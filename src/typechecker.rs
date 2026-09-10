@@ -17,6 +17,18 @@ use crate::ast::*;
 use crate::resolver::{ResolveResult, SpanKey};
 use crate::token::{FloatSuffix, IntSuffix, Span};
 use rustc_hash::{FxHashMap, FxHashSet};
+
+/// `(enum, variant, nested enum head)` — identifies ONE offending nested-enum
+/// relationship for [`TypeChecker::nested_enum_inst_offenders`]. Deduping on
+/// this triple is what keeps a single offending instantiation from reporting
+/// once per expression that mentions it (B-2026-09-10-13).
+pub(super) type NestedEnumInstKey = (String, String, String);
+
+/// `(earliest span, rendered type argument)` — where to point the diagnostic
+/// and what to call the argument. The argument is carried because the key holds
+/// only its HEAD: `G[G[R2]]` and `G[G[i64]]` share that head, and a message
+/// naming `G[G]` would not tell the author which instantiation to change.
+pub(super) type NestedEnumInstSite = (Span, String);
 use std::collections::HashSet;
 
 mod alloc_rejection;
@@ -2085,6 +2097,35 @@ pub struct TypeChecker<'a> {
     /// other arm is a pure function of the type, so only this one needs
     /// capturing in flight.
     pub(super) typeparam_clone_bound_spans: FxHashSet<SpanKey>,
+    /// User-declared VALUE enum names (non-`shared`, non-`par`) — the set
+    /// [`Self::validate_enum_payload_no_nested_enum`] tests a declared payload
+    /// head against, hoisted so its instantiation-side complement
+    /// (B-2026-09-10-13) tests against the SAME set. Two independently built
+    /// sets would be free to drift, and the whole point of the pair is that
+    /// one rule covers both spellings of one shape.
+    pub(super) nested_enum_value_names: FxHashSet<String>,
+    /// Watch list for that complement: for each user generic value enum, the
+    /// `(variant, generic-param INDEX)` of every single payload declared AS one
+    /// of the enum's own parameters. Those are exactly the payloads the
+    /// declaration-site pass cannot judge — their declared head is `T`, never an
+    /// enum name — so their nesting is decided by the type ARGUMENT instead.
+    /// The index is into [`EnumInfo::generic_params`], the same positional basis
+    /// that builds a `Type::Named`'s `args` (see `user_variant_value_type`).
+    ///
+    /// Empty for a program with no generic value enum, which is what keeps the
+    /// `record_expr_type` probe free on ordinary code.
+    pub(super) nested_enum_param_payloads: FxHashMap<String, Vec<(String, usize)>>,
+    /// Offending instantiations found in flight, keyed
+    /// `(enum, variant, nested enum head)` -> `(EARLIEST span, rendered type
+    /// argument)`. The argument is carried rather than re-derived because the
+    /// key holds only its HEAD — enough to dedup one offending relationship, but
+    /// `G[G[R2]]` and `G[G[i64]]` share it, and a message naming `G[G]` would
+    /// tell the author nothing about which instantiation to change. Deduped on that key
+    /// for the reason the declared pass dedups on `(variant, head)`: one
+    /// offending relationship is one diagnostic, however many expressions carry
+    /// the type. Emitted at the end of `check()` by
+    /// [`Self::emit_nested_enum_inst_errors`].
+    pub(super) nested_enum_inst_offenders: FxHashMap<NestedEnumInstKey, NestedEnumInstSite>,
     /// See [`TypeCheckResult::vector_method_receivers`]. Populated at vector
     /// instance-method inference; moved into the result at the end.
     pub(super) vector_method_receivers: FxHashMap<SpanKey, (Type, usize)>,
@@ -2712,6 +2753,9 @@ impl<'a> TypeChecker<'a> {
             warnings: Vec::new(),
             expr_types: FxHashMap::default(),
             typeparam_clone_bound_spans: FxHashSet::default(),
+            nested_enum_value_names: FxHashSet::default(),
+            nested_enum_param_payloads: FxHashMap::default(),
+            nested_enum_inst_offenders: FxHashMap::default(),
             vector_method_receivers: FxHashMap::default(),
             pointer_method_receiver_pointees: FxHashMap::default(),
             unsafe_depth: 0,
@@ -3037,6 +3081,10 @@ impl<'a> TypeChecker<'a> {
             })
             .map(|(key, _)| *key)
             .collect();
+        // B-2026-09-10-13 — drain the instantiation-side nested-enum-payload
+        // offenders gathered during body inference. Must run before `errors`
+        // moves into the result below.
+        self.emit_nested_enum_inst_errors();
         let distinct_type_traits = self.env.distinct_types.clone();
         let compiler_builtins = self.env.compiler_builtins.clone();
         let must_use_functions = self.env.must_use_functions.clone();
@@ -5349,6 +5397,23 @@ impl<'a> TypeChecker<'a> {
                 self.typeparam_clone_bound_spans.insert(key);
             } else {
                 self.typeparam_clone_bound_spans.remove(&key);
+            }
+        }
+        // B-2026-09-10-13 — the INSTANTIATION half of
+        // `validate_enum_payload_no_nested_enum`. That pass reads each variant's
+        // DECLARED payload head, so `enum G[T] { X(T), Y }` shows it `T` and it
+        // correctly says nothing; the nesting is created later, by the type
+        // ARGUMENT at `G[Mono]` / `G[G[R2]]`, which no declaration-site walk can
+        // see. Captured here rather than swept out of `expr_types` afterwards
+        // because a `SpanKey` is `(offset, length)` with no line/column, so the
+        // sweep could not render a diagnostic; this site still holds the real
+        // `Span`. Same reason B-2026-09-03-26's clone predicate is captured here.
+        //
+        // Cost on code with no generic value enum is one `matches!` and one
+        // `is_empty` — the watch map is empty, so there is no hash probe.
+        if let Type::Named { name, args } = ty {
+            if !args.is_empty() && !self.nested_enum_param_payloads.is_empty() {
+                self.note_nested_enum_instantiation(name, args, span);
             }
         }
         self.expr_types.insert(key, ty.clone());

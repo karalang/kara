@@ -10,7 +10,9 @@
 use crate::ast::*;
 
 use super::types::{is_numeric, type_display, Type, UIntSize, VariantTypeInfo};
-use super::{extract_derived_traits, Span, TypeErrorKind};
+use super::{
+    extract_derived_traits, FxHashMap, NestedEnumInstKey, NestedEnumInstSite, Span, TypeErrorKind,
+};
 
 impl<'a> super::TypeChecker<'a> {
     /// If `ty` is a `distinct type`, return whether it derives ANY of
@@ -1581,6 +1583,11 @@ impl<'a> super::TypeChecker<'a> {
                 _ => None,
             })
             .collect();
+        // Share the set with the instantiation-side complement
+        // (B-2026-09-10-13) and build its watch list now, while the same
+        // definition of "value enum" is in hand.
+        self.nested_enum_value_names = value_enum_names.iter().cloned().collect();
+        self.build_nested_enum_param_payload_watch();
 
         // Walk every enum variant and inspect its payload field types.
         // The payload field's `TypeExpr` -> head segment is the
@@ -1639,6 +1646,141 @@ impl<'a> super::TypeChecker<'a> {
                     }
                 }
             }
+        }
+    }
+
+    /// Build [`Self::nested_enum_param_payloads`] — the watch list behind the
+    /// instantiation-side half of the nested-enum-payload rule
+    /// (B-2026-09-10-13).
+    ///
+    /// A payload declared as one of the enum's OWN generic parameters is the
+    /// one shape `validate_enum_payload_no_nested_enum` structurally cannot
+    /// judge: it reads the declared head, which is `T`, and `T` is never an
+    /// enum name. Whether that payload nests an enum is decided by the type
+    /// ARGUMENT — `G[R2]` does not, `G[Mono]` and `G[G[R2]]` do — so it can only
+    /// be answered once inference has solved the instantiation.
+    ///
+    /// The two halves partition the variants exactly, the same way the
+    /// name-keyed and instantiation-keyed payload WALKERS do one layer down in
+    /// codegen (B-2026-09-10-2): a concretely-declared payload is judged at the
+    /// declaration and never here, a param-declared payload only here. So the
+    /// pair can neither double-report one variant nor leave one unjudged.
+    fn build_nested_enum_param_payload_watch(&mut self) {
+        let mut watch: FxHashMap<String, Vec<(String, usize)>> = FxHashMap::default();
+        for (ename, info) in &self.env.enums {
+            if info.is_shared || info.is_par || info.generic_params.is_empty() {
+                continue;
+            }
+            if !self.nested_enum_value_names.contains(ename) {
+                continue;
+            }
+            let mut rows: Vec<(String, usize)> = Vec::new();
+            for (vname, vinfo) in &info.variants {
+                let field_tys: Vec<&Type> = match vinfo {
+                    VariantTypeInfo::Unit => Vec::new(),
+                    VariantTypeInfo::Tuple(ts) => ts.iter().collect(),
+                    VariantTypeInfo::Struct(fs) => fs.iter().map(|(_, t)| t).collect(),
+                };
+                for fty in field_tys {
+                    // Only a payload that IS the parameter. A payload of
+                    // `Vec[T]` / `Slice[T]` / a tuple stops the size recursion at
+                    // one indirection and is allowed however `T` is chosen —
+                    // the same carve-out the declared pass states for recursion
+                    // through a collection layer.
+                    let Type::TypeParam(pname) = fty else {
+                        continue;
+                    };
+                    let Some(idx) = info.generic_params.iter().position(|g| g == pname) else {
+                        continue;
+                    };
+                    if !rows.iter().any(|(v, i)| v == vname && *i == idx) {
+                        rows.push((vname.clone(), idx));
+                    }
+                }
+            }
+            if !rows.is_empty() {
+                watch.insert(ename.clone(), rows);
+            }
+        }
+        self.nested_enum_param_payloads = watch;
+    }
+
+    /// Record an instantiation whose type ARGUMENT turns a param-declared
+    /// payload into a nested enum payload (B-2026-09-10-13). Called from
+    /// `record_expr_type` for every `Type::Named` carrying arguments.
+    ///
+    /// Keeps the EARLIEST span per offending `(enum, variant, nested head)`, so
+    /// the diagnostic lands on the construction that introduces the type rather
+    /// than on an arbitrary later use of it — every use of the binding is typed
+    /// with the same offending type and would otherwise report again.
+    pub(super) fn note_nested_enum_instantiation(
+        &mut self,
+        name: &str,
+        args: &[Type],
+        span: &Span,
+    ) {
+        let Some(watch) = self.nested_enum_param_payloads.get(name) else {
+            return;
+        };
+        // One entry per param-declared variant — a handful at most.
+        let watch = watch.clone();
+        for (vname, idx) in watch {
+            let Some(arg) = args.get(idx) else {
+                continue;
+            };
+            let Type::Named { name: head, .. } = arg else {
+                continue;
+            };
+            if !self.nested_enum_value_names.contains(head) {
+                continue;
+            }
+            let key = (name.to_string(), vname, head.clone());
+            match self.nested_enum_inst_offenders.get(&key) {
+                Some((prev, _)) if prev.offset <= span.offset => {}
+                _ => {
+                    self.nested_enum_inst_offenders
+                        .insert(key, (*span, type_display(arg)));
+                }
+            }
+        }
+    }
+
+    /// Emit one `E_ENUM_NESTED_ENUM_PAYLOAD` per offending instantiation
+    /// gathered by [`Self::note_nested_enum_instantiation`].
+    ///
+    /// Deliberately the SAME error code as the declared spelling: it is one
+    /// language rule ("v1 supports one level of enum nesting"), and a program
+    /// that trips it through a generic argument needs the same four remedies.
+    /// The message names the instantiation because that, not the declaration, is
+    /// what the author has to change.
+    ///
+    /// Sorted by span before emission — the offenders live in a hash map, and an
+    /// unsorted drain would order diagnostics differently between runs.
+    pub(super) fn emit_nested_enum_inst_errors(&mut self) {
+        if self.nested_enum_inst_offenders.is_empty() {
+            return;
+        }
+        let mut rows: Vec<(NestedEnumInstKey, NestedEnumInstSite)> =
+            std::mem::take(&mut self.nested_enum_inst_offenders)
+                .into_iter()
+                .collect();
+        rows.sort_by(|(ka, (sa, _)), (kb, (sb, _))| {
+            sa.offset.cmp(&sb.offset).then_with(|| ka.cmp(kb))
+        });
+        for ((ename, vname, head), (span, arg_display)) in rows {
+            self.type_error(
+                format!(
+                    "error[E_ENUM_NESTED_ENUM_PAYLOAD]: instantiating '{}[{}]' gives enum \
+                     variant '{}.{}' a payload of nested enum type '{}' — v1 only supports up \
+                     to one level of enum nesting; either use a different type argument, mark \
+                     '{}' as `shared` (RC pointer) or `par` (cross-task pointer — use this one \
+                     if the value must cross a task boundary), or wrap it in a `Vec` / \
+                     collection layer",
+                    ename, arg_display, ename, vname, head, head
+                ),
+                span,
+                TypeErrorKind::TypeMismatch,
+            );
         }
     }
 

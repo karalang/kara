@@ -21466,6 +21466,171 @@ fn test_compound_enum_nested_enum_payload_via_vec_is_allowed() {
     );
 }
 
+// ── Nested enum payload reached through a GENERIC INSTANTIATION ──
+//
+// B-2026-09-10-13. The CP5 carve-out above is enforced at the
+// DECLARATION, against each variant's declared payload head. For
+// `enum G[T] { X(T), Y }` that head is `T`, which is never an enum
+// name, so the declaration pass correctly says nothing — and the
+// nesting is instead created by the type ARGUMENT at `G[Mono]` /
+// `G[G[R2]]`, which no declaration-site walk can see. Codegen's layout
+// pass documents the resulting state as unreachable ("if we reach here,
+// the typecheck stage didn't fail") and falls back to a single
+// i64-payload word, which is why the shape used to compile, run no
+// `Drop` body, and strand its payload's heap.
+//
+// The instantiation half is the exact complement of the declared half:
+// it judges ONLY payloads declared as one of the enum's own generic
+// parameters, so a variant is judged by exactly one of the two.
+
+#[test]
+fn test_nested_enum_payload_via_generic_instantiation_rejected() {
+    // `G[Mono]` — one level, reached by instantiating the generic
+    // envelope at a value enum. The declared twin `enum H { P(Mono) }`
+    // is rejected, so this must be too.
+    let errors = typecheck_errors(
+        "enum Mono { P(i64), Q }\n\
+         enum G[T] { X(T), Y }\n\
+         fn main() { let v = G.X(Mono.P(1)); }",
+    );
+    let msgs: Vec<&String> = errors
+        .iter()
+        .filter(|e| e.message.contains("E_ENUM_NESTED_ENUM_PAYLOAD"))
+        .map(|e| &e.message)
+        .collect();
+    assert_eq!(
+        msgs.len(),
+        1,
+        "expected one E_ENUM_NESTED_ENUM_PAYLOAD for G[Mono], got: {msgs:?}"
+    );
+    // The message must name the INSTANTIATION, not just the head — that
+    // is the thing the author has to change.
+    assert!(
+        msgs[0].contains("'G[Mono]'"),
+        "diagnostic should name the instantiation: {msgs:?}"
+    );
+}
+
+#[test]
+fn test_generic_envelope_nested_in_itself_rejected() {
+    // `G[G[R2]]` — the row's own recipe. The type argument is another
+    // instantiation of the same generic enum, so the rendered argument
+    // must survive in full (`G[G[R2]]`); naming only its head would
+    // print `G[G]` and tell the author nothing.
+    let errors = typecheck_errors(
+        "struct R2 { s: i64 }\n\
+         enum G[T] { X(T), Y }\n\
+         fn main() { let n = G.X(G.X(R2 { s: 1 })); }",
+    );
+    let msgs: Vec<&String> = errors
+        .iter()
+        .filter(|e| e.message.contains("E_ENUM_NESTED_ENUM_PAYLOAD"))
+        .map(|e| &e.message)
+        .collect();
+    assert_eq!(
+        msgs.len(),
+        1,
+        "expected one E_ENUM_NESTED_ENUM_PAYLOAD for G[G[R2]], got: {msgs:?}"
+    );
+    assert!(
+        msgs[0].contains("'G[G[R2]]'"),
+        "diagnostic should render the full type argument: {msgs:?}"
+    );
+}
+
+#[test]
+fn test_nested_enum_payload_via_instantiation_deduped_across_uses() {
+    // Every expression that mentions the binding is typed with the same
+    // offending type, so an undeduped rule would report once per use.
+    // One offending `(enum, variant, nested head)` relationship is one
+    // diagnostic — the same dedup the declared half applies per
+    // `(variant, head)`.
+    let errors = typecheck_errors(
+        "enum Mono { P(i64), Q }\n\
+         enum G[T] { X(T), Y }\n\
+         fn take(v: G[Mono]) -> i64 { return 1; }\n\
+         fn main() {\n\
+         let v = G.X(Mono.P(1));\n\
+         let a = take(v);\n\
+         let b = G.X(Mono.Q);\n\
+         }",
+    );
+    let n = errors
+        .iter()
+        .filter(|e| e.message.contains("E_ENUM_NESTED_ENUM_PAYLOAD"))
+        .count();
+    assert_eq!(
+        n,
+        1,
+        "expected exactly one deduped diagnostic across uses, got {n}: {:?}",
+        errors.iter().map(|e| &e.message).collect::<Vec<_>>()
+    );
+}
+
+#[test]
+fn test_generic_enum_instantiated_at_struct_is_allowed() {
+    // The complement's boundary in the permissive direction. A struct
+    // payload is not enum nesting, and this is the shape B-2026-09-10-2
+    // fixed and left clean — over-rejecting here would undo it.
+    typecheck_ok(
+        "struct R2 { s: i64 }\n\
+         enum G[T] { X(T), Y }\n\
+         fn main() { let v = G.X(R2 { s: 1 }); }",
+    );
+}
+
+#[test]
+fn test_generic_enum_instantiated_at_option_is_allowed() {
+    // `Option`/`Result` are the seeded pair, and they are exactly the
+    // types the enum-in-enum carve-out in `payload_word_count_for_type_
+    // expr` admits — the declared twin `enum H { P(Option[i64]) }` is
+    // accepted, so the instantiated spelling must be too.
+    typecheck_ok(
+        "enum G[T] { X(T), Y }\n\
+         fn main() { let v = G.X(Some(1)); }",
+    );
+}
+
+#[test]
+fn test_seeded_envelope_around_generic_enum_is_allowed() {
+    // The mirror image: a seeded envelope OUTSIDE a user generic enum.
+    // `Option[E]` for a user enum `E` is a supported shape with its own
+    // machinery (B-2026-08-28-58 leg B), so the rule must not reach it.
+    typecheck_ok(
+        "struct R2 { s: i64 }\n\
+         enum G[T] { X(T), Y }\n\
+         fn main() { let v = Some(G.X(R2 { s: 1 })); }",
+    );
+}
+
+#[test]
+fn test_generic_enum_instantiated_at_vec_of_enum_is_allowed() {
+    // The collection carve-out, instantiation side: `Vec[Inner]` stops
+    // the size recursion at one indirection however `T` is chosen, and
+    // the watch list only ever fires on a payload that IS the parameter.
+    typecheck_ok(
+        "enum Inner { A, B }\n\
+         enum G[T] { X(T), Y }\n\
+         fn main() {\n\
+         let mut w: Vec[Inner] = Vec.new();\n\
+         w.push(Inner.A);\n\
+         let v = G.X(w);\n\
+         }",
+    );
+}
+
+#[test]
+fn test_generic_enum_instantiated_at_shared_enum_is_allowed() {
+    // The `shared` carve-out, instantiation side — a `shared` enum
+    // payload is one RC pointer word, which is why the diagnostic
+    // recommends it as a remedy.
+    typecheck_ok(
+        "shared enum SInner { A, B }\n\
+         enum G[T] { X(T), Y }\n\
+         fn main() { let v = G.X(SInner.A); }",
+    );
+}
+
 // ── Labeled Blocks (LB3 — LUB inference) ─────────────────────────
 
 #[test]
