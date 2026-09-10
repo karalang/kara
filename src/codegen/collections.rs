@@ -1661,6 +1661,35 @@ impl<'ctx> super::Codegen<'ctx> {
             // temps, `cap == 0` sources, and POD elements.
             let v = self.maybe_defensive_copy_param_arg(e, v);
             self.suppress_source_vec_cleanup_for_arg(e);
+            // B-2026-09-10-24 — the `Option`/`Result` payload channels, which
+            // the line above cannot reach: they sit behind
+            // `FreeInlineOptionPayload` / `FreeInlineResultPayload` /
+            // `BoxedEnumDrop`, each with its own in-slot guard rather than the
+            // Vec/String cap sentinel. `compile_tuple` carries the identical
+            // three lines for the identical reason, and this loop is written as
+            // its mirror ("Move-aware element ownership (mirror
+            // `compile_tuple`)" above) — the mirror was simply incomplete.
+            //
+            // The row that found this listed the `Vec`-literal sibling as NOT
+            // MEASURED, and the PREFIX spelling has the same doubling: on
+            // `main` `let o: Option[R] = ..; let v = Vec[o];` SIGSEGVs at
+            // `-O0` (4 valgrind errors), because the Vec's element drop and the
+            // un-disarmed source both own the boxed payload. `v.push(o)` is
+            // correct throughout — that site has disarmed this trio since slice
+            // 3q — which is what isolates it to the literal position.
+            //
+            // SCOPED TO THIS BUILDER DELIBERATELY. The bare `[o]` spelling is a
+            // different function (`compile_array_literal`, an `ArrayLiteral`
+            // node) and its cells crash on `main` too, but the identical three
+            // lines there are WRONG: measured, they turn
+            // `let v: Array[Option[R], 1] = [o];` from clean into a 32-byte
+            // leak, because that destination does not take the payload and the
+            // source is its only owner — the LEAK half of B-2026-08-23-4's
+            // "the two halves are only correct together". That spelling is
+            // filed as its own row rather than fixed by symmetry.
+            self.suppress_inline_option_payload_cleanup_for_moved_arg(e);
+            self.suppress_inline_result_payload_cleanup_for_moved_arg(e);
+            self.suppress_boxed_enum_payload_cleanup_for_moved_arg(e);
             if let ExprKind::Identifier(name) = &e.kind {
                 self.suppress_map_cleanup_for_tail_identifier(name);
             }

@@ -152941,11 +152941,19 @@ fn main() {
     /// The rebuild itself is untouched, so the qualified spellings keep the
     /// exact path they had.
     ///
-    /// NOT FIXED HERE, and measured so rather than assumed: an `Option`-typed
-    /// LOCAL moved into the tuple (`let o: Option[R] = ..; let p = (o, 7);`)
-    /// stays silent, because handing this arm that local's recorded
-    /// instantiation makes the tuple's walk and the un-disarmed source's walk
-    /// both own the payload — an abort, not a missed body. And a
+    /// FIXED SINCE, by B-2026-09-10-24: an `Option`-typed LOCAL moved into the
+    /// tuple (`let o: Option[R] = ..; let p = (o, 7);`) was silent here, and
+    /// this paragraph used to record it as unreachable — "handing this arm that
+    /// local's recorded instantiation makes the tuple's walk and the
+    /// un-disarmed source's walk both own the payload, an abort, not a missed
+    /// body". The abort was real and the inference from it was wrong: the
+    /// second owner is the DISARM's absence, not the lookup's presence.
+    /// `compile_tuple` now disarms a moved-in binding's three enum-payload
+    /// channels per element, exactly as `v.push(o)` does, and on top of that
+    /// the lookup is safe — see
+    /// `e2e_optres_local_moved_into_a_tuple_literal_runs_its_drop_body`. That
+    /// same missing disarm was crashing the ANNOTATED spelling of this cell
+    /// outright (B-2026-09-10-28). And a
     /// `(Option[Option[R]], i64)` element stays silent for a different reason
     /// again: the element type now resolves, and the tuple-element SELECTOR
     /// has the one-level horizon B-2026-09-10-17 covers.
@@ -153031,6 +153039,221 @@ fn main() {
             (
                 "no-drop-payload-control",
                 "fn main() { let p = (Some(5), 7); println(f\"ok{p.1}\"); println(\"done\") }\n",
+                "ok7\ndone\n",
+            ),
+        ] {
+            let Some(out) = run_program(&format!("{PRE}{body}")) else {
+                return;
+            };
+            assert_eq!(out, want, "[{label}]");
+        }
+    }
+
+    /// B-2026-09-10-24 + B-2026-09-10-28 — an `Option`/`Result` BINDING moved
+    /// into a tuple literal. Two rows, one cause, and they sit in one fixture
+    /// because separating them hides what makes the fix ordered.
+    ///
+    /// `compile_tuple` disarms a moved-in element's Vec/String cap, its Map
+    /// handle and its f-string accumulator, but never its ENUM PAYLOAD — that
+    /// lives behind `FreeInlineOptionPayload` / `FreeInlineResultPayload` /
+    /// `BoxedEnumDrop`, three guards `suppress_source_vec_cleanup_for_arg`
+    /// cannot reach. So the source stayed armed over bits the tuple had taken,
+    /// and WHAT THAT COST DEPENDED ENTIRELY ON WHETHER THE ELEMENT'S TYPE WAS
+    /// KNOWN:
+    ///
+    ///   * KNOWN (an annotated binding, -28): the tuple armed its own walks,
+    ///     the payload had two owners, and the 32-byte box was freed twice and
+    ///     read after — SIGSEGV at `-O0`, `free(): double free detected in
+    ///     tcache 2` at `-O2`, against the interpreter's correct body.
+    ///   * UNKNOWN (an unannotated binding, -24): the tuple armed nothing, the
+    ///     payload had exactly one owner, and the only loss was the body —
+    ///     `dR71` interpreted, nothing compiled.
+    ///
+    /// THE ORDER IS THE POINT. -24's own row proposed naming the element from
+    /// `optres_var_payload_tes` and MEASURED that three-line version aborting;
+    /// it concluded the lookup was wrong. The lookup is right and the disarm
+    /// was missing — typing the element merely converts the silent cell into
+    /// the crashing one. So the disarm lands first and the lookup rides on it;
+    /// a future edit that removes the disarm turns the `annotated-*` cells
+    /// below into aborts rather than into failures.
+    ///
+    /// The DISCARDED-LOCAL cells print the body BEFORE `ok`: `p` is never read,
+    /// so it dies at its own `let` under this tree's NLL model. That is the
+    /// model, not an artifact of the move — the `read` cells show the same
+    /// single body landing later instead.
+    #[test]
+    fn e2e_optres_local_moved_into_a_tuple_literal_runs_its_drop_body() {
+        const PRE: &str = "struct Rt { id: i64, name: String }\n\
+             impl Drop for Rt { fn drop(mut ref self) { println(f\"dRt{self.id}\") } }\n";
+        for (label, body, want) in [
+            // B-2026-09-10-24, THE ROW: an `Option` local, unannotated tuple.
+            (
+                "option-local",
+                "fn main() { let o: Option[Rt] = Some(Rt { id: 71, name: f\"a\" }); let p = (o, 7); println(\"ok\"); println(\"done\") }\n",
+                "dRt71\nok\ndone\n",
+            ),
+            // The `Result` twin the row measured behaving identically.
+            (
+                "result-local",
+                "fn main() { let r: Result[Rt, i64] = Result[Rt, i64].Ok(Rt { id: 71, name: f\"a\" }); let p = (r, 7); println(\"ok\"); println(\"done\") }\n",
+                "dRt71\nok\ndone\n",
+            ),
+            // B-2026-09-10-28: the ANNOTATED spelling — the crashing one. The
+            // annotation supplies the element types with no help from
+            // `refined_tuple_literal_elem_te`, so this cell is a pure test of
+            // the DISARM. Before it: SIGSEGV at -O0, double-free abort at -O2.
+            (
+                "annotated-option-local",
+                "fn main() { let o: Option[Rt] = Some(Rt { id: 71, name: f\"a\" }); let p: (Option[Rt], i64) = (o, 7); println(\"ok\"); println(\"done\") }\n",
+                "dRt71\nok\ndone\n",
+            ),
+            (
+                "annotated-result-local",
+                "fn main() { let r: Result[Rt, i64] = Result[Rt, i64].Ok(Rt { id: 71, name: f\"a\" }); let p: (Result[Rt, i64], i64) = (r, 7); println(\"ok\"); println(\"done\") }\n",
+                "dRt71\nok\ndone\n",
+            ),
+            // The binding READ, so it lives to the statement's end: the body
+            // moves after `n7`, and must still be exactly one.
+            (
+                "option-local-read",
+                "fn main() { let o: Option[Rt] = Some(Rt { id: 71, name: f\"a\" }); let p = (o, 7); println(f\"n{p.1}\"); println(\"done\") }\n",
+                "n7\ndRt71\ndone\n",
+            ),
+            // The SOURCE read before the move — one of the row's three
+            // NOT MEASURED items. A read does not change who owns the payload.
+            (
+                "source-read-before-move",
+                "fn main() { let o: Option[Rt] = Some(Rt { id: 71, name: f\"a\" }); println(f\"s{o.is_some()}\"); let p = (o, 7); println(\"ok\"); println(\"done\") }\n",
+                "strue\ndRt71\nok\ndone\n",
+            ),
+            // TWO such locals in one literal — the row's second NOT MEASURED
+            // item. Both bodies, in element order.
+            (
+                "two-locals-one-literal",
+                "fn main() { let a: Option[Rt] = Some(Rt { id: 71, name: f\"a\" }); let b: Option[Rt] = Some(Rt { id: 72, name: f\"b\" }); let p = (a, b); println(\"ok\"); println(\"done\") }\n",
+                "dRt71\ndRt72\nok\ndone\n",
+            ),
+            // The local in the SECOND slot, so a fix that only inspected
+            // element 0 shows up here.
+            (
+                "local-not-first",
+                "fn main() { let o: Option[Rt] = Some(Rt { id: 71, name: f\"a\" }); let p = (7, o); println(\"ok\"); println(\"done\") }\n",
+                "dRt71\nok\ndone\n",
+            ),
+            // A NESTED tuple literal over the same local: the disarm runs per
+            // element at every level, and the lookup recurses with it.
+            (
+                "nested-tuple-literal",
+                "fn main() { let o: Option[Rt] = Some(Rt { id: 71, name: f\"a\" }); let p = ((o, 6), 7); println(\"ok\"); println(\"done\") }\n",
+                "dRt71\nok\ndone\n",
+            ),
+            // A DESTRUCTURE of the same literal — the other consumer of the
+            // arm this fix teaches, reached through `finish_owned_tuple_*`
+            // rather than the binding path.
+            (
+                "destructured-literal",
+                "fn main() { let o: Option[Rt] = Some(Rt { id: 71, name: f\"a\" }); let (x, y) = (o, 7); println(f\"n{y}\"); println(\"done\") }\n",
+                // `x` binds the payload and is never read, so it dies at its
+                // own `let` — the body lands BEFORE `n7`, and both backends
+                // agree on that. Contrast `option-local-read` above, where the
+                // tuple itself is read and the single body lands after.
+                "dRt71\nn7\ndone\n",
+            ),
+            // CONTROL — a `None` local. The element types now resolve, so the
+            // walk is armed; it must find no payload and print nothing.
+            (
+                "none-local-control",
+                "fn main() { let o: Option[Rt] = None; let p = (o, 7); println(\"ok\"); println(\"done\") }\n",
+                "ok\ndone\n",
+            ),
+            // CONTROL — a payload with NO user `Drop`. The lookup names this
+            // element too; nothing may run for it, and its buffer must still
+            // be freed exactly once (the asan fixture asserts that half).
+            (
+                "no-drop-payload-control",
+                "fn main() { let o: Option[String] = Some(f\"abc\"); let p = (o, 7); println(f\"ok{p.1}\"); println(\"done\") }\n",
+                "ok7\ndone\n",
+            ),
+            // CONTROL — the BARE REBIND (`let o2 = o;`), the move that already
+            // disarmed correctly and whose `optres_var_payload_tes` read this
+            // fix reuses. Unchanged by either half.
+            (
+                "bare-rebind-control",
+                "fn main() { let o: Option[Rt] = Some(Rt { id: 71, name: f\"a\" }); let o2 = o; println(\"ok\"); println(\"done\") }\n",
+                "dRt71\nok\ndone\n",
+            ),
+            // CONTROL — the same local handed to a CALL, the other move site
+            // that has disarmed this trio since slice 3q.
+            (
+                "call-arg-control",
+                "fn eat(o: Option[Rt]) { println(\"in\") }\n\
+                 fn main() { let o: Option[Rt] = Some(Rt { id: 71, name: f\"a\" }); eat(o); println(\"done\") }\n",
+                "in\ndRt71\ndone\n",
+            ),
+            // ---- THE LITERAL SIBLINGS (B-2026-09-10-29) ----
+            // A `Vec[..]` PREFIX literal over the same local. On `main` this
+            // SIGSEGVed at `-O0` with 4 valgrind errors.
+            (
+                "vec-prefix-local",
+                "fn main() { let o: Option[Rt] = Some(Rt { id: 71, name: f\"a\" }); let v = Vec[o]; println(\"ok\"); println(\"done\") }\n",
+                "dRt71\nok\ndone\n",
+            ),
+            // Its ANNOTATED form. Note this is the OPPOSITE of the `Array`
+            // control below: an annotated `Vec` destination DOES take the
+            // payload, an annotated `Array` does not, and only measurement
+            // separates them.
+            (
+                "vec-prefix-annotated",
+                "fn main() { let o: Option[Rt] = Some(Rt { id: 71, name: f\"a\" }); let v: Vec[Option[Rt]] = Vec[o]; println(\"ok\"); println(\"done\") }\n",
+                "dRt71\nok\ndone\n",
+            ),
+            // A bare `[..]` ARRAY literal — a different builder again
+            // (`compile_array_literal`). SIGSEGVed on `main`; fixed by the
+            // element-type lookup alone, with NO disarm added to that builder.
+            (
+                "array-literal-local",
+                "fn main() { let o: Option[Rt] = Some(Rt { id: 71, name: f\"a\" }); let v = [o]; println(\"ok\"); println(\"done\") }\n",
+                "dRt71\nok\ndone\n",
+            ),
+            (
+                "array-literal-two-locals",
+                "fn main() { let a: Option[Rt] = Some(Rt { id: 71, name: f\"a\" }); let b: Option[Rt] = Some(Rt { id: 72, name: f\"b\" }); let v = [a, b]; println(\"ok\"); println(\"done\") }\n",
+                "dRt71\ndRt72\nok\ndone\n",
+            ),
+            // The NO-USER-`Drop` twin of the same array cell. It printed
+            // nothing to lose and still aborted with `free(): double free
+            // detected in tcache 2` on `main` — this class is reachable in a
+            // program containing no `Drop` impl at all, which is why it is not
+            // merely a missing-body row.
+            (
+                "array-literal-no-drop-payload",
+                "fn main() { let o: Option[String] = Some(f\"abc\"); let v = [o]; println(\"ok\"); println(\"done\") }\n",
+                "ok\ndone\n",
+            ),
+            // CONTROL — an annotated fixed `Array` destination. This one is
+            // CLEAN on `main` and must STAY clean: its element drop does not
+            // take the payload, so the source binding is the only owner and
+            // disarming it here leaks (measured: 32 B). It is why
+            // `compile_array_literal` deliberately carries no disarm.
+            (
+                "array-annotated-control",
+                "fn main() { let o: Option[Rt] = Some(Rt { id: 71, name: f\"a\" }); let v: Array[Option[Rt], 1] = [o]; println(\"ok\"); println(\"done\") }\n",
+                "dRt71\nok\ndone\n",
+            ),
+            // CONTROL — an INLINE heap payload in a TUPLE. The tuple's
+            // synthesized drop does not free one, so the source keeps it and
+            // nothing may be disarmed: with the inline suppressors added here
+            // this leaked 17 B (`String`) and 24 B (`Vec[i64]`). Silent by
+            // design — the payload has no user `Drop` — so the fixture asserts
+            // the OUTPUT and the asan leg asserts the balance.
+            (
+                "tuple-inline-string-control",
+                "fn main() { let o: Option[String] = Some(f\"hello-long-string\"); let p = (o, 7); println(f\"ok{p.1}\"); println(\"done\") }\n",
+                "ok7\ndone\n",
+            ),
+            (
+                "tuple-inline-vec-control",
+                "fn main() { let o: Option[Vec[i64]] = Some([1, 2, 3]); let p = (o, 7); println(f\"ok{p.1}\"); println(\"done\") }\n",
                 "ok7\ndone\n",
             ),
         ] {

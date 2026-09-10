@@ -18135,6 +18135,39 @@ impl<'ctx> super::Codegen<'ctx> {
             // A collection BINDING: rebuild `<head>[<elem>]` from the two
             // side-tables that together carry what the single TE lost.
             ExprKind::Identifier(n) => {
+                // B-2026-09-10-24 — an `Option`/`Result` BINDING moved into the
+                // literal (`let o: Option[R] = ..; let p = (o, 7);`). Every
+                // other spelling of this element was already answered — the
+                // bare ctor by -09-10-18, the qualified one by -08-03-1, the
+                // annotated one by -09-03-39 — and the one that names a LOCAL
+                // fell through to `infer_arg_elem_te`, came back as a bare
+                // `Option` with no generic args, and left the binding with no
+                // bodies walker: `dR71` under `--interp` against nothing on
+                // either compiled backend, at both opt levels, `Result` alike.
+                //
+                // `optres_var_payload_tes` is the let-site's own record of this
+                // local's RESOLVED instantiation — the same table a bare rebind
+                // (`let o2 = o;`) reads to re-register for its destination —
+                // so it meets this chain's standard (prefer what the source
+                // says over what a name implies) rather than re-deriving a
+                // shape from the identifier. It stores the WHOLE `Option[P]` /
+                // `Result[O, E]`, which is what the walker wants: the `Result`
+                // leg of `emit_optres_payload_user_drop_bodies_fn` reads BOTH
+                // arguments, so a payload-only record would be rejected there
+                // exactly as an argument-derived `Result[P]` is.
+                //
+                // ORDER IS LOAD-BEARING, and it is the whole reason this row
+                // stayed open after the diagnosis was right. Naming the element
+                // here ARMS the tuple's own memory and bodies walks, and until
+                // the move disarmed the SOURCE both owned the payload — this
+                // exact lookup was tried alone and measured `free(): double
+                // free detected in tcache 2` at `-O0` and `-O2`. The disarm
+                // landed first, in `compile_tuple`'s element loop (case (e)),
+                // which is also what fixed B-2026-09-10-28's crashing annotated
+                // twin; this arm is safe only on top of it.
+                if let Some(te) = self.var_types.optres_var_payload_tes.get(n.as_str()) {
+                    return Some(te.clone());
+                }
                 let head = self.var_types.var_type_names.get(n.as_str())?;
                 if head != "Vec" && head != "VecDeque" {
                     return None;

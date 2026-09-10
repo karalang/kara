@@ -124,6 +124,50 @@ impl<'ctx> super::Codegen<'ctx> {
             //     sets), whose move-out is handled by the suppression below.
             let v = self.maybe_defensive_copy_param_arg(elem_expr, v);
             self.suppress_source_vec_cleanup_for_arg(elem_expr);
+            // (e) B-2026-09-10-24 / B-2026-09-10-28 — an `Option`/`Result`
+            //     BINDING folded into the tuple hands over its PAYLOAD, and
+            //     `suppress_source_vec_cleanup_for_arg` above cannot reach it:
+            //     that helper's disarms are the Vec/String cap sentinel and the
+            //     struct/field chains, while an enum payload lives behind
+            //     `FreeInlineOptionPayload` / `FreeInlineResultPayload` /
+            //     `BoxedEnumDrop`, each with its own in-slot guard. So the
+            //     source stayed armed over bits the tuple now owns.
+            //
+            //     This is the exact trio `v.push(o)` has disarmed since slice 3q
+            //     (`vec_method.rs`), reaching the aggregate-literal position for
+            //     the same reason (a) reached it for Vec: a move is a move
+            //     whichever consumer takes the value.
+            //
+            //     WHAT IT COSTS TO OMIT, both halves measured on `main` before
+            //     this line existed. Where the binding's element type is KNOWN
+            //     the tuple arms its own walks, so the payload had two owners:
+            //     `let p: (Option[R], i64) = (o, 7);` freed the 32-byte box
+            //     twice and read it after — SIGSEGV at `-O0`, `free(): double
+            //     free detected in tcache 2` at `-O2`, against the
+            //     interpreter's correct `dR4` (B-2026-09-10-28). Where it is
+            //     UNKNOWN the tuple arms nothing, so the payload had exactly
+            //     one owner and the only loss was the body: `let p = (o, 7);`
+            //     printed `dR71` interpreted and nothing compiled
+            //     (B-2026-09-10-24). The second is why the disarm has to land
+            //     BEFORE `refined_tuple_literal_elem_te` learns to name an
+            //     `Identifier` element — typing it first is what turns the
+            //     silent-body cell into the crashing one, which is what
+            //     B-2026-09-10-24 measured when it tried the lookup alone.
+            //
+            //     BOXED ONLY, and that narrowing is measured rather than
+            //     conservative. The two INLINE suppressors belong to the
+            //     `Vec` sibling, whose per-element `karac_drop_Option_<P>`
+            //     frees an inline heap payload; the tuple's
+            //     `synthesize_tuple_drop_fn_te` does NOT, so zeroing the
+            //     source's cap there leaves the buffer with no owner at all.
+            //     Measured: with all three, `let o: Option[String] = ..;
+            //     let p = (o, 7);` leaked 17 B and the `Option[Vec[i64]]`
+            //     twin 24 B, while every boxed cell stayed clean — the LEAK
+            //     half of B-2026-08-23-4's "the two halves are only correct
+            //     together", reached from the opposite side. An inline
+            //     payload keeps its source-side owner and is already
+            //     balanced; only the box changes hands here.
+            self.suppress_boxed_enum_payload_cleanup_for_moved_arg(elem_expr);
             // (c) #23 — a Map/Set element folded into the tuple transfers
             //     ownership of its handle to the tuple. Maps are caller-retains
             //     with no in-slot cap sentinel (the Vec arm above can't reach
