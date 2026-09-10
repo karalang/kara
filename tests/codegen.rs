@@ -19354,6 +19354,101 @@ done
 "#
         );
     }
+
+    /// B-2026-09-10-16 — a MATCH-ARM PAYLOAD BINDING records its tuple's element
+    /// types, so a FIELD READ through it lowers instead of refusing.
+    ///
+    /// `match o { Some(t) => t.0.id }` over an `Option[(R, R)]` failed `karac build`
+    /// with the loud "cannot resolve field 'id' on this receiver (its type was not
+    /// recorded for codegen)" while `karac check` accepted it and `--interp` answered
+    /// it. LOUD, so nothing was ever miscompiled — the build simply stopped, and the
+    /// natural spelling of "read a field of the arm-bound payload" was unavailable.
+    ///
+    /// THE FOURTH SOURCE of a tuple's element types, and the last of the family: the
+    /// container element (B-2026-08-28-34), the struct field (B-2026-09-03-12) and the
+    /// `Array`-from-a-field (B-2026-09-04-28) were each taught to the place-chain
+    /// recorder one row at a time. The typechecker was ALREADY recording the whole
+    /// tuple `TypeExpr` for this binding, so the source existed and only codegen's
+    /// transcription of it was missing.
+    ///
+    /// `u2` / `u3` / `u4` are the same binder reached three other ways — `Result`,
+    /// `if let`, `while let` — all of which failed identically before the fix and are
+    /// pinned here so a future narrowing to `match`-over-`Option` is caught.
+    ///
+    /// `u5` / `u6` / `u7` are the over-reach controls, all three of which BUILT before
+    /// the fix and must not move: the destructuring arm (which binds elements rather
+    /// than the tuple), a bare `t.0` with no second hop (the tuple-index lowering reads
+    /// the LLVM aggregate directly and never needed a name — it is the SECOND hop that
+    /// had nothing to resolve against), and a METHOD call on the element, which
+    /// dispatches through a different table and so was never affected.
+    ///
+    /// `u5` deliberately carries ONE `Drop`-bearing element rather than two. The
+    /// two-element spelling destructured out of a `match` arm dies in opposite orders
+    /// on the two backends (B-2026-09-06-21, open), which would pin a divergence here
+    /// that has nothing to do with this row.
+    ///
+    /// THE ABSENT ELEMENT BODIES IN `u1`–`u4` AND `u7` ARE B-2026-09-10-14, NOT THIS
+    /// ROW. A whole-payload arm binding runs no element `Drop` body on EITHER backend
+    /// — both agree, memory is balanced, and that gap is filed and open. This test
+    /// pins the field READ resolving; it deliberately does not assert those bodies are
+    /// correct. Whoever fixes -14 should expect this string to need `dR1/t1`-shaped
+    /// additions and update it rather than treat the break as a regression.
+    ///
+    /// Twin of `tests/interpreter.rs`'s
+    /// `test_arm_bound_tuple_payload_field_read_resolves`, pinned to the same string.
+    #[test]
+    fn e2e_arm_bound_tuple_payload_field_read_resolves() {
+        let Some(out) = run_program(
+            r#"struct R { id: i64, tag: String }
+impl R { fn get(ref self) -> i64 { return self.id; } }
+impl Drop for R { fn drop(mut ref self) { println(f"dR{self.id}/{self.tag}") } }
+fn mk(i: i64) -> R { return R { id: i, tag: f"t{i}" }; }
+fn src(i: i64) -> Option[(R, R)] { if i > 0 { return Some((mk(i), mk(i + 100))); } return None; }
+
+fn u1() { let o: Option[(R, R)] = Some((mk(1), mk(101)));
+          match o { Some(t) => { println(f"  a{t.0.id}/{t.0.tag}") } None => { println("  n") } } }
+fn u2() { let o: Result[(R, R), i64] = Ok((mk(2), mk(102)));
+          match o { Ok(t) => { println(f"  b{t.0.id}/{t.0.tag}") } Err(e) => { println(f"  e{e}") } } }
+fn u3() { let o: Option[(R, R)] = Some((mk(3), mk(103)));
+          if let Some(t) = o { println(f"  c{t.0.id}/{t.0.tag}") } else { println("  n") } }
+fn u4() { let mut n = 4; while let Some(t) = src(n) { println(f"  d{t.0.id}/{t.0.tag}"); n = 0; } }
+fn u5() { let o: Option[(R, i64)] = Some((mk(5), 50));
+          match o { Some((a, b)) => { println(f"  e{a.id}/{a.tag}/{b}") } None => { println("  n") } } }
+fn u6() { let o: Option[(i64, i64)] = Some((6, 60));
+          match o { Some(t) => { println(f"  f{t.0}") } None => { println("  n") } } }
+fn u7() { let o: Option[(R, R)] = Some((mk(7), mk(107)));
+          match o { Some(t) => { println(f"  g{t.0.get()}/{t.1.tag}") } None => { println("  n") } } }
+
+fn main() {
+    println("u1"); u1(); println("u2"); u2(); println("u3"); u3();
+    println("u4"); u4(); println("u5"); u5(); println("u6"); u6();
+    println("u7"); u7(); println("end");
+}
+"#,
+        ) else {
+            return;
+        };
+        assert_eq!(
+            out,
+            r#"u1
+  a1/t1
+u2
+  b2/t2
+u3
+  c3/t3
+u4
+  d4/t4
+u5
+  e5/t5/50
+dR5/t5
+u6
+  f6
+u7
+  g7/t107
+end
+"#
+        );
+    }
     /// B-2026-09-02-38 — the STRUCT-PATTERN spelling of B-2026-09-02-25: a
     /// `let S { r, k } = s;` over an owned struct param binds VIEWS of the callee's
     /// entry copy, so a later `let m = r;` must MOVE the body rather than mint a

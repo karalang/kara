@@ -36714,6 +36714,64 @@ done
 "#
     );
 }
+/// B-2026-09-10-16 — the INTERPRETER twin of
+/// `tests/codegen.rs`'s `e2e_arm_bound_tuple_payload_field_read_resolves`,
+/// pinned to the same string.
+///
+/// This backend ALWAYS answered these cells — the defect was codegen refusing to
+/// lower the field read at all ("cannot resolve field 'id' on this receiver"),
+/// while `karac check` accepted the program and `--interp` ran it. So this twin is
+/// not a regression guard for a fix that landed here; it is the ORACLE the compiled
+/// side is now pinned against, and the thing that would catch a future "fix" to
+/// codegen that made the two backends agree by changing this one.
+#[test]
+fn test_arm_bound_tuple_payload_field_read_resolves() {
+    assert_eq!(
+        run(r#"struct R { id: i64, tag: String }
+impl R { fn get(ref self) -> i64 { return self.id; } }
+impl Drop for R { fn drop(mut ref self) { println(f"dR{self.id}/{self.tag}") } }
+fn mk(i: i64) -> R { return R { id: i, tag: f"t{i}" }; }
+fn src(i: i64) -> Option[(R, R)] { if i > 0 { return Some((mk(i), mk(i + 100))); } return None; }
+
+fn u1() { let o: Option[(R, R)] = Some((mk(1), mk(101)));
+          match o { Some(t) => { println(f"  a{t.0.id}/{t.0.tag}") } None => { println("  n") } } }
+fn u2() { let o: Result[(R, R), i64] = Ok((mk(2), mk(102)));
+          match o { Ok(t) => { println(f"  b{t.0.id}/{t.0.tag}") } Err(e) => { println(f"  e{e}") } } }
+fn u3() { let o: Option[(R, R)] = Some((mk(3), mk(103)));
+          if let Some(t) = o { println(f"  c{t.0.id}/{t.0.tag}") } else { println("  n") } }
+fn u4() { let mut n = 4; while let Some(t) = src(n) { println(f"  d{t.0.id}/{t.0.tag}"); n = 0; } }
+fn u5() { let o: Option[(R, i64)] = Some((mk(5), 50));
+          match o { Some((a, b)) => { println(f"  e{a.id}/{a.tag}/{b}") } None => { println("  n") } } }
+fn u6() { let o: Option[(i64, i64)] = Some((6, 60));
+          match o { Some(t) => { println(f"  f{t.0}") } None => { println("  n") } } }
+fn u7() { let o: Option[(R, R)] = Some((mk(7), mk(107)));
+          match o { Some(t) => { println(f"  g{t.0.get()}/{t.1.tag}") } None => { println("  n") } } }
+
+fn main() {
+    println("u1"); u1(); println("u2"); u2(); println("u3"); u3();
+    println("u4"); u4(); println("u5"); u5(); println("u6"); u6();
+    println("u7"); u7(); println("end");
+}
+"#),
+        r#"u1
+  a1/t1
+u2
+  b2/t2
+u3
+  c3/t3
+u4
+  d4/t4
+u5
+  e5/t5/50
+dR5/t5
+u6
+  f6
+u7
+  g7/t107
+end
+"#
+    );
+}
 /// B-2026-09-02-38 — the STRUCT-PATTERN spelling of B-2026-09-02-25: a
 /// `let S { r, k } = s;` over an owned struct param binds VIEWS of the callee's
 /// entry copy, so a later `let m = r;` must MOVE the body rather than mint a

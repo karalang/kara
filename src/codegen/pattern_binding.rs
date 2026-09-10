@@ -551,6 +551,73 @@ impl<'ctx> super::Codegen<'ctx> {
                                         .insert(name.clone(), inner);
                                 }
                             }
+                            // B-2026-09-10-16 — a MATCH-ARM PAYLOAD BINDING is
+                            // the FOURTH source of a tuple's element types, after
+                            // the container element (B-2026-08-28-34), the struct
+                            // field (B-2026-09-03-12) and the Array-from-a-field
+                            // (B-2026-09-04-28). Without it the binding's elements
+                            // were unknown to codegen, so `match o { Some(t) =>
+                            // t.0.id }` over an `Option[(W, W)]` failed
+                            // `karac build` with the loud "cannot resolve field"
+                            // gap while `karac check` accepted it and `--interp`
+                            // answered it. Only the FIELD read was affected: `t.0`
+                            // alone builds, because the tuple-index lowering reads
+                            // the LLVM aggregate directly and needs no name — it
+                            // is the SECOND hop that has nothing to resolve
+                            // against. `if let` and `while let` share this binder
+                            // and failed identically; `Result` does too.
+                            //
+                            // The typechecker already records the whole tuple
+                            // `TypeExpr` for this binding
+                            // (`record_pattern_inner_type`'s `Type::Tuple` arm),
+                            // so the source was present and only the transcription
+                            // into `tuple_var_elem_type_names` was missing — the
+                            // same registry, and the same spelling, the annotated
+                            // `let` path fills via `register_var_from_type_expr`.
+                            //
+                            // Substituted through the ACTIVE MONOMORPH first,
+                            // because `pattern_binding_inner_types` is a
+                            // PRE-monomorphization record — the generic-struct arm
+                            // below says so and does the same. Inside a monomorph
+                            // a declared `(T, i64)` payload must resolve `T` to
+                            // what this instantiation bound it to.
+                            //
+                            // FAIL CLOSED on whatever the substitution does not
+                            // resolve: an element is recorded only when it names a
+                            // type codegen has a LAYOUT for, and as `None`
+                            // otherwise — never as its bare spelling. Outside a
+                            // monomorph, or for a parameter this instantiation
+                            // does not bind, the recorded spelling is still `T`,
+                            // and a consumer taking that at face value would
+                            // resolve a field read against whatever unrelated type
+                            // happens to share the name. That is the
+                            // silent-wrong-answer trade B-2026-08-27-49 measured
+                            // and rejected, and `call_tuple_elem_type_name` is the
+                            // established precedent for a source that can carry a
+                            // bare parameter: it gates on the same predicate and
+                            // keeps refusing loudly for everything it cannot bind.
+                            // A scalar element (`i64`) is `None` here for the same
+                            // reason and costs nothing — it has no fields to
+                            // resolve and is a no-drop leaf either way.
+                            "Tuple" => {
+                                let tup_te = self.subst_monomorph_type_params(&inner_te);
+                                if let TypeKind::Tuple(elems) = &tup_te.kind {
+                                    let names: Vec<Option<String>> = elems
+                                        .iter()
+                                        .map(|e| match &e.kind {
+                                            TypeKind::Path(p) => p
+                                                .segments
+                                                .last()
+                                                .filter(|n| self.is_known_layout_type_name(n))
+                                                .cloned(),
+                                            _ => None,
+                                        })
+                                        .collect();
+                                    self.var_types
+                                        .tuple_var_elem_type_names
+                                        .insert(name.clone(), names);
+                                }
+                            }
                             _ => {}
                         }
                     }
