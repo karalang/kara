@@ -93,7 +93,7 @@ distinguish "bugs flattening" from "we stopped writing them down."
 | class | total |
 |---|---|
 | miscompile | 403 |
-| run-vs-build | 382 |
+| run-vs-build | 385 |
 | leak | 316 |
 | double-free | 222 |
 | missing-feature | 194 |
@@ -110,7 +110,7 @@ distinguish "bugs flattening" from "we stopped writing them down."
 
 | surface | total |
 |---|---|
-| codegen | 1650 |
+| codegen | 1653 |
 | interp | 414 |
 | typecheck | 295 |
 | other | 81 |
@@ -166,8 +166,10 @@ _Generated from `bug-ledger.jsonl` by `scripts/bug-curve.py` (2026-05-20 → 202
 | B-2026-09-10-11 | 2026-09-10 | codegen | low | A SHARED-PAYLOAD ENUM ON THE RETURN ROUTE STRANDS ITS 16-BYTE REFCOUNT BLOCK -- `let z = passt(mket(3))` over `enum Et { A(Sh), B }` with `shared struct Sh` loses 16 B in 1 block at -O0, because the admission gate's `shared` clause asks whether the ENUM is shared and not whether its PAYLOAD is | — |
 | B-2026-09-10-13 | 2026-09-10 | codegen+interp | low | A GENERIC ENVELOPE NESTED INSIDE A GENERIC ENVELOPE RUNS NO `Drop` BODY AND LEAKS 72 B DIRECT + 27 B INDIRECT -- `let n = G.X(G.X(mkr(4)));` over `enum G[T] { X(T), Y }` prints nothing on either backend and strands both the inner envelope's box and the payload's three `String`s, while the one-level spelling `G.X(mkr(4))` is correct and clean after B-2026-09-10-2 | — |
 | B-2026-09-10-14 | 2026-09-10 | codegen+interp | low | A WHOLE-PAYLOAD ARM BINDING OVER A LOCAL `Option[(R, R)]` RUNS NO ELEMENT `Drop` BODY ON EITHER BACKEND -- `match o { Some(t) => { println("hit") } .. }` prints `x hit` where `x hit dR1 dR2` is due, on `--interp`, `-O0` and `-O2` auto-par alike; the DESTRUCTURING arm `Some((a, b))` over the same local is correct on all three, and so is the same local with no `match` at all, so the gap is the whole-value binding rather than the payload shape. Memory is balanced (0 valgrind errors, nothing lost), so the absent output is the only observable | none |
-| B-2026-09-10-15 | 2026-09-10 | codegen | low | AN `Option[Option[R]]` PAYLOAD RUNS ITS `Drop` BODY ON THE INTERPRETER AND NOWHERE ON THE COMPILED BACKENDS -- `fn takeR(x: Option[Option[R]])` over a fresh-temp argument prints `ok dR71 done` under `--interp` and `ok done` on `karac build` at both opt levels, because `emit_optres_payload_user_drop_bodies_fn` has arms for a payload that is a user struct, a user enum or a tuple and none for a payload that is itself an `Option`/`Result` envelope; the memory side already walks that chain, so the box and interior are owned and only the body is lost (0 valgrind errors, nothing lost) | none |
 | B-2026-09-10-16 | 2026-09-10 | codegen | low | A FIELD READ THROUGH AN ARM-BOUND ENUM TUPLE PAYLOAD NEVER LOWERS -- `match o { Some(t) => t.0.id }` over `Option[(W, W)]` fails `karac build` with "codegen: cannot resolve field 'id' on this receiver (its type was not recorded for codegen)" while `karac check` accepts it and `--interp` answers it; the match-arm payload binding is a fourth source of a tuple's element types that the place-chain recorder does not populate, after the container-element, struct-field and Array-from-field sources fixed by B-2026-08-28-34, B-2026-09-03-12 and B-2026-09-04-28. LOUD (codegen refuses), and destructuring the payload instead builds and runs | none |
+| B-2026-09-10-17 | 2026-09-10 | codegen | low | A STRUCT FIELD TYPED `Option[Option[R]]` RUNS NO INNER `Drop` BODY ON THE COMPILED BACKENDS -- `struct W { o: Option[Option[R]] }` with a never-read `let w = W { o: Some(Some(R { .. })) }` prints `dR71 ok done` under `--interp` and `ok done` under `karac build` at `-O0` and at `-O2` auto-par, while the ONE-LEVEL field `Option[R]` is correct on all three. The payload walker exists after B-2026-09-10-15 and the struct-field arm would call it; nothing registers a bodies action for `w` at all, because `type_runs_user_drop` widens exactly ONE container level past a field's head name and says so in its own comment ("deeper nesting (`Vec[Vec[Res]]`) is the recorded residual"). Memory is balanced on both backends | none |
+| B-2026-09-10-18 | 2026-09-10 | codegen | low | A WHOLE-BINDING LOCAL TUPLE HOLDING AN `Option[R]` ELEMENT RUNS NO PAYLOAD `Drop` BODY ON THE COMPILED BACKENDS -- a never-read `let p = (Some(R { id: 71, .. }), 7);` prints `dR71 ok done` under `--interp` and `ok done` under `karac build` at `-O0` and at `-O2` auto-par. NOT a nesting defect: the `(Option[Option[R]], i64)` twin behaves identically, before and after B-2026-09-10-15, so the tuple-ELEMENT level is where it stops. The DESTRUCTURED spelling `let (o, n) = ...` was fixed by B-2026-09-03-15; this is its whole-binding twin, the same split B-2026-09-10-14 records one container over. The same `Option[R]` runs its body correctly from a bare local, a `Vec` element and a struct field. Memory is balanced on both backends | none |
+| B-2026-09-10-19 | 2026-09-10 | codegen | low | A NESTED DESTRUCTURING ARM BINDING LOSES ITS `Drop` BODY ON THE COMPILED BACKENDS -- `match x { Some(Some(r)) => { println(f"a{r.id}") } .. }` over `Option[Option[R]]` prints `a71 dR71 done` under `--interp` and `a71 done` under `karac build` at `-O0` and at `-O2` auto-par, while the one-level `Some(r)` over `Option[R]` is correct on all three. B-2026-09-10-15's payload walker is disarmed here on purpose -- `suppress_optres_payload_bodies_for_match` stands the place down when an arm DESTRUCTURES the payload, because the leaves are then supposed to own it -- so the place hands ownership to the nested leaf and the leaf does not take it. Memory is balanced on both backends | none |
 
 ### Relocated
 
@@ -2458,6 +2460,7 @@ _Generated from `bug-ledger.jsonl` by `scripts/bug-curve.py` (2026-05-20 → 202
 | B-2026-09-10-5 | codegen | high | A NAMED-LOCAL GENERIC ENUM PASSED BY VALUE SMASHES THE CALLER'S STACK -- `let a = G.X(W2 { a: 1, b: 2 }); hg(a);` over `enum G[T] { X(T), Y }` SIGSEG… | 91bd67b01 |
 | B-2026-09-10-9 | codegen | high | EVERY ELEMENT OF A BOXED TUPLE PAYLOAD RUNS ITS `Drop` BODY OVER A BOX THE CALLEE HAS ALREADY FREED -- `fn takeR(x: Option[(R, R)])` reads freed memo… | a56142bd8 |
 | B-2026-09-10-12 | codegen | medium | THE -O0 ASAN RATCHET IS RED ON `main`: `asan_arm_bound_array_rebind_leaves_memory_with_one_owner` (2d991e9's own fixture) leaks 48 B in 1 allocation… | 92eeb8a |
+| B-2026-09-10-15 | codegen | medium | AN `Option[Option[R]]` PAYLOAD RUNS ITS `Drop` BODY ON THE INTERPRETER AND NOWHERE ON THE COMPILED BACKENDS -- `fn takeR(x: Option[Option[R]])` over… | e9d902b4b |
 
 </details>
 
