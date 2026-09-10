@@ -85498,6 +85498,281 @@ fn main() {
     /// cells 1 and 3 are clean.
     ///
     /// Cells 7-9 carry the leak direction, since the fix REMOVES a drop.
+    /// B-2026-09-06-49 / B-2026-09-10-6 — a boxed `Array` payload of a seeded
+    /// `Option`/`Result` has EXACTLY ONE owner of its interior, in each of the
+    /// four places the payload can come from and go to.
+    ///
+    /// The two rows are one defect seen from its two ends, and neither is
+    /// visible without the other. An `Array[String, 2]` payload is 6 words, so
+    /// it boxes; the box's drop was box-ONLY, exactly the "box reclaimed,
+    /// contents not" signature B-2026-09-04-12 fixed for a TUPLE payload. What
+    /// hid it is that a NAMED array local carries its own `StructDrop` from
+    /// `make_array_param_callee_owned` and nothing stood that down at the move
+    /// into the variant, so it was an ACCIDENTAL owner:
+    ///
+    ///   f(Some([f"a", f"b"]))       nobody owns the interior  -> 54 B in 6
+    ///                               blocks over three calls (-49)
+    ///   let p = [..]; f(Some(p))    the caller's local owns it -> clean, and
+    ///                               that accident is what made -49 look like
+    ///                               an inline-literal-only bug
+    ///   .. plus `Some(t) => take(t)` a second owner appears     -> `free():
+    ///                               double free detected in tcache 2` (-6)
+    ///
+    /// So the fix cannot be one-sided: giving the box its interior without
+    /// retracting the caller converts every named cell into -6, and retracting
+    /// the caller without giving the box its interior converts every named cell
+    /// into -49. Both directions were measured on the way here.
+    ///
+    /// THE RETRACTION IS GATED ON THE CALLEE, and that gate is the whole
+    /// correction to this fix's first shape. Written at the variant-CONSTRUCTOR
+    /// site it is unconditional, and that site cannot see who consumes the
+    /// value it builds — so it also disarmed the caller for a GENERIC callee,
+    /// whose monomorph never reaches `compile_function`'s registration and
+    /// supplies nothing in its place. `fn takesOpt[T: Display](x: Option[T])`
+    /// is CLEAN on `main` and leaks 54 B under that form; cells 8 and 9 are the
+    /// controls that keep it that way.
+    ///
+    /// THE ARM-SIDE HANDOVER IS NOT THE TUPLE'S. A tuple payload retracts at
+    /// the arm via `binding_only_borrowed`, whose own doc records that it
+    /// models a free-function argument as entry-copied and NON-consuming —
+    /// right for a user `Drop` BODY, which the callee never runs, and wrong for
+    /// MEMORY, which an owned array param does take. Widening that predicate
+    /// instead retracts on `let u = t` too, where the rebind creates no owner
+    /// at all (B-2026-09-10-4 registers an arm-bound `Array` in the type tables
+    /// and deliberately in no memory table): measured as a fresh 72 B leak on
+    /// the read-only rebind cell, which is why the retraction lives at the
+    /// ARGUMENT site, where a second owner actually appears.
+    ///
+    /// `-O2` IS THE WRONG PLACE TO MEASURE ANY OF THIS and this harness builds
+    /// there, so the leak cells are carried by the `-O0` ratchet leg
+    /// (`scripts/asan-o0-leg.sh`) that runs this same suite; at `-O2` LLVM
+    /// deletes the buffers nothing observes and every leak cell here is
+    /// vacuously green. What this fixture catches at `-O2` is the double-free
+    /// half, which aborts at every level.
+    #[test]
+    fn asan_boxed_array_payload_interior_has_exactly_one_owner() {
+        // 1 — -49 proper: an inline literal payload, nobody owning the two
+        //     `String`s. 54 B in 6 blocks over three calls before the fix.
+        assert_clean_asan_run(
+            "fn plainA(x: Option[Array[String, 2]]) -> i64 {\n\
+             \x20   match x { Some(t) => { println(f\"s:{t[0]}\"); 1 } None => { println(\"n\"); 0 } }\n\
+             }\n\
+             fn main() {\n\
+             \x20   let mut s = 0;\n\
+             \x20   for i in 0..3 {\n\
+             \x20       s = s + plainA(Some([f\"aaaaaaaa{i}\", f\"bbbbbbbb{i}\"]));\n\
+             \x20   }\n\
+             \x20   println(f\"n:{s}\");\n\
+             }\n",
+            &["s:aaaaaaaa0", "s:aaaaaaaa1", "s:aaaaaaaa2", "n:3"],
+            "b49-inline-literal-payload-param",
+        );
+        // 2 — the NAMED-local spelling of cell 1. Clean before the fix by
+        //     accident, and the cell that turns into a double free if the box
+        //     is given the interior without retracting the caller's local.
+        assert_clean_asan_run(
+            "fn plainA(x: Option[Array[String, 2]]) -> i64 {\n\
+             \x20   match x { Some(t) => { println(f\"s:{t[0]}\"); 1 } None => { println(\"n\"); 0 } }\n\
+             }\n\
+             fn main() {\n\
+             \x20   let mut s = 0;\n\
+             \x20   for i in 0..3 {\n\
+             \x20       let p: Array[String, 2] = [f\"aaaaaaaa{i}\", f\"bbbbbbbb{i}\"];\n\
+             \x20       s = s + plainA(Some(p));\n\
+             \x20   }\n\
+             \x20   println(f\"n:{s}\");\n\
+             }\n",
+            &["s:aaaaaaaa0", "s:aaaaaaaa1", "s:aaaaaaaa2", "n:3"],
+            "b49-named-local-payload-param",
+        );
+        // 3 — -6 proper: the arm's whole-payload binding handed BY VALUE to a
+        //     callee that copies it in and frees it at scope exit. Aborts
+        //     `free(): double free detected in tcache 2` before the fix, 14
+        //     frees against 12 allocs.
+        assert_clean_asan_run(
+            "fn take(a: Array[String, 2]) { println(f\"t:{a[0]}\") }\n\
+             fn plainP(x: Option[Array[String, 2]]) {\n\
+             \x20   match x { Some(t) => { take(t) } None => { println(\"n\") } }\n\
+             }\n\
+             fn main() {\n\
+             \x20   let a: Array[String, 2] = [f\"aaaaaaaa0\", f\"bbbbbbbb0\"];\n\
+             \x20   plainP(Some(a));\n\
+             }\n",
+            &["t:aaaaaaaa0"],
+            "b6-arm-binding-passed-by-value",
+        );
+        // 4 — the same consumer reached through a REBIND. The alias has to hop
+        //     `t -> u`, or the arg site cannot find the box to stand down.
+        assert_clean_asan_run(
+            "fn take(a: Array[String, 2]) { println(f\"t:{a[0]}\") }\n\
+             fn plainM(x: Option[Array[String, 2]]) {\n\
+             \x20   match x { Some(t) => { let u = t; take(u) } None => { println(\"n\") } }\n\
+             }\n\
+             fn main() {\n\
+             \x20   let a: Array[String, 2] = [f\"aaaaaaaa0\", f\"bbbbbbbb0\"];\n\
+             \x20   plainM(Some(a));\n\
+             }\n",
+            &["t:aaaaaaaa0"],
+            "b6-arm-binding-rebound-then-passed",
+        );
+        // 5 — the LET site, which has its own registration and needed the same
+        //     pair. 18 B at `-O0` before the fix for the inline spelling, and a
+        //     double free for the named one once the consumer is added.
+        assert_clean_asan_run(
+            "fn take(a: Array[String, 2]) { println(f\"t:{a[0]}\") }\n\
+             fn main() {\n\
+             \x20   let a: Array[String, 2] = [f\"aaaaaaaa0\", f\"bbbbbbbb0\"];\n\
+             \x20   let o = Some(a);\n\
+             \x20   match o { Some(t) => { take(t) } None => { println(\"n\") } }\n\
+             }\n",
+            &["t:aaaaaaaa0"],
+            "b6-let-site-named-payload-consumed",
+        );
+        // 6 — the `Result` twin of cell 5. The let site derives its payload
+        //     through `option_generic_arg_type_expr`, which answers `None` for
+        //     a `Result`, so this side needed a per-VARIANT derivation rather
+        //     than the `Option`-shaped one beside it.
+        assert_clean_asan_run(
+            "fn take(a: Array[String, 2]) { println(f\"t:{a[0]}\") }\n\
+             fn main() {\n\
+             \x20   let a: Array[String, 2] = [f\"aaaaaaaa0\", f\"bbbbbbbb0\"];\n\
+             \x20   let o: Result[Array[String, 2], i64] = Ok(a);\n\
+             \x20   match o { Ok(t) => { take(t) } Err(e) => { println(f\"e:{e}\") } }\n\
+             }\n",
+            &["t:aaaaaaaa0"],
+            "b6-let-site-result-ok-payload-consumed",
+        );
+        // 7 — the `Err` SIDE carries a payload of its own, and both sides of a
+        //     `Result` register against one slot. `BoxedEnumDrop`'s tag guard
+        //     is what keeps exactly one of them firing.
+        assert_clean_asan_run(
+            "fn take(a: Array[String, 2]) { println(f\"t:{a[0]}\") }\n\
+             fn plainE(x: Result[i64, Array[String, 2]]) {\n\
+             \x20   match x { Ok(v) => { println(f\"v:{v}\") } Err(t) => { take(t) } }\n\
+             }\n\
+             fn main() {\n\
+             \x20   let a: Array[String, 2] = [f\"aaaaaaaa0\", f\"bbbbbbbb0\"];\n\
+             \x20   plainE(Err(a));\n\
+             }\n",
+            &["t:aaaaaaaa0"],
+            "b6-result-err-side-payload-consumed",
+        );
+        // 8 — GENERIC CALLEE CONTROL, named payload. Clean on `main` and the
+        //     cell an unconditional caller-side retraction leaks 54 B on: the
+        //     monomorph registers nothing to replace what was retracted.
+        assert_clean_asan_run(
+            "fn takesOpt[T: Display](x: Option[T]) -> i64 {\n\
+             \x20   match x { Some(t) => { println(f\"s:{t}\"); 1 } None => { println(\"n\"); 0 } }\n\
+             }\n\
+             fn main() {\n\
+             \x20   let mut s = 0;\n\
+             \x20   for i in 0..3 {\n\
+             \x20       let p: Array[String, 2] = [f\"aaaaaaaa{i}\", f\"bbbbbbbb{i}\"];\n\
+             \x20       s = s + takesOpt(Some(p));\n\
+             \x20   }\n\
+             \x20   println(f\"n:{s}\");\n\
+             }\n",
+            &[
+                "s:[aaaaaaaa0, bbbbbbbb0]",
+                "s:[aaaaaaaa1, bbbbbbbb1]",
+                "s:[aaaaaaaa2, bbbbbbbb2]",
+                "n:3",
+            ],
+            "b49-generic-callee-named-control",
+        );
+        // 9 — the generic control with a WILDCARD arm, which binds nothing and
+        //     so cannot be covered by any arm-level retraction.
+        assert_clean_asan_run(
+            "fn takesOpt[T: Display](x: Option[T]) -> i64 {\n\
+             \x20   match x { Some(_) => { println(\"s\"); 1 } None => { println(\"n\"); 0 } }\n\
+             }\n\
+             fn main() {\n\
+             \x20   let mut s = 0;\n\
+             \x20   for i in 0..3 {\n\
+             \x20       let p: Array[String, 2] = [f\"aaaaaaaa{i}\", f\"bbbbbbbb{i}\"];\n\
+             \x20       s = s + takesOpt(Some(p));\n\
+             \x20   }\n\
+             \x20   println(f\"n:{s}\");\n\
+             }\n",
+            &["s", "s", "s", "n:3"],
+            "b49-generic-callee-wildcard-control",
+        );
+        // 10 — a `ref` param takes no ownership, so the box must KEEP its
+        //      interior here. The mirror of cell 3, and the cell that fails if
+        //      the arg-site retraction forgets to check the borrow flags.
+        assert_clean_asan_run(
+            "fn peek(a: ref Array[String, 2]) { println(f\"p:{a[0]}\") }\n\
+             fn plainB(x: Option[Array[String, 2]]) {\n\
+             \x20   match x { Some(t) => { peek(t) } None => { println(\"n\") } }\n\
+             }\n\
+             fn main() {\n\
+             \x20   let a: Array[String, 2] = [f\"aaaaaaaa0\", f\"bbbbbbbb0\"];\n\
+             \x20   plainB(Some(a));\n\
+             }\n",
+            &["p:aaaaaaaa0"],
+            "b6-ref-param-keeps-the-box-owner",
+        );
+        // 11 — an all-SCALAR element needs no interior drop at all, and
+        //      `option_payload_struct_or_enum_drop_ok` is what keeps it from
+        //      getting one.
+        assert_clean_asan_run(
+            "fn plainI(x: Option[Array[i64, 2]]) {\n\
+             \x20   match x { Some(t) => { println(f\"s:{t[0]}\") } None => { println(\"n\") } }\n\
+             }\n\
+             fn main() {\n\
+             \x20   let a: Array[i64, 2] = [7, 9];\n\
+             \x20   plainI(Some(a));\n\
+             }\n",
+            &["s:7"],
+            "b49-scalar-element-control",
+        );
+        // 12 — a user `Drop` element, so the BODIES channel is exercised
+        //      alongside the memory one. Bodies follow the move and memory does
+        //      not (B-2026-08-28-57), so a fix that conflates them prints the
+        //      body twice or not at all.
+        assert_clean_asan_run(
+            "struct R9 { id: i64 }\n\
+             impl Drop for R9 { fn drop(mut ref self) { println(f\"dR{self.id}\") } }\n\
+             fn plainD(x: Option[Array[R9, 2]]) {\n\
+             \x20   match x { Some(t) => { println(f\"s:{t[0].id}\") } None => { println(\"n\") } }\n\
+             }\n\
+             fn main() {\n\
+             \x20   let a: Array[R9, 2] = [R9 { id: 1 }, R9 { id: 2 }];\n\
+             \x20   plainD(Some(a));\n\
+             }\n",
+            &["s:1"],
+            "b49-user-drop-element",
+        );
+        // 13 — THE ESCAPE CONTROL, and the cell this fix actually tripped over.
+        //      `let back = passthru(Some(e))` RECEIVES a box built at the
+        //      call's argument site; the named array local `e` upstream is
+        //      still its interior's owner, and this `let` has no source to
+        //      retract. Registering the interior here anyway makes two owners
+        //      — ASAN `attempting double-free`, on every surface including
+        //      `-O2`.
+        //
+        //      The gate is that the RHS must be a seeded variant CONSTRUCTOR,
+        //      i.e. that this `let` BUILDS the box rather than receiving one.
+        //      `asan_generic_callee_boxed_optres_temp_arg_frees_its_box` cell
+        //      5 is the same control, written for this hazard before this row
+        //      existed, and it is what caught the miss; this cell keeps the
+        //      pairing legible from inside this row's own fixture.
+        assert_clean_asan_run(
+            "fn passthru[T](x: Option[T]) -> Option[T] { return x; }\n\
+             fn takesOpt[T: Display](x: Option[T]) -> i64 {\n\
+             \x20   match x { Some(t) => { println(f\"o:{t}\"); 1 } None => { println(\"n\"); 0 } }\n\
+             }\n\
+             fn main() {\n\
+             \x20   let e: Array[String, 2] = [f\"aaaaaaaa0\", f\"bbbbbbbb0\"];\n\
+             \x20   let back = passthru(Some(e));\n\
+             \x20   let c = takesOpt(back);\n\
+             \x20   println(f\"c{c}\");\n\
+             }\n",
+            &["o:[aaaaaaaa0, bbbbbbbb0]", "c1"],
+            "b49-passthrough-escape-control",
+        );
+    }
+
     #[test]
     fn asan_arm_bound_array_rebind_leaves_memory_with_one_owner() {
         // 1 — the live bug: an ANNOTATED rebind of an arm-bound payload.

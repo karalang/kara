@@ -3703,6 +3703,22 @@ impl<'ctx> super::Codegen<'ctx> {
     /// `Vec[Vec[Option[String]]]` element stays false and keeps its existing
     /// (one-level fast) path rather than a wrong no-op.
     pub(super) fn te_recursive_drop_fully_supported(&self, te: &TypeExpr) -> bool {
+        // B-2026-09-06-49 / B-2026-09-10-6 — an `Array[T, N]`, answered
+        // BEFORE the kind match and through `array_elem_and_len`, because the
+        // two spellings of a fixed array do not share a kind: an ANNOTATED
+        // `Array[String, 2]` parses to `Path(["Array"], [Type(String),
+        // Const(2)])` and only an array LITERAL's inferred type is
+        // `TypeKind::Array`. An arm keyed on the kind compiles, applies
+        // cleanly, and misses every annotated parameter — the trap
+        // B-2026-09-06-49's investigation recorded after tracing a gate that
+        // printed `Path(["Array"], ...)` with `ok=false`.
+        //
+        // The promise this makes is `emit_drop_fn_for_array`, which walks
+        // 0..N through `vec_element_drain_fn`, so the recursion is exactly the
+        // element's own support question.
+        if let Some((elem_te, n)) = self.array_elem_and_len(te) {
+            return n > 0 && self.te_recursive_drop_fully_supported(&elem_te);
+        }
         match &te.kind {
             TypeKind::Weak(_) => true,
             TypeKind::Tuple(elems) => elems
@@ -3877,6 +3893,22 @@ impl<'ctx> super::Codegen<'ctx> {
     /// `option_payload_inline_recursive_drop_ok` (the String/Vec overlay
     /// gate); a `false` keeps the status-quo fast path.
     pub(super) fn option_payload_struct_or_enum_drop_ok(&self, payload_te: &TypeExpr) -> bool {
+        // B-2026-09-06-49 / B-2026-09-10-6 — an `Array[T, N]` payload whose
+        // element owns heap, the array peer of the `Tuple` arm below and
+        // admitted on the same two conditions: at least one thing to free, and
+        // a drop this predicate can actually promise.
+        //
+        // Keyed through `array_elem_and_len` for the both-spellings reason
+        // spelled out on `te_recursive_drop_fully_supported`. Admitting a
+        // payload here ARMS the move-site zero, so it must not be widened past
+        // what `emit_drop_fn_for_type_expr` will emit — an admitted head whose
+        // emitter bottoms out on the primitive no-op is a leak, which is the
+        // rule the `Map`/`Set` sibling below states at length.
+        if let Some((elem_te, n)) = self.array_elem_and_len(payload_te) {
+            return n > 0
+                && !super::vec_method::is_trivially_copyable_te(&elem_te)
+                && self.te_recursive_drop_fully_supported(payload_te);
+        }
         // B-2026-08-05-3 — a TUPLE payload carrying heap is the same situation
         // one type-shape over, and fell out at the `TypeKind::Path` bind below.
         // Requires at least one non-trivially-copyable element, so an

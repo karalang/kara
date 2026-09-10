@@ -7768,11 +7768,93 @@ impl<'ctx> super::Codegen<'ctx> {
                                             .insert(var_name.to_string(), src);
                                     }
                                 }
+                                // B-2026-09-06-49 / B-2026-09-10-6 — a NAMED
+                                // array local moved whole into the variant
+                                // (`let a = [..]; let o = Some(a)`) keeps its
+                                // own `StructDrop` from
+                                // `make_array_param_callee_owned`, and the
+                                // registration below is about to make the box
+                                // a second owner of the same buffer. Stand the
+                                // source down.
+                                //
+                                // Silent while the box is only read — the
+                                // elements are freed twice and nothing
+                                // observes it — until a downstream by-value
+                                // consumer of the arm's binding turns it into
+                                // `free(): double free detected in tcache 2`
+                                // at `-O0` and under the JIT (-6).
+                                //
+                                // Gated on the SAME three questions the
+                                // registration asks, per VARIANT: retracting a
+                                // source whose interior nothing takes over is
+                                // how the first shape of this fix leaked 54 B.
+                                if let Some((rhs_variant, payload_arg)) =
+                                    Self::seeded_variant_arg_payload(value)
+                                {
+                                    let takes_over = boxed
+                                        .iter()
+                                        .any(|(_, v, _)| *v == rhs_variant)
+                                        && Self::seeded_variant_payload_te(te, rhs_variant)
+                                            .is_some_and(|p| {
+                                                self.array_elem_and_len(&p).is_some()
+                                                    && self
+                                                        .option_payload_struct_or_enum_drop_ok(&p)
+                                            });
+                                    if takes_over {
+                                        self.suppress_array_binding_move_arg(payload_arg);
+                                    }
+                                }
                                 for (enum_name, variant, inner) in &boxed {
+                                    // B-2026-09-06-49 / B-2026-09-10-6 — the
+                                    // `Array` peer of `tuple_inner_drop`, and
+                                    // per VARIANT rather than beside it
+                                    // because `payload_te` above is
+                                    // Option-only (`option_generic_arg_type_expr`)
+                                    // while a `Result` carries a different
+                                    // payload on each side. Resolved through
+                                    // `array_elem_and_len`, since an annotated
+                                    // payload arrives as `Path(["Array"], ..)`
+                                    // and `TypeKind::Array` is only ever an
+                                    // array LITERAL's inferred type.
+                                    //
+                                    // Registering for BOTH sides of a `Result`
+                                    // is safe by construction:
+                                    // `BoxedEnumDrop` reads the live tag and
+                                    // frees only when it matches the variant
+                                    // registered for, so exactly one fires.
+                                    //
+                                    // Measured at `-O0`: 18 B lost per call
+                                    // for `Option[Array[String, 2]]` and the
+                                    // `Ok`/`Err` twins alike, box reclaimed
+                                    // and contents not — the same signature
+                                    // the tuple arm above was added for.
+                                    //
+                                    // GATED ON THIS `let` BUILDING THE BOX
+                                    // ITSELF, and that gate is not decoration.
+                                    // `let back = passthru(Some(e))` RECEIVES
+                                    // a box built at the call's argument site,
+                                    // where a named array local upstream is
+                                    // still its interior's owner — this arm
+                                    // has no source to retract there and
+                                    // registering anyway makes two owners.
+                                    // Measured as an ASAN
+                                    // `attempting double-free` on
+                                    // `asan_generic_callee_boxed_optres_temp_arg_frees_its_box`,
+                                    // whose cell 5 is the escape control
+                                    // written for exactly this hazard.
+                                    let array_inner_drop = Self::seeded_variant_ctor_name(value)
+                                        .filter(|c| c == variant)
+                                        .and_then(|_| Self::seeded_variant_payload_te(te, variant))
+                                        .filter(|p| {
+                                            self.array_elem_and_len(p).is_some()
+                                                && self.option_payload_struct_or_enum_drop_ok(p)
+                                        })
+                                        .map(|p| self.emit_drop_fn_for_type_expr(&p));
                                     let nested_opt_drop = payload_te
                                         .as_ref()
                                         .and_then(|p| self.option_shared_payload_element_drop(p))
-                                        .or(tuple_inner_drop);
+                                        .or(tuple_inner_drop)
+                                        .or(array_inner_drop);
                                     if let Some(drop_fn) = nested_opt_drop {
                                         self.track_boxed_enum_var_with_inner_drop(
                                             var_name,
@@ -9264,6 +9346,31 @@ impl<'ctx> super::Codegen<'ctx> {
                                 // `rebind_source_keeps_array_memory`.
                                 let rebind_of_live_array_owner =
                                     self.rebind_source_keeps_array_memory(value);
+                                // B-2026-09-10-6 — carry the boxed-payload
+                                // alias across the rebind. `let u = t` over an
+                                // arm-bound `Array` payload creates no owner
+                                // (that is what the flag above encodes), so `u`
+                                // is a second NAME for the same buffer the box
+                                // holds. The arg-site retraction in
+                                // `call_dispatch.rs` looks the handover up by
+                                // name, and without this hop `take(u)` cannot
+                                // find the box to stand down — the two-step
+                                // spelling of the same double free, 14 frees
+                                // against 12 allocs.
+                                if rebind_of_live_array_owner {
+                                    if let ExprKind::Identifier(src) = &value.kind {
+                                        if let Some(entry) = self
+                                            .payload_vars
+                                            .boxed_payload_alias
+                                            .get(src.as_str())
+                                            .cloned()
+                                        {
+                                            self.payload_vars
+                                                .boxed_payload_alias
+                                                .insert(var_name.to_string(), entry);
+                                        }
+                                    }
+                                }
                                 if let Some((elem_te, n)) = arr_parts.clone() {
                                     if !rebind_of_live_array_owner {
                                         let elem_ty = self.llvm_type_for_type_expr(&elem_te);

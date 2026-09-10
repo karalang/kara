@@ -2231,6 +2231,68 @@ impl<'ctx> super::Codegen<'ctx> {
                     );
                 }
             }
+            // B-2026-09-06-49 / B-2026-09-10-6 — retract the caller's array
+            // local when it is moved whole into a seeded variant that the
+            // CALLEE will take the interior of.
+            //
+            // A local `let p: Array[String, 2] = [..]` carries a `StructDrop`
+            // from `make_array_param_callee_owned`, and nothing stood it down
+            // across `f(Some(p))`. That left the caller an ACCIDENTAL owner of
+            // the payload's interior, which is the whole of both rows: it is
+            // why the named-local spelling looked clean while the inline
+            // literal leaked (-49, 54 B in 6 blocks over three calls), and it
+            // is the second owner a downstream by-value consumer of the arm's
+            // binding then double frees against (-6).
+            //
+            // GATED ON THE CALLEE, and that gate is the correction to this
+            // fix's first shape. Written at the variant-CONSTRUCTOR site
+            // (`try_compile_enum_variant_at`) the retraction is unconditional,
+            // and that site cannot see who consumes the value it builds — so
+            // it also disarmed the caller for a GENERIC callee, whose
+            // monomorph never reaches `compile_function`'s registration and
+            // therefore supplies nothing in its place. Measured: `g3`/`g5`
+            // (`fn takesOpt[T: Display](x: Option[T])`) are clean on `main`
+            // and leak 54 B with the unconditional form. Here the callee and
+            // the param index are both in hand, and asking the ANNOTATED
+            // signature declines the generic case for free: `Option[T]`'s
+            // payload is not syntactically an array.
+            if let Some((variant, inner)) = Self::seeded_variant_arg_payload(&a.value) {
+                if self.callee_takes_boxed_array_payload_interior(&name, i, variant) {
+                    self.suppress_array_binding_move_arg(inner);
+                }
+            }
+            // B-2026-09-10-6 — the OTHER end of the same handover: an arm's
+            // whole-payload binding out of a boxed `Array` payload, handed
+            // BY VALUE to a callee that copies it in and frees it at scope
+            // exit (`make_array_param_callee_owned`). The box's interior drop
+            // registered on the enclosing param and that callee then both own
+            // the elements — `free(): double free detected in tcache 2` at
+            // `-O0` and under the JIT, 14 frees against 12 allocs.
+            //
+            // NOT the arm-level retraction the tuple payload uses. That one
+            // asks `binding_only_borrowed`, whose own doc records that it
+            // models a free-function argument as entry-copied and
+            // NON-consuming — right for the question it was built for, since
+            // the callee runs no user `Drop` body for it, and wrong for
+            // MEMORY, which an owned array param does take. Widening it here
+            // instead would have retracted on `let u = t` as well, where the
+            // rebind creates no owner at all (B-2026-09-10-4 registers an
+            // arm-bound `Array` in the type tables and deliberately in no
+            // memory table) — measured as a fresh 72 B leak on the read-only
+            // rebind cell. Retracting HERE fires only where a second owner
+            // actually appears.
+            if let ExprKind::Identifier(argn) = &a.value.kind {
+                if self.callee_param_is_owned_array(&name, i) {
+                    if let Some((src, _)) = self
+                        .payload_vars
+                        .boxed_payload_alias
+                        .get(argn.as_str())
+                        .cloned()
+                    {
+                        self.clear_boxed_enum_inner_drop(&src);
+                    }
+                }
+            }
             // B-2026-08-29-63 — a param the prepass proved TRANSFER-safe has no
             // caller-side temp to own. Every registration below rests on the
             // callee entry-copying, so that "this caller temp is an INDEPENDENT
@@ -3361,6 +3423,135 @@ impl<'ctx> super::Codegen<'ctx> {
                     .then_some((variant, inner))
             })
             .collect()
+    }
+
+    /// The variant name and the bare-identifier payload of an argument
+    /// written as a seeded variant constructor — `Some(p)`, `Ok(p)`, `Err(p)`.
+    /// B-2026-09-06-49.
+    ///
+    /// Bare identifiers only, because the retraction it feeds has nothing to
+    /// retract otherwise: an inline literal payload never registered a
+    /// `StructDrop` in the caller's frame in the first place, which is exactly
+    /// the asymmetry -49 measured.
+    pub(super) fn seeded_variant_arg_payload(arg: &Expr) -> Option<(&'static str, &Expr)> {
+        let variant = Self::seeded_variant_ctor_name(arg)?;
+        let ExprKind::Call { args, .. } = &arg.kind else {
+            return None;
+        };
+        let [only] = args.as_slice() else {
+            return None;
+        };
+        matches!(only.value.kind, ExprKind::Identifier(_)).then_some((variant, &only.value))
+    }
+
+    /// Is this expression a seeded variant CONSTRUCTOR — `Some(..)`, `Ok(..)`,
+    /// `Err(..)` — whatever shape its payload has? B-2026-09-06-49.
+    ///
+    /// The payload-shape-free half of [`Self::seeded_variant_arg_payload`],
+    /// because the two questions have different populations. Retracting a
+    /// source needs a bare identifier to retract; deciding whether a `let`
+    /// BUILDS its box here, rather than receiving one built elsewhere, must
+    /// admit an inline literal payload too — that spelling has no source to
+    /// retract and is precisely the one that leaked.
+    pub(super) fn seeded_variant_ctor_name(arg: &Expr) -> Option<&'static str> {
+        let ExprKind::Call { callee, .. } = &arg.kind else {
+            return None;
+        };
+        let ctor = match &callee.kind {
+            ExprKind::Identifier(n) => n.as_str(),
+            ExprKind::Path { segments, .. } => segments.last()?.as_str(),
+            _ => return None,
+        };
+        match ctor {
+            "Some" => Some("Some"),
+            "Ok" => Some("Ok"),
+            "Err" => Some("Err"),
+            _ => None,
+        }
+    }
+
+    /// Will the callee's owned-param registration take the INTERIOR of a boxed
+    /// `Array` payload on this variant, so the caller must stand its own array
+    /// local down? B-2026-09-06-49 / B-2026-09-10-6.
+    ///
+    /// Deliberately the same three questions `compile_function`'s param loop
+    /// asks, read off the ANNOTATED signature rather than the monomorph type:
+    /// the payload is an array (through `array_elem_and_len`, since an
+    /// annotated payload arrives as `Path(["Array"], ..)` and a
+    /// `TypeKind::Array` test misses every one of them), it BOXES, and its
+    /// recursive drop is supported. A `ref` / `mut ref` param transfers
+    /// nothing and is declined first.
+    ///
+    /// Answering `false` is the safe direction — it leaves the caller owning
+    /// the interior, which is what `main` does today for every shape this row
+    /// does not touch.
+    fn callee_takes_boxed_array_payload_interior(
+        &self,
+        name: &str,
+        i: usize,
+        variant: &str,
+    ) -> bool {
+        let flagged = |table: &HashMap<String, Vec<bool>>| {
+            table
+                .get(name)
+                .and_then(|v| v.get(i))
+                .copied()
+                .unwrap_or(false)
+        };
+        if flagged(&self.fn_sig.fn_param_ref) || flagged(&self.fn_sig.fn_param_mut_ref) {
+            return false;
+        }
+        let Some(program) = self.program_snapshot.as_deref() else {
+            return false;
+        };
+        let Some(param_te) = program.items.iter().find_map(|item| match item {
+            Item::Function(f) if f.name == name => f.params.get(i).map(|p| p.ty.clone()),
+            _ => None,
+        }) else {
+            return false;
+        };
+        let Some(payload_te) = Self::seeded_variant_payload_te(&param_te, variant) else {
+            return false;
+        };
+        if self.array_elem_and_len(&payload_te).is_none() {
+            return false;
+        }
+        let boxed = match variant {
+            "Some" => self.option_payload_is_boxed(&payload_te),
+            _ => self.result_payload_is_boxed(&payload_te),
+        };
+        boxed && self.option_payload_struct_or_enum_drop_ok(&payload_te)
+    }
+
+    /// Is the callee's parameter `i` a bare owned `Array[T, N]`, i.e. one
+    /// `make_array_param_callee_owned` gives a callee-owned copy and a
+    /// scope-exit element drop to? B-2026-09-10-6.
+    ///
+    /// Mirrors that site's gate, read off the annotated signature: a `Path`
+    /// spelled `Array` with a positive const length, and neither `ref` nor
+    /// `mut ref` — a borrowed array param takes no ownership.
+    fn callee_param_is_owned_array(&self, name: &str, i: usize) -> bool {
+        let flagged = |table: &HashMap<String, Vec<bool>>| {
+            table
+                .get(name)
+                .and_then(|v| v.get(i))
+                .copied()
+                .unwrap_or(false)
+        };
+        if flagged(&self.fn_sig.fn_param_ref) || flagged(&self.fn_sig.fn_param_mut_ref) {
+            return false;
+        }
+        let Some(program) = self.program_snapshot.as_deref() else {
+            return false;
+        };
+        program
+            .items
+            .iter()
+            .find_map(|item| match item {
+                Item::Function(f) if f.name == name => f.params.get(i).map(|p| p.ty.clone()),
+                _ => None,
+            })
+            .is_some_and(|te| self.array_elem_and_len(&te).is_some())
     }
 
     /// Would an `Option[T]` payload of type `T` be HEAP-BOXED — i.e. does `T`'s

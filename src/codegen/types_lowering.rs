@@ -4444,6 +4444,30 @@ impl<'ctx> super::Codegen<'ctx> {
     /// `__karac_drop_struct_<T>` field cleanup runs before the box is
     /// freed) or `None` for tuples / scalars. Drives `track_boxed_enum_var`
     /// at the let-site. See docs/spikes/oversized-enum-payload.md.
+    /// B-2026-09-06-49 / B-2026-09-10-6 — the payload `TypeExpr` carried by
+    /// one SEEDED-pair variant, which [`Self::boxed_enum_payload_variants`]
+    /// names but does not hand back.
+    ///
+    /// `Result` boxes PER VARIANT, so the answer is per variant rather than
+    /// per type: `Ok` takes generic arg 0 and `Err` arg 1. `Option` has the
+    /// one payload variant. Returns `None` for any other head, so a caller
+    /// keyed on it cannot wander into a user enum by accident.
+    pub(super) fn seeded_variant_payload_te(te: &TypeExpr, variant: &str) -> Option<TypeExpr> {
+        let TypeKind::Path(p) = &te.kind else {
+            return None;
+        };
+        let idx = match (p.segments.last().map(|s| s.as_str()), variant) {
+            (Some("Option"), "Some") => 0,
+            (Some("Result"), "Ok") => 0,
+            (Some("Result"), "Err") => 1,
+            _ => return None,
+        };
+        match p.generic_args.as_ref()?.get(idx)? {
+            GenericArg::Type(t) => Some(t.clone()),
+            _ => None,
+        }
+    }
+
     pub(super) fn boxed_enum_payload_variants(
         &self,
         te: &TypeExpr,

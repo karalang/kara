@@ -2092,6 +2092,22 @@ impl<'ctx> super::Codegen<'ctx> {
             self.drop_rc.drop_fn_cache.insert(type_name, f);
             return f;
         }
+        // B-2026-09-06-49 / B-2026-09-10-6 — an `Array[T, N]` whose element
+        // owns heap. The walker already existed (`emit_drop_fn_for_array`,
+        // B-2026-08-27-30, five live callers); what was missing was routing,
+        // which is the correction B-2026-09-06-49's second investigation made
+        // to its own first one.
+        //
+        // Before the kind match and via `array_elem_and_len`, so the ANNOTATED
+        // `Path(["Array"], ...)` spelling routes as well as the literal's
+        // `TypeKind::Array`. Falls through when the element owns no heap
+        // (`emit_drop_fn_for_array` -> None), leaving `Array[i64, N]` on the
+        // primitive no-op exactly as before.
+        if let Some((elem_te, n)) = self.array_elem_and_len(te) {
+            if let Some(f) = self.emit_drop_fn_for_array(&elem_te, n) {
+                return f;
+            }
+        }
         match &te.kind {
             TypeKind::Weak(_) => self.emit_weak_slot_drop_fn(),
             TypeKind::Tuple(elems) if !elems.is_empty() => self.emit_tuple_drop_fn(elems),

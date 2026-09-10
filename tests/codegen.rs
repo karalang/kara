@@ -153960,6 +153960,181 @@ fn main() {
     /// `-O2` prints the right answer for most of these cells even when the
     /// program is corrupt, which is exactly why the memory half lives in
     /// `asan_arm_bound_array_rebind_leaves_memory_with_one_owner`.
+    /// B-2026-09-06-49 / B-2026-09-10-6 — the OUTPUT twin of
+    /// `asan_boxed_array_payload_interior_has_exactly_one_owner`.
+    ///
+    /// The memory fix moves who frees a boxed `Array` payload's interior, and
+    /// on the shapes with a user `Drop` element it also decides where the
+    /// BODIES run. Those are separate channels (B-2026-08-28-57: bodies follow
+    /// the move, memory does not), and a fix that conflates them prints a body
+    /// twice, or not at all, while every leak count still balances. This is the
+    /// half of that no sanitizer can see.
+    ///
+    /// THIS FIXTURE DOES NOT FAIL ON A PRE-FIX TREE, and that is worth saying
+    /// rather than leaving to be discovered. Both rows are memory defects, and
+    /// this harness builds at `-O2`, where LLVM deletes the allocations nothing
+    /// observes — so every cell here prints correctly before the fix as well.
+    /// The gate is `asan_boxed_array_payload_interior_has_exactly_one_owner`
+    /// (which does fail, on its first cell), together with the `-O0` ratchet
+    /// leg that re-runs that same suite where the double frees actually abort.
+    /// What this one adds is the cross-backend OUTPUT contract, which no
+    /// sanitizer can see: the Display renderings, the `None` arm, and cell 6's
+    /// agreed silence.
+    #[test]
+    fn e2e_boxed_array_payload_reads_back_on_every_surface() {
+        for (label, src, want) in [
+            // 1 — the inline-literal payload of -49, read through the arm.
+            (
+                "inline-literal-payload-read",
+                "fn plainA(x: Option[Array[String, 2]]) -> i64 {\n\
+                 \x20   match x { Some(t) => { println(f\"s:{t[0]}\"); 1 } None => { println(\"n\"); 0 } }\n\
+                 }\n\
+                 fn main() {\n\
+                 \x20   let n = plainA(Some([f\"aaaaaaaa0\", f\"bbbbbbbb0\"]));\n\
+                 \x20   println(f\"n:{n}\");\n\
+                 }\n",
+                "s:aaaaaaaa0\nn:1\n",
+            ),
+            // 2 — the named-local spelling of the same call.
+            (
+                "named-local-payload-read",
+                "fn plainA(x: Option[Array[String, 2]]) -> i64 {\n\
+                 \x20   match x { Some(t) => { println(f\"s:{t[0]}\"); 1 } None => { println(\"n\"); 0 } }\n\
+                 }\n\
+                 fn main() {\n\
+                 \x20   let a: Array[String, 2] = [f\"aaaaaaaa0\", f\"bbbbbbbb0\"];\n\
+                 \x20   let n = plainA(Some(a));\n\
+                 \x20   println(f\"n:{n}\");\n\
+                 }\n",
+                "s:aaaaaaaa0\nn:1\n",
+            ),
+            // 3 — -6: the arm's binding handed by value to a consumer.
+            (
+                "arm-binding-passed-by-value",
+                "fn take(a: Array[String, 2]) { println(f\"t:{a[0]}\") }\n\
+                 fn plainP(x: Option[Array[String, 2]]) {\n\
+                 \x20   match x { Some(t) => { take(t) } None => { println(\"n\") } }\n\
+                 }\n\
+                 fn main() {\n\
+                 \x20   let a: Array[String, 2] = [f\"aaaaaaaa0\", f\"bbbbbbbb0\"];\n\
+                 \x20   plainP(Some(a));\n\
+                 }\n",
+                "t:aaaaaaaa0\n",
+            ),
+            // 4 — the same consumer one rebind away.
+            (
+                "arm-binding-rebound-then-passed",
+                "fn take(a: Array[String, 2]) { println(f\"t:{a[0]}\") }\n\
+                 fn plainM(x: Option[Array[String, 2]]) {\n\
+                 \x20   match x { Some(t) => { let u = t; take(u) } None => { println(\"n\") } }\n\
+                 }\n\
+                 fn main() {\n\
+                 \x20   let a: Array[String, 2] = [f\"aaaaaaaa0\", f\"bbbbbbbb0\"];\n\
+                 \x20   plainM(Some(a));\n\
+                 }\n",
+                "t:aaaaaaaa0\n",
+            ),
+            // 5 — the `Result` let site, whose payload the `Option`-shaped
+            //     derivation beside it answers `None` for.
+            (
+                "let-site-result-ok-payload-consumed",
+                "fn take(a: Array[String, 2]) { println(f\"t:{a[0]}\") }\n\
+                 fn main() {\n\
+                 \x20   let a: Array[String, 2] = [f\"aaaaaaaa0\", f\"bbbbbbbb0\"];\n\
+                 \x20   let o: Result[Array[String, 2], i64] = Ok(a);\n\
+                 \x20   match o { Ok(t) => { take(t) } Err(e) => { println(f\"e:{e}\") } }\n\
+                 }\n",
+                "t:aaaaaaaa0\n",
+            ),
+            // 6 — THE BODIES CELL, and it PINS AN AGREED SILENCE rather than
+            //     the bodies. A boxed `Array` payload's element `Drop` bodies
+            //     run on NO backend — `--interp`, the JIT and both AOT lanes
+            //     all print `s:1` then `end` — and that is true on `main`
+            //     before this fix as well, so it is neither a divergence nor
+            //     something this change caused. It is the `Array` peer of the
+            //     TUPLE gap B-2026-09-09-20 recorded and a56142bd8 closed, and
+            //     it is filed as its own row. It is pinned here because this
+            //     fix moves who owns that interior, and the bodies channel is
+            //     separate from the memory one (B-2026-08-28-57): a later
+            //     change that starts running these bodies must do it on both
+            //     backends at once, and this cell is what makes a one-sided
+            //     attempt fail loudly instead of shipping a fresh
+            //     run-vs-build divergence.
+            (
+                "user-drop-element-bodies",
+                "struct R8 { id: i64 }\n\
+                 impl Drop for R8 { fn drop(mut ref self) { println(f\"dR{self.id}\") } }\n\
+                 fn plainD(x: Option[Array[R8, 2]]) {\n\
+                 \x20   match x { Some(t) => { println(f\"s:{t[0].id}\") } None => { println(\"n\") } }\n\
+                 }\n\
+                 fn main() {\n\
+                 \x20   let a: Array[R8, 2] = [R8 { id: 1 }, R8 { id: 2 }];\n\
+                 \x20   plainD(Some(a));\n\
+                 \x20   println(\"end\");\n\
+                 }\n",
+                "s:1\nend\n",
+            ),
+            // 7 — CONTROL: a generic callee, whose monomorph registers nothing
+            //     and whose caller must therefore keep its local.
+            (
+                "generic-callee-control",
+                "fn takesOpt[T: Display](x: Option[T]) -> i64 {\n\
+                 \x20   match x { Some(t) => { println(f\"s:{t}\"); 1 } None => { println(\"n\"); 0 } }\n\
+                 }\n\
+                 fn main() {\n\
+                 \x20   let p: Array[String, 2] = [f\"aaaaaaaa0\", f\"bbbbbbbb0\"];\n\
+                 \x20   let n = takesOpt(Some(p));\n\
+                 \x20   println(f\"n:{n}\");\n\
+                 }\n",
+                "s:[aaaaaaaa0, bbbbbbbb0]\nn:1\n",
+            ),
+            // 8 — CONTROL: a `ref` param takes nothing, so the box keeps its
+            //     interior and the read still lands.
+            (
+                "ref-param-control",
+                "fn peek(a: ref Array[String, 2]) { println(f\"p:{a[0]}\") }\n\
+                 fn plainB(x: Option[Array[String, 2]]) {\n\
+                 \x20   match x { Some(t) => { peek(t) } None => { println(\"n\") } }\n\
+                 }\n\
+                 fn main() {\n\
+                 \x20   let a: Array[String, 2] = [f\"aaaaaaaa0\", f\"bbbbbbbb0\"];\n\
+                 \x20   plainB(Some(a));\n\
+                 }\n",
+                "p:aaaaaaaa0\n",
+            ),
+            // 9 — CONTROL: the `None` arm, where no payload exists at all.
+            (
+                "none-arm-control",
+                "fn plainA(x: Option[Array[String, 2]]) -> i64 {\n\
+                 \x20   match x { Some(t) => { println(f\"s:{t[0]}\"); 1 } None => { println(\"n\"); 0 } }\n\
+                 }\n\
+                 fn main() {\n\
+                 \x20   let e: Option[Array[String, 2]] = None;\n\
+                 \x20   let n = plainA(e);\n\
+                 \x20   println(f\"n:{n}\");\n\
+                 }\n",
+                "n\nn:0\n",
+            ),
+            // 10 — CONTROL: a scalar element, outside this family entirely.
+            (
+                "scalar-element-control",
+                "fn plainI(x: Option[Array[i64, 2]]) {\n\
+                 \x20   match x { Some(t) => { println(f\"s:{t[0]}\") } None => { println(\"n\") } }\n\
+                 }\n\
+                 fn main() {\n\
+                 \x20   let a: Array[i64, 2] = [7, 9];\n\
+                 \x20   plainI(Some(a));\n\
+                 }\n",
+                "s:7\n",
+            ),
+        ] {
+            let Some(out) = run_program(src) else {
+                return;
+            };
+            assert_eq!(out, want, "[{label}]");
+        }
+    }
+
     #[test]
     fn e2e_arm_bound_array_rebind_reads_back_on_every_surface() {
         for (label, src, want) in [

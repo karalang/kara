@@ -2907,10 +2907,25 @@ impl<'ctx> super::Codegen<'ctx> {
                         // that actually owns heap, and returns its argument
                         // unchanged when there is no chain, so the tuple and
                         // single-level cases are byte-identical to before.
+                        // B-2026-09-06-49 / B-2026-09-10-6 — `Array[T, N]`
+                        // joins `Tuple` here, for the reason the tuple arm was
+                        // added: an `Array[String, 2]` payload is 6 words, so
+                        // it BOXES, and the box-only free reclaimed the box
+                        // while the `String`s inside it survived — the same
+                        // "box reclaimed, contents not" signature the
+                        // B-2026-09-02-22 note above describes, measured at
+                        // 54 B in 6 blocks over three calls.
+                        //
+                        // Through `array_elem_and_len` rather than
+                        // `matches!(p.kind, TypeKind::Array { .. })`: a
+                        // parameter is ANNOTATED, so its payload arrives as
+                        // `Path(["Array"], ...)` and a kind-keyed test misses
+                        // every one of them while compiling perfectly.
                         let tuple_inner_drop = payload_te
                             .clone()
                             .filter(|p| {
-                                matches!(p.kind, TypeKind::Tuple(_))
+                                (matches!(p.kind, TypeKind::Tuple(_))
+                                    || self.array_elem_and_len(p).is_some())
                                     && self.option_payload_struct_or_enum_drop_ok(p)
                             })
                             .map(|p| self.emit_drop_fn_for_type_expr(&p));
