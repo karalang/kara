@@ -93,7 +93,7 @@ distinguish "bugs flattening" from "we stopped writing them down."
 | class | total |
 |---|---|
 | miscompile | 403 |
-| run-vs-build | 386 |
+| run-vs-build | 387 |
 | leak | 318 |
 | double-free | 222 |
 | missing-feature | 194 |
@@ -102,7 +102,7 @@ distinguish "bugs flattening" from "we stopped writing them down."
 | false-positive | 106 |
 | perf | 104 |
 | soundness | 95 |
-| other | 91 |
+| other | 92 |
 | crash | 79 |
 | use-after-free | 37 |
 
@@ -110,8 +110,8 @@ distinguish "bugs flattening" from "we stopped writing them down."
 
 | surface | total |
 |---|---|
-| codegen | 1657 |
-| interp | 415 |
+| codegen | 1659 |
+| interp | 416 |
 | typecheck | 295 |
 | other | 81 |
 | ownership | 74 |
@@ -166,12 +166,13 @@ _Generated from `bug-ledger.jsonl` by `scripts/bug-curve.py` (2026-05-20 → 202
 | B-2026-09-10-11 | 2026-09-10 | codegen | low | A SHARED-PAYLOAD ENUM ON THE RETURN ROUTE STRANDS ITS 16-BYTE REFCOUNT BLOCK -- `let z = passt(mket(3))` over `enum Et { A(Sh), B }` with `shared struct Sh` loses 16 B in 1 block at -O0, because the admission gate's `shared` clause asks whether the ENUM is shared and not whether its PAYLOAD is | — |
 | B-2026-09-10-14 | 2026-09-10 | codegen+interp | low | A WHOLE-PAYLOAD ARM BINDING OVER A LOCAL `Option[(R, R)]` RUNS NO ELEMENT `Drop` BODY ON EITHER BACKEND -- `match o { Some(t) => { println("hit") } .. }` prints `x hit` where `x hit dR1 dR2` is due, on `--interp`, `-O0` and `-O2` auto-par alike; the DESTRUCTURING arm `Some((a, b))` over the same local is correct on all three, and so is the same local with no `match` at all, so the gap is the whole-value binding rather than the payload shape. Memory is balanced (0 valgrind errors, nothing lost), so the absent output is the only observable | none |
 | B-2026-09-10-17 | 2026-09-10 | codegen | low | A STRUCT FIELD TYPED `Option[Option[R]]` RUNS NO INNER `Drop` BODY ON THE COMPILED BACKENDS -- `struct W { o: Option[Option[R]] }` with a never-read `let w = W { o: Some(Some(R { .. })) }` prints `dR71 ok done` under `--interp` and `ok done` under `karac build` at `-O0` and at `-O2` auto-par, while the ONE-LEVEL field `Option[R]` is correct on all three. The payload walker exists after B-2026-09-10-15 and the struct-field arm would call it; nothing registers a bodies action for `w` at all, because `type_runs_user_drop` widens exactly ONE container level past a field's head name and says so in its own comment ("deeper nesting (`Vec[Vec[Res]]`) is the recorded residual"). Memory is balanced on both backends | none |
-| B-2026-09-10-18 | 2026-09-10 | codegen | low | A WHOLE-BINDING LOCAL TUPLE HOLDING AN `Option[R]` ELEMENT RUNS NO PAYLOAD `Drop` BODY ON THE COMPILED BACKENDS -- a never-read `let p = (Some(R { id: 71, .. }), 7);` prints `dR71 ok done` under `--interp` and `ok done` under `karac build` at `-O0` and at `-O2` auto-par. NOT a nesting defect: the `(Option[Option[R]], i64)` twin behaves identically, before and after B-2026-09-10-15, so the tuple-ELEMENT level is where it stops. The DESTRUCTURED spelling `let (o, n) = ...` was fixed by B-2026-09-03-15; this is its whole-binding twin, the same split B-2026-09-10-14 records one container over. The same `Option[R]` runs its body correctly from a bare local, a `Vec` element and a struct field. Memory is balanced on both backends | none |
 | B-2026-09-10-19 | 2026-09-10 | codegen | low | A NESTED DESTRUCTURING ARM BINDING LOSES ITS `Drop` BODY ON THE COMPILED BACKENDS -- `match x { Some(Some(r)) => { println(f"a{r.id}") } .. }` over `Option[Option[R]]` prints `a71 dR71 done` under `--interp` and `a71 done` under `karac build` at `-O0` and at `-O2` auto-par, while the one-level `Some(r)` over `Option[R]` is correct on all three. B-2026-09-10-15's payload walker is disarmed here on purpose -- `suppress_optres_payload_bodies_for_match` stands the place down when an arm DESTRUCTURES the payload, because the leaves are then supposed to own it -- so the place hands ownership to the nested leaf and the leaf does not take it. Memory is balanced on both backends | none |
 | B-2026-09-10-20 | 2026-09-10 | codegen | low | A `Vec` OR `shared enum` ENUM PAYLOAD LOSES ITS `Drop` BODY ON EVERY BACKEND, AND THE GENERIC SPELLING ALSO LEAKS -- `G.X(w)` over `Vec[Mono]` prints nothing and strands 320 B + 27 B, `G.X(SMono.P(..))` and its DECLARED twin `enum H3 { P(SMono) }` each strand 88 B + 27 B, while the same envelope over a plain struct payload is correct and clean -- so the two remedies `E_ENUM_NESTED_ENUM_PAYLOAD` recommends are both broken | — |
 | B-2026-09-10-21 | 2026-09-10 | codegen | low | A NESTED TUPLE ELEMENT INSIDE AN ARM-BOUND PAYLOAD STILL NEVER LOWERS -- `match o { Some(t) => t.0.0.id }` over `Option[((W, W), i64)]` fails `karac build` with the same "cannot resolve field 'id' ... its type was not recorded for codegen" B-2026-09-10-16 fixed one hop out, because a tuple element cannot be spelled as a NAME and the registry that row populates is name-valued; resolving it needs the full-`TypeExpr` registry, which carries B-2026-09-03-12's measured double-free hazard. LOUD, and `--interp` answers it | none |
 | B-2026-09-10-22 | 2026-09-10 | codegen+interp | low | A WHOLE-PAYLOAD ARM BINDING OVER A GENERIC BY-VALUE `Option[(T, i64)]` PARAM LOSES THE ELEMENT'S `Drop` BODY ON EVERY COMPILED SURFACE -- `fn take[T](o: Option[(T, i64)]) { match o { Some(t) => t.1 } }` prints `g9` compiled where `--interp` prints `dW3 g9`, while the CONCRETE twin of the same function runs the body on both backends; the generic is the axis, measured against a non-generic control | none |
 | B-2026-09-10-23 | 2026-09-10 | codegen | low | A WHOLE-PAYLOAD ARM BINDING OVER A BY-VALUE `Option[(W, i64)]` PARAM LEAKS THE TUPLE ELEMENT'S INTERIOR -- 2 B in 1 block at -O0, in the GENERIC and CONCRETE legs alike; the by-value param and the match are BOTH required (either alone is clean), making this the TUPLE-payload sibling of B-2026-09-07-44's struct-payload leak | none |
+| B-2026-09-10-24 | 2026-09-10 | codegen | medium | AN `Option`/`Result`-TYPED LOCAL MOVED INTO A TUPLE LITERAL LOSES ITS PAYLOAD'S `Drop` BODY, AND THE THREE-LINE FIX FOR IT DOUBLE-FREES -- `let o: Option[R] = ..; let p = (o, 7);` prints `dR71 ok done` under `--interp` and `ok done` on `karac build` at both opt levels (the `Result` twin likewise); `refined_tuple_literal_elem_te`'s `Identifier` arm resolves only `Vec`/`VecDeque`, and handing it the local's already-recorded `optres_var_payload_tes` instantiation was MEASURED to abort with `free(): double free detected in tcache 2` at `-O0` and `-O2`, because a move into a tuple literal does not disarm the source's own walk the way a bare rebind does. Memory is balanced without that edit (0 valgrind errors, nothing lost), so today the absent body is the only observable | none |
+| B-2026-09-10-25 | 2026-09-10 | codegen+interp | low | A FRESH TUPLE TEMP PASSED AS A CALL ARGUMENT RUNS ITS `Option` ELEMENT'S `Drop` BODY ON NEITHER BACKEND -- `eat((Some(R { .. }), 7))` over `fn eat(p: (Option[R], i64))` prints `eat done` under `--interp`, `-O0` and `-O2` auto-par alike, where one `dR71` is owed; the BINDING spelling of the same value (`let p = (Some(R { .. }), 7);`) is correct on all four surfaces since B-2026-09-10-18, so the element types resolve and what is missing is an owner for a tuple ARGUMENT temp's element bodies. Both backends agree, so no parity rule catches it and repairing either side alone would convert it into a divergence. Memory is balanced (0 valgrind errors, nothing lost) | none |
 
 ### Relocated
 
@@ -2465,6 +2466,7 @@ _Generated from `bug-ledger.jsonl` by `scripts/bug-curve.py` (2026-05-20 → 202
 | B-2026-09-10-13 | codegen+interp | low | A GENERIC ENVELOPE NESTED INSIDE A GENERIC ENVELOPE RUNS NO `Drop` BODY AND LEAKS 72 B DIRECT + 27 B INDIRECT -- `let n = G.X(G.X(mkr(4)));` over `en… | 2201cdc |
 | B-2026-09-10-15 | codegen | medium | AN `Option[Option[R]]` PAYLOAD RUNS ITS `Drop` BODY ON THE INTERPRETER AND NOWHERE ON THE COMPILED BACKENDS -- `fn takeR(x: Option[Option[R]])` over… | e9d902b4b |
 | B-2026-09-10-16 | codegen | low | A FIELD READ THROUGH AN ARM-BOUND ENUM TUPLE PAYLOAD NEVER LOWERS -- `match o { Some(t) => t.0.id }` over `Option[(W, W)]` fails `karac build` with "… | b3ce1771e |
+| B-2026-09-10-18 | codegen | low | A WHOLE-BINDING LOCAL TUPLE HOLDING AN `Option[R]` ELEMENT RUNS NO PAYLOAD `Drop` BODY ON THE COMPILED BACKENDS -- a never-read `let p = (Some(R { id… | e056b1540 |
 
 </details>
 
