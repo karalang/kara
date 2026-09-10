@@ -85773,6 +85773,297 @@ fn main() {
         );
     }
 
+    /// B-2026-09-10-8 / B-2026-09-10-26 — an `Array` whose ELEMENT is itself an
+    /// `Array` drops its whole interior, in every position an array can occupy.
+    ///
+    /// The two rows are one defect. -8 found it as an `Option` payload
+    /// (`Some(t) => t[0][0]`) while probing element shapes for B-2026-09-10-4
+    /// and left "does this leak outside a `match` arm?" as its cheapest
+    /// unmeasured discriminator; -26 answered it while closing B-2026-09-06-49
+    /// — a plain local, with no enum anywhere, loses the identical 36 B in 4
+    /// blocks. So the envelope was never part of the mechanism.
+    ///
+    /// TWO HALVES THAT DISAGREED ABOUT WHAT AN ARRAY IS, and either alone
+    /// leaves the leak:
+    ///
+    ///   - the EMITTER. `emit_drop_fn_for_array` resolves its per-element drop
+    ///     through `vec_element_drain_fn`, whose two legs are
+    ///     `vec_elem_agg_drop_for_type_expr` (name-keyed: Map/Set/Option/
+    ///     Result/shared/struct/enum/File, plus a Tuple arm) and
+    ///     `elem_te_needs_direct_recursive_drain` (String/str/Vec/Map/Set).
+    ///     Neither has an `Array` case, so an `Array` element answered `None`
+    ///     and the OUTER array emitted no walk at all.
+    ///
+    ///   - the ADMISSION. `make_array_param_callee_owned` and
+    ///     `synthesize_array_drop_fn_te` gate on `type_expr_has_drop_heap`,
+    ///     which has no `Array` arm either. With only the emitter fixed, the
+    ///     payload and struct-field routes came clean and the plain local and
+    ///     by-value param stayed at 36 B — measured, and the reason this
+    ///     fixture carries cells 1 and 2 separately from cells 3 and 5.
+    ///
+    /// WHY THE RECURSION IS NOT IN THE SHARED ELEMENT POLICY. Cell 16 is a
+    /// `Vec[Array[String, 2]]`, and it was already clean before this fix —
+    /// the source local pushed into the `Vec` owns those buffers. Widening
+    /// `vec_elem_agg_drop_for_type_expr` (or
+    /// `elem_te_needs_direct_recursive_drain`) to know about `Array` would
+    /// reach that shape too and give it a second owner, turning a fixed leak
+    /// into a double free. Recursing on the array's own element instead
+    /// reaches every leaking position and nothing already owned. The same
+    /// argument keeps `type_expr_has_drop_heap` untouched: it has 69 call
+    /// sites choosing copy depth and drop strategy across the backend, so the
+    /// admission widening is a separate array-only predicate
+    /// (`nested_array_needs_drop`) asked in the two gates that are already
+    /// about arrays.
+    ///
+    /// NOT FIXED HERE, and deliberately: `let b = passthru(a)` through a
+    /// GENERIC identity fn double frees. That is not this defect — the
+    /// ORDINARY one-level `Array[String, 2]` aborts identically on an
+    /// unmodified `main` (B-2026-09-10-34), because a monomorph's param
+    /// registration reads the DECLARED type `T` and never takes ownership
+    /// while the caller keeps its drop and the result binding adds one. This
+    /// fix does change the nested spelling's symptom from a 36 B leak to that
+    /// same abort, which is the honest consequence of giving the nested array
+    /// the owner a one-level array always had.
+    ///
+    /// `-O2` HIDES ALL BUT ONE CELL. This harness builds at `-O2`, where the
+    /// optimizer deletes buffers nothing observes, so cells 1-10 and 12-13 are
+    /// carried by the `-O0` ratchet leg (`scripts/asan-o0-leg.sh`) that runs
+    /// this same suite. Cell 11 (`==`) is the exception: the comparison reads
+    /// every buffer, so its 72 B survives the optimizer and fails here.
+    #[test]
+    fn asan_nested_array_element_interior_has_an_owner() {
+        // 1 — the plain LOCAL. No enum, no param, no field: the shape that
+        //     separates this from B-2026-09-06-49, whose probe happened to be
+        //     wrapped in an `Option`. 36 B in 4 blocks at `-O0`.
+        assert_clean_asan_run(
+            "fn main() {\n\
+             \x20\x20\x20\x20let a: Array[Array[String, 2], 2] =\n\
+             \x20\x20\x20\x20\x20\x20\x20\x20[[f\"aaaaaaaa0\", f\"bbbbbbbb0\"], [f\"cccccccc0\", f\"dddddddd0\"]];\n\
+             \x20\x20\x20\x20println(f\"s:{a[0][0]}\");\n\
+             }\n",
+            &["s:aaaaaaaa0"],
+            "nested-array-plain-local",
+        );
+        // 2 — the by-value PARAM, at the identical count. Both this and cell
+        //     1 register through `make_array_param_callee_owned`, whose gate
+        //     was the half that answered `false` for an `Array` element.
+        assert_clean_asan_run(
+            "fn eat(a: Array[Array[String, 2], 2]) { println(f\"e:{a[0][0]}\") }\n\
+             fn main() {\n\
+             \x20\x20\x20\x20let a: Array[Array[String, 2], 2] =\n\
+             \x20\x20\x20\x20\x20\x20\x20\x20[[f\"aaaaaaaa0\", f\"bbbbbbbb0\"], [f\"cccccccc0\", f\"dddddddd0\"]];\n\
+             \x20\x20\x20\x20eat(a);\n\
+             }\n",
+            &["e:aaaaaaaa0"],
+            "nested-array-by-value-param",
+        );
+        // 3 — the `Option` PAYLOAD spelling, which is how B-2026-09-10-8
+        //     found it (a hazard probe off B-2026-09-10-4).
+        assert_clean_asan_run(
+            "fn plainNN(x: Option[Array[Array[String, 2], 2]]) {\n\
+             \x20\x20\x20\x20match x { Some(t) => { println(f\"s:{t[0][0]}\") } None => { println(\"n\") } }\n\
+             }\n\
+             fn main() {\n\
+             \x20\x20\x20\x20let a: Array[Array[String, 2], 2] =\n\
+             \x20\x20\x20\x20\x20\x20\x20\x20[[f\"aaaaaaaa0\", f\"bbbbbbbb0\"], [f\"cccccccc0\", f\"dddddddd0\"]];\n\
+             \x20\x20\x20\x20plainNN(Some(a));\n\
+             }\n",
+            &["s:aaaaaaaa0"],
+            "nested-array-option-payload",
+        );
+        // 4 — the `Result` side of cell 3. Both envelopes route the payload
+        //     drop through the same array walk, so a one-sided repair shows up
+        //     here.
+        assert_clean_asan_run(
+            "fn plainR(x: Result[Array[Array[String, 2], 2], i64]) {\n\
+             \x20\x20\x20\x20match x { Ok(t) => { println(f\"s:{t[1][0]}\") } Err(e) => { println(f\"n:{e}\") } }\n\
+             }\n\
+             fn main() {\n\
+             \x20\x20\x20\x20let a: Array[Array[String, 2], 2] =\n\
+             \x20\x20\x20\x20\x20\x20\x20\x20[[f\"aaaaaaaa0\", f\"bbbbbbbb0\"], [f\"cccccccc0\", f\"dddddddd0\"]];\n\
+             \x20\x20\x20\x20plainR(Ok(a));\n\
+             }\n",
+            &["s:cccccccc0"],
+            "nested-array-result-ok-payload",
+        );
+        // 5 — a STRUCT FIELD. Reaches the walk by a different route (the
+        //     `FieldDrop::ArrayField` classification, which asks
+        //     `emit_drop_fn_for_array` whether a walk exists), so it pins the
+        //     emitter half rather than the admission half.
+        assert_clean_asan_run(
+            "struct W { a: Array[Array[String, 2], 2] }\n\
+             fn main() {\n\
+             \x20\x20\x20\x20let w = W { a: [[f\"aaaaaaaa0\", f\"bbbbbbbb0\"], [f\"cccccccc0\", f\"dddddddd0\"]] };\n\
+             \x20\x20\x20\x20println(\"s:ok\");\n\
+             }\n",
+            &["s:ok"],
+            "nested-array-struct-field",
+        );
+        // 6 — THREE levels, 72 B in 8 blocks. The recursion is on the
+        //     element, so depth is not a special case; a fix that hardcoded
+        //     one level of unwrapping passes cells 1-5 and fails here.
+        assert_clean_asan_run(
+            "fn main() {\n\
+             \x20\x20\x20\x20let a: Array[Array[Array[String, 2], 2], 2] =\n\
+             \x20\x20\x20\x20\x20\x20\x20\x20[[[f\"aaaaaaaa0\", f\"bbbbbbbb0\"], [f\"cccccccc0\", f\"dddddddd0\"]],\n\
+             \x20\x20\x20\x20\x20\x20\x20\x20\x20[[f\"eeeeeeee0\", f\"ffffffff0\"], [f\"gggggggg0\", f\"hhhhhhhh0\"]]];\n\
+             \x20\x20\x20\x20println(\"s:ok\");\n\
+             }\n",
+            &["s:ok"],
+            "nested-array-three-levels",
+        );
+        // 7 — the inner element is a user STRUCT, not a `String`. Same 36 B:
+        //     the gap is the missing `Array` case, not anything about the leaf
+        //     type.
+        assert_clean_asan_run(
+            "struct S { s: String }\n\
+             fn main() {\n\
+             \x20\x20\x20\x20let a: Array[Array[S, 2], 2] =\n\
+             \x20\x20\x20\x20\x20\x20\x20\x20[[S { s: f\"aaaaaaaa0\" }, S { s: f\"bbbbbbbb0\" }], [S { s: f\"cccccccc0\" }, S { s: f\"dddddddd0\" }]];\n\
+             \x20\x20\x20\x20println(\"s:ok\");\n\
+             }\n",
+            &["s:ok"],
+            "nested-array-struct-element",
+        );
+        // 8 — a REBIND. Carries the double-free direction: `let u = a` must
+        //     move the single owner, not add one (B-2026-09-10-4's
+        //     `rebind_source_keeps_array_memory` is what keeps it at one, and
+        //     this cell is what notices if a new registration walks past it).
+        assert_clean_asan_run(
+            "fn main() {\n\
+             \x20\x20\x20\x20let a: Array[Array[String, 2], 2] =\n\
+             \x20\x20\x20\x20\x20\x20\x20\x20[[f\"aaaaaaaa0\", f\"bbbbbbbb0\"], [f\"cccccccc0\", f\"dddddddd0\"]];\n\
+             \x20\x20\x20\x20let u: Array[Array[String, 2], 2] = a;\n\
+             \x20\x20\x20\x20println(f\"s:{u[0][1]}\");\n\
+             }\n",
+            &["s:bbbbbbbb0"],
+            "nested-array-rebind",
+        );
+        // 9 — the arm-bound rebind, i.e. cell 8 inside cell 3. The arm frees
+        //     the payload and the rebind creates no owner, so a second
+        //     registration here aborts rather than leaks.
+        assert_clean_asan_run(
+            "fn plainNN(x: Option[Array[Array[String, 2], 2]]) {\n\
+             \x20\x20\x20\x20match x { Some(t) => { let u: Array[Array[String, 2], 2] = t; println(f\"s:{u[1][1]}\") } None => { println(\"n\") } }\n\
+             }\n\
+             fn main() {\n\
+             \x20\x20\x20\x20let a: Array[Array[String, 2], 2] =\n\
+             \x20\x20\x20\x20\x20\x20\x20\x20[[f\"aaaaaaaa0\", f\"bbbbbbbb0\"], [f\"cccccccc0\", f\"dddddddd0\"]];\n\
+             \x20\x20\x20\x20plainNN(Some(a));\n\
+             }\n",
+            &["s:dddddddd0"],
+            "nested-array-arm-bound-rebind",
+        );
+        // 10 — RETURNED out of a callee. The escaping position: the callee's
+        //      own drop must be retracted and the caller's binding must take
+        //      it, which is one owner in each frame and never two.
+        assert_clean_asan_run(
+            "fn mk() -> Array[Array[String, 2], 2] {\n\
+             \x20\x20\x20\x20return [[f\"aaaaaaaa0\", f\"bbbbbbbb0\"], [f\"cccccccc0\", f\"dddddddd0\"]];\n\
+             }\n\
+             fn main() {\n\
+             \x20\x20\x20\x20let a = mk();\n\
+             \x20\x20\x20\x20println(f\"s:{a[1][0]}\");\n\
+             }\n",
+            &["s:cccccccc0"],
+            "nested-array-returned",
+        );
+        // 11 — `==` over two nested arrays. The ONE cell here that leaked at
+        //      `-O2` as well as `-O0` (72 B in 8 blocks at both), because the
+        //      comparison observes every buffer and the optimizer cannot
+        //      delete them. It is therefore the cell that fails in THIS
+        //      harness's default `-O2` build rather than only on the ratchet
+        //      leg.
+        assert_clean_asan_run(
+            "fn mk(n: i64) -> Array[Array[String, 2], 2] {\n\
+             \x20\x20\x20\x20return [[f\"aaaaaaaa{n}\", f\"bbbbbbbb{n}\"], [f\"cccccccc{n}\", f\"dddddddd{n}\"]];\n\
+             }\n\
+             fn main() {\n\
+             \x20\x20\x20\x20let x: Array[Array[String, 2], 2] = mk(0);\n\
+             \x20\x20\x20\x20let y: Array[Array[String, 2], 2] = mk(0);\n\
+             \x20\x20\x20\x20println(f\"s:{x == y}\");\n\
+             }\n",
+            &["s:true"],
+            "nested-array-equality",
+        );
+        // 12 — a LOOP body, 108 B over three iterations. Per-iteration
+        //      scope exit rather than function exit.
+        assert_clean_asan_run(
+            "fn mk(n: i64) -> Array[Array[String, 2], 2] {\n\
+             \x20\x20\x20\x20return [[f\"aaaaaaaa{n}\", f\"bbbbbbbb{n}\"], [f\"cccccccc{n}\", f\"dddddddd{n}\"]];\n\
+             }\n\
+             fn main() {\n\
+             \x20\x20\x20\x20let mut i = 0;\n\
+             \x20\x20\x20\x20while i < 3 {\n\
+             \x20\x20\x20\x20\x20\x20\x20\x20let a: Array[Array[String, 2], 2] = mk(i);\n\
+             \x20\x20\x20\x20\x20\x20\x20\x20println(f\"s:{i}\");\n\
+             \x20\x20\x20\x20\x20\x20\x20\x20i = i + 1;\n\
+             \x20\x20\x20\x20}\n\
+             }\n",
+            &["s:0", "s:1", "s:2"],
+            "nested-array-loop-body",
+        );
+        // 13 — two DIFFERENT inner extents in one program, 90 B before the
+        //      fix. The emitted walk is memoised on
+        //      `karac_drop_Array_<elem>_<N>`, and the element half of that name
+        //      is `display_mangle_te` of the inner array — so this cell fails
+        //      loudly if the nested name ever collapses to a bare `Array` and
+        //      the 2-wide walk is handed to the 3-wide type.
+        assert_clean_asan_run(
+            "fn main() {\n\
+             \x20\x20\x20\x20let a: Array[Array[String, 2], 2] =\n\
+             \x20\x20\x20\x20\x20\x20\x20\x20[[f\"aaaaaaaa0\", f\"bbbbbbbb0\"], [f\"cccccccc0\", f\"dddddddd0\"]];\n\
+             \x20\x20\x20\x20let b: Array[Array[String, 3], 2] =\n\
+             \x20\x20\x20\x20\x20\x20\x20\x20[[f\"eeeeeeee0\", f\"ffffffff0\", f\"gggggggg0\"], [f\"hhhhhhhh0\", f\"iiiiiiii0\", f\"jjjjjjjj0\"]];\n\
+             \x20\x20\x20\x20println(\"s:ok\");\n\
+             }\n",
+            &["s:ok"],
+            "nested-array-two-extents",
+        );
+        // 14 — CONTROL, the no-op direction: an all-scalar nest owns no heap,
+        //      so the walk must still decline. `nested_array_needs_drop`
+        //      carries the `None` contract inward; a version that answered
+        //      `true` for any array would emit a walk over `i64`s here.
+        assert_clean_asan_run(
+            "fn eat(a: Array[Array[i64, 2], 2]) { println(f\"e:{a[0][1]}\") }\n\
+             fn main() {\n\
+             \x20\x20\x20\x20let a: Array[Array[i64, 2], 2] = [[1, 2], [3, 4]];\n\
+             \x20\x20\x20\x20eat(a);\n\
+             }\n",
+            &["e:2"],
+            "nested-array-scalar-control",
+        );
+        // 15 — CONTROL: the ONE-LEVEL array, which was correct throughout.
+        //      Guards the direction where a widened element policy gives an
+        //      already-owned array a second owner.
+        assert_clean_asan_run(
+            "fn main() {\n\
+             \x20\x20\x20\x20let a: Array[String, 2] = [f\"aaaaaaaa0\", f\"bbbbbbbb0\"];\n\
+             \x20\x20\x20\x20println(f\"s:{a[0]}\");\n\
+             }\n",
+            &["s:aaaaaaaa0"],
+            "one-level-array-control",
+        );
+        // 16 — CONTROL, and the reason the recursion is inside
+        //      `emit_drop_fn_for_array` rather than in the shared element
+        //      policy: a `Vec[Array[String, 2]]` is already clean, because the
+        //      SOURCE LOCAL pushed into it owns those buffers. Teaching
+        //      `vec_elem_agg_drop_for_type_expr` about `Array` would give this
+        //      cell a second owner and abort it.
+        assert_clean_asan_run(
+            "fn main() {\n\
+             \x20\x20\x20\x20let mut v: Vec[Array[String, 2]] = Vec.new();\n\
+             \x20\x20\x20\x20let e0: Array[String, 2] = [f\"aaaaaaaa0\", f\"bbbbbbbb0\"];\n\
+             \x20\x20\x20\x20let e1: Array[String, 2] = [f\"cccccccc0\", f\"dddddddd0\"];\n\
+             \x20\x20\x20\x20v.push(e0);\n\
+             \x20\x20\x20\x20v.push(e1);\n\
+             \x20\x20\x20\x20println(f\"s:{v.len()}\");\n\
+             }\n",
+            &["s:2"],
+            "vec-of-one-level-arrays-control",
+        );
+    }
+
     #[test]
     fn asan_arm_bound_array_rebind_leaves_memory_with_one_owner() {
         // 1 — the live bug: an ANNOTATED rebind of an arm-bound payload.

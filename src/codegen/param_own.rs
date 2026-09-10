@@ -592,7 +592,14 @@ impl<'ctx> super::Codegen<'ctx> {
         elem_ty: inkwell::types::BasicTypeEnum<'ctx>,
         slot: PointerValue<'ctx>,
     ) -> bool {
-        if n == 0 || !self.type_expr_has_drop_heap(elem_te) {
+        // The `nested_array_needs_drop` disjunct: `type_expr_has_drop_heap`
+        // answers `false` for an `Array` ELEMENT, so an
+        // `Array[Array[String, 2], 2]` local or by-value param registered no
+        // drop at all (B-2026-09-10-8 / -26). The emitter this gate guards
+        // could already walk it -- only the admission was missing.
+        if n == 0
+            || !(self.type_expr_has_drop_heap(elem_te) || self.nested_array_needs_drop(elem_te))
+        {
             return false;
         }
         match self.synthesize_array_drop_fn_te(elem_ty, elem_te, n) {

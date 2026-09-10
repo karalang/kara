@@ -1378,6 +1378,37 @@ impl<'ctx> super::Codegen<'ctx> {
         }
     }
 
+    /// True when `te` is a fixed array whose ELEMENT needs dropping — i.e.
+    /// when `synthesize_array_drop_fn_te` would emit a walk for it
+    /// (B-2026-09-10-8 / B-2026-09-10-26).
+    ///
+    /// The admission gates for an array binding ask
+    /// `type_expr_has_drop_heap(elem_te)`, and that predicate has no `Array`
+    /// arm: an `Array[String, 2]` ELEMENT lands on its `_ => false` tail and
+    /// the enclosing `Array[Array[String, 2], 2]` was classified as owning no
+    /// heap at all. The element-walking emitter and the gate that admits it
+    /// disagreed about what an array IS, so a nested array local and by-value
+    /// param registered no drop and lost every buffer in the nest.
+    ///
+    /// Deliberately array-only rather than an `Array` arm on
+    /// `type_expr_has_drop_heap` itself, which has 69 call sites deciding
+    /// copy depth, field classification and strategy selection across the
+    /// backend. Widening one predicate under all of them is how a leak fix
+    /// becomes a double free; this asks the same question in the two places
+    /// that are already about arrays.
+    ///
+    /// Recursion terminates on the type: an array's element type is
+    /// syntactically smaller than the array, so the nesting is finite.
+    pub(super) fn nested_array_needs_drop(&self, te: &TypeExpr) -> bool {
+        let Some((elem_te, n)) = self.array_elem_and_len(te) else {
+            return false;
+        };
+        n > 0
+            && (self.type_expr_has_drop_heap(&elem_te)
+                || self.tuple_elem_needs_deep_drop(&elem_te)
+                || self.nested_array_needs_drop(&elem_te))
+    }
+
     /// Emit (or reuse) `karac_eq_Array_<elem>_<N>(*const [N x T], *const
     /// [N x T]) -> i1` — CONTENT equality for an `Array[T, N]`
     /// (B-2026-08-27-25), element-wise through the per-element eq fn so a
@@ -1410,6 +1441,33 @@ impl<'ctx> super::Codegen<'ctx> {
     /// `vec_element_drain_fn` decides WHETHER an element needs dropping, which
     /// is the same policy the `Vec` element drain uses -- so a
     /// `Array[i64, N]` emits nothing here, exactly as it frees nothing there.
+    ///
+    /// ONE element shape is decided here instead: an element that is ITSELF a
+    /// fixed array (B-2026-09-10-8 / B-2026-09-10-26). `vec_element_drain_fn`
+    /// resolves through `vec_elem_agg_drop_for_type_expr` (name-keyed:
+    /// Map/Set/Option/Result/shared/struct/enum/File, plus a Tuple arm) and
+    /// then `elem_te_needs_direct_recursive_drain` (String/str/Vec/Map/Set),
+    /// and NEITHER has an `Array` case -- so an `Array[Array[String, 2], 2]`
+    /// answered `None` for its element and the OUTER array therefore emitted
+    /// no drop function at all. Measured 36 B in 4 blocks at `-O0`, i.e. every
+    /// `String` in the nest, identically as a plain local, a by-value param, a
+    /// struct field and an enum payload; 72 B in 8 at three levels.
+    ///
+    /// The recursion is placed HERE rather than in the shared element policy
+    /// on purpose. Widening `vec_elem_agg_drop_for_type_expr` (or
+    /// `elem_te_needs_direct_recursive_drain`) would teach EVERY container
+    /// with an array element about that element's interior at once, and the
+    /// `Vec` half of that is not a hole waiting to be filled -- a
+    /// `Vec[Array[String, 2]]` built the only way the typechecker admits,
+    /// `let e: Array[String, 2] = [..]; v.push(e)`, is already clean because
+    /// the SOURCE LOCAL's own one-level array drop owns those buffers. A
+    /// second owner there is a double free, not a fix. Recursing on our own
+    /// element instead reaches exactly the shapes that leak and nothing that
+    /// is already owned.
+    ///
+    /// The recursion also carries the `None` contract inward: an
+    /// `Array[Array[i64, 2], 2]` still emits nothing, because the inner call
+    /// declines for the same reason a one-level `Array[i64, N]` does.
     pub(super) fn emit_drop_fn_for_array(
         &mut self,
         elem_te: &TypeExpr,
@@ -1421,7 +1479,17 @@ impl<'ctx> super::Codegen<'ctx> {
             return Some(f);
         }
         // Recurse first -- emit may switch the builder's insert block.
-        let elem_drop = self.vec_element_drain_fn(elem_te)?;
+        let elem_drop = match self.array_elem_and_len(elem_te) {
+            // An element that is itself a fixed array: its drop is this same
+            // walk one level down. `array_elem_and_len` accepts BOTH spellings
+            // (`TypeKind::Array` from a literal's inferred type, and the
+            // `Path(["Array"], [T, N])` an annotation parses to), so the
+            // annotated and inferred forms take the same route -- keying on
+            // `TypeKind::Array` alone would compile fine and miss every
+            // annotated one.
+            Some((inner_te, inner_n)) => self.emit_drop_fn_for_array(&inner_te, inner_n)?,
+            None => self.vec_element_drain_fn(elem_te)?,
+        };
 
         let ptr_ty = self.context.ptr_type(AddressSpace::default());
         let i64_t = self.context.i64_type();

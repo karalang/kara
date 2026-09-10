@@ -1327,8 +1327,15 @@ impl<'ctx> super::Codegen<'ctx> {
         elem_te: &crate::ast::TypeExpr,
         n: u32,
     ) -> Option<FunctionValue<'ctx>> {
+        // `nested_array_needs_drop` is the third disjunct because neither of
+        // the first two has an `Array` arm (B-2026-09-10-8 / -26): an
+        // `Array[Array[String, 2], 2]` asked both about its `Array[String, 2]`
+        // element, was told it owns no heap, and emitted no walk -- so every
+        // `String` in the nest leaked, 36 B in 4 blocks at `-O0`.
         if n == 0
-            || !(self.type_expr_has_drop_heap(elem_te) || self.tuple_elem_needs_deep_drop(elem_te))
+            || !(self.type_expr_has_drop_heap(elem_te)
+                || self.tuple_elem_needs_deep_drop(elem_te)
+                || self.nested_array_needs_drop(elem_te))
         {
             return None;
         }

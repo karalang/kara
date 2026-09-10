@@ -154483,6 +154483,172 @@ fn main() {
         }
     }
 
+    /// B-2026-09-10-8 / B-2026-09-10-26 — the OUTPUT twin of
+    /// `asan_nested_array_element_interior_has_an_owner`.
+    ///
+    /// Giving an `Array` element's interior an owner changes WHO frees those
+    /// buffers, and on the shapes with a user `Drop` element it also decides
+    /// WHERE the bodies run. Those are separate channels (B-2026-08-28-57:
+    /// bodies follow the move, memory does not), so a fix that conflates them
+    /// can balance every allocation while printing a body twice, or not at
+    /// all. That is the half no sanitizer sees.
+    ///
+    /// THIS FIXTURE DOES NOT FAIL ON A PRE-FIX TREE, said plainly rather than
+    /// left to be found: both rows are leaks, this harness builds at `-O2`,
+    /// and at `-O2` LLVM deletes the buffers nothing observes — so every cell
+    /// prints correctly before the fix too. The gate is the ASAN twin (which
+    /// fails on its first cell) plus the `-O0` ratchet leg that re-runs that
+    /// suite. What this one adds is the cross-backend OUTPUT contract: the
+    /// reads, the empty arms, the comparator, and cell 8's agreed silence.
+    #[test]
+    fn e2e_nested_array_element_reads_back_on_every_surface() {
+        for (label, src, want) in [
+            // 1 — the plain nested LOCAL, read two levels deep.
+            (
+                "nested-array-local-read",
+                "fn main() {\n\
+                 \x20\x20\x20\x20let a: Array[Array[String, 2], 2] =\n\
+                 \x20\x20\x20\x20\x20\x20\x20\x20[[f\"aaaaaaaa0\", f\"bbbbbbbb0\"], [f\"cccccccc0\", f\"dddddddd0\"]];\n\
+                 \x20\x20\x20\x20println(f\"s:{a[0][0]}\");\n\
+                 \x20\x20\x20\x20println(f\"t:{a[1][1]}\");\n\
+                 }\n",
+                "s:aaaaaaaa0\nt:dddddddd0\n",
+            ),
+            // 2 — the by-value PARAM. The transfer has to leave the callee
+            //     reading intact values, not a frame the caller already freed.
+            (
+                "nested-array-param-read",
+                "fn eat(a: Array[Array[String, 2], 2]) { println(f\"e:{a[0][1]}\") }\n\
+                 fn main() {\n\
+                 \x20\x20\x20\x20let a: Array[Array[String, 2], 2] =\n\
+                 \x20\x20\x20\x20\x20\x20\x20\x20[[f\"aaaaaaaa0\", f\"bbbbbbbb0\"], [f\"cccccccc0\", f\"dddddddd0\"]];\n\
+                 \x20\x20\x20\x20eat(a);\n\
+                 \x20\x20\x20\x20println(\"end\");\n\
+                 }\n",
+                "e:bbbbbbbb0\nend\n",
+            ),
+            // 3 — the `Option` payload, the spelling B-2026-09-10-8 filed.
+            (
+                "nested-array-option-payload-read",
+                "fn plainNN(x: Option[Array[Array[String, 2], 2]]) {\n\
+                 \x20\x20\x20\x20match x { Some(t) => { println(f\"s:{t[1][0]}\") } None => { println(\"n\") } }\n\
+                 }\n\
+                 fn main() {\n\
+                 \x20\x20\x20\x20let a: Array[Array[String, 2], 2] =\n\
+                 \x20\x20\x20\x20\x20\x20\x20\x20[[f\"aaaaaaaa0\", f\"bbbbbbbb0\"], [f\"cccccccc0\", f\"dddddddd0\"]];\n\
+                 \x20\x20\x20\x20plainNN(Some(a));\n\
+                 }\n",
+                "s:cccccccc0\n",
+            ),
+            // 4 — the `None` arm of cell 3: the walk must not run over a
+            //     payload that was never built.
+            (
+                "nested-array-option-none-arm",
+                "fn plainNN(x: Option[Array[Array[String, 2], 2]]) {\n\
+                 \x20\x20\x20\x20match x { Some(t) => { println(f\"s:{t[1][0]}\") } None => { println(\"n\") } }\n\
+                 }\n\
+                 fn main() { plainNN(None); }\n",
+                "n\n",
+            ),
+            // 5 — the `Result` Err side, the same question for the other
+            //     envelope: the Ok payload's array walk must not fire when the
+            //     live tag is Err.
+            (
+                "nested-array-result-err-arm",
+                "fn plainR(x: Result[Array[Array[String, 2], 2], i64]) {\n\
+                 \x20\x20\x20\x20match x { Ok(t) => { println(f\"s:{t[0][0]}\") } Err(e) => { println(f\"n:{e}\") } }\n\
+                 }\n\
+                 fn main() { plainR(Err(7)); }\n",
+                "n:7\n",
+            ),
+            // 6 — a REBIND, which must move the single owner rather than
+            //     add one; the read after it proves the buffers are still
+            //     alive.
+            (
+                "nested-array-rebind-read",
+                "fn main() {\n\
+                 \x20\x20\x20\x20let a: Array[Array[String, 2], 2] =\n\
+                 \x20\x20\x20\x20\x20\x20\x20\x20[[f\"aaaaaaaa0\", f\"bbbbbbbb0\"], [f\"cccccccc0\", f\"dddddddd0\"]];\n\
+                 \x20\x20\x20\x20let u: Array[Array[String, 2], 2] = a;\n\
+                 \x20\x20\x20\x20println(f\"s:{u[1][1]}\");\n\
+                 }\n",
+                "s:dddddddd0\n",
+            ),
+            // 7 — `==` over two nested arrays. The comparator walks the
+            //     same element chain the drop does, so a wrong element
+            //     identity shows up as a wrong ANSWER here rather than as a
+            //     leak.
+            (
+                "nested-array-equality-reads",
+                "fn mk(n: i64) -> Array[Array[String, 2], 2] {\n\
+                 \x20\x20\x20\x20return [[f\"aaaaaaaa{n}\", f\"bbbbbbbb{n}\"], [f\"cccccccc{n}\", f\"dddddddd{n}\"]];\n\
+                 }\n\
+                 fn main() {\n\
+                 \x20\x20\x20\x20let x: Array[Array[String, 2], 2] = mk(0);\n\
+                 \x20\x20\x20\x20let y: Array[Array[String, 2], 2] = mk(0);\n\
+                 \x20\x20\x20\x20let z: Array[Array[String, 2], 2] = mk(1);\n\
+                 \x20\x20\x20\x20println(f\"e:{x == y}\");\n\
+                 \x20\x20\x20\x20println(f\"n:{x == z}\");\n\
+                 }\n",
+                "e:true\nn:false\n",
+            ),
+            // 8 — AN AGREED SILENCE, PINNED ON PURPOSE. The inner element
+            //     has a user `Drop`, and on every compiled backend NO body
+            //     runs, while `--interp` runs all four. That divergence is
+            //     PRE-EXISTING and is not this fix's to close — it is
+            //     B-2026-09-10-35, the nested peer of B-2026-09-10-27, and
+            //     measured identical before and after. It is pinned here so
+            //     that whoever closes it has to change this expectation
+            //     deliberately: a repair that starts running the bodies on ONE
+            //     compiled surface, or that runs them twice, fails this cell
+            //     instead of shipping a fresh run-vs-build divergence. The
+            //     memory half IS fixed — cell 7 of the ASAN twin.
+            (
+                "nested-array-drop-bodies-agreed-silence",
+                "struct R { s: String }\n\
+                 impl Drop for R { fn drop(mut ref self) { println(f\"d:{self.s}\") } }\n\
+                 fn main() {\n\
+                 \x20\x20\x20\x20let a: Array[Array[R, 2], 2] =\n\
+                 \x20\x20\x20\x20\x20\x20\x20\x20[[R { s: f\"a0\" }, R { s: f\"a1\" }], [R { s: f\"b0\" }, R { s: f\"b1\" }]];\n\
+                 \x20\x20\x20\x20println(\"s:ok\");\n\
+                 \x20\x20\x20\x20println(\"end\");\n\
+                 }\n",
+                "s:ok\nend\n",
+            ),
+            // 9 — CONTROL for cell 8 one level up: a ONE-level
+            //     `Array[R, 2]` runs both bodies on every backend, interpreter
+            //     included. So the silence in cell 8 is specific to the
+            //     nesting and not to arrays carrying a `Drop` element.
+            (
+                "one-level-array-drop-bodies-control",
+                "struct R { s: String }\n\
+                 impl Drop for R { fn drop(mut ref self) { println(f\"d:{self.s}\") } }\n\
+                 fn main() {\n\
+                 \x20\x20\x20\x20let a: Array[R, 2] = [R { s: f\"a0\" }, R { s: f\"a1\" }];\n\
+                 \x20\x20\x20\x20println(\"s:ok\");\n\
+                 \x20\x20\x20\x20println(\"end\");\n\
+                 }\n",
+                "d:a0\nd:a1\ns:ok\nend\n",
+            ),
+            // 10 — CONTROL: an all-scalar nest, which owns no heap and must
+            //      keep emitting no walk at all.
+            (
+                "nested-array-scalar-control",
+                "fn eat(a: Array[Array[i64, 2], 2]) { println(f\"e:{a[1][0]}\") }\n\
+                 fn main() {\n\
+                 \x20\x20\x20\x20let a: Array[Array[i64, 2], 2] = [[1, 2], [3, 4]];\n\
+                 \x20\x20\x20\x20eat(a);\n\
+                 }\n",
+                "e:3\n",
+            ),
+        ] {
+            let Some(out) = run_program(src) else {
+                return;
+            };
+            assert_eq!(out, want, "[{label}]");
+        }
+    }
+
     #[test]
     fn e2e_arm_bound_array_rebind_reads_back_on_every_surface() {
         for (label, src, want) in [
