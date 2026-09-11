@@ -9831,11 +9831,28 @@ impl<'ctx> super::Codegen<'ctx> {
     /// memory-only syntheses directly is what keeps the body from running
     /// twice — the trap B-2026-07-30-11 and B-2026-08-28-58 leg A both record.
     ///
-    /// `None` for anything not a bare non-shared user struct or enum, which
-    /// leaves those shapes exactly as they were rather than guessing: an
-    /// instantiated payload (`G[Wrap[R]]`) needs the per-monomorph synthesis
-    /// and a `String`/`Vec` payload its own channel, neither of which
-    /// B-2026-09-10-2 measured.
+    /// B-2026-09-11-3 — the `String` / `Vec` half, which B-2026-09-10-2 left
+    /// open above as "its own channel, [not] measured". It is the same leak one
+    /// payload type over: `enum Slot[T] { Filled(T), Blank }` at `T = String`
+    /// boxes the 3-word payload (the erased area is ONE word), the box drop
+    /// reclaimed the 24-byte envelope, and the 70-byte character buffer inside
+    /// it was never freed — every construction that reaches scope exit rather
+    /// than being matched out. The monomorphic twin `enum StrSlot {
+    /// FilledS(String), … }` is clean because nothing boxes: `String` is
+    /// classified `VecOrString` against the DECLARATION, and a bare generic
+    /// param is classified `None`.
+    ///
+    /// Named directly (`emit_string_drop_fn` / `emit_vec_drop_fn`) rather than
+    /// routed through [`Self::emit_drop_fn_for_type_expr`], for the reason the
+    /// paragraph above gives: these two are memory-only by construction, so the
+    /// bodies walker registered alongside stays the sole owner of user `Drop`
+    /// bodies. Both are the same syntheses that dispatcher would reach for these
+    /// two heads anyway.
+    ///
+    /// `None` for anything else — an instantiated payload (`G[Wrap[R]]`) needs
+    /// the per-monomorph synthesis, and a tuple / `Array` payload its own
+    /// measurement — which leaves those shapes exactly as they were rather than
+    /// guessing.
     pub(super) fn enum_boxed_payload_interior_drop(
         &mut self,
         payload_te: &TypeExpr,
@@ -9843,9 +9860,6 @@ impl<'ctx> super::Codegen<'ctx> {
         let TypeKind::Path(p) = &payload_te.kind else {
             return None;
         };
-        if p.generic_args.is_some() {
-            return None;
-        }
         let [name] = p.segments.as_slice() else {
             return None;
         };
@@ -9853,11 +9867,33 @@ impl<'ctx> super::Codegen<'ctx> {
         if self.type_decls.shared_types.contains_key(name.as_str()) {
             return None;
         }
-        if self.type_decls.struct_types.contains_key(name.as_str()) {
-            return self.emit_struct_drop_synthesis(&name);
+        // A user type of the same name wins, exactly as before — the two
+        // lookups below are unchanged and still run first, so a program that
+        // declares its own `String` or `Vec` keeps the synthesis it had.
+        if p.generic_args.is_none() {
+            if self.type_decls.struct_types.contains_key(name.as_str()) {
+                return self.emit_struct_drop_synthesis(&name);
+            }
+            if self.type_decls.enum_layouts.contains_key(name.as_str()) {
+                return self.emit_enum_drop_switch(&name);
+            }
         }
-        if self.type_decls.enum_layouts.contains_key(name.as_str()) {
-            return self.emit_enum_drop_switch(&name);
+        // Both spellings, for the reason `emit_drop_fn_for_type_expr` records
+        // at its own `String` arm: an ANNOTATION writes `String`, while the
+        // TypeExpr the typechecker renders for an INFERRED binding writes the
+        // lowercase `str`.
+        if p.generic_args.is_none() && matches!(name.as_str(), "String" | "str") {
+            return Some(self.emit_string_drop_fn());
+        }
+        // `VecDeque` shares Vec's linear `{ptr,len,cap}` layout, so the same
+        // element walk + buffer free is exact for it (the sibling dispatcher
+        // pairs them for this reason).
+        if matches!(name.as_str(), "Vec" | "VecDeque") {
+            if let Some(crate::ast::GenericArg::Type(elem_te)) =
+                p.generic_args.as_ref().and_then(|a| a.first()).cloned()
+            {
+                return Some(self.emit_vec_drop_fn(&elem_te));
+            }
         }
         None
     }

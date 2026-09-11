@@ -84583,6 +84583,120 @@ fn main() {
         );
     }
 
+    /// B-2026-09-11-3 — the `String` / `Vec` half of the row above, found by
+    /// the drop fuzzer's corpus rather than by hand.
+    ///
+    /// `enum Slot[T] { Filled(T), Blank }` at `T = String` leaked the payload's
+    /// character buffer every time the value reached scope exit instead of
+    /// being matched out. A generic enum's erased payload area is ONE word (the
+    /// classifier reads the DECLARATION, where the payload is the bare
+    /// parameter `T`) and a `String` is three, so `coerce_to_payload_words`
+    /// heap-boxes it; the box drop then reclaimed the envelope and nothing
+    /// owned what was inside it. `enum_boxed_payload_interior_drop` resolved an
+    /// interior only as a user struct or enum — exactly the remainder its own
+    /// doc comment recorded as unmeasured.
+    ///
+    /// THE CELLS THAT MATTER ARE `c2` AND `c3`, and they are here because the
+    /// row was FILED WRONG. It claimed the leak needed a `ref` callee that
+    /// MATCHES the enum, listing "a `ref` callee that does not match" and
+    /// "never read at all" as clean controls. Both were measured at the default
+    /// `-O2`, where LLVM deletes an allocation nothing observes — so they
+    /// reported the optimizer, not the drop path. At `-O0` all three leak
+    /// identically and the match is not the axis at all. The same correction
+    /// retired the row's "context sensitivity" section: the two neighbouring
+    /// locals it named as required were only making the allocation observable.
+    ///
+    /// `c4`, `c5` and `c8` are DOUBLE-FREE cells, not leak cells. An arm that
+    /// binds the payload out takes the interior, and `clear_boxed_enum_inner_drop`
+    /// retracts the box's interior walk when it does; an interior drop installed
+    /// without that coordination frees the same buffer twice. They were clean
+    /// before this fix and must stay clean — the half a leak count alone does
+    /// not check.
+    ///
+    /// `c6` is the monomorphic twin, clean throughout: a concretely-declared
+    /// `String` payload classifies `VecOrString` and never boxes.
+    ///
+    /// NOT VACUOUS (B-2026-08-04-17): every payload is seeded from the opaque
+    /// `env.args().len()` and read through `contains` — its BYTES, not its
+    /// length. That is load-bearing here rather than routine: the literal-seeded,
+    /// `len()`-only first draft of this fixture folded to nothing at `-O2` and
+    /// passed against the very compiler it was written to fail, which is the
+    /// same non-measurement that put the two wrong controls in the row. Pre-fix
+    /// this program loses 480 B in 24 blocks at the default `-O2` and 864 B in
+    /// 32 blocks under `KARAC_OPT_LEVEL=0`.
+    #[test]
+    fn asan_generic_enum_boxed_string_payload_frees_its_interior() {
+        let mut expected: Vec<&str> = Vec::new();
+        for _ in 0..8 {
+            expected.extend_from_slice(&[
+                "c1:true", "c2:true", "c3", "c4:true", "c5:true", "c6:true", "c7:2", "c8:2",
+            ]);
+        }
+        expected.push("end");
+        assert_clean_asan_run_min_allocs(
+            r#"
+enum Slot[T] { Filled(T), Blank }
+enum StrSlot { FilledS(String), BlankS }
+
+fn peek(s: ref Slot[String]) -> bool { match s { Filled(x) => x.contains("row"), Blank => false, } }
+fn blind(s: ref Slot[String]) -> bool { return true; }
+fn take(s: Slot[String]) -> bool { match s { Filled(x) => x.contains("row"), Blank => false, } }
+fn mono(s: ref StrSlot) -> bool { match s { FilledS(x) => x.contains("row"), BlankS => false, } }
+fn vpeek(s: ref Slot[Vec[String]]) -> i64 {
+    match s {
+        Filled(x) => {
+            let mut c: i64 = 0i64;
+            for e in x { if e.contains("row") { c = c + 1i64; } }
+            return c;
+        },
+        Blank => 0i64,
+    }
+}
+fn vtake(s: Slot[Vec[String]]) -> i64 {
+    match s {
+        Filled(x) => {
+            let mut c: i64 = 0i64;
+            for e in x { if e.contains("row") { c = c + 1i64; } }
+            return c;
+        },
+        Blank => 0i64,
+    }
+}
+
+fn main() {
+    let n = env.args().len() as i64;
+    let mut i: i64 = 0i64;
+    while i < 8i64 {
+        let c1: Slot[String] = Filled(f"row-aaaaaaaaaaaa-{i}-{n}");
+        println(f"c1:{peek(c1)}");
+        let c2: Slot[String] = Filled(f"row-bbbbbbbbbbbb-{i}-{n}");
+        println(f"c2:{blind(c2)}");
+        let c3: Slot[String] = Filled(f"row-cccccccccccc-{i}-{n}");
+        println("c3");
+        let c4: Slot[String] = Filled(f"row-dddddddddddd-{i}-{n}");
+        println(f"c4:{take(c4)}");
+        let c5: Slot[String] = Filled(f"row-eeeeeeeeeeee-{i}-{n}");
+        println(f"c5:{match c5 { Filled(x) => x.contains("row"), Blank => false, }}");
+        let c6: StrSlot = FilledS(f"row-ffffffffffff-{i}-{n}");
+        println(f"c6:{mono(c6)}");
+        let c7: Slot[Vec[String]] = Filled(Vec[f"row-gggggggggggg-{i}-{n}", f"row-hhhhhhhhhhhh-{i}-{n}"]);
+        println(f"c7:{vpeek(c7)}");
+        let c8: Slot[Vec[String]] = Filled(Vec[f"row-iiiiiiiiiiii-{i}-{n}", f"row-jjjjjjjjjjjj-{i}-{n}"]);
+        println(f"c8:{vtake(c8)}");
+        i = i + 1i64;
+    }
+    println("end");
+}
+"#,
+            &expected,
+            "asan_generic_enum_boxed_string_payload_frees_its_interior",
+            // 133 measured (143 raw minus a 10 host floor). A version the
+            // optimizer folded away reaches ~10, so this floor separates them
+            // with room for host drift in either direction.
+            80,
+        );
+    }
+
     /// B-2026-09-06-72 — a `shared` FIELD's 16-byte refcount block when the
     /// owning struct travels out of a function inside an AGGREGATE.
     ///

@@ -262,10 +262,9 @@ programs build at least one. The differential stays at **0 divergences** — ove
 is now a 0 that had something to check.
 
 **And the sanitizer half found a bug the corpus could not previously reach**
-(B-2026-09-11-3): a user-declared **generic** enum passed by `ref` into a
-callee that MATCHES it leaks its payload at the caller's scope exit. The
-discriminators are what make it a report rather than a puzzle — in one
-identical surrounding program:
+(B-2026-09-11-3): a user-declared **generic** enum leaks its payload whenever
+the value reaches scope exit. The type discriminators are what make it a report
+rather than a puzzle — in one identical surrounding program:
 
     Slot[String]   (user generic enum)     70 B x 40 rounds LEAKED
     StrSlot        (the same, monomorphic) clean
@@ -273,11 +272,33 @@ identical surrounding program:
     Wrap[String]   (user generic STRUCT)   clean
     plain String                           clean
 
-and, on the same subject, `ref` with no match in the callee is clean while
-`ref` + match leaks, so it is the match on a BORROWED generic enum that
-disarms the caller's drop without anyone taking ownership. This is the same
-declaration-vs-instantiation axis B-2026-09-11-1 fixed in the oracle, one layer
-over in codegen.
+A generic enum erases its payload area to the width of the bare parameter `T`
+— one word — so a three-word `String` monomorph is heap-boxed, and the box drop
+reclaimed the envelope while nothing owned the buffer inside it. That is the
+same declaration-vs-instantiation axis B-2026-09-11-1 fixed in the oracle, one
+layer over in codegen: the erasure is what causes the BOXING.
+
+**The CALL-SHAPE half of that row was filed wrong, and the correction belongs
+here because it is a lesson about this harness rather than about that bug.** It
+reported that `ref` with no match in the callee was clean while `ref` + match
+leaked, and concluded that the match on a borrowed generic enum disarms the
+caller's drop. The leak had been measured under `KARAC_OPT_LEVEL=0`; those
+controls had not. At the default `-O2` LLVM deletes an allocation nothing
+observes, so both "clean" cells were reporting the optimizer. At `-O0` they leak
+identically and the match is not the axis at all — the two cells that really are
+clean (an owned callee, a match at the call site) are clean because the payload
+is MOVED OUT and the arm binding frees it. The row's whole "context sensitivity"
+section went the same way: the neighbouring locals it named as required were
+making the allocation observable, not selecting a codegen path.
+
+**A control measured at a different optimization level from its subject is not a
+control.** CLAUDE.md already says an `-O2`-only zero is evidence of nothing; what
+this adds is that the rule binds the CONTROLS just as hard as the measurement,
+and that a probe harness which sweeps cells should pin the opt level once for the
+whole sweep rather than per cell. The fixture that closed the row hit the same
+trap one more time — literal-seeded and `len()`-only, it folded away at `-O2` and
+passed against the unfixed compiler — and needed an opaque seed, a byte-level
+read, and an allocation floor before it measured anything.
 
 Note what the **differential** says about that program: nothing. It reports 0,
 correctly — codegen does emit a cleanup action for the binding, so the emitted
