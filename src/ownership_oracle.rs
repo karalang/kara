@@ -195,6 +195,19 @@ struct TypeDb {
     /// phantom drop for a name that binds nothing. Kept separate from
     /// `variant_ctors`, which is deliberately payload-carrying only.
     unit_variants: HashSet<String>,
+    /// `(enum name, variant name)` -> positional payload types, exactly as
+    /// DECLARED (generic parameters unsubstituted). `enums` above flattens
+    /// payload types across every variant, which cannot answer "which type sits
+    /// at position i of variant V" — the question a `match` arm asks
+    /// (B-2026-09-11-1).
+    variant_payloads: HashMap<(String, String), Vec<TypeExpr>>,
+    /// struct name -> declared generic parameter names, positionally. Same
+    /// role as `enum_generics`, for `struct W[T] { v: T }`.
+    struct_generics: HashMap<String, Vec<String>>,
+    /// enum name -> declared generic parameter names, positionally, so a
+    /// scrutinee's type arguments can be substituted into a variant's declared
+    /// payload types (`enum G[T] { X(T) }` matched over `G[String]`).
+    enum_generics: HashMap<String, Vec<String>>,
 }
 
 impl TypeDb {
@@ -209,9 +222,19 @@ impl TypeDb {
             .collect();
         let mut unit_variants: HashSet<String> =
             ["None"].iter().map(|s| (*s).to_string()).collect();
+        let mut variant_payloads: HashMap<(String, String), Vec<TypeExpr>> = HashMap::new();
+        let mut enum_generics: HashMap<String, Vec<String>> = HashMap::new();
+        let mut struct_generics: HashMap<String, Vec<String>> = HashMap::new();
         for item in &program.items {
             match item {
                 Item::StructDef(s) => {
+                    struct_generics.insert(
+                        s.name.clone(),
+                        s.generic_params
+                            .as_ref()
+                            .map(|g| g.params.iter().map(|p| p.name.clone()).collect())
+                            .unwrap_or_default(),
+                    );
                     structs.insert(
                         s.name.clone(),
                         s.fields
@@ -222,10 +245,27 @@ impl TypeDb {
                 }
                 Item::EnumDef(e) => {
                     let mut tys = Vec::new();
+                    enum_generics.insert(
+                        e.name.clone(),
+                        e.generic_params
+                            .as_ref()
+                            .map(|g| g.params.iter().map(|p| p.name.clone()).collect())
+                            .unwrap_or_default(),
+                    );
                     for v in &e.variants {
                         match &v.kind {
-                            VariantKind::Tuple(ts) => tys.extend(ts.iter().cloned()),
-                            VariantKind::Struct(fs) => tys.extend(fs.iter().map(|f| f.ty.clone())),
+                            VariantKind::Tuple(ts) => {
+                                tys.extend(ts.iter().cloned());
+                                variant_payloads
+                                    .insert((e.name.clone(), v.name.clone()), ts.clone());
+                            }
+                            VariantKind::Struct(fs) => {
+                                tys.extend(fs.iter().map(|f| f.ty.clone()));
+                                variant_payloads.insert(
+                                    (e.name.clone(), v.name.clone()),
+                                    fs.iter().map(|f| f.ty.clone()).collect(),
+                                );
+                            }
                             VariantKind::Unit => {}
                         }
                         // Unit variants take no argument, so they can never
@@ -248,6 +288,9 @@ impl TypeDb {
             enums,
             variant_ctors,
             unit_variants,
+            variant_payloads,
+            enum_generics,
+            struct_generics,
         }
     }
 
@@ -322,11 +365,27 @@ impl TypeDb {
                     // owns heap.
                     return true;
                 }
+                // A GENERIC user struct/enum owns heap according to its
+                // INSTANTIATION, not its declaration (B-2026-09-11-1). The
+                // declared member types of `enum G[T] { X(T) }` are `[T]`,
+                // which resolves as an unknown named type — non-heap — so
+                // every `G[String]` local read as owning nothing and was
+                // scheduled nowhere, match or no match. `Option`/`Result`
+                // escaped this only because they are special-cased above.
+                // Substituting the path's type arguments makes the two
+                // spellings agree the same way the `Array` arm does.
+                let args = generic_type_args(p);
                 if let Some(fields) = self.structs.get(name) {
-                    return fields.iter().any(|(_, f)| self.is_heap_guarded(f, seen));
+                    let params = self.struct_generics.get(name).cloned().unwrap_or_default();
+                    return fields.iter().any(|(_, f)| {
+                        self.is_heap_guarded(&subst_generics(f, &params, &args), seen)
+                    });
                 }
                 if let Some(tys) = self.enums.get(name) {
-                    return tys.iter().any(|t| self.is_heap_guarded(t, seen));
+                    let params = self.enum_generics.get(name).cloned().unwrap_or_default();
+                    return tys
+                        .iter()
+                        .any(|t| self.is_heap_guarded(&subst_generics(t, &params, &args), seen));
                 }
                 // Unknown named type: assume non-heap (POD) — conservative for
                 // the schedule (an unknown type contributes no drop), and the
@@ -1389,7 +1448,32 @@ impl Analyzer<'_> {
             ("Option", "Some") => args.first().cloned().map(|t| vec![t]),
             ("Result", "Ok") => args.first().cloned().map(|t| vec![t]),
             ("Result", "Err") => args.get(1).cloned().map(|t| vec![t]),
-            _ => None,
+            // A user enum: the scrutinee's type head names the enum, so the
+            // variant resolves without guessing from the bare variant name
+            // (two enums may share one). Declared payload types are then
+            // substituted with the scrutinee's type arguments, so
+            // `enum G[T] { X(T) }` matched over `G[String]` projects `String`
+            // rather than `T`. An unsubstituted parameter is harmless — it
+            // renders as an unknown named type, which `is_heap` reads as
+            // non-heap, i.e. the pre-existing conservative default.
+            _ => {
+                let declared = self
+                    .type_db
+                    .variant_payloads
+                    .get(&(head.to_string(), name.to_string()))?;
+                let params = self
+                    .type_db
+                    .enum_generics
+                    .get(head)
+                    .cloned()
+                    .unwrap_or_default();
+                Some(
+                    declared
+                        .iter()
+                        .map(|t| subst_generics(t, &params, &args))
+                        .collect(),
+                )
+            }
         }
     }
 
@@ -1564,6 +1648,66 @@ fn is_iter_call(expr: &Expr) -> bool {
             if matches!(method.as_str(), "iter" | "iter_mut" | "keys" | "values" | "enumerate")
     ) || matches!(&expr.kind,
         ExprKind::MethodCall { object, .. } if is_iter_call(object))
+}
+
+/// Replace declared generic parameters with a scrutinee's type arguments.
+///
+/// Only the shapes a payload type actually takes are walked — a bare parameter
+/// path, and the containers one can nest in (tuple, array, `Option[T]`-style
+/// generic args). Anything unrecognised is returned unchanged, which leaves an
+/// unsubstituted parameter behind; that is safe, because an unknown named type
+/// reads as non-heap and so schedules nothing.
+fn subst_generics(ty: &TypeExpr, params: &[String], args: &[TypeExpr]) -> TypeExpr {
+    if params.is_empty() || args.is_empty() {
+        return ty.clone();
+    }
+    match &ty.kind {
+        TypeKind::Path(p) => {
+            // A bare `T` — one segment, no arguments of its own.
+            if p.segments.len() == 1 && p.generic_args.is_none() {
+                if let Some(i) = params.iter().position(|n| *n == p.segments[0]) {
+                    if let Some(arg) = args.get(i) {
+                        return arg.clone();
+                    }
+                }
+            }
+            // Otherwise recurse into this type's own arguments, e.g. `Vec[T]`.
+            let Some(gargs) = &p.generic_args else {
+                return ty.clone();
+            };
+            let mut np = p.clone();
+            np.generic_args = Some(
+                gargs
+                    .iter()
+                    .map(|a| match a {
+                        GenericArg::Type(t) => GenericArg::Type(subst_generics(t, params, args)),
+                        other => other.clone(),
+                    })
+                    .collect(),
+            );
+            TypeExpr {
+                kind: TypeKind::Path(np),
+                span: ty.span,
+            }
+        }
+        TypeKind::Tuple(elems) => TypeExpr {
+            kind: TypeKind::Tuple(
+                elems
+                    .iter()
+                    .map(|e| subst_generics(e, params, args))
+                    .collect(),
+            ),
+            span: ty.span,
+        },
+        TypeKind::Array { element, size } => TypeExpr {
+            kind: TypeKind::Array {
+                element: Box::new(subst_generics(element, params, args)),
+                size: size.clone(),
+            },
+            span: ty.span,
+        },
+        _ => ty.clone(),
+    }
 }
 
 fn tuple_elem_ty(ty: &TypeExpr, i: usize) -> Option<TypeExpr> {

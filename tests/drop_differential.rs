@@ -455,3 +455,61 @@ fn moving_into_some_schedules_the_option_not_the_source() {
          (one value, two drops); got {places:?}"
     );
 }
+
+#[test]
+fn user_enum_match_schedules_the_payload_and_is_clean() {
+    // B-2026-09-11-1. The projection used to stop at `Option`/`Result`, so a
+    // user enum arm compared nothing. The variant resolves through the
+    // SCRUTINEE's type head (not the bare variant name, which two enums may
+    // share), and codegen covers it via the scrutinee's slot per rule 5.
+    let src = format!(
+        "enum Box2 {{ Full(String), Empty }}\n\
+         fn main() {{ let b: Box2 = Full({S}); \
+         match b {{ Full(s2) => {{ println(s2.len()); }}, Empty => {{}} }} }}"
+    );
+    assert_eq!(assert_clean(&src), 1);
+}
+
+#[test]
+fn a_generic_enum_local_is_scheduled_by_its_instantiation() {
+    // The deeper half of B-2026-09-11-1: `enums["G"]` holds the DECLARED
+    // payload types (`[T]`), which resolved as an unknown named type — so a
+    // `G[String]` local owned nothing in the model and was compared nowhere,
+    // with or without a match. Substituting the type argument fixes it.
+    let src = format!(
+        "enum G[T] {{ X(T), Y }}\n\
+         fn main() {{ let g: G[String] = X({S}); println(1i64); }}"
+    );
+    assert_eq!(assert_clean(&src), 1);
+}
+
+#[test]
+fn a_generic_enum_at_a_scalar_argument_schedules_nothing() {
+    // The complement, so the substitution cannot be "every generic enum owns
+    // heap": the same declaration at `i64` must stay unscheduled.
+    let src = "enum G1[T] { X(T), Y }\n\
+               fn main() { let g: G1[i64] = X(5i64); println(1i64); }";
+    assert_eq!(assert_clean(src), 0);
+}
+
+#[test]
+fn a_generic_struct_local_is_scheduled_by_its_instantiation() {
+    // Same rule for a generic struct, so the two declaration forms agree.
+    let src = format!(
+        "struct W[T] {{ v: T }}\n\
+         fn main() {{ let w: W[String] = W {{ v: {S} }}; println(1i64); }}"
+    );
+    assert_eq!(assert_clean(&src), 1);
+}
+
+#[test]
+fn generic_enum_match_projects_the_substituted_payload() {
+    // `X(T)` over `G[String]` projects `String`, so the arm binding is Owned
+    // heap and compared — the generic spelling of the case above.
+    let src = format!(
+        "enum G4[T] {{ X(T), Y }}\n\
+         fn main() {{ let g: G4[String] = X({S}); \
+         match g {{ X(v) => {{ println(v.len()); }}, Y => {{}} }} }}"
+    );
+    assert_eq!(assert_clean(&src), 1);
+}

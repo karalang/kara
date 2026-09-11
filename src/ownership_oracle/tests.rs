@@ -628,3 +628,141 @@ fn main() {
         "Err i64 must not drop; got {d:?}"
     );
 }
+
+// ───── generic instantiation + user enum payloads (B-2026-09-11-1) ─────
+
+/// A generic user enum owns heap according to its INSTANTIATION. Before this,
+/// `enums["G"]` held the DECLARED payload types (`[T]`), `T` resolved as an
+/// unknown named type — non-heap — and so every `G[String]` local owned
+/// nothing and was scheduled nowhere, with or without a `match`.
+/// `Option`/`Result` escaped only because they are special-cased.
+#[test]
+fn a_generic_enum_local_is_heap_by_its_type_argument() {
+    let res = oracle(
+        r#"
+enum G[T] { X(T), Y }
+fn main() {
+    let g: G[String] = X("aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa".to_string());
+    println(1i64);
+}
+"#,
+    );
+    let d = drops_in(&res, "main");
+    assert!(
+        d.contains(&"g".to_string()),
+        "G[String] owns heap; got {d:?}"
+    );
+}
+
+/// The complement — the same declaration at a scalar argument owns nothing.
+#[test]
+fn a_generic_enum_local_at_a_scalar_argument_is_not_heap() {
+    let res = oracle(
+        r#"
+enum G[T] { X(T), Y }
+fn main() {
+    let g: G[i64] = X(5i64);
+    println(1i64);
+}
+"#,
+    );
+    let d = drops_in(&res, "main");
+    assert!(
+        !d.contains(&"g".to_string()),
+        "G[i64] owns nothing; got {d:?}"
+    );
+}
+
+/// The same rule for a generic STRUCT, so the two declarations agree.
+#[test]
+fn a_generic_struct_local_is_heap_by_its_type_argument() {
+    let res = oracle(
+        r#"
+struct W[T] { v: T }
+fn main() {
+    let w: W[String] = W { v: "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa".to_string() };
+    println(1i64);
+}
+"#,
+    );
+    let d = drops_in(&res, "main");
+    assert!(
+        d.contains(&"w".to_string()),
+        "W[String] owns heap; got {d:?}"
+    );
+}
+
+/// A user enum's arm binding projects that variant's declared payload type —
+/// resolved through the SCRUTINEE's type head, so two enums sharing a variant
+/// name cannot be confused.
+#[test]
+fn user_enum_arm_payload_is_projected() {
+    let res = oracle(
+        r#"
+enum Box2 { Full(String), Empty }
+fn main() {
+    let b: Box2 = Full("aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa".to_string());
+    match b {
+        Full(s2) => { println(s2.len()); },
+        Empty => {},
+    }
+}
+"#,
+    );
+    let d = drops_in(&res, "main");
+    assert!(
+        d.contains(&"s2".to_string()),
+        "payload `s2` should drop; got {d:?}"
+    );
+}
+
+/// A generic user enum's arm binding substitutes the scrutinee's type argument
+/// into the variant's declared payload type, so `X(T)` over `G[String]`
+/// projects `String` rather than the parameter.
+#[test]
+fn generic_user_enum_arm_payload_substitutes_the_type_argument() {
+    let res = oracle(
+        r#"
+enum G[T] { X(T), Y }
+fn main() {
+    let g: G[String] = X("aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa".to_string());
+    match g {
+        X(v) => { println(v.len()); },
+        Y => {},
+    }
+}
+"#,
+    );
+    let d = drops_in(&res, "main");
+    assert!(
+        d.contains(&"v".to_string()),
+        "projected payload `v` should drop; got {d:?}"
+    );
+}
+
+/// A multi-payload variant splits positionally: the `String` carries an
+/// obligation, the `i64` does not.
+#[test]
+fn user_enum_multi_payload_variant_splits_positionally() {
+    let res = oracle(
+        r#"
+enum P2 { Pair(i64, String), None2 }
+fn main() {
+    let p: P2 = Pair(1i64, "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa".to_string());
+    match p {
+        Pair(a, b) => { println(a + b.len()); },
+        None2 => {},
+    }
+}
+"#,
+    );
+    let d = drops_in(&res, "main");
+    assert!(
+        d.contains(&"b".to_string()),
+        "heap payload `b` should drop; got {d:?}"
+    );
+    assert!(
+        !d.contains(&"a".to_string()),
+        "scalar payload `a` must not; got {d:?}"
+    );
+}
