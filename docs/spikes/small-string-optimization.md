@@ -382,18 +382,34 @@ perf payoff lands in Slice 2.
 
   **Step 5 ("flip the default and prove the payoff") cannot succeed as stated** and
   should not be attempted until the read path stops costing more than the
-  allocation it saves. In order:
-  1. **Reuse the construction slot** — a String just written to an alloca should
-     not be re-spilled to another. Needs a value→slot side table consulted by
-     `sso_string_parts_from_value`.
-  2. **Branch rather than select where the pointer feeds a length-known compare**,
-     so each arm has a concrete pointer LLVM can still fold.
-  3. **Make `substring` a construction site** — the one that matters for the
+  allocation it saves.
+
+  **ELIMINATING THE ROUND TRIP WAS TRIED AND IS WORTHLESS — do not redo it.**
+  Implemented as provenance read off the IR (if the value is a `load`, reuse the
+  pointer it loaded from; bail on any intervening `store`/`call` or a load from
+  another block). It worked: the three redundant `mov …,0x18(%rsp)` stores
+  disappear from the loop. It bought **nothing** — best-of-7 wall time 31 ms → 32
+  ms, and retired instructions went the WRONG way, **162,335,574 → 168,335,584**.
+  Deterministic counter, so that is not noise. The change was reverted rather than
+  landed: a soundness-critical IR scan for no measured benefit is a bad trade.
+
+  A plausible mechanism, offered as a HYPOTHESIS and not measured: reusing the
+  variable's own slot takes the address of `t`, which can block mem2reg from
+  promoting it, where the dedicated spill alloca kept the address-taking confined
+  to a slot nothing else used. If someone revisits this, test that first.
+
+  So the regression is, to a first approximation, **entirely cost #1** — the
+  opaque pointer defeating LLVM's compare folding. That is the only thing worth
+  working on:
+  1. **Branch rather than select where the pointer feeds a length-known compare**,
+     so each arm has a concrete pointer LLVM can still fold. This is the whole
+     9 ms.
+  2. **Make `substring` a construction site** — the one that matters for the
      profile. `karac_string_from_bytes_into(src, n, out)` is the right shape:
      codegen keeps its existing clamp and boundary check (whose contract differs
      from `slice_into`'s fatal one) and only the final assembly routes to the
      runtime, so the encoder keeps exactly one implementation.
-  4. Only then re-measure, and only then consider the default.
+  3. Only then re-measure, and only then consider the default.
 
   Gates at this commit: fmt OK, both clippy legs green, 109 binaries per leg.
   SSO=off 16,028 passed, 2 red (`signalling_karac_run_does_not_orphan_the_jit_runner`
