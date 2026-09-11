@@ -182,6 +182,57 @@ pub unsafe extern "C" fn karac_string_slice_into(
     }
 }
 
+/// Try to build an INLINE `String` descriptor from `n` bytes at `src`.
+/// Returns 1 if it did, 0 if `n` exceeds the inline capacity — in which case
+/// `out` is NOT written and the caller must take its own heap path.
+///
+/// The narrowest possible shape, and narrow on purpose. Codegen already has a
+/// heap path for every construction site (each with its own buffer contract —
+/// `String.substring` allocates exactly `n` bytes through
+/// `karac_alloc_or_panic`, while `karac_string_slice` allocates `n + 1` through
+/// Rust's allocator and NUL-terminates). Folding those into one runtime
+/// constructor would force one site's contract onto the other and quietly
+/// change which allocator a buffer came from. So this owns ONLY the part that
+/// must not be duplicated: the inline ENCODING, which lives in
+/// `RuntimeKaracString::new_inline` and nowhere else.
+///
+/// Returning the verdict rather than taking a threshold is what keeps the
+/// capacity out of codegen too: the caller branches on the answer and never
+/// learns the number. A wasted call on the heap path is noise against the
+/// `malloc` + `memcpy` that path was already going to do.
+///
+/// # Safety
+///
+/// * `src` must point to a readable buffer of at least `n` bytes when `n > 0`.
+/// * `out` must point to a writable `RuntimeKaracString`-sized region.
+/// * An inline result owns nothing and must not be freed — every buffer-free
+///   gate already skips it (`cap < 0` fails the `SGT cap, 0` test).
+#[no_mangle]
+pub unsafe extern "C" fn karac_string_try_inline_into(
+    src: *const u8,
+    n: i64,
+    out: *mut KaracString,
+) -> i8 {
+    unsafe {
+        // A negative `n` cannot arise from a caller that clamped, but it would
+        // become an enormous `usize` on the cast — so refuse rather than trust.
+        if n < 0 || n as usize > KaracString::INLINE_CAPACITY {
+            return 0;
+        }
+        let n = n as usize;
+        // `new_inline` handles `n == 0`, but the canonical empty String is
+        // `{null, 0, 0}` and every caller already has its own empty branch, so
+        // an empty request never reaches here in practice.
+        let bytes = if n == 0 {
+            &[][..]
+        } else {
+            std::slice::from_raw_parts(src, n)
+        };
+        *out = KaracString::new_inline(bytes);
+        1
+    }
+}
+
 /// Bounds- and UTF-8-boundary-validate a `s[start..end]` slice request,
 /// returning the validated `(start, end)` as `usize`. Both failure paths
 /// print to stderr and `exit(1)`, matching codegen's `emit_panic` shape (a
@@ -891,6 +942,70 @@ pub unsafe extern "C" fn karac_string_encode_char(cp: u32, out: *mut u8) -> i64 
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::RuntimeKaracString;
+
+    /// The verdict is the contract: 1 means `out` holds a complete inline
+    /// descriptor, 0 means `out` was NOT touched and the caller owns the heap
+    /// path. Sweep the boundary rather than spot-checking it — the off-by-one
+    /// at `INLINE_CAPACITY` is the whole risk.
+    #[test]
+    fn try_inline_answers_by_length_and_writes_only_when_it_says_yes() {
+        let src = [b'z'; 64];
+        for n in 0..=40usize {
+            // A sentinel that no successful write could produce, so "untouched"
+            // is distinguishable from "written with something plausible".
+            let mut out = RuntimeKaracString {
+                data: 0xDEAD_BEEF as *mut u8,
+                len: -12345,
+                cap: -54321,
+            };
+            let ok =
+                unsafe { karac_string_try_inline_into(src.as_ptr(), n as i64, &mut out as *mut _) };
+            if n <= RuntimeKaracString::INLINE_CAPACITY {
+                assert_eq!(ok, 1, "n={n} fits and must be inlined");
+                assert!(out.cap < 0, "n={n} must carry the inline tag");
+                assert_eq!(out.byte_len(), n, "n={n} length round-trip");
+                assert_eq!(out.as_bytes(), &src[..n], "n={n} bytes round-trip");
+            } else {
+                assert_eq!(ok, 0, "n={n} exceeds capacity and must decline");
+                assert_eq!(out.len, -12345, "declined call must not write `out`");
+                assert_eq!(out.cap, -54321, "declined call must not write `out`");
+            }
+        }
+    }
+
+    /// A negative length is refused rather than cast into an enormous `usize`.
+    #[test]
+    fn try_inline_refuses_a_negative_length() {
+        let src = [b'a'; 8];
+        let mut out = RuntimeKaracString {
+            data: core::ptr::null_mut(),
+            len: 7,
+            cap: 7,
+        };
+        let ok = unsafe { karac_string_try_inline_into(src.as_ptr(), -1, &mut out as *mut _) };
+        assert_eq!(ok, 0);
+        assert_eq!(out.len, 7, "refused call must not write `out`");
+    }
+
+    /// Multi-byte content travels verbatim — the encoder copies bytes and does
+    /// not inspect them, and `substring` has already done its own boundary
+    /// check by the time it calls here.
+    #[test]
+    fn try_inline_preserves_multibyte_content() {
+        let s = "héllo wörld";
+        assert!(s.len() <= RuntimeKaracString::INLINE_CAPACITY);
+        let mut out = RuntimeKaracString {
+            data: core::ptr::null_mut(),
+            len: 0,
+            cap: 0,
+        };
+        let ok =
+            unsafe { karac_string_try_inline_into(s.as_ptr(), s.len() as i64, &mut out as *mut _) };
+        assert_eq!(ok, 1);
+        assert_eq!(out.as_bytes(), s.as_bytes());
+    }
+
     // Test-only: the heap-fallback cases free what `karac_string_slice_into`
     // allocated so the suite stays leak-clean under LSan.
     use std::alloc::dealloc;

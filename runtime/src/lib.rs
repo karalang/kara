@@ -536,6 +536,7 @@ pub fn __preserve_no_mangle_symbols() -> usize {
         clone::karac_string_clone,
         clone::karac_string_slice,
         clone::karac_string_slice_into,
+        clone::karac_string_try_inline_into,
         clone::karac_string_slice_borrow,
         clone::karac_string_decode_char,
         clone::karac_string_encode_char,

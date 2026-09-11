@@ -267,6 +267,15 @@ pub(crate) struct RuntimeFns<'ctx> {
     /// when the slice fits the 23-byte overlay; heap otherwise. Only reached
     /// when `KARAC_SSO` is on.
     pub(crate) karac_string_slice_into_fn: FunctionValue<'ctx>,
+    /// `karac_string_try_inline_into(src, n, out) -> i8` — the narrow inline
+    /// constructor. Writes an inline descriptor and returns 1 when `n` fits
+    /// the overlay; returns 0 and leaves `out` untouched otherwise, so the
+    /// caller keeps its own heap path and its own buffer contract. Backs
+    /// `String.substring`, whose heap arm allocates exactly `n` bytes through
+    /// `karac_alloc_or_panic` and is deliberately NOT shared with
+    /// `karac_string_slice_into`'s (`n + 1`, Rust allocator, NUL-terminated).
+    /// Only reached when `KARAC_SSO` is on.
+    pub(crate) karac_string_try_inline_into_fn: FunctionValue<'ctx>,
     /// `karac_string_slice_borrow(data, len, start, end) -> ptr` — validating,
     /// non-allocating slice; returns `data + start`. Backs borrowed
     /// `{ptr, len, cap=0}` String views used as non-retained map keys.

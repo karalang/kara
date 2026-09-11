@@ -7,14 +7,15 @@ were fixed in `3833ff8`.
 
 **Slice 2 inline construction is LIVE behind `KARAC_SSO=1`, default OFF.** It
 works and it is correct on every surface probed. Its payoff is **workload-shaped,
-and the shape is the whole story**: SSO is a **37% WIN** where sliced strings are
-RETAINED, and a **19–41% LOSS** where they are sliced, used and discarded in the
-same iteration — because a transient `malloc`/`free` pair is a glibc tcache hit
-that costs less than the tag-aware read path. Separately, the construction site
-that landed (`s[a..b]`) is **not the one the motivating profile uses**
-(`.substring()`, which still mallocs). **Read "Slice 2 round 2" below before
-planning anything, and do not quote a payoff number without saying which of the
-two shapes it came from.** This doc is the campaign's
+and the shape is the whole story**: SSO is a **36–37% WIN** where sliced strings
+are RETAINED, and an **11–41% LOSS** where they are sliced, used and discarded in
+the same iteration — because a transient `malloc`/`free` pair is a glibc tcache
+hit that costs less than the tag-aware read path. **Both** construction sites are
+now inline — `s[a..b]` and `String.substring`, the latter being the one the
+motivating lexer profile actually uses — and they measure the same split, so the
+win is a property of the shape rather than of one benchmark. **Read "Slice 2
+round 2" below before planning anything, and do not quote a payoff number without
+saying which of the two shapes it came from.** This doc is the campaign's
 living handoff: layout decision (settled), staged slice plan, the tag-aware
 accessor work list, and the verification matrix. Scoped 2026-06-12; Slice 1 landed
 2026-07-09; Slice 2 construction 2026-09-11.
@@ -425,12 +426,81 @@ perf payoff lands in Slice 2.
   1. **Branch rather than select where the pointer feeds a length-known compare**,
      so each arm has a concrete pointer LLVM can still fold. Worth ~5 ms of the
      9 ms on the transient leg; leaves it still ~19% slower.
-  2. **Make `substring` a construction site** — the one that matters for the
-     profile. `karac_string_from_bytes_into(src, n, out)` is the right shape:
-     codegen keeps its existing clamp and boundary check (whose contract differs
-     from `slice_into`'s fatal one) and only the final assembly routes to the
-     runtime, so the encoder keeps exactly one implementation.
+  2. ~~**Make `substring` a construction site**~~ — **DONE**, see below.
   3. Only then re-measure, and only then consider the default.
+
+  ### `String.substring` is now a construction site (2026-09-11)
+
+  The site the profile actually uses. Same two-shape split as `s[a..b]`:
+
+  | shape | allocations 0 → 1 | `SSO=0` | `SSO=1` | |
+  |---|---|---|---|---|
+  | transient — substring, compare, discard | 1,000,047 → **47** | 9 ms | 10 ms | −11% |
+  | **retained** — substring, push into a `Vec[String]` | 200,012 → **12** | 14 ms | **9 ms** | **+36%** |
+
+  The retained row reproduces the `s[a..b]` benchmark's +37% almost exactly, which
+  is the consistency worth having: the win is a property of the SHAPE, not of one
+  benchmark.
+
+  **The entrypoint is deliberately narrow, and the reason is the buffer contract.**
+  The obvious design — one runtime constructor shared with
+  `karac_string_slice_into` — dies on inspection: `String.substring` allocates
+  exactly `n` bytes through `karac_alloc_or_panic` with no NUL, while
+  `karac_string_slice` allocates `n + 1` through Rust's allocator and
+  NUL-terminates. Sharing would force one site's contract onto the other and
+  silently change which allocator a buffer came from, which the free path has to
+  agree with. So `karac_string_try_inline_into(src, n, out) -> i8` owns only the
+  inline ENCODING: it writes `out` and answers 1, or answers 0 and leaves `out`
+  alone so the caller keeps its own heap arm. **Returning the verdict rather than
+  the threshold is what keeps `INLINE_CAPACITY` out of codegen** — codegen
+  branches on the answer and never learns the number.
+
+  **A construction fast path is most dangerous where it makes validation
+  skippable.** `substring` does a UTF-8 boundary check (B-2026-08-14-19: an
+  unchecked cut inside a codepoint put invalid UTF-8 on stdout and made `karac
+  run` and `karac build` disagree about a substring's LENGTH). The inline branch
+  sits after that check and takes the same `start`/`end` — measured, not asserted:
+  `"日本語".substring(0, 2)` faults identically at both settings and under
+  `--interp`.
+
+  ### Turning it on broke the self-hosted compiler, and that is the method working
+
+  The first `KARAC_SSO=1` gate after this change went red on **six** binaries —
+  all four self-host tests, the ASAN suite, and the known coroutine flake. Every
+  string literal's text came back EMPTY:
+
+      Kāra: "0 7 1 1 STR"      Rust: "0 7 1 1 STR hello"
+      Kāra: (str  @0:4)        Rust: (str hi @0:4)
+
+  `push_str`'s **argument** was read with raw `extract_value(src_val, 0/1)`. For
+  an inline argument, field 0 is the first eight CONTENT bytes reinterpreted as a
+  pointer and field 1 is content bytes 8..=15 — zero for anything under 8 bytes —
+  so it appended nothing, silently. The lexer's string-literal path is
+  `value.push_str(self.src.substring(run_start, self.current))`, so making
+  `substring` inline lit a fuse that had been sitting there since the read sweep.
+
+  **The site scanner's blind spot is why it was missed**, and it is worth naming
+  because it is not a reasoning error. The scanner matched
+  `build_extract_value(NAME, 0` with `NAME` as `[\w.]+`, which silently skips
+  `build_extract_value(src_val.into_struct_value(), 0` — the parens break the
+  match. Rewritten to accept an arbitrary aggregate expression, it found exactly
+  one more String site of the same shape (`try_push_str`). Two scanner gaps have
+  now each hidden a real site; a regex over call syntax is a lower bound, never a
+  census.
+
+  **PER-ARM PROMOTION LEAKS BY CONSTRUCTION — it is now a chokepoint.** The
+  deeper find: `try_push_str` mutates its receiver and had NO
+  `sso_deinline_in_place`. The previous round added promotion to `push_str`,
+  `push` and `reserve` one arm at a time and simply missed it, and nothing failed
+  until a new construction site made inline values common. Promotion now happens
+  once in `compile_vec_method`, keyed off an over-broad list of mutating method
+  names: a false positive costs one predictable compare, a false negative costs
+  silent corruption. A `Vec` guard keeps that compare off the hot `Vec` paths
+  while erring toward promoting whenever the receiver is not positively known to
+  be a `Vec` — which is what covers a `ref String` parameter, filtered out of the
+  String-typed tables by the `Ref(Str)` gap B-2026-08-18-22 hit.
+
+  After the fix, both legs: **109 binaries, 16,801 passed, zero red.**
 
   Gates at this commit: fmt OK, both clippy legs green, 109 binaries per leg.
   SSO=off 16,028 passed, 2 red (`signalling_karac_run_does_not_orphan_the_jit_runner`

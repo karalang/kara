@@ -6016,6 +6016,20 @@ impl<'ctx> Codegen<'ctx> {
             Some(Linkage::External),
         );
 
+        // karac_string_try_inline_into(src, n, out) -> i8
+        // Writes an INLINE descriptor to `out` and returns 1 when `n` fits the
+        // overlay; returns 0 and leaves `out` untouched otherwise, so the
+        // caller keeps its own heap path. The verdict is returned rather than
+        // the capacity exposed, which is what keeps `INLINE_CAPACITY` out of
+        // codegen entirely — only `runtime/src/sso.rs` knows the number or the
+        // encoding. Reached only when `KARAC_SSO` is on.
+        let string_try_inline_into_ty = context.i8_type().fn_type(&[ptr_md, i64_ty, ptr_md], false);
+        let karac_string_try_inline_into_fn = module.add_function(
+            "karac_string_try_inline_into",
+            string_try_inline_into_ty,
+            Some(Linkage::External),
+        );
+
         // karac_string_slice_borrow(data, len, start, end) -> ptr
         // Validates identically to karac_string_slice but returns a pointer
         // *into* the source (`data + start`) without allocating — backs a
@@ -6451,6 +6465,7 @@ impl<'ctx> Codegen<'ctx> {
                 karac_string_clone_fn,
                 karac_string_slice_fn,
                 karac_string_slice_into_fn,
+                karac_string_try_inline_into_fn,
                 karac_string_slice_borrow_fn,
                 karac_unicode_normalize_fn,
                 karac_dbg_quote_str_fn,

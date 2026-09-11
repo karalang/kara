@@ -1016,6 +1016,64 @@ impl<'ctx> super::Codegen<'ctx> {
         let ptr_ty = self.context.ptr_type(AddressSpace::default());
         let elem_ty = self.vec_elem_type_for_var(var_name);
 
+        // SSO: promote an inline receiver out of the overlay before ANY
+        // mutating method touches it — in ONE place, keyed off the method
+        // name, rather than per-arm.
+        //
+        // Per-arm was tried and leaks by construction: `push_str`, `push` and
+        // `reserve` got the call, `try_push_str` did not, and nothing failed
+        // until `substring` started producing inline values months later. The
+        // failure is also the quiet kind rather than a crash — the growth test
+        // `UGT(new_len, cap)` reads an inline `cap < 0` as an enormous
+        // unsigned, skips the grow, and the copy lands past the end of the
+        // descriptor.
+        //
+        // The list is deliberately OVER-broad (it names `Vec` mutators too):
+        // promotion is a no-op for anything already heap or static, so a false
+        // positive costs one predictable compare and a false negative costs
+        // silent corruption. The `Vec` guard below keeps that compare off the
+        // hot `Vec` paths anyway, and errs toward promoting whenever the
+        // receiver's type is not positively known to be a `Vec` — a
+        // `ref String` parameter is exactly such a case, and is filtered out of
+        // the String-typed tables (the `Ref(Str)` gap B-2026-08-18-22 hit).
+        const MUTATES_RECEIVER_IN_PLACE: &[&str] = &[
+            "append",
+            "clear",
+            "dedup",
+            "extend_from_slice",
+            "insert",
+            "pop",
+            "pop_front",
+            "push",
+            "push_front",
+            "push_str",
+            "remove",
+            "reserve",
+            "resize",
+            "retain",
+            "reverse",
+            "sort",
+            "sort_by",
+            "sort_by_key",
+            "split_off",
+            "swap",
+            "swap_remove",
+            "truncate",
+            "try_append",
+            "try_extend_from_slice",
+            "try_push",
+            "try_push_front",
+            "try_push_str",
+            "try_reserve",
+            "try_resize",
+        ];
+        if self.sso_on()
+            && MUTATES_RECEIVER_IN_PLACE.contains(&method)
+            && !self.var_types.vec_elem_types.contains_key(var_name)
+        {
+            self.sso_deinline_in_place(data_ptr, "recv.mut");
+        }
+
         match method {
             "len" => {
                 let len_ptr = self
@@ -2026,8 +2084,26 @@ impl<'ctx> super::Codegen<'ctx> {
 
                 // Result slot for the assembled String aggregate.
                 let result_slot = self.create_entry_alloca(fn_val, "ss.result", str_ty.into());
+                // SSO: try the inline encoding FIRST. `substring` is the
+                // construction site the campaign's own profile actually uses —
+                // the self-hosted lexer's per-token copy is
+                // `self.src.substring(a, b)`, not `s[a..b]` — so this is where
+                // the no-malloc win has to land.
+                //
+                // The runtime is asked for a VERDICT, not a threshold: it
+                // writes `out` and answers 1 when the bytes fit, or answers 0
+                // and leaves `out` alone. So `INLINE_CAPACITY` and the byte
+                // packing stay solely in `runtime/src/sso.rs`, and the heap arm
+                // below keeps its OWN buffer contract (exactly `n` bytes from
+                // `karac_alloc_or_panic`, no NUL) rather than inheriting
+                // `karac_string_slice_into`'s different one.
+                let inline_bb = if self.sso_on() {
+                    Some(self.context.append_basic_block(fn_val, "ss.inline"))
+                } else {
+                    None
+                };
                 self.builder
-                    .build_conditional_branch(out_of_range, empty_bb, copy_bb)
+                    .build_conditional_branch(out_of_range, empty_bb, inline_bb.unwrap_or(copy_bb))
                     .unwrap();
 
                 // Empty branch: store {null, 0, 0}.
@@ -2051,6 +2127,44 @@ impl<'ctx> super::Codegen<'ctx> {
                     .into_struct_value();
                 self.builder.build_store(result_slot, empty_agg).unwrap();
                 self.builder.build_unconditional_branch(cont_bb).unwrap();
+
+                // Inline branch: hand the bytes to the runtime encoder and
+                // fall through to the copy branch only if it declines.
+                if let Some(inline_bb) = inline_bb {
+                    self.builder.position_at_end(inline_bb);
+                    let n = self
+                        .builder
+                        .build_int_nsw_sub(end, start, "ss.inl.len")
+                        .unwrap();
+                    let src = unsafe {
+                        self.builder
+                            .build_gep(self.context.i8_type(), recv_data, &[start], "ss.inl.src")
+                            .unwrap()
+                    };
+                    let ok = self
+                        .builder
+                        .build_call(
+                            self.runtime_fns.karac_string_try_inline_into_fn,
+                            &[src.into(), n.into(), result_slot.into()],
+                            "ss.inl.ok",
+                        )
+                        .unwrap()
+                        .try_as_basic_value()
+                        .unwrap_basic()
+                        .into_int_value();
+                    let inlined = self
+                        .builder
+                        .build_int_compare(
+                            inkwell::IntPredicate::NE,
+                            ok,
+                            self.context.i8_type().const_zero(),
+                            "ss.inl.done",
+                        )
+                        .unwrap();
+                    self.builder
+                        .build_conditional_branch(inlined, cont_bb, copy_bb)
+                        .unwrap();
+                }
 
                 // Copy branch: malloc + memcpy from data+start.
                 self.builder.position_at_end(copy_bb);
@@ -2913,7 +3027,6 @@ impl<'ctx> super::Codegen<'ctx> {
 
                 // Mutating op: promote out of inline first, so every
                 // `len`/`cap` read below sees an ordinary heap string.
-                self.sso_deinline_in_place(data_ptr, "spush");
                 let data_ptr_ptr = self
                     .builder
                     .build_struct_gep(vec_ty, data_ptr, 0, "spush.data.ptr")
@@ -5207,16 +5320,20 @@ impl<'ctx> super::Codegen<'ctx> {
                         None => (self.compile_expr(&args[0].value)?, false),
                     };
                 // Extract src string's ptr and len.
-                let src_ptr = self
-                    .builder
-                    .build_extract_value(src_val.into_struct_value(), 0, "src.ptr")
-                    .unwrap()
-                    .into_pointer_value();
-                let src_len = self
-                    .builder
-                    .build_extract_value(src_val.into_struct_value(), 1, "src.len")
-                    .unwrap()
-                    .into_int_value();
+                //
+                // SSO: the ARGUMENT, not the receiver. The receiver is promoted
+                // out of inline below because it is mutated; the argument is a
+                // pure READ and must be tag-aware instead. An inline argument
+                // keeps its bytes in its own descriptor, so the raw field 0 is
+                // the first eight content bytes reinterpreted as a pointer and
+                // the raw field 1 is content bytes 8..=15 — zero for anything
+                // under 8 bytes, which appends NOTHING and loses the text
+                // silently. That is what `push_str(self.src.substring(a, b))`
+                // in the self-hosted lexer's string-literal path does, and it
+                // is how `STR hello` became `STR ` the moment `substring`
+                // started producing inline values.
+                let (src_ptr, src_len) =
+                    self.sso_string_parts_from_value(src_val.into_struct_value(), "pstr.src");
 
                 // Load target fields.
                 // Mutating op (`push_str`): promote out of inline first, so
@@ -5224,7 +5341,6 @@ impl<'ctx> super::Codegen<'ctx> {
                 // Without this the growth test `UGT(new_len, cap)` reads an
                 // inline `cap < 0` as an enormous unsigned, skips the grow,
                 // and the copy lands past the end of the descriptor.
-                self.sso_deinline_in_place(data_ptr, "pstr");
                 let data_ptr_ptr = self
                     .builder
                     .build_struct_gep(vec_ty, data_ptr, 0, "t.data.ptr")
@@ -5463,16 +5579,10 @@ impl<'ctx> super::Codegen<'ctx> {
                     return Err("String.try_push_str requires an argument".to_string());
                 }
                 let src_val = self.compile_expr(&args[0].value)?;
-                let src_ptr = self
-                    .builder
-                    .build_extract_value(src_val.into_struct_value(), 0, "tss.src.ptr")
-                    .unwrap()
-                    .into_pointer_value();
-                let src_len = self
-                    .builder
-                    .build_extract_value(src_val.into_struct_value(), 1, "tss.src.len")
-                    .unwrap()
-                    .into_int_value();
+                // SSO: the argument is a pure READ, same as `push_str`'s — and
+                // the same silent-truncation bug if left raw.
+                let (src_ptr, src_len) =
+                    self.sso_string_parts_from_value(src_val.into_struct_value(), "tss.src");
 
                 let data_ptr_ptr = self
                     .builder
@@ -8034,7 +8144,6 @@ impl<'ctx> super::Codegen<'ctx> {
                     let additional = self.compile_expr(&args[0].value)?.into_int_value();
                     // Mutating op: promote out of inline first, so every
                     // `len`/`cap` read below sees an ordinary heap string.
-                    self.sso_deinline_in_place(data_ptr, "srsv");
                     let (_data, len) = self.load_string_data_len(vec_ty, data_ptr, "srsv");
                     let cap_p = self
                         .builder
