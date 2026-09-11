@@ -261,6 +261,12 @@ pub(crate) struct RuntimeFns<'ctx> {
     /// a heap-owned copy so scope-exit cleanup fires; source untouched.
     pub(crate) karac_string_clone_fn: FunctionValue<'ctx>,
     pub(crate) karac_string_slice_fn: FunctionValue<'ctx>,
+    /// `karac_string_slice_into(data, len, start, end, out)` — SSO sibling of
+    /// `karac_string_slice`. Validates identically, then writes a complete
+    /// `{ptr,len,cap}` descriptor to `out`: **inline, allocating nothing**,
+    /// when the slice fits the 23-byte overlay; heap otherwise. Only reached
+    /// when `KARAC_SSO` is on.
+    pub(crate) karac_string_slice_into_fn: FunctionValue<'ctx>,
     /// `karac_string_slice_borrow(data, len, start, end) -> ptr` — validating,
     /// non-allocating slice; returns `data + start`. Backs borrowed
     /// `{ptr, len, cap=0}` String views used as non-retained map keys.

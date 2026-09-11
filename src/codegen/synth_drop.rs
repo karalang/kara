@@ -1138,7 +1138,7 @@ impl<'ctx> super::Codegen<'ctx> {
                 let is_heap = self
                     .builder
                     .build_int_compare(
-                        IntPredicate::UGT,
+                        IntPredicate::SGT,
                         cap,
                         i64_t.const_zero(),
                         "nstr.str.is_heap",
@@ -1307,7 +1307,7 @@ impl<'ctx> super::Codegen<'ctx> {
                     let is_heap = self
                         .builder
                         .build_int_compare(
-                            IntPredicate::UGT,
+                            IntPredicate::SGT,
                             cap,
                             i64_t.const_zero(),
                             "nstr.vec.is_heap",
@@ -2609,7 +2609,7 @@ impl<'ctx> super::Codegen<'ctx> {
                     let is_heap = self
                         .builder
                         .build_int_compare(
-                            IntPredicate::UGT,
+                            IntPredicate::SGT,
                             cap,
                             i64_t.const_zero(),
                             "sec.z.is_heap",
@@ -2762,7 +2762,7 @@ impl<'ctx> super::Codegen<'ctx> {
                     let is_heap = self
                         .builder
                         .build_int_compare(
-                            IntPredicate::UGT,
+                            IntPredicate::SGT,
                             cap,
                             zero,
                             &format!("drop.field{field_idx}.is_heap"),
@@ -5847,7 +5847,7 @@ impl<'ctx> super::Codegen<'ctx> {
                     let is_heap = self
                         .builder
                         .build_int_compare(
-                            IntPredicate::UGT,
+                            IntPredicate::SGT,
                             cap,
                             zero,
                             &format!("rcdrop.vec{field_idx}.is_heap"),
@@ -6437,7 +6437,7 @@ impl<'ctx> super::Codegen<'ctx> {
                 let is_heap = self
                     .builder
                     .build_int_compare(
-                        IntPredicate::UGT,
+                        IntPredicate::SGT,
                         cap,
                         i64_t.const_zero(),
                         &format!("{label}.is_heap"),

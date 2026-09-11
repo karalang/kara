@@ -3273,16 +3273,7 @@ impl<'ctx> super::Codegen<'ctx> {
                 || self.expr_is_string_like(object))
         {
             let v = self.compile_expr(object)?.into_struct_value();
-            let data = self
-                .builder
-                .build_extract_value(v, 0, "ts.s.data")
-                .unwrap()
-                .into_pointer_value();
-            let len = self
-                .builder
-                .build_extract_value(v, 1, "ts.s.len")
-                .unwrap()
-                .into_int_value();
+            let (data, len) = self.sso_string_parts_from_value(v, "ts.s");
             let copied = self.build_owned_string_from_parts(data, len);
             // Free the intermediate receiver temp when it is a fresh owned
             // String (a chained `x.trim().to_string()` /
@@ -5369,26 +5360,8 @@ impl<'ctx> super::Codegen<'ctx> {
                         // the `cmp` arm below uses, with its -1/0/+1 mapped onto
                         // the Less=0 / Equal=1 / Greater=2 tags by `+ 1`.
                         let ptr_ty = self.context.ptr_type(AddressSpace::default());
-                        let l_ptr = self
-                            .builder
-                            .build_extract_value(l, 0, "pcmp.l.ptr")
-                            .unwrap()
-                            .into_pointer_value();
-                        let l_len = self
-                            .builder
-                            .build_extract_value(l, 1, "pcmp.l.len")
-                            .unwrap()
-                            .into_int_value();
-                        let r_ptr = self
-                            .builder
-                            .build_extract_value(r, 0, "pcmp.r.ptr")
-                            .unwrap()
-                            .into_pointer_value();
-                        let r_len = self
-                            .builder
-                            .build_extract_value(r, 1, "pcmp.r.len")
-                            .unwrap()
-                            .into_int_value();
+                        let (l_ptr, l_len) = self.sso_string_parts_from_value(l, "pcmp.l");
+                        let (r_ptr, r_len) = self.sso_string_parts_from_value(r, "pcmp.r");
                         let cmp_fn =
                             self.module
                                 .get_function("karac_string_cmp")
@@ -5545,26 +5518,8 @@ impl<'ctx> super::Codegen<'ctx> {
                 {
                     let i64_t = self.context.i64_type();
                     let ptr_ty = self.context.ptr_type(AddressSpace::default());
-                    let l_ptr = self
-                        .builder
-                        .build_extract_value(l, 0, "scmp.l.ptr")
-                        .unwrap()
-                        .into_pointer_value();
-                    let l_len = self
-                        .builder
-                        .build_extract_value(l, 1, "scmp.l.len")
-                        .unwrap()
-                        .into_int_value();
-                    let r_ptr = self
-                        .builder
-                        .build_extract_value(r, 0, "scmp.r.ptr")
-                        .unwrap()
-                        .into_pointer_value();
-                    let r_len = self
-                        .builder
-                        .build_extract_value(r, 1, "scmp.r.len")
-                        .unwrap()
-                        .into_int_value();
+                    let (l_ptr, l_len) = self.sso_string_parts_from_value(l, "scmp.l");
+                    let (r_ptr, r_len) = self.sso_string_parts_from_value(r, "scmp.r");
                     let cmp_fn =
                         self.module
                             .get_function("karac_string_cmp")
@@ -5690,26 +5645,8 @@ impl<'ctx> super::Codegen<'ctx> {
                 if l.get_type() == self.vec_struct_type() {
                     let i64_t = self.context.i64_type();
                     let ptr_ty = self.context.ptr_type(AddressSpace::default());
-                    let l_ptr = self
-                        .builder
-                        .build_extract_value(l, 0, "cmp.l.ptr")
-                        .unwrap()
-                        .into_pointer_value();
-                    let l_len = self
-                        .builder
-                        .build_extract_value(l, 1, "cmp.l.len")
-                        .unwrap()
-                        .into_int_value();
-                    let r_ptr = self
-                        .builder
-                        .build_extract_value(r, 0, "cmp.r.ptr")
-                        .unwrap()
-                        .into_pointer_value();
-                    let r_len = self
-                        .builder
-                        .build_extract_value(r, 1, "cmp.r.len")
-                        .unwrap()
-                        .into_int_value();
+                    let (l_ptr, l_len) = self.sso_string_parts_from_value(l, "cmp.l");
+                    let (r_ptr, r_len) = self.sso_string_parts_from_value(r, "cmp.r");
                     let cmp_fn =
                         self.module
                             .get_function("karac_string_cmp")
@@ -5886,16 +5823,7 @@ impl<'ctx> super::Codegen<'ctx> {
                             .build_load(slice_ty, slot.ptr, "sam.s.hdr")
                             .unwrap()
                             .into_struct_value();
-                        let data = self
-                            .builder
-                            .build_extract_value(hdr, 0, "sam.s.data")
-                            .unwrap()
-                            .into_pointer_value();
-                        let len = self
-                            .builder
-                            .build_extract_value(hdr, 1, "sam.s.len")
-                            .unwrap()
-                            .into_int_value();
+                        let (data, len) = self.sso_string_parts_from_value(hdr, "sam.s");
                         Some((data, len, elem))
                     } else if let Some(elem) =
                         self.var_types.vec_elem_types.get(name.as_str()).copied()
@@ -10043,16 +9971,7 @@ impl<'ctx> super::Codegen<'ctx> {
             .unwrap();
         if field0.is_struct_value() {
             let ssv = field0.into_struct_value();
-            let d = self
-                .builder
-                .build_extract_value(ssv, 0, "rx.recv.pat.data")
-                .unwrap()
-                .into_pointer_value();
-            let l = self
-                .builder
-                .build_extract_value(ssv, 1, "rx.recv.pat.len")
-                .unwrap()
-                .into_int_value();
+            let (d, l) = self.sso_string_parts_from_value(ssv, "rx.recv.pat");
             (d, l)
         } else {
             let d = field0.into_pointer_value();
@@ -10183,16 +10102,7 @@ impl<'ctx> super::Codegen<'ctx> {
         inkwell::values::PointerValue<'ctx>,
         inkwell::values::IntValue<'ctx>,
     ) {
-        let d = self
-            .builder
-            .build_extract_value(sv, 0, "rx.str.data")
-            .unwrap()
-            .into_pointer_value();
-        let l = self
-            .builder
-            .build_extract_value(sv, 1, "rx.str.len")
-            .unwrap()
-            .into_int_value();
+        let (d, l) = self.sso_string_parts_from_value(sv, "rx.str");
         (d, l)
     }
 

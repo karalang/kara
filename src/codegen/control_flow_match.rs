@@ -1778,7 +1778,7 @@ impl<'ctx> super::Codegen<'ctx> {
         // would compare the wrong memory and silently pick the wrong arm.
         // With SSO off the accessor is exactly the two `extract_value`s it
         // replaced, so the dispatch IR does not move.
-        let (scrut_ptr, scrut_len) = self.sso_string_parts_from_value(fn_val, sv, "sd");
+        let (scrut_ptr, scrut_len) = self.sso_string_parts_from_value(sv, "sd");
 
         // Group keyword arms by byte length (BTreeMap → deterministic IR).
         let mut by_len: std::collections::BTreeMap<usize, Vec<(&str, usize)>> =

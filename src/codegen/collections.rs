@@ -4743,16 +4743,11 @@ impl<'ctx> super::Codegen<'ctx> {
 
         // The String aggregate `{ptr, i64 len, i64 cap}`.
         let agg = self.compile_expr(object)?.into_struct_value();
-        let data_ptr = self
-            .builder
-            .build_extract_value(agg, 0, "s.ptr")
-            .unwrap()
-            .into_pointer_value();
-        let str_len = self
-            .builder
-            .build_extract_value(agg, 1, "s.len")
-            .unwrap()
-            .into_int_value();
+        // SSO: the SOURCE may itself be inline, so its pointer and length
+        // come from the tag-aware accessor rather than the raw fields. With
+        // SSO off this is the same two `extract_value`s it replaced.
+        let fn_val = self.current_fn.unwrap();
+        let (data_ptr, str_len) = self.sso_string_parts_from_value(agg, "s");
 
         // start (default 0) and raw end (default len), coerced to i64.
         let start_i = match start {
@@ -4769,6 +4764,8 @@ impl<'ctx> super::Codegen<'ctx> {
             }
             None => str_len,
         };
+        let str_ty_sso = self.vec_struct_type();
+
         // Inclusive `a..=b` includes byte `b`, so the exclusive end is b + 1.
         let end_i = if inclusive {
             self.builder
@@ -4777,6 +4774,40 @@ impl<'ctx> super::Codegen<'ctx> {
         } else {
             raw_end
         };
+
+        // SSO: `karac_string_slice_into` validates identically and writes a
+        // complete descriptor — INLINE (no allocation) when the slice fits
+        // the 23-byte overlay. This is the campaign's payoff site: per-token
+        // `substring` in the self-hosted lexer is the malloc that dominates
+        // the post-dispatch profile, and most lexemes are short.
+        //
+        // Codegen deliberately owns no encoding here. `new_inline` in
+        // `runtime/src/sso.rs` is the single source of truth for the layout
+        // and is exhaustively unit-tested; re-emitting the byte-packing as
+        // IR would be a second implementation that could drift from it, and
+        // a layout mismatch between the two is silent data corruption. It is
+        // also not a new call — the allocating path already made one.
+        if self.sso_on() {
+            let out = self.sso_descriptor_alloca(fn_val, "slice.out");
+            self.builder
+                .build_call(
+                    self.runtime_fns.karac_string_slice_into_fn,
+                    &[
+                        data_ptr.into(),
+                        str_len.into(),
+                        start_i.into(),
+                        end_i.into(),
+                        out.into(),
+                    ],
+                    "",
+                )
+                .unwrap();
+            let loaded = self
+                .builder
+                .build_load(str_ty_sso, out, "slice.sso")
+                .unwrap();
+            return Ok(loaded);
+        }
 
         // karac_string_slice(data, len, start, end) -> new buffer ptr.
         let new_ptr = self
@@ -4843,16 +4874,7 @@ impl<'ctx> super::Codegen<'ctx> {
     ) -> Result<BasicValueEnum<'ctx>, String> {
         let i64_t = self.context.i64_type();
         let agg = self.compile_expr(object)?.into_struct_value();
-        let data_ptr = self
-            .builder
-            .build_extract_value(agg, 0, "bs.ptr")
-            .unwrap()
-            .into_pointer_value();
-        let str_len = self
-            .builder
-            .build_extract_value(agg, 1, "bs.len")
-            .unwrap()
-            .into_int_value();
+        let (data_ptr, str_len) = self.sso_string_parts_from_value(agg, "bs");
 
         let start_i = match start {
             Some(e) => {

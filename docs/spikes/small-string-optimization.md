@@ -227,6 +227,58 @@ perf payoff lands in Slice 2.
   Gate: **re-profile the self-host lexer** (instruction count + `malloc` leaf share must
   drop), full ASAN + **Linux/LSan** (SSO touches every free path — authoritative leak
   gate).
+- **Slice 2 progress — INLINE CONSTRUCTION IS LIVE behind `KARAC_SSO=1` (2026-09-11).**
+  `s[a..b]` now builds an inline String when the slice fits the 23-byte overlay,
+  allocating nothing. Default remains OFF; the read sweep is ~1/3 done.
+  - **The encoder lives in the RUNTIME, not codegen** — a deliberate departure from
+    this doc's original sketch. `karac_string_slice_into(data, len, start, end, out)`
+    validates through the same `slice_validate` as `karac_string_slice` and writes a
+    complete descriptor; codegen calls it and loads the 24 bytes back, owning no
+    encoding at all. Two reasons: (a) the allocating path does bounds AND UTF-8
+    char-boundary checking, both fatal, and an inline fast path in codegen that
+    skipped them would have been a silent soundness regression; (b) `new_inline` is
+    already the exhaustively-tested source of truth, and re-emitting the byte-packing
+    as IR would be a second implementation free to drift — a codegen↔runtime layout
+    mismatch is exactly the silent corruption this campaign's staging exists to
+    prevent. It is not a new call either: the allocating path already made one. The
+    win is removing the *malloc*.
+  - **MUTATION PROMOTES rather than going tag-aware** (`sso_deinline_in_place`). A
+    mutating op reads `len`/`cap` raw and repeatedly — growth test, destination
+    offset, aliasing rebase, post-copy length store. The failure was QUIET, not loud:
+    `needs_grow` is `UGT(new_len, cap)`, an inline `cap` is negative, so as unsigned
+    it is enormous, the grow is SKIPPED, and the copy lands past the end of the
+    descriptor. Promoting once at the head leaves every read downstream byte-for-byte
+    the pre-SSO code. A short mutated string loses its inline win, which is the right
+    trade — the corpus's short strings are overwhelmingly *read* — and it is what
+    folly's `fbstring` does.
+  - **SLICE 1'S "EVERY String buffer-free gate is now inline-safe" CLAIM WAS WRONG.**
+    16 `is_heap` gates were still `UGT(cap, 0)`; an inline `cap < 0` reads as an
+    enormous unsigned, so each would have freed the DESCRIPTOR'S OWN ADDRESS. 14 are
+    now `SGT` (the 2 SoA group-count gates stay, per this doc's own exclusion). Five
+    IR-assertion tests in `tests/codegen.rs` pinned the old `icmp ugt` text and were
+    updated, with a note at the assertions so nobody "restores" `ugt`. **Consequence
+    for the campaign's staging rule:** this commit is therefore NOT byte-identical IR
+    at SSO=off — it is *semantically* identical with 14 predicates flipped.
+  - **A latent UB in Slice 1 was found and fixed:** `RuntimeKaracString::as_bytes`
+    called `from_raw_parts(null, 0)` for the canonical empty String `{null, 0, 0}`,
+    which is UB at length zero and aborts under the debug precondition check. It had
+    only test callers, so it would have become live the moment Slice 3 wired it into
+    the FFI decode.
+  - **The sweep was PROBE-DRIVEN, and that is the transferable lesson.** Each
+    `KARAC_SSO=1` crash named exactly one unswept site — far more reliable than
+    eyeballing ~430 candidates. It is also how the *class* boundary was found: a
+    mechanical rewrite of 119 ptr+len PAIRS missed `String.len()`, which is a
+    **len-only** read, and `f_str_slice` silently returned 0 instead of 3
+    (`par_codegen::test_e2e_autopar_joined_range_slice_binding`).
+  - **Remaining sweep (the next session's work):** 108 `struct_gep(vec_ty, _, 1)`,
+    57 `extract_value(_, 1)`, 69 `extract_value(_, 0)` — 234 single-field reads, each
+    needing String/Vec classification. Then concat / `to_string` / `push_str` result
+    as construction sites, then the default flip + the profile gate.
+  - Gates at this commit: fmt + both clippy legs green; `--features llvm` **SSO=off**
+    16,001 passed (red: the load-flaky `signalling_karac_run_does_not_orphan_the_jit_runner`
+    and `gpu_e2e`'s missing optional archive); **SSO=on** 16,739 passed, `gpu_e2e` the
+    only red binary.
+
 - **Slice 3 — sweep + runtime/FFI decode.** Remaining raw sites; runtime decode
   (`println`/file/http/tls/json); thread the Kāra type to keep `Vec` branch-free for perf.
   Gate: corpus re-bench.

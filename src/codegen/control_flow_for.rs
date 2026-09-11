@@ -514,16 +514,7 @@ impl<'ctx> super::Codegen<'ctx> {
                 // StringLit arm in the dispatcher below.
                 let val = self.compile_expr(object)?;
                 let sv = val.into_struct_value();
-                let data = self
-                    .builder
-                    .build_extract_value(sv, 0, "for.s.recv.data")
-                    .unwrap()
-                    .into_pointer_value();
-                let len = self
-                    .builder
-                    .build_extract_value(sv, 1, "for.s.recv.len")
-                    .unwrap()
-                    .into_int_value();
+                let (data, len) = self.sso_string_parts_from_value(sv, "for.s.recv");
                 // A literal receiver (`"abc".chars()`) carries its own proof:
                 // the bytes are right there, so no analysis is needed to know
                 // whether the branch-free stride-1 loop is safe
@@ -545,16 +536,7 @@ impl<'ctx> super::Codegen<'ctx> {
             if args.is_empty() && method == "bytes" {
                 let val = self.compile_expr(object)?;
                 let sv = val.into_struct_value();
-                let data = self
-                    .builder
-                    .build_extract_value(sv, 0, "for.b.recv.data")
-                    .unwrap()
-                    .into_pointer_value();
-                let len = self
-                    .builder
-                    .build_extract_value(sv, 1, "for.b.recv.len")
-                    .unwrap()
-                    .into_int_value();
+                let (data, len) = self.sso_string_parts_from_value(sv, "for.b.recv");
                 return self.compile_for_string_bytes_inner(label, pattern, data, len, body);
             }
             // `for j in (start..end).step_by(n)` — the only chained
@@ -701,16 +683,7 @@ impl<'ctx> super::Codegen<'ctx> {
                 // (cap=0 indicates static, no scope-exit free).
                 let val = self.compile_expr(iterable)?;
                 let sv = val.into_struct_value();
-                let data = self
-                    .builder
-                    .build_extract_value(sv, 0, "for.s.lit.data")
-                    .unwrap()
-                    .into_pointer_value();
-                let len = self
-                    .builder
-                    .build_extract_value(sv, 1, "for.s.lit.len")
-                    .unwrap()
-                    .into_int_value();
+                let (data, len) = self.sso_string_parts_from_value(sv, "for.s.lit");
                 // Bare all-ASCII literal (`for c in "abc"`): self-proving, so
                 // take the branch-free stride-1 loop (B-2026-07-27-7). An
                 // f-string is not a literal — its bytes are built at runtime —

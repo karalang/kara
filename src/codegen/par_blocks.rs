@@ -1324,16 +1324,7 @@ impl<'ctx> super::Codegen<'ctx> {
         // collect_all_vec(fs);` aborted with a double-free. The premise was
         // right and only the call was missing; make it explicit here.
         self.suppress_source_vec_cleanup_for_arg(fs_expr);
-        let data_ptr = self
-            .builder
-            .build_extract_value(fs_val, 0, "cav.fs.data")
-            .unwrap()
-            .into_pointer_value();
-        let n = self
-            .builder
-            .build_extract_value(fs_val, 1, "cav.fs.len")
-            .unwrap()
-            .into_int_value();
+        let (data_ptr, n) = self.sso_string_parts_from_value(fs_val, "cav.fs");
 
         // 2. malloc the three N-sized arrays.
         let result_size = result_ty.size_of().unwrap();

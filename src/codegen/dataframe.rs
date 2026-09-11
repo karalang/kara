@@ -498,16 +498,7 @@ impl<'ctx> super::Codegen<'ctx> {
     ) -> Result<(PointerValue<'ctx>, IntValue<'ctx>), String> {
         let v = self.compile_expr(expr)?;
         let s = v.into_struct_value();
-        let data = self
-            .builder
-            .build_extract_value(s, 0, "df.name.data")
-            .unwrap()
-            .into_pointer_value();
-        let len = self
-            .builder
-            .build_extract_value(s, 1, "df.name.len")
-            .unwrap()
-            .into_int_value();
+        let (data, len) = self.sso_string_parts_from_value(s, "df.name");
         Ok((data, len))
     }
 
@@ -1002,16 +993,7 @@ impl<'ctx> super::Codegen<'ctx> {
             self.materialize_owned_temp(cols_val, (cols_arg.span.offset, cols_arg.span.length));
         }
         let cols_struct = cols_val.into_struct_value();
-        let cols_data = self
-            .builder
-            .build_extract_value(cols_struct, 0, "df.sel.cdata")
-            .unwrap()
-            .into_pointer_value();
-        let cols_len = self
-            .builder
-            .build_extract_value(cols_struct, 1, "df.sel.clen")
-            .unwrap()
-            .into_int_value();
+        let (cols_data, cols_len) = self.sso_string_parts_from_value(cols_struct, "df.sel.c");
 
         let j_slot = self.create_entry_alloca(fn_val, "df.sel.j", i64_t.into());
         self.builder

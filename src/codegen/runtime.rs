@@ -3231,7 +3231,7 @@ impl<'ctx> super::Codegen<'ctx> {
         let heap = self
             .builder
             .build_int_compare(
-                inkwell::IntPredicate::UGT,
+                inkwell::IntPredicate::SGT,
                 cap,
                 i64_t.const_zero(),
                 "freearg.heap",
@@ -5104,16 +5104,7 @@ impl<'ctx> super::Codegen<'ctx> {
         let i64_t = self.context.i64_type();
         let fn_val = self.current_fn.unwrap();
 
-        let data = self
-            .builder
-            .build_extract_value(sv, 0, "dcopy.data")
-            .unwrap()
-            .into_pointer_value();
-        let len = self
-            .builder
-            .build_extract_value(sv, 1, "dcopy.len")
-            .unwrap()
-            .into_int_value();
+        let (data, len) = self.sso_string_parts_from_value(sv, "dcopy");
         let cap = self
             .builder
             .build_extract_value(sv, 2, "dcopy.cap")
@@ -9744,7 +9735,7 @@ impl<'ctx> super::Codegen<'ctx> {
                 let inner_is_heap = self
                     .builder
                     .build_int_compare(
-                        IntPredicate::UGT,
+                        IntPredicate::SGT,
                         inner_cap,
                         zero,
                         &format!("{label}.drop.inner.is_heap"),
@@ -14158,7 +14149,7 @@ impl<'ctx> super::Codegen<'ctx> {
                         let inner_is_heap = self
                             .builder
                             .build_int_compare(
-                                IntPredicate::UGT,
+                                IntPredicate::SGT,
                                 inner_cap,
                                 zero,
                                 "cleanup.drop.inner.is_heap",
@@ -14276,7 +14267,7 @@ impl<'ctx> super::Codegen<'ctx> {
                             let fheap = self
                                 .builder
                                 .build_int_compare(
-                                    IntPredicate::UGT,
+                                    IntPredicate::SGT,
                                     fcap,
                                     zero,
                                     "cleanup.tup.field.heap",
@@ -16245,32 +16236,14 @@ impl<'ctx> super::Codegen<'ctx> {
             self.builder.build_store(acc, sval).unwrap();
             let u8_ty: inkwell::types::BasicTypeEnum<'ctx> = self.context.i8_type().into();
             self.track_vec_var(acc, Some(u8_ty));
-            let data = self
-                .builder
-                .build_extract_value(sval, 0, "fstr.ud.data")
-                .unwrap()
-                .into_pointer_value();
-            let len = self
-                .builder
-                .build_extract_value(sval, 1, "fstr.ud.len")
-                .unwrap()
-                .into_int_value();
+            let (data, len) = self.sso_string_parts_from_value(sval, "fstr.ud");
             return Ok((data, len));
         }
         if let Some(sname) = self.expr_user_struct_name(e) {
             let s = self
                 .compile_struct_display_string(e, &sname)?
                 .into_struct_value();
-            let data = self
-                .builder
-                .build_extract_value(s, 0, "fstr.s.data")
-                .unwrap()
-                .into_pointer_value();
-            let len = self
-                .builder
-                .build_extract_value(s, 1, "fstr.s.len")
-                .unwrap()
-                .into_int_value();
+            let (data, len) = self.sso_string_parts_from_value(s, "fstr.s");
             return Ok((data, len));
         }
         // All-unit enum interpolation part → variant-name (ptr, len) directly.
@@ -16286,16 +16259,7 @@ impl<'ctx> super::Codegen<'ctx> {
             let u8_ty: inkwell::types::BasicTypeEnum<'ctx> = self.context.i8_type().into();
             self.track_vec_var(acc, Some(u8_ty));
             let s = sval.into_struct_value();
-            let data = self
-                .builder
-                .build_extract_value(s, 0, "fstr.e.data")
-                .unwrap()
-                .into_pointer_value();
-            let len = self
-                .builder
-                .build_extract_value(s, 1, "fstr.e.len")
-                .unwrap()
-                .into_int_value();
+            let (data, len) = self.sso_string_parts_from_value(s, "fstr.e");
             return Ok((data, len));
         }
         // Whole-`Vector[T, N]` interpolation part → lane-walking formatter
@@ -16307,16 +16271,7 @@ impl<'ctx> super::Codegen<'ctx> {
             let u8_ty: inkwell::types::BasicTypeEnum<'ctx> = self.context.i8_type().into();
             self.track_vec_var(acc, Some(u8_ty));
             let s = sval.into_struct_value();
-            let data = self
-                .builder
-                .build_extract_value(s, 0, "fstr.simd.data")
-                .unwrap()
-                .into_pointer_value();
-            let len = self
-                .builder
-                .build_extract_value(s, 1, "fstr.simd.len")
-                .unwrap()
-                .into_int_value();
+            let (data, len) = self.sso_string_parts_from_value(s, "fstr.simd");
             return Ok((data, len));
         }
         // Collection (Vec/Map/Set) interpolation part → render via its Display
@@ -16329,16 +16284,7 @@ impl<'ctx> super::Codegen<'ctx> {
             let u8_ty: inkwell::types::BasicTypeEnum<'ctx> = self.context.i8_type().into();
             self.track_vec_var(acc, Some(u8_ty));
             let s = sval.into_struct_value();
-            let data = self
-                .builder
-                .build_extract_value(s, 0, "fstr.c.data")
-                .unwrap()
-                .into_pointer_value();
-            let len = self
-                .builder
-                .build_extract_value(s, 1, "fstr.c.len")
-                .unwrap()
-                .into_int_value();
+            let (data, len) = self.sso_string_parts_from_value(s, "fstr.c");
             return Ok((data, len));
         }
         // Vec interpolation with no variable name to key on (`f"{t.shape()}"`,
@@ -16358,16 +16304,7 @@ impl<'ctx> super::Codegen<'ctx> {
             let u8_ty: inkwell::types::BasicTypeEnum<'ctx> = self.context.i8_type().into();
             self.track_vec_var(acc, Some(u8_ty));
             let s = sval.into_struct_value();
-            let data = self
-                .builder
-                .build_extract_value(s, 0, "fstr.a.data")
-                .unwrap()
-                .into_pointer_value();
-            let len = self
-                .builder
-                .build_extract_value(s, 1, "fstr.a.len")
-                .unwrap()
-                .into_int_value();
+            let (data, len) = self.sso_string_parts_from_value(s, "fstr.a");
             return Ok((data, len));
         }
         // B-2026-08-31-25 — the slice sibling of the arm above. A slice at
@@ -16379,32 +16316,14 @@ impl<'ctx> super::Codegen<'ctx> {
             let u8_ty: inkwell::types::BasicTypeEnum<'ctx> = self.context.i8_type().into();
             self.track_vec_var(acc, Some(u8_ty));
             let s = sval.into_struct_value();
-            let data = self
-                .builder
-                .build_extract_value(s, 0, "fstr.sl.data")
-                .unwrap()
-                .into_pointer_value();
-            let len = self
-                .builder
-                .build_extract_value(s, 1, "fstr.sl.len")
-                .unwrap()
-                .into_int_value();
+            let (data, len) = self.sso_string_parts_from_value(s, "fstr.sl");
             return Ok((data, len));
         }
         if let Some((acc, sval)) = self.try_compile_vec_display(e)? {
             let u8_ty: inkwell::types::BasicTypeEnum<'ctx> = self.context.i8_type().into();
             self.track_vec_var(acc, Some(u8_ty));
             let s = sval.into_struct_value();
-            let data = self
-                .builder
-                .build_extract_value(s, 0, "fstr.v.data")
-                .unwrap()
-                .into_pointer_value();
-            let len = self
-                .builder
-                .build_extract_value(s, 1, "fstr.v.len")
-                .unwrap()
-                .into_int_value();
+            let (data, len) = self.sso_string_parts_from_value(s, "fstr.v");
             return Ok((data, len));
         }
         // B-2026-08-14-31 — the Map/Set sibling of the Vec arm above, for the
@@ -16416,16 +16335,7 @@ impl<'ctx> super::Codegen<'ctx> {
             let u8_ty: inkwell::types::BasicTypeEnum<'ctx> = self.context.i8_type().into();
             self.track_vec_var(acc, Some(u8_ty));
             let s = sval.into_struct_value();
-            let data = self
-                .builder
-                .build_extract_value(s, 0, "fstr.ms.data")
-                .unwrap()
-                .into_pointer_value();
-            let len = self
-                .builder
-                .build_extract_value(s, 1, "fstr.ms.len")
-                .unwrap()
-                .into_int_value();
+            let (data, len) = self.sso_string_parts_from_value(s, "fstr.ms");
             return Ok((data, len));
         }
         // Option/Result *call result* interpolation (`f"{cache.get(1)}"`) — the
@@ -16436,16 +16346,7 @@ impl<'ctx> super::Codegen<'ctx> {
             let u8_ty: inkwell::types::BasicTypeEnum<'ctx> = self.context.i8_type().into();
             self.track_vec_var(acc, Some(u8_ty));
             let s = sval.into_struct_value();
-            let data = self
-                .builder
-                .build_extract_value(s, 0, "fstr.or.data")
-                .unwrap()
-                .into_pointer_value();
-            let len = self
-                .builder
-                .build_extract_value(s, 1, "fstr.or.len")
-                .unwrap()
-                .into_int_value();
+            let (data, len) = self.sso_string_parts_from_value(s, "fstr.or");
             return Ok((data, len));
         }
         // Whole-tuple interpolation (`f"{t}"` where `t: (i64, i64)`) → render via
@@ -16458,16 +16359,7 @@ impl<'ctx> super::Codegen<'ctx> {
             let u8_ty: inkwell::types::BasicTypeEnum<'ctx> = self.context.i8_type().into();
             self.track_vec_var(acc, Some(u8_ty));
             let s = sval.into_struct_value();
-            let data = self
-                .builder
-                .build_extract_value(s, 0, "fstr.tup.data")
-                .unwrap()
-                .into_pointer_value();
-            let len = self
-                .builder
-                .build_extract_value(s, 1, "fstr.tup.len")
-                .unwrap()
-                .into_int_value();
+            let (data, len) = self.sso_string_parts_from_value(s, "fstr.tup");
             return Ok((data, len));
         }
         let is_char = self.expr_is_char(e);
@@ -16526,16 +16418,7 @@ impl<'ctx> super::Codegen<'ctx> {
             self.builder.build_store(acc, sv).unwrap();
             let u8_ty: inkwell::types::BasicTypeEnum<'ctx> = self.context.i8_type().into();
             self.track_vec_var(acc, Some(u8_ty));
-            let data = self
-                .builder
-                .build_extract_value(sv, 0, "fstr.str.data")
-                .unwrap()
-                .into_pointer_value();
-            let len = self
-                .builder
-                .build_extract_value(sv, 1, "fstr.str.len")
-                .unwrap()
-                .into_int_value();
+            let (data, len) = self.sso_string_parts_from_value(sv, "fstr.str");
             return Ok((data, len));
         }
         // A struct value that isn't the String `{ptr,i64,i64}` layout is a
@@ -16576,16 +16459,7 @@ impl<'ctx> super::Codegen<'ctx> {
         match val {
             BasicValueEnum::StructValue(sv) => {
                 // Treat as String: field 0 = ptr, field 1 = len.
-                let ptr = self
-                    .builder
-                    .build_extract_value(sv, 0, "fst.ptr")
-                    .unwrap()
-                    .into_pointer_value();
-                let len = self
-                    .builder
-                    .build_extract_value(sv, 1, "fst.len")
-                    .unwrap()
-                    .into_int_value();
+                let (ptr, len) = self.sso_string_parts_from_value(sv, "fst");
                 (ptr, len)
             }
             BasicValueEnum::IntValue(iv) if iv.get_type().get_bit_width() == 1 => {
@@ -16753,16 +16627,7 @@ impl<'ctx> super::Codegen<'ctx> {
             // radix / precision / zero-pad). No width, or a value already at
             // least `width` wide, needs no work — return the source (ptr, len).
             BasicValueEnum::StructValue(sv) if self.llvm_ty_is_vec_struct(sv.get_type().into()) => {
-                let sptr = self
-                    .builder
-                    .build_extract_value(sv, 0, "fss.ptr")
-                    .unwrap()
-                    .into_pointer_value();
-                let slen = self
-                    .builder
-                    .build_extract_value(sv, 1, "fss.len")
-                    .unwrap()
-                    .into_int_value();
+                let (sptr, slen) = self.sso_string_parts_from_value(sv, "fss");
                 let Some(width) = fs.width else {
                     return Ok((sptr, slen));
                 };
@@ -17048,16 +16913,7 @@ impl<'ctx> super::Codegen<'ctx> {
         // (holds up to `width` chars of up to 4 UTF-8 bytes each).
         if let BasicValueEnum::StructValue(sv) = val {
             if self.llvm_ty_is_vec_struct(sv.get_type().into()) {
-                let sptr = self
-                    .builder
-                    .build_extract_value(sv, 0, "fmt.s.ptr")
-                    .unwrap()
-                    .into_pointer_value();
-                let slen = self
-                    .builder
-                    .build_extract_value(sv, 1, "fmt.s.len")
-                    .unwrap()
-                    .into_int_value();
+                let (sptr, slen) = self.sso_string_parts_from_value(sv, "fmt.s");
                 if width == 0 {
                     return Ok((sptr, slen));
                 }

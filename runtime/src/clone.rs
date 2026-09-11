@@ -110,6 +110,129 @@ pub unsafe extern "C" fn karac_string_clone(src: *const c_void, dst: *mut c_void
     }
 }
 
+/// SSO-aware sibling of [`karac_string_slice`]: validates identically (same
+/// `slice_validate`, so the two can never disagree about a legal slice) and
+/// then writes a COMPLETE `{ptr, len, cap}` descriptor to `out` — **inline
+/// when the slice fits the 23-byte overlay, allocating nothing at all**,
+/// heap otherwise.
+///
+/// This is the payoff path of the SSO campaign. Per-token `substring` in the
+/// self-hosted lexer returns an owned `String` copy, and most lexemes —
+/// identifiers, keywords, punctuation — are short, so the malloc that
+/// dominates the post-dispatch profile disappears for them.
+///
+/// The encoder lives here rather than in codegen deliberately. `new_inline`
+/// (`runtime/src/sso.rs`) is the single source of truth for the layout and
+/// is exhaustively unit-tested; re-emitting the same byte-packing as LLVM IR
+/// would create a second implementation that could drift from it, and a
+/// layout mismatch between the two is silent data corruption. Codegen just
+/// calls this and loads the 24 bytes back, so it owns no encoding at all.
+/// The call itself is not a new cost: the allocating path already made one.
+///
+/// Three states, matching the `cap` discriminant:
+/// * `n == 0` → `{null, 0, 0}` — the canonical empty String, unchanged from
+///   `karac_string_slice`'s convention so nothing downstream sees a new
+///   representation for a case that already had one.
+/// * `0 < n <= INLINE_CAPACITY` → inline; `cap < 0`, no allocation, no free.
+/// * `n > INLINE_CAPACITY` → heap; `{buf, n, n}`, NUL-terminated, exactly as
+///   before.
+///
+/// # Safety
+///
+/// * `data` must point to a readable buffer of at least `len` bytes when
+///   `len > 0`.
+/// * `out` must point to a writable `RuntimeKaracString`-sized region.
+/// * A heap result owns its allocation on the same `cap == len` contract as
+///   `karac_string_clone`; an inline result owns nothing and must not be freed
+///   (the `cap > 0` gates already skip it).
+#[no_mangle]
+pub unsafe extern "C" fn karac_string_slice_into(
+    data: *const u8,
+    len: i64,
+    start: i64,
+    end: i64,
+    out: *mut KaracString,
+) {
+    unsafe {
+        let (start_us, end_us) = slice_validate(data, len, start, end);
+        let n = end_us - start_us;
+        let out = &mut *out;
+
+        if n == 0 {
+            out.data = ptr::null_mut();
+            out.len = 0;
+            out.cap = 0;
+            return;
+        }
+
+        if n <= KaracString::INLINE_CAPACITY {
+            *out = KaracString::new_inline(std::slice::from_raw_parts(data.add(start_us), n));
+            return;
+        }
+
+        // Too long to inline: the heap path, byte-for-byte what
+        // `karac_string_slice` produces (alloc n+1, copy n, NUL at [n]).
+        let layout = Layout::array::<u8>(n + 1).unwrap();
+        let new_data = alloc(layout);
+        ptr::copy_nonoverlapping(data.add(start_us), new_data, n);
+        *new_data.add(n) = 0;
+        out.data = new_data;
+        out.len = n as i64;
+        out.cap = n as i64;
+    }
+}
+
+/// Bounds- and UTF-8-boundary-validate a `s[start..end]` slice request,
+/// returning the validated `(start, end)` as `usize`. Both failure paths
+/// print to stderr and `exit(1)`, matching codegen's `emit_panic` shape (a
+/// non-boundary slice is a panic, not a recoverable error — same as Rust).
+///
+/// Shared by `karac_string_slice` and its SSO sibling
+/// `karac_string_slice_into` so the two can never disagree about what a
+/// legal slice is. That mattered enough to factor out: the SSO path returns
+/// an inline descriptor without allocating, and it would have been easy —
+/// and silently unsound — to let it skip the char-boundary check that the
+/// allocating path performs.
+///
+/// # Safety
+///
+/// `data` must point to a readable buffer of at least `len` bytes when
+/// `len > 0`.
+unsafe fn slice_validate(data: *const u8, len: i64, start: i64, end: i64) -> (usize, usize) {
+    unsafe {
+        if start < 0 || end < start || end > len {
+            // Lean fatal print (raw write(2), no std-IO) — see `fatal` /
+            // B-2026-06-11-8; this symbol is on every String-slice program's path.
+            crate::fatal::eprint_fmt(format_args!(
+                "runtime error: string slice bounds {}..{} out of range (len {})\n",
+                start, end, len
+            ));
+            std::process::exit(1);
+        }
+        let len_us = len as usize;
+        let start_us = start as usize;
+        let end_us = end as usize;
+        let bytes: &[u8] = if len_us == 0 {
+            &[]
+        } else {
+            std::slice::from_raw_parts(data, len_us)
+        };
+        // A byte index `i` is a UTF-8 char boundary iff it's the start/end of
+        // the buffer or `bytes[i]` is not a `0b10xxxxxx` continuation byte. The
+        // `i == len_us` short-circuit keeps `bytes[i]` from indexing past the end.
+        let is_boundary = |i: usize| i == 0 || i == len_us || (bytes[i] & 0xC0) != 0x80;
+        if !is_boundary(start_us) || !is_boundary(end_us) {
+            crate::fatal::eprint_fmt(format_args!(
+                "runtime error: E_STRING_SLICE_NOT_AT_CHAR_BOUNDARY: byte range \
+             {}..{} does not fall on UTF-8 char boundaries\n",
+                start, end
+            ));
+            std::process::exit(1);
+        }
+        (start_us, end_us)
+    }
+}
+
 /// Slice a Kāra `String`: `s[start..end]` → a fresh heap `String` buffer
 /// holding the bytes `data[start..end]`. Returns the new buffer pointer
 /// (NUL-terminated, `end - start` content bytes); the codegen caller builds
@@ -147,35 +270,7 @@ pub unsafe extern "C" fn karac_string_slice(
     end: i64,
 ) -> *mut u8 {
     unsafe {
-        if start < 0 || end < start || end > len {
-            // Lean fatal print (raw write(2), no std-IO) — see `fatal` /
-            // B-2026-06-11-8; this symbol is on every String-slice program's path.
-            crate::fatal::eprint_fmt(format_args!(
-                "runtime error: string slice bounds {}..{} out of range (len {})\n",
-                start, end, len
-            ));
-            std::process::exit(1);
-        }
-        let len_us = len as usize;
-        let start_us = start as usize;
-        let end_us = end as usize;
-        let bytes: &[u8] = if len_us == 0 {
-            &[]
-        } else {
-            std::slice::from_raw_parts(data, len_us)
-        };
-        // A byte index `i` is a UTF-8 char boundary iff it's the start/end of
-        // the buffer or `bytes[i]` is not a `0b10xxxxxx` continuation byte. The
-        // `i == len_us` short-circuit keeps `bytes[i]` from indexing past the end.
-        let is_boundary = |i: usize| i == 0 || i == len_us || (bytes[i] & 0xC0) != 0x80;
-        if !is_boundary(start_us) || !is_boundary(end_us) {
-            crate::fatal::eprint_fmt(format_args!(
-                "runtime error: E_STRING_SLICE_NOT_AT_CHAR_BOUNDARY: byte range \
-             {}..{} does not fall on UTF-8 char boundaries\n",
-                start, end
-            ));
-            std::process::exit(1);
-        }
+        let (start_us, end_us) = slice_validate(data, len, start, end);
         let n = end_us - start_us;
         if n == 0 {
             return ptr::null_mut();
@@ -796,6 +891,9 @@ pub unsafe extern "C" fn karac_string_encode_char(cp: u32, out: *mut u8) -> i64 
 #[cfg(test)]
 mod tests {
     use super::*;
+    // Test-only: the heap-fallback cases free what `karac_string_slice_into`
+    // allocated so the suite stays leak-clean under LSan.
+    use std::alloc::dealloc;
 
     /// Cloning an SSO **inline** source must copy the descriptor verbatim
     /// and allocate nothing: the bytes live in the 24 bytes themselves, so
@@ -864,6 +962,118 @@ mod tests {
         let moved = Box::new(dst);
         assert_eq!(moved.data_ptr(), &*moved as *const KaracString as *const u8);
         assert_eq!(moved.as_bytes(), b"lexeme");
+    }
+
+    /// Drive `karac_string_slice_into` and return the descriptor it wrote.
+    unsafe fn slice_into(s: &str, start: i64, end: i64) -> KaracString {
+        let mut out = KaracString {
+            data: ptr::null_mut(),
+            len: -1,
+            cap: -1,
+        };
+        unsafe {
+            karac_string_slice_into(
+                s.as_ptr(),
+                s.len() as i64,
+                start,
+                end,
+                &mut out as *mut KaracString,
+            );
+        }
+        out
+    }
+
+    /// A slice that fits the 23-byte overlay must come back INLINE and have
+    /// allocated nothing — this is the whole point of the campaign. The
+    /// lexer's short lexemes (identifiers, keywords, punctuation) all land
+    /// here, which is where the malloc that dominates the post-dispatch
+    /// profile goes away.
+    #[test]
+    fn slice_into_inlines_a_short_slice() {
+        let subject = "fn lexeme(x) { let ident = 1; }";
+        for (start, end, want) in [
+            (0i64, 2i64, "fn"),
+            (3, 9, "lexeme"),
+            (15, 18, "let"),
+            (19, 24, "ident"),
+            // Exactly INLINE_CAPACITY bytes.
+            (0, 23, "fn lexeme(x) { let iden"),
+        ] {
+            let out = unsafe { slice_into(subject, start, end) };
+            assert!(out.is_inline(), "{want:?} fits inline");
+            assert!(!out.is_owned_heap(), "an inline slice owns no buffer");
+            assert_eq!(out.byte_len(), want.len());
+            assert_eq!(out.as_bytes(), want.as_bytes());
+            // The bytes live in the descriptor itself.
+            assert_eq!(out.data_ptr(), &out as *const KaracString as *const u8);
+        }
+    }
+
+    /// One byte past the overlay must fall back to the heap, byte-for-byte
+    /// what `karac_string_slice` already produced (`cap == len`, buffer
+    /// NUL-terminated at `[len]`).
+    #[test]
+    fn slice_into_falls_back_to_heap_past_the_boundary() {
+        let subject = "0123456789abcdefghijklmnopqrstuvwxyz";
+        let out = unsafe { slice_into(subject, 0, 24) };
+        assert!(!out.is_inline(), "24 bytes exceeds the 23-byte overlay");
+        assert!(out.is_owned_heap(), "the heap slice owns its buffer");
+        assert_eq!(out.byte_len(), 24);
+        assert_eq!(out.as_bytes(), &subject.as_bytes()[..24]);
+        assert_eq!(out.cap, 24, "cap mirrors len — fresh buffer, no headroom");
+        unsafe {
+            assert_eq!(*out.data.add(24), 0, "heap buffer stays NUL-terminated");
+            dealloc(out.data, Layout::array::<u8>(25).unwrap());
+        }
+    }
+
+    /// The boundary is exactly 23/24, and it is worth pinning: an off-by-one
+    /// here either corrupts the descriptor (inlining 24 bytes would overwrite
+    /// the flag/length trailer) or silently gives up the win at 23.
+    #[test]
+    fn slice_into_boundary_is_exactly_inline_capacity() {
+        let subject = "x".repeat(64);
+        for n in 0..=30usize {
+            let out = unsafe { slice_into(&subject, 0, n as i64) };
+            let want_inline = n > 0 && n <= KaracString::INLINE_CAPACITY;
+            assert_eq!(
+                out.is_inline(),
+                want_inline,
+                "n={n} should{} be inline",
+                if want_inline { "" } else { " not" }
+            );
+            assert_eq!(out.byte_len(), n, "n={n} length round-trips");
+            assert_eq!(out.as_bytes(), &subject.as_bytes()[..n], "n={n} bytes");
+            if out.is_owned_heap() {
+                unsafe { dealloc(out.data, Layout::array::<u8>(n + 1).unwrap()) };
+            }
+        }
+    }
+
+    /// An empty slice keeps the canonical `{null, 0, 0}` it always had,
+    /// rather than becoming a third representation of "empty".
+    #[test]
+    fn slice_into_empty_stays_the_canonical_null_string() {
+        let out = unsafe { slice_into("hello", 2, 2) };
+        assert!(!out.is_inline());
+        assert!(out.is_static(), "cap == 0");
+        assert!(out.data.is_null());
+        assert_eq!(out.byte_len(), 0);
+    }
+
+    /// Multi-byte content must survive the overlay unchanged — the encoder
+    /// copies bytes, so a char-boundary-legal slice of UTF-8 round-trips.
+    #[test]
+    fn slice_into_preserves_multibyte_content() {
+        let subject = "héllo wörld";
+        let out = unsafe { slice_into(subject, 0, subject.len() as i64) };
+        assert_eq!(subject.len(), 13, "two 2-byte chars");
+        assert!(out.is_inline(), "13 bytes fits");
+        assert_eq!(
+            std::str::from_utf8(out.as_bytes()).unwrap(),
+            subject,
+            "UTF-8 survives the inline overlay"
+        );
     }
 
     /// Read back the heap buffer `karac_string_slice` returns as a `&str`.

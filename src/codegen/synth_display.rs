@@ -2776,16 +2776,7 @@ impl<'ctx> super::Codegen<'ctx> {
             .try_as_basic_value()
             .unwrap_basic()
             .into_struct_value();
-        let data = self
-            .builder
-            .build_extract_value(sval, 0, "ud.data")
-            .unwrap()
-            .into_pointer_value();
-        let len = self
-            .builder
-            .build_extract_value(sval, 1, "ud.len")
-            .unwrap()
-            .into_int_value();
+        let (data, len) = self.sso_string_parts_from_value(sval, "ud");
         let cap = self
             .builder
             .build_extract_value(sval, 2, "ud.cap")
@@ -2804,7 +2795,7 @@ impl<'ctx> super::Codegen<'ctx> {
         let owns = self
             .builder
             .build_int_compare(
-                IntPredicate::UGT,
+                IntPredicate::SGT,
                 cap,
                 self.context.i64_type().const_zero(),
                 "ud.owns",

@@ -375,13 +375,33 @@ impl<'ctx> super::Codegen<'ctx> {
     pub(super) fn emit_string_buffer_grow(
         &self,
         fn_val: inkwell::values::FunctionValue<'ctx>,
-        data: inkwell::values::PointerValue<'ctx>,
+        slot: inkwell::values::PointerValue<'ctx>,
         cap: inkwell::values::IntValue<'ctx>,
         len: inkwell::values::IntValue<'ctx>,
         new_cap: inkwell::values::IntValue<'ctx>,
         prefix: &str,
     ) -> inkwell::values::PointerValue<'ctx> {
         let ptr_ty = self.context.ptr_type(AddressSpace::default());
+        // `data` is reloaded from the descriptor rather than passed in: every
+        // caller had just loaded it, so the extra load is CSE'd away, and the
+        // slot is needed anyway for the tag-aware copy source below. Dropping
+        // the redundant parameter also keeps the signature inside clippy's
+        // argument-count limit.
+        let data = {
+            let d_p = self
+                .builder
+                .build_struct_gep(
+                    self.vec_struct_type(),
+                    slot,
+                    0,
+                    &format!("{prefix}.grow.d.p"),
+                )
+                .unwrap();
+            self.builder
+                .build_load(ptr_ty, d_p, &format!("{prefix}.grow.d"))
+                .unwrap()
+                .into_pointer_value()
+        };
         // SSO: tag-aware owned-heap gate (`SGT cap, 0`) — an inline string
         // (`cap < 0`) must NOT be realloc'd (its buffer is the struct itself),
         // so it correctly takes the fresh-malloc + copy path below. Proven
@@ -437,7 +457,24 @@ impl<'ctx> super::Codegen<'ctx> {
             .try_as_basic_value()
             .unwrap_basic()
             .into_pointer_value();
-        self.builder.build_memcpy(fr_data, 1, data, 1, len).unwrap();
+        // SSO: an inline string's bytes live in the descriptor, so the copy
+        // source is the descriptor's own address and the count is the decoded
+        // inline length — `data`/`len` here are overlaid data bytes. This is
+        // the coupled half of the gate hardening: the `SGT` gate above already
+        // routes an inline string to this fresh-malloc path (it must never be
+        // `realloc`'d), and without this its memcpy would read from a pointer
+        // made of string content. With SSO off both are the raw values.
+        let (src_bytes, src_len) = if self.sso_on() {
+            (
+                self.sso_string_data_ptr_from_slot(slot, data, prefix),
+                self.sso_string_len_from_slot(slot, len, prefix),
+            )
+        } else {
+            (data, len)
+        };
+        self.builder
+            .build_memcpy(fr_data, 1, src_bytes, 1, src_len)
+            .unwrap();
         self.builder
             .build_unconditional_branch(grow_done_bb)
             .unwrap();
@@ -496,6 +533,18 @@ impl<'ctx> super::Codegen<'ctx> {
             .build_load(i64_t, len_p, &format!("{tag}.recv.len"))
             .unwrap()
             .into_int_value();
+        // SSO: an inline receiver keeps its bytes in the descriptor, so both
+        // reads come from the tag. Every caller of this helper is a READ of
+        // the receiver (`to_uppercase`, `normalize`, `sorted`, `join`,
+        // `replace`, `strip_*`), which is exactly the case inline exists for;
+        // a MUTATING op promotes out of inline first instead — see
+        // `sso_deinline_in_place`. With SSO off these are the raw loads.
+        if self.sso_on() {
+            return (
+                self.sso_string_data_ptr_from_slot(data_ptr, data, tag),
+                self.sso_string_len_from_slot(data_ptr, len, tag),
+            );
+        }
         (data, len)
     }
 
@@ -705,26 +754,8 @@ impl<'ctx> super::Codegen<'ctx> {
                 return Err("Vec.binary_search: String element/needle expected".to_string());
             };
             let ptr_ty = self.context.ptr_type(AddressSpace::default());
-            let a_ptr = self
-                .builder
-                .build_extract_value(a, 0, "bs.a.ptr")
-                .unwrap()
-                .into_pointer_value();
-            let a_len = self
-                .builder
-                .build_extract_value(a, 1, "bs.a.len")
-                .unwrap()
-                .into_int_value();
-            let b_ptr = self
-                .builder
-                .build_extract_value(b, 0, "bs.b.ptr")
-                .unwrap()
-                .into_pointer_value();
-            let b_len = self
-                .builder
-                .build_extract_value(b, 1, "bs.b.len")
-                .unwrap()
-                .into_int_value();
+            let (a_ptr, a_len) = self.sso_string_parts_from_value(a, "bs.a");
+            let (b_ptr, b_len) = self.sso_string_parts_from_value(b, "bs.b");
             let cmp_fn = self
                 .module
                 .get_function("karac_string_cmp")
@@ -997,6 +1028,19 @@ impl<'ctx> super::Codegen<'ctx> {
                 // see `annotate_len_load_range` for the soundness argument
                 // (B-2026-07-10-5).
                 self.annotate_len_load_range(len, Some(elem_ty));
+                // SSO: an inline String keeps its length in `cap`'s high byte,
+                // not the `len` field (which it overlays with data bytes), so
+                // `.len()` must decode the tag. This arm serves Vec too, where
+                // the flag is never set and the select is the identity — the
+                // `!range` annotation above still holds either way, since an
+                // inline length is at most 23. Keeping Vec off the select is
+                // the Slice 3 refinement.
+                let len: inkwell::values::BasicValueEnum<'ctx> = if self.sso_on() {
+                    self.sso_string_len_from_slot(data_ptr, len.into_int_value(), "vec.len")
+                        .into()
+                } else {
+                    len
+                };
                 // Head-index deque (B-2026-07-30-5): the `len` field is the END
                 // index of the live range, so the user-visible count is
                 // `len - head`. The range annotation above still holds — the
@@ -1077,16 +1121,8 @@ impl<'ctx> super::Codegen<'ctx> {
                 // Prefix: evaluate the arg; expect a String struct value.
                 let prefix_val = self.compile_expr(&args[0].value)?;
                 let prefix_struct = prefix_val.into_struct_value();
-                let prefix_data = self
-                    .builder
-                    .build_extract_value(prefix_struct, 0, "sw.prefix.ptr")
-                    .unwrap()
-                    .into_pointer_value();
-                let prefix_len = self
-                    .builder
-                    .build_extract_value(prefix_struct, 1, "sw.prefix.len")
-                    .unwrap()
-                    .into_int_value();
+                let (prefix_data, prefix_len) =
+                    self.sso_string_parts_from_value(prefix_struct, "sw.prefix");
 
                 // recv_len >= prefix_len?
                 let has_len = self
@@ -1204,16 +1240,7 @@ impl<'ctx> super::Codegen<'ctx> {
                 let (sep_ptr, sep_len): (PointerValue<'ctx>, IntValue<'ctx>) = match sep_val {
                     BasicValueEnum::IntValue(cp) => self.emit_codepoint_to_utf8(cp),
                     BasicValueEnum::StructValue(sv) => {
-                        let d = self
-                            .builder
-                            .build_extract_value(sv, 0, "spl.sep.ptr")
-                            .unwrap()
-                            .into_pointer_value();
-                        let l = self
-                            .builder
-                            .build_extract_value(sv, 1, "spl.sep.len")
-                            .unwrap()
-                            .into_int_value();
+                        let (d, l) = self.sso_string_parts_from_value(sv, "spl.sep");
                         (d, l)
                     }
                     _ => return Err("String.split separator must be a char or String".to_string()),
@@ -1548,16 +1575,7 @@ impl<'ctx> super::Codegen<'ctx> {
                     match needle_val {
                         BasicValueEnum::IntValue(cp) => self.emit_codepoint_to_utf8(cp),
                         BasicValueEnum::StructValue(sv) => {
-                            let d = self
-                                .builder
-                                .build_extract_value(sv, 0, "fd.needle.ptr")
-                                .unwrap()
-                                .into_pointer_value();
-                            let l = self
-                                .builder
-                                .build_extract_value(sv, 1, "fd.needle.len")
-                                .unwrap()
-                                .into_int_value();
+                            let (d, l) = self.sso_string_parts_from_value(sv, "fd.needle");
                             (d, l)
                         }
                         _ => return Err("String.find needle must be a char or String".to_string()),
@@ -2338,16 +2356,7 @@ impl<'ctx> super::Codegen<'ctx> {
                         return Err("Vec.join requires a separator argument".to_string());
                     }
                     let sep_val = self.compile_expr(&args[0].value)?.into_struct_value();
-                    let d = self
-                        .builder
-                        .build_extract_value(sep_val, 0, "jn.sep.ptr")
-                        .unwrap()
-                        .into_pointer_value();
-                    let l = self
-                        .builder
-                        .build_extract_value(sep_val, 1, "jn.sep.len")
-                        .unwrap()
-                        .into_int_value();
+                    let (d, l) = self.sso_string_parts_from_value(sep_val, "jn.sep");
                     // A fresh-owned separator temp (`v.join("-".to_string())`)
                     // has no other owner once the runtime copies its bytes —
                     // free it after the call like `replace` frees its args.
@@ -2390,27 +2399,9 @@ impl<'ctx> super::Codegen<'ctx> {
                 }
                 let (recv_data, recv_len) = self.load_string_data_len(vec_ty, data_ptr, "rp");
                 let from_val = self.compile_expr(&args[0].value)?.into_struct_value();
-                let from_data = self
-                    .builder
-                    .build_extract_value(from_val, 0, "rp.from.ptr")
-                    .unwrap()
-                    .into_pointer_value();
-                let from_len = self
-                    .builder
-                    .build_extract_value(from_val, 1, "rp.from.len")
-                    .unwrap()
-                    .into_int_value();
+                let (from_data, from_len) = self.sso_string_parts_from_value(from_val, "rp.from");
                 let to_val = self.compile_expr(&args[1].value)?.into_struct_value();
-                let to_data = self
-                    .builder
-                    .build_extract_value(to_val, 0, "rp.to.ptr")
-                    .unwrap()
-                    .into_pointer_value();
-                let to_len = self
-                    .builder
-                    .build_extract_value(to_val, 1, "rp.to.len")
-                    .unwrap()
-                    .into_int_value();
+                let (to_data, to_len) = self.sso_string_parts_from_value(to_val, "rp.to");
                 let result = self.build_string_xform_result(
                     self.runtime_fns.karac_string_replace_fn,
                     vec![
@@ -2445,27 +2436,9 @@ impl<'ctx> super::Codegen<'ctx> {
                 }
                 let (recv_data, recv_len) = self.load_string_data_len(vec_ty, data_ptr, "rpn");
                 let from_val = self.compile_expr(&args[0].value)?.into_struct_value();
-                let from_data = self
-                    .builder
-                    .build_extract_value(from_val, 0, "rpn.from.ptr")
-                    .unwrap()
-                    .into_pointer_value();
-                let from_len = self
-                    .builder
-                    .build_extract_value(from_val, 1, "rpn.from.len")
-                    .unwrap()
-                    .into_int_value();
+                let (from_data, from_len) = self.sso_string_parts_from_value(from_val, "rpn.from");
                 let to_val = self.compile_expr(&args[1].value)?.into_struct_value();
-                let to_data = self
-                    .builder
-                    .build_extract_value(to_val, 0, "rpn.to.ptr")
-                    .unwrap()
-                    .into_pointer_value();
-                let to_len = self
-                    .builder
-                    .build_extract_value(to_val, 1, "rpn.to.len")
-                    .unwrap()
-                    .into_int_value();
+                let (to_data, to_len) = self.sso_string_parts_from_value(to_val, "rpn.to");
                 let n_val = self.compile_expr(&args[2].value)?.into_int_value();
                 let result = self.build_string_xform_result(
                     self.runtime_fns.karac_string_replacen_fn,
@@ -2501,16 +2474,7 @@ impl<'ctx> super::Codegen<'ctx> {
                 let (recv_data, recv_len) = self.load_string_data_len(vec_ty, data_ptr, "strip");
                 let arg_val = self.compile_expr(&args[0].value)?;
                 let arg_sv = arg_val.into_struct_value();
-                let pfx_data = self
-                    .builder
-                    .build_extract_value(arg_sv, 0, "strip.p.ptr")
-                    .unwrap()
-                    .into_pointer_value();
-                let pfx_len = self
-                    .builder
-                    .build_extract_value(arg_sv, 1, "strip.p.len")
-                    .unwrap()
-                    .into_int_value();
+                let (pfx_data, pfx_len) = self.sso_string_parts_from_value(arg_sv, "strip.p");
                 let fn_val = self.current_fn.unwrap();
                 let out_len_slot = self.create_entry_alloca(fn_val, "strip.outlen", i64_t.into());
                 let out_matched_slot =
@@ -2845,6 +2809,9 @@ impl<'ctx> super::Codegen<'ctx> {
                     .unwrap()
                     .into_int_value();
 
+                // Mutating op: promote out of inline first, so every
+                // `len`/`cap` read below sees an ordinary heap string.
+                self.sso_deinline_in_place(data_ptr, "spush");
                 let data_ptr_ptr = self
                     .builder
                     .build_struct_gep(vec_ty, data_ptr, 0, "spush.data.ptr")
@@ -2857,11 +2824,9 @@ impl<'ctx> super::Codegen<'ctx> {
                     .builder
                     .build_struct_gep(vec_ty, data_ptr, 2, "spush.cap.ptr")
                     .unwrap();
-                let data = self
-                    .builder
-                    .build_load(ptr_ty, data_ptr_ptr, "spush.data")
-                    .unwrap()
-                    .into_pointer_value();
+                // `data` is no longer loaded here: `emit_string_buffer_grow`
+                // reloads it from the descriptor so it can also form the
+                // tag-aware copy source.
                 let len = self
                     .builder
                     .build_load(i64_t, len_ptr, "spush.len")
@@ -2931,7 +2896,7 @@ impl<'ctx> super::Codegen<'ctx> {
                 // Grow via realloc where the buffer is heap (cap > 0); a
                 // static-literal / empty buffer takes a fresh malloc + copy.
                 let new_data =
-                    self.emit_string_buffer_grow(fn_val, data, cap, len, new_cap, "spush");
+                    self.emit_string_buffer_grow(fn_val, data_ptr, cap, len, new_cap, "spush");
 
                 self.builder.build_store(data_ptr_ptr, new_data).unwrap();
                 self.builder.build_store(cap_ptr, new_cap).unwrap();
@@ -3800,16 +3765,7 @@ impl<'ctx> super::Codegen<'ctx> {
                         "Vec.try_append: the source argument is not a Vec header".to_string()
                     );
                 };
-                let src_data = self
-                    .builder
-                    .build_extract_value(src_sv, 0, "tapp.src.data")
-                    .unwrap()
-                    .into_pointer_value();
-                let src_len = self
-                    .builder
-                    .build_extract_value(src_sv, 1, "tapp.src.len")
-                    .unwrap()
-                    .into_int_value();
+                let (src_data, src_len) = self.sso_string_parts_from_value(src_sv, "tapp.src");
                 let len_p = self
                     .builder
                     .build_struct_gep(vec_ty, data_ptr, 1, "tapp.len.p")
@@ -5161,6 +5117,12 @@ impl<'ctx> super::Codegen<'ctx> {
                     .into_int_value();
 
                 // Load target fields.
+                // Mutating op (`push_str`): promote out of inline first, so
+                // every `len`/`cap` read below sees an ordinary heap string.
+                // Without this the growth test `UGT(new_len, cap)` reads an
+                // inline `cap < 0` as an enormous unsigned, skips the grow,
+                // and the copy lands past the end of the descriptor.
+                self.sso_deinline_in_place(data_ptr, "pstr");
                 let data_ptr_ptr = self
                     .builder
                     .build_struct_gep(vec_ty, data_ptr, 0, "t.data.ptr")
@@ -5311,7 +5273,7 @@ impl<'ctx> super::Codegen<'ctx> {
                 // peak (dominant when a large output buffer doubles). A static-
                 // literal / empty buffer (cap == 0) takes a fresh malloc + copy.
                 let new_data =
-                    self.emit_string_buffer_grow(fn_val, data, cap, len, new_cap, "pstr");
+                    self.emit_string_buffer_grow(fn_val, data_ptr, cap, len, new_cap, "pstr");
 
                 self.builder.build_store(data_ptr_ptr, new_data).unwrap();
                 self.builder.build_store(cap_ptr, new_cap).unwrap();
@@ -7794,16 +7756,7 @@ impl<'ctx> super::Codegen<'ctx> {
                 let BasicValueEnum::StructValue(src_sv) = src_val else {
                     return Err("Vec.append: the source argument is not a Vec header".to_string());
                 };
-                let src_data = self
-                    .builder
-                    .build_extract_value(src_sv, 0, "app.src.data")
-                    .unwrap()
-                    .into_pointer_value();
-                let src_len = self
-                    .builder
-                    .build_extract_value(src_sv, 1, "app.src.len")
-                    .unwrap()
-                    .into_int_value();
+                let (src_data, src_len) = self.sso_string_parts_from_value(src_sv, "app.src");
                 self.suppress_source_vec_cleanup_for_arg(&args[0].value);
                 self.disarm_container_bodies_for_arg(&args[0].value);
 
@@ -7952,7 +7905,10 @@ impl<'ctx> super::Codegen<'ctx> {
                 // it rather than duplicating the realloc here.
                 if self.var_types.string_vars.contains(var_name) {
                     let additional = self.compile_expr(&args[0].value)?.into_int_value();
-                    let (data, len) = self.load_string_data_len(vec_ty, data_ptr, "srsv");
+                    // Mutating op: promote out of inline first, so every
+                    // `len`/`cap` read below sees an ordinary heap string.
+                    self.sso_deinline_in_place(data_ptr, "srsv");
+                    let (_data, len) = self.load_string_data_len(vec_ty, data_ptr, "srsv");
                     let cap_p = self
                         .builder
                         .build_struct_gep(vec_ty, data_ptr, 2, "srsv.cap.p")
@@ -7992,8 +7948,8 @@ impl<'ctx> super::Codegen<'ctx> {
                         .build_conditional_branch(must_grow, grow_bb, done_bb)
                         .unwrap();
                     self.builder.position_at_end(grow_bb);
-                    let new_data =
-                        self.emit_string_buffer_grow(fn_val, data, cur_cap, len, needed, "srsv");
+                    let new_data = self
+                        .emit_string_buffer_grow(fn_val, data_ptr, cur_cap, len, needed, "srsv");
                     self.builder.build_store(data_ptr, new_data).unwrap();
                     self.builder.build_store(cap_p, needed).unwrap();
                     self.builder.build_unconditional_branch(done_bb).unwrap();
@@ -8502,16 +8458,8 @@ impl<'ctx> super::Codegen<'ctx> {
                 // Needle: evaluate the arg, extract {data, len}.
                 let needle_val = self.compile_expr(&args[0].value)?;
                 let needle_struct = needle_val.into_struct_value();
-                let needle_data = self
-                    .builder
-                    .build_extract_value(needle_struct, 0, "ct.needle.ptr")
-                    .unwrap()
-                    .into_pointer_value();
-                let needle_len = self
-                    .builder
-                    .build_extract_value(needle_struct, 1, "ct.needle.len")
-                    .unwrap()
-                    .into_int_value();
+                let (needle_data, needle_len) =
+                    self.sso_string_parts_from_value(needle_struct, "ct.needle");
 
                 let fn_val = self.current_fn.unwrap();
                 let head_bb = self.context.append_basic_block(fn_val, "ct.head");
@@ -9484,26 +9432,8 @@ impl<'ctx> super::Codegen<'ctx> {
                     .build_load(vec_ty, b_ptr, "b.hdr")
                     .unwrap()
                     .into_struct_value();
-                let a_data = self
-                    .builder
-                    .build_extract_value(a_hdr, 0, "a.data")
-                    .unwrap()
-                    .into_pointer_value();
-                let a_len = self
-                    .builder
-                    .build_extract_value(a_hdr, 1, "a.len")
-                    .unwrap()
-                    .into_int_value();
-                let b_data = self
-                    .builder
-                    .build_extract_value(b_hdr, 0, "b.data")
-                    .unwrap()
-                    .into_pointer_value();
-                let b_len = self
-                    .builder
-                    .build_extract_value(b_hdr, 1, "b.len")
-                    .unwrap()
-                    .into_int_value();
+                let (a_data, a_len) = self.sso_string_parts_from_value(a_hdr, "a");
+                let (b_data, b_len) = self.sso_string_parts_from_value(b_hdr, "b");
                 let min_gt = self
                     .builder
                     .build_int_compare(inkwell::IntPredicate::SLT, a_len, b_len, "alt")
@@ -10181,26 +10111,8 @@ impl<'ctx> super::Codegen<'ctx> {
             .build_load(vec_ty, b_ptr, "b.str")
             .unwrap()
             .into_struct_value();
-        let a_data = self
-            .builder
-            .build_extract_value(a, 0, "a.str.ptr")
-            .unwrap()
-            .into_pointer_value();
-        let a_len = self
-            .builder
-            .build_extract_value(a, 1, "a.str.len")
-            .unwrap()
-            .into_int_value();
-        let b_data = self
-            .builder
-            .build_extract_value(b, 0, "b.str.ptr")
-            .unwrap()
-            .into_pointer_value();
-        let b_len = self
-            .builder
-            .build_extract_value(b, 1, "b.str.len")
-            .unwrap()
-            .into_int_value();
+        let (a_data, a_len) = self.sso_string_parts_from_value(a, "a.str");
+        let (b_data, b_len) = self.sso_string_parts_from_value(b, "b.str");
 
         let cmp_fn = self
             .module
@@ -10534,26 +10446,8 @@ impl<'ctx> super::Codegen<'ctx> {
         let res = if self.span_tables.string_typed_exprs.contains(&key_body_span) {
             match (key_a_val, key_b_val) {
                 (BasicValueEnum::StructValue(ka), BasicValueEnum::StructValue(kb)) => {
-                    let a_ptr = self
-                        .builder
-                        .build_extract_value(ka, 0, "ka.str.ptr")
-                        .unwrap()
-                        .into_pointer_value();
-                    let a_len = self
-                        .builder
-                        .build_extract_value(ka, 1, "ka.str.len")
-                        .unwrap()
-                        .into_int_value();
-                    let b_ptr = self
-                        .builder
-                        .build_extract_value(kb, 0, "kb.str.ptr")
-                        .unwrap()
-                        .into_pointer_value();
-                    let b_len = self
-                        .builder
-                        .build_extract_value(kb, 1, "kb.str.len")
-                        .unwrap()
-                        .into_int_value();
+                    let (a_ptr, a_len) = self.sso_string_parts_from_value(ka, "ka.str");
+                    let (b_ptr, b_len) = self.sso_string_parts_from_value(kb, "kb.str");
                     let runtime_fn =
                         self.module
                             .get_function("karac_string_cmp")

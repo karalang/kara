@@ -453,16 +453,7 @@ impl<'ctx> super::Codegen<'ctx> {
         let fd = self.extract_fd_from_tls_stream(self_val, "tls.io.self.fd");
 
         let buf_sv = buf_val.into_struct_value();
-        let buf_ptr = self
-            .builder
-            .build_extract_value(buf_sv, 0, "tls.io.buf.ptr")
-            .unwrap()
-            .into_pointer_value();
-        let buf_len = self
-            .builder
-            .build_extract_value(buf_sv, 1, "tls.io.buf.len")
-            .unwrap()
-            .into_int_value();
+        let (buf_ptr, buf_len) = self.sso_string_parts_from_value(buf_sv, "tls.io.buf");
 
         let direction = self
             .context
@@ -514,16 +505,7 @@ impl<'ctx> super::Codegen<'ctx> {
         let fd = self.extract_fd_from_tls_stream(self_val, "tls.wa.self.fd");
 
         let buf_sv = buf_val.into_struct_value();
-        let buf_ptr = self
-            .builder
-            .build_extract_value(buf_sv, 0, "tls.wa.buf.ptr")
-            .unwrap()
-            .into_pointer_value();
-        let buf_len = self
-            .builder
-            .build_extract_value(buf_sv, 1, "tls.wa.buf.len")
-            .unwrap()
-            .into_int_value();
+        let (buf_ptr, buf_len) = self.sso_string_parts_from_value(buf_sv, "tls.wa.buf");
 
         let fn_val = self
             .current_fn

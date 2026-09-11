@@ -119,13 +119,27 @@ impl RuntimeKaracString {
     }
 
     /// Borrow the string's bytes, tag-aware. Safe view over the live state.
+    ///
+    /// The empty-with-null-data case is handled explicitly rather than
+    /// falling through to `from_raw_parts`: the canonical empty String is
+    /// `{null, 0, 0}` — what `karac_string_clone` and `karac_string_slice`
+    /// both produce for an empty result — and `from_raw_parts(null, 0)` is
+    /// UB even at length zero (Rust requires a non-null, aligned pointer
+    /// regardless of length; the debug precondition check aborts on it).
+    /// Found by `slice_into_boundary_is_exactly_inline_capacity` sweeping
+    /// `n` from 0, which is exactly the state a length sweep hits first.
     #[inline]
     pub fn as_bytes(&self) -> &[u8] {
+        let len = self.byte_len();
+        let ptr = self.data_ptr();
+        if len == 0 || ptr.is_null() {
+            return &[];
+        }
         // SAFETY: `data_ptr()` + `byte_len()` describe a contiguous,
         // initialized byte range for every state (inline bytes live in
         // `self`; heap/static bytes in `data`), borrowed for `self`'s
-        // lifetime.
-        unsafe { core::slice::from_raw_parts(self.data_ptr(), self.byte_len()) }
+        // lifetime. Null/empty is handled above.
+        unsafe { core::slice::from_raw_parts(ptr, len) }
     }
 
     /// Build an inline descriptor from `bytes`. Panics if `bytes` exceeds
@@ -166,6 +180,22 @@ mod tests {
     fn descriptor_layout_pinned() {
         assert_eq!(core::mem::size_of::<RuntimeKaracString>(), 24);
         assert_eq!(core::mem::align_of::<RuntimeKaracString>(), 8);
+    }
+
+    /// The canonical empty String is `{null, 0, 0}`, and `as_bytes` must
+    /// survive it. `from_raw_parts(null, 0)` is UB even at length zero, so
+    /// this is a real abort, not a pedantic one — it aborted the suite when
+    /// `slice_into_boundary_is_exactly_inline_capacity` first swept n from 0.
+    #[test]
+    fn as_bytes_handles_the_canonical_null_empty_string() {
+        let empty = RuntimeKaracString {
+            data: core::ptr::null_mut(),
+            len: 0,
+            cap: 0,
+        };
+        assert_eq!(empty.byte_len(), 0);
+        assert!(empty.data_ptr().is_null());
+        assert_eq!(empty.as_bytes(), b"");
     }
 
     #[test]

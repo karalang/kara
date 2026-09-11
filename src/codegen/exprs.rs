@@ -4146,16 +4146,7 @@ impl<'ctx> super::Codegen<'ctx> {
         value: &Expr,
     ) -> Result<(PointerValue<'ctx>, inkwell::values::IntValue<'ctx>), String> {
         let aos = self.compile_expr(value)?.into_struct_value();
-        let aos_ptr = self
-            .builder
-            .build_extract_value(aos, 0, "aos.ptr")
-            .unwrap()
-            .into_pointer_value();
-        let aos_len = self
-            .builder
-            .build_extract_value(aos, 1, "aos.len")
-            .unwrap()
-            .into_int_value();
+        let (aos_ptr, aos_len) = self.sso_string_parts_from_value(aos, "aos");
         Ok((aos_ptr, aos_len))
     }
 

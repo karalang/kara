@@ -109193,8 +109193,17 @@ fn main() {
         // The Vec captured-local field's destructor body emits the
         // `cap > 0 ? free(data)` pattern: GEP into the state-struct
         // field (offset 1, after tag), GEP cap (Vec struct field 2),
-        // load i64, icmp ugt 0, conditional branch to a free BB that
+        // load i64, icmp SGT 0, conditional branch to a free BB that
         // loads the data ptr and calls free.
+        //
+        // The predicate is SIGNED, and that is load-bearing rather than
+        // incidental: SSO encodes "these bytes are inline" as the SIGN BIT of
+        // `cap` (`runtime/src/sso.rs`), so an inline descriptor has `cap < 0`
+        // and owns no buffer. Under the old `ugt` that negative cap read as an
+        // enormous unsigned and the gate freed the descriptor's own address.
+        // Do not "restore" `ugt` here — for a Vec the two are identical (its
+        // cap is a non-negative count), so this assertion is about keeping the
+        // String path inline-safe.
         let ir = ir_for_with_state_struct_layouts(
             "effect resource Network;
              pub fn fetch() with sends(Network) receives(Network) {}
@@ -109212,7 +109221,7 @@ fn main() {
             "destructor must load Vec cap as i64:\n{body}"
         );
         assert!(
-            body.contains("%items.drop.is_heap = icmp ugt i64 %items.drop.cap, 0"),
+            body.contains("%items.drop.is_heap = icmp sgt i64 %items.drop.cap, 0"),
             "destructor must compare cap > 0:\n{body}"
         );
         // The free branch loads data and calls free.
@@ -109324,11 +109333,11 @@ fn main() {
         );
         // Each field gets its own `cap > 0 ? free` pair.
         assert!(
-            body.contains("%items.drop.is_heap = icmp ugt i64 %items.drop.cap, 0"),
+            body.contains("%items.drop.is_heap = icmp sgt i64 %items.drop.cap, 0"),
             "items field needs its cap > 0 compare:\n{body}"
         );
         assert!(
-            body.contains("%name.drop.is_heap = icmp ugt i64 %name.drop.cap, 0"),
+            body.contains("%name.drop.is_heap = icmp sgt i64 %name.drop.cap, 0"),
             "name field needs its cap > 0 compare:\n{body}"
         );
     }
@@ -109818,7 +109827,7 @@ fn main() {
             "destructor must load Vec cap for the T-typed item field:\n{ir}"
         );
         assert!(
-            ir.contains("%item.drop.is_heap = icmp ugt i64 %item.drop.cap, 0"),
+            ir.contains("%item.drop.is_heap = icmp sgt i64 %item.drop.cap, 0"),
             "destructor must compare cap > 0:\n{ir}"
         );
         assert!(
@@ -109888,7 +109897,7 @@ fn main() {
         );
         let body = extract_fn_ir(&ir, "__kara_state_drop_driver");
         assert!(
-            body.contains("%items.drop.is_heap = icmp ugt i64 %items.drop.cap, 0"),
+            body.contains("%items.drop.is_heap = icmp sgt i64 %items.drop.cap, 0"),
             "non-generic Vec captured local still emits cap > 0 check:\n{body}"
         );
         assert!(
@@ -109976,7 +109985,7 @@ fn main() {
             );
             assert!(
                 ir.contains(&format!(
-                    "%{field_name}.drop.is_heap = icmp ugt i64 %{field_name}.drop.cap, 0"
+                    "%{field_name}.drop.is_heap = icmp sgt i64 %{field_name}.drop.cap, 0"
                 )),
                 "destructor must compare cap > 0 for `{field_name}` field:\n{ir}"
             );

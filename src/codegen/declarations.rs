@@ -3072,7 +3072,7 @@ impl<'ctx> super::Codegen<'ctx> {
                     let is_heap = self
                         .builder
                         .build_int_compare(
-                            inkwell::IntPredicate::UGT,
+                            inkwell::IntPredicate::SGT,
                             cap,
                             zero,
                             &format!("{}.drop.is_heap", field.name),

@@ -413,16 +413,7 @@ impl<'ctx> super::Codegen<'ctx> {
     ) -> Result<BasicValueEnum<'ctx>, String> {
         let path_val = self.compile_expr(path_arg)?;
         let path_sv = path_val.into_struct_value();
-        let path_ptr = self
-            .builder
-            .build_extract_value(path_sv, 0, "path.ptr")
-            .unwrap()
-            .into_pointer_value();
-        let path_len = self
-            .builder
-            .build_extract_value(path_sv, 1, "path.len")
-            .unwrap()
-            .into_int_value();
+        let (path_ptr, path_len) = self.sso_string_parts_from_value(path_sv, "path");
         let slot = self.alloca_io_result_slot()?;
         let f = self
             .module
@@ -479,16 +470,7 @@ impl<'ctx> super::Codegen<'ctx> {
         path_val: BasicValueEnum<'ctx>,
     ) -> Result<BasicValueEnum<'ctx>, String> {
         let path_sv = path_val.into_struct_value();
-        let path_ptr = self
-            .builder
-            .build_extract_value(path_sv, 0, "path.ptr")
-            .unwrap()
-            .into_pointer_value();
-        let path_len = self
-            .builder
-            .build_extract_value(path_sv, 1, "path.len")
-            .unwrap()
-            .into_int_value();
+        let (path_ptr, path_len) = self.sso_string_parts_from_value(path_sv, "path");
         let slot = self.alloca_io_result_slot()?;
         let f = self
             .module
@@ -548,27 +530,10 @@ impl<'ctx> super::Codegen<'ctx> {
         contents_val: BasicValueEnum<'ctx>,
     ) -> Result<BasicValueEnum<'ctx>, String> {
         let path_sv = path_val.into_struct_value();
-        let path_ptr = self
-            .builder
-            .build_extract_value(path_sv, 0, "fsw.path.ptr")
-            .unwrap()
-            .into_pointer_value();
-        let path_len = self
-            .builder
-            .build_extract_value(path_sv, 1, "fsw.path.len")
-            .unwrap()
-            .into_int_value();
+        let (path_ptr, path_len) = self.sso_string_parts_from_value(path_sv, "fsw.path");
         let contents_sv = contents_val.into_struct_value();
-        let contents_ptr = self
-            .builder
-            .build_extract_value(contents_sv, 0, "fsw.contents.ptr")
-            .unwrap()
-            .into_pointer_value();
-        let contents_len = self
-            .builder
-            .build_extract_value(contents_sv, 1, "fsw.contents.len")
-            .unwrap()
-            .into_int_value();
+        let (contents_ptr, contents_len) =
+            self.sso_string_parts_from_value(contents_sv, "fsw.contents");
         let slot = self.alloca_io_result_slot()?;
         let f = self
             .module
@@ -629,16 +594,7 @@ impl<'ctx> super::Codegen<'ctx> {
         let zero_i32 = i32_ty.const_int(0, false);
 
         let path_sv = path_val.into_struct_value();
-        let path_ptr = self
-            .builder
-            .build_extract_value(path_sv, 0, "rl.path.ptr")
-            .unwrap()
-            .into_pointer_value();
-        let path_len = self
-            .builder
-            .build_extract_value(path_sv, 1, "rl.path.len")
-            .unwrap()
-            .into_int_value();
+        let (path_ptr, path_len) = self.sso_string_parts_from_value(path_sv, "rl.path");
 
         let fn_val = self
             .current_fn
@@ -894,16 +850,7 @@ impl<'ctx> super::Codegen<'ctx> {
     ) -> Result<BasicValueEnum<'ctx>, String> {
         let handle = self_val.into_pointer_value();
         let buf_sv = buf_val.into_struct_value();
-        let buf_ptr = self
-            .builder
-            .build_extract_value(buf_sv, 0, "buf.ptr")
-            .unwrap()
-            .into_pointer_value();
-        let buf_len = self
-            .builder
-            .build_extract_value(buf_sv, 1, "buf.len")
-            .unwrap()
-            .into_int_value();
+        let (buf_ptr, buf_len) = self.sso_string_parts_from_value(buf_sv, "buf");
         let slot = self.alloca_io_result_slot()?;
         let f = self
             .module
@@ -933,16 +880,7 @@ impl<'ctx> super::Codegen<'ctx> {
     ) -> Result<BasicValueEnum<'ctx>, String> {
         let handle = self_val.into_pointer_value();
         let buf_sv = buf_val.into_struct_value();
-        let buf_ptr = self
-            .builder
-            .build_extract_value(buf_sv, 0, "buf.ptr")
-            .unwrap()
-            .into_pointer_value();
-        let buf_len = self
-            .builder
-            .build_extract_value(buf_sv, 1, "buf.len")
-            .unwrap()
-            .into_int_value();
+        let (buf_ptr, buf_len) = self.sso_string_parts_from_value(buf_sv, "buf");
         let slot = self.alloca_io_result_slot()?;
         let f = self
             .module

@@ -173,16 +173,7 @@ impl<'ctx> super::Codegen<'ctx> {
             .ok_or_else(|| format!("{what}: missing bytes argument"))?;
         let v = self.compile_expr(arg)?;
         let s = v.into_struct_value();
-        let data = self
-            .builder
-            .build_extract_value(s, 0, "arrow.in.data")
-            .unwrap()
-            .into_pointer_value();
-        let len = self
-            .builder
-            .build_extract_value(s, 1, "arrow.in.len")
-            .unwrap()
-            .into_int_value();
+        let (data, len) = self.sso_string_parts_from_value(s, "arrow.in");
         let temp_cap = (!matches!(arg.kind, ExprKind::Identifier(_))).then(|| {
             self.builder
                 .build_extract_value(s, 2, "arrow.in.cap")

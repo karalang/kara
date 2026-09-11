@@ -393,16 +393,7 @@ impl<'ctx> super::Codegen<'ctx> {
         // — extract `ptr` (field 0) and `len` (field 1). Cap is
         // ignored at the FFI boundary.
         let addr_sv = addr_val.into_struct_value();
-        let addr_ptr = self
-            .builder
-            .build_extract_value(addr_sv, 0, "tcp.bind.addr.ptr")
-            .unwrap()
-            .into_pointer_value();
-        let addr_len = self
-            .builder
-            .build_extract_value(addr_sv, 1, "tcp.bind.addr.len")
-            .unwrap()
-            .into_int_value();
+        let (addr_ptr, addr_len) = self.sso_string_parts_from_value(addr_sv, "tcp.bind.addr");
 
         let bind_fn = self
             .module
@@ -440,16 +431,7 @@ impl<'ctx> super::Codegen<'ctx> {
         addr_val: BasicValueEnum<'ctx>,
     ) -> Result<BasicValueEnum<'ctx>, String> {
         let addr_sv = addr_val.into_struct_value();
-        let addr_ptr = self
-            .builder
-            .build_extract_value(addr_sv, 0, "tcp.connect.addr.ptr")
-            .unwrap()
-            .into_pointer_value();
-        let addr_len = self
-            .builder
-            .build_extract_value(addr_sv, 1, "tcp.connect.addr.len")
-            .unwrap()
-            .into_int_value();
+        let (addr_ptr, addr_len) = self.sso_string_parts_from_value(addr_sv, "tcp.connect.addr");
 
         let i64_ty = self.context.i64_type();
         let zero = i64_ty.const_zero();
@@ -802,16 +784,7 @@ impl<'ctx> super::Codegen<'ctx> {
         let fd = self.extract_fd_from_tcp_struct(self_val, "tcp.wa.self.fd");
 
         let buf_sv = buf_val.into_struct_value();
-        let buf_ptr = self
-            .builder
-            .build_extract_value(buf_sv, 0, "tcp.wa.buf.ptr")
-            .unwrap()
-            .into_pointer_value();
-        let buf_len = self
-            .builder
-            .build_extract_value(buf_sv, 1, "tcp.wa.buf.len")
-            .unwrap()
-            .into_int_value();
+        let (buf_ptr, buf_len) = self.sso_string_parts_from_value(buf_sv, "tcp.wa.buf");
 
         let fn_val = self
             .current_fn
@@ -1013,16 +986,7 @@ impl<'ctx> super::Codegen<'ctx> {
         // the same physical layout — mutability is a type-system
         // concept only.
         let buf_sv = buf_val.into_struct_value();
-        let buf_ptr = self
-            .builder
-            .build_extract_value(buf_sv, 0, "tcp.io.buf.ptr")
-            .unwrap()
-            .into_pointer_value();
-        let buf_len = self
-            .builder
-            .build_extract_value(buf_sv, 1, "tcp.io.buf.len")
-            .unwrap()
-            .into_int_value();
+        let (buf_ptr, buf_len) = self.sso_string_parts_from_value(buf_sv, "tcp.io.buf");
 
         // Park on the stream fd for the right direction.
         let direction = self
@@ -1658,16 +1622,7 @@ impl<'ctx> super::Codegen<'ctx> {
         let fd = self.extract_fd_from_tcp_struct(self_val, "ws.io.self.fd");
 
         let slice_sv = slice_val.into_struct_value();
-        let buf_ptr = self
-            .builder
-            .build_extract_value(slice_sv, 0, "ws.io.buf.ptr")
-            .unwrap()
-            .into_pointer_value();
-        let buf_len = self
-            .builder
-            .build_extract_value(slice_sv, 1, "ws.io.buf.len")
-            .unwrap()
-            .into_int_value();
+        let (buf_ptr, buf_len) = self.sso_string_parts_from_value(slice_sv, "ws.io.buf");
 
         let direction = self
             .context

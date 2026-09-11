@@ -10070,26 +10070,8 @@ impl<'ctx> super::Codegen<'ctx> {
         let i32_t = self.context.i32_type();
 
         // Extract ptr and len from each string struct.
-        let l_ptr = self
-            .builder
-            .build_extract_value(lhs, 0, "l.ptr")
-            .unwrap()
-            .into_pointer_value();
-        let l_len = self
-            .builder
-            .build_extract_value(lhs, 1, "l.len")
-            .unwrap()
-            .into_int_value();
-        let r_ptr = self
-            .builder
-            .build_extract_value(rhs, 0, "r.ptr")
-            .unwrap()
-            .into_pointer_value();
-        let r_len = self
-            .builder
-            .build_extract_value(rhs, 1, "r.len")
-            .unwrap()
-            .into_int_value();
+        let (l_ptr, l_len) = self.sso_string_parts_from_value(lhs, "l");
+        let (r_ptr, r_len) = self.sso_string_parts_from_value(rhs, "r");
 
         match op {
             BinOp::Eq | BinOp::NotEq => {
@@ -11397,16 +11379,7 @@ impl<'ctx> super::Codegen<'ctx> {
         }
         self.materialize_owned_temp(compiled, (expr.span.offset, expr.span.length));
         let sv = compiled.into_struct_value();
-        let data = self
-            .builder
-            .build_extract_value(sv, 0, "freshvec.data")
-            .unwrap()
-            .into_pointer_value();
-        let len = self
-            .builder
-            .build_extract_value(sv, 1, "freshvec.len")
-            .unwrap()
-            .into_int_value();
+        let (data, len) = self.sso_string_parts_from_value(sv, "freshvec");
         Ok(Some((data, len)))
     }
 
@@ -11448,16 +11421,7 @@ impl<'ctx> super::Codegen<'ctx> {
                 // stack slot).
                 self.materialize_owned_temp(compiled, (expr.span.offset, expr.span.length));
                 let sv = compiled.into_struct_value();
-                let data = self
-                    .builder
-                    .build_extract_value(sv, 0, "lit.data")
-                    .unwrap()
-                    .into_pointer_value();
-                let len = self
-                    .builder
-                    .build_extract_value(sv, 1, "lit.len")
-                    .unwrap()
-                    .into_int_value();
+                let (data, len) = self.sso_string_parts_from_value(sv, "lit");
                 Ok(Some((data, len)))
             }
             _ => Err("collection literal compiled to neither array nor Vec value".into()),

@@ -86,16 +86,7 @@ impl<'ctx> super::Codegen<'ctx> {
             return Err("codegen: Interner.intern argument must be a String value".to_string());
         }
         let sstruct = sval.into_struct_value();
-        let data_ptr = self
-            .builder
-            .build_extract_value(sstruct, 0, "intern.arg.ptr")
-            .unwrap()
-            .into_pointer_value();
-        let len = self
-            .builder
-            .build_extract_value(sstruct, 1, "intern.arg.len")
-            .unwrap()
-            .into_int_value();
+        let (data_ptr, len) = self.sso_string_parts_from_value(sstruct, "intern.arg");
         let f = self
             .module
             .get_function("karac_runtime_interner_intern")

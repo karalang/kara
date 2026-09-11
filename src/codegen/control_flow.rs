@@ -2262,16 +2262,12 @@ impl<'ctx> super::Codegen<'ctx> {
         to_stderr: bool,
     ) {
         let sv = sval.into_struct_value();
-        let data = self
-            .builder
-            .build_extract_value(sv, 0, "ps.data")
-            .unwrap()
-            .into_pointer_value();
-        let len = self
-            .builder
-            .build_extract_value(sv, 1, "ps.len")
-            .unwrap()
-            .into_int_value();
+        // SSO: an inline String keeps its bytes in the descriptor, so the
+        // pointer and length come from the tag-aware accessor. Reading field
+        // 0/1 raw here writes overlaid data bytes reinterpreted as a pointer
+        // — the first thing a `println` of a short slice does. With SSO off
+        // this is the same two `extract_value`s it replaced.
+        let (data, len) = self.sso_string_parts_from_value(sv, "ps");
         self.emit_nul_safe_write(data, len, nl, to_stderr);
         // Free only an OWNING String. The invariant (mirrored by the f-string
         // accumulator's scope-exit cleanup) is `cap == 0 ⇔ non-owning` — a
@@ -2292,7 +2288,7 @@ impl<'ctx> super::Codegen<'ctx> {
         let owns = self
             .builder
             .build_int_compare(
-                inkwell::IntPredicate::UGT,
+                inkwell::IntPredicate::SGT,
                 cap,
                 self.context.i64_type().const_zero(),
                 "ps.owns",
@@ -2689,16 +2685,7 @@ impl<'ctx> super::Codegen<'ctx> {
             let s = self
                 .compile_struct_display_string(&args[0].value, &sname)?
                 .into_struct_value();
-            let data = self
-                .builder
-                .build_extract_value(s, 0, "pd.data")
-                .unwrap()
-                .into_pointer_value();
-            let len = self
-                .builder
-                .build_extract_value(s, 1, "pd.len")
-                .unwrap()
-                .into_int_value();
+            let (data, len) = self.sso_string_parts_from_value(s, "pd");
             self.emit_nul_safe_write(data, len, nl, to_stderr);
             return Ok(zero.into());
         }
@@ -2857,16 +2844,7 @@ impl<'ctx> super::Codegen<'ctx> {
             // writes exactly `len` bytes regardless of NULs (L5) and still
             // never reads past the buffer.
             let sv = val.into_struct_value();
-            let str_ptr = self
-                .builder
-                .build_extract_value(sv, 0, "str.ptr")
-                .unwrap()
-                .into_pointer_value();
-            let str_len = self
-                .builder
-                .build_extract_value(sv, 1, "str.len")
-                .unwrap()
-                .into_int_value();
+            let (str_ptr, str_len) = self.sso_string_parts_from_value(sv, "str");
             self.emit_nul_safe_write(str_ptr, str_len, nl, to_stderr);
             // #20: a fresh-owned String temp passed directly to `println` /
             // `print` (`println(i.to_string())`, `print(a + b)`) has no

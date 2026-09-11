@@ -244,16 +244,7 @@ impl<'ctx> super::Codegen<'ctx> {
                     return Err("codegen: Arena.push value/element type mismatch".to_string());
                 }
                 let sstruct = val.into_struct_value();
-                let data_ptr = self
-                    .builder
-                    .build_extract_value(sstruct, 0, "arena.push.sptr")
-                    .unwrap()
-                    .into_pointer_value();
-                let len = self
-                    .builder
-                    .build_extract_value(sstruct, 1, "arena.push.slen")
-                    .unwrap()
-                    .into_int_value();
+                let (data_ptr, len) = self.sso_string_parts_from_value(sstruct, "arena.push.s");
                 let idx = self.call_arena_push(handle, data_ptr, len)?;
                 // The runtime copied the bytes; a fresh-owned temp argument
                 // (`push(a + b)`) would otherwise orphan its buffer — the

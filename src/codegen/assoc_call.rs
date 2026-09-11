@@ -175,16 +175,7 @@ impl<'ctx> super::Codegen<'ctx> {
                 )
             })?;
             let slice_sv = slice_val.into_struct_value();
-            let data = self
-                .builder
-                .build_extract_value(slice_sv, 0, "from_slice.src.data")
-                .unwrap()
-                .into_pointer_value();
-            let len = self
-                .builder
-                .build_extract_value(slice_sv, 1, "from_slice.src.len")
-                .unwrap()
-                .into_int_value();
+            let (data, len) = self.sso_string_parts_from_value(slice_sv, "from_slice.src");
             (data, len)
         } else {
             let compiled = self.compile_expr(arg)?;
@@ -199,16 +190,7 @@ impl<'ctx> super::Codegen<'ctx> {
                     "Vec.from_slice: source struct has {n_fields} fields; expected 2 (Slice) or 3 (Vec)"
                 ));
             }
-            let data = self
-                .builder
-                .build_extract_value(sv, 0, "from_slice.src.data")
-                .unwrap()
-                .into_pointer_value();
-            let len = self
-                .builder
-                .build_extract_value(sv, 1, "from_slice.src.len")
-                .unwrap()
-                .into_int_value();
+            let (data, len) = self.sso_string_parts_from_value(sv, "from_slice.src");
             (data, len)
         };
         let _ = src_label; // retained for diagnostic clarity in errors above
@@ -778,16 +760,7 @@ impl<'ctx> super::Codegen<'ctx> {
                     None => self.compile_expr(&_args[0].value)?,
                 };
             let bytes_sv = self.require_struct_value(bytes_val, "StableHash.siphash24")?;
-            let data = self
-                .builder
-                .build_extract_value(bytes_sv, 0, "sip24.data")
-                .unwrap()
-                .into_pointer_value();
-            let len = self
-                .builder
-                .build_extract_value(bytes_sv, 1, "sip24.len")
-                .unwrap()
-                .into_int_value();
+            let (data, len) = self.sso_string_parts_from_value(bytes_sv, "sip24");
             let k0 = self.compile_expr(&_args[1].value)?.into_int_value();
             let k1 = self.compile_expr(&_args[2].value)?.into_int_value();
             let sip_fn = self
@@ -837,16 +810,7 @@ impl<'ctx> super::Codegen<'ctx> {
             let i64_t = self.context.i64_type();
             let pat_val = self.compile_expr(&_args[0].value)?;
             let pat_sv = pat_val.into_struct_value();
-            let pat_data = self
-                .builder
-                .build_extract_value(pat_sv, 0, "rx.pat.data")
-                .unwrap()
-                .into_pointer_value();
-            let pat_len = self
-                .builder
-                .build_extract_value(pat_sv, 1, "rx.pat.len")
-                .unwrap()
-                .into_int_value();
+            let (pat_data, pat_len) = self.sso_string_parts_from_value(pat_sv, "rx.pat");
 
             let validate_fn = self
                 .module
@@ -1128,16 +1092,7 @@ impl<'ctx> super::Codegen<'ctx> {
             // Evaluate the String arg, extract `{data, len}`.
             let s_val = self.compile_expr(&_args[0].value)?;
             let s_struct = s_val.into_struct_value();
-            let s_data = self
-                .builder
-                .build_extract_value(s_struct, 0, "parse.s.ptr")
-                .unwrap()
-                .into_pointer_value();
-            let s_len = self
-                .builder
-                .build_extract_value(s_struct, 1, "parse.s.len")
-                .unwrap()
-                .into_int_value();
+            let (s_data, s_len) = self.sso_string_parts_from_value(s_struct, "parse.s");
 
             // Allocate the out-i64 slot the runtime writes through.
             let fn_val = self
@@ -1233,16 +1188,7 @@ impl<'ctx> super::Codegen<'ctx> {
             // String arg → {data, len}.
             let s_val = self.compile_expr(&_args[0].value)?;
             let s_struct = s_val.into_struct_value();
-            let s_data = self
-                .builder
-                .build_extract_value(s_struct, 0, "radix.s.ptr")
-                .unwrap()
-                .into_pointer_value();
-            let s_len = self
-                .builder
-                .build_extract_value(s_struct, 1, "radix.s.len")
-                .unwrap()
-                .into_int_value();
+            let (s_data, s_len) = self.sso_string_parts_from_value(s_struct, "radix.s");
 
             // radix arg → i32 (the source value is i64-backed; truncate).
             let radix_val = self.compile_expr(&_args[1].value)?.into_int_value();
@@ -1330,16 +1276,7 @@ impl<'ctx> super::Codegen<'ctx> {
 
             let s_val = self.compile_expr(&_args[0].value)?;
             let s_struct = s_val.into_struct_value();
-            let s_data = self
-                .builder
-                .build_extract_value(s_struct, 0, "fparse.s.ptr")
-                .unwrap()
-                .into_pointer_value();
-            let s_len = self
-                .builder
-                .build_extract_value(s_struct, 1, "fparse.s.len")
-                .unwrap()
-                .into_int_value();
+            let (s_data, s_len) = self.sso_string_parts_from_value(s_struct, "fparse.s");
 
             let fn_val = self
                 .current_fn
@@ -1890,26 +1827,8 @@ impl<'ctx> super::Codegen<'ctx> {
                 let body_val = self.compile_expr(&_args[1].value)?;
                 let addr_sv = addr_val.into_struct_value();
                 let body_sv = body_val.into_struct_value();
-                let addr_ptr = self
-                    .builder
-                    .build_extract_value(addr_sv, 0, "addr.data")
-                    .unwrap()
-                    .into_pointer_value();
-                let addr_len = self
-                    .builder
-                    .build_extract_value(addr_sv, 1, "addr.len")
-                    .unwrap()
-                    .into_int_value();
-                let body_ptr = self
-                    .builder
-                    .build_extract_value(body_sv, 0, "body.data")
-                    .unwrap()
-                    .into_pointer_value();
-                let body_len = self
-                    .builder
-                    .build_extract_value(body_sv, 1, "body.len")
-                    .unwrap()
-                    .into_int_value();
+                let (addr_ptr, addr_len) = self.sso_string_parts_from_value(addr_sv, "addr");
+                let (body_ptr, body_len) = self.sso_string_parts_from_value(body_sv, "body");
 
                 // Allocate addr_len + 1 bytes, memcpy, null-terminate.
                 let one = self.context.i64_type().const_int(1, false);
@@ -2129,16 +2048,8 @@ impl<'ctx> super::Codegen<'ctx> {
             // `len + 1` bytes, memcpy, null-terminate.
             let addr_val = self.compile_expr(&_args[0].value)?;
             let addr_sv = addr_val.into_struct_value();
-            let addr_ptr_raw = self
-                .builder
-                .build_extract_value(addr_sv, 0, "http.serve.addr.data")
-                .unwrap()
-                .into_pointer_value();
-            let addr_len = self
-                .builder
-                .build_extract_value(addr_sv, 1, "http.serve.addr.len")
-                .unwrap()
-                .into_int_value();
+            let (addr_ptr_raw, addr_len) =
+                self.sso_string_parts_from_value(addr_sv, "http.serve.addr");
             let one = self.context.i64_type().const_int(1, false);
             let needed = self
                 .builder
@@ -2317,16 +2228,8 @@ impl<'ctx> super::Codegen<'ctx> {
         if type_name == "Server" && method == "serve_ws" && _args.len() == 3 {
             let addr_val = self.compile_expr(&_args[0].value)?;
             let addr_sv = addr_val.into_struct_value();
-            let addr_ptr_raw = self
-                .builder
-                .build_extract_value(addr_sv, 0, "http.servews.addr.data")
-                .unwrap()
-                .into_pointer_value();
-            let addr_len = self
-                .builder
-                .build_extract_value(addr_sv, 1, "http.servews.addr.len")
-                .unwrap()
-                .into_int_value();
+            let (addr_ptr_raw, addr_len) =
+                self.sso_string_parts_from_value(addr_sv, "http.servews.addr");
             let one = self.context.i64_type().const_int(1, false);
             let needed = self
                 .builder
@@ -2499,16 +2402,8 @@ impl<'ctx> super::Codegen<'ctx> {
         if type_name == "Server" && method == "serve_ws_tls" && _args.len() == 5 {
             let addr_val = self.compile_expr(&_args[0].value)?;
             let addr_sv = addr_val.into_struct_value();
-            let addr_ptr_raw = self
-                .builder
-                .build_extract_value(addr_sv, 0, "wss.serve.addr.data")
-                .unwrap()
-                .into_pointer_value();
-            let addr_len = self
-                .builder
-                .build_extract_value(addr_sv, 1, "wss.serve.addr.len")
-                .unwrap()
-                .into_int_value();
+            let (addr_ptr_raw, addr_len) =
+                self.sso_string_parts_from_value(addr_sv, "wss.serve.addr");
             let one = self.context.i64_type().const_int(1, false);
             let needed = self
                 .builder
@@ -2539,29 +2434,11 @@ impl<'ctx> super::Codegen<'ctx> {
 
             let cert_val = self.compile_expr(&_args[1].value)?;
             let cert_sv = cert_val.into_struct_value();
-            let cert_ptr = self
-                .builder
-                .build_extract_value(cert_sv, 0, "wss.serve.cert.data")
-                .unwrap()
-                .into_pointer_value();
-            let cert_len = self
-                .builder
-                .build_extract_value(cert_sv, 1, "wss.serve.cert.len")
-                .unwrap()
-                .into_int_value();
+            let (cert_ptr, cert_len) = self.sso_string_parts_from_value(cert_sv, "wss.serve.cert");
 
             let key_val = self.compile_expr(&_args[2].value)?;
             let key_sv = key_val.into_struct_value();
-            let key_ptr = self
-                .builder
-                .build_extract_value(key_sv, 0, "wss.serve.key.data")
-                .unwrap()
-                .into_pointer_value();
-            let key_len = self
-                .builder
-                .build_extract_value(key_sv, 1, "wss.serve.key.len")
-                .unwrap()
-                .into_int_value();
+            let (key_ptr, key_len) = self.sso_string_parts_from_value(key_sv, "wss.serve.key");
 
             let handler_fn = self.resolve_free_fn_for_handler_arg(&_args[3].value)?;
             self.require_http_handler_response_shape(handler_fn)?;
@@ -2712,16 +2589,8 @@ impl<'ctx> super::Codegen<'ctx> {
             // ── Addr (null-terminated C string, same shape as `serve`) ──
             let addr_val = self.compile_expr(&_args[0].value)?;
             let addr_sv = addr_val.into_struct_value();
-            let addr_ptr_raw = self
-                .builder
-                .build_extract_value(addr_sv, 0, "https.serve.addr.data")
-                .unwrap()
-                .into_pointer_value();
-            let addr_len = self
-                .builder
-                .build_extract_value(addr_sv, 1, "https.serve.addr.len")
-                .unwrap()
-                .into_int_value();
+            let (addr_ptr_raw, addr_len) =
+                self.sso_string_parts_from_value(addr_sv, "https.serve.addr");
             let one = self.context.i64_type().const_int(1, false);
             let needed = self
                 .builder
@@ -2759,30 +2628,13 @@ impl<'ctx> super::Codegen<'ctx> {
             // ── Cert PEM bytes (raw `(ptr, i64 len)`, no null term) ──
             let cert_val = self.compile_expr(&_args[1].value)?;
             let cert_sv = cert_val.into_struct_value();
-            let cert_ptr = self
-                .builder
-                .build_extract_value(cert_sv, 0, "https.serve.cert.data")
-                .unwrap()
-                .into_pointer_value();
-            let cert_len = self
-                .builder
-                .build_extract_value(cert_sv, 1, "https.serve.cert.len")
-                .unwrap()
-                .into_int_value();
+            let (cert_ptr, cert_len) =
+                self.sso_string_parts_from_value(cert_sv, "https.serve.cert");
 
             // ── Key PEM bytes ──
             let key_val = self.compile_expr(&_args[2].value)?;
             let key_sv = key_val.into_struct_value();
-            let key_ptr = self
-                .builder
-                .build_extract_value(key_sv, 0, "https.serve.key.data")
-                .unwrap()
-                .into_pointer_value();
-            let key_len = self
-                .builder
-                .build_extract_value(key_sv, 1, "https.serve.key.len")
-                .unwrap()
-                .into_int_value();
+            let (key_ptr, key_len) = self.sso_string_parts_from_value(key_sv, "https.serve.key");
 
             // ── Handler (free-fn → shim, same as `serve`) ──
             let handler_arg = &_args[3];
@@ -2992,16 +2844,7 @@ impl<'ctx> super::Codegen<'ctx> {
                 // copying keeps those correct and independent too. The copy is the
                 // owning contract of `From` — the result outlives the argument.
                 let v = self.compile_expr(&arg.value)?.into_struct_value();
-                let data = self
-                    .builder
-                    .build_extract_value(v, 0, "sf.data")
-                    .unwrap()
-                    .into_pointer_value();
-                let len = self
-                    .builder
-                    .build_extract_value(v, 1, "sf.len")
-                    .unwrap()
-                    .into_int_value();
+                let (data, len) = self.sso_string_parts_from_value(v, "sf");
                 return Ok(self.build_owned_string_from_parts(data, len));
             }
         }

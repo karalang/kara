@@ -403,7 +403,7 @@ impl<'ctx> super::Codegen<'ctx> {
             let has_heap = self
                 .builder
                 .build_int_compare(
-                    IntPredicate::UGT,
+                    IntPredicate::SGT,
                     cap,
                     i64_t.const_zero(),
                     "col.free.s.heap",
@@ -931,16 +931,7 @@ impl<'ctx> super::Codegen<'ctx> {
 
         // General path: a `Vec[T]` runtime value `{ptr, len, cap}`.
         let vec_val = arg_val.into_struct_value();
-        let src_data = self
-            .builder
-            .build_extract_value(vec_val, 0, "col.fv.src.data")
-            .unwrap()
-            .into_pointer_value();
-        let vlen = self
-            .builder
-            .build_extract_value(vec_val, 1, "col.fv.src.len")
-            .unwrap()
-            .into_int_value();
+        let (src_data, vlen) = self.sso_string_parts_from_value(vec_val, "col.fv.src");
         let control = self.column_alloc(elem, vlen, vlen)?;
         let data = self
             .column_load_field(control, 0, "col.fv.data")
@@ -1102,16 +1093,7 @@ impl<'ctx> super::Codegen<'ctx> {
             .ok_or_else(|| "Column.from_iter_nullable: missing values argument".to_string())?;
         let arg_val = self.compile_expr(arg_expr)?;
         let vec_val = arg_val.into_struct_value();
-        let src_ptr = self
-            .builder
-            .build_extract_value(vec_val, 0, "col.fin.src")
-            .unwrap()
-            .into_pointer_value();
-        let vlen = self
-            .builder
-            .build_extract_value(vec_val, 1, "col.fin.len")
-            .unwrap()
-            .into_int_value();
+        let (src_ptr, vlen) = self.sso_string_parts_from_value(vec_val, "col.fin");
 
         let control = self.column_alloc(elem, vlen, vlen)?;
         let data = self

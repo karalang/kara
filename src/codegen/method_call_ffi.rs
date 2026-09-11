@@ -164,16 +164,7 @@ impl<'ctx> super::Codegen<'ctx> {
     ) -> Result<BasicValueEnum<'ctx>, String> {
         let recv = self.compile_expr(object)?;
         let agg = recv.into_struct_value();
-        let data_ptr = self
-            .builder
-            .build_extract_value(agg, 0, "tocstr.ptr")
-            .unwrap()
-            .into_pointer_value();
-        let data_len = self
-            .builder
-            .build_extract_value(agg, 1, "tocstr.len")
-            .unwrap()
-            .into_int_value();
+        let (data_ptr, data_len) = self.sso_string_parts_from_value(agg, "tocstr");
 
         let cstring_ty = self.vec_struct_type();
 
@@ -256,16 +247,7 @@ impl<'ctx> super::Codegen<'ctx> {
     ) -> Result<BasicValueEnum<'ctx>, String> {
         let recv = self.compile_expr(object)?;
         let agg = recv.into_struct_value();
-        let data_ptr = self
-            .builder
-            .build_extract_value(agg, 0, "cstr.ts.ptr")
-            .unwrap()
-            .into_pointer_value();
-        let data_len = self
-            .builder
-            .build_extract_value(agg, 1, "cstr.ts.len")
-            .unwrap()
-            .into_int_value();
+        let (data_ptr, data_len) = self.sso_string_parts_from_value(agg, "cstr.ts");
         self.build_utf8_validated_result(data_ptr, data_len)
     }
 
@@ -285,16 +267,7 @@ impl<'ctx> super::Codegen<'ctx> {
     ) -> Result<BasicValueEnum<'ctx>, String> {
         let vec_val = self.compile_expr(arg)?;
         let agg = vec_val.into_struct_value();
-        let data_ptr = self
-            .builder
-            .build_extract_value(agg, 0, "fu8.data")
-            .unwrap()
-            .into_pointer_value();
-        let data_len = self
-            .builder
-            .build_extract_value(agg, 1, "fu8.len")
-            .unwrap()
-            .into_int_value();
+        let (data_ptr, data_len) = self.sso_string_parts_from_value(agg, "fu8");
         // B-2026-08-14-20 — a FRESH OWNED `Vec[u8]` TEMPORARY argument
         // (`String.from_utf8(mk_bytes())`, `String.from_utf8(s.bytes().to_vec())`)
         // has no binding to carry a scope-exit drop, and this path only reads
@@ -466,16 +439,7 @@ impl<'ctx> super::Codegen<'ctx> {
     ) -> Result<BasicValueEnum<'ctx>, String> {
         let recv = self.compile_expr(object)?;
         let agg = recv.into_struct_value();
-        let data_ptr = self
-            .builder
-            .build_extract_value(agg, 0, "cstr.tss.ptr")
-            .unwrap()
-            .into_pointer_value();
-        let data_len = self
-            .builder
-            .build_extract_value(agg, 1, "cstr.tss.len")
-            .unwrap()
-            .into_int_value();
+        let (data_ptr, data_len) = self.sso_string_parts_from_value(agg, "cstr.tss");
         self.build_utf8_validated_slice_result(data_ptr, data_len)
     }
 
@@ -1215,16 +1179,7 @@ impl<'ctx> super::Codegen<'ctx> {
             ));
         }
         let sv = str_val.into_struct_value();
-        let str_ptr = self
-            .builder
-            .build_extract_value(sv, 0, "con.str.ptr")
-            .unwrap()
-            .into_pointer_value();
-        let str_len = self
-            .builder
-            .build_extract_value(sv, 1, "con.str.len")
-            .unwrap()
-            .into_int_value();
+        let (str_ptr, str_len) = self.sso_string_parts_from_value(sv, "con.str");
         let nl = if newline { "\n" } else { "" };
         // NUL-safe `fwrite` to the stdout / stderr `FILE*` (L5) — the old
         // `printf`/`dprintf("%.*s")` form truncated a String at an interior

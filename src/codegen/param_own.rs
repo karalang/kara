@@ -3687,16 +3687,7 @@ impl<'ctx> super::Codegen<'ctx> {
                     let copied = self
                         .emit_vecstr_defensive_copy(sv.into(), elem_ty, elem_te.as_ref())
                         .into_struct_value();
-                    let cd = self
-                        .builder
-                        .build_extract_value(copied, 0, "p14e.cd")
-                        .unwrap()
-                        .into_pointer_value();
-                    let cl = self
-                        .builder
-                        .build_extract_value(copied, 1, "p14e.cl")
-                        .unwrap()
-                        .into_int_value();
+                    let (cd, cl) = self.sso_string_parts_from_value(copied, "p14e.c");
                     let cc = self
                         .builder
                         .build_extract_value(copied, 2, "p14e.cc")

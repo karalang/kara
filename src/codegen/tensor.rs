@@ -520,16 +520,7 @@ impl<'ctx> super::Codegen<'ctx> {
                     vals
                 } else {
                     let vec_val = arg_val.into_struct_value();
-                    let data = self
-                        .builder
-                        .build_extract_value(vec_val, 0, "t.dims.data")
-                        .unwrap()
-                        .into_pointer_value();
-                    let len = self
-                        .builder
-                        .build_extract_value(vec_val, 1, "t.dims.len")
-                        .unwrap()
-                        .into_int_value();
+                    let (data, len) = self.sso_string_parts_from_value(vec_val, "t.dims");
                     // len == rank assert.
                     let want = i64_t.const_int(rank as u64, false);
                     let ok = self

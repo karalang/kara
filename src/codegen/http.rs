@@ -207,16 +207,7 @@ impl<'ctx> super::Codegen<'ctx> {
             .build_extract_value(resp_struct, 1, "shim.resp.body")
             .unwrap()
             .into_struct_value();
-        let body_data = self
-            .builder
-            .build_extract_value(body_struct, 0, "shim.resp.body.data")
-            .unwrap()
-            .into_pointer_value();
-        let body_len = self
-            .builder
-            .build_extract_value(body_struct, 1, "shim.resp.body.len")
-            .unwrap()
-            .into_int_value();
+        let (body_data, body_len) = self.sso_string_parts_from_value(body_struct, "shim.resp.body");
         // Sign-extend / pass-through to i64 for the runtime call (Kāra's
         // String len is already i64, so this is a no-op for the typical
         // path — the explicit extension keeps us robust if a future
@@ -270,16 +261,8 @@ impl<'ctx> super::Codegen<'ctx> {
                 .build_extract_value(resp_struct, 2, "shim.resp.headers")
                 .unwrap()
                 .into_struct_value();
-            let headers_data = self
-                .builder
-                .build_extract_value(headers_vec, 0, "shim.resp.headers.data")
-                .unwrap()
-                .into_pointer_value();
-            let headers_len = self
-                .builder
-                .build_extract_value(headers_vec, 1, "shim.resp.headers.len")
-                .unwrap()
-                .into_int_value();
+            let (headers_data, headers_len) =
+                self.sso_string_parts_from_value(headers_vec, "shim.resp.headers");
 
             let cond_bb = self.context.append_basic_block(shim, "shim.hdrs.cond");
             let body_bb = self.context.append_basic_block(shim, "shim.hdrs.body");
@@ -335,26 +318,8 @@ impl<'ctx> super::Codegen<'ctx> {
                 .build_extract_value(elem_val, 1, "shim.hdrs.val")
                 .unwrap()
                 .into_struct_value();
-            let key_data = self
-                .builder
-                .build_extract_value(key_str, 0, "shim.hdrs.key.data")
-                .unwrap()
-                .into_pointer_value();
-            let key_len = self
-                .builder
-                .build_extract_value(key_str, 1, "shim.hdrs.key.len")
-                .unwrap()
-                .into_int_value();
-            let val_data = self
-                .builder
-                .build_extract_value(val_str, 0, "shim.hdrs.val.data")
-                .unwrap()
-                .into_pointer_value();
-            let val_len = self
-                .builder
-                .build_extract_value(val_str, 1, "shim.hdrs.val.len")
-                .unwrap()
-                .into_int_value();
+            let (key_data, key_len) = self.sso_string_parts_from_value(key_str, "shim.hdrs.key");
+            let (val_data, val_len) = self.sso_string_parts_from_value(val_str, "shim.hdrs.val");
             let set_header_fn = self
                 .module
                 .get_function("karac_runtime_http_response_set_header")
@@ -584,16 +549,7 @@ impl<'ctx> super::Codegen<'ctx> {
         // call site rather than inside one of the merge branches.
         let name_val = self.compile_expr(name_arg)?;
         let name_struct = name_val.into_struct_value();
-        let name_data = self
-            .builder
-            .build_extract_value(name_struct, 0, "req.hdr.name.data")
-            .unwrap()
-            .into_pointer_value();
-        let name_len = self
-            .builder
-            .build_extract_value(name_struct, 1, "req.hdr.name.len")
-            .unwrap()
-            .into_int_value();
+        let (name_data, name_len) = self.sso_string_parts_from_value(name_struct, "req.hdr.name");
 
         // Load the request pointer from the local's alloca.
         let req_ptr = self
@@ -1580,36 +1536,19 @@ impl<'ctx> super::Codegen<'ctx> {
         // copy needed at this layer.
         let url_val = self.compile_expr(&args[0].value)?;
         let url_sv = url_val.into_struct_value();
-        let url_data = self
-            .builder
-            .build_extract_value(url_sv, 0, "client.url.data")
-            .unwrap()
-            .into_pointer_value();
-        let url_len = self
-            .builder
-            .build_extract_value(url_sv, 1, "client.url.len")
-            .unwrap()
-            .into_int_value();
+        let (url_data, url_len) = self.sso_string_parts_from_value(url_sv, "client.url");
 
         // Arg 1 (post only): body String.
-        let body_args: Option<(PointerValue<'ctx>, inkwell::values::IntValue<'ctx>)> =
-            if method == "post" {
-                let body_val = self.compile_expr(&args[1].value)?;
-                let body_sv = body_val.into_struct_value();
-                let body_data = self
-                    .builder
-                    .build_extract_value(body_sv, 0, "client.body.data")
-                    .unwrap()
-                    .into_pointer_value();
-                let body_len = self
-                    .builder
-                    .build_extract_value(body_sv, 1, "client.body.len")
-                    .unwrap()
-                    .into_int_value();
-                Some((body_data, body_len))
-            } else {
-                None
-            };
+        let body_args: Option<(PointerValue<'ctx>, inkwell::values::IntValue<'ctx>)> = if method
+            == "post"
+        {
+            let body_val = self.compile_expr(&args[1].value)?;
+            let body_sv = body_val.into_struct_value();
+            let (body_data, body_len) = self.sso_string_parts_from_value(body_sv, "client.body");
+            Some((body_data, body_len))
+        } else {
+            None
+        };
 
         // Allocate the five out-param slots. `i64` for status / body_len
         // / err_len; pointer-typed for the two `*mut *mut u8` slots.
@@ -1931,16 +1870,7 @@ impl<'ctx> super::Codegen<'ctx> {
         // Compile the name arg first — outside the option-merge BBs.
         let name_val = self.compile_expr(name_arg)?;
         let name_struct = name_val.into_struct_value();
-        let name_data = self
-            .builder
-            .build_extract_value(name_struct, 0, "resp.hdr.name.data")
-            .unwrap()
-            .into_pointer_value();
-        let name_len = self
-            .builder
-            .build_extract_value(name_struct, 1, "resp.hdr.name.len")
-            .unwrap()
-            .into_int_value();
+        let (name_data, name_len) = self.sso_string_parts_from_value(name_struct, "resp.hdr.name");
 
         // Load the headers handle from Response field 2.
         let handle_ptr = self
@@ -2061,28 +1991,10 @@ impl<'ctx> super::Codegen<'ctx> {
         }
         let method_val = self.compile_expr(&args[0].value)?;
         let method_sv = method_val.into_struct_value();
-        let method_data = self
-            .builder
-            .build_extract_value(method_sv, 0, "req.method.data")
-            .unwrap()
-            .into_pointer_value();
-        let method_len = self
-            .builder
-            .build_extract_value(method_sv, 1, "req.method.len")
-            .unwrap()
-            .into_int_value();
+        let (method_data, method_len) = self.sso_string_parts_from_value(method_sv, "req.method");
         let url_val = self.compile_expr(&args[1].value)?;
         let url_sv = url_val.into_struct_value();
-        let url_data = self
-            .builder
-            .build_extract_value(url_sv, 0, "req.url.data")
-            .unwrap()
-            .into_pointer_value();
-        let url_len = self
-            .builder
-            .build_extract_value(url_sv, 1, "req.url.len")
-            .unwrap()
-            .into_int_value();
+        let (url_data, url_len) = self.sso_string_parts_from_value(url_sv, "req.url");
 
         let new_fn = self
             .module
@@ -2171,28 +2083,10 @@ impl<'ctx> super::Codegen<'ctx> {
                 }
                 let key_val = self.compile_expr(&args[0].value)?;
                 let key_sv = key_val.into_struct_value();
-                let key_data = self
-                    .builder
-                    .build_extract_value(key_sv, 0, "rb.header.key.data")
-                    .unwrap()
-                    .into_pointer_value();
-                let key_len = self
-                    .builder
-                    .build_extract_value(key_sv, 1, "rb.header.key.len")
-                    .unwrap()
-                    .into_int_value();
+                let (key_data, key_len) = self.sso_string_parts_from_value(key_sv, "rb.header.key");
                 let val_val = self.compile_expr(&args[1].value)?;
                 let val_sv = val_val.into_struct_value();
-                let val_data = self
-                    .builder
-                    .build_extract_value(val_sv, 0, "rb.header.val.data")
-                    .unwrap()
-                    .into_pointer_value();
-                let val_len = self
-                    .builder
-                    .build_extract_value(val_sv, 1, "rb.header.val.len")
-                    .unwrap()
-                    .into_int_value();
+                let (val_data, val_len) = self.sso_string_parts_from_value(val_sv, "rb.header.val");
                 let extern_fn = self
                     .module
                     .get_function("karac_runtime_http_builder_add_header")
@@ -2220,16 +2114,7 @@ impl<'ctx> super::Codegen<'ctx> {
                 }
                 let body_val = self.compile_expr(&args[0].value)?;
                 let body_sv = body_val.into_struct_value();
-                let body_data = self
-                    .builder
-                    .build_extract_value(body_sv, 0, "rb.body.data")
-                    .unwrap()
-                    .into_pointer_value();
-                let body_len = self
-                    .builder
-                    .build_extract_value(body_sv, 1, "rb.body.len")
-                    .unwrap()
-                    .into_int_value();
+                let (body_data, body_len) = self.sso_string_parts_from_value(body_sv, "rb.body");
                 let extern_fn = self
                     .module
                     .get_function("karac_runtime_http_builder_set_body")
