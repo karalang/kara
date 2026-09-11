@@ -167,7 +167,35 @@ perf payoff lands in Slice 2.
      `tss`/`efs`/`tefs` builders' post-grow memcpy) — to `string_data_ptr` (step 2's
      accessor), so an inline source is copied from the struct-self pointer. This is
      the coupled, only-testable-with-construction half.
-  2. **Tag-aware `string_data_ptr` / `string_len`** in codegen (mirror `runtime/src/sso.rs`):
+  2. **Tag-aware `string_data_ptr` / `string_len`** in codegen (mirror `runtime/src/sso.rs`)
+     — **SSA FORM + THE DISPATCH TREE DONE (2026-09-11); the slot form and the rest of the
+     sweep remain.** The whole SSO surface is now behind **`KARAC_SSO` (default OFF)**, which
+     is what makes the remaining sweep landable incrementally: with the gate off each
+     accessor emits *literally the same inkwell calls with the same value names* it replaced,
+     so an intermediate commit is **byte-identical IR** rather than merely "the branch is
+     never taken at runtime". That distinction is load-bearing — routing the string-`match`
+     dispatch tree through a live `load`+`icmp`+`select` would put a cost on the hottest
+     String read in the corpus (the `5adf2e90` lever) for every commit between here and the
+     flip, with no malloc saving yet to pay for it. `KARAC_SSO=1` turns the whole thing on,
+     which is how the sweep is tested ahead of the default flip.
+     Shipped: `sso_string_parts_from_value` (the SSA form — spills to an **entry-block**
+     alloca so the inline self-pointer has an address; entry placement is load-bearing twice
+     over, the address is stable for the whole function and a call site inside a loop
+     allocates once rather than per iteration), `sso_select_len` (decodes the inline length
+     from `cap`'s high byte with a **logical** shift — a sign-extending one smears the flag
+     bit into the length) and `sso_load_cap`. Step 4's dispatch tree
+     (`emit_string_dispatch`) is routed through it.
+     **The sharp edge the rest of the sweep must respect:** the returned pointer is valid
+     only for an *immediate* read (a memcpy source, a comparison, a runtime call that
+     copies). An inline descriptor is self-referential, so storing that pointer into
+     anything outliving the frame dangles as soon as the value is copied elsewhere.
+     Verified: a string-`match` program built at `KARAC_SSO=0` and `=1` produces **identical
+     output** but **different binaries** — the gate is real (the on-path is not dead code)
+     and behaviour is unchanged (no inline strings exist yet, so the tag select always
+     yields the heap value). Full `--features llvm` suite green **both ways**: 16,739 tests
+     across 109 binaries, `codegen` 3772/0 and `memory_sanitizer` 1589/0, with `gpu_e2e` the
+     only red binary (the sanctioned missing-optional-archive state).
+     Original note, still describing the remainder:
      a *slot* form (GEP field-0 address for inline, load field-0 for heap) is clean; a
      *value* (SSA) form must **spill to an alloca** to take the inline self-pointer — this
      is the main new complexity. Sweep the field-0 (data-ptr, ~224 sites) and field-1
@@ -191,9 +219,11 @@ perf payoff lands in Slice 2.
      runtime half testable *before* construction exists — verified to FAIL with the new
      branch disabled, so they discriminate. The codegen half has no such handle and is
      only exercisable once construction lands.
-  4. Route the **string-match dispatch tree** (`emit_string_dispatch` / `emit_len_bucket`
-     / `emit_byte_group`) through `string_data_ptr` + `string_len` (it currently reads
-     `extract_value(sv, 0/1)` raw).
+  4. ~~Route the **string-match dispatch tree** through `string_data_ptr` + `string_len`~~
+     — **DONE (2026-09-11)** as part of step 2: `emit_string_dispatch`'s two raw
+     `extract_value(sv, 0/1)` reads are now the single `sso_string_parts_from_value` call.
+     `emit_len_bucket` / `emit_byte_group` take the decoded ptr+len as arguments from it, so
+     they needed no change of their own.
   Gate: **re-profile the self-host lexer** (instruction count + `malloc` leaf share must
   drop), full ASAN + **Linux/LSan** (SSO touches every free path — authoritative leak
   gate).

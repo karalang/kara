@@ -1770,16 +1770,15 @@ impl<'ctx> super::Codegen<'ctx> {
             }
         };
 
-        let scrut_ptr = self
-            .builder
-            .build_extract_value(sv, 0, "sd.ptr")
-            .unwrap()
-            .into_pointer_value();
-        let scrut_len = self
-            .builder
-            .build_extract_value(sv, 1, "sd.len")
-            .unwrap()
-            .into_int_value();
+        // SSO: the scrutinee may be an inline String, whose bytes live in
+        // the descriptor itself rather than behind field 0 — so both the
+        // pointer and the length come from the tag-aware accessor. This is
+        // the "must-not-miss" site the campaign flagged: the dispatch tree
+        // compares raw bytes, so reading field 0/1 raw on an inline string
+        // would compare the wrong memory and silently pick the wrong arm.
+        // With SSO off the accessor is exactly the two `extract_value`s it
+        // replaced, so the dispatch IR does not move.
+        let (scrut_ptr, scrut_len) = self.sso_string_parts_from_value(fn_val, sv, "sd");
 
         // Group keyword arms by byte length (BTreeMap → deterministic IR).
         let mut by_len: std::collections::BTreeMap<usize, Vec<(&str, usize)>> =
