@@ -94,7 +94,7 @@ distinguish "bugs flattening" from "we stopped writing them down."
 |---|---|
 | miscompile | 403 |
 | run-vs-build | 388 |
-| leak | 321 |
+| leak | 322 |
 | double-free | 224 |
 | missing-feature | 195 |
 | codegen-gap | 174 |
@@ -110,7 +110,7 @@ distinguish "bugs flattening" from "we stopped writing them down."
 
 | surface | total |
 |---|---|
-| codegen | 1669 |
+| codegen | 1670 |
 | interp | 418 |
 | typecheck | 296 |
 | other | 86 |
@@ -177,7 +177,7 @@ _Generated from `bug-ledger.jsonl` by `scripts/bug-curve.py` (2026-05-20 → 202
 | B-2026-09-10-37 | 2026-09-10 | codegen | low | `.clone()` ON AN `Array[T, N]` HAS NO CODEGEN DISPATCHER ARM AT ANY DEPTH -- `a.clone()` bails `no handler for method 'clone' on variable 'a'` (codegen's own "this is a codegen bug" message), a residual of B-2026-07-29-31 which widened `.clone()` to `Option`/`Result` and every user type but never to `Array` | — |
 | B-2026-09-10-38 | 2026-09-10 | typecheck | low | AN ARRAY LITERAL IN A TUPLE-LITERAL ELEMENT DOES NOT TAKE THE TUPLE ANNOTATION'S ELEMENT TYPE AND INFERS `Vec` -- `let t: (Array[String, 2], i64) = ([f"a", f"b"], 7)` is rejected as `found '(Vec[String], i64)'` while the direct `let a: Array[String, 2] = [..]` and the `(Vec[String], i64)` spelling are both accepted; the tuple-ELEMENT position of the question B-2026-08-13-22 fixed at the `let` | — |
 | B-2026-09-11-2 | 2026-09-11 | other | low | A WILDCARD MATCH PAYLOAD (`Some(_)` / `Full(_)`) SCHEDULES NO DROP IN THE OWNERSHIP ORACLE, so the differential compares nothing for it -- `_` discards the BINDING, not the obligation, and a per-place schedule has no place to key it to (the bound spellings now schedule correctly) | — |
-| B-2026-09-11-3 | 2026-09-11 | codegen | medium | A USER-DECLARED GENERIC ENUM PASSED BY `ref` INTO A CALLEE THAT MATCHES IT LEAKS ITS PAYLOAD AT THE CALLER'S SCOPE EXIT -- `Slot[String]` loses 70 B a round while the SAME enum monomorphised, `Option[String]`, a generic STRUCT and a plain String are all clean in the identical program, and `ref` without a match in the callee is clean too | — |
+| B-2026-09-11-4 | 2026-09-11 | codegen | medium | A TUPLE, AN `Array`, AN `Option[String]` AND A GENERIC-STRUCT PAYLOAD STILL LEAK INSIDE A USER GENERIC ENUM'S HEAP BOX -- the four shapes `enum_boxed_payload_interior_drop` still answers `None` for, at 24 B a round each, while the bare-user-struct and `String`/`Vec` payloads beside them are clean | — |
 
 ### Relocated
 
@@ -2483,6 +2483,7 @@ _Generated from `bug-ledger.jsonl` by `scripts/bug-curve.py` (2026-05-20 → 202
 | B-2026-09-10-31 | other | medium | A `match` OVER AN OWNED HEAP LOCAL REMOVES IT FROM THE OWNERSHIP ORACLE'S COMPARED DROP SCHEDULE, so the differential reports checked=0 and is struct… | e0496eb |
 | B-2026-09-10-33 | other | low | THE DROP-FUZZER'S SHRINKER SAVES A PROGRAM THAT NO LONGER COMPILES AS A REPRO -- it deleted a `let` declaration and kept the reassignment, and "a con… | 55e6bbf |
 | B-2026-09-11-1 | other | low | THE MATCH-PAYLOAD PROJECTION STOPS AT `Option`/`Result` AND AT BOUND PAYLOADS -- a `Some(_)` wildcard and every USER ENUM arm still schedule zero dro… | fddcfcf |
+| B-2026-09-11-3 | codegen | medium | A USER-DECLARED GENERIC ENUM LEAKS ITS HEAP-BOXED PAYLOAD AT EVERY SCOPE EXIT -- `Slot[String]` loses its whole buffer while the SAME enum monomorphi… | cec3c32 |
 
 </details>
 
