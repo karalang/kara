@@ -202,15 +202,32 @@ pub fn differential_check_on(src: &str, tree: OracleTree) -> DiffOutcome {
         // param path already had, so the class is gated by name like every
         // other and the rule is gone. Unlike rules 1-3 it never recorded two
         // correct models legitimately disagreeing — it was a known gap.
-        let scheduled: BTreeSet<&str> = f
+        //
+        // Rule 5 — MATCH-PAYLOAD PLACE EQUIVALENCE (B-2026-09-10-31). A `match`
+        // arm's payload binding owns the payload (§3.4's obligation split), so
+        // the oracle schedules it under the BINDING's name; codegen discharges
+        // it through the SCRUTINEE's slot. Measured on
+        // `match ov { Some(x) => .. }`: codegen records `main::ov` and no
+        // `main::x`, and the program is correct at runtime (the `Drop` body
+        // runs exactly once, valgrind-clean). Two right answers, two names — so
+        // the obligation is covered if EITHER is emitted, which the oracle
+        // states per-event as `DropEvent::via`.
+        //
+        // This is deliberately an equivalence and not an exclusion: excluding
+        // match payloads is what made the schedule empty for every matched
+        // value in the first place, which is the blindness the row measured. If
+        // codegen emits NEITHER name, that is still a divergence and still
+        // reported.
+        let scheduled: BTreeSet<(&str, Option<&str>)> = f
             .drops
             .iter()
-            .map(|d| d.place.as_str())
-            .filter(|p| !fn_params.contains(*p))
+            .map(|d| (d.place.as_str(), d.via.as_deref()))
+            .filter(|(p, _)| !fn_params.contains(*p))
             .collect();
-        for place in scheduled {
+        for (place, via) in scheduled {
             drops_checked += 1;
-            let emitted = cg_places.is_some_and(|s| s.contains(place));
+            let emitted =
+                cg_places.is_some_and(|s| s.contains(place) || via.is_some_and(|v| s.contains(v)));
             if !emitted {
                 divergences.push(Divergence {
                     function: f.function.clone(),

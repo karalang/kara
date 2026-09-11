@@ -161,20 +161,63 @@ fn owned_fixed_array_of_string_is_gated_by_name_like_every_other_place() {
 }
 
 #[test]
-fn option_string_match_is_clean() {
-    // Documented oracle boundary: a `match o { Some(x) => … }` on an owned
-    // `Option[String]` schedules **zero** local drops — the scrutinee `o` is
-    // moved into the match and the payload binding `x` is modelled non-heap
-    // (the oracle does not infer a match-arm payload's heap-ness; see
-    // `ownership_oracle::bind_match_pattern_inner`). Codegen frees the payload
-    // via `o`'s inline-Option slot, which the missing-drop direction correctly
-    // does not flag. The assertion is that this is *clean* (no missing drop),
-    // not that it schedules anything.
+fn option_string_match_schedules_the_payload_and_is_clean() {
+    // B-2026-09-10-31. This case used to assert the schedule was EMPTY, and
+    // that was the bug: the payload binding `x` was modelled non-heap, so the
+    // scrutinee moved into the match and nothing was left to compare. Every
+    // matched `Option`/`Result`/enum — the shape most of the open drop rows
+    // are written in — compared zero drops and reported 0 divergences, which
+    // read as agreement and was really an empty comparison.
+    //
+    // The oracle now projects the scrutinee's payload type onto the arm
+    // binding, so `x` is Owned heap and IS scheduled. Codegen still discharges
+    // it through `o`'s inline-Option slot rather than a slot named `x`
+    // (measured: it records `main::o` and no `main::x`), and both are correct —
+    // the program runs the payload's `Drop` body exactly once and is
+    // valgrind-clean. Rule 5's place equivalence (`DropEvent::via`) is what
+    // keeps that from reading as a missing drop.
+    //
+    // So the assertion is now two-sided: exactly one payload drop is COMPARED,
+    // and it is covered.
     let src = format!(
         "fn main() {{ let o: Option[String] = Some({S}); \
          match o {{ Some(x) => {{ println(x.len()); }}, None => {{}} }} }}"
     );
-    assert_eq!(assert_clean(&src), 0);
+    assert_eq!(assert_clean(&src), 1);
+}
+
+#[test]
+fn match_payload_with_a_non_heap_type_schedules_nothing() {
+    // The complement, so the projection cannot be "mark every arm binding
+    // heap": an `Option[i64]` payload owns nothing and must stay unscheduled.
+    let src = "fn main() { let o: Option[i64] = Some(3i64);                match o { Some(x) => { println(x); }, None => {} } }";
+    assert_eq!(assert_clean(src), 0);
+}
+
+#[test]
+fn match_on_a_unit_variant_arm_binds_nothing() {
+    // `None =>` parses as `PatternKind::Binding("None")`, indistinguishable
+    // from a value binding by shape. Once payload types are projected, taking
+    // it for a binding hands it the scrutinee's payload type and schedules a
+    // phantom drop for a name that owns nothing — measured as a spurious
+    // `place: "None"` divergence before `TypeDb::is_unit_variant` was added.
+    // One drop is compared here (the `Some` arm's `x`), never two.
+    let src = format!(
+        "fn main() {{ let o: Option[String] = Some({S}); \
+         match o {{ Some(x) => {{ println(x.len()); }}, None => {{}} }} }}"
+    );
+    assert_eq!(assert_clean(&src), 1);
+}
+
+#[test]
+fn match_payload_tuple_splits_element_wise() {
+    // A tuple payload distributes: the `String` element carries an obligation,
+    // the `i64` element does not. Exactly one drop compared, not two, not zero.
+    let src = format!(
+        "fn main() {{ let o: Option[(i64, String)] = Some((1i64, {S})); \
+         match o {{ Some((a, b)) => {{ println(a + b.len()); }}, None => {{}} }} }}"
+    );
+    assert_eq!(assert_clean(&src), 1);
 }
 
 #[test]

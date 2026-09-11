@@ -78,6 +78,14 @@ pub struct DropEvent {
     pub scope_id: usize,
     pub reason: DropReason,
     pub span: Span,
+    /// An ALTERNATE place whose cleanup legitimately discharges this
+    /// obligation (B-2026-09-10-31). A `match` arm's payload binding owns the
+    /// payload per §3.4, but codegen frees it through the SCRUTINEE's slot —
+    /// measured: `match ov { Some(x) => .. }` records `main::ov` and no
+    /// `main::x`. Both are right; only the name differs, so a consumer
+    /// comparing by place must accept either. `None` when the obligation has
+    /// exactly one legitimate discharge site.
+    pub via: Option<String>,
 }
 
 /// A violation of the single invariant (§2) — a source-level ownership fault
@@ -179,6 +187,14 @@ struct TypeDb {
     /// the free-call arm's caller-retains default and the argument was read
     /// rather than moved — see the `Call` arm for what that cost.
     variant_ctors: HashSet<String>,
+    /// Names that are UNIT enum variants — `None` plus every user
+    /// `VariantKind::Unit`. A bare `None =>` arm parses as
+    /// `PatternKind::Binding("None")`, indistinguishable from a value binding
+    /// by shape alone, so without this set the payload projection
+    /// (B-2026-09-10-31) hands it the scrutinee's payload type and schedules a
+    /// phantom drop for a name that binds nothing. Kept separate from
+    /// `variant_ctors`, which is deliberately payload-carrying only.
+    unit_variants: HashSet<String>,
 }
 
 impl TypeDb {
@@ -191,6 +207,8 @@ impl TypeDb {
             .iter()
             .map(|s| (*s).to_string())
             .collect();
+        let mut unit_variants: HashSet<String> =
+            ["None"].iter().map(|s| (*s).to_string()).collect();
         for item in &program.items {
             match item {
                 Item::StructDef(s) => {
@@ -215,6 +233,9 @@ impl TypeDb {
                         if !matches!(v.kind, VariantKind::Unit) {
                             variant_ctors.insert(v.name.clone());
                             variant_ctors.insert(format!("{}.{}", e.name, v.name));
+                        } else {
+                            unit_variants.insert(v.name.clone());
+                            unit_variants.insert(format!("{}.{}", e.name, v.name));
                         }
                     }
                     enums.insert(e.name.clone(), tys);
@@ -226,7 +247,13 @@ impl TypeDb {
             structs,
             enums,
             variant_ctors,
+            unit_variants,
         }
+    }
+
+    /// Is this bare pattern name a UNIT variant rather than a value binding?
+    fn is_unit_variant(&self, name: &str) -> bool {
+        self.unit_variants.contains(name)
     }
 
     /// Does this callee name a payload-carrying enum-variant constructor?
@@ -552,6 +579,15 @@ struct Binding {
     span: Span,
     /// Whether this binding is heap-owning (only heap bindings drop).
     heap: bool,
+    /// Scrutinee place this binding's payload was moved out of, if any — the
+    /// alternate discharge site recorded on the resulting `DropEvent`.
+    via: Option<String>,
+    /// The binding's declared/inferred type, when known. Carried so a `match`
+    /// can project the scrutinee's PAYLOAD type onto its arm bindings
+    /// (B-2026-09-10-31) — `ty_render` is a display string and cannot be
+    /// re-projected. `None` wherever the type was never resolved, which keeps
+    /// the payload binding at today's conservative non-heap default.
+    ty: Option<TypeExpr>,
 }
 
 /// How the *parent* expression consumes a sub-expression's value.
@@ -634,12 +670,14 @@ impl Analyzer<'_> {
             let (heap, state) = (self.bindings[idx].heap, self.bindings[idx].state);
             if heap && state == PlaceState::Owned {
                 let b = &self.bindings[idx];
+                let via = b.via.clone();
                 self.drops.push(DropEvent {
                     place: b.name.clone(),
                     ty: b.ty_render.clone(),
                     scope_id: b.scope_id,
                     reason: DropReason::ScopeExit,
                     span: b.span,
+                    via,
                 });
                 self.bindings[idx].state = PlaceState::Dead;
             }
@@ -689,6 +727,23 @@ impl Analyzer<'_> {
         }
     }
 
+    /// [`Self::introduce`], also recording the binding's resolved type so a
+    /// later `match` on it can project payload types onto arm bindings.
+    fn introduce_typed(
+        &mut self,
+        name: String,
+        ty_render: String,
+        heap: bool,
+        state: PlaceState,
+        span: &Span,
+        ty: Option<TypeExpr>,
+    ) {
+        self.introduce(name, ty_render, heap, state, span);
+        if let Some(b) = self.bindings.last_mut() {
+            b.ty = ty;
+        }
+    }
+
     fn introduce(
         &mut self,
         name: String,
@@ -706,6 +761,8 @@ impl Analyzer<'_> {
             scope_id,
             span: *span,
             heap,
+            ty: None,
+            via: None,
         });
         if let Some((_, top)) = self.scopes.last_mut() {
             top.push(idx);
@@ -815,7 +872,11 @@ impl Analyzer<'_> {
                 } else {
                     PlaceState::Dead
                 };
-                self.introduce(name.clone(), render, heap, state, &pattern.span);
+                let resolved = match ty {
+                    Some(t) => Some(t.clone()),
+                    None => self.infer_expr_type(value),
+                };
+                self.introduce_typed(name.clone(), render, heap, state, &pattern.span, resolved);
             }
             // Destructure — `let Payload { tag, name, items } = pl` / `let (a, b)
             // = t`: the aggregate is fully moved out (§3.4 split at the top
@@ -1093,7 +1154,7 @@ impl Analyzer<'_> {
                 let n = self.bindings.len();
                 let pre = self.outer_states(n);
                 self.push_scope();
-                self.bind_match_pattern(pattern, /*scrutinee_owned=*/ false);
+                self.bind_match_pattern(pattern, /*scrutinee_owned=*/ false, None, None);
                 self.analyze_block(then_block, false);
                 self.pop_scope();
                 let then_states = self.outer_states(n);
@@ -1112,7 +1173,7 @@ impl Analyzer<'_> {
             } => {
                 self.analyze_expr(value, Role::Read);
                 self.push_scope();
-                self.bind_match_pattern(pattern, false);
+                self.bind_match_pattern(pattern, false, None, None);
                 self.analyze_block(body, false);
                 self.pop_scope();
             }
@@ -1239,7 +1300,17 @@ impl Analyzer<'_> {
         for arm in arms {
             self.set_outer_states(&pre);
             self.push_scope();
-            self.bind_match_pattern(&arm.pattern, scrutinee_owned);
+            let sty = self.scrutinee_ty(scrutinee);
+            let sname = match &scrutinee.kind {
+                ExprKind::Identifier(n) => Some(n.clone()),
+                _ => None,
+            };
+            self.bind_match_pattern(
+                &arm.pattern,
+                scrutinee_owned,
+                sty.as_ref(),
+                sname.as_deref(),
+            );
             if let Some(g) = &arm.guard {
                 self.analyze_expr(g, Role::Read);
             }
@@ -1271,41 +1342,132 @@ impl Analyzer<'_> {
     /// an owned scrutinee is Owned (moved out, §3.4); under a borrow scrutinee
     /// it is Borrowed (the owner keeps it — the B-2026-07-01-12 double-free
     /// class is exactly moving such a Borrowed binding out).
-    fn bind_match_pattern(&mut self, pattern: &Pattern, scrutinee_owned: bool) {
+    fn bind_match_pattern(
+        &mut self,
+        pattern: &Pattern,
+        scrutinee_owned: bool,
+        scrutinee_ty: Option<&TypeExpr>,
+        scrutinee_place: Option<&str>,
+    ) {
         let payload_state = if scrutinee_owned {
             PlaceState::Owned
         } else {
             PlaceState::Borrowed
         };
-        self.bind_match_pattern_inner(pattern, payload_state);
+        self.bind_match_pattern_inner(
+            pattern,
+            payload_state,
+            scrutinee_ty.cloned(),
+            scrutinee_place,
+        );
     }
 
-    fn bind_match_pattern_inner(&mut self, pattern: &Pattern, payload_state: PlaceState) {
-        match &pattern.kind {
-            PatternKind::Binding(n) => {
-                // A payload binding — heap-ness unknown without variant-type
-                // inference; default non-heap so it contributes no phantom drop,
-                // but keep the state so a use-after-move on a borrowed payload
-                // that is then moved out is still detectable at the move site.
-                self.introduce(n.clone(), "?".into(), false, payload_state, &pattern.span);
+    /// Payload types of `variant` when the scrutinee's type is known, positionally.
+    ///
+    /// v1 resolves the two prelude generics only — `Option[T]`'s `Some`, and
+    /// `Result[O, E]`'s `Ok` / `Err` — because those are where the open
+    /// drop-bug rows live and their payload type is right there in the type
+    /// arguments. A user enum returns `None`, which leaves its arm bindings at
+    /// the pre-existing non-heap default rather than guessing: `TypeDb::enums`
+    /// flattens payload types across ALL variants, so it cannot say which type
+    /// belongs to which variant at which position, and a wrong answer here
+    /// schedules a phantom drop. Extending this needs per-variant payload types
+    /// in the type db (its own change).
+    fn variant_payload_tys(
+        &self,
+        scrutinee_ty: Option<&TypeExpr>,
+        variant: &[String],
+    ) -> Option<Vec<TypeExpr>> {
+        let ty = scrutinee_ty?;
+        let name = variant.last()?.as_str();
+        let TypeKind::Path(p) = &ty.kind else {
+            return None;
+        };
+        let head = p.segments.last()?.as_str();
+        let args = generic_type_args(p);
+        match (head, name) {
+            ("Option", "Some") => args.first().cloned().map(|t| vec![t]),
+            ("Result", "Ok") => args.first().cloned().map(|t| vec![t]),
+            ("Result", "Err") => args.get(1).cloned().map(|t| vec![t]),
+            _ => None,
+        }
+    }
+
+    /// The declared type of an identifier scrutinee, when the binding carries
+    /// one. Anything else (a projection, a call result) stays `None` and the
+    /// payload keeps the conservative non-heap default.
+    fn scrutinee_ty(&self, scrutinee: &Expr) -> Option<TypeExpr> {
+        if let ExprKind::Identifier(n) = &scrutinee.kind {
+            if let Some(&idx) = self.by_name.get(n) {
+                return self.bindings[idx].ty.clone();
             }
-            PatternKind::TupleVariant { patterns, .. } => {
-                for p in patterns {
-                    self.bind_match_pattern_inner(p, payload_state);
+        }
+        None
+    }
+
+    fn bind_match_pattern_inner(
+        &mut self,
+        pattern: &Pattern,
+        payload_state: PlaceState,
+        payload_ty: Option<TypeExpr>,
+        scrutinee_place: Option<&str>,
+    ) {
+        match &pattern.kind {
+            PatternKind::Binding(n) if self.type_db.is_unit_variant(n) => {
+                // `None =>` / a user unit variant: a variant TEST that binds
+                // nothing. Introducing it would give the arm a binding named
+                // after the variant and — once payload types are projected — a
+                // phantom drop obligation for a value that does not exist.
+            }
+            PatternKind::Binding(n) => {
+                // A payload binding. Heap-ness comes from the projected payload
+                // type when the scrutinee's type was resolvable
+                // (B-2026-09-10-31); without one it stays non-heap, which is the
+                // pre-existing conservative default and contributes no phantom
+                // drop. The state is kept either way so a use-after-move on a
+                // borrowed payload that is then moved out stays detectable.
+                let heap = payload_ty
+                    .as_ref()
+                    .map(|t| self.type_db.is_heap(t))
+                    .unwrap_or(false);
+                let render = payload_ty
+                    .as_ref()
+                    .map(render_type)
+                    .unwrap_or_else(|| "?".into());
+                self.introduce_typed(
+                    n.clone(),
+                    render,
+                    heap,
+                    payload_state,
+                    &pattern.span,
+                    payload_ty,
+                );
+                if let Some(b) = self.bindings.last_mut() {
+                    b.via = scrutinee_place.map(|s| s.to_string());
+                }
+            }
+            PatternKind::TupleVariant { path, patterns } => {
+                let tys = self.variant_payload_tys(payload_ty.as_ref(), path);
+                for (i, p) in patterns.iter().enumerate() {
+                    let t = tys.as_ref().and_then(|v| v.get(i).cloned());
+                    self.bind_match_pattern_inner(p, payload_state, t, scrutinee_place);
                 }
             }
             PatternKind::Struct { fields, .. } => {
                 for fp in fields {
                     if let Some(sub) = &fp.pattern {
-                        self.bind_match_pattern_inner(sub, payload_state);
+                        self.bind_match_pattern_inner(sub, payload_state, None, scrutinee_place);
                     } else {
                         self.introduce(fp.name.clone(), "?".into(), false, payload_state, &fp.span);
                     }
                 }
             }
             PatternKind::Tuple(ps) => {
-                for p in ps {
-                    self.bind_match_pattern_inner(p, payload_state);
+                // A tuple payload splits element-wise, so an element that is
+                // itself heap keeps its own obligation.
+                for (i, p) in ps.iter().enumerate() {
+                    let t = payload_ty.as_ref().and_then(|t| tuple_elem_ty(t, i));
+                    self.bind_match_pattern_inner(p, payload_state, t, scrutinee_place);
                 }
             }
             PatternKind::AtBinding { name, pattern, .. } => {
@@ -1316,11 +1478,16 @@ impl Analyzer<'_> {
                     payload_state,
                     &pattern.span,
                 );
-                self.bind_match_pattern_inner(pattern, payload_state);
+                self.bind_match_pattern_inner(pattern, payload_state, payload_ty, scrutinee_place);
             }
             PatternKind::Or(ps) => {
                 if let Some(first) = ps.first() {
-                    self.bind_match_pattern_inner(first, payload_state);
+                    self.bind_match_pattern_inner(
+                        first,
+                        payload_state,
+                        payload_ty,
+                        scrutinee_place,
+                    );
                 }
             }
             _ => {}

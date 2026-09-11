@@ -488,3 +488,143 @@ fn main() {
         "spawn-captured `v` is RC-promoted — must NOT be scope-scheduled; {drops:?}"
     );
 }
+
+// ───────────── match-arm payload projection (B-2026-09-10-31) ─────────────
+
+/// The scrutinee's payload type reaches the arm binding, so a heap payload is
+/// Owned and scheduled. Before this the binding was modelled non-heap and a
+/// matched value left the schedule entirely — every `match` compared nothing.
+#[test]
+fn match_arm_payload_binding_is_scheduled_when_heap() {
+    let res = oracle(
+        r#"
+fn main() {
+    let o: Option[String] = Some("aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa".to_string());
+    match o {
+        Some(x) => { println(x.len()); },
+        None => {},
+    }
+}
+"#,
+    );
+    assert!(res.is_clean(), "unexpected violations: {:?}", res.functions);
+    let d = drops_in(&res, "main");
+    assert!(
+        d.contains(&"x".to_string()),
+        "payload `x` should drop; got {d:?}"
+    );
+}
+
+/// The obligation names the scrutinee as its alternate discharge site, which is
+/// what lets a consumer keyed on place names accept codegen's `o`-keyed free.
+#[test]
+fn match_arm_payload_drop_records_the_scrutinee_as_via() {
+    let res = oracle(
+        r#"
+fn main() {
+    let o: Option[String] = Some("aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa".to_string());
+    match o {
+        Some(x) => { println(x.len()); },
+        None => {},
+    }
+}
+"#,
+    );
+    let f = res.function("main").expect("main");
+    let ev = f.drops.iter().find(|d| d.place == "x").expect("x drops");
+    assert_eq!(ev.via.as_deref(), Some("o"));
+}
+
+/// The projection is a TYPE question, not "every arm binding owns something":
+/// a scalar payload must stay unscheduled or the model invents a free.
+#[test]
+fn match_arm_payload_binding_is_not_scheduled_when_scalar() {
+    let res = oracle(
+        r#"
+fn main() {
+    let o: Option[i64] = Some(3i64);
+    match o {
+        Some(x) => { println(x); },
+        None => {},
+    }
+}
+"#,
+    );
+    let d = drops_in(&res, "main");
+    assert!(
+        !d.contains(&"x".to_string()),
+        "scalar payload must not drop; got {d:?}"
+    );
+}
+
+/// A bare `None =>` arm parses as a Binding, so without the unit-variant set it
+/// is handed the payload type and schedules a phantom drop named `None`.
+#[test]
+fn a_unit_variant_arm_schedules_no_drop() {
+    let res = oracle(
+        r#"
+fn main() {
+    let o: Option[String] = Some("aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa".to_string());
+    match o {
+        Some(x) => { println(x.len()); },
+        None => {},
+    }
+}
+"#,
+    );
+    let d = drops_in(&res, "main");
+    assert!(
+        !d.contains(&"None".to_string()),
+        "`None` binds nothing; got {d:?}"
+    );
+}
+
+/// A tuple payload splits element-wise — the `String` drops, the `i64` does not.
+#[test]
+fn match_arm_tuple_payload_splits_element_wise() {
+    let res = oracle(
+        r#"
+fn main() {
+    let o: Option[(i64, String)] = Some((1i64, "aaaaaaaaaaaaaaaaaaaaaaaa".to_string()));
+    match o {
+        Some((a, b)) => { println(a + b.len()); },
+        None => {},
+    }
+}
+"#,
+    );
+    let d = drops_in(&res, "main");
+    assert!(
+        d.contains(&"b".to_string()),
+        "heap element `b` should drop; got {d:?}"
+    );
+    assert!(
+        !d.contains(&"a".to_string()),
+        "scalar element `a` must not; got {d:?}"
+    );
+}
+
+/// `Result`'s two arms project different type arguments.
+#[test]
+fn result_arms_project_ok_and_err_types_separately() {
+    let res = oracle(
+        r#"
+fn main() {
+    let r: Result[String, i64] = Ok("aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa".to_string());
+    match r {
+        Ok(x) => { println(x.len()); },
+        Err(e) => { println(e); },
+    }
+}
+"#,
+    );
+    let d = drops_in(&res, "main");
+    assert!(
+        d.contains(&"x".to_string()),
+        "Ok payload should drop; got {d:?}"
+    );
+    assert!(
+        !d.contains(&"e".to_string()),
+        "Err i64 must not drop; got {d:?}"
+    );
+}
