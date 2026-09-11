@@ -179,6 +179,26 @@ mod llvm_main {
         ArrTracked,    // Array[Tracked, 2] — a Drop value as an Array element
         ArrArrTracked, // Array[Array[Tracked, 2], 2] — the nested-interior shape
         OptArrTracked, // Option[Array[Tracked, 2]] — a boxed Array payload
+        // ── user + generic enum shapes (B-2026-09-10-31, B-2026-09-11-1) ──
+        //
+        // Two oracle fixes landed against these and NEITHER was fuzzable: the
+        // generator's whole vocabulary of enums was `Option` / `Result` / the
+        // `shared enum Tree`, so a user enum's match arm and a generic's type
+        // ARGUMENT never appeared in a generated program. Both fixes were
+        // validated by unit tests and hand-fed differential cases while the
+        // corpus reported its usual 0 — silence, not confirmation, exactly as
+        // the `Array` block above was before it landed.
+        //
+        // `Parcel` carries all three arm shapes the projection has to tell
+        // apart in ONE type: a multi-payload variant that splits positionally
+        // (`Two`), a scalar payload that must schedule nothing (`Note`), and a
+        // true unit variant that binds nothing (`Nothing` — the shape that
+        // parses as `PatternKind::Binding` and produced a phantom `place:
+        // "None"` divergence before `TypeDb::unit_variants` existed).
+        UserEnum,       // enum Parcel { Two(Tracked, String), Note(i64), Nothing }
+        GenSlotStr,     // Slot[String] — a generic enum at a HEAP type argument
+        GenSlotTracked, // Slot[Tracked] — the same, drop-log observable
+        GenWrapTracked, // struct Wrap[T] { item: T } at Wrap[Tracked]
     }
 
     // A live binding in the generated `main` body.
@@ -685,6 +705,62 @@ mod llvm_main {
                 ));
             }
             self.add_var_mut(n, Ty::OptArrTracked);
+        }
+
+        fn make_user_enum(&mut self) {
+            let n = self.fresh("pc");
+            match self.rng.below(5) {
+                0 => {
+                    let i = self.i64_literal();
+                    self.emit(format!("        let mut {n}: Parcel = Note({i});"));
+                }
+                1 => self.emit(format!("        let mut {n}: Parcel = Nothing;")),
+                _ => {
+                    let tag = self.fresh_tag();
+                    let (l1, l2) = (self.str_literal(), self.str_literal());
+                    self.emit(format!(
+                        "        let mut {n}: Parcel = Two(new_tracked({tag}i64, {l1}), {l2});"
+                    ));
+                }
+            }
+            self.add_var_mut(n, Ty::UserEnum);
+        }
+
+        fn make_gen_slot_str(&mut self) {
+            let n = self.fresh("gs");
+            if self.rng.chance(4, 5) {
+                let lit = self.str_literal();
+                self.emit(format!(
+                    "        let mut {n}: Slot[String] = Filled({lit});"
+                ));
+            } else {
+                self.emit(format!("        let mut {n}: Slot[String] = Blank;"));
+            }
+            self.add_var_mut(n, Ty::GenSlotStr);
+        }
+
+        fn make_gen_slot_tracked(&mut self) {
+            let n = self.fresh("gt");
+            if self.rng.chance(4, 5) {
+                let tag = self.fresh_tag();
+                let lit = self.str_literal();
+                self.emit(format!(
+                    "        let mut {n}: Slot[Tracked] = Filled(new_tracked({tag}i64, {lit}));"
+                ));
+            } else {
+                self.emit(format!("        let mut {n}: Slot[Tracked] = Blank;"));
+            }
+            self.add_var_mut(n, Ty::GenSlotTracked);
+        }
+
+        fn make_gen_wrap_tracked(&mut self) {
+            let n = self.fresh("gw");
+            let tag = self.fresh_tag();
+            let lit = self.str_literal();
+            self.emit(format!(
+                "        let mut {n}: Wrap[Tracked] = Wrap {{ item: new_tracked({tag}i64, {lit}) }};"
+            ));
+            self.add_var_mut(n, Ty::GenWrapTracked);
         }
 
         // ── transforms: consume live bindings, exercise drop-prone shapes ──
@@ -1285,6 +1361,51 @@ mod llvm_main {
                             v.name
                         )
                     }
+                    // The user-enum sink matches all three arm shapes, so one
+                    // generated program exercises the positional split, the
+                    // scalar payload and the unit variant together.
+                    Ty::UserEnum => {
+                        let x = self.fresh("pcx");
+                        format!(
+                            "        match {} {{ Two({x}t, {x}s) => {{ acc = acc + tracked_len({x}t) + {x}s.len(); }}, Note({x}n) => {{ acc = acc + {x}n; }}, Nothing => {{}} }}",
+                            v.name
+                        )
+                    }
+                    // Half the generic-enum sinks BORROW instead of matching,
+                    // and that half is the one the instantiation fix is about:
+                    // a matched scrutinee is moved, so its drop belongs to the
+                    // arm bindings, whereas a peeked one is still live at scope
+                    // exit and is scheduled only if `Slot[String]` is read as
+                    // heap through its type ARGUMENT. Matching alone would have
+                    // left that path as unfuzzed as it was before.
+                    Ty::GenSlotStr => {
+                        if self.rng.chance(1, 2) {
+                            format!("        acc = acc + slot_str_peek({});", v.name)
+                        } else {
+                            let x = self.fresh("gsx");
+                            format!(
+                                "        match {} {{ Filled({x}) => {{ acc = acc + {x}.len(); }}, Blank => {{}} }}",
+                                v.name
+                            )
+                        }
+                    }
+                    Ty::GenSlotTracked => {
+                        if self.rng.chance(1, 2) {
+                            format!("        acc = acc + slot_tracked_peek({});", v.name)
+                        } else {
+                            let x = self.fresh("gtx");
+                            format!(
+                                "        match {} {{ Filled({x}) => {{ acc = acc + tracked_len({x}); }}, Blank => {{}} }}",
+                                v.name
+                            )
+                        }
+                    }
+                    // Borrowed, like `CrateT`: the generic struct itself dies at
+                    // scope exit and that is what must cascade into `item`.
+                    Ty::GenWrapTracked => format!(
+                        "        acc = acc + {}.item.tag + tracked_peek({}.item);",
+                        v.name, v.name
+                    ),
                 };
                 self.emit(line);
             }
@@ -1315,7 +1436,7 @@ mod llvm_main {
             // weight. They are the only ones the drop-log oracle can judge, and
             // the displacement transforms all need one live to apply at all —
             // too thin a share and most programs never reach the new shapes.
-            match self.rng.below(24) {
+            match self.rng.below(28) {
                 0 => self.make_str(),
                 1 => self.make_vecstr(),
                 2 => self.make_pair(),
@@ -1339,7 +1460,11 @@ mod llvm_main {
                 20 => self.make_arr_str(),
                 21 => self.make_arr_tracked(),
                 22 => self.make_arr_arr_tracked(),
-                _ => self.make_opt_arr_tracked(),
+                23 => self.make_opt_arr_tracked(),
+                24 => self.make_user_enum(),
+                25 => self.make_gen_slot_str(),
+                26 => self.make_gen_slot_tracked(),
+                _ => self.make_gen_wrap_tracked(),
             }
         }
 
@@ -1460,7 +1585,27 @@ fn tup_vec_len(t: (Vec[String], i64)) -> i64 {
 
 fn peek_vec(v: ref Vec[String]) -> i64 { return v.len(); }
 
-fn arr_inner_peek(a: ref Array[Tracked, 2]) -> i64 { return a[1].name.len(); }"#;
+fn arr_inner_peek(a: ref Array[Tracked, 2]) -> i64 { return a[1].name.len(); }
+
+enum Slot[T] { Filled(T), Blank }
+
+struct Wrap[T] { item: T }
+
+enum Parcel { Two(Tracked, String), Note(i64), Nothing }
+
+fn slot_str_peek(s: ref Slot[String]) -> i64 {
+    match s {
+        Filled(x) => x.len(),
+        Blank => 0i64,
+    }
+}
+
+fn slot_tracked_peek(s: ref Slot[Tracked]) -> i64 {
+    match s {
+        Filled(t) => t.name.len(),
+        Blank => 0i64,
+    }
+}"#;
 
     // ───────────────────────── compile + run under ASan ──────────────────
 
@@ -1603,15 +1748,63 @@ fn arr_inner_peek(a: ref Array[Tracked, 2]) -> i64 { return a[1].name.len(); }"#
     struct Runner {
         workdir: PathBuf,
         counter: std::cell::Cell<u64>,
+        /// Where a repro is saved. Distinct from `workdir`: that one is
+        /// transient object/exe scratch under the system temp dir.
+        report_dir: PathBuf,
+        /// Interpreter INVARIANT violations already saved, keyed by message, so
+        /// one shape does not write fifty files. See `save_interp_panic`.
+        seen_interp_panics: std::cell::RefCell<std::collections::BTreeSet<String>>,
     }
 
     impl Runner {
-        fn new(workdir: PathBuf) -> Self {
+        fn new(workdir: PathBuf, report_dir: PathBuf) -> Self {
             std::fs::create_dir_all(&workdir).ok();
             Runner {
                 workdir,
                 counter: std::cell::Cell::new(0),
+                report_dir,
+                seen_interp_panics: std::cell::RefCell::new(std::collections::BTreeSet::new()),
             }
+        }
+
+        /// An interpreter panic is `Invalid` either way — the tree-walk backend
+        /// has real feature gaps and reporting those as findings would bury the
+        /// rest. But an `unreachable!` that calls itself an *internal error* is
+        /// not a feature gap, it is the interpreter's own invariant breaking on
+        /// a program that parsed, typechecked AND ownership-checked, and
+        /// discarding it silently is the same hole B-2026-09-10-30 records one
+        /// surface over (`DiffOutcome::Invalid` swallowing codegen failures).
+        ///
+        /// So: keep the outcome Invalid, keep it out of the exit code, and save
+        /// the program. Deduplicated by message, because one shape reproduces
+        /// on every program that contains it — a 100-program run hit the same
+        /// `tuple index on Value::Unit` fifty times.
+        fn save_interp_panic(&self, msg: &str, src: &str) {
+            let invariant = msg.contains("internal error") || msg.contains("not yet implemented");
+            if !invariant {
+                return;
+            }
+            let key = msg.split(" at ").next().unwrap_or(msg).to_string();
+            if !self.seen_interp_panics.borrow_mut().insert(key) {
+                return;
+            }
+            let n = self.seen_interp_panics.borrow().len();
+            std::fs::create_dir_all(&self.report_dir).ok();
+            let path = self.report_dir.join(format!("interp_panic_{n:02}.kara"));
+            // `msg` is multi-line (`panicked at <site>:\n<message>`), so every
+            // line needs the comment marker — a half-commented header makes the
+            // saved repro fail to PARSE, which is the exact confusion this
+            // capture exists to remove.
+            let commented = msg
+                .lines()
+                .map(|l| format!("// {l}"))
+                .collect::<Vec<_>>()
+                .join("\n");
+            let body = format!(
+                "// interpreter INVARIANT violation on a valid program:\n{commented}\n\n{src}"
+            );
+            let _ = std::fs::write(&path, body);
+            eprintln!("  [interp-panic] {msg}\n      saved -> {}", path.display());
         }
 
         fn run(&self, src: &str, surface: Surface) -> Outcome {
@@ -1622,6 +1815,18 @@ fn arr_inner_peek(a: ref Array[Tracked, 2]) -> i64 { return a[1].name.len(); }"#
                 return Outcome::Invalid("parse");
             }
             let resolved = karac::resolve(&parsed.program);
+            // The resolver's errors were never checked here, and that is how an
+            // UNDEFINED NAME reached the interpreter: the shrinker deletes a
+            // `let`, the uses of that binding survive, the typechecker gives an
+            // unresolved name the unit type, and `p1.0` blows up as
+            // "tuple index on Value::Unit" — an interpreter INVARIANT panic
+            // reported against a program `karac check` rejects outright.
+            // Attributability is the whole discipline here (a finding must
+            // implicate the lowering, never a buggy generated program), so the
+            // gate has to run every phase `karac check` runs.
+            if !resolved.errors.is_empty() {
+                return Outcome::Invalid("resolve");
+            }
             let typed = karac::typecheck(&parsed.program, &resolved);
             if !typed.errors.is_empty() {
                 return Outcome::Invalid("typecheck");
@@ -1646,6 +1851,18 @@ fn arr_inner_peek(a: ref Array[Tracked, 2]) -> i64 { return a[1].name.len(); }"#
             if surface == Surface::Interp {
                 let program = &parsed.program;
                 let typed_ref = &typed;
+                // Swap in a recording hook for the duration: the default one
+                // prints a 30-frame backtrace per panic, and a 100-program run
+                // hit this fifty times — the log became unreadable and the
+                // message itself was never kept anywhere it could be acted on.
+                let slot = std::sync::Arc::new(std::sync::Mutex::new(String::new()));
+                let sink = std::sync::Arc::clone(&slot);
+                let prev = std::panic::take_hook();
+                std::panic::set_hook(Box::new(move |info| {
+                    if let Ok(mut g) = sink.lock() {
+                        *g = info.to_string();
+                    }
+                }));
                 let captured = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
                     let mut interp = karac::interpreter::Interpreter::new(program, typed_ref);
                     interp.captured_output = Some(Vec::new());
@@ -1655,8 +1872,13 @@ fn arr_inner_peek(a: ref Array[Tracked, 2]) -> i64 { return a[1].name.len(); }"#
                         interp.runtime_errors.is_empty(),
                     )
                 }));
+                std::panic::set_hook(prev);
                 return match captured {
-                    Err(_) => Outcome::Invalid("interp-panic"),
+                    Err(_) => {
+                        let msg = slot.lock().map(|g| g.clone()).unwrap_or_default();
+                        self.save_interp_panic(&msg, src);
+                        Outcome::Invalid("interp-panic")
+                    }
                     Ok((_, false)) => Outcome::Invalid("interp-runtime-error"),
                     Ok((lines, true)) => {
                         let log = DropLog::parse(&lines.join("\n"));
@@ -2159,7 +2381,7 @@ fn arr_inner_peek(a: ref Array[Tracked, 2]) -> i64 { return a[1].name.len(); }"#
         // `--out` — so a committed corpus directory stays clean (repros + report
         // only). Each `.o`/exe is removed right after its run regardless.
         let work = std::env::temp_dir().join(format!("drop_fuzz_work_{}", std::process::id()));
-        let runner = Runner::new(work);
+        let runner = Runner::new(work, cfg.out.clone());
 
         let start = Instant::now();
         let mut valid = 0u64; // programs that compiled+ran on ≥1 surface
@@ -2439,10 +2661,22 @@ fn arr_inner_peek(a: ref Array[Tracked, 2]) -> i64 { return a[1].name.len(); }"#
                 .filter(|p| !fn_params.contains(*p))
                 .collect();
             let emitted = cg.get(&f.function).cloned().unwrap_or_default();
-            let missing: Vec<&str> = scheduled
+            // Honor the SAME place-equivalence `differential_check` applies
+            // (rule 5): codegen frees a matched payload through the
+            // SCRUTINEE's slot, so a drop scheduled on an arm binding is
+            // discharged by either name. Without this, `--explain` printed a
+            // MISSING for every `match` arm binding in the program — a triage
+            // aid disagreeing with the gate it exists to explain, and now that
+            // matches are the corpus's most common shape it disagreed loudly.
+            let missing: BTreeSet<&str> = f
+                .drops
                 .iter()
-                .copied()
-                .filter(|p| !emitted.contains(*p))
+                .filter(|d| !fn_params.contains(d.place.as_str()))
+                .filter(|d| {
+                    !emitted.contains(&d.place)
+                        && !d.via.as_deref().is_some_and(|v| emitted.contains(v))
+                })
+                .map(|d| d.place.as_str())
                 .collect();
             if scheduled.is_empty() && emitted.is_empty() {
                 continue;

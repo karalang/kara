@@ -229,3 +229,58 @@ compiler code — the Slice 1 property — so it stays the low-risk half.
 (B-2026-09-10-22), nested tuples inside arm bindings (-21), `shared`/`par` enum
 payloads (-11, -20). Each is a `Ty` variant, a producer, a sink arm and a
 prelude helper — the pattern the `Array` block now demonstrates.
+
+## Widening 2026-09-11: user and generic enums — and the first bug the corpus found on its own
+
+The `Array` widening above closed one vocabulary hole and immediately exposed
+the next one. Two oracle fixes landed against **user** and **generic** enums
+(B-2026-09-10-31's match-payload projection, B-2026-09-11-1's
+instantiation-keyed heap-ness) and **neither was fuzzable**: the generator's
+entire enum vocabulary was `Option`, `Result` and the `shared enum Tree`, so a
+user enum's arm and a generic's type ARGUMENT never appeared in a generated
+program. Both fixes shipped validated by unit tests and hand-fed differential
+cases while the corpus reported its usual 0 — silence, not confirmation, which
+is the same reading error this section was written to stop.
+
+**Four `Ty` variants close it**, following the `Array` block's pattern:
+`Parcel` (a user enum carrying all three arm shapes the projection must tell
+apart — a multi-payload variant that splits positionally, a scalar payload that
+must schedule nothing, and a true unit variant), `Slot[String]` and
+`Slot[Tracked]` (a user generic enum at a heap type argument, the second one
+drop-log observable), and `Wrap[Tracked]` (the generic struct twin).
+
+Half the generic-enum sinks **borrow** rather than match, and that half is the
+one that matters: a matched scrutinee is moved, so its drop belongs to the arm
+bindings, while a peeked one is still live at scope exit and is scheduled only
+if `Slot[String]` is read as heap through its type argument. Matching alone
+would have left the instantiation path as unfuzzed as it was before.
+
+**The coverage is now real and measurable.** 77 of 396 oracle-scheduled drops
+over 60 programs (19%) sit on the new shapes, against 0 before; 40 of 60
+programs build at least one. The differential stays at **0 divergences** — over
+185 programs / 1313 drops at seed base 1 and 287 / 2103 at base 2000 — but it
+is now a 0 that had something to check.
+
+**And the sanitizer half found a bug the corpus could not previously reach**
+(B-2026-09-11-3): a user-declared **generic** enum passed by `ref` into a
+callee that MATCHES it leaks its payload at the caller's scope exit. The
+discriminators are what make it a report rather than a puzzle — in one
+identical surrounding program:
+
+    Slot[String]   (user generic enum)     70 B x 40 rounds LEAKED
+    StrSlot        (the same, monomorphic) clean
+    Option[String] (the built-in generic)  clean
+    Wrap[String]   (user generic STRUCT)   clean
+    plain String                           clean
+
+and, on the same subject, `ref` with no match in the callee is clean while
+`ref` + match leaks, so it is the match on a BORROWED generic enum that
+disarms the caller's drop without anyone taking ownership. This is the same
+declaration-vs-instantiation axis B-2026-09-11-1 fixed in the oracle, one layer
+over in codegen.
+
+Note what the **differential** says about that program: nothing. It reports 0,
+correctly — codegen does emit a cleanup action for the binding, so the emitted
+set covers the schedule. The differential checks that a drop is SCHEDULED AND
+EMITTED, not that the emitted one frees the right memory; the sanitizer is the
+oracle for that half, which is why Slice 1 keeps both.
