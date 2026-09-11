@@ -6,13 +6,15 @@ follow-up claimed every String buffer-free/realloc gate was inline-safe —
 were fixed in `3833ff8`.
 
 **Slice 2 inline construction is LIVE behind `KARAC_SSO=1`, default OFF.** It
-works and it is correct on every surface probed — and its **first payoff
-measurement is NEGATIVE**: a lexer-shaped workload loses a million allocations and
-36% of its retired instructions, and still runs **40% slower**. Separately, the
-construction site that landed (`s[a..b]`) is **not the one the motivating profile
-uses** (`.substring()`, which still mallocs). **Read "Slice 2 round 2" below
-before planning anything, and do not attempt the default flip until the read path
-stops costing more than the allocation it saves.** This doc is the campaign's
+works and it is correct on every surface probed. Its payoff is **workload-shaped,
+and the shape is the whole story**: SSO is a **37% WIN** where sliced strings are
+RETAINED, and a **19–41% LOSS** where they are sliced, used and discarded in the
+same iteration — because a transient `malloc`/`free` pair is a glibc tcache hit
+that costs less than the tag-aware read path. Separately, the construction site
+that landed (`s[a..b]`) is **not the one the motivating profile uses**
+(`.substring()`, which still mallocs). **Read "Slice 2 round 2" below before
+planning anything, and do not quote a payoff number without saying which of the
+two shapes it came from.** This doc is the campaign's
 living handoff: layout decision (settled), staged slice plan, the tag-aware
 accessor work list, and the verification matrix. Scoped 2026-06-12; Slice 1 landed
 2026-07-09; Slice 2 construction 2026-09-11.
@@ -335,18 +337,39 @@ perf payoff lands in Slice 2.
   was filed. **Rule: a probe result is evidence about the probe until the probe is
   proven to reach the code it targets.**
 
-  ### The payoff measurement
+  ### The payoff measurement — three workloads, and the answer flips
 
-  Lexer-shaped workload — slice a 3-byte token out of a source string, compare it
-  to a keyword, discard — 1M iterations, AOT, archives matching `3833ff8`:
+  AOT, archives matching `3833ff8`, best-of-N wall time (best-of, not mean: the
+  container is noisy and the minimum is the stabler statistic):
 
-  | | allocations | I-refs (callgrind) | wall (mean of 5) |
-  |---|---|---|---|
-  | `KARAC_SSO=0` | 1,000,009 | 254,392,448 | **22 ms** |
-  | `KARAC_SSO=1` | **9** | **162,335,574** | **31 ms** |
+  | workload | allocations 0 → 1 | `SSO=0` | `SSO=1` | |
+  |---|---|---|---|---|
+  | **transient**, 3-byte literal — slice a token, compare, discard, 1M iters | 1,000,009 → 9 | 22 ms | 31 ms | **−41%** |
+  | **transient**, 16-byte literal — as above, but both legs call `bcmp` | 1,000,009 → 9 | 21 ms | 25 ms | **−19%** |
+  | **retained** — slice a token, push into a `Vec[String]`, keep, 200k iters | 200,012 → 12 | 16 ms | **10 ms** | **+37%** |
 
-  A million allocations removed, 36% fewer instructions retired, and **40% more
-  wall time.** The disassembly says why, and it is not the malloc:
+  **The premise holds, but only for RETAINED strings.** A short-lived
+  `malloc`/`free` pair is a glibc tcache hit — far cheaper than "allocation is the
+  #1 self-time leaf" suggests when the buffer is freed in the same loop iteration
+  it was made in. Retain the strings so tcache cannot recycle them and the picture
+  inverts: 200k allocations become 12, and the workload runs **37% faster**. That
+  matters for this campaign specifically, because the self-hosted lexer **keeps**
+  its token texts — it does not slice-and-discard.
+
+  The two transient rows isolate WHY that leg loses. Their only difference is the
+  compared literal's length, chosen so the 16-byte row emits `call bcmp@plt` on
+  BOTH legs and the 3-byte row does not:
+
+  * **~5 ms of the 9 ms is lost compare folding.** At SSO=0 the 3-byte compare
+    folds to `movzwl`/`xor`/`movzbl`/`xor` — four instructions, no call. At SSO=1
+    the pointer is a `cmovs` between the heap pointer and the descriptor's own
+    address, so LLVM can no longer see where the bytes are and calls `bcmp`.
+  * **~4 ms is residual read-path overhead** that survives even when both legs
+    call `bcmp`. **A million removed allocations do not pay for it.** So fixing
+    the folding alone would NOT make the transient leg a win — it would take it
+    from −41% to about −19%.
+
+  The disassembly on the losing leg also showed a second, separate inefficiency:
 
   1. **The tag-select makes the data pointer OPAQUE to LLVM.** At SSO=0 the 3-byte
      compare folds to `movzwl`/`xor`/`movzbl`/`xor` — four instructions, no call.
@@ -362,11 +385,7 @@ perf payoff lands in Slice 2.
      straight back to a second alloca. Six memory ops to return to where the callee
      already put it.
 
-  **This does not refute the premise — it relocates it.** `malloc`/`free` of a
-  short-lived buffer is a glibc tcache hit, far cheaper than "#1 self-time leaf"
-  suggests when the allocation is freed in the same loop. The win is real only
-  where allocations survive long enough to defeat tcache reuse, or where the memory
-  traffic itself matters (2.7 MB → 6.7 KB here).
+  (That round trip was then fixed and measured to be worthless — see below.)
 
   ### The landed construction site MISSES the motivating workload
 
@@ -398,12 +417,14 @@ perf payoff lands in Slice 2.
   promoting it, where the dedicated spill alloca kept the address-taking confined
   to a slot nothing else used. If someone revisits this, test that first.
 
-  So the regression is, to a first approximation, **entirely cost #1** — the
-  opaque pointer defeating LLVM's compare folding. That is the only thing worth
-  working on:
+  **Correction to an earlier draft of this entry**, which claimed the regression
+  was "to a first approximation entirely" the opaque pointer. The 16-byte-literal
+  row measures that: it is about **half**, and the other half is read-path
+  overhead a million removed allocations still fail to cover. Fixing the folding
+  is worth doing and is not sufficient.
   1. **Branch rather than select where the pointer feeds a length-known compare**,
-     so each arm has a concrete pointer LLVM can still fold. This is the whole
-     9 ms.
+     so each arm has a concrete pointer LLVM can still fold. Worth ~5 ms of the
+     9 ms on the transient leg; leaves it still ~19% slower.
   2. **Make `substring` a construction site** — the one that matters for the
      profile. `karac_string_from_bytes_into(src, n, out)` is the right shape:
      codegen keeps its existing clamp and boundary check (whose contract differs
