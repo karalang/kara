@@ -584,6 +584,46 @@ impl<'ctx> super::Codegen<'ctx> {
     /// The slot is recorded in `owned_array_params` so the move-out disarm and
     /// the call-site source suppression know this root carries a drop. Returns
     /// `false` (no drop) when `N == 0` or the element owns no drop-bearing heap.
+    /// The admission gate [`Self::make_array_param_callee_owned`] applies,
+    /// asked of a whole `TypeExpr` and WITHOUT emitting anything — so a CALLER
+    /// can decide whether the callee it is about to call will take ownership
+    /// of an array argument, and retract its own drop exactly where that
+    /// callee registers one (B-2026-09-10-34).
+    ///
+    /// The two questions have to be ONE predicate. Retracting the caller's
+    /// drop where the callee registers nothing leaves the buffers with no
+    /// owner at all; registering in the callee where the caller does not
+    /// retract leaves two. Both halves of that row's shape are reachable from
+    /// a one-line disagreement here, which is why this is a function rather
+    /// than a condition spelled twice.
+    ///
+    /// Accepts BOTH array spellings, via `array_elem_and_len`: the
+    /// `Array[T, N]` an annotation parses to and the `TypeKind::Array` a
+    /// literal's inferred type carries. The `Path`-only parse at the
+    /// `compile_function` site cannot see the second, and a SUBSTITUTED param
+    /// type arrives from the typechecker's per-call record in whichever
+    /// spelling that call inferred — the mirror image of the trap
+    /// B-2026-09-10-8 closed, where keying on `TypeKind::Array` alone compiled
+    /// fine and missed every annotated array.
+    pub(super) fn owned_array_param_te(&self, te: &TypeExpr) -> Option<(TypeExpr, u32)> {
+        let (elem_te, n) = self.array_elem_and_len(te)?;
+        if n == 0 || !self.array_elem_owns_callee_drop(&elem_te) {
+            return None;
+        }
+        Some((elem_te, n))
+    }
+
+    /// The element half of [`Self::owned_array_param_te`], and the gate
+    /// [`Self::make_array_param_callee_owned`] itself applies — one predicate,
+    /// so the te-level question and the emitting one cannot drift apart.
+    ///
+    /// `type_expr_has_drop_heap` answers `false` for an `Array` ELEMENT, which
+    /// is why the nested disjunct is here rather than folded into it
+    /// (B-2026-09-10-8 / -26 explains why that predicate is not widened).
+    pub(super) fn array_elem_owns_callee_drop(&self, elem_te: &TypeExpr) -> bool {
+        self.type_expr_has_drop_heap(elem_te) || self.nested_array_needs_drop(elem_te)
+    }
+
     pub(super) fn make_array_param_callee_owned(
         &mut self,
         param_name: &str,
@@ -597,9 +637,7 @@ impl<'ctx> super::Codegen<'ctx> {
         // `Array[Array[String, 2], 2]` local or by-value param registered no
         // drop at all (B-2026-09-10-8 / -26). The emitter this gate guards
         // could already walk it -- only the admission was missing.
-        if n == 0
-            || !(self.type_expr_has_drop_heap(elem_te) || self.nested_array_needs_drop(elem_te))
-        {
+        if n == 0 || !self.array_elem_owns_callee_drop(elem_te) {
             return false;
         }
         match self.synthesize_array_drop_fn_te(elem_ty, elem_te, n) {

@@ -86179,6 +86179,176 @@ fn main() {
     }
 
     #[test]
+    fn asan_generic_callee_array_param_has_exactly_one_owner() {
+        // B-2026-09-10-34. An owned `Array[T, N]` handed to a GENERIC callee
+        // had no owner story at all: `compile_function`'s array-param arm
+        // reads the DECLARED type, and a monomorph of `fn passthru[T](x: T)`
+        // declares `T`, so the monomorph never took ownership -- while the
+        // caller's own retraction sat behind `transfer_ident`, which is keyed
+        // on a STRUCT type name an array does not have. Caller and callee both
+        // kept the buffers: `free(): double free detected in tcache 2` under
+        // the JIT and at `-O0`, 12 frees against 10 allocs under valgrind.
+        //
+        // Every cell here is a DOUBLE FREE pre-fix, not a leak, so `-O2`'s
+        // dead-allocation deletion does not hide them -- but the `-O0` leg is
+        // still where the counts are read.
+        //
+        // Cells 6-10 are the controls that matter. Three separate wrong fixes
+        // passed cells 1-5 and failed one of these: a caller-only retraction
+        // (leaks the consume cell), a callee registration keyed off the
+        // substitution maps (registers nothing -- those channels are empty for
+        // a bare-`T` whole param by design, `type_param_is_a_whole_param_type`),
+        // and a record written under a non-final `mangled` (populated under a
+        // key nothing reads). Cells 1-5 alone cannot tell a working fix from
+        // any of them.
+        //
+        // 1 -- the reported shape: generic passthru, result BOUND.
+        assert_clean_asan_run(
+            "fn passthru[T](x: T) -> T { return x; }\n\
+             fn main() {\n\
+             \x20\x20\x20\x20let a: Array[String, 2] = [f\"aaaaaaaa0\", f\"bbbbbbbb0\"];\n\
+             \x20\x20\x20\x20let b: Array[String, 2] = passthru(a);\n\
+             \x20\x20\x20\x20println(f\"s:{b[0]}\");\n\
+             }\n",
+            &["s:aaaaaaaa0"],
+            "generic-array-param-bound",
+        );
+        // 2 -- the NESTED element, which B-2026-09-10-8/-26 gave an owner and
+        //      which therefore reached this same hole one level down. 16 frees
+        //      against 12 allocs pre-fix -- the only cell here with 4 invalid
+        //      frees rather than 2.
+        assert_clean_asan_run(
+            "fn passthru[T](x: T) -> T { return x; }\n\
+             fn main() {\n\
+             \x20\x20\x20\x20let a: Array[Array[String, 2], 2] =\n\
+             \x20\x20\x20\x20\x20\x20\x20\x20[[f\"aaaaaaaa0\", f\"bbbbbbbb0\"], [f\"cccccccc0\", f\"dddddddd0\"]];\n\
+             \x20\x20\x20\x20let b: Array[Array[String, 2], 2] = passthru(a);\n\
+             \x20\x20\x20\x20println(f\"s:{b[0][0]}\");\n\
+             }\n",
+            &["s:aaaaaaaa0"],
+            "generic-nested-array-param-bound",
+        );
+        // 3 -- a generic METHOD with an array argument. The row listed this as
+        //      NOT MEASURED; it aborts identically, because a generic method
+        //      routes through `compile_generic_call` like a free function.
+        assert_clean_asan_run(
+            "struct H { k: i64 }\n\
+             impl H {\n\
+             \x20\x20\x20\x20fn pass[T](ref self, x: T) -> T { return x; }\n\
+             }\n\
+             fn main() {\n\
+             \x20\x20\x20\x20let h: H = H { k: 1 };\n\
+             \x20\x20\x20\x20let a: Array[String, 2] = [f\"aaaaaaaa0\", f\"bbbbbbbb0\"];\n\
+             \x20\x20\x20\x20let b: Array[String, 2] = h.pass(a);\n\
+             \x20\x20\x20\x20println(f\"s:{b[1]}\");\n\
+             }\n",
+            &["s:bbbbbbbb0"],
+            "generic-method-array-arg",
+        );
+        // 4 -- a TWO-parameter generic where only one param is an array, also
+        //      listed NOT MEASURED. Pins that the record is per-parameter and
+        //      not "this call has an array somewhere".
+        assert_clean_asan_run(
+            "fn firstof[T, U](x: T, y: U) -> T { return x; }\n\
+             fn main() {\n\
+             \x20\x20\x20\x20let a: Array[String, 2] = [f\"aaaaaaaa0\", f\"bbbbbbbb0\"];\n\
+             \x20\x20\x20\x20let k: i64 = 3;\n\
+             \x20\x20\x20\x20let b: Array[String, 2] = firstof(a, k);\n\
+             \x20\x20\x20\x20println(f\"s:{b[0]}\");\n\
+             }\n",
+            &["s:aaaaaaaa0"],
+            "generic-two-param-one-array",
+        );
+        // 5 -- a generic caller FORWARDING its own type param into a second
+        //      generic. Not in the row at all, and the cell that rejects the
+        //      obvious fix: inside `outer`, `U` resolves through substitution
+        //      channels that are empty for a whole param, so the inner call
+        //      could see neither that `passthru` takes `y` nor what `y` is.
+        //      The resolver falls back to the caller's own `owned_array_params`
+        //      entry for exactly this.
+        assert_clean_asan_run(
+            "fn passthru[T](x: T) -> T { return x; }\n\
+             fn outer[U](y: U) -> U { return passthru(y); }\n\
+             fn main() {\n\
+             \x20\x20\x20\x20let a: Array[String, 2] = [f\"aaaaaaaa0\", f\"bbbbbbbb0\"];\n\
+             \x20\x20\x20\x20let b: Array[String, 2] = outer(a);\n\
+             \x20\x20\x20\x20println(f\"s:{b[0]}\");\n\
+             }\n",
+            &["s:aaaaaaaa0"],
+            "generic-forwarded-through-generic-caller",
+        );
+        // 6 -- CONTROL: the generic callee CONSUMES rather than returns. The
+        //      caller stands down, so the monomorph must actually register the
+        //      drop or these buffers have no owner at all. A caller-only fix
+        //      leaks 18 B in 2 blocks here while cells 1-5 look repaired.
+        assert_clean_asan_run(
+            "fn eat[T](x: T) -> i64 { return 7; }\n\
+             fn main() {\n\
+             \x20\x20\x20\x20let a: Array[String, 2] = [f\"aaaaaaaa0\", f\"bbbbbbbb0\"];\n\
+             \x20\x20\x20\x20let n: i64 = eat(a);\n\
+             \x20\x20\x20\x20println(f\"s:{n}\");\n\
+             }\n",
+            &["s:7"],
+            "generic-array-param-consumed-control",
+        );
+        // 7 -- CONTROL: a `ref` generic param transfers nothing, so neither
+        //      half may fire. The caller's binding still owns the buffers.
+        assert_clean_asan_run(
+            "fn peek[T](x: ref T) -> i64 { return 1; }\n\
+             fn main() {\n\
+             \x20\x20\x20\x20let a: Array[String, 2] = [f\"aaaaaaaa0\", f\"bbbbbbbb0\"];\n\
+             \x20\x20\x20\x20let n: i64 = peek(a);\n\
+             \x20\x20\x20\x20println(f\"s:{n}{a[0]}\");\n\
+             }\n",
+            &["s:1aaaaaaaa0"],
+            "generic-ref-array-param-control",
+        );
+        // 8 -- CONTROL: a scalar element owns no heap, so the array must not
+        //      be registered at all. Separates "an array moved" from "a
+        //      drop-bearing array moved".
+        assert_clean_asan_run(
+            "fn passthru[T](x: T) -> T { return x; }\n\
+             fn main() {\n\
+             \x20\x20\x20\x20let a: Array[i64, 3] = [1, 2, 3];\n\
+             \x20\x20\x20\x20let b: Array[i64, 3] = passthru(a);\n\
+             \x20\x20\x20\x20println(f\"s:{b[0]}\");\n\
+             }\n",
+            &["s:1"],
+            "generic-scalar-array-control",
+        );
+        // 9 -- CONTROL: the `Vec` peer, clean before this change and after.
+        //      The row asked whether the collection peers were already handled
+        //      by a different mechanism; they are, and this pins that the
+        //      array record did not disturb it.
+        assert_clean_asan_run(
+            "fn passthru[T](x: T) -> T { return x; }\n\
+             fn main() {\n\
+             \x20\x20\x20\x20let a: Vec[String] = [f\"aaaaaaaa0\", f\"bbbbbbbb0\"];\n\
+             \x20\x20\x20\x20let b: Vec[String] = passthru(a);\n\
+             \x20\x20\x20\x20println(f\"s:{b[0]}\");\n\
+             }\n",
+            &["s:aaaaaaaa0"],
+            "generic-vec-peer-control",
+        );
+        // 10 -- CONTROL: a fresh TEMP argument, which has no caller binding to
+        //       retract. The retraction must no-op rather than reach for a
+        //       root that is not there.
+        assert_clean_asan_run(
+            "fn mk() -> Array[String, 2] {\n\
+             \x20\x20\x20\x20let a: Array[String, 2] = [f\"aaaaaaaa0\", f\"bbbbbbbb0\"];\n\
+             \x20\x20\x20\x20return a;\n\
+             }\n\
+             fn passthru[T](x: T) -> T { return x; }\n\
+             fn main() {\n\
+             \x20\x20\x20\x20let b: Array[String, 2] = passthru(mk());\n\
+             \x20\x20\x20\x20println(f\"s:{b[0]}\");\n\
+             }\n",
+            &["s:aaaaaaaa0"],
+            "generic-array-temp-arg-control",
+        );
+    }
+
+    #[test]
     fn asan_arm_bound_array_rebind_leaves_memory_with_one_owner() {
         // 1 — the live bug: an ANNOTATED rebind of an arm-bound payload.
         assert_clean_asan_run(

@@ -1755,6 +1755,63 @@ impl<'ctx> super::Codegen<'ctx> {
     /// case keeps the resolution it has, and the underlying inconsistency (an
     /// ownership convention that depends on the element being UNKNOWN) is filed
     /// rather than fixed here.
+    /// For arg `idx` of a generic call: does this monomorph's parameter take
+    /// OWNERSHIP of a fixed array, and of what element type (B-2026-09-10-34)?
+    ///
+    /// One answer, asked by both halves of the register/retract pair — the
+    /// call-site record the mono param loop reads (`mono_array_param_tes`) and
+    /// the caller-side drop retraction. They cannot disagree about which
+    /// arguments moved because they are the same call.
+    ///
+    /// Two resolutions, in order:
+    ///
+    /// 1. The typechecker's per-call record (`callee_param_te_for_call`). This
+    ///    is the precise one and covers every call made from a non-generic
+    ///    frame.
+    ///
+    /// 2. The CALLER'S OWN tracked array, for a by-value bare-type-param
+    ///    callee. Needed because resolution (1) is answered in terms of the
+    ///    caller's type params, and inside a monomorph a bare `U` resolves
+    ///    through substitution channels that are deliberately empty for a
+    ///    whole-param `U` (`type_param_is_a_whole_param_type`). So
+    ///    `fn outer[U](y: U) -> U { return passthru(y); }` could see neither
+    ///    that `passthru` takes `y` nor what `y` is, registered `y`'s drop in
+    ///    `outer` and never retracted it, and freed the buffers in `outer` AND
+    ///    again through the caller's result binding — 12 frees against 10
+    ///    allocs, where the concrete twin is clean.
+    ///
+    ///    `owned_array_params` is exactly the right source there: it holds the
+    ///    live entry the caller's own param loop registered, element type and
+    ///    length included, so the instantiation is read off the frame that
+    ///    already knows it rather than re-derived. Restricted to the bare
+    ///    by-value spelling, which is the only one that transfers — a `ref`
+    ///    array param is excluded by
+    ///    `generic_param_is_bare_type_param_spelling`, and a param spelled
+    ///    `Array[T, N]` outright is already resolved by (1).
+    fn mono_owned_array_param_for_arg(
+        &self,
+        generic_fn: &Function,
+        idx: usize,
+        arg: &Expr,
+        call_span: &crate::token::Span,
+    ) -> Option<(TypeExpr, u32)> {
+        let p = generic_fn.params.get(idx)?;
+        let inst = self.callee_param_te_for_call(&p.ty, call_span);
+        if let Some(hit) = self.owned_array_param_te(&inst) {
+            return Some(hit);
+        }
+        if !Self::generic_param_is_bare_type_param_spelling(generic_fn, idx) {
+            return None;
+        }
+        let root = match &arg.kind {
+            ExprKind::Identifier(n) => n.clone(),
+            ExprKind::SelfValue => "self".to_string(),
+            _ => return None,
+        };
+        let (elem_te, n) = self.borrow_vars.owned_array_params.get(&root)?.clone();
+        (n > 0 && self.array_elem_owns_callee_drop(&elem_te)).then_some((elem_te, n))
+    }
+
     fn type_param_is_a_whole_param_type(generic_fn: &Function, tp: &str) -> bool {
         generic_fn.params.iter().any(|param| {
             let peeled = match &param.ty.kind {
@@ -2407,6 +2464,39 @@ impl<'ctx> super::Codegen<'ctx> {
         // instantiation (`Box[Box[i64]]` vs `Box[Box[String]]`) mangles only
         // its HEAD above, so every `Box[Box[..]]` collided on one symbol.
         let mangled = self.append_nested_instantiation_mangle(mangled, &generic_fn, args);
+        // B-2026-09-10-34 — the array twin of `mono_handle_param_infos`, and
+        // for the same reason: a monomorph of `fn passthru[T](x: T)` declares
+        // `T`, so its param loop cannot see that THIS instantiation is an
+        // owned `Array[String, 2]` and never registered the element drop.
+        //
+        // Resolved by `mono_owned_array_param_for_arg`, the single answer the
+        // caller-side retraction below also reads, so the register and the
+        // retract cannot disagree about which arguments moved.
+        //
+        // Keyed on the FINAL `mangled`, which is why this sits here rather
+        // than beside the handle record above: `mangled` is rebound four times
+        // in this function (collection, structural and nested-instantiation
+        // tokens all append after the handle one) and `compile_mono_function`
+        // looks the entry up under the last of them. Written at an earlier
+        // binding, the map is populated under a key nothing ever reads — which
+        // measures exactly like the registration not existing.
+        let array_moved: Vec<Option<(String, TypeExpr, u32)>> = args
+            .iter()
+            .enumerate()
+            .map(|(i, a)| {
+                let param_name = generic_fn.params.get(i)?.name()?.to_string();
+                let (elem_te, n) =
+                    self.mono_owned_array_param_for_arg(&generic_fn, i, &a.value, call_span)?;
+                Some((param_name, elem_te, n))
+            })
+            .collect();
+        let array_params: Vec<(String, TypeExpr, u32)> =
+            array_moved.iter().flatten().cloned().collect();
+        if !array_params.is_empty() {
+            self.mono_state
+                .mono_array_param_tes
+                .insert(mangled.clone(), array_params);
+        }
         // Bind handle-backed-container type params (`C` bound to a Column/Tensor
         // arg) to `ptr` so a bare-`C` RETURN (`map`/`zip_with` → `Self`) or a
         // `let d: C` local lowers to the pointer shape, not the `i64` default
@@ -2476,6 +2566,20 @@ impl<'ctx> super::Codegen<'ctx> {
         // retraction into an observable double free.
         let mut mono_agg: Vec<(bool, Option<TypeExpr>)> = Vec::new();
         let mut transfer_ident: Vec<bool> = Vec::new();
+        // B-2026-09-10-34 — the CALLER half of the monomorph array-param pair.
+        //
+        // `transfer_ident` cannot carry this. It is keyed on
+        // `var_type_names[var]`, a STRUCT name, and an `Array[String, 2]`
+        // local has none — so the whole retraction below, array line included,
+        // was skipped for every array argument to every monomorph. The
+        // concrete path reaches the same retraction unconditionally for each
+        // by-value argument (`call_dispatch.rs`), which is the entire reason
+        // `fn passthru(x: Array[String, 2])` is clean while its generic twin
+        // aborts.
+        //
+        // Read straight off `array_moved`, the record the callee-side
+        // registration is built from, so the two halves are one decision.
+        let array_transfer: Vec<bool> = array_moved.iter().map(Option::is_some).collect();
         {
             let saved_names =
                 std::mem::replace(&mut self.mono_state.type_subst_names, subst_names.clone());
@@ -2668,6 +2772,16 @@ impl<'ctx> super::Codegen<'ctx> {
         for (i, a) in args.iter().enumerate() {
             if transfer_ident[i] {
                 self.move_declined_copy_struct_arg(&a.value);
+            }
+            // B-2026-09-10-34 — retract the caller's array drop for an
+            // argument this monomorph's param takes ownership of. Keyed off
+            // `owned_array_param_te` asked of the SUBSTITUTED param type, the
+            // same predicate the mono param loop registers on, so the two
+            // cannot disagree about which arguments moved. No-ops for a
+            // temporary or a non-owning root (`suppress_array_binding_move_arg`
+            // looks the root up in `owned_array_params`).
+            if array_transfer[i] {
+                self.suppress_array_binding_move_arg(&a.value);
             }
             // B-2026-09-05-31 — the monomorph leg of `compile_call`'s
             // caller-side stand-down for a NAMED-LOCAL argument the callee
@@ -4071,6 +4185,49 @@ impl<'ctx> super::Codegen<'ctx> {
                 self.borrow_vars
                     .signature_ref_params
                     .insert(param_name.clone());
+            }
+            // B-2026-09-10-34 — the monomorph's own copy of the owned
+            // by-value `Array[T, N]` param drop, the array peer of the box
+            // registration just below and of `compile_function`'s array arm.
+            //
+            // A mono has its OWN param loop and that arm was never mirrored
+            // here, so no array param of any monomorph has ever been
+            // registered: `compile_function`'s reads `param.ty.kind`, and a
+            // monomorph of `fn passthru[T](x: T)` declares `T`.
+            //
+            // The instantiation comes from `mono_array_param_tes` rather than
+            // from `subst_monomorph_type_params`, and that is the whole point:
+            // all three substitution channels are EMPTY for a bare-`T` whole
+            // param by deliberate design (`type_param_is_a_whole_param_type`,
+            // B-2026-08-31-39), so resolving the declared type here yields `T`
+            // and silently registers nothing. Measured that way first — the
+            // caller-side retraction alone left `passthru(a);` and
+            // `eat(a)` leaking 18 B in 2 blocks while the bound spellings
+            // looked fixed, because the RESULT binding happened to be the one
+            // owner. Widening that channel instead is what B-2026-08-31-39
+            // measured into a leak and a double free.
+            //
+            // This is HALF of a pair and is unsound alone: the caller keeps
+            // its own scope-exit drop unless `compile_generic_call` retracts
+            // it, and both halves read the same `callee_param_te_for_call`
+            // answer so they cannot disagree about which arguments moved.
+            //
+            // Not gated on `nonescaping_params` like the box arm below: a
+            // returned array is disarmed at the `return` itself
+            // (`suppress_array_binding_move_arg`, B-2026-08-24-5), which is how
+            // the CONCRETE `fn passthru(x: Array[String, 2])` — clean on all
+            // six surfaces today — already handles this exact shape.
+            if !self.borrow_vars.ref_params.contains_key(&param_name) {
+                if let Some((elem_te, n)) = self
+                    .mono_state
+                    .mono_array_param_tes
+                    .get(mangled)
+                    .and_then(|v| v.iter().find(|(nm, _, _)| nm == &param_name))
+                    .map(|(_, te, n)| (te.clone(), *n))
+                {
+                    let elem_ty = self.llvm_type_for_type_expr(&elem_te);
+                    self.make_array_param_callee_owned(&param_name, &elem_te, n, elem_ty, alloca);
+                }
             }
             // B-2026-08-05-7 — the monomorph's own copy of the owned-param box
             // drop. This is THE site that matters for the reported shape: the

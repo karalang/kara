@@ -150,6 +150,27 @@ pub(crate) struct MonoState<'ctx> {
     /// `state::MonoHandleArgInfo`. Module-lifetime (mangled keys are
     /// globally unique), so no per-mono save/restore.
     pub(crate) mono_handle_param_infos: HashMap<String, Vec<(String, state::MonoHandleArgInfo)>>,
+    /// Owned by-value `Array[T, N]` params of a generic mono, keyed by MANGLED
+    /// mono name → `[(param_name, element TypeExpr, N)]` (B-2026-09-10-34).
+    ///
+    /// The array twin of `mono_handle_param_infos`, and it exists for the same
+    /// reason: the declared type of `fn passthru[T](x: T)` is just `T`, and the
+    /// mono param loop cannot act on that. What it CANNOT do is recover the
+    /// instantiation from the substitution maps, because
+    /// `type_param_is_a_whole_param_type` deliberately keeps a bare-`T` WHOLE
+    /// param out of the exact-`TypeExpr` channel — B-2026-08-31-39 measured
+    /// that widening: it flips such params into `owned_vecstr_params`, which
+    /// leaked one buffer per call on `fn echo[T](x: T) -> T` and ASAN
+    /// double-freed on `fn takeout[T](b: T) -> T { match b { v => return v } }`
+    /// once the caller side was adjusted to compensate.
+    ///
+    /// So this carries the one answer the array registration needs, on its own
+    /// channel, without reopening that. Written at the call site from
+    /// `callee_param_te_for_call` — the SAME resolution the caller-side
+    /// retraction keys on — so the register and the retract cannot disagree
+    /// about which arguments moved. Module-lifetime: mangled keys are unique
+    /// per instantiation, exactly like the handle map.
+    pub(crate) mono_array_param_tes: HashMap<String, Vec<(String, crate::ast::TypeExpr, u32)>>,
     /// B-2026-07-13-3: monomorph-resolved concrete payload `TypeExpr` for a
     /// GENERIC enum's bare-type-param variant payload binding (`enum Opt[T] {
     /// Yes(T) }`, matched as `Opt.Yes(v)` at `T = String`). The typechecker

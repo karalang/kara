@@ -154659,6 +154659,141 @@ fn main() {
     }
 
     #[test]
+    fn e2e_generic_array_param_reads_back_on_every_surface() {
+        // B-2026-09-10-34 -- the cross-surface twin of
+        // `asan_generic_callee_array_param_has_exactly_one_owner`.
+        //
+        // THIS FIXTURE DOES FAIL ON A PRE-FIX TREE, unlike its
+        // B-2026-09-10-8 sibling: the defect is a DOUBLE FREE rather than a
+        // leak, so the program aborts rather than quietly over-retaining, and
+        // the harness builds at `-O2` where a leak would have been optimized
+        // away. `--interp` prints correctly throughout, which is what makes
+        // each cell a run-vs-build divergence as well as a memory fault.
+        for (label, src, want) in [
+            // 1 -- generic passthru, result bound.
+            (
+                "generic-array-bound-read",
+                "fn passthru[T](x: T) -> T { return x; }\n\
+                 fn main() {\n\
+                 \x20\x20\x20\x20let a: Array[String, 2] = [f\"aaaaaaaa0\", f\"bbbbbbbb0\"];\n\
+                 \x20\x20\x20\x20let b: Array[String, 2] = passthru(a);\n\
+                 \x20\x20\x20\x20println(f\"s:{b[0]}\");\n\
+                 \x20\x20\x20\x20println(f\"t:{b[1]}\");\n\
+                 }\n",
+                "s:aaaaaaaa0\nt:bbbbbbbb0\n",
+            ),
+            // 2 -- the nested element through the same generic.
+            (
+                "generic-nested-array-bound-read",
+                "fn passthru[T](x: T) -> T { return x; }\n\
+                 fn main() {\n\
+                 \x20\x20\x20\x20let a: Array[Array[String, 2], 2] =\n\
+                 \x20\x20\x20\x20\x20\x20\x20\x20[[f\"aaaaaaaa0\", f\"bbbbbbbb0\"], [f\"cccccccc0\", f\"dddddddd0\"]];\n\
+                 \x20\x20\x20\x20let b: Array[Array[String, 2], 2] = passthru(a);\n\
+                 \x20\x20\x20\x20println(f\"s:{b[0][0]}\");\n\
+                 \x20\x20\x20\x20println(f\"t:{b[1][1]}\");\n\
+                 }\n",
+                "s:aaaaaaaa0\nt:dddddddd0\n",
+            ),
+            // 3 -- a generic METHOD with an array argument.
+            (
+                "generic-method-array-arg-read",
+                "struct H { k: i64 }\n\
+                 impl H {\n\
+                 \x20\x20\x20\x20fn pass[T](ref self, x: T) -> T { return x; }\n\
+                 }\n\
+                 fn main() {\n\
+                 \x20\x20\x20\x20let h: H = H { k: 1 };\n\
+                 \x20\x20\x20\x20let a: Array[String, 2] = [f\"aaaaaaaa0\", f\"bbbbbbbb0\"];\n\
+                 \x20\x20\x20\x20let b: Array[String, 2] = h.pass(a);\n\
+                 \x20\x20\x20\x20println(f\"s:{b[1]}\");\n\
+                 }\n",
+                "s:bbbbbbbb0\n",
+            ),
+            // 4 -- two type params, one array.
+            (
+                "generic-two-param-one-array-read",
+                "fn firstof[T, U](x: T, y: U) -> T { return x; }\n\
+                 fn main() {\n\
+                 \x20\x20\x20\x20let a: Array[String, 2] = [f\"aaaaaaaa0\", f\"bbbbbbbb0\"];\n\
+                 \x20\x20\x20\x20let k: i64 = 3;\n\
+                 \x20\x20\x20\x20let b: Array[String, 2] = firstof(a, k);\n\
+                 \x20\x20\x20\x20println(f\"s:{b[0]}\");\n\
+                 }\n",
+                "s:aaaaaaaa0\n",
+            ),
+            // 5 -- forwarded through a generic caller, the shape that rejects
+            //      a resolver keyed only on the typechecker's per-call record.
+            (
+                "generic-forwarded-through-generic-caller-read",
+                "fn passthru[T](x: T) -> T { return x; }\n\
+                 fn outer[U](y: U) -> U { return passthru(y); }\n\
+                 fn main() {\n\
+                 \x20\x20\x20\x20let a: Array[String, 2] = [f\"aaaaaaaa0\", f\"bbbbbbbb0\"];\n\
+                 \x20\x20\x20\x20let b: Array[String, 2] = outer(a);\n\
+                 \x20\x20\x20\x20println(f\"s:{b[0]}\");\n\
+                 }\n",
+                "s:aaaaaaaa0\n",
+            ),
+            // 6 -- CONTROL: consumed rather than returned. The callee must own
+            //      the buffers outright once the caller has stood down.
+            (
+                "generic-array-consumed-control-read",
+                "fn eat[T](x: T) -> i64 { return 7; }\n\
+                 fn main() {\n\
+                 \x20\x20\x20\x20let a: Array[String, 2] = [f\"aaaaaaaa0\", f\"bbbbbbbb0\"];\n\
+                 \x20\x20\x20\x20let n: i64 = eat(a);\n\
+                 \x20\x20\x20\x20println(f\"s:{n}\");\n\
+                 }\n",
+                "s:7\n",
+            ),
+            // 7 -- CONTROL: a `ref` generic param borrows, so the caller's
+            //      binding is still readable after the call.
+            (
+                "generic-ref-array-param-control-read",
+                "fn peek[T](x: ref T) -> i64 { return 1; }\n\
+                 fn main() {\n\
+                 \x20\x20\x20\x20let a: Array[String, 2] = [f\"aaaaaaaa0\", f\"bbbbbbbb0\"];\n\
+                 \x20\x20\x20\x20let n: i64 = peek(a);\n\
+                 \x20\x20\x20\x20println(f\"s:{n}\");\n\
+                 \x20\x20\x20\x20println(f\"t:{a[0]}\");\n\
+                 }\n",
+                "s:1\nt:aaaaaaaa0\n",
+            ),
+            // 8 -- CONTROL: the concrete twin, clean before this change and
+            //      after. It is the oracle the generic path is being brought
+            //      into line with.
+            (
+                "concrete-array-bound-control-read",
+                "fn passthru(x: Array[String, 2]) -> Array[String, 2] { return x; }\n\
+                 fn main() {\n\
+                 \x20\x20\x20\x20let a: Array[String, 2] = [f\"aaaaaaaa0\", f\"bbbbbbbb0\"];\n\
+                 \x20\x20\x20\x20let b: Array[String, 2] = passthru(a);\n\
+                 \x20\x20\x20\x20println(f\"s:{b[0]}\");\n\
+                 }\n",
+                "s:aaaaaaaa0\n",
+            ),
+            // 9 -- CONTROL: scalar elements own no heap and must stay
+            //      unregistered.
+            (
+                "generic-scalar-array-control-read",
+                "fn passthru[T](x: T) -> T { return x; }\n\
+                 fn main() {\n\
+                 \x20\x20\x20\x20let a: Array[i64, 3] = [1, 2, 3];\n\
+                 \x20\x20\x20\x20let b: Array[i64, 3] = passthru(a);\n\
+                 \x20\x20\x20\x20println(f\"s:{b[2]}\");\n\
+                 }\n",
+                "s:3\n",
+            ),
+        ] {
+            let Some(out) = run_program(src) else {
+                return;
+            };
+            assert_eq!(out, want, "[{label}]");
+        }
+    }
+
+    #[test]
     fn e2e_arm_bound_array_rebind_reads_back_on_every_surface() {
         for (label, src, want) in [
             // 1 — the annotated rebind, `String` element.
