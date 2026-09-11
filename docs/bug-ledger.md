@@ -94,7 +94,7 @@ distinguish "bugs flattening" from "we stopped writing them down."
 |---|---|
 | miscompile | 403 |
 | run-vs-build | 388 |
-| leak | 320 |
+| leak | 321 |
 | double-free | 224 |
 | missing-feature | 195 |
 | codegen-gap | 174 |
@@ -110,7 +110,7 @@ distinguish "bugs flattening" from "we stopped writing them down."
 
 | surface | total |
 |---|---|
-| codegen | 1668 |
+| codegen | 1669 |
 | interp | 418 |
 | typecheck | 296 |
 | other | 86 |
@@ -171,13 +171,13 @@ _Generated from `bug-ledger.jsonl` by `scripts/bug-curve.py` (2026-05-20 → 202
 | B-2026-09-10-27 | 2026-09-10 | interp+codegen | medium | A BOXED `Array` PAYLOAD'S ELEMENT `Drop` BODIES RUN ON NO BACKEND -- `Option[Array[R, 2]]` over `impl Drop for R` prints no `dR` under `--interp`, the JIT or either AOT lane; an AGREED SILENCE and the `Array` peer of the TUPLE gap a56142bd8 closed, so both backends must gain it together | — |
 | B-2026-09-10-30 | 2026-09-10 | other | medium | THE ORACLE<->CODEGEN DIFFERENTIAL COUNTS A CODEGEN FAILURE AS "NOT A VALID SUBJECT", so the gate is blind exactly where codegen is weakest -- `DiffOutcome::Invalid` covers parse, type, ownership AND `compile_to_ir` errors alike, none counted toward coverage and none reported, while "codegen refuses this shape" is its own open ledger class | — |
 | B-2026-09-10-32 | 2026-09-10 | codegen | low | A DIRECT METHOD CALL ON AN INDEXED ELEMENT OF A `ref Array[T, N]` PARAM FAILS CODEGEN -- `fn f(a: ref Array[String, 2]) -> i64 { return a[0].len(); }` is rejected with "outer is not a Vec/Slice/Array" though the outer IS an Array; by-value `Array`, `ref Vec` and field-then-method all lower | — |
-| B-2026-09-10-33 | 2026-09-10 | other | low | THE DROP-FUZZER'S SHRINKER SAVES A PROGRAM THAT NO LONGER COMPILES AS A REPRO -- it deleted a `let` declaration and kept the reassignment, and "a constructed `Drop` body never ran" is vacuously true of a program that never runs, so the empty program is the shrink predicate's fixed point (2 of 62 repros in one run) | — |
 | B-2026-09-10-34 | 2026-09-10 | codegen | high | AN OWNED `Array` PASSED INTO A GENERIC CALLEE THAT RETURNS IT DOUBLE FREES IN THE CALLER -- `let b: Array[String, 2] = passthru(a)` over `fn passthru[T](x: T) -> T` aborts `free(): double free detected in tcache 2` under the JIT and at `-O0` while `-O2` and `--interp` print correctly, because a monomorph's param registration reads the DECLARED type `T`, never takes ownership, and leaves the caller's binding and the result binding both owning the buffers | — |
 | B-2026-09-10-35 | 2026-09-10 | interp+codegen | low | AN `Array` ELEMENT THAT IS ITSELF AN `Array` RUNS ITS LEAVES' `Drop` BODIES ON THE INTERPRETER ALONE -- `Array[Array[R, 2], 2]` over `impl Drop for R` prints four `d:` lines under `--interp` and none under the JIT or either `karac build` opt level, while the ONE-LEVEL `Array[R, 2]` control agrees on all five surfaces | — |
 | B-2026-09-10-36 | 2026-09-10 | codegen | medium | A `Vec[Array[T, N]]` FED FROM A TEMPORARY LEAKS EVERY ELEMENT BUFFER AT BOTH OPT LEVELS -- 36 B in 4 blocks for `v.push(mk(0)); v.push(mk(1))` over `Vec[Array[String, 2]]`, while the named-source spelling `let e = [..]; v.push(e)` is clean because the SOURCE LOCAL owns those buffers and the container never had an element drop at all | — |
 | B-2026-09-10-37 | 2026-09-10 | codegen | low | `.clone()` ON AN `Array[T, N]` HAS NO CODEGEN DISPATCHER ARM AT ANY DEPTH -- `a.clone()` bails `no handler for method 'clone' on variable 'a'` (codegen's own "this is a codegen bug" message), a residual of B-2026-07-29-31 which widened `.clone()` to `Option`/`Result` and every user type but never to `Array` | — |
 | B-2026-09-10-38 | 2026-09-10 | typecheck | low | AN ARRAY LITERAL IN A TUPLE-LITERAL ELEMENT DOES NOT TAKE THE TUPLE ANNOTATION'S ELEMENT TYPE AND INFERS `Vec` -- `let t: (Array[String, 2], i64) = ([f"a", f"b"], 7)` is rejected as `found '(Vec[String], i64)'` while the direct `let a: Array[String, 2] = [..]` and the `(Vec[String], i64)` spelling are both accepted; the tuple-ELEMENT position of the question B-2026-08-13-22 fixed at the `let` | — |
 | B-2026-09-11-2 | 2026-09-11 | other | low | A WILDCARD MATCH PAYLOAD (`Some(_)` / `Full(_)`) SCHEDULES NO DROP IN THE OWNERSHIP ORACLE, so the differential compares nothing for it -- `_` discards the BINDING, not the obligation, and a per-place schedule has no place to key it to (the bound spellings now schedule correctly) | — |
+| B-2026-09-11-3 | 2026-09-11 | codegen | medium | A USER-DECLARED GENERIC ENUM PASSED BY `ref` INTO A CALLEE THAT MATCHES IT LEAKS ITS PAYLOAD AT THE CALLER'S SCOPE EXIT -- `Slot[String]` loses 70 B a round while the SAME enum monomorphised, `Option[String]`, a generic STRUCT and a plain String are all clean in the identical program, and `ref` without a match in the callee is clean too | — |
 
 ### Relocated
 
@@ -2481,6 +2481,7 @@ _Generated from `bug-ledger.jsonl` by `scripts/bug-curve.py` (2026-05-20 → 202
 | B-2026-09-10-28 | codegen | high | AN `Option`/`Result` LOCAL MOVED INTO AN *ANNOTATED* TUPLE BINDING IS A USE-AFTER-FREE AND A DOUBLE FREE -- `let o: Option[R] = Some(R { . | ebe9a5e18 |
 | B-2026-09-10-29 | codegen | high | AN `Option`/`Result` LOCAL MOVED INTO AN ARRAY OR `Vec` LITERAL DOUBLE-FREES ITS PAYLOAD, AND THE NO-`Drop` TWIN ABORTS IN A PROGRAM WITH NO `Drop` I… | ebe9a5e18 |
 | B-2026-09-10-31 | other | medium | A `match` OVER AN OWNED HEAP LOCAL REMOVES IT FROM THE OWNERSHIP ORACLE'S COMPARED DROP SCHEDULE, so the differential reports checked=0 and is struct… | e0496eb |
+| B-2026-09-10-33 | other | low | THE DROP-FUZZER'S SHRINKER SAVES A PROGRAM THAT NO LONGER COMPILES AS A REPRO -- it deleted a `let` declaration and kept the reassignment, and "a con… | 55e6bbf |
 | B-2026-09-11-1 | other | low | THE MATCH-PAYLOAD PROJECTION STOPS AT `Option`/`Result` AND AT BOUND PAYLOADS -- a `Some(_)` wildcard and every USER ENUM arm still schedule zero dro… | fddcfcf |
 
 </details>
