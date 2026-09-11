@@ -1964,6 +1964,31 @@ fn slot_tracked_peek(s: ref Slot[Tracked]) -> i64 {
     fn classify(code: Option<i32>, stderr: &str, stdout: &str, surface: Surface) -> Outcome {
         // Extract the canonical ASan error kind if present.
         let kind = asan_error_kind(stderr);
+        // A Kāra RUNTIME PANIC aborts the program part-way, and after that
+        // neither sanitizer arm is evidence about drop placement: LSan reports
+        // everything still live as leaked, and the drop log is a partial count.
+        // It has to be its own signature rather than fall through, because the
+        // leak arm silently absorbed it — a shrink candidate that panicked
+        // still produced `memory-leak`, so the shrinker accepted it and saved
+        // a repro that dies on line 2 under the signature of a real leak
+        // (B-2026-09-10-33, second shape: `iv22[1] = ..` on a Vec whose pushes
+        // the shrinker had deleted, reported as 1800 B in 40 blocks, actually
+        // 141 B in 3 and exit 101).
+        //
+        // A HARD memory error is exempt: a double-free or use-after-free
+        // happened before the abort and is real whether or not the program went
+        // on to panic.
+        let hard = matches!(
+            kind,
+            Some("double-free")
+                | Some("heap-use-after-free")
+                | Some("bad-free")
+                | Some("heap-buffer-overflow")
+                | Some("stack-buffer-overflow")
+        );
+        if !hard && kara_runtime_panicked(stderr) {
+            return finding("runtime-panic", stderr, surface);
+        }
         match code {
             Some(0) => {
                 let log = DropLog::parse(stdout);
@@ -2002,6 +2027,23 @@ fn slot_tracked_peek(s: ref Slot[Tracked]) -> i64 {
         }
     }
 
+    /// Did the generated program hit a Kāra runtime panic?
+    ///
+    /// TWO SPELLINGS, and missing the second one is why the first version of
+    /// this check silently did nothing. `src/codegen/runtime.rs` prints
+    /// `panic at <file>:<line>:<col> in <fn>: <msg>` when the span carries a
+    /// file and bare `panic: <msg>` when it does not — and the fuzzer compiles
+    /// from an in-memory AST, so it is ALWAYS the second form here. Matching
+    /// only the `karac build` spelling reads as working (every hand-run repro
+    /// has a file) while catching nothing in the loop that matters.
+    ///
+    /// Line-anchored so a program's own output cannot spoof it.
+    fn kara_runtime_panicked(stderr: &str) -> bool {
+        stderr
+            .lines()
+            .any(|l| l.starts_with("panic at ") || l.starts_with("panic: "))
+    }
+
     fn asan_error_kind(stderr: &str) -> Option<&'static str> {
         // Order matters — the more specific double-free string appears within a
         // generic "attempting free" report on some libc paths.
@@ -2030,11 +2072,16 @@ fn slot_tracked_peek(s: ref Slot[Tracked]) -> i64 {
         // Signature = surface + error kind. Keeps the corpus bucketed by class
         // and surface without over-splitting on addresses/line numbers.
         let signature = format!("{}:{}", surface.tag(), kind);
-        // A short, address-scrubbed excerpt for the report.
+        // A short, address-scrubbed excerpt for the report. The panic line
+        // leads for a `runtime-panic`: its LSan report is about what was still
+        // live when the program died, so showing that first says "leak" about
+        // a finding that is not one.
         let detail = stderr
             .lines()
             .filter(|l| {
-                l.contains("ERROR")
+                l.starts_with("panic at ")
+                    || l.starts_with("panic: ")
+                    || l.contains("ERROR")
                     || l.contains("SUMMARY")
                     || l.contains("freed by")
                     || l.contains("allocated by")
@@ -2323,6 +2370,33 @@ fn slot_tracked_peek(s: ref Slot[Tracked]) -> i64 {
                     let s = args.next().and_then(|x| x.parse().ok()).unwrap_or(cfg.seed);
                     let src = Gen::new(s).build_program();
                     differential_explain(s, &src);
+                    std::process::exit(0);
+                }
+                "--verify" => {
+                    // Debug aid: ask the runner what it makes of a program ON
+                    // DISK, on all three surfaces, and print the outcome. The
+                    // fuzzer could dump a program and explain its drop sets but
+                    // had no way to answer "does this saved repro still
+                    // reproduce?" — which is the one question a corpus of
+                    // shrunk repros exists to be asked (B-2026-09-10-33).
+                    let path = args.next().unwrap_or_default();
+                    let src = std::fs::read_to_string(&path).unwrap_or_else(|e| {
+                        eprintln!("--verify {path}: {e}");
+                        std::process::exit(2);
+                    });
+                    let work = std::env::temp_dir()
+                        .join(format!("drop_fuzz_verify_{}", std::process::id()));
+                    let runner = Runner::new(work, cfg.out.clone());
+                    for surface in [Surface::Seq, Surface::AutoPar, Surface::Interp] {
+                        let out = match runner.run(&src, surface) {
+                            Outcome::Invalid(why) => format!("Invalid({why})"),
+                            Outcome::Clean { .. } => "Clean".to_string(),
+                            Outcome::Finding { signature, detail } => {
+                                format!("Finding {signature}\n{}", indent(&detail, "      "))
+                            }
+                        };
+                        println!("  {:<8} {out}", surface.tag());
+                    }
                     std::process::exit(0);
                 }
                 "--no-shrink" => cfg.shrink = false,

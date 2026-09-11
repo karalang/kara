@@ -284,3 +284,25 @@ correctly — codegen does emit a cleanup action for the binding, so the emitted
 set covers the schedule. The differential checks that a drop is SCHEDULED AND
 EMITTED, not that the emitted one frees the right memory; the sanitizer is the
 oracle for that half, which is why Slice 1 keeps both.
+
+**Two defects in the fuzzer itself fell out of chasing that leak**, and both are
+the same failure mode as the coverage holes above — a gate that looks green
+because it is not looking. `Runner::run` called `karac::resolve` only to feed
+the typechecker and never checked `resolved.errors`, so a program with an
+undefined name passed the validity gate: the name types as unit, the program
+runs, its `Drop` bodies go missing with the deleted binding, and the drop log
+scores that as the finding reproducing. That is how the shrinker came to save
+non-compiling repros (B-2026-09-10-33) and how one reached the interpreter and
+tripped `tuple index on Value::Unit` fifty times in a single run. Separately, a
+shrink candidate that PANICS still scored `memory-leak`, because LSan reports
+whatever was live when the program aborted — so the corpus's one leak repro was
+a program that died on its second statement, filed under the signature of a
+real leak. Both are fixed; the same corpus position now shrinks to the
+generic-enum leak instead of to nothing.
+
+The discipline that keeps catching these is the one the Gotchas section already
+states for generated programs — *a finding must implicate the lowering, never
+buggy generated source* — applied to the fuzzer's own inputs. The corollary
+this round adds: a saved repro is not evidence until something has re-run it.
+`drop_fuzz --verify <file>` does that now, and it is what turned "62 of 62
+compile" into the more useful "60 of 62 reproduce their claimed signature".
