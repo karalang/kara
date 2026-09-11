@@ -17,15 +17,18 @@ use std::alloc::{alloc, Layout};
 use std::ffi::c_void;
 use std::ptr;
 
-/// Layout of a Kāra `String` value: `{ ptr data, i64 len, i64 cap }`.
-/// Matches the codegen-side `string_struct_type` (Vec[u8] re-used for
-/// String). Layout-equivalent on every supported target.
-#[repr(C)]
-struct KaracString {
-    data: *mut u8,
-    len: i64,
-    cap: i64,
-}
+// Layout of a Kāra `String` value: `{ ptr data, i64 len, i64 cap }`.
+// Matches the codegen-side `string_struct_type` (Vec[u8] re-used for
+// String). Layout-equivalent on every supported target.
+//
+// This aliases `RuntimeKaracString` rather than re-declaring the layout
+// locally (as it did until SSO) because the encoding contract in
+// `runtime/src/sso.rs` hangs its accessors — `is_inline` / `byte_len` /
+// `data_ptr` — off that type. `karac_string_clone` must decode the tag (an
+// inline source keeps its bytes *in* the descriptor), so it needs those
+// accessors, and a second accessor-less copy of the layout is exactly how
+// the two halves would drift apart.
+use crate::RuntimeKaracString as KaracString;
 
 /// Deep-copy a Kāra `String`. Reads `*src` (`{data, len, cap}`), allocates
 /// a fresh buffer holding `len` bytes, copies the source contents, and
@@ -44,6 +47,12 @@ struct KaracString {
 /// `data = null`, `cap = 0`. The interpreter and codegen scope-exit free
 /// paths already handle null-data Strings as no-ops.
 ///
+/// SSO inline handling (`cap < 0`): the source's bytes live in its own 24
+/// bytes, so the clone is a struct copy and allocates nothing — the third
+/// state of the `cap` discriminant described in `runtime/src/sso.rs`. It is
+/// checked first because an inline descriptor's `len`/`cap`/`data` fields
+/// are overlaid data bytes, not a heap descriptor.
+///
 /// # Safety
 ///
 /// * `src` must point to a readable, fully-initialised `KaracString`.
@@ -56,6 +65,20 @@ pub unsafe extern "C" fn karac_string_clone(src: *const c_void, dst: *mut c_void
     unsafe {
         let src = &*(src as *const KaracString);
         let dst = &mut *(dst as *mut KaracString);
+
+        // SSO: an inline source carries its bytes *inside* the 24-byte
+        // descriptor, so the clone is a plain struct copy — no allocation,
+        // and the copy's self-referential data pointer re-derives from the
+        // destination's own address the next time `data_ptr()` runs. This
+        // must be the FIRST branch: an inline descriptor's `len` field is
+        // data bytes 8..=15, not a length, and its `cap` is negative, so
+        // every read below would be reading garbage.
+        if src.is_inline() {
+            dst.data = src.data;
+            dst.len = src.len;
+            dst.cap = src.cap;
+            return;
+        }
 
         if src.len == 0 {
             dst.data = ptr::null_mut();
@@ -773,6 +796,75 @@ pub unsafe extern "C" fn karac_string_encode_char(cp: u32, out: *mut u8) -> i64 
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// Cloning an SSO **inline** source must copy the descriptor verbatim
+    /// and allocate nothing: the bytes live in the 24 bytes themselves, so
+    /// the copy is the clone. Reading `src.len`/`src.data` instead — what
+    /// the pre-SSO clone did — would treat overlaid data bytes as a heap
+    /// descriptor and `alloc` a garbage size off a negative `cap`.
+    ///
+    /// This is the half of Slice 2's "tag-aware clone" that is testable
+    /// before inline *construction* exists: `new_inline` is the reference
+    /// encoder, so it can hand `karac_string_clone` an inline source that
+    /// codegen cannot yet produce.
+    #[test]
+    fn clone_of_inline_source_is_a_struct_copy() {
+        for text in [
+            "".as_bytes(),
+            b"a",
+            b"hello",
+            // Exactly INLINE_CAPACITY — the boundary the encoder accepts.
+            b"23 bytes exactly here!!",
+        ] {
+            let src = KaracString::new_inline(text);
+            let mut dst = KaracString {
+                data: ptr::null_mut(),
+                len: -1,
+                cap: -1,
+            };
+            unsafe {
+                karac_string_clone(
+                    &src as *const KaracString as *const c_void,
+                    &mut dst as *mut KaracString as *mut c_void,
+                );
+            }
+            assert!(dst.is_inline(), "clone of an inline source stays inline");
+            assert!(
+                !dst.is_owned_heap(),
+                "an inline clone owns no buffer, so drop must not free it"
+            );
+            assert_eq!(dst.byte_len(), text.len());
+            assert_eq!(dst.as_bytes(), text);
+            // Verbatim 24-byte copy: every field matches the source.
+            assert_eq!(dst.data, src.data);
+            assert_eq!(dst.len, src.len);
+            assert_eq!(dst.cap, src.cap);
+        }
+    }
+
+    /// The inline clone is self-referential: `data_ptr()` must re-derive
+    /// from the *destination's* address, not carry the source's. Moving
+    /// the clone (here: into a `Box`) and reading it back proves the bytes
+    /// travelled with the descriptor rather than being aliased.
+    #[test]
+    fn inline_clone_data_ptr_follows_the_destination() {
+        let src = KaracString::new_inline(b"lexeme");
+        let mut dst = KaracString {
+            data: ptr::null_mut(),
+            len: 0,
+            cap: 0,
+        };
+        unsafe {
+            karac_string_clone(
+                &src as *const KaracString as *const c_void,
+                &mut dst as *mut KaracString as *mut c_void,
+            );
+        }
+        assert_eq!(dst.data_ptr(), &dst as *const KaracString as *const u8);
+        let moved = Box::new(dst);
+        assert_eq!(moved.data_ptr(), &*moved as *const KaracString as *const u8);
+        assert_eq!(moved.as_bytes(), b"lexeme");
+    }
 
     /// Read back the heap buffer `karac_string_slice` returns as a `&str`.
     /// `n` is the expected content length (`end - start`).

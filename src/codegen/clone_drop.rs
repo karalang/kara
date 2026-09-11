@@ -1436,6 +1436,8 @@ impl<'ctx> super::Codegen<'ctx> {
         self.drop_rc.try_clone_fn_cache.insert(type_name, f);
 
         let entry = self.context.append_basic_block(f, "entry");
+        let inline_bb = self.context.append_basic_block(f, "inline");
+        let heap_bb = self.context.append_basic_block(f, "heap");
         let empty_bb = self.context.append_basic_block(f, "empty");
         let alloc_bb = self.context.append_basic_block(f, "alloc");
         let oom_bb = self.context.append_basic_block(f, "oom");
@@ -1476,6 +1478,41 @@ impl<'ctx> super::Codegen<'ctx> {
             .builder
             .build_struct_gep(vec_ty, dst, 2, "d.cap.p")
             .unwrap();
+        // SSO: dispatch on the `cap` tag before trusting any other field.
+        // An inline source's `data`/`len` are overlaid data bytes, so the
+        // empty test and the alloc path below would both read garbage.
+        let src_cap_p = self
+            .builder
+            .build_struct_gep(vec_ty, src, 2, "s.cap.p")
+            .unwrap();
+        let src_cap = self
+            .builder
+            .build_load(i64_t, src_cap_p, "s.cap")
+            .unwrap()
+            .into_int_value();
+        let is_inline = self.sso_string_is_inline(src_cap);
+        self.builder
+            .build_conditional_branch(is_inline, inline_bb, heap_bb)
+            .unwrap();
+
+        // Inline → copy the 24-byte descriptor verbatim; the bytes travel
+        // with it and `dst`'s data pointer re-derives from its own address.
+        // Infallible: nothing is allocated, so the OOM path cannot be taken.
+        self.builder.position_at_end(inline_bb);
+        self.builder
+            .build_memcpy(
+                dst,
+                8,
+                src,
+                8,
+                i64_t.const_int(Self::STRING_DESCRIPTOR_BYTES, false),
+            )
+            .unwrap();
+        self.builder
+            .build_return(Some(&bool_t.const_int(1, false)))
+            .unwrap();
+
+        self.builder.position_at_end(heap_bb);
         let is_empty = self
             .builder
             .build_int_compare(IntPredicate::EQ, src_len, i64_t.const_zero(), "s.empty")

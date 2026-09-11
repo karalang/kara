@@ -173,9 +173,24 @@ perf payoff lands in Slice 2.
      is the main new complexity. Sweep the field-0 (data-ptr, ~224 sites) and field-1
      (len, ~204 sites) reads *on Strings* onto these (many are `Vec` — the accessor is a
      safe no-op there, but threading the Kāra type to keep `Vec` branch-free is Slice 3).
-  3. **Clone becomes tag-aware:** inline source ⇒ struct copy, no malloc (today's clone
-     does `EQ cap, 0` then mallocs `select(cap==0, len, cap)` — an inline `cap<0` would
-     malloc a garbage size, so this is a *must-fix before flipping construction on*).
+  3. ~~**Clone becomes tag-aware:** inline source ⇒ struct copy, no malloc~~ —
+     **DONE (2026-09-11, proven no-op).** Both String-clone entry points now branch on
+     the tag *first*, before any field read: the runtime `karac_string_clone`
+     (`runtime/src/clone.rs`) and codegen's fallible `emit_string_try_clone_fn`
+     (`clone_drop.rs`). An inline source is copied as a verbatim 24-byte descriptor —
+     the bytes travel inside it and the destination's self-pointer re-derives from its
+     own address — so nothing is allocated. `clone.rs` dropped its private duplicate of
+     the `{ptr,len,cap}` layout and now aliases `RuntimeKaracString`, which is what
+     carries the `sso.rs` accessors; a second accessor-less copy of the layout is how
+     the two halves would drift. The two `EQ cap, 0` sites in `emit_vec_clone_fn` /
+     `emit_vec_try_clone_fn` are **Vec** clones and stay as they are (a Vec never sets
+     the flag); the String path never reached them. Regression tests
+     (`clone_of_inline_source_is_a_struct_copy`,
+     `inline_clone_data_ptr_follows_the_destination`) feed `karac_string_clone` an
+     inline source built by the reference encoder `new_inline`, which is what makes the
+     runtime half testable *before* construction exists — verified to FAIL with the new
+     branch disabled, so they discriminate. The codegen half has no such handle and is
+     only exercisable once construction lands.
   4. Route the **string-match dispatch tree** (`emit_string_dispatch` / `emit_len_bucket`
      / `emit_byte_group`) through `string_data_ptr` + `string_len` (it currently reads
      `extract_value(sv, 0/1)` raw).

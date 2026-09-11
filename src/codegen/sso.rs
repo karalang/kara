@@ -26,6 +26,13 @@ use inkwell::values::IntValue;
 use inkwell::IntPredicate;
 
 impl<'ctx> super::Codegen<'ctx> {
+    /// Size in bytes of the `{ptr, len, cap}` descriptor — and therefore
+    /// the exact span an inline String's bytes occupy. Mirrors
+    /// `size_of::<RuntimeKaracString>()`, which `runtime/src/sso.rs` pins
+    /// with a layout test. Copying a whole descriptor is how an inline
+    /// String is cloned/moved: the bytes travel inside it.
+    pub(super) const STRING_DESCRIPTOR_BYTES: u64 = 24;
+
     /// The owned-heap predicate: `(i64) cap > 0`. True only when the
     /// descriptor owns a malloc'd buffer that a drop must `free` — inline
     /// (`cap < 0`) and static-literal (`cap == 0`) both answer false.
@@ -45,13 +52,10 @@ impl<'ctx> super::Codegen<'ctx> {
 
     /// The inline predicate: `(i64) cap < 0` (the flag / sign bit is set).
     ///
-    /// Mirrors `RuntimeKaracString::is_inline`. Not yet wired — the read
-    /// sites that must branch on it (`substring`/concat construction, the
-    /// tag-aware `string_data_ptr`, the string-match dispatch tree) land
-    /// with inline construction in Slice 2; this is the shared primitive
-    /// they will build on, kept beside `sso_string_is_owned_heap` so the
-    /// two halves of the discriminant stay in one place.
-    #[allow(dead_code)]
+    /// Mirrors `RuntimeKaracString::is_inline`. Every read that would
+    /// otherwise trust a raw `data`/`len` field on a String must branch on
+    /// this first: when the flag is set those two fields are overlaid data
+    /// bytes, not a heap descriptor.
     pub(super) fn sso_string_is_inline(&self, cap: IntValue<'ctx>) -> IntValue<'ctx> {
         let zero = cap.get_type().const_zero();
         self.builder
