@@ -626,6 +626,20 @@ impl<'ctx> super::Codegen<'ctx> {
                 .build_load(i64_t, len_p, "s.len")
                 .unwrap()
                 .into_int_value();
+            // SSO: `key_ptr` IS the descriptor, so an inline key's bytes live
+            // at `key_ptr` itself and its length in `cap`'s high byte. Hashing
+            // the raw fields would digest the overlaid data bytes as a pointer
+            // and a nonsense length — two equal short Strings would then land
+            // in different buckets, which is silent Map corruption rather than
+            // a crash. String-only arm, so `Vec` never pays for the select.
+            let (data_ptr, len) = if self.sso_on() {
+                (
+                    self.sso_string_data_ptr_from_slot(key_ptr, data_ptr, "s.hash"),
+                    self.sso_string_len_from_slot(key_ptr, len, "s.hash"),
+                )
+            } else {
+                (data_ptr, len)
+            };
             let hash = self.emit_fxhash_over_bytes(hash_fn, data_ptr, len);
             self.builder.build_return(Some(&hash)).unwrap();
         } else if let BasicTypeEnum::IntType(int_ty) = key_ty {
@@ -756,6 +770,21 @@ impl<'ctx> super::Codegen<'ctx> {
                 .build_load(i64_t, lb_p, "lb")
                 .unwrap()
                 .into_int_value();
+            // SSO: both params ARE descriptors. An inline String's `len` field
+            // is overlaid with data bytes 8..=15, so comparing the raw fields
+            // asks whether two strings happen to share bytes 8..=15 — which is
+            // neither their length nor their content. Route both before the
+            // fast-reject; the data pointers are routed in `bytes_bb` below.
+            // `karac_eq_String` backs Map/Set key equality, so getting this
+            // wrong loses lookups rather than crashing.
+            let (len_a, len_b) = if self.sso_on() {
+                (
+                    self.sso_string_len_from_slot(a_ptr, len_a, "eq.a"),
+                    self.sso_string_len_from_slot(b_ptr, len_b, "eq.b"),
+                )
+            } else {
+                (len_a, len_b)
+            };
 
             let neq_bb = self.context.append_basic_block(eq_fn, "neq");
             let bytes_bb = self.context.append_basic_block(eq_fn, "bytes");
@@ -794,6 +823,14 @@ impl<'ctx> super::Codegen<'ctx> {
                 .build_load(ptr_ty, db_p, "db")
                 .unwrap()
                 .into_pointer_value();
+            let (data_a, data_b) = if self.sso_on() {
+                (
+                    self.sso_string_data_ptr_from_slot(a_ptr, data_a, "eq.a"),
+                    self.sso_string_data_ptr_from_slot(b_ptr, data_b, "eq.b"),
+                )
+            } else {
+                (data_a, data_b)
+            };
 
             let loop_hdr = self.context.append_basic_block(eq_fn, "eq.hdr");
             let loop_bdy = self.context.append_basic_block(eq_fn, "eq.bdy");

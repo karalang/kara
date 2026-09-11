@@ -3199,6 +3199,18 @@ impl<'ctx> super::Codegen<'ctx> {
             .build_load(ptr_ty, data_ptr_ptr, "for.s.data")
             .unwrap()
             .into_pointer_value();
+        // SSO: `str_ptr` is the String's own descriptor, so an inline string's
+        // bytes start AT `str_ptr` and its length lives in `cap`'s high byte.
+        // Reading the raw fields would walk from the overlaid data bytes 0..=7
+        // reinterpreted as a pointer — a wild read, not a short one.
+        let (data, len) = if self.sso_on() {
+            (
+                self.sso_string_data_ptr_from_slot(str_ptr, data, "for.s"),
+                self.sso_string_len_from_slot(str_ptr, len, "for.s"),
+            )
+        } else {
+            (data, len)
+        };
         // B-2026-07-27-7: take the branch-free stride-1 loop only when BOTH
         // independent checks agree — the name passed the block-level
         // "stable all-ASCII constant" analysis, AND it resolves here to the

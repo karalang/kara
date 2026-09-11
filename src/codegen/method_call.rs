@@ -7386,6 +7386,22 @@ impl<'ctx> super::Codegen<'ctx> {
                 .build_load(i64_t, bl_p, "cte.b.len")
                 .unwrap()
                 .into_int_value();
+            // SSO: both operands are String descriptors held at their own
+            // allocas, so an inline one's bytes are AT the descriptor. The
+            // added select branches on the inline TAG, which is a function of
+            // length only — and length is already public here (it is passed to
+            // `karac_secret_ct_eq` as an argument), so the constant-time
+            // property over the secret CONTENT is unchanged.
+            let (a_ptr, a_len, b_ptr, b_len) = if self.sso_on() {
+                (
+                    self.sso_string_data_ptr_from_slot(recv_ptr, a_ptr, "cte.a"),
+                    self.sso_string_len_from_slot(recv_ptr, a_len, "cte.a"),
+                    self.sso_string_data_ptr_from_slot(arg_ptr, b_ptr, "cte.b"),
+                    self.sso_string_len_from_slot(arg_ptr, b_len, "cte.b"),
+                )
+            } else {
+                (a_ptr, a_len, b_ptr, b_len)
+            };
             let ct_fn = self
                 .module
                 .get_function("karac_secret_ct_eq")
@@ -8664,6 +8680,30 @@ impl<'ctx> super::Codegen<'ctx> {
                         .build_extract_value(sv, 1, "tmp.vec.len")
                         .unwrap()
                         .into_int_value();
+                    // SSO: the LEN-ONLY SSA class. This arm serves `len()`,
+                    // `count()` and `is_empty()` on a non-plain-identifier (or
+                    // borrow-local) receiver, so a `let`-bound String slice
+                    // reaches it — and an inline String's `len` FIELD is
+                    // overlaid with data bytes 8..=15, which is zero for any
+                    // string of 1..=7 bytes. Measured before this line existed:
+                    // `is_empty()` answered `true` for 3- and 5-byte inline
+                    // Strings and `false` for 9- and 19-byte ones, exactly
+                    // tracking whether byte 8 happened to be set.
+                    //
+                    // No spill is needed for a length: `cap` is field 2 of the
+                    // aggregate already in hand, so the tag-aware length is a
+                    // shift, a mask and a select over registers. Only a DATA
+                    // POINTER needs the descriptor's address.
+                    let len_val = if self.sso_on() {
+                        let cap = self
+                            .builder
+                            .build_extract_value(sv, 2, "tmp.vec.cap")
+                            .unwrap()
+                            .into_int_value();
+                        self.sso_select_len(cap, len_val, "tmp.vec")
+                    } else {
+                        len_val
+                    };
                     return Ok(match method {
                         // `count` is the char-iterator length: `s.chars()`
                         // compiles to a materialized `Vec[char]` here, so its

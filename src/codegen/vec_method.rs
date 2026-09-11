@@ -1117,6 +1117,16 @@ impl<'ctx> super::Codegen<'ctx> {
                     .build_load(i64_t, recv_len_ptr, "sw.recv.len")
                     .unwrap()
                     .into_int_value();
+                // SSO: the receiver is a String descriptor at `data_ptr`; an inline
+                // one keeps its bytes there and its length in `cap`'s high byte.
+                let (recv_data, recv_len) = if self.sso_on() {
+                    (
+                        self.sso_string_data_ptr_from_slot(data_ptr, recv_data, "sw.recv"),
+                        self.sso_string_len_from_slot(data_ptr, recv_len, "sw.recv"),
+                    )
+                } else {
+                    (recv_data, recv_len)
+                };
 
                 // Prefix: evaluate the arg; expect a String struct value.
                 let prefix_val = self.compile_expr(&args[0].value)?;
@@ -1233,6 +1243,16 @@ impl<'ctx> super::Codegen<'ctx> {
                     .build_load(i64_t, recv_len_ptr, "spl.recv.len")
                     .unwrap()
                     .into_int_value();
+                // SSO: the receiver is a String descriptor at `data_ptr`; an inline
+                // one keeps its bytes there and its length in `cap`'s high byte.
+                let (recv_data, recv_len) = if self.sso_on() {
+                    (
+                        self.sso_string_data_ptr_from_slot(data_ptr, recv_data, "spl.recv"),
+                        self.sso_string_len_from_slot(data_ptr, recv_len, "spl.recv"),
+                    )
+                } else {
+                    (recv_data, recv_len)
+                };
 
                 // Separator (ptr, len): a `char` UTF-8-encodes to a stack buf;
                 // a `String` contributes its `{data, len}` directly.
@@ -1345,6 +1365,16 @@ impl<'ctx> super::Codegen<'ctx> {
                     .build_load(i64_t, recv_len_ptr, "swss.recv.len")
                     .unwrap()
                     .into_int_value();
+                // SSO: the receiver is a String descriptor at `data_ptr`; an inline
+                // one keeps its bytes there and its length in `cap`'s high byte.
+                let (recv_data, recv_len) = if self.sso_on() {
+                    (
+                        self.sso_string_data_ptr_from_slot(data_ptr, recv_data, "swss.recv"),
+                        self.sso_string_len_from_slot(data_ptr, recv_len, "swss.recv"),
+                    )
+                } else {
+                    (recv_data, recv_len)
+                };
 
                 let split_fn = match self.module.get_function(sym) {
                     Some(f) => f,
@@ -1429,6 +1459,28 @@ impl<'ctx> super::Codegen<'ctx> {
                     .build_load(i64_t, recv_len_ptr, "sl.recv.len")
                     .unwrap()
                     .into_int_value();
+                // SSO: the receiver is a String descriptor at `data_ptr`; an inline
+                // one keeps its bytes there and its length in `cap`'s high byte.
+                //
+                // ESCAPE CAVEAT, recorded rather than fixed: the result is a
+                // BORROWED view (`cap == 0`) holding `recv_data + start`. With an
+                // inline receiver that pointer is the receiver's own alloca, so
+                // the view borrows a stack descriptor rather than a heap buffer.
+                // It is valid exactly as long as the receiver's binding is, which
+                // is what a borrow already means — but unlike a heap borrow it
+                // cannot outlive the frame, so a view that escapes upward would
+                // dangle. Routing is still strictly better than not: before it,
+                // the inline case read field 0 as a pointer, which is not a
+                // pointer at all. Whoever lifts `String.slice` into a returnable
+                // position needs escape reasoning here, not just a tag check.
+                let (recv_data, recv_len) = if self.sso_on() {
+                    (
+                        self.sso_string_data_ptr_from_slot(data_ptr, recv_data, "sl.recv"),
+                        self.sso_string_len_from_slot(data_ptr, recv_len, "sl.recv"),
+                    )
+                } else {
+                    (recv_data, recv_len)
+                };
 
                 let start = self.compile_expr(&args[0].value)?.into_int_value();
                 let end_raw = self.compile_expr(&args[1].value)?.into_int_value();
@@ -1569,6 +1621,16 @@ impl<'ctx> super::Codegen<'ctx> {
                     .build_load(i64_t, recv_len_ptr, "fd.recv.len")
                     .unwrap()
                     .into_int_value();
+                // SSO: the receiver is a String descriptor at `data_ptr`; an inline
+                // one keeps its bytes there and its length in `cap`'s high byte.
+                let (recv_data, recv_len) = if self.sso_on() {
+                    (
+                        self.sso_string_data_ptr_from_slot(data_ptr, recv_data, "fd.recv"),
+                        self.sso_string_len_from_slot(data_ptr, recv_len, "fd.recv"),
+                    )
+                } else {
+                    (recv_data, recv_len)
+                };
 
                 let needle_val = self.compile_expr(&args[0].value)?;
                 let (needle_data, needle_len): (PointerValue<'ctx>, IntValue<'ctx>) =
@@ -1700,6 +1762,16 @@ impl<'ctx> super::Codegen<'ctx> {
                     .build_load(i64_t, recv_len_ptr, "cc.len")
                     .unwrap()
                     .into_int_value();
+                // SSO: the receiver is a String descriptor at `data_ptr`; an inline
+                // one keeps its bytes there and its length in `cap`'s high byte.
+                let (recv_data, recv_len) = if self.sso_on() {
+                    (
+                        self.sso_string_data_ptr_from_slot(data_ptr, recv_data, "cc"),
+                        self.sso_string_len_from_slot(data_ptr, recv_len, "cc"),
+                    )
+                } else {
+                    (recv_data, recv_len)
+                };
                 let f = self
                     .module
                     .get_function("karac_runtime_string_char_count")
@@ -1742,6 +1814,16 @@ impl<'ctx> super::Codegen<'ctx> {
                     .build_load(i64_t, recv_len_ptr, "ca.len")
                     .unwrap()
                     .into_int_value();
+                // SSO: the receiver is a String descriptor at `data_ptr`; an inline
+                // one keeps its bytes there and its length in `cap`'s high byte.
+                let (recv_data, recv_len) = if self.sso_on() {
+                    (
+                        self.sso_string_data_ptr_from_slot(data_ptr, recv_data, "ca"),
+                        self.sso_string_len_from_slot(data_ptr, recv_len, "ca"),
+                    )
+                } else {
+                    (recv_data, recv_len)
+                };
                 let idx = self.compile_expr(&args[0].value)?.into_int_value();
                 let fn_val = self.current_fn.unwrap();
                 let out_cp = self.create_entry_alloca(fn_val, "ca.out_cp", i32_t.into());
@@ -1841,6 +1923,16 @@ impl<'ctx> super::Codegen<'ctx> {
                     .build_load(i64_t, recv_len_ptr, "ss.recv.len")
                     .unwrap()
                     .into_int_value();
+                // SSO: the receiver is a String descriptor at `data_ptr`; an inline
+                // one keeps its bytes there and its length in `cap`'s high byte.
+                let (recv_data, recv_len) = if self.sso_on() {
+                    (
+                        self.sso_string_data_ptr_from_slot(data_ptr, recv_data, "ss.recv"),
+                        self.sso_string_len_from_slot(data_ptr, recv_len, "ss.recv"),
+                    )
+                } else {
+                    (recv_data, recv_len)
+                };
 
                 // Evaluate start; end defaults to len for the one-arg form.
                 let start_raw = self.compile_expr(&args[0].value)?.into_int_value();
@@ -2591,6 +2683,16 @@ impl<'ctx> super::Codegen<'ctx> {
                     .build_load(i64_t, recv_len_ptr, "rep.recv.len")
                     .unwrap()
                     .into_int_value();
+                // SSO: the receiver is a String descriptor at `data_ptr`; an inline
+                // one keeps its bytes there and its length in `cap`'s high byte.
+                let (recv_data, recv_len) = if self.sso_on() {
+                    (
+                        self.sso_string_data_ptr_from_slot(data_ptr, recv_data, "rep.recv"),
+                        self.sso_string_len_from_slot(data_ptr, recv_len, "rep.recv"),
+                    )
+                } else {
+                    (recv_data, recv_len)
+                };
 
                 // count = max(0, arg).
                 let count_raw = self.compile_expr(&args[0].value)?.into_int_value();
@@ -6282,6 +6384,18 @@ impl<'ctx> super::Codegen<'ctx> {
                     .build_load(i64_t, len_ptr, "vec.len")
                     .unwrap()
                     .into_int_value();
+                // SSO: the LEN-ONLY read class again — the same shape that made
+                // `String.len()` return 0 last round. `new_inline` zero-fills
+                // the 24-byte descriptor before copying the bytes in, so an
+                // inline String of 1..=7 bytes has a `len` FIELD of exactly 0
+                // (its bytes occupy 0..=6, the field spans 8..=15). Reading it
+                // raw makes `is_empty()` answer `true` for every short
+                // non-empty String — a wrong answer, not a crash.
+                let len = if self.sso_on() {
+                    self.sso_string_len_from_slot(data_ptr, len, "vec.is_empty")
+                } else {
+                    len
+                };
                 let zero = i64_t.const_int(0, false);
                 // Head-index deque: empty is `len == head` (see the `len` arm).
                 let empty_mark = match self.deque_head_slot(var_name) {
@@ -6334,6 +6448,19 @@ impl<'ctx> super::Codegen<'ctx> {
                     .build_load(i64_t, len_p, "bytes.len")
                     .unwrap()
                     .into_int_value();
+                // SSO: the receiver is a String descriptor at `data_ptr`; an inline
+                // one keeps its bytes there and its length in `cap`'s high byte.
+                // Same borrowed-view escape caveat as `String.slice` above: this
+                // `Slice[u8]` points into the receiver's descriptor when that
+                // descriptor is inline.
+                let (data, len) = if self.sso_on() {
+                    (
+                        self.sso_string_data_ptr_from_slot(data_ptr, data, "bytes"),
+                        self.sso_string_len_from_slot(data_ptr, len, "bytes"),
+                    )
+                } else {
+                    (data, len)
+                };
                 Ok(self.build_slice_header(slice_ty, data, len))
             }
             "first" | "last" => {
@@ -8454,6 +8581,16 @@ impl<'ctx> super::Codegen<'ctx> {
                     .build_load(i64_t, recv_len_ptr, "ct.recv.len")
                     .unwrap()
                     .into_int_value();
+                // SSO: the receiver is a String descriptor at `data_ptr`; an inline
+                // one keeps its bytes there and its length in `cap`'s high byte.
+                let (recv_data, recv_len) = if self.sso_on() {
+                    (
+                        self.sso_string_data_ptr_from_slot(data_ptr, recv_data, "ct.recv"),
+                        self.sso_string_len_from_slot(data_ptr, recv_len, "ct.recv"),
+                    )
+                } else {
+                    (recv_data, recv_len)
+                };
 
                 // Needle: evaluate the arg, extract {data, len}.
                 let needle_val = self.compile_expr(&args[0].value)?;

@@ -420,6 +420,20 @@ impl<'ctx> super::Codegen<'ctx> {
                     .build_load(i64_t, len_p, "s.len")
                     .unwrap()
                     .into_int_value();
+                // SSO: `val_ptr` IS the String descriptor, so an inline one's
+                // bytes start there and its length is in `cap`'s high byte.
+                // This is the nested-String display leaf (a `Vec[String]`
+                // element, a struct field), distinct from the two top-level
+                // print arms in `control_flow.rs` — routing one does not route
+                // the others, which is how the empty-line bug got in.
+                let (data, len) = if self.sso_on() {
+                    (
+                        self.sso_string_data_ptr_from_slot(val_ptr, data, "s.disp"),
+                        self.sso_string_len_from_slot(val_ptr, len, "s.disp"),
+                    )
+                } else {
+                    (data, len)
+                };
                 // The other diverging leaf: `Debug` quotes and escapes.
                 if self.display.debug_render {
                     self.disp_append_debug_str(acc, data, len);

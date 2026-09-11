@@ -1,14 +1,21 @@
 # Spike: Small-String Optimization (SSO) for the runtime `String`
 
-**Status:** 🟢 **Slice 1 LANDED (layout + accessors + free-gate hardening, proven
-no-op); follow-up gate hardening landed 2026-07-11 — EVERY String buffer-free/realloc
-gate is now inline-safe (`SGT`), proven no-op (full suite + 590 ASAN/LSan + 2137
-codegen E2E green).** Slice 2 (inline construction — *the win*) is the next dedicated
-session; its precise handoff is in the staged plan below (step 1's gate half is now
-done — only the memcpy-source half + steps 2–4 + the construction flip remain, all
-coordinated + only-testable-with-construction). This doc is the campaign's living
-handoff: layout decision (now settled), staged slice plan, the tag-aware-accessor work
-list, and the verification matrix. Scoped 2026-06-12; Slice 1 landed 2026-07-09.
+**Status:** 🟡 **Slice 1 landed** (layout + accessors + free-gate hardening). Its
+follow-up claimed every String buffer-free/realloc gate was inline-safe —
+**Slice 2 measured that claim FALSE**: 16 gates were still unsigned `UGT`, and 14
+were fixed in `3833ff8`.
+
+**Slice 2 inline construction is LIVE behind `KARAC_SSO=1`, default OFF.** It
+works and it is correct on every surface probed — and its **first payoff
+measurement is NEGATIVE**: a lexer-shaped workload loses a million allocations and
+36% of its retired instructions, and still runs **40% slower**. Separately, the
+construction site that landed (`s[a..b]`) is **not the one the motivating profile
+uses** (`.substring()`, which still mallocs). **Read "Slice 2 round 2" below
+before planning anything, and do not attempt the default flip until the read path
+stops costing more than the allocation it saves.** This doc is the campaign's
+living handoff: layout decision (settled), staged slice plan, the tag-aware
+accessor work list, and the verification matrix. Scoped 2026-06-12; Slice 1 landed
+2026-07-09; Slice 2 construction 2026-09-11.
 
 **Layout decision — SETTLED (Slice 1):** Option A, **inline flag = sign bit (bit 63) of
 `cap`**. Three states discriminated by `cap` read as `i64`: static-heap (`cap == 0`),
@@ -270,14 +277,128 @@ perf payoff lands in Slice 2.
     mechanical rewrite of 119 ptr+len PAIRS missed `String.len()`, which is a
     **len-only** read, and `f_str_slice` silently returned 0 instead of 3
     (`par_codegen::test_e2e_autopar_joined_range_slice_binding`).
-  - **Remaining sweep (the next session's work):** 108 `struct_gep(vec_ty, _, 1)`,
-    57 `extract_value(_, 1)`, 69 `extract_value(_, 0)` — 234 single-field reads, each
-    needing String/Vec classification. Then concat / `to_string` / `push_str` result
-    as construction sites, then the default flip + the profile gate.
+  - **Remaining sweep (superseded by the round-2 entry below — read that first):**
+    108 `struct_gep(vec_ty, _, 1)`, 57 `extract_value(_, 1)`, 69
+    `extract_value(_, 0)`. Round 2 re-counted these with a balanced-paren scanner
+    and classified them: of 88 field-1 READ sites on the shared struct, most are
+    `Vec`-only methods (`sort`, `pop`, `retain`, …) that `String` does not have, so
+    the real String-relevant remainder is far smaller than the raw count suggests.
   - Gates at this commit: fmt + both clippy legs green; `--features llvm` **SSO=off**
     16,001 passed (red: the load-flaky `signalling_karac_run_does_not_orphan_the_jit_runner`
     and `gpu_e2e`'s missing optional archive); **SSO=on** 16,739 passed, `gpu_e2e` the
     only red binary.
+
+- **Slice 2 round 2 — correctness advanced, and the first PAYOFF MEASUREMENT is
+  NEGATIVE (2026-09-11).** The probe now agrees byte-for-byte at both settings
+  across three receiver forms. Then the first end-to-end measurement was taken,
+  and it says the campaign **as currently built is a net wall-time LOSS on the
+  shape it was designed for.** That is the headline; the rest is why.
+
+  - **Routed this round**, each String-only so `Vec` pays nothing:
+    `karac_hash_String` / `karac_eq_String` (Map/Set keys — the
+    highest-consequence pair, since a wrong digest puts equal keys in different
+    buckets where they never meet to be compared), the nested-String display leaf
+    in `synth_display` (`Vec[String]` elements, struct fields — distinct from the
+    two top-level print arms), `for c in s`, `Secret.ct_eq`, 11 receiver
+    `(ptr, len)` pairs in `vec_method.rs`, and the len-family SSA arm in
+    `method_call.rs`.
+  - **A LENGTH NEEDS NO SPILL.** `cap` is field 2 of the aggregate already in
+    hand, so a tag-aware length is a shift, a mask and a select over registers.
+    Only a DATA POINTER needs the descriptor's address. This splits the remaining
+    sweep by COST, not only by correctness: the 74 `extract_value(_, 1)` sites are
+    cheap, the 94 `extract_value(_, 0)` ones are not.
+  - **`emit_string_try_clone_fn` was deliberately left alone** — it already
+    dispatches on the `cap` tag. A mechanical rewrite would have "routed" it into
+    nonsense. Classifying each candidate beat transforming all of them, the
+    counter-lesson to the previous round's 119-site mass rewrite.
+
+  ### THE RECEIVER'S FORM SELECTS THE CODEGEN PATH
+
+  The most transferable finding here. `src[0..5].is_empty()` dispatches through
+  B-2026-08-18-22's borrowed scalar-reader arm and produces a `{ptr, len, cap = 0}`
+  view — **never an inline descriptor**, so it cannot exercise the tag in either
+  direction. `let t = src[0..5]; t.is_empty()` reaches the len-family SSA arm in
+  `method_call.rs` instead, and THAT one was broken: it answered `true` for a 3-
+  and a 5-byte inline String, `false` for 9 and 19 — exactly tracking whether byte
+  8 happened to be occupied, because an inline `len` field spans bytes 8..=15 and
+  `new_inline` zero-fills before copying.
+
+  It survived a green 28-surface probe, and then survived a first fix aimed at the
+  `"is_empty"` arm in `vec_method.rs` — the wrong site. **Testing one receiver form
+  certifies one path.** The probe now runs every surface in three: subscript in
+  receiver position, `let`-bound owned, and passed across a function boundary.
+
+  Two other probe "findings" this round were the PROBE's bugs, recorded so nobody
+  re-derives them: a binding reused across `Vec.push` and `Map.insert` (both take
+  ownership) read as an SSO divergence, and `s[a..b].substring(..)` failing codegen
+  at BOTH settings, which is B-2026-08-18-22's deliberately deferred half. Neither
+  was filed. **Rule: a probe result is evidence about the probe until the probe is
+  proven to reach the code it targets.**
+
+  ### The payoff measurement
+
+  Lexer-shaped workload — slice a 3-byte token out of a source string, compare it
+  to a keyword, discard — 1M iterations, AOT, archives matching `3833ff8`:
+
+  | | allocations | I-refs (callgrind) | wall (mean of 5) |
+  |---|---|---|---|
+  | `KARAC_SSO=0` | 1,000,009 | 254,392,448 | **22 ms** |
+  | `KARAC_SSO=1` | **9** | **162,335,574** | **31 ms** |
+
+  A million allocations removed, 36% fewer instructions retired, and **40% more
+  wall time.** The disassembly says why, and it is not the malloc:
+
+  1. **The tag-select makes the data pointer OPAQUE to LLVM.** At SSO=0 the 3-byte
+     compare folds to `movzwl`/`xor`/`movzbl`/`xor` — four instructions, no call.
+     At SSO=1 the pointer is a `cmovs` between the heap pointer and the
+     descriptor's own address, so LLVM can no longer see where the bytes are and
+     emits `call bcmp@plt`. An inlined 4-instruction compare became a PLT call; at
+     ~25 cycles over 1M iterations that is the right order of magnitude for the
+     whole 9 ms. (Not yet isolated — the `lexlong` variant, where both legs call
+     `bcmp`, is built and unmeasured.)
+  2. **The descriptor makes a pointless round trip.** `compile_string_slice` has
+     `karac_string_slice_into` write the descriptor to an alloca, then LOADS it to
+     an SSA aggregate; the consumer's `sso_string_parts_from_value` STORES it
+     straight back to a second alloca. Six memory ops to return to where the callee
+     already put it.
+
+  **This does not refute the premise — it relocates it.** `malloc`/`free` of a
+  short-lived buffer is a glibc tcache hit, far cheaper than "#1 self-time leaf"
+  suggests when the allocation is freed in the same loop. The win is real only
+  where allocations survive long enough to defeat tcache reuse, or where the memory
+  traffic itself matters (2.7 MB → 6.7 KB here).
+
+  ### The landed construction site MISSES the motivating workload
+
+  The self-hosted lexer's per-token copy is `self.src.substring(a, b)`
+  (`selfhost/src/lexer.kara:275`, `:513`, `:651`, `:986`, …) — the **method**, not
+  the `s[a..b]` subscript. `substring` mallocs inline in codegen (its own clamp +
+  `malloc` + `memcpy`), a separate construction site entirely. Measured: the same
+  benchmark written with `.substring()` allocates **1,000,046 times at
+  `KARAC_SSO=1`**. So the commit that "turned on inline construction" does not
+  touch the profile that motivated this campaign.
+
+  ### Consequence for the staged plan
+
+  **Step 5 ("flip the default and prove the payoff") cannot succeed as stated** and
+  should not be attempted until the read path stops costing more than the
+  allocation it saves. In order:
+  1. **Reuse the construction slot** — a String just written to an alloca should
+     not be re-spilled to another. Needs a value→slot side table consulted by
+     `sso_string_parts_from_value`.
+  2. **Branch rather than select where the pointer feeds a length-known compare**,
+     so each arm has a concrete pointer LLVM can still fold.
+  3. **Make `substring` a construction site** — the one that matters for the
+     profile. `karac_string_from_bytes_into(src, n, out)` is the right shape:
+     codegen keeps its existing clamp and boundary check (whose contract differs
+     from `slice_into`'s fatal one) and only the final assembly routes to the
+     runtime, so the encoder keeps exactly one implementation.
+  4. Only then re-measure, and only then consider the default.
+
+  Gates at this commit: fmt OK, both clippy legs green, 109 binaries per leg.
+  SSO=off 16,028 passed, 2 red (`signalling_karac_run_does_not_orphan_the_jit_runner`
+  = B-2026-09-09-1, and `coroutine_ws_over_tls_concurrent_handlers_all_execute`);
+  SSO=on 16,801 passed, zero red. Both reds are on the leg this work cannot affect.
 
 - **Slice 3 — sweep + runtime/FFI decode.** Remaining raw sites; runtime decode
   (`println`/file/http/tls/json); thread the Kāra type to keep `Vec` branch-free for perf.

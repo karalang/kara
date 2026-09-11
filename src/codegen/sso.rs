@@ -32,9 +32,18 @@ use inkwell::IntPredicate;
 /// read surface SSO needs, and they are being routed into ~430 field-0 /
 /// field-1 read sites over several commits. A half-swept tag-aware String
 /// surface is the shape that produces silent data corruption, so every
-/// intermediate commit must be a *byte-identical* no-op: with SSO off each
-/// accessor emits exactly the raw load it replaced, so the IR does not move
-/// at all — not merely "the branch is never taken at runtime".
+/// intermediate commit aims to be a no-op at SSO=off: each accessor emits
+/// exactly the raw load it replaced, so the IR does not move at all — not
+/// merely "the branch is never taken at runtime".
+///
+/// **That is no longer literally true of the whole campaign, and the weaker
+/// claim is the honest one.** The commit that turned on inline construction
+/// also flipped 14 buffer-free gates from `UGT` to `SGT` UNCONDITIONALLY (they
+/// have to be inline-safe before any inline value exists, and gating them on
+/// an env var would leave the unsafe predicate live by default). At SSO=off
+/// that tree is *semantically* identical with 14 predicates flipped, not
+/// byte-identical — which is why five IR-assertion tests in `tests/codegen.rs`
+/// had to be updated to expect `icmp sgt`.
 ///
 /// `KARAC_SSO=1` (also `on` / `true`) turns the whole thing on, which is how
 /// the sweep is tested ahead of the default flip. Read once — this is asked
