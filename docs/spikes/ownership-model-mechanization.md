@@ -364,6 +364,35 @@ new owner needs a cell where the value is COPIED, not just cells where it dies;
 the by-value-parameter cell is the cheapest one that exercises the copy/drop
 symmetry these classifiers keep warning about.
 
+**The sweep that class-naming asked for was run, and it paid — then it taught a
+second lesson about its own limits.** 40 cells of (10 container positions) x
+(tuple, `Array`, `String`, user struct), each measured at `KARAC_OPT_LEVEL=0`
+with one PASS/FAIL line. 38 built; exactly **two** leaked, and both were
+`Array` — as an enum payload and as a `Map` value (B-2026-09-12-12,
+B-2026-09-12-13). Every tuple cell was clean, which is the first independent
+confirmation that B-2026-09-12-8 holds across positions rather than only in the
+one it was measured in. That is the search working: two findings and one
+negative result, from a generator and a runner script.
+
+**The limit is that a generated matrix inherits its author's spelling habits.**
+The enum-payload fix was built, and on a 15-cell call-shape matrix it looked
+finished — every leak closed, the by-value double-free cell caught and fixed,
+A/B identical on all three surfaces. The `--features llvm` gate then failed with
+a SEGFAULT, and the reduction showed why: every cell the generator emitted used
+an UNQUALIFIED arm pattern over a locally-bound enum, while the failing shapes
+use a QUALIFIED constructor (`E.A(t)`, `plainE(E.A(a))`) — a spelling the ledger
+already records as behaviourally distinct, because the qualified form parses as
+a method call (B-2026-09-12-11). One of the shapes that broke was the exact
+element type the matrix had just called clean.
+
+So a probe matrix is evidence about the shapes it enumerates and **nothing
+more**. It is not a substitute for the suite, and the reflex it should train is
+to enumerate SPELLINGS as deliberately as shapes — qualified vs bare
+constructor, annotated vs inferred type, arm-bound vs let-bound — since every
+one of those axes has now produced a distinct defect in this family. The change
+was reverted whole; the row carries the diagnosis, the measurements, and the
+trap, which is worth more than a patch that segfaults.
+
 Note what the **differential** says about that program: nothing. It reports 0,
 correctly — codegen does emit a cleanup action for the binding, so the emitted
 set covers the schedule. The differential checks that a drop is SCHEDULED AND

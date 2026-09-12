@@ -94,7 +94,7 @@ distinguish "bugs flattening" from "we stopped writing them down."
 |---|---|
 | miscompile | 404 |
 | run-vs-build | 390 |
-| leak | 326 |
+| leak | 328 |
 | double-free | 224 |
 | missing-feature | 195 |
 | codegen-gap | 174 |
@@ -110,7 +110,7 @@ distinguish "bugs flattening" from "we stopped writing them down."
 
 | surface | total |
 |---|---|
-| codegen | 1679 |
+| codegen | 1681 |
 | interp | 418 |
 | typecheck | 296 |
 | other | 87 |
@@ -179,6 +179,8 @@ _Generated from `bug-ledger.jsonl` by `scripts/bug-curve.py` (2026-05-20 → 202
 | B-2026-09-12-5 | 2026-09-12 | codegen | medium | A BOXED TUPLE / `Array` / GENERIC-STRUCT PAYLOAD MATCHED OUT OF A GENERIC ENUM IS OWNED BY NOBODY -- the arm binding that takes it never frees it and the box's interior walk is retracted because it did, so the move-out cells leak 192-384 B where the identical `Option[String]` payload is clean | — |
 | B-2026-09-12-10 | 2026-09-12 | codegen | medium | THREE TUPLE-PAYLOAD ELEMENT SHAPES STILL LEAK INSIDE AN ENUM -- `(bool, String)` is declined on purpose by the word-alignment gate B-2026-09-12-8's fix relies on, while `(Rec, i64)` carrying a user `Drop` and `(Option[String], i64)` are declined for reasons not yet attributed; all three measured unchanged by that fix rather than worse | — |
 | B-2026-09-12-11 | 2026-09-12 | codegen | medium | A QUALIFIED CONSTRUCTOR AT AN ARGUMENT POSITION LOSES ITS PAYLOAD'S `Drop` BODY ON EVERY COMPILED BACKEND -- `plainD(Option[(R, R)].Some((R { .. }, R { .. })))` prints `s dR1 dR2 end` under `--interp` and `s end` at -O0, -O0 autopar and -O2 autopar, while the BARE `plainD(Some((..)))` spelling of the same program is correct on all four. A spelling asymmetry, not a payload-shape limit: struct, tuple and array payloads all exhibit it, and `Result`'s Ok/Err sides too. The qualified form parses as a METHOD CALL (B-2026-08-22-17), and `optres_arg_is_unowned_temp` rejects `MethodCall` in its first arm as a place rooted at a binding, so the caller never stages `__optres_arg_bodies_tmp` -- the IR shows the payload-bodies walker is never even EMITTED for the qualified spelling. Memory is clean on every cell, which is why no sanitizer catches it | none |
+| B-2026-09-12-12 | 2026-09-12 | codegen | medium | AN ENUM'S `Array[T, N]` PAYLOAD IS HEAP-BOXED BY A SIZING FALLBACK AND THEN FREED BY NOBODY -- 384 B direct plus 384 B indirect per 8 rounds for `enum E { A(Array[String, 2]), B }`, and 192 B even for `Array[i64, 3]`, which owns no heap at all and leaks purely from the needless box; the obvious two-part fix was BUILT AND MEASURED and it segfaults arm-bound reads, so the row carries the diagnosis and the trap rather than a patch | — |
+| B-2026-09-12-13 | 2026-09-12 | codegen | medium | AN `Array` HELD AS A `Map` VALUE LEAKS ITS ELEMENTS -- 384 B in 16 blocks for `Map[i64, Array[String, 2]]`, the one cell of a 38-cell position x type sweep still leaking after B-2026-09-12-12, while the same array as an enum payload, a struct field, a plain local, an `Option` payload and a `Result` payload are all clean | — |
 
 ### Relocated
 
