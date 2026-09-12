@@ -93,7 +93,7 @@ distinguish "bugs flattening" from "we stopped writing them down."
 | class | total |
 |---|---|
 | miscompile | 404 |
-| run-vs-build | 389 |
+| run-vs-build | 390 |
 | leak | 326 |
 | double-free | 224 |
 | missing-feature | 195 |
@@ -110,7 +110,7 @@ distinguish "bugs flattening" from "we stopped writing them down."
 
 | surface | total |
 |---|---|
-| codegen | 1678 |
+| codegen | 1679 |
 | interp | 418 |
 | typecheck | 296 |
 | other | 87 |
@@ -167,7 +167,6 @@ _Generated from `bug-ledger.jsonl` by `scripts/bug-curve.py` (2026-05-20 → 202
 | B-2026-09-10-22 | 2026-09-10 | codegen+interp | low | A WHOLE-PAYLOAD ARM BINDING OVER A GENERIC BY-VALUE `Option[(T, i64)]` PARAM LOSES THE ELEMENT'S `Drop` BODY ON EVERY COMPILED SURFACE -- `fn take[T](o: Option[(T, i64)]) { match o { Some(t) => t.1 } }` prints `g9` compiled where `--interp` prints `dW3 g9`, while the CONCRETE twin of the same function runs the body on both backends; the generic is the axis, measured against a non-generic control | none |
 | B-2026-09-10-23 | 2026-09-10 | codegen | low | A WHOLE-PAYLOAD ARM BINDING OVER A BY-VALUE `Option[(W, i64)]` PARAM LEAKS THE TUPLE ELEMENT'S INTERIOR -- 2 B in 1 block at -O0, in the GENERIC and CONCRETE legs alike; the by-value param and the match are BOTH required (either alone is clean), making this the TUPLE-payload sibling of B-2026-09-07-44's struct-payload leak | none |
 | B-2026-09-10-25 | 2026-09-10 | codegen+interp | low | A FRESH TUPLE TEMP PASSED AS A CALL ARGUMENT RUNS ITS `Option` ELEMENT'S `Drop` BODY ON NEITHER BACKEND -- `eat((Some(R { .. }), 7))` over `fn eat(p: (Option[R], i64))` prints `eat done` under `--interp`, `-O0` and `-O2` auto-par alike, where one `dR71` is owed; the BINDING spelling of the same value (`let p = (Some(R { .. }), 7);`) is correct on all four surfaces since B-2026-09-10-18, so the element types resolve and what is missing is an owner for a tuple ARGUMENT temp's element bodies. Both backends agree, so no parity rule catches it and repairing either side alone would convert it into a divergence. Memory is balanced (0 valgrind errors, nothing lost) | none |
-| B-2026-09-10-27 | 2026-09-10 | interp+codegen | medium | A BOXED `Array` PAYLOAD'S ELEMENT `Drop` BODIES RUN ON NO BACKEND -- `Option[Array[R, 2]]` over `impl Drop for R` prints no `dR` under `--interp`, the JIT or either AOT lane; an AGREED SILENCE and the `Array` peer of the TUPLE gap a56142bd8 closed, so both backends must gain it together | — |
 | B-2026-09-10-32 | 2026-09-10 | codegen | low | A DIRECT METHOD CALL ON AN INDEXED ELEMENT OF A `ref Array[T, N]` PARAM FAILS CODEGEN -- `fn f(a: ref Array[String, 2]) -> i64 { return a[0].len(); }` is rejected with "outer is not a Vec/Slice/Array" though the outer IS an Array; by-value `Array`, `ref Vec` and field-then-method all lower | — |
 | B-2026-09-10-35 | 2026-09-10 | interp+codegen | low | AN `Array` ELEMENT THAT IS ITSELF AN `Array` RUNS ITS LEAVES' `Drop` BODIES ON THE INTERPRETER ALONE -- `Array[Array[R, 2], 2]` over `impl Drop for R` prints four `d:` lines under `--interp` and none under the JIT or either `karac build` opt level, while the ONE-LEVEL `Array[R, 2]` control agrees on all five surfaces | — |
 | B-2026-09-10-36 | 2026-09-10 | codegen | medium | A `Vec[Array[T, N]]` FED FROM A TEMPORARY LEAKS EVERY ELEMENT BUFFER AT BOTH OPT LEVELS -- 36 B in 4 blocks for `v.push(mk(0)); v.push(mk(1))` over `Vec[Array[String, 2]]`, while the named-source spelling `let e = [..]; v.push(e)` is clean because the SOURCE LOCAL owns those buffers and the container never had an element drop at all | — |
@@ -179,6 +178,7 @@ _Generated from `bug-ledger.jsonl` by `scripts/bug-curve.py` (2026-05-20 → 202
 | B-2026-09-12-3 | 2026-09-12 | codegen | low | `mono_handle_param_infos` IS WRITTEN UNDER A NON-FINAL `mangled` AND READ UNDER THE FINAL ONE -- `compile_generic_call` rebinds `mangled` four times and stores the handle record after the first append, while `compile_mono_function` looks it up after the fourth, so the map is correct today only because the three later appends happen to be no-ops for a Column/Tensor argument | — |
 | B-2026-09-12-5 | 2026-09-12 | codegen | medium | A BOXED TUPLE / `Array` / GENERIC-STRUCT PAYLOAD MATCHED OUT OF A GENERIC ENUM IS OWNED BY NOBODY -- the arm binding that takes it never frees it and the box's interior walk is retracted because it did, so the move-out cells leak 192-384 B where the identical `Option[String]` payload is clean | — |
 | B-2026-09-12-10 | 2026-09-12 | codegen | medium | THREE TUPLE-PAYLOAD ELEMENT SHAPES STILL LEAK INSIDE AN ENUM -- `(bool, String)` is declined on purpose by the word-alignment gate B-2026-09-12-8's fix relies on, while `(Rec, i64)` carrying a user `Drop` and `(Option[String], i64)` are declined for reasons not yet attributed; all three measured unchanged by that fix rather than worse | — |
+| B-2026-09-12-11 | 2026-09-12 | codegen | medium | A QUALIFIED CONSTRUCTOR AT AN ARGUMENT POSITION LOSES ITS PAYLOAD'S `Drop` BODY ON EVERY COMPILED BACKEND -- `plainD(Option[(R, R)].Some((R { .. }, R { .. })))` prints `s dR1 dR2 end` under `--interp` and `s end` at -O0, -O0 autopar and -O2 autopar, while the BARE `plainD(Some((..)))` spelling of the same program is correct on all four. A spelling asymmetry, not a payload-shape limit: struct, tuple and array payloads all exhibit it, and `Result`'s Ok/Err sides too. The qualified form parses as a METHOD CALL (B-2026-08-22-17), and `optres_arg_is_unowned_temp` rejects `MethodCall` in its first arm as a place rooted at a binding, so the caller never stages `__optres_arg_bodies_tmp` -- the IR shows the payload-bodies walker is never even EMITTED for the qualified spelling. Memory is clean on every cell, which is why no sanitizer catches it | none |
 
 ### Relocated
 
@@ -2480,6 +2480,7 @@ _Generated from `bug-ledger.jsonl` by `scripts/bug-curve.py` (2026-05-20 → 202
 | B-2026-09-10-19 | codegen | low | A NESTED DESTRUCTURING ARM BINDING LOSES ITS `Drop` BODY ON THE COMPILED BACKENDS -- `match x { Some(Some(r)) => { println(f"a{r.id}") } . | 41717852a |
 | B-2026-09-10-24 | codegen | medium | AN `Option`/`Result`-TYPED LOCAL MOVED INTO A TUPLE LITERAL LOSES ITS PAYLOAD'S `Drop` BODY, AND THE THREE-LINE FIX FOR IT DOUBLE-FREES -- `let o: Op… | ebe9a5e18 |
 | B-2026-09-10-26 | codegen | medium | AN `Array` WHOSE ELEMENT IS ITSELF AN `Array` LEAKS ITS WHOLE INTERIOR -- `Array[Array[String, 2], 2]` loses all four `String` buffers (36 B at `-O0`… | 1e99113 |
+| B-2026-09-10-27 | interp+codegen | medium | A BOXED `Array` PAYLOAD'S ELEMENT `Drop` BODIES RUN ON NO BACKEND -- `Option[Array[R, 2]]` over `impl Drop for R` prints no `dR` under `--interp`, th… | 49f09d8eb |
 | B-2026-09-10-28 | codegen | high | AN `Option`/`Result` LOCAL MOVED INTO AN *ANNOTATED* TUPLE BINDING IS A USE-AFTER-FREE AND A DOUBLE FREE -- `let o: Option[R] = Some(R { . | ebe9a5e18 |
 | B-2026-09-10-29 | codegen | high | AN `Option`/`Result` LOCAL MOVED INTO AN ARRAY OR `Vec` LITERAL DOUBLE-FREES ITS PAYLOAD, AND THE NO-`Drop` TWIN ABORTS IN A PROGRAM WITH NO `Drop` I… | ebe9a5e18 |
 | B-2026-09-10-30 | other | medium | THE ORACLE<->CODEGEN DIFFERENTIAL COUNTS A CODEGEN FAILURE AS "NOT A VALID SUBJECT", so the gate is blind exactly where codegen is weakest -- `DiffOu… | 8d509c655 |
