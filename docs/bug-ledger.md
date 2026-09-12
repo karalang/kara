@@ -101,7 +101,7 @@ distinguish "bugs flattening" from "we stopped writing them down."
 | diagnostics | 125 |
 | false-positive | 106 |
 | perf | 104 |
-| other | 100 |
+| other | 101 |
 | soundness | 95 |
 | crash | 80 |
 | use-after-free | 38 |
@@ -110,8 +110,8 @@ distinguish "bugs flattening" from "we stopped writing them down."
 
 | surface | total |
 |---|---|
-| codegen | 1686 |
-| interp | 419 |
+| codegen | 1687 |
+| interp | 420 |
 | typecheck | 297 |
 | other | 87 |
 | ownership | 74 |
@@ -178,12 +178,12 @@ _Generated from `bug-ledger.jsonl` by `scripts/bug-curve.py` (2026-05-20 → 202
 | B-2026-09-12-5 | 2026-09-12 | codegen | medium | A BOXED TUPLE / `Array` / GENERIC-STRUCT PAYLOAD MATCHED OUT OF A GENERIC ENUM IS OWNED BY NOBODY -- the arm binding that takes it never frees it and the box's interior walk is retracted because it did, so the move-out cells leak 192-384 B where the identical `Option[String]` payload is clean | — |
 | B-2026-09-12-10 | 2026-09-12 | codegen | medium | THREE TUPLE-PAYLOAD ELEMENT SHAPES STILL LEAK INSIDE AN ENUM -- `(bool, String)` is declined on purpose by the word-alignment gate B-2026-09-12-8's fix relies on, while `(Rec, i64)` carrying a user `Drop` and `(Option[String], i64)` are declined for reasons not yet attributed; all three measured unchanged by that fix rather than worse | — |
 | B-2026-09-12-13 | 2026-09-12 | codegen | medium | AN `Array` HELD AS A `Map` VALUE LEAKS ITS ELEMENTS -- 384 B in 16 blocks for `Map[i64, Array[String, 2]]`, the one cell of a 38-cell position x type sweep still leaking after B-2026-09-12-12, while the same array as an enum payload, a struct field, a plain local, an `Option` payload and a `Result` payload are all clean | — |
-| B-2026-09-12-14 | 2026-09-12 | codegen | medium | A NAMED `Array` BINDING MOVED INTO A STRUCT FIELD KEEPS ITS OWN ELEMENT DROP, so the buffers are freed twice -- `let a: Array[String, 2] = [..]; let w = W { a: a };` is 10 allocs / 12 frees with two `Invalid free()` at `-O0` on plain scope exit, with NO call and NO generics involved, and every hand-off of `w` adds two more; the direct-literal field, a `Vec` field and an `Array[i64, 2]` field are all clean, and it reproduces identically at 2dd7028 so it predates this week's array-ownership work | — |
 | B-2026-09-12-15 | 2026-09-12 | codegen | medium | A BY-VALUE `Option`/`Result` ARGUMENT'S PAYLOAD `Drop` BODY RUNS ON NO COMPILED BACKEND AT THREE CALL POSITIONS -- a METHOD call (`s.take(Some(R { id: 1 }))`), an ASSOCIATED function (`Sink.eat(Some(..))`) and a MONOMORPHIZED GENERIC function (`genf(Some(..))`) each print the body under `--interp` and nothing at -O0, -O0 autopar or -O2 autopar, in BOTH the bare and the qualified spelling; the free-function position is correct on all four. B-2026-09-09-18 wired `track_optres_arg_temp_bodies` at exactly ONE of the four sibling argument loops, and the generic case fails for a second reason: `name` is overwritten with the MANGLED mono symbol before the gate looks the callee up by `f.name`. The associated-function cell has a THIRD observable -- the interpreter runs the body TWICE (`a:1 dR1 dR1`), so that one is a compiled miss and an interpreter double-run at once | — |
 | B-2026-09-12-16 | 2026-09-12 | typecheck | low | THE BLESSED EXPLICIT SPELLING IS REJECTED FOR A USER ENUM'S VARIANT CONSTRUCTOR -- `Ho[R].Full(R { id: 5 })` over `enum Ho[T] { Full(T), Empty }` fails typecheck with `no method 'Full' on Ho[…]`, while the seeded pair (`Option[R].Some(..)`, `Result[T, E].Ok(..)`) and the unqualified `Ho.Full(..)` both work; the same user-vs-builtin split B-2026-08-22-17 fixed for container constructors, one type family over | — |
 | B-2026-09-12-17 | 2026-09-12 | codegen+interp | medium | A GENERIC USER ENUM'S PAYLOAD `Drop` BODY RUNS ON NO COMPILED BACKEND WHEN THE ARGUMENT IS A FRESH TEMP -- `takeit(Full(R { id: 5 }))` over `enum Ho[T] { Full(T), Empty }` prints `f:5 dR5 end` under `--interp` and `f:5 end` at -O0, -O0 autopar and -O2 autopar, while the MONOMORPHIC `enum Ho { Full(R) }` spelling of the same program is correct on all four and a NAMED LOCAL of the generic enum is correct too. B-2026-09-09-18's caller-side bodies channel is gated on the parameter's head being literally `Option` or `Result` (`call_dispatch.rs`, `if head != "Option" && head != "Result"`), so a user enum head never reaches it; the named-local cells are correct because their let site owns the bodies instead. The qualified and bare spellings behave IDENTICALLY, which is what separates this from B-2026-09-12-11 | — |
 | B-2026-09-12-19 | 2026-09-12 | codegen | medium | A BOXED `Array[T, N]` ENUM PAYLOAD'S INTERIOR IS FREED BY NOBODY AT THREE OF THE FOUR REGISTRATION SITES -- 96 B per cell in the by-value-param and returned positions, because `array_interior_ok` can only be answered `true` by the `let` site and the real repair is the missing array move-out disarm | — |
 | B-2026-09-12-20 | 2026-09-12 | runtime | medium | SSO's INLINE STRING OVERLAY IS BROKEN ON EVERY 32-BIT TARGET -- `new_inline` packs the first eight content bytes into a u64 and stores them through the POINTER field, so on wasm32 (4-byte pointers) bytes 4..=7 are truncated away and land in the alignment hole before the i64 at offset 8, which nothing writes. Measured through a wasm_browser export: every inline length >= 5 comes back with bytes 4..=7 zeroed. Reachable only at KARAC_SSO=1, which is off by default. | — |
+| B-2026-09-12-21 | 2026-09-12 | codegen+interp | low | AN `Array` ELEMENT'S USER `Drop` BODY RUNS ON NO BACKEND ONCE THE ARRAY IS MOVED INTO A STRUCT FIELD -- `Array[R, 2]` with `impl Drop for R` prints `dR dR` on all six surfaces as a bare local and NOTHING on all six once `let w = W { a: a }` takes it, with memory balanced 8/8 either way, so it is a lost BODY rather than a lost buffer and no leak gate or A/B gate can see it | — |
 
 ### Relocated
 
@@ -2503,6 +2503,7 @@ _Generated from `bug-ledger.jsonl` by `scripts/bug-curve.py` (2026-05-20 → 202
 | B-2026-09-12-9 | other | medium | THE DROP FUZZER EMITS A METHOD THAT DOES NOT EXIST -- `bool` has no `to_i64`, so every program reaching `tracked_into_opt_then_displace`'s displacing… | 8d509c655 |
 | B-2026-09-12-11 | codegen | medium | A QUALIFIED CONSTRUCTOR AT AN ARGUMENT POSITION LOSES ITS PAYLOAD'S `Drop` BODY ON EVERY COMPILED BACKEND -- `plainD(Option[(R, R)].Some((R { . | 458c43491 |
 | B-2026-09-12-12 | codegen | medium | AN ENUM'S `Array[T, N]` PAYLOAD IS HEAP-BOXED BY A SIZING FALLBACK AND THEN FREED BY NOBODY -- 384 B direct plus 384 B indirect per 8 rounds for `enu… | de0ad99 |
+| B-2026-09-12-14 | codegen | medium | A NAMED `Array` BINDING MOVED INTO A STRUCT FIELD KEEPS ITS OWN ELEMENT DROP, so the buffers are freed twice -- `let a: Array[String, 2] = [..]; let… | c9570e0 |
 | B-2026-09-12-18 | codegen | high | A GENERIC ENUM'S BOXED `Array[T, N]` PAYLOAD DOUBLE-FREES ITS ELEMENTS WHEN THE PAYLOAD IS MOVED FROM A LOCAL -- SIGABRT for `String`, struct, `Drop`… | de0ad99 |
 
 </details>
