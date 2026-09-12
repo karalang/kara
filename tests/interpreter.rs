@@ -66717,3 +66717,129 @@ fn rc_promoted_base_still_destroys_its_retained_field() {
     ));
     assert_eq!(outm, vec!["dS2\n", "t1\n", "dS1\n", "m3\n"]);
 }
+
+/// B-2026-09-12-6 -- the INTERPRETER half of the nested generic-enum payload
+/// `Drop` bodies, asserting the identical programs and identical expected
+/// output as `e2e_generic_enum_nested_payload_drop_bodies_run_on_every_surface`
+/// in `tests/codegen.rs`.
+///
+/// Paired deliberately rather than trusted to one side. The defect this closes
+/// WAS a run-vs-build divergence in both directions -- each backend correct on
+/// exactly the shape the other missed -- so a fixture on one backend alone
+/// cannot tell "both agree" from "both moved together in the wrong direction".
+/// The two tests share their sources and their expectations verbatim; if they
+/// ever disagree, one of them fails.
+#[test]
+fn interp_generic_enum_nested_payload_drop_bodies_run() {
+    for (label, src, want) in [
+        // 1 -- the TUPLE payload, which THIS backend was the one to miss: its
+        //      payload walk destructured `Value::Struct` and a tuple is not
+        //      one, so the value was discarded before any descent.
+        (
+            "genum-tuple-payload-body",
+            "struct Rec { s: String }\n\
+     impl Drop for Rec { fn drop(mut ref self) { println(\"dB\"); } }\n\
+     struct Wrap[T] { val: T }\n\
+     struct WrapC { val: Rec }\n\
+     enum Slot[T] { Filled(T), Blank }\n\
+     fn main() {\n\
+     \x20   let mut i: i64 = 0;\n\
+     \x20   while i < 2 {\n\
+     \x20       let g: Slot[(Rec, i64)] = Filled((Rec { s: f\"aaaaaaaaaaaaaaaa-{i}\" }, 7));\n\
+     \x20       println(\"t\");\n\
+     \x20       i = i + 1;\n\
+     \x20   }\n\
+     \x20   println(\"end\");\n\
+     }\n",
+            "dB\nt\ndB\nt\nend\n",
+        ),
+        // 2 -- the GENERIC STRUCT payload, which this backend always got right
+        //      (a `Wrap[Rec]` payload IS a `Value::Struct`, so it reached the
+        //      field walk) and both compiled backends missed. Pinned here so a
+        //      future narrowing of the value match cannot silently lose it.
+        (
+            "genum-generic-struct-payload-body",
+            "struct Rec { s: String }\n\
+     impl Drop for Rec { fn drop(mut ref self) { println(\"dB\"); } }\n\
+     struct Wrap[T] { val: T }\n\
+     struct WrapC { val: Rec }\n\
+     enum Slot[T] { Filled(T), Blank }\n\
+     fn main() {\n\
+     \x20   let mut i: i64 = 0;\n\
+     \x20   while i < 2 {\n\
+     \x20       let g: Slot[Wrap[Rec]] = Filled(Wrap { val: Rec { s: f\"aaaaaaaaaaaaaaaa-{i}\" } });\n\
+     \x20       println(\"t\");\n\
+     \x20       i = i + 1;\n\
+     \x20   }\n\
+     \x20   println(\"end\");\n\
+     }\n",
+            "dB\nt\ndB\nt\nend\n",
+        ),
+        // 3 -- a tuple whose element is the generic struct: needs the tuple
+        //      descent here AND the instantiation-aware gate in codegen, so it
+        //      was silent on every backend.
+        (
+            "genum-tuple-of-generic-struct-payload-body",
+            "struct Rec { s: String }\n\
+     impl Drop for Rec { fn drop(mut ref self) { println(\"dB\"); } }\n\
+     struct Wrap[T] { val: T }\n\
+     struct WrapC { val: Rec }\n\
+     enum Slot[T] { Filled(T), Blank }\n\
+     fn main() {\n\
+     \x20   let mut i: i64 = 0;\n\
+     \x20   while i < 2 {\n\
+     \x20       let g: Slot[(Wrap[Rec], i64)] = Filled((Wrap { val: Rec { s: f\"aaaaaaaaaaaaaaaa-{i}\" } }, 7));\n\
+     \x20       println(\"t\");\n\
+     \x20       i = i + 1;\n\
+     \x20   }\n\
+     \x20   println(\"end\");\n\
+     }\n",
+            "dB\nt\ndB\nt\nend\n",
+        ),
+        // 4 -- the `Array` payload. TWO bodies per iteration: the row this
+        //      closes says "the correct count is 3 in every cell" for a
+        //      3-iteration loop, which undercounts exactly this shape.
+        //      `run_discarded_value_user_drops` has no `Value::Array` arm, so
+        //      delegating to it would have fixed cell 1 and left this one
+        //      broken.
+        (
+            "genum-array-payload-body",
+            "struct Rec { s: String }\n\
+     impl Drop for Rec { fn drop(mut ref self) { println(\"dB\"); } }\n\
+     struct Wrap[T] { val: T }\n\
+     struct WrapC { val: Rec }\n\
+     enum Slot[T] { Filled(T), Blank }\n\
+     fn main() {\n\
+     \x20   let mut i: i64 = 0;\n\
+     \x20   while i < 2 {\n\
+     \x20       let g: Slot[Array[Rec, 2]] = Filled([Rec { s: f\"aaaaaaaaaaaaaaaa-{i}\" }, Rec { s: f\"bbbbbbbbbbbbbbbb-{i}\" }]);\n\
+     \x20       println(\"t\");\n\
+     \x20       i = i + 1;\n\
+     \x20   }\n\
+     \x20   println(\"end\");\n\
+     }\n",
+            "dB\ndB\nt\ndB\ndB\nt\nend\n",
+        ),
+        // 5 -- CONTROL: correct on every backend before and after.
+        (
+            "genum-concrete-struct-payload-control",
+            "struct Rec { s: String }\n\
+     impl Drop for Rec { fn drop(mut ref self) { println(\"dB\"); } }\n\
+     struct Wrap[T] { val: T }\n\
+     struct WrapC { val: Rec }\n\
+     enum Slot[T] { Filled(T), Blank }\n\
+     fn main() {\n\
+     \x20   let mut i: i64 = 0;\n\
+     \x20   while i < 2 {\n\
+     \x20       let g: Slot[WrapC] = Filled(WrapC { val: Rec { s: f\"aaaaaaaaaaaaaaaa-{i}\" } });\n\
+     \x20       println(\"t\");\n\
+     \x20       i = i + 1;\n\
+     \x20   }\n\
+     \x20   println(\"end\");\n\
+     }\n",
+            "dB\nt\ndB\nt\nend\n",
+        ),
+    ] {
+        assert_eq!(run(src), want, "[{label}]");
+    }
+}

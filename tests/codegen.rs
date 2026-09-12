@@ -155180,6 +155180,150 @@ fn main() {
     }
 
     #[test]
+    fn e2e_generic_enum_nested_payload_drop_bodies_run_on_every_surface() {
+        // B-2026-09-12-6 -- a user `Drop` body on a value nested INSIDE a
+        // generic enum's payload ran on a different subset of backends per
+        // payload shape, and on no shape did it run everywhere.
+        //
+        // Two independent blind spots, one per backend, which is why the
+        // row's table reads as a diagonal: codegen could not see a GENERIC
+        // STRUCT payload (its arm filter asked a name-keyed predicate, so
+        // `Wrap[Rec]` looked up `Wrap` and found `val: T`), and the
+        // interpreter could not see a TUPLE or `Array` payload (its walk
+        // destructured `Value::Struct` and dropped every other shape before
+        // any descent). Each backend was correct on exactly the shape the
+        // other one's gate rejected.
+        //
+        // Body-only throughout, per the row's own instruction: the memory
+        // channel is untouched, so this cannot reproduce the double-running
+        // body of B-2026-07-30-11 / B-2026-08-28-58 leg A.
+        for (label, src, want) in [
+            // 1 -- a TUPLE payload. Correct on the compiled backends before this
+            //      change and silent on `--interp`, which is the half of the
+            //      divergence the interpreter owned.
+            (
+                "genum-tuple-payload-body",
+                "struct Rec { s: String }\n\
+             impl Drop for Rec { fn drop(mut ref self) { println(\"dB\"); } }\n\
+             struct Wrap[T] { val: T }\n\
+             struct WrapC { val: Rec }\n\
+             enum Slot[T] { Filled(T), Blank }\n\
+             fn main() {\n\
+             \x20\x20\x20\x20let mut i: i64 = 0;\n\
+             \x20\x20\x20\x20while i < 2 {\n\
+             \x20\x20\x20\x20\x20\x20\x20\x20let g: Slot[(Rec, i64)] = Filled((Rec { s: f\"aaaaaaaaaaaaaaaa-{i}\" }, 7));\n\
+             \x20\x20\x20\x20\x20\x20\x20\x20println(\"t\");\n\
+             \x20\x20\x20\x20\x20\x20\x20\x20i = i + 1;\n\
+             \x20\x20\x20\x20}\n\
+             \x20\x20\x20\x20println(\"end\");\n\
+             }\n",
+                "dB\nt\ndB\nt\nend\n",
+            ),
+            // 2 -- a GENERIC STRUCT payload, the mirror image: correct on
+            //      `--interp` and silent on both compiled backends, because the
+            //      arm filter asked a name-keyed predicate about `Wrap`, whose
+            //      declared field is `val: T`.
+            (
+                "genum-generic-struct-payload-body",
+                "struct Rec { s: String }\n\
+             impl Drop for Rec { fn drop(mut ref self) { println(\"dB\"); } }\n\
+             struct Wrap[T] { val: T }\n\
+             struct WrapC { val: Rec }\n\
+             enum Slot[T] { Filled(T), Blank }\n\
+             fn main() {\n\
+             \x20\x20\x20\x20let mut i: i64 = 0;\n\
+             \x20\x20\x20\x20while i < 2 {\n\
+             \x20\x20\x20\x20\x20\x20\x20\x20let g: Slot[Wrap[Rec]] = Filled(Wrap { val: Rec { s: f\"aaaaaaaaaaaaaaaa-{i}\" } });\n\
+             \x20\x20\x20\x20\x20\x20\x20\x20println(\"t\");\n\
+             \x20\x20\x20\x20\x20\x20\x20\x20i = i + 1;\n\
+             \x20\x20\x20\x20}\n\
+             \x20\x20\x20\x20println(\"end\");\n\
+             }\n",
+                "dB\nt\ndB\nt\nend\n",
+            ),
+            // 3 -- both descents at once, and so silent on every backend. This is
+            //      the cell that rejects fixing only the payload-arm filter:
+            //      the tuple arm's OWN element predicate was blind the same
+            //      way, one level down.
+            (
+                "genum-tuple-of-generic-struct-payload-body",
+                "struct Rec { s: String }\n\
+             impl Drop for Rec { fn drop(mut ref self) { println(\"dB\"); } }\n\
+             struct Wrap[T] { val: T }\n\
+             struct WrapC { val: Rec }\n\
+             enum Slot[T] { Filled(T), Blank }\n\
+             fn main() {\n\
+             \x20\x20\x20\x20let mut i: i64 = 0;\n\
+             \x20\x20\x20\x20while i < 2 {\n\
+             \x20\x20\x20\x20\x20\x20\x20\x20let g: Slot[(Wrap[Rec], i64)] = Filled((Wrap { val: Rec { s: f\"aaaaaaaaaaaaaaaa-{i}\" } }, 7));\n\
+             \x20\x20\x20\x20\x20\x20\x20\x20println(\"t\");\n\
+             \x20\x20\x20\x20\x20\x20\x20\x20i = i + 1;\n\
+             \x20\x20\x20\x20}\n\
+             \x20\x20\x20\x20println(\"end\");\n\
+             }\n",
+                "dB\nt\ndB\nt\nend\n",
+            ),
+            // 4 -- an `Array` payload, silent everywhere: it parses as a `Path`
+            //      whose head is `Array`, which is neither a user struct nor a
+            //      user enum, so the filter had no arm for it at all.
+            //
+            //      TWO bodies per iteration, not one. The row this closes
+            //      states "the correct count is 3 in every cell" over a
+            //      3-iteration loop, which is wrong for exactly this shape --
+            //      it constructs two `Rec`s per iteration. A fix measured
+            //      against that number reads as broken at the moment it
+            //      becomes right.
+            (
+                "genum-array-payload-body",
+                "struct Rec { s: String }\n\
+             impl Drop for Rec { fn drop(mut ref self) { println(\"dB\"); } }\n\
+             struct Wrap[T] { val: T }\n\
+             struct WrapC { val: Rec }\n\
+             enum Slot[T] { Filled(T), Blank }\n\
+             fn main() {\n\
+             \x20\x20\x20\x20let mut i: i64 = 0;\n\
+             \x20\x20\x20\x20while i < 2 {\n\
+             \x20\x20\x20\x20\x20\x20\x20\x20let g: Slot[Array[Rec, 2]] = Filled([Rec { s: f\"aaaaaaaaaaaaaaaa-{i}\" }, Rec { s: f\"bbbbbbbbbbbbbbbb-{i}\" }]);\n\
+             \x20\x20\x20\x20\x20\x20\x20\x20println(\"t\");\n\
+             \x20\x20\x20\x20\x20\x20\x20\x20i = i + 1;\n\
+             \x20\x20\x20\x20}\n\
+             \x20\x20\x20\x20println(\"end\");\n\
+             }\n",
+                "dB\ndB\nt\ndB\ndB\nt\nend\n",
+            ),
+            // 5 -- CONTROL: the CONCRETE wrapper in the same generic enum, correct
+            //      on all three backends before and after. It passes the very
+            //      gate `Wrap[Rec]` failed, which is what makes the defect an
+            //      asymmetry between a generic and a concrete payload rather
+            //      than a missing feature -- the same shape B-2026-08-06-8
+            //      found in `struct_owns_shared_field`.
+            (
+                "genum-concrete-struct-payload-control",
+                "struct Rec { s: String }\n\
+             impl Drop for Rec { fn drop(mut ref self) { println(\"dB\"); } }\n\
+             struct Wrap[T] { val: T }\n\
+             struct WrapC { val: Rec }\n\
+             enum Slot[T] { Filled(T), Blank }\n\
+             fn main() {\n\
+             \x20\x20\x20\x20let mut i: i64 = 0;\n\
+             \x20\x20\x20\x20while i < 2 {\n\
+             \x20\x20\x20\x20\x20\x20\x20\x20let g: Slot[WrapC] = Filled(WrapC { val: Rec { s: f\"aaaaaaaaaaaaaaaa-{i}\" } });\n\
+             \x20\x20\x20\x20\x20\x20\x20\x20println(\"t\");\n\
+             \x20\x20\x20\x20\x20\x20\x20\x20i = i + 1;\n\
+             \x20\x20\x20\x20}\n\
+             \x20\x20\x20\x20println(\"end\");\n\
+             }\n",
+                "dB\nt\ndB\nt\nend\n",
+            ),
+        ] {
+            let Some(out) = run_program(src) else {
+                return;
+            };
+            assert_eq!(out, want, "[{label}]");
+        }
+    }
+
+    #[test]
     fn e2e_arm_bound_array_rebind_reads_back_on_every_surface() {
         for (label, src, want) in [
             // 1 — the annotated rebind, `String` element.

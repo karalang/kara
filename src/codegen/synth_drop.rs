@@ -9288,9 +9288,23 @@ impl<'ctx> super::Codegen<'ctx> {
                         .enum_layouts
                         .get(head.as_str())
                         .is_some_and(|l| !l.is_shared);
+                // B-2026-09-12-6 — the INSTANTIATION, not the head name. This
+                // is the same blindness the payload-arm filter had, one level
+                // down: asked of a `Wrap[Rec]` ELEMENT it looked up `Wrap`,
+                // whose declared field is `val: T`, and answered `false`. So
+                // `Slot[(Wrap[Rec], i64)]` was declined by the tuple arm's own
+                // element test even after the payload filter learned to admit
+                // a generic struct, and the body ran on no backend.
+                //
+                // `type_runs_user_drop_mono` falls back to the name-only
+                // answer on an EMPTY subst, and a non-generic element yields
+                // an empty one, so every concrete element keeps its answer
+                // byte for byte. The widening reaches exactly the generic
+                // element whose instantiation carries a `Drop`.
+                let elem_subst = self.payload_type_subst(te);
                 if !self.type_decls.shared_types.contains_key(head)
                     && (self.type_decls.struct_types.contains_key(head) || user_enum)
-                    && self.type_runs_user_drop(head, &mut Vec::new())
+                    && self.type_runs_user_drop_mono(head, &elem_subst)
                 {
                     return true;
                 }
@@ -9816,7 +9830,22 @@ impl<'ctx> super::Codegen<'ctx> {
             }
             _ => return None,
         };
-        self.emit_payload_user_drop_bodies_core(fn_name, layout_key, arms)
+        // B-2026-09-12-6 — the SEEDED pair does NOT get the array arm.
+        //
+        // Not caution: measured. The arm lives in the shared core, so admitting
+        // it here too made `Option[Array[R, 2]]` and `Result[Array[R, 2], _]`
+        // print their element bodies on all three COMPILED surfaces while
+        // `--interp` stayed silent — the interpreter's own payload walk
+        // excludes the seeded pair by name, and this change gives it no reason
+        // to stop. Before: 0 bodies everywhere. After: 0 on `--interp`, 2 on
+        // every compiled surface.
+        //
+        // That trades a both-backends-silent bug for a run-vs-build
+        // DIVERGENCE, which is strictly worse under the A/B rule. The
+        // both-silent bug is B-2026-09-10-27 and is its own open row, with its
+        // own interpreter half to write; closing half of it from here would
+        // leave the backends disagreeing and that row looking fixed.
+        self.emit_payload_user_drop_bodies_core(fn_name, layout_key, arms, false)
     }
 
     /// The MEMORY-only drop for the value inside a user enum's heap-boxed
@@ -10088,7 +10117,10 @@ impl<'ctx> super::Codegen<'ctx> {
             return None;
         }
         let fn_name = format!("__karac_dropelems_genum_{}", Self::display_mangle_te(te));
-        self.emit_payload_user_drop_bodies_core(fn_name, enum_name, arms)
+        // The generic-enum head DOES take the array arm: its interpreter twin
+        // descends into an `Array` payload too (B-2026-09-12-6), so both
+        // backends move together.
+        self.emit_payload_user_drop_bodies_core(fn_name, enum_name, arms, true)
     }
 
     /// The shared emission core behind
@@ -10103,11 +10135,60 @@ impl<'ctx> super::Codegen<'ctx> {
     /// easily got wrong, and a second copy would be free to drift from this one.
     /// Every caller-visible filter still lives here, so the two heads decide only
     /// WHICH arms exist, never what happens to one.
+    /// The payload type's OWN generic substitution — `Wrap[Rec]` → `{T: Rec}`
+    /// (B-2026-09-12-6).
+    ///
+    /// Asked by both the arm filter and the case body of
+    /// [`Self::emit_payload_user_drop_bodies_core`], so the gate that admits an
+    /// arm and the walker that drains it cannot disagree about what the payload
+    /// is. Empty for a non-generic payload, which is the identity the
+    /// name-keyed emitters already take.
+    fn payload_type_subst(&self, pte: &TypeExpr) -> std::collections::HashMap<String, TypeExpr> {
+        let TypeKind::Path(pp) = &pte.kind else {
+            return std::collections::HashMap::new();
+        };
+        let Some(sname) = pp.segments.first() else {
+            return std::collections::HashMap::new();
+        };
+        match (
+            self.type_decls.struct_generic_params.get(sname.as_str()),
+            pp.generic_args.as_ref(),
+        ) {
+            (Some(params), Some(args)) => params
+                .iter()
+                .zip(args.iter())
+                .filter_map(|(param, arg)| match arg {
+                    GenericArg::Type(te) => Some((param.clone(), te.clone())),
+                    _ => None,
+                })
+                .collect(),
+            _ => std::collections::HashMap::new(),
+        }
+    }
+
+    /// Does this payload type name a fixed `Array` whose ELEMENT runs a user
+    /// `Drop` body, and of what element type and length (B-2026-09-12-6)?
+    ///
+    /// The array peer of the tuple test in the same filter, and body-only like
+    /// it: this answers whether there are BODIES to run, via
+    /// `elem_te_runs_user_drop`, NOT whether there is heap to free. The memory
+    /// side of an `Array` payload is a different channel and keeps its own
+    /// gate; conflating the two is how B-2026-07-30-11 and B-2026-08-28-58
+    /// leg A each produced a body that ran twice.
+    ///
+    /// Asked by both the filter and the case body, for the reason
+    /// [`Self::payload_type_subst`] gives.
+    fn payload_array_bodies_parts(&self, pte: &TypeExpr) -> Option<(TypeExpr, u32)> {
+        let (elem_te, n) = self.array_elem_and_len(pte)?;
+        (n > 0 && self.elem_te_runs_user_drop(&elem_te)).then_some((elem_te, n))
+    }
+
     fn emit_payload_user_drop_bodies_core(
         &mut self,
         fn_name: String,
         layout_key: &str,
         arms: Vec<(u64, TypeExpr, usize)>,
+        array_payload_bodies: bool,
     ) -> Option<FunctionValue<'ctx>> {
         // Keep only payload arms whose type is a non-shared user struct OR
         // user enum that runs a user drop (own body or Drop-bearing content).
@@ -10170,6 +10251,9 @@ impl<'ctx> super::Codegen<'ctx> {
             tag: u64,
             sname: String,
             tuple_elems: Option<Vec<TypeExpr>>,
+            /// B-2026-09-12-6 — `Some((elem, N))` for an `Array[E, N]` payload
+            /// whose element runs a body. The array peer of `tuple_elems`.
+            array_parts: Option<(TypeExpr, u32)>,
             envelope: bool,
             pte: TypeExpr,
             thresh: usize,
@@ -10183,12 +10267,36 @@ impl<'ctx> super::Codegen<'ctx> {
                             tag,
                             sname: String::new(),
                             tuple_elems: Some(elem_tes.clone()),
+                            array_parts: None,
                             envelope: false,
                             pte,
                             thresh,
                         });
                     }
                     return None;
+                }
+                // B-2026-09-12-6 — the ARRAY payload arm, and it must be tested
+                // BEFORE the `Path` gate below: `Array[Rec, 2]` parses as a
+                // `Path` whose head is `Array`, which is neither a user struct
+                // nor a user enum, so that gate declined it and no walker was
+                // emitted at all. `Slot[Array[Rec, 2]]` ran the element's body
+                // on NO backend.
+                //
+                // Body-only, through the same walker a local array `let`
+                // already uses one level up, with the memory left to the free
+                // channel exactly as the tuple, struct and enum arms leave it.
+                if array_payload_bodies {
+                    if let Some((elem_te, n)) = self.payload_array_bodies_parts(&pte) {
+                        return Some(PayloadArm {
+                            tag,
+                            sname: String::new(),
+                            tuple_elems: None,
+                            array_parts: Some((elem_te, n)),
+                            envelope: false,
+                            pte,
+                            thresh,
+                        });
+                    }
                 }
                 let TypeKind::Path(pp) = &pte.kind else {
                     return None;
@@ -10220,6 +10328,7 @@ impl<'ctx> super::Codegen<'ctx> {
                         tag,
                         sname,
                         tuple_elems: None,
+                        array_parts: None,
                         envelope: true,
                         pte,
                         thresh,
@@ -10232,9 +10341,23 @@ impl<'ctx> super::Codegen<'ctx> {
                         .enum_layouts
                         .get(sname.as_str())
                         .is_some_and(|l| !l.is_shared);
+                // B-2026-09-12-6 — the gate reads the payload's INSTANTIATION,
+                // not its head name. `type_runs_user_drop` is name-keyed: asked
+                // of `Wrap[Rec]` it looks up `Wrap`, whose declared field is
+                // `val: T`, finds no Drop-bearing field type, and answers
+                // `false` — so the arm was dropped and the compiled backends
+                // ran nothing, while the CONCRETE `WrapC { val: Rec }` passed
+                // the identical gate and was always correct. That asymmetry is
+                // the bug, and it is the same one B-2026-08-06-8 found in
+                // `struct_owns_shared_field`.
+                //
+                // `type_runs_user_drop_mono` is the existing subst-aware twin
+                // and falls back to the name-only answer on an empty subst, so
+                // every non-generic payload keeps its behaviour byte for byte.
+                let subst = self.payload_type_subst(&pte);
                 if self.type_decls.shared_types.contains_key(&sname)
                     || !(self.type_decls.struct_types.contains_key(&sname) || user_enum)
-                    || !self.type_runs_user_drop(&sname, &mut Vec::new())
+                    || !self.type_runs_user_drop_mono(&sname, &subst)
                 {
                     return None;
                 }
@@ -10242,6 +10365,7 @@ impl<'ctx> super::Codegen<'ctx> {
                     tag,
                     sname,
                     tuple_elems: None,
+                    array_parts: None,
                     envelope: false,
                     pte,
                     thresh,
@@ -10298,6 +10422,7 @@ impl<'ctx> super::Codegen<'ctx> {
             PayloadArm {
                 sname,
                 tuple_elems,
+                array_parts,
                 envelope,
                 pte,
                 thresh,
@@ -10383,10 +10508,24 @@ impl<'ctx> super::Codegen<'ctx> {
                     }
                     _ => None,
                 }
+            } else if let Some((elem_te, n)) = &array_parts {
+                // B-2026-09-12-6 — the array payload: run each element's body
+                // over the `[N x E]` aggregate at `target_ptr` (inline, or
+                // deboxed above). Body-only, like every sibling arm.
+                let elem_ty = self.llvm_type_for_type_expr(elem_te);
+                self.emit_array_elem_user_drop_bodies_fn(elem_ty, elem_te, *n)
             } else if is_enum {
                 self.emit_enum_payload_user_drop_bodies_fn(&sname)
             } else {
-                self.emit_user_drop_field_bodies_fn(&sname, &std::collections::HashMap::new())
+                // B-2026-09-12-6 — the payload's own instantiation, not an
+                // empty map. The filter above admits this arm on
+                // `type_runs_user_drop_mono(&sname, &subst)`; handing the
+                // emitter an empty subst here would admit `Wrap[Rec]` and then
+                // emit a walker for `Wrap`'s declared `val: T`, which resolves
+                // to nothing. Same helper at both ends, so the gate and the
+                // walk cannot disagree.
+                let subst = self.payload_type_subst(&pte);
+                self.emit_user_drop_field_bodies_fn(&sname, &subst)
             };
             if let Some(f) = inner {
                 self.builder
