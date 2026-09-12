@@ -331,6 +331,39 @@ control then found the third defect on its own: the body counts were WRONG in
 both directions across the three backends, on every shape, before the fix
 touched anything.
 
+**A CLASS emerged from following those remainders, and naming it is worth more
+than any one of the fixes.** Five separate backend sites have now been found
+losing a TUPLE, every one for the same structural reason: the site matches on
+`TypeKind::Path` (or looks the type up by NAME) and a tuple has no path spelling
+and no name to look up, so it falls to an `_ => <nothing>` tail. In order of
+discovery, none of them looked for:
+
+| site | what it lost |
+|---|---|
+| `enum_boxed_payload_interior_drop`'s first guard | a boxed tuple payload's interior (B-2026-09-11-4) |
+| `declared_mismatches_word`'s `llvm_type_for_name` | a tuple binding read as the payload WORD (B-2026-09-12-4) |
+| …and the two guards beside it (`ok_padded_primitive`, `ok_single_word`) | the same, by two different routes |
+| `enum_drop_kind_for_type_expr` | an enum's tuple payload, never freed (B-2026-09-12-8) |
+| `type_expr_word_aligned`'s narrow-element reject | `(bool, String)`, still open (B-2026-09-12-10) |
+
+Each was met rather than sought, which is the inefficiency. The pattern is now
+attested well enough to grep for directly — every `match … kind { Path(..) => …,
+_ => … }` over a payload, field or binding type in the backend is a candidate —
+and doing that sweep once is probably worth more than chasing the next instance.
+The same question should be asked of `Array`, whose two spellings (`TypeKind::Array`
+from a literal's inferred type, `Path(["Array"], …)` from an annotation) make it
+the *other* type a name-keyed guard mishandles, in its own way: a guard keyed on
+the kind alone silently misses every ANNOTATED array, which B-2026-09-06-49
+recorded and `array_elem_and_len` exists to prevent.
+
+**A second transferable rule came out of the same work, about fixes rather than
+searches.** B-2026-09-12-8's drop, added alone, turned its leak into a double
+free the moment the enum was passed by value — and *every leak cell still read
+clean*. A leak-only sweep would have shipped it. Any fix that gives something a
+new owner needs a cell where the value is COPIED, not just cells where it dies;
+the by-value-parameter cell is the cheapest one that exercises the copy/drop
+symmetry these classifiers keep warning about.
+
 Note what the **differential** says about that program: nothing. It reports 0,
 correctly — codegen does emit a cleanup action for the binding, so the emitted
 set covers the schedule. The differential checks that a drop is SCHEDULED AND

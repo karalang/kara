@@ -94,7 +94,7 @@ distinguish "bugs flattening" from "we stopped writing them down."
 |---|---|
 | miscompile | 404 |
 | run-vs-build | 389 |
-| leak | 325 |
+| leak | 326 |
 | double-free | 224 |
 | missing-feature | 195 |
 | codegen-gap | 174 |
@@ -110,7 +110,7 @@ distinguish "bugs flattening" from "we stopped writing them down."
 
 | surface | total |
 |---|---|
-| codegen | 1677 |
+| codegen | 1678 |
 | interp | 418 |
 | typecheck | 296 |
 | other | 87 |
@@ -178,7 +178,7 @@ _Generated from `bug-ledger.jsonl` by `scripts/bug-curve.py` (2026-05-20 → 202
 | B-2026-09-12-2 | 2026-09-12 | codegen | medium | A DISCARDED CALL RESULT OF AN ARRAY-RETURNING FUNCTION HAS NO OWNER ON EITHER BACKEND PATH -- `passthru(a);` over `fn passthru(x: Array[String, 2]) -> Array[String, 2]` leaks 18 B in 2 blocks at `-O0` on the CONCRETE path on unmodified `main`, and the generic path joined it at the identical count once 55e767a gave a monomorph's array param an owner, because the callee's transfer-owned drop is retracted at its own `return` and nothing at the call site picks the value up | — |
 | B-2026-09-12-3 | 2026-09-12 | codegen | low | `mono_handle_param_infos` IS WRITTEN UNDER A NON-FINAL `mangled` AND READ UNDER THE FINAL ONE -- `compile_generic_call` rebinds `mangled` four times and stores the handle record after the first append, while `compile_mono_function` looks it up after the fourth, so the map is correct today only because the three later appends happen to be no-ops for a Column/Tensor argument | — |
 | B-2026-09-12-5 | 2026-09-12 | codegen | medium | A BOXED TUPLE / `Array` / GENERIC-STRUCT PAYLOAD MATCHED OUT OF A GENERIC ENUM IS OWNED BY NOBODY -- the arm binding that takes it never frees it and the box's interior walk is retracted because it did, so the move-out cells leak 192-384 B where the identical `Option[String]` payload is clean | — |
-| B-2026-09-12-8 | 2026-09-12 | codegen | medium | A MONOMORPHIC ENUM'S TUPLE PAYLOAD LEAKS ITS `String` ON PLAIN SCOPE EXIT -- 24 B a round for `enum M { P((String, i64)), Q }`, with no generics and no boxing anywhere, while the identical enum holding a user STRUCT of the same two fields is clean | — |
+| B-2026-09-12-10 | 2026-09-12 | codegen | medium | THREE TUPLE-PAYLOAD ELEMENT SHAPES STILL LEAK INSIDE AN ENUM -- `(bool, String)` is declined on purpose by the word-alignment gate B-2026-09-12-8's fix relies on, while `(Rec, i64)` carrying a user `Drop` and `(Option[String], i64)` are declined for reasons not yet attributed; all three measured unchanged by that fix rather than worse | — |
 
 ### Relocated
 
@@ -2492,6 +2492,7 @@ _Generated from `bug-ledger.jsonl` by `scripts/bug-curve.py` (2026-05-20 → 202
 | B-2026-09-12-4 | codegen | high | A TUPLE PAYLOAD BOUND THROUGH A `ref` SCRUTINEE READ AS GARBAGE -- the via-ptr fast path bound the leaf at the i64 payload WORD, so every read reinte… | 7133d07 |
 | B-2026-09-12-6 | codegen | high | A USER `Drop` BODY ON A VALUE NESTED INSIDE A GENERIC ENUM'S BOXED PAYLOAD RUNS ON A DIFFERENT SUBSET OF BACKENDS PER PAYLOAD SHAPE, AND ON NO SHAPE… | b55b5e8 |
 | B-2026-09-12-7 | codegen | high | A NESTED ENVELOPE DESTRUCTURE WHOSE INNER VARIANT NAME COLLIDES WITH THE ENCLOSING ENVELOPE'S OWN VARIANT SET SEGFAULTS COMPILED -- `enum MyOpt { Som… | 5b939778c |
+| B-2026-09-12-8 | codegen | medium | A MONOMORPHIC ENUM'S TUPLE PAYLOAD LEAKED ITS ELEMENTS' HEAP -- `enum_drop_kind_for_type_expr` matched only `TypeKind::Path`, so a tuple fell to the… | 9f9ef8b |
 | B-2026-09-12-9 | other | medium | THE DROP FUZZER EMITS A METHOD THAT DOES NOT EXIST -- `bool` has no `to_i64`, so every program reaching `tracked_into_opt_then_displace`'s displacing… | 8d509c655 |
 
 </details>
