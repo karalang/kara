@@ -12866,6 +12866,25 @@ impl<'ctx> super::Codegen<'ctx> {
         }
     }
 
+    /// Is this sub-pattern itself an `Option`/`Result` variant destructure —
+    /// the inner `Some(r)` of a `Some(Some(r))` arm?
+    ///
+    /// B-2026-09-10-19. Such a sub-pattern reads as a destructure, but unlike a
+    /// tuple or struct one it hands its leaf no `Drop` body of its own, so the
+    /// payload place must keep the walk rather than stand down for it. Keyed on
+    /// the variant NAME set the enclosing check already uses, so a user enum
+    /// that happens to have a `Some` variant is treated the same way the outer
+    /// pattern test treats it.
+    fn is_optres_variant_pattern(sub: &Pattern) -> bool {
+        let PatternKind::TupleVariant { path, .. } = &sub.kind else {
+            return false;
+        };
+        matches!(
+            path.last().map(|s| s.as_str()),
+            Some("Some") | Some("Ok") | Some("Err")
+        )
+    }
+
     /// B-2026-07-30-11 (Option/Result leg) — retract a named `Option`/`Result`
     /// binding's payload-BODIES action (`__karac_dropelems_opt_*` /
     /// `__karac_dropelems_res_*`) when a `match`/`if let` arm binds the
@@ -12929,13 +12948,34 @@ impl<'ctx> super::Codegen<'ctx> {
         // Measured correct on both backends before and after this narrowing
         // (`a71 / dR71 / dR72 / done`), which is what the `all` below
         // preserves.
+        // B-2026-09-10-19 — a NESTED ENVELOPE sub-pattern joins the two above,
+        // for the same reason and on the same measurement. The narrowing this
+        // extends was written as "sub-patterns that BIND rather than
+        // destructure", on the premise that a destructure's leaves each take
+        // something and each get their own body. That premise is true of a
+        // TUPLE or struct destructure and false of an envelope one: nothing
+        // registers a body for a leaf bound out of an inner `Option`/`Result`.
+        //
+        // Measured, on a callee-owned param, before this change:
+        //
+        //     Some((a, b))        over Option[(R, R)]          a71 dR71 dR72 done   correct
+        //     Some(Some(r))       over Option[Option[R]]       a71 done             LOSES dR71
+        //     Some(Some((a, b)))  over Option[Option[(R, R)]]  a71 done             LOSES both
+        //
+        // so the flat destructure's leaves do own and the nested one's never
+        // do, whatever sits inside the inner variant -- which is why the test
+        // below is on the SUB-PATTERN'S OWN SHAPE and not on its contents. The
+        // `Ok(Ok(r))` spelling, a three-deep `Some(Some(Some(r)))`, an arm that
+        // MOVES the leaf into another call, and an arm that never reads it all
+        // lost the body identically.
         if self
             .payload_vars
             .callee_owned_payload_bodies_params
             .contains(&name)
-            && patterns
-                .iter()
-                .all(|sub| matches!(sub.kind, PatternKind::Binding(_) | PatternKind::Wildcard))
+            && patterns.iter().all(|sub| {
+                matches!(sub.kind, PatternKind::Binding(_) | PatternKind::Wildcard)
+                    || Self::is_optres_variant_pattern(sub)
+            })
         {
             return;
         }

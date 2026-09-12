@@ -153397,6 +153397,136 @@ fn main() {
         }
     }
 
+    /// B-2026-09-10-19 — a NESTED destructuring arm `Some(Some(r))` lost its
+    /// leaf's `Drop` body compiled, and nothing was missing: a disarm fired on
+    /// a premise that stopped holding one nesting level down.
+    ///
+    /// For a boxed NON-STRUCT payload the CALLEE's param-site arm owns the box,
+    /// and the walk runs at `cmrun.live` behind a `%optresbodies.<name>` arm
+    /// flag — entry-block `store i1 true`, and a consuming arm stores `false`
+    /// in its own block. `a56142bd8` narrowed that disarm to arms whose
+    /// sub-patterns BIND rather than destructure, on the premise that a
+    /// destructure's leaves each take something and each get their own body.
+    /// That is true of a TUPLE destructure and false of an ENVELOPE one:
+    /// nothing registers a body for a leaf bound out of an inner
+    /// `Option`/`Result`, so `Some(Some(r))` cleared the flag and no walk ran.
+    ///
+    /// THE IR IS WHAT SETTLED IT, because the one-level control and the nested
+    /// row differ in mechanism, not degree. Capturing both (`CAPTURE_TO=..
+    /// KARAC_JIT_RUNNER=..`) showed `Option[R]` carrying no `%optresbodies`
+    /// flag AT ALL — its payload is a struct, so the CALLER owns the box and
+    /// runs `__karac_dropelems_opt_R` after the call — while
+    /// `Option[Option[R]]` had the flag, a `store i1 false` opening
+    /// `match.body0`, and a `__karac_dropelems_opt_Option_R` call behind it.
+    /// A test that only compared the two outputs would have read this as a
+    /// missing walker and sent the fix to the emitter.
+    ///
+    /// THE LEAF IS A VIEW, NOT A SECOND OWNER — which is why leaving the place
+    /// armed is safe rather than a double free. `leaf-moved-into-a-call` is the
+    /// cell that proves it: the arm hands `r` to `eat(r)`, and the output is
+    /// exactly one `dR71`, valgrind-clean. If the leaf ever does start owning,
+    /// that cell aborts rather than going quiet.
+    ///
+    /// The `flat-tuple-destructure-control` cell is load-bearing in the other
+    /// direction: it must stay DISARMED. Its leaves do own, so a fix that
+    /// keyed on the arm being nested at all — rather than on each
+    /// sub-pattern's own shape — would double-free there.
+    #[test]
+    fn e2e_nested_envelope_match_arm_runs_its_leaf_drop_body() {
+        const PRE: &str = "struct Rv { id: i64, name: String }\n\
+             impl Drop for Rv { fn drop(mut ref self) { println(f\"dRv{self.id}\") } }\n";
+        for (label, body, want) in [
+            // THE ROW: `Some(Some(r))` over a callee-owned boxed payload.
+            (
+                "nested-option-arm",
+                "fn takeR(x: Option[Option[Rv]]) { match x { Some(Some(r)) => { println(f\"a{r.id}\") } Some(None) => { println(\"sn\") } None => { println(\"n\") } } }\n\
+                 fn main() { takeR(Some(Some(Rv { id: 71, name: f\"a\" }))); println(\"done\") }\n",
+                "a71\ndRv71\ndone\n",
+            ),
+            // The `Result` spelling, which the row left unmeasured. `Err` is in
+            // the arm set so the disarm's variant-name test sees all three.
+            (
+                "nested-result-arm",
+                "fn takeR(x: Result[Result[Rv, i64], i64]) { match x { Ok(Ok(r)) => { println(f\"a{r.id}\") } Ok(Err(e)) => { println(\"oe\") } Err(e) => { println(\"n\") } } }\n\
+                 fn main() { takeR(Result[Result[Rv, i64], i64].Ok(Result[Rv, i64].Ok(Rv { id: 71, name: f\"a\" }))); println(\"done\") }\n",
+                "a71\ndRv71\ndone\n",
+            ),
+            // Three deep — the sub-pattern test is per-level, so the middle
+            // `Some(..)` must be admitted on its own shape too.
+            (
+                "three-deep-arm",
+                "fn takeR(x: Option[Option[Option[Rv]]]) { match x { Some(Some(Some(r))) => { println(f\"a{r.id}\") } Some(Some(None)) => { println(\"ssn\") } Some(None) => { println(\"sn\") } None => { println(\"n\") } } }\n\
+                 fn main() { takeR(Some(Some(Some(Rv { id: 71, name: f\"a\" })))); println(\"done\") }\n",
+                "a71\ndRv71\ndone\n",
+            ),
+            // The leaf MOVED into another call. Exactly one body — the leaf is
+            // a view into the payload the place walk owns, not a second owner.
+            (
+                "leaf-moved-into-a-call",
+                "fn eat(r: Rv) { println(f\"e{r.id}\") }\n\
+                 fn takeR(x: Option[Option[Rv]]) { match x { Some(Some(r)) => { eat(r) } Some(None) => { println(\"sn\") } None => { println(\"n\") } } }\n\
+                 fn main() { takeR(Some(Some(Rv { id: 71, name: f\"a\" }))); println(\"done\") }\n",
+                "e71\ndRv71\ndone\n",
+            ),
+            // The leaf never read at all, so no use site could have carried the
+            // body on its behalf.
+            (
+                "leaf-never-read",
+                "fn takeR(x: Option[Option[Rv]]) { match x { Some(Some(r)) => { println(\"hit\") } Some(None) => { println(\"sn\") } None => { println(\"n\") } } }\n\
+                 fn main() { takeR(Some(Some(Rv { id: 71, name: f\"a\" }))); println(\"done\") }\n",
+                "hit\ndRv71\ndone\n",
+            ),
+            // A TUPLE leaf bound whole behind the nested variant: the inner
+            // arm is still `Some(..)`, and both elements' bodies must run.
+            (
+                "nested-arm-tuple-leaf-bound-whole",
+                "fn takeR(x: Option[Option[(Rv, Rv)]]) { match x { Some(Some(t)) => { println(\"hit\") } Some(None) => { println(\"sn\") } None => { println(\"n\") } } }\n\
+                 fn main() { takeR(Some(Some((Rv { id: 71, name: f\"a\" }, Rv { id: 72, name: f\"b\" })))); println(\"done\") }\n",
+                "hit\ndRv71\ndRv72\ndone\n",
+            ),
+            // A tuple leaf DESTRUCTURED inside the nested variant — the two
+            // shapes composed, which is the case a per-level test gets right
+            // and a whole-arm test does not.
+            (
+                "nested-arm-tuple-leaf-destructured",
+                "fn takeR(x: Option[Option[(Rv, Rv)]]) { match x { Some(Some((a, b))) => { println(f\"a{a.id}\") } Some(None) => { println(\"sn\") } None => { println(\"n\") } } }\n\
+                 fn main() { takeR(Some(Some((Rv { id: 71, name: f\"a\" }, Rv { id: 72, name: f\"b\" })))); println(\"done\") }\n",
+                "a71\ndRv71\ndRv72\ndone\n",
+            ),
+            // CONTROL — one level. No `%optresbodies` flag exists here at all
+            // (struct payload, caller-owned box), so this cell is untouched by
+            // the disarm either way and shows up if that ownership ever moves.
+            (
+                "one-level-arm-control",
+                "fn takeR(x: Option[Rv]) { match x { Some(r) => { println(f\"a{r.id}\") } None => { println(\"n\") } } }\n\
+                 fn main() { takeR(Some(Rv { id: 71, name: f\"a\" })); println(\"done\") }\n",
+                "a71\ndRv71\ndone\n",
+            ),
+            // CONTROL, AND THE ONE THAT MUST STAY DISARMED. A flat tuple
+            // destructure's leaves DO own, so admitting this arm would run the
+            // place walk beside them and double-free. Correct before and after.
+            (
+                "flat-tuple-destructure-control",
+                "fn takeR(x: Option[(Rv, Rv)]) { match x { Some((a, b)) => { println(f\"a{a.id}\") } None => { println(\"n\") } } }\n\
+                 fn main() { takeR(Some((Rv { id: 71, name: f\"a\" }, Rv { id: 72, name: f\"b\" }))); println(\"done\") }\n",
+                "a71\ndRv71\ndRv72\ndone\n",
+            ),
+            // CONTROL — the inner `None` arm taken, so the flag's armed path
+            // runs over an empty payload and must print nothing extra.
+            (
+                "inner-none-arm-control",
+                "fn takeR(x: Option[Option[Rv]]) { match x { Some(Some(r)) => { println(f\"a{r.id}\") } Some(None) => { println(\"sn\") } None => { println(\"n\") } } }\n\
+                 fn main() { let e: Option[Rv] = None; takeR(Some(e)); println(\"done\") }\n",
+                "sn\ndone\n",
+            ),
+        ] {
+            let Some(out) = run_program(&format!("{PRE}{body}")) else {
+                return;
+            };
+            assert_eq!(out, want, "[{label}]");
+        }
+    }
+
     /// B-2026-09-10-5 — a NAMED LOCAL of a user generic enum passed BY VALUE
     /// smashed the caller's stack, because the moved-from-slot disarm zeroed
     /// `Option`'s four words into whatever the binding's slot actually was.
