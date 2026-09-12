@@ -2427,6 +2427,45 @@ impl<'ctx> super::Codegen<'ctx> {
                 {
                     return Ok(None);
                 }
+                // B-2026-09-12-4: a TUPLE payload binding (`P(x)` where
+                // `x: (i64, i64)`). Third instance of the same trap as the two
+                // guards above, and the one with the widest blast radius. The
+                // typechecker records this binding's surface type as the name
+                // `"Tuple"`, and `llvm_type_for_name("Tuple")` has no entry, so
+                // it lands on the i64 fallback — which means the
+                // `declared_mismatches_word` check below compares i64 against
+                // the i64 payload word, sees no mismatch, and lets the fast
+                // path bind `x` as a ref-to-i64 AT THE PAYLOAD WORD. Every read
+                // through `x` then interprets that one word as the whole tuple:
+                // `x.0` yields the word, `x.1` yields whatever follows it.
+                //
+                // Neither existing guard catches it. `first_word_is_primitive`
+                // is TRUE for a tuple of scalars (its first word really is an
+                // i64), so `ok_padded_primitive` admits a multi-word tuple, and
+                // for a BOXED tuple payload `num_words` is 1 — the payload area
+                // holds only the box pointer — so `ok_single_word` admits it
+                // too and the binding aliases the pointer itself.
+                //
+                // Measured at `KARAC_OPT_LEVEL=0`, compiled vs `--interp`, all
+                // three of these read the payload through a `ref` parameter:
+                //
+                //     enum M { P((i64, i64)), Q }        a=0 b=0     vs a=42 b=7
+                //     enum M { P((String, i64)), Q }     len=<garbage> k=0
+                //                                                    vs len=22 k=7
+                //     Option[(i64, i64)]                 a=0 b=0     vs a=42 b=7
+                //
+                // So this is not confined to the generic-enum boxing family it
+                // was found in: a plain monomorphic enum and the built-in
+                // `Option` are equally affected, and the `(String, i64)` case
+                // reads a bogus pointer (valgrind: `Invalid read of size 1 ...
+                // Address 0x0`) rather than merely a wrong integer.
+                //
+                // Deferring to the value-source path is read-correct — it
+                // reconstructs the payload at its true type — and matches what
+                // the struct-payload guard does for the same reason.
+                if patterns.iter().any(|p| self.pattern_binds_tuple_payload(p)) {
+                    return Ok(None);
+                }
                 let offsets: Vec<(usize, usize)> = layout
                     .field_word_offsets
                     .get(variant_name)
@@ -2599,6 +2638,30 @@ impl<'ctx> super::Codegen<'ctx> {
                 .pattern_binding_types
                 .get(&key)
                 .is_some_and(|n| matches!(n.as_str(), "Map" | "Set" | "SortedMap" | "SortedSet"));
+        }
+        false
+    }
+
+    /// Whether a leaf binding's typechecker-recorded surface type is a TUPLE —
+    /// the payload shape whose multi-word (or boxed single-pointer) body
+    /// masquerades as a plain i64 payload word in the via-ptr fast path, so it
+    /// must defer to the value-source path to be reconstructed at its real type
+    /// (B-2026-09-12-4). Third companion to
+    /// [`Self::pattern_binds_struct_payload`] and
+    /// [`Self::pattern_binds_map_set_payload`]; the call site carries the
+    /// measurements and the reason neither of those two catches this one.
+    ///
+    /// The recorded name is the bare string `"Tuple"` — the typechecker does
+    /// not spell out the element types here — which is all this needs: any
+    /// tuple payload is a deferral, whatever its arity or elements.
+    fn pattern_binds_tuple_payload(&self, pat: &Pattern) -> bool {
+        if let PatternKind::Binding(_) = &pat.kind {
+            let key = (pat.span.offset, pat.span.length);
+            return self
+                .pattern_state
+                .pattern_binding_types
+                .get(&key)
+                .is_some_and(|n| n == "Tuple");
         }
         false
     }

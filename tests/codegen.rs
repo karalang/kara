@@ -54141,6 +54141,61 @@ fn main() {
     }
 
     #[test]
+    fn test_e2e_ref_enum_tuple_payload() {
+        // Regression for B-2026-09-12-4: a TUPLE payload bound through a `ref`
+        // scrutinee read as garbage. Third instance of the same via-ptr trap as
+        // B-2026-07-09-6 (struct payload) and B-2026-07-23-3 (Map/Set payload):
+        // the typechecker records the binding's surface type as the bare name
+        // "Tuple", `llvm_type_for_name` has no entry for it and falls back to
+        // i64, so `declared_mismatches_word` compared i64 against the i64
+        // payload word, saw no mismatch, and bound the leaf as a ref-to-i64 AT
+        // THE PAYLOAD WORD. Every read through the binding then reinterpreted
+        // that single word as the whole tuple.
+        //
+        // The three cells below are the three ways the enum can hold it, and
+        // all three were broken -- so this was never confined to the generic
+        // enum family it was found in. Compiled vs `--interp`, pre-fix:
+        //
+        //     enum M { P((i64, i64)), Q }   a=0 b=0          vs a=42 b=7
+        //     Option[(i64, i64)]            a=0 b=0          vs a=42 b=7
+        //     enum Slot[T] at T=(i64, i64)  a=0 b=0          vs a=42 b=7
+        //
+        // `mono` is a plain MONOMORPHIC enum whose 2-word tuple payload was
+        // admitted by `ok_padded_primitive` (a tuple of scalars really does
+        // have an i64 first word); `boxd` is the generic case, where the
+        // payload is heap-boxed and `num_words` is 1, so `ok_single_word`
+        // admitted it and the binding aliased the BOX POINTER itself. Neither
+        // existing guard could see either one.
+        //
+        // The scalar spelling is deliberate: it isolates the read from any
+        // memory question, since nothing here allocates. At `(String, i64)`
+        // the same shape read a null pointer (`Invalid read of size 1 ...
+        // Address 0x0` under valgrind) and silently took the wrong branch.
+        if let Some(out) = run_program(
+            "enum M { P((i64, i64)), Q }\n\
+             enum Slot[T] { Filled(T), Blank }\n\
+             fn mono(s: ref M) -> i64 {\n\
+                 match s { P(x) => { return x.0 + x.1; } Q => { return -1; } }\n\
+             }\n\
+             fn opt(s: ref Option[(i64, i64)]) -> i64 {\n\
+                 match s { Some(x) => { return x.0 + x.1; } None => { return -1; } }\n\
+             }\n\
+             fn boxd(s: ref Slot[(i64, i64)]) -> i64 {\n\
+                 match s { Filled(x) => { return x.0 + x.1; } Blank => { return -1; } }\n\
+             }\n\
+             fn main() {\n\
+                 let n = env.args().len() as i64;\n\
+                 let a: M = M.P((41 + n, 7));\n\
+                 let b: Option[(i64, i64)] = Some((41 + n, 7));\n\
+                 let c: Slot[(i64, i64)] = Filled((41 + n, 7));\n\
+                 println(f\"{mono(a)}:{opt(b)}:{boxd(c)}\");\n\
+             }",
+        ) {
+            assert_eq!(out, "49:49:49\n");
+        }
+    }
+
+    #[test]
     fn test_e2e_ref_enum_vec_struct_payload_field_access() {
         // Regression for B-2026-07-11-6: a `Vec[struct]` bound as an enum payload
         // lost its element TypeExpr, so `for e in entries { e.field }` bound the
