@@ -18,7 +18,28 @@ round 2" below before planning anything, and do not quote a payoff number withou
 saying which of the two shapes it came from.** This doc is the campaign's
 living handoff: layout decision (settled), staged slice plan, the tag-aware
 accessor work list, and the verification matrix. Scoped 2026-06-12; Slice 1 landed
-2026-07-09; Slice 2 construction 2026-09-11.
+2026-07-09; Slice 2 construction 2026-09-11; Slice 3's FFI boundary opened
+2026-09-12.
+
+**The default flip has a second blocker as of 2026-09-12, and it is not about
+speed.** `UseAfterMove` is advisory *because `cli.rs` promises the binary is
+memory-safe anyway*; at `KARAC_SSO=1` a moved-from short String reads empty in
+one measured shape and **SIGSEGVs** in another, so the flip would falsify that
+promise. Programs with no ownership diagnostic are unaffected. The cause is not
+yet traced — see "A NEW BLOCKER FOR THE DEFAULT FLIP" under the Slice 3 entry,
+which records what was measured and what is still only a hypothesis.
+
+**CI now runs one `KARAC_SSO=1` fixture** —
+`tests/cli.rs::test_sso_inline_string_survives_the_env_ffi_boundary`, added with
+the Slice 3 entry below. Before it, no COMPILED Kāra program in the suite ever
+emitted an inline descriptor — the runtime's own unit tests build them through
+`new_inline`, but nothing exercised codegen's construction path — so every SSO
+regression to date reached `main` through a green gate set and was caught only
+by a human remembering to run the second leg by hand.
+One fixture is not coverage; it is the first one, and the pattern it establishes
+(shell out to `karac` so the env var is per-fixture, and build the String with
+`substring` so it is actually inline) is what the rest of the surface should
+copy.
 
 **Layout decision — SETTLED (Slice 1):** Option A, **inline flag = sign bit (bit 63) of
 `cap`**. Three states discriminated by `cap` read as `i64`: static-heap (`cap == 0`),
@@ -510,11 +531,313 @@ perf payoff lands in Slice 2.
 - **Slice 3 — sweep + runtime/FFI decode.** Remaining raw sites; runtime decode
   (`println`/file/http/tls/json); thread the Kāra type to keep `Vec` branch-free for perf.
   Gate: corpus re-bench.
+
+- **Slice 3 progress — the FFI boundary: one gap MEASURED, one REASONED, and
+  two different fix shapes (2026-09-12).** A String crossing into a runtime
+  extern is the same failure class as the `push_str` argument bug that broke
+  the self-hosted compiler, and it fails the same way — silently — because
+  field 0 of an inline descriptor is a plausible-looking pointer built from the
+  string's own first eight bytes.
+
+  ### The gap that was measured: `extract_string_ptr_len`
+
+  `tls.rs::extract_string_ptr_len` — a helper whose own doc comment says it
+  extracts `{ptr, len}` from "a Kāra `String` struct value" — was still the two
+  raw `extract_value`s, and it has **nine callers**: TLS listener bind
+  (cert / key / addr), TLS client connect (addr / server-name / roots-PEM),
+  `env.set` (name, value) and `env.var` (name). `env.set` is the one that is
+  cheap to probe, and it is loud:
+
+  ```
+  let name = src.substring(0, 18);        // 18 bytes -> inline
+  env.set(name, src.substring(19, 28));
+
+  KARAC_SSO=0  ->  short-val
+  KARAC_SSO=1  ->  memory allocation of 5715719208697159504 bytes failed
+                   ... karac_runtime_env_set (runtime/src/lib.rs:1059)
+  ```
+
+  That byte count is not noise, it is **the name's own bytes 8..=15, plus one**.
+  `5715719208697159504 - 1` is `0x4F5250564E455F4F`, whose little-endian bytes
+  are `"O_ENVPRO"` — exactly `"KARAC_SSO_ENVPROBE"[8..16]`. The `+1` is
+  `CString::new` reserving the NUL, which is worth spelling out: the first
+  arithmetic on a corrupt length can hide the identity of the corruption, and
+  the whole reason this decodes at all is that an inline `len` field *is*
+  content.
+
+  Routing the helper through `sso_string_parts_from_value` fixes all nine sites at once and
+  is byte-identical IR at `KARAC_SSO=0` — the accessor's off-path is exactly the
+  two extracts it replaced, with the same value names. Verified after the fix:
+  all five lanes agree on `short-val` — `--interp`, JIT at `0` and `1`, AOT at
+  `0` and `1`.
+
+  ### The gap that is NOT routable: `cabi.rs::emit_string_return_area`
+
+  Worth its own entry because **the obvious fix is the wrong one.** This is the
+  wasm Component-Model export trampoline, and it *stores* the String's pointer
+  into a module-level return area that the component lifter reads **after the
+  trampoline has returned**. The accessor's contract is "valid for an immediate
+  read only" — an inline descriptor's data pointer is the descriptor's own
+  address — so routing it here would trade a garbage pointer for a **dangling**
+  one, which is strictly harder to debug. The fix is `sso_deinline_in_place`:
+  promote to a heap buffer before reading, restoring exactly the invariant the
+  function's contract already assumed ("the string bytes already live in the
+  guest's linear memory").
+
+  So the FFI sweep has **two fix shapes**, and the question that picks between
+  them is not "is this a String?" but **"does the pointer outlive the frame?"**
+  Immediate read ⇒ route. Stored anywhere ⇒ promote.
+
+  **This one is REASONED, NOT MEASURED**, and it says so at the site. A wasm
+  component E2E needs `wasm-tools` and the two wasm runtime archives, and the
+  container had neither. It is guarded by `sso_on()`, so it is a literal no-op
+  on the default leg — but an unverified fix is not a verified one, and the next
+  session with a wasm toolchain should run it before believing it.
+
+  ### The remaining raw-site count is NOT a remaining-risk count
+
+  The correction to the previous round's framing, and the transferable half of
+  this entry. A balanced-paren scan still reports 92 `extract_value(_, 0)`, 72
+  `extract_value(_, 1)` and 245 `build_struct_gep(vec_ty, _, 0)` sites raw,
+  which reads as a large outstanding surface. Re-reading them says otherwise:
+  `expr_ops.rs`'s field-0 sites are enum tags and overflow-check pairs,
+  `synth_display.rs`'s are enum tags and float wrappers, `closures.rs` and
+  `par_blocks.rs`'s are closure fat pointers, `tls.rs`'s others are
+  `{fd, config}` listener handles, and `method_call_ffi.rs`'s are `CStr` /
+  `CString` `{ptr, len}` receivers — a different two-field struct that never
+  carries the tag. They share the `{ptr,len,cap}` *syntax*, not its semantics.
+
+  Risk concentrates where a syntax scan does not look: in the **helpers that
+  return a `(data_ptr, len)` pair**. Enumerating those found the straggler in
+  one grep, where two rounds of site-by-site triage had walked past it.
+
+  **The census that works is on the SIGNATURE, not the name and not the call
+  syntax** — `fn … -> (PointerValue<'ctx>, IntValue<'ctx>)`. It depends on no
+  naming discipline, and it is a small closed set. Run over `src/codegen`, it
+  returns thirteen, of which six touch a String:
+
+  | helper | file | state |
+  |---|---|---|
+  | `sso_string_parts_from_value` | `sso.rs` | the accessor itself |
+  | `str_data_len` | `method_call.rs` | routed |
+  | `load_string_data_len` | `vec_method.rs` | routed (`to_uppercase`, `join`, `replace`, `strip_*`, …) |
+  | `regex_pattern_data_len` | `method_call.rs` | routed, both the flattened and nested `Regex` shapes |
+  | `df_string_parts` | `dataframe.rs` | routed (returns a `Result`, so the signature scan misses it — see below) |
+  | **`extract_string_ptr_len`** | **`tls.rs`** | **was raw — 9 callers** |
+
+  The straggler survived because of *where it lives*: nobody auditing String
+  behaviour greps `tls.rs`, and its `env.set` / `env.var` callers sit in
+  `method_call_ffi.rs`, three files from anything named String. A name-keyed
+  grep does find it — but it also misses `load_string_data_len`'s siblings and
+  depends on whoever named them, whereas the signature is structural.
+
+  And note the signature scan's own blind spot, recorded so the next person
+  does not trust it further than it goes: `df_string_parts` returns
+  `Result<(PointerValue, IntValue), String>` and does not match. That is the
+  third scanner gap this campaign has hit. **Every mechanical census here has
+  been a lower bound**; the value of this one is that it is a *different* lower
+  bound from the `extract_value` scan, and the two together left one site
+  standing rather than none.
+
+  A useful negative from the same audit: of the three sites the previous round's
+  handoff listed as suspected FFI gaps, one — `method_call_ffi.rs:129` — is a
+  **false positive** (it is `CString.as_bytes`, not a String), one is the
+  measured `tls.rs` gap, and one is the `cabi.rs` site needing the other fix
+  shape entirely. One of three was actionable as listed. A suspected-site list
+  is a starting point for reading, never a work list to apply.
+
+  ### The first `KARAC_SSO=1` fixture in the tree
+
+  `tests/cli.rs::test_sso_inline_string_survives_the_env_ffi_boundary`. Until
+  now **no compiled Kāra program in CI ever emitted an inline descriptor** (the
+  runtime unit tests build them via `new_inline`, which is why the *clone*
+  half was testable ahead of construction — but nothing drove codegen's
+  construction path) — so the entire SSO surface was covered by a two-leg gate
+  cycle a human had to remember to run
+  with the variable set, which is how both this bug and the `push_str` one
+  reached `main`. It has to shell out: `KARAC_SSO` is read once per process
+  through a `OnceLock` at codegen time and `tests/codegen.rs` compiles
+  in-process, so a fixture there cannot set it per-test and the first reader
+  would win regardless. Same constraint, and the same placement, as
+  `KARAC_OPT_LEVEL` in
+  `test_rc_promoted_param_move_suppression_is_sound_at_o0_and_on_the_jit`.
+
+  It also pins the thing that made the *existing* `env.set` / `env.var` E2E
+  fixtures useless here: **a string literal is static (`cap == 0`) and never
+  inline**, so `env.set("NAME", "val")` cannot exercise the tag in either
+  direction — which is why those fixtures stayed green through the whole
+  regression. This one builds its name and value with `substring`, a real
+  construction site. Same lesson as the receiver-form finding one round earlier:
+  a test that does not reach the code path certifies nothing.
+
+  Two details keep it from going quietly vacuous. Its AOT half skips when the
+  runtime archive is absent, like every other build-and-run fixture here — so
+  under `KARAC_REQUIRE_RUNTIME_ARCHIVE=1` (which CI's archive-building jobs set)
+  it asserts that **both** AOT legs actually built and ran, rather than
+  reporting green on two skips. And it was verified to FAIL with the fix backed
+  out, so it discriminates.
+
+  ### A NEW BLOCKER FOR THE DEFAULT FLIP: moved-from Strings read WILD, not stale
+
+  Found while bisecting a probe divergence, and it is the most consequential
+  thing in this entry — because it is not a footgun the user was warned about,
+  it is a **documented guarantee that SSO breaks**. `UseAfterMove` is advisory
+  by deliberate design, and `src/cli.rs` states the reason in as many words:
+
+  > `UseAfterMove` — codegen **defensive-copies the reuse, so the binary is
+  > memory-safe**; the diagnostic carries a machine-applicable `.clone()` fix
+  > precisely because the program compiles and runs. Keeping it non-fatal for
+  > `build` is deliberate.
+
+  So `karac check` prints `warning[ownership]` and then `All checks passed.`,
+  and the compiler promises the resulting binary is memory-safe. This compiles,
+  runs, and is covered by that promise:
+
+  ```
+  let a = base.substring(0, 10);
+  m.insert(a, 7);          // takes ownership
+  println(a);              // warning[ownership], but permitted
+  ```
+
+  **What was measured** (and this is the part to trust):
+
+  | program | `--interp` | `KARAC_SSO=0` | `KARAC_SSO=1` |
+  |---|---|---|---|
+  | one 10-byte source, `Map.insert` then read | `abcdefghij` | `abcdefghij` | *empty*, exit 0 |
+  | 10-byte **and** 40-byte sources, both moved then read | both correct | both correct | **SIGSEGV, exit 139** |
+
+  The 40-byte string is the control: over the 23-byte inline capacity, so it
+  stays heap on both legs and reads back fine. Its presence is what turns the
+  failure from a wrong answer into a crash — which is both why it is in the
+  reproducer and why the inline path, not `Map`, is the thing implicated.
+
+  **The mechanism is a HYPOTHESIS, and it does not yet fit both rows.** Move
+  suppression disarms a moved-from source by zeroing `cap` — see
+  `zero_struct_move_caps`'s contract, "each Vec/String field's `cap` is
+  zeroed", with the `_mono` sibling saying `cap`/`len`. For a heap String that
+  leaves `{ptr intact, len intact, cap = 0}`, which is exactly the
+  static-literal state, so the moved-from read is benign and returns the old
+  contents — consistent with both non-SSO columns. For an **inline** String
+  `cap` is not spare: it carries the inline flag AND the length, so zeroing it
+  should leave `{ptr = content bytes 0..=7, len = content bytes 8..=15}`, a low
+  bogus pointer with a large length. That predicts a crash in row 1, and row 1
+  prints *empty* instead — which fits `len` being zeroed too, and then does not
+  explain row 2's crash.
+
+  So two of the three facts are explained and one is not. **Trace the actual
+  disarm site for a bare local String before writing the fix** — those cited
+  helpers walk struct FIELDS, and whichever site handles a plain `let` binding
+  was not read. A fix aimed at the wrong site would pass this reproducer for
+  the wrong reason, which is the failure mode this campaign has already hit
+  once (the `is_empty` fix that landed in `vec_method.rs` when the defect was
+  in `method_call.rs`).
+
+  So SSO does not merely change what a moved-from read returns. It converts
+  *reads stale data* into *reads wild memory* on a program the compiler
+  explicitly undertakes to keep memory-safe. Four things follow:
+
+  - **Memory safety of programs with no ownership diagnostic is not affected**,
+    and that is worth stating precisely so nobody over-reads this. An inline
+    descriptor owns no buffer, and `cap = 0` makes its drop a no-op exactly as
+    before — no leak, no double free. The defect is confined to reading a
+    moved-from value.
+  - **It is a hard flip blocker, and the reason is a contract rather than
+    taste.** The `UseAfterMove` guarantee is not "we warned you"; it is "the
+    binary is memory-safe". Flipping SSO on by default would falsify that
+    sentence for every short String in the corpus, and the sentence would still
+    be sitting in `cli.rs` saying otherwise. Either the disarm becomes
+    tag-aware or that documented guarantee has to be withdrawn first — and
+    withdrawing it means making `UseAfterMove` fatal, which is a language
+    decision, not a codegen one.
+  - **Not filed as a ledger row, deliberately.** It is reachable only at
+    `KARAC_SSO=1`, an experimental gate that is off by default and has never
+    shipped on, and this doc is the campaign's canonical tracker — the same
+    reason the `push_str` and free-gate defects were recorded here rather than
+    in `bug-ledger.jsonl`. It becomes a row the moment a flip is attempted.
+  - **The likely fix, once the site is traced.** Disarm an inline source by
+    writing the canonical empty descriptor `{null, 0, 0}` rather than clearing
+    `cap` (and `len`) in place — a defined `""` for the moved-from read, which
+    is also the honest answer, since the value really did move away. Offered as
+    a direction, not a patch: the disarm is a family of sites
+    (`zero_struct_move_caps`, `zero_struct_move_caps_mono`,
+    `zero_enum_payload_caps`, plus the bare-local site above), it lives in the
+    move machinery rather than the String subsystem, and the unexplained row 2
+    may mean something else is wrong as well. It is not done here deliberately
+    — sizing it honestly beats bolting a guess onto an FFI commit.
+
+  The reproducer is the snippet above, doubled — the two rows of the table.
+  It lives here rather than in `examples/` on purpose: it segfaults on one leg,
+  so it belongs in no corpus that gets run, and it carries an ownership
+  diagnostic that every corpus fixture is supposed to be free of.
+
+  ### RUN `karac check` ON THE PROBE BEFORE BELIEVING A DIVERGENCE
+
+  The operational upgrade to last round's "a probe result is evidence about the
+  probe until the probe is proven to reach the code it targets." That rule was
+  already written down here, and this round produced the **same class of false
+  alarm anyway**: a combined probe segfaulted at `KARAC_SSO=1` and ran clean at
+  `=0`, which reads exactly like a fresh codegen bug. Every one of its eleven
+  surfaces passed in isolation; the divergence came from a binding reused after
+  `Map.insert` had taken ownership — the same ownership-reuse mistake the
+  previous round recorded, in a new costume.
+
+  What makes this actionable rather than just another warning is that **the
+  compiler had already said so**: `karac check` on the probe prints
+  `warning[ownership]: value 'a' moved here, used again here`. The check was
+  free and was not run. So the pre-flight is now concrete —
+
+  > `karac check <probe>.kara` must be clean of `warning[ownership]` before any
+  > `KARAC_SSO=0` vs `=1` divergence is treated as a compiler finding.
+
+  — and the same command is what distinguishes the two outcomes: the clean
+  version of that probe (`ffiprobe.kara`, every ownership-taking use given its
+  own fresh slice) is byte-identical at both settings across all eleven
+  surfaces, which is a real *negative* result for `println`, f-string
+  interpolation, `to_uppercase` / `to_lowercase` / `trim`, `len` /
+  `char_count`, `contains` / `starts_with`, `i64.parse`, `Map` insert+get,
+  `Vec[String]` display, and `+` concatenation.
+
+  ### Still open on this boundary
+
+  - **The borrowed-view lifetime.** `karac_string_slice_borrow` returns a
+    pointer *into* its source, and when the source is inline that source is the
+    accessor's entry-block spill slot. Every consumer today is a
+    B-2026-08-18-22 scalar reader that uses it before the next accessor call to
+    the same slot overwrites it — so it is correct by the callers' habits, not
+    by construction, and nothing checks it.
+  - **The wasm return area** fix is reasoned, not measured (above).
+  - **Unprobed surfaces**, each of which takes a `(ptr, len)` pair from a String
+    and is one `substring`-built argument away from being probed exactly as
+    `env.set` was: `serve_https` / `serve_ws_tls`, the HTTP *client* builder
+    path, `json`, `interner`, `Regex`, `String.normalize`.
+
+  Gates at this commit: fmt OK; clippy GREEN on both legs; `--features llvm`,
+  109 binaries per leg. **`KARAC_SSO=0`: 16,805 passed, ZERO red.**
+  `KARAC_SSO=1`: 16,770 passed, one red — `coro_e2e`'s
+  `coroutine_ws_over_tls_concurrent_handlers_all_execute`, which is
+  B-2026-09-12-1 and not this work (the SSO-off leg of the same tree is clean,
+  and that row's two prior reds are on opposite settings of the gate). That red
+  was worth more than the green: the row had asked for the assertion's
+  `left:`/`right:` counts to be preserved on the next occurrence, and this one
+  came back **15/16 — one handler wedged, the server did come up**, which
+  settles the question the row was written to separate. The row is updated with
+  it and stays open.
 - **Slice 4 (optional, "go further").** Pair with the lexer source-slices (below) to get
   the hot path to Rust *zero*-copy; small-string fast paths in concat/compare.
 
 ## Verification matrix
 
+- **The whole `--features llvm` suite at `KARAC_SSO=0` AND `=1`** — the two-leg
+  gate cycle. This is the only thing that exercises inline descriptors broadly,
+  and it is MANUAL: nothing schedules it, so it happens when whoever is holding
+  the campaign remembers. Every SSO regression so far landed through a green
+  single-leg gate set.
+- `tests/cli.rs::test_sso_inline_string_survives_the_env_ffi_boundary` — the one
+  `KARAC_SSO=1` fixture that runs unprompted. It is `#[cfg(feature = "llvm")]`,
+  so it rides the `--features llvm` leg — which is the leg that has codegen at
+  all — and it covers exactly one shape: a String crossing into a runtime
+  extern. Growing this list is how the manual cycle above stops being
+  load-bearing.
 - `tests/codegen.rs` String suite (E2E) + the new dispatch tests.
 - `tests/memory_sanitizer.rs` ASAN on macOS (UAF/double-free) **and** the Linux/LSan CI
   `memory-sanitizer` job (leaks — *the* gate, since SSO rewrites the free path; macOS

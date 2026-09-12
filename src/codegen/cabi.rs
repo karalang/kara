@@ -480,6 +480,40 @@ impl<'ctx> super::Codegen<'ctx> {
     ) -> Result<inkwell::values::IntValue<'ctx>, String> {
         let i32_ty = self.context.i32_type();
         let sv = string_val.into_struct_value();
+
+        // SSO: this pointer OUTLIVES the trampoline — it is stored into a
+        // module-level return area that the component lifter reads after we
+        // return. So the tag-aware accessor is *not* the fix here: for an
+        // inline String it yields the descriptor's own address, which would
+        // trade a garbage pointer for a dangling one. Promote to a heap
+        // buffer instead, which restores exactly the invariant this
+        // function's contract already assumes — "the string bytes already
+        // live in the guest's linear memory". Compiled out entirely when SSO
+        // is off, so the emitted IR is unchanged on the default leg.
+        //
+        // UNVERIFIED AT RUNTIME: reasoned from the descriptor contract, not
+        // measured. A wasm component E2E needs `wasm-tools` and the wasm
+        // runtime archives, neither of which the container that wrote this
+        // had. The sibling `env.set` gap on the same class WAS measured (see
+        // `tls.rs::extract_string_ptr_len`).
+        let sv = match (
+            self.sso_on(),
+            self.builder.get_insert_block().and_then(|b| b.get_parent()),
+        ) {
+            (true, Some(fn_val)) => {
+                let slot = self.sso_descriptor_alloca(fn_val, "cabi.strret.slot");
+                self.builder
+                    .build_store(slot, sv)
+                    .map_err(|e| format!("wasm export trampoline str ret spill: {e}"))?;
+                self.sso_deinline_in_place(slot, "cabi.strret");
+                self.builder
+                    .build_load(self.vec_struct_type(), slot, "cabi.strret.promoted")
+                    .map_err(|e| format!("wasm export trampoline str ret reload: {e}"))?
+                    .into_struct_value()
+            }
+            _ => sv,
+        };
+
         let ptr = self
             .builder
             .build_extract_value(sv, 0, "str_ptr")

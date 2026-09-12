@@ -36380,3 +36380,147 @@ fn derived_display_refusal_names_the_field_type_in_source_syntax() {
         }
     }
 }
+
+/// SSO Slice 3 — the FIRST fixture in the tree that runs with `KARAC_SSO=1`,
+/// and the boundary it guards is the one that has now broken twice.
+///
+/// **Why it has to shell out.** `KARAC_SSO` is read once per process through a
+/// `OnceLock` at codegen time, and `tests/codegen.rs` compiles in-process, so a
+/// fixture there cannot set it without changing the setting for every test
+/// compiling concurrently — and the first reader would win anyway. Spawning
+/// `karac` is what makes the flag per-fixture. Identical reasoning, and the
+/// same placement, as `KARAC_OPT_LEVEL` in
+/// `test_rc_promoted_param_move_suppression_is_sound_at_o0_and_on_the_jit`.
+///
+/// **Why it matters that this exists at all.** Until now the entire inline-
+/// String surface was covered only by a manual two-leg gate cycle someone had
+/// to remember to run with the variable set; nothing in CI ever emitted an
+/// inline descriptor. That is precisely how the `push_str` argument bug
+/// (`String.substring` construction, 2026-09-11) and the `env.set` bug this
+/// fixture pins both reached `main` unnoticed.
+///
+/// **The shape under test: a String crossing the FFI boundary.** An inline
+/// String keeps its bytes *in the descriptor* — field 0 is the first eight
+/// CONTENT bytes and field 1 is bytes 8..=15 — so a site that reads the two
+/// fields raw and hands them to a runtime extern passes a content-derived
+/// pointer and length. `tls.rs::extract_string_ptr_len` did exactly that for
+/// its nine callers (TLS listener bind, TLS client connect, `env.set`,
+/// `env.var`). Measured before the fix, this program aborted inside
+/// `karac_runtime_env_set` with
+/// `memory allocation of 5715719208697159504 bytes failed`. That count minus
+/// one is `0x4F5250564E455F4F`, whose little-endian bytes are `"O_ENVPRO"` —
+/// the variable name's OWN bytes 8..=15. (The `+1` is `CString::new` reserving
+/// the NUL; the first arithmetic on a corrupt length is enough to hide where it
+/// came from, which is why it is worth writing down.)
+///
+/// **Why the literals cannot be written inline in the source.** A string
+/// literal is static (`cap == 0`), never inline, so `env.set("NAME", "val")`
+/// exercises nothing — which is why the existing `env.set` / `env.var` E2E
+/// fixtures stayed green throughout. The name and value here are built with
+/// `substring`, which is a real inline construction site at `KARAC_SSO=1`, and
+/// both results are under the 23-byte inline capacity.
+#[cfg(feature = "llvm")]
+#[test]
+fn test_sso_inline_string_survives_the_env_ffi_boundary() {
+    use std::process::Command;
+
+    let tmp = scratch_project("sso-env-ffi");
+    // 28 bytes: [0,18) is the 18-byte name, [19,28) the 9-byte value. Both
+    // fit the 23-byte inline overlay, so both are inline descriptors at
+    // `KARAC_SSO=1` and ordinary heap Strings at `KARAC_SSO=0`.
+    let src = "fn main() writes(Env) reads(Env) {\n\
+               \x20   let src = \"KARAC_SSO_ENVPROBE=short-val\";\n\
+               \x20   let name = src.substring(0, 18);\n\
+               \x20   let val = src.substring(19, 28);\n\
+               \x20   env.set(name, val);\n\
+               \x20   match env.var(name) {\n\
+               \x20       Ok(v) => { println(v); }\n\
+               \x20       Err(_) => { println(\"missing\"); }\n\
+               \x20   }\n\
+               }\n";
+    write(&tmp.join("envffi.kara"), src);
+    let want = "short-val\n";
+
+    // The interpreter is the oracle: it has no descriptor layout to get wrong.
+    let interp = Command::new(env!("CARGO_BIN_EXE_karac"))
+        .current_dir(&tmp)
+        .args(["run", "--interp", "envffi.kara"])
+        .output()
+        .expect("spawn karac run --interp");
+    assert!(
+        interp.status.success(),
+        "interpreter run failed: {}",
+        String::from_utf8_lossy(&interp.stderr)
+    );
+    assert_eq!(
+        String::from_utf8_lossy(&interp.stdout),
+        want,
+        "oracle drifted — the fixture, not the compiler, needs re-measuring"
+    );
+
+    // Both SSO legs of the JIT lane. The status assertion is as load-bearing
+    // as the output one: pre-fix the `=1` leg did not print a wrong answer, it
+    // aborted the process in the runtime's `setenv`.
+    for sso in ["0", "1"] {
+        let out = Command::new(env!("CARGO_BIN_EXE_karac"))
+            .current_dir(&tmp)
+            .env("KARAC_SSO", sso)
+            .args(["run", "envffi.kara"])
+            .output()
+            .expect("spawn karac run");
+        assert!(
+            out.status.success(),
+            "KARAC_SSO={sso} karac run died: status {:?}, stderr {}",
+            out.status.code(),
+            String::from_utf8_lossy(&out.stderr)
+        );
+        assert_eq!(
+            String::from_utf8_lossy(&out.stdout),
+            want,
+            "KARAC_SSO={sso} JIT lane must match the interpreter"
+        );
+    }
+
+    // Both SSO legs of the AOT lane. Skips gracefully when the runtime
+    // archive is absent and the link fails, like every other build-and-run
+    // fixture here.
+    let mut aot_legs_run = 0;
+    for sso in ["0", "1"] {
+        let exe = tmp.join("envffi");
+        let _ = std::fs::remove_file(&exe);
+        let built = Command::new(env!("CARGO_BIN_EXE_karac"))
+            .current_dir(&tmp)
+            .env("KARAC_SSO", sso)
+            .args(["build", "envffi.kara"])
+            .output();
+        if !built.map(|o| o.status.success()).unwrap_or(false) || !exe.exists() {
+            continue;
+        }
+        aot_legs_run += 1;
+        let out = Command::new(&exe).output().expect("run built binary");
+        assert!(
+            out.status.success(),
+            "KARAC_SSO={sso} built binary died: status {:?}, stderr {}",
+            out.status.code(),
+            String::from_utf8_lossy(&out.stderr)
+        );
+        assert_eq!(
+            String::from_utf8_lossy(&out.stdout),
+            want,
+            "KARAC_SSO={sso} AOT lane must match the interpreter"
+        );
+    }
+    // The AOT half skips when the runtime archive is absent, which is a real
+    // and sanctioned state — but a skip that reports green is how a fixture
+    // stops testing anything without saying so. On the runs that are supposed
+    // to exercise real binaries, say it out loud instead.
+    if std::env::var("KARAC_REQUIRE_RUNTIME_ARCHIVE").is_ok() {
+        assert_eq!(
+            aot_legs_run, 2,
+            "KARAC_REQUIRE_RUNTIME_ARCHIVE is set, so both AOT legs must have \
+             built and run; only {aot_legs_run} did. Build the runtime archives \
+             (lean then full) per CLAUDE.md."
+        );
+    }
+    let _ = std::fs::remove_dir_all(&tmp);
+}

@@ -831,9 +831,29 @@ impl<'ctx> super::Codegen<'ctx> {
 
     /// Helper: extract `{ptr, len}` from a Kāra `String` struct value
     /// (matches `{ptr, i64 len, i64 cap}` Vec-style layout). Used by
-    /// `lower_tls_listener_bind_tls` to unpack the three String args, and
-    /// by the ambient-resource lowering in `method_call.rs` (`env.set`)
-    /// for the same `String` ABI extraction — hence `pub(super)`.
+    /// `lower_tls_listener_bind_tls` / `lower_tls_client_connect` to unpack
+    /// their String args, and by the ambient-resource lowering in
+    /// `method_call_ffi.rs` (`env.set` / `env.var`) for the same `String`
+    /// ABI extraction — hence `pub(super)`.
+    ///
+    /// **SSO:** this is a String-only helper — every caller passes a value the
+    /// typechecker has already fixed as `String` — so it reads through the
+    /// tag-aware accessor rather than the two raw `extract_value`s it used to
+    /// be. An inline String's field 0 is its first eight CONTENT bytes and
+    /// field 1 is bytes 8..=15, so the raw form handed `env.set` a
+    /// content-derived pointer and length; measured before the fix, an 18-byte
+    /// inline name aborted the process in `karac_runtime_env_set` with
+    /// `memory allocation of 5715719208697159504 bytes failed`. That count
+    /// minus one is `0x4F5250564E455F4F`, whose little-endian bytes are
+    /// `"O_ENVPRO"` — the name's OWN bytes 8..=15, because an inline `len`
+    /// field is content. (The `+1` is `CString::new` reserving the NUL.)
+    ///
+    /// The accessor's "valid for an immediate read only" contract holds here
+    /// because every caller hands the pair straight to a runtime extern that
+    /// COPIES the bytes (`karac_runtime_env_set`, `karac_runtime_env_var`,
+    /// `karac_runtime_tls_listener_bind`, `karac_runtime_tls_client_connect`).
+    /// The pointer is a descriptor's own address when the String is inline, so
+    /// a future caller that STORES it past the call would dangle.
     pub(super) fn extract_string_ptr_len(
         &mut self,
         s_val: BasicValueEnum<'ctx>,
@@ -842,18 +862,7 @@ impl<'ctx> super::Codegen<'ctx> {
         inkwell::values::PointerValue<'ctx>,
         inkwell::values::IntValue<'ctx>,
     ) {
-        let sv = s_val.into_struct_value();
-        let ptr = self
-            .builder
-            .build_extract_value(sv, 0, &format!("{name_hint}.ptr"))
-            .unwrap()
-            .into_pointer_value();
-        let len = self
-            .builder
-            .build_extract_value(sv, 1, &format!("{name_hint}.len"))
-            .unwrap()
-            .into_int_value();
-        (ptr, len)
+        self.sso_string_parts_from_value(s_val.into_struct_value(), name_hint)
     }
 
     /// Phase-8 line 24 — TLS counterpart to `wrap_tcp_io_result`.
