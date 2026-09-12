@@ -22208,6 +22208,47 @@ impl<'ctx> super::Codegen<'ctx> {
             && !handled_boxed_result
             && !handled_boxed_option
             && self.try_track_discarded_tuple_temp(tail, val);
+        // B-2026-09-12-2 — a discarded fixed-`Array` temp (`passthru(a);` over
+        // `fn passthru(x: Array[String, 2]) -> Array[String, 2]`), the sibling
+        // of the tuple arm above and reached for the same reason: every arm is
+        // keyed to a return SHAPE, an `Array` matched none of them, and
+        // `materialize_owned_temp`'s chokepoint has no aggregate walk.
+        //
+        // Every individual step of the ownership chain was already right,
+        // which is what made this hard to see. The caller's binding is
+        // retracted at the call (`suppress_array_binding_move_arg`) because
+        // the callee takes ownership by transfer; the callee registers its
+        // own scope-exit element drop (`make_array_param_callee_owned`) and
+        // RETRACTS it at `return x` (B-2026-08-24-5), correctly, since the
+        // value is leaving the frame. The result therefore arrives at the
+        // call site owned by nobody, and an expression statement binds
+        // nothing. The composition, not any step, dropped it on the floor:
+        // 18 B in 2 blocks at `-O0`, silent on all six surfaces, and clean at
+        // `-O2` where the optimizer deletes an allocation nothing observes.
+        //
+        // ONE ARM COVERS BOTH PATHS because the return type is resolved
+        // through `callee_param_te_for_call`, the typechecker's own per-call
+        // solution: the concrete callee's `Array[String, 2]` passes through
+        // untouched, and the generic callee's bare `T` is substituted to the
+        // same thing. Before 55e767a the generic spelling was clean only
+        // because nothing on that leg transferred ownership at all, so the
+        // caller's binding stayed the single correct owner; giving a
+        // monomorph's array param the owner it always should have had moved
+        // it onto the concrete path's behaviour, this hole included.
+        //
+        // BODIES ARE DELIBERATELY NOT REGISTERED, for the reason the tuple arm
+        // states: `--interp` runs no `Drop` body for a discarded call result
+        // either, so the backends agree today and adding one here alone would
+        // turn a leak into a run-vs-build divergence.
+        let handled_array = not_borrow
+            && !handled_option
+            && !handled_result
+            && !handled_option_map
+            && !handled_shared_option
+            && !handled_boxed_result
+            && !handled_boxed_option
+            && !handled_tuple
+            && self.try_track_discarded_array_temp(tail, val);
         if !handled_option
             && !handled_result
             && !handled_option_map
@@ -22215,6 +22256,7 @@ impl<'ctx> super::Codegen<'ctx> {
             && !handled_boxed_result
             && !handled_boxed_option
             && !handled_tuple
+            && !handled_array
         {
             // B-2026-08-25-17 — last resort, and only once every handler above
             // has declined: an inline-`Option` temp discarded inside a GENERIC
@@ -22270,6 +22312,290 @@ impl<'ctx> super::Codegen<'ctx> {
             return false;
         };
         let slot = self.create_entry_alloca(cur_fn, "__disc_tuple_tmp", agg_ty.into());
+        if self.builder.build_store(slot, val).is_err() {
+            return false;
+        }
+        if let Some(frame) = self.drop_rc.scope_cleanup_actions.last_mut() {
+            frame.push(super::state::CleanupAction::StructDrop {
+                struct_alloca: slot,
+                drop_fn,
+            });
+            return true;
+        }
+        false
+    }
+
+    /// B-2026-09-12-2 — the declared `Array[T, N]` parts of a discarded call
+    /// result, resolved FOR THIS CALL.
+    ///
+    /// The declared return type is recovered the same two ways
+    /// [`Self::tuple_binding_elem_tes`] recovers a tuple one — a free function
+    /// through `fn_return_type_exprs`, a method or assoc fn through
+    /// `find_function_ast` on the `Type.method` key — and then put through
+    /// [`Self::callee_param_te_for_call`], the typechecker's own per-call
+    /// solution. That last hop is what makes ONE arm cover both paths: a
+    /// concrete `Array[String, 2]` has no recorded frame and passes through
+    /// untouched, while a generic callee's bare `T` is substituted to the
+    /// array the monomorph actually lowers. Asking `fn_return_type_exprs`
+    /// alone would answer `T` and decline every generic spelling.
+    ///
+    /// `array_elem_and_len` accepts both array spellings, for the reason
+    /// [`Self::owned_array_param_te`] documents.
+    fn discarded_call_array_parts(&self, tail: &Expr) -> Option<(TypeExpr, u32)> {
+        let declared = match &tail.kind {
+            ExprKind::Call { callee, .. } => match &callee.kind {
+                ExprKind::Identifier(name) => self.fn_sig.fn_return_type_exprs.get(name).cloned(),
+                _ => None,
+            },
+            _ => None,
+        }
+        // `fn_return_type_exprs` holds CONCRETE signatures only — a generic
+        // callee has no entry at all, not a `T`-valued one (measured: every
+        // lookup in the generic spelling of this row's program answers
+        // `None`), so without this fallback the whole generic leg declined and
+        // the row's convergence claim would have been half-fixed. The callee
+        // AST is the same one the ownership gate reads, so both halves of the
+        // question resolve through one lookup.
+        .or_else(|| {
+            self.discarded_callee_fn(tail)
+                .and_then(|f| f.return_type.clone())
+        })?;
+        let inst = self.callee_param_te_for_call(&declared, &tail.span);
+        self.array_elem_and_len(&inst)
+    }
+
+    /// B-2026-09-12-2 — the callee AST behind a discarded call, when this
+    /// module can resolve one. Both keys [`Self::discarded_call_array_parts`]
+    /// uses, in the same order, so the two questions are asked of the same
+    /// function.
+    fn discarded_callee_fn(&self, tail: &Expr) -> Option<&crate::ast::Function> {
+        let program = self.program_snapshot.as_deref()?;
+        if let ExprKind::Call { callee, .. } = &tail.kind {
+            if let ExprKind::Identifier(name) = &callee.kind {
+                if let Some(f) = super::declarations::find_function_ast(program, name) {
+                    return Some(f);
+                }
+            }
+        }
+        let qualified = match &tail.kind {
+            ExprKind::MethodCall { object, method, .. } => {
+                self.type_name_of(object).map(|tn| format!("{tn}.{method}"))
+            }
+            ExprKind::Call { callee, .. } => match &callee.kind {
+                ExprKind::Path { segments, .. } if segments.len() >= 2 => Some(format!(
+                    "{}.{}",
+                    segments[segments.len() - 2],
+                    segments[segments.len() - 1]
+                )),
+                _ => None,
+            },
+            _ => None,
+        }?;
+        super::declarations::find_function_ast(program, &qualified)
+    }
+
+    /// B-2026-09-12-2 — does EVERY value this callee can hand back own the
+    /// array it returns?
+    ///
+    /// An ADMISSION gate, not a rejection one, and the polarity is the whole
+    /// point: the arm it guards registers a free, so a value that cannot be
+    /// PROVEN owned has to be left alone. Exactly two spellings qualify — an
+    /// `Identifier` naming a BY-VALUE `Array` parameter, and an `ArrayLiteral`
+    /// minted in the callee — and an unresolvable callee, an empty return set,
+    /// or a single unrecognized return refuses the whole call.
+    ///
+    /// A by-value array param is the transfer case this row is about: the
+    /// caller retracted its binding's drop at the call
+    /// (`suppress_array_binding_move_arg`) and the callee retracted its own
+    /// scope-exit drop at the `return` (B-2026-08-24-5), so the result reaches
+    /// the discard owned by nobody and this arm is its sole owner.
+    ///
+    /// The shape the gate exists to REFUSE is a borrow projection —
+    /// `fn get(w: ref W) -> Array[String, 2] { return w.a; }`. That copy
+    /// aliases buffers `w` still owns, so freeing it is a double free. Its
+    /// BOUND twin (`let b = get(w);`) already double-frees on unmodified
+    /// `main` — 10 allocs / 12 frees, four `Invalid free()` at `-O0`, the
+    /// W0299 `borrow_projection_copy` class B-2026-09-06-31 tracks — and the
+    /// DISCARD spelling is clean there only because nothing frees it at all.
+    /// Without this gate the arm would have spread an existing unsound copy to
+    /// a second spelling, trading a leak for a double free.
+    ///
+    /// A local move-out (`let a = [..]; return a;`) is declined for want of a
+    /// proof rather than for a measurement: it leaks today and keeps leaking.
+    /// Widening to it means establishing that the local's own scope-exit drop
+    /// is retracted at the `return`, which is a separate question from this
+    /// row's.
+    fn callee_hands_back_an_owned_array(&self, tail: &Expr) -> bool {
+        let Some(f) = self.discarded_callee_fn(tail) else {
+            return false;
+        };
+        let mut rets: Vec<&Expr> = Vec::new();
+        Self::collect_return_exprs(&f.body, &mut rets);
+        if rets.is_empty() {
+            return false;
+        }
+        rets.iter().all(|r| match &r.kind {
+            ExprKind::ArrayLiteral(_) => true,
+            ExprKind::Identifier(name) => f.params.iter().any(|p| {
+                matches!(&p.pattern.kind, crate::ast::PatternKind::Binding(pn) if pn == name)
+                    // INSTANTIATED, not declared. A generic callee's param is
+                    // spelled `T`, which is not an array in any spelling, so
+                    // asking `p.ty` directly refuses every monomorph — the
+                    // bare-`T` whole-param blindness B-2026-08-31-39 named.
+                    // Same per-call channel the return type goes through, so
+                    // the two halves of the question agree by construction.
+                    && self
+                        .array_elem_and_len(&self.callee_param_te_for_call(&p.ty, &tail.span))
+                        .is_some()
+            }),
+            _ => false,
+        })
+    }
+
+    /// Every expression this block can hand back to the enclosing function's
+    /// caller: the operand of each `return`, plus whatever the block's tail
+    /// evaluates to when the block IS the function's tail. Recurses through the
+    /// constructs a `return` can legally sit inside; a closure body is not one
+    /// of them (its `return` leaves the closure), so closures are not entered.
+    ///
+    /// `is_tail` is what keeps a control-transfer construct from being mistaken
+    /// for a value. A `match` in tail position hands back its ARMS' tails, not
+    /// itself, and pushing the `match` node would refuse the call for a shape
+    /// whose every arm is a plain `return x;` — measured: the `match`-arm
+    /// spelling of the row's own program went back to leaking 18 B when the
+    /// tail was pushed whole.
+    ///
+    /// Conservative by construction — an expression kind this walk does not
+    /// know is pushed AS ITSELF from tail position and contributes nothing from
+    /// statement position, and
+    /// [`Self::callee_hands_back_an_owned_array`] requires every collected
+    /// entry to qualify AND the set to be non-empty. So a shape that hides a
+    /// `return` from the walk refuses the call rather than admitting it unseen.
+    fn collect_return_exprs<'a>(block: &'a crate::ast::Block, out: &mut Vec<&'a Expr>) {
+        Self::collect_returns_in_block(block, out, true);
+    }
+
+    fn collect_returns_in_block<'a>(
+        block: &'a crate::ast::Block,
+        out: &mut Vec<&'a Expr>,
+        is_tail: bool,
+    ) {
+        for stmt in &block.stmts {
+            match &stmt.kind {
+                StmtKind::Expr(e) => Self::collect_returns_in_expr(e, out),
+                StmtKind::Let { value, .. } | StmtKind::LetElse { value, .. } => {
+                    Self::collect_returns_in_expr(value, out)
+                }
+                StmtKind::Assign { value, .. } | StmtKind::CompoundAssign { value, .. } => {
+                    Self::collect_returns_in_expr(value, out)
+                }
+                _ => {}
+            }
+        }
+        if let Some(fe) = &block.final_expr {
+            if is_tail {
+                Self::collect_tail_expr(fe, out);
+            } else {
+                Self::collect_returns_in_expr(fe, out);
+            }
+        }
+    }
+
+    /// The value an expression in TAIL position hands back, pushed as the leaf
+    /// it actually is: a branch construct contributes its branches' tails.
+    fn collect_tail_expr<'a>(e: &'a Expr, out: &mut Vec<&'a Expr>) {
+        match &e.kind {
+            ExprKind::Return(v) => {
+                if let Some(v) = v {
+                    Self::collect_tail_expr(v, out);
+                }
+            }
+            ExprKind::Block(b) => Self::collect_returns_in_block(b, out, true),
+            ExprKind::If {
+                then_block,
+                else_branch,
+                ..
+            } => {
+                Self::collect_returns_in_block(then_block, out, true);
+                if let Some(eb) = else_branch {
+                    Self::collect_tail_expr(eb, out);
+                }
+            }
+            ExprKind::Match { arms, .. } => {
+                for arm in arms {
+                    Self::collect_tail_expr(&arm.body, out);
+                }
+            }
+            _ => out.push(e),
+        }
+    }
+
+    /// The statement-position half: only an explicit `return` escapes here, so
+    /// a nested block's own tail is a discarded value, not a hand-back.
+    fn collect_returns_in_expr<'a>(e: &'a Expr, out: &mut Vec<&'a Expr>) {
+        match &e.kind {
+            ExprKind::Return(Some(v)) => Self::collect_tail_expr(v, out),
+            ExprKind::Return(None) => {}
+            ExprKind::Block(b) => Self::collect_returns_in_block(b, out, false),
+            ExprKind::If {
+                then_block,
+                else_branch,
+                ..
+            } => {
+                Self::collect_returns_in_block(then_block, out, false);
+                if let Some(eb) = else_branch {
+                    Self::collect_returns_in_expr(eb, out);
+                }
+            }
+            ExprKind::Match { arms, .. } => {
+                for arm in arms {
+                    Self::collect_returns_in_expr(&arm.body, out);
+                }
+            }
+            _ => {}
+        }
+    }
+
+    /// B-2026-09-12-2 — register the memory walk for a discarded fixed-`Array`
+    /// temp. See the call site for why the arm exists and why it registers no
+    /// bodies.
+    ///
+    /// The admission gate is [`Self::synthesize_array_drop_fn_te`]'s own, asked
+    /// by calling it: it declines `N == 0` and an element that owns no
+    /// drop-bearing heap, so an `Array[i64, 2]` discard registers nothing and
+    /// keeps its current codegen byte-for-byte. Deferring to the synthesizer
+    /// rather than re-spelling the condition is the same discipline
+    /// `owned_array_param_te` exists for — the emitting question and the
+    /// admitting one cannot drift apart if only one of them is written down.
+    ///
+    /// Nothing else owns a discarded fresh call result, so this walk is its
+    /// sole cleanup and cannot double-release: the caller's own binding, if it
+    /// had one, was retracted at the call, and the callee retracted its
+    /// scope-exit drop at the `return`.
+    fn try_track_discarded_array_temp(&mut self, tail: &Expr, val: BasicValueEnum<'ctx>) -> bool {
+        let Some((elem_te, n)) = self.discarded_call_array_parts(tail) else {
+            return false;
+        };
+        if !self.callee_hands_back_an_owned_array(tail) {
+            return false;
+        }
+        let elem_ty = self.llvm_type_for_type_expr(&elem_te);
+        let Some(drop_fn) = self.synthesize_array_drop_fn_te(elem_ty, &elem_te, n) else {
+            return false;
+        };
+        let Some(cur_fn) = self
+            .builder
+            .get_insert_block()
+            .and_then(|bb| bb.get_parent())
+        else {
+            return false;
+        };
+        // `array_type` comes from `BasicType`, which this module does not
+        // import at the top (the codegen modules each import the inkwell
+        // traits they use); scoped here so nothing else in the file changes.
+        use inkwell::types::BasicType;
+        let arr_ty = elem_ty.array_type(n);
+        let slot = self.create_entry_alloca(cur_fn, "__disc_array_tmp", arr_ty.into());
         if self.builder.build_store(slot, val).is_err() {
             return false;
         }

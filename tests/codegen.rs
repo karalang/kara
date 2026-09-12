@@ -155340,6 +155340,143 @@ fn main() {
     }
 
     #[test]
+    fn e2e_discarded_array_result_reads_back_on_every_surface() {
+        // B-2026-09-12-2 -- the cross-surface twin of
+        // `asan_discarded_array_result_has_exactly_one_owner`.
+        //
+        // A PRE-FIX TREE PASSES THIS FIXTURE, and that is the point rather
+        // than a weakness: the defect is a pure leak, silent on every surface
+        // and invisible at `-O2` where the harness builds, so nothing here
+        // can observe it. What these cells guard is the OTHER direction --
+        // a fix that registers one owner too many aborts the program, and
+        // cell 7 is the shape that actually did so before the admission gate
+        // went in. Read it together with the ASAN twin, which carries the
+        // counts; this one carries the corruption check.
+        for (label, src, want) in [
+            // 1 -- concrete callee, result discarded.
+            (
+                "discarded-array-concrete-read",
+                "fn passthru(x: Array[String, 2]) -> Array[String, 2] { return x; }\n\
+                 fn main() {\n\
+                 \x20\x20\x20\x20let a: Array[String, 2] = [f\"aaaaaaaa0\", f\"bbbbbbbb0\"];\n\
+                 \x20\x20\x20\x20passthru(a);\n\
+                 \x20\x20\x20\x20println(\"s:ok\");\n\
+                 }\n",
+                "s:ok\n",
+            ),
+            // 2 -- the generic spelling, which resolves its return type
+            //      through the per-call substitution rather than the
+            //      free-function table.
+            (
+                "discarded-array-generic-read",
+                "fn passthru[T](x: T) -> T { return x; }\n\
+                 fn main() {\n\
+                 \x20\x20\x20\x20let a: Array[String, 2] = [f\"aaaaaaaa0\", f\"bbbbbbbb0\"];\n\
+                 \x20\x20\x20\x20passthru(a);\n\
+                 \x20\x20\x20\x20println(\"s:ok\");\n\
+                 }\n",
+                "s:ok\n",
+            ),
+            // 3 -- the nested element.
+            (
+                "discarded-array-nested-read",
+                "fn passthru(x: Array[Array[String, 2], 2]) -> Array[Array[String, 2], 2] {\n\
+                 \x20\x20\x20\x20return x;\n\
+                 }\n\
+                 fn main() {\n\
+                 \x20\x20\x20\x20let a: Array[Array[String, 2], 2] =\n\
+                 \x20\x20\x20\x20\x20\x20\x20\x20[[f\"aaaaaaaa0\", f\"bbbbbbbb0\"], [f\"cccccccc0\", f\"dddddddd0\"]];\n\
+                 \x20\x20\x20\x20passthru(a);\n\
+                 \x20\x20\x20\x20println(\"s:ok\");\n\
+                 }\n",
+                "s:ok\n",
+            ),
+            // 4 -- a discarded METHOD result.
+            (
+                "discarded-array-method-read",
+                "struct H { k: i64 }\n\
+                 impl H {\n\
+                 \x20\x20\x20\x20fn passthru(self, x: Array[String, 2]) -> Array[String, 2] { return x; }\n\
+                 }\n\
+                 fn main() {\n\
+                 \x20\x20\x20\x20let h: H = H { k: 1 };\n\
+                 \x20\x20\x20\x20let a: Array[String, 2] = [f\"aaaaaaaa0\", f\"bbbbbbbb0\"];\n\
+                 \x20\x20\x20\x20h.passthru(a);\n\
+                 \x20\x20\x20\x20println(\"s:ok\");\n\
+                 }\n",
+                "s:ok\n",
+            ),
+            // 5 -- the `match`-arm return.
+            (
+                "discarded-array-match-arm-read",
+                "fn passthru(x: Array[String, 2], c: bool) -> Array[String, 2] {\n\
+                 \x20\x20\x20\x20match c {\n\
+                 \x20\x20\x20\x20\x20\x20\x20\x20true => { return x; }\n\
+                 \x20\x20\x20\x20\x20\x20\x20\x20false => { return x; }\n\
+                 \x20\x20\x20\x20}\n\
+                 }\n\
+                 fn main() {\n\
+                 \x20\x20\x20\x20let a: Array[String, 2] = [f\"aaaaaaaa0\", f\"bbbbbbbb0\"];\n\
+                 \x20\x20\x20\x20passthru(a, true);\n\
+                 \x20\x20\x20\x20println(\"s:ok\");\n\
+                 }\n",
+                "s:ok\n",
+            ),
+            // 6 -- a callee that MINTS the array.
+            (
+                "discarded-array-minted-read",
+                "fn mint() -> Array[String, 2] { return [f\"aaaaaaaa0\", f\"bbbbbbbb0\"]; }\n\
+                 fn main() {\n\
+                 \x20\x20\x20\x20mint();\n\
+                 \x20\x20\x20\x20println(\"s:ok\");\n\
+                 }\n",
+                "s:ok\n",
+            ),
+            // 7 -- THE CORRUPTION CONTROL: a borrow-projection return. With
+            //      the arm ungated this aborts on a double free rather than
+            //      printing, on every compiled surface.
+            (
+                "discarded-borrow-projection-read",
+                "struct W { a: Array[String, 2] }\n\
+                 fn get(w: ref W) -> Array[String, 2] { return w.a; }\n\
+                 fn main() {\n\
+                 \x20\x20\x20\x20let w: W = W { a: [f\"aaaaaaaa0\", f\"bbbbbbbb0\"] };\n\
+                 \x20\x20\x20\x20get(w);\n\
+                 \x20\x20\x20\x20println(\"s:ok\");\n\
+                 }\n",
+                "s:ok\n",
+            ),
+            // 8 -- CONTROL: the bound result still reads back.
+            (
+                "discarded-array-bound-control-read",
+                "fn passthru(x: Array[String, 2]) -> Array[String, 2] { return x; }\n\
+                 fn main() {\n\
+                 \x20\x20\x20\x20let a: Array[String, 2] = [f\"aaaaaaaa0\", f\"bbbbbbbb0\"];\n\
+                 \x20\x20\x20\x20let b: Array[String, 2] = passthru(a);\n\
+                 \x20\x20\x20\x20println(f\"s:{b[0]}\");\n\
+                 }\n",
+                "s:aaaaaaaa0\n",
+            ),
+            // 9 -- CONTROL: scalar elements register nothing.
+            (
+                "discarded-scalar-array-control-read",
+                "fn passthru(x: Array[i64, 2]) -> Array[i64, 2] { return x; }\n\
+                 fn main() {\n\
+                 \x20\x20\x20\x20let a: Array[i64, 2] = [11, 22];\n\
+                 \x20\x20\x20\x20passthru(a);\n\
+                 \x20\x20\x20\x20println(\"s:ok\");\n\
+                 }\n",
+                "s:ok\n",
+            ),
+        ] {
+            let Some(out) = run_program(src) else {
+                return;
+            };
+            assert_eq!(out, want, "[{label}]");
+        }
+    }
+
+    #[test]
     fn e2e_arm_bound_array_rebind_reads_back_on_every_surface() {
         for (label, src, want) in [
             // 1 — the annotated rebind, `String` element.

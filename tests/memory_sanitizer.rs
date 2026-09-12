@@ -86549,6 +86549,181 @@ fn main() {
     }
 
     #[test]
+    fn asan_discarded_array_result_has_exactly_one_owner() {
+        // B-2026-09-12-2. A discarded call result of an array-returning
+        // function was owned by NOBODY, and every individual step of the
+        // ownership chain was right -- which is what made it invisible. The
+        // caller's binding is retracted at the call
+        // (`suppress_array_binding_move_arg`) because the callee takes
+        // ownership by transfer; the callee registers its own scope-exit
+        // element drop (`make_array_param_callee_owned`) and RETRACTS it at
+        // `return x` (B-2026-08-24-5), correctly, since the value is leaving
+        // the frame. The result therefore arrives at the call site owned by
+        // nobody, and an expression statement binds nothing. Measured 18 B in
+        // 2 blocks at `-O0`; silent on all six surfaces, and clean at `-O2`
+        // where the optimizer deletes an allocation nothing observes.
+        //
+        // Cells 7-10 are the controls that matter, and cell 7 is the one that
+        // caught a wrong fix: registering the drop WITHOUT proving the result
+        // owned turns a borrow-projection return into a double free, spreading
+        // an existing unsound copy (the W0299 `borrow_projection_copy` class,
+        // B-2026-09-06-31) to a second spelling. Cells 1-6 alone cannot tell
+        // that fix from this one.
+        //
+        // 1 -- the reported shape: concrete callee, result DISCARDED.
+        assert_clean_asan_run(
+            "fn passthru(x: Array[String, 2]) -> Array[String, 2] { return x; }\n\
+             fn main() {\n\
+             \x20\x20\x20\x20let a: Array[String, 2] = [f\"aaaaaaaa0\", f\"bbbbbbbb0\"];\n\
+             \x20\x20\x20\x20passthru(a);\n\
+             \x20\x20\x20\x20println(\"s:ok\");\n\
+             }\n",
+            &["s:ok"],
+            "discarded-array-result-concrete",
+        );
+        // 2 -- the GENERIC spelling, which was clean before 55e767a only
+        //      because nothing on that leg transferred ownership at all, so
+        //      the caller's binding stayed the single correct owner. Giving a
+        //      monomorph's array param the owner it always should have had
+        //      moved it onto the concrete path's behaviour, this hole
+        //      included -- convergence, not a new defect. It declines unless
+        //      the return type is resolved through the per-call substitution:
+        //      `fn_return_type_exprs` holds no entry for a generic callee.
+        assert_clean_asan_run(
+            "fn passthru[T](x: T) -> T { return x; }\n\
+             fn main() {\n\
+             \x20\x20\x20\x20let a: Array[String, 2] = [f\"aaaaaaaa0\", f\"bbbbbbbb0\"];\n\
+             \x20\x20\x20\x20passthru(a);\n\
+             \x20\x20\x20\x20println(\"s:ok\");\n\
+             }\n",
+            &["s:ok"],
+            "discarded-array-result-generic",
+        );
+        // 3 -- the NESTED element, listed NOT MEASURED on the row. 36 B in 4
+        //      blocks pre-fix, twice the one-level count, because the walk is
+        //      the recursive one B-2026-09-10-8/-26 built.
+        assert_clean_asan_run(
+            "fn passthru(x: Array[Array[String, 2], 2]) -> Array[Array[String, 2], 2] {\n\
+             \x20\x20\x20\x20return x;\n\
+             }\n\
+             fn main() {\n\
+             \x20\x20\x20\x20let a: Array[Array[String, 2], 2] =\n\
+             \x20\x20\x20\x20\x20\x20\x20\x20[[f\"aaaaaaaa0\", f\"bbbbbbbb0\"], [f\"cccccccc0\", f\"dddddddd0\"]];\n\
+             \x20\x20\x20\x20passthru(a);\n\
+             \x20\x20\x20\x20println(\"s:ok\");\n\
+             }\n",
+            &["s:ok"],
+            "discarded-array-result-nested",
+        );
+        // 4 -- a discarded METHOD result, also listed NOT MEASURED. Resolves
+        //      through the `Type.method` key rather than the free-function
+        //      table, so it pins the second of the two lookups.
+        assert_clean_asan_run(
+            "struct H { k: i64 }\n\
+             impl H {\n\
+             \x20\x20\x20\x20fn passthru(self, x: Array[String, 2]) -> Array[String, 2] { return x; }\n\
+             }\n\
+             fn main() {\n\
+             \x20\x20\x20\x20let h: H = H { k: 1 };\n\
+             \x20\x20\x20\x20let a: Array[String, 2] = [f\"aaaaaaaa0\", f\"bbbbbbbb0\"];\n\
+             \x20\x20\x20\x20h.passthru(a);\n\
+             \x20\x20\x20\x20println(\"s:ok\");\n\
+             }\n",
+            &["s:ok"],
+            "discarded-array-result-method",
+        );
+        // 5 -- the `match`-arm return, the third NOT-MEASURED shape. This is
+        //      the cell that fails if the return walk pushes a tail CONSTRUCT
+        //      rather than its arms' tails: the `match` node is neither an
+        //      identifier nor a literal, so the whole call gets refused and
+        //      the leak comes back at the identical count.
+        assert_clean_asan_run(
+            "fn passthru(x: Array[String, 2], c: bool) -> Array[String, 2] {\n\
+             \x20\x20\x20\x20match c {\n\
+             \x20\x20\x20\x20\x20\x20\x20\x20true => { return x; }\n\
+             \x20\x20\x20\x20\x20\x20\x20\x20false => { return x; }\n\
+             \x20\x20\x20\x20}\n\
+             }\n\
+             fn main() {\n\
+             \x20\x20\x20\x20let a: Array[String, 2] = [f\"aaaaaaaa0\", f\"bbbbbbbb0\"];\n\
+             \x20\x20\x20\x20passthru(a, true);\n\
+             \x20\x20\x20\x20println(\"s:ok\");\n\
+             }\n",
+            &["s:ok"],
+            "discarded-array-result-match-arm",
+        );
+        // 6 -- a callee that MINTS the array rather than forwarding a param.
+        //      Nothing upstream ever owned these buffers, so this is the one
+        //      target cell whose fix cannot be confused with a retraction.
+        assert_clean_asan_run(
+            "fn mint() -> Array[String, 2] { return [f\"aaaaaaaa0\", f\"bbbbbbbb0\"]; }\n\
+             fn main() {\n\
+             \x20\x20\x20\x20mint();\n\
+             \x20\x20\x20\x20println(\"s:ok\");\n\
+             }\n",
+            &["s:ok"],
+            "discarded-array-result-minted",
+        );
+        // 7 -- THE CONTROL THAT CAUGHT A WRONG FIX: a BORROW PROJECTION
+        //      return. `w.a` copies out of a struct `w` still owns, so a drop
+        //      registered here is a double free -- measured as four
+        //      `Invalid free()` at `-O0` with an ungated arm. This cell is
+        //      clean on unmodified `main` precisely because nothing frees the
+        //      copy, which is why only a control can see the regression.
+        assert_clean_asan_run(
+            "struct W { a: Array[String, 2] }\n\
+             fn get(w: ref W) -> Array[String, 2] { return w.a; }\n\
+             fn main() {\n\
+             \x20\x20\x20\x20let w: W = W { a: [f\"aaaaaaaa0\", f\"bbbbbbbb0\"] };\n\
+             \x20\x20\x20\x20get(w);\n\
+             \x20\x20\x20\x20println(\"s:ok\");\n\
+             }\n",
+            &["s:ok"],
+            "discarded-borrow-projection-control",
+        );
+        // 8 -- CONTROL: the BOUND result, which was always clean because the
+        //      binding registers the owner the discard had no place for.
+        //      Guards the direction where the new arm gives it a second.
+        assert_clean_asan_run(
+            "fn passthru(x: Array[String, 2]) -> Array[String, 2] { return x; }\n\
+             fn main() {\n\
+             \x20\x20\x20\x20let a: Array[String, 2] = [f\"aaaaaaaa0\", f\"bbbbbbbb0\"];\n\
+             \x20\x20\x20\x20let b: Array[String, 2] = passthru(a);\n\
+             \x20\x20\x20\x20println(f\"s:{b[0]}\");\n\
+             }\n",
+            &["s:aaaaaaaa0"],
+            "discarded-array-bound-control",
+        );
+        // 9 -- CONTROL: a SCALAR element. The synthesizer's own gate declines
+        //      it, so this cell must register nothing at all; a widened
+        //      admission would emit a walk over `i64`s.
+        assert_clean_asan_run(
+            "fn passthru(x: Array[i64, 2]) -> Array[i64, 2] { return x; }\n\
+             fn main() {\n\
+             \x20\x20\x20\x20let a: Array[i64, 2] = [11, 22];\n\
+             \x20\x20\x20\x20passthru(a);\n\
+             \x20\x20\x20\x20println(\"s:ok\");\n\
+             }\n",
+            &["s:ok"],
+            "discarded-scalar-array-control",
+        );
+        // 10 -- CONTROL: the `Vec` peer at the same shape, clean throughout
+        //       (14 allocs / 14 frees). Whatever owns a discarded `Vec`
+        //       result must keep owning it -- the array arm sits beside that
+        //       machinery, not in front of it.
+        assert_clean_asan_run(
+            "fn passthru(x: Vec[String]) -> Vec[String] { return x; }\n\
+             fn main() {\n\
+             \x20\x20\x20\x20let a: Vec[String] = [f\"aaaaaaaa0\", f\"bbbbbbbb0\"];\n\
+             \x20\x20\x20\x20passthru(a);\n\
+             \x20\x20\x20\x20println(\"s:ok\");\n\
+             }\n",
+            &["s:ok"],
+            "discarded-vec-peer-control",
+        );
+    }
+
+    #[test]
     fn asan_arm_bound_array_rebind_leaves_memory_with_one_owner() {
         // 1 — the live bug: an ANNOTATED rebind of an arm-bound payload.
         assert_clean_asan_run(
