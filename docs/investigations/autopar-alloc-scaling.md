@@ -524,30 +524,40 @@ same sink (`unique 573650`). `uniqueabbr_par_nofmt.c` in the kata's bench
 directory is `uniqueabbr_par.c` with `abbrev`'s digits written by hand and
 nothing else changed:
 
-| | mean | user | sys |
+| lane | 1 thread | 18 threads | speedup |
 |---|---:|---:|---:|
-| C seq | 54.34 ms | 52.35 | 1.28 |
-| C par, `sprintf` | **70.94 ms** | 160.58 | **903.57** |
-| C par, manual digits | **3.24 ms** | 22.30 | 0.95 |
+| C, `sprintf` | 55.04 ms | 70.68 ms | **0.78×** |
+| C, manual digits | 18.99 ms | 3.87 ms | **4.91×** |
+| Kāra, original | 90.29 ms | 24.14 ms | **3.74×** |
+| Kāra, no per-punch alloc | 36.33 ms | 9.18 ms | **3.96×** |
 
-**0.77× against sequential with `sprintf` — reproducing this row's recorded
-0.76× exactly — and 16.76× without it.** The same program, the same
-partitioning, the same hardware; 21.9× between the two par lanes.
+**0.78× with `sprintf` — reproducing this row's recorded 0.76× — and 4.91×
+without it**, same binary, one knob. (An earlier revision of this section read
+16.76×. That compared `par_manual` at 18 threads against `seq.c`, a *different
+file* that still calls sprintf, so it was not a speedup at all. Both C variants
+now take an `argv` thread count precisely so the same-binary comparison exists.)
 
 The 903 ms of **system** time on a 71 ms wall-clock run is the mechanism showing
 through, and `/usr/bin/time -l` corroborates it: 865 involuntary context
 switches against 63. That is the serialization `B-2026-09-05-23` recorded for
 the Kāra lane on this same kata, in the C mirror, for the same reason.
 
-**So all three witnesses now reduce to causes already named.** The C row does
-not cut against a Kāra-side diagnosis any more — it was never evidence about
-partitioning, and with the formatting removed the C mirror gets 16.76× on ~15.7
-cores, which is close to what the hardware can offer. The hardware is fine and
-the static partition is fine.
+**The `sprintf` finding stands; the conclusion drawn from it does not.** The C
+mirror's collapse is libc formatting — 906 ms of system time and 865 involuntary
+context switches vanish with it. But the de-formatted mirror reaches **4.91×**,
+not near-linear, on a 6P+12E box whose asymmetric ceiling is ~10×. So "the
+hardware is fine and the partition is fine" was overstated.
 
-That makes `B-2026-08-28-76`'s own headline *stronger*, not weaker: Kāra's 3.45×
-on this kata now sits against a C mirror doing 16.76× on the same machine, with
-no remaining witness suggesting everyone collapses here.
+**And the allocation hypothesis is refuted.** Kāra's punch loop allocates three
+times per punch where the mirror allocates nothing; hoisting all of it out cuts
+absolute time 2.5× and moves the speedup 3.74× → 3.96×. Allocation is most of
+Kāra's *work* here and almost none of its *under-return*, so
+`B-2026-09-05-22`'s libmalloc ceiling does not explain kata:288.
+
+Against the right comparator — no formatting, no allocation, same machine, same
+partitioning — Kāra returns **3.96× where C returns 4.91×**: 81% of the mirror's
+parallel efficiency, not a 4× shortfall. What is actually unexplained is why
+*this workload* tops out near 5× on eighteen cores **in both languages**.
 
 Kāra's par lane is **not** at parity with C on this host — 24.9–27.5 ms against
 18.5–19.8 ms, ~1.35x slower — against a mirror that allocates nothing while
