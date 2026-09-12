@@ -664,11 +664,93 @@ perf payoff lands in Slice 2.
   them is not "is this a String?" but **"does the pointer outlive the frame?"**
   Immediate read ⇒ route. Stored anywhere ⇒ promote.
 
-  **This one is REASONED, NOT MEASURED**, and it says so at the site. A wasm
-  component E2E needs `wasm-tools` and the two wasm runtime archives, and the
-  container had neither. It is guarded by `sso_on()`, so it is a literal no-op
-  on the default leg — but an unverified fix is not a verified one, and the next
-  session with a wasm toolchain should run it before believing it.
+  **MEASURED 2026-09-12, and it works** — see "THE INLINE OVERLAY IS BROKEN ON
+  32-BIT TARGETS" below. A `wasm_browser` export returning a `substring` lifts
+  the correct bytes at `KARAC_SSO=1` for every length that the encoder gets
+  right, so the promotion fires and does its job.
+
+  **The claim that this was unverifiable here was WRONG, and that is worth
+  recording.** It was written as "a wasm component E2E needs `wasm-tools` and the
+  two wasm runtime archives, and the container had neither." Neither was
+  *present*; both were one command away. The two wasm rust targets ship in the
+  pinned toolchain (`rust-toolchain.toml` declares them), the archives are two
+  `cargo rustc … --crate-type staticlib` invocations, `wasm-tools` installs from
+  crates.io, and node is already on PATH. The only genuine obstacle was a
+  toolchain mismatch — the wasm targets live under the pinned `1.94.1` while
+  `karac` resolves its sysroot from the active default — fixed with one
+  `rustup target add … --toolchain stable`. An unchecked assumption about the
+  environment had been standing in for a finding, and actually running it found
+  a real defect the reasoning would have preserved indefinitely.
+
+
+  ### THE INLINE OVERLAY IS BROKEN ON 32-BIT TARGETS (found 2026-09-12, OPEN)
+
+  Found by finally running the thing this doc had recorded as unverifiable. The
+  `cabi.rs` return-area promotion is **fine** — the corruption is upstream of it,
+  in the reference encoder itself.
+
+  **Measured.** A `wasm_browser` export returning `s.substring(0, n)`, run under
+  node, sweeping `n` across the inline boundary:
+
+  ```
+  KARAC_SSO=0   ALL OK (0..30, incl. the 23-byte boundary)
+  KARAC_SSO=1   n=4  "abcd"          ok
+                n=5  "abcd\0"        want "abcde"
+                n=8  "abcd\0\0\0\0"  want "abcdefgh"
+                n=12 "abcd\0\0\0\0ijkl" want "abcdefghijkl"
+                n=24,30               ok  (over capacity -> heap)
+  ```
+
+  **Content bytes 4..=7 are always zero.** Everything else survives.
+
+  **Mechanism.** `RuntimeKaracString::new_inline` packs the first eight content
+  bytes into a `u64` and then stores them through the pointer field:
+
+  ```rust
+  let data = u64::from_le_bytes(raw[0..8].try_into().unwrap());
+  RuntimeKaracString { data: data as *mut u8, len, cap }
+  ```
+
+  On a 64-bit target `data` is eight bytes and the overlay is exact. On
+  **wasm32 the pointer is four bytes**, so `data as *mut u8` truncates — content
+  bytes 4..=7 are discarded — and in memory offsets 4..=7 are the alignment hole
+  before the `i64` at offset 8, which nothing ever writes. Hence zeros, exactly
+  where measured. The same hole means the 23-byte `INLINE_CAPACITY` is wrong on
+  32-bit too: only 19 bytes are reachable through the struct fields.
+
+  **Why the tests could not catch it.** `runtime/src/sso.rs`'s contract is
+  described in this doc as "exhaustively unit-tested — all three states, every
+  inline length 0..=23, boundary rejection, layout-pin", and it is. Those tests
+  run on the HOST, x86-64, where `data` is eight bytes and the hole does not
+  exist. A layout contract that is pointer-width dependent cannot be validated at
+  one pointer width, and nothing in the suite runs them at another.
+
+  **Nor could the existing wasm E2E.** `wasm_browser_rich_exports_marshal_e2e`
+  exports `shout(s: String) -> String { s + "!" }` and calls it with `'hi'`.
+  Concat is not an inline construction site, so the result is a heap String and
+  the test passes identically with the bug present — it was green at
+  `KARAC_SSO=1` throughout.
+
+  **And a near-miss worth keeping.** The first probe returned `pick('abc…', 3)`
+  and got `"abc"`, which was written down as verification. It is not: `n=3` fits
+  entirely in bytes 0..=3, the bytes that survive truncation, so it passes with
+  the bug present. **A single passing value on a boundary-shaped defect proves
+  nothing** — the sweep is what made it visible, and the sweep should have been
+  the first thing run.
+
+  **Status: OPEN, not fixed here.** Reachable only at `KARAC_SSO=1` (default
+  off), so nothing ships broken today. The shape of the fix is clear — write the
+  inline bytes through a raw byte pointer into the destination (`out as *mut u8`)
+  rather than reconstructing struct fields, so the padding hole is written
+  directly — but it touches the single source of truth that codegen mirrors, it
+  changes `INLINE_CAPACITY`'s meaning on 32-bit, and the `karac_string_clone`
+  24-byte struct-copy path needs the same audit (Rust does not guarantee padding
+  is copied). That is a slice, not a patch, and this session had already used its
+  budget for aiming a fix without full understanding.
+
+  **The gate to add with the fix:** the sweep above, as an E2E. It needs the two
+  wasm staticlib archives and node — all present in an ordinary container, which
+  is the other thing this entry corrects.
 
   ### The remaining raw-site count is NOT a remaining-risk count
 
