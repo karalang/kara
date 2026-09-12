@@ -3161,23 +3161,38 @@ impl<'a> super::Interpreter<'a> {
     }
 
     fn owned_param_names_of_fn(&self, fn_name: &str) -> std::collections::HashSet<String> {
-        self.program
-            .items
-            .iter()
-            .find_map(|item| match item {
-                crate::ast::Item::Function(f) if f.name == fn_name => Some(
-                    f.params
-                        .iter()
-                        .filter(|p| {
-                            !matches!(
-                                p.ty.kind,
-                                crate::ast::TypeKind::Ref(_) | crate::ast::TypeKind::MutRef(_)
-                            )
-                        })
-                        .filter_map(|p| p.name().map(str::to_string))
-                        .collect(),
-                ),
-                _ => None,
+        // B-2026-09-12-15 — resolved through `callee_fn_for_param_ownership`
+        // rather than by scanning `Item::Function` here, which saw FREE
+        // functions only. An ASSOCIATED function lives in an `Item::ImplBlock`,
+        // so `Sink.eat(Some(R { id: 1 }))` seeded an EMPTY owned-param set, the
+        // arm-bound payload was never marked a view of the entry copy, and the
+        // callee ran the body the caller was already running: `a:1 dR1 dR1` on
+        // `--interp` where one body is due. Traced by panicking on the Nth body
+        // and reading the two stacks — one from `run_fresh_temp_arg_drops`
+        // (the caller), one from the arm block's own `run_cleanup` (the callee).
+        //
+        // That resolver is the right one rather than merely a convenient one:
+        // it tries a free function FIRST, so nothing changes for the spelling
+        // that was already correct, and its `assoc_only` flag DROPS instance
+        // methods — which is what this must not admit. An instance method's
+        // caller path does not stand down (the same asymmetry
+        // `cond_returned_param_drop_names` records for B-2026-08-28-70), so
+        // seeding its params here would move `s.take(Some(..))` from one body
+        // to zero. Measured: with instance methods admitted, the method cell
+        // loses its body; with them dropped, method and associated spellings
+        // both print exactly one.
+        self.callee_fn_for_param_ownership(fn_name)
+            .map(|f| {
+                f.params
+                    .iter()
+                    .filter(|p| {
+                        !matches!(
+                            p.ty.kind,
+                            crate::ast::TypeKind::Ref(_) | crate::ast::TypeKind::MutRef(_)
+                        )
+                    })
+                    .filter_map(|p| p.name().map(str::to_string))
+                    .collect()
             })
             .unwrap_or_default()
     }

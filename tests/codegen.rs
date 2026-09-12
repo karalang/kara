@@ -153945,6 +153945,197 @@ fn main() {
         }
     }
 
+    /// B-2026-09-12-15 — a by-value `Option`/`Result` argument's payload `Drop`
+    /// body ran on NO compiled backend at three of the FOUR argument positions,
+    /// and ran TWICE at the fourth when the callee consumed the payload.
+    ///
+    /// FOUR ARGUMENT LOOPS, ONE WIRED. The memory halves of this question were
+    /// wired at all four when B-2026-08-12-15 split it (payload buffer vs field
+    /// envelope); B-2026-09-09-18 then added the BODIES half at the
+    /// free-function loop only. So `s.take(Some(R { .. }))` (method),
+    /// `Sink.eat(Some(R { .. }))` (associated fn) and `genf(Some(R { .. }))`
+    /// (monomorphized generic) each printed one body on `--interp` and none
+    /// compiled. The generic path could not reuse the other three's name-keyed
+    /// gate: `compile_generic_call`'s own doc says it "runs neither half" of
+    /// `compile_call`, so it asks the two questions of the `generic_fn` AST it
+    /// already holds.
+    ///
+    /// THE CONSUMING GATE IS WHAT MAKES THE TRANSPLANT SAFE, and it was missing
+    /// from the site that already had the registration. A param can be
+    /// NON-ESCAPING while its PAYLOAD escapes: `acc.push(r)` hands `r` to
+    /// something outliving the call, `return r` hands it to the caller's own
+    /// binding. Both make the receiver run the body, so owning it here as well
+    /// printed TWO bodies for one value — cells 7 and 8, measured that way at
+    /// the free-function position before this change. Copying the old
+    /// registration to three more loops without this gate would have spread that
+    /// double run rather than fixed the silence; cell 9 is the shape that would
+    /// have regressed (correct today only BECAUSE its position registered
+    /// nothing).
+    ///
+    /// The gate is per-VARIANT where the argument is a constructor and so says
+    /// which variant it builds — a callee may take `Ok`'s payload and only read
+    /// `Err`'s — and falls back to declining whenever any variant is consumed,
+    /// which is the status quo rather than the double run.
+    ///
+    /// MEMORY WAS CLEAN THROUGHOUT, before and after, on every cell: 0 valgrind
+    /// errors with all heap blocks freed. A body frees nothing, so neither the
+    /// silence nor the double run was ever visible to a sanitizer — the same
+    /// reason B-2026-09-09-18's own hole and B-2026-09-12-11 went unnoticed.
+    #[test]
+    fn e2e_optres_arg_payload_body_runs_once_at_every_call_position() {
+        const PRE: &str = "struct Rp { id: i64 }\n\
+             impl Drop for Rp { fn drop(mut ref self) { println(f\"dRp{self.id}\") } }\n";
+        for (label, body, want) in [
+            // 1 — METHOD position, the row's first cell.
+            (
+                "method-arg",
+                "struct Sk { n: i64 }\n\
+                 impl Sk { fn take(mut ref self, x: Option[Rp]) { match x { Some(r) => { println(f\"m:{r.id}\") } None => { println(\"n\") } } } }\n\
+                 fn main() { let mut s = Sk { n: 0 }; s.take(Some(Rp { id: 1 })); println(\"end\") }\n",
+                "m:1\ndRp1\nend\n",
+            ),
+            // 2 — the same with a `ref self` receiver, so the fix does not
+            //     depend on the receiver's mode.
+            (
+                "method-arg-ref-self",
+                "struct Sk { n: i64 }\n\
+                 impl Sk { fn look(ref self, x: Option[Rp]) { match x { Some(r) => { println(f\"l:{r.id}\") } None => { println(\"n\") } } } }\n\
+                 fn main() { let s = Sk { n: 0 }; s.look(Some(Rp { id: 1 })); println(\"end\") }\n",
+                "l:1\ndRp1\nend\n",
+            ),
+            // 3 — ASSOCIATED-FUNCTION position. This cell needed the
+            //     INTERPRETER half as well: it printed `dRp1` twice there,
+            //     because `owned_param_names_of_fn` scanned `Item::Function`
+            //     only and an assoc fn lives in an `ImplBlock`, so the
+            //     arm-bound payload was never marked a view of the entry copy.
+            (
+                "assoc-fn-arg",
+                "struct Sk { n: i64 }\n\
+                 impl Sk { fn eat(x: Option[Rp]) { match x { Some(r) => { println(f\"a:{r.id}\") } None => { println(\"n\") } } } }\n\
+                 fn main() { Sk.eat(Some(Rp { id: 1 })); println(\"end\") }\n",
+                "a:1\ndRp1\nend\n",
+            ),
+            // 4 — MONOMORPHIZED GENERIC position.
+            (
+                "generic-fn-arg",
+                "fn genf[T](x: Option[T]) { match x { Some(v) => { println(\"g\") } None => { println(\"n\") } } }\n\
+                 fn main() { genf(Some(Rp { id: 1 })); println(\"end\") }\n",
+                "g\ndRp1\nend\n",
+            ),
+            // 5 — the `Err` side at the associated position, so the tag that is
+            //     0 is covered too.
+            (
+                "assoc-fn-result-err",
+                "struct Sk { n: i64 }\n\
+                 impl Sk { fn eat(x: Result[i64, Rp]) { match x { Ok(n) => { println(\"ok\") } Err(r) => { println(f\"e:{r.id}\") } } } }\n\
+                 fn main() { Sk.eat(Err(Rp { id: 1 })); println(\"end\") }\n",
+                "e:1\ndRp1\nend\n",
+            ),
+            // 6 — the QUALIFIED spelling at the method position. B-2026-09-12-11
+            //     made the two spellings agree; this holds them together now
+            //     that the position itself is fixed.
+            (
+                "method-arg-qualified-spelling",
+                "struct Sk { n: i64 }\n\
+                 impl Sk { fn take(mut ref self, x: Option[Rp]) { match x { Some(r) => { println(f\"m:{r.id}\") } None => { println(\"n\") } } } }\n\
+                 fn main() { let mut s = Sk { n: 0 }; s.take(Option[Rp].Some(Rp { id: 1 })); println(\"end\") }\n",
+                "m:1\ndRp1\nend\n",
+            ),
+            // 7 — THE DOUBLE RUN, free-function position: the callee pushes the
+            //     payload into an accumulator that outlives the call. Printed
+            //     `dRp1 / len:1 / dRp1` compiled before the consuming gate.
+            (
+                "consuming-callee-pushes-payload",
+                "fn eat(x: Option[Rp], acc: mut ref Vec[Rp]) { match x { Some(r) => { acc.push(r) } None => { println(\"n\") } } }\n\
+                 fn main() { let mut acc: Vec[Rp] = []; eat(Some(Rp { id: 1 }), mut acc); println(f\"len:{acc.len()}\"); println(\"end\") }\n",
+                "len:1\ndRp1\nend\n",
+            ),
+            // 8 — the other consuming shape: the callee RETURNS the payload, so
+            //     the caller's own destination binding owns it. Printed
+            //     `k:1 / dRp1 / end / dRp1` before.
+            (
+                "consuming-callee-returns-payload",
+                "fn give(x: Option[Rp]) -> Rp { match x { Some(r) => { return r } None => { return Rp { id: 0 } } } }\n\
+                 fn main() { let k = give(Some(Rp { id: 1 })); println(f\"k:{k.id}\"); println(\"end\") }\n",
+                "k:1\ndRp1\nend\n",
+            ),
+            // 9 — CONTROL, and the cell that says why the gate had to come
+            //     first: a consuming callee at the METHOD position, correct
+            //     before this change only because that position registered
+            //     nothing. It must still print one body now that it does.
+            (
+                "consuming-callee-at-method-position",
+                "struct Sk { n: i64 }\n\
+                 impl Sk { fn take(mut ref self, x: Option[Rp], acc: mut ref Vec[Rp]) { match x { Some(r) => { acc.push(r) } None => { println(\"n\") } } } }\n\
+                 fn main() { let mut s = Sk { n: 0 }; let mut acc: Vec[Rp] = []; s.take(Some(Rp { id: 1 }), mut acc); println(f\"len:{acc.len()}\"); println(\"end\") }\n",
+                "len:1\ndRp1\nend\n",
+            ),
+            // 10 — CONTROL: a `let` destructure of a non-`Option` by-value
+            //      param inside an ASSOCIATED function. The interpreter half
+            //      repairs this too — it printed two bodies there — and it is
+            //      the shape `owned_param_names_stack` exists for
+            //      (B-2026-08-01-12), so it pins the widening to what it was
+            //      meant to cover.
+            (
+                "assoc-fn-let-destructure-of-owned-param",
+                "struct Wp { r: Rp }\n\
+                 struct Sk { n: i64 }\n\
+                 impl Sk { fn eat(w: Wp) { let m = w.r; println(f\"m:{m.id}\") } }\n\
+                 fn main() { Sk.eat(Wp { r: Rp { id: 1 } }); println(\"end\") }\n",
+                "m:1\ndRp1\nend\n",
+            ),
+            // 11 — CONTROL: the FREE-function twin of cell 10, which was always
+            //      correct. Pinned so the widening cannot be read as having
+            //      moved it.
+            (
+                "free-fn-let-destructure-of-owned-param-control",
+                "struct Wp { r: Rp }\n\
+                 fn eat(w: Wp) { let m = w.r; println(f\"m:{m.id}\") }\n\
+                 fn main() { eat(Wp { r: Rp { id: 1 } }); println(\"end\") }\n",
+                "m:1\ndRp1\nend\n",
+            ),
+            // 12 — CONTROL: a plain non-`Option` owned param at the associated
+            //      position, which has no payload channel at all.
+            (
+                "assoc-fn-plain-owned-param-control",
+                "struct Sk { n: i64 }\n\
+                 impl Sk { fn eat(r: Rp) { println(f\"a:{r.id}\") } }\n\
+                 fn main() { Sk.eat(Rp { id: 1 }); println(\"end\") }\n",
+                "a:1\ndRp1\nend\n",
+            ),
+            // 14 — A NESTED DESTRUCTURE whose leaf is only READ, at the
+            //      associated position. This is the shape that caught the first
+            //      version of this fix: it gated on
+            //      `optres_payload_consuming_param_variants`, which reports a
+            //      nested pattern as TAKING the payload unconditionally — right
+            //      for the memory question it was written for, wrong here, since
+            //      `r.s` is merely read and the payload ENUM's own body is still
+            //      the caller's to run. That version silenced three `dK` lines
+            //      pinned by `e2e_boxed_enum_payload_param_output_is_unchanged`,
+            //      and `optres_payload_escaping_param_variants` exists because of
+            //      it. Divergent before the fix (`a:z` compiled against
+            //      `a:z / dK` interpreted).
+            (
+                "nested-destructure-read-only-leaf",
+                "struct R2q { s: String }\n                 enum Kq { A(R2q), B }\n                 impl Drop for Kq { fn drop(mut ref self) { println(\"dKq\") } }\n                 struct Sk2 { n: i64 }\n                 impl Sk2 { fn show(x: Option[Kq]) { match x { Option.Some(Kq.A(r)) => { println(f\"a:{r.s}\") } Option.Some(Kq.B) => {} Option.None => {} } } }\n                 fn main() { Sk2.show(Option.Some(Kq.A(R2q { s: f\"z\" }))); println(\"end\") }\n",
+                "a:z\ndKq\nend\n",
+            ),
+            // 13 — CONTROL: the free-function position the row started from,
+            //      correct before and after.
+            (
+                "free-fn-arg-control",
+                "fn plainD(x: Option[Rp]) { match x { Some(r) => { println(f\"s:{r.id}\") } None => { println(\"n\") } } }\n\
+                 fn main() { plainD(Some(Rp { id: 1 })); println(\"end\") }\n",
+                "s:1\ndRp1\nend\n",
+            ),
+        ] {
+            let Some(out) = run_program(&format!("{PRE}{body}")) else {
+                return;
+            };
+            assert_eq!(out, want, "[{label}]");
+        }
+    }
+
     /// B-2026-09-12-11 — a QUALIFIED constructor at an argument position
     /// (`plainD(Option[(Rq, Rq)].Some((..)))`) ran its payload's `Drop` body on
     /// NO compiled backend, while the BARE `plainD(Some((..)))` spelling of the

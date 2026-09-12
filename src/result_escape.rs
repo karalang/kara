@@ -48,6 +48,23 @@ struct Acc<'a> {
     /// [`optres_payload_consuming_param_variants`]; see that function for why the
     /// question has to be answered from the CALLER's side on the generic path.
     payload_consumers: HashMap<&'a str, HashSet<&'a str>>,
+    /// B-2026-09-12-15 — the BODIES sibling of `payload_consumers`, and a
+    /// separate map because the two questions want opposite conservatism.
+    ///
+    /// `payload_consumers` answers "does an arm TAKE the payload", where an
+    /// unrecognised or NESTED pattern is reported as taken on purpose: for the
+    /// memory question that costs a leak, while the other answer would arm a
+    /// second owner. This map answers "does the payload OUTLIVE the call", where
+    /// reporting a nested destructure as taken costs a MISSING `Drop` body —
+    /// measured on `fn show(x: Option[K]) { match x { Option.Some(K.A(r)) => ..`,
+    /// whose arm only reads `r.s` and whose payload enum `K` still owes its own
+    /// body to the caller. Reusing the other map silenced three `dK` lines that
+    /// `e2e_boxed_enum_payload_param_output_is_unchanged` pins.
+    ///
+    /// So this one asks `binding_only_borrowed` of every name the pattern binds
+    /// AT ANY DEPTH, with no destructure shortcut: a name that is merely read
+    /// does not escape however deeply it was bound.
+    payload_escapers: HashMap<&'a str, HashSet<&'a str>>,
     /// True while walking inside a closure body. A reference to an OUTER binding
     /// there is a CAPTURE — an escape into an env that can outlive the binding's
     /// scope — so `match`-scrutinee safety is suppressed (even `match d` inside a
@@ -170,6 +187,40 @@ pub fn unused_param_names(func: &Function) -> HashSet<String> {
         .collect()
 }
 
+/// B-2026-09-12-15 — for each PARAM of `func`, the seeded-pair VARIANTS whose
+/// payload OUTLIVES the call: bound out by an arm and then moved somewhere the
+/// call does not own (pushed into a `mut ref` accumulator, returned, stored).
+///
+/// The gate in front of the caller-side payload-BODIES registration. A param can
+/// be non-escaping while its payload escapes, and then whatever received the
+/// payload runs the body — so registering in the caller as well runs it twice.
+/// Measured at `-O0`: `match x { Some(r) => acc.push(r) .. }` printed
+/// `dR1 / len:1 / dR1` compiled against one body on `--interp`, and
+/// `match x { Some(r) => return r .. }` printed `k:1 / dR1 / end / dR1`.
+///
+/// NOT [`optres_payload_consuming_param_variants`], whose conservatism runs the
+/// other way — see `Acc::payload_escapers` for the fixture that separates them.
+pub fn optres_payload_escaping_param_variants(func: &Function) -> HashMap<String, HashSet<String>> {
+    let mut acc = Acc::default();
+    walk_block(&func.body, &mut acc);
+    func.params
+        .iter()
+        .filter_map(|p| {
+            let crate::ast::PatternKind::Binding(name) = &p.pattern.kind else {
+                return None;
+            };
+            acc.payload_escapers.get(name.as_str()).map(|vs| {
+                (
+                    name.clone(),
+                    vs.iter()
+                        .map(|v| (*v).to_string())
+                        .collect::<HashSet<String>>(),
+                )
+            })
+        })
+        .collect()
+}
+
 /// B-2026-09-06-48 — for each PARAM of `func`, the seeded-pair VARIANTS whose
 /// boxed payload is TAKEN by an arm matching on that param directly.
 ///
@@ -242,6 +293,69 @@ fn variant_arm_takes_payload<'a>(
                 && guard.is_none_or(|g| crate::consume_class::binding_only_borrowed(v, g))
         }))
         .then_some(variant),
+    }
+}
+
+/// B-2026-09-12-15 — the VARIANT whose payload an arm lets OUTLIVE the call,
+/// feeding `Acc::payload_escapers`.
+///
+/// Differs from [`variant_arm_takes_payload`] in exactly one way, and that way
+/// is the point: the variant is read off the pattern even when its sub-patterns
+/// are NESTED, and the borrow test then runs over every name the pattern binds
+/// at any depth. A nested destructure whose leaves are only read lets nothing
+/// outlive the call.
+///
+/// A pattern that binds NOTHING (`Some(_)`) escapes nothing. An unrecognised
+/// spelling has no names to test and so falls in the same bucket — which is the
+/// conservative direction HERE, since declining to register is the status quo
+/// rather than a second body.
+fn variant_arm_payload_escapes<'a>(
+    pattern: &'a crate::ast::Pattern,
+    guard: Option<&Expr>,
+    body: &Expr,
+) -> Option<&'a str> {
+    let variant = optres_variant_of_pattern(pattern)?;
+    let names = pattern.binding_names();
+    if names.is_empty() {
+        return None;
+    }
+    (!names.iter().all(|v| {
+        crate::consume_class::binding_only_borrowed(v, body)
+            && guard.is_none_or(|g| crate::consume_class::binding_only_borrowed(v, g))
+    }))
+    .then_some(variant)
+}
+
+/// Block sibling of [`variant_arm_payload_escapes`]. `None` for the block means
+/// the bindings escape the construct entirely (`let`-else), so they always do.
+fn variant_arm_payload_escapes_block<'a>(
+    pattern: &'a crate::ast::Pattern,
+    block: Option<&Block>,
+) -> Option<&'a str> {
+    let variant = optres_variant_of_pattern(pattern)?;
+    let names = pattern.binding_names();
+    if names.is_empty() {
+        return None;
+    }
+    match block {
+        None => Some(variant),
+        Some(b) => (!names
+            .iter()
+            .all(|v| crate::consume_class::binding_only_borrowed_block(v, b)))
+        .then_some(variant),
+    }
+}
+
+/// The seeded-pair variant a pattern matches, nested sub-patterns included.
+/// [`variant_payload_binds`] answers this too but folds it together with its
+/// take/not-take verdict, which the escape question needs to reach separately.
+fn optres_variant_of_pattern(pattern: &crate::ast::Pattern) -> Option<&str> {
+    let crate::ast::PatternKind::TupleVariant { path, .. } = &pattern.kind else {
+        return None;
+    };
+    match path.last().map(|s| s.as_str()) {
+        Some(v @ ("Some" | "Ok" | "Err")) => Some(v),
+        _ => None,
     }
 }
 
@@ -391,6 +505,12 @@ fn walk_stmt<'a>(s: &'a Stmt, acc: &mut Acc<'a>) {
                             .or_default()
                             .insert(v);
                     }
+                    if let Some(v) = variant_arm_payload_escapes_block(pattern, None) {
+                        acc.payload_escapers
+                            .entry(n.as_str())
+                            .or_default()
+                            .insert(v);
+                    }
                 }
             }
             walk_block(else_block, acc);
@@ -440,6 +560,14 @@ fn walk_expr<'a>(e: &'a Expr, acc: &mut Acc<'a>) {
                         variant_arm_takes_payload(&a.pattern, a.guard.as_ref(), &a.body)
                     {
                         acc.payload_consumers
+                            .entry(n.as_str())
+                            .or_default()
+                            .insert(v);
+                    }
+                    if let Some(v) =
+                        variant_arm_payload_escapes(&a.pattern, a.guard.as_ref(), &a.body)
+                    {
+                        acc.payload_escapers
                             .entry(n.as_str())
                             .or_default()
                             .insert(v);
@@ -551,6 +679,12 @@ fn walk_expr<'a>(e: &'a Expr, acc: &mut Acc<'a>) {
                         .or_default()
                         .insert(v);
                 }
+                if let Some(v) = variant_arm_payload_escapes_block(pattern, Some(then_block)) {
+                    acc.payload_escapers
+                        .entry(n.as_str())
+                        .or_default()
+                        .insert(v);
+                }
             }
             walk_block(then_block, acc);
             if let Some(e) = else_branch {
@@ -574,6 +708,12 @@ fn walk_expr<'a>(e: &'a Expr, acc: &mut Acc<'a>) {
             if let ExprKind::Identifier(n) = &value.kind {
                 if let Some(v) = variant_arm_takes_payload_block(pattern, Some(body)) {
                     acc.payload_consumers
+                        .entry(n.as_str())
+                        .or_default()
+                        .insert(v);
+                }
+                if let Some(v) = variant_arm_payload_escapes_block(pattern, Some(body)) {
+                    acc.payload_escapers
                         .entry(n.as_str())
                         .or_default()
                         .insert(v);

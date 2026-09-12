@@ -2754,7 +2754,17 @@ impl<'ctx> super::Codegen<'ctx> {
                 // `fn giveback(x: Option[R2]) -> Option[R2] { return x; }`,
                 // which is correct BEFORE this fix (the destination `let` owns
                 // it) and must stay at one body after.
-                if let Some(param_te) = self.callee_by_value_optres_param_nonescaping(&name, i) {
+                // B-2026-09-12-15 — ... and the CONSUMING question, which this
+                // site did not ask. A callee whose arm takes the payload out
+                // (into a `mut ref` accumulator, or by returning it) gives it to
+                // something that runs the body itself, so owning it here as well
+                // printed two bodies for one value. `_bodies_te` is the same
+                // gate plus that question; the memory sibling above keeps the
+                // plain form, because taking the payload out does not change who
+                // frees the BOX.
+                if let Some(param_te) =
+                    self.callee_by_value_optres_param_bodies_te(&name, i, &a.value)
+                {
                     if self.optres_arg_is_unowned_temp(&a.value) {
                         self.track_optres_arg_temp_bodies(val, &param_te);
                     }
@@ -4034,13 +4044,83 @@ impl<'ctx> super::Codegen<'ctx> {
     /// A `ref` / `mut ref` param is excluded by the `TypeKind::Path` match: a
     /// borrow's payload is owned by whoever the caller borrowed it from, never
     /// by the argument expression.
-    pub(super) fn callee_by_value_optres_param_nonescaping(
+    /// B-2026-09-12-15 — the VARIANT a constructor argument builds, when the
+    /// argument is a constructor and so says statically which one it is.
+    ///
+    /// Needed because the caller-side bodies question is per-variant: a callee
+    /// may TAKE the payload out of its `Ok` arm and merely read its `Err` one,
+    /// and the registration this gates walks whichever tag is present at
+    /// runtime. Where the variant cannot be read off the expression the callers
+    /// below fall back to declining whenever the callee consumes ANY variant,
+    /// which is the conservative direction (the status quo for that shape) and
+    /// never the double-run.
+    ///
+    /// All three constructor spellings answer here: `Some(x)` (a `Call` on a
+    /// bare variant name), `Option.Some(x)` (a `Call` on a two-segment path)
+    /// and `Option[T].Some(x)` (the `MethodCall` form B-2026-09-12-11 taught
+    /// this file to recognise).
+    pub(super) fn ctor_variant_name_of_arg(&self, arg: &Expr) -> Option<String> {
+        match &arg.kind {
+            ExprKind::Call { callee, .. } => match &callee.kind {
+                ExprKind::Identifier(n) => Some(n.clone()),
+                ExprKind::Path { segments, .. } => segments.last().cloned(),
+                _ => None,
+            },
+            ExprKind::MethodCall { method, .. } if self.is_qualified_enum_variant_ctor(arg) => {
+                Some(method.clone())
+            }
+            _ => None,
+        }
+    }
+
+    /// B-2026-09-12-15 — may the CALLER own this by-value `Option`/`Result`
+    /// argument's payload `Drop` BODIES?
+    ///
+    /// Two questions, not one. The param must not escape — B-2026-09-09-18's
+    /// original gate, and the reason a returned param's body is not run twice.
+    /// AND the callee's matching arm must not TAKE the payload rather than only
+    /// read it, which is the half that was missing.
+    ///
+    /// A param can be non-escaping while its PAYLOAD escapes —
+    /// `fn eat(x: Option[R], acc: mut ref Vec[R]) { match x { Some(r) => acc.push(r) .. } }`
+    /// hands `r` to something that outlives the call, and `fn give(x: Option[R])
+    /// -> R { match x { Some(r) => return r .. } }` hands it to the caller's own
+    /// destination binding. The param-level escape analysis answers "no" for
+    /// both, correctly, and that is the wrong question for the bodies channel:
+    /// whatever received the payload runs its body, so registering here as well
+    /// runs it TWICE.
+    ///
+    /// Measured at `-O0` before this gate existed, on the free-function
+    /// position where the bodies channel was already wired: `eat` above printed
+    /// `dR1 / len:1 / dR1` compiled against `len:1 / dR1` on `--interp`, and
+    /// `give` printed `k:1 / dR1 / end / dR1` against `k:1 / dR1 / end`. Both
+    /// are valgrind-clean, because a body frees nothing — which is exactly why
+    /// no sanitizer ever objected to the extra run.
+    ///
+    /// `optres_payload_escaping_param_variants` is the BODIES-side sibling of
+    /// the map B-2026-09-06-48 consults for the generic path's MEMORY arm, and
+    /// the split is not duplication: that one reports a NESTED destructure as
+    /// taken on purpose (for memory, the safe direction), which here silences a
+    /// body that is genuinely owed — `match x { Option.Some(K.A(r)) => .. }`
+    /// only reads `r.s`, and the payload enum's own body still belongs to the
+    /// caller. Sharing the map cost three `dK` lines that
+    /// `e2e_boxed_enum_payload_param_output_is_unchanged` pins, which is how the
+    /// distinction was found.
+    ///
+    /// THE MEMORY SIBLINGS DELIBERATELY DO NOT SHARE THIS GATE. Taking the
+    /// payload out of an arm changes who runs the BODY; it does not change who
+    /// frees the BOX, which is still the callee's own prologue. Narrowing
+    /// `callee_optres_param_entry_copied_and_owned` the same way would strand
+    /// the box for every consuming callee.
+    pub(super) fn callee_by_value_optres_param_bodies_te(
         &self,
         callee_name: &str,
         arg_index: usize,
+        arg: &Expr,
     ) -> Option<TypeExpr> {
         let program = self.program_snapshot.as_deref()?;
         let bare = callee_name.rsplit('.').next().unwrap_or(callee_name);
+        let want_variant = self.ctor_variant_name_of_arg(arg);
         let check = |f: &crate::ast::Function, ast_i: usize| -> Option<TypeExpr> {
             let p = f.params.get(ast_i)?;
             let TypeKind::Path(path) = &p.ty.kind else {
@@ -4055,6 +4135,21 @@ impl<'ctx> super::Codegen<'ctx> {
             };
             if !crate::result_escape::by_value_nonescaping_param_names(f).contains(pname.as_str()) {
                 return None;
+            }
+            let escaped = crate::result_escape::optres_payload_escaping_param_variants(f);
+            if let Some(vs) = escaped.get(pname.as_str()) {
+                match want_variant.as_deref() {
+                    // The argument names its variant, so ask about that one
+                    // only: a callee that takes `Ok`'s payload and reads
+                    // `Err`'s owes the caller nothing for `Ok` and everything
+                    // for `Err`.
+                    Some(v) if !vs.contains(v) => {}
+                    // Either this variant is taken, or the argument is not a
+                    // constructor and so cannot say which variant it is. Both
+                    // decline, which leaves the status quo rather than the
+                    // double run.
+                    _ => return None,
+                }
             }
             Some(p.ty.clone())
         };

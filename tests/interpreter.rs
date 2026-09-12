@@ -18310,6 +18310,114 @@ fn test_a_nested_optres_payload_runs_its_inner_drop_body() {
 }
 
 #[test]
+fn test_an_associated_fn_runs_an_owned_params_drop_body_once() {
+    // B-2026-09-12-15 (interpreter half) — an ASSOCIATED function's by-value
+    // params were never seeded into `owned_param_names_stack`, so anything bound
+    // out of the entry copy inside the body registered a Drop slot of its own
+    // and ran the body the CALLER was already going to run.
+    //
+    // `owned_param_names_of_fn` scanned `Item::Function` for a matching name.
+    // An associated function lives in an `Item::ImplBlock`, so the lookup
+    // returned nothing and the seed set was EMPTY. Two shapes doubled:
+    //
+    //   * a payload bound out of an `Option` argument in a `match` arm, and
+    //   * a `let` destructure of an owned struct param — the very shape
+    //     B-2026-08-01-12 added the stack for.
+    //
+    // Traced rather than guessed: panicking on the Nth body and reading the two
+    // stacks showed body 1 from the caller's `run_fresh_temp_arg_drops` and
+    // body 2 from the arm block's own `run_cleanup`.
+    //
+    // The fix routes the lookup through `callee_fn_for_param_ownership`, which
+    // resolves a free function FIRST (so the already-correct spelling is
+    // untouched) and whose `assoc_only` flag DROPS instance methods. That
+    // exclusion is load-bearing: an instance method's caller path does not stand
+    // down, so seeding its params moves `s.take(Some(..))` from one body to
+    // zero. Both directions were measured.
+    const PRELUDE: &str = "struct Rq { id: i64 }\n\
+         impl Drop for Rq { fn drop(mut ref self) { println(f\"dRq{self.id}\"); } }\n";
+
+    // The `Option`-payload shape: one body, not two.
+    assert_eq!(
+        run(&format!(
+            "{PRELUDE}struct Sq {{ n: i64 }}\n\
+             impl Sq {{\n\
+             \x20   fn eat(x: Option[Rq]) {{\n\
+             \x20       match x {{ Some(r) => {{ println(f\"a:{{r.id}}\") }} None => {{ println(\"n\") }} }}\n\
+             \x20   }}\n\
+             }}\n\
+             fn main() {{\n\
+             \x20   Sq.eat(Some(Rq {{ id: 1 }}));\n\
+             \x20   println(\"end\");\n}}\n"
+        )),
+        "a:1\ndRq1\nend\n"
+    );
+
+    // The `let`-destructure shape, the stack's original purpose.
+    assert_eq!(
+        run(&format!(
+            "{PRELUDE}struct Wq {{ r: Rq }}\n\
+             struct Sq {{ n: i64 }}\n\
+             impl Sq {{ fn eat(w: Wq) {{ let m = w.r; println(f\"m:{{m.id}}\") }} }}\n\
+             fn main() {{\n\
+             \x20   Sq.eat(Wq {{ r: Rq {{ id: 1 }} }});\n\
+             \x20   println(\"end\");\n}}\n"
+        )),
+        "m:1\ndRq1\nend\n"
+    );
+
+    // CONTROL — an INSTANCE method must keep its body. This is the direction the
+    // `assoc_only` flag protects: admitting instance methods here silences it.
+    assert_eq!(
+        run(&format!(
+            "{PRELUDE}struct Sq {{ n: i64 }}\n\
+             impl Sq {{\n\
+             \x20   fn take(mut ref self, x: Option[Rq]) {{\n\
+             \x20       match x {{ Some(r) => {{ println(f\"m:{{r.id}}\") }} None => {{ println(\"n\") }} }}\n\
+             \x20   }}\n\
+             }}\n\
+             fn main() {{\n\
+             \x20   let mut s = Sq {{ n: 0 }};\n\
+             \x20   s.take(Some(Rq {{ id: 1 }}));\n\
+             \x20   println(\"end\");\n}}\n"
+        )),
+        "m:1\ndRq1\nend\n"
+    );
+
+    // CONTROL — the FREE-function twin of the destructure cell, correct before
+    // this change and resolved by the same lookup's first arm.
+    assert_eq!(
+        run(&format!(
+            "{PRELUDE}struct Wq {{ r: Rq }}\n\
+             fn eat(w: Wq) {{ let m = w.r; println(f\"m:{{m.id}}\") }}\n\
+             fn main() {{\n\
+             \x20   eat(Wq {{ r: Rq {{ id: 1 }} }});\n\
+             \x20   println(\"end\");\n}}\n"
+        )),
+        "m:1\ndRq1\nend\n"
+    );
+
+    // CONTROL — a consuming associated callee: the payload goes into an
+    // accumulator that outlives the call, so the accumulator runs the body and
+    // this must still be exactly one.
+    assert_eq!(
+        run(&format!(
+            "{PRELUDE}struct Sq {{ n: i64 }}\n\
+             impl Sq {{\n\
+             \x20   fn keep(x: Option[Rq], acc: mut ref Vec[Rq]) {{\n\
+             \x20       match x {{ Some(r) => {{ acc.push(r) }} None => {{ println(\"n\") }} }}\n\
+             \x20   }}\n\
+             }}\n\
+             fn main() {{\n\
+             \x20   let mut acc: Vec[Rq] = [];\n\
+             \x20   Sq.keep(Some(Rq {{ id: 1 }}), mut acc);\n\
+             \x20   println(f\"len:{{acc.len()}}\");\n}}\n"
+        )),
+        "len:1\ndRq1\n"
+    );
+}
+
+#[test]
 fn test_a_boxed_array_payload_runs_its_element_drop_bodies() {
     // B-2026-09-10-27 (interpreter half) — an `Option`/`Result` payload that is
     // a fixed `Array[T, N]`.

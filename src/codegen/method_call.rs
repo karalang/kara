@@ -8455,6 +8455,26 @@ impl<'ctx> super::Codegen<'ctx> {
                             self.track_optres_arg_temp(val, &param_te, own_payload, own_envelope);
                         }
                     }
+                    // B-2026-09-12-15 — the BODY channel for the same temp. The
+                    // memory halves above were wired at all three argument loops
+                    // when B-2026-08-12-15 split the question; B-2026-09-09-18
+                    // then added the bodies half at the FREE-FUNCTION loop only,
+                    // so `s.take(Some(R { id: 1 }))` printed no body on any
+                    // compiled backend against one on `--interp` — a divergence
+                    // in both the bare and the qualified spelling, which is what
+                    // separates it from B-2026-09-12-11's spelling asymmetry.
+                    //
+                    // `_bodies_te` rather than the plain non-escaping gate,
+                    // because a callee whose arm TAKES the payload out already
+                    // has an owner for the body; see its doc for the two
+                    // measured double-runs that establishes.
+                    if let Some(param_te) =
+                        self.callee_by_value_optres_param_bodies_te(&qualified, pidx, &a.value)
+                    {
+                        if self.optres_arg_is_unowned_temp(&a.value) {
+                            self.track_optres_arg_temp_bodies(val, &param_te);
+                        }
+                    }
                     // Signedness-carrying scalar coercion at the METHOD arg
                     // boundary, the twin of the free-fn site in
                     // `call_dispatch.rs`. The boundary sweep below sees only

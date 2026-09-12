@@ -1923,6 +1923,9 @@ impl<'ctx> super::Codegen<'ctx> {
         // only when a boxed-payload `Option`/`Result` temp argument turns up.
         let mut nonescaping_generic_params: Option<std::collections::HashSet<String>> = None;
         // B-2026-09-06-48 — memoised beside its sibling above; see the use site.
+        let mut payload_escaping_generic_params: Option<
+            std::collections::HashMap<String, std::collections::HashSet<String>>,
+        > = None;
         let mut payload_consuming_generic_params: Option<
             std::collections::HashMap<String, std::collections::HashSet<String>>,
         > = None;
@@ -2102,6 +2105,47 @@ impl<'ctx> super::Codegen<'ctx> {
                             .collect(),
                     };
                     self.track_boxed_optres_arg_temp(val, &inst, &taken);
+                    // B-2026-09-12-15 — the BODY channel, the fourth and last
+                    // argument loop. This path cannot use the name-keyed gate
+                    // the other three share: `compile_generic_call` never
+                    // reaches `compile_call`'s loop (its own doc says it "runs
+                    // neither half"), and the callee is this `generic_fn`
+                    // rather than an entry in `program.items`. So the two
+                    // questions are asked directly, of the same AST and the
+                    // same memoised sets the memory arm above already built —
+                    // `param_nonescaping` for the param, and `taken` for the
+                    // payload, which is why the consuming case needs no second
+                    // analysis here.
+                    //
+                    // Only where the instantiated param is `Option`/`Result`:
+                    // `inst` is the resolved type (`Option[R]`, not the erased
+                    // `Option[T]`), which is what the bodies walker keys on.
+                    // The BODIES question needs the ESCAPE map, not `taken`:
+                    // `taken` reports a nested destructure as taking the
+                    // payload, which is right for the box above and wrong here.
+                    let escaping = payload_escaping_generic_params
+                        .get_or_insert_with(|| {
+                            crate::result_escape::optres_payload_escaping_param_variants(
+                                &generic_fn,
+                            )
+                        })
+                        .get(match &p.pattern.kind {
+                            crate::ast::PatternKind::Binding(n) => n.as_str(),
+                            _ => "",
+                        })
+                        .cloned()
+                        .unwrap_or_default();
+                    let ctor_variant = self.ctor_variant_name_of_arg(&a.value);
+                    let variant_escapes = match ctor_variant.as_deref() {
+                        Some(v) => escaping.contains(v),
+                        None => !escaping.is_empty(),
+                    };
+                    if !variant_escapes
+                        && matches!(&inst.kind, TypeKind::Path(pp)
+                            if pp.segments.last().is_some_and(|h| h == "Option" || h == "Result"))
+                    {
+                        self.track_optres_arg_temp_bodies(val, &inst);
+                    }
                 }
             }
         }

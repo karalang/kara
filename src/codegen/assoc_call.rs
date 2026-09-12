@@ -3364,6 +3364,17 @@ impl<'ctx> super::Codegen<'ctx> {
                             self.track_optres_arg_temp(val, &param_te, own_payload, own_envelope);
                         }
                     }
+                    // B-2026-09-12-15 — the BODY channel, the third of the four
+                    // argument loops. `Sink.eat(Some(R { id: 1 }))` printed no
+                    // body compiled; see the method site's note for why only
+                    // the memory halves were ever wired here.
+                    if let Some(param_te) =
+                        self.callee_by_value_optres_param_bodies_te(&qualified, i, &a.value)
+                    {
+                        if self.optres_arg_is_unowned_temp(&a.value) {
+                            self.track_optres_arg_temp_bodies(val, &param_te);
+                        }
+                    }
                     // A fresh bare-`shared` (RC-box) result passed by value:
                     // the callee inc/decs net-zero, so the caller still owns
                     // the temp's +1 and must release it. Self-excludes a
