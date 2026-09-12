@@ -155633,6 +155633,123 @@ fn main() {
     }
 
     #[test]
+    fn e2e_array_binding_moved_into_struct_field_reads_back_on_every_surface() {
+        // B-2026-09-12-14 -- the cross-surface twin of
+        // `asan_array_binding_moved_into_struct_field_has_one_owner`.
+        //
+        // A PRE-FIX TREE PASSES THIS FIXTURE. glibc's tcache absorbs the
+        // duplicate free rather than aborting, so every backend printed
+        // correctly and exited 0 -- which is exactly why the defect survived:
+        // no output gate anywhere could see it. The ASAN twin carries the
+        // counts and is the one that fails pre-fix (at BOTH opt levels, since
+        // a double free is not an allocation the optimizer can delete). What
+        // these cells guard is the read-back: the field must still be
+        // readable after the source binding's drop is retracted, on every
+        // surface, and a retraction that went too far would print garbage or
+        // abort here.
+        for (label, src, want) in [
+            (
+                "array-binding-into-struct-field-read",
+                "struct W { a: Array[String, 2] }\n\
+                 fn main() {\n\
+                 \x20\x20\x20\x20let a: Array[String, 2] = [f\"aaaaaaaa0\", f\"bbbbbbbb0\"];\n\
+                 \x20\x20\x20\x20let w: W = W { a: a };\n\
+                 \x20\x20\x20\x20println(f\"s:{w.a[0]}\");\n\
+                 \x20\x20\x20\x20println(f\"t:{w.a[1]}\");\n\
+                 }\n",
+                "s:aaaaaaaa0\nt:bbbbbbbb0\n",
+            ),
+            (
+                "two-array-fields-read",
+                "struct W { a: Array[String, 2], b: Array[String, 2] }\n\
+                 fn main() {\n\
+                 \x20\x20\x20\x20let a: Array[String, 2] = [f\"aaaaaaaa0\", f\"bbbbbbbb0\"];\n\
+                 \x20\x20\x20\x20let b: Array[String, 2] = [f\"cccccccc0\", f\"dddddddd0\"];\n\
+                 \x20\x20\x20\x20let w: W = W { a: a, b: b };\n\
+                 \x20\x20\x20\x20println(f\"s:{w.a[0]}\");\n\
+                 \x20\x20\x20\x20println(f\"t:{w.b[1]}\");\n\
+                 }\n",
+                "s:aaaaaaaa0\nt:dddddddd0\n",
+            ),
+            (
+                "escaping-struct-field-read",
+                "struct W { a: Array[String, 2] }\n\
+                 fn mk() -> W {\n\
+                 \x20\x20\x20\x20let a: Array[String, 2] = [f\"aaaaaaaa0\", f\"bbbbbbbb0\"];\n\
+                 \x20\x20\x20\x20return W { a: a };\n\
+                 }\n\
+                 fn main() {\n\
+                 \x20\x20\x20\x20let w: W = mk();\n\
+                 \x20\x20\x20\x20println(f\"s:{w.a[0]}\");\n\
+                 }\n",
+                "s:aaaaaaaa0\n",
+            ),
+            (
+                "generic-struct-array-field-read",
+                "struct Box[T] { v: T }\n\
+                 fn main() {\n\
+                 \x20\x20\x20\x20let a: Array[String, 2] = [f\"aaaaaaaa0\", f\"bbbbbbbb0\"];\n\
+                 \x20\x20\x20\x20let w: Box[Array[String, 2]] = Box[Array[String, 2]] { v: a };\n\
+                 \x20\x20\x20\x20println(f\"s:{w.v[1]}\");\n\
+                 }\n",
+                "s:bbbbbbbb0\n",
+            ),
+            (
+                "array-field-move-in-loop-read",
+                "struct W { a: Array[String, 2] }\n\
+                 fn main() {\n\
+                 \x20\x20\x20\x20let mut i: i64 = 0;\n\
+                 \x20\x20\x20\x20while i < 3 {\n\
+                 \x20\x20\x20\x20\x20\x20\x20\x20let a: Array[String, 2] = [f\"aaaaaaaa0\", f\"bbbbbbbb0\"];\n\
+                 \x20\x20\x20\x20\x20\x20\x20\x20let w: W = W { a: a };\n\
+                 \x20\x20\x20\x20\x20\x20\x20\x20println(f\"s:{w.a[0]}\");\n\
+                 \x20\x20\x20\x20\x20\x20\x20\x20i = i + 1;\n\
+                 \x20\x20\x20\x20}\n\
+                 }\n",
+                "s:aaaaaaaa0\ns:aaaaaaaa0\ns:aaaaaaaa0\n",
+            ),
+            // CONTROL: the discarded literal, whose source keeps its owner.
+            (
+                "discarded-struct-literal-read",
+                "struct W { a: Array[String, 2] }\n\
+                 fn main() {\n\
+                 \x20\x20\x20\x20let a: Array[String, 2] = [f\"aaaaaaaa0\", f\"bbbbbbbb0\"];\n\
+                 \x20\x20\x20\x20W { a: a };\n\
+                 \x20\x20\x20\x20println(\"s:ok\");\n\
+                 }\n",
+                "s:ok\n",
+            ),
+            // CONTROL: the shared struct, owned through the RC path.
+            (
+                "shared-struct-array-field-read",
+                "shared struct W { a: Array[String, 2] }\n\
+                 fn main() {\n\
+                 \x20\x20\x20\x20let a: Array[String, 2] = [f\"aaaaaaaa0\", f\"bbbbbbbb0\"];\n\
+                 \x20\x20\x20\x20let w: W = W { a: a };\n\
+                 \x20\x20\x20\x20println(f\"s:{w.a[0]}\");\n\
+                 }\n",
+                "s:aaaaaaaa0\n",
+            ),
+            // CONTROL: scalar elements, where the disarm must find nothing.
+            (
+                "scalar-array-field-read",
+                "struct W { a: Array[i64, 2] }\n\
+                 fn main() {\n\
+                 \x20\x20\x20\x20let a: Array[i64, 2] = [11, 22];\n\
+                 \x20\x20\x20\x20let w: W = W { a: a };\n\
+                 \x20\x20\x20\x20println(f\"s:{w.a[1]}\");\n\
+                 }\n",
+                "s:22\n",
+            ),
+        ] {
+            let Some(out) = run_program(src) else {
+                return;
+            };
+            assert_eq!(out, want, "[{label}]");
+        }
+    }
+
+    #[test]
     fn e2e_arm_bound_array_rebind_reads_back_on_every_surface() {
         for (label, src, want) in [
             // 1 — the annotated rebind, `String` element.

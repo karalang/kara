@@ -86823,6 +86823,241 @@ fn main() {
     }
 
     #[test]
+    fn asan_array_binding_moved_into_struct_field_has_one_owner() {
+        // B-2026-09-12-14. A NAMED `Array` binding moved into a struct field
+        // kept the scope-exit element drop `make_array_param_callee_owned`
+        // gave it at its `let`, while the struct's own drop walked the same
+        // buffers -- so both ran. 10 allocs / 12 frees with two
+        // `Invalid free()` at `-O0`, needing NO call and NO generics, and two
+        // more per additional array field.
+        //
+        // It stayed invisible for two compounding reasons. glibc's tcache
+        // absorbs the duplicate free rather than aborting, so every backend
+        // printed correctly and exited 0; and the two neighbouring spellings
+        // are clean for UNRELATED reasons -- a direct literal into the field
+        // has no source binding to leave an owner behind, and a `Vec` field is
+        // covered by `suppress_source_vec_cleanup_for_arg`, which sits three
+        // lines above the gap in the same battery.
+        //
+        // Cell 12 is the control that caught a regression in the fix: an
+        // ungated disarm turned the DISCARDED literal spelling from a clean
+        // 10 allocs / 10 frees into an 18 B leak, because a discarded literal
+        // takes nothing over and its sources must keep their owners.
+        //
+        // 1 -- the reported shape.
+        assert_clean_asan_run(
+            "struct W { a: Array[String, 2] }\n\
+             fn main() {\n\
+             \x20\x20\x20\x20let a: Array[String, 2] = [f\"aaaaaaaa0\", f\"bbbbbbbb0\"];\n\
+             \x20\x20\x20\x20let w: W = W { a: a };\n\
+             \x20\x20\x20\x20println(f\"s:{w.a[0]}\");\n\
+             }\n",
+            &["s:aaaaaaaa0"],
+            "array-binding-into-struct-field",
+        );
+        // 2 -- TWO array fields. Four invalid frees rather than two, which is
+        //      what shows the duplicate is per SOURCE BINDING and not one
+        //      per struct.
+        assert_clean_asan_run(
+            "struct W { a: Array[String, 2], b: Array[String, 2] }\n\
+             fn main() {\n\
+             \x20\x20\x20\x20let a: Array[String, 2] = [f\"aaaaaaaa0\", f\"bbbbbbbb0\"];\n\
+             \x20\x20\x20\x20let b: Array[String, 2] = [f\"cccccccc0\", f\"dddddddd0\"];\n\
+             \x20\x20\x20\x20let w: W = W { a: a, b: b };\n\
+             \x20\x20\x20\x20println(f\"s:{w.b[1]}\");\n\
+             }\n",
+            &["s:dddddddd0"],
+            "two-array-fields",
+        );
+        // 3 -- the NESTED element, through the recursive walk
+        //      B-2026-09-10-8/-26 built.
+        assert_clean_asan_run(
+            "struct W { a: Array[Array[String, 2], 2] }\n\
+             fn main() {\n\
+             \x20\x20\x20\x20let a: Array[Array[String, 2], 2] =\n\
+             \x20\x20\x20\x20\x20\x20\x20\x20[[f\"aaaaaaaa0\", f\"bbbbbbbb0\"], [f\"cccccccc0\", f\"dddddddd0\"]];\n\
+             \x20\x20\x20\x20let w: W = W { a: a };\n\
+             \x20\x20\x20\x20println(\"s:ok\");\n\
+             }\n",
+            &["s:ok"],
+            "nested-array-field",
+        );
+        // 4 -- a `Vec` ELEMENT inside the moved array.
+        assert_clean_asan_run(
+            "struct W { a: Array[Vec[String], 2] }\n\
+             fn main() {\n\
+             \x20\x20\x20\x20let mut v0: Vec[String] = Vec.new();\n\
+             \x20\x20\x20\x20v0.push(f\"aaaaaaaa0\");\n\
+             \x20\x20\x20\x20let mut v1: Vec[String] = Vec.new();\n\
+             \x20\x20\x20\x20v1.push(f\"bbbbbbbb0\");\n\
+             \x20\x20\x20\x20let a: Array[Vec[String], 2] = [v0, v1];\n\
+             \x20\x20\x20\x20let w: W = W { a: a };\n\
+             \x20\x20\x20\x20println(\"s:ok\");\n\
+             }\n",
+            &["s:ok"],
+            "vec-element-array-field",
+        );
+        // 5 -- the ESCAPING struct, returned from the fn that built it. The
+        //      duplicate travels with it, so this is the shape where the
+        //      second free lands in the CALLER's frame.
+        assert_clean_asan_run(
+            "struct W { a: Array[String, 2] }\n\
+             fn mk() -> W {\n\
+             \x20\x20\x20\x20let a: Array[String, 2] = [f\"aaaaaaaa0\", f\"bbbbbbbb0\"];\n\
+             \x20\x20\x20\x20return W { a: a };\n\
+             }\n\
+             fn main() {\n\
+             \x20\x20\x20\x20let w: W = mk();\n\
+             \x20\x20\x20\x20println(f\"s:{w.a[0]}\");\n\
+             }\n",
+            &["s:aaaaaaaa0"],
+            "escaping-struct-field",
+        );
+        // 6 -- a GENERIC struct at the same shape.
+        assert_clean_asan_run(
+            "struct Box[T] { v: T }\n\
+             fn main() {\n\
+             \x20\x20\x20\x20let a: Array[String, 2] = [f\"aaaaaaaa0\", f\"bbbbbbbb0\"];\n\
+             \x20\x20\x20\x20let w: Box[Array[String, 2]] = Box[Array[String, 2]] { v: a };\n\
+             \x20\x20\x20\x20println(f\"s:{w.v[0]}\");\n\
+             }\n",
+            &["s:aaaaaaaa0"],
+            "generic-struct-array-field",
+        );
+        // 7-10 -- the four DOWNSTREAM positions, none of which the row
+        //         recorded and all of which double-freed identically: the
+        //         literal pushed into a `Vec`, passed as a call argument,
+        //         wrapped in a user enum, and wrapped in `Option`.
+        assert_clean_asan_run(
+            "struct W { a: Array[String, 2] }\n\
+             fn main() {\n\
+             \x20\x20\x20\x20let mut vs: Vec[W] = Vec.new();\n\
+             \x20\x20\x20\x20let a: Array[String, 2] = [f\"aaaaaaaa0\", f\"bbbbbbbb0\"];\n\
+             \x20\x20\x20\x20vs.push(W { a: a });\n\
+             \x20\x20\x20\x20println(f\"s:{vs.len()}\");\n\
+             }\n",
+            &["s:1"],
+            "struct-literal-pushed-into-vec",
+        );
+        assert_clean_asan_run(
+            "struct W { a: Array[String, 2] }\n\
+             fn eat(w: W) -> i64 { return 1; }\n\
+             fn main() {\n\
+             \x20\x20\x20\x20let a: Array[String, 2] = [f\"aaaaaaaa0\", f\"bbbbbbbb0\"];\n\
+             \x20\x20\x20\x20let n: i64 = eat(W { a: a });\n\
+             \x20\x20\x20\x20println(f\"s:{n}\");\n\
+             }\n",
+            &["s:1"],
+            "struct-literal-as-call-arg",
+        );
+        assert_clean_asan_run(
+            "struct W { a: Array[String, 2] }\n\
+             enum E { Full(W), Empty }\n\
+             fn main() {\n\
+             \x20\x20\x20\x20let a: Array[String, 2] = [f\"aaaaaaaa0\", f\"bbbbbbbb0\"];\n\
+             \x20\x20\x20\x20let e: E = E.Full(W { a: a });\n\
+             \x20\x20\x20\x20println(\"s:ok\");\n\
+             }\n",
+            &["s:ok"],
+            "struct-literal-in-enum-payload",
+        );
+        assert_clean_asan_run(
+            "struct W { a: Array[String, 2] }\n\
+             fn main() {\n\
+             \x20\x20\x20\x20let a: Array[String, 2] = [f\"aaaaaaaa0\", f\"bbbbbbbb0\"];\n\
+             \x20\x20\x20\x20let o: Option[W] = Some(W { a: a });\n\
+             \x20\x20\x20\x20println(\"s:ok\");\n\
+             }\n",
+            &["s:ok"],
+            "struct-literal-in-option",
+        );
+        // 11 -- inside a LOOP, where the duplicate recurs per iteration.
+        assert_clean_asan_run(
+            "struct W { a: Array[String, 2] }\n\
+             fn main() {\n\
+             \x20\x20\x20\x20let mut i: i64 = 0;\n\
+             \x20\x20\x20\x20while i < 3 {\n\
+             \x20\x20\x20\x20\x20\x20\x20\x20let a: Array[String, 2] = [f\"aaaaaaaa0\", f\"bbbbbbbb0\"];\n\
+             \x20\x20\x20\x20\x20\x20\x20\x20let w: W = W { a: a };\n\
+             \x20\x20\x20\x20\x20\x20\x20\x20println(f\"s:{w.a[0]}\");\n\
+             \x20\x20\x20\x20\x20\x20\x20\x20i = i + 1;\n\
+             \x20\x20\x20\x20}\n\
+             }\n",
+            &["s:aaaaaaaa0", "s:aaaaaaaa0", "s:aaaaaaaa0"],
+            "array-field-move-in-loop",
+        );
+        // 12 -- THE CONTROL THAT CAUGHT A REGRESSION: the DISCARDED literal.
+        //       It takes nothing over, so the source keeps its owner and this
+        //       cell is clean on unmodified `main`. An ungated disarm leaks
+        //       18 B in 2 blocks here -- this row's double free traded for a
+        //       leak one statement over. The gate is `in_discarded_aggregate_tail`,
+        //       the predicate B-2026-09-01-5 / B-2026-09-07-14 built for the
+        //       four place-shaped disarms in the same battery.
+        assert_clean_asan_run(
+            "struct W { a: Array[String, 2] }\n\
+             fn main() {\n\
+             \x20\x20\x20\x20let a: Array[String, 2] = [f\"aaaaaaaa0\", f\"bbbbbbbb0\"];\n\
+             \x20\x20\x20\x20W { a: a };\n\
+             \x20\x20\x20\x20println(\"s:ok\");\n\
+             }\n",
+            &["s:ok"],
+            "discarded-struct-literal-control",
+        );
+        // 13 -- CONTROL: the SHARED struct, clean at 11 allocs / 11 frees
+        //       throughout because the RC path owns the field through a
+        //       different channel. The disarm is deliberately not wired into
+        //       that branch; adding it there would retract the only owner.
+        assert_clean_asan_run(
+            "shared struct W { a: Array[String, 2] }\n\
+             fn main() {\n\
+             \x20\x20\x20\x20let a: Array[String, 2] = [f\"aaaaaaaa0\", f\"bbbbbbbb0\"];\n\
+             \x20\x20\x20\x20let w: W = W { a: a };\n\
+             \x20\x20\x20\x20println(f\"s:{w.a[0]}\");\n\
+             }\n",
+            &["s:aaaaaaaa0"],
+            "shared-struct-array-field-control",
+        );
+        // 14 -- CONTROL: a direct ARRAY LITERAL into the field. No source
+        //       binding exists, so there was never a second owner.
+        assert_clean_asan_run(
+            "struct W { a: Array[String, 2] }\n\
+             fn main() {\n\
+             \x20\x20\x20\x20let w: W = W { a: [f\"aaaaaaaa0\", f\"bbbbbbbb0\"] };\n\
+             \x20\x20\x20\x20println(f\"s:{w.a[0]}\");\n\
+             }\n",
+            &["s:aaaaaaaa0"],
+            "direct-literal-field-control",
+        );
+        // 15 -- CONTROL: the `Vec` field, clean because
+        //       `suppress_source_vec_cleanup_for_arg` already covers it. It is
+        //       the peer this fix was modelled on, so a regression here would
+        //       mean the new disarm displaced it.
+        assert_clean_asan_run(
+            "struct W { a: Vec[String] }\n\
+             fn main() {\n\
+             \x20\x20\x20\x20let mut a: Vec[String] = Vec.new();\n\
+             \x20\x20\x20\x20a.push(f\"aaaaaaaa0\");\n\
+             \x20\x20\x20\x20let w: W = W { a: a };\n\
+             \x20\x20\x20\x20println(f\"s:{w.a[0]}\");\n\
+             }\n",
+            &["s:aaaaaaaa0"],
+            "vec-field-control",
+        );
+        // 16 -- CONTROL: a SCALAR element owns no heap, so the disarm must
+        //       find nothing to retract.
+        assert_clean_asan_run(
+            "struct W { a: Array[i64, 2] }\n\
+             fn main() {\n\
+             \x20\x20\x20\x20let a: Array[i64, 2] = [11, 22];\n\
+             \x20\x20\x20\x20let w: W = W { a: a };\n\
+             \x20\x20\x20\x20println(f\"s:{w.a[0]}\");\n\
+             }\n",
+            &["s:11"],
+            "scalar-array-field-control",
+        );
+    }
+
+    #[test]
     fn asan_arm_bound_array_rebind_leaves_memory_with_one_owner() {
         // 1 — the live bug: an ANNOTATED rebind of an arm-bound payload.
         assert_clean_asan_run(

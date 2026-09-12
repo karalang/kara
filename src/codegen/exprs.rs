@@ -3853,6 +3853,44 @@ impl<'ctx> super::Codegen<'ctx> {
                 // move was clean.
                 self.suppress_tuple_index_move_source(&field_init.value);
                 self.suppress_array_elem_move_source(&field_init.value);
+                // B-2026-09-12-14 — the WHOLE-ARRAY peer of the line above, and
+                // the array peer of `suppress_source_vec_cleanup_for_arg` three
+                // lines up. `suppress_array_elem_move_source` covers
+                // `S { f: a[0] }`, an ELEMENT moved out; nothing covered
+                // `S { a: arr }`, the binding moved whole. So the source kept
+                // the scope-exit element drop `make_array_param_callee_owned`
+                // gave it at its `let`, the struct's own drop walked the same
+                // buffers, and both ran: 10 allocs / 12 frees with two
+                // `Invalid free()` at `-O0`, needing no call and no generics,
+                // and two more per additional array field.
+                //
+                // It hid because the two neighbouring spellings are clean for
+                // unrelated reasons — a direct literal into the field
+                // (`W { a: [f"..", f".."] }`) has no source binding to leave an
+                // owner behind, and a `Vec` field is covered by the suppression
+                // above — so only a NAMED array binding reaches the gap. glibc's
+                // tcache absorbs the duplicate free rather than aborting, which
+                // is why every backend printed correctly and exited 0.
+                //
+                // The shared-struct branch above deliberately does NOT get this
+                // call: `shared struct W { a: Array[String, 2] }` measures a
+                // clean 11 allocs / 11 frees, because the RC path owns the
+                // field through a different channel. Adding it there would
+                // retract the only owner.
+                //
+                // Gated on `in_discarded_aggregate_tail` for the reason
+                // B-2026-09-01-5 / B-2026-09-07-14 gate the four place-shaped
+                // disarms below: a DISCARDED aggregate literal (`W { a: arr };`)
+                // takes nothing over, so its sources keep their owners. That
+                // predicate's own doc anticipated this — it exists so a widening
+                // of the window reaches every disarm at once — and this is the
+                // fifth member of the family. Measured: ungated, the discarded
+                // spelling went from a clean 10 allocs / 10 frees to an 18 B
+                // leak in 2 blocks, trading this row's double free for a leak
+                // one statement over.
+                if !self.in_discarded_aggregate_tail(&field_init.value) {
+                    self.suppress_array_binding_move_arg(&field_init.value);
+                }
                 // B-2026-08-28-15 — and the deeper-place peer, `S { f: p.0.name }`.
                 self.suppress_place_field_struct_move_source(&field_init.value);
                 // Boxed / inline-heap `Option`/`Result` binding moved whole into
