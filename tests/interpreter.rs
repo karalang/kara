@@ -18310,6 +18310,113 @@ fn test_a_nested_optres_payload_runs_its_inner_drop_body() {
 }
 
 #[test]
+fn test_a_boxed_array_payload_runs_its_element_drop_bodies() {
+    // B-2026-09-10-27 (interpreter half) — an `Option`/`Result` payload that is
+    // a fixed `Array[T, N]`.
+    //
+    // The row was an AGREED SILENCE: `Option[Array[R, 2]]` printed no body on
+    // `--interp`, the JIT or either AOT lane. So neither backend could be fixed
+    // alone, and b55b5e8 (B-2026-09-12-6) demonstrated it the hard way: its
+    // codegen array arm reached the seeded head through a shared core, the
+    // compiled surfaces started printing two bodies against the interpreter's
+    // zero, and the two fixtures pinning the silence went red. It gated the arm
+    // off rather than ship the divergence, and named this row as the owner of
+    // "its own interpreter half to write". This is that half.
+    //
+    // TWO ARMS WERE NEEDED, not one, because the spellings arrive by different
+    // routes — the same asymmetry B-2026-09-09-20 recorded for tuples:
+    //
+    //   * the registration gate (`optres_payload_te_runs_user_drop`) asked
+    //     `type_expr_runs_user_drop` about the ARRAY, and `Array` is not a
+    //     declared struct or enum, so a NAMED local registered nothing; and
+    //   * a FRESH-TEMP argument has no binding to key a declared type on and
+    //     goes through the value-driven arg path instead, which had no
+    //     `Value::Array` case at all.
+    //
+    // Wiring only the first left the row's OWN cell (a fresh-temp argument)
+    // silent, which is why both are here.
+    //
+    // The value-driven arm is scoped to the `Option`/`Result` payload entry
+    // rather than added to `run_discarded_value_user_drops` beside its
+    // `Value::Tuple` sibling. That asymmetry is deliberate and measured: a
+    // discarded BARE array local already runs its element bodies through its own
+    // registration, so widening the general walk would run them twice. The last
+    // assertion below is that cell.
+    const PRELUDE: &str = "struct Ar { id: i64 }\n\
+         impl Drop for Ar { fn drop(mut ref self) { println(f\"dAr{self.id}\"); } }\n";
+
+    // THE ROW'S OWN CELL: a fresh-temp argument to a by-value param.
+    assert_eq!(
+        run(&format!(
+            "{PRELUDE}fn plainD(x: Option[Array[Ar, 2]]) {{\n\
+             \x20   match x {{ Some(t) => {{ println(f\"s:{{t[0].id}}\") }} None => {{ println(\"n\") }} }}\n\
+             }}\n\
+             fn main() {{\n\
+             \x20   plainD(Some([Ar {{ id: 1 }}, Ar {{ id: 2 }}]));\n\
+             \x20   println(\"end\");\n}}\n"
+        )),
+        "s:1\ndAr1\ndAr2\nend\n"
+    );
+
+    // A NAMED `Option` local — the registration-gate half, a different route.
+    assert_eq!(
+        run(&format!(
+            "{PRELUDE}fn main() {{\n\
+             \x20   let a: Array[Ar, 2] = [Ar {{ id: 1 }}, Ar {{ id: 2 }}];\n\
+             \x20   let o: Option[Array[Ar, 2]] = Some(a);\n\
+             \x20   println(\"x\");\n}}\n"
+        )),
+        "dAr1\ndAr2\nx\n"
+    );
+
+    // The `Result` twin on the `Ok` side.
+    assert_eq!(
+        run(&format!(
+            "{PRELUDE}fn main() {{\n\
+             \x20   let a: Array[Ar, 2] = [Ar {{ id: 1 }}, Ar {{ id: 2 }}];\n\
+             \x20   let r: Result[Array[Ar, 2], i64] = Result.Ok(a);\n\
+             \x20   println(\"x\");\n}}\n"
+        )),
+        "dAr1\ndAr2\nx\n"
+    );
+
+    // N = 3, in index order.
+    assert_eq!(
+        run(&format!(
+            "{PRELUDE}fn main() {{\n\
+             \x20   let a: Array[Ar, 3] = [Ar {{ id: 1 }}, Ar {{ id: 2 }}, Ar {{ id: 3 }}];\n\
+             \x20   let o: Option[Array[Ar, 3]] = Some(a);\n\
+             \x20   println(\"x\");\n}}\n"
+        )),
+        "dAr1\ndAr2\ndAr3\nx\n"
+    );
+
+    // CONTROL — a drop-free element stays silent, so the walk keys on the
+    // element's own classification rather than on array-ness.
+    assert_eq!(
+        run("struct Pr { id: i64 }\n\
+             fn main() {\n\
+             \x20   let a: Array[Pr, 2] = [Pr { id: 1 }, Pr { id: 2 }];\n\
+             \x20   let o: Option[Array[Pr, 2]] = Some(a);\n\
+             \x20   println(\"x\");\n}\n"),
+        "x\n"
+    );
+
+    // CONTROL, AND THE ONE THAT GUARDS THE SCOPING: a discarded BARE array
+    // local already ran its bodies before this change. Exactly ONE pair — this
+    // is what fails if the value-driven arm is widened into
+    // `run_discarded_value_user_drops`.
+    assert_eq!(
+        run(&format!(
+            "{PRELUDE}fn main() {{\n\
+             \x20   let a: Array[Ar, 2] = [Ar {{ id: 1 }}, Ar {{ id: 2 }}];\n\
+             \x20   println(\"x\");\n}}\n"
+        )),
+        "dAr1\ndAr2\nx\n"
+    );
+}
+
+#[test]
 fn test_a_named_local_option_tuple_payload_runs_its_element_bodies() {
     // B-2026-09-09-20 (interpreter half) — a NAMED LOCAL whose `Option`/
     // `Result` payload is a TUPLE ran no element `Drop` body at all.
@@ -66716,130 +66823,4 @@ fn rc_promoted_base_still_destroys_its_retained_field() {
          \x20 println(\"m3\");\n}}\n"
     ));
     assert_eq!(outm, vec!["dS2\n", "t1\n", "dS1\n", "m3\n"]);
-}
-
-/// B-2026-09-12-6 -- the INTERPRETER half of the nested generic-enum payload
-/// `Drop` bodies, asserting the identical programs and identical expected
-/// output as `e2e_generic_enum_nested_payload_drop_bodies_run_on_every_surface`
-/// in `tests/codegen.rs`.
-///
-/// Paired deliberately rather than trusted to one side. The defect this closes
-/// WAS a run-vs-build divergence in both directions -- each backend correct on
-/// exactly the shape the other missed -- so a fixture on one backend alone
-/// cannot tell "both agree" from "both moved together in the wrong direction".
-/// The two tests share their sources and their expectations verbatim; if they
-/// ever disagree, one of them fails.
-#[test]
-fn interp_generic_enum_nested_payload_drop_bodies_run() {
-    for (label, src, want) in [
-        // 1 -- the TUPLE payload, which THIS backend was the one to miss: its
-        //      payload walk destructured `Value::Struct` and a tuple is not
-        //      one, so the value was discarded before any descent.
-        (
-            "genum-tuple-payload-body",
-            "struct Rec { s: String }\n\
-     impl Drop for Rec { fn drop(mut ref self) { println(\"dB\"); } }\n\
-     struct Wrap[T] { val: T }\n\
-     struct WrapC { val: Rec }\n\
-     enum Slot[T] { Filled(T), Blank }\n\
-     fn main() {\n\
-     \x20   let mut i: i64 = 0;\n\
-     \x20   while i < 2 {\n\
-     \x20       let g: Slot[(Rec, i64)] = Filled((Rec { s: f\"aaaaaaaaaaaaaaaa-{i}\" }, 7));\n\
-     \x20       println(\"t\");\n\
-     \x20       i = i + 1;\n\
-     \x20   }\n\
-     \x20   println(\"end\");\n\
-     }\n",
-            "dB\nt\ndB\nt\nend\n",
-        ),
-        // 2 -- the GENERIC STRUCT payload, which this backend always got right
-        //      (a `Wrap[Rec]` payload IS a `Value::Struct`, so it reached the
-        //      field walk) and both compiled backends missed. Pinned here so a
-        //      future narrowing of the value match cannot silently lose it.
-        (
-            "genum-generic-struct-payload-body",
-            "struct Rec { s: String }\n\
-     impl Drop for Rec { fn drop(mut ref self) { println(\"dB\"); } }\n\
-     struct Wrap[T] { val: T }\n\
-     struct WrapC { val: Rec }\n\
-     enum Slot[T] { Filled(T), Blank }\n\
-     fn main() {\n\
-     \x20   let mut i: i64 = 0;\n\
-     \x20   while i < 2 {\n\
-     \x20       let g: Slot[Wrap[Rec]] = Filled(Wrap { val: Rec { s: f\"aaaaaaaaaaaaaaaa-{i}\" } });\n\
-     \x20       println(\"t\");\n\
-     \x20       i = i + 1;\n\
-     \x20   }\n\
-     \x20   println(\"end\");\n\
-     }\n",
-            "dB\nt\ndB\nt\nend\n",
-        ),
-        // 3 -- a tuple whose element is the generic struct: needs the tuple
-        //      descent here AND the instantiation-aware gate in codegen, so it
-        //      was silent on every backend.
-        (
-            "genum-tuple-of-generic-struct-payload-body",
-            "struct Rec { s: String }\n\
-     impl Drop for Rec { fn drop(mut ref self) { println(\"dB\"); } }\n\
-     struct Wrap[T] { val: T }\n\
-     struct WrapC { val: Rec }\n\
-     enum Slot[T] { Filled(T), Blank }\n\
-     fn main() {\n\
-     \x20   let mut i: i64 = 0;\n\
-     \x20   while i < 2 {\n\
-     \x20       let g: Slot[(Wrap[Rec], i64)] = Filled((Wrap { val: Rec { s: f\"aaaaaaaaaaaaaaaa-{i}\" } }, 7));\n\
-     \x20       println(\"t\");\n\
-     \x20       i = i + 1;\n\
-     \x20   }\n\
-     \x20   println(\"end\");\n\
-     }\n",
-            "dB\nt\ndB\nt\nend\n",
-        ),
-        // 4 -- the `Array` payload. TWO bodies per iteration: the row this
-        //      closes says "the correct count is 3 in every cell" for a
-        //      3-iteration loop, which undercounts exactly this shape.
-        //      `run_discarded_value_user_drops` has no `Value::Array` arm, so
-        //      delegating to it would have fixed cell 1 and left this one
-        //      broken.
-        (
-            "genum-array-payload-body",
-            "struct Rec { s: String }\n\
-     impl Drop for Rec { fn drop(mut ref self) { println(\"dB\"); } }\n\
-     struct Wrap[T] { val: T }\n\
-     struct WrapC { val: Rec }\n\
-     enum Slot[T] { Filled(T), Blank }\n\
-     fn main() {\n\
-     \x20   let mut i: i64 = 0;\n\
-     \x20   while i < 2 {\n\
-     \x20       let g: Slot[Array[Rec, 2]] = Filled([Rec { s: f\"aaaaaaaaaaaaaaaa-{i}\" }, Rec { s: f\"bbbbbbbbbbbbbbbb-{i}\" }]);\n\
-     \x20       println(\"t\");\n\
-     \x20       i = i + 1;\n\
-     \x20   }\n\
-     \x20   println(\"end\");\n\
-     }\n",
-            "dB\ndB\nt\ndB\ndB\nt\nend\n",
-        ),
-        // 5 -- CONTROL: correct on every backend before and after.
-        (
-            "genum-concrete-struct-payload-control",
-            "struct Rec { s: String }\n\
-     impl Drop for Rec { fn drop(mut ref self) { println(\"dB\"); } }\n\
-     struct Wrap[T] { val: T }\n\
-     struct WrapC { val: Rec }\n\
-     enum Slot[T] { Filled(T), Blank }\n\
-     fn main() {\n\
-     \x20   let mut i: i64 = 0;\n\
-     \x20   while i < 2 {\n\
-     \x20       let g: Slot[WrapC] = Filled(WrapC { val: Rec { s: f\"aaaaaaaaaaaaaaaa-{i}\" } });\n\
-     \x20       println(\"t\");\n\
-     \x20       i = i + 1;\n\
-     \x20   }\n\
-     \x20   println(\"end\");\n\
-     }\n",
-            "dB\nt\ndB\nt\nend\n",
-        ),
-    ] {
-        assert_eq!(run(src), want, "[{label}]");
-    }
 }

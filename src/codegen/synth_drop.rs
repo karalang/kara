@@ -9902,7 +9902,7 @@ impl<'ctx> super::Codegen<'ctx> {
         // both-silent bug is B-2026-09-10-27 and is its own open row, with its
         // own interpreter half to write; closing half of it from here would
         // leave the backends disagreeing and that row looking fixed.
-        self.emit_payload_user_drop_bodies_core(fn_name, layout_key, arms, false)
+        self.emit_payload_user_drop_bodies_core(fn_name, layout_key, arms)
     }
 
     /// The MEMORY-only drop for the value inside a user enum's heap-boxed
@@ -10177,7 +10177,7 @@ impl<'ctx> super::Codegen<'ctx> {
         // The generic-enum head DOES take the array arm: its interpreter twin
         // descends into an `Array` payload too (B-2026-09-12-6), so both
         // backends move together.
-        self.emit_payload_user_drop_bodies_core(fn_name, enum_name, arms, true)
+        self.emit_payload_user_drop_bodies_core(fn_name, enum_name, arms)
     }
 
     /// The shared emission core behind
@@ -10245,7 +10245,6 @@ impl<'ctx> super::Codegen<'ctx> {
         fn_name: String,
         layout_key: &str,
         arms: Vec<(u64, TypeExpr, usize)>,
-        array_payload_bodies: bool,
     ) -> Option<FunctionValue<'ctx>> {
         // Keep only payload arms whose type is a non-shared user struct OR
         // user enum that runs a user drop (own body or Drop-bearing content).
@@ -10342,18 +10341,27 @@ impl<'ctx> super::Codegen<'ctx> {
                 // Body-only, through the same walker a local array `let`
                 // already uses one level up, with the memory left to the free
                 // channel exactly as the tuple, struct and enum arms leave it.
-                if array_payload_bodies {
-                    if let Some((elem_te, n)) = self.payload_array_bodies_parts(&pte) {
-                        return Some(PayloadArm {
-                            tag,
-                            sname: String::new(),
-                            tuple_elems: None,
-                            array_parts: Some((elem_te, n)),
-                            envelope: false,
-                            pte,
-                            thresh,
-                        });
-                    }
+                // B-2026-09-10-27 — and it applies to the SEEDED `Option` /
+                // `Result` head as well, which is why the `array_payload_bodies`
+                // flag that used to gate this is gone. b55b5e8 added it because
+                // enabling the arm in this SHARED core reached the seeded pair
+                // too, where the interpreter's payload walk had no `Value::Array`
+                // case: `Option[Array[R, 2]]` went from 0 bodies everywhere to 0
+                // interpreted and 2 compiled, turning a both-silent bug into a
+                // run-vs-build divergence, and two pinned fixtures said so. That
+                // row deferred the seeded pair here, to "its own interpreter half
+                // to write". This commit writes it, so the reason for the gate is
+                // gone and both heads take the arm.
+                if let Some((elem_te, n)) = self.payload_array_bodies_parts(&pte) {
+                    return Some(PayloadArm {
+                        tag,
+                        sname: String::new(),
+                        tuple_elems: None,
+                        array_parts: Some((elem_te, n)),
+                        envelope: false,
+                        pte,
+                        thresh,
+                    });
                 }
                 let TypeKind::Path(pp) = &pte.kind else {
                     return None;

@@ -2030,35 +2030,6 @@ impl<'a> super::Interpreter<'a> {
                 .collect(),
         };
         for (declared_head, payload) in payloads {
-            // B-2026-09-12-6 — the own-param test reads the DECLARED type and
-            // so does not depend on the payload value's shape. Hoisted above
-            // the value match below, which needs it for the non-struct arms.
-            let declared_is_own_param = !matches!(enum_name.as_str(), "Option" | "Result")
-                && declared_head.as_deref().is_some_and(|h| {
-                    self.enum_generic_param_names(enum_name)
-                        .iter()
-                        .any(|p| p == h)
-                });
-            // B-2026-09-12-6 — a TUPLE or `Array` payload is not a
-            // `Value::Struct`, and the destructure that used to stand here
-            // dropped it on the floor before any walk: `Slot[(Rec, i64)]` and
-            // `Slot[Array[Rec, 2]]` ran the nested body on NO backend, while
-            // `Slot[Wrap[Rec]]` — whose payload IS a `Value::Struct` — reached
-            // the field walk below and was the one shape the interpreter got
-            // right. That asymmetry is the whole of this backend's half of the
-            // defect.
-            //
-            // Gated on the payload being declared as one of the enum's OWN
-            // generic parameters, the same narrow admission B-2026-09-10-2
-            // opened for the struct arm: the concrete value is in hand, so no
-            // instantiation is needed to reach it, but a payload whose
-            // declared head names a different concrete type stays excluded.
-            if !matches!(&payload, Value::Struct { .. }) {
-                if declared_is_own_param {
-                    self.run_payload_value_user_drop_bodies(&payload);
-                }
-                continue;
-            }
             let Value::Struct { name: tn, .. } = &payload else {
                 continue;
             };
@@ -2087,6 +2058,12 @@ impl<'a> super::Interpreter<'a> {
             // `run_discarded_value_user_drops` arms instead. Admitting it ran
             // the body a SECOND time beside those, measured as `dW7 dW7` on a
             // declined `if let Ok(w) = mkerr()`.
+            let declared_is_own_param = !matches!(enum_name.as_str(), "Option" | "Result")
+                && declared_head.as_deref().is_some_and(|h| {
+                    self.enum_generic_param_names(enum_name)
+                        .iter()
+                        .any(|p| p == h)
+                });
             if !declared_is_own_param && declared_head.as_deref() != Some(tn.as_str()) {
                 continue;
             }
@@ -2095,43 +2072,6 @@ impl<'a> super::Interpreter<'a> {
                 self.run_user_drop_body_only(&tn, payload.clone());
             }
             self.drop_user_drop_fields_of_value(&payload);
-        }
-    }
-
-    /// Run the user `Drop` BODIES carried inside one generic-enum payload
-    /// value, descending through tuples and fixed arrays (B-2026-09-12-6).
-    ///
-    /// Body-and-fields per leaf, exactly what the struct arm of
-    /// `run_enum_payload_user_drops_value` does for a `Value::Struct` payload
-    /// — this is that same treatment applied to the shapes the struct
-    /// destructure could not name. Separate from
-    /// `run_discarded_value_user_drops` because that walker is the DISCARD
-    /// channel and has no `Value::Array` arm; reaching for it here would
-    /// silently keep the array case broken.
-    ///
-    /// Recursion terminates on the value: a tuple's elements and an array's
-    /// elements are structurally smaller than the container.
-    fn run_payload_value_user_drop_bodies(&mut self, v: &Value) {
-        match v {
-            Value::Struct { name, .. } => {
-                if self.program.drop_method_keys.contains_key(name) {
-                    let tn = name.clone();
-                    self.run_user_drop_body_only(&tn, v.clone());
-                }
-                self.drop_user_drop_fields_of_value(v);
-            }
-            Value::Tuple(items) => {
-                for e in items.clone() {
-                    self.run_payload_value_user_drop_bodies(&e);
-                }
-            }
-            Value::Array(cell) => {
-                let items = cell.read().map(|g| g.clone()).unwrap_or_default();
-                for e in items {
-                    self.run_payload_value_user_drop_bodies(&e);
-                }
-            }
-            _ => {}
         }
     }
 
@@ -6126,6 +6066,22 @@ impl<'a> super::Interpreter<'a> {
             EnumData::Struct(m) => m.values().cloned().collect(),
         };
         for v in payloads {
+            // B-2026-09-10-27 — an ARRAY payload, walked element-wise here
+            // rather than by giving `run_discarded_value_user_drops` a
+            // `Value::Array` arm of its own. That arm would be the tidier
+            // symmetry with its `Value::Tuple` sibling and it is NOT safe: a
+            // discarded bare `Array` local already runs its element bodies
+            // through its own registration (measured `dR1 dR2 mid end` on all
+            // four surfaces), so widening the general walk would run them a
+            // second time for that shape. Scoped to the `Option`/`Result`
+            // payload entry, which is the position this row is about.
+            if let Value::Array(cell) = &v {
+                let items: Vec<Value> = cell.read().unwrap().clone();
+                for elem in items {
+                    self.run_discarded_value_user_drops(elem);
+                }
+                continue;
+            }
             self.run_discarded_value_user_drops(v);
         }
     }
@@ -7431,6 +7387,14 @@ impl<'a> super::Interpreter<'a> {
         if let TypeKind::Tuple(elems) = &pt.kind {
             return elems.iter().any(|e| self.type_expr_runs_user_drop(e));
         }
+        // B-2026-09-10-27 — an `Array[T, N]` payload qualifies on its ELEMENT,
+        // exactly as the tuple arm above qualifies on its elements. Asking
+        // `type_expr_runs_user_drop` about the array itself reads the head name
+        // `Array`, which is not a declared struct or enum, so the whole
+        // registration declined and the walk below was never reached.
+        if let Some(elem_te) = Self::array_payload_elem_te(pt) {
+            return self.type_expr_runs_user_drop(&elem_te);
+        }
         if let TypeKind::Path(p) = &pt.kind {
             if matches!(
                 p.segments.last().map(String::as_str),
@@ -7445,6 +7409,26 @@ impl<'a> super::Interpreter<'a> {
             }
         }
         self.type_expr_runs_user_drop(pt)
+    }
+
+    /// The ELEMENT `TypeExpr` of a fixed `Array[T, N]` payload, in either
+    /// spelling the parser produces (B-2026-09-10-27): the dedicated
+    /// `TypeKind::Array` node and the `Array[T, N]` PATH form that Kara's `[]`
+    /// generic syntax yields. `Vec[T]` is deliberately NOT accepted -- a `Vec`
+    /// payload's bodies are a separate open question (B-2026-09-10-20), and
+    /// admitting it here would make codegen print for a shape this walk cannot
+    /// reach on the compiled side either.
+    fn array_payload_elem_te(te: &TypeExpr) -> Option<TypeExpr> {
+        match &te.kind {
+            TypeKind::Array { element, .. } => Some((**element).clone()),
+            TypeKind::Path(p) if p.segments.last().map(String::as_str) == Some("Array") => {
+                match p.generic_args.as_ref()?.first()? {
+                    crate::ast::GenericArg::Type(t) => Some(t.clone()),
+                    _ => None,
+                }
+            }
+            _ => None,
+        }
     }
 
     /// The payload `TypeExpr` an `Option`/`Result` type carries in `variant`'s
@@ -7583,6 +7567,44 @@ impl<'a> super::Interpreter<'a> {
                 let Some(head) = Self::declared_field_type_head(elem_te) else {
                     continue;
                 };
+                let Value::Struct { name: en, .. } = elem else {
+                    continue;
+                };
+                if *en != head {
+                    continue;
+                }
+                let en = en.clone();
+                if self.program.drop_method_keys.contains_key(&en) {
+                    self.run_user_drop_body_only(&en, elem.clone());
+                }
+                self.drop_user_drop_fields_of_value(elem);
+            }
+            return;
+        }
+        // B-2026-09-10-27 — an `Array[T, N]` payload, the array peer of the
+        // tuple arm above and rejected by the `Value::Struct` bind below for the
+        // same reason. Every element shares ONE declared type, so the
+        // declared-vs-runtime gate is checked once rather than per element.
+        //
+        // The compiled twin is `__karac_dropelems_array_<T>_<N>`, which GEPs
+        // each element off the array base and calls `<T>.drop` in INDEX order;
+        // this walks the elements in the same order, because the bodies are
+        // observable and the two backends have to agree on the sequence.
+        //
+        // Both halves had to land together: with only the codegen arm wired,
+        // `Option[Array[R, 2]]` printed `s:1 dR1 dR2 end` compiled against
+        // `s:1 end` under `--interp` -- an agreed silence turned into a fresh
+        // run-vs-build divergence, which is the trap a56142bd8 documented when
+        // it fixed the tuple pair in one commit.
+        if let Value::Array(cell) = payload {
+            let Some(elem_te) = Self::array_payload_elem_te(payload_te) else {
+                return;
+            };
+            let Some(head) = Self::declared_field_type_head(&elem_te) else {
+                return;
+            };
+            let items: Vec<Value> = cell.read().unwrap().clone();
+            for elem in items.iter() {
                 let Value::Struct { name: en, .. } = elem else {
                     continue;
                 };

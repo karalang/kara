@@ -153783,6 +153783,168 @@ fn main() {
         }
     }
 
+    /// B-2026-09-10-27 — a boxed `Array` payload's element `Drop` bodies ran on
+    /// NO backend, the `Array` peer of the tuple gap a56142bd8 closed.
+    ///
+    /// `Option[Array[R, 2]]` printed `s:1 / end` under `--interp`, the JIT and
+    /// both AOT lanes. An AGREED SILENCE, so no A/B rule was broken — which is
+    /// why both halves had to land in ONE commit, and the pin in
+    /// `e2e_boxed_array_payload_reads_back_on_every_surface`'s cell 6 is what
+    /// enforced that. It worked exactly as designed: with only codegen's arm
+    /// wired, that cell went to `s:1 / dR1 / dR2 / end` compiled against
+    /// `s:1 / end` interpreted, and the loud failure said the interpreter had to
+    /// move too.
+    ///
+    /// THE CODEGEN ARM IS NOT NEW HERE — b55b5e8 (B-2026-09-12-6) wrote it, and
+    /// then deliberately GATED IT OFF for the seeded `Option`/`Result` head.
+    /// That row hit this exact wall: the arm lives in a core shared by both
+    /// heads, so enabling it reached the seeded pair too, where the
+    /// interpreter's payload walk had no `Value::Array` case —
+    /// `Option[Array[R, 2]]` went from 0 bodies everywhere to 0 interpreted and
+    /// 2 compiled, and the two fixtures pinning that silence went red. Rather
+    /// than trade a both-silent bug for a run-vs-build divergence, it gated the
+    /// arm to the generic-enum head and left the seeded pair to THIS row, with
+    /// "its own interpreter half to write". This commit writes that half, so the
+    /// gate's reason is gone and it is removed; both heads now take the arm.
+    ///
+    /// Nothing under either arm is new either:
+    /// `emit_array_elem_user_drop_bodies_fn` has emitted
+    /// `__karac_dropelems_array_<T>_<N>` since B-2026-08-28-57. The interpreter
+    /// declined for the mirror reason to codegen's: its registration gate asked
+    /// `type_expr_runs_user_drop` about the ARRAY rather than its element, and
+    /// `Array` is not a declared struct or enum.
+    ///
+    /// THE INTERPRETER NEEDED TWO SEPARATE ARMS, because the two spellings reach
+    /// bodies by different routes — the asymmetry B-2026-09-09-20 recorded for
+    /// tuples. A NAMED local goes through the declared-type table
+    /// (`optres_payload_bodies_tes`); a FRESH-TEMP argument has no binding to key
+    /// on and goes through the value-driven arg path instead. Wiring only the
+    /// first left the row's own cell silent.
+    ///
+    /// THE VALUE-DRIVEN ARM IS SCOPED TO THE OPTRES ENTRY rather than given to
+    /// `run_discarded_value_user_drops` beside its `Value::Tuple` sibling, and
+    /// that asymmetry is deliberate: a discarded BARE `Array` local already runs
+    /// its element bodies through its own registration (measured
+    /// `dR1 / dR2 / mid / end` on all four surfaces), so widening the general
+    /// walk would run them a SECOND time for that shape.
+    ///
+    /// NOT CLOSED HERE, and measured rather than assumed: the QUALIFIED
+    /// constructor spelling at an argument position
+    /// (`plainD(Option[Array[R, 2]].Some(a))`) still runs no body compiled. That
+    /// is not this row's defect and not array-specific — it is pre-existing for
+    /// TUPLE and STRUCT payloads too, because the qualified form parses as a
+    /// METHOD CALL (B-2026-08-22-17) and `optres_arg_is_unowned_temp` rejects
+    /// `MethodCall` in its first arm as "a place rooted at a binding". Filed as
+    /// its own row; widening that predicate is explicitly unsafe on its own (its
+    /// doc records three shapes it would turn into double frees).
+    #[test]
+    fn e2e_boxed_array_payload_runs_its_element_drop_bodies() {
+        const PRE: &str = "struct Ra { id: i64 }\n\
+             impl Drop for Ra { fn drop(mut ref self) { println(f\"dRa{self.id}\") } }\n";
+        for (label, body, want) in [
+            // THE ROW: a named array local wrapped in a bare ctor at an
+            // argument position.
+            (
+                "named-array-local-arg",
+                "fn plainD(x: Option[Array[Ra, 2]]) { match x { Some(t) => { println(f\"s:{t[0].id}\") } None => { println(\"n\") } } }\n\
+                 fn main() { let a: Array[Ra, 2] = [Ra { id: 1 }, Ra { id: 2 }]; plainD(Some(a)); println(\"end\") }\n",
+                "s:1\ndRa1\ndRa2\nend\n",
+            ),
+            // An INLINE array literal, so the caller has no array local whose
+            // own registration could be doing the work instead.
+            (
+                "inline-array-literal-arg",
+                "fn plainD(x: Option[Array[Ra, 2]]) { match x { Some(t) => { println(f\"s:{t[0].id}\") } None => { println(\"n\") } } }\n\
+                 fn main() { plainD(Some([Ra { id: 1 }, Ra { id: 2 }])); println(\"end\") }\n",
+                "s:1\ndRa1\ndRa2\nend\n",
+            ),
+            // A NAMED `Option` local rather than a fresh temp — the route
+            // asymmetry B-2026-09-09-20 recorded, and one of this row's own
+            // NOT MEASURED items.
+            (
+                "named-option-local",
+                "fn plainD(x: Option[Array[Ra, 2]]) { match x { Some(t) => { println(f\"s:{t[0].id}\") } None => { println(\"n\") } } }\n\
+                 fn main() { let a: Array[Ra, 2] = [Ra { id: 1 }, Ra { id: 2 }]; let o: Option[Array[Ra, 2]] = Some(a); plainD(o); println(\"end\") }\n",
+                "s:1\ndRa1\ndRa2\nend\n",
+            ),
+            // A DISCARDED `Option` local, never passed anywhere: the bodies are
+            // due at its own `let`, which is why they precede `mid`.
+            (
+                "discarded-option-local",
+                "fn main() { let a: Array[Ra, 2] = [Ra { id: 1 }, Ra { id: 2 }]; let o: Option[Array[Ra, 2]] = Some(a); println(\"mid\"); println(\"end\") }\n",
+                "dRa1\ndRa2\nmid\nend\n",
+            ),
+            // The `Result` spelling, another NOT MEASURED item. Built through an
+            // annotated local because a bare `[..]` literal inside a qualified
+            // `Result` constructor infers as `Vec`, not `Array` — an inference
+            // gap unrelated to this row.
+            (
+                "result-ok-array-payload",
+                "fn plainD(x: Result[Array[Ra, 2], i64]) { match x { Ok(t) => { println(f\"s:{t[0].id}\") } Err(e) => { println(\"n\") } } }\n\
+                 fn main() { let a: Array[Ra, 2] = [Ra { id: 1 }, Ra { id: 2 }]; let o: Result[Array[Ra, 2], i64] = Result[Array[Ra, 2], i64].Ok(a); plainD(o); println(\"end\") }\n",
+                "s:1\ndRa1\ndRa2\nend\n",
+            ),
+            // N = 3, so a walk that happened to be arity-2 shows up here.
+            (
+                "arity-three",
+                "fn plainD(x: Option[Array[Ra, 3]]) { match x { Some(t) => { println(f\"s:{t[0].id}\") } None => { println(\"n\") } } }\n\
+                 fn main() { plainD(Some([Ra { id: 1 }, Ra { id: 2 }, Ra { id: 3 }])); println(\"end\") }\n",
+                "s:1\ndRa1\ndRa2\ndRa3\nend\n",
+            ),
+            // An element that owns HEAP as well as carrying a `Drop`, so the
+            // memory and bodies channels are both live at once — the third of
+            // this row's NOT MEASURED items. One body each, no double free.
+            (
+                "element-owns-heap-and-drop",
+                "struct Rh { id: i64, name: String }\n\
+                 impl Drop for Rh { fn drop(mut ref self) { println(f\"dRh{self.id}\") } }\n\
+                 fn plainD(x: Option[Array[Rh, 2]]) { match x { Some(t) => { println(f\"s:{t[0].id}\") } None => { println(\"n\") } } }\n\
+                 fn main() { plainD(Some([Rh { id: 1, name: f\"a\" }, Rh { id: 2, name: f\"b\" }])); println(\"end\") }\n",
+                "s:1\ndRh1\ndRh2\nend\n",
+            ),
+            // CONTROL — an element with NO `Drop` at all must stay silent, so a
+            // walk that fired on array-ness rather than on the element's own
+            // classification shows up here.
+            (
+                "drop-free-element-control",
+                "struct Pa { id: i64 }\n\
+                 fn plainD(x: Option[Array[Pa, 2]]) { match x { Some(t) => { println(f\"s:{t[0].id}\") } None => { println(\"n\") } } }\n\
+                 fn main() { plainD(Some([Pa { id: 1 }, Pa { id: 2 }])); println(\"end\") }\n",
+                "s:1\nend\n",
+            ),
+            // CONTROL — a discarded BARE array local, which already ran its
+            // bodies through its own registration before this change. Exactly
+            // ONE pair: this is the cell that fails if the value-driven arm is
+            // ever widened into `run_discarded_value_user_drops`.
+            (
+                "bare-array-local-not-doubled-control",
+                "fn main() { let a: Array[Ra, 2] = [Ra { id: 1 }, Ra { id: 2 }]; println(\"mid\"); println(\"end\") }\n",
+                "dRa1\ndRa2\nmid\nend\n",
+            ),
+            // CONTROL — the TUPLE payload a56142bd8 fixed, unchanged by this.
+            (
+                "tuple-payload-control",
+                "fn plainD(x: Option[(Ra, Ra)]) { match x { Some(t) => { println(\"s\") } None => { println(\"n\") } } }\n\
+                 fn main() { plainD(Some((Ra { id: 1 }, Ra { id: 2 }))); println(\"end\") }\n",
+                "s\ndRa1\ndRa2\nend\n",
+            ),
+            // BOUNDARY — a BARE array as a fresh-temp argument (no envelope)
+            // runs no element body on any backend. An agreed silence, outside
+            // this row, and pinned so a later change has to move both backends.
+            (
+                "boundary-bare-array-arg-stays-silent",
+                "fn takeA(x: Array[Ra, 2]) { println(f\"t:{x[0].id}\") }\n\
+                 fn main() { takeA([Ra { id: 1 }, Ra { id: 2 }]); println(\"end\") }\n",
+                "t:1\nend\n",
+            ),
+        ] {
+            let Some(out) = run_program(&format!("{PRE}{body}")) else {
+                return;
+            };
+            assert_eq!(out, want, "[{label}]");
+        }
+    }
+
     /// B-2026-09-10-5 — a NAMED LOCAL of a user generic enum passed BY VALUE
     /// smashed the caller's stack, because the moved-from-slot disarm zeroed
     /// `Option`'s four words into whatever the binding's slot actually was.
@@ -154789,20 +154951,18 @@ fn main() {
                  }\n",
                 "t:aaaaaaaa0\n",
             ),
-            // 6 — THE BODIES CELL, and it PINS AN AGREED SILENCE rather than
-            //     the bodies. A boxed `Array` payload's element `Drop` bodies
-            //     run on NO backend — `--interp`, the JIT and both AOT lanes
-            //     all print `s:1` then `end` — and that is true on `main`
-            //     before this fix as well, so it is neither a divergence nor
-            //     something this change caused. It is the `Array` peer of the
-            //     TUPLE gap B-2026-09-09-20 recorded and a56142bd8 closed, and
-            //     it is filed as its own row. It is pinned here because this
-            //     fix moves who owns that interior, and the bodies channel is
-            //     separate from the memory one (B-2026-08-28-57): a later
-            //     change that starts running these bodies must do it on both
-            //     backends at once, and this cell is what makes a one-sided
-            //     attempt fail loudly instead of shipping a fresh
-            //     run-vs-build divergence.
+            // 6 — THE BODIES CELL. It PINNED AN AGREED SILENCE until
+            //     B-2026-09-10-27 closed it, and the pin did its job: that row
+            //     wired codegen's array arm first, this cell went from
+            //     `s:1 / end` to `s:1 / dR1 / dR2 / end` on the compiled
+            //     backends while `--interp` still printed `s:1 / end`, and the
+            //     loud failure here is what said the interpreter half had to
+            //     land in the same commit. Both did.
+            //
+            //     Kept as a live assertion of the CORRECTED behaviour rather
+            //     than deleted: the bodies channel is separate from the memory
+            //     one (B-2026-08-28-57), so a later change to who owns the
+            //     interior must not silently take these bodies away again.
             (
                 "user-drop-element-bodies",
                 "struct R8 { id: i64 }\n\
@@ -154815,7 +154975,7 @@ fn main() {
                  \x20   plainD(Some(a));\n\
                  \x20   println(\"end\");\n\
                  }\n",
-                "s:1\nend\n",
+                "s:1\ndR1\ndR2\nend\n",
             ),
             // 7 — CONTROL: a generic callee, whose monomorph registers nothing
             //     and whose caller must therefore keep its local.
@@ -155170,150 +155330,6 @@ fn main() {
                  \x20\x20\x20\x20println(f\"s:{b[2]}\");\n\
                  }\n",
                 "s:3\n",
-            ),
-        ] {
-            let Some(out) = run_program(src) else {
-                return;
-            };
-            assert_eq!(out, want, "[{label}]");
-        }
-    }
-
-    #[test]
-    fn e2e_generic_enum_nested_payload_drop_bodies_run_on_every_surface() {
-        // B-2026-09-12-6 -- a user `Drop` body on a value nested INSIDE a
-        // generic enum's payload ran on a different subset of backends per
-        // payload shape, and on no shape did it run everywhere.
-        //
-        // Two independent blind spots, one per backend, which is why the
-        // row's table reads as a diagonal: codegen could not see a GENERIC
-        // STRUCT payload (its arm filter asked a name-keyed predicate, so
-        // `Wrap[Rec]` looked up `Wrap` and found `val: T`), and the
-        // interpreter could not see a TUPLE or `Array` payload (its walk
-        // destructured `Value::Struct` and dropped every other shape before
-        // any descent). Each backend was correct on exactly the shape the
-        // other one's gate rejected.
-        //
-        // Body-only throughout, per the row's own instruction: the memory
-        // channel is untouched, so this cannot reproduce the double-running
-        // body of B-2026-07-30-11 / B-2026-08-28-58 leg A.
-        for (label, src, want) in [
-            // 1 -- a TUPLE payload. Correct on the compiled backends before this
-            //      change and silent on `--interp`, which is the half of the
-            //      divergence the interpreter owned.
-            (
-                "genum-tuple-payload-body",
-                "struct Rec { s: String }\n\
-             impl Drop for Rec { fn drop(mut ref self) { println(\"dB\"); } }\n\
-             struct Wrap[T] { val: T }\n\
-             struct WrapC { val: Rec }\n\
-             enum Slot[T] { Filled(T), Blank }\n\
-             fn main() {\n\
-             \x20\x20\x20\x20let mut i: i64 = 0;\n\
-             \x20\x20\x20\x20while i < 2 {\n\
-             \x20\x20\x20\x20\x20\x20\x20\x20let g: Slot[(Rec, i64)] = Filled((Rec { s: f\"aaaaaaaaaaaaaaaa-{i}\" }, 7));\n\
-             \x20\x20\x20\x20\x20\x20\x20\x20println(\"t\");\n\
-             \x20\x20\x20\x20\x20\x20\x20\x20i = i + 1;\n\
-             \x20\x20\x20\x20}\n\
-             \x20\x20\x20\x20println(\"end\");\n\
-             }\n",
-                "dB\nt\ndB\nt\nend\n",
-            ),
-            // 2 -- a GENERIC STRUCT payload, the mirror image: correct on
-            //      `--interp` and silent on both compiled backends, because the
-            //      arm filter asked a name-keyed predicate about `Wrap`, whose
-            //      declared field is `val: T`.
-            (
-                "genum-generic-struct-payload-body",
-                "struct Rec { s: String }\n\
-             impl Drop for Rec { fn drop(mut ref self) { println(\"dB\"); } }\n\
-             struct Wrap[T] { val: T }\n\
-             struct WrapC { val: Rec }\n\
-             enum Slot[T] { Filled(T), Blank }\n\
-             fn main() {\n\
-             \x20\x20\x20\x20let mut i: i64 = 0;\n\
-             \x20\x20\x20\x20while i < 2 {\n\
-             \x20\x20\x20\x20\x20\x20\x20\x20let g: Slot[Wrap[Rec]] = Filled(Wrap { val: Rec { s: f\"aaaaaaaaaaaaaaaa-{i}\" } });\n\
-             \x20\x20\x20\x20\x20\x20\x20\x20println(\"t\");\n\
-             \x20\x20\x20\x20\x20\x20\x20\x20i = i + 1;\n\
-             \x20\x20\x20\x20}\n\
-             \x20\x20\x20\x20println(\"end\");\n\
-             }\n",
-                "dB\nt\ndB\nt\nend\n",
-            ),
-            // 3 -- both descents at once, and so silent on every backend. This is
-            //      the cell that rejects fixing only the payload-arm filter:
-            //      the tuple arm's OWN element predicate was blind the same
-            //      way, one level down.
-            (
-                "genum-tuple-of-generic-struct-payload-body",
-                "struct Rec { s: String }\n\
-             impl Drop for Rec { fn drop(mut ref self) { println(\"dB\"); } }\n\
-             struct Wrap[T] { val: T }\n\
-             struct WrapC { val: Rec }\n\
-             enum Slot[T] { Filled(T), Blank }\n\
-             fn main() {\n\
-             \x20\x20\x20\x20let mut i: i64 = 0;\n\
-             \x20\x20\x20\x20while i < 2 {\n\
-             \x20\x20\x20\x20\x20\x20\x20\x20let g: Slot[(Wrap[Rec], i64)] = Filled((Wrap { val: Rec { s: f\"aaaaaaaaaaaaaaaa-{i}\" } }, 7));\n\
-             \x20\x20\x20\x20\x20\x20\x20\x20println(\"t\");\n\
-             \x20\x20\x20\x20\x20\x20\x20\x20i = i + 1;\n\
-             \x20\x20\x20\x20}\n\
-             \x20\x20\x20\x20println(\"end\");\n\
-             }\n",
-                "dB\nt\ndB\nt\nend\n",
-            ),
-            // 4 -- an `Array` payload, silent everywhere: it parses as a `Path`
-            //      whose head is `Array`, which is neither a user struct nor a
-            //      user enum, so the filter had no arm for it at all.
-            //
-            //      TWO bodies per iteration, not one. The row this closes
-            //      states "the correct count is 3 in every cell" over a
-            //      3-iteration loop, which is wrong for exactly this shape --
-            //      it constructs two `Rec`s per iteration. A fix measured
-            //      against that number reads as broken at the moment it
-            //      becomes right.
-            (
-                "genum-array-payload-body",
-                "struct Rec { s: String }\n\
-             impl Drop for Rec { fn drop(mut ref self) { println(\"dB\"); } }\n\
-             struct Wrap[T] { val: T }\n\
-             struct WrapC { val: Rec }\n\
-             enum Slot[T] { Filled(T), Blank }\n\
-             fn main() {\n\
-             \x20\x20\x20\x20let mut i: i64 = 0;\n\
-             \x20\x20\x20\x20while i < 2 {\n\
-             \x20\x20\x20\x20\x20\x20\x20\x20let g: Slot[Array[Rec, 2]] = Filled([Rec { s: f\"aaaaaaaaaaaaaaaa-{i}\" }, Rec { s: f\"bbbbbbbbbbbbbbbb-{i}\" }]);\n\
-             \x20\x20\x20\x20\x20\x20\x20\x20println(\"t\");\n\
-             \x20\x20\x20\x20\x20\x20\x20\x20i = i + 1;\n\
-             \x20\x20\x20\x20}\n\
-             \x20\x20\x20\x20println(\"end\");\n\
-             }\n",
-                "dB\ndB\nt\ndB\ndB\nt\nend\n",
-            ),
-            // 5 -- CONTROL: the CONCRETE wrapper in the same generic enum, correct
-            //      on all three backends before and after. It passes the very
-            //      gate `Wrap[Rec]` failed, which is what makes the defect an
-            //      asymmetry between a generic and a concrete payload rather
-            //      than a missing feature -- the same shape B-2026-08-06-8
-            //      found in `struct_owns_shared_field`.
-            (
-                "genum-concrete-struct-payload-control",
-                "struct Rec { s: String }\n\
-             impl Drop for Rec { fn drop(mut ref self) { println(\"dB\"); } }\n\
-             struct Wrap[T] { val: T }\n\
-             struct WrapC { val: Rec }\n\
-             enum Slot[T] { Filled(T), Blank }\n\
-             fn main() {\n\
-             \x20\x20\x20\x20let mut i: i64 = 0;\n\
-             \x20\x20\x20\x20while i < 2 {\n\
-             \x20\x20\x20\x20\x20\x20\x20\x20let g: Slot[WrapC] = Filled(WrapC { val: Rec { s: f\"aaaaaaaaaaaaaaaa-{i}\" } });\n\
-             \x20\x20\x20\x20\x20\x20\x20\x20println(\"t\");\n\
-             \x20\x20\x20\x20\x20\x20\x20\x20i = i + 1;\n\
-             \x20\x20\x20\x20}\n\
-             \x20\x20\x20\x20println(\"end\");\n\
-             }\n",
-                "dB\nt\ndB\nt\nend\n",
             ),
         ] {
             let Some(out) = run_program(src) else {

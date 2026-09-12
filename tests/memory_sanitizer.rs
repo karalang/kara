@@ -86035,6 +86035,15 @@ fn main() {
         //      alongside the memory one. Bodies follow the move and memory does
         //      not (B-2026-08-28-57), so a fix that conflates them prints the
         //      body twice or not at all.
+        //
+        //      B-2026-09-10-27 gave this shape its bodies, so the expectation
+        //      moved from `s:1` alone to `s:1 / dR1 / dR2`. THE MEMORY SIDE IS
+        //      WHAT THIS FIXTURE GUARDS AND IT DID NOT MOVE: ASAN passed both
+        //      before and after — the failure that flagged this cell was the
+        //      output assertion alone ("ASAN passed, but output mismatched"),
+        //      which is exactly the split the two channels are supposed to
+        //      keep. ONE body per element, so a later change that runs the
+        //      walk twice still fails here.
         assert_clean_asan_run(
             "struct R9 { id: i64 }\n\
              impl Drop for R9 { fn drop(mut ref self) { println(f\"dR{self.id}\") } }\n\
@@ -86045,7 +86054,7 @@ fn main() {
              \x20   let a: Array[R9, 2] = [R9 { id: 1 }, R9 { id: 2 }];\n\
              \x20   plainD(Some(a));\n\
              }\n",
-            &["s:1"],
+            &["s:1", "dR1", "dR2"],
             "b49-user-drop-element",
         );
         // 13 — THE ESCAPE CONTROL, and the cell this fix actually tripped over.
