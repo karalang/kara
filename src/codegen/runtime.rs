@@ -5115,10 +5115,30 @@ impl<'ctx> super::Codegen<'ctx> {
         let copy_bb = self.context.append_basic_block(fn_val, "dcopy.copy");
         let done_bb = self.context.append_basic_block(fn_val, "dcopy.done");
 
+        // SIGNED, and the last `cap > 0` gate in the tree to become so (Slice 2
+        // flipped 14; a multi-line-aware census found this one still unsigned,
+        // because the predicate and its `cap` operand sit on different lines and
+        // every earlier scan was line-oriented).
+        //
+        // Never a SOUNDNESS bug: an inline source takes the copy path and gets a
+        // correct heap copy, because `sso_string_parts_from_value` above hands
+        // the copy the right bytes. A PERFORMANCE bug, and a total one — an
+        // inline String owns no buffer, so there is no alias to defend against,
+        // yet every by-value owned String/Vec param deep-copy promoted it back
+        // to the heap, re-spending exactly the malloc SSO had just avoided.
+        // Measured on the self-hosted lexer: this gate alone was 2.3 billion
+        // instructions and 14.8% of wall time.
+        //
+        // `SGT` sends an inline source down the pass-through arm, where the phi
+        // returns `sv` verbatim — correct for the same reason the `cap == 0`
+        // literal case is: the header carries no heap ownership, so copying it
+        // by value is complete, and an inline descriptor re-derives its data
+        // pointer from whatever address it lands at. `Vec` never sets the flag,
+        // so `SGT` ≡ `UGT` there.
         let owned = self
             .builder
             .build_int_compare(
-                inkwell::IntPredicate::UGT,
+                inkwell::IntPredicate::SGT,
                 cap,
                 i64_t.const_int(0, false),
                 "dcopy.owned",

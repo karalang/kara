@@ -9,9 +9,9 @@ were fixed in `3833ff8`.
 works and it is correct on every surface probed. Both construction sites are
 inline — `s[a..b]` and `String.substring`.
 
-**A 14.8% WIN ON THE MOTIVATING WORKLOAD IS MEASURED, AVAILABLE, AND NOT YET
-LANDABLE. 2026-09-12.** Slice 2's own exit gate — re-profile the self-hosted
-lexer — had never been run; every payoff figure below it was synthetic. Run on
+**THE MOTIVATING WORKLOAD NOW WINS 14.8%, AND THE FIX IS LANDED. 2026-09-12.**
+Slice 2's own exit gate — re-profile the self-hosted lexer — had never been run;
+every payoff figure below it was synthetic. Run on
 441 KiB of real Kāra it first showed SSO **4% SLOWER**, and attributing that
 regression to a single function exposed the cause: one `cap > 0` ownership gate
 in `emit_vecstr_defensive_copy` still read UNSIGNED, so every inline String was
@@ -27,20 +27,21 @@ deep-copied back onto the heap at each by-value consuming call — re-spending t
 That gate survived Slice 2's sweep because `rustfmt` puts the predicate and its
 `cap` operand on different lines, so no line-oriented grep could match it.
 
-**THE FLIP IS REVERTED ON `main`, AND THAT IS THE IMPORTANT PART OF THIS ENTRY.**
-The unsigned gate was **masking a class of latent inline-descriptor bugs**: by
-de-inlining every String at every by-value consuming call it kept inline
-descriptors out of most of the compiler. Turning it off lets them flow, and two
-defects surfaced within one gate cycle — an enum-payload store made through the
-read-only accessor (found, fixed, and kept: it is a genuine latent-bug fix that
-is a no-op until the gate moves), and a **SIGSEGV in the self-hosted item
-parser** that is still open. Eight binaries went red on the first attempt. The
-number of remaining sites is unknown, which is exactly why one predicate is not a
-patch.
+**THE GATE WAS MASKING A CLASS OF LATENT BUGS, AND THAT IS THE OTHER HALF OF THE
+STORY.** By de-inlining every String at every by-value consuming call, the
+unsigned gate kept inline descriptors out of most of the compiler — every site
+downstream of it had been silently exempted from supporting them. Flipping it
+reddened **eight binaries** on the first attempt. The de-masking then converged
+in **two** fixes, not the open-ended list it looked like:
 
-So the opportunity is **costed and the price is ordinary work**: 2.3 billion
-instructions and 14.8% of wall time on the campaign's motivating workload, behind
-a de-masking pass whose length is unknown until it is run. See "SLICE 2'S OWN GATE
+1. an enum-payload store made through the read-only accessor (`param_own.rs`),
+   which wrote a spill-slot address into a payload word; and
+2. the mutation chokepoint's Vec guard (`vec_method.rs`), which tested
+   `!vec_elem_types.contains_key(v)` on the false belief that the table names
+   `Vec` receivers — it holds Strings too, so `push_str` on a pattern-bound
+   String skipped promotion entirely.
+
+All seven selfhost differentials pass at `KARAC_SSO=1` with all three changes in. See "SLICE 2'S OWN GATE
 FINALLY RAN" below for the profile, the four hypotheses it falsified first, the
 latent bug the flip exposed, and the near-miss where a stale `karac` nearly got
 the whole thing reverted as a no-op.
@@ -863,12 +864,26 @@ perf payoff lands in Slice 2.
 
   ### Still open on this boundary
 
-  - **The borrowed-view lifetime.** `karac_string_slice_borrow` returns a
-    pointer *into* its source, and when the source is inline that source is the
-    accessor's entry-block spill slot. Every consumer today is a
-    B-2026-08-18-22 scalar reader that uses it before the next accessor call to
-    the same slot overwrites it — so it is correct by the callers' habits, not
-    by construction, and nothing checks it.
+  - **The borrowed-view lifetime — AUDITED 2026-09-12, safe by enumeration.**
+    `karac_string_slice_borrow` returns a pointer *into* its source, and when
+    the source is inline that source is the accessor's entry-block spill slot,
+    so the view is only valid until the next accessor call reuses that slot.
+    The consumer set is small and closed, and every member is an immediate
+    read:
+
+    | consumer | what it does with the view |
+    |---|---|
+    | `calls.rs:172` | B-2026-08-18-22's scalar-reader receiver arm (`len`, `contains`, `starts_with`, …) — reads, returns a scalar |
+    | `maps.rs` ×5 | `get` / `contains_key` / `remove` / entry lookups — hashes and compares the bytes |
+    | `vec_method.rs:5340` | `push_str`'s ARGUMENT — memcpy source |
+
+    So it is correct today, and correct by enumeration rather than by
+    construction: nothing stops a future consumer from storing the view. The
+    check when adding one is "does this read the bytes before the next
+    `sso_string_parts_from_value` call in the same function?" — and the same
+    scan that found the enum-payload store (accessor result reaching a
+    `build_store` / `store_enum_word` / `build_insert_value`) is the mechanical
+    version of that question.
   - **The wasm return area** fix is reasoned, not measured (above).
   - **Unprobed surfaces**, each of which takes a `(ptr, len)` pair from a String
     and is one `substring`-built argument away from being probed exactly as
@@ -1031,7 +1046,7 @@ perf payoff lands in Slice 2.
      "A near-miss worth keeping".
 
 
-  ### THE LOSS WAS ONE MISSED GATE — WORTH 14.8%, AND NOT YET LANDABLE
+  ### THE LOSS WAS ONE MISSED GATE — WORTH 14.8%, AND NOW LANDED
 
   **Everything above this heading is the measurement that found the bug — it is
   correct and worth reading, and its conclusion is superseded.** The profile did
@@ -1115,12 +1130,15 @@ perf payoff lands in Slice 2.
   the compiler. It was load-bearing by accident — not for correctness of its own
   path, but as a *filter* keeping a whole representation out of code that had
   never been audited for it. Flipping it is therefore not a one-line perf fix; it
-  is a de-masking exercise whose size is unknown until it is run. Two defects
-  appeared in the first cycle. The second is still open:
+  is a de-masking exercise whose size is unknown until it is run. **It ran, and
+  it converged in two defects** — see "THE DE-MASKING RAN" below for both and
+  for the gate results. The second announced itself as:
 
   > `selfhost_parser_items` — **SIGSEGV** in the item-parser binary at
   > `KARAC_SSO=1` with the gate flipped, after the payload-store fix below made
-  > the lexer, parser and codegen differentials pass. Not yet diagnosed.
+  > the lexer, parser and codegen differentials pass.
+
+  and turned out to be the mutation chokepoint's inverted Vec guard.
 
   The cause sits one layer up, in the enum-payload arm of the by-value param deep
   copy (`param_own.rs`). It reconstructs a `{ptr,len,cap}` from the enum's payload
@@ -1179,6 +1197,85 @@ perf payoff lands in Slice 2.
   confirms the payload fix is the no-op it should be while the gate stays
   unsigned.
 
+
+  ### THE DE-MASKING RAN, AND IT WAS TWO FIXES — not an open-ended list
+
+  The flip's first attempt reddened eight binaries and the honest report was
+  "unknown number of defects behind this." Run properly — flip the gate, run the
+  selfhost differentials at `KARAC_SSO=1`, fix what breaks, repeat — it converged
+  in **two** rounds. All seven differentials green — and the full cycle with all
+  three changes in reports **`SSO=0` 16,820 passed / zero red** and **`SSO=1`
+  16,785 passed** with only B-2026-09-12-1's coroutine flake, plus the ASAN
+  `-O0` ratchet leg green at BOTH SSO settings (1593 passed, quarantine list
+  matched exactly). That last leg is the one that matters here: the flip moves
+  values from a copy arm to a pass-through arm, and `-O2` deletes the unobserved
+  allocation that a stranded buffer would show up as.
+
+      selfhost_codegen        ok      selfhost_parser_types   ok
+      selfhost_lexer          ok      selfhost_resolver       ok
+      selfhost_parser         ok      selfhost_typechecker    ok
+      selfhost_parser_items   ok
+
+  **All three defects share one root, and it is worth naming as a class.** Every
+  one is a guard or an accessor written while inline descriptors could not reach
+  it, so its assumption about the value it was handed was never tested:
+
+  | # | site | what was wrong |
+  |---|---|---|
+  | 1 | `param_own.rs` enum-payload store | used the read-only accessor to STORE a descriptor, writing a spill-slot address into a payload word |
+  | 2 | `vec_method.rs` mutation chokepoint | its "is this a Vec?" guard tested `!vec_elem_types.contains_key(v)`, but that table holds Strings too |
+  | 3 | *(none — 1 and 2 were the whole list)* | |
+
+  ### THE SIDE-TABLE MISREADING, because it happened twice
+
+  Defect 2 is the instructive one. The guard read:
+
+  ```rust
+  && !self.var_types.vec_elem_types.contains_key(var_name)   // "not a Vec" — WRONG
+  ```
+
+  `vec_elem_types` maps **any** `{ptr,len,cap}`-shaped local to its ELEMENT type.
+  A pattern-bound or let-bound `String` is in it with element `i8` —
+  `pattern_binding.rs`'s own comment calls it "the side table METHOD DISPATCH
+  reads to pick the String-shaped arm." So the guard skipped promotion for
+  exactly the Strings that needed it, and this doc's own description of it
+  ("erring toward promoting whenever the receiver is not positively known to be a
+  `Vec`") was backwards.
+
+  Measured: the self-hosted item parser SIGSEGV'd in
+  `collect_leading_doc_comments` on
+
+  ```kara
+  Some(prev) => { let mut joined = prev; joined.push_str("\n"); … }
+  ```
+
+  — an **invalid write of size 1** at address `0x656e6f20656e696c`, which is the
+  little-endian ASCII of `"line one"`: the string's own content bytes used as a
+  destination pointer. Valgrind names the function and decodes the address in one
+  step, which is why it found in minutes what reading could not.
+
+  **The guard is now gone rather than corrected.** Both Vec guards in this
+  campaign were wrong in the same unsafe direction, and there is no reliable
+  POSITIVE Vec signal to test (`var_type_names` carries struct names, not
+  container names; `string_vars` would reintroduce the same failure the moment an
+  entry is missing). So the mutating set promotes unconditionally:
+  `sso_deinline_in_place` is a not-taken branch for a `Vec` — its `cap` is a
+  count, never negative — and compiles out entirely with SSO off. The cost on
+  `Vec.push` is one load, one compare and one not-taken branch. **Re-introduce a
+  guard only off a positive Vec signal and only with a measurement showing that
+  cost matters**; never off the absence of a String signal.
+
+  ### What the masking cost, as a lesson
+
+  A gate nobody could grep for was not just hiding 2.3 billion instructions of
+  performance. It was **holding a whole value representation out of the
+  compiler**, and every site downstream of it had been silently exempted from
+  supporting inline Strings. That is why "flip one predicate" was the wrong
+  mental model and "de-mask, then fix what surfaces" was the right one — and why
+  the selfhost differentials, not the unit suite, were the instrument: they are
+  the only tests that run a real 20,000-line Kāra program end to end and compare
+  it against an independent implementation.
+
   ### Four mechanisms were falsified before this one was found
 
   Recorded because the ratio is the lesson. Each was plausible, each was derived
@@ -1212,21 +1309,21 @@ perf payoff lands in Slice 2.
 
   ### What this means for the plan
 
-  1. **The PERF objection is ANSWERABLE but not yet answered.** With the
-     `dcopy.owned` gate flipped, SSO is −21.9% instructions and 14.8% faster on
-     the self-hosted lexer with 69% of its allocations removed — so Slice 2's
-     gate ("instruction count + `malloc` leaf share must drop") passes on both
-     halves for the first time. But the flip is reverted, because it un-masks
-     latent inline-descriptor bugs. **The next slice is that de-masking**, and it
-     is now the highest-value work in the campaign: a known 2.3 billion
-     instructions behind a defect list of unknown length, of which two entries
-     are already known (one fixed, one an open SIGSEGV in `selfhost_parser_items`).
-  2. **A second, independent blocker is CORRECTNESS**: the move-suppression
-     disarm (see "A NEW BLOCKER FOR THE DEFAULT FLIP" above), which falsifies a
-     documented `UseAfterMove` guarantee. Its first step is still *trace the
-     disarm site*, not write the fix. Note the likely relationship — both are
-     cases of inline descriptors reaching code written before they existed, so
-     the de-masking work may well surface the disarm bug's cause too.
+  1. **The PERF objection IS ANSWERED, and the de-masking is done.** SSO is
+     −21.9% instructions and 14.8% faster on the self-hosted lexer with 69% of
+     its allocations removed, so Slice 2's gate ("instruction count + `malloc`
+     leaf share must drop") passes on both halves for the first time. The gate
+     flip and both of the latent bugs it un-masked are landed and gated.
+  2. **The remaining blocker is CORRECTNESS and it is now the ONLY one**: the
+     move-suppression disarm (see "A NEW BLOCKER FOR THE DEFAULT FLIP" above),
+     which falsifies a documented `UseAfterMove` guarantee. Its first step is
+     still *trace the disarm site*, not write the fix.
+     **Measured 2026-09-12, after the de-masking: it is UNCHANGED.** Both
+     reproducers behave exactly as before (`uam` reads empty at `KARAC_SSO=1`,
+     `mv3` still SIGSEGVs, exit 139), so the two are independent defects rather
+     than one cause — which is a useful negative, because the family resemblance
+     ("inline descriptors reaching code written before they existed") made it
+     reasonable to expect the de-masking to carry it away. It did not.
   3. **Re-measure the synthetic shapes before quoting them again.** The
      transient/retained table above was taken with the unsigned `dcopy` gate
      live, so every one of those numbers understates SSO — the retained rows most

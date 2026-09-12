@@ -1067,10 +1067,32 @@ impl<'ctx> super::Codegen<'ctx> {
             "try_reserve",
             "try_resize",
         ];
-        if self.sso_on()
-            && MUTATES_RECEIVER_IN_PLACE.contains(&method)
-            && !self.var_types.vec_elem_types.contains_key(var_name)
-        {
+        // NO Vec GUARD, and the guard that used to be here was WRONG IN THE
+        // UNSAFE DIRECTION. It read `!vec_elem_types.contains_key(var_name)`,
+        // on the belief that the table names Vec receivers — it does not.
+        // `vec_elem_types` maps any `{ptr,len,cap}`-shaped local to its ELEMENT
+        // type, and a pattern-bound or let-bound `String` goes in it with
+        // element `i8` (`pattern_binding.rs`, whose own comment calls it "the
+        // side table METHOD DISPATCH reads to pick the String-shaped arm").
+        // So the guard skipped promotion for exactly the Strings that need it.
+        //
+        // Measured, with the `dcopy.owned` gate signed: the self-hosted item
+        // parser SIGSEGV'd on `collect_leading_doc_comments`'s
+        // `joined.push_str("\n")` — a 1-byte write through an inline
+        // descriptor's field 0, at address 0x656e6f20656e696c, which is the
+        // ASCII of the string's own content, `"line one"`.
+        //
+        // It was masked until then: the unsigned gate de-inlined every by-value
+        // consumed String before it could reach a mutation, so `push_str` never
+        // saw an inline receiver. Both of this campaign's Vec guards have now
+        // been wrong the same way, so this one promotes unconditionally for the
+        // mutating set. `sso_deinline_in_place` is a no-op branch for a `Vec`
+        // (cap is a count, never negative) and compiles out entirely with SSO
+        // off; the runtime cost on `Vec.push` is one load, one compare and one
+        // not-taken branch. Re-introduce a guard only off a POSITIVE Vec signal
+        // and only with a measurement showing that cost matters — never off the
+        // absence of a String signal, which is what failed twice.
+        if self.sso_on() && MUTATES_RECEIVER_IN_PLACE.contains(&method) {
             self.sso_deinline_in_place(data_ptr, "recv.mut");
         }
 
