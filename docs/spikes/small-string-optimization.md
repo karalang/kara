@@ -9,26 +9,48 @@ were fixed in `3833ff8`.
 works and it is correct on every surface probed. Both construction sites are
 inline — `s[a..b]` and `String.substring`.
 
-**THE MOTIVATING WORKLOAD LOSES. Measured 2026-09-12, and it is the number to
-read first.** Slice 2's own exit gate — re-profile the self-hosted lexer — had
-never been run; every payoff figure above it was synthetic. Run on 441 KiB of
-real Kāra, SSO removes **31% of allocation calls** (16.3 M → 11.2 M) and is
-**4.0% SLOWER** (1450 → 1508 ms; +3.4% instructions retired, so it is extra work,
-not a cache artifact). The strings it captures average **4.4 bytes**, so it
-removes 31% of allocation *calls* and 1% of allocated *bytes* — exactly the
-allocations glibc's tcache already serves nearly free. See "SLICE 2'S OWN GATE
-FINALLY RAN" below; it also corrects two claims this doc previously made, one of
-them about this very workload.
+**A 14.8% WIN ON THE MOTIVATING WORKLOAD IS MEASURED, AVAILABLE, AND NOT YET
+LANDABLE. 2026-09-12.** Slice 2's own exit gate — re-profile the self-hosted
+lexer — had never been run; every payoff figure below it was synthetic. Run on
+441 KiB of real Kāra it first showed SSO **4% SLOWER**, and attributing that
+regression to a single function exposed the cause: one `cap > 0` ownership gate
+in `emit_vecstr_defensive_copy` still read UNSIGNED, so every inline String was
+deep-copied back onto the heap at each by-value consuming call — re-spending the
+`malloc` construction had just avoided. Flipping it to `SGT` measures:
 
-On synthetic benchmarks the payoff is **workload-shaped**: a **36–37% WIN** where
-sliced strings are RETAINED, an **11–41% LOSS** where they are sliced, used and
-discarded in the same iteration. Those numbers stand for their own shapes. What
-does NOT stand is the inference that real programs sit on the winning side — the
-lexer is a mix, and it loses. **Do not quote a payoff number without saying which
-shape it came from, and do not treat the synthetic proportions as a guide to
-where the cost is: the lexer profile contradicts the compare-folding split they
-imply.** This doc is the campaign's
-living handoff: layout decision (settled), staged slice plan, the tag-aware
+| 441 KiB × 200 passes | allocations | instructions | wall, best-of-7 |
+|---|---|---|---|
+| `KARAC_SSO=0` | 16,292,811 | 9,190,806,670 | 1484 ms |
+| `KARAC_SSO=1` before | 11,232,411 | 9,507,462,371 | 1524 ms |
+| **`KARAC_SSO=1` after** | **5,128,411 (−69%)** | **7,173,722,614 (−21.9%)** | **1265 ms (14.8% faster)** |
+
+That gate survived Slice 2's sweep because `rustfmt` puts the predicate and its
+`cap` operand on different lines, so no line-oriented grep could match it.
+
+**THE FLIP IS REVERTED ON `main`, AND THAT IS THE IMPORTANT PART OF THIS ENTRY.**
+The unsigned gate was **masking a class of latent inline-descriptor bugs**: by
+de-inlining every String at every by-value consuming call it kept inline
+descriptors out of most of the compiler. Turning it off lets them flow, and two
+defects surfaced within one gate cycle — an enum-payload store made through the
+read-only accessor (found, fixed, and kept: it is a genuine latent-bug fix that
+is a no-op until the gate moves), and a **SIGSEGV in the self-hosted item
+parser** that is still open. Eight binaries went red on the first attempt. The
+number of remaining sites is unknown, which is exactly why one predicate is not a
+patch.
+
+So the opportunity is **costed and the price is ordinary work**: 2.3 billion
+instructions and 14.8% of wall time on the campaign's motivating workload, behind
+a de-masking pass whose length is unknown until it is run. See "SLICE 2'S OWN GATE
+FINALLY RAN" below for the profile, the four hypotheses it falsified first, the
+latent bug the flip exposed, and the near-miss where a stale `karac` nearly got
+the whole thing reverted as a no-op.
+
+**The synthetic transient/retained table below is now STALE and must not be
+quoted.** Every number in it was taken with that unsigned gate live, so all of
+them understate SSO — the retained rows most of all, since a retained String is
+precisely what gets deep-copied at a consuming call. Re-run before citing.
+
+This doc is the campaign's living handoff: layout decision (settled), staged slice plan, the tag-aware
 accessor work list, and the verification matrix. Scoped 2026-06-12; Slice 1 landed
 2026-07-09; Slice 2 construction 2026-09-11; Slice 3's FFI boundary opened
 2026-09-12.
@@ -270,10 +292,14 @@ perf payoff lands in Slice 2.
   Gate: **re-profile the self-host lexer** (instruction count + `malloc` leaf share must
   drop), full ASAN + **Linux/LSan** (SSO touches every free path — authoritative leak
   gate).
-  **RAN 2026-09-12 — and FAILED its own criterion.** The `malloc` share dropped
-  as predicted (31% fewer allocation calls) but the instruction count went **UP**
-  3.4% and wall time 4.0%. See "SLICE 2'S OWN GATE FINALLY RAN" below. The gate
-  was written as a conjunction and only one half passed.
+  **RAN 2026-09-12. Fails as the tree stands; passes with a change that is not
+  yet landable.** First run: the `malloc` share dropped as predicted (31% fewer
+  allocation calls) but the instruction count went **UP** 3.4% and wall time
+  4.0% — a conjunction with only one half passing. Attributing that failure found
+  an unswept unsigned `cap > 0` gate; flipping it passes both halves
+  (allocations **−69%**, instructions **−21.9%**, wall **14.8% faster**) and
+  reddens eight binaries, because that gate was masking latent inline bugs. See
+  "SLICE 2'S OWN GATE FINALLY RAN" below.
 - **Slice 2 progress — INLINE CONSTRUCTION IS LIVE behind `KARAC_SSO=1` (2026-09-11).**
   `s[a..b]` now builds an inline String when the slice fits the 23-byte overlay,
   allocating nothing. Default remains OFF; the read sweep is ~1/3 done.
@@ -376,6 +402,13 @@ perf payoff lands in Slice 2.
   proven to reach the code it targets.**
 
   ### The payoff measurement — three workloads, and the answer flips
+
+  > **STALE as of 2026-09-12 — do not quote these numbers.** Every row below was
+  > measured with the unsigned `dcopy.owned` gate live, which deep-copied each
+  > inline String back onto the heap at every by-value consuming call. All of
+  > them understate SSO, the retained rows most of all. Re-run before citing.
+  > The mechanism, and what it was worth on the self-hosted lexer, are under
+  > "THE LOSS WAS ONE MISSED GATE" below.
 
   AOT, archives matching `3833ff8`, best-of-N wall time (best-of, not mean: the
   container is noisy and the minimum is the stabler statistic):
@@ -480,6 +513,10 @@ perf payoff lands in Slice 2.
   ### `String.substring` is now a construction site (2026-09-11)
 
   The site the profile actually uses. Same two-shape split as `s[a..b]`:
+
+  > **STALE as of 2026-09-12 — same reason as the table above.** Measured with
+  > the unsigned `dcopy.owned` gate live; both rows understate SSO. Re-run
+  > before citing.
 
   | shape | allocations 0 → 1 | `SSO=0` | `SSO=1` | |
   |---|---|---|---|---|
@@ -971,29 +1008,238 @@ perf payoff lands in Slice 2.
   ```
 
   Both valgrind counters are deterministic, so they can be trusted from a single
-  run and under load; only the wall-time row needs best-of-N. **Check the token
-  total matches across legs before reading any other number** — it is the cheap
-  proof that the two binaries did the same work.
+  run and under load; only the wall-time row needs best-of-N.
+
+  **The token total is NOT a correctness check, and treating it as one cost a
+  session.** This harness sums `toks.len()`, so it proves the two binaries lexed
+  the same NUMBER of tokens and says nothing about their CONTENT. A miscompile
+  that drops String payload content keeps the count identical — and drops
+  allocations, which reads as a spectacular win. That exact thing happened on
+  2026-09-12: a −69%/−21.5% result was recorded from a compiler that was
+  rendering `IDENT ab` as `IDENT x\u{fffd}`.
+
+  Two rules, both cheap:
+
+  1. **Gate every perf number on `KARAC_SSO=1 cargo test --features llvm --test
+     selfhost_lexer` being GREEN for the exact `karac` that built the benchmark.**
+     That differential compares against the Rust lexer token-for-token, which is
+     the correctness oracle this harness does not have. Perf numbers from a
+     compiler that fails it are meaningless.
+  2. **`cmp` the benchmark binaries across any compiler change.** A change that
+     does nothing and a change you did not compile look identical from the
+     outside, and only one of them is worth reverting — see the near-miss under
+     "A near-miss worth keeping".
+
+
+  ### THE LOSS WAS ONE MISSED GATE — WORTH 14.8%, AND NOT YET LANDABLE
+
+  **Everything above this heading is the measurement that found the bug — it is
+  correct and worth reading, and its conclusion is superseded.** The profile did
+  its job: by attributing the regression to a single function it exposed an
+  unswept `cap > 0` gate, and flipping it turns SSO from a 2.6% loss into a
+  **14.8% win** on the campaign's motivating workload.
+
+  **The flip is NOT on `main`.** It reddened eight binaries — all seven selfhost
+  differentials plus the coroutine flake — because the unsigned gate was masking
+  latent inline-descriptor bugs elsewhere. One is fixed below; a SIGSEGV in the
+  self-hosted item parser is still open. The numbers here are what the flip is
+  WORTH, not what the tree currently does.
+
+  Same harness, same 441 KiB input, same 200 passes, all three verified against
+  a `karac` whose selfhost differential passes:
+
+  | | heap allocations | instructions retired | wall, best-of-7 |
+  |---|---|---|---|
+  | `KARAC_SSO=0` | 16,292,811 | 9,190,806,670 | 1484 ms |
+  | `KARAC_SSO=1`, before | 11,232,411 (−31%) | 9,507,462,371 (**+3.4%**) | 1524 ms (**−2.6%**) |
+  | `KARAC_SSO=1`, after | **5,128,411 (−69%)** | **7,173,722,614 (−21.9%)** | **1265 ms (14.8% faster)** |
+
+  ### How the profile found it
+
+  DWARF-attributed callgrind named one function: **`Lexer.make_spanned`, 348.6 M
+  → 776.6 M instructions**, 46% of the entire Kāra-side regression. Disassembly
+  showed why — **187 → 591 instructions, and its `malloc`/`memcpy` call sites
+  went 5 → 13.** SSO was *adding* allocation sites to the hottest per-token
+  function, which is the opposite of the whole design.
+
+  `make_spanned(token: Token)` takes an owned aggregate by value, so it hits
+  `emit_vecstr_defensive_copy` — the deep copy that gives a retaining callee its
+  own buffer. Its ownership gate was:
+
+  ```rust
+  inkwell::IntPredicate::UGT, cap, i64_t.const_int(0, false), "dcopy.owned",
+  ```
+
+  An inline `cap` is negative, so read **unsigned** it is enormous and the gate is
+  always true: every inline String was deep-copied onto the heap, re-spending
+  exactly the `malloc` construction had just avoided. Construction removed the
+  allocation and this handed it straight back, one function later.
+
+  `SGT` sends an inline source down the pass-through arm, where the phi already
+  returns the header verbatim. That is correct for the same reason the `cap == 0`
+  literal case is — an inline String owns no buffer, so there is no alias to
+  defend against, and the descriptor re-derives its data pointer from whatever
+  address it lands at. `Vec` never sets the flag, so `SGT` ≡ `UGT` there.
+
+  ### Why it survived every previous sweep
+
+  **The predicate and its `cap` operand are on different lines.** Slice 2's sweep
+  found 16 unsigned gates and flipped 14 with line-oriented greps; this one is
+  formatted across five lines by `rustfmt`, so no `grep 'UGT.*cap'` could ever
+  have matched it. A multi-line-aware census — balance the parens of each
+  `build_int_compare(…)` call, then test its operands — finds it immediately, and
+  reports it as **the last one in the tree**.
+
+  That is the fourth scanner blind spot this campaign has hit, and the pattern is
+  now unmistakable: *every* mechanical census here has been a lower bound, and
+  each gap was a formatting accident rather than a reasoning error — a closing
+  paren on the wrong line, an aggregate expression instead of an identifier, a
+  `Result`-wrapped return type, and now a multi-line argument list. **Write the
+  census against the syntax tree, not against lines.**
+
+  Note also what this was NOT. Unlike the 14 gates Slice 2 flipped, this was never
+  a soundness bug: the copy path handles an inline source correctly, because
+  `sso_string_parts_from_value` hands it the right bytes. It was a pure
+  performance bug — and a total one on that path, which is why a predicate nobody
+  could see was worth 2.3 billion instructions.
+
+
+  ### THE FLIP EXPOSED LATENT BUGS — the first is the doc's own rule, broken
+
+  The gate flip alone is **not** the fix. Landing it by itself reddened eight
+  binaries: all seven selfhost differentials plus the known coroutine flake, with
+  the lexer rendering `IDENT ab` as `IDENT x\u{fffd}` — right length, wrong bytes.
+
+  **This is the entry's real finding.** The unsigned gate de-inlined every String
+  at every by-value consuming call, so inline descriptors never reached most of
+  the compiler. It was load-bearing by accident — not for correctness of its own
+  path, but as a *filter* keeping a whole representation out of code that had
+  never been audited for it. Flipping it is therefore not a one-line perf fix; it
+  is a de-masking exercise whose size is unknown until it is run. Two defects
+  appeared in the first cycle. The second is still open:
+
+  > `selfhost_parser_items` — **SIGSEGV** in the item-parser binary at
+  > `KARAC_SSO=1` with the gate flipped, after the payload-store fix below made
+  > the lexer, parser and codegen differentials pass. Not yet diagnosed.
+
+  The cause sits one layer up, in the enum-payload arm of the by-value param deep
+  copy (`param_own.rs`). It reconstructs a `{ptr,len,cap}` from the enum's payload
+  words, runs the defensive copy, and then writes the result back — and it wrote
+  it back through **`sso_string_parts_from_value`**:
+
+  ```rust
+  let (cd, cl) = self.sso_string_parts_from_value(copied, "p14e.c");   // WRONG here
+  let cc = build_extract_value(copied, 2, ...);                        // raw cap
+  store_enum_word(data_idx, ptr_to_int(cd)); store_enum_word(len_idx, cl); …
+  ```
+
+  That is a **store**, not a read. For an inline `copied` the accessor returns the
+  address of an entry-block SPILL SLOT, so the payload ends up holding a `cap`
+  that still carries the inline tag next to a `ptr` into a frame that dies. A
+  reader then trusts `cap`, recomputes the data pointer from the payload's own
+  address, and reads whatever is there.
+
+  **This is exactly the rule this doc has carried since the accessor landed** —
+  *"the returned pointer is valid only for an immediate read; storing it into
+  anything outliving the frame dangles"* — violated in the tree, by the read
+  sweep, at a site that looks like a ptr+len read and is not one. It was latent
+  only because the unsigned gate below it de-inlined every source first, so
+  `copied` was always heap and the accessor was a no-op. The moment the gate went
+  signed, the latent bug became the live one.
+
+  The fix is to round-trip the three words verbatim — a descriptor is complete in
+  every state, and the payload should hold it as-is.
+
+  **A validated scan says this was the only such site.** The check is: for each
+  accessor call, do its result names reach a `build_store` / `store_enum_word` /
+  `build_ptr_to_int` within the next 25 lines? Run against `HEAD` it finds
+  `param_own.rs:3728`; run against the fixed tree it finds nothing. **Validating
+  the scanner against the known instance before trusting its zero is the step
+  that makes a null result mean anything** — four scanner blind spots in this
+  campaign say an unvalidated census is a guess.
+
+  ### The first measurement of the fix was taken on the CORRUPT build
+
+  Recorded because the reasoning that caught it was nearly right and the
+  conclusion nearly wrong. The −69% allocations were first measured from the
+  gate-flip-only compiler — the one corrupting payloads — which is grounds for
+  suspecting the win was an artifact: a miscompile that drops String content
+  would also drop allocations.
+
+  Re-measured after the payload fix: allocations **identical** (5,128,411) and
+  instructions slightly **better** (7,211,445,814 → 7,173,722,614). The suspicion
+  was wrong — the corruption changed which bytes were stored, not how many
+  allocations happened — but it was the right suspicion to have, and checking it
+  cost one re-run. **A perf number from a compiler that fails its differential is
+  not evidence, even when it turns out to be right.**
+
+  Gates on the landed state (the payload fix, WITHOUT the gate flip): fmt OK;
+  clippy GREEN on both legs; `--features llvm` 109 binaries per leg, **both
+  `KARAC_SSO=0` and `=1` at 16,809 passed with ZERO red binaries** — which also
+  confirms the payload fix is the no-op it should be while the gate stays
+  unsigned.
+
+  ### Four mechanisms were falsified before this one was found
+
+  Recorded because the ratio is the lesson. Each was plausible, each was derived
+  by reading code or disassembly, and each was wrong or negligible:
+
+  | hypothesis | predicted | measured |
+  |---|---|---|
+  | lost compare folding (`bcmp`) | "~5 of the 9 ms" | **0.9%** of the regression |
+  | the descriptor round trip | fewer redundant stores | **negative** — instructions went UP |
+  | the `Vec` len select | the diffuse cost | **42 instructions** out of 9.5 B |
+  | `try_inline_into` call overhead | 61% of the regression | net **−612 M** — construction was always winning |
+
+  Only end-to-end counters held up. The profile was worth more than all four
+  readings of the source that preceded it.
+
+  ### A near-miss worth keeping
+
+  The first measurement of this fix reported allocations and instructions
+  **exactly** unchanged — 9,507,462,371 to the single instruction — and was one
+  command away from being written up as "the flip is a no-op, reverting." It was
+  measuring a `karac` built two minutes earlier, from before the flip: the
+  measurement was fired off the binary's mtime changing rather than off the build
+  task's completion.
+
+  An exact match to nine significant figures is not a null result, it is a
+  fingerprint — a genuine no-op still perturbs layout and inlining. The cheap
+  guard is `cmp` on the two artifacts: **a change that does nothing and a change
+  you did not compile look identical from the outside**, and only one of them is
+  worth reverting. Same shape as CLAUDE.md's stale-archive and `git archive`
+  bisect traps — a result that fails to move when the input demonstrably did.
 
   ### What this means for the plan
 
-  1. **The default flip is further away than "clear two blockers".** Slice 5 was
-     already blocked on the move-suppression disarm and on transient-shape perf.
-     This says the perf blocker is not a narrow one: on the campaign's own
-     motivating workload, with construction working exactly as designed and five
-     million allocations genuinely removed, the read path still loses.
-  2. **The next perf work is the read path, not the compare sites** — making the
-     tag-select cheaper or rarer everywhere, e.g. threading the Kāra type so a
-     `Vec` never pays (Slice 3's perf half, still undone), or keeping known-heap
-     Strings off the select entirely. Branch-not-select drops to a footnote.
-  3. **SSO may be right as an opt-in rather than a default.** The retained
-     synthetic shape is a real +36–37% and is not invalidated by this; what is
-     invalidated is the assumption that real programs sit on that side. A
-     workload that builds and keeps many short strings still wins. A compiler
-     front end does not.
-  4. **Do not re-derive this from the synthetic benchmarks.** They are correct
-     about their own shapes and misleading about proportions — the 5-of-9-ms
-     compare-folding split is the specific number this profile contradicts.
+  1. **The PERF objection is ANSWERABLE but not yet answered.** With the
+     `dcopy.owned` gate flipped, SSO is −21.9% instructions and 14.8% faster on
+     the self-hosted lexer with 69% of its allocations removed — so Slice 2's
+     gate ("instruction count + `malloc` leaf share must drop") passes on both
+     halves for the first time. But the flip is reverted, because it un-masks
+     latent inline-descriptor bugs. **The next slice is that de-masking**, and it
+     is now the highest-value work in the campaign: a known 2.3 billion
+     instructions behind a defect list of unknown length, of which two entries
+     are already known (one fixed, one an open SIGSEGV in `selfhost_parser_items`).
+  2. **A second, independent blocker is CORRECTNESS**: the move-suppression
+     disarm (see "A NEW BLOCKER FOR THE DEFAULT FLIP" above), which falsifies a
+     documented `UseAfterMove` guarantee. Its first step is still *trace the
+     disarm site*, not write the fix. Note the likely relationship — both are
+     cases of inline descriptors reaching code written before they existed, so
+     the de-masking work may well surface the disarm bug's cause too.
+  3. **Re-measure the synthetic shapes before quoting them again.** The
+     transient/retained table above was taken with the unsigned `dcopy` gate
+     live, so every one of those numbers understates SSO — the retained rows most
+     of all, since a retained String is exactly what gets deep-copied at a
+     consuming call. The −11%/−19%/−41% transient losses may also have shrunk.
+     **Nothing in that table should be quoted until it is re-run.**
+  4. **Branch-not-select stays a footnote** — measured at 0.9% of the regression
+     it was filed against.
+  5. **The read-path pessimism above was wrong, and the reason is worth keeping.**
+     "The cost is diffuse, one select on every String read" was an inference from
+     a per-function delta, not a measurement of the selects themselves. The
+     diffuse cost was real but small; one concentrated gate was 2.3 billion
+     instructions. **Attribute to a line before concluding a cost is structural.**
 - **Slice 4 (optional, "go further").** Pair with the lexer source-slices (below) to get
   the hot path to Rust *zero*-copy; small-string fast paths in concat/compare.
 

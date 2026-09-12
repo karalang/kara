@@ -3779,7 +3779,35 @@ impl<'ctx> super::Codegen<'ctx> {
                     let copied = self
                         .emit_vecstr_defensive_copy(sv.into(), elem_ty, elem_te.as_ref())
                         .into_struct_value();
-                    let (cd, cl) = self.sso_string_parts_from_value(copied, "p14e.c");
+                    // VERBATIM, and that is the whole point: this STORES a
+                    // descriptor back into the enum's payload words, it does not
+                    // read its bytes. `sso_string_parts_from_value` was wrong
+                    // here — for an inline `copied` it hands back the address of
+                    // an entry-block SPILL SLOT, and storing that produced an
+                    // incoherent descriptor: a `cap` still carrying the inline
+                    // tag, next to a `ptr` into a frame that dies. Readers then
+                    // trust `cap`, recompute the data pointer from the payload's
+                    // own address, and get whatever is there. Measured: the
+                    // self-hosted lexer rendered `IDENT ab` as `IDENT x\u{fffd}`.
+                    //
+                    // It was LATENT until the `dcopy.owned` gate below it went
+                    // signed, because the unsigned gate de-inlined every source
+                    // first, so `copied` was always heap and the accessor was a
+                    // no-op. This is the doc's own rule biting: the accessor's
+                    // pointer is valid for an IMMEDIATE READ only and must never
+                    // be stored into anything outliving the frame. The three
+                    // words are a complete descriptor in every state — inline,
+                    // static or owned-heap — so they round-trip as they are.
+                    let cd = self
+                        .builder
+                        .build_extract_value(copied, 0, "p14e.cd")
+                        .unwrap()
+                        .into_pointer_value();
+                    let cl = self
+                        .builder
+                        .build_extract_value(copied, 1, "p14e.cl")
+                        .unwrap()
+                        .into_int_value();
                     let cc = self
                         .builder
                         .build_extract_value(copied, 2, "p14e.cc")
