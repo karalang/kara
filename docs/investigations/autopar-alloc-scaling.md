@@ -514,18 +514,40 @@ together on kata:288 not because they share a partitioning strategy, but because
 they share an allocator." They do not share an allocator problem, because the
 mirror does not use the allocator. Whatever puts `uniqueabbr_par.c` at 0.76x on
 the M5, malloc contention is not it, and `B-2026-08-28-76` leans on that C row
-as its single most important piece of evidence.
+as its single most important piece of evidence. (The next section settles what
+it is.)
 
-**A hypothesis for the M5, not a finding here.** `abbrev` in that C file is
-`sprintf(out, "%c%zu%c", ...)`, once per punch, a million times, across 18
-threads. `B-2026-09-05-23` already measured libc `snprintf` serializing on this
-exact kata on macOS, worth the difference between 1.08x and 3.45x on the *Kāra*
-lane. The C mirror calls the same family in the same loop at the same rate. If
-the M5's C collapse is `sprintf` rather than the partition or the allocator,
-then all three witnesses reduce to causes already named and the C row stops
-cutting against a Kāra-side diagnosis. It is minutes to test on an M5 — replace
-that `sprintf` with manual digit formatting and re-run the par lane. Not
-testable here: no macOS, and on glibc the C par lane has no collapse to remove.
+### The hypothesis above was right: the C mirror's collapse is `sprintf`
+
+Measured on the M5, 2026-09-12, hyperfine 15 runs, all three arms printing the
+same sink (`unique 573650`). `uniqueabbr_par_nofmt.c` in the kata's bench
+directory is `uniqueabbr_par.c` with `abbrev`'s digits written by hand and
+nothing else changed:
+
+| | mean | user | sys |
+|---|---:|---:|---:|
+| C seq | 54.34 ms | 52.35 | 1.28 |
+| C par, `sprintf` | **70.94 ms** | 160.58 | **903.57** |
+| C par, manual digits | **3.24 ms** | 22.30 | 0.95 |
+
+**0.77× against sequential with `sprintf` — reproducing this row's recorded
+0.76× exactly — and 16.76× without it.** The same program, the same
+partitioning, the same hardware; 21.9× between the two par lanes.
+
+The 903 ms of **system** time on a 71 ms wall-clock run is the mechanism showing
+through, and `/usr/bin/time -l` corroborates it: 865 involuntary context
+switches against 63. That is the serialization `B-2026-09-05-23` recorded for
+the Kāra lane on this same kata, in the C mirror, for the same reason.
+
+**So all three witnesses now reduce to causes already named.** The C row does
+not cut against a Kāra-side diagnosis any more — it was never evidence about
+partitioning, and with the formatting removed the C mirror gets 16.76× on ~15.7
+cores, which is close to what the hardware can offer. The hardware is fine and
+the static partition is fine.
+
+That makes `B-2026-08-28-76`'s own headline *stronger*, not weaker: Kāra's 3.45×
+on this kata now sits against a C mirror doing 16.76× on the same machine, with
+no remaining witness suggesting everyone collapses here.
 
 Kāra's par lane is **not** at parity with C on this host — 24.9–27.5 ms against
 18.5–19.8 ms, ~1.35x slower — against a mirror that allocates nothing while
