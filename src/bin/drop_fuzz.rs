@@ -1063,7 +1063,15 @@ mod llvm_main {
             self.emit(format!("        let mut {n}: Option[Tracked] = Some({t});"));
             if self.rng.chance(1, 2) {
                 self.emit(format!("        {n} = None;"));
-                self.emit(format!("        acc = acc + {n}.is_none().to_i64();"));
+                // `bool` has no `to_i64` — the language never had one, so the
+                // old `{n}.is_none().to_i64()` spelling made the WHOLE program
+                // ill-typed and the differential threw it away entire
+                // (B-2026-09-12-9). This branch fires 1-in-2 on a deliberate
+                // memory shape (displacing a live `Tracked` out of a variant
+                // payload), so half of that shape's coverage was being
+                // discarded silently. Read the displacement through an `if`
+                // instead, which is what the emitted line meant.
+                self.emit(format!("        if {n}.is_none() {{ acc = acc + 1i64; }}"));
             } else {
                 self.add_var_mut(n, Ty::OptTracked);
             }
@@ -1772,8 +1780,11 @@ fn slot_tracked_peek(s: ref Slot[Tracked]) -> i64 {
         /// rest. But an `unreachable!` that calls itself an *internal error* is
         /// not a feature gap, it is the interpreter's own invariant breaking on
         /// a program that parsed, typechecked AND ownership-checked, and
-        /// discarding it silently is the same hole B-2026-09-10-30 records one
-        /// surface over (`DiffOutcome::Invalid` swallowing codegen failures).
+        /// discarding it silently is the same hole B-2026-09-10-30 recorded one
+        /// surface over (a single `DiffOutcome::Invalid` swallowing codegen
+        /// failures alongside front-end rejects). That one is now fixed —
+        /// `CodegenRefused` is its own outcome — and this is the interpreter
+        /// analogue of the same principle.
         ///
         /// So: keep the outcome Invalid, keep it out of the exit code, and save
         /// the program. Deduplicated by message, because one shape reproduces
@@ -2329,6 +2340,13 @@ fn slot_tracked_peek(s: ref Slot[Tracked]) -> i64 {
         /// `--features llvm`) but NOT the runtime archives or `cc` — no linking
         /// or execution happens. Mutually exclusive with the ASan run.
         differential: bool,
+        /// `--fail-on-codegen-refused`: make `--differential` exit nonzero when
+        /// any generated program typechecked and then codegen refused to lower
+        /// it (B-2026-09-10-30). OFF by default, because the corpus currently
+        /// carries a standing population of such shapes and flipping it on
+        /// would redden the gate for a class that is already filed row by row.
+        /// Turning it on is how a run is held to "no NEW unlowerable shape".
+        fail_on_codegen_refused: bool,
     }
 
     fn parse_args() -> Config {
@@ -2341,6 +2359,7 @@ fn slot_tracked_peek(s: ref Slot[Tracked]) -> i64 {
             verbose: false,
             oracle_only: false,
             differential: false,
+            fail_on_codegen_refused: false,
         };
         let mut args = std::env::args().skip(1);
         while let Some(a) = args.next() {
@@ -2399,10 +2418,51 @@ fn slot_tracked_peek(s: ref Slot[Tracked]) -> i64 {
                     }
                     std::process::exit(0);
                 }
+                "--differential-verify" => {
+                    // Debug aid, and the only way to SEE a codegen refusal from
+                    // the command line (B-2026-09-10-30): the generated corpus
+                    // contains no unlowerable shape, so the refusal path is not
+                    // reachable through `--differential` at all. Ask the
+                    // differential what it makes of a program ON DISK and print
+                    // the outcome — the sibling of `--verify`, which answers the
+                    // same question for the ASan runner.
+                    let path = args.next().unwrap_or_default();
+                    let src = std::fs::read_to_string(&path).unwrap_or_else(|e| {
+                        eprintln!("--differential-verify {path}: {e}");
+                        std::process::exit(2);
+                    });
+                    match karac::drop_differential::differential_check(&src) {
+                        DiffOutcome::NotASubject { reason } => {
+                            println!("NotASubject({reason})");
+                        }
+                        DiffOutcome::CodegenRefused { error } => {
+                            println!("CodegenRefused: {error}");
+                            println!("  grouped as: {}", normalize_codegen_error(&error));
+                            if cfg.fail_on_codegen_refused {
+                                std::process::exit(1);
+                            }
+                        }
+                        DiffOutcome::CaptureEdge => println!("CaptureEdge"),
+                        DiffOutcome::Checked {
+                            drops_checked,
+                            divergences,
+                        } => {
+                            println!(
+                                "Checked: {drops_checked} drop(s), {} divergence(s)",
+                                divergences.len()
+                            );
+                            for d in &divergences {
+                                println!("  [DIFF] fn={} place=`{}`", d.function, d.place);
+                            }
+                        }
+                    }
+                    std::process::exit(0);
+                }
                 "--no-shrink" => cfg.shrink = false,
                 "--keep-going" => cfg.keep_going = true,
                 "--oracle-only" => cfg.oracle_only = true,
                 "--differential" => cfg.differential = true,
+                "--fail-on-codegen-refused" => cfg.fail_on_codegen_refused = true,
                 "--verbose" => cfg.verbose = true,
                 "-h" | "--help" => {
                     print_help();
@@ -2433,6 +2493,12 @@ fn slot_tracked_peek(s: ref Slot[Tracked]) -> i64 {
              \x20                oracle drop schedule vs codegen's emitted drops. Flags a\n\
              \x20                missing drop (leak) localized to (function, place). Needs\n\
              \x20                LLVM but no runtime archives / cc — no linking or execution\n\
+             \x20 --differential-verify P\n\
+             \x20                ask the differential what it makes of the program at P\n\
+             \x20                and print the outcome (sibling of --verify)\n\
+             \x20 --fail-on-codegen-refused\n\
+             \x20                with --differential: exit nonzero if any program typechecked\n\
+             \x20                and codegen then refused to lower it (off by default)\n\
              \x20 --verbose      per-program progress\n"
         );
     }
@@ -2771,6 +2837,15 @@ fn slot_tracked_peek(s: ref Slot[Tracked]) -> i64 {
         let mut drops_checked = 0u64;
         let mut skipped_capture = 0u64;
         let mut findings: Vec<DiffFinding> = Vec::new();
+        // B-2026-09-10-30: the two skip populations, counted rather than
+        // dropped on the floor. `not_a_subject` is keyed by which front-end
+        // gate rejected the program; `refused` groups codegen's refusals by
+        // MESSAGE, because one unlowerable shape reproduces across every
+        // generated program that contains it — the distinct messages are the
+        // actionable output, the raw count is just the corpus tax.
+        let mut not_a_subject: BTreeMap<&'static str, u64> = BTreeMap::new();
+        let mut refused: BTreeMap<String, (u64, u64)> = BTreeMap::new();
+        let mut refused_total = 0u64;
 
         eprintln!(
             "drop_fuzz: differential over {} programs (seed base {}) — oracle drop schedule vs \
@@ -2788,7 +2863,31 @@ fn slot_tracked_peek(s: ref Slot[Tracked]) -> i64 {
                 // model-conservatism, not a leak — out of the heap-core gate.
                 // Counted, never silently dropped.
                 DiffOutcome::CaptureEdge => skipped_capture += 1,
-                DiffOutcome::Invalid => {}
+                // Parsed/typed/ownership rejects: genuinely nothing to compare.
+                // Counted so the denominator is legible, not because they are
+                // interesting.
+                DiffOutcome::NotASubject { reason } => {
+                    if cfg.verbose {
+                        eprintln!("  [skip] seed={seed} not a subject ({reason})");
+                    }
+                    *not_a_subject.entry(reason).or_default() += 1;
+                }
+                // Typechecked, then codegen refused it. Uncounted toward
+                // coverage (there are no emitted drops to compare), but
+                // REPORTED — this is the gate going blind exactly where codegen
+                // is weakest, and it used to be indistinguishable from a
+                // program that never typechecked.
+                DiffOutcome::CodegenRefused { error } => {
+                    if cfg.verbose {
+                        eprintln!("  [refused] seed={seed} {error}");
+                    }
+                    refused_total += 1;
+                    let key = normalize_codegen_error(&error);
+                    refused
+                        .entry(key)
+                        .and_modify(|(n, _)| *n += 1)
+                        .or_insert((1, seed));
+                }
                 DiffOutcome::Checked {
                     drops_checked: dc,
                     divergences,
@@ -2826,31 +2925,120 @@ fn slot_tracked_peek(s: ref Slot[Tracked]) -> i64 {
             programs,
             drops_checked,
             skipped_capture,
+            &not_a_subject,
+            &refused,
+            refused_total,
             &findings,
             elapsed,
         );
 
+        let not_subject_total: u64 = not_a_subject.values().sum();
         eprintln!("\n── differential summary ──");
-        eprintln!("  programs checked : {programs}");
-        eprintln!("  drops checked    : {drops_checked}");
+        eprintln!("  programs generated : {}", cfg.count);
+        eprintln!("  programs checked   : {programs}");
+        eprintln!("  drops checked      : {drops_checked}");
         eprintln!("  skipped (§7 capture edge) : {skipped_capture}");
-        eprintln!("  divergences      : {}", findings.len());
-        eprintln!("  elapsed          : {:.1}s", elapsed.as_secs_f64());
+        // The two lines below are the point of B-2026-09-10-30: before it,
+        // every program in both populations left the corpus with no trace, so
+        // "N programs checked" could stay flat while the generator's reach
+        // shrank underneath it.
+        let by_gate = not_a_subject
+            .iter()
+            .map(|(r, n)| format!("{r} {n}"))
+            .collect::<Vec<_>>()
+            .join(", ");
+        eprintln!(
+            "  not a subject      : {not_subject_total}{}",
+            if by_gate.is_empty() {
+                String::new()
+            } else {
+                format!("  ({by_gate})")
+            }
+        );
+        eprintln!(
+            "  codegen REFUSED    : {refused_total}  ({} distinct shape(s))",
+            refused.len()
+        );
+        for (msg, (n, seed)) in &refused {
+            eprintln!("      {n:>4}x  seed={seed}  {msg}");
+        }
+        eprintln!("  divergences        : {}", findings.len());
+        eprintln!("  elapsed            : {:.1}s", elapsed.as_secs_f64());
         if findings.is_empty() {
             eprintln!(
                 "  ✓ on every function, codegen's emitted drop set covers the oracle's schedule."
             );
-        } else {
+        }
+        if !findings.is_empty() {
+            eprintln!("  report: {}/differential.md", cfg.out.display());
+            std::process::exit(1);
+        }
+        // Opt-in, off by default — see the `Config` field for why the corpus's
+        // standing refusal population is not a red gate today.
+        if cfg.fail_on_codegen_refused && refused_total > 0 {
+            eprintln!(
+                "  ✗ --fail-on-codegen-refused: {refused_total} program(s) typechecked and \
+                 codegen refused to lower them ({} distinct shape(s))",
+                refused.len()
+            );
             eprintln!("  report: {}/differential.md", cfg.out.display());
             std::process::exit(1);
         }
     }
 
+    /// Collapse a codegen diagnostic to its SHAPE so refusals group.
+    ///
+    /// The message carries a `file:line:col` prefix and quotes the offending
+    /// identifier, both of which differ per generated program while the defect
+    /// is the same one. Stripping them is what turns "26 refusals" into "two
+    /// unlowerable shapes" — the form a ledger row can actually be written
+    /// from.
+    fn normalize_codegen_error(e: &str) -> String {
+        // Drop a leading `<file>:<line>:<col>: ` span prefix if present.
+        let body = match e.find(": ") {
+            Some(i) if e[..i].contains(".kara:") || e[..i].chars().any(|c| c == ':') => {
+                let head = &e[..i];
+                if head.split(':').count() >= 3 {
+                    &e[i + 2..]
+                } else {
+                    e
+                }
+            }
+            _ => e,
+        };
+        // Replace `'<ident>'` with `'_'` so the same defect over different
+        // generated names lands in one bucket.
+        let mut out = String::with_capacity(body.len());
+        let mut rest = body;
+        while let Some(i) = rest.find('\'') {
+            out.push_str(&rest[..i]);
+            match rest[i + 1..].find('\'') {
+                Some(j) => {
+                    out.push_str("'_'");
+                    rest = &rest[i + 1 + j + 1..];
+                }
+                None => {
+                    out.push_str(&rest[i..]);
+                    rest = "";
+                    break;
+                }
+            }
+        }
+        out.push_str(rest);
+        // Collapse whitespace runs: a diagnostic that wrapped and one that did
+        // not are the same shape, and must land in the same bucket.
+        out.split_whitespace().collect::<Vec<_>>().join(" ")
+    }
+
+    #[allow(clippy::too_many_arguments)]
     fn write_differential_report(
         cfg: &Config,
         programs: u64,
         drops_checked: u64,
         skipped_capture: u64,
+        not_a_subject: &BTreeMap<&'static str, u64>,
+        refused: &BTreeMap<String, (u64, u64)>,
+        refused_total: u64,
         findings: &[DiffFinding],
         elapsed: Duration,
     ) {
@@ -2862,16 +3050,60 @@ fn slot_tracked_peek(s: ref Slot[Tracked]) -> i64 {
              `codegen::drop_obs`, seq surface). A divergence is a **missing drop**: the oracle \
              schedules a drop codegen emitted no cleanup action for → a leak, localized to \
              `(function, place)`.\n\n\
+             - programs generated: **{}**\n\
              - programs checked: **{programs}**\n\
              - scheduled drops checked: **{drops_checked}**\n\
              - skipped (§7 closure/par capture edge): **{skipped_capture}**\n\
+             - not a differential subject: **{}**\n\
+             - codegen refused: **{refused_total}**\n\
              - divergences: **{}**\n\
              - base seed: `{}`\n\
              - elapsed: {:.1}s\n\n",
+            cfg.count,
+            not_a_subject.values().sum::<u64>(),
             findings.len(),
             cfg.seed,
             elapsed.as_secs_f64()
         ));
+
+        // B-2026-09-10-30. `programs checked` is a self-selecting denominator
+        // unless the skips are visible next to it: every shape codegen chokes
+        // on leaves the corpus, so the divergence ratio can sit at 0 while the
+        // compiler gets worse on exactly those shapes. These two sections are
+        // what make the exclusions countable.
+        if !not_a_subject.is_empty() {
+            md.push_str("## Not a differential subject\n\n");
+            md.push_str(
+                "Rejected by the front end, so there is nothing to compare. Expected in a \
+                 random corpus; a sharp move here means the generator drifted.\n\n\
+                 | gate | programs |\n|---|---|\n",
+            );
+            for (reason, n) in not_a_subject {
+                md.push_str(&format!("| {reason} | {n} |\n"));
+            }
+            md.push('\n');
+        }
+
+        md.push_str("## Codegen refused\n\n");
+        if refused_total == 0 {
+            md.push_str("_None: every program the front end accepted, codegen lowered._\n\n");
+        } else {
+            md.push_str(&format!(
+                "**{refused_total} program(s)** passed parse, typecheck and ownership and then \
+                 failed `compile_to_ir`. These are NOT counted toward coverage — there are no \
+                 emitted drops to compare against — but each is a shape the front end accepts \
+                 and the backend cannot lower, which is its own ledger class. Grouped by \
+                 message, since one unlowerable shape reproduces across every generated program \
+                 containing it; reproduce one with `--seed <seed> --count 1`.\n\n\
+                 | programs | seed | codegen refusal |\n|---|---|---|\n"
+            ));
+            let mut rows: Vec<_> = refused.iter().collect();
+            rows.sort_by_key(|(msg, (n, _))| (std::cmp::Reverse(*n), (*msg).clone()));
+            for (msg, (n, seed)) in rows {
+                md.push_str(&format!("| {n} | `{seed}` | {msg} |\n"));
+            }
+            md.push('\n');
+        }
         if findings.is_empty() {
             md.push_str(
                 "_No divergences: codegen's emitted drop set covers the oracle's schedule on \
@@ -3142,7 +3374,67 @@ fn slot_tracked_peek(s: ref Slot[Tracked]) -> i64 {
     // work — and the next double-run bug would be the first thing to test it.
     #[cfg(test)]
     mod tests {
-        use super::DropLog;
+        use super::{normalize_codegen_error, DropLog, Gen};
+
+        // ── B-2026-09-10-30: codegen-refusal grouping ──────────────────────
+        //
+        // The raw refusal count is the corpus tax; the DISTINCT SHAPES are the
+        // actionable output, since one unlowerable construct reproduces across
+        // every generated program containing it. That only holds if two
+        // refusals of the same shape normalize to one key — hence these.
+
+        #[test]
+        fn refusals_of_one_shape_over_different_names_group_together() {
+            let a = "p.kara:1:51: codegen: indexed-receiver method 'len' on 'a'";
+            let b = "other.kara:9:3: codegen: indexed-receiver method 'len' on 'zz14'";
+            assert_eq!(normalize_codegen_error(a), normalize_codegen_error(b));
+            // …and the shape survives normalization rather than being erased.
+            assert!(normalize_codegen_error(a).contains("indexed-receiver method"));
+            assert!(!normalize_codegen_error(a).contains("p.kara"));
+        }
+
+        #[test]
+        fn a_wrapped_diagnostic_groups_with_an_unwrapped_one() {
+            assert_eq!(
+                normalize_codegen_error("p.kara:1:1: codegen: outer is\n   not an Array"),
+                normalize_codegen_error("q.kara:2:2: codegen: outer is not an Array")
+            );
+        }
+
+        #[test]
+        fn genuinely_different_refusals_stay_apart() {
+            let a = "p.kara:1:1: codegen: indexed-receiver method 'len' on 'a'";
+            let b = "p.kara:1:1: codegen: no dispatcher arm for '.clone()' on 'a'";
+            assert_ne!(normalize_codegen_error(a), normalize_codegen_error(b));
+        }
+
+        #[test]
+        fn a_message_with_no_span_prefix_survives_unchanged() {
+            // Not every CodegenError carries `file:line:col`; the normalizer
+            // must not eat the body when the prefix is absent.
+            assert_eq!(
+                normalize_codegen_error("codegen: something went wrong"),
+                "codegen: something went wrong"
+            );
+        }
+
+        // ── B-2026-09-12-9: the generator emitted a method that never existed ─
+        //
+        // `bool` has no `to_i64`, so `<expr>.is_none().to_i64()` made the WHOLE
+        // program ill-typed and the differential discarded it entire. This is a
+        // shape assertion rather than a typecheck run: the generator is the
+        // thing under test, and a spelling that cannot typecheck is the defect.
+        #[test]
+        fn the_generator_never_calls_to_i64_on_a_bool() {
+            for seed in 1..200u64 {
+                let src = Gen::new(seed).build_program();
+                assert!(
+                    !src.contains(".to_i64()"),
+                    "seed {seed} emits `.to_i64()`; `bool` has no such method and the \
+                     differential throws the whole program away (B-2026-09-12-9):\n{src}"
+                );
+            }
+        }
 
         #[test]
         fn balanced_log_reports_nothing() {

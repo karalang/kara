@@ -70,6 +70,18 @@
 //!     borrow-*escape decision procedure* for stored/heap-env closures is still
 //!     open (judgment §7) but is not exercised by the fuzzer.
 //!
+//! **What never reaches the comparison is reported, not dropped**
+//! (B-2026-09-10-30). A program can leave the corpus three ways, and they are
+//! three different facts: the front end rejected it ([`DiffOutcome::NotASubject`],
+//! carrying which gate), codegen refused to lower it
+//! ([`DiffOutcome::CodegenRefused`], carrying the diagnostic), or it is a known
+//! capture edge ([`DiffOutcome::CaptureEdge`]). These used to be one silent
+//! `Invalid`, which made `programs checked` a self-selecting denominator: every
+//! shape codegen chokes on left the corpus, so the divergence ratio could sit at
+//! 0 while the compiler got worse on exactly those shapes. The runner now prints
+//! all three counts, and `--fail-on-codegen-refused` turns the second into a
+//! gate.
+//!
 //! Only the **missing-drop (leak)** direction is checked. The extra-drop
 //! (double-free) direction is not emit-time observable — codegen neutralizes a
 //! moved-out value's drop with a runtime null/cap guard while keeping the
@@ -89,11 +101,37 @@ pub struct Divergence {
 }
 
 /// The result of checking one program.
+///
+/// The two non-subject variants are deliberately **not** one value
+/// (B-2026-09-10-30). They used to be: a single `Invalid` covered parse,
+/// typecheck, ownership *and* `compile_to_ir` failures alike, so a program
+/// codegen could not lower left the corpus with the same silent status as one
+/// that never typechecked. That is backwards for a gate whose job is to find
+/// codegen defects — it went blind exactly where codegen is weakest, and
+/// "codegen refuses this shape" is its own standing ledger class. Splitting
+/// them costs one variant and turns a silent exclusion into a number.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub enum DiffOutcome {
-    /// Not a valid differential subject (parse / type / ownership error, or a
-    /// codegen failure) — not counted toward coverage.
-    Invalid,
+    /// The program never reached codegen, so there is nothing to compare: it
+    /// failed to parse, typecheck, or ownership-check. Genuinely not a
+    /// differential subject — not counted toward coverage, and not a finding.
+    ///
+    /// `reason` names which of the three gates rejected it (`"parse"`,
+    /// `"typecheck"`, `"ownership"`), because a caller that cannot tell them
+    /// apart cannot tell a generator bug from a compiler one.
+    NotASubject { reason: &'static str },
+    /// The program parsed, typechecked and ownership-checked — and then
+    /// **codegen refused it** (`compile_to_ir` returned an error). Not counted
+    /// toward coverage either (there are no emitted drops to compare against),
+    /// but this is a *finding-shaped* skip rather than an uninteresting one:
+    /// every such program is a shape the front end accepts and the backend
+    /// cannot lower.
+    ///
+    /// `error` is the codegen diagnostic, kept so a runner can group refusals
+    /// by message — the distinct messages are the actionable output, since one
+    /// unlowerable shape reproduces across every generated program containing
+    /// it.
+    CodegenRefused { error: String },
     /// Reserved: a program the differential deliberately skips. No longer
     /// produced — both `spawn` closure captures (oracle demotes to Borrowed) and
     /// `par {}` shared-struct captures (freed via scope-exit `RcDec`, which the
@@ -136,12 +174,14 @@ pub fn differential_check(src: &str) -> DiffOutcome {
 pub fn differential_check_on(src: &str, tree: OracleTree) -> DiffOutcome {
     let mut parsed = crate::parse(src);
     if !parsed.errors.is_empty() {
-        return DiffOutcome::Invalid;
+        return DiffOutcome::NotASubject { reason: "parse" };
     }
     let resolved = crate::resolve(&parsed.program);
     let typed = crate::typecheck(&parsed.program, &resolved);
     if !typed.errors.is_empty() {
-        return DiffOutcome::Invalid;
+        return DiffOutcome::NotASubject {
+            reason: "typecheck",
+        };
     }
 
     // On the SURFACE tree, analyze before lowering (rule 1 & 2).
@@ -156,7 +196,9 @@ pub fn differential_check_on(src: &str, tree: OracleTree) -> DiffOutcome {
     crate::lower(&mut parsed.program, &typed);
     let ownership = crate::ownershipcheck(&parsed.program, &typed);
     if !ownership.errors.is_empty() {
-        return DiffOutcome::Invalid;
+        return DiffOutcome::NotASubject {
+            reason: "ownership",
+        };
     }
 
     // On the LOWERED tree, analyze after lowering — the tree codegen sees.
@@ -173,8 +215,15 @@ pub fn differential_check_on(src: &str, tree: OracleTree) -> DiffOutcome {
     crate::codegen::drop_obs::begin();
     let ir = crate::codegen::compile_to_ir(&parsed.program, Some(&ownership), None);
     let recs = crate::codegen::drop_obs::take();
-    if ir.is_err() {
-        return DiffOutcome::Invalid;
+    // B-2026-09-10-30: a refusal HERE is not the same event as a parse or type
+    // error above. The program is well-formed by every front-end rule and the
+    // backend still cannot lower it, which is the defect class this gate exists
+    // to find — so it gets its own outcome and carries the diagnostic out,
+    // rather than joining the front-end rejects in one silent bucket.
+    if let Err(e) = ir {
+        return DiffOutcome::CodegenRefused {
+            error: e.to_string(),
+        };
     }
 
     // Codegen's emitted drop set, per function → distinct places.

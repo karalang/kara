@@ -335,13 +335,25 @@ fn par_block_shared_capture_is_checked_clean() {
 }
 
 #[test]
-fn ownership_error_is_invalid_not_a_divergence() {
+fn a_move_checked_program_is_not_a_subject_and_says_which_gate_rejected_it() {
     // Use-after-move: `karac check` rejects it, so it is not a codegen question.
+    //
+    // This asserted a bare `DiffOutcome::Invalid` until B-2026-09-10-30 split
+    // that variant. The value of naming the gate is that this case and a
+    // CODEGEN REFUSAL used to be the same value — so a program the backend
+    // could not lower was indistinguishable from this one, which is the
+    // blindness the row measured.
     let src = format!(
         "fn main() {{ let s: String = {S}; let mut v: Vec[String] = Vec.new(); \
          v.push(s); println(s.len()); }}"
     );
-    assert_eq!(differential_check(&src), DiffOutcome::Invalid);
+    match differential_check(&src) {
+        DiffOutcome::NotASubject { reason } => assert!(
+            reason == "ownership" || reason == "typecheck",
+            "a move violation should be rejected by ownership or typecheck, got {reason:?}"
+        ),
+        other => panic!("expected NotASubject, got {other:?}"),
+    }
 }
 
 // ── Drop-bearing shapes (B-2026-08-23-5) ────────────────────────────────────
@@ -512,4 +524,76 @@ fn generic_enum_match_projects_the_substituted_payload() {
          match g {{ X(v) => {{ println(v.len()); }}, Y => {{}} }} }}"
     );
     assert_eq!(assert_clean(&src), 1);
+}
+
+// ─────────────── B-2026-09-10-30: the two non-subject populations ───────────
+//
+// `DiffOutcome` used to have ONE `Invalid` covering parse, typecheck, ownership
+// AND `compile_to_ir` failures, so a program the backend could not lower left
+// the corpus with the same silent status as one that never typechecked — the
+// gate went blind exactly where codegen is weakest. These cases pin the split
+// so it cannot quietly collapse back: a codegen refusal must be reachable as
+// its own outcome, and a front-end reject must name the gate that rejected it.
+
+#[test]
+fn a_codegen_refusal_is_its_own_outcome_not_a_front_end_reject() {
+    // The row's measured program: `karac check` passes, `karac build` fails
+    // with `indexed-receiver method 'len' on 'a' — outer is not a
+    // Vec/Slice/Array`. Before the split this returned the same value as a
+    // syntax error.
+    let src = format!(
+        "fn speek(a: ref Array[String, 2]) -> i64 {{ return a[0].len(); }}\n\
+         fn main() {{ let aa: Array[Array[String, 2], 2] = [[{S}, {S}], [{S}, {S}]]; \
+         println(speek(aa[0])); }}"
+    );
+    match differential_check(&src) {
+        DiffOutcome::CodegenRefused { error } => {
+            // The diagnostic must come OUT, not just the fact of failure — the
+            // distinct messages are what a runner groups refusals by.
+            assert!(
+                error.contains("indexed-receiver"),
+                "refusal should carry codegen's diagnostic, got: {error}"
+            );
+        }
+        other => panic!(
+            "a program that typechecks and codegen refuses must be CodegenRefused, got {other:?}"
+        ),
+    }
+}
+
+#[test]
+fn front_end_rejects_name_the_gate_that_rejected_them() {
+    // All three used to be indistinguishable from each other AND from a codegen
+    // refusal. A caller that cannot tell them apart cannot tell a generator bug
+    // from a compiler one.
+    let cases: [(&str, &str); 2] = [
+        ("fn main( {", "parse"),
+        (
+            "fn main() { let x: i64 = \"not an int\"; println(x); }",
+            "typecheck",
+        ),
+    ];
+    for (src, want) in cases {
+        match differential_check(src) {
+            DiffOutcome::NotASubject { reason } => {
+                assert_eq!(reason, want, "wrong gate named for:\n{src}")
+            }
+            other => panic!("expected NotASubject({want}) for:\n{src}\ngot {other:?}"),
+        }
+    }
+}
+
+#[test]
+fn a_valid_program_is_still_checked() {
+    // The control: the split must not have turned a good subject into a skip.
+    // Without this, all three cases above pass vacuously if `differential_check`
+    // regressed into never returning `Checked`.
+    let src = format!("fn main() {{ let s: String = {S}; println(s.len()); }}");
+    match differential_check(&src) {
+        DiffOutcome::Checked { drops_checked, .. } => assert!(
+            drops_checked > 0,
+            "the control shape should schedule at least one drop"
+        ),
+        other => panic!("expected Checked, got {other:?}"),
+    }
 }
