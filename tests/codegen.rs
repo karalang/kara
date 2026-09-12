@@ -153945,6 +153945,162 @@ fn main() {
         }
     }
 
+    /// B-2026-09-12-11 — a QUALIFIED constructor at an argument position
+    /// (`plainD(Option[(Rq, Rq)].Some((..)))`) ran its payload's `Drop` body on
+    /// NO compiled backend, while the BARE `plainD(Some((..)))` spelling of the
+    /// same program was correct on all four surfaces.
+    ///
+    /// ONE CLASS UNDER TWO SPELLINGS, which is the whole content of the defect.
+    /// B-2026-08-22-17 established that `T[args].method(..)` parses as a
+    /// `MethodCall` while `T.method(..)` parses as a `Call`;
+    /// `optres_arg_is_unowned_temp` lists `MethodCall` in its first arm beside
+    /// `Identifier` / `FieldAccess` / `Index` and answers `false` for all of
+    /// them on the reading "a live binding or a place rooted at one". For a
+    /// qualified CONSTRUCTOR that reading is simply wrong — it mints a fresh
+    /// enum value nothing else owns — so the caller never staged
+    /// `__optres_arg_bodies_tmp` and the payload-bodies walker was never even
+    /// EMITTED (confirmed in captured IR, not inferred from the predicate).
+    ///
+    /// NOT A WIDENING OF THAT PREDICATE'S SEMANTIC CLASS, which matters because
+    /// its doc records that widening it turns three shapes clean today into
+    /// DOUBLE FREES. The `Call` arm already answers `true` for every enum
+    /// constructor unconditionally; this makes the same answer reachable
+    /// through the second spelling. Cells 8–10 are those three shapes in the
+    /// qualified spelling — a callee that STORES the argument, one that RETURNS
+    /// it, and one that returns it INSIDE AN AGGREGATE — and each must show
+    /// exactly one body and no abort.
+    ///
+    /// THE ENVELOPE PREDICATE NEEDED THE SAME RECOGNIZER, and its half is a
+    /// LEAK rather than a missing body, so it is pinned in
+    /// `tests/memory_sanitizer.rs` where LSan can see it (32 B per call):
+    /// `optres_arg_mints_field_envelope` matched only `ExprKind::Call` too.
+    ///
+    /// MEMORY WAS CLEAN THROUGHOUT — before the fix and after, every cell here
+    /// is 0 valgrind errors with all heap blocks freed. That is why no
+    /// sanitizer caught this half: the box and its interior always had owners
+    /// and only the user body was missing, exactly as B-2026-09-09-18's
+    /// fresh-temp hole went unnoticed.
+    ///
+    /// NON-ARGUMENT POSITIONS WERE NEVER AFFECTED (cell 12), which was an open
+    /// question on the row rather than an assumption: a `let` RHS, a `return`
+    /// and a `Vec`-literal element all ran the body correctly in both
+    /// spellings, because they reach ownership through the let/return
+    /// machinery rather than through the argument-freshness predicates.
+    #[test]
+    fn e2e_qualified_ctor_argument_runs_its_payload_drop_body() {
+        const PRE: &str = "struct Rq { id: i64 }\n\
+             impl Drop for Rq { fn drop(mut ref self) { println(f\"dRq{self.id}\") } }\n";
+        for (label, body, want) in [
+            // 1 — THE ROW: a boxed TUPLE payload behind a qualified ctor.
+            (
+                "tuple-payload-qualified-arg",
+                "fn plainD(x: Option[(Rq, Rq)]) { match x { Some(t) => { println(\"s\") } None => { println(\"n\") } } }\n\
+                 fn main() { plainD(Option[(Rq, Rq)].Some((Rq { id: 1 }, Rq { id: 2 }))); println(\"end\") }\n",
+                "s\ndRq1\ndRq2\nend\n",
+            ),
+            // 2 — a STRUCT payload, so this is not tuple-specific.
+            (
+                "struct-payload-qualified-arg",
+                "fn plainD(x: Option[Rq]) { match x { Some(r) => { println(f\"s:{r.id}\") } None => { println(\"n\") } } }\n\
+                 fn main() { plainD(Option[Rq].Some(Rq { id: 1 })); println(\"end\") }\n",
+                "s:1\ndRq1\nend\n",
+            ),
+            // 3 — an `Array` payload. Visible only since B-2026-09-10-27 gave
+            //     the interpreter its element walk; before that this shape sat
+            //     inside that row's agreed silence.
+            (
+                "array-payload-qualified-arg",
+                "fn plainD(x: Option[Array[Rq, 2]]) { match x { Some(t) => { println(f\"s:{t[0].id}\") } None => { println(\"n\") } } }\n\
+                 fn main() { let a: Array[Rq, 2] = [Rq { id: 1 }, Rq { id: 2 }]; plainD(Option[Array[Rq, 2]].Some(a)); println(\"end\") }\n",
+                "s:1\ndRq1\ndRq2\nend\n",
+            ),
+            // 4 — `Result`'s `Ok` side.
+            (
+                "result-ok-qualified-arg",
+                "fn plainD(x: Result[Array[Rq, 2], i64]) { match x { Ok(t) => { println(f\"s:{t[0].id}\") } Err(e) => { println(\"n\") } } }\n\
+                 fn main() { let a: Array[Rq, 2] = [Rq { id: 1 }, Rq { id: 2 }]; plainD(Result[Array[Rq, 2], i64].Ok(a)); println(\"end\") }\n",
+                "s:1\ndRq1\ndRq2\nend\n",
+            ),
+            // 5 — and its `Err` side, whose tag is the other one.
+            (
+                "result-err-qualified-arg",
+                "fn plainD(x: Result[i64, Array[Rq, 2]]) { match x { Ok(n) => { println(\"ok\") } Err(t) => { println(f\"e:{t[0].id}\") } } }\n\
+                 fn main() { let a: Array[Rq, 2] = [Rq { id: 1 }, Rq { id: 2 }]; plainD(Result[i64, Array[Rq, 2]].Err(a)); println(\"end\") }\n",
+                "e:1\ndRq1\ndRq2\nend\n",
+            ),
+            // 6 — NESTED, both levels qualified, so the recognizer has to hold
+            //     for a ctor sitting inside a ctor.
+            (
+                "nested-qualified-arg",
+                "fn plainD(x: Option[Option[Rq]]) { match x { Some(o) => { println(\"s\") } None => { println(\"n\") } } }\n\
+                 fn main() { plainD(Option[Option[Rq]].Some(Option[Rq].Some(Rq { id: 1 }))); println(\"end\") }\n",
+                "s\ndRq1\nend\n",
+            ),
+            // 7 — CONTROL: the BARE spelling of cell 1, correct before this
+            //     change and unchanged by it. The two spellings now agree,
+            //     which is the property the row is actually about.
+            (
+                "bare-spelling-control",
+                "fn plainD(x: Option[(Rq, Rq)]) { match x { Some(t) => { println(\"s\") } None => { println(\"n\") } } }\n\
+                 fn main() { plainD(Some((Rq { id: 1 }, Rq { id: 2 }))); println(\"end\") }\n",
+                "s\ndRq1\ndRq2\nend\n",
+            ),
+            // 8 — CONTROL, escape shape 1: the callee STORES the argument into
+            //     a `mut ref` accumulator that outlives the call. Owning it in
+            //     the caller as well would be a double free, so the count of
+            //     `dRq1` here is the load-bearing assertion.
+            (
+                "control-callee-stores-the-arg",
+                "fn keep(x: Option[Rq], acc: mut ref Vec[Option[Rq]]) { acc.push(x); println(\"k\") }\n\
+                 fn main() { let mut acc: Vec[Option[Rq]] = []; keep(Option[Rq].Some(Rq { id: 1 }), mut acc); println(f\"len:{acc.len()}\"); println(\"end\") }\n",
+                "k\nlen:1\ndRq1\nend\n",
+            ),
+            // 9 — CONTROL, escape shape 2: the callee RETURNS the param, so the
+            //     destination `let` owns it.
+            (
+                "control-callee-returns-the-arg",
+                "fn giveback(x: Option[Rq]) -> Option[Rq] { return x }\n\
+                 fn main() { let z = giveback(Option[Rq].Some(Rq { id: 1 })); match z { Some(r) => { println(f\"z:{r.id}\") } None => { println(\"zn\") } } println(\"end\") }\n",
+                "z:1\ndRq1\nend\n",
+            ),
+            // 10 — CONTROL, escape shape 3: returned INSIDE AN AGGREGATE, the
+            //      route B-2026-09-01-35's escape analysis added and a
+            //      syntactic store gate could not see.
+            (
+                "control-callee-returns-it-in-an-aggregate",
+                "fn wrap(x: Option[Rq]) -> (Option[Rq], i64) { return (x, 7) }\n\
+                 fn main() { let t = wrap(Option[Rq].Some(Rq { id: 1 })); match t.0 { Some(r) => { println(f\"w:{r.id}\") } None => { println(\"wn\") } } println(\"end\") }\n",
+                "w:1\ndRq1\nend\n",
+            ),
+            // 11 — CONTROL: a real ASSOCIATED FUNCTION on an enum type, whose
+            //      qualified spelling is the same `MethodCall` shape but whose
+            //      method names no variant. The recognizer must decline it —
+            //      it mints nothing this frame can claim — and the program must
+            //      still work.
+            (
+                "control-assoc-fn-on-an-enum-type",
+                "enum Md[T] { A(T), B }\n\
+                 impl[T] Md[T] { fn make(n: T) -> Md[T] { return A(n) } }\n\
+                 fn takeit(x: Md[i64]) { match x { A(n) => { println(f\"a:{n}\") } B => { println(\"b\") } } }\n\
+                 fn main() { takeit(Md[i64].make(3)); println(\"end\") }\n",
+                "a:3\nend\n",
+            ),
+            // 12 — CONTROL: a NON-ARGUMENT position. Correct in both spellings
+            //      before this change, and pinned so the fix stays confined to
+            //      the argument-freshness predicates it edited.
+            (
+                "control-qualified-ctor-as-a-let-rhs",
+                "fn main() { let z = Option[Rq].Some(Rq { id: 1 }); println(\"l\"); println(\"end\") }\n",
+                "dRq1\nl\nend\n",
+            ),
+        ] {
+            let Some(out) = run_program(&format!("{PRE}{body}")) else {
+                return;
+            };
+            assert_eq!(out, want, "[{label}]");
+        }
+    }
+
     /// B-2026-09-10-5 — a NAMED LOCAL of a user generic enum passed BY VALUE
     /// smashed the caller's stack, because the moved-from-slot disarm zeroed
     /// `Option`'s four words into whatever the binding's slot actually was.

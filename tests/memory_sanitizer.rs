@@ -87152,4 +87152,104 @@ fn main() {
             "b9-boxed-tuple-escaping-param-control",
         );
     }
+
+    /// B-2026-09-12-11's LEAK half — the QUALIFIED constructor spelling at an
+    /// argument position was invisible to BOTH argument-freshness predicates,
+    /// and the envelope one loses memory rather than a `Drop` body.
+    ///
+    /// `optres_arg_mints_field_envelope` matched only `ExprKind::Call`, so a
+    /// qualified `cls(Result[W, i64].Ok(W { o: Option.Some(Option.Some(i)) }))`
+    /// minted a 32-byte `coerce_to_payload_words` envelope per call that no
+    /// frame owned: measured 128 B definitely lost in 4 blocks over four calls
+    /// at `KARAC_OPT_LEVEL=0`, against 0 bytes and all blocks freed for the
+    /// BARE `cls(Ok(W { .. }))` spelling of the same program. The output is
+    /// identical either way, which is why this half needs a sanitizer cell and
+    /// the body half in `tests/codegen.rs` does not.
+    ///
+    /// CELL 1 IS AN `-O0` CELL, and that was measured rather than assumed: on a
+    /// deliberately reverted tree this test failed on cell 3, not cell 1, so at
+    /// this harness's default opt level LLVM deletes an envelope nothing
+    /// observes and LSan sees nothing to report. The cell earns its keep on
+    /// `scripts/asan-o0-leg.sh`, which re-runs this whole suite at
+    /// `KARAC_OPT_LEVEL=0` — the same reason CLAUDE.md calls that leg the place
+    /// a leak-class cell is actually measured. Cell 3's buffer is large enough
+    /// to survive the optimizer, which is why the pre-fix failure surfaced
+    /// there: 276 B in 9 allocations under LSan, 144 B direct in 3 blocks under
+    /// valgrind at `-O0`.
+    ///
+    /// Cells 3 and 4 are the DOUBLE-FREE direction of the same admission,
+    /// because `optres_arg_is_unowned_temp` now answers `true` for this
+    /// spelling and that hands the caller ownership of a real heap buffer. A
+    /// payload the callee copies in must be freed exactly once (cell 3); one the
+    /// callee STORES somewhere that outlives the call must be freed by the
+    /// store's owner and not here as well (cell 4). Both abort under ASAN if
+    /// the admission reaches a shape the escape gate should have excluded.
+    #[test]
+    fn asan_qualified_ctor_argument_envelope_has_an_owner() {
+        // 1 — the row's leak: 128 B in 4 blocks before the fix.
+        assert_clean_asan_run(
+            "struct W { o: Option[Option[i64]] }\n\
+             fn cls(x: Result[W, i64]) {\n\
+             \x20   match x { Ok(w) => { println(\"ok\") } Err(e) => { println(\"er\") } }\n\
+             }\n\
+             fn main() {\n\
+             \x20   for i in 0..4 {\n\
+             \x20       cls(Result[W, i64].Ok(W { o: Option.Some(Option.Some(i)) }));\n\
+             \x20   }\n\
+             \x20   println(\"end\");\n\
+             }\n",
+            &["ok", "ok", "ok", "ok", "end"],
+            "b11-qualified-ctor-field-envelope",
+        );
+        // 2 — CONTROL: the BARE spelling of cell 1, clean before and after.
+        assert_clean_asan_run(
+            "struct W { o: Option[Option[i64]] }\n\
+             fn cls(x: Result[W, i64]) {\n\
+             \x20   match x { Ok(w) => { println(\"ok\") } Err(e) => { println(\"er\") } }\n\
+             }\n\
+             fn main() {\n\
+             \x20   for i in 0..4 {\n\
+             \x20       cls(Ok(W { o: Option.Some(Option.Some(i)) }));\n\
+             \x20   }\n\
+             \x20   println(\"end\");\n\
+             }\n",
+            &["ok", "ok", "ok", "ok", "end"],
+            "b11-bare-ctor-field-envelope-control",
+        );
+        // 3 — a real heap payload behind the qualified spelling. The caller now
+        //     owns this `{ptr,len,cap}` buffer, so a second owner shows up here
+        //     as a double free rather than as a leak.
+        assert_clean_asan_run(
+            "fn show(x: Option[Vec[String]]) {\n\
+             \x20   match x { Some(v) => { println(f\"n:{v.len()}\") } None => { println(\"n\") } }\n\
+             }\n\
+             fn main() {\n\
+             \x20   for i in 0..3 {\n\
+             \x20       let vs: Vec[String] = [f\"aaaaaaaaaaaaaaaaaaaa-{i}\", f\"bbbbbbbbbbbbbbbbbbbb-{i}\"];\n\
+             \x20       show(Option[Vec[String]].Some(vs));\n\
+             \x20   }\n\
+             \x20   println(\"end\");\n\
+             }\n",
+            &["n:2", "n:2", "n:2", "end"],
+            "b11-qualified-ctor-heap-payload",
+        );
+        // 4 — the ESCAPE shape: the callee pushes the argument into an
+        //     accumulator that outlives the call, so the caller must NOT own it.
+        assert_clean_asan_run(
+            "fn keep(x: Option[Vec[String]], acc: mut ref Vec[Option[Vec[String]]]) {\n\
+             \x20   acc.push(x);\n\
+             \x20   println(\"k\");\n\
+             }\n\
+             fn main() {\n\
+             \x20   let mut acc: Vec[Option[Vec[String]]] = [];\n\
+             \x20   for i in 0..3 {\n\
+             \x20       let vs: Vec[String] = [f\"cccccccccccccccccccc-{i}\", f\"dddddddddddddddddddd-{i}\"];\n\
+             \x20       keep(Option[Vec[String]].Some(vs), mut acc);\n\
+             \x20   }\n\
+             \x20   println(f\"len:{acc.len()}\");\n\
+             }\n",
+            &["k", "k", "k", "len:3"],
+            "b11-qualified-ctor-escaping-arg",
+        );
+    }
 }

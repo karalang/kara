@@ -3746,6 +3746,28 @@ impl<'ctx> super::Codegen<'ctx> {
     }
 
     pub(super) fn optres_arg_mints_field_envelope(&self, arg: &Expr) -> bool {
+        // B-2026-09-12-11 — the QUALIFIED constructor spelling again, and this
+        // predicate needed it too. The envelope is minted by the construction
+        // itself, so it cannot matter which of the two spellings performed the
+        // construction; before this, only the `Call` arm below could see one.
+        //
+        // Measured over `fn cls(x: Result[W, i64])` for
+        // `struct W { o: Option[Option[i64]] }`, four calls at
+        // `KARAC_OPT_LEVEL=0`: the qualified
+        // `cls(Result[W, i64].Ok(W { o: Option.Some(Option.Some(i)) }))` lost
+        // 128 B in 4 blocks — 32 B of envelope per call, this row's sibling
+        // allocation — while the bare `cls(Ok(W { .. }))` spelling of the same
+        // program freed every block. The ctor's ARGUMENTS still have to clear
+        // `envelope_operand_is_unowned` exactly as they do in that arm: the
+        // spelling of the construction is what changed, not the question about
+        // what it wraps.
+        if let ExprKind::MethodCall { args, .. } = &arg.kind {
+            if self.is_qualified_enum_variant_ctor(arg) {
+                return args
+                    .iter()
+                    .all(|a| self.envelope_operand_is_unowned(&a.value));
+            }
+        }
         match &arg.kind {
             ExprKind::Call { args, .. } => {
                 if self.enum_name_of_expr(arg).is_some() {
@@ -3814,7 +3836,64 @@ impl<'ctx> super::Codegen<'ctx> {
         }
     }
 
+    /// B-2026-09-12-11 — is this expression the QUALIFIED spelling of an enum
+    /// constructor (`Option[(R, R)].Some(..)`), which the parser hands us as a
+    /// `MethodCall` rather than the `Call` the bare `Some(..)` produces?
+    ///
+    /// A recognizer rather than a widening of any one arm, because the two
+    /// freshness predicates below both need the answer and both would otherwise
+    /// read the same expression as a place rooted at a live binding. That
+    /// reading is what B-2026-08-22-17 established as the trap here: the
+    /// qualified form `T[args].method(..)` PARSES as a method call while the
+    /// unqualified `T.method(..)` parses as a call, so a rule written against
+    /// `ExprKind::Call` silently covers one spelling of the same program.
+    ///
+    /// Measured before this landed, over `fn plainD(x: Option[(R, R)])`: the
+    /// qualified argument printed `s end` on all three compiled lanes against
+    /// `s dR1 dR2 end` on `--interp`, while the bare argument was correct on
+    /// all four — and the IR showed the payload-bodies walker was never even
+    /// EMITTED for the qualified cell, because nothing asked for it.
+    ///
+    /// The guard is the same one codegen's own qualified-call re-form uses
+    /// (`method_call.rs`, B-2026-08-22-17): a single-segment type path carrying
+    /// explicit generic args, not shadowed by a local. `generic_args: Some(_)`
+    /// is what makes this a TYPE receiver rather than a value — a bare
+    /// `Option.Some(x)` has no generic args and is already an `ExprKind::Call`
+    /// with a two-segment callee `Path`, which the arms below have always
+    /// handled. Requiring the method to name a VARIANT of that enum is what
+    /// keeps a real associated function on an enum type
+    /// (`MyEnum[i64].parse(s)`) out: it mints nothing this frame can claim.
+    pub(super) fn is_qualified_enum_variant_ctor(&self, arg: &Expr) -> bool {
+        let ExprKind::MethodCall { object, method, .. } = &arg.kind else {
+            return false;
+        };
+        let ExprKind::Path {
+            segments,
+            generic_args: Some(_),
+        } = &object.kind
+        else {
+            return false;
+        };
+        segments.len() == 1
+            && !self.variables.contains_key(segments[0].as_str())
+            && self
+                .type_decls
+                .enum_layouts
+                .get(segments[0].as_str())
+                .is_some_and(|l| l.tags.contains_key(method.as_str()))
+    }
+
     pub(super) fn optres_arg_is_unowned_temp(&self, arg: &Expr) -> bool {
+        // B-2026-09-12-11 — the QUALIFIED constructor spelling, which arrives
+        // as a `MethodCall` and would otherwise be refused by the arm below as
+        // a place rooted at a binding. It mints a fresh enum value exactly as
+        // the `Call` arm's constructor does, so it gets that arm's answer
+        // rather than a new rule: this is one class under two spellings, not a
+        // second class. Tested BEFORE the match so the shared first arm keeps
+        // saying what it means about real method calls.
+        if self.is_qualified_enum_variant_ctor(arg) {
+            return true;
+        }
         match &arg.kind {
             // A live binding or a place rooted at one: something else owns it.
             ExprKind::Identifier(_)
