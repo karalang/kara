@@ -1423,15 +1423,19 @@ impl Analyzer<'_> {
 
     /// Payload types of `variant` when the scrutinee's type is known, positionally.
     ///
-    /// v1 resolves the two prelude generics only — `Option[T]`'s `Some`, and
-    /// `Result[O, E]`'s `Ok` / `Err` — because those are where the open
-    /// drop-bug rows live and their payload type is right there in the type
-    /// arguments. A user enum returns `None`, which leaves its arm bindings at
-    /// the pre-existing non-heap default rather than guessing: `TypeDb::enums`
-    /// flattens payload types across ALL variants, so it cannot say which type
-    /// belongs to which variant at which position, and a wrong answer here
-    /// schedules a phantom drop. Extending this needs per-variant payload types
-    /// in the type db (its own change).
+    /// Resolves the two prelude generics — `Option[T]`'s `Some` and
+    /// `Result[O, E]`'s `Ok` / `Err`, whose payload type is right there in the
+    /// type arguments — and user enums through `TypeDb::variant_payloads`,
+    /// keyed `(enum, variant)`. The user-enum arm arrived with B-2026-09-11-1;
+    /// before it, `TypeDb::enums` flattened payload types across ALL variants
+    /// and so could not say which type belonged to which variant at which
+    /// position, which is why a user enum used to return `None` and leave its
+    /// arm bindings at the non-heap default.
+    ///
+    /// `None` still means "no answer, keep the conservative default", and the
+    /// callers rely on that: an unresolved payload type schedules nothing
+    /// rather than guessing, because a wrong answer here is a PHANTOM drop —
+    /// and phantoms are the one error this differential cannot self-report.
     fn variant_payload_tys(
         &self,
         scrutinee_ty: Option<&TypeExpr>,
@@ -1528,6 +1532,59 @@ impl Analyzer<'_> {
                 );
                 if let Some(b) = self.bindings.last_mut() {
                     b.via = scrutinee_place.map(|s| s.to_string());
+                }
+            }
+            PatternKind::Wildcard => {
+                // `_` DISCARDS THE BINDING, NOT THE OBLIGATION (B-2026-09-11-2).
+                // The matched value is still freed at the match; `_` only
+                // declines to name it. The schedule is a list of per-PLACE
+                // events and a wildcard supplies no place, so before this arm
+                // existed the obligation had nowhere to live and the whole
+                // shape compared ZERO drops — `match ov { Some(_) => .. }`
+                // measured `checked=0` while codegen visibly emitted `ov`.
+                //
+                // The place is therefore SYNTHETIC and the match is carried by
+                // `via`: the scrutinee is the site codegen actually frees
+                // through (B-2026-09-10-31's channel, already what a BOUND
+                // payload uses). The name is deliberately unspellable in Kāra
+                // so it can never collide with a user binding or an alloca
+                // name, and it is derived from the scrutinee rather than a
+                // counter so that exclusive arms over one scrutinee dedup to a
+                // single obligation instead of inflating the count.
+                //
+                // Three guards, each of which is the difference between a real
+                // obligation and a false divergence:
+                //   * a resolved HEAP payload type — a non-heap `_` owns
+                //     nothing (`Option[i64]`: codegen emits no record at all,
+                //     so scheduling one would diverge immediately);
+                //   * a NAMED scrutinee — without one there is no `via`, and a
+                //     synthetic place can never match codegen by name, so the
+                //     event would be a guaranteed false positive;
+                //   * `payload_state` carried through unchanged — under a
+                //     borrowed scrutinee it is `Borrowed`, which `pop_scope`
+                //     never drops, exactly as a bound payload behaves there
+                //     (measured: a `ref` param scrutinee schedules nothing on
+                //     either spelling, and its callee emits no records).
+                let heap = payload_ty
+                    .as_ref()
+                    .map(|t| self.type_db.is_heap(t))
+                    .unwrap_or(false);
+                if let (true, Some(scrut)) = (heap, scrutinee_place) {
+                    let render = payload_ty
+                        .as_ref()
+                        .map(render_type)
+                        .unwrap_or_else(|| "?".into());
+                    self.introduce_typed(
+                        format!("<discarded from {scrut}>"),
+                        render,
+                        true,
+                        payload_state,
+                        &pattern.span,
+                        payload_ty,
+                    );
+                    if let Some(b) = self.bindings.last_mut() {
+                        b.via = Some(scrut.to_string());
+                    }
                 }
             }
             PatternKind::TupleVariant { path, patterns } => {

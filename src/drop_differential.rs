@@ -89,6 +89,14 @@
 //! emit time. The ASan/LSan fuzzer run stays the double-free authority.
 
 use std::collections::{BTreeMap, BTreeSet, HashMap, HashSet};
+use std::sync::OnceLock;
+
+/// Whether `KARAC_DIFF_EXPLAIN=1` armed the side-by-side dump. Read once — env
+/// is fixed for a process — mirroring `drop_obs::silenced`.
+fn explain_enabled() -> bool {
+    static ON: OnceLock<bool> = OnceLock::new();
+    *ON.get_or_init(|| std::env::var("KARAC_DIFF_EXPLAIN").as_deref() == Ok("1"))
+}
 
 use crate::ast::{Function, ImplItem, Item, Program};
 
@@ -235,6 +243,34 @@ pub fn differential_check_on(src: &str, tree: OracleTree) -> DiffOutcome {
     }
     let empty: HashSet<String> = HashSet::new();
 
+    // `KARAC_DIFF_EXPLAIN=1` dumps both sides of the comparison to stderr, in
+    // the same off-by-default style as `KARAC_DROPOBS_SILENCE`. Without it the
+    // only observable is the verdict, and a `checked=0` verdict is ambiguous in
+    // exactly the way that matters: it reads the same whether the oracle
+    // scheduled nothing (a MODEL gap, B-2026-09-11-2) or scheduled something
+    // codegen also emitted. Seeing which side is empty is the whole diagnosis,
+    // so the knob prints the oracle's schedule and codegen's places side by
+    // side rather than making the next reader re-derive them.
+    if explain_enabled() {
+        for f in &oracle.functions {
+            eprintln!("[explain] fn {}", f.function);
+            for d in &f.drops {
+                match &d.via {
+                    Some(v) => eprintln!("[explain]   oracle: `{}` (via `{v}`)", d.place),
+                    None => eprintln!("[explain]   oracle: `{}`", d.place),
+                }
+            }
+            match cg.get(f.function.as_str()) {
+                Some(places) => {
+                    for p in places {
+                        eprintln!("[explain]   codegen: `{p}`");
+                    }
+                }
+                None => eprintln!("[explain]   codegen: (no records)"),
+            }
+        }
+    }
+
     let mut drops_checked = 0usize;
     let mut divergences = Vec::new();
     for f in &oracle.functions {
@@ -267,6 +303,15 @@ pub fn differential_check_on(src: &str, tree: OracleTree) -> DiffOutcome {
         // value in the first place, which is the blindness the row measured. If
         // codegen emits NEITHER name, that is still a divergence and still
         // reported.
+        //
+        // B-2026-09-11-2 leans on the same channel for a payload NO arm binds.
+        // `_` discards the binding, not the obligation, so the oracle schedules
+        // it under a synthetic place (`<discarded from ov>`) that is unspellable
+        // in Kāra and therefore can never match `cg_places` by name — the match
+        // is carried entirely by `via`. That is why the oracle only emits such
+        // an event when it has a named scrutinee to put in `via`: without one
+        // the event could never be covered and would be a guaranteed false
+        // divergence rather than a finding.
         let scheduled: BTreeSet<(&str, Option<&str>)> = f
             .drops
             .iter()

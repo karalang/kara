@@ -1162,6 +1162,29 @@ mod llvm_main {
             true
         }
 
+        /// DISCARD an `Option[Tracked]`'s payload with `_` instead of binding
+        /// it (B-2026-09-11-2). `_` drops the BINDING, not the obligation: the
+        /// `Tracked` is still freed and its `Drop` body still runs, but no arm
+        /// name owns it, so this is the shape whose whole drop schedule used to
+        /// be empty.
+        ///
+        /// It is a distinct strategy rather than a coin-flip inside
+        /// `match_opt_tracked` because the generator emitted NO wildcard
+        /// pattern anywhere — measured 0 of 200 seeds when the row was fixed —
+        /// so the corpus could not reach the shape at all, and the oracle fix
+        /// alone would have been gated by the curated tests only. A payload
+        /// with a user `Drop` is the variant that matters: a missed obligation
+        /// here is a `Drop` body that never runs, not just an unfreed buffer.
+        fn discard_opt_tracked_payload(&mut self) -> bool {
+            let Some(o) = self.take(Ty::OptTracked) else {
+                return false;
+            };
+            self.emit(format!(
+                "        match {o} {{ Some(_) => {{ acc = acc + 1i64; }}, None => {{}} }}"
+            ));
+            true
+        }
+
         /// Move a live `Tracked` into a `Vec[Tracked]`. Element drop inside a
         /// container is a distinct codegen path from a local slot's drop.
         fn tracked_into_vec(&mut self) -> bool {
@@ -1569,9 +1592,9 @@ mod llvm_main {
         fn step_one(&mut self) {
             // Try transforms in a random order until one applies; if none does
             // (nothing live of the needed type), produce fresh material.
-            let mut order: [u8; 29] = [
+            let mut order: [u8; 30] = [
                 0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16, 17, 18, 19, 20, 21, 22,
-                23, 24, 25, 26, 27, 28,
+                23, 24, 25, 26, 27, 28, 29,
             ];
             // Fisher-Yates on the fixed array.
             for i in (1..order.len()).rev() {
@@ -1610,7 +1633,9 @@ mod llvm_main {
                     25 => self.for_owned_vec_tup_tracked(),
                     26 => self.reassign_res_tracked(),
                     27 => self.match_res_tracked(),
-                    _ => false, // slot 28: fall through to a producer
+                    // ── discarded (unbound) payloads ──
+                    28 => self.discard_opt_tracked_payload(),
+                    _ => false, // slot 29: fall through to a producer
                 };
                 if applied {
                     return;

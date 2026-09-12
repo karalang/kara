@@ -526,6 +526,96 @@ fn generic_enum_match_projects_the_substituted_payload() {
     assert_eq!(assert_clean(&src), 1);
 }
 
+// ──────────── B-2026-09-11-2: `_` discards the binding, not the drop ────────
+//
+// A wildcard payload used to schedule NOTHING, so every discard-the-payload
+// shape compared zero drops while codegen visibly emitted the scrutinee's
+// free. The obligation is real and has no binding to key on, so the oracle
+// records it under a synthetic place and lets rule 5's `via` carry the match to
+// the scrutinee — the same channel a BOUND payload already used.
+
+#[test]
+fn a_wildcard_option_payload_is_scheduled_through_the_scrutinee() {
+    // The row's first measured program. Was `checked=0`; codegen emitted `ov`
+    // the whole time, so the gate was blind rather than satisfied.
+    let src = format!(
+        "fn main() {{ let v: Vec[String] = Vec[{S}]; \
+         let ov: Option[Vec[String]] = Some(v); \
+         match ov {{ Some(_) => {{ println(1i64); }}, None => {{}} }} }}"
+    );
+    assert_eq!(assert_clean(&src), 1);
+}
+
+#[test]
+fn a_wildcard_user_enum_payload_is_scheduled_through_the_scrutinee() {
+    // The row's second measured program — the user-enum spelling, which only
+    // became projectable at all once B-2026-09-11-1 landed per-variant payload
+    // types. Both halves are needed for this to schedule.
+    let src = format!(
+        "enum Box3 {{ Full(String), Empty }}\n\
+         fn main() {{ let b: Box3 = Full({S}); \
+         match b {{ Full(_) => {{ println(1i64); }}, Empty => {{}} }} }}"
+    );
+    assert_eq!(assert_clean(&src), 1);
+}
+
+#[test]
+fn a_bound_arm_and_a_wildcard_arm_each_carry_their_own_obligation() {
+    // The mixed match is what rules out the tempting narrow fix — "leave the
+    // scrutinee unmoved when no arm binds a payload" fixes the two cases above
+    // and still loses THIS one, because the scrutinee's move is decided once
+    // for the whole match while the discard is per-arm. Both arms schedule,
+    // both discharge through `e`, and per-arm counting matches what the bound
+    // spelling already did.
+    let src = format!(
+        "enum E2 {{ A(String), B(String), C }}\n\
+         fn main() {{ let e: E2 = A({S}); \
+         match e {{ A(t) => {{ println(t.len()); }}, \
+                    B(_) => {{ println(2i64); }}, C => {{}} }} }}"
+    );
+    assert_eq!(assert_clean(&src), 2);
+}
+
+#[test]
+fn a_wildcard_inside_a_tuple_payload_is_scheduled() {
+    // The recursive path: the discarded element sits under a bound one, so the
+    // arm is not wholly unbound and the obligation is still only the wildcard's.
+    // `y` is `i64` and owns nothing, so this shape compared zero drops before.
+    let src = format!(
+        "fn main() {{ let v: Vec[String] = Vec[{S}]; \
+         let ot: Option[(Vec[String], i64)] = Some((v, 3i64)); \
+         match ot {{ Some((_, y)) => {{ println(y); }}, None => {{}} }} }}"
+    );
+    assert_eq!(assert_clean(&src), 1);
+}
+
+#[test]
+fn a_non_heap_wildcard_payload_stays_unscheduled() {
+    // The complement, so the rule cannot degrade into "every `_` owns heap".
+    // Codegen emits no record at all for this program, so a scheduled event
+    // here would not merely inflate the count — it would be a false divergence.
+    let src = "fn main() { let oi: Option[i64] = Some(7i64); \
+               match oi { Some(_) => { println(1i64); }, None => {} } }";
+    assert_eq!(assert_clean(src), 0);
+}
+
+#[test]
+fn a_wildcard_payload_under_a_borrowed_scrutinee_stays_unscheduled() {
+    // Under a `ref` param the payload is Borrowed, which `pop_scope` never
+    // drops — the same answer the bound spelling gives there. The guard is
+    // load-bearing rather than cosmetic: `peek` emits NO codegen records (its
+    // param is discharged caller-side), so scheduling anything in it would fail
+    // `assert_clean`'s divergence check outright, not just move the count. The
+    // one drop counted here is `main`'s own `ov`, which the caller still owns.
+    let src = format!(
+        "fn peek(o: ref Option[Vec[String]]) -> i64 {{ \
+             match o {{ Some(_) => {{ 1i64 }}, None => {{ 0i64 }} }} }}\n\
+         fn main() {{ let v: Vec[String] = Vec[{S}]; \
+         let ov: Option[Vec[String]] = Some(v); println(peek(ov)); }}"
+    );
+    assert_eq!(assert_clean(&src), 1);
+}
+
 // ─────────────── B-2026-09-10-30: the two non-subject populations ───────────
 //
 // `DiffOutcome` used to have ONE `Invalid` covering parse, typecheck, ownership
