@@ -1626,6 +1626,10 @@ perf payoff lands in Slice 2.
   instructions and takes far longer** — measured at 10× iterations so the
   ~5 ms process floor cannot explain it:
 
+  **STALE — superseded by the table two sections below; the SSO=1 wall figures
+  here were taken with the pre-`write_inline` encoder and are roughly double the
+  current regression. The instruction counts and the throughput point stand.**
+
   | 10M iterations | instructions | wall, best-of-5 | throughput |
   |---|---|---|---|
   | `lexlike` `SSO=0` | 2,540,034,522 | 179 ms | **14.2 G instr/s** |
@@ -1647,6 +1651,93 @@ perf payoff lands in Slice 2.
   14.8% faster) because allocator work is a large share of a big program; on a
   tight loop they point in opposite directions. Wall time is the claim;
   instruction count is a diagnostic for *where* the work went.
+
+  ### THE BRANCH EXPERIMENT: LLVM WON'T LET YOU RUN IT, AND HALF THE REGRESSION WAS THE ENCODER
+
+  The table above prompted an obvious hypothesis: if the `cmovs` is what puts
+  the data pointer on an unspeculatable address-dependency chain, emit a real
+  BRANCH instead and let the (highly predictable) tag choose. Run 2026-09-12.
+  Two results, and the second is the one that matters.
+
+  **1. The experiment cannot be run at the accessor level.** A branch-and-phi
+  variant of `sso_pick_data_ptr` was wired behind `KARAC_SSO_BRANCH=1`. The gate
+  demonstrably fires — pre-optimization IR goes from 4 `select`s named
+  `*.data_ptr` to 16 `*.dp.inl/.heap/.join` blocks — and the two final binaries
+  are **byte-identical** (same SHA). SimplifyCFG's two-entry-phi folding
+  re-forms the `select`: a phi of two already-computed values costs nothing to
+  speculate, so LLVM always folds it back.
+
+  The version that would actually test the hypothesis has to sink the *load*
+  into the arms, because that is the only thing a branch buys — a load at a
+  branch-dependent address can issue early, a load at a `cmov`-dependent address
+  cannot. But the accessor hands back a POINTER, and its consumers are a memcpy
+  source, a `bcmp`, a runtime call. Getting the loads inside the diamond means
+  duplicating every consumer into both arms. **That is a redesign of the read
+  surface, not a codegen tweak**, and it should not be attempted on the strength
+  of a hypothesis that has never been isolated.
+
+  **2. Half of `lexlike`'s regression was the ENCODER, and a correctness fix
+  already removed it.** `write_inline` (landed for the 32-bit defect above,
+  B-2026-09-12-20) writes the descriptor straight through `out as *mut u8`. The
+  encoder it replaced built a 24-byte stack array, wrote 3 content bytes and a
+  1-byte trailer into it, then read three overlapping 8-byte integers back out —
+  a partial-store-then-wide-load, which x86 cannot store-to-load forward. Three
+  stalls per constructed string, in a loop doing 10M of them.
+
+  Measured by reverting the encoder and rebuilding the archives, everything else
+  held fixed:
+
+  | 10M iterations, best-of-7, idle | SSO=0 | SSO=1 old encoder | SSO=1 shipped |
+  |---|---|---|---|
+  | `lexlike10` | 178 ms | 295 ms (**+66%**) | 238 ms (**+34%**) |
+  | `substr10`  |  61 ms |  78 ms (**+28%**) |  64 ms (**+5%**)  |
+
+  The old-encoder column reproduces the table above almost exactly (295 vs its
+  292), which is what licenses the comparison. **So the tight-loop regression
+  recorded above is stale: it is now +34% and +5%, not +63% and +149%** — and
+  nobody set out to fix it. The lesson is not about store forwarding; it is that
+  a regression attributed to a value REPRESENTATION turned out to be half
+  attributable to one avoidable detail of how that representation was written.
+  Before concluding SSO is inherently bad for tight loops, the remaining 34%
+  deserves the same treatment — and it needs a profiler, which the cloud
+  container does not have (`perf` is absent; only `valgrind` is present).
+
+  ### ABSOLUTE TIMINGS IN THIS DOC ARE NOT COMPARABLE ACROSS SESSIONS — RATIOS ARE
+
+  Re-running the self-hosted lexer on an idle box the same day turned up a
+  ~3.4x uniform speedup that has NOTHING to do with SSO, and the preserved
+  binaries make it measurable rather than speculative — they were all timed
+  back-to-back in one loop:
+
+  | lexprof build | | wall, best-of-5 |
+  |---|---|---|
+  | `lexprof_sso0`  | 03:20, SSO=0 | 1203 ms |
+  | `lexprof_sso1`  | 03:20, SSO=1 pre-de-masking | 1202 ms |
+  | `lexprof_fix2`  | 04:57, SSO=1 post-de-masking | 1044 ms |
+  | built now       | SSO=0 | **354 ms** |
+  | built now       | SSO=1 | **298 ms** |
+
+  Eliminated as causes, each by measurement rather than argument: **machine
+  load** (old and new binaries timed in the same loop, same minute); **archive
+  build form** (relinking against a deliberately wrong-form `cargo build`
+  archive gives 355 ms vs 354 — it costs binary size, as CLAUDE.md says, not
+  speed); **optimization level** (`KARAC_OPT_LEVEL=0` gives 946 ms and a 631 KB
+  binary, against the preserved 436-449 KB); **`c9570e0`'s drop-handover fix**
+  (reverting just `src/codegen/exprs.rs` to its parent and rebuilding gives
+  347/299 — unchanged); and **a leak in the older builds** (the inverse of the
+  guess: the NEW binaries peak at 33-35 MB RSS against the old ones' 16 MB, so
+  the old ones were not retaining, they were churning). Several enum-payload
+  free/drop fixes from other sessions landed in the window and remain the best
+  unverified candidate; pinning it needs a real bisect.
+
+  **What survives, and it is the part the flip decision rests on: the RATIO is
+  stable.** 1203 -> 1044 is 13.2%; 354 -> 298 is 15.8%. The SSO win on the
+  motivating workload reproduces across a 3.4x shift in the baseline it sits on.
+
+  **The rule this earns:** quote SSO numbers as ratios measured within one
+  session against one compiler and one set of archives, and never compare an
+  absolute millisecond figure in this doc to one taken on another day. Every
+  table here should be read as a within-row comparison only.
 
   One bookkeeping note: `substr.kara` as it survives in the harness allocates
   1,000,009 → 9, while this doc's `String.substring` table records 1,000,047 →
