@@ -9857,6 +9857,62 @@ impl<'ctx> super::Codegen<'ctx> {
         &mut self,
         payload_te: &TypeExpr,
     ) -> Option<FunctionValue<'ctx>> {
+        // B-2026-09-11-4 — the two shapes that are not a bare `Path`, answered
+        // BEFORE the `Path` guard below. A tuple has no `Path` spelling at all,
+        // and a fixed array has TWO of them: an ANNOTATED `Array[String, 2]`
+        // parses to `Path(["Array"], [Type(String), Const(2)])` while only an
+        // array LITERAL's inferred type is `TypeKind::Array`. Keying on the kind
+        // alone compiles and misses every annotated payload — the trap
+        // B-2026-09-06-49 recorded — so both go through `array_elem_and_len`,
+        // which is the one reader of both spellings.
+        //
+        // Both are gated on `te_recursive_drop_fully_supported` — the same
+        // predicate the element-drain family already asks — which answers
+        // "does the recursive drop family free this subtree completely".
+        //
+        // Be precise about what that gate does NOT do: its `_` tail is a NAME
+        // LOOKUP, so it admits user structs, user enums and shared types as
+        // freely as it admits `String`. It is a completeness gate, not a
+        // memory-only one. So the two emitters reached here — `emit_tuple_drop_fn`
+        // and (through `vec_element_drain_fn`) `emit_drop_fn_for_array` — DO
+        // recurse into `emit_drop_fn_for_type_expr`, the dispatcher the rest of
+        // this function deliberately avoids because it can hand back the
+        // user-drop WRAPPER and run a `Drop` body the bodies walker registered
+        // alongside already owns (B-2026-07-30-11, B-2026-08-28-58 leg A).
+        //
+        // What makes that safe here is the dispatcher's OWN first guard, added
+        // by B-2026-07-30-11 for exactly this: a bare user struct carrying an
+        // `impl Drop` resolves to the memory-only synthesis and never to the
+        // identically-named wrapper. Measured rather than assumed — four
+        // payload shapes carrying a user `Drop` body, `KARAC_OPT_LEVEL=0`,
+        // body count before this change vs after:
+        //
+        //     Slot[(Rec, i64)]           3 -> 3 bodies, 72 B leaked -> 0
+        //     Slot[Wrap[Rec]]            0 -> 0 bodies, 72 B leaked -> 0
+        //     Slot[(Wrap[Rec], i64)]     0 -> 0 bodies, 72 B leaked -> 0
+        //     Slot[Array[Rec, 2]]        0 -> 0 bodies, 132 B leaked -> 0
+        //
+        // Every count is UNCHANGED and every leak is closed, which is the
+        // property that matters: this widens what gets FREED without moving a
+        // single `Drop` body. (The three zero rows are a separate, pre-existing
+        // gap — a user `Drop` body nested inside a generic enum's boxed payload
+        // does not run in compiled code at all, while the interpreter runs it.
+        // That divergence predates this change and is filed on its own row; it
+        // is emphatically not something to "fix" from here by reaching for the
+        // wrapper, which is the double-body trap above.)
+        if let Some((elem_te, n)) = self.array_elem_and_len(payload_te) {
+            if !self.te_recursive_drop_fully_supported(payload_te) {
+                return None;
+            }
+            return self.emit_drop_fn_for_array(&elem_te, n);
+        }
+        if let TypeKind::Tuple(elems) = &payload_te.kind {
+            if elems.is_empty() || !self.te_recursive_drop_fully_supported(payload_te) {
+                return None;
+            }
+            let elems = elems.clone();
+            return Some(self.emit_tuple_drop_fn(&elems));
+        }
         let TypeKind::Path(p) = &payload_te.kind else {
             return None;
         };
@@ -9894,6 +9950,48 @@ impl<'ctx> super::Codegen<'ctx> {
             {
                 return Some(self.emit_vec_drop_fn(&elem_te));
             }
+        }
+        // B-2026-09-11-4 — an `Option[..]` payload, through the same
+        // tag-guarded synthesis a `Vec[Option[String]]` ELEMENT already uses.
+        // Gated on `option_payload_inline_recursive_drop_ok`, which
+        // `emit_option_drop_fn`'s own doc names as the caller's obligation:
+        // that synthesis overlays the payload's `{ptr, len, cap}` on words
+        // w0..w2, so a scalar payload (no cap word — w2 is garbage) and a
+        // payload that was itself boxed must not reach it.
+        //
+        // Note this is the INSIDE of another enum's box, which is why the
+        // concrete-keyed channel that covers a top-level `Option[String]`
+        // BINDING (`track_inline_option_payload_var`, B-2026-06-10-6) does not
+        // reach here — it is a let-site registration on an Option binding.
+        if name.as_str() == "Option" {
+            let inner = match p.generic_args.as_ref().and_then(|a| a.first()) {
+                Some(crate::ast::GenericArg::Type(t)) => t.clone(),
+                _ => return None,
+            };
+            if self.option_payload_inline_recursive_drop_ok(&inner) {
+                return self.emit_option_drop_fn(&inner);
+            }
+            return None;
+        }
+        // B-2026-09-11-4 — a user GENERIC struct (`Wrap[String]`). The
+        // name-keyed lookup above stays gated on `generic_args.is_none()` for
+        // the reason `emit_struct_drop_synthesis_mono` records: one drop fn per
+        // struct NAME resolves a bare-`T` field from the DECLARATION, so it is
+        // shared across `Wrap[String]` and `Wrap[i64]` and cannot free either
+        // one's heap without corrupting the other (a String-element drain over
+        // an `i64` field would `free` the integer as a bogus `{ptr,len,cap}`).
+        // Threading the instantiation's subst mangles a distinct symbol per
+        // monomorph and resolves each field to the concrete type first.
+        //
+        // An empty subst means the payload's args did not line up with the
+        // declaration's params, and falling back to the name-shared drop is
+        // exactly the corruption above — so decline instead.
+        if p.generic_args.is_some() && self.type_decls.struct_types.contains_key(name.as_str()) {
+            let subst = self.generic_struct_subst_from_inst(name.as_str(), payload_te);
+            if subst.is_empty() {
+                return None;
+            }
+            return self.emit_struct_drop_synthesis_mono(&name, &subst);
         }
         None
     }

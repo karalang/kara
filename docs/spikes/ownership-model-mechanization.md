@@ -300,6 +300,37 @@ trap one more time — literal-seeded and `len()`-only, it folded away at `-O2` 
 passed against the unfixed compiler — and needed an opaque seed, a byte-level
 read, and an allocation floor before it measured anything.
 
+**Following that row's remainder produced three more defects, and the shape of
+how they were found is the point.** B-2026-09-11-4 asked for four payload shapes
+(a tuple, an `Array`, an `Option[String]`, a user generic struct) that still
+leaked inside a generic enum's box. Rather than fix the resolver and re-measure
+the one cell the row quoted, the sweep was widened to a **4 x 4 matrix** — each
+payload shape crossed with four call shapes (never read, matched at the call
+site, through an owned callee, through a `ref` callee) — plus a `String` row and
+a plain-user-struct row as controls, every cell at `KARAC_OPT_LEVEL=0` with one
+PASS/FAIL line of its own. The row had recorded four leaking cells. The matrix
+found **ten**, and three things the row could not have said:
+
+* an `Option[String]` payload matched out was ALREADY clean, which made it the
+  cell that would have turned into a double free had the retraction not fired —
+  the row's own stated hazard, and the only shape where it had teeth;
+* six move-out cells leak for a reason the resolver cannot reach (the arm
+  binding owns nothing), which is a second hole, not the same one;
+* one cell was not a leak at all but a **miscompile** — a tuple payload read
+  through a `ref` parameter returns garbage, and its all-scalar `(i64, i64)`
+  variant allocates nothing whatsoever, so no amount of leak-chasing would have
+  surfaced it.
+
+**The generalization: a row's own cell list is a hypothesis, not a test plan.**
+The matrix cost one generator and one runner script and it found more than twice
+what the row described, including a defect in a different class. It also caught
+the fix's own risk — a body-count control across four user-`Drop` payload shapes,
+run before and after, is what turned "this does not move a `Drop` body" from an
+argument about which emitter is memory-only into four measured pairs. That
+control then found the third defect on its own: the body counts were WRONG in
+both directions across the three backends, on every shape, before the fix
+touched anything.
+
 Note what the **differential** says about that program: nothing. It reports 0,
 correctly — codegen does emit a cleanup action for the binding, so the emitted
 set covers the schedule. The differential checks that a drop is SCHEDULED AND

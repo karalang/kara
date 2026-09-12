@@ -84697,6 +84697,103 @@ fn main() {
         );
     }
 
+    /// B-2026-09-11-4 — the four payload shapes B-2026-09-11-3 deliberately
+    /// left alone: a TUPLE, an `Array`, an `Option[String]` and a user GENERIC
+    /// struct, each inside `enum Slot[T] { Filled(T), Blank }`.
+    ///
+    /// Same mechanism as the parent, one payload type over. The erased payload
+    /// area is ONE word (the classifier reads the DECLARATION, where the
+    /// payload is the bare parameter `T`), so `coerce_to_payload_words` boxes
+    /// any wider monomorph; the box drop reclaimed the envelope and
+    /// `enum_boxed_payload_interior_drop` answered `None` for all four, so
+    /// nothing owned what was inside it. The tuple and the array fell out at
+    /// the resolver's first guard because neither is a `TypeKind::Path` it
+    /// could read; `Option[String]` and `Wrap[String]` are `Path` WITH generic
+    /// args, and the two user-type lookups are gated on `generic_args.is_none()`
+    /// because a name-shared drop cannot free instantiation-specific heap.
+    ///
+    /// `c8` AND `c9` ARE THE DOUBLE-FREE CELLS, and on this row they are the
+    /// half that actually had teeth. Unlike the parent's shapes, an
+    /// `Option[String]` payload that is MATCHED OUT was already clean before
+    /// this fix — its arm binding genuinely owns the interior — so installing
+    /// an interior drop without the `clear_boxed_enum_inner_drop` retraction
+    /// would have freed those buffers twice rather than merely leaked them.
+    /// They were clean pre-fix and must stay clean; a leak count alone does not
+    /// check that direction.
+    ///
+    /// `c7` is the control: a bare user struct payload, which B-2026-09-10-2
+    /// already resolved, clean throughout.
+    ///
+    /// NOT VACUOUS, and unusually well-evidenced for this class: pre-fix this
+    /// program loses **1,120 B in 56 blocks at `KARAC_OPT_LEVEL=0` AND 320 B in
+    /// 16 blocks at the default `-O2`** — it fails against the unfixed compiler
+    /// at BOTH levels, so it does not depend on the `-O0` leg to have any
+    /// force. Every payload is still seeded from the opaque `env.args().len()`,
+    /// and the read cells go through `contains` (bytes, not length), because
+    /// the first draft of the PARENT's fixture was literal-seeded and folded to
+    /// nothing at `-O2`, passing against the compiler it was written to fail.
+    #[test]
+    fn asan_generic_enum_boxed_aggregate_payloads_free_their_interiors() {
+        let mut expected: Vec<&str> = Vec::new();
+        for _ in 0..8 {
+            expected.extend_from_slice(&[
+                "c1", "c2", "c3", "c4", "c5:true", "c6:true", "c7", "c8:true", "c9:true",
+            ]);
+        }
+        expected.push("end");
+        assert_clean_asan_run_min_allocs(
+            r#"
+struct Wrap[T] { val: T }
+struct Plain { s: String }
+enum Slot[T] { Filled(T), Blank }
+
+fn opeek(s: ref Slot[Option[String]]) -> bool {
+    match s { Filled(x) => match x { Some(y) => y.contains("row"), None => false, }, Blank => false, }
+}
+fn otake(s: Slot[Option[String]]) -> bool {
+    match s { Filled(x) => match x { Some(y) => y.contains("row"), None => false, }, Blank => false, }
+}
+fn wpeek(s: ref Slot[Wrap[String]]) -> bool {
+    match s { Filled(x) => x.val.contains("row"), Blank => false, }
+}
+
+fn main() {
+    let n = env.args().len() as i64;
+    let mut i: i64 = 0i64;
+    while i < 8i64 {
+        let c1: Slot[(String, i64)] = Filled((f"row-aaaaaaaaaaaa-{i}-{n}", 1i64));
+        println("c1");
+        let c2: Slot[Array[String, 2]] = Filled([f"row-bbbbbbbbbbbb-{i}-{n}", f"row-cccccccccccc-{i}-{n}"]);
+        println("c2");
+        let c3: Slot[Option[String]] = Filled(Some(f"row-dddddddddddd-{i}-{n}"));
+        println("c3");
+        let c4: Slot[Wrap[String]] = Filled(Wrap { val: f"row-eeeeeeeeeeee-{i}-{n}" });
+        println("c4");
+        let c5: Slot[Option[String]] = Filled(Some(f"row-ffffffffffff-{i}-{n}"));
+        println(f"c5:{opeek(c5)}");
+        let c6: Slot[Wrap[String]] = Filled(Wrap { val: f"row-gggggggggggg-{i}-{n}" });
+        println(f"c6:{wpeek(c6)}");
+        let c7: Slot[Plain] = Filled(Plain { s: f"row-hhhhhhhhhhhh-{i}-{n}" });
+        println("c7");
+        let c8: Slot[Option[String]] = Filled(Some(f"row-iiiiiiiiiiii-{i}-{n}"));
+        println(f"c8:{match c8 { Filled(x) => match x { Some(y) => y.contains("row"), None => false, }, Blank => false, }}");
+        let c9: Slot[Option[String]] = Filled(Some(f"row-jjjjjjjjjjjj-{i}-{n}"));
+        println(f"c9:{otake(c9)}");
+        i = i + 1i64;
+    }
+    println("end");
+}
+"#,
+            &expected,
+            "asan_generic_enum_boxed_aggregate_payloads_free_their_interiors",
+            // 117 measured at the default level post-fix (the pre-fix binary
+            // reaches only 77, because the leaked allocations are the ones the
+            // optimizer could delete). A version folded away entirely reaches
+            // ~10, so this floor separates them with room for host drift.
+            60,
+        );
+    }
+
     /// B-2026-09-06-72 — a `shared` FIELD's 16-byte refcount block when the
     /// owning struct travels out of a function inside an AGGREGATE.
     ///
