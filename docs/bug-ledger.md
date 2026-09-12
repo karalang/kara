@@ -92,9 +92,9 @@ distinguish "bugs flattening" from "we stopped writing them down."
 
 | class | total |
 |---|---|
-| miscompile | 403 |
-| run-vs-build | 388 |
-| leak | 323 |
+| miscompile | 404 |
+| run-vs-build | 389 |
+| leak | 324 |
 | double-free | 224 |
 | missing-feature | 195 |
 | codegen-gap | 174 |
@@ -110,7 +110,7 @@ distinguish "bugs flattening" from "we stopped writing them down."
 
 | surface | total |
 |---|---|
-| codegen | 1672 |
+| codegen | 1675 |
 | interp | 418 |
 | typecheck | 296 |
 | other | 86 |
@@ -176,10 +176,12 @@ _Generated from `bug-ledger.jsonl` by `scripts/bug-curve.py` (2026-05-20 → 202
 | B-2026-09-10-37 | 2026-09-10 | codegen | low | `.clone()` ON AN `Array[T, N]` HAS NO CODEGEN DISPATCHER ARM AT ANY DEPTH -- `a.clone()` bails `no handler for method 'clone' on variable 'a'` (codegen's own "this is a codegen bug" message), a residual of B-2026-07-29-31 which widened `.clone()` to `Option`/`Result` and every user type but never to `Array` | — |
 | B-2026-09-10-38 | 2026-09-10 | typecheck | low | AN ARRAY LITERAL IN A TUPLE-LITERAL ELEMENT DOES NOT TAKE THE TUPLE ANNOTATION'S ELEMENT TYPE AND INFERS `Vec` -- `let t: (Array[String, 2], i64) = ([f"a", f"b"], 7)` is rejected as `found '(Vec[String], i64)'` while the direct `let a: Array[String, 2] = [..]` and the `(Vec[String], i64)` spelling are both accepted; the tuple-ELEMENT position of the question B-2026-08-13-22 fixed at the `let` | — |
 | B-2026-09-11-2 | 2026-09-11 | other | low | A WILDCARD MATCH PAYLOAD (`Some(_)` / `Full(_)`) SCHEDULES NO DROP IN THE OWNERSHIP ORACLE, so the differential compares nothing for it -- `_` discards the BINDING, not the obligation, and a per-place schedule has no place to key it to (the bound spellings now schedule correctly) | — |
-| B-2026-09-11-4 | 2026-09-11 | codegen | medium | A TUPLE, AN `Array`, AN `Option[String]` AND A GENERIC-STRUCT PAYLOAD STILL LEAK INSIDE A USER GENERIC ENUM'S HEAP BOX -- the four shapes `enum_boxed_payload_interior_drop` still answers `None` for, at 24 B a round each, while the bare-user-struct and `String`/`Vec` payloads beside them are clean | — |
 | B-2026-09-12-1 | 2026-09-12 | runtime | low | `coroutine_ws_over_tls_concurrent_handlers_all_execute` GOES RED IN THE REQUIRED GATE SET BUT IS NOT REPRODUCIBLE ON DEMAND -- observed twice in full `--features llvm` gate cycles (once on each KARAC_SSO leg, `34 passed; 1 failed`), then 22 consecutive PASSES across three deliberately harsher conditions. The test's own assertion names a coroutine-resume / accept-path handshake-pool mismatch, i.e. the exact race its fix (task #21) closed, so a recurrence is worth a row rather than a re-run. | — |
 | B-2026-09-12-2 | 2026-09-12 | codegen | medium | A DISCARDED CALL RESULT OF AN ARRAY-RETURNING FUNCTION HAS NO OWNER ON EITHER BACKEND PATH -- `passthru(a);` over `fn passthru(x: Array[String, 2]) -> Array[String, 2]` leaks 18 B in 2 blocks at `-O0` on the CONCRETE path on unmodified `main`, and the generic path joined it at the identical count once 55e767a gave a monomorph's array param an owner, because the callee's transfer-owned drop is retracted at its own `return` and nothing at the call site picks the value up | — |
 | B-2026-09-12-3 | 2026-09-12 | codegen | low | `mono_handle_param_infos` IS WRITTEN UNDER A NON-FINAL `mangled` AND READ UNDER THE FINAL ONE -- `compile_generic_call` rebinds `mangled` four times and stores the handle record after the first append, while `compile_mono_function` looks it up after the fourth, so the map is correct today only because the three later appends happen to be no-ops for a Column/Tensor argument | — |
+| B-2026-09-12-4 | 2026-09-12 | codegen | high | A GENERIC ENUM WHOSE PAYLOAD IS A TUPLE, MATCHED THROUGH A `ref` PARAMETER, READS THE PAYLOAD AS GARBAGE -- the arm binding gets a bogus pointer, so a `(String, i64)` payload reads a NULL string (valgrind: `Invalid read of size 1 ... Address 0x0`) and an all-scalar `(i64, i64)` payload reads zeros, while the interpreter reads both correctly | — |
+| B-2026-09-12-5 | 2026-09-12 | codegen | medium | A BOXED TUPLE / `Array` / GENERIC-STRUCT PAYLOAD MATCHED OUT OF A GENERIC ENUM IS OWNED BY NOBODY -- the arm binding that takes it never frees it and the box's interior walk is retracted because it did, so the move-out cells leak 192-384 B where the identical `Option[String]` payload is clean | — |
+| B-2026-09-12-6 | 2026-09-12 | codegen | high | A USER `Drop` BODY ON A VALUE NESTED INSIDE A GENERIC ENUM'S BOXED PAYLOAD RUNS ON A DIFFERENT SUBSET OF BACKENDS PER PAYLOAD SHAPE, AND ON NO SHAPE DOES IT RUN EVERYWHERE -- `(Rec, i64)` runs it only under `karac build`, `Wrap[Rec]` only under `--interp`, and a nested tuple or an `Array[Rec, 2]` on none of the three | — |
 
 ### Relocated
 
@@ -2487,6 +2489,7 @@ _Generated from `bug-ledger.jsonl` by `scripts/bug-curve.py` (2026-05-20 → 202
 | B-2026-09-10-34 | codegen | high | AN OWNED `Array` PASSED INTO A GENERIC CALLEE THAT RETURNS IT DOUBLE FREES IN THE CALLER -- `let b: Array[String, 2] = passthru(a)` over `fn passthru… | 55e767a |
 | B-2026-09-11-1 | other | low | THE MATCH-PAYLOAD PROJECTION STOPS AT `Option`/`Result` AND AT BOUND PAYLOADS -- a `Some(_)` wildcard and every USER ENUM arm still schedule zero dro… | fddcfcf |
 | B-2026-09-11-3 | codegen | medium | A USER-DECLARED GENERIC ENUM LEAKS ITS HEAP-BOXED PAYLOAD AT EVERY SCOPE EXIT -- `Slot[String]` loses its whole buffer while the SAME enum monomorphi… | cec3c32 |
+| B-2026-09-11-4 | codegen | medium | A TUPLE, AN `Array`, AN `Option[String]` AND A GENERIC-STRUCT PAYLOAD LEAKED INSIDE A USER GENERIC ENUM'S HEAP BOX -- `enum_boxed_payload_interior_dr… | a6584ca |
 
 </details>
 
