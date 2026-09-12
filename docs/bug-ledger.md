@@ -92,16 +92,16 @@ distinguish "bugs flattening" from "we stopped writing them down."
 
 | class | total |
 |---|---|
-| miscompile | 405 |
+| miscompile | 406 |
 | run-vs-build | 392 |
 | leak | 329 |
 | double-free | 226 |
 | missing-feature | 196 |
-| codegen-gap | 174 |
+| codegen-gap | 175 |
 | diagnostics | 125 |
 | false-positive | 106 |
 | perf | 104 |
-| other | 101 |
+| other | 102 |
 | soundness | 95 |
 | crash | 80 |
 | use-after-free | 38 |
@@ -110,8 +110,8 @@ distinguish "bugs flattening" from "we stopped writing them down."
 
 | surface | total |
 |---|---|
-| codegen | 1687 |
-| interp | 420 |
+| codegen | 1690 |
+| interp | 421 |
 | typecheck | 297 |
 | other | 87 |
 | ownership | 74 |
@@ -183,6 +183,9 @@ _Generated from `bug-ledger.jsonl` by `scripts/bug-curve.py` (2026-05-20 → 202
 | B-2026-09-12-17 | 2026-09-12 | codegen+interp | medium | A GENERIC USER ENUM'S PAYLOAD `Drop` BODY RUNS ON NO COMPILED BACKEND WHEN THE ARGUMENT IS A FRESH TEMP -- `takeit(Full(R { id: 5 }))` over `enum Ho[T] { Full(T), Empty }` prints `f:5 dR5 end` under `--interp` and `f:5 end` at -O0, -O0 autopar and -O2 autopar, while the MONOMORPHIC `enum Ho { Full(R) }` spelling of the same program is correct on all four and a NAMED LOCAL of the generic enum is correct too. B-2026-09-09-18's caller-side bodies channel is gated on the parameter's head being literally `Option` or `Result` (`call_dispatch.rs`, `if head != "Option" && head != "Result"`), so a user enum head never reaches it; the named-local cells are correct because their let site owns the bodies instead. The qualified and bare spellings behave IDENTICALLY, which is what separates this from B-2026-09-12-11 | — |
 | B-2026-09-12-19 | 2026-09-12 | codegen | medium | A BOXED `Array[T, N]` ENUM PAYLOAD'S INTERIOR IS FREED BY NOBODY AT THREE OF THE FOUR REGISTRATION SITES -- 96 B per cell in the by-value-param and returned positions, because `array_interior_ok` can only be answered `true` by the `let` site and the real repair is the missing array move-out disarm | — |
 | B-2026-09-12-21 | 2026-09-12 | codegen+interp | low | AN `Array` ELEMENT'S USER `Drop` BODY RUNS ON NO BACKEND ONCE THE ARRAY IS MOVED INTO A STRUCT FIELD -- `Array[R, 2]` with `impl Drop for R` prints `dR dR` on all six surfaces as a bare local and NOTHING on all six once `let w = W { a: a }` takes it, with memory balanced 8/8 either way, so it is a lost BODY rather than a lost buffer and no leak gate or A/B gate can see it | — |
+| B-2026-09-12-22 | 2026-09-12 | codegen | high | A `ref`-ENUM MATCH BINDING OF AN `Array[T, N]` PAYLOAD IS NOT THE PAYLOAD -- reading through it yields UNINITIALISED memory on all five COMPILED surfaces (JIT + `karac build` at both opt levels x auto-par on/off) while `--interp` is correct; at -O2 the garbage folds to the OTHER arm's constant, so the symptom reads as a wrong-arm bug and hides the uninitialised read underneath | — |
+| B-2026-09-12-23 | 2026-09-12 | codegen | medium | INDEXING A `ref`-ENUM MATCH BINDING OF AN `Array[T, N]` PAYLOAD DOES NOT LOWER -- `match b { Packed(a) => a[1].name.len(), .. }` on a `ref` enum typechecks and runs under `--interp`, and `karac build` refuses it with `Index operator applied to non-array type`; the same expression on an OWNED match, and the same binding passed to a `ref Array[T, N]` callee, both lower | — |
+| B-2026-09-12-24 | 2026-09-12 | codegen+interp | medium | AN ENUM VARIANT'S `Array[T, N]` OR `Vec[T]` PAYLOAD NEVER RUNS ITS ELEMENTS' USER `Drop` BODIES -- the enum-payload twin of B-2026-09-12-21, and the answer to that row's own NOT-MEASURED question; `Option[Array[T, N]]` is the ONE spelling that is correct on every surface, which is exactly why the fuzzer's single container-payload shape reported green | — |
 
 ### Relocated
 
