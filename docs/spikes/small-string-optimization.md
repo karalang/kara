@@ -46,13 +46,18 @@ FINALLY RAN" below for the profile, the four hypotheses it falsified first, the
 latent bug the flip exposed, and the near-miss where a stale `karac` nearly got
 the whole thing reverted as a no-op.
 
-**The synthetic transient/retained table below is now STALE and must not be
-quoted.** Every number in it was taken with that unsigned gate live, so all of
-them understate SSO — the retained rows most of all, since a retained String is
-precisely what gets deep-copied at a consuming call. Re-run before citing.
+**The synthetic transient/retained table below was RE-MEASURED and is
+UNCHANGED** — and finding out why is the most useful thing the re-run produced.
+Not one of those benchmarks makes a by-value consuming call, so the gate never
+fired in any of them; they modelled *what is done with a slice* and omitted *how
+it travels*, and the second axis is where the 2.3 billion instructions were. A
+shape taxonomy without parameter passing cannot predict a compiler front end.
+The same entry records a second trap: on those benchmarks SSO runs **36% fewer
+instructions and 63% slower**, so an instruction delta must never be quoted as
+evidence of speed here.
 
-This doc is the campaign's living handoff: layout decision (settled), staged slice plan, the tag-aware
-accessor work list, and the verification matrix. Scoped 2026-06-12; Slice 1 landed
+This doc is the campaign's living handoff: layout decision (settled), staged
+slice plan, the tag-aware accessor work list, and the verification matrix. Scoped 2026-06-12; Slice 1 landed
 2026-07-09; Slice 2 construction 2026-09-11; Slice 3's FFI boundary opened
 2026-09-12.
 
@@ -404,12 +409,14 @@ perf payoff lands in Slice 2.
 
   ### The payoff measurement — three workloads, and the answer flips
 
-  > **STALE as of 2026-09-12 — do not quote these numbers.** Every row below was
-  > measured with the unsigned `dcopy.owned` gate live, which deep-copied each
-  > inline String back onto the heap at every by-value consuming call. All of
-  > them understate SSO, the retained rows most of all. Re-run before citing.
-  > The mechanism, and what it was worth on the self-hosted lexer, are under
-  > "THE LOSS WAS ONE MISSED GATE" below.
+  > **RE-MEASURED 2026-09-12 and UNCHANGED — these rows stand.** They were
+  > briefly marked stale on the theory that the unsigned `dcopy.owned` gate had
+  > depressed them. It had not: none of these benchmarks makes a by-value
+  > consuming call, so the gate never fired in any of them, and the allocation
+  > counts re-measure byte-identical. See "The synthetic tables RE-MEASURED"
+  > below — including why that is the sharpest available explanation of why this
+  > corpus mispredicted the real workload, and why an instruction-count delta
+  > must not be quoted as evidence of speed here.
 
   AOT, archives matching `3833ff8`, best-of-N wall time (best-of, not mean: the
   container is noisy and the minimum is the stabler statistic):
@@ -515,9 +522,10 @@ perf payoff lands in Slice 2.
 
   The site the profile actually uses. Same two-shape split as `s[a..b]`:
 
-  > **STALE as of 2026-09-12 — same reason as the table above.** Measured with
-  > the unsigned `dcopy.owned` gate live; both rows understate SSO. Re-run
-  > before citing.
+  > **NOT re-measured (2026-09-12).** The surviving harness file allocates
+  > 1,000,009 → 9 where this table records 1,000,047 → 47, so it is a different
+  > program and these rows could not be reproduced. They stand as originally
+  > measured. The sibling table above WAS re-measured and came back unchanged.
 
   | shape | allocations 0 → 1 | `SSO=0` | `SSO=1` | |
   |---|---|---|---|---|
@@ -1324,12 +1332,15 @@ perf payoff lands in Slice 2.
      than one cause — which is a useful negative, because the family resemblance
      ("inline descriptors reaching code written before they existed") made it
      reasonable to expect the de-masking to carry it away. It did not.
-  3. **Re-measure the synthetic shapes before quoting them again.** The
-     transient/retained table above was taken with the unsigned `dcopy` gate
-     live, so every one of those numbers understates SSO — the retained rows most
-     of all, since a retained String is exactly what gets deep-copied at a
-     consuming call. The −11%/−19%/−41% transient losses may also have shrunk.
-     **Nothing in that table should be quoted until it is re-run.**
+  3. **The synthetic shapes were re-measured and are UNCHANGED — done.** The
+     prediction that they understated SSO was wrong: none of them makes a
+     by-value consuming call, so the fixed gate never fired in any of them. What
+     that buys is a better account of why this corpus mispredicted the real
+     workload — it models what happens TO a slice and not how the slice TRAVELS
+     — and a hard rule that an instruction delta is not evidence of speed on SSO
+     work, since these benchmarks run 36% fewer instructions 63% slower. **The
+     corpus needs a by-value-consume benchmark before it can be trusted to
+     predict anything again.**
   4. **Branch-not-select stays a footnote** — measured at 0.9% of the regression
      it was filed against.
   5. **The read-path pessimism above was wrong, and the reason is worth keeping.**
@@ -1337,6 +1348,63 @@ perf payoff lands in Slice 2.
      a per-function delta, not a measurement of the selects themselves. The
      diffuse cost was real but small; one concentrated gate was 2.3 billion
      instructions. **Attribute to a line before concluding a cost is structural.**
+
+- **The synthetic tables RE-MEASURED, and the "stale" marking was WRONG
+  (2026-09-12).** After the `dcopy.owned` flip landed, both tables above were
+  marked STALE on the reasoning that every number in them was taken with the bad
+  gate live and so understated SSO — the retained rows most of all, since a
+  retained String is what gets deep-copied at a consuming call. Re-run against
+  the fixed compiler, the allocation counts come back **byte-identical**:
+  1,000,009 → 9 on each transient shape, 200,012 → 12 retained.
+
+  **Because none of the four benchmarks exercises the fixed gate at all.**
+  `emit_vecstr_defensive_copy` fires on a by-value consuming call into a function
+  with an owned `String`/`Vec` parameter. Not one of the synthetics makes such a
+  call — they slice, compare, and either discard or `push`. The self-hosted lexer
+  makes two per token: `keyword_or_ident(text: String)` and
+  `make_spanned(token: Token)`.
+
+  **That is also why the synthetic corpus mispredicted the real workload**, and
+  it is a sharper explanation than "the payoff is workload-shaped." The
+  benchmarks modelled *what is done with a slice* (kept vs discarded) and omitted
+  *how it travels* (by value into a callee, or not). The second axis turned out
+  to carry the dominant cost — 2.3 billion instructions on the lexer — and no
+  benchmark in the corpus had it. A shape-based taxonomy that does not include
+  parameter passing cannot predict a compiler front end.
+
+  ### INSTRUCTION COUNT IS NOT A PROXY FOR TIME ON THIS CHANGE
+
+  The re-measurement turned up something the campaign has been quietly relying
+  on, wrongly. On the synthetics, `KARAC_SSO=1` executes **far fewer
+  instructions and takes far longer** — measured at 10× iterations so the
+  ~5 ms process floor cannot explain it:
+
+  | 10M iterations | instructions | wall, best-of-5 | throughput |
+  |---|---|---|---|
+  | `lexlike` `SSO=0` | 2,540,034,522 | 179 ms | **14.2 G instr/s** |
+  | `lexlike` `SSO=1` | 1,619,437,650 (**−36%**) | 292 ms (**+63%**) | **5.6 G instr/s** |
+  | `substr` `SSO=0` | 1,920,834,802 | 119 ms | **16.2 G instr/s** |
+  | `substr` `SSO=1` | 1,630,235,033 (**−15%**) | 296 ms (**+149%**) | **5.5 G instr/s** |
+
+  A ~3× collapse in instructions-per-second, and it is mechanical rather than
+  mysterious: SSO trades a large number of **cheap, perfectly predictable**
+  allocator instructions (glibc's tcache fast path in a tight loop) for a small
+  number of **serially dependent** ones. An inline descriptor's data pointer
+  comes out of a `cmovs`, so every read is a load whose *address* depends on a
+  comparison — the address cannot be speculated, and the `bcmp` the opaque
+  pointer forces is an indirect call on top. Instruction count cannot see a
+  dependency chain.
+
+  **So do not quote an instruction delta as evidence of speed on SSO work.** The
+  two metrics happened to agree on the self-hosted lexer (−21.9% instructions,
+  14.8% faster) because allocator work is a large share of a big program; on a
+  tight loop they point in opposite directions. Wall time is the claim;
+  instruction count is a diagnostic for *where* the work went.
+
+  One bookkeeping note: `substr.kara` as it survives in the harness allocates
+  1,000,009 → 9, while this doc's `String.substring` table records 1,000,047 →
+  47. Those are different programs, so that table's rows were **not** reproduced
+  here and remain as originally measured.
 - **Slice 4 (optional, "go further").** Pair with the lexer source-slices (below) to get
   the hot path to Rust *zero*-copy; small-string fast paths in concat/compare.
 
