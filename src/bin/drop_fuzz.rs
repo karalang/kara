@@ -199,6 +199,29 @@ mod llvm_main {
         GenSlotStr,     // Slot[String] — a generic enum at a HEAP type argument
         GenSlotTracked, // Slot[Tracked] — the same, drop-log observable
         GenWrapTracked, // struct Wrap[T] { item: T } at Wrap[Tracked]
+        // ── monomorphic enum at an `Array` payload (B-2026-09-12-12 / -18) ──
+        //
+        // The GENERIC axis above was covered — `Option[Array[Tracked, 2]]` and
+        // `Slot[T]` both box an oversize payload — and the MONOMORPHIC one was
+        // not. That gap is exactly where both rows lived: the box drop existed
+        // only on the generic path, because -12's own notes recorded the
+        // premise "it bites only the GENERIC case". An `Array[T, N]` refutes
+        // that (the under-sizing comes from the spelling a variant declaration
+        // is forced to use, not from erasure), but nothing in this generator
+        // could build the counterexample, so the corpus reported its usual 0
+        // while a 768-byte leak sat on `main`.
+        //
+        // Three axes, because the pair of bugs needed all three: the payload
+        // built INLINE at the constructor (-12, the box drop), the payload
+        // MOVED IN from a local (-18, the double free the interior walk
+        // introduced), and the QUALIFIED vs UNQUALIFIED constructor spelling
+        // (`Bin.Packed` arrives as a `Path` callee, `Packed` as a `MethodCall`
+        // — a gate written for one spelling leaves the other broken).
+        //
+        // Fourth time this generator has been widened after a hand probe found
+        // what it could not express (see the NESTED, `Array`, and user/generic
+        // enum blocks above). The pattern is itself the finding.
+        UserEnumArr, // enum Bin { Packed(Array[Tracked, 2]), Bare }
     }
 
     // A live binding in the generated `main` body.
@@ -724,6 +747,53 @@ mod llvm_main {
                 }
             }
             self.add_var_mut(n, Ty::UserEnum);
+        }
+
+        /// A monomorphic enum whose variant declares an `Array[Tracked, 2]`,
+        /// i.e. a payload wider than the enum's inline slot, so codegen boxes
+        /// it. The three construction shapes are the three axes named on
+        /// `Ty::UserEnumArr`; the moved-from-local arm deliberately does NOT
+        /// register its source binding, because the source is moved and a sink
+        /// touching it afterwards would be a move-checker error, not a drop bug.
+        fn make_user_enum_arr(&mut self) {
+            let n = self.fresh("bn");
+            match self.rng.below(6) {
+                0 => {
+                    self.emit(format!("        let mut {n}: Bin = Bare;"));
+                }
+                1 | 2 => {
+                    // Inline at the constructor, qualified spelling.
+                    let (t1, t2) = (self.fresh_tag(), self.fresh_tag());
+                    let (l1, l2) = (self.str_literal(), self.str_literal());
+                    self.emit(format!(
+                        "        let mut {n}: Bin = Bin.Packed(\
+                         [new_tracked({t1}i64, {l1}), new_tracked({t2}i64, {l2})]);"
+                    ));
+                }
+                3 => {
+                    // Inline at the constructor, UNQUALIFIED spelling.
+                    let (t1, t2) = (self.fresh_tag(), self.fresh_tag());
+                    let (l1, l2) = (self.str_literal(), self.str_literal());
+                    self.emit(format!(
+                        "        let mut {n}: Bin = Packed(\
+                         [new_tracked({t1}i64, {l1}), new_tracked({t2}i64, {l2})]);"
+                    ));
+                }
+                _ => {
+                    // Moved in from a local — the shape whose source cleanup
+                    // stayed armed while `String` / struct / tuple locals were
+                    // all disarmed (B-2026-09-12-18).
+                    let src = self.fresh("bsrc");
+                    let (t1, t2) = (self.fresh_tag(), self.fresh_tag());
+                    let (l1, l2) = (self.str_literal(), self.str_literal());
+                    self.emit(format!(
+                        "        let mut {src}: Array[Tracked, 2] = \
+                         [new_tracked({t1}i64, {l1}), new_tracked({t2}i64, {l2})];"
+                    ));
+                    self.emit(format!("        let mut {n}: Bin = Bin.Packed({src});"));
+                }
+            }
+            self.add_var_mut(n, Ty::UserEnumArr);
         }
 
         fn make_gen_slot_str(&mut self) {
@@ -1372,6 +1442,25 @@ mod llvm_main {
                     // The user-enum sink matches all three arm shapes, so one
                     // generated program exercises the positional split, the
                     // scalar payload and the unit variant together.
+                    // Half these sinks BORROW rather than match, for the same
+                    // reason `GenSlotStr`'s do — and here it is the half that
+                    // carries B-2026-09-12-12. A matched scrutinee is MOVED, so
+                    // the payload's drop belongs to the arm binding and the
+                    // enum never dies as an enum; only a peeked one is still
+                    // live at scope exit, which is where the missing box free
+                    // is measurable at all. An always-matching sink would have
+                    // left this shape as unfuzzed as its absence did.
+                    Ty::UserEnumArr => {
+                        if self.rng.chance(1, 2) {
+                            format!("        acc = acc + bin_peek({});", v.name)
+                        } else {
+                            let x = self.fresh("bnx");
+                            format!(
+                                "        match {} {{ Packed({x}) => {{ acc = acc + {x}[0].name.len(); }}, Bare => {{}} }}",
+                                v.name
+                            )
+                        }
+                    }
                     Ty::UserEnum => {
                         let x = self.fresh("pcx");
                         format!(
@@ -1444,7 +1533,7 @@ mod llvm_main {
             // weight. They are the only ones the drop-log oracle can judge, and
             // the displacement transforms all need one live to apply at all —
             // too thin a share and most programs never reach the new shapes.
-            match self.rng.below(28) {
+            match self.rng.below(29) {
                 0 => self.make_str(),
                 1 => self.make_vecstr(),
                 2 => self.make_pair(),
@@ -1472,7 +1561,8 @@ mod llvm_main {
                 24 => self.make_user_enum(),
                 25 => self.make_gen_slot_str(),
                 26 => self.make_gen_slot_tracked(),
-                _ => self.make_gen_wrap_tracked(),
+                27 => self.make_gen_wrap_tracked(),
+                _ => self.make_user_enum_arr(),
             }
         }
 
@@ -1531,6 +1621,23 @@ mod llvm_main {
     }
 
     /// Fixed type / helper-fn preamble shared by every generated program.
+    ///
+    /// `bin_peek` reads its payload through `arr_inner_peek(a)` rather than the
+    /// natural `a[1].name.len()` ON PURPOSE, and the reason is a bug, not a
+    /// style choice: indexing a `ref`-enum match binding of an `Array` payload
+    /// does not lower at all (B-2026-09-12-23, `Index operator applied to
+    /// non-array type`). Because this preamble is prepended to EVERY generated
+    /// program, the natural spelling made codegen refuse all of them — 10
+    /// programs x 2 AOT surfaces — while the run still reported
+    /// `valid: 10 programs (10 valid executions)` off the interpreter alone.
+    /// The per-reason invalid tally below is what surfaced that; keep both.
+    ///
+    /// The indirect spelling lowers but reads UNINITIALISED memory on every
+    /// compiled surface (B-2026-09-12-22), so this helper returns garbage under
+    /// `karac build` today. That is tolerable here and only here: the drop-log
+    /// oracle judges the `N`/`D` tokens, which are unaffected, and the borrow
+    /// sink's job is to keep the enum LIVE to scope exit rather than to compute
+    /// anything. Re-spell it to `a[1].name.len()` once -22/-23 are fixed.
     const PREAMBLE: &str = r#"struct Payload { tag: i64, name: String, items: Vec[String] }
 
 shared struct Holder { s: String }
@@ -1601,6 +1708,8 @@ struct Wrap[T] { item: T }
 
 enum Parcel { Two(Tracked, String), Note(i64), Nothing }
 
+enum Bin { Packed(Array[Tracked, 2]), Bare }
+
 fn slot_str_peek(s: ref Slot[String]) -> i64 {
     match s {
         Filled(x) => x.len(),
@@ -1612,6 +1721,13 @@ fn slot_tracked_peek(s: ref Slot[Tracked]) -> i64 {
     match s {
         Filled(t) => t.name.len(),
         Blank => 0i64,
+    }
+}
+
+fn bin_peek(b: ref Bin) -> i64 {
+    match b {
+        Packed(a) => arr_inner_peek(a),
+        Bare => 0i64,
     }
 }"#;
 
@@ -2534,6 +2650,16 @@ fn slot_tracked_peek(s: ref Slot[Tracked]) -> i64 {
         // shapes, and a clean report says nothing about them — the exact failure
         // mode that let the pre-widening corpus report 0 findings.
         let mut drop_tokens = 0u64;
+        // Per-reason tally of the (program, surface) pairs that never ran.
+        // `Outcome::Invalid` used to be discarded silently, which makes a
+        // WIDENING unfalsifiable: add a shape that does not typecheck and every
+        // program carrying it becomes `Invalid("typecheck")` and disappears, so
+        // the run reports its usual green over a grammar arm that was never
+        // executed once. That is the same vacuity the `drop_tokens` counter
+        // above exists for, one level up — aggregate construction counts cannot
+        // localize a single dead arm. Printed unconditionally, because the
+        // number that matters is the one nobody thought to ask for.
+        let mut invalid_reasons: BTreeMap<&'static str, u64> = BTreeMap::new();
         // Slice 3 — ownership-oracle model self-check across the corpus.
         let mut oracle_programs = 0u64;
         let mut oracle_drops = 0u64;
@@ -2593,7 +2719,9 @@ fn slot_tracked_peek(s: ref Slot[Tracked]) -> i64 {
 
             for surface in SURFACES {
                 match runner.run(&src, surface) {
-                    Outcome::Invalid(_reason) => {}
+                    Outcome::Invalid(reason) => {
+                        *invalid_reasons.entry(reason).or_insert(0) += 1;
+                    }
                     Outcome::Clean { log } => {
                         any_valid = true;
                         runs += 1;
@@ -2702,6 +2830,20 @@ fn slot_tracked_peek(s: ref Slot[Tracked]) -> i64 {
                 "  drop-log oracle: {drop_tokens} construction(s) observed on runs \
                  that balanced (imbalanced runs are listed above)"
             );
+        }
+
+        // Per-reason invalid tally. A generator arm that never compiles is
+        // invisible in every other line of this summary.
+        if invalid_reasons.is_empty() {
+            eprintln!("  invalid (program, surface) pairs: none");
+        } else {
+            let total: u64 = invalid_reasons.values().sum();
+            let detail = invalid_reasons
+                .iter()
+                .map(|(r, n)| format!("{r}={n}"))
+                .collect::<Vec<_>>()
+                .join(" ");
+            eprintln!("  invalid (program, surface) pairs: {total} ({detail})");
         }
 
         // Known-open pins: report which fired, and flag any that did not so a

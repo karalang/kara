@@ -8,8 +8,8 @@ of [`../ownership-model-mechanization.md`](../ownership-model-mechanization.md).
 - `report.md` — the last committed run's report: measured drop-bug rate +
   bucketed signature table + any shrunk minimal repros.
 - `repro_*.kara` — shrunk, kata-sized repros, one per finding signature (only
-  present when a run found something; **empty on a clean HEAD**, which is the
-  current state).
+  present when a run found something). **Three are present as of 2026-09-12**;
+  they shrink to the same four-line program on all three surfaces.
 
 ## Run it
 
@@ -28,11 +28,69 @@ seed: program *k* uses `seed + k`, so a finding is re-derivable with
 Linux; Apple-clang macOS has no LSan (double-free / UAF only there). On macOS,
 run this inside the container gate (`scripts/lsan-local.sh --shell`).
 
-## Current measurement (2026-07-07)
+## Current measurement (2026-09-12) — 43.58%, and the 0 before it was vacuous
 
-**0 findings over 1000+ valid (program, surface) executions** on HEAD. The known
-drop-soundness classes in the generator's covered heap-core are closed on the
-current compiler.
+`--count 400 --seed 5000` at `16bb16e`:
+
+| | |
+|---|---|
+| programs generated | 400 |
+| valid (program, surface) executions | 1200 (3 surfaces, **0 invalid**) |
+| findings | **523 — 43.58%** |
+| signatures | `seq:drop-never-ran` 196 · `autopar:drop-never-ran` 196 · `interp:drop-never-ran` 131 |
+| ownership-oracle violations | 0 over 5793 scheduled drops |
+| drop-log constructions on balanced runs | 198 720 |
+
+All three repros shrink to the same program, and it is the shape this run's
+widening added — a monomorphic enum at an `Array` payload:
+
+```rust
+enum Bin { Packed(Array[Tracked, 2]), Bare }
+// ...
+let mut bn3: Bin = Packed([new_tracked(1i64, "..."), new_tracked(2i64, "...")]);
+```
+
+The elements' user `Drop` bodies never run (B-2026-09-12-24). Memory is
+balanced — `de0ad99` freed the box — so ASan, LSan and valgrind are all clean
+on it and only the drop-log oracle can see it.
+
+### The previous measurement was not wrong, it was unasked
+
+The 2026-07-07 line this replaces read "**0 findings over 1000+ valid
+executions** … the known drop-soundness classes in the generator's covered
+heap-core are closed on the current compiler". Both halves were true as
+written; the load-bearing words were *covered* and *known*. The generator's
+only container-payload enum shape was `OptArrTracked` =
+`Option[Array[Tracked, 2]]`, and `Option` is — measured — the ONE spelling in
+that family that runs its element bodies correctly on every surface. The
+monomorphic enum, `Slot[Vec[T]]`, and `Slot[Array[T, N]]` under the
+interpreter were all broken the whole time, and the corpus could not express
+any of them.
+
+That makes four widenings in a row that were prompted by a hand probe finding
+what the generator could not build (the `Ty` enum's comment blocks record the
+NESTED, `Array`, and user/generic-enum ones). The recurring lesson is not that
+the grammar is too small — it is that **a fuzzer's green is a statement about
+its grammar, not about the compiler**, and the only honest way to read one is
+next to the list of shapes it can emit.
+
+### And a green run can be greener than the run really was
+
+This widening's first pass reported `valid: 10 programs (10 valid executions)`
+— a plausible line that was actually 10 interpreter runs with **every AOT
+surface refusing to compile**, because the new preamble helper tripped
+B-2026-09-12-23. `Outcome::Invalid(_)` was discarded silently, so a harness
+whose entire sanitizer arm had stopped running still printed a summary that
+read like a clean one.
+
+The run now prints a per-reason tally, unconditionally:
+
+```
+  invalid (program, surface) pairs: 20 (codegen=20)   <- the broken pass
+  invalid (program, surface) pairs: none              <- the run above
+```
+
+Check that line before reading any other number in a report.
 
 ## Why "green" is not vacuous — validation by fault injection
 
