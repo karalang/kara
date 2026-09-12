@@ -84794,6 +84794,100 @@ fn main() {
         );
     }
 
+    /// B-2026-09-12-8 — an enum's TUPLE payload. No generics, no boxing, no
+    /// erased payload area: `enum T2 { P((String, i64)), Q }` lost 24 B a round
+    /// on plain scope exit while `enum S2 { R(Pr), Z }` holding a user struct
+    /// of the same two fields was clean.
+    ///
+    /// `enum_drop_kind_for_type_expr` matched only `TypeKind::Path`, so a tuple
+    /// fell to the `_` tail and classified `EnumDropKind::None`. The machinery
+    /// to free it already existed and already worked in every OTHER position a
+    /// tuple can hold heap — a plain local, a struct field, a `Vec` element,
+    /// all measured clean against the same compiler — so the enum payload was
+    /// the one position left out, and the fix is a `NestedTuple` kind wired to
+    /// the tuple drop those three already use.
+    ///
+    /// `c2` AND `c6` ARE THE DOUBLE-FREE CELLS AND THEY EARNED THEIR PLACE.
+    /// Adding the drop alone — without the symmetric arm in
+    /// `deep_copy_enum_heap_payload_in_place` — turned this row's leak into a
+    /// double free the moment the enum was passed BY VALUE: the callee's
+    /// bit-copied param aliased the caller's element buffers and both drops
+    /// freed them (`Invalid free() ... 0 bytes inside a block of size 24
+    /// free'd`, once per round). That intermediate state passed a leak-only
+    /// check with flying colours — every leak cell read clean — which is why
+    /// the by-value cell is in the fixture and not merely in the prose.
+    ///
+    /// `c8` and `c9` are the controls (a user-struct payload and a bare
+    /// `String` payload), clean before and after in all five call shapes.
+    ///
+    /// NOT VACUOUS: pre-fix this program loses **1,344 B in 56 blocks plus 320
+    /// B indirect at `KARAC_OPT_LEVEL=0`, and 800 B in 40 blocks at the default
+    /// `-O2`** — it fails against the unfixed compiler at BOTH levels. Payloads
+    /// are seeded from the opaque `env.args().len()` and read through
+    /// `contains` (bytes, not length).
+    #[test]
+    fn asan_enum_tuple_payload_frees_its_elements() {
+        let mut expected: Vec<&str> = Vec::new();
+        for _ in 0..8 {
+            expected.extend_from_slice(&[
+                "c1", "c2:true", "c3", "c4:true", "c5:true", "c6:2", "c7", "c8:true", "c9:true",
+            ]);
+        }
+        expected.push("end");
+        assert_clean_asan_run_min_allocs(
+            r#"
+struct Pr { s: String, k: i64 }
+enum T2 { P((String, i64)), Q }
+enum Tvec { Pvec((Vec[String], i64)), Qvec }
+enum Tnest { Pnest(((String, i64), i64)), Qnest }
+enum S2 { R(Pr), Z }
+enum V2 { W(String), Y }
+
+fn take2(s: T2) -> bool { match s { P(x) => x.0.contains("row"), Q => false, } }
+fn peek2(s: ref T2) -> bool { match s { P(x) => x.0.contains("row"), Q => false, } }
+fn mk2(i: i64, n: i64) -> T2 { return P((f"row-cccccccccccc-{i}-{n}", 1i64)); }
+fn takev(s: Tvec) -> i64 {
+    match s { Pvec(x) => { let mut k: i64 = 0i64; for e in x.0 { if e.contains("row") { k = k + 1i64; } } return k; }, Qvec => { return 0i64; } }
+}
+fn takes(s: S2) -> bool { match s { R(x) => x.s.contains("row"), Z => false, } }
+fn takew(s: V2) -> bool { match s { W(x) => x.contains("row"), Y => false, } }
+
+fn main() {
+    let n = env.args().len() as i64;
+    let mut i: i64 = 0i64;
+    while i < 8i64 {
+        let c1: T2 = P((f"row-aaaaaaaaaaaa-{i}-{n}", 1i64));
+        println("c1");
+        let c2: T2 = P((f"row-bbbbbbbbbbbb-{i}-{n}", 1i64));
+        println(f"c2:{take2(c2)}");
+        let c3: T2 = mk2(i, n);
+        println("c3");
+        let c4: T2 = P((f"row-dddddddddddd-{i}-{n}", 1i64));
+        println(f"c4:{peek2(c4)}");
+        let c5: T2 = P((f"row-eeeeeeeeeeee-{i}-{n}", 1i64));
+        println(f"c5:{match c5 { P(x) => x.0.contains("row"), Q => false, }}");
+        let c6: Tvec = Pvec((Vec[f"row-ffffffffffff-{i}-{n}", f"row-gggggggggggg-{i}-{n}"], 1i64));
+        println(f"c6:{takev(c6)}");
+        let c7: Tnest = Pnest(((f"row-hhhhhhhhhhhh-{i}-{n}", 1i64), 2i64));
+        println("c7");
+        let c8: S2 = R(Pr { s: f"row-iiiiiiiiiiii-{i}-{n}", k: 1i64 });
+        println(f"c8:{takes(c8)}");
+        let c9: V2 = W(f"row-jjjjjjjjjjjj-{i}-{n}");
+        println(f"c9:{takew(c9)}");
+        i = i + 1i64;
+    }
+    println("end");
+}
+"#,
+            &expected,
+            "asan_enum_tuple_payload_frees_its_elements",
+            // 173 measured at the default level post-fix (the pre-fix binary
+            // reaches 133 — the leaked allocations are the ones the optimizer
+            // could delete). A version folded away entirely reaches ~10.
+            90,
+        );
+    }
+
     /// B-2026-09-06-72 — a `shared` FIELD's 16-byte refcount block when the
     /// owning struct travels out of a function inside an AGGREGATE.
     ///

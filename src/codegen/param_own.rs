@@ -3623,6 +3623,60 @@ impl<'ctx> super::Codegen<'ctx> {
                         }
                         continue;
                     }
+                    // B-2026-09-12-8 — a TUPLE payload: the symmetric peer of
+                    // the enum drop's new `NestedTuple` arm, and NOT optional.
+                    // Adding that drop without this turned the row's leak into
+                    // a double free the moment the enum was passed BY VALUE:
+                    // the callee's bit-copied param aliased the caller's
+                    // element buffers and both drops freed them —
+                    // `Invalid free() ... 0 bytes inside a block of size 24
+                    // free'd`, once per round, measured on
+                    // `take(M.P((f"...", 1)))` at -O0. The leak cell and the
+                    // double-free cell sit side by side in the regression
+                    // fixture for exactly this reason.
+                    //
+                    // The payload's word region starts at LLVM field
+                    // `start_word + 1` (tag is field 0) and the classifier only
+                    // picked `NestedTuple` when the tuple is word-aligned, so
+                    // that region IS the tuple. Recurse per element through the
+                    // same `deep_copy_one_aggregate_field` the struct walk's
+                    // tuple FIELD arm uses, so every element shape the two
+                    // paths admit stays in agreement by construction.
+                    if *kind == EnumDropKind::NestedTuple {
+                        let elems =
+                            variant_tes
+                                .get(name)
+                                .and_then(|tes| tes.get(fi))
+                                .and_then(|te| match &te.kind {
+                                    TypeKind::Tuple(es) if !es.is_empty() => Some(es.clone()),
+                                    _ => None,
+                                });
+                        if let Some(elems) = elems {
+                            let tup_ty = match self.llvm_type_for_type_expr(&TypeExpr {
+                                kind: TypeKind::Tuple(elems.clone()),
+                                span: Default::default(),
+                            }) {
+                                BasicTypeEnum::StructType(t) => Some(t),
+                                _ => None,
+                            };
+                            if let (Some(tup_ty), Ok(region_ptr)) = (
+                                tup_ty,
+                                self.builder.build_struct_gep(
+                                    enum_ty,
+                                    base_ptr,
+                                    (*start_word + 1) as u32,
+                                    "p14e.tup",
+                                ),
+                            ) {
+                                for (j, ete) in elems.iter().enumerate() {
+                                    self.deep_copy_one_aggregate_field(
+                                        region_ptr, tup_ty, j as u32, ete,
+                                    );
+                                }
+                            }
+                        }
+                        continue;
+                    }
                     // B-2026-07-23-11: a `Map`/`Set`(-family) payload — deep-clone
                     // the handle in place (src == dst == the payload-word slot) via
                     // the map clone fn, so a callee-owned by-value enum param owns

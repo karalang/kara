@@ -5697,6 +5697,36 @@ impl<'ctx> super::Codegen<'ctx> {
                     _ => EnumDropKind::None,
                 }
             }
+            // B-2026-09-12-8 — a TUPLE payload. Everything above is keyed on
+            // `TypeKind::Path`, so a tuple fell to the `_` tail and classified
+            // `None`: `enum M { P((String, i64)), Q }` lost 24 B a round on
+            // plain scope exit while the identical enum holding a user STRUCT
+            // of the same two fields was clean.
+            //
+            // Word-alignment is the same precondition the `NestedStruct` arms
+            // above carry, asked through the predicate that already has a tuple
+            // arm: the drop hands the payload's word region to the tuple's own
+            // drop fn, so the tuple's LLVM fields must line up with the enum's
+            // 8-byte payload words. A `(bool, i64)` packs its first element
+            // sub-word and is declined rather than dropped at the wrong offsets.
+            //
+            // The heap question is asked with the same pair
+            // `synthesize_tuple_drop_fn_te` and the struct walk's own
+            // `FieldDrop::NestedTuple` classifier use — `type_expr_has_drop_heap`
+            // reads `Option`/`Result` as heapless by design, so the
+            // `tuple_elem_needs_deep_drop` half is what keeps a
+            // `(Option[Res], i64)` payload from being read as owning nothing
+            // (B-2026-08-03-3 / B-2026-08-03-7, the same correction one table
+            // over).
+            TypeKind::Tuple(elems)
+                if !elems.is_empty()
+                    && self.type_expr_word_aligned(ty, &mut Vec::new())
+                    && elems.iter().any(|e| {
+                        self.type_expr_has_drop_heap(e) || self.tuple_elem_needs_deep_drop(e)
+                    }) =>
+            {
+                EnumDropKind::NestedTuple
+            }
             _ => EnumDropKind::None,
         }
     }

@@ -266,6 +266,20 @@ pub(crate) enum EnumDropKind {
     /// enums aren't in `enum_layouts` yet at `declare_enums` time) — tracked
     /// separately, not in this slice.
     NestedStruct,
+    /// B-2026-09-12-8 — a TUPLE payload laid out inline in the variant's
+    /// payload words, the enum-side peer of the struct walk's
+    /// `FieldDrop::NestedTuple`. Dropped by handing the payload's word-region
+    /// pointer to [`synthesize_tuple_drop_fn_te`], exactly as `NestedStruct`
+    /// hands its region to `__karac_drop_struct_<S>` — the tuple's LLVM fields
+    /// are 8-byte words at the same offsets, which the classifier enforces with
+    /// `type_expr_word_aligned` before choosing this kind.
+    ///
+    /// The machinery this reaches already existed and already worked in every
+    /// OTHER position a tuple can hold heap: a plain local, a struct field, a
+    /// `Vec` element. Measured clean in all three while the enum payload beside
+    /// them leaked, because the classifier is keyed on `TypeKind::Path` and a
+    /// tuple has no path spelling to look up.
+    NestedTuple,
     /// B-2026-09-05-26: payload field is a named non-shared user struct that
     /// the two `NestedStruct` admissions DECLINE — not copy-supported (a
     /// `Drop`-bearing field, a `Map` field) and owning no shared field — yet

@@ -627,6 +627,63 @@ impl<'ctx> super::Codegen<'ctx> {
                                 }
                             }
                         }
+                        EnumDropKind::NestedTuple => {
+                            // B-2026-09-12-8 — the enum-side peer of the struct
+                            // walk's `FieldDrop::NestedTuple`, and a wiring job
+                            // rather than new machinery: the tuple drop this
+                            // reaches already worked in every OTHER position a
+                            // tuple can hold heap (a plain local, a struct
+                            // field, a `Vec` element, all measured clean) while
+                            // the enum payload beside them leaked.
+                            //
+                            // The payload starts at word `start_word`, LLVM
+                            // field `start_word + 1` (the tag is field 0). The
+                            // enum's payload words and the tuple's own LLVM
+                            // fields are 8-byte words at the same offsets — the
+                            // classifier picks this kind only when
+                            // `type_expr_word_aligned` agrees — so the
+                            // word-region pointer IS a pointer to the tuple,
+                            // exactly as the `NestedStruct` arm above hands its
+                            // region to `__karac_drop_struct_<S>`.
+                            //
+                            // Synthesized BEFORE the GEP: sub-emitters may move
+                            // the builder's insert block (the same ordering
+                            // caution `emit_tuple_drop_fn`'s callers observe).
+                            let tuple_te = variant_field_tes
+                                .iter()
+                                .find(|(n, _)| n == variant_name)
+                                .and_then(|(_, tes)| tes.get(fi))
+                                .cloned();
+                            if let Some(te) = tuple_te {
+                                if let crate::ast::TypeKind::Tuple(elems) = te.kind.clone() {
+                                    let agg = self.llvm_type_for_type_expr(&te);
+                                    if let inkwell::types::BasicTypeEnum::StructType(agg_ty) = agg {
+                                        // `None` when the tuple owns no
+                                        // drop-bearing heap. The classifier
+                                        // asks that same question before
+                                        // choosing this kind, so this is a
+                                        // guard rather than a live path.
+                                        if let Some(tdrop) =
+                                            self.synthesize_tuple_drop_fn_te(agg_ty, &elems)
+                                        {
+                                            let field_idx = (*start_word + 1) as u32;
+                                            let field_ptr = self
+                                                .builder
+                                                .build_struct_gep(
+                                                    layout.llvm_type,
+                                                    p_arg,
+                                                    field_idx,
+                                                    "drop.ntuple.p",
+                                                )
+                                                .unwrap();
+                                            self.builder
+                                                .build_call(tdrop, &[field_ptr.into()], "")
+                                                .unwrap();
+                                        }
+                                    }
+                                }
+                            }
+                        }
                         EnumDropKind::MapOrSet => {
                             // B-2026-07-23-11 — a `Map`/`Set`(-family) payload is
                             // a single heap-handle word at `start_word` (LLVM
