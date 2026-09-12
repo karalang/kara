@@ -6732,6 +6732,7 @@ impl<'ctx> Codegen<'ctx> {
                 pattern_binding_scrutinee_optres_area: 0,
                 pattern_binding_scrutinee_is_shared_enum: false,
                 match_scrutinee_enum_hint: None,
+                match_scrutinee_payload_tes: std::collections::HashMap::new(),
                 pattern_binding_types: HashMap::new(),
                 pattern_binding_inner_types: HashMap::new(),
                 pattern_binding_borrow_modes: HashMap::new(),

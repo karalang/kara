@@ -270,6 +270,42 @@ pub(crate) struct PatternState<'ctx> {
     /// enum can't be resolved statically, in which case the resolvers keep
     /// their prior user-vs-seed fallback.
     pub(crate) match_scrutinee_enum_hint: Option<String>,
+    /// B-2026-09-12-7 — variant name → the enum name of THAT VARIANT'S PAYLOAD,
+    /// for the match scrutinee currently being compiled (`{"Some": "MyOpt"}` for
+    /// a `match x { .. }` over `x: Option[MyOpt]`).
+    ///
+    /// The sibling hint above names the enum a TOP-LEVEL arm pattern resolves
+    /// against, and it is exactly wrong one level down: a NESTED sub-pattern
+    /// (`Some(Some(v))`'s inner `Some`) is a variant of the PAYLOAD's enum, not
+    /// of the scrutinee's. With only the outer hint,
+    /// `variant_pattern_enum_and_tag` answered `Option`'s `Some` for the inner
+    /// pattern of `match x: Option[MyOpt] { Some(Some(v)) => .. }` where
+    /// `enum MyOpt { Some(i64), Nothing }` — returning Option's tag (1, against
+    /// `MyOpt.Some`'s 0) AND Option's 4-word LLVM type, which then made
+    /// `reconstruct_payload_value` debox an INLINE 2-word payload via
+    /// `inttoptr`. One wrong lookup, both halves of the miscompile: a null
+    /// deref when the payload is narrow, a silently wrong arm when it is boxed.
+    ///
+    /// `and_in_nested_variant_conditions` and `bind_pattern_values`'s
+    /// `TupleVariant` arm both swap the hint to this variant's payload for the
+    /// duration of their sub-pattern loops, so a nested resolution asks the
+    /// payload's enum while the outer arm keeps asking the scrutinee's. BOTH
+    /// sides are needed: fixing only the condition path makes the arm correctly
+    /// ENTERED and then lets the binding debox an inline payload, which moves
+    /// the crash rather than removing it (measured).
+    ///
+    /// The value is the payload's full `TypeExpr`, not just its head name, so
+    /// each nesting level can rebuild the map for the next one
+    /// (`Option[Option[MyOpt]]` -> `Option[MyOpt]` -> `MyOpt`): a head name
+    /// alone cannot answer the level below it, which left a three-deep collision
+    /// still crashing. Keyed by the CURRENT level's variant names, and replaced
+    /// (not extended) as the recursion descends.
+    ///
+    /// Only populated where the payload is actually resolvable (a seeded
+    /// `Option`/`Result` whose payload names a known enum); absent leaves the
+    /// outer hint in place, so every shape that was resolving correctly keeps
+    /// its prior path.
+    pub(crate) match_scrutinee_payload_tes: std::collections::HashMap<String, TypeExpr>,
     /// Per-pattern-binding surface type table — populated from
     /// `Program.pattern_binding_types` (set by the lowering pass from
     /// `TypeCheckResult.pattern_binding_types`). Key: pattern's

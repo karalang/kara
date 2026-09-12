@@ -132,6 +132,14 @@ impl<'ctx> super::Codegen<'ctx> {
         self.pattern_state.match_scrutinee_enum_hint = self
             .type_name_of_expr(scrutinee)
             .filter(|n| self.type_decls.enum_layouts.contains_key(n.as_str()));
+        // B-2026-09-12-7 — and the per-variant PAYLOAD enum beside it, which is
+        // what a NESTED sub-pattern must resolve against. See
+        // `match_scrutinee_payload_enums`. Saved/restored on the same lines as
+        // the hint above so a nested match cannot inherit an outer scrutinee's
+        // payload map.
+        let saved_scrut_payload_tes =
+            std::mem::take(&mut self.pattern_state.match_scrutinee_payload_tes);
+        self.pattern_state.match_scrutinee_payload_tes = self.scrutinee_payload_tes(scrutinee);
         // `match v[i] { V(s) => … }` over a heap-element `Vec` — deep-clone the
         // shallow element so the destructure moves a payload field out of an
         // INDEPENDENT buffer, not the container's (otherwise the binding's drop
@@ -1606,6 +1614,7 @@ impl<'ctx> super::Codegen<'ctx> {
             .pattern_binding_scrutinee_payload_bodies_src = saved_bodies_src;
         self.pattern_state.pattern_binding_scrutinee_optres_slot = saved_optres_slot;
         self.pattern_state.match_scrutinee_enum_hint = saved_scrut_enum_hint;
+        self.pattern_state.match_scrutinee_payload_tes = saved_scrut_payload_tes;
 
         // Every arm diverged (`return` / `unreachable()` / `todo()` in all of
         // them): no arm branched to `merge_bb`, so it has no predecessors.
@@ -7509,6 +7518,63 @@ impl<'ctx> super::Codegen<'ctx> {
             .map(str::to_string)
     }
 
+    /// Build the `variant -> payload enum name` map for a match scrutinee
+    /// (B-2026-09-12-7). See `match_scrutinee_payload_enums` for why a nested
+    /// sub-pattern needs a hint of its own.
+    ///
+    /// Only the SEEDED envelopes are answered, because they are the only
+    /// scrutinees whose payload type is recorded per variable rather than being
+    /// readable off the layout: `Option`/`Result` erase their payload area to a
+    /// fixed width, so `enum_layouts` cannot say what `T` was, while
+    /// `var_option_payload_te` / `var_result_payload_te` hold the concrete
+    /// instantiation for any declared variable. A user enum's payload is not
+    /// covered here and deliberately keeps the outer hint: its variant defs
+    /// carry real types, so the shapes that were resolving correctly are left on
+    /// exactly the path they were on.
+    ///
+    /// Entries are filtered to payload heads that name a known enum — a struct,
+    /// tuple or scalar payload has no variants for a sub-pattern to resolve
+    /// against, so recording one would only displace a hint that is already
+    /// right.
+    fn scrutinee_payload_tes(
+        &self,
+        scrutinee: &Expr,
+    ) -> std::collections::HashMap<String, TypeExpr> {
+        let name = match &scrutinee.kind {
+            ExprKind::Identifier(n) => n.clone(),
+            ExprKind::SelfValue => "self".to_string(),
+            _ => return std::collections::HashMap::new(),
+        };
+        let mut out = std::collections::HashMap::new();
+        if let Some(te) = self.var_types.var_option_payload_te.get(name.as_str()) {
+            out.insert("Some".to_string(), te.clone());
+        }
+        if let Some((ok, err)) = self.var_types.var_result_payload_te.get(name.as_str()) {
+            out.insert("Ok".to_string(), ok.clone());
+            out.insert("Err".to_string(), err.clone());
+        }
+        out
+    }
+
+    /// The `variant -> payload TypeExpr` map for the level BELOW `te`
+    /// (B-2026-09-12-7) — how the nested hint follows the recursion down.
+    ///
+    /// `te` is the type of the value a nested sub-pattern destructures; its own
+    /// variants' payloads are what the level under it must resolve against. Only
+    /// the seeded envelopes answer, for the same reason
+    /// `scrutinee_payload_tes` covers only them: `Option`/`Result` erase their
+    /// payload area, so the instantiation is the only place the payload type
+    /// survives.
+    pub(super) fn payload_tes_below(te: &TypeExpr) -> std::collections::HashMap<String, TypeExpr> {
+        let mut out = std::collections::HashMap::new();
+        for v in ["Some", "Ok", "Err"] {
+            if let Some(p) = Self::seeded_enum_variant_payload_type_expr(te, v) {
+                out.insert(v.to_string(), p);
+            }
+        }
+        out
+    }
+
     /// Resolve `(enum llvm type, expected tag)` for a *variant* sub-pattern
     /// (`E.A(c)` / `E.S { .. }` / a fieldless `Binding` variant `E.B`), or
     /// `None` if the pattern is not an enum-variant pattern. **The tag and
@@ -7698,6 +7764,51 @@ impl<'ctx> super::Codegen<'ctx> {
             .build_conditional_branch(cond, check_bb, merge_bb)
             .unwrap();
         self.builder.position_at_end(check_bb);
+        // B-2026-09-12-7 — for the duration of this loop, an unqualified variant
+        // sub-pattern must resolve against the PAYLOAD's enum, not the
+        // scrutinee's. Both `variant_pattern_enum_and_tag` (the tag AND the LLVM
+        // type it hands `reconstruct_payload_value`) and `variant_pattern_enum_name`
+        // read the one hint field, so swapping it here moves every nested
+        // resolution at once. Restored below, on both the value and the error
+        // path, so an outer arm's own pattern keeps asking the scrutinee's enum.
+        let saved_hint_for_nested = self.pattern_state.match_scrutinee_enum_hint.clone();
+        let saved_payload_tes = std::mem::take(&mut self.pattern_state.match_scrutinee_payload_tes);
+        if let Some(payload_te) = saved_payload_tes.get(outer_variant_name) {
+            if let TypeKind::Path(pp) = &payload_te.kind {
+                if let Some(head) = pp.segments.last() {
+                    if self.type_decls.enum_layouts.contains_key(head.as_str()) {
+                        self.pattern_state.match_scrutinee_enum_hint = Some(head.clone());
+                    }
+                }
+            }
+            // Hand the level below this one ITS map, so a deeper collision
+            // (`Option[Option[MyOpt]]`) resolves each level against its own
+            // payload rather than re-answering this level's.
+            self.pattern_state.match_scrutinee_payload_tes = Self::payload_tes_below(payload_te);
+        }
+        let r = self.and_in_nested_variant_conditions_inner(
+            sv,
+            outer_variant_name,
+            sub_patterns,
+            entry_bb,
+            merge_bb,
+        );
+        self.pattern_state.match_scrutinee_enum_hint = saved_hint_for_nested;
+        self.pattern_state.match_scrutinee_payload_tes = saved_payload_tes;
+        r
+    }
+
+    /// The sub-pattern loop of [`Self::and_in_nested_variant_conditions`], split
+    /// out so the payload-enum hint swap has exactly one restore point across
+    /// both the value and the `?` error paths.
+    fn and_in_nested_variant_conditions_inner(
+        &mut self,
+        sv: inkwell::values::StructValue<'ctx>,
+        outer_variant_name: &str,
+        sub_patterns: &[Pattern],
+        entry_bb: inkwell::basic_block::BasicBlock<'ctx>,
+        merge_bb: inkwell::basic_block::BasicBlock<'ctx>,
+    ) -> Result<inkwell::values::IntValue<'ctx>, String> {
         let mut inner_cond = self.context.bool_type().const_int(1, false);
         let offsets = self.resolve_variant_field_offsets(
             outer_variant_name,

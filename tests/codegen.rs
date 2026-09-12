@@ -153582,6 +153582,207 @@ fn main() {
         }
     }
 
+    /// B-2026-09-12-7 — a NESTED envelope destructure whose inner variant name
+    /// collides with the ENCLOSING envelope's own variant set miscompiled, from
+    /// ONE wrong lookup that produced three different observables.
+    ///
+    /// `variant_pattern_enum_and_tag` resolves an unqualified variant pattern
+    /// against `match_scrutinee_enum_hint` — the #39 disambiguator, which names
+    /// the enum a TOP-LEVEL arm resolves against. That hint is exactly wrong one
+    /// level down: a nested sub-pattern is a variant of the PAYLOAD's enum. So
+    /// for `match x: Option[MyOpt] { Some(Some(v)) => .. }` over
+    /// `enum MyOpt { Some(i64), Nothing }`, the inner `Some` answered `Option`'s
+    /// — returning `Option`'s TAG (1, against `MyOpt.Some`'s 0) *and* `Option`'s
+    /// 4-word LLVM TYPE, and that oversized type is what made
+    /// `reconstruct_payload_value` debox an INLINE 2-word payload via `inttoptr`.
+    ///
+    /// THREE OBSERVABLES from that one lookup, which is why the row's own
+    /// "two observables" reading was corrected when the full matrix was measured:
+    ///
+    ///   * SIGSEGV — a narrow inline payload: `inttoptr` of a tag value (0) is a
+    ///     null deref. Also what the two wrong-arm cells below do at `-O2`
+    ///     auto-par, so the crash is the general case and the wrong arm is the
+    ///     `-O0` special case.
+    ///   * a SILENTLY WRONG ARM — a boxed payload: the load succeeds through a
+    ///     real box pointer, reads `MyOpt.Some`'s tag 0, compares it against 1,
+    ///     falls through, and takes the outer `None` arm on a scrutinee that is
+    ///     demonstrably `Some(..)`.
+    ///   * a WRONG VALUE — a `shared` payload enum: `a0` for `a71`.
+    ///
+    /// THE TRIGGER IS THE ENCLOSING ENVELOPE'S SET, not `Option`/`Result` in
+    /// general: `Ok` is dangerous only under a `Result` and `Some` only under an
+    /// `Option`, which is what the four controls pin. Nesting is required too —
+    /// the same enum matched directly, and an enum that merely HAS a colliding
+    /// variant the sub-pattern does not name, were correct throughout.
+    ///
+    /// BOTH SIDES HAD TO MOVE, and the intermediate state is the evidence:
+    /// fixing only the condition path (`and_in_nested_variant_conditions`) made
+    /// the arm correctly ENTERED and then let `bind_pattern_values` debox the
+    /// inline payload itself — the two wrong-arm cells turned INTO crashes. The
+    /// hint is therefore swapped on both paths.
+    ///
+    /// The hint carries the payload's full `TypeExpr` rather than its head name
+    /// so each level can rebuild the map for the next one; with a head name
+    /// alone, `Option[Option[MyOpt]]` still crashed because level 2 could not
+    /// answer level 3.
+    #[test]
+    fn e2e_nested_envelope_variant_name_collision_resolves_against_the_payload() {
+        for (label, body, want) in [
+            // THE ROW: inline narrow payload — a null deref before the fix.
+            (
+                "option-some-collision-inline",
+                "enum MyOpt { Some(i64), Nothing }\n\
+                 fn main() { let x: Option[MyOpt] = Some(MyOpt.Some(71));\n\
+                 match x { Some(Some(v)) => { println(f\"a{v}\") } Some(Nothing) => { println(\"sn\") } None => { println(\"n\") } }\n\
+                 println(\"done\") }\n",
+                "a71\ndone\n",
+            ),
+            // A BOXED payload: the wrong-arm observable at -O0, a crash at -O2.
+            (
+                "option-some-collision-boxed",
+                "struct Rc7 { id: i64, name: String }\n\
+                 impl Drop for Rc7 { fn drop(mut ref self) { println(f\"dRc{self.id}\") } }\n\
+                 enum MyOptB { Some(Rc7), Nothing }\n\
+                 fn main() { let x: Option[MyOptB] = Some(MyOptB.Some(Rc7 { id: 71, name: f\"a\" }));\n\
+                 match x { Some(Some(r)) => { println(f\"a{r.id}\") } Some(Nothing) => { println(\"sn\") } None => { println(\"n\") } }\n\
+                 println(\"done\") }\n",
+                "a71\ndRc71\ndone\n",
+            ),
+            // The QUALIFIED inner spelling — qualifying did NOT rescue it, which
+            // is what rules out a mere unqualified-name ambiguity the author
+            // could write around.
+            (
+                "qualified-inner-pattern",
+                "enum MyOptQ { Some(i64), Nothing }\n\
+                 fn main() { let x: Option[MyOptQ] = Some(MyOptQ.Some(71));\n\
+                 match x { Some(MyOptQ.Some(v)) => { println(f\"a{v}\") } Some(MyOptQ.Nothing) => { println(\"sn\") } None => { println(\"n\") } }\n\
+                 println(\"done\") }\n",
+                "a71\ndone\n",
+            ),
+            // A WILDCARD payload behind the colliding name.
+            (
+                "wildcard-payload",
+                "enum MyOptW { Some(i64), Nothing }\n\
+                 fn main() { let x: Option[MyOptW] = Some(MyOptW.Some(71));\n\
+                 match x { Some(Some(_)) => { println(\"a\") } Some(Nothing) => { println(\"sn\") } None => { println(\"n\") } }\n\
+                 println(\"done\") }\n",
+                "a\ndone\n",
+            ),
+            // `Result` outer with a colliding `Ok` — the same defect on the
+            // other envelope.
+            (
+                "result-ok-collision",
+                "enum MyRes { Ok(i64), Bad }\n\
+                 fn main() { let x: Result[MyRes, i64] = Result[MyRes, i64].Ok(MyRes.Ok(71));\n\
+                 match x { Ok(Ok(v)) => { println(f\"a{v}\") } Ok(Bad) => { println(\"ob\") } Err(e) => { println(\"n\") } }\n\
+                 println(\"done\") }\n",
+                "a71\ndone\n",
+            ),
+            // The `Err` SIDE of a `Result`, so the per-variant payload lookup is
+            // exercised on arg 1 rather than arg 0.
+            (
+                "result-err-collision",
+                "enum MyE { Err(i64), Fine }\n\
+                 fn main() { let x: Result[i64, MyE] = Result[i64, MyE].Err(MyE.Err(71));\n\
+                 match x { Ok(v) => { println(f\"ok{v}\") } Err(Err(c)) => { println(f\"e{c}\") } Err(Fine) => { println(\"ef\") } }\n\
+                 println(\"done\") }\n",
+                "e71\ndone\n",
+            ),
+            // THREE DEEP. This is why the hint carries a `TypeExpr` and not a
+            // head name: each level rebuilds the map for the one below it, and
+            // with a name alone this cell still crashed after the two-deep cells
+            // were green.
+            (
+                "three-deep-collision",
+                "enum MyOpt3 { Some(i64), Nothing }\n\
+                 fn main() { let x: Option[Option[MyOpt3]] = Some(Some(MyOpt3.Some(71)));\n\
+                 match x { Some(Some(Some(v))) => { println(f\"a{v}\") } Some(Some(Nothing)) => { println(\"ssn\") } Some(None) => { println(\"sn\") } None => { println(\"n\") } }\n\
+                 println(\"done\") }\n",
+                "a71\ndone\n",
+            ),
+            // A `shared` payload enum — the third observable, a wrong VALUE
+            // (`a0`) rather than a crash or a wrong arm.
+            (
+                "shared-payload-enum-collision",
+                "shared enum MyOptS { Some(i64), Nothing }\n\
+                 fn main() { let x: Option[MyOptS] = Some(MyOptS.Some(71));\n\
+                 match x { Some(Some(v)) => { println(f\"a{v}\") } Some(Nothing) => { println(\"sn\") } None => { println(\"n\") } }\n\
+                 println(\"done\") }\n",
+                "a71\ndone\n",
+            ),
+            // CONTROL — the inner variant renamed. Never collided, correct
+            // throughout, and here so a fix that widened past the collision
+            // shows up.
+            (
+                "noncolliding-name-control",
+                "enum MyOptN { Thing(i64), Nothing }\n\
+                 fn main() { let x: Option[MyOptN] = Some(MyOptN.Thing(71));\n\
+                 match x { Some(Thing(v)) => { println(f\"a{v}\") } Some(Nothing) => { println(\"sn\") } None => { println(\"n\") } }\n\
+                 println(\"done\") }\n",
+                "a71\ndone\n",
+            ),
+            // CONTROL — `Ok` under an `Option`. The name is a seeded variant
+            // name but NOT one of the enclosing envelope's, so it never
+            // collided: this is the cell that pins the trigger to the outer
+            // set rather than to `Option`/`Result` names in general.
+            (
+                "ok-under-option-control",
+                "enum MyResO { Ok(i64), Bad }\n\
+                 fn main() { let x: Option[MyResO] = Some(MyResO.Ok(71));\n\
+                 match x { Some(Ok(v)) => { println(f\"a{v}\") } Some(Bad) => { println(\"ob\") } None => { println(\"n\") } }\n\
+                 println(\"done\") }\n",
+                "a71\ndone\n",
+            ),
+            // CONTROL — no envelope at all. The collision needs the nesting.
+            (
+                "no-envelope-control",
+                "enum MyOptD { Some(i64), Nothing }\n\
+                 fn main() { let x: MyOptD = MyOptD.Some(71);\n\
+                 match x { Some(v) => { println(f\"a{v}\") } Nothing => { println(\"sn\") } }\n\
+                 println(\"done\") }\n",
+                "a71\ndone\n",
+            ),
+            // CONTROL — the colliding variant EXISTS on the payload enum but the
+            // sub-pattern does not name it, so nothing resolves against it.
+            (
+                "colliding-variant-unnamed-control",
+                "enum MyOptU { Thing(i64), None }\n\
+                 fn main() { let x: Option[MyOptU] = Some(MyOptU.Thing(71));\n\
+                 match x { Some(Thing(v)) => { println(f\"a{v}\") } Some(None) => { println(\"sn\") } None => { println(\"n\") } }\n\
+                 println(\"done\") }\n",
+                "a71\ndone\n",
+            ),
+            // CONTROL — the #39 shape this hint exists for: one variant name
+            // shared across two USER enums, reached through an envelope. The
+            // swap must not cost #39 its disambiguation.
+            (
+                "hash39-shared-name-control",
+                "enum Tok7 { Float(i64), Other }\n\
+                 enum Exp7 { Float(i64), Blank }\n\
+                 fn main() { let x: Option[Tok7] = Some(Tok7.Float(71));\n\
+                 match x { Some(Float(v)) => { println(f\"t{v}\") } Some(Other) => { println(\"o\") } None => { println(\"n\") } }\n\
+                 println(\"done\") }\n",
+                "t71\ndone\n",
+            ),
+            // CONTROL — the nesting SPLIT into two sequential matches. Always
+            // correct, and the cell that originally localized the defect to the
+            // nested pattern rather than to the enum's storage or its own match.
+            (
+                "split-into-two-matches-control",
+                "enum MyOptP { Some(i64), Nothing }\n\
+                 fn main() { let x: Option[MyOptP] = Some(MyOptP.Some(71));\n\
+                 match x { Some(inner) => { match inner { Some(v) => { println(f\"a{v}\") } Nothing => { println(\"sn\") } } } None => { println(\"n\") } }\n\
+                 println(\"done\") }\n",
+                "a71\ndone\n",
+            ),
+        ] {
+            let Some(out) = run_program(body) else {
+                return;
+            };
+            assert_eq!(out, want, "[{label}]");
+        }
+    }
+
     /// B-2026-09-10-5 — a NAMED LOCAL of a user generic enum passed BY VALUE
     /// smashed the caller's stack, because the moved-from-slot disarm zeroed
     /// `Option`'s four words into whatever the binding's slot actually was.

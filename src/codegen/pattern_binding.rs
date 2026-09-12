@@ -1862,6 +1862,33 @@ impl<'ctx> super::Codegen<'ctx> {
                     let en = en.clone();
                     self.record_mono_generic_enum_payload_types(&en, variant_name, patterns);
                 }
+                // B-2026-09-12-7 — the CONDITION side's twin. Every
+                // `reconstruct_payload_value` below rebuilds a NESTED
+                // sub-pattern, whose unqualified variant must resolve against
+                // this variant's PAYLOAD enum rather than the match scrutinee's;
+                // the word count and LLVM type that decide debox-vs-inline come
+                // from that same resolution. Without the swap the condition path
+                // (fixed in `and_in_nested_variant_conditions`) correctly ENTERS
+                // the arm and then the binding deboxes an inline payload via
+                // `inttoptr` — the crash simply moves. Restored on both exits of
+                // this arm.
+                let saved_hint_for_payload = self.pattern_state.match_scrutinee_enum_hint.clone();
+                let saved_payload_tes =
+                    std::mem::take(&mut self.pattern_state.match_scrutinee_payload_tes);
+                if let Some(payload_te) = saved_payload_tes.get(variant_name) {
+                    if let crate::ast::TypeKind::Path(pp) = &payload_te.kind {
+                        if let Some(head) = pp.segments.last() {
+                            if self.type_decls.enum_layouts.contains_key(head.as_str()) {
+                                self.pattern_state.match_scrutinee_enum_hint = Some(head.clone());
+                            }
+                        }
+                    }
+                    // As on the condition side: the level below gets its own map,
+                    // so `bind_pattern_values`'s recursion through nested
+                    // sub-patterns keeps resolving against the right enum.
+                    self.pattern_state.match_scrutinee_payload_tes =
+                        Self::payload_tes_below(payload_te);
+                }
 
                 // Shared enum: extract payload via GEP (words at heap index 2+).
                 if let BasicValueEnum::PointerValue(ptr) = scrut {
@@ -1928,6 +1955,9 @@ impl<'ctx> super::Codegen<'ctx> {
                                     self.bind_pattern_values(sub_pat, bound)?;
                                     self.record_deboxed_payload_box(sub_pat, &field_words);
                                 }
+                                self.pattern_state.match_scrutinee_enum_hint =
+                                    saved_hint_for_payload;
+                                self.pattern_state.match_scrutinee_payload_tes = saved_payload_tes;
                                 return Ok(());
                             }
                         }
@@ -1956,6 +1986,8 @@ impl<'ctx> super::Codegen<'ctx> {
                         self.record_deboxed_payload_box(sub_pat, &field_words);
                     }
                 }
+                self.pattern_state.match_scrutinee_enum_hint = saved_hint_for_payload;
+                self.pattern_state.match_scrutinee_payload_tes = saved_payload_tes;
                 Ok(())
             }
             PatternKind::Or(pats) => {
