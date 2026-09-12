@@ -61,13 +61,16 @@ slice plan, the tag-aware accessor work list, and the verification matrix. Scope
 2026-07-09; Slice 2 construction 2026-09-11; Slice 3's FFI boundary opened
 2026-09-12.
 
-**The default flip has a second blocker as of 2026-09-12, and it is not about
-speed.** `UseAfterMove` is advisory *because `cli.rs` promises the binary is
-memory-safe anyway*; at `KARAC_SSO=1` a moved-from short String reads empty in
-one measured shape and **SIGSEGVs** in another, so the flip would falsify that
-promise. Programs with no ownership diagnostic are unaffected. The cause is not
-yet traced — see "A NEW BLOCKER FOR THE DEFAULT FLIP" under the Slice 3 entry,
-which records what was measured and what is still only a hypothesis.
+**That second blocker — the move-suppression disarm — is also FIXED
+(2026-09-12).** `UseAfterMove` is advisory *because `cli.rs` promises the binary
+is memory-safe anyway*, and at `KARAC_SSO=1` a moved-from short String was
+reading wild memory, so the flip would have falsified that promise. Traced,
+resolved and fixed: the disarm zeroed `cap` alone, which for an inline
+descriptor destroys the tag and length together; it is now tag-aware and blanks
+the descriptor on the inline path only, leaving heap and static sources exactly
+as before. See "MOVED-FROM STRINGS READ WILD, NOT STALE" under the Slice 3
+entry — including why the same bug printed silence in one shape and SIGSEGV'd in
+another.
 
 **CI now runs one `KARAC_SSO=1` fixture** —
 `tests/cli.rs::test_sso_inline_string_survives_the_env_ffi_boundary`, added with
@@ -750,7 +753,7 @@ perf payoff lands in Slice 2.
   reporting green on two skips. And it was verified to FAIL with the fix backed
   out, so it discriminates.
 
-  ### A NEW BLOCKER FOR THE DEFAULT FLIP: moved-from Strings read WILD, not stale
+  ### MOVED-FROM STRINGS READ WILD, NOT STALE — was a flip blocker, FIXED 2026-09-12
 
   Found while bisecting a probe divergence, and it is the most consequential
   thing in this entry — because it is not a footgun the user was warned about,
@@ -837,6 +840,75 @@ perf payoff lands in Slice 2.
     move machinery rather than the String subsystem, and the unexplained row 2
     may mean something else is wrong as well. It is not done here deliberately
     — sizing it honestly beats bolting a guess onto an FFI commit.
+
+
+  ### RESOLVED 2026-09-12 — one bug with two faces, and the fix is tag-aware
+
+  The entry above recorded the mechanism as a HYPOTHESIS that "does not yet fit
+  both rows": cap-only zeroing predicts a crash, and the one-string case printed
+  *empty* instead. The IR settles it, and the hypothesis was right — what was
+  wrong was expecting one failure mode.
+
+  `dump_ir` on the reproducer shows the disarm and the read exactly:
+
+  ```llvm
+  %short16     = load { ptr, i64, i64 }, ptr %short   ; the map gets the PRE-disarm value
+  %move.cap.p  = getelementptr … ptr %short, i32 0, i32 2
+  store i64 0, ptr %move.cap.p                        ; disarm: cap only
+  …
+  %str.cap      = 0
+  %sso.inline18 = icmp slt i64 %str.cap, 0            ; FALSE — no longer looks inline
+  %str.data_ptr = select i1 false, …, %str.ptr        ; content bytes 0..=7 AS A POINTER
+  %str.byte_len = select i1 false, …, %str.len        ; content bytes 8..=15  = 27,241
+  call void @__karac_write_console_line(ptr %str.data_ptr, i64 %str.byte_len, …)
+  ```
+
+  So the moved-from read really does hand a 27 KB length and a pointer made of
+  the string's own text to the console writer. **What happens next is decided by
+  the CONSUMER, not by the descriptor** — which is why it looked like two
+  different defects:
+
+  | consumer | what it does with the bogus pointer | result |
+  |---|---|---|
+  | `println(s)` | passes it straight to `write(2)` | kernel rejects the buffer with **EFAULT**, runtime ignores the short write → **prints nothing, exits 0** |
+  | `println(f"[{s}]")` | **memcpy**s it in user space to build the interpolation | **SIGSEGV** |
+
+  Proven by changing only the consumer on one otherwise identical program:
+  `println(short)` exits 0 silently, `println(f"[{short}]")` exits 139. Optimization
+  level is not involved — both behave identically at `-O0` and `-O2`.
+
+  **The silent form is the common one and the worse one.** Any String corruption
+  that reaches `println` directly looks like an empty line rather than a crash;
+  it takes a user-space consumer to make it loud. Worth remembering well beyond
+  this bug — it is a general silent-failure channel in this runtime.
+
+  ### The fix
+
+  `call_dispatch.rs`'s move-out disarm now reads the tag BEFORE clearing it and
+  blanks the whole descriptor on the inline path only:
+
+  - **heap / static source — unchanged.** The selects yield the old `ptr`/`len`,
+    so `cap = 0` still leaves the static-literal state and a moved-from read
+    still returns stale-but-valid bytes. That is what `cli.rs`'s advisory
+    `UseAfterMove` undertakes, and it is preserved exactly.
+  - **inline source — blanked to `{null, 0, 0}`**, so the moved-from read yields
+    a defined `""`, which is also the honest answer: the value did move away.
+
+  Branch-free (three loads, two selects, three stores), and compiled out entirely
+  with SSO off.
+
+  Measured, same programs:
+
+  | | before | after |
+  |---|---|---|
+  | `println(f"[{s}]")` at `KARAC_SSO=1` | **SIGSEGV**, exit 139 | exit 0, prints `[]` |
+  | two-source reproducer at `KARAC_SSO=1` | **SIGSEGV**, exit 139 | exit 0, `short-after-move=[]` |
+  | the 40-byte HEAP source in the same program | stale contents | **stale contents — unchanged** |
+  | every `KARAC_SSO=0` row | — | **byte-identical** |
+
+  The heap row is the control that matters: it shows the change is confined to
+  the inline path and did not quietly alter the documented behaviour for
+  everything else.
 
   The reproducer is the snippet above, doubled — the two rows of the table.
   It lives here rather than in `examples/` on purpose: it segfaults on one leg,
@@ -1322,16 +1394,14 @@ perf payoff lands in Slice 2.
      its allocations removed, so Slice 2's gate ("instruction count + `malloc`
      leaf share must drop") passes on both halves for the first time. The gate
      flip and both of the latent bugs it un-masked are landed and gated.
-  2. **The remaining blocker is CORRECTNESS and it is now the ONLY one**: the
-     move-suppression disarm (see "A NEW BLOCKER FOR THE DEFAULT FLIP" above),
-     which falsifies a documented `UseAfterMove` guarantee. Its first step is
-     still *trace the disarm site*, not write the fix.
-     **Measured 2026-09-12, after the de-masking: it is UNCHANGED.** Both
-     reproducers behave exactly as before (`uam` reads empty at `KARAC_SSO=1`,
-     `mv3` still SIGSEGVs, exit 139), so the two are independent defects rather
-     than one cause — which is a useful negative, because the family resemblance
-     ("inline descriptors reaching code written before they existed") made it
-     reasonable to expect the de-masking to carry it away. It did not.
+  2. **The correctness blocker is FIXED.** The move-suppression disarm is now
+     tag-aware, so the documented `UseAfterMove` guarantee holds at
+     `KARAC_SSO=1`: both reproducers that SIGSEGV'd now exit 0 with a defined
+     `""`, and a moved-from HEAP String still reads its stale bytes exactly as
+     before. Worth recording that it was measured UNCHANGED by the de-masking
+     first — the family resemblance ("inline descriptors reaching code written
+     before they existed") made it reasonable to expect one fix to carry both,
+     and it did not; they needed separate fixes at separate sites.
   3. **The synthetic shapes were re-measured and are UNCHANGED — done.** The
      prediction that they understated SSO was wrong: none of them makes a
      by-value consuming call, so the fixed gate never fired in any of them. What

@@ -13077,8 +13077,77 @@ impl<'ctx> super::Codegen<'ctx> {
                     self.builder
                         .build_struct_gep(vec_ty, slot.ptr, 2, "move.cap.p")
                 {
+                    // SSO: read the tag BEFORE clearing it. `cap == 0` is the
+                    // move-out sentinel for a Vec/String local, and for a HEAP
+                    // source that is harmless — it leaves `{ptr, len}` intact,
+                    // which is the static-literal state, so a moved-from read
+                    // returns stale-but-valid bytes. That is what makes
+                    // `UseAfterMove` advisory: `cli.rs` undertakes that the
+                    // binary is memory-safe anyway.
+                    //
+                    // For an INLINE source `cap` is not spare — it carries the
+                    // flag AND the length — so zeroing it alone leaves
+                    // `{ptr = content bytes 0..=7, len = content bytes 8..=15,
+                    // cap = 0}`: a heap-LOOKING header whose data pointer is the
+                    // string's own text. Measured on `let s = base.substring(0,
+                    // 10); m.insert(s, 7); …s…`, and the failure is
+                    // consumer-dependent, which is why it reads as two
+                    // different bugs: `println(s)` hands the bogus pointer to
+                    // `write(2)`, the kernel rejects the buffer with EFAULT and
+                    // the runtime ignores the short write, so it prints NOTHING
+                    // and exits 0; `println(f"[{s}]")` memcpy's the same
+                    // pointer in user space and SIGSEGVs. Silence is the common
+                    // form, which is the worse one.
+                    //
+                    // So blank the whole descriptor on the inline path, giving
+                    // the moved-from read a defined `""` — also the honest
+                    // answer, since the value really did move away. Branch-free
+                    // and heap-preserving: the selects yield the old `ptr`/`len`
+                    // whenever the source was not inline, so nothing about the
+                    // heap or static cases changes, and with SSO off this
+                    // compiles out entirely.
+                    let was_inline = if self.sso_on() {
+                        self.builder
+                            .build_load(i64_t, cap_ptr, "move.cap.pre")
+                            .ok()
+                            .map(|c| self.sso_string_is_inline(c.into_int_value()))
+                    } else {
+                        None
+                    };
                     let zero = i64_t.const_int(0, false);
                     let _ = self.builder.build_store(cap_ptr, zero);
+                    if let Some(is_inline) = was_inline {
+                        let ptr_ty = self.context.ptr_type(AddressSpace::default());
+                        if let (Ok(d_ptr), Ok(l_ptr)) = (
+                            self.builder
+                                .build_struct_gep(vec_ty, slot.ptr, 0, "move.d.p"),
+                            self.builder
+                                .build_struct_gep(vec_ty, slot.ptr, 1, "move.l.p"),
+                        ) {
+                            if let (Ok(d_old), Ok(l_old)) = (
+                                self.builder.build_load(ptr_ty, d_ptr, "move.d.old"),
+                                self.builder.build_load(i64_t, l_ptr, "move.l.old"),
+                            ) {
+                                if let (Ok(d_new), Ok(l_new)) = (
+                                    self.builder.build_select(
+                                        is_inline,
+                                        ptr_ty.const_null(),
+                                        d_old.into_pointer_value(),
+                                        "move.d.new",
+                                    ),
+                                    self.builder.build_select(
+                                        is_inline,
+                                        zero,
+                                        l_old.into_int_value(),
+                                        "move.l.new",
+                                    ),
+                                ) {
+                                    let _ = self.builder.build_store(d_ptr, d_new);
+                                    let _ = self.builder.build_store(l_ptr, l_new);
+                                }
+                            }
+                        }
+                    }
                     // B-2026-08-30-2 — the source has just been left with no
                     // cleanup. Record it (with the element type the owner will
                     // need) so a value-position block tail can give the
