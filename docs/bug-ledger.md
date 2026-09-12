@@ -101,7 +101,7 @@ distinguish "bugs flattening" from "we stopped writing them down."
 | diagnostics | 125 |
 | false-positive | 106 |
 | perf | 104 |
-| other | 97 |
+| other | 98 |
 | soundness | 95 |
 | crash | 79 |
 | use-after-free | 38 |
@@ -118,13 +118,13 @@ distinguish "bugs flattening" from "we stopped writing them down."
 | cli | 73 |
 | autopar | 56 |
 | parser | 46 |
-| runtime | 42 |
+| runtime | 43 |
 | effect | 29 |
 | resolver | 29 |
 | lexer | 8 |
 ## Current state
 
-_Generated from `bug-ledger.jsonl` by `scripts/bug-curve.py` (2026-05-20 → 2026-09-11). Do not edit this block by hand; edit the ledger and regenerate._
+_Generated from `bug-ledger.jsonl` by `scripts/bug-curve.py` (2026-05-20 → 2026-09-12). Do not edit this block by hand; edit the ledger and regenerate._
 
 ### Open
 
@@ -178,6 +178,7 @@ _Generated from `bug-ledger.jsonl` by `scripts/bug-curve.py` (2026-05-20 → 202
 | B-2026-09-10-38 | 2026-09-10 | typecheck | low | AN ARRAY LITERAL IN A TUPLE-LITERAL ELEMENT DOES NOT TAKE THE TUPLE ANNOTATION'S ELEMENT TYPE AND INFERS `Vec` -- `let t: (Array[String, 2], i64) = ([f"a", f"b"], 7)` is rejected as `found '(Vec[String], i64)'` while the direct `let a: Array[String, 2] = [..]` and the `(Vec[String], i64)` spelling are both accepted; the tuple-ELEMENT position of the question B-2026-08-13-22 fixed at the `let` | — |
 | B-2026-09-11-2 | 2026-09-11 | other | low | A WILDCARD MATCH PAYLOAD (`Some(_)` / `Full(_)`) SCHEDULES NO DROP IN THE OWNERSHIP ORACLE, so the differential compares nothing for it -- `_` discards the BINDING, not the obligation, and a per-place schedule has no place to key it to (the bound spellings now schedule correctly) | — |
 | B-2026-09-11-4 | 2026-09-11 | codegen | medium | A TUPLE, AN `Array`, AN `Option[String]` AND A GENERIC-STRUCT PAYLOAD STILL LEAK INSIDE A USER GENERIC ENUM'S HEAP BOX -- the four shapes `enum_boxed_payload_interior_drop` still answers `None` for, at 24 B a round each, while the bare-user-struct and `String`/`Vec` payloads beside them are clean | — |
+| B-2026-09-12-1 | 2026-09-12 | runtime | low | `coroutine_ws_over_tls_concurrent_handlers_all_execute` GOES RED IN THE REQUIRED GATE SET BUT IS NOT REPRODUCIBLE ON DEMAND -- observed twice in full `--features llvm` gate cycles (once on each KARAC_SSO leg, `34 passed; 1 failed`), then 22 consecutive PASSES across three deliberately harsher conditions. The test's own assertion names a coroutine-resume / accept-path handshake-pool mismatch, i.e. the exact race its fix (task #21) closed, so a recurrence is worth a row rather than a re-run. | — |
 
 ### Relocated
 
