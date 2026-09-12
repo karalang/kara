@@ -6,16 +6,28 @@ follow-up claimed every String buffer-free/realloc gate was inline-safe —
 were fixed in `3833ff8`.
 
 **Slice 2 inline construction is LIVE behind `KARAC_SSO=1`, default OFF.** It
-works and it is correct on every surface probed. Its payoff is **workload-shaped,
-and the shape is the whole story**: SSO is a **36–37% WIN** where sliced strings
-are RETAINED, and an **11–41% LOSS** where they are sliced, used and discarded in
-the same iteration — because a transient `malloc`/`free` pair is a glibc tcache
-hit that costs less than the tag-aware read path. **Both** construction sites are
-now inline — `s[a..b]` and `String.substring`, the latter being the one the
-motivating lexer profile actually uses — and they measure the same split, so the
-win is a property of the shape rather than of one benchmark. **Read "Slice 2
-round 2" below before planning anything, and do not quote a payoff number without
-saying which of the two shapes it came from.** This doc is the campaign's
+works and it is correct on every surface probed. Both construction sites are
+inline — `s[a..b]` and `String.substring`.
+
+**THE MOTIVATING WORKLOAD LOSES. Measured 2026-09-12, and it is the number to
+read first.** Slice 2's own exit gate — re-profile the self-hosted lexer — had
+never been run; every payoff figure above it was synthetic. Run on 441 KiB of
+real Kāra, SSO removes **31% of allocation calls** (16.3 M → 11.2 M) and is
+**4.0% SLOWER** (1450 → 1508 ms; +3.4% instructions retired, so it is extra work,
+not a cache artifact). The strings it captures average **4.4 bytes**, so it
+removes 31% of allocation *calls* and 1% of allocated *bytes* — exactly the
+allocations glibc's tcache already serves nearly free. See "SLICE 2'S OWN GATE
+FINALLY RAN" below; it also corrects two claims this doc previously made, one of
+them about this very workload.
+
+On synthetic benchmarks the payoff is **workload-shaped**: a **36–37% WIN** where
+sliced strings are RETAINED, an **11–41% LOSS** where they are sliced, used and
+discarded in the same iteration. Those numbers stand for their own shapes. What
+does NOT stand is the inference that real programs sit on the winning side — the
+lexer is a mix, and it loses. **Do not quote a payoff number without saying which
+shape it came from, and do not treat the synthetic proportions as a guide to
+where the cost is: the lexer profile contradicts the compare-folding split they
+imply.** This doc is the campaign's
 living handoff: layout decision (settled), staged slice plan, the tag-aware
 accessor work list, and the verification matrix. Scoped 2026-06-12; Slice 1 landed
 2026-07-09; Slice 2 construction 2026-09-11; Slice 3's FFI boundary opened
@@ -258,6 +270,10 @@ perf payoff lands in Slice 2.
   Gate: **re-profile the self-host lexer** (instruction count + `malloc` leaf share must
   drop), full ASAN + **Linux/LSan** (SSO touches every free path — authoritative leak
   gate).
+  **RAN 2026-09-12 — and FAILED its own criterion.** The `malloc` share dropped
+  as predicted (31% fewer allocation calls) but the instruction count went **UP**
+  3.4% and wall time 4.0%. See "SLICE 2'S OWN GATE FINALLY RAN" below. The gate
+  was written as a conjunction and only one half passed.
 - **Slice 2 progress — INLINE CONSTRUCTION IS LIVE behind `KARAC_SSO=1` (2026-09-11).**
   `s[a..b]` now builds an inline String when the slice fits the 23-byte overlay,
   allocating nothing. Default remains OFF; the read sweep is ~1/3 done.
@@ -374,9 +390,14 @@ perf payoff lands in Slice 2.
   `malloc`/`free` pair is a glibc tcache hit — far cheaper than "allocation is the
   #1 self-time leaf" suggests when the buffer is freed in the same loop iteration
   it was made in. Retain the strings so tcache cannot recycle them and the picture
-  inverts: 200k allocations become 12, and the workload runs **37% faster**. That
-  matters for this campaign specifically, because the self-hosted lexer **keeps**
-  its token texts — it does not slice-and-discard.
+  inverts: 200k allocations become 12, and the workload runs **37% faster**.
+
+  **CORRECTION (2026-09-12).** This entry originally continued: "That matters for
+  this campaign specifically, because the self-hosted lexer *keeps* its token
+  texts — it does not slice-and-discard." That was read off `lexer.kara`, never
+  measured, and it is wrong in the half that matters — see "THE LEXER IS NOT THE
+  'RETAINED' SHAPE" below. The lexer is a mix, and the allocation saving and the
+  read-path cost do not split along the same line.
 
   The two transient rows isolate WHY that leg loses. Their only difference is the
   compared literal's length, chosen so the 16-byte row emits `call bcmp@plt` on
@@ -447,6 +468,12 @@ perf payoff lands in Slice 2.
   1. **Branch rather than select where the pointer feeds a length-known compare**,
      so each arm has a concrete pointer LLVM can still fold. Worth ~5 ms of the
      9 ms on the transient leg; leaves it still ~19% slower.
+     **SUPERSEDED 2026-09-12 — do not start here.** On the self-hosted lexer the
+     compare-folding effect is real but accounts for **0.9%** of the regression
+     (`__memcmp_avx2_movbe`: present at `KARAC_SSO=1`, absent at `=0`,
+     2,863,800 instructions of a +316,655,701 total). This lever was sized on a
+     benchmark built to isolate it; those proportions do not survive a program
+     whose String reads are diffuse.
   2. ~~**Make `substring` a construction site**~~ — **DONE**, see below.
   3. Only then re-measure, and only then consider the default.
 
@@ -822,6 +849,151 @@ perf payoff lands in Slice 2.
   came back **15/16 — one handler wedged, the server did come up**, which
   settles the question the row was written to separate. The row is updated with
   it and stays open.
+
+- **SLICE 2'S OWN GATE FINALLY RAN, AND THE MOTIVATING WORKLOAD LOSES
+  (2026-09-12).** Slice 2's exit criterion was "re-profile the self-host lexer
+  (instruction count + `malloc` leaf share must drop)". It had never been run.
+  Every payoff number in this doc up to here is synthetic. Run now, on the
+  workload the whole campaign was scoped around, SSO is a **4% REGRESSION**.
+
+  **Setup**, following [`selfhost-lexer-profile.md`](selfhost-lexer-profile.md)'s
+  method: a snapshot of `selfhost/src/{span,token,lexer}.kara` (never the live
+  tree) plus a lex-in-a-loop driver, 441 KiB of real Kāra (the compiler's own
+  sources + `examples/`), 200 passes, built sequential (`KARAC_AUTO_PAR=0`).
+  Token output is **identical on both legs** (10,639,400) and the binaries
+  differ, so the gate is real and correctness holds. Linux x86-64 container —
+  **do not compare these absolute numbers against that doc's macOS/M5 figures**;
+  only the two legs here are comparable to each other.
+
+  | 441 KiB × 200 passes | `KARAC_SSO=0` | `KARAC_SSO=1` | |
+  |---|---|---|---|
+  | wall, best-of-7 | **1450 ms** | 1508 ms | **−4.0%** |
+  | instructions retired (callgrind) | 9,190,806,670 | 9,507,462,371 | **−3.4%** |
+  | heap allocations (valgrind) | 16,292,811 | 11,232,411 | **−31%** |
+  | bytes allocated | 2,231,969,346 | 2,210,121,746 | −1.0% |
+
+  Wall and instruction deltas agree in sign and size, so this is **extra work
+  executed**, not a cache or branch-prediction artifact. The two allocation rows
+  are the campaign's problem in one line: SSO removes **31% of allocation CALLS
+  but only 1% of allocated BYTES**, because the strings it captures average
+  **4.4 bytes**. Those are exactly the allocations glibc's tcache already serves
+  almost free.
+
+  ### Where the instructions went
+
+  | bucket | delta | note |
+  |---|---|---|
+  | libc allocator (`malloc`/`free`/`_int_*`/consolidate) | **−629,573,607** | the win — 124 instructions per removed allocation |
+  | `karac_free_buf` | −85,990,200 | fewer buffers to release |
+  | `karac_string_try_inline_into` | +192,436,000 | 38 instructions/call over 5,060,400 calls |
+  | Kāra code (`lex_all` + its static locals) | **+929,630,600** | the tag-aware read path |
+  | `__memcmp_avx2_movbe` | +2,863,800 | **absent entirely at `KARAC_SSO=0`** |
+  | net | **+316,655,701** | |
+
+  The new runtime entrypoint **pays for itself comfortably** — 38 instructions
+  to avoid a 124-instruction malloc/free pair. The campaign is not losing on its
+  construction site. It is losing on the **read** side: +930 M instructions of
+  tag-select spread through the generated Kāra code, against −716 M of allocator
+  and free-path work removed.
+
+  ### THE `bcmp` STORY IS TRUE AND IRRELEVANT — a correction to this doc
+
+  Slice 2 round 2 decomposed a 9 ms synthetic regression as "**~5 ms is lost
+  compare folding**: the tag-select makes the data pointer opaque, so an inlined
+  4-instruction compare becomes `call bcmp@plt`", and filed **branch-not-select**
+  as lever #1, "worth ~5 ms of the 9 ms".
+
+  On the real lexer that mechanism is **confirmed in kind and negligible in
+  size**. `__memcmp_avx2_movbe` appears at `KARAC_SSO=1` and is *completely
+  absent* at `KARAC_SSO=0` — exactly the predicted effect, and a clean natural
+  experiment for it — at **2,863,800 instructions: 0.9% of the regression.**
+
+  So branch-not-select is not the lever here. It was sized on a microbenchmark
+  built to isolate it (a 3-byte literal compare in a tight loop), and that
+  benchmark's proportions do not survive contact with a program whose String
+  reads are diffuse. **The cost is not concentrated in one foldable compare; it
+  is one select on every String read, everywhere.** A lever that fixes the
+  compare sites recovers ~1% of this.
+
+  ### THE LEXER IS NOT THE "RETAINED" SHAPE — a second correction
+
+  This doc claimed "the self-hosted lexer **keeps** its token texts — it does not
+  slice-and-discard", and used that to argue the campaign's motivating workload
+  sits on the winning side of the split. **That was read off the source, not
+  measured, and it is wrong in the half that matters.** The hot path is:
+
+  ```
+  let text = self.src.substring(self.start, self.current);
+  let token = keyword_or_ident(text);      // takes the String BY VALUE
+  ```
+
+  `keyword_or_ident` is a `match text { "fn" => Token.Fn, … }` over **87 arms**.
+  A keyword returns a payload-free variant and the String is **dropped** — the
+  transient shape. An identifier returns `Token.Identifier(text)` — retained. In
+  the 441 KiB input: 41,866 identifier-shaped lexemes per pass, **19.6%
+  keywords**, mean length 4.4 bytes, and **100% under the 23-byte capacity**.
+
+  The trap is that the two effects do not split along the same line. The
+  allocation saving follows the 20/80 keyword/identifier split; the read-path
+  cost falls on **all 41,866**, because every one of them goes through the
+  `match` dispatch regardless of which way it resolves. Reading the source tells
+  you the first split and hides the second.
+
+
+  ### Reproducing it
+
+  The harness is small enough to keep here rather than in the tree, and it must
+  not be run against the live `selfhost/` worktree (that doc's rule, and another
+  session edits it):
+
+  ```bash
+  mkdir -p lexprof/src && cd lexprof
+  printf '[package]\nname = "lexprof"\nversion = "0.1.0"\nauthors = []\nedition = "2026"\n\n[dependencies]\n' > kara.toml
+  cp <kara>/selfhost/src/{span,token,lexer}.kara src/
+  cat <kara>/selfhost/src/*.kara <kara>/examples/*.kara | head -c 451584 > input.kara
+  # src/main.kara:
+  #   import lexer.lex_all;
+  #   fn main() with panics reads(FileSystem) {
+  #       match fs.read_to_string("input.kara") {
+  #           Ok(src) => {
+  #               let mut total: i64 = 0;
+  #               let mut i: i64 = 0;
+  #               while i < 200 { let toks = lex_all(src.clone()); total = total + toks.len(); i = i + 1; }
+  #               println(total);
+  #           }
+  #           Err(_) => { println("READ FAILED"); }
+  #       }
+  #   }
+  for m in 0 1; do KARAC_SSO=$m KARAC_AUTO_PAR=0 karac build && mv lexprof lexprof_sso$m; done
+  valgrind --tool=memcheck   ./lexprof_sso$m   # "total heap usage: N allocs"
+  valgrind --tool=callgrind  ./lexprof_sso$m   # "I refs:"
+  callgrind_annotate --threshold=97 callgrind.out.<pid>
+  ```
+
+  Both valgrind counters are deterministic, so they can be trusted from a single
+  run and under load; only the wall-time row needs best-of-N. **Check the token
+  total matches across legs before reading any other number** — it is the cheap
+  proof that the two binaries did the same work.
+
+  ### What this means for the plan
+
+  1. **The default flip is further away than "clear two blockers".** Slice 5 was
+     already blocked on the move-suppression disarm and on transient-shape perf.
+     This says the perf blocker is not a narrow one: on the campaign's own
+     motivating workload, with construction working exactly as designed and five
+     million allocations genuinely removed, the read path still loses.
+  2. **The next perf work is the read path, not the compare sites** — making the
+     tag-select cheaper or rarer everywhere, e.g. threading the Kāra type so a
+     `Vec` never pays (Slice 3's perf half, still undone), or keeping known-heap
+     Strings off the select entirely. Branch-not-select drops to a footnote.
+  3. **SSO may be right as an opt-in rather than a default.** The retained
+     synthetic shape is a real +36–37% and is not invalidated by this; what is
+     invalidated is the assumption that real programs sit on that side. A
+     workload that builds and keeps many short strings still wins. A compiler
+     front end does not.
+  4. **Do not re-derive this from the synthetic benchmarks.** They are correct
+     about their own shapes and misleading about proportions — the 5-of-9-ms
+     compare-folding split is the specific number this profile contradicts.
 - **Slice 4 (optional, "go further").** Pair with the lexer source-slices (below) to get
   the hot path to Rust *zero*-copy; small-string fast paths in concat/compare.
 
