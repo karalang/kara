@@ -2637,7 +2637,7 @@ impl<'ctx> super::Codegen<'ctx> {
                         // user `Drop` BODY rides the separate bodies walker
                         // registered below, and handing the wrapper here would
                         // run that body twice.
-                        let inner = self.enum_boxed_payload_interior_drop(&payload_te);
+                        let inner = self.enum_boxed_payload_interior_drop(&payload_te, false);
                         self.track_boxed_enum_var_with_inner_drop(
                             &param_name,
                             alloca,

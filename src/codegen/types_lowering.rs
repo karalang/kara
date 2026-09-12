@@ -53,7 +53,7 @@ use super::helpers::{
     array_inner_type_expr, const_value_as_u32, map_kv_type_exprs, set_inner_type_expr,
     slice_inner_type_expr, vec_inner_type_expr,
 };
-use super::state::SharedTypeInfo;
+use super::state::{EnumDropKind, SharedTypeInfo};
 
 /// How a `#[repr(C)]` struct crosses the C ABI by value on AArch64 (AAPCS),
 /// from `arm64_repr_c_struct_coercion` (B-2026-07-09-2). Register cases are
@@ -4976,8 +4976,25 @@ impl<'ctx> super::Codegen<'ctx> {
             return vec![];
         }
         let area = (layout.llvm_type.count_fields() as usize).saturating_sub(1);
-        // Only a generic instantiation can outgrow its own area (see above), so
-        // a bare non-generic path is left alone rather than re-checked.
+        // B-2026-09-12-12 — this used to `return vec![]` for a bare non-generic
+        // path, on the reasoning quoted above that "only a generic instantiation
+        // can outgrow its own area". An `Array[T, N]` payload refutes it. The
+        // area comes from `payload_word_count_for_type_expr`, whose real-width
+        // `TypeKind::Array` arm only ever sees a type recovered from INFERENCE;
+        // a variant DECLARATION can only spell an array as
+        // `Path(["Array"], [Type(T), Const(N)])`, which takes that function's
+        // conservative `_ => 1` tail. So a MONOMORPHIC `enum E {
+        // A(Array[String, 2]), B }` is sized at one word and boxed exactly like
+        // an erased `T`, and its box had no owner: 384 B direct plus 384 B
+        // indirect over 8 rounds, and 192 B for an `Array[i64, 3]` that owns no
+        // heap at all and leaked purely the needless box.
+        //
+        // So the substitution is now OPTIONAL rather than required: with
+        // generic args it resolves the monomorph as before, and without them
+        // the declared payload type is already concrete and is measured
+        // directly. `llvm_type_word_count(..) > area` is unchanged and remains
+        // the sole boxing test, so this admits exactly the payloads the pack
+        // side actually boxed.
         let args: Vec<TypeExpr> = match &p.generic_args {
             Some(a) => a
                 .iter()
@@ -4986,16 +5003,14 @@ impl<'ctx> super::Codegen<'ctx> {
                     _ => None,
                 })
                 .collect(),
-            None => return vec![],
+            None => Vec::new(),
         };
-        if args.is_empty() {
-            return vec![];
-        }
         let params = self.enum_generic_param_names(enum_name);
-        if params.is_empty() {
-            return vec![];
-        }
-        let subst: HashMap<String, TypeExpr> = params.into_iter().zip(args).collect();
+        let subst: HashMap<String, TypeExpr> = if args.is_empty() || params.is_empty() {
+            HashMap::new()
+        } else {
+            params.into_iter().zip(args).collect()
+        };
         let mut out = Vec::new();
         for (_tag, vname, tys) in self.enum_variant_field_type_exprs(enum_name) {
             // Single-payload variants only. A multi-field variant packs its
@@ -5004,10 +5019,46 @@ impl<'ctx> super::Codegen<'ctx> {
             if tys.len() != 1 {
                 continue;
             }
+            // B-2026-09-12-12 — admit a variant ONLY when the drop switch does
+            // not already own its payload. Relaxing the generic-only gate above
+            // brings monomorphic enums into scope, and one shape there is
+            // already handled: an `Option`/`Result` payload is boxed by the same
+            // oversize path and freed by `EnumDropKind::BoxedOptRes`, so
+            // returning it here too would free one box twice. Every kind this
+            // classifier assigns means "some arm of `emit_enum_drop_switch`
+            // frees this"; `None` means nobody does, which is precisely the
+            // gap. The generic case is unaffected — an erased `T` payload
+            // classifies `None` already, so the set it returned before is
+            // returned unchanged.
+            if layout
+                .field_drop_kinds
+                .get(&vname)
+                .is_some_and(|ks| ks.iter().any(|k| *k != EnumDropKind::None))
+            {
+                continue;
+            }
             let concrete = Self::subst_type_params(&tys[0], &subst);
-            let ll = self.llvm_type_for_type_expr(&concrete);
-            if Self::llvm_type_word_count(ll) > area {
-                out.push((enum_name.to_string(), vname, concrete));
+            // B-2026-09-12-12 — the monomorphic relaxation is ARRAY-ONLY, and
+            // that limit was measured rather than chosen for caution. Admitting
+            // every oversize monomorphic payload double-freed the self-hosted
+            // parser (`free(): double free detected in tcache 2`, SIGABRT in
+            // `selfhost_parser_matches_rust_parser_items`), and the instrumented
+            // build named the culprits: `Item.Func` (area 26, 38 words) and
+            // `Stmt.Let` (area 8, 11 words) — large STRUCT payloads whose boxes
+            // already have an owner. Nothing about those shapes is in evidence
+            // here; the gap this row measured is the array one, where the
+            // under-sizing comes from the SPELLING a variant declaration is
+            // forced to use. A monomorphic struct payload that outgrows its area
+            // may or may not leak its box — that is a separate question, on a
+            // separate row, and is not answered by widening this.
+            //
+            // The GENERIC path keeps every payload shape, unchanged: it was
+            // already correct there and the self-host suite is green on it.
+            if !subst.is_empty() || self.array_elem_and_len(&concrete).is_some() {
+                let ll = self.llvm_type_for_type_expr(&concrete);
+                if Self::llvm_type_word_count(ll) > area {
+                    out.push((enum_name.to_string(), vname, concrete));
+                }
             }
         }
         out

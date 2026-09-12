@@ -4258,7 +4258,7 @@ impl<'ctx> super::Codegen<'ctx> {
                     self.user_enum_boxed_payload_variants(&mono_ty)
                 {
                     // B-2026-09-10-2 — the interior, as at the other two sites.
-                    let inner = self.enum_boxed_payload_interior_drop(&payload_te);
+                    let inner = self.enum_boxed_payload_interior_drop(&payload_te, false);
                     self.track_boxed_enum_var_with_inner_drop(
                         &param_name,
                         alloca,

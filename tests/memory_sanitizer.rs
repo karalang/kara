@@ -84888,6 +84888,105 @@ fn main() {
         );
     }
 
+    /// B-2026-09-12-12 / B-2026-09-12-18 — a boxed `Array[T, N]` enum payload,
+    /// across the two axes that each produced a distinct defect in this family.
+    ///
+    /// The BOX had no owner for a MONOMORPHIC enum.
+    /// `user_enum_boxed_payload_variants` returns every variant whose payload
+    /// outgrows its area, but bailed on a non-generic path because "only a
+    /// generic instantiation can outgrow its own area". An array refutes that:
+    /// the under-sizing comes from the SPELLING a variant declaration is forced
+    /// to use — `Path(["Array"], ..)`, which `payload_word_count_for_type_expr`
+    /// sizes through its conservative tail, while the real-width
+    /// `TypeKind::Array` arm only ever sees a type recovered from inference. So
+    /// `enum E { A(Array[String, 2]), B }` boxed exactly like an erased `T` and
+    /// leaked 384 B direct plus 384 B indirect over 8 rounds; `Array[i64, 3]`,
+    /// which owns no heap at all, leaked 192 B purely to the box.
+    ///
+    /// The INTERIOR walk double-freed a payload moved out of a LOCAL. An array
+    /// local moved into an enum payload keeps its own `StructDrop` plus a
+    /// `FreeVecBuffer` per element — no array move-out disarm is wired to that
+    /// site — so the source freed the elements and the walk freed them again:
+    /// SIGABRT for `String`, struct, `Drop`-bearing and nested-array elements,
+    /// SIGSEGV for `Vec[String]`. The `l*` cells below are that shape, and the
+    /// whole fixture aborts on the pre-fix compiler (measured: rc=134).
+    ///
+    /// `g5` is the INLINE spelling, which was always correct and must stay
+    /// walked — it is the cell that fails if the gate is turned off rather than
+    /// narrowed. `m2` uses the UNQUALIFIED constructor and arm pattern while
+    /// every other cell is qualified, because that axis is exactly what the
+    /// generated matrix preceding this fix failed to vary.
+    ///
+    /// All-`Array` on purpose and no user `Drop` bodies: this asserts MEMORY, so
+    /// no cell can pass for a body-count reason.
+    ///
+    /// Each `l*` cell READS a byte out of the local before moving it. Without
+    /// that the fixture tripped its own vacuity floor at 77 allocations — the
+    /// optimizer deleted roughly half the payload strings because nothing
+    /// observed them, and a clean ASAN run over allocations that never happened
+    /// proves nothing. The read is taken BEFORE the move, deliberately: reading
+    /// through a match arm instead would hand the interior to the binding and
+    /// mask the very ownership overlap these cells exist to pin.
+    #[test]
+    fn asan_enum_boxed_array_payload_frees_its_box_and_not_its_source() {
+        let mut expected: Vec<&str> = Vec::new();
+        for _ in 0..8 {
+            expected.extend_from_slice(&[
+                "g1:true", "g2:true", "g3:1", "g4", "g5", "m1", "m2:true", "m3",
+            ]);
+        }
+        expected.push("end");
+        assert_clean_asan_run_min_allocs(
+            r#"
+struct Pr { a: String, b: i64 }
+enum G[T] { Y(T), N }
+enum E { A(Array[String, 2]), B }
+enum Ei { Ai(Array[i64, 3]), Bi }
+
+fn main() {
+    let n = env.args().len() as i64;
+    let mut i: i64 = 0i64;
+    while i < 8i64 {
+        let l1: Array[String, 2] = [f"row-cccccccccccc-{i}-{n}", f"row-dddddddddddd-{i}-{n}"];
+        let r1 = l1[1].contains("row");
+        let g1: G[Array[String, 2]] = G.Y(l1);
+        println(f"g1:{r1}");
+        let l2: Array[Pr, 2] = [Pr { a: f"row-eeeeeeeeeeee-{i}-{n}", b: i }, Pr { a: f"row-ffffffffffff-{i}-{n}", b: i }];
+        let r2 = l2[1].a.contains("row");
+        let g2: G[Array[Pr, 2]] = G.Y(l2);
+        println(f"g2:{r2}");
+        let l3: Array[Vec[String], 2] = [[f"row-gggggggggggg-{i}-{n}"], [f"row-hhhhhhhhhhhh-{i}-{n}"]];
+        let r3 = l3[1].len();
+        let g3: G[Array[Vec[String], 2]] = G.Y(l3);
+        println(f"g3:{r3}");
+        let l4: Array[Array[String, 2], 2] = [[f"row-iiiiiiiiiiii-{i}-{n}", f"row-jjjjjjjjjjjj-{i}-{n}"], [f"row-kkkkkkkkkkkk-{i}-{n}", f"row-llllllllllll-{i}-{n}"]];
+        let g4: G[Array[Array[String, 2], 2]] = G.Y(l4);
+        println("g4");
+        let g5: G[Array[String, 2]] = G.Y([f"row-mmmmmmmmmmmm-{i}-{n}", f"row-nnnnnnnnnnnn-{i}-{n}"]);
+        println("g5");
+        let m1: E = E.A([f"row-oooooooooooo-{i}-{n}", f"row-pppppppppppp-{i}-{n}"]);
+        println("m1");
+        let m2: E = A([f"row-qqqqqqqqqqqq-{i}-{n}", f"row-rrrrrrrrrrrr-{i}-{n}"]);
+        println(f"m2:{match m2 { A(t) => { t[1].contains("row") } B => { false } }}");
+        let m3: Ei = Ei.Ai([i, i + n, i * 2i64]);
+        println("m3");
+        i = i + 1i64;
+    }
+    println("end");
+}
+"#,
+            &expected,
+            "asan_enum_boxed_array_payload_frees_its_box_and_not_its_source",
+            // 93 measured at the default level post-fix. Not a guess about what
+            // the optimizer keeps: this fixture's real proof is that the exact
+            // program aborts on the pre-fix compiler (rc=134, `free(): double
+            // free detected in tcache 2`) and runs valgrind-clean on this one,
+            // and the floor only has to catch a version folded away entirely,
+            // which reaches ~10.
+            60,
+        );
+    }
+
     /// B-2026-09-06-72 — a `shared` FIELD's 16-byte refcount block when the
     /// owning struct travels out of a function inside an AGGREGATE.
     ///

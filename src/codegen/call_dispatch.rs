@@ -3444,6 +3444,42 @@ impl<'ctx> super::Codegen<'ctx> {
         matches!(only.value.kind, ExprKind::Identifier(_)).then_some((variant, &only.value))
     }
 
+    /// Does `value` CONSTRUCT a user enum variant whose single payload argument
+    /// is built in place, so no named source can still own its interior?
+    ///
+    /// B-2026-09-12-18 — the question
+    /// [`Self::enum_boxed_payload_interior_drop`]'s `array_interior_ok` asks.
+    /// True only for a variant-constructor call whose one argument is NOT a bare
+    /// identifier: an inline literal (`G.Y([f"a", f"b"])`) has no source to
+    /// double-free against, while `G.Y(a)` leaves `a`'s own element cleanup
+    /// armed. Everything else — a rebind (`let g2 = g;`), a call returning the
+    /// enum, a multi-field variant — answers false, because the box was built
+    /// somewhere this site cannot see.
+    ///
+    /// Both constructor spellings arrive as a `Call` and differ only in the
+    /// callee: unqualified `A(x)` through an `Identifier`, qualified `E.A(x)`
+    /// through a `Path` whose last segment is the variant. Measured, not
+    /// assumed — an instrumented build printed no match for `G.Y(a)` under an
+    /// `Identifier`-only reading while the variant set already held `G.Y`.
+    pub(super) fn user_variant_ctor_builds_payload_inline(value: &Expr) -> Option<String> {
+        let ExprKind::Call { callee, args } = &value.kind else {
+            return None;
+        };
+        let v = match &callee.kind {
+            ExprKind::Identifier(v) => v.clone(),
+            ExprKind::Path { segments, .. } => segments.last()?.clone(),
+            _ => return None,
+        };
+        let [only] = args.as_slice() else {
+            return None;
+        };
+        (!matches!(
+            only.value.kind,
+            ExprKind::Identifier(_) | ExprKind::SelfValue
+        ))
+        .then_some(v)
+    }
+
     /// Is this expression a seeded variant CONSTRUCTOR — `Some(..)`, `Ok(..)`,
     /// `Err(..)` — whatever shape its payload has? B-2026-09-06-49.
     ///
@@ -5814,7 +5850,7 @@ impl<'ctx> super::Codegen<'ctx> {
             for (enum_name, variant, payload_te) in
                 self.user_enum_boxed_payload_variants(&te.clone())
             {
-                let inner = self.enum_boxed_payload_interior_drop(&payload_te);
+                let inner = self.enum_boxed_payload_interior_drop(&payload_te, false);
                 self.track_boxed_enum_var_with_inner_drop(
                     "__owned_agg_tmp",
                     slot,

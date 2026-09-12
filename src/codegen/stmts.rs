@@ -8120,12 +8120,25 @@ impl<'ctx> super::Codegen<'ctx> {
                                 .then(|| self.variables.get(var_name.as_str()).copied())
                                 .flatten()
                             {
+                                // B-2026-09-12-18 — an ARRAY interior may be
+                                // walked only when THIS `let` builds the payload
+                                // in place. `G.Y(a)` leaves `a`'s own element
+                                // cleanup armed and the walk then frees it
+                                // twice; `G.Y([f"x", f"y"])` has no such source.
+                                // Per-variant, since a multi-variant enum can
+                                // box more than one and only the one being
+                                // constructed here is in-place.
+                                let inline_variant =
+                                    Self::user_variant_ctor_builds_payload_inline(value);
                                 for (enum_name, variant, payload_te) in boxed {
                                     // B-2026-09-10-2 — the INTERIOR this site
                                     // passed as `None`. See the param site in
                                     // `functions.rs` for why the resolver is
                                     // the memory-only one.
-                                    let inner = self.enum_boxed_payload_interior_drop(&payload_te);
+                                    let inner = self.enum_boxed_payload_interior_drop(
+                                        &payload_te,
+                                        inline_variant.as_deref() == Some(variant.as_str()),
+                                    );
                                     self.track_boxed_enum_var_with_inner_drop(
                                         var_name, slot.ptr, &enum_name, &variant, inner,
                                     );

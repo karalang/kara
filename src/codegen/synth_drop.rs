@@ -9939,9 +9939,15 @@ impl<'ctx> super::Codegen<'ctx> {
     /// the per-monomorph synthesis, and a tuple / `Array` payload its own
     /// measurement — which leaves those shapes exactly as they were rather than
     /// guessing.
+    /// `array_interior_ok` — B-2026-09-12-18. Whether the caller can promise no
+    /// named source still owns an ARRAY payload's elements; see the arm below
+    /// for the double free that rides on getting it wrong. Only the array arm
+    /// reads it: every other shape here is either disarmed on move already
+    /// (`String`, struct, tuple) or frees nothing it does not own.
     pub(super) fn enum_boxed_payload_interior_drop(
         &mut self,
         payload_te: &TypeExpr,
+        array_interior_ok: bool,
     ) -> Option<FunctionValue<'ctx>> {
         // B-2026-09-11-4 — the two shapes that are not a bare `Path`, answered
         // BEFORE the `Path` guard below. A tuple has no `Path` spelling at all,
@@ -9986,8 +9992,45 @@ impl<'ctx> super::Codegen<'ctx> {
         // That divergence predates this change and is filed on its own row; it
         // is emphatically not something to "fix" from here by reaching for the
         // wrapper, which is the double-body trap above.)
+        // B-2026-09-12-18 — the ARRAY arm is gated on `array_interior_ok`, and
+        // that gate is mine to answer for: `a6584ca` (closing B-2026-09-11-4)
+        // added this arm ungated, which is correct for a payload built INLINE at
+        // the construction site and a DOUBLE FREE for one moved out of a local:
+        //
+        //     let a: Array[String, 2] = [f"x", f"y"];
+        //     let g: G[Array[String, 2]] = G.Y(a);
+        //
+        // An array local moved into an enum payload keeps its OWN queued
+        // cleanup — a `StructDrop` on the slot plus a `FreeVecBuffer` per
+        // element — because none of the array move-out disarms are wired to this
+        // site, and the two that could be (`suppress_array_binding_move_arg`,
+        // `suppress_array_elem_move_source`) gate on `owned_array_params`, which
+        // holds by-value PARAMS only. The `String`, struct and tuple payloads in
+        // the same position are all disarmed and were all clean; only an array
+        // was not. So the source freed the elements and this walk freed them
+        // again. While the arm did not exist the two errors cancelled — a leaked
+        // box against an unclaimed interior — which is why the shapes measured
+        // when it landed, all inline literals, looked right.
+        //
+        // Measured at `KARAC_OPT_LEVEL=0`, `enum G[T] { Y(T), N }` at
+        // `T = Array[E, 2]` with the payload moved from a local, against
+        // `a6584ca^` where all seven ran clean:
+        //
+        //     E = String                 free(): double free detected in tcache 2
+        //     E = Pr (plain struct)      free(): double free detected in tcache 2
+        //     E = Rec (impl Drop)        free(): double free detected in tcache 2
+        //     E = Array[String, 2]       free(): double free detected in tcache 2
+        //     E = Vec[String]            SEGFAULT
+        //     E = i64                    clean (no interior to free)
+        //     E = Option[String]         clean (the walk declines it)
+        //
+        // So the caller decides, because only the caller can see where the
+        // payload came from: `false` whenever a named source may still own the
+        // interior, `true` only for a construction that built it in place. The
+        // asymmetry is deliberate — declining costs a leak, admitting wrongly
+        // costs a double free.
         if let Some((elem_te, n)) = self.array_elem_and_len(payload_te) {
-            if !self.te_recursive_drop_fully_supported(payload_te) {
+            if !array_interior_ok || !self.te_recursive_drop_fully_supported(payload_te) {
                 return None;
             }
             return self.emit_drop_fn_for_array(&elem_te, n);
