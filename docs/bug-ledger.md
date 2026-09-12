@@ -101,7 +101,7 @@ distinguish "bugs flattening" from "we stopped writing them down."
 | diagnostics | 125 |
 | false-positive | 106 |
 | perf | 104 |
-| other | 102 |
+| other | 103 |
 | soundness | 95 |
 | crash | 80 |
 | use-after-free | 38 |
@@ -113,7 +113,7 @@ distinguish "bugs flattening" from "we stopped writing them down."
 | codegen | 1692 |
 | interp | 421 |
 | typecheck | 297 |
-| other | 87 |
+| other | 88 |
 | ownership | 74 |
 | cli | 73 |
 | autopar | 56 |
@@ -172,7 +172,6 @@ _Generated from `bug-ledger.jsonl` by `scripts/bug-curve.py` (2026-05-20 → 202
 | B-2026-09-10-36 | 2026-09-10 | codegen | medium | A `Vec[Array[T, N]]` FED FROM A TEMPORARY LEAKS EVERY ELEMENT BUFFER AT BOTH OPT LEVELS -- 36 B in 4 blocks for `v.push(mk(0)); v.push(mk(1))` over `Vec[Array[String, 2]]`, while the named-source spelling `let e = [..]; v.push(e)` is clean because the SOURCE LOCAL owns those buffers and the container never had an element drop at all | — |
 | B-2026-09-10-37 | 2026-09-10 | codegen | low | `.clone()` ON AN `Array[T, N]` HAS NO CODEGEN DISPATCHER ARM AT ANY DEPTH -- `a.clone()` bails `no handler for method 'clone' on variable 'a'` (codegen's own "this is a codegen bug" message), a residual of B-2026-07-29-31 which widened `.clone()` to `Option`/`Result` and every user type but never to `Array` | — |
 | B-2026-09-10-38 | 2026-09-10 | typecheck | low | AN ARRAY LITERAL IN A TUPLE-LITERAL ELEMENT DOES NOT TAKE THE TUPLE ANNOTATION'S ELEMENT TYPE AND INFERS `Vec` -- `let t: (Array[String, 2], i64) = ([f"a", f"b"], 7)` is rejected as `found '(Vec[String], i64)'` while the direct `let a: Array[String, 2] = [..]` and the `(Vec[String], i64)` spelling are both accepted; the tuple-ELEMENT position of the question B-2026-08-13-22 fixed at the `let` | — |
-| B-2026-09-11-2 | 2026-09-11 | other | low | A WILDCARD MATCH PAYLOAD (`Some(_)` / `Full(_)`) SCHEDULES NO DROP IN THE OWNERSHIP ORACLE, so the differential compares nothing for it -- `_` discards the BINDING, not the obligation, and a per-place schedule has no place to key it to (the bound spellings now schedule correctly) | — |
 | B-2026-09-12-1 | 2026-09-12 | runtime | low | `coroutine_ws_over_tls_concurrent_handlers_all_execute` GOES RED IN THE REQUIRED GATE SET BUT IS NOT REPRODUCIBLE ON DEMAND -- five reds across both KARAC_SSO legs against 22 consecutive passes under deliberately harsher standalone conditions. The three preserved reds report 15, 15 and 11 of 16 handlers echoing, so the count is VARIABLE (an earlier two-observation reading of it as a stable 15/16 is retracted in the detail). What holds is the discriminator the row was filed for: `left > 0` every time, so the server DOES come up -- a coroutine-resume / accept-path race, not a port or fixture problem. | — |
 | B-2026-09-12-3 | 2026-09-12 | codegen | low | `mono_handle_param_infos` IS WRITTEN UNDER A NON-FINAL `mangled` AND READ UNDER THE FINAL ONE -- `compile_generic_call` rebinds `mangled` four times and stores the handle record after the first append, while `compile_mono_function` looks it up after the fourth, so the map is correct today only because the three later appends happen to be no-ops for a Column/Tensor argument | — |
 | B-2026-09-12-5 | 2026-09-12 | codegen | medium | A BOXED TUPLE / `Array` / GENERIC-STRUCT PAYLOAD MATCHED OUT OF A GENERIC ENUM IS OWNED BY NOBODY -- the arm binding that takes it never frees it and the box's interior walk is retracted because it did, so the move-out cells leak 192-384 B where the identical `Option[String]` payload is clean | — |
@@ -187,6 +186,7 @@ _Generated from `bug-ledger.jsonl` by `scripts/bug-curve.py` (2026-05-20 → 202
 | B-2026-09-12-24 | 2026-09-12 | codegen+interp | medium | AN ENUM VARIANT'S `Array[T, N]` OR `Vec[T]` PAYLOAD NEVER RUNS ITS ELEMENTS' USER `Drop` BODIES -- the enum-payload twin of B-2026-09-12-21, and the answer to that row's own NOT-MEASURED question; `Option[Array[T, N]]` is the ONE spelling that is correct on every surface, which is exactly why the fuzzer's single container-payload shape reported green | — |
 | B-2026-09-12-25 | 2026-09-12 | codegen | high | A NESTED DESTRUCTURE WHOSE LEAF ESCAPES INTO A `mut ref` ACCUMULATOR DOUBLE-FREES ON EVERY COMPILED LANE -- `fn show(x: Option[K], acc: mut ref Vec[R2]) { match x { Option.Some(K.A(r)) => { acc.push(r) } .. } }` over `enum K { A(R2), B }` aborts with `free(): double free detected in tcache 2` at -O0, -O0 autopar and -O2 autopar, while `--interp` runs clean and prints `len:1 / end`. The READ-ONLY twin of the same pattern (`println(f"a:{r.s}")` instead of the push) is clean on all four surfaces, so the trigger is the leaf ESCAPING rather than the nesting: two owners end up on one `R2` -- the accumulator that received it and something in the callee's own teardown of the boxed payload | — |
 | B-2026-09-12-26 | 2026-09-12 | codegen | medium | AN ASSOCIATED FUNCTION THAT CONDITIONALLY RETURNS ITS OWNED PARAM RUNS THE PARAM'S `Drop` BODY TWICE ON EVERY COMPILED LANE -- `impl Sk { fn pick(r: R, flag: bool) -> R { if flag { return r } return R { id: 9 } } }` called as `let k = Sk.pick(R { id: 1 }, true)` prints `dR1 / k:1 / dR1` at -O0, -O0 autopar and -O2 autopar against `k:1 / dR1` on `--interp`, where one `R` exists and one body is owed. The FREE-function spelling of the same program is correct on all four surfaces, so this is the associated half of the ownership flip `cond_returned_param_drop_names` performs | — |
+| B-2026-09-12-27 | 2026-09-12 | other | low | A MATCHED PARAMETER PROJECTS NO PAYLOAD TYPE ON EITHER SPELLING, so a `match` on a by-value param compares nothing -- `analyze` introduces params with `introduce` rather than `introduce_typed`, so `Binding::ty` is `None` for every param and `scrutinee_ty` has nothing to return (measured: `fn eat(o: Option[Vec[String]])` schedules 0 in `eat` on both `Some(x)` and `Some(_)` while codegen records `o`) | — |
 
 ### Relocated
 
@@ -2496,6 +2496,7 @@ _Generated from `bug-ledger.jsonl` by `scripts/bug-curve.py` (2026-05-20 → 202
 | B-2026-09-10-33 | other | low | THE DROP-FUZZER'S SHRINKER SAVES A PROGRAM THAT NO LONGER COMPILES AS A REPRO -- it deleted a `let` declaration and kept the reassignment, and "a con… | 55e6bbf |
 | B-2026-09-10-34 | codegen | high | AN OWNED `Array` PASSED INTO A GENERIC CALLEE THAT RETURNS IT DOUBLE FREES IN THE CALLER -- `let b: Array[String, 2] = passthru(a)` over `fn passthru… | 55e767a |
 | B-2026-09-11-1 | other | low | THE MATCH-PAYLOAD PROJECTION STOPS AT `Option`/`Result` AND AT BOUND PAYLOADS -- a `Some(_)` wildcard and every USER ENUM arm still schedule zero dro… | fddcfcf |
+| B-2026-09-11-2 | other | low | A WILDCARD MATCH PAYLOAD (`Some(_)` / `Full(_)`) SCHEDULES NO DROP IN THE OWNERSHIP ORACLE, so the differential compares nothing for it -- `_` discar… | 6cb874e7f |
 | B-2026-09-11-3 | codegen | medium | A USER-DECLARED GENERIC ENUM LEAKS ITS HEAP-BOXED PAYLOAD AT EVERY SCOPE EXIT -- `Slot[String]` loses its whole buffer while the SAME enum monomorphi… | cec3c32 |
 | B-2026-09-11-4 | codegen | medium | A TUPLE, AN `Array`, AN `Option[String]` AND A GENERIC-STRUCT PAYLOAD LEAKED INSIDE A USER GENERIC ENUM'S HEAP BOX -- `enum_boxed_payload_interior_dr… | a6584ca |
 | B-2026-09-12-2 | codegen | medium | A DISCARDED CALL RESULT OF AN ARRAY-RETURNING FUNCTION HAS NO OWNER ON EITHER BACKEND PATH -- `passthru(a);` over `fn passthru(x: Array[String, 2]) -… | 56927b8 |
