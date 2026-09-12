@@ -665,9 +665,12 @@ perf payoff lands in Slice 2.
   Immediate read ⇒ route. Stored anywhere ⇒ promote.
 
   **MEASURED 2026-09-12, and it works** — see "THE INLINE OVERLAY IS BROKEN ON
-  32-BIT TARGETS" below. A `wasm_browser` export returning a `substring` lifts
-  the correct bytes at `KARAC_SSO=1` for every length that the encoder gets
-  right, so the promotion fires and does its job.
+  32-BIT TARGETS" below, and the section after it for what the fix turned out to
+  be. A `wasm_browser` export returning a `substring` lifts the correct bytes at
+  `KARAC_SSO=1`, so the promotion fires and does its job. (It did so even while
+  the overlay was losing content bytes underneath it — the promotion was never
+  the defect, which is why the two had to be separated before either could be
+  read.)
 
   **The claim that this was unverifiable here was WRONG, and that is worth
   recording.** It was written as "a wasm component E2E needs `wasm-tools` and the
@@ -683,7 +686,8 @@ perf payoff lands in Slice 2.
   a real defect the reasoning would have preserved indefinitely.
 
 
-  ### THE INLINE OVERLAY IS BROKEN ON 32-BIT TARGETS (found 2026-09-12, OPEN)
+  ### THE INLINE OVERLAY IS BROKEN ON 32-BIT TARGETS (found 2026-09-12, FIXED
+  — but not by the fix this entry prescribes; see the section after it)
 
   Found by finally running the thing this doc had recorded as unverifiable. The
   `cabi.rs` return-area promotion is **fine** — the corruption is upstream of it,
@@ -738,8 +742,9 @@ perf payoff lands in Slice 2.
   nothing** — the sweep is what made it visible, and the sweep should have been
   the first thing run.
 
-  **Status: OPEN, not fixed here.** Reachable only at `KARAC_SSO=1` (default
-  off), so nothing ships broken today. The shape of the fix is clear — write the
+  **Status when this entry was written: OPEN.** Reachable only at `KARAC_SSO=1`
+  (default off), so nothing shipped broken. The shape of the fix looked clear —
+  write the
   inline bytes through a raw byte pointer into the destination (`out as *mut u8`)
   rather than reconstructing struct fields, so the padding hole is written
   directly — but it touches the single source of truth that codegen mirrors, it
@@ -751,6 +756,96 @@ perf payoff lands in Slice 2.
   **The gate to add with the fix:** the sweep above, as an E2E. It needs the two
   wasm staticlib archives and node — all present in an ordinary container, which
   is the other thing this entry corrects.
+
+  ### …AND THE FIX IS NOT THE ENCODER — THE OVERLAY IS 64-BIT-ONLY (2026-09-12)
+
+  The entry above names the encoder as the mechanism and prescribes writing the
+  inline bytes through a raw byte pointer. That fix was written, and **it does
+  not fix the bug.** Applied alone, with the wasm archive rebuilt, the sweep
+  fails in exactly the shape it failed before: content bytes 4..=7 zero at every
+  length from 5 through 23. The encoder was a real defect and it was not the
+  whole one.
+
+  **The rest of it is visible in one line of IR.** `examples/dump_ir` on a
+  `substring` program at `KARAC_SSO=1`:
+
+  ```llvm
+  ss.inline:
+    %ss.inl.ok = call i8 @karac_string_try_inline_into(ptr %ss.inl.src, i64 %ss.inl.len, ptr %ss.result)
+    br i1 %ss.inl.done, label %ss.cont, label %ss.copy
+  ss.cont:
+    %ss.load = load { ptr, i64, i64 }, ptr %ss.result, align 8
+    ret { ptr, i64, i64 } %ss.load
+  ```
+
+  The runtime writes 24 bytes into `%ss.result`. Codegen then reads them back
+  with `load { ptr, i64, i64 }` — which loads **three fields, not 24 bytes** —
+  and returns the aggregate. On wasm32 bytes 4..=7 belong to no field, so they
+  are dropped one instruction after being written, and every later store of that
+  value writes three fields again. Writing the hole was never the hard part;
+  *keeping* it is, and a `String` moves through the compiler as an aggregate
+  everywhere.
+
+  So the honest reading is that **the 24-byte overlay presupposes a gapless
+  descriptor**, and `{ptr, i64, i64}` is gapless only at a pointer width of 8.
+  Supporting 32-bit would mean lowering every descriptor move in the compiler to
+  a 24-byte `memcpy` — on the value type that moves most, to pessimise the
+  64-bit path SSO exists to speed up. Not a trade worth making for a target
+  where the malloc SSO removes is not the bottleneck anyway.
+
+  **What landed instead: inline construction is refused where the descriptor has
+  a hole**, on both sides independently.
+
+  * `RuntimeKaracString::DESCRIPTOR_IS_GAPLESS` (`runtime/src/sso.rs`) states the
+    precondition as what it actually is — `size_of::<Self>() == size_of::<*mut
+    u8>() + 16` — rather than as a target name. Both runtime construction
+    entrypoints check it: `karac_string_try_inline_into` answers 0, which is the
+    verdict its callers already handle, and `karac_string_slice_into` falls
+    through to its heap arm.
+  * `Codegen::sso_on()` is additionally `&& !active_target_is_wasm()`, so the
+    inline blocks are not emitted on wasm at all.
+
+  Where it is false, no inline descriptor is ever built, no reader can meet one,
+  and `String` behaves exactly as it did pre-SSO. The redundancy is not
+  decorative and was **measured**: with the codegen gate alone backed out, the
+  emitted wasm still contains the `karac_string_try_inline_into` call and the
+  sweep is still clean, because the runtime refuses and the caller takes its heap
+  path.
+
+  The encoder fix stayed in regardless — `write_inline` writes the descriptor
+  through `out as *mut u8`, and `karac_string_clone`'s inline arm now does a raw
+  24-byte copy instead of three field assignments. Neither changes a byte on
+  64-bit; both remove a way for the layout to be wrong that nothing else was
+  checking.
+
+  **The gate:** `wasm_browser_inline_string_survives_export_at_every_length`
+  (`tests/cli.rs`) builds the `substring` export at `KARAC_SSO=1` and sweeps
+  `n = 0..=30` under node against the host's own `slice`. It is red with the
+  gates backed out and green with them in.
+
+  #### The negative control needed its own negative control
+
+  Backing the two gates out of the SOURCE and re-running the test reported
+  **pass** — which briefly read as "the new test is vacuous", the campaign's
+  recurring failure shape and a plausible verdict given it had just been written.
+  It was not. `cargo test` rebuilds `karac` and the runtime *rlib*; it does not
+  rebuild `libkarac_runtime_wasm.a`, which is what a wasm build links. The
+  archive still carried the gate, so the backout had not reached the binary under
+  test. Rebuilding the archive made the same test fail immediately.
+
+  This is CLAUDE.md's archive-staleness trap, met inside a backout experiment
+  rather than a measurement — and it is the more dangerous placement, because a
+  stale archive there does not merely mislead about a number, it certifies a real
+  gate as useless. **A backout that changes runtime source is not in effect until
+  the archive is rebuilt**, and the tell is the same one the campaign keeps
+  relearning: a result that does not move when the input demonstrably did.
+
+  One further check the first sabotage attempt failed to be: to prove the test
+  body ran at all, the JS oracle was corrupted — but the corruption changed the
+  shared `src` string feeding *both* the call and the expectation, so the two
+  moved together and the test passed legitimately. Corrupting only the
+  expectation (`want = src.slice(0, n) + 'X'`) made it fail in 0.62 s, proving
+  the body builds, runs node, and compares.
 
   ### The remaining raw-site count is NOT a remaining-risk count
 
@@ -1588,7 +1683,7 @@ perf payoff lands in Slice 2.
   it vary would make any difference unattributable.
 
   **What it does NOT cover**, so nobody over-reads it: these are x86-64 native
-  builds, so B-2026-09-12-20's 32-bit encoder defect is invisible here; `--interp`
+  builds, so B-2026-09-12-20's 32-bit overlay defect is invisible here; `--interp`
   and the auto-par surface are deliberately held fixed rather than compared; and
   it is one pinned hash seed.
 
@@ -1624,6 +1719,13 @@ perf payoff lands in Slice 2.
   all — and it covers exactly one shape: a String crossing into a runtime
   extern. Growing this list is how the manual cycle above stops being
   load-bearing.
+- `tests/cli.rs::wasm_browser_inline_string_survives_export_at_every_length` —
+  the second unprompted `KARAC_SSO=1` fixture, and the only one that watches a
+  32-bit target. It builds a `substring` export at `KARAC_SSO=1` and sweeps
+  `n = 0..=30` under node, so it covers both the inline/heap boundary and the
+  four-byte window B-2026-09-12-20 lived in. Skips cleanly without the wasm
+  archive or node; a single length would not have caught the defect it exists
+  for, which is why it is a sweep.
 - `tests/codegen.rs` String suite (E2E) + the new dispatch tests.
 - `tests/memory_sanitizer.rs` ASAN on macOS (UAF/double-free) **and** the Linux/LSan CI
   `memory-sanitizer` job (leaks — *the* gate, since SSO rewrites the free path; macOS
@@ -1632,6 +1734,13 @@ perf payoff lands in Slice 2.
   oppositely under optimization — `reference_macos_leak_detection_methodology`).
 - Re-profile the self-host lexer (instruction-count gate) + corpus re-bench before any
   published number.
+- **Rebuild the runtime archives first — all of them, including the two wasm
+  ones — whenever `runtime/src` changes at all.** CLAUDE.md says this for
+  measurements; SSO has now been bitten by it twice, the second time inside a
+  BACKOUT (see "the negative control needed its own negative control"), where a
+  stale archive does not distort a number but certifies a working gate as
+  useless. The wasm pair is the easiest to forget because no native gate touches
+  it.
 
 ## The complementary, separately-owned win (record — do NOT do here)
 

@@ -21747,6 +21747,110 @@ fn main() {}
     let _ = std::fs::remove_dir_all(&tmp);
 }
 
+/// A `String` built by an INLINE construction site survives a wasm export
+/// intact, at every length across the inline/heap boundary — the regression
+/// gate for B-2026-09-12-20.
+///
+/// SSO overlays a short string onto its own 24-byte `{ptr, i64, i64}`
+/// descriptor. That only works while those 24 bytes are wholly covered by
+/// the three fields, and on wasm32 they are not: the pointer is 4 bytes, so
+/// the `i64` at offset 8 leaves bytes 4..=7 belonging to no field, straight
+/// through the middle of the overlay's data. Codegen moves a `String` as an
+/// LLVM aggregate (`load { ptr, i64, i64 }`), which reads three fields and
+/// not 24 bytes, so the hole's contents were dropped one instruction after
+/// the runtime wrote them: every inline string of length >= 5 came back with
+/// a four-byte gap of zeros. Both sides now refuse to build an inline
+/// descriptor where the layout has a hole.
+///
+/// **Why this is a length SWEEP and not one call.** The defect is confined
+/// to bytes 4..=7 of the content, so it is invisible below length 5 and
+/// invisible again above the 23-byte inline capacity, where the string is
+/// heap-allocated and the overlay is not in play at all. The finding session
+/// first probed `pick(src, 3)`, got `"abc"`, and briefly wrote that down as
+/// verification — `n=3` fits entirely inside the bytes that survive. A
+/// single passing value proves nothing about a boundary-shaped defect.
+///
+/// **Why the existing wasm export tests could not catch it.**
+/// `wasm_browser_rich_exports_marshal_e2e` exports `shout(s) { s + "!" }`,
+/// and concatenation is not an inline construction site — the marshalled
+/// value is always a heap String, so that test was green at `KARAC_SSO=1`
+/// throughout. `substring` is the construction site the SSO campaign's own
+/// profile uses, which is why this one calls it.
+///
+/// The whole thing runs at `KARAC_SSO=1`: the feature is off by default, so
+/// a test that did not set it would exercise the pre-SSO path and pass no
+/// matter what the overlay did.
+#[test]
+fn wasm_browser_inline_string_survives_export_at_every_length() {
+    let tmp = wasm_test_dir("browser-sso-sweep");
+    let path = tmp.join("picklib.kara");
+    std::fs::write(
+        &path,
+        r#"
+#[target(wasm_browser)]
+pub fn pick(s: String, n: i32) -> String { return s.substring(0, n as i64); }
+
+fn main() {}
+"#,
+    )
+    .unwrap();
+
+    let out = karac_bin()
+        .args(["build", path.to_str().unwrap(), "--target=wasm_browser"])
+        .current_dir(&tmp)
+        .env("KARAC_SSO", "1")
+        .env_remove("KARAC_RUNTIME")
+        .output()
+        .unwrap();
+    let stderr = String::from_utf8_lossy(&out.stderr);
+    if let Some(reason) = wasm_build_skip_reason(&out) {
+        eprintln!("skip: wasm_browser_inline_string_survives_export_at_every_length — {reason}");
+        let _ = std::fs::remove_dir_all(&tmp);
+        return;
+    }
+    assert!(out.status.success(), "wasm browser build failed: {stderr}");
+
+    // n = 0..=30 walks from empty, through the four-byte window the defect
+    // lived in, across the 23-byte inline capacity, and out the far side into
+    // the heap path. Each answer is checked against the JS slice of the same
+    // source, so the oracle is the host's own string semantics.
+    let runner = tmp.join("run.mjs");
+    std::fs::write(
+        &runner,
+        "import { instantiate } from './picklib.js';\n\
+         const e = (await instantiate()).exports;\n\
+         const src = 'abcdefghijklmnopqrstuvwxyz0123456789';\n\
+         let bad = 0;\n\
+         for (let n = 0; n <= 30; n++) {\n\
+         \x20 const want = src.slice(0, n);\n\
+         \x20 const got = e.pick(src, n);\n\
+         \x20 if (got !== want) { bad++;\n\
+         \x20   console.error(`n=${n} want=${JSON.stringify(want)} got=${JSON.stringify(got)}`); }\n\
+         }\n\
+         if (bad !== 0) { console.error(`${bad} lengths wrong`); process.exit(3); }\n\
+         console.log('OK');\n",
+    )
+    .unwrap();
+    let node = std::process::Command::new("node")
+        .arg(&runner)
+        .current_dir(&tmp)
+        .output();
+    let Ok(node_out) = node else {
+        eprintln!(
+            "skip: wasm_browser_inline_string_survives_export_at_every_length — node not on PATH"
+        );
+        let _ = std::fs::remove_dir_all(&tmp);
+        return;
+    };
+    let so = String::from_utf8_lossy(&node_out.stdout);
+    let se = String::from_utf8_lossy(&node_out.stderr);
+    assert!(
+        node_out.status.success() && so.contains("OK"),
+        "inline String lost bytes across the wasm export boundary: stdout={so} stderr={se}",
+    );
+    let _ = std::fs::remove_dir_all(&tmp);
+}
+
 /// phase-10 "WASM entry-point discovery" (sub-slice C): a
 /// `--bindings component` (wasm_wasi default) build lifts each scalar
 /// `pub fn` export into the embedded WIT world. The export name is

@@ -67,6 +67,37 @@ impl RuntimeKaracString {
     /// of the 24-byte descriptor minus the 1-byte flag/length trailer).
     pub const INLINE_CAPACITY: usize = 23;
 
+    /// Whether the descriptor's 24 bytes are wholly covered by its three
+    /// fields — the precondition the inline overlay cannot do without.
+    ///
+    /// `{*mut u8, i64, i64}` is gapless only when the pointer is 8 bytes.
+    /// At any narrower pointer width the `i64` at offset 8 leaves a hole
+    /// (wasm32: bytes 4..=7) that belongs to no field, and the overlay's
+    /// bytes 0..=22 run straight through it.
+    ///
+    /// **A hole is fatal to the scheme, not merely awkward to encode.**
+    /// Writing those bytes is easy enough — [`write_inline`] does it
+    /// through a raw byte pointer. Keeping them is not: codegen moves a
+    /// `String` as an LLVM aggregate value, and `load {ptr, i64, i64}`
+    /// reads three FIELDS, not 24 bytes. `String.substring`'s SSO arm has
+    /// the runtime write the descriptor into a slot and then loads it right
+    /// back (`src/codegen/vec_method.rs`, `ss.load`), so on a padded target
+    /// the hole's contents are dropped one instruction after being written,
+    /// and every later store of that value writes three fields again.
+    /// Making 32-bit work would mean turning every descriptor move in the
+    /// compiler into a 24-byte `memcpy` — on the value type that moves most,
+    /// to pessimise the 64-bit path this optimization exists to speed up.
+    ///
+    /// So inline construction is gated on this instead: where it is false,
+    /// nothing ever builds an inline descriptor, no reader can meet one, and
+    /// `String` behaves exactly as it did before SSO. Codegen gates its own
+    /// construction sites on the same condition (`sso_on`), and the two
+    /// construction entrypoints here refuse independently, so a gap on
+    /// either side degrades to the heap path rather than to corruption.
+    /// Measured as B-2026-09-12-20.
+    pub const DESCRIPTOR_IS_GAPLESS: bool =
+        core::mem::size_of::<Self>() == core::mem::size_of::<*mut u8>() + 16;
+
     /// True when the string is stored inline (no heap buffer).
     #[inline]
     pub fn is_inline(&self) -> bool {
@@ -142,28 +173,78 @@ impl RuntimeKaracString {
         unsafe { core::slice::from_raw_parts(ptr, len) }
     }
 
-    /// Build an inline descriptor from `bytes`. Panics if `bytes` exceeds
-    /// [`INLINE_CAPACITY`]. This is the reference encoder — codegen's
-    /// inline-construction path (a later slice) emits the equivalent store
-    /// sequence, and it anchors the round-trip unit tests below.
+    /// Build an inline descriptor from `bytes` as a VALUE. Panics if `bytes`
+    /// exceeds [`INLINE_CAPACITY`].
+    ///
+    /// Convenience over [`write_inline`], and the form the round-trip unit
+    /// tests below are written against. **Runtime code should call
+    /// `write_inline` instead**: returning the descriptor by value hands it to
+    /// a typed move, which carries fields rather than bytes, so on a padded
+    /// descriptor any content byte sitting in the hole would be lost on the
+    /// way out. That is moot wherever inline construction is actually reachable
+    /// — [`DESCRIPTOR_IS_GAPLESS`](Self::DESCRIPTOR_IS_GAPLESS) gates it, and a
+    /// gapless descriptor has no hole to lose — but the value form is the one
+    /// with the extra assumption, so it is the one not to build on.
+    ///
+    /// Codegen owns no copy of this encoding: its construction sites call
+    /// `karac_string_try_inline_into` / `karac_string_slice_into`, which write
+    /// through an out-pointer. This module is the only encoder there is.
     pub fn new_inline(bytes: &[u8]) -> Self {
+        let mut slot = core::mem::MaybeUninit::<Self>::uninit();
+        // SAFETY: `write_inline` initialises all 24 bytes of the descriptor
+        // (data, then the flag/length trailer, then zero-fill), so the value
+        // is fully initialised on return. The overlong case panics before
+        // any write, and never reaches `assume_init`.
+        unsafe {
+            Self::write_inline(slot.as_mut_ptr(), bytes);
+            slot.assume_init()
+        }
+    }
+
+    /// Write an inline descriptor for `bytes` into `out`. Panics if `bytes`
+    /// exceeds [`INLINE_CAPACITY`].
+    ///
+    /// **This, not [`new_inline`], is the form runtime code must use**, and
+    /// the reason is padding. The overlay covers all 24 bytes of the
+    /// descriptor, but on a target where `{*mut u8, i64, i64}` has a hole —
+    /// any pointer width below 64, e.g. wasm32, where the `i64` at offset 8
+    /// leaves bytes 4..=7 unaddressed by any field — bytes inside that hole
+    /// belong to no field at all. Building the value field-by-field cannot
+    /// write them, and Rust does not promise a *move* of the finished value
+    /// carries padding either. Writing straight through `out as *mut u8`
+    /// sidesteps both: the bytes land in the caller's storage, hole included,
+    /// and nothing copies the value afterwards.
+    ///
+    /// That was not a hypothetical. Before this existed, the encoder packed
+    /// the first eight content bytes into a `u64` and stored it through the
+    /// `data` field, so on wasm32 the cast to a 4-byte pointer truncated
+    /// bytes 4..=7 away and every inline string of length >= 5 came back with
+    /// a four-byte hole of zeros (B-2026-09-12-20).
+    ///
+    /// # Safety
+    ///
+    /// `out` must point to a writable, suitably-aligned region of at least
+    /// `size_of::<Self>()` bytes. It need not be initialised.
+    pub unsafe fn write_inline(out: *mut Self, bytes: &[u8]) {
         assert!(
             bytes.len() <= Self::INLINE_CAPACITY,
-            "new_inline: {} bytes exceeds inline capacity {}",
+            "write_inline: {} bytes exceeds inline capacity {}",
             bytes.len(),
             Self::INLINE_CAPACITY,
         );
-        let mut raw = [0u8; 24];
-        raw[..bytes.len()].copy_from_slice(bytes);
-        // Byte 23 = flag (bit 7) | length (bits 0..=6).
-        raw[23] = 0x80 | (bytes.len() as u8);
-        let data = u64::from_le_bytes(raw[0..8].try_into().unwrap());
-        let len = i64::from_le_bytes(raw[8..16].try_into().unwrap());
-        let cap = i64::from_le_bytes(raw[16..24].try_into().unwrap());
-        RuntimeKaracString {
-            data: data as *mut u8,
-            len,
-            cap,
+        // SAFETY: the caller guarantees `out` is writable for 24 bytes. The
+        // three writes below cover `0..len`, `len..23` and byte 23, i.e. the
+        // whole descriptor, so no byte is left uninitialised.
+        unsafe {
+            let raw = out as *mut u8;
+            core::ptr::copy_nonoverlapping(bytes.as_ptr(), raw, bytes.len());
+            // Zero the unused content bytes. Not cosmetic: `as_bytes` reads
+            // only `byte_len()` of them, but a descriptor that is memcmp'd or
+            // hashed as 24 opaque bytes would otherwise see leftover stack.
+            core::ptr::write_bytes(raw.add(bytes.len()), 0, Self::INLINE_CAPACITY - bytes.len());
+            // Byte 23 = flag (bit 7) | length (bits 0..=6).
+            raw.add(Self::INLINE_CAPACITY)
+                .write(0x80 | (bytes.len() as u8));
         }
     }
 }

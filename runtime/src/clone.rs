@@ -74,9 +74,17 @@ pub unsafe extern "C" fn karac_string_clone(src: *const c_void, dst: *mut c_void
         // data bytes 8..=15, not a length, and its `cap` is negative, so
         // every read below would be reading garbage.
         if src.is_inline() {
-            dst.data = src.data;
-            dst.len = src.len;
-            dst.cap = src.cap;
+            // A RAW 24-byte copy, not three field assignments. The inline
+            // overlay covers the whole descriptor including any byte that
+            // belongs to no field — on a target where `{*mut u8, i64, i64}`
+            // has a hole (wasm32: bytes 4..=7, before the `i64` at offset 8)
+            // a field-wise copy silently drops the content bytes living
+            // there. Same reason `write_inline` exists (B-2026-09-12-20).
+            ptr::copy_nonoverlapping(
+                src as *const KaracString as *const u8,
+                dst as *mut KaracString as *mut u8,
+                core::mem::size_of::<KaracString>(),
+            );
             return;
         }
 
@@ -165,8 +173,14 @@ pub unsafe extern "C" fn karac_string_slice_into(
             return;
         }
 
-        if n <= KaracString::INLINE_CAPACITY {
-            *out = KaracString::new_inline(std::slice::from_raw_parts(data.add(start_us), n));
+        if KaracString::DESCRIPTOR_IS_GAPLESS && n <= KaracString::INLINE_CAPACITY {
+            // `write_inline`, not `*out = new_inline(...)`: the overlay covers
+            // all 24 bytes and a struct assignment cannot carry the ones that
+            // belong to no field on a padded target. The gapless gate is the
+            // other half of the same finding — where the descriptor has a
+            // hole, the overlay is unusable at any capacity and this falls
+            // through to the heap path below (B-2026-09-12-20).
+            KaracString::write_inline(out, std::slice::from_raw_parts(data.add(start_us), n));
             return;
         }
 
@@ -214,6 +228,14 @@ pub unsafe extern "C" fn karac_string_try_inline_into(
     out: *mut KaracString,
 ) -> i8 {
     unsafe {
+        // The gapless check first: on a target whose descriptor has a padding
+        // hole the overlay cannot survive codegen's aggregate loads, so the
+        // honest answer is always "no, take your heap path" — which is exactly
+        // what this function's verdict protocol already gives every caller, at
+        // no new cost (B-2026-09-12-20).
+        if !KaracString::DESCRIPTOR_IS_GAPLESS {
+            return 0;
+        }
         // A negative `n` cannot arise from a caller that clamped, but it would
         // become an enormous `usize` on the cast — so refuse rather than trust.
         if n < 0 || n as usize > KaracString::INLINE_CAPACITY {
@@ -228,7 +250,9 @@ pub unsafe extern "C" fn karac_string_try_inline_into(
         } else {
             std::slice::from_raw_parts(src, n)
         };
-        *out = KaracString::new_inline(bytes);
+        // Through the out-pointer, not a struct assignment — see
+        // `write_inline`'s note on the padding hole (B-2026-09-12-20).
+        KaracString::write_inline(out, bytes);
         1
     }
 }

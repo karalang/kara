@@ -100,8 +100,41 @@ impl<'ctx> super::Codegen<'ctx> {
 
     /// Whether the tag-aware String read/construct path is switched on.
     /// See [`sso_enabled`] — off by default while the sweep lands.
+    ///
+    /// **Also off on wasm, unconditionally, and that is a correctness gate
+    /// rather than a policy one.** The inline overlay needs the descriptor's
+    /// 24 bytes to be wholly covered by its three fields, and
+    /// `{ptr, i64, i64}` is gapless only at a pointer width of 8. On wasm32
+    /// the `i64` at offset 8 leaves bytes 4..=7 belonging to no field, while
+    /// the overlay's data bytes 0..=22 run straight through them.
+    ///
+    /// Writing those bytes is not the problem — `write_inline` in
+    /// `runtime/src/sso.rs` does it through a raw byte pointer. KEEPING them
+    /// is. A `String` moves through the compiler as an LLVM aggregate, and
+    /// `load { ptr, i64, i64 }` reads three fields, not 24 bytes: the
+    /// `substring` arm below has the runtime write a descriptor into
+    /// `ss.result` and loads it straight back (`ss.load`), so on a padded
+    /// target the hole's contents are dropped one instruction after they are
+    /// written, and every later store writes three fields again. Supporting
+    /// it would mean lowering every descriptor move in the compiler to a
+    /// 24-byte `memcpy` — on the value type that moves most, to pessimise the
+    /// 64-bit path SSO exists to speed up.
+    ///
+    /// So no inline descriptor is ever constructed there, no reader can meet
+    /// one, and `String` on wasm behaves exactly as it did before SSO. The
+    /// runtime's two construction entrypoints refuse on the same condition
+    /// (`RuntimeKaracString::DESCRIPTOR_IS_GAPLESS`) independently of this
+    /// gate, so a gap on either side degrades to the heap path rather than to
+    /// corruption. Measured as B-2026-09-12-20: before this, every inline
+    /// string of length >= 5 came back from a wasm export with a four-byte
+    /// hole of zeros.
+    ///
+    /// `wasm_browser` / `wasm_wasi` are the only sub-64-bit entries in
+    /// `V1_TARGETS`, so the target test and the pointer-width test pick out
+    /// the same set today; the runtime constant is the one that states the
+    /// actual precondition, and it is what a new target would be judged by.
     pub(super) fn sso_on(&self) -> bool {
-        sso_enabled()
+        sso_enabled() && !crate::target::active_target_is_wasm()
     }
 
     /// Promote an inline String at `slot` into ordinary heap form, in place.
