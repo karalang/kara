@@ -92,7 +92,7 @@ distinguish "bugs flattening" from "we stopped writing them down."
 
 | class | total |
 |---|---|
-| miscompile | 404 |
+| miscompile | 405 |
 | run-vs-build | 392 |
 | leak | 329 |
 | double-free | 226 |
@@ -118,7 +118,7 @@ distinguish "bugs flattening" from "we stopped writing them down."
 | cli | 73 |
 | autopar | 56 |
 | parser | 46 |
-| runtime | 43 |
+| runtime | 44 |
 | effect | 29 |
 | resolver | 29 |
 | lexer | 8 |
@@ -183,6 +183,7 @@ _Generated from `bug-ledger.jsonl` by `scripts/bug-curve.py` (2026-05-20 → 202
 | B-2026-09-12-16 | 2026-09-12 | typecheck | low | THE BLESSED EXPLICIT SPELLING IS REJECTED FOR A USER ENUM'S VARIANT CONSTRUCTOR -- `Ho[R].Full(R { id: 5 })` over `enum Ho[T] { Full(T), Empty }` fails typecheck with `no method 'Full' on Ho[…]`, while the seeded pair (`Option[R].Some(..)`, `Result[T, E].Ok(..)`) and the unqualified `Ho.Full(..)` both work; the same user-vs-builtin split B-2026-08-22-17 fixed for container constructors, one type family over | — |
 | B-2026-09-12-17 | 2026-09-12 | codegen+interp | medium | A GENERIC USER ENUM'S PAYLOAD `Drop` BODY RUNS ON NO COMPILED BACKEND WHEN THE ARGUMENT IS A FRESH TEMP -- `takeit(Full(R { id: 5 }))` over `enum Ho[T] { Full(T), Empty }` prints `f:5 dR5 end` under `--interp` and `f:5 end` at -O0, -O0 autopar and -O2 autopar, while the MONOMORPHIC `enum Ho { Full(R) }` spelling of the same program is correct on all four and a NAMED LOCAL of the generic enum is correct too. B-2026-09-09-18's caller-side bodies channel is gated on the parameter's head being literally `Option` or `Result` (`call_dispatch.rs`, `if head != "Option" && head != "Result"`), so a user enum head never reaches it; the named-local cells are correct because their let site owns the bodies instead. The qualified and bare spellings behave IDENTICALLY, which is what separates this from B-2026-09-12-11 | — |
 | B-2026-09-12-19 | 2026-09-12 | codegen | medium | A BOXED `Array[T, N]` ENUM PAYLOAD'S INTERIOR IS FREED BY NOBODY AT THREE OF THE FOUR REGISTRATION SITES -- 96 B per cell in the by-value-param and returned positions, because `array_interior_ok` can only be answered `true` by the `let` site and the real repair is the missing array move-out disarm | — |
+| B-2026-09-12-20 | 2026-09-12 | runtime | medium | SSO's INLINE STRING OVERLAY IS BROKEN ON EVERY 32-BIT TARGET -- `new_inline` packs the first eight content bytes into a u64 and stores them through the POINTER field, so on wasm32 (4-byte pointers) bytes 4..=7 are truncated away and land in the alignment hole before the i64 at offset 8, which nothing writes. Measured through a wasm_browser export: every inline length >= 5 comes back with bytes 4..=7 zeroed. Reachable only at KARAC_SSO=1, which is off by default. | — |
 
 ### Relocated
 
