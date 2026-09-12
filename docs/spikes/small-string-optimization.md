@@ -1557,6 +1557,57 @@ perf payoff lands in Slice 2.
   1,000,009 → 9, while this doc's `String.substring` table records 1,000,047 →
   47. Those are different programs, so that table's rows were **not** reproduced
   here and remain as originally measured.
+
+- **THE KATA CORPUS A/B IS CLEAN — 1063 programs, zero divergences (2026-09-12).**
+  The broadest correctness evidence SSO has, and the one net nobody had cast.
+  Every `.kara` in `kara-katas` (1026 leetcode + 37 bespoke/oracle) built at
+  `KARAC_SSO=0` and `=1` and run, comparing stdout AND exit code:
+
+      examined 1063   built 1061   skipped 2   diverged 0
+
+  Measured at `e1c4746`, with both legs built by the same `karac` binary (only
+  the env gate differs between them).
+
+  The two skips are a harness artifact, not a gap: both are `src/main.kara`
+  inside a `kara.toml` project, which single-file `karac build <file>` cannot
+  build. Re-run in project mode, that kata matches too — so the real coverage is
+  **1063 of 1063**.
+
+  **Why this is the net that mattered.** The `--features llvm` suite is 109
+  binaries of largely targeted fixtures; the katas are a thousand independently
+  written programs doing whatever string manipulation their problem suggested,
+  by authors not thinking about descriptors. That is exactly where this
+  campaign's defects lived — every one was in code that had never seen an inline
+  descriptor: a guard keyed on a side table that means something else, a
+  read-only accessor used to store, an encoder assuming 64-bit pointers.
+
+  **Two controls, both from `kara-katas`' own rules.** `KARAC_HASH_SEED=7` is
+  pinned, because `Map`/`Set` iteration order is per-process random and unpinned
+  it manufactures divergences that are explicitly NOT compiler bugs;
+  `KARAC_AUTO_PAR=0` is held fixed, since auto-par is a third surface and letting
+  it vary would make any difference unattributable.
+
+  **What it does NOT cover**, so nobody over-reads it: these are x86-64 native
+  builds, so B-2026-09-12-20's 32-bit encoder defect is invisible here; `--interp`
+  and the auto-par surface are deliberately held fixed rather than compared; and
+  it is one pinned hash seed.
+
+  **The harness's own vacuous-pass, caught by a pilot.**
+
+  Worth recording because it is the third instance of one shape in this campaign.
+  The first run of this harness reported `examined=30 built=0 skipped=30
+  diverged=0` — it compared NOTHING and reported agreement, because it `cd`s to a
+  temp dir and then passed a path relative to the corpus root. On the full corpus
+  that would have printed "1063 examined, 0 diverged" and read as a clean sweep.
+
+  A 30-kata pilot caught it in seconds, and what made it visible was that the
+  harness prints `built` alongside `diverged` rather than only a verdict. The
+  same tell would have caught the other two: a benchmark whose "correctness
+  check" summed token COUNTS and so could not see corrupted token TEXT, and a
+  single `pick(…, 3)` probe that could not see a defect confined to bytes 4..=7.
+  **A comparison that can report agreement without comparing anything must
+  publish its denominator.**
+
 - **Slice 4 (optional, "go further").** Pair with the lexer source-slices (below) to get
   the hot path to Rust *zero*-copy; small-string fast paths in concat/compare.
 
