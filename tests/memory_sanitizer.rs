@@ -87894,4 +87894,116 @@ fn main() {
             "plain-local-array-control",
         );
     }
+
+    /// B-2026-09-12-25 — the memory half, and specifically the CEILING leg.
+    /// `6ea22e3b4` reached through the box correctly and disarmed every bound
+    /// position, which is right for a leaf at or under the envelope's payload
+    /// area and a LEAK above it: it left four fixtures red on both ASAN legs.
+    /// The wide-leaf cells here are that boundary, pinned so the ceiling cannot
+    /// be dropped again.
+    ///
+    /// See `codegen::e2e_boxed_user_enum_tuple_variant_payload_destructure_has_one_owner`
+    /// for the output half and the full cell matrix; this pins the frees.
+    #[test]
+    fn asan_boxed_user_enum_tuple_variant_payload_has_one_owner() {
+        // THE ROW'S SHAPE, three iterations so the doubled free is not a
+        // one-off. `free(): double free detected in tcache 2` before the fix.
+        //
+        // MEASURE THIS CELL AT `KARAC_OPT_LEVEL=0` — it is the `asan-o0-leg.sh`
+        // leg that catches it. At the harness's default `-O2` LLVM deletes the
+        // doubled malloc/free pair for the short leaf strings, which is exactly
+        // how the row came to record the read-only twin below as clean.
+        assert_clean_asan_run(
+            "struct R2z { s: String }\n\
+             enum Kz { A(R2z), B }\n\
+             impl Drop for Kz { fn drop(mut ref self) { println(\"dKz\") } }\n\
+             fn show(x: Option[Kz], acc: mut ref Vec[R2z]) { match x { Option.Some(Kz.A(r)) => { acc.push(r) } Option.Some(Kz.B) => {} Option.None => {} } }\n\
+             fn main() { let mut acc: Vec[R2z] = []; for i in 0..3 { show(Option.Some(Kz.A(R2z { s: f\"aaaaaaaaaaaaaaaaaaaa-{i}\" })), mut acc); } println(f\"len:{acc.len()}\") }\n",
+            &["len:3"],
+            "b25-tuple-variant-leaf-escapes",
+        );
+        // The READ-ONLY twin. The row recorded it as clean on all four surfaces;
+        // it aborts identically at `-O0`. Pinned so the escape axis cannot be
+        // reintroduced as a gate on a later pass.
+        assert_clean_asan_run(
+            "struct R2z { s: String }\n\
+             enum Kz { A(R2z), B }\n\
+             impl Drop for Kz { fn drop(mut ref self) { println(\"dKz\") } }\n\
+             fn show(x: Option[Kz]) { match x { Option.Some(Kz.A(r)) => { println(f\"a:{r.s.len()}\") } Option.Some(Kz.B) => {} Option.None => {} } }\n\
+             fn main() { for i in 0..3 { show(Option.Some(Kz.A(R2z { s: f\"bbbbbbbbbbbbbbbbbbbb-{i}\" }))); } println(\"end\") }\n",
+            &["a:22", "dKz", "a:22", "dKz", "a:22", "dKz", "end"],
+            "b25-tuple-variant-leaf-read-only",
+        );
+        // FOUR `String` leaves in one tuple variant. This cell aborts at the
+        // DEFAULT opt level as well, so it guards the class on this leg rather
+        // than only under the `-O0` ratchet.
+        assert_clean_asan_run(
+            "enum Kz4 { A(String, String, String, String), B }\n\
+             impl Drop for Kz4 { fn drop(mut ref self) { println(\"dKz4\") } }\n\
+             fn show(x: Option[Kz4], acc: mut ref Vec[String]) { match x { Option.Some(Kz4.A(s, t, u, v)) => { acc.push(s); acc.push(t); acc.push(u); acc.push(v) } Option.Some(Kz4.B) => {} Option.None => {} } }\n\
+             fn main() { let mut acc: Vec[String] = []; for i in 0..3 { show(Option.Some(Kz4.A(f\"cccccccccccccccccccc-{i}\", f\"dddddddddddddddddddd-{i}\", f\"eeeeeeeeeeeeeeeeeeee-{i}\", f\"ffffffffffffffffffff-{i}\")), mut acc); } println(f\"len:{acc.len()}\") }\n",
+            &["len:12"],
+            "b25-tuple-variant-four-string-leaves",
+        );
+        // The accumulator is a plain struct FIELD, not a `Vec` — the row's other
+        // unmeasured shape. Aborts at the default opt level too.
+        assert_clean_asan_run(
+            "struct R2z { s: String }\n\
+             struct Accz { held: R2z }\n\
+             enum Kz { A(R2z), B }\n\
+             impl Drop for Kz { fn drop(mut ref self) { println(\"dKz\") } }\n\
+             fn show(x: Option[Kz], acc: mut ref Accz) { match x { Option.Some(Kz.A(r)) => { acc.held = r; } Option.Some(Kz.B) => {} Option.None => {} } }\n\
+             fn main() { let mut acc = Accz { held: R2z { s: f\"gggggggggggggggggggg-0\" } }; for i in 0..3 { show(Option.Some(Kz.A(R2z { s: f\"hhhhhhhhhhhhhhhhhhhh-{i}\" })), mut acc); } println(f\"h:{acc.held.s}\") }\n",
+            &["h:hhhhhhhhhhhhhhhhhhhh-2"],
+            "b25-tuple-variant-leaf-into-struct-field",
+        );
+        // CONTROL, and the cell an over-broad fix would turn into a LEAK: the
+        // leaf is a wildcard, so nothing takes it and the box must stay its only
+        // owner. Clean before and after.
+        assert_clean_asan_run(
+            "struct R2z { s: String }\n\
+             enum Kz { A(R2z), B }\n\
+             impl Drop for Kz { fn drop(mut ref self) { println(\"dKz\") } }\n\
+             fn show(x: Option[Kz]) { match x { Option.Some(Kz.A(_)) => { println(\"a\") } Option.Some(Kz.B) => {} Option.None => {} } }\n\
+             fn main() { for i in 0..3 { show(Option.Some(Kz.A(R2z { s: f\"iiiiiiiiiiiiiiiiiiii-{i}\" }))); } println(\"end\") }\n",
+            &["a", "dKz", "a", "dKz", "a", "dKz", "end"],
+            "b25-tuple-variant-wildcard-leaf-control",
+        );
+        // CONTROL: the STRUCT-shaped spelling of cell 1, which B-2026-08-31-23
+        // already disarmed. Pinned beside it so the pair keeps naming the axis.
+        assert_clean_asan_run(
+            "struct R2z { s: String }\n\
+             enum Kzs { A { r: R2z }, B }\n\
+             impl Drop for Kzs { fn drop(mut ref self) { println(\"dKzs\") } }\n\
+             fn show(x: Option[Kzs], acc: mut ref Vec[R2z]) { match x { Option.Some(Kzs.A { r }) => { acc.push(r) } Option.Some(Kzs.B) => {} Option.None => {} } }\n\
+             fn main() { let mut acc: Vec[R2z] = []; for i in 0..3 { show(Option.Some(Kzs.A { r: R2z { s: f\"jjjjjjjjjjjjjjjjjjjj-{i}\" } }), mut acc); } println(f\"len:{acc.len()}\") }\n",
+            &["len:3"],
+            "b25-struct-variant-leaf-escapes-control",
+        );
+        // THE CEILING, from the side a broader fix breaks. A 9-word leaf is wider
+        // than `Option`'s 3-word payload area, so the arm's binding is a view and
+        // the box must keep freeing it. Disarming on the BINDING alone leaked all
+        // three `String`s per call here — the shape of four existing fixtures,
+        // which is how both ASAN ratchets caught the first version of this fix.
+        assert_clean_asan_run(
+            "struct R39 { s: String, t: String, u: String }\n\
+             enum Kw9 { A(R39), B }\n\
+             fn mkr(i: i64) -> R39 { return R39 { s: f\"ssssssssssss{i}\", t: f\"tttttttttttt{i}\", u: f\"uuuuuuuuuuuu{i}\" }; }\n\
+             fn nested(x: Option[Kw9]) { match x { Option.Some(Kw9.A(r)) => { println(f\"n:{r.s.len()}\") } Option.Some(Kw9.B) => {} Option.None => {} } }\n\
+             fn main() { for i in 0..3 { nested(Option.Some(Kw9.A(mkr(i)))); } println(\"end\") }\n",
+            &["n:13", "n:13", "n:13", "end"],
+            "b25-wide-leaf-read-only-keeps-the-box-as-owner",
+        );
+        // Why the ceiling is the AREA and not the constant 3: a 5-word leaf is over
+        // `Option`'s ceiling and under `Result`'s, and under `Result` it owns
+        // itself. Aborted before the fix.
+        assert_clean_asan_run(
+            "struct R5w { s: String, a: i64, b: i64 }\n\
+             enum K5w { A(R5w), B }\n\
+             fn nested(x: Result[K5w, i64], acc: mut ref Vec[R5w]) { match x { Result.Ok(K5w.A(r)) => { acc.push(r) } Result.Ok(K5w.B) => {} Result.Err(e) => { println(\"er\") } } }\n\
+             fn main() { let mut acc: Vec[R5w] = []; for i in 0..3 { nested(Result.Ok(K5w.A(R5w { s: f\"ssssssssssss{i}\", a: 7, b: 8 })), mut acc); } println(f\"len:{acc.len()}\") }\n",
+            &["len:3"],
+            "b25-five-word-leaf-under-result-is-disarmed",
+        );
+    }
 }

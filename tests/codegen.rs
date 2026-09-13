@@ -154257,6 +154257,259 @@ fn main() {
         }
     }
 
+    /// B-2026-09-12-25 — a boxed user-enum payload destructured by a TUPLE
+    /// variant pattern (`match x { Option.Some(K.A(r)) => … }`) gave its leaf
+    /// two owners: the arm's binding, and the boxed payload's own drop still
+    /// walking into the field the pattern moved out. `free(): double free
+    /// detected in tcache 2` on every compiled lane, `--interp` clean.
+    ///
+    /// TWO LEGS, LANDED SEPARATELY. `6ea22e3b4`'s
+    /// `suppress_nested_boxed_payload_cleanup` reaches through the box and
+    /// applies the inner-enum disarm to the nested sub-pattern; the ceiling in
+    /// `suppress_destructured_enum_payload_cleanup_at_limited` decides WHICH
+    /// positions may be disarmed. Both are needed: reaching the right level
+    /// fixes the double free, and the ceiling keeps that from becoming a leak
+    /// for a leaf wider than the envelope's payload area.
+    ///
+    /// THE ROW'S OWN CONTROL WAS WRONG, and correcting it is what fixed the
+    /// shape of the repair. It recorded the READ-ONLY twin as clean on all
+    /// four surfaces, which reads as "the trigger is the leaf ESCAPING" and
+    /// invites an escape-gated disarm. The twin aborts identically at
+    /// `KARAC_OPT_LEVEL=0` (cell 2) and looked clean only because at the
+    /// default `-O2` LLVM deletes the doubled malloc/free pair. A bound leaf
+    /// at or under the area owns its bit-copy whether the arm moves it on or
+    /// only reads it, so the disarm keys on the BINDING and the WIDTH — cell 5
+    /// is the wildcard leaf that would leak if it dropped the first, and cells
+    /// 14–17 are the boundary that would leak if it dropped the second.
+    ///
+    /// The struct-shaped spelling (cells 3 and 4) was already correct through
+    /// B-2026-08-31-23's separate path, which is why it is pinned here as a
+    /// control rather than as part of the defect.
+    #[test]
+    fn e2e_boxed_user_enum_tuple_variant_payload_destructure_has_one_owner() {
+        for (label, body, want) in [
+            // 1 — THE ROW'S SHAPE: a boxed user-enum payload destructured by a
+            //      TUPLE variant pattern whose leaf is pushed into a `mut ref`
+            //      accumulator. `free(): double free detected in tcache 2` on all
+            //      three compiled lanes before the fix; 13 allocs / 14 frees and one
+            //      `Invalid free()` of the payload's `String` buffer under valgrind.
+            (
+                "tuple-variant-leaf-escapes-into-accumulator",
+                "struct R25 { s: String }\n\
+             enum K5 { A(R25), B }\n\
+             impl Drop for K5 { fn drop(mut ref self) { println(\"dK5\") } }\n\
+             fn show(x: Option[K5], acc: mut ref Vec[R25]) { match x { Option.Some(K5.A(r)) => { acc.push(r) } Option.Some(K5.B) => {} Option.None => {} } }\n\
+             fn main() { let mut acc: Vec[R25] = []; show(Option.Some(K5.A(R25 { s: f\"z\" })), mut acc); println(f\"len:{acc.len()}\"); println(\"end\") }\n",
+                "len:1\nend\n",
+            ),
+            // 2 — the READ-ONLY twin, and the cell that refutes the row's own
+            //      control. The row recorded this shape as clean on all four surfaces;
+            //      it aborts identically at `KARAC_OPT_LEVEL=0` and only looked clean
+            //      at the default `-O2`, where LLVM deletes the doubled malloc/free
+            //      pair. A bound leaf owns its bit-copy whether the arm moves it on or
+            //      merely reads it, which is why the fix is not gated on escape.
+            (
+                "tuple-variant-leaf-read-only",
+                "struct R25 { s: String }\n\
+             enum K5 { A(R25), B }\n\
+             impl Drop for K5 { fn drop(mut ref self) { println(\"dK5\") } }\n\
+             fn show(x: Option[K5], acc: mut ref Vec[R25]) { match x { Option.Some(K5.A(r)) => { println(f\"a:{r.s}\") } Option.Some(K5.B) => {} Option.None => {} } }\n\
+             fn main() { let mut acc: Vec[R25] = []; show(Option.Some(K5.A(R25 { s: f\"z\" })), mut acc); println(f\"len:{acc.len()}\"); println(\"end\") }\n",
+                "a:z\ndK5\nlen:0\nend\n",
+            ),
+            // 3 — CONTROL: the STRUCT-shaped spelling of cell 1, correct before the
+            //      fix because B-2026-08-31-23 already admitted an enum-variant STRUCT
+            //      pattern here. The pair is what names the axis: pattern SHAPE, not
+            //      the payload's type, the population, or what the arm does.
+            (
+                "struct-variant-leaf-escapes-control",
+                "struct R25 { s: String }\n\
+             enum Ks5 { A { r: R25 }, B }\n\
+             impl Drop for Ks5 { fn drop(mut ref self) { println(\"dKs5\") } }\n\
+             fn show(x: Option[Ks5], acc: mut ref Vec[R25]) { match x { Option.Some(Ks5.A { r }) => { acc.push(r) } Option.Some(Ks5.B) => {} Option.None => {} } }\n\
+             fn main() { let mut acc: Vec[R25] = []; show(Option.Some(Ks5.A { r: R25 { s: f\"z\" } }), mut acc); println(f\"len:{acc.len()}\"); println(\"end\") }\n",
+                "len:1\nend\n",
+            ),
+            // 4 — CONTROL: the struct-shaped read-only twin. Clean before and after,
+            //      and the evidence that disarming on a BINDING rather than on an
+            //      escape is what the struct path has always done.
+            (
+                "struct-variant-leaf-read-only-control",
+                "struct R25 { s: String }\n\
+             enum Ks5 { A { r: R25 }, B }\n\
+             impl Drop for Ks5 { fn drop(mut ref self) { println(\"dKs5\") } }\n\
+             fn show(x: Option[Ks5]) { match x { Option.Some(Ks5.A { r }) => { println(f\"a:{r.s}\") } Option.Some(Ks5.B) => {} Option.None => {} } }\n\
+             fn main() { show(Option.Some(Ks5.A { r: R25 { s: f\"z\" } })); println(\"end\") }\n",
+                "a:z\ndKs5\nend\n",
+            ),
+            // 5 — CONTROL, and the cell that would catch an over-broad fix: the leaf
+            //      is a WILDCARD, so nothing takes it and the box must stay its only
+            //      owner. Disarming here would trade the abort for a leak.
+            //      `pattern_consumes_field`'s bind-vs-TEST rule is what keeps it.
+            (
+                "tuple-variant-wildcard-leaf-control",
+                "struct R25 { s: String }\n\
+             enum K5 { A(R25), B }\n\
+             impl Drop for K5 { fn drop(mut ref self) { println(\"dK5\") } }\n\
+             fn show(x: Option[K5]) { match x { Option.Some(K5.A(_)) => { println(\"a\") } Option.Some(K5.B) => {} Option.None => {} } }\n\
+             fn main() { show(Option.Some(K5.A(R25 { s: f\"z\" }))); println(\"end\") }\n",
+                "a\ndK5\nend\n",
+            ),
+            // 6 — CONTROL: a `ref`-mode parameter. The callee BORROWS, so there is
+            //      only ever one owner and the disarm must not reach it.
+            (
+                "tuple-variant-ref-mode-param-control",
+                "struct R25 { s: String }\n\
+             enum K5 { A(R25), B }\n\
+             impl Drop for K5 { fn drop(mut ref self) { println(\"dK5\") } }\n\
+             fn show(x: ref Option[K5]) { match x { Option.Some(K5.A(r)) => { println(f\"a:{r.s}\") } Option.Some(K5.B) => {} Option.None => {} } }\n\
+             fn main() { let x: Option[K5] = Option.Some(K5.A(R25 { s: f\"z\" })); show(x); println(\"end\") }\n",
+                "a:z\ndK5\nend\n",
+            ),
+            // 7 — a NAMED LOCAL rather than a by-value param, so the defect is not
+            //      specific to `boxed_struct_payload_param_vars`: the let site's own
+            //      `boxed_enum_payload_vars` membership reached the same disarm and
+            //      bailed on the same line. Aborted before the fix.
+            (
+                "tuple-variant-named-local-scrutinee",
+                "struct R25 { s: String }\n\
+             enum K5 { A(R25), B }\n\
+             impl Drop for K5 { fn drop(mut ref self) { println(\"dK5\") } }\n\
+             fn main() { let mut acc: Vec[R25] = []; let x: Option[K5] = Option.Some(K5.A(R25 { s: f\"z\" })); match x { Option.Some(K5.A(r)) => { acc.push(r) } Option.Some(K5.B) => {} Option.None => {} } println(f\"len:{acc.len()}\"); println(\"end\") }\n",
+                "len:1\nend\n",
+            ),
+            // 8 — the payload enum declares NO `impl Drop`, and it aborts all the
+            //      same. The row listed this as unmeasured and asked whether the enum's
+            //      own drop fn was the second owner; it is not — the interior walk the
+            //      box carries is, and that exists for the heap fields alone.
+            (
+                "tuple-variant-payload-enum-without-drop",
+                "struct R25 { s: String }\n\
+             enum K5 { A(R25), B }\n\
+             fn show(x: Option[K5], acc: mut ref Vec[R25]) { match x { Option.Some(K5.A(r)) => { acc.push(r) } Option.Some(K5.B) => {} Option.None => {} } }\n\
+             fn main() { let mut acc: Vec[R25] = []; show(Option.Some(K5.A(R25 { s: f\"z\" })), mut acc); println(f\"len:{acc.len()}\"); println(\"end\") }\n",
+                "len:1\nend\n",
+            ),
+            // 9 — FOUR `String` leaves in one tuple variant, each pushed. This cell
+            //      aborts at the DEFAULT opt level too (four invalid frees), so it is
+            //      the one that guards the class on the plain `--features llvm` leg
+            //      rather than only under the `-O0` ASAN ratchet.
+            (
+                "tuple-variant-four-string-leaves",
+                "enum Ks25 { A(String, String, String, String), B }\n\
+             impl Drop for Ks25 { fn drop(mut ref self) { println(\"dKs25\") } }\n\
+             fn show(x: Option[Ks25], acc: mut ref Vec[String]) { match x { Option.Some(Ks25.A(s, t, u, v)) => { acc.push(s); acc.push(t); acc.push(u); acc.push(v) } Option.Some(Ks25.B) => {} Option.None => {} } }\n\
+             fn main() { let mut acc: Vec[String] = []; show(Option.Some(Ks25.A(f\"a\", f\"b\", f\"c\", f\"d\")), mut acc); println(f\"len:{acc.len()}\"); println(\"end\") }\n",
+                "len:4\nend\n",
+            ),
+            // 10 — one level DEEPER (`Some(Kw5.A(W5 { r }))`), the nesting the row
+            //       listed as unmeasured. It reaches the disarm through the same
+            //       tuple-variant gate and then through the enum path's own
+            //       bind-vs-test walk, so no extra recursion was needed.
+            (
+                "tuple-variant-one-level-deeper",
+                "struct R25 { s: String }\n\
+             struct W5 { r: R25 }\n\
+             enum Kw5 { A(W5), B }\n\
+             impl Drop for Kw5 { fn drop(mut ref self) { println(\"dKw5\") } }\n\
+             fn show(x: Option[Kw5], acc: mut ref Vec[R25]) { match x { Option.Some(Kw5.A(W5 { r })) => { acc.push(r) } Option.Some(Kw5.B) => {} Option.None => {} } }\n\
+             fn main() { let mut acc: Vec[R25] = []; show(Option.Some(Kw5.A(W5 { r: R25 { s: f\"z\" } })), mut acc); println(f\"len:{acc.len()}\"); println(\"end\") }\n",
+                "len:1\nend\n",
+            ),
+            // 11 — the accumulator is a plain STRUCT field rather than a `Vec`, the
+            //       row's other unmeasured shape. Two invalid frees before the fix.
+            (
+                "tuple-variant-leaf-into-struct-field",
+                "struct R25 { s: String }\n\
+             struct Acc5 { held: R25 }\n\
+             enum K5 { A(R25), B }\n\
+             impl Drop for K5 { fn drop(mut ref self) { println(\"dK5\") } }\n\
+             fn show(x: Option[K5], acc: mut ref Acc5) { match x { Option.Some(K5.A(r)) => { acc.held = r; } Option.Some(K5.B) => {} Option.None => {} } }\n\
+             fn main() { let mut acc = Acc5 { held: R25 { s: f\"i\" } }; show(Option.Some(K5.A(R25 { s: f\"z\" })), mut acc); println(f\"h:{acc.held.s}\"); println(\"end\") }\n",
+                "h:z\nend\n",
+            ),
+            // 12 — the arm RETURNS the nested leaf instead of pushing it. The row
+            //       noted B-2026-09-12-15's `give` cell returns a WHOLE payload and is
+            //       clean; the nested-leaf return is not, and aborted here too.
+            (
+                "tuple-variant-leaf-returned",
+                "struct R25 { s: String }\n\
+             enum K5 { A(R25), B }\n\
+             impl Drop for K5 { fn drop(mut ref self) { println(\"dK5\") } }\n\
+             fn give(x: Option[K5]) -> R25 { match x { Option.Some(K5.A(r)) => { r } Option.Some(K5.B) => { R25 { s: f\"b\" } } Option.None => { R25 { s: f\"n\" } } } }\n\
+             fn main() { let g = give(Option.Some(K5.A(R25 { s: f\"z\" }))); println(f\"g:{g.s}\"); println(\"end\") }\n",
+                "g:z\nend\n",
+            ),
+            // 13 — CONTROL for the BOXEDNESS axis: the same enum inside a `Result`,
+            //       whose five-word payload area holds it INLINE. No box, no second
+            //       owner, clean before and after — which is why the `Result` spelling
+            //       the row left unmeasured was never part of the defect.
+            (
+                "result-inline-payload-control",
+                "struct R25 { s: String }\n\
+             enum K5 { A(R25), B }\n\
+             impl Drop for K5 { fn drop(mut ref self) { println(\"dK5\") } }\n\
+             fn show(x: Result[K5, i64], acc: mut ref Vec[R25]) { match x { Result.Ok(K5.A(r)) => { acc.push(r) } Result.Ok(K5.B) => {} Result.Err(e) => { println(f\"e:{e}\") } } }\n\
+             fn main() { let mut acc: Vec[R25] = []; show(Result.Ok(K5.A(R25 { s: f\"z\" })), mut acc); println(f\"len:{acc.len()}\"); println(\"end\") }\n",
+                "len:1\nend\n",
+            ),
+            // 14 — THE CEILING, from the side that a broader fix breaks. The leaf is
+            //       9 words, WIDER than `Option`'s 3-word payload area, so the arm's
+            //       binding is a view into the box and owns nothing: the box must keep
+            //       freeing it. The first version of this fix disarmed on the BINDING
+            //       alone and leaked all three `String`s here (27 B in 3 blocks),
+            //       reddening both ASAN ratchets and four existing fixtures.
+            (
+                "wide-leaf-read-only-must-not-be-disarmed",
+                "struct R39 { s: String, t: String, u: String }\n\
+             enum Kw9 { A(R39), B }\n\
+             fn mkr(i: i64) -> R39 { return R39 { s: f\"ssssssss{i}\", t: f\"tttttttt{i}\", u: f\"uuuuuuuu{i}\" }; }\n\
+             fn nested(x: Option[Kw9]) { match x { Option.Some(Kw9.A(r)) => { println(f\"n:{r.s}\") } Option.Some(Kw9.B) => {} Option.None => {} } }\n\
+             fn main() { nested(Option.Some(Kw9.A(mkr(1)))); println(\"end\") }\n",
+                "n:ssssssss1\nend\n",
+            ),
+            // 15 — the exact flip point: 4 words, one over the area, and clean before
+            //       and after. With cell 1's 3-word leaf this pair localises the ceiling
+            //       to the area rather than to any property of the struct's shape.
+            (
+                "four-word-leaf-read-only-is-the-flip-point",
+                "struct R4w { s: String, a: i64 }\n\
+             enum K4w { A(R4w), B }\n\
+             fn nested(x: Option[K4w]) { match x { Option.Some(K4w.A(r)) => { println(f\"n:{r.s}:{r.a}\") } Option.Some(K4w.B) => {} Option.None => {} } }\n\
+             fn main() { nested(Option.Some(K4w.A(R4w { s: f\"ssssssss1\", a: 7 }))); println(\"end\") }\n",
+                "n:ssssssss1:7\nend\n",
+            ),
+            // 16 — why it is the AREA and not the constant 3. A 5-word leaf is over
+            //       `Option`'s ceiling and under `Result`'s, and under `Result` it owns
+            //       itself: this cell ABORTED before the fix and is clean after, while
+            //       cell 15's 4-word leaf under `Option` was never part of the defect.
+            (
+                "five-word-leaf-under-result-is-disarmed",
+                "struct R5w { s: String, a: i64, b: i64 }\n\
+             enum K5w { A(R5w), B }\n\
+             fn nested(x: Result[K5w, i64]) { match x { Result.Ok(K5w.A(r)) => { println(f\"n:{r.s}:{r.a}\") } Result.Ok(K5w.B) => {} Result.Err(e) => { println(\"er\") } } }\n\
+             fn main() { nested(Result.Ok(K5w.A(R5w { s: f\"ssssssss1\", a: 7, b: 8 }))); println(\"end\") }\n",
+                "n:ssssssss1:7\nend\n",
+            ),
+            // 17 — a 3-word matched leaf beside a 12-word sibling variant, so the
+            //       ENUM is wide while the POSITION is not. It aborted before the fix,
+            //       which is what makes the ceiling a per-position question.
+            (
+                "narrow-leaf-beside-a-wider-sibling-variant",
+                "struct R3n { s: String }\n\
+             struct Wid { a: String, b: String, c: String, d: String }\n\
+             enum Kmix { A(R3n), B(Wid) }\n\
+             fn main() { let x: Option[Kmix] = Option.Some(Kmix.A(R3n { s: f\"ssssssss1\" })); match x { Option.Some(Kmix.A(r)) => { println(f\"n:{r.s}\") } Option.Some(Kmix.B(w)) => { println(f\"b:{w.a}\") } Option.None => {} } println(\"end\") }\n",
+                "n:ssssssss1\nend\n",
+            ),
+        ] {
+            let Some(out) = run_program(body) else {
+                return;
+            };
+            assert_eq!(out, want, "[{label}]");
+        }
+    }
+
     /// B-2026-09-12-11 — a QUALIFIED constructor at an argument position
     /// (`plainD(Option[(Rq, Rq)].Some((..)))`) ran its payload's `Drop` body on
     /// NO compiled backend, while the BARE `plainD(Some((..)))` spelling of the

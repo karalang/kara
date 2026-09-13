@@ -2280,15 +2280,19 @@ impl<'ctx> super::Codegen<'ctx> {
         };
         // A qualified inner variant (`K.A`) names its enum; an unqualified one
         // does not, and resolving it is a separate lookup this does not do.
-        let Some(inner_enum) = inner_path.first().filter(|n| {
-            self.type_decls.enum_layouts.contains_key(n.as_str())
-        }) else {
+        let Some(inner_enum) = inner_path
+            .first()
+            .filter(|n| self.type_decls.enum_layouts.contains_key(n.as_str()))
+        else {
             return;
         };
         let inner_enum = inner_enum.clone();
         let (Some(outer_layout), Some(inner_layout)) = (
             self.type_decls.enum_layouts.get(enum_name).cloned(),
-            self.type_decls.enum_layouts.get(inner_enum.as_str()).cloned(),
+            self.type_decls
+                .enum_layouts
+                .get(inner_enum.as_str())
+                .cloned(),
         ) else {
             return;
         };
@@ -2316,7 +2320,15 @@ impl<'ctx> super::Codegen<'ctx> {
             .builder
             .build_int_to_ptr(w0, ptr_ty, "nestbox.ptr")
             .unwrap();
-        self.suppress_destructured_enum_payload_cleanup_at(box_ptr, &inner_enum, sub);
+        // B-2026-09-12-25 leg 2 — `area` above is the OUTER envelope's payload-area
+        // word count (3 for `Option`, 5 for `Result`), which is exactly the width
+        // at which a leaf stops owning itself. Disarming past it leaks.
+        self.suppress_destructured_enum_payload_cleanup_at_limited(
+            box_ptr,
+            &inner_enum,
+            sub,
+            Some(area),
+        );
     }
 
     /// The box-interior half of [`Self::suppress_destructured_enum_payload_cleanup`]
@@ -11235,6 +11247,65 @@ impl<'ctx> super::Codegen<'ctx> {
         enum_name: &str,
         pattern: &Pattern,
     ) {
+        self.suppress_destructured_enum_payload_cleanup_at_limited(
+            slot_ptr, enum_name, pattern, None,
+        )
+    }
+
+    /// [`Self::suppress_destructured_enum_payload_cleanup_at`] with an optional
+    /// per-position WIDTH CEILING, for the one caller that reaches through a BOX.
+    ///
+    /// B-2026-09-12-25 leg 2 — a consumed position may be disarmed only when the
+    /// arm's leaf binding OWNS what it bound, and for a payload reached through
+    /// an `Option`/`Result` box that turns on the leaf's WIDTH: a leaf that fits
+    /// the envelope's inline payload area is materialised as an owning copy, and
+    /// a WIDER one is a view into the box that owns nothing. Disarming a view's
+    /// position leaves the bytes to nobody, so the box must keep freeing it.
+    ///
+    /// `6ea22e3b4` reached the right level and disarmed on the BINDING alone,
+    /// which is correct for a leaf at or under the area and a LEAK above it. It
+    /// left four fixtures red on both ASAN legs and at the default opt level —
+    /// `asan_boxed_enum_payload_param_owns_its_interior`,
+    /// `asan_struct_field_boxed_payload_arm_leaf_owns_its_interior`,
+    /// `asan_caller_owned_boxed_param_payload_rebound_immutably_is_freed_once`
+    /// and `asan_boxed_result_field_keeps_an_owner_for_its_envelope` — each one a
+    /// wide-leaf read-only shape.
+    ///
+    /// MEASURED, read-only arm on `enum Ke { A(R), B }` inside `Option[Ke]`,
+    /// against a tree with NEITHER leg of this fix. The leaf's own width is the
+    /// variable and the flip lands exactly at the area:
+    ///
+    /// ```text
+    /// R = { String }                   3 words  <= 3  two owners (double free)
+    /// R = { String, i64 }              4 words   > 3  ONE owner  (clean)
+    /// R = { String, String }           6 words   > 3  ONE owner  (clean)
+    /// R = { String, String, String }   9 words   > 3  ONE owner  (clean)
+    /// R = { String, i64, i64 } in Result[Ke, i64]
+    ///                                  5 words  <= 5  two owners (double free)
+    /// ```
+    ///
+    /// The `Result` row is what makes it the AREA and not the constant 3: one
+    /// 5-word leaf, over `Option`'s ceiling and under `Result`'s, owning itself
+    /// only under the second. A 3-word leaf beside a 12-word sibling variant
+    /// still double-frees, so it is the POSITION's width and not the enum's.
+    ///
+    /// A WRONG EXPLANATION, recorded because it is the one a reader reaches for:
+    /// that a wide leaf is itself heap-boxed inside the payload enum, so the
+    /// `boxed_struct` branch below frees the envelope while the fields go
+    /// unowned. It is not. `payload_word_count_for_type_expr` gives each variant
+    /// position its natural width and `max_words` is the max over variants, so
+    /// `word_count > num_words` can never fire for this shape. The ceiling is
+    /// about who MATERIALISES the leaf, not about a second box.
+    ///
+    /// `None` keeps the historical behaviour — disarm every bound position — for
+    /// the callers whose scrutinee is the enum itself rather than a box.
+    fn suppress_destructured_enum_payload_cleanup_at_limited(
+        &mut self,
+        slot_ptr: PointerValue<'ctx>,
+        enum_name: &str,
+        pattern: &Pattern,
+        max_position_words: Option<usize>,
+    ) {
         let layout = match self.type_decls.enum_layouts.get(enum_name) {
             Some(l) => l.clone(),
             None => return,
@@ -11266,6 +11337,12 @@ impl<'ctx> super::Codegen<'ctx> {
                 Some(o) => *o,
                 None => continue,
             };
+            // B-2026-09-12-25 leg 2 — skip a position WIDER than the caller's
+            // ceiling: its leaf binding is a view into the box and owns nothing,
+            // so the box must keep freeing it. See the table on this fn's doc.
+            if max_position_words.is_some_and(|limit| num_words > limit) {
+                continue;
+            }
             // `consumed_positions` already filtered to the fields this pattern
             // *moves* into a binding (a `Wildcard`/literal sub-pattern doesn't
             // claim ownership, so its field's drop must still fire to free the
