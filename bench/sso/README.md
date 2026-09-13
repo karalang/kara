@@ -69,6 +69,28 @@ Each was eliminated by measurement, not argument:
 Best remaining candidate for the (SSO-neutral) 3.4x: enum-payload free/drop
 fixes that landed from other sessions in the same window. Needs a real bisect.
 
+## Per-kata timing on a cloud container is not trustworthy
+
+Measured 2026-09-13, sweeping the kata corpus. Two separate readings had to be
+thrown away before one survived, and the same two traps will catch the next
+person:
+
+* **Cross-sweep comparison is confounded.** The `SSO=0` rail — identical
+  configuration, untouched by the change under test — drifted **34%** between
+  two sweeps an hour apart, with no stray process on the box (load 0.45). Host
+  throttling. Per-kata deltas did not reproduce: one kata moved 93.5% -> 29.4%
+  while another moved 49.2% -> 92.7%, under a change that could only help both.
+* **Best-of-5 is below the effect size.** A three-rail design (baseline, real,
+  probe) gets a free self-check, because a probe that strictly removes work can
+  never be slower than what it is probing. That impossible ordering fired on
+  **15/79 katas (19%)** at N=5, and on **1/29** at N=15 restricted to katas
+  whose effect clears ~40 ms.
+
+**So: trust corpus AGGREGATES, distrust any individual kata's delta** unless it
+clears ~40 ms and survives a high-N three-rail pass — and publish the
+impossible-sign count next to any per-kata claim. It is the cheapest noise floor
+available, and it is what caught both bad readings.
+
 ## Profiling notes
 
 **A cloud container cannot do this.** The VM exposes no hardware PMU —

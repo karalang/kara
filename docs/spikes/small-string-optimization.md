@@ -1802,6 +1802,102 @@ perf payoff lands in Slice 2.
 - **Slice 4 (optional, "go further").** Pair with the lexer source-slices (below) to get
   the hot path to Rust *zero*-copy; small-string fast paths in concat/compare.
 
+## THE KATA CORPUS, TIMED — the measurement the flip actually turns on (2026-09-13)
+
+The corpus had been swept for correctness (1063/1063 byte-identical) and **never
+timed**, which is a strange gap for a performance feature and the reason the
+flip question kept resisting an answer. 340 bench katas, interleaved rails,
+`KARAC_HASH_SEED=7` and `KARAC_AUTO_PAR=0` held fixed as in the correctness
+sweep. 322 measurable (the other 723 corpus katas run in ~5 ms of process
+startup and cannot show a representation change at all).
+
+```
+median per-kata delta : +0.7%
+aggregate wall time   : 180.8s -> 186.5s   (+3.1% SLOWER)
+  improved >=5%:  17        regressed >=5%:  79
+```
+
+**On the measurement that decides it, SSO-by-default makes the corpus slower,
+and regressions outnumber improvements nearly 5:1. The answer to the flip is
+NO.** That verdict rests on an aggregate over 322 programs, which averages
+per-kata noise out; it is the robust part of everything below.
+
+### But the cost is not the String tradeoff — it is that codegen cannot tell a Vec from a String
+
+The worst regressions contain **zero Strings**. `queue_using_stacks`,
+`largest_rectangle`, `stack_using_queues`, `paint_ii`, `num_trees`,
+`right_side_view` — pure Vec/stack/queue programs, on which a String
+optimization should be a no-op. Static code barely moves (+157 instructions,
++5 `cmov` on a 62,000-instruction binary), so the cost is dynamic and in a hot
+loop.
+
+The site is `vec_method.rs`'s mutating-method chokepoint: `push`/`pop` are in
+`MUTATES_RECEIVER_IN_PLACE`, and `sso_deinline_in_place` runs there
+**unguarded**, taking the descriptor's ADDRESS — which forces a register-
+resident `Vec` descriptor to memory on every push. That guard is unguarded
+deliberately: it used to key off `vec_elem_types`, which is not a "this is a
+Vec" table, so it skipped promotion for exactly the Strings that needed it and
+the self-hosted item parser SIGSEGV'd. The comment left there says to
+re-introduce a guard *only off a positive Vec signal and only with a measurement
+showing the cost matters*. This is that measurement.
+
+**Upper-bound probe.** A deliberately-incorrect compiler with that call compiled
+out, three rails (`SSO=0`, `SSO=1`, `SSO=1`-probe) built and timed per kata in
+ONE pass, best-of-15, on the 29 katas whose regression clears the noise floor
+(>=40 ms AND >=15%). Probe output is compared against the `SSO=0` rail and the
+kata excluded on mismatch, so a crash cannot read as a speedup (0 excluded).
+
+```
+recovery = (real - probe) / (real - sso0)
+  median 90%      IQR 55%..100%      >=80%: 18/29      <=20%: 4/29
+```
+
+Several land exactly on baseline — `paint_ii` 257 -> 561 -> **257**,
+`num_trees` 757 -> 1009 -> **757**, `right_side_view` 703 -> 1008 -> **703**.
+
+**A SECOND cost exists for a minority.** Four katas recover <=20%, and three of
+them (`zigzag`, `flatten_2d`, `largest_rectangle`) are also String-free — so
+they pay a Vec cost somewhere the probe does not touch: the tag-aware READ
+accessors, which apply their select to `Vec` too. Same root cause, different
+site. `src/codegen/sso.rs`'s own comment already names it ("keeping `Vec` off
+the select entirely is the Slice 3 perf refinement").
+
+So this is not two fixes. **Threading the Kāra type to the accessors — the
+standing Slice 3 item — fixes both**, and the probe puts a floor under what it
+is worth: ~90% of the regression on two thirds of the worst-hit programs.
+
+Note the direction of the bound: the probe removes the de-inline for Strings
+too, which a correct fix cannot. On a String-free program (most of these) a
+positive-Vec-signal guard recovers the full amount; where a String receiver
+actually mutates, it recovers less.
+
+### The two readings that had to be thrown away first
+
+Worth recording, because both looked like results.
+
+**Cross-sweep comparison is confounded on this container.** The probe was first
+run as a separate full sweep and compared against the original: aggregate +3.1%
+-> +0.7%, regressions 79 -> 37, a tidy story. It is not readable. The `SSO=0`
+rail — which the probe cannot affect — moved from 180.8s to 242.3s between the
+two sweeps, a 34% baseline drift with no stray process on the box (load 0.45),
+i.e. host throttling. Per-kata deltas did not reproduce at all: one kata's
+regression moved 93.5% -> 29.4% while another's moved 49.2% -> 92.7%, under a
+change that can only help both.
+
+**Per-kata resolution at best-of-5 is below the effect size.** The three-rail
+design has a free self-check — the probe strictly removes work, so
+`probe > real` is physically impossible. At N=5 over 79 katas that fired
+**15/79 (19%)**, and only 55/79 of the regressions reproduced at all, so ~30% of
+the population selected on the first sweep was noise. Its headline "median 80%
+recovery" was computed over rows like `sso0=420 real=422 probe=409` — a 2 ms
+numerator over a 2 ms denominator, rendered as 650%. At N=15 on high-effect
+katas the same check fires **1/29** and 28/29 reproduce.
+
+**The rule:** on this container, trust corpus AGGREGATES and distrust any
+individual kata's delta unless it clears ~40 ms and survives a high-N three-rail
+pass. Publish the impossible-sign count alongside any per-kata claim — it is the
+cheapest noise floor available and it is what caught both bad readings here.
+
 ## Verification matrix
 
 - **The whole `--features llvm` suite at `KARAC_SSO=0` AND `=1`** — the two-leg
