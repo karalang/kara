@@ -94,7 +94,7 @@ distinguish "bugs flattening" from "we stopped writing them down."
 |---|---|
 | miscompile | 406 |
 | run-vs-build | 393 |
-| leak | 329 |
+| leak | 331 |
 | double-free | 227 |
 | missing-feature | 196 |
 | codegen-gap | 175 |
@@ -110,7 +110,7 @@ distinguish "bugs flattening" from "we stopped writing them down."
 
 | surface | total |
 |---|---|
-| codegen | 1692 |
+| codegen | 1694 |
 | interp | 421 |
 | typecheck | 297 |
 | other | 88 |
@@ -124,7 +124,7 @@ distinguish "bugs flattening" from "we stopped writing them down."
 | lexer | 8 |
 ## Current state
 
-_Generated from `bug-ledger.jsonl` by `scripts/bug-curve.py` (2026-05-20 → 2026-09-12). Do not edit this block by hand; edit the ledger and regenerate._
+_Generated from `bug-ledger.jsonl` by `scripts/bug-curve.py` (2026-05-20 → 2026-09-13). Do not edit this block by hand; edit the ledger and regenerate._
 
 ### Open
 
@@ -176,7 +176,6 @@ _Generated from `bug-ledger.jsonl` by `scripts/bug-curve.py` (2026-05-20 → 202
 | B-2026-09-12-3 | 2026-09-12 | codegen | low | `mono_handle_param_infos` IS WRITTEN UNDER A NON-FINAL `mangled` AND READ UNDER THE FINAL ONE -- `compile_generic_call` rebinds `mangled` four times and stores the handle record after the first append, while `compile_mono_function` looks it up after the fourth, so the map is correct today only because the three later appends happen to be no-ops for a Column/Tensor argument | — |
 | B-2026-09-12-5 | 2026-09-12 | codegen | medium | A BOXED TUPLE / `Array` / GENERIC-STRUCT PAYLOAD MATCHED OUT OF A GENERIC ENUM IS OWNED BY NOBODY -- the arm binding that takes it never frees it and the box's interior walk is retracted because it did, so the move-out cells leak 192-384 B where the identical `Option[String]` payload is clean | — |
 | B-2026-09-12-10 | 2026-09-12 | codegen | medium | THREE TUPLE-PAYLOAD ELEMENT SHAPES STILL LEAK INSIDE AN ENUM -- `(bool, String)` is declined on purpose by the word-alignment gate B-2026-09-12-8's fix relies on, while `(Rec, i64)` carrying a user `Drop` and `(Option[String], i64)` are declined for reasons not yet attributed; all three measured unchanged by that fix rather than worse | — |
-| B-2026-09-12-13 | 2026-09-12 | codegen | medium | AN `Array` HELD AS A `Map` VALUE LEAKS ITS ELEMENTS -- 384 B in 16 blocks for `Map[i64, Array[String, 2]]`, the one cell of a 38-cell position x type sweep still leaking after B-2026-09-12-12, while the same array as an enum payload, a struct field, a plain local, an `Option` payload and a `Result` payload are all clean | — |
 | B-2026-09-12-16 | 2026-09-12 | typecheck | low | THE BLESSED EXPLICIT SPELLING IS REJECTED FOR A USER ENUM'S VARIANT CONSTRUCTOR -- `Ho[R].Full(R { id: 5 })` over `enum Ho[T] { Full(T), Empty }` fails typecheck with `no method 'Full' on Ho[…]`, while the seeded pair (`Option[R].Some(..)`, `Result[T, E].Ok(..)`) and the unqualified `Ho.Full(..)` both work; the same user-vs-builtin split B-2026-08-22-17 fixed for container constructors, one type family over | — |
 | B-2026-09-12-17 | 2026-09-12 | codegen+interp | medium | A GENERIC USER ENUM'S PAYLOAD `Drop` BODY RUNS ON NO COMPILED BACKEND WHEN THE ARGUMENT IS A FRESH TEMP -- `takeit(Full(R { id: 5 }))` over `enum Ho[T] { Full(T), Empty }` prints `f:5 dR5 end` under `--interp` and `f:5 end` at -O0, -O0 autopar and -O2 autopar, while the MONOMORPHIC `enum Ho { Full(R) }` spelling of the same program is correct on all four and a NAMED LOCAL of the generic enum is correct too. B-2026-09-09-18's caller-side bodies channel is gated on the parameter's head being literally `Option` or `Result` (`call_dispatch.rs`, `if head != "Option" && head != "Result"`), so a user enum head never reaches it; the named-local cells are correct because their let site owns the bodies instead. The qualified and bare spellings behave IDENTICALLY, which is what separates this from B-2026-09-12-11 | — |
 | B-2026-09-12-19 | 2026-09-12 | codegen | medium | A BOXED `Array[T, N]` ENUM PAYLOAD'S INTERIOR IS FREED BY NOBODY AT THREE OF THE FOUR REGISTRATION SITES -- 96 B per cell in the by-value-param and returned positions, because `array_interior_ok` can only be answered `true` by the `let` site and the real repair is the missing array move-out disarm | — |
@@ -185,6 +184,8 @@ _Generated from `bug-ledger.jsonl` by `scripts/bug-curve.py` (2026-05-20 → 202
 | B-2026-09-12-25 | 2026-09-12 | codegen | high | A NESTED DESTRUCTURE WHOSE LEAF ESCAPES INTO A `mut ref` ACCUMULATOR DOUBLE-FREES ON EVERY COMPILED LANE -- `fn show(x: Option[K], acc: mut ref Vec[R2]) { match x { Option.Some(K.A(r)) => { acc.push(r) } .. } }` over `enum K { A(R2), B }` aborts with `free(): double free detected in tcache 2` at -O0, -O0 autopar and -O2 autopar, while `--interp` runs clean and prints `len:1 / end`. The READ-ONLY twin of the same pattern (`println(f"a:{r.s}")` instead of the push) is clean on all four surfaces, so the trigger is the leaf ESCAPING rather than the nesting: two owners end up on one `R2` -- the accumulator that received it and something in the callee's own teardown of the boxed payload | — |
 | B-2026-09-12-26 | 2026-09-12 | codegen | medium | AN ASSOCIATED FUNCTION THAT CONDITIONALLY RETURNS ITS OWNED PARAM RUNS THE PARAM'S `Drop` BODY TWICE ON EVERY COMPILED LANE -- `impl Sk { fn pick(r: R, flag: bool) -> R { if flag { return r } return R { id: 9 } } }` called as `let k = Sk.pick(R { id: 1 }, true)` prints `dR1 / k:1 / dR1` at -O0, -O0 autopar and -O2 autopar against `k:1 / dR1` on `--interp`, where one `R` exists and one body is owed. The FREE-function spelling of the same program is correct on all four surfaces, so this is the associated half of the ownership flip `cond_returned_param_drop_names` performs | — |
 | B-2026-09-12-27 | 2026-09-12 | other | low | A MATCHED PARAMETER PROJECTS NO PAYLOAD TYPE ON EITHER SPELLING, so a `match` on a by-value param compares nothing -- `analyze` introduces params with `introduce` rather than `introduce_typed`, so `Binding::ty` is `None` for every param and `scrutinee_ty` has nothing to return (measured: `fn eat(o: Option[Vec[String]])` schedules 0 in `eat` on both `Some(x)` and `Some(_)` while codegen records `o`) | — |
+| B-2026-09-13-1 | 2026-09-13 | codegen | medium | AN `Array` USED AS A `Map` KEY LEAKS ITS ELEMENTS -- 384 B in 16 blocks for `Map[Array[String, 2], i64]`, the KEY half of B-2026-09-12-13's selector, held back ON PURPOSE because a key has a NO-ADOPT branch a value does not: wiring it anyway turned the leak into a `try_insert` tcache ABORT plus a surviving 13 B orphan | — |
+| B-2026-09-13-2 | 2026-09-13 | codegen | medium | THE `Option[Array[T, N]]` A `Map` HANDS BACK IS OWNED BY NOBODY -- `insert`'s displaced old value leaks 336 B in 14 blocks and `remove`'s return 192 B in 4 + 192 indirect, while the `Vec[String]` and `String` twins at both call sites are clean; the 48 B direct blocks are the boxed payload and the indirect ones the `String`s inside it | — |
 
 ### Relocated
 
@@ -2505,6 +2506,7 @@ _Generated from `bug-ledger.jsonl` by `scripts/bug-curve.py` (2026-05-20 → 202
 | B-2026-09-12-9 | other | medium | THE DROP FUZZER EMITS A METHOD THAT DOES NOT EXIST -- `bool` has no `to_i64`, so every program reaching `tracked_into_opt_then_displace`'s displacing… | 8d509c655 |
 | B-2026-09-12-11 | codegen | medium | A QUALIFIED CONSTRUCTOR AT AN ARGUMENT POSITION LOSES ITS PAYLOAD'S `Drop` BODY ON EVERY COMPILED BACKEND -- `plainD(Option[(R, R)].Some((R { . | 458c43491 |
 | B-2026-09-12-12 | codegen | medium | AN ENUM'S `Array[T, N]` PAYLOAD IS HEAP-BOXED BY A SIZING FALLBACK AND THEN FREED BY NOBODY -- 384 B direct plus 384 B indirect per 8 rounds for `enu… | de0ad99 |
+| B-2026-09-12-13 | codegen | medium | AN `Array` HELD AS A `Map` VALUE LEAKS ITS ELEMENTS -- 384 B in 16 blocks for `Map[i64, Array[String, 2]]`, the one cell of a 38-cell position x type… | 95489c4 |
 | B-2026-09-12-14 | codegen | medium | A NAMED `Array` BINDING MOVED INTO A STRUCT FIELD KEEPS ITS OWN ELEMENT DROP, so the buffers are freed twice -- `let a: Array[String, 2] = [..]; let… | c9570e0 |
 | B-2026-09-12-15 | codegen | medium | A BY-VALUE `Option`/`Result` ARGUMENT'S PAYLOAD `Drop` BODY RUNS ON NO COMPILED BACKEND AT THREE CALL POSITIONS -- a METHOD call (`s.take(Some(R { id… | 72bfbc5f3 |
 | B-2026-09-12-18 | codegen | high | A GENERIC ENUM'S BOXED `Array[T, N]` PAYLOAD DOUBLE-FREES ITS ELEMENTS WHEN THE PAYLOAD IS MOVED FROM A LOCAL -- SIGABRT for `String`, struct, `Drop`… | de0ad99 |
