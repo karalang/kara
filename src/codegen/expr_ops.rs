@@ -10061,7 +10061,6 @@ impl<'ctx> super::Codegen<'ctx> {
         Ok(out.into())
     }
 
-
     /// B-2026-09-13-22 — flatten a chain of String `+` into its leaf operands.
     ///
     /// `a + b + c` is left-associative, so by the time codegen sees the

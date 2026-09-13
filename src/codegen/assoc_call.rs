@@ -1434,8 +1434,8 @@ impl<'ctx> super::Codegen<'ctx> {
                     // buffer sized to the sum. Declines (returns None) for a
                     // two-leaf concat, so the unfused path stays byte-identical.
                     if type_name == "String" && matches!(op, BinOp::Add) {
-                        if let Some(leaves) = self
-                            .flatten_string_concat_leaves(&_args[0].value, &_args[1].value)
+                        if let Some(leaves) =
+                            self.flatten_string_concat_leaves(&_args[0].value, &_args[1].value)
                         {
                             let fused = self.compile_fused_string_concat(&leaves)?;
                             self.tracing.current_span = op_span;
