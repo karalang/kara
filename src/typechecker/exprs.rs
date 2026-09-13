@@ -695,12 +695,53 @@ impl<'a> super::TypeChecker<'a> {
                                 )
                     )
                 };
-                if elems.iter().any(elem_is_inferred_ctor) {
+                // B-2026-09-10-38 — an element that cannot SYNTHESISE the
+                // expected type either, one shape over.
+                //
+                // A bare `[..]` hardcodes `Vec[T]` in synthesis mode; the
+                // `Array[T, N]` coercion exists only in check mode. So
+                // `let t: (Array[String, 2], i64) = ([f"a", f"b"], 7)` was
+                // rejected as `found '(Vec[String], i64)'` while the DIRECT
+                // `let a: Array[String, 2] = [..]` — which reaches check mode —
+                // was fine, and so was the `(Vec[String], i64)` spelling, whose
+                // synthesised answer happens to be the wanted one. B-2026-08-13-22
+                // fixed the direct position; this is the tuple-ELEMENT position
+                // of the same question.
+                //
+                // GATED ON THE SLOT, not on the element. The arm's original
+                // scoping note — "a non-constructor element keeps synthesis mode
+                // so integer handling is unchanged" — is what makes that
+                // necessary: keying on `ArrayLiteral` alone would push an
+                // expectation into every `(…, [1, 2])` against a `Vec` slot as
+                // well, which is the integer-literal path that note protects.
+                // Asking for `Type::Array` narrows it to the one case synthesis
+                // provably cannot reach.
+                //
+                // `RepeatLiteral` rides along because `[0; 3]` synthesises `Vec`
+                // by the same route and failed identically (measured). The
+                // PrefixCollectionLiteral spelling `Array[f"a", f"b"]` already
+                // synthesises `Type::Array` and is untouched — it was the only
+                // way to write this before, and it stays accepted.
+                let elem_needs_expected = |e: &Expr, slot: &Type| -> bool {
+                    elem_is_inferred_ctor(e)
+                        || matches!(
+                            (&e.kind, slot),
+                            (
+                                ExprKind::ArrayLiteral(_) | ExprKind::RepeatLiteral { .. },
+                                Type::Array { .. }
+                            )
+                        )
+                };
+                if elems
+                    .iter()
+                    .zip(exp_elems.iter())
+                    .any(|(e, slot)| elem_needs_expected(e, slot))
+                {
                     let types: Vec<Type> = elems
                         .iter()
                         .zip(exp_elems.iter())
                         .map(|(e, slot)| {
-                            if elem_is_inferred_ctor(e) {
+                            if elem_needs_expected(e, slot) {
                                 self.check_expr(e, slot)
                             } else {
                                 self.infer_expr(e)
