@@ -5379,7 +5379,11 @@ impl<'a> super::TypeChecker<'a> {
                 let (mode, dispatch_ty) = ScrutineeMode::classify(&scrut_ty);
                 let dispatch_ty = dispatch_ty.clone();
                 self.local_scope.push();
+                let prev_blk = self
+                    .current_arm_body_block
+                    .replace(std::rc::Rc::new(then_block.clone()));
                 self.check_pattern_against(pattern, &dispatch_ty, mode);
+                self.current_arm_body_block = prev_blk;
                 // B-2026-09-06-14 — see `arm_materializes_scrutinee_copy`.
                 if self.block_materializes_scrutinee_copy(pattern, then_block) {
                     self.warn_borrow_projection_copy(value, &scrut_ty);
@@ -6002,7 +6006,11 @@ impl<'a> super::TypeChecker<'a> {
                 let (mode, dispatch_ty) = ScrutineeMode::classify(&scrut_ty);
                 let dispatch_ty = dispatch_ty.clone();
                 self.local_scope.push();
+                let prev_blk = self
+                    .current_arm_body_block
+                    .replace(std::rc::Rc::new(body.clone()));
                 self.check_pattern_against(pattern, &dispatch_ty, mode);
+                self.current_arm_body_block = prev_blk;
                 // B-2026-09-06-14 — see `arm_materializes_scrutinee_copy`.
                 if self.block_materializes_scrutinee_copy(pattern, body) {
                     self.warn_borrow_projection_copy(value, &scrut_ty);

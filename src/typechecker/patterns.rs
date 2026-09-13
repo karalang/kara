@@ -226,7 +226,11 @@ impl<'a> super::TypeChecker<'a> {
         for arm in arms {
             self.local_scope.push();
             let errs_before = self.errors.len();
+            let prev_arm_body = self
+                .current_arm_body
+                .replace(std::rc::Rc::new(arm.body.clone()));
             self.check_pattern_against(&arm.pattern, &dispatch_ty, mode);
+            self.current_arm_body = prev_arm_body;
             materializes |= self.arm_materializes_scrutinee_copy(arm);
             scrutinee_mismatch |= self.errors[errs_before..]
                 .iter()
@@ -513,7 +517,11 @@ impl<'a> super::TypeChecker<'a> {
         for arm in arms {
             self.local_scope.push();
             let errs_before = self.errors.len();
+            let prev_arm_body = self
+                .current_arm_body
+                .replace(std::rc::Rc::new(arm.body.clone()));
             self.check_pattern_against(&arm.pattern, &dispatch_ty, mode);
+            self.current_arm_body = prev_arm_body;
             materializes |= self.arm_materializes_scrutinee_copy(arm);
             scrutinee_mismatch |= self.errors[errs_before..]
                 .iter()
@@ -958,6 +966,40 @@ impl<'a> super::TypeChecker<'a> {
                                 .cloned()
                                 .zip(args.iter().cloned().map(SubstValue::Type))
                                 .collect();
+                            // B-2026-09-13-11 / -12 — design.md § Part 8 `Drop`
+                            // rejects a move out of a value whose type has its
+                            // own destructor, and (since the divergence those
+                            // rows measured) that reaches an enum variant
+                            // payload too. Only the positions this pattern
+                            // BINDS count; a `_` or a literal test moves
+                            // nothing.
+                            let bound: Vec<(String, Type)> = patterns
+                                .iter()
+                                .zip(field_types.iter())
+                                .filter_map(|(pat, ty)| {
+                                    let PatternKind::Binding(n) = &pat.kind else {
+                                        return None;
+                                    };
+                                    let resolved = if subs.is_empty() {
+                                        ty.clone()
+                                    } else {
+                                        substitute_type_params(ty, &subs)
+                                    };
+                                    Some((n.clone(), resolved))
+                                })
+                                .collect();
+                            // A match arm's body wins; the `if let` /
+                            // `while let` block channel is consulted inside the
+                            // rule when there is no arm expression.
+                            let body = self.current_arm_body.clone();
+                            self.reject_partial_move_variant_pattern(
+                                pattern.span,
+                                name,
+                                &variant_name,
+                                &bound,
+                                body.as_deref(),
+                                mode,
+                            );
                             for (pat, ty) in patterns.iter().zip(field_types.iter()) {
                                 let resolved = if subs.is_empty() {
                                     ty.clone()

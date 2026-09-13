@@ -274,6 +274,32 @@ pub const STARTER_LINTS: &[LintInfo] = &[
              warning here until `ref <place>` gives it a zero-cost fix-it. B-2026-09-01-4.",
     },
     LintInfo {
+        name: "partial_move_of_drop_enum",
+        default_level: LintLevel::Warn,
+        description:
+            "A payload is moved out of an ENUM VARIANT whose enum has its own `impl Drop` \
+             (`match x { Option.Some(K.A(r)) => acc.push(r) }`, `let Option.Some(K.A(r)) = x \
+             else { .. }`). The enum sibling of `partial_move_of_drop_struct`, and the \
+             extension design.md § Part 8 `Drop` pre-authorized: that section excluded enum \
+             variant payloads from the struct rule in v1 because all four surfaces AGREED on \
+             the spelling when it was measured, and said `if a divergence is ever measured \
+             there, extend the rule then — with the measurement`. B-2026-09-13-12 is that \
+             divergence: the let-else spelling prints the enum's drop body on `--interp` and \
+             on NO compiled backend. B-2026-09-13-11 is why a body count cannot simply be \
+             chosen instead — the same enum's drop body fires or not depending on what the \
+             ARM BODY does with the leaf, making a type's observable `Drop` count depend on \
+             its consumer. \
+             Gated on CONSUMPTION rather than on the binding's type, which is the one place \
+             it departs from its struct sibling: there the read-only spelling was itself \
+             broken, so a type-only test removed a defect; here the read-only spelling is \
+             correct on all four surfaces and a type-only test rejects it too — measured at \
+             45 codegen fixtures against the struct rule's 8. \
+             `Warn`, not the `Deny` that would actually remove the divergence, for the same \
+             reason the struct rule landed at `Warn`: `--features llvm` fixtures are written \
+             in this shape and each pins drop behaviour for a bug fixed in it, so promotion \
+             waits on triaging them. B-2026-09-13-11, B-2026-09-13-12.",
+    },
+    LintInfo {
         name: "partial_move_of_drop_struct",
         default_level: LintLevel::Deny,
         description:

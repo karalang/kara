@@ -4990,6 +4990,153 @@ impl<'a> super::TypeChecker<'a> {
         );
     }
 
+    /// B-2026-09-13-11 / B-2026-09-13-12 — the ENUM-VARIANT sibling of
+    /// [`Self::reject_partial_move_pattern`].
+    ///
+    /// design.md § Part 8 `Drop` left enum variant payloads out of the rule in
+    /// v1, and said exactly what would bring them in: "It is left out because
+    /// all four surfaces AGREE on that spelling today (measured), so there is
+    /// no defect to remove and a rejection would only delete working code. If a
+    /// divergence is ever measured there, extend the rule then — with the
+    /// measurement, as here."
+    ///
+    /// THE MEASUREMENT, on `enum K { A(R2), B }` with `impl Drop for K`:
+    ///
+    /// ```text
+    /// let-else, arm moves the leaf   --interp  dK / g:z / end
+    ///                                compiled       g:z / end     <- divergence
+    /// match,    arm moves the leaf   all four  len:1 / end        (no `dK`)
+    /// match,    arm only READS it    all four  a:z / dK / len:0 / end
+    /// ```
+    ///
+    /// The first line is the divergence the spec asks for. The second and third
+    /// are the reason a count cannot simply be chosen: the enclosing enum's
+    /// `Drop` body is conditioned on what the ARM BODY does with a leaf
+    /// binding, so the observable body count of a type depends on what its
+    /// consumer does with a field — the property `Drop` exists to make
+    /// predictable. Rejecting the move removes the divergence and the
+    /// body-dependence together, which is why it beats picking zero or one.
+    ///
+    /// Fires on the same terms as the struct rule: an OWNED scrutinee only
+    /// (under `ref` / `mut ref` the bindings are borrows and nothing leaves),
+    /// and only when some bound position is non-`Copy`. A read-only arm moves
+    /// nothing and stays legal, which is what keeps the third line above
+    /// working.
+    pub(super) fn reject_partial_move_variant_pattern(
+        &mut self,
+        pattern_span: Span,
+        enum_name: &str,
+        variant_name: &str,
+        bound: &[(String, Type)],
+        body: Option<&Expr>,
+        mode: crate::typechecker::types::ScrutineeMode,
+    ) {
+        use crate::typechecker::types::ScrutineeMode;
+        if !matches!(mode, ScrutineeMode::Owned) {
+            return;
+        }
+        let has_drop =
+            self.env.impls.iter().any(|imp| {
+                imp.trait_name.as_deref() == Some("Drop") && imp.target_type == enum_name
+            });
+        if !has_drop {
+            return;
+        }
+        let moved = bound.iter().any(|(name, ty)| {
+            let movable = !matches!(ty, Type::Error | Type::Never)
+                && !self.is_copy_type_during_check(ty)
+                && !self.copy_is_only_an_rc_retain(ty)
+                && !matches!(ty, Type::Function { .. } | Type::TypeParam(_))
+                && !matches!(ty, Type::Ref(_) | Type::MutRef(_) | Type::Slice { .. });
+            // The ARM BODY decides, not the binding's type alone. This is the
+            // one place this rule departs from its struct sibling, and the
+            // measurement is why: the struct rule's read-only spelling was
+            // BROKEN (`dR` twice, the second over a zeroed field), so
+            // rejecting on type alone removed a defect. Here the read-only
+            // spelling is CORRECT on all four surfaces, and a type-only test
+            // rejects it along with the moving one — measured at 45 codegen
+            // fixtures, against the struct rule's 8, because a read-only
+            // payload destructure is a mainstream spelling in this corpus.
+            // design.md asked for the divergence to be removed, not for
+            // working code to be deleted, so the gate is consumption.
+            //
+            // `binding_only_borrowed` is the SAME classifier codegen uses to
+            // decide whether a payload binding takes a consuming channel, so a
+            // position counts as moved here on exactly the terms the rest of
+            // the compiler calls a move. No body to consult (the `let` /
+            // let-else route) means the binding outlives the statement, which
+            // is itself a move.
+            // B-2026-09-13-11 — a projection off the binding whose FIELD TYPE
+            // is `Copy` is a read, not a partial move. The syntactic walk in
+            // `consume_class` calls every projection rooted at a binding a
+            // move, which is the right bias for a drop-DISARM decision and the
+            // wrong one here: it made `match self { E.A(r) => return r.id }`
+            // — a scalar read — look like a consuming arm, and that single
+            // miscall accounted for most of the fixtures this rule appeared to
+            // break. `result_escape.rs`'s `projection_is_read` takes the
+            // blanket form of this knob; blanket is too loose here, because a
+            // projection of a NON-`Copy` field (`return r.s`) really does move
+            // it out and really does leave the enum's drop body over a
+            // half-moved payload — the hazard this rule exists for.
+            let copy_fields: std::collections::HashSet<String> = match ty {
+                Type::Named { name: tn, .. } => self
+                    .env
+                    .structs
+                    .get(tn.as_str())
+                    .map(|info| {
+                        info.fields
+                            .iter()
+                            .filter(|(_, ft, _)| {
+                                self.is_copy_type_during_check(ft)
+                                    || self.copy_is_only_an_rc_retain(ft)
+                            })
+                            .map(|(fname, _, _)| fname.clone())
+                            .collect()
+                    })
+                    .unwrap_or_default(),
+                _ => std::collections::HashSet::new(),
+            };
+            let copy_read = |e: &Expr| -> bool {
+                let ExprKind::FieldAccess { object, field } = &e.kind else {
+                    return false;
+                };
+                matches!(&object.kind, ExprKind::Identifier(n) if n == name)
+                    && copy_fields.contains(field.as_str())
+            };
+            let consumed = match (body, self.current_arm_body_block.as_deref()) {
+                (Some(b), _) => {
+                    !crate::consume_class::binding_only_borrowed_with(name, b, &copy_read)
+                }
+                // `if let` / `while let` scope the binding to a BLOCK, whose
+                // value is its `final_expr`, so a forwarding tail counts as a
+                // transfer exactly as a consuming statement does.
+                (None, Some(b)) => {
+                    !crate::consume_class::binding_only_borrowed_block_with(name, b, &copy_read)
+                }
+                // No scope to consult: the `let` / let-else route, where the
+                // binding outlives the statement and that is itself a move.
+                (None, None) => true,
+            };
+            movable && consumed
+        });
+        if !moved {
+            return;
+        }
+        self.type_lint_warning_with_fix(
+            format!(
+                "this pattern moves a payload out of `{enum_name}.{variant_name}`, and \
+                 `{enum_name}` has its own `impl Drop`: the enum still reaches its \
+                 destructor, so its drop body runs over a payload that is already gone. \
+                 design.md § Part 8 `Drop` rejects this shape. Bind the whole value and \
+                 read the payload in place, or give it a `.clone()`"
+            ),
+            pattern_span,
+            TypeErrorKind::TypeMismatch,
+            "partial_move_of_drop_enum",
+            None,
+        );
+    }
+
     /// B-2026-09-03-20 — `Some(w.r)` / `Ok(w.r)` / `Err(w.r)`, both the bare
     /// and the `Option.Some` / `Result.Ok` path spellings.
     ///

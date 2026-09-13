@@ -48352,6 +48352,128 @@ fn partial_move_diagnostics(source: &str) -> usize {
         .count()
 }
 
+/// Sibling of [`partial_move_diagnostics`] for the ENUM rule.
+fn partial_move_enum_diagnostics(source: &str) -> usize {
+    let parsed = parse(source);
+    assert!(
+        parsed.errors.is_empty(),
+        "Parse errors: {:?}",
+        parsed.errors
+    );
+    let resolved = resolve(&parsed.program);
+    assert!(
+        resolved.errors.is_empty(),
+        "Resolve errors: {:?}",
+        resolved.errors
+    );
+    let result = typecheck(&parsed.program, &resolved);
+    result
+        .errors
+        .iter()
+        .chain(result.warnings.iter())
+        .filter(|e| e.lint_name.as_deref() == Some("partial_move_of_drop_enum"))
+        .count()
+}
+
+/// B-2026-09-13-11 / B-2026-09-13-12 — the ENUM-VARIANT extension of
+/// `partial_move_of_drop_struct`, which design.md § Part 8 `Drop`
+/// pre-authorized: it excluded enum variant payloads in v1 *because* all four
+/// surfaces agreed on the spelling when measured, and said "If a divergence is
+/// ever measured there, extend the rule then — with the measurement, as here."
+///
+/// THE MEASUREMENT, on `enum K { A(R2), B }` with `impl Drop for K`:
+///
+/// ```text
+/// let-else, leaf escapes    --interp  dK / g:z / end
+///                           compiled       g:z / end      <- the divergence
+/// match, arm MOVES the leaf  all four  len:1 / end         (no `dK` anywhere)
+/// match, arm only READS it   all four  a:z / dK / len:0 / end
+/// ```
+///
+/// WHAT THIS TEST PINS is the shape of the rule, not the drop count: that it
+/// fires on the two spellings that MOVE and stays silent on the one that
+/// READS. The distinction is the whole design of the rule and the one place it
+/// departs from its struct sibling — there the read-only spelling was itself
+/// broken, so rejecting on the binding's TYPE removed a defect; here the
+/// read-only spelling is correct on all four surfaces, and a type-only test
+/// rejects it too. Measured at 45 codegen fixtures under the type-only
+/// reading, against the struct rule's 8, because a read-only payload
+/// destructure is a mainstream spelling in this corpus.
+///
+/// A SCALAR PROJECTION IS A READ (`r.id` where `id: i64`) and is its own cell.
+/// `consume_class`'s syntactic walk calls every projection rooted at a binding
+/// a partial move — the right bias for a drop-DISARM decision, backwards here
+/// — so the rule supplies a `copy_read` oracle keyed on the FIELD's type.
+/// Without that cell, the fix for it has nothing holding it in place.
+///
+/// The rule is `Warn`, not the `Deny` that would actually remove the
+/// divergence, because `--features llvm` fixtures are written in this shape
+/// and each pins drop behaviour for a bug fixed in it. Promotion is tracked
+/// separately, exactly as B-2026-09-01-43 promoted the struct rule.
+#[test]
+fn partial_move_of_drop_enum_fires_on_moves_and_not_on_reads() {
+    let prelude = "struct R2 { s: String, id: i64 }\n\
+                   enum K { A(R2), B }\n\
+                   impl Drop for K { fn drop(mut ref self) { println(\"dK\") } }\n";
+
+    // 1 -- the arm MOVES the leaf onward: fires.
+    let moved = format!(
+        "{prelude}\
+         fn show(x: Option[K], acc: mut ref Vec[R2]) {{\n\
+         \x20\x20\x20\x20match x {{ Option.Some(K.A(r)) => {{ acc.push(r) }} \
+         Option.Some(K.B) => {{}} Option.None => {{}} }}\n\
+         }}\n\
+         fn main() {{ let mut acc: Vec[R2] = []; \
+         show(Option.Some(K.A(R2 {{ s: f\"z\", id: 1 }})), mut acc); }}\n"
+    );
+    assert_eq!(partial_move_enum_diagnostics(&moved), 1, "moving arm");
+
+    // 2 -- the arm only READS the leaf: silent. This spelling is correct on
+    //      all four surfaces, so a rule that fires here deletes working code.
+    let read = format!(
+        "{prelude}\
+         fn show(x: Option[K]) {{\n\
+         \x20\x20\x20\x20match x {{ Option.Some(K.A(r)) => {{ println(f\"a:{{r.s}}\") }} \
+         Option.Some(K.B) => {{}} Option.None => {{}} }}\n\
+         }}\n\
+         fn main() {{ show(Option.Some(K.A(R2 {{ s: f\"z\", id: 1 }}))); }}\n"
+    );
+    assert_eq!(partial_move_enum_diagnostics(&read), 0, "read-only arm");
+
+    // 3 -- a SCALAR projection is a read, not a partial move. The cell that
+    //      pins the `copy_read` oracle; without it the syntactic walk calls
+    //      `r.id` a move and this whole class of arm is falsely accused.
+    let scalar = format!(
+        "{prelude}\
+         fn show(x: Option[K]) -> i64 {{\n\
+         \x20\x20\x20\x20match x {{ Option.Some(K.A(r)) => {{ return r.id; }} \
+         Option.Some(K.B) => {{ return 0; }} Option.None => {{ return 0; }} }}\n\
+         }}\n\
+         fn main() {{ println(f\"n:{{show(Option.Some(K.A(R2 {{ s: f\"z\", id: 7 }})))}}\"); }}\n"
+    );
+    assert_eq!(
+        partial_move_enum_diagnostics(&scalar),
+        0,
+        "scalar projection"
+    );
+
+    // 4 -- CONTROL: the same shape on an enum with NO `impl Drop`. Nothing to
+    //      confuse, so the rule must stay off it entirely.
+    let nodrop = "struct R2 { s: String, id: i64 }\n\
+                  enum P { A(R2), B }\n\
+                  fn show(x: Option[P], acc: mut ref Vec[R2]) {\n\
+                  \x20\x20\x20\x20match x { Option.Some(P.A(r)) => { acc.push(r) } \
+                  Option.Some(P.B) => {} Option.None => {} }\n\
+                  }\n\
+                  fn main() { let mut acc: Vec[R2] = []; \
+                  show(Option.Some(P.A(R2 { s: f\"z\", id: 1 })), mut acc); }\n";
+    assert_eq!(
+        partial_move_enum_diagnostics(nodrop),
+        0,
+        "enum without Drop"
+    );
+}
+
 /// B-2026-09-01-38 — design.md § Part 8 `Drop`, "Interaction with move
 /// semantics", was UNIMPLEMENTED: *"Partial moves out of a struct field are
 /// rejected if the struct has a `Drop` impl."*

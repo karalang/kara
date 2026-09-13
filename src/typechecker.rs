@@ -2086,6 +2086,18 @@ pub struct TypeChecker<'a> {
     /// against the nearest enclosing entry (design.md § @ Bindings,
     /// "Owned scrutinee" — the cannot-double-consume rule).
     pub(super) owned_at_binding_outers: Vec<(String, Span)>,
+    /// B-2026-09-13-11 / -12 — the match arm currently being checked, so
+    /// `reject_partial_move_variant_pattern` can ask whether the arm body
+    /// actually CONSUMES a payload binding rather than rejecting on the
+    /// binding's type alone. `None` outside a match arm (the `let` and
+    /// let-else routes), where a binding outliving the statement is itself a
+    /// move.
+    pub(super) current_arm_body: Option<std::rc::Rc<Expr>>,
+    /// The `if let` then-block / `while let` body sibling of
+    /// [`Self::current_arm_body`]. Those two constructs scope their bindings to
+    /// a `Block` rather than a single arm expression, and
+    /// `consume_class::binding_only_borrowed_block` is the matching predicate.
+    pub(super) current_arm_body_block: Option<std::rc::Rc<crate::ast::Block>>,
     pub(super) errors: Vec<TypeError>,
     pub(super) warnings: Vec<TypeError>,
     pub(super) expr_types: FxHashMap<SpanKey, Type>,
@@ -2749,6 +2761,8 @@ impl<'a> TypeChecker<'a> {
             env: TypeEnv::new(),
             local_scope: LocalTypeScope::new(),
             owned_at_binding_outers: Vec::new(),
+            current_arm_body: None,
+            current_arm_body_block: None,
             errors: Vec::new(),
             warnings: Vec::new(),
             expr_types: FxHashMap::default(),
