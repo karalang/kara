@@ -3387,6 +3387,58 @@ impl<'ctx> super::Codegen<'ctx> {
         let _ = self.builder.build_call(drop_fn, &[slot.into()], "");
     }
 
+    /// B-2026-09-13-2 — free the BOX that packing a DISCARDED wide `Option[V]`
+    /// hand-back just allocated.
+    ///
+    /// `coerce_to_payload_words` heap-boxes any payload wider than the
+    /// envelope's inline area and puts the box pointer in word 0. On a
+    /// discarded `Map` hand-back nobody ever reads that envelope, so the box is
+    /// malloc'd and abandoned: 48 B per call for an `Array[String, 2]` value,
+    /// which is the 192 B in 4 blocks that survived after the CONTENTS reclaim
+    /// landed (the 176 B of indirect `String`s went to zero there, and these
+    /// direct blocks are what was left).
+    ///
+    /// The precondition is exactly the one that authorized the contents
+    /// reclaim, and no weaker: the caller has just run
+    /// `reclaim_displaced_owned_map_value` under the discard flag, so the
+    /// envelope is known dead and its interior already released. That is why
+    /// this takes the flag's value from the caller rather than re-deriving it
+    /// — if the flag were ever wrong the contents would already have been
+    /// double-freed, so this adds no new risk class, only the 48 bytes.
+    ///
+    /// ENVELOPE-ONLY by construction: it frees the box and never walks into it,
+    /// because the walk already happened. Calling a full payload drop here
+    /// would be the double free.
+    ///
+    /// No-ops unless the payload genuinely boxed — the same
+    /// `llvm_type_word_count > area` predicate every pack, unpack and drop site
+    /// recomputes, so an inline payload (a `String` / `Vec` V) keeps today's
+    /// behaviour untouched and word 0 is never mistaken for a pointer.
+    pub(super) fn free_discarded_wide_payload_box(
+        &mut self,
+        discarded: bool,
+        payload_words: &[inkwell::values::IntValue<'ctx>],
+        payload_ty: BasicTypeEnum<'ctx>,
+        area_words: usize,
+    ) {
+        if !discarded || Self::llvm_type_word_count(payload_ty) <= area_words {
+            return;
+        }
+        let Some(&box_word) = payload_words.first() else {
+            return;
+        };
+        let ptr_ty = self.context.ptr_type(AddressSpace::default());
+        let Ok(box_ptr) = self
+            .builder
+            .build_int_to_ptr(box_word, ptr_ty, "disc.box.p")
+        else {
+            return;
+        };
+        let _ = self
+            .builder
+            .build_call(self.runtime_fns.free_fn, &[box_ptr.into()], "");
+    }
+
     /// Caller obligation: only pass values that are genuinely *fresh-owned*.
     /// A value reloaded from an existing tracked binding (a place expression)
     /// must NOT be routed here — its storage is already owned by the

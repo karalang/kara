@@ -88773,4 +88773,246 @@ fn main() {
             "map-key-struct-for-loop-elem-duplicate-one-owner",
         );
     }
+
+    #[test]
+    fn asan_an_array_option_payload_a_call_hands_back_has_an_owner() {
+        // B-2026-09-13-2. Filed as "the `Option[Array[T, N]]` a `Map` hands
+        // back is owned by nobody", and the row's own note says to MEASURE
+        // rather than trust its framing. Measuring moved the axis twice.
+        //
+        // FIRST: the `Map` is not the axis. A PLAIN function returning
+        // `Option[Array[String, 2]]`, with no `Map` anywhere in the program,
+        // leaks byte-identically to `Map.remove` -- 176 B in 8 blocks
+        // arm-bound, 192 B in 4 plus 176 indirect discarded.
+        //
+        // SECOND: boxing is not the axis either. At `KARAC_OPT_LEVEL=0`, four
+        // calls, arm-bound and read:
+        //
+        //     Option[S4 { 4 Strings }]       96 B, boxed          clean
+        //     Option[(String x4)]            96 B, boxed          clean
+        //     Option[S2 { 2 Strings }]       48 B, boxed          clean
+        //     Option[(String, String)]       48 B, boxed          clean
+        //     Option[Array[String, 2]]       48 B, boxed      176 B / 8
+        //     Option[Array[String, 1]]       24 B, INLINE      88 B / 4
+        //
+        // Same-width struct and tuple payloads are clean at both widths, so
+        // the axis is `Array` AS THE PAYLOAD TYPE. What was missing was
+        // ROUTING, one route at a time, which is why the by-value PARAM and
+        // the `let o = Some([..])` LITERAL spellings were already clean
+        // (B-2026-09-06-49 / B-2026-09-10-6 and this row's own let site) while
+        // every CALL-sourced spelling leaked.
+        //
+        // Four registrations, each with its own sole-ownership argument:
+        //
+        //   * `let o = mk(j)` -- the let site refused a CALL RHS wholesale
+        //     against a real hazard (`let back = passthru(Some(e))` receives a
+        //     box whose interior an upstream local still owns). Widened by
+        //     exactly one spelling, `call_builds_its_own_optres_box`: a callee
+        //     NONE of whose arguments flows into its return cannot be handing
+        //     back a box the caller supplied.
+        //   * `let o = m.remove(k)` -- `map_handback_moves_value_out`. No
+        //     callee AST to ask, so the argument is that `remove` tombstones
+        //     the bucket and `insert` replaces it. `get` is excluded because
+        //     its payload ALIASES live storage.
+        //   * the DISCARD forms -- `map_val_array_reclaim_on_discard_for`
+        //     arms the reclaim that already handled an array, plus
+        //     `free_discarded_wide_payload_box` for the 48-byte box the pack
+        //     allocates for an envelope nobody reads.
+        //   * `match m.remove(k) { Some(a) => .. }` -- the `Array` peer of the
+        //     whole-TUPLE arm-binding branch in `control_flow_match`.
+        //
+        // 1 -- THE ARM-BOUND SHAPE IS NOT FIXED and is deliberately not
+        //      asserted here. `match m.remove(k) { Some(a) => .. }` still
+        //      leaks 176 B in 8 blocks. It was implemented -- the `Array` peer
+        //      of the whole-TUPLE arm-binding branch in `control_flow_match`,
+        //      which registers the box's interior drop against the bound
+        //      payload -- and then REVERTED, because it is unsound at that
+        //      site and made three correct programs incorrect.
+        //
+        //      An arm that binds the whole payload and MOVES it onward hands
+        //      ownership to the destination, so the box's registration becomes
+        //      a second owner. Measured, with the registration in place:
+        //
+        //          Some(a) => { keep.push(a) }      use-after-free, garbage
+        //          Some(a) => { m.insert(2, a) }    abort, tcache double free
+        //          Some(a) => { Box2 { a: a, .. } } abort, tcache double free
+        //
+        //      All three are CORRECT on this commit's parent, so that is a
+        //      leak traded for corruption -- the exact outcome
+        //      B-2026-09-13-1's note warns about. `consume_class`'s
+        //      `binding_only_borrowed` retraction covers a by-value CALL
+        //      consumer (`Some(a) => { eat(a) }`, cell 9 below) but not a move
+        //      into a container, a struct literal, or back into the map.
+        //
+        //      And the site cannot simply be taught the array shape, because
+        //      its TUPLE twin has the identical defect ALREADY: the same three
+        //      spellings over `Map[i64, (String, String)]` abort with
+        //      `free(): double free detected in tcache 2` on every compiled
+        //      backend with NO change to the compiler at all, while the
+        //      interpreter is correct. That is filed as its own row; the
+        //      arm-bound array shape waits on it rather than being bought at
+        //      the price of corruption.
+        // 2 -- the row's `remove` leg DISCARDED, both spellings. The bare form
+        //      is the one that shows the BOX: the general statement-result
+        //      cleanup reaches an inline payload and not a heap-boxed one.
+        assert_clean_asan_run(
+            "fn main() {\n\
+             \x20\x20\x20\x20let mut m: Map[i64, Array[String, 2]] = Map.new();\n\
+             \x20\x20\x20\x20let mut i: i64 = 0;\n\
+             \x20\x20\x20\x20while i < 4 {\n\
+             \x20\x20\x20\x20\x20\x20\x20\x20m.insert(i, Array[f\"raaaaaaaaaaaa{i}\", f\"cbbbbbbbbbbbb{i}\"]);\n\
+             \x20\x20\x20\x20\x20\x20\x20\x20i = i + 1;\n\
+             \x20\x20\x20\x20}\n\
+             \x20\x20\x20\x20m.remove(0);\n\
+             \x20\x20\x20\x20let _ = m.remove(1);\n\
+             \x20\x20\x20\x20println(f\"n:{m.len()}\");\n\
+             }\n",
+            &["n:2"],
+            "map-remove-array-value-discarded",
+        );
+        // 3 -- the row's `insert`-overwrite leg: the DISPLACED old value,
+        //      discarded. 336 B in 7 blocks plus 308 indirect in 14 before.
+        assert_clean_asan_run(
+            "fn main() {\n\
+             \x20\x20\x20\x20let mut m: Map[i64, Array[String, 2]] = Map.new();\n\
+             \x20\x20\x20\x20let mut i: i64 = 0;\n\
+             \x20\x20\x20\x20while i < 4 {\n\
+             \x20\x20\x20\x20\x20\x20\x20\x20m.insert(3, Array[f\"raaaaaaaaaaaa{i}\", f\"cbbbbbbbbbbbb{i}\"]);\n\
+             \x20\x20\x20\x20\x20\x20\x20\x20i = i + 1;\n\
+             \x20\x20\x20\x20}\n\
+             \x20\x20\x20\x20println(f\"n:{m.len()}\");\n\
+             }\n",
+            &["n:1"],
+            "map-insert-overwrite-array-value-discarded",
+        );
+        // 4 -- the same leg BOUND, so the displaced value is read rather than
+        //      thrown away. A different owner from cell 3 and it must not be
+        //      the same one twice.
+        assert_clean_asan_run(
+            "fn main() {\n\
+             \x20\x20\x20\x20let mut m: Map[i64, Array[String, 2]] = Map.new();\n\
+             \x20\x20\x20\x20let mut i: i64 = 0;\n\
+             \x20\x20\x20\x20while i < 3 {\n\
+             \x20\x20\x20\x20\x20\x20\x20\x20let o = m.insert(3, Array[f\"raaaaaaaaaaaa{i}\", f\"cbbbbbbbbbbbb{i}\"]);\n\
+             \x20\x20\x20\x20\x20\x20\x20\x20match o {\n\
+             \x20\x20\x20\x20\x20\x20\x20\x20\x20\x20\x20\x20Some(a) => { println(f\"o:{a[0]}\"); }\n\
+             \x20\x20\x20\x20\x20\x20\x20\x20\x20\x20\x20\x20None => { println(\"o:fresh\"); }\n\
+             \x20\x20\x20\x20\x20\x20\x20\x20}\n\
+             \x20\x20\x20\x20\x20\x20\x20\x20i = i + 1;\n\
+             \x20\x20\x20\x20}\n\
+             \x20\x20\x20\x20println(f\"n:{m.len()}\");\n\
+             }\n",
+            &["o:fresh", "o:raaaaaaaaaaaa0", "o:raaaaaaaaaaaa1", "n:1"],
+            "map-insert-overwrite-array-value-bound",
+        );
+        // 5 -- NO MAP IN THE PROGRAM. This is the cell that says the row's own
+        //      framing was wrong, and it is the general fix rather than the
+        //      map-shaped one: a plain call return, bound annotated, bound
+        //      inferred, and never matched at all.
+        assert_clean_asan_run(
+            "fn mk(n: i64) -> Option[Array[String, 2]] {\n\
+             \x20\x20\x20\x20if n < 0 { return None; }\n\
+             \x20\x20\x20\x20return Some(Array[f\"raaaaaaaaaaaa{n}\", f\"cbbbbbbbbbbbb{n}\"]);\n\
+             }\n\
+             fn main() {\n\
+             \x20\x20\x20\x20let a: Option[Array[String, 2]] = mk(1);\n\
+             \x20\x20\x20\x20match a { Some(v) => { println(f\"a:{v[0]}\"); } None => { println(\"a:none\"); } }\n\
+             \x20\x20\x20\x20let b = mk(2);\n\
+             \x20\x20\x20\x20match b { Some(v) => { println(f\"b:{v[0]}\"); } None => { println(\"b:none\"); } }\n\
+             \x20\x20\x20\x20let c: Option[Array[String, 2]] = mk(3);\n\
+             \x20\x20\x20\x20println(\"c:unread\");\n\
+             }\n",
+            &["a:raaaaaaaaaaaa1", "b:raaaaaaaaaaaa2", "c:unread"],
+            "call-returned-array-option-bound-and-unread",
+        );
+        // 6 -- the `Result` twin of cell 5, both variants live.
+        assert_clean_asan_run(
+            "fn mk(n: i64) -> Result[Array[String, 2], i64] {\n\
+             \x20\x20\x20\x20if n < 0 { return Err(7); }\n\
+             \x20\x20\x20\x20return Ok(Array[f\"raaaaaaaaaaaa{n}\", f\"cbbbbbbbbbbbb{n}\"]);\n\
+             }\n\
+             fn main() {\n\
+             \x20\x20\x20\x20let a = mk(1);\n\
+             \x20\x20\x20\x20match a { Ok(v) => { println(f\"a:{v[0]}\"); } Err(e) => { println(\"a:err\"); } }\n\
+             \x20\x20\x20\x20let b = mk(0 - 1);\n\
+             \x20\x20\x20\x20match b { Ok(v) => { println(f\"b:{v[0]}\"); } Err(e) => { println(\"b:err\"); } }\n\
+             }\n",
+            &["a:raaaaaaaaaaaa1", "b:err"],
+            "call-returned-array-result-both-variants",
+        );
+        // 7 -- THE ALIASING CONTROL, and the cell that fails if
+        //      `map_handback_moves_value_out` ever admits `get`. `get`'s
+        //      payload interior aliases the bucket's stored value; only the box
+        //      is fresh. Two reads of the same key, so a disarmed bucket shows
+        //      up as a use-after-free on the second rather than as a leak.
+        assert_clean_asan_run(
+            "fn main() {\n\
+             \x20\x20\x20\x20let mut m: Map[i64, Array[String, 2]] = Map.new();\n\
+             \x20\x20\x20\x20m.insert(1, Array[f\"raaaaaaaaaaaa1\", f\"cbbbbbbbbbbbb1\"]);\n\
+             \x20\x20\x20\x20match m.get(1) { Some(a) => { println(f\"p:{a[0]}\"); } None => { println(\"p:none\"); } }\n\
+             \x20\x20\x20\x20match m.get(1) { Some(a) => { println(f\"q:{a[0]}\"); } None => { println(\"q:none\"); } }\n\
+             \x20\x20\x20\x20println(f\"n:{m.len()}\");\n\
+             }\n",
+            &["p:raaaaaaaaaaaa1", "q:raaaaaaaaaaaa1", "n:1"],
+            "map-get-array-value-aliases-storage-control",
+        );
+        // 8 -- THE PASSTHROUGH HAZARD is NOT asserted here, deliberately.
+        //      `let back = passthru(Some(e))` is the shape the let site's gate
+        //      was built against, and this row keeps it DECLINED:
+        //      `passthru` returns its argument, so
+        //      `call_arg_flows_into_return` is true, no registration happens,
+        //      and the upstream local stays the interior's only owner. It
+        //      cannot be a cell in this battery because that spelling still
+        //      leaks 132 B in 6 blocks -- unchanged by this row, measured
+        //      before and after -- so an `assert_clean_asan_run` would fail on
+        //      a pre-existing leak rather than guard this fix.
+        //
+        //      Its guard is the cell written for exactly this hazard:
+        //      `asan_generic_callee_boxed_optres_temp_arg_frees_its_box`
+        //      cell 5, which aborts with `attempting double-free` if the
+        //      registration is ever widened to reach it.
+        // 9 -- the CONSUMING arm: the bound array is handed to a by-value
+        //      callee, so the arm's binding takes over and the box's
+        //      registration must not free it a second time. This is the cell
+        //      that turns a wrong registration from a silent leak into an
+        //      abort.
+        assert_clean_asan_run(
+            "fn mk(n: i64) -> Option[Array[String, 2]] {\n\
+             \x20\x20\x20\x20if n < 0 { return None; }\n\
+             \x20\x20\x20\x20return Some(Array[f\"raaaaaaaaaaaa{n}\", f\"cbbbbbbbbbbbb{n}\"]);\n\
+             }\n\
+             fn eat(a: Array[String, 2]) -> i64 { return a[0].len(); }\n\
+             fn main() {\n\
+             \x20\x20\x20\x20let mut i: i64 = 0;\n\
+             \x20\x20\x20\x20while i < 3 {\n\
+             \x20\x20\x20\x20\x20\x20\x20\x20let o = mk(i);\n\
+             \x20\x20\x20\x20\x20\x20\x20\x20match o {\n\
+             \x20\x20\x20\x20\x20\x20\x20\x20\x20\x20\x20\x20Some(a) => { println(f\"n:{eat(a)}\"); }\n\
+             \x20\x20\x20\x20\x20\x20\x20\x20\x20\x20\x20\x20None => { println(\"n:none\"); }\n\
+             \x20\x20\x20\x20\x20\x20\x20\x20}\n\
+             \x20\x20\x20\x20\x20\x20\x20\x20i = i + 1;\n\
+             \x20\x20\x20\x20}\n\
+             }\n",
+            &["n:14", "n:14", "n:14"],
+            "call-returned-array-option-consuming-arm",
+        );
+        // 10 -- the SCALAR-element control. `emit_drop_fn_for_array` declines a
+        //       heapless element, so every registration above must emit nothing
+        //       and an `Array[i64, N]` value keeps its exact no-op.
+        assert_clean_asan_run(
+            "fn mk(n: i64) -> Option[Array[i64, 2]] {\n\
+             \x20\x20\x20\x20if n < 0 { return None; }\n\
+             \x20\x20\x20\x20return Some(Array[n, n + 1]);\n\
+             }\n\
+             fn main() {\n\
+             \x20\x20\x20\x20let mut m: Map[i64, Array[i64, 2]] = Map.new();\n\
+             \x20\x20\x20\x20m.insert(1, Array[11, 22]);\n\
+             \x20\x20\x20\x20m.remove(1);\n\
+             \x20\x20\x20\x20let o = mk(5);\n\
+             \x20\x20\x20\x20match o { Some(a) => { println(f\"s:{a[0]}\"); } None => { println(\"s:none\"); } }\n\
+             }\n",
+            &["s:5"],
+            "array-option-scalar-element-control",
+        );
+    }
 }

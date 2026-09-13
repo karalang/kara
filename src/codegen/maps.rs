@@ -2206,6 +2206,11 @@ impl<'ctx> super::Codegen<'ctx> {
                 // shared, `map_val_shared_heap_type_for` returns None
                 // and we skip — Vec/String/primitive V's don't have a
                 // refcount to dec.
+                // B-2026-09-13-2 — remember the flag: it is cleared on read
+                // below, and the BOX free after the pack needs the same
+                // precondition the contents reclaim runs under.
+                let discarded_handback = self.mapset.pending_map_insert_old_dec
+                    && self.map_val_array_reclaim_on_discard_for(var_name);
                 if self.mapset.pending_map_insert_old_dec {
                     self.mapset.pending_map_insert_old_dec = false;
                     if self.map_val_weak_for(var_name) {
@@ -2239,11 +2244,25 @@ impl<'ctx> super::Codegen<'ctx> {
                         // literal no-ops. (The fresh-insert path never reaches
                         // here.)
                         self.reclaim_displaced_owned_map_value(var_name, old_val, val_ty);
+                    } else if self.map_val_array_reclaim_on_discard_for(var_name) {
+                        // B-2026-09-13-2 — an `Array[T, N]` V. The same
+                        // reclaim, which already resolves an array through
+                        // `map_val_drop_fn_for_type_expr`; only the arming
+                        // predicate above was missing.
+                        self.reclaim_displaced_owned_map_value(var_name, old_val, val_ty);
                     }
                 }
                 // Multi-word payload via `coerce_to_payload_words` — see
                 // `Vec.first`/`Vec.last` arm for the rationale.
                 let some_payload_words = self.coerce_to_payload_words(old_val, 3)?;
+                // B-2026-09-13-2 — the discarded envelope's box, as in the
+                // `remove` arm: contents released above, box released here.
+                self.free_discarded_wide_payload_box(
+                    discarded_handback,
+                    &some_payload_words,
+                    val_ty,
+                    3,
+                );
                 let some_end_bb = self.builder.get_insert_block().unwrap();
                 self.builder.build_unconditional_branch(merge_bb).unwrap();
                 self.builder.position_at_end(none_bb);
@@ -2727,6 +2746,11 @@ impl<'ctx> super::Codegen<'ctx> {
                 // nobody holds. Reclaim it — dec a shared/RC value, free an
                 // owned-heap `String`/`Vec` buffer. Same wildcard-let gating as
                 // insert (a bare `m.remove(k);` already drops its Option temp).
+                // B-2026-09-13-2 — remember the flag: it is cleared on read
+                // below, and the BOX free after the pack needs the same
+                // precondition the contents reclaim runs under.
+                let discarded_handback = self.mapset.pending_map_insert_old_dec
+                    && self.map_val_array_reclaim_on_discard_for(var_name);
                 if self.mapset.pending_map_insert_old_dec {
                     self.mapset.pending_map_insert_old_dec = false;
                     if self.map_val_weak_for(var_name) {
@@ -2750,11 +2774,26 @@ impl<'ctx> super::Codegen<'ctx> {
                         // Deep drop for Vec[String]; shallow free for String /
                         // Vec[primitive] (B-2026-07-22-12 remove sibling).
                         self.reclaim_displaced_owned_map_value(var_name, old_val, val_ty);
+                    } else if self.map_val_array_reclaim_on_discard_for(var_name) {
+                        // B-2026-09-13-2 — an `Array[T, N]` V. The same
+                        // reclaim, which already resolves an array through
+                        // `map_val_drop_fn_for_type_expr`; only the arming
+                        // predicate above was missing.
+                        self.reclaim_displaced_owned_map_value(var_name, old_val, val_ty);
                     }
                 }
                 // Multi-word payload via `coerce_to_payload_words` — see
                 // `Vec.first`/`Vec.last` arm for the rationale.
                 let some_payload_words = self.coerce_to_payload_words(old_val, 3)?;
+                // B-2026-09-13-2 — the discarded envelope's box. The contents
+                // were released just above; this is the 48-byte box the pack
+                // allocated for a payload nobody will read.
+                self.free_discarded_wide_payload_box(
+                    discarded_handback,
+                    &some_payload_words,
+                    val_ty,
+                    3,
+                );
                 let found_end_bb = self.builder.get_insert_block().unwrap();
                 self.builder.build_unconditional_branch(merge_bb).unwrap();
                 self.builder.position_at_end(notfound_bb);

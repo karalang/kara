@@ -3519,6 +3519,115 @@ impl<'ctx> super::Codegen<'ctx> {
         }
     }
 
+    /// Does this CALL hand back an `Option`/`Result` box that the CALLEE built
+    /// out of its own materials, making the caller's result binding the sole
+    /// owner of the interior? B-2026-09-13-2.
+    ///
+    /// The let site can register a boxed payload's INTERIOR drop only when it
+    /// knows nothing upstream still owns that interior. Until this row the only
+    /// spelling it trusted was the `let` whose OWN RHS is the `Some(...)`
+    /// constructor, because then the box is demonstrably built right there. A
+    /// CALL RHS was refused wholesale, and the refusal is documented against a
+    /// real hazard: `let back = passthru(Some(e))` receives a box built at the
+    /// CALL'S ARGUMENT SITE, where the named array local `e` upstream is still
+    /// its interior's owner, so registering makes two owners — an ASAN
+    /// `attempting double-free`, which is cell 5 of
+    /// `asan_generic_callee_boxed_optres_temp_arg_frees_its_box`.
+    ///
+    /// But that hazard has a name, and it is the one
+    /// `call_passthrough_armed_boxed_source` is built on:
+    /// [`Self::call_arg_flows_into_return`]. A callee NONE of whose arguments
+    /// reaches its return cannot be handing back a box the caller supplied, so
+    /// the interior it returns was built inside the callee and the caller's
+    /// binding is its only owner. `fn mk(n: i64) -> Option[Array[String, 2]]`
+    /// is that shape; `fn passthru(o: Option[Array[String, 2]]) -> …` is not.
+    ///
+    /// MEASURED at `KARAC_OPT_LEVEL=0`, four calls, before this row:
+    ///
+    /// ```text
+    /// let o = mk(j)          (annotated or inferred)   176 B / 8 LEAKED
+    /// let o: .. = mk(j)      never even matched        176 B / 8 LEAKED
+    /// let o = Some([..])     literal RHS                        clean
+    /// fn take(o: Option[Array[String, 2]])  by-value param      clean
+    /// ```
+    ///
+    /// The literal and by-value-param routes were already covered — by this
+    /// site's `seeded_variant_ctor_name` gate and by `compile_function`'s param
+    /// loop respectively — which is what localizes the gap to a call RHS.
+    ///
+    /// Conservative in the safe direction: an argument whose flow into the
+    /// return cannot be established (a method call, an unknown callee, a
+    /// snapshot-less build) reads as "may flow", so the status quo stands and
+    /// the interior keeps today's leak rather than gaining a second owner.
+    pub(super) fn call_builds_its_own_optres_box(&self, value: &Expr) -> bool {
+        let ExprKind::Call { callee, args, .. } = &value.kind else {
+            return false;
+        };
+        let ExprKind::Identifier(callee_name) = &callee.kind else {
+            return false;
+        };
+        // A variant CONSTRUCTOR is not a callee in this sense — the existing
+        // `seeded_variant_ctor_name` gate owns that spelling, and answering
+        // `true` here as well would register the same interior twice.
+        if Self::seeded_variant_ctor_name(value).is_some() {
+            return false;
+        }
+        if self.program_snapshot.is_none() {
+            return false;
+        }
+        !args
+            .iter()
+            .enumerate()
+            .any(|(i, _)| self.call_arg_flows_into_return(callee_name, i))
+    }
+
+    /// Does this METHOD CALL hand back an `Option[V]` the container has MOVED
+    /// OUT of its own storage, making the caller's result binding the sole
+    /// owner of the interior? B-2026-09-13-2.
+    ///
+    /// The `MethodCall` peer of [`Self::call_builds_its_own_optres_box`], and a
+    /// separate predicate because it establishes sole ownership by a different
+    /// argument. There is no callee AST to ask `call_arg_flows_into_return`
+    /// about: a `Map` method is a builtin, so the question is instead whether
+    /// the container still backs what it returned.
+    ///
+    /// For these three it does not. `remove` tombstones the bucket, and
+    /// teardown only ever walks OCCUPIED slots; `insert` and `try_insert`
+    /// REPLACE the bucket's value with the incoming one, so the displaced old
+    /// value is no longer reachable from storage. In every case the runtime has
+    /// already moved the value into the returned `Some(old)` and the caller is
+    /// the only owner left.
+    ///
+    /// `get` IS DELIBERATELY ABSENT, and that is the whole safety argument for
+    /// the list being explicit rather than "any method returning `Option[V]`":
+    /// `get` hands back a value the container still owns, so registering there
+    /// would be a second owner — a double free, not a leak. Measured: the
+    /// `get` spelling of this fixture is clean today at both opt levels, while
+    /// the `remove` and `insert`-overwrite spellings each leak 176 B in 8
+    /// blocks over four calls.
+    ///
+    /// Keyed on `map_key_type_exprs`, the established test for "this receiver
+    /// name is a tracked map", so a same-named method on any other receiver
+    /// falls through to the status quo.
+    ///
+    /// `Vec.pop()` is the same root through a different channel — measured at
+    /// the identical 176 B in 8 blocks — and is filed as its own row rather
+    /// than guessed at here: there is no equally settled "this receiver is a
+    /// tracked Vec" test to key on, and inventing one under an ownership
+    /// registration is how a leak fix becomes a double free.
+    pub(super) fn map_handback_moves_value_out(&self, value: &Expr) -> bool {
+        let ExprKind::MethodCall { object, method, .. } = &value.kind else {
+            return false;
+        };
+        let ExprKind::Identifier(recv) = &object.kind else {
+            return false;
+        };
+        if !matches!(method.as_str(), "remove" | "insert" | "try_insert") {
+            return false;
+        }
+        self.mapset.map_key_type_exprs.contains_key(recv.as_str())
+    }
+
     /// Will the callee's owned-param registration take the INTERIOR of a boxed
     /// `Array` payload on this variant, so the caller must stand its own array
     /// local down? B-2026-09-06-49 / B-2026-09-10-6.

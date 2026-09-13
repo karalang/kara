@@ -3947,6 +3947,54 @@ impl<'ctx> super::Codegen<'ctx> {
             .is_some_and(|te| matches!(te.kind, TypeKind::Weak(_)))
     }
 
+    /// B-2026-09-13-2 — the `Array[T, N]` peer of
+    /// [`Self::map_val_owned_heap_str_vec_for`], for the DISCARDED hand-back.
+    ///
+    /// Both of a `Map`'s hand-back sites return `Option[V]`, and when the
+    /// result is thrown away the displaced / removed value is wrapped in a
+    /// `Some(old)` nobody holds. `reclaim_displaced_owned_map_value` already
+    /// frees it correctly for EVERY V — it prefers
+    /// `map_val_drop_fn_for_type_expr`, which has had an `Array` arm since
+    /// B-2026-09-12-13 — but the flag that ARMS that reclaim is set behind the
+    /// sibling above, whose head test admits only `String` and `Vec`. So an
+    /// array value was never offered to a reclaim that would have handled it.
+    ///
+    /// MEASURED at `KARAC_OPT_LEVEL=0` over `Map[i64, Array[String, 2]]`:
+    ///
+    /// ```text
+    /// bare `m.remove(k);`          192 B in 4 + 176 B indirect in 8
+    /// `let _ = m.remove(k);`       192 B in 4 + 176 B indirect in 8
+    /// bare insert-overwrite        336 B in 7 + 308 B indirect in 14
+    /// ... all three at V = Vec[String]                         clean
+    /// ```
+    ///
+    /// The 4 direct blocks are 48 B each — the boxed `[2 x {ptr,len,cap}]`
+    /// payload — and the 8 indirect are the `String`s reachable through it.
+    ///
+    /// NOT RESTRICTED TO THE `let _ =` SHAPE, and that asymmetry with the
+    /// sibling is the measurement above rather than a choice. The sibling is
+    /// wildcard-only because a BARE `m.insert(k, v);` already has its
+    /// `Option[V]` temp dropped by the general statement-result cleanup, so
+    /// arming there too would double-free. That cleanup reaches an INLINE
+    /// `{ptr,len,cap}` payload; it does not reach a heap-BOXED one, which is
+    /// why the bare row above leaks its boxes at all. Arming both forms is
+    /// therefore the status quo for a str/vec V and the fix for an array one.
+    ///
+    /// Held to the same two conditions the `Option`-payload admission gate
+    /// uses, so a heapless `Array[i64, N]` value is declined and keeps the
+    /// exact no-op it has today.
+    pub(super) fn map_val_array_reclaim_on_discard_for(&self, var_name: &str) -> bool {
+        let Some(v_te) = self.var_types.var_elem_type_exprs.get(var_name) else {
+            return false;
+        };
+        let Some((elem_te, n)) = self.array_elem_and_len(v_te) else {
+            return false;
+        };
+        n > 0
+            && !super::vec_method::is_trivially_copyable_te(&elem_te)
+            && self.te_recursive_drop_fully_supported(v_te)
+    }
+
     pub(super) fn map_val_owned_heap_str_vec_for(&self, var_name: &str) -> bool {
         let Some(v_te) = self.var_types.var_elem_type_exprs.get(var_name) else {
             return false;

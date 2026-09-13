@@ -4206,7 +4206,16 @@ impl<'ctx> super::Codegen<'ctx> {
                 );
                 let owned_heap =
                     is_let_wildcard && self.map_val_owned_heap_str_vec_for(receiver_name);
-                if shared || owned_heap || weak {
+                // B-2026-09-13-2 — an `Array[T, N]` V, which the str/vec test
+                // above declines, so the reclaim that would have freed it was
+                // never armed. BOTH discard forms rather than the wildcard
+                // only: the general statement-result cleanup that makes the
+                // bare form safe for a str/vec V reaches an INLINE payload and
+                // not a heap-BOXED one, so a bare `m.remove(k);` leaked its
+                // boxes too (192 B in 4 blocks, plus 176 indirect). See the
+                // predicate's doc for the full measurement.
+                let owned_array = self.map_val_array_reclaim_on_discard_for(receiver_name);
+                if shared || owned_heap || owned_array || weak {
                     self.mapset.pending_map_insert_old_dec = true;
                 }
             }
@@ -7842,9 +7851,30 @@ impl<'ctx> super::Codegen<'ctx> {
                                     // `asan_generic_callee_boxed_optres_temp_arg_frees_its_box`,
                                     // whose cell 5 is the escape control
                                     // written for exactly this hazard.
+                                    //
+                                    // B-2026-09-13-2 widens that gate by ONE
+                                    // spelling, and only where the hazard it
+                                    // names provably cannot arise: a CALL RHS
+                                    // none of whose arguments flows into the
+                                    // callee's return. Such a callee cannot be
+                                    // handing back a box the caller supplied,
+                                    // so the interior was built inside it and
+                                    // this binding is the sole owner --
+                                    // `call_builds_its_own_optres_box`, which
+                                    // is keyed on the same
+                                    // `call_arg_flows_into_return` that
+                                    // `call_passthrough_armed_boxed_source`
+                                    // above uses to detect the hazard. The
+                                    // `passthru(Some(e))` cell stays declined.
                                     let array_inner_drop = Self::seeded_variant_ctor_name(value)
                                         .filter(|c| c == variant)
-                                        .and_then(|_| Self::seeded_variant_payload_te(te, variant))
+                                        .map(|_| ())
+                                        .or_else(|| {
+                                            (self.call_builds_its_own_optres_box(value)
+                                                || self.map_handback_moves_value_out(value))
+                                            .then_some(())
+                                        })
+                                        .and_then(|()| Self::seeded_variant_payload_te(te, variant))
                                         .filter(|p| {
                                             self.array_elem_and_len(p).is_some()
                                                 && self.option_payload_struct_or_enum_drop_ok(p)
