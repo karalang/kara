@@ -18522,6 +18522,55 @@ fn test_a_boxed_array_payload_runs_its_element_drop_bodies() {
         )),
         "dAr1\ndAr2\nx\n"
     );
+
+    // B-2026-09-12-24 — the MONOMORPHIC user enum at an `Array` payload, the
+    // interpreter half of this row\'s sibling change in
+    // `emit_user_enum_payload_bodies`. Both halves land together, for the
+    // reason the header above records the hard way.
+    //
+    // The DECLARED head is the discriminator here and it has to be: the
+    // interpreter represents `Array[T, N]` and `Vec[T]` with the same
+    // `Value::Array`, so a value-shaped test cannot separate them. A
+    // monomorphic declaration can (`Array` vs `Vec`); a generic one cannot,
+    // and an earlier draft keyed on the value fired for `Slot[Vec[R]]` too —
+    // silent on every compiled surface — printing two bodies against
+    // codegen\'s zero. That is the divergence this row exists to avoid, made
+    // in the opposite direction.
+    assert_eq!(
+        run(&format!(
+            "{PRELUDE}enum Bin {{ Packed(Array[Ar, 2]), Bare }}\n\
+             fn main() {{\n\
+             \x20   let b: Bin = Bin.Packed([Ar {{ id: 1 }}, Ar {{ id: 2 }}]);\n\
+             \x20   println(\"x\");\n}}\n"
+        )),
+        "dAr1\ndAr2\nx\n"
+    );
+
+    // MATCHED OUT — the arm binding owns the elements, so exactly one pair.
+    assert_eq!(
+        run(&format!(
+            "{PRELUDE}enum Bin {{ Packed(Array[Ar, 2]), Bare }}\n\
+             fn main() {{\n\
+             \x20   let b: Bin = Packed([Ar {{ id: 1 }}, Ar {{ id: 2 }}]);\n\
+             \x20   match b {{ Packed(a) => {{ println(f\"s:{{a[0].id}}\") }} Bare => {{ println(\"n\") }} }}\n\
+             \x20   println(\"x\");\n}}\n"
+        )),
+        "s:1\ndAr1\ndAr2\nx\n"
+    );
+
+    // BOUNDARY — the `Vec` payload of the same shape is silent on EVERY
+    // backend and stays that way. The honest remainder of this row: the shared
+    // bodies core has a tuple arm and an array arm and no `Vec` arm, for any
+    // enum head. Pinned on both sides so that arm has to move both at once.
+    assert_eq!(
+        run(&format!(
+            "{PRELUDE}enum Vbin {{ V(Vec[Ar]), Z }}\n\
+             fn main() {{\n\
+             \x20   let v: Vbin = Vbin.V(Vec[Ar {{ id: 1 }}, Ar {{ id: 2 }}]);\n\
+             \x20   println(\"x\");\n}}\n"
+        )),
+        "x\n"
+    );
 }
 
 #[test]

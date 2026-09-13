@@ -153937,6 +153937,50 @@ fn main() {
                  fn main() { takeA([Ra { id: 1 }, Ra { id: 2 }]); println(\"end\") }\n",
                 "t:1\nend\n",
             ),
+            // B-2026-09-12-24 — the MONOMORPHIC user enum at an `Array`
+            // payload. Every cell above wraps the array in `Option` / `Result`
+            // or a generic, which is what let this one sit silent: the
+            // monomorphic walker (`emit_user_enum_payload_bodies`) admits a
+            // variant field only when its head is in `struct_types`, and
+            // `Array` is not — so no walker was emitted at all, on either
+            // backend. Measured before the fix, this cell printed `end` alone.
+            (
+                "mono-enum-array-payload",
+                "enum Bin { Packed(Array[Ra, 2]), Bare }\n\
+                 fn main() { let b: Bin = Bin.Packed([Ra { id: 1 }, Ra { id: 2 }]); println(\"end\") }\n",
+                "dRa1\ndRa2\nend\n",
+            ),
+            // The same cell MATCHED OUT, which is the double-body shape: the
+            // arm binding takes the array, so the enum's walk must not fire on
+            // top of it. `dRa1 dRa2` once, not twice.
+            (
+                "mono-enum-array-payload-matched-out",
+                "enum Bin { Packed(Array[Ra, 2]), Bare }\n\
+                 fn main() { let b: Bin = Packed([Ra { id: 1 }, Ra { id: 2 }]);\n\
+                 \x20   match b { Packed(a) => { println(f\"s:{a[0].id}\") } Bare => { println(\"n\") } }\n\
+                 \x20   println(\"end\") }\n",
+                "s:1\ndRa1\ndRa2\nend\n",
+            ),
+            // The unit variant of the same enum — the walker\'s switch must fall
+            // through to its exit rather than read an absent payload.
+            (
+                "mono-enum-array-payload-unit-variant",
+                "enum Bin { Packed(Array[Ra, 2]), Bare }\n\
+                 fn main() { let b: Bin = Bare; println(\"end\") }\n",
+                "end\n",
+            ),
+            // BOUNDARY — the `Vec` payload of the same shape is silent on
+            // EVERY backend and stays that way here. It is the honest
+            // remainder of B-2026-09-12-24 (the shared bodies core has a tuple
+            // arm and an array arm and no `Vec` arm, for any enum head
+            // including `Option`), pinned so whoever writes that arm has to
+            // move both backends at once rather than half of it.
+            (
+                "boundary-mono-enum-vec-payload-stays-silent",
+                "enum Vbin { V(Vec[Ra]), Z }\n\
+                 fn main() { let v: Vbin = Vbin.V(Vec[Ra { id: 1 }, Ra { id: 2 }]); println(\"end\") }\n",
+                "end\n",
+            ),
         ] {
             let Some(out) = run_program(&format!("{PRE}{body}")) else {
                 return;

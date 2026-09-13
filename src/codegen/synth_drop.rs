@@ -120,7 +120,15 @@ impl FieldSkipTree {
 /// One struct-typed payload field the enum bodies walker visits: LLVM field
 /// index of its first word, the struct's name, and the words the layout allots
 /// it (B-2026-09-05-26 — wider than that and the payload is heap-boxed).
-type EnumPayloadBodyField = (u32, String, usize);
+/// `(llvm field index, payload struct name, allotted words, array parts)`.
+///
+/// `array_parts` is `Some((element `TypeExpr`, N))` for an `Array[E, N]`
+/// payload and `None` for the struct payload this walker started with
+/// (B-2026-09-12-24). The two are mutually exclusive — an array field carries
+/// an empty `String` where a struct carries its name — because the case body
+/// dispatches on it rather than on the name, and a name is what an array does
+/// not have.
+type EnumPayloadBodyField = (u32, String, usize, Option<(TypeExpr, u32)>);
 type EnumPayloadBodyTargets = Vec<(u64, String, Vec<EnumPayloadBodyField>)>;
 type EnumPayloadBodyCase<'ctx> = (BasicBlock<'ctx>, Vec<EnumPayloadBodyField>);
 
@@ -9628,16 +9636,45 @@ impl<'ctx> super::Codegen<'ctx> {
                 if generic_params.contains(&name) {
                     continue;
                 }
+                if skip.contains(&(vname.clone(), fi)) {
+                    continue;
+                }
+                // B-2026-09-12-24 — the `Array[E, N]` payload arm, tested
+                // BEFORE the struct gate below for the reason
+                // B-2026-09-12-6 gives about the sibling emitter: an array
+                // spells as a `Path` whose head is `Array`, which is in
+                // neither `struct_types` nor `shared_types`, so that gate
+                // declined it and this walker emitted nothing for it. A
+                // monomorphic `enum EArr { A(Array[R, 2]), Z }` therefore ran
+                // its elements' bodies on NO backend, while the same array as
+                // a bare local ran them on all six.
+                //
+                // Body-only, through the same `emit_array_elem_user_drop_bodies_fn`
+                // a local array `let` registers — memory stays with the free
+                // channel, exactly as the struct arm below leaves it
+                // (B-2026-08-28-57: bodies follow the move, memory does not).
+                //
+                // The interpreter half lands in the same commit, keyed on the
+                // same DECLARED head. Wiring only this side is the trade
+                // B-2026-09-12-6 refused: it turns a both-silent bug into a
+                // run-vs-build divergence, which is strictly worse under the
+                // A/B rule.
+                if let Some((elem_te, n)) = self.payload_array_bodies_parts(te) {
+                    fields.push((
+                        (start_word + 1) as u32,
+                        String::new(),
+                        num_words,
+                        Some((elem_te, n)),
+                    ));
+                    continue;
+                }
                 if self.type_decls.shared_types.contains_key(&name)
                     || !self.type_decls.struct_types.contains_key(&name)
                 {
                     continue;
                 }
-                if skip.contains(&(vname.clone(), fi)) {
-                    continue;
-                }
                 if self.type_runs_user_drop(&name, &mut Vec::new()) {
-                    fields.push(((start_word + 1) as u32, name, num_words));
+                    fields.push(((start_word + 1) as u32, name, num_words, None));
                 }
             }
             if !fields.is_empty() {
@@ -9703,7 +9740,7 @@ impl<'ctx> super::Codegen<'ctx> {
             // walk over `EnumData::Tuple` / `Struct`. (Struct FIELDS drop in
             // reverse declaration order; a variant's payload SLOTS do not, and
             // both backends agree on that split — same rule as tuple elements.)
-            for (field_idx, sname, num_words) in fields {
+            for (field_idx, sname, num_words, array_parts) in fields {
                 let fp = self
                     .builder
                     .build_struct_gep(layout.llvm_type, p_arg, field_idx, "de.payload.p")
@@ -9715,8 +9752,28 @@ impl<'ctx> super::Codegen<'ctx> {
                 // deboxing binder does; reading the word as the struct printed
                 // a garbage `id` for every unbound boxed payload.
                 let mut box_next: Option<BasicBlock<'ctx>> = None;
-                let fp = match self.type_decls.struct_types.get(&sname).copied() {
-                    Some(st) if Self::llvm_type_word_count(st.into()) > num_words => {
+                // B-2026-09-12-24 — an `Array[E, N]` payload asks the SAME
+                // question through its own LLVM type: `Array[R, 2]` over a
+                // two-word element is 4 words against a one-word area, so it is
+                // boxed by `coerce_to_payload_words` just as an over-wide
+                // struct is, and the word holds the box pointer. Resolved here
+                // rather than in the match below so both payload kinds share
+                // the one null-guarded walk.
+                let payload_llvm_words = match &array_parts {
+                    Some((elem_te, n)) => {
+                        let elem_ty = self.llvm_type_for_type_expr(elem_te);
+                        Self::llvm_type_word_count(elem_ty).saturating_mul(*n as usize)
+                    }
+                    None => self
+                        .type_decls
+                        .struct_types
+                        .get(&sname)
+                        .copied()
+                        .map(|st| Self::llvm_type_word_count(st.into()))
+                        .unwrap_or(0),
+                };
+                let fp = match Some(payload_llvm_words) {
+                    Some(w) if w > num_words => {
                         let ptr_ty = self.context.ptr_type(AddressSpace::default());
                         let bp = self
                             .builder
@@ -9743,6 +9800,18 @@ impl<'ctx> super::Codegen<'ctx> {
                     }
                     _ => fp,
                 };
+                if let Some((elem_te, n)) = array_parts {
+                    let elem_ty = self.llvm_type_for_type_expr(&elem_te);
+                    if let Some(f) = self.emit_array_elem_user_drop_bodies_fn(elem_ty, &elem_te, n)
+                    {
+                        self.builder.build_call(f, &[fp.into()], "").unwrap();
+                    }
+                    if let Some(nb) = box_next {
+                        self.builder.build_unconditional_branch(nb).unwrap();
+                        self.builder.position_at_end(nb);
+                    }
+                    continue;
+                }
                 let owns_body = self
                     .program_snapshot
                     .as_deref()

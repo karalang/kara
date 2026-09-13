@@ -2030,6 +2030,52 @@ impl<'a> super::Interpreter<'a> {
                 .collect(),
         };
         for (declared_head, payload) in payloads {
+            // B-2026-09-12-24 — the `Array` PAYLOAD arm. The `Value::Struct`
+            // destructure below drops an array payload on the floor, so an
+            // enum variant declaring `Array[R, N]` ran its elements' `Drop`
+            // bodies on NO backend.
+            //
+            // DECLARED HEAD, not the value, is the discriminator, and that is
+            // the whole reason this arm can exist at all: the interpreter
+            // represents `Array[T, N]` and `Vec[T]` with the SAME
+            // `Value::Array`, so a value-shaped test cannot tell them apart.
+            // A monomorphic declaration can — `Array[R, 2]` has head `Array`
+            // and `Vec[R]` has head `Vec` — which is exactly the cell codegen's
+            // sibling change wires in `emit_user_enum_payload_bodies`.
+            //
+            // DELIBERATELY NOT the generic cell (`Slot[T]` at `T = Array[R, N]`,
+            // whose declared head is the parameter). Measured, and it is why an
+            // earlier draft of this arm was thrown away: admitting it by the
+            // value's shape fires for `Slot[Vec[R]]` too, which is silent on
+            // every compiled surface — so the interpreter printed `D3 D4` where
+            // codegen printed nothing, manufacturing a second divergence while
+            // closing the first. Telling those two apart here needs the
+            // BINDING'S instantiation, the chain `record_optres_payload_te`
+            // builds for the seeded pair and no user generic enum has yet.
+            // `Slot[Array[R, N]]` (compiled-right, interpreted-silent) and every
+            // `Vec` payload (silent on both) stay in the row.
+            if let Some("Array") = declared_head.as_deref() {
+                if let Value::Array(cell) = &payload {
+                    let elems: Vec<Value> = match cell.read() {
+                        Ok(g) => g.clone(),
+                        Err(_) => continue,
+                    };
+                    // Forward order, own body per element, no recursion into
+                    // fields — what the compiled walker
+                    // (`emit_array_elem_user_drop_bodies_fn`) emits for the
+                    // same cell.
+                    for e in elems {
+                        let Value::Struct { name: en, .. } = &e else {
+                            continue;
+                        };
+                        if self.program.drop_method_keys.contains_key(en) {
+                            let en = en.clone();
+                            self.run_user_drop_body_only(&en, e.clone());
+                        }
+                    }
+                    continue;
+                }
+            }
             let Value::Struct { name: tn, .. } = &payload else {
                 continue;
             };
