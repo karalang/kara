@@ -39886,20 +39886,21 @@ end
             Some("dD7\nend\n"),
             "[discarded arm literal consuming a whole local runs one body]"
         );
-        // STILL PINNED AT A KNOWN DEFECT, not asserted as correct. The
-        // PROJECTED spelling (`W { r: t.r, .. }`) runs the local's body twice
-        // — once at the discard, once at its own scope end — because
-        // `collect_aggregate_literal_sources` resolves a bare name and not a
-        // field projection, so the disarm above never names `t`. All three
-        // backends agree on it, so it is an agreed gap rather than a
-        // divergence, and it is PRE-EXISTING: measured byte-identical at
-        // `c4af3243`, the commit before B-2026-08-29-31 taught this path to
-        // own an arm's value at all. Filed separately.
+        // B-2026-09-01-17 — the PROJECTED spelling (`W { r: t.r, .. }`) is FIXED
+        // and asserted as correct. The surplus body was the SOURCE local's
+        // field-bodies walk, fired early via NLL — established by backtrace
+        // (`fire_due_drops` -> `drop_user_drop_fields_of_binding`), not by print
+        // order, which misleads here because the source's walk runs AHEAD of the
+        // consumer's. `compile_struct_init`'s field loop carried
+        // `suppress_struct_field_move_into_literal` (the MEMORY half of a
+        // struct-field move-out) without its BODIES peer, which that helper's
+        // own doc says belongs at the same positions.
         //
-        // Its MEMORY is balanced, which corrects what B-2026-08-31-35's own
-        // prose recorded: measured clean under valgrind at `-O2` and at
-        // `-O0`, over a 5-iteration loop, and clean at `ebaacfc` too — the
-        // second body runs over the moved-from husk rather than re-freeing.
+        // Landed AFTER B-2026-09-13-26, and the order is load-bearing: until a
+        // discarded ARRAY literal registered an owner, the source's walk was the
+        // only thing running an array element's body, and standing it down took
+        // that body to ZERO. The array and bare-block spellings are asserted
+        // alongside this one for exactly that reason.
         let src = format!(
             "{hdr}fn main() {{\nlet n = 0;\nlet t = mkw(7);\n\
              let _ = if n == 0 {{ W {{ r: t.r, b: 1 }} }} else {{ W {{ r: mkd(2), b: 2 }} }};\n\
@@ -39907,9 +39908,36 @@ end
         );
         assert_eq!(
             run_program(&src).as_deref(),
-            Some("dD7\ndD7\nend\n"),
-            "[pinned DEFECT: discarded arm literal consuming a local's field]"
+            Some("dD7\nend\n"),
+            "[discarded arm literal consuming a local's FIELD runs one body]"
         );
+        // B-2026-09-13-26 / B-2026-09-13-28 — the two spellings whose bodies had
+        // NO owner until this landed, pinned here beside the fix that depends on
+        // them. An array literal's elements and an aliased literal at a bare
+        // block tail each ran zero bodies; with owners in place both run one, and
+        // the projection disarm above composes instead of zeroing them.
+        for (label, body) in [
+            (
+                "discarded array literal of a projected field",
+                "let t = mkw(7);\n                 let _ = if n == 0 { [W { r: t.r, b: 1 }] } else { [W { r: mkd(2), b: 2 }] };",
+            ),
+            (
+                "aliased literal at a bare block tail",
+                "let t = mkw(7);\nlet _ = { W { r: t.r, b: 1 } };",
+            ),
+            (
+                "discarded array literal of fresh elements",
+                "let _ = if n == 0 { [mkd(7), mkd(8)] } else { [mkd(2)] };",
+            ),
+        ] {
+            let src = format!("{hdr}fn main() {{\nlet n = 0;\n{body}\nprintln(\"end\");\n}}\n");
+            let want = if label.contains("fresh elements") {
+                "dD7\ndD8\nend\n"
+            } else {
+                "dD7\nend\n"
+            };
+            assert_eq!(run_program(&src).as_deref(), Some(want), "[{label}]");
+        }
     }
 
     #[test]

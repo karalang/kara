@@ -3114,7 +3114,7 @@ impl<'a> super::Interpreter<'a> {
         }
     }
 
-    fn field_chain_name_path(value: &Expr) -> Option<(String, Vec<String>)> {
+    pub(crate) fn field_chain_name_path(value: &Expr) -> Option<(String, Vec<String>)> {
         let ExprKind::FieldAccess { object, field } = &value.kind else {
             return None;
         };
@@ -5774,6 +5774,34 @@ impl<'a> super::Interpreter<'a> {
             ExprKind::Tuple(elems) => {
                 matches!(val, Value::Tuple(items) if self.discard_tuple_all_elems_safe(elems, items, true))
             }
+            // B-2026-09-13-26 — an ARRAY / `Vec`-prefix LITERAL, on exactly the
+            // tuple arm's terms. Nothing admitted one, so every discard spelling
+            // of an array literal ran ZERO element bodies: `let _ = if c {
+            // [W { r: mkd(7), b: 1 }] } else { .. };` printed nothing, and so did
+            // the bare-statement, `Vec[..]` and multi-element forms. The STRUCT
+            // and TUPLE spellings of the identical discard were already correct,
+            // which is what pins the array wrapper as the axis rather than the
+            // discard or the branch.
+            //
+            // The all-fresh requirement is the tuple arm's and is carried over
+            // for its reason, not by analogy: a Drop-carrying PLACE element
+            // (`let _ = [r]`) moves a binding whose own Drop slot stays armed,
+            // and firing the walk here would double its body. Codegen twin: the
+            // array arms of `discarded_literal_tail_inner`, which apply the same
+            // freshness rule and likewise omit the tuple arm's movable-place
+            // hatch.
+            ExprKind::ArrayLiteral(elems)
+            | ExprKind::PrefixCollectionLiteral { items: elems, .. } => {
+                !elems.is_empty()
+                    && match val {
+                        Value::Array(rc) => {
+                            let items: Vec<Value> =
+                                rc.read().map(|g| g.clone()).unwrap_or_default();
+                            self.discard_tuple_all_elems_safe(elems, &items, true)
+                        }
+                        _ => false,
+                    }
+            }
             ExprKind::Call { callee, .. } => match &callee.kind {
                 ExprKind::Path { .. } => true,
                 ExprKind::Identifier(n) => {
@@ -6144,6 +6172,27 @@ impl<'a> super::Interpreter<'a> {
             }
             Value::Tuple(items) => {
                 for e in items {
+                    self.run_discarded_value_user_drops(e);
+                }
+            }
+            // B-2026-09-13-26 — an ARRAY / `Vec`-literal temp fell to `_ => {}`,
+            // so EVERY discard spelling of one ran no element bodies at all:
+            // `let _ = if c { [W { r: mkd(7), b: 1 }] } else { .. };` printed
+            // nothing, and so did the bare-statement, `Vec[..]`-prefix and
+            // multi-element spellings. Agreed with both compiled backends, which
+            // registered no owner for the same reason, so nothing reported it.
+            //
+            // Recursive through `run_discarded_value_user_drops` rather than
+            // through `run_nested_array_struct_elem_bodies`, which reaches only
+            // `Struct` and nested `Array` elements: an element that is a tuple,
+            // an `Option`/`Result` payload or a last-reference `shared` needs
+            // the same treatment a tuple ELEMENT already gets, and the arm above
+            // is the definition of that. Codegen twin: the array arms of
+            // `discarded_literal_tail_inner` plus the element-bodies walk
+            // `track_discarded_array_elem_bodies` registers.
+            Value::Array(ref rc) => {
+                let elems: Vec<Value> = rc.read().map(|g| g.clone()).unwrap_or_default();
+                for e in elems {
                     self.run_discarded_value_user_drops(e);
                 }
             }
@@ -9171,7 +9220,18 @@ impl<'a> super::Interpreter<'a> {
                     // `let _ = R { .. };` ran one through the wildcard gate.
                     // Judged by the same predicate that gate uses, so the two
                     // spellings cannot answer differently.
-                    ExprKind::StructLiteral { .. } | ExprKind::Tuple(_)
+                    // B-2026-09-13-26 — the ARRAY / `Vec`-prefix spellings sit
+                    // beside the two literal kinds already here, and were
+                    // missing for the same reason they were missing from
+                    // `discard_rhs_produces_owned_value`: nothing named them,
+                    // so `[mkd(7)];` in statement position ran no element body
+                    // while `W { r: mkd(7), b: 1 };` and `(mkd(7), 1);` both
+                    // ran one. Judged by the same predicate, so the bare and
+                    // `let _ =` spellings still cannot answer differently.
+                    ExprKind::StructLiteral { .. }
+                    | ExprKind::Tuple(_)
+                    | ExprKind::ArrayLiteral(_)
+                    | ExprKind::PrefixCollectionLiteral { .. }
                         if self.discard_rhs_produces_owned_value(expr, &discarded) =>
                     {
                         self.run_discarded_value_user_drops(discarded);

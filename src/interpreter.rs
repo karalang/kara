@@ -2933,6 +2933,27 @@ impl<'a> Interpreter<'a> {
             self.pending_let_ty = field_tys.get(&field.name).cloned();
             let val = self.eval_expr_inner(&field.value);
             self.pending_let_ty = saved_let_ty;
+            // B-2026-09-01-17 — a Drop-bearing field PROJECTED out of a local
+            // into this literal (`W { r: t.r, b: 1 }`) is a move out of that
+            // local, so the local's field-bodies walk must stop running the
+            // moved-out leaf. Without it the leaf's body ran TWICE: once for
+            // whoever consumed the literal, once when `t`'s walk reached `r`.
+            //
+            // Codegen twin: the `disarm_struct_field_move_bodies` call in
+            // `compile_struct_init`'s field loop, the BODIES peer of the
+            // `suppress_struct_field_move_into_literal` (MEMORY) call already
+            // there. Gated to a DIRECT one-hop `FieldAccess` so the two backends
+            // enumerate the same sources: codegen's helper needs an `Identifier`
+            // object, so it early-returns on a deeper chain and on any other
+            // shape, and letting this one recurse would mask a source codegen
+            // leaves armed. A nested struct literal needs no recursion — it is
+            // itself evaluated through this same loop.
+            if matches!(field.value.kind, ExprKind::FieldAccess { .. })
+                && Self::field_chain_name_path(&field.value)
+                    .is_some_and(|(_, path)| path.len() == 1)
+            {
+                self.record_returned_projection_moves(&field.value);
+            }
             let src_u = self.span_unsigned_int_width(&field.value.span);
             let val = match field_tys.get(&field.name) {
                 Some(te) => exec::coerce_int_value_to_declared_float(val, te, src_u),

@@ -1035,6 +1035,34 @@ impl<'ctx> super::Codegen<'ctx> {
                     // arg-position one the wildcard-let discard site uses, so
                     // the two spellings cannot answer differently.
                     self.track_discarded_arm_owned_aggregate(owned_tail, v);
+                    // B-2026-09-13-26 — the ARRAY peer. Registered beside the
+                    // aggregate leg rather than inside it: that registrar keys
+                    // off a struct LLVM type and returns immediately for an
+                    // `[N x T]` array value, so an array arm had no owner and
+                    // its elements' bodies ran nowhere. Bodies only, so it
+                    // cannot collide with either memory leg above.
+                    self.track_discarded_array_elem_bodies(owned_tail, v);
+                } else if let Some(v) = result {
+                    // B-2026-09-13-28 / B-2026-09-01-17 — the DECLINED literal.
+                    //
+                    // `discarded_arm_owned_aggregate_tail` refuses a literal
+                    // carrying an ALIASED field (`{ W { r: t.r, b: 1 } }`),
+                    // because `expr_yields_fresh_owned_temp`'s all-fresh rule
+                    // turns the whole literal away for that one field. Nothing
+                    // then owned it, and the single body such a program printed
+                    // came from the SOURCE local's field walk by accident —
+                    // which is exactly what B-2026-09-01-17's disarm stands
+                    // down, taking the count to ZERO on the compiled backends
+                    // while the interpreter (whose consumer does own it) went to
+                    // one.
+                    //
+                    // Give it a BODIES-ONLY owner, the same shape and for the
+                    // same reason as the array leg above: it frees nothing, so
+                    // it cannot collide with the memory registrations, and
+                    // B-2026-09-01-5's finding that "no takeover is owed"
+                    // (the field is an alias, not a clone) is about MEMORY and
+                    // is untouched here.
+                    self.track_discarded_aliased_literal_field_bodies(tail, v);
                 }
                 // B-2026-08-26-12 — the `Option[shared T]` sibling of the
                 // plain-`shared` retain `suppress_block_tail_cleanup` reaches
@@ -4432,6 +4460,10 @@ impl<'ctx> super::Codegen<'ctx> {
                         self.track_discarded_tuple_elem_bodies(&elems, val, &[]);
                     }
                 }
+                // B-2026-09-13-26 — the ARRAY peer of the tuple leg above. No
+                // registrar claimed an array literal here, so its elements' Drop
+                // bodies ran nowhere.
+                self.track_discarded_array_elem_bodies(&tail, val);
                 self.drain_discard_frame_args_first(b53_arg_mark);
                 Ok(())
             }
@@ -11985,6 +12017,13 @@ impl<'ctx> super::Codegen<'ctx> {
                             self.track_discarded_tuple_elem_bodies(&elems, val, &[]);
                         }
                     }
+                    // B-2026-09-13-26 — the ARRAY peer, the bare-statement twin
+                    // of the same call in the `let _ =` literal arm.
+                    // `track_inline_owned_aggregate_arg` above keys off a struct
+                    // LLVM type and declines a Vec handle, so `[mkd(7)];` had no
+                    // owner and its element bodies ran nowhere while
+                    // `W { r: mkd(7), b: 1 };` and `(mkd(7), 1);` both ran one.
+                    self.track_discarded_array_elem_bodies(lt, val);
                     self.drain_discard_frame_args_first(b53_arg_mark);
                 }
                 Ok(())
@@ -22921,7 +22960,14 @@ impl<'ctx> super::Codegen<'ctx> {
     /// carry their own window, armed by `compile_block_with_frame`.
     fn discarded_stmt_aggregate_literal(expr: &Expr) -> Option<&Expr> {
         match &expr.kind {
-            ExprKind::StructLiteral { .. } | ExprKind::Tuple(_) => Some(expr),
+            // B-2026-09-13-26 — the ARRAY / `Vec`-prefix spellings beside the
+            // two already here. This arms the window that makes place-shaped
+            // sources keep their own cleanup, and an array literal needs it on
+            // the same terms a struct or tuple one does.
+            ExprKind::StructLiteral { .. }
+            | ExprKind::Tuple(_)
+            | ExprKind::ArrayLiteral(_)
+            | ExprKind::PrefixCollectionLiteral { .. } => Some(expr),
             ExprKind::Block(block)
             | ExprKind::Seq(block)
             | ExprKind::Unsafe(block)
@@ -22991,6 +23037,33 @@ impl<'ctx> super::Codegen<'ctx> {
             {
                 Some(expr)
             }
+            // B-2026-09-13-26 — an ARRAY / `Vec`-prefix literal of FRESH
+            // elements. Same all-fresh rule as the tuple arm above, and
+            // deliberately WITHOUT that arm's movable-place escape hatch: the
+            // hatch is legal only where the caller retracts the moved source,
+            // and the arm site performs no such retraction (the reason
+            // `discarded_owned_literal_tail` keeps places declined there).
+            //
+            // Admitting the literal is what gives the array arm an `owned_tail`
+            // at all; the bodies walk itself is registered beside the aggregate
+            // leg, since that leg keys off a struct LLVM type and declines an
+            // `[N x T]` value.
+            ExprKind::ArrayLiteral(elems)
+                if !elems.is_empty()
+                    && elems
+                        .iter()
+                        .all(|e| self.discard_tuple_elem_is_fresh_expr(e)) =>
+            {
+                Some(expr)
+            }
+            ExprKind::PrefixCollectionLiteral { items, .. }
+                if !items.is_empty()
+                    && items
+                        .iter()
+                        .all(|e| self.discard_tuple_elem_is_fresh_expr(e)) =>
+            {
+                Some(expr)
+            }
             ExprKind::Block(block)
             | ExprKind::Seq(block)
             | ExprKind::Unsafe(block)
@@ -23040,6 +23113,188 @@ impl<'ctx> super::Codegen<'ctx> {
     /// the overwhelmingly common argument too; when it IS empty the emitted
     /// walker and its cached symbol name are byte-identical to what this
     /// emitted before the parameter existed.
+    /// B-2026-09-13-28 — a BODIES-ONLY owner for a discarded struct literal that
+    /// `discarded_arm_owned_aggregate_tail` DECLINED because one of its fields
+    /// is an aliased projection (`{ W { r: t.r, b: 1 } };`).
+    ///
+    /// Registers the struct's field-bodies walker on the arm's own frame, so the
+    /// literal runs its Drop-bearing fields' bodies exactly once. Frees nothing,
+    /// which is what keeps it disjoint from `materialize_owned_temp` and
+    /// `track_inline_owned_aggregate_arg` — both of which declined this literal
+    /// anyway — and what keeps B-2026-09-01-5's memory finding intact: the
+    /// projected field is an ALIAS of the source's, the source still frees it,
+    /// and nothing here changes that.
+    ///
+    /// Self-limiting: it does nothing unless the tail is a struct literal whose
+    /// type actually has a field-bodies walker to emit, so a literal with no
+    /// Drop-bearing field registers nothing.
+    pub(super) fn track_discarded_aliased_literal_field_bodies(
+        &mut self,
+        tail: &Expr,
+        val: BasicValueEnum<'ctx>,
+    ) {
+        let ExprKind::StructLiteral { path, fields, .. } = &tail.kind else {
+            return;
+        };
+        // ONLY the aliased-PROJECTION shape, which is the one nothing else owns.
+        // A literal declined for a different reason already has an owner, and
+        // registering a second walk here ran the body twice: measured on
+        // `if n == 0 { S { r: t, k: 1 } };` — a no-`else` discard whose field is
+        // a WHOLE local — which B-2026-08-31-35 had already made correct
+        // (`e2e_an_arm_literal_consuming_a_local_runs_one_body`, `dR7 dR7`
+        // against its `dR7`). The all-fresh predicate turns that literal away
+        // too, so "declined" alone is not evidence of a missing owner; a
+        // projected field is.
+        if !fields
+            .iter()
+            .any(|f| matches!(f.value.kind, ExprKind::FieldAccess { .. }))
+        {
+            return;
+        }
+        let Some(struct_name) = path.last().cloned() else {
+            return;
+        };
+        if !self
+            .type_decls
+            .struct_types
+            .contains_key(struct_name.as_str())
+        {
+            return;
+        }
+        let inkwell::types::BasicTypeEnum::StructType(_) = val.get_type() else {
+            return;
+        };
+        let subst = std::collections::HashMap::new();
+        let Some(bodies) = self.emit_user_drop_field_bodies_fn(&struct_name, &subst) else {
+            return;
+        };
+        let Some(cur_fn) = self
+            .builder
+            .get_insert_block()
+            .and_then(|bb| bb.get_parent())
+        else {
+            return;
+        };
+        let slot = self.create_entry_alloca(cur_fn, "__disc_alias_tmp", val.get_type());
+        self.builder.build_store(slot, val).unwrap();
+        self.track_user_drop_var_with_fn(
+            &struct_name,
+            "__disc_alias_tmp",
+            slot,
+            bodies,
+            UserDropKind::StructFieldBodies,
+        );
+    }
+
+    /// B-2026-09-13-26 — the ARRAY sibling of
+    /// [`Self::track_discarded_tuple_elem_bodies`]: run a discarded array /
+    /// `Vec`-literal temp's element `Drop` bodies.
+    ///
+    /// A discarded ARRAY literal registered no owner at all, so every spelling
+    /// of one ran ZERO element bodies — `let _ = if c { [W { r: mkd(7), b: 1 }] }
+    /// else { .. };` printed nothing, and so did the bare-statement, `Vec[..]`
+    /// prefix and multi-element forms. Agreed with the interpreter, which fell to
+    /// `_ => {}` on `Value::Array` for the same reason, so no A/B gate saw it.
+    /// The STRUCT and TUPLE spellings of the identical discard were already
+    /// correct, which is what pins the array wrapper as the axis.
+    ///
+    /// BODIES ONLY, and that is why it is safe to register here: the walker is
+    /// `emit_array_elem_user_drop_bodies_fn`, the same one a `let`-bound array
+    /// registers, and it frees nothing. Whatever owns the elements' MEMORY is
+    /// unchanged.
+    ///
+    /// The element type comes from the literal's own span record, the source
+    /// `literal_span_elem_hint` already reads, so a discarded literal resolves it
+    /// exactly as a bound one does and the two cannot drift.
+    ///
+    /// Registered under `__disc_tup_tmp`'s sibling name rather than an
+    /// argument-temp name: `drain_statement_temp_user_drops` retires only the
+    /// argument list, and a discard's own frame drains at the statement
+    /// (`drain_discard_frame_args_first`), which is where design.md
+    /// § Temporary Lifetime Rules puts a statement-position expression's
+    /// temporary — "Statement-position expression (`expr;`) | At the `;`".
+    pub(super) fn track_discarded_array_elem_bodies(
+        &mut self,
+        tail: &Expr,
+        val: BasicValueEnum<'ctx>,
+    ) {
+        let items = match &tail.kind {
+            ExprKind::ArrayLiteral(items) => items,
+            ExprKind::PrefixCollectionLiteral { items, .. } => items,
+            _ => return,
+        };
+        if items.is_empty() {
+            return;
+        }
+        // A bare `[..]` / `Vec[..]` literal in a discarded position lowers to a
+        // heap VEC HANDLE (`{ptr, len, cap}`), not to an `[N x T]` aggregate.
+        // Measured, and it is the whole reason the first attempt at this was
+        // wrong: registering `emit_array_elem_user_drop_bodies_fn` here walked
+        // the handle's three words as if they were elements, so
+        // `let _ = if c { [mkd(7), mkd(8)] } else { .. };` printed `dD7 dD0` —
+        // the second body reading `b` out of the capacity word. The type test
+        // below is what keeps that from ever being registered again.
+        let inkwell::types::BasicTypeEnum::StructType(handle_ty) = val.get_type() else {
+            return;
+        };
+        if handle_ty.count_fields() != 3 {
+            return;
+        }
+        let Some(te) = self
+            .type_decls
+            .enum_inst_type_exprs
+            .get(&(tail.span.offset, tail.span.length))
+            .cloned()
+        else {
+            return;
+        };
+        let Some(elem_te) = super::helpers::vec_inner_type_expr(&te) else {
+            return;
+        };
+        let elem_ty = self.llvm_type_for_type_expr(&elem_te);
+        // Element must name a non-shared struct or a user value enum, the same
+        // admission the `let`-bound Vec registration uses, so a discarded
+        // literal and a bound one resolve the identical walker.
+        let TypeKind::Path(ep) = &elem_te.kind else {
+            return;
+        };
+        let Some(elem_name) = ep.segments.first().filter(|n| {
+            let n = n.as_str();
+            self.type_decls.struct_types.contains_key(n)
+                || (n != "Option"
+                    && n != "Result"
+                    && self
+                        .type_decls
+                        .enum_layouts
+                        .get(n)
+                        .is_some_and(|l| !l.is_shared))
+        }) else {
+            return;
+        };
+        let elem_name = elem_name.clone();
+        let subst = self.generic_struct_subst_from_inst(&elem_name, &elem_te);
+        let Some(bodies) = self.emit_vec_elem_user_drop_bodies_fn_mono(&elem_name, elem_ty, &subst)
+        else {
+            return;
+        };
+        let Some(cur_fn) = self
+            .builder
+            .get_insert_block()
+            .and_then(|bb| bb.get_parent())
+        else {
+            return;
+        };
+        let slot = self.create_entry_alloca(cur_fn, "__disc_arr_tmp", val.get_type());
+        self.builder.build_store(slot, val).unwrap();
+        self.track_user_drop_var_with_fn(
+            &elem_name,
+            "__disc_arr_tmp",
+            slot,
+            bodies,
+            UserDropKind::ContainerElemBodies,
+        );
+    }
+
     pub(super) fn track_discarded_tuple_elem_bodies(
         &mut self,
         elems: &[Expr],

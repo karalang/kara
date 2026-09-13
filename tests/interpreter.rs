@@ -60669,11 +60669,13 @@ fn test_discarded_branch_of_body_less_heap_literals_keeps_one_owner() {
             "[discarded arm literal consuming a whole local runs one body]"
         );
     }
-    // STILL PINNED AT A KNOWN DEFECT on both backends, which is what keeps it
-    // an agreed gap rather than a divergence: the PROJECTED spelling runs the
-    // local's body twice, because the disarm resolves a bare name and not a
-    // field projection. Pre-existing — measured byte-identical at `c4af3243`.
-    // Filed separately.
+    // B-2026-09-01-17 — the PROJECTED spelling is FIXED and asserted as correct.
+    // It ran the local's body twice because `compile_struct_init`'s field loop
+    // (and this backend's `eval_struct_literal` twin) carried only the MEMORY
+    // half of a struct-field move-out, so `t`'s field-bodies walk stayed armed
+    // over the moved-out leaf. Landed AFTER B-2026-09-13-26, and that order is
+    // load-bearing: until a discarded array literal had an owner, standing the
+    // source down took the array spelling's body to ZERO rather than to one.
     {
         let src = format!(
             "{hdr}fn main() {{\nlet n = 0;\nlet t = mkw(7);\n\
@@ -60682,8 +60684,8 @@ fn test_discarded_branch_of_body_less_heap_literals_keeps_one_owner() {
         );
         assert_eq!(
             run(&src),
-            "dD7\ndD7\nend\n",
-            "[pinned DEFECT: discarded arm literal consuming a local's field]"
+            "dD7\nend\n",
+            "[discarded arm literal consuming a local's FIELD runs one body]"
         );
     }
 }

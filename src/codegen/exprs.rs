@@ -3844,6 +3844,38 @@ impl<'ctx> super::Codegen<'ctx> {
                 // StructDrop skips it (the new literal is the sole owner). The
                 // whole-Identifier suppress above doesn't reach a FieldAccess.
                 self.suppress_struct_field_move_into_literal(&field_init.value);
+                // B-2026-09-01-17 — the BODIES peer of the line above, at the
+                // position its own doc names: `disarm_struct_field_move_bodies`
+                // is "the BODIES half of a struct-field move-out, applied at the
+                // same positions that call
+                // `suppress_struct_field_move_into_literal` (its MEMORY half)",
+                // and this position carried the memory half alone. So
+                // `W { r: t.r, b: 1 }` cap-zeroed `t.r` but left `t`'s
+                // field-bodies walk armed over the moved-out field, and the leaf
+                // ran its body TWICE — once for whoever consumed the literal,
+                // once when `t`'s walk reached `r`. Established by backtrace, not
+                // by print order: the surplus body comes from
+                // `fire_due_drops` -> `drop_user_drop_fields_of_binding` on `t`,
+                // which fires EARLY via NLL, ahead of the consumer's.
+                //
+                // Every consuming position doubled, not only the discarded
+                // branch the row was filed against — the `let`-bound and
+                // bare-block spellings did too — which is why this belongs in
+                // the literal's field loop and not at any one statement hook.
+                //
+                // ORDERED AFTER B-2026-09-13-26, and that order is load-bearing:
+                // until a discarded ARRAY literal registered an owner, the
+                // source's walk was the only thing running an array element's
+                // body, and standing it down here took that body to ZERO rather
+                // than to one. With the owner in place the two compose.
+                //
+                // Self-gated (identifier/`self` root, non-param, non-RC-boxed,
+                // `Copy` leaf declined via `place_chain_leaf_runs_user_drop`) and
+                // idempotent, so the let-site callers that already reach it for
+                // the same field are unaffected. Interp twin: the
+                // `record_returned_projection_moves` call in
+                // `eval_struct_literal`'s field loop.
+                self.disarm_struct_field_move_bodies(&field_init.value);
                 // B-2026-08-28-15 — the TUPLE-INDEX and ARRAY-ELEMENT peers of
                 // the field-access line above. `S { f: t.0 }` / `S { f: a[0] }`
                 // move a heap-carrying element into the literal, which now owns
