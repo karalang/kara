@@ -94,7 +94,7 @@ distinguish "bugs flattening" from "we stopped writing them down."
 |---|---|
 | miscompile | 406 |
 | run-vs-build | 401 |
-| leak | 339 |
+| leak | 340 |
 | double-free | 229 |
 | missing-feature | 197 |
 | codegen-gap | 176 |
@@ -110,7 +110,7 @@ distinguish "bugs flattening" from "we stopped writing them down."
 
 | surface | total |
 |---|---|
-| codegen | 1718 |
+| codegen | 1719 |
 | interp | 431 |
 | typecheck | 299 |
 | other | 90 |
@@ -189,12 +189,12 @@ _Generated from `bug-ledger.jsonl` by `scripts/bug-curve.py` (2026-05-20 → 202
 | B-2026-09-13-17 | 2026-09-13 | codegen | medium | `Vec.pop()` HANDS BACK AN `Array[T, N]` ELEMENT NOBODY OWNS -- 176 B in 8 blocks over four pops of a `Vec[Array[String, 2]]`, the same numbers and the same root as B-2026-09-13-2's `Map` hand-back, through the one receiver channel that fix could not key on | — |
 | B-2026-09-13-18 | 2026-09-13 | codegen | medium | AN `Array[T, N]` `Option` PAYLOAD THAT FITS THE INLINE AREA IS OWNED BY NOBODY -- `Option[Array[String, 1]]` from a call leaks 88 B in 4 blocks while the BOXED `Array[String, 2]` sibling is now clean, so B-2026-09-13-2's four registrations all sit on the boxed route and the inline one has none | — |
 | B-2026-09-13-19 | 2026-09-13 | codegen | medium | A BARE DISCARDED CALL STATEMENT LOSES A WIDE `Option` PAYLOAD AND ITS BOX -- `mk(j);` over a `-> Option[Array[String, 2]]` leaks 192 B in 4 plus 176 indirect in 8, while the `Map` spelling of the same discard is now clean because the statement-discard chokepoint declines the shape | — |
-| B-2026-09-13-20 | 2026-09-13 | codegen | low | A FRESH-OWNED TUPLE KEY TEMPORARY LEAKS AT EVERY `Map` LOOKUP SITE -- `m.get(mk(j))` over `Map[(String, String), i64]` loses 36 B per lookup, while the identical user-STRUCT spelling is clean because `free_fresh_owned_struct_key_arg` has no tuple peer | — |
 | B-2026-09-13-23 | 2026-09-13 | codegen | low | AN `Array[String, N]` INSIDE A TUPLE LEAKS ITS ELEMENT BUFFERS -- 20 B in 2 blocks at -O0 for `let t: (Array[String, 2], i64) = ([f"a{n}", f"b{n}"], 7)`, while the SAME array in a plain `let` is clean. PRE-EXISTING rather than introduced by B-2026-09-10-38: the `Array[..]` PREFIX spelling, which typechecked before that fix, leaks the identical 20 B against the PRE-FIX compiler -- so the tuple POSITION owns the defect and the annotation fix merely made it reachable by a second spelling | — |
 | B-2026-09-13-24 | 2026-09-13 | codegen+interp | medium | A USER ENUM'S VARIANT-CONSTRUCTOR TEMP LOSES ITS `Drop` BODY -- `takeit(Ho.Full(R { id: 5 }))` over `enum Ho[T] { Full(T), Empty }` prints `f:5` alone on every COMPILED surface against `--interp`'s `f:5 dR5`, and the newly-enabled qualified spelling `Ho[R].Full(..)` loses it on BOTH backends, while the seeded `Option[R].Some(..)` is correct everywhere -- so the seeded pair has an owner for the ctor temp and a user enum has none | — |
 | B-2026-09-13-25 | 2026-09-13 | typecheck | low | THE FIELD-LESS QUALIFIED VARIANT `Ho[i64].Empty` IS STILL REJECTED as `'Ho' is a type, not a function`, where design.md § 588 lists a qualified field-less enum-variant constant as a valid argument form -- it is not a CALL, so it never reaches `try_path_receiver_method`'s method arm that B-2026-09-12-16 taught to accept `Ho[R].Full(..)` | — |
 | B-2026-09-13-27 | 2026-09-13 | interp+codegen | medium | A `let`-BOUND TUPLE CARRYING A LOCAL'S PROJECTED FIELD IS RUN-VS-BUILD DIVERGENT -- `let w = if c { (t.r, 1) } else { .. };` runs the leaf's `Drop` body TWICE under `--interp` and ONCE on both compiled backends | — |
 | B-2026-09-13-29 | 2026-09-13 | codegen | medium | A DISCARDED `Option`/`Result` WHOSE PAYLOAD IS AN ARRAY RUNS ITS ELEMENT BODIES ON THE INTERPRETER AND NOT ON EITHER COMPILED BACKEND -- B-2026-09-10-27 fixed the interpreter half and left codegen without a twin | — |
+| B-2026-09-13-30 | 2026-09-13 | codegen | low | A METHOD-CALL KEY TEMPORARY STILL LEAKS AT EVERY `Map` LOOKUP -- `m.get(g.make(0))` over `Map[(String, String), i64]` loses 32 B in 2 blocks because a method's return type is absent from `fn_return_type_exprs`, so the nameless-key leg B-2026-09-13-20 added has no `TypeExpr` to resolve | — |
 
 ### Relocated
 
@@ -2538,6 +2538,7 @@ _Generated from `bug-ledger.jsonl` by `scripts/bug-curve.py` (2026-05-20 → 202
 | B-2026-09-13-9 | codegen | high | A NESTED DESTRUCTURE OF A BOXED ENUM PAYLOAD STILL DOUBLE-FREES WHEN THE LEAF IS WIDER THAN THE ENVELOPE'S PAYLOAD AREA AND THE ARM REBINDS OR MOVES… | 7c79677 |
 | B-2026-09-13-10 | codegen | medium | THE STRUCT-SHAPED SPELLING OF A NESTED BOXED-PAYLOAD DESTRUCTURE LEAKS A LEAF WIDER THAN THE ENVELOPE'S PAYLOAD AREA -- `match x { Option.Some(Kws.A… | e6bcbac |
 | B-2026-09-13-16 | codegen | high | A CALLEE THAT WRAPS ITS OWN BY-VALUE `Array` PARAM IN AN `Option` RETURNS A DANGLING INTERIOR -- `fn wrap(a: Array[String, 2]) -> Option[Array[String… | d9d6df5 |
+| B-2026-09-13-20 | codegen | low | A FRESH-OWNED TUPLE KEY TEMPORARY LEAKS AT EVERY `Map` LOOKUP SITE -- `m.get(mk(j))` over `Map[(String, String), i64]` loses 36 B per lookup, while t… | 8fd717f |
 | B-2026-09-13-21 | codegen+interp | high | AN ARM THAT BINDS A WHOLE BOXED TUPLE PAYLOAD AND MOVES IT ONWARD DOUBLE-FREES ON EVERY COMPILED BACKEND -- `match m.remove(k) { Some(a) => { keep.pu… | 9b9fe76 |
 | B-2026-09-13-22 | codegen | high | A chained string concatenation allocates one buffer per `+`, so `a + b + c` costs two allocations where one sized to the total would do — 36% of kata… | fea7ac09b |
 | B-2026-09-13-26 | interp+codegen | medium | A DISCARDED ARRAY LITERAL OF Drop-BEARING STRUCTS RUNS NO ELEMENT BODIES AT ALL -- `let _ = if c { [W { r: mkd(7), b: 1 }] } else { . | 122b991 |
