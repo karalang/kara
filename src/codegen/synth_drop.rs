@@ -9974,6 +9974,64 @@ impl<'ctx> super::Codegen<'ctx> {
         self.emit_payload_user_drop_bodies_core(fn_name, layout_key, arms)
     }
 
+    /// B-2026-09-12-5 — will the MATCH ARM that binds this boxed payload out
+    /// register an owner for its INTERIOR, so that
+    /// `clear_boxed_enum_inner_drop`'s retraction hands ownership on rather
+    /// than dropping it on the floor?
+    ///
+    /// Deliberately written directly above
+    /// [`Self::enum_boxed_payload_interior_drop`] and split the same three
+    /// ways, because the two answer halves of one question — that resolver
+    /// says who frees the interior when the box dies, this says whether an arm
+    /// takes that job over — and a drift between them is a leak on one side
+    /// and a double free on the other.
+    ///
+    /// TRUE for the shapes with a binding-side registration:
+    ///
+    ///  * `Option` / `Result`  — the inline optres payload channel
+    ///    (`track_inline_option_payload_var`, B-2026-06-10-6).
+    ///  * `Vec` / `VecDeque` / `String` / `str` — the buffer channel.
+    ///  * a bare user struct or enum — B-2026-09-10-2's channel.
+    ///
+    /// FALSE for a TUPLE, an `Array`, and a generic-struct INSTANTIATION.
+    /// The first two have no name to key a registration on at all; the third
+    /// has one and still cannot use it, for the reason the resolver gates its
+    /// own user-type lookups on `generic_args.is_none()` — a name-shared drop
+    /// cannot free instantiation-specific heap.
+    ///
+    /// MEASURED, `KARAC_OPT_LEVEL=0`, `enum Slot[T] { Filled(T), Blank }`,
+    /// a READ-ONLY arm, before the gate this feeds:
+    ///
+    ///     (String, i64)      160 B / 8 blocks leaked
+    ///     Array[String, 2]   320 B / 16
+    ///     Wrap[String]       160 B / 8
+    ///     Option[String]     clean     <- the shapes this answers TRUE for
+    ///     Plain / String     clean
+    ///
+    /// and with the retraction disabled outright the first three go clean
+    /// while the last three abort with 8 invalid frees each — which is what
+    /// establishes that the split is per shape and not a blanket answer.
+    pub(super) fn boxed_payload_interior_taken_by_arm(&mut self, payload_te: &TypeExpr) -> bool {
+        if self.array_elem_and_len(payload_te).is_some() {
+            return false;
+        }
+        if matches!(&payload_te.kind, TypeKind::Tuple(_)) {
+            return false;
+        }
+        let TypeKind::Path(p) = &payload_te.kind else {
+            // Not a shape the resolver installs an interior drop for; the
+            // answer cannot matter, and TRUE is today's behaviour.
+            return true;
+        };
+        let [name] = p.segments.as_slice() else {
+            return true;
+        };
+        match name.as_str() {
+            "Option" | "Result" | "Vec" | "VecDeque" | "String" | "str" => true,
+            _ => p.generic_args.is_none(),
+        }
+    }
+
     /// The MEMORY-only drop for the value inside a user enum's heap-boxed
     /// payload — what `track_boxed_enum_var_with_inner_drop` wants as its
     /// `inner_drop_fn` so the box free takes the payload's own heap with it

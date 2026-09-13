@@ -2638,12 +2638,13 @@ impl<'ctx> super::Codegen<'ctx> {
                         // registered below, and handing the wrapper here would
                         // run that body twice.
                         let inner = self.enum_boxed_payload_interior_drop(&payload_te, false);
-                        self.track_boxed_enum_var_with_inner_drop(
+                        self.track_boxed_enum_var_with_inner_drop_for_payload(
                             &param_name,
                             alloca,
                             &enum_name,
                             &variant,
                             inner,
+                            &payload_te,
                         );
                     }
                     // B-2026-09-10-2 — the BODIES half of the same param. The
@@ -2981,6 +2982,9 @@ impl<'ctx> super::Codegen<'ctx> {
                             variant,
                             payload_inner_drop,
                             deeper,
+                            // B-2026-09-12-5 — optres envelope chain; see the
+                            // predicate for why these answer `true`.
+                            true,
                         );
                     }
                     // B-2026-09-10-9 — the payload's user `Drop` BODIES, on the

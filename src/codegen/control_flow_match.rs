@@ -6131,6 +6131,10 @@ impl<'ctx> super::Codegen<'ctx> {
                 // inner_drop` / `suppress_*_for_var`, and this action must never
                 // answer to a user binding's retraction.
                 name: "boxenv".to_string(),
+                // B-2026-09-12-5 — box-only (`inner_drop_fn: None`), so the
+                // flag cannot change what this action does; `true` is the
+                // pre-existing retraction behaviour.
+                interior_arm_owned: true,
                 enum_slot: slot,
                 enum_ty: slot_ty,
                 inner_drop_fn: None,
@@ -9225,7 +9229,22 @@ impl<'ctx> super::Codegen<'ctx> {
             // heap. Downgrade to box-only, exactly what B-2026-08-05-3 does for
             // the boxed TUPLE payload; a no-op for a box drop that carries no
             // inner drop, which is every one of them before this row.
-            self.clear_boxed_enum_inner_drop(scrut_name);
+            // B-2026-09-12-5 — and only where SOMEONE receives the interior.
+            // `enum_pattern_consumes_user_drop_payload` above answers `true`
+            // for every instantiation of a generic payload, because it reads
+            // the DECLARATION, where the field is the bare parameter `T`
+            // (`own_params.contains(&n)`). That is the right admission test
+            // for the channel and much too coarse to decide ownership, so the
+            // shape half rides on the registration and the consumption half is
+            // computed here.
+            let binds = Self::variant_arm_binds(pattern);
+            let arm_only_borrows = body.is_some_and(|b| {
+                !binds.is_empty()
+                    && binds
+                        .iter()
+                        .all(|v| super::consume_class::binding_only_borrowed(v, b))
+            });
+            self.clear_boxed_enum_inner_drop(scrut_name, arm_only_borrows);
         }
     }
 
@@ -12379,7 +12398,9 @@ impl<'ctx> super::Codegen<'ctx> {
         if let Some(name) =
             self.boxed_tuple_payload_arm_takes_ownership(scrutinee, pattern, only_borrows)
         {
-            self.clear_boxed_enum_inner_drop(&name);
+            // Consumption is already established by the admission test above,
+            // so B-2026-09-12-5's borrow gate has nothing to add here.
+            self.clear_boxed_enum_inner_drop(&name, false);
         }
     }
 
@@ -12402,7 +12423,8 @@ impl<'ctx> super::Codegen<'ctx> {
         if let Some(name) =
             self.boxed_tuple_payload_arm_takes_ownership(scrutinee, pattern, only_borrows)
         {
-            self.clear_boxed_enum_inner_drop(&name);
+            // Consumption established by the admission test; see the arm sibling.
+            self.clear_boxed_enum_inner_drop(&name, false);
         }
     }
 

@@ -8008,6 +8008,9 @@ impl<'ctx> super::Codegen<'ctx> {
                                             self.track_boxed_enum_var_with_chain(
                                                 var_name, slot.ptr, enum_name, variant, leaf_drop,
                                                 deeper,
+                                                // B-2026-09-12-5 — optres
+                                                // envelope chain.
+                                                true,
                                             );
                                         }
                                     }
@@ -8139,8 +8142,13 @@ impl<'ctx> super::Codegen<'ctx> {
                                         &payload_te,
                                         inline_variant.as_deref() == Some(variant.as_str()),
                                     );
-                                    self.track_boxed_enum_var_with_inner_drop(
-                                        var_name, slot.ptr, &enum_name, &variant, inner,
+                                    self.track_boxed_enum_var_with_inner_drop_for_payload(
+                                        var_name,
+                                        slot.ptr,
+                                        &enum_name,
+                                        &variant,
+                                        inner,
+                                        &payload_te,
                                     );
                                 }
                             }

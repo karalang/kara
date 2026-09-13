@@ -2171,6 +2171,41 @@ impl<'ctx> super::Codegen<'ctx> {
             payload_variant,
             inner_drop_fn,
             Vec::new(),
+            true,
+        );
+    }
+
+    /// B-2026-09-12-5 — the payload-TYPE-aware sibling of
+    /// [`Self::track_boxed_enum_var_with_inner_drop`], for the four sites that
+    /// resolve an instantiated `payload_te` before asking
+    /// [`Self::enum_boxed_payload_interior_drop`] for the interior walk.
+    ///
+    /// Those four are the only registrations that can answer whether a match
+    /// arm will take the interior over, because they are the only ones holding
+    /// the instantiated payload type; every other site keeps the 5-argument
+    /// form and today's `true`. A separate entry point rather than a sixth
+    /// parameter, for the reason `track_boxed_enum_var_with_chain`'s own doc
+    /// gives about this family: the registration sites are many and only a few
+    /// have the information, so widening them all would spread the blast radius
+    /// past where it was measured.
+    pub(super) fn track_boxed_enum_var_with_inner_drop_for_payload(
+        &mut self,
+        name: &str,
+        enum_slot: PointerValue<'ctx>,
+        enum_name: &str,
+        payload_variant: &str,
+        inner_drop_fn: Option<FunctionValue<'ctx>>,
+        payload_te: &crate::ast::TypeExpr,
+    ) {
+        let interior_arm_owned = self.boxed_payload_interior_taken_by_arm(payload_te);
+        self.track_boxed_enum_var_with_chain(
+            name,
+            enum_slot,
+            enum_name,
+            payload_variant,
+            inner_drop_fn,
+            Vec::new(),
+            interior_arm_owned,
         );
     }
 
@@ -2193,6 +2228,7 @@ impl<'ctx> super::Codegen<'ctx> {
         payload_variant: &str,
         inner_drop_fn: Option<FunctionValue<'ctx>>,
         deeper_tags: Vec<u64>,
+        interior_arm_owned: bool,
     ) {
         // B-2026-08-29-2 — the two USED to be mutually exclusive here, asserted
         // on the reading that "the chain walks envelopes, the drop owns the
@@ -2215,6 +2251,7 @@ impl<'ctx> super::Codegen<'ctx> {
                 enum_ty,
                 inner_drop_fn,
                 some_tag,
+                interior_arm_owned,
                 deeper_tags,
             });
         }
@@ -12345,16 +12382,39 @@ impl<'ctx> super::Codegen<'ctx> {
     /// there, a per-element destructure simply never gets an inner drop
     /// installed; here the let-site cannot see the pattern yet, so the drop is
     /// installed optimistically and retracted by the consuming arm.
-    pub(super) fn clear_boxed_enum_inner_drop(&mut self, name: &str) {
+    /// B-2026-09-12-5 — `arm_only_borrows` is what keeps this from retracting
+    /// into a vacuum.
+    ///
+    /// The retraction hands the interior from the box to whoever the arm gave
+    /// it to. That is sound whenever SOMEONE receives it, and there are two
+    /// ways for that to be true: the payload shape has a binding-side
+    /// registration (`interior_arm_owned`, set at the four registration sites
+    /// that know the instantiated payload type), or the arm CONSUMES the
+    /// binding so the value's new home owns it. When neither holds — a
+    /// read-only arm over a tuple, an `Array` or a generic-struct payload —
+    /// the retraction used to leave the interior owned by nobody.
+    ///
+    /// Both halves are load-bearing and each was measured on its own:
+    /// dropping the `interior_arm_owned` half turns the `Option`/`Plain`/
+    /// `String` cells into 8 invalid frees apiece, and dropping the
+    /// `arm_only_borrows` half leaves the read-only tuple / `Array` /
+    /// `Wrap[T]` cells leaking 160 / 320 / 160 B. A CONSUMING arm over those
+    /// same three shapes is clean before and after, which is why the borrow
+    /// test rather than the shape alone decides.
+    ///
+    /// Callers that have already established consumption pass `false` and are
+    /// byte-identical to before.
+    pub(super) fn clear_boxed_enum_inner_drop(&mut self, name: &str, arm_only_borrows: bool) {
         for frame in self.drop_rc.scope_cleanup_actions.iter_mut().rev() {
             for action in frame.iter_mut() {
                 if let CleanupAction::BoxedEnumDrop {
                     name: n,
                     inner_drop_fn,
+                    interior_arm_owned,
                     ..
                 } = action
                 {
-                    if n == name {
+                    if n == name && (*interior_arm_owned || !arm_only_borrows) {
                         *inner_drop_fn = None;
                     }
                 }
@@ -15381,6 +15441,10 @@ impl<'ctx> super::Codegen<'ctx> {
                 enum_ty,
                 inner_drop_fn,
                 some_tag,
+                // Read by `clear_boxed_enum_inner_drop`, not by the emit: by
+                // the time cleanup is emitted the retraction has already
+                // decided whether `inner_drop_fn` survives.
+                interior_arm_owned: _,
                 deeper_tags,
             } => {
                 let tag_ptr = self

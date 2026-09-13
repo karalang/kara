@@ -2289,7 +2289,10 @@ impl<'ctx> super::Codegen<'ctx> {
                         .get(argn.as_str())
                         .cloned()
                     {
-                        self.clear_boxed_enum_inner_drop(&src);
+                        // B-2026-09-12-5 — an ARGUMENT hand-off, not a match
+                        // arm: the callee's param owns the payload, so this is
+                        // the consuming case and keeps today's behaviour.
+                        self.clear_boxed_enum_inner_drop(&src, false);
                     }
                 }
             }
@@ -4484,6 +4487,9 @@ impl<'ctx> super::Codegen<'ctx> {
                 variant,
                 inner_drop,
                 deeper,
+                // B-2026-09-12-5 — an `Option`/`Result` ENVELOPE chain, whose
+                // payload reaches an arm through the inline optres channel.
+                true,
             );
         }
     }
@@ -5985,12 +5991,13 @@ impl<'ctx> super::Codegen<'ctx> {
                 self.user_enum_boxed_payload_variants(&te.clone())
             {
                 let inner = self.enum_boxed_payload_interior_drop(&payload_te, false);
-                self.track_boxed_enum_var_with_inner_drop(
+                self.track_boxed_enum_var_with_inner_drop_for_payload(
                     "__owned_agg_tmp",
                     slot,
                     &enum_name,
                     &variant,
                     inner,
+                    &payload_te,
                 );
             }
         }

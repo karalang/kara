@@ -735,6 +735,7 @@ impl<'ctx> super::Codegen<'ctx> {
                 enum_ty,
                 inner_drop_fn,
                 some_tag,
+                interior_arm_owned,
                 ref deeper_tags,
             } => CleanupAction::BoxedEnumDrop {
                 name: binding_name.to_string(),
@@ -742,6 +743,11 @@ impl<'ctx> super::Codegen<'ctx> {
                 enum_ty,
                 inner_drop_fn,
                 some_tag,
+                // B-2026-09-12-5 — carried through rather than defaulted: this
+                // is the SAME registration re-homed onto the parent frame, so
+                // re-deriving it here could disagree with the site that knew
+                // the payload type.
+                interior_arm_owned,
                 deeper_tags: deeper_tags.clone(),
             },
             SlotOwnership::SharedElided => CleanupAction::FreeSharedElided {
@@ -2723,12 +2729,14 @@ impl<'ctx> super::Codegen<'ctx> {
                                 enum_ty,
                                 inner_drop_fn,
                                 some_tag,
+                                interior_arm_owned,
                                 deeper_tags,
                                 ..
                             } if Some(*enum_slot) == local_ptr => Some(SlotOwnership::BoxedEnum {
                                 enum_ty: *enum_ty,
                                 inner_drop_fn: *inner_drop_fn,
                                 some_tag: *some_tag,
+                                interior_arm_owned: *interior_arm_owned,
                                 deeper_tags: deeper_tags.clone(),
                             }),
                             _ => None,

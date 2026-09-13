@@ -1074,6 +1074,25 @@ pub(crate) enum CleanupAction<'ctx> {
         /// `Ok`). Captured at registration so cleanup is robust to a
         /// seed-table renumber.
         some_tag: u64,
+        /// B-2026-09-12-5 — will the MATCH ARM that binds this payload out
+        /// take over `inner_drop_fn`'s job, so that
+        /// `clear_boxed_enum_inner_drop`'s retraction HANDS OWNERSHIP ON
+        /// rather than dropping it on the floor?
+        ///
+        /// The retraction is shape-agnostic by construction (it nulls
+        /// `inner_drop_fn` without inspecting the payload), and that is
+        /// right for every payload whose arm binding registers an owner of
+        /// its own — `Option`/`Result` through the inline optres channel, a
+        /// bare user type through B-2026-09-10-2's, `String`/`Vec` through
+        /// the buffer channel. A TUPLE, an `Array` and a generic-struct
+        /// INSTANTIATION have no such registration, so retracting for them
+        /// left the interior owned by NOBODY.
+        ///
+        /// Recorded per REGISTRATION rather than per binding name because
+        /// that is the granularity the fact has: it is a property of the
+        /// payload type this box was installed for, and the retraction site
+        /// has the binding name but not the instantiated payload type.
+        interior_arm_owned: bool,
         /// Tags of the further ENVELOPE boxes reachable *inside* this box,
         /// outermost first — empty for the single-box shape, which is every
         /// registration site but the let site. B-2026-08-07-6.
@@ -1605,6 +1624,11 @@ pub(crate) enum SlotOwnership<'ctx> {
         enum_ty: StructType<'ctx>,
         inner_drop_fn: Option<FunctionValue<'ctx>>,
         some_tag: u64,
+        /// B-2026-09-12-5 — carried across the par hand-off so the
+        /// re-registration on the parent frame keeps the answer the site that
+        /// knew the instantiated payload type gave. See
+        /// `CleanupAction::BoxedEnumDrop`'s field of the same name.
+        interior_arm_owned: bool,
         deeper_tags: Vec<u64>,
     },
 }

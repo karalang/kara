@@ -4317,12 +4317,13 @@ impl<'ctx> super::Codegen<'ctx> {
                 {
                     // B-2026-09-10-2 — the interior, as at the other two sites.
                     let inner = self.enum_boxed_payload_interior_drop(&payload_te, false);
-                    self.track_boxed_enum_var_with_inner_drop(
+                    self.track_boxed_enum_var_with_inner_drop_for_payload(
                         &param_name,
                         alloca,
                         &enum_name,
                         &variant,
                         inner,
+                        &payload_te,
                     );
                 }
                 // B-2026-09-10-2 — the bodies half, mirroring the
