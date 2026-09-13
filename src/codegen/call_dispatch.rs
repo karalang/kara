@@ -14559,9 +14559,7 @@ impl<'ctx> super::Codegen<'ctx> {
             // loop reuses its slot every iteration, which is correct because
             // the box never outlives the iteration that made it.
             let box_ptr = match (self.enum_box_use_alloca, self.current_fn) {
-                (true, Some(fn_val)) => {
-                    self.create_entry_alloca(fn_val, "enumbox.stack", val_ty)
-                }
+                (true, Some(fn_val)) => self.create_entry_alloca(fn_val, "enumbox.stack", val_ty),
                 _ => self
                     .builder
                     .build_call(self.runtime_fns.malloc_fn, &[size.into()], "enumbox")

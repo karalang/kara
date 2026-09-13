@@ -15463,7 +15463,6 @@ impl<'ctx> super::Codegen<'ctx> {
                 if self.borrow_vars.ref_params.contains_key(n.as_str()))
     }
 
-
     /// B-2026-09-12-28 — mark `scrutinee` as eligible for a STACK box across
     /// its own `compile_expr`, and hand back the previous marker to restore.
     ///
