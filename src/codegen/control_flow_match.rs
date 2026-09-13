@@ -12056,7 +12056,7 @@ impl<'ctx> super::Codegen<'ctx> {
     }
 
     pub(super) fn suppress_inline_option_payload_cleanup(
-        &self,
+        &mut self,
         scrutinee: &Expr,
         pattern: &Pattern,
     ) {
@@ -12108,6 +12108,68 @@ impl<'ctx> super::Codegen<'ctx> {
                 .build_struct_gep(layout.llvm_type, slot.ptr, 3, "optpl.suppress.cap")
         {
             let _ = self.builder.build_store(cap_ptr, i64_t.const_int(0, false));
+        }
+        // B-2026-09-13-18 — the zero above TRANSFERS the payload to the arm's
+        // binding, and for an `Array[T, N]` payload nothing downstream took
+        // delivery: `bind_pattern_values`' `track_vec_var` arm owns a `Vec` or
+        // `String` payload of the identical program, and has no array peer, so
+        // the element buffers were freed by nobody (88 B in 4 blocks over four
+        // calls of `Option[Array[String, 1]]`).
+        //
+        // REGISTERED HERE RATHER THAN AT THE BINDING SITE, which is where the
+        // `Vec` peer lives, because the two questions are not the same one.
+        // `bind_pattern_values` runs BEFORE this suppression and cannot know
+        // whether the source will be disarmed; registering there covers every
+        // arm-bound array including the BOXED-payload routes, whose interiors
+        // already have owners (B-2026-09-13-2's registrations, the box's own
+        // interior walk). Measured: doing so double-frees — 3 codegen and 7
+        // memory_sanitizer fixtures, ASAN `attempting double-free`. Pairing the
+        // registration with the disarm in one place makes the transfer
+        // symmetric by construction, which is the property the whole
+        // suppress/track family depends on.
+        self.own_disarmed_inline_array_payload(pattern);
+    }
+
+    /// The delivery half of [`Self::suppress_inline_option_payload_cleanup`]:
+    /// give the arm's `Array[T, N]` payload binding the scope-exit element drop
+    /// the source just gave up. No-op for every other payload shape, and for a
+    /// borrow-mode bind (which claims nothing).
+    fn own_disarmed_inline_array_payload(&mut self, pattern: &Pattern) {
+        if self.pattern_state.pattern_binding_is_borrow {
+            return;
+        }
+        let PatternKind::TupleVariant { patterns, .. } = &pattern.kind else {
+            return;
+        };
+        for sub in patterns {
+            let PatternKind::Binding(bound) = &sub.kind else {
+                continue;
+            };
+            let Some(elem_te) = self
+                .var_types
+                .array_elem_type_exprs
+                .get(bound.as_str())
+                .cloned()
+            else {
+                continue;
+            };
+            let Some(slot) = self.variables.get(bound.as_str()).copied() else {
+                continue;
+            };
+            if !slot.ty.is_array_type() {
+                continue;
+            }
+            let arr_ty = slot.ty.into_array_type();
+            let n = arr_ty.len();
+            let elem_ty = arr_ty.get_element_type();
+            if let Some(drop_fn) = self.synthesize_array_drop_fn_te(elem_ty, &elem_te, n) {
+                if let Some(frame) = self.drop_rc.scope_cleanup_actions.last_mut() {
+                    frame.push(super::state::CleanupAction::StructDrop {
+                        struct_alloca: slot.ptr,
+                        drop_fn,
+                    });
+                }
+            }
         }
     }
 

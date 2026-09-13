@@ -88602,6 +88602,133 @@ fn main() {
         );
     }
 
+    /// B-2026-09-13-18 — an `Array[T, N]` `Option` payload that FITS the inline
+    /// payload area was owned by nobody.
+    ///
+    /// TWO INDEPENDENT GAPS, and the first alone does not close the row.
+    ///
+    /// (1) ADMISSION. `inline_heap_payload_elem` — the `{ptr,len,cap}` overlay
+    /// gate behind `FreeInlineOptionPayload` — admitted `String`/`str`,
+    /// `Vec`/`VecDeque` and a transparent single-heap-field wrapper struct, and
+    /// never consulted `array_elem_and_len`. An `Array[String, 1]` is exactly
+    /// three words, so it is stored INLINE and every registration
+    /// B-2026-09-13-2 added declined it by construction (each reads word 0 as a
+    /// box pointer behind a width guard). A one-element array is admitted on
+    /// precisely the transparent-wrapper argument the struct arm already makes:
+    /// it lays out bit-identically to its single element at payload offset 0.
+    ///
+    /// (2) DELIVERY, which is what the `Some(_)` cell below isolates. Fixing
+    /// admission alone made the wildcard arm clean and left `Some(a)` leaking:
+    /// binding the payload out DISARMS the source
+    /// (`suppress_inline_option_payload_cleanup` zeroes the overlay's cap to
+    /// transfer ownership) and nothing downstream took delivery, because
+    /// `bind_pattern_values`' `track_vec_var` arm — which owns the `Vec` and
+    /// `String` payloads of the identical program — has no array peer.
+    ///
+    /// THE REGISTRATION IS PAIRED WITH THE DISARM rather than placed at the
+    /// binding site, and that is not a style choice. `bind_pattern_values` runs
+    /// BEFORE the suppression and cannot know whether the source will be
+    /// disarmed; registering there also covers the BOXED routes, whose
+    /// interiors already have owners. Measured: doing so double-freed — 3
+    /// codegen and 7 memory_sanitizer fixtures, ASAN `attempting double-free`.
+    ///
+    /// CELLS. `wild` pins gap (1) — it was the first to go clean and would stay
+    /// clean if gap (2) regressed, so it is what keeps the two halves
+    /// distinguishable. `read` and `moved` pin gap (2) in both directions: a
+    /// missing owner leaks, and an owner registered without the disarm
+    /// double-frees. `scalar` is the control that must stay a no-op — an
+    /// `Array[i64, 3]` also fits the area and has nothing to free; it declines
+    /// because the recursion bottoms out on a primitive. `vec`/`str` are the
+    /// payload shapes that were always clean and must remain so.
+    ///
+    /// NOT COVERED, and deliberately absent rather than silently passing: the
+    /// FRESH-TEMP scrutinee spelling (`match mk(j) { .. }` with no binding in
+    /// between) still leaks 88 B. There is no inline-`Option` fresh-temp
+    /// scrutinee tracker at all — only `Result`
+    /// (`track_freshtemp_inline_result_scrutinee`) and `Option[shared]` have
+    /// one — so that spelling needs a new registration with its own suppression
+    /// pairing, which is the half that double-freed when rushed.
+    #[test]
+    fn asan_inline_array_option_payload_has_exactly_one_owner() {
+        assert_clean_asan_run(
+            r#"
+fn mk(n: i64) -> Option[Array[String, 1]] {
+    if n < 0 { return None; }
+    return Some(Array[f"row-aaaaaaaaaaaaaaaa-{n}"]);
+}
+fn mkscalar(n: i64) -> Option[Array[i64, 3]] {
+    if n < 0 { return None; }
+    return Some(Array[n, n + 1, n + 2]);
+}
+fn mkvec(n: i64) -> Option[Vec[String]] {
+    if n < 0 { return None; }
+    let mut v: Vec[String] = [];
+    v.push(f"vec-aaaaaaaaaaaaaaaa-{n}");
+    return Some(v);
+}
+fn mkstr(n: i64) -> Option[String] {
+    if n < 0 { return None; }
+    return Some(f"str-aaaaaaaaaaaaaaaa-{n}");
+}
+
+fn main() {
+    let mut j: i64 = 0;
+    while j < 4 {
+        let w = mk(j);
+        match w { Some(_) => { println("wild"); } None => { println("none"); } }
+        let r = mk(j);
+        match r { Some(a) => { println(f"read:{a[0]}"); } None => { println("none"); } }
+        let m = mk(j);
+        match m { Some(a) => { let t = a; println(f"moved:{t[0]}"); } None => { println("none"); } }
+        let lo: Option[Array[String, 1]] = Some(Array[f"loc-aaaaaaaaaaaaaaaa-{j}"]);
+        match lo { Some(a) => { println(f"local:{a[0]}"); } None => { println("none"); } }
+        mk(j);
+        let s = mkscalar(j);
+        match s { Some(a) => { println(f"scalar:{a[0]}"); } None => { println("none"); } }
+        let v = mkvec(j);
+        match v { Some(a) => { println(f"vec:{a[0]}"); } None => { println("none"); } }
+        let t = mkstr(j);
+        match t { Some(a) => { println(f"str:{a}"); } None => { println("none"); } }
+        j = j + 1;
+    }
+    println("end");
+}
+"#,
+            &[
+                "wild",
+                "read:row-aaaaaaaaaaaaaaaa-0",
+                "moved:row-aaaaaaaaaaaaaaaa-0",
+                "local:loc-aaaaaaaaaaaaaaaa-0",
+                "scalar:0",
+                "vec:vec-aaaaaaaaaaaaaaaa-0",
+                "str:str-aaaaaaaaaaaaaaaa-0",
+                "wild",
+                "read:row-aaaaaaaaaaaaaaaa-1",
+                "moved:row-aaaaaaaaaaaaaaaa-1",
+                "local:loc-aaaaaaaaaaaaaaaa-1",
+                "scalar:1",
+                "vec:vec-aaaaaaaaaaaaaaaa-1",
+                "str:str-aaaaaaaaaaaaaaaa-1",
+                "wild",
+                "read:row-aaaaaaaaaaaaaaaa-2",
+                "moved:row-aaaaaaaaaaaaaaaa-2",
+                "local:loc-aaaaaaaaaaaaaaaa-2",
+                "scalar:2",
+                "vec:vec-aaaaaaaaaaaaaaaa-2",
+                "str:str-aaaaaaaaaaaaaaaa-2",
+                "wild",
+                "read:row-aaaaaaaaaaaaaaaa-3",
+                "moved:row-aaaaaaaaaaaaaaaa-3",
+                "local:loc-aaaaaaaaaaaaaaaa-3",
+                "scalar:3",
+                "vec:vec-aaaaaaaaaaaaaaaa-3",
+                "str:str-aaaaaaaaaaaaaaaa-3",
+                "end",
+            ],
+            "asan_inline_array_option_payload_has_exactly_one_owner",
+        );
+    }
+
     /// B-2026-09-13-10 — the STRUCT-shaped spelling of a nested boxed-payload
     /// destructure, which leaked one block per leaf field because its disarm
     /// had no WIDTH CEILING.

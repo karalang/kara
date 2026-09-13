@@ -1735,6 +1735,33 @@ impl<'ctx> super::Codegen<'ctx> {
         if let Some(inner) = self.transparent_single_heap_field_te(arg) {
             return self.inline_heap_payload_elem(&inner);
         }
+        // B-2026-09-13-18 — a ONE-ELEMENT `Array[T, 1]`, on exactly the
+        // transparent-wrapper argument the struct arm above makes: it lays out
+        // bit-identically to its single `T` at payload offset 0, so the
+        // `{ptr,len,cap}` overlay free at the payload words frees that element's
+        // buffer.
+        //
+        // WHY N == 1 AND NOT `N > 0`. This gate only ever sees payloads that FIT
+        // the envelope's inline area (3 words for `Option`) — anything wider was
+        // heap-BOXED at pack time and travels the boxed channel instead. An
+        // element that owns heap is itself at least a 3-word `{ptr,len,cap}`, so
+        // the only array that both fits and has anything to free is a
+        // single-element one; `N > 1` here would be either unreachable or a
+        // payload whose second element sits past the area, and the overlay would
+        // free one triple and silently orphan the rest. `Array[i64, 3]` also fits
+        // and must stay a no-op — it does, because the recursion bottoms out on a
+        // primitive and answers `None`, the same way the wrapper arm declines a
+        // scalar field.
+        //
+        // Measured: `Option[Array[String, 1]]` from a call leaked 88 B in 4
+        // blocks over four calls on EVERY spelling (`let`, arm-bound, discarded)
+        // while the BOXED `Array[String, 2]` sibling was clean — every
+        // registration B-2026-09-13-2 added reads word 0 as a box pointer behind
+        // a width guard, so all of them decline the inline shape by construction
+        // and this channel had no array arm at all.
+        if let Some((elem_te, 1)) = self.array_elem_and_len(arg) {
+            return self.inline_heap_payload_elem(&elem_te);
+        }
         None
     }
 
