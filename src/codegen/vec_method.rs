@@ -1092,7 +1092,10 @@ impl<'ctx> super::Codegen<'ctx> {
         // not-taken branch. Re-introduce a guard only off a POSITIVE Vec signal
         // and only with a measurement showing that cost matters — never off the
         // absence of a String signal, which is what failed twice.
-        if self.sso_on() && MUTATES_RECEIVER_IN_PLACE.contains(&method) {
+        if self.sso_on()
+            && MUTATES_RECEIVER_IN_PLACE.contains(&method)
+            && !self.receiver_is_definitely_not_string(var_name)
+        {
             self.sso_deinline_in_place(data_ptr, "recv.mut");
         }
 

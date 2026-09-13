@@ -1898,6 +1898,70 @@ individual kata's delta unless it clears ~40 ms and survives a high-N three-rail
 pass. Publish the impossible-sign count alongside any per-kata claim — it is the
 cheapest noise floor available and it is what caught both bad readings here.
 
+### ITEM #4, FIRST HALF: Vec is off the mutating-method SSO path (2026-09-13)
+
+The measurement the standing comment at `vec_method.rs` asked for came back
+saying the cost matters, so the guard it asked for is now in — off a POSITIVE
+signal, which is the whole difference from the two that were wrong before.
+
+```rust
+fn receiver_is_definitely_not_string(&self, var_name: &str) -> bool {
+    self.var_types.var_elem_type_exprs.contains_key(var_name)   // positive Vec/Slice signal
+        && !self.var_types.string_vars.contains(var_name)        // and no positive String signal
+}
+```
+
+**Why this signal and not the previous two.** Both earlier guards read the
+ABSENCE of a String signal as evidence of a `Vec`. `vec_elem_types` cannot serve:
+it maps any `{ptr,len,cap}`-shaped local to its ELEMENT type and a `String` goes
+in it with element `i8`, so the guard skipped exactly the Strings that needed
+promotion. `vec_elem_type_for_var` is worse — it DEFAULTS to `i64` for an absent
+variable, so "unknown" and "`Vec[i64]`" are the same answer.
+`var_elem_type_exprs` is different in kind: the registrar in `stmts.rs` branches
+on the binding type, putting a `String` into `vec_elem_types` + `string_vars` in
+one arm and everything else into `var_elem_type_exprs` in the other — its own
+comment says "a String is none of them". All five insert sites were checked (the
+registrar, a slice, a `.chars()` binding, a shadow restore, a match-binding
+copy); none introduces a `String`. `control_flow.rs` already relies on the same
+distinction. Both halves are required, and anything unknown answers `false` and
+keeps the SSO path: guessing wrong costs silent memory corruption one way and a
+few instructions the other.
+
+**Measured, three rails in one pass at best-of-15** — `SSO=0`, `SSO=1` guarded,
+and `SSO=1` with the de-inline compiled out entirely (the ceiling) — over the 29
+katas whose regression clears the noise floor:
+
+| | before | after |
+|---|---|---|
+| median regression vs `SSO=0` | **+39.3%** | **+2.1%** |
+| still >=15% regressed | 28 / 29 | **10 / 29** |
+| within +-5% | 0 | **16** |
+
+Median capture of the available ceiling: **82%**. The guarded and probe columns
+track each other closely almost everywhere (`stack_using_queues` 294 vs 293,
+`largest_rectangle` 1766 vs 1769), which is the real confirmation: the guard got
+essentially everything removing the call could give, so the signal fires where
+it should. Several land exactly on baseline (`paint_ii` 258 vs 258, `rangesum`
+681 vs 681, `meetpoint` 651 vs 651) and a few now beat it (`edit_distance`
+-10%, `triangle` -11%).
+
+**The 10 residual regressions are the SECOND cost, and they are now measured
+rather than inferred.** For `zigzag` (+92%) and `largest_rectangle` (+85%) the
+PROBE does not help either — 1389 vs 1392, 1766 vs 1769 — so they are not paying
+at this site at all. That is the tag-aware READ accessors applying their select
+to `Vec`, which `src/codegen/sso.rs` has named as the Slice 3 refinement all
+along. Reaching it means threading the receiver's name (or type) into
+`sso_string_data_ptr_from_slot` / `sso_string_parts_from_value`, which take a
+slot or a bare SSA aggregate and have no var in scope. That is item #4's second
+half, and it is worth roughly a third of the high-effect regressions.
+
+**One check retired.** The three-rail design's impossible-ordering check (a probe
+that strictly removes work can never be slower) is what caught two unreadable
+sweeps, but it is MEANINGLESS in this comparison: guarded and probe emit nearly
+identical code for these programs, so a 1-2 ms ordering between them is noise,
+not a defect. Reported here so nobody reads its 16/29 as a failure — a check
+outside the comparison it was built for should be retired, not quoted.
+
 ## Verification matrix
 
 - **The whole `--features llvm` suite at `KARAC_SSO=0` AND `=1`** — the two-leg

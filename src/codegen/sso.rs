@@ -98,6 +98,42 @@ impl<'ctx> super::Codegen<'ctx> {
             .unwrap()
     }
 
+    /// A POSITIVE "this receiver cannot be a `String`" signal, and the only
+    /// kind of signal it is safe to gate SSO work on.
+    ///
+    /// **Two previous guards here were wrong in the unsafe direction, both by
+    /// reading the ABSENCE of a String signal as evidence of a `Vec`.** The
+    /// first read `!vec_elem_types.contains_key(v)`, but that table maps any
+    /// `{ptr,len,cap}`-shaped local to its ELEMENT type and a `String` goes in
+    /// it with element `i8` — so the guard skipped promotion for exactly the
+    /// Strings that needed it, and the self-hosted item parser SIGSEGV'd on a
+    /// `push_str` through an inline descriptor. `vec_elem_type_for_var` cannot
+    /// be used either: it DEFAULTS to `i64` for an absent variable, so "not in
+    /// the table" is indistinguishable from "a `Vec[i64]`".
+    ///
+    /// `var_elem_type_exprs` is different in kind: the registrar
+    /// (`stmts.rs`) branches on the binding's type and inserts a `String` into
+    /// `vec_elem_types` + `string_vars` in one arm and everything else into
+    /// `var_elem_type_exprs` in the other, so a `String` never reaches this
+    /// table by construction — its own comment says "a String is none of
+    /// them". `control_flow.rs` already relies on the same distinction. The
+    /// other four insert sites are a slice, a `.chars()` binding, a shadow
+    /// restore and a match-binding copy; none introduces a `String` either.
+    ///
+    /// Both halves are required, belt and braces: a positive non-String signal
+    /// AND the absence of the positive String signal. Anything unknown answers
+    /// `false` and keeps the SSO path, because the failure mode of guessing
+    /// wrong is silent memory corruption in one direction and a few wasted
+    /// instructions in the other.
+    ///
+    /// Measured worth (2026-09-13, kata corpus): the mutating-method
+    /// chokepoint alone was ~90% of the regression on the median high-effect
+    /// kata, on programs containing no Strings at all.
+    pub(super) fn receiver_is_definitely_not_string(&self, var_name: &str) -> bool {
+        self.var_types.var_elem_type_exprs.contains_key(var_name)
+            && !self.var_types.string_vars.contains(var_name)
+    }
+
     /// Whether the tag-aware String read/construct path is switched on.
     /// See [`sso_enabled`] — off by default while the sweep lands.
     ///
