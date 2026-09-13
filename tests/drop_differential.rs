@@ -526,6 +526,76 @@ fn generic_enum_match_projects_the_substituted_payload() {
     assert_eq!(assert_clean(&src), 1);
 }
 
+// ─── B-2026-09-12-27: a matched param's payload is discharged CALLER-side ───
+//
+// Once the oracle learned parameter types, a `match` on a by-value param began
+// scheduling its payload under the arm binding's name with `via` = the param.
+// Codegen discharges that payload in the CALLER, so the callee records nothing
+// and a per-callee comparison cannot see it — rule 2's premise exactly, which
+// is why rule 2 now tests `via` as well as the place.
+//
+// These are FALSE-POSITIVE guards, not coverage: each program below is correct
+// at runtime (verified on `--interp`, JIT, AOT and AOT under `KARAC_AUTO_PAR=0`
+// — the `Drop` body fires exactly once and the surfaces agree), and each would
+// report a divergence without the `via` half of the filter.
+
+const HELD: &str = "struct Held { tag: i64, buf: String }\n\
+     impl Drop for Held { fn drop(mut ref self) { println(99i64); } }\n";
+
+#[test]
+fn a_heap_payload_matched_out_of_a_by_value_param_is_not_a_divergence() {
+    // The decisive cell: correct on every surface, and the one that sent the
+    // unfiltered build red. Codegen frees the payload through main's `ot`.
+    let src = format!(
+        "{HELD}\
+         fn eat(o: Option[Held]) -> i64 {{ match o {{ Some(t) => {{ t.tag }}, None => {{ 0i64 }} }} }}\n\
+         fn main() {{ let ot: Option[Held] = Some(Held {{ tag: 7i64, buf: {S} }}); \
+         println(eat(ot)); }}"
+    );
+    assert_clean(&src);
+}
+
+#[test]
+fn a_heap_payload_matched_and_ignored_in_a_by_value_param_is_not_a_divergence() {
+    // Same shape with an arm that never touches the binding — a different
+    // codegen path to the same caller-side discharge, and the cell that shows
+    // the exclusion is about the PARAM, not about how the arm uses the payload.
+    let src = format!(
+        "{HELD}\
+         fn eat(o: Option[Held]) -> i64 {{ match o {{ Some(t) => {{ 7i64 }}, None => {{ 0i64 }} }} }}\n\
+         fn main() {{ let ot: Option[Held] = Some(Held {{ tag: 7i64, buf: {S} }}); \
+         println(eat(ot)); }}"
+    );
+    assert_clean(&src);
+}
+
+#[test]
+fn a_wildcard_payload_over_a_by_value_param_is_not_a_divergence() {
+    // B-2026-09-11-2's synthetic place reached through a param scrutinee: it
+    // carries `via` = the param too, so the same filter has to catch it.
+    let src = format!(
+        "{HELD}\
+         fn eat(o: Option[Held]) -> i64 {{ match o {{ Some(_) => {{ 1i64 }}, None => {{ 0i64 }} }} }}\n\
+         fn main() {{ let ot: Option[Held] = Some(Held {{ tag: 7i64, buf: {S} }}); \
+         println(eat(ot)); }}"
+    );
+    assert_clean(&src);
+}
+
+#[test]
+fn a_matched_local_scrutinee_is_still_compared() {
+    // The exclusion is keyed to PARAMS and must not widen to locals, which are
+    // discharged in the same frame and are the population rule 5 covers. Without
+    // this, a filter bug that dropped every `via`-carrying event would look
+    // clean: the count is what catches it.
+    let src = format!(
+        "fn main() {{ let v: Vec[String] = Vec[{S}]; \
+         let ov: Option[Vec[String]] = Some(v); \
+         match ov {{ Some(x) => {{ println(x.len()); }}, None => {{}} }} }}"
+    );
+    assert_eq!(assert_clean(&src), 1);
+}
+
 // ──────────── B-2026-09-11-2: `_` discards the binding, not the drop ────────
 //
 // A wildcard payload used to schedule NOTHING, so every discard-the-payload

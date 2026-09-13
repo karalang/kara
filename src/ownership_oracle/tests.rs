@@ -535,6 +535,146 @@ fn main() {
     assert_eq!(ev.via.as_deref(), Some("o"));
 }
 
+// ──────── matched PARAMETER payload projection (B-2026-09-12-27) ─────────
+//
+// A parameter used to carry no resolved type at all: `analyze` introduced
+// params with the untyped `introduce`, so `Binding::ty` was `None` for every
+// one, `scrutinee_ty` returned `None`, and a `match` on a by-value param
+// projected nothing onto its arm bindings. Both spellings were silent, which is
+// what made this invisible from the bound/wildcard asymmetry that found it.
+//
+// These live here, on the MODEL, rather than in `tests/drop_differential.rs`,
+// and that placement is load-bearing: the differential deliberately excludes
+// this population (rule 2 extends to `via`, because codegen discharges a
+// matched param's payload in the CALLER), so a gate test over there would pass
+// with the fix reverted.
+
+/// The row's first measured program. `eat` scheduled nothing while codegen
+/// visibly recorded `o`.
+#[test]
+fn a_matched_by_value_param_schedules_its_payload() {
+    let res = oracle(
+        r#"
+fn eat(o: Option[String]) -> i64 {
+    match o {
+        Some(x) => { x.len() },
+        None => { 0i64 },
+    }
+}
+"#,
+    );
+    assert!(res.is_clean(), "unexpected violations: {:?}", res.functions);
+    let d = drops_in(&res, "eat");
+    assert!(
+        d.contains(&"x".to_string()),
+        "payload `x` should drop; got {d:?}"
+    );
+}
+
+/// And it names the PARAM as its discharge site, which is the field rule 2 now
+/// tests on — without it the obligation would be compared and would false-
+/// positive on correct code.
+#[test]
+fn a_matched_by_value_param_payload_records_the_param_as_via() {
+    let res = oracle(
+        r#"
+fn eat(o: Option[String]) -> i64 {
+    match o {
+        Some(x) => { x.len() },
+        None => { 0i64 },
+    }
+}
+"#,
+    );
+    let f = res.function("eat").expect("eat");
+    let ev = f.drops.iter().find(|d| d.place == "x").expect("x drops");
+    assert_eq!(ev.via.as_deref(), Some("o"));
+}
+
+/// The wildcard spelling over a param, i.e. B-2026-09-11-2's synthetic place
+/// reached through a parameter scrutinee. Both halves are needed for this.
+#[test]
+fn a_wildcard_payload_over_a_by_value_param_is_scheduled() {
+    let res = oracle(
+        r#"
+fn eat(o: Option[String]) -> i64 {
+    match o {
+        Some(_) => { 1i64 },
+        None => { 0i64 },
+    }
+}
+"#,
+    );
+    let f = res.function("eat").expect("eat");
+    let ev = f
+        .drops
+        .iter()
+        .find(|d| d.place == "<discarded from o>")
+        .expect("synthetic place drops");
+    assert_eq!(ev.via.as_deref(), Some("o"));
+}
+
+/// A user enum parameter projects through `TypeDb::variant_payloads` the same
+/// way a local does.
+#[test]
+fn a_matched_user_enum_param_schedules_its_payload() {
+    let res = oracle(
+        r#"
+enum Box4 { Full(String), Empty }
+
+fn eat(b: Box4) -> i64 {
+    match b {
+        Full(s) => { s.len() },
+        Empty => { 0i64 },
+    }
+}
+"#,
+    );
+    let d = drops_in(&res, "eat");
+    assert!(
+        d.contains(&"s".to_string()),
+        "payload `s` should drop; got {d:?}"
+    );
+}
+
+/// A SCALAR payload over a param stays unscheduled, for the same reason it does
+/// over a local: a phantom drop is the one error the differential cannot
+/// self-report.
+#[test]
+fn a_matched_by_value_param_with_a_scalar_payload_stays_unscheduled() {
+    let res = oracle(
+        r#"
+fn eat(o: Option[i64]) -> i64 {
+    match o {
+        Some(x) => { x },
+        None => { 0i64 },
+    }
+}
+"#,
+    );
+    let d = drops_in(&res, "eat");
+    assert!(d.is_empty(), "scalar payload must not drop; got {d:?}");
+}
+
+/// A BORROW param projects nothing, and gets no dedicated guard to make it so:
+/// `ref T` is `TypeKind::Ref`, which `variant_payload_tys` does not walk. This
+/// test is what would catch that changing.
+#[test]
+fn a_matched_ref_param_payload_stays_unscheduled() {
+    let res = oracle(
+        r#"
+fn peek(o: ref Option[String]) -> i64 {
+    match o {
+        Some(x) => { x.len() },
+        None => { 0i64 },
+    }
+}
+"#,
+    );
+    let d = drops_in(&res, "peek");
+    assert!(d.is_empty(), "borrowed payload must not drop; got {d:?}");
+}
+
 /// The projection is a TYPE question, not "every arm binding owns something":
 /// a scalar payload must stay unscheduled or the model invents a free.
 #[test]

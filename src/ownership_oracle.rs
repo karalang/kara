@@ -701,7 +701,32 @@ fn analyze_fn(f: &Function, type_db: &TypeDb, sigs: &SigTable) -> FnOracle {
                     }
                 }
             };
-            a.introduce(name.to_string(), render_type(&p.ty), heap, state, &p.span);
+            // B-2026-09-12-27 — record the parameter's RESOLVED type, not only
+            // its rendered form. Locals have gone through `introduce_typed`
+            // since B-2026-09-10-31, but parameters kept the untyped
+            // `introduce`, so `Binding::ty` was `None` for every parameter,
+            // `scrutinee_ty` (which reads exactly that field) returned `None`,
+            // and `variant_payload_tys` had nothing to project — a `match` on a
+            // by-value param left its arm bindings at the conservative non-heap
+            // default and the whole match compared nothing, on the bound and
+            // the wildcard spelling alike. The type was already in hand:
+            // `render_type(&p.ty)` renders it for display on this same line.
+            //
+            // A BORROW param needs no guard here and deliberately gets none: a
+            // `ref T` parameter's type is `TypeKind::Ref`, and
+            // `variant_payload_tys` only projects through `TypeKind::Path`, so
+            // it returns `None` and the payload keeps the conservative default
+            // BY CONSTRUCTION. A hand-written mode test here would be a second
+            // copy of that rule, free to rot out of step with the projection it
+            // shadows.
+            a.introduce_typed(
+                name.to_string(),
+                render_type(&p.ty),
+                heap,
+                state,
+                &p.span,
+                Some(p.ty.clone()),
+            );
         }
     }
     a.analyze_block(&f.body, /*is_fn_body=*/ true);

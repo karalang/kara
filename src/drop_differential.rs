@@ -312,11 +312,47 @@ pub fn differential_check_on(src: &str, tree: OracleTree) -> DiffOutcome {
         // an event when it has a named scrutinee to put in `via`: without one
         // the event could never be covered and would be a guaranteed false
         // divergence rather than a finding.
+        // RULE 2 COVERS THE PAYLOAD OF A MATCHED PARAM TOO, AND IT HAS TO BE
+        // TESTED ON `via` RATHER THAN ON THE PLACE (B-2026-09-12-27). Once the
+        // oracle learned parameter types, `match o { Some(x) => .. }` on a
+        // by-value param began scheduling the payload under the ARM BINDING's
+        // name (`x`, or `<discarded from o>` for a wildcard) with `via = o`.
+        // Neither of those names is a parameter, so the place-keyed filter above
+        // let them through — and they are exactly the obligations rule 2 exists
+        // to exclude, discharged across the call boundary where a per-callee
+        // comparison cannot see them.
+        //
+        // MEASURED, on `struct Held { tag: i64, buf: String }` with a user
+        // `Drop`, matched out of `fn eat(o: Option[Held])` — all four cells emit
+        // the IDENTICAL oracle event (`t` via `o`) and the identical empty
+        // codegen record set for `eat`, because codegen discharges the payload
+        // in the CALLER (`ot`, or `__optres_arg_bodies_tmp` for a fresh temp):
+        //
+        //   named local arg, arm reads `t.tag`   correct program  -> FALSE divergence
+        //   named local arg, arm ignores `t`     correct program  -> FALSE divergence
+        //   fresh temp arg,  arm ignores `t`     correct program  -> FALSE divergence
+        //   fresh temp arg,  arm reads `t.tag`   Drop body LOST   -> true  divergence
+        //
+        // Three of the four are correct programs, and no per-function
+        // comparison can separate them from the fourth: the discriminator lives
+        // in another function's records. Reporting all four would redden the
+        // gate on correct code, so the class is excluded on the same grounds as
+        // the param itself. The corpus does not currently generate the shape (0
+        // divergences over 1600 programs unfiltered), which is why this is a
+        // guard against a future generator widening rather than a live fix.
+        //
+        // The cost is real and is not hidden: this takes the matched-param
+        // population back out of the comparison, so the oracle's now-correct
+        // schedule for it is unwatched. Closing that needs a CROSS-FUNCTION
+        // discharge check (the callee's obligation covered by the caller's
+        // record), which the per-function design cannot express today.
         let scheduled: BTreeSet<(&str, Option<&str>)> = f
             .drops
             .iter()
             .map(|d| (d.place.as_str(), d.via.as_deref()))
-            .filter(|(p, _)| !fn_params.contains(*p))
+            .filter(|(p, via)| {
+                !fn_params.contains(*p) && !via.is_some_and(|v| fn_params.contains(v))
+            })
             .collect();
         for (place, via) in scheduled {
             drops_checked += 1;
