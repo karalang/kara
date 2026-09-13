@@ -5506,6 +5506,76 @@ impl<'ctx> super::Codegen<'ctx> {
     /// off `owned_array_params`, so a temporary or a non-owning root no-ops.
     /// Without this, `fn g(a: Array[String,2]) { h(a) }` would free the shared
     /// buffers in both `g` and `h` — a double free.
+    /// B-2026-09-13-16 — [`Self::suppress_array_binding_move_arg`] applied
+    /// THROUGH a payload constructor, for the two `return` positions.
+    ///
+    /// `return a;` over an owned by-value `Array[T, N]` param already retracts
+    /// this frame's scope-exit element drop (B-2026-08-24-5), which is why
+    /// `fn passthru(x: Array[String, 2]) -> Array[String, 2]` is clean. WRAPPING
+    /// the same array on the way out is the identical transfer —
+    /// `fn wrap(a: Array[String, 2]) -> Option[Array[String, 2]] { return Some(a); }`
+    /// hands the caller a value whose payload words point at this frame's
+    /// buffers — but the disarm resolves a root of `Identifier`/`SelfValue` only,
+    /// so a `Call` returned early and nothing was retracted. The callee's array
+    /// drop then freed the `N` buffers while the returned `Option` still carried
+    /// their `{ptr,len,cap}` triples: measured as garbage output at exit 0, and
+    /// under valgrind an `Invalid read of size 2` in `memmove` on a block freed
+    /// by the callee's own array drop. Not a leak — a silent use-after-free.
+    ///
+    /// ONLY VALUE CONSTRUCTORS ARE UNWRAPPED, never an arbitrary call. `Some(a)`
+    /// keeps `a`'s interior inside the value it returns, so the transfer reaches
+    /// the caller; `helper(a)` hands the array to a callee that registers its own
+    /// ownership, and unwrapping there would retract the drop on both sides and
+    /// leave the buffers with no owner at all — the failure mode
+    /// [`Self::owned_array_param_te`]'s doc warns about, in its other direction.
+    ///
+    /// Restricted to the `return` positions rather than folded into the shared
+    /// helper because that helper also serves call-argument, map-insert and
+    /// struct-field sites, each of which has its own settled answer about who
+    /// owns an argument.
+    pub(super) fn suppress_array_binding_move_through_ctor(&mut self, arg: &Expr) {
+        self.suppress_array_binding_move_arg(arg);
+        for inner in Self::payload_ctor_operands(arg) {
+            self.suppress_array_binding_move_through_ctor(inner);
+        }
+    }
+
+    /// The operands of `arg` that a returned value KEEPS — i.e. whose interior
+    /// travels to the caller inside the result. Empty for anything else, which
+    /// is what keeps an ordinary call out.
+    fn payload_ctor_operands(arg: &Expr) -> Vec<&Expr> {
+        match &arg.kind {
+            // `Some(a)` / `Ok(a)` / `Err(a)`, bare and path-spelled, plus a user
+            // enum's variant constructor: all of them store the operand into the
+            // value being returned.
+            ExprKind::Call { callee, args, .. } if Self::is_value_ctor_callee(callee) => {
+                args.iter().map(|a| &a.value).collect()
+            }
+            ExprKind::Tuple(elems) => elems.iter().collect(),
+            ExprKind::ArrayLiteral(elems) => elems.iter().collect(),
+            ExprKind::StructLiteral { fields, .. } => fields.iter().map(|f| &f.value).collect(),
+            _ => Vec::new(),
+        }
+    }
+
+    /// A callee that CONSTRUCTS a value rather than running a body: the three
+    /// prelude payload constructors and any `Path`/`Identifier` whose final
+    /// segment is capitalised (a variant constructor). A lowercase identifier is
+    /// an ordinary function and is deliberately excluded — Kāra's case-class
+    /// invariant makes that split reliable, and erring toward "not a
+    /// constructor" leaves today's behaviour unchanged.
+    fn is_value_ctor_callee(callee: &Expr) -> bool {
+        let last = match &callee.kind {
+            ExprKind::Identifier(n) => n.rsplit('.').next().unwrap_or(n),
+            ExprKind::Path { segments, .. } => match segments.last() {
+                Some(s) => s.as_str(),
+                None => return false,
+            },
+            _ => return false,
+        };
+        last.chars().next().is_some_and(|c| c.is_uppercase())
+    }
+
     pub(super) fn suppress_array_binding_move_arg(&mut self, arg: &Expr) {
         let root = match &arg.kind {
             ExprKind::Identifier(n) => n.clone(),

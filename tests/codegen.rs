@@ -151179,6 +151179,68 @@ fn main() {
         );
     }
 
+    /// B-2026-09-13-16 — a callee that WRAPS its own by-value `Array` param in
+    /// an `Option` returned a DANGLING interior, and this pins the OUTPUT
+    /// because wrong output was the observable.
+    ///
+    /// `return a;` over an owned by-value `Array[T, N]` param already retracted
+    /// the callee's scope-exit element drop (B-2026-08-24-5) — which is why
+    /// `fn passthru(x: Array[String, 2]) -> Array[String, 2]` was always clean.
+    /// `return Some(a);` is the identical transfer, but the disarm resolved a
+    /// root of `Identifier` / `SelfValue` only, so a `Call` returned on its
+    /// first line and nothing was retracted. The callee then freed the `N`
+    /// buffers while the returned `Option` still carried their `{ptr,len,cap}`
+    /// triples, and the caller `memmove`d out of freed heap.
+    ///
+    /// MEASURED before the fix, `KARAC_OPT_LEVEL=0`: garbage on all three
+    /// compiled surfaces and the right answer under `--interp`, with valgrind
+    /// reporting `Invalid read of size 2` in `memmove`, 33 errors from 2
+    /// contexts, on a block freed by the callee's own array drop. The three
+    /// compiled surfaces printed DIFFERENT garbage from each other, which is
+    /// the tell that this is freed heap being re-read rather than a consistent
+    /// miscompile.
+    ///
+    /// IT LIVES HERE RATHER THAN IN `memory_sanitizer.rs` because the cell is
+    /// not yet leak-free: retracting the callee's drop hands the buffers to the
+    /// caller's arm-bound binding, whose owner is the one B-2026-09-13-2 left
+    /// standing, so 132 B remain — the same residual that row records for its
+    /// `passthru` sibling. The consuming controls, which CAN be asserted
+    /// leak-free, are `asan_consuming_array_params_keep_their_callee_drop`.
+    ///
+    /// The `mk` cell is the in-program oracle: a callee that builds its own
+    /// interior was correct throughout, so a run where `w:` and `m:` disagree
+    /// is this defect and not a `Option[Array[..]]` problem in general.
+    #[test]
+    fn e2e_array_param_wrapped_into_an_option_return_survives_the_callee() {
+        assert_eq!(
+            run_program(
+                "fn wrap(a: Array[String, 2]) -> Option[Array[String, 2]] { return Some(a); }\n\
+                 fn mk(n: i64) -> Option[Array[String, 2]] { return Some([f\"row-aaaaaaaaaaaaaaaa-{n}\", f\"col-bbbbbbbbbbbbbbbb-{n}\"]); }\n\
+                 fn main() {\n\
+                 \x20\x20\x20\x20let mut j: i64 = 0;\n\
+                 \x20\x20\x20\x20while j < 3 {\n\
+                 \x20\x20\x20\x20\x20\x20\x20\x20let e: Array[String, 2] = [f\"row-aaaaaaaaaaaaaaaa-{j}\", f\"col-bbbbbbbbbbbbbbbb-{j}\"];\n\
+                 \x20\x20\x20\x20\x20\x20\x20\x20let o = wrap(e);\n\
+                 \x20\x20\x20\x20\x20\x20\x20\x20match o { Some(a) => { println(f\"w:{a[0]}\"); } None => { println(\"none\"); } }\n\
+                 \x20\x20\x20\x20\x20\x20\x20\x20match mk(j) { Some(a) => { println(f\"m:{a[0]}\"); } None => { println(\"none\"); } }\n\
+                 \x20\x20\x20\x20\x20\x20\x20\x20j = j + 1;\n\
+                 \x20\x20\x20\x20}\n\
+                 \x20\x20\x20\x20println(\"end\");\n\
+                 }\n"
+            ),
+            Some(
+                "w:row-aaaaaaaaaaaaaaaa-0\n\
+                 m:row-aaaaaaaaaaaaaaaa-0\n\
+                 w:row-aaaaaaaaaaaaaaaa-1\n\
+                 m:row-aaaaaaaaaaaaaaaa-1\n\
+                 w:row-aaaaaaaaaaaaaaaa-2\n\
+                 m:row-aaaaaaaaaaaaaaaa-2\n\
+                 end\n"
+                    .to_string()
+            )
+        );
+    }
+
     /// Every place shape the method path must now reach, against the
     /// free-function spelling of the same call as the in-program oracle: a
     /// nested field, a tuple index, a struct-held tuple index, an array index

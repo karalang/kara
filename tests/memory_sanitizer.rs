@@ -88481,6 +88481,69 @@ fn main() {
         );
     }
 
+    /// B-2026-09-13-16 — the CONSUMING controls for the wrapped-array-return
+    /// fix, which is the half that can be asserted leak-free.
+    ///
+    /// That row is a use-after-free: `fn wrap(a: Array[String, 2]) ->
+    /// Option[Array[String, 2]] { return Some(a); }` freed the param's `N`
+    /// buffers at callee exit while the returned `Option` still carried their
+    /// `{ptr,len,cap}` triples. Its observable is WRONG OUTPUT, so the wrapping
+    /// cell itself is pinned in `tests/codegen.rs`
+    /// (`e2e_array_param_wrapped_into_an_option_return_survives_the_callee`) —
+    /// it cannot live here, because retracting the callee's drop leaves the
+    /// buffers to the caller's ARM-BOUND binding, whose owner is the one
+    /// B-2026-09-13-2 left standing, so the cell still leaks the 132 B that row
+    /// records for its `passthru` sibling. Asserting zero here would fail for a
+    /// defect this fix does not own.
+    ///
+    /// What DOES belong here is the other direction, which is the dangerous
+    /// one: a disarm that fires too widely retracts the callee's drop where
+    /// nothing else registers one, and the buffers get no owner at all. Each
+    /// cell below consumes its param and must stay at `definitely lost: 0`:
+    ///   - `eat` returns a SCALAR while naming the param in its return, the
+    ///     shape a "mentioned in the return" rule would wrongly strip;
+    ///   - `sink` consumes it and returns nothing;
+    ///   - `passthru_arr` is the bare `return a;` the original B-2026-08-24-5
+    ///     disarm was built for, which must keep working unchanged.
+    #[test]
+    fn asan_consuming_array_params_keep_their_callee_drop() {
+        assert_clean_asan_run(
+            r#"
+fn eat(a: Array[String, 2]) -> i64 { return a[0].len(); }
+fn sink(a: Array[String, 2]) { println(f"s:{a[1]}"); }
+fn passthru_arr(a: Array[String, 2]) -> Array[String, 2] { return a; }
+
+fn main() {
+    let mut j: i64 = 0;
+    while j < 3 {
+        let e2: Array[String, 2] = [f"eat-aaaaaaaaaaaaaaaa-{j}", f"eat-bbbbbbbbbbbbbbbb-{j}"];
+        println(f"e:{eat(e2)}");
+        let e3: Array[String, 2] = [f"snk-aaaaaaaaaaaaaaaa-{j}", f"snk-bbbbbbbbbbbbbbbb-{j}"];
+        sink(e3);
+        let e4: Array[String, 2] = [f"pt-aaaaaaaaaaaaaaaa-{j}", f"pt-bbbbbbbbbbbbbbbb-{j}"];
+        let r = passthru_arr(e4);
+        println(f"p:{r[0]}");
+        j = j + 1;
+    }
+    println("end");
+}
+"#,
+            &[
+                "e:22",
+                "s:snk-bbbbbbbbbbbbbbbb-0",
+                "p:pt-aaaaaaaaaaaaaaaa-0",
+                "e:22",
+                "s:snk-bbbbbbbbbbbbbbbb-1",
+                "p:pt-aaaaaaaaaaaaaaaa-1",
+                "e:22",
+                "s:snk-bbbbbbbbbbbbbbbb-2",
+                "p:pt-aaaaaaaaaaaaaaaa-2",
+                "end",
+            ],
+            "asan_consuming_array_params_keep_their_callee_drop",
+        );
+    }
+
     /// B-2026-09-13-10 — the STRUCT-shaped spelling of a nested boxed-payload
     /// destructure, which leaked one block per leaf field because its disarm
     /// had no WIDTH CEILING.

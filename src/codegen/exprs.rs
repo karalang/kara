@@ -1304,7 +1304,9 @@ impl<'ctx> super::Codegen<'ctx> {
                     // retracted. Without it both frames free the same element
                     // buffers. See the tail-position sibling in
                     // `suppress_cleanup_for_tail_return`.
-                    self.suppress_array_binding_move_arg(e);
+                    // B-2026-09-13-16 — through a payload constructor too
+                    // (`return Some(a);`), not only the bare `return a;`.
+                    self.suppress_array_binding_move_through_ctor(e);
                     // B-2026-08-29-56 — the INLINE sibling of the boxed-payload
                     // escape disarm below. `let buf = Some(f"zz"); buf` hands the
                     // caller an `Option` whose payload words still point at THIS
