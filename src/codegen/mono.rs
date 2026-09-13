@@ -7127,7 +7127,9 @@ impl<'ctx> super::Codegen<'ctx> {
             .unwrap();
         base_phi.add_incoming(&[(&tail_base_next, tail_next_bb)]);
         scanned_phi.add_incoming(&[(&tail_scanned_next, tail_next_bb)]);
-        self.builder.build_unconditional_branch(grp_cond_bb).unwrap();
+        self.builder
+            .build_unconditional_branch(grp_cond_bb)
+            .unwrap();
 
         // ── grp.body: one load, two masks ──
         self.builder.position_at_end(grp_body_bb);
@@ -7148,7 +7150,10 @@ impl<'ctx> super::Codegen<'ctx> {
         // runtime's twin says the same with `u64::from_le`.
         let zero_lanes = |cg: &Self, x: IntValue<'ctx>, tag: &str| {
             let not_hi = i64_t.const_int(!HI, false);
-            let masked = cg.builder.build_and(x, not_hi, &format!("{tag}.m")).unwrap();
+            let masked = cg
+                .builder
+                .build_and(x, not_hi, &format!("{tag}.m"))
+                .unwrap();
             let bumped = cg
                 .builder
                 .build_int_add(masked, not_hi, &format!("{tag}.a"))
@@ -7166,19 +7171,14 @@ impl<'ctx> super::Codegen<'ctx> {
         // zero input is poison unless is_zero_poison=false, so the mask is
         // tested first and the select feeds a safe value.
         let cttz = {
-            let intr = inkwell::intrinsics::Intrinsic::find("llvm.cttz")
-                .expect("llvm.cttz must exist");
+            let intr =
+                inkwell::intrinsics::Intrinsic::find("llvm.cttz").expect("llvm.cttz must exist");
             intr.get_declaration(&self.module, &[i64_t.into()])
                 .expect("llvm.cttz has an i64 declaration")
         };
         let empt_is_zero = self
             .builder
-            .build_int_compare(
-                IntPredicate::EQ,
-                empties,
-                i64_t.const_zero(),
-                "grp.noempty",
-            )
+            .build_int_compare(IntPredicate::EQ, empties, i64_t.const_zero(), "grp.noempty")
             .unwrap();
         let empt_tz = self
             .builder
@@ -7211,7 +7211,9 @@ impl<'ctx> super::Codegen<'ctx> {
             )
             .unwrap()
             .into_int_value();
-        self.builder.build_unconditional_branch(lane_cond_bb).unwrap();
+        self.builder
+            .build_unconditional_branch(lane_cond_bb)
+            .unwrap();
 
         // ── lane.cond: walk the set lanes of the tag mask, in order ──
         self.builder.position_at_end(lane_cond_bb);
@@ -7230,11 +7232,7 @@ impl<'ctx> super::Codegen<'ctx> {
         self.builder.position_at_end(lane_pick_bb);
         let hit_tz = self
             .builder
-            .build_call(
-                cttz,
-                &[hits.into(), bool_t.const_zero().into()],
-                "lane.tz",
-            )
+            .build_call(cttz, &[hits.into(), bool_t.const_zero().into()], "lane.tz")
             .unwrap()
             .try_as_basic_value()
             .unwrap_basic()
@@ -7301,7 +7299,12 @@ impl<'ctx> super::Codegen<'ctx> {
         self.builder.position_at_end(after_lanes_bb);
         let has_empty = self
             .builder
-            .build_int_compare(IntPredicate::NE, empties, i64_t.const_zero(), "grp.hasempty")
+            .build_int_compare(
+                IntPredicate::NE,
+                empties,
+                i64_t.const_zero(),
+                "grp.hasempty",
+            )
             .unwrap();
         let next_grp_bb = self.context.append_basic_block(f, "grp.next");
         self.builder
@@ -7322,7 +7325,9 @@ impl<'ctx> super::Codegen<'ctx> {
             .unwrap();
         base_phi.add_incoming(&[(&base_next, next_grp_bb)]);
         scanned_phi.add_incoming(&[(&scanned_next, next_grp_bb)]);
-        self.builder.build_unconditional_branch(grp_cond_bb).unwrap();
+        self.builder
+            .build_unconditional_branch(grp_cond_bb)
+            .unwrap();
 
         // ── match.found / not.found ──
         self.builder.position_at_end(found_bb);
