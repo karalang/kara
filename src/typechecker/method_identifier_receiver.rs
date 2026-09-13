@@ -869,7 +869,35 @@ impl<'a> super::TypeChecker<'a> {
                 // (`new`, `with_capacity`, the fallible `try_*` companions,
                 // `Channel`'s tuple return) instead of a second copy that
                 // would drift from the first.
-                if is_builtin_container_head(&type_name) {
+                // B-2026-09-12-16 — a USER ENUM's variant constructor, which
+                // needs the identical delegation for the identical reason.
+                //
+                // `Option` and `Result` are in `is_builtin_container_head`, so
+                // `Option[R].Some(x)` has been accepted here all along; a user
+                // enum was refused only because its name is not in that list.
+                // That is the whole of the seeded-vs-user split the row
+                // measured — not, as it guessed, a separate arm upstream
+                // accepting the seeded pair.
+                //
+                // It matters beyond ergonomics: B-2026-08-21-53 made the
+                // qualified form THE documented way to pin type arguments, and
+                // a user enum with a payload had no way to spell the pin at all
+                // — `Ho.Full(x)` takes whatever inference gives it and
+                // `Ho[R].Full(x)` was rejected.
+                //
+                // The gate is a POSITIVE test (the receiver names an enum and
+                // the method names one of its variants), not a fallthrough, for
+                // the reason `is_builtin_container_head`'s own doc gives:
+                // a failed delegation reports against the name it rebuilt, so
+                // speculatively delegating an unknown head would emit a
+                // diagnostic about a name the user did not write instead of the
+                // focused `no method` message below.
+                let is_user_enum_variant_ctor = self
+                    .env
+                    .enums
+                    .get(type_name.as_str())
+                    .is_some_and(|e| e.variants.iter().any(|(v, _)| v == method));
+                if is_builtin_container_head(&type_name) || is_user_enum_variant_ctor {
                     let delegated_callee = Expr {
                         kind: ExprKind::Path {
                             segments: vec![type_name.clone(), method.to_string()],
