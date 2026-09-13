@@ -85513,6 +85513,133 @@ fn main() {
         );
     }
 
+    /// B-2026-09-13-9 — a nested destructure of a BOXED enum payload whose leaf
+    /// is WIDER than the envelope's payload area, where the arm MOVES the leaf.
+    ///
+    /// B-2026-09-12-25 leg 2 gave `suppress_nested_boxed_payload_cleanup` a
+    /// width ceiling: a leaf at or under the area (3 words for `Option`, 5 for
+    /// `Result`) is materialised as an owning copy and the box must stand down
+    /// for it, while a WIDER leaf is a view into the box that owns nothing, so
+    /// the box must keep freeing it. That is correct for a READ-ONLY arm — it is
+    /// what the four fixtures leg 2 repaired all measure — and it is blind to
+    /// the other axis: a REBIND or a move-out mints a second owner for the same
+    /// buffers at ANY width, and nothing else stood the box down for it.
+    ///
+    /// Every cell below aborted at `KARAC_OPT_LEVEL=0`, at `-O2`, and under
+    /// auto-par, while `--interp` printed the expected lines and exited 0. The
+    /// counts are valgrind's at `-O0`, 9-word leaf unless noted:
+    ///
+    /// ```text
+    ///   let m = r;                 3 errors   (2 at a 6-word leaf)
+    ///   acc.push(r)  mut ref Vec   5 errors
+    ///   return r     from the arm  3 errors
+    ///   acc.held = r mut ref field 7 errors
+    /// ```
+    ///
+    /// The fix exempts exactly the positions the arm body MOVES from the
+    /// ceiling, so the read-only shapes keep it. Cells 5-7 are the controls that
+    /// pin that: a read-only arm at the same width, `eat(r)` (by-value to a
+    /// callee, clean before the fix because the callee's entry copy is not a
+    /// second owner of the box's buffers), and a rebind at a leaf that FITS the
+    /// area — the shape leg 2 already fixed, which must stay fixed.
+    #[test]
+    fn asan_wide_boxed_enum_leaf_moved_out_of_an_arm_is_freed_once() {
+        const PRE: &str = "struct R3 { s: String, t: String, u: String }\n\
+             enum Ke { A(R3), B }\n\
+             fn seed() -> i64 { env.args().len() }\n\
+             fn mk(i: i64) -> R3 { return R3 { s: f\"ssssssss{i}{seed()}\", t: f\"tttttttt{i}\", u: f\"uuuuuuuu{i}\" }; }\n";
+
+        // 1 — the row's own cell: an immutable rebind of the wide leaf.
+        assert_clean_asan_run(
+            &format!(
+                "{PRE}\
+                 fn f(x: Option[Ke]) {{ match x {{ Option.Some(Ke.A(r)) => {{ let m = r; println(f\"rb:{{m.s}}\"); }} _ => {{}} }} }}\n\
+                 fn main() {{ let mut i = 0; while i < 2 {{ f(Option.Some(Ke.A(mk(i)))); i = i + 1; }} }}\n"
+            ),
+            &["rb:ssssssss01", "rb:ssssssss11"],
+            "b9-wide-leaf-rebind",
+        );
+
+        // 2 — the leaf pushed into a `mut ref` container, which outlives the arm.
+        assert_clean_asan_run(
+            &format!(
+                "{PRE}\
+                 fn f(x: Option[Ke], acc: mut ref Vec[R3]) {{ match x {{ Option.Some(Ke.A(r)) => {{ acc.push(r); }} _ => {{}} }} }}\n\
+                 fn main() {{ let mut acc: Vec[R3] = Vec.new(); let mut i = 0;\n\
+                 \x20  while i < 2 {{ f(Option.Some(Ke.A(mk(i))), mut acc); i = i + 1; }}\n\
+                 \x20  println(f\"rb:{{acc[0].s}}\"); }}\n"
+            ),
+            &["rb:ssssssss01"],
+            "b9-wide-leaf-push-mut-ref-vec",
+        );
+
+        // 3 — the leaf RETURNED out of the arm.
+        assert_clean_asan_run(
+            &format!(
+                "{PRE}\
+                 fn f(x: Option[Ke]) -> R3 {{ match x {{ Option.Some(Ke.A(r)) => {{ return r; }} _ => {{ return mk(9); }} }} }}\n\
+                 fn main() {{ let mut i = 0; while i < 2 {{ let g = f(Option.Some(Ke.A(mk(i)))); println(f\"rb:{{g.s}}\"); i = i + 1; }} }}\n"
+            ),
+            &["rb:ssssssss01", "rb:ssssssss11"],
+            "b9-wide-leaf-arm-return",
+        );
+
+        // 4 — the leaf assigned into a `mut ref` struct field.
+        assert_clean_asan_run(
+            &format!(
+                "{PRE}\
+                 struct Holder {{ held: R3 }}\n\
+                 fn f(x: Option[Ke], acc: mut ref Holder) {{ match x {{ Option.Some(Ke.A(r)) => {{ acc.held = r; }} _ => {{}} }} }}\n\
+                 fn main() {{ let mut h = Holder {{ held: mk(9) }}; let mut i = 0;\n\
+                 \x20  while i < 2 {{ f(Option.Some(Ke.A(mk(i))), mut h); i = i + 1; }}\n\
+                 \x20  println(f\"rb:{{h.held.s}}\"); }}\n"
+            ),
+            &["rb:ssssssss11"],
+            "b9-wide-leaf-mut-ref-field-assign",
+        );
+
+        // 5 — CONTROL, read-only arm at the same width. Clean BEFORE the fix and
+        //     the shape leg 2's ceiling exists to protect: the box is the single
+        //     owner and exempting this position would LEAK.
+        assert_clean_asan_run(
+            &format!(
+                "{PRE}\
+                 fn f(x: Option[Ke]) {{ match x {{ Option.Some(Ke.A(r)) => {{ println(f\"rb:{{r.s}}\"); }} _ => {{}} }} }}\n\
+                 fn main() {{ let mut i = 0; while i < 2 {{ f(Option.Some(Ke.A(mk(i)))); i = i + 1; }} }}\n"
+            ),
+            &["rb:ssssssss01", "rb:ssssssss11"],
+            "b9-wide-leaf-readonly-control",
+        );
+
+        // 6 — CONTROL, the leaf handed BY VALUE to a callee. Clean before the
+        //     fix: the callee's entry copy is not a second owner of the box's
+        //     buffers, which is what puts the axis on a rebind or a transfer
+        //     into storage rather than on "any consume".
+        assert_clean_asan_run(
+            &format!(
+                "{PRE}\
+                 fn eat(v: R3) {{ println(f\"rb:{{v.s}}\"); }}\n\
+                 fn f(x: Option[Ke]) {{ match x {{ Option.Some(Ke.A(r)) => {{ eat(r); }} _ => {{}} }} }}\n\
+                 fn main() {{ let mut i = 0; while i < 2 {{ f(Option.Some(Ke.A(mk(i)))); i = i + 1; }} }}\n"
+            ),
+            &["rb:ssssssss01", "rb:ssssssss11"],
+            "b9-wide-leaf-callee-by-value-control",
+        );
+
+        // 7 — CONTROL, a rebind at a leaf that FITS `Option`'s 3-word area. This
+        //     is leg 2's own shape; it must stay fixed.
+        assert_clean_asan_run(
+            "struct R1 { s: String }\n\
+             enum Kn { A(R1), B }\n\
+             fn seed() -> i64 { env.args().len() }\n\
+             fn mk1(i: i64) -> R1 { return R1 { s: f\"ssssssss{i}{seed()}\" }; }\n\
+             fn f(x: Option[Kn]) { match x { Option.Some(Kn.A(r)) => { let m = r; println(f\"rb:{m.s}\"); } _ => {} } }\n\
+             fn main() { let mut i = 0; while i < 2 { f(Option.Some(Kn.A(mk1(i)))); i = i + 1; } }\n",
+            &["rb:ssssssss01", "rb:ssssssss11"],
+            "b9-narrow-leaf-rebind-control",
+        );
+    }
+
     /// B-2026-09-09-14 — a DISCARDED tuple temp (`f(mk(20));`) owns its whole
     /// interior and nothing was freeing it.
     ///

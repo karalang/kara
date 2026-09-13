@@ -899,7 +899,11 @@ impl<'ctx> super::Codegen<'ctx> {
                         &arm.pattern,
                     );
                 } else {
-                    self.suppress_destructured_enum_payload_cleanup(scrutinee, &arm.pattern);
+                    self.suppress_destructured_enum_payload_cleanup(
+                        scrutinee,
+                        &arm.pattern,
+                        Some(&arm.body),
+                    );
                     // B-2026-08-07-7 — the BOXED-payload struct-field channel
                     // the call above cannot reach (`is_heap_bearing()` is false
                     // for `BoxedOptRes`, so it skips boxed payloads by design).
@@ -2263,6 +2267,7 @@ impl<'ctx> super::Codegen<'ctx> {
         slot_ptr: PointerValue<'ctx>,
         enum_name: &str,
         pattern: &Pattern,
+        body: Option<&Expr>,
     ) {
         let PatternKind::TupleVariant { patterns, .. } = &pattern.kind else {
             return;
@@ -2323,12 +2328,65 @@ impl<'ctx> super::Codegen<'ctx> {
         // B-2026-09-12-25 leg 2 — `area` above is the OUTER envelope's payload-area
         // word count (3 for `Option`, 5 for `Result`), which is exactly the width
         // at which a leaf stops owning itself. Disarming past it leaks.
+        //
+        // B-2026-09-13-9 — EXCEPT where the arm MOVES the leaf out. The ceiling
+        // encodes "a wide leaf is a view into the box and owns nothing", which is
+        // true for a read-only arm and is what makes the box the single owner
+        // there. A rebind (`let m = r`), a push into a `mut ref` container, a
+        // return, or an assignment into a `mut ref` field all mint a SECOND owner
+        // for the same buffers regardless of width, and nothing else stands the
+        // box down for them — so those positions abort where the read-only twin
+        // is clean. Exempting exactly the moved positions keeps the read-only
+        // shapes (the four fixtures leg 2 was written to repair) on the ceiling
+        // while giving the moved ones the disarm they always needed.
+        let exempt = self.body_moved_payload_positions(&inner_enum, sub, body);
         self.suppress_destructured_enum_payload_cleanup_at_limited(
             box_ptr,
             &inner_enum,
             sub,
             Some(area),
+            &exempt,
         );
+    }
+
+    /// B-2026-09-13-9 — the payload positions of `pattern` whose binding the arm
+    /// `body` MOVES rather than merely reads, as indices into the inner variant.
+    ///
+    /// The discriminator for lifting
+    /// [`Self::suppress_destructured_enum_payload_cleanup_at_limited`]'s width
+    /// ceiling. `consume_class::binding_only_borrowed` is the same classifier the
+    /// arm loop already uses to decide whether a payload binding takes a
+    /// consuming channel, so a position counts as moved on exactly the terms the
+    /// rest of the arm machinery calls a move.
+    ///
+    /// Empty when there is no body to consult (the `let … else` leg, whose
+    /// binding outlives the statement and whose scope is not a single block), so
+    /// that leg keeps today's ceiling unchanged.
+    fn body_moved_payload_positions(
+        &self,
+        inner_enum: &str,
+        pattern: &Pattern,
+        body: Option<&Expr>,
+    ) -> std::collections::HashSet<usize> {
+        let mut out = std::collections::HashSet::new();
+        let Some(body) = body else {
+            return out;
+        };
+        let Some((_, consumed)) = self.enum_pattern_consumed_positions(inner_enum, pattern) else {
+            return out;
+        };
+        let PatternKind::TupleVariant { patterns, .. } = &pattern.kind else {
+            return out;
+        };
+        for pos in consumed {
+            let Some(PatternKind::Binding(name)) = patterns.get(pos).map(|p| &p.kind) else {
+                continue;
+            };
+            if !super::consume_class::binding_only_borrowed(name, body) {
+                out.insert(pos);
+            }
+        }
+        out
     }
 
     /// The box-interior half of [`Self::suppress_destructured_enum_payload_cleanup`]
@@ -9077,6 +9135,7 @@ impl<'ctx> super::Codegen<'ctx> {
         &mut self,
         scrutinee: &Expr,
         pattern: &Pattern,
+        body: Option<&Expr>,
     ) {
         // An owned `self` receiver (`impl E { fn get(self) { match self { E.V(s)
         // => … } } }`) parses as `SelfValue`, not `Identifier("self")`. Without
@@ -9111,7 +9170,7 @@ impl<'ctx> super::Codegen<'ctx> {
         // pattern that reaches THROUGH the box in one step
         // (`Some(K.A(r))`), where the leaf the arm binds lives inside the
         // boxed payload and the box's own drop still walks to it.
-        self.suppress_nested_boxed_payload_cleanup(slot.ptr, &enum_name, pattern);
+        self.suppress_nested_boxed_payload_cleanup(slot.ptr, &enum_name, pattern, body);
         // B-2026-07-30-11 (enum leg) — the BODIES channel's half of the same
         // move-out. The cap-zeroing above disarms the source's MEMORY drop; the
         // payload's user `impl Drop` body rides the separate NLL `UserDrop`
@@ -11248,7 +11307,11 @@ impl<'ctx> super::Codegen<'ctx> {
         pattern: &Pattern,
     ) {
         self.suppress_destructured_enum_payload_cleanup_at_limited(
-            slot_ptr, enum_name, pattern, None,
+            slot_ptr,
+            enum_name,
+            pattern,
+            None,
+            &std::collections::HashSet::new(),
         )
     }
 
@@ -11305,6 +11368,7 @@ impl<'ctx> super::Codegen<'ctx> {
         enum_name: &str,
         pattern: &Pattern,
         max_position_words: Option<usize>,
+        ceiling_exempt_positions: &std::collections::HashSet<usize>,
     ) {
         let layout = match self.type_decls.enum_layouts.get(enum_name) {
             Some(l) => l.clone(),
@@ -11340,7 +11404,14 @@ impl<'ctx> super::Codegen<'ctx> {
             // B-2026-09-12-25 leg 2 — skip a position WIDER than the caller's
             // ceiling: its leaf binding is a view into the box and owns nothing,
             // so the box must keep freeing it. See the table on this fn's doc.
-            if max_position_words.is_some_and(|limit| num_words > limit) {
+            // B-2026-09-13-9 — a position the arm MOVES is exempt: the move mints
+            // a second owner for the same buffers whatever the leaf's width, so
+            // the box has to stand down for it exactly as it does under the
+            // ceiling. Read-only positions keep the ceiling and keep the box as
+            // their single owner.
+            if max_position_words.is_some_and(|limit| num_words > limit)
+                && !ceiling_exempt_positions.contains(&pos)
+            {
                 continue;
             }
             // `consumed_positions` already filtered to the fields this pattern
