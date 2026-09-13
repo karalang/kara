@@ -22765,6 +22765,90 @@ fn main() {
     /// `no-construct-at-all` stays `-O0`-only by construction: reading the
     /// payload would require the very construct the row exists to exclude, and
     /// the `asan-o0` CI leg is its gate.
+    /// B-2026-09-12-25 — a nested destructure that binds a struct leaf out of a
+    /// BOXED enum payload gave the leaf two owners: the arm's binding, and the
+    /// boxed payload's own drop still walking to the field the pattern moved
+    /// out. Both went through `__karac_drop_struct_R2` and the second aborted.
+    ///
+    /// FOUR CELLS, and the second is the one the row got wrong. It was filed
+    /// with the escaping form as the defect and the READ-ONLY form as a clean
+    /// control, concluding that the trigger was the leaf escaping into a
+    /// `mut ref` accumulator. Both double-free identically: glibc's tcache
+    /// check missed the read-only one, while ASAN and macOS libmalloc catch it.
+    /// The trigger is the nested move-out, whatever the arm then does.
+    ///
+    /// The `Result` cell and the INLINE cell bound the fix. Inline is the
+    /// control that matters most: its payload has no box, so the disarm must
+    /// NOT fire there — reading word 1 as a pointer would be reading the
+    /// payload's own bytes as an address.
+    #[test]
+    fn asan_nested_boxed_payload_leaf_has_one_owner() {
+        const H: &str = "struct R2 { s: String }\n\
+             enum K { A(R2), B }\n\
+             impl Drop for K { fn drop(mut ref self) { println(\"dK\") } }\n\
+             struct Small { n: i64 }\n\
+             enum S { A(Small), B }\n";
+        for (label, body, want) in [
+            // The row's own shape: the leaf escapes into a `mut ref` accumulator.
+            (
+                "escaping-into-mut-ref",
+                "fn show(x: Option[K], acc: mut ref Vec[R2]) {\n\
+                 \x20  match x {\n\
+                 \x20    Option.Some(K.A(r)) => { acc.push(r) }\n\
+                 \x20    Option.Some(K.B) => {}\n\
+                 \x20    Option.None => {}\n\
+                 \x20  } }\n\
+                 fn main() {\n\
+                 \x20  let mut acc: Vec[R2] = [];\n\
+                 \x20  show(Option.Some(K.A(R2 { s: f\"z\" })), mut acc);\n\
+                 \x20  println(f\"len:{acc.len()}\");\n\
+                 \x20  println(\"end\") }\n",
+                vec!["len:1", "end"],
+            ),
+            // The row's "clean control", which is not clean: the leaf is only
+            // READ and still had two owners.
+            (
+                "read-only-leaf",
+                "fn show(x: Option[K]) {\n\
+                 \x20  match x {\n\
+                 \x20    Option.Some(K.A(r)) => { println(f\"a:{r.s}\") }\n\
+                 \x20    Option.Some(K.B) => {}\n\
+                 \x20    Option.None => {}\n\
+                 \x20  } }\n\
+                 fn main() { show(Option.Some(K.A(R2 { s: f\"z\" }))); println(\"end\") }\n",
+                vec!["a:z", "dK", "end"],
+            ),
+            // The `Result` spelling of the same nesting.
+            (
+                "result-ok-side",
+                "fn show(x: Result[K, i64]) {\n\
+                 \x20  match x {\n\
+                 \x20    Result.Ok(K.A(r)) => { println(f\"a:{r.s}\") }\n\
+                 \x20    Result.Ok(K.B) => {}\n\
+                 \x20    Result.Err(e) => { println(f\"e:{e}\") }\n\
+                 \x20  } }\n\
+                 fn main() { show(Result.Ok(K.A(R2 { s: f\"y\" }))); println(\"end\") }\n",
+                vec!["a:y", "dK", "end"],
+            ),
+            // INLINE payload — no box. The disarm must decline here; the outer
+            // zeroing already covers it.
+            (
+                "inline-payload-untouched",
+                "fn show(x: Option[S]) {\n\
+                 \x20  match x {\n\
+                 \x20    Option.Some(S.A(m)) => { println(f\"n:{m.n}\") }\n\
+                 \x20    Option.Some(S.B) => {}\n\
+                 \x20    Option.None => {}\n\
+                 \x20  } }\n\
+                 fn main() { show(Option.Some(S.A(Small { n: 7 }))); println(\"end\") }\n",
+                vec!["n:7", "end"],
+            ),
+        ] {
+            let src = format!("{H}{body}");
+            assert_clean_asan_run(&src, &want, label);
+        }
+    }
+
     #[test]
     fn asan_reassigning_a_moved_in_boxed_payload_frees_the_envelope() {
         const H: &str = "enum Val { Nothing, Ident(String) }\n\

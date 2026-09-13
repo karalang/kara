@@ -2230,6 +2230,95 @@ impl<'ctx> super::Codegen<'ctx> {
             .insert(bound.clone(), (src.clone(), container.to_string()));
     }
 
+    /// B-2026-09-12-25 — disarm the drop INSIDE a boxed enum payload when the
+    /// arm's pattern reaches through the box and binds a leaf out of it.
+    ///
+    /// `match x { Option.Some(K.A(r)) => … }` over `enum K { A(R2), B }` gave
+    /// the `R2` two owners: the binding `r`, and the boxed `K`'s own drop,
+    /// which still walked into the field the pattern had moved out. Both went
+    /// through `__karac_drop_struct_R2` and the second one aborted.
+    ///
+    /// WHY THE EXISTING DISARMS MISS IT. The outer
+    /// `suppress_destructured_enum_payload_cleanup_at` runs, but it zeroes the
+    /// OUTER container's payload word — one level above where the leaf lives.
+    /// `register_boxed_payload_alias` would reach the right level, but it
+    /// accepts only a plain `Binding` sub-pattern (`Some(k)`), so a nested
+    /// `TupleVariant` records no alias and nothing fires.
+    ///
+    /// The disarm itself is the same one the aliased path performs, applied to
+    /// the INNER enum through the box pointer: zero the moved-out field's words
+    /// inside the box so the payload's drop skips what the binding now owns.
+    ///
+    /// ONLY WHEN THE PAYLOAD IS ACTUALLY BOXED. An inline payload has no box
+    /// and the outer zeroing already covers it; reading word 1 as a pointer
+    /// there would be reading the payload's own bytes as an address.
+    ///
+    /// The RECORDED CONTROL FOR THIS ROW WAS A FALSE NEGATIVE: the read-only
+    /// twin (`println(f"a:{r.s}")` instead of an escaping push) double-frees
+    /// identically. glibc's tcache check missed it; ASAN and macOS libmalloc
+    /// both catch it. So this is not about the leaf escaping — it is about the
+    /// nested move-out — and the fix belongs here rather than at the call site.
+    fn suppress_nested_boxed_payload_cleanup(
+        &mut self,
+        slot_ptr: PointerValue<'ctx>,
+        enum_name: &str,
+        pattern: &Pattern,
+    ) {
+        let PatternKind::TupleVariant { patterns, .. } = &pattern.kind else {
+            return;
+        };
+        let [sub] = patterns.as_slice() else {
+            return;
+        };
+        // The sub-pattern must itself destructure — a plain binding is the
+        // aliased path's job, and a wildcard claims nothing.
+        let PatternKind::TupleVariant {
+            path: inner_path, ..
+        } = &sub.kind
+        else {
+            return;
+        };
+        // A qualified inner variant (`K.A`) names its enum; an unqualified one
+        // does not, and resolving it is a separate lookup this does not do.
+        let Some(inner_enum) = inner_path.first().filter(|n| {
+            self.type_decls.enum_layouts.contains_key(n.as_str())
+        }) else {
+            return;
+        };
+        let inner_enum = inner_enum.clone();
+        let (Some(outer_layout), Some(inner_layout)) = (
+            self.type_decls.enum_layouts.get(enum_name).cloned(),
+            self.type_decls.enum_layouts.get(inner_enum.as_str()).cloned(),
+        ) else {
+            return;
+        };
+        if outer_layout.is_shared || inner_layout.is_shared {
+            return;
+        }
+        let area = (outer_layout.llvm_type.count_fields() as usize).saturating_sub(1);
+        if Self::llvm_type_word_count(inner_layout.llvm_type.into()) <= area {
+            // Inline payload: no box to reach through.
+            return;
+        }
+        let ptr_ty = self.context.ptr_type(AddressSpace::default());
+        let Ok(w0_ptr) =
+            self.builder
+                .build_struct_gep(outer_layout.llvm_type, slot_ptr, 1, "nestbox.w0")
+        else {
+            return;
+        };
+        let w0 = self
+            .builder
+            .build_load(self.context.i64_type(), w0_ptr, "nestbox.w0v")
+            .unwrap()
+            .into_int_value();
+        let box_ptr = self
+            .builder
+            .build_int_to_ptr(w0, ptr_ty, "nestbox.ptr")
+            .unwrap();
+        self.suppress_destructured_enum_payload_cleanup_at(box_ptr, &inner_enum, sub);
+    }
+
     /// The box-interior half of [`Self::suppress_destructured_enum_payload_cleanup`]
     /// for a scrutinee that is a whole-payload ALIAS (B-2026-08-31-23).
     ///
@@ -9005,6 +9094,12 @@ impl<'ctx> super::Codegen<'ctx> {
         // owns the same buffer, so disarm there too or the arm's move and the
         // box's drop both free it. No-op for every other scrutinee.
         self.suppress_aliased_boxed_payload_cleanup(scrut_name, pattern);
+        // B-2026-09-12-25 — the NESTED spelling of the same hazard. The line
+        // above covers a whole-payload binding (`Some(k)`); this covers a
+        // pattern that reaches THROUGH the box in one step
+        // (`Some(K.A(r))`), where the leaf the arm binds lives inside the
+        // boxed payload and the box's own drop still walks to it.
+        self.suppress_nested_boxed_payload_cleanup(slot.ptr, &enum_name, pattern);
         // B-2026-07-30-11 (enum leg) — the BODIES channel's half of the same
         // move-out. The cap-zeroing above disarms the source's MEMORY drop; the
         // payload's user `impl Drop` body rides the separate NLL `UserDrop`
