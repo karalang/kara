@@ -93,7 +93,7 @@ distinguish "bugs flattening" from "we stopped writing them down."
 | class | total |
 |---|---|
 | miscompile | 406 |
-| run-vs-build | 393 |
+| run-vs-build | 394 |
 | leak | 331 |
 | double-free | 227 |
 | missing-feature | 196 |
@@ -101,7 +101,7 @@ distinguish "bugs flattening" from "we stopped writing them down."
 | diagnostics | 125 |
 | false-positive | 106 |
 | perf | 104 |
-| other | 103 |
+| other | 104 |
 | soundness | 95 |
 | crash | 80 |
 | use-after-free | 38 |
@@ -110,10 +110,10 @@ distinguish "bugs flattening" from "we stopped writing them down."
 
 | surface | total |
 |---|---|
-| codegen | 1694 |
-| interp | 421 |
+| codegen | 1695 |
+| interp | 422 |
 | typecheck | 297 |
-| other | 88 |
+| other | 89 |
 | ownership | 74 |
 | cli | 73 |
 | autopar | 56 |
@@ -183,9 +183,10 @@ _Generated from `bug-ledger.jsonl` by `scripts/bug-curve.py` (2026-05-20 → 202
 | B-2026-09-12-24 | 2026-09-12 | codegen+interp | medium | AN ENUM VARIANT'S `Array[T, N]` OR `Vec[T]` PAYLOAD NEVER RUNS ITS ELEMENTS' USER `Drop` BODIES -- the enum-payload twin of B-2026-09-12-21, and the answer to that row's own NOT-MEASURED question; `Option[Array[T, N]]` is the ONE spelling that is correct on every surface, which is exactly why the fuzzer's single container-payload shape reported green | — |
 | B-2026-09-12-25 | 2026-09-12 | codegen | high | A NESTED DESTRUCTURE WHOSE LEAF ESCAPES INTO A `mut ref` ACCUMULATOR DOUBLE-FREES ON EVERY COMPILED LANE -- `fn show(x: Option[K], acc: mut ref Vec[R2]) { match x { Option.Some(K.A(r)) => { acc.push(r) } .. } }` over `enum K { A(R2), B }` aborts with `free(): double free detected in tcache 2` at -O0, -O0 autopar and -O2 autopar, while `--interp` runs clean and prints `len:1 / end`. The READ-ONLY twin of the same pattern (`println(f"a:{r.s}")` instead of the push) is clean on all four surfaces, so the trigger is the leaf ESCAPING rather than the nesting: two owners end up on one `R2` -- the accumulator that received it and something in the callee's own teardown of the boxed payload | — |
 | B-2026-09-12-26 | 2026-09-12 | codegen | medium | AN ASSOCIATED FUNCTION THAT CONDITIONALLY RETURNS ITS OWNED PARAM RUNS THE PARAM'S `Drop` BODY TWICE ON EVERY COMPILED LANE -- `impl Sk { fn pick(r: R, flag: bool) -> R { if flag { return r } return R { id: 9 } } }` called as `let k = Sk.pick(R { id: 1 }, true)` prints `dR1 / k:1 / dR1` at -O0, -O0 autopar and -O2 autopar against `k:1 / dR1` on `--interp`, where one `R` exists and one body is owed. The FREE-function spelling of the same program is correct on all four surfaces, so this is the associated half of the ownership flip `cond_returned_param_drop_names` performs | — |
-| B-2026-09-12-27 | 2026-09-12 | other | low | A MATCHED PARAMETER PROJECTS NO PAYLOAD TYPE ON EITHER SPELLING, so a `match` on a by-value param compares nothing -- `analyze` introduces params with `introduce` rather than `introduce_typed`, so `Binding::ty` is `None` for every param and `scrutinee_ty` has nothing to return (measured: `fn eat(o: Option[Vec[String]])` schedules 0 in `eat` on both `Some(x)` and `Some(_)` while codegen records `o`) | — |
 | B-2026-09-13-1 | 2026-09-13 | codegen | medium | AN `Array` USED AS A `Map` KEY LEAKS ITS ELEMENTS -- 384 B in 16 blocks for `Map[Array[String, 2], i64]`, the KEY half of B-2026-09-12-13's selector, held back ON PURPOSE because a key has a NO-ADOPT branch a value does not: wiring it anyway turned the leak into a `try_insert` tcache ABORT plus a surviving 13 B orphan | — |
 | B-2026-09-13-2 | 2026-09-13 | codegen | medium | THE `Option[Array[T, N]]` A `Map` HANDS BACK IS OWNED BY NOBODY -- `insert`'s displaced old value leaks 336 B in 14 blocks and `remove`'s return 192 B in 4 + 192 indirect, while the `Vec[String]` and `String` twins at both call sites are clean; the 48 B direct blocks are the boxed payload and the indirect ones the `String`s inside it | — |
+| B-2026-09-13-3 | 2026-09-13 | codegen+interp | medium | A FRESH-TEMP `Option[T]` ARGUMENT WHOSE ARM LETS A PAYLOAD-DERIVED VALUE FLOW OUT LOSES THE PAYLOAD'S USER `Drop` BODY ON EVERY COMPILED BACKEND -- `eat(Some(Tracked { tag: 7 }))` over `fn eat(o: Option[Tracked]) { match o { Some(t) => { t.tag } .. } }` prints `99 7 1000` under `--interp` and `7 1000` on JIT, AOT and AOT at `KARAC_AUTO_PAR=0`. `return t.tag;` and `let z: i64 = t.tag; z` lose it too, while `t.tag + 0i64`, `println(t.tag); 7i64`, a payload-ignoring arm and the `Some(_)` arm all KEEP it, and a NAMED-LOCAL argument is correct throughout. valgrind-clean at -O0 (0 bytes in use at exit), so neither ASAN ratchet leg can see it. NOT B-2026-09-12-17: that row's head test excludes a USER enum head, `Option` passes it, and the keeping cells demonstrably stage `__optres_arg_bodies_tmp` | — |
+| B-2026-09-13-4 | 2026-09-13 | other | low | THE DIFFERENTIAL CANNOT COMPARE A MATCHED PARAMETER'S PAYLOAD AT ALL, so B-2026-09-12-27's now-correct schedule for that population is unwatched -- rule 2 excludes it because codegen discharges the payload in the CALLER while the comparison is per-callee, and three of the four measured cells are CORRECT programs that would report false divergences if compared. Closing it needs a cross-function discharge check (a callee obligation covered by the caller's record), which `differential_check` cannot express: it walks functions independently and `param_names_by_function` is its only call-boundary information | — |
 
 ### Relocated
 
@@ -2513,6 +2514,7 @@ _Generated from `bug-ledger.jsonl` by `scripts/bug-curve.py` (2026-05-20 → 202
 | B-2026-09-12-20 | runtime | medium | SSO's INLINE STRING OVERLAY IS UNUSABLE ON EVERY 32-BIT TARGET -- the 24-byte overlay presupposes a descriptor with no padding, and `{ptr, i64, i64}`… | bab0491 |
 | B-2026-09-12-22 | codegen | high | A `ref`-ENUM MATCH BINDING OF AN `Array[T, N]` PAYLOAD IS NOT THE PAYLOAD -- reading through it yields UNINITIALISED memory on all five COMPILED surf… | 25f56cb |
 | B-2026-09-12-23 | codegen | medium | INDEXING A `ref`-ENUM MATCH BINDING OF AN `Array[T, N]` PAYLOAD DOES NOT LOWER -- `match b { Packed(a) => a[1].name.len(), . | 25f56cb |
+| B-2026-09-12-27 | other | low | A MATCHED PARAMETER PROJECTS NO PAYLOAD TYPE ON EITHER SPELLING, so a `match` on a by-value param compares nothing -- `analyze` introduces params wit… | 29d81a6b0 |
 
 </details>
 
