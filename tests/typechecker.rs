@@ -50255,3 +50255,139 @@ fn shared_field_move_covers_tuple_and_option_but_not_scalar_payloads() {
         assert_eq!(fires(items), 0, "expected NO rejection for {label}");
     }
 }
+
+/// B-2026-09-10-38 — an ARRAY literal in a TUPLE-LITERAL element takes the
+/// tuple annotation's element type instead of defaulting to `Vec`.
+///
+/// A bare `[..]` hardcodes `Vec[T]` in synthesis mode; the `Array[T, N]`
+/// coercion lives only in check mode. The tuple check-mode arm pushed the
+/// expected slot type into an element only when that element was a
+/// `Type.new()` constructor call, so an array literal took synthesis and the
+/// `let` was rejected as `found '(Vec[String], i64)'`.
+///
+/// THE THREE ACCEPTED CELLS ARE THE POINT, not just the fixed one: the direct
+/// `let` reaches check mode and always worked, and the `Vec` spelling works
+/// because synthesis happens to produce the wanted answer. Only the
+/// combination "array literal + `Array` slot + tuple element" was missing, and
+/// keeping all three here is what shows the fix did not simply make the tuple
+/// arm push expectations everywhere.
+///
+/// MEASURED as part of the same eight-cell matrix: the struct-literal FIELD
+/// position and the call-ARGUMENT position, which the row listed as unmeasured
+/// and suspected, were already CORRECT — so the gap is the tuple-element
+/// position specifically, not "annotation propagation" in general.
+#[test]
+fn array_literal_takes_array_annotation_in_a_tuple_element() {
+    // The row's headline program.
+    typecheck_ok(
+        r#"fn main() {
+    let t: (Array[String, 2], i64) = ([f"a", f"b"], 7);
+    println(f"s:{t.1}");
+}"#,
+    );
+    // NESTED, one level deeper — the row measured this failing the same way,
+    // which is what showed it was the outermost hop missing and not a depth
+    // limit.
+    typecheck_ok(
+        r#"fn main() {
+    let t: (Array[Array[i64, 2], 2], i64) = ([[1, 2], [3, 4]], 5);
+    println(f"s:{t.1}");
+}"#,
+    );
+    // `[0; 3]` — a RepeatLiteral, which synthesises `Vec` by the same route and
+    // failed identically. Not in the row; found by the matrix.
+    typecheck_ok(
+        r#"fn main() {
+    let t: (Array[i64, 3], i64) = ([0; 3], 7);
+    println(f"s:{t.1}");
+}"#,
+    );
+    // CONTROL — the direct `let`, which reaches check mode and always worked.
+    typecheck_ok(r#"fn main() { let a: Array[String, 2] = [f"a", f"b"]; println(f"{a[0]}"); }"#);
+    // CONTROL — the `Vec` slot, whose synthesised answer is already right. This
+    // is the cell that would break if the fix pushed the expectation into every
+    // element rather than only where the slot is `Array`.
+    typecheck_ok(
+        r#"fn main() { let t: (Vec[String], i64) = ([f"a", f"b"], 7); println(f"{t.1}"); }"#,
+    );
+    // CONTROL — the explicit `Array[..]` prefix spelling, which synthesises
+    // `Type::Array` directly. It was the only way to write this before, and it
+    // stays accepted.
+    typecheck_ok(
+        r#"fn main() { let t: (Array[String, 2], i64) = (Array[f"a", f"b"], 7); println(f"{t.1}"); }"#,
+    );
+    // CONTROL — the struct-FIELD and call-ARGUMENT positions, correct before
+    // and after; see the doc above.
+    typecheck_ok(
+        r#"struct S { a: Array[String, 2], n: i64 }
+fn main() { let s = S { a: [f"a", f"b"], n: 7 }; println(f"{s.n}"); }"#,
+    );
+    typecheck_ok(
+        r#"fn take(a: Array[String, 2]) -> i64 { 1 }
+fn main() { let k = take([f"a", f"b"]); println(f"{k}"); }"#,
+    );
+}
+
+/// B-2026-09-12-16 — `Ho[R].Full(x)` over a USER enum is accepted, as
+/// `Option[R].Some(x)` already was.
+///
+/// The seeded pair is not accepted by some arm upstream, which is what the row
+/// guessed: `is_builtin_container_head` simply lists `"Option"` and `"Result"`,
+/// so both go through B-2026-08-22-17's delegation in
+/// `try_path_receiver_method` and a user enum was refused for being absent from
+/// that list. The fix is a positive gate beside it — the receiver names an enum
+/// and the method names one of its variants.
+///
+/// It matters because B-2026-08-21-53 made the qualified form the documented
+/// way to pin type arguments, and a user enum with a payload had no way to
+/// spell the pin at all: `Ho.Full(x)` takes whatever inference gives it.
+///
+/// THE THREE REJECTIONS ARE HALF THE TEST. A widened acceptance gate has to be
+/// shown still refusing: a pin the constructor cannot satisfy, an unknown
+/// variant name, and — the row's own unmeasured cell — the FIELD-LESS spelling
+/// `Ho[i64].Empty`, which is not a call at all and is still rejected as
+/// `'Ho' is a type, not a function`. That last one is unchanged by this fix and
+/// is recorded here so the boundary is explicit rather than assumed.
+#[test]
+fn qualified_variant_constructor_works_for_a_user_enum() {
+    typecheck_ok(
+        r#"struct R { id: i64 }
+enum Ho[T] { Full(T), Empty }
+fn takeit(x: Ho[R]) -> i64 { match x { Full(r) => { r.id } Empty => { 0 } } }
+fn main() { println(f"{takeit(Ho[R].Full(R { id: 5 }))}"); }"#,
+    );
+    // A NON-GENERIC user enum, unqualified — the neighbouring spelling.
+    typecheck_ok(
+        r#"enum Col { Red(i64), Blue }
+fn main() { match Col.Red(3) { Red(n) => { println(f"r:{n}") } Blue => { println("b") } } }"#,
+    );
+    // CONTROL — the seeded pair, accepted by the same arm all along.
+    typecheck_ok(
+        r#"struct R { id: i64 }
+fn takeit(x: Option[R]) -> i64 { match x { Some(r) => { r.id } None => { 0 } } }
+fn main() { println(f"{takeit(Option[R].Some(R { id: 5 }))}"); }"#,
+    );
+    // REJECTION — a pin the constructor cannot satisfy. The delegation unifies
+    // rather than checks, so a nonsense qualification must still fail.
+    let errs = typecheck_errors(
+        r#"struct R { id: i64 }
+enum Ho[T] { Full(T), Empty }
+fn main() { let x: Ho[i64] = Ho[i64].Full(R { id: 5 }); println("end"); }"#,
+    );
+    assert!(
+        errs.iter()
+            .any(|e| e.to_string().contains("cannot construct")),
+        "a bad pin must still be rejected, got: {errs:?}"
+    );
+    // REJECTION — an unknown variant keeps the focused `no method` message
+    // rather than a diagnostic about the rebuilt two-segment name.
+    let errs = typecheck_errors(
+        r#"enum Ho[T] { Full(T), Empty }
+fn main() { let x = Ho[i64].Nope(3); println("end"); }"#,
+    );
+    assert!(
+        errs.iter()
+            .any(|e| e.to_string().contains("no method 'Nope'")),
+        "an unknown variant must report `no method`, got: {errs:?}"
+    );
+}
