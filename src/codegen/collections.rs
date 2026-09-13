@@ -2442,7 +2442,13 @@ impl<'ctx> super::Codegen<'ctx> {
     /// not a ref-Array param (owned arrays, ref Vec/Slice/Map/etc. — all routed
     /// elsewhere), so non-Array dispatch is untouched. This mirrors the explicit
     /// `ref Vec[T]` route, which exists for the same `ptr`-slot reason.
-    fn ref_array_index_target(
+    /// B-2026-09-10-32 — `pub(super)` because the indexed-RECEIVER path in
+    /// `calls.rs` needs the same answer this file's `compile_index` /
+    /// `compile_index_store` already get. Both dispatch on `slot.ty` and both
+    /// fall past their `ArrayType` arm for a borrowed array; sharing the one
+    /// helper is what keeps `a[0]` and `a[0].len()` agreeing about what a
+    /// `ref Array` param is.
+    pub(super) fn ref_array_index_target(
         &self,
         name: &str,
     ) -> Option<(PointerValue<'ctx>, BasicTypeEnum<'ctx>)> {

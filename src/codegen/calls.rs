@@ -437,6 +437,31 @@ impl<'ctx> super::Codegen<'ctx> {
             // site, so the `elem_te` lookup above resolves for maps unchanged —
             // only the element-pointer lowering was missing.
             self.lower_indexed_elem_ptr_map(&outer_name, index)?
+        } else if let Some((data_ptr, BasicTypeEnum::ArrayType(arr_ty))) =
+            self.ref_array_index_target(outer_name.as_str())
+        {
+            // B-2026-09-10-32 — a BORROWED fixed array (`fn f(a: ref
+            // Array[String, 2]) -> i64 { a[0].len() }`).
+            //
+            // The `else` below dispatches on `slot.ty`, and a `ref`/`mut ref`
+            // array param's slot holds the BORROW — an alloca containing a
+            // `ptr` to the caller's `[N x T]` — so its slot type is `ptr` and
+            // the `ArrayType` test fell through to an error whose text
+            // ("outer is not a Vec/Slice/Array") was wrong about the cause: the
+            // outer IS an Array, and only the slot's LLVM type said otherwise.
+            //
+            // `ref_array_index_target` is B-2026-06-17-1's answer to exactly
+            // this, already consulted by `compile_index` and
+            // `compile_index_store` for the same reason. Reusing it rather than
+            // re-deriving the load here is what keeps `a[0]` and `a[0].len()`
+            // from disagreeing about the same binding, and it carries the
+            // `mut ref` case for free.
+            //
+            // The `ref Vec` twin never had the problem because a Vec outer is
+            // claimed by `vec_elem_types` several arms above, before any
+            // slot-type inspection happens — which is what made this look like
+            // an `Array`-specific defect rather than a borrow-specific one.
+            self.lower_indexed_elem_ptr_array_at(data_ptr, arr_ty, index)?
         } else {
             // Array shape via slot.ty inspection. v1 supports fixed-size
             // arrays only when the slot's LLVM type is ArrayType.
