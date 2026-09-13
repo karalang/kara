@@ -10002,11 +10002,13 @@ impl<'ctx> super::Codegen<'ctx> {
     /// MEASURED, `KARAC_OPT_LEVEL=0`, `enum Slot[T] { Filled(T), Blank }`,
     /// a READ-ONLY arm, before the gate this feeds:
     ///
-    ///     (String, i64)      160 B / 8 blocks leaked
-    ///     Array[String, 2]   320 B / 16
-    ///     Wrap[String]       160 B / 8
-    ///     Option[String]     clean     <- the shapes this answers TRUE for
-    ///     Plain / String     clean
+    /// ```text
+    /// (String, i64)      160 B / 8 blocks leaked
+    /// Array[String, 2]   320 B / 16
+    /// Wrap[String]       160 B / 8
+    /// Option[String]     clean     <- the shapes this answers TRUE for
+    /// Plain / String     clean
+    /// ```
     ///
     /// and with the retraction disabled outright the first three go clean
     /// while the last three abort with 8 invalid frees each — which is what
