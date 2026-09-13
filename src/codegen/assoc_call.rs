@@ -1426,6 +1426,22 @@ impl<'ctx> super::Codegen<'ctx> {
                     // the raw-`Binary` arm in `exprs.rs` only sees operands the
                     // lowering declined to rewrite.
                     let op_span = self.tracing.current_span;
+                    // B-2026-09-13-22 — a CHAIN of String `+` is one allocation,
+                    // not one per operator. `a + b + c` arrives here as
+                    // `String.add(String.add(a, b), c)`; taking the operands one
+                    // pair at a time mallocs per level and re-copies the left
+                    // prefix each time. Flatten the spine and emit a single
+                    // buffer sized to the sum. Declines (returns None) for a
+                    // two-leaf concat, so the unfused path stays byte-identical.
+                    if type_name == "String" && matches!(op, BinOp::Add) {
+                        if let Some(leaves) = self
+                            .flatten_string_concat_leaves(&_args[0].value, &_args[1].value)
+                        {
+                            let fused = self.compile_fused_string_concat(&leaves)?;
+                            self.tracing.current_span = op_span;
+                            return Ok(fused);
+                        }
+                    }
                     let lhs = self.compile_expr(&_args[0].value)?;
                     let rhs = self.compile_expr(&_args[1].value)?;
                     self.tracing.current_span = op_span;

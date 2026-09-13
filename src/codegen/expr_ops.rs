@@ -10061,6 +10061,146 @@ impl<'ctx> super::Codegen<'ctx> {
         Ok(out.into())
     }
 
+
+    /// B-2026-09-13-22 — flatten a chain of String `+` into its leaf operands.
+    ///
+    /// `a + b + c` is left-associative, so by the time codegen sees the
+    /// outermost `+` the left operand is itself a concat. Two shapes reach
+    /// here: the desugared `String.add(a, b)` call that `rewrite_binary` emits
+    /// for owned operands, and the surface `Binary { Add }` the desugar
+    /// declines when an operand is ref-typed. Both are walked.
+    ///
+    /// Returns the leaves in evaluation order, or `None` when the left spine is
+    /// not a concat — in which case there is nothing to fuse and the caller
+    /// keeps its existing two-operand path byte-for-byte.
+    pub(crate) fn flatten_string_concat_leaves<'e>(
+        &self,
+        left: &'e Expr,
+        right: &'e Expr,
+    ) -> Option<Vec<&'e Expr>> {
+        fn spine<'e>(e: &'e Expr, out: &mut Vec<&'e Expr>) {
+            match &e.kind {
+                ExprKind::Binary {
+                    op: BinOp::Add,
+                    left,
+                    right,
+                } => {
+                    spine(left, out);
+                    out.push(right);
+                }
+                ExprKind::Call { callee, args, .. } if args.len() == 2 => {
+                    let is_str_add = matches!(
+                        &callee.kind,
+                        ExprKind::Path { segments, .. }
+                            if segments.len() == 2
+                                && segments[0] == "String"
+                                && segments[1] == "add"
+                    );
+                    if is_str_add {
+                        spine(&args[0].value, out);
+                        out.push(&args[1].value);
+                    } else {
+                        out.push(e);
+                    }
+                }
+                _ => out.push(e),
+            }
+        }
+        let mut leaves = Vec::new();
+        spine(left, &mut leaves);
+        leaves.push(right);
+        // Two leaves is the unfused shape; fusing it would emit the same one
+        // malloc it already emits, so decline and leave that path untouched.
+        if leaves.len() >= 3 {
+            Some(leaves)
+        } else {
+            None
+        }
+    }
+
+    /// B-2026-09-13-22 — emit a flattened concat as ONE allocation.
+    ///
+    /// Sums every leaf's length, mallocs once, and memcpys each leaf at its
+    /// running offset. The nested form allocated once per `+` and re-copied the
+    /// whole left prefix at every level; this copies each leaf exactly once.
+    ///
+    /// Ownership matches the unfused path: the concat COPIES operand bytes, so
+    /// a fresh-owned leaf temp (`x.clone()`, a `substring`) is freed after the
+    /// last read of its buffer. `free_fresh_owned_str_arg` self-gates to
+    /// fresh-owned shapes with a `cap > 0` backstop, so an identifier, literal
+    /// or borrow is never freed. There are no intermediates to free, which is
+    /// the whole point.
+    pub(crate) fn compile_fused_string_concat(
+        &mut self,
+        leaves: &[&Expr],
+    ) -> Result<BasicValueEnum<'ctx>, String> {
+        let i64_t = self.context.i64_type();
+        let i8_ty = self.context.i8_type();
+
+        let mut vals = Vec::with_capacity(leaves.len());
+        for leaf in leaves {
+            vals.push(self.compile_expr(leaf)?);
+        }
+        let mut parts = Vec::with_capacity(vals.len());
+        for (i, v) in vals.iter().enumerate() {
+            if !v.is_struct_value() {
+                return Err("fused string concat: non-string operand".to_string());
+            }
+            parts.push(self.sso_string_parts_from_value(v.into_struct_value(), &format!("fc{i}")));
+        }
+
+        let mut total = parts[0].1;
+        for (_, len) in &parts[1..] {
+            total = self.builder.build_int_add(total, *len, "fcat.len").unwrap();
+        }
+        let buf = self
+            .builder
+            .build_call(self.runtime_fns.malloc_fn, &[total.into()], "fcat.buf")
+            .unwrap()
+            .try_as_basic_value()
+            .unwrap_basic()
+            .into_pointer_value();
+
+        let mut off = i64_t.const_zero();
+        for (i, (ptr, len)) in parts.iter().enumerate() {
+            let dest = if i == 0 {
+                buf
+            } else {
+                unsafe {
+                    self.builder
+                        .build_gep(i8_ty, buf, &[off], "fcat.dst")
+                        .unwrap()
+                }
+            };
+            self.builder.build_memcpy(dest, 1, *ptr, 1, *len).unwrap();
+            off = self.builder.build_int_add(off, *len, "fcat.off").unwrap();
+        }
+
+        let str_ty = self.vec_struct_type();
+        let mut agg = str_ty.get_undef();
+        agg = self
+            .builder
+            .build_insert_value(agg, buf, 0, "fcat.ptr")
+            .unwrap()
+            .into_struct_value();
+        agg = self
+            .builder
+            .build_insert_value(agg, total, 1, "fcat.n")
+            .unwrap()
+            .into_struct_value();
+        agg = self
+            .builder
+            .build_insert_value(agg, total, 2, "fcat.cap")
+            .unwrap()
+            .into_struct_value();
+
+        // After every read of every leaf buffer, so the frees are dominated.
+        for (leaf, v) in leaves.iter().zip(vals.iter()) {
+            self.free_fresh_owned_str_arg(leaf, *v);
+        }
+        Ok(agg.into())
+    }
+
     pub(super) fn compile_string_binop(
         &self,
         op: &BinOp,

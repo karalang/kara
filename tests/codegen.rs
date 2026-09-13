@@ -19044,6 +19044,75 @@ done
         assert_eq!(out, "dR101\ndR1\none\nn\ndR102\ndR2\ntwo\nin\ndR103\ndR3\nthree\ndR104\ndR4\nfour\nn\ndR105\ndR5\nfive\nin\ndR106\ndR6\nsix\ndR107\ndR7\nin\nseven\nin\ndR8\neight\ndR9\nnine\nn\nten\nend\n");
     }
 
+    /// B-2026-09-13-22 — `a + b + c` is ONE allocation sized to the total, not
+    /// one per `+`.
+    ///
+    /// The chain arrives as `String.add(String.add(a, b), c)`; the fused
+    /// lowering flattens the left spine and memcpys each leaf at its running
+    /// offset. Two things can go wrong and neither is visible in a two-leaf
+    /// concat: the bytes can be assembled in the wrong order or at the wrong
+    /// offset, and the leaves can be EVALUATED out of order, which a
+    /// side-effecting leaf detects and nothing else does.
+    ///
+    /// Case 5 is the one that matters: `order 123` fails if the flattener walks
+    /// the spine in any order but left-to-right, which the nested form gave for
+    /// free and the fused form has to preserve deliberately.
+    #[test]
+    fn e2e_fused_string_concat_chain_keeps_bytes_and_order() {
+        let Some(out) = run_program(
+            "fn mk(n: i64) -> String {\n\
+             \x20   let mut s = String.new();\n\
+             \x20   s.push_str(\"<\");\n\
+             \x20   s.push_str(f\"{n}\");\n\
+             \x20   s.push_str(\">\");\n\
+             \x20   return s;\n\
+             }\n\
+             fn side(n: i64, acc: mut ref Vec[i64]) -> String {\n\
+             \x20   acc.push(n);\n\
+             \x20   return f\"s{n}\";\n\
+             }\n\
+             fn main() {\n\
+             \x20   let a = \"A\";\n\
+             \x20   let b = \"B\";\n\
+             \x20   let c = \"C\";\n\
+             \x20   println(a + b);\n\
+             \x20   println(a + b + c);\n\
+             \x20   println(a + b + c + \"D\");\n\
+             \x20   println(mk(1) + \"+\" + mk(2));\n\
+             \x20   println(mk(3) + \"-\" + mk(4) + \"!\" + mk(5));\n\
+             \x20   println(\"[\" + \"\" + \"]\");\n\
+             \x20   println(\"\" + \"\" + \"x\");\n\
+             \x20   let mut order: Vec[i64] = [];\n\
+             \x20   let joined = side(1, mut order) + side(2, mut order) + side(3, mut order);\n\
+             \x20   println(joined);\n\
+             \x20   let mut i = 0;\n\
+             \x20   let mut seen = String.new();\n\
+             \x20   while i < order.len() {\n\
+             \x20     seen.push_str(f\"{order[i]}\");\n\
+             \x20     i = i + 1;\n\
+             \x20   }\n\
+             \x20   println(f\"order {seen}\");\n\
+             \x20   let mut k = 0;\n\
+             \x20   let mut last = String.new();\n\
+             \x20   while k < 200 {\n\
+             \x20     last = mk(k) + \":\" + mk(k + 1) + \";\";\n\
+             \x20     k = k + 1;\n\
+             \x20   }\n\
+             \x20   println(last);\n\
+             \x20   println((\"x\" + \"y\" + \"z\").len());\n\
+             \x20   println((a + b) + (c + \"D\"));\n\
+             \x20   println(\"end\")\n\
+             }\n\
+             ",
+        ) else {
+            return;
+        };
+        assert_eq!(
+            out,
+            "AB\nABC\nABCD\n<1>+<2>\n<3>-<4>!<5>\n[]\nx\ns1s2s3\norder 123\n<199>:<200>;\n3\nABCD\nend\n"
+        );
+    }
+
     /// B-2026-09-12-28 — a `Map.get` whose value is an enum WIDER than the
     /// seeded 3-word `Option` area is boxed by `coerce_to_payload_words`, and
     /// for a fresh-temp scrutinee that box now lives on the stack.

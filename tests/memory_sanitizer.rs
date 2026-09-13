@@ -22849,6 +22849,64 @@ fn main() {
         }
     }
 
+    /// B-2026-09-13-22 — the OWNERSHIP half of the fused concat chain.
+    ///
+    /// The nested form freed each level's fresh-owned operands, and the inner
+    /// concat's own buffer was itself a fresh temp the outer level freed.
+    /// Fusing deletes those intermediates, so the frees have to move to the
+    /// LEAVES — and the two ways to get that wrong are invisible in the printed
+    /// answer: free a leaf twice (a `.clone()` freed by the concat and again by
+    /// its own binding cleanup), or stop freeing one at all.
+    ///
+    /// Cells cover the leaf kinds that differ in who owns them: fresh temps,
+    /// literals (never freed), a named binding (never freed), a borrowed `ref`
+    /// param, and a chain in a loop where a leak compounds.
+    #[test]
+    fn asan_fused_string_concat_chain_frees_each_leaf_once() {
+        const H: &str = "fn seed() -> i64 { env.args().len() }\n\
+             fn mk(n: i64) -> String { f\"leaf-{n}-{seed()}-aaaaaaaaaaaaaaaaaaaaaaaaaaaa\" }\n";
+        for (label, body, want) in [
+            (
+                "all-fresh-temps",
+                "fn main() { let s = mk(1) + mk(2) + mk(3); println(f\"n:{s.len() > 0}\"); println(\"end\") }\n",
+                vec!["n:true", "end"],
+            ),
+            (
+                "fresh-and-literal",
+                "fn main() { let s = mk(1) + \"-\" + mk(2) + \"!\"; println(f\"n:{s.len() > 0}\"); println(\"end\") }\n",
+                vec!["n:true", "end"],
+            ),
+            (
+                "named-binding-leaf",
+                "fn main() { let a = mk(1); let s = a + \"-\" + mk(2);\n\
+                 \x20  println(f\"n:{s.len() > 0}\"); println(\"end\") }\n",
+                vec!["n:true", "end"],
+            ),
+            (
+                "borrowed-ref-leaf",
+                "fn cat(p: ref String) -> String { return p + \"-\" + mk(9) + \"!\" }\n\
+                 fn main() { let a = mk(1); let s = cat(ref a);\n\
+                 \x20  println(f\"n:{s.len() > 0}/{a.len() > 0}\"); println(\"end\") }\n",
+                vec!["end"],
+            ),
+            (
+                "chain-in-a-loop",
+                "fn main() { let mut i = 0; let mut n = 0;\n\
+                 \x20  while i < 50 { let s = mk(i) + \":\" + mk(i + 1) + \";\"; n = n + s.len(); i = i + 1 }\n\
+                 \x20  println(f\"n:{n > 0}\"); println(\"end\") }\n",
+                vec!["n:true", "end"],
+            ),
+            (
+                "two-leaf-unfused-control",
+                "fn main() { let s = mk(1) + mk(2); println(f\"n:{s.len() > 0}\"); println(\"end\") }\n",
+                vec!["n:true", "end"],
+            ),
+        ] {
+            let src = format!("{H}{body}");
+            assert_clean_asan_run(&src, &want, label);
+        }
+    }
+
     /// B-2026-09-12-28 — the MEMORY twin of
     /// `e2e_map_get_wide_enum_payload_survives_stack_boxing`.
     ///
