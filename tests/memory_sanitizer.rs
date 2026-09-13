@@ -88006,4 +88006,187 @@ fn main() {
             "b25-five-word-leaf-under-result-is-disarmed",
         );
     }
+
+    #[test]
+    fn asan_array_used_as_a_map_key_frees_its_elements() {
+        // B-2026-09-13-1. The KEY half of B-2026-09-12-13's selector. It leaked
+        // the same 384 B in 16 blocks, and the same one-line arm answers it --
+        // but a key carries two obligations a value does not, and wiring the
+        // arm without them measured STRICTLY WORSE than the leak it replaced.
+        //
+        // A key has a NO-ADOPT branch. On a duplicate key the bucket keeps the
+        // key it already holds, so the caller's key is orphaned rather than
+        // adopted; a value is simply replaced and always adopted. And there are
+        // TWO insert entry points, `insert` and `try_insert`, the second with
+        // its own no-adopt branch plus an OOM branch where nothing is stored at
+        // all. Wired with only `insert`'s retraction, `try_insert` aborted with
+        // a glibc tcache double free and a duplicate-key `insert` still leaked
+        // 13 B in 2 blocks.
+        //
+        // Cells 3 and 4 are the ones that would have caught that, and neither
+        // shape existed in this file before: every cell written for
+        // B-2026-09-12-13 used DISTINCT keys and the `insert` entry point. The
+        // test that did catch it,
+        // `asan_slice_and_array_equality_are_ownership_neutral`, does it only
+        // incidentally.
+        //
+        // 1 -- the reported shape, distinct keys.
+        assert_clean_asan_run(
+            "fn main() {\n\
+             \x20\x20\x20\x20let mut m: Map[Array[String, 2], i64] = Map.new();\n\
+             \x20\x20\x20\x20m.insert([f\"aaaaaaaa0\", f\"bbbbbbbb0\"], 7);\n\
+             \x20\x20\x20\x20m.insert([f\"cccccccc0\", f\"dddddddd0\"], 8);\n\
+             \x20\x20\x20\x20println(f\"s:{m.len()}\");\n\
+             }\n",
+            &["s:2"],
+            "map-key-array-distinct",
+        );
+        // 2 -- the source-LOCAL spelling, map OUTLIVING the local, then looked
+        //      up. Before the fix this read the stored key out of freed memory
+        //      during the hash compare -- one invalid read in `karac_map_get`,
+        //      on a block the source local's drop had already released. The
+        //      lookup still "worked", which is what made it invisible.
+        assert_clean_asan_run(
+            "fn main() {\n\
+             \x20\x20\x20\x20let mut m: Map[Array[String, 2], i64] = Map.new();\n\
+             \x20\x20\x20\x20let mut i: i64 = 0;\n\
+             \x20\x20\x20\x20while i < 2 {\n\
+             \x20\x20\x20\x20\x20\x20\x20\x20let k: Array[String, 2] = [f\"kaaaaaaa{i}\", f\"kbbbbbbb{i}\"];\n\
+             \x20\x20\x20\x20\x20\x20\x20\x20m.insert(k, i);\n\
+             \x20\x20\x20\x20\x20\x20\x20\x20i = i + 1;\n\
+             \x20\x20\x20\x20}\n\
+             \x20\x20\x20\x20let probe: Array[String, 2] = [f\"kaaaaaaa1\", f\"kbbbbbbb1\"];\n\
+             \x20\x20\x20\x20match m.get(probe) {\n\
+             \x20\x20\x20\x20\x20\x20\x20\x20Some(v) => { println(f\"s:{v}\"); }\n\
+             \x20\x20\x20\x20\x20\x20\x20\x20None => { println(\"s:missing\"); }\n\
+             \x20\x20\x20\x20}\n\
+             }\n",
+            &["s:1"],
+            "map-key-array-local-source-lookup",
+        );
+        // 3 -- DUPLICATE keys, the no-adopt branch. The bucket keeps its own
+        //      key and the incoming one is orphaned; without
+        //      `free_array_half_on_no_adopt` this leaked 13 B in 2 blocks per
+        //      duplicate while every distinct-key cell stayed clean.
+        assert_clean_asan_run(
+            "fn mk() -> Array[String, 2] { return Array[f\"aaaaaaaa0\", f\"bbbbbbbb0\"]; }\n\
+             fn main() {\n\
+             \x20\x20\x20\x20let mut m: Map[Array[String, 2], i64] = Map.new();\n\
+             \x20\x20\x20\x20let k1 = mk();\n\
+             \x20\x20\x20\x20let k2 = mk();\n\
+             \x20\x20\x20\x20m.insert(k1, 1);\n\
+             \x20\x20\x20\x20m.insert(k2, 2);\n\
+             \x20\x20\x20\x20println(f\"s:{m.len()}\");\n\
+             }\n",
+            &["s:1"],
+            "map-key-array-duplicate-no-adopt",
+        );
+        // 4 -- `try_insert`, the SECOND entry point. It has its own no-adopt
+        //      branch plus an OOM branch, and none of the array retractions
+        //      reached it before this row -- including the VALUE-side one that
+        //      B-2026-09-12-13 added to `insert` alone, which left
+        //      `try_insert(k, <array local>)` aborting on a double free.
+        assert_clean_asan_run(
+            "fn mk() -> Array[String, 2] { return Array[f\"aaaaaaaa0\", f\"bbbbbbbb0\"]; }\n\
+             fn main() {\n\
+             \x20\x20\x20\x20let mut m: Map[Array[String, 2], i64] = Map.new();\n\
+             \x20\x20\x20\x20let k1 = mk();\n\
+             \x20\x20\x20\x20let k2 = mk();\n\
+             \x20\x20\x20\x20match m.try_insert(k1, 1) {\n\
+             \x20\x20\x20\x20\x20\x20\x20\x20Ok(o) => { println(\"s:ok\"); }\n\
+             \x20\x20\x20\x20\x20\x20\x20\x20Err(e) => { println(\"s:err\"); }\n\
+             \x20\x20\x20\x20}\n\
+             \x20\x20\x20\x20match m.try_insert(k2, 2) {\n\
+             \x20\x20\x20\x20\x20\x20\x20\x20Ok(o) => { println(\"t:ok\"); }\n\
+             \x20\x20\x20\x20\x20\x20\x20\x20Err(e) => { println(\"t:err\"); }\n\
+             \x20\x20\x20\x20}\n\
+             \x20\x20\x20\x20println(f\"u:{m.len()}\");\n\
+             }\n",
+            &["s:ok", "t:ok", "u:1"],
+            "map-key-array-try-insert-duplicate",
+        );
+        // 5 -- `try_insert` on the VALUE half from a source local. This is the
+        //      B-2026-09-12-13 correction: that fix gave the map's value side a
+        //      drop fn and retracted the source at `insert` only, so this
+        //      spelling went from a silent use-after-free (3 invalid reads,
+        //      garbage read-back) to a hard abort. Two entry points, one
+        //      battery.
+        assert_clean_asan_run(
+            "fn main() {\n\
+             \x20\x20\x20\x20let mut m: Map[i64, Array[String, 2]] = Map.new();\n\
+             \x20\x20\x20\x20let e: Array[String, 2] = [f\"aaaaaaaa0\", f\"bbbbbbbb0\"];\n\
+             \x20\x20\x20\x20match m.try_insert(1, e) {\n\
+             \x20\x20\x20\x20\x20\x20\x20\x20Ok(o) => { println(\"s:ok\"); }\n\
+             \x20\x20\x20\x20\x20\x20\x20\x20Err(x) => { println(\"s:err\"); }\n\
+             \x20\x20\x20\x20}\n\
+             \x20\x20\x20\x20match m.get(1) {\n\
+             \x20\x20\x20\x20\x20\x20\x20\x20Some(a) => { println(f\"t:{a[0]}\"); }\n\
+             \x20\x20\x20\x20\x20\x20\x20\x20None => { println(\"t:missing\"); }\n\
+             \x20\x20\x20\x20}\n\
+             }\n",
+            &["s:ok", "t:aaaaaaaa0"],
+            "map-value-array-try-insert-local",
+        );
+        // 6 -- the NESTED array key, through the recursive walk.
+        assert_clean_asan_run(
+            "fn main() {\n\
+             \x20\x20\x20\x20let mut m: Map[Array[Array[String, 2], 2], i64] = Map.new();\n\
+             \x20\x20\x20\x20m.insert([[f\"aaaaaaaa0\", f\"bbbbbbbb0\"], [f\"cccccccc0\", f\"dddddddd0\"]], 7);\n\
+             \x20\x20\x20\x20println(f\"s:{m.len()}\");\n\
+             }\n",
+            &["s:1"],
+            "map-key-nested-array",
+        );
+        // 7 -- CONTROL: a `String` KEY, the one-level overlay whose own
+        //      no-adopt reclaim (`free_str_vec_buffer_if_heap`) the array one
+        //      sits beside. Duplicate keys, so it exercises the same branch.
+        assert_clean_asan_run(
+            "fn main() {\n\
+             \x20\x20\x20\x20let mut m: Map[String, i64] = Map.new();\n\
+             \x20\x20\x20\x20let k1 = f\"aaaaaaaa0\";\n\
+             \x20\x20\x20\x20let k2 = f\"aaaaaaaa0\";\n\
+             \x20\x20\x20\x20m.insert(k1, 1);\n\
+             \x20\x20\x20\x20m.insert(k2, 2);\n\
+             \x20\x20\x20\x20println(f\"s:{m.len()}\");\n\
+             }\n",
+            &["s:1"],
+            "map-key-string-duplicate-control",
+        );
+        // 8 -- duplicate keys from LITERAL temps rather than source locals.
+        //      The no-adopt reclaim must fire whether or not a retraction
+        //      happened first: with a literal there is no source binding to
+        //      retract, so the orphan is reached by a different route to
+        //      cell 3's.
+        //
+        //      NOT a control for a user STRUCT key. That shape has the SAME
+        //      no-adopt orphan and still leaks -- 252 B in 14 blocks,
+        //      measured identical before and after this change, so it is
+        //      pre-existing and outside this row; `free_str_vec_buffer_if_heap`
+        //      no-ops on a struct exactly as it does on an array, and the
+        //      reclaim added here is array-shaped by construction. Filed
+        //      separately rather than asserted clean here.
+        assert_clean_asan_run(
+            "fn main() {\n\
+             \x20\x20\x20\x20let mut m: Map[Array[String, 2], i64] = Map.new();\n\
+             \x20\x20\x20\x20m.insert([f\"aaaaaaaa0\", f\"bbbbbbbb0\"], 1);\n\
+             \x20\x20\x20\x20m.insert([f\"aaaaaaaa0\", f\"bbbbbbbb0\"], 2);\n\
+             \x20\x20\x20\x20println(f\"s:{m.len()}\");\n\
+             }\n",
+            &["s:1"],
+            "map-key-array-duplicate-literals",
+        );
+        // 9 -- CONTROL: a SCALAR-element array key. `emit_drop_fn_for_array`
+        //      declines it, so both the drop fn and the reclaim must emit
+        //      nothing; a widened admission would free `i64`s.
+        assert_clean_asan_run(
+            "fn main() {\n\
+             \x20\x20\x20\x20let mut m: Map[Array[i64, 2], i64] = Map.new();\n\
+             \x20\x20\x20\x20m.insert([11, 22], 7);\n\
+             \x20\x20\x20\x20m.insert([11, 22], 8);\n\
+             \x20\x20\x20\x20println(f\"s:{m.len()}\");\n\
+             }\n",
+            &["s:1"],
+            "map-key-scalar-array-control",
+        );
+    }
 }

@@ -156444,6 +156444,153 @@ fn main() {
     }
 
     #[test]
+    fn e2e_array_used_as_a_map_key_reads_back_on_every_surface() {
+        // B-2026-09-13-1 -- the cross-surface twin of
+        // `asan_array_used_as_a_map_key_frees_its_elements`.
+        //
+        // A key is read on every lookup, by the hash/equality compare, so the
+        // key half's use-after-free is directly observable here in a way the
+        // value half's was not: before the fix the map held pointers into
+        // buffers the source local had already freed, and `karac_map_get`
+        // compared against them. That it usually still FOUND the entry is the
+        // hazard -- freed bytes often survive -- so these cells assert the
+        // looked-up value, not merely that a lookup happened.
+        //
+        // Every lookup is by an explicitly typed probe. An array literal in an
+        // argument position does not take the expected element type and infers
+        // as `Vec[String]` (the B-2026-09-10-38 family), so `m.get([..])` does
+        // not type-check while `m.insert([..], v)` does.
+        for (label, src, want) in [
+            // 1 -- source-LOCAL keys, map outliving them, looked up by value.
+            (
+                "map-key-array-local-source-lookup",
+                "fn main() {\n\
+                 \x20\x20\x20\x20let mut m: Map[Array[String, 2], i64] = Map.new();\n\
+                 \x20\x20\x20\x20let mut i: i64 = 0;\n\
+                 \x20\x20\x20\x20while i < 3 {\n\
+                 \x20\x20\x20\x20\x20\x20\x20\x20let k: Array[String, 2] = [f\"kaaaaaaa{i}\", f\"kbbbbbbb{i}\"];\n\
+                 \x20\x20\x20\x20\x20\x20\x20\x20m.insert(k, i * 10);\n\
+                 \x20\x20\x20\x20\x20\x20\x20\x20i = i + 1;\n\
+                 \x20\x20\x20\x20}\n\
+                 \x20\x20\x20\x20let p0: Array[String, 2] = [f\"kaaaaaaa0\", f\"kbbbbbbb0\"];\n\
+                 \x20\x20\x20\x20let p2: Array[String, 2] = [f\"kaaaaaaa2\", f\"kbbbbbbb2\"];\n\
+                 \x20\x20\x20\x20match m.get(p0) {\n\
+                 \x20\x20\x20\x20\x20\x20\x20\x20Some(v) => { println(f\"s:{v}\"); }\n\
+                 \x20\x20\x20\x20\x20\x20\x20\x20None => { println(\"s:missing\"); }\n\
+                 \x20\x20\x20\x20}\n\
+                 \x20\x20\x20\x20match m.get(p2) {\n\
+                 \x20\x20\x20\x20\x20\x20\x20\x20Some(v) => { println(f\"t:{v}\"); }\n\
+                 \x20\x20\x20\x20\x20\x20\x20\x20None => { println(\"t:missing\"); }\n\
+                 \x20\x20\x20\x20}\n\
+                 \x20\x20\x20\x20println(f\"u:{m.len()}\");\n\
+                 }\n",
+                "s:0\nt:20\nu:3\n",
+            ),
+            // 2 -- DUPLICATE keys. The second insert must REPLACE rather than
+            //      add, which is only true if the stored key still compares
+            //      equal -- i.e. if its buffers are intact.
+            (
+                "map-key-array-duplicate-replaces",
+                "fn mk(n: i64) -> Array[String, 2] { return Array[f\"kaaaaaaa{n}\", f\"kbbbbbbb{n}\"]; }\n\
+                 fn main() {\n\
+                 \x20\x20\x20\x20let mut m: Map[Array[String, 2], i64] = Map.new();\n\
+                 \x20\x20\x20\x20let k1 = mk(1);\n\
+                 \x20\x20\x20\x20let k2 = mk(1);\n\
+                 \x20\x20\x20\x20m.insert(k1, 11);\n\
+                 \x20\x20\x20\x20m.insert(k2, 22);\n\
+                 \x20\x20\x20\x20let p: Array[String, 2] = mk(1);\n\
+                 \x20\x20\x20\x20match m.get(p) {\n\
+                 \x20\x20\x20\x20\x20\x20\x20\x20Some(v) => { println(f\"s:{v}\"); }\n\
+                 \x20\x20\x20\x20\x20\x20\x20\x20None => { println(\"s:missing\"); }\n\
+                 \x20\x20\x20\x20}\n\
+                 \x20\x20\x20\x20println(f\"t:{m.len()}\");\n\
+                 }\n",
+                "s:22\nt:1\n",
+            ),
+            // 3 -- `try_insert`, both halves, the second entry point.
+            (
+                "map-key-array-try-insert",
+                "fn mk(n: i64) -> Array[String, 2] { return Array[f\"kaaaaaaa{n}\", f\"kbbbbbbb{n}\"]; }\n\
+                 fn main() {\n\
+                 \x20\x20\x20\x20let mut m: Map[Array[String, 2], i64] = Map.new();\n\
+                 \x20\x20\x20\x20let k1 = mk(1);\n\
+                 \x20\x20\x20\x20let k2 = mk(1);\n\
+                 \x20\x20\x20\x20match m.try_insert(k1, 11) {\n\
+                 \x20\x20\x20\x20\x20\x20\x20\x20Ok(o) => { println(\"s:ok\"); }\n\
+                 \x20\x20\x20\x20\x20\x20\x20\x20Err(e) => { println(\"s:err\"); }\n\
+                 \x20\x20\x20\x20}\n\
+                 \x20\x20\x20\x20match m.try_insert(k2, 22) {\n\
+                 \x20\x20\x20\x20\x20\x20\x20\x20Ok(o) => { println(\"t:ok\"); }\n\
+                 \x20\x20\x20\x20\x20\x20\x20\x20Err(e) => { println(\"t:err\"); }\n\
+                 \x20\x20\x20\x20}\n\
+                 \x20\x20\x20\x20let p: Array[String, 2] = mk(1);\n\
+                 \x20\x20\x20\x20match m.get(p) {\n\
+                 \x20\x20\x20\x20\x20\x20\x20\x20Some(v) => { println(f\"u:{v}\"); }\n\
+                 \x20\x20\x20\x20\x20\x20\x20\x20None => { println(\"u:missing\"); }\n\
+                 \x20\x20\x20\x20}\n\
+                 }\n",
+                "s:ok\nt:ok\nu:22\n",
+            ),
+            // 4 -- `try_insert` on the VALUE half from a source local: the
+            //      B-2026-09-12-13 correction, which aborted before this row.
+            (
+                "map-value-array-try-insert-local-read",
+                "fn main() {\n\
+                 \x20\x20\x20\x20let mut m: Map[i64, Array[String, 2]] = Map.new();\n\
+                 \x20\x20\x20\x20let e: Array[String, 2] = [f\"vaaaaaaa0\", f\"vbbbbbbb0\"];\n\
+                 \x20\x20\x20\x20match m.try_insert(1, e) {\n\
+                 \x20\x20\x20\x20\x20\x20\x20\x20Ok(o) => { println(\"s:ok\"); }\n\
+                 \x20\x20\x20\x20\x20\x20\x20\x20Err(x) => { println(\"s:err\"); }\n\
+                 \x20\x20\x20\x20}\n\
+                 \x20\x20\x20\x20match m.get(1) {\n\
+                 \x20\x20\x20\x20\x20\x20\x20\x20Some(a) => { println(f\"t:{a[1]}\"); }\n\
+                 \x20\x20\x20\x20\x20\x20\x20\x20None => { println(\"t:missing\"); }\n\
+                 \x20\x20\x20\x20}\n\
+                 }\n",
+                "s:ok\nt:vbbbbbbb0\n",
+            ),
+            // CONTROL: a `String` key at the same duplicate shape, whose own
+            // no-adopt reclaim the array one sits beside.
+            (
+                "map-key-string-duplicate-control",
+                "fn main() {\n\
+                 \x20\x20\x20\x20let mut m: Map[String, i64] = Map.new();\n\
+                 \x20\x20\x20\x20let k1 = f\"kaaaaaaa1\";\n\
+                 \x20\x20\x20\x20let k2 = f\"kaaaaaaa1\";\n\
+                 \x20\x20\x20\x20m.insert(k1, 11);\n\
+                 \x20\x20\x20\x20m.insert(k2, 22);\n\
+                 \x20\x20\x20\x20match m.get(f\"kaaaaaaa1\") {\n\
+                 \x20\x20\x20\x20\x20\x20\x20\x20Some(v) => { println(f\"s:{v}\"); }\n\
+                 \x20\x20\x20\x20\x20\x20\x20\x20None => { println(\"s:missing\"); }\n\
+                 \x20\x20\x20\x20}\n\
+                 }\n",
+                "s:22\n",
+            ),
+            // CONTROL: scalar elements, where both the drop fn and the reclaim
+            // must decline and the map still behaves.
+            (
+                "map-key-scalar-array-control",
+                "fn main() {\n\
+                 \x20\x20\x20\x20let mut m: Map[Array[i64, 2], i64] = Map.new();\n\
+                 \x20\x20\x20\x20m.insert([11, 22], 1);\n\
+                 \x20\x20\x20\x20m.insert([11, 22], 2);\n\
+                 \x20\x20\x20\x20let p: Array[i64, 2] = [11, 22];\n\
+                 \x20\x20\x20\x20match m.get(p) {\n\
+                 \x20\x20\x20\x20\x20\x20\x20\x20Some(v) => { println(f\"s:{v}\"); }\n\
+                 \x20\x20\x20\x20\x20\x20\x20\x20None => { println(\"s:missing\"); }\n\
+                 \x20\x20\x20\x20}\n\
+                 }\n",
+                "s:2\n",
+            ),
+        ] {
+            let Some(out) = run_program(src) else {
+                return;
+            };
+            assert_eq!(out, want, "[{label}]");
+        }
+    }
+
+    #[test]
     fn e2e_array_held_as_a_map_value_reads_back_on_every_surface() {
         // B-2026-09-12-13 -- the cross-surface twin of
         // `asan_array_held_as_a_map_value_frees_its_elements`.

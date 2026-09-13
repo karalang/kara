@@ -3250,6 +3250,50 @@ impl<'ctx> super::Codegen<'ctx> {
         self.builder.position_at_end(done_bb);
     }
 
+    /// B-2026-09-13-1 — the `Array[T, N]` analogue of
+    /// `free_str_vec_buffer_if_heap`, for the NO-ADOPT branches of a map
+    /// insert.
+    ///
+    /// A key has a branch a value does not: on a DUPLICATE key the bucket
+    /// keeps the key it already holds and the incoming one is orphaned, and on
+    /// `try_insert`'s OOM branch nothing is stored at all, so BOTH halves are
+    /// orphaned. The sibling above reclaims a String/Vec there — one
+    /// cap-guarded buffer — and its own shape guard declines an array, because
+    /// an array of vec structs is not itself the `{ptr,len,cap}` overlay. So
+    /// the orphan survived: 13 B in 2 blocks per duplicate, measured.
+    ///
+    /// Takes the half BY VALUE, which is what all three branches have in hand,
+    /// and materializes a slot because the walk's ABI wants a pointer.
+    /// Declines exactly where `emit_drop_fn_for_array` does — a heapless
+    /// element — so an `Array[i64, N]` half emits nothing, as today.
+    ///
+    /// This is the piece that makes an array KEY's drop fn sound. Without it,
+    /// giving the key a drop fn and retracting its source measured strictly
+    /// WORSE than the leak it replaced: `try_insert` aborted with a glibc
+    /// tcache double free and the duplicate-key orphan survived anyway.
+    pub(super) fn free_array_half_on_no_adopt(
+        &mut self,
+        val: BasicValueEnum<'ctx>,
+        half_te: &TypeExpr,
+    ) {
+        let Some((elem_te, n)) = self.array_elem_and_len(half_te) else {
+            return;
+        };
+        // Resolve the walk BEFORE touching the current block: the synthesizer
+        // saves and restores the insert point, but only around its own body.
+        let Some(drop_fn) = self.emit_drop_fn_for_array(&elem_te, n) else {
+            return;
+        };
+        let Some(fn_val) = self.current_fn else {
+            return;
+        };
+        let slot = self.create_entry_alloca(fn_val, "map.noadopt.arr", val.get_type());
+        if self.builder.build_store(slot, val).is_err() {
+            return;
+        }
+        let _ = self.builder.build_call(drop_fn, &[slot.into()], "");
+    }
+
     /// Caller obligation: only pass values that are genuinely *fresh-owned*.
     /// A value reloaded from an existing tracked binding (a place expression)
     /// must NOT be routed here — its storage is already owned by the
@@ -4761,38 +4805,35 @@ impl<'ctx> super::Codegen<'ctx> {
     /// `emit_drop_fn_for_type_expr` / `vec_elem_agg_drop_for_type_expr`,
     /// the slice-3n/3o/3p/3q recursive drop family.
     /// The per-KEY drop fn for a `Map[K, V]` / `Set[K]`. Delegates to
-    /// `map_val_drop_fn_for_type_expr` — one policy for both halves — with a
-    /// single deliberate hold-back, and exists so that hold-back lives in ONE
-    /// place: the key side is resolved independently at two call sites (the
-    /// binding registration in `maps.rs` and `map_temp_cleanup_parts` here),
-    /// and guarding only one of them is how this was got wrong the first time.
+    /// `map_val_drop_fn_for_type_expr` — one policy for both halves — and
+    /// exists so the key side has ONE resolution point: it is consulted
+    /// independently from five places (the binding registration in `maps.rs`,
+    /// `map_temp_cleanup_parts`, the clone/drop pair, and two struct-field
+    /// walks), and B-2026-09-12-13's first attempt to hold the `Array` case
+    /// back guarded only one of them, so the behaviour it meant to suppress
+    /// survived through the other four.
     ///
-    /// B-2026-09-12-13 / B-2026-09-13-1 — an `Array[T, N]` KEY is held back,
-    /// even though the value selector now answers one and the key leaks
-    /// without it (measured: 384 B in 16 blocks for
-    /// `Map[Array[String, 2], i64]`).
+    /// B-2026-09-13-1 lifted that hold-back once the key's own obligations
+    /// were met, and they are worth naming because a key has TWO a value does
+    /// not:
     ///
-    /// A key drop fn is only sound once the key's SOURCE is retracted at every
-    /// insert entry point AND the incoming key is reclaimed on each NO-ADOPT
-    /// branch — on a duplicate key the bucket keeps the key it already has, so
-    /// the caller's key is orphaned rather than adopted (the B-2026-06-20-9
-    /// shape `free_str_vec_buffer_if_heap` handles for a String/Vec key, and
-    /// which no-ops on an array). Wiring the drop fn with only `insert`'s
-    /// retraction measured strictly WORSE than the leak it replaced:
-    /// `try_insert` aborted with a glibc tcache double free, and a
-    /// duplicate-key `insert` still leaked the orphan (13 B in 2 blocks — the
-    /// shape `asan_slice_and_array_equality_are_ownership_neutral` caught).
-    /// A half-wired key aborts; an unwired one leaks.
+    ///   * the source must be retracted at EVERY insert entry point, which is
+    ///     `insert` and `try_insert` (`suppress_array_binding_move_arg` on
+    ///     `args[0]` in both);
+    ///   * the incoming key must be reclaimed on every NO-ADOPT branch —
+    ///     `insert`'s existing-key branch, and `try_insert`'s existing-key AND
+    ///     OOM branches — via `free_array_half_on_no_adopt`, because on a
+    ///     duplicate the bucket keeps the key it already holds and the
+    ///     caller's is orphaned rather than adopted.
     ///
-    /// The VALUE half has no such branch — the bucket's value IS replaced on a
-    /// duplicate — which is why it is wired and this is not.
+    /// With only the first of those, `try_insert` aborted on a glibc tcache
+    /// double free and a duplicate-key `insert` still leaked 13 B in 2 blocks.
+    /// A value half needs neither obligation: its bucket slot is REPLACED on a
+    /// duplicate, so it is always adopted.
     pub(super) fn map_key_drop_fn_for_type_expr(
         &mut self,
         key_te: &TypeExpr,
     ) -> Option<FunctionValue<'ctx>> {
-        if self.array_elem_and_len(key_te).is_some() {
-            return None;
-        }
         self.map_val_drop_fn_for_type_expr(key_te)
     }
 
@@ -4832,11 +4873,11 @@ impl<'ctx> super::Codegen<'ctx> {
         // would compile, apply cleanly, and miss the entire bug — the trap
         // B-2026-09-06-49 recorded and B-2026-09-10-6 re-hit.
         //
-        // The KEY half resolves `key_drop_fn` through this same function and
-        // an `Array` key leaks identically (measured: 384 B in 16 blocks for
-        // `Map[Array[String, 2], i64]`), but `map_temp_cleanup_parts` holds
-        // that case back on purpose -- see the filter there, and
-        // B-2026-09-13-1. A key has a no-adopt branch a value does not.
+        // Serves the KEY half too, through `map_key_drop_fn_for_type_expr`:
+        // an `Array` key leaked identically (384 B in 16 blocks for
+        // `Map[Array[String, 2], i64]`) and was held back until B-2026-09-13-1
+        // paid the two obligations a key carries and a value does not — see
+        // that function's doc.
         //
         // `emit_drop_fn_for_array` carries its own decline — it hands back
         // `None` for a heapless element — so `Map[i64, Array[i64, 2]]` keeps

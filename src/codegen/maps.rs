@@ -1749,6 +1749,23 @@ impl<'ctx> super::Codegen<'ctx> {
                 self.suppress_boxed_enum_payload_cleanup_for_moved_arg(&args[1].value);
                 self.suppress_inline_option_payload_cleanup_for_moved_arg(&args[1].value);
                 self.suppress_inline_result_payload_cleanup_for_moved_arg(&args[1].value);
+                // B-2026-09-13-1 — the whole-array member, on BOTH halves.
+                //
+                // The VALUE side is a correction to B-2026-09-12-13, which gave
+                // the map's value side a drop fn but added this retraction to
+                // `insert` ALONE. `try_insert` then had two owners for
+                // `try_insert(k, <array local>)`: measured as a silent
+                // use-after-free before that fix (3 invalid reads, garbage
+                // read-back) and as a glibc tcache DOUBLE FREE after it, i.e. a
+                // silent bug turned into a hard abort by fixing the sibling
+                // entry point and not this one. Two entry points, one battery.
+                //
+                // The KEY side is sound only alongside the array reclaim on
+                // this arm's three no-adopt branches below -- the OOM branch
+                // (nothing stored, both halves orphaned) and the existing-key
+                // branch (the bucket keeps its own key).
+                self.suppress_array_binding_move_arg(&args[0].value);
+                self.suppress_array_binding_move_arg(&args[1].value);
 
                 let key_slot = self.create_entry_alloca(fn_val, "map.try.key", key_ty);
                 let val_slot = self.create_entry_alloca(fn_val, "map.try.val", val_ty);
@@ -1811,6 +1828,15 @@ impl<'ctx> super::Codegen<'ctx> {
                     .into_int_value();
                 self.free_str_vec_buffer_if_heap(key_val);
                 self.free_str_vec_buffer_if_heap(val_val);
+                // B-2026-09-13-1 — the array analogue, both halves: nothing was
+                // stored, so neither the map nor the (now retracted) sources
+                // own them.
+                if let Some(kte) = self.mapset.map_key_type_exprs.get(var_name).cloned() {
+                    self.free_array_half_on_no_adopt(key_val, &kte);
+                }
+                if let Some(vte) = self.var_types.var_elem_type_exprs.get(var_name).cloned() {
+                    self.free_array_half_on_no_adopt(val_val, &vte);
+                }
                 // Staged for-loop struct-element copies orphaned by the
                 // failed insert — nothing was stored (B-2026-08-01-29).
                 self.free_staged_for_loop_agg_copy_on_no_adopt(&args[0].value, key_slot);
@@ -1842,6 +1868,11 @@ impl<'ctx> super::Codegen<'ctx> {
                 // (duplicate-key leak, B-2026-06-20-9 sibling).
                 self.builder.position_at_end(some_bb);
                 self.free_str_vec_buffer_if_heap(key_val);
+                // B-2026-09-13-1 — the array analogue. The VALUE is adopted
+                // even here (the bucket's value is replaced), so only the key.
+                if let Some(kte) = self.mapset.map_key_type_exprs.get(var_name).cloned() {
+                    self.free_array_half_on_no_adopt(key_val, &kte);
+                }
                 // Staged for-loop struct-element KEY copy orphaned by the
                 // no-adopt on an existing key (B-2026-08-01-29); the value
                 // was adopted (bucket value replaced).
@@ -1951,6 +1982,10 @@ impl<'ctx> super::Codegen<'ctx> {
                     // so the source keeps its own body and the map's key walk
                     // never sees it.
                     self.disarm_moved_value_arg_user_drops(&args[0].value);
+                    // B-2026-09-13-1 — the whole-array KEY member. Sound only
+                    // with the no-adopt reclaim on the existing-key branch
+                    // below, which is the branch a value half does not have.
+                    self.suppress_array_binding_move_arg(&args[0].value);
                 }
                 self.suppress_source_vec_cleanup_for_arg_ex(&args[1].value, !weak_val);
                 // Container-bodies twin of the cap-zero above.
@@ -1958,10 +1993,9 @@ impl<'ctx> super::Codegen<'ctx> {
                 self.disarm_moved_value_arg_user_drops(&args[1].value);
                 // B-2026-09-12-13 — the WHOLE-ARRAY member of this battery,
                 // the memory-side dual of the `Array` arm now in
-                // `map_val_drop_fn_for_type_expr`. VALUE side only: the key
-                // side of that arm is held back in `map_temp_cleanup_parts`,
-                // because a duplicate key is NOT adopted and would need a
-                // no-adopt reclaim here to match (B-2026-09-13-1). Every other shape that can
+                // `map_val_drop_fn_for_type_expr`. The KEY side takes the same
+                // member just above, once B-2026-09-13-1 added the no-adopt
+                // reclaim a duplicate key needs. Every other shape that can
                 // be moved into a bucket is retracted above: a Vec/String
                 // binding by `suppress_source_vec_cleanup_for_arg_ex`, a
                 // container element's user `Drop` body, a moved value's user
@@ -2136,6 +2170,11 @@ impl<'ctx> super::Codegen<'ctx> {
                 // on a rodata literal or scalar key.
                 if let Some(kv) = key_val {
                     self.free_str_vec_buffer_if_heap(kv);
+                    // B-2026-09-13-1 — the array analogue on the one no-adopt
+                    // branch `insert` has.
+                    if let Some(kte) = self.mapset.map_key_type_exprs.get(var_name).cloned() {
+                        self.free_array_half_on_no_adopt(kv, &kte);
+                    }
                 }
                 // Staged for-loop struct-element KEY copy orphaned by the
                 // no-adopt (B-2026-08-01-29): reclaim from the staged slot.
