@@ -84916,12 +84916,51 @@ fn main() {
     /// and the read cells go through `contains` (bytes, not length), because
     /// the first draft of the PARENT's fixture was literal-seeded and folded to
     /// nothing at `-O2`, passing against the compiler it was written to fail.
+    ///
+    /// `c10`–`c17` ARE B-2026-09-12-5, the MOVE-OUT half this row's fix
+    /// deliberately did not touch, added here rather than in a fresh fixture
+    /// because that row's own instruction was to extend this one — `c8`/`c9`
+    /// are the double-free cells its gate must not disturb, and they only
+    /// prove that while they sit in the same program.
+    ///
+    /// The split across those eight is the whole point, and it is two-by-two:
+    ///
+    ///  * `c10`–`c12` READ the payload out of a call-site arm (tuple, generic
+    ///    struct, `Array`). These leaked 160 / 160 / 320 B at `-O0` before the
+    ///    gate, because `clear_boxed_enum_inner_drop` retracted the box's
+    ///    interior walk for a binding that registers no owner of its own.
+    ///  * `c13`, `c14` are the same read through an OWNED CALLEE.
+    ///  * `c15`–`c17` CONSUME the payload into a local that outlives the match.
+    ///    These were clean before and after: the retraction is right there,
+    ///    because the value's new home owns the interior. They are what forces
+    ///    the gate to test the arm's borrow verdict rather than the payload
+    ///    shape alone.
+    ///
+    /// THE NEGATIVE CONTROL WAS RUN FOR THESE EIGHT, not just assumed: with
+    /// `src/codegen` checked out at the pre-fix commit and rebuilt, this test
+    /// FAILS; with the fix restored it passes. (`git checkout`, not `git
+    /// archive` — the latter restores original mtimes and cargo then rebuilds
+    /// nothing, so the run measures the previous binary and every revision
+    /// looks identical.) The per-cell numbers behind the aggregate, measured
+    /// directly under valgrind at `KARAC_OPT_LEVEL=0` with one verdict line per
+    /// cell: 160 B for each tuple cell, 160 B for each `Wrap[String]` cell and
+    /// 320 B for the `Array` cell, over 8 rounds.
+    ///
+    /// NO `Slot[Array[..]]` THROUGH AN OWNED CALLEE, and the absence is
+    /// deliberate: that cell still leaks 320 B, because the PARAM registration
+    /// site passes `array_interior_ok: false` and so installs no array
+    /// interior drop for the gate to preserve. B-2026-09-12-18 put that
+    /// restriction there against a double free, so lifting it is its own
+    /// measurement and its own row — not something to smuggle in behind a
+    /// fixture cell.
     #[test]
     fn asan_generic_enum_boxed_aggregate_payloads_free_their_interiors() {
         let mut expected: Vec<&str> = Vec::new();
         for _ in 0..8 {
             expected.extend_from_slice(&[
                 "c1", "c2", "c3", "c4", "c5:true", "c6:true", "c7", "c8:true", "c9:true",
+                "c10:true", "c11:true", "c12:true", "c13:true", "c14:true", "c15:true", "c16:true",
+                "c17:true",
             ]);
         }
         expected.push("end");
@@ -84938,6 +84977,12 @@ fn otake(s: Slot[Option[String]]) -> bool {
     match s { Filled(x) => match x { Some(y) => y.contains("row"), None => false, }, Blank => false, }
 }
 fn wpeek(s: ref Slot[Wrap[String]]) -> bool {
+    match s { Filled(x) => x.val.contains("row"), Blank => false, }
+}
+fn ttake(s: Slot[(String, i64)]) -> bool {
+    match s { Filled(x) => x.0.contains("row"), Blank => false, }
+}
+fn wtake(s: Slot[Wrap[String]]) -> bool {
     match s { Filled(x) => x.val.contains("row"), Blank => false, }
 }
 
@@ -84963,6 +85008,25 @@ fn main() {
         println(f"c8:{match c8 { Filled(x) => match x { Some(y) => y.contains("row"), None => false, }, Blank => false, }}");
         let c9: Slot[Option[String]] = Filled(Some(f"row-jjjjjjjjjjjj-{i}-{n}"));
         println(f"c9:{otake(c9)}");
+        let c10: Slot[(String, i64)] = Filled((f"row-kkkkkkkkkkkk-{i}-{n}", 2i64));
+        println(f"c10:{match c10 { Filled(x) => x.0.contains("row"), Blank => false, }}");
+        let c11: Slot[Wrap[String]] = Filled(Wrap { val: f"row-llllllllllll-{i}-{n}" });
+        println(f"c11:{match c11 { Filled(x) => x.val.contains("row"), Blank => false, }}");
+        let c12: Slot[Array[String, 2]] = Filled([f"row-mmmmmmmmmmmm-{i}-{n}", f"row-nnnnnnnnnnnn-{i}-{n}"]);
+        println(f"c12:{match c12 { Filled(x) => x[0].contains("row"), Blank => false, }}");
+        let c13: Slot[(String, i64)] = Filled((f"row-oooooooooooo-{i}-{n}", 3i64));
+        println(f"c13:{ttake(c13)}");
+        let c14: Slot[Wrap[String]] = Filled(Wrap { val: f"row-pppppppppppp-{i}-{n}" });
+        println(f"c14:{wtake(c14)}");
+        let c15: Slot[(String, i64)] = Filled((f"row-qqqqqqqqqqqq-{i}-{n}", 4i64));
+        let m15: (String, i64) = match c15 { Filled(x) => x, Blank => (f"zzzzzzzzzzzz-{i}", 0i64), };
+        println(f"c15:{m15.0.contains("row")}");
+        let c16: Slot[Wrap[String]] = Filled(Wrap { val: f"row-rrrrrrrrrrrr-{i}-{n}" });
+        let m16: Wrap[String] = match c16 { Filled(x) => x, Blank => Wrap { val: f"zzzzzzzzzzzz-{i}" }, };
+        println(f"c16:{m16.val.contains("row")}");
+        let c17: Slot[Array[String, 2]] = Filled([f"row-ssssssssssss-{i}-{n}", f"row-tttttttttttt-{i}-{n}"]);
+        let m17: Array[String, 2] = match c17 { Filled(x) => x, Blank => [f"zzzzzzzzzzzz-{i}", f"yyyyyyyyyyyy-{i}"], };
+        println(f"c17:{m17[0].contains("row")}");
         i = i + 1i64;
     }
     println("end");
