@@ -154136,6 +154136,127 @@ fn main() {
         }
     }
 
+    /// B-2026-09-13-3 — the same caller-side bodies channel, silenced one gate
+    /// further in: a fresh-temp `Option` argument whose ARM lets a
+    /// payload-DERIVED value flow out ran the payload's `Drop` body NOWHERE.
+    ///
+    /// `binding_only_borrowed`'s syntactic walk calls every projection rooted
+    /// at the arm binding a partial move, so `Some(t) => { t.tag }` read as
+    /// "the payload escapes", `callee_by_value_optres_param_bodies_te`
+    /// declined, and nothing compensated: a fresh temp has no let site in the
+    /// callee to own it. Measured on all four surfaces before this change —
+    /// `eat(Some(Tracked { tag: 7 }))` printed `7 / 1000` against `--interp`'s
+    /// `99 / 7 / 1000`, and `return t.tag;` / `let z: i64 = t.tag; z` lost it
+    /// too while `t.tag + 0i64` and `println(t.tag); 7i64` kept it (an operator
+    /// or a call between the read and the result is enough to change the
+    /// syntactic answer, which is what made the trigger look arbitrary).
+    ///
+    /// WHAT MAKES THE NARROW READING SOUND IS A TYPECHECKER RULE, not a codegen
+    /// convention. The projection-tolerant escape map is consulted only when
+    /// the payload type declares its own `impl Drop` — and for such a struct a
+    /// partial move is a hard error (`partial_move_of_drop_struct`, design.md
+    /// § Part 8, measured: `return t.inner;` off a `Drop`-bearing `Outer` does
+    /// not compile at all). So every projection that reaches codegen there is
+    /// provably a copy and carries no body away.
+    ///
+    /// CELLS 5-8 ARE THE GUARDS, and they are why the rule is not wider. A
+    /// payload WITHOUT its own `Drop` may legally move a `Drop`-bearing field
+    /// out, and a TUPLE payload may move an element out; both hand the body to
+    /// the receiver and both are correct today. Reading those projections as
+    /// copies would register a second body in the caller — the double run
+    /// B-2026-09-12-15 measured as `dRp1 / len:1 / dRp1`.
+    ///
+    /// MEMORY WAS CLEAN THROUGHOUT at `-O0`: 0 valgrind errors, 0 bytes in use
+    /// at exit, on every cell before and after. A body frees nothing, so no
+    /// sanitizer and neither ASAN ratchet leg could ever see this.
+    #[test]
+    fn e2e_optres_arg_payload_body_survives_a_projecting_arm() {
+        const PRE: &str = "struct Tr { tag: i64 }\n\
+             impl Drop for Tr { fn drop(mut ref self) { println(f\"dTr{self.tag}\") } }\n";
+        for (label, body, want) in [
+            // 1 — the row's headline cell: the arm's tail is a bare field read.
+            (
+                "tail-field-read",
+                "fn eat(o: Option[Tr]) -> i64 { match o { Some(t) => { t.tag } None => { 0 } } }\n\
+                 fn main() { println(f\"r:{eat(Some(Tr { tag: 7 }))}\"); println(\"end\") }\n",
+                "r:7\ndTr7\nend\n",
+            ),
+            // 2 — the explicit `return` spelling of the same read.
+            (
+                "return-field-read",
+                "fn eat(o: Option[Tr]) -> i64 { match o { Some(t) => { return t.tag; } None => { return 0; } } }\n\
+                 fn main() { println(f\"r:{eat(Some(Tr { tag: 7 }))}\"); println(\"end\") }\n",
+                "r:7\ndTr7\nend\n",
+            ),
+            // 3 — bound to a local first, which the walk also read as a move.
+            (
+                "let-then-tail",
+                "fn eat(o: Option[Tr]) -> i64 { match o { Some(t) => { let z: i64 = t.tag; z } None => { 0 } } }\n\
+                 fn main() { println(f\"r:{eat(Some(Tr { tag: 7 }))}\"); println(\"end\") }\n",
+                "r:7\ndTr7\nend\n",
+            ),
+            // 4 — a NESTED body under the same shape: the payload's own body and
+            //     its field's were both lost, so both have to come back.
+            (
+                "nested-drop-field",
+                "struct In2 { n: i64 }\n\
+                 impl Drop for In2 { fn drop(mut ref self) { println(f\"dIn{self.n}\") } }\n\
+                 struct Ou2 { inner: In2, tag: i64 }\n\
+                 impl Drop for Ou2 { fn drop(mut ref self) { println(f\"dOu{self.tag}\") } }\n\
+                 fn eat(o: Option[Ou2]) -> i64 { match o { Some(t) => { t.tag } None => { 0 } } }\n\
+                 fn main() { println(f\"r:{eat(Some(Ou2 { inner: In2 { n: 5 }, tag: 7 }))}\"); println(\"end\") }\n",
+                "r:7\ndOu7\ndIn5\nend\n",
+            ),
+            // 5 — GUARD: payload has NO `Drop` of its own, so moving a
+            //     `Drop`-bearing field out is legal and the RECEIVER owns that
+            //     body. Correct today; must not gain a second one.
+            (
+                "guard-plain-struct-moves-drop-field",
+                "struct In3 { n: i64 }\n\
+                 impl Drop for In3 { fn drop(mut ref self) { println(f\"dIn{self.n}\") } }\n\
+                 struct Hd3 { inner: In3, tag: i64 }\n\
+                 fn eat(o: Option[Hd3]) -> In3 { match o { Some(t) => { return t.inner; } None => { return In3 { n: 0 }; } } }\n\
+                 fn main() { let g: In3 = eat(Some(Hd3 { inner: In3 { n: 5 }, tag: 7 })); println(f\"g:{g.n}\"); println(\"end\") }\n",
+                "g:5\ndIn5\nend\n",
+            ),
+            // 6 — GUARD: a TUPLE payload moving an element out, same hazard by a
+            //     different route.
+            (
+                "guard-tuple-payload-moves-element",
+                "fn eat(o: Option[(Tr, i64)]) -> Tr { match o { Some(t) => { return t.0; } None => { return Tr { tag: 0 }; } } }\n\
+                 fn main() { let g: Tr = eat(Some((Tr { tag: 5 }, 9))); println(f\"g:{g.tag}\"); println(\"end\") }\n",
+                "g:5\ndTr5\nend\n",
+            ),
+            // 7 — GUARD: payload with no own `Drop`, scalar read. Already
+            //     correct before the change (a different channel supplies the
+            //     field's body), so it pins that this did not disturb it.
+            (
+                "guard-plain-struct-scalar-read",
+                "struct In4 { n: i64 }\n\
+                 impl Drop for In4 { fn drop(mut ref self) { println(f\"dIn{self.n}\") } }\n\
+                 struct Hd4 { inner: In4, tag: i64 }\n\
+                 fn eat(o: Option[Hd4]) -> i64 { match o { Some(t) => { t.tag } None => { 0 } } }\n\
+                 fn main() { println(f\"r:{eat(Some(Hd4 { inner: In4 { n: 5 }, tag: 7 }))}\"); println(\"end\") }\n",
+                "dIn5\nr:7\nend\n",
+            ),
+            // 8 — GUARD: the whole payload handed to an accumulator that
+            //     outlives the call. The bare identifier is NOT a projection, so
+            //     it still stands the caller down — this is the exact cell
+            //     B-2026-09-12-15's gate was built for.
+            (
+                "guard-consuming-callee-pushes-payload",
+                "fn eat(o: Option[Tr], acc: mut ref Vec[Tr]) { match o { Some(t) => { acc.push(t) } None => { println(\"n\") } } }\n\
+                 fn main() { let mut acc: Vec[Tr] = []; eat(Some(Tr { tag: 1 }), mut acc); println(f\"len:{acc.len()}\"); println(\"end\") }\n",
+                "len:1\ndTr1\nend\n",
+            ),
+        ] {
+            let Some(out) = run_program(&format!("{PRE}{body}")) else {
+                return;
+            };
+            assert_eq!(out, want, "[{label}]");
+        }
+    }
+
     /// B-2026-09-12-11 — a QUALIFIED constructor at an argument position
     /// (`plainD(Option[(Rq, Rq)].Some((..)))`) ran its payload's `Drop` body on
     /// NO compiled backend, while the BARE `plainD(Some((..)))` spelling of the

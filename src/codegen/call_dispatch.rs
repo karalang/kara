@@ -4136,7 +4136,46 @@ impl<'ctx> super::Codegen<'ctx> {
             if !crate::result_escape::by_value_nonescaping_param_names(f).contains(pname.as_str()) {
                 return None;
             }
-            let escaped = crate::result_escape::optres_payload_escaping_param_variants(f);
+            // B-2026-09-13-3 — which escape map to believe depends on whether
+            // the payload can be partially moved at all.
+            //
+            // The syntactic walk calls every projection off the arm binding a
+            // partial move, so `match o { Some(t) => { t.tag } .. }` reads as
+            // "the payload escapes", this gate declines, and the body runs
+            // NOWHERE: the callee has no binding to own a fresh temp and the
+            // caller just stood down for a taker that does not exist. Measured
+            // at -O0, -O2, autopar and under the JIT: `eat(Some(Tracked{..}))`
+            // printed `7 / 1000` against `--interp`'s `99 / 7 / 1000`, and the
+            // `return t.tag;` and `let z = t.tag; z` spellings lose it too.
+            //
+            // When the payload type declares its own `impl Drop`, a projection
+            // CANNOT be a partial move — the typechecker rejects that outright
+            // (`partial_move_of_drop_struct`, design.md § Part 8) — so every
+            // projection that gets this far is a copy read and takes no body
+            // with it. Only then is the projection-tolerant map sound.
+            //
+            // The guard is not cosmetic. A payload WITHOUT its own `Drop` may
+            // legally move a `Drop`-bearing field out (`Holder2 { inner: Inner
+            // }`, `return t.inner;`), and a tuple payload may move an element
+            // out (`return t.0;`) — both hand the body to the returned value,
+            // and both are correct today. Reading the projection as a copy
+            // there would register a SECOND body in the caller, which is the
+            // double-run this gate exists to prevent (B-2026-09-12-15 measured
+            // `dR1 / len:1 / dR1`).
+            let payload_owns_its_drop_body = optres_payload_te(&p.ty, want_variant.as_deref())
+                .and_then(|te| match &te.kind {
+                    TypeKind::Path(pp) => pp.segments.last().cloned(),
+                    _ => None,
+                })
+                .is_some_and(|head| {
+                    !self.type_decls.shared_types.contains_key(head.as_str())
+                        && program.drop_method_keys.contains_key(head.as_str())
+                });
+            let escaped = if payload_owns_its_drop_body {
+                crate::result_escape::optres_payload_escaping_param_variants_ignoring_projections(f)
+            } else {
+                crate::result_escape::optres_payload_escaping_param_variants(f)
+            };
             if let Some(vs) = escaped.get(pname.as_str()) {
                 match want_variant.as_deref() {
                     // The argument names its variant, so ask about that one
@@ -15050,5 +15089,36 @@ impl<'ctx> super::Codegen<'ctx> {
             let _ = inst.set_alignment(elem_align);
         }
         Ok(Some(loaded))
+    }
+}
+
+/// B-2026-09-13-3 — the payload `TypeExpr` a seeded-pair type carries for one
+/// VARIANT: `Option[T]`'s `Some` is `T`, `Result[O, E]`'s `Ok` is `O` and `Err`
+/// is `E`.
+///
+/// `None` whenever the answer is not certain — the argument did not name its
+/// variant, the head is not a seeded pair, or the generic args are missing.
+/// Every `None` falls back to the pre-existing escape map, so an unreadable
+/// shape keeps today's behaviour rather than gaining the projection-tolerant
+/// reading on a guess.
+fn optres_payload_te(param_te: &TypeExpr, want_variant: Option<&str>) -> Option<TypeExpr> {
+    let TypeKind::Path(p) = &param_te.kind else {
+        return None;
+    };
+    let head = p.segments.last()?.as_str();
+    let args: Vec<&TypeExpr> = p
+        .generic_args
+        .as_ref()?
+        .iter()
+        .filter_map(|a| match a {
+            crate::ast::GenericArg::Type(te) => Some(te),
+            _ => None,
+        })
+        .collect();
+    match (head, want_variant?) {
+        ("Option", "Some") => args.first().map(|t| (*t).clone()),
+        ("Result", "Ok") => args.first().map(|t| (*t).clone()),
+        ("Result", "Err") => args.get(1).map(|t| (*t).clone()),
+        _ => None,
     }
 }

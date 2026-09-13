@@ -46,6 +46,44 @@ pub(crate) fn binding_only_borrowed(name: &str, e: &Expr) -> bool {
     classify_binding_in_expr(name, e) == Consumption::NonConsuming
 }
 
+/// [`binding_only_borrowed`] with the `copy_read` knob supplied, for a caller
+/// that can answer "does reading this place create an owner" better than the
+/// syntactic default can (B-2026-09-13-3).
+///
+/// The syntactic walk calls EVERY projection rooted at the binding a partial
+/// move. That bias is safe for a drop-DISARM decision — over-reporting a take
+/// leaves the existing owner alone — and it is backwards for the caller-side
+/// BODIES decision, where over-reporting a take makes the caller stand down
+/// for a taker that does not exist and the body runs nowhere at all. The two
+/// callers want opposite conservatism from the same predicate, which is why
+/// this one takes the knob rather than flipping the default.
+pub(crate) fn binding_only_borrowed_with(
+    name: &str,
+    e: &Expr,
+    copy_read: &dyn Fn(&Expr) -> bool,
+) -> bool {
+    let c = Ctx {
+        name,
+        copy_read,
+        free_fn_arg_transfers: false,
+    };
+    !(value_derived_from(&c, e) || has_consuming_sink(&c, e))
+}
+
+/// Block sibling of [`binding_only_borrowed_with`].
+pub(crate) fn binding_only_borrowed_block_with(
+    name: &str,
+    b: &crate::ast::Block,
+    copy_read: &dyn Fn(&Expr) -> bool,
+) -> bool {
+    let c = Ctx {
+        name,
+        copy_read,
+        free_fn_arg_transfers: false,
+    };
+    !block_consumes(&c, b)
+}
+
 /// Block sibling of [`binding_only_borrowed`], for the if-let `then_block` /
 /// while-let `body` scopes where the binding lives directly in a `Block` rather
 /// than a single arm expression. A block's value is its `final_expr`, so a
