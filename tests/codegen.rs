@@ -24141,6 +24141,107 @@ fn main() {
                  D { id: 46, name: f\"n46\" }); println(f\"{x.id}\"); }\n",
                 "drop n45\n46\ndrop n46\n",
             ),
+            // B-2026-09-12-26 — the `return` in TAIL position, i.e. the last
+            // exit written WITHOUT a trailing semicolon. Every cell above whose
+            // last exit is a `return` at all spells it `return X;`
+            // (`method-return-both-exits-*`, the `generic-param-is-*` group), and
+            // the rest end on a tail EXPRESSION (`return-in-branch-*`,
+            // `if-else-*`). Both of those are admitted. Drop the semicolon from
+            // the first group and the `return` becomes the body's `final_expr`,
+            // and `fn_conditionally_returns_param_bare` collapsed to `false` for
+            // the whole function — a spelling with no cell anywhere in this
+            // suite.
+            //
+            // The mechanism is `leaf_tails`, which is handed the body's tail and
+            // had no `Return` arm, so its catch-all pushed the `Return` NODE as a
+            // leaf. `may_mention` does not recognise `ExprKind::Return` and
+            // answers `true` for it by design, so condition 3 read that leaf as
+            // "mentions the param by a route no flag clears" and declined. The
+            // fix gives `leaf_tails` the operand, which is the same leaf
+            // `collect_return_leaves` already contributes for the statement
+            // spelling — so the two spellings are now analysed identically.
+            //
+            // WHAT IT COST DIFFERED BY CALL POSITION, which is why the row was
+            // filed as an associated-vs-free defect rather than a syntactic one:
+            //
+            //  * ASSOCIATED and METHOD callers gate `escapes_frame` on this
+            //    predicate, so `false` left it false, the argument registrar took
+            //    its non-escaping arm and hung the FULL `karac_drop_<T>` wrapper
+            //    on the temp — its body ran beside the result binding's:
+            //    `drop 1` / `1` / `drop 1` at -O0, -O0 autopar and -O2 autopar
+            //    against `--interp`'s `1` / `drop 1`.
+            //  * FREE callers gate on `call_arg_flows_into_return`, the
+            //    `fn_returns_param` UNION, which sees the `return` either way —
+            //    so the free spelling's hand-back path was right, and only its
+            //    DYING path was wrong, by a body that ran nowhere. Both backends
+            //    agreed on that miss, so no A/B gate reported it.
+            (
+                "assoc-return-tail-both-exits-escaping",
+                "struct Sk { n: i64 }\n\
+                 impl Sk { fn pick(r: R, flag: bool) -> R \
+                 { if flag { return r } return R { id: 9 } } }\n\
+                 fn main() { let x = Sk.pick(R { id: 1 }, true); println(f\"{x.id}\"); }\n",
+                "1\ndrop 1\n",
+            ),
+            (
+                "assoc-return-tail-both-exits-dying",
+                "struct Sk { n: i64 }\n\
+                 impl Sk { fn pick(r: R, flag: bool) -> R \
+                 { if flag { return r } return R { id: 9 } } }\n\
+                 fn main() { let x = Sk.pick(R { id: 1 }, false); println(f\"{x.id}\"); }\n",
+                "drop 1\n9\ndrop 9\n",
+            ),
+            // THE DISCRIMINATOR, and the reason the semicolon is named above: the
+            // identical associated function with `return R { id: 9 };` was correct
+            // before this fix and after it. A cell that differs from the one above
+            // by one character is what keeps a future reader from re-deriving the
+            // trigger as "associated functions".
+            (
+                "assoc-return-STATEMENT-both-exits-escaping",
+                "struct Sk { n: i64 }\n\
+                 impl Sk { fn pick(r: R, flag: bool) -> R \
+                 { if flag { return r; } return R { id: 9 }; } }\n\
+                 fn main() { let x = Sk.pick(R { id: 1 }, true); println(f\"{x.id}\"); }\n",
+                "1\ndrop 1\n",
+            ),
+            // The METHOD spelling of the tail form — the third column the row
+            // asked for. Same defect as the associated one, same registrar.
+            (
+                "method-return-tail-both-exits-escaping",
+                "struct Mk { n: i64 }\n\
+                 impl Mk { fn pick(ref self, r: R, flag: bool) -> R \
+                 { if flag { return r } return R { id: 9 } } }\n\
+                 fn main() { let m = Mk { n: 0 }; \
+                 let x = m.pick(R { id: 1 }, true); println(f\"{x.id}\"); }\n",
+                "1\ndrop 1\n",
+            ),
+            // The FREE twin. Its hand-back path was already right; its DYING path
+            // is the half this fix repairs, and it is repaired on BOTH backends
+            // because the predicate is shared.
+            (
+                "free-return-tail-both-exits-escaping",
+                "fn pickf(r: R, flag: bool) -> R { if flag { return r } return R { id: 9 } }\n\
+                 fn main() { let x = pickf(R { id: 1 }, true); println(f\"{x.id}\"); }\n",
+                "1\ndrop 1\n",
+            ),
+            (
+                "free-return-tail-both-exits-dying",
+                "fn pickf(r: R, flag: bool) -> R { if flag { return r } return R { id: 9 } }\n\
+                 fn main() { let x = pickf(R { id: 1 }, false); println(f\"{x.id}\"); }\n",
+                "drop 1\n9\ndrop 9\n",
+            ),
+            // BOUNDARY — an UNCONDITIONAL `return r` in tail position. Admitting
+            // the operand as a leaf must not turn this into a conditional shape:
+            // both leaves yield the param, no leaf yields nothing, so the
+            // predicate still declines and the caller's result binding stays the
+            // only owner.
+            (
+                "assoc-unconditional-return-tail",
+                "struct Sk2 { n: i64 }\n\
+                 impl Sk2 { fn pick(r: R) -> R { return r } }\n\
+                 fn main() { let x = Sk2.pick(R { id: 1 }); println(f\"{x.id}\"); }\n",
+                "1\ndrop 1\n",
+            ),
         ] {
             let heap = "struct H { id: i64, name: String }\n\
                  impl Drop for H { fn drop(mut ref self) { println(f\"drop {self.name}\"); } }\n";

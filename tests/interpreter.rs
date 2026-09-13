@@ -39216,6 +39216,55 @@ fn test_conditionally_returned_param_user_drop_body_runs_once() {
              println(f\"{x.id}\") }\n",
             "drop n41\n99\ndrop n99\n",
         ),
+        // B-2026-09-12-26 — the `return` in TAIL position (the last exit written
+        // WITHOUT a trailing semicolon), which `leaf_tails` pushed as a whole
+        // `Return` node and `may_mention`'s catch-all then declined. This
+        // backend shares `fn_conditionally_returns_param_bare` with codegen, so
+        // its DYING cells moved with the fix too: before it, the param that died
+        // inside the callee ran no body here either. The compiled twin
+        // (`e2e_conditionally_returned_param_user_drop_body_runs_once`) carries
+        // the full account and the per-call-position split; these expectations
+        // are those verbatim, so a divergence shows as one of the two failing.
+        (
+            "assoc-return-tail-both-exits-escaping",
+            "struct Sk { n: i64 }\n\
+             impl Sk { fn pick(r: R, flag: bool) -> R \
+             { if flag { return r } return R { id: 9 } } }\n\
+             fn main() { let x = Sk.pick(R { id: 1 }, true); println(f\"{x.id}\") }\n",
+            "1\ndrop 1\n",
+        ),
+        (
+            "assoc-return-tail-both-exits-dying",
+            "struct Sk { n: i64 }\n\
+             impl Sk { fn pick(r: R, flag: bool) -> R \
+             { if flag { return r } return R { id: 9 } } }\n\
+             fn main() { let x = Sk.pick(R { id: 1 }, false); println(f\"{x.id}\") }\n",
+            "drop 1\n9\ndrop 9\n",
+        ),
+        // THE DISCRIMINATOR — the same function with the semicolon, correct
+        // before and after.
+        (
+            "assoc-return-STATEMENT-both-exits-escaping",
+            "struct Sk { n: i64 }\n\
+             impl Sk { fn pick(r: R, flag: bool) -> R \
+             { if flag { return r; } return R { id: 9 }; } }\n\
+             fn main() { let x = Sk.pick(R { id: 1 }, true); println(f\"{x.id}\") }\n",
+            "1\ndrop 1\n",
+        ),
+        (
+            "free-return-tail-both-exits-dying",
+            "fn pickf(r: R, flag: bool) -> R { if flag { return r } return R { id: 9 } }\n\
+             fn main() { let x = pickf(R { id: 1 }, false); println(f\"{x.id}\") }\n",
+            "drop 1\n9\ndrop 9\n",
+        ),
+        // BOUNDARY — an UNCONDITIONAL `return r` in tail position stays declined.
+        (
+            "assoc-unconditional-return-tail",
+            "struct Sk2 { n: i64 }\n\
+             impl Sk2 { fn pick(r: R) -> R { return r } }\n\
+             fn main() { let x = Sk2.pick(R { id: 1 }); println(f\"{x.id}\") }\n",
+            "1\ndrop 1\n",
+        ),
     ] {
         let heap = "struct H { id: i64, name: String }\n\
              impl Drop for H { fn drop(mut ref self) { println(f\"drop {self.name}\") } }\n";
