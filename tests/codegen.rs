@@ -23918,6 +23918,148 @@ fn main() {
         );
     }
 
+    /// B-2026-09-10-32 — an indexed-receiver method call on a BORROWED fixed
+    /// array lowers.
+    ///
+    /// `fn f(a: ref Array[String, 2]) -> i64 { a[0].len() }` failed codegen
+    /// with "outer is not a Vec/Slice/Array", which was wrong about the cause:
+    /// the outer IS an Array. A `ref`/`mut ref` array param's slot holds the
+    /// BORROW (a `ptr` to the caller's `[N x T]`), so the dispatch chain's last
+    /// arm — which inspects `slot.ty` for an `ArrayType` — fell through.
+    ///
+    /// THE FOUR CONTROLS ARE WHY THIS IS BORROW-SPECIFIC RATHER THAN
+    /// ARRAY-SPECIFIC. By-value `Array` works because its slot really is an
+    /// `ArrayType`; `ref Vec` works because a Vec outer is claimed several arms
+    /// earlier by `vec_elem_types`, before any slot-type inspection; and
+    /// field-then-method works because the field projection never reaches the
+    /// indexed-receiver path at all. `mut ref` and a SCALAR element type are
+    /// the two cells the row did not have — both failed identically before,
+    /// which is what shows the gap was neither about mutability nor about heap
+    /// elements.
+    #[test]
+    fn e2e_indexed_receiver_method_on_a_borrowed_array() {
+        for (label, src, want) in [
+            (
+                "ref-array",
+                "fn f(a: ref Array[String, 2]) -> i64 { return a[0].len(); }\n\
+                 fn main() { let a: Array[String, 2] = [\"abcdefghij\", \"abcdefghij\"]; \
+                 println(f\"{f(a)}\"); }\n",
+                "10\n",
+            ),
+            (
+                "mut-ref-array",
+                "fn f(a: mut ref Array[String, 2]) -> i64 { return a[1].len(); }\n\
+                 fn main() { let mut a: Array[String, 2] = [\"abcdefghij\", \"abcdefghij\"]; \
+                 println(f\"{f(mut a)}\"); }\n",
+                "10\n",
+            ),
+            (
+                "ref-array-scalar-elem",
+                "fn f(a: ref Array[i64, 2]) -> i64 { return a[0].abs(); }\n\
+                 fn main() { let a: Array[i64, 2] = [0 - 7, 3]; println(f\"{f(a)}\"); }\n",
+                "7\n",
+            ),
+            (
+                "control-by-value",
+                "fn f(a: Array[String, 2]) -> i64 { return a[0].len(); }\n\
+                 fn main() { let a: Array[String, 2] = [\"abcdefghij\", \"abcdefghij\"]; \
+                 println(f\"{f(a)}\"); }\n",
+                "10\n",
+            ),
+            (
+                "control-ref-vec",
+                "fn f(a: ref Vec[String]) -> i64 { return a[0].len(); }\n\
+                 fn main() { let a: Vec[String] = [\"abcdefghij\", \"abcdefghij\"]; \
+                 println(f\"{f(a)}\"); }\n",
+                "10\n",
+            ),
+            (
+                "control-field-then-method",
+                "struct W { name: String }\n\
+                 fn f(a: ref Array[W, 2]) -> i64 { return a[0].name.len(); }\n\
+                 fn main() { let a: Array[W, 2] = [W { name: \"abcdefghij\" }, \
+                 W { name: \"abcdefghij\" }]; println(f\"{f(a)}\"); }\n",
+                "10\n",
+            ),
+        ] {
+            assert_eq!(run_program(src).as_deref(), Some(want), "{label}");
+        }
+    }
+
+    /// B-2026-09-10-37 — `.clone()` on an `Array[T, N]` lowers.
+    ///
+    /// It bailed with codegen's own "this is a codegen bug" fall-through at
+    /// every depth. The row read that as a missing DISPATCHER arm over existing
+    /// machinery, believing `emit_clone_fn_for_type_expr` already had an
+    /// `Array` route. It did not — the array-shaped emitters were the DROP
+    /// walker and the EQ walker, and every `emit_clone_fn_for_type_expr` call
+    /// in `collections.rs` passes an ELEMENT type. So the capability was
+    /// genuinely absent, and `emit_clone_fn_for_array` is it.
+    ///
+    /// `independence` is the cell that makes this a CLONE test rather than a
+    /// compiles-without-erroring test: it mutates the source afterwards and
+    /// asserts the copy did not move with it. A shallow `memcpy` of the
+    /// `[N x T]` would pass every other cell here and fail this one.
+    ///
+    /// `derive-clone-with-array-field` is the row's own unmeasured cell, and it
+    /// named it "the spelling most likely to be hit by real code".
+    /// `indexed-element` is the spelling `E_INDEX_MOVE_NON_COPY` tells users to
+    /// write when they try to move an array element out — it goes through the
+    /// synth binding an indexed receiver mints, which has no let-site entry in
+    /// `array_var_elem_te` and so needed the `array_elem_type_exprs` fallback.
+    #[test]
+    fn e2e_clone_on_a_fixed_array() {
+        for (label, src, want) in [
+            (
+                "string-elems",
+                "fn main() { let n = env.args().len() as i64;\n\
+                 let a: Array[String, 2] = [f\"aa-{n}\", f\"bb-{n}\"];\n\
+                 let b: Array[String, 2] = a.clone(); println(f\"{b[0]}:{b[1]}\"); }\n",
+                "aa-1:bb-1\n",
+            ),
+            (
+                "nested-array",
+                "fn main() { let n = env.args().len() as i64;\n\
+                 let a: Array[Array[String, 2], 2] = [[f\"p-{n}\", f\"q-{n}\"], [f\"r-{n}\", f\"s-{n}\"]];\n\
+                 let b: Array[Array[String, 2], 2] = a.clone();\n\
+                 let i2: Array[String, 2] = b[1].clone(); println(f\"{i2[0]}\"); }\n",
+                "r-1\n",
+            ),
+            (
+                "indexed-element",
+                "fn main() { let n = env.args().len() as i64;\n\
+                 let a: Array[Array[String, 2], 2] = [[f\"p-{n}\", f\"q-{n}\"], [f\"r-{n}\", f\"s-{n}\"]];\n\
+                 let e: Array[String, 2] = a[0].clone(); println(f\"{e[1]}\"); }\n",
+                "q-1\n",
+            ),
+            (
+                "scalar-elems",
+                "fn main() { let a: Array[i64, 3] = [1, 2, 3];\n\
+                 let b: Array[i64, 3] = a.clone(); println(f\"{b[2]}\"); }\n",
+                "3\n",
+            ),
+            (
+                "derive-clone-with-array-field",
+                "#[derive(Clone)]\n\
+                 struct S { a: Array[String, 2], n: i64 }\n\
+                 fn main() { let m = env.args().len() as i64;\n\
+                 let s = S { a: [f\"x-{m}\", f\"y-{m}\"], n: 7 };\n\
+                 let t = s.clone(); println(f\"{t.a[0]}:{t.n}\"); }\n",
+                "x-1:7\n",
+            ),
+            (
+                "independence",
+                "fn main() { let n = env.args().len() as i64;\n\
+                 let mut a: Array[String, 2] = [f\"aa-{n}\", f\"bb-{n}\"];\n\
+                 let b: Array[String, 2] = a.clone();\n\
+                 a[0] = f\"MUT-{n}\"; println(f\"{a[0]}|{b[0]}\"); }\n",
+                "MUT-1|aa-1\n",
+            ),
+        ] {
+            assert_eq!(run_program(src).as_deref(), Some(want), "{label}");
+        }
+    }
+
     /// B-2026-08-28-22 — a callee that returns an owned param on SOME tail paths
     /// and not others now runs that param's user `Drop` body on the paths where it
     /// dies, instead of nowhere.
