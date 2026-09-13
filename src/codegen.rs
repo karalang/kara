@@ -2218,6 +2218,20 @@ pub(super) struct Codegen<'ctx> {
     /// so a stale entry can never disarm an unrelated statement's temp).
     pub(crate) freshtemp_field_access_slot:
         Option<(PointerValue<'ctx>, String, String, (usize, usize))>,
+    /// B-2026-09-12-28 — stack-boxing for an oversized enum payload whose
+    /// consumer is the construct that immediately follows.
+    ///
+    /// `enum_box_stack_args` holds the `args.as_ptr()` of the scrutinee method
+    /// call currently eligible, set across the scrutinee's `compile_expr` and
+    /// cleared straight after; a builtin lowering compares its OWN `args`
+    /// slice against it, so nothing but that exact call site can claim it.
+    /// `enum_box_use_alloca` is the transient the boxing site reads.
+    /// `enum_box_was_stack` reports back to
+    /// `track_freshtemp_boxed_enum_scrutinee`, which must NOT queue a free for
+    /// a box that lives on the stack.
+    pub(crate) enum_box_stack_args: Option<usize>,
+    pub(crate) enum_box_use_alloca: bool,
+    pub(crate) enum_box_was_stack: bool,
     /// Per-function scoped-alias metadata for slice parameters (alias-metadata
     /// slice 4). Keyed by param binding name → the `!alias.scope` / `!noalias`
     /// nodes attached to the element load/store in `compile_slice_index` /
@@ -6671,6 +6685,9 @@ impl<'ctx> Codegen<'ctx> {
             arm_tail_owner_ctx: None,
             arm_pending_tail_owner: None,
             freshtemp_field_access_slot: None,
+            enum_box_stack_args: None,
+            enum_box_use_alloca: false,
+            enum_box_was_stack: false,
             bce: BceState {
                 len_alias: HashMap::new(),
                 asserted_index_bounds: Vec::new(),

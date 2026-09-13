@@ -118,7 +118,9 @@ impl<'ctx> super::Codegen<'ctx> {
             } else {
                 None
             };
+        let saved_stack_box = self.begin_stack_boxed_scrutinee(scrutinee);
         let scrut = self.compile_expr(scrutinee)?;
+        self.end_stack_boxed_scrutinee(saved_stack_box);
         // #39 — resolve the scrutinee's enum type so unqualified variant
         // patterns disambiguate against it (`Float` → `Token.Float`, not a
         // colliding `Expr.Float`). Set before any pattern-resolution call below
@@ -15395,12 +15397,72 @@ impl<'ctx> super::Codegen<'ctx> {
                 if self.borrow_vars.ref_params.contains_key(n.as_str()))
     }
 
+
+    /// B-2026-09-12-28 — mark `scrutinee` as eligible for a STACK box across
+    /// its own `compile_expr`, and hand back the previous marker to restore.
+    ///
+    /// Eligibility is the same predicate the box's free already relies on:
+    /// `expr_yields_fresh_owned_temp`. If that holds, the box the scrutinee
+    /// builds is freed at this construct's scope exit and nowhere else, so an
+    /// entry-block alloca covers its whole life. A non-fresh scrutinee is a
+    /// place owned elsewhere, with its own let-site box drop — left alone.
+    ///
+    /// Keyed on the `args` SLICE POINTER rather than a bare bool because
+    /// compiling the scrutinee also compiles its arguments, and one of those
+    /// can be another boxing call whose result really does escape. Only the
+    /// lowering whose own `args` slice is this one may claim the marker.
+    pub(crate) fn begin_stack_boxed_scrutinee(&mut self, scrutinee: &Expr) -> Option<usize> {
+        let claim = match &scrutinee.kind {
+            ExprKind::MethodCall { args, .. } if !args.is_empty() => {
+                if self.expr_yields_fresh_owned_temp(scrutinee) {
+                    Some(args.as_ptr() as usize)
+                } else {
+                    None
+                }
+            }
+            _ => None,
+        };
+        self.enum_box_was_stack = false;
+        std::mem::replace(&mut self.enum_box_stack_args, claim)
+    }
+
+    /// Restore the marker `begin_stack_boxed_scrutinee` displaced. The
+    /// `enum_box_was_stack` report survives for the caller's subsequent
+    /// `track_freshtemp_boxed_enum_scrutinee`, which consumes it.
+    ///
+    /// INVARIANT, and the one thing to preserve when adding a construct: every
+    /// `track_freshtemp_boxed_enum_scrutinee` call site must be preceded, in
+    /// the same function, by a `begin_stack_boxed_scrutinee` for that same
+    /// scrutinee. `begin` resets the report to false, which is what stops a
+    /// `true` left by one construct — its registration skipped because the
+    /// scrutinee took the ref or user-enum path — from reaching the NEXT
+    /// construct's registration and suppressing a free that must happen. Four
+    /// sites, four begins today: `match`, `if let`, `while let`, `let ... else`.
+    /// A fifth registration added without one would consume a stale `true`.
+    pub(crate) fn end_stack_boxed_scrutinee(&mut self, saved: Option<usize>) {
+        self.enum_box_stack_args = saved;
+    }
+
+    /// True when `args` is the scrutinee call site currently marked for stack
+    /// boxing. Consumes nothing: a lowering may ask before it knows whether it
+    /// will box at all.
+    pub(crate) fn stack_box_claim(&self, args: &[CallArg]) -> bool {
+        !args.is_empty() && self.enum_box_stack_args == Some(args.as_ptr() as usize)
+    }
+
     pub(super) fn track_freshtemp_boxed_enum_scrutinee(
         &mut self,
         scrutinee: &Expr,
         patterns: &[&Pattern],
         val: BasicValueEnum<'ctx>,
     ) -> Option<PointerValue<'ctx>> {
+        // B-2026-09-12-28 — the box this would free lives on the stack, so
+        // there is nothing to free and `free()` on an alloca would abort
+        // (macOS libmalloc: `mfm_free` on a non-heap address). Consumed here,
+        // once, by the construct whose scrutinee set it.
+        if std::mem::take(&mut self.enum_box_was_stack) {
+            return None;
+        }
         if !self.expr_yields_fresh_owned_temp(scrutinee)
             && !self.match_result_scrutinee_owns_box(scrutinee)
         {

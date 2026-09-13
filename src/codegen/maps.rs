@@ -2447,7 +2447,29 @@ impl<'ctx> super::Codegen<'ctx> {
                 }
                 // Multi-word payload via `coerce_to_payload_words` — see
                 // `Vec.first`/`Vec.last` arm for the rationale.
+                // B-2026-09-12-28 — `Option[V]` for a V wider than the 3-word
+                // area is boxed here. When this very call is the scrutinee of
+                // the construct that follows, the box is construct-scoped and
+                // belongs on the stack. `args` identifies the call site, so an
+                // unrelated `Map.get` compiled while the flag is live (a nested
+                // one in the key expression) cannot claim it.
+                let stack_box = self.stack_box_claim(args);
+                let prev_box_mode = std::mem::replace(&mut self.enum_box_use_alloca, stack_box);
                 let some_payload_words = self.coerce_to_payload_words(elem_val, 3)?;
+                self.enum_box_use_alloca = prev_box_mode;
+                // Reported on the CLAIM, not on an actual box: the helper only
+                // boxes a V wider than the area and does not say which it did,
+                // so this over-reports for a V that fits. That direction is the
+                // safe one, and the reason is worth stating. The report's only
+                // effect is to make `track_freshtemp_boxed_enum_scrutinee`
+                // return early. For a fitting V that registration would queue
+                // nothing anyway — its own `payload_words <= area` check skips
+                // the arm — so the outcomes agree. The one case where they
+                // differ is a fitting V whose PATTERN-derived width claims
+                // oversize, and there the early return SUPPRESSES a free of a
+                // box that was never allocated. Over-reporting can therefore
+                // only withhold a wrong free, never a real one.
+                self.enum_box_was_stack |= stack_box;
                 let found_end_bb = self.builder.get_insert_block().unwrap();
                 self.builder.build_unconditional_branch(merge_bb).unwrap();
 

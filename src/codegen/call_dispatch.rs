@@ -14550,13 +14550,26 @@ impl<'ctx> super::Codegen<'ctx> {
                     .build_int_z_extend(raw_size, i64_t, "enumbox.sz64")
                     .unwrap()
             };
-            let box_ptr = self
-                .builder
-                .build_call(self.runtime_fns.malloc_fn, &[size.into()], "enumbox")
-                .unwrap()
-                .try_as_basic_value()
-                .unwrap_basic()
-                .into_pointer_value();
+            // B-2026-09-12-28 — an entry-block alloca when the consumer is
+            // known to bound the box's lifetime (a fresh-temp scrutinee, set by
+            // `begin_stack_boxed_scrutinee`). The alloca outlives the construct
+            // by construction, so it is strictly safer than the malloc it
+            // replaces, and `track_freshtemp_boxed_enum_scrutinee` declines to
+            // queue the matching free. One alloca per SITE: a site inside a
+            // loop reuses its slot every iteration, which is correct because
+            // the box never outlives the iteration that made it.
+            let box_ptr = match (self.enum_box_use_alloca, self.current_fn) {
+                (true, Some(fn_val)) => {
+                    self.create_entry_alloca(fn_val, "enumbox.stack", val_ty)
+                }
+                _ => self
+                    .builder
+                    .build_call(self.runtime_fns.malloc_fn, &[size.into()], "enumbox")
+                    .unwrap()
+                    .try_as_basic_value()
+                    .unwrap_basic()
+                    .into_pointer_value(),
+            };
             // `malloc` guarantees 16-byte alignment; an over-aligned value
             // (a `<4 x i64>` wants 32) would otherwise get LLVM's natural
             // alignment on this store and lower to `vmovaps`, which FAULTS on

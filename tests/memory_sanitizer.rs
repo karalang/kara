@@ -22849,6 +22849,106 @@ fn main() {
         }
     }
 
+    /// B-2026-09-12-28 — the MEMORY twin of
+    /// `e2e_map_get_wide_enum_payload_survives_stack_boxing`.
+    ///
+    /// A `Map.get` on a value type wider than the 3-word `Option` area is
+    /// heap-boxed; for a fresh-temp scrutinee that box now comes from an
+    /// entry-block alloca instead, and `track_freshtemp_boxed_enum_scrutinee`
+    /// declines to queue its free. Two failures live here and neither is
+    /// visible in the printed answer:
+    ///
+    ///  - the suppression MISSES and the alloca is passed to `free()` — on
+    ///    macOS libmalloc that is an abort in `mfm_free`, and under ASAN an
+    ///    attempting-free-on-address-which-was-not-malloc'd report;
+    ///  - the suppression fires for a box that was NOT stack-allocated, and
+    ///    the box leaks (or its payload is freed twice through the binding).
+    ///
+    /// The cells walk the arms that differ in who ends up owning the payload:
+    /// read-only, moved into a longer-lived local, moved into a `mut ref`
+    /// accumulator that outlives the construct, unbound, and a miss.
+    #[test]
+    fn asan_map_get_stack_boxed_payload_has_one_owner() {
+        const H: &str = "enum B { S(String), C }\n\
+             struct Wide { a: String, b: String, n: i64 }\n\
+             enum W { V(Wide), E }\n\
+             fn seed() -> i64 { env.args().len() }\n\
+             fn mk() -> String { f\"payload-{seed()}-aaaaaaaaaaaaaaaaaaaaaaaaaaaaaa\" }\n\
+             fn fill(m: mut ref Map[String, B]) { let _ = m.insert(\"k\", B.S(mk())) }\n";
+        for (label, body, want) in [
+            // Read-only arm in a LOOP — the kata:288 shape. A leaked box grows
+            // without bound; a double-freed one aborts on the second pass.
+            (
+                "read-only-in-a-loop",
+                "fn main() {\n\
+                 \x20  let mut m: Map[String, B] = Map.new(); fill(mut m);\n\
+                 \x20  let mut i = 0; let mut n = 0;\n\
+                 \x20  while i < 4 {\n\
+                 \x20    match m.get(\"k\") { None => {} Some(B.S(w)) => { n = n + w.len() } Some(B.C) => {} }\n\
+                 \x20    i = i + 1 }\n\
+                 \x20  println(f\"n:{n}\"); println(\"end\") }\n",
+                vec!["end"],
+            ),
+            // The payload MOVES into a local that outlives the construct.
+            (
+                "moved-into-outliving-local",
+                "fn main() {\n\
+                 \x20  let mut m: Map[String, B] = Map.new(); fill(mut m);\n\
+                 \x20  let mut held = String.new();\n\
+                 \x20  match m.get(\"k\") { None => {} Some(B.S(w)) => { held = w } Some(B.C) => {} }\n\
+                 \x20  println(f\"h:{held.len()}\"); println(\"end\") }\n",
+                vec!["end"],
+            ),
+            // ...and into a `mut ref` accumulator, the escape shape.
+            (
+                "moved-into-mut-ref-acc",
+                "fn take(m: ref Map[String, B], acc: mut ref Vec[String]) {\n\
+                 \x20  match m.get(\"k\") { None => {} Some(B.S(w)) => { acc.push(w) } Some(B.C) => {} } }\n\
+                 fn main() {\n\
+                 \x20  let mut m: Map[String, B] = Map.new(); fill(mut m);\n\
+                 \x20  let mut acc: Vec[String] = [];\n\
+                 \x20  take(ref m, mut acc);\n\
+                 \x20  println(f\"len:{acc.len()}\"); println(\"end\") }\n",
+                vec!["len:1", "end"],
+            ),
+            // Payload never bound — nothing takes the inner heap.
+            (
+                "unbound-payload",
+                "fn main() {\n\
+                 \x20  let mut m: Map[String, B] = Map.new(); fill(mut m);\n\
+                 \x20  match m.get(\"k\") { None => println(\"n\"), Some(_) => println(\"s\") }\n\
+                 \x20  println(\"end\") }\n",
+                vec!["s", "end"],
+            ),
+            // A MISS boxes nothing at all — the suppression must not disarm an
+            // unrelated drop on the way past.
+            (
+                "miss-boxes-nothing",
+                "fn main() {\n\
+                 \x20  let mut m: Map[String, B] = Map.new(); fill(mut m);\n\
+                 \x20  match m.get(\"absent\") { None => println(\"none\"), Some(B.S(w)) => println(w), Some(B.C) => println(\"c\") }\n\
+                 \x20  println(\"end\") }\n",
+                vec!["none", "end"],
+            ),
+            // A payload wider than one box, read repeatedly.
+            (
+                "wider-payload-repeated",
+                "fn main() {\n\
+                 \x20  let mut wm: Map[String, W] = Map.new();\n\
+                 \x20  let _ = wm.insert(\"w\", W.V(Wide { a: mk(), b: mk(), n: 7 }));\n\
+                 \x20  let mut i = 0;\n\
+                 \x20  while i < 3 {\n\
+                 \x20    match wm.get(\"w\") { None => {} Some(W.V(x)) => { println(f\"n:{x.n}\") } Some(W.E) => {} }\n\
+                 \x20    i = i + 1 }\n\
+                 \x20  println(\"end\") }\n",
+                vec!["n:7", "end"],
+            ),
+        ] {
+            let src = format!("{H}{body}");
+            assert_clean_asan_run(&src, &want, label);
+        }
+    }
+
     #[test]
     fn asan_reassigning_a_moved_in_boxed_payload_frees_the_envelope() {
         const H: &str = "enum Val { Nothing, Ident(String) }\n\

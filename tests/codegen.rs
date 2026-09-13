@@ -19044,6 +19044,110 @@ done
         assert_eq!(out, "dR101\ndR1\none\nn\ndR102\ndR2\ntwo\nin\ndR103\ndR3\nthree\ndR104\ndR4\nfour\nn\ndR105\ndR5\nfive\nin\ndR106\ndR6\nsix\ndR107\ndR7\nin\nseven\nin\ndR8\neight\ndR9\nnine\nn\nten\nend\n");
     }
 
+    /// B-2026-09-12-28 — a `Map.get` whose value is an enum WIDER than the
+    /// seeded 3-word `Option` area is boxed by `coerce_to_payload_words`, and
+    /// for a fresh-temp scrutinee that box now lives on the stack.
+    ///
+    /// The optimization's whole safety argument is that the box pointer never
+    /// escapes the construct: an arm binds the payload through
+    /// `reconstruct_payload_value`, which `inttoptr`s word 0 and LOADS `T`, so
+    /// the binding owns T's inner heap and the box is a pure container. This
+    /// test walks every shape that reaches the box and pins the VALUES, so a
+    /// future change that silences a fault by dropping the payload instead of
+    /// handing it over shows up here rather than only in the ASAN twin
+    /// (`asan_map_get_stack_boxed_payload_has_one_owner`).
+    ///
+    /// Case 8 is the one that matters most: the SOURCE MAP must still read
+    /// correctly after every preceding case, which is what proves the box
+    /// never owned the bucket's heap.
+    #[test]
+    fn e2e_map_get_wide_enum_payload_survives_stack_boxing() {
+        let Some(out) = run_program(
+            "enum B {\n\
+             \x20\x20\x20\x20S(String),\n\
+             \x20\x20\x20\x20C,\n\
+             }\n\
+             struct Wide {\n\
+             \x20\x20\x20\x20a: String,\n\
+             \x20\x20\x20\x20b: String,\n\
+             \x20\x20\x20\x20n: i64,\n\
+             }\n\
+             enum W {\n\
+             \x20\x20\x20\x20V(Wide),\n\
+             \x20\x20\x20\x20E,\n\
+             }\n\
+             fn main() {\n\
+             \x20\x20\x20\x20let mut m: Map[String, B] = Map.new();\n\
+             \x20\x20\x20\x20let _ = m.insert(\"k1\", B.S(\"v1\"));\n\
+             \x20\x20\x20\x20let _ = m.insert(\"k2\", B.C);\n\
+             \x20\x20\x20\x20let mut i = 0;\n\
+             \x20\x20\x20\x20let mut hits = 0;\n\
+             \x20\x20\x20\x20while i < 5 {\n\
+             \x20\x20\x20\x20\x20\x20\x20\x20let u = match m.get(\"k1\") {\n\
+             \x20\x20\x20\x20\x20\x20\x20\x20\x20\x20\x20\x20None => false,\n\
+             \x20\x20\x20\x20\x20\x20\x20\x20\x20\x20\x20\x20Some(B.S(w)) => w == \"v1\",\n\
+             \x20\x20\x20\x20\x20\x20\x20\x20\x20\x20\x20\x20Some(B.C) => false,\n\
+             \x20\x20\x20\x20\x20\x20\x20\x20};\n\
+             \x20\x20\x20\x20\x20\x20\x20\x20if u {\n\
+             \x20\x20\x20\x20\x20\x20\x20\x20\x20\x20\x20\x20hits = hits + 1;\n\
+             \x20\x20\x20\x20\x20\x20\x20\x20}\n\
+             \x20\x20\x20\x20\x20\x20\x20\x20i = i + 1;\n\
+             \x20\x20\x20\x20}\n\
+             \x20\x20\x20\x20println(f\"1 hits {hits}\");\n\
+             \x20\x20\x20\x20let mut moved = String.new();\n\
+             \x20\x20\x20\x20match m.get(\"k1\") {\n\
+             \x20\x20\x20\x20\x20\x20\x20\x20None => {}\n\
+             \x20\x20\x20\x20\x20\x20\x20\x20Some(B.S(w)) => {\n\
+             \x20\x20\x20\x20\x20\x20\x20\x20\x20\x20\x20\x20moved = w;\n\
+             \x20\x20\x20\x20\x20\x20\x20\x20}\n\
+             \x20\x20\x20\x20\x20\x20\x20\x20Some(B.C) => {}\n\
+             \x20\x20\x20\x20}\n\
+             \x20\x20\x20\x20println(f\"2 moved {moved}\");\n\
+             \x20\x20\x20\x20match m.get(\"zz\") {\n\
+             \x20\x20\x20\x20\x20\x20\x20\x20None => println(\"3 none\"),\n\
+             \x20\x20\x20\x20\x20\x20\x20\x20Some(B.S(w)) => println(f\"3 {w}\"),\n\
+             \x20\x20\x20\x20\x20\x20\x20\x20Some(B.C) => println(\"3 conf\"),\n\
+             \x20\x20\x20\x20}\n\
+             \x20\x20\x20\x20match m.get(\"k1\") {\n\
+             \x20\x20\x20\x20\x20\x20\x20\x20None => println(\"4 n\"),\n\
+             \x20\x20\x20\x20\x20\x20\x20\x20Some(_) => println(\"4 s\"),\n\
+             \x20\x20\x20\x20}\n\
+             \x20\x20\x20\x20if let Some(B.S(w)) = m.get(\"k1\") {\n\
+             \x20\x20\x20\x20\x20\x20\x20\x20println(f\"5 {w}\");\n\
+             \x20\x20\x20\x20}\n\
+             \x20\x20\x20\x20match m.get(\"k2\") {\n\
+             \x20\x20\x20\x20\x20\x20\x20\x20None => println(\"6 none\"),\n\
+             \x20\x20\x20\x20\x20\x20\x20\x20Some(B.S(w)) => println(f\"6 {w}\"),\n\
+             \x20\x20\x20\x20\x20\x20\x20\x20Some(B.C) => println(\"6 conf\"),\n\
+             \x20\x20\x20\x20}\n\
+             \x20\x20\x20\x20let mut wm: Map[String, W] = Map.new();\n\
+             \x20\x20\x20\x20let _ = wm.insert(\"w\", W.V(Wide { a: \"aa\", b: \"bb\", n: 7 }));\n\
+             \x20\x20\x20\x20let mut j = 0;\n\
+             \x20\x20\x20\x20while j < 3 {\n\
+             \x20\x20\x20\x20\x20\x20\x20\x20match wm.get(\"w\") {\n\
+             \x20\x20\x20\x20\x20\x20\x20\x20\x20\x20\x20\x20None => println(\"7 none\"),\n\
+             \x20\x20\x20\x20\x20\x20\x20\x20\x20\x20\x20\x20Some(W.V(x)) => println(f\"7 {x.a}{x.b}{x.n}\"),\n\
+             \x20\x20\x20\x20\x20\x20\x20\x20\x20\x20\x20\x20Some(W.E) => println(\"7 e\"),\n\
+             \x20\x20\x20\x20\x20\x20\x20\x20}\n\
+             \x20\x20\x20\x20\x20\x20\x20\x20j = j + 1;\n\
+             \x20\x20\x20\x20}\n\
+             \x20\x20\x20\x20match m.get(\"k1\") {\n\
+             \x20\x20\x20\x20\x20\x20\x20\x20None => println(\"8 none\"),\n\
+             \x20\x20\x20\x20\x20\x20\x20\x20Some(B.S(w)) => println(f\"8 {w}\"),\n\
+             \x20\x20\x20\x20\x20\x20\x20\x20Some(B.C) => println(\"8 conf\"),\n\
+             \x20\x20\x20\x20}\n\
+             \x20\x20\x20\x20println(\"end\");\n\
+             }\n\
+             ",
+        ) else {
+            return;
+        };
+        assert_eq!(
+            out,
+            "1 hits 5\n2 moved v1\n3 none\n4 s\n5 v1\n6 conf\n7 aabb7\n7 aabb7\n7 aabb7\n8 v1\nend\n"
+        );
+    }
+
     /// B-2026-09-07-33 — the VALUE half of
     /// `asan_boxed_payload_handed_out_of_a_match_arm_is_not_written_after_free`.
     ///

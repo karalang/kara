@@ -54,7 +54,9 @@ impl<'ctx> super::Codegen<'ctx> {
         let tail = self.fn_ctx.tail_ret_inner.take();
         // Keyed on the scrutinee's span, so compile ORDER is irrelevant.
         let own_value = self.branch_value_is_owned(value);
+        let saved_stack_box = self.begin_stack_boxed_scrutinee(value);
         let val = self.compile_expr(value)?;
+        self.end_stack_boxed_scrutinee(saved_stack_box);
         // B-2026-09-02-15 — `if let E.A(r) = v[i] { … }` over a heap-element
         // `Vec`: deep-clone the shallow element read, exactly as `compile_match`
         // does at its own scrutinee site. `materialize_freshtemp_enum_scrutinee`'s
@@ -891,7 +893,9 @@ impl<'ctx> super::Codegen<'ctx> {
         // `body_bb`, so the bind below can reuse it (same SSA shape as
         // `compile_if_let`).
         self.builder.position_at_end(cond_bb);
+        let saved_stack_box = self.begin_stack_boxed_scrutinee(value);
         let val = self.compile_expr(value)?;
+        self.end_stack_boxed_scrutinee(saved_stack_box);
         // B-2026-09-02-15 — `if let E.A(r) = v[i] { … }` over a heap-element
         // `Vec`: deep-clone the shallow element read, exactly as `compile_match`
         // does at its own scrutinee site. `materialize_freshtemp_enum_scrutinee`'s
@@ -1739,7 +1743,9 @@ impl<'ctx> super::Codegen<'ctx> {
         value: &Expr,
         else_block: &Block,
     ) -> Result<(), String> {
+        let saved_stack_box = self.begin_stack_boxed_scrutinee(value);
         let val = self.compile_expr(value)?;
+        self.end_stack_boxed_scrutinee(saved_stack_box);
         // B-2026-09-02-15 — `if let E.A(r) = v[i] { … }` over a heap-element
         // `Vec`: deep-clone the shallow element read, exactly as `compile_match`
         // does at its own scrutinee site. `materialize_freshtemp_enum_scrutinee`'s
