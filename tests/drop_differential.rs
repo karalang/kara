@@ -697,21 +697,29 @@ fn a_wildcard_payload_under_a_borrowed_scrutinee_stays_unscheduled() {
 
 #[test]
 fn a_codegen_refusal_is_its_own_outcome_not_a_front_end_reject() {
-    // The row's measured program: `karac check` passes, `karac build` fails
-    // with `indexed-receiver method 'len' on 'a' — outer is not a
-    // Vec/Slice/Array`. Before the split this returned the same value as a
-    // syntax error.
+    // ANY program that typechecks and codegen refuses will do — this test is
+    // about the OUTCOME being distinct, not about which construct refuses. The
+    // specimen therefore needs re-pointing whenever the gap it uses is closed,
+    // and that has already happened once: the original was B-2026-09-10-32's
+    // `fn speek(a: ref Array[String, 2]) -> i64 { a[0].len() }`, which now
+    // lowers, and this test failed as a result. That failure is the RIGHT
+    // outcome for a fixed bug and the wrong one for this test, so when it
+    // happens again, swap the specimen rather than deleting the case.
+    //
+    // The current one is a stated v1 LIMITATION rather than an open bug row
+    // ("nested indexed read requires the outer container to be a named
+    // variable in v1"), which should outlive a bug-row specimen — a row is by
+    // construction something someone intends to fix.
     let src = format!(
-        "fn speek(a: ref Array[String, 2]) -> i64 {{ return a[0].len(); }}\n\
-         fn main() {{ let aa: Array[Array[String, 2], 2] = [[{S}, {S}], [{S}, {S}]]; \
-         println(speek(aa[0])); }}"
+        "fn main() {{ let nested: (Array[Array[String, 2], 2], i64) = \
+         ([[{S}, {S}], [{S}, {S}]], 3); println(f\"{{nested.0[1][0]}}\"); }}"
     );
     match differential_check(&src) {
         DiffOutcome::CodegenRefused { error } => {
             // The diagnostic must come OUT, not just the fact of failure — the
             // distinct messages are what a runner groups refusals by.
             assert!(
-                error.contains("indexed-receiver"),
+                error.contains("nested indexed read"),
                 "refusal should carry codegen's diagnostic, got: {error}"
             );
         }

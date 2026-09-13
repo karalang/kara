@@ -162,7 +162,15 @@ impl<'ctx> super::Codegen<'ctx> {
         let name_owned = name.clone();
         let (te, clone_fn) = match self.receiver_collection_type_expr(&name_owned)? {
             Some(te) => {
-                let f = self.emit_clone_fn_for_type_expr(&te);
+                // B-2026-09-10-37 — an `Array[T, N]` receiver goes STRAIGHT to
+                // its own emitter. `emit_clone_fn_for_type_expr` has no array
+                // arm (see the comment there): it is shared with copy sites
+                // that must stay shallow, and routing arrays through it turned
+                // a discarded borrow-projection return into a 20 B leak.
+                let f = match self.array_elem_and_len(&te) {
+                    Some((elem_te, n)) => self.emit_clone_fn_for_array(&elem_te, n),
+                    None => self.emit_clone_fn_for_type_expr(&te),
+                };
                 (te, f)
             }
             // B-2026-07-29-27 / B-2026-07-29-31 — the AGGREGATE receivers:

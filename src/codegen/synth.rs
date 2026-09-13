@@ -1611,6 +1611,18 @@ impl<'ctx> super::Codegen<'ctx> {
         }
 
         // Recurse first — emit may switch the builder's insert block.
+        //
+        // An element that is itself a fixed array recurses HERE rather than
+        // through `emit_clone_fn_for_type_expr`, mirroring
+        // `emit_drop_fn_for_array`'s own nesting. That dispatcher has no array
+        // arm on purpose (see its comment): giving it one deep-clones a borrow
+        // projection whose result nobody owns. `array_elem_and_len` accepts
+        // both the literal's `TypeKind::Array` and the annotation's
+        // `Path(["Array"], [T, N])`, so nesting resolves for either spelling.
+        // `emit_owning_clone_fn_for_type_expr` carries the nested-array case
+        // itself (its own array arm), so this needs no second dispatch — and
+        // routing through it is what makes an `Array[shared T, N]` retain each
+        // handle rather than copy N uncounted aliases.
         let elem_clone = self.emit_owning_clone_fn_for_type_expr(elem_te);
 
         let ptr_ty = self.context.ptr_type(AddressSpace::default());

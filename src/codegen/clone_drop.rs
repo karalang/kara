@@ -41,22 +41,24 @@ impl<'ctx> super::Codegen<'ctx> {
             self.drop_rc.clone_fn_cache.insert(type_name, f);
             return f;
         }
-        // B-2026-09-10-37 — an `Array[T, N]`, routed BEFORE the kind match and
-        // via `array_elem_and_len`, exactly as the drop dispatcher routes
-        // `emit_drop_fn_for_array`. Both spellings therefore resolve: the
-        // literal's inferred `TypeKind::Array` and the annotation's
-        // `Path(["Array"], [T, N])`. Keying on the kind alone compiles and
-        // misses every annotated array — B-2026-09-06-49's trap, which the
-        // drop peer's comment records for the same reason.
+        // B-2026-09-10-37 — deliberately NO `Array` arm here, though the drop
+        // dispatcher has one for `emit_drop_fn_for_array`.
         //
-        // Unlike the drop peer this does not fall through for a heap-free
-        // element: `emit_clone_fn_for_array` always returns a function, and for
-        // `Array[i64, N]` that is N element-wise primitive copies, which is
-        // what a clone of it means. The drop peer returns `None` there because
-        // there is nothing to free.
-        if let Some((elem_te, n)) = self.array_elem_and_len(te) {
-            return self.emit_clone_fn_for_array(&elem_te, n);
-        }
+        // Routing arrays through this function is what a first cut did, and
+        // `asan_discarded_array_result_has_exactly_one_owner`'s cell 7 caught
+        // it: `fn get(w: ref W) -> Array[String, 2] { return w.a; }` with the
+        // result DISCARDED. That return is a BORROW PROJECTION — a copy out of
+        // a struct the caller still owns — and it is clean on `main` precisely
+        // because the copy is shallow and nothing frees it. Giving this
+        // dispatcher an array route turned that copy into a deep clone with no
+        // owner: 20 B in 2 objects from `karac_string_clone`, under LSan.
+        //
+        // This function has many callers beyond `.clone()`, and the row is
+        // about `.clone()`. So `emit_clone_fn_for_array` is reached from
+        // `try_compile_clone` alone, and recurses on ITSELF for a nested array
+        // element rather than coming back through here — the same shape
+        // `emit_drop_fn_for_array` uses for its own nesting. Widening this
+        // dispatcher is a separate change with its own measurements.
         match &te.kind {
             // B-2026-09-08-7 — a `weak T` leaf, and the CLONE-side twin of the
             // drop arm below. Without it the fallback emitted a bare pointer
@@ -217,6 +219,33 @@ impl<'ctx> super::Codegen<'ctx> {
         &mut self,
         te: &TypeExpr,
     ) -> FunctionValue<'ctx> {
+        // B-2026-09-10-37 — an `Array[T, N]` is routed on the OWNING side only,
+        // never on the plain dispatcher below.
+        //
+        // That split is the whole correctness argument, and both halves were
+        // measured. "Owning" already means "hand out an independent OWNER" —
+        // it is why this function retains a `shared` handle instead of copying
+        // an uncounted alias — and an array of `String` needs independent
+        // buffers by exactly that logic. Its two callers are the
+        // `#[derive(Clone)]` field walk (`emit_struct_clone_fn`) and
+        // `emit_tuple_clone_fn`, both of which are handing out a second owner.
+        //
+        // The PLAIN `emit_clone_fn_for_type_expr` must not have this arm. It is
+        // shared with copy sites that are deliberately shallow, and giving it
+        // one turned `fn get(w: ref W) -> Array[String, 2] { return w.a; }`
+        // with the result DISCARDED into a deep clone owned by nobody — 20 B in
+        // 2 objects from `karac_string_clone` under LSan, caught by
+        // `asan_discarded_array_result_has_exactly_one_owner`'s cell 7, which
+        // its own comment labels "THE CONTROL THAT CAUGHT A WRONG FIX".
+        //
+        // Removing the arm from BOTH is equally wrong in the other direction:
+        // `#[derive(Clone)]` on a struct with an `Array[String, N]` field then
+        // bit-copies the field, both structs free the same buffers, and the
+        // cell aborts `free(): double free detected in tcache 2`. Measured in
+        // that state before landing on this split.
+        if let Some((elem_te, n)) = self.array_elem_and_len(te) {
+            return self.emit_clone_fn_for_array(&elem_te, n);
+        }
         if let TypeKind::Path(p) = &te.kind {
             if let Some(name) = p.segments.first().map(String::as_str) {
                 if let Some(heap_type) = self.type_decls.shared_types.get(name).map(|i| i.heap_type)
