@@ -88884,37 +88884,35 @@ fn main() {
         //   * `match m.remove(k) { Some(a) => .. }` -- the `Array` peer of the
         //     whole-TUPLE arm-binding branch in `control_flow_match`.
         //
-        // 1 -- THE ARM-BOUND SHAPE IS NOT FIXED and is deliberately not
-        //      asserted here. `match m.remove(k) { Some(a) => .. }` still
-        //      leaks 176 B in 8 blocks. It was implemented -- the `Array` peer
-        //      of the whole-TUPLE arm-binding branch in `control_flow_match`,
-        //      which registers the box's interior drop against the bound
-        //      payload -- and then REVERTED, because it is unsound at that
-        //      site and made three correct programs incorrect.
+        // 1 -- THE ARM-BOUND SHAPE IS STILL OPEN and is deliberately not
+        //      asserted. `match m.remove(k) { Some(a) => .. }` leaks 176 B in
+        //      8 blocks. The registration that closes it -- the `Array` peer of
+        //      the whole-TUPLE arm-binding branch -- has now been attempted
+        //      TWICE, and each attempt found a different hazard:
         //
-        //      An arm that binds the whole payload and MOVES it onward hands
-        //      ownership to the destination, so the box's registration becomes
-        //      a second owner. Measured, with the registration in place:
+        //      1. The retraction could not reach a FRESH-TEMP scrutinee at all,
+        //         so an arm that moved the binding onward double-freed. That is
+        //         B-2026-09-13-21, and it is FIXED -- its own battery is
+        //         `asan_a_freshtemp_boxed_payload_binding_the_arm_moves_on_has_one_owner`
+        //         below. With it in place the three move spellings
+        //         (`let b = a`, `m.insert(2, a)`, `Bx { a: a }`) are all clean
+        //         for an array too.
+        //      2. What still is not: a by-value CALL. `Some(a) => { eat(a) }`
+        //         over `Map[i64, Array[String, 2]]` aborts with a tcache double
+        //         free, while the TUPLE twin of the same spelling is clean. A
+        //         by-value array param is CALLEE-OWNED (B-2026-09-06-49 /
+        //         B-2026-09-10-6) so the call transfers, whereas a
+        //         copy-supported tuple param is entry-copied and the caller
+        //         retains. `binding_only_borrowed`, which the retraction uses,
+        //         encodes the entry-copy convention and so calls that array
+        //         call-arg non-consuming -- no retraction, and the callee's
+        //         free plus the box's interior drop collide.
         //
-        //          Some(a) => { keep.push(a) }      use-after-free, garbage
-        //          Some(a) => { m.insert(2, a) }    abort, tcache double free
-        //          Some(a) => { Box2 { a: a, .. } } abort, tcache double free
-        //
-        //      All three are CORRECT on this commit's parent, so that is a
-        //      leak traded for corruption -- the exact outcome
-        //      B-2026-09-13-1's note warns about. `consume_class`'s
-        //      `binding_only_borrowed` retraction covers a by-value CALL
-        //      consumer (`Some(a) => { eat(a) }`, cell 9 below) but not a move
-        //      into a container, a struct literal, or back into the map.
-        //
-        //      And the site cannot simply be taught the array shape, because
-        //      its TUPLE twin has the identical defect ALREADY: the same three
-        //      spellings over `Map[i64, (String, String)]` abort with
-        //      `free(): double free detected in tcache 2` on every compiled
-        //      backend with NO change to the compiler at all, while the
-        //      interpreter is correct. That is filed as its own row; the
-        //      arm-bound array shape waits on it rather than being bought at
-        //      the price of corruption.
+        //      An array arm therefore wants `consume_class::binding_materialized`
+        //      (`free_fn_arg_transfers: true`) chosen per binding off the
+        //      recorded type tag, not the tag simply added to the tuple
+        //      predicate. Left open rather than bought at the price of a double
+        //      free for the second time.
         // 2 -- the row's `remove` leg DISCARDED, both spellings. The bare form
         //      is the one that shows the BOX: the general statement-result
         //      cleanup reaches an inline payload and not a heap-boxed one.
@@ -89077,5 +89075,186 @@ fn main() {
             &["s:5"],
             "array-option-scalar-element-control",
         );
+    }
+
+    #[test]
+    fn asan_a_freshtemp_boxed_payload_binding_the_arm_moves_on_has_one_owner() {
+        // B-2026-09-13-21. A whole-payload binding taken out of a HEAP-BOXED
+        // `Option`/`Result` and then MOVED onward had two owners on every
+        // compiled backend: the destination it was moved into, and the box's
+        // own interior drop. `free(): double free detected in tcache 2`, no
+        // output at all, while `--interp` printed the right answer.
+        //
+        // The registration (B-2026-07-18-3) was sound for a NAMED scrutinee
+        // because `retract_boxed_tuple_inner_drop_for_arm` stands the interior
+        // drop down when the arm takes ownership. It could not reach a
+        // FRESH-TEMP scrutinee: `boxed_tuple_payload_arm_takes_ownership`
+        // opened with `let ExprKind::Identifier(name) = &scrutinee.kind else {
+        // return None; }`, and a fresh temp has no identifier. The fix resolves
+        // the name the way the fresh-temp registration actually keys its box --
+        // by ENUM NAME.
+        //
+        // MEASURED on 4c544f2 over `Map[i64, (String, String)]`, interpreter
+        // vs the three compiled surfaces. The named/fresh-temp pair is what
+        // localized it:
+        //
+        //     match m.remove(k) { Some(a) => { let b = a; .. } }  ABORT -> ok
+        //     match m.remove(k) { Some(a) => { keep.push(a) } }   ABORT -> ok
+        //     match m.remove(k) { Some(a) => { m.insert(2, a) } } ABORT -> ok
+        //     match m.remove(k) { Some(a) => { Bx { a: a, .. } } } ABORT -> ok
+        //     match mk(1)       { Some(a) => { keep.push(a) } }   ABORT -> ok
+        //     let o = m.remove(k); match o { .. push }            ok    -> ok
+        //     match m.remove(k) { Some(a) => { println(a.0) } }   ok    -> ok
+        //     match m.remove(k) { Some(a) => { eat(a) } }         ok    -> ok
+        //
+        // `eat(a)` was clean for a reason that is NOT the retraction, and the
+        // two must not be confused: a copy-supported tuple param is
+        // entry-copied by the callee, so no second owner is ever minted. The
+        // whole-STRUCT payload branch was unaffected throughout (read, rebind
+        // and push all clean) because a struct interior reaches the box through
+        // `boxed_struct_payload_vars` and its own move-out mirror.
+        //
+        // 1 -- THE MINIMAL CASE: a plain rebind. No container, no callee.
+        assert_clean_asan_run(
+            "fn main() {\n\
+             \x20\x20\x20\x20let mut m: Map[i64, (String, String)] = Map.new();\n\
+             \x20\x20\x20\x20m.insert(1, (f\"aaaaaaaaaaaa1\", f\"bbbbbbbbbbbb1\"));\n\
+             \x20\x20\x20\x20match m.remove(1) {\n\
+             \x20\x20\x20\x20\x20\x20\x20\x20Some(a) => { let b = a; println(f\"r:{b.0}\"); }\n\
+             \x20\x20\x20\x20\x20\x20\x20\x20None => { println(\"r:none\"); }\n\
+             \x20\x20\x20\x20}\n\
+             \x20\x20\x20\x20println(f\"m:{m.len()}\");\n\
+             }\n",
+            &["r:aaaaaaaaaaaa1", "m:0"],
+            "freshtemp-boxed-tuple-arm-rebind",
+        );
+        // 2 -- moved back into the SAME container the box came from, which is
+        //      the spelling most likely to be misclassified.
+        assert_clean_asan_run(
+            "fn main() {\n\
+             \x20\x20\x20\x20let mut m: Map[i64, (String, String)] = Map.new();\n\
+             \x20\x20\x20\x20m.insert(1, (f\"aaaaaaaaaaaa1\", f\"bbbbbbbbbbbb1\"));\n\
+             \x20\x20\x20\x20match m.remove(1) {\n\
+             \x20\x20\x20\x20\x20\x20\x20\x20Some(a) => { m.insert(2, a); }\n\
+             \x20\x20\x20\x20\x20\x20\x20\x20None => { println(\"none\"); }\n\
+             \x20\x20\x20\x20}\n\
+             \x20\x20\x20\x20match m.get(2) {\n\
+             \x20\x20\x20\x20\x20\x20\x20\x20Some(v) => { println(f\"g:{v.0}\"); }\n\
+             \x20\x20\x20\x20\x20\x20\x20\x20None => { println(\"g:missing\"); }\n\
+             \x20\x20\x20\x20}\n\
+             \x20\x20\x20\x20println(f\"m:{m.len()}\");\n\
+             }\n",
+            &["g:aaaaaaaaaaaa1", "m:1"],
+            "freshtemp-boxed-tuple-arm-reinsert",
+        );
+        // 3 -- moved into a STRUCT LITERAL field.
+        assert_clean_asan_run(
+            "struct Bx21 { a: (String, String), n: i64 }\n\
+             fn main() {\n\
+             \x20\x20\x20\x20let mut m: Map[i64, (String, String)] = Map.new();\n\
+             \x20\x20\x20\x20m.insert(1, (f\"aaaaaaaaaaaa1\", f\"bbbbbbbbbbbb1\"));\n\
+             \x20\x20\x20\x20match m.remove(1) {\n\
+             \x20\x20\x20\x20\x20\x20\x20\x20Some(a) => { let b = Bx21 { a: a, n: 5 }; println(f\"s:{b.a.0}:{b.n}\"); }\n\
+             \x20\x20\x20\x20\x20\x20\x20\x20None => { println(\"none\"); }\n\
+             \x20\x20\x20\x20}\n\
+             \x20\x20\x20\x20println(f\"m:{m.len()}\");\n\
+             }\n",
+            &["s:aaaaaaaaaaaa1:5", "m:0"],
+            "freshtemp-boxed-tuple-arm-struct-literal",
+        );
+        // 4 -- a PLAIN CALL scrutinee, no `Map` in the program. The fix is not
+        //      map-shaped; the fresh temp is what matters.
+        assert_clean_asan_run(
+            "fn mk21(n: i64) -> Option[(String, String)] {\n\
+             \x20\x20\x20\x20if n < 0 { return None; }\n\
+             \x20\x20\x20\x20return Some((f\"aaaaaaaaaaaa{n}\", f\"bbbbbbbbbbbb{n}\"));\n\
+             }\n\
+             fn main() {\n\
+             \x20\x20\x20\x20match mk21(1) {\n\
+             \x20\x20\x20\x20\x20\x20\x20\x20Some(a) => { let b = a; println(f\"r:{b.0}\"); }\n\
+             \x20\x20\x20\x20\x20\x20\x20\x20None => { println(\"r:none\"); }\n\
+             \x20\x20\x20\x20}\n\
+             }\n",
+            &["r:aaaaaaaaaaaa1"],
+            "freshtemp-boxed-tuple-arm-plain-call",
+        );
+        // 5 -- THE NAMED SCRUTINEE, which was correct before and must stay so.
+        //      It is the cell that fails if the fix ever widens the retraction
+        //      past the fresh-temp case and stands a named binding's box down
+        //      twice.
+        assert_clean_asan_run(
+            "fn main() {\n\
+             \x20\x20\x20\x20let mut m: Map[i64, (String, String)] = Map.new();\n\
+             \x20\x20\x20\x20m.insert(1, (f\"aaaaaaaaaaaa1\", f\"bbbbbbbbbbbb1\"));\n\
+             \x20\x20\x20\x20let o = m.remove(1);\n\
+             \x20\x20\x20\x20match o {\n\
+             \x20\x20\x20\x20\x20\x20\x20\x20Some(a) => { let b = a; println(f\"r:{b.0}\"); }\n\
+             \x20\x20\x20\x20\x20\x20\x20\x20None => { println(\"r:none\"); }\n\
+             \x20\x20\x20\x20}\n\
+             \x20\x20\x20\x20println(f\"m:{m.len()}\");\n\
+             }\n",
+            &["r:aaaaaaaaaaaa1", "m:0"],
+            "named-boxed-tuple-arm-rebind-control",
+        );
+        // 6 -- THE READ-ONLY CONTROL. The interior drop must still RUN here:
+        //      nothing else owns it, so a fix that retracted unconditionally
+        //      would turn this into a leak. LSan makes that a failure.
+        assert_clean_asan_run(
+            "fn main() {\n\
+             \x20\x20\x20\x20let mut m: Map[i64, (String, String)] = Map.new();\n\
+             \x20\x20\x20\x20m.insert(1, (f\"aaaaaaaaaaaa1\", f\"bbbbbbbbbbbb1\"));\n\
+             \x20\x20\x20\x20match m.remove(1) {\n\
+             \x20\x20\x20\x20\x20\x20\x20\x20Some(a) => { println(f\"r:{a.0}\"); }\n\
+             \x20\x20\x20\x20\x20\x20\x20\x20None => { println(\"r:none\"); }\n\
+             \x20\x20\x20\x20}\n\
+             \x20\x20\x20\x20println(f\"m:{m.len()}\");\n\
+             }\n",
+            &["r:aaaaaaaaaaaa1", "m:0"],
+            "freshtemp-boxed-tuple-arm-read-only-control",
+        );
+        // 7 -- the BY-VALUE CALL consumer. Clean before and after, and NOT
+        //      because of the retraction: the callee entry-copies a
+        //      copy-supported tuple param, so no second owner exists. Pinned so
+        //      that reading it as evidence about the retraction is harder.
+        assert_clean_asan_run(
+            "fn eat21(t: (String, String)) -> i64 { return t.0.len(); }\n\
+             fn main() {\n\
+             \x20\x20\x20\x20let mut m: Map[i64, (String, String)] = Map.new();\n\
+             \x20\x20\x20\x20m.insert(1, (f\"aaaaaaaaaaaa1\", f\"bbbbbbbbbbbb1\"));\n\
+             \x20\x20\x20\x20match m.remove(1) {\n\
+             \x20\x20\x20\x20\x20\x20\x20\x20Some(a) => { println(f\"r:{eat21(a)}\"); }\n\
+             \x20\x20\x20\x20\x20\x20\x20\x20None => { println(\"r:none\"); }\n\
+             \x20\x20\x20\x20}\n\
+             }\n",
+            &["r:13"],
+            "freshtemp-boxed-tuple-arm-byvalue-call-control",
+        );
+        // 8 -- THE ARRAY PAYLOAD IS NOT COVERED, because its registration is
+        //      not landing here. This row fixes the RETRACTION, and with it the
+        //      three MOVE spellings are clean for an array as well -- measured.
+        //      But `Some(a) => { eat(a) }` over
+        //      `Map[i64, Array[String, 2]]` still aborts once the array
+        //      registration is added, because a by-value array param is
+        //      CALLEE-OWNED while a copy-supported tuple param is entry-copied,
+        //      and `binding_only_borrowed` encodes the latter. So the array
+        //      registration waits on a per-binding predicate choice; see
+        //      `boxed_tuple_payload_arm_takes_ownership`'s note and
+        //      B-2026-09-13-2 cell 1.
+        //
+        //      Nothing about an array is asserted here, and that is the point:
+        //      this row's fix is the tuple retraction, whose absence was a
+        //      DOUBLE FREE on unmodified main.
+        // 9 -- THE `push` SPELLING IS NOT ASSERTED CLEAN, and the reason is
+        //      not this row. `keep.push(a)` over `Vec[Array[String, 2]]` leaks
+        //      132 B in 6 blocks here, and so does `keep.push(mk(i))` with NO
+        //      `match` anywhere in the program -- 132 B in 6, the identical
+        //      figure -- while the named-source spelling `let e = [..];
+        //      keep.push(e)` is clean. That is B-2026-09-10-36, already open:
+        //      a `Vec[Array[T, N]]` fed from a TEMPORARY loses every element
+        //      buffer, and an arm-bound array is a temporary to `push`.
+        //
+        //      It is CORRECTNESS-clean on all four surfaces, which is what this
+        //      row is about. Asserting it here would fail on a leak this row
+        //      did not cause and cannot fix.
     }
 }

@@ -12335,8 +12335,45 @@ impl<'ctx> super::Codegen<'ctx> {
         pattern: &Pattern,
         arm_only_borrows: bool,
     ) -> Option<String> {
-        let ExprKind::Identifier(name) = &scrutinee.kind else {
-            return None;
+        // B-2026-09-13-21 — a FRESH-TEMP scrutinee has no identifier, and this
+        // `let ... else` used to be the whole story, so the retraction could
+        // never reach the registration `track_freshtemp_boxed_enum_scrutinee`
+        // makes. That registration tracks its box under the ENUM NAME
+        // ("Option" / "Result") rather than a binding's, so resolving the name
+        // that way is all that was missing.
+        //
+        // The defect it closes is a DOUBLE FREE, not a leak, and the named
+        // spelling of the very same program is clean -- which is what localized
+        // it. Measured on 4c544f2, `Map[i64, (String, String)]`:
+        //
+        // ```text
+        // match m.remove(k) { Some(a) => { let b = a; .. } }   ABORT (134)
+        // match m.remove(k) { Some(a) => { keep.push(a) } }    ABORT (134)
+        // match mk(1)       { Some(a) => { keep.push(a) } }    ABORT (134)
+        // let o = m.remove(k); match o { Some(a) => push }     clean
+        // match m.remove(k) { Some(a) => { println(a.0) } }    clean
+        // match m.remove(k) { Some(a) => { eat(a) } }          clean
+        // ```
+        //
+        // `eat(a)` is clean for a different reason than the retraction, and it
+        // is worth not mistaking one for the other: the callee entry-copies a
+        // copy-supported tuple param, so no second owner is ever minted there.
+        // The `let b = a` row is the minimal case -- no container, no callee,
+        // just a rebind -- and it is the one to reach for when re-testing.
+        //
+        // The whole-STRUCT payload branch is NOT affected (measured: read,
+        // rebind and `push` all clean), because a struct interior reaches the
+        // box through `boxed_struct_payload_vars` and its own move-out mirror.
+        // This is the tuple branch's missing half of that.
+        //
+        // Two fresh-temp boxed scrutinees in one function both register under
+        // the same enum name, so a retraction for one downgrades the other to
+        // box-only. That direction is a LEAK, never a double free, which is the
+        // right way round for a collision this keying has had since the
+        // registration was written.
+        let name = match &scrutinee.kind {
+            ExprKind::Identifier(name) => name.clone(),
+            _ => self.variant_pattern_enum_name(pattern)?,
         };
         if !self
             .payload_vars
@@ -12345,6 +12382,7 @@ impl<'ctx> super::Codegen<'ctx> {
         {
             return None;
         }
+        let name = &name;
         let PatternKind::TupleVariant { path, patterns } = &pattern.kind else {
             return None;
         };
@@ -12357,6 +12395,21 @@ impl<'ctx> super::Codegen<'ctx> {
         let destructures = patterns
             .iter()
             .any(|p| matches!(&p.kind, PatternKind::Tuple(_)));
+        // TUPLE ONLY, and `"Array"` is deliberately NOT here -- see
+        // B-2026-09-13-2, whose arm-bound shape wants an array registration
+        // this would have to retract. Adding the tag is not enough for it: a
+        // by-value ARRAY param is CALLEE-OWNED (B-2026-09-06-49 /
+        // B-2026-09-10-6), so `Some(a) => { eat(a) }` transfers, while the
+        // same spelling over a TUPLE does not -- the callee entry-copies a
+        // copy-supported tuple and the caller retains. `binding_only_borrowed`
+        // below encodes the entry-copy convention (`free_fn_arg_transfers:
+        // false`), so it calls that array call-arg non-consuming, no
+        // retraction fires, and the callee's free plus the box's interior drop
+        // are a double free. Measured: `match m.remove(1) { Some(a) =>
+        // eat22(a) }` over `Map[i64, Array[String, 2]]` aborts, the tuple twin
+        // is clean. An array arm wants `consume_class::binding_materialized`
+        // (`free_fn_arg_transfers: true`) instead, chosen per binding off the
+        // recorded type tag.
         let whole_tuple_binding = patterns.iter().any(|p| {
             matches!(&p.kind, PatternKind::Binding(_))
                 && self
