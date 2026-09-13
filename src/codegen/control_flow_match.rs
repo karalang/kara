@@ -1070,7 +1070,11 @@ impl<'ctx> super::Codegen<'ctx> {
                     // Slice 3t: struct-destructure of a BOXED payload — zero
                     // the consumed fields inside the box so the binding's
                     // BoxedEnumDrop inner walk frees only unbound fields.
-                    self.suppress_boxed_payload_struct_destructure(scrutinee, &arm.pattern);
+                    self.suppress_boxed_payload_struct_destructure(
+                        scrutinee,
+                        &arm.pattern,
+                        Some(&arm.body),
+                    );
                     // B-2026-08-04-6 — the FRESH-TEMP twin: same per-field
                     // split, against the box staged by
                     // `track_freshtemp_boxed_enum_scrutinee`. No-ops for a
@@ -1078,6 +1082,7 @@ impl<'ctx> super::Codegen<'ctx> {
                     self.suppress_freshtemp_boxed_payload_struct_destructure(
                         freshtemp_boxed_slot,
                         &arm.pattern,
+                        Some(&arm.body),
                     );
                 }
                 // #15: a struct-FIELD enum scrutinee (`match spanned.tok { … }`).
@@ -2364,6 +2369,13 @@ impl<'ctx> super::Codegen<'ctx> {
     /// Empty when there is no body to consult (the `let … else` leg, whose
     /// binding outlives the statement and whose scope is not a single block), so
     /// that leg keeps today's ceiling unchanged.
+    ///
+    /// B-2026-09-13-10 — handles the STRUCT-shaped variant pattern
+    /// (`Kws.A { r }`) as well as the tuple-shaped one, because the ceiling now
+    /// applies to both. The two shapes differ only in how a position recovers
+    /// its binding NAME: a tuple position is its sub-pattern, a struct field is
+    /// either shorthand (`{ r }`, binding by the field's own name) or renamed
+    /// (`{ r: m }`, binding by the sub-pattern's).
     fn body_moved_payload_positions(
         &self,
         inner_enum: &str,
@@ -2374,17 +2386,40 @@ impl<'ctx> super::Codegen<'ctx> {
         let Some(body) = body else {
             return out;
         };
-        let Some((_, consumed)) = self.enum_pattern_consumed_positions(inner_enum, pattern) else {
-            return out;
-        };
-        let PatternKind::TupleVariant { patterns, .. } = &pattern.kind else {
+        let Some((variant, consumed)) = self.enum_pattern_consumed_positions(inner_enum, pattern)
+        else {
             return out;
         };
         for pos in consumed {
-            let Some(PatternKind::Binding(name)) = patterns.get(pos).map(|p| &p.kind) else {
-                continue;
+            let name = match &pattern.kind {
+                PatternKind::TupleVariant { patterns, .. } => {
+                    match patterns.get(pos).map(|p| &p.kind) {
+                        Some(PatternKind::Binding(n)) => n.clone(),
+                        _ => continue,
+                    }
+                }
+                PatternKind::Struct { fields, .. } => {
+                    let Some(field_names) =
+                        self.enum_variant_struct_field_names(inner_enum, &variant)
+                    else {
+                        continue;
+                    };
+                    let Some(fname) = field_names.get(pos) else {
+                        continue;
+                    };
+                    let Some(fp) = fields.iter().find(|fp| &fp.name == fname) else {
+                        continue;
+                    };
+                    match fp.pattern.as_ref().map(|p| &p.kind) {
+                        // Shorthand `{ r }` binds by the field's own name.
+                        None => fp.name.clone(),
+                        Some(PatternKind::Binding(n)) => n.clone(),
+                        _ => continue,
+                    }
+                }
+                _ => continue,
             };
-            if !super::consume_class::binding_only_borrowed(name, body) {
+            if !super::consume_class::binding_only_borrowed(&name, body) {
                 out.insert(pos);
             }
         }
@@ -14315,6 +14350,7 @@ impl<'ctx> super::Codegen<'ctx> {
         &mut self,
         scrutinee: &Expr,
         pattern: &Pattern,
+        body: Option<&Expr>,
     ) {
         let ExprKind::Identifier(name) = &scrutinee.kind else {
             return;
@@ -14346,7 +14382,7 @@ impl<'ctx> super::Codegen<'ctx> {
         let Some(slot) = self.variables.get(name.as_str()).copied() else {
             return;
         };
-        self.suppress_boxed_payload_struct_destructure_at(slot.ptr, pattern);
+        self.suppress_boxed_payload_struct_destructure_at(slot.ptr, pattern, body);
     }
 
     /// B-2026-08-04-6 — the FRESH-TEMP twin of
@@ -14363,9 +14399,10 @@ impl<'ctx> super::Codegen<'ctx> {
         &mut self,
         slot: Option<PointerValue<'ctx>>,
         pattern: &Pattern,
+        body: Option<&Expr>,
     ) {
         let Some(slot) = slot else { return };
-        self.suppress_boxed_payload_struct_destructure_at(slot, pattern);
+        self.suppress_boxed_payload_struct_destructure_at(slot, pattern, body);
     }
 
     /// Shared body of the two entry points above: `slot` points at the
@@ -14374,6 +14411,7 @@ impl<'ctx> super::Codegen<'ctx> {
         &mut self,
         slot_ptr: PointerValue<'ctx>,
         pattern: &Pattern,
+        body: Option<&Expr>,
     ) {
         let PatternKind::TupleVariant { path, patterns } = &pattern.kind else {
             return;
@@ -14544,7 +14582,35 @@ impl<'ctx> super::Codegen<'ctx> {
             // struct arm spells out above. Only the base pointer differs —
             // the box interior here, the enum's own slot there.
             BoxedPayloadShape::EnumVariant(ename) => {
-                self.suppress_destructured_enum_payload_cleanup_at(box_ptr, ename, sub);
+                // B-2026-09-13-10 — under the SAME width ceiling
+                // `suppress_nested_boxed_payload_cleanup` carries, and for the
+                // same reason: a leaf wider than the envelope's payload area is
+                // a VIEW into the box and owns nothing, so disarming its
+                // position hands the bytes to nobody. This call passed `None`
+                // from B-2026-08-31-23 until now, which is why the struct-shaped
+                // spelling leaked one block per leaf field (27 B in 3 blocks for
+                // a 3-`String` leaf) while its tuple-shaped twin — given the
+                // ceiling by B-2026-09-12-25 leg 2 — was clean.
+                //
+                // The moved-position exemption rides along for the same reason
+                // it does there (B-2026-09-13-9): a move mints a second owner
+                // whatever the leaf's width, so the box must stand down for it.
+                // The ceiling rides on HAVING a body, and that is not a
+                // convenience: the three `let`-family callers
+                // (`compile_if_let` / `compile_while_let` / `compile_let_else`)
+                // already gate this whole call on `optres_bindings_owned`, so
+                // every position they reach here is one the binding MOVES.
+                // Under the exemption above those are exempt anyway, and
+                // applying a ceiling we cannot then lift would turn today's
+                // correct disarm into a double free. `None` therefore keeps the
+                // historical unlimited walk for them, exactly as it does for
+                // every other caller of the unlimited entry point.
+                let ename = ename.clone();
+                let exempt = self.body_moved_payload_positions(&ename, sub, body);
+                let ceiling = body.is_some().then_some(area);
+                self.suppress_destructured_enum_payload_cleanup_at_limited(
+                    box_ptr, &ename, sub, ceiling, &exempt,
+                );
             }
         }
         self.builder.build_unconditional_branch(join_bb).unwrap();

@@ -477,12 +477,16 @@ impl<'ctx> super::Codegen<'ctx> {
         // after — which is what identifies the binding mode as the axis rather
         // than the construct.
         if optres_bindings_owned {
-            self.suppress_boxed_payload_struct_destructure(value, pattern);
+            self.suppress_boxed_payload_struct_destructure(value, pattern, None);
             // B-2026-08-04-6 — the FRESH-TEMP twin: same per-field split,
             // against the box staged by `track_freshtemp_boxed_enum_scrutinee`
             // (no named variable exists for the expr-based entry point to
             // find). No-ops when the scrutinee is not a fresh-temp boxed one.
-            self.suppress_freshtemp_boxed_payload_struct_destructure(freshtemp_boxed_slot, pattern);
+            self.suppress_freshtemp_boxed_payload_struct_destructure(
+                freshtemp_boxed_slot,
+                pattern,
+                None,
+            );
         }
         // B-2026-07-21-8: ref-chain struct clone — fire the per-field
         // cap-zeroing against the CLONE slot (the expr-based suppressors
@@ -1206,12 +1210,16 @@ impl<'ctx> super::Codegen<'ctx> {
         // never did. See the `compile_if_let` site for what the ungated call
         // got wrong and how it was measured.
         if optres_bindings_owned {
-            self.suppress_boxed_payload_struct_destructure(value, pattern);
+            self.suppress_boxed_payload_struct_destructure(value, pattern, None);
             // B-2026-08-04-6 — the FRESH-TEMP twin: same per-field split,
             // against the box staged by `track_freshtemp_boxed_enum_scrutinee`
             // (no named variable exists for the expr-based entry point to
             // find). No-ops when the scrutinee is not a fresh-temp boxed one.
-            self.suppress_freshtemp_boxed_payload_struct_destructure(freshtemp_boxed_slot, pattern);
+            self.suppress_freshtemp_boxed_payload_struct_destructure(
+                freshtemp_boxed_slot,
+                pattern,
+                None,
+            );
         }
         // B-2026-08-08-25 — restore after the suppressors, before the body
         // compiles (see the if-let site).
@@ -2066,12 +2074,16 @@ impl<'ctx> super::Codegen<'ctx> {
         // never did. See the `compile_if_let` site for what the ungated call
         // got wrong and how it was measured.
         if optres_bindings_owned {
-            self.suppress_boxed_payload_struct_destructure(value, pattern);
+            self.suppress_boxed_payload_struct_destructure(value, pattern, None);
             // B-2026-08-04-6 — the FRESH-TEMP twin: same per-field split,
             // against the box staged by `track_freshtemp_boxed_enum_scrutinee`
             // (no named variable exists for the expr-based entry point to
             // find). No-ops when the scrutinee is not a fresh-temp boxed one.
-            self.suppress_freshtemp_boxed_payload_struct_destructure(freshtemp_boxed_slot, pattern);
+            self.suppress_freshtemp_boxed_payload_struct_destructure(
+                freshtemp_boxed_slot,
+                pattern,
+                None,
+            );
         }
         // B-2026-07-21-8: ref-chain struct clone — per-field cap-zeroing
         // against the CLONE slot on the match edge (see the if-let site);

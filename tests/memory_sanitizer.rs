@@ -88416,4 +88416,94 @@ fn main() {
             "map-key-scalar-array-control",
         );
     }
+
+    /// B-2026-09-13-10 — the STRUCT-shaped spelling of a nested boxed-payload
+    /// destructure, which leaked one block per leaf field because its disarm
+    /// had no WIDTH CEILING.
+    ///
+    /// `Option.Some(Kws.A { r })` over `enum Kws { A { r: R3 }, B }` routes
+    /// through `suppress_boxed_payload_struct_destructure_at`'s
+    /// `BoxedPayloadShape::EnumVariant` arm, which called the UNLIMITED
+    /// `suppress_destructured_enum_payload_cleanup_at` — disarming every
+    /// position the pattern BINDS. For a leaf at or under the envelope's
+    /// payload area that is right (the leaf is materialised as an owning
+    /// copy); ABOVE it the leaf is a view into the box and owns nothing, so
+    /// the disarm handed its fields to nobody. Measured on an unmodified tree:
+    /// `definitely lost: 27 bytes in 3 blocks` at `-O0`, one per `R3` field,
+    /// with correct output on all four surfaces.
+    ///
+    /// The TUPLE-shaped twin (`Kws2.A(r)`) was already clean, having been given
+    /// the ceiling by B-2026-09-12-25 leg 2 — which is what identifies the
+    /// PATTERN SHAPE as the axis rather than the width or the nesting.
+    ///
+    /// FOUR CELLS, chosen so that neither direction of the fix can pass alone:
+    ///
+    /// - `nested` — the row's own repro, a READ-ONLY arm over a 9-word leaf.
+    ///   Leaked before, clean after: the defect itself.
+    /// - `tup` — the tuple-shaped twin, clean before AND after. It pins the
+    ///   ceiling the struct arm is being given, so a fix that removed it from
+    ///   both would fail here.
+    /// - `moved` — the same struct-shaped pattern whose arm MOVES the leaf
+    ///   (`acc.push(r)`). A move mints a second owner whatever the leaf's
+    ///   width, so B-2026-09-13-9's exemption must lift the ceiling for it; a
+    ///   bare ceiling with no exemption turns this cell into a DOUBLE FREE. It
+    ///   is the cell that makes the fix's second half load-bearing.
+    /// - `narrow` — a leaf UNDER the area (`R1 { s: String }`, 3 words), read
+    ///   only. At or below the ceiling the disarm still fires, so this pins
+    ///   that the ceiling did not simply disable the arm.
+    #[test]
+    fn asan_struct_shaped_boxed_enum_payload_leaf_respects_the_width_ceiling() {
+        assert_clean_asan_run(
+            r#"
+struct R3 { s: String, t: String, u: String }
+struct R1 { s: String }
+enum Kws { A { r: R3 }, B }
+enum Kws2 { A(R3), B }
+enum Kn { A { r: R1 }, B }
+
+fn mk3(i: i64) -> R3 { return R3 { s: f"ssssssss{i}", t: f"tttttttt{i}", u: f"uuuuuuuu{i}" }; }
+
+fn nested(x: Option[Kws]) {
+    match x { Option.Some(Kws.A { r }) => { println(f"n:{r.s}"); } Option.Some(Kws.B) => {} Option.None => {} }
+}
+fn tup(x: Option[Kws2]) {
+    match x { Option.Some(Kws2.A(r)) => { println(f"t:{r.s}"); } Option.Some(Kws2.B) => {} Option.None => {} }
+}
+fn moved(x: Option[Kws], acc: mut ref Vec[R3]) {
+    match x { Option.Some(Kws.A { r }) => { acc.push(r); } Option.Some(Kws.B) => {} Option.None => {} }
+}
+fn narrow(x: Option[Kn]) {
+    match x { Option.Some(Kn.A { r }) => { println(f"w:{r.s}"); } Option.Some(Kn.B) => {} Option.None => {} }
+}
+
+fn main() {
+    let mut acc: Vec[R3] = [];
+    let mut i = 0;
+    while i < 3 {
+        nested(Option.Some(Kws.A { r: mk3(i) }));
+        tup(Option.Some(Kws2.A(mk3(i))));
+        moved(Option.Some(Kws.A { r: mk3(i) }), mut acc);
+        narrow(Option.Some(Kn.A { r: R1 { s: f"nnnnnnnn{i}" } }));
+        i = i + 1;
+    }
+    println(f"len:{acc.len()}");
+    println("end");
+}
+"#,
+            &[
+                "n:ssssssss0",
+                "t:ssssssss0",
+                "w:nnnnnnnn0",
+                "n:ssssssss1",
+                "t:ssssssss1",
+                "w:nnnnnnnn1",
+                "n:ssssssss2",
+                "t:ssssssss2",
+                "w:nnnnnnnn2",
+                "len:3",
+                "end",
+            ],
+            "asan_struct_shaped_boxed_enum_payload_leaf_respects_the_width_ceiling",
+        );
+    }
 }
