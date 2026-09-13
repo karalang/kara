@@ -3066,6 +3066,13 @@ impl<'ctx> super::Codegen<'ctx> {
         val: BasicValueEnum<'ctx>,
     ) {
         let inkwell::types::BasicTypeEnum::StructType(agg_ty) = val.get_type() else {
+            // B-2026-09-13-20 — an `Array[T, N]` key's value is an LLVM
+            // ARRAY, not a struct, so this gate turned it away before any leg
+            // ran. The shape guard and the type-keyed resolver disagreeing
+            // about what an aggregate is cost this row a second measurement
+            // round: the tuple cells went clean while the array cell kept
+            // leaking its 64 B / 4 unchanged.
+            self.free_fresh_owned_nameless_key_arg(arg, val, val.get_type());
             return;
         };
         // A String/Vec-shaped key is the `free_fresh_owned_str_arg` path's job;
@@ -3080,6 +3087,12 @@ impl<'ctx> super::Codegen<'ctx> {
             // Not a struct temp — it may still be a fresh ENUM-variant temp
             // owning heap, which leaks the same way.
             self.free_fresh_owned_enum_key_arg(arg, val, agg_ty, cur_fn);
+            // B-2026-09-13-20 — or a key with NO TYPE NAME AT ALL (a tuple, an
+            // `Array[T, N]`, a tuple nesting either), which both legs above
+            // decline for the same reason: each resolves its drop through a
+            // NAME. Mutually exclusive with the enum leg by shape, and that
+            // leg's own gate is re-checked inside rather than assumed.
+            self.free_fresh_owned_nameless_key_arg(arg, val, agg_ty.into());
             return;
         };
         // `shared` keys are RC-managed; their release is the rc machinery's.
@@ -3143,6 +3156,171 @@ impl<'ctx> super::Codegen<'ctx> {
         self.builder
             .build_call(drop_fn, &[slot.into()], "")
             .unwrap();
+    }
+
+    /// The NAMELESS leg of [`Self::free_fresh_owned_struct_key_arg`]: a fresh
+    /// owned key temporary whose type has no NAME — a tuple, an
+    /// `Array[T, N]`, or a tuple nesting either.
+    ///
+    /// B-2026-09-13-20. The struct leg resolves its drop through
+    /// `emit_struct_drop_synthesis(&name)` and the enum leg through
+    /// `emit_enum_drop_switch(&ename)`, so both decline a key that has no name
+    /// to key on, and nothing else runs: the temporary is borrowed by the
+    /// lookup, discarded, and lost. MEASURED at `KARAC_OPT_LEVEL=0` under
+    /// valgrind, two lookups of `m.get(mk(j))` unless noted:
+    ///
+    /// ```text
+    /// Map[(String, String), i64]                  64 B / 4   LEAKED
+    /// Map[(String, i64), i64]                     36 B / 2   LEAKED
+    /// Map[Array[String, 2], i64]                  64 B / 4   LEAKED
+    /// Map[((String, String), i64), i64]           64 B / 4   LEAKED
+    /// Set[(String, String)], s.contains(mk(j))    64 B / 4   LEAKED
+    /// Map[K, i64], K = struct { a, b: String }    clean  <- the named control
+    /// Map[Vec[String], i64]                       clean  <- the overlay's
+    /// Map[String, i64] / Map[i64, i64]            clean  <- siblings
+    /// let probe = mk(1); m.get(probe)             clean  <- another owner
+    /// insert-only, no lookup at all               clean  <- insert MOVES
+    /// ```
+    ///
+    /// The row was filed as a TUPLE key; the array and nested-tuple cells are
+    /// the same defect one shape over, found by sweeping the key-shape axis
+    /// before writing the fix rather than after — the same lesson
+    /// B-2026-09-13-6 recorded when its struct-keyed title turned out to cover
+    /// a tuple and a `Vec[String]` too.
+    ///
+    /// KEYED ON `map_key_drop_fn_for_type_expr`, the one-policy resolver the
+    /// map's own storage side uses for both halves, so this adds no third
+    /// notion of what a key owns. Two consequences follow from that choice and
+    /// both are deliberate: an `Array[i64, N]` key still emits nothing (the
+    /// resolver's `emit_drop_fn_for_array` declines a heapless element), and a
+    /// shape the storage walk cannot fully free is declined here rather than
+    /// half-freed.
+    ///
+    /// AN ARRAY KEY REACHES HERE THROUGH A SECOND GATE, and missing it is why
+    /// the array cell survived this row's first fix. The caller opens with
+    /// `let BasicTypeEnum::StructType(agg_ty) = val.get_type() else { return
+    /// }`, and an `Array[T, N]` VALUE is an LLVM array — so the tuple cells
+    /// went clean while the array cell kept leaking exactly 64 B / 4. The
+    /// shape guard is LLVM-type-keyed and the resolver is TypeExpr-keyed;
+    /// whenever those two disagree about what counts as an aggregate, the
+    /// guard wins silently. Hence `slot_ty: BasicTypeEnum` rather than a
+    /// `StructType`, and a route from that `else` arm.
+    ///
+    /// WHY THE ANNOTATED-ARRAY SPELLING FORCED THAT CHOICE. The obvious gate —
+    /// `matches!(key_te.kind, TypeKind::Tuple(_) | TypeKind::Array { .. })` —
+    /// compiles, applies cleanly, and MISSES the array cell entirely: an
+    /// annotated `Array[String, 2]` parses to `Path(["Array"], [Type(String),
+    /// Const(2)])`, and only an array LITERAL's inferred type is
+    /// `TypeKind::Array`. A `fn mk(n) -> Array[String, 2]` return is always the
+    /// annotated spelling. That is the trap B-2026-09-06-49 recorded and
+    /// B-2026-09-10-6 re-hit, so the resolver — which tries
+    /// `array_elem_and_len` BEFORE its kind match — decides, not a kind list
+    /// here.
+    ///
+    /// THE FRESH-TEMP GATE IS THE SOUNDNESS BOUNDARY. Two spellings are
+    /// admitted and they need different gates: a CALL temp is admitted by
+    /// `expr_yields_fresh_owned_temp` (and its TypeExpr read off the callee's
+    /// recorded return type), while a tuple LITERAL is fresh BY CONSTRUCTION —
+    /// it is built at the call site — so that predicate, which matches
+    /// `Call`/`MethodCall` only, would decline it forever.
+    ///
+    /// THE LITERAL LEG LOOKED LIKE A DOUBLE FREE AND IS NOT, and the cell that
+    /// settles it is worth keeping because the reasoning does not survive
+    /// inspection alone. `let a = ..; let b = ..; m.get((a, b))` builds the
+    /// tuple from LOCALS, and those locals are still readable after the
+    /// lookup — so the tuple plainly does not take their buffers. It leaked 32
+    /// B / 2 all the same, which is the proof that the literal DEEP-COPIES
+    /// them and abandons the copy: a shallow alias would have had nothing
+    /// extra to lose. Freeing that copy is therefore the only reclaim, not a
+    /// second one. The pinned cell measures both halves — clean under LSan AND
+    /// `after:13:13` still printed — because a fix that mistook the copy for
+    /// an alias would abort rather than leak, and only the second half of that
+    /// assertion can tell the two apart.
+    ///
+    /// A METHOD-call temp (`m.get(g.make(0))`, measured 32 B / 2) is still NOT
+    /// covered: its return type is absent from `fn_return_type_exprs`, so
+    /// there is no TypeExpr to resolve and a method-return map is a larger
+    /// change than this row. Left open on B-2026-09-13-20 with that
+    /// measurement rather than guessed at.
+    ///
+    /// `Identifier` keys stay excluded exactly as in the struct leg — a
+    /// let-bound key is owned by its binding — and the measured `let probe =
+    /// mk(1); m.get(probe)` cell above is that boundary's control.
+    ///
+    /// THE DROP IS IMMEDIATE, for the reason the struct leg's doc gives at
+    /// length: lookups live in loops, and a scope-exit registration frees the
+    /// LAST key while leaking every earlier one.
+    fn free_fresh_owned_nameless_key_arg(
+        &mut self,
+        arg: &crate::ast::Expr,
+        val: BasicValueEnum<'ctx>,
+        slot_ty: inkwell::types::BasicTypeEnum<'ctx>,
+    ) {
+        let Some(cur_fn) = self.current_fn else {
+            return;
+        };
+        // The enum leg owns a fresh enum-variant temp; re-checked rather than
+        // inferred from call order, so this stays correct if either moves.
+        if self.enum_name_of_expr(arg).is_some() {
+            return;
+        }
+        // Two admitted spellings, each with its own way to the key's TypeExpr.
+        let key_te = match &arg.kind {
+            // A tuple LITERAL is fresh by construction — it is built at the
+            // call — so `expr_yields_fresh_owned_temp`, which matches
+            // `Call`/`MethodCall` only, is not the gate for it.
+            ExprKind::Tuple(_) => self.infer_arg_elem_te(arg),
+            // A CALL temp, gated by the established fresh-owned predicate.
+            ExprKind::Call { callee, .. } if self.expr_yields_fresh_owned_temp(arg) => {
+                let ExprKind::Identifier(fn_name) = &callee.kind else {
+                    return;
+                };
+                // Cloned out before any `&mut self` call below. The generic
+                // fallback is the same two-map lookup
+                // `tuple_arg_elem_type_exprs` needs, and for the same measured
+                // reason: a generic callee is absent from `fn_sig`.
+                let Some(te) = self
+                    .fn_sig
+                    .fn_return_type_exprs
+                    .get(fn_name)
+                    .or_else(|| {
+                        self.mono_state
+                            .generic_fns
+                            .get(fn_name)?
+                            .return_type
+                            .as_ref()
+                    })
+                    .cloned()
+                else {
+                    return;
+                };
+                te
+            }
+            _ => return,
+        };
+        // A `String` / `Vec` key is the `free_fresh_owned_str_arg` overlay
+        // path's, which runs at every one of these sites; the resolver would
+        // hand back a FULL drop for a `Vec[String]` and the two together are a
+        // double free of the same buffer. The caller's `vec_struct_type()`
+        // guard already turns these away — this is the same rule stated where
+        // the resolver is consulted, since that guard is shape-keyed and this
+        // is type-keyed.
+        if let TypeKind::Path(path) = &key_te.kind {
+            if matches!(
+                path.segments.first().map(|s| s.as_str()),
+                Some("String") | Some("str") | Some("Vec") | Some("VecDeque")
+            ) {
+                return;
+            }
+        }
+        let Some(drop_fn) = self.map_key_drop_fn_for_type_expr(&key_te) else {
+            return;
+        };
+        let slot = self.create_entry_alloca(cur_fn, "map.key.ntmp", slot_ty);
+        if self.builder.build_store(slot, val).is_err() {
+            return;
+        }
+        let _ = self.builder.build_call(drop_fn, &[slot.into()], "");
     }
 
     /// The struct type name of a key expression that yields a FRESH owned

@@ -89442,4 +89442,299 @@ fn main() {
         //      row is about. Asserting it here would fail on a leak this row
         //      did not cause and cannot fix.
     }
+
+    #[test]
+    fn asan_a_nameless_map_key_temporary_is_reclaimed_at_every_lookup() {
+        // B-2026-09-13-20. A lookup BORROWS its key and discards it, so a
+        // fresh-owned key temporary is the caller's to reclaim. `get`,
+        // `contains_key`, `remove` and `Set.contains` each called
+        // `free_fresh_owned_str_arg` (the `{ptr,len,cap}` overlay) and
+        // `free_fresh_owned_struct_key_arg` (the named-aggregate sibling) --
+        // and a key whose type has NO NAME is neither, so both declined and
+        // the temporary was lost once per lookup.
+        //
+        // Filed as a TUPLE key. Sweeping the key-shape axis BEFORE writing the
+        // fix -- the lesson B-2026-09-13-6 recorded when its struct-keyed title
+        // turned out to cover a tuple and a `Vec[String]` too -- found three
+        // more shapes the title does not mention: `Array[String, 2]`, a nested
+        // tuple, and the `Set.contains` spelling of all of them.
+        //
+        // MEASURED at `KARAC_OPT_LEVEL=0` under valgrind, two lookups each:
+        //
+        //     Map[(String, String), i64]                64 B / 4  -> clean
+        //     Map[(String, i64), i64]                   36 B / 2  -> clean
+        //     Map[Array[String, 2], i64]                64 B / 4  -> clean
+        //     Map[((String, String), i64), i64]         64 B / 4  -> clean
+        //     Set[(String, String)]                     64 B / 4  -> clean
+        //     m.get((a, b)) from locals                 32 B / 2  -> clean
+        //     Map[K, i64] named struct                  clean     -> clean
+        //     Map[Vec[String], i64]                     clean     -> clean
+        //     let probe = mk(1); m.get(probe)           clean     -> clean
+        //     insert-only                               clean     -> clean
+        //
+        // Reclaim resolved through `map_key_drop_fn_for_type_expr`, the same
+        // one-policy resolver the map's storage side uses for both halves, so
+        // this adds no third notion of what a key owns.
+        //
+        // STILL OPEN, measured and left on the row: a METHOD-call temp
+        // (`m.get(g.make(0))`, 32 B / 2), whose return type is absent from
+        // `fn_return_type_exprs` -- there is no TypeExpr to resolve without a
+        // method-return map, which is a larger change than this row.
+        // 1 -- THE ROW'S OWN SHAPE. A lookup BORROWS its key, so a fresh
+        //      owned temporary is the caller's to reclaim; a tuple has no type
+        //      NAME, so both existing legs declined it. 64 B in 4 blocks
+        //      before, over two lookups.
+        assert_clean_asan_run(
+            "fn mk20(n: i64) -> (String, String) { return (f\"aaaaaaaaaaaa{n}\", f\"bbbbbbbbbbbb{n}\"); }\n\
+             fn main() {\n\
+             \x20\x20\x20\x20let mut m: Map[(String, String), i64] = Map.new();\n\
+             \x20\x20\x20\x20let mut i: i64 = 0;\n\
+             \x20\x20\x20\x20while i < 3 { m.insert(mk20(i), i); i = i + 1; }\n\
+             \x20\x20\x20\x20let mut j: i64 = 0;\n\
+             \x20\x20\x20\x20while j < 2 {\n\
+             \x20\x20\x20\x20\x20\x20\x20\x20match m.get(mk20(j)) { Some(v) => { println(f\"g:{v}\"); } None => { println(\"miss\"); } }\n\
+             \x20\x20\x20\x20\x20\x20\x20\x20j = j + 1;\n\
+             \x20\x20\x20\x20}\n\
+             \x20\x20\x20\x20println(f\"len:{m.len()}\");\n\
+             }",
+            &["g:0", "g:1", "len:3"],
+            "map-get-tuple-key-fresh-temp",
+        );
+
+        // 2 -- `contains_key`, same 64 B / 4. All three lookup entry points
+        //      share the helper, so all three are pinned.
+        assert_clean_asan_run(
+            "fn mk20(n: i64) -> (String, String) { return (f\"aaaaaaaaaaaa{n}\", f\"bbbbbbbbbbbb{n}\"); }\n\
+             fn main() {\n\
+             \x20\x20\x20\x20let mut m: Map[(String, String), i64] = Map.new();\n\
+             \x20\x20\x20\x20let mut i: i64 = 0;\n\
+             \x20\x20\x20\x20while i < 3 { m.insert(mk20(i), i); i = i + 1; }\n\
+             \x20\x20\x20\x20let mut j: i64 = 0;\n\
+             \x20\x20\x20\x20while j < 2 {\n\
+             \x20\x20\x20\x20\x20\x20\x20\x20if m.contains_key(mk20(j)) { println(\"yes\"); } else { println(\"no\"); }\n\
+             \x20\x20\x20\x20\x20\x20\x20\x20j = j + 1;\n\
+             \x20\x20\x20\x20}\n\
+             \x20\x20\x20\x20println(f\"len:{m.len()}\");\n\
+             }",
+            &["yes", "yes", "len:3"],
+            "map-contains-key-tuple-key-fresh-temp",
+        );
+
+        // 3 -- `remove`, same 64 B / 4.
+        assert_clean_asan_run(
+            "fn mk20(n: i64) -> (String, String) { return (f\"aaaaaaaaaaaa{n}\", f\"bbbbbbbbbbbb{n}\"); }\n\
+             fn main() {\n\
+             \x20\x20\x20\x20let mut m: Map[(String, String), i64] = Map.new();\n\
+             \x20\x20\x20\x20let mut i: i64 = 0;\n\
+             \x20\x20\x20\x20while i < 3 { m.insert(mk20(i), i); i = i + 1; }\n\
+             \x20\x20\x20\x20let mut j: i64 = 0;\n\
+             \x20\x20\x20\x20while j < 2 {\n\
+             \x20\x20\x20\x20\x20\x20\x20\x20match m.remove(mk20(j)) { Some(v) => { println(f\"r:{v}\"); } None => { println(\"miss\"); } }\n\
+             \x20\x20\x20\x20\x20\x20\x20\x20j = j + 1;\n\
+             \x20\x20\x20\x20}\n\
+             \x20\x20\x20\x20println(f\"len:{m.len()}\");\n\
+             }",
+            &["r:0", "r:1", "len:1"],
+            "map-remove-tuple-key-fresh-temp",
+        );
+
+        // 4 -- a PARTLY heap tuple, 36 B / 2. It pins that the walk frees
+        //      the String element and steps over the scalar.
+        assert_clean_asan_run(
+            "fn mkx20(n: i64) -> (String, i64) { return (f\"aaaaaaaaaaaa{n}\", n); }\n\
+             fn main() {\n\
+             \x20\x20\x20\x20let mut m: Map[(String, i64), i64] = Map.new();\n\
+             \x20\x20\x20\x20let mut i: i64 = 0;\n\
+             \x20\x20\x20\x20while i < 3 { m.insert(mkx20(i), i); i = i + 1; }\n\
+             \x20\x20\x20\x20let mut j: i64 = 0;\n\
+             \x20\x20\x20\x20while j < 2 {\n\
+             \x20\x20\x20\x20\x20\x20\x20\x20match m.get(mkx20(j)) { Some(v) => { println(f\"g:{v}\"); } None => { println(\"miss\"); } }\n\
+             \x20\x20\x20\x20\x20\x20\x20\x20j = j + 1;\n\
+             \x20\x20\x20\x20}\n\
+             \x20\x20\x20\x20println(f\"len:{m.len()}\");\n\
+             }",
+            &["g:0", "g:1", "len:3"],
+            "map-get-mixed-tuple-key-fresh-temp",
+        );
+
+        // 5 -- AN `Array[T, N]` KEY, and the cell that survived this row's
+        //      first fix. Not in the row's title; found by sweeping the
+        //      key-shape axis. An array VALUE is an LLVM array, not a struct,
+        //      so the caller's `StructType` shape guard turned it away before
+        //      any leg ran -- the tuple cells above went clean while this one
+        //      kept leaking its 64 B / 4 unchanged. Two gates, not one.
+        assert_clean_asan_run(
+            "fn mka20(n: i64) -> Array[String, 2] { return Array[f\"aaaaaaaaaaaa{n}\", f\"bbbbbbbbbbbb{n}\"]; }\n\
+             fn main() {\n\
+             \x20\x20\x20\x20let mut m: Map[Array[String, 2], i64] = Map.new();\n\
+             \x20\x20\x20\x20let mut i: i64 = 0;\n\
+             \x20\x20\x20\x20while i < 3 { m.insert(mka20(i), i); i = i + 1; }\n\
+             \x20\x20\x20\x20let mut j: i64 = 0;\n\
+             \x20\x20\x20\x20while j < 2 {\n\
+             \x20\x20\x20\x20\x20\x20\x20\x20match m.get(mka20(j)) { Some(v) => { println(f\"g:{v}\"); } None => { println(\"miss\"); } }\n\
+             \x20\x20\x20\x20\x20\x20\x20\x20j = j + 1;\n\
+             \x20\x20\x20\x20}\n\
+             \x20\x20\x20\x20println(f\"len:{m.len()}\");\n\
+             }",
+            &["g:0", "g:1", "len:3"],
+            "map-get-array-key-fresh-temp",
+        );
+
+        // 6 -- a NESTED tuple key, 64 B / 4. Also absent from the title.
+        assert_clean_asan_run(
+            "fn mkn20(n: i64) -> ((String, String), i64) { return ((f\"aaaaaaaaaaaa{n}\", f\"bbbbbbbbbbbb{n}\"), n); }\n\
+             fn main() {\n\
+             \x20\x20\x20\x20let mut m: Map[((String, String), i64), i64] = Map.new();\n\
+             \x20\x20\x20\x20let mut i: i64 = 0;\n\
+             \x20\x20\x20\x20while i < 3 { m.insert(mkn20(i), i); i = i + 1; }\n\
+             \x20\x20\x20\x20let mut j: i64 = 0;\n\
+             \x20\x20\x20\x20while j < 2 {\n\
+             \x20\x20\x20\x20\x20\x20\x20\x20match m.get(mkn20(j)) { Some(v) => { println(f\"g:{v}\"); } None => { println(\"miss\"); } }\n\
+             \x20\x20\x20\x20\x20\x20\x20\x20j = j + 1;\n\
+             \x20\x20\x20\x20}\n\
+             \x20\x20\x20\x20println(f\"len:{m.len()}\");\n\
+             }",
+            &["g:0", "g:1", "len:3"],
+            "map-get-nested-tuple-key-fresh-temp",
+        );
+
+        // 7 -- `Set.contains`, 64 B / 4. The helper is shared by eight call
+        //      sites across maps, sets and `Vec.contains`, so fixing it there
+        //      rather than at a site covers the Set spelling for free.
+        assert_clean_asan_run(
+            "fn mk20(n: i64) -> (String, String) { return (f\"aaaaaaaaaaaa{n}\", f\"bbbbbbbbbbbb{n}\"); }\n\
+             fn main() {\n\
+             \x20\x20\x20\x20let mut s: Set[(String, String)] = Set.new();\n\
+             \x20\x20\x20\x20let mut i: i64 = 0;\n\
+             \x20\x20\x20\x20while i < 3 { s.insert(mk20(i)); i = i + 1; }\n\
+             \x20\x20\x20\x20let mut j: i64 = 0;\n\
+             \x20\x20\x20\x20while j < 2 { if s.contains(mk20(j)) { println(\"yes\"); } else { println(\"no\"); } j = j + 1; }\n\
+             \x20\x20\x20\x20println(f\"len:{s.len()}\");\n\
+             }",
+            &["yes", "yes", "len:3"],
+            "set-contains-tuple-key-fresh-temp",
+        );
+
+        // 8 -- THE SOUNDNESS CELL, and the only one whose second assertion
+        //      matters as much as the leak. A tuple LITERAL built from LOCALS
+        //      reads like a reclaim that would double-free them -- and the
+        //      locals are demonstrably still alive after the lookup, since
+        //      `after:` prints their lengths. It leaked 32 B / 2 anyway, which
+        //      is the proof that the literal DEEP-COPIES them and abandons the
+        //      copy: an alias would have had nothing extra to lose. So the
+        //      copy is the only owner and freeing it is the only reclaim.
+        //
+        //      Both halves are asserted deliberately: a fix that mistook the
+        //      copy for an alias would ABORT here rather than leak, and only
+        //      the `after:` half distinguishes the two.
+        assert_clean_asan_run(
+            "fn main() {\n\
+             \x20\x20\x20\x20let mut m: Map[(String, String), i64] = Map.new();\n\
+             \x20\x20\x20\x20m.insert((f\"aaaaaaaaaaaa0\", f\"bbbbbbbbbbbb0\"), 0);\n\
+             \x20\x20\x20\x20let a: String = f\"aaaaaaaaaaaa0\";\n\
+             \x20\x20\x20\x20let b: String = f\"bbbbbbbbbbbb0\";\n\
+             \x20\x20\x20\x20match m.get((a, b)) { Some(v) => { println(f\"g:{v}\"); } None => { println(\"miss\"); } }\n\
+             \x20\x20\x20\x20println(f\"after:{a.len()}:{b.len()}\");\n\
+             }",
+            &["g:0", "after:13:13"],
+            "map-get-tuple-literal-key-from-locals-still-valid",
+        );
+
+        // 9 -- THE NAMED CONTROL, clean before and after. It is the cell
+        //      that named the missing owner in the first place: the same shape
+        //      to the program, differing only in whether the key type has a
+        //      name for `emit_struct_drop_synthesis` to key on. A fix that
+        //      routed a named struct through the new leg as well would
+        //      double-free here.
+        assert_clean_asan_run(
+            "#[derive(Hash, Eq)]\n\
+             struct K20 { a: String, b: String }\n\
+             fn mks20(n: i64) -> K20 { return K20 { a: f\"aaaaaaaaaaaa{n}\", b: f\"bbbbbbbbbbbb{n}\" }; }\n\
+             fn main() {\n\
+             \x20\x20\x20\x20let mut m: Map[K20, i64] = Map.new();\n\
+             \x20\x20\x20\x20let mut i: i64 = 0;\n\
+             \x20\x20\x20\x20while i < 3 { m.insert(mks20(i), i); i = i + 1; }\n\
+             \x20\x20\x20\x20let mut j: i64 = 0;\n\
+             \x20\x20\x20\x20while j < 2 {\n\
+             \x20\x20\x20\x20\x20\x20\x20\x20match m.get(mks20(j)) { Some(v) => { println(f\"g:{v}\"); } None => { println(\"miss\"); } }\n\
+             \x20\x20\x20\x20\x20\x20\x20\x20j = j + 1;\n\
+             \x20\x20\x20\x20}\n\
+             \x20\x20\x20\x20println(f\"len:{m.len()}\");\n\
+             }",
+            &["g:0", "g:1", "len:3"],
+            "map-get-named-struct-key-control",
+        );
+
+        // 10 -- THE OVERLAY CONTROL. A `Vec` key is already fully reclaimed
+        //      by `free_fresh_owned_str_arg` at these same sites, and the
+        //      TypeExpr resolver would hand back a FULL drop for
+        //      `Vec[String]`. The two together are a double free of one
+        //      buffer, which is why the new leg declines a `String`/`Vec`-
+        //      headed key explicitly as well as behind the caller's shape
+        //      guard. This cell aborts if that decline is ever dropped.
+        assert_clean_asan_run(
+            "fn mkv20(n: i64) -> Vec[String] { let mut v: Vec[String] = Vec.new(); v.push(f\"aaaaaaaaaaaa{n}\"); return v; }\n\
+             fn main() {\n\
+             \x20\x20\x20\x20let mut m: Map[Vec[String], i64] = Map.new();\n\
+             \x20\x20\x20\x20m.insert(mkv20(0), 0);\n\
+             \x20\x20\x20\x20match m.get(mkv20(0)) { Some(v) => { println(f\"g:{v}\"); } None => { println(\"miss\"); } }\n\
+             \x20\x20\x20\x20println(f\"len:{m.len()}\");\n\
+             }",
+            &["g:0", "len:1"],
+            "map-get-vec-key-overlay-control",
+        );
+
+        // 11 -- THE OTHER-OWNER CONTROL. A let-bound key is owned by its
+        //      BINDING and freed at that binding's scope exit, so the reclaim
+        //      must not fire. `Identifier` keys are excluded in every leg for
+        //      this reason, and this is the cell that proves the exclusion
+        //      still holds.
+        assert_clean_asan_run(
+            "fn mk20(n: i64) -> (String, String) { return (f\"aaaaaaaaaaaa{n}\", f\"bbbbbbbbbbbb{n}\"); }\n\
+             fn main() {\n\
+             \x20\x20\x20\x20let mut m: Map[(String, String), i64] = Map.new();\n\
+             \x20\x20\x20\x20let mut i: i64 = 0;\n\
+             \x20\x20\x20\x20while i < 3 { m.insert(mk20(i), i); i = i + 1; }\n\
+             \x20\x20\x20\x20let probe: (String, String) = mk20(1);\n\
+             \x20\x20\x20\x20match m.get(probe) { Some(v) => { println(f\"g:{v}\"); } None => { println(\"miss\"); } }\n\
+             \x20\x20\x20\x20println(f\"len:{m.len()}\");\n\
+             }",
+            &["g:1", "len:3"],
+            "map-get-tuple-key-place-expr-control",
+        );
+
+        // 12 -- THE INSERT CONTROL. An insert MOVES its key into the
+        //      collection and the map's own drop reclaims it, so the insert
+        //      path must stay untouched -- the row said to check this
+        //      separately, and B-2026-09-13-6 had just made the tuple key's
+        //      no-adopt branch sound. A lookup-site reclaim wired into the
+        //      insert path double-frees every stored key.
+        assert_clean_asan_run(
+            "fn mk20(n: i64) -> (String, String) { return (f\"aaaaaaaaaaaa{n}\", f\"bbbbbbbbbbbb{n}\"); }\n\
+             fn main() {\n\
+             \x20\x20\x20\x20let mut m: Map[(String, String), i64] = Map.new();\n\
+             \x20\x20\x20\x20let mut i: i64 = 0;\n\
+             \x20\x20\x20\x20while i < 3 { m.insert(mk20(i), i); i = i + 1; }\n\
+             \x20\x20\x20\x20println(f\"len:{m.len()}\");\n\
+             }",
+            &["len:3"],
+            "map-insert-tuple-key-only-control",
+        );
+
+        // 13 -- A HEAPLESS array key. The resolver's `emit_drop_fn_for_array`
+        //      declines a heapless element, so this emits nothing at all and
+        //      keeps exactly the no-op it had. Pinned so that a future widening
+        //      of the resolver does not silently start walking it.
+        assert_clean_asan_run(
+            "fn mki20(n: i64) -> Array[i64, 2] { return Array[n, n + 1]; }\n\
+             fn main() {\n\
+             \x20\x20\x20\x20let mut m: Map[Array[i64, 2], i64] = Map.new();\n\
+             \x20\x20\x20\x20m.insert(mki20(0), 7);\n\
+             \x20\x20\x20\x20match m.get(mki20(0)) { Some(v) => { println(f\"g:{v}\"); } None => { println(\"miss\"); } }\n\
+             \x20\x20\x20\x20println(f\"len:{m.len()}\");\n\
+             }",
+            &["g:7", "len:1"],
+            "map-get-heapless-array-key-control",
+        );
+    }
 }
