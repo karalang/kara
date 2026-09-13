@@ -41,6 +41,22 @@ impl<'ctx> super::Codegen<'ctx> {
             self.drop_rc.clone_fn_cache.insert(type_name, f);
             return f;
         }
+        // B-2026-09-10-37 — an `Array[T, N]`, routed BEFORE the kind match and
+        // via `array_elem_and_len`, exactly as the drop dispatcher routes
+        // `emit_drop_fn_for_array`. Both spellings therefore resolve: the
+        // literal's inferred `TypeKind::Array` and the annotation's
+        // `Path(["Array"], [T, N])`. Keying on the kind alone compiles and
+        // misses every annotated array — B-2026-09-06-49's trap, which the
+        // drop peer's comment records for the same reason.
+        //
+        // Unlike the drop peer this does not fall through for a heap-free
+        // element: `emit_clone_fn_for_array` always returns a function, and for
+        // `Array[i64, N]` that is N element-wise primitive copies, which is
+        // what a clone of it means. The drop peer returns `None` there because
+        // there is nothing to free.
+        if let Some((elem_te, n)) = self.array_elem_and_len(te) {
+            return self.emit_clone_fn_for_array(&elem_te, n);
+        }
         match &te.kind {
             // B-2026-09-08-7 — a `weak T` leaf, and the CLONE-side twin of the
             // drop arm below. Without it the fallback emitted a bare pointer

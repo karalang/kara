@@ -87,6 +87,53 @@ impl<'ctx> super::Codegen<'ctx> {
             } else {
                 mk_path("String", vec![])
             }
+        } else if let Some((elem_te, n)) = self
+            .var_types
+            .array_var_elem_te
+            .get(name)
+            .cloned()
+            .or_else(|| {
+                // B-2026-09-10-37 — the SYNTH binding an indexed receiver mints
+                // (`b[1].clone()` over `Array[Array[String, 2], 2]`, which is
+                // the spelling `E_INDEX_MOVE_NON_COPY` tells the user to
+                // write). `array_var_elem_te` is written at the LET SITE only,
+                // so a synth has no entry; `register_var_from_type_expr` does
+                // populate `array_elem_type_exprs`, and the slot's own LLVM
+                // `ArrayType` carries the length the pair is missing.
+                let elem = self.var_types.array_elem_type_exprs.get(name).cloned()?;
+                let slot = self.variables.get(name)?;
+                match slot.ty {
+                    BasicTypeEnum::ArrayType(at) => Some((elem, at.len())),
+                    _ => None,
+                }
+            })
+        {
+            // B-2026-09-10-37 — a fixed `Array[T, N]` receiver.
+            //
+            // Arrays are deliberately kept OUT of `vec_elem_types` (that table
+            // means "this binding is a Vec/Slice/Map" to a dozen readers), so
+            // the chain above cannot see one and `a.clone()` fell through to
+            // codegen's "no handler for method 'clone'" bail at every depth.
+            // `array_var_elem_te` is the table that does record it — element
+            // `TypeExpr` plus length, per let-bound fixed array.
+            //
+            // Built by hand rather than through `mk_path` because an `Array`
+            // head takes a CONST second argument for the length, and that
+            // helper only makes `GenericArg::Type` arguments.
+            TypeExpr {
+                kind: TypeKind::Path(crate::ast::PathExpr {
+                    segments: vec!["Array".to_string()],
+                    generic_args: Some(vec![
+                        GenericArg::Type(elem_te),
+                        GenericArg::Const(crate::ast::Expr {
+                            kind: crate::ast::ExprKind::Integer(i128::from(n), None),
+                            span: span_zero,
+                        }),
+                    ]),
+                    span: span_zero,
+                }),
+                span: span_zero,
+            }
         } else {
             return Ok(None);
         };

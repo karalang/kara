@@ -1563,6 +1563,98 @@ impl<'ctx> super::Codegen<'ctx> {
         Some(drop_fn)
     }
 
+    /// B-2026-09-10-37 — `karac_clone_Array_<elem>_<N>(*const src, *mut dst)`,
+    /// the CLONE peer of [`Self::emit_drop_fn_for_array`] and
+    /// [`Self::emit_eq_fn_for_array`].
+    ///
+    /// `a.clone()` on an `Array[T, N]` bailed with codegen's own "this is a
+    /// codegen bug" fall-through at every depth. The row filed for it read the
+    /// gap as a missing DISPATCHER arm over existing machinery, on the belief
+    /// that `emit_clone_fn_for_type_expr` already had an `Array` route. It did
+    /// not: the array-shaped emitters that exist are the drop walker and the
+    /// eq walker, and every `emit_clone_fn_for_type_expr` call in
+    /// `collections.rs` passes an ELEMENT type, never an array. So the
+    /// capability was genuinely absent and this is it.
+    ///
+    /// Structurally the drop walker with a second pointer: unrolled per index
+    /// rather than looped, because `N` is a compile-time constant and the drop
+    /// and eq peers both unroll (eq loops only because it needs an early exit).
+    ///
+    /// The element goes through `emit_owning_clone_fn_for_type_expr`, matching
+    /// `emit_tuple_clone_fn` rather than the bare
+    /// `emit_clone_fn_for_type_expr`. That is what makes an
+    /// `Array[shared T, N]` retain each handle instead of copying N uncounted
+    /// aliases — the same reason the tuple emitter reaches for the owning form,
+    /// and the difference between a clone and a memcpy for this element class.
+    ///
+    /// A nested `Array[Array[T, M], N]` recurses through the dispatcher's own
+    /// array route (added alongside this), which resolves via
+    /// `array_elem_and_len` and so accepts BOTH spellings — the literal's
+    /// inferred `TypeKind::Array` and the annotation's
+    /// `Path(["Array"], [T, N])`. Keying on the kind alone compiles and misses
+    /// every annotated payload, which is the trap B-2026-09-06-49 recorded and
+    /// the drop peer's comment repeats.
+    pub(super) fn emit_clone_fn_for_array(
+        &mut self,
+        elem_te: &TypeExpr,
+        n: u32,
+    ) -> FunctionValue<'ctx> {
+        let elem_name = Self::display_mangle_te(elem_te);
+        let type_name = format!("Array_{elem_name}_{n}");
+        if let Some(&f) = self.drop_rc.clone_fn_cache.get(&type_name) {
+            return f;
+        }
+        let fn_name = format!("karac_clone_{type_name}");
+        if let Some(f) = self.module.get_function(&fn_name) {
+            self.drop_rc.clone_fn_cache.insert(type_name, f);
+            return f;
+        }
+
+        // Recurse first — emit may switch the builder's insert block.
+        let elem_clone = self.emit_owning_clone_fn_for_type_expr(elem_te);
+
+        let ptr_ty = self.context.ptr_type(AddressSpace::default());
+        let i64_t = self.context.i64_type();
+        let elem_ty = self.llvm_type_for_type_expr(elem_te);
+        let array_ty = elem_ty.array_type(n);
+
+        let saved_bb = self.builder.get_insert_block();
+        let fn_ty = self
+            .context
+            .void_type()
+            .fn_type(&[ptr_ty.into(), ptr_ty.into()], false);
+        let clone_fn = self
+            .module
+            .add_function(&fn_name, fn_ty, Some(Linkage::Internal));
+        self.drop_rc.clone_fn_cache.insert(type_name, clone_fn);
+
+        let entry_bb = self.context.append_basic_block(clone_fn, "entry");
+        self.builder.position_at_end(entry_bb);
+        let src = clone_fn.get_nth_param(0).unwrap().into_pointer_value();
+        let dst = clone_fn.get_nth_param(1).unwrap().into_pointer_value();
+        for i in 0..n {
+            let idx = [i64_t.const_zero(), i64_t.const_int(u64::from(i), false)];
+            let src_p = unsafe {
+                self.builder
+                    .build_gep(array_ty, src, &idx, "ac.elem.s")
+                    .unwrap()
+            };
+            let dst_p = unsafe {
+                self.builder
+                    .build_gep(array_ty, dst, &idx, "ac.elem.d")
+                    .unwrap()
+            };
+            self.builder
+                .build_call(elem_clone, &[src_p.into(), dst_p.into()], "")
+                .unwrap();
+        }
+        self.builder.build_return(None).unwrap();
+        if let Some(bb) = saved_bb {
+            self.builder.position_at_end(bb);
+        }
+        clone_fn
+    }
+
     pub(super) fn emit_eq_fn_for_array(
         &mut self,
         elem_te: &TypeExpr,
