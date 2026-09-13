@@ -1311,11 +1311,16 @@ perf payoff lands in Slice 2.
   unswept `cap > 0` gate, and flipping it turns SSO from a 2.6% loss into a
   **14.8% win** on the campaign's motivating workload.
 
-  **The flip is NOT on `main`.** It reddened eight binaries — all seven selfhost
-  differentials plus the coroutine flake — because the unsigned gate was masking
-  latent inline-descriptor bugs elsewhere. One is fixed below; a SIGSEGV in the
-  self-hosted item parser is still open. The numbers here are what the flip is
-  WORTH, not what the tree currently does.
+  **The flip is ON `main` as of `86c9bb3` — this paragraph recorded the state
+  mid-slice and is kept for the sequence.** When written it read "the flip is NOT
+  on main": it had reddened eight binaries — all seven selfhost differentials
+  plus the coroutine flake — because the unsigned gate was masking latent
+  inline-descriptor bugs elsewhere. Both were found and fixed (the enum-payload
+  verbatim store, `e4ed7ed`; the inverted `vec_elem_types` guard, `8eaa11a`),
+  including the SIGSEGV in the self-hosted item parser that this paragraph left
+  open. All eight selfhost differentials pass at `KARAC_SSO=1` in the current
+  gate set, `selfhost_parser_matches_rust_parser_items` among them; the only red
+  left on that leg is the pre-existing coroutine flake, B-2026-09-12-1.
 
   Same harness, same 441 KiB input, same 200 passes, all three verified against
   a `karac` whose selfhost differential passes:
