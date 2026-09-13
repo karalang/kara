@@ -93,7 +93,7 @@ distinguish "bugs flattening" from "we stopped writing them down."
 | class | total |
 |---|---|
 | miscompile | 406 |
-| run-vs-build | 400 |
+| run-vs-build | 401 |
 | leak | 339 |
 | double-free | 229 |
 | missing-feature | 197 |
@@ -110,7 +110,7 @@ distinguish "bugs flattening" from "we stopped writing them down."
 
 | surface | total |
 |---|---|
-| codegen | 1717 |
+| codegen | 1718 |
 | interp | 431 |
 | typecheck | 299 |
 | other | 90 |
@@ -130,7 +130,6 @@ _Generated from `bug-ledger.jsonl` by `scripts/bug-curve.py` (2026-05-20 → 202
 
 | id | date | surface | sev | title | tracker |
 |---|---|---|---|---|---|
-| B-2026-09-01-17 | 2026-09-01 | interp+codegen | low | THE PROJECTED SPELLING OF B-2026-08-31-35 STILL RUNS THE LOCAL'S `Drop` BODY TWICE -- `let _ = if c { W { r: t.r, b: 1 } } else { .. };` over a local `W` doubles on all three backends because the aggregate-literal source walker resolves a bare NAME and not a field projection, so the disarm e49a85f wired up never names `t` | — |
 | B-2026-09-01-27 | 2026-09-01 | interp | low | A FRESH-TEMP owned argument DESTRUCTURED inside a method runs the right Drop bodies in the WRONG ORDER -- the payload's body fires before the enum shell's under `--interp` and after it on both compiled backends, so the counts agree and the sequence does not | — |
 | B-2026-09-02-9 | 2026-09-02 | runtime | low | OVER-ALIGNED ALLOCATION IS UNSUPPORTED ON WINDOWS -- `karac_alloc_aligned_or_panic` aborts there rather than honoring an alignment above `malloc`'s 16-byte guarantee, because the MSVC CRT has no `free`-compatible aligned allocator and every release path assumes plain `free`. | — |
 | B-2026-09-02-16 | 2026-09-02 | interp+codegen | low | A NEVER-READ SHADOWED NAME'S TWO GENERATIONS FIRE IN THE WRONG ORDER UNDER AUTO-PAR because each is branch-local and fires inside its own outlined branch at its own `let`, while the interpreter fires both at the single name-keyed endpoint in LIFO order -- `dR3 dR4 mid` vs `dR4 dR3 mid`; the position is now right on every surface and only the order between the two generations differs | — |
@@ -194,9 +193,8 @@ _Generated from `bug-ledger.jsonl` by `scripts/bug-curve.py` (2026-05-20 → 202
 | B-2026-09-13-23 | 2026-09-13 | codegen | low | AN `Array[String, N]` INSIDE A TUPLE LEAKS ITS ELEMENT BUFFERS -- 20 B in 2 blocks at -O0 for `let t: (Array[String, 2], i64) = ([f"a{n}", f"b{n}"], 7)`, while the SAME array in a plain `let` is clean. PRE-EXISTING rather than introduced by B-2026-09-10-38: the `Array[..]` PREFIX spelling, which typechecked before that fix, leaks the identical 20 B against the PRE-FIX compiler -- so the tuple POSITION owns the defect and the annotation fix merely made it reachable by a second spelling | — |
 | B-2026-09-13-24 | 2026-09-13 | codegen+interp | medium | A USER ENUM'S VARIANT-CONSTRUCTOR TEMP LOSES ITS `Drop` BODY -- `takeit(Ho.Full(R { id: 5 }))` over `enum Ho[T] { Full(T), Empty }` prints `f:5` alone on every COMPILED surface against `--interp`'s `f:5 dR5`, and the newly-enabled qualified spelling `Ho[R].Full(..)` loses it on BOTH backends, while the seeded `Option[R].Some(..)` is correct everywhere -- so the seeded pair has an owner for the ctor temp and a user enum has none | — |
 | B-2026-09-13-25 | 2026-09-13 | typecheck | low | THE FIELD-LESS QUALIFIED VARIANT `Ho[i64].Empty` IS STILL REJECTED as `'Ho' is a type, not a function`, where design.md § 588 lists a qualified field-less enum-variant constant as a valid argument form -- it is not a CALL, so it never reaches `try_path_receiver_method`'s method arm that B-2026-09-12-16 taught to accept `Ho[R].Full(..)` | — |
-| B-2026-09-13-26 | 2026-09-13 | interp+codegen | medium | A DISCARDED ARRAY LITERAL OF Drop-BEARING STRUCTS RUNS NO ELEMENT BODIES AT ALL -- `let _ = if c { [W { r: mkd(7), b: 1 }] } else { .. };` prints NOTHING on all four surfaces, with no projection anywhere, so nothing owns the array's elements | — |
 | B-2026-09-13-27 | 2026-09-13 | interp+codegen | medium | A `let`-BOUND TUPLE CARRYING A LOCAL'S PROJECTED FIELD IS RUN-VS-BUILD DIVERGENT -- `let w = if c { (t.r, 1) } else { .. };` runs the leaf's `Drop` body TWICE under `--interp` and ONCE on both compiled backends | — |
-| B-2026-09-13-28 | 2026-09-13 | interp+codegen | medium | THE BARE-BLOCK SPELLING OF B-2026-09-01-17 IS RUN-VS-BUILD DIVERGENT, NOT AN AGREED GAP -- `let _ = { W { r: t.r, b: 1 } };` runs the projected leaf's body TWICE under `--interp` and ONCE on both compiled backends | — |
+| B-2026-09-13-29 | 2026-09-13 | codegen | medium | A DISCARDED `Option`/`Result` WHOSE PAYLOAD IS AN ARRAY RUNS ITS ELEMENT BODIES ON THE INTERPRETER AND NOT ON EITHER COMPILED BACKEND -- B-2026-09-10-27 fixed the interpreter half and left codegen without a twin | — |
 
 ### Relocated
 
@@ -2147,6 +2145,7 @@ _Generated from `bug-ledger.jsonl` by `scripts/bug-curve.py` (2026-05-20 → 202
 | B-2026-09-01-14 | cli | medium | THE DEFAULT `cargo test` LEG WAS RED ON `main` FOR TWO HOURS BECAUSE A CODEGEN-DIAGNOSTIC ASSERTION IS NOT GATED ON THE llvm FEATURE -- `ref_binding_… | Added `#[cfg(feature = "llvm")]`, the gate the other 98 `ka… |
 | B-2026-09-01-15 | codegen | medium | A NESTED `ref c[i][j]` STILL DECLINES ON FOUR ROOTS THE Vec-ROOTED LOWERING DOES NOT MODEL -- `Array[Vec[T], N]`, `Vec[Array[T, N]]`, a struct FIELD… | 2143f047 |
 | B-2026-09-01-16 | codegen | medium | A STRUCT WHOSE FIELD IS PASSED BY VALUE FROM INSIDE AN INTERPOLATED-STRING ARGUMENT HAS ITS `Drop` DEFERRED TO SCOPE EXIT ON ALL THREE COMPILED SURFA… | aa21ffb |
+| B-2026-09-01-17 | interp+codegen | low | THE PROJECTED SPELLING OF B-2026-08-31-35 STILL RUNS THE LOCAL'S `Drop` BODY TWICE -- `let _ = if c { W { r: t.r, b: 1 } } else { . | 122b991 |
 | B-2026-09-01-18 | interp | medium | A DISCARDED AGGREGATE LITERAL BEHIND A BLOCK WRAPPER, OR WRITTEN BARE IN STATEMENT POSITION, RUNS ITS CONSUMED LOCAL'S `Drop` BODY TWICE ON THE INTER… | 0033588 |
 | B-2026-09-01-19 | typecheck+interp+codegen | medium | AN OUT-OF-RANGE INTEGER LITERAL WITH A WIDER SUFFIX REACHES A GENERIC PAYLOAD SLOT UNCHECKED, SO THE BACKENDS DISAGREE AND ONE SHAPE FLIPS SIGN -- `O… | f366e42e |
 | B-2026-09-01-20 | typecheck | medium | DEFAULT ARGUMENTS ARE FILLED FOR FREE FUNCTIONS ONLY -- `H.f(1)` and `h.g(1)` both fail with `expected 2 argument(s), found 1` for a parameter that h… | fc67e1f |
@@ -2541,6 +2540,8 @@ _Generated from `bug-ledger.jsonl` by `scripts/bug-curve.py` (2026-05-20 → 202
 | B-2026-09-13-16 | codegen | high | A CALLEE THAT WRAPS ITS OWN BY-VALUE `Array` PARAM IN AN `Option` RETURNS A DANGLING INTERIOR -- `fn wrap(a: Array[String, 2]) -> Option[Array[String… | d9d6df5 |
 | B-2026-09-13-21 | codegen+interp | high | AN ARM THAT BINDS A WHOLE BOXED TUPLE PAYLOAD AND MOVES IT ONWARD DOUBLE-FREES ON EVERY COMPILED BACKEND -- `match m.remove(k) { Some(a) => { keep.pu… | 9b9fe76 |
 | B-2026-09-13-22 | codegen | high | A chained string concatenation allocates one buffer per `+`, so `a + b + c` costs two allocations where one sized to the total would do — 36% of kata… | fea7ac09b |
+| B-2026-09-13-26 | interp+codegen | medium | A DISCARDED ARRAY LITERAL OF Drop-BEARING STRUCTS RUNS NO ELEMENT BODIES AT ALL -- `let _ = if c { [W { r: mkd(7), b: 1 }] } else { . | 122b991 |
+| B-2026-09-13-28 | interp+codegen | medium | THE BARE-BLOCK SPELLING OF B-2026-09-01-17 IS RUN-VS-BUILD DIVERGENT, NOT AN AGREED GAP -- `let _ = { W { r: t.r, b: 1 } };` runs the projected leaf'… | 122b991 |
 
 </details>
 
