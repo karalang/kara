@@ -155385,6 +155385,135 @@ fn main() {
         }
     }
 
+    /// B-2026-09-12-22 / B-2026-09-12-23 — the `ref`-SCRUTINEE half of the
+    /// family above, which that test covers only through OWNED matches.
+    ///
+    /// Every cell of `e2e_boxed_array_payload_reads_back_on_every_surface`
+    /// matches a by-value scrutinee. Its cell 8 does put a `ref Array[T, N]`
+    /// on the CALLEE (`fn peek(a: ref Array[String, 2])`), which is what made
+    /// the gap easy to miss: the `ref` that was never tested is the one on the
+    /// SCRUTINEE, and it selects a different binder entirely
+    /// (`bind_pattern_values_via_ptr`, not `bind_pattern_values`).
+    ///
+    /// That binder aliased the leaf AT the enum's payload word. For a BOXED
+    /// payload that word holds the box POINTER, so the binding was a `ref` to
+    /// a pointer typed `i64`:
+    ///
+    ///   - indexing it did not lower at all — `ref_array_index_target` wants an
+    ///     `ArrayType` in `ref_params` and found that `i64` (cells 1, 3, 4, 6
+    ///     are all `codegen failed: Index operator applied to non-array type`
+    ///     on a pre-fix tree);
+    ///   - passing it to a `ref Array[T, N]` callee lowered and read
+    ///     UNINITIALISED memory (cell 2 printed `p:` followed by a NUL byte
+    ///     pre-fix — the box pointer's own bytes read back as the string).
+    ///
+    /// THE CELLS DO FAIL ON A PRE-FIX TREE, said plainly because the sibling
+    /// test above has to say the opposite: five of the six are a hard codegen
+    /// refusal and the sixth is visibly wrong output, at `-O2`, with no
+    /// sanitizer needed. The `-O2` column of the row is the trap — there the
+    /// undef folds to the OTHER arm's constant, which reads as a discriminant
+    /// bug; these cells are written to fail loudly instead.
+    ///
+    /// Cell 5 is the control that bounds the fix: a `Vec` payload through the
+    /// same `ref` match is inline, needs no debox, and is correct on both
+    /// trees. Cell 6 pins the unit arm, the one the folded `-O2` read was
+    /// mistaken for.
+    #[test]
+    fn e2e_boxed_array_payload_reads_back_through_a_ref_match() {
+        for (label, src, want) in [
+            // 1 — the monomorphic enum, indexed directly in the arm.
+            (
+                "mono-ref-match-index",
+                "enum Bin { Packed(Array[String, 2]), Bare }\n\
+                 fn f(b: ref Bin) {\n\
+                 \x20   match b { Packed(a) => { println(f\"s:{a[0]}\") } Bare => { println(\"n\") } }\n\
+                 }\n\
+                 fn main() {\n\
+                 \x20   let x: Bin = Bin.Packed([f\"aaaaaaaa0\", f\"bbbbbbbb0\"]);\n\
+                 \x20   f(x);\n\
+                 }\n",
+                "s:aaaaaaaa0\n",
+            ),
+            // 2 — THE SILENT CELL: the arm binding handed to a `ref Array`
+            //     callee. This one LOWERED before the fix and printed a NUL.
+            (
+                "mono-ref-match-binding-to-ref-array-callee",
+                "enum Bin { Packed(Array[String, 2]), Bare }\n\
+                 fn peek(a: ref Array[String, 2]) { println(f\"p:{a[1]}\") }\n\
+                 fn f(b: ref Bin) {\n\
+                 \x20   match b { Packed(a) => { peek(a) } Bare => { println(\"n\") } }\n\
+                 }\n\
+                 fn main() {\n\
+                 \x20   let x: Bin = Bin.Packed([f\"aaaaaaaa0\", f\"bbbbbbbb0\"]);\n\
+                 \x20   f(x);\n\
+                 }\n",
+                "p:bbbbbbbb0\n",
+            ),
+            // 3 — `Option`, to show this is not about user enums.
+            (
+                "option-ref-match-index",
+                "fn f(o: ref Option[Array[String, 2]]) {\n\
+                 \x20   match o { Some(a) => { println(f\"s:{a[0]}\") } None => { println(\"n\") } }\n\
+                 }\n\
+                 fn main() {\n\
+                 \x20   let x: Option[Array[String, 2]] = Some([f\"aaaaaaaa0\", f\"bbbbbbbb0\"]);\n\
+                 \x20   f(x);\n\
+                 }\n",
+                "s:aaaaaaaa0\n",
+            ),
+            // 4 — a generic user enum at a heap ARRAY type argument, to show it
+            //     is not the monomorphic/generic axis B-2026-09-12-12 was about.
+            (
+                "generic-ref-match-index",
+                "enum Slot[T] { Filled(T), Blank }\n\
+                 fn f(s: ref Slot[Array[String, 2]]) {\n\
+                 \x20   match s { Filled(a) => { println(f\"s:{a[0]}\") } Blank => { println(\"n\") } }\n\
+                 }\n\
+                 fn main() {\n\
+                 \x20   let x: Slot[Array[String, 2]] = Filled([f\"aaaaaaaa0\", f\"bbbbbbbb0\"]);\n\
+                 \x20   f(x);\n\
+                 }\n",
+                "s:aaaaaaaa0\n",
+            ),
+            // 5 — CONTROL: a `Vec` payload is INLINE, so the same `ref` match
+            //     needs no debox and was correct on a pre-fix tree too. This is
+            //     what bounds the fix to boxed payloads.
+            (
+                "vec-payload-ref-match-control",
+                "enum Vbin { V(Vec[String]), Z }\n\
+                 fn f(b: ref Vbin) {\n\
+                 \x20   match b { V(v) => { println(f\"s:{v[0]}\") } Z => { println(\"n\") } }\n\
+                 }\n\
+                 fn main() {\n\
+                 \x20   let x: Vbin = Vbin.V(Vec[f\"aaaaaaaa0\", f\"bbbbbbbb0\"]);\n\
+                 \x20   f(x);\n\
+                 }\n",
+                "s:aaaaaaaa0\n",
+            ),
+            // 6 — the UNIT arm through the same `ref` match. At `-O2` the
+            //     pre-fix undef folded to exactly this arm's value, so a reader
+            //     of that column would have called the bug a wrong-arm
+            //     dispatch; pin the arm that really is taken here.
+            (
+                "unit-arm-ref-match",
+                "enum Bin { Packed(Array[String, 2]), Bare }\n\
+                 fn f(b: ref Bin) {\n\
+                 \x20   match b { Packed(a) => { println(f\"s:{a[0]}\") } Bare => { println(\"n\") } }\n\
+                 }\n\
+                 fn main() {\n\
+                 \x20   let x: Bin = Bare;\n\
+                 \x20   f(x);\n\
+                 }\n",
+                "n\n",
+            ),
+        ] {
+            let Some(out) = run_program(src) else {
+                return;
+            };
+            assert_eq!(out, want, "[{label}]");
+        }
+    }
+
     /// B-2026-09-10-8 / B-2026-09-10-26 — the OUTPUT twin of
     /// `asan_nested_array_element_interior_has_an_owner`.
     ///

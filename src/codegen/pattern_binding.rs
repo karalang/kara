@@ -2529,6 +2529,46 @@ impl<'ctx> super::Codegen<'ctx> {
                         field_ty,
                         BasicTypeEnum::IntType(_) | BasicTypeEnum::FloatType(_)
                     );
+                    // B-2026-09-12-22 / -23 — a BOXED payload has no valid
+                    // binding at the payload word, because that word holds the
+                    // BOX POINTER rather than the value. `coerce_to_payload_words`
+                    // boxes anything wider than the variant's payload area, and
+                    // the canonical case is an `Array[T, N]` payload: `Array`'s
+                    // width is fixed at the declaration, so a variant spelling one
+                    // is oversize by construction rather than by instantiation —
+                    // monomorphic, `Option` and generic enums alike.
+                    //
+                    // The guards above cannot see it. `ok_single_word` is TRUE
+                    // (the area is exactly the one word the box pointer sits in),
+                    // and `declared_mismatches_word` compares
+                    // `llvm_type_for_name` against the word type, which resolves
+                    // an array binding's recorded type to the same i64 — so the
+                    // one guard written to catch "the declared type is not this
+                    // word" reports a match on the payload where it is most
+                    // wrong. The leaf was then aliased AT the box-pointer slot and
+                    // typed i64, which is how a `ref`-matched `Array` payload came
+                    // to read uninitialised memory on every compiled surface
+                    // (-22) while the direct `a[i]` spelling refused to lower at
+                    // all (-23) — `ref_array_index_target` needs an `ArrayType` in
+                    // `ref_params` and found that i64 instead.
+                    //
+                    // Defer to the value-source path, which already handles this:
+                    // `reconstruct_payload_value` deboxes on exactly this
+                    // predicate (`want > field_words.len()`), rebuilds the payload
+                    // at its true `[N x T]` type, and the slice-3a copy-shim then
+                    // registers the binding with that type. Measured on
+                    // `Slot[Array[Tracked, 2]]`, `Option[Array[Tracked, 2]]` and a
+                    // monomorphic `enum Bin { Packed(Array[Tracked, 2]), Bare }`.
+                    //
+                    // Deliberately NOT spelled as "is this an Array": the
+                    // predicate is boxed-ness, so any future oversize payload gets
+                    // the correct path without another row. The `Option[i64]`
+                    // over-estimate the padded path exists for is unaffected —
+                    // there `want` is 1 against a 3-word area, so this is false.
+                    let payload_is_boxed = self.pattern_payload_word_count(sub_pat) > num_words;
+                    if payload_is_boxed {
+                        return Ok(None);
+                    }
                     let ok_single_word = num_words == 1;
                     let ok_padded_primitive =
                         num_words > 1 && sub_is_leaf && first_word_is_primitive;
