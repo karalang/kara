@@ -9,6 +9,7 @@ Bench infrastructure for compiler-quality gates and microbenchmarks. Each subdir
 | [`compile_speed/`](compile_speed/) | Cold compile-elapsed time of `karac build` vs `rustc -O` (peer baseline); `clang -O2` opportunistic; `go build` reference at launch-time | **CI gate** — PR-trigger, fails on >30% regression vs `baseline.json` |
 | [`hash_quality/`](hash_quality/) | Hash function collision rate + distribution quality | Manual reproduction |
 | [`hot_swap_cost/`](hot_swap_cost/) | `--enable-hot-swap` AOT cost on tight vs moderate function bodies | Manual reproduction |
+| [`sso/`](sso/) | Small-string optimization at `KARAC_SSO=0` vs `=1` — selfhost lexer, plus two tight-loop microbenchmarks that regress | Manual reproduction; ratios only, absolutes are not comparable across runs |
 | [`indirection_cost/`](indirection_cost/) | Type-erasure tax on collection operations (Rust microbench) | Manual reproduction |
 | [`wasm_size/`](wasm_size/) | WASM module size (`hello` + Iris filter core) — Kāra vs Rust vs TinyGo, core module + component, stripped + brotli'd | Credibility receipt — checked-in size table, no gate (add `baseline.json` if size becomes a launch claim) |
 

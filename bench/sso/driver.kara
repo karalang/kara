@@ -1,0 +1,19 @@
+import lexer.lex_all;
+
+fn main() with panics reads(FileSystem) {
+    match fs.read_to_string("input.kara") {
+        Ok(src) => {
+            let mut total: i64 = 0;
+            let mut i: i64 = 0;
+            while i < 200 {
+                let toks = lex_all(src.clone());
+                total = total + toks.len();
+                i = i + 1;
+            }
+            println(total);
+        }
+        Err(_) => {
+            println("READ FAILED");
+        }
+    }
+}

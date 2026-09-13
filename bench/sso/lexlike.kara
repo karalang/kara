@@ -1,0 +1,17 @@
+// Lexer-shaped: slice a token, compare it against a keyword, discard.  This is
+// the `substring` + keyword-dispatch shape the SSO spike's profile named, with
+// the per-token copy as the dominant per-iteration cost.
+fn main() {
+    let src = "let mut fn if else while return for in match struct enum impl";
+    let mut hits = 0;
+    let mut i = 0;
+    while i < ITERS {
+        let off = i % 50;
+        let t = src[off..(off + 3)];
+        if t == "let" {
+            hits = hits + 1;
+        }
+        i = i + 1;
+    }
+    println(f"{hits}");
+}

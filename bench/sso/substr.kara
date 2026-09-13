@@ -1,0 +1,15 @@
+// The selfhost lexer's actual per-token shape: `self.src.substring(a, b)`.
+fn main() {
+    let src = "let mut fn if else while return for in match struct enum impl";
+    let mut hits = 0;
+    let mut i = 0;
+    while i < ITERS {
+        let off = i % 50;
+        let t = src.substring(off, off + 3);
+        if t == "let" {
+            hits = hits + 1;
+        }
+        i = i + 1;
+    }
+    println(f"{hits}");
+}
