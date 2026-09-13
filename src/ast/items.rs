@@ -3408,6 +3408,45 @@ pub fn fn_conditionally_returns_param_bare(
                 Some(t) => leaf_tails(t, out),
                 None => out.push(e),
             },
+            // B-2026-09-12-26 — a `return` reached AS A TAIL contributes its
+            // OPERAND's leaves, not the `Return` node itself.
+            //
+            // A function whose exits are all `return` statements still has a
+            // `final_expr` — the last `return` is an EXPRESSION in tail
+            // position — so this walker was handed the `Return` node and its
+            // catch-all pushed it whole. `may_mention` does not recognise
+            // `ExprKind::Return` and answers `true` for it by design, so
+            // condition 3 read that leaf as "mentions the param by a route no
+            // flag clears" and declined the WHOLE function. Every exit of the
+            // form `if c { return r } return mk(9)` was therefore invisible to
+            // this predicate, while the same program with a TRAILING SEMICOLON
+            // (`… return mk(9);`) was admitted — that makes the last `return` a
+            // statement, leaves `final_expr` empty, and routes every exit
+            // through `collect_return_leaves` alone. One character, and it is
+            // why the nearest fixture cells (`method-return-both-exits-*`, all
+            // of which carry the semicolon) covered none of this.
+            //
+            // What that cost is asymmetric across call positions, which is why
+            // it read as an associated-vs-free defect rather than a shape one.
+            // A FREE callee's caller declines its argument registration on
+            // `call_arg_flows_into_return` — the `fn_returns_param` UNION,
+            // which does see the `return` — so the miss showed only as a lost
+            // body on the dies-inside path (agreed by both backends, so no A/B
+            // gate reported it). The ASSOCIATED and METHOD legs gate on this
+            // predicate instead, so a `false` here left `escapes_frame` false,
+            // the caller registered the FULL `karac_drop_<T>` wrapper for the
+            // argument temp, and its body ran beside the result binding's:
+            // `dR1 / k:1 / dR1` at -O0, -O0 autopar and -O2 autopar against
+            // `--interp`'s `k:1 / dR1`.
+            //
+            // Not a widening of what counts as a hand-back: `collect_return_-
+            // leaves` has folded `return` operands into the leaf set since
+            // condition 4, and this makes the TAIL spelling reach the same
+            // leaves it already does for a `return` in statement position. The
+            // duplicate leaf the two walkers now both contribute is harmless —
+            // they classify it identically — and an UNCONDITIONAL `return r`
+            // still yields no `yields_nothing` leaf and is still declined.
+            ExprKind::Return(Some(inner)) => leaf_tails(inner, out),
             _ => out.push(e),
         }
     }
