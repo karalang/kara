@@ -93,15 +93,15 @@ distinguish "bugs flattening" from "we stopped writing them down."
 | class | total |
 |---|---|
 | miscompile | 406 |
-| run-vs-build | 395 |
-| leak | 332 |
-| double-free | 227 |
+| run-vs-build | 396 |
+| leak | 333 |
+| double-free | 228 |
 | missing-feature | 196 |
 | codegen-gap | 175 |
 | diagnostics | 125 |
+| other | 107 |
 | false-positive | 106 |
 | perf | 105 |
-| other | 105 |
 | soundness | 95 |
 | crash | 80 |
 | use-after-free | 38 |
@@ -110,10 +110,10 @@ distinguish "bugs flattening" from "we stopped writing them down."
 
 | surface | total |
 |---|---|
-| codegen | 1698 |
-| interp | 424 |
+| codegen | 1702 |
+| interp | 426 |
 | typecheck | 297 |
-| other | 89 |
+| other | 90 |
 | ownership | 74 |
 | cli | 73 |
 | autopar | 56 |
@@ -187,6 +187,11 @@ _Generated from `bug-ledger.jsonl` by `scripts/bug-curve.py` (2026-05-20 → 202
 | B-2026-09-13-5 | 2026-09-13 | interp | medium | THE INTERPRETER RUNS A `Drop` BODY TWICE WHEN AN ARM MOVES A SUB-VALUE OUT OF A BY-VALUE `Option` PAYLOAD, and the COMPILED backends are the correct ones here -- `fn eat(o: Option[(R, i64)]) -> R { match o { Some(t) => { return t.0; } .. } }` prints `dR5 got:5 dR5 end` under `--interp` against JIT/AOT/AOT-at-`KARAC_AUTO_PAR=0`'s `got:5 dR5 end`, and the plain-struct spelling (`Holder2 { inner: Inner }` with no `Drop` of its own, `return t.inner;`) prints `dI5 got:5 dI5 end` against `got:5 dI5 end`. The value is MOVED into the caller's binding, so exactly one owner exists and exactly one body is owed; the interpreter counts two. DIRECTION IS THE REVERSE of B-2026-09-13-3 / B-2026-09-12-15 / B-2026-09-09-18 / B-2026-09-12-17, which are all 'compiled loses a body' -- a fix that treats the interpreter as the oracle will make this worse | — |
 | B-2026-09-13-6 | 2026-09-13 | codegen | medium | A USER STRUCT USED AS A `Map` KEY LEAKS THE ORPHANED DUPLICATE -- 252 B in 14 blocks for a repeated `struct K { a: String, b: String }` key, the same no-adopt branch B-2026-09-13-1 fixed for an `Array`, one type over; the DISTINCT-key spelling is clean, which is why every cell written for B-2026-09-12-13 missed it | — |
 | B-2026-09-13-7 | 2026-09-13 | codegen+interp | medium | AN ENUM VARIANT'S `Vec[T]` PAYLOAD RUNS NO ELEMENT `Drop` BODY ON ANY BACKEND AND ANY ENUM HEAD, AND `Slot[Array[R, N]]` RUNS THEM ON THE FIVE COMPILED SURFACES ONLY -- the two cells B-2026-09-12-24 measured and did not fix; the shared bodies core has a tuple arm and an array arm and no `Vec` arm, and the interpreter has no instantiation chain for a user generic enum the way it has one for the seeded pair | — |
+| B-2026-09-13-8 | 2026-09-13 | other | medium | TWO SESSIONS FIXED ONE CLAIMED LEDGER ROW IN PARALLEL AND THE SECOND LANDED A REGRESSION BEHIND A VACUOUS GREEN -- B-2026-09-12-25 was tagged `kara-bug:B-2026-09-12-25` and worked to a gated fix while another session, holding no tag, independently corrected the row and landed `6ea22e3b4` for it; that commit left four ASAN fixtures red on `main` at the default opt level AND on both ratchet legs, reported green because a fresh worktree has no runtime archives and `link_or_skip` soft-skips a whole suite into `ok`. Both halves are process, not codegen: the claim protocol only asks a session to read the board BEFORE picking a row, so a row picked before it is claimed is invisible to it, and the archive soft-skip means a `--features llvm` suite can report success having executed nothing | — |
+| B-2026-09-13-9 | 2026-09-13 | codegen | high | A NESTED DESTRUCTURE OF A BOXED ENUM PAYLOAD STILL DOUBLE-FREES WHEN THE LEAF IS WIDER THAN THE ENVELOPE'S PAYLOAD AREA AND THE ARM REBINDS OR MOVES IT -- `match x { Option.Some(Ke.A(r)) => { let m = r; .. } .. }` over `struct R { s: String, t: String, u: String }` aborts on all three compiled lanes while `--interp` is clean, and so do the spellings that push the leaf into a `mut ref Vec`, assign it to a `mut ref` struct field, or return it from the arm. B-2026-09-12-25's fix covers the same shapes for a leaf that FITS the area (3 words for `Option`, 5 for `Result`), where the leaf is materialised as an owning copy; above the area the leaf is a view that owns nothing, so the box must keep freeing it -- and a rebind or a move-out creates a second owner anyway | — |
+| B-2026-09-13-10 | 2026-09-13 | codegen | medium | THE STRUCT-SHAPED SPELLING OF A NESTED BOXED-PAYLOAD DESTRUCTURE LEAKS A LEAF WIDER THAN THE ENVELOPE'S PAYLOAD AREA -- `match x { Option.Some(Kws.A { r }) => { println(f"n:{r.s}") } .. }` over `struct R3 { s: String, t: String, u: String }` loses 27 bytes in 3 blocks at `-O0`, one per field of the leaf, because the disarm B-2026-08-31-23 added for an enum-variant STRUCT pattern fires unconditionally on a BINDING while a leaf over the area is a view that owns nothing. The TUPLE-shaped twin of the same program is clean, having been given the width ceiling by B-2026-09-12-25's fix | — |
+| B-2026-09-13-11 | 2026-09-13 | codegen+interp | low | A DESTRUCTURED ENUM PAYLOAD'S OWN `Drop` BODY RUNS ON NO SURFACE ONCE THE ARM MOVES ITS FIELD OUT -- `match x { Option.Some(K.A(r)) => { acc.push(r) } .. }` over `enum K { A(R2), B }` with `impl Drop for K` prints NO `dK` on `--interp`, `-O0`, `-O0` autopar or `-O2` autopar, while the READ-ONLY twin of the same program (`println(f"a:{r.s}")` for the arm body) prints exactly one on all four. The husk is still a `K`, so the count is arguable in both directions -- but it cannot be arguable PER ARM BODY: whether the leaf was moved on or merely read decides whether the enclosing enum's body runs at all, and nothing in the language says a move erases its owner's `Drop` | — |
+| B-2026-09-13-12 | 2026-09-13 | codegen+interp | medium | THE let-else SPELLING OF A NESTED ENUM-PAYLOAD DESTRUCTURE LOSES THE PAYLOAD ENUM'S `Drop` BODY ON EVERY COMPILED BACKEND -- `fn give(x: Option[K]) -> R2 { let Option.Some(K.A(r)) = x else { return R2 { s: f"n" } }; r }` over `enum K { A(R2), B }` with `impl Drop for K` prints `dK / g:z / end` interpreted and `g:z / end` on `-O0`, `-O0` autopar and `-O2` autopar. Memory is clean on all four (0 valgrind errors, all heap freed), so this is a BODIES-only divergence; the `match` spelling of the same program prints nothing on ANY surface, which is a different disagreement and is filed separately | — |
 
 ### Relocated
 
@@ -2515,7 +2520,7 @@ _Generated from `bug-ledger.jsonl` by `scripts/bug-curve.py` (2026-05-20 → 202
 | B-2026-09-12-22 | codegen | high | A `ref`-ENUM MATCH BINDING OF AN `Array[T, N]` PAYLOAD IS NOT THE PAYLOAD -- reading through it yields UNINITIALISED memory on all five COMPILED surf… | 25f56cb |
 | B-2026-09-12-23 | codegen | medium | INDEXING A `ref`-ENUM MATCH BINDING OF AN `Array[T, N]` PAYLOAD DOES NOT LOWER -- `match b { Packed(a) => a[1].name.len(), . | 25f56cb |
 | B-2026-09-12-24 | codegen+interp | medium | A MONOMORPHIC ENUM VARIANT'S `Array[T, N]` PAYLOAD NEVER RUNS ITS ELEMENTS' USER `Drop` BODIES -- `enum EArr { A(Array[R, 2]), Z }` prints nothing on… | d8165fb |
-| B-2026-09-12-25 | codegen | high | A NESTED DESTRUCTURE THAT BINDS A STRUCT LEAF OUT OF A BOXED ENUM PAYLOAD DOUBLE-FREES ON EVERY COMPILED LANE -- `match x { Option.Some(K.A(r)) => . | src/codegen/control_flow_match.rs: new `suppress_nested_box… |
+| B-2026-09-12-25 | codegen | high | A NESTED DESTRUCTURE THAT BINDS A STRUCT LEAF OUT OF A BOXED ENUM PAYLOAD DOUBLE-FREES ON EVERY COMPILED LANE -- `match x { Option.Some(K.A(r)) => . | 2fbb9de3e |
 | B-2026-09-12-27 | other | low | A MATCHED PARAMETER PROJECTS NO PAYLOAD TYPE ON EITHER SPELLING, so a `match` on a by-value param compares nothing -- `analyze` introduces params wit… | 29d81a6b0 |
 | B-2026-09-13-1 | codegen | medium | AN `Array` USED AS A `Map` KEY LEAKS ITS ELEMENTS -- 384 B in 16 blocks for `Map[Array[String, 2], i64]`, the KEY half of B-2026-09-12-13's selector,… | 3908b36 |
 | B-2026-09-13-3 | codegen+interp | medium | A FRESH-TEMP `Option[T]` ARGUMENT WHOSE ARM LETS A PAYLOAD-DERIVED VALUE FLOW OUT LOSES THE PAYLOAD'S USER `Drop` BODY ON EVERY COMPILED BACKEND -- `… | 50fbc683a |
