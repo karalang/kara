@@ -6634,6 +6634,18 @@ impl<'ctx> Codegen<'ctx> {
                     // B-2026-09-09-12 — hand the whole probe to the runtime's
                     // SWAR group scan instead of walking bytes here.
                     Ok("runtimegroup") => mono::MapLookupProbe::RuntimeGroup,
+                    // B-2026-09-09-12 item 3 — the same scan, emitted inline.
+                    Ok("inlinegroup") => mono::MapLookupProbe::InlineGroup,
+                    Ok("bytewalk") | Ok("bounded") => mono::MapLookupProbe::Bounded,
+                    // NOT the default yet. The scan is 1.50x on a miss-heavy
+                    // probe and 1.06x on a hit-heavy one, and it takes kata:146
+                    // 2.18x -> 1.56x and kata:170 4.58x -> 2.47x against
+                    // equal-safety Rust. But kata:387 and kata:219 read 8% and
+                    // 3% WORSE, where the microbenchmarks for their shape say
+                    // parity — a delta that size on a small kata is inside code
+                    // placement, and this corpus's rule is to sweep
+                    // KARAC_TEXT_PAD on both sides before believing it. Flip
+                    // the default when that sweep says the two are noise.
                     _ => mono::MapLookupProbe::Bounded,
                 },
                 temp_recv_mapset_types: HashMap::new(),

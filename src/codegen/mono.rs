@@ -90,6 +90,20 @@ pub(crate) enum MapLookupProbe {
     /// keeps its byte walk, so this form is a measurement lever rather than a
     /// wholesale replacement until it has a number on the corpus.
     RuntimeGroup,
+    /// B-2026-09-09-12 item 3. The same SWAR group scan, emitted INLINE here
+    /// rather than reached through a call.
+    ///
+    /// `RuntimeGroup` priced the call-per-lookup approximation and it gives
+    /// back what the scan wins — 1.40x where lookups dominate, 1% WORSE on
+    /// kata:146. The scan's whole advantage is that it removes a
+    /// data-dependent branch per bucket; paying a call per lookup to reach it
+    /// puts a different unpredictable transfer in its place.
+    ///
+    /// Same gate as `RuntimeGroup` (i64 key, i64 value) and the same
+    /// tombstone-free reasoning: a lane equal to the tag is a candidate, a
+    /// zero lane ends the chain, and a tombstone is neither, so it is skipped
+    /// without a test of its own.
+    InlineGroup,
 }
 
 /// The loop-carried cursor of a mono LOOKUP probe, returned by
@@ -6054,7 +6068,9 @@ impl<'ctx> super::Codegen<'ctx> {
             // `RuntimeGroup` rides with `Bounded` here: only the one routed
             // site short-circuits before reaching this cursor, and every other
             // probe must keep a correct walk.
-            MapLookupProbe::Bounded | MapLookupProbe::RuntimeGroup => {
+            MapLookupProbe::Bounded
+            | MapLookupProbe::RuntimeGroup
+            | MapLookupProbe::InlineGroup => {
                 let bound_done = self
                     .builder
                     .build_int_compare(IntPredicate::UGE, cur, cap, "bound.done")
@@ -6826,6 +6842,519 @@ impl<'ctx> super::Codegen<'ctx> {
         self.builder.build_return(Some(&found)).unwrap();
     }
 
+    /// B-2026-09-09-12 item 3 — `karac_map_<i64>_<i64>_get` with the control
+    /// bytes scanned EIGHT AT A TIME, inline.
+    ///
+    /// The masks are the shipped runtime's, in IR: `lanes_eq` is the exact
+    /// per-lane zero test `!(((x & !HI) + !HI) | x) & HI` rather than the
+    /// classic `(x - LO) & !x & HI`, which borrows ACROSS lanes and would flag
+    /// a lane above a genuine zero. The probe here walks EVERY set lane of the
+    /// tag mask, so it would see those false lanes; `stop` already excludes
+    /// them (a false lane sits above a real zero), and the exact form means
+    /// correctness does not rest on that interaction holding.
+    ///
+    /// ORDER MATTERS WITHIN A GROUP. A tag hit in a lane after the first EMPTY
+    /// lane is past the end of the chain and must not be considered — the byte
+    /// walk got that for free by returning at the empty.
+    ///
+    /// A group that would run off the end of the table falls back to a
+    /// single-bucket step, which is the last few buckets only.
+    fn emit_mono_map_get_via_inline_group(
+        &mut self,
+        f: FunctionValue<'ctx>,
+        map_arg: inkwell::values::PointerValue<'ctx>,
+        key_arg: IntValue<'ctx>,
+        out_val_arg: inkwell::values::PointerValue<'ctx>,
+    ) {
+        const LO: u64 = 0x0101_0101_0101_0101;
+        const HI: u64 = 0x8080_8080_8080_8080;
+        const WIDTH: u64 = 8;
+
+        let i8_t = self.context.i8_type();
+        let i64_t = self.context.i64_type();
+        let bool_t = self.context.bool_type();
+        let ptr_ty = self.context.ptr_type(AddressSpace::default());
+
+        let entry_bb = self.context.append_basic_block(f, "entry");
+        let grp_cond_bb = self.context.append_basic_block(f, "grp.cond");
+        let grp_pick_bb = self.context.append_basic_block(f, "grp.pick");
+        let tail_bb = self.context.append_basic_block(f, "grp.tail");
+        let grp_body_bb = self.context.append_basic_block(f, "grp.body");
+        let lane_cond_bb = self.context.append_basic_block(f, "lane.cond");
+        let lane_eq_bb = self.context.append_basic_block(f, "lane.eq");
+        let after_lanes_bb = self.context.append_basic_block(f, "grp.after");
+        let found_bb = self.context.append_basic_block(f, "match.found");
+        let not_found_bb = self.context.append_basic_block(f, "not.found");
+
+        // ── entry: hash through the map's STORED hash_fn, then the fields ──
+        self.builder.position_at_end(entry_bb);
+        let hash_fn_ty = i64_t.fn_type(&[ptr_ty.into()], false);
+        let hash_fn_pp = unsafe {
+            self.builder
+                .build_in_bounds_gep(
+                    i8_t,
+                    map_arg,
+                    &[i64_t.const_int(Self::KARAC_MAP_HASH_FN_OFFSET, false)],
+                    "hash.fn.pp",
+                )
+                .unwrap()
+        };
+        let hash_fn_ptr = self
+            .builder
+            .build_load(ptr_ty, hash_fn_pp, "hash.fn")
+            .unwrap()
+            .into_pointer_value();
+        let key_slot = self.builder.build_alloca(i64_t, "hash.key.slot").unwrap();
+        self.builder.build_store(key_slot, key_arg).unwrap();
+        let hash = self
+            .builder
+            .build_indirect_call(hash_fn_ty, hash_fn_ptr, &[key_slot.into()], "hash")
+            .unwrap()
+            .try_as_basic_value()
+            .unwrap_basic()
+            .into_int_value();
+
+        let load_field = |cg: &Self, off: u64, name: &str| {
+            let p = unsafe {
+                cg.builder
+                    .build_in_bounds_gep(i8_t, map_arg, &[i64_t.const_int(off, false)], name)
+                    .unwrap()
+            };
+            p
+        };
+        let status_ptr = self
+            .builder
+            .build_load(
+                ptr_ty,
+                load_field(self, Self::KARAC_MAP_STATUS_OFFSET, "status.p"),
+                "status",
+            )
+            .unwrap()
+            .into_pointer_value();
+        let kv_ptr = self
+            .builder
+            .build_load(
+                ptr_ty,
+                load_field(self, Self::KARAC_MAP_KV_OFFSET, "kv.p"),
+                "kv",
+            )
+            .unwrap()
+            .into_pointer_value();
+        let cap = self
+            .builder
+            .build_load(
+                i64_t,
+                load_field(self, Self::KARAC_MAP_CAPACITY_OFFSET, "cap.p"),
+                "cap",
+            )
+            .unwrap()
+            .into_int_value();
+        let mask = self
+            .builder
+            .build_int_sub(cap, i64_t.const_int(1, false), "mask")
+            .unwrap();
+        let start = self.builder.build_and(hash, mask, "start").unwrap();
+        let ctrl = self.emit_map_ctrl_of(hash);
+        let ctrl_wide = self
+            .builder
+            .build_int_z_extend(ctrl, i64_t, "ctrl.w")
+            .unwrap();
+        let want = self
+            .builder
+            .build_int_mul(ctrl_wide, i64_t.const_int(LO, false), "want")
+            .unwrap();
+
+        // ── home bucket first ──
+        // The group scan's arithmetic is paid before it can answer, and a HIT
+        // usually sits at the home bucket, one well-predicted compare away.
+        // Measured on one 26-entry table with only the hit rate moved: the scan
+        // is 1.57x at ~25% hits and 0.87x at 100%. This restores the byte
+        // walk's hit cost and keeps the scan for the chain.
+        let home_sp = unsafe {
+            self.builder
+                .build_in_bounds_gep(i8_t, status_ptr, &[start], "home.sp")
+                .unwrap()
+        };
+        let home_s = self
+            .builder
+            .build_load(i8_t, home_sp, "home.s")
+            .unwrap()
+            .into_int_value();
+        let home_is_ctrl = self
+            .builder
+            .build_int_compare(IntPredicate::EQ, home_s, ctrl, "home.ctrl")
+            .unwrap();
+        let home_eq_bb = self.context.append_basic_block(f, "home.eq");
+        self.builder
+            .build_conditional_branch(home_is_ctrl, home_eq_bb, grp_cond_bb)
+            .unwrap();
+
+        self.builder.position_at_end(home_eq_bb);
+        let home_off = self
+            .builder
+            .build_int_mul(start, i64_t.const_int(16, false), "home.off")
+            .unwrap();
+        let home_kv_p = unsafe {
+            self.builder
+                .build_in_bounds_gep(i8_t, kv_ptr, &[home_off], "home.kv.p")
+                .unwrap()
+        };
+        let home_key = self
+            .builder
+            .build_load(i64_t, home_kv_p, "home.key")
+            .unwrap()
+            .into_int_value();
+        let home_match = self
+            .builder
+            .build_int_compare(IntPredicate::EQ, home_key, key_arg, "home.match")
+            .unwrap();
+        self.builder
+            .build_conditional_branch(home_match, found_bb, grp_cond_bb)
+            .unwrap();
+
+        // ── grp.cond: base + scanned, bounded like the byte walk ──
+        self.builder.position_at_end(grp_cond_bb);
+        let base_phi = self.builder.build_phi(i64_t, "base").unwrap();
+        let scanned_phi = self.builder.build_phi(i64_t, "scanned").unwrap();
+        // Both home-bucket outcomes fall into the scan at the SAME base: the
+        // home bucket is re-tested as lane 0 of the first group, which costs a
+        // lane rather than a bucket and keeps `start` the only seed.
+        base_phi.add_incoming(&[(&start, entry_bb), (&start, home_eq_bb)]);
+        scanned_phi.add_incoming(&[
+            (&i64_t.const_zero(), entry_bb),
+            (&i64_t.const_zero(), home_eq_bb),
+        ]);
+        let base = base_phi.as_basic_value().into_int_value();
+        let scanned = scanned_phi.as_basic_value().into_int_value();
+        let exhausted = self
+            .builder
+            .build_int_compare(IntPredicate::UGE, scanned, cap, "grp.exhausted")
+            .unwrap();
+        self.builder
+            .build_conditional_branch(exhausted, not_found_bb, grp_pick_bb)
+            .unwrap();
+
+        // ── grp.pick: a whole group, or the single-bucket tail ──
+        self.builder.position_at_end(grp_pick_bb);
+        let base_end = self
+            .builder
+            .build_int_add(base, i64_t.const_int(WIDTH, false), "base.end")
+            .unwrap();
+        let fits = self
+            .builder
+            .build_int_compare(IntPredicate::ULE, base_end, cap, "grp.fits")
+            .unwrap();
+        self.builder
+            .build_conditional_branch(fits, grp_body_bb, tail_bb)
+            .unwrap();
+
+        // ── grp.tail: one bucket, the byte walk's own rules ──
+        self.builder.position_at_end(tail_bb);
+        let tail_sp = unsafe {
+            self.builder
+                .build_in_bounds_gep(i8_t, status_ptr, &[base], "tail.sp")
+                .unwrap()
+        };
+        let tail_s = self
+            .builder
+            .build_load(i8_t, tail_sp, "tail.s")
+            .unwrap()
+            .into_int_value();
+        let tail_empty = self
+            .builder
+            .build_int_compare(
+                IntPredicate::EQ,
+                tail_s,
+                i8_t.const_int(Self::BUCKET_EMPTY, false),
+                "tail.empty",
+            )
+            .unwrap();
+        let tail_hit_bb = self.context.append_basic_block(f, "grp.tail.hit");
+        let tail_next_bb = self.context.append_basic_block(f, "grp.tail.next");
+        self.builder
+            .build_conditional_branch(tail_empty, not_found_bb, tail_hit_bb)
+            .unwrap();
+
+        self.builder.position_at_end(tail_hit_bb);
+        let tail_is_ctrl = self
+            .builder
+            .build_int_compare(IntPredicate::EQ, tail_s, ctrl, "tail.ctrl")
+            .unwrap();
+        let tail_eq_bb = self.context.append_basic_block(f, "grp.tail.eq");
+        self.builder
+            .build_conditional_branch(tail_is_ctrl, tail_eq_bb, tail_next_bb)
+            .unwrap();
+
+        // The tail carries its OWN key compare rather than sharing `lane.eq`.
+        // Sharing it made `lane.eq` reachable from two paths and left
+        // `lane.next` reading a `hits` PHI that does not exist on the tail
+        // edge — a dominance violation. Eight instructions, taken only for the
+        // last few buckets of a table, buys the whole cross-path tangle away.
+        self.builder.position_at_end(tail_eq_bb);
+        let tail_off = self
+            .builder
+            .build_int_mul(base, i64_t.const_int(16, false), "tail.off")
+            .unwrap();
+        let tail_kv_p = unsafe {
+            self.builder
+                .build_in_bounds_gep(i8_t, kv_ptr, &[tail_off], "tail.kv.p")
+                .unwrap()
+        };
+        let tail_key = self
+            .builder
+            .build_load(i64_t, tail_kv_p, "tail.key")
+            .unwrap()
+            .into_int_value();
+        let tail_match = self
+            .builder
+            .build_int_compare(IntPredicate::EQ, tail_key, key_arg, "tail.match")
+            .unwrap();
+        self.builder
+            .build_conditional_branch(tail_match, found_bb, tail_next_bb)
+            .unwrap();
+
+        self.builder.position_at_end(tail_next_bb);
+        let tail_base_next = {
+            let b = self
+                .builder
+                .build_int_add(base, i64_t.const_int(1, false), "tail.base.inc")
+                .unwrap();
+            self.builder.build_and(b, mask, "tail.base.next").unwrap()
+        };
+        let tail_scanned_next = self
+            .builder
+            .build_int_add(scanned, i64_t.const_int(1, false), "tail.scanned.next")
+            .unwrap();
+        base_phi.add_incoming(&[(&tail_base_next, tail_next_bb)]);
+        scanned_phi.add_incoming(&[(&tail_scanned_next, tail_next_bb)]);
+        self.builder.build_unconditional_branch(grp_cond_bb).unwrap();
+
+        // ── grp.body: one load, two masks ──
+        self.builder.position_at_end(grp_body_bb);
+        let gp = unsafe {
+            self.builder
+                .build_in_bounds_gep(i8_t, status_ptr, &[base], "grp.p")
+                .unwrap()
+        };
+        let g_load = self.builder.build_load(i64_t, gp, "grp.bytes").unwrap();
+        // The base is any bucket index, so this load is unaligned by
+        // construction; inkwell would otherwise declare align 8 on an i64.
+        let g = g_load.into_int_value();
+        if let Some(inst) = g.as_instruction() {
+            inst.set_alignment(1).expect("align 1 is valid");
+        }
+        // Little-endian, so lane 0 is the lowest address and lane order IS
+        // probe order. Every target kara emits for is little-endian; the
+        // runtime's twin says the same with `u64::from_le`.
+        let zero_lanes = |cg: &Self, x: IntValue<'ctx>, tag: &str| {
+            let not_hi = i64_t.const_int(!HI, false);
+            let masked = cg.builder.build_and(x, not_hi, &format!("{tag}.m")).unwrap();
+            let bumped = cg
+                .builder
+                .build_int_add(masked, not_hi, &format!("{tag}.a"))
+                .unwrap();
+            let ored = cg.builder.build_or(bumped, x, &format!("{tag}.o")).unwrap();
+            let inv = cg.builder.build_not(ored, &format!("{tag}.n")).unwrap();
+            cg.builder
+                .build_and(inv, i64_t.const_int(HI, false), &format!("{tag}.z"))
+                .unwrap()
+        };
+        let eqx = self.builder.build_xor(g, want, "grp.eqx").unwrap();
+        let hits0 = zero_lanes(self, eqx, "grp.hits");
+        let empties = zero_lanes(self, g, "grp.empt");
+        // `stop` = first EMPTY lane, or WIDTH when there is none. cttz on a
+        // zero input is poison unless is_zero_poison=false, so the mask is
+        // tested first and the select feeds a safe value.
+        let cttz = {
+            let intr = inkwell::intrinsics::Intrinsic::find("llvm.cttz")
+                .expect("llvm.cttz must exist");
+            intr.get_declaration(&self.module, &[i64_t.into()])
+                .expect("llvm.cttz has an i64 declaration")
+        };
+        let empt_is_zero = self
+            .builder
+            .build_int_compare(
+                IntPredicate::EQ,
+                empties,
+                i64_t.const_zero(),
+                "grp.noempty",
+            )
+            .unwrap();
+        let empt_tz = self
+            .builder
+            .build_call(
+                cttz,
+                &[empties.into(), bool_t.const_zero().into()],
+                "grp.empt.tz",
+            )
+            .unwrap()
+            .try_as_basic_value()
+            .unwrap_basic()
+            .into_int_value();
+        let empt_lane = self
+            .builder
+            .build_right_shift(empt_tz, i64_t.const_int(3, false), false, "grp.empt.lane")
+            .unwrap();
+        // NO empty lane means every lane is live, so `stop` is the WIDTH.
+        // Selecting on the mask rather than feeding cttz a stand-in matters:
+        // a stand-in of 1<<63 gives 63>>3 = 7 and silently drops every
+        // candidate in lane 7 of a full group (measured: 13236 hits against
+        // the byte walk's 13333). `is_zero_poison` is false, so cttz(0) is a
+        // defined 64 and the select picks the other arm anyway.
+        let stop = self
+            .builder
+            .build_select(
+                empt_is_zero,
+                i64_t.const_int(WIDTH, false),
+                empt_lane,
+                "grp.stop",
+            )
+            .unwrap()
+            .into_int_value();
+        self.builder.build_unconditional_branch(lane_cond_bb).unwrap();
+
+        // ── lane.cond: walk the set lanes of the tag mask, in order ──
+        self.builder.position_at_end(lane_cond_bb);
+        let hits_phi = self.builder.build_phi(i64_t, "hits").unwrap();
+        hits_phi.add_incoming(&[(&hits0, grp_body_bb)]);
+        let hits = hits_phi.as_basic_value().into_int_value();
+        let no_hits = self
+            .builder
+            .build_int_compare(IntPredicate::EQ, hits, i64_t.const_zero(), "lane.none")
+            .unwrap();
+        let lane_pick_bb = self.context.append_basic_block(f, "lane.pick");
+        self.builder
+            .build_conditional_branch(no_hits, after_lanes_bb, lane_pick_bb)
+            .unwrap();
+
+        self.builder.position_at_end(lane_pick_bb);
+        let hit_tz = self
+            .builder
+            .build_call(
+                cttz,
+                &[hits.into(), bool_t.const_zero().into()],
+                "lane.tz",
+            )
+            .unwrap()
+            .try_as_basic_value()
+            .unwrap_basic()
+            .into_int_value();
+        let lane = self
+            .builder
+            .build_right_shift(hit_tz, i64_t.const_int(3, false), false, "lane")
+            .unwrap();
+        // Past the first EMPTY lane is past the end of this key's chain.
+        let past_stop = self
+            .builder
+            .build_int_compare(IntPredicate::UGE, lane, stop, "lane.past")
+            .unwrap();
+        let lane_live_bb = self.context.append_basic_block(f, "lane.live");
+        self.builder
+            .build_conditional_branch(past_stop, after_lanes_bb, lane_live_bb)
+            .unwrap();
+
+        self.builder.position_at_end(lane_live_bb);
+        let cand = self.builder.build_int_add(base, lane, "cand").unwrap();
+        self.builder.build_unconditional_branch(lane_eq_bb).unwrap();
+
+        // ── lane.eq: the key compare, shared with the tail path ──
+        self.builder.position_at_end(lane_eq_bb);
+        let slot = cand;
+        let kv_off = self
+            .builder
+            .build_int_mul(slot, i64_t.const_int(16, false), "slot.off")
+            .unwrap();
+        let slot_kv_p = unsafe {
+            self.builder
+                .build_in_bounds_gep(i8_t, kv_ptr, &[kv_off], "slot.kv.p")
+                .unwrap()
+        };
+        let slot_key = self
+            .builder
+            .build_load(i64_t, slot_kv_p, "slot.key")
+            .unwrap()
+            .into_int_value();
+        let key_match = self
+            .builder
+            .build_int_compare(IntPredicate::EQ, slot_key, key_arg, "key.match")
+            .unwrap();
+        let lane_next_bb = self.context.append_basic_block(f, "lane.next");
+        self.builder
+            .build_conditional_branch(key_match, found_bb, lane_next_bb)
+            .unwrap();
+
+        // ── lane.next: drop the lowest set lane, or step the tail ──
+        self.builder.position_at_end(lane_next_bb);
+        let hits_cleared = {
+            let dec = self
+                .builder
+                .build_int_sub(hits, i64_t.const_int(1, false), "hits.dec")
+                .unwrap();
+            self.builder.build_and(hits, dec, "hits.next").unwrap()
+        };
+        hits_phi.add_incoming(&[(&hits_cleared, lane_next_bb)]);
+        self.builder
+            .build_unconditional_branch(lane_cond_bb)
+            .unwrap();
+
+        // ── grp.after: an EMPTY lane ends the probe; else next group ──
+        self.builder.position_at_end(after_lanes_bb);
+        let has_empty = self
+            .builder
+            .build_int_compare(IntPredicate::NE, empties, i64_t.const_zero(), "grp.hasempty")
+            .unwrap();
+        let next_grp_bb = self.context.append_basic_block(f, "grp.next");
+        self.builder
+            .build_conditional_branch(has_empty, not_found_bb, next_grp_bb)
+            .unwrap();
+
+        self.builder.position_at_end(next_grp_bb);
+        let base_next = {
+            let b = self
+                .builder
+                .build_int_add(base, i64_t.const_int(WIDTH, false), "base.inc")
+                .unwrap();
+            self.builder.build_and(b, mask, "base.next").unwrap()
+        };
+        let scanned_next = self
+            .builder
+            .build_int_add(scanned, i64_t.const_int(WIDTH, false), "scanned.next")
+            .unwrap();
+        base_phi.add_incoming(&[(&base_next, next_grp_bb)]);
+        scanned_phi.add_incoming(&[(&scanned_next, next_grp_bb)]);
+        self.builder.build_unconditional_branch(grp_cond_bb).unwrap();
+
+        // ── match.found / not.found ──
+        self.builder.position_at_end(found_bb);
+        // The one genuine cross-path value, and both predecessors dominate it.
+        let kvp_phi = self.builder.build_phi(ptr_ty, "found.kv.p").unwrap();
+        kvp_phi.add_incoming(&[
+            (&slot_kv_p, lane_eq_bb),
+            (&tail_kv_p, tail_eq_bb),
+            (&home_kv_p, home_eq_bb),
+        ]);
+        let found_kv_p = kvp_phi.as_basic_value().into_pointer_value();
+        let val_p = unsafe {
+            self.builder
+                .build_in_bounds_gep(i8_t, found_kv_p, &[i64_t.const_int(8, false)], "slot.val.p")
+                .unwrap()
+        };
+        let val = self
+            .builder
+            .build_load(i64_t, val_p, "val")
+            .unwrap()
+            .into_int_value();
+        self.builder.build_store(out_val_arg, val).unwrap();
+        self.builder
+            .build_return(Some(&bool_t.const_int(1, false)))
+            .unwrap();
+
+        self.builder.position_at_end(not_found_bb);
+        self.builder
+            .build_return(Some(&bool_t.const_zero()))
+            .unwrap();
+    }
+
     pub(super) fn emit_mono_map_get_body(
         &mut self,
         f: FunctionValue<'ctx>,
@@ -6854,6 +7383,17 @@ impl<'ctx> super::Codegen<'ctx> {
             && val_size == 8
         {
             self.emit_mono_map_get_via_runtime_group(f, map_arg, key_arg, out_val_arg);
+            return;
+        }
+
+        // B-2026-09-09-12 item 3 — the same scan, emitted here instead of
+        // called. Same gate, and the byte walk below stays the default until
+        // this has a corpus number.
+        if self.mapset.map_lookup_probe == MapLookupProbe::InlineGroup
+            && key_size == 8
+            && val_size == 8
+        {
+            self.emit_mono_map_get_via_inline_group(f, map_arg, key_arg, out_val_arg);
             return;
         }
 
