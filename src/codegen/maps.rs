@@ -1826,16 +1826,20 @@ impl<'ctx> super::Codegen<'ctx> {
                     .build_load(i64_t, bytes_slot, "map.try.bytes.v")
                     .unwrap()
                     .into_int_value();
-                self.free_str_vec_buffer_if_heap(key_val);
-                self.free_str_vec_buffer_if_heap(val_val);
-                // B-2026-09-13-1 — the array analogue, both halves: nothing was
+                // B-2026-09-13-1 / B-2026-09-13-6 — both halves: nothing was
                 // stored, so neither the map nor the (now retracted) sources
-                // own them.
-                if let Some(kte) = self.mapset.map_key_type_exprs.get(var_name).cloned() {
-                    self.free_array_half_on_no_adopt(key_val, &kte);
+                // own them. `free_half_on_no_adopt` is a DISPATCHER over the
+                // half's own drop fn and falls back to the shallow
+                // `{ptr,len,cap}` free, so it replaces the bare shallow call
+                // rather than running alongside it — a `Vec[String]` half
+                // would otherwise have its outer buffer freed twice.
+                match self.mapset.map_key_type_exprs.get(var_name).cloned() {
+                    Some(kte) => self.free_half_on_no_adopt(key_val, &kte, Some(&args[0].value)),
+                    None => self.free_str_vec_buffer_if_heap(key_val),
                 }
-                if let Some(vte) = self.var_types.var_elem_type_exprs.get(var_name).cloned() {
-                    self.free_array_half_on_no_adopt(val_val, &vte);
+                match self.var_types.var_elem_type_exprs.get(var_name).cloned() {
+                    Some(vte) => self.free_half_on_no_adopt(val_val, &vte, Some(&args[1].value)),
+                    None => self.free_str_vec_buffer_if_heap(val_val),
                 }
                 // Staged for-loop struct-element copies orphaned by the
                 // failed insert — nothing was stored (B-2026-08-01-29).
@@ -1867,11 +1871,12 @@ impl<'ctx> super::Codegen<'ctx> {
                 // NOT adopt the incoming one, so free the deep-copied key buffer
                 // (duplicate-key leak, B-2026-06-20-9 sibling).
                 self.builder.position_at_end(some_bb);
-                self.free_str_vec_buffer_if_heap(key_val);
-                // B-2026-09-13-1 — the array analogue. The VALUE is adopted
-                // even here (the bucket's value is replaced), so only the key.
-                if let Some(kte) = self.mapset.map_key_type_exprs.get(var_name).cloned() {
-                    self.free_array_half_on_no_adopt(key_val, &kte);
+                // B-2026-09-13-1 / B-2026-09-13-6 — through the shape
+                // dispatcher. The VALUE is adopted even here (the bucket's
+                // value is replaced), so only the key.
+                match self.mapset.map_key_type_exprs.get(var_name).cloned() {
+                    Some(kte) => self.free_half_on_no_adopt(key_val, &kte, Some(&args[0].value)),
+                    None => self.free_str_vec_buffer_if_heap(key_val),
                 }
                 // Staged for-loop struct-element KEY copy orphaned by the
                 // no-adopt on an existing key (B-2026-08-01-29); the value
@@ -2169,11 +2174,11 @@ impl<'ctx> super::Codegen<'ctx> {
                 // the caller's source intact); cap>0 / vec-struct guards no-op
                 // on a rodata literal or scalar key.
                 if let Some(kv) = key_val {
-                    self.free_str_vec_buffer_if_heap(kv);
-                    // B-2026-09-13-1 — the array analogue on the one no-adopt
-                    // branch `insert` has.
-                    if let Some(kte) = self.mapset.map_key_type_exprs.get(var_name).cloned() {
-                        self.free_array_half_on_no_adopt(kv, &kte);
+                    // B-2026-09-13-1 / B-2026-09-13-6 — through the shape
+                    // dispatcher, on the one no-adopt branch `insert` has.
+                    match self.mapset.map_key_type_exprs.get(var_name).cloned() {
+                        Some(kte) => self.free_half_on_no_adopt(kv, &kte, Some(&args[0].value)),
+                        None => self.free_str_vec_buffer_if_heap(kv),
                     }
                 }
                 // Staged for-loop struct-element KEY copy orphaned by the

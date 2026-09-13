@@ -88357,7 +88357,7 @@ fn main() {
         );
         // 3 -- DUPLICATE keys, the no-adopt branch. The bucket keeps its own
         //      key and the incoming one is orphaned; without
-        //      `free_array_half_on_no_adopt` this leaked 13 B in 2 blocks per
+        //      `free_half_on_no_adopt` this leaked 13 B in 2 blocks per
         //      duplicate while every distinct-key cell stayed clean.
         assert_clean_asan_run(
             "fn mk() -> Array[String, 2] { return Array[f\"aaaaaaaa0\", f\"bbbbbbbb0\"]; }\n\
@@ -88449,13 +88449,13 @@ fn main() {
         //      retract, so the orphan is reached by a different route to
         //      cell 3's.
         //
-        //      NOT a control for a user STRUCT key. That shape has the SAME
-        //      no-adopt orphan and still leaks -- 252 B in 14 blocks,
-        //      measured identical before and after this change, so it is
-        //      pre-existing and outside this row; `free_str_vec_buffer_if_heap`
-        //      no-ops on a struct exactly as it does on an array, and the
-        //      reclaim added here is array-shaped by construction. Filed
-        //      separately rather than asserted clean here.
+        //      The user-STRUCT key this cell deliberately did NOT cover --
+        //      the same no-adopt orphan, 252 B in 14 blocks, left open here as
+        //      pre-existing -- is B-2026-09-13-6, now fixed by generalizing
+        //      this row's array-shaped reclaim into the shape DISPATCHER
+        //      `free_half_on_no_adopt`. Its battery is
+        //      `asan_a_no_adopt_map_key_orphan_is_reclaimed_for_every_shape`
+        //      below.
         assert_clean_asan_run(
             "fn main() {\n\
              \x20\x20\x20\x20let mut m: Map[Array[String, 2], i64] = Map.new();\n\
@@ -88568,6 +88568,209 @@ fn main() {
                 "end",
             ],
             "asan_struct_shaped_boxed_enum_payload_leaf_respects_the_width_ceiling",
+        );
+    }
+
+    #[test]
+    fn asan_a_no_adopt_map_key_orphan_is_reclaimed_for_every_shape() {
+        // B-2026-09-13-6. B-2026-09-13-1 reclaimed the key a map DECLINES TO
+        // ADOPT on a duplicate for one shape -- `Array[T, N]` -- by calling a
+        // bespoke array helper alongside `free_str_vec_buffer_if_heap`, whose
+        // guard no-ops on anything that is not itself the 24-byte
+        // `{ptr,len,cap}` overlay. Every other non-overlay shape was left
+        // orphaned, and the reported one was a user struct.
+        //
+        // MEASURED at `KARAC_OPT_LEVEL=0` under valgrind, eight inserts of ONE
+        // duplicate key (so seven orphans), before -> after:
+        //
+        //     Map[K, i64], K = struct { a: String, b: String }  252 B/14 -> 0
+        //     Map[(String, String), i64]                        252 B/14 -> 0
+        //     Map[Vec[String], i64]                             252 B/14 -> 0
+        //     Map[K, i64], K = struct { a: String, b: i64 }     154 B/ 7 -> 0
+        //     Map[String, i64]                                  clean -> clean
+        //     Map[i64, i64]                                     clean -> clean
+        //     Map[Array[String, 2], i64]                        clean -> clean
+        //
+        // The TUPLE and `Vec[String]` rows were not in B-2026-09-13-6's title;
+        // they were found by sweeping the shape axis before writing the fix,
+        // and they are why this is a DISPATCHER rather than a third sibling.
+        // A `Vec[String]` key's outer buffer is ALREADY reclaimed by
+        // `free_str_vec_buffer_if_heap` at the same site, so a helper running
+        // IN ADDITION to it would have freed that buffer twice -- a
+        // double-free traded for a leak. `free_half_on_no_adopt` therefore
+        // chooses: the half's own full drop fn when one exists, else the
+        // shallow cap-guarded free.
+        //
+        // The retraction half needs nothing new, and the leak measurements are
+        // themselves the evidence: had the source local kept its own cleanup,
+        // those interiors would have been freed by it rather than lost.
+        //
+        // 1 -- the reported shape: a two-String user struct key, duplicates
+        //      from a source LOCAL.
+        assert_clean_asan_run(
+            "#[derive(Hash, Eq)]\n\
+             struct K6 { a: String, b: String }\n\
+             fn mk() -> K6 { return K6 { a: f\"aaaaaaaaaaaa0\", b: f\"bbbbbbbbbbbb0\" }; }\n\
+             fn main() {\n\
+             \x20\x20\x20\x20let mut m: Map[K6, i64] = Map.new();\n\
+             \x20\x20\x20\x20let k1 = mk();\n\
+             \x20\x20\x20\x20let k2 = mk();\n\
+             \x20\x20\x20\x20m.insert(k1, 1);\n\
+             \x20\x20\x20\x20m.insert(k2, 2);\n\
+             \x20\x20\x20\x20println(f\"s:{m.len()}\");\n\
+             }\n",
+            &["s:1"],
+            "map-key-struct-duplicate-no-adopt",
+        );
+        // 2 -- a TUPLE key. Not in the row's title; same orphan, same size.
+        assert_clean_asan_run(
+            "fn mk() -> (String, String) { return (f\"aaaaaaaaaaaa0\", f\"bbbbbbbbbbbb0\"); }\n\
+             fn main() {\n\
+             \x20\x20\x20\x20let mut m: Map[(String, String), i64] = Map.new();\n\
+             \x20\x20\x20\x20let k1 = mk();\n\
+             \x20\x20\x20\x20let k2 = mk();\n\
+             \x20\x20\x20\x20m.insert(k1, 1);\n\
+             \x20\x20\x20\x20m.insert(k2, 2);\n\
+             \x20\x20\x20\x20println(f\"s:{m.len()}\");\n\
+             }\n",
+            &["s:1"],
+            "map-key-tuple-duplicate-no-adopt",
+        );
+        // 3 -- the `Vec[String]` key: the cell that forces the dispatcher
+        //      shape. Its OUTER buffer was already freed here before this
+        //      change and only the 14 inner Strings leaked, so a reclaim
+        //      running alongside the shallow free would double-free it.
+        assert_clean_asan_run(
+            "fn mk() -> Vec[String] {\n\
+             \x20\x20\x20\x20let mut v: Vec[String] = Vec.new();\n\
+             \x20\x20\x20\x20v.push(f\"aaaaaaaaaaaa0\");\n\
+             \x20\x20\x20\x20v.push(f\"bbbbbbbbbbbb0\");\n\
+             \x20\x20\x20\x20return v;\n\
+             }\n\
+             fn main() {\n\
+             \x20\x20\x20\x20let mut m: Map[Vec[String], i64] = Map.new();\n\
+             \x20\x20\x20\x20let k1 = mk();\n\
+             \x20\x20\x20\x20let k2 = mk();\n\
+             \x20\x20\x20\x20m.insert(k1, 1);\n\
+             \x20\x20\x20\x20m.insert(k2, 2);\n\
+             \x20\x20\x20\x20println(f\"s:{m.len()}\");\n\
+             }\n",
+            &["s:1"],
+            "map-key-vecstring-duplicate-no-adopt",
+        );
+        // 4 -- a PARTLY-heap struct key. Its 154 B / 7 says the walk reaches
+        //      the String field and steps over the i64 rather than treating
+        //      the struct as one opaque block.
+        assert_clean_asan_run(
+            "#[derive(Hash, Eq)]\n\
+             struct K6b { a: String, b: i64 }\n\
+             fn mk() -> K6b { return K6b { a: f\"aaaaaaaaaaaaaaaa0\", b: 3 }; }\n\
+             fn main() {\n\
+             \x20\x20\x20\x20let mut m: Map[K6b, i64] = Map.new();\n\
+             \x20\x20\x20\x20let k1 = mk();\n\
+             \x20\x20\x20\x20let k2 = mk();\n\
+             \x20\x20\x20\x20m.insert(k1, 1);\n\
+             \x20\x20\x20\x20m.insert(k2, 2);\n\
+             \x20\x20\x20\x20println(f\"s:{m.len()}\");\n\
+             }\n",
+            &["s:1"],
+            "map-key-struct-partial-heap-duplicate",
+        );
+        // 5 -- `try_insert`, the SECOND entry point with its own no-adopt
+        //      branch. B-2026-09-13-1 records that wiring only `insert` turned
+        //      its array leak into a glibc tcache abort, so the struct shape
+        //      gets the same two-entry-point battery rather than one.
+        assert_clean_asan_run(
+            "#[derive(Hash, Eq)]\n\
+             struct K6c { a: String, b: String }\n\
+             fn mk() -> K6c { return K6c { a: f\"aaaaaaaaaaaa0\", b: f\"bbbbbbbbbbbb0\" }; }\n\
+             fn main() {\n\
+             \x20\x20\x20\x20let mut m: Map[K6c, i64] = Map.new();\n\
+             \x20\x20\x20\x20let k1 = mk();\n\
+             \x20\x20\x20\x20let k2 = mk();\n\
+             \x20\x20\x20\x20match m.try_insert(k1, 1) {\n\
+             \x20\x20\x20\x20\x20\x20\x20\x20Ok(o) => { println(\"s:ok\"); }\n\
+             \x20\x20\x20\x20\x20\x20\x20\x20Err(e) => { println(\"s:err\"); }\n\
+             \x20\x20\x20\x20}\n\
+             \x20\x20\x20\x20match m.try_insert(k2, 2) {\n\
+             \x20\x20\x20\x20\x20\x20\x20\x20Ok(o) => { println(\"t:ok\"); }\n\
+             \x20\x20\x20\x20\x20\x20\x20\x20Err(e) => { println(\"t:err\"); }\n\
+             \x20\x20\x20\x20}\n\
+             \x20\x20\x20\x20println(f\"u:{m.len()}\");\n\
+             }\n",
+            &["s:ok", "t:ok", "u:1"],
+            "map-key-struct-try-insert-duplicate",
+        );
+        // 6 -- the map is still USABLE after a reclaim: the bucket kept its own
+        //      key, so a later lookup must hash and compare live memory. This
+        //      is the cell that fails if the reclaim ever frees the ADOPTED
+        //      half instead of the orphan -- a leak fix's worst failure mode,
+        //      and one no leak count would show.
+        assert_clean_asan_run(
+            "#[derive(Hash, Eq)]\n\
+             struct K6d { a: String, b: String }\n\
+             fn mk(n: i64) -> K6d { return K6d { a: f\"aaaaaaaaaaaa{n}\", b: f\"bbbbbbbbbbbb{n}\" }; }\n\
+             fn main() {\n\
+             \x20\x20\x20\x20let mut m: Map[K6d, i64] = Map.new();\n\
+             \x20\x20\x20\x20let mut i: i64 = 0;\n\
+             \x20\x20\x20\x20while i < 6 { m.insert(mk(i % 3), i); i = i + 1; }\n\
+             \x20\x20\x20\x20println(f\"len:{m.len()}\");\n\
+             \x20\x20\x20\x20match m.get(mk(1)) {\n\
+             \x20\x20\x20\x20\x20\x20\x20\x20Some(v) => { println(f\"g:{v}\"); }\n\
+             \x20\x20\x20\x20\x20\x20\x20\x20None => { println(\"g:missing\"); }\n\
+             \x20\x20\x20\x20}\n\
+             \x20\x20\x20\x20match m.remove(mk(1)) {\n\
+             \x20\x20\x20\x20\x20\x20\x20\x20Some(v) => { println(f\"r:{v}\"); }\n\
+             \x20\x20\x20\x20\x20\x20\x20\x20None => { println(\"r:nothing\"); }\n\
+             \x20\x20\x20\x20}\n\
+             \x20\x20\x20\x20println(f\"len2:{m.len()}\");\n\
+             }\n",
+            &["len:3", "g:4", "r:4", "len2:2"],
+            "map-key-struct-duplicate-then-lookup",
+        );
+        // 7 -- the shapes that must NOT gain a walk. A scalar key has no heap,
+        //      and a plain `String` key is exactly the overlay the shallow
+        //      sibling already owns -- routing it through the drop fn too would
+        //      free one buffer twice. Both were clean before and stay clean.
+        assert_clean_asan_run(
+            "fn main() {\n\
+             \x20\x20\x20\x20let mut m: Map[i64, i64] = Map.new();\n\
+             \x20\x20\x20\x20m.insert(7, 1);\n\
+             \x20\x20\x20\x20m.insert(7, 2);\n\
+             \x20\x20\x20\x20let mut s: Map[String, i64] = Map.new();\n\
+             \x20\x20\x20\x20let a = f\"aaaaaaaaaaaa0\";\n\
+             \x20\x20\x20\x20let b = f\"aaaaaaaaaaaa0\";\n\
+             \x20\x20\x20\x20s.insert(a, 1);\n\
+             \x20\x20\x20\x20s.insert(b, 2);\n\
+             \x20\x20\x20\x20println(f\"s:{m.len()}:{s.len()}\");\n\
+             }\n",
+            &["s:1:1"],
+            "map-key-scalar-and-string-duplicate-controls",
+        );
+        // 8 -- THE ONE-OWNER CELL. A for-loop-owned struct element key has a
+        //      SECOND reclaim on this very branch (B-2026-08-01-29's
+        //      `free_staged_for_loop_agg_copy_on_no_adopt`, which drops the
+        //      staged deep copy). That one coexisted with the shallow sibling
+        //      only because the sibling no-ops on a struct; it cannot coexist
+        //      with a dispatcher that drops a struct properly. The first cut of
+        //      this fix ran both and aborted
+        //      `asan_dup_key_for_loop_elem_insert_no_leak` -- caught by the
+        //      suite, not by any hand probe here, which is why the shape is
+        //      pinned in this battery too and not only in that test.
+        assert_clean_asan_run(
+            "#[derive(Hash, Eq, Ord)]\n\
+             struct K6e { a: i64, s: String }\n\
+             fn main() {\n\
+             \x20\x20\x20\x20let mut ks: Vec[K6e] = Vec.new();\n\
+             \x20\x20\x20\x20ks.push(K6e { a: 1, s: f\"ssssssssssss1\" });\n\
+             \x20\x20\x20\x20ks.push(K6e { a: 1, s: f\"ssssssssssss1\" });\n\
+             \x20\x20\x20\x20let mut m: Map[K6e, i64] = Map.new();\n\
+             \x20\x20\x20\x20let mut i: i64 = 0;\n\
+             \x20\x20\x20\x20for k in ks { m.insert(k, i); i = i + 1; }\n\
+             \x20\x20\x20\x20println(f\"s:{m.len()}\");\n\
+             }\n",
+            &["s:1"],
+            "map-key-struct-for-loop-elem-duplicate-one-owner",
         );
     }
 }

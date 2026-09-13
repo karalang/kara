@@ -3287,44 +3287,100 @@ impl<'ctx> super::Codegen<'ctx> {
         self.builder.position_at_end(done_bb);
     }
 
-    /// B-2026-09-13-1 — the `Array[T, N]` analogue of
-    /// `free_str_vec_buffer_if_heap`, for the NO-ADOPT branches of a map
-    /// insert.
+    /// B-2026-09-13-1 / B-2026-09-13-6 — reclaim an orphaned map half on a
+    /// NO-ADOPT branch of an insert, for ANY half shape rather than one
+    /// bespoke shape at a time.
     ///
     /// A key has a branch a value does not: on a DUPLICATE key the bucket
     /// keeps the key it already holds and the incoming one is orphaned, and on
     /// `try_insert`'s OOM branch nothing is stored at all, so BOTH halves are
-    /// orphaned. The sibling above reclaims a String/Vec there — one
-    /// cap-guarded buffer — and its own shape guard declines an array, because
-    /// an array of vec structs is not itself the `{ptr,len,cap}` overlay. So
-    /// the orphan survived: 13 B in 2 blocks per duplicate, measured.
+    /// orphaned. `free_str_vec_buffer_if_heap` reclaims a String / `Vec`
+    /// there — one cap-guarded buffer — and its shape guard declines anything
+    /// that is not itself the 24-byte `{ptr,len,cap}` overlay. That is why an
+    /// `Array[String, 2]` key leaked (B-2026-09-13-1), and, one type over,
+    /// three more shapes did too. MEASURED at `KARAC_OPT_LEVEL=0` over eight
+    /// inserts of ONE duplicate key, i.e. seven orphans:
     ///
-    /// Takes the half BY VALUE, which is what all three branches have in hand,
-    /// and materializes a slot because the walk's ABI wants a pointer.
-    /// Declines exactly where `emit_drop_fn_for_array` does — a heapless
-    /// element — so an `Array[i64, N]` half emits nothing, as today.
+    /// ```text
+    /// Map[K, i64], K = struct { a: String, b: String }   252 B / 14
+    /// Map[(String, String), i64]                         252 B / 14
+    /// Map[Vec[String], i64]                              252 B / 14
+    /// Map[K, i64], K = struct { a: String, b: i64 }       154 B /  7
+    /// Map[String, i64]                                   clean  <- sibling
+    /// Map[i64, i64]                                      clean  <- no heap
+    /// Map[Array[String, 2], i64]                         clean  <- -13-1
+    /// ```
     ///
-    /// This is the piece that makes an array KEY's drop fn sound. Without it,
-    /// giving the key a drop fn and retracting its source measured strictly
-    /// WORSE than the leak it replaced: `try_insert` aborted with a glibc
-    /// tcache double free and the duplicate-key orphan survived anyway.
-    pub(super) fn free_array_half_on_no_adopt(
+    /// The `Vec[String]` cell is the one that says this must be a DISPATCHER
+    /// and not a third sibling called alongside the old one: its outer buffer
+    /// is already reclaimed by `free_str_vec_buffer_if_heap`, so a helper that
+    /// ran IN ADDITION to it would free that buffer twice. So this fn chooses:
+    /// the half's own full drop fn when one exists (it owns the whole half,
+    /// interior and outer buffer alike), and otherwise the shallow
+    /// cap-guarded free, which is exact for a `String` / `Vec[primitive]` and
+    /// a no-op for a scalar. Callers hand the half here INSTEAD OF calling the
+    /// shallow free themselves.
+    ///
+    /// Keyed on `map_key_drop_fn_for_type_expr`, the same one-policy resolver
+    /// the map's storage side uses for both halves, so a shape the storage
+    /// walk cannot fully free is declined here too rather than half-freed.
+    /// An `Array[i64, N]` half therefore still emits nothing, exactly as
+    /// B-2026-09-13-1 left it.
+    ///
+    /// Takes the half BY VALUE, which is what all three branches have in
+    /// hand, and materializes a slot because the walk's ABI wants a pointer.
+    ///
+    /// SOUNDNESS rests on the source being retracted, and the leak
+    /// measurements above are themselves the evidence that it is: had the
+    /// source local kept its own cleanup, those interiors would have been
+    /// freed by it rather than lost. Both insert entry points retract at every
+    /// call (`suppress_array_binding_move_arg` /
+    /// `disarm_moved_value_arg_user_drops` /
+    /// `suppress_source_vec_cleanup_for_arg`), and they do so BEFORE the
+    /// runtime call, so the OOM branch — which stores neither half — has an
+    /// already-retracted source too and both halves are genuinely ours there.
+    ///
+    /// Without a reclaim on every no-adopt branch, giving a key half a drop fn
+    /// and retracting its source measured strictly WORSE than the leak it
+    /// replaced: `try_insert` aborted with a glibc tcache double free and the
+    /// duplicate-key orphan survived anyway (B-2026-09-13-1).
+    /// `src_arg` IS THE OTHER HALF OF THE ONE-OWNER RULE and is not optional
+    /// decoration. B-2026-08-01-29 put a SECOND reclaim on these same
+    /// branches -- `free_staged_for_loop_agg_copy_on_no_adopt`, which drops the
+    /// staged deep copy of a for-loop-owned STRUCT element. That one could
+    /// coexist with the shallow sibling because the sibling no-ops on a struct;
+    /// it cannot coexist with a dispatcher that drops a struct properly, and
+    /// the two together are a double free, not a tighter leak fix. Measured:
+    /// `for p in qs { let _ = m.insert(p, i); }` over a duplicate
+    /// `struct P { a: i64, s: String }` key aborted
+    /// `asan_dup_key_for_loop_elem_insert_no_leak` the moment this fn stopped
+    /// declining structs -- the suite caught it, not a hand probe. So when that
+    /// reclaim owns the half, this one stands down to exactly the shallow free
+    /// it used to be: status quo for that shape, which is already correct
+    /// there.
+    pub(super) fn free_half_on_no_adopt(
         &mut self,
         val: BasicValueEnum<'ctx>,
         half_te: &TypeExpr,
+        src_arg: Option<&crate::ast::Expr>,
     ) {
-        let Some((elem_te, n)) = self.array_elem_and_len(half_te) else {
+        // The staged for-loop-element reclaim (B-2026-08-01-29) is the other
+        // owner of this exact heap; exactly one of the two may run.
+        if src_arg.is_some_and(|a| self.arg_is_for_loop_struct_elem(a)) {
+            self.free_str_vec_buffer_if_heap(val);
             return;
-        };
-        // Resolve the walk BEFORE touching the current block: the synthesizer
-        // saves and restores the insert point, but only around its own body.
-        let Some(drop_fn) = self.emit_drop_fn_for_array(&elem_te, n) else {
+        }
+        // Resolve the walk BEFORE touching the current block: the synthesizers
+        // save and restore the insert point, but only around their own body.
+        let Some(drop_fn) = self.map_key_drop_fn_for_type_expr(half_te) else {
+            self.free_str_vec_buffer_if_heap(val);
             return;
         };
         let Some(fn_val) = self.current_fn else {
+            self.free_str_vec_buffer_if_heap(val);
             return;
         };
-        let slot = self.create_entry_alloca(fn_val, "map.noadopt.arr", val.get_type());
+        let slot = self.create_entry_alloca(fn_val, "map.noadopt.half", val.get_type());
         if self.builder.build_store(slot, val).is_err() {
             return;
         }
@@ -4859,7 +4915,7 @@ impl<'ctx> super::Codegen<'ctx> {
     ///     `args[0]` in both);
     ///   * the incoming key must be reclaimed on every NO-ADOPT branch —
     ///     `insert`'s existing-key branch, and `try_insert`'s existing-key AND
-    ///     OOM branches — via `free_array_half_on_no_adopt`, because on a
+    ///     OOM branches — via `free_half_on_no_adopt`, because on a
     ///     duplicate the bucket keeps the key it already holds and the
     ///     caller's is orphaned rather than adopted.
     ///
