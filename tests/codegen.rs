@@ -156070,6 +156070,144 @@ fn main() {
     }
 
     #[test]
+    fn e2e_array_held_as_a_map_value_reads_back_on_every_surface() {
+        // B-2026-09-12-13 -- the cross-surface twin of
+        // `asan_array_held_as_a_map_value_frees_its_elements`.
+        //
+        // Unlike the struct-field row's twin, a PRE-FIX TREE FAILS THIS ONE,
+        // and that is the point: the source-local spelling was not merely
+        // leaking, it was reading out of freed buffers. The exact first cell
+        // printed `s:s:H0V` with six valgrind errors before the fix. So these
+        // cells are a real output gate here rather than only a guard against
+        // an over-eager retraction.
+        //
+        // Every lookup is by KEY. A `Map` walk is per-process hash order, so
+        // a bare `for (k, v) in m` would diverge between runs of one binary
+        // for reasons that have nothing to do with this row.
+        for (label, src, want) in [
+            // 1 -- the source-LOCAL spelling, map outliving the local. The
+            //      use-after-free face: pre-fix this printed garbage.
+            (
+                "map-value-array-local-source-read",
+                "fn main() {\n\
+                 \x20\x20\x20\x20let mut m: Map[i64, Array[String, 2]] = Map.new();\n\
+                 \x20\x20\x20\x20let mut i: i64 = 0;\n\
+                 \x20\x20\x20\x20while i < 2 {\n\
+                 \x20\x20\x20\x20\x20\x20\x20\x20let e: Array[String, 2] = [f\"aaaaaaaa{i}\", f\"bbbbbbbb{i}\"];\n\
+                 \x20\x20\x20\x20\x20\x20\x20\x20m.insert(i, e);\n\
+                 \x20\x20\x20\x20\x20\x20\x20\x20i = i + 1;\n\
+                 \x20\x20\x20\x20}\n\
+                 \x20\x20\x20\x20match m.get(0) {\n\
+                 \x20\x20\x20\x20\x20\x20\x20\x20Some(a) => { println(f\"s:{a[0]}\"); }\n\
+                 \x20\x20\x20\x20\x20\x20\x20\x20None => { println(\"s:missing\"); }\n\
+                 \x20\x20\x20\x20}\n\
+                 \x20\x20\x20\x20match m.get(1) {\n\
+                 \x20\x20\x20\x20\x20\x20\x20\x20Some(a) => { println(f\"t:{a[1]}\"); }\n\
+                 \x20\x20\x20\x20\x20\x20\x20\x20None => { println(\"t:missing\"); }\n\
+                 \x20\x20\x20\x20}\n\
+                 }\n",
+                "s:aaaaaaaa0\nt:bbbbbbbb1\n",
+            ),
+            // 2 -- the temp-literal spelling, which read back correctly even
+            //      pre-fix and only leaked. Both spellings must agree.
+            (
+                "map-value-array-literal-read",
+                "fn main() {\n\
+                 \x20\x20\x20\x20let mut m: Map[i64, Array[String, 2]] = Map.new();\n\
+                 \x20\x20\x20\x20m.insert(1, [f\"aaaaaaaa0\", f\"bbbbbbbb0\"]);\n\
+                 \x20\x20\x20\x20match m.get(1) {\n\
+                 \x20\x20\x20\x20\x20\x20\x20\x20Some(a) => { println(f\"s:{a[0]}\"); }\n\
+                 \x20\x20\x20\x20\x20\x20\x20\x20None => { println(\"s:missing\"); }\n\
+                 \x20\x20\x20\x20}\n\
+                 }\n",
+                "s:aaaaaaaa0\n",
+            ),
+            // 4 -- the NESTED array value.
+            (
+                "map-value-nested-array-read",
+                "fn main() {\n\
+                 \x20\x20\x20\x20let mut m: Map[i64, Array[Array[String, 2], 2]] = Map.new();\n\
+                 \x20\x20\x20\x20m.insert(1, [[f\"aaaaaaaa0\", f\"bbbbbbbb0\"], [f\"cccccccc0\", f\"dddddddd0\"]]);\n\
+                 \x20\x20\x20\x20match m.get(1) {\n\
+                 \x20\x20\x20\x20\x20\x20\x20\x20Some(a) => { println(\"s:ok\"); }\n\
+                 \x20\x20\x20\x20\x20\x20\x20\x20None => { println(\"s:missing\"); }\n\
+                 \x20\x20\x20\x20}\n\
+                 }\n",
+                "s:ok\n",
+            ),
+            // 5 -- `SortedMap`, the ordered sibling on the same storage.
+            (
+                "sortedmap-value-array-read",
+                "fn main() {\n\
+                 \x20\x20\x20\x20let mut m: SortedMap[i64, Array[String, 2]] = SortedMap.new();\n\
+                 \x20\x20\x20\x20let e: Array[String, 2] = [f\"aaaaaaaa0\", f\"bbbbbbbb0\"];\n\
+                 \x20\x20\x20\x20m.insert(1, e);\n\
+                 \x20\x20\x20\x20match m.get(1) {\n\
+                 \x20\x20\x20\x20\x20\x20\x20\x20Some(a) => { println(f\"s:{a[1]}\"); }\n\
+                 \x20\x20\x20\x20\x20\x20\x20\x20None => { println(\"s:missing\"); }\n\
+                 \x20\x20\x20\x20}\n\
+                 }\n",
+                "s:bbbbbbbb0\n",
+            ),
+            // 6 -- the map RETURNED from the fn that built it, read by the
+            //      caller: the stored buffers must outlive the callee frame.
+            (
+                "map-value-array-returned-read",
+                "fn mk() -> Map[i64, Array[String, 2]] {\n\
+                 \x20\x20\x20\x20let mut m: Map[i64, Array[String, 2]] = Map.new();\n\
+                 \x20\x20\x20\x20let e: Array[String, 2] = [f\"aaaaaaaa0\", f\"bbbbbbbb0\"];\n\
+                 \x20\x20\x20\x20m.insert(1, e);\n\
+                 \x20\x20\x20\x20return m;\n\
+                 }\n\
+                 fn main() {\n\
+                 \x20\x20\x20\x20let m = mk();\n\
+                 \x20\x20\x20\x20match m.get(1) {\n\
+                 \x20\x20\x20\x20\x20\x20\x20\x20Some(a) => { println(f\"s:{a[0]}\"); }\n\
+                 \x20\x20\x20\x20\x20\x20\x20\x20None => { println(\"s:missing\"); }\n\
+                 \x20\x20\x20\x20}\n\
+                 }\n",
+                "s:aaaaaaaa0\n",
+            ),
+            // CONTROL: a `Vec[String]` value from a source local -- the type
+            // that already resolved a per-value drop, so `insert` already
+            // retracted its source. It must read back unchanged.
+            (
+                "map-value-vec-local-read-control",
+                "fn main() {\n\
+                 \x20\x20\x20\x20let mut inner: Vec[String] = Vec.new();\n\
+                 \x20\x20\x20\x20inner.push(f\"aaaaaaaa0\");\n\
+                 \x20\x20\x20\x20let mut m: Map[i64, Vec[String]] = Map.new();\n\
+                 \x20\x20\x20\x20m.insert(1, inner);\n\
+                 \x20\x20\x20\x20match m.get(1) {\n\
+                 \x20\x20\x20\x20\x20\x20\x20\x20Some(v) => { println(f\"s:{v[0]}\"); }\n\
+                 \x20\x20\x20\x20\x20\x20\x20\x20None => { println(\"s:missing\"); }\n\
+                 \x20\x20\x20\x20}\n\
+                 }\n",
+                "s:aaaaaaaa0\n",
+            ),
+            // CONTROL: scalar elements, where the new arm must decline and the
+            // value still reads back.
+            (
+                "map-value-scalar-array-read-control",
+                "fn main() {\n\
+                 \x20\x20\x20\x20let mut m: Map[i64, Array[i64, 2]] = Map.new();\n\
+                 \x20\x20\x20\x20m.insert(1, [11, 22]);\n\
+                 \x20\x20\x20\x20match m.get(1) {\n\
+                 \x20\x20\x20\x20\x20\x20\x20\x20Some(a) => { println(f\"s:{a[1]}\"); }\n\
+                 \x20\x20\x20\x20\x20\x20\x20\x20None => { println(\"s:missing\"); }\n\
+                 \x20\x20\x20\x20}\n\
+                 }\n",
+                "s:22\n",
+            ),
+        ] {
+            let Some(out) = run_program(src) else {
+                return;
+            };
+            assert_eq!(out, want, "[{label}]");
+        }
+    }
+
+    #[test]
     fn e2e_arm_bound_array_rebind_reads_back_on_every_surface() {
         for (label, src, want) in [
             // 1 — the annotated rebind, `String` element.

@@ -3038,7 +3038,7 @@ impl<'ctx> super::Codegen<'ctx> {
                             // only fires where the flag free was INCOMPLETE —
                             // it can add a leak fix but never a double free.
                             field_val_drop_fn = self.map_val_drop_fn_for_type_expr(&v_te);
-                            field_key_drop_fn = self.map_val_drop_fn_for_type_expr(&k_te);
+                            field_key_drop_fn = self.map_key_drop_fn_for_type_expr(&k_te);
                         } else if let Some(elem_te) = super::helpers::set_inner_type_expr(&field_te)
                         {
                             // `Set[T]` lowers to `Map[T, ()]`; the
@@ -3046,7 +3046,7 @@ impl<'ctx> super::Codegen<'ctx> {
                             if let Some(heap_ty) = self.shared_heap_type_for_type_expr(&elem_te) {
                                 self.emit_map_shared_half_rc_dec_walk(handle, heap_ty, false);
                             }
-                            field_key_drop_fn = self.map_val_drop_fn_for_type_expr(&elem_te);
+                            field_key_drop_fn = self.map_key_drop_fn_for_type_expr(&elem_te);
                         }
                         // Key-half release walk (B-2026-08-02-21) — before the
                         // handle free below, exactly like the binding-death
@@ -10848,7 +10848,7 @@ impl<'ctx> super::Codegen<'ctx> {
             }
             _ => (None, None),
         };
-        let mem_drop = self.map_val_drop_fn_for_type_expr(key_te);
+        let mem_drop = self.map_key_drop_fn_for_type_expr(key_te);
         if own_body.is_none() && field_bodies.is_none() && mem_drop.is_none() {
             return None;
         }

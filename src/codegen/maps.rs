@@ -314,7 +314,7 @@ impl<'ctx> super::Codegen<'ctx> {
             .map_key_type_exprs
             .get(var_name)
             .cloned()
-            .and_then(|te| self.map_val_drop_fn_for_type_expr(&te));
+            .and_then(|te| self.map_key_drop_fn_for_type_expr(&te));
         let key_is_vec = if key_drop_fn.is_some() {
             false
         } else {
@@ -1956,6 +1956,31 @@ impl<'ctx> super::Codegen<'ctx> {
                 // Container-bodies twin of the cap-zero above.
                 self.disarm_container_bodies_for_arg(&args[1].value);
                 self.disarm_moved_value_arg_user_drops(&args[1].value);
+                // B-2026-09-12-13 — the WHOLE-ARRAY member of this battery,
+                // the memory-side dual of the `Array` arm now in
+                // `map_val_drop_fn_for_type_expr`. VALUE side only: the key
+                // side of that arm is held back in `map_temp_cleanup_parts`,
+                // because a duplicate key is NOT adopted and would need a
+                // no-adopt reclaim here to match (B-2026-09-13-1). Every other shape that can
+                // be moved into a bucket is retracted above: a Vec/String
+                // binding by `suppress_source_vec_cleanup_for_arg_ex`, a
+                // container element's user `Drop` body, a moved value's user
+                // `Drop`, and — below — a boxed or inline `Option`/`Result`
+                // payload. An array binding moved in WHOLE had no member, so
+                // `m.insert(k, a)` left the source local's own element drop as
+                // the only owner while the bucket bit-copied its pointers.
+                //
+                // That spelling measures CLEAN today, which is what hid it:
+                // the local frees the buffers and the map frees nothing, so
+                // the books balance. They balance on a DANGLING bucket. Outlive
+                // the local — insert inside a loop, read the map after — and
+                // the reads come back garbage (measured: 2 invalid reads and
+                // corrupted output, against a temp-literal twin that reads
+                // correctly and merely leaks). So this retraction is not
+                // bookkeeping for the drop fn above; without it that fn turns a
+                // latent use-after-free into a plain double free, and with the
+                // pair the map is the single owner of what it stores.
+                self.suppress_array_binding_move_arg(&args[1].value);
                 // Slice 3u: a moved boxed-payload Option/Result binding
                 // (`m.insert(k, o)` on a Map[K, Option[Wide]]) — null the
                 // source's box word so its BoxedEnumDrop skips; the map's

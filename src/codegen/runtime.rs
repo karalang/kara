@@ -4701,7 +4701,7 @@ impl<'ctx> super::Codegen<'ctx> {
         let key_te = k.cloned();
         let key_drop_fn = key_te
             .as_ref()
-            .and_then(|t| self.map_val_drop_fn_for_type_expr(t));
+            .and_then(|t| self.map_key_drop_fn_for_type_expr(t));
         let key_is_vec = if key_drop_fn.is_some() {
             false
         } else {
@@ -4760,6 +4760,42 @@ impl<'ctx> super::Codegen<'ctx> {
     /// releases only the outer buffer). Delegates the actual synthesis to
     /// `emit_drop_fn_for_type_expr` / `vec_elem_agg_drop_for_type_expr`,
     /// the slice-3n/3o/3p/3q recursive drop family.
+    /// The per-KEY drop fn for a `Map[K, V]` / `Set[K]`. Delegates to
+    /// `map_val_drop_fn_for_type_expr` — one policy for both halves — with a
+    /// single deliberate hold-back, and exists so that hold-back lives in ONE
+    /// place: the key side is resolved independently at two call sites (the
+    /// binding registration in `maps.rs` and `map_temp_cleanup_parts` here),
+    /// and guarding only one of them is how this was got wrong the first time.
+    ///
+    /// B-2026-09-12-13 / B-2026-09-13-1 — an `Array[T, N]` KEY is held back,
+    /// even though the value selector now answers one and the key leaks
+    /// without it (measured: 384 B in 16 blocks for
+    /// `Map[Array[String, 2], i64]`).
+    ///
+    /// A key drop fn is only sound once the key's SOURCE is retracted at every
+    /// insert entry point AND the incoming key is reclaimed on each NO-ADOPT
+    /// branch — on a duplicate key the bucket keeps the key it already has, so
+    /// the caller's key is orphaned rather than adopted (the B-2026-06-20-9
+    /// shape `free_str_vec_buffer_if_heap` handles for a String/Vec key, and
+    /// which no-ops on an array). Wiring the drop fn with only `insert`'s
+    /// retraction measured strictly WORSE than the leak it replaced:
+    /// `try_insert` aborted with a glibc tcache double free, and a
+    /// duplicate-key `insert` still leaked the orphan (13 B in 2 blocks — the
+    /// shape `asan_slice_and_array_equality_are_ownership_neutral` caught).
+    /// A half-wired key aborts; an unwired one leaks.
+    ///
+    /// The VALUE half has no such branch — the bucket's value IS replaced on a
+    /// duplicate — which is why it is wired and this is not.
+    pub(super) fn map_key_drop_fn_for_type_expr(
+        &mut self,
+        key_te: &TypeExpr,
+    ) -> Option<FunctionValue<'ctx>> {
+        if self.array_elem_and_len(key_te).is_some() {
+            return None;
+        }
+        self.map_val_drop_fn_for_type_expr(key_te)
+    }
+
     pub(super) fn map_val_drop_fn_for_type_expr(
         &mut self,
         val_te: &TypeExpr,
@@ -4774,6 +4810,43 @@ impl<'ctx> super::Codegen<'ctx> {
         // identical position — same rule, both containers.
         if matches!(&val_te.kind, TypeKind::Weak(_)) {
             return Some(self.emit_weak_slot_drop_fn());
+        }
+        // B-2026-09-12-13 — an `Array[T, N]` half. The dispatch below reaches
+        // only `Weak`, `Path` and `Tuple` kinds, so a fixed array fell out of
+        // the `_ => return None` catch-all and the map's value side got
+        // NOTHING: no drop fn, and no `val_is_vec` overlay either (an array OF
+        // vec structs is not itself one, so `llvm_ty_is_vec_struct` is false).
+        // That is why the container was the axis rather than the element —
+        // `Map[i64, Array[String, 2]]` leaked 384 B in 16 blocks while the
+        // SAME array as a plain local, a struct field, an enum payload, an
+        // `Option` payload and a `Result` payload were all clean, and while a
+        // `String`, a user struct, a tuple and a `Vec[String]` VALUE in the
+        // same map were clean too.
+        //
+        // Resolved through `array_elem_and_len` and placed BEFORE the kind
+        // match, because the two spellings of a fixed array do not share a
+        // kind: an ANNOTATED `Array[String, 2]` parses to `Path(["Array"],
+        // [Type(String), Const(2)])`, and only an array LITERAL's inferred
+        // type is `TypeKind::Array`. A `Map[K, Array[T, N]]` DECLARATION is
+        // always the annotated spelling, so an arm keyed on `TypeKind::Array`
+        // would compile, apply cleanly, and miss the entire bug — the trap
+        // B-2026-09-06-49 recorded and B-2026-09-10-6 re-hit.
+        //
+        // The KEY half resolves `key_drop_fn` through this same function and
+        // an `Array` key leaks identically (measured: 384 B in 16 blocks for
+        // `Map[Array[String, 2], i64]`), but `map_temp_cleanup_parts` holds
+        // that case back on purpose -- see the filter there, and
+        // B-2026-09-13-1. A key has a no-adopt branch a value does not.
+        //
+        // `emit_drop_fn_for_array` carries its own decline — it hands back
+        // `None` for a heapless element — so `Map[i64, Array[i64, 2]]` keeps
+        // the exact no-op it has today rather than gaining a walk that frees
+        // nothing. Its move-out dual is `suppress_array_binding_move_arg` on
+        // the insert arguments; the two must land together, since this fn
+        // alone would double-free an array moved in from a source LOCAL,
+        // whose own one-level drop is today the only owner.
+        if let Some((elem_te, n)) = self.array_elem_and_len(val_te) {
+            return self.emit_drop_fn_for_array(&elem_te, n);
         }
         let path = match &val_te.kind {
             TypeKind::Path(p) => p,

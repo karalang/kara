@@ -87586,4 +87586,228 @@ fn main() {
             "b11-qualified-ctor-escaping-arg",
         );
     }
+
+    #[test]
+    fn asan_array_held_as_a_map_value_frees_its_elements() {
+        // B-2026-09-12-13. `map_val_drop_fn_for_type_expr` dispatched on
+        // `val_te.kind` with arms for `Weak`, `Path` and `Tuple`, so an
+        // `Array[T, N]` half fell out of the `_ => return None` tail and the
+        // map's value side got NOTHING: no drop fn, and no `val_is_vec`
+        // overlay either, because an array OF vec structs is not itself one.
+        // 384 B in 16 blocks at `-O0` for `Map[i64, Array[String, 2]]`.
+        //
+        // The CONTAINER was the axis, not the element: the same array as a
+        // plain local, a struct field, an enum payload, an `Option` payload
+        // and a `Result` payload is clean, and a `String`, a user struct, a
+        // tuple and a `Vec[String]` VALUE in the same map are clean too. So
+        // every neighbouring cell answered "fine" and only this one did not.
+        //
+        // The fix is a PAIR, and cells 2 and 10 are why. The drop fn alone
+        // would double-free an array moved in from a source LOCAL, whose own
+        // one-level drop is today the only owner -- and that spelling measures
+        // CLEAN before the fix, because the local frees the buffers and the
+        // map frees nothing. They balance on a DANGLING bucket: outlive the
+        // local and the reads come back garbage (measured, 2 invalid reads),
+        // against a temp-literal twin that reads correctly and merely leaks.
+        // So this row's leak and a latent use-after-free are one defect, and
+        // `suppress_array_binding_move_arg` on the insert arguments is the
+        // half that makes the map the single owner rather than a second one.
+        //
+        // 1 -- the reported shape.
+        assert_clean_asan_run(
+            "fn main() {\n\
+             \x20\x20\x20\x20let mut m: Map[i64, Array[String, 2]] = Map.new();\n\
+             \x20\x20\x20\x20m.insert(1, [f\"aaaaaaaa0\", f\"bbbbbbbb0\"]);\n\
+             \x20\x20\x20\x20println(\"s:ok\");\n\
+             }\n",
+            &["s:ok"],
+            "map-value-array-literal",
+        );
+        // 2 -- the LOCAL-source spelling, with the map OUTLIVING the local and
+        //      reading back. This is the use-after-free face: before the fix
+        //      it printed garbage with two invalid reads while reporting no
+        //      leak at all. The readback is the assertion -- a clean ASAN run
+        //      alone would not have caught it.
+        assert_clean_asan_run(
+            "fn main() {\n\
+             \x20\x20\x20\x20let mut m: Map[i64, Array[String, 2]] = Map.new();\n\
+             \x20\x20\x20\x20let mut i: i64 = 0;\n\
+             \x20\x20\x20\x20while i < 2 {\n\
+             \x20\x20\x20\x20\x20\x20\x20\x20let e: Array[String, 2] = [f\"aaaaaaaa{i}\", f\"bbbbbbbb{i}\"];\n\
+             \x20\x20\x20\x20\x20\x20\x20\x20m.insert(i, e);\n\
+             \x20\x20\x20\x20\x20\x20\x20\x20i = i + 1;\n\
+             \x20\x20\x20\x20}\n\
+             \x20\x20\x20\x20match m.get(0) {\n\
+             \x20\x20\x20\x20\x20\x20\x20\x20Some(a) => { println(f\"s:{a[0]}\"); }\n\
+             \x20\x20\x20\x20\x20\x20\x20\x20None => { println(\"s:missing\"); }\n\
+             \x20\x20\x20\x20}\n\
+             }\n",
+            &["s:aaaaaaaa0"],
+            "map-value-array-local-source-readback",
+        );
+        // 3 -- the NESTED element, through the recursive walk
+        //      B-2026-09-10-8/-26 built. 704 B in 32 blocks before the fix.
+        assert_clean_asan_run(
+            "fn main() {\n\
+             \x20\x20\x20\x20let mut m: Map[i64, Array[Array[String, 2], 2]] = Map.new();\n\
+             \x20\x20\x20\x20m.insert(1, [[f\"aaaaaaaa0\", f\"bbbbbbbb0\"], [f\"cccccccc0\", f\"dddddddd0\"]]);\n\
+             \x20\x20\x20\x20println(\"s:ok\");\n\
+             }\n",
+            &["s:ok"],
+            "map-value-nested-array",
+        );
+        // 4 -- a `Vec` ELEMENT inside the array value.
+        assert_clean_asan_run(
+            "fn main() {\n\
+             \x20\x20\x20\x20let mut v0: Vec[String] = Vec.new();\n\
+             \x20\x20\x20\x20v0.push(f\"aaaaaaaa0\");\n\
+             \x20\x20\x20\x20let mut v1: Vec[String] = Vec.new();\n\
+             \x20\x20\x20\x20v1.push(f\"bbbbbbbb0\");\n\
+             \x20\x20\x20\x20let mut m: Map[i64, Array[Vec[String], 2]] = Map.new();\n\
+             \x20\x20\x20\x20m.insert(1, [v0, v1]);\n\
+             \x20\x20\x20\x20println(\"s:ok\");\n\
+             }\n",
+            &["s:ok"],
+            "map-value-array-of-vec",
+        );
+        // 5 -- `SortedMap`, the ordered sibling. Same KaracMap storage, so it
+        //      leaked the same 384 B and takes the same fix.
+        assert_clean_asan_run(
+            "fn main() {\n\
+             \x20\x20\x20\x20let mut m: SortedMap[i64, Array[String, 2]] = SortedMap.new();\n\
+             \x20\x20\x20\x20m.insert(1, [f\"aaaaaaaa0\", f\"bbbbbbbb0\"]);\n\
+             \x20\x20\x20\x20println(\"s:ok\");\n\
+             }\n",
+            &["s:ok"],
+            "sortedmap-value-array",
+        );
+        // 6 -- the map held as a STRUCT FIELD, which reaches the value side
+        //      through a different walk than a bare local does.
+        assert_clean_asan_run(
+            "struct H { m: Map[i64, Array[String, 2]] }\n\
+             fn main() {\n\
+             \x20\x20\x20\x20let mut m: Map[i64, Array[String, 2]] = Map.new();\n\
+             \x20\x20\x20\x20m.insert(1, [f\"aaaaaaaa0\", f\"bbbbbbbb0\"]);\n\
+             \x20\x20\x20\x20let h: H = H { m: m };\n\
+             \x20\x20\x20\x20println(\"s:ok\");\n\
+             }\n",
+            &["s:ok"],
+            "map-value-array-in-struct-field",
+        );
+        // 7 -- the map RETURNED from the fn that built it.
+        assert_clean_asan_run(
+            "fn mk() -> Map[i64, Array[String, 2]] {\n\
+             \x20\x20\x20\x20let mut m: Map[i64, Array[String, 2]] = Map.new();\n\
+             \x20\x20\x20\x20m.insert(1, [f\"aaaaaaaa0\", f\"bbbbbbbb0\"]);\n\
+             \x20\x20\x20\x20return m;\n\
+             }\n\
+             fn main() {\n\
+             \x20\x20\x20\x20let m = mk();\n\
+             \x20\x20\x20\x20println(\"s:ok\");\n\
+             }\n",
+            &["s:ok"],
+            "map-value-array-returned",
+        );
+        // 8 -- the map passed BY VALUE to a callee, which owns it on arrival.
+        assert_clean_asan_run(
+            "fn take(m: Map[i64, Array[String, 2]]) -> i64 { return m.len() as i64; }\n\
+             fn main() {\n\
+             \x20\x20\x20\x20let mut m: Map[i64, Array[String, 2]] = Map.new();\n\
+             \x20\x20\x20\x20m.insert(1, [f\"aaaaaaaa0\", f\"bbbbbbbb0\"]);\n\
+             \x20\x20\x20\x20println(f\"s:{take(m)}\");\n\
+             }\n",
+            &["s:1"],
+            "map-value-array-by-value-param",
+        );
+        // 9 -- `clear()`, which resolves its per-value drop through the SAME
+        //       selector (`karac_map_clear_with_val_drop_fn`) and so was
+        //       leaking for the same reason the scope-exit free was.
+        assert_clean_asan_run(
+            "fn main() {\n\
+             \x20\x20\x20\x20let mut m: Map[i64, Array[String, 2]] = Map.new();\n\
+             \x20\x20\x20\x20m.insert(1, [f\"aaaaaaaa0\", f\"bbbbbbbb0\"]);\n\
+             \x20\x20\x20\x20m.clear();\n\
+             \x20\x20\x20\x20println(\"s:ok\");\n\
+             }\n",
+            &["s:ok"],
+            "map-value-array-clear",
+        );
+        // 10 -- CONTROL: the `Vec[String]` VALUE from a source local. This type
+        //       already resolved a `val_drop_fn` before the fix and was clean,
+        //       which means `insert` ALREADY retracts a Vec source's cleanup.
+        //       It must stay exactly one owner -- if the new array retraction
+        //       had been written as a widening of that battery rather than a
+        //       new member, this is the cell that would double-free.
+        assert_clean_asan_run(
+            "fn main() {\n\
+             \x20\x20\x20\x20let mut inner: Vec[String] = Vec.new();\n\
+             \x20\x20\x20\x20inner.push(f\"aaaaaaaa0\");\n\
+             \x20\x20\x20\x20let mut m: Map[i64, Vec[String]] = Map.new();\n\
+             \x20\x20\x20\x20m.insert(1, inner);\n\
+             \x20\x20\x20\x20println(\"s:ok\");\n\
+             }\n",
+            &["s:ok"],
+            "map-value-vec-local-control",
+        );
+        // 11 -- CONTROL: a user STRUCT value from a source local, the other
+        //       already-clean neighbour on the same battery.
+        assert_clean_asan_run(
+            "struct W { a: String, b: String }\n\
+             fn main() {\n\
+             \x20\x20\x20\x20let w: W = W { a: f\"aaaaaaaa0\", b: f\"bbbbbbbb0\" };\n\
+             \x20\x20\x20\x20let mut m: Map[i64, W] = Map.new();\n\
+             \x20\x20\x20\x20m.insert(1, w);\n\
+             \x20\x20\x20\x20println(\"s:ok\");\n\
+             }\n",
+            &["s:ok"],
+            "map-value-struct-local-control",
+        );
+        // 12 -- CONTROL: a TUPLE value, which reaches the selector's own
+        //       `TypeKind::Tuple` arm -- the arm the new `Array` route is
+        //       modelled on and must not disturb.
+        assert_clean_asan_run(
+            "fn main() {\n\
+             \x20\x20\x20\x20let mut m: Map[i64, (String, String)] = Map.new();\n\
+             \x20\x20\x20\x20m.insert(1, (f\"aaaaaaaa0\", f\"bbbbbbbb0\"));\n\
+             \x20\x20\x20\x20println(\"s:ok\");\n\
+             }\n",
+            &["s:ok"],
+            "map-value-tuple-control",
+        );
+        // 13 -- CONTROL: a plain `String` value, the one-level `val_is_vec`
+        //       overlay. The new arm sits before the name-keyed dispatch, so
+        //       this is the cell that proves it did not shadow it.
+        assert_clean_asan_run(
+            "fn main() {\n\
+             \x20\x20\x20\x20let mut m: Map[i64, String] = Map.new();\n\
+             \x20\x20\x20\x20m.insert(1, f\"aaaaaaaa0\");\n\
+             \x20\x20\x20\x20println(\"s:ok\");\n\
+             }\n",
+            &["s:ok"],
+            "map-value-string-control",
+        );
+        // 14 -- CONTROL: a SCALAR element. `emit_drop_fn_for_array` declines
+        //       it, so this map must register nothing at all; a widened
+        //       admission would emit a walk over `i64`s and free them.
+        assert_clean_asan_run(
+            "fn main() {\n\
+             \x20\x20\x20\x20let mut m: Map[i64, Array[i64, 2]] = Map.new();\n\
+             \x20\x20\x20\x20m.insert(1, [11, 22]);\n\
+             \x20\x20\x20\x20println(\"s:ok\");\n\
+             }\n",
+            &["s:ok"],
+            "map-value-scalar-array-control",
+        );
+        // 15 -- CONTROL: the same array as a PLAIN LOCAL, the position the
+        //       sweep found already clean. Its own one-level drop owns the
+        //       buffers and nothing in this fix may add a second owner.
+        assert_clean_asan_run(
+            "fn main() {\n\
+             \x20\x20\x20\x20let a: Array[String, 2] = [f\"aaaaaaaa0\", f\"bbbbbbbb0\"];\n\
+             \x20\x20\x20\x20println(f\"s:{a[0]}\");\n\
+             }\n",
+            &["s:aaaaaaaa0"],
+            "plain-local-array-control",
+        );
+    }
 }
