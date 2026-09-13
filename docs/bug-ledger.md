@@ -93,11 +93,11 @@ distinguish "bugs flattening" from "we stopped writing them down."
 | class | total |
 |---|---|
 | miscompile | 406 |
-| run-vs-build | 398 |
+| run-vs-build | 400 |
 | leak | 339 |
 | double-free | 229 |
 | missing-feature | 197 |
-| codegen-gap | 175 |
+| codegen-gap | 176 |
 | diagnostics | 126 |
 | perf | 107 |
 | other | 107 |
@@ -110,8 +110,8 @@ distinguish "bugs flattening" from "we stopped writing them down."
 
 | surface | total |
 |---|---|
-| codegen | 1714 |
-| interp | 428 |
+| codegen | 1717 |
+| interp | 431 |
 | typecheck | 299 |
 | other | 90 |
 | ownership | 74 |
@@ -196,6 +196,9 @@ _Generated from `bug-ledger.jsonl` by `scripts/bug-curve.py` (2026-05-20 → 202
 | B-2026-09-13-23 | 2026-09-13 | codegen | low | AN `Array[String, N]` INSIDE A TUPLE LEAKS ITS ELEMENT BUFFERS -- 20 B in 2 blocks at -O0 for `let t: (Array[String, 2], i64) = ([f"a{n}", f"b{n}"], 7)`, while the SAME array in a plain `let` is clean. PRE-EXISTING rather than introduced by B-2026-09-10-38: the `Array[..]` PREFIX spelling, which typechecked before that fix, leaks the identical 20 B against the PRE-FIX compiler -- so the tuple POSITION owns the defect and the annotation fix merely made it reachable by a second spelling | — |
 | B-2026-09-13-24 | 2026-09-13 | codegen+interp | medium | A USER ENUM'S VARIANT-CONSTRUCTOR TEMP LOSES ITS `Drop` BODY -- `takeit(Ho.Full(R { id: 5 }))` over `enum Ho[T] { Full(T), Empty }` prints `f:5` alone on every COMPILED surface against `--interp`'s `f:5 dR5`, and the newly-enabled qualified spelling `Ho[R].Full(..)` loses it on BOTH backends, while the seeded `Option[R].Some(..)` is correct everywhere -- so the seeded pair has an owner for the ctor temp and a user enum has none | — |
 | B-2026-09-13-25 | 2026-09-13 | typecheck | low | THE FIELD-LESS QUALIFIED VARIANT `Ho[i64].Empty` IS STILL REJECTED as `'Ho' is a type, not a function`, where design.md § 588 lists a qualified field-less enum-variant constant as a valid argument form -- it is not a CALL, so it never reaches `try_path_receiver_method`'s method arm that B-2026-09-12-16 taught to accept `Ho[R].Full(..)` | — |
+| B-2026-09-13-26 | 2026-09-13 | interp+codegen | medium | A DISCARDED ARRAY LITERAL OF Drop-BEARING STRUCTS RUNS NO ELEMENT BODIES AT ALL -- `let _ = if c { [W { r: mkd(7), b: 1 }] } else { .. };` prints NOTHING on all four surfaces, with no projection anywhere, so nothing owns the array's elements | — |
+| B-2026-09-13-27 | 2026-09-13 | interp+codegen | medium | A `let`-BOUND TUPLE CARRYING A LOCAL'S PROJECTED FIELD IS RUN-VS-BUILD DIVERGENT -- `let w = if c { (t.r, 1) } else { .. };` runs the leaf's `Drop` body TWICE under `--interp` and ONCE on both compiled backends | — |
+| B-2026-09-13-28 | 2026-09-13 | interp+codegen | medium | THE BARE-BLOCK SPELLING OF B-2026-09-01-17 IS RUN-VS-BUILD DIVERGENT, NOT AN AGREED GAP -- `let _ = { W { r: t.r, b: 1 } };` runs the projected leaf's body TWICE under `--interp` and ONCE on both compiled backends | — |
 
 ### Relocated
 
