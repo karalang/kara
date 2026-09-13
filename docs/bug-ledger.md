@@ -98,7 +98,7 @@ distinguish "bugs flattening" from "we stopped writing them down."
 | double-free | 228 |
 | missing-feature | 196 |
 | codegen-gap | 175 |
-| diagnostics | 125 |
+| diagnostics | 126 |
 | other | 107 |
 | perf | 106 |
 | false-positive | 106 |
@@ -112,7 +112,7 @@ distinguish "bugs flattening" from "we stopped writing them down."
 |---|---|
 | codegen | 1704 |
 | interp | 426 |
-| typecheck | 297 |
+| typecheck | 298 |
 | other | 90 |
 | ownership | 74 |
 | cli | 73 |
@@ -190,6 +190,7 @@ _Generated from `bug-ledger.jsonl` by `scripts/bug-curve.py` (2026-05-20 → 202
 | B-2026-09-13-11 | 2026-09-13 | codegen+interp | low | A DESTRUCTURED ENUM PAYLOAD'S OWN `Drop` BODY RUNS ON NO SURFACE ONCE THE ARM MOVES ITS FIELD OUT -- `match x { Option.Some(K.A(r)) => { acc.push(r) } .. }` over `enum K { A(R2), B }` with `impl Drop for K` prints NO `dK` on `--interp`, `-O0`, `-O0` autopar or `-O2` autopar, while the READ-ONLY twin of the same program (`println(f"a:{r.s}")` for the arm body) prints exactly one on all four. The husk is still a `K`, so the count is arguable in both directions -- but it cannot be arguable PER ARM BODY: whether the leaf was moved on or merely read decides whether the enclosing enum's body runs at all, and nothing in the language says a move erases its owner's `Drop` | — |
 | B-2026-09-13-12 | 2026-09-13 | codegen+interp | medium | THE let-else SPELLING OF A NESTED ENUM-PAYLOAD DESTRUCTURE LOSES THE PAYLOAD ENUM'S `Drop` BODY ON EVERY COMPILED BACKEND -- `fn give(x: Option[K]) -> R2 { let Option.Some(K.A(r)) = x else { return R2 { s: f"n" } }; r }` over `enum K { A(R2), B }` with `impl Drop for K` prints `dK / g:z / end` interpreted and `g:z / end` on `-O0`, `-O0` autopar and `-O2` autopar. Memory is clean on all four (0 valgrind errors, all heap freed), so this is a BODIES-only divergence; the `match` spelling of the same program prints nothing on ANY surface, which is a different disagreement and is filed separately | — |
 | B-2026-09-13-13 | 2026-09-13 | codegen | medium | A CONDITIONALLY-RETURNED PARAM WHOSE OTHER EXIT LEAF MENTIONS IT STILL RUNS ITS `Drop` BODY TWICE AT THE ASSOCIATED AND METHOD CALL POSITIONS -- `if flag { return r } return R { id: 90 + r.id }` prints `dR1 / k:1 / dR1` at -O0, -O0 autopar and -O2 autopar against `--interp`'s `k:1 / dR1`, where replacing `90 + r.id` with a constant makes every surface agree. `fn_conditionally_returns_param_bare`'s condition 3 declines the mention CORRECTLY -- no per-path flag clears a leaf that READS the param -- but the assoc/method registrars read that `false` as "no other frame can own this argument" and hang the full `karac_drop_<T>` wrapper on the caller's temp; the FREE position is correct here because it gates on the `fn_returns_param` union instead | — |
+| B-2026-09-13-14 | 2026-09-13 | typecheck | medium | PROMOTE `partial_move_of_drop_enum` FROM `Warn` TO `Deny`, which is what actually removes B-2026-09-13-12's run-vs-build divergence -- blocked on triaging the 28 codegen + 15 memory_sanitizer fixtures written in the shape, each the regression test for a bug fixed in it, exactly as B-2026-09-01-43 resolved the struct rule's eight | — |
 
 ### Relocated
 
