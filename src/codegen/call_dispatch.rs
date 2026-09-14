@@ -3592,6 +3592,58 @@ impl<'ctx> super::Codegen<'ctx> {
         self.mapset.map_key_type_exprs.contains_key(recv.as_str())
     }
 
+    /// Does this `Vec`/`VecDeque` POP hand back an element the container has
+    /// MOVED OUT of its own storage, making the caller's result binding the
+    /// sole owner of the interior? B-2026-09-13-17.
+    ///
+    /// The third sibling of [`Self::call_builds_its_own_optres_box`] and
+    /// [`Self::map_handback_moves_value_out`], establishing sole ownership by
+    /// the same argument the `Map` one does, on the container that row could
+    /// not key on.
+    ///
+    /// THE SOLE-OWNERSHIP ARGUMENT. `pop` decrements `len`, and the buffer
+    /// drain walks `0..len`, so the popped slot is BEYOND the walked range and
+    /// the container can no longer reach it. That is the same shape as `remove`
+    /// tombstoning a bucket: the runtime has already moved the value into the
+    /// returned `Some(old)` and the caller's binding is the only owner left.
+    ///
+    /// THE RECEIVER PREDICATE IS NOT INVENTED HERE, which is what B-2026-09-13-17
+    /// was blocked on — it filed rather than guessed, on the grounds that there
+    /// was "no equally settled `this receiver is a tracked Vec` test to key on,
+    /// and inventing one under an ownership registration is how a leak fix
+    /// becomes a double free". There is one, and it has been load-bearing since
+    /// B-2026-07-12-4: `nested_option_shared_pop_inner_drop` registers an inner
+    /// drop for a popped `Option[shared T]` keyed on exactly this method set and
+    /// exactly this table. This predicate is that same shape, so it inherits a
+    /// shipped answer rather than proposing a new one.
+    ///
+    /// IT IS ALSO SELF-CHECKING, which the `Map` sibling's name-presence test is
+    /// not: `var_elem_type_exprs` is consulted for the element TYPE, and the
+    /// predicate declines unless that element is itself an `Array[T, N]`. A
+    /// `String` receiver — which does land in the neighbouring `vec_elem_types`
+    /// table — cannot pass, and neither can a `Vec` of any other element shape,
+    /// so the widening is confined to the one payload shape measured.
+    ///
+    /// `first` / `last` / `get` STAY OUT, for the reason `get` is absent from
+    /// the `Map` sibling: they are BORROW-shaped and their payload aliases live
+    /// storage, so registering there would be a second owner — a double free,
+    /// not a leak.
+    pub(super) fn vec_handback_moves_value_out(&self, value: &Expr) -> bool {
+        let ExprKind::MethodCall { object, method, .. } = &value.kind else {
+            return false;
+        };
+        if !matches!(method.as_str(), "pop" | "pop_back" | "pop_front") {
+            return false;
+        }
+        let ExprKind::Identifier(recv) = &object.kind else {
+            return false;
+        };
+        self.var_types
+            .var_elem_type_exprs
+            .get(recv.as_str())
+            .is_some_and(|te| self.array_elem_and_len(te).is_some())
+    }
+
     /// Will the callee's owned-param registration take the INTERIOR of a boxed
     /// `Array` payload on this variant, so the caller must stand its own array
     /// local down? B-2026-09-06-49 / B-2026-09-10-6.

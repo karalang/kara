@@ -7950,8 +7950,22 @@ impl<'ctx> super::Codegen<'ctx> {
                                         .filter(|c| c == variant)
                                         .map(|_| ())
                                         .or_else(|| {
+                                            // B-2026-09-13-17 adds the third
+                                            // spelling on the same argument:
+                                            // a `Vec`/`VecDeque` POP, whose
+                                            // popped slot is beyond the
+                                            // `0..len` drain and so is no
+                                            // longer reachable from the
+                                            // container. That row filed rather
+                                            // than guessed because it believed
+                                            // no settled receiver predicate
+                                            // existed; one has since
+                                            // B-2026-07-12-4, and
+                                            // `vec_handback_moves_value_out`
+                                            // keys on it.
                                             (self.call_builds_its_own_optres_box(value)
-                                                || self.map_handback_moves_value_out(value))
+                                                || self.map_handback_moves_value_out(value)
+                                                || self.vec_handback_moves_value_out(value))
                                             .then_some(())
                                         })
                                         .and_then(|()| Self::seeded_variant_payload_te(te, variant))
