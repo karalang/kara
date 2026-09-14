@@ -186,7 +186,6 @@ _Generated from `bug-ledger.jsonl` by `scripts/bug-curve.py` (2026-05-20 → 202
 | B-2026-09-14-10 | 2026-09-14 | codegen+interp | low | A BORROW PROJECTION COPIES AS A METHOD ARGUMENT BUT NOT AS A FREE-FUNCTION ONE -- `v.push(w.r)` runs the field's `Drop` body TWICE and `consume(w.r)` runs it ONCE, same syntactic position, same borrow, on all four surfaces alike | — |
 | B-2026-09-14-11 | 2026-09-14 | codegen | medium | A DISCARDED USER-ENUM TEMP WITH A BOXED PAYLOAD STILL LEAKS IN EVERY SPELLING WHOSE TYPE CANNOT BE RESOLVED -- `h.makeb(i);`, `H.assoc(i);` and `let _ = if c { mk(i) } else { mk(i) };` each lose 144 B in 3 blocks plus 102 B indirect in 6, while their INLINE-payload siblings went clean with B-2026-09-14-9, because `untyped_let_boxed_enum_te` answers only for a direct free-function `Call` | — |
 | B-2026-09-14-12 | 2026-09-14 | codegen | medium | AN ENUM WITH A BOXED `Array` PAYLOAD IS FREED ONLY BY THE FIVE EXPLICIT REGISTRATION SITES -- held in a struct FIELD, a `Vec` or a `Map` it loses its box and interior at the container's destruction, 144 B in 3 blocks plus 102 B indirect in 6 for three entries, with no discard anywhere in the program, because the enum's own DROP SWITCH has no case for it | — |
-| B-2026-09-14-13 | 2026-09-14 | codegen | medium | A FRESH-TEMP `Option` SCRUTINEE WITH A BOXED PAYLOAD LOSES IT IN TWO DIFFERENT WAYS -- `match mk2(j) { Some(a) => .. }` over `Option[Array[String, 2]]` frees the box and orphans its 6 element buffers (102 B / 6), while `Some(_)` claims nothing at all (144 B / 3 plus 102 B indirect / 6), and the `let`-bound spelling of the same call is clean | — |
 | B-2026-09-14-15 | 2026-09-14 | interp+codegen | medium | A NESTED FIXED `Array` (`Array[Array[D, N], M]`) RUNS ITS INNERMOST ELEMENTS' `Drop` BODIES UNDER `--interp` AND ON NEITHER COMPILED BACKEND -- no envelope involved; the `Vec[Vec[D]]` spelling is correct | — |
 
 ### Relocated
@@ -2558,6 +2557,7 @@ _Generated from `bug-ledger.jsonl` by `scripts/bug-curve.py` (2026-05-20 → 202
 | B-2026-09-14-3 | codegen | medium | AN ENUM TUPLE VARIANT USED AS A FIRST-CLASS FUNCTION VALUE ICEs CODEGEN -- `let g = Col.A; g(3)` passes `karac check` and then panics in `closures.rs… | 09e2e4b |
 | B-2026-09-14-4 | parser | low | A QUALIFIED STRUCT-SHAPED VARIANT CANNOT PIN ITS TYPE ARGUMENTS -- `Sh[i64].S { v: 3 }` is a PARSE error (`Expected Semicolon, found LeftBrace`), the… | 938baae |
 | B-2026-09-14-9 | codegen | medium | A BARE DISCARDED CALL RETURNING A CONCRETE USER ENUM WITH A BOXED `Array` PAYLOAD LOSES ITS BOX AND INTERIOR -- `mk(i);` over `fn mk(..) -> E` with `… | 3e2365b |
+| B-2026-09-14-13 | codegen | medium | A FRESH-TEMP `Option` SCRUTINEE WITH A BOXED PAYLOAD LOSES IT IN TWO DIFFERENT WAYS -- `match mk2(j) { Some(a) => . | 7c3cb26 |
 | B-2026-09-14-14 | codegen | high | A BLOCK-SCOPED NAMED `Array[T, N]` LOCAL MOVED INTO `Vec.push` IS NOT DISARMED, so its element buffers are freed at block exit while the `Vec` still… | fec3f60 |
 
 </details>
