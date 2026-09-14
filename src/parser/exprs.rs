@@ -2222,6 +2222,28 @@ impl super::Parser {
             });
         }
 
+        // Qualified field-less enum-variant constant: `TypeName[Args].Variant`
+        // (B-2026-09-13-25). Emits the SAME two-segment `Path` the unqualified
+        // `Enum.Variant` form produces a few lines below, with the explicit
+        // args attached, so every downstream phase that matches
+        // `Path { segments, .. }` keeps working unchanged and only the
+        // typechecker has to read the args.
+        if starts_upper(&name)
+            && self.check(&Token::LeftBracket)
+            && self.lookahead_generic_variant_const()
+        {
+            let args = self.parse_generic_type_args()?;
+            self.expect(&Token::Dot)?;
+            let variant = self.expect_identifier()?;
+            return Some(Expr {
+                span: self.span_from(&start),
+                kind: ExprKind::Path {
+                    segments: vec![name, variant],
+                    generic_args: Some(args),
+                },
+            });
+        }
+
         // Generic struct literal: `Name[Args] { field: value }`. Must be
         // intercepted BEFORE the postfix `[` index loop, exactly like the UFCS
         // form above — otherwise the bracket is consumed as a subscript and the
@@ -2405,6 +2427,67 @@ impl super::Parser {
                         return self.tokens[a].token == Token::Dot
                             && matches!(self.tokens[b].token, Token::Identifier { .. })
                             && self.tokens[c].token == Token::LeftParen;
+                    }
+                }
+                _ => {}
+            }
+            i += 1;
+        }
+        false
+    }
+
+    /// `TypeName[Type, ...].Variant` — a qualified FIELD-LESS enum-variant
+    /// constant carrying explicit generic arguments, e.g. `Ho[i64].Empty`.
+    ///
+    /// Sibling of [`Self::lookahead_concrete_type_ufcs`], and the reason it is
+    /// a separate predicate rather than a relaxation of it: that one requires
+    /// `.IDENT (`, because a UFCS dispatch is a CALL. A field-less variant has
+    /// no argument list at all, so it never matched, and `Ho[i64].Empty` fell
+    /// to the postfix loop as `Index(Ho, i64)` followed by a field access —
+    /// which then reported TWO "is a type, not a function" errors, one for
+    /// `Ho` and one for `i64` (B-2026-09-13-25). design.md § 588 lists the
+    /// qualified field-less variant as a valid argument form, and it is the
+    /// one case where the pin is load-bearing: a payload-free variant gives
+    /// inference nothing to read `T` from, so `Ho.Empty` alone cannot say
+    /// which `Ho[T]` it is.
+    ///
+    /// Requires the name after the `.` to be Type-class and NOT followed by
+    /// `(` or `{`: the call form is the UFCS predicate's, and the brace form
+    /// is a generic struct-variant literal, which is not this shape.
+    fn lookahead_generic_variant_const(&self) -> bool {
+        let inner_start = self.pos + 1;
+        if inner_start >= self.tokens.len() {
+            return false;
+        }
+        if !Self::starts_type(&self.tokens[inner_start].token) {
+            return false;
+        }
+        let mut depth: usize = 0;
+        let mut i = self.pos;
+        while i < self.tokens.len() {
+            match &self.tokens[i].token {
+                Token::LeftBracket => depth += 1,
+                Token::RightBracket => {
+                    depth -= 1;
+                    if depth == 0 {
+                        let a = i + 1;
+                        let b = i + 2;
+                        if b >= self.tokens.len() {
+                            return false;
+                        }
+                        if self.tokens[a].token != Token::Dot {
+                            return false;
+                        }
+                        let Token::Identifier { name, .. } = &self.tokens[b].token else {
+                            return false;
+                        };
+                        if !starts_upper(name) {
+                            return false;
+                        }
+                        return !matches!(
+                            self.tokens.get(i + 3).map(|t| &t.token),
+                            Some(Token::LeftParen) | Some(Token::LeftBrace)
+                        );
                     }
                 }
                 _ => {}

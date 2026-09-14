@@ -24060,6 +24060,58 @@ fn main() {
         }
     }
 
+    /// B-2026-09-13-25 — a qualified FIELD-LESS enum-variant constant with
+    /// pinned type arguments (`Ho[i64].Empty`) lowers and runs.
+    ///
+    /// The defect was a front-end reject, so the interesting part downstream is
+    /// that nothing downstream had to change: the new parser shape is the same
+    /// two-segment `Path` the unqualified `Ho.Empty` already produced, with the
+    /// args attached, and every codegen arm matches `Path { segments, .. }`.
+    /// This asserts that claim rather than trusting it — a lowering that read
+    /// the args as a subscript, or lost the monomorph, would fail here and
+    /// nowhere in `tests/typechecker.rs`.
+    #[test]
+    fn e2e_qualified_field_less_variant_with_pinned_type_args() {
+        for (label, src, want) in [
+            (
+                "user-generic-enum",
+                "enum Ho[T] { Full(T), Empty }\n\
+                 fn takeit(x: Ho[i64]) { match x { Full(r) => { println(f\"f:{r}\") } Empty => { println(\"e\") } } }\n\
+                 fn main() { takeit(Ho[i64].Empty); println(\"end\"); }\n",
+                "e\nend\n",
+            ),
+            (
+                "seeded-option",
+                "fn takeit(x: Option[i64]) { match x { Some(r) => { println(f\"f:{r}\") } None => { println(\"e\") } } }\n\
+                 fn main() { takeit(Option[i64].None); println(\"end\"); }\n",
+                "e\nend\n",
+            ),
+            (
+                "annotated-binding",
+                "enum Ho[T] { Full(T), Empty }\n\
+                 fn main() { let v: Ho[i64] = Ho[i64].Empty;\n\
+                 match v { Full(r) => { println(f\"f:{r}\") } Empty => { println(\"e\") } } }\n",
+                "e\n",
+            ),
+            (
+                "two-parameters",
+                "enum Pair[A, B] { L(A), R(B), N }\n\
+                 fn takeit(x: Pair[i64, String]) { match x { L(a) => { println(f\"l:{a}\") } R(b) => { println(f\"r:{b}\") } N => { println(\"n\") } } }\n\
+                 fn main() { takeit(Pair[i64, String].N); }\n",
+                "n\n",
+            ),
+            (
+                "payload-carrying-sibling-still-runs",
+                "enum Ho[T] { Full(T), Empty }\n\
+                 fn takeit(x: Ho[i64]) { match x { Full(r) => { println(f\"f:{r}\") } Empty => { println(\"e\") } } }\n\
+                 fn main() { takeit(Ho[i64].Full(7)); println(\"end\"); }\n",
+                "f:7\nend\n",
+            ),
+        ] {
+            assert_eq!(run_program(src).as_deref(), Some(want), "{label}");
+        }
+    }
+
     /// B-2026-08-28-22 — a callee that returns an owned param on SOME tail paths
     /// and not others now runs that param's user `Drop` body on the paths where it
     /// dies, instead of nowhere.

@@ -4553,7 +4553,26 @@ impl<'a> super::TypeChecker<'a> {
                 }
                 ty
             }
-            ExprKind::Path { segments, .. } => self.resolve_path_type(segments, &expr.span),
+            ExprKind::Path {
+                segments,
+                generic_args,
+            } => {
+                // `Ho[i64].Empty` — a qualified enum-variant constant whose
+                // type arguments are PINNED at the use site (B-2026-09-13-25).
+                // Tried first because `resolve_path_type` answers from the
+                // enum's DECLARED parameters (`Ho[T]`) and leaves `T` for
+                // inference, which a payload-free variant gives it no way to
+                // solve. Declines to `None` for every other path shape, so
+                // nothing else changes.
+                let pinned = match generic_args {
+                    Some(ga) => self.qualified_variant_with_type_args(segments, ga, &expr.span),
+                    None => None,
+                };
+                match pinned {
+                    Some(t) => t,
+                    None => self.resolve_path_type(segments, &expr.span),
+                }
+            }
 
             ExprKind::SelfValue => self.current_self_type.clone().unwrap_or(Type::Error),
             ExprKind::SelfType => self.current_self_type.clone().unwrap_or(Type::Error),

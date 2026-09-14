@@ -875,6 +875,82 @@ impl<'a> super::TypeChecker<'a> {
         }
     }
 
+    /// `Enum[Args].Variant` — a qualified FIELD-LESS enum-variant constant
+    /// whose type arguments are given EXPLICITLY at the use site rather than
+    /// left for inference (B-2026-09-13-25; design.md § 588 lists this as a
+    /// valid argument form, and B-2026-08-21-53 made the qualified spelling the
+    /// documented way to pin type arguments).
+    ///
+    /// WHY IT CANNOT JUST GO THROUGH [`Self::resolve_path_type`]: that path
+    /// answers a variant with the enum's DECLARED parameters — `Ho[T]`, a
+    /// `Type::TypeParam` per parameter — and relies on the use site to solve
+    /// them from the payload. A FIELD-LESS variant has no payload, so there is
+    /// nothing to solve from and `Ho.Empty` alone genuinely cannot say which
+    /// `Ho[T]` it is. That is exactly the case the explicit spelling exists
+    /// for, so here the declared parameters are replaced by the pinned args.
+    ///
+    /// UNIT VARIANTS ONLY, deliberately. A TUPLE variant already has both its
+    /// spellings: `Ho[i64].Full(3)` is a call and resolves through
+    /// `try_path_receiver_method` (B-2026-09-12-16), and the bare
+    /// `let g = Ho[i64].Full` — a variant used as a first-class function value
+    /// — reaches a codegen ICE that has nothing to do with this row: the
+    /// UNQUALIFIED, NON-GENERIC `let g = Col.A; g(3)` panics identically at
+    /// `closures.rs`'s `into_struct_value`, filed separately. Admitting the
+    /// tuple shape here would turn today's clean "cannot infer type parameter
+    /// 'T'" into that crash, so it declines and the existing diagnostic stands.
+    ///
+    /// Returns `None` for anything that is not a two-segment path naming a
+    /// unit-shaped variant of a known enum, so every other generic-args path
+    /// shape (concrete-type UFCS, `size_of[T]`, …) is untouched.
+    pub(super) fn qualified_variant_with_type_args(
+        &mut self,
+        segments: &[String],
+        generic_args: &[GenericArg],
+        span: &Span,
+    ) -> Option<Type> {
+        if segments.len() != 2 {
+            return None;
+        }
+        let enum_info = self.env.enums.get(&segments[0]).cloned()?;
+        let (_, variant_type) = enum_info.variants.iter().find(|(n, _)| n == &segments[1])?;
+        if !matches!(variant_type, VariantTypeInfo::Unit) {
+            return None;
+        }
+        // Const and shape args cannot appear on an enum's parameter list
+        // today, and dropping one silently would bind the WRONG parameter
+        // positionally; decline instead and let the ordinary path report.
+        let pinned: Vec<Type> = generic_args
+            .iter()
+            .map(|a| match a {
+                GenericArg::Type(t) => Some(self.lower_type_expr(t, &[])),
+                _ => None,
+            })
+            .collect::<Option<Vec<_>>>()?;
+        if pinned.len() != enum_info.generic_params.len() {
+            // Report rather than decline. Declining would fall through to
+            // `resolve_path_type`, which answers with the enum's DECLARED
+            // parameters and lets inference solve them from the annotation —
+            // so `Ho[i64, u8].Empty` would be silently accepted as `Ho[i64]`,
+            // while the call spelling `Ho[i64, u8].Full(3)` rejects the same
+            // mistake with "cannot construct `Ho[i64]` as `Ho[i64, u8]`".
+            self.type_error(
+                format!(
+                    "enum '{}' takes {} type argument(s), but {} were given",
+                    segments[0],
+                    enum_info.generic_params.len(),
+                    pinned.len()
+                ),
+                *span,
+                TypeErrorKind::TypeMismatch,
+            );
+            return Some(Type::Error);
+        }
+        Some(Type::Named {
+            name: segments[0].clone(),
+            args: pinned,
+        })
+    }
+
     pub(super) fn resolve_path_type(&mut self, segments: &[String], span: &Span) -> Type {
         // Value-binding-rooted field path — `F.value`, `CFG.max`,
         // `OUTER.inner.field`, where the leading segment is a value binding

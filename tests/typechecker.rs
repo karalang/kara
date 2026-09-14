@@ -50391,3 +50391,110 @@ fn main() { let x = Ho[i64].Nope(3); println("end"); }"#,
         "an unknown variant must report `no method`, got: {errs:?}"
     );
 }
+
+#[test]
+fn qualified_field_less_variant_pins_its_type_arguments() {
+    // B-2026-09-13-25, the sibling of the row above and a DIFFERENT mechanism.
+    // `Ho[R].Full(..)` is a CALL, so it parses as a method call on a
+    // one-segment path and reaches `try_path_receiver_method`.
+    // `Ho[i64].Empty` has no argument list, so it is not a call at all: before
+    // the fix the postfix loop read it as `Index(Ho, i64)` followed by a field
+    // access and reported TWO "is a type, not a function" errors, one for `Ho`
+    // and one for `i64`. design.md § 588 lists the qualified field-less variant
+    // as a valid argument form, and it is the one case where the pin is
+    // load-bearing — a payload-free variant gives inference nothing to read
+    // `T` from.
+    typecheck_ok(
+        r#"enum Ho[T] { Full(T), Empty }
+fn takeit(x: Ho[i64]) { match x { Full(r) => { println(f"f:{r}") } Empty => { println("e") } } }
+fn main() { takeit(Ho[i64].Empty); println("end") }"#,
+    );
+    // The SEEDED equivalent, which the row listed as not measured and which was
+    // broken the same way — so this was a gap for builtins too, not just for
+    // user enums.
+    typecheck_ok(
+        r#"fn takeit(x: Option[i64]) { match x { Some(r) => { println(f"f:{r}") } None => { println("e") } } }
+fn main() { takeit(Option[i64].None); println("end") }"#,
+    );
+    // Not argument-position-specific: an annotated binding takes it too.
+    typecheck_ok(
+        r#"enum Ho[T] { Full(T), Empty }
+fn takeit(x: Ho[i64]) { match x { Full(r) => { println(f"f:{r}") } Empty => { println("e") } } }
+fn main() { let v: Ho[i64] = Ho[i64].Empty; takeit(v); println("end") }"#,
+    );
+    // Two parameters, so the substitution is positional rather than a
+    // one-parameter special case.
+    typecheck_ok(
+        r#"enum Pair[A, B] { L(A), R(B), N }
+fn takeit(x: Pair[i64, String]) { match x { L(a) => { println(f"l:{a}") } R(b) => { println(f"r:{b}") } N => { println("n") } } }
+fn main() { takeit(Pair[i64, String].N); }"#,
+    );
+    // CONTROLS — the two spellings that already worked must be unchanged: a
+    // non-generic enum's variant, and the unqualified form in a position where
+    // inference can supply `T`.
+    typecheck_ok(
+        r#"enum Col { Red, Blue }
+fn takeit(x: Col) { match x { Red => { println("r") } Blue => { println("b") } } }
+fn main() { takeit(Col.Blue); println("end") }"#,
+    );
+    typecheck_ok(
+        r#"enum Ho[T] { Full(T), Empty }
+fn takeit(x: Ho[i64]) { match x { Full(r) => { println(f"f:{r}") } Empty => { println("e") } } }
+fn main() { takeit(Ho.Empty); println("end") }"#,
+    );
+    // REJECTION — the pin is CHECKED, not merely recorded.
+    let errs = typecheck_errors(
+        r#"enum Ho[T] { Full(T), Empty }
+fn takeit(x: Ho[i64]) { match x { Full(r) => { println(f"f:{r}") } Empty => { println("e") } } }
+fn main() { takeit(Ho[String].Empty); }"#,
+    );
+    assert!(
+        errs.iter().any(|e| e
+            .to_string()
+            .contains("expected 'Ho[i64]', found 'Ho[String]'")),
+        "a wrong pin must be rejected, got: {errs:?}"
+    );
+    // REJECTION — wrong ARITY. Declining here instead would fall through to the
+    // declared-parameters path, where inference solves `T` from the annotation
+    // and the extra argument vanishes silently; the call spelling
+    // `Ho[i64, u8].Full(3)` already rejects the same mistake.
+    let errs = typecheck_errors(
+        r#"enum Ho[T] { Full(T), Empty }
+fn main() { let x: Ho[i64] = Ho[i64, u8].Empty; println("end") }"#,
+    );
+    assert!(
+        errs.iter().any(|e| e
+            .to_string()
+            .contains("takes 1 type argument(s), but 2 were given")),
+        "an arity mismatch must be reported, got: {errs:?}"
+    );
+    // REJECTION — an unknown variant still reports against the type.
+    let errs = typecheck_errors(
+        r#"enum Ho[T] { Full(T), Empty }
+fn main() { let x: Ho[i64] = Ho[i64].Nope; println("end") }"#,
+    );
+    assert!(
+        errs.iter().any(|e| e.to_string().contains("'Nope'")),
+        "an unknown variant must be named, got: {errs:?}"
+    );
+    // A TUPLE variant used as a bare first-class function value is DELIBERATELY
+    // still refused, with the message it has always had. Admitting it would be
+    // a widening onto a pre-existing codegen ICE: the unqualified, non-generic
+    // `let g = Col.A; g(3)` panics in `closures.rs`'s `into_struct_value`, so
+    // the qualified generic spelling must not become the one path that
+    // type-checks its way into that crash.
+    let errs = typecheck_errors(
+        r#"enum Ho[T] { Full(T), Empty }
+fn main() { let g = Ho[i64].Full; println("end") }"#,
+    );
+    assert!(
+        errs.iter()
+            .any(|e| e.to_string().contains("cannot infer type parameter 'T'")),
+        "a bare tuple-variant value keeps its existing diagnostic, got: {errs:?}"
+    );
+    // CONTROLS for the two neighbouring `Name[Args].` shapes the new parser
+    // lookahead sits between: concrete-type UFCS (needs the `(`) and the
+    // generic-args intrinsic call.
+    typecheck_ok(r#"fn main() { let v = Vec[i64].new(); println(f"{v.len()}"); }"#);
+    typecheck_ok(r#"fn main() { println(f"{size_of[i64]()}"); }"#);
+}
