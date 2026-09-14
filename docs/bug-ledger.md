@@ -93,13 +93,13 @@ distinguish "bugs flattening" from "we stopped writing them down."
 | class | total |
 |---|---|
 | miscompile | 406 |
-| run-vs-build | 405 |
+| run-vs-build | 406 |
 | leak | 345 |
 | double-free | 230 |
 | missing-feature | 198 |
 | codegen-gap | 177 |
 | diagnostics | 126 |
-| other | 110 |
+| other | 111 |
 | perf | 108 |
 | false-positive | 106 |
 | soundness | 95 |
@@ -110,8 +110,8 @@ distinguish "bugs flattening" from "we stopped writing them down."
 
 | surface | total |
 |---|---|
-| codegen | 1735 |
-| interp | 438 |
+| codegen | 1737 |
+| interp | 439 |
 | typecheck | 299 |
 | other | 90 |
 | ownership | 74 |
@@ -188,6 +188,8 @@ _Generated from `bug-ledger.jsonl` by `scripts/bug-curve.py` (2026-05-20 → 202
 | B-2026-09-14-15 | 2026-09-14 | interp+codegen | medium | A NESTED FIXED `Array` (`Array[Array[D, N], M]`) RUNS ITS INNERMOST ELEMENTS' `Drop` BODIES UNDER `--interp` AND ON NEITHER COMPILED BACKEND -- no envelope involved; the `Vec[Vec[D]]` spelling is correct | — |
 | B-2026-09-14-16 | 2026-09-14 | codegen+interp | low | PROJECTING ONE FIELD OFF A FRESH TEMP DROPS THE TEMP'S OTHER `Drop` BODIES ON EVERY SURFACE -- `let w = (mkw(7).r, 1);` runs the moved leaf's body but never the untouched sibling field's, while a bare discarded `mkw(7);` runs both | — |
 | B-2026-09-14-17 | 2026-09-14 | codegen | high | A MATCH ARM THAT CONSUMES A BOXED `Array` PAYLOAD FREES ITS ELEMENT BUFFERS TWICE AND ABORTS THE PROGRAM -- `match e { E.A(a) => take(a) }` over `enum E { A(Array[String, 2]), B }` exits 134 with `free(): double free detected`, 24 frees against 18 allocs, because `boxed_payload_interior_taken_by_arm` answers FALSE for an array unconditionally and the box keeps an interior drop the arm has already handed on | — |
+| B-2026-09-14-18 | 2026-09-14 | codegen+interp | medium | AN UNMOVED PART OF AN OWNED `Option` PAYLOAD LOSES ITS `Drop` BODY ON ALL FOUR SURFACES when the arm DESTRUCTURES the payload and returns a different part -- `Some((a, b)) => { return b; }` over `Option[(R, i64)]` prints `got:9 end` everywhere against the due `dR5 got:9 end`, and the two-Drop-element cell loses `dR6` everywhere, so the A/B parity rule sees nothing; this is the cell B-2026-09-13-5 recorded as 'correct on all four surfaces', which its `(R, i64)` sibling could not show | — |
+| B-2026-09-14-19 | 2026-09-14 | codegen | medium | WHERE THE COMPILED BACKENDS KEEP AN OWNED `Option` PAYLOAD'S `Drop` BODY THEY RUN IT AT THE CALLER'S SCOPE EXIT, NOT AT THE PAYLOAD'S DEATH -- `fn eat(o: Option[R]) -> i64` reading only `r.id` prints `got:5 end dR5` on JIT/AOT against `--interp`'s correct `dR5 got:5 end`, so the count agrees and the body is observable one statement too late; the mirror of B-2026-09-14-7, where compiled runs EARLY | — |
 
 ### Relocated
 
