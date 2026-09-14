@@ -1016,6 +1016,18 @@ impl<'ctx> super::Codegen<'ctx> {
         let ptr_ty = self.context.ptr_type(AddressSpace::default());
         let elem_ty = self.vec_elem_type_for_var(var_name);
 
+        // SSO, receiver-aware: every tag-aware READ below decodes `cap` and
+        // selects, and a `Vec` can never set the inline flag — so on a receiver
+        // we can positively identify as a non-String the whole sequence is the
+        // identity, paid per call. `v.len()` in a loop condition is the shape
+        // that hurt: `lshr`/`and`/`select` on the trip count of every iteration.
+        // Measured on a `Vec[i64]` index+len loop with no Strings anywhere,
+        // KARAC_SSO=1 emitted 6 inline compares, 3 selects and 4 byte_len
+        // decodes; 4 of the 6 were this one call. See
+        // `receiver_is_definitely_not_string` for why THIS signal is safe where
+        // the two earlier guards at this file's mutation chokepoint were not.
+        let sso_recv = self.sso_on() && !self.receiver_is_definitely_not_string(var_name);
+
         // SSO: promote an inline receiver out of the overlay before ANY
         // mutating method touches it — in ONE place, keyed off the method
         // name, rather than per-arm.
@@ -1092,10 +1104,7 @@ impl<'ctx> super::Codegen<'ctx> {
         // not-taken branch. Re-introduce a guard only off a POSITIVE Vec signal
         // and only with a measurement showing that cost matters — never off the
         // absence of a String signal, which is what failed twice.
-        if self.sso_on()
-            && MUTATES_RECEIVER_IN_PLACE.contains(&method)
-            && !self.receiver_is_definitely_not_string(var_name)
-        {
+        if sso_recv && MUTATES_RECEIVER_IN_PLACE.contains(&method) {
             self.sso_deinline_in_place(data_ptr, "recv.mut");
         }
 
@@ -1118,7 +1127,7 @@ impl<'ctx> super::Codegen<'ctx> {
                 // `!range` annotation above still holds either way, since an
                 // inline length is at most 23. Keeping Vec off the select is
                 // the Slice 3 refinement.
-                let len: inkwell::values::BasicValueEnum<'ctx> = if self.sso_on() {
+                let len: inkwell::values::BasicValueEnum<'ctx> = if sso_recv {
                     self.sso_string_len_from_slot(data_ptr, len.into_int_value(), "vec.len")
                         .into()
                 } else {
@@ -1202,7 +1211,7 @@ impl<'ctx> super::Codegen<'ctx> {
                     .into_int_value();
                 // SSO: the receiver is a String descriptor at `data_ptr`; an inline
                 // one keeps its bytes there and its length in `cap`'s high byte.
-                let (recv_data, recv_len) = if self.sso_on() {
+                let (recv_data, recv_len) = if sso_recv {
                     (
                         self.sso_string_data_ptr_from_slot(data_ptr, recv_data, "sw.recv"),
                         self.sso_string_len_from_slot(data_ptr, recv_len, "sw.recv"),
@@ -1328,7 +1337,7 @@ impl<'ctx> super::Codegen<'ctx> {
                     .into_int_value();
                 // SSO: the receiver is a String descriptor at `data_ptr`; an inline
                 // one keeps its bytes there and its length in `cap`'s high byte.
-                let (recv_data, recv_len) = if self.sso_on() {
+                let (recv_data, recv_len) = if sso_recv {
                     (
                         self.sso_string_data_ptr_from_slot(data_ptr, recv_data, "spl.recv"),
                         self.sso_string_len_from_slot(data_ptr, recv_len, "spl.recv"),
@@ -1450,7 +1459,7 @@ impl<'ctx> super::Codegen<'ctx> {
                     .into_int_value();
                 // SSO: the receiver is a String descriptor at `data_ptr`; an inline
                 // one keeps its bytes there and its length in `cap`'s high byte.
-                let (recv_data, recv_len) = if self.sso_on() {
+                let (recv_data, recv_len) = if sso_recv {
                     (
                         self.sso_string_data_ptr_from_slot(data_ptr, recv_data, "swss.recv"),
                         self.sso_string_len_from_slot(data_ptr, recv_len, "swss.recv"),
@@ -1556,7 +1565,7 @@ impl<'ctx> super::Codegen<'ctx> {
                 // the inline case read field 0 as a pointer, which is not a
                 // pointer at all. Whoever lifts `String.slice` into a returnable
                 // position needs escape reasoning here, not just a tag check.
-                let (recv_data, recv_len) = if self.sso_on() {
+                let (recv_data, recv_len) = if sso_recv {
                     (
                         self.sso_string_data_ptr_from_slot(data_ptr, recv_data, "sl.recv"),
                         self.sso_string_len_from_slot(data_ptr, recv_len, "sl.recv"),
@@ -1706,7 +1715,7 @@ impl<'ctx> super::Codegen<'ctx> {
                     .into_int_value();
                 // SSO: the receiver is a String descriptor at `data_ptr`; an inline
                 // one keeps its bytes there and its length in `cap`'s high byte.
-                let (recv_data, recv_len) = if self.sso_on() {
+                let (recv_data, recv_len) = if sso_recv {
                     (
                         self.sso_string_data_ptr_from_slot(data_ptr, recv_data, "fd.recv"),
                         self.sso_string_len_from_slot(data_ptr, recv_len, "fd.recv"),
@@ -1847,7 +1856,7 @@ impl<'ctx> super::Codegen<'ctx> {
                     .into_int_value();
                 // SSO: the receiver is a String descriptor at `data_ptr`; an inline
                 // one keeps its bytes there and its length in `cap`'s high byte.
-                let (recv_data, recv_len) = if self.sso_on() {
+                let (recv_data, recv_len) = if sso_recv {
                     (
                         self.sso_string_data_ptr_from_slot(data_ptr, recv_data, "cc"),
                         self.sso_string_len_from_slot(data_ptr, recv_len, "cc"),
@@ -1899,7 +1908,7 @@ impl<'ctx> super::Codegen<'ctx> {
                     .into_int_value();
                 // SSO: the receiver is a String descriptor at `data_ptr`; an inline
                 // one keeps its bytes there and its length in `cap`'s high byte.
-                let (recv_data, recv_len) = if self.sso_on() {
+                let (recv_data, recv_len) = if sso_recv {
                     (
                         self.sso_string_data_ptr_from_slot(data_ptr, recv_data, "ca"),
                         self.sso_string_len_from_slot(data_ptr, recv_len, "ca"),
@@ -2008,7 +2017,7 @@ impl<'ctx> super::Codegen<'ctx> {
                     .into_int_value();
                 // SSO: the receiver is a String descriptor at `data_ptr`; an inline
                 // one keeps its bytes there and its length in `cap`'s high byte.
-                let (recv_data, recv_len) = if self.sso_on() {
+                let (recv_data, recv_len) = if sso_recv {
                     (
                         self.sso_string_data_ptr_from_slot(data_ptr, recv_data, "ss.recv"),
                         self.sso_string_len_from_slot(data_ptr, recv_len, "ss.recv"),
@@ -2824,7 +2833,7 @@ impl<'ctx> super::Codegen<'ctx> {
                     .into_int_value();
                 // SSO: the receiver is a String descriptor at `data_ptr`; an inline
                 // one keeps its bytes there and its length in `cap`'s high byte.
-                let (recv_data, recv_len) = if self.sso_on() {
+                let (recv_data, recv_len) = if sso_recv {
                     (
                         self.sso_string_data_ptr_from_slot(data_ptr, recv_data, "rep.recv"),
                         self.sso_string_len_from_slot(data_ptr, recv_len, "rep.recv"),
@@ -6588,7 +6597,7 @@ impl<'ctx> super::Codegen<'ctx> {
                 // (its bytes occupy 0..=6, the field spans 8..=15). Reading it
                 // raw makes `is_empty()` answer `true` for every short
                 // non-empty String — a wrong answer, not a crash.
-                let len = if self.sso_on() {
+                let len = if sso_recv {
                     self.sso_string_len_from_slot(data_ptr, len, "vec.is_empty")
                 } else {
                     len
@@ -6650,7 +6659,7 @@ impl<'ctx> super::Codegen<'ctx> {
                 // Same borrowed-view escape caveat as `String.slice` above: this
                 // `Slice[u8]` points into the receiver's descriptor when that
                 // descriptor is inline.
-                let (data, len) = if self.sso_on() {
+                let (data, len) = if sso_recv {
                     (
                         self.sso_string_data_ptr_from_slot(data_ptr, data, "bytes"),
                         self.sso_string_len_from_slot(data_ptr, len, "bytes"),
@@ -8779,7 +8788,7 @@ impl<'ctx> super::Codegen<'ctx> {
                     .into_int_value();
                 // SSO: the receiver is a String descriptor at `data_ptr`; an inline
                 // one keeps its bytes there and its length in `cap`'s high byte.
-                let (recv_data, recv_len) = if self.sso_on() {
+                let (recv_data, recv_len) = if sso_recv {
                     (
                         self.sso_string_data_ptr_from_slot(data_ptr, recv_data, "ct.recv"),
                         self.sso_string_len_from_slot(data_ptr, recv_len, "ct.recv"),

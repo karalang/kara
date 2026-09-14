@@ -1962,6 +1962,64 @@ identical code for these programs, so a 1-2 ms ordering between them is noise,
 not a defect. Reported here so nobody reads its 16/29 as a failure — a check
 outside the comparison it was built for should be retired, not quoted.
 
+### ITEM #4, SECOND HALF: Vec is off the READ path too (2026-09-14)
+
+The first half took `Vec` off the mutating-method chokepoint. The residual
+regressions pointed at the tag-aware READS, and `src/codegen/sso.rs` had named
+them as the outstanding Slice 3 refinement from the beginning. This closes that.
+
+**Attributed to the line before anything was changed**, which is the discipline
+this campaign keeps having to relearn. A `Vec[i64]` index+len loop with no
+Strings anywhere, dumped through `examples/dump_ir` at `KARAC_SSO=1`, emitted 6
+inline compares, 3 selects and 4 `byte_len` decodes. Four of the six were one
+call — `v.len()` in the loop condition:
+
+```llvm
+%sso.inline     = icmp slt i64 %vec.len.cap, 0
+%vec.len.ilen.sh = lshr i64 %vec.len.cap, 56
+%vec.len.ilen   = and  i64 %vec.len.ilen.sh, 127
+%vec.len.byte_len = select i1 %sso.inline, i64 %vec.len.ilen, i64 %vec.len15
+%lt16 = icmp slt i64 %j13, %vec.len.byte_len
+```
+
+`lshr`/`and`/`select` on the trip count of every iteration, for a flag a `Vec`
+can never set. The arm's own comment already said so: "This arm serves Vec too,
+where the flag is never set and the select is the identity — keeping Vec off the
+select is the Slice 3 refinement."
+
+**The change.** `compile_vec_method` already has `var_name` in scope, so the
+receiver-aware gate is computed once at the top and the **13 read sites** route
+through it — `len`, `is_empty`, `bytes`, and the ten `(recv_data, recv_len)`
+pairs. The mutation chokepoint folds into the same gate, so there is one
+spelling rather than two. The predicate is unchanged from the first half
+(`receiver_is_definitely_not_string`), and the reasoning for why THAT signal is
+safe where two earlier guards were not is documented at its definition.
+
+**One site deliberately left on the plain gate:** the `substring` inline
+CONSTRUCTION arm. A receiver positively identified as a non-String never reaches
+`substring`, so narrowing it buys nothing and widens the diff — and construction
+is a different risk class from a read.
+
+**Re-read the IR to confirm the instructions actually disappeared**, rather than
+inferring from a timing delta:
+
+| `Vec[i64]` loop, `KARAC_SSO=1` | inline compares | `byte_len` decodes |
+|---|---|---|
+| before | 6 | 4 |
+| after | **4** | **2** |
+
+and the loop condition is now a plain `load i64, ptr %vec.len.ptr`. The residual
+4/2 are the `println(f"{total}")` path — a genuine String, correctly tag-aware.
+
+**The risk delta is real and worth naming.** The first half touched one MUTATION
+site; this touches thirteen READS. A misclassified String on a read takes the
+raw `len`/`data` fields, and on an inline descriptor those are overlaid content
+bytes — a plausible-looking pointer and a garbage length, silently. That is why
+the gate bar did not move: all eight selfhost differentials green at
+`KARAC_SSO=1` (the item parser among them, which is what caught the last bad
+guard on this file), 110 binaries per leg, and both ASAN ratchet legs at 1618
+passed with the quarantine matched exactly.
+
 ## Verification matrix
 
 - **The whole `--features llvm` suite at `KARAC_SSO=0` AND `=1`** — the two-leg
