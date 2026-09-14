@@ -94,7 +94,7 @@ distinguish "bugs flattening" from "we stopped writing them down."
 |---|---|
 | miscompile | 406 |
 | run-vs-build | 404 |
-| leak | 341 |
+| leak | 342 |
 | double-free | 229 |
 | missing-feature | 198 |
 | codegen-gap | 177 |
@@ -110,7 +110,7 @@ distinguish "bugs flattening" from "we stopped writing them down."
 
 | surface | total |
 |---|---|
-| codegen | 1726 |
+| codegen | 1727 |
 | interp | 435 |
 | typecheck | 299 |
 | other | 90 |
@@ -169,7 +169,6 @@ _Generated from `bug-ledger.jsonl` by `scripts/bug-curve.py` (2026-05-20 → 202
 | B-2026-09-12-3 | 2026-09-12 | codegen | low | `mono_handle_param_infos` IS WRITTEN UNDER A NON-FINAL `mangled` AND READ UNDER THE FINAL ONE -- `compile_generic_call` rebinds `mangled` four times and stores the handle record after the first append, while `compile_mono_function` looks it up after the fourth, so the map is correct today only because the three later appends happen to be no-ops for a Column/Tensor argument | — |
 | B-2026-09-12-10 | 2026-09-12 | codegen | medium | THREE TUPLE-PAYLOAD ELEMENT SHAPES STILL LEAK INSIDE AN ENUM -- `(bool, String)` is declined on purpose by the word-alignment gate B-2026-09-12-8's fix relies on, while `(Rec, i64)` carrying a user `Drop` and `(Option[String], i64)` are declined for reasons not yet attributed; all three measured unchanged by that fix rather than worse | — |
 | B-2026-09-12-17 | 2026-09-12 | codegen+interp | medium | A GENERIC USER ENUM'S PAYLOAD `Drop` BODY RUNS ON NO COMPILED BACKEND WHEN THE ARGUMENT IS A FRESH TEMP -- `takeit(Full(R { id: 5 }))` over `enum Ho[T] { Full(T), Empty }` prints `f:5 dR5 end` under `--interp` and `f:5 end` at -O0, -O0 autopar and -O2 autopar, while the MONOMORPHIC `enum Ho { Full(R) }` spelling of the same program is correct on all four and a NAMED LOCAL of the generic enum is correct too. B-2026-09-09-18's caller-side bodies channel is gated on the parameter's head being literally `Option` or `Result` (`call_dispatch.rs`, `if head != "Option" && head != "Result"`), so a user enum head never reaches it; the named-local cells are correct because their let site owns the bodies instead. The qualified and bare spellings behave IDENTICALLY, which is what separates this from B-2026-09-12-11 | — |
-| B-2026-09-12-19 | 2026-09-12 | codegen | medium | A BOXED `Array[T, N]` ENUM PAYLOAD'S INTERIOR IS FREED BY NOBODY AT THREE OF THE FOUR REGISTRATION SITES -- 96 B per cell in the by-value-param and returned positions, because `array_interior_ok` can only be answered `true` by the `let` site and the real repair is the missing array move-out disarm | — |
 | B-2026-09-12-21 | 2026-09-12 | codegen+interp | low | AN `Array` ELEMENT'S USER `Drop` BODY RUNS ON NO BACKEND ONCE THE ARRAY IS MOVED INTO A STRUCT FIELD -- `Array[R, 2]` with `impl Drop for R` prints `dR dR` on all six surfaces as a bare local and NOTHING on all six once `let w = W { a: a }` takes it, with memory balanced 8/8 either way, so it is a lost BODY rather than a lost buffer and no leak gate or A/B gate can see it | — |
 | B-2026-09-12-29 | 2026-09-12 | codegen | medium | The stack-boxed enum payload covers Map.get only; Vec.pop / Vec.first / a -> Option[Wide] return still heap-box per iteration | B-2026-09-12-28 |
 | B-2026-09-13-2 | 2026-09-13 | codegen | medium | THE `Option[Array[T, N]]` A `Map` HANDS BACK IS OWNED BY NOBODY -- `insert`'s displaced old value leaks 336 B in 14 blocks and `remove`'s return 192 B in 4 + 192 indirect, while the `Vec[String]` and `String` twins at both call sites are clean; the 48 B direct blocks are the boxed payload and the indirect ones the `String`s inside it | — |
@@ -194,6 +193,7 @@ _Generated from `bug-ledger.jsonl` by `scripts/bug-curve.py` (2026-05-20 → 202
 | B-2026-09-14-6 | 2026-09-14 | codegen+interp | medium | AN `Option` PAYLOAD SUB-VALUE MOVED OUT RUNS ITS `Drop` BODY TWICE ON ALL THREE BACKENDS in two spellings -- a NAMED-LOCAL argument, and a payload whose field is heap-carrying -- so the A/B parity rule sees nothing and the duplicate is invisible to every gate | — |
 | B-2026-09-14-7 | 2026-09-14 | codegen+interp | low | AN `Option`-PAYLOAD ELEMENT MOVED OUT AND NOT RETURNED DIES AT OPPOSITE ENDS OF THE ARM -- `Some(t) => { let x = t.0; println("mid"); }` prints `mid dR5` under `--interp` against the compiled backends' `dR5 mid`, so the COUNT agrees and only the sequence differs | — |
 | B-2026-09-14-8 | 2026-09-14 | interp | low | THE INTERPRETER LOSES THE DIES-INSIDE `Drop` BODY FOR AN ASSOCIATED FN BUT NOT FOR THE METHOD SPELLING OF THE SAME CALLEE -- `Sk.pick(R { id: 1 }, false)` prints `k:91 dR91` under `--interp` against all three compiled surfaces' correct `dR1 k:91 dR91`, while adding a `mut ref self` receiver to the identical body makes the interpreter correct too | — |
+| B-2026-09-14-9 | 2026-09-14 | codegen | medium | A BARE DISCARDED CALL RETURNING A CONCRETE USER ENUM WITH A BOXED `Array` PAYLOAD LOSES ITS BOX AND INTERIOR -- `mk(i);` over `fn mk(..) -> E` with `enum E { A(Array[String, 2]), B }` leaks 192 B in 4 blocks plus 136 B indirect in 8, while the `let`-bound spelling of the same call is now clean and the `Option` analogue was fixed by B-2026-09-13-19 | — |
 
 ### Relocated
 
@@ -2527,6 +2527,7 @@ _Generated from `bug-ledger.jsonl` by `scripts/bug-curve.py` (2026-05-20 → 202
 | B-2026-09-12-15 | codegen | medium | A BY-VALUE `Option`/`Result` ARGUMENT'S PAYLOAD `Drop` BODY RUNS ON NO COMPILED BACKEND AT THREE CALL POSITIONS -- a METHOD call (`s.take(Some(R { id… | 72bfbc5f3 |
 | B-2026-09-12-16 | typecheck | low | THE BLESSED EXPLICIT SPELLING IS REJECTED FOR A USER ENUM'S VARIANT CONSTRUCTOR -- `Ho[R].Full(R { id: 5 })` over `enum Ho[T] { Full(T), Empty }` fai… | 0292739 |
 | B-2026-09-12-18 | codegen | high | A GENERIC ENUM'S BOXED `Array[T, N]` PAYLOAD DOUBLE-FREES ITS ELEMENTS WHEN THE PAYLOAD IS MOVED FROM A LOCAL -- SIGABRT for `String`, struct, `Drop`… | de0ad99 |
+| B-2026-09-12-19 | codegen | medium | A BOXED `Array[T, N]` ENUM PAYLOAD'S INTERIOR IS FREED BY NOBODY AT THREE OF THE FOUR REGISTRATION SITES -- 96 B per cell in the by-value-param and r… | b98707e |
 | B-2026-09-12-20 | runtime | medium | SSO's INLINE STRING OVERLAY IS UNUSABLE ON EVERY 32-BIT TARGET -- the 24-byte overlay presupposes a descriptor with no padding, and `{ptr, i64, i64}`… | bab0491 |
 | B-2026-09-12-22 | codegen | high | A `ref`-ENUM MATCH BINDING OF AN `Array[T, N]` PAYLOAD IS NOT THE PAYLOAD -- reading through it yields UNINITIALISED memory on all five COMPILED surf… | 25f56cb |
 | B-2026-09-12-23 | codegen | medium | INDEXING A `ref`-ENUM MATCH BINDING OF AN `Array[T, N]` PAYLOAD DOES NOT LOWER -- `match b { Packed(a) => a[1].name.len(), . | 25f56cb |
