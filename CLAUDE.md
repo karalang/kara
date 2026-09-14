@@ -110,6 +110,8 @@ bash scripts/asan-o0-leg.sh          # whole suite at -O0, ratcheted against the
 bash scripts/asan-instrumented-leg.sh
 ```
 
+**Both legs now REQUIRE the runtime archives, and that is load-bearing rather than tidy** (B-2026-09-13-8). `asan-o0-leg.sh` sets `KARAC_REQUIRE_RUNTIME_ARCHIVE=1` itself (pass `KARAC_REQUIRE_RUNTIME_ARCHIVE=0` to opt out), and the instrumented leg inherits it by exec. Without it the authoritative pre-push gate could not tell "skipped" from "passed": on a tree with no archives every fixture soft-skips through `link_or_skip`, and the leg printed `test result: ok. 1613 passed` in 60 s and exited 0 — measured 2026-09-14 with the archives moved aside. The old safety net was the ratchet's other arm ("a quarantined fixture started passing"), and **it has decayed to nothing**: both quarantine lists are fully drained (0 live entries), so an empty `got` against an empty `expected` matches exactly. That decay is silent and gets worse as the lists shrink, which is the opposite of what a ratchet should do. The 5 fixtures that need an OPT-IN archive (4 regex, 1 arrow) are subtracted and reported as SKIPPED rather than failed, so the flag does not fail the leg on an ordinary checkout — that carve-out is why the flag could not simply be exported by the caller.
+
 The `-O0` leg is where a leak-class cell is actually measured — at `-O2` LLVM deletes allocations nothing observes, so an `-O2`-only zero is evidence of nothing. **But note the converse failure mode, which is not about coverage at all** (B-2026-09-10-12): that leak WAS measured at `-O0` by its author's own valgrind sweep, printed as `definitely lost: 48 bytes in 1 blocks`, and missed because a 15-cell instrumented log was summarized with `grep`/`tail` rather than a per-cell verdict. When a probe sweep covers many cells, have it print one unambiguous PASS/FAIL line per cell — a filtered view of a long log can crop the one block that mattered.
 
 **Embedded-component wasm tests additionally need `wasm-tools`** (`cargo install wasm-tools` or `brew install wasm-tools`): `--bindings component` — the `wasm_wasi` default — shells out to it for componentization (phase-10 embedded-WIT migration; design.md § Component Model emission). Without it, the embedded-component E2E tests in `tests/cli.rs` skip with a stderr notice (same vacuous-pass caveat as the archives). The wasi preview1 adapter is vendored in karac itself (`wasi-preview1-component-adapter-provider` crate) — no extra setup.
@@ -227,6 +229,17 @@ Several agent sessions work this repo in parallel, and the open rows of `docs/bu
 2. **Read the board.** `list_sessions({mine: true, limit: 30})` on the `claude-code-remote` MCP server (load the schema via ToolSearch if it isn't in context). Each row carries `tags`, `title`, `session_status`, `updated_at`, and `post_turn_summary`; collect the `kara-bug:<ID>` tags. A tag on a `RUNNING` session — or on an `IDLE` one whose `updated_at` is recent — is a **live claim: pick a different row**. A tag on an `ARCHIVED` session, or one stale by a day or more, is a dead claim and the row is free.
 3. **Stake it.** `get_session()` with no arguments returns your own session id; then `set_session_tags({session_ids: ["<own id>"], add: ["kara-bug:B-2026-08-17-29"]})`. Mirror the id into the title as well (`set_session_title`, e.g. `"bugs group D · B-2026-08-17-29"`) so the claim is legible in the web session list without anyone reading tags.
 4. **Re-read once.** List again after tagging. If another session tagged the same id inside that window, **the session with the older `created_at` keeps it**; the younger removes its tag and picks another row. Deterministic, no negotiation, no message round-trip.
+4½. **Re-read the board at the pre-push fetch, not only at pick time.** Step 2
+   is read ONCE, when you pick, so two sessions whose pick times straddle a
+   claim cannot see each other — the session that picked FIRST holds no tag and
+   is invisible to the one that claims SECOND, and the `created_at` tiebreak in
+   step 4 resolves simultaneous *tags*, not an untagged session. That is not
+   hypothetical: B-2026-09-13-8 records two sessions independently fixing
+   B-2026-09-12-25, the second landing during the first's gate cycle. So list
+   the board again at the `git fetch` every push already performs, and treat
+   another session's tag on the row you are about to close as
+   stop-and-coordinate rather than a race to push. One tool call, at the one
+   moment both sessions are guaranteed to look.
 5. **Release on close.** Drop the tag (`set_session_tags({remove: [...]})`) once the closing commit lands. That commit's `status: "fixed"` is the real release — the tag is only the in-flight signal, so a session that dies mid-fix leaks nothing.
 
 **Re-read the row itself before closing it — a claim does not freeze it.** The

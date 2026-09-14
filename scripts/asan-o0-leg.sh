@@ -48,8 +48,26 @@ trap 'rm -f "$LOG"' EXIT
 UPDATE=0
 [[ "${1:-}" == "--update" ]] && UPDATE=1
 
+# B-2026-09-13-8 — REQUIRE THE ARCHIVES BY DEFAULT. Without this the leg is a
+# gate that cannot tell "skipped" from "passed": on a tree with no runtime
+# archives every fixture soft-skips through `link_or_skip` and the suite prints
+# `test result: ok` in a third of a second, having linked nothing. Measured
+# 2026-09-14 — two fixtures "passed" in 0.30 s with the archives moved aside,
+# and failed in 0.52 s with the flag set. That vacuity is how `6ea22e3b4` landed
+# four red fixtures on `main` behind a green run.
+#
+# The whole-suite case is caught today by the ratchet's other arm (all 309
+# quarantined fixtures "start passing"), but it is caught with the WRONG
+# message — "remove them from the list, it only shrinks" — which prescribes
+# deleting the quarantine list. Naming the real cause is the point.
+#
+# Honour an explicit setting so a caller who genuinely wants the soft-skip can
+# say so; `0` restores the old behaviour.
+REQUIRE_ARCHIVE="${KARAC_REQUIRE_RUNTIME_ARCHIVE:-1}"
+
 echo ">> [$LEG] KARAC_OPT_LEVEL=$OPT_LEVEL cargo test --features llvm --test memory_sanitizer (--test-threads=$THREADS)"
-KARAC_OPT_LEVEL="$OPT_LEVEL" cargo test --features llvm --test memory_sanitizer \
+KARAC_OPT_LEVEL="$OPT_LEVEL" KARAC_REQUIRE_RUNTIME_ARCHIVE="$REQUIRE_ARCHIVE" \
+  cargo test --features llvm --test memory_sanitizer \
   -- --test-threads="$THREADS" >"$LOG" 2>&1
 echo ">> suite exited $?"
 
@@ -70,8 +88,34 @@ fi
 RESULT_LINE="$(grep -E '^test result:' "$LOG" | tail -1)"
 echo ">> $RESULT_LINE"
 
-got="$(grep -oE '^test [A-Za-z0-9_:]+ \.\.\. FAILED' "$LOG" |
+all_failed="$(grep -oE '^test [A-Za-z0-9_:]+ \.\.\. FAILED' "$LOG" |
   sed -E 's/^test (.*) \.\.\. FAILED$/\1/' | sort -u)"
+
+# B-2026-09-13-8 — SUBTRACT the fixtures that failed only because an OPT-IN
+# archive is absent. Requiring the archives (above) turns those from a skip into
+# a failure, and CLAUDE.md § Commands tells everyone to SKIP building the
+# regex / arrow / gpu / unicode archives unless doing that kind of work — so an
+# unconditional flag would fail this leg on every ordinary checkout. Measured:
+# 5 of the 1613 fixtures need one (4 regex, 1 arrow), and with them subtracted
+# the leg matches the quarantine list exactly.
+#
+# Keyed on the OPT-IN archive filenames rather than on "a link failure", because
+# a MISSING REQUIRED archive must stay a hard failure — that is the vacuity this
+# whole change is about. Its panic names no opt-in archive, so it does not match.
+optin_skipped="$(awk '
+  /^---- .* stdout ----$/ { t = $2; next }
+  t != "" && /libkarac_runtime_(regex|arrow|gpu|unicode)\.a/ { print t; t = "" }
+' "$LOG" | sort -u)"
+
+got="$(comm -23 <(echo "$all_failed" | sed '/^$/d') <(echo "$optin_skipped" | sed '/^$/d'))"
+
+if [[ -n "$optin_skipped" ]]; then
+  echo
+  echo ">> SKIPPED — opt-in runtime archive absent (NOT counted as pass or fail):"
+  echo "$optin_skipped" | sed 's/^/     /'
+  echo "   Build the archive named in the failure to cover these; CLAUDE.md"
+  echo "   § Commands deliberately leaves them unbuilt on an ordinary checkout."
+fi
 
 if [[ "$UPDATE" == "1" ]]; then
   echo "$got" | sed '/^$/d' >"$EXPECTED.new"

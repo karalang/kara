@@ -114,9 +114,19 @@ export KARAC_SANITIZE_ADDRESS=1
 # exactly what this configuration has. It is disabled here rather than in
 # `apply_address_sanitizer` for that reason — a leg that knowingly mixes karac's
 # pass with the host's runtime opts out for itself, and an ordinary
-# `KARAC_SANITIZE_ADDRESS=1` build still gets the check. The ratchet is what
-# keeps this honest: it fails if a QUARANTINED fixture starts passing, so a
-# run that instrumented nothing cannot report green.
+# `KARAC_SANITIZE_ADDRESS=1` build still gets the check. What keeps this honest
+# is that a run which instrumented nothing cannot report green.
+#
+# B-2026-09-13-8 — THAT USED TO REST ON THE RATCHET and no longer can. The
+# argument was "it fails if a QUARANTINED fixture starts passing", which holds
+# only while the quarantine list has entries: both lists are now fully drained
+# (0 live entries, 2026-09-14), so an empty `got` against an empty `expected`
+# matches exactly and the leg exits 0. Measured on a tree with the runtime
+# archives moved aside: `test result: ok. 1613 passed` in 60 s, "matches the
+# quarantine list exactly", rc 0 — a vacuous green from the authoritative
+# pre-push gate, which is the shape that let `6ea22e3b4` land four red fixtures
+# on `main`. The property is now carried by `asan-o0-leg.sh` requiring the
+# runtime archives instead, which does not decay as the lists shrink.
 #
 # Appended rather than assigned, so a caller's own -mllvm flags survive.
 export KARAC_LLVM_ARGS="${KARAC_LLVM_ARGS:+$KARAC_LLVM_ARGS }-asan-guard-against-version-mismatch=0"
