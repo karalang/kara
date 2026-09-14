@@ -89146,6 +89146,151 @@ fn main() {
         );
     }
 
+    /// B-2026-09-14-13 — a fresh-temp `Option`/`Result` scrutinee whose payload
+    /// is a BOXED `Array` lost it, in two different ways depending on the arm,
+    /// and the two have different causes.
+    ///
+    /// UNDER A BOUND ARM the box was freed and its element buffers were not
+    /// (102 B in 6 over three rounds): the payload-kind dispatch in
+    /// `track_freshtemp_boxed_enum_scrutinee` has arms for a tuple binding, a
+    /// struct binding, a wildcard resolving to a struct NAME, and a struct
+    /// destructure — and an `Array[T, N]` has no struct name, so it fell to
+    /// `_ => None` and the free went box-only. That is the "box reclaimed,
+    /// contents not" signature B-2026-09-13-2 records for every route it fixed.
+    ///
+    /// UNDER A WILDCARD ARM nothing was registered at all and the box leaked
+    /// too (144 B in 3, plus its interior indirectly). The width gate sizes a
+    /// wildcard payload from a struct-name lookup, which an array declines, so
+    /// `payload_words` fell to its 1-word default, `payload_words <= area`
+    /// held, and the arm was `continue`d before any registration. Sizing from
+    /// the payload TYPE — one step earlier than the name the resolver throws
+    /// away — is what lets that arm through.
+    ///
+    /// THE INTERIOR WALK NEEDS A CONSUMPTION GATE, which is the part that had
+    /// to be measured rather than reasoned. A wildcard binds nothing, so the
+    /// walk is unconditionally the sole owner. A BINDING is only safe when the
+    /// arm merely borrows it: `Some(a) => take(a)` and `Some(a) => v.push(a)`
+    /// hand the array to a destination that frees it, and both aborted 134 with
+    /// two invalid frees when the walk registered unconditionally. The `push`
+    /// cell is the sharper one — B-2026-09-10-36 had just given
+    /// `Vec[Array[..]]` its own element walk, so that destination acquired an
+    /// owner the same day this registration did.
+    ///
+    /// AND THE BORROW TEST ALONE IS NOT ENOUGH: `consume_class` scores a
+    /// FREE-FN ARGUMENT as non-consuming (B-2026-07-23-4 records the quirk), so
+    /// `take(a)` still double-freed until the gate also asked
+    /// `bindings_passed_whole_to_free_fn_arg`. `v.push(a)` was declined by the
+    /// borrow test; `take(a)` needed the second check. Both are in the fixture.
+    ///
+    /// CELLS. `read`/`wild` are the row's two failing arms; `moved-to-callee`
+    /// and `pushed` are the two consuming shapes that must NOT double-free;
+    /// `held` is the `let`-bound spelling that was always clean; `borrow` is a
+    /// `Map.get` whose box interior aliases the container's storage and is
+    /// excluded for that reason. `wide`/`wide-wild` (a user struct) and
+    /// `scalar` (an `Array[i64, 6]` with nothing to free) must stay exactly as
+    /// they were.
+    ///
+    /// TWO CELLS BEYOND THE ROW, both leaking before and clean after:
+    /// `vecarr`, an `Array[Vec[String], 2]` payload (576 B in 12 over three
+    /// rounds — the largest single cell in the sweep), and `err`, the `Result`
+    /// Err side, which the row only measured on `Option`.
+    ///
+    /// Measured at `-O0`: 656 B in 14 blocks before, clean after, with output
+    /// matching `--interp` throughout.
+    ///
+    /// NOT COVERED, and this row's own NOT-MEASURED list: the `if let` /
+    /// `while let` / `let else` siblings. Those three callers supply no arm
+    /// bodies, so the gate cannot classify a binding there and DECLINES it
+    /// rather than guessing — a wildcard payload still registers, a bound one
+    /// keeps the box-only free it had.
+    #[test]
+    fn asan_boxed_array_scrutinee_payload_has_exactly_one_owner() {
+        assert_clean_asan_run(
+            r#"
+struct Wide { a: String, b: String, c: String, d: i64 }
+
+fn mkarr(j: i64) -> Option[Array[String, 2]] {
+    if j >= 0 { return Option.Some(Array[f"arr-aaaaaaaaaaaaaaaa-{j}", f"arr-bbbbbbbbbbbbbbbb-{j}"]); }
+    return Option.None;
+}
+fn mkvecarr(j: i64) -> Option[Array[Vec[String], 2]] {
+    let mut p: Vec[String] = Vec.new();
+    p.push(f"vec-cccccccccccccccc-{j}");
+    let mut q: Vec[String] = Vec.new();
+    q.push(f"vec-dddddddddddddddd-{j}");
+    if j >= 0 { return Option.Some(Array[p, q]); }
+    return Option.None;
+}
+fn mkerr(j: i64) -> Result[i64, Array[String, 2]] {
+    if j < 0 { return Result.Ok(1); }
+    return Result.Err(Array[f"err-eeeeeeeeeeeeeeee-{j}", f"err-ffffffffffffffff-{j}"]);
+}
+fn mkwide(j: i64) -> Option[Wide] {
+    if j >= 0 { return Option.Some(Wide { a: f"wid-gggggggggggggggg-{j}", b: f"wid-hhhhhhhhhhhhhhhh-{j}", c: f"wid-iiiiiiiiiiiiiiii-{j}", d: j }); }
+    return Option.None;
+}
+fn mkscalar(j: i64) -> Option[Array[i64, 6]] {
+    if j >= 0 { return Option.Some(Array[j, j+1, j+2, j+3, j+4, j+5]); }
+    return Option.None;
+}
+fn take(a: Array[String, 2]) -> i64 { println(f"moved-to-callee:{a[0]}"); return 1; }
+
+fn main() {
+    let mut j: i64 = 0;
+    while j < 2 {
+        match mkarr(j) { Option.Some(a) => { println(f"read:{a[0]}"); } Option.None => {} }
+        match mkarr(j) { Option.Some(_) => { println("wild"); } Option.None => {} }
+        match mkarr(j) { Option.Some(a) => { let _ = take(a); } Option.None => {} }
+        match mkvecarr(j) { Option.Some(a) => { println(f"vecarr:{a[0][0]}"); } Option.None => {} }
+        match mkerr(j) { Result.Ok(v) => { println(f"ok:{v}"); } Result.Err(e) => { println(f"err:{e[0]}"); } }
+        match mkwide(j) { Option.Some(w) => { println(f"wide:{w.a}"); } Option.None => {} }
+        match mkwide(j) { Option.Some(_) => { println("wide-wild"); } Option.None => {} }
+        match mkscalar(j) { Option.Some(s) => { println(f"scalar:{s[0]}"); } Option.None => {} }
+        let held = mkarr(j);
+        match held { Option.Some(a) => { println(f"held:{a[0]}"); } Option.None => {} }
+        j = j + 1;
+    }
+
+    let mut v: Vec[Array[String, 2]] = Vec.new();
+    match mkarr(0) { Option.Some(a) => { v.push(a); } Option.None => {} }
+    println(f"pushed:{v[0][0]}");
+
+    let mut m: Map[i64, Array[String, 2]] = Map.new();
+    m.insert(5, Array[f"map-jjjjjjjjjjjjjjjj-0", f"map-kkkkkkkkkkkkkkkk-1"]);
+    match m.get(5) { Option.Some(a) => { println(f"borrow:{a[0]}"); } Option.None => {} }
+    println(f"maplen:{m.len()}");
+
+    println("end");
+}
+"#,
+            &[
+                "read:arr-aaaaaaaaaaaaaaaa-0",
+                "wild",
+                "moved-to-callee:arr-aaaaaaaaaaaaaaaa-0",
+                "vecarr:vec-cccccccccccccccc-0",
+                "err:err-eeeeeeeeeeeeeeee-0",
+                "wide:wid-gggggggggggggggg-0",
+                "wide-wild",
+                "scalar:0",
+                "held:arr-aaaaaaaaaaaaaaaa-0",
+                "read:arr-aaaaaaaaaaaaaaaa-1",
+                "wild",
+                "moved-to-callee:arr-aaaaaaaaaaaaaaaa-1",
+                "vecarr:vec-cccccccccccccccc-1",
+                "err:err-eeeeeeeeeeeeeeee-1",
+                "wide:wid-gggggggggggggggg-1",
+                "wide-wild",
+                "scalar:1",
+                "held:arr-aaaaaaaaaaaaaaaa-1",
+                "pushed:arr-aaaaaaaaaaaaaaaa-0",
+                "borrow:map-jjjjjjjjjjjjjjjj-0",
+                "maplen:1",
+                "end",
+            ],
+            "asan_boxed_array_scrutinee_payload_has_exactly_one_owner",
+        );
+    }
+
     /// B-2026-09-13-19 — a BARE DISCARDED call statement lost a wide `Option`
     /// payload and its box.
     ///

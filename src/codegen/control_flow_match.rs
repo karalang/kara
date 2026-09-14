@@ -280,7 +280,10 @@ impl<'ctx> super::Codegen<'ctx> {
         // scrutinee` returns None for them; the gate makes that explicit.
         let freshtemp_boxed_slot = if scrut_ref_ptr.is_none() && freshtemp_enum.is_none() {
             let pats: Vec<&Pattern> = arms.iter().map(|a| &a.pattern).collect();
-            self.track_freshtemp_boxed_enum_scrutinee(scrutinee, &pats, scrut)
+            {
+                let bodies: Vec<&Expr> = arms.iter().map(|a| &a.body).collect();
+                self.track_freshtemp_boxed_enum_scrutinee(scrutinee, &pats, scrut, &bodies)
+            }
         } else {
             None
         };
@@ -15686,6 +15689,12 @@ impl<'ctx> super::Codegen<'ctx> {
         scrutinee: &Expr,
         patterns: &[&Pattern],
         val: BasicValueEnum<'ctx>,
+        // Arm bodies parallel to `patterns`, or EMPTY when the caller cannot
+        // supply them. Only B-2026-09-14-13's array-interior arm reads this,
+        // and it treats empty as "unknown" and declines a BOUND payload rather
+        // than guessing — see that arm for why a moved binding is a double
+        // free.
+        arm_bodies: &[&Expr],
     ) -> Option<PointerValue<'ctx>> {
         // B-2026-09-12-28 — the box this would free lives on the stack, so
         // there is nothing to free and `free()` on an alloca would abort
@@ -15702,7 +15711,7 @@ impl<'ctx> super::Codegen<'ctx> {
         let BasicValueEnum::StructValue(sv) = val else {
             return None;
         };
-        for pat in patterns {
+        for (arm_idx, pat) in patterns.iter().enumerate() {
             let PatternKind::TupleVariant {
                 path,
                 patterns: subs,
@@ -15736,6 +15745,24 @@ impl<'ctx> super::Codegen<'ctx> {
                     .optres_scrutinee_payload_struct_name_for(scrutinee, &variant)
                     .and_then(|n| self.type_decls.struct_types.get(n.as_str()).copied())
                     .map(|st| Self::llvm_type_word_count(st.into()))
+                    // B-2026-09-14-13 — a payload with no STRUCT NAME could not
+                    // be sized at all and fell to the 1-word default, which the
+                    // `<= area` gate below then rejects: the arm was `continue`d
+                    // and NOTHING was registered, so a wildcard arm over
+                    // `Option[Array[String, 2]]` leaked the box itself (144 B in
+                    // 3 over three rounds) on top of its interior. The bound arm
+                    // sized fine through `pattern_payload_word_count` and so got
+                    // as far as a box-only free, which is why the two arms of
+                    // the same program failed by different amounts.
+                    //
+                    // Size from the payload TYPE instead when the name lookup
+                    // declines. Same source, one step earlier — the name
+                    // resolver reads this very type and then throws all but its
+                    // first path segment away.
+                    .or_else(|| {
+                        self.optres_scrutinee_payload_te_for(scrutinee, &variant)
+                            .map(|te| Self::llvm_type_word_count(self.llvm_type_for_type_expr(&te)))
+                    })
                     .unwrap_or(1),
                 _ => self.pattern_payload_word_count(payload),
             };
@@ -15846,6 +15873,74 @@ impl<'ctx> super::Codegen<'ctx> {
                                     return Some(alloca);
                                 }
                             }
+                        }
+                    }
+                }
+            }
+            // B-2026-09-14-13 — the ARRAY payload, which the name-keyed
+            // dispatch below cannot answer for: an `Array[T, N]` has no struct
+            // name, so both the `Binding` and `Wildcard` arms resolve `None`
+            // and the free goes box-ONLY, stranding every element buffer
+            // (102 B in 6 over three rounds of `Option[Array[String, 2]]`).
+            // The box itself was freed correctly under a bound arm, which is
+            // the "box reclaimed, contents not" signature B-2026-09-13-2
+            // records for every route it fixed.
+            //
+            // Placed BEFORE the name dispatch, like the tuple arm above and for
+            // the same reason: both are payload shapes with no type name, so
+            // they need the `TypeExpr`-driven drop rather than a struct lookup.
+            //
+            // `array_interior_ok: true` is sound HERE specifically because the
+            // scrutinee is a FRESH TEMP: there is no named source still owning
+            // the interior, which is the one thing that gate exists to rule out
+            // (B-2026-09-12-18's table is what getting it wrong costs — a
+            // double free for `String`, struct and `Drop`-bearing elements and
+            // a SEGFAULT for `Vec[String]`). Borrow scrutinees are excluded
+            // above for the separate reason that their box interior aliases the
+            // container's storage.
+            //
+            // WHY NO PAIRED DISARM, unlike B-2026-09-13-18's inline half: there
+            // is nothing to disarm. The arm's array binding registers no owner
+            // of its own — that is precisely why the interior was leaking — so
+            // this walk becomes the single owner rather than a second one.
+            // Measured on a consuming arm that MOVES the array into an owning
+            // callee, which is the shape that would collide if the binding did
+            // own it.
+            // A WILDCARD binds nothing, so nothing downstream can take the
+            // interior and the walk is unconditionally the sole owner. A
+            // BINDING is only safe when the arm merely BORROWS it: a consuming
+            // arm hands the array to a destination that frees it, and the walk
+            // would then be a second owner. Measured exactly that way before
+            // this gate existed -- `Some(a) => take(a)` into an owning param
+            // and `Some(a) => v.push(a)` into a `Vec` both aborted 134 with two
+            // invalid frees, while every non-moving cell stayed clean. The
+            // `push` one is the sharper lesson: B-2026-09-10-36 had just given
+            // `Vec[Array[..]]` its own element walk, so that destination
+            // acquired an owner the same day this registration did.
+            //
+            // With no bodies supplied (the if-let / while-let / let-else
+            // callers) a binding is declined rather than guessed at; those three
+            // spellings are this row's own NOT-MEASURED list.
+            let array_arm_owns_interior = match &payload.kind {
+                PatternKind::Wildcard => true,
+                PatternKind::Binding(_) => arm_bodies
+                    .get(arm_idx)
+                    .is_some_and(|body| self.arm_payload_binding_only_borrowed(pat, body)),
+                _ => false,
+            };
+            if !scrutinee_is_borrow && array_arm_owns_interior {
+                if let Some(pte) = self.optres_scrutinee_payload_te_for(scrutinee, &variant) {
+                    if self.array_elem_and_len(&pte).is_some() {
+                        if let Some(inner_drop) = self.enum_boxed_payload_interior_drop(&pte, true)
+                        {
+                            self.track_boxed_enum_var_with_inner_drop(
+                                &enum_name,
+                                alloca,
+                                &enum_name,
+                                &variant,
+                                Some(inner_drop),
+                            );
+                            return Some(alloca);
                         }
                     }
                 }
@@ -16387,6 +16482,46 @@ impl<'ctx> super::Codegen<'ctx> {
     /// (and guard). Combined with the struct-wrapper check, a borrow-only
     /// struct-wrapper arm skips the source-payload suppression so the source
     /// frees the read-only payload at arm-end (B-2026-07-12-2 gap 2).
+    /// Do ALL bindings in this arm's variant payload merely BORROW it —
+    /// never move it onward? B-2026-09-14-13.
+    ///
+    /// The same `consume_class` question
+    /// [`Self::arm_only_borrows_inline_result_payload`] asks, minus that one's
+    /// guard handling and `Result`-specific framing, so the boxed-array
+    /// interior walk can tell a reading arm (`Some(a) => println(a[0])`, where
+    /// nothing else will ever free the elements) from a consuming one
+    /// (`Some(a) => take(a)` / `v.push(a)`, where the destination frees them).
+    /// `false` for a payload that binds nothing, which callers answer
+    /// separately — a wildcard cannot move anything and is always safe.
+    pub(super) fn arm_payload_binding_only_borrowed(&self, pattern: &Pattern, body: &Expr) -> bool {
+        let PatternKind::TupleVariant { patterns, .. } = &pattern.kind else {
+            return false;
+        };
+        let mut binds: Vec<String> = Vec::new();
+        for pat in patterns {
+            collect_pattern_bindings(pat, &mut binds);
+        }
+        if binds.is_empty() {
+            return false;
+        }
+        // `consume_class` scores a FREE-FN ARGUMENT as non-consuming, so
+        // `binding_only_borrowed` alone is spuriously true for
+        // `Some(a) => take(a)` where `take` owns its param and frees it.
+        // B-2026-07-23-4 records that quirk and the wrapper family compensates
+        // with the same `bindings_passed_whole_to_free_fn_arg` check; this is
+        // that compensation for an array binding, which the wrapper predicate
+        // cannot serve because it gates on `struct_types` membership.
+        //
+        // Measured: with only the borrow test, `v.push(a)` was correctly
+        // declined but `take(a)` still aborted 134 with two invalid frees.
+        if !super::consume_class::bindings_passed_whole_to_free_fn_arg(&binds, body).is_empty() {
+            return false;
+        }
+        binds
+            .iter()
+            .all(|v| super::consume_class::binding_only_borrowed(v, body))
+    }
+
     pub(super) fn arm_only_borrows_inline_result_payload(
         &self,
         pattern: &Pattern,

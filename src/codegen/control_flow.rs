@@ -178,7 +178,7 @@ impl<'ctx> super::Codegen<'ctx> {
         // owns its inner heap). Registers in the enclosing frame, so the box
         // frees on both the match and miss edges.
         let freshtemp_boxed_slot = if freshtemp_enum.is_none() {
-            self.track_freshtemp_boxed_enum_scrutinee(value, &[pattern], val)
+            self.track_freshtemp_boxed_enum_scrutinee(value, &[pattern], val, &[])
         } else {
             None
         };
@@ -1011,7 +1011,7 @@ impl<'ctx> super::Codegen<'ctx> {
         // box), so no miss-edge box free is needed; a `Result`-terminating
         // boxed `Err` miss is deferred (spike §1, rare shape).
         let freshtemp_boxed_slot = if freshtemp_enum.is_none() {
-            self.track_freshtemp_boxed_enum_scrutinee(value, &[pattern], val)
+            self.track_freshtemp_boxed_enum_scrutinee(value, &[pattern], val, &[])
         } else {
             None
         };
@@ -1465,6 +1465,37 @@ impl<'ctx> super::Codegen<'ctx> {
     /// Takes the FIRST generic arg for `Option` and, for `Result`, whichever
     /// of `Ok`/`Err` the variant names — the caller passes the variant it is
     /// registering the box drop for, so the two cannot be crossed.
+    /// The payload `TypeExpr` of a match/if-let scrutinee's instantiated
+    /// `Option[T]` / `Result[O, E]`, for the variant being matched.
+    ///
+    /// The `TypeExpr` sibling of
+    /// [`Self::optres_scrutinee_payload_struct_name_for`], which takes the
+    /// payload's first path SEGMENT and so can only answer for a payload that
+    /// is a named struct. B-2026-09-14-13 needs the type itself: an
+    /// `Array[T, N]` payload has no struct name, which is exactly why the
+    /// name-based resolver returns `None` for it and the width gate that
+    /// consults it then sizes a wildcard arm at its 1-word default.
+    pub(super) fn optres_scrutinee_payload_te_for(
+        &self,
+        scrutinee: &Expr,
+        variant: &str,
+    ) -> Option<crate::ast::TypeExpr> {
+        use crate::ast::{GenericArg, TypeKind};
+        let te = self.optres_scrutinee_type_expr(scrutinee)?;
+        let TypeKind::Path(p) = &te.kind else {
+            return None;
+        };
+        let args = p.generic_args.as_ref()?;
+        let idx = match variant {
+            "Err" => 1usize,
+            _ => 0usize,
+        };
+        let GenericArg::Type(pt) = args.get(idx)? else {
+            return None;
+        };
+        Some(pt.clone())
+    }
+
     pub(super) fn optres_scrutinee_payload_struct_name_for(
         &self,
         scrutinee: &Expr,
@@ -1860,7 +1891,7 @@ impl<'ctx> super::Codegen<'ctx> {
         // so it frees after the escaped bindings on the match edge and via the
         // divergent else edge's cleanup walk on the miss edge.
         let freshtemp_boxed_slot = if freshtemp_enum.is_none() {
-            self.track_freshtemp_boxed_enum_scrutinee(value, &[pattern], val)
+            self.track_freshtemp_boxed_enum_scrutinee(value, &[pattern], val, &[])
         } else {
             None
         };
