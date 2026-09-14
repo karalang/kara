@@ -7727,6 +7727,88 @@ impl<'ctx> super::Codegen<'ctx> {
                         self.emit_enum_payload_user_drop_bodies_fn_skipping(&enum_name, skip)
                     }
                 }
+                // B-2026-09-12-17 / B-2026-09-13-24 — the walker above is keyed
+                // on the enum NAME and, by design, skips a payload declared as
+                // one of the enum's own generic params (B-2026-08-03-5's guard:
+                // a program declaring `struct T` would otherwise make an erased
+                // payload look Drop-bearing). So for `enum Ho[T] { Full(T) }` it
+                // returns `None`, every slot having been skipped, and a
+                // fresh-temp argument had no owner for its payload body at all:
+                // `takeit(Ho.Full(R { id: 5 }))` printed `f:5 end` on all three
+                // compiled surfaces against `--interp`'s `f:5 dR5 end`.
+                //
+                // THE AXIS IS GENERICITY, not "user enum vs the seeded pair".
+                // The MONOMORPHIC `enum Mo { Full(R) }` spelling of the same
+                // program is correct on all four surfaces through the walker
+                // above — which is the question B-2026-09-12-17 leaves open
+                // ("why the monomorphic form is correct is not established") and
+                // the answer its own hypothesis proposed. `Option[R]` is correct
+                // for the mirror-image reason: the seeded pair's own gate
+                // (`callee_by_value_optres_param_bodies_te`) is
+                // instantiation-keyed, reading `generic_args` off the parameter
+                // type, which is exactly what the name-keyed walker cannot do.
+                //
+                // `emit_generic_enum_payload_user_drop_bodies_fn` (B-2026-09-10-2)
+                // is that instantiation-keyed walker and already answers every
+                // hazard this position raises: it folds the instantiation into
+                // the symbol name, so `Ho[R]` and `Ho[S]` cannot share a walker;
+                // it derives the box threshold from the erased layout's own
+                // payload-area width; and its complement gate admits ONLY
+                // variants whose DECLARED payload is a generic param, so a
+                // concretely-declared payload stays with the name-keyed walker
+                // above and is never walked twice. That last property is what
+                // makes this a fallback rather than a widening — the two
+                // walkers partition the variants instead of overlapping, so the
+                // monomorphic cells that are correct today cannot double.
+                //
+                // Same `None`-then-instantiation pair, and the same side-table,
+                // as the discarded-RETURN position a thousand lines up
+                // (`discarded_generic_enum_te`); the argument position simply
+                // never asked. Keyed on the ctor expression's own span, which is
+                // the record the `let` site's own fallback reads
+                // (`let_generic_enum_payload_bodies_walker`), so a temp and a
+                // binding of the same monomorph resolve through one source.
+                .or_else(|| {
+                    let te = self
+                        .type_decls
+                        .enum_inst_type_exprs
+                        .get(&(arg.span.offset, arg.span.length))
+                        .cloned()?;
+                    let te = self.subst_monomorph_type_params(&te);
+                    // INLINE PAYLOADS ONLY, and the boundary is measured rather
+                    // than cautious. When the instantiated payload outgrows the
+                    // erased payload area it is heap-BOXED, and the box's own
+                    // interior drop already runs the body -- B-2026-09-10-2
+                    // wired that route, which is why a boxed generic payload in
+                    // this very position was correct before this change.
+                    // Registering here as well gave it TWO owners: the first
+                    // pass at this fix printed a second `d2:9` for
+                    // `holdgen(G.X(mkr(3)))` over a three-`String` payload,
+                    // caught by `asan_generic_enum_payload_runs_its_drop_and_frees_its_interior`
+                    // (ASAN itself stayed clean -- a duplicated body, not a
+                    // double free, so only that fixture's output check saw it).
+                    //
+                    // The INLINE case is the one with no owner at all: a
+                    // one-word payload never boxes, so there is no box drop to
+                    // carry the body and the name-keyed walker has already
+                    // skipped the slot for being generic.
+                    //
+                    // `user_enum_boxed_payload_variants` is the same predicate
+                    // the box route keys on, resolved against this same
+                    // instantiation, so the two cannot disagree about which
+                    // payloads box.
+                    //
+                    // FAIL-CLOSED ON A MIXED ENUM: one variant boxing stands
+                    // the whole fallback down, so an enum with both a boxing
+                    // and an inline payload keeps today's missing body for the
+                    // inline one rather than risking a second owner for the
+                    // boxed one. A lost body is the status quo; a doubled body
+                    // is a regression.
+                    if !self.user_enum_boxed_payload_variants(&te).is_empty() {
+                        return None;
+                    }
+                    self.emit_generic_enum_payload_user_drop_bodies_fn(&te)
+                })
             } else {
                 None
             };

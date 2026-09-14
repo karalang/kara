@@ -60819,6 +60819,132 @@ fn test_tuple_literal_of_a_projected_field_runs_one_body_at_the_owner() {
     }
 }
 
+/// B-2026-09-12-17 / B-2026-09-13-24 — a GENERIC user enum's payload `Drop` body
+/// runs for a fresh-temp constructor argument, and the axis is GENERICITY rather
+/// than "user enum vs the seeded pair".
+///
+/// The name-keyed walker `emit_enum_payload_user_drop_bodies_fn` skips a payload
+/// declared as one of the enum's own generic params (B-2026-08-03-5's guard), so
+/// for `enum Ho[T] { Full(T) }` every slot was skipped, it returned `None`, and a
+/// fresh temp — which has no `let` site to fall back on — had no owner for its
+/// payload body at all. The instantiation-keyed walker
+/// `emit_generic_enum_payload_user_drop_bodies_fn` (B-2026-09-10-2) is now tried
+/// when the name-keyed one declines.
+///
+/// CELLS 4-9 ARE THE CONTROLS THAT MAKE THE FIX A PARTITION RATHER THAN A
+/// WIDENING. The monomorphic enum reaches the name-keyed walker and the seeded
+/// `Option` reaches its own instantiation-keyed gate; both were already correct,
+/// and neither may now DOUBLE. The generic named-local cell is correct through its
+/// `let` site, which is the asymmetry that localised this in the first place, and
+/// the payload-less variant pins that the tag switch still selects nothing to run.
+///
+/// INLINE PAYLOADS ONLY, and cells 10-12 are why. When the instantiated payload
+/// outgrows the erased one-word payload area it is heap-BOXED, and the box's own
+/// interior drop already runs the body (B-2026-09-10-2) -- so registering here as
+/// well gives it TWO owners. The first pass at this fix did exactly that and
+/// doubled the body for a three-`String` payload, caught by
+/// `asan_generic_enum_payload_runs_its_drop_and_frees_its_interior` rather than by
+/// anything here: every cell in this table used a ONE-WORD payload, so the table
+/// could not see the boxing axis at all. Cell 10 is that shape, pinned.
+///
+/// ASAN STAYED CLEAN THROUGH THAT REGRESSION -- a duplicated body is not a double
+/// free -- so only an output comparison catches this class. That is the argument
+/// for pinning cell 10 here rather than relying on the sanitizer suite.
+///
+/// CELL 3 PINS A KNOWN REMAINING GAP, deliberately, at its measured value: the
+/// spelling qualified WITH generic args (`Ho[R].Full(..)`) reaches neither backend
+/// — `enum_name_of_expr` has no `MethodCall` arm and the interpreter's fresh-temp
+/// arg walk does not register that node either — so it runs the body on NO
+/// surface. That is an AGREED gap, not a divergence, and it stays on
+/// B-2026-09-13-24. Pinned here so that fixing one backend alone turns this cell
+/// red instead of silently creating a run-vs-build split, which is what that row's
+/// own arithmetic warns about.
+///
+/// Twin in the other backend's suite under the same name, same table.
+#[test]
+fn test_generic_enum_ctor_temp_arg_runs_its_payload_drop_body() {
+    let hdr = "struct R { id: i64 }\n\
+               impl Drop for R { fn drop(mut ref self) { println(f\"dR{self.id}\") } }\n\
+               struct W { a: String, b: String, c: String }\n\
+               impl Drop for W { fn drop(mut ref self) { println(f\"dW{self.a.len()}\") } }\n\
+               fn mkw() -> W { return W { a: f\"aaa{1}\", b: f\"bbb{1}\", c: f\"ccc{1}\" }; }\n\
+               enum Ho[T] { Full(T), Empty }\n\
+               enum Mo { Whole(R), Nil }\n\
+               enum Bo { Wide(W), Nil }\n\
+               fn takeit(x: Ho[R]) { match x { Full(r) => { println(f\"f:{r.id}\") } Empty => { println(\"e\") } } }\n\
+               fn takemo(x: Mo) { match x { Whole(r) => { println(f\"f:{r.id}\") } Nil => { println(\"e\") } } }\n\
+               fn taken(o: Option[R]) { match o { Some(r) => { println(f\"f:{r.id}\") } None => { println(\"e\") } } }\n\
+               fn takebo(x: Bo) { match x { Wide(r) => { println(f\"w:{r.a.len()}\") } Nil => { println(\"e\") } } }\n\
+               fn holdw(x: Ho[W]) { println(\"hw\"); }\n\
+               fn holdbo(x: Bo) { println(\"hb\"); }\n";
+    for (label, stmts, want) in [
+        (
+            "generic enum, bare ctor temp",
+            "takeit(Full(R { id: 5 }));",
+            "f:5\ndR5\nend\n",
+        ),
+        (
+            "generic enum, qualified-without-args ctor temp",
+            "takeit(Ho.Full(R { id: 5 }));",
+            "f:5\ndR5\nend\n",
+        ),
+        (
+            "KNOWN GAP: generic enum, ctor qualified WITH generic args",
+            "takeit(Ho[R].Full(R { id: 5 }));",
+            "f:5\nend\n",
+        ),
+        (
+            "control: monomorphic enum, bare ctor temp",
+            "takemo(Whole(R { id: 5 }));",
+            "f:5\ndR5\nend\n",
+        ),
+        (
+            "control: monomorphic enum, qualified ctor temp",
+            "takemo(Mo.Whole(R { id: 5 }));",
+            "f:5\ndR5\nend\n",
+        ),
+        (
+            "control: the seeded Option oracle",
+            "taken(Some(R { id: 5 }));",
+            "f:5\ndR5\nend\n",
+        ),
+        (
+            "control: the seeded Option oracle, qualified",
+            "taken(Option[R].Some(R { id: 5 }));",
+            "f:5\ndR5\nend\n",
+        ),
+        (
+            "control: generic enum through a NAMED LOCAL",
+            "let h: Ho[R] = Full(R { id: 5 });\n\
+             takeit(h);",
+            "f:5\ndR5\nend\n",
+        ),
+        (
+            "control: generic enum, payload-less variant",
+            "takeit(Empty);",
+            "e\nend\n",
+        ),
+        (
+            "REGRESSION GUARD: boxed generic payload, callee does not bind it",
+            "holdw(Ho.Full(mkw()));",
+            "hw\ndW4\nend\n",
+        ),
+        (
+            "control: boxed payload in a MONOMORPHIC enum, callee does not bind",
+            "holdbo(Bo.Wide(mkw()));",
+            "hb\ndW4\nend\n",
+        ),
+        (
+            "control: boxed payload in a MONOMORPHIC enum, arm binds it",
+            "takebo(Bo.Wide(mkw()));",
+            "w:4\ndW4\nend\n",
+        ),
+    ] {
+        let src = format!("{hdr}fn main() {{\n{stmts}\nprintln(\"end\");\n}}\n");
+        assert_eq!(run(&src), want, "[{label}]");
+    }
+}
+
 #[test]
 fn test_wildcard_let_discard_owns_what_its_arm_hands_out() {
     let hdr = "struct R { id: i64, name: String }\n\
