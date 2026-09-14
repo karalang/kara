@@ -171,7 +171,25 @@ impl<'a> super::TypeChecker<'a> {
         let (mode, dispatch_ty) = ScrutineeMode::classify(&scrut_ty);
         let dispatch_ty = dispatch_ty.clone();
         self.local_scope.push();
+        // B-2026-09-13-14 — publish the then-block for the duration of the
+        // pattern check, exactly as `infer_if_let` does. The mirror this
+        // function's comment above claims was incomplete: a consumption-gated
+        // pattern rule asks "what does the binding's SCOPE do with it", and
+        // for an `if let` that scope is the then-block, reachable only through
+        // this channel. Without it `partial_move_of_drop_enum` fell to its
+        // no-scope-to-consult leg, which answers "consumed" unconditionally —
+        // so `if let E.A(r) = self { return r.id; }` read as a payload MOVE
+        // when it is a scalar field READ, and the identical `match` and
+        // `while let` spellings (whose sites do set this) were correctly
+        // silent. CHECK position is the one that mattered: a method whose body
+        // is `if let … else …` against a declared return type lands here, and
+        // that is the mainstream spelling, which is why the infer-side fix
+        // alone left the misfire in place.
+        let prev_blk = self
+            .current_arm_body_block
+            .replace(std::rc::Rc::new(then_block.clone()));
         self.check_pattern_against(pattern, &dispatch_ty, mode);
+        self.current_arm_body_block = prev_blk;
         // B-2026-09-06-14 — see `arm_materializes_scrutinee_copy`.
         if self.block_materializes_scrutinee_copy(pattern, then_block) {
             self.warn_borrow_projection_copy(value, &scrut_ty);

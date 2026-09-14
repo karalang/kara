@@ -48472,6 +48472,96 @@ fn partial_move_of_drop_enum_fires_on_moves_and_not_on_reads() {
         0,
         "enum without Drop"
     );
+
+    // 5 -- B-2026-09-13-14 — THE SAME SCALAR READ IN AN `if let`, AT CHECK
+    //      POSITION. Cell 3's `match` twin was already silent; this spelling
+    //      fired, and the difference was not the pattern or the body but WHICH
+    //      TYPECHECKER PATH saw it. A consumption-gated rule asks what the
+    //      binding's SCOPE does with it, and for an `if let` that scope
+    //      reaches the rule only through `current_arm_body_block`;
+    //      `infer_if_let` publishes it and `check_if_let_against` did not, so
+    //      the rule fell to its no-scope-to-consult leg, which answers
+    //      "consumed" unconditionally. A method or fn whose whole body is
+    //      `if let … else …` against a DECLARED RETURN TYPE is checked, not
+    //      inferred, which is why the infer-side channel being right all along
+    //      hid this: the mainstream spelling is the one that took the broken
+    //      path.
+    let iflet_scalar = format!(
+        "{prelude}\
+         fn show(x: K) -> i64 {{\n\
+         \x20\x20\x20\x20if let K.A(r) = x {{ return r.id; }} else {{ return 0; }}\n\
+         }}\n\
+         fn main() {{ println(f\"n:{{show(K.A(R2 {{ s: f\"z\", id: 7 }}))}}\"); }}\n"
+    );
+    assert_eq!(
+        partial_move_enum_diagnostics(&iflet_scalar),
+        0,
+        "if let, scalar projection, check position"
+    );
+
+    // 6 -- the TAIL-VALUE spelling of the same block, which reaches the rule
+    //      through `final_expr` rather than a `return` statement. Same answer.
+    let iflet_tail = format!(
+        "{prelude}\
+         fn show(x: K) -> i64 {{\n\
+         \x20\x20\x20\x20if let K.A(r) = x {{ r.id }} else {{ 0 }}\n\
+         }}\n\
+         fn main() {{ println(f\"n:{{show(K.A(R2 {{ s: f\"z\", id: 7 }}))}}\"); }}\n"
+    );
+    assert_eq!(
+        partial_move_enum_diagnostics(&iflet_tail),
+        0,
+        "if let, tail value, check position"
+    );
+
+    // 7 -- THE CANARY for cells 5 and 6: the same `if let` at the same
+    //      position that genuinely MOVES the payload must still fire. Opening
+    //      the channel is only correct if it carries a real move through.
+    let iflet_move = format!(
+        "{prelude}\
+         fn show(x: K) -> i64 {{\n\
+         \x20\x20\x20\x20if let K.A(r) = x {{ let m = r; return m.id; }} else {{ return 0; }}\n\
+         }}\n\
+         fn main() {{ println(f\"n:{{show(K.A(R2 {{ s: f\"z\", id: 7 }}))}}\"); }}\n"
+    );
+    assert_eq!(
+        partial_move_enum_diagnostics(&iflet_move),
+        1,
+        "if let that moves, check position"
+    );
+
+    // 8 -- the second canary, and the one that shows the gate is the FIELD's
+    //      type rather than the syntax: reading a NON-`Copy` field out of the
+    //      same block really does move it, and really does leave the enum's
+    //      drop body over a half-moved payload.
+    let iflet_nonc = format!(
+        "{prelude}\
+         fn show(x: K) -> String {{\n\
+         \x20\x20\x20\x20if let K.A(r) = x {{ return r.s; }} else {{ return f\"n\"; }}\n\
+         }}\n\
+         fn main() {{ println(f\"s:{{show(K.A(R2 {{ s: f\"z\", id: 7 }}))}}\"); }}\n"
+    );
+    assert_eq!(
+        partial_move_enum_diagnostics(&iflet_nonc),
+        1,
+        "if let reading a non-Copy field, check position"
+    );
+
+    // 9 -- the INFER-position sibling of cell 5, which was correct before this
+    //      fix and is pinned so a regression there is visible too: an `if let`
+    //      whose value is bound rather than returned is inferred.
+    let iflet_infer = format!(
+        "{prelude}\
+         fn show(x: K) {{\n\
+         \x20\x20\x20\x20if let K.A(r) = x {{ println(f\"n:{{r.id}}\") }}\n\
+         }}\n\
+         fn main() {{ show(K.A(R2 {{ s: f\"z\", id: 7 }})); }}\n"
+    );
+    assert_eq!(
+        partial_move_enum_diagnostics(&iflet_infer),
+        0,
+        "if let, scalar projection, infer position"
+    );
 }
 
 /// B-2026-09-01-38 — design.md § Part 8 `Drop`, "Interaction with move
