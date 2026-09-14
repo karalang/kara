@@ -34401,6 +34401,7 @@ fn main() {
                            fn takev(a: Array[Vec[i64], 2]) -> i64 { return a[0].len() + a[1].len(); }\n\
                            fn sumi(a: Array[i64, 3]) -> i64 { return a[0] + a[1] + a[2]; }\n\
                            fn takevs(v: Vec[String]) -> i64 { return v[0].len(); }\n\
+                           fn gid[T](x: T) -> i64 { return 1; }\n\
                            fn mka(t: String) -> Array[String, 2] { return [f\"{t}-aaaaaaaaaaaaaaaaaaaa\", f\"{t}-bbbbbbbbbbbbbbbbbbbb\"]; }\n";
         for (label, body, want) in [
             (
@@ -34446,6 +34447,11 @@ fn main() {
                 "a user enum variant constructor",
                 "let a = mka(\"c8\");\nlet w = Wrp.Full(a);\nprintln(f\"{a[0]} {wlen(w)}\");",
                 "c8-aaaaaaaaaaaaaaaaaaaa 23\n",
+            ),
+            (
+                "a GENERIC (monomorph) call argument",
+                "let a = mka(\"c9\");\nlet n = gid(a);\nprintln(f\"{a[0]} {n}\");",
+                "c9-aaaaaaaaaaaaaaaaaaaa 1\n",
             ),
             (
                 "an Array[Vec[i64], N] argument",

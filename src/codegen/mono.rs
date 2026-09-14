@@ -1927,7 +1927,7 @@ impl<'ctx> super::Codegen<'ctx> {
             args.iter().map(|a| self.compile_expr(&a.value)).collect();
         self.var_types.pending_let_elem_type = saved_pending_elem;
         self.var_types.pending_let_elem_type_expr = saved_pending_elem_te;
-        let arg_vals: Vec<BasicValueEnum<'ctx>> = arg_vals?;
+        let mut arg_vals: Vec<BasicValueEnum<'ctx>> = arg_vals?;
 
         // Body walk for B-2026-08-15-9's gate, computed at most once per call
         // and only when a bare-`T` param the return-type test rejected actually
@@ -2855,6 +2855,17 @@ impl<'ctx> super::Codegen<'ctx> {
             // temporary or a non-owning root (`suppress_array_binding_move_arg`
             // looks the root up in `owned_array_params`).
             if array_transfer[i] {
+                // B-2026-09-14-27 — the monomorph leg of the defensive copy
+                // that makes that retraction safe when the ownership pass saw
+                // the source READ AGAIN. Emitted here rather than at the
+                // argument compile because `array_transfer` — the fact that
+                // says this param takes ownership, and so that a copy will
+                // have an owner — is not known until now. The arguments were
+                // compiled above, so the copy reads a source slot nothing has
+                // touched since, and it records the site before the
+                // retraction consults it.
+                let copied = self.uam_array_defensive_copy(&a.value, arg_vals[i]);
+                arg_vals[i] = copied;
                 self.suppress_array_binding_move_arg(&a.value);
             }
             // B-2026-09-05-31 — the monomorph leg of `compile_call`'s
