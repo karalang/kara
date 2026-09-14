@@ -1693,6 +1693,29 @@ impl<'ctx> super::Codegen<'ctx> {
                 self.lower_indexed_elem_ptr_map_at(field_ptr, key_ll_ty, val_ll_ty, inner_idx)?;
             return Ok(Some((elem_ptr, ty, val_te)));
         }
+        // B-2026-09-09-25 — a fixed `Array[T, N]` field (`h.a[0][1]`, where
+        // `a: Array[Vec[i64], 2]`). The Vec-shaped resolution below cannot
+        // serve it twice over: `vec_inner_type_expr` answers only for a `Vec`
+        // head, and the element pointer for a fixed array is a two-index GEP
+        // into inline storage rather than a load-then-offset through a
+        // `{ptr,len,cap}` handle. So the array needs its own arm, taken before
+        // the `Vec` resolution rather than folded into it.
+        //
+        // Measured as the READ half left standing once the store half of this
+        // row was fixed: `h.a[0][1] = 99` then built and the `println` of the
+        // same place on the NEXT line refused with "nested indexed read
+        // requires the outer container to be a named variable" — a write that
+        // compiles and a read-back that does not. The named-base read was
+        // fixed by B-2026-09-09-9; this is the same miss one base shape over,
+        // exactly as the store half was the same miss one call site over.
+        if let Some(elem_te) = super::helpers::array_inner_type_expr(&field_te) {
+            if let BasicTypeEnum::ArrayType(arr_ty) = self.llvm_type_for_type_expr(&field_te) {
+                let (elem_ptr, ty) =
+                    self.lower_indexed_elem_ptr_array_at(field_ptr, arr_ty, inner_idx)?;
+                return Ok(Some((elem_ptr, ty, elem_te)));
+            }
+            return Ok(None);
+        }
         // The field must itself be an indexable container; its ELEMENT type is
         // what the synth identifier gets registered as.
         let Some(elem_te) = super::helpers::vec_inner_type_expr(&field_te) else {
@@ -2104,6 +2127,23 @@ impl<'ctx> super::Codegen<'ctx> {
                     .var_types
                     .var_elem_type_exprs
                     .get(base.as_str())
+                    // B-2026-09-09-25 — the STORE half of B-2026-09-09-9's
+                    // `array_elem_type_exprs` fallback. An `Array[T, N]` records
+                    // its element `TypeExpr` in its OWN table (widening the
+                    // shared one is unsafe: ~170 readers treat a present entry
+                    // as "this binding is a Vec/Slice/Map"), so this lookup
+                    // missed EVERY array base and returned `Ok(None)` before
+                    // reaching the `ArrayType` dispatch arm ten lines below —
+                    // which was therefore unreachable for a named array.
+                    //
+                    // Both index-rooted callers resolve through here, so the
+                    // one miss cost `a[0][1] = v` over `Array[Vec[i64], 2]`
+                    // ("Index assignment target must be a variable", refused on
+                    // every compiled backend while `--interp` ran it) and the
+                    // chained read's base resolution alike. The read of the
+                    // same declaration was already fixed one call site over,
+                    // which is why `a[0][1]` could be printed but not written.
+                    .or_else(|| self.var_types.array_elem_type_exprs.get(base.as_str()))
                     .cloned()
                 else {
                     return Ok(None);

@@ -83057,6 +83057,158 @@ fn main() {
         );
     }
 
+    /// B-2026-09-09-25 — a nested index whose OUTER container is a fixed
+    /// `Array[T, N]`, write and read.
+    ///
+    /// RUN-VS-BUILD in the form where one side produces no binary at all:
+    /// `--interp` ran `a[0][1] = 99` over `Array[Vec[i64], 2]` and every
+    /// compiled configuration (JIT, AOT, both opt levels, auto-par on and off)
+    /// refused it with "Index assignment target must be a variable". The
+    /// identical declaration with a `Vec` outer stored fine, and the READ half
+    /// of the SAME declaration had already been fixed by B-2026-09-09-9 — so
+    /// the element could be printed but not written.
+    ///
+    /// One registry miss caused both halves, one call site apart. An
+    /// `Array[T, N]` records its element `TypeExpr` in `array_elem_type_exprs`
+    /// rather than the shared `var_elem_type_exprs` (widening the shared table
+    /// is unsafe — ~170 readers treat a present entry as "this binding is a
+    /// Vec/Slice/Map"), and `container_place_name` — the resolver both
+    /// index-rooted paths go through — consulted only the shared table. It
+    /// returned `None` for every array base BEFORE reaching its own
+    /// `ArrayType` dispatch arm, which was therefore unreachable code.
+    ///
+    /// Case 6 is why the fix is two arms rather than one: with the store fixed,
+    /// `h.a[0][1] = 99` built and the read-back on the next line refused with
+    /// "nested indexed read requires the outer container to be a named
+    /// variable" — `nested_index_field_base_elem` resolves a field base through
+    /// `vec_inner_type_expr`, which answers only for a `Vec` head. A write that
+    /// compiles and a read of the same place that does not is a worse state
+    /// than the uniform refusal it replaced.
+    ///
+    /// Case 8 is the control that keeps the fix honest about WHICH side was
+    /// broken: an Array INNER under a `Vec` outer always worked, because that
+    /// base is a Vec and resolves through the shared table.
+    #[test]
+    fn test_e2e_nested_index_store_over_an_array_outer() {
+        // 1. The filed reproduction — store, then read the same place back.
+        assert_eq!(
+            run_program(
+                "fn main() {\n\
+                 \x20   let mut a: Array[Vec[i64], 2] = [[10, 11], [20]];\n\
+                 \x20   a[0][1] = 99;\n\
+                 \x20   println(f\"{a[0][1]}\");\n\
+                 \x20   println(f\"{a[1][0]}\");\n\
+                 }"
+            )
+            .as_deref(),
+            Some("99\n20\n")
+        );
+        // 2. The COMPOUND spelling, which the row left unmeasured and which
+        // refused with the same message.
+        assert_eq!(
+            run_program(
+                "fn main() {\n\
+                 \x20   let mut a: Array[Vec[i64], 2] = [[10, 11], [20]];\n\
+                 \x20   a[0][1] += 1;\n\
+                 \x20   println(f\"{a[0][1]}\");\n\
+                 }"
+            )
+            .as_deref(),
+            Some("12\n")
+        );
+        // 3. THREE levels. Resolving through `container_place_name` recurses,
+        // so depth costs nothing extra — the same property that let
+        // B-2026-08-20-33 lift the chained-store deferral.
+        assert_eq!(
+            run_program(
+                "fn main() {\n\
+                 \x20   let mut a: Array[Vec[Vec[i64]], 2] = [[[1, 2, 3]], [[4]]];\n\
+                 \x20   a[0][0][2] = 99;\n\
+                 \x20   println(f\"{a[0][0][2]}\");\n\
+                 }"
+            )
+            .as_deref(),
+            Some("99\n")
+        );
+        // 4. Array all the way down — the inner element is itself a fixed
+        // array, so the synth minted for `a[0]` registers through
+        // `array_elem_type_exprs` in turn.
+        assert_eq!(
+            run_program(
+                "fn main() {\n\
+                 \x20   let mut a: Array[Array[i64, 2], 2] = [[10, 11], [20, 21]];\n\
+                 \x20   a[0][1] = 99;\n\
+                 \x20   println(f\"{a[0][1]}:{a[1][0]}\");\n\
+                 }"
+            )
+            .as_deref(),
+            Some("99:20\n")
+        );
+        // 5. A HEAP element, so the store has a displaced buffer to release.
+        // Measured under valgrind at -O0: all heap blocks freed, 0 errors.
+        assert_eq!(
+            run_program(
+                "fn main() {\n\
+                 \x20   let mut a: Array[Vec[String], 2] = [[\"x\", \"y\"], [\"z\"]];\n\
+                 \x20   a[0][1] = \"MUT\";\n\
+                 \x20   println(f\"{a[0][1]}\");\n\
+                 }"
+            )
+            .as_deref(),
+            Some("MUT\n")
+        );
+        // 6. A struct FIELD base — the spelling a 2D cursor in a struct
+        // actually writes, and the one that needed the read arm too.
+        assert_eq!(
+            run_program(
+                "struct H { a: Array[Vec[i64], 2] }\n\
+                 fn main() {\n\
+                 \x20   let mut h = H { a: [[10, 11], [20]] };\n\
+                 \x20   h.a[0][1] = 99;\n\
+                 \x20   println(f\"{h.a[0][1]}\");\n\
+                 }"
+            )
+            .as_deref(),
+            Some("99\n")
+        );
+        // 7. `mut ref self` — the field base reached from inside a method,
+        // where the receiver normalisation runs.
+        assert_eq!(
+            run_program(
+                "struct H { a: Array[Vec[i64], 2] }\n\
+                 impl H {\n\
+                 \x20   fn bump(mut ref self) {\n\
+                 \x20       self.a[0][1] = self.a[0][1] + 1;\n\
+                 \x20   }\n\
+                 }\n\
+                 fn main() {\n\
+                 \x20   let mut h = H { a: [[10, 11], [20]] };\n\
+                 \x20   h.bump();\n\
+                 \x20   println(f\"{h.a[0][1]}\");\n\
+                 }"
+            )
+            .as_deref(),
+            Some("12\n")
+        );
+        // 8. CONTROL — an Array INNER under a Vec outer, which built before
+        // this fix and must still.
+        assert_eq!(
+            run_program(
+                "fn main() {\n\
+                 \x20   let r0: Array[i64, 2] = [10, 11];\n\
+                 \x20   let r1: Array[i64, 2] = [20, 21];\n\
+                 \x20   let mut v: Vec[Array[i64, 2]] = Vec.new();\n\
+                 \x20   v.push(r0);\n\
+                 \x20   v.push(r1);\n\
+                 \x20   v[0][1] = 99;\n\
+                 \x20   println(f\"{v[0][1]}:{v[1][0]}\");\n\
+                 }"
+            )
+            .as_deref(),
+            Some("99:20\n")
+        );
+    }
+
     /// B-2026-08-21-4 — `as_slice()` on a `ref`-mode receiver, and a call
     /// declared to return `Slice[T]`.
     ///
