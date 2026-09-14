@@ -1272,6 +1272,13 @@ impl<'a> super::Interpreter<'a> {
             Some(Value::EnumVariant { enum_name: en, .. }) if en != "Option" && en != "Result" => {
                 self.type_name_runs_user_drop(&en, &mut Vec::new())
             }
+            // B-2026-09-14-2 — a CONTAINER payload bound out by the arm. The
+            // binding owns the elements from here on, exactly as a struct or
+            // user-enum payload binding owns its value.
+            Some(Value::Array(cell)) => cell
+                .read()
+                .map(|g| g.iter().any(|e| self.value_runs_user_drop(e)))
+                .unwrap_or(false),
             _ => false,
         }
     }

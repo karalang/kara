@@ -518,6 +518,15 @@ impl<'ctx> super::Codegen<'ctx> {
                                     .var_elem_type_exprs
                                     .insert(name.clone(), inner_te.clone());
                                 bound_vec_elem = Some(elem_llvm);
+                                // B-2026-09-14-2 — the binding owns these
+                                // elements now; see the registrar's doc.
+                                let elem_for_bodies = inner_te.clone();
+                                let name_for_bodies = name.clone();
+                                self.register_arm_container_payload_elem_bodies(
+                                    &name_for_bodies,
+                                    &elem_for_bodies,
+                                    None,
+                                );
                             }
                             "Slice" => {
                                 self.var_types
@@ -548,7 +557,16 @@ impl<'ctx> super::Codegen<'ctx> {
                                 {
                                     self.var_types
                                         .array_elem_type_exprs
-                                        .insert(name.clone(), inner);
+                                        .insert(name.clone(), inner.clone());
+                                    // B-2026-09-14-2 — the `Array` peer of the
+                                    // `Vec` arm above.
+                                    let n = self.array_elem_and_len(&inner_te).map(|(_, n)| n);
+                                    let name_for_bodies = name.clone();
+                                    self.register_arm_container_payload_elem_bodies(
+                                        &name_for_bodies,
+                                        &inner,
+                                        n,
+                                    );
                                 }
                             }
                             // B-2026-09-10-16 — a MATCH-ARM PAYLOAD BINDING is
@@ -2736,5 +2754,114 @@ impl<'ctx> super::Codegen<'ctx> {
                 .is_some_and(|n| n == "Tuple");
         }
         false
+    }
+
+    /// B-2026-09-14-2 — register an arm-bound CONTAINER payload's element
+    /// `Drop` bodies, for both container kinds.
+    ///
+    /// THE DISCRIMINATOR IS THE SCRUTINEE'S POSITION, and it is neither the
+    /// container kind nor the payload's width — both of those were tried and
+    /// measured wrong. Holding the element type fixed and varying only where
+    /// the envelope came from:
+    ///
+    ///     match a LOCAL envelope      no bodies on either backend  <- the gap
+    ///     match a by-value PARAM      one body on both             <- already right
+    ///
+    /// and sweeping `Array[E, N]` across the inline/boxed word-count boundary
+    /// (2, 3, 4 words against the `Option` area's 3) changes nothing: every
+    /// width is silent for a LOCAL scrutinee and correct for a PARAM one. The
+    /// callee-owned-param machinery already runs a param envelope's payload
+    /// bodies, so registering here as well double-fires it — measured
+    /// `dRa1 dRa2 dRa1 dRa2` on
+    /// `e2e_boxed_array_payload_runs_its_element_drop_bodies`, whose scrutinee
+    /// is a param despite the name (its `Array[Ra, 2]` is two words, i.e.
+    /// inline).
+    ///
+    /// So: a LOCAL scrutinee only, read off the flag the binder already
+    /// maintains for exactly this question.
+    ///
+    /// BODIES ONLY — both walkers free nothing, so this cannot double-free
+    /// against whatever owns the buffer, and it is silent for an element that
+    /// runs no body.
+    pub(super) fn register_arm_container_payload_elem_bodies(
+        &mut self,
+        name: &str,
+        elem_te: &TypeExpr,
+        len: Option<u32>,
+    ) {
+        if self.pattern_state.pattern_binding_scrutinee_is_owned_param {
+            return;
+        }
+        // And the SEEDED PAIR only. A USER enum's own payload walker already
+        // runs an arm-bound array payload's bodies for a local scrutinee —
+        // measured `dRa1 dRa2 dRa1 dRa2` against its `dRa1 dRa2` on
+        // `e2e_boxed_array_payload_runs_its_element_drop_bodies`'s
+        // `mono-enum-array-payload-matched-out` case (`enum Bin { Packed(Array[Ra, 2]) }`).
+        // `Option`/`Result` are the pair with no such walker at this position,
+        // which is what leaves their arm binding owning the elements alone.
+        if !self
+            .pattern_state
+            .pattern_binding_scrutinee_is_option_result
+        {
+            return;
+        }
+        // BOTH container kinds, while the envelope's payload walker carries no
+        // `Vec` arm outside the discard position (B-2026-09-13-29's gate). If
+        // that gate is ever lifted, a `Vec` payload becomes the ENVELOPE's —
+        // its handle stays reachable from the envelope after the arm copies it,
+        // so the walk finds the same buffer and registering here as well runs
+        // every element twice (measured `d1 d2 d1 d2`). An `Array` payload is
+        // moved out of the envelope's area and stays this registration's
+        // regardless.
+        if !self.elem_te_runs_user_drop(elem_te) {
+            return;
+        }
+        let Some(slot) = self.variables.get(name).copied() else {
+            return;
+        };
+        let elem_ty = self.llvm_type_for_type_expr(elem_te);
+        let bodies = match len {
+            Some(n) if n > 0 => self.emit_array_elem_user_drop_bodies_fn(elem_ty, elem_te, n),
+            Some(_) => None,
+            None => {
+                // Same element admission the bound-`Vec` registration uses, so a
+                // payload binding and a plain local resolve one walker.
+                let elem_name = match &elem_te.kind {
+                    TypeKind::Path(ep) => ep
+                        .segments
+                        .first()
+                        .filter(|n| {
+                            let n = n.as_str();
+                            self.type_decls.struct_types.contains_key(n)
+                                || (n != "Option"
+                                    && n != "Result"
+                                    && self
+                                        .type_decls
+                                        .enum_layouts
+                                        .get(n)
+                                        .is_some_and(|l| !l.is_shared))
+                        })
+                        .cloned(),
+                    _ => None,
+                };
+                match elem_name {
+                    Some(en) => {
+                        let subst = self.generic_struct_subst_from_inst(&en, elem_te);
+                        self.emit_vec_elem_user_drop_bodies_fn_mono(&en, elem_ty, &subst)
+                    }
+                    None => None,
+                }
+            }
+        };
+        let Some(bodies) = bodies else {
+            return;
+        };
+        self.track_user_drop_var_with_fn(
+            "",
+            name,
+            slot.ptr,
+            bodies,
+            UserDropKind::ContainerElemBodies,
+        );
     }
 }

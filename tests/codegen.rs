@@ -34064,6 +34064,84 @@ fn main() {
         }
     }
 
+    /// B-2026-09-14-2 (arm-binding half) — a CONTAINER payload bound out by a
+    /// `match` / `if let` arm runs its elements' `Drop` bodies, once, for BOTH
+    /// container kinds.
+    ///
+    /// THE DISCRIMINATOR IS THE SCRUTINEE'S POSITION, not the container kind and
+    /// not the payload's width — both of those were tried and measured wrong.
+    /// Holding the element type fixed and varying only where the envelope came
+    /// from: a LOCAL scrutinee ran no bodies on either backend, a by-value PARAM
+    /// one ran exactly one. Sweeping `Array[E, N]` across the inline/boxed
+    /// word-count boundary (2, 3, 4 words against the `Option` area's 3) changes
+    /// nothing — every width is silent for a local and correct for a param.
+    ///
+    /// So the registration is gated to a LOCAL scrutinee of the SEEDED PAIR: the
+    /// callee-owned-param machinery already runs a param envelope's payload
+    /// bodies, and a USER enum's own payload walker already runs a local one —
+    /// registering beside either double-fires, measured
+    /// `dRa1 dRa2 dRa1 dRa2` on `e2e_boxed_array_payload_runs_its_element_drop_bodies`
+    /// (whose scrutinee is a param, despite the name) and on its
+    /// `mono-enum-array-payload-matched-out` case.
+    #[test]
+    fn e2e_arm_bound_container_payload_runs_element_bodies() {
+        const PRE: &str = "struct E1 { id: i64 }\n\
+                           impl Drop for E1 { fn drop(mut ref self) { println(f\"d{self.id}\") } }\n";
+        for (label, body, want) in [
+            (
+                "local envelope, Array payload",
+                "let a: Array[E1, 2] = [E1 { id: 1 }, E1 { id: 2 }];\n                 let o: Option[Array[E1, 2]] = Option.Some(a);\n                 match o { Option.Some(t) => { println(f\"s{t[0].id}\"); } Option.None => { println(\"n\"); } }",
+                "s1\nd1\nd2\nmid\n",
+            ),
+            (
+                "local envelope, Vec payload",
+                "let o: Option[Vec[E1]] = Option.Some([E1 { id: 1 }, E1 { id: 2 }]);\n                 match o { Option.Some(t) => { println(f\"s{t.len()}\"); } Option.None => { println(\"n\"); } }",
+                "s2\nd1\nd2\nmid\n",
+            ),
+            (
+                "if let, local envelope, Array payload",
+                "let a: Array[E1, 2] = [E1 { id: 1 }, E1 { id: 2 }];\n                 let o: Option[Array[E1, 2]] = Option.Some(a);\n                 if let Option.Some(t) = o { println(f\"s{t[0].id}\"); }",
+                "s1\nd1\nd2\nmid\n",
+            ),
+            // Width sweep across the inline/boxed payload boundary: the answer
+            // must not depend on it, which is what rules the word count out as
+            // the discriminator.
+            (
+                "width 3 words (inline edge)",
+                "let a: Array[E1, 3] = [E1 { id: 1 }, E1 { id: 2 }, E1 { id: 3 }];\n                 let o: Option[Array[E1, 3]] = Option.Some(a);\n                 match o { Option.Some(t) => { println(f\"s{t[0].id}\"); } Option.None => { println(\"n\"); } }",
+                "s1\nd1\nd2\nd3\nmid\n",
+            ),
+            (
+                "width 4 words (boxed edge)",
+                "let a: Array[E1, 4] = [E1 { id: 1 }, E1 { id: 2 }, E1 { id: 3 }, E1 { id: 4 }];\n                 let o: Option[Array[E1, 4]] = Option.Some(a);\n                 match o { Option.Some(t) => { println(f\"s{t[0].id}\"); } Option.None => { println(\"n\"); } }",
+                "s1\nd1\nd2\nd3\nd4\nmid\n",
+            ),
+            // Controls: the two positions that already had an owner must keep
+            // exactly one body, not two.
+            (
+                "control: by-value PARAM envelope keeps one body",
+                "let a: Array[E1, 2] = [E1 { id: 1 }, E1 { id: 2 }];\n                 takeA(Option.Some(a));",
+                "s1\nd1\nd2\nmid\n",
+            ),
+            (
+                "control: non-Drop element stays silent",
+                "let o: Option[Vec[i64]] = Option.Some([1, 2]);\n                 match o { Option.Some(t) => { println(f\"s{t.len()}\"); } Option.None => { println(\"n\"); } }",
+                "s2\nmid\n",
+            ),
+        ] {
+            let src = format!(
+                "{PRE}fn takeA(x: Option[Array[E1, 2]]) {{ match x {{ Option.Some(t) => {{ println(f\"s{{t[0].id}}\"); }} Option.None => {{ println(\"n\"); }} }} }}\n\
+                 fn main() {{\n{body}\nprintln(\"mid\");\n}}\n"
+            );
+            let (interp_out, interp_errs, _, _) = karac::run_program_full(&src);
+            assert!(interp_errs.is_empty(), "[{label}] interp errored: {interp_errs:?}");
+            assert_eq!(interp_out.join(""), want, "[{label}] interpreter");
+            if let Some(aot) = run_program(&src) {
+                assert_eq!(aot, want, "[{label}] AOT");
+            }
+        }
+    }
+
     #[test]
     fn e2e_discarded_optres_tuple_payload_runs_one_body() {
         assert_eq!(
