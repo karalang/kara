@@ -62,8 +62,8 @@
 //! `OptionInline` free (which is gated on this very copy-supported predicate).
 //! Bailing on the rest preserves today's exact behavior for those shapes.
 
-use inkwell::types::{BasicType, BasicTypeEnum, StructType};
-use inkwell::values::PointerValue;
+use inkwell::types::{ArrayType, BasicType, BasicTypeEnum, StructType};
+use inkwell::values::{BasicValueEnum, PointerValue};
 use inkwell::{AddressSpace, IntPredicate};
 use std::collections::HashMap;
 
@@ -5674,6 +5674,20 @@ impl<'ctx> super::Codegen<'ctx> {
     /// already armed — measured as `free(): double free detected in tcache 2`
     /// on exactly that spelling.
     pub(super) fn suppress_array_local_move_into_ctor(&mut self, arg: &Expr) {
+        // B-2026-09-14-27 — the SOURCE of a `UseAfterMove` keeps its drop when
+        // the consumer has been handed an independent copy
+        // (`uam_array_defensive_copy`). Retracting here would leave the
+        // original `N` buffers with no owner at all — the mirror of the bug
+        // this guard is half of, which retracted unconditionally and let the
+        // caller's later read dangle. Keyed on "a copy really happened", so a
+        // hand-off the copy does not reach still retracts exactly as before.
+        if self
+            .span_tables
+            .uam_copied_sites
+            .contains(&(arg.span.offset, arg.span.length))
+        {
+            return;
+        }
         let root = match &arg.kind {
             ExprKind::Identifier(n) => n.clone(),
             _ => return,
@@ -5705,7 +5719,202 @@ impl<'ctx> super::Codegen<'ctx> {
         self.borrow_vars.owned_array_params.remove(root.as_str());
     }
 
+    /// B-2026-09-14-27 — ONE predicate, two halves: the defensive COPY
+    /// ([`Self::uam_array_defensive_copy`]) and the disarm SKIP that copy
+    /// obliges ([`Self::suppress_array_binding_move_arg`] and its local-move
+    /// sibling) must answer the same question, and they answer it here.
+    ///
+    /// `UseAfterMove` is advisory on the compiled surface by construction
+    /// (`kind_blocks_production`, [`crate::ownership`]), and
+    /// [`super::param_transfer`]'s module doc states what that promise rests
+    /// on: "the value the reuse reads still being intact, and at a call
+    /// ARGUMENT the entry copy is what keeps it intact". `Array` took the
+    /// callee-owns convention (B-2026-09-13-15 / -16) WITHOUT that copy, so
+    /// the hand-off disarmed the caller and the later read dangled — two
+    /// different wrong strings on the two compiled backends against a correct
+    /// `--interp`, at exit 0, with valgrind reporting 17 allocs / 17 frees and
+    /// no invalid free, because the free is legitimate and the READ is the
+    /// error.
+    ///
+    /// FAIL-SAFE BY POLARITY. The disarm skip keys on `uam_copied_sites` — "a
+    /// copy really happened" — not on this predicate, exactly as
+    /// `suppress_source_vec_cleanup_for_arg_ex` and
+    /// `gpu_zero_moved_buffer_handle` already do. So a hand-off site this copy
+    /// does not reach keeps today's retraction and today's behaviour; it can
+    /// never stand the caller down with nothing to protect it, which is the
+    /// double free the other polarity would invent. That is what lets the
+    /// element coverage below widen one shape at a time.
+    ///
+    /// The element gate is `field_copy_supported` — the SAME predicate the
+    /// struct/tuple entry copy uses to decide what `deep_copy_one_aggregate_
+    /// field` can duplicate — so copy-depth equals drop-depth by construction
+    /// rather than by a second list agreeing with the first. It answers
+    /// `false` for an `Array` element in both spellings (its `TypeKind`
+    /// catch-all and its `Path` catch-all), so the nested case is recursed
+    /// here instead: this module DOES have an array emitter, one indirection
+    /// down.
+    pub(super) fn array_uam_elem_copy_supported(&self, elem_te: &TypeExpr) -> bool {
+        if let Some((inner, n)) = self.array_elem_and_len(elem_te) {
+            return n > 0 && self.array_uam_elem_copy_supported(&inner);
+        }
+        self.field_copy_supported(elem_te, &mut Vec::new())
+    }
+
+    /// B-2026-09-14-27 — would [`Self::uam_array_defensive_copy`] copy this
+    /// argument? Asked BEFORE the argument is compiled, at the three concrete
+    /// call-argument loops, so the copy can be emitted ahead of the disarm
+    /// those loops run.
+    ///
+    /// The container movers (`Vec.push`, `Map.insert`) need no such
+    /// pre-check — they compile the argument first and reach the copy through
+    /// `maybe_defensive_copy_param_arg` — but a free-fn / method / assoc-fn
+    /// loop stands the caller down BEFORE it compiles the argument, and the
+    /// disarm skip keys on a copy having really happened. Without this the two
+    /// halves could only agree by the disarm keying on a PREDICTION, which is
+    /// the polarity that turns a missed site into a double free.
+    pub(super) fn uam_array_arg_wants_copy(&self, arg: &Expr) -> bool {
+        let root = match &arg.kind {
+            ExprKind::Identifier(n) => n.as_str(),
+            ExprKind::SelfValue => "self",
+            _ => return false,
+        };
+        if !self
+            .span_tables
+            .uam_consume_sites
+            .contains(&(arg.span.offset, arg.span.length))
+        {
+            return false;
+        }
+        self.borrow_vars
+            .owned_array_params
+            .get(root)
+            .is_some_and(|(elem_te, n)| *n > 0 && self.array_uam_elem_copy_supported(elem_te))
+    }
+
+    /// B-2026-09-14-27 — the copy half. Hand the CONSUMER an independent
+    /// `Array[T, N]` so the source keeps its own, at a move the ownership pass
+    /// flagged as read again.
+    ///
+    /// Inert for every program that draws no `UseAfterMove` warning: the span
+    /// gate is `uam_consume_sites`, which the ownership pass fills only with
+    /// consume sites that have a later use. At a flagged site the element
+    /// buffers are duplicated in place into a temporary and the temporary is
+    /// loaded back, so the callee's array drop
+    /// ([`Self::synthesize_array_drop_fn_te`]) frees the COPY while the
+    /// caller's retained drop frees the original — one owner each, which is
+    /// what makes the disarm skip safe rather than a leak.
+    ///
+    /// Keyed on `owned_array_params`, the set that says this root carries an
+    /// array drop at all, so a temporary, a borrowed root, or an array whose
+    /// element owns no heap is returned untouched.
+    pub(super) fn uam_array_defensive_copy(
+        &mut self,
+        expr: &Expr,
+        val: BasicValueEnum<'ctx>,
+    ) -> BasicValueEnum<'ctx> {
+        let root = match &expr.kind {
+            ExprKind::Identifier(n) => n.clone(),
+            ExprKind::SelfValue => "self".to_string(),
+            _ => return val,
+        };
+        if !self
+            .span_tables
+            .uam_consume_sites
+            .contains(&(expr.span.offset, expr.span.length))
+        {
+            return val;
+        }
+        let Some((elem_te, n)) = self.borrow_vars.owned_array_params.get(&root).cloned() else {
+            return val;
+        };
+        if n == 0 || !val.is_array_value() || !self.array_uam_elem_copy_supported(&elem_te) {
+            return val;
+        }
+        let Some(fn_val) = self.current_fn else {
+            return val;
+        };
+        let slot = self.create_entry_alloca(fn_val, "uam.array.src", val.get_type());
+        self.builder.build_store(slot, val).unwrap();
+        let arr_ty = val.get_type().into_array_type();
+        // CLONE-ON-EXTRACT, not entry-copy: the copy leaves with its own
+        // owner, so a bare `shared` leaf must be rc-INC'd or the two owners
+        // share one box with one count. Same flag, same reason, as
+        // `uam_defensive_copy`'s struct arm.
+        let saved_rc_inc = self.drop_rc.deep_copy_rc_inc_bare_shared;
+        self.drop_rc.deep_copy_rc_inc_bare_shared = true;
+        self.deep_copy_array_elems_in_place(slot, arr_ty, &elem_te, n);
+        self.drop_rc.deep_copy_rc_inc_bare_shared = saved_rc_inc;
+        let copied = self
+            .builder
+            .build_load(val.get_type(), slot, "uam.array.clone")
+            .unwrap();
+        self.span_tables
+            .uam_copied_sites
+            .insert((expr.span.offset, expr.span.length));
+        copied
+    }
+
+    /// Duplicate each element's heap of an `[N x T]` in place.
+    ///
+    /// A fixed array is not a struct at the LLVM level, so it cannot be walked
+    /// with `build_struct_gep` — the same reason
+    /// [`Self::synthesize_array_drop_fn_te`] cannot reuse `emit_tuple_elem_
+    /// drops`. The element GEP is emitted here and the per-element work is
+    /// then handed to `deep_copy_one_aggregate_field` through a ONE-FIELD
+    /// struct view of the element (`{T}`, field 0 at offset 0, so the struct
+    /// GEP it performs resolves to the element pointer itself). Reusing that
+    /// emitter rather than re-deriving the dispatch is what keeps this copy
+    /// symmetric with the drop for every element shape at once, present and
+    /// future.
+    fn deep_copy_array_elems_in_place(
+        &mut self,
+        base: PointerValue<'ctx>,
+        arr_ty: ArrayType<'ctx>,
+        elem_te: &TypeExpr,
+        n: u32,
+    ) {
+        let i32_t = self.context.i32_type();
+        let zero = i32_t.const_zero();
+        let nested = self.array_elem_and_len(elem_te);
+        let one_field = (nested.is_none())
+            .then(|| self.llvm_type_for_type_expr(elem_te))
+            .map(|t| self.context.struct_type(&[t], false));
+        for i in 0..n {
+            let idx = i32_t.const_int(i as u64, false);
+            let Ok(ep) = (unsafe {
+                self.builder
+                    .build_in_bounds_gep(arr_ty, base, &[zero, idx], "uam.arr.ep")
+            }) else {
+                continue;
+            };
+            match (&nested, one_field) {
+                (Some((inner_te, m)), _) => {
+                    let inner_llvm = self.llvm_type_for_type_expr(inner_te);
+                    let inner_arr = inner_llvm.array_type(*m);
+                    let inner_te = inner_te.clone();
+                    self.deep_copy_array_elems_in_place(ep, inner_arr, &inner_te, *m);
+                }
+                (None, Some(one)) => self.deep_copy_one_aggregate_field(ep, one, 0, elem_te),
+                (None, None) => {}
+            }
+        }
+    }
+
     pub(super) fn suppress_array_binding_move_arg(&mut self, arg: &Expr) {
+        // B-2026-09-14-27 — the SOURCE of a `UseAfterMove` keeps its drop when
+        // the consumer has been handed an independent copy
+        // (`uam_array_defensive_copy`). Retracting here would leave the
+        // original `N` buffers with no owner at all — the mirror of the bug
+        // this guard is half of, which retracted unconditionally and let the
+        // caller's later read dangle. Keyed on "a copy really happened", so a
+        // hand-off the copy does not reach still retracts exactly as before.
+        if self
+            .span_tables
+            .uam_copied_sites
+            .contains(&(arg.span.offset, arg.span.length))
+        {
+            return;
+        }
         let root = match &arg.kind {
             ExprKind::Identifier(n) => n.clone(),
             ExprKind::SelfValue => "self".to_string(),

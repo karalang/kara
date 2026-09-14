@@ -7489,6 +7489,33 @@ impl<'ctx> super::Codegen<'ctx> {
         arg_expr: &Expr,
         val: BasicValueEnum<'ctx>,
     ) -> BasicValueEnum<'ctx> {
+        // B-2026-09-14-27 — the FIXED-ARRAY arm, and it belongs HERE rather
+        // than in `uam_defensive_copy`.
+        //
+        // That sibling serves the three positions that compile a moved value
+        // themselves (a `let` RHS and the two struct-literal field inits), and
+        // an `Array` at those positions is already correct: the destination
+        // takes the source's own memory (`rebind_source_keeps_array_memory`)
+        // and registers no second drop, so a copy there has no owner at all —
+        // measured as 44 B definitely lost on `let b = a;` when the arm was
+        // wired into that path instead. What is broken is the ARGUMENT
+        // hand-off, which retracts the caller's drop, and this helper is the
+        // arg-position hook the container movers (`Vec.push`, `Map.insert`)
+        // already funnel through.
+        //
+        // Excluded in RETURN position for the reason the wrapper above gives
+        // for the whole family: there the read is already reconciled, and
+        // cloning again leaks.
+        if !self.in_return_defensive_copy && !self.uam_array_copy_declined {
+            let copied = self.uam_array_defensive_copy(arg_expr, val);
+            if self
+                .span_tables
+                .uam_copied_sites
+                .contains(&(arg_expr.span.offset, arg_expr.span.length))
+            {
+                return copied;
+            }
+        }
         // B-2026-07-04-2 / B-2026-07-05-1: a heap element read by index
         // (`a[i]` where `a` is a named `Vec[String]`/`Vec[Vec[..]]`/…) and moved
         // into an OWNING sink (tuple literal, `push`, struct field, map value,

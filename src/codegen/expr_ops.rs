@@ -122,7 +122,15 @@ impl<'ctx> super::Codegen<'ctx> {
             //     v.push((i, x)) }` over `Vec[String]` trapped, exit 133). No-op
             //     for a fresh temp / plain owned local (not in the retaining
             //     sets), whose move-out is handled by the suppression below.
+            // B-2026-09-14-27 — …but NOT its fixed-`Array` leg. A tuple's
+            // drop walker has no `Array` arm, so the tuple never frees an
+            // array element and the source stays its sole owner; handing the
+            // tuple an independent copy here leaks it. See
+            // `uam_array_copy_declined`.
+            let saved_decline = self.uam_array_copy_declined;
+            self.uam_array_copy_declined = true;
             let v = self.maybe_defensive_copy_param_arg(elem_expr, v);
+            self.uam_array_copy_declined = saved_decline;
             self.suppress_source_vec_cleanup_for_arg(elem_expr);
             // B-2026-09-13-27 — the FIELD-ACCESS peer of the line above, and
             // the tuple sibling of the `disarm_struct_field_move_bodies` call

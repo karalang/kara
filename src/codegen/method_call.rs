@@ -7723,6 +7723,20 @@ impl<'ctx> super::Codegen<'ctx> {
                 for (i, a) in args.iter().enumerate() {
                     let pidx = i + 1;
                     let is_ref = ref_flags.get(pidx).copied().unwrap_or(false);
+                    // B-2026-09-14-27 — the method spelling of the free-fn
+                    // arm in `compile_call`: an owned `Array` argument read
+                    // again after this move is compiled and COPIED ahead of
+                    // the retraction below, which would otherwise stand the
+                    // caller's element drop down and leave that read dangling.
+                    let uam_array_arg = if !is_ref
+                        && slice_elems.get(pidx).copied().flatten().is_none()
+                        && self.uam_array_arg_wants_copy(&a.value)
+                    {
+                        let v = self.compile_expr(&a.value)?;
+                        Some(self.uam_array_defensive_copy(&a.value, v))
+                    } else {
+                        None
+                    };
                     if !is_ref {
                         // B-2026-07-28-4: by-value struct arg whose param
                         // declined the entry copy — move it, don't leave both
@@ -7843,6 +7857,10 @@ impl<'ctx> super::Codegen<'ctx> {
                                 }
                             }
                         }
+                    }
+                    if let Some(v) = uam_array_arg {
+                        compiled_args.push(v.into());
+                        continue;
                     }
                     if is_ref {
                         // B-2026-08-21-23 — a `ref Slice[T]` / `mut ref Slice[T]`

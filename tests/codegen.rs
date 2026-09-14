@@ -34359,6 +34359,138 @@ fn main() {
         }
     }
 
+    /// B-2026-09-14-27 — an owned `Array[T, N]` READ AFTER it is handed over by
+    /// value reads its OWN buffers, on every backend.
+    ///
+    /// `UseAfterMove` is advisory on the compiled surface by design
+    /// (`kind_blocks_production`), and what makes that safe is the defensive
+    /// copy: at a flagged move the consumer is handed an independent value and
+    /// the source keeps its own. `Array` took the CALLEE-OWNS convention
+    /// (B-2026-09-13-15 / -16) without that copy, so the hand-off retracted the
+    /// caller's element drop and the later read dangled — `karac check` printed
+    /// `warning[ownership]` then `All checks passed`, `karac build` produced a
+    /// binary, and the binary printed two DIFFERENT wrong strings on the two
+    /// compiled backends at exit 0 against a correct `--interp`.
+    ///
+    /// The cells are the hand-off shapes, each measured broken before the fix:
+    /// a free function, a method, an associated function, `Vec.push` and
+    /// `Map.insert` with the container dying first (in `main` the container
+    /// outlives the read, which is the timing that hides this whole class), the
+    /// same binding twice, an enclosing array literal, and a variant
+    /// constructor. Long f-string elements on purpose — a short literal is
+    /// stored inline by SSO and never exercises the buffer at all.
+    ///
+    /// THE CONTROLS ARE THE OTHER HALF OF THE RULE, because the copy must fire
+    /// exactly where the destination takes ownership. A struct-literal field, a
+    /// tuple literal and a plain rebind all keep the SOURCE as sole owner — the
+    /// destination's drop walker has no `Array` arm (B-2026-09-10-8 / -26) or
+    /// it takes the source's own memory (`rebind_source_keeps_array_memory`) —
+    /// so copying there strands the copy. Each was clean before this row and
+    /// stays clean; the tuple cell in particular leaked 44 B at `-O0` on an
+    /// intermediate version of the fix that copied at every destination.
+    #[test]
+    fn e2e_array_read_after_a_by_value_move_reads_its_own_buffers() {
+        const HDR: &str = "fn take(a: Array[String, 2]) -> i64 { return a[0].len(); }\n\
+                           struct Acc { id: i64 }\n\
+                           impl Acc { fn eat(ref self, a: Array[String, 2]) -> i64 { return a[1].len(); } }\n\
+                           struct St { }\n\
+                           impl St { fn sv(a: Array[String, 2]) -> i64 { return a[1].len(); } }\n\
+                           struct Hold { a: Array[String, 2], n: i64 }\n\
+                           enum Wrp { Full(Array[String, 2]), Empty }\n\
+                           fn wlen(w: Wrp) -> i64 { match w { Wrp.Full(x) => { return x[1].len(); } Wrp.Empty => { return 0; } } }\n\
+                           fn takev(a: Array[Vec[i64], 2]) -> i64 { return a[0].len() + a[1].len(); }\n\
+                           fn sumi(a: Array[i64, 3]) -> i64 { return a[0] + a[1] + a[2]; }\n\
+                           fn takevs(v: Vec[String]) -> i64 { return v[0].len(); }\n\
+                           fn mka(t: String) -> Array[String, 2] { return [f\"{t}-aaaaaaaaaaaaaaaaaaaa\", f\"{t}-bbbbbbbbbbbbbbbbbbbb\"]; }\n";
+        for (label, body, want) in [
+            (
+                "a free function argument",
+                "let a = mka(\"c1\");\nlet n = take(a);\nprintln(f\"{a[0]} {n}\");",
+                "c1-aaaaaaaaaaaaaaaaaaaa 23\n",
+            ),
+            (
+                "a method argument",
+                "let h = Acc { id: 0 };\nlet a = mka(\"c2\");\nlet n = h.eat(a);\nprintln(f\"{a[0]} {n}\");",
+                "c2-aaaaaaaaaaaaaaaaaaaa 23\n",
+            ),
+            (
+                "an associated-function argument",
+                "let a = mka(\"c3\");\nlet n = St.sv(a);\nprintln(f\"{a[0]} {n}\");",
+                "c3-aaaaaaaaaaaaaaaaaaaa 23\n",
+            ),
+            (
+                "Vec.push, with the container dying FIRST",
+                "let a = mka(\"c4\");\n\
+                 { let mut v: Vec[Array[String, 2]] = []; v.push(a); println(f\"in {v.len()}\"); }\n\
+                 println(f\"{a[0]}\");",
+                "in 1\nc4-aaaaaaaaaaaaaaaaaaaa\n",
+            ),
+            (
+                "Map.insert, with the container dying FIRST",
+                "let a = mka(\"c5\");\n\
+                 { let mut m: Map[i64, Array[String, 2]] = Map.new(); m.insert(1, a); println(f\"in {m.len()}\"); }\n\
+                 println(f\"{a[0]}\");",
+                "in 1\nc5-aaaaaaaaaaaaaaaaaaaa\n",
+            ),
+            (
+                "the same binding handed over TWICE",
+                "let a = mka(\"c6\");\nlet x = take(a);\nlet y = take(a);\nprintln(f\"{a[0]} {x} {y}\");",
+                "c6-aaaaaaaaaaaaaaaaaaaa 23 23\n",
+            ),
+            (
+                "an element of an enclosing array literal",
+                "let a = mka(\"c7\");\nlet n: Array[Array[String, 2], 1] = [a];\nprintln(f\"{a[0]}\");",
+                "c7-aaaaaaaaaaaaaaaaaaaa\n",
+            ),
+            (
+                "a user enum variant constructor",
+                "let a = mka(\"c8\");\nlet w = Wrp.Full(a);\nprintln(f\"{a[0]} {wlen(w)}\");",
+                "c8-aaaaaaaaaaaaaaaaaaaa 23\n",
+            ),
+            (
+                "an Array[Vec[i64], N] argument",
+                "let a: Array[Vec[i64], 2] = [[1, 2, 3], [4, 5]];\nlet n = takev(a);\nprintln(f\"{a[0].len()} {n}\");",
+                "3 5\n",
+            ),
+            (
+                "control: a struct-literal field keeps the source alias",
+                "let a = mka(\"d1\");\nlet h = Hold { a: a, n: 1 };\nprintln(f\"{a[0]} {h.a[1].len()}\");",
+                "d1-aaaaaaaaaaaaaaaaaaaa 23\n",
+            ),
+            (
+                "control: a tuple literal keeps the source alias",
+                "let a = mka(\"d2\");\nlet t = (a, 5);\nprintln(f\"{a[0]} {t.1}\");",
+                "d2-aaaaaaaaaaaaaaaaaaaa 5\n",
+            ),
+            (
+                "control: a plain rebind keeps the source alias",
+                "let a = mka(\"d3\");\nlet b = a;\nprintln(f\"{a[0]} {b[1].len()}\");",
+                "d3-aaaaaaaaaaaaaaaaaaaa 23\n",
+            ),
+            (
+                "control: a Copy Array[i64, N] never moves at all",
+                "let a: Array[i64, 3] = [1, 2, 3];\nlet n = sumi(a);\nprintln(f\"{a[0]} {n}\");",
+                "1 6\n",
+            ),
+            (
+                "control: Vec[String] is caller-retains and was always correct",
+                "let v: Vec[String] = [f\"d5-aaaaaaaaaaaaaaaaaaaa\"];\nlet n = takevs(v);\nprintln(f\"{v[0]} {n}\");",
+                "d5-aaaaaaaaaaaaaaaaaaaa 23\n",
+            ),
+        ] {
+            let src = format!("{HDR}fn main() {{\n{body}\n}}\n");
+            let (interp_out, interp_errs, _, _) = karac::run_program_full(&src);
+            assert!(
+                interp_errs.is_empty(),
+                "[{label}] interp errored: {interp_errs:?}"
+            );
+            assert_eq!(interp_out.join(""), want, "[{label}] interpreter");
+            if let Some(aot) = run_program(&src) {
+                assert_eq!(aot, want, "[{label}] AOT");
+            }
+        }
+    }
+
     /// B-2026-09-14-2 (gate-lift half) — an `Option`/`Result` whose payload is a
     /// `Vec` runs its elements' `Drop` bodies OUTSIDE the discard position too:
     /// a bound envelope, a plain move, a consuming `match` / `if let` arm, and

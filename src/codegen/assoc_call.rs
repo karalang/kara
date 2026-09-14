@@ -3045,6 +3045,15 @@ impl<'ctx> super::Codegen<'ctx> {
                     }
                 } else {
                     let val = self.compile_expr(&a.value)?;
+                    // B-2026-09-14-27 — an owned `Array` argument the ownership
+                    // pass flagged as read again after this move gets an
+                    // independent copy, so the retraction below can stand the
+                    // caller's element drop down without dangling that read.
+                    // This arm compiles the argument BEFORE the retraction, so
+                    // the copy records its site in time for the skip; the
+                    // free-fn and method loops, which retract first, pre-check
+                    // with `uam_array_arg_wants_copy` instead.
+                    let val = self.uam_array_defensive_copy(&a.value, val);
                     // `Option[shared T]` arg-share discipline — mirrors the
                     // free-fn call path in `compile_call`: a tracked
                     // Identifier binding gets a tag+null-guarded inner inc so

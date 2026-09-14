@@ -1492,6 +1492,23 @@ impl<'ctx> super::Codegen<'ctx> {
                 continue;
             }
             let is_ref = ref_flags.get(i).copied().unwrap_or(false);
+            // B-2026-09-14-27 — an owned `Array` argument the ownership
+            // pass flagged as read again after this move. Compile and COPY
+            // it here, ahead of the retraction below: `Array` is
+            // callee-owns (B-2026-09-13-15 / -16), so that retraction
+            // stands the caller's element drop down and the later read
+            // dangles unless the callee is handed an independent array.
+            // The copy records the site, which is what makes
+            // `suppress_array_binding_move_arg` skip.
+            let uam_array_arg = if !is_ref
+                && slice_elems.get(i).copied().flatten().is_none()
+                && self.uam_array_arg_wants_copy(&a.value)
+            {
+                let v = self.compile_expr(&a.value)?;
+                Some(self.uam_array_defensive_copy(&a.value, v))
+            } else {
+                None
+            };
             if !is_ref {
                 // B-2026-07-28-4: by-value struct arg whose param declined the
                 // entry copy — move it, don't leave both sides owning it.
@@ -1500,6 +1517,10 @@ impl<'ctx> super::Codegen<'ctx> {
                 // prepass proved transfer-safe, whose callee now takes these
                 // buffers instead of copying them.
                 self.move_transferred_struct_arg(&a.value, &name, i);
+            }
+            if let Some(v) = uam_array_arg {
+                compiled_args.push(v.into());
+                continue;
             }
             if is_ref {
                 // `ref Slice[T]` / `mut ref Slice[T]` param fed an `Array[T, N]`:

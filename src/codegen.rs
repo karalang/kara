@@ -1964,6 +1964,22 @@ pub(super) struct Codegen<'ctx> {
     pub(crate) deferred_shared_temp_release:
         Option<(inkwell::types::StructType<'ctx>, PointerValue<'ctx>)>,
     pub(crate) in_return_defensive_copy: bool,
+    /// B-2026-09-14-27 — suppress the fixed-`Array` leg of
+    /// [`Self::maybe_defensive_copy_param_arg`] for a destination that does
+    /// NOT take ownership of an array it is handed.
+    ///
+    /// The array leg gives the destination its own `N` buffers so the source
+    /// can keep its scope-exit element drop, which is right wherever the
+    /// destination frees what it is given (a callee-owns `Array` param, a
+    /// `Vec`/`Map` element, an enclosing array literal). A TUPLE literal is
+    /// the one measured exception: `synthesize_tuple_drop_fn_te` gates on
+    /// `type_expr_has_drop_heap` / `tuple_elem_needs_deep_drop`, and NEITHER
+    /// has an `Array` arm (B-2026-09-10-8 / -26), so a tuple never frees an
+    /// array element and the source must stay its sole owner. Copying there
+    /// leaks the copy outright — measured at 44 B in 2 blocks at `-O0` on
+    /// `let a: Array[String, 2] = ..; let t = (a, 5); println(a[0]);`, on a
+    /// cell that is clean without the leg.
+    pub(crate) uam_array_copy_declined: bool,
     /// Set of top-level Atomic[T]-typed bindings whose inner T is `bool`.
     /// The slot itself is widened to `i8` (LLVM atomics reject `i1`); this
     /// set drives the `.load` trunc-to-i1 and `.store` zext-to-i8 wrapping
@@ -6413,6 +6429,7 @@ impl<'ctx> Codegen<'ctx> {
             deferred_shared_temp_release: None,
             vec_elem_field_clone_log: Vec::new(),
             in_return_defensive_copy: false,
+            uam_array_copy_declined: false,
             tracing: Tracing {
                 strip_error_trace: read_strip_error_trace_env(),
                 runtime_panic_prefix_needed: true,
