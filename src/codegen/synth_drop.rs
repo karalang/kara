@@ -460,6 +460,76 @@ impl<'ctx> super::Codegen<'ctx> {
 
                             self.builder.position_at_end(skip_bb);
                         }
+                        EnumDropKind::BoxedArray => {
+                            // B-2026-09-14-12 — the array peer of the
+                            // `BoxedOptRes` arm below, and the ONE structural
+                            // difference is that this one walks the interior
+                            // before releasing the envelope.
+                            //
+                            // It has to. Classifying the field at all stands
+                            // the five explicit `BoxedEnumDrop` registrations
+                            // down (`user_enum_boxed_payload_variants` skips a
+                            // variant whose kind is not `None`), and each of
+                            // those freed the box AND its interior. A box-only
+                            // arm here would move the envelope's owner and drop
+                            // the interior's on the floor — turning a leak in
+                            // three container positions into a leak in eight.
+                            //
+                            // Resolve the interior drop BEFORE opening any
+                            // basic block: the sub-emitter may synthesize a
+                            // function and move the builder's insert block, the
+                            // same discipline the `VecOrString` arm above
+                            // documents.
+                            let inner_drop = variant_field_tes
+                                .iter()
+                                .find(|(n, _)| n == variant_name)
+                                .and_then(|(_, tes)| tes.get(fi))
+                                .cloned()
+                                .and_then(|te| self.enum_boxed_payload_interior_drop(&te, true));
+                            let w_idx = (*start_word + 1) as u32;
+                            if let Ok(word_ptr) = self.builder.build_struct_gep(
+                                layout.llvm_type,
+                                p_arg,
+                                w_idx,
+                                "drop.boxarr.wp",
+                            ) {
+                                let w = self
+                                    .builder
+                                    .build_load(i64_t, word_ptr, "drop.boxarr.w")
+                                    .unwrap()
+                                    .into_int_value();
+                                let box_ptr = self
+                                    .builder
+                                    .build_int_to_ptr(w, ptr_ty, "drop.boxarr.p")
+                                    .unwrap();
+                                let is_null = self
+                                    .builder
+                                    .build_is_null(box_ptr, "drop.boxarr.isnull")
+                                    .unwrap();
+                                let free_bb =
+                                    self.context.append_basic_block(drop_fn, "drop.boxarr.free");
+                                let skip_bb =
+                                    self.context.append_basic_block(drop_fn, "drop.boxarr.skip");
+                                self.builder
+                                    .build_conditional_branch(is_null, skip_bb, free_bb)
+                                    .unwrap();
+                                self.builder.position_at_end(free_bb);
+                                if let Some(f) = inner_drop {
+                                    self.builder.build_call(f, &[box_ptr.into()], "").unwrap();
+                                }
+                                self.builder
+                                    .build_call(self.runtime_fns.free_fn, &[box_ptr.into()], "")
+                                    .unwrap();
+                                // Re-zero the word so a re-entrant drain is a
+                                // no-op — the same defence the `BoxedOptRes`
+                                // arm and the `VecOrString` cap re-zero carry.
+                                self.builder
+                                    .build_store(word_ptr, i64_t.const_int(0, false))
+                                    .unwrap();
+                                self.builder.build_unconditional_branch(skip_bb).unwrap();
+                                self.builder.position_at_end(skip_bb);
+                            }
+                        }
                         EnumDropKind::BoxedOptRes => {
                             // B-2026-08-05-7 — free the heap box the pack side
                             // minted for an `Option`/`Result` payload. Its

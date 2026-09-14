@@ -8569,6 +8569,47 @@ impl<'ctx> super::Codegen<'ctx> {
     /// call because the temp has no binding and nothing registered
     /// `track_enum_var` for it. Keyed on `!= None`, the same gate
     /// `emit_enum_drop_switch` itself uses, so the two cannot drift.
+    /// B-2026-09-14-12 — the question the three `track_enum_var` REGISTRATION
+    /// gates are actually asking: does this enum's value need an owner at
+    /// scope exit?
+    ///
+    /// They asked [`Self::enum_has_heap_payload`], which folds
+    /// `is_heap_bearing()` — and that predicate answers a DIFFERENT question,
+    /// "must the by-value entry copy duplicate this payload?". For every kind
+    /// but the boxed ones the two answers coincide, which is why one predicate
+    /// served both for so long. `BoxedArray` splits them: the entry copy must
+    /// not duplicate its box (so `is_heap_bearing` is false, deliberately)
+    /// while the drop switch frees that box and walks its interior.
+    ///
+    /// The split is not academic. Classifying the payload at all stands the
+    /// five explicit `BoxedEnumDrop` registrations down
+    /// (`user_enum_boxed_payload_variants` skips a variant whose kind is not
+    /// `None`), so a site that then declines to register the SWITCH leaves the
+    /// value owned by nobody. Measured on two of the three gates: the
+    /// by-value-param prologue and the bare-discard site
+    /// (`mk(i);`, B-2026-09-14-9's own cell) each went from clean to 144 B in 3
+    /// blocks plus interior.
+    ///
+    /// Deliberately NOT [`Self::enum_drop_switch_does_work`], which folds
+    /// `!= None` and so would also pull in `BoxedOptRes`. That kind may well
+    /// have the same hole — nothing here measures it, its box's owner is a
+    /// different question because its arm frees the box alone, and widening
+    /// these three gates on an unmeasured guess is how a leak becomes a double
+    /// free. A separate row if it proves real.
+    pub(super) fn enum_needs_scope_exit_owner(&self, enum_name: &str) -> bool {
+        self.enum_has_heap_payload(enum_name)
+            || self
+                .type_decls
+                .enum_layouts
+                .get(enum_name)
+                .is_some_and(|l| {
+                    l.field_drop_kinds
+                        .values()
+                        .flatten()
+                        .any(|k| *k == super::state::EnumDropKind::BoxedArray)
+                })
+    }
+
     pub(super) fn enum_drop_switch_does_work(&self, enum_name: &str) -> bool {
         self.type_decls
             .enum_layouts

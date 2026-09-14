@@ -89291,6 +89291,184 @@ fn main() {
         );
     }
 
+    /// B-2026-09-14-12 — an enum whose variant payload is a heap-BOXED
+    /// `Array[T, N]` was freed ONLY by the five sites that registered a
+    /// `BoxedEnumDrop` explicitly (`let`, by-value param, return, mono, and
+    /// B-2026-09-14-9's discard). Everywhere else the value is reached through
+    /// the enum's own DROP SWITCH, and the switch had no case for it: held in a
+    /// struct FIELD, a `Vec` element or a `Map` value it lost its box and
+    /// interior at the container's destruction, with no discard anywhere in the
+    /// program.
+    ///
+    /// The repair classifies the payload `EnumDropKind::BoxedArray`, which
+    /// HANDS those five sites' job to the switch rather than adding a sixth
+    /// owner — `user_enum_boxed_payload_variants` stands a variant down the
+    /// moment its kind is not `None`. That is why the arm frees the box AND
+    /// walks the interior, where the `BoxedOptRes` arm beside it frees the box
+    /// alone.
+    ///
+    /// Measured at `-O0` under valgrind, three rounds per cell, before → after:
+    ///
+    /// * struct field / `Vec` element / `Map` value — 144 B in 3 blocks plus
+    ///   interior, each → clean (the row's own three cells).
+    /// * `Array[i64, 3]` in a `Vec` — 72 B in 3, pure box, no interior → clean.
+    /// * `Array[Vec[String], 2]` in a `Vec` — 144 B + 594 B indirect in 12 →
+    ///   clean.
+    /// * `v.clone()` and `#[derive(Clone)]` over the enum — 144 B + interior →
+    ///   clean (the clone had to learn to DEEP-copy the box; a shallow copy
+    ///   aliases the element buffers the new interior walk frees).
+    /// * `enum S { A(Array[i64, 2]), C(String) }` — 48 B in 3 → clean, and
+    ///   `enum K { A(Array[String, 2]), C(Wide) }` — 144 B + interior → clean.
+    ///   These two are the reason the boxing test reads the FIELD's word slot
+    ///   and not the enum-wide area: both have a wider sibling variant, both
+    ///   are boxed by the pack side all the same, and an area test declines
+    ///   them.
+    /// * by-value param (`eat(e)` and `eat(mk(i))`) and the bare discard
+    ///   `mk(j);` — clean before AND after, and the three cells that caught
+    ///   three wrong intermediate fixes. All three are the same mistake:
+    ///   `enum_has_heap_payload` folds `is_heap_bearing()`, which answers "must
+    ///   the entry copy duplicate this?" and not "does this need an owner at
+    ///   scope exit?" — and classifying the payload stands the explicit
+    ///   registration down, so a gate that then declines leaves the value owned
+    ///   by nobody. Without the `param_own` admission the callee registered
+    ///   nothing (144 B); without the transfer clause both frames registered
+    ///   against one box (7 invalid frees); without routing the discard gate
+    ///   through `enum_needs_scope_exit_owner` the temp owned nothing (144 B),
+    ///   which is B-2026-09-14-9's own cell and was caught by ITS fixture on
+    ///   the ASAN ratchet leg, after `cargo test --features llvm` had gone
+    ///   green — the Commands block's warning about those legs, paying for
+    ///   itself.
+    ///
+    /// NOT COVERED, deliberately: a match arm that CONSUMES the payload
+    /// (`E.A(a) => take(a)`). That aborts 134 before and after this fix — it is
+    /// B-2026-09-14-17, whose cause is a different predicate
+    /// (`boxed_payload_interior_taken_by_arm` answering FALSE for every array),
+    /// and giving the value an owner does not repair a wrong answer about who
+    /// the owner is. The fresh-temp spelling of that one arm is the single cell
+    /// this fix moves in the wrong direction — from a 144 B leak to that same
+    /// abort — because the temp previously had no owner at all; its read-only
+    /// and wildcard siblings go from 288 B + 78 B indirect to clean.
+    #[test]
+    fn asan_boxed_array_enum_payload_is_freed_by_the_drop_switch() {
+        assert_clean_asan_run(
+            r#"
+enum E { A(Array[String, 2]), B }
+enum N { A(Array[Vec[String], 2]), B }
+enum G { A(Array[i64, 3]), B }
+struct Wide { a: i64, b: i64, c: i64, d: i64, e: i64, f: i64, g: i64, h: i64 }
+enum K { A(Array[String, 2]), C(Wide) }
+enum S { A(Array[i64, 2]), C(String) }
+
+struct Held { e: E, k: i64 }
+
+#[derive(Clone)]
+struct HeldC { e: E, k: i64 }
+
+fn mk(n: i64) -> E {
+    let a: Array[String, 2] = [f"ba-left-aaaaaaaaaaaaaaaa-{n}", f"ba-right-bbbbbbbbbbbbbbbb-{n}"];
+    return E.A(a);
+}
+fn mkn(n: i64) -> N {
+    let mut p: Vec[String] = Vec.new();
+    p.push(f"ba-vec-cccccccccccccccc-{n}");
+    let mut q: Vec[String] = Vec.new();
+    q.push(f"ba-vec-dddddddddddddddd-{n}");
+    let a: Array[Vec[String], 2] = [p, q];
+    return N.A(a);
+}
+fn mkg(n: i64) -> G {
+    let a: Array[i64, 3] = [n, n + 1, n + 2];
+    return G.A(a);
+}
+fn mkk(n: i64) -> K {
+    let a: Array[String, 2] = [f"ba-wide-eeeeeeeeeeeeeeee-{n}", f"ba-wide-ffffffffffffffff-{n}"];
+    return K.A(a);
+}
+fn mks(n: i64) -> S {
+    let a: Array[i64, 2] = [n, n + 10];
+    return S.A(a);
+}
+fn eat(e: E) -> i64 { return 1; }
+
+fn main() {
+    let mut j: i64 = 0;
+    while j < 2 {
+        let h = Held { e: mk(j), k: j };
+        println(f"field:{h.k}");
+
+        let held: E = mk(j);
+        println(f"let:{j}");
+
+        let named: E = mk(j);
+        println(f"named:{eat(named)}");
+        println(f"temp:{eat(mk(j))}");
+
+        match mk(j) {
+            E.A(a) => { println(f"read:{a[0]}"); }
+            E.B => {}
+        }
+
+        match mkk(j) {
+            K.A(a) => { println(f"widearea:{a[0]}"); }
+            K.C(w) => { println(f"wide:{w.a}"); }
+        }
+
+        match mks(j) {
+            S.A(a) => { println(f"inline:{a[0]}"); }
+            S.C(s) => { println(f"str:{s}"); }
+        }
+
+        let hc = HeldC { e: mk(j), k: j };
+        let hc2 = hc.clone();
+        println(f"structclone:{hc2.k}");
+
+        mk(j);
+
+        j = j + 1;
+    }
+
+    let mut v: Vec[E] = Vec.new();
+    let mut vn: Vec[N] = Vec.new();
+    let mut vg: Vec[G] = Vec.new();
+    let mut m: Map[i64, E] = Map.new();
+    let mut i: i64 = 0;
+    while i < 2 {
+        v.push(mk(i));
+        vn.push(mkn(i));
+        vg.push(mkg(i));
+        m.insert(i, mk(i));
+        i = i + 1;
+    }
+    let vc: Vec[E] = v.clone();
+    println(f"vec:{v.len()} vecclone:{vc.len()} nested:{vn.len()} scalar:{vg.len()} map:{m.len()}");
+
+    println("end");
+}
+"#,
+            &[
+                "field:0",
+                "let:0",
+                "named:1",
+                "temp:1",
+                "read:ba-left-aaaaaaaaaaaaaaaa-0",
+                "widearea:ba-wide-eeeeeeeeeeeeeeee-0",
+                "inline:0",
+                "structclone:0",
+                "field:1",
+                "let:1",
+                "named:1",
+                "temp:1",
+                "read:ba-left-aaaaaaaaaaaaaaaa-1",
+                "widearea:ba-wide-eeeeeeeeeeeeeeee-1",
+                "inline:1",
+                "structclone:1",
+                "vec:2 vecclone:2 nested:2 scalar:2 map:2",
+                "end",
+            ],
+            "asan_boxed_array_enum_payload_is_freed_by_the_drop_switch",
+        );
+    }
+
     /// B-2026-09-13-19 — a BARE DISCARDED call statement lost a wide `Option`
     /// payload and its box.
     ///

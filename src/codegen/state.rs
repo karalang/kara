@@ -326,14 +326,63 @@ pub(crate) enum EnumDropKind {
     /// suppression to zero THROUGH it — a separate slice, and the one where the
     /// symmetry rule above actually bites.
     BoxedOptRes,
+    /// B-2026-09-14-12 — a fixed-size `Array[T, N]` payload wide enough to be
+    /// heap-BOXED, and the array peer of [`Self::BoxedOptRes`] one row over.
+    ///
+    /// The under-sizing has a different cause from the `Option`/`Result` one
+    /// and the same consequence. A variant DECLARATION can only spell an array
+    /// as `Path(["Array"], [Type(T), Const(N)])`, and
+    /// `payload_word_count_for_type_expr`'s real-width arm is keyed on
+    /// `TypeKind::Array` — a kind only ever produced by INFERENCE — so the
+    /// declared spelling takes that function's conservative `_ => 1` tail. The
+    /// pack side (`coerce_to_payload_words`) then sees a 6-word value against a
+    /// 1-word slot and boxes it, exactly as it does for an `Option` payload.
+    ///
+    /// Who owned that box is the part this kind changes. Five sites registered
+    /// a `BoxedEnumDrop` explicitly — `let`, by-value param, return, mono, and
+    /// B-2026-09-14-9's discard — and each freed the box AND walked its
+    /// interior. Every OTHER position reaches the value only through this drop
+    /// switch, which classified the field `None` and emitted nothing: a value
+    /// held in a struct FIELD, a `Vec` element or a `Map` value lost 144 B in 3
+    /// blocks plus its interior at the container's destruction, with no discard
+    /// anywhere in the program.
+    ///
+    /// The arm therefore frees the box AND runs the interior walk, which is
+    /// what the five explicit sites do today — it has to, because
+    /// `user_enum_boxed_payload_variants` stands a variant down the moment its
+    /// kind is not `None`, so classifying at all HANDS those five sites'
+    /// responsibility to this switch rather than adding a sixth owner. That
+    /// hand-off is why a box-only arm (the `BoxedOptRes` shape) would be a
+    /// regression rather than a partial fix.
+    ///
+    /// Unlike `BoxedOptRes` the interior walk is unconditional, and that is a
+    /// measured property of the shape rather than an assumption:
+    /// `boxed_payload_interior_taken_by_arm` answers FALSE for every array
+    /// payload, so the explicit sites never retract their interior drop either.
+    /// Where that answer is WRONG — a match arm that hands the array on — the
+    /// double free is B-2026-09-14-17's, present identically before and after
+    /// this kind existed, and not repaired by moving the same walk between two
+    /// owners.
+    ///
+    /// [`Self::is_heap_bearing`] is FALSE, for the same reason it is false for
+    /// `BoxedOptRes`: the by-value entry deep-copy must not duplicate the box
+    /// and the match-out suppression must not zero this word. The CLONE side is
+    /// the one place the two kinds diverge — `emit_enum_owning_clone_fn` copies
+    /// a `BoxedOptRes` box shallowly (correct, because that box's free is
+    /// box-only) and must DEEP-clone this one through the array's own owning
+    /// clone, or the two enums' boxes hold the same element buffers and the
+    /// interior walk here frees them twice.
+    BoxedArray,
 }
 
 impl EnumDropKind {
     /// Whether this kind owns heap the variant cleanup must free — and that
     /// the deep-copy-on-entry must duplicate and the move-suppression must
-    /// neutralize. Every kind except `None` and `BoxedOptRes` is heap-bearing.
+    /// neutralize. Every kind except `None`, `BoxedOptRes` and `BoxedArray` is
+    /// heap-bearing.
     ///
-    /// `BoxedOptRes` answers false on purpose: the entry-copy does NOT
+    /// `BoxedOptRes` and `BoxedArray` answer false on purpose: the entry-copy
+    /// does NOT
     /// duplicate its box, and the MATCH-OUT suppression must not zero its word
     /// — there the source still owns the box and only the interior moved, so
     /// zeroing would strand it, which is the leak this kind exists to close.
@@ -341,7 +390,10 @@ impl EnumDropKind {
     /// `zero_enum_payload_caps` therefore gates on `!= None` rather than on
     /// this predicate. See `BoxedOptRes`'s own doc.
     pub(crate) fn is_heap_bearing(self) -> bool {
-        !matches!(self, EnumDropKind::None | EnumDropKind::BoxedOptRes)
+        !matches!(
+            self,
+            EnumDropKind::None | EnumDropKind::BoxedOptRes | EnumDropKind::BoxedArray
+        )
     }
 }
 

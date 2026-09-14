@@ -3650,6 +3650,73 @@ impl<'ctx> super::Codegen<'ctx> {
                 }
                 let max_words = variant_totals.iter().copied().max().unwrap_or(0);
 
+                // B-2026-09-14-12 — upgrade a heap-BOXED `Array[T, N]` payload
+                // from `None` to `EnumDropKind::BoxedArray`.
+                //
+                // A second pass rather than an arm in
+                // `enum_drop_kind_for_type_expr` beside every other kind,
+                // because the question this asks is not answerable from the
+                // field's type alone: an array payload is boxed or inline
+                // depending on how its REAL width compares with the slot the
+                // layout gave it, and the slot is `field_word_offsets`, built
+                // by the loop above. Name a kind for an array that sits inline
+                // and the drop switch `inttoptr`s two elements and frees them
+                // as a pointer.
+                //
+                // The test is deliberately the PACK side's, word for word.
+                // `coerce_to_payload_words` boxes when the value's real width
+                // exceeds `num_words` — the field's own slot, which for an
+                // array is always the conservative 1, because a variant
+                // DECLARATION can only spell one as `Path(["Array"], [Type(T),
+                // Const(N)])` and `payload_word_count_for_type_expr`'s
+                // real-width arm is keyed on `TypeKind::Array`, a kind only
+                // inference produces. Reading the ENUM-WIDE area instead was
+                // measured and is WRONG in the direction that leaves the bug
+                // open: `enum K2 { A(Array[String, 2]), C(Wide) }` has area 8,
+                // its 6-word array is boxed by the pack side all the same, and
+                // an area test declines it — 144 B in 3 blocks still lost, in
+                // any enum that happens to own one wider variant.
+                //
+                // `user_enum_boxed_payload_variants` asks the area question,
+                // which is why those same enums have no explicit registration
+                // to collide with here. The sets stay disjoint in the safe
+                // direction regardless: everything it admits, this admits
+                // (`real > area >= field_words`), so it stands every one of
+                // them down.
+                //
+                // `real` is computed AST-side (`payload_word_count_for_type_expr`
+                // of the element, times N) rather than from
+                // `llvm_type_word_count`, because this pass runs inside
+                // `declare_enums` and struct LLVM types do not exist yet — the
+                // same struct-vs-enum cycle break `payload_word_count_for_type_expr`
+                // documents. The two agree field-for-field.
+                for (vname, kinds) in field_drop_kinds.iter_mut() {
+                    if kinds.len() != 1 || kinds[0] != EnumDropKind::None {
+                        continue;
+                    }
+                    let Some(v) = e.variants.iter().find(|v| &v.name == vname) else {
+                        continue;
+                    };
+                    let field_ty = match &v.kind {
+                        VariantKind::Tuple(tys) if tys.len() == 1 => &tys[0],
+                        VariantKind::Struct(fields) if fields.len() == 1 => &fields[0].ty,
+                        _ => continue,
+                    };
+                    let Some((elem_te, n)) = self.array_elem_and_len(field_ty) else {
+                        continue;
+                    };
+                    let field_words = field_word_offsets
+                        .get(vname)
+                        .and_then(|offs| offs.first())
+                        .map(|(_, w)| *w)
+                        .unwrap_or(1);
+                    let elem_words =
+                        self.payload_word_count_for_type_expr(&elem_te, &e.name, vname);
+                    if elem_words.saturating_mul(n as usize) > field_words {
+                        kinds[0] = EnumDropKind::BoxedArray;
+                    }
+                }
+
                 // Build the unified LLVM type: { i64 tag, i64 w0, ..., i64 wN }
                 let i64_t: BasicTypeEnum<'ctx> = self.context.i64_type().into();
                 let mut field_types: Vec<BasicTypeEnum<'ctx>> = vec![i64_t]; // tag

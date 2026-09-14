@@ -1142,6 +1142,16 @@ impl<'ctx> super::Codegen<'ctx> {
         // pointer as the Option's tag and clone garbage. Each gets its own box
         // in the destination instead (see the apply loop below).
         let mut boxed_fields: Vec<(String, u32, BasicTypeEnum<'ctx>)> = Vec::new();
+        // B-2026-09-14-12 — heap-BOXED `Array[T, N]` payload fields, kept out of
+        // BOTH lists above. Like `boxed_fields` the word is a box pointer, so
+        // the plain field walk would clone the pointer as a value; unlike
+        // `boxed_fields` the box's free is NOT box-only — the `BoxedArray` drop
+        // arm walks the interior — so a shallow box copy would leave two enums
+        // whose boxes hold the same element buffers and the second drop would
+        // free them twice. Each carries the array's own OWNING clone fn, run
+        // into the fresh box.
+        let mut boxed_deep_fields: Vec<(String, u32, BasicTypeEnum<'ctx>, FunctionValue<'ctx>)> =
+            Vec::new();
         for (variant_name, _tag) in &tag_entries {
             let (Some(kinds), Some(offsets)) = (
                 layout.field_drop_kinds.get(variant_name),
@@ -1168,6 +1178,17 @@ impl<'ctx> super::Codegen<'ctx> {
                         variant_name.clone(),
                         (*start_word + 1) as u32,
                         self.llvm_type_for_type_expr(&field_te),
+                    ));
+                    continue;
+                }
+                if *kind == EnumDropKind::BoxedArray {
+                    let payload_ty = self.llvm_type_for_type_expr(&field_te);
+                    let clone_fn = self.emit_owning_clone_fn_for_type_expr(&field_te);
+                    boxed_deep_fields.push((
+                        variant_name.clone(),
+                        (*start_word + 1) as u32,
+                        payload_ty,
+                        clone_fn,
                     ));
                     continue;
                 }
@@ -1317,6 +1338,79 @@ impl<'ctx> super::Codegen<'ctx> {
                 let new_word = self
                     .builder
                     .build_ptr_to_int(new_box, i64_t, "clone.optres.d.w")
+                    .unwrap();
+                self.builder.build_store(dst_word_ptr, new_word).unwrap();
+                self.builder.build_unconditional_branch(join_bb).unwrap();
+                self.builder.position_at_end(join_bb);
+            }
+            // B-2026-09-14-12 — the DEEP sibling of the loop above. Same fresh
+            // box, but the payload is written by the array's owning clone
+            // (independent element buffers) rather than a bitcopy, because the
+            // `BoxedArray` drop arm frees the interior as well as the envelope.
+            for (vn, field_idx, payload_ty, child_clone) in &boxed_deep_fields {
+                if vn != variant_name {
+                    continue;
+                }
+                let src_word_ptr = self
+                    .builder
+                    .build_struct_gep(layout.llvm_type, src, *field_idx, "clone.boxarr.s.wp")
+                    .unwrap();
+                let dst_word_ptr = self
+                    .builder
+                    .build_struct_gep(layout.llvm_type, dst, *field_idx, "clone.boxarr.d.wp")
+                    .unwrap();
+                let src_word = self
+                    .builder
+                    .build_load(i64_t, src_word_ptr, "clone.boxarr.s.w")
+                    .unwrap()
+                    .into_int_value();
+                let src_box = self
+                    .builder
+                    .build_int_to_ptr(src_word, ptr_ty, "clone.boxarr.s.box")
+                    .unwrap();
+                let is_null = self
+                    .builder
+                    .build_is_null(src_box, "clone.boxarr.isnull")
+                    .unwrap();
+                let copy_bb = self
+                    .context
+                    .append_basic_block(clone_fn, "clone.boxarr.copy");
+                let join_bb = self
+                    .context
+                    .append_basic_block(clone_fn, "clone.boxarr.join");
+                self.builder
+                    .build_conditional_branch(is_null, join_bb, copy_bb)
+                    .unwrap();
+                self.builder.position_at_end(copy_bb);
+                let size = payload_ty
+                    .size_of()
+                    .map(|s| {
+                        if s.get_type().get_bit_width() == 64 {
+                            s
+                        } else {
+                            self.builder
+                                .build_int_z_extend(s, i64_t, "clone.boxarr.sz64")
+                                .unwrap()
+                        }
+                    })
+                    .unwrap_or_else(|| i64_t.const_int(32, false));
+                let new_box = self
+                    .builder
+                    .build_call(
+                        self.runtime_fns.malloc_fn,
+                        &[size.into()],
+                        "clone.boxarr.box",
+                    )
+                    .unwrap()
+                    .try_as_basic_value()
+                    .unwrap_basic()
+                    .into_pointer_value();
+                self.builder
+                    .build_call(*child_clone, &[src_box.into(), new_box.into()], "")
+                    .unwrap();
+                let new_word = self
+                    .builder
+                    .build_ptr_to_int(new_box, i64_t, "clone.boxarr.d.w")
                     .unwrap();
                 self.builder.build_store(dst_word_ptr, new_word).unwrap();
                 self.builder.build_unconditional_branch(join_bb).unwrap();

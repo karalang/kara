@@ -6129,7 +6129,7 @@ impl<'ctx> super::Codegen<'ctx> {
         // interpreter was fine (B-2026-08-01-2; same rule as the ctor arm's
         // "pushed AFTER the battery so the LIFO drain runs them before the
         // battery's frees").
-        if is_enum && self.enum_has_heap_payload(&ret_ty_name) {
+        if is_enum && self.enum_needs_scope_exit_owner(&ret_ty_name) {
             self.track_enum_var(&ret_ty_name, slot);
         }
         // B-2026-09-10-2 — the MEMORY half for a discarded generic enum return.
@@ -7429,7 +7429,7 @@ impl<'ctx> super::Codegen<'ctx> {
                             // harmless only while no walker existed to read
                             // through it -- adding one without this move would
                             // have had `dR5` read a freed payload.
-                            if is_enum && self.enum_has_heap_payload(&ret_ty_name) {
+                            if is_enum && self.enum_needs_scope_exit_owner(&ret_ty_name) {
                                 self.track_enum_var(&ret_ty_name, slot);
                             }
                             if is_enum {
@@ -11864,7 +11864,7 @@ impl<'ctx> super::Codegen<'ctx> {
                                 UserDropKind::ContainerElemBodies,
                             );
                         }
-                        if self.enum_has_heap_payload(&tn) {
+                        if self.enum_needs_scope_exit_owner(&tn) {
                             self.track_enum_var(&tn, slot);
                         }
                     } else if self.type_decls.struct_types.contains_key(&tn) {

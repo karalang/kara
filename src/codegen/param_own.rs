@@ -461,11 +461,23 @@ impl<'ctx> super::Codegen<'ctx> {
             }
             // Only meaningful when some variant carries a heap payload —
             // otherwise the drop is a no-op and there's nothing to copy.
-            let any_heap = layout
-                .field_drop_kinds
-                .values()
-                .any(|ks| ks.iter().any(|k| k.is_heap_bearing()));
-            if !any_heap {
+            //
+            // B-2026-09-14-12 — asked through `enum_needs_scope_exit_owner`
+            // rather than by folding `is_heap_bearing` here, because this gate
+            // decides a REGISTRATION and that predicate answers the entry-COPY
+            // question. The two diverge for a boxed payload (see that
+            // function's doc), and the divergence is not a no-op: classifying
+            // the field stands this param's own explicit `BoxedEnumDrop`
+            // registration down, so declining here leaves the callee's value
+            // owned by nobody — measured as `fn eat(e: E)` over
+            // `enum E { A(Array[String, 2]), B }` going from clean to 144 B in
+            // 3 blocks plus its interior.
+            //
+            // The copy below is unaffected and stays right: it has no arm for
+            // the kind, so it duplicates nothing, which is exactly why the
+            // transfer clause in `enum_param_owned_by_transfer` puts this class
+            // on the transfer path and the caller retracts.
+            if !self.enum_needs_scope_exit_owner(type_name) {
                 return false;
             }
             // B-2026-09-07-16 — OWN BY TRANSFER when the entry copy cannot
@@ -2521,6 +2533,28 @@ impl<'ctx> super::Codegen<'ctx> {
             .into_iter()
             .map(|(_tag, name, tes)| (name, tes))
             .collect();
+        // B-2026-09-14-12 — a heap-BOXED `Array[T, N]` payload is the
+        // non-struct member of this class, and it belongs here for the reason
+        // the class exists rather than by analogy: the entry copy
+        // (`deep_copy_enum_heap_payload_in_place`) has no arm for the kind at
+        // all, so it duplicates NOTHING and the callee's slot is the caller's
+        // box. Answering false leaves both frames registered against one
+        // allocation — measured as 7 invalid frees and 21 valgrind errors on
+        // `let e: E = mk(i); eat(e);`, where the fresh-temp spelling
+        // `eat(mk(i))` was already clean because the caller had no binding to
+        // keep armed.
+        //
+        // Stated at the TYPE level like every other clause here, which is the
+        // whole point of the predicate: the caller's retraction
+        // (`move_declined_copy_enum_arg`) cannot read the callee's prologue, so
+        // the two frames reach the same answer only by asking this.
+        if layout
+            .field_drop_kinds
+            .values()
+            .any(|ks| ks.contains(&EnumDropKind::BoxedArray))
+        {
+            return true;
+        }
         layout.field_drop_kinds.iter().any(|(vname, kinds)| {
             kinds.iter().enumerate().any(|(fi, kind)| {
                 variant_tes
