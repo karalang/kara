@@ -5876,7 +5876,45 @@ impl<'ctx> super::Codegen<'ctx> {
                             .or_else(|| self.discarded_whole_param_type_name(&qualified, args))
                             .or(declared)
                     };
-                    resolved.filter(|d| !self.type_decls.enum_layouts.contains_key(d.as_str()))
+                    // B-2026-09-14-11 — the enum exclusion NARROWED from "any
+                    // enum" to "an enum returned by an assoc fn ON THAT SAME
+                    // ENUM", which is the shape B-2026-09-06-70 measured.
+                    //
+                    // Its cell was `Ev.mke();` over `impl Ev { fn mke() -> Ev }`
+                    // — the assoc fn's owner type IS the returned enum — and the
+                    // double body it recorded (`dQ71 dQ71`) is real: something
+                    // on that path already owns the value. Re-measured here and
+                    // still true, for every payload kind tried: String, `Vec`,
+                    // `Map`, a heap-bearing struct, a `Drop`-bearing struct, and
+                    // a `Drop` on the enum itself are all clean before and
+                    // after, one body per round on all three surfaces.
+                    //
+                    // The CROSS-TYPE spelling has no such owner and was the
+                    // whole of this row. `impl Host { fn mk(n) -> Ey }` under a
+                    // bare `Host.mk(i);` leaked on every payload kind — 21 B in
+                    // 3 blocks for a `String`, 288 B in 3 plus 21 indirect for a
+                    // `Vec[String]`, 216 B in 3 plus 1,605 indirect in 9 for a
+                    // `Map[i64, String]`, and 144 B in 3 plus its interior for
+                    // the `Array[String, 2]` the row reported.
+                    //
+                    // Gating on `type_runs_user_drop` instead was tried and is
+                    // WRONG: it admits the same-type `Vec` / `Map` / struct
+                    // payloads, which already have their owner, and turns three
+                    // clean cells into 4, 18 and 1 invalid frees respectively.
+                    // The owner tracks the assoc fn's SELF TYPE, not whether a
+                    // user `Drop` exists anywhere.
+                    //
+                    // Note the row's own localization does not survive this:
+                    // it read the defect as `untyped_let_boxed_enum_te` failing
+                    // to resolve a TypeExpr for the BOXED half, on the evidence
+                    // that "the inline-payload siblings of all four are clean".
+                    // The inline sibling of THIS spelling is not clean — it
+                    // leaks 42 B in 3 blocks — so no type resolution is
+                    // involved; the arm refused the whole enum class outright.
+                    resolved.filter(|d| {
+                        !self.type_decls.enum_layouts.contains_key(d.as_str())
+                            || d.as_str() != segments[0].as_str()
+                    })
                 }
                 _ => None,
             },

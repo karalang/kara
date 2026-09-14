@@ -89291,6 +89291,122 @@ fn main() {
         );
     }
 
+    /// B-2026-09-14-11 — a discarded enum returned by a CROSS-TYPE associated
+    /// function was owned by nobody. `Host.mk(i);` over
+    /// `impl Host { fn mk(n) -> Ey }` registered nothing at all, for every
+    /// payload kind.
+    ///
+    /// `try_track_discarded_user_drop_temp`'s assoc-fn arm ended in
+    /// `resolved.filter(|d| !enum_layouts.contains_key(d))` — it refused EVERY
+    /// enum return. That came from B-2026-09-06-70, whose cell was
+    /// `Ev.mke();` over `impl Ev { fn mke() -> Ev }`, i.e. the assoc fn's owner
+    /// type IS the returned enum. That shape really does have an owner and
+    /// really did double its `Drop` body; what was over-general is the jump
+    /// from it to all enums.
+    ///
+    /// Measured at `-O0` under valgrind, before -> after, CROSS-TYPE:
+    ///
+    /// * `String` payload — 21 B in 3 blocks -> clean.
+    /// * `Vec[String]` — 288 B in 3 plus 21 indirect in 3 -> clean.
+    /// * `Map[i64, String]` — 216 B in 3 plus 1,605 indirect in 9 -> clean.
+    ///   An order of magnitude past the 144 B the owning row reported, which
+    ///   is why the row's `Array`-shaped framing understated it.
+    /// * `Array[String, 2]` — 144 B in 3 plus 51 indirect in 6 -> clean.
+    ///
+    /// Whole fixture: 482 B in 8 blocks plus 1,256 B indirect in 12 before,
+    /// clean after, identical under `--interp` and `-O0`.
+    ///
+    /// THE SAME-TYPE CELLS ARE THE POINT, and they are here as controls that
+    /// must NOT move: `Ev.mke()` (Drop-bearing payload), `Ew.mkw()` (heap
+    /// struct payload) and `Ed.mkd()` (a `Drop` on the enum itself) are clean
+    /// before AND after, one body per round. An earlier gate on
+    /// `type_runs_user_drop` passed this row's own cells and turned the
+    /// same-type `Vec`, `Map` and struct payloads into 4, 18 and 1 invalid
+    /// frees — the owner tracks the assoc fn's SELF TYPE, not whether a user
+    /// `Drop` exists anywhere. Without these three controls that gate looks
+    /// correct.
+    ///
+    /// NOT COVERED: the same-type spelling with a BOXED `Array` payload
+    /// (`impl Ex { fn mk() -> Ex }` over `enum Ex { A(Array[String, 2]) }`),
+    /// which still leaks 144 B in 3 plus 42 indirect in 6 — the owner that
+    /// covers every other payload kind on that path does not cover a boxed
+    /// array. Its own row; excluded here deliberately rather than missed.
+    #[test]
+    fn asan_discarded_cross_type_assoc_enum_has_exactly_one_owner() {
+        assert_clean_asan_run(
+            r#"
+struct Q { id: i64, s: String }
+
+impl Drop for Q {
+    fn drop(mut ref self) { println(f"dQ{self.id}"); }
+}
+
+struct W { s: String, k: i64 }
+
+enum Ey { S(String), V(Vec[String]), M(Map[i64, String]), A(Array[String, 2]), N }
+enum Ev { A(Q), B }
+enum Ew { A(W), B }
+enum Ed { A(String), B }
+
+impl Drop for Ed {
+    fn drop(mut ref self) { println("dEd"); }
+}
+
+struct Host { k: i64 }
+
+impl Host {
+    fn mkstr(n: i64) -> Ey { return Ey.S(f"xt-str-aaaaaaaaaaaaaaaa-{n}"); }
+    fn mkvec(n: i64) -> Ey {
+        let mut p: Vec[String] = Vec.new();
+        p.push(f"xt-vec-bbbbbbbbbbbbbbbb-{n}");
+        return Ey.V(p);
+    }
+    fn mkmap(n: i64) -> Ey {
+        let mut p: Map[i64, String] = Map.new();
+        p.insert(n, f"xt-map-cccccccccccccccc-{n}");
+        return Ey.M(p);
+    }
+    fn mkarr(n: i64) -> Ey {
+        let p: Array[String, 2] = [f"xt-arr-dddddddddddddddd-{n}", f"xt-arr-eeeeeeeeeeeeeeee-{n}"];
+        return Ey.A(p);
+    }
+}
+
+impl Ev {
+    fn mke(n: i64) -> Ev { return Ev.A(Q { id: n, s: f"st-q-ffffffffffffffff-{n}" }); }
+}
+
+impl Ew {
+    fn mkw(n: i64) -> Ew { return Ew.A(W { s: f"st-w-gggggggggggggggg-{n}", k: n }); }
+}
+
+impl Ed {
+    fn mkd(n: i64) -> Ed { return Ed.A(f"st-d-hhhhhhhhhhhhhhhh-{n}"); }
+}
+
+fn main() {
+    let mut j: i64 = 0;
+    while j < 2 {
+        Host.mkstr(j);
+        Host.mkvec(j);
+        Host.mkmap(j);
+        Host.mkarr(j);
+
+        Ev.mke(j);
+        Ew.mkw(j);
+        Ed.mkd(j);
+
+        println(f"round:{j}");
+        j = j + 1;
+    }
+    println("end");
+}
+"#,
+            &["dQ0", "dEd", "round:0", "dQ1", "dEd", "round:1", "end"],
+            "asan_discarded_cross_type_assoc_enum_has_exactly_one_owner",
+        );
+    }
+
     /// B-2026-09-14-12 — an enum whose variant payload is a heap-BOXED
     /// `Array[T, N]` was freed ONLY by the five sites that registered a
     /// `BoxedEnumDrop` explicitly (`let`, by-value param, return, mono, and
