@@ -6347,6 +6347,7 @@ impl<'ctx> Codegen<'ctx> {
                 boxed_enum_payload_vars: std::collections::HashSet::new(),
                 boxed_enum_payload_struct: std::collections::HashMap::new(),
                 boxed_payload_alias: std::collections::HashMap::new(),
+                boxed_array_payload_alias: std::collections::HashMap::new(),
                 boxed_struct_payload_vars: std::collections::HashSet::new(),
                 boxed_struct_payload_param_vars: std::collections::HashSet::new(),
                 callee_owned_payload_bodies_params: std::collections::HashSet::new(),

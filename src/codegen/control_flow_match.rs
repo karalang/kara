@@ -607,10 +607,12 @@ impl<'ctx> super::Codegen<'ctx> {
         // the map is keyed by BINDING NAME, so an alias recorded by one arm
         // must not be inherited by a later one that reuses the name.
         let saved_boxed_payload_alias = self.payload_vars.boxed_payload_alias.clone();
+        let saved_boxed_array_payload_alias = self.payload_vars.boxed_array_payload_alias.clone();
         for (i, arm) in arms.iter().enumerate() {
             self.borrow_vars.borrowed_agg_payload_struct_vars =
                 saved_borrowed_agg_payload_vars.clone();
             self.payload_vars.boxed_payload_alias = saved_boxed_payload_alias.clone();
+            self.payload_vars.boxed_array_payload_alias = saved_boxed_array_payload_alias.clone();
             let arm_bb = next_bb;
             // Always create a fresh fail_bb — never reuse merge_bb directly.
             // If the last pattern condition is false (non-exhaustive match or
@@ -904,6 +906,12 @@ impl<'ctx> super::Codegen<'ctx> {
                     // alloca (no identifier to resolve). The source EnumDrop
                     // registered before the arm loop frees this arm's unbound
                     // heap fields at scope exit.
+                    // B-2026-09-14-17 — the fresh-temp spelling of the boxed
+                    // `Array` alias. It joined this class when B-2026-09-14-12
+                    // gave the temp an owner (before that it leaked instead of
+                    // aborting), and it has no scrutinee NAME, which is why the
+                    // registry is keyed on the slot.
+                    self.register_boxed_array_payload_alias(*alloca, enum_name, &arm.pattern);
                     self.suppress_destructured_enum_payload_cleanup_at(
                         *alloca,
                         enum_name,
@@ -1592,6 +1600,7 @@ impl<'ctx> super::Codegen<'ctx> {
         }
         self.borrow_vars.borrowed_agg_payload_struct_vars = saved_borrowed_agg_payload_vars;
         self.payload_vars.boxed_payload_alias = saved_boxed_payload_alias;
+        self.payload_vars.boxed_array_payload_alias = saved_boxed_array_payload_alias;
 
         // Wire the entry block. With a qualifying string-dispatch plan, branch
         // `entry_bb` through the switch tree straight into the arm bodies;
@@ -2271,6 +2280,97 @@ impl<'ctx> super::Codegen<'ctx> {
         self.payload_vars
             .boxed_payload_alias
             .insert(bound.clone(), (src.clone(), container.to_string()));
+    }
+
+    /// B-2026-09-14-17 — record that the arm's binding is a bit-copy alias of
+    /// the interior of a USER enum's heap-boxed `Array` payload.
+    ///
+    /// The `EnumDropKind::BoxedArray` peer of
+    /// [`Self::register_boxed_payload_alias`], which records only the SEEDED
+    /// `Option`/`Result` pair and returns early on any other variant path.
+    ///
+    /// WHY THE ALIAS IS NEEDED AT ALL, and why it is the array kind that needs
+    /// it. B-2026-09-14-12 classified this payload `BoxedArray`, which stands
+    /// the five explicit `BoxedEnumDrop` registrations down and hands the job
+    /// to the enum's own drop SWITCH — and that arm frees the box AND walks its
+    /// interior. A drop switch is emitted once per enum and cannot see any arm,
+    /// so when an arm hands the array to a new owner the interior gets two, and
+    /// the program aborts. The sibling `BoxedOptRes` arm carries no such hazard
+    /// because it is box-only: its interior already belongs to whoever matched
+    /// it out.
+    ///
+    /// Takes the SLOT rather than the scrutinee expression so the three
+    /// spellings that reach it — a named `match`, an `if let` / `let else`, and
+    /// a FRESH-TEMP scrutinee with no name at all — share one registration.
+    ///
+    /// DECLINES an element type that runs a user `Drop` body. The disarm this
+    /// feeds zeroes the box's contents, and the payload's BODIES walker reads
+    /// the same words afterwards: admitting `Array[D, 2]` for a `D` with an
+    /// `impl Drop` turned a correct `drop-D-7` / `drop-D-107` into
+    /// `drop-D-0` / `drop-D-0` on every compiled backend. That shape has its
+    /// own double free when the element also carries heap, measured and filed
+    /// as B-2026-09-14-25 rather than half-repaired here — a memory disarm that
+    /// corrupts the body trades an abort for silent wrong output.
+    pub(super) fn register_boxed_array_payload_alias(
+        &mut self,
+        slot: PointerValue<'ctx>,
+        enum_name: &str,
+        pattern: &Pattern,
+    ) {
+        let Some(layout) = self.type_decls.enum_layouts.get(enum_name).cloned() else {
+            return;
+        };
+        if layout.is_shared {
+            return;
+        }
+        let PatternKind::TupleVariant { patterns, .. } = &pattern.kind else {
+            return;
+        };
+        let [sub] = patterns.as_slice() else {
+            return;
+        };
+        let PatternKind::Binding(bound) = &sub.kind else {
+            return;
+        };
+        let Some((variant, _)) = self.enum_pattern_consumed_positions(enum_name, pattern) else {
+            return;
+        };
+        // Position 0: the single-field variant the `[sub]` shape above pinned.
+        // Read the KIND rather than re-deriving the boxing decision, so this
+        // tracks whatever `declarations.rs` classified.
+        if layout
+            .field_drop_kinds
+            .get(&variant)
+            .and_then(|k| k.first())
+            .copied()
+            != Some(super::state::EnumDropKind::BoxedArray)
+        {
+            return;
+        }
+        let elem_runs_body = self
+            .enum_variant_field_type_exprs(enum_name)
+            .into_iter()
+            .find(|(_, v, _)| v == &variant)
+            .and_then(|(_, _, tes)| tes.first().cloned())
+            .and_then(|te| self.array_elem_and_len(&te))
+            .and_then(|(elem, _)| match &elem.kind {
+                TypeKind::Path(p) => p.segments.first().cloned(),
+                _ => None,
+            })
+            .is_some_and(|n| self.type_runs_user_drop(&n, &mut Vec::new()));
+        if elem_runs_body {
+            return;
+        }
+        // The binding's own slot, for the staleness guard the map documents.
+        // A pattern whose binding has no slot yet cannot be handed on, so
+        // recording nothing is the right answer rather than a fallback.
+        let Some(bound_slot) = self.variables.get(bound.as_str()).map(|s| s.ptr) else {
+            return;
+        };
+        self.payload_vars.boxed_array_payload_alias.insert(
+            bound.clone(),
+            (slot, bound_slot, enum_name.to_string(), variant, 0),
+        );
     }
 
     /// B-2026-09-12-25 — disarm the drop INSIDE a boxed enum payload when the
@@ -9232,6 +9332,12 @@ impl<'ctx> super::Codegen<'ctx> {
             Some(n) => n.clone(),
             None => return,
         };
+        // B-2026-09-14-17 — the USER-enum `BoxedArray` alias, recorded HERE
+        // rather than beside `register_boxed_payload_alias` in the arm loop so
+        // the `if let` / `let else` spellings — which reach this function and
+        // never that loop — are covered by the same line. Both abort on the
+        // consuming arm exactly as the `match` spelling does.
+        self.register_boxed_array_payload_alias(slot.ptr, &enum_name, pattern);
         self.suppress_destructured_enum_payload_cleanup_at(slot.ptr, &enum_name, pattern);
         // B-2026-08-31-23 — when the scrutinee is a whole-payload binding over
         // a BOXED payload, the line above disarmed a BIT COPY. The box still

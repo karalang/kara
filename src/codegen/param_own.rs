@@ -5638,6 +5638,13 @@ impl<'ctx> super::Codegen<'ctx> {
             ExprKind::Identifier(n) => n.clone(),
             _ => return,
         };
+        // B-2026-09-14-17 — the arm-ALIAS case, as in the param-keyed sibling
+        // below and for the same reason: an array bound out of a boxed enum
+        // payload has no `StructDrop` on its own slot to retract, because what
+        // owns its buffers is the SOURCE enum's drop switch. `Vec.push` and the
+        // other container movers reach this helper rather than that one, so the
+        // hand-off has to be recognised in both.
+        self.suppress_boxed_array_payload_alias_move(&root);
         let Some(slot) = self.variables.get(root.as_str()).copied() else {
             return;
         };
@@ -5664,6 +5671,15 @@ impl<'ctx> super::Codegen<'ctx> {
             ExprKind::SelfValue => "self".to_string(),
             _ => return,
         };
+        // B-2026-09-14-17 — the arm-ALIAS case, before the owned-param one.
+        // An array bound out of a boxed enum payload has no `owned_array_params`
+        // entry and no `StructDrop` of its own to retract, so the retraction
+        // below no-ops for it; what owns its buffers is the SOURCE enum's drop
+        // switch, one indirection away. Handled here rather than at each
+        // hand-off site because this fn is already called from every one of
+        // them, which is also what keeps the read-only and rebind arms out of
+        // it: neither reaches a hand-off at all.
+        self.suppress_boxed_array_payload_alias_move(&root);
         if self.borrow_vars.owned_array_params.remove(&root).is_none() {
             return;
         }
@@ -5682,6 +5698,109 @@ impl<'ctx> super::Codegen<'ctx> {
                 )
             });
         }
+    }
+
+    /// B-2026-09-14-17 — stand the SOURCE enum's drop switch down for the
+    /// interior of a heap-boxed `Array` payload whose arm binding has just been
+    /// handed to a new owner.
+    ///
+    /// The arm's binding is a bit-copy of the box's element descriptors
+    /// (`register_boxed_array_payload_alias`), so it aliases the same character
+    /// buffers the box does. Under the callee-owns convention for a by-value
+    /// `Array` param (B-2026-09-13-15, B-2026-09-13-16) the destination frees
+    /// them, and the switch's `BoxedArray` arm walks the interior and frees
+    /// them again — 2 invalid frees and `exit 134` per iteration.
+    ///
+    /// ZEROES THE BOX'S CONTENTS, not the enum's payload WORD. The word holds
+    /// the box pointer and the box envelope still belongs to the switch, which
+    /// frees it after the interior walk; zeroing the word would strand it, the
+    /// leak `EnumDropKind::is_heap_bearing`'s doc warns about and the reason
+    /// this kind is excluded from the ordinary cap-zeroing in the first place.
+    /// An all-zero interior makes every `cap > 0` guard in the interior walk
+    /// skip, so the walk becomes a no-op and the envelope is still reclaimed.
+    ///
+    /// Safe against the binding because the copy is already taken: the arm's
+    /// pattern binds before the body is compiled, and this fires at a call or
+    /// literal INSIDE that body.
+    fn suppress_boxed_array_payload_alias_move(&mut self, root: &str) {
+        let Some((slot, bound_slot, enum_name, variant, pos)) =
+            self.payload_vars.boxed_array_payload_alias.remove(root)
+        else {
+            return;
+        };
+        // Staleness guard — see the map's own doc. The `if let` / `while let` /
+        // `let else` legs do not scope-restore this registry, so a later
+        // binding reusing the NAME would otherwise zero a box whose enum is
+        // already gone.
+        if self.variables.get(root).map(|s| s.ptr) != Some(bound_slot) {
+            return;
+        }
+        let Some(layout) = self
+            .type_decls
+            .enum_layouts
+            .get(enum_name.as_str())
+            .cloned()
+        else {
+            return;
+        };
+        let Some((start_word, _)) = layout
+            .field_word_offsets
+            .get(&variant)
+            .and_then(|o| o.get(pos))
+            .copied()
+        else {
+            return;
+        };
+        let Some(payload_te) = self
+            .enum_variant_field_type_exprs(enum_name.as_str())
+            .into_iter()
+            .find(|(_, v, _)| v == &variant)
+            .and_then(|(_, _, tes)| tes.get(pos).cloned())
+        else {
+            return;
+        };
+        let interior_ty = self.llvm_type_for_type_expr(&payload_te);
+        let Some(cur_fn) = self
+            .builder
+            .get_insert_block()
+            .and_then(|bb| bb.get_parent())
+        else {
+            return;
+        };
+        let i64_t = self.context.i64_type();
+        let ptr_ty = self.context.ptr_type(inkwell::AddressSpace::default());
+        let Ok(word_ptr) = self.builder.build_struct_gep(
+            layout.llvm_type,
+            slot,
+            (start_word + 1) as u32,
+            "boxarr.alias.wp",
+        ) else {
+            return;
+        };
+        let w = self
+            .builder
+            .build_load(i64_t, word_ptr, "boxarr.alias.w")
+            .unwrap()
+            .into_int_value();
+        let box_ptr = self
+            .builder
+            .build_int_to_ptr(w, ptr_ty, "boxarr.alias.p")
+            .unwrap();
+        let is_null = self
+            .builder
+            .build_is_null(box_ptr, "boxarr.alias.isnull")
+            .unwrap();
+        let zero_bb = self.context.append_basic_block(cur_fn, "boxarr.alias.zero");
+        let join_bb = self.context.append_basic_block(cur_fn, "boxarr.alias.join");
+        self.builder
+            .build_conditional_branch(is_null, join_bb, zero_bb)
+            .unwrap();
+        self.builder.position_at_end(zero_bb);
+        self.builder
+            .build_store(box_ptr, interior_ty.const_zero())
+            .unwrap();
+        self.builder.build_unconditional_branch(join_bb).unwrap();
+        self.builder.position_at_end(join_bb);
     }
 
     fn store_enum_word(

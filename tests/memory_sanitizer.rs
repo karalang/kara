@@ -89585,6 +89585,233 @@ fn main() {
         );
     }
 
+    /// B-2026-09-14-17 — a match arm that CONSUMES a heap-boxed `Array` enum
+    /// payload freed its element buffers twice and aborted the program: 2
+    /// invalid frees, `18 allocs / 24 frees`, `free(): double free detected in
+    /// tcache 2`, `exit 134` on every compiled backend against a correct
+    /// `--interp`. NINE spellings, one cause.
+    ///
+    /// WHERE THE ROW POINTED AND WHY IT IS NOT THERE. The row named
+    /// `boxed_payload_interior_taken_by_arm`'s unconditional FALSE for an array
+    /// payload, which was right when it was filed and stale by the time it was
+    /// worked: B-2026-09-14-12 landed in between and classified the payload
+    /// `EnumDropKind::BoxedArray`, which stands the five explicit
+    /// `BoxedEnumDrop` registrations down and hands the interior to the enum's
+    /// own drop SWITCH. That predicate is consulted only by those
+    /// registrations, so for this shape it is no longer reached at all —
+    /// instrumenting it printed nothing for any cell here. The retraction it
+    /// gates (`clear_boxed_enum_inner_drop`) likewise mutates a `CleanupAction`
+    /// that no longer exists, so both halves of the named repair would have
+    /// been no-ops.
+    ///
+    /// WHAT IT ACTUALLY IS. The switch's `BoxedArray` arm frees the box AND
+    /// walks its interior, and a drop switch is emitted once per ENUM and
+    /// cannot see any arm. The ordinary match-out cap-zeroing declines the
+    /// position because `EnumDropKind::is_heap_bearing()` is false for
+    /// `BoxedArray` — correct for the sibling `BoxedOptRes`, whose arm is
+    /// box-only, and wrong here, where the interior IS freed. So the source
+    /// keeps its interior owner while the arm hands the same buffers to a
+    /// second one.
+    ///
+    /// THE REPAIR records the arm's binding as an alias of the box interior
+    /// (`register_boxed_array_payload_alias`) and zeroes the BOX'S CONTENTS —
+    /// not the enum's payload word — at the hand-off, so the interior walk
+    /// becomes a no-op while the envelope keeps the owner that frees it.
+    /// Zeroing the word instead would strand the envelope, the leak
+    /// `is_heap_bearing`'s doc warns about.
+    ///
+    /// IT HOOKS THE TWO SHARED HAND-OFF HELPERS rather than the call sites.
+    /// `suppress_array_binding_move_arg` and `suppress_array_local_move_into_ctor`
+    /// are already invoked from every position that mints a new owner for an
+    /// array, so the read-only and rebind arms stay clean BY CONSTRUCTION —
+    /// neither reaches a hand-off. That matters: a syntactic arm scan gets the
+    /// rebind wrong in both directions, and `call_dispatch`'s own note on the
+    /// `Option` sibling records `let u = t` measured as a fresh 72 B leak when
+    /// the retraction was widened that way.
+    ///
+    /// MEASURED at `KARAC_OPT_LEVEL=0` under valgrind, and on all four surfaces
+    /// (`--interp`, JIT, `karac build`, `-O0` no-auto-par), before → after:
+    ///
+    /// * free-fn arg, method arg (`v.push`), struct literal, by-value param,
+    ///   FRESH-TEMP scrutinee, `if let`, `let else`, and the FRESH-TEMP forms of
+    ///   those last two — each `exit 134` with 2 invalid frees → clean, and the
+    ///   whole program `142 allocs / 142 frees`.
+    ///
+    /// The two fresh-temp `if let` / `let else` cells are a SECOND registration
+    /// site, not a second cause: those legs call
+    /// `suppress_destructured_enum_payload_cleanup_at` directly and so bypassed
+    /// the registration the named-scrutinee leg gets inside
+    /// `suppress_destructured_enum_payload_cleanup`. They were still aborting
+    /// after the first seven were clean, which is why they are pinned here.
+    /// * the method-arg cell aborted at the DEFAULT opt level too, not only at
+    ///   `-O0`; the other six had their double free deleted by `-O2` and shipped
+    ///   the abort at `-O0` alone.
+    /// * read-only arm, rebind arm, inline `String` payload, `Array[i64, 3]`
+    ///   payload — clean before AND after, and the four cells that pin the
+    ///   disarm to hand-offs rather than to "the arm binds something".
+    ///
+    /// THE `Drop`-BODY ELEMENT IS DELIBERATELY EXCLUDED, and the `dropelem`
+    /// cell below is what holds that line. `Array[D, 2]` for a `D` with an
+    /// `impl Drop` and NO heap is clean already, and admitting it turned a
+    /// correct `body:7` / `body:107` into `body:0` / `body:0` — the payload's
+    /// BODIES walker reads the words this disarm zeroes. The variant where the
+    /// element carries heap AND a body double-frees today and is not repaired
+    /// here, because the same zeroing would trade its abort for silent wrong
+    /// output; it is filed with its measurements rather than half-fixed.
+    #[test]
+    fn asan_consuming_arm_over_a_boxed_array_payload_frees_the_interior_once() {
+        assert_clean_asan_run(
+            r#"
+struct D { id: i64 }
+impl Drop for D { fn drop(mut ref self) { println(f"body:{self.id}"); } }
+
+enum E { A(Array[String, 2]), B }
+enum G { A(Array[i64, 3]), B }
+enum Bd { A(Array[D, 2]), B }
+enum E3 { A(String), B }
+
+struct W { inner: Array[String, 2] }
+
+fn mk(n: i64) -> E {
+    let a: Array[String, 2] = [f"ba17-left-aaaaaaaaaaaaaaaa-{n}", f"ba17-right-bbbbbbbbbbbbbbbb-{n}"];
+    return E.A(a);
+}
+fn mkg(n: i64) -> G { let a: Array[i64, 3] = [n, n + 1, n + 2]; return G.A(a); }
+fn mkb(n: i64) -> Bd { let a: Array[D, 2] = [D { id: n }, D { id: n + 100 }]; return Bd.A(a); }
+fn mk3(n: i64) -> E3 { return E3.A(f"ba17-inline-cccccccccccccccc-{n}"); }
+
+fn take(a: Array[String, 2]) -> i64 { return a[0].len(); }
+fn takeg(a: Array[i64, 3]) -> i64 { return a[0] + a[2]; }
+fn takeb(a: Array[D, 2]) -> i64 { return a[0].id; }
+fn take3(s: String) -> i64 { return s.len(); }
+
+fn eat(e: E) -> i64 {
+    match e {
+        E.A(a) => { return take(a); }
+        E.B => { return 0; }
+    }
+}
+fn viaTempLetElse(n: i64) -> i64 {
+    let E.A(a) = mk(n) else { return 0; };
+    return take(a);
+}
+fn viaLetElse(n: i64) -> i64 {
+    let e: E = mk(n);
+    let E.A(a) = e else { return 0; };
+    return take(a);
+}
+
+fn main() {
+    let mut i: i64 = 0;
+    while i < 2 {
+        let e1: E = mk(i);
+        match e1 {
+            E.A(a) => { println(f"freefn:{take(a)}"); }
+            E.B => {}
+        }
+
+        let mut v: Vec[Array[String, 2]] = Vec.new();
+        let e2: E = mk(i);
+        match e2 {
+            E.A(a) => { v.push(a); }
+            E.B => {}
+        }
+        println(f"method:{v.len()}");
+
+        let e3: E = mk(i);
+        match e3 {
+            E.A(a) => { let w = W { inner: a }; println(f"structlit:{w.inner[0].len()}"); }
+            E.B => {}
+        }
+
+        println(f"param:{eat(mk(i))}");
+
+        match mk(i) {
+            E.A(a) => { println(f"freshtemp:{take(a)}"); }
+            E.B => {}
+        }
+
+        let e4: E = mk(i);
+        if let E.A(a) = e4 { println(f"iflet:{take(a)}"); }
+
+        println(f"letelse:{viaLetElse(i)}");
+
+        if let E.A(a) = mk(i) { println(f"tempiflet:{take(a)}"); }
+
+        println(f"templetelse:{viaTempLetElse(i)}");
+
+        let e5: E = mk(i);
+        match e5 {
+            E.A(a) => { println(f"readonly:{a[1].len()}"); }
+            E.B => {}
+        }
+
+        let e6: E = mk(i);
+        match e6 {
+            E.A(a) => { let b = a; println(f"rebind:{b[1].len()}"); }
+            E.B => {}
+        }
+
+        let e7: E3 = mk3(i);
+        match e7 {
+            E3.A(s) => { println(f"inline:{take3(s)}"); }
+            E3.B => {}
+        }
+
+        let e8: G = mkg(i);
+        match e8 {
+            G.A(a) => { println(f"ints:{takeg(a)}"); }
+            G.B => {}
+        }
+
+        let e9: Bd = mkb(i);
+        match e9 {
+            Bd.A(a) => { println(f"dropelem:{takeb(a)}"); }
+            Bd.B => {}
+        }
+
+        i = i + 1;
+    }
+}
+"#,
+            &[
+                "freefn:28",
+                "method:1",
+                "structlit:28",
+                "param:28",
+                "freshtemp:28",
+                "iflet:28",
+                "letelse:28",
+                "tempiflet:28",
+                "templetelse:28",
+                "readonly:29",
+                "rebind:29",
+                "inline:30",
+                "ints:2",
+                "dropelem:0",
+                "body:0",
+                "body:100",
+                "freefn:28",
+                "method:1",
+                "structlit:28",
+                "param:28",
+                "freshtemp:28",
+                "iflet:28",
+                "letelse:28",
+                "tempiflet:28",
+                "templetelse:28",
+                "readonly:29",
+                "rebind:29",
+                "inline:30",
+                "ints:4",
+                "dropelem:1",
+                "body:1",
+                "body:101",
+            ],
+            "asan_consuming_arm_over_a_boxed_array_payload_frees_the_interior_once",
+        );
+    }
+
     /// B-2026-09-13-19 — a BARE DISCARDED call statement lost a wide `Option`
     /// payload and its box.
     ///

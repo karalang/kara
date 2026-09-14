@@ -140,6 +140,47 @@ pub(crate) struct PayloadVars<'ctx> {
     /// re-derive the box pointer and disarm THERE as well. Scoped per arm, for
     /// the reason B-2026-08-31-14 records about name-keyed registries.
     pub(crate) boxed_payload_alias: std::collections::HashMap<String, (String, String)>,
+    /// B-2026-09-14-17 — the USER-enum, `EnumDropKind::BoxedArray` sibling of
+    /// [`Self::boxed_payload_alias`], keyed the same way and scoped per arm for
+    /// the same reason.
+    ///
+    /// A separate map rather than a widening of that one: its two consumers
+    /// (`suppress_aliased_boxed_payload_cleanup` and the argument hand-off in
+    /// `call_dispatch`) both read the recorded container as a SEEDED enum name
+    /// and reach for `Option`/`Result` layouts with it, so a user enum stored
+    /// there resolves to the wrong layout rather than to none.
+    ///
+    /// Value is `(source slot, BINDING slot, enum name, variant, payload
+    /// position)` — what `suppress_boxed_array_payload_alias_move` needs to
+    /// re-derive the box pointer at the hand-off site, plus the identity check
+    /// below.
+    ///
+    /// The BINDING slot is a staleness guard, and it is needed because this map
+    /// is NOT scope-restored on every path that writes it. The `match` arm loop
+    /// saves and restores it per arm, but the `if let` / `while let` /
+    /// `let else` legs have no such frame, so an entry survives to the end of
+    /// the function. Without the guard, a later `let a: Array[String, 2] = …`
+    /// reusing the same NAME and handed to an owned-array param would zero a
+    /// box belonging to an enum that is already dead — a write through a freed
+    /// pointer, i.e. this fix's own failure mode. Comparing the binding's
+    /// current slot against the one recorded at the arm makes a rebound name a
+    /// no-op instead.
+    ///
+    /// The SLOT rather than the source's NAME, which is what the `Option`
+    /// sibling stores: a FRESH-TEMP scrutinee (`match mk(i) { E.A(a) => … }`)
+    /// has no name to resolve and is one of the spellings that aborts, so a
+    /// name-keyed source would leave it out. Every slot recorded here is an
+    /// entry-block alloca, so it dominates the hand-off inside the arm body.
+    pub(crate) boxed_array_payload_alias: std::collections::HashMap<
+        String,
+        (
+            inkwell::values::PointerValue<'ctx>,
+            inkwell::values::PointerValue<'ctx>,
+            String,
+            String,
+            usize,
+        ),
+    >,
     pub(crate) boxed_leaf_owning_depth: std::collections::HashMap<String, usize>,
     pub(crate) boxed_struct_payload_vars: std::collections::HashSet<String>,
     /// B-2026-09-06-50 — OWNED by-value params whose `Option` payload is a

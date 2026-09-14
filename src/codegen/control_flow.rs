@@ -343,6 +343,17 @@ impl<'ctx> super::Codegen<'ctx> {
         // the pattern's bindings now own. Then-arm only — the else/miss edge
         // runs no suppression so the drop walk frees the temp wholesale.
         if let Some((alloca, enum_name)) = &freshtemp_enum {
+            // B-2026-09-14-17 — the FRESH-TEMP spelling of the boxed `Array`
+            // payload alias. The named-scrutinee leg below registers it inside
+            // `suppress_destructured_enum_payload_cleanup`; this branch calls
+            // the `_at` form directly and so bypassed it, leaving
+            // `if let E.A(a) = mk(i) { take(a) }` and its `let else` twin
+            // aborting 134 with 2 invalid frees while the `let`-bound spelling
+            // of the same program was clean. Gated like the disarm below: a
+            // borrow-path binding owns nothing to hand on.
+            if optres_bindings_owned {
+                self.register_boxed_array_payload_alias(*alloca, enum_name, pattern);
+            }
             self.suppress_destructured_enum_payload_cleanup_at(*alloca, enum_name, pattern);
         } else if optres_bindings_owned {
             // B-2026-07-23-13: OWNED-VARIABLE user-enum scrutinee — the missing
@@ -1119,6 +1130,17 @@ impl<'ctx> super::Codegen<'ctx> {
         let optres_bindings_owned = !self.pattern_state.pattern_binding_is_borrow;
         self.pattern_state.pattern_binding_is_borrow = saved_borrow_flag;
         if let Some((alloca, enum_name)) = &freshtemp_enum {
+            // B-2026-09-14-17 — the FRESH-TEMP spelling of the boxed `Array`
+            // payload alias. The named-scrutinee leg below registers it inside
+            // `suppress_destructured_enum_payload_cleanup`; this branch calls
+            // the `_at` form directly and so bypassed it, leaving
+            // `if let E.A(a) = mk(i) { take(a) }` and its `let else` twin
+            // aborting 134 with 2 invalid frees while the `let`-bound spelling
+            // of the same program was clean. Gated like the disarm below: a
+            // borrow-path binding owns nothing to hand on.
+            if optres_bindings_owned {
+                self.register_boxed_array_payload_alias(*alloca, enum_name, pattern);
+            }
             self.suppress_destructured_enum_payload_cleanup_at(*alloca, enum_name, pattern);
         } else if optres_bindings_owned {
             // B-2026-08-09-14 — the WHILE-LET leg of B-2026-07-23-13, which
@@ -2025,6 +2047,17 @@ impl<'ctx> super::Codegen<'ctx> {
         let optres_bindings_owned = !self.pattern_state.pattern_binding_is_borrow;
         self.pattern_state.pattern_binding_is_borrow = saved_borrow_flag;
         if let Some((alloca, enum_name)) = &freshtemp_enum {
+            // B-2026-09-14-17 — the FRESH-TEMP spelling of the boxed `Array`
+            // payload alias. The named-scrutinee leg below registers it inside
+            // `suppress_destructured_enum_payload_cleanup`; this branch calls
+            // the `_at` form directly and so bypassed it, leaving
+            // `if let E.A(a) = mk(i) { take(a) }` and its `let else` twin
+            // aborting 134 with 2 invalid frees while the `let`-bound spelling
+            // of the same program was clean. Gated like the disarm below: a
+            // borrow-path binding owns nothing to hand on.
+            if optres_bindings_owned {
+                self.register_boxed_array_payload_alias(*alloca, enum_name, pattern);
+            }
             self.suppress_destructured_enum_payload_cleanup_at(*alloca, enum_name, pattern);
         } else if optres_bindings_owned {
             // B-2026-07-31-45 — the OWNED-VARIABLE disarm the match
