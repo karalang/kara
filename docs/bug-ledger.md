@@ -93,7 +93,7 @@ distinguish "bugs flattening" from "we stopped writing them down."
 | class | total |
 |---|---|
 | miscompile | 406 |
-| run-vs-build | 403 |
+| run-vs-build | 404 |
 | leak | 341 |
 | double-free | 229 |
 | missing-feature | 198 |
@@ -111,7 +111,7 @@ distinguish "bugs flattening" from "we stopped writing them down."
 | surface | total |
 |---|---|
 | codegen | 1726 |
-| interp | 434 |
+| interp | 435 |
 | typecheck | 299 |
 | other | 90 |
 | ownership | 74 |
@@ -193,6 +193,7 @@ _Generated from `bug-ledger.jsonl` by `scripts/bug-curve.py` (2026-05-20 → 202
 | B-2026-09-14-5 | 2026-09-14 | codegen | medium | THE COMPILED BACKENDS LOSE AN OWED `Option` PAYLOAD BODY FOR AN OWNED PARAM -- `fn eat(o: Option[(R, i64)]) -> i64 { match o { Some(t) => return t.1 } }` moves NOTHING out and still prints `got:9 end` on JIT/AOT against the interpreter's correct `dR5 got:9 end`; with two Drop-bearing elements and one moved out the compiled side runs NEITHER, so the direction is the reverse of B-2026-09-13-5's | — |
 | B-2026-09-14-6 | 2026-09-14 | codegen+interp | medium | AN `Option` PAYLOAD SUB-VALUE MOVED OUT RUNS ITS `Drop` BODY TWICE ON ALL THREE BACKENDS in two spellings -- a NAMED-LOCAL argument, and a payload whose field is heap-carrying -- so the A/B parity rule sees nothing and the duplicate is invisible to every gate | — |
 | B-2026-09-14-7 | 2026-09-14 | codegen+interp | low | AN `Option`-PAYLOAD ELEMENT MOVED OUT AND NOT RETURNED DIES AT OPPOSITE ENDS OF THE ARM -- `Some(t) => { let x = t.0; println("mid"); }` prints `mid dR5` under `--interp` against the compiled backends' `dR5 mid`, so the COUNT agrees and only the sequence differs | — |
+| B-2026-09-14-8 | 2026-09-14 | interp | low | THE INTERPRETER LOSES THE DIES-INSIDE `Drop` BODY FOR AN ASSOCIATED FN BUT NOT FOR THE METHOD SPELLING OF THE SAME CALLEE -- `Sk.pick(R { id: 1 }, false)` prints `k:91 dR91` under `--interp` against all three compiled surfaces' correct `dR1 k:91 dR91`, while adding a `mut ref self` receiver to the identical body makes the interpreter correct too | — |
 
 ### Relocated
 
