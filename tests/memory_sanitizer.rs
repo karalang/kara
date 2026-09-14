@@ -90592,5 +90592,34 @@ fn main() {
             &["t", "t", "t", "end"],
             "enum-tuple-payload-struct-wrapping-subword-tuple",
         );
+
+        // 7 -- A DIRECTLY-`shared` ELEMENT, found by the sweep the row asks
+        //      for rather than from its cell list. 48 B in 3 blocks before.
+        //
+        //      Same ordering root as cells 1 and 2, one table further: the
+        //      disjunct that recognises a shared element resolves through
+        //      `shared_types`, which the shared-struct declaration pass fills
+        //      AFTER the enum pass — so when an enum payload is classified that
+        //      map is EMPTY (measured: len 0, against 46 struct types already
+        //      known). The name-only `shared_type_names` set is filled earlier
+        //      and already holds the element then, so it is consulted as a
+        //      second disjunct rather than replacing the typed lookup the later
+        //      positions want.
+        assert_clean_asan_run(
+            "shared struct Shd { v: i64 }\n\
+             enum M { P((Shd, i64)), Q }\n\
+             fn main() {\n\
+             \x20\x20\x20\x20let n = env.args().len() as i64;\n\
+             \x20\x20\x20\x20let mut i: i64 = 0i64;\n\
+             \x20\x20\x20\x20while i < 3i64 {\n\
+             \x20\x20\x20\x20\x20\x20\x20\x20let g: M = P((Shd { v: n }, 1i64));\n\
+             \x20\x20\x20\x20\x20\x20\x20\x20println(\"t\");\n\
+             \x20\x20\x20\x20\x20\x20\x20\x20i = i + 1i64;\n\
+             \x20\x20\x20\x20}\n\
+             \x20\x20\x20\x20println(\"end\");\n\
+             }",
+            &["t", "t", "t", "end"],
+            "enum-tuple-payload-directly-shared-element",
+        );
     }
 }

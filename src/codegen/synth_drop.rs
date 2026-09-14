@@ -9255,6 +9255,32 @@ impl<'ctx> super::Codegen<'ctx> {
                     // A `Vec[shared]` element has had this answer for a long
                     // time; this is the tuple asking the same question.
                     || self.shared_heap_type_for_type_expr(te).is_some()
+                    // B-2026-09-12-10 — the same question asked of the table
+                    // that is POPULATED when an enum payload is classified.
+                    // The disjunct above resolves through `shared_types`, which
+                    // is filled by the shared-struct declaration pass — and
+                    // that pass runs AFTER the enum pass, so at the moment
+                    // `enum_drop_kind_for_type_expr` asks, `shared_types` is
+                    // entirely empty (measured: len 0, against 46 already-known
+                    // struct types). A directly-`shared` element was therefore
+                    // invisible in the enum-payload position and visible
+                    // everywhere else.
+                    //
+                    // `shared_type_names` is a name-only set filled earlier and
+                    // already holds the element then (measured: len 1,
+                    // containing it), which is why this is a second disjunct
+                    // rather than a change to the first: the LLVM-typed lookup
+                    // is what later positions want, and this is what the
+                    // declaration-time one can have.
+                    //
+                    // Measured: `enum M { P((Shd, i64)), Q }` over
+                    // `shared struct Shd` leaked 48 B in 3 blocks as an enum
+                    // payload while the identical tuple was clean as a plain
+                    // local and as a struct field.
+                    || matches!(&te.kind, TypeKind::Path(p)
+                        if p.segments.last().is_some_and(|n| {
+                            self.type_decls.shared_type_names.contains(n.as_str())
+                        }))
                     // B-2026-09-06-72 — a plain STRUCT element that
                     // transitively owns a `shared` field. Exactly the
                     // disjunct above one level down, and the same relation
