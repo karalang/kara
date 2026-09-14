@@ -92,9 +92,9 @@ distinguish "bugs flattening" from "we stopped writing them down."
 
 | class | total |
 |---|---|
-| run-vs-build | 408 |
+| run-vs-build | 409 |
 | miscompile | 406 |
-| leak | 347 |
+| leak | 346 |
 | double-free | 231 |
 | missing-feature | 198 |
 | codegen-gap | 177 |
@@ -184,7 +184,6 @@ _Generated from `bug-ledger.jsonl` by `scripts/bug-curve.py` (2026-05-20 → 202
 | B-2026-09-14-16 | 2026-09-14 | codegen+interp | low | PROJECTING ONE FIELD OFF A FRESH TEMP DROPS THE TEMP'S OTHER `Drop` BODIES ON EVERY SURFACE -- `let w = (mkw(7).r, 1);` runs the moved leaf's body but never the untouched sibling field's, while a bare discarded `mkw(7);` runs both | — |
 | B-2026-09-14-18 | 2026-09-14 | codegen+interp | medium | AN UNMOVED PART OF AN OWNED `Option` PAYLOAD LOSES ITS `Drop` BODY ON ALL FOUR SURFACES when the arm DESTRUCTURES the payload and returns a different part -- `Some((a, b)) => { return b; }` over `Option[(R, i64)]` prints `got:9 end` everywhere against the due `dR5 got:9 end`, and the two-Drop-element cell loses `dR6` everywhere, so the A/B parity rule sees nothing; this is the cell B-2026-09-13-5 recorded as 'correct on all four surfaces', which its `(R, i64)` sibling could not show | — |
 | B-2026-09-14-19 | 2026-09-14 | codegen | medium | WHERE THE COMPILED BACKENDS KEEP AN OWNED `Option` PAYLOAD'S `Drop` BODY THEY RUN IT AT THE CALLER'S SCOPE EXIT, NOT AT THE PAYLOAD'S DEATH -- `fn eat(o: Option[R]) -> i64` reading only `r.id` prints `got:5 end dR5` on JIT/AOT against `--interp`'s correct `dR5 got:5 end`, so the count agrees and the body is observable one statement too late; the mirror of B-2026-09-14-7, where compiled runs EARLY | — |
-| B-2026-09-14-21 | 2026-09-14 | codegen | low | A DISCARDED SAME-TYPE ASSOCIATED-FN ENUM LEAKS ONLY WHEN ITS PAYLOAD IS A BOXED `Array` -- `Ex.mk(i);` over `impl Ex { fn mk(n) -> Ex }` with `enum Ex { A(Array[String, 2]), B }` loses 144 B in 3 blocks plus 42 B indirect in 6, while the identical spelling with a `String`, `Vec`, `Map`, heap-struct or `Drop`-bearing payload is clean, so the owner that covers the same-type path does not reach through a box | — |
 | B-2026-09-14-22 | 2026-09-14 | codegen | medium | A GENERIC ENUM'S BOXED PAYLOAD LOSES ITS `Drop` BODY ON EVERY COMPILED SURFACE ONCE THE CONSUMING ARM BINDS IT -- `takew(Ho.Full(mkw()))` over a three-`String` payload prints `w:4 end` on JIT/AOT against `--interp`'s `w:4 dW4 end`, and the named-local spelling splits the same way, while the identical callee that does NOT bind the payload is correct on all four and the MONOMORPHIC twin is correct in both shapes -- so the axis is `clear_boxed_enum_inner_drop` retracting the box's interior walk with nothing picking the body up | — |
 | B-2026-09-14-23 | 2026-09-14 | codegen | medium | A WHOLE-CONTAINER REASSIGNMENT LOSES THE DISPLACED CONTAINER'S ELEMENT `Drop` BODIES ON EVERY COMPILED BACKEND -- `let mut v: Vec[D] = [..]; v = [..];` runs the displaced elements' bodies under `--interp` and none compiled, and `Array[D, N]` and both nested spellings diverge identically, so the loss is in the DISPLACEMENT site rather than in any element walker | — |
 | B-2026-09-14-24 | 2026-09-14 | typecheck | low | A NESTED `[..]` LITERAL UNDER A `Vec`-OUTER ANNOTATION DOES NOT TAKE THE INNER `Array[T, N]` TYPE -- `let v: Vec[Array[D, 1]] = [[mkd(1)], [mkd(2)]];` is rejected as `found 'Vec[Vec[D]]'` while the `Array`-outer spelling accepts the identical literal, so the annotation propagates through an `Array` level and not through a `Vec` one | — |
@@ -2572,6 +2571,7 @@ _Generated from `bug-ledger.jsonl` by `scripts/bug-curve.py` (2026-05-20 → 202
 | B-2026-09-14-15 | interp+codegen | medium | A NESTED FIXED `Array` (`Array[Array[D, N], M]`) RUNS ITS INNERMOST ELEMENTS' `Drop` BODIES UNDER `--interp` AND ON NEITHER COMPILED BACKEND -- no en… | 338a535 |
 | B-2026-09-14-17 | codegen | high | A MATCH ARM THAT CONSUMES A BOXED `Array` PAYLOAD FREES ITS ELEMENT BUFFERS TWICE AND ABORTS THE PROGRAM -- `match e { E.A(a) => take(a) }` over `enu… | 1a5d7f9 |
 | B-2026-09-14-20 | codegen | medium | SSO's PROMOTE-ON-MUTATION COSTS 32-40% ON CHAR-BY-CHAR STRING BUILDING, and it is the whole of the remaining corpus regression -- `sso_deinline_in_pl… | c1adb9c |
+| B-2026-09-14-21 | codegen | medium | A DISCARDED ENUM TEMP TAKES THE BY-TRANSFER STAND-DOWN THAT ONLY AN ARGUMENT SHOULD -- `Ex.mk(i);` and its `if`/`match`-tail spellings over an enum w… | 10008a1 |
 
 </details>
 
