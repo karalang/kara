@@ -2764,8 +2764,10 @@ impl<'ctx> super::Codegen<'ctx> {
     /// measured wrong. Holding the element type fixed and varying only where
     /// the envelope came from:
     ///
-    ///     match a LOCAL envelope      no bodies on either backend  <- the gap
-    ///     match a by-value PARAM      one body on both             <- already right
+    /// ```text
+    /// match a LOCAL envelope      no bodies on either backend  <- the gap
+    /// match a by-value PARAM      one body on both             <- already right
+    /// ```
     ///
     /// and sweeping `Array[E, N]` across the inline/boxed word-count boundary
     /// (2, 3, 4 words against the `Option` area's 3) changes nothing: every
