@@ -179,6 +179,37 @@ fn restore_default_sigpipe() {
 #[cfg(not(unix))]
 fn restore_default_sigpipe() {}
 
+/// Remove the handoff IR file the spawner left for us, when the spawner asked
+/// us to own it (`KARAC_JIT_IR_UNLINK`, set only by
+/// `run_check_cmds::run_ir_via_jit_subprocess`).
+///
+/// B-2026-09-10-10: `oneshot_main` already unlinks, immediately after
+/// `read_to_string`, and that covers every path where this process gets as far
+/// as opening the file. The two `libc::_exit(129)` orphan exits below do NOT:
+/// `main` calls `watch_for_parent_death()` BEFORE `oneshot_main`, so a runner
+/// whose spawner is SIGKILLed while it is still doing dynamic-load /
+/// arg-parsing work leaves via the startup check without ever reading the
+/// file — and the spawner, being dead, cannot run its own `remove_file`
+/// either. Nobody unlinks, and the ~53 KB file stays on disk indefinitely
+/// (measured present 30 minutes later). Deterministically: the runner started
+/// with a `SPAWNER_PID_ENV` naming a process that is not our parent exits 129
+/// with the file still there.
+///
+/// argv[1] is the path, which is also why this declines a `--`-prefixed first
+/// argument: `--repl-mode` and `--test-batch` name a mode rather than a file,
+/// and their callers manage their own temp paths.
+#[cfg(unix)]
+fn unlink_handoff_ir_if_ours() {
+    if std::env::var_os("KARAC_JIT_IR_UNLINK").is_none() {
+        return;
+    }
+    if let Some(path) = std::env::args().nth(1) {
+        if !path.starts_with("--") {
+            let _ = std::fs::remove_file(path);
+        }
+    }
+}
+
 /// Exit when the process that spawned this runner goes away — B-2026-09-05-24.
 ///
 /// `karac_jit_runner` is never a program in its own right: it exists only to
@@ -246,6 +277,11 @@ fn watch_for_parent_death() {
             if unsafe { libc::getppid() } != declared {
                 // Orphaned before we could arm. Same exit code and same
                 // reasoning as the watchdog below.
+                //
+                // This exit is ahead of `oneshot_main`'s unlink, and the
+                // spawner is by definition gone, so nothing else will remove
+                // the handoff file (B-2026-09-10-10).
+                unlink_handoff_ir_if_ours();
                 unsafe { libc::_exit(129) };
             }
             declared
@@ -279,6 +315,12 @@ fn watch_for_parent_death() {
                 //
                 // 129 is the shell's `128 + SIGHUP` — "the thing this process
                 // was attached to went away", which is exactly what happened.
+                //
+                // Unlink first, for the same reason as the startup check
+                // above: on the paths this thread fires before the one-shot
+                // read (a spawner killed during our dynamic load), the file
+                // has no other owner left alive (B-2026-09-10-10).
+                unlink_handoff_ir_if_ours();
                 unsafe { libc::_exit(129) };
             }
         });

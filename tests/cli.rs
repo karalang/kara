@@ -4506,6 +4506,96 @@ fn signalling_karac_run_does_not_orphan_the_jit_runner() {
     }
 }
 
+#[cfg(all(feature = "llvm", unix))]
+#[test]
+fn an_orphaned_jit_runner_unlinks_the_handoff_ir_before_exiting() {
+    // B-2026-09-10-10, the DETERMINISTIC half of the SIGKILL leg above.
+    //
+    // `signalling_karac_run_does_not_orphan_the_jit_runner` covers the same
+    // defect end to end, but only wins the race some of the time: it leaked in
+    // 2 of 4 full-gate runs and in 0 of 2 isolated ones, because the runner
+    // normally reaches `oneshot_main`'s unlink before the parent's death is
+    // visible. Measured here at 2/10 before the fix and 0/10 after — good
+    // enough to notice, not good enough to gate on.
+    //
+    // The mechanism does not need the race. `main` calls
+    // `watch_for_parent_death()` BEFORE `oneshot_main`, and that function exits
+    // 129 outright when the pid the spawner declared for itself is no longer
+    // our parent. Declaring a pid that was never our parent walks that exit
+    // path on every run, so the leak is one process spawn rather than a
+    // stochastic sweep.
+    use std::process::{Command, Stdio};
+
+    let runner = env!("CARGO_BIN_EXE_karac_jit_runner");
+    let tmp = scratch_project("jit-orphan-unlink");
+
+    // Not real IR: the orphan exit fires long before anything parses it, and
+    // the two control cells below only care whether the file survives.
+    let handoff = tmp.join("handoff.ll");
+
+    let spawn = |args: &[&str], declared: Option<&str>, optin: bool| -> Option<i32> {
+        let mut cmd = Command::new(runner);
+        cmd.args(args).stdout(Stdio::null()).stderr(Stdio::null());
+        if let Some(d) = declared {
+            cmd.env("KARAC_JIT_RUNNER_SPAWNER_PID", d);
+        }
+        if optin {
+            cmd.env("KARAC_JIT_IR_UNLINK", "1");
+        }
+        cmd.status().ok().and_then(|s| s.code())
+    };
+
+    // A pid that is definitely not this test process's parent. `2` is `kthreadd`
+    // on Linux and a live-but-unrelated pid on macOS; either way the runner's
+    // `getppid() != declared` check fires. It must be > 1 to pass the runner's
+    // own filter.
+    let not_our_parent = "2";
+
+    // Cell 1: the regression. Orphaned at startup, opted in — the runner owns
+    // the file and nothing else is alive to remove it.
+    write(&handoff, "; placeholder\n");
+    let rc = spawn(
+        &[handoff.to_str().expect("utf-8 path")],
+        Some(not_our_parent),
+        true,
+    );
+    assert_eq!(rc, Some(129), "expected the orphan exit path");
+    assert!(
+        !handoff.exists(),
+        "an orphaned karac_jit_runner left the handoff IR {} on disk — the \
+         spawner is dead by definition on this path, so nobody else will",
+        handoff.display()
+    );
+
+    // Cell 2: without the opt-in the file belongs to the caller (`karac test`'s
+    // dispatch and tests/codegen.rs both pass paths they manage themselves), so
+    // the same exit must NOT touch it.
+    write(&handoff, "; placeholder\n");
+    let rc = spawn(
+        &[handoff.to_str().expect("utf-8 path")],
+        Some(not_our_parent),
+        false,
+    );
+    assert_eq!(rc, Some(129), "expected the orphan exit path");
+    assert!(
+        handoff.exists(),
+        "an orphaned karac_jit_runner deleted a handoff IR it was never given \
+         ownership of ({})",
+        handoff.display()
+    );
+
+    // Cell 3: argv[1] is a MODE, not a path, so there is nothing to unlink and
+    // the neighbouring file must survive.
+    write(&handoff, "; placeholder\n");
+    let rc = spawn(&["--repl-mode"], Some(not_our_parent), true);
+    assert_eq!(rc, Some(129), "expected the orphan exit path");
+    assert!(
+        handoff.exists(),
+        "--repl-mode orphan exit removed an unrelated file ({})",
+        handoff.display()
+    );
+}
+
 #[cfg(feature = "llvm")]
 #[test]
 fn test_stdin_lines_run_and_build_parity() {
