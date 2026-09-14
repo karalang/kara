@@ -94,7 +94,7 @@ distinguish "bugs flattening" from "we stopped writing them down."
 |---|---|
 | miscompile | 406 |
 | run-vs-build | 404 |
-| leak | 342 |
+| leak | 344 |
 | double-free | 229 |
 | missing-feature | 198 |
 | codegen-gap | 177 |
@@ -110,7 +110,7 @@ distinguish "bugs flattening" from "we stopped writing them down."
 
 | surface | total |
 |---|---|
-| codegen | 1728 |
+| codegen | 1730 |
 | interp | 436 |
 | typecheck | 299 |
 | other | 90 |
@@ -190,8 +190,9 @@ _Generated from `bug-ledger.jsonl` by `scripts/bug-curve.py` (2026-05-20 → 202
 | B-2026-09-14-6 | 2026-09-14 | codegen+interp | medium | AN `Option` PAYLOAD SUB-VALUE MOVED OUT RUNS ITS `Drop` BODY TWICE ON ALL THREE BACKENDS in two spellings -- a NAMED-LOCAL argument, and a payload whose field is heap-carrying -- so the A/B parity rule sees nothing and the duplicate is invisible to every gate | — |
 | B-2026-09-14-7 | 2026-09-14 | codegen+interp | low | AN `Option`-PAYLOAD ELEMENT MOVED OUT AND NOT RETURNED DIES AT OPPOSITE ENDS OF THE ARM -- `Some(t) => { let x = t.0; println("mid"); }` prints `mid dR5` under `--interp` against the compiled backends' `dR5 mid`, so the COUNT agrees and only the sequence differs | — |
 | B-2026-09-14-8 | 2026-09-14 | interp | low | THE INTERPRETER LOSES THE DIES-INSIDE `Drop` BODY FOR AN ASSOCIATED FN BUT NOT FOR THE METHOD SPELLING OF THE SAME CALLEE -- `Sk.pick(R { id: 1 }, false)` prints `k:91 dR91` under `--interp` against all three compiled surfaces' correct `dR1 k:91 dR91`, while adding a `mut ref self` receiver to the identical body makes the interpreter correct too | — |
-| B-2026-09-14-9 | 2026-09-14 | codegen | medium | A BARE DISCARDED CALL RETURNING A CONCRETE USER ENUM WITH A BOXED `Array` PAYLOAD LOSES ITS BOX AND INTERIOR -- `mk(i);` over `fn mk(..) -> E` with `enum E { A(Array[String, 2]), B }` leaks 192 B in 4 blocks plus 136 B indirect in 8, while the `let`-bound spelling of the same call is now clean and the `Option` analogue was fixed by B-2026-09-13-19 | — |
 | B-2026-09-14-10 | 2026-09-14 | codegen+interp | low | A BORROW PROJECTION COPIES AS A METHOD ARGUMENT BUT NOT AS A FREE-FUNCTION ONE -- `v.push(w.r)` runs the field's `Drop` body TWICE and `consume(w.r)` runs it ONCE, same syntactic position, same borrow, on all four surfaces alike | — |
+| B-2026-09-14-11 | 2026-09-14 | codegen | medium | A DISCARDED USER-ENUM TEMP WITH A BOXED PAYLOAD STILL LEAKS IN EVERY SPELLING WHOSE TYPE CANNOT BE RESOLVED -- `h.makeb(i);`, `H.assoc(i);` and `let _ = if c { mk(i) } else { mk(i) };` each lose 144 B in 3 blocks plus 102 B indirect in 6, while their INLINE-payload siblings went clean with B-2026-09-14-9, because `untyped_let_boxed_enum_te` answers only for a direct free-function `Call` | — |
+| B-2026-09-14-12 | 2026-09-14 | codegen | medium | AN ENUM WITH A BOXED `Array` PAYLOAD IS FREED ONLY BY THE FIVE EXPLICIT REGISTRATION SITES -- held in a struct FIELD, a `Vec` or a `Map` it loses its box and interior at the container's destruction, 144 B in 3 blocks plus 102 B indirect in 6 for three entries, with no discard anywhere in the program, because the enum's own DROP SWITCH has no case for it | — |
 
 ### Relocated
 
@@ -2554,6 +2555,7 @@ _Generated from `bug-ledger.jsonl` by `scripts/bug-curve.py` (2026-05-20 → 202
 | B-2026-09-13-29 | codegen | medium | A DISCARDED `Option`/`Result` WHOSE PAYLOAD IS AN ARRAY RUNS ITS ELEMENT BODIES ON THE INTERPRETER AND NOT ON EITHER COMPILED BACKEND -- B-2026-09-10… | 1d73a30 |
 | B-2026-09-14-3 | codegen | medium | AN ENUM TUPLE VARIANT USED AS A FIRST-CLASS FUNCTION VALUE ICEs CODEGEN -- `let g = Col.A; g(3)` passes `karac check` and then panics in `closures.rs… | 09e2e4b |
 | B-2026-09-14-4 | parser | low | A QUALIFIED STRUCT-SHAPED VARIANT CANNOT PIN ITS TYPE ARGUMENTS -- `Sh[i64].S { v: 3 }` is a PARSE error (`Expected Semicolon, found LeftBrace`), the… | 938baae |
+| B-2026-09-14-9 | codegen | medium | A BARE DISCARDED CALL RETURNING A CONCRETE USER ENUM WITH A BOXED `Array` PAYLOAD LOSES ITS BOX AND INTERIOR -- `mk(i);` over `fn mk(..) -> E` with `… | 3e2365b |
 
 </details>
 
