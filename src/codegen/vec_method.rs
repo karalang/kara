@@ -3305,6 +3305,38 @@ impl<'ctx> super::Codegen<'ctx> {
                 // container's element walk now (see
                 // `disarm_moved_value_arg_user_drops`).
                 self.disarm_moved_value_arg_user_drops(&args[0].value);
+                // B-2026-09-14-14 — the ARRAY peer of the cap-zero above, and
+                // the one shape this move-semantics cluster never covered. An
+                // `Array[T, N]` local is neither a tracked Vec/String binding
+                // (so `suppress_source_vec_cleanup_for_arg_ex` does not reach
+                // it) nor a container/user-Drop binding (so neither disarm
+                // above does); it owns its elements through a `StructDrop`
+                // queued on its slot. `push` bit-copies the array in, so the
+                // container and the local then alias the same element buffers,
+                // and the local's scope-exit drop frees what the `Vec` still
+                // points at.
+                //
+                // At FUNCTION scope that drop runs after every read, so the
+                // dangling window never opens and the bug is invisible; in a
+                // block or loop body it runs before them. Measured at BOTH opt
+                // levels on `if true { let a: Array[String, 2] = ..; v.push(a) }`:
+                // `Invalid read of size 2` and garbage output on the compiled
+                // backends against a correct `--interp`, at exit code 0 with no
+                // diagnostic. The `String` element spelling one type over was
+                // always clean, which is what identified a MISSING arm rather
+                // than a broken one.
+                //
+                // The SLOT-keyed disarm rather than the `owned_array_params`
+                // one, and that is the whole reason this needed a new call: a
+                // block-scoped `let` array is not a param, so the param-keyed
+                // sibling (`suppress_array_binding_move_arg`) bails on its
+                // membership test. `Map.insert` calls exactly that sibling, so
+                // it is a no-op there too -- the Map spelling of this program is
+                // clean for its own reasons, not because it disarms. Retracting
+                // by slot covers the local, and the helper drops
+                // `owned_array_params` membership as well, so a by-value array
+                // PARAM argument cannot then be retracted twice.
+                self.suppress_array_local_move_into_ctor(&args[0].value);
                 // Map/Set source moved into the Vec: the Vec now owns the
                 // handle and frees it via the `Vec[Map]` element drop
                 // (`track_vec_of_maps_var`), so drop the source binding's
@@ -4385,6 +4417,16 @@ impl<'ctx> super::Codegen<'ctx> {
                 // container's element walk now (see
                 // `disarm_moved_value_arg_user_drops`).
                 self.disarm_moved_value_arg_user_drops(&args[0].value);
+                // B-2026-09-14-14 — the array standdown, same as the
+                // `push`/`push_back` arm's; see its comment for why the
+                // SLOT-keyed disarm is the one that reaches a block-scoped
+                // local. Repeated per arm deliberately: all FOUR element-moving
+                // arms take the argument by move and all four corrupted
+                // identically (`Invalid read of size 2`, garbage output against
+                // a correct `--interp`), so a pattern-matched edit that catches
+                // only `push`/`push_back` leaves this pair still dangling —
+                // measured that way before this line existed.
+                self.suppress_array_local_move_into_ctor(&args[0].value);
                 // Map/Set source moved into the Vec: the Vec now owns the
                 // handle and frees it via the `Vec[Map]` element drop
                 // (`track_vec_of_maps_var`), so drop the source binding's
@@ -4593,6 +4635,16 @@ impl<'ctx> super::Codegen<'ctx> {
                 // container's element walk now (see
                 // `disarm_moved_value_arg_user_drops`).
                 self.disarm_moved_value_arg_user_drops(&args[0].value);
+                // B-2026-09-14-14 — the array standdown, same as the
+                // `push`/`push_back` arm's; see its comment for why the
+                // SLOT-keyed disarm is the one that reaches a block-scoped
+                // local. Repeated per arm deliberately: all FOUR element-moving
+                // arms take the argument by move and all four corrupted
+                // identically (`Invalid read of size 2`, garbage output against
+                // a correct `--interp`), so a pattern-matched edit that catches
+                // only `push`/`push_back` leaves this pair still dangling —
+                // measured that way before this line existed.
+                self.suppress_array_local_move_into_ctor(&args[0].value);
                 // Map/Set source moved into the Vec: the Vec now owns the
                 // handle and frees it via the `Vec[Map]` element drop
                 // (`track_vec_of_maps_var`), so drop the source binding's
@@ -4759,6 +4811,16 @@ impl<'ctx> super::Codegen<'ctx> {
                 // container's element walk now (see
                 // `disarm_moved_value_arg_user_drops`).
                 self.disarm_moved_value_arg_user_drops(&args[0].value);
+                // B-2026-09-14-14 — the array standdown, same as the
+                // `push`/`push_back` arm's; see its comment for why the
+                // SLOT-keyed disarm is the one that reaches a block-scoped
+                // local. Repeated per arm deliberately: all FOUR element-moving
+                // arms take the argument by move and all four corrupted
+                // identically (`Invalid read of size 2`, garbage output against
+                // a correct `--interp`), so a pattern-matched edit that catches
+                // only `push`/`push_back` leaves this pair still dangling —
+                // measured that way before this line existed.
+                self.suppress_array_local_move_into_ctor(&args[0].value);
                 // Map/Set source moved into the Vec: the Vec now owns the
                 // handle and frees it via the `Vec[Map]` element drop
                 // (`track_vec_of_maps_var`), so drop the source binding's

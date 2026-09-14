@@ -3814,6 +3814,44 @@ impl<'ctx> super::Codegen<'ctx> {
     /// types (their own synthesizer returns `None`; RC dec is separate), and
     /// no-heap aggregates (the synthesizer returns `None`). Callers fall back
     /// to the plain `track_vec_var` path on `None`.
+    /// B-2026-09-10-36 — the per-element drop for a `Vec[Array[T, N]]`,
+    /// deliberately SEPARATE from [`Self::vec_elem_agg_drop_for_type_expr`]
+    /// rather than an arm inside it.
+    ///
+    /// That resolver is the obvious home and it is the wrong one. It has 28
+    /// callers, and widening it was measured: two boxed-payload paths that
+    /// contain no `Vec` at all
+    /// (`asan_boxed_array_payload_interior_has_exactly_one_owner`,
+    /// `asan_generic_callee_boxed_optres_temp_arg_frees_its_box`) went from
+    /// green to `AddressSanitizer: attempting double-free`, because their array
+    /// interiors already have an owner. `emit_drop_fn_for_array`'s own doc names
+    /// the hazard: widening the shared policy "would teach EVERY container with
+    /// an array element about that element's interior at once". This helper is
+    /// consulted only where a `Vec` REGISTRATION chooses its element walk, so it
+    /// reaches exactly the containers that need it.
+    ///
+    /// `None` for every non-array element, and for an array whose interior the
+    /// recursive-drop family cannot free completely — the same
+    /// `te_recursive_drop_fully_supported` gate the boxed-payload interior walk
+    /// asks, so a shape this cannot fully free is left to the status quo rather
+    /// than half-freed.
+    ///
+    /// MUST BE PAIRED WITH THE SOURCE STANDDOWN at the four element-moving arms
+    /// (B-2026-09-14-14). Alone it is a DOUBLE FREE for the named-source
+    /// spelling `let e = Array[..]; v.push(e);`, where the local still owns the
+    /// interior — measured as an abort 134 on all three compiled backends while
+    /// `--interp` printed correctly. The pair is the whole fix.
+    pub(super) fn vec_elem_array_drop_for_type_expr(
+        &mut self,
+        elem_te: &TypeExpr,
+    ) -> Option<inkwell::values::FunctionValue<'ctx>> {
+        let (inner_te, n) = self.array_elem_and_len(elem_te)?;
+        if !self.te_recursive_drop_fully_supported(elem_te) {
+            return None;
+        }
+        self.emit_drop_fn_for_array(&inner_te, n)
+    }
+
     pub(super) fn vec_elem_agg_drop_for_type_expr(
         &mut self,
         elem_te: &TypeExpr,

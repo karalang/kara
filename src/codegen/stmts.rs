@@ -1966,7 +1966,24 @@ impl<'ctx> super::Codegen<'ctx> {
                                     .and_then(|te| self.vec_elem_map_drop_for_type_expr(te));
                                 let agg_elem_drop = elem_te
                                     .as_ref()
-                                    .and_then(|te| self.vec_elem_agg_drop_for_type_expr(te));
+                                    .and_then(|te| self.vec_elem_agg_drop_for_type_expr(te))
+                                    // B-2026-09-10-36 — the `Array` element the
+                                    // shared resolver above deliberately does
+                                    // not answer for (see
+                                    // `vec_elem_array_drop_for_type_expr`: it
+                                    // has 28 callers and widening it
+                                    // double-freed two boxed-payload paths
+                                    // containing no `Vec`). Asked HERE, at the
+                                    // registration that chooses this
+                                    // container's element walk, which is the
+                                    // seam the row's own post-mortem points at
+                                    // after four attempts elsewhere missed the
+                                    // top-level `let`-bound leg entirely.
+                                    .or_else(|| {
+                                        elem_te.as_ref().and_then(|te| {
+                                            self.vec_elem_array_drop_for_type_expr(te)
+                                        })
+                                    });
                                 let is_heap_env_vec = self
                                     .closure_state
                                     .escape
@@ -8586,7 +8603,22 @@ impl<'ctx> super::Codegen<'ctx> {
                                     .and_then(|te| self.vec_elem_map_drop_for_type_expr(te));
                                 let agg_elem_drop = elem_te
                                     .as_ref()
-                                    .and_then(|te| self.vec_elem_agg_drop_for_type_expr(te));
+                                    .and_then(|te| self.vec_elem_agg_drop_for_type_expr(te))
+                                    // B-2026-09-10-36 — the `Array` element,
+                                    // asked at the registration that actually
+                                    // fires for a `let`-bound `Vec[Array[..]]`.
+                                    // Found by instrumenting `track_vec_var`
+                                    // with `#[track_caller]` rather than by
+                                    // reading: the row's four previous attempts
+                                    // patched the three dispatches that resolve
+                                    // through the shared resolver and none of
+                                    // them is this one, which is why they moved
+                                    // the top-level cells by zero bytes.
+                                    .or_else(|| {
+                                        elem_te.as_ref().and_then(|te| {
+                                            self.vec_elem_array_drop_for_type_expr(te)
+                                        })
+                                    });
                                 // Vec-store slice (B-2026-06-22-2): a `Vec[Fn]`
                                 // that OWNS heap-env closures (>=1 heap-env push,
                                 // flagged in `reject_heap_env_misuse`). Free each

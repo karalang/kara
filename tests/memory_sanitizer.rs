@@ -89007,6 +89007,145 @@ fn main() {
         );
     }
 
+    /// B-2026-09-14-14 + B-2026-09-10-36 — the `Vec[Array[T, N]]` ownership
+    /// PAIR. Neither half is correct alone, which is why one fixture covers
+    /// both.
+    ///
+    /// THE CORRUPTION HALF (-14-14). A block-scoped named `Array` local moved
+    /// into `Vec.push` was never disarmed, so the container and the local
+    /// aliased the same element buffers and the local's scope-exit drop freed
+    /// what the `Vec` still pointed at. Reads returned garbage on both compiled
+    /// backends while `--interp` was correct, at exit code 0 with no
+    /// diagnostic. At FUNCTION scope the drop runs after every read so the
+    /// window never opens — the `fn:` cell — which is why this hid. A leak
+    /// check sees nothing either: the buffers ARE freed, once too early.
+    ///
+    /// ALL FOUR ELEMENT-MOVING ARMS take the argument by move and all four
+    /// corrupted identically; `push`/`push_back`, `try_push`/`try_push_back`,
+    /// `push_front` and `try_push_front` each carry the standdown, because a
+    /// pattern-matched edit catching only the first pair leaves the rest
+    /// dangling — measured that way mid-fix.
+    ///
+    /// THE LEAK HALF (-10-36). With the source stood down, nobody freed the
+    /// elements at all: `vec_element_drain_fn`'s policy has no `Array` case, so
+    /// the container never had an element drop. Before the pair, the two errors
+    /// CANCELLED for a function-scope source — one owner too many against one
+    /// walk too few — which is why `fn:` measured clean on main and would have
+    /// regressed to a leak had the standdown landed by itself.
+    ///
+    /// WHERE THE CONTAINER HALF GOES, and it is not where four previous
+    /// attempts put it. `vec_elem_agg_drop_for_type_expr` is the obvious home
+    /// and has 28 callers; widening it double-freed two boxed-payload paths
+    /// containing no `Vec` at all. The element walk is chosen at the `Vec`'s
+    /// REGISTRATION site instead, and the live one for a `let`-bound
+    /// `Vec[Array[..]]` was found by instrumenting `track_vec_var` with
+    /// `#[track_caller]` — none of the three dispatches those attempts patched
+    /// is it, which is why they moved the top-level cells by zero bytes.
+    ///
+    /// CELLS. `tmp:` is -10-36's own headline repro (temporary-fed, 80 B);
+    /// `blk:`/`loop:` are -14-14's corruption; `fn:` is the cancelling pair
+    /// above; `par:` a by-value array param, which corrupted too and is not in
+    /// either row's text; `front:` the `push_front` arm; `pop:` the hand-back
+    /// crossing B-2026-09-13-17's route. Must-not-regress: `scalar:` (an
+    /// `Array[i64, 3]` with nothing to free), `str:` (the `String` element
+    /// spelling that was always clean and is what identified a MISSING arm),
+    /// and `map:` (which has had both halves since B-2026-09-12-13 /
+    /// B-2026-09-13-1 and must stay exactly as it was).
+    ///
+    /// Measured at `-O0`: 10 invalid reads, 2 invalid frees, 88 B lost in 4
+    /// blocks and divergent output before; clean and matching after.
+    #[test]
+    fn asan_vec_array_element_has_exactly_one_owner() {
+        assert_clean_asan_run(
+            r#"
+fn mk(n: i64) -> Array[String, 2] {
+    return Array[f"tmp-aaaaaaaaaaaaaaaa-{n}", f"tmp-bbbbbbbbbbbbbbbb-{n}"];
+}
+fn takes(a: Array[String, 2], v: mut ref Vec[Array[String, 2]]) {
+    v.push(a);
+}
+
+fn main() {
+    let mut tmpfed: Vec[Array[String, 2]] = Vec.new();
+    tmpfed.push(mk(0));
+    tmpfed.push(mk(1));
+    println(f"tmp:{tmpfed[0][0]}");
+
+    let mut blockfed: Vec[Array[String, 2]] = Vec.new();
+    if true {
+        let a: Array[String, 2] = Array[f"blk-cccccccccccccccc-0", f"blk-dddddddddddddddd-1"];
+        blockfed.push(a);
+    }
+    println(f"blk:{blockfed[0][0]}");
+
+    let mut loopfed: Vec[Array[String, 2]] = Vec.new();
+    let mut i: i64 = 0;
+    while i < 3 {
+        let e: Array[String, 2] = Array[f"lp-eeeeeeeeeeeeeeee-{i}", f"lp-ffffffffffffffff-{i}"];
+        loopfed.push(e);
+        i = i + 1;
+    }
+    println(f"loop:{loopfed[2][0]}");
+
+    let mut fnfed: Vec[Array[String, 2]] = Vec.new();
+    let fa: Array[String, 2] = Array[f"fn-gggggggggggggggg-0", f"fn-hhhhhhhhhhhhhhhh-1"];
+    fnfed.push(fa);
+    println(f"fn:{fnfed[0][0]}");
+
+    let mut paramfed: Vec[Array[String, 2]] = Vec.new();
+    takes(Array[f"par-iiiiiiiiiiiiiiii-0", f"par-jjjjjjjjjjjjjjjj-1"], mut paramfed);
+    println(f"par:{paramfed[0][0]}");
+
+    let mut frontfed: Vec[Array[String, 2]] = Vec.new();
+    if true {
+        let b: Array[String, 2] = Array[f"frt-kkkkkkkkkkkkkkkk-0", f"frt-llllllllllllllll-1"];
+        frontfed.push_front(b);
+    }
+    println(f"front:{frontfed[0][0]}");
+
+    let mut popped: Vec[Array[String, 2]] = Vec.new();
+    if true {
+        let c: Array[String, 2] = Array[f"pop-mmmmmmmmmmmmmmmm-0", f"pop-nnnnnnnnnnnnnnnn-1"];
+        popped.push(c);
+    }
+    let po = popped.pop();
+    match po { Some(x) => { println(f"pop:{x[0]}"); } None => {} }
+
+    let mut scalars: Vec[Array[i64, 3]] = Vec.new();
+    if true { let s: Array[i64, 3] = Array[7, 8, 9]; scalars.push(s); }
+    println(f"scalar:{scalars[0][0]}");
+
+    let mut strs: Vec[String] = Vec.new();
+    if true { let t: String = f"str-oooooooooooooooo-0"; strs.push(t); }
+    println(f"str:{strs[0]}");
+
+    let mut m: Map[i64, Array[String, 2]] = Map.new();
+    if true {
+        let d: Array[String, 2] = Array[f"map-pppppppppppppppp-0", f"map-qqqqqqqqqqqqqqqq-1"];
+        m.insert(3, d);
+    }
+    match m.get(3) { Some(x) => { println(f"map:{x[0]}"); } None => {} }
+
+    println("end");
+}
+"#,
+            &[
+                "tmp:tmp-aaaaaaaaaaaaaaaa-0",
+                "blk:blk-cccccccccccccccc-0",
+                "loop:lp-eeeeeeeeeeeeeeee-2",
+                "fn:fn-gggggggggggggggg-0",
+                "par:par-iiiiiiiiiiiiiiii-0",
+                "front:frt-kkkkkkkkkkkkkkkk-0",
+                "pop:pop-mmmmmmmmmmmmmmmm-0",
+                "scalar:7",
+                "str:str-oooooooooooooooo-0",
+                "map:map-pppppppppppppppp-0",
+                "end",
+            ],
+            "asan_vec_array_element_has_exactly_one_owner",
+        );
+    }
+
     /// B-2026-09-13-19 — a BARE DISCARDED call statement lost a wide `Option`
     /// payload and its box.
     ///
