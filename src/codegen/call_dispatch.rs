@@ -6006,7 +6006,33 @@ impl<'ctx> super::Codegen<'ctx> {
                     .and_then(|te| self.emit_generic_enum_payload_user_drop_bodies_fn(te))
                 {
                     Some(f) => Some((f, UserDropKind::ContainerElemBodies)),
-                    None => return,
+                    // B-2026-09-14-9 — the ENUM twin of B-2026-08-29-32's
+                    // struct arm, and the same mistake one branch over: the
+                    // bodies question is answered CORRECTLY here (no variant
+                    // carries a `Drop`-bearing payload, so there is no body to
+                    // run), and returning on that answer skipped the MEMORY
+                    // registrations below, which are this temp's only owner.
+                    // A discarded `mk(i);` over `fn mk(..) -> E` with
+                    // `enum E { A(Array[String, 2]), B }` therefore freed
+                    // nothing at all: 192 B in 4 blocks plus 136 B indirect in
+                    // 8 at `-O0`, while `let v = mk(i);` — the same call one
+                    // binding away — is clean since 57cc2e8. It is not
+                    // array-shaped: the `String` and 3-tuple payloads of the
+                    // same shape leaked 68 B / 4 and 204 B / 12 the same way,
+                    // which is what identifies the defect as this `return`
+                    // rather than a missing payload-shape arm.
+                    //
+                    // Answer "no bodies" and fall through, exactly as the
+                    // struct arm below does — including its alias guard, since
+                    // a branch tail that hands back a temp someone else owns
+                    // must not be claimed twice.
+                    None => {
+                        if self.discard_branch_tail_aliases_a_temp(tail) {
+                            return;
+                        }
+                        memory_only = true;
+                        None
+                    }
                 },
             }
         } else if !self.type_runs_user_drop(&ret_ty_name, &mut Vec::new()) {
@@ -6063,7 +6089,17 @@ impl<'ctx> super::Codegen<'ctx> {
             for (enum_name, variant, payload_te) in
                 self.user_enum_boxed_payload_variants(&te.clone())
             {
-                let inner = self.enum_boxed_payload_interior_drop(&payload_te, false);
+                // B-2026-09-14-9 — `true`, matching the `let` site
+                // (`stmts.rs`) and the by-value-param site (`functions.rs`).
+                // It was `false` because B-2026-09-12-18 found the interior
+                // walk double-freeing an interior a moved-from LOCAL still
+                // owned; B-2026-09-13-15 removed that hazard at the root by
+                // standing every array source down at the constructor
+                // LOWERING, so the box is now the interior's sole owner here
+                // too. With the fall-through above but this still `false`, the
+                // discarded box was freed and its 8 `String`s were not
+                // (136 B in 8 blocks at `-O0`).
+                let inner = self.enum_boxed_payload_interior_drop(&payload_te, true);
                 self.track_boxed_enum_var_with_inner_drop_for_payload(
                     "__owned_agg_tmp",
                     slot,

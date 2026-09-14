@@ -88932,11 +88932,10 @@ fn main() {
     /// the `let` (clean by a different route, which is why the leak needed the
     /// call-return hop).
     ///
-    /// NOT COVERED, and deliberately absent rather than silently passing: the
-    /// bare DISCARD `mk(i);` of the same concrete enum still leaks the same
-    /// 192 + 136. That is the statement-discard chokepoint, not one of this
-    /// row's four registration sites — the user-enum analogue of what
-    /// B-2026-09-13-19 fixed for `Option` — and is filed separately.
+    /// NOT COVERED HERE, because it is a different SITE: the bare DISCARD
+    /// `mk(i);` of the same concrete enum, which leaked the same 192 + 136 and
+    /// was filed as B-2026-09-14-9. It is fixed and has its own fixture,
+    /// `asan_discarded_concrete_user_enum_temp_frees_its_payload` below.
     #[test]
     fn asan_unannotated_let_from_a_concrete_enum_return_owns_its_box() {
         assert_clean_asan_run(
@@ -89005,6 +89004,130 @@ fn main() {
                 "end",
             ],
             "asan_unannotated_let_from_a_concrete_enum_return_owns_its_box",
+        );
+    }
+
+    /// B-2026-09-14-9 — a DISCARDED concrete user-enum temp owned nothing at
+    /// all. `mk(i);` over `fn mk(..) -> E` with
+    /// `enum E { A(Array[String, 2]), B }` leaked 192 B in 4 blocks (the boxed
+    /// `[2 x {ptr,len,cap}]` payloads) plus 136 B indirect in 8 (their
+    /// `String`s), while `let v = mk(i);` — the same call one binding away —
+    /// was clean since 57cc2e8.
+    ///
+    /// THE DEFECT WAS A `return`, NOT A MISSING SHAPE ARM, which is what the
+    /// row's own "WHERE TO LOOK" got wrong and what the controls here pin
+    /// down. `try_track_discarded_user_drop_temp` resolves the type correctly
+    /// and reaches its bodies decision; for an enum whose payload declares no
+    /// `Drop` anywhere, both body-walker lookups answer `None` — correctly,
+    /// there is no body to run — and the arm returned on that answer, above
+    /// the MEMORY registrations that are this temp's only owner. That is
+    /// exactly the mistake B-2026-08-29-32 fixed one branch over for STRUCTS,
+    /// and the repair is the same: answer "no bodies", set `memory_only`, and
+    /// fall through (keeping that arm's alias guard, so a branch tail handing
+    /// back someone else's temp is still not claimed twice).
+    ///
+    /// NOT ARRAY-SHAPED, which is how the `return` was identified rather than
+    /// a missing payload-shape arm: the `String` and 3-tuple payloads of the
+    /// same enum discarded the same way leaked 68 B / 4 and 204 B / 12
+    /// respectively, and a `Vec[String]` payload leaked too. All four are
+    /// cells here; a shape-keyed fix would have left three of them leaking.
+    ///
+    /// THE SECOND HALF is `array_interior_ok`, and it only became visible once
+    /// the `return` was gone: with the fall-through alone, the array cell's
+    /// BOX was freed and its eight `String`s were not (136 B in 8 at `-O0`).
+    /// This site passed `false` because B-2026-09-12-18 measured the interior
+    /// walk double-freeing an interior a moved-from LOCAL still owned;
+    /// B-2026-09-13-15 removed that hazard at the root by standing every array
+    /// source down at the constructor LOWERING, so the box is the interior's
+    /// sole owner and this site now passes `true` like the `let` and
+    /// by-value-param sites. Flipping it ALONE, before the fall-through
+    /// landed, changed nothing at all — the row records that measurement, and
+    /// it is why the two halves belong in one fixture.
+    ///
+    /// CONTROLS THAT MUST NOT DOUBLE-FIRE, each a neighbouring channel this
+    /// registration could have collided with: `mkd` is an enum with its OWN
+    /// `Drop` (one `dD` per round, never two — it takes the wrapper path and
+    /// must not also take the fall-through), `mkp` is an enum whose PAYLOAD
+    /// carries a `Drop` (one `dR:` per round — it reaches a real body walker,
+    /// so the `None` leg is never taken), and `kept` is the `let`-bound
+    /// spelling that already had an owner. The `if`/`match` cells are bare
+    /// discards NESTED in branch arms, which route through the same arm.
+    ///
+    /// STILL LEAKING AND DELIBERATELY ABSENT, measured identical on the pre-
+    /// and post-fix compilers and filed as B-2026-09-14-10 rather than folded
+    /// in: a BOXED payload in the spellings whose TYPE cannot be resolved,
+    /// because `untyped_let_boxed_enum_te` answers only for a direct
+    /// free-function `Call` (plus the `Vec.pop` family). So
+    /// `let _ = if c { mk(i) } else { mk(i) };`, `h.makeb(i);` and
+    /// `H.assoc(i);` each still lose 144 B in 3 blocks plus 102 B indirect in
+    /// 6 over three rounds — while their INLINE-payload siblings
+    /// (`h.make(i);`, `let _ = if c { mk3(i) } else { mk3(i) };`) are cells
+    /// here and went clean, which is what localizes the remainder to the
+    /// boxed registration's type lookup rather than to this arm. A discarded
+    /// SHARED enum is out of scope by design (it returns early onto the RC
+    /// path).
+    #[test]
+    fn asan_discarded_concrete_user_enum_temp_frees_its_payload() {
+        assert_clean_asan_run(
+            r#"
+enum E { A(Array[String, 2]), B }
+enum E2 { A((String, String, String)), B }
+enum E3 { A(String), B }
+enum Ev { A(Vec[String]), B }
+enum G[T] { Y(T), N }
+
+struct R { name: String }
+impl Drop for R { fn drop(mut ref self) { println(f"dR:{self.name}"); } }
+enum P { A(R), B }
+
+enum D { A(String), B }
+impl Drop for D { fn drop(mut ref self) { println("dD"); } }
+
+fn mk(i: i64) -> E { return E.A([f"aa-{i}-xxxxxxxxxxxx", f"bb-{i}-yyyyyyyyyyyy"]); }
+fn mk2(i: i64) -> E2 { return E2.A((f"cc-{i}-xxxxxxxxxxxx", f"dd-{i}-yyyyyyyyyyyy", f"ee-{i}-zzzzzzzzzzzz")); }
+fn mk3(i: i64) -> E3 { return E3.A(f"ff-{i}-xxxxxxxxxxxx"); }
+fn mkv(i: i64) -> Ev { let mut v: Vec[String] = Vec.new(); v.push(f"vv-{i}-xxxxxxxxxxxx"); return Ev.A(v); }
+fn mkg(i: i64) -> G[Array[String, 2]] { return G.Y([f"gg-{i}-xxxxxxxxxxxx", f"hh-{i}-yyyyyyyyyyyy"]); }
+fn mkp(i: i64) -> P { return P.A(R { name: f"pp-{i}" }); }
+fn mkd(i: i64) -> D { return D.A(f"dd-{i}-xxxxxxxxxxxx"); }
+
+fn main() {
+    let mut i: i64 = 0;
+    while i < 3 {
+        mk(i);
+        let _ = mk(i);
+        mk2(i);
+        mk3(i);
+        mkv(i);
+        mkg(i);
+        if i > 0 { mk(i); } else { mk(i); }
+        match i { 0 => { mk3(i); } _ => { mk3(i); } }
+        println(f"round:{i}");
+        mkp(i);
+        mkd(i);
+        let kept = mk(i);
+        match kept { E.A(x) => { println(f"kept:{x[0]}"); } E.B => {} }
+        i = i + 1;
+    }
+    println("end");
+}
+"#,
+            &[
+                "round:0",
+                "dR:pp-0",
+                "dD",
+                "kept:aa-0-xxxxxxxxxxxx",
+                "round:1",
+                "dR:pp-1",
+                "dD",
+                "kept:aa-1-xxxxxxxxxxxx",
+                "round:2",
+                "dR:pp-2",
+                "dD",
+                "kept:aa-2-xxxxxxxxxxxx",
+                "end",
+            ],
+            "asan_discarded_concrete_user_enum_temp_frees_its_payload",
         );
     }
 
