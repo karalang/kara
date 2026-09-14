@@ -1103,6 +1103,9 @@ impl<'a> super::TypeChecker<'a> {
                 // `W` exactly as `let x = w.r;` does. Measured: two `R` bodies,
                 // the second diverging run-vs-build.
                 self.warn_partial_move_of_drop_struct(&f.value, &push_ty);
+                // B-2026-09-06-31 — the borrowed-root twin: `W { r: w.r }`
+                // copies too (measured two bodies).
+                self.warn_borrow_projection_copy(&f.value, &push_ty);
                 if !param_subs.is_empty() {
                     if let Some(actual) = self
                         .expr_types
@@ -1387,6 +1390,9 @@ impl<'a> super::TypeChecker<'a> {
                 // `W` exactly as `let x = w.r;` does. Measured: two `R` bodies,
                 // the second diverging run-vs-build.
                 self.warn_partial_move_of_drop_struct(&f.value, &push_ty);
+                // B-2026-09-06-31 — the borrowed-root twin: `W { r: w.r }`
+                // copies too (measured two bodies).
+                self.warn_borrow_projection_copy(&f.value, &push_ty);
                 if !param_subs.is_empty() {
                     if let Some(actual) = self
                         .expr_types

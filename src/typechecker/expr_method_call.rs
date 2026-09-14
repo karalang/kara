@@ -933,6 +933,11 @@ impl<'a> super::TypeChecker<'a> {
                 let arg_ty = self.infer_expr(&arg.value);
                 self.check_assignable(param, &arg_ty, arg.value.span);
                 self.warn_partial_move_of_drop_struct(&arg.value, param);
+                // B-2026-09-06-31 — the borrowed-root twin. A METHOD argument copies
+                // (`v.push(w.r)`, measured two bodies) where a FREE-function argument
+                // does not (`consume(w.r)`, measured one) — see the note on
+                // `warn_borrow_projection_copy`, which is why only this arm gets it.
+                self.warn_borrow_projection_copy(&arg.value, param);
             }
         }
 

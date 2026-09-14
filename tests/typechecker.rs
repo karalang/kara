@@ -49266,6 +49266,99 @@ fn a_borrowed_drop_struct_may_be_destructured_and_projected() {
 ///
 /// The negative in the same test is the point: the IDENTICAL line over an
 /// OWNED root is a move, runs one `Drop` body, and must stay silent.
+/// B-2026-09-06-31 — `borrow_projection_copy` reaches every value position
+/// that actually copies, not only `let` / assignment / a pattern scrutinee.
+///
+/// THE ROW LISTS FIVE UNCOVERED POSITIONS AND ONE OF THEM DOES NOT COPY, which
+/// is why each cell below carries its measured body count rather than an
+/// assumption. Counted on the interpreter with an `impl Drop` that prints
+/// (`fn f(w: ref W) -> …` over `struct W { r: R }`, the borrow's owner
+/// outliving the call):
+///
+/// ```text
+///     let x = w.r;          2 bodies   already covered
+///     return w.r;           2 bodies   ADDED
+///     W { r: w.r }          2 bodies   ADDED
+///     v.push(w.r)           2 bodies   ADDED  (a METHOD argument)
+///     w.r        (tail)     2 bodies   ADDED
+///     consume(w.r)          1 body     NOT added — a FREE-function argument
+/// ```
+///
+/// The last line is the row being wrong and `warn_borrow_projection_copy`'s own
+/// doc comment being right ("CALL ARGUMENT is deliberately NOT included —
+/// measured, it mints no copy"). A warning there would be a false claim. The
+/// free-versus-method asymmetry it exposes is filed separately.
+///
+/// The invariant this test really pins is one warning exactly when there are
+/// two bodies, so it asserts the silent cell as hard as the loud ones.
+#[test]
+fn borrow_projection_copy_reaches_every_copying_value_position() {
+    let hits = |src: &str| -> usize {
+        typecheck_ok(src)
+            .warnings
+            .iter()
+            .filter(|w| w.lint_name.as_deref() == Some("borrow_projection_copy"))
+            .count()
+    };
+    let prelude = "struct R { id: i64 }\n\
+                   struct W { r: R }\n\
+                   fn consume(x: R) -> i64 { return x.id; }\n";
+
+    // Each cell carries its OWN `main`: the bodies differ in return type, and a
+    // shared one silently fails to type-check rather than failing the lint
+    // assertion, which is a confusing way for this test to break.
+    let use_i64 = "fn main() { let a = W { r: R { id: 5 } }; println(f(a)); }";
+    let use_r = "fn main() { let a = W { r: R { id: 5 } }; let g = f(a); println(g.id); }";
+    let use_w = "fn main() { let a = W { r: R { id: 5 } }; let g = f(a); println(g.r.id); }";
+
+    for (label, body, main) in [
+        (
+            "let-initializer (already covered)",
+            "fn f(w: ref W) -> i64 { let m = w.r; return m.id; }",
+            use_i64,
+        ),
+        ("return", "fn f(w: ref W) -> R { return w.r; }", use_r),
+        (
+            "struct-literal-field",
+            "fn f(w: ref W) -> W { return W { r: w.r }; }",
+            use_w,
+        ),
+        (
+            "method-argument",
+            "fn f(w: ref W) -> i64 { let mut v: Vec[R] = Vec.new(); v.push(w.r); return v.len(); }",
+            use_i64,
+        ),
+        ("tail-expression", "fn f(w: ref W) -> R { w.r }", use_r),
+    ] {
+        let src = format!("{prelude}{body}\n{main}");
+        assert_eq!(
+            hits(&src),
+            1,
+            "{label} copies, so it must warn exactly once"
+        );
+    }
+
+    // THE NEGATIVE, and it is the reason this rule is not simply "every value
+    // position": a bare free-function argument runs ONE body, so a warning
+    // there would claim a copy that does not happen.
+    let src = format!("{prelude}fn f(w: ref W) -> i64 {{ return consume(w.r); }}\n{use_i64}");
+    assert_eq!(
+        hits(&src),
+        0,
+        "a free-function argument mints no copy — measured one `Drop` body — so \
+         the lint must stay silent there"
+    );
+
+    // A `Copy` leaf read through the same projection is exempt at the top of
+    // the rule and must not start warning from the new positions.
+    let src = format!("{prelude}fn f(w: ref W) -> i64 {{ return w.r.id; }}\n{use_i64}");
+    assert_eq!(
+        hits(&src),
+        0,
+        "a `Copy` leaf is not a copy of anything owned"
+    );
+}
+
 #[test]
 fn borrow_projection_copy_fires_only_when_the_root_is_a_borrow() {
     let borrowed = typecheck_ok(

@@ -2842,6 +2842,10 @@ impl<'a> super::TypeChecker<'a> {
             // the construct's value, which is why the arm spellings needed no
             // hook of their own.
             self.warn_partial_move_of_drop_struct(expr, expected);
+            // B-2026-09-06-31 — the borrowed-root twin. One site for the tail
+            // and for every `if` / `match` arm that produces a value through it,
+            // exactly as the owned rule's note above says. Measured: two bodies.
+            self.warn_borrow_projection_copy(expr, expected);
             t
         } else if diverged {
             // Tail-less but diverging — bottom, not unit (see #12).
@@ -4100,6 +4104,8 @@ impl<'a> super::TypeChecker<'a> {
             // reaches the `let` site as a BLOCK, so the initializer's own
             // check never sees the projection.
             self.warn_partial_move_of_drop_struct(expr, &t);
+            // B-2026-09-06-31 — the borrowed-root twin of the un-annotated tail.
+            self.warn_borrow_projection_copy(expr, &t);
             t
         } else if diverged {
             // A tail-less block whose body diverges (e.g. `{ return e; }`)

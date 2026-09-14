@@ -5772,6 +5772,12 @@ impl<'a> super::TypeChecker<'a> {
                         self.infer_expr(expr)
                     };
                     self.warn_partial_move_of_drop_struct(expr, &ret_ty);
+                    // B-2026-09-06-31 — the BORROWED-root twin of the line above, and
+                    // the position the rule was most conspicuously missing:
+                    // `fn f(w: ref W) -> R { return w.r; }` reads as a move out of a
+                    // borrow, which the language forbids, and compiled silently while
+                    // copying. Measured two `R` bodies for one value.
+                    self.warn_borrow_projection_copy(expr, &ret_ty);
                 } else if let Some(ref ret_ty) = self.current_return_type.clone() {
                     if *ret_ty != Type::Unit && *ret_ty != Type::Error {
                         self.type_error(

@@ -156,6 +156,9 @@ impl<'a> super::TypeChecker<'a> {
                 // A false positive introduced with this site in 0ae5836 and
                 // found by B-2026-09-03-29's corpus sweep; B-2026-09-03-37.
                 self.warn_partial_move_of_drop_struct(&args[0].value, &arg_ty);
+                // B-2026-09-06-31 — the borrowed-root twin; `v.push(w.r)` is the
+                // row's own cell and copies.
+                self.warn_borrow_projection_copy(&args[0].value, &arg_ty);
                 // Unify so an unsolved element typevar bound to the
                 // receiver (e.g. `let mut v = Vec.new(); v.push(x);`)
                 // gets pinned to the first push's value type. Otherwise
