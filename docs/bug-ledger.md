@@ -190,7 +190,6 @@ _Generated from `bug-ledger.jsonl` by `scripts/bug-curve.py` (2026-05-20 → 202
 | B-2026-09-13-30 | 2026-09-13 | codegen | low | A METHOD-CALL KEY TEMPORARY STILL LEAKS AT EVERY `Map` LOOKUP -- `m.get(g.make(0))` over `Map[(String, String), i64]` loses 32 B in 2 blocks because a method's return type is absent from `fn_return_type_exprs`, so the nameless-key leg B-2026-09-13-20 added has no `TypeExpr` to resolve | — |
 | B-2026-09-14-1 | 2026-09-14 | codegen | low | AN INDEX-ASSIGN INTO AN `Array[String, N]` LEAKS THE DISPLACED BUFFER -- `a[0] = f"MUTATED-{n}"` over `let mut a: Array[String, 2]` loses 10 B in 1 block at -O0, the overwritten element's own buffer. Measured with NO `.clone()` anywhere in the program, so it is independent of B-2026-09-10-37's new array clone and merely shares that row's independence-check fixture cell; the store overwrites the `{ptr,len,cap}` in place and nothing frees what was there | — |
 | B-2026-09-14-2 | 2026-09-14 | interp+codegen | medium | AN `Option`/`Result` WHOSE PAYLOAD IS A `Vec` RUNS ITS ELEMENT `Drop` BODIES NOWHERE UNLESS IT IS DISCARDED -- a BOUND envelope, a consuming `match` arm and a plain move are all silent on every backend | — |
-| B-2026-09-14-3 | 2026-09-14 | codegen | medium | AN ENUM TUPLE VARIANT USED AS A FIRST-CLASS FUNCTION VALUE ICEs CODEGEN -- `let g = Col.A; g(3)` passes `karac check` and then panics in `closures.rs`'s `into_struct_value` ("Found IntValue ... but expected the StructValue variant"), so a shape the typechecker calls a `Function` is lowered as a closure struct it never was | — |
 | B-2026-09-14-4 | 2026-09-14 | parser | low | A QUALIFIED STRUCT-SHAPED VARIANT CANNOT PIN ITS TYPE ARGUMENTS -- `Sh[i64].S { v: 3 }` is a PARSE error (`Expected Semicolon, found LeftBrace`), the third corner of the same `Name[Args].Variant` grid whose call and field-less corners now work | — |
 
 ### Relocated
@@ -2547,6 +2546,7 @@ _Generated from `bug-ledger.jsonl` by `scripts/bug-curve.py` (2026-05-20 → 202
 | B-2026-09-13-26 | interp+codegen | medium | A DISCARDED ARRAY LITERAL OF Drop-BEARING STRUCTS RUNS NO ELEMENT BODIES AT ALL -- `let _ = if c { [W { r: mkd(7), b: 1 }] } else { . | 122b991 |
 | B-2026-09-13-28 | interp+codegen | medium | THE BARE-BLOCK SPELLING OF B-2026-09-01-17 IS RUN-VS-BUILD DIVERGENT, NOT AN AGREED GAP -- `let _ = { W { r: t.r, b: 1 } };` runs the projected leaf'… | 122b991 |
 | B-2026-09-13-29 | codegen | medium | A DISCARDED `Option`/`Result` WHOSE PAYLOAD IS AN ARRAY RUNS ITS ELEMENT BODIES ON THE INTERPRETER AND NOT ON EITHER COMPILED BACKEND -- B-2026-09-10… | 1d73a30 |
+| B-2026-09-14-3 | codegen | medium | AN ENUM TUPLE VARIANT USED AS A FIRST-CLASS FUNCTION VALUE ICEs CODEGEN -- `let g = Col.A; g(3)` passes `karac check` and then panics in `closures.rs… | 09e2e4b |
 
 </details>
 
