@@ -33881,6 +33881,93 @@ fn main() {
     /// box is never freed regardless of this body fix — tracked on its own row.
     /// This pin stays on the inline shape, which the fix makes correct on every
     /// surface with no leak.
+    /// B-2026-09-13-29 — a discarded `Option`/`Result` whose payload is a `Vec`
+    /// of Drop-bearing elements runs those elements' bodies, once, at the
+    /// discard.
+    ///
+    /// It ran them on the interpreter (B-2026-09-10-27's payload walk) and on
+    /// NEITHER compiled backend, a run-vs-build divergence on the DEFAULT
+    /// spelling: a bare `[..]` literal types as `Vec`, and the `Array[E, N]`
+    /// spelling — which has had its arm since B-2026-09-12-6 — was already
+    /// correct. `array_elem_and_len` needs a compile-time length, so the `Vec`
+    /// payload fell past the array arm to the struct arm, whose head lookup
+    /// answers `None` for `Vec`, and no walker was emitted at all.
+    ///
+    /// THE ARM IS SCOPED TO THE DISCARD POSITION and the `Array` cell below is
+    /// here to keep that honest. A bound `Option[Vec[D]]`, a consuming `match`
+    /// arm and a plain move run no bodies on EITHER backend — an agreed gap with
+    /// its own row — and turning the arm on for the shared emitter converted all
+    /// three into divergences. Only the discard position has the interpreter
+    /// half already written, so only it takes the arm.
+    #[test]
+    fn e2e_discarded_optres_vec_payload_runs_element_bodies() {
+        const HDR: &str = "struct D { a: String, b: i64 }\n\
+                           impl Drop for D { fn drop(mut ref self) { println(f\"dD{self.b}\") } }\n\
+                           fn pay() -> String { return \"heap\"; }\n\
+                           fn mkd(n: i64) -> D { return D { a: pay(), b: n }; }\n\
+                           fn mkopt() -> Option[Vec[D]] { return Option.Some([mkd(1), mkd(2)]); }\n";
+        for (label, body, want) in [
+            (
+                "the row's repro: a BINDING discarded",
+                "let o = Option.Some([mkd(1), mkd(2)]);\nlet _ = o;",
+                "dD1\ndD2\nmid\n",
+            ),
+            (
+                "the literal discarded directly",
+                "let _ = Option.Some([mkd(1), mkd(2)]);",
+                "dD1\ndD2\nmid\n",
+            ),
+            (
+                "a call returning the envelope",
+                "let _ = mkopt();",
+                "dD1\ndD2\nmid\n",
+            ),
+            (
+                "a discarded branch yielding the envelope",
+                "let _ = if n == 0 { Option.Some([mkd(1), mkd(2)]) } else { Option.None };",
+                "dD1\ndD2\nmid\n",
+            ),
+            (
+                "the Result Err arm",
+                "let o: Result[i64, Vec[D]] = Result.Err([mkd(1), mkd(2)]);\nlet _ = o;",
+                "dD1\ndD2\nmid\n",
+            ),
+            (
+                "a NESTED Vec payload",
+                "let o: Option[Vec[Vec[D]]] = Option.Some([[mkd(1)], [mkd(2)]]);\nlet _ = o;",
+                "dD1\ndD2\nmid\n",
+            ),
+            // Controls. The Array spelling was correct before this and must stay
+            // so; `None` and a non-Drop element must stay silent.
+            (
+                "control: the Array payload spelling",
+                "let o: Option[Array[D, 2]] = Option.Some([mkd(1), mkd(2)]);\nlet _ = o;",
+                "dD1\ndD2\nmid\n",
+            ),
+            (
+                "control: None runs nothing",
+                "let o: Option[Vec[D]] = Option.None;\nlet _ = o;",
+                "mid\n",
+            ),
+            (
+                "control: a Vec of non-Drop elements",
+                "let o: Option[Vec[i64]] = Option.Some([1, 2]);\nlet _ = o;",
+                "mid\n",
+            ),
+        ] {
+            let src = format!("{HDR}fn main() {{\nlet n = 0;\n{body}\nprintln(\"mid\");\n}}\n");
+            let (interp_out, interp_errs, _, _) = karac::run_program_full(&src);
+            assert!(
+                interp_errs.is_empty(),
+                "[{label}] interp errored: {interp_errs:?}"
+            );
+            assert_eq!(interp_out.join(""), want, "[{label}] interpreter");
+            if let Some(aot) = run_program(&src) {
+                assert_eq!(aot, want, "[{label}] AOT");
+            }
+        }
+    }
+
     #[test]
     fn e2e_discarded_optres_tuple_payload_runs_one_body() {
         assert_eq!(

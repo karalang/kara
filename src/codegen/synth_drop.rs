@@ -9914,6 +9914,36 @@ impl<'ctx> super::Codegen<'ctx> {
         &mut self,
         te: &TypeExpr,
     ) -> Option<FunctionValue<'ctx>> {
+        self.emit_optres_payload_user_drop_bodies_fn_ex(te, false)
+    }
+
+    /// B-2026-09-13-29 — [`Self::emit_optres_payload_user_drop_bodies_fn`] with
+    /// the `Vec`-payload arm switched ON, for the DISCARD registrar alone.
+    ///
+    /// SCOPED, and the scoping is the whole design of this fix rather than
+    /// caution. Measured on a clean tree, a `Vec` payload runs no element bodies
+    /// anywhere in three positions — a BOUND `Option[Vec[D]]`, a consuming
+    /// `match` arm, and a plain move (`let w = o;`) — and both backends are
+    /// silent together, so those are an agreed gap, not a divergence. Turning
+    /// the arm on for the shared emitter gave the compiled backends bodies in
+    /// all three while the interpreter stayed silent, converting three AGREED
+    /// bugs into three run-vs-build DIVERGENCES. That is the exact trade
+    /// B-2026-09-12-6 refused when it deferred the seeded pair, and it is
+    /// strictly worse under the A/B rule.
+    ///
+    /// Only the DISCARD position has an interpreter half already written
+    /// (B-2026-09-10-27's array walk in `run_enum_payload_user_drops_value`), so
+    /// only the discard position may take the arm. The other three keep today's
+    /// both-silent behaviour and are their own row.
+    ///
+    /// The flag is folded into the symbol NAME, so the two variants cannot
+    /// collide in the module cache and a discard site can never be handed the
+    /// bound site's walker.
+    pub(super) fn emit_optres_payload_user_drop_bodies_fn_ex(
+        &mut self,
+        te: &TypeExpr,
+        include_vec: bool,
+    ) -> Option<FunctionValue<'ctx>> {
         let TypeKind::Path(p) = &te.kind else {
             return None;
         };
@@ -9928,7 +9958,11 @@ impl<'ctx> super::Codegen<'ctx> {
                 let layout = self.type_decls.enum_layouts.get("Option")?;
                 let some_tag = layout.tags.get("Some").copied().unwrap_or(1);
                 (
-                    format!("__karac_dropelems_opt_{}", Self::display_mangle_te(pt)),
+                    format!(
+                        "__karac_dropelems_opt_{}{}",
+                        Self::display_mangle_te(pt),
+                        if include_vec { "_v" } else { "" }
+                    ),
                     "Option",
                     vec![(some_tag, pt.clone(), 3)],
                 )
@@ -9946,9 +9980,10 @@ impl<'ctx> super::Codegen<'ctx> {
                 let err_tag = layout.tags.get("Err").copied().unwrap_or(1);
                 (
                     format!(
-                        "__karac_dropelems_res_{}_{}",
+                        "__karac_dropelems_res_{}_{}{}",
                         Self::display_mangle_te(ok_te),
-                        Self::display_mangle_te(err_te)
+                        Self::display_mangle_te(err_te),
+                        if include_vec { "_v" } else { "" }
                     ),
                     "Result",
                     vec![(ok_tag, ok_te.clone(), 5), (err_tag, err_te.clone(), 5)],
@@ -9971,7 +10006,7 @@ impl<'ctx> super::Codegen<'ctx> {
         // both-silent bug is B-2026-09-10-27 and is its own open row, with its
         // own interpreter half to write; closing half of it from here would
         // leave the backends disagreeing and that row looking fixed.
-        self.emit_payload_user_drop_bodies_core(fn_name, layout_key, arms)
+        self.emit_payload_user_drop_bodies_core(fn_name, layout_key, arms, include_vec)
     }
 
     /// B-2026-09-12-5 — will the MATCH ARM that binds this boxed payload out
@@ -10349,7 +10384,12 @@ impl<'ctx> super::Codegen<'ctx> {
         // The generic-enum head DOES take the array arm: its interpreter twin
         // descends into an `Array` payload too (B-2026-09-12-6), so both
         // backends move together.
-        self.emit_payload_user_drop_bodies_core(fn_name, enum_name, arms)
+        //
+        // It does NOT take the `Vec` arm (B-2026-09-13-29): that arm's
+        // interpreter half exists only for the seeded pair's DISCARD position,
+        // so admitting it here would give this head bodies the interpreter does
+        // not run.
+        self.emit_payload_user_drop_bodies_core(fn_name, enum_name, arms, false)
     }
 
     /// The shared emission core behind
@@ -10412,11 +10452,44 @@ impl<'ctx> super::Codegen<'ctx> {
         (n > 0 && self.elem_te_runs_user_drop(&elem_te)).then_some((elem_te, n))
     }
 
+    /// B-2026-09-13-29 — the `Vec` peer of [`Self::payload_array_bodies_parts`].
+    ///
+    /// `Array[E, N]` and `Vec[E]` look alike in source and are NOT alike here:
+    /// the array arm indexes an `[N x E]` aggregate with a length known at
+    /// compile time, while a `Vec` payload is a `{ptr, len, cap}` HANDLE whose
+    /// length is a runtime word. So the array arm's `array_elem_and_len` returns
+    /// `None` for a `Vec` and the payload fell through to the struct arm, which
+    /// answers `None` for the head `Vec` — no walker, no bodies.
+    ///
+    /// That is the whole of the divergence this closes, and the two shapes
+    /// measure differently on exactly that line: `Option[Array[D, 2]]` already
+    /// ran its element bodies on every surface, while `Option[Vec[D]]` ran them
+    /// only on the interpreter. A bare `[..]` literal types as `Vec` by default,
+    /// so the DEFAULT spelling was the broken one.
+    ///
+    /// Body-only, like every sibling arm: the handle's buffer is freed on the
+    /// value's own free channel and nothing here touches it.
+    pub(super) fn payload_vec_bodies_parts(&self, pte: &TypeExpr) -> Option<TypeExpr> {
+        let TypeKind::Path(p) = &pte.kind else {
+            return None;
+        };
+        // `Vec` only. `VecDeque` is deliberately excluded: its ring layout is
+        // not the three-word handle this walker addresses, so admitting it
+        // would walk the wrong words — the same shape trap B-2026-09-13-26
+        // recorded when an array walker was pointed at a `Vec` handle.
+        if p.segments.first().map(String::as_str) != Some("Vec") {
+            return None;
+        }
+        let elem = super::helpers::vec_inner_type_expr(pte)?;
+        self.elem_te_runs_user_drop(&elem).then_some(elem)
+    }
+
     fn emit_payload_user_drop_bodies_core(
         &mut self,
         fn_name: String,
         layout_key: &str,
         arms: Vec<(u64, TypeExpr, usize)>,
+        include_vec: bool,
     ) -> Option<FunctionValue<'ctx>> {
         // Keep only payload arms whose type is a non-shared user struct OR
         // user enum that runs a user drop (own body or Drop-bearing content).
@@ -10482,6 +10555,11 @@ impl<'ctx> super::Codegen<'ctx> {
             /// B-2026-09-12-6 — `Some((elem, N))` for an `Array[E, N]` payload
             /// whose element runs a body. The array peer of `tuple_elems`.
             array_parts: Option<(TypeExpr, u32)>,
+            /// B-2026-09-13-29 — `Some(elem)` for a `Vec[E]` payload whose
+            /// element runs a body. Held apart from `array_parts` because the
+            /// runtime shapes differ: a fixed `[N x E]` aggregate there, a
+            /// `{ptr, len, cap}` handle here.
+            vec_elem: Option<TypeExpr>,
             envelope: bool,
             pte: TypeExpr,
             thresh: usize,
@@ -10496,6 +10574,7 @@ impl<'ctx> super::Codegen<'ctx> {
                             sname: String::new(),
                             tuple_elems: Some(elem_tes.clone()),
                             array_parts: None,
+                            vec_elem: None,
                             envelope: false,
                             pte,
                             thresh,
@@ -10530,6 +10609,31 @@ impl<'ctx> super::Codegen<'ctx> {
                         sname: String::new(),
                         tuple_elems: None,
                         array_parts: Some((elem_te, n)),
+                        vec_elem: None,
+                        envelope: false,
+                        pte,
+                        thresh,
+                    });
+                }
+                // B-2026-09-13-29 — the `Vec` payload, beside the array arm and
+                // for the reason it is NOT that arm: `array_elem_and_len` needs
+                // a compile-time length, so a `Vec[E]` fell past it to the
+                // struct arm, whose head lookup answers `None` for `Vec`. No
+                // walker was emitted and the payload's element bodies ran
+                // nowhere on any compiled surface, while the interpreter's own
+                // payload walk (B-2026-09-10-27) ran them — a run-vs-build
+                // divergence on the DEFAULT spelling, since a bare `[..]`
+                // literal types as `Vec`.
+                if let Some(elem_te) = include_vec
+                    .then(|| self.payload_vec_bodies_parts(&pte))
+                    .flatten()
+                {
+                    return Some(PayloadArm {
+                        tag,
+                        sname: String::new(),
+                        tuple_elems: None,
+                        array_parts: None,
+                        vec_elem: Some(elem_te),
                         envelope: false,
                         pte,
                         thresh,
@@ -10566,6 +10670,7 @@ impl<'ctx> super::Codegen<'ctx> {
                         sname,
                         tuple_elems: None,
                         array_parts: None,
+                        vec_elem: None,
                         envelope: true,
                         pte,
                         thresh,
@@ -10603,6 +10708,7 @@ impl<'ctx> super::Codegen<'ctx> {
                     sname,
                     tuple_elems: None,
                     array_parts: None,
+                    vec_elem: None,
                     envelope: false,
                     pte,
                     thresh,
@@ -10660,6 +10766,7 @@ impl<'ctx> super::Codegen<'ctx> {
                 sname,
                 tuple_elems,
                 array_parts,
+                vec_elem,
                 envelope,
                 pte,
                 thresh,
@@ -10733,7 +10840,7 @@ impl<'ctx> super::Codegen<'ctx> {
                 // the recursion needs no reshaping. Body-only like every
                 // sibling arm: the inner envelope's box and interior are
                 // owned by the value's free channel, unchanged by this.
-                self.emit_optres_payload_user_drop_bodies_fn(&pte)
+                self.emit_optres_payload_user_drop_bodies_fn_ex(&pte, include_vec)
             } else if let Some(elem_tes) = &tuple_elems {
                 // B-2026-09-05-14 — the tuple payload: run each Drop-carrying
                 // element's body over the tuple aggregate at `target_ptr`
@@ -10751,6 +10858,43 @@ impl<'ctx> super::Codegen<'ctx> {
                 // deboxed above). Body-only, like every sibling arm.
                 let elem_ty = self.llvm_type_for_type_expr(elem_te);
                 self.emit_array_elem_user_drop_bodies_fn(elem_ty, elem_te, *n)
+            } else if let Some(elem_te) = &vec_elem {
+                // B-2026-09-13-29 — the `Vec` payload: run each element's body
+                // over the `{ptr, len, cap}` handle at `target_ptr`, walking
+                // the handle's runtime length. Dispatched exactly as the
+                // `let`-bound `Vec` registration dispatches, so a discarded
+                // payload and a bound binding resolve the SAME walker: the mono
+                // element walk for a struct / user-enum element, the te-driven
+                // recursive one for a nested container.
+                let elem_ty = self.llvm_type_for_type_expr(elem_te);
+                let elem_struct_name = match &elem_te.kind {
+                    TypeKind::Path(ep) => ep
+                        .segments
+                        .first()
+                        .filter(|n| {
+                            let n = n.as_str();
+                            self.type_decls.struct_types.contains_key(n)
+                                || (n != "Option"
+                                    && n != "Result"
+                                    && self
+                                        .type_decls
+                                        .enum_layouts
+                                        .get(n)
+                                        .is_some_and(|l| !l.is_shared))
+                        })
+                        .cloned(),
+                    _ => None,
+                };
+                match elem_struct_name {
+                    Some(en) => {
+                        let subst = self.generic_struct_subst_from_inst(&en, elem_te);
+                        self.emit_vec_elem_user_drop_bodies_fn_mono(&en, elem_ty, &subst)
+                    }
+                    None => {
+                        let te = elem_te.clone();
+                        self.emit_nested_vec_elem_bodies_fn(&te)
+                    }
+                }
             } else if is_enum {
                 self.emit_enum_payload_user_drop_bodies_fn(&sname)
             } else {
