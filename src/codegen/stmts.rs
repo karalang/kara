@@ -8218,12 +8218,60 @@ impl<'ctx> super::Codegen<'ctx> {
                 // struct walk here would free fields a binding also frees.
                 if shared_option_info.is_none() {
                     if let PatternKind::Binding(var_name) = &pattern.kind {
-                        let te_opt: Option<TypeExpr> = ty.clone().or_else(|| {
-                            self.type_decls
-                                .enum_inst_type_exprs
-                                .get(&(value.span.offset, value.span.length))
-                                .cloned()
-                        });
+                        let te_opt: Option<TypeExpr> = ty
+                            .clone()
+                            .or_else(|| {
+                                self.type_decls
+                                    .enum_inst_type_exprs
+                                    .get(&(value.span.offset, value.span.length))
+                                    .cloned()
+                            })
+                            // B-2026-09-12-19 — the CALLEE'S DECLARED RETURN
+                            // TYPE, for an un-annotated `let` bound from a call.
+                            // `enum_inst_type_exprs` carries a generic
+                            // INSTANTIATION; a call returning a CONCRETE user
+                            // enum records none, and with no annotation either
+                            // this resolved to `None` and the registration below
+                            // never ran — so `let v = mk(i)` over
+                            // `fn mk(..) -> E` with `enum E { A(Array[String, 2]), B }`
+                            // leaked the box AND its interior (192 B in 4 blocks
+                            // plus 136 B indirect in 8 over four rounds) while the
+                            // ANNOTATED `let v: E = mk(i)`, the identical value one
+                            // token away, was clean.
+                            //
+                            // Concrete enums have been in scope for this
+                            // registration since B-2026-09-12-12 (a declared
+                            // `Array[T, N]` payload takes
+                            // `payload_word_count_for_type_expr`'s conservative
+                            // `_ => 1` tail and boxes exactly like an erased `T`),
+                            // so the only thing missing was the type. The
+                            // "only the generic case can reach here" note above
+                            // predates that row.
+                            //
+                            // Same two-map lookup as `callee_tuple_param_elem_type_exprs`
+                            // and the return-position sibling in
+                            // `call_dispatch.rs`: a GENERIC callee is absent from
+                            // the `fn_sig` map and has to be read off
+                            // `generic_fns` instead.
+                            .or_else(|| {
+                                let ExprKind::Call { callee, .. } = &value.kind else {
+                                    return None;
+                                };
+                                let ExprKind::Identifier(fn_name) = &callee.kind else {
+                                    return None;
+                                };
+                                self.fn_sig
+                                    .fn_return_type_exprs
+                                    .get(fn_name)
+                                    .cloned()
+                                    .or_else(|| {
+                                        self.mono_state
+                                            .generic_fns
+                                            .get(fn_name)?
+                                            .return_type
+                                            .clone()
+                                    })
+                            });
                         if let Some(te) = te_opt {
                             // Resolve through the active monomorph subst: inside
                             // a generic fn the annotation may itself be `Opt[T]`.

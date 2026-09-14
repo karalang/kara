@@ -88903,6 +88903,111 @@ fn main() {
         );
     }
 
+    /// B-2026-09-12-19 — an UN-ANNOTATED `let` bound from a call returning a
+    /// CONCRETE user enum registered no owner at all: 192 B in 4 blocks (the
+    /// boxed `[2 x {ptr,len,cap}]` payloads) plus 136 B indirect in 8 (their
+    /// `String`s), over four rounds.
+    ///
+    /// NOT AN OWNERSHIP QUESTION — a missing TYPE. The let-site boxed-enum
+    /// registration resolves its payload type from the annotation, else from
+    /// `enum_inst_type_exprs`. That table carries a generic INSTANTIATION; a
+    /// call returning a concrete user enum records none, so an un-annotated
+    /// `let` resolved to `None` and the registration never ran. Concrete enums
+    /// have been in scope for it since B-2026-09-12-12 — a declared
+    /// `Array[T, N]` payload takes `payload_word_count_for_type_expr`'s
+    /// conservative `_ => 1` tail and boxes exactly like an erased `T` — so
+    /// only the type was missing. The fallback reads the callee's declared
+    /// return type, through the same two-map lookup
+    /// (`fn_return_type_exprs`, then `generic_fns`) the sibling sites use.
+    ///
+    /// THE PAIR IS THE POINT: `annotated` and `bare` are the identical value
+    /// one token apart, and only the second leaked. If this regresses they
+    /// diverge again, which is a sharper signal than either alone.
+    ///
+    /// CONTROLS, all clean before and after, each ruling out a wider reading:
+    /// `tuple` and `strpay` are the same concrete enum returned the same way
+    /// with non-array payloads (so the defect is array-shaped, not
+    /// return-shaped); `generic` is the generic sibling (already clean, and
+    /// what made the concrete case easy to miss); `local` builds the payload at
+    /// the `let` (clean by a different route, which is why the leak needed the
+    /// call-return hop).
+    ///
+    /// NOT COVERED, and deliberately absent rather than silently passing: the
+    /// bare DISCARD `mk(i);` of the same concrete enum still leaks the same
+    /// 192 + 136. That is the statement-discard chokepoint, not one of this
+    /// row's four registration sites — the user-enum analogue of what
+    /// B-2026-09-13-19 fixed for `Option` — and is filed separately.
+    #[test]
+    fn asan_unannotated_let_from_a_concrete_enum_return_owns_its_box() {
+        assert_clean_asan_run(
+            r#"
+enum E { A(Array[String, 2]), B }
+enum E2 { A((String, String, String)), B }
+enum E3 { A(String), B }
+enum G[T] { Y(T), N }
+
+fn mk(i: i64) -> E { return E.A([f"aa-{i}-xxxxxxxxxxxx", f"bb-{i}-yyyyyyyyyyyy"]); }
+fn mk2(i: i64) -> E2 { return E2.A((f"cc-{i}-xxxxxxxxxxxx", f"dd-{i}-yyyyyyyyyyyy", f"ee-{i}-zzzzzzzzzzzz")); }
+fn mk3(i: i64) -> E3 { return E3.A(f"ff-{i}-xxxxxxxxxxxx"); }
+fn mkg(i: i64) -> G[Array[String, 2]] { return G.Y([f"gg-{i}-xxxxxxxxxxxx", f"hh-{i}-yyyyyyyyyyyy"]); }
+
+fn main() {
+    let mut i: i64 = 0;
+    while i < 4 {
+        let bare = mk(i);
+        match bare { E.A(x) => { println(f"bare:{x[0]}"); } E.B => {} }
+
+        let annotated: E = mk(i);
+        match annotated { E.A(x) => { println(f"annotated:{x[0]}"); } E.B => {} }
+
+        let tuple = mk2(i);
+        match tuple { E2.A(t) => { println(f"tuple:{t.0}"); } E2.B => {} }
+
+        let strpay = mk3(i);
+        match strpay { E3.A(s) => { println(f"strpay:{s}"); } E3.B => {} }
+
+        let generic = mkg(i);
+        match generic { G.Y(x) => { println(f"generic:{x[0]}"); } G.N => {} }
+
+        let local: E = E.A([f"ii-{i}-xxxxxxxxxxxx", f"jj-{i}-yyyyyyyyyyyy"]);
+        match local { E.A(x) => { println(f"local:{x[0]}"); } E.B => {} }
+
+        i = i + 1;
+    }
+    println("end");
+}
+"#,
+            &[
+                "bare:aa-0-xxxxxxxxxxxx",
+                "annotated:aa-0-xxxxxxxxxxxx",
+                "tuple:cc-0-xxxxxxxxxxxx",
+                "strpay:ff-0-xxxxxxxxxxxx",
+                "generic:gg-0-xxxxxxxxxxxx",
+                "local:ii-0-xxxxxxxxxxxx",
+                "bare:aa-1-xxxxxxxxxxxx",
+                "annotated:aa-1-xxxxxxxxxxxx",
+                "tuple:cc-1-xxxxxxxxxxxx",
+                "strpay:ff-1-xxxxxxxxxxxx",
+                "generic:gg-1-xxxxxxxxxxxx",
+                "local:ii-1-xxxxxxxxxxxx",
+                "bare:aa-2-xxxxxxxxxxxx",
+                "annotated:aa-2-xxxxxxxxxxxx",
+                "tuple:cc-2-xxxxxxxxxxxx",
+                "strpay:ff-2-xxxxxxxxxxxx",
+                "generic:gg-2-xxxxxxxxxxxx",
+                "local:ii-2-xxxxxxxxxxxx",
+                "bare:aa-3-xxxxxxxxxxxx",
+                "annotated:aa-3-xxxxxxxxxxxx",
+                "tuple:cc-3-xxxxxxxxxxxx",
+                "strpay:ff-3-xxxxxxxxxxxx",
+                "generic:gg-3-xxxxxxxxxxxx",
+                "local:ii-3-xxxxxxxxxxxx",
+                "end",
+            ],
+            "asan_unannotated_let_from_a_concrete_enum_return_owns_its_box",
+        );
+    }
+
     /// B-2026-09-13-10 — the STRUCT-shaped spelling of a nested boxed-payload
     /// destructure, which leaked one block per leaf field because its disarm
     /// had no WIDTH CEILING.
