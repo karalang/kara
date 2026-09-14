@@ -100,7 +100,7 @@ distinguish "bugs flattening" from "we stopped writing them down."
 | codegen-gap | 177 |
 | diagnostics | 126 |
 | other | 111 |
-| perf | 109 |
+| perf | 110 |
 | false-positive | 107 |
 | soundness | 95 |
 | crash | 81 |
@@ -110,7 +110,7 @@ distinguish "bugs flattening" from "we stopped writing them down."
 
 | surface | total |
 |---|---|
-| codegen | 1744 |
+| codegen | 1745 |
 | interp | 439 |
 | typecheck | 300 |
 | other | 90 |
@@ -184,7 +184,6 @@ _Generated from `bug-ledger.jsonl` by `scripts/bug-curve.py` (2026-05-20 → 202
 | B-2026-09-14-16 | 2026-09-14 | codegen+interp | low | PROJECTING ONE FIELD OFF A FRESH TEMP DROPS THE TEMP'S OTHER `Drop` BODIES ON EVERY SURFACE -- `let w = (mkw(7).r, 1);` runs the moved leaf's body but never the untouched sibling field's, while a bare discarded `mkw(7);` runs both | — |
 | B-2026-09-14-18 | 2026-09-14 | codegen+interp | medium | AN UNMOVED PART OF AN OWNED `Option` PAYLOAD LOSES ITS `Drop` BODY ON ALL FOUR SURFACES when the arm DESTRUCTURES the payload and returns a different part -- `Some((a, b)) => { return b; }` over `Option[(R, i64)]` prints `got:9 end` everywhere against the due `dR5 got:9 end`, and the two-Drop-element cell loses `dR6` everywhere, so the A/B parity rule sees nothing; this is the cell B-2026-09-13-5 recorded as 'correct on all four surfaces', which its `(R, i64)` sibling could not show | — |
 | B-2026-09-14-19 | 2026-09-14 | codegen | medium | WHERE THE COMPILED BACKENDS KEEP AN OWNED `Option` PAYLOAD'S `Drop` BODY THEY RUN IT AT THE CALLER'S SCOPE EXIT, NOT AT THE PAYLOAD'S DEATH -- `fn eat(o: Option[R]) -> i64` reading only `r.id` prints `got:5 end dR5` on JIT/AOT against `--interp`'s correct `dR5 got:5 end`, so the count agrees and the body is observable one statement too late; the mirror of B-2026-09-14-7, where compiled runs EARLY | — |
-| B-2026-09-14-20 | 2026-09-14 | codegen | medium | SSO's PROMOTE-ON-MUTATION COSTS 32-40% ON CHAR-BY-CHAR STRING BUILDING, and it is the whole of the remaining corpus regression -- `sso_deinline_in_place` fires on every mutating method call (`push`, `push_str`, `insert`, ...) and does nothing on almost all of them; a 60-char build, which can NEVER be inline, still regresses 40%, so the cost is the PROBE rather than the promotion. Reachable only at KARAC_SSO=1, which is off by default. | — |
 | B-2026-09-14-21 | 2026-09-14 | codegen | low | A DISCARDED SAME-TYPE ASSOCIATED-FN ENUM LEAKS ONLY WHEN ITS PAYLOAD IS A BOXED `Array` -- `Ex.mk(i);` over `impl Ex { fn mk(n) -> Ex }` with `enum Ex { A(Array[String, 2]), B }` loses 144 B in 3 blocks plus 42 B indirect in 6, while the identical spelling with a `String`, `Vec`, `Map`, heap-struct or `Drop`-bearing payload is clean, so the owner that covers the same-type path does not reach through a box | — |
 | B-2026-09-14-22 | 2026-09-14 | codegen | medium | A GENERIC ENUM'S BOXED PAYLOAD LOSES ITS `Drop` BODY ON EVERY COMPILED SURFACE ONCE THE CONSUMING ARM BINDS IT -- `takew(Ho.Full(mkw()))` over a three-`String` payload prints `w:4 end` on JIT/AOT against `--interp`'s `w:4 dW4 end`, and the named-local spelling splits the same way, while the identical callee that does NOT bind the payload is correct on all four and the MONOMORPHIC twin is correct in both shapes -- so the axis is `clear_boxed_enum_inner_drop` retracting the box's interior walk with nothing picking the body up | — |
 | B-2026-09-14-23 | 2026-09-14 | codegen | medium | A WHOLE-CONTAINER REASSIGNMENT LOSES THE DISPLACED CONTAINER'S ELEMENT `Drop` BODIES ON EVERY COMPILED BACKEND -- `let mut v: Vec[D] = [..]; v = [..];` runs the displaced elements' bodies under `--interp` and none compiled, and `Array[D, N]` and both nested spellings diverge identically, so the loss is in the DISPLACEMENT site rather than in any element walker | — |
@@ -192,6 +191,7 @@ _Generated from `bug-ledger.jsonl` by `scripts/bug-curve.py` (2026-05-20 → 202
 | B-2026-09-14-25 | 2026-09-14 | codegen | high | AN `Array[D, N]` ENUM PAYLOAD WHOSE ELEMENT CARRIES BOTH HEAP AND A USER `Drop` BODY DOUBLE-FREES ON A CONSUMING ARM -- `Bd.A(a) => takeb(a)` over `enum Bd { A(Array[D, 2]), B }` for `struct D { id: i64, s: String }` exits 134 with 2 invalid frees at BOTH opt levels while `--interp` is correct, and B-2026-09-14-17's box-interior zeroing cannot be extended to it because the BODIES walker reads the words it zeroes -- measured, that turns the abort into `drop-D-0-` on every compiled backend | — |
 | B-2026-09-14-26 | 2026-09-14 | codegen | medium | A CONSUMING ARM OVER A BOXED TUPLE ENUM PAYLOAD LEAKS ITS ELEMENTS -- `T.A(p) => taket(p)` over `enum T { A((String, String)), B }` loses 159 B in 6 blocks (21 allocs / 15 frees) while the READ-ONLY arm over the same enum is clean, so it is arm-dependent and distinct from B-2026-09-12-10; it also REFUTES B-2026-09-14-17's guess that a boxed tuple shares the array's double free -- box-only arms leak where interior-walking arms abort | — |
 | B-2026-09-14-27 | 2026-09-14 | ownership+codegen | high | READING A NAMED `Array[T, N]` LOCAL AFTER PASSING IT BY VALUE PRINTS GARBAGE ON EVERY COMPILED BACKEND AT EXIT 0 -- `let n = take(a); println(a[0])` over `fn take(a: Array[String, 2])` yields two different wrong strings on the two compiled backends against a correct `--interp`, because the `Array` callee-owns convention disarms the caller while the ownership checker reports the later read as a WARNING and then prints `All checks passed` | — |
+| B-2026-09-14-28 | 2026-09-14 | codegen | medium | `vertical`'s +85% SSO REGRESSION IS NOT THE DE-INLINE PROBE AND NOT `prefix_string` -- both were ruled out by measurement (c1adb9c removed the probe: +84.1% -> +85.4%; an exact mirror of `prefix_string` runs 9-15% FASTER under SSO), so the worst regression in the corpus is now UNATTRIBUTED. `shortest_distance_iii` (+36%) and `shortest_distance` (+61%) are the same shape. Reachable only at KARAC_SSO=1, which is off by default. | — |
 
 ### Relocated
 
@@ -2571,6 +2571,7 @@ _Generated from `bug-ledger.jsonl` by `scripts/bug-curve.py` (2026-05-20 → 202
 | B-2026-09-14-14 | codegen | high | A BLOCK-SCOPED NAMED `Array[T, N]` LOCAL MOVED INTO `Vec.push` IS NOT DISARMED, so its element buffers are freed at block exit while the `Vec` still… | fec3f60 |
 | B-2026-09-14-15 | interp+codegen | medium | A NESTED FIXED `Array` (`Array[Array[D, N], M]`) RUNS ITS INNERMOST ELEMENTS' `Drop` BODIES UNDER `--interp` AND ON NEITHER COMPILED BACKEND -- no en… | 338a535 |
 | B-2026-09-14-17 | codegen | high | A MATCH ARM THAT CONSUMES A BOXED `Array` PAYLOAD FREES ITS ELEMENT BUFFERS TWICE AND ABORTS THE PROGRAM -- `match e { E.A(a) => take(a) }` over `enu… | 1a5d7f9 |
+| B-2026-09-14-20 | codegen | medium | SSO's PROMOTE-ON-MUTATION COSTS 32-40% ON CHAR-BY-CHAR STRING BUILDING, and it is the whole of the remaining corpus regression -- `sso_deinline_in_pl… | c1adb9c |
 
 </details>
 
