@@ -4647,11 +4647,33 @@ impl<'ctx> super::Codegen<'ctx> {
                                     .values()
                                     .any(|ks| ks.iter().any(|dk| *dk != EnumDropKind::None));
                         }
-                        if self.type_decls.struct_types.contains_key(name) {
-                            if let Some(fields) = self.type_decls.struct_field_type_exprs.get(name)
-                            {
-                                return fields.iter().any(|f| self.type_expr_has_drop_heap(f));
-                            }
+                        // B-2026-09-12-10 — keyed on the FIELD-TYPE-EXPR table
+                        // alone. This used to require `struct_types` (the LLVM
+                        // type map) to hold the name FIRST, and that made a pure
+                        // type-expr question ORDER-DEPENDENT: user structs enter
+                        // `struct_types` in a later declaration pass than the one
+                        // that classifies an enum's payload drop, so every
+                        // `enum_drop_kind_for_type_expr` call over a tuple payload
+                        // saw `false` for a user-struct element and classified the
+                        // payload `None` — no drop emitted, and the element's
+                        // `Drop` body never run either.
+                        //
+                        // Measured on `enum M { P((Rec, i64)), Q }` with
+                        // `Rec { s: String }` + `impl Drop`: 72 B in 3 blocks and
+                        // `dRec` ZERO times as an enum payload, against the SAME
+                        // tuple clean with `dRec` 3/3 as a plain local and as a
+                        // struct field — the two positions classified late enough
+                        // for `struct_types` to hold `Rec`. That split is what
+                        // identifies the table rather than the predicate.
+                        //
+                        // `struct_field_type_exprs` is the table this arm already
+                        // read for the answer; the guard above it was asking "is
+                        // this a struct" of a map that cannot answer yet. A
+                        // `get` on the field table is the same test and is
+                        // populated by then. Enum names never reach here — the
+                        // `enum_layouts` arm above returns first.
+                        if let Some(fields) = self.type_decls.struct_field_type_exprs.get(name) {
+                            return fields.iter().any(|f| self.type_expr_has_drop_heap(f));
                         }
                         false
                     }
@@ -9268,8 +9290,22 @@ impl<'ctx> super::Codegen<'ctx> {
         let Some(name) = p.segments.last() else {
             return false;
         };
+        // B-2026-09-12-10 — the `struct_types` membership test this used to
+        // carry is dropped for the same reason as `type_expr_has_drop_heap`'s,
+        // one table over: it made a type-expr question order-dependent, and the
+        // enum-payload classifier runs before user structs reach that LLVM map.
+        // `struct_owns_shared_field` already answers `false` for a name absent
+        // from `struct_field_type_exprs`, so the guard was asking "is this a
+        // struct" of a map that cannot answer yet while the authoritative table
+        // could.
+        //
+        // Measured on `enum M { P((Wrap, i64)), Q }` with
+        // `struct Wrap { i: Inner }` over a `shared struct Inner`: 48 B in 3
+        // blocks before, clean after. This cell was PREDICTED from the
+        // `(Rec, i64)` root rather than found — B-2026-09-06-72 established the
+        // struct-owns-a-shared-field element for tuples, and it was broken in
+        // the enum-payload position only, by this guard.
         !self.type_decls.shared_types.contains_key(name.as_str())
-            && self.type_decls.struct_types.contains_key(name.as_str())
             && self.struct_owns_shared_field(name, &mut Vec::new())
     }
 

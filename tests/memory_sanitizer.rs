@@ -90417,4 +90417,180 @@ fn main() {
             "map-get-heapless-array-key-control",
         );
     }
+    #[test]
+    fn asan_an_enum_tuple_payload_sees_a_struct_element_that_owns_heap() {
+        // B-2026-09-12-10 — two of the row's three cells, and one it did not
+        // list. An enum's TUPLE payload got no drop at all when an element was
+        // a user STRUCT, because the admit gate's heap question was
+        // ORDER-DEPENDENT: `type_expr_has_drop_heap` (and
+        // `struct_elem_owns_shared_field`) tested `struct_types` — the LLVM
+        // type map — before reading `struct_field_type_exprs`, and user structs
+        // enter that map in a LATER declaration pass than the one classifying
+        // an enum payload. So the predicate answered "owns no heap" for every
+        // user-struct element and the payload classified `None`.
+        //
+        // WHAT IDENTIFIES THE TABLE rather than the predicate is cell 3: the
+        // identical tuple is clean as a plain local and as a struct field,
+        // positions classified late enough for the map to hold the name. Both
+        // guards are dropped; the authoritative field-type-expr table answers
+        // the same question and is populated by then.
+        //
+        // THIS FIXTURE ONLY BITES AT `-O0`, so a green default `--features
+        // llvm` run is NOT coverage for it: measured, the unfixed tree is clean
+        // at the default opt level on every cell below, because LLVM deletes an
+        // allocation nothing observes. Adding a read of the payload does not
+        // rescue it either — tried, and `-O2` still eliminates the whole
+        // round. `scripts/asan-o0-leg.sh` is what actually holds this, where
+        // the unfixed tree reports `72 byte(s) leaked in 3 allocation(s)`.
+        //
+        // MEASURED, `KARAC_OPT_LEVEL=0`, valgrind, three rounds, value never
+        // read:
+        //
+        //     (Rec2, i64)  enum payload      72 B / 3  ->  clean
+        //     (Wrap, i64)  shared-owning     48 B / 3  ->  clean
+        //     (Rec2, i64)  plain local       clean     ->  clean   (control)
+        //     (String, i64) enum payload     clean     ->  clean   (control)
+        //
+        // STILL OPEN on the row, deliberately untouched here: `(bool, String)`
+        // is declined by the word-alignment gate this fix's arm depends on
+        // (widening it would free at the wrong offsets), and
+        // `(Option[String], i64)` is ADMITTED by the gate and still leaks —
+        // 40 B definite + 24 B indirect a round, the signature of a BOXED
+        // payload whose box nobody frees, which is the boxed-payload family and
+        // not this one.
+        // 1 -- a plain USER STRUCT element. 72 B in 3 blocks before, at -O0.
+        //      `Rec2` deliberately has NO `impl Drop`: the same cell WITH one
+        //      still runs its body zero times (B-2026-09-12-6, a different
+        //      defect on the same shape), so pinning the body count here would
+        //      tie this fixture to that row. Memory only.
+        assert_clean_asan_run(
+            "struct Rec2 { s: String }\n\
+             enum M { P((Rec2, i64)), Q }\n\
+             fn main() {\n\
+             \x20\x20\x20\x20let n = env.args().len() as i64;\n\
+             \x20\x20\x20\x20let mut i: i64 = 0i64;\n\
+             \x20\x20\x20\x20while i < 3i64 {\n\
+             \x20\x20\x20\x20\x20\x20\x20\x20let g: M = P((Rec2 { s: f\"row-aaaaaaaaaaaaaaaa-{i}-{n}\" }, 1i64));\n\
+             \x20\x20\x20\x20\x20\x20\x20\x20println(\"t\");\n\
+             \x20\x20\x20\x20\x20\x20\x20\x20i = i + 1i64;\n\
+             \x20\x20\x20\x20}\n\
+             \x20\x20\x20\x20println(\"end\");\n\
+             }",
+            &["t", "t", "t", "end"],
+            "enum-tuple-payload-struct-element",
+        );
+
+        // 2 -- a struct element owning a `shared` field. 48 B in 3 blocks
+        //      before. PREDICTED from cell 1's root rather than found:
+        //      B-2026-09-06-72 established this element shape for tuples, and
+        //      `struct_elem_owns_shared_field` carried the same
+        //      `struct_types` guard, so it was broken in the enum-payload
+        //      position alone.
+        assert_clean_asan_run(
+            "shared struct Inner { v: i64 }\n\
+             struct Wrap { i: Inner }\n\
+             enum M { P((Wrap, i64)), Q }\n\
+             fn main() {\n\
+             \x20\x20\x20\x20let n = env.args().len() as i64;\n\
+             \x20\x20\x20\x20let mut i: i64 = 0i64;\n\
+             \x20\x20\x20\x20while i < 3i64 {\n\
+             \x20\x20\x20\x20\x20\x20\x20\x20let g: M = P((Wrap { i: Inner { v: n } }, 1i64));\n\
+             \x20\x20\x20\x20\x20\x20\x20\x20println(\"t\");\n\
+             \x20\x20\x20\x20\x20\x20\x20\x20i = i + 1i64;\n\
+             \x20\x20\x20\x20}\n\
+             \x20\x20\x20\x20println(\"end\");\n\
+             }",
+            &["t", "t", "t", "end"],
+            "enum-tuple-payload-shared-owning-element",
+        );
+
+        // 3 -- THE POSITION CONTROL, and the cell that identified the table
+        //      rather than the predicate: the SAME tuple as a plain local was
+        //      clean before this fix and stays clean, because the let-site is
+        //      classified late enough for `struct_types` to hold `Rec2`.
+        assert_clean_asan_run(
+            "struct Rec2 { s: String }\n\
+             fn main() {\n\
+             \x20\x20\x20\x20let n = env.args().len() as i64;\n\
+             \x20\x20\x20\x20let mut i: i64 = 0i64;\n\
+             \x20\x20\x20\x20while i < 3i64 {\n\
+             \x20\x20\x20\x20\x20\x20\x20\x20let p: (Rec2, i64) = (Rec2 { s: f\"row-aaaaaaaaaaaaaaaa-{i}-{n}\" }, 1i64);\n\
+             \x20\x20\x20\x20\x20\x20\x20\x20println(\"t\");\n\
+             \x20\x20\x20\x20\x20\x20\x20\x20i = i + 1i64;\n\
+             \x20\x20\x20\x20}\n\
+             \x20\x20\x20\x20println(\"end\");\n\
+             }",
+            &["t", "t", "t", "end"],
+            "plain-local-tuple-struct-element-control",
+        );
+
+        // 4 -- the shape B-2026-09-12-8 already covered, kept as a
+        //      no-regression control on the arm this fix widens.
+        assert_clean_asan_run(
+            "enum M { P((String, i64)), Q }\n\
+             fn main() {\n\
+             \x20\x20\x20\x20let n = env.args().len() as i64;\n\
+             \x20\x20\x20\x20let mut i: i64 = 0i64;\n\
+             \x20\x20\x20\x20while i < 3i64 {\n\
+             \x20\x20\x20\x20\x20\x20\x20\x20let g: M = P((f\"row-aaaaaaaaaaaaaaaa-{i}-{n}\", 1i64));\n\
+             \x20\x20\x20\x20\x20\x20\x20\x20println(\"t\");\n\
+             \x20\x20\x20\x20\x20\x20\x20\x20i = i + 1i64;\n\
+             \x20\x20\x20\x20}\n\
+             \x20\x20\x20\x20println(\"end\");\n\
+             }",
+            &["t", "t", "t", "end"],
+            "enum-tuple-payload-string-element-control",
+        );
+
+        // 5 -- A SUB-WORD FIRST FIELD, which is the cell that shows this fix
+        //      does not free at wrong offsets. `type_expr_word_aligned` also
+        //      gated on `struct_types`, so for a user-struct element it never
+        //      consulted `struct_payload_word_aligned` and fell through to
+        //      "aligned" — meaning the alignment precondition the arm relies on
+        //      was never actually CHECKED for the elements this fix newly
+        //      admits. It holds anyway, because a struct pads its fields to
+        //      word granularity (only a `bool` as a DIRECT TUPLE element packs
+        //      sub-word, which is why the row's `(bool, String)` cell reports
+        //      `word_aligned=false` and stays declined). 72 B / 3 before,
+        //      clean after, valgrind 0 errors and no invalid free.
+        assert_clean_asan_run(
+            "struct Small { b: bool, s: String }\n\
+             enum M { P((Small, i64)), Q }\n\
+             fn main() {\n\
+             \x20\x20\x20\x20let n = env.args().len() as i64;\n\
+             \x20\x20\x20\x20let mut i: i64 = 0i64;\n\
+             \x20\x20\x20\x20while i < 3i64 {\n\
+             \x20\x20\x20\x20\x20\x20\x20\x20let g: M = P((Small { b: true, s: f\"row-aaaaaaaaaaaaaaaa-{i}-{n}\" }, 1i64));\n\
+             \x20\x20\x20\x20\x20\x20\x20\x20println(\"t\");\n\
+             \x20\x20\x20\x20\x20\x20\x20\x20i = i + 1i64;\n\
+             \x20\x20\x20\x20}\n\
+             \x20\x20\x20\x20println(\"end\");\n\
+             }",
+            &["t", "t", "t", "end"],
+            "enum-tuple-payload-subword-struct-field",
+        );
+
+        // 6 -- the same question one level down: a struct CONTAINING a sub-word
+        //      tuple, which is exactly what `struct_payload_word_aligned` exists
+        //      to reject and what the skipped check would have caught. Also
+        //      72 B / 3 before and clean after with 0 errors — the struct's own
+        //      drop fn knows its real layout, so the word region is never the
+        //      thing being indexed.
+        assert_clean_asan_run(
+            "struct Wrap2 { t: (bool, String) }\n\
+             enum M { P((Wrap2, i64)), Q }\n\
+             fn main() {\n\
+             \x20\x20\x20\x20let n = env.args().len() as i64;\n\
+             \x20\x20\x20\x20let mut i: i64 = 0i64;\n\
+             \x20\x20\x20\x20while i < 3i64 {\n\
+             \x20\x20\x20\x20\x20\x20\x20\x20let g: M = P((Wrap2 { t: (true, f\"row-aaaaaaaaaaaaaaaa-{i}-{n}\") }, 1i64));\n\
+             \x20\x20\x20\x20\x20\x20\x20\x20println(\"t\");\n\
+             \x20\x20\x20\x20\x20\x20\x20\x20i = i + 1i64;\n\
+             \x20\x20\x20\x20}\n\
+             \x20\x20\x20\x20println(\"end\");\n\
+             }",
+            &["t", "t", "t", "end"],
+            "enum-tuple-payload-struct-wrapping-subword-tuple",
+        );
+    }
 }
