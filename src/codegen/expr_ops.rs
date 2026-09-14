@@ -124,6 +124,41 @@ impl<'ctx> super::Codegen<'ctx> {
             //     sets), whose move-out is handled by the suppression below.
             let v = self.maybe_defensive_copy_param_arg(elem_expr, v);
             self.suppress_source_vec_cleanup_for_arg(elem_expr);
+            // B-2026-09-13-27 — the FIELD-ACCESS peer of the line above, and
+            // the tuple sibling of the `disarm_struct_field_move_bodies` call
+            // in `compile_struct_init`'s field loop (B-2026-09-01-17). A field
+            // PROJECTED out of a local into this literal (`let w = (t.r, 1);`)
+            // is a move out of that local, so the local's field-bodies walk
+            // must stop running the moved-out leaf. The whole-Identifier
+            // suppress above does not reach a `FieldAccess`, exactly as it does
+            // not in the struct-literal loop.
+            //
+            // Without it `t`'s walk still fired the leaf, and EARLY -- ahead of
+            // the binding that now owns the value, because the source's drop
+            // goes at its own last use. So the cell read as one body in the
+            // wrong place on the compiled backends and as two under `--interp`,
+            // which is the run-vs-build shape the row was filed against; the
+            // position was the part the count hid.
+            //
+            // BODIES ONLY: the MEMORY half
+            // (`suppress_struct_field_move_into_literal`) is deliberately not
+            // its peer here. A projected struct element's heap is already
+            // balanced at this position -- measured clean under valgrind at
+            // `-O0` before and after, on `(t.r, 1)`, `(mkw(7).r, 1)` and the
+            // annotated twin -- because the source's walk is its sole owner and
+            // the tuple's own drop does not reach a user-struct element's
+            // fields. Zeroing the source's cap as well would leave that heap
+            // with no owner at all, which is the trade case (e) one screen up
+            // records for the inline-Option suppressors.
+            //
+            // Self-gated in the helper (identifier/`self` root, non-param,
+            // non-RC-boxed, `Copy` leaf declined) and idempotent, so the
+            // let-site callers that already reach it for the same field are
+            // unaffected. Interp twin: the `record_returned_projection_moves`
+            // call in `eval_expr_inner`'s `ExprKind::Tuple` arm.
+            if matches!(elem_expr.kind, ExprKind::FieldAccess { .. }) {
+                self.disarm_struct_field_move_bodies(elem_expr);
+            }
             // (e) B-2026-09-10-24 / B-2026-09-10-28 — an `Option`/`Result`
             //     BINDING folded into the tuple hands over its PAYLOAD, and
             //     `suppress_source_vec_cleanup_for_arg` above cannot reach it:

@@ -40478,6 +40478,143 @@ end
         }
     }
 
+    /// B-2026-09-13-27 — a tuple literal carrying a FIELD PROJECTED out of a
+    /// local (`let w = (t.r, 1);`) runs the moved leaf's `Drop` body ONCE, and at
+    /// the binding that owns it rather than at the source.
+    ///
+    /// The row was filed as a run-vs-build count divergence — two bodies under
+    /// `--interp` against one compiled — and the count was the smaller half. The
+    /// compiled body ran at the SOURCE's drop, ahead of the `w` that owns the
+    /// value, so the single answer was in the wrong place; and where no named
+    /// source existed to fire it (`(mkw(7).r, 1)`), or where the RHS was an `if`
+    /// wrapping the literal, the compiled backends ran it ZERO times. Three
+    /// defects composing into a plausible-looking one.
+    ///
+    /// The `if`-RHS cells (2, 4, 7, 9, 10) covered a SEPARATE and wider gap,
+    /// measured on a clean `origin/main`: a `let`-bound tuple whose RHS was an
+    /// `if` got no bodies walker at all, so the whole-local and fresh-minting
+    /// elements lost the body identically with no projection in sight.
+    ///
+    /// The `pre` / `post` markers are load-bearing and not decoration: they are
+    /// what distinguishes "one body" from "one body at the right time", which is
+    /// the distinction the row's count-only measurement could not make. Cell 5 (the
+    /// UNMOVED sibling field) and the whole-local controls pin the other side —
+    /// standing a source's walk down must not take a field that never moved.
+    ///
+    /// The last cell is the STRUCT-literal spelling of cell 1, fixed by
+    /// B-2026-09-01-17 and asserted here as the reference the tuple spelling now
+    /// matches. Twin in the other backend's suite under the same name, with the
+    /// same table, so a one-sided change shows up as a diff rather than as a drift.
+    #[test]
+    fn e2e_tuple_literal_of_a_projected_field_runs_one_body_at_the_owner() {
+        let hdr = "struct D { a: String, b: i64 }\n\
+                   impl Drop for D { fn drop(mut ref self) { println(f\"dD{self.b}\") } }\n\
+                   struct W { r: D, s: D, b: i64 }\n\
+                   struct V { r: D, b: i64 }\n\
+                   fn pay() -> String { return \"heap\"; }\n\
+                   fn mkd(n: i64) -> D { return D { a: pay(), b: n }; }\n\
+                   fn mkw(n: i64) -> W { return W { r: mkd(n), s: mkd(n + 100), b: n }; }\n";
+        for (label, stmts, want) in [
+            (
+                "projected field, read later",
+                "let t = mkw(7);\n\
+                 println(\"pre\");\n\
+                 let w = (t.r, 1);\n\
+                 println(\"post\");\n\
+                 println(f\"idx{w.1}\");",
+                "pre\ndD107\npost\nidx1\ndD7\nend\n",
+            ),
+            (
+                "projected field through an if",
+                "let t = mkw(7);\n\
+                 println(\"pre\");\n\
+                 let w = if n == 0 { (t.r, 1) } else { (mkd(2), 2) };\n\
+                 println(\"post\");\n\
+                 println(f\"idx{w.1}\");",
+                "pre\ndD107\npost\nidx1\ndD7\nend\n",
+            ),
+            (
+                "projected field, never read",
+                "let t = mkw(7);\n\
+                 println(\"pre\");\n\
+                 let w = (t.r, 1);\n\
+                 println(\"post\");",
+                "pre\ndD7\ndD107\npost\nend\n",
+            ),
+            (
+                "projected field through an if, never read",
+                "let t = mkw(7);\n\
+                 println(\"pre\");\n\
+                 let w = if n == 0 { (t.r, 1) } else { (mkd(2), 2) };\n\
+                 println(\"post\");",
+                "pre\ndD7\ndD107\npost\nend\n",
+            ),
+            (
+                "the SIBLING field projected instead",
+                "let t = mkw(7);\n\
+                 println(\"pre\");\n\
+                 let w = (t.s, 1);\n\
+                 println(\"post\");\n\
+                 println(f\"idx{w.1}\");",
+                "pre\ndD7\npost\nidx1\ndD107\nend\n",
+            ),
+            (
+                "fresh-temp projection, no named source",
+                "println(\"pre\");\n\
+                 let w = (mkw(7).r, 1);\n\
+                 println(\"post\");\n\
+                 println(f\"idx{w.1}\");",
+                "pre\npost\nidx1\ndD7\nend\n",
+            ),
+            (
+                "fresh-temp projection through an if",
+                "println(\"pre\");\n\
+                 let w = if n == 0 { (mkw(7).r, 1) } else { (mkd(2), 2) };\n\
+                 println(\"post\");\n\
+                 println(f\"idx{w.1}\");",
+                "pre\npost\nidx1\ndD7\nend\n",
+            ),
+            (
+                "control: whole-local element",
+                "let d = mkd(7);\n\
+                 println(\"pre\");\n\
+                 let w = (d, 1);\n\
+                 println(\"post\");\n\
+                 println(f\"idx{w.1}\");",
+                "pre\npost\nidx1\ndD7\nend\n",
+            ),
+            (
+                "control: whole-local element through an if",
+                "let d = mkd(7);\n\
+                 println(\"pre\");\n\
+                 let w = if n == 0 { (d, 1) } else { (mkd(2), 2) };\n\
+                 println(\"post\");\n\
+                 println(f\"idx{w.1}\");",
+                "pre\npost\nidx1\ndD7\nend\n",
+            ),
+            (
+                "control: fresh element through an if",
+                "println(\"pre\");\n\
+                 let w = if n == 0 { (mkd(7), 1) } else { (mkd(2), 2) };\n\
+                 println(\"post\");\n\
+                 println(f\"idx{w.1}\");",
+                "pre\npost\nidx1\ndD7\nend\n",
+            ),
+            (
+                "control: the STRUCT-literal sibling of cell 1",
+                "let t = mkw(7);\n\
+                 println(\"pre\");\n\
+                 let w = V { r: t.r, b: 1 };\n\
+                 println(\"post\");\n\
+                 println(f\"idx{w.b}\");",
+                "pre\ndD107\npost\nidx1\ndD7\nend\n",
+            ),
+        ] {
+            let src = format!("{hdr}fn main() {{\nlet n = 0;\n{stmts}\nprintln(\"end\");\n}}\n");
+            assert_eq!(run_program(&src).as_deref(), Some(want), "[{label}]");
+        }
+    }
+
     #[test]
     fn e2e_wildcard_let_discard_owns_what_its_arm_hands_out() {
         let hdr = "struct R { id: i64, name: String }\n\

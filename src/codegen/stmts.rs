@@ -18535,6 +18535,38 @@ impl<'ctx> super::Codegen<'ctx> {
                     span: e.span,
                 })
             }
+            // B-2026-09-13-27 — a FIELD PROJECTED out of a local
+            // (`let w = (t.r, 1);`). Every namer in `infer_arg_elem_te`
+            // declines a `FieldAccess`, so the element came back as the EMPTY
+            // path and the binding registered no bodies walker for that slot at
+            // all -- the same erasure the `Identifier` and ctor arms above were
+            // written for, one expression form further along.
+            //
+            // What it cost is easiest to read off the ANNOTATED twin, which
+            // supplies exactly this type by hand: `let w: (D, i64) = (mkw(7).r,
+            // 1);` runs the leaf's body once on all four surfaces, while the
+            // unannotated spelling of the same value ran it ZERO times on both
+            // compiled backends against one under `--interp`. With a NAMED
+            // source in front of it the loss hid behind a second defect --
+            // `t`'s own field walk still reached the moved-out leaf and fired
+            // it early -- so the count read as a plausible one and only its
+            // POSITION was wrong (before the binding it belongs to, not at its
+            // death). Those two are why this arm and the `compile_tuple` disarm
+            // that follows it have to land together.
+            //
+            // ORDER IS LOAD-BEARING in the direction B-2026-09-10-24's
+            // `Identifier` arm records for the same function: naming the
+            // element here is what gives the tuple an owner, so standing the
+            // SOURCE down first would take the body to zero rather than to one.
+            // Measured in that order deliberately -- the unannotated cell goes
+            // silent -- which is why the two edits are one commit.
+            //
+            // `plain_field_type_expr` is the same resolution the annotation
+            // path gets for free (declared field type, generic arguments
+            // substituted through `resolve_generic_field_te`), and it answers
+            // `None` for any object it cannot name -- the fail-closed rule every
+            // arm here follows.
+            ExprKind::FieldAccess { object, field } => self.plain_field_type_expr(object, field),
             _ => None,
         }
     }
@@ -18557,6 +18589,59 @@ impl<'ctx> super::Codegen<'ctx> {
                     })
                     .collect(),
             );
+        }
+        // B-2026-09-13-27 — a BRANCH-EXPRESSION source
+        // (`let w = if c { (t.r, 1) } else { (mkd(2), 2) };`, and the `match`
+        // and block-tail spellings). The arm above requires the RHS to BE a
+        // tuple literal, so an `if` wrapping one fell past every arm in this
+        // function, the binding got no bodies walker, and the element's user
+        // `Drop` body ran ZERO times on all three compiled surfaces against
+        // one under `--interp`.
+        //
+        // PRE-EXISTING and WIDER than the projection this row is about,
+        // measured on a clean `origin/main`: the whole-local element
+        // (`let d = mkd(7); let w = if c { (d, 1) } else { .. };`) and the
+        // fresh-minting one (`if c { (mkd(7), 1) } else { .. }`) lose the body
+        // identically, with no projection anywhere in sight. That is what
+        // pins the axis on the RHS's SHAPE rather than on where the element
+        // came from.
+        //
+        // It is fixed HERE rather than filed because this row's own disarm
+        // makes it load-bearing: standing the source's field walk down is what
+        // stops `t`'s walk from firing the moved-out leaf, and for the branch
+        // spelling that walk was the only thing running the body at all. Left
+        // alone, the `if` cell would have gone from one body in the wrong place
+        // to none — trading the row's divergence for a lost body instead of
+        // removing it.
+        //
+        // `first_any_branch_tail` is the existing look-through (block / `if`
+        // then-arm / first `match` arm), and refining from the FIRST tail is
+        // sound for a TYPE: the typechecker has already made every arm agree,
+        // so the arms can differ in how they produce the element but not in
+        // what it is. Gated on that tail being a tuple LITERAL, so any other
+        // branch source keeps falling through to the arms below.
+        if matches!(
+            &value.kind,
+            ExprKind::If { .. }
+                | ExprKind::Match { .. }
+                | ExprKind::Block(_)
+                | ExprKind::Seq(_)
+                | ExprKind::Unsafe(_)
+                | ExprKind::LabeledBlock { .. }
+        ) {
+            if let Some(tail) = self.first_any_branch_tail(value) {
+                if let ExprKind::Tuple(elems) = &tail.kind {
+                    return Some(
+                        elems
+                            .iter()
+                            .map(|e| {
+                                self.refined_tuple_literal_elem_te(e)
+                                    .unwrap_or_else(|| self.infer_arg_elem_te(e))
+                            })
+                            .collect(),
+                    );
+                }
+            }
         }
         // B-2026-09-03-12 — a PLACE source (`let x = h.pe;`, `let x = g.h.pe;`).
         // The declared element types are the field's own, which

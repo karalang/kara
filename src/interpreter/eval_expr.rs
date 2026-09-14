@@ -550,7 +550,43 @@ impl<'a> super::Interpreter<'a> {
 
             // Tuple
             ExprKind::Tuple(exprs) => {
-                let vals: Vec<Value> = exprs.iter().map(|e| self.eval_expr_inner(e)).collect();
+                let vals: Vec<Value> = exprs
+                    .iter()
+                    .map(|e| {
+                        let v = self.eval_expr_inner(e);
+                        // B-2026-09-13-27 — a Drop-bearing field PROJECTED out
+                        // of a local into this literal (`let w = (t.r, 1);`) is
+                        // a move out of that local, so the local's field-bodies
+                        // walk must stop running the moved-out leaf. Without it
+                        // the leaf's body ran TWICE: once early, when `t`'s walk
+                        // reached `r` at its own last use, and once when the
+                        // tuple's owner died.
+                        //
+                        // The struct-literal spelling of the same move
+                        // (`W { r: t.r, b: 1 }`) has stood the source down since
+                        // B-2026-09-01-17, through this same helper at the twin
+                        // position in `eval_struct_literal`'s field loop; the
+                        // tuple literal simply never asked. Recorded AFTER the
+                        // element is evaluated, the same order that loop uses,
+                        // so the mask cannot hide the read that produced the
+                        // value.
+                        //
+                        // Gated to a DIRECT one-hop `FieldAccess` for the reason
+                        // the struct-literal caller gives: codegen's
+                        // `disarm_struct_field_move_bodies` needs an
+                        // `Identifier` object and early-returns on a deeper
+                        // chain, so admitting more here would mask a source
+                        // codegen leaves armed. A NESTED tuple element needs no
+                        // recursion -- it is itself evaluated through this arm.
+                        if matches!(e.kind, ExprKind::FieldAccess { .. })
+                            && Self::field_chain_name_path(e)
+                                .is_some_and(|(_, path)| path.len() == 1)
+                        {
+                            self.record_returned_projection_moves(e);
+                        }
+                        v
+                    })
+                    .collect();
                 Value::Tuple(vals)
             }
 
