@@ -36718,3 +36718,177 @@ fn test_sso_inline_string_survives_the_env_ffi_boundary() {
     }
     let _ = std::fs::remove_dir_all(&tmp);
 }
+
+/// SSO Slice 3 — the de-inline check lives INSIDE the `push`/`push_str` growth
+/// test (`B-2026-09-14-20`, `src/codegen/vec_method.rs`), and this is what
+/// stops it being removed.
+///
+/// **What the fold is.** `String.push` and `String.push_str` used to emit a
+/// `sso_deinline_in_place` branch at the head of the operation. They no longer
+/// do: both already test whether the buffer must grow, so the inline tag is
+/// OR'd into that existing test and an inline receiver is promoted inside the
+/// allocation the grow was going to perform anyway.
+///
+///     %needs_grow     = icmp ugt i64 %new_len, %cap
+///     %sso.inline     = icmp slt i64 %cap, 0
+///     %grow_or_inline = or i1 %needs_grow, %sso.inline
+///
+/// **Why a fixture and not just the gate suite.** Delete the `%sso.inline`
+/// disjunct and `heap_needs_grow` alone decides the branch — but `UGT` reads an
+/// inline `cap < 0` as an enormous unsigned and answers "no grow", so an inline
+/// receiver appends THROUGH ITS OWN DESCRIPTOR BYTES as if field 0 were a heap
+/// pointer. That is a wild store, and at `KARAC_SSO=0` (the default, and every
+/// CI leg) it cannot happen at all: the whole suite stays green while the
+/// inline path is broken. Verified by backing the disjunct out and rebuilding —
+/// this fixture fails, `cargo test --features llvm` otherwise does not.
+///
+/// **Why it shells out.** `KARAC_SSO` is read once per process through a
+/// `OnceLock` at codegen time, so an in-process `tests/codegen.rs` fixture
+/// cannot set it per-test. Same reasoning and placement as
+/// `test_sso_inline_string_survives_the_env_ffi_boundary` above.
+///
+/// **Coverage.** Lengths 0..=40 cross the 23-byte inline capacity in both
+/// directions, against four mutation shapes that reach the growth test
+/// differently: `push` (promotion through the fold), `push_str` FIRST (so that
+/// `push` is not what promotes the receiver — an earlier hand-run control was
+/// vacuous for exactly that reason), self-append via a clone (the alias case:
+/// this change's own first draft took the alias base tag-aware and thereby made
+/// the alias range a stack range), and an empty append (the no-op that must
+/// still leave a well-formed String).
+#[cfg(feature = "llvm")]
+#[test]
+fn test_sso_de_inline_rides_the_string_growth_test() {
+    use std::process::Command;
+
+    let tmp = scratch_project("sso-deinline-growth");
+    // `substring` is a real inline construction site at `KARAC_SSO=1`, so every
+    // receiver with n <= 23 below is an inline descriptor and every receiver
+    // above it is an ordinary heap String.
+    let src = r#"fn src() -> String {
+    "abcdefghijklmnopqrstuvwxyz0123456789ABCDEFGHIJKLMNOPQRSTUV"
+}
+
+fn p_push(n: i64) -> String {
+    let mut s = src().substring(0, n);
+    s.push('!');
+    s
+}
+
+fn p_pushstr_first(n: i64) -> String {
+    let mut s = src().substring(0, n);
+    s.push_str("xy");
+    s
+}
+
+fn p_self(n: i64) -> String {
+    let mut s = src().substring(0, n);
+    let t = s.clone();
+    s.push_str(t);
+    s
+}
+
+fn p_empty(n: i64) -> String {
+    let mut s = src().substring(0, n);
+    s.push_str("");
+    s
+}
+
+fn main() {
+    let mut n = 0;
+    while n <= 40 {
+        let a = p_push(n);
+        let b = p_pushstr_first(n);
+        let c = p_self(n);
+        let d = p_empty(n);
+        println(f"{n} {a.len()} {a} {b.len()} {b} {c.len()} {c} {d.len()} {d}");
+        n = n + 1;
+    }
+}
+"#;
+    write(&tmp.join("deinline.kara"), src);
+
+    // The interpreter is the oracle: it has no inline descriptor to get wrong.
+    let interp = Command::new(env!("CARGO_BIN_EXE_karac"))
+        .current_dir(&tmp)
+        .args(["run", "--interp", "deinline.kara"])
+        .output()
+        .expect("spawn karac run --interp");
+    assert!(
+        interp.status.success(),
+        "interpreter run failed: {}",
+        String::from_utf8_lossy(&interp.stderr)
+    );
+    let want = String::from_utf8_lossy(&interp.stdout).into_owned();
+    assert_eq!(
+        want.lines().count(),
+        41,
+        "oracle should print one line per length 0..=40; got:\n{want}"
+    );
+
+    // Both SSO legs of the JIT lane.
+    for sso in ["0", "1"] {
+        let out = Command::new(env!("CARGO_BIN_EXE_karac"))
+            .current_dir(&tmp)
+            .env("KARAC_SSO", sso)
+            .args(["run", "deinline.kara"])
+            .output()
+            .expect("spawn karac run");
+        assert!(
+            out.status.success(),
+            "KARAC_SSO={sso} karac run died: status {:?}, stderr {}",
+            out.status.code(),
+            String::from_utf8_lossy(&out.stderr)
+        );
+        assert_eq!(
+            String::from_utf8_lossy(&out.stdout),
+            want,
+            "KARAC_SSO={sso} JIT lane must match the interpreter"
+        );
+    }
+
+    // Both SSO legs of the AOT lane, under both auto-par settings — the third
+    // surface, per CLAUDE.md's A/B rule.
+    let mut aot_legs_run = 0;
+    for sso in ["0", "1"] {
+        for par in ["1", "0"] {
+            let exe = tmp.join("deinline");
+            let _ = std::fs::remove_file(&exe);
+            let built = Command::new(env!("CARGO_BIN_EXE_karac"))
+                .current_dir(&tmp)
+                .env("KARAC_SSO", sso)
+                .env("KARAC_AUTO_PAR", par)
+                .args(["build", "deinline.kara"])
+                .output();
+            if !built.map(|o| o.status.success()).unwrap_or(false) || !exe.exists() {
+                continue;
+            }
+            aot_legs_run += 1;
+            let out = Command::new(&exe).output().expect("run built binary");
+            assert!(
+                out.status.success(),
+                "KARAC_SSO={sso} KARAC_AUTO_PAR={par} built binary died: \
+                 status {:?}, stderr {}",
+                out.status.code(),
+                String::from_utf8_lossy(&out.stderr)
+            );
+            assert_eq!(
+                String::from_utf8_lossy(&out.stdout),
+                want,
+                "KARAC_SSO={sso} KARAC_AUTO_PAR={par} AOT lane must match the \
+                 interpreter"
+            );
+        }
+    }
+    // A skip that reports green is how a fixture stops testing anything without
+    // saying so. On the runs that are supposed to exercise real binaries, say
+    // it out loud instead.
+    if std::env::var("KARAC_REQUIRE_RUNTIME_ARCHIVE").is_ok() {
+        assert_eq!(
+            aot_legs_run, 4,
+            "KARAC_REQUIRE_RUNTIME_ARCHIVE is set, so all four AOT legs must \
+             have built and run; only {aot_legs_run} did. Build the runtime \
+             archives (lean then full) per CLAUDE.md."
+        );
+    }
+    let _ = std::fs::remove_dir_all(&tmp);
+}

@@ -123,3 +123,43 @@ Not this track alone — it is three workloads. The missing measurement is the
 **kata corpus timed at both settings** (1063 programs, already verified
 byte-identical at both). They were swept for correctness and never timed, and
 they are mostly `lexlike`-shaped, which is the shape that loses.
+
+## Rails
+
+| rail | shape | what it isolates |
+|---|---|---|
+| `lexer` | the real selfhost lexer over selfhost sources | end-to-end, the only non-synthetic rail |
+| `lexlike` | slice a 3-byte token, compare, discard | transient-read tax |
+| `substr` | the same via `String.substring` | transient-read tax, method spelling |
+| `builder20` / `builder60` | `push` into a never-inline String, CONSTANT bound | per-push tax, upper bound only (see below) |
+| `promote` | receiver inline at first mutation (from `substring`) | promotion cost |
+| `pfx_idx` | `builder` with a RUNTIME bound | per-push tax, the honest short-string number |
+| `pfx_chars` | exact mirror of `vertical`'s `prefix_string` | a rail SSO WINS on — the paired control |
+
+**Read `builder*` and `promote` as a pair.** A change that makes the inline
+check cheaper by making the promotion more expensive looks like a win on
+`builder` alone; one such change made the same loop 4x worse before the pairing
+caught it. Likewise `pfx_chars` is the rail that stops a mutation-path change
+being credited with a win it did not earn — it is 9-15% FASTER under SSO, so a
+regression there is a real cost even when every other rail improves.
+
+**`builder20` is unrolled; `pfx_idx` is not.** `builder20`'s trip count is a
+compile-time constant, so LLVM unrolls the loop and erases the per-iteration
+cost the rail exists to measure. `pfx_idx` has the identical 0..20 length
+distribution with a runtime bound. Where the two disagree, `pfx_idx` is the
+number that describes real code.
+
+## Caveat: the driver loops are AUTO-PARALLELIZED
+
+Every micro rail's `main` accumulates `total = total + s.len()`, which the
+auto-par analyzer classifies as a `+` reduction and fans out at these iteration
+counts (confirm with `karac build --concurrency-report <rail>.kara`). Both legs
+of a comparison are fanned out identically, so the SIGN and rough magnitude of
+an SSO=0 vs SSO=1 delta hold — but the absolute numbers are PARALLEL THROUGHPUT,
+not per-iteration cost, and a per-iteration difference spread across cores reads
+SMALLER here than it is. Build a rail with `KARAC_AUTO_PAR=0` to see the
+sequential per-iteration cost.
+
+Do not make a rail's accumulated value depend on the accumulator itself (e.g.
+`let k = (i + total) % 21`). That shape is silently miscompiled under auto-par —
+B-2026-09-14-31.

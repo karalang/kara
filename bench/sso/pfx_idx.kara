@@ -1,0 +1,45 @@
+// PREFIX-BY-INDEX: `pfx_chars` with the `chars()` walk removed -- the same
+// 0..LEN length distribution and the same runtime bound, driving a bare
+// `push` loop instead of an iterator.
+//
+// WHY THIS RAIL EXISTS, and it is a measurement lesson rather than a codegen
+// one. `builder20` builds a 20-char string with a COMPILE-TIME-CONSTANT trip
+// count, and it barely moved across B-2026-09-14-20's fold (+17.2% -> +15.8%).
+// That reads as "short strings do not benefit", and it is an ARTIFACT: a
+// constant bound lets LLVM unroll the loop, which erases the per-iteration
+// cost the rail was built to measure. This rail has the identical length
+// distribution with a RUNTIME bound, and it gained 14 points across the same
+// change (+17.8/+19.4% -> +4.1/+5.6%).
+//
+// So: read `pfx_idx` for what a short-string builder actually costs, and read
+// `builder20` only as the unrolled upper bound. A rail whose trip count the
+// optimizer can see is measuring the optimizer, not the feature.
+//
+// `k` must NOT be derived from `total`. An earlier draft used
+// `(i + total) % (LEN + 1)` to make the bound maximally opaque, which made the
+// driver loop's `+` reduction read its own accumulator -- a shape the auto-par
+// analyzer classifies as a valid reduction and silently miscompiles above its
+// cost threshold (B-2026-09-14-31). `i % (LEN + 1)` is already opaque enough:
+// the callee takes `k` as a PARAMETER, so its loop bound is runtime-variable
+// whatever the caller does, which is the only property this rail needs.
+fn prefix_idx(k: i64) -> String {
+    let mut out: String = "";
+    let mut i = 0;
+    while i < k {
+        out.push('a');
+        i = i + 1;
+    }
+    out
+}
+
+fn main() {
+    let mut total = 0;
+    let mut i = 0;
+    while i < ITERS {
+        let k = i % (LEN + 1);
+        let s = prefix_idx(k);
+        total = total + s.len();
+        i = i + 1;
+    }
+    println(f"{total}");
+}

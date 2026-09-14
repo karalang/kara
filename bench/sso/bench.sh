@@ -94,6 +94,8 @@ MICRO=(
   "builder20:builder:$BITERS:20"
   "builder60:builder:$BITERS:60"
   "promote:promote:$BITERS:20"
+  "pfx_idx:pfx_idx:$BITERS:20"
+  "pfx_chars:pfx_chars:$BITERS:20"
 )
 for spec in "${MICRO[@]}"; do
   IFS=: read -r name srcf it ln <<< "$spec"
@@ -132,7 +134,7 @@ for sso in 0 1; do
   done
 done
 
-for rail in lexer lexlike substr builder20 builder60 promote; do
+for rail in lexer lexlike substr builder20 builder60 promote pfx_idx pfx_chars; do
   a=${T[${rail}0]}; b=${T[${rail}1]}
   pct=$(awk -v a="$a" -v b="$b" 'BEGIN{ printf "%+.1f%%", (b-a)*100.0/a }')
   note=$(awk -v a="$a" -v b="$b" 'BEGIN{ print (b<a) ? "SSO wins" : "SSO loses" }')

@@ -1,0 +1,44 @@
+// PREFIX-BY-CHARS: an EXACT mirror of `prefix_string` from the `vertical` kata
+// (leetcode/14-longest-common-prefix/vertical.kara) -- a `ref String` walked
+// with `chars()`, pushed one char at a time into a fresh String, broken out of
+// at a runtime bound, returned by value.
+//
+// This rail exists to REFUTE an attribution, and it is the reason
+// B-2026-09-14-28 exists. `vertical` is SSO's worst corpus regression (+85%),
+// and a static count of `recv.mut.deinline` blocks in its IR pointed at
+// `prefix_string` as the cost. It is not: this rail runs 9-15% FASTER at
+// KARAC_SSO=1 than at KARAC_SSO=0, on two independent samples -- the OPPOSITE
+// SIGN from the kata containing it. A shape that gets faster cannot be what
+// makes its caller slower, so `vertical`'s cost is somewhere nobody has
+// measured yet.
+//
+// Keep it even though it is a rail SSO WINS on. Its job is to stay green in
+// the other direction: it is the paired control that stops the next
+// mutation-path change from being credited with a win it did not earn, and
+// B-2026-09-14-20's fold cost it ~6 points (-15.3% -> -9.0/-10.2%), which is
+// the only rail in this directory that recorded that change as a LOSS.
+fn prefix_chars(s: ref String, k: i64) -> String {
+    let mut out: String = "";
+    let mut i = 0;
+    for c in s.chars() {
+        if i >= k {
+            break;
+        }
+        out.push(c);
+        i = i + 1;
+    }
+    out
+}
+
+fn main() {
+    let src = "abcdefghijklmnopqrstuvwxyz0123456789";
+    let mut total = 0;
+    let mut i = 0;
+    while i < ITERS {
+        let k = i % (LEN + 1);
+        let s = prefix_chars(src, k);
+        total = total + s.len();
+        i = i + 1;
+    }
+    println(f"{total}");
+}
