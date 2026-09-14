@@ -88889,6 +88889,124 @@ fn main() {
         );
     }
 
+    /// B-2026-09-13-17 — the `Option[Array[T, N]]` a `Vec` POP hands back was
+    /// owned by nobody. `let o = v.pop()` over a `Vec[Array[String, 2]]` leaked
+    /// 176 B in 8 blocks over four pops: the box reclaimed, its eight `String`
+    /// buffers not — the same "box reclaimed, contents not" signature
+    /// B-2026-09-13-2 records for every route it fixed.
+    ///
+    /// THE RECEIVER PREDICATE IS THE WHOLE ROW. B-2026-09-13-2 fixed the `Map`
+    /// hand-back of the identical value shape and filed this one rather than
+    /// guessing, because its own registration keys on `map_key_type_exprs` and
+    /// it judged there was "no equally settled `this receiver is a tracked Vec`
+    /// test to key on, and inventing one under an ownership registration is how
+    /// a leak fix becomes a double free". One exists and has been load-bearing
+    /// since B-2026-07-12-4: `nested_option_shared_pop_inner_drop` registers an
+    /// inner drop for a popped `Option[shared T]` keyed on exactly this method
+    /// set and exactly this table, so the fix inherits a shipped answer.
+    ///
+    /// The sole-ownership argument is the `Map` sibling's: `pop` decrements
+    /// `len` and the buffer drain walks `0..len`, so the popped slot is beyond
+    /// the walked range and the container can no longer reach it.
+    ///
+    /// CELLS THAT MUST NOT DOUBLE-FREE: `first`/`last` (borrow-shaped, aliasing
+    /// live storage — the reason `get` is absent from the `Map` list),
+    /// `moved-to-callee` (the popped array handed to an owning param, whose
+    /// callee frees it — this is why only three of four pops leaked before),
+    /// `str`/`vec` (a `Vec[String]` and `Vec[Vec[String]]` pop, which the
+    /// predicate declines because the element is not an array), `scalar` (an
+    /// `Array[i64, 3]` with nothing to free), `empty` (a pop past the end,
+    /// returning `None`), and `maprm` (B-2026-09-13-2's own route, which must
+    /// stay exactly as it was).
+    ///
+    /// Measured at `-O0`: 132 B in 6 blocks before, clean after. Six is three
+    /// arrays of two `String`s — the two bound arms and the wildcard — with the
+    /// fourth pop's array freed by the callee it was moved into.
+    ///
+    /// THE FIXTURE POPS THE `Vec` EMPTY DELIBERATELY, and that is not tidiness.
+    /// A `Vec[Array[..]]` still holding elements at teardown leaks them through
+    /// a different open row (B-2026-09-10-36, fed from a temporary), and
+    /// feeding one from a block-scoped named local corrupts through another
+    /// (B-2026-09-14-14). Draining it is what makes this fixture measure THIS
+    /// row rather than either of those.
+    ///
+    /// NOT COVERED, because it is a different registration: the FRESH-TEMP
+    /// spelling `match v.pop() { .. }` with no binding in between. It still
+    /// leaks the same 176 B, unchanged by this fix, because it routes through
+    /// the boxed fresh-temp scrutinee path rather than the `let`-binding one —
+    /// that is B-2026-09-14-13, filed with its own measurements.
+    #[test]
+    fn asan_vec_pop_handback_owns_its_array_interior() {
+        assert_clean_asan_run(
+            r#"
+fn take(a: Array[String, 2]) -> i64 {
+    println(f"moved-to-callee:{a[0]}");
+    return 1;
+}
+
+fn main() {
+    let mut v: Vec[Array[String, 2]] = Vec.new();
+    let mut i: i64 = 0;
+    while i < 4 {
+        v.push(Array[f"row-aaaaaaaaaaaaaaaa-{i}", f"col-bbbbbbbbbbbbbbbb-{i}"]);
+        i = i + 1;
+    }
+    match v.first() { Some(a) => { println(f"first:{a[0]}"); } None => {} }
+    match v.last() { Some(a) => { println(f"last:{a[1]}"); } None => {} }
+    let o0 = v.pop();
+    match o0 { Some(a) => { println(f"bound:{a[0]}"); } None => {} }
+    let o1 = v.pop();
+    match o1 { Some(_) => { println("wild"); } None => {} }
+    let o2 = v.pop();
+    match o2 { Some(a) => { let _ = take(a); } None => {} }
+    let o3 = v.pop();
+    match o3 { Some(a) => { println(f"bound:{a[0]}"); } None => {} }
+    let o4 = v.pop();
+    match o4 { Some(a) => { println(f"never:{a[0]}"); } None => { println("empty"); } }
+
+    let mut sv: Vec[String] = Vec.new();
+    sv.push(f"str-cccccccccccccccc-0");
+    let so = sv.pop();
+    match so { Some(s) => { println(f"str:{s}"); } None => {} }
+
+    let mut nv: Vec[Vec[String]] = Vec.new();
+    let mut inner: Vec[String] = Vec.new();
+    inner.push(f"vec-dddddddddddddddd-0");
+    nv.push(inner);
+    let no = nv.pop();
+    match no { Some(w) => { println(f"vec:{w[0]}"); } None => {} }
+
+    let mut iv: Vec[Array[i64, 3]] = Vec.new();
+    iv.push(Array[7, 8, 9]);
+    let io = iv.pop();
+    match io { Some(a) => { println(f"scalar:{a[0]}"); } None => {} }
+
+    let mut m: Map[i64, Array[String, 2]] = Map.new();
+    m.insert(1, Array[f"map-gggggggggggggggg-0", f"map-hhhhhhhhhhhhhhhh-1"]);
+    let mo = m.remove(1);
+    match mo { Some(a) => { println(f"maprm:{a[0]}"); } None => {} }
+
+    println("end");
+}
+"#,
+            &[
+                "first:row-aaaaaaaaaaaaaaaa-0",
+                "last:col-bbbbbbbbbbbbbbbb-3",
+                "bound:row-aaaaaaaaaaaaaaaa-3",
+                "wild",
+                "moved-to-callee:row-aaaaaaaaaaaaaaaa-1",
+                "bound:row-aaaaaaaaaaaaaaaa-0",
+                "empty",
+                "str:str-cccccccccccccccc-0",
+                "vec:vec-dddddddddddddddd-0",
+                "scalar:7",
+                "maprm:map-gggggggggggggggg-0",
+                "end",
+            ],
+            "asan_vec_pop_handback_owns_its_array_interior",
+        );
+    }
+
     /// B-2026-09-13-19 — a BARE DISCARDED call statement lost a wide `Option`
     /// payload and its box.
     ///
