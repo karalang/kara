@@ -115,6 +115,106 @@ fn a_user_expr_colliding_with_a_stdlib_span_does_not_break_the_stdlib_body() {
     assert!(ir.contains("define"), "expected a non-empty module");
 }
 
+/// The WHOLE-STRUCT guard (B-2026-09-04-11): every field of `SpanTables` is
+/// either swapped for the stdlib body pass or on a named exemption list.
+///
+/// This is the guard the install-vs-swap scan below could not be. That one
+/// keys on `self.span_tables.X = program.X`, so it sees only the
+/// PROGRAM-DERIVED tables — and the two that actually leaked were seeded some
+/// other way and were therefore invisible to it by construction:
+/// `uam_consume_sites` is `.extend()`ed from the ownership result, and
+/// `uam_copied_sites` is accumulated by codegen as it compiles. Enumerating the
+/// STRUCT instead of the install list cannot miss a table for the way it was
+/// populated.
+///
+/// It also found a third: `vec_index_cloned_sites`, likewise codegen-
+/// accumulated and likewise read during body emission. Its own doc comment
+/// says "`SpanKey`s are source-unique", which is true within one source and is
+/// exactly the assumption this bug class refutes.
+///
+/// The exemption list is deliberately short and each entry states a REASON
+/// that was checked, not assumed — an exemption whose reason is "probably
+/// fine" is the shape this whole class hides in.
+#[test]
+fn every_span_table_is_swapped_or_exempt_for_the_stdlib_body_pass() {
+    const SPAN_TABLES_SRC: &str = include_str!("../src/codegen/span_tables.rs");
+    const CODEGEN_SRC: &str = include_str!("../src/codegen.rs");
+
+    let fields: std::collections::BTreeSet<String> = SPAN_TABLES_SRC
+        .lines()
+        .filter_map(|l| l.trim().strip_prefix("pub(crate) "))
+        .filter_map(|rest| {
+            let name: String = rest
+                .chars()
+                .take_while(|c| c.is_ascii_alphanumeric() || *c == '_')
+                .collect();
+            rest[name.len()..].starts_with(':').then_some(name)
+        })
+        .collect();
+
+    let swapped: std::collections::BTreeSet<String> = CODEGEN_SRC
+        .split("&mut self.span_tables.")
+        .skip(1)
+        .filter_map(|rest| {
+            let name: String = rest
+                .chars()
+                .take_while(|c| c.is_ascii_alphanumeric() || *c == '_')
+                .collect();
+            rest[name.len()..]
+                .trim_start_matches([',', ' ', '\n'])
+                .starts_with("&mut t_")
+                .then_some(name)
+        })
+        .collect();
+
+    // EXEMPT, with the reason each was checked against:
+    //
+    //  * `vec_index_borrow_spans` — `compile_function` recomputes (overwrites)
+    //    it per function from that function's own body, so a stdlib body never
+    //    sees a user entry. Safe by construction, as B-2026-09-04-11 records.
+    //  * `impl_dispatch_names` — both of its read sites are inside
+    //    `compile_program`, never inside `compile_stdlib_program`, so it is
+    //    never live during the window this guard is about. Safe by REACH; if a
+    //    reader is ever added to a body-emission path, swap it instead of
+    //    extending this list.
+    let exempt: std::collections::BTreeSet<String> =
+        ["vec_index_borrow_spans", "impl_dispatch_names"]
+            .into_iter()
+            .map(String::from)
+            .collect();
+
+    assert!(
+        fields.len() > 20,
+        "the field scan matched only {} entries — span_tables.rs was refactored \
+         and this guard needs updating, not deleting",
+        fields.len()
+    );
+    for name in &exempt {
+        assert!(
+            fields.contains(name),
+            "`{name}` is on the exemption list but is no longer a `SpanTables` \
+             field — drop the stale entry so the list keeps meaning something"
+        );
+    }
+
+    let unswapped: Vec<&String> = fields
+        .difference(&swapped)
+        .filter(|n| !exempt.contains(*n))
+        .collect();
+    assert!(
+        unswapped.is_empty(),
+        "these `SpanTables` fields are neither swapped for the baked-stdlib body \
+         pass nor on the exemption list: {unswapped:?}\n\n\
+         `Span` carries no file identity, so a stdlib expression sharing an \
+         (offset, length) with a user expression reads the wrong entry. Either \
+         add the field to the `let mut t_… = …;` block and the `swap_all!` macro \
+         in `compile_stdlib_program`, or add it to `exempt` above WITH the reason \
+         you checked — reach (no reader runs during the stdlib pass) or \
+         construction (recomputed per function). \"Probably fine\" is how the \
+         fourteen of B-2026-09-04-5 and the three of B-2026-09-04-11 accumulated."
+    );
+}
+
 /// The static half: every span table installed from the user program in
 /// `compile_program` must also be swapped for the stdlib body pass.
 ///

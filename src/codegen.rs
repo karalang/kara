@@ -9898,11 +9898,49 @@ impl<'ctx> Codegen<'ctx> {
         let mut t_iter_terminal_elem_types = tp.iter_terminal_elem_types.clone();
         let mut t_iter_terminal_acc_types = tp.iter_terminal_acc_types.clone();
         let mut t_stats_elem_types = tp.stats_elem_types.clone();
+        // B-2026-09-04-11 — the three span tables that are NOT program-derived
+        // and so never appeared on the install list B-2026-09-04-5's guard
+        // scans. They are swapped to EMPTY rather than to a stdlib-side value,
+        // and each half of that is load-bearing:
+        //
+        //  * EMPTY IS THE CORRECT STDLIB VALUE for `uam_consume_sites`, because
+        //    the OWNERSHIP PASS NEVER RUNS OVER A BAKED MODULE. `lower_stdlib_source`
+        //    is `parse → desugar → resolve → typecheck → lower` — there is no
+        //    `ownershipcheck` in it — so a baked module HAS no consume sites to
+        //    represent, and every hit during stdlib emission is necessarily a
+        //    collision with a user offset. That is the question the row could
+        //    not answer without reading this function, and it is why an empty
+        //    set is a fact here rather than a guess.
+        //  * SWAPPING AT ALL is what the other two need. `uam_copied_sites` and
+        //    `vec_index_cloned_sites` are accumulated by codegen AS IT COMPILES,
+        //    so without the swap the stdlib pass both reads the user's entries
+        //    and leaves its own behind in the user's set. `vec_index_cloned_sites`'
+        //    own doc says "`SpanKey`s are source-unique", which is true within
+        //    one source and is exactly the assumption this bug class refutes.
+        //
+        // The other two unswapped tables are genuinely exempt and stay that
+        // way; the guard in `tests/stdlib_span_table_isolation.rs` names both
+        // with its reason, so a third exemption cannot be added silently.
+        let mut t_uam_consume_sites = std::collections::HashSet::new();
+        let mut t_uam_copied_sites = std::collections::HashSet::new();
+        let mut t_vec_index_cloned_sites = FxHashSet::default();
         macro_rules! swap_all {
             () => {{
                 std::mem::swap(
                     &mut self.span_tables.question_conversions,
                     &mut t_question_conversions,
+                );
+                std::mem::swap(
+                    &mut self.span_tables.uam_consume_sites,
+                    &mut t_uam_consume_sites,
+                );
+                std::mem::swap(
+                    &mut self.span_tables.uam_copied_sites,
+                    &mut t_uam_copied_sites,
+                );
+                std::mem::swap(
+                    &mut self.span_tables.vec_index_cloned_sites,
+                    &mut t_vec_index_cloned_sites,
                 );
                 std::mem::swap(
                     &mut self.span_tables.question_ok_payload_types,
