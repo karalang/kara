@@ -94,7 +94,7 @@ distinguish "bugs flattening" from "we stopped writing them down."
 |---|---|
 | miscompile | 406 |
 | run-vs-build | 404 |
-| leak | 344 |
+| leak | 345 |
 | double-free | 229 |
 | missing-feature | 198 |
 | codegen-gap | 177 |
@@ -110,7 +110,7 @@ distinguish "bugs flattening" from "we stopped writing them down."
 
 | surface | total |
 |---|---|
-| codegen | 1730 |
+| codegen | 1731 |
 | interp | 436 |
 | typecheck | 299 |
 | other | 90 |
@@ -178,7 +178,6 @@ _Generated from `bug-ledger.jsonl` by `scripts/bug-curve.py` (2026-05-20 → 202
 | B-2026-09-13-13 | 2026-09-13 | codegen | medium | A CONDITIONALLY-RETURNED PARAM WHOSE OTHER EXIT LEAF MENTIONS IT STILL RUNS ITS `Drop` BODY TWICE AT THE ASSOCIATED AND METHOD CALL POSITIONS -- `if flag { return r } return R { id: 90 + r.id }` prints `dR1 / k:1 / dR1` at -O0, -O0 autopar and -O2 autopar against `--interp`'s `k:1 / dR1`, where replacing `90 + r.id` with a constant makes every surface agree. `fn_conditionally_returns_param_bare`'s condition 3 declines the mention CORRECTLY -- no per-path flag clears a leaf that READS the param -- but the assoc/method registrars read that `false` as "no other frame can own this argument" and hang the full `karac_drop_<T>` wrapper on the caller's temp; the FREE position is correct here because it gates on the `fn_returns_param` union instead | — |
 | B-2026-09-13-14 | 2026-09-13 | typecheck | medium | PROMOTE `partial_move_of_drop_enum` FROM `Warn` TO `Deny`, which is what actually removes B-2026-09-13-12's run-vs-build divergence -- blocked on triaging the 28 codegen + 15 memory_sanitizer fixtures written in the shape, each the regression test for a bug fixed in it, exactly as B-2026-09-01-43 resolved the struct rule's eight | — |
 | B-2026-09-13-17 | 2026-09-13 | codegen | medium | `Vec.pop()` HANDS BACK AN `Array[T, N]` ELEMENT NOBODY OWNS -- 176 B in 8 blocks over four pops of a `Vec[Array[String, 2]]`, the same numbers and the same root as B-2026-09-13-2's `Map` hand-back, through the one receiver channel that fix could not key on | — |
-| B-2026-09-13-18 | 2026-09-13 | codegen | medium | AN `Array[T, N]` `Option` PAYLOAD THAT FITS THE INLINE AREA IS OWNED BY NOBODY -- `Option[Array[String, 1]]` from a call leaks 88 B in 4 blocks while the BOXED `Array[String, 2]` sibling is now clean, so B-2026-09-13-2's four registrations all sit on the boxed route and the inline one has none | — |
 | B-2026-09-13-23 | 2026-09-13 | codegen | low | AN `Array[String, N]` INSIDE A TUPLE LEAKS ITS ELEMENT BUFFERS -- 20 B in 2 blocks at -O0 for `let t: (Array[String, 2], i64) = ([f"a{n}", f"b{n}"], 7)`, while the SAME array in a plain `let` is clean. PRE-EXISTING rather than introduced by B-2026-09-10-38: the `Array[..]` PREFIX spelling, which typechecked before that fix, leaks the identical 20 B against the PRE-FIX compiler -- so the tuple POSITION owns the defect and the annotation fix merely made it reachable by a second spelling | — |
 | B-2026-09-13-24 | 2026-09-13 | codegen+interp | medium | A USER ENUM'S VARIANT-CONSTRUCTOR TEMP LOSES ITS `Drop` BODY -- `takeit(Ho.Full(R { id: 5 }))` over `enum Ho[T] { Full(T), Empty }` prints `f:5` alone on every COMPILED surface against `--interp`'s `f:5 dR5`, and the newly-enabled qualified spelling `Ho[R].Full(..)` loses it on BOTH backends, while the seeded `Option[R].Some(..)` is correct everywhere -- so the seeded pair has an owner for the ctor temp and a user enum has none | — |
 | B-2026-09-13-27 | 2026-09-13 | interp+codegen | medium | A `let`-BOUND TUPLE CARRYING A LOCAL'S PROJECTED FIELD IS RUN-VS-BUILD DIVERGENT -- `let w = if c { (t.r, 1) } else { .. };` runs the leaf's `Drop` body TWICE under `--interp` and ONCE on both compiled backends | — |
@@ -193,6 +192,7 @@ _Generated from `bug-ledger.jsonl` by `scripts/bug-curve.py` (2026-05-20 → 202
 | B-2026-09-14-10 | 2026-09-14 | codegen+interp | low | A BORROW PROJECTION COPIES AS A METHOD ARGUMENT BUT NOT AS A FREE-FUNCTION ONE -- `v.push(w.r)` runs the field's `Drop` body TWICE and `consume(w.r)` runs it ONCE, same syntactic position, same borrow, on all four surfaces alike | — |
 | B-2026-09-14-11 | 2026-09-14 | codegen | medium | A DISCARDED USER-ENUM TEMP WITH A BOXED PAYLOAD STILL LEAKS IN EVERY SPELLING WHOSE TYPE CANNOT BE RESOLVED -- `h.makeb(i);`, `H.assoc(i);` and `let _ = if c { mk(i) } else { mk(i) };` each lose 144 B in 3 blocks plus 102 B indirect in 6, while their INLINE-payload siblings went clean with B-2026-09-14-9, because `untyped_let_boxed_enum_te` answers only for a direct free-function `Call` | — |
 | B-2026-09-14-12 | 2026-09-14 | codegen | medium | AN ENUM WITH A BOXED `Array` PAYLOAD IS FREED ONLY BY THE FIVE EXPLICIT REGISTRATION SITES -- held in a struct FIELD, a `Vec` or a `Map` it loses its box and interior at the container's destruction, 144 B in 3 blocks plus 102 B indirect in 6 for three entries, with no discard anywhere in the program, because the enum's own DROP SWITCH has no case for it | — |
+| B-2026-09-14-13 | 2026-09-14 | codegen | medium | A FRESH-TEMP `Option` SCRUTINEE WITH A BOXED PAYLOAD LOSES IT IN TWO DIFFERENT WAYS -- `match mk2(j) { Some(a) => .. }` over `Option[Array[String, 2]]` frees the box and orphans its 6 element buffers (102 B / 6), while `Some(_)` claims nothing at all (144 B / 3 plus 102 B indirect / 6), and the `let`-bound spelling of the same call is clean | — |
 
 ### Relocated
 
@@ -2545,6 +2545,7 @@ _Generated from `bug-ledger.jsonl` by `scripts/bug-curve.py` (2026-05-20 → 202
 | B-2026-09-13-10 | codegen | medium | THE STRUCT-SHAPED SPELLING OF A NESTED BOXED-PAYLOAD DESTRUCTURE LEAKS A LEAF WIDER THAN THE ENVELOPE'S PAYLOAD AREA -- `match x { Option.Some(Kws.A… | e6bcbac |
 | B-2026-09-13-15 | codegen | medium | A BOXED `Array[T, N]` ENUM PAYLOAD READ THROUGH AN OWNED CALLEE STILL LEAKS ITS ELEMENTS -- 320 B in 16 blocks at -O0 for `fn take(s: Slot[Array[Stri… | b98707e |
 | B-2026-09-13-16 | codegen | high | A CALLEE THAT WRAPS ITS OWN BY-VALUE `Array` PARAM IN AN `Option` RETURNS A DANGLING INTERIOR -- `fn wrap(a: Array[String, 2]) -> Option[Array[String… | d9d6df5 |
+| B-2026-09-13-18 | codegen | medium | AN `Array[T, N]` `Option` PAYLOAD THAT FITS THE INLINE AREA IS OWNED BY NOBODY -- `Option[Array[String, 1]]` from a call leaks 88 B in 4 blocks while… | 2d6a266 |
 | B-2026-09-13-19 | codegen | medium | A BARE DISCARDED CALL STATEMENT LOSES A WIDE `Option` PAYLOAD AND ITS BOX -- `mk(j);` over a `-> Option[Array[String, 2]]` leaks 192 B in 4 plus 176… | e0332cb |
 | B-2026-09-13-20 | codegen | low | A FRESH-OWNED TUPLE KEY TEMPORARY LEAKS AT EVERY `Map` LOOKUP SITE -- `m.get(mk(j))` over `Map[(String, String), i64]` loses 36 B per lookup, while t… | 8fd717f |
 | B-2026-09-13-21 | codegen+interp | high | AN ARM THAT BINDS A WHOLE BOXED TUPLE PAYLOAD AND MOVES IT ONWARD DOUBLE-FREES ON EVERY COMPILED BACKEND -- `match m.remove(k) { Some(a) => { keep.pu… | 9b9fe76 |
