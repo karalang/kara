@@ -3850,7 +3850,18 @@ impl<'a> super::TypeChecker<'a> {
     }
 
     pub(super) fn infer_expr(&mut self, expr: &Expr) -> Type {
+        // B-2026-09-14-3: hand `infer_call`'s callee-position marker on to a
+        // `Path` node and to nothing else. The marker says "a tuple-shaped
+        // enum variant here is the construction form `Col.A(3)`", and only the
+        // callee ITSELF earns that. Any other node kind swallows it, so a
+        // constructor nested inside a callee expression — `foo(Col.A)(3)` —
+        // is back in value position by the time its own `Path` is reached.
+        let in_callee = std::mem::take(&mut self.variant_ctor_in_callee);
+        if matches!(expr.kind, ExprKind::Path { .. }) {
+            self.variant_ctor_in_callee = in_callee;
+        }
         let ty = self.infer_expr_inner(expr);
+        self.variant_ctor_in_callee = false;
         self.record_expr_type(&expr.span, &ty);
         ty
     }

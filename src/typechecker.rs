@@ -2649,6 +2649,17 @@ pub struct TypeChecker<'a> {
     /// user sees the accurate literal-anchored diagnostic followed by a
     /// `` `<error>` does not implement `Ord` `` that names the wrong problem.
     pub(super) reported_uninferrable_empty_literal: bool,
+    /// One-shot: the expression about to be inferred is the CALLEE of a
+    /// `Call`, so a path naming a tuple-shaped enum variant is the legal
+    /// construction form `Col.A(3)` rather than the illegal value form
+    /// `let g = Col.A` (B-2026-09-14-3).
+    ///
+    /// Set by `infer_call` immediately before it infers the callee and
+    /// consumed by `infer_expr`, which hands it on ONLY when the node is
+    /// itself a `Path` — every other node kind swallows it, so a variant
+    /// constructor nested somewhere INSIDE a callee expression
+    /// (`foo(Col.A)(3)`) is still in value position and still rejected.
+    pub(super) variant_ctor_in_callee: bool,
     /// Binding name → span of the bare `[]` literal that left that binding's
     /// type un-inferrable (B-2026-08-25-31).
     ///
@@ -2860,6 +2871,7 @@ impl<'a> TypeChecker<'a> {
             current_fn_stdlib_origin: false,
             compiling_stdlib: false,
             reported_uninferrable_empty_literal: false,
+            variant_ctor_in_callee: false,
             uninferrable_binding_origins: FxHashMap::default(),
             stdlib_self_module: None,
             lint_override_stack: Vec::new(),

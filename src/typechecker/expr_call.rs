@@ -2268,7 +2268,14 @@ impl<'a> super::TypeChecker<'a> {
             }
         }
 
+        // B-2026-09-14-3: `Col.A(3)` is the legal construction form of a
+        // tuple-shaped variant, and it resolves through the very same
+        // `resolve_path_type` arm that answers the ILLEGAL value form
+        // `let g = Col.A`. Mark the callee so that arm can tell them apart —
+        // see `infer_expr`, which passes the marker to a `Path` node only.
+        self.variant_ctor_in_callee = true;
         let callee_ty = self.infer_expr(annotated_callee.as_ref().unwrap_or(callee));
+        self.variant_ctor_in_callee = false;
 
         // Closure-VALUE call through a non-identifier callee — a struct field
         // `(h.f)(x)`, a Vec/array index `v[i](x)`, a tuple index `(t.0)(x)`,

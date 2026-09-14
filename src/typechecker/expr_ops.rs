@@ -1066,6 +1066,34 @@ impl<'a> super::TypeChecker<'a> {
                         match variant_type {
                             VariantTypeInfo::Unit => return return_ty,
                             VariantTypeInfo::Tuple(fields) => {
+                                // B-2026-09-14-3. `Type::Function` is the right
+                                // answer for the CONSTRUCTION form `Col.A(3)`,
+                                // which is what `infer_call` asks for. As a
+                                // VALUE it was a promise no backend keeps: the
+                                // interpreter reports "path 'Col.A' has no
+                                // interpreter evaluation rule", and codegen
+                                // either panics in `closures.rs`'s
+                                // `into_struct_value` (a local binding) or
+                                // fails LLVM module verification (an argument
+                                // or a return). A clean `karac check` followed
+                                // by a compiler panic is the worst of the three
+                                // outcomes, so refuse it here and name the
+                                // closure form, which works on every backend.
+                                if !std::mem::take(&mut self.variant_ctor_in_callee) {
+                                    let params: Vec<String> =
+                                        (0..fields.len()).map(|i| format!("a{i}")).collect();
+                                    let joined = params.join(", ");
+                                    self.type_error(
+                                        format!(
+                                            "enum variant constructor '{type_name}.{member}' cannot be used as a \
+                                             function value — wrap it in a closure: \
+                                             `|{joined}| {type_name}.{member}({joined})`"
+                                        ),
+                                        *span,
+                                        TypeErrorKind::TypeMismatch,
+                                    );
+                                    return Type::Error;
+                                }
                                 return Type::Function {
                                     params: fields.clone(),
                                     return_type: Box::new(return_ty),

@@ -50478,23 +50478,101 @@ fn main() { let x: Ho[i64] = Ho[i64].Nope; println("end") }"#,
         "an unknown variant must be named, got: {errs:?}"
     );
     // A TUPLE variant used as a bare first-class function value is DELIBERATELY
-    // still refused, with the message it has always had. Admitting it would be
-    // a widening onto a pre-existing codegen ICE: the unqualified, non-generic
-    // `let g = Col.A; g(3)` panics in `closures.rs`'s `into_struct_value`, so
-    // the qualified generic spelling must not become the one path that
-    // type-checks its way into that crash.
+    // still refused. This row's fix admits UNIT variants only, because the
+    // value form of a tuple variant is a shape NO backend implements —
+    // B-2026-09-14-3, found while scoping this row and fixed right after it,
+    // which is why the assertion below names that row's diagnostic rather than
+    // the "cannot infer type parameter 'T'" this test first recorded.
     let errs = typecheck_errors(
         r#"enum Ho[T] { Full(T), Empty }
 fn main() { let g = Ho[i64].Full; println("end") }"#,
     );
     assert!(
         errs.iter()
-            .any(|e| e.to_string().contains("cannot infer type parameter 'T'")),
-        "a bare tuple-variant value keeps its existing diagnostic, got: {errs:?}"
+            .any(|e| e.to_string().contains("cannot be used as a function value")),
+        "a bare tuple-variant value stays refused, got: {errs:?}"
     );
     // CONTROLS for the two neighbouring `Name[Args].` shapes the new parser
     // lookahead sits between: concrete-type UFCS (needs the `(`) and the
     // generic-args intrinsic call.
     typecheck_ok(r#"fn main() { let v = Vec[i64].new(); println(f"{v.len()}"); }"#);
     typecheck_ok(r#"fn main() { println(f"{size_of[i64]()}"); }"#);
+}
+
+#[test]
+fn an_enum_variant_constructor_is_not_a_function_value() {
+    // B-2026-09-14-3. `resolve_path_type` answers a tuple-shaped variant with
+    // `Type::Function`, which is exactly right for the CONSTRUCTION form
+    // `Col.A(3)` and was a promise no backend kept for the VALUE form. All
+    // three outcomes were measured on the same program:
+    //
+    //   karac check          -> All checks passed.
+    //   karac run --interp   -> runtime error: internal: path 'Col.A' has no
+    //                           interpreter evaluation rule
+    //   karac run  (a local) -> panicked at codegen/closures.rs: Found
+    //                           IntValue ... but expected the StructValue
+    //   karac run  (an arg)  -> codegen failed: Module verification failed
+    //
+    // A clean `karac check` followed by a compiler panic is the worst of those,
+    // so the typechecker now refuses the value form and names the closure
+    // spelling, which works on every backend.
+    for src in [
+        // A local binding — the spelling that panicked.
+        r#"enum Col { A(i64), B }
+fn main() { let g = Col.A; let x: Col = g(3); println("end") }"#,
+        // An ARGUMENT — the spelling that failed module verification.
+        r#"enum Col { A(i64), B }
+fn apply(f: Fn(i64) -> Col, n: i64) -> Col { return f(n); }
+fn main() { let x = apply(Col.A, 5); println("end") }"#,
+        // A RETURN — same verification failure, different position.
+        r#"enum Col { A(i64), B }
+fn mk() -> Fn(i64) -> Col { return Col.A; }
+fn main() { let g = mk(); println("end") }"#,
+        // NESTED inside a callee expression rather than being one. The
+        // callee-position marker is handed only to a `Path` node, so this is
+        // still a value and still refused.
+        r#"enum Col { A(i64), B }
+fn apply(f: Fn(i64) -> Col, n: i64) -> Col { return f(n); }
+fn main() { let x = apply(Col.A, 5)(3); println("end") }"#,
+    ] {
+        let errs = typecheck_errors(src);
+        assert!(
+            errs.iter()
+                .any(|e| e.to_string().contains("cannot be used as a function value")),
+            "expected the value-form refusal for:\n{src}\ngot: {errs:?}"
+        );
+    }
+    // The remedy the diagnostic names must actually compile, on both arities —
+    // an unreachable fix-it is worse than none.
+    typecheck_ok(
+        r#"enum Col { A(i64), B }
+fn apply(f: Fn(i64) -> Col, n: i64) -> Col { return f(n); }
+fn main() { let x = apply(|a0| Col.A(a0), 5); match x { A(r) => { println(f"a:{r}") } B => { println("b") } } }"#,
+    );
+    // The message is arity-correct: a two-field variant names two parameters.
+    let errs = typecheck_errors(
+        r#"enum Col { A(i64, String), B }
+fn main() { let g = Col.A; println("end") }"#,
+    );
+    assert!(
+        errs.iter()
+            .any(|e| e.to_string().contains("`|a0, a1| Col.A(a0, a1)`")),
+        "the closure fix-it must match the variant's arity, got: {errs:?}"
+    );
+    // CONTROLS — the CALL form of the same path is what the marker exists to
+    // keep working, in both the plain and the type-pinned spellings, and a UNIT
+    // variant as a value was always legal and stays so.
+    typecheck_ok(
+        r#"enum Col { A(i64), B }
+fn main() { match Col.A(3) { A(r) => { println(f"a:{r}") } B => { println("b") } } }"#,
+    );
+    typecheck_ok(
+        r#"enum Ho[T] { Full(T), Empty }
+fn takeit(x: Ho[i64]) { match x { Full(r) => { println(f"f:{r}") } Empty => { println("e") } } }
+fn main() { takeit(Ho[i64].Full(7)); println("end") }"#,
+    );
+    typecheck_ok(
+        r#"enum Col { A(i64), B }
+fn main() { let g = Col.B; match g { A(r) => { println(f"a:{r}") } B => { println("b") } } }"#,
+    );
 }
