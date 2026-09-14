@@ -95,7 +95,7 @@ distinguish "bugs flattening" from "we stopped writing them down."
 | miscompile | 406 |
 | run-vs-build | 405 |
 | leak | 345 |
-| double-free | 229 |
+| double-free | 230 |
 | missing-feature | 198 |
 | codegen-gap | 177 |
 | diagnostics | 126 |
@@ -110,7 +110,7 @@ distinguish "bugs flattening" from "we stopped writing them down."
 
 | surface | total |
 |---|---|
-| codegen | 1734 |
+| codegen | 1735 |
 | interp | 438 |
 | typecheck | 299 |
 | other | 90 |
@@ -187,6 +187,7 @@ _Generated from `bug-ledger.jsonl` by `scripts/bug-curve.py` (2026-05-20 → 202
 | B-2026-09-14-12 | 2026-09-14 | codegen | medium | AN ENUM WITH A BOXED `Array` PAYLOAD IS FREED ONLY BY THE FIVE EXPLICIT REGISTRATION SITES -- held in a struct FIELD, a `Vec` or a `Map` it loses its box and interior at the container's destruction, 144 B in 3 blocks plus 102 B indirect in 6 for three entries, with no discard anywhere in the program, because the enum's own DROP SWITCH has no case for it | — |
 | B-2026-09-14-15 | 2026-09-14 | interp+codegen | medium | A NESTED FIXED `Array` (`Array[Array[D, N], M]`) RUNS ITS INNERMOST ELEMENTS' `Drop` BODIES UNDER `--interp` AND ON NEITHER COMPILED BACKEND -- no envelope involved; the `Vec[Vec[D]]` spelling is correct | — |
 | B-2026-09-14-16 | 2026-09-14 | codegen+interp | low | PROJECTING ONE FIELD OFF A FRESH TEMP DROPS THE TEMP'S OTHER `Drop` BODIES ON EVERY SURFACE -- `let w = (mkw(7).r, 1);` runs the moved leaf's body but never the untouched sibling field's, while a bare discarded `mkw(7);` runs both | — |
+| B-2026-09-14-17 | 2026-09-14 | codegen | high | A MATCH ARM THAT CONSUMES A BOXED `Array` PAYLOAD FREES ITS ELEMENT BUFFERS TWICE AND ABORTS THE PROGRAM -- `match e { E.A(a) => take(a) }` over `enum E { A(Array[String, 2]), B }` exits 134 with `free(): double free detected`, 24 frees against 18 allocs, because `boxed_payload_interior_taken_by_arm` answers FALSE for an array unconditionally and the box keeps an interior drop the arm has already handed on | — |
 
 ### Relocated
 
