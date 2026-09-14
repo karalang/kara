@@ -93,14 +93,14 @@ distinguish "bugs flattening" from "we stopped writing them down."
 | class | total |
 |---|---|
 | miscompile | 406 |
-| run-vs-build | 401 |
+| run-vs-build | 403 |
 | leak | 341 |
 | double-free | 229 |
 | missing-feature | 198 |
 | codegen-gap | 177 |
 | diagnostics | 126 |
 | perf | 108 |
-| other | 107 |
+| other | 108 |
 | false-positive | 106 |
 | soundness | 95 |
 | crash | 81 |
@@ -110,8 +110,8 @@ distinguish "bugs flattening" from "we stopped writing them down."
 
 | surface | total |
 |---|---|
-| codegen | 1723 |
-| interp | 432 |
+| codegen | 1726 |
+| interp | 434 |
 | typecheck | 299 |
 | other | 90 |
 | ownership | 74 |
@@ -191,6 +191,9 @@ _Generated from `bug-ledger.jsonl` by `scripts/bug-curve.py` (2026-05-20 → 202
 | B-2026-09-14-1 | 2026-09-14 | codegen | low | AN INDEX-ASSIGN INTO AN `Array[String, N]` LEAKS THE DISPLACED BUFFER -- `a[0] = f"MUTATED-{n}"` over `let mut a: Array[String, 2]` loses 10 B in 1 block at -O0, the overwritten element's own buffer. Measured with NO `.clone()` anywhere in the program, so it is independent of B-2026-09-10-37's new array clone and merely shares that row's independence-check fixture cell; the store overwrites the `{ptr,len,cap}` in place and nothing frees what was there | — |
 | B-2026-09-14-2 | 2026-09-14 | interp+codegen | medium | AN `Option`/`Result` WHOSE PAYLOAD IS A `Vec` RUNS ITS ELEMENT `Drop` BODIES NOWHERE UNLESS IT IS DISCARDED -- a BOUND envelope, a consuming `match` arm and a plain move are all silent on every backend | — |
 | B-2026-09-14-4 | 2026-09-14 | parser | low | A QUALIFIED STRUCT-SHAPED VARIANT CANNOT PIN ITS TYPE ARGUMENTS -- `Sh[i64].S { v: 3 }` is a PARSE error (`Expected Semicolon, found LeftBrace`), the third corner of the same `Name[Args].Variant` grid whose call and field-less corners now work | — |
+| B-2026-09-14-5 | 2026-09-14 | codegen | medium | THE COMPILED BACKENDS LOSE AN OWED `Option` PAYLOAD BODY FOR AN OWNED PARAM -- `fn eat(o: Option[(R, i64)]) -> i64 { match o { Some(t) => return t.1 } }` moves NOTHING out and still prints `got:9 end` on JIT/AOT against the interpreter's correct `dR5 got:9 end`; with two Drop-bearing elements and one moved out the compiled side runs NEITHER, so the direction is the reverse of B-2026-09-13-5's | — |
+| B-2026-09-14-6 | 2026-09-14 | codegen+interp | medium | AN `Option` PAYLOAD SUB-VALUE MOVED OUT RUNS ITS `Drop` BODY TWICE ON ALL THREE BACKENDS in two spellings -- a NAMED-LOCAL argument, and a payload whose field is heap-carrying -- so the A/B parity rule sees nothing and the duplicate is invisible to every gate | — |
+| B-2026-09-14-7 | 2026-09-14 | codegen+interp | low | AN `Option`-PAYLOAD ELEMENT MOVED OUT AND NOT RETURNED DIES AT OPPOSITE ENDS OF THE ARM -- `Some(t) => { let x = t.0; println("mid"); }` prints `mid dR5` under `--interp` against the compiled backends' `dR5 mid`, so the COUNT agrees and only the sequence differs | — |
 
 ### Relocated
 
