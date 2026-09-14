@@ -50590,6 +50590,99 @@ fn main() { let g = Ho[i64].Full; println("end") }"#,
 }
 
 #[test]
+fn qualified_struct_shaped_variant_pins_its_type_arguments() {
+    // B-2026-09-14-4 — the third corner of the `Name[Args].Variant` grid.
+    // `Ho[i64].Full(3)` is the CALL corner (B-2026-09-12-16), `Ho[i64].Empty`
+    // the field-less one (B-2026-09-13-25), and `Sh[i64].S { v: 3 }` was a
+    // PARSE error: the three lookaheads that intercept `Name[` each want a
+    // different token after the matching `]` (`.IDENT (`, `.IDENT` with no
+    // brace, and `{` immediately), so none matched, the bracket was read as a
+    // subscript and the brace opened a block.
+    typecheck_ok(
+        r#"enum Sh[T] { S { v: T }, E }
+fn main() { let x: Sh[i64] = Sh[i64].S { v: 3 }; match x { S { v } => { println(f"{v}") } E => { println("e") } } }"#,
+    );
+    // Argument position, which failed with a DIFFERENT message
+    // (`Expected RightParen, found LeftBrace`) for the same cause.
+    typecheck_ok(
+        r#"enum Sh[T] { S { v: T }, E }
+fn takeit(x: Sh[i64]) { match x { S { v } => { println(f"{v}") } E => { println("e") } } }
+fn main() { takeit(Sh[i64].S { v: 3 }); }"#,
+    );
+    // Two parameters, so the substitution is positional rather than a
+    // one-parameter special case.
+    typecheck_ok(
+        r#"enum Pr[A, B] { L { a: A }, R { b: B }, N }
+fn takeit(x: Pr[i64, String]) { match x { L { a } => { println(f"l:{a}") } R { b } => { println(f"r:{b}") } N => { println("n") } } }
+fn main() { takeit(Pr[i64, String].L { a: 7 }); }"#,
+    );
+    // THE CASE THE PIN EXISTS FOR: a PHANTOM parameter, in a binding with no
+    // annotation. `T` appears in no field, so nothing else can solve it — this
+    // is "cannot infer type parameter 'T'" without the pin being threaded, and
+    // it is the same reasoning B-2026-08-24-3 recorded for the generic STRUCT
+    // literal.
+    typecheck_ok(
+        r#"enum Sh[T] { S { n: i64 }, E }
+fn main() { let x = Sh[i64].S { n: 3 }; match x { S { n } => { println(f"{n}") } E => { println("e") } } }"#,
+    );
+    // REJECTION — a wrong pin must FAIL rather than be discarded. Parsing the
+    // shape is half a fix: with the arguments lowered but not threaded, this
+    // typed as `Sh[i64]` off the field value and passed.
+    let errs = typecheck_errors(
+        r#"enum Sh[T] { S { v: T }, E }
+fn takeit(x: Sh[i64]) { match x { S { v } => { println(f"{v}") } E => { println("e") } } }
+fn main() { takeit(Sh[String].S { v: 3 }); }"#,
+    );
+    assert!(
+        errs.iter()
+            .any(|e| e.to_string().contains("conflicts with 'String'")),
+        "a wrong pin must be rejected at the field, got: {errs:?}"
+    );
+    // REJECTION — arity, and a non-generic enum given arguments at all. Same
+    // wording as the struct-literal sibling, named against the ENUM rather than
+    // the variant.
+    let errs = typecheck_errors(
+        r#"enum Sh[T] { S { v: T }, E }
+fn main() { let x: Sh[i64] = Sh[i64, u8].S { v: 3 }; println("end") }"#,
+    );
+    assert!(
+        errs.iter().any(|e| e
+            .to_string()
+            .contains("`Sh` takes 1 type argument, but 2 were supplied here")),
+        "arity must be reported against the enum, got: {errs:?}"
+    );
+    let errs = typecheck_errors(
+        r#"enum Col { S { v: i64 }, E }
+fn main() { let x: Col = Col[i64].S { v: 3 }; println("end") }"#,
+    );
+    assert!(
+        errs.iter()
+            .any(|e| e.to_string().contains("`Col` is not generic")),
+        "a non-generic enum must refuse type arguments, got: {errs:?}"
+    );
+    // CONTROLS — the four neighbouring spellings that already worked and must
+    // be unchanged: unqualified generic, non-generic qualified, the bare
+    // variant name, and the plain generic STRUCT literal whose lookahead this
+    // one sits beside.
+    typecheck_ok(
+        r#"enum Sh[T] { S { v: T }, E }
+fn main() { let x: Sh[i64] = Sh.S { v: 3 }; match x { S { v } => { println(f"{v}") } E => { println("e") } } }"#,
+    );
+    typecheck_ok(
+        r#"enum Col { S { v: i64 }, E }
+fn main() { let x: Col = Col.S { v: 3 }; match x { S { v } => { println(f"{v}") } E => { println("e") } } }"#,
+    );
+    typecheck_ok(
+        r#"enum Sh[T] { S { v: T }, E }
+fn main() { let x: Sh[i64] = S { v: 3 }; match x { S { v } => { println(f"{v}") } E => { println("e") } } }"#,
+    );
+    typecheck_ok(
+        r#"struct C[T] { v: T }
+fn main() { let c: C[i64] = C[i64] { v: 3 }; println(f"{c.v}"); }"#,
+    );
+}
+
+#[test]
 fn an_enum_variant_constructor_is_not_a_function_value() {
     // B-2026-09-14-3. `resolve_path_type` answers a tuple-shaped variant with
     // `Type::Function`, which is exactly right for the CONSTRUCTION form

@@ -24112,6 +24112,50 @@ fn main() {
         }
     }
 
+    /// B-2026-09-14-4 — a qualified STRUCT-SHAPED enum-variant literal with
+    /// pinned type arguments (`Sh[i64].S { v: 3 }`) lowers and runs.
+    ///
+    /// The defect was a parse error, so what this checks downstream is that the
+    /// new shape reaches codegen as the two-segment `StructLiteral` the
+    /// unqualified `Enum.Variant { .. }` form already produced — nothing in the
+    /// backend had to learn the spelling, and this asserts that rather than
+    /// trusting it.
+    #[test]
+    fn e2e_qualified_struct_shaped_variant_with_pinned_type_args() {
+        for (label, src, want) in [
+            (
+                "annotated-binding",
+                "enum Sh[T] { S { v: T }, E }\n\
+                 fn main() { let x: Sh[i64] = Sh[i64].S { v: 3 };\n\
+                 match x { S { v } => { println(f\"{v}\") } E => { println(\"e\") } } }\n",
+                "3\n",
+            ),
+            (
+                "argument-position",
+                "enum Sh[T] { S { v: T }, E }\n\
+                 fn takeit(x: Sh[i64]) { match x { S { v } => { println(f\"{v}\") } E => { println(\"e\") } } }\n\
+                 fn main() { takeit(Sh[i64].S { v: 3 }); }\n",
+                "3\n",
+            ),
+            (
+                "phantom-parameter",
+                "enum Sh[T] { S { n: i64 }, E }\n\
+                 fn main() { let x = Sh[i64].S { n: 3 };\n\
+                 match x { S { n } => { println(f\"{n}\") } E => { println(\"e\") } } }\n",
+                "3\n",
+            ),
+            (
+                "two-parameters",
+                "enum Pr[A, B] { L { a: A }, R { b: B }, N }\n\
+                 fn takeit(x: Pr[i64, String]) { match x { L { a } => { println(f\"l:{a}\") } R { b } => { println(f\"r:{b}\") } N => { println(\"n\") } } }\n\
+                 fn main() { takeit(Pr[i64, String].L { a: 7 }); }\n",
+                "l:7\n",
+            ),
+        ] {
+            assert_eq!(run_program(src).as_deref(), Some(want), "{label}");
+        }
+    }
+
     /// B-2026-08-28-22 — a callee that returns an owned param on SOME tail paths
     /// and not others now runs that param's user `Drop` body on the paths where it
     /// dies, instead of nowhere.

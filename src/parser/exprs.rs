@@ -2244,6 +2244,21 @@ impl super::Parser {
             });
         }
 
+        // Qualified STRUCT-SHAPED enum-variant literal:
+        // `TypeName[Args].Variant { field: value }` (B-2026-09-14-4). Emits the
+        // same two-segment `StructLiteral` path the unqualified `Enum.Variant
+        // { … }` form produces, with the args attached — so the typechecker's
+        // existing `path[len - 2]` enum-variant dispatch serves it unchanged.
+        if starts_upper(&name)
+            && self.check(&Token::LeftBracket)
+            && self.lookahead_generic_variant_struct_literal()
+        {
+            let args = self.parse_generic_type_args()?;
+            self.expect(&Token::Dot)?;
+            let variant = self.expect_identifier()?;
+            return self.parse_struct_literal_body_generic(vec![name, variant], Some(args), &start);
+        }
+
         // Generic struct literal: `Name[Args] { field: value }`. Must be
         // intercepted BEFORE the postfix `[` index loop, exactly like the UFCS
         // form above — otherwise the bracket is consumed as a subscript and the
@@ -2488,6 +2503,62 @@ impl super::Parser {
                             self.tokens.get(i + 3).map(|t| &t.token),
                             Some(Token::LeftParen) | Some(Token::LeftBrace)
                         );
+                    }
+                }
+                _ => {}
+            }
+            i += 1;
+        }
+        false
+    }
+
+    /// `TypeName[Type, ...].Variant { field: value }` — a qualified
+    /// STRUCT-SHAPED enum variant carrying explicit generic arguments,
+    /// e.g. `Sh[i64].S { v: 3 }` (B-2026-09-14-4).
+    ///
+    /// The third corner of the `Name[Args].Variant` grid, and the last one to
+    /// work. [`Self::lookahead_concrete_type_ufcs`] takes the CALL form
+    /// (`.IDENT (`), [`Self::lookahead_generic_variant_const`] the field-less
+    /// one (`.IDENT` with no `(` or `{`), and
+    /// [`Self::lookahead_generic_struct_literal`] a generic STRUCT literal —
+    /// which wants `{` IMMEDIATELY after the matching `]` and so has no notion
+    /// of an intervening `.Variant` segment. `Sh[i64].S {` matched none of
+    /// them, the `[` was read as a subscript, and the brace opened a block:
+    /// `Expected Semicolon, found LeftBrace` in statement position and
+    /// `Expected RightParen, found LeftBrace` as an argument.
+    fn lookahead_generic_variant_struct_literal(&self) -> bool {
+        let inner_start = self.pos + 1;
+        if inner_start >= self.tokens.len() {
+            return false;
+        }
+        if !Self::starts_type(&self.tokens[inner_start].token) {
+            return false;
+        }
+        let mut depth: usize = 0;
+        let mut i = self.pos;
+        while i < self.tokens.len() {
+            match &self.tokens[i].token {
+                Token::LeftBracket => depth += 1,
+                Token::RightBracket => {
+                    depth -= 1;
+                    if depth == 0 {
+                        let a = i + 1;
+                        let b = i + 2;
+                        if b >= self.tokens.len() {
+                            return false;
+                        }
+                        if self.tokens[a].token != Token::Dot {
+                            return false;
+                        }
+                        let Token::Identifier { name, .. } = &self.tokens[b].token else {
+                            return false;
+                        };
+                        if !starts_upper(name) {
+                            return false;
+                        }
+                        // Same brace judgement the plain generic-struct-literal
+                        // sibling makes, one segment further along.
+                        return self.looks_like_struct_literal_at(i + 3);
                     }
                 }
                 _ => {}

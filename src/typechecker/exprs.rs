@@ -5894,12 +5894,21 @@ impl<'a> super::TypeChecker<'a> {
                         if let Some(ref spread_expr) = spread {
                             self.infer_expr(spread_expr);
                         }
+                        // B-2026-09-14-4 — `Sh[i64].S { v: 3 }` pins the enum's
+                        // arguments at the literal. This arm returns before the
+                        // generic-args block far below (which is keyed on a
+                        // STRUCT name and could not serve a variant anyway), so
+                        // the pin is lowered and threaded here or it is inert.
+                        let pinned = generic_args.as_ref().and_then(|args| {
+                            self.lower_variant_literal_generic_args(&enum_name, args, &expr.span)
+                        });
                         return self.infer_enum_struct_variant_literal(
                             &enum_name,
                             &target_name,
                             &decl_fields,
                             fields,
                             &expr.span,
+                            pinned.as_deref(),
                         );
                     }
                 }
@@ -5926,6 +5935,7 @@ impl<'a> super::TypeChecker<'a> {
                             &decl_fields,
                             fields,
                             &expr.span,
+                            None,
                         );
                     }
                 }

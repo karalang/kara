@@ -719,6 +719,64 @@ impl<'a> super::TypeChecker<'a> {
     /// the type, and a wrong claim should be a diagnostic, not a fallback to
     /// inference that reports something less specific somewhere else.
     /// B-2026-08-24-3.
+    /// B-2026-09-14-4 — the ENUM-keyed sibling of
+    /// [`Self::lower_literal_generic_args`], for a qualified struct-shaped
+    /// variant literal that pins its type arguments (`Sh[i64].S { v: 3 }`).
+    ///
+    /// Separate rather than a shared arity lookup because the two read
+    /// different tables and name different things in their diagnostics: the
+    /// struct form's `target_name` IS the type, while here the literal's last
+    /// segment is the VARIANT and the arity belongs to the enum two segments
+    /// up. Messages are word-for-word the struct form's so the two spellings
+    /// read alike.
+    pub(super) fn lower_variant_literal_generic_args(
+        &mut self,
+        enum_name: &str,
+        args: &[crate::ast::GenericArg],
+        span: &Span,
+    ) -> Option<Vec<Type>> {
+        let arity = self.env.enums.get(enum_name)?.generic_params.len();
+        if arity == 0 {
+            self.type_error(
+                format!("`{enum_name}` is not generic, so it takes no type arguments here"),
+                *span,
+                TypeErrorKind::TypeMismatch,
+            );
+            return None;
+        }
+        if args.len() != arity {
+            self.type_error(
+                format!(
+                    "`{enum_name}` takes {arity} type argument{}, but {} {} supplied here",
+                    if arity == 1 { "" } else { "s" },
+                    args.len(),
+                    if args.len() == 1 { "was" } else { "were" },
+                ),
+                *span,
+                TypeErrorKind::TypeMismatch,
+            );
+            return None;
+        }
+        let mut out = Vec::with_capacity(args.len());
+        for a in args {
+            match a {
+                crate::ast::GenericArg::Type(te) => out.push(self.lower_type_expr(te, &[])),
+                _ => {
+                    self.type_error(
+                        format!(
+                            "`{enum_name}` expects type arguments here; \
+                             a const or shape argument is not valid at an enum-variant literal"
+                        ),
+                        *span,
+                        TypeErrorKind::TypeMismatch,
+                    );
+                    return None;
+                }
+            }
+        }
+        Some(out)
+    }
+
     pub(super) fn lower_literal_generic_args(
         &mut self,
         struct_name: &str,
@@ -1241,6 +1299,7 @@ impl<'a> super::TypeChecker<'a> {
         declared_fields: &[(String, Type)],
         fields: &[FieldInit],
         span: &Span,
+        pinned: Option<&[Type]>,
     ) -> Type {
         let provided: HashSet<&str> = fields.iter().map(|f| f.name.as_str()).collect();
         for (fname, _) in declared_fields {
@@ -1270,7 +1329,30 @@ impl<'a> super::TypeChecker<'a> {
             .unwrap_or_default();
         let mut param_subs: HashMap<String, SubstValue> = HashMap::new();
         let mut id_to_name: HashMap<TypeVarId, String> = HashMap::new();
-        for p in &generic_params {
+        // B-2026-09-14-4 — a PINNED argument binds its parameter outright
+        // instead of getting a metavar to solve. Two things need it, and the
+        // second is the reason the pin exists at all:
+        //
+        //  * a PHANTOM parameter appears in no field, so nothing can solve it —
+        //    `let x = Sh[i64].S { n: 3 };` over `enum Sh[T] { S { n: i64 }, E }`
+        //    reported "cannot infer type parameter 'T'" with the answer written
+        //    right there in the source. Same reasoning the struct-literal form
+        //    records at `infer_struct_literal_expected`'s call site.
+        //  * a WRONG pin has to be REJECTED rather than discarded. Binding the
+        //    parameter concretely makes the field check compare against the
+        //    pinned type, so `Sh[String].S { v: 3 }` fails on `v` instead of
+        //    silently typing as `Sh[i64]` and passing.
+        //
+        // Arity is already checked by `lower_variant_literal_generic_args`,
+        // which declines (and reports) on a mismatch, so a `pinned` that
+        // arrives here and does not line up is treated as absent rather than
+        // bound positionally against the wrong parameters.
+        let pinned = pinned.filter(|p| p.len() == generic_params.len());
+        for (i, p) in generic_params.iter().enumerate() {
+            if let Some(t) = pinned.and_then(|ps| ps.get(i)) {
+                param_subs.insert(p.clone(), SubstValue::Type(t.clone()));
+                continue;
+            }
             let var = self.env.fresh_type_var();
             if let Type::TypeVar(id) = var {
                 id_to_name.insert(id, p.clone());
