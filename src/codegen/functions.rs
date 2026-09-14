@@ -2637,7 +2637,12 @@ impl<'ctx> super::Codegen<'ctx> {
                         // user `Drop` BODY rides the separate bodies walker
                         // registered below, and handing the wrapper here would
                         // run that body twice.
-                        let inner = self.enum_boxed_payload_interior_drop(&payload_te, false);
+                        // B-2026-09-13-15 — `true`: every constructor spelling now stands its
+                        // array source down at the ctor lowering, so the box owns the
+                        // interior however the payload was built. This site is emitted
+                        // once per monomorph and cannot ask per call, which is why the
+                        // answer is made uniform at construction instead.
+                        let inner = self.enum_boxed_payload_interior_drop(&payload_te, true);
                         self.track_boxed_enum_var_with_inner_drop_for_payload(
                             &param_name,
                             alloca,

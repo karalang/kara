@@ -8233,25 +8233,22 @@ impl<'ctx> super::Codegen<'ctx> {
                                 .then(|| self.variables.get(var_name.as_str()).copied())
                                 .flatten()
                             {
-                                // B-2026-09-12-18 — an ARRAY interior may be
-                                // walked only when THIS `let` builds the payload
-                                // in place. `G.Y(a)` leaves `a`'s own element
-                                // cleanup armed and the walk then frees it
-                                // twice; `G.Y([f"x", f"y"])` has no such source.
-                                // Per-variant, since a multi-variant enum can
-                                // box more than one and only the one being
-                                // constructed here is in-place.
-                                let inline_variant =
-                                    Self::user_variant_ctor_builds_payload_inline(value);
                                 for (enum_name, variant, payload_te) in boxed {
                                     // B-2026-09-10-2 — the INTERIOR this site
                                     // passed as `None`. See the param site in
                                     // `functions.rs` for why the resolver is
                                     // the memory-only one.
-                                    let inner = self.enum_boxed_payload_interior_drop(
-                                        &payload_te,
-                                        inline_variant.as_deref() == Some(variant.as_str()),
-                                    );
+                                    // B-2026-09-13-15 — unconditional. This was
+                                    // gated on whether THIS `let` built the payload
+                                    // in place (B-2026-09-12-18), because
+                                    // `G.Y(a)` left `a`'s own element cleanup
+                                    // armed and a walk would free it twice. The
+                                    // constructor lowering now stands that source
+                                    // down, so the box owns the interior on every
+                                    // spelling and the in-place question no longer
+                                    // decides ownership.
+                                    let inner =
+                                        self.enum_boxed_payload_interior_drop(&payload_te, true);
                                     self.track_boxed_enum_var_with_inner_drop_for_payload(
                                         var_name,
                                         slot.ptr,

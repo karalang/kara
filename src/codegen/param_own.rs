@@ -5576,6 +5576,54 @@ impl<'ctx> super::Codegen<'ctx> {
         last.chars().next().is_some_and(|c| c.is_uppercase())
     }
 
+    /// B-2026-09-13-15 — retract a LOCAL array's element drop when it is moved
+    /// into a user variant constructor, so the enum box becomes the interior's
+    /// single owner.
+    ///
+    /// [`Self::suppress_array_binding_move_arg`] performs the same retraction
+    /// but gates on `owned_array_params`, which holds by-value PARAMS only —
+    /// B-2026-09-12-18 records that gap as the reason the box's array interior
+    /// walk had to be withheld wherever a named source might still own the
+    /// elements.
+    ///
+    /// Withholding is what left the interior owned by NOBODY once the enum was
+    /// handed to an owned callee: that callee's param registration is emitted
+    /// ONCE per monomorph, not per call site, so it cannot ask which spelling
+    /// built any particular payload. Standing the source down here makes the
+    /// answer uniform instead — after the move the box owns the interior on
+    /// every path, so every registration site may walk it unconditionally.
+    ///
+    /// Hooked at the constructor LOWERING (`try_compile_enum_variant_at`)
+    /// rather than at the `let` that binds one, because a constructor also
+    /// appears in argument position (`take(Filled(a))`), nested, and in tail
+    /// position. A let-site-only hook leaves those uncovered while the walk is
+    /// already armed — measured as `free(): double free detected in tcache 2`
+    /// on exactly that spelling.
+    pub(super) fn suppress_array_local_move_into_ctor(&mut self, arg: &Expr) {
+        let root = match &arg.kind {
+            ExprKind::Identifier(n) => n.clone(),
+            _ => return,
+        };
+        let Some(slot) = self.variables.get(root.as_str()).copied() else {
+            return;
+        };
+        if !slot.ty.is_array_type() {
+            return;
+        }
+        for frame in self.drop_rc.scope_cleanup_actions.iter_mut().rev() {
+            frame.retain(|action| {
+                !matches!(
+                    action,
+                    super::state::CleanupAction::StructDrop { struct_alloca, .. }
+                        if *struct_alloca == slot.ptr
+                )
+            });
+        }
+        // Membership too, so the param-keyed sibling cannot retract the same
+        // slot a second time.
+        self.borrow_vars.owned_array_params.remove(root.as_str());
+    }
+
     pub(super) fn suppress_array_binding_move_arg(&mut self, arg: &Expr) {
         let root = match &arg.kind {
             ExprKind::Identifier(n) => n.clone(),

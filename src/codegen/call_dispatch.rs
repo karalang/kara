@@ -3457,42 +3457,6 @@ impl<'ctx> super::Codegen<'ctx> {
         matches!(only.value.kind, ExprKind::Identifier(_)).then_some((variant, &only.value))
     }
 
-    /// Does `value` CONSTRUCT a user enum variant whose single payload argument
-    /// is built in place, so no named source can still own its interior?
-    ///
-    /// B-2026-09-12-18 — the question
-    /// [`Self::enum_boxed_payload_interior_drop`]'s `array_interior_ok` asks.
-    /// True only for a variant-constructor call whose one argument is NOT a bare
-    /// identifier: an inline literal (`G.Y([f"a", f"b"])`) has no source to
-    /// double-free against, while `G.Y(a)` leaves `a`'s own element cleanup
-    /// armed. Everything else — a rebind (`let g2 = g;`), a call returning the
-    /// enum, a multi-field variant — answers false, because the box was built
-    /// somewhere this site cannot see.
-    ///
-    /// Both constructor spellings arrive as a `Call` and differ only in the
-    /// callee: unqualified `A(x)` through an `Identifier`, qualified `E.A(x)`
-    /// through a `Path` whose last segment is the variant. Measured, not
-    /// assumed — an instrumented build printed no match for `G.Y(a)` under an
-    /// `Identifier`-only reading while the variant set already held `G.Y`.
-    pub(super) fn user_variant_ctor_builds_payload_inline(value: &Expr) -> Option<String> {
-        let ExprKind::Call { callee, args } = &value.kind else {
-            return None;
-        };
-        let v = match &callee.kind {
-            ExprKind::Identifier(v) => v.clone(),
-            ExprKind::Path { segments, .. } => segments.last()?.clone(),
-            _ => return None,
-        };
-        let [only] = args.as_slice() else {
-            return None;
-        };
-        (!matches!(
-            only.value.kind,
-            ExprKind::Identifier(_) | ExprKind::SelfValue
-        ))
-        .then_some(v)
-    }
-
     /// Is this expression a seeded variant CONSTRUCTOR — `Some(..)`, `Ok(..)`,
     /// `Err(..)` — whatever shape its payload has? B-2026-09-06-49.
     ///
@@ -9696,6 +9660,30 @@ impl<'ctx> super::Codegen<'ctx> {
             Some(n) => n,
             None => return Ok(None),
         };
+
+        // B-2026-09-13-15 — an ARRAY local moved in by name (`G.Y(a)`) keeps
+        // its own element drop unless something stands it down, which is what
+        // forced the box's interior walk to be withheld and left the interior
+        // unowned once the enum reached an owned callee. Retract it here, at
+        // the one site every constructor spelling passes through, so the box is
+        // the single owner on every path and every registration may walk it.
+        //
+        // USER ENUMS ONLY. The retraction is one half of a pair -- the other is
+        // the `array_interior_ok: true` the user-enum registrations now pass --
+        // and a SEEDED `Option`/`Result` payload is owned by an entirely
+        // different channel that this does not arm. Disarming there retracts
+        // without arming, which is the leak half of the same mistake: measured
+        // as `takesOpt(Some(p))` over an array local
+        // (`b49-generic-callee-named-control`) going from clean to a
+        // LeakSanitizer report. A `shared` enum is excluded for the same
+        // reason -- its payload is RC-managed, not box-owned.
+        let disarm_array_sources = !self.type_decls.seeded_enum_names.contains(&enum_name)
+            && !self.type_decls.shared_types.contains_key(&enum_name);
+        if disarm_array_sources {
+            for a in args {
+                self.suppress_array_local_move_into_ctor(&a.value);
+            }
+        }
 
         let (tag, llvm_type) = {
             let layout = &self.type_decls.enum_layouts[&enum_name];

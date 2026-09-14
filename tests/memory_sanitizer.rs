@@ -88798,6 +88798,111 @@ fn main() {
         );
     }
 
+    /// B-2026-09-13-15 — a boxed `Array[T, N]` enum payload read through an
+    /// OWNED CALLEE leaked its elements, and the fix INVERTS the rule the
+    /// previous one established.
+    ///
+    /// B-2026-09-12-18 made the box's array interior walk conditional on
+    /// whether THAT construction site built the payload in place
+    /// (`user_variant_ctor_builds_payload_inline`), because `G.Y(a)` left the
+    /// local `a`'s own element cleanup armed and walking would free it twice.
+    /// Correct locally, and it leaves the interior owned by NOBODY once the
+    /// enum is handed to an owned callee: that callee's param registration is
+    /// emitted ONCE per monomorph, not per call site, so it cannot ask which
+    /// spelling produced any particular payload. 288 B in 16 blocks.
+    ///
+    /// So the source is stood down at the MOVE instead
+    /// (`suppress_array_local_move_into_ctor`), and the walk is then
+    /// unconditional at both registration sites. The box owns its array
+    /// interior, full stop; the per-construction-site question is deleted.
+    ///
+    /// HOOKED AT THE CONSTRUCTOR LOWERING, not at the `let` that binds one.
+    /// A let-site hook misses a constructor in ARGUMENT position and the walk
+    /// is armed anyway — measured `free(): double free detected in tcache 2` on
+    /// `take(Filled(a))`, a cell that was clean before. `try_compile_enum_variant_at`
+    /// is the one site every spelling passes through.
+    ///
+    /// USER ENUMS ONLY, which is the other half of the pairing and was also
+    /// measured the hard way. A SEEDED `Option`/`Result` payload is owned by a
+    /// different channel that this change does not arm, so disarming there
+    /// retracts without arming — the LEAK mirror of the double free above,
+    /// caught as `takesOpt(Some(p))` over an array local going from clean to a
+    /// LeakSanitizer report. `shared` enums are out for the same reason: their
+    /// payload is RC-managed, not box-owned.
+    ///
+    /// FIVE CELLS, one per spelling, because each of the three failures above
+    /// showed up in a different one:
+    ///   - `callee_inplace` is the row's defect (in-place ctor, owned callee);
+    ///   - `callee_named` is the local-source spelling, clean before and after,
+    ///     and the cell that turns into a double free if the walk is armed
+    ///     without the disarm;
+    ///   - `arg_named` is `take(Filled(a))`, the one a let-site hook misses;
+    ///   - `arg_inline` is its literal twin, which has no source to stand down;
+    ///   - `no_callee` matches in place with no callee hop at all, which is
+    ///     where the defect does NOT appear and so pins that the owned-callee
+    ///     hop is the axis.
+    #[test]
+    fn asan_boxed_array_enum_payload_interior_has_one_owner_through_an_owned_callee() {
+        assert_clean_asan_run(
+            r#"
+enum Slot[T] { Filled(T), Blank }
+
+fn take(s: Slot[Array[String, 2]]) -> bool {
+    match s { Filled(x) => x[0].contains("row"), Blank => false, }
+}
+
+fn main() {
+    let mut i: i64 = 0;
+    while i < 4 {
+        let g: Slot[Array[String, 2]] =
+            Filled([f"row-bbbbbbbbbbbb-{i}", f"row-cccccccccccc-{i}"]);
+        println(f"callee_inplace:{take(g)}");
+
+        let a: Array[String, 2] = [f"row-dddddddddddd-{i}", f"row-eeeeeeeeeeee-{i}"];
+        let h: Slot[Array[String, 2]] = Filled(a);
+        println(f"callee_named:{take(h)}");
+
+        let b: Array[String, 2] = [f"row-ffffffffffff-{i}", f"row-gggggggggggg-{i}"];
+        println(f"arg_named:{take(Filled(b))}");
+
+        println(f"arg_inline:{take(Filled([f"row-hhhhhhhhhhhh-{i}", f"row-iiiiiiiiiiii-{i}"]))}");
+
+        let c: Array[String, 2] = [f"row-jjjjjjjjjjjj-{i}", f"row-kkkkkkkkkkkk-{i}"];
+        let k: Slot[Array[String, 2]] = Filled(c);
+        match k { Filled(x) => { println(f"no_callee:{x[0]}"); } Blank => {} }
+
+        i = i + 1;
+    }
+    println("end");
+}
+"#,
+            &[
+                "callee_inplace:true",
+                "callee_named:true",
+                "arg_named:true",
+                "arg_inline:true",
+                "no_callee:row-jjjjjjjjjjjj-0",
+                "callee_inplace:true",
+                "callee_named:true",
+                "arg_named:true",
+                "arg_inline:true",
+                "no_callee:row-jjjjjjjjjjjj-1",
+                "callee_inplace:true",
+                "callee_named:true",
+                "arg_named:true",
+                "arg_inline:true",
+                "no_callee:row-jjjjjjjjjjjj-2",
+                "callee_inplace:true",
+                "callee_named:true",
+                "arg_named:true",
+                "arg_inline:true",
+                "no_callee:row-jjjjjjjjjjjj-3",
+                "end",
+            ],
+            "asan_boxed_array_enum_payload_interior_has_one_owner_through_an_owned_callee",
+        );
+    }
+
     /// B-2026-09-13-10 — the STRUCT-shaped spelling of a nested boxed-payload
     /// destructure, which leaked one block per leaf field because its disarm
     /// had no WIDTH CEILING.
