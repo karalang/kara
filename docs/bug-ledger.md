@@ -97,7 +97,7 @@ distinguish "bugs flattening" from "we stopped writing them down."
 | leak | 341 |
 | double-free | 229 |
 | missing-feature | 197 |
-| codegen-gap | 176 |
+| codegen-gap | 177 |
 | diagnostics | 126 |
 | perf | 107 |
 | other | 107 |
@@ -110,8 +110,8 @@ distinguish "bugs flattening" from "we stopped writing them down."
 
 | surface | total |
 |---|---|
-| codegen | 1720 |
-| interp | 431 |
+| codegen | 1721 |
+| interp | 432 |
 | typecheck | 299 |
 | other | 90 |
 | ownership | 74 |
@@ -190,9 +190,9 @@ _Generated from `bug-ledger.jsonl` by `scripts/bug-curve.py` (2026-05-20 → 202
 | B-2026-09-13-24 | 2026-09-13 | codegen+interp | medium | A USER ENUM'S VARIANT-CONSTRUCTOR TEMP LOSES ITS `Drop` BODY -- `takeit(Ho.Full(R { id: 5 }))` over `enum Ho[T] { Full(T), Empty }` prints `f:5` alone on every COMPILED surface against `--interp`'s `f:5 dR5`, and the newly-enabled qualified spelling `Ho[R].Full(..)` loses it on BOTH backends, while the seeded `Option[R].Some(..)` is correct everywhere -- so the seeded pair has an owner for the ctor temp and a user enum has none | — |
 | B-2026-09-13-25 | 2026-09-13 | typecheck | low | THE FIELD-LESS QUALIFIED VARIANT `Ho[i64].Empty` IS STILL REJECTED as `'Ho' is a type, not a function`, where design.md § 588 lists a qualified field-less enum-variant constant as a valid argument form -- it is not a CALL, so it never reaches `try_path_receiver_method`'s method arm that B-2026-09-12-16 taught to accept `Ho[R].Full(..)` | — |
 | B-2026-09-13-27 | 2026-09-13 | interp+codegen | medium | A `let`-BOUND TUPLE CARRYING A LOCAL'S PROJECTED FIELD IS RUN-VS-BUILD DIVERGENT -- `let w = if c { (t.r, 1) } else { .. };` runs the leaf's `Drop` body TWICE under `--interp` and ONCE on both compiled backends | — |
-| B-2026-09-13-29 | 2026-09-13 | codegen | medium | A DISCARDED `Option`/`Result` WHOSE PAYLOAD IS AN ARRAY RUNS ITS ELEMENT BODIES ON THE INTERPRETER AND NOT ON EITHER COMPILED BACKEND -- B-2026-09-10-27 fixed the interpreter half and left codegen without a twin | — |
 | B-2026-09-13-30 | 2026-09-13 | codegen | low | A METHOD-CALL KEY TEMPORARY STILL LEAKS AT EVERY `Map` LOOKUP -- `m.get(g.make(0))` over `Map[(String, String), i64]` loses 32 B in 2 blocks because a method's return type is absent from `fn_return_type_exprs`, so the nameless-key leg B-2026-09-13-20 added has no `TypeExpr` to resolve | — |
 | B-2026-09-14-1 | 2026-09-14 | codegen | low | AN INDEX-ASSIGN INTO AN `Array[String, N]` LEAKS THE DISPLACED BUFFER -- `a[0] = f"MUTATED-{n}"` over `let mut a: Array[String, 2]` loses 10 B in 1 block at -O0, the overwritten element's own buffer. Measured with NO `.clone()` anywhere in the program, so it is independent of B-2026-09-10-37's new array clone and merely shares that row's independence-check fixture cell; the store overwrites the `{ptr,len,cap}` in place and nothing frees what was there | — |
+| B-2026-09-14-2 | 2026-09-14 | interp+codegen | medium | AN `Option`/`Result` WHOSE PAYLOAD IS A `Vec` RUNS ITS ELEMENT `Drop` BODIES NOWHERE UNLESS IT IS DISCARDED -- a BOUND envelope, a consuming `match` arm and a plain move are all silent on every backend | — |
 
 ### Relocated
 
@@ -2544,6 +2544,7 @@ _Generated from `bug-ledger.jsonl` by `scripts/bug-curve.py` (2026-05-20 → 202
 | B-2026-09-13-22 | codegen | high | A chained string concatenation allocates one buffer per `+`, so `a + b + c` costs two allocations where one sized to the total would do — 36% of kata… | fea7ac09b |
 | B-2026-09-13-26 | interp+codegen | medium | A DISCARDED ARRAY LITERAL OF Drop-BEARING STRUCTS RUNS NO ELEMENT BODIES AT ALL -- `let _ = if c { [W { r: mkd(7), b: 1 }] } else { . | 122b991 |
 | B-2026-09-13-28 | interp+codegen | medium | THE BARE-BLOCK SPELLING OF B-2026-09-01-17 IS RUN-VS-BUILD DIVERGENT, NOT AN AGREED GAP -- `let _ = { W { r: t.r, b: 1 } };` runs the projected leaf'… | 122b991 |
+| B-2026-09-13-29 | codegen | medium | A DISCARDED `Option`/`Result` WHOSE PAYLOAD IS AN ARRAY RUNS ITS ELEMENT BODIES ON THE INTERPRETER AND NOT ON EITHER COMPILED BACKEND -- B-2026-09-10… | 1d73a30 |
 
 </details>
 
