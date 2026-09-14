@@ -3986,7 +3986,7 @@ impl<'a> super::Interpreter<'a> {
     /// Array/Tuple/Map value still classifies `false` through
     /// `value_runs_user_drop`, keeping the dedicated container walkers the
     /// sole firers for direct bindings.
-    fn field_value_carries_user_drop(&self, v: &Value) -> bool {
+    pub(super) fn field_value_carries_user_drop(&self, v: &Value) -> bool {
         match v {
             Value::Struct { .. } => self.value_runs_user_drop(v),
             Value::Array(rc) => rc
@@ -7344,6 +7344,41 @@ impl<'a> super::Interpreter<'a> {
                     }
                 }
                 Value::Array(_) => self.run_nested_array_struct_elem_bodies(&e),
+                // B-2026-09-14-15 — the three element shapes this walk was
+                // missing, each mirroring the arm the FLAT element loop in
+                // `run_array_element_user_drops` already had. Depth was the
+                // only difference: one level down, `Array[(D, i64), N]` /
+                // `Array[Option[D], N]` / `Array[E, N]` all ran their bodies on
+                // every surface, and one level up the same elements ran none
+                // here while codegen's nested walkers ran them — a
+                // run-vs-build divergence per shape, in the silent direction on
+                // this side.
+                //
+                // No index masking, unlike the flat loop: `moved_out_tuple_elem_
+                // bodies` and its payload twin are keyed by (binding, index) and
+                // a nested element has no binding of its own, so there is
+                // nothing at this depth that an arm could have taken.
+                Value::Tuple(items) => {
+                    let items = items.clone();
+                    self.run_tuple_item_user_drops(items);
+                }
+                Value::EnumVariant { enum_name, .. }
+                    if enum_name == "Option" || enum_name == "Result" =>
+                {
+                    self.run_discarded_value_user_drops(e.clone());
+                }
+                Value::EnumVariant { enum_name, .. } => {
+                    // Own body gated on `drop_method_keys`, payload walk
+                    // unconditional — the same split the flat loop makes, and
+                    // for the same reason: codegen reaches an enum member's own
+                    // body only through that map, while a Drop-bearing variant
+                    // payload is visible to it either way.
+                    let tn = enum_name.clone();
+                    if self.program.drop_method_keys.contains_key(&tn) {
+                        self.run_user_drop_body_only(&tn, e.clone());
+                    }
+                    self.run_enum_payload_user_drops_value(&e);
+                }
                 _ => {}
             }
         }
@@ -7495,11 +7530,11 @@ impl<'a> super::Interpreter<'a> {
         // `type_expr_runs_user_drop("Vec[D]")`, got `false` from the head name
         // `Vec`, and declined to arm a walk that would have handled the shape —
         // the same one-level horizon the envelope leg below was written to close.
+        //
+        // B-2026-09-14-15 — and it reaches a nested FIXED `Array` as well. The
+        // stop that stood here for one row was codegen's horizon, not this
+        // predicate's; the walk's matching note records why it came off.
         if let Some(elem_te) = Self::array_payload_elem_te(pt) {
-            if Self::is_fixed_array_te(&elem_te) {
-                // Codegen's horizon — see the walk's matching note.
-                return false;
-            }
             return self.optres_payload_te_runs_user_drop(&elem_te);
         }
         if let TypeKind::Path(p) = &pt.kind {
@@ -7534,18 +7569,6 @@ impl<'a> super::Interpreter<'a> {
     /// handled a `Vec` payload's elements correctly -- both container kinds are
     /// one runtime value -- and simply never got a type, so it returned before
     /// touching the value.
-    /// Is `te` a FIXED `Array[T, N]` (either spelling), as opposed to a `Vec[T]`
-    /// handle? Read only to stop a NESTED array element short of a walk codegen
-    /// cannot emit — see the two call sites for why that horizon is codegen's
-    /// and not a decision taken here.
-    fn is_fixed_array_te(te: &TypeExpr) -> bool {
-        match &te.kind {
-            TypeKind::Array { .. } => true,
-            TypeKind::Path(p) => p.segments.last().map(String::as_str) == Some("Array"),
-            _ => false,
-        }
-    }
-
     fn array_payload_elem_te(te: &TypeExpr) -> Option<TypeExpr> {
         match &te.kind {
             TypeKind::Array { element, .. } => Some((**element).clone()),
@@ -7749,20 +7772,21 @@ impl<'a> super::Interpreter<'a> {
             // `Vec` payload arm dispatches to for a non-struct element; without
             // this leg that fallback printed compiled-only for the shape.
             //
-            // NOT a fixed `Array` element, which is codegen's horizon rather
-            // than a choice made here: `emit_array_elem_user_drop_bodies_fn`
-            // admits an element on `elem_te_runs_user_drop`, which reads the
-            // head name `Array` and answers false, so no walker is emitted at
-            // any nesting. That horizon is not about envelopes at all — a bare
-            // `let v: Array[Array[D, 1], 2] = ..;` with no `Option` in sight is
-            // silent compiled and printing under `--interp` — so recursing here
-            // for that shape would convert an agreed gap into a fresh
-            // run-vs-build divergence rather than fix anything. `Array[Vec[D], N]`
-            // is NOT that shape: codegen reaches its `Vec` element through
-            // `emit_slot_drop_bodies_at`, so it recurses and agrees.
-            if Self::array_payload_elem_te(&elem_te)
-                .is_some_and(|_| !Self::is_fixed_array_te(&elem_te))
-            {
+            // B-2026-09-14-15 -- a NESTED FIXED `Array` element reaches this
+            // leg too, and used to be refused here. The refusal was codegen's
+            // horizon rather than a choice made here: until that row,
+            // `emit_array_elem_user_drop_bodies_fn` admitted an element on
+            // `elem_te_runs_user_drop`, which read the head name `Array` and
+            // answered false, so no walker was emitted at any nesting and
+            // recursing here would have converted an agreed gap into a fresh
+            // run-vs-build divergence. That row gave the predicate its array
+            // leg and `emit_slot_drop_bodies_at` the matching array arm, so
+            // the horizon is gone and the refusal with it -- in the one commit
+            // the family's rule requires, since holding either half back
+            // leaves a divergence pointing the other way (measured: with the
+            // codegen half alone, `Option[Array[Array[D, 1], 2]]` printed
+            // compiled and stayed silent under `--interp`).
+            if Self::array_payload_elem_te(&elem_te).is_some() {
                 for elem in items.iter() {
                     self.run_optres_payload_bodies_for(&elem_te, elem);
                 }

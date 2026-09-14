@@ -8744,6 +8744,35 @@ impl<'ctx> super::Codegen<'ctx> {
                 per_tuple,
             );
         }
+        // B-2026-09-14-15 — a fixed `Array[T, N]` element (`Vec[Array[D, 1]]`):
+        // stride by the array's own LLVM type and run the array element walker
+        // on each slot, the same shape the tuple arm above has. Without it the
+        // fn declined — the inference-recovered spelling is not a `Path` at
+        // all, and the source-written one has the head `Array`, which is no
+        // declared struct, not `Option`/`Result`, and not `Vec` — so a `Vec`
+        // whose elements are arrays ran no body on any compiled backend while
+        // `--interp` printed them, the mirror image of the nesting gap in
+        // `emit_array_elem_user_drop_bodies_fn` that this row opened on.
+        //
+        // Ahead of the `Path` destructure so both spellings take this arm, and
+        // bodies-only like every sibling: the elements' memory is freed on the
+        // vec's own scope-exit channel, which this does not touch.
+        if let Some((inner_te, n)) = self.array_elem_and_len(elem_te) {
+            if n == 0 {
+                return None;
+            }
+            let inner_ty = self.llvm_type_for_type_expr(&inner_te);
+            let per_elem = self.emit_array_elem_user_drop_bodies_fn(inner_ty, &inner_te, n)?;
+            let elem_llvm = self.llvm_type_for_type_expr(elem_te);
+            return self.emit_vec_elem_walker_loop(
+                &format!(
+                    "__karac_dropelems_vecofarr_{}",
+                    Self::display_mangle_te(elem_te)
+                ),
+                elem_llvm,
+                per_elem,
+            );
+        }
         let TypeKind::Path(p) = &elem_te.kind else {
             return None;
         };
@@ -8769,6 +8798,34 @@ impl<'ctx> super::Codegen<'ctx> {
             return self.emit_vec_elem_walker_loop(
                 &format!(
                     "__karac_dropelems_vecofoptres_{}",
+                    Self::display_mangle_te(elem_te)
+                ),
+                elem_llvm,
+                per_elem,
+            );
+        }
+        // B-2026-09-14-15 — a user ENUM element (`Vec[Vec[E]]` over
+        // `impl Drop for E`). The flat `Vec[E]` spelling runs the body on
+        // every surface, so the nested one is the same walker one level up;
+        // without this arm the fn declined on the unrecognized head and the
+        // shape was silent compiled while the interpreter's nested walk — once
+        // it gained its own enum arm in this commit — printed. The per-element
+        // callee is the generic slot wrapper, which routes to the enum leg of
+        // `emit_slot_drop_bodies_at`: own body first, then the live variant's
+        // payload bodies.
+        if head != "Option"
+            && head != "Result"
+            && self
+                .type_decls
+                .enum_layouts
+                .get(head.as_str())
+                .is_some_and(|l| !l.is_shared)
+        {
+            let per_elem = self.emit_slot_bodies_walker_fn(elem_te)?;
+            let elem_llvm = self.llvm_type_for_type_expr(elem_te);
+            return self.emit_vec_elem_walker_loop(
+                &format!(
+                    "__karac_dropelems_vecofenum_{}",
                     Self::display_mangle_te(elem_te)
                 ),
                 elem_llvm,
@@ -9240,6 +9297,53 @@ impl<'ctx> super::Codegen<'ctx> {
         Some(walker)
     }
 
+    /// B-2026-09-14-15 — `__karac_dropslot_<T>(p: ptr)`: the one-slot
+    /// BODIES-ONLY walk over a value of type `te`, i.e. a callable wrapper
+    /// around [`Self::emit_slot_drop_bodies_at`].
+    ///
+    /// Exists because the container element loops
+    /// ([`Self::emit_vec_elem_walker_loop`]) take a FUNCTION to call per
+    /// element, while `emit_slot_drop_bodies_at` emits instructions in place.
+    /// Every arm of `emit_nested_vec_elem_bodies_fn` that predates this built
+    /// its per-element callee by hand; this is the same thing for any element
+    /// shape that arm list has no dedicated builder for, which is how the user
+    /// ENUM element arrived without a fourth hand-written walker.
+    ///
+    /// Frees nothing, like every walker in this family — the element memory
+    /// stays on the container's own scope-exit channel.
+    pub(super) fn emit_slot_bodies_walker_fn(
+        &mut self,
+        te: &TypeExpr,
+    ) -> Option<FunctionValue<'ctx>> {
+        if !self.elem_te_runs_user_drop(te) {
+            return None;
+        }
+        let fn_name = format!("__karac_dropslot_{}", Self::display_mangle_te(te));
+        if let Some(f) = self.module.get_function(&fn_name) {
+            return Some(f);
+        }
+        let ptr_ty = self.context.ptr_type(AddressSpace::default());
+        let saved = self.builder.get_insert_block();
+        let saved_fn = self.current_fn;
+        let walker = self.module.add_function(
+            &fn_name,
+            self.context.void_type().fn_type(&[ptr_ty.into()], false),
+            Some(Linkage::Internal),
+        );
+        self.current_fn = Some(walker);
+        let entry = self.context.append_basic_block(walker, "entry");
+        self.builder.position_at_end(entry);
+        let p = walker.get_nth_param(0).unwrap().into_pointer_value();
+        let te = te.clone();
+        self.emit_slot_drop_bodies_at(p, &te);
+        self.builder.build_return(None).unwrap();
+        self.current_fn = saved_fn;
+        if let Some(bb) = saved {
+            self.builder.position_at_end(bb);
+        }
+        Some(walker)
+    }
+
     /// True when tuple element `te` owns heap the LLVM-type-driven aggregate
     /// drop ([`Self::synthesize_aggregate_drop_fn`]) would free only
     /// SHALLOWLY — today a `Vec[E]` / `VecDeque[E]` whose `E` itself owns heap,
@@ -9463,6 +9567,28 @@ impl<'ctx> super::Codegen<'ctx> {
                 return true;
             }
         }
+        // B-2026-09-14-15 — a fixed `Array[T, N]` in this slot, which is the
+        // same one-level horizon the tuple leg above closes, on the other
+        // container. Every leg below reads a HEAD NAME, and the head of
+        // `Array[D, 1]` is `Array` — not a declared struct or enum — so the
+        // predicate answered false for an array element at ANY nesting depth
+        // and `emit_array_elem_user_drop_bodies_fn` emitted no walker for
+        // `Array[Array[D, 1], 2]`. The interpreter recurses structurally on
+        // `Value::Array` and had been printing those bodies all along, so the
+        // gap read as a run-vs-build divergence rather than an agreed silence.
+        //
+        // Recursing the SELECTOR is the whole of the admission half, exactly
+        // as it was for the nested tuple: `emit_slot_drop_bodies_at` gained
+        // the matching array arm in the same commit, so the gate and the walk
+        // reach equally far — the parity this family's defects are all shaped
+        // by. Both surface spellings resolve through `array_elem_and_len`
+        // (source-written `Path("Array", [T, N])` and inference-recovered
+        // `TypeKind::Array`), so neither is admitted without the other.
+        if let Some((inner, n)) = self.array_elem_and_len(te) {
+            if n > 0 && self.elem_te_runs_user_drop(&inner) {
+                return true;
+            }
+        }
         if let TypeKind::Path(p) = &te.kind {
             if let Some(head) = p.segments.first() {
                 // Direct element: a non-shared user STRUCT that runs a body,
@@ -9588,6 +9714,29 @@ impl<'ctx> super::Codegen<'ctx> {
             if let inkwell::types::BasicTypeEnum::StructType(agg) = self.llvm_type_for_type_expr(te)
             {
                 if let Some(w) = self.emit_tuple_elem_user_drop_bodies_fn(agg, &inner) {
+                    self.builder.build_call(w, &[ep.into()], "").unwrap();
+                }
+            }
+            return;
+        }
+        // B-2026-09-14-15 — a fixed `Array[T, N]` in this slot: hand the slot
+        // pointer to the array element walker, which is the aggregate's own
+        // base pointer (an `[N x T]` lives inline in the slot, unlike a `Vec`,
+        // whose slot holds a `{ptr,len,cap}` handle — the shape trap
+        // B-2026-09-13-26 recorded). Bodies-only like every arm here: the
+        // array's memory stays on the scope-exit channel.
+        //
+        // Ahead of the `Path` head match because the source-written spelling
+        // IS a `Path` whose head is `Array`, which would otherwise fall to the
+        // struct arm below, find no declared struct named `Array`, and return
+        // having emitted nothing. `emit_array_elem_user_drop_bodies_fn`
+        // re-checks `elem_te_runs_user_drop` itself and answers `None` for an
+        // element with no body to run, so an array of scalars costs a lookup
+        // and emits no walker.
+        if let Some((inner_te, n)) = self.array_elem_and_len(te) {
+            if n > 0 {
+                let inner_ty = self.llvm_type_for_type_expr(&inner_te);
+                if let Some(w) = self.emit_array_elem_user_drop_bodies_fn(inner_ty, &inner_te, n) {
                     self.builder.build_call(w, &[ep.into()], "").unwrap();
                 }
             }

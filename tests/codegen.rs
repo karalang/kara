@@ -34066,6 +34066,299 @@ fn main() {
         }
     }
 
+    /// B-2026-09-14-15, element-shape half — a NESTED container element runs
+    /// the SAME `Drop` bodies its flat sibling does, whatever shape it is.
+    ///
+    /// The nesting fix opened this: once codegen's array element walker
+    /// recursed, `Array[Array[X, N], M]` reached `emit_slot_drop_bodies_at` for
+    /// every `X` it has an arm for — a user enum, a tuple, an `Option` — while
+    /// the interpreter's nested walk still had arms for a struct and another
+    /// array ALONE, which turned four agreed silences into four divergences.
+    /// The walk gained the three missing arms, mirroring the FLAT element loop
+    /// in `run_array_element_user_drops` shape for shape.
+    ///
+    /// That value-level walk cannot tell an `Array` from a `Vec` — both are one
+    /// `Value::Array` — so widening it necessarily widened the `Vec` nesting
+    /// too, and `emit_nested_vec_elem_bodies_fn` had to gain the one arm it was
+    /// missing (a user enum) in the same commit or `Vec[Vec[E]]` would have
+    /// become the new divergence. Two cells below were DIVERGENT before this
+    /// row for that reason and nothing to do with arrays — `Vec[Vec[(D, i64)]]`
+    /// and `Vec[Vec[Option[D]]]`, compiled-printing and interp-silent — and
+    /// they close here.
+    ///
+    /// Each cell's FLAT sibling is asserted beside it: the flat spelling is
+    /// what defines the right answer, and a nested cell that disagrees with it
+    /// is the defect this fixture exists to catch.
+    #[test]
+    fn e2e_nested_container_element_shapes_run_their_drop_bodies() {
+        const HDR: &str = "struct D { a: String, b: i64 }\n\
+                           impl Drop for D { fn drop(mut ref self) { println(f\"dD{self.b}\") } }\n\
+                           fn pay() -> String { return \"heap\"; }\n\
+                           fn mkd(n: i64) -> D { return D { a: pay(), b: n }; }\n\
+                           enum E { A(i64), B }\n\
+                           impl Drop for E { fn drop(mut ref self) { println(\"dE\") } }\n\
+                           enum E2 { P(D), Q }\n\
+                           fn mke2(n: i64) -> E2 { return E2.P(mkd(n)); }\n";
+        for (label, body, want) in [
+            // An own-`Drop` enum element, flat then nested, in both containers.
+            ("flat Array[E, 2]", "let a: Array[E, 2] = [E.A(1), E.B];", "dE\ndE\nmid\n"),
+            ("flat Vec[E]", "let a: Vec[E] = [E.A(1), E.B];", "dE\ndE\nmid\n"),
+            (
+                "nested Array[Array[E, 2], 1]",
+                "let a: Array[Array[E, 2], 1] = [[E.A(1), E.B]];",
+                "dE\ndE\nmid\n",
+            ),
+            (
+                "nested Vec[Vec[E]]",
+                "let a: Vec[Vec[E]] = [[E.A(1)], [E.B]];",
+                "dE\ndE\nmid\n",
+            ),
+            (
+                "mixed Array[Vec[E], 2]",
+                "let a: Array[Vec[E], 2] = [[E.A(1)], [E.B]];",
+                "dE\ndE\nmid\n",
+            ),
+            // An enum with NO own `Drop` but a Drop-bearing payload.
+            ("flat Array[E2, 2]", "let a: Array[E2, 2] = [mke2(1), E2.Q];", "dD1\nmid\n"),
+            (
+                "nested Array[Array[E2, 2], 1]",
+                "let a: Array[Array[E2, 2], 1] = [[mke2(1), E2.Q]];",
+                "dD1\nmid\n",
+            ),
+            (
+                "nested Vec[Vec[E2]]",
+                "let a: Vec[Vec[E2]] = [[mke2(1)], [E2.Q]];",
+                "dD1\nmid\n",
+            ),
+            // A tuple element.
+            (
+                "nested Array[Array[(D, i64), 1], 2]",
+                "let a: Array[Array[(D, i64), 1], 2] = [[(mkd(1), 7)], [(mkd(2), 8)]];",
+                "dD1\ndD2\nmid\n",
+            ),
+            (
+                // Divergent before this row, and not an array shape at all.
+                "nested Vec[Vec[(D, i64)]]",
+                "let a: Vec[Vec[(D, i64)]] = [[(mkd(1), 7)], [(mkd(2), 8)]];",
+                "dD1\ndD2\nmid\n",
+            ),
+            // An Option element.
+            (
+                "nested Array[Array[Option[D], 1], 2]",
+                "let a: Array[Array[Option[D], 1], 2] = [[Option.Some(mkd(1))], [Option.Some(mkd(2))]];",
+                "dD1\ndD2\nmid\n",
+            ),
+            (
+                // Divergent before this row, likewise.
+                "nested Vec[Vec[Option[D]]]",
+                "let a: Vec[Vec[Option[D]]] = [[Option.Some(mkd(1))], [Option.Some(mkd(2))]];",
+                "dD1\ndD2\nmid\n",
+            ),
+            // A Vec element inside an array, which was already correct.
+            (
+                "control: Array[Array[Vec[D], 1], 2] was already correct",
+                "let a: Array[Array[Vec[D], 1], 2] = [[[mkd(1)]], [[mkd(2)]]];",
+                "dD1\ndD2\nmid\n",
+            ),
+        ] {
+            let src = format!("{HDR}fn main() {{\n{body}\nprintln(\"mid\");\n}}\n");
+            let (interp_out, interp_errs, _, _) = karac::run_program_full(&src);
+            assert!(
+                interp_errs.is_empty(),
+                "[{label}] interp errored: {interp_errs:?}"
+            );
+            assert_eq!(interp_out.join(""), want, "[{label}] interpreter");
+            if let Some(aot) = run_program(&src) {
+                assert_eq!(aot, want, "[{label}] AOT");
+            }
+        }
+    }
+
+    /// B-2026-09-14-15 — a NESTED fixed `Array` runs its innermost elements'
+    /// `Drop` bodies on every surface: `Array[Array[D, N], M]` bound, moved,
+    /// discarded, inside an envelope or an arm, and the mirror shape
+    /// `Vec[Array[D, N]]`.
+    ///
+    /// The defect was a ONE-LEVEL HORIZON in two walkers and, on the
+    /// interpreter, in one value-level gate — three sites, one shape:
+    ///
+    ///   * `elem_te_runs_user_drop` admitted an element by its HEAD NAME, and
+    ///     the head of `Array[D, 1]` is `Array`, no declared struct or enum. So
+    ///     `emit_array_elem_user_drop_bodies_fn` emitted NO walker for a nested
+    ///     array at any depth, and `emit_slot_drop_bodies_at` had no array arm
+    ///     to run once one existed. `--interp` recurses structurally on
+    ///     `Value::Array` and had been printing these bodies all along, so the
+    ///     gap was a run-vs-build divergence rather than an agreed silence.
+    ///   * `emit_nested_vec_elem_bodies_fn` — the `Vec` side of the same
+    ///     nesting — had arms for a tuple, a struct, an `Option`/`Result` and a
+    ///     `Vec` element, and none for an `Array` one, so `Vec[Array[D, 1]]`
+    ///     diverged the same way.
+    ///   * `pattern_binding_owes_drop_body` classified an arm-bound container's
+    ///     elements with `value_runs_user_drop`, which answers only for a
+    ///     `Value::Struct`. A nested element is another `Value::Array`, so no
+    ///     Drop slot was registered for the arm binding and the arm ran nothing
+    ///     — which had already made `match o { Some(t) => .. }` over
+    ///     `Option[Vec[Vec[D]]]` and `Option[Array[Vec[D], 2]]` divergent
+    ///     before this row; both are cells here.
+    ///
+    /// The two halves move in ONE commit, as every row in this family does. The
+    /// codegen half alone flipped the envelope cells the other way (compiled
+    /// printing, `--interp` silent), because B-2026-09-14-2 had deliberately
+    /// stopped its payload walk and that walk's arming gate short of a fixed
+    /// array so as not to open a third divergence; lifting that stop is the
+    /// interpreter half and is only correct once the walker exists.
+    ///
+    /// NOT moved, and pinned below: an `Array[D, N]` in a STRUCT FIELD is an
+    /// agreed silence on all four surfaces (B-2026-09-12-21's shape), and a
+    /// whole-container REASSIGNMENT loses the displaced container's element
+    /// bodies on every compiled backend — flat `Vec[D]` and `Array[D, N]`
+    /// alike, so neither is this nesting's business.
+    #[test]
+    fn e2e_nested_fixed_array_runs_its_element_drop_bodies() {
+        const HDR: &str = "struct D { a: String, b: i64 }\n\
+                           impl Drop for D { fn drop(mut ref self) { println(f\"dD{self.b}\") } }\n\
+                           fn pay() -> String { return \"heap\"; }\n\
+                           fn mkd(n: i64) -> D { return D { a: pay(), b: n }; }\n\
+                           fn mka(n: i64) -> Array[D, 1] { return [mkd(n)]; }\n\
+                           struct W { z: Array[D, 2] }\n\
+                           fn eat(a: Array[Array[D, 1], 2]) { println(\"in-eat\"); }\n";
+        for (label, body, want) in [
+            (
+                "a nested fixed Array local",
+                "let v: Array[Array[D, 1], 2] = [[mkd(1)], [mkd(2)]];",
+                "dD1\ndD2\nmid\n",
+            ),
+            (
+                "two elements in the inner array",
+                "let v: Array[Array[D, 2], 1] = [[mkd(1), mkd(2)]];",
+                "dD1\ndD2\nmid\n",
+            ),
+            (
+                "three levels deep",
+                "let v: Array[Array[Array[D, 1], 1], 2] = [[[mkd(1)]], [[mkd(2)]]];",
+                "dD1\ndD2\nmid\n",
+            ),
+            (
+                "an Array element of a TUPLE, which shares the widened predicate",
+                "let t: (Array[D, 2], i64) = ([mkd(1), mkd(2)], 7);",
+                "dD1\ndD2\nmid\n",
+            ),
+            (
+                "a nested Array element of a tuple",
+                "let t: (Array[Array[D, 1], 2], i64) = ([[mkd(1)], [mkd(2)]], 7);",
+                "dD1\ndD2\nmid\n",
+            ),
+            (
+                "bound inside an Option envelope",
+                "let o: Option[Array[Array[D, 1], 2]] = Option.Some([[mkd(1)], [mkd(2)]]);",
+                "dD1\ndD2\nmid\n",
+            ),
+            (
+                "discarded inside an Option envelope",
+                "let o: Option[Array[Array[D, 1], 2]] = Option.Some([[mkd(1)], [mkd(2)]]);\nlet _ = o;",
+                "dD1\ndD2\nmid\n",
+            ),
+            (
+                "Result's Ok arm",
+                "let r: Result[Array[Array[D, 1], 2], i64] = Result.Ok([mka(1), mka(2)]);",
+                "dD1\ndD2\nmid\n",
+            ),
+            (
+                "bound out by a consuming match arm",
+                "let o: Option[Array[Array[D, 1], 2]] = Option.Some([[mkd(1)], [mkd(2)]]);\n\
+                 match o { Option.Some(t) => { println(\"arm\"); } Option.None => { println(\"none\"); } }",
+                "arm\ndD1\ndD2\nmid\n",
+            ),
+            (
+                "the same through if let",
+                "let o: Option[Array[Array[D, 1], 2]] = Option.Some([[mkd(1)], [mkd(2)]]);\n\
+                 if let Option.Some(t) = o { println(\"arm\"); }",
+                "arm\ndD1\ndD2\nmid\n",
+            ),
+            (
+                "moved into a call",
+                "let v: Array[Array[D, 1], 2] = [[mkd(1)], [mkd(2)]];\neat(v);",
+                "in-eat\ndD1\ndD2\nmid\n",
+            ),
+            // The Vec side of the same nesting.
+            (
+                "a Vec of fixed Arrays",
+                "let v: Vec[Array[D, 1]] = [mka(1), mka(2)];",
+                "dD1\ndD2\nmid\n",
+            ),
+            (
+                "a Vec of fixed Arrays inside an envelope",
+                "let o: Option[Vec[Array[D, 1]]] = Option.Some([mka(1), mka(2)]);",
+                "dD1\ndD2\nmid\n",
+            ),
+            (
+                "a Vec of fixed Arrays bound out by an arm",
+                "let o: Option[Vec[Array[D, 1]]] = Option.Some([mka(1), mka(2)]);\n\
+                 match o { Option.Some(t) => { println(\"arm\"); } Option.None => { println(\"none\"); } }",
+                "arm\ndD1\ndD2\nmid\n",
+            ),
+            (
+                "Vec of Vec of fixed Array",
+                "let v: Vec[Vec[Array[D, 1]]] = [[mka(1)], [mka(2)]];",
+                "dD1\ndD2\nmid\n",
+            ),
+            // The two arm cells that were already divergent before this row and
+            // that the widened arm gate closes with it.
+            (
+                "an arm-bound Vec[Vec[D]] payload",
+                "let o: Option[Vec[Vec[D]]] = Option.Some([[mkd(1)], [mkd(2)]]);\n\
+                 match o { Option.Some(t) => { println(\"arm\"); } Option.None => { println(\"none\"); } }",
+                "arm\ndD1\ndD2\nmid\n",
+            ),
+            (
+                "an arm-bound Array[Vec[D], 2] payload",
+                "let o: Option[Array[Vec[D], 2]] = Option.Some([[mkd(1)], [mkd(2)]]);\n\
+                 match o { Option.Some(t) => { println(\"arm\"); } Option.None => { println(\"none\"); } }",
+                "arm\ndD1\ndD2\nmid\n",
+            ),
+            // Controls: shapes that were already correct and must not move.
+            (
+                "control: the flat Array local is unchanged",
+                "let v: Array[D, 2] = [mkd(1), mkd(2)];",
+                "dD1\ndD2\nmid\n",
+            ),
+            (
+                "control: Array[Vec[D], N] was already correct",
+                "let v: Array[Vec[D], 2] = [[mkd(1)], [mkd(2)]];",
+                "dD1\ndD2\nmid\n",
+            ),
+            (
+                "control: Vec[Vec[D]] was already correct",
+                "let v: Vec[Vec[D]] = [[mkd(1)], [mkd(2)]];",
+                "dD1\ndD2\nmid\n",
+            ),
+            (
+                "control: a nested array of non-Drop elements runs nothing",
+                "let v: Array[Array[i64, 1], 2] = [[1], [2]];",
+                "mid\n",
+            ),
+            (
+                // B-2026-09-12-21's shape, deliberately untouched: an agreed
+                // silence on all four surfaces, which is strictly better than a
+                // divergence and is not this row's to trade.
+                "control: an Array in a STRUCT FIELD stays an agreed silence",
+                "let w = W { z: [mkd(1), mkd(2)] };",
+                "mid\n",
+            ),
+        ] {
+            let src = format!("{HDR}fn main() {{\n{body}\nprintln(\"mid\");\n}}\n");
+            let (interp_out, interp_errs, _, _) = karac::run_program_full(&src);
+            assert!(
+                interp_errs.is_empty(),
+                "[{label}] interp errored: {interp_errs:?}"
+            );
+            assert_eq!(interp_out.join(""), want, "[{label}] interpreter");
+            if let Some(aot) = run_program(&src) {
+                assert_eq!(aot, want, "[{label}] AOT");
+            }
+        }
+    }
+
     /// B-2026-09-14-2 (gate-lift half) — an `Option`/`Result` whose payload is a
     /// `Vec` runs its elements' `Drop` bodies OUTSIDE the discard position too:
     /// a bound envelope, a plain move, a consuming `match` / `if let` arm, and
@@ -34087,14 +34380,17 @@ fn main() {
     /// one level up: its safety argument was that the binding's own walker
     /// skipped every `Vec` arm, which the lift makes false.
     ///
-    /// A NESTED FIXED ARRAY (`Option[Array[Array[D, 1], 2]]`) stays silent on
-    /// both backends and its cell pins that. It is codegen's own one-level
-    /// horizon, not this family's: `emit_array_elem_user_drop_bodies_fn` admits
-    /// an element on `elem_te_runs_user_drop`, which reads the head name
-    /// `Array`, so no walker exists at any nesting — a bare
-    /// `let v: Array[Array[D, 1], 2] = ..;` with no envelope in sight diverges
-    /// identically. Its own row. `Array[Vec[D], N]` is NOT that shape and is
-    /// correct here.
+    /// A NESTED FIXED ARRAY (`Option[Array[Array[D, 1], 2]]`) was silent on
+    /// both backends when this landed, and its cell pinned that. It was
+    /// codegen's own one-level horizon, not this family's:
+    /// `emit_array_elem_user_drop_bodies_fn` admitted an element on
+    /// `elem_te_runs_user_drop`, which reads the head name `Array`, so no
+    /// walker existed at any nesting — a bare
+    /// `let v: Array[Array[D, 1], 2] = ..;` with no envelope in sight diverged
+    /// identically. B-2026-09-14-15 closed that horizon and the cell below now
+    /// pins the bodies RUNNING, with that row's own matrix in
+    /// `e2e_nested_fixed_array_runs_its_element_drop_bodies`.
+    /// `Array[Vec[D], N]` was never that shape and is correct here.
     #[test]
     fn e2e_optres_vec_payload_runs_element_bodies_outside_the_discard() {
         const HDR: &str = "struct D { a: String, b: i64 }\n\
@@ -34166,9 +34462,13 @@ fn main() {
             ),
             // Controls.
             (
-                "control: a nested FIXED array stays silent (codegen's horizon)",
+                // B-2026-09-14-15 moved this cell: it pinned the agreed
+                // SILENCE this row deliberately stopped short of, and that
+                // row gave codegen's array element walker its nesting arm and
+                // took the interpreter's matching stop off in one commit.
+                "a nested FIXED array runs its innermost elements' bodies",
                 "let o: Option[Array[Array[D, 1], 2]] = Option.Some([[mkd(1)], [mkd(2)]]);",
-                "mid\n",
+                "dD1\ndD2\nmid\n",
             ),
             (
                 "control: a Vec of non-Drop elements",
@@ -157358,19 +157658,18 @@ fn main() {
                  }\n",
                 "e:true\nn:false\n",
             ),
-            // 8 — AN AGREED SILENCE, PINNED ON PURPOSE. The inner element
-            //     has a user `Drop`, and on every compiled backend NO body
-            //     runs, while `--interp` runs all four. That divergence is
-            //     PRE-EXISTING and is not this fix's to close — it is
-            //     B-2026-09-10-35, the nested peer of B-2026-09-10-27, and
-            //     measured identical before and after. It is pinned here so
-            //     that whoever closes it has to change this expectation
-            //     deliberately: a repair that starts running the bodies on ONE
-            //     compiled surface, or that runs them twice, fails this cell
-            //     instead of shipping a fresh run-vs-build divergence. The
-            //     memory half IS fixed — cell 7 of the ASAN twin.
+            // 8 — B-2026-09-10-35, CLOSED by B-2026-09-14-15 (the two rows
+            //     are the same defect, filed four days apart from opposite
+            //     directions). This cell used to pin the compiled SILENCE
+            //     while `--interp` ran all four bodies; the pin did its job,
+            //     failing the moment the walkers learned the nesting, and the
+            //     expectation moved deliberately with that fix. All five
+            //     surfaces now print the four bodies in this order —
+            //     `--interp`, JIT, and `karac build` at both opt levels and
+            //     both auto-par settings, measured. The memory half was
+            //     already fixed — cell 7 of the ASAN twin.
             (
-                "nested-array-drop-bodies-agreed-silence",
+                "nested-array-drop-bodies-run-on-every-surface",
                 "struct R { s: String }\n\
                  impl Drop for R { fn drop(mut ref self) { println(f\"d:{self.s}\") } }\n\
                  fn main() {\n\
@@ -157379,7 +157678,7 @@ fn main() {
                  \x20\x20\x20\x20println(\"s:ok\");\n\
                  \x20\x20\x20\x20println(\"end\");\n\
                  }\n",
-                "s:ok\nend\n",
+                "d:a0\nd:a1\nd:b0\nd:b1\ns:ok\nend\n",
             ),
             // 9 — CONTROL for cell 8 one level up: a ONE-level
             //     `Array[R, 2]` runs both bodies on every backend, interpreter

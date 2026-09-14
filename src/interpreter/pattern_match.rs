@@ -1275,9 +1275,21 @@ impl<'a> super::Interpreter<'a> {
             // B-2026-09-14-2 — a CONTAINER payload bound out by the arm. The
             // binding owns the elements from here on, exactly as a struct or
             // user-enum payload binding owns its value.
+            //
+            // B-2026-09-14-15 — `field_value_carries_user_drop` per element,
+            // not `value_runs_user_drop`. The latter answers only for a
+            // `Value::Struct`, so a NESTED container element (`Vec[Vec[D]]`,
+            // `Array[Array[D, 1], 2]`, `Array[Vec[D], 2]` — one runtime shape,
+            // `Value::Array`, for all three) classified false, no Drop slot was
+            // registered for the arm binding, and the arm ran nothing while
+            // every compiled backend ran the elements' bodies. The walk this
+            // gates (`run_array_element_user_drops`) has recursed into a nested
+            // element since B-2026-08-01-23, so only the GATE was short — the
+            // same gate/walk reach mismatch this family is shaped by, on the
+            // value side rather than the type side.
             Some(Value::Array(cell)) => cell
                 .read()
-                .map(|g| g.iter().any(|e| self.value_runs_user_drop(e)))
+                .map(|g| g.iter().any(|e| self.field_value_carries_user_drop(e)))
                 .unwrap_or(false),
             _ => false,
         }
