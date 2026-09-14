@@ -6651,16 +6651,42 @@ impl<'ctx> Codegen<'ctx> {
                     // B-2026-09-09-12 item 3 — the same scan, emitted inline.
                     Ok("inlinegroup") => mono::MapLookupProbe::InlineGroup,
                     Ok("bytewalk") | Ok("bounded") => mono::MapLookupProbe::Bounded,
-                    // NOT the default yet. The scan is 1.50x on a miss-heavy
-                    // probe and 1.06x on a hit-heavy one, and it takes kata:146
-                    // 2.18x -> 1.56x and kata:170 4.58x -> 2.47x against
-                    // equal-safety Rust. But kata:387 and kata:219 read 8% and
-                    // 3% WORSE, where the microbenchmarks for their shape say
-                    // parity — a delta that size on a small kata is inside code
-                    // placement, and this corpus's rule is to sweep
-                    // KARAC_TEXT_PAD on both sides before believing it. Flip
-                    // the default when that sweep says the two are noise.
-                    _ => mono::MapLookupProbe::Bounded,
+                    // THE DEFAULT since B-2026-09-07-53 (2026-09-13). Opt back
+                    // out with `KARAC_MAP_PROBE=bytewalk`.
+                    //
+                    // The previous comment here said to flip "when a
+                    // KARAC_TEXT_PAD sweep says kata:387 and kata:219 are
+                    // noise". That is not what settled it, so the condition is
+                    // replaced rather than ticked off. What settled it was a
+                    // corpus screen — all 29 map-using bench programs, both
+                    // arms, with the 13 non-scalar-keyed katas as negative
+                    // controls (all read 1.0000, so the screen measures this
+                    // probe and nothing else) — followed by CYCLES on every
+                    // candidate it named, 8 builds per arm, distributions
+                    // rather than points:
+                    //
+                    //     separable WINS    146 0.703, 220 0.703, 170 0.461
+                    //     separable LOSSES  347 1.083, 166 1.056
+                    //     NOT SEPARABLE     387, 219, 726, 1, 895
+                    //
+                    // Aggregate about -11.2 BILLION cycles over the measured
+                    // set: three katas gain 29-54%, two lose 5-8%, the rest are
+                    // neutral. The four headline ratios against equal-safety
+                    // Rust move 1.14/1.47/2.18/4.58 -> ~1.21/1.49/1.56/2.47 —
+                    // the worst case halves, which is the number that
+                    // invalidated this row's published claim.
+                    //
+                    // DO NOT calibrate a shape-dependent gate on instruction
+                    // counts, which is the obvious next idea and is wrong here.
+                    // The scan's value is ILP, so instructions mispredict
+                    // cycles in BOTH directions: kata:220 executes 8.7% MORE
+                    // instructions and runs 29.7% FASTER, and kata:146 is flat
+                    // on instructions and also 29.7% faster. A capacity gate
+                    // picked from those numbers would route 220 to the byte
+                    // walk and forfeit a 30% win. A shape-dependent probe needs
+                    // a runtime variable that predicts the OUTCOME; nothing
+                    // measured on this row identifies one.
+                    _ => mono::MapLookupProbe::InlineGroup,
                 },
                 temp_recv_mapset_types: HashMap::new(),
                 map_val_bodies_tes: HashMap::new(),
