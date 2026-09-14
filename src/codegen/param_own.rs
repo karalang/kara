@@ -619,7 +619,7 @@ impl<'ctx> super::Codegen<'ctx> {
     /// fine and missed every annotated array.
     pub(super) fn owned_array_param_te(&self, te: &TypeExpr) -> Option<(TypeExpr, u32)> {
         let (elem_te, n) = self.array_elem_and_len(te)?;
-        if n == 0 || !self.array_elem_owns_callee_drop(&elem_te) {
+        if n == 0 || !self.array_param_elem_is_callee_owned(&elem_te) {
             return None;
         }
         Some((elem_te, n))
@@ -634,6 +634,46 @@ impl<'ctx> super::Codegen<'ctx> {
     /// (B-2026-09-10-8 / -26 explains why that predicate is not widened).
     pub(super) fn array_elem_owns_callee_drop(&self, elem_te: &TypeExpr) -> bool {
         self.type_expr_has_drop_heap(elem_te) || self.nested_array_needs_drop(elem_te)
+    }
+
+    /// B-2026-09-14-25 — the PARAM-ONLY half of
+    /// [`Self::array_elem_owns_callee_drop`]: does a by-value `Array[T, N]`
+    /// param transfer ownership of its elements to the CALLEE?
+    ///
+    /// Separate from its base because that one has a THIRD consumer. Despite
+    /// its name, `make_array_param_callee_owned` is also what a `let`-bound
+    /// array local calls to register its own scope-exit element drop
+    /// (`stmts.rs`), so a Drop-body exclusion written into the base predicate
+    /// silently removed the LOCAL's memory drop as well — measured as
+    /// `asan_fixed_array_element_bodies_are_memory_balanced`'s
+    /// `heap-struct-elems` row leaking 4 bytes in 2 allocations on a program
+    /// with no function call in it at all. The param question and the
+    /// does-this-array-own-heap question are different questions that happened
+    /// to share a predicate.
+    ///
+    /// FALSE for an element that runs a user `Drop` BODY, which is the fix.
+    /// The bodies ride a caller-side channel: measured on `fn taked(d: D)` and
+    /// `fn takev(v: Vec[D])`, a by-value aggregate's body prints AFTER the call
+    /// statement on all four surfaces, so the caller is still holding the value
+    /// when it runs. Letting the callee free an array's element heap while the
+    /// caller keeps the bodies made the caller read freed memory — measured
+    /// with no enum in the program as `body-7-<binary junk>` on both compiled
+    /// backends at exit 0 against a correct `--interp`, and inside a boxed enum
+    /// payload as a hard double free, because there the payload's interior walk
+    /// frees the same buffers again.
+    ///
+    /// An element with heap but NO user `Drop` is unaffected and stays
+    /// callee-owned, so B-2026-09-13-15 and B-2026-09-13-16's `Array[String,
+    /// N]` leaks stay closed.
+    ///
+    /// Asked by BOTH sides of the transfer — the caller's retraction
+    /// (`owned_array_param_te`, `mono_owned_array_param_for_arg`) and the two
+    /// callee-side registrations — for the reason
+    /// [`Self::owned_array_param_te`]'s doc gives: retract without registering
+    /// and the buffers have no owner, register without retracting and they have
+    /// two.
+    pub(super) fn array_param_elem_is_callee_owned(&self, elem_te: &TypeExpr) -> bool {
+        self.array_elem_owns_callee_drop(elem_te) && !self.elem_te_runs_user_drop(elem_te)
     }
 
     pub(super) fn make_array_param_callee_owned(
@@ -5680,9 +5720,21 @@ impl<'ctx> super::Codegen<'ctx> {
         // them, which is also what keeps the read-only and rebind arms out of
         // it: neither reaches a hand-off at all.
         self.suppress_boxed_array_payload_alias_move(&root);
-        if self.borrow_vars.owned_array_params.remove(&root).is_none() {
+        // B-2026-09-14-25 — decline where the CALLEE does not take ownership.
+        // Membership alone is not the question: `make_array_param_callee_owned`
+        // is also the `let`-local registrar, so a plain local sits in this map
+        // too, and retracting its drop for a callee that registers nothing
+        // leaves the element buffers with no owner at all — measured as 44 B in
+        // 2 blocks on the by-value-param cell while the identical unmoved local
+        // was clean. The same predicate the two registration sites ask, so the
+        // two sides of the transfer cannot disagree.
+        let Some((elem_te, _)) = self.borrow_vars.owned_array_params.get(&root).cloned() else {
+            return;
+        };
+        if !self.array_param_elem_is_callee_owned(&elem_te) {
             return;
         }
+        self.borrow_vars.owned_array_params.remove(&root);
         let Some(slot) = self.variables.get(&root).map(|s| s.ptr) else {
             return;
         };

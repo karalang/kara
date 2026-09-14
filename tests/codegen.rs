@@ -83772,6 +83772,41 @@ fn main() {
         );
     }
 
+    /// B-2026-09-14-25, the NO-ENUM half — the cell that showed the enum was
+    /// never the cause.
+    ///
+    /// A plain `let a: Array[D, 2]` handed to `fn take(a: Array[D, 2])` printed
+    /// GARBAGE in its elements' `Drop` bodies on both compiled backends at exit
+    /// 0, while `--interp` was correct: the callee freed the element heap under
+    /// the callee-owns convention and the CALLER still ran the bodies at its own
+    /// scope exit, reading buffers that frame had already returned. Measured as
+    /// `body-7-u<L...` against `body-7-c24-aaaa...`.
+    ///
+    /// Asserts the OUTPUT half — that the bodies observe LIVE data and run at
+    /// the same point on every surface. The memory half of this same shape is
+    /// the `byval:` cell of
+    /// `asan_drop_bearing_array_element_is_freed_once_through_a_consuming_arm`
+    /// in `tests/memory_sanitizer.rs`; keeping both is deliberate, because the
+    /// two ways this shape broke during the fix were a leak with correct output
+    /// and correct output with a leak, and neither fixture alone catches both.
+    #[test]
+    fn test_e2e_by_value_array_param_leaves_element_drop_bodies_readable() {
+        assert_eq!(
+            run_program(
+                "struct D { id: i64, s: String }\n\
+                 impl Drop for D { fn drop(mut ref self) { println(f\"body-{self.id}-{self.s}\"); } }\n\
+                 fn take(a: Array[D, 2]) -> i64 { return a[0].id; }\n\
+                 fn main() {\n\
+                 \x20   let a: Array[D, 2] = [D { id: 7, s: f\"left-aaaaaaaaaaaaaaaa\" }, D { id: 107, s: f\"right-bbbbbbbbbbbbbbbb\" }];\n\
+                 \x20   println(f\"got={take(a)}\");\n\
+                 \x20   println(\"post\");\n\
+                 }"
+            )
+            .as_deref(),
+            Some("got=7\nbody-7-left-aaaaaaaaaaaaaaaa\nbody-107-right-bbbbbbbbbbbbbbbb\npost\n")
+        );
+    }
+
     /// B-2026-08-21-4 — `as_slice()` on a `ref`-mode receiver, and a call
     /// declared to return `Slice[T]`.
     ///

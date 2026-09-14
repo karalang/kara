@@ -2500,7 +2500,13 @@ impl<'ctx> super::Codegen<'ctx> {
                             ) = (args.first(), args.get(1))
                             {
                                 if let ExprKind::Integer(n, _) = &size_expr.kind {
-                                    if *n > 0 {
+                                    // B-2026-09-14-25 — the param-level gate.
+                                    // An element that runs a user `Drop` body
+                                    // stays CALLER-RETAINS, matching every
+                                    // sibling by-value aggregate; the emitter
+                                    // below is shared with the `let`-local
+                                    // registrar, which must keep its drop.
+                                    if *n > 0 && self.array_param_elem_is_callee_owned(elem_te) {
                                         let elem_ty = self.llvm_type_for_type_expr(elem_te);
                                         self.make_array_param_callee_owned(
                                             &param_name,

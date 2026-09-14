@@ -90009,6 +90009,205 @@ fn main() {
         );
     }
 
+    /// B-2026-09-14-25 — an `Array[D, N]` enum payload whose element carries
+    /// BOTH heap and a user `Drop` body double-freed its element buffers on a
+    /// consuming arm: `exit 134`, 2 invalid frees, `15 allocs / 17 frees`, at
+    /// BOTH opt levels, against a correct `--interp`.
+    ///
+    /// Filed as the shape B-2026-09-14-17 deliberately excluded, and the reason
+    /// it could not ride that fix is that the two owners are on different
+    /// channels: -17 zeroes the box's CONTENTS so the interior walk skips, and
+    /// the payload's BODIES walker reads those same words afterwards. Admitting
+    /// the element there turned a correct `body:7` into `body:0`.
+    ///
+    /// THE ENUM TURNED OUT NOT TO BE THE CAUSE, and the cell that showed it has
+    /// no enum in it. A plain `let a: Array[D, 2]` passed by value to
+    /// `fn take(a: Array[D, 2])` prints GARBAGE in its `Drop` bodies on both
+    /// compiled backends at exit 0 — `body-7-<binary junk>` — while `--interp`
+    /// is correct. The callee frees the element heap under the callee-owns
+    /// convention `owned_array_param_te` applies, and the CALLER still runs the
+    /// elements' `Drop` bodies at its own scope exit, over buffers that frame
+    /// already returned. Put that same array in a boxed enum payload and the
+    /// payload's interior walk frees them a second time, which is the abort.
+    ///
+    /// THE CONVENTION IS THE DEFECT, and the two sibling shapes settle which
+    /// way it should go. Measured on `fn taked(d: D)` and `fn takev(v: Vec[D])`,
+    /// the body prints AFTER the call statement on all four surfaces — the
+    /// caller is still holding the value when it runs, i.e. a by-value
+    /// aggregate param is CALLER-RETAINS for both memory and bodies. `Array` was
+    /// the only aggregate that was callee-owns, so it is the outlier rather
+    /// than the precedent.
+    ///
+    /// THE REPAIR withholds callee-ownership for exactly the elements that run
+    /// a user `Drop` body (`array_elem_owns_callee_drop`). Because the caller's
+    /// retraction and the callee's registration are ONE predicate — as that
+    /// function's own doc insists — a single line flips both, and there is no
+    /// window in which one side has moved and the other has not.
+    ///
+    /// THE REJECTED ALTERNATIVE, recorded because it looks like the obvious
+    /// one: move the BODIES to the callee instead, so both halves live with the
+    /// new owner. It was implemented and measured. It fixes the memory and runs
+    /// each body INSIDE the callee, before the caller's call statement
+    /// finishes — diverging from `--interp` and from both sibling shapes above.
+    /// Trading an abort for a run-vs-build divergence is the same bad trade
+    /// -17 refused, so the convention was restored instead of extended.
+    ///
+    /// MEASURED at `KARAC_OPT_LEVEL=0` under valgrind, all four surfaces,
+    /// before → after: the consuming arm over `Hd` — `exit 134`, 2 invalid
+    /// frees → clean, and the whole fixture `78 allocs / 78 frees`,
+    /// byte-identical on `--interp`, JIT, `karac build` and `-O0` no-auto-par.
+    ///
+    /// CONTROLS, clean before AND after, each pinning one edge of the gate:
+    /// the READ-ONLY arm over the same enum (already clean, so the gate must
+    /// not disturb it); an `Array[P, 2]` whose element has a `Drop` body and NO
+    /// heap (clean before — it is the cell that proves the heap is what makes
+    /// the difference); an `Array[String, 2]` payload, which has no user `Drop`
+    /// at all and so STAYS callee-owned, keeping B-2026-09-13-15 and
+    /// B-2026-09-13-16's leaks closed; and `v.push` of a `Drop`-bearing array,
+    /// which was already correct and is the reference the repair reasons from.
+    ///
+    /// ONE KNOWN GAP IS PINNED HERE RATHER THAN FIXED: the FRESH-TEMP consuming
+    /// arm (`consume:` below) runs NO element bodies at all. It does so on
+    /// every surface including `--interp`, so it is a both-backends-silent gap
+    /// (B-2026-09-10-7's family) and not a divergence this row introduced —
+    /// asserted as measured so that a change either way is noticed.
+    ///
+    /// A WRONG FIRST CUT, and the reason the predicate is split in two. The
+    /// exclusion first went into `array_elem_owns_callee_drop` itself, which
+    /// reads as the natural home for it. That predicate has a THIRD consumer:
+    /// despite its name, `make_array_param_callee_owned` is also what a
+    /// `let`-bound array local calls to register its own scope-exit element
+    /// drop, so the exclusion silently removed the LOCAL's memory drop as well.
+    /// It cost `asan_fixed_array_element_bodies_are_memory_balanced`'s
+    /// `heap-struct-elems` row 4 bytes in 2 allocations on a program with no
+    /// function call in it, and the leak was briefly mistaken for a
+    /// pre-existing defect this fix merely unmasked — it was neither
+    /// pre-existing nor unmasked, it was caused. Hence
+    /// `array_param_elem_is_callee_owned`: the by-value-param question, asked
+    /// by both sides of the transfer and by nobody else.
+    ///
+    /// THE CALLER'S RETRACTION NEEDED THE SAME GATE, for the mirror reason.
+    /// `suppress_array_binding_move_arg` keyed on `owned_array_params`
+    /// MEMBERSHIP, and a `let`-local is in that map too, so it went on
+    /// retracting the local's drop for a callee that now registers nothing — 44
+    /// B in 2 blocks on the by-value cell while the identical unmoved local was
+    /// clean. Both sides now ask one predicate, which is what that function's
+    /// own doc demands and what the first cut proved by violating.
+    #[test]
+    fn asan_drop_bearing_array_element_is_freed_once_through_a_consuming_arm() {
+        assert_clean_asan_run(
+            r#"
+struct D { id: i64, s: String }
+impl Drop for D { fn drop(mut ref self) { println(f"hd-{self.id}-{self.s}"); } }
+
+struct P { id: i64 }
+impl Drop for P { fn drop(mut ref self) { println(f"np-{self.id}"); } }
+
+enum Hd { A(Array[D, 2]), B }
+enum Np { A(Array[P, 2]), B }
+enum Sp { A(Array[String, 2]), B }
+
+fn mkhd(n: i64) -> Hd {
+    let a: Array[D, 2] = [D { id: n, s: f"b25-left-aaaaaaaaaaaaaaaa-{n}" }, D { id: n + 100, s: f"b25-right-bbbbbbbbbbbbbbbb-{n}" }];
+    return Hd.A(a);
+}
+fn mknp(n: i64) -> Np {
+    let a: Array[P, 2] = [P { id: n }, P { id: n + 100 }];
+    return Np.A(a);
+}
+fn mksp(n: i64) -> Sp {
+    let a: Array[String, 2] = [f"b25-sp-cccccccccccccccc-{n}", f"b25-sp-dddddddddddddddd-{n}"];
+    return Sp.A(a);
+}
+
+fn takehd(a: Array[D, 2]) -> i64 { return a[0].id; }
+fn takenp(a: Array[P, 2]) -> i64 { return a[0].id; }
+fn takesp(a: Array[String, 2]) -> i64 { return a[0].len(); }
+
+fn main() {
+    let mut i: i64 = 0;
+    while i < 2 {
+        match mkhd(i) {
+            Hd.A(a) => { println(f"consume:{takehd(a)}"); }
+            Hd.B => {}
+        }
+
+        let e2: Hd = mkhd(i);
+        match e2 {
+            Hd.A(a) => { println(f"bound:{takehd(a)}"); }
+            Hd.B => {}
+        }
+
+        let e3: Hd = mkhd(i);
+        match e3 {
+            Hd.A(a) => { println(f"readonly:{a[1].id}"); }
+            Hd.B => {}
+        }
+
+        let e4: Np = mknp(i);
+        match e4 {
+            Np.A(a) => { println(f"noheap:{takenp(a)}"); }
+            Np.B => {}
+        }
+
+        let e5: Sp = mksp(i);
+        match e5 {
+            Sp.A(a) => { println(f"strpay:{takesp(a)}"); }
+            Sp.B => {}
+        }
+
+        let bv: Array[D, 2] = [D { id: i + 20, s: f"b25-byval-gggggggggggggggg-{i}" }, D { id: i + 21, s: f"b25-byval-hhhhhhhhhhhhhhhh-{i}" }];
+        println(f"byval:{takehd(bv)}");
+
+        let pv: Array[D, 2] = [D { id: i + 7, s: f"b25-push-eeeeeeeeeeeeeeee-{i}" }, D { id: i + 8, s: f"b25-push-ffffffffffffffff-{i}" }];
+        let mut v: Vec[Array[D, 2]] = Vec.new();
+        v.push(pv);
+        println(f"push:{v.len()}");
+
+        i = i + 1;
+    }
+}
+"#,
+            &[
+                "consume:0",
+                "bound:0",
+                "hd-0-b25-left-aaaaaaaaaaaaaaaa-0",
+                "hd-100-b25-right-bbbbbbbbbbbbbbbb-0",
+                "readonly:100",
+                "hd-0-b25-left-aaaaaaaaaaaaaaaa-0",
+                "hd-100-b25-right-bbbbbbbbbbbbbbbb-0",
+                "noheap:0",
+                "np-0",
+                "np-100",
+                "strpay:25",
+                "byval:20",
+                "hd-20-b25-byval-gggggggggggggggg-0",
+                "hd-21-b25-byval-hhhhhhhhhhhhhhhh-0",
+                "push:1",
+                "hd-7-b25-push-eeeeeeeeeeeeeeee-0",
+                "hd-8-b25-push-ffffffffffffffff-0",
+                "consume:1",
+                "bound:1",
+                "hd-1-b25-left-aaaaaaaaaaaaaaaa-1",
+                "hd-101-b25-right-bbbbbbbbbbbbbbbb-1",
+                "readonly:101",
+                "hd-1-b25-left-aaaaaaaaaaaaaaaa-1",
+                "hd-101-b25-right-bbbbbbbbbbbbbbbb-1",
+                "noheap:1",
+                "np-1",
+                "np-101",
+                "strpay:25",
+                "byval:21",
+                "hd-21-b25-byval-gggggggggggggggg-1",
+                "hd-22-b25-byval-hhhhhhhhhhhhhhhh-1",
+                "push:1",
+                "hd-8-b25-push-eeeeeeeeeeeeeeee-1",
+                "hd-9-b25-push-ffffffffffffffff-1",
+            ],
+            "asan_drop_bearing_array_element_is_freed_once_through_a_consuming_arm",
+        );
+    }
+
     /// B-2026-09-13-19 — a BARE DISCARDED call statement lost a wide `Option`
     /// payload and its box.
     ///

@@ -1823,7 +1823,7 @@ impl<'ctx> super::Codegen<'ctx> {
             _ => return None,
         };
         let (elem_te, n) = self.borrow_vars.owned_array_params.get(&root)?.clone();
-        (n > 0 && self.array_elem_owns_callee_drop(&elem_te)).then_some((elem_te, n))
+        (n > 0 && self.array_param_elem_is_callee_owned(&elem_te)).then_some((elem_te, n))
     }
 
     fn type_param_is_a_whole_param_type(generic_fn: &Function, tp: &str) -> bool {
@@ -4299,8 +4299,20 @@ impl<'ctx> super::Codegen<'ctx> {
                     .and_then(|v| v.iter().find(|(nm, _, _)| nm == &param_name))
                     .map(|(_, te, n)| (te.clone(), *n))
                 {
-                    let elem_ty = self.llvm_type_for_type_expr(&elem_te);
-                    self.make_array_param_callee_owned(&param_name, &elem_te, n, elem_ty, alloca);
+                    // B-2026-09-14-25 — the param-level gate, not the base
+                    // one: an element running a user `Drop` body stays
+                    // caller-retains, and the shared emitter below is also the
+                    // `let`-local registrar, which must keep its drop.
+                    if self.array_param_elem_is_callee_owned(&elem_te) {
+                        let elem_ty = self.llvm_type_for_type_expr(&elem_te);
+                        self.make_array_param_callee_owned(
+                            &param_name,
+                            &elem_te,
+                            n,
+                            elem_ty,
+                            alloca,
+                        );
+                    }
                 }
             }
             // B-2026-08-05-7 — the monomorph's own copy of the owned-param box
