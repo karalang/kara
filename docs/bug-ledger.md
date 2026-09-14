@@ -100,7 +100,7 @@ distinguish "bugs flattening" from "we stopped writing them down."
 | codegen-gap | 177 |
 | diagnostics | 126 |
 | other | 111 |
-| perf | 108 |
+| perf | 109 |
 | false-positive | 106 |
 | soundness | 95 |
 | crash | 81 |
@@ -110,7 +110,7 @@ distinguish "bugs flattening" from "we stopped writing them down."
 
 | surface | total |
 |---|---|
-| codegen | 1737 |
+| codegen | 1738 |
 | interp | 439 |
 | typecheck | 299 |
 | other | 90 |
@@ -189,6 +189,7 @@ _Generated from `bug-ledger.jsonl` by `scripts/bug-curve.py` (2026-05-20 → 202
 | B-2026-09-14-17 | 2026-09-14 | codegen | high | A MATCH ARM THAT CONSUMES A BOXED `Array` PAYLOAD FREES ITS ELEMENT BUFFERS TWICE AND ABORTS THE PROGRAM -- `match e { E.A(a) => take(a) }` over `enum E { A(Array[String, 2]), B }` exits 134 with `free(): double free detected`, 24 frees against 18 allocs, because `boxed_payload_interior_taken_by_arm` answers FALSE for an array unconditionally and the box keeps an interior drop the arm has already handed on | — |
 | B-2026-09-14-18 | 2026-09-14 | codegen+interp | medium | AN UNMOVED PART OF AN OWNED `Option` PAYLOAD LOSES ITS `Drop` BODY ON ALL FOUR SURFACES when the arm DESTRUCTURES the payload and returns a different part -- `Some((a, b)) => { return b; }` over `Option[(R, i64)]` prints `got:9 end` everywhere against the due `dR5 got:9 end`, and the two-Drop-element cell loses `dR6` everywhere, so the A/B parity rule sees nothing; this is the cell B-2026-09-13-5 recorded as 'correct on all four surfaces', which its `(R, i64)` sibling could not show | — |
 | B-2026-09-14-19 | 2026-09-14 | codegen | medium | WHERE THE COMPILED BACKENDS KEEP AN OWNED `Option` PAYLOAD'S `Drop` BODY THEY RUN IT AT THE CALLER'S SCOPE EXIT, NOT AT THE PAYLOAD'S DEATH -- `fn eat(o: Option[R]) -> i64` reading only `r.id` prints `got:5 end dR5` on JIT/AOT against `--interp`'s correct `dR5 got:5 end`, so the count agrees and the body is observable one statement too late; the mirror of B-2026-09-14-7, where compiled runs EARLY | — |
+| B-2026-09-14-20 | 2026-09-14 | codegen | medium | SSO's PROMOTE-ON-MUTATION COSTS 32-40% ON CHAR-BY-CHAR STRING BUILDING, and it is the whole of the remaining corpus regression -- `sso_deinline_in_place` fires on every mutating method call (`push`, `push_str`, `insert`, ...) and does nothing on almost all of them; a 60-char build, which can NEVER be inline, still regresses 40%, so the cost is the PROBE rather than the promotion. Reachable only at KARAC_SSO=1, which is off by default. | — |
 
 ### Relocated
 

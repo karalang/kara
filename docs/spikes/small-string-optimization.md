@@ -2056,10 +2056,11 @@ guards attacked the right thing:
 half and the upper-bound probe, and were predicted from that to be paying at the
 read accessors. They were.
 
-**What remains is the genuine tradeoff.** The residual losers are String
-programs — `vertical` (13 String mentions, +35%), `shortest_distance` (6, +34%),
-`alien_seq` (7, +26%), `interleave_unchecked` (+19%) — not Vec programs paying a
-tax. No further guard reaches these: they are SSO doing what SSO does, trading a
+**What remains is the genuine tradeoff** — though these per-kata figures are
+best-of-3 and do NOT survive re-measurement; see the section below, where 10 of
+the 17 turn out to be noise and the worst three are far worse than stated here.
+The residual losers are String programs — `vertical`, `shortest_distance`,
+`alien_seq` — not Vec programs paying a tax. No further guard reaches these: they are SSO doing what SSO does, trading a
 malloc for a tagged read, on workloads where the read side dominates. The one
 String-free straggler is `row_buffers` (+29%), which is worth a look on its own
 terms.
@@ -2073,6 +2074,67 @@ corpus 3%" but "SSO is corpus-neutral, wins ~15% on the compiler's own hot
 workload, and leaves 17 String programs measurably slower." That is a judgement
 about which programs matter, not a measurement gap — and the 17 are few enough
 to examine individually if someone wants the last word.
+
+### THE RESIDUAL, MEASURED PROPERLY: 7 not 17, and the mechanism is promote-on-mutation
+
+The corpus sweep runs best-of-3, and its per-kata rows do not survive contact
+with a careful measurement — the aggregate does, because noise averages out over
+321 katas, but individual rows do not. Re-running all 17 claimed regressions at
+best-of-15 interleaved:
+
+| kata | sweep N=3 | N=15 | |
+|---|---|---|---|
+| `vertical` | +36% | **+86%** | real |
+| `shortest_distance` | +34% | **+69%** | real |
+| `shortest_distance_iii` | +14% | **+37%** | real |
+| `word_ladder` | +12% | +12% | real |
+| `alien` / `alien_seq` | +19/26% | +11/11% | real |
+| `atoi` | +8% | +5% | real |
+| **10 others** | 5–29% | −4%..+4% | **noise** |
+
+**The noise cut BOTH ways**, which is the part worth internalising: 10 of 17
+evaporated (`row_buffers` +29% → +3%, `interleave_unchecked` +19% → +1%) while
+the worst three got substantially WORSE (+36% → +86%). A best-of-3 sweep is not
+a conservative estimate of a per-kata delta; it is an unbiased-but-wide one, and
+reading its tails as a cost list is wrong in both directions.
+
+`row_buffers` deserves its own line because it was chased as an anomaly — a
+String-free program still regressing after both guards. It is not a regression.
+Its IR carries two move-out disarms and a `for c in pattern.chars()` loop running
+~11k times against 200M char-ops; there was never a mechanism for a 29% cost. A
+predicted cause (an index-expression receiver `rows[cur].push(…)` defeating the
+guard) was refuted first by a minimal `Vec[Vec[i64]]` repro that emits no tag
+work at all.
+
+**What the 7 survivors have in common.** `vertical`'s IR at `KARAC_SSO=1` adds 63
+inline compares, and the dominant prefix is **`recv.mut` — 96 de-inline probes**,
+not reads. The kata builds Strings character by character (`out.push(c)` in
+`prefix_string`). Isolated:
+
+```
+char-by-char String builder, 4M calls
+  build(20)   SSO=0  31ms   SSO=1  41ms   +32.3%
+  build(60)   SSO=0  48ms   SSO=1  67ms   +39.6%
+```
+
+**`build(60)` can never be inline** — 60 bytes is past the 23-byte capacity, so
+the string is heap from its first growth — and it still regresses 40%. So the
+cost is not the promotion. It is the de-inline PROBE, emitted on every mutating
+method call and doing nothing on every one of them.
+
+**This is the price of a documented simplification, measured for the first
+time.** The campaign chose "MUTATION PROMOTES rather than going tag-aware"
+deliberately, and it is what makes the mutating surface correct without every
+`push_str` read becoming tag-aware. What it costs was never measured: 32–40% on
+String building, and it is the whole of the remaining corpus regression.
+
+**The alternative is the thing SSO is supposed to do.** Appending INTO the inline
+buffer while the bytes still fit is the classic small-string win — no malloc at
+all for a short built string — where promote-on-mutation instead pays the tag
+check and then throws the inline representation away. That is a design slice, not
+a guard: it makes `push`/`push_str` tag-aware on the write side rather than
+promoting. Filed as its own ledger row rather than carried here, because it
+outlives this spike.
 
 ## Verification matrix
 
