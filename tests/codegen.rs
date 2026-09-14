@@ -33989,12 +33989,14 @@ fn main() {
     /// payload fell past the array arm to the struct arm, whose head lookup
     /// answers `None` for `Vec`, and no walker was emitted at all.
     ///
-    /// THE ARM IS SCOPED TO THE DISCARD POSITION and the `Array` cell below is
-    /// here to keep that honest. A bound `Option[Vec[D]]`, a consuming `match`
-    /// arm and a plain move run no bodies on EITHER backend — an agreed gap with
-    /// its own row — and turning the arm on for the shared emitter converted all
-    /// three into divergences. Only the discard position has the interpreter
-    /// half already written, so only it takes the arm.
+    /// THE ARM WAS SCOPED TO THE DISCARD POSITION when this landed, because a
+    /// bound `Option[Vec[D]]`, a consuming `match` arm and a plain move ran no
+    /// bodies on EITHER backend — an agreed gap — and turning the arm on for the
+    /// shared emitter converted all three into divergences. B-2026-09-14-2 wrote
+    /// the interpreter half those positions needed and lifted the scoping, so
+    /// every caller now takes the arm; the cells here are unchanged by that,
+    /// which is the point of keeping them. `e2e_optres_vec_payload_runs_element_
+    /// bodies_outside_the_discard` is the lift's own fixture.
     #[test]
     fn e2e_discarded_optres_vec_payload_runs_element_bodies() {
         const HDR: &str = "struct D { a: String, b: i64 }\n\
@@ -34052,6 +34054,139 @@ fn main() {
             ),
         ] {
             let src = format!("{HDR}fn main() {{\nlet n = 0;\n{body}\nprintln(\"mid\");\n}}\n");
+            let (interp_out, interp_errs, _, _) = karac::run_program_full(&src);
+            assert!(
+                interp_errs.is_empty(),
+                "[{label}] interp errored: {interp_errs:?}"
+            );
+            assert_eq!(interp_out.join(""), want, "[{label}] interpreter");
+            if let Some(aot) = run_program(&src) {
+                assert_eq!(aot, want, "[{label}] AOT");
+            }
+        }
+    }
+
+    /// B-2026-09-14-2 (gate-lift half) — an `Option`/`Result` whose payload is a
+    /// `Vec` runs its elements' `Drop` bodies OUTSIDE the discard position too:
+    /// a bound envelope, a plain move, a consuming `match` / `if let` arm, and
+    /// `Result`'s `Ok` arm. Each cell is paired with its `Array[E, N]` twin,
+    /// which was already correct and defines the target.
+    ///
+    /// These were an AGREED gap — both backends silent — until this landed, so
+    /// no A/B gate reported them, and B-2026-09-13-29 deliberately scoped its
+    /// `Vec` arm to the discard rather than trade three agreed gaps for three
+    /// run-vs-build divergences. The lift is the interpreter half catching up:
+    /// `array_payload_elem_te` resolves `Vec[E]` as well as `Array[E, N]`, and
+    /// the payload walk recurses into a nested container element.
+    ///
+    /// TWO THINGS MOVED WITH THE LIFT, both measured and both pinned below. The
+    /// arm-binding registration had to DECLINE a `Vec` payload — the envelope
+    /// still holds the handle after the arm copies it, so both walks reach one
+    /// buffer and every element ran twice (`d1 d2 d1 d2`) — and the `let _ = o;`
+    /// hook B-2026-09-13-29 added for a BINDING had to go, for the same reason
+    /// one level up: its safety argument was that the binding's own walker
+    /// skipped every `Vec` arm, which the lift makes false.
+    ///
+    /// A NESTED FIXED ARRAY (`Option[Array[Array[D, 1], 2]]`) stays silent on
+    /// both backends and its cell pins that. It is codegen's own one-level
+    /// horizon, not this family's: `emit_array_elem_user_drop_bodies_fn` admits
+    /// an element on `elem_te_runs_user_drop`, which reads the head name
+    /// `Array`, so no walker exists at any nesting — a bare
+    /// `let v: Array[Array[D, 1], 2] = ..;` with no envelope in sight diverges
+    /// identically. Its own row. `Array[Vec[D], N]` is NOT that shape and is
+    /// correct here.
+    #[test]
+    fn e2e_optres_vec_payload_runs_element_bodies_outside_the_discard() {
+        const HDR: &str = "struct D { a: String, b: i64 }\n\
+                           impl Drop for D { fn drop(mut ref self) { println(f\"dD{self.b}\") } }\n\
+                           fn pay() -> String { return \"heap\"; }\n\
+                           fn mkd(n: i64) -> D { return D { a: pay(), b: n }; }\n";
+        for (label, body, want) in [
+            (
+                "bound Option[Vec[D]]",
+                "let o: Option[Vec[D]] = Option.Some([mkd(1), mkd(2)]);",
+                "dD1\ndD2\nmid\n",
+            ),
+            (
+                "twin: bound Option[Array[D, 2]]",
+                "let o: Option[Array[D, 2]] = Option.Some([mkd(1), mkd(2)]);",
+                "dD1\ndD2\nmid\n",
+            ),
+            (
+                "plain move of a Vec payload",
+                "let o: Option[Vec[D]] = Option.Some([mkd(1)]);\nlet w = o;",
+                "dD1\nmid\n",
+            ),
+            (
+                "twin: plain move of an Array payload",
+                "let o: Option[Array[D, 1]] = Option.Some([mkd(1)]);\nlet w = o;",
+                "dD1\nmid\n",
+            ),
+            (
+                "bound Result[Vec[D], i64] Ok",
+                "let o: Result[Vec[D], i64] = Result.Ok([mkd(1), mkd(2)]);",
+                "dD1\ndD2\nmid\n",
+            ),
+            (
+                "consuming match arm, Vec payload",
+                "let o: Option[Vec[D]] = Option.Some([mkd(1), mkd(2)]);\n                 match o { Option.Some(v) => { println(f\"n={v.len()}\"); } Option.None => { println(\"none\"); } }",
+                "n=2\ndD1\ndD2\nmid\n",
+            ),
+            (
+                "if let, Vec payload",
+                "let o: Option[Vec[D]] = Option.Some([mkd(1), mkd(2)]);\n                 if let Option.Some(v) = o { println(f\"n={v.len()}\"); }",
+                "n=2\ndD1\ndD2\nmid\n",
+            ),
+            (
+                "nested Vec payload, bound",
+                "let o: Option[Vec[Vec[D]]] = Option.Some([[mkd(1)], [mkd(2)]]);",
+                "dD1\ndD2\nmid\n",
+            ),
+            (
+                "Array of Vec payload, bound",
+                "let o: Option[Array[Vec[D], 2]] = Option.Some([[mkd(1)], [mkd(2)]]);",
+                "dD1\ndD2\nmid\n",
+            ),
+            // The two things that moved with the lift. A double here is the
+            // regression each guards against.
+            (
+                "the discard keeps exactly one round",
+                "let o: Option[Vec[D]] = Option.Some([mkd(1), mkd(2)]);\nlet _ = o;",
+                "dD1\ndD2\nmid\n",
+            ),
+            (
+                "a mixed Result[Vec[D], D] runs the live arm once",
+                "let o: Result[Vec[D], D] = Result.Ok([mkd(1), mkd(2)]);",
+                "dD1\ndD2\nmid\n",
+            ),
+            (
+                "the mixed envelope's Err arm is unaffected",
+                "let o: Result[Vec[D], D] = Result.Err(mkd(9));",
+                "dD9\nmid\n",
+            ),
+            // Controls.
+            (
+                "control: a nested FIXED array stays silent (codegen's horizon)",
+                "let o: Option[Array[Array[D, 1], 2]] = Option.Some([[mkd(1)], [mkd(2)]]);",
+                "mid\n",
+            ),
+            (
+                "control: a Vec of non-Drop elements",
+                "let o: Option[Vec[i64]] = Option.Some([1, 2]);",
+                "mid\n",
+            ),
+            (
+                "control: None runs nothing",
+                "let o: Option[Vec[D]] = Option.None;",
+                "mid\n",
+            ),
+            (
+                "control: a scalar payload is unchanged",
+                "let o: Option[D] = Option.Some(mkd(1));",
+                "dD1\nmid\n",
+            ),
+        ] {
+            let src = format!("{HDR}fn main() {{\n{body}\nprintln(\"mid\");\n}}\n");
             let (interp_out, interp_errs, _, _) = karac::run_program_full(&src);
             assert!(
                 interp_errs.is_empty(),

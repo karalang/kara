@@ -7487,8 +7487,20 @@ impl<'a> super::Interpreter<'a> {
         // `type_expr_runs_user_drop` about the array itself reads the head name
         // `Array`, which is not a declared struct or enum, so the whole
         // registration declined and the walk below was never reached.
+        //
+        // B-2026-09-14-2 — RECURSIVE, not a `type_expr_runs_user_drop` call, so
+        // the gate reaches a NESTED container exactly as far as the walk does.
+        // That is this predicate's whole contract, stated in the doc above: with
+        // the flat call, `Option[Vec[Vec[D]]]` asked
+        // `type_expr_runs_user_drop("Vec[D]")`, got `false` from the head name
+        // `Vec`, and declined to arm a walk that would have handled the shape —
+        // the same one-level horizon the envelope leg below was written to close.
         if let Some(elem_te) = Self::array_payload_elem_te(pt) {
-            return self.type_expr_runs_user_drop(&elem_te);
+            if Self::is_fixed_array_te(&elem_te) {
+                // Codegen's horizon — see the walk's matching note.
+                return false;
+            }
+            return self.optres_payload_te_runs_user_drop(&elem_te);
         }
         if let TypeKind::Path(p) = &pt.kind {
             if matches!(
@@ -7506,17 +7518,43 @@ impl<'a> super::Interpreter<'a> {
         self.type_expr_runs_user_drop(pt)
     }
 
-    /// The ELEMENT `TypeExpr` of a fixed `Array[T, N]` payload, in either
-    /// spelling the parser produces (B-2026-09-10-27): the dedicated
+    /// The ELEMENT `TypeExpr` of a CONTAINER payload: a fixed `Array[T, N]` in
+    /// either spelling the parser produces (B-2026-09-10-27) -- the dedicated
     /// `TypeKind::Array` node and the `Array[T, N]` PATH form that Kara's `[]`
-    /// generic syntax yields. `Vec[T]` is deliberately NOT accepted -- a `Vec`
-    /// payload's bodies are a separate open question (B-2026-09-10-20), and
-    /// admitting it here would make codegen print for a shape this walk cannot
-    /// reach on the compiled side either.
+    /// generic syntax yields -- or a `Vec[T]` handle.
+    ///
+    /// B-2026-09-14-2 -- `Vec[T]` used to be deliberately REFUSED here, on the
+    /// premise that the compiled side could not reach the shape either: the
+    /// envelope's payload walker carried no `Vec` arm, so admitting it would
+    /// have made `--interp` print where no compiled backend did. That premise
+    /// expired when B-2026-09-13-29 wrote the `Vec` arm and this commit lifted
+    /// its discard-only gate, so the two sides now reach the same shape and
+    /// this must accept it or the divergence runs the other way. Accepting it
+    /// is the whole interpreter half: the `Value::Array` walk below already
+    /// handled a `Vec` payload's elements correctly -- both container kinds are
+    /// one runtime value -- and simply never got a type, so it returned before
+    /// touching the value.
+    /// Is `te` a FIXED `Array[T, N]` (either spelling), as opposed to a `Vec[T]`
+    /// handle? Read only to stop a NESTED array element short of a walk codegen
+    /// cannot emit — see the two call sites for why that horizon is codegen's
+    /// and not a decision taken here.
+    fn is_fixed_array_te(te: &TypeExpr) -> bool {
+        match &te.kind {
+            TypeKind::Array { .. } => true,
+            TypeKind::Path(p) => p.segments.last().map(String::as_str) == Some("Array"),
+            _ => false,
+        }
+    }
+
     fn array_payload_elem_te(te: &TypeExpr) -> Option<TypeExpr> {
         match &te.kind {
             TypeKind::Array { element, .. } => Some((**element).clone()),
-            TypeKind::Path(p) if p.segments.last().map(String::as_str) == Some("Array") => {
+            TypeKind::Path(p)
+                if matches!(
+                    p.segments.last().map(String::as_str),
+                    Some("Array") | Some("Vec")
+                ) =>
+            {
                 match p.generic_args.as_ref()?.first()? {
                     crate::ast::GenericArg::Type(t) => Some(t.clone()),
                     _ => None,
@@ -7695,10 +7733,44 @@ impl<'a> super::Interpreter<'a> {
             let Some(elem_te) = Self::array_payload_elem_te(payload_te) else {
                 return;
             };
+            let items: Vec<Value> = cell.read().unwrap().clone();
+            // B-2026-09-14-2 -- a NESTED container element (`Option[Vec[Vec[D]]]`),
+            // ahead of the declared-head gate below rather than inside the loop.
+            // That gate is why an earlier attempt to route the nested element
+            // back through this walk never fired: `declared_field_type_head`
+            // answers `Some("Vec")` for the inner container, which passes the
+            // gate, and then every element fails the `Value::Struct` bind and is
+            // skipped -- so a leg placed inside the loop looked reachable and
+            // ran on nothing. Recursing on the ELEMENT's declared type re-enters
+            // this same arm one level down and terminates on the type's nesting
+            // depth, exactly as the envelope arm above does.
+            //
+            // The compiled twin is `emit_nested_vec_elem_bodies_fn`, which the
+            // `Vec` payload arm dispatches to for a non-struct element; without
+            // this leg that fallback printed compiled-only for the shape.
+            //
+            // NOT a fixed `Array` element, which is codegen's horizon rather
+            // than a choice made here: `emit_array_elem_user_drop_bodies_fn`
+            // admits an element on `elem_te_runs_user_drop`, which reads the
+            // head name `Array` and answers false, so no walker is emitted at
+            // any nesting. That horizon is not about envelopes at all — a bare
+            // `let v: Array[Array[D, 1], 2] = ..;` with no `Option` in sight is
+            // silent compiled and printing under `--interp` — so recursing here
+            // for that shape would convert an agreed gap into a fresh
+            // run-vs-build divergence rather than fix anything. `Array[Vec[D], N]`
+            // is NOT that shape: codegen reaches its `Vec` element through
+            // `emit_slot_drop_bodies_at`, so it recurses and agrees.
+            if Self::array_payload_elem_te(&elem_te)
+                .is_some_and(|_| !Self::is_fixed_array_te(&elem_te))
+            {
+                for elem in items.iter() {
+                    self.run_optres_payload_bodies_for(&elem_te, elem);
+                }
+                return;
+            }
             let Some(head) = Self::declared_field_type_head(&elem_te) else {
                 return;
             };
-            let items: Vec<Value> = cell.read().unwrap().clone();
             for elem in items.iter() {
                 let Value::Struct { name: en, .. } = elem else {
                     continue;

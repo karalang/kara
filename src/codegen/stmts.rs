@@ -4397,54 +4397,6 @@ impl<'ctx> super::Codegen<'ctx> {
             // inside a one-shot frame, plus the tuple-element bodies walk
             // the memory-only tuple drop lacks. Gated to all-fresh
             // element/field exprs — see `discarded_owned_literal_tail`.
-            // B-2026-09-13-29 — `let _ = o;` where `o` is a BINDING holding an
-            // `Option`/`Result` whose payload is a `Vec` of Drop-bearing
-            // elements. The interpreter's discard walk runs those bodies; the
-            // binding's own payload walker is emitted without the `Vec` arm
-            // (that arm is scoped to the discard position, see
-            // `emit_optres_payload_user_drop_bodies_fn_ex`), so the compiled
-            // backends ran none and this is the spelling the row was filed
-            // against.
-            //
-            // Registered on the discard frame with a walker that DOES carry the
-            // arm. It cannot double against the binding's own action, and the
-            // gate is what guarantees that rather than an argument: the walker
-            // is only registered when EVERY Drop-bearing arm of the envelope is
-            // a `Vec` payload, so every arm it runs is one the binding's
-            // vec-less walker skips. A mixed `Result[Vec[D], D]` is declined
-            // here and keeps today's behaviour.
-            StmtKind::Let { pattern, value, .. }
-                if matches!(&pattern.kind, PatternKind::Wildcard)
-                    && matches!(&value.kind, ExprKind::Identifier(_))
-                    && self.discarded_ident_optres_vec_payload_te(value).is_some() =>
-            {
-                let te = self
-                    .discarded_ident_optres_vec_payload_te(value)
-                    .expect("guard guarantees the envelope type");
-                let val = self.compile_expr(value)?;
-                if let Some(bodies) = self.emit_optres_payload_user_drop_bodies_fn_ex(&te, true) {
-                    if let Some(cur_fn) = self
-                        .builder
-                        .get_insert_block()
-                        .and_then(|bb| bb.get_parent())
-                    {
-                        let slot =
-                            self.create_entry_alloca(cur_fn, "__disc_optres_v_tmp", val.get_type());
-                        self.builder.build_store(slot, val).unwrap();
-                        // CALLED here, not registered as a cleanup action.
-                        // design.md § Temporary Lifetime Rules puts a
-                        // statement-position discard's drop "At the `;`", and
-                        // the interpreter fires this walk at the discard
-                        // statement. Registering it on the enclosing frame
-                        // instead deferred the bodies to function exit —
-                        // measured `mid end dD1 dD2` against the interpreter's
-                        // `dD1 dD2 mid end`, which is a divergence in ORDER
-                        // rather than in count and just as much an A/B failure.
-                        self.builder.build_call(bodies, &[slot.into()], "").unwrap();
-                    }
-                }
-                Ok(())
-            }
             StmtKind::Let { pattern, value, .. }
                 if matches!(&pattern.kind, PatternKind::Wildcard)
                     && self.discarded_movable_literal_tail(value).is_some() =>
@@ -22823,58 +22775,6 @@ impl<'ctx> super::Codegen<'ctx> {
     /// span, so the table misses it — from the Map receiver's value te for
     /// `insert`/`remove` (the same fallback
     /// `try_track_discarded_shared_option` uses). Borrow producers are
-    /// B-2026-09-13-29 — the envelope type of `let _ = <ident>;` when that
-    /// binding holds an `Option`/`Result` EVERY Drop-bearing arm of which is a
-    /// `Vec` payload.
-    ///
-    /// The all-arms condition is the safety property, not a convenience: the
-    /// binding's own payload walker is emitted WITHOUT the `Vec` arm, so a
-    /// vec-only envelope's walker and the binding's walker run disjoint arms and
-    /// cannot double. A mixed envelope (`Result[Vec[D], D]`) would share the `D`
-    /// arm with the binding's walker and run that body twice, so it is declined.
-    fn discarded_ident_optres_vec_payload_te(&self, value: &Expr) -> Option<TypeExpr> {
-        let ExprKind::Identifier(name) = &value.kind else {
-            return None;
-        };
-        // The binding's own envelope type. `enum_inst_var_types` is the table
-        // the Option/Result binding paths record an instantiation in;
-        // `var_elem_type_exprs` holds an ELEMENT type and answered `None` here,
-        // which is why the first attempt at this hook never fired.
-        let te = self
-            .type_decls
-            .enum_inst_var_types
-            .get(name.as_str())
-            .cloned()
-            .or_else(|| {
-                self.var_types
-                    .var_elem_type_exprs
-                    .get(name.as_str())
-                    .cloned()
-            })?;
-        let TypeKind::Path(p) = &te.kind else {
-            return None;
-        };
-        let head = p.segments.last()?.as_str();
-        if head != "Option" && head != "Result" {
-            return None;
-        }
-        let args = p.generic_args.as_ref()?;
-        let mut saw_vec = false;
-        for a in args {
-            let crate::ast::GenericArg::Type(pt) = a else {
-                return None;
-            };
-            if self.payload_vec_bodies_parts(pt).is_some() {
-                saw_vec = true;
-            } else if self.elem_te_runs_user_drop(pt) {
-                // A Drop-bearing arm that is NOT a `Vec` — the binding's own
-                // walker already runs it, so registering here would double it.
-                return None;
-            }
-        }
-        saw_vec.then_some(te)
-    }
-
     /// excluded exactly as the memory side excludes them.
     pub(super) fn track_discarded_optres_payload_bodies(
         &mut self,
@@ -22912,12 +22812,10 @@ impl<'ctx> super::Codegen<'ctx> {
         let Some(te) = te else {
             return;
         };
-        // B-2026-09-13-29 — the DISCARD position, and the only one that may take
-        // the `Vec`-payload arm: it is the one whose interpreter half is already
-        // written (B-2026-09-10-27). See
-        // `emit_optres_payload_user_drop_bodies_fn_ex` for the measurement that
-        // fixes the scope.
-        let Some(bodies) = self.emit_optres_payload_user_drop_bodies_fn_ex(&te, true) else {
+        // B-2026-09-13-29 gave the DISCARD position the `Vec`-payload arm ahead
+        // of every other; B-2026-09-14-2 wrote the interpreter half the rest
+        // needed and lifted the scoping, so this is now the ordinary emitter.
+        let Some(bodies) = self.emit_optres_payload_user_drop_bodies_fn(&te) else {
             return;
         };
         let Some(cur_fn) = self

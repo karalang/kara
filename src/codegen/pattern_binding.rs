@@ -2807,14 +2807,19 @@ impl<'ctx> super::Codegen<'ctx> {
         {
             return;
         }
-        // BOTH container kinds, while the envelope's payload walker carries no
-        // `Vec` arm outside the discard position (B-2026-09-13-29's gate). If
-        // that gate is ever lifted, a `Vec` payload becomes the ENVELOPE's —
-        // its handle stays reachable from the envelope after the arm copies it,
-        // so the walk finds the same buffer and registering here as well runs
-        // every element twice (measured `d1 d2 d1 d2`). An `Array` payload is
-        // moved out of the envelope's area and stays this registration's
-        // regardless.
+        // ARRAY ONLY, which is the `len.is_some()` test: B-2026-09-14-2 lifted
+        // B-2026-09-13-29's discard-only gate, so the envelope's payload walker
+        // now carries a `Vec` arm at every position. A `Vec` payload is a
+        // HANDLE the envelope still holds after the arm copies it, so that walk
+        // and this registration reach the SAME buffer and every element runs
+        // twice — measured `d1 d2 d1 d2`. An `Array` payload is moved out of the
+        // envelope's area, leaving nothing for the envelope's walk to find, so
+        // it stays this registration's either way. That asymmetry is the whole
+        // reason this predicate is the container kind here and the scrutinee's
+        // position everywhere else in this function.
+        if len.is_none() {
+            return;
+        }
         if !self.elem_te_runs_user_drop(elem_te) {
             return;
         }
@@ -2824,36 +2829,9 @@ impl<'ctx> super::Codegen<'ctx> {
         let elem_ty = self.llvm_type_for_type_expr(elem_te);
         let bodies = match len {
             Some(n) if n > 0 => self.emit_array_elem_user_drop_bodies_fn(elem_ty, elem_te, n),
-            Some(_) => None,
-            None => {
-                // Same element admission the bound-`Vec` registration uses, so a
-                // payload binding and a plain local resolve one walker.
-                let elem_name = match &elem_te.kind {
-                    TypeKind::Path(ep) => ep
-                        .segments
-                        .first()
-                        .filter(|n| {
-                            let n = n.as_str();
-                            self.type_decls.struct_types.contains_key(n)
-                                || (n != "Option"
-                                    && n != "Result"
-                                    && self
-                                        .type_decls
-                                        .enum_layouts
-                                        .get(n)
-                                        .is_some_and(|l| !l.is_shared))
-                        })
-                        .cloned(),
-                    _ => None,
-                };
-                match elem_name {
-                    Some(en) => {
-                        let subst = self.generic_struct_subst_from_inst(&en, elem_te);
-                        self.emit_vec_elem_user_drop_bodies_fn_mono(&en, elem_ty, &subst)
-                    }
-                    None => None,
-                }
-            }
+            // A zero-length array has no element to run, and `None` is the
+            // `Vec` case the guard above already turned away.
+            _ => None,
         };
         let Some(bodies) = bodies else {
             return;

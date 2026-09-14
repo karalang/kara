@@ -9914,31 +9914,34 @@ impl<'ctx> super::Codegen<'ctx> {
         &mut self,
         te: &TypeExpr,
     ) -> Option<FunctionValue<'ctx>> {
-        self.emit_optres_payload_user_drop_bodies_fn_ex(te, false)
+        self.emit_optres_payload_user_drop_bodies_fn_ex(te, true)
     }
 
     /// B-2026-09-13-29 — [`Self::emit_optres_payload_user_drop_bodies_fn`] with
-    /// the `Vec`-payload arm switched ON, for the DISCARD registrar alone.
+    /// the `Vec`-payload arm switched explicitly ON.
     ///
-    /// SCOPED, and the scoping is the whole design of this fix rather than
-    /// caution. Measured on a clean tree, a `Vec` payload runs no element bodies
-    /// anywhere in three positions — a BOUND `Option[Vec[D]]`, a consuming
-    /// `match` arm, and a plain move (`let w = o;`) — and both backends are
-    /// silent together, so those are an agreed gap, not a divergence. Turning
-    /// the arm on for the shared emitter gave the compiled backends bodies in
-    /// all three while the interpreter stayed silent, converting three AGREED
-    /// bugs into three run-vs-build DIVERGENCES. That is the exact trade
-    /// B-2026-09-12-6 refused when it deferred the seeded pair, and it is
-    /// strictly worse under the A/B rule.
+    /// THE FLAG IS NOW `true` AT EVERY CALL SITE and is kept only so the
+    /// history below stays attached to the thing it is about. B-2026-09-13-29
+    /// scoped the arm to the DISCARD registrar, because turning it on for the
+    /// shared emitter gave the compiled backends a `Vec` payload's element
+    /// bodies in three further positions — a BOUND `Option[Vec[D]]`, a
+    /// consuming `match` arm and a plain move (`let w = o;`) — while the
+    /// interpreter stayed silent, converting three AGREED both-silent bugs into
+    /// three run-vs-build DIVERGENCES. That is the exact trade B-2026-09-12-6
+    /// refused, and it is strictly worse under the A/B rule.
     ///
-    /// Only the DISCARD position has an interpreter half already written
-    /// (B-2026-09-10-27's array walk in `run_enum_payload_user_drops_value`), so
-    /// only the discard position may take the arm. The other three keep today's
-    /// both-silent behaviour and are their own row.
+    /// B-2026-09-14-2 wrote the missing interpreter half — `array_payload_elem_te`
+    /// now resolves `Vec[E]` as well as `Array[E, N]`, and the payload walk
+    /// recurses into a nested container element — so the reason for the scoping
+    /// is gone and every caller takes the arm. Two things had to move with the
+    /// lift, both measured: the arm-binding registration must DECLINE a `Vec`
+    /// payload (the envelope still holds the handle after the arm copies it, so
+    /// both walks reach one buffer — `d1 d2 d1 d2`), and the interpreter's bound
+    /// walk must recurse for `Option[Vec[Vec[D]]]`, which codegen reaches via
+    /// `emit_nested_vec_elem_bodies_fn`.
     ///
-    /// The flag is folded into the symbol NAME, so the two variants cannot
-    /// collide in the module cache and a discard site can never be handed the
-    /// bound site's walker.
+    /// The flag stays folded into the symbol NAME so a module built before this
+    /// lift and one built after cannot collide in the cache.
     pub(super) fn emit_optres_payload_user_drop_bodies_fn_ex(
         &mut self,
         te: &TypeExpr,
