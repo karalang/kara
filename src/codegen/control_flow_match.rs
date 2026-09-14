@@ -296,12 +296,31 @@ impl<'ctx> super::Codegen<'ctx> {
         } else {
             None
         };
+        // B-2026-09-13-18 — the `Option` peer of the tracker above, which the
+        // preamble never had. Gated against `freshtemp_boxed_slot` as well as
+        // the enum path: a boxed payload already has an owner there, and the
+        // two must not both claim it. The `Result` tracker cannot have answered
+        // for the same value (one temp is not both), so the ordering here is
+        // for legibility rather than disambiguation.
+        let freshtemp_inline_opt = if scrut_ref_ptr.is_none()
+            && freshtemp_enum.is_none()
+            && freshtemp_boxed_slot.is_none()
+            && freshtemp_inline_res.is_none()
+        {
+            self.track_freshtemp_inline_option_scrutinee(scrutinee, scrut)
+        } else {
+            None
+        };
         // Fresh-temp Option[shared] scrutinee — release the temp's
         // transferred ref (B-2026-07-15-1; see the tracker's doc).
         // B-2026-08-30-16 — the box this match must release at its OWN exit,
         // not at the enclosing scope's.
         let mut freshtemp_shared_enum: Option<PointerValue<'ctx>> = None;
-        if scrut_ref_ptr.is_none() && freshtemp_enum.is_none() && freshtemp_inline_res.is_none() {
+        if scrut_ref_ptr.is_none()
+            && freshtemp_enum.is_none()
+            && freshtemp_inline_res.is_none()
+            && freshtemp_inline_opt.is_none()
+        {
             let pats: Vec<&Pattern> = arms.iter().map(|a| &a.pattern).collect();
             self.track_freshtemp_shared_option_scrutinee(scrutinee, &pats, scrut);
             // B-2026-08-28-74 — the bare `shared` enum sibling of the line
@@ -1045,6 +1064,16 @@ impl<'ctx> super::Codegen<'ctx> {
                         {
                             self.suppress_inline_result_payload_cleanup_at(slot, &arm.pattern);
                         }
+                    }
+                    // B-2026-09-13-18 — the `Option` half of the pairing above.
+                    // Simpler than the `Result` one because there is no
+                    // struct-wrapper borrow exception to weigh: the disarm
+                    // itself declines on the source-retains classification and
+                    // on a non-consuming pattern, which is the whole of the
+                    // question for an inline `Option` payload. Registration and
+                    // disarm sit in the same file, one arm apart, deliberately.
+                    if let Some(slot) = freshtemp_inline_opt {
+                        self.suppress_inline_option_payload_cleanup_at(slot, &arm.pattern);
                     }
                     self.suppress_inline_option_map_payload_cleanup(scrutinee, &arm.pattern);
                     // B-2026-07-03-31: skip disarming the source payload drop
@@ -16090,6 +16119,130 @@ impl<'ctx> super::Codegen<'ctx> {
                 some_tag,
             });
         }
+    }
+
+    /// B-2026-09-13-18 — the `Option` sibling of
+    /// [`Self::track_freshtemp_inline_result_scrutinee`], and the last spelling
+    /// of that row: `match mk(j) { Some(a) => .. }` over
+    /// `fn mk(..) -> Option[Array[String, 1]]`, with no binding in between,
+    /// leaked its payload under a CONSUMING arm and under a WILDCARD arm alike
+    /// — so it was never a delivery problem, it was that nothing claimed the
+    /// scrutinee temp at all. The preamble had `track_freshtemp_boxed_enum_
+    /// scrutinee` for a boxed payload, this function's `Result` twin, and
+    /// `track_freshtemp_shared_option_scrutinee` for `Option[shared]`, and no
+    /// peer for a plain inline `Option`. The `let`-bound spelling one line away
+    /// (`let o = mk(j); match o { .. }`) was already clean, through
+    /// `track_inline_option_payload_var`.
+    ///
+    /// THE EXCLUSIONS ARE THE WHOLE DESIGN, and each one is a measured
+    /// double-free on some sibling:
+    ///
+    /// * a BORROW-returning scrutinee (`Map.get`) aliases the container's
+    ///   storage, so freeing here corrupts it;
+    /// * a PASSTHROUGH call is a fresh temp only in shape — the callee handed
+    ///   its argument back and the named source stays armed (B-2026-08-29-6);
+    /// * a BOXED payload is owned by `track_freshtemp_boxed_enum_scrutinee`,
+    ///   and `option_inline_payload_elem` declines it (as it declines shared,
+    ///   Map/Set and scalar payloads), so the gate is the resolver's rather
+    ///   than a second predicate that could drift from it.
+    ///
+    /// The `Result` twin's own comment notes that the `Option` spelling of
+    /// B-2026-08-29-6's program was fixed "by the source-retains classification
+    /// alone, because no scrutinee registrar claims an inline `Option` temp".
+    /// That premise changes here, which is exactly why the passthrough
+    /// exclusion above is copied across rather than assumed unnecessary.
+    ///
+    /// Paired with [`Self::suppress_inline_option_payload_cleanup_at`] in the
+    /// arm loop: a consuming arm zeroes this slot's `cap` so the binding owns
+    /// the buffer instead. That pairing is not optional — B-2026-09-13-18's
+    /// own history is a registration placed one step away from its disarm
+    /// double-freeing 10 fixtures.
+    pub(super) fn track_freshtemp_inline_option_scrutinee(
+        &mut self,
+        scrutinee: &Expr,
+        val: BasicValueEnum<'ctx>,
+    ) -> Option<PointerValue<'ctx>> {
+        if !self.expr_yields_fresh_owned_temp(scrutinee) {
+            return None;
+        }
+        if self.scrutinee_is_borrow_call(scrutinee) {
+            return None;
+        }
+        if self.call_passthrough_armed_any_source(scrutinee).is_some() {
+            return None;
+        }
+        let BasicValueEnum::StructValue(sv) = val else {
+            return None;
+        };
+        let te = self.enum_inst_type_from_span(scrutinee)?;
+        let payload_elem_ty = self.option_inline_payload_elem(&te)?;
+        let payload_elem_agg_drop = self.option_payload_vec_elem_agg_drop(&te);
+        let layout = self.type_decls.enum_layouts.get("Option")?;
+        let option_ty = layout.llvm_type;
+        let some_tag = layout.tags.get("Some").copied().unwrap_or(1);
+        let fn_val = self.current_fn?;
+        let alloca = self.create_entry_alloca(fn_val, "__freshtemp_inline_opt", option_ty.into());
+        let _ = self.builder.build_store(alloca, sv);
+        if let Some(frame) = self.drop_rc.scope_cleanup_actions.last_mut() {
+            frame.push(
+                crate::codegen::state::CleanupAction::FreeInlineOptionPayload {
+                    option_slot: alloca,
+                    option_ty,
+                    some_tag,
+                    payload_elem_ty: Some(payload_elem_ty),
+                    payload_elem_agg_drop,
+                },
+            );
+        }
+        Some(alloca)
+    }
+
+    /// The slot-addressed disarm for
+    /// [`Self::track_freshtemp_inline_option_scrutinee`], and the fresh-temp
+    /// counterpart of [`Self::suppress_inline_option_payload_cleanup`] — which
+    /// cannot serve here because it resolves its slot from an
+    /// `ExprKind::Identifier` scrutinee, and a fresh temp has no name.
+    ///
+    /// Same two steps, in the same order, for the same reason: zero the
+    /// payload's `cap` word so the source stops owning the buffer, then hand
+    /// an `Array[T, N]` binding the element drop the source just gave up
+    /// (`own_disarmed_inline_array_payload`), because nothing downstream owns
+    /// an arm-bound array. Declines when the classifier proved the arms only
+    /// BORROW the payload, since then there is no owner to transfer to and
+    /// disarming would free it out from under the still-live read.
+    pub(super) fn suppress_inline_option_payload_cleanup_at(
+        &mut self,
+        option_slot: PointerValue<'ctx>,
+        pattern: &Pattern,
+    ) {
+        if self
+            .pattern_state
+            .pattern_binding_source_retains_inline_payload
+        {
+            return;
+        }
+        let PatternKind::TupleVariant { path, patterns } = &pattern.kind else {
+            return;
+        };
+        if path.last().map(|s| s.as_str()) != Some("Some") {
+            return;
+        }
+        if !patterns.iter().any(pattern_consumes_field) {
+            return;
+        }
+        let Some(layout) = self.type_decls.enum_layouts.get("Option") else {
+            return;
+        };
+        let i64_t = self.context.i64_type();
+        // cap word of the `{ptr,len,cap}` payload: tag(0) + w0(1) + w1(2) +
+        // w2/cap(3) — the same GEP the named-source disarm uses.
+        if let Ok(cap_ptr) =
+            self.builder
+                .build_struct_gep(layout.llvm_type, option_slot, 3, "optpl.ftsuppress.cap")
+        {
+            let _ = self.builder.build_store(cap_ptr, i64_t.const_int(0, false));
+        }
+        self.own_disarmed_inline_array_payload(pattern);
     }
 
     pub(super) fn track_freshtemp_inline_result_scrutinee(

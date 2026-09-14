@@ -88641,13 +88641,11 @@ fn main() {
     /// because the recursion bottoms out on a primitive. `vec`/`str` are the
     /// payload shapes that were always clean and must remain so.
     ///
-    /// NOT COVERED, and deliberately absent rather than silently passing: the
-    /// FRESH-TEMP scrutinee spelling (`match mk(j) { .. }` with no binding in
-    /// between) still leaks 88 B. There is no inline-`Option` fresh-temp
-    /// scrutinee tracker at all — only `Result`
-    /// (`track_freshtemp_inline_result_scrutinee`) and `Option[shared]` have
-    /// one — so that spelling needs a new registration with its own suppression
-    /// pairing, which is the half that double-freed when rushed.
+    /// NOT COVERED HERE, because it needed a registration this fixture's two
+    /// gaps do not reach: the FRESH-TEMP scrutinee spelling
+    /// (`match mk(j) { .. }` with no binding in between). It is fixed and has
+    /// its own fixture,
+    /// `asan_freshtemp_inline_option_scrutinee_has_exactly_one_owner` below.
     #[test]
     fn asan_inline_array_option_payload_has_exactly_one_owner() {
         assert_clean_asan_run(
@@ -88726,6 +88724,168 @@ fn main() {
                 "end",
             ],
             "asan_inline_array_option_payload_has_exactly_one_owner",
+        );
+    }
+
+    /// B-2026-09-13-18, final spelling — a FRESH-TEMP inline-`Option`
+    /// scrutinee was owned by nobody. `match mk(j) { Some(a) => .. }` over
+    /// `fn mk(..) -> Option[Array[String, 1]]`, with no binding in between,
+    /// leaked its payload; so did the `Some(_)` wildcard arm, which is what
+    /// proved it was never a delivery problem. The `let`-bound spelling one
+    /// line away (`let o = mk(j); match o { .. }`) was already clean through
+    /// `track_inline_option_payload_var`.
+    ///
+    /// THE PREAMBLE SIMPLY HAD NO PEER FOR IT. It carries
+    /// `track_freshtemp_boxed_enum_scrutinee` for a boxed payload,
+    /// `track_freshtemp_inline_result_scrutinee` for `Result`, and
+    /// `track_freshtemp_shared_option_scrutinee` for `Option[shared]` — and
+    /// nothing for a plain inline `Option`. The `Result` tracker's own comment
+    /// even records the consequence, that B-2026-08-29-6's `Option` spelling
+    /// was fixed "by the source-retains classification alone, because no
+    /// scrutinee registrar claims an inline `Option` temp". Adding one changes
+    /// that premise, which is why the new tracker copies that comment's
+    /// passthrough exclusion rather than assuming it unnecessary — `pass` below
+    /// is its cell.
+    ///
+    /// IT WAS NOT ARRAY-ONLY, which the two bonus cells pin. `str` and `vec`
+    /// are `Option[String]` and `Option[Vec[String]]` fresh temps, and their
+    /// WILDCARD arms leaked on the pre-fix compiler too (51 B / 3 blocks and
+    /// 288 B + 51 indirect over three rounds) — the bound arms were clean
+    /// because `track_vec_var` owns the binding. So the hole was every inline
+    /// payload shape under a non-consuming arm, not the array shape the row
+    /// was filed on.
+    ///
+    /// THE DISARM IS PAIRED WITH THE REGISTRATION, in the arm loop, for the
+    /// reason the sibling fixture above records at length: a registration
+    /// placed one step from its disarm double-freed 10 fixtures. The fresh-temp
+    /// disarm needs its own entry point because the named-source one resolves
+    /// its slot from an `ExprKind::Identifier` scrutinee, and a temp has no
+    /// name.
+    ///
+    /// CELLS THAT MUST NOT DOUBLE-FREE, each a channel this registration could
+    /// have collided with, and all clean before AND after: `pass` (a
+    /// passthrough call is a fresh temp only in shape — the named source stays
+    /// armed), `held` (the `let`-bound spelling, which already had an owner),
+    /// `wrap` (a transparent single-heap-field struct the overlay frees
+    /// through), `node` (a `shared` payload, which routes to the RC tracker),
+    /// `scalar` (an `Array[i64, 3]` with nothing to free), `str-read` (a
+    /// borrow-only arm, where disarming would free the buffer out from under
+    /// the read), and `guard-*` (a guarded arm). `Map.get` and `Vec.pop`
+    /// scrutinees are covered by the borrow and pop paths and were verified
+    /// clean in both directions outside this fixture.
+    ///
+    /// Measured whole-program at `-O0`: 486 B in 12 blocks plus 66 B indirect
+    /// in 3 before, clean after.
+    ///
+    /// STILL LEAKING AND DELIBERATELY ABSENT: `Option[Array[String, 2]]`, whose
+    /// payload is six words and therefore BOXED, loses 246 B in 9 blocks plus
+    /// 102 B indirect in 6 — identically before and after, so it belongs to the
+    /// boxed scrutinee path rather than this one, and is filed separately.
+    #[test]
+    fn asan_freshtemp_inline_option_scrutinee_has_exactly_one_owner() {
+        assert_clean_asan_run(
+            r#"
+struct Wrap { s: String }
+shared struct Node { name: String }
+
+fn mkarr(n: i64) -> Option[Array[String, 1]] {
+    if n < 0 { return None; }
+    return Some([f"arr-aaaaaaaaaaaaaaaa-{n}"]);
+}
+fn mkstr(n: i64) -> Option[String] {
+    if n < 0 { return None; }
+    return Some(f"str-bbbbbbbbbbbbbbbb-{n}");
+}
+fn mkvec(n: i64) -> Option[Vec[String]] {
+    if n < 0 { return None; }
+    let mut v: Vec[String] = Vec.new();
+    v.push(f"vec-cccccccccccccccc-{n}");
+    return Some(v);
+}
+fn mkscalar(n: i64) -> Option[Array[i64, 3]] {
+    if n < 0 { return None; }
+    return Some([n, n + 1, n + 2]);
+}
+fn mkwrap(n: i64) -> Option[Wrap] {
+    if n < 0 { return None; }
+    return Some(Wrap { s: f"wrp-dddddddddddddddd-{n}" });
+}
+fn mknode(n: i64) -> Option[Node] {
+    if n < 0 { return None; }
+    return Some(Node { name: f"nod-eeeeeeeeeeeeeeee-{n}" });
+}
+fn passthru(o: Option[String]) -> Option[String] { return o; }
+
+fn main() {
+    let mut n: i64 = 0;
+    while n < 3 {
+        match mkarr(n) { Some(a) => { println(f"arr-moved:{a[0]}"); } None => {} }
+        match mkarr(n) { Some(_) => { println("arr-wild"); } None => {} }
+        match mkstr(n) { Some(s) => { println(f"str-moved:{s}"); } None => {} }
+        match mkstr(n) { Some(_) => { println("str-wild"); } None => {} }
+        match mkstr(n) { Some(s) => { println(f"str-read:{s.len()}"); } None => {} }
+        match mkvec(n) { Some(v) => { println(f"vec-moved:{v[0]}"); } None => {} }
+        match mkvec(n) { Some(_) => { println("vec-wild"); } None => {} }
+        match mkscalar(n) { Some(a) => { println(f"scalar:{a[0]}"); } None => {} }
+        match mkwrap(n) { Some(w) => { println(f"wrap:{w.s}"); } None => {} }
+        match mknode(n) { Some(d) => { println(f"node:{d.name}"); } None => {} }
+
+        let src: Option[String] = Some(f"pas-ffffffffffffffff-{n}");
+        match passthru(src) { Some(s) => { println(f"pass:{s}"); } None => {} }
+
+        let held = mkarr(n);
+        match held { Some(a) => { println(f"held:{a[0]}"); } None => {} }
+
+        match mkstr(n) { Some(s) if n > 0 => { println(f"guard-hi:{s}"); } Some(s) => { println(f"guard-lo:{s}"); } None => {} }
+
+        n = n + 1;
+    }
+    println("end");
+}
+"#,
+            &[
+                "arr-moved:arr-aaaaaaaaaaaaaaaa-0",
+                "arr-wild",
+                "str-moved:str-bbbbbbbbbbbbbbbb-0",
+                "str-wild",
+                "str-read:22",
+                "vec-moved:vec-cccccccccccccccc-0",
+                "vec-wild",
+                "scalar:0",
+                "wrap:wrp-dddddddddddddddd-0",
+                "node:nod-eeeeeeeeeeeeeeee-0",
+                "pass:pas-ffffffffffffffff-0",
+                "held:arr-aaaaaaaaaaaaaaaa-0",
+                "guard-lo:str-bbbbbbbbbbbbbbbb-0",
+                "arr-moved:arr-aaaaaaaaaaaaaaaa-1",
+                "arr-wild",
+                "str-moved:str-bbbbbbbbbbbbbbbb-1",
+                "str-wild",
+                "str-read:22",
+                "vec-moved:vec-cccccccccccccccc-1",
+                "vec-wild",
+                "scalar:1",
+                "wrap:wrp-dddddddddddddddd-1",
+                "node:nod-eeeeeeeeeeeeeeee-1",
+                "pass:pas-ffffffffffffffff-1",
+                "held:arr-aaaaaaaaaaaaaaaa-1",
+                "guard-hi:str-bbbbbbbbbbbbbbbb-1",
+                "arr-moved:arr-aaaaaaaaaaaaaaaa-2",
+                "arr-wild",
+                "str-moved:str-bbbbbbbbbbbbbbbb-2",
+                "str-wild",
+                "str-read:22",
+                "vec-moved:vec-cccccccccccccccc-2",
+                "vec-wild",
+                "scalar:2",
+                "wrap:wrp-dddddddddddddddd-2",
+                "node:nod-eeeeeeeeeeeeeeee-2",
+                "pass:pas-ffffffffffffffff-2",
+                "held:arr-aaaaaaaaaaaaaaaa-2",
+                "guard-hi:str-bbbbbbbbbbbbbbbb-2",
+                "end",
+            ],
+            "asan_freshtemp_inline_option_scrutinee_has_exactly_one_owner",
         );
     }
 
