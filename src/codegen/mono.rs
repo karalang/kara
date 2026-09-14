@@ -2483,11 +2483,9 @@ impl<'ctx> super::Codegen<'ctx> {
         // — the LLVM-shape subst above sees only `ptr` for these (S6a).
         let handle_params = self.collect_mono_handle_params(&generic_fn, args);
         let mangled = self.append_handle_mangle(mangled, &handle_params);
-        if !handle_params.is_empty() {
-            self.mono_state
-                .mono_handle_param_infos
-                .insert(mangled.clone(), handle_params);
-        }
+        // The RECORD for `handle_params` is written further down, after the
+        // final `mangled` binding — see the note on `mono_array_param_tes`,
+        // which states the rule for both maps (B-2026-09-12-3).
         // B-2026-07-11-35 (return-owned-param leg) — disambiguate a generic
         // param bound to a builtin COLLECTION (String / Vec / VecDeque) by its
         // element-aware token. Those three all lower to the opaque
@@ -2554,6 +2552,23 @@ impl<'ctx> super::Codegen<'ctx> {
             self.mono_state
                 .mono_array_param_tes
                 .insert(mangled.clone(), array_params);
+        }
+        // B-2026-09-12-3 — the HANDLE record, moved down here from its old
+        // home three appends earlier for the reason the array note above
+        // states. It was correct only as a conjunction of three separate
+        // "this append does not apply to a Column/Tensor argument" facts,
+        // none of them written down anywhere near the write, and any future
+        // mangle axis that DID append for a handle-backed argument would have
+        // broken it silently — no verifier error, no link failure, just a
+        // prologue registration that does not happen and builtin method
+        // intercepts that do not fire.
+        //
+        // The record's CONTENT never depended on the later appends, only its
+        // KEY did, which is what makes the move mechanical and a no-op today.
+        if !handle_params.is_empty() {
+            self.mono_state
+                .mono_handle_param_infos
+                .insert(mangled.clone(), handle_params);
         }
         // Bind handle-backed-container type params (`C` bound to a Column/Tensor
         // arg) to `ptr` so a bare-`C` RETURN (`map`/`zip_with` → `Self`) or a
