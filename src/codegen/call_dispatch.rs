@@ -6479,6 +6479,7 @@ impl<'ctx> super::Codegen<'ctx> {
             val,
             arg,
             arg_escapes_frame,
+            false,
             None,
             false,
             &[],
@@ -6486,6 +6487,35 @@ impl<'ctx> super::Codegen<'ctx> {
             None,
             None,
         )
+    }
+
+    /// B-2026-09-14-21 — the DISCARD sibling of
+    /// [`Self::track_inline_owned_aggregate_arg`], for a value that is thrown
+    /// away rather than handed to a callee (`Ex.mk(i);`, a discarded arm tail,
+    /// `let _ = if c { .. } else { .. };`).
+    ///
+    /// Identical in every respect but one: it does NOT take the by-transfer
+    /// stand-down, because that stand-down's premise is a callee taking
+    /// ownership and a discarded temp has none. A separate entry point rather
+    /// than a fifth meaning for `arg_escapes_frame`, which several real
+    /// ARGUMENT sites also pass as `false`.
+    pub(super) fn track_discarded_owned_aggregate_temp(
+        &mut self,
+        val: BasicValueEnum<'ctx>,
+        arg: &Expr,
+    ) {
+        self.track_inline_owned_aggregate_arg_inst(
+            val,
+            arg,
+            false,
+            true,
+            None,
+            false,
+            &[],
+            &[],
+            None,
+            None,
+        );
     }
 
     /// [`Self::track_inline_owned_aggregate_arg`] carrying the callee's
@@ -6509,6 +6539,7 @@ impl<'ctx> super::Codegen<'ctx> {
             val,
             arg,
             arg_escapes_frame,
+            false,
             None,
             false,
             escaping_paths,
@@ -7231,6 +7262,11 @@ impl<'ctx> super::Codegen<'ctx> {
         val: BasicValueEnum<'ctx>,
         arg: &Expr,
         arg_escapes_frame: bool,
+        // B-2026-09-14-21 — true when this value is a DISCARDED temp rather
+        // than an argument to a callee. Only the transfer stand-down below
+        // reads it; see the comment there for why the two positions must
+        // answer differently.
+        discarded_temp: bool,
         mono_inst: Option<TypeExpr>,
         callee_entry_copies_mono: bool,
         escaping_paths: &[crate::ast::ParamPath],
@@ -7288,6 +7324,7 @@ impl<'ctx> super::Codegen<'ctx> {
                 val,
                 &tail,
                 arg_escapes_frame,
+                discarded_temp,
                 mono_inst,
                 callee_entry_copies_mono,
                 escaping_paths,
@@ -7667,7 +7704,31 @@ impl<'ctx> super::Codegen<'ctx> {
             // `free(): double free detected in tcache 2` at `-O0` and `-O2`,
             // valgrind reporting two frees of one 56-byte block at 9 allocs /
             // 10 frees, against `--interp`'s clean `ok`.
-            if self.enum_param_owned_by_transfer(&enum_name) {
+            // B-2026-09-14-21 — the stand-down applies to an ARGUMENT, and a
+            // discarded temp is not one.
+            //
+            // Its premise, stated above, is "the callee owns this temp
+            // outright": for an enum whose payload the entry copy declines
+            // there is no copy, the two frames share one buffer, and
+            // registering here would be a second owner. All true — of an
+            // argument. At a DISCARD there is no callee and no second owner,
+            // so the stand-down leaves the value owned by nobody.
+            //
+            // It went unnoticed because `enum_param_owned_by_transfer` was, at
+            // the time, true only for payload shapes that never reach a bare
+            // discard in the suite. B-2026-09-14-12 added `BoxedArray` to that
+            // predicate — correctly, for the by-value param it was fixing —
+            // and every discarded `Ex.mk(i);` over an enum with a boxed
+            // `Array` payload silently lost its owner: 144 B in 3 blocks plus
+            // its interior, 72 B for an `Array[i64, 3]` that owns no interior
+            // at all, and with a `Drop`-bearing element the BODIES too
+            // (`dR0 dR100` on `--interp`, nothing compiled).
+            //
+            // The same cell leaked BEFORE that change for an unrelated reason
+            // (the drop switch had no arm for the payload, so `heap_payload`
+            // was false a few lines down), which is why the symptom never moved
+            // and the mechanism did.
+            if !discarded_temp && self.enum_param_owned_by_transfer(&enum_name) {
                 return;
             }
             let has_user_drop = self

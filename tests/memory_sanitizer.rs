@@ -89291,6 +89291,108 @@ fn main() {
         );
     }
 
+    /// B-2026-09-14-21 — a DISCARDED same-type assoc-fn enum whose payload is a
+    /// heap-boxed `Array` was owned by nobody, losing its box, its interior AND
+    /// its `Drop` bodies.
+    ///
+    /// TWO CORRECT CHANGES COMBINED INTO A HOLE, which is the whole lesson and
+    /// why this fixture carries the controls for both of them.
+    /// `track_inline_owned_aggregate_arg_inst` stands down when
+    /// `enum_param_owned_by_transfer` is true (B-2026-09-07-16), on the premise
+    /// "the callee owns this temp outright" — right for an ARGUMENT, and it
+    /// really did fix a double free. B-2026-09-14-12 then added `BoxedArray` to
+    /// that predicate, right for the by-value param it was fixing. At a
+    /// DISCARD there is no callee, so the stand-down left the value unowned.
+    ///
+    /// The cell leaked the same 144 B BEFORE that second change, for an
+    /// unrelated reason (`heap_payload` was false, the switch having no arm for
+    /// the payload), so the symptom never moved while the mechanism did — which
+    /// is how the owning row came to blame the wrong function in its own
+    /// "WHERE TO LOOK".
+    ///
+    /// Measured at `-O0` under valgrind, before -> after, whole fixture:
+    /// 464 B in 10 blocks plus 336 B indirect in 16 -> clean. And the BODIES,
+    /// which no leak check can see: `main` printed `round:0 round:1 end` with
+    /// every `dR` missing; the fix prints `dR0 dR100` per round, identical
+    /// under `--interp`, `-O0` and `KARAC_AUTO_PAR=0`. That half makes the
+    /// defect a run-vs-build divergence rather than the leak it was filed as.
+    ///
+    /// Cells: `Array[String, 2]` (box + interior), `Array[i64, 3]` (a box with
+    /// NO interior — 72 B, which is what proves the box itself was unowned
+    /// rather than just its contents), `Array[R, 2]` with `impl Drop for R`
+    /// (the bodies), and the `if` / `match` branch-tail spellings, since the
+    /// bare discard is one of three positions that reach this registrar.
+    /// `Es { A(String) }` is the inline-payload control that was always clean.
+    ///
+    /// The ARGUMENT side is deliberately untouched: the stand-down still fires
+    /// for real arguments, which is why
+    /// `asan_discarded_cross_type_assoc_enum_has_exactly_one_owner` and the
+    /// `Drop`-bearing same-type cells beside it must stay green — they are what
+    /// would catch this being "fixed" by loosening the shared predicate instead
+    /// of separating the two positions.
+    #[test]
+    fn asan_discarded_boxed_array_assoc_temp_has_exactly_one_owner() {
+        assert_clean_asan_run(
+            r#"
+struct R { id: i64, s: String }
+
+impl Drop for R {
+    fn drop(mut ref self) { println(f"dR{self.id}"); }
+}
+
+enum Ea { A(Array[String, 2]), B }
+enum Eg { A(Array[i64, 3]), B }
+enum Ed { A(Array[R, 2]), B }
+enum Es { A(String), B }
+
+impl Ea {
+    fn mk(n: i64) -> Ea {
+        let p: Array[String, 2] = [f"bx-aaaaaaaaaaaaaaaa-{n}", f"bx-bbbbbbbbbbbbbbbb-{n}"];
+        return Ea.A(p);
+    }
+}
+impl Eg {
+    fn mk(n: i64) -> Eg {
+        let p: Array[i64, 3] = [n, n + 1, n + 2];
+        return Eg.A(p);
+    }
+}
+impl Ed {
+    fn mk(n: i64) -> Ed {
+        let p: Array[R, 2] = [R { id: n, s: f"dr-cccccccccccccccc-{n}" }, R { id: n + 100, s: f"dr-dddddddddddddddd-{n}" }];
+        return Ed.A(p);
+    }
+}
+impl Es {
+    fn mk(n: i64) -> Es { return Es.A(f"st-eeeeeeeeeeeeeeee-{n}"); }
+}
+
+fn main() {
+    let mut j: i64 = 0;
+    while j < 2 {
+        Ea.mk(j);
+        Eg.mk(j);
+        Ed.mk(j);
+        Es.mk(j);
+
+        let c: bool = j > 0;
+        let _ = if c { Ea.mk(j) } else { Ea.mk(j) };
+        let _ = match j {
+            0 => { Ea.mk(j) }
+            _ => { Ea.mk(j) }
+        };
+
+        println(f"round:{j}");
+        j = j + 1;
+    }
+    println("end");
+}
+"#,
+            &["dR0", "dR100", "round:0", "dR1", "dR101", "round:1", "end"],
+            "asan_discarded_boxed_array_assoc_temp_has_exactly_one_owner",
+        );
+    }
+
     /// B-2026-09-14-11 — a discarded enum returned by a CROSS-TYPE associated
     /// function was owned by nobody. `Host.mk(i);` over
     /// `impl Host { fn mk(n) -> Ey }` registered nothing at all, for every

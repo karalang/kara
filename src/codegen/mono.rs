@@ -2826,6 +2826,7 @@ impl<'ctx> super::Codegen<'ctx> {
                     val,
                     &a.value,
                     escapes_frame,
+                    false,
                     mono_agg[i].1.clone(),
                     mono_agg[i].0,
                     &escaping_parts,

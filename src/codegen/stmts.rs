@@ -4392,11 +4392,11 @@ impl<'ctx> super::Codegen<'ctx> {
                 ) {
                     if let Some(en) = self.enum_name_of_expr(enum_probe) {
                         if en != "Option" && en != "Result" {
-                            self.track_inline_owned_aggregate_arg(val, tail, false);
+                            self.track_discarded_owned_aggregate_temp(val, tail);
                         }
                     }
                 } else if bare_variant_enum.is_some_and(|en| en != "Option" && en != "Result") {
-                    self.track_inline_owned_aggregate_arg(val, tail, false);
+                    self.track_discarded_owned_aggregate_temp(val, tail);
                 }
                 // Payload bodies for a discarded Option/Result temp — pushed
                 // AFTER the battery so the LIFO drain runs them before the
@@ -4459,7 +4459,7 @@ impl<'ctx> super::Codegen<'ctx> {
                 if self.shared_struct_literal_type(&tail).is_some() {
                     self.materialize_owned_temp(val, (tail.span.offset, tail.span.length));
                 }
-                self.track_inline_owned_aggregate_arg(val, &tail, false);
+                self.track_discarded_owned_aggregate_temp(val, &tail);
                 // B-2026-08-01-8: the registrar's internal bodies leg is
                 // gated ALL-FRESH (shared with the call-arg position, where
                 // a place element's body belongs to its binding), so a
@@ -12070,11 +12070,11 @@ impl<'ctx> super::Codegen<'ctx> {
                     ) {
                         if let Some(en) = self.enum_name_of_expr(enum_probe) {
                             if en != "Option" && en != "Result" {
-                                self.track_inline_owned_aggregate_arg(val, tail, false);
+                                self.track_discarded_owned_aggregate_temp(val, tail);
                             }
                         }
                     } else if bare_variant_enum.is_some_and(|en| en != "Option" && en != "Result") {
-                        self.track_inline_owned_aggregate_arg(val, tail, false);
+                        self.track_discarded_owned_aggregate_temp(val, tail);
                     }
                     // B-2026-07-30-11 (Option/Result bare-statement leg):
                     // payload user-Drop bodies for `mkopt(2);` — the same
@@ -12098,7 +12098,7 @@ impl<'ctx> super::Codegen<'ctx> {
                     if self.shared_struct_literal_type(lt).is_some() {
                         self.materialize_owned_temp(val, (lt.span.offset, lt.span.length));
                     }
-                    self.track_inline_owned_aggregate_arg(val, lt, false);
+                    self.track_discarded_owned_aggregate_temp(val, lt);
                     if let ExprKind::Tuple(elems) = &lt.kind {
                         let any_place = elems
                             .iter()
@@ -23092,7 +23092,7 @@ impl<'ctx> super::Codegen<'ctx> {
         if optres_ctor {
             return;
         }
-        self.track_inline_owned_aggregate_arg(val, tail, false);
+        self.track_discarded_owned_aggregate_temp(val, tail);
     }
 
     pub(super) fn discarded_owned_literal_tail<'e>(&self, expr: &'e Expr) -> Option<&'e Expr> {
