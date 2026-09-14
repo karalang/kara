@@ -2020,6 +2020,60 @@ the gate bar did not move: all eight selfhost differentials green at
 guard on this file), 110 binaries per leg, and both ASAN ratchet legs at 1618
 passed with the quarantine matched exactly.
 
+### THE CORPUS RE-TIMED WITH BOTH HALVES — the flip is no longer disqualified (2026-09-14)
+
+Same 340 bench katas, same interleaved rails, same controls, on a compiler
+carrying both halves of item #4 and the two overnight allocation-path commits
+(`fea7ac0` concat chain, `fd6750a` scalar map probe) that made the old baseline
+stale.
+
+| | unguarded (2026-09-13) | both halves (2026-09-14) |
+|---|---|---|
+| median per-kata delta | +0.7% | **+0.4%** |
+| aggregate wall time | **+3.1%** | **+0.2%** |
+| improved >=5% | 17 | 12 |
+| regressed >=5% | **79** | **17** |
+| within +-5% | 226 | **292** |
+
+**Regressions fell from 79 to 17 and the aggregate from +3.1% to +0.2%** — at
+the noise floor. The verdict "SSO-by-default makes the corpus slower" no longer
+holds; it now makes it neither faster nor slower, with a ~15% win still standing
+on the motivating self-hosted-lexer workload.
+
+**Every Vec-heavy regression is gone**, which is the confirmation that the two
+guards attacked the right thing:
+
+| kata | unguarded | both halves |
+|---|---|---|
+| `largest_rectangle` | +93% | **-1%** |
+| `queue_using_stacks` | +93% | **+1%** |
+| `zigzag` | +49% | **-3%** |
+| `stack_using_queues` | +44% | **-2%** |
+| `paint_ii` | +48% | +5% |
+| `flatten_2d` | +11% | -2% |
+
+`zigzag` and `largest_rectangle` are the two that had resisted BOTH the first
+half and the upper-bound probe, and were predicted from that to be paying at the
+read accessors. They were.
+
+**What remains is the genuine tradeoff.** The residual losers are String
+programs — `vertical` (13 String mentions, +35%), `shortest_distance` (6, +34%),
+`alien_seq` (7, +26%), `interleave_unchecked` (+19%) — not Vec programs paying a
+tax. No further guard reaches these: they are SSO doing what SSO does, trading a
+malloc for a tagged read, on workloads where the read side dominates. The one
+String-free straggler is `row_buffers` (+29%), which is worth a look on its own
+terms.
+
+The wins are concentrated too, and on the shape the campaign predicted:
+`exprops` -25%/-24% (allocation-heavy expression building),
+`palindrome_partitioning` -17%, `word_pattern_ii` -17%.
+
+**So the decision question has changed shape.** It is no longer "SSO costs the
+corpus 3%" but "SSO is corpus-neutral, wins ~15% on the compiler's own hot
+workload, and leaves 17 String programs measurably slower." That is a judgement
+about which programs matter, not a measurement gap — and the 17 are few enough
+to examine individually if someone wants the last word.
+
 ## Verification matrix
 
 - **The whole `--features llvm` suite at `KARAC_SSO=0` AND `=1`** — the two-leg
