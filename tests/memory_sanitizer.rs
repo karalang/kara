@@ -88729,6 +88729,75 @@ fn main() {
         );
     }
 
+    /// B-2026-09-13-19 — a BARE DISCARDED call statement lost a wide `Option`
+    /// payload and its box.
+    ///
+    /// `mk(j);` over `fn mk(..) -> Option[Array[String, 2]]` leaked 192 B in 4
+    /// blocks plus 176 B indirect in 8: the 4 direct blocks are the boxed
+    /// `[2 x {ptr,len,cap}]` payloads and the 8 indirect are the `String`s
+    /// reachable through them — the "box unowned, interior unreachable" split.
+    ///
+    /// `try_track_discarded_boxed_option` already had a TUPLE arm and a STRUCT
+    /// arm for exactly this shape. An `Array[T, N]` is spelled as a `Path` whose
+    /// head is `Array`, so it reached the struct branch, failed the
+    /// `struct_types` lookup, and fell through to `materialize_owned_temp` —
+    /// which claims a Vec/String by LLVM shape and a Map/Set handle or RC box by
+    /// name, and has no Option arm at all, so nothing was queued.
+    ///
+    /// Keyed through `array_elem_and_len` rather than a `TypeKind::Array` match:
+    /// a return type is ANNOTATED, so the payload arrives as
+    /// `Path(["Array"], ..)` and a kind-keyed test misses every one of them
+    /// while still compiling. That is the same trap this family has now hit at
+    /// six separate registration sites.
+    ///
+    /// CELLS. `discard` is the defect. `bound` (`let o = mk(j)`) and `str` (an
+    /// `Option[String]` discard) were clean before and must stay clean — they
+    /// are what would catch a fix that widened the discard chokepoint instead of
+    /// adding the arm beside its tuple peer. The `<= 3` word gate partitions
+    /// against the INLINE tracker, which now admits a one-element array
+    /// (B-2026-09-13-18), so `inline1` pins that the two do not both claim it —
+    /// a double-free if they did.
+    #[test]
+    fn asan_discarded_boxed_array_option_temp_frees_its_box_and_interior() {
+        assert_clean_asan_run(
+            r#"
+fn mk(n: i64) -> Option[Array[String, 2]] {
+    if n < 0 { return None; }
+    return Some([f"row-aaaaaaaaaaaaaaaa-{n}", f"col-bbbbbbbbbbbbbbbb-{n}"]);
+}
+fn mk1(n: i64) -> Option[Array[String, 1]] {
+    if n < 0 { return None; }
+    return Some(Array[f"one-aaaaaaaaaaaaaaaa-{n}"]);
+}
+fn mkstr(n: i64) -> Option[String] {
+    if n < 0 { return None; }
+    return Some(f"str-aaaaaaaaaaaaaaaa-{n}");
+}
+
+fn main() {
+    let mut j: i64 = 0;
+    while j < 4 {
+        mk(j);
+        mk1(j);
+        mkstr(j);
+        let o = mk(j);
+        match o { Some(a) => { println(f"bound:{a[0]}"); } None => { println("none"); } }
+        j = j + 1;
+    }
+    println("end");
+}
+"#,
+            &[
+                "bound:row-aaaaaaaaaaaaaaaa-0",
+                "bound:row-aaaaaaaaaaaaaaaa-1",
+                "bound:row-aaaaaaaaaaaaaaaa-2",
+                "bound:row-aaaaaaaaaaaaaaaa-3",
+                "end",
+            ],
+            "asan_discarded_boxed_array_option_temp_frees_its_box_and_interior",
+        );
+    }
+
     /// B-2026-09-13-10 — the STRUCT-shaped spelling of a nested boxed-payload
     /// destructure, which leaked one block per leaf field because its disarm
     /// had no WIDTH CEILING.

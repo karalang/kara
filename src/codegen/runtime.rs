@@ -9548,6 +9548,72 @@ impl<'ctx> super::Codegen<'ctx> {
             );
             return true;
         }
+        // B-2026-09-13-19 — the ARRAY arm, beside the tuple one above and for
+        // the same reason. `mk(j);` over `fn mk(..) -> Option[Array[String, 2]]`
+        // leaked 192 B in 4 blocks plus 176 B indirect in 8: the 4 direct blocks
+        // are the boxed `[2 x {ptr,len,cap}]` payloads and the 8 indirect are the
+        // `String`s reachable through them, the same "box unowned, interior
+        // unreachable" split the tuple arm was added for.
+        //
+        // An `Array[T, N]` is spelled as a `Path` whose head is `Array`, so it
+        // reached the struct branch below, failed the `struct_types` lookup and
+        // fell through to `materialize_owned_temp` — which claims a Vec/String
+        // by LLVM shape, a Map/Set handle and an RC box by name, and has no
+        // Option arm at all, so nothing was queued.
+        //
+        // Keyed through `array_elem_and_len` rather than a `TypeKind::Array`
+        // match, for the both-spellings reason this family keeps re-learning: a
+        // return type is ANNOTATED, so the payload arrives as
+        // `Path(["Array"], ..)` and a kind-keyed test misses every one of them
+        // while compiling perfectly.
+        //
+        // The `<= 3` word gate is the tuple arm's, unchanged: an inline payload
+        // boxes nothing and belongs to the inline tracker, which now admits a
+        // one-element array (B-2026-09-13-18). The two therefore partition the
+        // widths rather than overlapping.
+        if let Some((elem_te, n)) = self.array_elem_and_len(&payload_te) {
+            // A PLAIN CALL only, never a method call. The defect is a discarded
+            // call to a free function; a container HAND-BACK that happens to
+            // return the same type already has an owner — `m.remove(k);` and
+            // `m.insert(k, v);` free both the displaced contents and the
+            // envelope box at the map sites themselves (B-2026-09-13-2's
+            // `free_discarded_wide_payload_box`, gated on a `discarded_handback`
+            // flag that is consumed inside the map lowering and is not
+            // observable from here). Claiming those too is a DOUBLE FREE, not a
+            // second-best: measured, ASAN `attempting double-free` on
+            // `map-remove-array-value-discarded`.
+            //
+            // Excluding every method call under-claims — `Vec.pop();` discarded
+            // is B-2026-09-13-17's territory and still leaks — and that is the
+            // safe direction: an unclaimed temp leaks, a twice-claimed one
+            // crashes.
+            if !matches!(tail.kind, ExprKind::Call { .. }) {
+                return false;
+            }
+            let payload_ty = self.llvm_type_for_type_expr(&payload_te);
+            if Self::llvm_type_word_count(payload_ty) <= 3 {
+                return false;
+            }
+            let elem_ty = self.llvm_type_for_type_expr(&elem_te);
+            let inner_drop_fn = self.synthesize_array_drop_fn_te(elem_ty, &elem_te, n);
+            let Some(cur_fn) = self
+                .builder
+                .get_insert_block()
+                .and_then(|bb| bb.get_parent())
+            else {
+                return false;
+            };
+            let slot = self.create_entry_alloca(cur_fn, "__owned_boxed_opt_tmp", val.get_type());
+            self.builder.build_store(slot, val).unwrap();
+            self.track_boxed_enum_var_with_inner_drop(
+                "__owned_boxed_opt_tmp",
+                slot,
+                "Option",
+                "Some",
+                inner_drop_fn,
+            );
+            return true;
+        }
         let TypeKind::Path(pp) = &payload_te.kind else {
             return false;
         };
