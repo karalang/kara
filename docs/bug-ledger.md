@@ -93,7 +93,7 @@ distinguish "bugs flattening" from "we stopped writing them down."
 | class | total |
 |---|---|
 | miscompile | 406 |
-| run-vs-build | 404 |
+| run-vs-build | 405 |
 | leak | 345 |
 | double-free | 229 |
 | missing-feature | 198 |
@@ -110,8 +110,8 @@ distinguish "bugs flattening" from "we stopped writing them down."
 
 | surface | total |
 |---|---|
-| codegen | 1732 |
-| interp | 436 |
+| codegen | 1733 |
+| interp | 437 |
 | typecheck | 299 |
 | other | 90 |
 | ownership | 74 |
@@ -182,7 +182,6 @@ _Generated from `bug-ledger.jsonl` by `scripts/bug-curve.py` (2026-05-20 → 202
 | B-2026-09-13-30 | 2026-09-13 | codegen | low | A METHOD-CALL KEY TEMPORARY STILL LEAKS AT EVERY `Map` LOOKUP -- `m.get(g.make(0))` over `Map[(String, String), i64]` loses 32 B in 2 blocks because a method's return type is absent from `fn_return_type_exprs`, so the nameless-key leg B-2026-09-13-20 added has no `TypeExpr` to resolve | — |
 | B-2026-09-13-31 | 2026-09-13 | codegen | medium | Three map katas are 5-8% slower under the group-scan default, and no runtime signal is known that would route them back to the byte walk | B-2026-09-07-53 |
 | B-2026-09-14-1 | 2026-09-14 | codegen | low | AN INDEX-ASSIGN INTO AN `Array[String, N]` LEAKS THE DISPLACED BUFFER -- `a[0] = f"MUTATED-{n}"` over `let mut a: Array[String, 2]` loses 10 B in 1 block at -O0, the overwritten element's own buffer. Measured with NO `.clone()` anywhere in the program, so it is independent of B-2026-09-10-37's new array clone and merely shares that row's independence-check fixture cell; the store overwrites the `{ptr,len,cap}` in place and nothing frees what was there | — |
-| B-2026-09-14-2 | 2026-09-14 | interp+codegen | medium | AN `Option`/`Result` WHOSE PAYLOAD IS A `Vec` RUNS ITS ELEMENT `Drop` BODIES NOWHERE UNLESS IT IS DISCARDED -- a BOUND envelope, a consuming `match` arm and a plain move are all silent on every backend | — |
 | B-2026-09-14-5 | 2026-09-14 | codegen | medium | THE COMPILED BACKENDS LOSE AN OWED `Option` PAYLOAD BODY FOR AN OWNED PARAM -- `fn eat(o: Option[(R, i64)]) -> i64 { match o { Some(t) => return t.1 } }` moves NOTHING out and still prints `got:9 end` on JIT/AOT against the interpreter's correct `dR5 got:9 end`; with two Drop-bearing elements and one moved out the compiled side runs NEITHER, so the direction is the reverse of B-2026-09-13-5's | — |
 | B-2026-09-14-6 | 2026-09-14 | codegen+interp | medium | AN `Option` PAYLOAD SUB-VALUE MOVED OUT RUNS ITS `Drop` BODY TWICE ON ALL THREE BACKENDS in two spellings -- a NAMED-LOCAL argument, and a payload whose field is heap-carrying -- so the A/B parity rule sees nothing and the duplicate is invisible to every gate | — |
 | B-2026-09-14-7 | 2026-09-14 | codegen+interp | low | AN `Option`-PAYLOAD ELEMENT MOVED OUT AND NOT RETURNED DIES AT OPPOSITE ENDS OF THE ARM -- `Some(t) => { let x = t.0; println("mid"); }` prints `mid dR5` under `--interp` against the compiled backends' `dR5 mid`, so the COUNT agrees and only the sequence differs | — |
@@ -192,6 +191,7 @@ _Generated from `bug-ledger.jsonl` by `scripts/bug-curve.py` (2026-05-20 → 202
 | B-2026-09-14-12 | 2026-09-14 | codegen | medium | AN ENUM WITH A BOXED `Array` PAYLOAD IS FREED ONLY BY THE FIVE EXPLICIT REGISTRATION SITES -- held in a struct FIELD, a `Vec` or a `Map` it loses its box and interior at the container's destruction, 144 B in 3 blocks plus 102 B indirect in 6 for three entries, with no discard anywhere in the program, because the enum's own DROP SWITCH has no case for it | — |
 | B-2026-09-14-13 | 2026-09-14 | codegen | medium | A FRESH-TEMP `Option` SCRUTINEE WITH A BOXED PAYLOAD LOSES IT IN TWO DIFFERENT WAYS -- `match mk2(j) { Some(a) => .. }` over `Option[Array[String, 2]]` frees the box and orphans its 6 element buffers (102 B / 6), while `Some(_)` claims nothing at all (144 B / 3 plus 102 B indirect / 6), and the `let`-bound spelling of the same call is clean | — |
 | B-2026-09-14-14 | 2026-09-14 | codegen | high | A BLOCK-SCOPED NAMED `Array[T, N]` LOCAL MOVED INTO `Vec.push` IS NOT DISARMED, so its element buffers are freed at block exit while the `Vec` still points at them -- every element reads back as garbage on both compiled backends while `--interp` is correct, silently and at exit code 0, and the identical program with a `String` element or a `Map.insert` destination is clean | — |
+| B-2026-09-14-15 | 2026-09-14 | interp+codegen | medium | A NESTED FIXED `Array` (`Array[Array[D, N], M]`) RUNS ITS INNERMOST ELEMENTS' `Drop` BODIES UNDER `--interp` AND ON NEITHER COMPILED BACKEND -- no envelope involved; the `Vec[Vec[D]]` spelling is correct | — |
 
 ### Relocated
 
@@ -2555,6 +2555,7 @@ _Generated from `bug-ledger.jsonl` by `scripts/bug-curve.py` (2026-05-20 → 202
 | B-2026-09-13-26 | interp+codegen | medium | A DISCARDED ARRAY LITERAL OF Drop-BEARING STRUCTS RUNS NO ELEMENT BODIES AT ALL -- `let _ = if c { [W { r: mkd(7), b: 1 }] } else { . | 122b991 |
 | B-2026-09-13-28 | interp+codegen | medium | THE BARE-BLOCK SPELLING OF B-2026-09-01-17 IS RUN-VS-BUILD DIVERGENT, NOT AN AGREED GAP -- `let _ = { W { r: t.r, b: 1 } };` runs the projected leaf'… | 122b991 |
 | B-2026-09-13-29 | codegen | medium | A DISCARDED `Option`/`Result` WHOSE PAYLOAD IS AN ARRAY RUNS ITS ELEMENT BODIES ON THE INTERPRETER AND NOT ON EITHER COMPILED BACKEND -- B-2026-09-10… | 1d73a30 |
+| B-2026-09-14-2 | interp+codegen | medium | AN `Option`/`Result` WHOSE PAYLOAD IS A `Vec` RUNS ITS ELEMENT `Drop` BODIES NOWHERE UNLESS IT IS DISCARDED -- a BOUND envelope, a consuming `match`… | 5143688 |
 | B-2026-09-14-3 | codegen | medium | AN ENUM TUPLE VARIANT USED AS A FIRST-CLASS FUNCTION VALUE ICEs CODEGEN -- `let g = Col.A; g(3)` passes `karac check` and then panics in `closures.rs… | 09e2e4b |
 | B-2026-09-14-4 | parser | low | A QUALIFIED STRUCT-SHAPED VARIANT CANNOT PIN ITS TYPE ARGUMENTS -- `Sh[i64].S { v: 3 }` is a PARSE error (`Expected Semicolon, found LeftBrace`), the… | 938baae |
 | B-2026-09-14-9 | codegen | medium | A BARE DISCARDED CALL RETURNING A CONCRETE USER ENUM WITH A BOXED `Array` PAYLOAD LOSES ITS BOX AND INTERIOR -- `mk(i);` over `fn mk(..) -> E` with `… | 3e2365b |
