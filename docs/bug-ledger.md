@@ -104,13 +104,13 @@ distinguish "bugs flattening" from "we stopped writing them down."
 | false-positive | 106 |
 | soundness | 95 |
 | crash | 81 |
-| use-after-free | 39 |
+| use-after-free | 40 |
 
 ### By surface
 
 | surface | total |
 |---|---|
-| codegen | 1731 |
+| codegen | 1732 |
 | interp | 436 |
 | typecheck | 299 |
 | other | 90 |
@@ -193,6 +193,7 @@ _Generated from `bug-ledger.jsonl` by `scripts/bug-curve.py` (2026-05-20 → 202
 | B-2026-09-14-11 | 2026-09-14 | codegen | medium | A DISCARDED USER-ENUM TEMP WITH A BOXED PAYLOAD STILL LEAKS IN EVERY SPELLING WHOSE TYPE CANNOT BE RESOLVED -- `h.makeb(i);`, `H.assoc(i);` and `let _ = if c { mk(i) } else { mk(i) };` each lose 144 B in 3 blocks plus 102 B indirect in 6, while their INLINE-payload siblings went clean with B-2026-09-14-9, because `untyped_let_boxed_enum_te` answers only for a direct free-function `Call` | — |
 | B-2026-09-14-12 | 2026-09-14 | codegen | medium | AN ENUM WITH A BOXED `Array` PAYLOAD IS FREED ONLY BY THE FIVE EXPLICIT REGISTRATION SITES -- held in a struct FIELD, a `Vec` or a `Map` it loses its box and interior at the container's destruction, 144 B in 3 blocks plus 102 B indirect in 6 for three entries, with no discard anywhere in the program, because the enum's own DROP SWITCH has no case for it | — |
 | B-2026-09-14-13 | 2026-09-14 | codegen | medium | A FRESH-TEMP `Option` SCRUTINEE WITH A BOXED PAYLOAD LOSES IT IN TWO DIFFERENT WAYS -- `match mk2(j) { Some(a) => .. }` over `Option[Array[String, 2]]` frees the box and orphans its 6 element buffers (102 B / 6), while `Some(_)` claims nothing at all (144 B / 3 plus 102 B indirect / 6), and the `let`-bound spelling of the same call is clean | — |
+| B-2026-09-14-14 | 2026-09-14 | codegen | high | A BLOCK-SCOPED NAMED `Array[T, N]` LOCAL MOVED INTO `Vec.push` IS NOT DISARMED, so its element buffers are freed at block exit while the `Vec` still points at them -- every element reads back as garbage on both compiled backends while `--interp` is correct, silently and at exit code 0, and the identical program with a `String` element or a `Map.insert` destination is clean | — |
 
 ### Relocated
 
