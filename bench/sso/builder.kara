@@ -1,0 +1,37 @@
+// String BUILDER: push one character at a time into a growing String. This is
+// the shape B-2026-09-14-20 isolated as SSO's worst remaining regression — a
+// receiver that is mutated in a tight loop and therefore never benefits from
+// being inline, while paying whatever the inline representation costs to check.
+//
+// `out` starts as a STATIC descriptor (`cap == 0`), so the first `push`
+// allocates and the String is heap for the rest of its life. It is never
+// inline even once. The rail therefore measures the TAX ALONE: what a
+// String-mutating loop pays for SSO without any possibility of a win. The
+// per-push cost is two ALU ops (`icmp slt` + `or`) folded into the growth
+// test — it used to be a separate branch and basic block, which is what this
+// rail was built to catch.
+//
+// LEN is substituted by bench.sh (two instantiations: 20 and 60), because the
+// regression scaled with it: the loop body's share of the per-string malloc
+// grows with the string, so a longer string is a purer measurement of the
+// per-push tax.
+fn build(n: i64) -> String {
+    let mut out = "".to_string();
+    let mut i = 0;
+    while i < n {
+        out.push('a');
+        i = i + 1;
+    }
+    out
+}
+
+fn main() {
+    let mut total = 0;
+    let mut i = 0;
+    while i < ITERS {
+        let s = build(LEN);
+        total = total + s.len();
+        i = i + 1;
+    }
+    println(f"{total}");
+}

@@ -17,6 +17,12 @@
 #           call. SSO LOSES.
 #   substr  the same shape via `String.substring` rather than slice syntax.
 #           SSO is a wash.
+#   builder20/60  build a String by pushing one char at a time. The receiver is
+#           heap from its first push and never inline, so this is SSO's TAX on a
+#           mutating loop with no possible win. B-2026-09-14-20's regression.
+#   promote an inline receiver (from `substring`) mutated once — the promotion
+#           path itself. Read as a PAIR with builder: moving cost from one to
+#           the other is not a win.
 #
 # Last measured on x86-64 (2026-09-12, KARAC_SSO=1 vs =0):
 #   lexer   15.8% FASTER      lexlike  34% SLOWER      substr  5% SLOWER
@@ -40,6 +46,11 @@ HERE="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 ROOT="$(cd "$HERE/../.." && pwd)"
 BUILD="$HERE/build"
 ITERS="${ITERS:-10000000}"
+# The builder/promote rails allocate a String per iteration, so they need three
+# orders of magnitude fewer iterations than the slice-compare rails to land in
+# the same wall-clock range. Scaled off ITERS so one env var still moves
+# everything together.
+BITERS="${BITERS:-$(( ITERS / 4 ))}"
 PASSES="${PASSES:-200}"
 RUNS="${RUNS:-7}"
 
@@ -76,8 +87,17 @@ cat "$ROOT"/selfhost/src/*.kara > "$BUILD/lexer/input.kara"
 echo "lexer input: $(wc -c < "$BUILD/lexer/input.kara") bytes x $PASSES passes"
 
 # --- microbench rails ---------------------------------------------------------
-for m in lexlike substr; do
-  sed "s/ITERS/$ITERS/" "$HERE/$m.kara" > "$BUILD/$m.kara"
+# name:source:iters:len — `len` is "" for the rails that take no LEN.
+MICRO=(
+  "lexlike:lexlike:$ITERS:"
+  "substr:substr:$ITERS:"
+  "builder20:builder:$BITERS:20"
+  "builder60:builder:$BITERS:60"
+  "promote:promote:$BITERS:20"
+)
+for spec in "${MICRO[@]}"; do
+  IFS=: read -r name srcf it ln <<< "$spec"
+  sed -e "s/ITERS/$it/" -e "s/LEN/$ln/" "$HERE/$srcf.kara" > "$BUILD/$name.kara"
 done
 
 # best-of-RUNS wall time in ms. Deletes the binary and asserts it reappeared:
@@ -103,7 +123,8 @@ for sso in 0 1; do
   mv "$BUILD/lexer/lexprof" "$BUILD/lexer/rail$sso"
   T[lexer$sso]=$( cd "$BUILD/lexer" && timeit "./rail$sso" )
   # microbenches
-  for m in lexlike substr; do
+  for spec in "${MICRO[@]}"; do
+    m="${spec%%:*}"
     ( cd "$BUILD" && rm -f "$m" && KARAC_SSO=$sso "$KARAC" build "$m.kara" >/dev/null 2>&1 )
     [ -x "$BUILD/$m" ] || { echo "$m rail SSO=$sso: BUILD PRODUCED NO BINARY" >&2; exit 1; }
     mv "$BUILD/$m" "$BUILD/$m.rail$sso"
@@ -111,7 +132,7 @@ for sso in 0 1; do
   done
 done
 
-for rail in lexer lexlike substr; do
+for rail in lexer lexlike substr builder20 builder60 promote; do
   a=${T[${rail}0]}; b=${T[${rail}1]}
   pct=$(awk -v a="$a" -v b="$b" 'BEGIN{ printf "%+.1f%%", (b-a)*100.0/a }')
   note=$(awk -v a="$a" -v b="$b" 'BEGIN{ print (b<a) ? "SSO wins" : "SSO loses" }')

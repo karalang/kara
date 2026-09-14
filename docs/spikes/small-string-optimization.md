@@ -2127,6 +2127,11 @@ time.** The campaign chose "MUTATION PROMOTES rather than going tag-aware"
 deliberately, and it is what makes the mutating surface correct without every
 `push_str` read becoming tag-aware. What it costs was never measured: 32–40% on
 String building, and it is the whole of the remaining corpus regression.
+**[CORRECTED 2026-09-14 — the second clause is false.](#the-fold-the-growth-test-is-the-de-inline-test-2026-09-14)**
+The probe was removed for `push`/`push_str` and `vertical` did not move: +84% →
++85%. The 32–40% on a *synthetic* builder was real and is now largely recovered;
+the inference from it to "the whole of the remaining corpus regression" was a
+static IR count standing in for an attribution.
 
 **The alternative is the thing SSO is supposed to do.** Appending INTO the inline
 buffer while the bytes still fit is the classic small-string win — no malloc at
@@ -2135,6 +2140,145 @@ check and then throws the inline representation away. That is a design slice, no
 a guard: it makes `push`/`push_str` tag-aware on the write side rather than
 promoting. Filed as its own ledger row rather than carried here, because it
 outlives this spike.
+
+### THE FOLD: the growth test IS the de-inline test (2026-09-14)
+
+The row's own prescription, implemented: `String.push` and `String.push_str` no
+longer emit a head-of-op `sso_deinline_in_place` branch. They already test
+whether the buffer must grow, and `emit_string_buffer_grow` already routes an
+inline receiver (`SGT cap, 0` is false) to its fresh-malloc arm, whose memcpy
+source is the tag-aware data pointer. So the growth test is made to answer both
+questions at once:
+
+```llvm
+;                        ... unchanged from KARAC_SSO=0 ...
+  %spush.needs_grow     = icmp ugt i64 %spush.new_len, %spush.cap
+  %sso.inline4          = icmp slt i64 %spush.cap, 0          ; + 1 instruction
+  %spush.grow_or_inline = or i1 %spush.needs_grow, %sso.inline4 ; + 1 instruction
+  br i1 %spush.grow_or_inline, label %spush.grow, label %spush.copy
+```
+
+An inline receiver is forced onto the grow edge and is promoted inside the
+allocation the grow was going to perform anyway. **Two ALU ops and no extra
+basic block**, where before there was a branch and a whole `recv.mut.deinline`
+block ahead of the loop body's every iteration. The `lshr`/`and`/`select` that
+decodes the overlaid `len`/`cap` moved into the grow block, which is cold.
+
+`MUTATES_RECEIVER_IN_PLACE`'s other ~27 methods keep the head-of-op promote.
+The two that opt out are the two that have a growth test to fold into.
+
+**Measured — two independent samples, best-of-15, three rails built and timed
+per program in ONE pass** (`SSO=0`, `SSO=1` folded, `SSO=1` at `7b6ebe8`), so
+every delta is a within-pass ratio rather than a cross-sweep one:
+
+| rail | before | after | |
+|---|---|---|---|
+| `promote` — inline receiver, promoted then appended | +25.4 / +25.8% | **+7.7 / +8.8%** | −17 pts |
+| `builder60` — 60-char build, never inline | +28.4 / +29.7% | **+10.7 / +11.4%** | −18 pts |
+| `pfx_idx` — `vertical`'s builder, runtime-varying length | +17.8 / +19.4% | **+4.1 / +5.6%** | −14 pts |
+| `builder20` — 20-char build, CONSTANT trip count | +17.2 / +16.1% | +15.8 / +14.8% | −1 pt |
+| `pfx_chars` — the same builder driven by `chars()` | −15.3 / −15.3% | **−9.0 / −10.2%** | **+6 pts, a LOSS** |
+
+Both directions reproduce across the two samples, including the loss.
+
+**`promote` is the paired control, and it is the reason to believe the rest.**
+The previous attempt on this row made the check cheaper by making the promotion
+four times more expensive, which would have looked like a win on a builder rail
+alone. Here the promotion path improves by MORE than the never-inline path, so
+no cost was shuffled between them.
+
+**`builder20` is a measurement artifact, not a short-string result.** It calls
+`build(20)` with a compile-time-constant trip count, so LLVM unrolls the loop
+and the rail stops measuring per-push cost. `pfx_idx` has the same 0–20 length
+distribution with a runtime-varying bound and gains 14 points. A first reading
+of this table blamed string length; the two rails differ only in whether the
+count is a constant.
+
+**`pfx_chars` gives back 6 points and the loss is real.** It is a rail where SSO
+already wins, and two ALU ops per iteration cost more there than a
+perfectly-predicted branch that is never taken. Net across the corpus this is
+comfortably paid for, but it is not a free change.
+
+#### The 17 residual katas, re-timed
+
+| | at `7b6ebe8` | folded |
+|---|---|---|
+| median | +3.5% | **+1.4%** |
+| aggregate | +7.9% | **+5.7%** |
+| regressed ≥5% | 6 | **4** |
+| improved ≥5% | 0 | **2** |
+
+`alien_seq` +8.4% → **−11.9%** and `alien` +11.0% → **−8.1%** cross from
+regression into win; `word_ladder` +14.6% → +6.4%.
+
+#### What this REFUTES, including in this document
+
+`vertical`, the worst regression in the corpus and the kata this row's mechanism
+was derived from, **did not move: +84.1% → +85.4%.** Its IR now contains zero
+`recv.mut.deinline` blocks — the fold applied — and the kata is unchanged.
+`shortest_distance_iii` likewise: +35.7% → +36.1%.
+
+The attribution those rested on was "`vertical`'s IR adds 63 inline compares and
+the dominant prefix is `recv.mut` — 96 de-inline probes". **That is a static
+count of IR occurrences, and a static count is not an attribution.** Removing
+all 96 is worth about 1% on this kata.
+
+Nor is it `prefix_string`, the function the count pointed at. `pfx_chars` mirrors
+it exactly — a `ref String` walked with `chars()`, pushed into a fresh String,
+returned by value — and that shape is **9–15% FASTER** under SSO, in the
+opposite direction from the kata containing it.
+
+So `vertical`'s +85% is, as of this writing, **unattributed**. The leading
+suspect is the other loop: `longest_common_prefix` scans `strs[s].bytes()` and
+`other[col]` over a `Vec[String]` tens to hundreds of times per outer iteration,
+against at most 20 pushes. Those are tag-aware READS on String elements reached
+through an INDEX EXPRESSION, which the item-#4 receiver guard structurally
+cannot help — the receiver is not a named variable, and the elements really are
+Strings, so the guard would be wrong to fire. `shortest_distance` and
+`shortest_distance_iii` scan `Vec[String]` the same way. That is a hypothesis
+with a mechanism and no measurement behind it yet, and it is filed as its own
+row rather than asserted here — this section exists because the last mechanism
+asserted from a static count was wrong.
+
+#### Correctness
+
+Seven negative controls, each a deliberate single-gate backout rebuilt and
+re-probed, all against a probe that sweeps lengths 0–40 across `push`,
+`push_str`-first, self-append, empty-append and reserve-then-push, on
+`--interp` (oracle) vs AOT vs JIT and both auto-par settings:
+
+| gate removed | result |
+|---|---|
+| `push` de-inline gate | SIGSEGV |
+| `push_str` de-inline gate | SIGSEGV |
+| `push` publish decoded length after promote | SIGSEGV |
+| `push_str` publish decoded length after promote | SIGABRT |
+| `push` decoded growth geometry | SIGABRT |
+| `push_str` decoded growth geometry | SIGABRT |
+| `push_str` inline receiver never aliases (`& !is_inline`) | SIGSEGV |
+
+`KARAC_SSO=0` stayed green through every one, so each failure is the gate rather
+than the probe.
+
+**Two vacuous controls had to be fixed before that table meant anything**, which
+is the campaign's recurring shape showing up twice more. The first `push`
+control PASSED because it was run against a binary whose rebuild had not
+finished — the codegen form of the stale-archive trap. The first `push_str`
+control PASSED because the probe called `push` before `push_str` on the same
+receiver, so `push_str` only ever saw an already-promoted heap string; it needed
+a case where `push_str` is the FIRST mutation.
+
+**One control caught a bug in this slice's own first draft.** That draft took the
+self-append alias base tag-aware, `select(is_inline, slot, data)`. That makes the
+alias range a STACK range, and an unrelated alloca landing inside
+`[slot, slot + len)` reads as an alias and rebases a valid source pointer to a
+garbage offset. The correct answer is that an inline receiver never aliases its
+source at all — a borrowed slice of the receiver is rejected by the ownership
+checker, and `out.push_str(out)` arrives as a value that
+`sso_string_parts_from_value` spills to its own entry-block alloca. The guard is
+now `in_range & !is_inline`, and its control segfaults, so the hazard was live
+rather than theoretical.
+
 
 ## Verification matrix
 

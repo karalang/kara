@@ -1104,7 +1104,27 @@ impl<'ctx> super::Codegen<'ctx> {
         // not-taken branch. Re-introduce a guard only off a POSITIVE Vec signal
         // and only with a measurement showing that cost matters — never off the
         // absence of a String signal, which is what failed twice.
-        if sso_recv && MUTATES_RECEIVER_IN_PLACE.contains(&method) {
+        //
+        // TWO METHODS OPT OUT, and not by a receiver guard: `String.push` and
+        // `String.push_str` FOLD the promotion into the growth test they
+        // already perform, so a head-of-op branch here would be a second,
+        // redundant conditional on the same descriptor. B-2026-09-14-20
+        // measured that the branch — not what it does — is the cost (removing
+        // it recovered 29 of 32 regression points on a char-by-char builder,
+        // while making its taken arm cheaper made things WORSE), so the win
+        // comes from having one conditional rather than from a cheaper second
+        // one. Every other mutating method keeps the promote here.
+        //
+        // The `push` half must test the SAME predicate the match arm below
+        // dispatches on (`string_vars.contains`): a String-shaped local that
+        // is absent from `string_vars` falls through to the generic Vec `push`
+        // arm, which does raw `len`/`cap` arithmetic and needs the promote.
+        let folded_into_grow = match method {
+            "push" => self.var_types.string_vars.contains(var_name),
+            "push_str" => true,
+            _ => false,
+        };
+        if sso_recv && !folded_into_grow && MUTATES_RECEIVER_IN_PLACE.contains(&method) {
             self.sso_deinline_in_place(data_ptr, "recv.mut");
         }
 
@@ -3059,8 +3079,9 @@ impl<'ctx> super::Codegen<'ctx> {
                     .unwrap()
                     .into_int_value();
 
-                // Mutating op: promote out of inline first, so every
-                // `len`/`cap` read below sees an ordinary heap string.
+                // Mutating op. SSO: the promotion is NOT a separate branch at
+                // the head of the op — it is folded into the growth test
+                // below, which an inline receiver is forced to take.
                 let data_ptr_ptr = self
                     .builder
                     .build_struct_gep(vec_ty, data_ptr, 0, "spush.data.ptr")
@@ -3097,10 +3118,35 @@ impl<'ctx> super::Codegen<'ctx> {
                 let fn_val = self.current_fn.unwrap();
                 let grow_bb = self.context.append_basic_block(fn_val, "spush.grow");
                 let copy_bb = self.context.append_basic_block(fn_val, "spush.copy");
-                let needs_grow = self
+                let heap_needs_grow = self
                     .builder
                     .build_int_compare(inkwell::IntPredicate::UGT, new_len, cap, "spush.needs_grow")
                     .unwrap();
+                // SSO: THE GROWTH TEST IS THE DE-INLINE TEST. An inline
+                // descriptor overlays `data`/`len` with its own bytes and
+                // keeps its length in `cap`'s high byte, so it must never
+                // reach the in-place copy arm — and `emit_string_buffer_grow`
+                // already routes it (`SGT cap, 0`) to the fresh-malloc arm
+                // whose memcpy source is the tag-aware data pointer. Forcing
+                // this test true for an inline receiver therefore promotes it
+                // INSIDE the allocation the grow was going to do anyway.
+                //
+                // `heap_needs_grow` alone cannot serve: `UGT` reads an inline
+                // `cap < 0` as an enormous unsigned and answers "no grow"
+                // (the original SSO mutation bug), and the signed flip is no
+                // better, because `new_len` is built from the raw `len` field,
+                // which for an inline string ≥ 16 bytes is content bytes 8..=15
+                // and may itself be negative. So the inline case is decided by
+                // the tag, not by the comparison — two ALU ops on the hot path,
+                // replacing a branch and a basic block.
+                let needs_grow = if sso_recv {
+                    let is_inline = self.sso_string_is_inline(cap);
+                    self.builder
+                        .build_or(heap_needs_grow, is_inline, "spush.grow_or_inline")
+                        .unwrap()
+                } else {
+                    heap_needs_grow
+                };
                 self.builder
                     .build_conditional_branch(needs_grow, grow_bb, copy_bb)
                     .unwrap();
@@ -3113,11 +3159,39 @@ impl<'ctx> super::Codegen<'ctx> {
                 // lands in ONE allocation instead of growing 0→4→8 — halving
                 // the realloc traffic on short-string-heavy workloads.
                 self.builder.position_at_end(grow_bb);
+                // SSO: on this edge the receiver may be inline, and then `len`
+                // and `cap` are overlaid data bytes. Decode both from the tag
+                // before they reach the growth arithmetic. `eff_cap` is the
+                // inline LENGTH rather than `INLINE_CAPACITY`, which is exactly
+                // what the head-of-op promote used to store into `cap`, so the
+                // doubling schedule after a promotion is unchanged. Computed
+                // before `emit_string_buffer_grow`, whose fresh-malloc arm
+                // memcpy's out of this descriptor — nothing may store into the
+                // slot until after that copy.
+                let (eff_len, eff_cap) = if sso_recv {
+                    let l = self.sso_select_len(cap, len, "spush.g");
+                    let is_inline = self.sso_string_is_inline(cap);
+                    let c = self
+                        .builder
+                        .build_select(is_inline, l, cap, "spush.g.cap")
+                        .unwrap()
+                        .into_int_value();
+                    (l, c)
+                } else {
+                    (len, cap)
+                };
+                let eff_new_len = if sso_recv {
+                    self.builder
+                        .build_int_add(eff_len, enc_len, "spush.g.new_len")
+                        .unwrap()
+                } else {
+                    new_len
+                };
                 let two = i64_t.const_int(2, false);
                 let min_cap = i64_t.const_int(8, false);
                 let doubled = self
                     .builder
-                    .build_int_mul(cap, two, "spush.doubled")
+                    .build_int_mul(eff_cap, two, "spush.doubled")
                     .unwrap();
                 let cmp1 = self
                     .builder
@@ -3132,14 +3206,14 @@ impl<'ctx> super::Codegen<'ctx> {
                     .builder
                     .build_int_compare(
                         inkwell::IntPredicate::UGT,
-                        new_len,
+                        eff_new_len,
                         growth_min,
                         "spush.cmp2",
                     )
                     .unwrap();
                 let new_cap = self
                     .builder
-                    .build_select(cmp2, new_len, growth_min, "spush.new_cap")
+                    .build_select(cmp2, eff_new_len, growth_min, "spush.new_cap")
                     .unwrap()
                     .into_int_value();
                 // Grow via realloc where the buffer is heap (cap > 0); a
@@ -3149,6 +3223,15 @@ impl<'ctx> super::Codegen<'ctx> {
 
                 self.builder.build_store(data_ptr_ptr, new_data).unwrap();
                 self.builder.build_store(cap_ptr, new_cap).unwrap();
+                // SSO: publish the decoded length. A receiver that arrived
+                // inline has just been promoted by the grow above, so field 1
+                // still holds overlaid data bytes and the copy block below
+                // reloads it as the append offset. A plain re-store of `len`
+                // for a heap or static receiver, on a path that has just
+                // called the allocator.
+                if sso_recv {
+                    self.builder.build_store(len_ptr, eff_len).unwrap();
+                }
                 self.builder.build_unconditional_branch(copy_bb).unwrap();
 
                 // Copy encoded bytes (1–4) into data + len.
@@ -5432,11 +5515,14 @@ impl<'ctx> super::Codegen<'ctx> {
                     self.sso_string_parts_from_value(src_val.into_struct_value(), "pstr.src");
 
                 // Load target fields.
-                // Mutating op (`push_str`): promote out of inline first, so
-                // every `len`/`cap` read below sees an ordinary heap string.
-                // Without this the growth test `UGT(new_len, cap)` reads an
-                // inline `cap < 0` as an enormous unsigned, skips the grow,
-                // and the copy lands past the end of the descriptor.
+                // Mutating op (`push_str`). SSO: the promotion is folded into
+                // the growth test below rather than emitted as a separate
+                // head-of-op branch — see the `MUTATES_RECEIVER_IN_PLACE`
+                // chokepoint and `String.push` for the argument. The raw
+                // growth test `UGT(new_len, cap)` cannot be left to decide it:
+                // an inline `cap < 0` reads as an enormous unsigned, the grow
+                // is skipped, and the copy lands past the end of the
+                // descriptor.
                 let data_ptr_ptr = self
                     .builder
                     .build_struct_gep(vec_ty, data_ptr, 0, "t.data.ptr")
@@ -5465,6 +5551,13 @@ impl<'ctx> super::Codegen<'ctx> {
                     .unwrap()
                     .into_int_value();
 
+                // SSO: `len` and `cap` are read RAW here and stay raw on the
+                // no-grow path, which is the whole point — an inline receiver
+                // cannot reach that path (the growth test below forces it onto
+                // the grow edge), so every raw read below it is looking at an
+                // ordinary heap string. The decode happens once, inside the
+                // grow block, where it is off the hot path.
+                //
                 // Required capacity = len + src_len.
                 let new_len = self.builder.build_int_add(len, src_len, "new_len").unwrap();
 
@@ -5528,17 +5621,66 @@ impl<'ctx> super::Codegen<'ctx> {
                             "pstr.alias.lt",
                         )
                         .unwrap();
-                    self.builder.build_and(ge, lt, "pstr.alias").unwrap()
+                    let in_range = self.builder.build_and(ge, lt, "pstr.alias").unwrap();
+                    // SSO: an INLINE receiver never aliases its source, and
+                    // the address comparison above cannot be trusted to say so.
+                    // `data`/`cap` are that receiver's own content bytes, so
+                    // `[data_int, data_end)` is an arbitrary range; and were
+                    // the range taken tag-aware instead, its base would be the
+                    // descriptor's stack address and an unrelated alloca
+                    // sitting inside `[slot, slot + len)` would read as an
+                    // alias. Either way a false positive rebases a perfectly
+                    // good source pointer to a garbage offset.
+                    //
+                    // False is also the true answer. The only source that could
+                    // point into an inline descriptor is a borrowed slice of
+                    // the receiver itself, which the ownership checker rejects
+                    // outright (`out.push_str(out[a..b])` — "cannot be borrowed
+                    // as Slice[T] because it is also borrowed as mut ref T");
+                    // `out.push_str(out)` reaches here as a VALUE, which
+                    // `sso_string_parts_from_value` spills to its own
+                    // entry-block alloca, so its pointer is that spill, never
+                    // this slot. A heap receiver is unaffected: its buffer
+                    // cannot contain a stack address, so the comparison was
+                    // already exact there.
+                    if sso_recv {
+                        let not_inline = self
+                            .builder
+                            .build_not(self.sso_string_is_inline(cap), "pstr.not_inline")
+                            .unwrap();
+                        self.builder
+                            .build_and(in_range, not_inline, "pstr.alias.heap")
+                            .unwrap()
+                    } else {
+                        in_range
+                    }
                 };
 
                 // Growth check: if new_len > cap, grow.
                 let fn_val = self.current_fn.unwrap();
                 let grow_bb = self.context.append_basic_block(fn_val, "pstr.grow");
                 let copy_bb = self.context.append_basic_block(fn_val, "pstr.copy");
-                let needs_grow = self
+                let heap_needs_grow = self
                     .builder
                     .build_int_compare(inkwell::IntPredicate::UGT, new_len, cap, "needs_grow")
                     .unwrap();
+                // SSO: THE GROWTH TEST IS THE DE-INLINE TEST — an inline
+                // receiver always takes the grow edge, which promotes it via
+                // `emit_string_buffer_grow`'s fresh-malloc arm. The comparison
+                // cannot decide it: `UGT` reads an inline `cap < 0` as an
+                // enormous unsigned and answers "no grow", and `new_len` is
+                // built from the raw `len` field, which for an inline string
+                // ≥ 16 bytes is content bytes 8..=15 and carries no useful
+                // magnitude. So the tag decides it directly — two ALU ops on
+                // the hot path, replacing a branch and a basic block.
+                let needs_grow = if sso_recv {
+                    let is_inline = self.sso_string_is_inline(cap);
+                    self.builder
+                        .build_or(heap_needs_grow, is_inline, "pstr.grow_or_inline")
+                        .unwrap()
+                } else {
+                    heap_needs_grow
+                };
                 self.builder
                     .build_conditional_branch(needs_grow, grow_bb, copy_bb)
                     .unwrap();
@@ -5561,7 +5703,35 @@ impl<'ctx> super::Codegen<'ctx> {
                 // short string (≤8 bytes) lands in one allocation rather than
                 // growing 0→4→8 — fewer reallocs on short-string workloads.
                 let min_cap = i64_t.const_int(8, false);
-                let doubled = self.builder.build_int_mul(cap, two, "doubled").unwrap();
+                // SSO: on this edge the receiver may be inline, and then `len`
+                // and `cap` are overlaid data bytes. Decode both before they
+                // reach the growth arithmetic. `eff_cap` is the inline LENGTH
+                // rather than `INLINE_CAPACITY`, which is what the head-of-op
+                // promote this replaces used to store into `cap`, so the
+                // doubling schedule after a promotion is unchanged. Computed
+                // before `emit_string_buffer_grow`, whose fresh-malloc arm
+                // memcpy's out of this descriptor — nothing may store into the
+                // slot until after that copy.
+                let (eff_len, eff_cap) = if sso_recv {
+                    let l = self.sso_select_len(cap, len, "pstr.g");
+                    let is_inline = self.sso_string_is_inline(cap);
+                    let c = self
+                        .builder
+                        .build_select(is_inline, l, cap, "pstr.g.cap")
+                        .unwrap()
+                        .into_int_value();
+                    (l, c)
+                } else {
+                    (len, cap)
+                };
+                let eff_new_len = if sso_recv {
+                    self.builder
+                        .build_int_add(eff_len, src_len, "pstr.g.new_len")
+                        .unwrap()
+                } else {
+                    new_len
+                };
+                let doubled = self.builder.build_int_mul(eff_cap, two, "doubled").unwrap();
                 let cmp1 = self
                     .builder
                     .build_int_compare(inkwell::IntPredicate::UGT, doubled, min_cap, "cmp1")
@@ -5573,11 +5743,11 @@ impl<'ctx> super::Codegen<'ctx> {
                     .into_int_value();
                 let cmp2 = self
                     .builder
-                    .build_int_compare(inkwell::IntPredicate::UGT, new_len, growth_min, "cmp2")
+                    .build_int_compare(inkwell::IntPredicate::UGT, eff_new_len, growth_min, "cmp2")
                     .unwrap();
                 let new_cap = self
                     .builder
-                    .build_select(cmp2, new_len, growth_min, "new_cap")
+                    .build_select(cmp2, eff_new_len, growth_min, "new_cap")
                     .unwrap()
                     .into_int_value();
 
@@ -5591,6 +5761,13 @@ impl<'ctx> super::Codegen<'ctx> {
 
                 self.builder.build_store(data_ptr_ptr, new_data).unwrap();
                 self.builder.build_store(cap_ptr, new_cap).unwrap();
+                // SSO: publish the decoded length — a receiver that arrived
+                // inline has just been promoted, so field 1 still holds
+                // overlaid data bytes and the copy block reloads it as the
+                // append offset. A plain re-store of `len` otherwise.
+                if sso_recv {
+                    self.builder.build_store(len_ptr, eff_len).unwrap();
+                }
                 self.builder.build_unconditional_branch(copy_bb).unwrap();
 
                 // Copy src bytes to data + len.

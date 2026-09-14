@@ -1,0 +1,34 @@
+// PROMOTE-ON-MUTATION: the other half of `build`. Here the receiver really IS
+// inline when it is first mutated — it comes from `substring`, which under
+// KARAC_SSO=1 constructs an inline descriptor for anything up to 23 bytes — so
+// every iteration takes the promotion path exactly once and then appends to an
+// ordinary heap string.
+//
+// `build` measures what a never-inline receiver pays for the check; this
+// measures what an actually-inline receiver pays for the promotion. The two
+// together are what a mutating String workload sees, and they must be read as
+// a pair: a change that makes the check cheaper by making the promotion more
+// expensive would look like a win on `build` alone. (One did: B-2026-09-14-20's
+// second attempt moved the promotion into an attributed runtime call and made
+// the same loop 4x worse.)
+fn grow_from_inline(n: i64) -> String {
+    let src = "abcdefghijklmnopqrstuvwxyz0123456789";
+    let mut out = src.substring(0, 12);
+    let mut i = 0;
+    while i < n {
+        out.push('a');
+        i = i + 1;
+    }
+    out
+}
+
+fn main() {
+    let mut total = 0;
+    let mut i = 0;
+    while i < ITERS {
+        let s = grow_from_inline(LEN);
+        total = total + s.len();
+        i = i + 1;
+    }
+    println(f"{total}");
+}
