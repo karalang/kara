@@ -96,8 +96,12 @@ all_failed="$(grep -oE '^test [A-Za-z0-9_:]+ \.\.\. FAILED' "$LOG" |
 # a failure, and CLAUDE.md § Commands tells everyone to SKIP building the
 # regex / arrow / gpu / unicode archives unless doing that kind of work — so an
 # unconditional flag would fail this leg on every ordinary checkout. Measured:
-# 5 of the 1613 fixtures need one (4 regex, 1 arrow), and with them subtracted
-# the leg matches the quarantine list exactly.
+# 6 of the 1617 fixtures need one (4 regex, 1 arrow, 1 unicode), and with them
+# subtracted the leg matches the quarantine list exactly. The COUNT drifts as
+# fixtures land -- it read "5 ... (4 regex, 1 arrow)" until the normalize
+# fixture's unicode archive joined them (re-measured 2026-09-14) -- so trust the
+# SKIPPED list the leg prints, not this number. The detection below is keyed on
+# the archive FILENAMES and needs no count, which is why the drift was harmless.
 #
 # Keyed on the OPT-IN archive filenames rather than on "a link failure", because
 # a MISSING REQUIRED archive must stay a hard failure — that is the vacuity this
