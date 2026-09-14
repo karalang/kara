@@ -10936,6 +10936,101 @@ fn main() {
     /// the `Vec` drain rather than keyed on `String`, and `Vec[Holder]` that
     /// the field drop is reached through a container's element drain and not
     /// only at a bare scope exit.
+    /// B-2026-09-14-1 — an index-assign into an `Array` element RELEASES the
+    /// buffer it displaces.
+    ///
+    /// The store wrote over the slot and nothing freed what was there, so
+    /// `a[0] = f"MUTATED-{n}"` over `Array[String, 2]` orphaned the overwritten
+    /// element: 10 bytes in 1 block at `-O0`, and 30 in 3 blocks for `c2`'s
+    /// three stores, so the loss is per-STORE rather than per-binding.
+    ///
+    /// `c6` IS THE ORACLE AND THE REASON THIS IS ARRAY-SPECIFIC. The identical
+    /// program over `Vec[String]` was always clean (18 allocs / 18 frees) —
+    /// its leg has released the displaced element since B-2026-06-19-7 — which
+    /// is the first thing the row asked to measure, because a `Vec` leak of the
+    /// same shape would have made this the whole indexed-store family instead
+    /// of one arm.
+    ///
+    /// `c4` and `c5` are the guard's two decline paths, and they are cells
+    /// rather than assumptions: `c4` stores over RODATA elements, which the
+    /// cap guard must skip (`cap == 0`) or it frees a static buffer, and `c5`
+    /// is a scalar `Array[i64, 3]` whose slot owns no heap at all. `c3` is the
+    /// compound form, where the RHS reads the same element it overwrites.
+    ///
+    /// THE ALIASING HAZARD THE `Vec` LEG GUARDS AGAINST IS NOT EXPRESSIBLE
+    /// HERE, which is why this arm needs no equivalent: `a[0] = a[1]` and
+    /// `a[0] = a[0]` are both refused by `E_INDEX_MOVE_NON_COPY`, so a store is
+    /// the only way to displace an element and its RHS can never be another
+    /// live element of the same array.
+    ///
+    /// FLOORED because this class hides under DCE, and the floor is what keeps
+    /// the cell from collapsing to nothing: an orphaned allocation whose only
+    /// consumer is the slot it is overwritten in is exactly what LLVM deletes.
+    /// 29 allocations measured at `-O2` against 35 at `-O0`.
+    ///
+    /// IT BITES AT BOTH OPT LEVELS, which is worth stating because the
+    /// single-store repro does NOT: that program is clean under valgrind at
+    /// `-O2` (the allocation is deleted outright) and it was the basis for an
+    /// earlier draft of this comment claiming the `-O0` leg was the only gate.
+    /// MEASURED on the unfixed compiler instead: `50 byte(s) leaked in 5
+    /// allocation(s)` at `-O0` -- 10 bytes for each of the five displacing
+    /// stores, `c1` plus `c2`'s three plus `c3` -- and `10 byte(s) leaked in 1
+    /// allocation(s)` at `-O2`, where DCE takes four of the five and one
+    /// survives. So the `--features llvm` leg catches this too; the `-O0` leg
+    /// is simply the one that sees all of it.
+    ///
+    /// TWO CELLS DELIBERATELY ABSENT, both still on the row. A STRUCT element
+    /// carrying a heap field (`Array[D, N]`, `D { s: String }`) is not a
+    /// vec-struct slot, so the guard declines and its 10 bytes still leak —
+    /// along with the displaced element's `Drop` BODY, which never runs either.
+    /// And `Array[Vec[i64], N]` has a pre-existing `Invalid free()` (measured
+    /// on this same tree before the fix, 17 allocs / 17 frees with 32 bytes
+    /// lost); the fix closes its leak half and leaves the invalid free, filed
+    /// separately. Neither belongs in a fixture that asserts a clean run.
+    #[test]
+    fn asan_array_index_store_releases_the_displaced_element() {
+        assert_clean_asan_run_min_allocs(
+            r#"
+fn main() {
+    let n = env.args().len() as i64;
+    let mut a: Array[String, 2] = [f"aaaaaaaa-{n}", f"bbbbbbbb-{n}"];
+    a[0] = f"MUTATED-{n}";
+    println(f"c1:{a[0]}");
+    let mut b: Array[String, 3] = [f"pppppppp-{n}", f"qqqqqqqq-{n}", f"rrrrrrrr-{n}"];
+    b[0] = f"M1-{n}";
+    b[1] = f"M2-{n}";
+    b[2] = f"M3-{n}";
+    println(f"c2:{b[0]}{b[1]}{b[2]}");
+    let mut c: Array[String, 2] = [f"cccccccc-{n}", f"dddddddd-{n}"];
+    c[0] = c[0] + f"X{n}";
+    println(f"c3:{c[0]}");
+    let mut d: Array[String, 2] = ["lit-a", "lit-b"];
+    d[0] = "lit-c";
+    println(f"c4:{d[0]}");
+    let mut e: Array[i64, 3] = [n, n + 1, n + 2];
+    e[0] = n + 9;
+    println(f"c5:{e[0]}");
+    let mut v: Vec[String] = Vec.new();
+    v.push(f"vvvvvvvv-{n}");
+    v[0] = f"VM-{n}";
+    println(f"c6:{v[0]}");
+    println("end");
+}
+"#,
+            &[
+                "c1:MUTATED-1",
+                "c2:M1-1M2-1M3-1",
+                "c3:cccccccc-1X1",
+                "c4:lit-c",
+                "c5:10",
+                "c6:VM-1",
+                "end",
+            ],
+            "asan_array_index_store_releases_the_displaced_element",
+            20,
+        );
+    }
+
     #[test]
     fn asan_array_struct_field_drops_its_elements() {
         assert_clean_asan_run(

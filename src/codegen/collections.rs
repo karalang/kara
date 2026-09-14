@@ -7068,6 +7068,35 @@ impl<'ctx> super::Codegen<'ctx> {
                     .build_gep(arr_ty, arr_ptr, &[zero, idx_val], "arr.store.ptr")
                     .unwrap()
             };
+            // B-2026-09-14-1 — RELEASE THE DISPLACED ELEMENT first. This arm
+            // stored over the slot and nothing freed what was there, so
+            // `a[0] = f"MUTATED-{n}"` over `Array[String, 2]` orphaned the
+            // overwritten element's buffer: 10 B in 1 block at `-O0`, and 30 B
+            // in 3 blocks for three stores, so it is per-store rather than
+            // per-binding.
+            //
+            // The `Vec` leg has done this since B-2026-06-19-7 and is CLEAN on
+            // the identical program (`v[0] = ..` over `Vec[String]`, 18 allocs
+            // / 18 frees) — which is what makes this Array-specific rather than
+            // a whole-family gap, and the Vec leg the oracle to copy. Same
+            // helper, same cap guard: `emit_free_vec_buffer_if_owned` frees only
+            // a genuinely owned heap buffer and skips an inline (`cap < 0`) or
+            // static (`cap == 0`) one, so a rodata element is a no-op here.
+            //
+            // OUTER BUFFER ONLY, for the reason the Vec leg's own comment
+            // gives: a live per-element alias keeps its own scope-exit cleanup,
+            // so a deep walk here would double-free it. That also bounds what
+            // this fixes — a STRUCT element carrying a heap field
+            // (`Array[D, N]` with `D { s: String }`) is not a vec-struct slot,
+            // keeps its 10 B, and stays on the row along with the displaced
+            // element's lost `Drop` BODY, which this does not address either.
+            //
+            // `-O0` is the only place this is visible: at `-O2` LLVM deletes
+            // the orphaned allocation outright and valgrind reports 0 errors,
+            // which is why the row's figure is the `-O0` one.
+            if self.llvm_ty_is_vec_struct(at.get_element_type()) {
+                self.emit_free_vec_buffer_if_owned(elem_ptr, 1);
+            }
             // B-2026-08-14-6 — coerce to the ARRAY's declared element type
             // before the store. LLVM types a store by its VALUE, so writing an
             // `iN` into an `[N x double]` slot is not an error — it writes the
