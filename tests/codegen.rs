@@ -34829,6 +34829,112 @@ fn main() {
         }
     }
 
+    /// B-2026-09-14-5 (defect 1) — a COPY projection off an owned
+    /// `Option`/`Result` payload binding does not stand the caller down.
+    ///
+    /// `optres_payload_escaping_param_variants` called every projection off the
+    /// payload binding an escape, so `Some(t) => return t.1` over
+    /// `Option[(R, i64)]` read as a partial move of the payload: the gate
+    /// declined, the callee has no binding to own a fresh temp, and the body
+    /// ran NOWHERE. `got:9 end` on all three compiled surfaces against
+    /// `--interp`'s `dR5 got:9 end`.
+    ///
+    /// THE TWO FIXED POLICIES ARE THE ENDS OF ONE AXIS and both are wrong here.
+    /// `t.0` really does move `R` out and hand its body to the receiver, while
+    /// `t.1` and `t.0.id` carry nothing — so calling all three escapes loses two
+    /// bodies and calling all three reads doubles one. The policy is now asked
+    /// per projection with the payload's type in hand: a projection is a READ
+    /// exactly when its LEAF carries no `Drop` body.
+    ///
+    /// CELL 3 IS THE ONE THAT KEEPS THE RULE HONEST. `return t.0` is a real
+    /// part move and must STILL decline; it is unchanged by this row and still
+    /// loses its sibling's body, which is defect 2 (B-2026-09-14-18,
+    /// B-2026-09-13-5) and deliberately not repaired here. Pinned at its
+    /// measured value so a later part-precision fix has to move it
+    /// deliberately rather than silently.
+    ///
+    /// CELLS 6-7 ARE THE TUPLE BOUNDARY, measured rather than assumed. The
+    /// first cut applied the leaf policy to every payload shape and DOUBLED a
+    /// body for a NAMED payload — there the callee's own param machinery
+    /// already runs the field bodies, so the gate declining is what keeps the
+    /// caller from becoming a second owner. A tuple payload has no such
+    /// callee-side owner, which is why its cells lose the body instead. Same
+    /// question, opposite correct answers; cell 7 is the named-payload control
+    /// that caught it.
+    #[test]
+    fn e2e_copy_projection_off_an_optres_payload_keeps_the_owed_body() {
+        const HDR: &str = "struct R { id: i64 }\n\
+                           impl Drop for R { fn drop(mut ref self) { println(f\"dR{self.id}\") } }\n\
+                           struct In { id: i64 }\n\
+                           impl Drop for In { fn drop(mut ref self) { println(f\"dIn{self.id}\") } }\n\
+                           struct Plain { inner: In }\n";
+        // Each cell carries its own interpreter expectation, because ONE of
+        // them legitimately differs: the real-part-move control is
+        // B-2026-09-13-5's interpreter DOUBLE (`dR5 dR6 got:5 dR5`) against
+        // codegen's under-run, a divergence this row does not touch. Pinning
+        // both sides separately keeps that cell honest instead of dropping the
+        // interpreter assertion for the whole table.
+        for (label, fns, body, want, interp_want) in [
+            (
+                "a Copy leaf: t.1",
+                "fn eat(o: Option[(R, i64)]) -> i64 { match o { Some(t) => { return t.1; } None => { return 0; } } }\n",
+                "let got: i64 = eat(Option.Some((R { id: 5 }, 9)));\nprintln(f\"got:{got}\");\nprintln(\"end\");",
+                "dR5\ngot:9\nend\n",
+                "dR5\ngot:9\nend\n",
+            ),
+            (
+                "a Copy leaf reached THROUGH the Drop-bearing element: t.0.id",
+                "fn eat(o: Option[(R, i64)]) -> i64 { match o { Some(t) => { return t.0.id; } None => { return 0; } } }\n",
+                "let got: i64 = eat(Option.Some((R { id: 5 }, 9)));\nprintln(f\"got:{got}\");\nprintln(\"end\");",
+                "dR5\ngot:5\nend\n",
+                "dR5\ngot:5\nend\n",
+            ),
+            (
+                "control: a REAL part move still declines — defect 2, unchanged",
+                "fn eat(o: Option[(R, R)]) -> R { match o { Some(t) => { return t.0; } None => { return R { id: 0 }; } } }\n",
+                "let got: R = eat(Option.Some((R { id: 5 }, R { id: 6 })));\nprintln(f\"got:{got.id}\");\nprintln(\"end\");",
+                "got:5\ndR5\nend\n",
+                // B-2026-09-13-5: the interpreter runs the moved-out part's
+                // body at the payload's death AND the caller runs it at the
+                // binding, so it prints one more than codegen. Neither is the
+                // due `dR6 got:5 dR5 end`; both are pinned as measured.
+                "dR5\ndR6\ngot:5\ndR5\nend\n",
+            ),
+            (
+                "control: no projection at all was always correct",
+                "fn eat(o: Option[(R, i64)]) -> i64 { match o { Some(t) => { return 0; } None => { return 0; } } }\n",
+                "let got: i64 = eat(Option.Some((R { id: 5 }, 9)));\nprintln(f\"got:{got}\");\nprintln(\"end\");",
+                "dR5\ngot:0\nend\n",
+                "dR5\ngot:0\nend\n",
+            ),
+            (
+                "control: a bare payload binding read",
+                "fn eat(o: Option[R]) -> i64 { match o { Some(t) => { return t.id; } None => { return 0; } } }\n",
+                "let got: i64 = eat(Option.Some(R { id: 5 }));\nprintln(f\"got:{got}\");\nprintln(\"end\");",
+                "dR5\ngot:5\nend\n",
+                "dR5\ngot:5\nend\n",
+            ),
+            (
+                "control: a NAMED payload's scalar read — the doubling boundary",
+                "fn eat(o: Option[Plain]) -> i64 { match o { Some(t) => { return t.inner.id; } None => { return 0; } } }\n",
+                "let got: i64 = eat(Option.Some(Plain { inner: In { id: 5 } }));\nprintln(f\"got:{got}\");\nprintln(\"end\");",
+                "dIn5\ngot:5\nend\n",
+                "dIn5\ngot:5\nend\n",
+            ),
+        ] {
+            let src = format!("{HDR}{fns}fn main() {{\n{body}\n}}\n");
+            let (interp_out, interp_errs, _, _) = karac::run_program_full(&src);
+            assert!(
+                interp_errs.is_empty(),
+                "[{label}] interp errored: {interp_errs:?}"
+            );
+            assert_eq!(interp_out.join(""), interp_want, "[{label}] interpreter");
+            if let Some(aot) = run_program(&src) {
+                assert_eq!(aot, want, "[{label}] AOT");
+            }
+        }
+    }
+
     /// B-2026-09-15-15 — a MULTI-FIELD enum variant owns its boxed
     /// `Array[T, N]` payload, and an arm that hands that payload on is
     /// disarmed in both pattern shapes.

@@ -4261,6 +4261,67 @@ impl<'ctx> super::Codegen<'ctx> {
     /// frees the BOX, which is still the callee's own prologue. Narrowing
     /// `callee_optres_param_entry_copied_and_owned` the same way would strand
     /// the box for every consuming callee.
+    /// B-2026-09-14-5 — the projection chain of `e`, outermost accessor last,
+    /// or `None` for anything that is not a pure field/tuple projection.
+    ///
+    /// `Index` (`v[i]`) is deliberately excluded rather than modelled: its leaf
+    /// depends on a runtime value, so there is no static leaf to type, and the
+    /// conservative answer at every caller below is "this escapes".
+    fn projection_accessor_chain(e: &Expr) -> Option<Vec<crate::ast::ParamPart>> {
+        let mut out = Vec::new();
+        let mut cur = e;
+        loop {
+            match &cur.kind {
+                ExprKind::FieldAccess { object, field, .. } => {
+                    out.push(crate::ast::ParamPart::Field(field.clone()));
+                    cur = object;
+                }
+                ExprKind::TupleIndex { object, index, .. } => {
+                    out.push(crate::ast::ParamPart::TupleIndex(*index as usize));
+                    cur = object;
+                }
+                ExprKind::Identifier(_) | ExprKind::SelfValue => break,
+                _ => return None,
+            }
+        }
+        out.reverse();
+        (!out.is_empty()).then_some(out)
+    }
+
+    /// B-2026-09-14-5 — walk an accessor chain through a `TypeExpr`, yielding
+    /// the leaf type, or `None` where the chain does not fit the type.
+    ///
+    /// `None` is the answer for a chain rooted at some OTHER binding than the
+    /// payload — a nested destructure binds each part under its own name, and a
+    /// projection off one of those does not fit the payload type. Every caller
+    /// treats `None` as "assume it carries a body", which is the status quo.
+    fn te_at_accessor_chain(
+        &self,
+        root: &TypeExpr,
+        chain: &[crate::ast::ParamPart],
+    ) -> Option<TypeExpr> {
+        let mut cur = root.clone();
+        for part in chain {
+            cur = match (part, &cur.kind) {
+                (crate::ast::ParamPart::TupleIndex(i), TypeKind::Tuple(elems)) => {
+                    elems.get(*i)?.clone()
+                }
+                (crate::ast::ParamPart::Field(f), TypeKind::Path(p)) => {
+                    let name = p.segments.last()?;
+                    let names = self.type_decls.struct_field_names.get(name.as_str())?;
+                    let idx = names.iter().position(|n| n == f)?;
+                    self.type_decls
+                        .struct_field_type_exprs
+                        .get(name.as_str())?
+                        .get(idx)?
+                        .clone()
+                }
+                _ => return None,
+            };
+        }
+        Some(cur)
+    }
+
     pub(super) fn callee_by_value_optres_param_bodies_te(
         &self,
         callee_name: &str,
@@ -4320,10 +4381,69 @@ impl<'ctx> super::Codegen<'ctx> {
                     !self.type_decls.shared_types.contains_key(head.as_str())
                         && program.drop_method_keys.contains_key(head.as_str())
                 });
+            //
+            // B-2026-09-14-5 — the ELSE arm is no longer the fully
+            // projection-INTOLERANT map. Both fixed policies are ends of one
+            // axis and both are wrong for a payload whose parts differ: over
+            // `Option[(R, i64)]`, `t.0` really does move `R` out and hand its
+            // body to the receiver, while `t.1` and `t.0.id` are copy reads
+            // that carry nothing. The intolerant map calls all three escapes
+            // and LOSES the body for the latter two (`got end` where
+            // `dR5 got end` is due); the tolerant map would call all three
+            // reads and DOUBLE the body for the first, which is the
+            // `dR1 / len:1 / dR1` B-2026-09-12-15 measured.
+            //
+            // So the policy is now asked per projection, with the payload's
+            // type in hand: a projection is a READ exactly when its LEAF
+            // carries no `Drop` body. `result_escape` cannot answer that — it
+            // is a plain-AST analysis with no type table — so it takes the
+            // policy as a closure and this is the caller that can supply one.
+            //
+            // CONSERVATIVE WHEREVER IT CANNOT RESOLVE. A chain that does not
+            // fit the payload type (a projection off a nested destructure's
+            // own binding), an `Index`, or an unknown shape all answer "not a
+            // read", which reproduces today's intolerant behaviour for that
+            // projection rather than guessing. Erring this way costs the
+            // status quo; the other way costs a double body.
+            //
+            // The `payload_owns_its_drop_body` arm above is UNCHANGED and
+            // stays fully tolerant: there the typechecker has already rejected
+            // every partial move (`partial_move_of_drop_struct`), so a
+            // surviving projection is provably a copy whatever its leaf type
+            // says — asking the leaf there would wrongly re-classify
+            // `t.inner` off a `Drop`-declaring payload as an escape.
+            //
+            // TUPLE PAYLOADS ONLY, and the boundary is measured rather than
+            // cautious. For a NAMED payload the callee's own param machinery
+            // already runs the field bodies, so the gate declining is what
+            // keeps the caller from becoming a second owner: applying the leaf
+            // policy there printed `dIn5 dIn5 r:7 end` for a due
+            // `dIn5 r:7 end` on `guard-plain-struct-scalar-read` — the exact
+            // double this gate's own doc warns about, from the other side. A
+            // tuple payload has no such callee-side owner, which is why its
+            // projection cells LOSE the body instead of doubling it, and why
+            // the two shapes need opposite answers to the same question.
+            let payload_te_for_policy = optres_payload_te(&p.ty, want_variant.as_deref())
+                .filter(|te| matches!(te.kind, TypeKind::Tuple(_)));
+            let leaf_is_copy_read = |e: &Expr| -> bool {
+                let Some(root) = payload_te_for_policy.as_ref() else {
+                    return false;
+                };
+                let Some(chain) = Self::projection_accessor_chain(e) else {
+                    return false;
+                };
+                let Some(leaf) = self.te_at_accessor_chain(root, &chain) else {
+                    return false;
+                };
+                !self.elem_te_runs_user_drop(&leaf)
+            };
             let escaped = if payload_owns_its_drop_body {
                 crate::result_escape::optres_payload_escaping_param_variants_ignoring_projections(f)
             } else {
-                crate::result_escape::optres_payload_escaping_param_variants(f)
+                crate::result_escape::optres_payload_escaping_param_variants_with(
+                    f,
+                    &leaf_is_copy_read,
+                )
             };
             if let Some(vs) = escaped.get(pname.as_str()) {
                 match want_variant.as_deref() {

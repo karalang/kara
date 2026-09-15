@@ -38,6 +38,18 @@ use std::collections::{HashMap, HashSet};
 /// `match` scrutinee, uses that are a READ-ONLY position)`.
 #[derive(Default)]
 struct Acc<'a> {
+    /// B-2026-09-14-5 — the PROJECTION POLICY the `payload_escapers_proj` map is
+    /// built under, supplied by the caller. `None` is
+    /// [`projection_is_read`], i.e. "every projection is a read", which is what
+    /// [`optres_payload_escaping_param_variants_ignoring_projections`] wants.
+    ///
+    /// The point of making it a parameter is that the SOUND answer needs type
+    /// information this module does not have and should not acquire: whether a
+    /// projection carries a `Drop` body out depends on its LEAF type, which
+    /// only a caller holding the payload's `TypeExpr` and the struct table can
+    /// resolve. The walk stays here; the policy comes from whoever can answer
+    /// it. See [`optres_payload_escaping_param_variants_with`].
+    copy_read: Option<&'a dyn Fn(&Expr) -> bool>,
     counts: HashMap<&'a str, (u32, u32, u32)>,
     /// `(binding name, value-span (offset,length))` for every `Binding`-pattern
     /// `let` / `let…else` encountered — filtered against `counts` after the walk.
@@ -236,6 +248,59 @@ pub fn optres_payload_escaping_param_variants(func: &Function) -> HashMap<String
         .collect()
 }
 
+/// B-2026-09-14-5 — [`optres_payload_escaping_param_variants`] under a
+/// CALLER-SUPPLIED projection policy.
+///
+/// The two fixed policies this module already exposes are the ends of one
+/// axis: `optres_payload_escaping_param_variants` calls every projection off
+/// the payload binding an escape, and `..._ignoring_projections` calls none of
+/// them one. Both are wrong for a TUPLE payload, and in opposite directions —
+/// `t.0` over `Option[(R, i64)]` really does move `R` out and hand its body to
+/// the receiver, while `t.1` and `t.0.id` are copy reads that take nothing.
+/// Picking either fixed policy therefore loses a body or doubles one; measured
+/// as `got end` where `dR5 got end` is due (B-2026-09-14-5), and as
+/// `dR1 / len:1 / dR1` in the other direction (B-2026-09-12-15).
+///
+/// The sound answer depends on the projection's LEAF TYPE, which this module
+/// deliberately cannot see: it is a plain-AST analysis with no type table, and
+/// giving it one would drag the struct/field environment through every caller.
+/// So the WALK stays here and the POLICY is passed in by a caller that can
+/// resolve leaves — `codegen` holds the payload `TypeExpr` and the struct field
+/// tables and answers "does this projection's leaf carry a `Drop` body".
+///
+/// `copy_read` is asked of each projection expression and answers `true` when
+/// it is a READ that carries nothing away. Returning `false` for everything
+/// reproduces `optres_payload_escaping_param_variants`; returning `true` for
+/// every projection reproduces `..._ignoring_projections`, so both existing
+/// entry points are special cases of this one and are kept as the named,
+/// obviously-correct spellings of their ends.
+pub fn optres_payload_escaping_param_variants_with(
+    func: &Function,
+    copy_read: &dyn Fn(&Expr) -> bool,
+) -> HashMap<String, HashSet<String>> {
+    let mut acc = Acc {
+        copy_read: Some(copy_read),
+        ..Default::default()
+    };
+    walk_block(&func.body, &mut acc);
+    func.params
+        .iter()
+        .filter_map(|p| {
+            let crate::ast::PatternKind::Binding(name) = &p.pattern.kind else {
+                return None;
+            };
+            acc.payload_escapers_proj.get(name.as_str()).map(|vs| {
+                (
+                    name.clone(),
+                    vs.iter()
+                        .map(|v| (*v).to_string())
+                        .collect::<HashSet<String>>(),
+                )
+            })
+        })
+        .collect()
+}
+
 /// B-2026-09-13-3 — [`optres_payload_escaping_param_variants`] for a payload
 /// that CANNOT be partially moved, so a projection off it is always a read.
 ///
@@ -399,6 +464,7 @@ fn variant_arm_payload_escapes_proj<'a>(
     pattern: &'a crate::ast::Pattern,
     guard: Option<&Expr>,
     body: &Expr,
+    copy_read: &dyn Fn(&Expr) -> bool,
 ) -> Option<&'a str> {
     let variant = optres_variant_of_pattern(pattern)?;
     let names = pattern.binding_names();
@@ -406,7 +472,7 @@ fn variant_arm_payload_escapes_proj<'a>(
         return None;
     }
     (!names.iter().all(|v| {
-        crate::consume_class::binding_only_borrowed_with(v, body, &projection_is_read)
+        crate::consume_class::binding_only_borrowed_with(v, body, copy_read)
             && guard.is_none_or(|g| {
                 crate::consume_class::binding_only_borrowed_with(v, g, &projection_is_read)
             })
@@ -418,6 +484,7 @@ fn variant_arm_payload_escapes_proj<'a>(
 fn variant_arm_payload_escapes_proj_block<'a>(
     pattern: &'a crate::ast::Pattern,
     block: Option<&Block>,
+    copy_read: &dyn Fn(&Expr) -> bool,
 ) -> Option<&'a str> {
     let variant = optres_variant_of_pattern(pattern)?;
     let names = pattern.binding_names();
@@ -426,9 +493,9 @@ fn variant_arm_payload_escapes_proj_block<'a>(
     }
     match block {
         None => Some(variant),
-        Some(b) => (!names.iter().all(|v| {
-            crate::consume_class::binding_only_borrowed_block_with(v, b, &projection_is_read)
-        }))
+        Some(b) => (!names
+            .iter()
+            .all(|v| crate::consume_class::binding_only_borrowed_block_with(v, b, copy_read)))
         .then_some(variant),
     }
 }
@@ -618,7 +685,8 @@ fn walk_stmt<'a>(s: &'a Stmt, acc: &mut Acc<'a>) {
                             .or_default()
                             .insert(v);
                     }
-                    if let Some(v) = variant_arm_payload_escapes_proj_block(pattern, None) {
+                    let cr: &dyn Fn(&Expr) -> bool = acc.copy_read.unwrap_or(&projection_is_read);
+                    if let Some(v) = variant_arm_payload_escapes_proj_block(pattern, None, cr) {
                         acc.payload_escapers_proj
                             .entry(n.as_str())
                             .or_default()
@@ -668,6 +736,7 @@ fn walk_expr<'a>(e: &'a Expr, acc: &mut Acc<'a>) {
         ExprKind::Match { scrutinee, arms } => {
             walk_scrutinee(acc, scrutinee);
             if let ExprKind::Identifier(n) = &scrutinee.kind {
+                let cr: &dyn Fn(&Expr) -> bool = acc.copy_read.unwrap_or(&projection_is_read);
                 for a in arms {
                     if let Some(v) =
                         variant_arm_takes_payload(&a.pattern, a.guard.as_ref(), &a.body)
@@ -686,7 +755,7 @@ fn walk_expr<'a>(e: &'a Expr, acc: &mut Acc<'a>) {
                             .insert(v);
                     }
                     if let Some(v) =
-                        variant_arm_payload_escapes_proj(&a.pattern, a.guard.as_ref(), &a.body)
+                        variant_arm_payload_escapes_proj(&a.pattern, a.guard.as_ref(), &a.body, cr)
                     {
                         acc.payload_escapers_proj
                             .entry(n.as_str())
@@ -806,7 +875,10 @@ fn walk_expr<'a>(e: &'a Expr, acc: &mut Acc<'a>) {
                         .or_default()
                         .insert(v);
                 }
-                if let Some(v) = variant_arm_payload_escapes_proj_block(pattern, Some(then_block)) {
+                let cr: &dyn Fn(&Expr) -> bool = acc.copy_read.unwrap_or(&projection_is_read);
+                if let Some(v) =
+                    variant_arm_payload_escapes_proj_block(pattern, Some(then_block), cr)
+                {
                     acc.payload_escapers_proj
                         .entry(n.as_str())
                         .or_default()
@@ -845,7 +917,8 @@ fn walk_expr<'a>(e: &'a Expr, acc: &mut Acc<'a>) {
                         .or_default()
                         .insert(v);
                 }
-                if let Some(v) = variant_arm_payload_escapes_proj_block(pattern, Some(body)) {
+                let cr: &dyn Fn(&Expr) -> bool = acc.copy_read.unwrap_or(&projection_is_read);
+                if let Some(v) = variant_arm_payload_escapes_proj_block(pattern, Some(body), cr) {
                     acc.payload_escapers_proj
                         .entry(n.as_str())
                         .or_default()
