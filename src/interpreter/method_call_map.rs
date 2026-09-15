@@ -296,10 +296,14 @@ impl<'a> super::Interpreter<'a> {
                 }
             }
             "remove" => {
-                let val = args
-                    .first()
-                    .map(|a| self.eval_expr_inner(&a.value))
-                    .unwrap_or(Value::Unit);
+                // B-2026-09-15-5 — the ARGUMENT key temporary owes a body too,
+                // and it is a SECOND owing distinct from the stored key's below
+                // (B-2026-08-27-2): `m.remove(mkd(0))` destroys two values, the
+                // fresh temp that was hashed and the key the map was holding.
+                // Measured 1 body where 3 were owed across
+                // `contains_key` + `remove`.
+                let (val, arg_owes) = self.eval_lookup_key_arg(args);
+                let val_for_drop = val.clone();
                 if let Value::Map(m) = obj {
                     // B-2026-08-27-2 — the stored KEY is destroyed here, so its
                     // body is owed. The VALUE is not: it moves out into the
@@ -328,6 +332,7 @@ impl<'a> super::Interpreter<'a> {
                     if let Some(k) = removed_key {
                         self.run_discarded_value_user_drops(k);
                     }
+                    self.run_owed_lookup_key_user_drops(val_for_drop, arg_owes);
                     return Some(old);
                 }
                 if let Value::SortedMap(mut m) = obj {
@@ -357,6 +362,7 @@ impl<'a> super::Interpreter<'a> {
                     if let Some(k) = removed_key {
                         self.run_discarded_value_user_drops(k);
                     }
+                    self.run_owed_lookup_key_user_drops(val_for_drop, arg_owes);
                     return Some(old);
                 }
                 if let Value::SortedSet(mut set) = obj {
@@ -368,6 +374,14 @@ impl<'a> super::Interpreter<'a> {
                     if let Some(e) = removed {
                         self.run_discarded_value_user_drops(e);
                     }
+                    // B-2026-09-15-5 — and the ARGUMENT temp's own body, which
+                    // is a second, distinct owing. Missed on the first pass
+                    // (only the two MAP legs were patched) and caught by
+                    // sweeping every lookup entry point on every container
+                    // against the compiled backend: codegen funnels all of
+                    // them through one chokepoint, so a per-site interpreter
+                    // fix leaves exactly this kind of hole.
+                    self.run_owed_lookup_key_user_drops(val_for_drop, arg_owes);
                     return Some(Value::Bool(was_present));
                 }
                 if let Value::Set(set) = obj {
@@ -383,6 +397,8 @@ impl<'a> super::Interpreter<'a> {
                     if let Some(e) = removed {
                         self.run_discarded_value_user_drops(e);
                     }
+                    // B-2026-09-15-5 — plus the ARGUMENT temp's own body.
+                    self.run_owed_lookup_key_user_drops(val_for_drop, arg_owes);
                     return Some(Value::Bool(was_present));
                 }
             }

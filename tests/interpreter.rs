@@ -1938,6 +1938,17 @@ fn removing_an_entry_runs_the_key_or_element_drop_body() {
     // all four were affected: a Set's ELEMENT is the key half, so `Set.remove`
     // ran no body at all.
     //
+    // B-2026-09-15-5 UPDATED THE EXPECTATION: each `remove` now prints TWO
+    // key bodies, not one. The argument here is a struct LITERAL -- a fresh
+    // temporary that is built, hashed, and discarded at the call -- so it is a
+    // second value with its own body debt, distinct from the STORED key this
+    // row was about. The old single-`dropK` expectation was this defect
+    // written down: when B-2026-08-27-2 fixed the stored key's body, the
+    // argument temp's was still being dropped on the floor at every lookup
+    // entry point, so one body looked complete. Passing a BOUND key instead
+    // (`let p = K { n: 1 }; m.remove(p)`) still yields two, because the
+    // binding owns one of them -- which is why the count is the same and only
+    // the OWNER differs.
     // Key before value falls out of the semantics rather than being imposed:
     // the key dies at the call, the value dies wherever the returned `Option`
     // does. Codegen twin: `test_e2e_remove_runs_the_key_drop_body`.
@@ -1966,10 +1977,10 @@ fn removing_an_entry_runs_the_key_or_element_drop_body() {
         }";
     assert_eq!(
         run_no_errors(src),
-        "dropK 1\ndropV 1\nmap len=0\n\
-         dropK 2\ndropV 2\nsmap len=0\n\
-         dropK 3\nset len=0\n\
-         dropK 4\nsset len=0\n"
+        "dropK 1\ndropK 1\ndropV 1\nmap len=0\n\
+         dropK 2\ndropK 2\ndropV 2\nsmap len=0\n\
+         dropK 3\ndropK 3\nset len=0\n\
+         dropK 4\ndropK 4\nsset len=0\n"
     );
 }
 
@@ -67286,4 +67297,321 @@ fn rc_promoted_base_still_destroys_its_retained_field() {
          \x20 println(\"m3\");\n}}\n"
     ));
     assert_eq!(outm, vec!["dS2\n", "t1\n", "dS1\n", "m3\n"]);
+}
+
+/// B-2026-09-15-5 — a map/set LOOKUP key temporary's user `Drop` body runs at
+/// the lookup, which is where its live range ends.
+///
+/// A lookup BORROWS its key and discards it. The reclaim added by
+/// B-2026-08-26-32 / B-2026-09-13-20 / B-2026-09-13-30 resolves a MEMORY walk at
+/// each of the five lookup entry points; a type's user `Drop` hook is a SEPARATE
+/// `Type.drop` call that every other drop site pairs with its walk, and the key
+/// sites emitted the walk alone. So a key's storage was reclaimed exactly once
+/// and its body never ran.
+///
+/// design.md § Drop is what makes the lookup the OWED position rather than merely
+/// an early one: destructors fire at a value's live-range end, not at lexical
+/// scope end, and "a value whose last use is mid-scope is dropped at that use".
+/// A key temporary's last use IS the lookup.
+///
+/// A BOTH-BACKENDS GAP, not a run/build divergence — measured byte-identical on
+/// `karac run --interp` and `karac build` before the fix, which is why an A/B
+/// kata could never have caught it and why this fixture is PAIRED instead.
+/// Invisible to ASAN and to both ratchet legs too, since storage is freed exactly
+/// once either way; only an output comparison sees it.
+///
+/// THE FIVE CONTROL CELLS ARE WHAT LOCALIZE IT. A fresh temp's body already ran
+/// at an ordinary consuming position, at a bare discard, at a binding's
+/// live-range end, at container destruction, and for an inserted key — so the
+/// machinery worked everywhere except this one position, and the fix belongs at
+/// the key sites rather than in any walker. They are also the cells that fail if
+/// the fix ever DOUBLES a body.
+///
+/// THE `dD1` POSITION IN EVERY MAP CELL IS THE LIVE-RANGE RULE, NOT AN ODDITY,
+/// and predicting it wrong is easy: the stored element's body fires BEFORE
+/// `post`, not at the end of `main`, because the map's own last use is the
+/// lookup, so the map dies there too. Every `want` here was measured and then
+/// checked against that rule rather than assumed from lexical nesting.
+///
+/// A TUPLE key needs its own arm and nearly became a regression: the
+/// `TypeKind::Path`-keyed leaf walker declines a nameless type, while the
+/// interpreter's value-driven walk recurses into tuple elements — so fixing only
+/// the named case would have traded a symmetric gap for a run/build divergence,
+/// which is strictly worse. Cells 5 and 6 pin both tuple spellings.
+///
+/// NOT FIXED HERE, and deliberately not asserted: an enum stored in a `Map` or
+/// `Set` never runs its user `Drop` body at all — `s.insert(mke(0))` with no
+/// lookup anywhere prints nothing, while `Vec[Tg]` is correct. That is a
+/// STORED-ELEMENT defect independent of this row's lookup question, filed
+/// separately; the lookup half of the enum spelling IS fixed by this change.
+#[test]
+fn test_a_lookup_key_temporarys_user_drop_body_runs_at_the_lookup() {
+    let hdr = "#[derive(Hash, Eq, PartialEq)]\n\
+               struct Dk { a: String, b: i64 }\n\
+               impl Drop for Dk { fn drop(mut ref self) { println(f\"dD{self.b}\") } }\n\
+               #[derive(Hash, Eq, PartialEq)]\n\
+               struct Nest { i: Dk, b: i64 }\n\
+               struct Mk { p: String }\n\
+               impl Mk { fn mkd(ref self, n: i64) -> Dk { return Dk { a: f\"heap-{n}\", b: n }; } }\n\
+               impl Mk { fn build(n: i64) -> Dk { return Dk { a: f\"heap-{n}\", b: n }; } }\n\
+               fn mkd(n: i64) -> Dk { return Dk { a: f\"heap-{n}\", b: n }; }\n\
+               fn mkn(n: i64) -> Nest { return Nest { i: mkd(n), b: n }; }\n\
+               fn mkt(n: i64) -> (Dk, i64) { return (mkd(n), n); }\n\
+               fn eat(d: Dk) -> i64 { return d.b; }\n";
+    for (label, stmts, want) in [
+        (
+            "the row's shape: a struct key at Map.get",
+            "let mut m: Map[Dk, i64] = Map.new();\n\
+             m.insert(mkd(1), 1);\n\
+             println(\"pre\");\n\
+             match m.get(mkd(2)) { Some(v) => { println(f\"g{v}\"); } None => { println(\"miss\"); } }\n\
+             println(\"post\");\n",
+            "pre\ndD2\nmiss\ndD1\npost\nend\n",
+        ),
+        (
+            "a Drop-bearing field ONE LEVEL DOWN -- the row's second question",
+            "let mut m: Map[Nest, i64] = Map.new();\n\
+             m.insert(mkn(1), 1);\n\
+             println(\"pre\");\n\
+             match m.get(mkn(2)) { Some(v) => { println(f\"g{v}\"); } None => { println(\"miss\"); } }\n\
+             println(\"post\");\n",
+            "pre\ndD2\nmiss\ndD1\npost\nend\n",
+        ),
+        (
+            "a METHOD-call key, the spelling B-2026-09-13-30 made memory-clean",
+            "let mut m: Map[Dk, i64] = Map.new();\n\
+             let g: Mk = Mk { p: f\"x\" };\n\
+             m.insert(g.mkd(1), 1);\n\
+             println(\"pre\");\n\
+             match m.get(g.mkd(2)) { Some(v) => { println(f\"g{v}\"); } None => { println(\"miss\"); } }\n\
+             println(\"post\");\n",
+            "pre\ndD2\nmiss\ndD1\npost\nend\n",
+        ),
+        (
+            "an ASSOC-FN key: a Path callee, through the same shared resolver",
+            "let mut m: Map[Dk, i64] = Map.new();\n\
+             m.insert(Mk.build(1), 1);\n\
+             println(\"pre\");\n\
+             match m.get(Mk.build(2)) { Some(v) => { println(f\"g{v}\"); } None => { println(\"miss\"); } }\n\
+             println(\"post\");\n",
+            "pre\ndD2\nmiss\ndD1\npost\nend\n",
+        ),
+        (
+            "a TUPLE key from a call -- nameless, so the per-ELEMENT walker",
+            "let mut m: Map[(Dk, i64), i64] = Map.new();\n\
+             m.insert(mkt(1), 1);\n\
+             println(\"pre\");\n\
+             match m.get(mkt(2)) { Some(v) => { println(f\"g{v}\"); } None => { println(\"miss\"); } }\n\
+             println(\"post\");\n",
+            "pre\ndD2\nmiss\ndD1\npost\nend\n",
+        ),
+        (
+            "a TUPLE LITERAL key, fresh by construction",
+            "let mut m: Map[(Dk, i64), i64] = Map.new();\n\
+             m.insert((mkd(1), 1), 1);\n\
+             println(\"pre\");\n\
+             match m.get((mkd(2), 2)) { Some(v) => { println(f\"g{v}\"); } None => { println(\"miss\"); } }\n\
+             println(\"post\");\n",
+            "pre\ndD2\nmiss\ndD1\npost\nend\n",
+        ),
+        (
+            "Set.contains",
+            "let mut s: Set[Dk] = Set.new();\n\
+             s.insert(mkd(1));\n\
+             println(\"pre\");\n\
+             if s.contains(mkd(2)) { println(\"hit\"); } else { println(\"miss\"); }\n\
+             println(\"post\");\n",
+            "pre\ndD2\nmiss\ndD1\npost\nend\n",
+        ),
+        (
+            "contains_key + remove: THREE bodies -- two key temps and the stored key",
+            "let mut m: Map[Dk, i64] = Map.new();\n\
+             m.insert(mkd(1), 1);\n\
+             println(\"pre\");\n\
+             if m.contains_key(mkd(2)) { println(\"has\"); } else { println(\"no\"); }\n\
+             println(\"mid\");\n\
+             m.remove(mkd(1));\n\
+             println(\"post\");\n",
+            "pre\ndD2\nno\nmid\ndD1\ndD1\npost\nend\n",
+        ),
+        (
+            "CONTROL: an ordinary consuming position was always correct",
+            "println(\"pre\");\n\
+             let r: i64 = eat(mkd(3));\n\
+             println(f\"r{r}\");\n\
+             println(\"post\");\n",
+            "pre\ndD3\nr3\npost\nend\n",
+        ),
+        (
+            "CONTROL: a bare discard was always correct",
+            "println(\"pre\");\n\
+             mkd(4);\n\
+             println(\"post\");\n",
+            "pre\ndD4\npost\nend\n",
+        ),
+        (
+            "CONTROL: a BOUND key -- the body is the binding's, at ITS live-range end",
+            "let mut m: Map[Dk, i64] = Map.new();\n\
+             m.insert(mkd(1), 1);\n\
+             println(\"pre\");\n\
+             let k: Dk = mkd(2);\n\
+             match m.get(k) { Some(v) => { println(f\"g{v}\"); } None => { println(\"miss\"); } }\n\
+             println(\"post\");\n",
+            "pre\nmiss\ndD2\ndD1\npost\nend\n",
+        ),
+        (
+            "CONTROL: insert MOVES its key -- one body, at the map's destruction",
+            "let mut m: Map[Dk, i64] = Map.new();\n\
+             println(\"pre\");\n\
+             m.insert(mkd(1), 1);\n\
+             println(\"post\");\n",
+            "pre\ndD1\npost\nend\n",
+        ),
+        (
+            "CONTROL: Vec storage was always correct",
+            "let mut v: Vec[Dk] = Vec.new();\n\
+             println(\"pre\");\n\
+             v.push(mkd(5));\n\
+             println(\"post\");\n",
+            "pre\ndD5\npost\nend\n",
+        ),
+    ] {
+        let src = format!("{hdr}fn main() {{\n{stmts}\nprintln(\"end\");\n}}\n");
+        assert_eq!(run(&src), want, "[{label}]");
+    }
+}
+
+/// B-2026-09-15-5 — EVERY lookup entry point on EVERY container runs its key
+/// temporary's user `Drop` body, and this matrix exists because the first pass
+/// missed three of the eleven.
+///
+/// Codegen funnels all eleven through ONE chokepoint
+/// (`free_fresh_owned_struct_key_arg`), so its half was complete the moment that
+/// dispatcher gained the bodies call. The interpreter has a SEPARATE arm per
+/// container per method, so a per-site fix there is only as complete as the list
+/// the author enumerated — and mine was short by `Set.remove`,
+/// `SortedSet.remove` and `Vec.contains`. The asymmetry is the whole lesson: a
+/// one-chokepoint backend and an eleven-site backend cannot be paired by fixing
+/// "the obvious sites", and the gap it leaves is a RUN/BUILD DIVERGENCE (codegen
+/// correct, interpreter silent), which is worse than the symmetric gap it
+/// replaced.
+///
+/// Found by sweeping the matrix against the compiled backend rather than by
+/// reading the interpreter, which is why every cell is here rather than only the
+/// three that were broken: the eight that were already right are what make the
+/// three a gap instead of a guess.
+///
+/// Each cell looks up a key the container does NOT hold, so the two bodies are
+/// unambiguous: `dK2` is the discarded argument temporary (owed AT the lookup)
+/// and `dK1` is the container's own stored element, which fires at the
+/// container's live-range end — the lookup, since that is its last use.
+#[test]
+fn test_every_lookup_entry_point_runs_its_key_temporarys_body() {
+    let hdr = "#[derive(Hash, Eq, PartialEq, Ord)]\n\
+               struct K { n: i64 }\n\
+               impl Drop for K { fn drop(mut ref self) { println(f\"dK{self.n}\"); } }\n";
+    for (label, stmts, want) in [
+        (
+            "Map.get",
+            "let mut c: Map[K, i64] = Map.new();\n\
+             c.insert(K { n: 1 }, 1);\n\
+             println(\"pre\");\n\
+             match c.get(K { n: 2 }) { Some(v) => { println(\"hit\"); } None => { println(\"miss\"); } }\n\
+             println(\"post\");\n",
+            "pre\ndK2\nmiss\ndK1\npost\n",
+        ),
+        (
+            "Map.contains_key",
+            "let mut c: Map[K, i64] = Map.new();\n\
+             c.insert(K { n: 1 }, 1);\n\
+             println(\"pre\");\n\
+             if c.contains_key(K { n: 2 }) { println(\"hit\"); } else { println(\"miss\"); }\n\
+             println(\"post\");\n",
+            "pre\ndK2\nmiss\ndK1\npost\n",
+        ),
+        (
+            "Map.remove",
+            "let mut c: Map[K, i64] = Map.new();\n\
+             c.insert(K { n: 1 }, 1);\n\
+             println(\"pre\");\n\
+             c.remove(K { n: 2 });\n\
+             println(\"post\");\n",
+            "pre\ndK2\ndK1\npost\n",
+        ),
+        (
+            "SortedMap.get",
+            "let mut c: SortedMap[K, i64] = SortedMap.new();\n\
+             c.insert(K { n: 1 }, 1);\n\
+             println(\"pre\");\n\
+             match c.get(K { n: 2 }) { Some(v) => { println(\"hit\"); } None => { println(\"miss\"); } }\n\
+             println(\"post\");\n",
+            "pre\ndK2\nmiss\ndK1\npost\n",
+        ),
+        (
+            "SortedMap.contains_key",
+            "let mut c: SortedMap[K, i64] = SortedMap.new();\n\
+             c.insert(K { n: 1 }, 1);\n\
+             println(\"pre\");\n\
+             if c.contains_key(K { n: 2 }) { println(\"hit\"); } else { println(\"miss\"); }\n\
+             println(\"post\");\n",
+            "pre\ndK2\nmiss\ndK1\npost\n",
+        ),
+        (
+            "SortedMap.remove",
+            "let mut c: SortedMap[K, i64] = SortedMap.new();\n\
+             c.insert(K { n: 1 }, 1);\n\
+             println(\"pre\");\n\
+             c.remove(K { n: 2 });\n\
+             println(\"post\");\n",
+            "pre\ndK2\ndK1\npost\n",
+        ),
+        (
+            "Set.contains",
+            "let mut c: Set[K] = Set.new();\n\
+             c.insert(K { n: 1 });\n\
+             println(\"pre\");\n\
+             if c.contains(K { n: 2 }) { println(\"hit\"); } else { println(\"miss\"); }\n\
+             println(\"post\");\n",
+            "pre\ndK2\nmiss\ndK1\npost\n",
+        ),
+        (
+            "Set.remove -- MISSED on the first pass",
+            "let mut c: Set[K] = Set.new();\n\
+             c.insert(K { n: 1 });\n\
+             println(\"pre\");\n\
+             c.remove(K { n: 2 });\n\
+             println(\"post\");\n",
+            "pre\ndK2\ndK1\npost\n",
+        ),
+        (
+            "SortedSet.contains",
+            "let mut c: SortedSet[K] = SortedSet.new();\n\
+             c.insert(K { n: 1 });\n\
+             println(\"pre\");\n\
+             if c.contains(K { n: 2 }) { println(\"hit\"); } else { println(\"miss\"); }\n\
+             println(\"post\");\n",
+            "pre\ndK2\nmiss\ndK1\npost\n",
+        ),
+        (
+            "SortedSet.remove -- MISSED on the first pass",
+            "let mut c: SortedSet[K] = SortedSet.new();\n\
+             c.insert(K { n: 1 });\n\
+             println(\"pre\");\n\
+             c.remove(K { n: 2 });\n\
+             println(\"post\");\n",
+            "pre\ndK2\ndK1\npost\n",
+        ),
+        (
+            "Vec.contains -- MISSED on the first pass",
+            "let mut c: Vec[K] = Vec.new();\n\
+             c.push(K { n: 1 });\n\
+             println(\"pre\");\n\
+             if c.contains(K { n: 2 }) { println(\"hit\"); } else { println(\"miss\"); }\n\
+             println(\"post\");\n",
+            "pre\ndK2\nmiss\ndK1\npost\n",
+        ),
+    ] {
+        let src = format!("{hdr}fn main() {{\n{stmts}\n}}\n");
+        assert_eq!(run(&src), want, "[{label}]");
+    }
 }

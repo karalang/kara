@@ -6160,6 +6160,53 @@ impl<'a> super::Interpreter<'a> {
         }
     }
 
+    /// B-2026-09-15-5 — evaluate a LOOKUP's key argument, and report whether
+    /// that key temporary owes a user `Drop` body at the lookup.
+    ///
+    /// A lookup BORROWS its key and discards it, so a fresh-owned key
+    /// temporary's live range ends AT the lookup — and design.md § Drop fires
+    /// destructors at a value's live-range end rather than at lexical scope
+    /// end, so this is the position the body is OWED at, not merely an early
+    /// one. Every lookup entry point evaluated its key with the bare
+    /// `args.first().map(|a| self.eval_expr_inner(&a.value))` idiom and then
+    /// let the resulting `Value` fall out of scope as an ordinary Rust value,
+    /// so no user hook ever ran.
+    ///
+    /// Returns the flag rather than running the body here, because the body
+    /// takes `mut ref self` and can MUTATE the key: running it before the
+    /// container hashes the key would hash a mutated key. Callers pair this
+    /// with [`Self::run_owed_lookup_key_user_drops`] AFTER the lookup.
+    ///
+    /// `insert` deliberately does not use this pair: an insert MOVES its key
+    /// into the container and the container's own destruction runs the body —
+    /// measured correct, and running one here too would double it.
+    ///
+    /// An `Identifier` key is excluded, matching codegen's key legs exactly: a
+    /// let-bound key's body runs at ITS live-range end (measured: two bodies,
+    /// correct), so a second here would make three.
+    pub(super) fn eval_lookup_key_arg(&mut self, args: &[crate::ast::CallArg]) -> (Value, bool) {
+        let Some(a) = args.first() else {
+            return (Value::Unit, false);
+        };
+        let key = self.eval_expr_inner(&a.value);
+        let owes = matches!(
+            &a.value.kind,
+            ExprKind::Call { .. }
+                | ExprKind::MethodCall { .. }
+                | ExprKind::StructLiteral { .. }
+                | ExprKind::Tuple(_)
+        );
+        (key, owes)
+    }
+
+    /// The second half of [`Self::eval_lookup_key_arg`], run AFTER the lookup
+    /// has used the key (B-2026-09-15-5).
+    pub(super) fn run_owed_lookup_key_user_drops(&mut self, key: Value, owes: bool) {
+        if owes {
+            self.run_discarded_value_user_drops(key);
+        }
+    }
+
     pub(super) fn run_discarded_value_user_drops(&mut self, val: Value) {
         match val {
             Value::Struct { ref name, .. } => {

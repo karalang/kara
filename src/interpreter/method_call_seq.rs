@@ -1115,32 +1115,32 @@ impl<'a> super::Interpreter<'a> {
                     });
                 }
                 if let Value::Map(ref m) = obj {
-                    let key = args
-                        .first()
-                        .map(|a| self.eval_expr_inner(&a.value))
-                        .unwrap_or(Value::Unit);
-                    return Some(match m.read().unwrap().get(&key) {
+                    // B-2026-09-15-5 — the key temporary's user `Drop` body is
+                    // owed here, and runs AFTER the map has hashed the key.
+                    let (key, owes) = self.eval_lookup_key_arg(args);
+                    let out = match m.read().unwrap().get(&key) {
                         Some(v) => found_map_value_to_option(v),
                         None => Value::EnumVariant {
                             enum_name: "Option".to_string(),
                             variant: "None".to_string(),
                             data: EnumData::Unit,
                         },
-                    });
+                    };
+                    self.run_owed_lookup_key_user_drops(key, owes);
+                    return Some(out);
                 }
                 if let Value::SortedMap(ref m) = obj {
-                    let key = args
-                        .first()
-                        .map(|a| self.eval_expr_inner(&a.value))
-                        .unwrap_or(Value::Unit);
-                    return Some(match m.get(&OrdValue(key)) {
+                    let (key, owes) = self.eval_lookup_key_arg(args);
+                    let out = match m.get(&OrdValue(key.clone())) {
                         Some(v) => found_map_value_to_option(v),
                         None => Value::EnumVariant {
                             enum_name: "Option".to_string(),
                             variant: "None".to_string(),
                             data: EnumData::Unit,
                         },
-                    });
+                    };
+                    self.run_owed_lookup_key_user_drops(key, owes);
+                    return Some(out);
                 }
                 if let Value::Struct { ref name, .. } = obj {
                     if name == "Client" {
@@ -1189,10 +1189,15 @@ impl<'a> super::Interpreter<'a> {
             "contains" => {
                 if let Value::Array(ref rc) = obj {
                     let v = rc.read().unwrap();
-                    let needle = args
-                        .first()
-                        .map(|a| self.eval_expr_inner(&a.value))
-                        .unwrap_or(Value::Unit);
+                    // B-2026-09-15-5 — `Vec.contains` borrows and discards its
+                    // needle exactly as a map lookup does its key, so the
+                    // needle temp owes a body too. Missed on the first pass
+                    // (only the map legs were patched) and caught by sweeping
+                    // every lookup entry point on every container against the
+                    // compiled backend: codegen funnels all of them through
+                    // one chokepoint, so a per-site interpreter fix leaves
+                    // exactly this kind of hole.
+                    let (needle, owes) = self.eval_lookup_key_arg(args);
                     // B-2026-08-14-6 — the PROBE takes the same int-to-float
                     // widening the store does. Without it an `Int` needle never
                     // equals a `Float` element, so `Vec[f64].contains(some_u8)`
@@ -1200,7 +1205,9 @@ impl<'a> super::Interpreter<'a> {
                     // would have made both surfaces agree on that false, which
                     // is agreement on the wrong answer.
                     let needle = self.coerce_float_slot_arg(&needle, args.first());
-                    return Some(Value::Bool(v.contains(&needle)));
+                    let out = Value::Bool(v.contains(&needle));
+                    self.run_owed_lookup_key_user_drops(needle, owes);
+                    return Some(out);
                 }
                 if let Value::String(ref s) = obj {
                     let needle = args
@@ -1213,34 +1220,30 @@ impl<'a> super::Interpreter<'a> {
                     return Some(Value::Bool(false));
                 }
                 if let Value::SortedSet(ref s) = obj {
-                    let needle = args
-                        .first()
-                        .map(|a| self.eval_expr_inner(&a.value))
-                        .unwrap_or(Value::Unit);
-                    return Some(Value::Bool(s.contains_key(&OrdValue(needle))));
+                    let (needle, owes) = self.eval_lookup_key_arg(args);
+                    let out = Value::Bool(s.contains_key(&OrdValue(needle.clone())));
+                    self.run_owed_lookup_key_user_drops(needle, owes);
+                    return Some(out);
                 }
                 if let Value::Set(ref s) = obj {
-                    let needle = args
-                        .first()
-                        .map(|a| self.eval_expr_inner(&a.value))
-                        .unwrap_or(Value::Unit);
-                    return Some(Value::Bool(s.read().unwrap().contains(&needle)));
+                    let (needle, owes) = self.eval_lookup_key_arg(args);
+                    let out = Value::Bool(s.read().unwrap().contains(&needle));
+                    self.run_owed_lookup_key_user_drops(needle, owes);
+                    return Some(out);
                 }
             }
             "contains_key" => {
                 if let Value::Map(ref m) = obj {
-                    let key = args
-                        .first()
-                        .map(|a| self.eval_expr_inner(&a.value))
-                        .unwrap_or(Value::Unit);
-                    return Some(Value::Bool(m.read().unwrap().contains_key(&key)));
+                    let (key, owes) = self.eval_lookup_key_arg(args);
+                    let out = Value::Bool(m.read().unwrap().contains_key(&key));
+                    self.run_owed_lookup_key_user_drops(key, owes);
+                    return Some(out);
                 }
                 if let Value::SortedMap(ref m) = obj {
-                    let key = args
-                        .first()
-                        .map(|a| self.eval_expr_inner(&a.value))
-                        .unwrap_or(Value::Unit);
-                    return Some(Value::Bool(m.contains_key(&OrdValue(key))));
+                    let (key, owes) = self.eval_lookup_key_arg(args);
+                    let out = Value::Bool(m.contains_key(&OrdValue(key.clone())));
+                    self.run_owed_lookup_key_user_drops(key, owes);
+                    return Some(out);
                 }
             }
             "binary_search" => {

@@ -46221,10 +46221,24 @@ fn main() {
             status.success(),
             "[{label}] ASAN run failed (status {status:?}); stdout:\n{stdout}"
         );
-        // 200 removals x (one key body + one value body) = 400.
+        // 200 removals x (ARGUMENT key body + STORED key body + value body)
+        // = 600.
+        //
+        // B-2026-09-15-5 RAISED THIS FROM 400. `m.remove(K { n: i })` destroys
+        // TWO keys, not one: the fresh argument temporary that is built,
+        // hashed and discarded at the call, and the key the map was holding.
+        // This row fixed the stored key's body; the argument temporary's was
+        // still being dropped on the floor at every lookup entry point, so 400
+        // looked complete and was in fact this defect written down.
+        //
+        // The BOUND-key spelling (`let p = K { n: i }; m.remove(p)`) measures
+        // 600 as well, which is the invariant worth keeping in view: the count
+        // does not depend on how the key is spelled, only on WHO owns each
+        // body -- the binding's own live-range end in that spelling, the
+        // lookup site in this one. Measured byte-identical on both backends.
         assert_eq!(
             stdout.trim(),
-            "fired=400 len=0",
+            "fired=600 len=0",
             "[{label}] stdout:\n{stdout}"
         );
     }

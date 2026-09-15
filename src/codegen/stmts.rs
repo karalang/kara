@@ -17695,6 +17695,20 @@ impl<'ctx> super::Codegen<'ctx> {
             .took_memory
     }
 
+    /// BODIES-ONLY entry point for
+    /// [`Self::run_discarded_leaf_user_drop_bodies`], for a caller that needs
+    /// the user `Drop` bodies and owns the MEMORY half itself — the map/set
+    /// key legs, B-2026-09-15-5. Keeps `DiscardedLeaf` private, exactly as
+    /// [`Self::discarded_leaf_took_memory`] keeps it private for the caller
+    /// that only ever asked the memory question.
+    pub(super) fn run_discarded_leaf_bodies_only(
+        &mut self,
+        te: &TypeExpr,
+        elem: BasicValueEnum<'ctx>,
+    ) {
+        let _ = self.run_discarded_leaf_user_drop_bodies(te, elem, false);
+    }
+
     /// B-2026-09-03-14 — RETURNS BOTH ANSWERS, because they are not the same
     /// answer and a caller that needed the other one silently got `false`.
     /// `took_memory` is the original bool: `true` only when `free_memory` was

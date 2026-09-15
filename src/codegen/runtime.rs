@@ -3065,6 +3065,22 @@ impl<'ctx> super::Codegen<'ctx> {
         arg: &crate::ast::Expr,
         val: BasicValueEnum<'ctx>,
     ) {
+        // B-2026-09-15-5 — THE BODIES HALF, which none of the three legs below
+        // carries. Each resolves a MEMORY walk
+        // (`emit_struct_drop_synthesis` / `emit_enum_drop_switch` /
+        // `map_key_drop_fn_for_type_expr`); a type's user `Drop` hook is a
+        // SEPARATE `Type.drop` call that every other drop site pairs with its
+        // walk, and the key sites emitted the walk alone. So the key
+        // temporary's storage was reclaimed correctly and its body never ran.
+        //
+        // Ordered BEFORE the memory legs, and before the LLVM-shape gate that
+        // turns an array-shaped key away, for two reasons: a body must observe
+        // the value while its heap is still live, and the shape gate is not
+        // the bodies question.
+        //
+        // Invisible to ASAN and to both ratchet legs, because storage is
+        // freed exactly once either way — only an output comparison sees it.
+        self.run_fresh_owned_key_user_drop_bodies(arg, val);
         let inkwell::types::BasicTypeEnum::StructType(agg_ty) = val.get_type() else {
             // B-2026-09-13-20 — an `Array[T, N]` key's value is an LLVM
             // ARRAY, not a struct, so this gate turned it away before any leg
@@ -3429,6 +3445,118 @@ impl<'ctx> super::Codegen<'ctx> {
             }
             _ => None,
         }
+    }
+
+    /// B-2026-09-15-5 — run a fresh-owned key temporary's user `Drop` BODIES
+    /// at the lookup.
+    ///
+    /// A lookup borrows its key and discards it, so the temporary's live range
+    /// ends AT the lookup — and design.md § Drop is explicit that destructors
+    /// fire at a value's live-range end rather than at lexical scope end, so
+    /// the lookup is the owed position, not merely an early one.
+    ///
+    /// MEASURED with `impl Drop` printing one marker, `KARAC_OPT_LEVEL=0`,
+    /// both backends byte-identical before the fix (so this is a
+    /// both-backends gap, NOT a run/build divergence — an A/B kata could not
+    /// have caught it):
+    ///
+    /// ```text
+    ///                                     bodies got / owed
+    /// m.get(mkd(0))     struct key              1 / 2
+    /// m.get(mkd(0))     Drop field 1 down       1 / 2
+    /// m.get(g.mkd(0))   method key              1 / 2
+    /// s.contains(..)    Set key                 1 / 2
+    /// m.contains_key + m.remove                 1 / 3
+    /// eat(mkd(0))       ordinary consumer       1 / 1  <- correct
+    /// mkd(0);           discarded temp          1 / 1  <- correct
+    /// let k = mkd(0); m.get(k)                  2 / 2  <- correct
+    /// insert only, no lookup                    1 / 1  <- correct
+    /// v.push(mkd(0))    Vec storage             1 / 1  <- correct
+    /// ```
+    ///
+    /// THE FOUR CORRECT ROWS ARE WHAT LOCALIZE THIS. A fresh temp's body runs
+    /// at an ordinary consuming position, at a bare discard, at a binding's
+    /// live-range end and at container destruction — so the machinery works
+    /// everywhere except this position, and the fix belongs here rather than
+    /// in the walkers.
+    ///
+    /// `Identifier` keys are excluded, by the same gate the memory legs use:
+    /// a let-bound key's body runs at ITS live-range end (the measured
+    /// two-body row above), and a second here would make three.
+    fn run_fresh_owned_key_user_drop_bodies(
+        &mut self,
+        arg: &crate::ast::Expr,
+        val: BasicValueEnum<'ctx>,
+    ) {
+        let Some(te) = self.fresh_owned_key_type_expr(arg) else {
+            return;
+        };
+        // A TUPLE key has no type NAME, so the leaf walker below — which keys
+        // on `TypeKind::Path` — declines it, and only the per-ELEMENT walker
+        // reaches an element's body. Measured: `Map[(P, i64), i64]` with
+        // `impl Drop for P` ran ONE body (the map's stored element) where two
+        // were owed, and the interpreter's value-driven walk recursed into the
+        // tuple and ran both — so leaving this arm out would have traded a
+        // symmetric gap for a RUN/BUILD DIVERGENCE, which is strictly worse.
+        if let TypeKind::Tuple(elems) = &te.kind {
+            let elems = elems.clone();
+            let inkwell::types::BasicTypeEnum::StructType(agg_ty) = val.get_type() else {
+                return;
+            };
+            if agg_ty.count_fields() as usize != elems.len() {
+                return;
+            }
+            let Some(cur_fn) = self.current_fn else {
+                return;
+            };
+            // Emitted BEFORE the alloca and store: the sub-emitters may
+            // synthesize a function and move the builder's insert block, the
+            // hazard `vec_element_drain_fn`'s doc states for its own callers.
+            let Some(bodies) = self.emit_tuple_elem_user_drop_bodies_fn(agg_ty, &elems) else {
+                return;
+            };
+            let slot = self.create_entry_alloca(cur_fn, "map.key.bodies", agg_ty.into());
+            if self.builder.build_store(slot, val).is_ok() {
+                let _ = self.builder.build_call(bodies, &[slot.into()], "");
+            }
+            return;
+        }
+        // `free_memory: false` — the memory legs below own that half, and
+        // asking for both here would free the key's heap twice.
+        self.run_discarded_leaf_bodies_only(&te, val);
+    }
+
+    /// The declared `TypeExpr` of a fresh-owned key temporary
+    /// (B-2026-09-15-5), for the bodies question. An inline `S { .. }`
+    /// literal names its own type; every call spelling goes through
+    /// [`Self::fresh_owned_key_callee_key`], which is the resolver
+    /// B-2026-09-13-30 added for the memory half — so both halves admit
+    /// exactly the same set of key expressions rather than drifting.
+    fn fresh_owned_key_type_expr(&mut self, arg: &crate::ast::Expr) -> Option<TypeExpr> {
+        // A tuple LITERAL names no callee — fresh by construction, resolved the
+        // way the nameless MEMORY leg resolves it, so both halves see one type.
+        if matches!(&arg.kind, ExprKind::Tuple(_)) {
+            return Some(self.infer_arg_elem_te(arg));
+        }
+        if let ExprKind::StructLiteral { path, .. } = &arg.kind {
+            let name = path.last()?.clone();
+            return Some(TypeExpr {
+                kind: TypeKind::Path(crate::ast::PathExpr {
+                    segments: vec![name],
+                    generic_args: None,
+                    span: arg.span,
+                }),
+                span: arg.span,
+            });
+        }
+        let key = self.fresh_owned_key_callee_key(arg)?;
+        let te = self
+            .fn_sig
+            .fn_return_type_exprs
+            .get(&key)
+            .or_else(|| self.mono_state.generic_fns.get(&key)?.return_type.as_ref())
+            .cloned()?;
+        Some(self.callee_param_te_for_call(&te, &arg.span))
     }
 
     /// The struct type name of a key expression that yields a FRESH owned
