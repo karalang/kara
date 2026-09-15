@@ -93,6 +93,12 @@ Measured (2026-08-29, while checking B-2026-08-28-73's attribution): an eight-co
 
 Practical rule: **`touch` the tree after any archive extraction, or bisect with `git checkout` instead.** The tell that you are in it is a bisect where a revision's result does not change when its content demonstrably does — check one such pair deliberately before trusting the run.
 
+**A NON-VACUITY CHECK ON AN ALREADY-COMMITTED FIX CANNOT USE `git stash push src/` — it takes nothing, silently.** The check that a new fixture actually fails without its fix is only worth running if the tree it measures is really the unfixed one. `git stash push src/` stashes *uncommitted* changes, so once the fix is committed it stashes an empty set, exits 0, and the run measures the FIXED tree — every new fixture "passes without the fix", which reads as a vacuous test and invites deleting or weakening it.
+
+Measured twice: B-2026-09-14-1 (caught by a determinism check — a cell that read identically before and after) and again on B-2026-09-15-5's session, where the tell was a marker count printed as a guard (`grep -c '<BUG-ID>' src/... ` → 3 and 2, expected 0). The second occurrence is why this is a rule and not a note: the failure mode is invisible in the test output itself, because passing tests are what it produces.
+
+Practical rule: **check out the parent commit's tree instead — `git checkout HEAD~1 -- src/`, run, then `git checkout HEAD -- src/`** (keeping `tests/` at HEAD, so new fixtures meet old code). `git checkout` stamps fresh mtimes, so it does not have the archive-extraction problem above. And **print a guard the run itself can fail on**: a `grep -c` of the fix's bug-id in each file it touched, expected zero, before the fixtures run.
+
 **Practical rule: rebuild the archives whenever `runtime/src` changes AT ALL, not only when the symbol set does.** Symbol presence is necessary, not sufficient. The check before trusting any AOT measurement is a diff, not an `nm`:
 
 ```bash
