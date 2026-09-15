@@ -71,8 +71,40 @@ MAGNITUDE for `builder60` (+2.4…3.6% → +11.7…13.6%, amplified fourfold) in
 OPPOSITE directions, so the pin is a control on both counts. Table and
 mechanism-hypothesis in `bench/sso/README.md`.
 
-**Kata corpus** (17 residual regressions, sweep already pinned): median +1.4%,
-aggregate +5.7%, 4 regressed ≥5%, 2 improved ≥5%.
+**Kata corpus, x86-64** (17 residual regressions, sweep already pinned): median
++1.4%, aggregate +5.7%, 4 regressed ≥5%, 2 improved ≥5%.
+
+**Kata corpus, arm64 / macOS (M5 Pro), 2026-09-15 — first sweep on this host.**
+Every figure above this line is x86-64. The flip decision has been resting on a
+corpus aggregate for one of the two platforms kāra ships on; this is the other.
+All 340 bench programs, both arms, 3 builds per arm with the arms **alternated**,
+min of 2 runs per build, `KARAC_AUTO_PAR=0`, katas checkout pinned at
+`003e06a6`:
+
+| | arm64 | x86-64 |
+|---|---|---|
+| median | **1.0004** | +1.4% |
+| aggregate (total corpus cycles) | **1.0012** | +5.7% |
+| ≥5% worse | 24 | 4 |
+| ≥5% better | 12 | 2 |
+| within 5% | 304 | — |
+| sink mismatches | **0 / 340** | — |
+
+**On arm64 SSO is corpus-neutral**: 420.1 B cycles → 420.7 B. The spread is
+real — p05 0.964, p95 1.076 — but it cancels, and it cancels by *weight* as well
+as by count: the 12 winners save 3,048 M cycles against the 24 losers' 2,839 M.
+So this is not "a small aggregate hiding a large split"; the split is there and
+the two halves are the same size.
+
+**0 sink mismatches across 340 programs** is the other half of the result. SSO
+changes the `String` representation, so a wrong answer was the failure mode worth
+looking for, and there isn't one on this host.
+
+What this does **not** say: that the flip is safe on arm64. A neutral aggregate
+with a ±7% tail is an argument for flipping only if the tail is understood, and
+two of the 24 regressions are the blockers below. It does say the flip decision
+is **per-platform**, and that the +5.7% currently blocking it is an x86-64
+number that does not describe arm64.
 
 **The two blockers, both unattributed rather than unfixed:**
 
@@ -80,6 +112,17 @@ aggregate +5.7%, 4 regressed ≥5%, 2 improved ≥5%.
   de-inline probe was ruled out by measurement (removing it moved the kata 1.3
   points) and `prefix_string` was ruled out too (an exact mirror runs 9–15%
   *faster* under SSO). Largest single item in the corpus.
+  **arm64 (2026-09-15): +37–39%, disjoint distributions — same sign, smaller.**
+  And the decomposition contradicts this row's own suspect: instructions go
+  1.4118 while cycles go 1.3734 and **IPC is flat and high in both arms (7.26 →
+  7.38)**. A store-to-load forwarding stall depresses IPC; IPC did not move. On
+  arm64 the cost is 41% more instructions on the read path, i.e. *work*, not a
+  hazard. Checking IPC on the two x86-64 arms is cheaper than building the
+  upper-bound probe and decides whether the hosts share one mechanism or differ.
+  (Note for anyone re-measuring: **two katas ship a `bench/vertical.kara`** —
+  this one is `1-100/14-longest-common-prefix`, not
+  `301-400/314-binary-tree-vertical-order-traversal`. Selecting by filename
+  measures the wrong program and reads ≈0.98.)
 - **B-2026-09-15-6 is CLOSED `invalid`, and it was the wrong question.** The two
   spellings do not differ under SSO: at `KARAC_SSO=1` `substr` is 217 ms and
   `lexlike` 215 ms, 0.9% apart, samples interleaving. The "~46–52 point gap" was
