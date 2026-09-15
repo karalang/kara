@@ -10199,6 +10199,77 @@ fn main() {
         );
     }
 
+    /// B-2026-09-02-31 — the BARE-ARM spelling of the row directly above, split
+    /// out at that fix's close because its block-bodied condition could not
+    /// reach this one. The two programs differ by two characters per arm
+    /// (`=> s,` against `=> { s }`) and leaked the same 15 B per evaluation,
+    /// unbounded in a loop.
+    ///
+    /// WHY THE PARENT FIX EXCLUDED IT. Re-homing a declined arm owner to the
+    /// innermost LIVE frame was gated on the arm being BLOCK-BODIED, because
+    /// that condition — and nothing else in the record — kept the GENERIC-ENUM
+    /// DEBOX out. `fn get[T](o: Opt[T], d: T) -> T { match o { Opt.Yes(v) => v, .. } }`
+    /// is bare-armed too, and its value escapes the function entirely, so an
+    /// owner in the innermost live frame frees it before the caller reads it.
+    /// Both populations arrived through the same bare-tail channel, and the
+    /// record they arrived with could not tell them apart.
+    ///
+    /// The discriminator is now `compute_fn_escaping_branch_spans`: does this
+    /// match's value BECOME the function's return value? The debox's does; a
+    /// match consumed inside the statement that built it does not.
+    ///
+    /// FIVE LEGS PER ITERATION, three that leaked and two controls:
+    ///   - `fstr` — the match interpolated into an f-string, the row's shape.
+    ///   - the `sink(match …)` CALL ARGUMENT, which contributes to `total`.
+    ///   - `named` — the same nested position over a NAMED enum local.
+    ///   - `let` — the destination-owns-it control, clean before and after.
+    ///   - `escape` — `deboxBare`, the ESCAPING control: the debox shape itself,
+    ///     which must keep declining the re-home. It is the leg that fails if
+    ///     the discriminator is dropped for a looser gate, and it fails as
+    ///     `Instruction does not dominate all uses` on `%branchown` — the module
+    ///     verifier catching the premature free before it can run — rather than
+    ///     as a sanitizer report.
+    ///
+    /// Measured pre-fix at HEAD: 135 B in 9 blocks at `-O0` (three leaking legs
+    /// × three iterations × 15 B) and 90 B in 6 blocks at `-O2`, LLVM having
+    /// elided one leg's allocation there.
+    #[test]
+    fn asan_nested_bare_arm_match_owns_its_moved_out_payload() {
+        let Some((out, status)) = run_under_asan(
+            r#"enum Ve { A(String), B }
+impl Drop for Ve { fn drop(mut ref self) { println("dVe") } }
+fn mkVe(n: i64) -> Ve { return Ve.A(f"payloadpayload{n}") }
+fn sink(s: String) -> i64 { return s.len() }
+
+#[allow(partial_move_of_drop_enum)]
+fn deboxBare(v: Ve) -> String { match v { Ve.A(s) => s, Ve.B => "none".to_string() } }
+
+#[allow(partial_move_of_drop_enum)]
+fn main() {
+    let mut i = 0;
+    let mut total = 0;
+    while i < 3 {
+        println(f"fstr[{match mkVe(i) { Ve.A(s) => s, Ve.B => "none".to_string() }}]");
+        total = total + sink(match mkVe(i) { Ve.A(s) => s, Ve.B => "none".to_string() });
+        let v = mkVe(i);
+        println(f"named[{match v { Ve.A(s) => s, Ve.B => "none".to_string() }}]");
+        let out = match mkVe(i) { Ve.A(s) => s, Ve.B => "none".to_string() };
+        println(f"let[{out}]");
+        println(f"escape[{deboxBare(mkVe(i))}]");
+        i = i + 1;
+    }
+    println(f"total {total}");
+    println("end");
+}
+"#,
+            "asan_nested_bare_arm_match_owns_its_moved_out_payload",
+        ) else {
+            return;
+        };
+        assert!(status.success(), "ASAN/LSan reported a problem:\n{out}");
+        assert_eq!(out, "dVe\nfstr[payloadpayload0]\ndVe\nnamed[payloadpayload0]\ndVe\ndVe\nlet[payloadpayload0]\ndVe\nescape[payloadpayload0]\ndVe\nfstr[payloadpayload1]\ndVe\nnamed[payloadpayload1]\ndVe\ndVe\nlet[payloadpayload1]\ndVe\nescape[payloadpayload1]\ndVe\nfstr[payloadpayload2]\ndVe\nnamed[payloadpayload2]\ndVe\ndVe\nlet[payloadpayload2]\ndVe\nescape[payloadpayload2]\ntotal 45\nend\n", "unexpected transcript:\n{out}");
+    }
+
     /// B-2026-08-31-19 — the memory half of teaching codegen to render an
     /// `Array[T, N]`.
     ///

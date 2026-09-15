@@ -4865,6 +4865,27 @@ impl<'ctx> super::Codegen<'ctx> {
         // layout carriers are swapped at the mono entry point.
         let saved_contract_frame = self.take_contract_frame();
         self.install_contract_frame(func)?;
+        // B-2026-09-02-31 — a mono body never installed the escaping-branch
+        // span set, so `compile_match`'s owner registration asked its question
+        // against an EMPTY set and read every branch in a monomorph as
+        // non-escaping. For the generic-enum debox
+        // (`fn get[T](o: Opt[T], d: T) -> T { match o { Opt.Yes(v) => v, .. } }`)
+        // that is the one answer which must not be wrong: the value leaves the
+        // frame, and re-homing an owner onto it produced `Instruction does not
+        // dominate all uses` on `%branchown` — the verifier catching a
+        // premature free before it could run.
+        //
+        // Saved and restored rather than overwritten, for the same reason the
+        // contract frame directly above is: a mono is compiled INLINE inside
+        // its caller, so the caller's own set is live across this call.
+        //
+        // NOTE the sibling `discarded_branch_spans` has the SAME gap here and
+        // is deliberately left alone — it is a behaviour change this row did
+        // not measure. Filed as its own row rather than fixed in passing.
+        let saved_escaping_spans = std::mem::replace(
+            &mut self.pattern_state.fn_escaping_branch_spans,
+            crate::codegen::borrow_elision::compute_fn_escaping_branch_spans(&func.body),
+        );
 
         let mut result = self.compile_block(&func.body)?;
 
@@ -4999,6 +5020,7 @@ impl<'ctx> super::Codegen<'ctx> {
         // Hand the enclosing function back its contract frame — this mono's
         // is finished at the returns above (B-2026-08-21-21).
         self.restore_contract_frame(saved_contract_frame);
+        self.pattern_state.fn_escaping_branch_spans = saved_escaping_spans;
         // Leave the frame stack as the caller swapped it in
         // (`compile_generic_call` restores its own); clearing keeps the
         // post-body state tidy and matches `compile_function`'s exit.

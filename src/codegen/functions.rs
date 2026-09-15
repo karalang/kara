@@ -3931,6 +3931,10 @@ impl<'ctx> super::Codegen<'ctx> {
         // let one function's spans answer another's questions.
         self.pattern_state.discarded_branch_spans =
             crate::codegen::borrow_elision::compute_discarded_branch_spans(&func.body);
+        // B-2026-09-02-31 — the escaping-position sibling of the set above, and
+        // function-scoped for the same reason: it is span-keyed over THIS body.
+        self.pattern_state.fn_escaping_branch_spans =
+            crate::codegen::borrow_elision::compute_fn_escaping_branch_spans(&func.body);
 
         // B-2026-08-01-33 stage 3c — the frozen-element container NAMES are
         // function-scoped and the hint that fills them is span-keyed and

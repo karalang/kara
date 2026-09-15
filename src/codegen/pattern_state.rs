@@ -48,6 +48,17 @@ pub(crate) struct PatternState<'ctx> {
     /// `compute_discarded_branch_spans`, which documents the discarding
     /// positions and why the set is keyed by span rather than carried as a flag.
     pub(crate) discarded_branch_spans: rustc_hash::FxHashSet<crate::resolver::SpanKey>,
+    /// B-2026-09-02-31 — branch expressions whose VALUE IS THE FUNCTION'S
+    /// RETURN VALUE, keyed exactly as `discarded_branch_spans` above (the
+    /// condition / scrutinee span the branch compilers hold).
+    ///
+    /// Read by `compile_match`'s deferred owner registration to tell a bare arm
+    /// whose payload ESCAPES the function from one whose payload is consumed
+    /// inside the statement that built it — the two reach that registration
+    /// through the same channel and are otherwise indistinguishable. Computed
+    /// per function by `compute_fn_escaping_branch_spans`, which documents the
+    /// escaping positions and why over-inclusion is the safe direction.
+    pub(crate) fn_escaping_branch_spans: rustc_hash::FxHashSet<crate::resolver::SpanKey>,
     /// Set by `compile_match` when the scrutinee is a borrow-returning
     /// call (`Map.get`, `Vec.first`, ...) — used by `bind_pattern_values`
     /// to suppress `track_vec_var` for the bound name, since the payload

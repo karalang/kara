@@ -1572,7 +1572,30 @@ impl<'ctx> super::Codegen<'ctx> {
                 // (2) already covers the escaping shape that was measured, and
                 // this excludes the rest of that position on the same reasoning
                 // rather than on a measurement of its own.
-                let arm_rehome = arm_pending_is_block
+                //
+                // B-2026-09-02-31 — condition (2) is now `block-bodied OR the
+                // match's value does not escape this function`, which is the
+                // discriminator the bare path lacked. The debox shape above IS
+                // the function's tail expression, so it stays excluded by the
+                // second disjunct; `println(f"{match mk() { A(s) => s, .. }}")`
+                // is consumed inside its own statement, so it re-homes and
+                // stops stranding its payload. Note this only WIDENS: a span
+                // wrongly in the escaping set falls back to `arm_pending_is_block`,
+                // i.e. the pre-existing behaviour, which is why the walk that
+                // builds it is written to over-include.
+                //
+                // `tail.is_none()` is retained as condition (3), but it is worth
+                // recording what it actually tests: `tail_ret_inner` is set ONLY
+                // for a function whose return type is `Option[shared T]`, so it
+                // is not the general "not in tail-return position" check its
+                // original comment reads as. That check is now the escaping-set
+                // lookup, and the two are kept separate rather than merged
+                // because the `Option[shared]` path has its own per-branch inc.
+                let match_escapes_fn = self
+                    .pattern_state
+                    .fn_escaping_branch_spans
+                    .contains(&crate::resolver::SpanKey::from_span(&scrutinee.span));
+                let arm_rehome = (arm_pending_is_block || !match_escapes_fn)
                     && tail.is_none()
                     && self.variant_pattern_enum_name(&arm.pattern).is_some();
                 arm_owner_records.push((

@@ -25,7 +25,9 @@
 //! `let` (even on a loop back-edge) is safe — `r` re-reads `v[i]` after it each
 //! iteration — so only the post-`let` tail is scanned.
 
-use crate::ast::{Block, Expr, ExprKind, Pattern, PatternKind, Stmt, StmtKind};
+use crate::ast::{
+    Block, Expr, ExprKind, ParsedInterpolationPart, Pattern, PatternKind, Stmt, StmtKind,
+};
 use crate::resolver::SpanKey;
 use rustc_hash::FxHashSet;
 
@@ -943,5 +945,342 @@ fn walk_expr_for_discards(expr: &Expr, out: &mut FxHashSet<SpanKey>) {
             }
         }
         _ => {}
+    }
+}
+
+/// B-2026-09-02-31 — the branch heads whose VALUE IS THE CURRENT FUNCTION'S
+/// RETURN VALUE, keyed exactly as [`compute_discarded_branch_spans`] is (the
+/// `if` condition / the `match` or `if let` scrutinee), because that is the
+/// only span the branch compilers hold.
+///
+/// This exists to separate the two populations that reach `compile_match`'s
+/// deferred owner registration through the same BARE-tail channel and cannot be
+/// told apart by the record itself:
+///
+///   - a bare arm whose value ESCAPES the function — the generic-enum debox,
+///     `fn get[T](o: Opt[T], d: T) -> T { match o { Opt.Yes(v) => v, .. } }`.
+///     Every frame in the function drains before the caller reads the value, so
+///     an owner in the innermost live frame is a premature free.
+///   - a bare arm whose value is consumed INSIDE the statement that built it —
+///     `println(f"out[{match mkVe(9) { Ve.A(s) => s, .. }}]")`. The enclosing
+///     frame drains after the consumer, so an owner there is exactly right, and
+///     without one the payload is stranded.
+///
+/// The `match` arm's owner registration reads this to decline the first and
+/// allow the second; before it, the block-bodied condition stood in for the
+/// distinction and excluded both, which is why the bare spelling leaked.
+///
+/// OVER-INCLUSION IS THE SAFE DIRECTION and the walk is written for it: a span
+/// wrongly recorded here only falls back to the pre-existing block-bodied
+/// condition, i.e. today's behaviour, while a MISSED escape would newly re-home
+/// an owner that frees before the caller reads. That is why a closure's body
+/// tail and its `return`s are recorded too (they escape to the closure's
+/// caller, which this set does not model separately), and why the `return` walk
+/// below is exhaustive rather than restricted to the shapes that look likely.
+///
+/// Note that only the value-TRANSPARENT wrappers propagate: a `match` nested
+/// inside a call, an operator or an f-string is NOT escaping even under
+/// `return f(match ..)`, because what escapes there is `f`'s result and the
+/// match's own value is consumed by `f` inside the frame.
+pub(crate) fn compute_fn_escaping_branch_spans(body: &Block) -> FxHashSet<SpanKey> {
+    let mut out = FxHashSet::default();
+    if let Some(fe) = body.final_expr.as_deref() {
+        record_escaping_branch(fe, &mut out);
+    }
+    // The LAST-STATEMENT spelling of the same tail, and not a redundancy: a
+    // body can carry its tail expression as a trailing `StmtKind::Expr` with
+    // `final_expr` empty, which is exactly how the debox
+    // `fn get[T](o: Opt[T], d: T) -> T { match o { Opt.Yes(v) => v, .. } }`
+    // parses. Measured: without this leg both span sets are EMPTY while
+    // compiling `get`, the escaping lookup misses, and the arm re-homes an
+    // owner onto a value that leaves the frame — `Instruction does not dominate
+    // all uses` on `%branchown`, which is the verifier catching the premature
+    // free before it can run. `suppress_cleanup_for_tail_return` reads the tail
+    // through the same `final_expr`-or-last-statement pair for the same reason.
+    if let Some(StmtKind::Expr(e)) = body.stmts.last().map(|s| &s.kind) {
+        match &e.kind {
+            ExprKind::Return(Some(inner)) => record_escaping_branch(inner, &mut out),
+            _ => record_escaping_branch(e, &mut out),
+        }
+    }
+    walk_block_for_returns(body, &mut out);
+    out
+}
+
+/// Record `expr`'s branch head if its value is the escaping one, then keep
+/// peeling: escape is INHERITED through a value-transparent wrapper exactly as
+/// discard is in [`record_discarded_branch`].
+///
+/// Unlike that sibling this DOES walk the then-block, because every arm's tail
+/// is the escaping value here — there is no single outer node whose own gate
+/// covers the alternatives.
+fn record_escaping_branch(expr: &Expr, out: &mut FxHashSet<SpanKey>) {
+    match &expr.kind {
+        ExprKind::If {
+            condition,
+            then_block,
+            else_branch,
+        } => {
+            out.insert(SpanKey::from_span(&condition.span));
+            if let Some(fe) = then_block.final_expr.as_deref() {
+                record_escaping_branch(fe, out);
+            }
+            if let Some(eb) = else_branch.as_deref() {
+                record_escaping_branch(eb, out);
+            }
+        }
+        ExprKind::IfLet {
+            value,
+            then_block,
+            else_branch,
+            ..
+        } => {
+            out.insert(SpanKey::from_span(&value.span));
+            if let Some(fe) = then_block.final_expr.as_deref() {
+                record_escaping_branch(fe, out);
+            }
+            if let Some(eb) = else_branch.as_deref() {
+                record_escaping_branch(eb, out);
+            }
+        }
+        ExprKind::Match { scrutinee, arms } => {
+            out.insert(SpanKey::from_span(&scrutinee.span));
+            for arm in arms {
+                record_escaping_branch(&arm.body, out);
+            }
+        }
+        ExprKind::Block(b)
+        | ExprKind::Seq(b)
+        | ExprKind::Unsafe(b)
+        | ExprKind::LabeledBlock { body: b, .. } => {
+            if let Some(fe) = b.final_expr.as_deref() {
+                record_escaping_branch(fe, out);
+            }
+        }
+        _ => {}
+    }
+}
+
+/// Reach every `return` in the function, so its operand can be recorded as an
+/// escaping position by [`record_escaping_branch`].
+fn walk_block_for_returns(block: &Block, out: &mut FxHashSet<SpanKey>) {
+    for stmt in &block.stmts {
+        walk_stmt_for_returns(stmt, out);
+    }
+    if let Some(fe) = block.final_expr.as_deref() {
+        walk_expr_for_returns(fe, out);
+    }
+}
+
+/// EXHAUSTIVE on purpose — no `_ => {}`, for the reason
+/// [`compute_fn_escaping_branch_spans`] gives: a `return` this fails to reach
+/// is a match that gets re-homed when it must not be, which is a premature free
+/// rather than a missed optimization. An exhaustive match makes the next
+/// `StmtKind` addition a compile error here instead of a silent hole. Arm
+/// inventory mirrors `span_visitor::visit_stmt`, the complete in-tree walk.
+fn walk_stmt_for_returns(stmt: &Stmt, out: &mut FxHashSet<SpanKey>) {
+    match &stmt.kind {
+        StmtKind::Let { value, .. } => walk_expr_for_returns(value, out),
+        StmtKind::LetUninit { .. } => {}
+        StmtKind::LetElse {
+            value, else_block, ..
+        } => {
+            walk_expr_for_returns(value, out);
+            walk_block_for_returns(else_block, out);
+        }
+        StmtKind::Defer { body } => walk_block_for_returns(body, out),
+        StmtKind::ErrDefer { body, .. } => walk_block_for_returns(body, out),
+        StmtKind::Assign { target, value } | StmtKind::CompoundAssign { target, value, .. } => {
+            walk_expr_for_returns(target, out);
+            walk_expr_for_returns(value, out);
+        }
+        StmtKind::MultiAssign { targets, values } => {
+            for t in targets {
+                walk_expr_for_returns(t, out);
+            }
+            for v in values {
+                walk_expr_for_returns(v, out);
+            }
+        }
+        StmtKind::Expr(e) => walk_expr_for_returns(e, out),
+    }
+}
+
+/// The expression half of [`walk_stmt_for_returns`], exhaustive for the same
+/// reason. Arm inventory mirrors `span_visitor::visit_expr`.
+fn walk_expr_for_returns(expr: &Expr, out: &mut FxHashSet<SpanKey>) {
+    match &expr.kind {
+        ExprKind::Integer(_, _)
+        | ExprKind::Float(_, _)
+        | ExprKind::CharLit(_)
+        | ExprKind::ByteLit(_)
+        | ExprKind::ByteStringLit(_)
+        | ExprKind::StringLit(_)
+        | ExprKind::MultiStringLit(_)
+        | ExprKind::CStringLit { .. }
+        | ExprKind::Bool(_)
+        | ExprKind::Identifier(_)
+        | ExprKind::Path { .. }
+        | ExprKind::SelfValue
+        | ExprKind::SelfType
+        | ExprKind::PipePlaceholder
+        | ExprKind::Continue { .. }
+        | ExprKind::OffsetOf { .. }
+        | ExprKind::Error => {}
+        // The escaping positions themselves. `Break` carries a value out of a
+        // labeled block rather than the function, but it is recorded on the
+        // over-inclusion rule above: the cost is today's behaviour.
+        ExprKind::Return(opt) | ExprKind::Break { value: opt, .. } => {
+            if let Some(inner) = opt {
+                record_escaping_branch(inner, out);
+                walk_expr_for_returns(inner, out);
+            }
+        }
+        // A closure's tail and its `return`s escape to the CLOSURE's caller.
+        // Recorded rather than modelled, per the over-inclusion rule.
+        ExprKind::Closure { body, .. } => {
+            record_escaping_branch(body, out);
+            walk_expr_for_returns(body, out);
+        }
+        ExprKind::InterpolatedStringLit(parts) => {
+            for p in parts {
+                if let ParsedInterpolationPart::Expr(inner, _) = p {
+                    walk_expr_for_returns(inner, out);
+                }
+            }
+        }
+        ExprKind::Block(b)
+        | ExprKind::Comptime(b)
+        | ExprKind::Par(b)
+        | ExprKind::Seq(b)
+        | ExprKind::Try(b)
+        | ExprKind::Unsafe(b)
+        | ExprKind::LabeledBlock { body: b, .. }
+        | ExprKind::Loop { body: b, .. }
+        | ExprKind::Lock { body: b, .. } => walk_block_for_returns(b, out),
+        ExprKind::If {
+            condition,
+            then_block,
+            else_branch,
+        } => {
+            walk_expr_for_returns(condition, out);
+            walk_block_for_returns(then_block, out);
+            if let Some(e) = else_branch.as_deref() {
+                walk_expr_for_returns(e, out);
+            }
+        }
+        ExprKind::IfLet {
+            value,
+            then_block,
+            else_branch,
+            ..
+        } => {
+            walk_expr_for_returns(value, out);
+            walk_block_for_returns(then_block, out);
+            if let Some(e) = else_branch.as_deref() {
+                walk_expr_for_returns(e, out);
+            }
+        }
+        ExprKind::While {
+            condition, body, ..
+        } => {
+            walk_expr_for_returns(condition, out);
+            walk_block_for_returns(body, out);
+        }
+        ExprKind::WhileLet { value, body, .. } => {
+            walk_expr_for_returns(value, out);
+            walk_block_for_returns(body, out);
+        }
+        ExprKind::For { iterable, body, .. } => {
+            walk_expr_for_returns(iterable, out);
+            walk_block_for_returns(body, out);
+        }
+        ExprKind::Match { scrutinee, arms } => {
+            walk_expr_for_returns(scrutinee, out);
+            for arm in arms {
+                if let Some(g) = &arm.guard {
+                    walk_expr_for_returns(g, out);
+                }
+                walk_expr_for_returns(&arm.body, out);
+            }
+        }
+        ExprKind::MethodCall { object, args, .. } => {
+            walk_expr_for_returns(object, out);
+            for a in args {
+                walk_expr_for_returns(&a.value, out);
+            }
+        }
+        ExprKind::Call { callee, args, .. } => {
+            walk_expr_for_returns(callee, out);
+            for a in args {
+                walk_expr_for_returns(&a.value, out);
+            }
+        }
+        ExprKind::OptionalChain { object, args, .. } => {
+            walk_expr_for_returns(object, out);
+            if let Some(args) = args {
+                for a in args {
+                    walk_expr_for_returns(&a.value, out);
+                }
+            }
+        }
+        ExprKind::Index { object, index } => {
+            walk_expr_for_returns(object, out);
+            walk_expr_for_returns(index, out);
+        }
+        ExprKind::Binary { left, right, .. }
+        | ExprKind::NilCoalesce { left, right }
+        | ExprKind::Pipe { left, right } => {
+            walk_expr_for_returns(left, out);
+            walk_expr_for_returns(right, out);
+        }
+        ExprKind::Unary { operand, .. } => walk_expr_for_returns(operand, out),
+        ExprKind::Question(inner) => walk_expr_for_returns(inner, out),
+        ExprKind::FieldAccess { object, .. } | ExprKind::TupleIndex { object, .. } => {
+            walk_expr_for_returns(object, out)
+        }
+        ExprKind::Cast { expr: inner, .. } => walk_expr_for_returns(inner, out),
+        ExprKind::Tuple(exprs) | ExprKind::ArrayLiteral(exprs) => {
+            for x in exprs {
+                walk_expr_for_returns(x, out);
+            }
+        }
+        ExprKind::PrefixCollectionLiteral { items, .. } => {
+            for x in items {
+                walk_expr_for_returns(x, out);
+            }
+        }
+        ExprKind::RepeatLiteral { value, count, .. } => {
+            walk_expr_for_returns(value, out);
+            walk_expr_for_returns(count, out);
+        }
+        ExprKind::MapLiteral(pairs) => {
+            for (k, v) in pairs {
+                walk_expr_for_returns(k, out);
+                walk_expr_for_returns(v, out);
+            }
+        }
+        ExprKind::StructLiteral { fields, spread, .. } => {
+            for f in fields {
+                walk_expr_for_returns(&f.value, out);
+            }
+            if let Some(sp) = spread {
+                walk_expr_for_returns(sp, out);
+            }
+        }
+        ExprKind::Range { start, end, .. } => {
+            if let Some(st) = start {
+                walk_expr_for_returns(st, out);
+            }
+            if let Some(en) = end {
+                walk_expr_for_returns(en, out);
+            }
+        }
+        ExprKind::Providers { bindings, body } => {
+            for pb in bindings {
+                walk_expr_for_returns(&pb.value, out);
+            }
+            walk_block_for_returns(body, out);
+        }
     }
 }
