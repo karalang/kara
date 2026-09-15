@@ -95,7 +95,7 @@ distinguish "bugs flattening" from "we stopped writing them down."
 | run-vs-build | 409 |
 | miscompile | 407 |
 | leak | 347 |
-| double-free | 232 |
+| double-free | 233 |
 | missing-feature | 198 |
 | codegen-gap | 177 |
 | diagnostics | 126 |
@@ -104,13 +104,13 @@ distinguish "bugs flattening" from "we stopped writing them down."
 | false-positive | 107 |
 | soundness | 95 |
 | crash | 81 |
-| use-after-free | 41 |
+| use-after-free | 42 |
 
 ### By surface
 
 | surface | total |
 |---|---|
-| codegen | 1749 |
+| codegen | 1751 |
 | interp | 439 |
 | typecheck | 300 |
 | other | 90 |
@@ -187,12 +187,13 @@ _Generated from `bug-ledger.jsonl` by `scripts/bug-curve.py` (2026-05-20 → 202
 | B-2026-09-14-23 | 2026-09-14 | codegen | medium | A WHOLE-CONTAINER REASSIGNMENT LOSES THE DISPLACED CONTAINER'S ELEMENT `Drop` BODIES ON EVERY COMPILED BACKEND -- `let mut v: Vec[D] = [..]; v = [..];` runs the displaced elements' bodies under `--interp` and none compiled, and `Array[D, N]` and both nested spellings diverge identically, so the loss is in the DISPLACEMENT site rather than in any element walker | — |
 | B-2026-09-14-24 | 2026-09-14 | typecheck | low | A NESTED `[..]` LITERAL UNDER A `Vec`-OUTER ANNOTATION DOES NOT TAKE THE INNER `Array[T, N]` TYPE -- `let v: Vec[Array[D, 1]] = [[mkd(1)], [mkd(2)]];` is rejected as `found 'Vec[Vec[D]]'` while the `Array`-outer spelling accepts the identical literal, so the annotation propagates through an `Array` level and not through a `Vec` one | — |
 | B-2026-09-14-26 | 2026-09-14 | codegen | medium | A CONSUMING ARM OVER A BOXED TUPLE ENUM PAYLOAD LEAKS ITS ELEMENTS -- `T.A(p) => taket(p)` over `enum T { A((String, String)), B }` loses 159 B in 6 blocks (21 allocs / 15 frees) while the READ-ONLY arm over the same enum is clean, so it is arm-dependent and distinct from B-2026-09-12-10; it also REFUTES B-2026-09-14-17's guess that a boxed tuple shares the array's double free -- box-only arms leak where interior-walking arms abort | — |
-| B-2026-09-14-27 | 2026-09-14 | ownership+codegen | high | READING A NAMED `Array[T, N]` LOCAL AFTER PASSING IT BY VALUE PRINTS GARBAGE ON EVERY COMPILED BACKEND AT EXIT 0 -- `let n = take(a); println(a[0])` over `fn take(a: Array[String, 2])` yields two different wrong strings on the two compiled backends against a correct `--interp`, because the `Array` callee-owns convention disarms the caller while the ownership checker reports the later read as a WARNING and then prints `All checks passed` | — |
 | B-2026-09-14-28 | 2026-09-14 | codegen | medium | `vertical`'s +85% SSO REGRESSION IS NOT THE DE-INLINE PROBE AND NOT `prefix_string` -- both were ruled out by measurement (c1adb9c removed the probe: +84.1% -> +85.4%; an exact mirror of `prefix_string` runs 9-15% FASTER under SSO), so the worst regression in the corpus is now UNATTRIBUTED. `shortest_distance_iii` (+36%) and `shortest_distance` (+61%) are the same shape. Reachable only at KARAC_SSO=1, which is off by default. | — |
 | B-2026-09-14-29 | 2026-09-14 | codegen | low | AN INDEX-ASSIGN DISPLACING A STRUCT ELEMENT WITH A HEAP FIELD LOSES BOTH ITS MEMORY AND ITS `Drop` BODY -- `a[0] = D { .. }` over `Array[D, 2]` with `D { s: String }` prints `a0:3 / dD3 / dD2` with the displaced element's `dD1` running nowhere, and leaks its 10-byte `s` buffer; B-2026-09-14-1's fix is gated on the element being a vec-struct slot, which a user struct is not, so it declines this shape by construction and closing it needs the element's own drop WRAPPER at the store rather than a buffer free | — |
 | B-2026-09-14-30 | 2026-09-14 | codegen | medium | AN INDEX-ASSIGN WHOSE RHS IS A NAMED LOCAL DOUBLE-FREES THE MOVED-IN VALUE FOR A HEAP-OWNING ARRAY ELEMENT -- `a[0] = v3` over `Array[Vec[i64], 2]` reports `Invalid free()` on a 32-byte block at -O0, freed once from `main` and once through a nested call, while the FRESH-rhs spelling (`a[0] = Vec.new()`) and the array literal that consumes the same sources are both free of it; the array LITERAL suppresses the sources it consumes and the index-STORE does not | — |
 | B-2026-09-14-31 | 2026-09-14 | codegen | high | AUTO-PAR MISCOMPILES A `+` REDUCTION WHOSE CONTRIBUTION READS ITS OWN ACCUMULATOR -- `while i < 50 { let k = (i + total) % 21; total = total + mk(k); i = i + 1; }` prints 413 compiled and 289 under `--interp` / `KARAC_AUTO_PAR=0` (oracle 289). The analyzer reports `parallel_reduction { op: +, accumulator: total, fanned_out: true }` without ever testing that the contributed expression is free of reads of `total`. The COST GATE is the only thing masking it: the same program is correct at trip count 38 (`declined_below_cost_threshold`) and wrong at 39. Silent, no diagnostic, and ON BY DEFAULT. | — |
 | B-2026-09-15-1 | 2026-09-15 | codegen | medium | TWO SSO RAIL NUMBERS MOVED BY MORE THAN 40 POINTS AND NEITHER IS ATTRIBUTED -- `lexlike`'s +34% regression (this track's stated open question) became a 12-14% WIN between 2026-09-12 and 2026-09-15, and `substr` is now the worst rail at +34% having read as +5%. `substr`'s move is explained (it was fanning out; `bench.sh` did not pin `KARAC_AUTO_PAR=0` until 2026-09-15). `lexlike`'s is NOT: it is the one rail the analyzer never fans out, so both numbers are sequential and directly comparable. Reachable only at KARAC_SSO=1, which is off by default. | — |
+| B-2026-09-15-2 | 2026-09-15 | codegen | high | MOVING A NAMED `Array[T, N]` LOCAL INTO AN ENCLOSING ARRAY LITERAL DOUBLE-FREES ITS ELEMENT BUFFERS ON EVERY COMPILED BACKEND -- `let n: Array[Array[String, 2], 1] = [a];` over `let a: Array[String, 2] = [f"..", f".."]` aborts with `free(): double free detected in tcache 2` at exit 134 against a correct `--interp`, and `karac check` prints `All checks passed` with NO diagnostic of any kind | — |
+| B-2026-09-15-3 | 2026-09-15 | codegen | medium | AN `Array[T, N]` LOCAL MOVED INTO A USER ENUM'S VARIANT CONSTRUCTOR STILL DANGLES ON EVERY COMPILED BACKEND when the enum dies FIRST -- `{ let w = Wrp.Full(a); .. }` then `println(a[0])` prints garbage at exit 0 against a correct `--interp`, because the constructor site stands the caller's element drop down BEFORE the payload is compiled and so cannot be handed the defensive copy that closed the argument spellings | — |
 
 ### Relocated
 
@@ -2576,6 +2577,7 @@ _Generated from `bug-ledger.jsonl` by `scripts/bug-curve.py` (2026-05-20 → 202
 | B-2026-09-14-20 | codegen | medium | SSO's PROMOTE-ON-MUTATION COSTS 32-40% ON CHAR-BY-CHAR STRING BUILDING, and it is the whole of the remaining corpus regression -- `sso_deinline_in_pl… | c1adb9c |
 | B-2026-09-14-21 | codegen | medium | A DISCARDED ENUM TEMP TAKES THE BY-TRANSFER STAND-DOWN THAT ONLY AN ARGUMENT SHOULD -- `Ex.mk(i);` and its `if`/`match`-tail spellings over an enum w… | 10008a1 |
 | B-2026-09-14-25 | codegen | high | AN `Array[D, N]` ENUM PAYLOAD WHOSE ELEMENT CARRIES BOTH HEAP AND A USER `Drop` BODY DOUBLE-FREES ON A CONSUMING ARM -- `Bd.A(a) => takeb(a)` over `e… | a56b9a2 |
+| B-2026-09-14-27 | ownership+codegen | high | READING A NAMED `Array[T, N]` LOCAL AFTER PASSING IT BY VALUE PRINTS GARBAGE ON EVERY COMPILED BACKEND AT EXIT 0 -- `let n = take(a); println(a[0])`… | 9a56c60 |
 
 </details>
 
