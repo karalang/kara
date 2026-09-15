@@ -274,6 +274,111 @@ impl<'a> super::TypeChecker<'a> {
         }
     }
 
+    /// B-2026-09-14-24 — the check-mode element pushdown for a SEQUENCE
+    /// literal, for every (literal spelling, expected outer form) pair except
+    /// the two the dedicated `Array`-expected arms above already own.
+    ///
+    /// design.md § Collection Literals: "Type annotation drives the
+    /// interpretation in check mode. When the binding has an expected type,
+    /// the literal takes that type", and `let c: Vec[i8] = [1, 2, 3]` is
+    /// spelled out as "annotation propagates to each literal element". Only
+    /// the bare-`[..]`-against-`Array[T, N]` half of that implemented the
+    /// propagation. Every other pair inferred the elements in SYNTHESIS mode,
+    /// where a bare sequence literal defaults to `Vec[T]` — so a nested
+    /// literal came back `Vec[Vec[D]]` and
+    /// `let v: Vec[Array[D, 1]] = [[mkd(1)], [mkd(2)]]` was rejected while the
+    /// identical literal under `Array[Array[D, 1], 2]` was accepted. Measured
+    /// on the same tree: the `Vec`-outer, `VecDeque`-outer, `Slice`-param,
+    /// `ref Vec`-param, return-position, struct-field and fn-argument
+    /// spellings all failed, and so did the PREFIX spelling of the
+    /// `Array`-outer case that works bare (`Array[[1, 2], [3, 4]]` against
+    /// `Array[Array[i64, 2], 2]`) — i.e. the gap was the missing arms, not a
+    /// design choice about what a bare `[..]` defaults to.
+    ///
+    /// Returns `(element type to push into each element, type to record and
+    /// return for the literal)`. Three deliberate declines:
+    ///
+    /// * **A SCALAR-NUMERIC element type** is left to the adoption block
+    ///   further down (B-2026-08-05-19 and siblings). That path carries the
+    ///   width, range and float-truncation rules a bare pushdown would lose:
+    ///   pushing `u32` into `[1.5, 2.5]` would accept a silent truncation the
+    ///   adoption gate exists to reject. The two halves are disjoint by
+    ///   construction — this one fires only where the element type has no
+    ///   width to choose.
+    /// * **A NON-CONCRETE expectation** (`expectation_is_concrete`), because a
+    ///   generic call's `Vec[T]` slot is how the solver learns `T` from the
+    ///   argument; pushing an unsolved `T` into each element would record the
+    ///   elements at the metavar instead of letting inference fix it.
+    /// * **The two pairs already handled above**, so their length check and
+    ///   diagnostics stay the single owner of that combination.
+    ///
+    /// The recorded type is the expectation with `ref`/`mut ref` PEELED, and
+    /// `Slice[T]` recorded as `Vec[T]` — both mirroring what
+    /// `contextual_scalar_collection_type` and the literal re-record block
+    /// already do for the scalar half, and both load-bearing: a `Slice[T]`
+    /// parameter materializes the literal as a Vec buffer, and the slice
+    /// header is synthesized at the call boundary.
+    fn contextual_sequence_element_pushdown(expr: &Expr, expected: &Type) -> Option<(Type, Type)> {
+        // Pairs the dedicated `Array`-expected arms above own outright.
+        let already_handled = matches!(
+            (&expr.kind, expected),
+            (ExprKind::ArrayLiteral(_), Type::Array { .. })
+                | (
+                    ExprKind::RepeatLiteral {
+                        type_name: None,
+                        ..
+                    },
+                    Type::Array { .. }
+                )
+        );
+        if already_handled {
+            return None;
+        }
+        match &expr.kind {
+            ExprKind::ArrayLiteral(_) => {}
+            ExprKind::RepeatLiteral { .. } => {}
+            // A `Map`/`Set` prefix literal has no single element slot to push
+            // into (`Map` is key+value, and `Set[..]` against a `Set[T]`
+            // expectation is not a sequence). `MapLiteral` never reaches here.
+            ExprKind::PrefixCollectionLiteral { type_name, .. } => {
+                if !matches!(type_name.as_str(), "Vec" | "Array" | "VecDeque") {
+                    return None;
+                }
+            }
+            _ => return None,
+        }
+        if !expectation_is_concrete(expected) {
+            return None;
+        }
+        fn is_scalar_numeric(t: &Type) -> bool {
+            matches!(t, Type::Int(_) | Type::UInt(_) | Type::Float(_))
+        }
+        let ctx = match expected {
+            Type::Ref(inner) | Type::MutRef(inner) => inner.as_ref(),
+            other => other,
+        };
+        let (element, recorded) = match ctx {
+            Type::Named { name, args }
+                if (name == "Vec" || name == "VecDeque") && args.len() == 1 =>
+            {
+                (args[0].clone(), ctx.clone())
+            }
+            Type::Array { element, .. } => ((**element).clone(), ctx.clone()),
+            Type::Slice { element, .. } => (
+                (**element).clone(),
+                Type::Named {
+                    name: "Vec".to_string(),
+                    args: vec![(**element).clone()],
+                },
+            ),
+            _ => return None,
+        };
+        if is_scalar_numeric(&element) || element == Type::Error {
+            return None;
+        }
+        Some((element, recorded))
+    }
+
     /// B-2026-08-14-11 — record an UNSUFFIXED FLOAT literal at the width its
     /// DESTINATION declares, so `let a: f32 = 0.1` is the same value as
     /// `let a: f32 = 0.1f32`.
@@ -1096,6 +1201,64 @@ impl<'a> super::TypeChecker<'a> {
             self.check_expr(value, element);
             self.record_expr_type(&expr.span, expected);
             return expected.clone();
+        }
+        // B-2026-09-14-24 — the same propagation for every other (literal
+        // spelling, expected sequence form) pair: a `Vec`/`VecDeque`/`Slice`/
+        // `ref Vec` expectation with a bare or prefix literal, and an `Array`
+        // expectation with a PREFIX literal. See
+        // `contextual_sequence_element_pushdown` for what it declines and why.
+        if let Some((element, recorded)) =
+            Self::contextual_sequence_element_pushdown(expr, expected)
+        {
+            match &expr.kind {
+                ExprKind::ArrayLiteral(elements)
+                | ExprKind::PrefixCollectionLiteral {
+                    items: elements, ..
+                } => {
+                    // An `Array[T, N]` expectation still length-checks — the
+                    // arm above owns the bare spelling, this covers the prefix
+                    // one.
+                    if let Type::Array { size, .. } = &recorded {
+                        if let Some(n) = size.as_usize() {
+                            if elements.len() != n {
+                                self.type_error(
+                                    format!(
+                                        "array literal has {} element(s), expected {}",
+                                        elements.len(),
+                                        n
+                                    ),
+                                    expr.span,
+                                    TypeErrorKind::TypeMismatch,
+                                );
+                            }
+                        }
+                    }
+                    for elem in elements {
+                        self.check_expr(elem, &element);
+                        // B-2026-09-03-20 — a sequence-literal element is
+                        // consumed by value, the same as a tuple element.
+                        self.warn_partial_move_of_drop_struct(elem, &element);
+                    }
+                }
+                ExprKind::RepeatLiteral { value, count, .. } => {
+                    let count_ty = self.infer_expr(count);
+                    if !matches!(count_ty, Type::Int(_) | Type::UInt(_) | Type::Error) {
+                        self.type_error(
+                            format!(
+                                "repeat-literal count must be an integer, found '{}'",
+                                type_display(&count_ty)
+                            ),
+                            count.span,
+                            TypeErrorKind::TypeMismatch,
+                        );
+                    }
+                    self.check_expr(value, &element);
+                    self.warn_partial_move_of_drop_struct(value, &element);
+                }
+                _ => unreachable!("gated by contextual_sequence_element_pushdown"),
+            }
+            self.record_expr_type(&expr.span, &recorded);
+            return recorded;
         }
         if let Some(coerced) = self.try_apply_into_coercion(expr, expected) {
             return coerced;

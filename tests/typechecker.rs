@@ -10690,6 +10690,171 @@ fn test_array_size_mismatch_is_error() {
     assert!(!errors.is_empty(), "Expected size-mismatch error, got none");
 }
 
+/// B-2026-09-14-24 — a check-mode sequence literal propagates the
+/// annotation's ELEMENT type into each element, for every (literal spelling,
+/// expected outer form) pair.
+///
+/// design.md § Collection Literals says so outright ("Type annotation drives
+/// the interpretation in check mode … annotation propagates to each literal
+/// element"), and only the bare-`[..]`-against-`Array[T, N]` pair implemented
+/// it. Everything else inferred the elements in SYNTHESIS mode, where a bare
+/// sequence literal defaults to `Vec[T]` — so a nested `[mkd(1)]` came back
+/// `Vec[D]` and `let v: Vec[Array[D, 1]] = [[mkd(1)], [mkd(2)]]` was rejected
+/// as `found 'Vec[Vec[D]]'` while the IDENTICAL literal under
+/// `Array[Array[D, 1], 2]` was accepted. The row was filed on the `Vec`-outer
+/// `let`; sweeping the pairs found the same gap at a fn argument, a struct
+/// field, a return, a `Slice[T]` param, a `ref Vec[T]` param, a
+/// `VecDeque`-outer annotation, the repeat spelling — and at the PREFIX
+/// spelling of the `Array`-outer case that works bare, which is what settles
+/// it as missing arms rather than a design choice about the bare form's
+/// default.
+#[test]
+fn test_annotation_element_type_reaches_a_nested_sequence_literal() {
+    const PRELUDE: &str = "struct D { id: i64 }\n\
+         fn mkd(n: i64) -> D { return D { id: n }; }\n\
+         fn mka(n: i64) -> Array[D, 1] { return [mkd(n)]; }\n";
+    for (cell, body) in [
+        // The row's own spelling, and the `Array`-outer control that already
+        // worked.
+        (
+            "vec_outer_nested",
+            "fn main() { let v: Vec[Array[D, 1]] = [[mkd(1i64)], [mkd(2i64)]]; let _n = v.len(); }",
+        ),
+        (
+            "array_outer_control",
+            "fn main() { let v: Array[Array[D, 1], 2] = [[mkd(1i64)], [mkd(2i64)]]; let _x = ref v[0]; }",
+        ),
+        (
+            "element_typed_by_a_call_control",
+            "fn main() { let v: Vec[Array[D, 1]] = [mka(1i64), mka(2i64)]; let _n = v.len(); }",
+        ),
+        // Two levels of `Vec` over an `Array` — the propagation has to recurse.
+        (
+            "deep_mix",
+            "fn main() { let v: Vec[Vec[Array[D, 1]]] = [[[mkd(1i64)]]]; let _n = v.len(); }",
+        ),
+        // Every other check-mode POSITION, not just the annotated `let`.
+        (
+            "fn_argument",
+            "fn take(v: Vec[Array[D, 1]]) -> i64 { return v.len(); }\n\
+             fn main() { let _n = take([[mkd(1i64)]]); }",
+        ),
+        (
+            "struct_field",
+            "struct H { xs: Vec[Array[D, 1]] }\n\
+             fn main() { let h: H = H { xs: [[mkd(1i64)]] }; let _n = h.xs.len(); }",
+        ),
+        (
+            "return_position",
+            "fn mk() -> Vec[Array[i64, 2]] { return [[1i64, 2i64]]; }\n\
+             fn main() { let _n = mk().len(); }",
+        ),
+        (
+            "slice_param",
+            "fn take(s: Slice[Array[i64, 2]]) -> i64 { return s.len(); }\n\
+             fn main() { let _n = take([[1i64, 2i64], [3i64, 4i64]]); }",
+        ),
+        (
+            "ref_vec_param",
+            "fn take(v: ref Vec[Array[i64, 2]]) -> i64 { return v.len(); }\n\
+             fn main() { let _n = take([[1i64, 2i64]]); }",
+        ),
+        // Outer forms other than `Vec`, and inner forms other than `Array`.
+        (
+            "vecdeque_outer",
+            "fn main() { let v: VecDeque[Array[i64, 2]] = [[1i64, 2i64]]; let _n = v.len(); }",
+        ),
+        (
+            "vecdeque_inner",
+            "fn main() { let v: Vec[VecDeque[i64]] = [[1i64], [2i64]]; let _n = v.len(); }",
+        ),
+        // The other two literal SPELLINGS.
+        (
+            "repeat_spelling",
+            "fn main() { let v: Vec[Array[i64, 2]] = [[7i64, 8i64]; 3]; let _n = v.len(); }",
+        ),
+        (
+            "prefix_spelling_vec_outer",
+            "fn main() { let v: Vec[Array[i64, 2]] = Vec[[1i64, 2i64], [3i64, 4i64]]; let _n = v.len(); }",
+        ),
+        (
+            "prefix_spelling_array_outer",
+            "fn main() { let v: Array[Array[i64, 2], 2] = Array[[1i64, 2i64], [3i64, 4i64]]; let _x = v[0]; }",
+        ),
+    ] {
+        let src = format!("{PRELUDE}{body}");
+        // Not `typecheck_ok`: its panic message does not name the cell, and a
+        // 14-cell sweep whose failure does not say WHICH cell broke is the
+        // filtered-log failure mode CLAUDE.md warns about.
+        let parsed = parse(&src);
+        assert!(
+            parsed.errors.is_empty(),
+            "cell `{cell}`: parse errors {:?}",
+            parsed.errors
+        );
+        let resolved = resolve(&parsed.program);
+        assert!(
+            resolved.errors.is_empty(),
+            "cell `{cell}`: resolve errors {:?}",
+            resolved.errors
+        );
+        let errors = typecheck(&parsed.program, &resolved).errors;
+        assert!(
+            errors.is_empty(),
+            "cell `{cell}`: expected the annotation's element type to reach the literal; got {:?}",
+            errors.iter().map(|e| e.message.clone()).collect::<Vec<_>>()
+        );
+    }
+}
+
+/// B-2026-09-14-24 — the pushdown above must not swallow the rules the
+/// SCALAR-element path enforces, which is why it declines a scalar-numeric
+/// element type outright and leaves that half to the adoption block
+/// (B-2026-08-05-19 and siblings). Each cell here rejects today and must keep
+/// rejecting: a float literal into an integer element is a silent truncation,
+/// an out-of-range literal is out of range, a `String` element is not a
+/// `u32`, and a prefix literal against `Array[T, N]` length-checks exactly as
+/// the bare spelling does.
+#[test]
+fn test_element_pushdown_does_not_relax_the_scalar_element_rules() {
+    for (cell, src) in [
+        (
+            "float_into_integer_element",
+            "fn main() { let v: Vec[u32] = [1.5, 2.5]; let _n = v.len(); }",
+        ),
+        (
+            "integer_literal_out_of_range",
+            "fn main() { let v: Vec[i8] = [200]; let _n = v.len(); }",
+        ),
+        (
+            "string_into_integer_element",
+            "fn main() { let v: Vec[u32] = [\"a\", \"b\"]; let _n = v.len(); }",
+        ),
+        (
+            "prefix_spelling_length_mismatch",
+            "fn main() { let v: Array[Array[i64, 2], 3] = Array[[1i64, 2i64], [3i64, 4i64]]; let _x = v[0]; }",
+        ),
+    ] {
+        let errors = typecheck_errors(src);
+        assert!(
+            !errors.is_empty(),
+            "cell `{cell}`: must still be rejected, but typechecked clean"
+        );
+    }
+}
+
+/// B-2026-09-14-24 — and it must not intercept a GENERIC slot, which is how
+/// the solver learns the element type FROM the argument. `Vec[T]` with `T`
+/// unsolved is not an expectation to push down; the pushdown declines on
+/// `expectation_is_concrete` for exactly this.
+#[test]
+fn test_element_pushdown_leaves_an_unsolved_generic_slot_to_inference() {
+    typecheck_ok(
+        "fn count[T](v: Vec[T]) -> i64 { return v.len(); }\n\
+         fn main() { let _n = count([1i64, 2i64]); let _m = count([\"a\", \"b\"]); }",
+    );
+}
+
 // ── Vec-default sequence literals ───────────────────────────────
 
 #[test]
