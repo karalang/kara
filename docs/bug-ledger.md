@@ -92,9 +92,9 @@ distinguish "bugs flattening" from "we stopped writing them down."
 
 | class | total |
 |---|---|
+| run-vs-build | 411 |
 | miscompile | 410 |
-| run-vs-build | 409 |
-| leak | 352 |
+| leak | 353 |
 | double-free | 233 |
 | missing-feature | 198 |
 | codegen-gap | 178 |
@@ -110,7 +110,7 @@ distinguish "bugs flattening" from "we stopped writing them down."
 
 | surface | total |
 |---|---|
-| codegen | 1762 |
+| codegen | 1765 |
 | interp | 441 |
 | typecheck | 300 |
 | other | 90 |
@@ -188,13 +188,15 @@ _Generated from `bug-ledger.jsonl` by `scripts/bug-curve.py` (2026-05-20 → 202
 | B-2026-09-14-26 | 2026-09-14 | codegen | medium | A CONSUMING ARM OVER A BOXED TUPLE ENUM PAYLOAD LEAKS ITS ELEMENTS -- `T.A(p) => taket(p)` over `enum T { A((String, String)), B }` loses 159 B in 6 blocks (21 allocs / 15 frees) while the READ-ONLY arm over the same enum is clean, so it is arm-dependent and distinct from B-2026-09-12-10; it also REFUTES B-2026-09-14-17's guess that a boxed tuple shares the array's double free -- box-only arms leak where interior-walking arms abort | — |
 | B-2026-09-14-28 | 2026-09-14 | codegen | medium | `vertical`'s +85% SSO REGRESSION IS NOT THE DE-INLINE PROBE AND NOT `prefix_string` -- both were ruled out by measurement (c1adb9c removed the probe: +84.1% -> +85.4%; an exact mirror of `prefix_string` runs 9-15% FASTER under SSO), so the worst regression in the corpus is now UNATTRIBUTED. `shortest_distance_iii` (+36%) and `shortest_distance` (+61%) are the same shape. Reachable only at KARAC_SSO=1, which is off by default. | — |
 | B-2026-09-14-29 | 2026-09-14 | codegen | low | AN INDEX-ASSIGN DISPLACING A STRUCT ELEMENT WITH A HEAP FIELD LOSES BOTH ITS MEMORY AND ITS `Drop` BODY -- `a[0] = D { .. }` over `Array[D, 2]` with `D { s: String }` prints `a0:3 / dD3 / dD2` with the displaced element's `dD1` running nowhere, and leaks its 10-byte `s` buffer; B-2026-09-14-1's fix is gated on the element being a vec-struct slot, which a user struct is not, so it declines this shape by construction and closing it needs the element's own drop WRAPPER at the store rather than a buffer free | — |
-| B-2026-09-15-3 | 2026-09-15 | codegen | medium | AN `Array[T, N]` LOCAL MOVED INTO A USER ENUM'S VARIANT CONSTRUCTOR STILL DANGLES ON EVERY COMPILED BACKEND when the enum dies FIRST -- `{ let w = Wrp.Full(a); .. }` then `println(a[0])` prints garbage at exit 0 against a correct `--interp`, because the constructor site stands the caller's element drop down BEFORE the payload is compiled and so cannot be handed the defensive copy that closed the argument spellings | — |
 | B-2026-09-15-7 | 2026-09-15 | codegen | low | AN INDEX-STORE FREES ONLY THE OUTER BUFFER OF THE `Vec` ELEMENT IT DISPLACES, STRANDING THAT ELEMENT'S OWN ELEMENTS -- `a[0] = <new>` over `Array[Vec[String], 2]` loses the displaced Vec's 5-byte String at -O0, and the `Vec[Vec[String]]` TWIN loses the identical 5 bytes, so this is NOT Array-specific and not B-2026-09-14-30's; it is the outer-buffer-only bound both legs were deliberately given, now measured as a real loss rather than a documented caveat | — |
 | B-2026-09-15-9 | 2026-09-15 | codegen | medium | AN ENUM PAYLOAD TUPLE CONTAINING A FIXED `Array` STRANDS ITS PAYLOAD BOX ON EVERY COMPILED BACKEND, INDEPENDENTLY OF THE INTERIOR -- `T2.P(mka("x"), 3)` over `enum T2 { P(Array[String, 2], i64), N }` loses the 48 B envelope (plus 44 B indirect), and `(Array[i64, 2], i64)` with NO HEAP ANYWHERE still loses its 16 B envelope, with the output correct, exit 0 and `karac check` clean | — |
 | B-2026-09-15-10 | 2026-09-15 | codegen | medium | A `shared enum` VARIANT CARRYING AN `Array[T, N]` STRANDS ITS PAYLOAD BOX ON EVERY COMPILED BACKEND -- `Sh.S(a)` over `shared enum Sh { S(Array[String, 2]), N }` loses 48 B at `-O0` with the output correct and `karac check` clean, and loses a further 44 B indirectly once a named source is involved | — |
 | B-2026-09-15-12 | 2026-09-15 | codegen | low | A `-> ref` METHOD WHOSE INNER IS AN `Array[T, N]` OR A NAMED STRUCT IS DECLINED BY CODEGEN AT EVERY VALUE-POSITION CONSUMER -- `h.peek()[0]` says `Index operator applied to non-array type` and `h.peek().a` says `cannot resolve field 'a' on this receiver`, both while `--interp` prints the right answer; the TUPLE inner of the same shape now lowers (B-2026-09-15-4) and these two are the inners that fix deliberately declined to widen to | — |
 | B-2026-09-15-13 | 2026-09-15 | codegen | medium | SSO'S INLINE CONSTRUCTION GOES THROUGH AN OPAQUE RUNTIME CALL AND COSTS 10x WHAT THE ENCODING COSTS -- `String.substring` at KARAC_SSO=1 calls `karac_string_try_inline_into` per construction and runs 212ms on a 10M-iteration slice/compare rail, against 127ms for the SAME rail at KARAC_SSO=0 whose substring lowering is CALL-FREE IN IR; emitting the inline fast path as IR instead (memcpy + zero-fill + flag byte, the exact `write_inline` encoding) runs the rail in 22ms -- 9.6x faster than the current SSO path and 5.7x faster than the non-SSO baseline, with identical output at three iteration counts. The call is not merely overhead: it is an optimization barrier the rest of the loop cannot be simplified across. | — |
 | B-2026-09-15-14 | 2026-09-15 | interp+codegen | medium | AN ENUM STORED IN A `Map` OR `Set` NEVER RUNS ITS USER `Drop` BODY AT ALL -- `s.insert(mkd(0))` over `Set[Tg]` with `impl Drop for Tg`, no lookup anywhere, prints ZERO bodies where one is owed at the set's destruction, and the same holds for a `Map[Tg, i64]` key and for a Drop-bearing PAYLOAD; `Vec[Tg]` and a STRUCT element in the same `Map` are both correct, so the axis is hash-container storage of an enum and this is the last unfixed member of the family B-2026-08-28-55 and B-2026-08-28-54 closed | — |
+| B-2026-09-15-15 | 2026-09-15 | codegen | medium | A MULTI-FIELD ENUM VARIANT STRANDS ITS BOXED `Array[T, N]` PAYLOAD ON EVERY COMPILED BACKEND -- `Both(a, b)` loses 96 B + 92 B indirect at `-O0` and `M(a, 5)` / `M(5, a)` lose 48 B + 46 B each, with the output correct, `karac check` clean apart from the advisory ownership warning, and no dangle anywhere; the SINGLE-field variant beside them is balanced, which is what isolates the field count rather than the array | — |
+| B-2026-09-15-16 | 2026-09-15 | codegen | medium | A PLAIN STRUCT MOVED INTO AN OWNING SINK LEAVES THE SOURCE'S HEAP FIELD READING EMPTY ON EVERY COMPILED BACKEND -- `Ws.Full(p)` then `println(p.s)` prints nothing where `--interp` prints the string, and `v.push(p)` does the same, while the CALL-ARGUMENT spelling of the identical program is correct; memory-safe and valgrind-clean, so nothing reports it | — |
+| B-2026-09-15-17 | 2026-09-15 | codegen | low | AN `Array[R, N]` WHOSE ELEMENT RUNS A USER `Drop` BODY, MOVED INTO AN ENUM VARIANT CONSTRUCTOR, RUNS THOSE BODIES BEFORE THE CONSUMING CALL ON EVERY COMPILED BACKEND and after it under `--interp` -- the identical program with a plain function call in place of the constructor is correctly ordered on both, which puts the divergence at the constructor rather than at the array | — |
 
 ### Relocated
 
@@ -2584,6 +2586,7 @@ _Generated from `bug-ledger.jsonl` by `scripts/bug-curve.py` (2026-05-20 → 202
 | B-2026-09-14-30 | codegen | medium | AN INDEX-ASSIGN WHOSE RHS IS A NAMED LOCAL DOUBLE-FREES THE MOVED-IN VALUE FOR A HEAP-OWNING ARRAY ELEMENT -- `a[0] = v3` over `Array[Vec[i64], 2]` r… | 666d673 |
 | B-2026-09-14-31 | codegen | high | AUTO-PAR MISCOMPILES A `+` REDUCTION WHOSE CONTRIBUTION READS ITS OWN ACCUMULATOR -- `while i < 50 { let k = (i + total) % 21; total = total + mk(k);… | 4f60677 |
 | B-2026-09-15-2 | codegen | high | MOVING A NAMED `Array[T, N]` LOCAL INTO AN ENCLOSING ARRAY LITERAL DOUBLE-FREES ITS ELEMENT BUFFERS ON EVERY COMPILED BACKEND -- `let n: Array[Array[… | 73f1781 |
+| B-2026-09-15-3 | codegen | medium | AN `Array[T, N]` LOCAL MOVED INTO A USER ENUM'S VARIANT CONSTRUCTOR STILL DANGLES ON EVERY COMPILED BACKEND when the enum dies FIRST -- `{ let w = Wr… | 19d245c |
 | B-2026-09-15-4 | codegen | high | A METHOD RETURNING `ref (T, U)` IS MISHANDLED AT EVERY VALUE-POSITION CONSUMER -- `m.get(h.peek())` over a heap tuple SIGSEGVs, `h.peek().0` prints `… | 6027ab1 |
 | B-2026-09-15-5 | interp+codegen | medium | A MAP-LOOKUP KEY TEMPORARY'S USER `Drop` BODY NEVER RUNS -- `m.get(mkd(0))` over `Map[Dk, i64]` with `impl Drop for Dk` reclaims the key's storage bu… | c75268b |
 | B-2026-09-15-8 | codegen | medium | AN `Array[S, N]` OF A `shared struct` LEAKS EVERY ELEMENT'S REFCOUNT BLOCK, WITH NO STORE AND NO MOVE ANYWHERE IN THE PROGRAM -- a bare `let a: Array… | 844a233cc |
