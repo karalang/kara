@@ -99,8 +99,8 @@ distinguish "bugs flattening" from "we stopped writing them down."
 | missing-feature | 198 |
 | codegen-gap | 177 |
 | diagnostics | 126 |
+| perf | 111 |
 | other | 111 |
-| perf | 110 |
 | false-positive | 107 |
 | soundness | 95 |
 | crash | 81 |
@@ -110,7 +110,7 @@ distinguish "bugs flattening" from "we stopped writing them down."
 
 | surface | total |
 |---|---|
-| codegen | 1748 |
+| codegen | 1749 |
 | interp | 439 |
 | typecheck | 300 |
 | other | 90 |
@@ -124,7 +124,7 @@ distinguish "bugs flattening" from "we stopped writing them down."
 | lexer | 8 |
 ## Current state
 
-_Generated from `bug-ledger.jsonl` by `scripts/bug-curve.py` (2026-05-20 → 2026-09-14). Do not edit this block by hand; edit the ledger and regenerate._
+_Generated from `bug-ledger.jsonl` by `scripts/bug-curve.py` (2026-05-20 → 2026-09-15). Do not edit this block by hand; edit the ledger and regenerate._
 
 ### Open
 
@@ -192,6 +192,7 @@ _Generated from `bug-ledger.jsonl` by `scripts/bug-curve.py` (2026-05-20 → 202
 | B-2026-09-14-29 | 2026-09-14 | codegen | low | AN INDEX-ASSIGN DISPLACING A STRUCT ELEMENT WITH A HEAP FIELD LOSES BOTH ITS MEMORY AND ITS `Drop` BODY -- `a[0] = D { .. }` over `Array[D, 2]` with `D { s: String }` prints `a0:3 / dD3 / dD2` with the displaced element's `dD1` running nowhere, and leaks its 10-byte `s` buffer; B-2026-09-14-1's fix is gated on the element being a vec-struct slot, which a user struct is not, so it declines this shape by construction and closing it needs the element's own drop WRAPPER at the store rather than a buffer free | — |
 | B-2026-09-14-30 | 2026-09-14 | codegen | medium | AN INDEX-ASSIGN WHOSE RHS IS A NAMED LOCAL DOUBLE-FREES THE MOVED-IN VALUE FOR A HEAP-OWNING ARRAY ELEMENT -- `a[0] = v3` over `Array[Vec[i64], 2]` reports `Invalid free()` on a 32-byte block at -O0, freed once from `main` and once through a nested call, while the FRESH-rhs spelling (`a[0] = Vec.new()`) and the array literal that consumes the same sources are both free of it; the array LITERAL suppresses the sources it consumes and the index-STORE does not | — |
 | B-2026-09-14-31 | 2026-09-14 | codegen | high | AUTO-PAR MISCOMPILES A `+` REDUCTION WHOSE CONTRIBUTION READS ITS OWN ACCUMULATOR -- `while i < 50 { let k = (i + total) % 21; total = total + mk(k); i = i + 1; }` prints 413 compiled and 289 under `--interp` / `KARAC_AUTO_PAR=0` (oracle 289). The analyzer reports `parallel_reduction { op: +, accumulator: total, fanned_out: true }` without ever testing that the contributed expression is free of reads of `total`. The COST GATE is the only thing masking it: the same program is correct at trip count 38 (`declined_below_cost_threshold`) and wrong at 39. Silent, no diagnostic, and ON BY DEFAULT. | — |
+| B-2026-09-15-1 | 2026-09-15 | codegen | medium | TWO SSO RAIL NUMBERS MOVED BY MORE THAN 40 POINTS AND NEITHER IS ATTRIBUTED -- `lexlike`'s +34% regression (this track's stated open question) became a 12-14% WIN between 2026-09-12 and 2026-09-15, and `substr` is now the worst rail at +34% having read as +5%. `substr`'s move is explained (it was fanning out; `bench.sh` did not pin `KARAC_AUTO_PAR=0` until 2026-09-15). `lexlike`'s is NOT: it is the one rail the analyzer never fans out, so both numbers are sequential and directly comparable. Reachable only at KARAC_SSO=1, which is off by default. | — |
 
 ### Relocated
 
