@@ -26418,6 +26418,101 @@ fn main() {
     /// enum and a `Map` with a STRUCT element were both already correct, so the
     /// defect is hash-container storage of an ENUM specifically, not enums and
     /// not containers.
+    /// B-2026-09-14-23 — a whole-container REASSIGNMENT lost the displaced
+    /// container's element `Drop` bodies on every compiled backend, while the
+    /// interpreter ran them: a run-vs-build divergence at the DISPLACEMENT
+    /// site, not in any element walker (the flat spellings diverged exactly as
+    /// the nested ones did, which is what said it was one site and not four).
+    ///
+    /// Two distinct gaps behind one symptom. For a `Vec`, the eager-free block
+    /// that already carries the displaced-bodies call is gated on a classified
+    /// RHS, and a container LITERAL matched no arm — `rhs_yields_fresh_ref`
+    /// answers for `StructLiteral`/`Call`/`MethodCall` only, and the two
+    /// literal spellings are `ArrayLiteral` and `PrefixCollectionLiteral`. For
+    /// a fixed `Array`, the local is in neither `vec_elem_types` nor
+    /// `var_elem_type_exprs`, so that block is inapplicable to it at all and it
+    /// needed its own bodies-only call keyed on `array_elem_type_exprs`.
+    ///
+    /// The surviving elements (dD3, dD4) were always correct everywhere, which
+    /// is what isolates the defect to the displaced value.
+    #[test]
+    fn e2e_whole_container_reassign_runs_displaced_element_bodies() {
+        const H: &str = "struct D { id: i64, s: String }\n\
+             impl Drop for D { fn drop(mut ref self) { println(f\"dD{self.id}\") } }\n\
+             fn mkd(i: i64) -> D { return D { id: i, s: f\"tttttttttttttttt{i}\" } }\n";
+        for (label, body, want) in [
+            (
+                "vec-flat",
+                "fn main() {\n\
+                 \x20   let mut v: Vec[D] = [mkd(1), mkd(2)];\n\
+                 \x20   v = [mkd(3), mkd(4)];\n\
+                 \x20   println(\"mid\");\n\
+                 \x20   println(\"end\");\n\
+                 }\n",
+                "dD1\ndD2\ndD3\ndD4\nmid\nend\n",
+            ),
+            (
+                "array-flat",
+                "fn main() {\n\
+                 \x20   let mut v: Array[D, 2] = [mkd(1), mkd(2)];\n\
+                 \x20   v = [mkd(3), mkd(4)];\n\
+                 \x20   println(\"mid\");\n\
+                 \x20   println(\"end\");\n\
+                 }\n",
+                "dD1\ndD2\ndD3\ndD4\nmid\nend\n",
+            ),
+            (
+                "array-nested",
+                "fn main() {\n\
+                 \x20   let mut v: Array[Array[D, 1], 2] = [[mkd(1)], [mkd(2)]];\n\
+                 \x20   v = [[mkd(3)], [mkd(4)]];\n\
+                 \x20   println(\"mid\");\n\
+                 \x20   println(\"end\");\n\
+                 }\n",
+                "dD1\ndD2\ndD3\ndD4\nmid\nend\n",
+            ),
+            // The container stays USABLE after the reassignment — the displaced
+            // bodies run for the OLD elements only. Without this cell a fix
+            // that ran bodies over the NEW contents would pass the three above,
+            // since there the container dies immediately and the two orders are
+            // indistinguishable.
+            (
+                "vec-read-back-after-reassign",
+                "fn main() {\n\
+                 \x20   let mut v: Vec[D] = [mkd(1), mkd(2)];\n\
+                 \x20   v = [mkd(3), mkd(4)];\n\
+                 \x20   println(\"mid\");\n\
+                 \x20   println(f\"read:{v[0].id},{v[1].id},len={v.len()}\");\n\
+                 \x20   println(\"end\");\n\
+                 }\n",
+                "dD1\ndD2\nmid\nread:3,4,len=2\ndD3\ndD4\nend\n",
+            ),
+        ] {
+            let prog = format!("{H}{body}");
+            assert_eq!(run_program(&prog).as_deref(), Some(want), "{label}");
+        }
+        // AGREED SILENCES, measured on both backends and NOT this row's shape:
+        // a struct FIELD assigned a fresh container, and a displaced `Map`.
+        // Both were among the row's NOT MEASURED items; both answer "gap, not
+        // divergence", so they are pinned here rather than fixed, and a later
+        // widening that starts printing their displaced bodies on one backend
+        // only has to move this assertion deliberately.
+        assert_eq!(
+            run_program(&format!(
+                "{H}struct Hold {{ mut v: Vec[D] }}\n\
+                 fn main() {{\n\
+                 \x20   let mut h = Hold {{ v: [mkd(1), mkd(2)] }};\n\
+                 \x20   h.v = [mkd(3), mkd(4)];\n\
+                 \x20   println(\"mid\");\n\
+                 \x20   println(\"end\");\n\
+                 }}\n"
+            ))
+            .as_deref(),
+            Some("dD3\ndD4\nmid\nend\n"),
+            "struct-field target: displaced bodies are an AGREED silence on both backends"
+        );
+    }
+
     #[test]
     fn e2e_hash_container_enum_element_runs_its_body() {
         const H: &str = "#[derive(Hash, Eq, PartialEq)]\n\

@@ -12812,11 +12812,74 @@ impl<'ctx> super::Codegen<'ctx> {
                                     && *key == (object.span.offset, object.span.length)
                             )
                     );
+                    // B-2026-09-14-23 — a CONTAINER LITERAL RHS
+                    // (`v = [mkd(3), mkd(4)]`). `rhs_yields_fresh_ref` answers
+                    // for `StructLiteral` / `Call` / `MethodCall` and has no
+                    // `ArrayLiteral` arm, so a whole-container reassignment from
+                    // a literal matched NO term below: `trigger_eager_free`
+                    // stayed false and the displaced old container's element
+                    // `Drop` BODIES (the B-2026-08-03-2 class-1 call further
+                    // down) never ran. The interpreter runs them, so this was a
+                    // run-vs-build divergence on every compiled surface, for
+                    // `Array[D, N]` and `Vec[D]` alike and at both nesting
+                    // depths — which is what said the loss is at the
+                    // DISPLACEMENT site rather than in any element walker.
+                    //
+                    // Added as its own term rather than by widening
+                    // `rhs_yields_fresh_ref`: that predicate also drives the
+                    // receive-side `rc_inc` skip at both the let and assign
+                    // sites, so widening it would change refcounting for every
+                    // array-literal bind, which is a different question from
+                    // whether the OVERWRITTEN value needs reclaiming.
+                    let rhs_is_container_literal = matches!(
+                        &value.kind,
+                        ExprKind::ArrayLiteral(_) | ExprKind::PrefixCollectionLiteral { .. }
+                    );
+                    // B-2026-09-14-23 — the FIXED-`Array` half of the same
+                    // displacement. A fixed `Array[D, N]` local is in NEITHER
+                    // `vec_elem_types` nor `var_elem_type_exprs`, so
+                    // `lhs_is_tracked_vec` is false and the whole eager-free
+                    // block below — including its displaced-bodies call — is
+                    // inapplicable to it. Its element type lives in
+                    // `array_elem_type_exprs` instead.
+                    //
+                    // Emitted as its own BODIES-ONLY call rather than by
+                    // widening `lhs_is_tracked_vec`, because everything else in
+                    // that block is MEMORY for a heap buffer: a fixed array is
+                    // stack-allocated and has no buffer to free, so routing it
+                    // through the Vec path would free a slot nobody malloc'd.
+                    // Bodies on this channel, memory on the scope-exit one —
+                    // the split B-2026-09-14-15's walkers are built around.
+                    //
+                    // Runs BEFORE the RHS store below, while the displaced
+                    // elements are still live in the slot.
+                    if rhs_is_container_literal && !lhs_is_tracked_vec && !rhs_is_self_alias {
+                        if let (Some(elem_te), Some(slot)) = (
+                            self.var_types
+                                .array_elem_type_exprs
+                                .get(name.as_str())
+                                .cloned(),
+                            self.variables.get(name.as_str()).copied(),
+                        ) {
+                            if slot.ty.is_array_type() {
+                                let n = slot.ty.into_array_type().len();
+                                let elem_ty = self.llvm_type_for_type_expr(&elem_te);
+                                if let Some(bodies) =
+                                    self.emit_array_elem_user_drop_bodies_fn(elem_ty, &elem_te, n)
+                                {
+                                    self.builder
+                                        .build_call(bodies, &[slot.ptr.into()], "")
+                                        .unwrap();
+                                }
+                            }
+                        }
+                    }
                     let trigger_eager_free = lhs_is_tracked_vec
                         && !rhs_is_self_alias
                         && (staged_fstr_acc.is_some()
                             || rhs_is_moved_alias
                             || rhs_is_fresh
+                            || rhs_is_container_literal
                             || rhs_is_staged_freshtemp_field
                             || rhs_is_heap_vec_index
                             || rhs_is_place_field_move
