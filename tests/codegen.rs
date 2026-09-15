@@ -21594,6 +21594,69 @@ fn main() {
         );
     }
 
+    /// B-2026-09-04-36 — a fresh-temp method RECEIVER dies AS THE CALL
+    /// RETURNS, not at the enclosing statement's `;`.
+    ///
+    /// `println(f"ref[{mk(1).peek()}]")` printed the body AFTER the value on
+    /// jit/aot against `--interp`'s before it. The statement spelling
+    /// (`let v = mk(3).take()`) agreed on all four surfaces, which is exactly
+    /// why this hid: there the `;` follows the call return with nothing in
+    /// between, so the two rows coincide.
+    ///
+    /// WHY THE CALL RETURN IS THE ANSWER. B-2026-08-29-55 moved the three
+    /// ARGUMENT registrars onto a per-call window and excluded the receiver on
+    /// the ground that it "has its OWN row in the position table with a
+    /// different end". It does not — design.md § Temporary Lifetime Rules has
+    /// no row for a method receiver. Two readings both land on the argument
+    /// row: `self` IS a parameter, so the receiver is argument zero; and the
+    /// canonical rule ends a temporary "at the first program point where the
+    /// surrounding context's evaluation has produced a value that no longer
+    /// references the temporary", which for `mk(1).peek() -> i64` is the call
+    /// return. The statement drain applied the neighbouring longer row, and the
+    /// composition-with-NLL paragraph forbids that direction outright.
+    ///
+    /// THE TWO-RECEIVER CELL IS THE ONE THAT SHOWS IT IS NOT MERELY LATE.
+    /// `mk(4).take() + mk(5).take()` drained BOTH receivers at the `;`, and the
+    /// statement frame pops LIFO, so the compiled backends ran `dR5 dR4` —
+    /// the second receiver's body before the first's — against the
+    /// interpreter's `dR4 dR5`. Each receiver now dies inside its own call
+    /// window, so the order follows program order. This is the held-too-long
+    /// footgun the position table exists to close, one row over from the
+    /// argument case that prompted B-2026-08-29-55.
+    ///
+    /// Both self-modes are pinned because they reach the placement by
+    /// different routes: `ref self` always had a body here, and `take(self)`
+    /// only acquired one in B-2026-09-04-30, inheriting the same split.
+    /// SCRUTINEE temps are deliberately NOT part of this move and were measured
+    /// not to split — they genuinely do have their own position-table rows.
+    #[test]
+    fn e2e_fresh_receiver_temp_dies_at_the_call_return() {
+        let Some(out) = run_program(
+            "struct R { id: i64, t: String }\n\
+             impl Drop for R { fn drop(mut ref self) { println(f\"dR{self.id}\") } }\n\
+             fn mk(n: i64) -> R { return R { id: n, t: f\"tag{n}\" } }\n\
+             impl R {\n\
+             \x20   fn peek(ref self) -> i64 { return self.id * 2 }\n\
+             \x20   fn take(self) -> i64 { return self.id * 3 }\n\
+             }\n\
+             fn main() {\n\
+             \x20   println(f\"ref[{mk(1).peek()}]\");\n\
+             \x20   println(f\"own[{mk(2).take()}]\");\n\
+             \x20   let v = mk(3).take();\n\
+             \x20   println(f\"stmt[{v}]\");\n\
+             \x20   let two = mk(4).take() + mk(5).take();\n\
+             \x20   println(f\"two[{two}]\");\n\
+             \x20   println(\"end\");\n\
+             }\n",
+        ) else {
+            return;
+        };
+        assert_eq!(
+            out,
+            "dR1\nref[2]\ndR2\nown[6]\ndR3\nstmt[9]\ndR4\ndR5\ntwo[27]\nend\n"
+        );
+    }
+
     /// B-2026-08-01-4 — a fresh Drop-bearing call-arg temp in LET position
     /// fires its body at the END OF THE STATEMENT, where the interpreter
     /// fires it (`run_fresh_temp_arg_drops` runs as the call returns).

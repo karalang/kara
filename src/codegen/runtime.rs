@@ -11116,9 +11116,11 @@ impl<'ctx> super::Codegen<'ctx> {
                         // ran after the payload's death (at scope exit), so
                         // firing it sooner narrows that window rather than
                         // opening one.
-                        // Receiver and scrutinee temps are NOT arguments and
-                        // do not share the argument row's live-range end, so a
-                        // per-call drain must not claim them (B-2026-08-29-55).
+                        // B-2026-09-04-36 — the SCRUTINEE temps below are not
+                        // arguments and keep the statement drain; the RECEIVER
+                        // moved up into the argument group, because that half of
+                        // this sentence did not survive checking. See the
+                        // `__urecv_drop_tmp` arm above.
                         //
                         // B-2026-08-30-15 adds the STRUCT scrutinee slot, minted
                         // by `materialize_freshtemp_struct_scrutinee`, on
@@ -11134,9 +11136,46 @@ impl<'ctx> super::Codegen<'ctx> {
                         // at construct exit before this drain ever sees it; this
                         // is what covers `if let` / `let…else` / `while let`,
                         // which have no construct-exit firing of their own.
+                        // B-2026-09-04-36 — THE FRESH-TEMP RECEIVER IS AN
+                        // ARGUMENT, so it drains at the call return in both
+                        // modes rather than only at the statement `;`.
+                        //
+                        // B-2026-08-29-55 excluded it on the ground that it
+                        // "has its OWN row in the position table with a
+                        // different end". It does not. design.md § Temporary
+                        // Lifetime Rules has rows for the statement, the block
+                        // tail, the `if let`/`while let`/`let-else` scrutinee,
+                        // the match scrutinee, the arm guard, the call
+                        // ARGUMENT, the operator argument, the index, the
+                        // literal field, `return`, the closure tail, the loop
+                        // body and the `for` iterator — and none for a method
+                        // receiver. Two readings both land on the argument row:
+                        // `self` IS a parameter (design.md gives `self` /
+                        // `ref self` / `mut ref self` the same mode rules as
+                        // any parameter), so the receiver is argument zero; and
+                        // failing that, the canonical rule — "ends at the first
+                        // program point where the surrounding context's
+                        // evaluation has produced a value that no longer
+                        // references the temporary" — ends it when the call
+                        // returns a value that does not reference it.
+                        //
+                        // So the statement drain was the neighbouring
+                        // "Statement-position expression | At the `;`" row,
+                        // which is strictly longer, and the same section's
+                        // composition-with-NLL paragraph forbids that
+                        // direction: "NLL never EXTENDS a temporary's live
+                        // range past the position-specific end." Measured:
+                        // `println(f"  {mk(1).peek()}")` printed the body AFTER
+                        // the value on jit/aot against `--interp`'s before it,
+                        // while the statement spelling `let v = mk(1).peek()`
+                        // agreed on all four — the `;` follows the call return
+                        // with nothing in between, which is why it hid.
+                        //
+                        // The scrutinee exclusion below is untouched and stays
+                        // correct: those temps DO have their own rows.
+                        || binding_name == "__urecv_drop_tmp"
                         || (!call_return_only
-                            && (binding_name == "__urecv_drop_tmp"
-                                || binding_name == "__freshtemp_enum_scrut"
+                            && (binding_name == "__freshtemp_enum_scrut"
                                 || binding_name == "__freshtemp_struct_scrut")) =>
                     {
                         fired.push((binding_ptr, drop_fn));
