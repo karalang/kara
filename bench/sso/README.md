@@ -266,23 +266,42 @@ reproduce. Six trials at the default now: −1.7% / 0.0% / −1.7% and
 `substr`'s delta collapses to about zero while pinned it is the worst rail
 here. Consistent with the pre-pin header's "+5%".
 
-**The gap is portable across x86-64 boxes, NOT across ISAs.** On an M5 Pro
-(macOS/arm64), measured at this row's own filing commit so compiler drift is
-excluded, `substr` is −50.0% and `lexlike` −53.0% — **both spellings win ~50%
-under SSO, and the gap is 3 points.** Re-measured on current main with 6 builds
-per arm, arms alternated, auto-par pinned: at `KARAC_SSO=1` the two rails are
-indistinguishable (instructions 1.0344, cycles 1.0232, distributions overlap).
-So "the differential is the durable unit" holds between the two x86-64
-containers above and fails across the ISA boundary; the same is true of
-`vertical`'s +85%, which is +1.4% there. Neither of this track's blockers has an
-arm64 instance. That does NOT mean SSO should be flipped on by default on
-arm64 — the +5.7% corpus aggregate is an x86-64 number and the arm64 corpus has
-never been swept.
+**THE GAP WAS NOT A FINDING — B-2026-09-15-6 IS CLOSED `invalid`.** The two
+rails cost the SAME under SSO. Best-of-15, auto-par pinned, both printing
+`200000`:
 
-**The open question is the GAP, on x86-64.** `substr` and `lexlike` do identical work —
-slice a 3-byte token, compare, discard — one through `String.substring`, one
-through slice syntax, and they differ by ~46–52 points on both x86-64 hosts and both
-compilers tried, across seven independent samples. Unlike the levels, that is a property of the code. Filed as
-B-2026-09-15-6; the next step there is to diff the two rails' IR at
-`KARAC_SSO=1` pinned, on one host, since they differ only in how the piece is
-produced. Never profiled.
+| rail | `KARAC_SSO=0` | `KARAC_SSO=1` |
+|---|---|---|
+| `substr` | **126 ms** | 217 ms |
+| `lexlike` | **176 ms** | 215 ms |
+
+0.9% apart at `SSO=1`, samples interleaving. The "46–52 point gap" was
+(+72%) − (+23%) — two ratios with **equal numerators** and unequal denominators.
+The rails differ with SSO **off**, and SSO erases the difference. The arm64
+measurement said the same thing from the other side ("at `SSO=1` the two rails
+are indistinguishable") and was read as *no arm64 instance of the gap* rather
+than as *the gap is arithmetic*.
+
+**What the IR diff found instead: B-2026-09-15-13.** The hot-path string call
+in each leg:
+
+| leg | call |
+|---|---|
+| `substr` @ `SSO=0` | **none** — bounds/UTF-8 checks as IR blocks, `karac_alloc_or_panic` + `memcpy` |
+| `substr` @ `SSO=1` | **`karac_string_try_inline_into`** ← inserted by SSO |
+| `lexlike` @ `SSO=0` | `karac_string_slice` |
+| `lexlike` @ `SSO=1` | `karac_string_slice_into` |
+
+`lexlike` pays an opaque call in both legs, so SSO costs it little; `substr`'s
+lowering was call-free and SSO adds one, so it lands where `lexlike` already
+was. Replacing that call with the equivalent IR — `memcpy`, zero-fill, byte-23
+`0x80 | len` flag, exactly `KaracString::write_inline` — runs the rail in
+**22 ms** against 212 ms: 9.6x faster than the current SSO path and **5.7x
+faster than the non-SSO baseline**, with correct output and linear scaling at
+10M / 20M / 40M iterations.
+
+Two hypotheses were refuted on the way, both of them ours. Annotating the call
+`memory(argmem: readwrite) nounwind willreturn` did nothing (213 vs 212 ms), and
+hand-folding the comparison's literal side did nothing (211 ms) — so the
+store-to-load-forwarding shape, real as it is, is not where the time goes. The
+call is an optimization barrier.

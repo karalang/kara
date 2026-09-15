@@ -38,16 +38,19 @@ commits moved these rails by nothing and the whole difference is the machine.
 
 **So: never compare a rail delta to a number from a previous session, including
 every number in this document.** Re-run both legs on one machine. What survives
-across hosts is the GAP between two rails measured together — which is why
-B-2026-09-15-6 is written about the ~46–52 point `substr`/`lexlike` gap and not
-about either rail's level. **That survives between boxes of one ISA and no
-further:** on arm64 the same gap is 3 points, both spellings winning ~50%. So
-a differential is more durable than a level, not durable outright.
+across hosts is the GAP between two rails measured together. **That rule stands;
+the `substr`/`lexlike` gap it was derived from does not.** B-2026-09-15-6 is
+closed `invalid`: at `KARAC_SSO=1` the two rails cost the same (217 ms vs
+215 ms), so the "gap" was a difference of two ratios with equal numerators. A
+differential is more durable than a level — and still has to be a differential
+between two things that actually differ.
 
-**Both of this track's blockers are x86-64 phenomena.** `vertical`'s +85%
-(B-2026-09-14-28) measures +1.4% on an M5 Pro at its own filing commit, and the
-`substr`/`lexlike` gap is 3 points there. The default-flip decision is therefore
-PER-PLATFORM. What that does not license is flipping SSO on for arm64: the
+**`vertical` is an x86-64 phenomenon** — +85% here, +1.4% on an M5 Pro at its
+own filing commit (B-2026-09-14-28) — so the default-flip decision is
+per-platform. (The second "blocker", the `substr`/`lexlike` gap, turned out not
+to be one at all; its 3-point arm64 reading was the same arithmetic artifact
+seen from the other side.) What that does not license is flipping SSO on for
+arm64: the
 +5.7% corpus aggregate below is an x86-64 number, the arm64 corpus has never
 been swept, and two rails plus one kata are not a corpus. That sweep is the
 honest next step for the arm64 side.
@@ -77,14 +80,18 @@ aggregate +5.7%, 4 regressed ≥5%, 2 improved ≥5%.
   de-inline probe was ruled out by measurement (removing it moved the kata 1.3
   points) and `prefix_string` was ruled out too (an exact mirror runs 9–15%
   *faster* under SSO). Largest single item in the corpus.
-- **B-2026-09-15-6** — `substr` (via `String.substring`) and `lexlike` (via
-  slice syntax) do *identical* work and differ by **~46–52 points on both
-  x86-64 hosts, over seven samples** — but by **3 points on arm64**, where both
-  spellings win ~50%, while neither rail's own delta is portable. The
-  differential is the finding; the levels are not. Never profiled; this track
-  has never had a profiler pointed at it. (An earlier framing of this row as an
-  auto-par "sign flip" was withdrawn — the −14.7% did not reproduce, and a
-  `KARAC_PAR_WORKERS` sweep gives ≈0 at 1/2/4/8/18 workers.)
+- **B-2026-09-15-6 is CLOSED `invalid`, and it was the wrong question.** The two
+  spellings do not differ under SSO: at `KARAC_SSO=1` `substr` is 217 ms and
+  `lexlike` 215 ms, 0.9% apart, samples interleaving. The "~46–52 point gap" was
+  (+72%) − (+23%) — two ratios with **equal numerators** and unequal
+  denominators. They differ only at `KARAC_SSO=0` (126 ms vs 176 ms).
+- **B-2026-09-15-13 replaces it, and it is the actionable one.** SSO reaches
+  inline construction through an **opaque runtime call**
+  (`karac_string_try_inline_into`). Emitting that encoding as IR instead takes
+  the same rail from **212 ms to 22 ms** — 9.6x faster than the current SSO path
+  and **5.7x faster than the non-SSO baseline** — with identical output at three
+  iteration counts and linear scaling. The `+73%` this track called its blocker
+  is the cost of the call, not of SSO.
 
 **Correctness is not the blocker.** The inline path is pinned by
 `test_sso_de_inline_rides_the_string_growth_test` (`tests/cli.rs`), verified
@@ -92,9 +99,13 @@ non-vacuous by backing the fold out — the `KARAC_SSO=1` leg then SIGSEGVs whil
 the `=0` leg stays byte-identical to the oracle, which is why a default-off suite
 cannot catch this class on its own.
 
-**What a flip decision needs** that does not exist yet: an attribution for
-`vertical`, and an answer to why two spellings of the same read workload differ
-by 46–52 points. Both have a written next experiment in their rows.
+**What a flip decision needs** has changed shape. The `substr` question is
+answered, and answered against this campaign's own framing: with SSO's inline
+encoding emitted as IR rather than called, the rail that was the track's worst
+regression becomes its largest win (B-2026-09-15-13). **The flip has been
+weighed against the cost of a call, not against the cost of SSO.** Still
+missing: whether that holds beyond one rail — the lexer, the corpus, `vertical`,
+arm64, none of them measured — and an attribution for `vertical`.
 
 **Slice 2 inline construction is LIVE behind `KARAC_SSO=1`, default OFF.** It
 works and it is correct on every surface probed. Both construction sites are
@@ -2354,17 +2365,37 @@ without checking that its baseline was reproducible. Two numbers from different
 dates disagreeing is not a finding until both are reproduced on the same
 workload. The baseline is the first thing to re-measure, not the last.
 
-**The track's real open question is the GAP between `substr` and `lexlike`,
-because it is a differential and so survives the host problem above.** The two
-do identical work — slice a 3-byte token, compare it to a keyword, discard, no
-consuming call — one through `String.substring` and one through slice syntax.
-They differ by **46–52 points on both x86-64 hosts and both compilers tried,
-over seven samples**, while neither rail's own delta is portable at all — but
-the gap is **3 points on arm64**, where both spellings win ~50%, so it does not
-survive the ISA boundary either. Filed as
-B-2026-09-15-6. The next step is an IR diff of the two rails at `KARAC_SSO=1`
-pinned, on one host, since they differ only in how the piece is produced; this
-track has never had a profiler pointed at it.
+**The GAP between `substr` and `lexlike` was never a finding, and the IR diff
+proposed here is what dissolved it.** The two rails cost the SAME at
+`KARAC_SSO=1` — 217 ms and 215 ms, 0.9% apart, samples interleaving. The
+"46–52 point gap" was (+72%) − (+23%): two ratios with equal numerators and
+unequal denominators. What differs is the `KARAC_SSO=0` baseline (126 ms vs
+176 ms), because `substr`'s substring lowering is call-free in IR there while
+`lexlike` routes through `karac_string_slice` in both legs. B-2026-09-15-6 is
+closed `invalid`.
+
+The arm64 section of that row already contained the same observation — "at
+`SSO=1` the two rails are indistinguishable (cycles 1.0232, distributions
+overlap)" — and both sessions read it as *the gap has no arm64 instance* rather
+than as *the gap is arithmetic*. On both ISAs the numerators agree; only the
+baselines differ.
+
+**What the diff found instead is B-2026-09-15-13.** SSO adds an opaque
+`karac_string_try_inline_into` call to a lowering that had none. Emitting the
+encoding as IR — `memcpy`, zero-fill, byte-23 flag, exactly `write_inline` —
+runs the rail in **22 ms** against 212 ms, output identical at 10M/20M/40M
+iterations and scaling linearly (2.2 / 2.0 / 1.9 ns per iteration, against
+12.7 / 12.4 / 12.3 at `KARAC_SSO=0`).
+
+Two other hypotheses were tested and REFUTED on the way, both of them this
+document's own. Annotating the call `memory(argmem: readwrite) nounwind
+willreturn` — so LLVM knows it touches only its arguments — changed nothing
+(213 ms vs 212 ms). Hand-folding the comparison's literal side changed nothing
+either (211 ms), which retires the store-to-load-forwarding prediction this
+section used to make: the shape is real (a `String == String` under SSO spills
+BOTH operands and reloads `cap`, 7 IR instructions becoming ~18, including on a
+literal whose `cap` is a constant 0) and it is not where the time goes. The call
+is an optimization barrier, not an aliasing or a spill problem.
 
 **An earlier version of this section said something sharper and wrong, in the
 paragraph immediately below the warning against exactly this.** It claimed

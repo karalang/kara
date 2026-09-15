@@ -71,41 +71,37 @@
 # committed rail at five commits spanning 09-12..09-15 gives -12 to -14% at
 # every one of them, flat. Recorded as B-2026-09-15-1 (invalid).
 #
-# THE OPEN QUESTION is the GAP BETWEEN substr AND lexlike, which is a
-# differential and therefore survives the host problem above. The two do
-# IDENTICAL work -- slice a 3-byte token, compare it to a keyword, discard, no
-# consuming call -- one through `String.substring` and one through slice syntax,
-# and they differ by 46-52 points on both x86-64 hosts and both compilers tried,
-# over seven samples. Filed as B-2026-09-15-6. No profiler has ever been pointed
-# at this track; the next step there is an IR diff of the two rails at
-# KARAC_SSO=1 pinned, on an x86-64 host.
+# THE substr/lexlike GAP WAS NOT A FINDING -- B-2026-09-15-6 is closed invalid.
+# The two rails cost the SAME under SSO. Best-of-15, pinned, both printing
+# 200000:
 #
-# AND THE GAP IS x86-64 ONLY -- it does not survive the ISA boundary, which
-# retires the stronger claim that a differential is portable where a level is
-# not. On an M5 Pro, measured at the row's own filing commit, `substr` is -50.0%
-# and `lexlike` -53.0%: BOTH spellings win ~50% under SSO and the gap is 3
-# POINTS, with the two rails indistinguishable at KARAC_SSO=1 (cycles 1.0232,
-# distributions overlap). `vertical`'s +85% is +1.4% there too, so NEITHER of
-# this track's blockers has an arm64 instance. Differentials are the durable
-# unit BETWEEN BOXES OF ONE ISA; that is all the two-host table above supports.
+#   rail       KARAC_SSO=0   KARAC_SSO=1
+#   substr        126 ms        217 ms
+#   lexlike       176 ms        215 ms
 #
-# AN EARLIER VERSION OF THIS PARAGRAPH SAID SOMETHING SHARPER AND WRONG: that
-# `substr` was a 14.7% SSO WIN fanned out and a 30.9% LOSS pinned -- a sign flip
-# decided by the scheduler. The win half was ONE run on a loaded box and does
-# not reproduce. Six trials at the default straddle zero (-1.7/0.0/-1.7 and
-# +0.0/-1.7/+1.7), and a KARAC_PAR_WORKERS sweep is flat at 1, 2, 4, 8 and 18.
-# What is true is weaker: fanning out MASKS the pinned regression.
+# 0.9% apart at SSO=1, samples interleaving. The "46-52 point gap" was
+# (+72%) - (+23%): two ratios with EQUAL NUMERATORS and unequal denominators.
+# The rails differ with SSO OFF and SSO erases the difference. Read that as a
+# standing warning about this harness: it reports RATIOS, and a difference of
+# two ratios is not a difference in behaviour. Compare the raw ms columns before
+# concluding that two rails disagree.
 #
-# AND FANNING OUT DOES NOT UNIFORMLY COMPRESS, which is why the pin is a control
-# rather than a tidier baseline. Measured at f72fac4 on host B, three samples of
-# each leg: `substr` 73% -> 0% and `pfx_idx` +16% -> +10% COMPRESS, while
-# `builder60` +2.4..3.6% -> +11.7..13.6% AMPLIFIES about fourfold, `builder20`
-# and `promote` likewise. The rails whose SSO cost is per-iteration serial work
-# compress; the ones that pay it in allocator traffic amplify, plausibly on
-# 4-worker allocator contention -- that mechanism is a hypothesis, the
-# amplification is measured. `lexlike` is the control and holds: the analyzer
-# declines to fan it out (175-177ms pinned, 175-176ms fanned), so its delta is
-# identical under both settings.
+# WHAT THE IR DIFF FOUND INSTEAD -- B-2026-09-15-13. The hot-path string call:
+#
+#   substr  SSO=0   NONE (bounds/UTF-8 as IR blocks, alloc_or_panic + memcpy)
+#   substr  SSO=1   karac_string_try_inline_into   <-- inserted by SSO
+#   lexlike SSO=0   karac_string_slice
+#   lexlike SSO=1   karac_string_slice_into
+#
+# `lexlike` pays an opaque call in BOTH legs so SSO costs it little; `substr`'s
+# lowering was call-free and SSO adds one. Replacing that call with equivalent
+# IR (memcpy + zero-fill + byte-23 flag, exactly KaracString::write_inline) runs
+# the rail in 22ms against 212ms -- 9.6x faster than the current SSO path and
+# 5.7x faster than the non-SSO baseline, correct output, linear scaling at
+# 10M/20M/40M iterations. Two hypotheses were REFUTED on the way: annotating the
+# call `memory(argmem: readwrite) nounwind willreturn` did nothing (213 vs 212),
+# and hand-folding the comparison's literal side did nothing (211). The call is
+# an optimization barrier, not an aliasing or spill problem.
 #
 # See the README for what has already been ruled out.
 #

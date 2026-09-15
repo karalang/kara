@@ -99,7 +99,7 @@ distinguish "bugs flattening" from "we stopped writing them down."
 | missing-feature | 198 |
 | codegen-gap | 178 |
 | diagnostics | 126 |
-| perf | 112 |
+| perf | 113 |
 | other | 111 |
 | false-positive | 107 |
 | soundness | 95 |
@@ -110,7 +110,7 @@ distinguish "bugs flattening" from "we stopped writing them down."
 
 | surface | total |
 |---|---|
-| codegen | 1760 |
+| codegen | 1761 |
 | interp | 439 |
 | typecheck | 300 |
 | other | 90 |
@@ -196,6 +196,7 @@ _Generated from `bug-ledger.jsonl` by `scripts/bug-curve.py` (2026-05-20 → 202
 | B-2026-09-15-9 | 2026-09-15 | codegen | medium | AN ENUM PAYLOAD TUPLE CONTAINING A FIXED `Array` STRANDS ITS PAYLOAD BOX ON EVERY COMPILED BACKEND, INDEPENDENTLY OF THE INTERIOR -- `T2.P(mka("x"), 3)` over `enum T2 { P(Array[String, 2], i64), N }` loses the 48 B envelope (plus 44 B indirect), and `(Array[i64, 2], i64)` with NO HEAP ANYWHERE still loses its 16 B envelope, with the output correct, exit 0 and `karac check` clean | — |
 | B-2026-09-15-10 | 2026-09-15 | codegen | medium | A `shared enum` VARIANT CARRYING AN `Array[T, N]` STRANDS ITS PAYLOAD BOX ON EVERY COMPILED BACKEND -- `Sh.S(a)` over `shared enum Sh { S(Array[String, 2]), N }` loses 48 B at `-O0` with the output correct and `karac check` clean, and loses a further 44 B indirectly once a named source is involved | — |
 | B-2026-09-15-12 | 2026-09-15 | codegen | low | A `-> ref` METHOD WHOSE INNER IS AN `Array[T, N]` OR A NAMED STRUCT IS DECLINED BY CODEGEN AT EVERY VALUE-POSITION CONSUMER -- `h.peek()[0]` says `Index operator applied to non-array type` and `h.peek().a` says `cannot resolve field 'a' on this receiver`, both while `--interp` prints the right answer; the TUPLE inner of the same shape now lowers (B-2026-09-15-4) and these two are the inners that fix deliberately declined to widen to | — |
+| B-2026-09-15-13 | 2026-09-15 | codegen | medium | SSO'S INLINE CONSTRUCTION GOES THROUGH AN OPAQUE RUNTIME CALL AND COSTS 10x WHAT THE ENCODING COSTS -- `String.substring` at KARAC_SSO=1 calls `karac_string_try_inline_into` per construction and runs 212ms on a 10M-iteration slice/compare rail, against 127ms for the SAME rail at KARAC_SSO=0 whose substring lowering is CALL-FREE IN IR; emitting the inline fast path as IR instead (memcpy + zero-fill + flag byte, the exact `write_inline` encoding) runs the rail in 22ms -- 9.6x faster than the current SSO path and 5.7x faster than the non-SSO baseline, with identical output at three iteration counts. The call is not merely overhead: it is an optimization barrier the rest of the loop cannot be simplified across. | — |
 
 ### Relocated
 
