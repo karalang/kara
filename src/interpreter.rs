@@ -23,7 +23,7 @@ mod exec;
 // interpreter's own user imports straight from `exec`), so CI's
 // featureless clippy flags it unused without the gate.
 #[cfg(feature = "llvm")]
-pub(crate) use exec::compute_block_last_use;
+pub(crate) use exec::{compute_block_last_use, last_use_fires_at};
 mod helpers;
 mod iter_eval;
 mod layout_query;

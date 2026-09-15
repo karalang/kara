@@ -656,7 +656,7 @@ pub(crate) fn cancelled_sentinel() -> Value {
 /// run-vs-build divergence held in place by a `bool`, and every drop-position
 /// row in the ledger is some version of the two backends answering one question
 /// differently. One function, one answer.
-pub(crate) fn compute_block_last_use(block: &Block) -> HashMap<String, usize> {
+pub(crate) fn compute_block_last_use(block: &Block) -> HashMap<String, Vec<usize>> {
     // Collect every binding the block introduces.
     let mut owned: HashSet<String> = HashSet::new();
     for stmt in &block.stmts {
@@ -677,6 +677,9 @@ pub(crate) fn compute_block_last_use(block: &Block) -> HashMap<String, usize> {
     }
     let scope_exit = block.stmts.len();
     let mut last_use: HashMap<String, usize> = HashMap::new();
+    // B-2026-09-02-16 — name -> every statement index that references it, in
+    // ascending order. Only consumed by the per-generation pass at the end.
+    let mut all_refs: HashMap<String, Vec<usize>> = HashMap::new();
 
     // Per-statement free-idents walk. We only care which `owned`
     // bindings each statement *references* — outer-block bindings
@@ -742,6 +745,13 @@ pub(crate) fn compute_block_last_use(block: &Block) -> HashMap<String, usize> {
             }
         }
         for name in idents {
+            // B-2026-09-02-16 — every reference index, not just the latest.
+            // The per-generation post-pass below needs to ask "was this name
+            // referenced inside THIS generation's window", which the running
+            // maximum cannot answer once a later generation advances it.
+            if owned.contains(&name) {
+                all_refs.entry(name.clone()).or_default().push(idx);
+            }
             record_use(name, idx, &owned, &mut last_use, scope_exit);
         }
     }
@@ -799,7 +809,134 @@ pub(crate) fn compute_block_last_use(block: &Block) -> HashMap<String, usize> {
             _ => {}
         }
     }
+    generation_endpoints(block, &owned, &last_use, &all_refs, scope_exit)
+}
+
+/// B-2026-09-02-16 — turn the NAME-keyed endpoint map into a GENERATION-keyed
+/// one: every `let` of a shadowed name gets the endpoint of its OWN value's
+/// live range, instead of all of them sharing the surviving generation's.
+///
+/// design.md § Shadowing: "Shadowing (`let x = ...` again) is always allowed
+/// regardless of `mut` — it creates a NEW BINDING rather than mutating the old
+/// one." design.md § Drop ordering within a branch: "Destructors fire at each
+/// binding's LIVE-RANGE END ... A value whose last use is in the middle of a
+/// branch has its drop inserted at that mid-branch point." Two bindings, two
+/// live ranges, two endpoints — a single `usize` per name could not say that,
+/// and what it said instead was the reverse order (both bodies at the last
+/// `let`, drained LIFO: `dR4 dR3` for a program the spec wants as `dR3 dR4`).
+///
+/// The evidence that this is a representation gap rather than a policy choice:
+/// the SAME program with the second binding RENAMED already behaved this way on
+/// every backend. `let a = mk(1); let b = mk(2);`, neither read, prints
+/// `dR1 dR2` — each at its own `let`, declaration order. Only the spelling
+/// differed, and live-range rules do not depend on spelling.
+///
+/// WINDOWS. For a name with `let` indices `d0 < d1 < ... < dk`, generation `j`
+/// (`j < k`) owns the half-open-then-closed window `(dj, d(j+1)]` — its own
+/// `let` is excluded because an initializer that mentions the name
+/// (`let b = f(b)`) reads the PREVIOUS generation, and the shadowing `let` is
+/// included for exactly that reason. Its endpoint is the last reference in that
+/// window, or `dj` itself when there is none (never read: NLL kills it at its
+/// own `let`). The surviving generation `dk` keeps whatever the name-keyed pass
+/// already computed, which is the pre-existing behaviour for every unshadowed
+/// name in the tree.
+///
+/// CONSERVATIVE WHERE THE WALKER IS. A name pinned to `scope_exit` — referenced
+/// by a `defer`/`errdefer` body, by the block's `final_expr`, or through a
+/// construct the shallow walker treats as opaque — keeps ALL its generations at
+/// scope exit, unchanged. The pin means "this walker could not see the liveness
+/// here", and splitting generations under it would be inventing precision the
+/// analysis does not have.
+fn generation_endpoints(
+    block: &Block,
+    owned: &HashSet<String>,
+    last_use: &HashMap<String, usize>,
+    all_refs: &HashMap<String, Vec<usize>>,
+    scope_exit: usize,
+) -> HashMap<String, Vec<usize>> {
+    // Every `let` index per owned name, ascending.
+    let mut defs: HashMap<String, Vec<usize>> = HashMap::new();
+    for (idx, stmt) in block.stmts.iter().enumerate() {
+        match &stmt.kind {
+            StmtKind::Let { pattern, .. } | StmtKind::LetElse { pattern, .. } => {
+                for n in pattern.binding_names() {
+                    if owned.contains(&n) {
+                        defs.entry(n).or_default().push(idx);
+                    }
+                }
+            }
+            StmtKind::LetUninit { name, .. } => {
+                if owned.contains(name) {
+                    defs.entry(name.clone()).or_default().push(idx);
+                }
+            }
+            _ => {}
+        }
+    }
+
+    let mut out: HashMap<String, Vec<usize>> = HashMap::new();
+    for (name, survivor) in last_use {
+        let sites = defs.get(name).cloned().unwrap_or_default();
+        // Unshadowed, or pinned to scope exit: one endpoint, exactly as before.
+        if sites.len() < 2 || *survivor == scope_exit {
+            out.insert(name.clone(), vec![*survivor]);
+            continue;
+        }
+        let empty: Vec<usize> = Vec::new();
+        let refs = all_refs.get(name).unwrap_or(&empty);
+        let mut points: Vec<usize> = Vec::with_capacity(sites.len());
+        for w in sites.windows(2) {
+            let (here, next) = (w[0], w[1]);
+            let end = refs
+                .iter()
+                .copied()
+                .filter(|r| *r > here && *r <= next)
+                .max()
+                .unwrap_or(here);
+            // ONLY STRICTLY BEFORE THE SHADOWING `let`, and this is what makes
+            // a name-keyed ENDPOINT SET safe without a generation tag on every
+            // cleanup slot.
+            //
+            // The consumers ask "does any endpoint of this NAME equal the
+            // current statement index" against whatever slot the name has, so
+            // an endpoint is only sound while exactly one slot can match it. An
+            // endpoint `< next` is fired at a statement where the only slot for
+            // the name is the one `here` created, because `next`'s slot does not
+            // exist yet — sound by construction.
+            //
+            // `end == next` is the one case where that fails, and it is reached
+            // exactly when the SHADOWING INITIALIZER reads the old generation
+            // (`let z = z`, `let z = f(z)`). There the old slot has usually
+            // already been retracted by the move-suppression helpers, so the
+            // endpoint would match the SURVIVOR's freshly-pushed slot and run
+            // its body before its own last read. Measured while building this:
+            // `let z = mk(12); let z = z; println(f"z={z.id}")` printed
+            // `dR12 z=12` — the body before the read it must follow, which is a
+            // use-after-drop rather than a re-ordering. Such a generation keeps
+            // the survivor's endpoint, i.e. the pre-existing behaviour.
+            if end < next {
+                points.push(end);
+            }
+        }
+        points.push(*survivor);
+        points.sort_unstable();
+        points.dedup();
+        out.insert(name.clone(), points);
+    }
+    out
+}
+
+/// Does `name`'s drop slot fire at `stmt_idx`? The generation-aware replacement
+/// for the `last_use.get(name) == Some(stmt_idx)` test every consumer used when
+/// the map held one endpoint per name (B-2026-09-02-16).
+pub(crate) fn last_use_fires_at(
+    last_use: &HashMap<String, Vec<usize>>,
+    name: &str,
+    stmt_idx: usize,
+) -> bool {
     last_use
+        .get(name)
+        .is_some_and(|points| points.contains(&stmt_idx))
 }
 
 /// Push a `Drop` action for each binding the statement introduced.

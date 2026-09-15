@@ -2204,15 +2204,18 @@ impl<'ctx> super::Codegen<'ctx> {
     fn par_group_swallows_nll_drop(
         &self,
         group: &ParallelGroup,
-        last_use: &HashMap<String, usize>,
+        last_use: &HashMap<String, Vec<usize>>,
     ) -> bool {
         let Some(frame) = self.drop_rc.scope_cleanup_actions.last() else {
             return false;
         };
         frame.iter().any(|a| {
+            // B-2026-09-02-16 — a shadowed name now carries one endpoint per
+            // GENERATION, so the group swallows a firing point if it covers ANY
+            // of them, not just the survivor's.
             self.nll_fireable_binding(a)
                 .and_then(|n| last_use.get(n))
-                .is_some_and(|lu| group.statement_indices.contains(lu))
+                .is_some_and(|points| points.iter().any(|lu| group.statement_indices.contains(lu)))
         })
     }
 

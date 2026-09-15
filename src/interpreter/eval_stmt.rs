@@ -1097,14 +1097,16 @@ impl<'a> super::Interpreter<'a> {
     fn fire_due_drops(
         &mut self,
         cleanup: &mut Vec<CleanupAction>,
-        last_use: &HashMap<String, usize>,
+        last_use: &HashMap<String, Vec<usize>>,
         stmt_idx: usize,
     ) {
         let mut i = cleanup.len();
         while i > 0 {
             i -= 1;
             let should_fire = match &cleanup[i] {
-                CleanupAction::Drop { name } => last_use.get(name).copied() == Some(stmt_idx),
+                CleanupAction::Drop { name } => {
+                    super::exec::last_use_fires_at(last_use, name, stmt_idx)
+                }
                 // B-2026-08-30-51 — a shadowed slot fires at the NAME's endpoint,
                 // the same one the survivor uses, which is what the compiled
                 // backends do: their `last_use` is name-keyed too, so every
@@ -1114,7 +1116,7 @@ impl<'a> super::Interpreter<'a> {
                 // the wrong place, measured as all of them landing after the
                 // last statement of `main` rather than beside the survivor's.
                 CleanupAction::DropShadowed { name, .. } => {
-                    last_use.get(name).copied() == Some(stmt_idx)
+                    super::exec::last_use_fires_at(last_use, name, stmt_idx)
                 }
                 CleanupAction::Defer(_) => false,
             };

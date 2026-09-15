@@ -11448,7 +11448,7 @@ impl<'ctx> super::Codegen<'ctx> {
 
     pub(super) fn fire_due_user_drops(
         &mut self,
-        last_use: &std::collections::HashMap<String, usize>,
+        last_use: &std::collections::HashMap<String, Vec<usize>>,
         stmt_idx: usize,
     ) {
         // A terminated insert block (the statement ended in return/break)
@@ -11501,8 +11501,11 @@ impl<'ctx> super::Codegen<'ctx> {
                         name,
                         ptr,
                         heap_type,
-                    } if last_use.get(name.as_str()).copied() == Some(stmt_idx)
-                        && self.nll_fireable_binding(a).is_some() =>
+                    } if crate::interpreter::last_use_fires_at(
+                        last_use,
+                        name.as_str(),
+                        stmt_idx,
+                    ) && self.nll_fireable_binding(a).is_some() =>
                     {
                         Some(DueDrop::Rc {
                             name: name.clone(),
@@ -11516,7 +11519,11 @@ impl<'ctx> super::Codegen<'ctx> {
                         drop_fn,
                         type_name,
                         kind,
-                    } if last_use.get(binding_name.as_str()).copied() == Some(stmt_idx)
+                    } if crate::interpreter::last_use_fires_at(
+                        last_use,
+                        binding_name.as_str(),
+                        stmt_idx,
+                    )
                         // The admission clauses (container element bodies, a
                         // non-shared struct, a value enum's own body) live in
                         // `nll_fireable_binding` so the auto-par group planner

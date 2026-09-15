@@ -63620,7 +63620,7 @@ fn main() {
                      \x20   println(f\"t={{t.id}}\");\n\
                      }}"
                 ),
-                "t=2\ndR2\ndR1\n",
+                "dR1\nt=2\ndR2\n",
             ),
             (
                 "shadow-first-read-before-shadow",
@@ -63632,7 +63632,7 @@ fn main() {
                      \x20   println(f\"u={{u.id}}\");\n\
                      }}"
                 ),
-                "u=3\nu=4\ndR4\ndR3\n",
+                "u=3\ndR3\nu=4\ndR4\n",
             ),
             (
                 "shadow-three-deep",
@@ -63644,7 +63644,7 @@ fn main() {
                      \x20   println(f\"w={{w.id}}\");\n\
                      }}"
                 ),
-                "w=7\ndR7\ndR6\ndR5\n",
+                "dR5\ndR6\nw=7\ndR7\n",
             ),
             (
                 "shadow-neither-generation-read",
@@ -63693,7 +63693,7 @@ fn main() {
                 // instead of both at the shared name-keyed endpoint. That
                 // residual is its own row, and it needs `tests/par_codegen.rs`
                 // to be seen.
-                "dR9\ndR8\nmid\n",
+                "dR8\ndR9\nmid\n",
             ),
             (
                 "shadow-inside-nested-block",
@@ -63726,7 +63726,7 @@ fn main() {
                      \x20   println(f\"a={{a.n}}\");\n\
                      }}"
                 ),
-                "a=2\ndR14\ndR13\n",
+                "dR13\na=2\ndR14\n",
             ),
             (
                 "shadow-in-a-loop-body",
@@ -63739,7 +63739,7 @@ fn main() {
                      \x20   }}\n\
                      }}"
                 ),
-                "h=30\ndR30\ndR20\nh=31\ndR31\ndR21\n",
+                "dR20\nh=30\ndR30\ndR21\nh=31\ndR31\n",
             ),
             (
                 "shadow-block-tail-moves-the-shadowed-name",

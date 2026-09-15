@@ -40616,9 +40616,12 @@ fn test_shadowed_binding_drops_its_own_value() {
                  \x20   println(f\"t={{t.id}}\");\n\
                  }}\n"
             ),
-            // Both generations share the name's endpoint and drain LIFO there:
-            // newest first. Pre-fix this was `dR2 dR2`.
-            "t=2\ndR2\ndR1\n",
+            // B-2026-09-02-16 — each generation dies at its OWN live-range
+            // end. `t`(1) is never read, so NLL kills it at its own `let`,
+            // before `t`(2) exists; `t`(2) dies after the read. Until the
+            // endpoint map was generation-keyed both shared the name's single
+            // endpoint and drained LIFO there, giving `t=2 dR2 dR1`.
+            "dR1\nt=2\ndR2\n",
         ),
         (
             "shadow-first-read-before-shadow",
@@ -40630,10 +40633,13 @@ fn test_shadowed_binding_drops_its_own_value() {
                  \x20   println(f\"u={{u.id}}\");\n\
                  }}\n"
             ),
-            // The shadowed value is NOT dropped at its own last read: the
-            // endpoint is the name's, so it waits for the survivor's and drains
-            // after it. Measured identical on both compiled backends.
-            "u=3\nu=4\ndR4\ndR3\n",
+            // B-2026-09-02-16 — the shadowed value IS dropped at its own last
+            // read now. This cell used to read `u=3 u=4 dR4 dR3`, documenting
+            // the name-keyed endpoint as a known deviation from design.md
+            // § Drop ordering ("destructors fire at each binding's live-range
+            // end"); generation-keying removed the deviation rather than the
+            // documentation of it.
+            "u=3\ndR3\nu=4\ndR4\n",
         ),
         (
             "shadow-three-deep",
@@ -40645,7 +40651,7 @@ fn test_shadowed_binding_drops_its_own_value() {
                  \x20   println(f\"w={{w.id}}\");\n\
                  }}\n"
             ),
-            "w=7\ndR7\ndR6\ndR5\n",
+            "dR5\ndR6\nw=7\ndR7\n",
         ),
         (
             "shadow-neither-generation-read",
@@ -40656,11 +40662,11 @@ fn test_shadowed_binding_drops_its_own_value() {
                  \x20   println(\"mid\");\n\
                  }}\n"
             ),
-            // With no read anywhere the endpoint comes from the fallback, and
-            // it must be the LAST `let`: pinning it to the first put the
-            // endpoint before the survivor's slot existed, so that slot missed
-            // it and drained at scope exit instead.
-            "dR9\ndR8\nmid\n",
+            // B-2026-09-02-16 — with no read anywhere BOTH generations die at
+            // their own `let`, in declaration order. The old `dR9 dR8` came
+            // from the two sharing one endpoint; the survivor's slot no longer
+            // misses its own, because each generation now has one.
+            "dR8\ndR9\nmid\n",
         ),
         (
             "shadow-inside-nested-block",
@@ -40698,8 +40704,10 @@ fn test_shadowed_binding_drops_its_own_value() {
                  }}\n"
             ),
             // The frozen value carries its fields, so the field walk reaches
-            // the shadowed generation's `r` too.
-            "a=2\ndR14\ndR13\n",
+            // the shadowed generation's `r` too — now at that generation's own
+            // endpoint (B-2026-09-02-16), which for a never-read `a`(13) is its
+            // own `let`, ahead of the surviving `a`(14)'s read.
+            "dR13\na=2\ndR14\n",
         ),
         (
             "shadow-in-a-loop-body",
@@ -40713,8 +40721,10 @@ fn test_shadowed_binding_drops_its_own_value() {
                  }}\n"
             ),
             // Each iteration is its own scope, so the freeze must not leak
-            // across them.
-            "h=30\ndR30\ndR20\nh=31\ndR31\ndR21\n",
+            // across them. Per iteration the never-read generation dies at its
+            // own `let` and the survivor after its read (B-2026-09-02-16), so
+            // the pair reads `dR20 h=30 dR30` rather than `h=30 dR30 dR20`.
+            "dR20\nh=30\ndR30\ndR21\nh=31\ndR31\n",
         ),
         (
             "shadow-block-tail-moves-the-shadowed-name",

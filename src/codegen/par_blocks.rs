@@ -2792,7 +2792,7 @@ impl<'ctx> super::Codegen<'ctx> {
                 _ => None,
             };
             if let Some(name) = branch_local_binding {
-                let last_use = std::collections::HashMap::from([(name, 0usize)]);
+                let last_use = std::collections::HashMap::from([(name, vec![0usize])]);
                 self.fire_due_user_drops(&last_use, 0);
             }
 

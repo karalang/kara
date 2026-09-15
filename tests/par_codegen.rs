@@ -348,6 +348,87 @@ fn main() {{
         }
     }
 
+    /// B-2026-09-02-16 — a never-read SHADOWED name's two generations fire in
+    /// DECLARATION order, and the auto-par build agrees with the other three
+    /// surfaces about it.
+    ///
+    /// This lives in `par_codegen` rather than beside its `codegen` siblings
+    /// because the divergence needed a band that is actually DISPATCHED: each
+    /// generation is branch-local (neither is ever read, so neither is
+    /// published as a return slot), B-2026-08-29-66 fires a branch-local
+    /// binding inside its own outlined branch at its own `let`, and the
+    /// branches' captured output is replayed at the join in source order. The
+    /// sequential build and the interpreter reached the same statements with no
+    /// outlining at all.
+    ///
+    /// THE ARITHMETIC IS LOAD-BEARING, and is why this pin exists in this
+    /// shape. The row's original program stopped diverging on 2026-09-04 —
+    /// `5641972b0` declines a cheap band whose work is fully visible, and a band
+    /// of two `println`s and two allocations is exactly that (a console
+    /// resource and `allocates` are both excluded from "might hide work"). The
+    /// groups were still RECOGNIZED, so `--concurrency-report` looked
+    /// unchanged, but nothing was lowered and all four surfaces agreed for the
+    /// wrong reason. `heavy()` puts the band over the dispatch threshold so the
+    /// outlining this pin is about actually happens; the `__par_branch_`
+    /// assertion on the emitted IR is what keeps the fixture honest if the cost
+    /// model moves again, so a band that silently stops being dispatched fails
+    /// here instead of passing for the wrong reason.
+    ///
+    /// WHY DECLARATION ORDER IS THE ANSWER. design.md § Shadowing: a second
+    /// `let` of a name "creates a NEW BINDING rather than mutating the old
+    /// one"; § Drop ordering within a branch: "Destructors fire at each
+    /// binding's LIVE-RANGE END ... A value whose last use is in the middle of
+    /// a branch has its drop inserted at that mid-branch point." Two bindings,
+    /// two live ranges, and a never-read one's live range ends at its own
+    /// `let`. The reverse-declaration LIFO rule governs only what REMAINS at
+    /// scope exit, and nothing does here. The control below is the proof that
+    /// this was a representation gap and not a policy choice: the same program
+    /// with the second binding RENAMED already printed `dR1 dR2` on every
+    /// backend before the fix, so only the spelling differed.
+    #[test]
+    fn par_shadowed_never_read_generations_fire_in_declaration_order() {
+        const H: &str = "struct R { id: i64, v: Vec[String] }\n\
+             impl Drop for R { fn drop(mut ref self) { println(f\"dR{self.id}\") } }\n\
+             fn mk(id: i64) -> R { let mut v: Vec[String] = Vec.new(); v.push(\"p\"); return R { id: id, v: v } }\n\
+             fn heavy(n: i64) -> i64 { let mut a: i64 = 0; let mut k: i64 = 0; while k < n { a = a + k * k + (a % 7); k = k + 1; } return a }\n";
+        for (label, body, want) in [
+            (
+                "shadowed, neither generation read",
+                "println(\"A\");\n\
+                 let h1: i64 = heavy(2000);\n\
+                 let b = mk(3);\n\
+                 let b = mk(4);\n\
+                 let h2: i64 = heavy(2000);\n\
+                 println(\"mid\");\n\
+                 println(f\"h={h1 + h2}\")",
+                "A\ndR3\ndR4\nmid\nh=5329344654\n",
+            ),
+            (
+                "distinct names, neither read (control)",
+                "println(\"A\");\n\
+                 let h1: i64 = heavy(2000);\n\
+                 let p = mk(1);\n\
+                 let q = mk(2);\n\
+                 let h2: i64 = heavy(2000);\n\
+                 println(\"mid\");\n\
+                 println(f\"h={h1 + h2}\")",
+                "A\ndR1\ndR2\nmid\nh=5329344654\n",
+            ),
+        ] {
+            let src = format!("{H}fn main() {{\n{body}\n}}\n");
+            // The band must actually be DISPATCHED, not merely recognized —
+            // see the doc comment. `--concurrency-report` cannot tell these
+            // apart; an outlined branch function in the IR can.
+            assert!(
+                ir_for_analyzed(&src).contains("__par_branch_"),
+                "{label}: no outlined par branch in the IR — the band was \
+                 recognized but not lowered, so this fixture would pass \
+                 without exercising the divergence it pins"
+            );
+            assert_eq!(run_program(&src), Some(want.to_string()), "{label}");
+        }
+    }
+
     #[test]
     fn mut_ref_vec_param_is_a_valid_fanout_target() {
         let out = run_program(
