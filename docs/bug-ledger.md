@@ -99,8 +99,8 @@ distinguish "bugs flattening" from "we stopped writing them down."
 | missing-feature | 199 |
 | codegen-gap | 178 |
 | diagnostics | 126 |
+| other | 114 |
 | perf | 113 |
-| other | 112 |
 | false-positive | 107 |
 | soundness | 95 |
 | crash | 82 |
@@ -110,10 +110,10 @@ distinguish "bugs flattening" from "we stopped writing them down."
 
 | surface | total |
 |---|---|
-| codegen | 1780 |
-| interp | 448 |
+| codegen | 1781 |
+| interp | 449 |
 | typecheck | 301 |
-| other | 90 |
+| other | 91 |
 | ownership | 75 |
 | cli | 73 |
 | autopar | 56 |
@@ -157,7 +157,6 @@ _Generated from `bug-ledger.jsonl` by `scripts/bug-curve.py` (2026-05-20 → 202
 | B-2026-09-10-25 | 2026-09-10 | codegen+interp | low | A FRESH TUPLE TEMP PASSED AS A CALL ARGUMENT RUNS ITS `Option` ELEMENT'S `Drop` BODY ON NEITHER BACKEND -- `eat((Some(R { .. }), 7))` over `fn eat(p: (Option[R], i64))` prints `eat done` under `--interp`, `-O0` and `-O2` auto-par alike, where one `dR71` is owed; the BINDING spelling of the same value (`let p = (Some(R { .. }), 7);`) is correct on all four surfaces since B-2026-09-10-18, so the element types resolve and what is missing is an owner for a tuple ARGUMENT temp's element bodies. Both backends agree, so no parity rule catches it and repairing either side alone would convert it into a divergence. Memory is balanced (0 valgrind errors, nothing lost) | none |
 | B-2026-09-12-1 | 2026-09-12 | runtime | low | `coroutine_ws_over_tls_concurrent_handlers_all_execute` GOES RED IN THE REQUIRED GATE SET BUT IS NOT REPRODUCIBLE ON DEMAND -- five reds across both KARAC_SSO legs against 22 consecutive passes under deliberately harsher standalone conditions. The three preserved reds report 15, 15 and 11 of 16 handlers echoing, so the count is VARIABLE (an earlier two-observation reading of it as a stable 15/16 is retracted in the detail). What holds is the discriminator the row was filed for: `left > 0` every time, so the server DOES come up -- a coroutine-resume / accept-path race, not a port or fixture problem. | — |
 | B-2026-09-12-10 | 2026-09-12 | codegen | medium | THREE TUPLE-PAYLOAD ELEMENT SHAPES STILL LEAK INSIDE AN ENUM -- `(bool, String)` is declined on purpose by the word-alignment gate B-2026-09-12-8's fix relies on, while `(Rec, i64)` carrying a user `Drop` and `(Option[String], i64)` are declined for reasons not yet attributed; all three measured unchanged by that fix rather than worse | — |
-| B-2026-09-12-21 | 2026-09-12 | codegen+interp | low | AN `Array` ELEMENT'S USER `Drop` BODY RUNS ON NO BACKEND ONCE THE ARRAY IS MOVED INTO A STRUCT FIELD -- `Array[R, 2]` with `impl Drop for R` prints `dR dR` on all six surfaces as a bare local and NOTHING on all six once `let w = W { a: a }` takes it, with memory balanced 8/8 either way, so it is a lost BODY rather than a lost buffer and no leak gate or A/B gate can see it | — |
 | B-2026-09-12-29 | 2026-09-12 | codegen | medium | The stack-boxed enum payload covers Map.get only; Vec.pop / Vec.first / a -> Option[Wide] return still heap-box per iteration | B-2026-09-12-28 |
 | B-2026-09-13-2 | 2026-09-13 | codegen | medium | THE `Option[Array[T, N]]` A `Map` HANDS BACK IS OWNED BY NOBODY -- `insert`'s displaced old value leaks 336 B in 14 blocks and `remove`'s return 192 B in 4 + 192 indirect, while the `Vec[String]` and `String` twins at both call sites are clean; the 48 B direct blocks are the boxed payload and the indirect ones the `String`s inside it | — |
 | B-2026-09-13-4 | 2026-09-13 | other | low | THE DIFFERENTIAL CANNOT COMPARE A MATCHED PARAMETER'S PAYLOAD AT ALL, so B-2026-09-12-27's now-correct schedule for that population is unwatched -- rule 2 excludes it because codegen discharges the payload in the CALLER while the comparison is per-callee, and three of the four measured cells are CORRECT programs that would report false divergences if compared. Closing it needs a cross-function discharge check (a callee obligation covered by the caller's record), which `differential_check` cannot express: it walks functions independently and `param_names_by_function` is its only call-boundary information | — |
@@ -192,6 +191,8 @@ _Generated from `bug-ledger.jsonl` by `scripts/bug-curve.py` (2026-05-20 → 202
 | B-2026-09-15-32 | 2026-09-15 | codegen+interp | medium | A NESTED `Array[Array[T, N], M]` INDEX-ASSIGN LOSES THE DISPLACED INNER ARRAY'S ELEMENT `Drop` BODIES AND LEAKS THEIR HEAP, ON BOTH BACKENDS -- `a[0] = [D { .. }]` prints no `dD1` under `--interp` OR compiled and loses 10 B in 1 block at `-O0`; an AGREED gap, so fixing only codegen would manufacture a NEW divergence, which is why B-2026-09-14-29's fix declines this shape | — |
 | B-2026-09-15-33 | 2026-09-15 | codegen+interp | medium | AN INDEX-ASSIGN WHOSE RHS IS A NAMED LOCAL RUNS THE DISPLACED ELEMENT'S `Drop` BODY UNDER `--interp` AND ON NO COMPILED SURFACE -- `a[0] = b` diverges on the `Array` AND `Vec` legs alike while the fresh-literal RHS agrees, because `store_destroys_displaced` classifies an identifier RHS as a RELOCATION on purpose (B-2026-08-26-21); the open question is whether `a[0] = b` is a relocation at all, not why the call is missing | — |
 | B-2026-09-15-34 | 2026-09-15 | interp | medium | A SHADOWED BINDING REBOUND THROUGH A CALL RUNS ITS USER `Drop` BODY TWICE IN THE INTERPRETER -- `let q = mk(15); let q = idr(q);` prints `dR15 dR15` under `karac run --interp` against one body on both compiled backends; needs BOTH the shadowing and the call, and two controls show each is necessary | — |
+| B-2026-09-15-35 | 2026-09-15 | codegen+interp | low | A STRUCT FIELD DECLARED AS A BARE GENERIC PARAM BOUND TO A CONTAINER LOSES ITS ELEMENTS' `Drop` BODIES ON ALL FOUR SURFACES -- `G[T] { a: T }` at `T = Array[R, 2]` and at `T = Vec[R]` both print nothing, where the SAME parameter bound to a plain Drop struct fires correctly (B-2026-08-02-14) and the same containers spelled CONCRETELY in the field both fire, so the erasure is the variable and not the container. | — |
+| B-2026-09-15-36 | 2026-09-15 | other | medium | THE CODEGEN E2E HARNESS IGNORES TYPECHECK ERRORS, so a fixture cell whose program DOES NOT COMPILE runs on the interpreter anyway and passes green whenever its expected output happens to match -- which is exactly the shape of the ~hundreds of "agreed silence" cells that expect only a trailing marker line. | — |
 
 ### Relocated
 
@@ -2540,6 +2541,7 @@ _Generated from `bug-ledger.jsonl` by `scripts/bug-curve.py` (2026-05-20 → 202
 | B-2026-09-12-18 | codegen | high | A GENERIC ENUM'S BOXED `Array[T, N]` PAYLOAD DOUBLE-FREES ITS ELEMENTS WHEN THE PAYLOAD IS MOVED FROM A LOCAL -- SIGABRT for `String`, struct, `Drop`… | de0ad99 |
 | B-2026-09-12-19 | codegen | medium | A BOXED `Array[T, N]` ENUM PAYLOAD'S INTERIOR IS FREED BY NOBODY AT THREE OF THE FOUR REGISTRATION SITES -- 96 B per cell in the by-value-param and r… | b98707e |
 | B-2026-09-12-20 | runtime | medium | SSO's INLINE STRING OVERLAY IS UNUSABLE ON EVERY 32-BIT TARGET -- the 24-byte overlay presupposes a descriptor with no padding, and `{ptr, i64, i64}`… | bab0491 |
+| B-2026-09-12-21 | codegen+interp | low | AN `Array` ELEMENT'S USER `Drop` BODY RUNS ON NO BACKEND ONCE THE ARRAY IS MOVED INTO A STRUCT FIELD -- `Array[R, 2]` with `impl Drop for R` prints `… | 645ea3b |
 | B-2026-09-12-22 | codegen | high | A `ref`-ENUM MATCH BINDING OF AN `Array[T, N]` PAYLOAD IS NOT THE PAYLOAD -- reading through it yields UNINITIALISED memory on all five COMPILED surf… | 25f56cb |
 | B-2026-09-12-23 | codegen | medium | INDEXING A `ref`-ENUM MATCH BINDING OF AN `Array[T, N]` PAYLOAD DOES NOT LOWER -- `match b { Packed(a) => a[1].name.len(), . | 25f56cb |
 | B-2026-09-12-24 | codegen+interp | medium | A MONOMORPHIC ENUM VARIANT'S `Array[T, N]` PAYLOAD NEVER RUNS ITS ELEMENTS' USER `Drop` BODIES -- `enum EArr { A(Array[R, 2]), Z }` prints nothing on… | d8165fb |
