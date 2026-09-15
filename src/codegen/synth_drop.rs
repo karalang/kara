@@ -4929,27 +4929,6 @@ impl<'ctx> super::Codegen<'ctx> {
             let Some(llvm_field) = tuple_ty.get_field_type_at_index(idx) else {
                 continue;
             };
-            // B-2026-09-15-11 — the fixed-`Array` element, ahead of the kind
-            // match for the two-spellings reason `tuple_elem_needs_deep_drop`
-            // states: an annotated array's head is `Path(["Array"], ..)`, so a
-            // `TypeKind` arm would miss every annotated one. `emit_drop_fn_for_
-            // array` carries its own `None` contract for an element that owns
-            // no heap, so an `Array[i64, N]` element still emits nothing.
-            if let Some((elem_te, n)) = self.array_elem_and_len(te) {
-                if n > 0 {
-                    if let Some(arr_drop) = self.emit_drop_fn_for_array(&elem_te, n) {
-                        if let Ok(field_ptr) =
-                            self.builder
-                                .build_struct_gep(tuple_ty, base_ptr, idx, "drop.tup.arr.p")
-                        {
-                            self.builder
-                                .build_call(arr_drop, &[field_ptr.into()], "")
-                                .unwrap();
-                        }
-                    }
-                }
-                continue;
-            }
             match &te.kind {
                 TypeKind::Tuple(inner) => {
                     if let inkwell::types::BasicTypeEnum::StructType(fst) = llvm_field {
@@ -9416,30 +9395,6 @@ impl<'ctx> super::Codegen<'ctx> {
     }
 
     pub(super) fn tuple_elem_needs_deep_drop(&self, te: &TypeExpr) -> bool {
-        // B-2026-09-15-11 — a fixed-`Array` element, answered BEFORE the kind
-        // match and through `array_elem_and_len`, because the two spellings of
-        // an array do not share a kind: an ANNOTATED `Array[String, 2]` parses
-        // to `Path(["Array"], [Type(String), Const(2)])` and only a literal's
-        // inferred type is `TypeKind::Array`. The same shape
-        // `te_recursive_drop_fully_supported` and `synthesize_array_drop_fn_te`
-        // already use, and for the same reason.
-        //
-        // Without this disjunct `type_expr_has_drop_heap` (false for an
-        // `Array` by documented design) and every arm below both answered
-        // `false`, so `synthesize_tuple_drop_fn_te`'s gate declined a tuple
-        // whose only heap is an array element and emitted NO drop at all:
-        // `let p: (Array[String, 2], i64) = (mka("x"), 3);` lost 44 B in 2
-        // blocks at `-O0` with the output correct and `karac check` clean.
-        //
-        // The emitter half is the `Array` arm in `emit_tuple_elem_drops`; the
-        // OWNERSHIP half is the tuple literal now standing its named array
-        // source down, because a tuple that frees its array element is a
-        // second owner otherwise. All three move together or not at all.
-        if let Some((elem_te, n)) = self.array_elem_and_len(te) {
-            return n > 0
-                && (self.type_expr_has_drop_heap(&elem_te)
-                    || self.tuple_elem_needs_deep_drop(&elem_te));
-        }
         match &te.kind {
             TypeKind::Tuple(inner) => inner.iter().any(|e| self.tuple_elem_needs_deep_drop(e)),
             TypeKind::Path(_) => {

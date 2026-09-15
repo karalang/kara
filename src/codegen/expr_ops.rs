@@ -122,42 +122,16 @@ impl<'ctx> super::Codegen<'ctx> {
             //     v.push((i, x)) }` over `Vec[String]` trapped, exit 133). No-op
             //     for a fresh temp / plain owned local (not in the retaining
             //     sets), whose move-out is handled by the suppression below.
-            // B-2026-09-15-11 — the exclusion that stood here is RETIRED, and
-            // the three-way pairing is why. B-2026-09-14-27 declined the
-            // fixed-`Array` leg at this site because a tuple's drop walker had
-            // no `Array` arm: the tuple never freed an array element, so the
-            // source had to stay its sole owner and a copy here would have had
-            // no owner at all (measured then: 44 B in 2 blocks at `-O0`).
-            //
-            // That premise is now false. `tuple_elem_needs_deep_drop` admits
-            // an array element and `emit_tuple_elem_drops` walks it, so the
-            // tuple DOES free what it is handed — which flips both halves:
-            // the copy leg is admitted (a source read again keeps its own
-            // buffers) and the array source is stood down (a source NOT read
-            // again hands its buffers over). Leaving either half behind is the
-            // other error: no disarm is a double free, no copy is the dangling
-            // read B-2026-09-14-27 closed everywhere else.
-            // B-2026-09-15-11 — the fixed-`Array` halves fire only when the
-            // tuple's DECLARED element type carries the array, because that is
-            // exactly when `synthesize_tuple_drop_fn_te` will see it and walk
-            // it. An unannotated `let t = (a, 5)` loses the array type at the
-            // let site, so the tuple frees nothing and BOTH halves must stand
-            // down: disarming there strands the source's buffers (44 B in 2
-            // blocks at `-O0`, measured) and copying there strands the copy.
-            // Asking `ann_elems` keeps the literal and the drop synthesis on
-            // one fact instead of two that can disagree.
-            let declared_array_elem = ann_elems
-                .as_ref()
-                .and_then(|aes| aes.get(idx))
-                .is_some_and(|te| self.array_elem_and_len(te).is_some());
+            // B-2026-09-14-27 — …but NOT its fixed-`Array` leg. A tuple's
+            // drop walker has no `Array` arm, so the tuple never frees an
+            // array element and the source stays its sole owner; handing the
+            // tuple an independent copy here leaks it. See
+            // `uam_array_copy_declined`.
             let saved_decline = self.uam_array_copy_declined;
-            self.uam_array_copy_declined = !declared_array_elem;
+            self.uam_array_copy_declined = true;
             let v = self.maybe_defensive_copy_param_arg(elem_expr, v);
             self.uam_array_copy_declined = saved_decline;
             self.suppress_source_vec_cleanup_for_arg(elem_expr);
-            if declared_array_elem {
-                self.suppress_array_local_move_into_ctor(elem_expr);
-            }
             // B-2026-09-13-27 — the FIELD-ACCESS peer of the line above, and
             // the tuple sibling of the `disarm_struct_field_move_bodies` call
             // in `compile_struct_init`'s field loop (B-2026-09-01-17). A field

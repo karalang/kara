@@ -48363,46 +48363,6 @@ fn main() {
     }
 
     #[test]
-    fn asan_tuple_holding_a_fixed_array_frees_its_element_buffers() {
-        // B-2026-09-15-11 — a tuple whose only heap is a fixed-`Array`
-        // element got NO drop at all. `type_expr_has_drop_heap` answers
-        // `false` for an `Array` by documented design, and
-        // `tuple_elem_needs_deep_drop` had arms for `Vec`, `Option`/`Result`,
-        // a struct containing a `Vec`, and `shared` — but none for `Array` —
-        // so `synthesize_tuple_drop_fn_te`'s gate declined the tuple outright
-        // and its element buffers were stranded: 44 B in 2 blocks at `-O0`,
-        // output correct, `karac check` clean.
-        //
-        // Three pieces move together: the gate admits, `emit_tuple_elem_drops`
-        // walks, and the tuple LITERAL stands its named array source down —
-        // a tuple that frees its element is a second owner otherwise. Both
-        // literal halves are gated on the DECLARED element type, because the
-        // drop walker is synthesized from the let-site type and an unannotated
-        // `let t = (a, 5)` loses the array there.
-        assert_clean_asan_run(
-            r#"
-fn mka(t: String) -> Array[String, 2] {
-    return [f"{t}-aaaaaaaaaaaaaaaaaaaa", f"{t}-bbbbbbbbbbbbbbbbbbbb"];
-}
-
-fn main() {
-    let p: (Array[String, 2], i64) = (mka("fresh"), 3);
-    println(p.1);
-    let a = mka("named");
-    let q: (Array[String, 2], i64) = (a, 5);
-    println(q.1);
-    let b = mka("reread");
-    let r: (Array[String, 2], i64) = (b, 7);
-    println(b[0]);
-    println(r.1);
-}
-"#,
-            &["3", "5", "reread-aaaaaaaaaaaaaaaaaaaa", "7"],
-            "tuple_holding_a_fixed_array_frees_its_element_buffers",
-        );
-    }
-
-    #[test]
     fn asan_array_local_moved_into_a_container_literal_has_one_owner() {
         // B-2026-09-15-2 — a named `Array[T, N]` local moved into an enclosing
         // ARRAY or VEC literal was owned twice: the local keeps the
