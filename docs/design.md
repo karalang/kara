@@ -9290,6 +9290,25 @@ In every row, Drop may *also* run a cleanup action (releasing a file descriptor,
 
 **Implication for `defer` / `errdefer`.** Same rule. `defer` blocks are documented at [defer/errdefer rules](#defer-and-cleanup) as cleanup that runs at scope exit; they share the same LIFO stack with Drop. They are *also* not soundness primitives — a `defer { close(fd) }` block leaks the file descriptor if it doesn't run, but cannot violate type safety. This is why both the defer mechanism and `Drop` are correctly described as "cleanup is guaranteed except in the two named exceptions" (double-panic and `panic = "abort"`) without that exception cascading into a soundness hazard. The cleanup contract is an *operational guarantee* (resources are released when the scope exits normally), not a *type-system guarantee* (the invariant holds whether or not the cleanup runs).
 
+**Partial move of a still-live struct, refilled through a call, is rejected.** Moving a `Drop`-bearing field out of an owned struct leaves that field a *husk*: the value's `Drop` body now belongs to whatever took it, and the base owes no body for that field. Assigning the field again is how the base takes ownership back, and the compiler must not run a body for what the assignment displaces — there is nothing live there to destroy. Written directly, that works:
+
+```kara
+let taken = g.one;      // `g.one` is a husk; `taken` owns the body
+g.one = mks(7);         // no body for the husk; `g.one` is live again
+```
+
+Written *through a call*, it is a compile error:
+
+```kara
+let taken = g.one;
+g.set(mks(7));          // error: 'g.one' was moved out, and 'set' refills it
+                        // through this call
+```
+
+The reason is that husk-ness is a property the caller knows and the callee does not. `set` assigns `self.one` and has no way to see that its caller gave `one` away; the compiler would have to carry that fact across the call boundary, which needs either a drop flag stored in the object or a separate compilation of the callee per husk state. Kāra declines both, so the shape is rejected rather than silently getting the destructor order wrong. The rejection is narrow by construction — it needs a real move-out of a `Drop`-bearing field, a base still live afterwards, and a callee that actually assigns *that* field, all on a path where the move reaches the call. A call assigning a different field, a read through a `ref` (a projection copy, not a move), and a move that does not dominate the call are all accepted.
+
+Reorder the two statements, take a copy instead of a move, or assign the field directly. This is the one place where `Drop` semantics constrain what the language accepts rather than only when destructors run, and it is deliberately a *rejection*: it removes a program from the language rather than assigning it a meaning the two backends cannot both implement.
+
 The single conceptual rule across the whole Kāra design: **soundness lives in the type system; cleanup lives in the runtime**. The two layers cooperate — the type system guarantees that cleanup *will* run on every normal path, and the runtime executes it — but the type system's soundness story does not depend on the runtime's execution of cleanup. This is what makes Kāra safe in the face of double-panic, abort, leak-via-cycle, and any future explicit-skip primitive.
 
 ---

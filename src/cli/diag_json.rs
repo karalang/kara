@@ -2112,6 +2112,7 @@ pub(super) fn collect_diagnostics(pipeline: &Pipeline) -> DiagnosticJson {
             id_counter += 1;
             let code = match err.kind {
                 crate::ownership::OwnershipErrorKind::UseAfterMove => "E0500",
+                crate::ownership::OwnershipErrorKind::MovedFieldRefilledAcrossCall => "E0513",
                 crate::ownership::OwnershipErrorKind::OwnershipCycle => "E0501",
                 crate::ownership::OwnershipErrorKind::NoRcViolation => "E0502",
                 crate::ownership::OwnershipErrorKind::RcFallbackNote => "N0503",

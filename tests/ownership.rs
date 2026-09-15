@@ -13979,3 +13979,239 @@ fn uam_hint_offers_clone_for_clone_bounded_type_param() {
         "T: Clone: karac fix withheld a valid `.clone()` edit"
     );
 }
+
+// ── B-2026-09-08-3: a moved-out field refilled through a call ──────────
+//
+// The shape neither backend can compile correctly: a `Drop`-bearing field is
+// moved out of an owned, still-live struct, and the same base is then handed to
+// a call that assigns that field. Both backends gate the displacement drop on a
+// PER-FRAME move-out record, so the callee — whose frame carries no such record
+// — runs the husk's `Drop` body and the value it stored never runs its own.
+// Measured before the check existed, byte-identical on `--interp`, JIT and AOT
+// at `KARAC_OPT_LEVEL` 0 and 2 with `KARAC_AUTO_PAR` on and off:
+//
+//     method spelling   dS1 dS2 t1 dS1   <- spurious dS1, and no dS7 anywhere
+//     direct spelling   dS2 dS7 t1 dS1   <- correct
+//
+// The check rejects it rather than repairing it; `src/moved_field_refill.rs`
+// records why a repair needs drop flags in the object or per-call-site
+// specialization, and why promoting the plain `UseAfterMove` warning instead
+// would reject correct code (karac's own `runtime/stdlib/protobuf.kara` among
+// it).
+//
+// The two halves of the matrix below are equally load-bearing: the ACCEPT cases
+// are spellings measured CORRECT on every surface, and each one is a shape an
+// over-broad predicate would wrongly reject.
+
+const REFILL_PRELUDE: &str = "struct Rs { id: i64, name: String }\n\
+    impl Drop for Rs { fn drop(mut ref self) { println(f\"dS{self.id}\") } }\n\
+    fn mks(i: i64) -> Rs { return Rs { id: i, name: f\"h{i}\" }; }\n\
+    struct Bs { mut one: Rs, mut two: Rs }\n";
+
+fn refills_rejected(source: &str) -> bool {
+    let parsed = parse(source);
+    assert!(
+        parsed.errors.is_empty(),
+        "Parse errors: {:?}",
+        parsed.errors
+    );
+    let resolved = resolve(&parsed.program);
+    assert!(
+        resolved.errors.is_empty(),
+        "Resolve errors: {:?}",
+        resolved.errors
+    );
+    let typed = typecheck(&parsed.program, &resolved);
+    ownershipcheck(&parsed.program, &typed)
+        .errors
+        .iter()
+        .any(|e| e.kind == OwnershipErrorKind::MovedFieldRefilledAcrossCall)
+}
+
+#[test]
+fn moved_field_refill_rejects_the_method_spelling() {
+    let src = format!(
+        "{REFILL_PRELUDE}\
+         impl Bs {{ fn set(mut ref self, r: Rs) {{ self.one = r; }} }}\n\
+         fn main() {{\n\
+         \x20   let mut g = Bs {{ one: mks(1), two: mks(2) }};\n\
+         \x20   let taken = g.one;\n\
+         \x20   g.set(mks(7));\n\
+         \x20   println(f\"t{{taken.id}}\");\n\
+         }}\n"
+    );
+    assert!(
+        refills_rejected(&src),
+        "the row's own cell must be rejected"
+    );
+}
+
+#[test]
+fn moved_field_refill_rejects_the_free_function_spelling() {
+    // Routes through the `mut ref` PARAMETER map rather than the method map,
+    // so it exercises the other half of `collect_assignments`.
+    let src = format!(
+        "{REFILL_PRELUDE}\
+         fn setf(g: mut ref Bs, r: Rs) {{ g.one = r; }}\n\
+         fn main() {{\n\
+         \x20   let mut g = Bs {{ one: mks(1), two: mks(2) }};\n\
+         \x20   let taken = g.one;\n\
+         \x20   setf(mut g, mks(7));\n\
+         \x20   println(f\"t{{taken.id}}\");\n\
+         }}\n"
+    );
+    assert!(refills_rejected(&src));
+}
+
+#[test]
+fn moved_field_refill_rejects_a_nested_base() {
+    // `o.b.one` — the base is a PATH, so `place_path` / `resolve_place_type`
+    // must walk field types rather than stopping at the root binding.
+    let src = format!(
+        "{REFILL_PRELUDE}\
+         struct Outer {{ mut b: Bs }}\n\
+         impl Bs {{ fn set(mut ref self, r: Rs) {{ self.one = r; }} }}\n\
+         fn main() {{\n\
+         \x20   let mut o = Outer {{ b: Bs {{ one: mks(1), two: mks(2) }} }};\n\
+         \x20   let taken = o.b.one;\n\
+         \x20   o.b.set(mks(7));\n\
+         \x20   println(f\"t{{taken.id}}\");\n\
+         }}\n"
+    );
+    assert!(refills_rejected(&src));
+}
+
+#[test]
+fn moved_field_refill_rejects_an_assignment_two_calls_deep() {
+    // `outer` assigns nothing itself; it calls `self.set(r)`. Only the
+    // fixpoint in `collect_assignments` makes this reachable — without it the
+    // shape compiles and miscompiles exactly as before.
+    let src = format!(
+        "{REFILL_PRELUDE}\
+         impl Bs {{\n\
+         \x20   fn set(mut ref self, r: Rs) {{ self.one = r; }}\n\
+         \x20   fn outer(mut ref self, r: Rs) {{ self.set(r); }}\n\
+         }}\n\
+         fn main() {{\n\
+         \x20   let mut g = Bs {{ one: mks(1), two: mks(2) }};\n\
+         \x20   let taken = g.one;\n\
+         \x20   g.outer(mks(7));\n\
+         \x20   println(f\"t{{taken.id}}\");\n\
+         }}\n"
+    );
+    assert!(refills_rejected(&src));
+}
+
+#[test]
+fn moved_field_refill_rejects_the_shape_inside_a_loop() {
+    let src = format!(
+        "{REFILL_PRELUDE}\
+         impl Bs {{ fn set(mut ref self, r: Rs) {{ self.one = r; }} }}\n\
+         fn main() {{\n\
+         \x20   let mut g = Bs {{ one: mks(1), two: mks(2) }};\n\
+         \x20   let mut i = 0;\n\
+         \x20   while i < 1 {{\n\
+         \x20       let taken = g.one;\n\
+         \x20       g.set(mks(7));\n\
+         \x20       println(f\"t{{taken.id}}\");\n\
+         \x20       i = i + 1;\n\
+         \x20   }}\n\
+         }}\n"
+    );
+    assert!(refills_rejected(&src));
+}
+
+#[test]
+fn moved_field_refill_accepts_a_call_assigning_a_different_field() {
+    // `settwo` assigns `two`; the husk is `one`. Measured `dS2 dS7 t1 dS1` —
+    // correct — so a predicate that fired on "any call taking the base" would
+    // reject a working program. This is what the per-field assignment set buys.
+    let src = format!(
+        "{REFILL_PRELUDE}\
+         impl Bs {{ fn settwo(mut ref self, r: Rs) {{ self.two = r; }} }}\n\
+         fn main() {{\n\
+         \x20   let mut g = Bs {{ one: mks(1), two: mks(2) }};\n\
+         \x20   let taken = g.one;\n\
+         \x20   g.settwo(mks(7));\n\
+         \x20   println(f\"t{{taken.id}}\");\n\
+         }}\n"
+    );
+    assert!(
+        !refills_rejected(&src),
+        "different field must still compile"
+    );
+}
+
+#[test]
+fn moved_field_refill_accepts_a_call_with_no_move_out() {
+    let src = format!(
+        "{REFILL_PRELUDE}\
+         impl Bs {{ fn set(mut ref self, r: Rs) {{ self.one = r; }} }}\n\
+         fn main() {{\n\
+         \x20   let mut g = Bs {{ one: mks(1), two: mks(2) }};\n\
+         \x20   g.set(mks(7));\n\
+         \x20   println(\"m\");\n\
+         }}\n"
+    );
+    assert!(!refills_rejected(&src));
+}
+
+#[test]
+fn moved_field_refill_accepts_the_direct_assignment_spelling() {
+    // B-2026-09-07-63 fixed this one; it clears its own mask on assignment and
+    // prints correctly. Rejecting it would undo that fix.
+    let src = format!(
+        "{REFILL_PRELUDE}\
+         fn main() {{\n\
+         \x20   let mut g = Bs {{ one: mks(1), two: mks(2) }};\n\
+         \x20   let taken = g.one;\n\
+         \x20   g.one = mks(7);\n\
+         \x20   println(f\"t{{taken.id}}\");\n\
+         }}\n"
+    );
+    assert!(!refills_rejected(&src), "the direct spelling is correct");
+}
+
+#[test]
+fn moved_field_refill_accepts_a_projection_copy_off_a_borrow() {
+    // `let x = self.one` off a `ref` receiver is a COPY, not a move — both
+    // `Drop` bodies firing is the documented semantics
+    // (`warning[borrow_projection_copy]`), so there is no husk to protect.
+    let src = format!(
+        "{REFILL_PRELUDE}\
+         impl Bs {{\n\
+         \x20   fn set(mut ref self, r: Rs) {{ self.one = r; }}\n\
+         \x20   fn peek(ref self) -> i64 {{ let x = self.one; return x.id; }}\n\
+         }}\n\
+         fn main() {{\n\
+         \x20   let mut g = Bs {{ one: mks(1), two: mks(2) }};\n\
+         \x20   let n = g.peek();\n\
+         \x20   g.set(mks(7));\n\
+         \x20   println(f\"n{{n}}\");\n\
+         }}\n"
+    );
+    assert!(!refills_rejected(&src), "a projection copy is not a move");
+}
+
+#[test]
+fn moved_field_refill_accepts_a_dominance_incomparable_move() {
+    // The move is inside an `if`, so it does not dominate the call. The
+    // ownership pass answers with an RC-fallback promotion instead: the base
+    // RETAINS the field, so there is no husk. Measured correct on every
+    // surface. This is the case the `uam_bindings` dominance gate exists for —
+    // drop that gate and this program starts being rejected.
+    let src = format!(
+        "{REFILL_PRELUDE}\
+         impl Bs {{ fn set(mut ref self, r: Rs) {{ self.one = r; }} }}\n\
+         fn main() {{\n\
+         \x20   let mut g = Bs {{ one: mks(1), two: mks(2) }};\n\
+         \x20   let c = true;\n\
+         \x20   if c {{ let taken = g.one; println(f\"t{{taken.id}}\"); }}\n\
+         \x20   g.set(mks(7));\n\
+         }}\n"
+    );
+    assert!(
+        !refills_rejected(&src),
+        "dominance-incomparable is the RC-fallback shape, not this defect"
+    );
+}

@@ -96,6 +96,7 @@ pub mod module;
 pub mod module_binding;
 pub mod module_rename;
 pub mod monomorphization;
+pub mod moved_field_refill;
 pub mod must_use_lint;
 pub mod numeric_conv;
 pub mod ownership;

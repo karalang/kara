@@ -560,6 +560,15 @@ pub fn kind_blocks_production(kind: &OwnershipErrorKind) -> bool {
 #[derive(Debug, Clone, PartialEq)]
 pub enum OwnershipErrorKind {
     UseAfterMove,
+    /// B-2026-09-08-3 — a `Drop`-bearing field was moved out of an owned,
+    /// still-live struct, and the same base was then handed to a call that
+    /// assigns that field. BLOCKING, unlike its `UseAfterMove` neighbour,
+    /// because neither backend can compile it correctly: the move-out record
+    /// both consult is per-FRAME, so the callee's assignment runs a `Drop`
+    /// body over a husk the caller already gave away, and the value the callee
+    /// stored never runs its own. See `crate::moved_field_refill` for the
+    /// mechanism and for why the fix is a rejection rather than a repair.
+    MovedFieldRefilledAcrossCall,
     OwnershipCycle,
     /// A value of a `@no_rc` type or inside a `#[no_rc]` function
     /// would require RC fallback.
@@ -760,6 +769,11 @@ pub(crate) fn class_for_ownership_error_kind(
         // three published ownership classes, and folding an escape into
         // "borrow conflict" would tell a consumer the borrow checker found an
         // overlap when it found a lifetime problem.
+        // B-2026-09-08-3 is a move-after-use in substance — the base is used
+        // (as a call receiver) after one of its fields was moved out — so it
+        // shares `UseAfterMove`'s class rather than going unclassified.
+        OwnershipErrorKind::MovedFieldRefilledAcrossCall => Some(DC::OwnershipMoveAfterUse),
+
         OwnershipErrorKind::OwnershipCycle
         | OwnershipErrorKind::NoRcViolation
         | OwnershipErrorKind::RcFallbackNote
@@ -1271,6 +1285,15 @@ pub struct OwnershipChecker<'a> {
     /// second move's source-zeroing suppression then stranded the later
     /// reuse with a zeroed value.
     pub(crate) all_uam_consume_sites: std::collections::HashSet<(usize, usize)>,
+    /// B-2026-09-08-3 — `(fn_key, binding)` for every use-after-move witness,
+    /// which is the DOMINANCE half of the moved-field-refill check's predicate:
+    /// a binding absent here either was never moved or had its move and use
+    /// dominance-incomparable (the RC-fallback shape, where the base retains
+    /// the field and there is no husk). `moved_field_refill` adds the two
+    /// structural halves and rejects only the intersection, which is what keeps
+    /// it off the `String`-concat reuse that draws the same warning and
+    /// compiles correctly.
+    pub(crate) uam_bindings: std::collections::HashSet<(String, String)>,
     /// Inferred closure parameter modes (round 12.23). Keyed by the
     /// closure expression's `SpanKey`; values mirror `param_modes`'s
     /// per-fn `(name, mode)` shape. Surfaced via
@@ -1639,6 +1662,7 @@ impl<'a> OwnershipChecker<'a> {
             typecheck_result,
             param_modes: HashMap::new(),
             all_uam_consume_sites: std::collections::HashSet::new(),
+            uam_bindings: std::collections::HashSet::new(),
             closure_param_modes: FxHashMap::default(),
             closure_captures: FxHashMap::default(),
             closure_capture_paths: FxHashMap::default(),
@@ -2337,6 +2361,38 @@ impl<'a> OwnershipChecker<'a> {
                 _ => {}
             }
         }
+        self.check_moved_field_refills();
+    }
+
+    /// B-2026-09-08-3 — run after the whole-program walk, because the
+    /// dominance gate it reads (`uam_bindings`) is only complete once every
+    /// function's predicate outputs have been populated.
+    fn check_moved_field_refills(&mut self) {
+        for r in
+            crate::moved_field_refill::find_moved_field_refills(self.program, &self.uam_bindings)
+        {
+            self.errors.push(OwnershipError {
+                message: format!(
+                    "'{}.{}' was moved out at line {}:{}, and '{}' refills it through \
+                     this call — the compiler cannot place the `Drop` bodies correctly",
+                    r.binding, r.field, r.move_span.line, r.move_span.column, r.callee
+                ),
+                span: r.call_span,
+                kind: OwnershipErrorKind::MovedFieldRefilledAcrossCall,
+                // The three repairs, cheapest first. Reordering the two
+                // statements is the one that keeps the program's shape.
+                suggestion: Some(format!(
+                    "call '{}' BEFORE moving '{}' out, or take a copy instead of moving \
+                     (bind through a `ref` so the read is a projection copy), or assign \
+                     the field directly (`{}.{} = ...`) rather than through a call",
+                    r.callee, r.field, r.binding, r.field
+                )),
+                replacement: None,
+                // The move site, so the diagnostic can point at both ends of
+                // the shape the way `UseAfterMove` does.
+                consume_span: Some(r.move_span),
+            });
+        }
     }
 
     fn check_function(
@@ -2691,6 +2747,12 @@ impl<'a> OwnershipChecker<'a> {
             // (a within-arm sequential consume+use is dominance-comparable and
             // surfaces here; the arm rename must not leak into the diagnostic).
             let binding = demangle_binding(&binding);
+            // B-2026-09-08-3 — the dominance half of the moved-field-refill
+            // predicate. Recorded for EVERY witness, before the advisory
+            // diagnostic below, because that check runs after the whole program
+            // walk and needs the set complete.
+            self.uam_bindings
+                .insert((fn_key.to_string(), binding.to_string()));
             // Machine-applicable fix (B-2026-07-19-3): when the moved value has a
             // `.clone()` method, insert it at the CONSUME site so the moved-away
             // value is a fresh copy and the original stays live for the later use
