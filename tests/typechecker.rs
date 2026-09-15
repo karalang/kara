@@ -10847,19 +10847,20 @@ fn test_element_pushdown_does_not_relax_the_scalar_element_rules() {
 }
 
 /// B-2026-09-14-24 — the pushdown DECLINES a `VecDeque` in either half of the
-/// pair, and that is a deliberate hold rather than an oversight: codegen
-/// MISCOMPILES a `VecDeque` built as a nested sequence-literal element, so
-/// admitting the spelling would trade a false-positive rejection for a wrong
-/// answer. See B-2026-09-15-22.
+/// pair, and that is a deliberate hold rather than an oversight: a `VecDeque`
+/// built as a nested sequence-literal element FAULTS AT SCOPE-EXIT DROP on
+/// every compiled surface, so admitting the spelling would trade a
+/// false-positive rejection for a crash. See B-2026-09-15-22.
 ///
 /// The gap predates the pushdown, which is how it was found. The one spelling
 /// the tree already accepted — `let v: Array[VecDeque[i64], 1] = [[1]];`, via
-/// the `ArrayLiteral`-against-`Array` arm — was measured on 347b420^ as `x:1`
-/// under `--interp` against NO OUTPUT from `karac run` (JIT) and from both
-/// builds. Of the shapes this arm would newly admit, the JIT produces no
-/// output for `Vec[VecDeque[Array[i64, 1]]]`, and every compiled surface reads
-/// the inner length as 0 for `let v: VecDeque[Vec[i64]] = [[1], [2]];` where
-/// the interpreter reads 1.
+/// the `ArrayLiteral`-against-`Array` arm — prints the CORRECT `x:1` on every
+/// surface and then hangs forever on the three compiled ones; the N = 2
+/// spelling prints correctly and then SIGSEGVs. (An earlier reading of "no
+/// output" was a stdout-buffering artifact.) Of the shapes this arm would
+/// newly admit, `Vec[VecDeque[Array[i64, 1]]]` faults under the JIT, and every
+/// compiled surface reads the inner length as 0 for
+/// `let v: VecDeque[Vec[i64]] = [[1], [2]];` where the interpreter reads 1.
 ///
 /// `slice_inner` and `string_inner` in the accept test above are the control:
 /// `VecDeque` is the variable, not nesting.

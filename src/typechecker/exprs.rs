@@ -376,22 +376,25 @@ impl<'a> super::TypeChecker<'a> {
         if is_scalar_numeric(&element) || element == Type::Error {
             return None;
         }
-        // A `VecDeque` anywhere in the pair is declined because CODEGEN
-        // MISCOMPILES a `VecDeque` built as a nested sequence-literal element,
-        // and admitting the spelling would trade a false-positive rejection
-        // for a wrong answer -- which is strictly worse. See B-2026-09-15-22.
+        // A `VecDeque` anywhere in the pair is declined because a `VecDeque`
+        // built as a nested sequence-literal element FAULTS AT SCOPE-EXIT DROP
+        // on every compiled surface, and admitting the spelling would trade a
+        // false-positive rejection for a crash -- strictly worse. See
+        // B-2026-09-15-22.
         //
         // The gap PREDATES this arm, which is how it was found: the one
         // spelling the tree already accepted,
         // `let v: Array[VecDeque[i64], 1] = [[1]];`, goes through the
-        // `ArrayLiteral`-against-`Array` arm above and was measured on
-        // 347b420^ as `x:1` under `--interp` against NO OUTPUT at all from
-        // `karac run` (JIT) and from both builds. The two shapes this arm
-        // would newly admit are wrong in the same family: the JIT produces no
-        // output for `Vec[VecDeque[Array[i64, 1]]]`, and every compiled
-        // surface reads the inner length as 0 for
-        // `let v: VecDeque[Vec[i64]] = [[1], [2]];` where the interpreter
-        // reads 1.
+        // `ArrayLiteral`-against-`Array` arm above. Measured with stdout
+        // UNBUFFERED, it prints the CORRECT `x:1` on every surface and then
+        // hangs forever on the three compiled ones; the N = 2 spelling prints
+        // correctly and then SIGSEGVs. (An earlier reading of "no output at
+        // all" was a buffering artifact -- the output was written and lost
+        // when the process was killed.) The two shapes this arm would newly
+        // admit are in the same family: `Vec[VecDeque[Array[i64, 1]]]` faults
+        // under the JIT, and every compiled surface reads the inner length as
+        // 0 for `let v: VecDeque[Vec[i64]] = [[1], [2]];` where the
+        // interpreter reads 1.
         //
         // `Slice` and `String` elements are NOT declined -- both measured
         // byte-identical across `karac run`, `--interp`, the default build and

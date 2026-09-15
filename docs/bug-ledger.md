@@ -92,8 +92,8 @@ distinguish "bugs flattening" from "we stopped writing them down."
 
 | class | total |
 |---|---|
-| run-vs-build | 414 |
 | miscompile | 413 |
+| run-vs-build | 413 |
 | leak | 357 |
 | double-free | 234 |
 | missing-feature | 199 |
@@ -103,7 +103,7 @@ distinguish "bugs flattening" from "we stopped writing them down."
 | other | 112 |
 | false-positive | 107 |
 | soundness | 95 |
-| crash | 81 |
+| crash | 82 |
 | use-after-free | 42 |
 
 ### By surface
@@ -186,7 +186,7 @@ _Generated from `bug-ledger.jsonl` by `scripts/bug-curve.py` (2026-05-20 → 202
 | B-2026-09-15-18 | 2026-09-15 | codegen | medium | A GENERIC MULTI-FIELD VARIANT STILL STRANDS ITS BOXED `Array[T, N]` PAYLOAD after B-2026-09-15-15 -- `G2.Y(a, 5)` over `enum G2[T] { Y(T, i64), N }` at `T = Array[String, 2]` loses 48 B + 44 B indirect at `-O0`, byte-identical before and after that fix, because an ERASED `T` cannot be classified at declaration and the monomorphic path that would catch it declines multi-field variants of its own | — |
 | B-2026-09-15-7 | 2026-09-15 | codegen | low | AN INDEX-STORE FREES ONLY THE OUTER BUFFER OF THE `Vec` ELEMENT IT DISPLACES, STRANDING THAT ELEMENT'S OWN ELEMENTS -- `a[0] = <new>` over `Array[Vec[String], 2]` loses the displaced Vec's 5-byte String at -O0, and the `Vec[Vec[String]]` TWIN loses the identical 5 bytes, so this is NOT Array-specific and not B-2026-09-14-30's; it is the outer-buffer-only bound both legs were deliberately given, now measured as a real loss rather than a documented caveat | — |
 | B-2026-09-15-21 | 2026-09-15 | codegen | medium | AN ARM-BOUND PAYLOAD ASSIGNED OVER A `mut` LOCAL STRANDS THE DISPLACED VALUE'S HEAP FIELD, BUT ONLY WHEN THE ENUM ARRIVED AS A BY-VALUE PARAM -- `out = r` inside `fn take(b: E)` loses 2 B per call at -O0 while the identical body in `main`, or over an inline-literal scrutinee, is clean; the displaced value's `Drop` BODY still runs, so only the memory is lost | — |
-| B-2026-09-15-22 | 2026-09-15 | codegen | medium | A `VecDeque` BUILT AS A NESTED SEQUENCE-LITERAL ELEMENT MISCOMPILES ON EVERY COMPILED SURFACE -- `let v: Array[VecDeque[i64], 1] = [[1]];` prints `x:1` under `--interp` and NOTHING AT ALL from `karac run` and both builds, while a flat `VecDeque[i64] = [1, 2, 3]`, a `VecDeque` built by `push`, and every other nested element type (`Array`, `Vec`, `Slice`, `String`) are byte-identical across all four | — |
+| B-2026-09-15-22 | 2026-09-15 | codegen | medium | AN `Array[T, N]` WHOSE ELEMENT IS A `VecDeque` BUILT FROM A NESTED `[..]` LITERAL FAULTS AT SCOPE-EXIT DROP ON EVERY COMPILED SURFACE -- `let v: Array[VecDeque[i64], 1] = [[1]];` prints the CORRECT `x:1` and then hangs forever, and the N=2 spelling prints correctly and then SIGSEGVs, while `[VecDeque.new()]`, a `Vec` element, a flat `VecDeque[i64] = [1, 2]` and a `push`-built one are all byte-identical across all four surfaces | — |
 | B-2026-09-15-23 | 2026-09-15 | interp+codegen | medium | A NESTED CONTAINER IN A STRUCT FIELD LOSES ITS ELEMENT'S `Drop` BODY ON ALL FOUR SURFACES -- `struct H { xs: Vec[Vec[D]] }` with `H { xs: [[mkd(1)]] }` prints `n:1 end` where the same `Vec[D]` field prints `n:1 dD1 end`, so the field is the variable and no A/B comparison can see it | — |
 | B-2026-09-15-24 | 2026-09-15 | interp+codegen | medium | A USER-DEFINED METHOD THAT DISCARDS A BORROW-PROJECTION ARGUMENT RUNS THE FIELD'S `Drop` BODY TWICE UNDER `--interp` AND ONCE ON EVERY COMPILED SURFACE -- `b.put(w.r)` diverges on all three receiver forms while the identical free and associated spellings agree at one body, because the real discriminator is whether the CALLEE KEEPS THE VALUE, not the call spelling B-2026-09-14-10 reads it as | — |
 | B-2026-09-15-25 | 2026-09-15 | parser+typecheck | low | TWO OF THE FIVE PREFIX-COLLECTION-LITERAL TYPES design.md NAMES DO NOT PARSE -- `VecDeque[1, 2]` reports `'VecDeque' is a type, not a function` and `SortedMap["a": 1]` is a raw parse error on the `:`, while the spec says the form is supported by `Vec`, `Set`, `Map`, `VecDeque`, and `SortedMap` | — |
