@@ -12726,6 +12726,7 @@ fn mkv() -> Vec[String] {
     return v
 }
 
+#[allow(partial_move_of_drop_enum)]
 fn ret_str(s: ref S) -> String {
     match s.e {
         E.A(v) => { let m = v; return m[0] }
@@ -12733,6 +12734,7 @@ fn ret_str(s: ref S) -> String {
     }
 }
 
+#[allow(partial_move_of_drop_enum)]
 fn ret_i64(s: ref S) -> i64 {
     match s.e {
         E.A(v) => { let m = v; return m.len() }

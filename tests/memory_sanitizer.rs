@@ -1464,6 +1464,7 @@ struct Hs { e: E, s: String }
 fn consume(x: R) -> i64 { return x.id }
 
 impl H1 {
+    #[allow(partial_move_of_drop_enum)]
     fn whole(self) -> i64 { match self { H1 { e } => { match e { E.A(r) => { let m = r; return m.id; } E.B => { return 0; } } } } }
     fn plain(self) -> i64 { match self { H1 { e } => { match e { E.A(r) => { return r.id; } E.B => { return 0; } } } } }
     fn viacall(self) -> i64 { match self { H1 { e } => { match e { E.A(r) => { return consume(r); } E.B => { return 0; } } } } }
@@ -1476,8 +1477,10 @@ impl Hs {
     fn strleaf(self) -> i64 { match self { Hs { e, s } => { let m = s; println(f"  s{m}"); match e { E.A(r) => { return r.id; } E.B => { return 0; } } } } }
 }
 impl E {
+    #[allow(partial_move_of_drop_enum)]
     fn m_r(self) -> R { match self { E.A(r) => { return r; } E.B => { return mk(0); } } }
 }
+#[allow(partial_move_of_drop_enum)]
 fn p_whole(h: H1) -> i64 { match h { H1 { e } => { match e { E.A(r) => { let m = r; return m.id; } E.B => { return 0; } } } } }
 fn p_plain(h: H1) -> i64 { match h { H1 { e } => { match e { E.A(r) => { return r.id; } E.B => { return 0; } } } } }
 fn p_rebind(h: H1) -> i64 { match h { H1 { e } => { let k = e; match k { E.A(r) => { return r.id; } E.B => { return 0; } } } } }
@@ -1938,6 +1941,7 @@ struct W { e: E }
 enum F { A(R), B }
 impl E {
     fn m_read(self) -> i64 { match self { E.A(r) => { return r.id; } E.B => { return 0; } } }
+    #[allow(partial_move_of_drop_enum)]
     fn m_r(self) -> R { match self { E.A(r) => { return r; } E.B => { return mk(0); } } }
     fn m_print(self) { match self { E.A(r) => { println(f"  p{r.id}"); } E.B => { println("  pB"); } } }
     fn m_ref(ref self) -> i64 { match self { E.A(r) => { return r.id; } E.B => { return 0; } } }
@@ -3090,16 +3094,24 @@ fn main() {
              struct H2 { s: S }\n\
              \n\
              impl H1 {\n\
+             #[allow(partial_move_of_drop_enum)]\n\
              \x20   fn out(self) -> R { match self.e { E.A(r) => { return r; } E.B => { return mk(0); } } }\n\
+             #[allow(partial_move_of_drop_enum)]\n\
              \x20   fn out_iflet(self) -> R { if let E.A(r) = self.e { return r; } else { return mk(0); } }\n\
+             #[allow(partial_move_of_drop_enum)]\n\
              \x20   fn out_tail(self) -> R { match self.e { E.A(r) => r, E.B => mk(0) } }\n\
+             #[allow(partial_move_of_drop_enum)]\n\
              \x20   fn out_some(self, k: bool) -> R { match self.e { E.A(r) => { if k { return r; } return mk(1); } E.B => { return mk(0); } } }\n\
+             #[allow(partial_move_of_drop_enum)]\n\
              \x20   fn read(self) -> i64 { match self.e { E.A(r) => { return r.id; } E.B => { return 0; } } }\n\
              }\n\
-             impl H2 { fn out2(self) -> R { match self.s.e { E.A(r) => { return r; } E.B => { return mk(0); } } } }\n\
+             impl H2 { #[allow(partial_move_of_drop_enum)] fn out2(self) -> R { match self.s.e { E.A(r) => { return r; } E.B => { return mk(0); } } } }\n\
+             #[allow(partial_move_of_drop_enum)]\n\
              fn p_out(h: H1) -> R { match h.e { E.A(r) => { return r; } E.B => { return mk(0); } } }\n\
+             #[allow(partial_move_of_drop_enum)]\n\
              fn p_out2(h: H2) -> R { match h.s.e { E.A(r) => { return r; } E.B => { return mk(0); } } }\n\
              fn p_read(h: H1) -> i64 { match h.e { E.A(r) => { return r.id; } E.B => { return 0; } } }\n\
+             #[allow(partial_move_of_drop_enum)]\n\
              fn e_out(b: E) -> R { match b { E.A(r) => { return r; } E.B => { return mk(0); } } }\n\
              \n\
              fn main() {\n\
@@ -3194,7 +3206,9 @@ fn main() {
              struct W { r: R }\n\
              fn consume(x: R) -> i64 { return x.id }\n\
              \n\
+             #[allow(partial_move_of_drop_enum)]\n\
              fn p_out(h: ref H) -> R { let r2 = match h.e { E.A(r) => r, E.B => mk(0) }; return r2; }\n\
+             #[allow(partial_move_of_drop_enum)]\n\
              fn p_out_mut(h: mut ref H) -> R { match h.e { E.A(r) => { return r; } E.B => { return mk(0); } } }\n\
              fn p_field(w: ref W) -> R { return w.r; }\n\
              fn p_consume(h: ref H) -> i64 { match h.e { E.A(r) => { return consume(r); } E.B => { return 0; } } }\n\
@@ -3203,7 +3217,9 @@ fn main() {
              \x20   fn m_consume(ref self) -> i64 { match self.e { E.A(r) => { return consume(r); } E.B => { return 0; } } }\n\
              \x20   fn m_consume_mut(mut ref self) -> i64 { match self.e { E.A(r) => { return consume(r); } E.B => { return 0; } } }\n\
              \x20   fn m_consume_iflet(ref self) -> i64 { if let E.A(r) = self.e { return consume(r); } return 0; }\n\
+             #[allow(partial_move_of_drop_enum)]\n\
              \x20   fn m_let(ref self) -> i64 { match self.e { E.A(r) => { let m = r; return consume(m); } E.B => { return 0; } } }\n\
+             #[allow(partial_move_of_drop_enum)]\n\
              \x20   fn m_out(ref self) -> R { let r2 = match self.e { E.A(r) => r, E.B => mk(0) }; return r2; }\n\
              \x20   fn m_read(ref self) -> i64 { match self.e { E.A(r) => { return r.id; } E.B => { return 0; } } }\n\
              \x20   fn m_mixed(ref self, k: bool) -> i64 { match self.e { E.A(r) if k => { return consume(r); } E.A(r) => { return r.id; } E.B => { return 0; } } }\n\
@@ -3318,12 +3334,14 @@ fn main() {
              fn p_whilelet(h: ref H) -> i64 { while let E.A(r) = h.e { return r.id; } return 0; }\n\
              fn p_iflet2(h: ref H2) -> i64 { if let E.A(r) = h.s.e { return r.id; } else { return 0; } }\n\
              fn p_match(h: ref H) -> i64 { match h.e { E.A(r) => { return r.id; } E.B => { return 0; } } }\n\
+             #[allow(partial_move_of_drop_enum)]\n\
              fn p_iflet_move(h: ref H) -> i64 { if let E.A(r) = h.e { let m = r; return m.id; } else { return 0; } }\n\
              fn p_iflet_consume(h: ref H) -> i64 { if let E.A(r) = h.e { return consume(r); } return 0; }\n\
              impl H {\n\
              \x20   fn m_iflet(ref self) -> i64 { if let E.A(r) = self.e { return r.id; } else { return 0; } }\n\
              \x20   fn m_iflet_mut(mut ref self) -> i64 { if let E.A(r) = self.e { return r.id; } else { return 0; } }\n\
              \x20   fn m_whilelet(ref self) -> i64 { while let E.A(r) = self.e { return r.id; } return 0; }\n\
+             #[allow(partial_move_of_drop_enum)]\n\
              \x20   fn m_iflet_move(ref self) -> i64 { if let E.A(r) = self.e { let m = r; return m.id; } else { return 0; } }\n\
              }\n\
              \n\
@@ -5080,15 +5098,19 @@ fn main() {
              struct H2 { s: S }\n\
              \n\
              impl H1 {\n\
+             #[allow(partial_move_of_drop_enum)]\n\
              \x20   fn fieldlet(self) -> i64 { let e = self.e; match e { E.A(r) => { let m = r; return m.id; } E.B => { return 0; } } }\n\
              \x20   fn readlet(self) -> i64 { let e = self.e; match e { E.A(r) => { return r.id; } E.B => { return 0; } } }\n\
              \x20   fn justlet(self) -> i64 { let e = self.e; return 7; }\n\
              \x20   fn borrowedlet(mut ref self) -> i64 { let e = self.e; match e { E.A(r) => { return r.id; } E.B => { return 0; } } }\n\
              }\n\
              impl H2 {\n\
+             #[allow(partial_move_of_drop_enum)]\n\
              \x20   fn deep(self) -> i64 { let e = self.s.e; match e { E.A(r) => { let m = r; return m.id; } E.B => { return 0; } } }\n\
+             #[allow(partial_move_of_drop_enum)]\n\
              \x20   fn mid(self) -> i64 { let s = self.s; match s.e { E.A(r) => { let m = r; return m.id; } E.B => { return 0; } } }\n\
              }\n\
+             #[allow(partial_move_of_drop_enum)]\n\
              fn p_fieldlet(h: H1) -> i64 { let e = h.e; match e { E.A(r) => { let m = r; return m.id; } E.B => { return 0; } } }\n\
              \n\
              fn main() {\n\
@@ -5175,19 +5197,27 @@ fn main() {
              fn consume(x: R) -> i64 { return x.id }\n\
              \n\
              impl H1 {\n\
+             #[allow(partial_move_of_drop_enum)]\n\
              \x20   fn take(self) -> i64 { match self.e { E.A(r) => { let m = r; return m.id; } E.B => { return 0; } } }\n\
              \x20   fn read(self) -> i64 { match self.e { E.A(r) => { return r.id; } E.B => { return 0; } } }\n\
              \x20   fn viacall(self) -> i64 { match self.e { E.A(r) => { return consume(r); } E.B => { return 0; } } }\n\
+             #[allow(partial_move_of_drop_enum)]\n\
              \x20   fn iflet(self) -> i64 { if let E.A(r) = self.e { let m = r; return m.id; } else { return 0; } }\n\
+             #[allow(partial_move_of_drop_enum)]\n\
              \x20   fn letelse(self) -> i64 { let E.A(r) = self.e else { return 0; }; let m = r; return m.id; }\n\
+             #[allow(partial_move_of_drop_enum)]\n\
              \x20   fn whilelet(self) -> i64 { while let E.A(r) = self.e { let m = r; return m.id; } return 0; }\n\
+             #[allow(partial_move_of_drop_enum)]\n\
              \x20   fn borrowed(mut ref self) -> i64 { match self.e { E.A(r) => { let m = r; return m.id; } E.B => { return 0; } } }\n\
              }\n\
              impl H2 {\n\
+             #[allow(partial_move_of_drop_enum)]\n\
              \x20   fn take2(self) -> i64 { match self.s.e { E.A(r) => { let m = r; return m.id; } E.B => { return 0; } } }\n\
              \x20   fn read2(self) -> i64 { match self.s.e { E.A(r) => { return r.id; } E.B => { return 0; } } }\n\
              }\n\
+             #[allow(partial_move_of_drop_enum)]\n\
              fn p_take(h: H1) -> i64 { match h.e { E.A(r) => { let m = r; return m.id; } E.B => { return 0; } } }\n\
+             #[allow(partial_move_of_drop_enum)]\n\
              fn p_iflet(h: H1) -> i64 { if let E.A(r) = h.e { let m = r; return m.id; } else { return 0; } }\n\
              \n\
              fn main() {\n\
@@ -9797,6 +9827,7 @@ fn mkv(n: i64) -> Vec[String] {
     return v
 }
 
+#[allow(partial_move_of_drop_enum)]
 fn take(s: ref S) -> String {
     match s.e { E.A(v) => { let m = v; return m[1] } E.B => { return "none" } }
 }
@@ -10138,6 +10169,7 @@ impl Drop for Ve { fn drop(mut ref self) { println("dVe") } }
 fn mkVe(n: i64) -> Ve { return Ve.A(f"payloadpayload{n}") }
 fn sink(s: String) -> i64 { return s.len() }
 
+#[allow(partial_move_of_drop_enum)]
 fn main() {
     let mut i = 0;
     let mut total = 0;
@@ -23369,12 +23401,14 @@ fn main() {
             // The row's own shape: the leaf escapes into a `mut ref` accumulator.
             (
                 "escaping-into-mut-ref",
-                "fn show(x: Option[K], acc: mut ref Vec[R2]) {\n\
+                "#[allow(partial_move_of_drop_enum)]\n\
+                 fn show(x: Option[K], acc: mut ref Vec[R2]) {\n\
                  \x20  match x {\n\
                  \x20    Option.Some(K.A(r)) => { acc.push(r) }\n\
                  \x20    Option.Some(K.B) => {}\n\
                  \x20    Option.None => {}\n\
                  \x20  } }\n\
+                 #[allow(partial_move_of_drop_enum)]\n\
                  fn main() {\n\
                  \x20  let mut acc: Vec[R2] = [];\n\
                  \x20  show(Option.Some(K.A(R2 { s: f\"z\" })), mut acc);\n\
@@ -79840,6 +79874,7 @@ shared enum Sh { A(String), B }
 impl Drop for Sh { fn drop(mut ref self) { println("dSh"); } }
 fn mkSh(n: i64) -> Sh { return Sh.A(f"payloadpayload{n}"); }
 
+#[allow(partial_move_of_drop_enum)]
 fn main() {
     let mut i = 0;
     while i < 3 {
@@ -80447,6 +80482,7 @@ fn mk(n: i64) -> R {
     return R { id: n, tag: f"tag-payloadpayload-{n}", xs: v }
 }
 
+#[allow(partial_move_of_drop_enum)]
 fn two_views(b: E, c: E) -> i64 {
     let mut h: H3 = H3 { f: mk(30), g: mk(31), k: mk(32) };
     match b { E.A(r) => { h.f = r; } E.B => { } }
@@ -88981,6 +89017,7 @@ fn main() {
             "struct R2z { s: String }\n\
              enum Kz { A(R2z), B }\n\
              impl Drop for Kz { fn drop(mut ref self) { println(\"dKz\") } }\n\
+             #[allow(partial_move_of_drop_enum)]\n\
              fn show(x: Option[Kz], acc: mut ref Vec[R2z]) { match x { Option.Some(Kz.A(r)) => { acc.push(r) } Option.Some(Kz.B) => {} Option.None => {} } }\n\
              fn main() { let mut acc: Vec[R2z] = []; for i in 0..3 { show(Option.Some(Kz.A(R2z { s: f\"aaaaaaaaaaaaaaaaaaaa-{i}\" })), mut acc); } println(f\"len:{acc.len()}\") }\n",
             &["len:3"],
@@ -88993,6 +89030,7 @@ fn main() {
             "struct R2z { s: String }\n\
              enum Kz { A(R2z), B }\n\
              impl Drop for Kz { fn drop(mut ref self) { println(\"dKz\") } }\n\
+             #[allow(partial_move_of_drop_enum)]\n\
              fn show(x: Option[Kz]) { match x { Option.Some(Kz.A(r)) => { println(f\"a:{r.s.len()}\") } Option.Some(Kz.B) => {} Option.None => {} } }\n\
              fn main() { for i in 0..3 { show(Option.Some(Kz.A(R2z { s: f\"bbbbbbbbbbbbbbbbbbbb-{i}\" }))); } println(\"end\") }\n",
             &["a:22", "dKz", "a:22", "dKz", "a:22", "dKz", "end"],
@@ -89004,6 +89042,7 @@ fn main() {
         assert_clean_asan_run(
             "enum Kz4 { A(String, String, String, String), B }\n\
              impl Drop for Kz4 { fn drop(mut ref self) { println(\"dKz4\") } }\n\
+             #[allow(partial_move_of_drop_enum)]\n\
              fn show(x: Option[Kz4], acc: mut ref Vec[String]) { match x { Option.Some(Kz4.A(s, t, u, v)) => { acc.push(s); acc.push(t); acc.push(u); acc.push(v) } Option.Some(Kz4.B) => {} Option.None => {} } }\n\
              fn main() { let mut acc: Vec[String] = []; for i in 0..3 { show(Option.Some(Kz4.A(f\"cccccccccccccccccccc-{i}\", f\"dddddddddddddddddddd-{i}\", f\"eeeeeeeeeeeeeeeeeeee-{i}\", f\"ffffffffffffffffffff-{i}\")), mut acc); } println(f\"len:{acc.len()}\") }\n",
             &["len:12"],
@@ -89016,6 +89055,7 @@ fn main() {
              struct Accz { held: R2z }\n\
              enum Kz { A(R2z), B }\n\
              impl Drop for Kz { fn drop(mut ref self) { println(\"dKz\") } }\n\
+             #[allow(partial_move_of_drop_enum)]\n\
              fn show(x: Option[Kz], acc: mut ref Accz) { match x { Option.Some(Kz.A(r)) => { acc.held = r; } Option.Some(Kz.B) => {} Option.None => {} } }\n\
              fn main() { let mut acc = Accz { held: R2z { s: f\"gggggggggggggggggggg-0\" } }; for i in 0..3 { show(Option.Some(Kz.A(R2z { s: f\"hhhhhhhhhhhhhhhhhhhh-{i}\" })), mut acc); } println(f\"h:{acc.held.s}\") }\n",
             &["h:hhhhhhhhhhhhhhhhhhhh-2"],
@@ -89028,6 +89068,7 @@ fn main() {
             "struct R2z { s: String }\n\
              enum Kz { A(R2z), B }\n\
              impl Drop for Kz { fn drop(mut ref self) { println(\"dKz\") } }\n\
+             #[allow(partial_move_of_drop_enum)]\n\
              fn show(x: Option[Kz]) { match x { Option.Some(Kz.A(_)) => { println(\"a\") } Option.Some(Kz.B) => {} Option.None => {} } }\n\
              fn main() { for i in 0..3 { show(Option.Some(Kz.A(R2z { s: f\"iiiiiiiiiiiiiiiiiiii-{i}\" }))); } println(\"end\") }\n",
             &["a", "dKz", "a", "dKz", "a", "dKz", "end"],
@@ -89039,6 +89080,7 @@ fn main() {
             "struct R2z { s: String }\n\
              enum Kzs { A { r: R2z }, B }\n\
              impl Drop for Kzs { fn drop(mut ref self) { println(\"dKzs\") } }\n\
+             #[allow(partial_move_of_drop_enum)]\n\
              fn show(x: Option[Kzs], acc: mut ref Vec[R2z]) { match x { Option.Some(Kzs.A { r }) => { acc.push(r) } Option.Some(Kzs.B) => {} Option.None => {} } }\n\
              fn main() { let mut acc: Vec[R2z] = []; for i in 0..3 { show(Option.Some(Kzs.A { r: R2z { s: f\"jjjjjjjjjjjjjjjjjjjj-{i}\" } }), mut acc); } println(f\"len:{acc.len()}\") }\n",
             &["len:3"],

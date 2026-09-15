@@ -275,7 +275,7 @@ pub const STARTER_LINTS: &[LintInfo] = &[
     },
     LintInfo {
         name: "partial_move_of_drop_enum",
-        default_level: LintLevel::Warn,
+        default_level: LintLevel::Deny,
         description:
             "A payload is moved out of an ENUM VARIANT whose enum has its own `impl Drop` \
              (`match x { Option.Some(K.A(r)) => acc.push(r) }`, `let Option.Some(K.A(r)) = x \
@@ -294,10 +294,15 @@ pub const STARTER_LINTS: &[LintInfo] = &[
              broken, so a type-only test removed a defect; here the read-only spelling is \
              correct on all four surfaces and a type-only test rejects it too — measured at \
              45 codegen fixtures against the struct rule's 8. \
-             `Warn`, not the `Deny` that would actually remove the divergence, for the same \
-             reason the struct rule landed at `Warn`: `--features llvm` fixtures are written \
-             in this shape and each pins drop behaviour for a bug fixed in it, so promotion \
-             waits on triaging them. B-2026-09-13-11, B-2026-09-13-12.",
+             `Deny` since B-2026-09-13-14, which is what actually removes the divergence: \
+             at `Warn` the program still compiled and still diverged. The promotion waited \
+             on triaging the `--features llvm` fixtures written in this shape — each pins \
+             drop behaviour for a bug fixed in it — and they now carry \
+             `#[allow(partial_move_of_drop_enum)]` on the enclosing declaration, the \
+             per-`fn` opt-out its struct sibling's eight use. That spelling is deliberate: \
+             it keeps the shape reachable, so the coverage still guards programs someone \
+             can write, and a fixture NEWLY written in this shape fails the check-gate and \
+             has to be annotated on purpose. B-2026-09-13-11, B-2026-09-13-12.",
     },
     LintInfo {
         name: "partial_move_of_drop_struct",
