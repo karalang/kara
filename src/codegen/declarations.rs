@@ -3690,30 +3690,104 @@ impl<'ctx> super::Codegen<'ctx> {
                 // `declare_enums` and struct LLVM types do not exist yet — the
                 // same struct-vs-enum cycle break `payload_word_count_for_type_expr`
                 // documents. The two agree field-for-field.
+                //
+                // B-2026-09-15-15 — PER FIELD, not per single-field variant.
+                // This pass landed reading only a variant with exactly one
+                // field (`kinds.len() != 1`, plus a `tys.len() == 1` match),
+                // so an array sharing its variant with ANY second field kept
+                // kind `None` and the drop switch emitted nothing for it. The
+                // pack side does not care how many siblings a field has: it
+                // boxes on the field's own slot, so the box was allocated and
+                // never freed. Measured at `-O0`, one construction each:
+                //
+                //     Both(Array[String, 2], Array[String, 2])  96 B + 88 B indirect
+                //     M(Array[String, 2], i64)                  48 B + 44 B
+                //     M(i64, Array[String, 2])                  48 B + 44 B
+                //     T(Array[String, 2], i64, Array[String,2]) 96 B + 88 B
+                //     S { a: Array[String, 2], n: i64 }         48 B + 44 B
+                //     Full(Array[String, 2])   -- one field     clean
+                //
+                // 48 B is one `Array[String, 2]`'s three-word triples, i.e.
+                // the box itself; position and the sibling's type are both
+                // irrelevant, which is what leaves the field COUNT.
+                //
+                // Widening cannot create a second owner. The five explicit
+                // `BoxedEnumDrop` registrations are stood down through
+                // `user_enum_boxed_payload_variants`, which ALREADY declines
+                // any variant with `tys.len() != 1` -- so no multi-field
+                // variant was ever in its set, and the switch arm this hands
+                // to is the first owner rather than a competing one. Every
+                // other consumer of the kind reads it per field already
+                // (`clone_drop`'s boxed-deep list, the entry-copy predicate,
+                // `param_own`'s `contains`), and the drop switch arm keys on
+                // `fi` and the field's own `start_word`, so only the
+                // classifier was narrow.
                 for (vname, kinds) in field_drop_kinds.iter_mut() {
-                    if kinds.len() != 1 || kinds[0] != EnumDropKind::None {
-                        continue;
-                    }
                     let Some(v) = e.variants.iter().find(|v| &v.name == vname) else {
                         continue;
                     };
-                    let field_ty = match &v.kind {
-                        VariantKind::Tuple(tys) if tys.len() == 1 => &tys[0],
-                        VariantKind::Struct(fields) if fields.len() == 1 => &fields[0].ty,
-                        _ => continue,
+                    let field_tys: Vec<&TypeExpr> = match &v.kind {
+                        VariantKind::Unit => continue,
+                        VariantKind::Tuple(tys) => tys.iter().collect(),
+                        VariantKind::Struct(fields) => fields.iter().map(|f| &f.ty).collect(),
                     };
-                    let Some((elem_te, n)) = self.array_elem_and_len(field_ty) else {
-                        continue;
-                    };
-                    let field_words = field_word_offsets
-                        .get(vname)
-                        .and_then(|offs| offs.first())
-                        .map(|(_, w)| *w)
-                        .unwrap_or(1);
-                    let elem_words =
-                        self.payload_word_count_for_type_expr(&elem_te, &e.name, vname);
-                    if elem_words.saturating_mul(n as usize) > field_words {
-                        kinds[0] = EnumDropKind::BoxedArray;
+                    let single_field = field_tys.len() == 1;
+                    for (fi, field_ty) in field_tys.into_iter().enumerate() {
+                        if kinds.get(fi) != Some(&EnumDropKind::None) {
+                            continue;
+                        }
+                        let Some((elem_te, n)) = self.array_elem_and_len(field_ty) else {
+                            continue;
+                        };
+                        // An element that runs a user `Drop` BODY is admitted
+                        // at single-field width and declined by the widening,
+                        // and that asymmetry is deliberate rather than an
+                        // oversight. B-2026-09-14-12 admitted it, and
+                        // B-2026-09-15-17 is the ordering divergence that
+                        // admission rides on -- the bodies run BEFORE the
+                        // consuming call on the compiled backends and after it
+                        // under `--interp`. A multi-field variant carrying such
+                        // an element AGREES across backends today and merely
+                        // leaks, so widening to it would trade an agreed gap
+                        // for a new run-vs-build divergence: measured on
+                        // `M(Array[R, 2], i64)` going from `in 28 / dD23 / dD2`
+                        // on every surface to `dD23 / dD2 / in 28` on the
+                        // compiled ones. That is the trade B-2026-09-13-29
+                        // declined for the same reason, so this declines it
+                        // too; close -15-17 and this clause comes out.
+                        //
+                        // READ `program.drop_method_keys` DIRECTLY, not
+                        // `type_runs_user_drop`, and that is the same
+                        // declare-time cycle this pass already works around for
+                        // the width. `program_snapshot` -- the table that
+                        // predicate consults -- is assigned in `compile_program`
+                        // AFTER `declare_enums` returns, so asking it here
+                        // answers `false` for every type in the program. Costly
+                        // to discover from the outside: the clause simply did
+                        // not fire, and the divergence it was written to prevent
+                        // showed up in the cell matrix as though the clause were
+                        // absent. The `Program` this pass is handed carries the
+                        // table already (lowering fills it from
+                        // `TypeCheckResult`), so the answer is available -- just
+                        // not through that accessor.
+                        let elem_runs_body = match &elem_te.kind {
+                            TypeKind::Path(p) => p.segments.first().cloned(),
+                            _ => None,
+                        }
+                        .is_some_and(|n| program.drop_method_keys.contains_key(n.as_str()));
+                        if !single_field && elem_runs_body {
+                            continue;
+                        }
+                        let field_words = field_word_offsets
+                            .get(vname)
+                            .and_then(|offs| offs.get(fi))
+                            .map(|(_, w)| *w)
+                            .unwrap_or(1);
+                        let elem_words =
+                            self.payload_word_count_for_type_expr(&elem_te, &e.name, vname);
+                        if elem_words.saturating_mul(n as usize) > field_words {
+                            kinds[fi] = EnumDropKind::BoxedArray;
+                        }
                     }
                 }
 

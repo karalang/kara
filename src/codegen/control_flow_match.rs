@@ -2323,54 +2323,111 @@ impl<'ctx> super::Codegen<'ctx> {
         if layout.is_shared {
             return;
         }
-        let PatternKind::TupleVariant { patterns, .. } = &pattern.kind else {
-            return;
-        };
-        let [sub] = patterns.as_slice() else {
-            return;
-        };
-        let PatternKind::Binding(bound) = &sub.kind else {
-            return;
-        };
         let Some((variant, _)) = self.enum_pattern_consumed_positions(enum_name, pattern) else {
             return;
         };
-        // Position 0: the single-field variant the `[sub]` shape above pinned.
-        // Read the KIND rather than re-deriving the boxing decision, so this
-        // tracks whatever `declarations.rs` classified.
-        if layout
-            .field_drop_kinds
-            .get(&variant)
-            .and_then(|k| k.first())
-            .copied()
-            != Some(super::state::EnumDropKind::BoxedArray)
-        {
+        // B-2026-09-15-15 — EVERY bound field, in BOTH pattern shapes. This
+        // landed matching `TupleVariant` with exactly one sub-pattern
+        // (`let [sub] = patterns.as_slice()`) and reading position 0, which
+        // left two holes the consumer never had: a tuple variant's array
+        // sharing its variant with a second field (newly reachable now that
+        // the classifier marks it) and a STRUCT-shaped variant at any width
+        // (`S { a }`), which has no `TupleVariant` spelling at all and so
+        // recorded nothing even while its single field was classified.
+        //
+        // The struct-shaped hole is PRE-EXISTING and was measured as a hard
+        // double free on stock `main`: `match s { St1.S { a } => eat(a) }`
+        // over `enum St1 { S { a: Array[String, 2] }, N }` aborts with
+        // `free(): double free detected in tcache 2` on both compiled
+        // backends against a correct `--interp`. The arm hands the interior
+        // to `eat`, the drop switch's `BoxedArray` arm walks it again.
+        //
+        // `suppress_boxed_array_payload_alias_move` already reads the
+        // recorded POSITION for both its word GEP and its payload type, so
+        // nothing downstream needed widening — only this registration, which
+        // is why the fifth tuple element existed and was always written `0`.
+        let binds: Vec<(usize, String)> = match &pattern.kind {
+            PatternKind::TupleVariant { patterns, .. } => patterns
+                .iter()
+                .enumerate()
+                .filter_map(|(i, sub)| match &sub.kind {
+                    PatternKind::Binding(b) => Some((i, b.clone())),
+                    _ => None,
+                })
+                .collect(),
+            PatternKind::Struct { fields, .. } => {
+                let Some(names) = self.enum_variant_struct_field_names(enum_name, &variant) else {
+                    return;
+                };
+                fields
+                    .iter()
+                    .filter_map(|fp| {
+                        // Shorthand `{ a }` binds under the FIELD's name;
+                        // `{ a: x }` under the sub-pattern's. Anything else
+                        // (a wildcard, a nested destructure) claims nothing
+                        // this disarm can hand over.
+                        let bound = match fp.pattern.as_ref().map(|sp| &sp.kind) {
+                            None => fp.name.clone(),
+                            Some(PatternKind::Binding(b)) => b.clone(),
+                            Some(_) => return None,
+                        };
+                        let pos = names.iter().position(|n| n == &fp.name)?;
+                        Some((pos, bound))
+                    })
+                    .collect()
+            }
+            _ => return,
+        };
+        if binds.is_empty() {
             return;
         }
-        let elem_runs_body = self
+        let kinds = layout
+            .field_drop_kinds
+            .get(&variant)
+            .cloned()
+            .unwrap_or_default();
+        let tes = self
             .enum_variant_field_type_exprs(enum_name)
             .into_iter()
             .find(|(_, v, _)| v == &variant)
-            .and_then(|(_, _, tes)| tes.first().cloned())
-            .and_then(|te| self.array_elem_and_len(&te))
-            .and_then(|(elem, _)| match &elem.kind {
-                TypeKind::Path(p) => p.segments.first().cloned(),
-                _ => None,
-            })
-            .is_some_and(|n| self.type_runs_user_drop(&n, &mut Vec::new()));
-        if elem_runs_body {
-            return;
+            .map(|(_, _, tes)| tes)
+            .unwrap_or_default();
+        for (pos, bound) in binds {
+            // Read the KIND rather than re-deriving the boxing decision, so
+            // this tracks whatever `declarations.rs` classified.
+            if kinds.get(pos).copied() != Some(super::state::EnumDropKind::BoxedArray) {
+                continue;
+            }
+            let elem_runs_body = tes
+                .get(pos)
+                .cloned()
+                .and_then(|te| self.array_elem_and_len(&te))
+                .and_then(|(elem, _)| match &elem.kind {
+                    TypeKind::Path(p) => p.segments.first().cloned(),
+                    _ => None,
+                })
+                .is_some_and(|n| self.type_runs_user_drop(&n, &mut Vec::new()));
+            if elem_runs_body {
+                continue;
+            }
+            // The binding's own slot, for the staleness guard the map
+            // documents. A pattern whose binding has no slot yet cannot be
+            // handed on, so recording nothing is the right answer rather than
+            // a fallback.
+            let Some(bound_slot) = self.variables.get(bound.as_str()).map(|s| s.ptr) else {
+                continue;
+            };
+            self.payload_vars.boxed_array_payload_alias.insert(
+                bound.clone(),
+                (
+                    slot,
+                    bound_slot,
+                    enum_name.to_string(),
+                    variant.clone(),
+                    pos,
+                ),
+            );
         }
-        // The binding's own slot, for the staleness guard the map documents.
-        // A pattern whose binding has no slot yet cannot be handed on, so
-        // recording nothing is the right answer rather than a fallback.
-        let Some(bound_slot) = self.variables.get(bound.as_str()).map(|s| s.ptr) else {
-            return;
-        };
-        self.payload_vars.boxed_array_payload_alias.insert(
-            bound.clone(),
-            (slot, bound_slot, enum_name.to_string(), variant, 0),
-        );
     }
 
     /// B-2026-09-12-25 — disarm the drop INSIDE a boxed enum payload when the

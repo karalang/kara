@@ -34592,6 +34592,158 @@ fn main() {
         }
     }
 
+    /// B-2026-09-15-15 — a MULTI-FIELD enum variant owns its boxed
+    /// `Array[T, N]` payload, and an arm that hands that payload on is
+    /// disarmed in both pattern shapes.
+    ///
+    /// Two narrow gates, one at each end of the same ownership pair.
+    ///
+    /// The CLASSIFIER (`declarations.rs`) upgraded an oversize array payload to
+    /// `EnumDropKind::BoxedArray` only for a variant with exactly one field, so
+    /// an array sharing its variant with any second field kept kind `None` and
+    /// the drop switch emitted nothing for it — the box was allocated and never
+    /// freed. Position and the sibling's type are both irrelevant, which is
+    /// what leaves the field COUNT: measured at `-O0`, `Both(a, b)` lost 96 B +
+    /// 88 B indirect, `M(a, 5)` / `M(5, a)` / `S { a, n }` / `M(a, "sib")` 48 B
+    /// + 44 B each, while the single-field `Full(a)` beside them was clean.
+    ///
+    /// The DISARM (`register_boxed_array_payload_alias`) matched only a
+    /// `TupleVariant` pattern with exactly one sub-pattern. Once the classifier
+    /// widens, an arm that binds a multi-field variant's array out and hands it
+    /// on has two owners — the binding and the switch's interior walk — so
+    /// `tuplehand` and `out` abort with `free(): double free detected in tcache
+    /// 2`. Both are cells here.
+    ///
+    /// WHAT THIS TEST DOES NOT GUARD, stated because the cell list reads as
+    /// though it does. Neither failure mode is visible from output: the leak
+    /// by nature, and the double free because `run_program` returns `None` on
+    /// a non-zero exit, which the tolerant `if let Some(aot)` form then skips.
+    /// Measured — with the fix reverted this test PASSES. It is kept for
+    /// interpreter/AOT parity on shapes that had none of it before;
+    /// `asan_multi_field_variant_owns_its_boxed_array_payload` is the
+    /// regression guard, and it is non-vacuous.
+    ///
+    /// `struct1hand` IS A PRE-EXISTING DOUBLE FREE, not a consequence of the
+    /// widening, and it is the reason the disarm needed the struct arm rather
+    /// than just the multi-field one: `St1.S { a }` is a SINGLE-field variant
+    /// that the classifier already admitted, but a struct-shaped pattern has no
+    /// `TupleVariant` spelling, so nothing was ever recorded for it. It aborts
+    /// identically on stock `main` and is fixed here.
+    ///
+    /// `srcread` is the use-after-free this leak was MASKING: with the box
+    /// unowned nothing freed the interior, so the moved-from source stayed
+    /// readable by accident. It reads correctly after the fix too — the
+    /// per-argument defensive copy B-2026-09-15-3 put in place already covers
+    /// multi-field constructors — and the cell pins that rather than assuming
+    /// it.
+    ///
+    /// NOT REPAIRED, deliberately, and each has its own row: a GENERIC
+    /// multi-field variant (`G2[T] { Y(T, i64), N }` at `T = Array[String, 2]`)
+    /// still strands 48 B + 44 B, because an erased `T` payload cannot be
+    /// classified at declaration and the monomorphic path that would catch it
+    /// declines multi-field variants of its own (B-2026-09-15-18); a `shared
+    /// enum` is excluded from this machinery entirely (B-2026-09-15-10); and an
+    /// element running a user `Drop` BODY is declined by the widening on
+    /// purpose, because admitting it trades an agreed leak for a new
+    /// run-vs-build divergence (B-2026-09-15-17).
+    #[test]
+    fn e2e_multi_field_variant_owns_its_boxed_array_payload() {
+        const HDR: &str = "fn mka(t: String) -> Array[String, 2] { return [f\"{t}-aaaaaaaaaaaaaaaaaaaa\", f\"{t}-bbbbbbbbbbbbbbbbbbbb\"]; }\n\
+                           fn eat(a: Array[String, 2]) -> i64 { return a[0].len(); }\n\
+                           enum Two { Both(Array[String, 2], Array[String, 2]), None2 }\n\
+                           fn tlen(t: Two) -> i64 { match t { Two.Both(x, y) => { return x[0].len() + y[1].len(); } Two.None2 => { return 0; } } }\n\
+                           enum Mix { M(Array[String, 2], i64), N }\n\
+                           fn mlen(m: Mix) -> i64 { match m { Mix.M(x, k) => { return x[0].len() + k; } Mix.N => { return 0; } } }\n\
+                           fn mhand(m: Mix) -> i64 { match m { Mix.M(x, k) => { return eat(x) + k; } Mix.N => { return 0; } } }\n\
+                           fn mout(m: Mix) -> Array[String, 2] { match m { Mix.M(x, k) => { return x; } Mix.N => { return mka(\"z\"); } } }\n\
+                           enum Mix2 { M(i64, Array[String, 2]), N }\n\
+                           fn mlen2(m: Mix2) -> i64 { match m { Mix2.M(k, x) => { return x[0].len() + k; } Mix2.N => { return 0; } } }\n\
+                           enum Tri { T(Array[String, 2], i64, Array[String, 2]), N }\n\
+                           fn trilen(t: Tri) -> i64 { match t { Tri.T(x, k, y) => { return x[0].len() + k + y[1].len(); } Tri.N => { return 0; } } }\n\
+                           enum St { S { a: Array[String, 2], n: i64 }, N }\n\
+                           fn stlen(s: St) -> i64 { match s { St.S { a, n } => { return a[0].len() + n; } St.N => { return 0; } } }\n\
+                           fn sthand(s: St) -> i64 { match s { St.S { a, n } => { return eat(a) + n; } St.N => { return 0; } } }\n\
+                           enum St1 { S { a: Array[String, 2] }, N }\n\
+                           fn st1hand(s: St1) -> i64 { match s { St1.S { a } => { return eat(a); } St1.N => { return 0; } } }\n\
+                           enum Mx { M(Array[String, 2], String), N }\n\
+                           fn mxlen(m: Mx) -> i64 { match m { Mx.M(x, s) => { return x[0].len() + s.len(); } Mx.N => { return 0; } } }\n\
+                           enum Wrp { Full(Array[String, 2]), Empty }\n\
+                           fn wlen(w: Wrp) -> i64 { match w { Wrp.Full(x) => { return x[0].len(); } Wrp.Empty => { return 0; } } }\n";
+        for (label, body, want) in [
+            (
+                "two array payloads",
+                "{ let w = Two.Both(mka(\"p\"), mka(\"q\")); println(f\"{tlen(w)}\"); }\nprintln(\"done\");",
+                "44\ndone\n",
+            ),
+            (
+                "array then scalar",
+                "{ let w = Mix.M(mka(\"a\"), 5); println(f\"{mlen(w)}\"); }\nprintln(\"done\");",
+                "27\ndone\n",
+            ),
+            (
+                "scalar then array",
+                "{ let w = Mix2.M(5, mka(\"b\")); println(f\"{mlen2(w)}\"); }\nprintln(\"done\");",
+                "27\ndone\n",
+            ),
+            (
+                "three fields, two arrays",
+                "{ let w = Tri.T(mka(\"c\"), 5, mka(\"d\")); println(f\"{trilen(w)}\"); }\nprintln(\"done\");",
+                "49\ndone\n",
+            ),
+            (
+                "a struct-shaped variant",
+                "{ let w = St.S { a: mka(\"e\"), n: 5 }; println(f\"{stlen(w)}\"); }\nprintln(\"done\");",
+                "27\ndone\n",
+            ),
+            (
+                "an array sibling of a String field",
+                "{ let w = Mx.M(mka(\"k\"), f\"sib-aaaaaaaaaaaaaaaaaaaa\"); println(f\"{mxlen(w)}\"); }\nprintln(\"done\");",
+                "46\ndone\n",
+            ),
+            (
+                "an arm that HANDS ON a tuple variant's array — aborted before",
+                "{ let w = Mix.M(mka(\"h\"), 5); println(f\"{mhand(w)}\"); }\nprintln(\"done\");",
+                "27\ndone\n",
+            ),
+            (
+                "an arm that RETURNS a tuple variant's array — aborted before",
+                "{ let w = Mix.M(mka(\"j\"), 5); let r = mout(w); println(f\"{r[1].len()}\"); }\nprintln(\"done\");",
+                "22\ndone\n",
+            ),
+            (
+                "an arm that HANDS ON a struct-shaped variant's array — aborted before",
+                "{ let w = St.S { a: mka(\"f\"), n: 5 }; println(f\"{sthand(w)}\"); }\nprintln(\"done\");",
+                "27\ndone\n",
+            ),
+            (
+                "the SINGLE-field struct-shaped spelling — a pre-existing abort",
+                "{ let w = St1.S { a: mka(\"g\") }; println(f\"{st1hand(w)}\"); }\nprintln(\"done\");",
+                "22\ndone\n",
+            ),
+            (
+                "the moved-from source stays readable — the masked use-after-free",
+                "let src = mka(\"m\");\n{ let w = Mix.M(src, 5); println(f\"{mlen(w)}\"); }\nprintln(f\"{src[0]}\");",
+                "27\nm-aaaaaaaaaaaaaaaaaaaa\n",
+            ),
+            (
+                "control: the single-field variant was always balanced",
+                "{ let w = Wrp.Full(mka(\"n\")); println(f\"{wlen(w)}\"); }\nprintln(\"done\");",
+                "22\ndone\n",
+            ),
+        ] {
+            let src = format!("{HDR}fn main() {{\n{body}\n}}\n");
+            let (interp_out, interp_errs, _, _) = karac::run_program_full(&src);
+            assert!(
+                interp_errs.is_empty(),
+                "[{label}] interp errored: {interp_errs:?}"
+            );
+            assert_eq!(interp_out.join(""), want, "[{label}] interpreter");
+            if let Some(aot) = run_program(&src) {
+                assert_eq!(aot, want, "[{label}] AOT");
+            }
+        }
+    }
+
     /// B-2026-09-15-3 — a user ENUM VARIANT CONSTRUCTOR is the hand-off site
     /// B-2026-09-14-27's copy did not reach, and this pins it closed on every
     /// backend.

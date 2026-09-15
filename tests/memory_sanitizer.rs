@@ -11165,6 +11165,132 @@ fn main() {
         );
     }
 
+    /// B-2026-09-15-15 — a MULTI-FIELD enum variant owns its boxed
+    /// `Array[T, N]` payload, and this is the fixture that actually proves it.
+    ///
+    /// THE CODEGEN TWIN CANNOT CARRY THIS ROW, which is worth stating because
+    /// it usually can. Both failure modes here are invisible to an output
+    /// assertion: the leak by nature, and the double free because
+    /// `run_program` returns `None` on a non-zero exit and the tolerant
+    /// `if let Some(aot)` form then asserts nothing. Verified — with the fix
+    /// reverted, `e2e_multi_field_variant_owns_its_boxed_array_payload` passes.
+    /// It is kept for A/B output parity; THIS fixture is the guard, and unlike
+    /// B-2026-09-15-3's memory twin it is non-vacuous, because a double free
+    /// and a leak are both malloc/free BOOKKEEPING, which ASAN intercepts even
+    /// though it does not instrument `karac`'s emitted IR.
+    ///
+    /// The cells, each measured broken at `-O0` before the fix:
+    ///
+    ///     two / mix / mix2 / tri / struct / heapsib   48 B per array payload,
+    ///                                                 plus its elements, LEAKED
+    ///     tuplehand / out / structhand                the same leak, and a
+    ///                                                 DOUBLE FREE once the
+    ///                                                 classifier widens
+    ///     struct1hand                                 a PRE-EXISTING double
+    ///                                                 free on stock `main`
+    ///
+    /// `struct1hand` is the one that is not this row's own regression: a
+    /// SINGLE-field struct-shaped variant was already classified `BoxedArray`,
+    /// but `register_boxed_array_payload_alias` matched only `TupleVariant`
+    /// patterns, so an arm binding `St1.S { a }` and handing `a` on had two
+    /// owners and aborted. It is in this fixture because the disarm's struct
+    /// arm is what fixes it, and a fixture that covered only the widened
+    /// shapes would let it regress silently.
+    ///
+    /// `srcread` pins the use-after-free the leak was MASKING — with nothing
+    /// freeing the box, the moved-from source stayed readable by accident.
+    /// B-2026-09-15-3's per-argument defensive copy is what keeps it readable
+    /// now that the box is freed, so this cell is a cross-row guard.
+    ///
+    /// `single` is the control that was always balanced.
+    ///
+    /// FLOORED at 60 allocations: the stranded boxes are exactly what LLVM
+    /// deletes when nothing observes them, so an `-O2`-only zero proves
+    /// nothing. Measured 178 allocs / 178 frees.
+    #[test]
+    fn asan_multi_field_variant_owns_its_boxed_array_payload() {
+        assert_clean_asan_run_min_allocs(
+            r#"
+struct R { s: String }
+enum Two { Both(Array[String, 2], Array[String, 2]), None2 }
+enum Mix { M(Array[String, 2], i64), N }
+enum Mix2 { M(i64, Array[String, 2]), N }
+enum Tri { T(Array[String, 2], i64, Array[String, 2]), N }
+enum St { S { a: Array[String, 2], n: i64 }, N }
+enum St1 { S { a: Array[String, 2] }, N }
+enum Mx { M(Array[String, 2], String), N }
+enum Wrp { Full(Array[String, 2]), Empty }
+
+fn mka(t: String) -> Array[String, 2] {
+    return [f"b1515-{t}-aaaaaaaaaaaaaaaa", f"b1515-{t}-bbbbbbbbbbbbbbbb"];
+}
+fn eat(a: Array[String, 2]) -> i64 { return a[0].len(); }
+fn tlen(t: Two) -> i64 { match t { Two.Both(x, y) => { return x[0].len() + y[1].len(); } Two.None2 => { return 0; } } }
+fn mlen(m: Mix) -> i64 { match m { Mix.M(x, k) => { return x[0].len() + k; } Mix.N => { return 0; } } }
+fn mlen2(m: Mix2) -> i64 { match m { Mix2.M(k, x) => { return x[0].len() + k; } Mix2.N => { return 0; } } }
+fn trilen(t: Tri) -> i64 { match t { Tri.T(x, k, y) => { return x[0].len() + k + y[1].len(); } Tri.N => { return 0; } } }
+fn stlen(s: St) -> i64 { match s { St.S { a, n } => { return a[0].len() + n; } St.N => { return 0; } } }
+fn sthand(s: St) -> i64 { match s { St.S { a, n } => { return eat(a) + n; } St.N => { return 0; } } }
+fn st1hand(s: St1) -> i64 { match s { St1.S { a } => { return eat(a); } St1.N => { return 0; } } }
+fn mhand(m: Mix) -> i64 { match m { Mix.M(x, k) => { return eat(x) + k; } Mix.N => { return 0; } } }
+fn mout(m: Mix) -> Array[String, 2] { match m { Mix.M(x, k) => { return x; } Mix.N => { return mka("z"); } } }
+fn mxlen(m: Mx) -> i64 { match m { Mx.M(x, s) => { return x[0].len() + s.len(); } Mx.N => { return 0; } } }
+fn wlen(w: Wrp) -> i64 { match w { Wrp.Full(x) => { return x[0].len(); } Wrp.Empty => { return 0; } } }
+
+fn main() {
+    let mut i: i64 = 0;
+    while i < 2 {
+        { let w = Two.Both(mka(f"p{i}"), mka(f"q{i}")); println(f"two:{tlen(w)}"); }
+        { let w = Mix.M(mka(f"a{i}"), 5); println(f"mix:{mlen(w)}"); }
+        { let w = Mix2.M(5, mka(f"b{i}")); println(f"mix2:{mlen2(w)}"); }
+        { let w = Tri.T(mka(f"c{i}"), 5, mka(f"d{i}")); println(f"tri:{trilen(w)}"); }
+        { let w = St.S { a: mka(f"e{i}"), n: 5 }; println(f"struct:{stlen(w)}"); }
+        { let w = St.S { a: mka(f"f{i}"), n: 5 }; println(f"structhand:{sthand(w)}"); }
+        { let w = St1.S { a: mka(f"g{i}") }; println(f"struct1hand:{st1hand(w)}"); }
+        { let w = Mix.M(mka(f"h{i}"), 5); println(f"tuplehand:{mhand(w)}"); }
+        { let w = Mix.M(mka(f"j{i}"), 5); let r = mout(w); println(f"out:{r[1].len()}"); }
+        { let w = Mx.M(mka(f"k{i}"), f"b1515-sib-aaaaaaaaaaaaaaaa"); println(f"heapsib:{mxlen(w)}"); }
+        let src = mka(f"m{i}");
+        { let w = Mix.M(src, 5); println(f"srcmove:{mlen(w)}"); }
+        println(f"srcread:{src[0].len()}");
+        { let w = Wrp.Full(mka(f"n{i}")); println(f"single:{wlen(w)}"); }
+        i = i + 1;
+    }
+}
+"#,
+            &[
+                "two:50",
+                "mix:30",
+                "mix2:30",
+                "tri:55",
+                "struct:30",
+                "structhand:30",
+                "struct1hand:25",
+                "tuplehand:30",
+                "out:25",
+                "heapsib:51",
+                "srcmove:30",
+                "srcread:25",
+                "single:25",
+                "two:50",
+                "mix:30",
+                "mix2:30",
+                "tri:55",
+                "struct:30",
+                "structhand:30",
+                "struct1hand:25",
+                "tuplehand:30",
+                "out:25",
+                "heapsib:51",
+                "srcmove:30",
+                "srcread:25",
+                "single:25",
+            ],
+            "asan_multi_field_variant_owns_its_boxed_array_payload",
+            60,
+        );
+    }
+
     /// B-2026-09-15-3 — the MEMORY half of an `Array[T, N]` local moved into a
     /// user ENUM VARIANT CONSTRUCTOR.
     ///
