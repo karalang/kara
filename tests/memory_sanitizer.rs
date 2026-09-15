@@ -11165,6 +11165,67 @@ fn main() {
         );
     }
 
+    /// B-2026-09-15-4 — the MEMORY half of a `-> ref (T, U)` method result used
+    /// in a value position.
+    ///
+    /// `m.get(h.peek())` over `Map[(String, String), i64]` read the borrow's
+    /// `ptr` as the `{ptr,len,cap}` pair itself and hashed whatever it found:
+    /// SIGSEGV, with 2461 valgrind errors from 4 contexts ("Use of
+    /// uninitialised value of size 8", then "Invalid read of size 8", then
+    /// signal 11). The output half is
+    /// `test_e2e_ref_tuple_return_used_in_a_value_position` in
+    /// `tests/codegen.rs`; both are kept because the two ways this shape
+    /// failed were a crash and a silently wrong answer, and the scalar cell
+    /// (which cannot crash) is invisible to a sanitizer while the heap cell is
+    /// invisible to an output assertion.
+    ///
+    /// `free:` is the free-function spelling, which was already correct — it is
+    /// here as the oracle the method arm was made to match, so a regression
+    /// that reaches only one of the two is still caught.
+    #[test]
+    fn asan_ref_tuple_return_in_a_value_position_is_balanced() {
+        assert_clean_asan_run(
+            r#"
+struct Hold { pr: (String, String) }
+impl Hold { fn peek(ref self) -> ref (String, String) { return self.pr; } }
+fn peekf(h: ref Hold) -> ref (String, String) { return h.pr; }
+
+fn main() {
+    let mut i: i64 = 0;
+    while i < 2 {
+        let h = Hold { pr: (f"b154-left-aaaaaaaaaaaaaaaa-{i}", f"b154-right-bbbbbbbbbbbbbbbb-{i}") };
+
+        let mut m: Map[(String, String), i64] = Map.new();
+        m.insert((f"b154-left-aaaaaaaaaaaaaaaa-{i}", f"b154-right-bbbbbbbbbbbbbbbb-{i}"), 7);
+        match m.get(h.peek()) {
+            Some(v) => { println(f"mapheap:{v}"); }
+            None => { println("mapheap:missing"); }
+        }
+
+        println(f"proj:{h.peek().0.len()}");
+        println(f"free:{peekf(h).1.len()}");
+
+        let p: ref (String, String) = h.peek();
+        println(f"bound:{p.0.len()}");
+
+        i = i + 1;
+    }
+}
+"#,
+            &[
+                "mapheap:7",
+                "proj:28",
+                "free:29",
+                "bound:28",
+                "mapheap:7",
+                "proj:28",
+                "free:29",
+                "bound:28",
+            ],
+            "asan_ref_tuple_return_in_a_value_position_is_balanced",
+        );
+    }
+
     #[test]
     fn asan_array_struct_field_drops_its_elements() {
         assert_clean_asan_run(

@@ -84058,6 +84058,70 @@ fn main() {
     /// The displaced elements are RODATA strings so this program stays memory
     /// clean (17 allocs / 17 frees) while B-2026-09-14-29 is still open; the
     /// moved-in `b` owns a live buffer, which is what the disarm is about.
+    /// B-2026-09-15-4 — a method returning `ref (T, U)` used in a VALUE
+    /// position.
+    ///
+    /// The callee lowers to the `ptr` borrow ABI and the consumer read that
+    /// pointer AS the tuple: SIGSEGV for a `Map[(String, String), i64]` key,
+    /// `p0:0` for an inline `.0`, and `missing` for a scalar-tuple key that had
+    /// just been inserted. `--interp` was correct in all three, so this was a
+    /// run-vs-build divergence as well as a miscompile.
+    ///
+    /// WHAT MAKES THIS THE METHOD ARM OF AN EXISTING RULE RATHER THAN A NEW
+    /// ONE: `free:` below is the FREE-FUNCTION spelling of `proj:`, and it was
+    /// correct before the fix — `compile_call` has loaded the pointee for a
+    /// borrow-returning free-fn call since B-2026-06-07-5. The method path had
+    /// a guard that was supposed to REFUSE this shape instead, and the guard
+    /// had silently stopped firing: it keyed its lookup on the RECEIVER's span
+    /// on the premise that the parser set `MethodCall.span == receiver.span`,
+    /// and B-2026-08-18-24 removed that premise. A guard whose key stops
+    /// matching does not fail loudly; it lets the value through.
+    ///
+    /// `bound:` is the control that localized it — the SAME method is correct
+    /// when its result is bound as a `ref`, because the `let` arm sets
+    /// `compiling_ref_return_let_rhs` first, so the callee was never the
+    /// problem. `mapscalar:` is the cheapest cell: no heap, no crash, just a
+    /// lookup that answered `missing` for a key that is present, which is the
+    /// shape most likely to reach a user as a silently wrong program.
+    #[test]
+    fn test_e2e_ref_tuple_return_used_in_a_value_position() {
+        assert_eq!(
+            run_program(
+                "struct Hold { pr: (String, String) }\n\
+                 struct Sc { pr: (i64, i64) }\n\
+                 impl Hold { fn peek(ref self) -> ref (String, String) { return self.pr; } }\n\
+                 impl Sc { fn peek(ref self) -> ref (i64, i64) { return self.pr; } }\n\
+                 fn peekf(h: ref Hold) -> ref (String, String) { return h.pr; }\n\
+                 fn main() {\n\
+                 \x20   let h = Hold { pr: (f\"left-{40 + 2}\", f\"right-{7 * 6}\") };\n\
+                 \x20   println(f\"proj:{h.peek().0}\");\n\
+                 \x20   let p: ref (String, String) = h.peek();\n\
+                 \x20   println(f\"bound:{p.1}\");\n\
+                 \x20   println(f\"free:{peekf(h).0}\");\n\
+                 \x20   let mut m: Map[(String, String), i64] = Map.new();\n\
+                 \x20   m.insert((f\"left-{40 + 2}\", f\"right-{7 * 6}\"), 9);\n\
+                 \x20   match m.get(h.peek()) {\n\
+                 \x20       Some(v) => { println(f\"mapheap:{v}\"); }\n\
+                 \x20       None => { println(\"mapheap:missing\"); }\n\
+                 \x20   }\n\
+                 \x20   let s = Sc { pr: (11, 12) };\n\
+                 \x20   let mut sm: Map[(i64, i64), i64] = Map.new();\n\
+                 \x20   sm.insert((11, 12), 5);\n\
+                 \x20   match sm.get(s.peek()) {\n\
+                 \x20       Some(v) => { println(f\"mapscalar:{v}\"); }\n\
+                 \x20       None => { println(\"mapscalar:missing\"); }\n\
+                 \x20   }\n\
+                 \x20   println(f\"scalarproj:{s.peek().1}\");\n\
+                 }"
+            )
+            .as_deref(),
+            Some(
+                "proj:left-42\nbound:right-42\nfree:left-42\nmapheap:9\nmapscalar:5\n\
+                 scalarproj:12\n"
+            )
+        );
+    }
+
     #[test]
     fn test_e2e_array_index_store_runs_the_moved_in_source_body_once() {
         assert_eq!(

@@ -1427,25 +1427,61 @@ impl<'ctx> super::Codegen<'ctx> {
             }
         }
 
-        // Borrow-returning method call used outside a `let x = recv.m()`
-        // binding: the result is a `ptr` (the borrow's address); any other
-        // context would mishandle it as a value. The let arm sets
-        // `compiling_ref_return_let_rhs` for the sanctioned site; reject
-        // elsewhere rather than miscompile (sibling of the free-fn gate in
-        // `compile_call`). The MethodCall expr shares the receiver's span,
-        // which is the key the lowering pass used for the call's result
-        // type. Direct use is a tracked follow-on (B-2026-06-07-5).
-        if !self.compiling_ref_return_let_rhs
-            && self.user_ref_method_names.contains(method)
-            && self
+        // Direct use of a borrow-returning method result in a VALUE position
+        // (`m.get(h.peek())`, `h.peek().0`). The callee lowers to the `ptr`
+        // borrow ABI; emit it once with the bind-directly gate bypassed, then
+        // load the pointee so the consuming context sees the borrowed value.
+        // Exactly what `compile_call` has done for the FREE-FUNCTION spelling
+        // since B-2026-06-07-5 — and the free-fn spelling of every cell below
+        // is correct today, which is what makes this the method arm of one
+        // rule rather than a new policy.
+        //
+        // B-2026-09-15-4. What stood here was a GUARD that refused this shape
+        // rather than lowering it, and it had stopped firing: it keyed the
+        // `ref_return_inner_types` lookup on `object.span` (the RECEIVER),
+        // on the premise — true when it was written — that the parser set
+        // `MethodCall.span == receiver.span`. B-2026-08-18-24 removed that
+        // premise, and a guard whose key no longer matches does not fail
+        // loudly, it just lets the value through. Measured on `h.peek()`:
+        // `obj=(257,1) obj_hit=false  call=(257,8) call_hit=true` — same
+        // offset, different length. The consumer then read a `ptr` as the
+        // tuple itself: SIGSEGV for `Map[(String, String), i64]`, `p0:0` for
+        // an inline `.0`, and `missing` for a scalar-tuple key that is
+        // present. The interpreter was correct in all three, so this was a
+        // run-vs-build divergence, and `let p: ref (..) = h.peek()` was
+        // correct throughout because the let arm sets the gate below first.
+        //
+        // The `let` arm's own path is unaffected: it sets
+        // `compiling_ref_return_let_rhs` before compiling the RHS, so the
+        // gate declines here and the binding still gets the raw `ptr`.
+        if !self.compiling_ref_return_let_rhs && self.user_ref_method_names.contains(method) {
+            if let Some(inner_te) = self
                 .ref_return_inner_types
-                .contains_key(&(object.span.offset, object.span.length))
-        {
-            return Err(format!(
-                "borrow-returning method call `.{method}(...)` must be bound directly with \
-                 `let x = ...{method}(...)` before use; direct use of a `-> ref T` result \
-                 is not yet supported (B-2026-06-07-5)"
-            ));
+                .get(&(call_span.offset, call_span.length))
+                .cloned()
+                // TUPLE INNERS ONLY, and the bound is measured rather than
+                // cautious. An `-> ref Array[String, N]` inner is DECLINED
+                // today by the index lowering ("Index operator applied to
+                // non-array type") — a loud compile-time refusal. Loading its
+                // pointee here makes that program compile and then
+                // double-free at run time (`free(): double free detected in
+                // tcache 2`), because the loaded array is a second owner of
+                // the element buffers. Trading a compile error for a runtime
+                // abort is strictly worse, so the Array and named-struct
+                // inners keep their existing refusals and stay on the row.
+                .filter(|te| matches!(te.kind, TypeKind::Tuple(_)))
+            {
+                let inner = self.llvm_type_for_type_expr(&inner_te);
+                self.compiling_ref_return_let_rhs = true;
+                let ptr_res =
+                    self.compile_method_call(object, method, args, call_span, args_close_span);
+                self.compiling_ref_return_let_rhs = false;
+                let ptr = ptr_res?.into_pointer_value();
+                return Ok(self
+                    .builder
+                    .build_load(inner, ptr, "ref.direct.use.method")
+                    .unwrap());
+            }
         }
 
         // A method whose RECEIVER is a borrow-returning user accessor
