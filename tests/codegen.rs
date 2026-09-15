@@ -85076,7 +85076,22 @@ fn main() {
             Some("dD1\na0:3\ndD3\ndD2\n")
         );
         // A FIELD-rooted array (`h.xs[0] = ..`) reaches the same emitter
-        // through its synth-identifier path.
+        // through its synth-identifier path, and lands on the SAME transcript as
+        // the local-array and `Vec` cells above: `dD1` at the store for the
+        // displaced element, then the field walk at scope exit for the two
+        // survivors.
+        //
+        // THIS CELL SHIPPED WITH A STALE EXPECTATION -- `dD1 a0:3`, recorded
+        // without the two survivors -- and that value matched NO tree on `main`.
+        // It is this fix (`bfeeb86`, the displaced element's release) composed
+        // with `645ea3b`'s Array-typed-struct-field element walk, which had
+        // already landed. Measured on the parent commit `8a68502`, the
+        // field-rooted output was `a0:3 dD3 dD2`: the walk present, the
+        // displaced body missing. So `dD1 a0:3` could only have come from a
+        // branch forked BEFORE `645ea3b`, measured there, and not re-run after
+        // rebasing onto it -- the same pre-rebase/post-push window that
+        // B-2026-09-01-27 records. Corrected here rather than in a new row,
+        // because the behaviour was already right and only the pin was wrong.
         assert_eq!(
             run_program(&format!(
                 "{H}struct H2 {{ xs: Array[D, 2] }}\n\
@@ -85087,7 +85102,7 @@ fn main() {
                  }}"
             ))
             .as_deref(),
-            Some("dD1\na0:3\n")
+            Some("dD1\na0:3\ndD3\ndD2\n")
         );
     }
 
