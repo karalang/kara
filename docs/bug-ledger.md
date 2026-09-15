@@ -92,8 +92,8 @@ distinguish "bugs flattening" from "we stopped writing them down."
 
 | class | total |
 |---|---|
+| miscompile | 409 |
 | run-vs-build | 409 |
-| miscompile | 407 |
 | leak | 347 |
 | double-free | 233 |
 | missing-feature | 198 |
@@ -110,7 +110,7 @@ distinguish "bugs flattening" from "we stopped writing them down."
 
 | surface | total |
 |---|---|
-| codegen | 1751 |
+| codegen | 1753 |
 | interp | 439 |
 | typecheck | 300 |
 | other | 90 |
@@ -173,7 +173,6 @@ _Generated from `bug-ledger.jsonl` by `scripts/bug-curve.py` (2026-05-20 → 202
 | B-2026-09-13-14 | 2026-09-13 | typecheck | medium | PROMOTE `partial_move_of_drop_enum` FROM `Warn` TO `Deny`, which is what actually removes B-2026-09-13-12's run-vs-build divergence -- blocked on triaging the 28 codegen + 15 memory_sanitizer fixtures written in the shape, each the regression test for a bug fixed in it, exactly as B-2026-09-01-43 resolved the struct rule's eight | — |
 | B-2026-09-13-23 | 2026-09-13 | codegen | low | AN `Array[String, N]` INSIDE A TUPLE LEAKS ITS ELEMENT BUFFERS -- 20 B in 2 blocks at -O0 for `let t: (Array[String, 2], i64) = ([f"a{n}", f"b{n}"], 7)`, while the SAME array in a plain `let` is clean. PRE-EXISTING rather than introduced by B-2026-09-10-38: the `Array[..]` PREFIX spelling, which typechecked before that fix, leaks the identical 20 B against the PRE-FIX compiler -- so the tuple POSITION owns the defect and the annotation fix merely made it reachable by a second spelling | — |
 | B-2026-09-13-24 | 2026-09-13 | codegen+interp | medium | A USER ENUM'S VARIANT-CONSTRUCTOR TEMP LOSES ITS `Drop` BODY -- `takeit(Ho.Full(R { id: 5 }))` over `enum Ho[T] { Full(T), Empty }` prints `f:5` alone on every COMPILED surface against `--interp`'s `f:5 dR5`, and the newly-enabled qualified spelling `Ho[R].Full(..)` loses it on BOTH backends, while the seeded `Option[R].Some(..)` is correct everywhere -- so the seeded pair has an owner for the ctor temp and a user enum has none | — |
-| B-2026-09-13-30 | 2026-09-13 | codegen | low | A METHOD-CALL KEY TEMPORARY STILL LEAKS AT EVERY `Map` LOOKUP -- `m.get(g.make(0))` over `Map[(String, String), i64]` loses 32 B in 2 blocks because a method's return type is absent from `fn_return_type_exprs`, so the nameless-key leg B-2026-09-13-20 added has no `TypeExpr` to resolve | — |
 | B-2026-09-13-31 | 2026-09-13 | codegen | medium | Three map katas are 5-8% slower under the group-scan default, and no runtime signal is known that would route them back to the byte walk | B-2026-09-07-53 |
 | B-2026-09-14-5 | 2026-09-14 | codegen | medium | THE COMPILED BACKENDS LOSE AN OWED `Option` PAYLOAD BODY FOR AN OWNED PARAM -- `fn eat(o: Option[(R, i64)]) -> i64 { match o { Some(t) => return t.1 } }` moves NOTHING out and still prints `got:9 end` on JIT/AOT against the interpreter's correct `dR5 got:9 end`; with two Drop-bearing elements and one moved out the compiled side runs NEITHER, so the direction is the reverse of B-2026-09-13-5's | — |
 | B-2026-09-14-6 | 2026-09-14 | codegen+interp | medium | AN `Option` PAYLOAD SUB-VALUE MOVED OUT RUNS ITS `Drop` BODY TWICE ON ALL THREE BACKENDS in two spellings -- a NAMED-LOCAL argument, and a payload whose field is heap-carrying -- so the A/B parity rule sees nothing and the duplicate is invisible to every gate | — |
@@ -194,6 +193,8 @@ _Generated from `bug-ledger.jsonl` by `scripts/bug-curve.py` (2026-05-20 → 202
 | B-2026-09-15-1 | 2026-09-15 | codegen | medium | TWO SSO RAIL NUMBERS MOVED BY MORE THAN 40 POINTS AND NEITHER IS ATTRIBUTED -- `lexlike`'s +34% regression (this track's stated open question) became a 12-14% WIN between 2026-09-12 and 2026-09-15, and `substr` is now the worst rail at +34% having read as +5%. `substr`'s move is explained (it was fanning out; `bench.sh` did not pin `KARAC_AUTO_PAR=0` until 2026-09-15). `lexlike`'s is NOT: it is the one rail the analyzer never fans out, so both numbers are sequential and directly comparable. Reachable only at KARAC_SSO=1, which is off by default. | — |
 | B-2026-09-15-2 | 2026-09-15 | codegen | high | MOVING A NAMED `Array[T, N]` LOCAL INTO AN ENCLOSING ARRAY LITERAL DOUBLE-FREES ITS ELEMENT BUFFERS ON EVERY COMPILED BACKEND -- `let n: Array[Array[String, 2], 1] = [a];` over `let a: Array[String, 2] = [f"..", f".."]` aborts with `free(): double free detected in tcache 2` at exit 134 against a correct `--interp`, and `karac check` prints `All checks passed` with NO diagnostic of any kind | — |
 | B-2026-09-15-3 | 2026-09-15 | codegen | medium | AN `Array[T, N]` LOCAL MOVED INTO A USER ENUM'S VARIANT CONSTRUCTOR STILL DANGLES ON EVERY COMPILED BACKEND when the enum dies FIRST -- `{ let w = Wrp.Full(a); .. }` then `println(a[0])` prints garbage at exit 0 against a correct `--interp`, because the constructor site stands the caller's element drop down BEFORE the payload is compiled and so cannot be handed the defensive copy that closed the argument spellings | — |
+| B-2026-09-15-4 | 2026-09-15 | codegen | high | A METHOD RETURNING `ref (T, U)` IS MISHANDLED AT EVERY VALUE-POSITION CONSUMER -- `m.get(h.peek())` over a heap tuple SIGSEGVs, `h.peek().0` prints `0` instead of the field, and a scalar-tuple key answers `missing` for a key that is present, while binding the same result as a `ref` is correct and the by-value spelling of all three cells is correct | — |
+| B-2026-09-15-5 | 2026-09-15 | codegen | medium | A MAP-LOOKUP KEY TEMPORARY'S USER `Drop` BODY NEVER RUNS -- `m.get(mkd(0))` over `Map[Dk, i64]` with `impl Drop for Dk` reclaims the key's storage but skips the `Dk.drop` call, in the free-function and method spellings alike, because the key-reclaim legs emit the memory walk without the separate user-`Drop` call every other drop site pairs it with | — |
 
 ### Relocated
 
@@ -2563,6 +2564,7 @@ _Generated from `bug-ledger.jsonl` by `scripts/bug-curve.py` (2026-05-20 → 202
 | B-2026-09-13-27 | interp+codegen | medium | A `let`-BOUND TUPLE CARRYING A LOCAL'S PROJECTED FIELD IS RUN-VS-BUILD DIVERGENT -- `let w = if c { (t.r, 1) } else { . | d78d198 |
 | B-2026-09-13-28 | interp+codegen | medium | THE BARE-BLOCK SPELLING OF B-2026-09-01-17 IS RUN-VS-BUILD DIVERGENT, NOT AN AGREED GAP -- `let _ = { W { r: t.r, b: 1 } };` runs the projected leaf'… | 122b991 |
 | B-2026-09-13-29 | codegen | medium | A DISCARDED `Option`/`Result` WHOSE PAYLOAD IS AN ARRAY RUNS ITS ELEMENT BODIES ON THE INTERPRETER AND NOT ON EITHER COMPILED BACKEND -- B-2026-09-10… | 1d73a30 |
+| B-2026-09-13-30 | codegen | low | A METHOD-CALL KEY TEMPORARY LEAKS AT EVERY `Map` LOOKUP -- `m.get(g.make(0))` over `Map[(String, String), i64]` loses 32 B in 2 blocks, and so do the… | 6de7a86 |
 | B-2026-09-14-1 | codegen | low | AN INDEX-ASSIGN INTO AN `Array[String, N]` LEAKS THE DISPLACED BUFFER -- `a[0] = f"MUTATED-{n}"` over `let mut a: Array[String, 2]` loses 10 B in 1 b… | 7d0f15e |
 | B-2026-09-14-2 | interp+codegen | medium | AN `Option`/`Result` WHOSE PAYLOAD IS A `Vec` RUNS ITS ELEMENT `Drop` BODIES NOWHERE UNLESS IT IS DISCARDED -- a BOUND envelope, a consuming `match`… | 5143688 |
 | B-2026-09-14-3 | codegen | medium | AN ENUM TUPLE VARIANT USED AS A FIRST-CLASS FUNCTION VALUE ICEs CODEGEN -- `let g = Col.A; g(3)` passes `karac check` and then panics in `closures.rs… | 09e2e4b |
