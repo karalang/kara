@@ -68,6 +68,48 @@ impl<'ctx> super::Codegen<'ctx> {
     /// String is cloned/moved: the bytes travel inside it.
     pub(super) const STRING_DESCRIPTOR_BYTES: u64 = 24;
 
+    /// Maximum bytes an inline descriptor can hold. Mirrors
+    /// `RuntimeKaracString::INLINE_CAPACITY`, exactly as
+    /// [`STRING_DESCRIPTOR_BYTES`](Self::STRING_DESCRIPTOR_BYTES) mirrors
+    /// `size_of::<RuntimeKaracString>()`.
+    ///
+    /// **It is a mirror rather than a reference, and not by preference.**
+    /// `karac-runtime` IS a dependency under the `llvm` feature, so
+    /// `karac_runtime::RuntimeKaracString::INLINE_CAPACITY` compiles — and
+    /// then fails to LINK, for every binary that links `libkarac`. Pulling
+    /// the runtime rlib in makes the linker keep its `#[no_mangle] karac_*`
+    /// surface (the link line forces it with
+    /// `--export-dynamic-symbol=karac_*`), and that surface references
+    /// `KARAC_SPAWN_SITES_ENABLED` — an `extern static` that CODEGEN EMITS
+    /// INTO COMPILED PROGRAMS and that nothing in the compiler defines. The
+    /// build then dies with `undefined symbol: KARAC_SPAWN_SITES_ENABLED` on
+    /// `karac` itself and on unrelated test bins like `drop_fuzz`.
+    /// `karac_jit_runner` gets away with it because a JIT'd module supplies
+    /// those globals; the compiler has no such module. Measured while
+    /// landing B-2026-09-15-13.
+    ///
+    /// So the drift has to be caught by a test instead, and it is — by
+    /// `codegen_inline_encoding_contract` in `runtime/src/sso.rs`, which
+    /// restates these three constants and asserts the bytes they imply
+    /// against `write_inline` itself, at every length from 0 to the
+    /// capacity. Change either side and that test fails.
+    ///
+    /// Worth recording why codegen names this number at all:
+    /// `karac_string_try_inline_into` was built to keep it out, answering a
+    /// VERDICT rather than taking a threshold, so a caller branched on the
+    /// answer and never learned the bound. Emitting the encoding inline
+    /// gives that up — a fits-test needs a constant to compare against.
+    /// That was a deliberate trade, at 10x on the measured rail.
+    pub(super) const STRING_INLINE_CAPACITY: u64 = 23;
+
+    /// Byte 23 of an inline descriptor: bit 7 set, bits 0..=6 the length.
+    /// The low byte of `INLINE_FLAG` (bit 63 of `cap`) on a little-endian
+    /// target, which `runtime/src/sso.rs` enforces with a `compile_error!`
+    /// on any other endianness. `codegen_inline_encoding_contract` in
+    /// `runtime/src/sso.rs` asserts the whole encoding against the runtime's
+    /// own `write_inline` rather than trusting this comment.
+    const STRING_INLINE_FLAG_BYTE: u64 = 0x80;
+
     /// The owned-heap predicate: `(i64) cap > 0`. True only when the
     /// descriptor owns a malloc'd buffer that a drop must `free` — inline
     /// (`cap < 0`) and static-literal (`cap == 0`) both answer false.
@@ -171,6 +213,106 @@ impl<'ctx> super::Codegen<'ctx> {
     /// actual precondition, and it is what a new target would be judged by.
     pub(super) fn sso_on(&self) -> bool {
         sso_enabled() && !crate::target::active_target_is_wasm()
+    }
+
+    /// Emit `String.substring`'s inline-construction fast path as IR, in
+    /// place of a call to `karac_string_try_inline_into`.
+    ///
+    /// From the current block: branch to a fresh fast block when `n` fits
+    /// inline, else to `on_too_long` (the caller's heap arm). The fast block
+    /// writes the descriptor and branches to `on_inlined`.
+    ///
+    /// The three writes are `RuntimeKaracString::write_inline`'s three
+    /// writes, in its order: the bytes, a zero-fill of the unused content
+    /// bytes, and the byte-23 flag/length trailer. The zero-fill is not
+    /// cosmetic — `as_bytes` reads only `byte_len()` of them, but a
+    /// descriptor compared or hashed as 24 opaque bytes would otherwise see
+    /// leftover stack.
+    ///
+    /// **Why not the call.** It is an OPTIMIZATION BARRIER, not merely call
+    /// overhead: nothing in the surrounding loop can be simplified or
+    /// vectorised across an opaque callee, and on the inline path there is no
+    /// `malloc` for its cost to hide behind. Measured on
+    /// `bench/sso/substr.kara`, 10M iterations, auto-par pinned, x86-64:
+    /// **212ms through the call, 21ms through these instructions**, against a
+    /// 125ms `KARAC_SSO=0` baseline — so the call cost more than the malloc it
+    /// exists to avoid. Two other explanations were tested and refuted:
+    /// annotating the declaration `memory(argmem: readwrite) nounwind
+    /// willreturn` recovered nothing (213ms), which rules out aliasing, and
+    /// folding the comparison's literal side recovered nothing (211ms), which
+    /// rules out the store-to-load-forwarding shape the spike doc predicted.
+    /// B-2026-09-15-13.
+    ///
+    /// The JIT is NOT a second path here — `karac run` goes through this same
+    /// codegen — so after this change `karac_string_try_inline_into` has no
+    /// caller in the compiler at all. It stays as a `#[no_mangle]` runtime
+    /// export (removing ABI surface is a separate decision), but it is no
+    /// longer on any hot path. Its sibling `write_inline` still owns the
+    /// encoding, and `codegen_inline_encoding_contract` in
+    /// `runtime/src/sso.rs` asserts these instructions against it.
+    ///
+    /// A negative `n` cannot arise from the validated `end - start` at the
+    /// only call site, but the fits-test is UNSIGNED, so one would read as
+    /// enormous and take the heap arm — the same refusal the runtime makes,
+    /// for the same reason.
+    pub(super) fn sso_emit_inline_construct(
+        &self,
+        src: PointerValue<'ctx>,
+        n: IntValue<'ctx>,
+        out: PointerValue<'ctx>,
+        on_inlined: inkwell::basic_block::BasicBlock<'ctx>,
+        on_too_long: inkwell::basic_block::BasicBlock<'ctx>,
+        prefix: &str,
+    ) {
+        let fn_val = self.current_fn.unwrap();
+        let i64_t = self.context.i64_type();
+        let i8_t = self.context.i8_type();
+        let cap = i64_t.const_int(Self::STRING_INLINE_CAPACITY, false);
+
+        let fits = self
+            .builder
+            .build_int_compare(IntPredicate::ULE, n, cap, &format!("{prefix}.fits"))
+            .unwrap();
+        let fast_bb = self
+            .context
+            .append_basic_block(fn_val, &format!("{prefix}.fast"));
+        self.builder
+            .build_conditional_branch(fits, fast_bb, on_too_long)
+            .unwrap();
+
+        self.builder.position_at_end(fast_bb);
+        self.builder.build_memcpy(out, 1, src, 1, n).unwrap();
+        let tail = unsafe {
+            self.builder
+                .build_gep(i8_t, out, &[n], &format!("{prefix}.tailp"))
+                .unwrap()
+        };
+        let tail_len = self
+            .builder
+            .build_int_nsw_sub(cap, n, &format!("{prefix}.tailn"))
+            .unwrap();
+        self.builder
+            .build_memset(tail, 1, i8_t.const_zero(), tail_len)
+            .unwrap();
+        let flag_p = unsafe {
+            self.builder
+                .build_gep(i8_t, out, &[cap], &format!("{prefix}.flagp"))
+                .unwrap()
+        };
+        let len_b = self
+            .builder
+            .build_int_truncate(n, i8_t, &format!("{prefix}.lenb"))
+            .unwrap();
+        let flag = self
+            .builder
+            .build_or(
+                len_b,
+                i8_t.const_int(Self::STRING_INLINE_FLAG_BYTE, false),
+                &format!("{prefix}.flag"),
+            )
+            .unwrap();
+        self.builder.build_store(flag_p, flag).unwrap();
+        self.builder.build_unconditional_branch(on_inlined).unwrap();
     }
 
     /// Promote an inline String at `slot` into ordinary heap form, in place.
@@ -460,5 +602,30 @@ impl<'ctx> super::Codegen<'ctx> {
         alloca_b
             .build_alloca(self.vec_struct_type(), &format!("{prefix}.spill"))
             .ok()
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    /// The flag/length trailer must be the descriptor's LAST byte: an
+    /// off-by-one here writes one byte past a 24-byte descriptor. The
+    /// encoding itself is cross-checked against the runtime's own
+    /// `write_inline` by `codegen_inline_encoding_contract` in
+    /// `runtime/src/sso.rs` — it cannot be checked from here, because
+    /// `libkarac` cannot link `karac-runtime` (see
+    /// `STRING_INLINE_CAPACITY`). B-2026-09-15-13.
+    #[test]
+    fn sso_inline_capacity_leaves_room_for_the_trailer() {
+        type Cg<'a> = crate::codegen::Codegen<'a>;
+        assert_eq!(
+            Cg::STRING_INLINE_CAPACITY + 1,
+            Cg::STRING_DESCRIPTOR_BYTES,
+            "the flag/length trailer must be the descriptor's last byte",
+        );
+        assert_eq!(
+            Cg::STRING_INLINE_FLAG_BYTE,
+            0x80,
+            "flag is bit 7 of byte 23"
+        );
     }
 }

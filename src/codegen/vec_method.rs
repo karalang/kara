@@ -2144,13 +2144,16 @@ impl<'ctx> super::Codegen<'ctx> {
                 // `self.src.substring(a, b)`, not `s[a..b]` — so this is where
                 // the no-malloc win has to land.
                 //
-                // The runtime is asked for a VERDICT, not a threshold: it
-                // writes `out` and answers 1 when the bytes fit, or answers 0
-                // and leaves `out` alone. So `INLINE_CAPACITY` and the byte
-                // packing stay solely in `runtime/src/sso.rs`, and the heap arm
-                // below keeps its OWN buffer contract (exactly `n` bytes from
-                // `karac_alloc_or_panic`, no NUL) rather than inheriting
-                // `karac_string_slice_into`'s different one.
+                // The inline arm writes the descriptor ITSELF rather than
+                // asking the runtime for a verdict — see
+                // `sso_emit_inline_construct`, and B-2026-09-15-13 for why the
+                // call was 10x the cost of the six instructions it hid. The
+                // encoding still has one owner: the capacity is read from
+                // `RuntimeKaracString::INLINE_CAPACITY` at compile time and
+                // the byte packing is asserted against `write_inline` itself.
+                // The heap arm below keeps its OWN buffer contract (exactly
+                // `n` bytes from `karac_alloc_or_panic`, no NUL) rather than
+                // inheriting `karac_string_slice_into`'s different one.
                 let inline_bb = if self.sso_on() {
                     Some(self.context.append_basic_block(fn_val, "ss.inline"))
                 } else {
@@ -2182,8 +2185,16 @@ impl<'ctx> super::Codegen<'ctx> {
                 self.builder.build_store(result_slot, empty_agg).unwrap();
                 self.builder.build_unconditional_branch(cont_bb).unwrap();
 
-                // Inline branch: hand the bytes to the runtime encoder and
-                // fall through to the copy branch only if it declines.
+                // Inline branch: write the descriptor here, and fall through
+                // to the copy branch only when the bytes do not fit.
+                //
+                // This used to CALL `karac_string_try_inline_into`, which was
+                // 10x slower than emitting the same six instructions —
+                // 212ms against 21ms on `bench/sso/substr.kara`, with the
+                // no-SSO baseline at 125ms, so the call cost more than the
+                // `malloc` it exists to avoid. It is an optimization barrier
+                // rather than call overhead: nothing in the surrounding loop
+                // simplifies across an opaque callee. B-2026-09-15-13.
                 if let Some(inline_bb) = inline_bb {
                     self.builder.position_at_end(inline_bb);
                     let n = self
@@ -2195,29 +2206,7 @@ impl<'ctx> super::Codegen<'ctx> {
                             .build_gep(self.context.i8_type(), recv_data, &[start], "ss.inl.src")
                             .unwrap()
                     };
-                    let ok = self
-                        .builder
-                        .build_call(
-                            self.runtime_fns.karac_string_try_inline_into_fn,
-                            &[src.into(), n.into(), result_slot.into()],
-                            "ss.inl.ok",
-                        )
-                        .unwrap()
-                        .try_as_basic_value()
-                        .unwrap_basic()
-                        .into_int_value();
-                    let inlined = self
-                        .builder
-                        .build_int_compare(
-                            inkwell::IntPredicate::NE,
-                            ok,
-                            self.context.i8_type().const_zero(),
-                            "ss.inl.done",
-                        )
-                        .unwrap();
-                    self.builder
-                        .build_conditional_branch(inlined, cont_bb, copy_bb)
-                        .unwrap();
+                    self.sso_emit_inline_construct(src, n, result_slot, cont_bb, copy_bb, "ss.inl");
                 }
 
                 // Copy branch: malloc + memcpy from data+start.

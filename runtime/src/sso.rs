@@ -358,4 +358,70 @@ mod tests {
         assert_eq!(s.as_bytes(), &bytes[..]);
         // The whole 23-byte payload survives the pack/unpack round trip.
     }
+
+    /// **The codegen twin's contract.** `String.substring` no longer CALLS
+    /// `karac_string_try_inline_into` — since B-2026-09-15-13 it emits the
+    /// encoding as IR, because the call cost 10x what the instructions do
+    /// (212ms against 21ms on `bench/sso/substr.kara`, on a rail whose
+    /// no-SSO baseline is 125ms; the call was an optimization barrier, not
+    /// merely overhead). `write_inline` below is still the encoding's one
+    /// owner, so the two must agree byte for byte.
+    ///
+    /// They cannot be checked from the codegen side: `libkarac` cannot link
+    /// `karac-runtime`, because doing so drags in the `#[no_mangle] karac_*`
+    /// surface, which references `KARAC_SPAWN_SITES_ENABLED` — an extern
+    /// static that codegen emits into COMPILED PROGRAMS and that the
+    /// compiler itself never defines. So the check lives here, on the side
+    /// that can see `write_inline` directly.
+    ///
+    /// The three constants below are `src/codegen/sso.rs`'s
+    /// `STRING_DESCRIPTOR_BYTES`, `STRING_INLINE_CAPACITY` and
+    /// `STRING_INLINE_FLAG_BYTE`, restated as literals, and the three writes
+    /// are the IR `sso_emit_inline_construct` emits, in order. Change either
+    /// side and this fails.
+    #[test]
+    fn codegen_inline_encoding_contract() {
+        const CODEGEN_DESCRIPTOR_BYTES: usize = 24;
+        const CODEGEN_INLINE_CAPACITY: usize = 23;
+        const CODEGEN_FLAG_BYTE: u8 = 0x80;
+
+        assert_eq!(
+            core::mem::size_of::<RuntimeKaracString>(),
+            CODEGEN_DESCRIPTOR_BYTES,
+            "descriptor size drifted from src/codegen/sso.rs STRING_DESCRIPTOR_BYTES",
+        );
+        assert_eq!(
+            RuntimeKaracString::INLINE_CAPACITY,
+            CODEGEN_INLINE_CAPACITY,
+            "INLINE_CAPACITY drifted from src/codegen/sso.rs STRING_INLINE_CAPACITY",
+        );
+
+        // Every length the codegen fast path accepts, both ends included:
+        // 0 (routed elsewhere by the caller, but the encoding must still
+        // agree) and the exact capacity, where the zero-fill is empty and
+        // the trailer is the only write after the copy.
+        for n in 0..=CODEGEN_INLINE_CAPACITY {
+            let bytes: Vec<u8> = (0..n).map(|i| b'a' + (i % 26) as u8).collect();
+
+            let mut rt = core::mem::MaybeUninit::<RuntimeKaracString>::uninit();
+            // SAFETY: `rt` is writable for a whole descriptor and
+            // `bytes.len() <= INLINE_CAPACITY`.
+            let runtime_bytes = unsafe {
+                RuntimeKaracString::write_inline(rt.as_mut_ptr(), &bytes);
+                let init = rt.assume_init();
+                let p = &init as *const RuntimeKaracString as *const u8;
+                core::slice::from_raw_parts(p, CODEGEN_DESCRIPTOR_BYTES).to_vec()
+            };
+
+            let mut codegen_bytes = vec![0u8; CODEGEN_DESCRIPTOR_BYTES];
+            codegen_bytes[..n].copy_from_slice(&bytes); // memcpy(out, src, n)
+            codegen_bytes[n..CODEGEN_INLINE_CAPACITY].fill(0); // memset(out+n, 0, CAP-n)
+            codegen_bytes[CODEGEN_INLINE_CAPACITY] = CODEGEN_FLAG_BYTE | (n as u8); // trailer
+
+            assert_eq!(
+                codegen_bytes, runtime_bytes,
+                "codegen and write_inline disagree at n={n}",
+            );
+        }
+    }
 }
