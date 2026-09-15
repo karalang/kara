@@ -2500,6 +2500,54 @@ impl<'ctx> super::Codegen<'ctx> {
         Some((data_ptr, arr_ty))
     }
 
+    /// True when `name` is a fixed `Array[T, N]` index-assign target whose
+    /// ELEMENT is a heap-owning `{ptr,len,cap}` — the Array peer of the
+    /// `vec_elem_types` lookup the index-assign moved-source suppression makes
+    /// for a `Vec` container (B-2026-09-14-30).
+    ///
+    /// Reads the same LLVM array type the store itself resolves, including the
+    /// `ref`-bound spelling: a `mut ref Array[Vec[i64], 2]` param indexes the
+    /// CALLER's array, which still owns its elements, so a source moved in
+    /// there must be disarmed too (measured — without it the `ref` cell aborts
+    /// identically to the local one). Unlike `ref_array_index_target` this
+    /// takes no builder, so it stays usable from a predicate.
+    pub(super) fn array_index_target_owns_heap_elem(&self, name: &str) -> bool {
+        let Some(arr_ty) = self
+            .borrow_vars
+            .ref_params
+            .get(name)
+            .copied()
+            .or_else(|| self.variables.get(name).map(|slot| slot.ty))
+        else {
+            return false;
+        };
+        matches!(arr_ty, BasicTypeEnum::ArrayType(at)
+            if self.llvm_ty_is_vec_struct(at.get_element_type()))
+    }
+
+    /// Element `TypeExpr` of an index-assign target rooted at a bare
+    /// `Array[T, N]` IDENTIFIER (B-2026-09-14-30).
+    ///
+    /// Deliberately NOT folded into [`Self::vec_index_elem_type_expr`]'s
+    /// `Identifier` arm. That arm reads `var_elem_type_exprs`, which records
+    /// Vec / Slice / Map bindings; an `Array` local records its element in the
+    /// separate `array_elem_type_exprs`, and `var_types.rs` documents that
+    /// split as load-bearing — the shared resolver's other callers drive clone
+    /// and index-lowering decisions off the same answer, so widening it there
+    /// would change behaviour far outside this one suppression. Its
+    /// `FieldAccess` arm already resolves an `Array[E, N]` field
+    /// (B-2026-08-27-32); this is the bare-local leg of the same idea, scoped
+    /// to the one call site that needs it.
+    pub(super) fn array_index_target_elem_type_expr(&self, object: &Expr) -> Option<TypeExpr> {
+        let ExprKind::Identifier(name) = &object.kind else {
+            return None;
+        };
+        self.var_types
+            .array_elem_type_exprs
+            .get(name.as_str())
+            .cloned()
+    }
+
     pub(super) fn compile_index(
         &mut self,
         object: &Expr,

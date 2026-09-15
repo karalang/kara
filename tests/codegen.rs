@@ -84040,6 +84040,42 @@ fn main() {
         );
     }
 
+    /// B-2026-09-14-30, the `Drop`-BODY half of the moved-in-source disarm.
+    ///
+    /// The memory half is `asan_array_index_store_disarms_the_moved_in_source`
+    /// in `tests/memory_sanitizer.rs`. This asserts the OTHER thing the second
+    /// arm does: `suppress_user_drop_for_var` retracts the moved-from source's
+    /// own `Drop` registration, so `dD3` runs ONCE — from the array element
+    /// that now owns the value — rather than once there and once for `b`.
+    ///
+    /// A KNOWN GAP IS PINNED HERE AS MEASURED RATHER THAN FIXED: the DISPLACED
+    /// element's body (`dD1`) runs on `--interp` and on NO compiled backend.
+    /// That is B-2026-09-14-29, whose own filing left "does the interpreter run
+    /// `dD1`?" unmeasured — it does, so that row is a run-vs-build divergence
+    /// as well as a leak. Asserting the compiled output as it stands means a
+    /// change either way is noticed here.
+    ///
+    /// The displaced elements are RODATA strings so this program stays memory
+    /// clean (17 allocs / 17 frees) while B-2026-09-14-29 is still open; the
+    /// moved-in `b` owns a live buffer, which is what the disarm is about.
+    #[test]
+    fn test_e2e_array_index_store_runs_the_moved_in_source_body_once() {
+        assert_eq!(
+            run_program(
+                "struct D { id: i64, s: String }\n\
+                 impl Drop for D { fn drop(mut ref self) { println(f\"dD{self.id}\"); } }\n\
+                 fn main() {\n\
+                 \x20   let mut a: Array[D, 2] = [D { id: 1, s: \"b30-static-one\" }, D { id: 2, s: \"b30-static-two\" }];\n\
+                 \x20   let b = D { id: 3, s: f\"b30-heap-payload\" };\n\
+                 \x20   a[0] = b;\n\
+                 \x20   println(f\"a0:{a[0].id}\");\n\
+                 }"
+            )
+            .as_deref(),
+            Some("a0:3\ndD3\ndD2\n")
+        );
+    }
+
     /// B-2026-08-21-4 — `as_slice()` on a `ref`-mode receiver, and a call
     /// declared to return `Slice[T]`.
     ///

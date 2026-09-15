@@ -11031,6 +11031,140 @@ fn main() {
         );
     }
 
+    /// B-2026-09-14-30 — the MOVED-IN SOURCE of an `Array` index-store gives up
+    /// its own cleanup, which is the half B-2026-09-14-1 left open.
+    ///
+    /// That row freed the element the store DISPLACES; this one is the other
+    /// side of the same transfer. `a[0] = v3` for a named local `v3` moved its
+    /// `{ptr,len,cap}` into the element slot while `v3`'s scope-exit cleanup
+    /// stayed armed, so the array's element drop and `v3` both freed the same
+    /// 32-byte buffer: `free(): double free detected in tcache 2`, exit 134 on
+    /// the JIT, on a default `karac build`, and at `-O0`. The interpreter was
+    /// correct throughout, so this was a run-vs-build divergence as well as a
+    /// memory-safety error.
+    ///
+    /// `vectwin` IS THE ORACLE, and measuring it FIRST is what said this was one
+    /// arm rather than the whole indexed-store family: the identical program
+    /// over `Vec[Vec[i64]]` is clean at 18 allocs / 18 frees. The `Vec` leg has
+    /// suppressed the moved-in source since B-2026-06-19-7; the `Array` leg
+    /// never did, because the gate asks `vec_elem_types` / `var_elem_type_exprs`
+    /// and an `Array` local records its element in `array_elem_type_exprs`.
+    ///
+    /// `structelem` COVERS THE SECOND ARM, the one that disarms a moved-in
+    /// struct's heap-field caps. Its displaced elements are deliberately
+    /// RODATA (`"b30-static-one"`, cap 0): a heap-bearing displaced element
+    /// still leaks under B-2026-09-14-29, which is a different row and does not
+    /// belong in a fixture asserting a clean run. The MOVED-IN `b` does own a
+    /// live buffer, which is what arms the double free this asserts against.
+    ///
+    /// `refparam` is here because a `mut ref Array[..]` param indexes the
+    /// CALLER's array, which still owns its elements — it aborted identically
+    /// before the fix, and the predicate reads `borrow_vars.ref_params` so it
+    /// resolves.
+    ///
+    /// CONTROLS, clean before AND after: `freshrhs` has no named source to
+    /// suppress; `scalar` is an `Array[i64, 2]` whose element owns no heap, so
+    /// it pins the new predicate as a no-op where the container will free
+    /// nothing; `vectwin` is the oracle above.
+    ///
+    /// FLOORED for the reason its sibling is: the orphaned-then-double-freed
+    /// buffers are exactly what LLVM deletes when nothing observes them, and a
+    /// fixture that allocates nothing at `-O2` asserts nothing.
+    #[test]
+    fn asan_array_index_store_disarms_the_moved_in_source() {
+        assert_clean_asan_run_min_allocs(
+            r#"
+struct D { id: i64, s: String }
+
+fn put(a: mut ref Array[Vec[i64], 2], n: i64) {
+    let mut vr: Vec[i64] = Vec.new();
+    vr.push(n + 9);
+    a[0] = vr;
+}
+
+fn main() {
+    let mut i: i64 = 0;
+    while i < 2 {
+        let mut v1: Vec[i64] = Vec.new();  v1.push(i);
+        let mut v2: Vec[i64] = Vec.new();  v2.push(i + 1);
+        let mut a: Array[Vec[i64], 2] = [v1, v2];
+        let mut v3: Vec[i64] = Vec.new();  v3.push(i + 9);
+        a[0] = v3;
+        println(f"vecelem:{a[0].len()}");
+
+        let mut sa: Array[String, 2] = [f"b30-one-aaaaaaaaaaaaaaaa-{i}", f"b30-two-bbbbbbbbbbbbbbbb-{i}"];
+        let s3 = f"b30-three-cccccccccccccccc-{i}";
+        sa[0] = s3;
+        println(f"strelem:{sa[0].len()}");
+
+        let mut da: Array[D, 2] = [D { id: 1, s: "b30-static-one" }, D { id: 2, s: "b30-static-two" }];
+        let b = D { id: 3, s: f"b30-heap-{i}" };
+        da[0] = b;
+        println(f"structelem:{da[0].id}");
+
+        let mut r1: Vec[i64] = Vec.new();  r1.push(i);
+        let mut r2: Vec[i64] = Vec.new();  r2.push(i + 1);
+        let mut ra: Array[Vec[i64], 2] = [r1, r2];
+        put(mut ra, i);
+        println(f"refparam:{ra[0].len()}");
+
+        let mut l1: Vec[i64] = Vec.new();  l1.push(i);
+        let mut l2: Vec[i64] = Vec.new();  l2.push(i + 1);
+        let mut la: Array[Vec[i64], 2] = [l1, l2];
+        let mut j: i64 = 0;
+        while j < 3 {
+            let mut vn: Vec[i64] = Vec.new();
+            vn.push(i + j);
+            la[0] = vn;
+            j = j + 1;
+        }
+        println(f"loop:{la[0].len()}");
+
+        let mut f1: Vec[i64] = Vec.new();  f1.push(i);
+        let mut f2: Vec[i64] = Vec.new();  f2.push(i + 1);
+        let mut fa: Array[Vec[i64], 2] = [f1, f2];
+        fa[0] = Vec.new();
+        println(f"freshrhs:{fa[0].len()}");
+
+        let mut na: Array[i64, 2] = [i, i + 1];
+        let x = i + 9;
+        na[0] = x;
+        println(f"scalar:{na[0]}");
+
+        let mut w1: Vec[i64] = Vec.new();  w1.push(i);
+        let mut w: Vec[Vec[i64]] = Vec.new();
+        w.push(w1);
+        let mut w3: Vec[i64] = Vec.new();  w3.push(i + 9);
+        w[0] = w3;
+        println(f"vectwin:{w[0].len()}");
+
+        i = i + 1;
+    }
+}
+"#,
+            &[
+                "vecelem:1",
+                "strelem:28",
+                "structelem:3",
+                "refparam:1",
+                "loop:1",
+                "freshrhs:0",
+                "scalar:9",
+                "vectwin:1",
+                "vecelem:1",
+                "strelem:28",
+                "structelem:3",
+                "refparam:1",
+                "loop:1",
+                "freshrhs:0",
+                "scalar:10",
+                "vectwin:1",
+            ],
+            "asan_array_index_store_disarms_the_moved_in_source",
+            20,
+        );
+    }
+
     #[test]
     fn asan_array_struct_field_drops_its_elements() {
         assert_clean_asan_run(

@@ -13957,7 +13957,28 @@ impl<'ctx> super::Codegen<'ctx> {
                                 .is_some_and(|te| {
                                     self.tensor_var_info_from_type_expr(te).is_some()
                                 });
-                            (is_vecstruct_elem || is_tensor_elem)
+                            // B-2026-09-14-30 — the ARRAY leg. The two
+                            // lookups above read Vec-only registries, so an
+                            // `Array[Vec[T], N]` / `Array[String, N]` local
+                            // reached neither and its moved-in source kept its
+                            // scope-exit cleanup: `a[0] = v3` freed the same
+                            // 32-byte buffer twice (`free(): double free
+                            // detected in tcache 2`, exit 134 on the JIT and
+                            // both `karac build` legs; the interpreter is
+                            // correct). The `Vec[Vec[i64]]` twin is CLEAN at
+                            // 18 allocs / 18 frees, which is what makes this
+                            // Array-specific and the Vec leg the oracle.
+                            //
+                            // Same predicate as the store's own displaced-
+                            // element free (`llvm_ty_is_vec_struct` on the
+                            // array's element, B-2026-09-14-1), so both sides
+                            // of the transfer ask one question: the container
+                            // takes the buffer over exactly when it will free
+                            // it. A scalar `Array[i64, N]` owns no heap and is
+                            // a no-op on both sides.
+                            let is_heap_array_elem =
+                                self.array_index_target_owns_heap_elem(container.as_str());
+                            (is_vecstruct_elem || is_tensor_elem || is_heap_array_elem)
                                 && !self
                                     .var_types
                                     .slice_elem_types
@@ -14064,8 +14085,18 @@ impl<'ctx> super::Codegen<'ctx> {
                     // reach.
                     if let ExprKind::Identifier(src) = &value.kind {
                         if !self.borrow_vars.ref_params.contains_key(src) {
-                            let elem_struct =
-                                self.vec_index_elem_type_expr(object).and_then(|te| {
+                            // B-2026-09-14-30 — `vec_index_elem_type_expr`
+                            // resolves an `Array[E, N]` FIELD (`h.a[0] = b`,
+                            // B-2026-08-27-32) but not a bare `Array` local,
+                            // whose element type lives in the separate
+                            // `array_elem_type_exprs`. That asymmetry is
+                            // exactly why the field-rooted spelling was clean
+                            // at 17 allocs / 17 frees while `a[0] = b` over
+                            // `Array[D, 2]` (`D { s: String }`) aborted.
+                            let elem_struct = self
+                                .vec_index_elem_type_expr(object)
+                                .or_else(|| self.array_index_target_elem_type_expr(object))
+                                .and_then(|te| {
                                     let TypeKind::Path(p) = &te.kind else {
                                         return None;
                                     };
