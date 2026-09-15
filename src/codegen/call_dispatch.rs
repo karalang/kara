@@ -9967,13 +9967,34 @@ impl<'ctx> super::Codegen<'ctx> {
         // (`b49-generic-callee-named-control`) going from clean to a
         // LeakSanitizer report. A `shared` enum is excluded for the same
         // reason -- its payload is RC-managed, not box-owned.
+        //
+        // B-2026-09-15-3 — WHERE this runs is load-bearing, and it used to run
+        // here, in its own loop ahead of every payload. The retraction is one
+        // half of a pair whose other half is the defensive copy
+        // (B-2026-09-14-27): `UseAfterMove` is advisory on the compiled
+        // surface, so a later `a[0]` must still read intact buffers, and the
+        // copy is what keeps them intact. `suppress_array_local_move_into_ctor`
+        // skips when a copy HAPPENED (`uam_copied_sites`) -- deliberately
+        // keyed on the record rather than on a prediction -- and the copy for
+        // this site is emitted by `maybe_defensive_copy_param_arg`, several
+        // lines INTO the payload loop below. Standing every argument down
+        // first meant the record did not exist yet, so the skip never fired,
+        // the caller's element drop was retracted anyway, and the copy it
+        // should have protected was made a moment later and stored in a
+        // payload whose drop then freed it while the source still pointed at
+        // the original.
+        //
+        // Measured at `-O0` on `{ let w = Wrp.Full(a); .. }` then
+        // `println(a[0])`: valgrind `Invalid read`, and three different wrong
+        // strings across JIT / `-O0` / auto-par at exit 0 against a correct
+        // `--interp`.
+        //
+        // The fix is the ORDER alone -- the call moved into the payload loop,
+        // immediately after that copy -- so the pair agrees by construction.
+        // Nothing here needs the retraction to precede payload compilation: it
+        // edits `scope_cleanup_actions`, not the IR.
         let disarm_array_sources = !self.type_decls.seeded_enum_names.contains(&enum_name)
             && !self.type_decls.shared_types.contains_key(&enum_name);
-        if disarm_array_sources {
-            for a in args {
-                self.suppress_array_local_move_into_ctor(&a.value);
-            }
-        }
 
         let (tag, llvm_type) = {
             let layout = &self.type_decls.enum_layouts[&enum_name];
@@ -10136,6 +10157,13 @@ impl<'ctx> super::Codegen<'ctx> {
             // caller retains the free). Kata-22 family, 2026-06-06.
             self.suppress_fstr_acc_if_moved_out(&arg.value);
             let val = self.maybe_defensive_copy_param_arg(&arg.value, val);
+            // B-2026-09-13-15's retraction, run HERE rather than in a loop of
+            // its own ahead of every payload -- see the note beside
+            // `disarm_array_sources` above. The copy on the line before is the
+            // record this consults, so the two only agree in this order.
+            if disarm_array_sources {
+                self.suppress_array_local_move_into_ctor(&arg.value);
+            }
             // B-2026-07-16-5: a payload sourced from a BORROW — `Some(s)`
             // with `s: ref String` (the `Option[ref String]` adversarial-
             // accept shape) — packs the LENDER's `{ptr,len,cap}` triple

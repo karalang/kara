@@ -11165,6 +11165,167 @@ fn main() {
         );
     }
 
+    /// B-2026-09-15-3 — the MEMORY half of an `Array[T, N]` local moved into a
+    /// user ENUM VARIANT CONSTRUCTOR.
+    ///
+    /// The constructor stood the caller's element drop down
+    /// (`suppress_array_local_move_into_ctor`) in a loop that ran BEFORE any
+    /// payload was compiled, while the defensive copy that retraction depends
+    /// on is emitted by `maybe_defensive_copy_param_arg` several lines into the
+    /// payload loop. The skip keys on the copy having HAPPENED, so it could not
+    /// fire that early: the source was retracted anyway and the payload's drop
+    /// freed buffers the later read still pointed at. The output half is
+    /// `e2e_array_moved_into_an_enum_ctor_leaves_the_source_readable` in
+    /// `tests/codegen.rs`, and THAT is the half that catches the dangle — say
+    /// so plainly, because the split is not the usual one. `karac`'s own
+    /// emitted IR carries no ASAN instrumentation (only the linked C shim
+    /// does), so this harness sees `malloc`/`free` BOOKKEEPING — double frees,
+    /// invalid frees, leaks — and an invalid READ in compiled Kāra is
+    /// invisible to it. Verified: this fixture passes on the pre-fix compiler,
+    /// at `KARAC_OPT_LEVEL=0` as well, because ASAN's quarantine keeps the
+    /// freed block off the reuse path and the stale read returns the old
+    /// contents intact. valgrind DOES report it (`Invalid read of size 1`).
+    ///
+    /// What this fixture guards is the LEAK dimension, and it earns its place
+    /// on a regression measured during the fix rather than on principle. An
+    /// intermediate version emitted its own defensive copy ahead of the
+    /// retraction, not noticing that `maybe_defensive_copy_param_arg` already
+    /// makes one further down the payload loop; every repaired cell then
+    /// stranded the duplicate — 46 B in 2 blocks per array at `-O0`, output
+    /// still perfect, codegen twin still green. LeakSanitizer catches exactly
+    /// that, and nothing else in the suite would have.
+    ///
+    /// Every cell lets the enum DIE FIRST — an inner block, or a callee that
+    /// takes it by value — because with the enum outliving the read the
+    /// program is correct by timing alone and asserts nothing. `nocallee` is
+    /// the smallest of them: no function call anywhere, the block's own drop is
+    /// the free.
+    ///
+    /// TWO SHAPES ARE DELIBERATELY ABSENT, both of which leak identically
+    /// before and after this row and would make a clean-run fixture impossible
+    /// to write: a `shared enum` payload strands 48 B plus its elements
+    /// (B-2026-09-15-10), and a MULTI-field variant strands its boxed array
+    /// payload the same way, 48 B per array (B-2026-09-15-15). Both are
+    /// asserted for OUTPUT in the codegen twin, which is the half of them this
+    /// row does affect.
+    ///
+    /// FLOORED at 60 allocations for the usual reason: the orphaned buffers are
+    /// exactly what LLVM deletes when nothing observes them, so a fixture that
+    /// allocates nothing at `-O2` asserts nothing. The measured run is 186
+    /// allocs / 186 frees.
+    #[test]
+    fn asan_array_moved_into_an_enum_ctor_is_balanced() {
+        assert_clean_asan_run_min_allocs(
+            r#"
+struct P { s: String }
+enum Wrp { Full(Array[String, 2]), Empty }
+enum G[T] { Y(T), N }
+enum Wi { Full(Array[i64, 2]), Empty }
+enum Wp { Full(Array[P, 2]), Empty }
+
+fn wlen(w: Wrp) -> i64 { match w { Wrp.Full(x) => { return x[0].len(); } Wrp.Empty => { return 0; } } }
+fn glen(g: G[Array[String, 2]]) -> i64 { match g { G.Y(x) => { return x[0].len(); } G.N => { return 0; } } }
+fn ilen(w: Wi) -> i64 { match w { Wi.Full(x) => { return x[0]; } Wi.Empty => { return 0; } } }
+fn plen(w: Wp) -> i64 { match w { Wp.Full(x) => { return x[0].s.len(); } Wp.Empty => { return 0; } } }
+fn takeo(o: Option[Array[String, 2]]) -> i64 { match o { Some(x) => { return x[0].len(); } None => { return 0; } } }
+fn viaparam(a: Array[String, 2]) -> i64 {
+    { let w = Wrp.Full(a); println(f"param-in:{wlen(w)}"); }
+    return a[0].len();
+}
+fn mka(t: String) -> Array[String, 2] {
+    return [f"b153-{t}-aaaaaaaaaaaaaaaaaaaa", f"b153-{t}-bbbbbbbbbbbbbbbbbbbb"];
+}
+
+fn main() {
+    let mut i: i64 = 0;
+    while i < 2 {
+
+        let a1 = mka(f"n{i}");
+        { let w = Wrp.Full(a1); match w { Wrp.Full(x) => { println(f"nocallee-in:{x[0].len()}"); } Wrp.Empty => { println("e"); } } }
+        println(f"nocallee:{a1[0].len()}");
+
+        let a2 = mka(f"c{i}");
+        { let w = Wrp.Full(a2); println(f"callee-in:{wlen(w)}"); }
+        println(f"callee:{a2[1].len()}");
+
+        let a3 = mka(f"f{i}");
+        let w3 = Wrp.Full(a3);
+        println(f"fnscope-in:{wlen(w3)}");
+        println(f"fnscope:{a3[0].len()}");
+
+        let a4 = mka(f"g{i}");
+        println(f"argpos-in:{wlen(Wrp.Full(a4))}");
+        println(f"argpos:{a4[0].len()}");
+
+        let a5 = mka(f"h{i}");
+        { let g = G.Y(a5); println(f"generic-in:{glen(g)}"); }
+        println(f"generic:{a5[0].len()}");
+
+        let a6 = mka(f"p{i}");
+        println(f"param:{viaparam(a6)}");
+
+        let a7: Array[P, 2] = [P { s: f"b153-s{i}-aaaaaaaaaaaaaaaaaaaa" }, P { s: f"b153-s{i}-bbbbbbbbbbbbbbbbbbbb" }];
+        { let w = Wp.Full(a7); println(f"structelem-in:{plen(w)}"); }
+        println(f"structelem:{a7[1].s.len()}");
+
+        let d1 = mka(f"o{i}");
+        { println(f"seeded-in:{takeo(Option.Some(d1))}"); }
+        println(f"seeded:{d1[0].len()}");
+
+        let d3: Array[i64, 2] = [i + 7, i + 8];
+        { let w = Wi.Full(d3); println(f"scalar-in:{ilen(w)}"); }
+        println(f"scalar:{d3[1]}");
+
+        { let w = Wrp.Full(mka(f"v{i}")); println(f"fresh:{wlen(w)}"); }
+        i = i + 1;
+    }
+}
+"#,
+            &[
+                "nocallee-in:28",
+                "nocallee:28",
+                "callee-in:28",
+                "callee:28",
+                "fnscope-in:28",
+                "fnscope:28",
+                "argpos-in:28",
+                "argpos:28",
+                "generic-in:28",
+                "generic:28",
+                "param-in:28",
+                "param:28",
+                "structelem-in:28",
+                "structelem:28",
+                "seeded-in:28",
+                "seeded:28",
+                "scalar-in:7",
+                "scalar:8",
+                "fresh:28",
+                "nocallee-in:28",
+                "nocallee:28",
+                "callee-in:28",
+                "callee:28",
+                "fnscope-in:28",
+                "fnscope:28",
+                "argpos-in:28",
+                "argpos:28",
+                "generic-in:28",
+                "generic:28",
+                "param-in:28",
+                "param:28",
+                "structelem-in:28",
+                "structelem:28",
+                "seeded-in:28",
+                "seeded:28",
+                "scalar-in:8",
+                "scalar:9",
+                "fresh:28",
+            ],
+            "asan_array_moved_into_an_enum_ctor_is_balanced",
+            60,
+        );
+    }
+
     /// B-2026-09-15-4 — the MEMORY half of a `-> ref (T, U)` method result used
     /// in a value position.
     ///

@@ -34592,6 +34592,159 @@ fn main() {
         }
     }
 
+    /// B-2026-09-15-3 — a user ENUM VARIANT CONSTRUCTOR is the hand-off site
+    /// B-2026-09-14-27's copy did not reach, and this pins it closed on every
+    /// backend.
+    ///
+    /// That row's own constructor cell reads the source in the SAME statement
+    /// that consumes the enum (`println(f"{a[0]} {wlen(w)}")`), so the read
+    /// happens before anything frees and the cell passed while the site was
+    /// broken. TIMING IS THE WHOLE TRAP HERE: every cell below therefore lets
+    /// the enum DIE FIRST — the inner block in `main`, or the callee that takes
+    /// it by value — and only then reads the source.
+    ///
+    /// WHY IT SURVIVED THAT FIX, and it is an ORDERING bug rather than a
+    /// missing copy. `try_compile_enum_variant_at` stood every argument down
+    /// (`suppress_array_local_move_into_ctor`) in a loop of its own, BEFORE it
+    /// compiled any payload. The skip inside that helper keys on
+    /// `uam_copied_sites` — "a copy really happened" — and the copy for this
+    /// site is emitted by `maybe_defensive_copy_param_arg`, several lines INTO
+    /// the payload loop. So at skip time the record did not exist yet: the
+    /// retraction ran unprotected, and the copy it should have protected was
+    /// made a moment later and stored in a payload whose drop freed it while
+    /// the source still pointed at the original. Measured as valgrind
+    /// `Invalid read` and three different wrong strings across JIT / `-O0` /
+    /// auto-par at exit 0, against a correct `--interp`. The fix moves the
+    /// retraction to just after that copy; nothing else changed.
+    ///
+    /// ADDING A SECOND COPY HERE IS THE WRONG SHAPE, measured rather than
+    /// reasoned: an intermediate version emitted its own copy ahead of the
+    /// retraction, which left `maybe_defensive_copy_param_arg`'s copy running
+    /// too, and every repaired cell then leaked 46 B in 2 blocks at `-O0` —
+    /// one stranded duplicate per array. The existing copy was always in the
+    /// right place; only the retraction was not.
+    ///
+    /// The cells are the spellings that differ in WHO frees and WHEN: a
+    /// block-scoped enum with no callee at all (the smallest repro — the
+    /// block's own drop is the free), the same handed to an owned callee, the
+    /// enum at function scope, the constructor in argument position, a
+    /// GENERIC enum whose payload boxes, an array PARAM as the source, and a
+    /// struct-element array. Seven, each measured broken before the fix.
+    ///
+    /// THE CONTROLS PIN THE OTHER HALF, because a copy at a site that does not
+    /// take ownership strands it. A SEEDED `Option` payload is excluded from
+    /// the retraction on purpose (B-2026-09-10-6) and was always correct; a
+    /// `shared` enum is RC-managed and likewise excluded; a scalar
+    /// `Array[i64, N]` owns no heap; and a fresh temp has no source to
+    /// protect. Each prints correctly before and after.
+    ///
+    /// The TWO-array-payload cell is a control of a different kind: its output
+    /// was correct before this row and stays correct, but a MULTI-field
+    /// variant strands its boxed array payload (48 B plus its elements, per
+    /// array) on every backend — B-2026-09-15-15, pre-existing and byte-
+    /// identical across this change. It is asserted for OUTPUT only here, and
+    /// deliberately kept out of the memory fixture
+    /// (`asan_array_moved_into_an_enum_ctor_is_balanced`) for that reason. The
+    /// `shared` cell carries the same caveat under B-2026-09-15-10.
+    #[test]
+    fn e2e_array_moved_into_an_enum_ctor_leaves_the_source_readable() {
+        const HDR: &str = "fn mka(t: String) -> Array[String, 2] { return [f\"{t}-aaaaaaaaaaaaaaaaaaaa\", f\"{t}-bbbbbbbbbbbbbbbbbbbb\"]; }\n\
+                           enum Wrp { Full(Array[String, 2]), Empty }\n\
+                           fn wlen(w: Wrp) -> i64 { match w { Wrp.Full(x) => { return x[0].len(); } Wrp.Empty => { return 0; } } }\n\
+                           enum Two { Both(Array[String, 2], Array[String, 2]), None2 }\n\
+                           fn tlen(t: Two) -> i64 { match t { Two.Both(x, y) => { return x[0].len() + y[0].len(); } Two.None2 => { return 0; } } }\n\
+                           enum G[T] { Y(T), N }\n\
+                           fn glen(g: G[Array[String, 2]]) -> i64 { match g { G.Y(x) => { return x[0].len(); } G.N => { return 0; } } }\n\
+                           shared enum Sh { Full(Array[String, 2]), Empty }\n\
+                           fn slen(s: Sh) -> i64 { match s { Sh.Full(x) => { return x[0].len(); } Sh.Empty => { return 0; } } }\n\
+                           enum Wi { Full(Array[i64, 2]), Empty }\n\
+                           fn ilen(w: Wi) -> i64 { match w { Wi.Full(x) => { return x[0]; } Wi.Empty => { return 0; } } }\n\
+                           struct P { s: String }\n\
+                           enum Wp { Full(Array[P, 2]), Empty }\n\
+                           fn plen(w: Wp) -> i64 { match w { Wp.Full(x) => { return x[0].s.len(); } Wp.Empty => { return 0; } } }\n\
+                           fn takeo(o: Option[Array[String, 2]]) -> i64 { match o { Some(x) => { return x[0].len(); } None => { return 0; } } }\n\
+                           fn viaparam(a: Array[String, 2]) { { let w = Wrp.Full(a); println(f\"in {wlen(w)}\"); } println(f\"{a[0]}\"); }\n";
+        for (label, body, want) in [
+            (
+                "the enum dies at the end of an inner block, with NO callee",
+                "let a = mka(\"c1\");\n\
+                 { let w = Wrp.Full(a); match w { Wrp.Full(x) => { println(f\"in {x[0].len()}\"); } Wrp.Empty => { println(\"e\"); } } }\n\
+                 println(f\"{a[0]}\");",
+                "in 23\nc1-aaaaaaaaaaaaaaaaaaaa\n",
+            ),
+            (
+                "the enum dies at the end of an inner block, handed to an owned callee",
+                "let a = mka(\"c2\");\n{ let w = Wrp.Full(a); println(f\"in {wlen(w)}\"); }\nprintln(f\"{a[0]}\");",
+                "in 23\nc2-aaaaaaaaaaaaaaaaaaaa\n",
+            ),
+            (
+                "the enum at FUNCTION scope, consumed by an owned callee",
+                "let a = mka(\"c3\");\nlet w = Wrp.Full(a);\nprintln(f\"in {wlen(w)}\");\nprintln(f\"{a[0]}\");",
+                "in 23\nc3-aaaaaaaaaaaaaaaaaaaa\n",
+            ),
+            (
+                "the constructor in ARGUMENT position",
+                "let a = mka(\"c4\");\nprintln(f\"in {wlen(Wrp.Full(a))}\");\nprintln(f\"{a[0]}\");",
+                "in 23\nc4-aaaaaaaaaaaaaaaaaaaa\n",
+            ),
+            (
+                "a GENERIC enum, whose payload boxes",
+                "let a = mka(\"c5\");\n{ let g = G.Y(a); println(f\"in {glen(g)}\"); }\nprintln(f\"{a[0]}\");",
+                "in 23\nc5-aaaaaaaaaaaaaaaaaaaa\n",
+            ),
+            (
+                "an array PARAM as the source",
+                "viaparam(mka(\"c6\"));",
+                "in 23\nc6-aaaaaaaaaaaaaaaaaaaa\n",
+            ),
+            (
+                "a struct-element array",
+                "let a: Array[P, 2] = [P { s: f\"c7-aaaaaaaaaaaaaaaaaaaa\" }, P { s: f\"c7-bbbbbbbbbbbbbbbbbbbb\" }];\n\
+                 { let w = Wp.Full(a); println(f\"in {plen(w)}\"); }\n\
+                 println(f\"{a[0].s}\");",
+                "in 23\nc7-aaaaaaaaaaaaaaaaaaaa\n",
+            ),
+            (
+                "control: a SEEDED Option payload is excluded from the retraction",
+                "let a = mka(\"d1\");\n{ println(f\"in {takeo(Option.Some(a))}\"); }\nprintln(f\"{a[0]}\");",
+                "in 23\nd1-aaaaaaaaaaaaaaaaaaaa\n",
+            ),
+            (
+                "control: a shared enum is RC-managed and likewise excluded",
+                "let a = mka(\"d2\");\n{ let w = Sh.Full(a); println(f\"in {slen(w)}\"); }\nprintln(f\"{a[0]}\");",
+                "in 23\nd2-aaaaaaaaaaaaaaaaaaaa\n",
+            ),
+            (
+                "control: a scalar Array[i64, N] owns no heap",
+                "let a: Array[i64, 2] = [7, 8];\n{ let w = Wi.Full(a); println(f\"in {ilen(w)}\"); }\nprintln(f\"{a[0]}\");",
+                "in 7\n7\n",
+            ),
+            (
+                "control: a variant carrying TWO array payloads",
+                "let a = mka(\"d4\");\nlet b = mka(\"e4\");\n\
+                 { let w = Two.Both(a, b); println(f\"in {tlen(w)}\"); }\n\
+                 println(f\"{a[0]} {b[1]}\");",
+                "in 46\nd4-aaaaaaaaaaaaaaaaaaaa e4-bbbbbbbbbbbbbbbbbbbb\n",
+            ),
+            (
+                "control: a fresh temp has no source to protect",
+                "{ let w = Wrp.Full(mka(\"d5\")); println(f\"in {wlen(w)}\"); }\nprintln(\"done\");",
+                "in 23\ndone\n",
+            ),
+        ] {
+            let src = format!("{HDR}fn main() {{\n{body}\n}}\n");
+            let (interp_out, interp_errs, _, _) = karac::run_program_full(&src);
+            assert!(
+                interp_errs.is_empty(),
+                "[{label}] interp errored: {interp_errs:?}"
+            );
+            assert_eq!(interp_out.join(""), want, "[{label}] interpreter");
+            if let Some(aot) = run_program(&src) {
+                assert_eq!(aot, want, "[{label}] AOT");
+            }
+        }
+    }
+
     /// B-2026-09-14-2 (gate-lift half) — an `Option`/`Result` whose payload is a
     /// `Vec` runs its elements' `Drop` bodies OUTSIDE the discard position too:
     /// a bound envelope, a plain move, a consuming `match` / `if let` arm, and
