@@ -6368,6 +6368,63 @@ impl<'ctx> super::Codegen<'ctx> {
     /// nested caller passes the INNER element type it already had to derive to
     /// GEP. The refcount shapes below need it; the vec-struct and scalar
     /// shapes do not, so a missing entry degrades to those rather than failing.
+    /// B-2026-09-15-7 — release the displaced element of an index store whose
+    /// element slot is a `{ptr,len,cap}` vec-struct, DEEPLY when that
+    /// element's own elements own heap below its buffer.
+    ///
+    /// Both index-store legs called `emit_free_vec_buffer_if_owned` directly
+    /// before this: it frees the element's DATA buffer and treats that
+    /// buffer's contents as opaque. For a `Vec[String]` element that strands
+    /// every inner String's char buffer — measured 5 B in 1 block at `-O0` on
+    /// `Array[Vec[String], 2]` AND on the `Vec[Vec[String]]` twin, which is
+    /// what says the gap was never Array-specific. Routing both legs through
+    /// one helper is the same anti-drift discipline B-2026-08-10-1 extracted
+    /// the shared store path for.
+    ///
+    /// THE OUTER-BUFFER-ONLY BOUND WAS DELIBERATE, and its stated reason was
+    /// that "a live per-element alias keeps its own scope-exit cleanup, so a
+    /// deep walk here would double-free it". That hazard is not constructible
+    /// for these containers today: an OWNING per-element alias cannot be
+    /// spelled. `let r = a[0]` is rejected outright by the typechecker
+    /// (`E_INDEX_MOVE_NON_COPY`), `ref a[0]` is a borrow that carries no
+    /// cleanup of its own, `a[0].clone()` produces independent buffers, and a
+    /// `for e in a` binding leaked identically rather than owning — all four
+    /// re-measured against this fix and clean. The guard's author was not
+    /// wrong; the comment predates that diagnostic, and the hazard stays real
+    /// for a container whose elements CAN be moved out.
+    ///
+    /// `vec_elem_agg_drop_for_type_expr` is the gate as much as the emitter:
+    /// it hands back a recursive `karac_drop_Vec_<inner>` only when the inner
+    /// type owns heap below the buffer AND the whole subtree is a shape that
+    /// family fully frees. The head check confines this to `Vec`/`VecDeque`
+    /// elements, so a `String` element — also a `{ptr,len,cap}` slot — cannot
+    /// reach the dispatcher at all and keeps the byte-for-byte buffer-only
+    /// free. The recursive drop frees the outer buffer ITSELF, so the two
+    /// paths are alternatives and never both.
+    fn emit_displaced_vec_elem_release(
+        &mut self,
+        elem_ptr: PointerValue<'ctx>,
+        elem_te: Option<&TypeExpr>,
+    ) {
+        let deep = match elem_te.map(|te| &te.kind) {
+            Some(TypeKind::Path(p))
+                if matches!(
+                    p.segments.first().map(String::as_str),
+                    Some("Vec") | Some("VecDeque")
+                ) =>
+            {
+                let te = elem_te.expect("matched on Some");
+                self.vec_elem_agg_drop_for_type_expr(te)
+            }
+            _ => None,
+        };
+        if let Some(f) = deep {
+            self.builder.build_call(f, &[elem_ptr.into()], "").unwrap();
+            return;
+        }
+        self.emit_free_vec_buffer_if_owned(elem_ptr, 1);
+    }
+
     fn emit_elem_store_releasing_displaced(
         &mut self,
         elem_ptr: inkwell::values::PointerValue<'ctx>,
@@ -6403,7 +6460,10 @@ impl<'ctx> super::Codegen<'ctx> {
             // Inner element size unknown here (the overwritten element is
             // itself a `{ptr,len,cap}`) — cap × 1 hint (String-exact, Vec
             // under-hint), keeping hot small element overwrites at libc cost.
-            self.emit_free_vec_buffer_if_owned(elem_ptr, 1);
+            // B-2026-09-15-7 routes a `Vec`-typed element through the deep
+            // release first; everything else lands on that same free.
+            let elem_te_ref = elem_te.clone();
+            self.emit_displaced_vec_elem_release(elem_ptr, elem_te_ref.as_ref());
         } else if elem_is_tensor {
             // Free the displaced old block, then take over the new one.
             // `free(null)` is a no-op, so the move-suppression sentinel needs no
@@ -7173,8 +7233,13 @@ impl<'ctx> super::Codegen<'ctx> {
             // `-O0` is the only place this is visible: at `-O2` LLVM deletes
             // the orphaned allocation outright and valgrind reports 0 errors,
             // which is why the row's figure is the `-O0` one.
+            // B-2026-09-15-7 — the "OUTER BUFFER ONLY" bound above is lifted
+            // for a `Vec`-typed element, through the helper both legs now
+            // share. The struct-element half of the caveat was closed
+            // separately by B-2026-09-14-29.
             if self.llvm_ty_is_vec_struct(at.get_element_type()) {
-                self.emit_free_vec_buffer_if_owned(elem_ptr, 1);
+                let arr_elem_te = self.array_index_target_elem_type_expr(object);
+                self.emit_displaced_vec_elem_release(elem_ptr, arr_elem_te.as_ref());
             }
             // B-2026-08-14-6 — coerce to the ARRAY's declared element type
             // before the store. LLVM types a store by its VALUE, so writing an

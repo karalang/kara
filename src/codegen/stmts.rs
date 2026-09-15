@@ -21651,13 +21651,44 @@ impl<'ctx> super::Codegen<'ctx> {
         {
             return;
         }
-        let Some(elem_te) = self
+        // B-2026-09-14-29 — an `Array[T, N]` binding records its element type
+        // in `array_elem_type_exprs`, never in the VEC table this emitter
+        // reads, so the lookup missed and EVERY `a[i] = <new>` over an array
+        // of user structs/enums skipped the displaced element's drop: its
+        // `Drop` body never ran on any compiled surface (the interpreter runs
+        // it, so the body half was a run/build divergence) and its heap
+        // fields were orphaned.
+        //
+        // THE TYPE LOOKUP IS THE PART THAT LOOKS LIKE THE WORK, AND IS NOT.
+        // Adding a bare `.or_else(...)` fallback here hands the emitter the
+        // right TYPE and leaves it with `Vec` ADDRESSING: the path below
+        // loads a `{ptr,len,cap}` data pointer and GEPs from it, while an
+        // `Array` stores its elements INLINE, so the GEP reads the array's
+        // own first words as a pointer. That was measured on these exact
+        // cells and is strictly worse than the bug — a garbage id printed for
+        // `Array[D, 2]`, NO OUTPUT AT ALL for `Array[F, 2]`, and a valgrind
+        // MEMERR where `Array[E, 2]` had had a bounded 10-byte leak.
+        //
+        // So the element TYPE and the element POINTER are chosen together and
+        // never mixed: an Array container takes `array_elem_type_exprs` and
+        // `lower_indexed_elem_ptr_array`, a Vec takes the vec table and
+        // `lower_indexed_elem_ptr_vec`.
+        let (elem_te, container_is_array) = match self
             .var_types
             .var_elem_type_exprs
             .get(container.as_str())
             .cloned()
-        else {
-            return;
+        {
+            Some(te) => (te, false),
+            None => match self
+                .var_types
+                .array_elem_type_exprs
+                .get(container.as_str())
+                .cloned()
+            {
+                Some(te) => (te, true),
+                None => return,
+            },
         };
         let TypeKind::Path(p) = &elem_te.kind else {
             return;
@@ -21686,7 +21717,22 @@ impl<'ctx> super::Codegen<'ctx> {
             return;
         }
         let container = container.clone();
-        let Ok((elem_ptr, _)) = self.lower_indexed_elem_ptr_vec(&container, index) else {
+        // The Array leg needs the binding's own slot, and takes the same
+        // bounds-checked GEP every other Array indexed-receiver lowering
+        // uses. A slot whose LLVM type is not an ArrayType — a borrowed
+        // `mut ref Array[T, N]` param, whose slot holds a POINTER — makes
+        // `lower_indexed_elem_ptr_array` return Err, and this declines
+        // exactly as it did before rather than GEPing through a pointer it
+        // cannot describe.
+        let lowered = if container_is_array {
+            match self.variables.get(container.as_str()).copied() {
+                Some(slot) => self.lower_indexed_elem_ptr_array(slot, index),
+                None => return,
+            }
+        } else {
+            self.lower_indexed_elem_ptr_vec(&container, index)
+        };
+        let Ok((elem_ptr, _)) = lowered else {
             return;
         };
         if run_bodies && self.type_runs_user_drop(&etn, &mut Vec::new()) {

@@ -93001,6 +93001,172 @@ fn main() {
         );
     }
 
+    /// B-2026-09-14-29 — an index-assign over an `Array[T, N]` of user
+    /// structs reclaims the displaced element's heap fields. 10 B in 1 block
+    /// at `-O0` before the fix.
+    ///
+    /// The no-`Drop` `E` cell is the one that isolates the MEMORY half: it
+    /// has a heap field and no body to run, so a fix that only restored the
+    /// `Drop` bodies leaves it red here while the codegen output test passes.
+    /// Its sibling — a body with no heap — lives in the codegen suite for the
+    /// mirror-image reason.
+    #[test]
+    fn asan_array_index_store_frees_the_displaced_struct_element() {
+        // Heap field + `Drop` body: the row's own repro.
+        assert_clean_asan_run(
+            "struct D { s: String, id: i64 }\n\
+             impl Drop for D { fn drop(mut ref self) { println(f\"dD{self.id}\") } }\n\
+             fn main() {\n\
+             \x20   let mut a: Array[D, 2] = [D { s: f\"aaaaaaaaaaaa1\", id: 1 }, D { s: f\"bbbbbbbbbbbb2\", id: 2 }];\n\
+             \x20   a[0] = D { s: f\"MUTATEDMUTATED3\", id: 3 };\n\
+             \x20   println(f\"a0:{a[0].id}\");\n\
+             }\n",
+            &["dD1", "a0:3", "dD3", "dD2"],
+            "b29-array-index-store-struct-elem",
+        );
+        // A heap field and NO `Drop` body — the memory half with no body to
+        // mask it.
+        assert_clean_asan_run(
+            "struct E { s: String, id: i64 }\n\
+             fn main() {\n\
+             \x20   let mut a: Array[E, 2] = [E { s: f\"aaaaaaaaaaaa1\", id: 1 }, E { s: f\"bbbbbbbbbbbb2\", id: 2 }];\n\
+             \x20   a[0] = E { s: f\"MUTATEDMUTATED3\", id: 3 };\n\
+             \x20   println(f\"a0:{a[0].id}\");\n\
+             }\n",
+            &["a0:3"],
+            "b29-array-index-store-no-drop-elem",
+        );
+        // CONTROL — the `Vec[D]` twin, clean before and after. It is the
+        // ORACLE this fix was derived from, so a regression that breaks the
+        // two together shows up here rather than looking Array-specific.
+        assert_clean_asan_run(
+            "struct D { s: String, id: i64 }\n\
+             impl Drop for D { fn drop(mut ref self) { println(f\"dD{self.id}\") } }\n\
+             fn main() {\n\
+             \x20   let mut a: Vec[D] = [D { s: f\"aaaaaaaaaaaa1\", id: 1 }, D { s: f\"bbbbbbbbbbbb2\", id: 2 }];\n\
+             \x20   a[0] = D { s: f\"MUTATEDMUTATED3\", id: 3 };\n\
+             \x20   println(f\"a0:{a[0].id}\");\n\
+             }\n",
+            &["dD1", "a0:3", "dD3", "dD2"],
+            "b29-vec-index-store-oracle",
+        );
+    }
+
+    /// B-2026-09-15-7 — an index store over a container whose element is
+    /// itself a heap-bearing `Vec` reclaims that element's OWN elements, not
+    /// just its outer buffer. 5 B in 1 block at `-O0` before the fix, on the
+    /// `Array` leg and on the `Vec[Vec[String]]` twin alike.
+    ///
+    /// THE ALIAS CELLS ARE THE POINT OF THIS FIXTURE, not the leak cells. The
+    /// outer-buffer-only bound existed to avoid double-freeing a live
+    /// per-element alias, so the deep walk is exactly the change that guard
+    /// forbade; these three spellings are every way an alias can be obtained
+    /// today, and each must stay single-free. `let r = a[0]` — the fourth —
+    /// is rejected by the typechecker (`E_INDEX_MOVE_NON_COPY`) and so cannot
+    /// be written as a cell at all.
+    #[test]
+    fn asan_index_store_frees_the_displaced_vec_elements_own_elements() {
+        const MK: &str = "fn main() {\n\
+             \x20   let mut v1: Vec[String] = Vec.new();\n\
+             \x20   v1.push(f\"one-payload-one\");\n\
+             \x20   let mut v2: Vec[String] = Vec.new();\n\
+             \x20   v2.push(f\"two-payload-two\");\n";
+        // The `Array` leg.
+        assert_clean_asan_run(
+            &format!(
+                "{MK}\x20   let mut a: Array[Vec[String], 2] = [v1, v2];\n\
+                 \x20   a[0] = Vec.new();\n\
+                 \x20   println(f\"a0:{{a[0].len()}}\");\n\
+                 }}\n"
+            ),
+            &["a0:0"],
+            "b7-array-elem-inner-elements",
+        );
+        // The `Vec[Vec[String]]` TWIN — the cell that says this was never
+        // Array-specific, and the reason the fix went in the shared helper.
+        assert_clean_asan_run(
+            &format!(
+                "{MK}\x20   let mut a: Vec[Vec[String]] = [v1, v2];\n\
+                 \x20   let nv: Vec[String] = Vec.new();\n\
+                 \x20   a[0] = nv;\n\
+                 \x20   println(f\"a0:{{a[0].len()}}\");\n\
+                 }}\n"
+            ),
+            &["a0:0"],
+            "b7-vec-elem-inner-elements-twin",
+        );
+        // Depth 3: the recursive drop family walks every level, so one level
+        // of deepening is not a special case.
+        assert_clean_asan_run(
+            "fn main() {\n\
+             \x20   let mut inner: Vec[String] = Vec.new();\n\
+             \x20   inner.push(f\"deep-payload-deep\");\n\
+             \x20   let mut mid: Vec[Vec[String]] = Vec.new();\n\
+             \x20   mid.push(inner);\n\
+             \x20   let mut a: Array[Vec[Vec[String]], 2] = [mid, Vec.new()];\n\
+             \x20   a[0] = Vec.new();\n\
+             \x20   println(f\"a0:{a[0].len()}\");\n\
+             }\n",
+            &["a0:0"],
+            "b7-depth-three",
+        );
+        // CONTROL — no inner heap, so the deep path must decline and leave
+        // the buffer-only free byte-for-byte.
+        assert_clean_asan_run(
+            "fn main() {\n\
+             \x20   let mut v1: Vec[i64] = Vec.new();\n\
+             \x20   v1.push(1);\n\
+             \x20   let mut a: Array[Vec[i64], 2] = [v1, Vec.new()];\n\
+             \x20   a[0] = Vec.new();\n\
+             \x20   println(f\"a0:{a[0].len()}\");\n\
+             }\n",
+            &["a0:0"],
+            "b7-no-inner-heap-control",
+        );
+        // ALIAS 1 — a `ref` borrow of the element, read before the store.
+        assert_clean_asan_run(
+            &format!(
+                "{MK}\x20   let mut a: Array[Vec[String], 2] = [v1, v2];\n\
+                 \x20   let r = ref a[0];\n\
+                 \x20   println(f\"r:{{r.len()}}\");\n\
+                 \x20   a[0] = Vec.new();\n\
+                 \x20   println(f\"a0:{{a[0].len()}}\");\n\
+                 }}\n"
+            ),
+            &["r:1", "a0:0"],
+            "b7-alias-ref-borrow",
+        );
+        // ALIAS 2 — an independent `clone`, which must SURVIVE the deep walk.
+        // `c:1` is the assertion that matters: a walk that reached the
+        // clone's buffer would show as a double free here.
+        assert_clean_asan_run(
+            &format!(
+                "{MK}\x20   let mut a: Array[Vec[String], 2] = [v1, v2];\n\
+                 \x20   let c = a[0].clone();\n\
+                 \x20   a[0] = Vec.new();\n\
+                 \x20   println(f\"c:{{c.len()}} a0:{{a[0].len()}}\");\n\
+                 }}\n"
+            ),
+            &["c:1 a0:0"],
+            "b7-alias-clone-survives",
+        );
+        // ALIAS 3 — a `for` binding over the container before the store.
+        assert_clean_asan_run(
+            &format!(
+                "{MK}\x20   let mut a: Array[Vec[String], 2] = [v1, v2];\n\
+                 \x20   let mut tot = 0;\n\
+                 \x20   for e in a {{\n\
+                 \x20       tot = tot + 1;\n\
+                 \x20   }}\n\
+                 \x20   a[0] = Vec.new();\n\
+                 \x20   println(f\"tot:{{tot}} a0:{{a[0].len()}}\");\n\
+                 }}\n"
+            ),
+            &["tot:2 a0:0"],
+            "b7-alias-for-binding",
+        );
+    }
+
     /// B-2026-09-15-20 — a whole-container reassignment over a FIXED
     /// `Array[T, N]` stranded the displaced elements' heap.
     ///

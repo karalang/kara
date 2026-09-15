@@ -84981,6 +84981,26 @@ fn main() {
         );
     }
 
+    /// B-2026-09-14-30's cell. THE EXPECTATION IS UNCHANGED BY
+    /// B-2026-09-14-29, and that is worth a note because -14-29's own prose
+    /// predicted it would change here.
+    ///
+    /// That row expected closing it to add a leading `dD1` to this test. It
+    /// does not, and the reason is the RHS: `a[0] = b` stores a NAMED LOCAL,
+    /// which `store_destroys_displaced` classifies as a RELOCATION rather
+    /// than a destruction, so `run_bodies` is false and the displaced body is
+    /// deliberately suppressed (B-2026-08-26-21 — firing it is what printed
+    /// five `Drop` bodies for two values across a three-line swap). -14-29's
+    /// fix gives the emitter its missing Array element-type and addressing;
+    /// it does not touch that destroy-vs-relocate gate, so a fresh-literal
+    /// RHS gains `dD1` (see
+    /// `e2e_array_index_store_runs_the_displaced_elements_drop_body`) and this
+    /// named-local spelling does not.
+    ///
+    /// The interpreter DOES print `dD1` here, so a run/build divergence
+    /// remains at this one spelling. It is not -14-29's, and closing it means
+    /// deciding whether a moved-from local is a relocation at all — filed
+    /// separately rather than resolved by loosening the gate.
     #[test]
     fn test_e2e_array_index_store_runs_the_moved_in_source_body_once() {
         assert_eq!(
@@ -84996,6 +85016,78 @@ fn main() {
             )
             .as_deref(),
             Some("a0:3\ndD3\ndD2\n")
+        );
+    }
+
+    /// B-2026-09-14-29 — an index-assign over an `Array[T, N]` runs the
+    /// DISPLACED element's `Drop` body, at the store, on every compiled
+    /// surface. The interpreter always did, so this was a run/build
+    /// divergence the kata A/B gate could see.
+    ///
+    /// The `Vec[D]` cell is the ORACLE rather than a control: it was correct
+    /// throughout, and it is what identified the owner as the drop emitter's
+    /// Vec-only element-type lookup rather than the store path. If a future
+    /// change regresses the two together, the Array and Vec cells move as a
+    /// pair and that is the tell.
+    ///
+    /// The no-heap `F` cell isolates the BODY half with nothing to leak, so a
+    /// fix that only closed the memory half fails here while the sanitizer
+    /// suite stays green.
+    #[test]
+    fn e2e_array_index_store_runs_the_displaced_elements_drop_body() {
+        const H: &str = "struct D { s: String, id: i64 }\n\
+             impl Drop for D { fn drop(mut ref self) { println(f\"dD{self.id}\") } }\n";
+        // Heap field + Drop body: the row's own repro.
+        assert_eq!(
+            run_program(&format!(
+                "{H}fn main() {{\n\
+                 \x20   let mut a: Array[D, 2] = [D {{ s: f\"aaaaaaaa-1\", id: 1 }}, D {{ s: f\"bbbbbbbb-2\", id: 2 }}];\n\
+                 \x20   a[0] = D {{ s: f\"MUTATED-3\", id: 3 }};\n\
+                 \x20   println(f\"a0:{{a[0].id}}\");\n\
+                 }}"
+            ))
+            .as_deref(),
+            Some("dD1\na0:3\ndD3\ndD2\n")
+        );
+        // A `Drop` body with NO heap field — the body half alone.
+        assert_eq!(
+            run_program(
+                "struct F { id: i64 }\n\
+                 impl Drop for F { fn drop(mut ref self) { println(f\"dF{self.id}\") } }\n\
+                 fn main() {\n\
+                 \x20   let mut a: Array[F, 2] = [F { id: 1 }, F { id: 2 }];\n\
+                 \x20   a[0] = F { id: 3 };\n\
+                 \x20   println(f\"a0:{a[0].id}\");\n\
+                 }"
+            )
+            .as_deref(),
+            Some("dF1\na0:3\ndF3\ndF2\n")
+        );
+        // THE ORACLE — the `Vec[D]` twin, correct before and after.
+        assert_eq!(
+            run_program(&format!(
+                "{H}fn main() {{\n\
+                 \x20   let mut a: Vec[D] = [D {{ s: f\"aaaaaaaa-1\", id: 1 }}, D {{ s: f\"bbbbbbbb-2\", id: 2 }}];\n\
+                 \x20   a[0] = D {{ s: f\"MUTATED-3\", id: 3 }};\n\
+                 \x20   println(f\"a0:{{a[0].id}}\");\n\
+                 }}"
+            ))
+            .as_deref(),
+            Some("dD1\na0:3\ndD3\ndD2\n")
+        );
+        // A FIELD-rooted array (`h.xs[0] = ..`) reaches the same emitter
+        // through its synth-identifier path.
+        assert_eq!(
+            run_program(&format!(
+                "{H}struct H2 {{ xs: Array[D, 2] }}\n\
+                 fn main() {{\n\
+                 \x20   let mut h: H2 = H2 {{ xs: [D {{ s: f\"aaaaaaaa-1\", id: 1 }}, D {{ s: f\"bbbbbbbb-2\", id: 2 }}] }};\n\
+                 \x20   h.xs[0] = D {{ s: f\"MUTATED-3\", id: 3 }};\n\
+                 \x20   println(f\"a0:{{h.xs[0].id}}\");\n\
+                 }}"
+            ))
+            .as_deref(),
+            Some("dD1\na0:3\n")
         );
     }
 
