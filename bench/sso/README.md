@@ -195,17 +195,29 @@ SSO is faster.
 | `pfx_idx` | 64 / 63 ms | 73 / 73 ms | +14.1 / +15.9% |
 | `pfx_chars` | 175 / 175 ms | 157 / 157 ms | **-10.3 / -10.3%** |
 
-**`lexlike` no longer regresses, and that retires this track's stated open
-question.** It stood at +34% on 2026-09-12 and is now a 12-14% WIN. The pin does
-not explain it -- `lexlike` is the one rail that never fanned out, so both
-numbers are sequential and directly comparable. Something between 2026-09-12 and
-2026-09-15 fixed it; the candidates are B-2026-09-12-20's overlay fix, the
-growth-test fold (c1adb9c), and keeping `Vec` off the SSO path, and NOTHING HERE
-ATTRIBUTES IT to any of them. Do not re-derive the old 34% from this file: it is
-gone, and the open question named in `bench.sh`'s header is answered only in the
-sense that the symptom stopped.
+**`lexlike` did not "stop regressing" — it never regressed here.** An earlier
+revision of this file said it went +34% → −13% and called that an unexplained
+win. Building the committed rail at five commits spanning 09-12..09-15 gives
+−12 to −14% at every one, including `bab0491`, the commit the +34% was
+attributed to. `bench/sso/lexlike.kara` was committed by `5bcafe9` at
+09-13 00:04, 1h42m AFTER `bab0491`, and `5bcafe9` also wrote the header line
+carrying the +34%: the figure measured a pre-harness workload and was
+transcribed above rails that replaced it. Refuted and recorded as
+B-2026-09-15-1 (invalid). The lesson is narrow and worth keeping: two numbers
+from different dates disagreeing is not a finding until both are reproduced on
+the same workload.
 
-**`substr` is now the worst rail at +34%**, having read as +5% while fanned out.
-It is the same shape as `lexlike` -- slice, compare, discard -- but through
-`String.substring`, and the two now disagree by 47 points. That is the open
-question this track should be asking next.
+**`substr` flips SIGN with the auto-par setting, and that IS the open question.**
+At one commit, best-of-9: default auto-par −14.7% (SSO wins), pinned +30.9%
+(SSO loses). Not a compressed magnitude — the opposite conclusion. Both legs get
+~2.3x faster fanned out (175 → 75 ms at `SSO=0`), so the rail parallelises
+fine; the two legs just do not scale equally. `lexlike` is the control: the
+analyzer declines to fan it out, and its delta is identical under both settings
+(−13.0% / −13.4%).
+
+So pinned, `substr` (+31%) and `lexlike` (−13%) differ by 44 points while doing
+the same slice/compare/discard work, one through `String.substring` and one
+through slice syntax. Nothing attributes that, and no profiler has ever been
+pointed at this track. Filed as B-2026-09-15-6; the next step written there is
+to diff the two rails' IR at `KARAC_SSO=1` pinned, since they differ only in how
+the 3-byte piece is produced.

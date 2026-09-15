@@ -2222,8 +2222,8 @@ numbers the table above was meant to report:
 | `builder60` | +10.7 / +11.4% | **+11.9 / +12.5%** | slightly worse |
 | `pfx_idx` | +4.1 / +5.6% | **+14.1 / +15.9%** | **~3x worse** |
 | `pfx_chars` | −9.0 / −10.2% | **−10.3 / −10.3%** | unchanged |
-| `substr` | +5% (2026-09-12) | **+33.7 / +34.3%** | **~7x worse** |
-| `lexlike` | +34% (2026-09-12) | **−12.7 / −13.7%** | **regression GONE** |
+| `substr` | +5% (2026-09-12, not reproducible) | **+33.7 / +34.3%** | see below — sign flips |
+| `lexlike` | +34% (2026-09-12, NOT REPRODUCIBLE) | **−12.7 / −13.7%** | was never +34% — B-2026-09-15-1 |
 | `lexer` | −15.8% (2026-09-12) | **−17.7 / −17.5%** | slightly better |
 
 **What the pin changed, and what it did not.** The rails whose per-iteration
@@ -2234,18 +2234,59 @@ paired-control argument, `builder20` being an unroll artifact, and `pfx_chars`
 being a real loss are all unchanged — but **the per-push SSO tax is roughly
 three times what the unpinned table reported.**
 
-**`lexlike` no longer regresses, and nothing here explains why.** It was this
-track's stated open question at +34%; it is now a 12-14% win. The pin cannot
-account for it: `lexlike` is the single rail the analyzer declines to fan out
-(`declined_memory_bound`), so its 2026-09-12 and 2026-09-15 numbers are both
-sequential and directly comparable. Candidates are B-2026-09-12-20's overlay
-fix, the fold itself, and keeping `Vec` off the SSO path — none measured. This
-is the same failure mode as B-2026-09-14-28's: a number moved and the cause is
-unattributed, so it is recorded as unattributed rather than assigned.
+**`lexlike` never regressed, and the paragraph that stood here said it did.**
+This section first claimed `lexlike` went +34% → −13% unexplained and listed
+three candidate commits. The prescribed experiment was then run — the committed
+rail built at five commits spanning 09-12..09-15, auto-par pinned, best-of-9 —
+and it is **flat at −12 to −14% everywhere**, including `bab0491`, the commit
+the +34% was attributed to:
 
-**`substr` is the new worst rail at +34%.** Same slice/compare/discard shape as
-`lexlike`, but through `String.substring`; the two now disagree by 47 points,
-and `substr` read as +5% for as long as it was fanned out.
+| commit | | `SSO=0` → `SSO=1` |
+|---|---|---|
+| `bab0491` | the inline overlay is 64-bit-only | 260 → 226 ms, **−13.1%** |
+| `4c544f2` | keep `Vec` off the mutating-method path | 263 → 228 ms, −13.3% |
+| `09f795a` | keep `Vec` off the READ path too | 264 → 226 ms, −14.4% |
+| `c1adb9c` | the growth test IS the de-inline test | 258 → 227 ms, −12.0% |
+| `27466ba` | main | 261 → 229 ms, −12.3% |
+
+`bench/sso/lexlike.kara` did not exist at `bab0491`. It was committed by
+`5bcafe9` at 09-13 00:04, 1h42m later, and `5bcafe9` also wrote the header line
+carrying "lexlike 34% SLOWER (2026-09-12)" — so that figure measured an
+uncommitted pre-harness workload and was transcribed above rails that replaced
+it. Refuted and recorded as B-2026-09-15-1 (**invalid**).
+
+Worth stating plainly, because this document has now made the same mistake
+twice in two directions. B-2026-09-14-20 promoted a static IR count to an
+attribution; measurement refuted it. The paragraph above declined to credit any
+commit — the right instinct — but still accepted that the movement HAPPENED,
+without checking that its baseline was reproducible. Two numbers from different
+dates disagreeing is not a finding until both are reproduced on the same
+workload. The baseline is the first thing to re-measure, not the last.
+
+**`substr` flips SIGN with the auto-par setting, and that is the track's real
+open question.** Measured at one commit, best-of-9, so no cross-date comparison
+is involved:
+
+| rail | auto-par default | auto-par pinned |
+|---|---|---|
+| `lexlike` | −13.0% | −13.4% |
+| `substr` | **−14.7%** (SSO wins) | **+30.9%** (SSO loses) |
+| `pfx_idx` | +10.5% | +15.6% |
+
+Compressing a per-iteration difference is expected and is what happened to
+`pfx_idx`. `substr` does something worse: fanned out it reports SSO as a solid
+win, pinned it reports a solid loss — the opposite conclusion, not a milder one.
+Both legs are ~2.3x faster fanned out (175 → 75 ms at `SSO=0`), so the rail
+parallelises fine; the legs simply do not scale equally. `lexlike` is the
+control that makes this readable: the analyzer declines to fan it out, so its
+delta is the same under both settings.
+
+Pinned, `substr` (+31%) and `lexlike` (−13%) differ by **44 points while doing
+the same work** — slice a 3-byte token, compare, discard — one through
+`String.substring` and one through slice syntax. Filed as B-2026-09-15-6. The
+next step is to diff the two rails' IR at `KARAC_SSO=1` pinned, since they
+differ only in how the piece is produced; this track has never had a profiler
+pointed at it.
 
 #### The 17 residual katas, re-timed
 

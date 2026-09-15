@@ -99,7 +99,7 @@ distinguish "bugs flattening" from "we stopped writing them down."
 | missing-feature | 198 |
 | codegen-gap | 177 |
 | diagnostics | 126 |
-| perf | 111 |
+| perf | 112 |
 | other | 111 |
 | false-positive | 107 |
 | soundness | 95 |
@@ -110,7 +110,7 @@ distinguish "bugs flattening" from "we stopped writing them down."
 
 | surface | total |
 |---|---|
-| codegen | 1753 |
+| codegen | 1754 |
 | interp | 439 |
 | typecheck | 300 |
 | other | 90 |
@@ -190,11 +190,11 @@ _Generated from `bug-ledger.jsonl` by `scripts/bug-curve.py` (2026-05-20 → 202
 | B-2026-09-14-29 | 2026-09-14 | codegen | low | AN INDEX-ASSIGN DISPLACING A STRUCT ELEMENT WITH A HEAP FIELD LOSES BOTH ITS MEMORY AND ITS `Drop` BODY -- `a[0] = D { .. }` over `Array[D, 2]` with `D { s: String }` prints `a0:3 / dD3 / dD2` with the displaced element's `dD1` running nowhere, and leaks its 10-byte `s` buffer; B-2026-09-14-1's fix is gated on the element being a vec-struct slot, which a user struct is not, so it declines this shape by construction and closing it needs the element's own drop WRAPPER at the store rather than a buffer free | — |
 | B-2026-09-14-30 | 2026-09-14 | codegen | medium | AN INDEX-ASSIGN WHOSE RHS IS A NAMED LOCAL DOUBLE-FREES THE MOVED-IN VALUE FOR A HEAP-OWNING ARRAY ELEMENT -- `a[0] = v3` over `Array[Vec[i64], 2]` reports `Invalid free()` on a 32-byte block at -O0, freed once from `main` and once through a nested call, while the FRESH-rhs spelling (`a[0] = Vec.new()`) and the array literal that consumes the same sources are both free of it; the array LITERAL suppresses the sources it consumes and the index-STORE does not | — |
 | B-2026-09-14-31 | 2026-09-14 | codegen | high | AUTO-PAR MISCOMPILES A `+` REDUCTION WHOSE CONTRIBUTION READS ITS OWN ACCUMULATOR -- `while i < 50 { let k = (i + total) % 21; total = total + mk(k); i = i + 1; }` prints 413 compiled and 289 under `--interp` / `KARAC_AUTO_PAR=0` (oracle 289). The analyzer reports `parallel_reduction { op: +, accumulator: total, fanned_out: true }` without ever testing that the contributed expression is free of reads of `total`. The COST GATE is the only thing masking it: the same program is correct at trip count 38 (`declined_below_cost_threshold`) and wrong at 39. Silent, no diagnostic, and ON BY DEFAULT. | — |
-| B-2026-09-15-1 | 2026-09-15 | codegen | medium | TWO SSO RAIL NUMBERS MOVED BY MORE THAN 40 POINTS AND NEITHER IS ATTRIBUTED -- `lexlike`'s +34% regression (this track's stated open question) became a 12-14% WIN between 2026-09-12 and 2026-09-15, and `substr` is now the worst rail at +34% having read as +5%. `substr`'s move is explained (it was fanning out; `bench.sh` did not pin `KARAC_AUTO_PAR=0` until 2026-09-15). `lexlike`'s is NOT: it is the one rail the analyzer never fans out, so both numbers are sequential and directly comparable. Reachable only at KARAC_SSO=1, which is off by default. | — |
 | B-2026-09-15-2 | 2026-09-15 | codegen | high | MOVING A NAMED `Array[T, N]` LOCAL INTO AN ENCLOSING ARRAY LITERAL DOUBLE-FREES ITS ELEMENT BUFFERS ON EVERY COMPILED BACKEND -- `let n: Array[Array[String, 2], 1] = [a];` over `let a: Array[String, 2] = [f"..", f".."]` aborts with `free(): double free detected in tcache 2` at exit 134 against a correct `--interp`, and `karac check` prints `All checks passed` with NO diagnostic of any kind | — |
 | B-2026-09-15-3 | 2026-09-15 | codegen | medium | AN `Array[T, N]` LOCAL MOVED INTO A USER ENUM'S VARIANT CONSTRUCTOR STILL DANGLES ON EVERY COMPILED BACKEND when the enum dies FIRST -- `{ let w = Wrp.Full(a); .. }` then `println(a[0])` prints garbage at exit 0 against a correct `--interp`, because the constructor site stands the caller's element drop down BEFORE the payload is compiled and so cannot be handed the defensive copy that closed the argument spellings | — |
 | B-2026-09-15-4 | 2026-09-15 | codegen | high | A METHOD RETURNING `ref (T, U)` IS MISHANDLED AT EVERY VALUE-POSITION CONSUMER -- `m.get(h.peek())` over a heap tuple SIGSEGVs, `h.peek().0` prints `0` instead of the field, and a scalar-tuple key answers `missing` for a key that is present, while binding the same result as a `ref` is correct and the by-value spelling of all three cells is correct | — |
 | B-2026-09-15-5 | 2026-09-15 | codegen | medium | A MAP-LOOKUP KEY TEMPORARY'S USER `Drop` BODY NEVER RUNS -- `m.get(mkd(0))` over `Map[Dk, i64]` with `impl Drop for Dk` reclaims the key's storage but skips the `Dk.drop` call, in the free-function and method spellings alike, because the key-reclaim legs emit the memory walk without the separate user-`Drop` call every other drop site pairs it with | — |
+| B-2026-09-15-6 | 2026-09-15 | codegen | medium | `substr` IS A 14.7% SSO *WIN* UNDER DEFAULT AUTO-PAR AND A 30.9% SSO *LOSS* WITH `KARAC_AUTO_PAR=0` -- the same commit, the same rail, a 45-POINT SWING AND A SIGN FLIP decided entirely by the auto-par setting. Every SSO rail conclusion is therefore conditional on a variable that `bench/sso/bench.sh` did not pin until 2026-09-15 (375118d). Pinned, `substr` is the worst rail in the track at +31%, against `lexlike` at -13% for the SAME slice/compare/discard shape reached through `String.substring` instead of slice syntax -- a 44-point gap between two rails doing the same work, never profiled. Reachable only at KARAC_SSO=1, off by default. | — |
 
 ### Relocated
 

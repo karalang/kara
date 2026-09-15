@@ -25,23 +25,29 @@
 #           the other is not a win.
 #
 # Last measured on x86-64 (2026-09-15, KARAC_SSO=1 vs =0, RUNS=15, auto-par
-# pinned off -- see the tunables note below; earlier numbers were NOT pinned):
-#   lexer  17.6% FASTER   lexlike  13% FASTER   substr  34% SLOWER
+# pinned off -- see the tunables note below; numbers from before 2026-09-15 were
+# NOT pinned and are not comparable to these):
+#   lexer  -17.6%   lexlike  -13%   substr  +31..34%
 #   builder20 +15%   builder60 +12%   promote +8%   pfx_idx +15%   pfx_chars -10%
 #
-# THE OPEN QUESTION HAS MOVED. It used to be "where does lexlike's remaining 34%
-# go?". lexlike no longer regresses at all -- it is a 12-14% WIN as of
-# 2026-09-15, and the pin does not explain that, because lexlike is the one rail
-# the analyzer never fans out (declined_memory_bound), so its old and new
-# numbers are both sequential and directly comparable. Something between
-# 2026-09-12 and 2026-09-15 fixed it and NOTHING HAS ATTRIBUTED IT; the
-# candidates are B-2026-09-12-20's overlay fix, the growth-test fold (c1adb9c),
-# and keeping Vec off the SSO path.
+# DO NOT TRUST A PRE-2026-09-15 NUMBER FROM THIS HEADER, and do not re-measure
+# to "confirm" one. This block used to read "lexlike 34% SLOWER (2026-09-12)",
+# and that figure was never reproducible: bench/sso/lexlike.kara was committed
+# by 5bcafe9 at 09-13 00:04, 1h42m AFTER the commit the number was attributed
+# to, and 5bcafe9 wrote both the rail and the header line. The figure described
+# an uncommitted pre-harness workload, not the rail beneath it. Building the
+# committed rail at five commits spanning 09-12..09-15 gives -12 to -14% at
+# every one of them, flat. Recorded as B-2026-09-15-1 (invalid).
 #
-# The question now is SUBSTR, at +34%. It is the same slice/compare/discard
-# shape as lexlike but through `String.substring`, and the two disagree by 47
-# points. It read as +5% for as long as it was fanned out. It has never been
-# profiled either. See the README for what has already been ruled out.
+# THE OPEN QUESTION is SUBSTR, and it is sharper than a magnitude. At ONE
+# commit, `substr` is a 14.7% SSO WIN under default auto-par and a 30.9% SSO
+# LOSS pinned -- same rail, same compiler, a sign flip decided by the scheduler
+# (B-2026-09-15-6). Pinned it is the worst rail in the track, while `lexlike` --
+# the SAME slice/compare/discard shape, reached through slice syntax instead of
+# `String.substring` -- wins 13%. Nothing attributes that 44-point gap and no
+# profiler has ever been pointed at this track.
+#
+# See the README for what has already been ruled out.
 #
 # Tunables (env): ITERS (microbench iterations, default 10000000), PASSES (lexer
 # passes over the input, default 200), RUNS (samples per rail, default 7),
