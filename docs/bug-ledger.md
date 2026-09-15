@@ -210,6 +210,7 @@ _Generated from `bug-ledger.jsonl` by `scripts/bug-curve.py` (2026-05-20 → 202
 | B-2026-08-31-31 | 2026-08-31 | codegen | medium | WHEN THE DESTRUCTURED STRUCT HAS ITS OWN `impl Drop`, ITS WRAPPER STILL RUNS THE MOVED-OUT FIELD'S BODY ON THE HUSK -- the carrier is `OwnWrapper`, which B-2026-08-31-26's mask cannot reach | B-2026-09-01-38 |
 | B-2026-08-31-33 | 2026-08-31 | interp | medium | THE INTERPRETER SKIPS THE PARTIALLY-MOVED RESIDUE'S OWN `Drop` BODY WHEN AN ARM DESTRUCTURES AN `Option`-WRAPPED PAYLOAD -- `Some(H { r, .. })` prints `dR[a]` where both compiled backends print `dH dR[a]` | B-2026-09-01-38 |
 | B-2026-09-02-9 | 2026-09-02 | runtime | low | OVER-ALIGNED ALLOCATION IS UNSUPPORTED ON WINDOWS -- `karac_alloc_aligned_or_panic` aborts there rather than honoring an alignment above `malloc`'s 16-byte guarantee, because the MSVC CRT has no `free`-compatible aligned allocator and every release path assumes plain `free`. | .github/workflows/ci.yml § STAGE 4 (Codegen E2E on windows-latest with LLVM 18) — deferred |
+| B-2026-09-15-11 | 2026-09-15 | codegen | medium | A TUPLE WHOSE ONLY HEAP IS A FIXED-`Array` ELEMENT GETS NO DROP AT ALL AND STRANDS ITS ELEMENT BUFFERS ON EVERY COMPILED BACKEND -- `let p: (Array[String, 2], i64) = (mka("x"), 3);` loses 44 B in 2 blocks at `-O0` with the OUTPUT CORRECT, exit 0, and `karac check` clean, because `tuple_elem_needs_deep_drop` has arms for `Vec`, `Option`/`Result`, a struct containing a `Vec` and `shared`, but none for `Array` | B-2026-09-13-23 |
 
 </details>
 
@@ -2585,7 +2586,6 @@ _Generated from `bug-ledger.jsonl` by `scripts/bug-curve.py` (2026-05-20 → 202
 | B-2026-09-14-31 | codegen | high | AUTO-PAR MISCOMPILES A `+` REDUCTION WHOSE CONTRIBUTION READS ITS OWN ACCUMULATOR -- `while i < 50 { let k = (i + total) % 21; total = total + mk(k);… | 4f60677 |
 | B-2026-09-15-2 | codegen | high | MOVING A NAMED `Array[T, N]` LOCAL INTO AN ENCLOSING ARRAY LITERAL DOUBLE-FREES ITS ELEMENT BUFFERS ON EVERY COMPILED BACKEND -- `let n: Array[Array[… | 73f1781 |
 | B-2026-09-15-4 | codegen | high | A METHOD RETURNING `ref (T, U)` IS MISHANDLED AT EVERY VALUE-POSITION CONSUMER -- `m.get(h.peek())` over a heap tuple SIGSEGVs, `h.peek().0` prints `… | 6027ab1 |
-| B-2026-09-15-11 | codegen | medium | A TUPLE WHOSE ONLY HEAP IS A FIXED-`Array` ELEMENT GETS NO DROP AT ALL AND STRANDS ITS ELEMENT BUFFERS ON EVERY COMPILED BACKEND -- `let p: (Array[St… | da73ec3c8 |
 
 </details>
 
