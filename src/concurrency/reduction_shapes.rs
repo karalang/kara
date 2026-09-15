@@ -656,3 +656,160 @@ pub(crate) fn collect_push_shape(expr: &Expr) -> Option<String> {
     };
     Some(name.clone())
 }
+
+/// B-2026-09-14-31 — does the loop body carry a TRUE DEPENDENCE on `acc`, i.e.
+/// does anything read the accumulator other than the reduction step's own
+/// operand?
+///
+/// A reduction is `acc = acc <op> delta` where `delta` is independent of `acc`.
+/// The shape recognizers above check only the FORM of the update — that `acc`
+/// appears exactly once in the same-op chain — and never ask what `delta`
+/// reads. When `delta` depends on the running total the loop is not a reduction
+/// at all: each iteration needs the previous iteration's value, and fanning it
+/// out across workers computes a different answer.
+///
+/// Measured before this gate, all four `fanned_out: true` and silently wrong
+/// (oracle / compiled):
+///
+/// * `let k = (i + total) % 21; total = total + mk(k);` — 289 / 413. The
+///   dependence runs through a body-local `let`, so the update statement alone
+///   mentions `total` exactly once and looks impeccable.
+/// * `total = total + mk((total % 7) + 1);` — 115 / 111. No `let` involved: the
+///   delta reads the accumulator directly, and `acc_matches_either` returns on
+///   the LEFT operand without ever inspecting the right.
+/// * the same two wrapped in `if k > 2 { .. }` — 245 / 400 — and chained as
+///   `total = total + mk(k) + 1` — 460 / 552.
+///
+/// WHY NOT "acc may be read only once in the body": that would decline
+/// `total = total + mk(k); total = total + 1;`, two reduction steps into one
+/// accumulator, which is a perfectly valid reduction and fans out correctly
+/// today (measured 498 on every surface). The rule is per-STEP instead — each
+/// update into `acc` may read it exactly once, and nothing else may read it at
+/// all.
+///
+/// Conservative in the sound direction: an unrecognized statement shape is
+/// walked for reads and disqualifies the loop if it mentions `acc`, so a shape
+/// this walk does not model can cost parallelism but cannot keep a dependent
+/// loop fanned out.
+pub(super) fn loop_body_carries_acc_dependence(block: &Block, acc: &str) -> bool {
+    block
+        .stmts
+        .iter()
+        .any(|s| stmt_carries_acc_dependence(s, acc))
+        || block
+            .final_expr
+            .as_deref()
+            .is_some_and(|e| expr_carries_acc_dependence(e, acc))
+}
+
+fn stmt_carries_acc_dependence(stmt: &Stmt, acc: &str) -> bool {
+    match &stmt.kind {
+        // An update INTO the accumulator is the one legal reader, and only of
+        // its own single operand. `acc = acc + f(acc)` counts two and is
+        // rejected here rather than by the shape matcher, which stops at the
+        // first operand.
+        StmtKind::Assign { target, value } if identifier_name(target).as_deref() == Some(acc) => {
+            count_acc_reads_expr(value, acc) != 1
+        }
+        // `acc += delta` names the accumulator only as the target, so `delta`
+        // must not mention it at all.
+        StmtKind::CompoundAssign { target, value, .. }
+            if identifier_name(target).as_deref() == Some(acc) =>
+        {
+            count_acc_reads_expr(value, acc) != 0
+        }
+        StmtKind::Assign { target, value } => {
+            count_acc_reads_expr(target, acc) != 0 || count_acc_reads_expr(value, acc) != 0
+        }
+        StmtKind::CompoundAssign { target, value, .. } => {
+            count_acc_reads_expr(target, acc) != 0 || count_acc_reads_expr(value, acc) != 0
+        }
+        StmtKind::Let { value, .. } => count_acc_reads_expr(value, acc) != 0,
+        StmtKind::LetElse { value, .. } => count_acc_reads_expr(value, acc) != 0,
+        StmtKind::Expr(e) => expr_carries_acc_dependence(e, acc),
+        _ => false,
+    }
+}
+
+/// The expression half, which exists so a reduction step nested inside an `if`
+/// arm (the `conditional_acc_update_shape` the recognizer already admits) is
+/// treated as a step rather than as an ordinary read.
+fn expr_carries_acc_dependence(expr: &Expr, acc: &str) -> bool {
+    match &expr.kind {
+        ExprKind::If {
+            condition,
+            then_block,
+            else_branch,
+        } => {
+            count_acc_reads_expr(condition, acc) != 0
+                || loop_body_carries_acc_dependence(then_block, acc)
+                || else_branch
+                    .as_deref()
+                    .is_some_and(|e| expr_carries_acc_dependence(e, acc))
+        }
+        ExprKind::Block(b) | ExprKind::Seq(b) => loop_body_carries_acc_dependence(b, acc),
+        ExprKind::While {
+            condition, body, ..
+        } => {
+            count_acc_reads_expr(condition, acc) != 0 || loop_body_carries_acc_dependence(body, acc)
+        }
+        ExprKind::For { iterable, body, .. } => {
+            count_acc_reads_expr(iterable, acc) != 0 || loop_body_carries_acc_dependence(body, acc)
+        }
+        ExprKind::Loop { body, .. } => loop_body_carries_acc_dependence(body, acc),
+        ExprKind::Match { scrutinee, arms } => {
+            count_acc_reads_expr(scrutinee, acc) != 0
+                || arms.iter().any(|a| {
+                    a.guard
+                        .as_ref()
+                        .is_some_and(|g| count_acc_reads_expr(g, acc) != 0)
+                        || expr_carries_acc_dependence(&a.body, acc)
+                })
+        }
+        _ => count_acc_reads_expr(expr, acc) != 0,
+    }
+}
+
+/// How many times `acc` is READ in `expr`. Counts rather than merely detects,
+/// because the legal case is "exactly one" and `collect_expr_reads` answers
+/// with a set.
+fn count_acc_reads_expr(expr: &Expr, acc: &str) -> usize {
+    let mut n = 0usize;
+    if let ExprKind::Identifier(name) = &expr.kind {
+        if name == acc {
+            n += 1;
+        }
+    }
+    crate::index_disjoint::for_each_child_public(expr, &mut |c| match c {
+        crate::index_disjoint::Child::Expr(e) => n += count_acc_reads_expr(e, acc),
+        crate::index_disjoint::Child::Block(b) => n += count_acc_reads_block(b, acc),
+    });
+    n
+}
+
+fn count_acc_reads_block(block: &Block, acc: &str) -> usize {
+    let mut n = 0usize;
+    for stmt in &block.stmts {
+        n += match &stmt.kind {
+            StmtKind::Let { value, .. } | StmtKind::LetElse { value, .. } => {
+                count_acc_reads_expr(value, acc)
+            }
+            StmtKind::Assign { target, value } | StmtKind::CompoundAssign { target, value, .. } => {
+                // The target is a WRITE; only a non-identifier target (an index
+                // or field path) contributes reads.
+                let t = if identifier_name(target).is_some() {
+                    0
+                } else {
+                    count_acc_reads_expr(target, acc)
+                };
+                t + count_acc_reads_expr(value, acc)
+            }
+            StmtKind::Expr(e) => count_acc_reads_expr(e, acc),
+            _ => 0,
+        };
+    }
+    if let Some(t) = block.final_expr.as_deref() {
+        n += count_acc_reads_expr(t, acc);
+    }
+    n
+}

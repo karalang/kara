@@ -673,6 +673,62 @@ impl<'a> super::ConcurrencyChecker<'a> {
                     None
                 }
             };
+            // B-2026-09-14-31 — SOUNDNESS GATE: the recognizers above check the
+            // FORM of the update and never ask what the contributed delta
+            // READS. A reduction requires `delta` to be independent of the
+            // accumulator; when it is not, the loop carries a true dependence,
+            // is not a reduction, and fanning it out computes a different
+            // answer — silently, with no diagnostic, on by default.
+            //
+            // Measured before this gate, every one `fanned_out: true` and wrong
+            // (oracle / compiled): the dependence through a body-local `let`
+            // (289 / 413), the same read taken DIRECTLY in the delta
+            // (`total = total + mk((total % 7) + 1)`, 115 / 111 — which the
+            // owning row does not mention and which a fix aimed at the `let`
+            // spelling alone would leave miscompiling), and both wrapped in an
+            // `if` (245 / 400) or chained (460 / 552).
+            //
+            // Placed with the other soundness gates rather than inside the
+            // shape matchers because it is a property of the whole BODY, not of
+            // the update expression: the reproduction's update statement
+            // mentions the accumulator exactly once and is impeccable on its
+            // own.
+            let classified = match classified {
+                // ARITHMETIC-CHAIN SHAPES ONLY. `Min`/`Max` and `Collect`
+                // read the accumulator BY DESIGN and are not dependences:
+                // the min/max conditional compares the candidate against the
+                // running extremum (`if v < acc { acc = v }`) and the collect
+                // step names the accumulator as its receiver (`acc.push(v)`).
+                // In both the CONTRIBUTED value is still independent — the read
+                // belongs to the combine, not to the contribution.
+                //
+                // Measured: gating them too declined 12 `par_codegen` fixtures
+                // (the whole collect/tabulate family plus
+                // `test_ir_reduction_{min,max}_conditional_assign`), i.e. it
+                // de-parallelized correct loops — silent lost throughput, which
+                // is the failure mode this gate must not have. The defect this
+                // row measured is entirely in the `acc = acc <op> delta` chain,
+                // so the gate stays there.
+                Some((ref acc, op))
+                    if matches!(
+                        op,
+                        ReductionOp::Add
+                            | ReductionOp::Mul
+                            | ReductionOp::BitOr
+                            | ReductionOp::BitAnd
+                            | ReductionOp::BitXor
+                    ) && crate::concurrency::reduction_shapes::loop_body_carries_acc_dependence(
+                        body, acc,
+                    ) =>
+                {
+                    note_decline(
+                        declined,
+                        "the contributed value reads the accumulator, so the loop carries a true dependence and is not a reduction — each iteration needs the previous one's total",
+                    );
+                    None
+                }
+                other => other,
+            };
             if let Some((accumulator, op)) = classified {
                 // B-2026-07-16-6 soundness gate: the reduction lowering runs
                 // this body on MULTIPLE worker threads, so any value the body

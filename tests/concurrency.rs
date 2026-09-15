@@ -5625,3 +5625,177 @@ fn test_branches_may_hide_work_ignores_allocates_but_not_blocks() {
         group.statement_indices
     );
 }
+
+// ── B-2026-09-14-31: reduction dependence gate ──────────────────
+//
+// A `+` reduction whose contributed delta READS the accumulator is not a
+// reduction at all — the loop carries a true dependence, and fanning it out
+// computes a different answer. The recognizers check only the FORM of
+// `acc = acc <op> delta` (that the accumulator appears exactly once in the
+// same-op chain) and never asked what `delta` reads.
+//
+// Measured before the gate, every shape below reported
+// `parallel_reduction { op: +, accumulator: total, fanned_out: true }` and the
+// compiled program printed a wrong answer against the interpreter's oracle:
+// 289/413 for the `let` spelling, 115/111 for the direct one, 245/400
+// conditional, 460/552 chained. Silent, no diagnostic, on by default — only
+// the COST gate masked it, and a cost gate moves for performance reasons
+// (correct at trip count 38, wrong at 39).
+
+fn reduces_into(src: &str, acc: &str) -> bool {
+    analyze(src)
+        .function_decisions
+        .values()
+        .any(|f| f.loop_reductions.iter().any(|r| r.accumulator == acc))
+}
+
+/// The dependent shapes must NOT be recognized. Each is a distinct route to
+/// the same wrong answer.
+#[test]
+fn reduction_declines_when_the_delta_reads_the_accumulator() {
+    // Through a body-local `let` — the update statement itself mentions the
+    // accumulator exactly once and looks impeccable.
+    assert!(
+        !reduces_into(
+            r#"
+fn mk(k: i64) -> i64 { k }
+fn main() {
+    let mut total = 0;
+    let mut i = 0;
+    while i < 50 { let k = (i + total) % 21; total = total + mk(k); i = i + 1; }
+    println(f"{total}");
+}
+"#,
+            "total"
+        ),
+        "a delta reading the accumulator through a body-local `let` is a true dependence"
+    );
+
+    // DIRECTLY in the delta, no `let` involved. Not in the owning row: the
+    // shape matcher returns on the LEFT operand and never inspects the right,
+    // so a fix aimed at the `let` spelling alone leaves this miscompiling.
+    assert!(
+        !reduces_into(
+            r#"
+fn mk(k: i64) -> i64 { k }
+fn main() {
+    let mut total = 0;
+    let mut i = 0;
+    while i < 50 { total = total + mk((total % 7) + 1); i = i + 1; }
+    println(f"{total}");
+}
+"#,
+            "total"
+        ),
+        "a delta reading the accumulator directly is a true dependence"
+    );
+
+    // The conditional-update spelling, and the same-op chain.
+    assert!(
+        !reduces_into(
+            r#"
+fn mk(k: i64) -> i64 { k }
+fn main() {
+    let mut total = 0;
+    let mut i = 0;
+    while i < 50 { let k = (i + total) % 21; if k > 2 { total = total + mk(k); } i = i + 1; }
+    println(f"{total}");
+}
+"#,
+            "total"
+        ),
+        "the conditional-update spelling carries the same dependence"
+    );
+    assert!(
+        !reduces_into(
+            r#"
+fn mk(k: i64) -> i64 { k }
+fn main() {
+    let mut total = 0;
+    let mut i = 0;
+    while i < 50 { let k = (i + total) % 21; total = total + mk(k) + 1; i = i + 1; }
+    println(f"{total}");
+}
+"#,
+            "total"
+        ),
+        "a same-op chain does not launder the dependence"
+    );
+}
+
+/// THE CONTROLS, and they are the point: the gate must not cost parallelism on
+/// correct code. A rule of "the accumulator may be read at most once in the
+/// body" passes every assertion above and declines `two_steps` below, which is
+/// a valid reduction — which is why the rule is per-STEP instead.
+#[test]
+fn reduction_still_recognized_when_the_delta_is_independent() {
+    let cases: [(&str, &str); 4] = [
+        ("independent", "let k = i % 21; total = total + mk(k);"),
+        (
+            "two_steps",
+            "let k = i % 21; total = total + mk(k); total = total + 1;",
+        ),
+        (
+            "conditional",
+            "let k = i % 21; if k > 2 { total = total + mk(k); }",
+        ),
+        ("compound", "let k = i % 21; total += mk(k);"),
+    ];
+    for (name, body) in cases {
+        let src = format!(
+            r#"
+fn mk(k: i64) -> i64 {{ k }}
+fn main() {{
+    let mut total = 0;
+    let mut i = 0;
+    while i < 50 {{ {body} i = i + 1; }}
+    println(f"{{total}}");
+}}
+"#
+        );
+        assert!(
+            reduces_into(&src, "total"),
+            "{name}: an independent contribution is a genuine reduction and must keep fanning out"
+        );
+    }
+}
+
+/// `Min` / `Max` / `Collect` read the accumulator BY DESIGN — the conditional
+/// compares against the running extremum, the collect step names it as the push
+/// receiver — and in both the contributed value is still independent. Gating
+/// them declined 12 `par_codegen` fixtures (the whole collect/tabulate family
+/// plus both min/max conditionals): correct answers, silently lost
+/// parallelism, and every reduction cell above still green. This pins the
+/// carve-out so that regression cannot return unnoticed.
+#[test]
+fn min_max_and_collect_still_recognized_despite_reading_the_accumulator() {
+    assert!(
+        reduces_into(
+            r#"
+fn main() {
+    let mut m: i64 = 1000i64;
+    let mut i: i64 = 0i64;
+    while i < 100i64 { let x: i64 = i * 7i64; if x < m { m = x; } i = i + 1i64; }
+    println(m);
+}
+"#,
+            "m"
+        ),
+        "the min conditional compares against the accumulator as part of the COMBINE"
+    );
+    assert!(
+        reduces_into(
+            r#"
+fn main() {
+    let mut acc: Vec[i64] = Vec.new();
+    let mut i: i64 = 0i64;
+    #[par_order_free]
+    while i < 100i64 { acc.push(i * 2i64); i = i + 1i64; }
+    println(acc.len());
+}
+"#,
+            "acc"
+        ),
+        "the collect step names the accumulator as its push RECEIVER"
+    );
+}
