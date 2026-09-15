@@ -633,7 +633,33 @@ impl<'ctx> super::Codegen<'ctx> {
     /// is why the nested disjunct is here rather than folded into it
     /// (B-2026-09-10-8 / -26 explains why that predicate is not widened).
     pub(super) fn array_elem_owns_callee_drop(&self, elem_te: &TypeExpr) -> bool {
-        self.type_expr_has_drop_heap(elem_te) || self.nested_array_needs_drop(elem_te)
+        self.type_expr_has_drop_heap(elem_te)
+            || self.nested_array_needs_drop(elem_te)
+            // B-2026-09-15-8 — a `shared` element. `type_expr_has_drop_heap`
+            // answers `false` for a shared type on purpose (its drop is
+            // refcount-driven, not a buffer free), and no other disjunct here
+            // asked about one, so `make_array_param_callee_owned` registered
+            // NOTHING for an `Array[S, N]` and every element's 16-byte refcount
+            // block was stranded: 32 B in 2 blocks at `-O0` for a bare
+            // `let a: Array[S, 2] = [S { v: n }, S { v: n + 1 }]`, scaling with
+            // N, with no store and no move anywhere in the program.
+            //
+            // THE TWO GATES DISAGREED, which is the actual defect.
+            // `synthesize_array_drop_fn_te` — the EMITTER this registrar exists
+            // to arm — already admits a shared element through its
+            // `tuple_elem_needs_deep_drop` disjunct, and
+            // `emit_drop_fn_for_type_expr` already answers a shared element
+            // with `emit_vec_elem_rc_dec_fn` (B-2026-09-03-36). So the walk was
+            // fully built and simply never registered. The same two disjuncts
+            // the tuple gate carries are used here verbatim so the registrar
+            // and the emitter answer alike: the typed lookup for the positions
+            // that have it, and `shared_type_names` for the declaration-time
+            // ones that do not (B-2026-09-12-10 records why one is not enough).
+            || self.shared_heap_type_for_type_expr(elem_te).is_some()
+            || matches!(&elem_te.kind, TypeKind::Path(p)
+                if p.segments.last().is_some_and(|n| {
+                    self.type_decls.shared_type_names.contains(n.as_str())
+                }))
     }
 
     /// B-2026-09-14-25 — the PARAM-ONLY half of

@@ -48363,6 +48363,63 @@ fn main() {
     }
 
     #[test]
+    fn asan_array_of_shared_elements_releases_every_refcount_block() {
+        // B-2026-09-15-8 — an `Array[S, N]` of a `shared struct` registered no
+        // scope-exit drop at all, so every element's 16-byte refcount block was
+        // stranded: 32 B in 2 blocks at `-O0` for a bare local, scaling with N,
+        // with no store and no move anywhere in the program.
+        //
+        // TWO GATES DISAGREED. `synthesize_array_drop_fn_te` — the emitter —
+        // already admitted a shared element through its
+        // `tuple_elem_needs_deep_drop` disjunct, and
+        // `emit_drop_fn_for_type_expr` already answers a shared element with
+        // `emit_vec_elem_rc_dec_fn` (B-2026-09-03-36). The walk was built; only
+        // `array_elem_owns_callee_drop` — the registrar that arms it — never
+        // asked about a shared element, because `type_expr_has_drop_heap`
+        // answers `false` for a shared type by design.
+        //
+        // The cells are the positions where the array stays a LOCAL, which is
+        // where the defect lives: a plain local, a whole-array rebind, a
+        // by-value argument, and a return. The positions that hand the array to
+        // a destination owning its own drop (a container literal, a struct
+        // field, an enum constructor, `push`) were clean BEFORE this and are
+        // pinned here too, because arming a new drop is exactly how a leak
+        // becomes a double release.
+        //
+        // -O0 ONLY. At the default opt level LLVM deletes the allocation
+        // nothing observes and every cell here is clean on the unfixed tree, so
+        // the ordinary `--features llvm` run is vacuous for this fixture and
+        // `scripts/asan-o0-leg.sh` is where it has teeth.
+        assert_clean_asan_run(
+            r#"
+shared struct S { v: i64 }
+struct Holder { a: Array[S, 2] }
+
+fn take(a: Array[S, 2]) -> i64 { return a[0].v; }
+fn give(n: i64) -> Array[S, 2] { return [S { v: n }, S { v: n + 1 }]; }
+
+fn main() {
+    let n = env.args().len() as i64;
+    let a: Array[S, 2] = [S { v: n }, S { v: n + 1 }];
+    println(a[0].v);
+    let b: Array[S, 2] = [S { v: n }, S { v: n + 1 }];
+    let c = b;
+    println(c[1].v);
+    let d: Array[S, 2] = [S { v: n }, S { v: n + 1 }];
+    println(take(d));
+    let e = give(n);
+    println(e[0].v);
+    let f: Array[S, 2] = [S { v: n }, S { v: n + 1 }];
+    let h = Holder { a: f };
+    println(h.a[0].v);
+}
+"#,
+            &["1", "2", "1", "1", "1"],
+            "array_of_shared_elements_releases_every_refcount_block",
+        );
+    }
+
+    #[test]
     fn asan_array_local_moved_into_a_container_literal_has_one_owner() {
         // B-2026-09-15-2 — a named `Array[T, N]` local moved into an enclosing
         // ARRAY or VEC literal was owned twice: the local keeps the
