@@ -34359,6 +34359,101 @@ fn main() {
         }
     }
 
+    /// B-2026-09-15-2 — a named `Array[T, N]` local moved into an enclosing
+    /// container LITERAL has exactly one owner.
+    ///
+    /// The local carries a `StructDrop` of its own
+    /// (`make_array_param_callee_owned`); the literal bit-copies its `N`
+    /// element descriptors and registers its own walk (B-2026-09-10-8 for the
+    /// nested-array case); nothing stood the source down, so both freed the
+    /// same buffers — `free(): double free detected in tcache 2` at exit 134
+    /// on every compiled backend against a correct `--interp`, and `karac
+    /// check` printed `All checks passed` with NO diagnostic at all, because
+    /// nothing in the ownership pass models a container literal as a move.
+    ///
+    /// STRICT `assert_eq!` ON THE AOT SIDE, deliberately. The pre-fix binary
+    /// ABORTS, and `run_program` answers `None` for a crash exactly as it does
+    /// for a missing toolchain — so the tolerant `if let Some(aot)` form this
+    /// file mostly uses would have passed vacuously on the very defect it was
+    /// written for. The strict form fails with `left: None`, which is the
+    /// signal B-2026-07-28-1 documents.
+    ///
+    /// The controls carry the other half of the rule: `v.push(a)` (disarmed
+    /// since B-2026-09-13-15, which is what isolated this to the literals), a
+    /// fresh temp element (no named source to stand down), a `Map` value
+    /// position, a tuple literal (whose drop walker has no `Array` arm, so the
+    /// source must KEEP ownership), and a `Copy` element.
+    #[test]
+    fn e2e_array_local_moved_into_a_container_literal_has_one_owner() {
+        const HDR: &str = "struct D { a: String, b: i64 }\n\
+                           impl Drop for D { fn drop(mut ref self) { println(f\"dD{self.b}\") } }\n\
+                           fn mkd(n: i64) -> D { return D { a: f\"payload-{n}-aaaaaaaaaaaaaaaa\", b: n }; }\n\
+                           fn mka(t: String) -> Array[String, 2] { return [f\"{t}-aaaaaaaaaaaaaaaaaaaa\", f\"{t}-bbbbbbbbbbbbbbbbbbbb\"]; }\n";
+        for (label, body, want) in [
+            (
+                "a named local into an ARRAY literal",
+                "let a = mka(\"k1\");\nlet n: Array[Array[String, 2], 1] = [a];\nprintln(f\"{n[0][1]}\");",
+                "k1-bbbbbbbbbbbbbbbbbbbb\nend\n",
+            ),
+            (
+                "a named local into a VEC literal",
+                "let a = mka(\"k2\");\nlet v: Vec[Array[String, 2]] = [a];\nprintln(f\"{v.len()}\");",
+                "1\nend\n",
+            ),
+            (
+                "TWO named locals into one array literal",
+                "let a = mka(\"k3a\");\nlet b = mka(\"k3b\");\n\
+                 let n: Array[Array[String, 2], 2] = [a, b];\nprintln(f\"{n[0][0]}\");",
+                "k3a-aaaaaaaaaaaaaaaaaaaa\nend\n",
+            ),
+            (
+                "a Drop-bearing element type",
+                "let a: Array[D, 1] = [mkd(5)];\nlet n: Array[Array[D, 1], 1] = [a];",
+                "dD5\nend\n",
+            ),
+            (
+                "the source is READ AGAIN — the copy owns it, not the retraction",
+                "let a = mka(\"kA\");\nlet n: Array[Array[String, 2], 1] = [a];\nprintln(f\"{a[0]}\");",
+                "kA-aaaaaaaaaaaaaaaaaaaa\nend\n",
+            ),
+            (
+                "control: v.push(a) was already disarmed",
+                "let a = mka(\"k4\");\nlet mut v: Vec[Array[String, 2]] = [];\nv.push(a);\nprintln(f\"{v.len()}\");",
+                "1\nend\n",
+            ),
+            (
+                "control: a fresh temp element has no named source",
+                "let n: Array[Array[String, 2], 1] = [mka(\"k6\")];\nprintln(f\"{n[0][0]}\");",
+                "k6-aaaaaaaaaaaaaaaaaaaa\nend\n",
+            ),
+            (
+                "control: a Map value position",
+                "let a = mka(\"k7\");\nlet mut m: Map[i64, Array[String, 2]] = Map.new();\n\
+                 m.insert(1, a);\nprintln(f\"{m.len()}\");",
+                "1\nend\n",
+            ),
+            (
+                "control: a tuple literal keeps the source as sole owner",
+                "let a = mka(\"k8\");\nlet t = (a, 5);\nprintln(f\"{t.1}\");",
+                "5\nend\n",
+            ),
+            (
+                "control: a Copy element never moves at all",
+                "let a: Array[i64, 2] = [1, 2];\nlet n: Array[Array[i64, 2], 1] = [a];\nprintln(f\"{n[0][1]}\");",
+                "2\nend\n",
+            ),
+        ] {
+            let src = format!("{HDR}fn main() {{\n{body}\nprintln(\"end\");\n}}\n");
+            let (interp_out, interp_errs, _, _) = karac::run_program_full(&src);
+            assert!(
+                interp_errs.is_empty(),
+                "[{label}] interp errored: {interp_errs:?}"
+            );
+            assert_eq!(interp_out.join(""), want, "[{label}] interpreter");
+            assert_eq!(run_program(&src), Some(want.to_string()), "[{label}] AOT");
+        }
+    }
+
     /// B-2026-09-14-27 — an owned `Array[T, N]` READ AFTER it is handed over by
     /// value reads its OWN buffers, on every backend.
     ///

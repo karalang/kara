@@ -48168,6 +48168,73 @@ fn main() {
     }
 
     #[test]
+    fn asan_array_local_moved_into_a_container_literal_has_one_owner() {
+        // B-2026-09-15-2 — a named `Array[T, N]` local moved into an enclosing
+        // ARRAY or VEC literal was owned twice: the local keeps the
+        // `StructDrop` `make_array_param_callee_owned` gave it, the literal
+        // bit-copies its `N` element descriptors and registers its own walk,
+        // and both free the same buffers. `free(): double free detected in
+        // tcache 2` at exit 134 on every compiled backend against a correct
+        // `--interp`, with `karac check` printing `All checks passed` and NO
+        // diagnostic of any kind — nothing in the ownership pass models a
+        // container literal as a move.
+        //
+        // The rule was already written in `compile_array_literal`'s own
+        // comment ("arming the array drop without suppressing here
+        // DOUBLE-FREES"); it had simply never been applied to an array-typed
+        // ELEMENT, only to the Vec/String one. `v.push(a)` has disarmed since
+        // B-2026-09-13-15, which is what isolated the gap to the two literal
+        // positions.
+        assert_clean_asan_run(
+            r#"
+fn mka(t: String) -> Array[String, 2] {
+    return [f"{t}-aaaaaaaaaaaaaaaaaaaa", f"{t}-bbbbbbbbbbbbbbbbbbbb"];
+}
+
+fn main() {
+    let a = mka("arr");
+    let n: Array[Array[String, 2], 1] = [a];
+    println(n[0][1]);
+    let b = mka("vec");
+    let v: Vec[Array[String, 2]] = [b];
+    println(v.len());
+}
+"#,
+            &["arr-bbbbbbbbbbbbbbbbbbbb", "1"],
+            "array_local_moved_into_a_container_literal_has_one_owner",
+        );
+    }
+
+    #[test]
+    fn asan_array_local_read_after_a_container_literal_keeps_its_own_buffers() {
+        // B-2026-09-15-2 composing with B-2026-09-14-27: when the ownership
+        // pass DOES see the source read again, the literal is handed an
+        // independent copy and the source keeps its drop, so the retraction
+        // above must NOT also fire. It does not —
+        // `suppress_array_local_move_into_ctor` stands down on
+        // `uam_copied_sites` — and this cell is what pins the two halves
+        // against each other: retracting as well would free nothing and leak
+        // the copy, copying without retracting on the aliasing spelling is the
+        // double free the sibling test covers.
+        assert_clean_asan_run(
+            r#"
+fn mka(t: String) -> Array[String, 2] {
+    return [f"{t}-aaaaaaaaaaaaaaaaaaaa", f"{t}-bbbbbbbbbbbbbbbbbbbb"];
+}
+
+fn main() {
+    let a = mka("arr");
+    let n: Array[Array[String, 2], 1] = [a];
+    println(a[0]);
+    println(n[0][1]);
+}
+"#,
+            &["arr-aaaaaaaaaaaaaaaaaaaa", "arr-bbbbbbbbbbbbbbbbbbbb"],
+            "array_local_read_after_a_container_literal_keeps_its_own_buffers",
+        );
+    }
+
+    #[test]
     fn asan_rebound_vec_weak_param_leaks_per_element_not_per_program() {
         // The under-count is PER SLOT, so the loss scales with the element
         // count rather than being one fixed block. Measured pre-fix under

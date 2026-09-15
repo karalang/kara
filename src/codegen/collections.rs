@@ -1541,6 +1541,28 @@ impl<'ctx> super::Codegen<'ctx> {
                 // runs BEFORE the cap-zero so it reads the source's real `cap`.
                 let v = self.maybe_defensive_copy_param_arg(e, v);
                 self.suppress_source_vec_cleanup_for_arg(e);
+                // B-2026-09-15-2 — the ARRAY channel of that same move-aware
+                // set, which this loop never ran. A named `Array[T, N]` local
+                // carries a `StructDrop` of its own
+                // (`make_array_param_callee_owned`), the enclosing literal
+                // bit-copies its `N` element descriptors and registers its own
+                // nested-array walk (B-2026-09-10-8), and both then free the
+                // same buffers: `free(): double free detected in tcache 2` at
+                // exit 134 on `let a: Array[String, 2] = ..; let n:
+                // Array[Array[String, 2], 1] = [a];` against a correct
+                // `--interp`, with NO diagnostic of any kind. The comment
+                // above already states the rule this restores — "arming the
+                // array drop without suppressing here DOUBLE-FREES" — it was
+                // simply never applied to an array-typed ELEMENT, only to the
+                // Vec/String one.
+                //
+                // `v.push(a)` has disarmed this since B-2026-09-13-15, which
+                // is what isolated the gap to the literal positions. The
+                // helper stands down by itself where B-2026-09-14-27's
+                // defensive copy already ran (`uam_copied_sites`), so the
+                // read-again spelling keeps its independent copy and only the
+                // aliasing spelling is retracted.
+                self.suppress_array_local_move_into_ctor(e);
                 if let ExprKind::Identifier(name) = &e.kind {
                     self.suppress_map_cleanup_for_tail_identifier(name);
                 }
@@ -1661,6 +1683,15 @@ impl<'ctx> super::Codegen<'ctx> {
             // temps, `cap == 0` sources, and POD elements.
             let v = self.maybe_defensive_copy_param_arg(e, v);
             self.suppress_source_vec_cleanup_for_arg(e);
+            // B-2026-09-15-2 — the ARRAY channel, the fixed-array sibling of
+            // the line above and of the Option/Result trio below. Measured on
+            // the same program one container over: `let a: Array[String, 2] =
+            // ..; let v: Vec[Array[String, 2]] = [a];` double-freed at exit
+            // 134 while `v.push(a)` was clean, which is the same
+            // literal-vs-push split the array literal shows. The `Vec`'s
+            // element drop owns the array once it holds the descriptors, so
+            // the named source must stand down.
+            self.suppress_array_local_move_into_ctor(e);
             // B-2026-09-10-24 — the `Option`/`Result` payload channels, which
             // the line above cannot reach: they sit behind
             // `FreeInlineOptionPayload` / `FreeInlineResultPayload` /
