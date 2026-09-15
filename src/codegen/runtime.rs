@@ -11057,6 +11057,40 @@ impl<'ctx> super::Codegen<'ctx> {
                         // the argument site for the reason `ContainerElemBodies`
                         // gives for NLL placement at all — the fn is BODIES only
                         // and frees nothing.
+                        // B-2026-09-14-19 — the owned `Option`/`Result` PARAM
+                        // payload's bodies, minted by
+                        // `track_optres_arg_temp_bodies`. Same class as every
+                        // name above it and the last one still missing: the
+                        // registration lands on the enclosing SCOPE frame, so
+                        // in `main` the walk ran at `main`'s exit and the body
+                        // was observable one statement too late —
+                        // `fn eat(o: Option[R]) -> i64` reading only `r.id`
+                        // printed `got:5 end dR5` on all three compiled
+                        // surfaces against `--interp`'s `dR5 got:5 end`. The
+                        // COUNT agreed, so no leak gate and no sanitizer could
+                        // see it; only the position diverged, and it diverged
+                        // across the caller's own remaining statements.
+                        //
+                        // In the UNCONDITIONAL group, i.e. fired at the CALL's
+                        // return rather than only at the statement's `;`,
+                        // because that is the position design.md § Temporary
+                        // Lifetime Rules gives it ("Function/method call
+                        // argument | After the call returns") and because the
+                        // payload dies INSIDE the callee: the caller must not be
+                        // able to observe a world between the call and the body
+                        // in which the payload is still alive. The boxing
+                        // sibling already runs there by a different route — its
+                        // bodies are registered on the CALLEE's frame
+                        // (B-2026-09-10-9) — and was correct on every surface
+                        // before this, which is what identified the frame rather
+                        // than the ownership as the variable.
+                        //
+                        // Safe to fire early for the reason `ContainerElemBodies`
+                        // gives throughout this list: the fn is BODIES only and
+                        // frees nothing, and the registrar is reached only
+                        // through `callee_by_value_optres_param_nonescaping`, so
+                        // the value never escapes the call.
+                        || binding_name == "__optres_arg_bodies_tmp"
                         || binding_name == "__disc_tup_arg"
                         // B-2026-08-29-28 — the fresh-temp MATCH / `if let` /
                         // `let…else` SCRUTINEE's own `impl Drop` body, minted by

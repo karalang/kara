@@ -156728,6 +156728,26 @@ fn main() {
     /// MEMORY WAS CLEAN THROUGHOUT at `-O0`: 0 valgrind errors, 0 bytes in use
     /// at exit, on every cell before and after. A body frees nothing, so no
     /// sanitizer and neither ASAN ratchet leg could ever see this.
+    ///
+    /// FOUR CELLS WERE RE-MEASURED FOR B-2026-09-14-19, which moved the body
+    /// from the caller's scope exit to the call's return. `tail-field-read`,
+    /// `return-field-read`, `let-then-tail` and `nested-drop-field` all called
+    /// `eat` INSIDE a `println`, so the payload dies in the callee before the
+    /// caller has a value to print and the body belongs first — which is what
+    /// `--interp` printed all along. This table asserts AOT only
+    /// (`run_program`), so the divergence was invisible in it and their
+    /// expectations had the compiled side's lateness baked in, exactly the
+    /// class B-2026-08-29-55's note records finding in seven other control
+    /// cases. The table was already internally inconsistent about it:
+    /// `guard-plain-struct-scalar-read` is the same shape and expected the
+    /// body FIRST. Each of the four was re-derived against the interpreter
+    /// rather than flipped to match the new build.
+    ///
+    /// THE TWO `guard-*-moves-*` CELLS DID NOT MOVE, and that is the rule
+    /// rather than an exemption: there the body is handed to the RECEIVER, so
+    /// it is owed at the caller's binding and legitimately runs after the read.
+    /// (The interpreter DOUBLES on both — `dIn5 g:5 dIn5` — which is the
+    /// separate B-2026-09-13-5 defect and why these assert the compiled order.)
     #[test]
     fn e2e_optres_arg_payload_body_survives_a_projecting_arm() {
         const PRE: &str = "struct Tr { tag: i64 }\n\
@@ -156738,21 +156758,42 @@ fn main() {
                 "tail-field-read",
                 "fn eat(o: Option[Tr]) -> i64 { match o { Some(t) => { t.tag } None => { 0 } } }\n\
                  fn main() { println(f\"r:{eat(Some(Tr { tag: 7 }))}\"); println(\"end\") }\n",
-                "r:7\ndTr7\nend\n",
+                // B-2026-09-14-19 — was `r:7\ndTr7\nend\n`, which baked in the
+                // compiled side's own lateness. The call sits INSIDE the
+                // `println`, so the payload dies in `eat` before the caller has
+                // a value to print: the body belongs first. `--interp` said
+                // `dTr7 r:7 end` all along and this table asserts AOT only
+                // (`run_program`), so the divergence was invisible here and got
+                // recorded as intent — the eighth instance of exactly what
+                // B-2026-08-29-55's own note describes finding in seven other
+                // control cases. Both backends now print this.
+                "dTr7\nr:7\nend\n",
             ),
             // 2 — the explicit `return` spelling of the same read.
             (
                 "return-field-read",
                 "fn eat(o: Option[Tr]) -> i64 { match o { Some(t) => { return t.tag; } None => { return 0; } } }\n\
                  fn main() { println(f\"r:{eat(Some(Tr { tag: 7 }))}\"); println(\"end\") }\n",
-                "r:7\ndTr7\nend\n",
+                // B-2026-09-14-19 — was the same string with the body LAST.
+                // See the `tail-field-read` cell above: the call sits inside
+                // the `println`, the payload dies in the callee, and
+                // `--interp` printed the body first all along. Verified
+                // against the interpreter cell by cell rather than flipped
+                // to match the new build.
+                "dTr7\nr:7\nend\n",
             ),
             // 3 — bound to a local first, which the walk also read as a move.
             (
                 "let-then-tail",
                 "fn eat(o: Option[Tr]) -> i64 { match o { Some(t) => { let z: i64 = t.tag; z } None => { 0 } } }\n\
                  fn main() { println(f\"r:{eat(Some(Tr { tag: 7 }))}\"); println(\"end\") }\n",
-                "r:7\ndTr7\nend\n",
+                // B-2026-09-14-19 — was the same string with the body LAST.
+                // See the `tail-field-read` cell above: the call sits inside
+                // the `println`, the payload dies in the callee, and
+                // `--interp` printed the body first all along. Verified
+                // against the interpreter cell by cell rather than flipped
+                // to match the new build.
+                "dTr7\nr:7\nend\n",
             ),
             // 4 — a NESTED body under the same shape: the payload's own body and
             //     its field's were both lost, so both have to come back.
@@ -156764,7 +156805,13 @@ fn main() {
                  impl Drop for Ou2 { fn drop(mut ref self) { println(f\"dOu{self.tag}\") } }\n\
                  fn eat(o: Option[Ou2]) -> i64 { match o { Some(t) => { t.tag } None => { 0 } } }\n\
                  fn main() { println(f\"r:{eat(Some(Ou2 { inner: In2 { n: 5 }, tag: 7 }))}\"); println(\"end\") }\n",
-                "r:7\ndOu7\ndIn5\nend\n",
+                // B-2026-09-14-19 — was the same string with the body LAST.
+                // See the `tail-field-read` cell above: the call sits inside
+                // the `println`, the payload dies in the callee, and
+                // `--interp` printed the body first all along. Verified
+                // against the interpreter cell by cell rather than flipped
+                // to match the new build.
+                "dOu7\ndIn5\nr:7\nend\n",
             ),
             // 5 — GUARD: payload has NO `Drop` of its own, so moving a
             //     `Drop`-bearing field out is legal and the RECEIVER owns that
