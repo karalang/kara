@@ -97,7 +97,7 @@ distinguish "bugs flattening" from "we stopped writing them down."
 | leak | 352 |
 | double-free | 233 |
 | missing-feature | 198 |
-| codegen-gap | 177 |
+| codegen-gap | 178 |
 | diagnostics | 126 |
 | perf | 112 |
 | other | 111 |
@@ -110,7 +110,7 @@ distinguish "bugs flattening" from "we stopped writing them down."
 
 | surface | total |
 |---|---|
-| codegen | 1759 |
+| codegen | 1760 |
 | interp | 439 |
 | typecheck | 300 |
 | other | 90 |
@@ -189,13 +189,13 @@ _Generated from `bug-ledger.jsonl` by `scripts/bug-curve.py` (2026-05-20 → 202
 | B-2026-09-14-28 | 2026-09-14 | codegen | medium | `vertical`'s +85% SSO REGRESSION IS NOT THE DE-INLINE PROBE AND NOT `prefix_string` -- both were ruled out by measurement (c1adb9c removed the probe: +84.1% -> +85.4%; an exact mirror of `prefix_string` runs 9-15% FASTER under SSO), so the worst regression in the corpus is now UNATTRIBUTED. `shortest_distance_iii` (+36%) and `shortest_distance` (+61%) are the same shape. Reachable only at KARAC_SSO=1, which is off by default. | — |
 | B-2026-09-14-29 | 2026-09-14 | codegen | low | AN INDEX-ASSIGN DISPLACING A STRUCT ELEMENT WITH A HEAP FIELD LOSES BOTH ITS MEMORY AND ITS `Drop` BODY -- `a[0] = D { .. }` over `Array[D, 2]` with `D { s: String }` prints `a0:3 / dD3 / dD2` with the displaced element's `dD1` running nowhere, and leaks its 10-byte `s` buffer; B-2026-09-14-1's fix is gated on the element being a vec-struct slot, which a user struct is not, so it declines this shape by construction and closing it needs the element's own drop WRAPPER at the store rather than a buffer free | — |
 | B-2026-09-15-3 | 2026-09-15 | codegen | medium | AN `Array[T, N]` LOCAL MOVED INTO A USER ENUM'S VARIANT CONSTRUCTOR STILL DANGLES ON EVERY COMPILED BACKEND when the enum dies FIRST -- `{ let w = Wrp.Full(a); .. }` then `println(a[0])` prints garbage at exit 0 against a correct `--interp`, because the constructor site stands the caller's element drop down BEFORE the payload is compiled and so cannot be handed the defensive copy that closed the argument spellings | — |
-| B-2026-09-15-4 | 2026-09-15 | codegen | high | A METHOD RETURNING `ref (T, U)` IS MISHANDLED AT EVERY VALUE-POSITION CONSUMER -- `m.get(h.peek())` over a heap tuple SIGSEGVs, `h.peek().0` prints `0` instead of the field, and a scalar-tuple key answers `missing` for a key that is present, while binding the same result as a `ref` is correct and the by-value spelling of all three cells is correct | — |
 | B-2026-09-15-5 | 2026-09-15 | codegen | medium | A MAP-LOOKUP KEY TEMPORARY'S USER `Drop` BODY NEVER RUNS -- `m.get(mkd(0))` over `Map[Dk, i64]` with `impl Drop for Dk` reclaims the key's storage but skips the `Dk.drop` call, in the free-function and method spellings alike, because the key-reclaim legs emit the memory walk without the separate user-`Drop` call every other drop site pairs it with | — |
 | B-2026-09-15-6 | 2026-09-15 | codegen | medium | `substr` IS A 14.7% SSO *WIN* UNDER DEFAULT AUTO-PAR AND A 30.9% SSO *LOSS* WITH `KARAC_AUTO_PAR=0` -- the same commit, the same rail, a 45-POINT SWING AND A SIGN FLIP decided entirely by the auto-par setting. Every SSO rail conclusion is therefore conditional on a variable that `bench/sso/bench.sh` did not pin until 2026-09-15 (375118d). Pinned, `substr` is the worst rail in the track at +31%, against `lexlike` at -13% for the SAME slice/compare/discard shape reached through `String.substring` instead of slice syntax -- a 44-point gap between two rails doing the same work, never profiled. Reachable only at KARAC_SSO=1, off by default. | — |
 | B-2026-09-15-7 | 2026-09-15 | codegen | low | AN INDEX-STORE FREES ONLY THE OUTER BUFFER OF THE `Vec` ELEMENT IT DISPLACES, STRANDING THAT ELEMENT'S OWN ELEMENTS -- `a[0] = <new>` over `Array[Vec[String], 2]` loses the displaced Vec's 5-byte String at -O0, and the `Vec[Vec[String]]` TWIN loses the identical 5 bytes, so this is NOT Array-specific and not B-2026-09-14-30's; it is the outer-buffer-only bound both legs were deliberately given, now measured as a real loss rather than a documented caveat | — |
 | B-2026-09-15-8 | 2026-09-15 | codegen | medium | AN `Array[S, N]` OF A `shared struct` LEAKS EVERY ELEMENT'S REFCOUNT BLOCK, WITH NO STORE AND NO MOVE ANYWHERE IN THE PROGRAM -- a bare `let a: Array[S, 2] = [S { v: n }, S { v: n + 1 }]` loses 32 B in 2 blocks at -O0 (16 B per element), while the `Vec[S]` spelling is the control; the array's scope-exit drop never rc-decs its elements | — |
 | B-2026-09-15-9 | 2026-09-15 | codegen | medium | AN ENUM PAYLOAD TUPLE CONTAINING A FIXED `Array` STRANDS ITS PAYLOAD BOX ON EVERY COMPILED BACKEND, INDEPENDENTLY OF THE INTERIOR -- `T2.P(mka("x"), 3)` over `enum T2 { P(Array[String, 2], i64), N }` loses the 48 B envelope (plus 44 B indirect), and `(Array[i64, 2], i64)` with NO HEAP ANYWHERE still loses its 16 B envelope, with the output correct, exit 0 and `karac check` clean | — |
 | B-2026-09-15-10 | 2026-09-15 | codegen | medium | A `shared enum` VARIANT CARRYING AN `Array[T, N]` STRANDS ITS PAYLOAD BOX ON EVERY COMPILED BACKEND -- `Sh.S(a)` over `shared enum Sh { S(Array[String, 2]), N }` loses 48 B at `-O0` with the output correct and `karac check` clean, and loses a further 44 B indirectly once a named source is involved | — |
+| B-2026-09-15-12 | 2026-09-15 | codegen | low | A `-> ref` METHOD WHOSE INNER IS AN `Array[T, N]` OR A NAMED STRUCT IS DECLINED BY CODEGEN AT EVERY VALUE-POSITION CONSUMER -- `h.peek()[0]` says `Index operator applied to non-array type` and `h.peek().a` says `cannot resolve field 'a' on this receiver`, both while `--interp` prints the right answer; the TUPLE inner of the same shape now lowers (B-2026-09-15-4) and these two are the inners that fix deliberately declined to widen to | — |
 
 ### Relocated
 
@@ -2584,6 +2584,7 @@ _Generated from `bug-ledger.jsonl` by `scripts/bug-curve.py` (2026-05-20 → 202
 | B-2026-09-14-30 | codegen | medium | AN INDEX-ASSIGN WHOSE RHS IS A NAMED LOCAL DOUBLE-FREES THE MOVED-IN VALUE FOR A HEAP-OWNING ARRAY ELEMENT -- `a[0] = v3` over `Array[Vec[i64], 2]` r… | 666d673 |
 | B-2026-09-14-31 | codegen | high | AUTO-PAR MISCOMPILES A `+` REDUCTION WHOSE CONTRIBUTION READS ITS OWN ACCUMULATOR -- `while i < 50 { let k = (i + total) % 21; total = total + mk(k);… | 4f60677 |
 | B-2026-09-15-2 | codegen | high | MOVING A NAMED `Array[T, N]` LOCAL INTO AN ENCLOSING ARRAY LITERAL DOUBLE-FREES ITS ELEMENT BUFFERS ON EVERY COMPILED BACKEND -- `let n: Array[Array[… | 73f1781 |
+| B-2026-09-15-4 | codegen | high | A METHOD RETURNING `ref (T, U)` IS MISHANDLED AT EVERY VALUE-POSITION CONSUMER -- `m.get(h.peek())` over a heap tuple SIGSEGVs, `h.peek().0` prints `… | 6027ab1 |
 | B-2026-09-15-11 | codegen | medium | A TUPLE WHOSE ONLY HEAP IS A FIXED-`Array` ELEMENT GETS NO DROP AT ALL AND STRANDS ITS ELEMENT BUFFERS ON EVERY COMPILED BACKEND -- `let p: (Array[St… | da73ec3c8 |
 
 </details>
