@@ -94,8 +94,8 @@ distinguish "bugs flattening" from "we stopped writing them down."
 |---|---|
 | run-vs-build | 411 |
 | miscompile | 410 |
-| leak | 353 |
-| double-free | 233 |
+| leak | 354 |
+| double-free | 234 |
 | missing-feature | 198 |
 | codegen-gap | 178 |
 | diagnostics | 126 |
@@ -110,7 +110,7 @@ distinguish "bugs flattening" from "we stopped writing them down."
 
 | surface | total |
 |---|---|
-| codegen | 1765 |
+| codegen | 1767 |
 | interp | 441 |
 | typecheck | 300 |
 | other | 90 |
@@ -193,9 +193,9 @@ _Generated from `bug-ledger.jsonl` by `scripts/bug-curve.py` (2026-05-20 → 202
 | B-2026-09-15-12 | 2026-09-15 | codegen | low | A `-> ref` METHOD WHOSE INNER IS AN `Array[T, N]` OR A NAMED STRUCT IS DECLINED BY CODEGEN AT EVERY VALUE-POSITION CONSUMER -- `h.peek()[0]` says `Index operator applied to non-array type` and `h.peek().a` says `cannot resolve field 'a' on this receiver`, both while `--interp` prints the right answer; the TUPLE inner of the same shape now lowers (B-2026-09-15-4) and these two are the inners that fix deliberately declined to widen to | — |
 | B-2026-09-15-13 | 2026-09-15 | codegen | medium | SSO'S INLINE CONSTRUCTION GOES THROUGH AN OPAQUE RUNTIME CALL AND COSTS 10x WHAT THE ENCODING COSTS -- `String.substring` at KARAC_SSO=1 calls `karac_string_try_inline_into` per construction and runs 212ms on a 10M-iteration slice/compare rail, against 127ms for the SAME rail at KARAC_SSO=0 whose substring lowering is CALL-FREE IN IR; emitting the inline fast path as IR instead (memcpy + zero-fill + flag byte, the exact `write_inline` encoding) runs the rail in 22ms -- 9.6x faster than the current SSO path and 5.7x faster than the non-SSO baseline, with identical output at three iteration counts. The call is not merely overhead: it is an optimization barrier the rest of the loop cannot be simplified across. | — |
 | B-2026-09-15-14 | 2026-09-15 | interp+codegen | medium | AN ENUM STORED IN A `Map` OR `Set` NEVER RUNS ITS USER `Drop` BODY AT ALL -- `s.insert(mkd(0))` over `Set[Tg]` with `impl Drop for Tg`, no lookup anywhere, prints ZERO bodies where one is owed at the set's destruction, and the same holds for a `Map[Tg, i64]` key and for a Drop-bearing PAYLOAD; `Vec[Tg]` and a STRUCT element in the same `Map` are both correct, so the axis is hash-container storage of an enum and this is the last unfixed member of the family B-2026-08-28-55 and B-2026-08-28-54 closed | — |
-| B-2026-09-15-15 | 2026-09-15 | codegen | medium | A MULTI-FIELD ENUM VARIANT STRANDS ITS BOXED `Array[T, N]` PAYLOAD ON EVERY COMPILED BACKEND -- `Both(a, b)` loses 96 B + 92 B indirect at `-O0` and `M(a, 5)` / `M(5, a)` lose 48 B + 46 B each, with the output correct, `karac check` clean apart from the advisory ownership warning, and no dangle anywhere; the SINGLE-field variant beside them is balanced, which is what isolates the field count rather than the array | — |
 | B-2026-09-15-16 | 2026-09-15 | codegen | medium | A PLAIN STRUCT MOVED INTO AN OWNING SINK LEAVES THE SOURCE'S HEAP FIELD READING EMPTY ON EVERY COMPILED BACKEND -- `Ws.Full(p)` then `println(p.s)` prints nothing where `--interp` prints the string, and `v.push(p)` does the same, while the CALL-ARGUMENT spelling of the identical program is correct; memory-safe and valgrind-clean, so nothing reports it | — |
 | B-2026-09-15-17 | 2026-09-15 | codegen | low | AN `Array[R, N]` WHOSE ELEMENT RUNS A USER `Drop` BODY, MOVED INTO AN ENUM VARIANT CONSTRUCTOR, RUNS THOSE BODIES BEFORE THE CONSUMING CALL ON EVERY COMPILED BACKEND and after it under `--interp` -- the identical program with a plain function call in place of the constructor is correctly ordered on both, which puts the divergence at the constructor rather than at the array | — |
+| B-2026-09-15-18 | 2026-09-15 | codegen | medium | A GENERIC MULTI-FIELD VARIANT STILL STRANDS ITS BOXED `Array[T, N]` PAYLOAD after B-2026-09-15-15 -- `G2.Y(a, 5)` over `enum G2[T] { Y(T, i64), N }` at `T = Array[String, 2]` loses 48 B + 44 B indirect at `-O0`, byte-identical before and after that fix, because an ERASED `T` cannot be classified at declaration and the monomorphic path that would catch it declines multi-field variants of its own | — |
 
 ### Relocated
 
@@ -2590,6 +2590,8 @@ _Generated from `bug-ledger.jsonl` by `scripts/bug-curve.py` (2026-05-20 → 202
 | B-2026-09-15-4 | codegen | high | A METHOD RETURNING `ref (T, U)` IS MISHANDLED AT EVERY VALUE-POSITION CONSUMER -- `m.get(h.peek())` over a heap tuple SIGSEGVs, `h.peek().0` prints `… | 6027ab1 |
 | B-2026-09-15-5 | interp+codegen | medium | A MAP-LOOKUP KEY TEMPORARY'S USER `Drop` BODY NEVER RUNS -- `m.get(mkd(0))` over `Map[Dk, i64]` with `impl Drop for Dk` reclaims the key's storage bu… | c75268b |
 | B-2026-09-15-8 | codegen | medium | AN `Array[S, N]` OF A `shared struct` LEAKS EVERY ELEMENT'S REFCOUNT BLOCK, WITH NO STORE AND NO MOVE ANYWHERE IN THE PROGRAM -- a bare `let a: Array… | 844a233cc |
+| B-2026-09-15-15 | codegen | medium | A MULTI-FIELD ENUM VARIANT STRANDS ITS BOXED `Array[T, N]` PAYLOAD ON EVERY COMPILED BACKEND -- `Both(a, b)` loses 96 B + 92 B indirect at `-O0` and… | c6adcae |
+| B-2026-09-15-19 | codegen | high | A SINGLE-FIELD STRUCT-SHAPED VARIANT WHOSE ARM HANDS ITS `Array[T, N]` PAYLOAD ON DOUBLE FREES ON BOTH COMPILED BACKENDS -- `match s { St1.S { a } =>… | c6adcae |
 
 </details>
 
