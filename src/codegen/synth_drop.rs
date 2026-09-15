@@ -4131,9 +4131,35 @@ impl<'ctx> super::Codegen<'ctx> {
                 // on — asking a different question here would admit fields the
                 // emitter then declines, which is a silent no-op rather than a
                 // fix.
+                //
+                // The ELEMENT is subst-resolved (B-2026-09-12-21), the way
+                // every leg above resolves its head name, so
+                // `G[T] { a: Array[T, 2] }` under `T -> R` is admitted rather
+                // than asked about the bare `T` and declined.
+                //
+                // This is a REGRESSION FIX, not a widening. B-2026-09-15-26's
+                // interpreter arm gates on the DECLARED field type being an
+                // array and then fires VALUE-driven, so `Array[T, 2]` admitted
+                // it there and ran the real `Value::Array`'s element bodies
+                // while codegen declined — turning an agreed silence into a
+                // run-vs-build divergence. Resolving the element here puts the
+                // two gates back on one question.
+                //
+                // DELIBERATELY the element and not the whole TE. Substituting
+                // the whole thing also resolves a field declared as the bare
+                // param (`G[T] { a: T }` at `T = Array[R, 2]`), which codegen
+                // can then walk and the interpreter cannot — its gate needs a
+                // declared array TE, so `Path("T")` is not one. Measured: that
+                // spelling is silent on all four surfaces today, and the
+                // whole-TE substitution flipped it to compiled-fires /
+                // interp-silent, trading this divergence for another one.
+                // Matching the interpreter's gate exactly is what keeps the
+                // change to the cell that is actually broken.
                 let array_elem = field_te.is_some_and(|te| {
-                    self.array_elem_and_len(te)
-                        .is_some_and(|(elem, n)| n > 0 && self.elem_te_runs_user_drop(&elem))
+                    self.array_elem_and_len(te).is_some_and(|(elem, n)| {
+                        let elem = crate::desugar::subst_type_expr(&elem, subst);
+                        n > 0 && self.elem_te_runs_user_drop(&elem)
+                    })
                 });
                 (direct
                     || vec_elem

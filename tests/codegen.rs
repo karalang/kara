@@ -34787,6 +34787,63 @@ fn main() {
                 "dD1\ndD2\nend\n",
             ),
             (
+                // B-2026-09-12-21's own repro: the array reaches the field by
+                // a MOVE out of a named local rather than as a literal. Fires
+                // exactly once — the source binding does not keep a second
+                // walk.
+                "the array is MOVED into the field from a local (B-2026-09-12-21)",
+                "struct H { f: Array[D, 2] }\n",
+                "let a: Array[D, 2] = [mkd(1), mkd(2)];\nlet h = H { f: a };",
+                "dD1\ndD2\nend\n",
+            ),
+            (
+                // B-2026-09-12-21, the GENERIC half, and a REGRESSION this row
+                // introduced before catching it: the interpreter arm above
+                // gates on the DECLARED field type being an array and then
+                // fires value-driven, so `Array[T, 2]` admitted it there while
+                // codegen's mono selector asked about the bare `T` and
+                // declined. Silent on all four surfaces before B-2026-09-15-26,
+                // compiled-silent / interp-firing after it, and agreed again
+                // once the selector resolves the ELEMENT through the subst.
+                "a generic parent whose field is Array[T, N] (B-2026-09-12-21)",
+                "struct G[T] { a: Array[T, 2] }\n",
+                "let g: G[D] = G { a: [mkd(1), mkd(2)] };",
+                "dD1\ndD2\nend\n",
+            ),
+            (
+                "control: the Vec[T] spelling of that generic field, always correct",
+                "struct G[T] { a: Vec[T] }\n",
+                "let g: G[D] = G { a: [mkd(1), mkd(2)] };",
+                "dD1\ndD2\nend\n",
+            ),
+            (
+                "control: a bare generic param bound to a Drop struct (B-2026-08-02-14)",
+                "struct G[T] { a: T }\n",
+                "let g: G[D] = G { a: mkd(1) };",
+                "dD1\nend\n",
+            ),
+            (
+                // PINNED, and the reason the selector resolves the ELEMENT
+                // rather than the whole field TypeExpr. Substituting the whole
+                // thing also resolves a field declared as the bare param, which
+                // codegen could then walk and the interpreter could not — its
+                // gate needs a DECLARED array TE and `Path("T")` is not one.
+                // Measured: whole-TE substitution flipped these two to
+                // compiled-fires / interp-silent, trading one divergence for
+                // another. They are an agreed silence and belong to their own
+                // row.
+                "pinned: a bare generic param bound to an Array is silent on all four",
+                "struct G[T] { a: T }\n",
+                "let g: G[Array[D, 2]] = G { a: [mkd(1), mkd(2)] };",
+                "end\n",
+            ),
+            (
+                "pinned: the same with the param bound to a Vec",
+                "struct G[T] { a: T }\n",
+                "let g: G[Vec[D]] = G { a: [mkd(1), mkd(2)] };",
+                "end\n",
+            ),
+            (
                 // B-2026-09-15-23's subject: a nested container in a `Vec`
                 // field. Silent on BOTH backends, so it is an agreed gap and
                 // not a divergence — pinned here to make a change to that gate

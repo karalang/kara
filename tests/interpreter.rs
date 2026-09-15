@@ -67821,6 +67821,40 @@ fn test_array_typed_struct_field_runs_its_element_drop_bodies() {
         "end\n",
         "control: non-Drop elements"
     );
+    // B-2026-09-12-21 — the array reaches the field by a MOVE out of a named
+    // local rather than as a literal. Exactly one pair of bodies: the source
+    // binding does not keep a second walk.
+    assert_eq!(
+        run(&format!(
+            "{H}struct H {{ f: Array[D, 2] }}\n             fn main() {{\n             \x20   let a: Array[D, 2] = [mkd(1), mkd(2)];\n             \x20   let h = H {{ f: a }};\n             \x20   println(\"end\");\n             }}\n"
+        )),
+        "dD1\ndD2\nend\n",
+        "the array is MOVED into the field from a local"
+    );
+    // B-2026-09-12-21, generic half. This arm is the one that fires
+    // VALUE-driven off the declared array type, so it was already correct here
+    // while codegen's mono selector asked about the bare `T` and declined —
+    // the divergence B-2026-09-15-26 opened and the element-subst closed. Kept
+    // as the interpreter side of that pair.
+    assert_eq!(
+        run(&format!(
+            "{H}struct G[T] {{ a: Array[T, 2] }}\n             fn main() {{\n             \x20   let g: G[D] = G {{ a: [mkd(1), mkd(2)] }};\n             \x20   println(\"end\");\n             }}\n"
+        )),
+        "dD1\ndD2\nend\n",
+        "a generic parent whose field is Array[T, N]"
+    );
+    // PINNED — a bare generic param bound to a CONTAINER is silent on all four
+    // surfaces, and is why the codegen selector resolves the array's ELEMENT
+    // rather than the whole field TypeExpr: substituting the whole thing lets
+    // codegen walk a field this gate cannot see, which is a divergence rather
+    // than a fix. Its own row, not this one's.
+    assert_eq!(
+        run(&format!(
+            "{H}struct G[T] {{ a: T }}\n             fn main() {{\n             \x20   let g: G[Array[D, 2]] = G {{ a: [mkd(1), mkd(2)] }};\n             \x20   println(\"end\");\n             }}\n"
+        )),
+        "end\n",
+        "pinned: a bare generic param bound to an Array"
+    );
     // PINNED — a nested container in a `Vec` field is still an agreed silence
     // on both backends (B-2026-09-15-23), so the two gates stay in step.
     assert_eq!(
