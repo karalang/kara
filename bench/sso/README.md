@@ -149,17 +149,63 @@ cost the rail exists to measure. `pfx_idx` has the identical 0..20 length
 distribution with a runtime bound. Where the two disagree, `pfx_idx` is the
 number that describes real code.
 
-## Caveat: the driver loops are AUTO-PARALLELIZED
+## Auto-par is PINNED OFF, and that is a control
 
-Every micro rail's `main` accumulates `total = total + s.len()`, which the
-auto-par analyzer classifies as a `+` reduction and fans out at these iteration
-counts (confirm with `karac build --concurrency-report <rail>.kara`). Both legs
-of a comparison are fanned out identically, so the SIGN and rough magnitude of
-an SSO=0 vs SSO=1 delta hold — but the absolute numbers are PARALLEL THROUGHPUT,
-not per-iteration cost, and a per-iteration difference spread across cores reads
-SMALLER here than it is. Build a rail with `KARAC_AUTO_PAR=0` to see the
-sequential per-iteration cost.
+`bench.sh` builds every rail with `KARAC_AUTO_PAR=0`. The spike doc states the
+reason as a control for the kata sweep -- "auto-par is a third surface and
+letting it vary would make any difference unattributable" -- but this script did
+not apply it until 2026-09-15, so **every rail number published before that date
+was measured with the driver loops FANNED OUT.**
+
+Each rail's `main` accumulates `total = total + s.len()`, which the analyzer
+reads as a `+` reduction and parallelizes at these iteration counts. Both legs
+of a comparison fanned out equally, so the SIGNS held -- but the magnitudes were
+parallel-throughput deltas, and a per-iteration difference spread across cores
+reads SMALLER than it is. It is not a small correction: pinning moved `pfx_idx`
+from +4.1/+5.6% to +14.1/+15.9%, roughly 3x, and `substr` from +5% to +33.7%.
+
+Not every rail was affected, which is why the error was easy to miss. Check any
+individual rail with `karac build --concurrency-report <rail>.kara`:
+
+| rail | fans out under default? |
+|---|---|
+| `substr`, `builder20`, `builder60`, `promote`, `pfx_idx`, `pfx_chars` | yes |
+| `lexlike` | no — `declined_memory_bound` |
+
+So `lexlike`'s history is comparable across the change and everything else's is
+not.
 
 Do not make a rail's accumulated value depend on the accumulator itself (e.g.
-`let k = (i + total) % 21`). That shape is silently miscompiled under auto-par —
+`let k = (i + total) % 21`). That shape is silently miscompiled under auto-par --
 B-2026-09-14-31.
+
+## Last measured (2026-09-15, x86-64, RUNS=15, auto-par pinned off)
+
+Two independent samples; `delta` is `SSO=1` relative to `SSO=0`, negative means
+SSO is faster.
+
+| rail | SSO=0 | SSO=1 | delta |
+|---|---|---|---|
+| `lexer` | 2860 / 2844 ms | 2355 / 2345 ms | **-17.7 / -17.5%** |
+| `lexlike` | 259 / 262 ms | 226 / 226 ms | **-12.7 / -13.7%** |
+| `substr` | 172 / 172 ms | 230 / 231 ms | +33.7 / +34.3% |
+| `builder20` | 219 / 220 ms | 252 / 251 ms | +15.1 / +14.1% |
+| `builder60` | 329 / 329 ms | 368 / 370 ms | +11.9 / +12.5% |
+| `promote` | 179 / 178 ms | 193 / 192 ms | +7.8 / +7.9% |
+| `pfx_idx` | 64 / 63 ms | 73 / 73 ms | +14.1 / +15.9% |
+| `pfx_chars` | 175 / 175 ms | 157 / 157 ms | **-10.3 / -10.3%** |
+
+**`lexlike` no longer regresses, and that retires this track's stated open
+question.** It stood at +34% on 2026-09-12 and is now a 12-14% WIN. The pin does
+not explain it -- `lexlike` is the one rail that never fanned out, so both
+numbers are sequential and directly comparable. Something between 2026-09-12 and
+2026-09-15 fixed it; the candidates are B-2026-09-12-20's overlay fix, the
+growth-test fold (c1adb9c), and keeping `Vec` off the SSO path, and NOTHING HERE
+ATTRIBUTES IT to any of them. Do not re-derive the old 34% from this file: it is
+gone, and the open question named in `bench.sh`'s header is answered only in the
+sense that the symptom stopped.
+
+**`substr` is now the worst rail at +34%**, having read as +5% while fanned out.
+It is the same shape as `lexlike` -- slice, compare, discard -- but through
+`String.substring`, and the two now disagree by 47 points. That is the open
+question this track should be asking next.

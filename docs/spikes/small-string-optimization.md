@@ -2169,7 +2169,17 @@ The two that opt out are the two that have a growth test to fold into.
 
 **Measured — two independent samples, best-of-15, three rails built and timed
 per program in ONE pass** (`SSO=0`, `SSO=1` folded, `SSO=1` at `7b6ebe8`), so
-every delta is a within-pass ratio rather than a cross-sweep one:
+every delta is a within-pass ratio rather than a cross-sweep one.
+
+> **⚠ THIS TABLE WAS MEASURED WITH AUTO-PAR ON, which this document's own kata
+> sweep names as a control it holds fixed.** `bench/sso/bench.sh` did not pin
+> `KARAC_AUTO_PAR=0` until 2026-09-15, and every micro rail except `lexlike`
+> fans its driver loop out, so these are PARALLEL-THROUGHPUT deltas that
+> understate per-iteration cost. The before/after comparison below is still
+> internally valid — both columns came from the same unpinned harness, so the
+> fold's improvement is real — but the absolute magnitudes are not the cost of
+> SSO. See "Re-measured with the control applied" immediately after this table.
+
 
 | rail | before | after | |
 |---|---|---|---|
@@ -2198,6 +2208,44 @@ count is a constant.
 already wins, and two ALU ops per iteration cost more there than a
 perfectly-predicted branch that is never taken. Net across the corpus this is
 comfortably paid for, but it is not a free change.
+
+#### Re-measured with the control applied (2026-09-15)
+
+`bench.sh` now pins `KARAC_AUTO_PAR=0` at both build sites. Same machine,
+`RUNS=15`, two independent samples, current `main`. These are the per-iteration
+numbers the table above was meant to report:
+
+| rail | unpinned (above) | **pinned** | |
+|---|---|---|---|
+| `promote` | +7.7 / +8.8% | **+7.8 / +7.9%** | unchanged |
+| `builder20` | +15.8 / +14.8% | **+15.1 / +14.1%** | unchanged |
+| `builder60` | +10.7 / +11.4% | **+11.9 / +12.5%** | slightly worse |
+| `pfx_idx` | +4.1 / +5.6% | **+14.1 / +15.9%** | **~3x worse** |
+| `pfx_chars` | −9.0 / −10.2% | **−10.3 / −10.3%** | unchanged |
+| `substr` | +5% (2026-09-12) | **+33.7 / +34.3%** | **~7x worse** |
+| `lexlike` | +34% (2026-09-12) | **−12.7 / −13.7%** | **regression GONE** |
+| `lexer` | −15.8% (2026-09-12) | **−17.7 / −17.5%** | slightly better |
+
+**What the pin changed, and what it did not.** The rails whose per-iteration
+cost was being divided across cores moved a lot (`pfx_idx` ~3x, `substr` ~7x);
+the rails dominated by per-call malloc rather than per-iteration ALU work
+(`promote`, `builder20`) barely moved. So the fold's *conclusions* survive — the
+paired-control argument, `builder20` being an unroll artifact, and `pfx_chars`
+being a real loss are all unchanged — but **the per-push SSO tax is roughly
+three times what the unpinned table reported.**
+
+**`lexlike` no longer regresses, and nothing here explains why.** It was this
+track's stated open question at +34%; it is now a 12-14% win. The pin cannot
+account for it: `lexlike` is the single rail the analyzer declines to fan out
+(`declined_memory_bound`), so its 2026-09-12 and 2026-09-15 numbers are both
+sequential and directly comparable. Candidates are B-2026-09-12-20's overlay
+fix, the fold itself, and keeping `Vec` off the SSO path — none measured. This
+is the same failure mode as B-2026-09-14-28's: a number moved and the cause is
+unattributed, so it is recorded as unattributed rather than assigned.
+
+**`substr` is the new worst rail at +34%.** Same slice/compare/discard shape as
+`lexlike`, but through `String.substring`; the two now disagree by 47 points,
+and `substr` read as +5% for as long as it was fanned out.
 
 #### The 17 residual katas, re-timed
 
@@ -2245,7 +2293,11 @@ asserted from a static count was wrong.
 Seven negative controls, each a deliberate single-gate backout rebuilt and
 re-probed, all against a probe that sweeps lengths 0–40 across `push`,
 `push_str`-first, self-append, empty-append and reserve-then-push, on
-`--interp` (oracle) vs AOT vs JIT and both auto-par settings:
+`--interp` (oracle) vs AOT vs JIT and both auto-par settings (this sweep is now
+a permanent fixture, `test_sso_de_inline_rides_the_string_growth_test` in
+`tests/cli.rs` — re-verified non-vacuous by backing the fold out, which makes
+the `KARAC_SSO=1` leg SIGSEGV while the `=0` leg stays byte-identical to the
+oracle, i.e. the default-off suite cannot catch this class at all):
 
 | gate removed | result |
 |---|---|

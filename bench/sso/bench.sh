@@ -24,21 +24,41 @@
 #           path itself. Read as a PAIR with builder: moving cost from one to
 #           the other is not a win.
 #
-# Last measured on x86-64 (2026-09-12, KARAC_SSO=1 vs =0):
-#   lexer   15.8% FASTER      lexlike  34% SLOWER      substr  5% SLOWER
+# Last measured on x86-64 (2026-09-15, KARAC_SSO=1 vs =0, RUNS=15, auto-par
+# pinned off -- see the tunables note below; earlier numbers were NOT pinned):
+#   lexer  17.6% FASTER   lexlike  13% FASTER   substr  34% SLOWER
+#   builder20 +15%   builder60 +12%   promote +8%   pfx_idx +15%   pfx_chars -10%
 #
-# THE OPEN QUESTION this track exists to answer: where does lexlike's remaining
-# 34% go? Half of what used to be a 66% regression turned out to be a
-# store-to-load forwarding stall in the inline encoder, removed as a side effect
-# of an unrelated correctness fix (B-2026-09-12-20). That is reason to suspect
-# the rest is also an implementation artifact rather than inherent to the
-# representation -- but it needs a PROFILER to attribute, and it has never been
-# profiled. See the README for what has already been ruled out, so you do not
-# re-run those.
+# THE OPEN QUESTION HAS MOVED. It used to be "where does lexlike's remaining 34%
+# go?". lexlike no longer regresses at all -- it is a 12-14% WIN as of
+# 2026-09-15, and the pin does not explain that, because lexlike is the one rail
+# the analyzer never fans out (declined_memory_bound), so its old and new
+# numbers are both sequential and directly comparable. Something between
+# 2026-09-12 and 2026-09-15 fixed it and NOTHING HAS ATTRIBUTED IT; the
+# candidates are B-2026-09-12-20's overlay fix, the growth-test fold (c1adb9c),
+# and keeping Vec off the SSO path.
+#
+# The question now is SUBSTR, at +34%. It is the same slice/compare/discard
+# shape as lexlike but through `String.substring`, and the two disagree by 47
+# points. It read as +5% for as long as it was fanned out. It has never been
+# profiled either. See the README for what has already been ruled out.
 #
 # Tunables (env): ITERS (microbench iterations, default 10000000), PASSES (lexer
 # passes over the input, default 200), RUNS (samples per rail, default 7),
 # KARAC (compiler path, default target/release/karac then target/debug/karac).
+#
+# AUTO-PAR IS PINNED OFF, and that is a CONTROL rather than a preference. The
+# spike doc's kata sweep states it as one -- "KARAC_AUTO_PAR=0 is held fixed,
+# since auto-par is a third surface and letting it vary would make any
+# difference unattributable" -- but this script did not apply it until
+# 2026-09-15, so every rail number published before that date was measured with
+# the driver loops FANNED OUT. Each rail's `main` accumulates
+# `total = total + s.len()`, which the analyzer reads as a `+` reduction and
+# parallelizes at these iteration counts; both legs of a comparison fanned out
+# equally, so the SIGNS held, but the magnitudes were parallel-throughput
+# deltas and understated per-iteration cost. Check with
+# `karac build --concurrency-report <rail>.kara`. Set KARAC_AUTO_PAR=1 here
+# only to measure the thread pool on purpose.
 
 set -euo pipefail
 
@@ -53,6 +73,8 @@ ITERS="${ITERS:-10000000}"
 BITERS="${BITERS:-$(( ITERS / 4 ))}"
 PASSES="${PASSES:-200}"
 RUNS="${RUNS:-7}"
+# See the header: this is a control, not a preference.
+AUTO_PAR="${KARAC_AUTO_PAR:-0}"
 
 if [ -z "${KARAC:-}" ]; then
   for c in "$ROOT/target/release/karac" "$ROOT/target/debug/karac"; do
@@ -120,14 +142,14 @@ printf -- '---------- ---------- ---------- ----------   ----\n'
 declare -A T
 for sso in 0 1; do
   # lexer
-  ( cd "$BUILD/lexer" && rm -f lexprof && KARAC_SSO=$sso "$KARAC" build >/dev/null 2>&1 )
+  ( cd "$BUILD/lexer" && rm -f lexprof && KARAC_SSO=$sso KARAC_AUTO_PAR=$AUTO_PAR "$KARAC" build >/dev/null 2>&1 )
   [ -x "$BUILD/lexer/lexprof" ] || { echo "lexer rail SSO=$sso: BUILD PRODUCED NO BINARY" >&2; exit 1; }
   mv "$BUILD/lexer/lexprof" "$BUILD/lexer/rail$sso"
   T[lexer$sso]=$( cd "$BUILD/lexer" && timeit "./rail$sso" )
   # microbenches
   for spec in "${MICRO[@]}"; do
     m="${spec%%:*}"
-    ( cd "$BUILD" && rm -f "$m" && KARAC_SSO=$sso "$KARAC" build "$m.kara" >/dev/null 2>&1 )
+    ( cd "$BUILD" && rm -f "$m" && KARAC_SSO=$sso KARAC_AUTO_PAR=$AUTO_PAR "$KARAC" build "$m.kara" >/dev/null 2>&1 )
     [ -x "$BUILD/$m" ] || { echo "$m rail SSO=$sso: BUILD PRODUCED NO BINARY" >&2; exit 1; }
     mv "$BUILD/$m" "$BUILD/$m.rail$sso"
     T[$m$sso]=$( timeit "$BUILD/$m.rail$sso" )
