@@ -39,12 +39,34 @@ commits moved these rails by nothing and the whole difference is the machine.
 **So: never compare a rail delta to a number from a previous session, including
 every number in this document.** Re-run both legs on one machine. What survives
 across hosts is the GAP between two rails measured together — which is why
-B-2026-09-15-6 is written about the ~47–51 point `substr`/`lexlike` gap and not
-about either rail's level.
+B-2026-09-15-6 is written about the ~46–52 point `substr`/`lexlike` gap and not
+about either rail's level. **That survives between boxes of one ISA and no
+further:** on arm64 the same gap is 3 points, both spellings winning ~50%. So
+a differential is more durable than a level, not durable outright.
+
+**Both of this track's blockers are x86-64 phenomena.** `vertical`'s +85%
+(B-2026-09-14-28) measures +1.4% on an M5 Pro at its own filing commit, and the
+`substr`/`lexlike` gap is 3 points there. The default-flip decision is therefore
+PER-PLATFORM. What that does not license is flipping SSO on for arm64: the
++5.7% corpus aggregate below is an x86-64 number, the arm64 corpus has never
+been swept, and two rails plus one kata are not a corpus. That sweep is the
+honest next step for the arm64 side.
 
 **Anything here dated before 2026-09-15 additionally had auto-par ON**
 (`bench.sh` did not pin the control until `375118d`), which is a separate and
 compounding reason not to compare against it.
+
+**Two further rules the 2026-09-15 re-run added, both about how numbers here are
+written down.** First, **read the spread, not the third digit**: the harness
+prints integer milliseconds, so a rail at 127–129 ms quantizes to ±0.8% and one
+at 44 ms to ±2.3%. `promote`'s long-standing `+0.8%` is *zero* — it flips sign
+between samples — and `lexer`, the rail SSO's whole case rests on, is the
+LOOSEST at 5 points across five samples (~−16 ± 3%, not −17.6%). Two samples
+cannot show either; take three or more. Second, **auto-par does not uniformly
+compress**: pinning changes the SIGN for `substr` (+73% → ≈0%) and the
+MAGNITUDE for `builder60` (+2.4…3.6% → +11.7…13.6%, amplified fourfold) in
+OPPOSITE directions, so the pin is a control on both counts. Table and
+mechanism-hypothesis in `bench/sso/README.md`.
 
 **Kata corpus** (17 residual regressions, sweep already pinned): median +1.4%,
 aggregate +5.7%, 4 regressed ≥5%, 2 improved ≥5%.
@@ -56,8 +78,9 @@ aggregate +5.7%, 4 regressed ≥5%, 2 improved ≥5%.
   points) and `prefix_string` was ruled out too (an exact mirror runs 9–15%
   *faster* under SSO). Largest single item in the corpus.
 - **B-2026-09-15-6** — `substr` (via `String.substring`) and `lexlike` (via
-  slice syntax) do *identical* work and differ by **~47–51 points on every host
-  and compiler tested**, while neither rail's own delta is portable. The
+  slice syntax) do *identical* work and differ by **~46–52 points on both
+  x86-64 hosts, over seven samples** — but by **3 points on arm64**, where both
+  spellings win ~50%, while neither rail's own delta is portable. The
   differential is the finding; the levels are not. Never profiled; this track
   has never had a profiler pointed at it. (An earlier framing of this row as an
   auto-par "sign flip" was withdrawn — the −14.7% did not reproduce, and a
@@ -71,7 +94,7 @@ cannot catch this class on its own.
 
 **What a flip decision needs** that does not exist yet: an attribution for
 `vertical`, and an answer to why two spellings of the same read workload differ
-by 44 points. Both have a written next experiment in their rows.
+by 46–52 points. Both have a written next experiment in their rows.
 
 **Slice 2 inline construction is LIVE behind `KARAC_SSO=1`, default OFF.** It
 works and it is correct on every surface probed. Both construction sites are
@@ -2331,30 +2354,57 @@ without checking that its baseline was reproducible. Two numbers from different
 dates disagreeing is not a finding until both are reproduced on the same
 workload. The baseline is the first thing to re-measure, not the last.
 
-**`substr` flips SIGN with the auto-par setting, and that is the track's real
-open question.** Measured at one commit, best-of-9, so no cross-date comparison
-is involved:
+**The track's real open question is the GAP between `substr` and `lexlike`,
+because it is a differential and so survives the host problem above.** The two
+do identical work — slice a 3-byte token, compare it to a keyword, discard, no
+consuming call — one through `String.substring` and one through slice syntax.
+They differ by **46–52 points on both x86-64 hosts and both compilers tried,
+over seven samples**, while neither rail's own delta is portable at all — but
+the gap is **3 points on arm64**, where both spellings win ~50%, so it does not
+survive the ISA boundary either. Filed as
+B-2026-09-15-6. The next step is an IR diff of the two rails at `KARAC_SSO=1`
+pinned, on one host, since they differ only in how the piece is produced; this
+track has never had a profiler pointed at it.
 
-| rail | auto-par default | auto-par pinned |
-|---|---|---|
-| `lexlike` | −13.0% | −13.4% |
-| `substr` | **−14.7%** (SSO wins) | **+30.9%** (SSO loses) |
-| `pfx_idx` | +10.5% | +15.6% |
+**An earlier version of this section said something sharper and wrong, in the
+paragraph immediately below the warning against exactly this.** It claimed
+`substr` flipped SIGN with the auto-par setting — a 14.7% SSO *win* fanned out
+against a 30.9% loss pinned — on a single best-of-9 run at one commit. The win
+half does not reproduce. Six trials at the default straddle zero
+(−1.7 / 0.0 / −1.7% and +0.0 / −1.7 / +1.7%), none within 13 points of −14.7%,
+and a `KARAC_PAR_WORKERS` sweep is flat at 1, 2, 4, 8 and 18 workers. The
+−14.7% was one run on a loaded box. Best-of-9 within a single configuration
+does not protect against a loaded box, because every one of the nine is loaded;
+only a repeat at a different time does, which is what the paragraph above this
+one says and what this table did not do.
 
-Compressing a per-iteration difference is expected and is what happened to
-`pfx_idx`. `substr` does something worse: fanned out it reports SSO as a solid
-win, pinned it reports a solid loss — the opposite conclusion, not a milder one.
-Both legs are ~2.3x faster fanned out (175 → 75 ms at `SSO=0`), so the rail
-parallelises fine; the legs simply do not scale equally. `lexlike` is the
-control that makes this readable: the analyzer declines to fan it out, so its
-delta is the same under both settings.
+**What replaces it: auto-par does not uniformly compress — it moves different
+rails in OPPOSITE directions.** Re-measured at `f72fac4`, host B, `RUNS=15`,
+three samples of each leg:
 
-Pinned, `substr` (+31%) and `lexlike` (−13%) differ by **44 points while doing
-the same work** — slice a 3-byte token, compare, discard — one through
-`String.substring` and one through slice syntax. Filed as B-2026-09-15-6. The
-next step is to diff the two rails' IR at `KARAC_SSO=1` pinned, since they
-differ only in how the piece is produced; this track has never had a profiler
-pointed at it.
+| rail | pinned | default (fanned out) | |
+|---|---|---|---|
+| `lexlike` | +20.9 … +24.0% | +21.7 … +22.9% | unchanged — does not fan out |
+| `substr` | +72.8 … +74.4% | **+0.0 / −1.7 / +1.7%** | masked to zero |
+| `pfx_idx` | +15.9 … +18.2% | +7.1 … +14.3% | compressed |
+| `builder60` | +2.4 … +3.6% | **+11.7 … +13.6%** | **amplified ~4x** |
+| `builder20` | +1.8 … +3.7% | +4.5 … +7.0% | amplified |
+| `promote` | −0.8 … +0.8% (zero) | +2.9 / +2.9 / +2.9% | zero → real |
+| `pfx_chars` | −7.5 … −8.5% | −6.7 … −12.9% | roughly same |
+| `lexer` | −13.4 … −19.1% | −17.4 … −18.2% | roughly same |
+
+The rails whose SSO cost is per-iteration serial work (`substr`, `pfx_idx`) get
+compressed, because parallelism hides it; the ones that pay it in allocator
+traffic (`builder*`, `promote`) get amplified, plausibly because four workers
+contend on the allocator. **That mechanism is a hypothesis and has not been
+measured.** The amplification has been: `builder60` is four times worse fanned
+out than pinned, consistently across three samples. So the pin is a control in
+both directions — it changes the SIGN of the answer for `substr` and the
+MAGNITUDE for `builder*`, oppositely.
+
+`lexlike` remains the control that makes the table readable, and that half of
+the old section survives: the analyzer declines to fan it out (175–177 ms
+pinned, 175–176 ms fanned), so its delta is identical under both settings.
 
 #### The 17 residual katas, re-timed
 

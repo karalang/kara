@@ -11,12 +11,12 @@
 # false. Measured on two containers with the SAME COMPILER (karac built at
 # 27466ba, run on both):
 #
-#   rail        host A           host B (nproc=4)   
-#   lexlike     -12.7 / -13.7%   +22.9%             36 pts, SIGN FLIPS
-#   substr      +33.7 / +34.3%   +73.6%             doubles
-#   builder20   +15.1 / +14.1%   +3.1%              12 pts better
-#   promote     +7.8 / +7.9%     +0.0%              
-#   pfx_idx     +14.1 / +15.9%   +15.9%             portable, near-exactly
+#   rail        host A (2)       host B, nproc=4 (5 samples)
+#   lexlike     -12.7 / -13.7%   +20.9 .. +24.0%    ~36 pts, SIGN FLIPS
+#   substr      +33.7 / +34.3%   +72.2 .. +74.4%    doubles
+#   builder20   +15.1 / +14.1%   +1.8 .. +3.7%      ~12 pts better
+#   promote     +7.8 / +7.9%     -0.8 .. +0.8%      zero, flips within noise
+#   pfx_idx     +14.1 / +15.9%   +15.9 .. +18.2%    portable, near-exactly
 #
 # A rail's SSO ratio is a property of the rail AND the host: different rails are
 # bound by different subsystems, so a different CPU allocation reprices them
@@ -47,11 +47,20 @@
 #           path itself. Read as a PAIR with builder: moving cost from one to
 #           the other is not a win.
 #
-# Last measured on x86-64 (2026-09-15, KARAC_SSO=1 vs =0, RUNS=15, auto-par
-# pinned off -- see the tunables note below; numbers from before 2026-09-15 were
-# NOT pinned and are not comparable to these):
-#   lexer  -17.6%   lexlike  -13%   substr  +31..34%
-#   builder20 +15%   builder60 +12%   promote +8%   pfx_idx +15%   pfx_chars -10%
+# Last measured 2026-09-15 at f72fac4, KARAC_SSO=1 vs =0, RUNS=15, auto-par
+# pinned off (see the tunables note below; numbers from before 2026-09-15 were
+# NOT pinned and are not comparable). ON HOST B -- read the table above before
+# comparing these to anything, and re-run rather than trusting them:
+#   lexer -13.4..-19.1   lexlike +20.9..+24.0   substr +72.2..+74.4
+#   builder20 +1.8..+3.7   builder60 +2.4..+3.6   promote -0.8..+0.8 (zero)
+#   pfx_idx +15.9..+18.2   pfx_chars -7.5..-8.5
+#
+# THOSE ARE RANGES BECAUSE THE THIRD DIGIT IS NOISE. The harness prints integer
+# milliseconds, so a rail at 127-129ms quantizes to +-0.8% and one at 44ms to
+# +-2.3%. `promote`'s +0.8% is zero -- it flips sign between samples. `lexer` is
+# the LOOSEST rail, 5 points across five samples, which matters because it is
+# the rail SSO's whole case rests on: ~-16 +- 3%, not -17.6%. Two samples cannot
+# show this; take three or more.
 #
 # DO NOT TRUST A PRE-2026-09-15 NUMBER FROM THIS HEADER, and do not re-measure
 # to "confirm" one. This block used to read "lexlike 34% SLOWER (2026-09-12)",
@@ -62,13 +71,41 @@
 # committed rail at five commits spanning 09-12..09-15 gives -12 to -14% at
 # every one of them, flat. Recorded as B-2026-09-15-1 (invalid).
 #
-# THE OPEN QUESTION is SUBSTR, and it is sharper than a magnitude. At ONE
-# commit, `substr` is a 14.7% SSO WIN under default auto-par and a 30.9% SSO
-# LOSS pinned -- same rail, same compiler, a sign flip decided by the scheduler
-# (B-2026-09-15-6). Pinned it is the worst rail in the track, while `lexlike` --
-# the SAME slice/compare/discard shape, reached through slice syntax instead of
-# `String.substring` -- wins 13%. Nothing attributes that 44-point gap and no
-# profiler has ever been pointed at this track.
+# THE OPEN QUESTION is the GAP BETWEEN substr AND lexlike, which is a
+# differential and therefore survives the host problem above. The two do
+# IDENTICAL work -- slice a 3-byte token, compare it to a keyword, discard, no
+# consuming call -- one through `String.substring` and one through slice syntax,
+# and they differ by 46-52 points on both x86-64 hosts and both compilers tried,
+# over seven samples. Filed as B-2026-09-15-6. No profiler has ever been pointed
+# at this track; the next step there is an IR diff of the two rails at
+# KARAC_SSO=1 pinned, on an x86-64 host.
+#
+# AND THE GAP IS x86-64 ONLY -- it does not survive the ISA boundary, which
+# retires the stronger claim that a differential is portable where a level is
+# not. On an M5 Pro, measured at the row's own filing commit, `substr` is -50.0%
+# and `lexlike` -53.0%: BOTH spellings win ~50% under SSO and the gap is 3
+# POINTS, with the two rails indistinguishable at KARAC_SSO=1 (cycles 1.0232,
+# distributions overlap). `vertical`'s +85% is +1.4% there too, so NEITHER of
+# this track's blockers has an arm64 instance. Differentials are the durable
+# unit BETWEEN BOXES OF ONE ISA; that is all the two-host table above supports.
+#
+# AN EARLIER VERSION OF THIS PARAGRAPH SAID SOMETHING SHARPER AND WRONG: that
+# `substr` was a 14.7% SSO WIN fanned out and a 30.9% LOSS pinned -- a sign flip
+# decided by the scheduler. The win half was ONE run on a loaded box and does
+# not reproduce. Six trials at the default straddle zero (-1.7/0.0/-1.7 and
+# +0.0/-1.7/+1.7), and a KARAC_PAR_WORKERS sweep is flat at 1, 2, 4, 8 and 18.
+# What is true is weaker: fanning out MASKS the pinned regression.
+#
+# AND FANNING OUT DOES NOT UNIFORMLY COMPRESS, which is why the pin is a control
+# rather than a tidier baseline. Measured at f72fac4 on host B, three samples of
+# each leg: `substr` 73% -> 0% and `pfx_idx` +16% -> +10% COMPRESS, while
+# `builder60` +2.4..3.6% -> +11.7..13.6% AMPLIFIES about fourfold, `builder20`
+# and `promote` likewise. The rails whose SSO cost is per-iteration serial work
+# compress; the ones that pay it in allocator traffic amplify, plausibly on
+# 4-worker allocator contention -- that mechanism is a hypothesis, the
+# amplification is measured. `lexlike` is the control and holds: the analyzer
+# declines to fan it out (175-177ms pinned, 175-176ms fanned), so its delta is
+# identical under both settings.
 #
 # See the README for what has already been ruled out.
 #

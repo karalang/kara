@@ -184,17 +184,27 @@ B-2026-09-14-31.
 **A rail's SSO ratio is a property of the rail AND the host.** Same compiler
 (`karac` at `27466ba`, built and run on both), `RUNS=15`, auto-par pinned off:
 
-| rail | host A | host B (`nproc=4`) | portable? |
+| rail | host A (2 samples) | host B, `nproc=4` (5 samples) | portable? |
 |---|---|---|---|
-| `lexer` | −17.7 / −17.5% | −13.4 / −17.0% | roughly |
-| `lexlike` | **−12.7 / −13.7%** | **+22.9 / +23.3%** | **no — sign flips** |
-| `substr` | +33.7 / +34.3% | +72.2 / +72.8% | **no — doubles** |
-| `builder20` | +15.1 / +14.1% | +2.5 / +3.1% | no |
-| `builder60` | +11.9 / +12.5% | +2.4 / +3.2% | no |
-| `promote` | +7.8 / +7.9% | +0.8% | no |
-| `pfx_idx` | +14.1 / +15.9% | +15.9% | yes, near-exactly |
-| `pfx_chars` | −10.3% | −7.6 / −7.5% | roughly |
-| **`substr` − `lexlike`** | **46.4 / 48.0 pts** | **49.3 / 49.5 pts** | **yes** |
+| `lexer` | −17.5 … −17.7% | −13.4 … −19.1% | roughly |
+| `lexlike` | **−12.7 … −13.7%** | **+20.9 … +24.0%** | **no — sign flips** |
+| `substr` | +33.7 … +34.3% | +72.2 … +74.4% | **no — doubles** |
+| `builder20` | +15.1 … +14.1% | +1.8 … +3.7% | no |
+| `builder60` | +11.9 … +12.5% | +2.4 … +3.6% | no |
+| `promote` | +7.8 … +7.9% | −0.8 … +0.8% (zero) | no |
+| `pfx_idx` | +14.1 … +15.9% | +15.9 … +18.2% | yes, near-exactly |
+| `pfx_chars` | −10.3% | −7.5 … −8.5% | roughly |
+| **`substr` − `lexlike`** | **46.4 / 48.0 pts** | **48.8 … 51.9 pts** | **yes** |
+
+**Read the SPREAD, not the third digit.** The harness reports integer
+milliseconds, so a rail landing at 127–129 ms quantizes to ±0.8% and one at
+44 ms to ±2.3%. `promote`'s `+0.8 / +0.8 / +0.8 / −0.8 / +0.8` is not a small
+regression — it is zero, ±1 ms, and it flips sign between samples. `pfx_idx`'s
++15.9/+18.2 spread is the same artifact at 44 → 51/52 ms: the delta is real,
+its third digit is not. `lexer` is the LOOSEST rail rather than the tightest —
+5 points across five samples — which matters because it is the rail SSO's whole
+case rests on, so state it as ~−16 ± 3% and not as −17.6%. Two samples cannot
+show any of this; the host B column above is five.
 
 Different rails are bound by different subsystems, so a different CPU
 allocation reprices them non-uniformly: the malloc-dominated rails
@@ -220,19 +230,59 @@ and was transcribed above rails that replaced it. Refuted as B-2026-09-15-1
 a regression. Two numbers from different dates — or different boxes —
 disagreeing is not a finding until both are reproduced together.
 
-**Auto-par MASKS the pinned regression, which is what the pin is for.** An
-earlier revision claimed `substr` was a 14.7% SSO *win* under default auto-par
-and a 30.9% loss pinned — a sign flip. The win half does not reproduce: three
-fresh trials at the default give −1.7% / 0.0% / −1.7%, and a
+**Auto-par does not uniformly compress — it moves different rails in opposite
+directions, which is why the pin is a control and not a tidier baseline.**
+Measured on host B at `f72fac4`, `RUNS=15`, three samples of each leg:
+
+| rail | pinned | default (fanned out) | |
+|---|---|---|---|
+| `lexlike` | +20.9 … +24.0% | +21.7 … +22.9% | unchanged — does not fan out |
+| `substr` | +72.8 … +74.4% | **+0.0 / −1.7 / +1.7%** | masked to zero |
+| `pfx_idx` | +15.9 … +18.2% | +7.1 … +14.3% | compressed |
+| `builder60` | +2.4 … +3.6% | **+11.7 … +13.6%** | **amplified ~4x** |
+| `builder20` | +1.8 … +3.7% | +4.5 … +7.0% | amplified |
+| `promote` | −0.8 … +0.8% (zero) | +2.9 / +2.9 / +2.9% | zero → real |
+| `pfx_chars` | −7.5 … −8.5% | −6.7 … −12.9% | roughly same |
+| `lexer` | −13.4 … −19.1% | −17.4 … −18.2% | roughly same |
+
+The rails whose SSO cost is per-iteration serial work (`substr`, `pfx_idx`) get
+COMPRESSED, because parallelism hides it; the rails that pay it in allocator
+traffic (`builder*`, `promote`) get AMPLIFIED, plausibly because four workers
+contend on the allocator. That mechanism is a hypothesis and has not been
+measured. The amplification has: `builder60` is four times worse fanned out
+than pinned, consistently across three samples.
+
+`lexlike` is the control that makes the table readable, and it holds — the
+analyzer declines to fan it out (175–177 ms pinned, 175–176 ms fanned), so its
+delta is identical under both settings.
+
+**Auto-par MASKS the pinned `substr` regression, which is what the pin is for.**
+An earlier revision claimed `substr` was a 14.7% SSO *win* under default
+auto-par and a 30.9% loss pinned — a sign flip. The win half does not
+reproduce. Six trials at the default now: −1.7% / 0.0% / −1.7% and
++0.0% / −1.7% / +1.7%, straddling zero, none within 13 points of −14.7%; a
 `KARAC_PAR_WORKERS` sweep gives roughly zero at 1, 2, 4, 8 and 18 workers. That
 −14.7% was one run on a loaded box. The correct, weaker statement: fanned out,
 `substr`'s delta collapses to about zero while pinned it is the worst rail
 here. Consistent with the pre-pin header's "+5%".
 
-**The open question is the GAP.** `substr` and `lexlike` do identical work —
+**The gap is portable across x86-64 boxes, NOT across ISAs.** On an M5 Pro
+(macOS/arm64), measured at this row's own filing commit so compiler drift is
+excluded, `substr` is −50.0% and `lexlike` −53.0% — **both spellings win ~50%
+under SSO, and the gap is 3 points.** Re-measured on current main with 6 builds
+per arm, arms alternated, auto-par pinned: at `KARAC_SSO=1` the two rails are
+indistinguishable (instructions 1.0344, cycles 1.0232, distributions overlap).
+So "the differential is the durable unit" holds between the two x86-64
+containers above and fails across the ISA boundary; the same is true of
+`vertical`'s +85%, which is +1.4% there. Neither of this track's blockers has an
+arm64 instance. That does NOT mean SSO should be flipped on by default on
+arm64 — the +5.7% corpus aggregate is an x86-64 number and the arm64 corpus has
+never been swept.
+
+**The open question is the GAP, on x86-64.** `substr` and `lexlike` do identical work —
 slice a 3-byte token, compare, discard — one through `String.substring`, one
-through slice syntax, and they differ by ~47–51 points on BOTH hosts and both
-compilers tested. Unlike the levels, that is a property of the code. Filed as
+through slice syntax, and they differ by ~46–52 points on both x86-64 hosts and both
+compilers tried, across seven independent samples. Unlike the levels, that is a property of the code. Filed as
 B-2026-09-15-6; the next step there is to diff the two rails' IR at
 `KARAC_SSO=1` pinned, on one host, since they differ only in how the piece is
 produced. Never profiled.
