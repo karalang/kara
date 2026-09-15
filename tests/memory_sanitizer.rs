@@ -93109,4 +93109,109 @@ fn main() {
             "b20-array-reassign-vec-heap",
         );
     }
+    /// B-2026-09-15-27 — a `Vec[Array[T, N]]`-typed STRUCT FIELD frees its
+    /// elements' heap. 34 B in 2 blocks definitely lost before the fix on a
+    /// plain `let h: H` with no reassignment anywhere.
+    ///
+    /// The struct-field element policy `vec_element_drain_fn` resolves through
+    /// `vec_elem_agg_drop_for_type_expr` (name-keyed, plus a Tuple arm) and
+    /// then `elem_te_needs_direct_recursive_drain` (a literal list of head
+    /// names), and NEITHER has an `Array` case — so the field freed its buffer
+    /// and left every fixed array's interior unowned.
+    ///
+    /// B-2026-09-10-8/-26 saw this exact position and put its recursion in
+    /// `emit_drop_fn_for_array` instead, on the ground that a
+    /// `Vec[Array[String, 2]]` built as `let e = [..]; v.push(e)` is already
+    /// owned by the source local, so widening the shared policy would make a
+    /// second owner. That is true of a `Vec` LOCAL — its cell 16 in
+    /// `asan_nested_fixed_array_elements_are_freed_at_every_position` is
+    /// unchanged by this fix and is the control for it — and FALSE of a FIELD:
+    /// the push-built spelling leaks as a field exactly as the literal one
+    /// does, because `v.push(e)` disarms `e` and moving `v` into the field
+    /// leaves nothing else owning the elements. Both spellings are cells here.
+    ///
+    /// MUST be read at `-O0`: at `-O2` LLVM deletes the allocations nothing
+    /// observes, which is the `asan-o0-leg.sh` case.
+    ///
+    /// BODIES are NOT asserted beyond `end`: a nested container in a `Vec`
+    /// field is still silent on both backends, which is B-2026-09-15-23's
+    /// subject. Bodies and memory are separate channels (B-2026-08-28-57) and
+    /// this row is the memory one.
+    #[test]
+    fn asan_vec_of_fixed_arrays_in_a_struct_field_frees_its_elements() {
+        const H: &str = "struct D { id: i64, s: String }\n\
+             impl Drop for D { fn drop(mut ref self) { println(f\"dD{self.id}\") } }\n\
+             fn mkd(i: i64) -> D { return D { id: i, s: f\"tttttttttttttttt{i}\" } }\n\
+             struct H { f: Vec[Array[D, 1]] }\n";
+        // The reported shape: a Vec literal of array literals, no reassignment.
+        assert_clean_asan_run(
+            &format!(
+                "{H}fn main() {{\n\
+                 \x20   let h: H = H {{ f: [[mkd(1)], [mkd(2)]] }};\n\
+                 \x20   println(\"end\");\n\
+                 }}\n"
+            ),
+            &["end"],
+            "b27-vec-of-arrays-field-literal",
+        );
+        // The PUSH-BUILT spelling, and the cell that refutes the premise the
+        // recursion was originally kept out of the shared policy on: 3 B in 1
+        // block before the fix, because the push disarms the source local and
+        // moving the `Vec` into the field leaves no owner behind.
+        assert_clean_asan_run(
+            &format!(
+                "{H}fn main() {{\n\
+                 \x20   let mut v: Vec[Array[D, 1]] = [];\n\
+                 \x20   let e1: Array[D, 1] = [mkd(1)];\n\
+                 \x20   v.push(e1);\n\
+                 \x20   let h: H = H {{ f: v }};\n\
+                 \x20   println(\"end\");\n\
+                 }}\n"
+            ),
+            &["end"],
+            "b27-vec-of-arrays-field-pushed",
+        );
+        // An element with more than one slot, so a fix that walks only index 0
+        // is visible.
+        assert_clean_asan_run(
+            "struct D { id: i64, s: String }\n\
+             impl Drop for D { fn drop(mut ref self) { println(f\"dD{self.id}\") } }\n\
+             fn mkd(i: i64) -> D { return D { id: i, s: f\"tttttttttttttttt{i}\" } }\n\
+             struct H { f: Vec[Array[D, 2]] }\n\
+             fn main() {\n\
+             \x20   let h: H = H { f: [[mkd(1), mkd(2)], [mkd(3), mkd(4)]] };\n\
+             \x20   println(\"end\");\n\
+             }\n",
+            &["end"],
+            "b27-vec-of-two-slot-arrays-field",
+        );
+        // CONTROL — the same type as a LOCAL, clean before and after. This is
+        // the half the original reasoning got right, and a widening that
+        // started double-freeing it aborts here.
+        assert_clean_asan_run(
+            &format!(
+                "{H}fn main() {{\n\
+                 \x20   let v: Vec[Array[D, 1]] = [[mkd(1)], [mkd(2)]];\n\
+                 \x20   println(\"end\");\n\
+                 }}\n"
+            ),
+            &["dD1", "dD2", "end"],
+            "b27-vec-of-arrays-local-control",
+        );
+        // B-2026-09-15-26's shape on the memory channel: the flat `Array[D, N]`
+        // FIELD, whose bodies that row restored. It was clean throughout —
+        // pinned so the bodies fix cannot quietly acquire a second owner.
+        assert_clean_asan_run(
+            "struct D { id: i64, s: String }\n\
+             impl Drop for D { fn drop(mut ref self) { println(f\"dD{self.id}\") } }\n\
+             fn mkd(i: i64) -> D { return D { id: i, s: f\"tttttttttttttttt{i}\" } }\n\
+             struct H { f: Array[D, 2] }\n\
+             fn main() {\n\
+             \x20   let h: H = H { f: [mkd(1), mkd(2)] };\n\
+             \x20   println(\"end\");\n\
+             }\n",
+            &["dD1", "dD2", "end"],
+            "b26-array-field-bodies-memory-control",
+        );
+    }
 }

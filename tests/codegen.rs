@@ -34575,15 +34575,160 @@ fn main() {
                 "mid\n",
             ),
             (
-                // B-2026-09-12-21's shape, deliberately untouched: an agreed
-                // silence on all four surfaces, which is strictly better than a
-                // divergence and is not this row's to trade.
-                "control: an Array in a STRUCT FIELD stays an agreed silence",
+                // B-2026-09-12-21's shape. This cell pinned the AGREED SILENCE
+                // that B-2026-09-14-15 declined to trade for a divergence, and
+                // B-2026-09-15-26 has since closed it in the other direction —
+                // both gates learned the array FIELD together, so the cell is
+                // now an agreed FIRING and this row's reasoning is intact: it
+                // never became a divergence.
+                "an Array in a STRUCT FIELD fires on both backends (B-2026-09-15-26)",
                 "let w = W { z: [mkd(1), mkd(2)] };",
-                "mid\n",
+                "dD1\ndD2\nmid\n",
             ),
         ] {
             let src = format!("{HDR}fn main() {{\n{body}\nprintln(\"mid\");\n}}\n");
+            let (interp_out, interp_errs, _, _) = karac::run_program_full(&src);
+            assert!(
+                interp_errs.is_empty(),
+                "[{label}] interp errored: {interp_errs:?}"
+            );
+            assert_eq!(interp_out.join(""), want, "[{label}] interpreter");
+            if let Some(aot) = run_program(&src) {
+                assert_eq!(aot, want, "[{label}] AOT");
+            }
+        }
+    }
+
+    /// B-2026-09-15-26 / B-2026-09-15-27 — an `Array[T, N]`-typed STRUCT
+    /// FIELD runs its elements' `Drop` bodies, and a `Vec[Array[T, N]]` field
+    /// frees their heap.
+    ///
+    /// Both backends were silent on the bodies, so this was an AGREED GAP
+    /// rather than a divergence, and the two halves move in one commit for
+    /// that reason — repairing codegen alone would have manufactured the
+    /// divergence B-2026-09-10-17 declined to create when it fixed the
+    /// envelope half of this same family.
+    ///
+    /// THREE sites, one shape. Every one of them is keyed on a HEAD NAME, and
+    /// the head of `Array[D, 2]` is `Array` — not a declared struct, not a
+    /// container in any of their tables:
+    ///
+    ///   * codegen's RELEVANCE gate `type_runs_user_drop` has a
+    ///     one-container-level leg per container (`Vec`, `Map`/`Set`, tuple,
+    ///     `Option`/`Result` payload, envelope chain, generic struct
+    ///     instantiation) and had none for a fixed array, so `H { f: Array[D,
+    ///     2] }` classified drop-free and NO bodies action was registered for
+    ///     `h` at all. Widening the field SELECTOR alone (which this row also
+    ///     did, for the same reason) changes nothing while the gate ahead of
+    ///     it answers false — measured.
+    ///   * the interpreter twin `field_te_runs_user_drop` had the identical
+    ///     hole, which is what made the silence agreed.
+    ///   * the interpreter's field WALK then had to learn the position too:
+    ///     `Vec` and `Array` are one runtime value (`Value::Array`), so an
+    ///     array field reached the `Vec` arm, was turned away by its
+    ///     declared-head gate, and fell through that arm's unconditional
+    ///     `continue`.
+    ///
+    /// The MEMORY half (-15-27) is one further site and the opposite polarity:
+    /// `vec_element_drain_fn`, the shared struct-field / enum-payload element
+    /// policy, had no array case, so a `Vec[Array[D, 1]]` FIELD freed its
+    /// buffer and leaked every element's interior. B-2026-09-10-8/-26 saw that
+    /// position and deliberately put its recursion in `emit_drop_fn_for_array`
+    /// instead, on the ground that a `Vec[Array[String, 2]]` built as `let e =
+    /// [..]; v.push(e)` is already owned by the source local. That holds for a
+    /// `Vec` LOCAL and not for a FIELD: the push-built spelling leaks as a
+    /// field exactly as the literal one does, because the push disarms `e` and
+    /// moving the `Vec` into the field leaves no other owner. Both spellings
+    /// are cells below.
+    ///
+    /// The `Vec[Vec[D]]` and `Vec[Array[D, 1]]` BODIES remain an agreed
+    /// silence — a nested container in a `Vec` field, which is
+    /// B-2026-09-15-23's subject and not this row's. Pinned as such below so a
+    /// later change to that gate is visible here.
+    #[test]
+    fn e2e_array_typed_struct_field_runs_its_element_drop_bodies() {
+        const HDR: &str = "struct D { id: i64, s: String }\n\
+                           impl Drop for D { fn drop(mut ref self) { println(f\"dD{self.id}\") } }\n\
+                           fn mkd(n: i64) -> D { return D { id: n, s: f\"ss{n}\" }; }\n\
+                           struct N { v: i64 }\n";
+        for (label, decls, body, want) in [
+            (
+                "the flat Array field — the row's own cell",
+                "struct H { f: Array[D, 2] }\n",
+                "let h: H = H { f: [mkd(1), mkd(2)] };",
+                "dD1\ndD2\nend\n",
+            ),
+            (
+                "an Array field whose element is itself a container",
+                "struct H { f: Array[Vec[D], 1] }\n",
+                "let h: H = H { f: [[mkd(1), mkd(2)]] };",
+                "dD1\ndD2\nend\n",
+            ),
+            (
+                "an Array field of Arrays",
+                "struct H { f: Array[Array[D, 1], 2] }\n",
+                "let h: H = H { f: [[mkd(1)], [mkd(2)]] };",
+                "dD1\ndD2\nend\n",
+            ),
+            (
+                "the holder declares its own Drop too — own body first, then elements",
+                "struct H { f: Array[D, 2] }\n\
+                 impl Drop for H { fn drop(mut ref self) { println(\"dH\") } }\n",
+                "let h: H = H { f: [mkd(1), mkd(2)] };",
+                "dH\ndD1\ndD2\nend\n",
+            ),
+            (
+                "one struct deeper, the control the row quotes",
+                "struct H { f: Array[D, 2] }\nstruct G { h: H }\n",
+                "let g: G = G { h: H { f: [mkd(1), mkd(2)] } };",
+                "dD1\ndD2\nend\n",
+            ),
+            // Controls that must not move.
+            (
+                "control: an Array field of non-Drop elements runs nothing",
+                "struct H { f: Array[N, 2] }\n",
+                "let h: H = H { f: [N { v: 1 }, N { v: 2 }] };",
+                "end\n",
+            ),
+            (
+                "control: the flat Vec field, the one shape that always worked",
+                "struct H { f: Vec[D] }\n",
+                "let h: H = H { f: [mkd(1), mkd(2)] };",
+                "dD1\ndD2\nend\n",
+            ),
+            (
+                "control: the Array LOCAL, which localizes the defect to the field",
+                "",
+                "let a: Array[D, 2] = [mkd(1), mkd(2)];",
+                "dD1\ndD2\nend\n",
+            ),
+            (
+                // B-2026-09-15-23's subject: a nested container in a `Vec`
+                // field. Silent on BOTH backends, so it is an agreed gap and
+                // not a divergence — pinned here to make a change to that gate
+                // visible from this row.
+                "pinned: Vec[Vec[D]] field bodies stay an agreed silence (B-2026-09-15-23)",
+                "struct H { f: Vec[Vec[D]] }\n",
+                "let h: H = H { f: [[mkd(1), mkd(2)]] };",
+                "end\n",
+            ),
+            (
+                "pinned: Vec[Array[D, 1]] field bodies likewise — its HEAP is this row's (-15-27)",
+                "struct H { f: Vec[Array[D, 1]] }\n",
+                "let h: H = H { f: [[mkd(1)], [mkd(2)]] };",
+                "end\n",
+            ),
+            (
+                "pinned: the push-built spelling of the same field",
+                "struct H { f: Vec[Array[D, 1]] }\n",
+                "let mut v: Vec[Array[D, 1]] = [];\n\
+                 let e1: Array[D, 1] = [mkd(1)];\n\
+                 v.push(e1);\n\
+                 let h: H = H { f: v };",
+                "end\n",
+            ),
+        ] {
+            let src = format!("{HDR}{decls}fn main() {{\n{body}\nprintln(\"end\");\n}}\n");
             let (interp_out, interp_errs, _, _) = karac::run_program_full(&src);
             assert!(
                 interp_errs.is_empty(),

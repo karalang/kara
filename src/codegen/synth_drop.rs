@@ -1579,6 +1579,34 @@ impl<'ctx> super::Codegen<'ctx> {
         &mut self,
         elem_te: &TypeExpr,
     ) -> Option<FunctionValue<'ctx>> {
+        // B-2026-09-15-27 — a fixed `Array[T, N]` ELEMENT. Neither resolver
+        // below has an `Array` case (`vec_elem_agg_drop_for_type_expr` is
+        // name-keyed plus a Tuple arm; the direct-drain set is a literal list
+        // of head names), so a `Vec[Array[D, 1]]` got NO per-element drop and
+        // every heap leaf inside the fixed arrays leaked once the buffer was
+        // freed.
+        //
+        // B-2026-09-10-8/-26 SAW this position and deliberately put its
+        // recursion in `emit_drop_fn_for_array` instead, on the stated ground
+        // that widening the shared policy would make a second owner for a
+        // `Vec[Array[String, 2]]` built as `let e = [..]; v.push(e)`, where
+        // "the SOURCE LOCAL's own one-level array drop owns those buffers".
+        // That reasoning holds for a `Vec` LOCAL and NOT for the two positions
+        // this function serves. Measured: the push-built spelling as a struct
+        // FIELD leaks exactly as the literal one does (3 B in 1 block against
+        // the literal's 6 B in 2), because `v.push(e1)` disarms `e1`'s drop and
+        // moving `v` into the field leaves nothing else owning the elements.
+        // So there is no second owner to collide with here — the owner the
+        // note names exists only while the `Vec` is still a local, and a local
+        // `Vec` reaches its elements through `FreeVecBuffer`'s own inline
+        // drain rather than through this policy.
+        //
+        // `emit_drop_fn_for_array` is the same walker the local path uses, and
+        // it carries its own `None` contract inward, so `Vec[Array[i64, 2]]`
+        // still emits nothing.
+        if let Some((inner_te, n)) = self.array_elem_and_len(elem_te) {
+            return self.emit_drop_fn_for_array(&inner_te, n);
+        }
         self.vec_elem_agg_drop_for_type_expr(elem_te).or_else(|| {
             if Self::elem_te_needs_direct_recursive_drain(elem_te) {
                 Some(self.emit_drop_fn_for_type_expr(elem_te))
@@ -3734,6 +3762,34 @@ impl<'ctx> super::Codegen<'ctx> {
                         found = true;
                         break 'tes;
                     }
+                    // B-2026-09-15-26 — a fixed `Array[T, N]` FIELD, the
+                    // container this widening never gained a level for. Every
+                    // leg above reads a HEAD NAME, and the head of
+                    // `Array[D, 2]` is `Array` — not a declared struct or enum
+                    // — so `H { f: Array[D, 2] }` classified drop-free, no
+                    // bodies action was registered for `h` at all, and the
+                    // elements' `Drop` bodies ran on NO backend. The same `D`s
+                    // in an array LOCAL print, and a `Vec[D]` FIELD prints,
+                    // which is what isolates this to the array-typed field.
+                    //
+                    // `elem_te_runs_user_drop` rather than a head-name lookup,
+                    // because the head of an array's ELEMENT can itself be a
+                    // container (`Array[Vec[D], 1]`) and that predicate is the
+                    // one the emitter's admission gate already uses — asking a
+                    // different question here would admit fields the emitter
+                    // then declines, a silent no-op rather than a fix. Its
+                    // interpreter twin `field_te_runs_user_drop` gained the
+                    // matching array arm in the same commit, so both
+                    // backends' type-level gates still classify identically —
+                    // the rule B-2026-09-10-17 established when it repaired
+                    // the envelope half of this family and deliberately left
+                    // the `Vec`-level half alone.
+                    if let Some((elem, n)) = self.array_elem_and_len(te) {
+                        if n > 0 && self.elem_te_runs_user_drop(&elem) {
+                            found = true;
+                            break 'tes;
+                        }
+                    }
                     // B-2026-09-05-5 — a field that is a GENERIC STRUCT
                     // INSTANTIATION (`inner: Gd[R]`). The head-name walk above
                     // asks `type_runs_user_drop("Gd")`, which reads
@@ -4060,13 +4116,33 @@ impl<'ctx> super::Codegen<'ctx> {
                             !nsub.is_empty() && self.type_runs_user_drop_mono(&head, &nsub)
                         }
                 });
+                // B-2026-09-15-26 — a fixed `Array[T, N]` FIELD. Every leg
+                // above is keyed on a HEAD NAME (`vec_field_elem_head` answers
+                // only for `Vec`/`VecDeque`, and only when the element is a
+                // plain named type), so an array-typed field never entered the
+                // walk set at all and its elements' `Drop` bodies ran on NO
+                // backend. The same `D`s in an array LOCAL print correctly, and
+                // a `Vec[D]` FIELD prints correctly, which is what isolates
+                // this to the array-typed field position.
+                //
+                // `elem_te_runs_user_drop` rather than a head-name lookup,
+                // because that is the predicate the emitter
+                // (`emit_array_elem_user_drop_bodies_fn`) already gates itself
+                // on — asking a different question here would admit fields the
+                // emitter then declines, which is a silent no-op rather than a
+                // fix.
+                let array_elem = field_te.is_some_and(|te| {
+                    self.array_elem_and_len(te)
+                        .is_some_and(|(elem, n)| n > 0 && self.elem_te_runs_user_drop(&elem))
+                });
                 (direct
                     || vec_elem
                     || map_val
                     || tuple_elem
                     || optres_payload
                     || optres_envelope
-                    || nested_generic)
+                    || nested_generic
+                    || array_elem)
                     .then_some(idx)
             })
             .collect()
@@ -4392,6 +4468,35 @@ impl<'ctx> super::Codegen<'ctx> {
             // slot. Placed before the head-name gate below because a tuple
             // field has no head name (`field_kinds` holds `None` for it).
             if let Some(fte) = field_te_resolved.as_ref() {
+                // B-2026-09-15-26 — a fixed `Array[T, N]` FIELD, walked with
+                // the same emitter the array LOCAL position uses. `field_ptr`
+                // IS the array's storage (a fixed array is laid out inline in
+                // the parent, not behind a handle), which is exactly what
+                // `emit_array_elem_user_drop_bodies_fn` expects, so the arm is
+                // a GEP and a call rather than new machinery.
+                //
+                // BODIES ONLY: that emitter frees nothing, and the parent's own
+                // drop still owns the elements' memory, so this cannot double
+                // free what the memory channel reclaims. Bodies and memory are
+                // separate channels (B-2026-08-28-57) and this row is the
+                // bodies one.
+                //
+                // Placed FIRST so the tuple arm below keeps seeing only tuples:
+                // `array_elem_and_len` accepts both the annotated
+                // `Array[T, N]` spelling and the inferred `TypeKind::Array`,
+                // and neither is a `TypeKind::Tuple`, so the two cannot
+                // overlap — the ordering is for readers, not for correctness.
+                if let Some((elem_te, n)) = self.array_elem_and_len(fte) {
+                    if n > 0 {
+                        let elem_ty = self.llvm_type_for_type_expr(&elem_te);
+                        if let Some(w) =
+                            self.emit_array_elem_user_drop_bodies_fn(elem_ty, &elem_te, n)
+                        {
+                            self.builder.build_call(w, &[field_ptr.into()], "").unwrap();
+                        }
+                    }
+                    continue;
+                }
                 if let TypeKind::Tuple(elem_tes) = &fte.kind {
                     let elem_tes = elem_tes.clone();
                     if let inkwell::types::BasicTypeEnum::StructType(agg) =

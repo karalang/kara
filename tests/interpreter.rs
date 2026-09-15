@@ -67735,3 +67735,93 @@ fn test_hash_container_enum_element_runs_its_body() {
         "struct element in the same Map"
     );
 }
+
+/// B-2026-09-15-26 — an `Array[T, N]`-typed STRUCT FIELD runs its elements'
+/// `Drop` bodies on the tree-walk backend.
+///
+/// The interpreter twin of the codegen E2E
+/// (`e2e_array_typed_struct_field_runs_its_element_drop_bodies`), which lives
+/// behind `--features llvm` and so is invisible to the DEFAULT leg. Both
+/// backends were silent here, so the row moved both gates in one commit; this
+/// fixture is what keeps the interpreter half under the gate CI actually runs.
+///
+/// Two sites on this side, both keyed on a head name that `Array` is not: the
+/// relevance gate `field_te_runs_user_drop`, and then the field WALK in
+/// `drop_user_drop_fields_of_value` — `Vec` and `Array` are one runtime value
+/// (`Value::Array`), so the field reached the `Vec` arm, failed its
+/// declared-head gate, and fell through that arm's unconditional `continue`.
+#[test]
+fn test_array_typed_struct_field_runs_its_element_drop_bodies() {
+    const H: &str = "struct D { id: i64, s: String }\n\
+         impl Drop for D { fn drop(mut ref self) { println(f\"dD{self.id}\") } }\n\
+         fn mkd(n: i64) -> D { return D { id: n, s: f\"ss{n}\" }; }\n";
+    assert_eq!(
+        run(&format!(
+            "{H}struct H {{ f: Array[D, 2] }}\n\
+             fn main() {{\n\
+             \x20   let h: H = H {{ f: [mkd(1), mkd(2)] }};\n\
+             \x20   println(\"end\");\n\
+             }}\n"
+        )),
+        "dD1\ndD2\nend\n",
+        "the flat Array field"
+    );
+    assert_eq!(
+        run(&format!(
+            "{H}struct H {{ f: Array[Vec[D], 1] }}\n\
+             fn main() {{\n\
+             \x20   let h: H = H {{ f: [[mkd(1), mkd(2)]] }};\n\
+             \x20   println(\"end\");\n\
+             }}\n"
+        )),
+        "dD1\ndD2\nend\n",
+        "an Array field whose element is itself a container"
+    );
+    assert_eq!(
+        run(&format!(
+            "{H}struct H {{ f: Array[D, 2] }}\n\
+             impl Drop for H {{ fn drop(mut ref self) {{ println(\"dH\") }} }}\n\
+             fn main() {{\n\
+             \x20   let h: H = H {{ f: [mkd(1), mkd(2)] }};\n\
+             \x20   println(\"end\");\n\
+             }}\n"
+        )),
+        "dH\ndD1\ndD2\nend\n",
+        "the holder's own body runs first, then the elements'"
+    );
+    assert_eq!(
+        run(&format!(
+            "{H}struct H {{ f: Array[D, 2] }}\nstruct G {{ h: H }}\n\
+             fn main() {{\n\
+             \x20   let g: G = G {{ h: H {{ f: [mkd(1), mkd(2)] }} }};\n\
+             \x20   println(\"end\");\n\
+             }}\n"
+        )),
+        "dD1\ndD2\nend\n",
+        "one struct deeper"
+    );
+    // CONTROL — an Array field of non-Drop elements still runs nothing.
+    assert_eq!(
+        run("struct N { v: i64 }\n\
+             struct H { f: Array[N, 2] }\n\
+             fn main() {\n\
+             \x20   let h: H = H { f: [N { v: 1 }, N { v: 2 }] };\n\
+             \x20   println(\"end\");\n\
+             }\n"),
+        "end\n",
+        "control: non-Drop elements"
+    );
+    // PINNED — a nested container in a `Vec` field is still an agreed silence
+    // on both backends (B-2026-09-15-23), so the two gates stay in step.
+    assert_eq!(
+        run(&format!(
+            "{H}struct H {{ f: Vec[Array[D, 1]] }}\n\
+             fn main() {{\n\
+             \x20   let h: H = H {{ f: [[mkd(1)], [mkd(2)]] }};\n\
+             \x20   println(\"end\");\n\
+             }}\n"
+        )),
+        "end\n",
+        "pinned: Vec[Array[D, 1]] field bodies stay silent (B-2026-09-15-23)"
+    );
+}

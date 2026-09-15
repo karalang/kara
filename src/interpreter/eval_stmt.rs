@@ -4052,6 +4052,28 @@ impl<'a> super::Interpreter<'a> {
         }
     }
 
+    /// The ELEMENT `TypeExpr` of a FIXED `Array[T, N]` field annotation, in
+    /// either spelling the parser produces (B-2026-09-15-26): the dedicated
+    /// `TypeKind::Array` node and the `Array[T, N]` PATH form Kāra's `[]`
+    /// generic syntax yields.
+    ///
+    /// `Vec[T]` is deliberately NOT accepted even though both are
+    /// `Value::Array` at runtime — the Vec arm that follows this one has its
+    /// own declared-head gate and its own per-element dispatch, and admitting
+    /// `Vec` here would silently take its traffic.
+    fn array_field_declared_elem_te(te: &TypeExpr) -> Option<TypeExpr> {
+        match &te.kind {
+            TypeKind::Array { element, .. } => Some((**element).clone()),
+            TypeKind::Path(p) if p.segments.last().map(String::as_str) == Some("Array") => {
+                match p.generic_args.as_ref()?.first()? {
+                    crate::ast::GenericArg::Type(t) => Some(t.clone()),
+                    _ => None,
+                }
+            }
+            _ => None,
+        }
+    }
+
     /// Value-level worker for [`Self::drop_user_drop_fields_of_binding`].
     ///
     /// Walks a `Value::Struct`'s fields in REVERSE declaration order (read off
@@ -4160,6 +4182,40 @@ impl<'a> super::Interpreter<'a> {
             if let Value::EnumVariant { enum_name, .. } = &field_value {
                 if enum_name == "Option" || enum_name == "Result" {
                     self.run_discarded_value_user_drops(field_value.clone());
+                    continue;
+                }
+            }
+            // B-2026-09-15-26 — a fixed `Array[T, N]` FIELD. Both container
+            // kinds are one runtime value here (`Value::Array`), so this field
+            // reached the Vec arm below and was turned away by its
+            // declared-head gate, then hit that arm's unconditional `continue`
+            // — no walk, on either backend, since codegen's relevance gate had
+            // the matching hole. The same elements in an array LOCAL print,
+            // and a `Vec[D]` field prints, which is what isolates the defect
+            // to the array-typed field position.
+            //
+            // Routed through `run_discarded_value_user_drops` rather than
+            // restating the Vec arm's per-element dispatch, because codegen's
+            // twin (`emit_array_elem_user_drop_bodies_fn`, reached from
+            // `emit_user_drop_field_bodies_fn_skipping`'s array arm) RECURSES
+            // into the element: an element that is itself a container
+            // (`Array[Vec[D], 1]`) runs its bodies there, and the value
+            // recursion is the interpreter's equivalent of that. For a plain
+            // struct element the two are the same thing — that walker's
+            // `Struct` arm is `run_user_drop_body_on_value`, which is the
+            // `run_user_drop_body_only` + `drop_user_drop_fields_of_value`
+            // pair the Vec arm writes out by hand.
+            //
+            // Forward element order, matching codegen's `0..N` GEP loop.
+            // Bodies only: the elements' heap is freed by whichever memory
+            // drop owns the array (bodies and memory are separate channels,
+            // B-2026-08-28-57).
+            if let Value::Array(rc) = &field_value {
+                if Self::array_field_declared_elem_te(&declared_te).is_some() {
+                    let elems: Vec<Value> = rc.read().map(|g| g.clone()).unwrap_or_default();
+                    for e in elems {
+                        self.run_discarded_value_user_drops(e);
+                    }
                     continue;
                 }
             }

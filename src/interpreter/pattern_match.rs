@@ -1783,6 +1783,23 @@ impl<'a> super::Interpreter<'a> {
         false
     }
 
+    /// The ELEMENT `TypeExpr` of a fixed `Array[T, N]` annotation, in either
+    /// spelling the parser produces (B-2026-09-15-26). `Vec[T]` is deliberately
+    /// NOT accepted: the caller already has a `Vec` leg keyed on the head name,
+    /// and admitting it here would double-count.
+    fn array_field_elem_te(te: &TypeExpr) -> Option<TypeExpr> {
+        match &te.kind {
+            TypeKind::Array { element, .. } => Some((**element).clone()),
+            TypeKind::Path(p) if p.segments.last().map(String::as_str) == Some("Array") => {
+                match p.generic_args.as_ref()?.first()? {
+                    crate::ast::GenericArg::Type(t) => Some(t.clone()),
+                    _ => None,
+                }
+            }
+            _ => None,
+        }
+    }
+
     /// B-2026-08-02-24 — does a struct FIELD's declared type reach user-Drop
     /// work? The head-name recursion alone read a `Vec[Res]` field as the
     /// head `"Vec"` (no struct def, no Drop) and declined, so a struct
@@ -1795,6 +1812,27 @@ impl<'a> super::Interpreter<'a> {
     /// elements, Map/SortedMap values, Set/SortedSet elements, and tuple
     /// elements, so both backends' type-level gates classify identically.
     pub(crate) fn field_te_runs_user_drop(&self, fty: &TypeExpr, seen: &mut Vec<String>) -> bool {
+        // B-2026-09-15-26 — a fixed `Array[T, N]` field, in BOTH spellings the
+        // parser produces (the dedicated `TypeKind::Array` node and the
+        // `Array[T, N]` PATH form Kāra's `[]` generic syntax yields). Neither
+        // reached a leg below: the path form's head is `Array`, which is not a
+        // declared type and not in the container `idxs` table, and the node
+        // form fell off the `_ => false` tail. So `H { f: Array[D, 2] }`
+        // classified drop-free and the elements' `Drop` bodies ran on NO
+        // backend — codegen's `type_runs_user_drop` had the identical hole,
+        // which is why this read as an agreed silence rather than a
+        // divergence.
+        //
+        // Recursive through this same predicate, not a head-name read, so the
+        // element may itself be a container (`Array[Vec[D], 1]`) — matching
+        // codegen's leg, which recurses through `elem_te_runs_user_drop`. Both
+        // gates must classify identically or the two backends print different
+        // things (B-2026-09-10-17).
+        if let Some(elem) = Self::array_field_elem_te(fty) {
+            if self.field_te_runs_user_drop(&elem, seen) {
+                return true;
+            }
+        }
         match &fty.kind {
             TypeKind::Path(p) => {
                 let Some(head) = p.segments.first() else {
