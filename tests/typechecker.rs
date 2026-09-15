@@ -10771,6 +10771,30 @@ fn test_annotation_element_type_reaches_a_nested_sequence_literal() {
             "string_inner",
             "fn main() { let v: Vec[String] = [\"a\", \"b\"]; let _n = v.len(); }",
         ),
+        // B-2026-09-15-22 — these four were DECLINED while a nested-literal
+        // `VecDeque` faulted at scope-exit drop. That was one condition in
+        // `lowering.rs` (the heap-handle canonicalization was gated on the
+        // recorded type being named `Vec`), and with it fixed all four measure
+        // byte-identical across `karac run`, `--interp`, the default build and
+        // `KARAC_AUTO_PAR=0`. Moved here from
+        // `test_element_pushdown_declines_a_vecdeque_until_codegen_lowers_one`,
+        // which is gone — the decline was lifted whole, not cell-by-cell.
+        (
+            "vecdeque_inner",
+            "fn main() { let v: Vec[VecDeque[i64]] = [[1i64], [2i64]]; let _n = v.len(); }",
+        ),
+        (
+            "vecdeque_inner_over_array",
+            "fn main() { let v: Vec[VecDeque[Array[i64, 1]]] = [[[1i64]]]; let _n = v.len(); }",
+        ),
+        (
+            "vecdeque_outer_over_vec",
+            "fn main() { let v: VecDeque[Vec[i64]] = [[1i64], [2i64]]; let _n = v.len(); }",
+        ),
+        (
+            "vecdeque_outer_over_array",
+            "fn main() { let v: VecDeque[Array[i64, 2]] = [[1i64, 2i64]]; let _n = v.len(); }",
+        ),
         // The other two literal SPELLINGS.
         (
             "repeat_spelling",
@@ -10846,65 +10870,12 @@ fn test_element_pushdown_does_not_relax_the_scalar_element_rules() {
     }
 }
 
-/// B-2026-09-14-24 — the pushdown DECLINES a `VecDeque` in either half of the
-/// pair, and that is a deliberate hold rather than an oversight: a `VecDeque`
-/// built as a nested sequence-literal element FAULTS AT SCOPE-EXIT DROP on
-/// every compiled surface, so admitting the spelling would trade a
-/// false-positive rejection for a crash. See B-2026-09-15-22.
-///
-/// The gap predates the pushdown, which is how it was found. The one spelling
-/// the tree already accepted — `let v: Array[VecDeque[i64], 1] = [[1]];`, via
-/// the `ArrayLiteral`-against-`Array` arm — prints the CORRECT `x:1` on every
-/// surface and then hangs forever on the three compiled ones; the N = 2
-/// spelling prints correctly and then SIGSEGVs. (An earlier reading of "no
-/// output" was a stdout-buffering artifact.) Of the shapes this arm would
-/// newly admit, `Vec[VecDeque[Array[i64, 1]]]` faults under the JIT, and every
-/// compiled surface reads the inner length as 0 for
-/// `let v: VecDeque[Vec[i64]] = [[1], [2]];` where the interpreter reads 1.
-///
-/// `slice_inner` and `string_inner` in the accept test above are the control:
-/// `VecDeque` is the variable, not nesting.
-///
-/// One cell costs acceptance it would otherwise have —
-/// `let v: VecDeque[Array[i64, 2]] = [[1, 2]];` measures identical on all four
-/// surfaces — and it stays rejected because the outer test cannot tell it from
-/// the `VecDeque[Vec[i64]]` shape that does not. When the codegen row is
-/// fixed, lift the whole decline and move these cells to the accept test;
-/// do not relax the one cell on its own.
-#[test]
-fn test_element_pushdown_declines_a_vecdeque_until_codegen_lowers_one() {
-    for (cell, src) in [
-        (
-            "vecdeque_inner",
-            "fn main() { let v: Vec[VecDeque[i64]] = [[1i64], [2i64]]; let _n = v.len(); }",
-        ),
-        (
-            "vecdeque_inner_over_array",
-            "fn main() { let v: Vec[VecDeque[Array[i64, 1]]] = [[[1i64]]]; let _n = v.len(); }",
-        ),
-        (
-            "vecdeque_outer_over_vec",
-            "fn main() { let v: VecDeque[Vec[i64]] = [[1i64], [2i64]]; let _n = v.len(); }",
-        ),
-        (
-            "vecdeque_outer_over_array",
-            "fn main() { let v: VecDeque[Array[i64, 2]] = [[1i64, 2i64]]; let _n = v.len(); }",
-        ),
-    ] {
-        let errors = typecheck_errors(src);
-        assert!(
-            !errors.is_empty(),
-            "cell `{cell}`: must stay rejected while codegen miscompiles a \
-             nested-literal `VecDeque`"
-        );
-    }
-}
-
-/// B-2026-09-14-24 — a `VecDeque` with a SCALAR element is NOT caught by the
-/// decline above: it never reaches the pushdown at all, because the
-/// scalar-adoption path owns it. Measured identical on all four surfaces, and
-/// it worked before the pushdown existed, so this pins that the decline did
-/// not overreach.
+/// B-2026-09-14-24 — a `VecDeque` with a SCALAR element never reaches the
+/// pushdown at all: the scalar-adoption path owns it. Measured identical on
+/// all four surfaces, and it worked before the pushdown existed. Kept after
+/// B-2026-09-15-22 lifted the `VecDeque` decline, because it pins the
+/// scalar-adoption boundary itself rather than anything about that decline —
+/// this spelling must keep working whatever the non-scalar arm does.
 #[test]
 fn test_a_scalar_element_vecdeque_literal_still_checks() {
     typecheck_ok("fn main() { let v: VecDeque[i64] = [1i64, 2i64, 3i64]; let _n = v.len(); }");

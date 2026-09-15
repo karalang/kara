@@ -1777,9 +1777,42 @@ impl<'a> Lowerer<'a> {
                 // `Array[T, N]`, recorded as `Type::Array`) is left untouched.
                 // Mirror-image of the `Array[…]` → ArrayLiteral
                 // canonicalization in the PrefixCollectionLiteral arm.
+                //
+                // B-2026-09-15-22 — `VecDeque` takes this canonicalization
+                // too. The gate read `name == "Vec"`, so a literal recorded as
+                // `VecDeque[T]` stayed an `ArrayLiteral` and codegen emitted
+                // the fixed `[N x T]` aggregate the paragraph above calls the
+                // wrong shape — and the failure was exactly the one it
+                // predicts, "a segfault on the array bytes read as a Vec
+                // header". Measured: `let v: Array[VecDeque[i64], 1] = [[1]];`
+                // wrote 8 bytes (`[1 x i64]`) into a 24-byte
+                // `[1 x {ptr,len,cap}]` slot, leaving `len`/`cap`
+                // uninitialized, so the scope-exit drop walked a garbage
+                // length (hang at N = 1) or freed a garbage pointer (SIGSEGV
+                // at N = 2) AFTER printing the correct output.
+                //
+                // Only a NESTED literal depended on this: an annotated `let`
+                // builds the handle in its own arm, which is why
+                // `let v: VecDeque[i64] = [1, 2, 3];` was always correct and
+                // only an element position faulted.
+                //
+                // The synthesized `type_name` is "Vec", not "VecDeque", and
+                // that is deliberate: the two share one `{ptr, len, cap}`
+                // representation by construction (see the `Vec`/`VecDeque`
+                // `new` arm in `assoc_call.rs`), this rewrite exists solely to
+                // select the heap-handle construction, and
+                // `compile_vec_prefix_literal` is reached from a `type_name ==
+                // "Vec"` dispatch. The expression's RECORDED TYPE in
+                // `expr_types` is untouched and still says `VecDeque[T]`, so
+                // every type-driven decision downstream — including
+                // `push_front`/`pop_front` lowering, which keys on the
+                // BINDING, not on this literal — is unaffected. Emitting
+                // "VecDeque" here would instead need a second dispatch arm and
+                // would synthesize a prefix form the parser cannot produce
+                // (B-2026-09-15-25).
                 let is_vec = matches!(
                     self.tc.expr_types.get(&SpanKey::from_span(&expr.span)),
-                    Some(Type::Named { name, .. }) if name == "Vec"
+                    Some(Type::Named { name, .. }) if name == "Vec" || name == "VecDeque"
                 );
                 if is_vec {
                     if let ExprKind::ArrayLiteral(items) = &mut expr.kind {

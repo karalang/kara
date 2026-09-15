@@ -28507,6 +28507,90 @@ fn main() {
         }
     }
 
+    /// B-2026-09-15-22 — a `VecDeque` built as a NESTED SEQUENCE-LITERAL
+    /// element must lower to a real `{ptr, len, cap}` heap handle, not to the
+    /// fixed `[N x T]` aggregate.
+    ///
+    /// `lowering.rs` canonicalizes a bare `[..]` whose recorded type is a
+    /// growable sequence into the `Vec[..]` PREFIX form, because codegen's
+    /// `compile_array_literal` always emits the fixed aggregate and that is
+    /// the wrong shape for a heap handle. The gate read `name == "Vec"`, so a
+    /// `VecDeque`-recorded literal was left alone and codegen wrote an 8-byte
+    /// `[1 x i64]` into a 24-byte `[1 x {ptr,len,cap}]` slot — `len` and `cap`
+    /// left as uninitialized stack. The scope-exit drop then walked a garbage
+    /// length (HUNG at N = 1) or freed a garbage pointer (SIGSEGV at N = 2),
+    /// in both cases AFTER printing the program's correct output. The gate's
+    /// own comment had already predicted it: "a segfault on the array bytes
+    /// read as a Vec header".
+    ///
+    /// Only a NESTED literal was affected — an annotated `let` builds the
+    /// handle in its own arm, which is why `let v: VecDeque[i64] = [1, 2, 3];`
+    /// was always correct and why this survived undetected.
+    ///
+    /// Every cell here is a program that HUNG or CRASHED before the fix, so
+    /// this test asserting anything at all is the regression guard; the
+    /// `Vec`-element and `VecDeque.new()`-element cells are the controls that
+    /// were already correct (the latter passed only because a null handle
+    /// makes a spurious free a no-op).
+    #[test]
+    fn e2e_nested_vecdeque_literal_lowers_to_a_heap_handle() {
+        for (label, body, want) in [
+            // Hung before the fix: garbage `len` walked at scope exit.
+            (
+                "array-of-deque-n1",
+                "fn main() { let v: Array[VecDeque[i64], 1] = [[1]];\n                 \x20            println(f\"x:{v[0].len()}\"); }\n",
+                "x:1\n",
+            ),
+            // SIGSEGV before the fix: garbage pointer freed at scope exit.
+            (
+                "array-of-deque-n2",
+                "fn main() { let v: Array[VecDeque[i64], 2] = [[1], [2]];\n                 \x20            println(f\"a:{v[0].len()} b:{v[1].len()}\"); }\n",
+                "a:1 b:1\n",
+            ),
+            // No read at all still faulted — the `let` alone was enough.
+            (
+                "array-of-deque-no-read",
+                "fn main() { let v: Array[VecDeque[i64], 1] = [[1]]; println(\"ok\"); }\n",
+                "ok\n",
+            ),
+            // The `Vec`-outer nests, which the typechecker declined until this
+            // fix landed (B-2026-09-14-24's decline, since lifted).
+            (
+                "vec-of-deque",
+                "fn main() { let v: Vec[VecDeque[i64]] = [[1], [2]];\n                 \x20            println(f\"n:{v.len()} x:{v[0].len()}\"); }\n",
+                "n:2 x:1\n",
+            ),
+            (
+                "deque-of-vec",
+                "fn main() { let v: VecDeque[Vec[i64]] = [[1], [2]];\n                 \x20            println(f\"n:{v.len()} x:{v[0].len()}\"); }\n",
+                "n:2 x:1\n",
+            ),
+            (
+                "deque-outer-over-array",
+                "fn main() { let v: VecDeque[Array[i64, 2]] = [[1, 2]];\n                 \x20            println(f\"n:{v.len()}\"); }\n",
+                "n:1\n",
+            ),
+            // Controls that were already correct.
+            (
+                "control-vec-element",
+                "fn main() { let v: Array[Vec[i64], 1] = [[1]];\n                 \x20            println(f\"x:{v[0].len()}\"); }\n",
+                "x:1\n",
+            ),
+            (
+                "control-deque-new-element",
+                "fn main() { let v: Array[VecDeque[i64], 1] = [VecDeque.new()];\n                 \x20            println(f\"x:{v[0].len()}\"); }\n",
+                "x:0\n",
+            ),
+            (
+                "control-flat-deque",
+                "fn main() { let v: VecDeque[i64] = [1, 2, 3];\n                 \x20            println(f\"n:{v.len()}\"); }\n",
+                "n:3\n",
+            ),
+        ] {
+            assert_eq!(run_program(body).as_deref(), Some(want), "{label}");
+        }
+    }
+
     /// B-2026-08-28-40 — an own-`impl Drop` enum discarded by a wildcard
     /// destructure leaf runs its LIVE PAYLOAD's body too, not just its own.
     ///
