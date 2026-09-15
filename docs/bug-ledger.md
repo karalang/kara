@@ -94,7 +94,7 @@ distinguish "bugs flattening" from "we stopped writing them down."
 |---|---|
 | miscompile | 409 |
 | run-vs-build | 409 |
-| leak | 349 |
+| leak | 351 |
 | double-free | 233 |
 | missing-feature | 198 |
 | codegen-gap | 177 |
@@ -110,7 +110,7 @@ distinguish "bugs flattening" from "we stopped writing them down."
 
 | surface | total |
 |---|---|
-| codegen | 1756 |
+| codegen | 1758 |
 | interp | 439 |
 | typecheck | 300 |
 | other | 90 |
@@ -194,6 +194,8 @@ _Generated from `bug-ledger.jsonl` by `scripts/bug-curve.py` (2026-05-20 → 202
 | B-2026-09-15-6 | 2026-09-15 | codegen | medium | `substr` IS A 14.7% SSO *WIN* UNDER DEFAULT AUTO-PAR AND A 30.9% SSO *LOSS* WITH `KARAC_AUTO_PAR=0` -- the same commit, the same rail, a 45-POINT SWING AND A SIGN FLIP decided entirely by the auto-par setting. Every SSO rail conclusion is therefore conditional on a variable that `bench/sso/bench.sh` did not pin until 2026-09-15 (375118d). Pinned, `substr` is the worst rail in the track at +31%, against `lexlike` at -13% for the SAME slice/compare/discard shape reached through `String.substring` instead of slice syntax -- a 44-point gap between two rails doing the same work, never profiled. Reachable only at KARAC_SSO=1, off by default. | — |
 | B-2026-09-15-7 | 2026-09-15 | codegen | low | AN INDEX-STORE FREES ONLY THE OUTER BUFFER OF THE `Vec` ELEMENT IT DISPLACES, STRANDING THAT ELEMENT'S OWN ELEMENTS -- `a[0] = <new>` over `Array[Vec[String], 2]` loses the displaced Vec's 5-byte String at -O0, and the `Vec[Vec[String]]` TWIN loses the identical 5 bytes, so this is NOT Array-specific and not B-2026-09-14-30's; it is the outer-buffer-only bound both legs were deliberately given, now measured as a real loss rather than a documented caveat | — |
 | B-2026-09-15-8 | 2026-09-15 | codegen | medium | AN `Array[S, N]` OF A `shared struct` LEAKS EVERY ELEMENT'S REFCOUNT BLOCK, WITH NO STORE AND NO MOVE ANYWHERE IN THE PROGRAM -- a bare `let a: Array[S, 2] = [S { v: n }, S { v: n + 1 }]` loses 32 B in 2 blocks at -O0 (16 B per element), while the `Vec[S]` spelling is the control; the array's scope-exit drop never rc-decs its elements | — |
+| B-2026-09-15-9 | 2026-09-15 | codegen | medium | A MULTI-FIELD USER ENUM VARIANT CARRYING AN `Array[T, N]` STRANDS ITS PAYLOAD BOX AND THE ARRAY'S ELEMENT BUFFERS ON EVERY COMPILED BACKEND -- `Two.Pair(a, 3)` over `enum Two { Pair(Array[String, 2], i64), Nil }` loses 48 B directly plus 44 B indirectly at `-O0`, with the OUTPUT CORRECT, exit 0, and `karac check` clean, so nothing but a leak checker sees it | — |
+| B-2026-09-15-10 | 2026-09-15 | codegen | medium | A `shared enum` VARIANT CARRYING AN `Array[T, N]` STRANDS ITS PAYLOAD BOX ON EVERY COMPILED BACKEND -- `Sh.S(a)` over `shared enum Sh { S(Array[String, 2]), N }` loses 48 B at `-O0` with the output correct and `karac check` clean, and loses a further 44 B indirectly once a named source is involved | — |
 
 ### Relocated
 
