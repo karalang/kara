@@ -376,6 +376,52 @@ impl<'a> super::TypeChecker<'a> {
         if is_scalar_numeric(&element) || element == Type::Error {
             return None;
         }
+        // A `VecDeque` anywhere in the pair is declined because CODEGEN
+        // MISCOMPILES a `VecDeque` built as a nested sequence-literal element,
+        // and admitting the spelling would trade a false-positive rejection
+        // for a wrong answer -- which is strictly worse. See B-2026-09-15-22.
+        //
+        // The gap PREDATES this arm, which is how it was found: the one
+        // spelling the tree already accepted,
+        // `let v: Array[VecDeque[i64], 1] = [[1]];`, goes through the
+        // `ArrayLiteral`-against-`Array` arm above and was measured on
+        // 347b420^ as `x:1` under `--interp` against NO OUTPUT at all from
+        // `karac run` (JIT) and from both builds. The two shapes this arm
+        // would newly admit are wrong in the same family: the JIT produces no
+        // output for `Vec[VecDeque[Array[i64, 1]]]`, and every compiled
+        // surface reads the inner length as 0 for
+        // `let v: VecDeque[Vec[i64]] = [[1], [2]];` where the interpreter
+        // reads 1.
+        //
+        // `Slice` and `String` elements are NOT declined -- both measured
+        // byte-identical across `karac run`, `--interp`, the default build and
+        // `KARAC_AUTO_PAR=0`, so `VecDeque` is the variable here rather than
+        // nesting.
+        //
+        // The cost is one cell that would otherwise work:
+        // `let v: VecDeque[Array[i64, 2]] = [[1, 2]];` measured identical on
+        // all four surfaces, and it stays rejected because the outer test
+        // cannot tell it from the `VecDeque[Vec[i64]]` shape that does not.
+        // Lift the whole decline -- not just that cell -- when the codegen row
+        // is fixed. A `VecDeque` with a SCALAR element
+        // (`let v: VecDeque[i64] = [1, 2, 3];`) is untouched: it never reaches
+        // here, because the scalar path above owns it.
+        fn mentions_vecdeque(t: &Type) -> bool {
+            match t {
+                Type::Named { name, args } => {
+                    name == "VecDeque" || args.iter().any(mentions_vecdeque)
+                }
+                Type::Ref(i) | Type::MutRef(i) => mentions_vecdeque(i),
+                Type::Array { element, .. } | Type::Slice { element, .. } => {
+                    mentions_vecdeque(element)
+                }
+                Type::Tuple(ts) => ts.iter().any(mentions_vecdeque),
+                _ => false,
+            }
+        }
+        if mentions_vecdeque(&recorded) || mentions_vecdeque(&element) {
+            return None;
+        }
         Some((element, recorded))
     }
 
