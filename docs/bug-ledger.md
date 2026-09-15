@@ -94,13 +94,13 @@ distinguish "bugs flattening" from "we stopped writing them down."
 |---|---|
 | run-vs-build | 414 |
 | miscompile | 413 |
-| leak | 356 |
+| leak | 357 |
 | double-free | 234 |
 | missing-feature | 199 |
 | codegen-gap | 178 |
 | diagnostics | 126 |
 | perf | 113 |
-| other | 111 |
+| other | 112 |
 | false-positive | 107 |
 | soundness | 95 |
 | crash | 81 |
@@ -110,7 +110,7 @@ distinguish "bugs flattening" from "we stopped writing them down."
 
 | surface | total |
 |---|---|
-| codegen | 1775 |
+| codegen | 1777 |
 | interp | 445 |
 | typecheck | 301 |
 | other | 90 |
@@ -131,7 +131,6 @@ _Generated from `bug-ledger.jsonl` by `scripts/bug-curve.py` (2026-05-20 → 202
 | id | date | surface | sev | title | tracker |
 |---|---|---|---|---|---|
 | B-2026-09-02-16 | 2026-09-02 | interp+codegen | low | A NEVER-READ SHADOWED NAME'S TWO GENERATIONS FIRE IN THE WRONG ORDER UNDER AUTO-PAR because each is branch-local and fires inside its own outlined branch at its own `let`, while the interpreter fires both at the single name-keyed endpoint in LIFO order -- `dR3 dR4 mid` vs `dR4 dR3 mid`; the position is now right on every surface and only the order between the two generations differs | — |
-| B-2026-09-02-31 | 2026-09-02 | codegen | low | THE BARE-ARM SPELLING OF B-2026-09-01-26 STILL LEAKS -- `match mkVe(9) { Ve.A(s) => s, .. }` in a nested expression position loses 15 B per evaluation at both opt levels where the BRACED `=> { s }` spelling is now clean. Excluded by that fix's block-bodied-arm condition, which is load-bearing: dropping it fails BOTH `asan_generic_enum_heap_payload_bind_return_no_leak_or_double_free` and `selfhost_codegen_matches_seed_run`, because a bare-armed match is also how the generic-enum debox hands a value out of its frame | — |
 | B-2026-09-04-32 | 2026-09-04 | codegen+other | low | EVERY COMPILED BACKEND RELEASES AN AGGREGATE-HELD `shared` FIELD AT LEXICAL SCOPE EXIT while design.md pins RC decrements at the binding's LIVE-RANGE END -- one holder splits, `struct Mx { r: R, s: S }` giving `v2 dR1 post dS2`, so the plain field obeys the spec and the shared one does not; a BARE shared binding is unaffected | — |
 | B-2026-09-04-36 | 2026-09-04 | interp+codegen | low | A RECEIVER TEMP NESTED IN A LARGER EXPRESSION DRAINS AT THE STATEMENT'S `;` ON THE COMPILED BACKENDS AND AT THE CALL RETURN IN THE INTERPRETER -- `println(f"  {mk(1).peek()}")` prints `dR1/t1` BEFORE the value under `--interp` and AFTER it on jit/aot. Statement position agrees, which is why it hides: `let v = mk(1).peek()` is byte-identical on all four. This is B-2026-08-29-55's drain-point question one row over -- that row moved the three ARGUMENT registrars to a per-call window and deliberately left the fresh-temp RECEIVER (`__urecv_drop_tmp`) on the statement drain, on the grounds that a receiver has its own position-table row with a different end | — |
 | B-2026-09-05-32 | 2026-09-05 | codegen | low | THE IDENTITY-ARM SPELLING OF B-2026-09-01-1 STILL LEAKS -- `e = if c { pass(e) } else { e }` loses a block (12 allocs / 11 frees at -O0) because the branch is DECLINED on purpose: an arm that hands the binding back unchanged yields the OLD value, so the overwrite cleanup would free the buffer about to be stored back; the one shape that genuinely needs a per-arm or aliasing-aware cleanup, and like its parent clean at -O2 | — |
@@ -195,6 +194,8 @@ _Generated from `bug-ledger.jsonl` by `scripts/bug-curve.py` (2026-05-20 → 202
 | B-2026-09-15-26 | 2026-09-15 | interp+codegen | medium | AN `Array[T, N]`-TYPED STRUCT FIELD NEVER RUNS ITS ELEMENTS' `Drop` BODIES -- `struct H { a: Array[D, 2] }` prints nothing at scope exit where the same `D`s in an `Array` LOCAL print correctly and a `Vec[D]`-typed FIELD prints correctly, so the gap is the array-typed FIELD position; both backends are silent identically, making it an AGREED gap rather than a divergence, and the memory channel is correct throughout -- the exact inverse of B-2026-09-15-20 | — |
 | B-2026-09-15-27 | 2026-09-15 | codegen | medium | A `Vec[Array[T, N]]`-TYPED STRUCT FIELD LEAKS ITS ELEMENTS' HEAP -- 34 bytes in 2 blocks definitely lost on a plain `let h: H` with no reassignment, where the neighbouring `Array[Vec[D], 1]` and `Vec[Vec[D]]` field shapes are clean; the one field shape in the sweep that loses MEMORY as well as `Drop` bodies, and the counterexample to B-2026-09-15-23's claim that the lost-body-in-a-field class is invisible to ASAN | — |
 | B-2026-09-15-28 | 2026-09-15 | interp+codegen | medium | A `Vec[T]`-TYPED STRUCT FIELD ASSIGNED A FRESH CONTAINER LOSES THE DISPLACED ELEMENTS' `Drop` BODIES -- `h.v = [..]` prints the surviving elements' bodies and none for the displaced ones on every surface, the FIELD-position analogue of B-2026-09-14-23; agreed on both backends rather than divergent, and nothing leaks | — |
+| B-2026-09-15-29 | 2026-09-15 | codegen | low | THE `if let` SIBLING OF B-2026-09-02-31 STILL LEAKS ITS MOVED-OUT PAYLOAD -- `(if let Ve.A(s) = mkVe(i) { s } else { .. }).len()` in a nested expression position loses 310 B over 20 evaluations at -O0, unchanged by that row's fix, because the escaping-value discriminator it added has exactly one consuming read site and that site is `compile_match` | — |
+| B-2026-09-15-30 | 2026-09-15 | codegen | low | A MONOMORPH BODY NEVER INSTALLS `discarded_branch_spans`, so every branch inside a generic instantiation reads as NON-DISCARDED -- the sibling of the gap B-2026-09-02-31 fixed for its own span set, left alone there because it is a behaviour change that row did not measure | — |
 
 ### Relocated
 
@@ -2206,6 +2207,7 @@ _Generated from `bug-ledger.jsonl` by `scripts/bug-curve.py` (2026-05-20 → 202
 | B-2026-09-02-28 | interp+codegen | medium | A TUPLE-DESTRUCTURE DISCARD OF A CALL-PRODUCED ENUM RUNS NEITHER BODY ON THE COMPILED BACKENDS -- `let (_, _) = (mk(1), 5);` is interp `dB dW7` again… | 8e121a3 |
 | B-2026-09-02-29 | parser | medium | 12 OF THE 18 FUTURE-RESERVED KEYWORDS STILL RENDER THE INTERNAL `Error("...")` DEBUG WRAPPER INTO THE USER-VISIBLE DIAGNOSTIC, plus a cascading secon… | 1f2fae6 |
 | B-2026-09-02-30 | parser | low | NO RESERVED-KEYWORD DIAGNOSTIC MENTIONS THE `r#` ESCAPE, though design.md names it as THE remedy for exactly this collision and says tooling can appl… | 1f2fae6 |
+| B-2026-09-02-31 | codegen | low | THE BARE-ARM SPELLING OF B-2026-09-01-26 STILL LEAKS -- `match mkVe(9) { Ve.A(s) => s, . | e7b4edf62 |
 | B-2026-09-02-32 | codegen | high | A WHOLE-ELEMENT REBIND OUT OF A BARE-TUPLE PATTERN DOUBLE-FREES THE ELEMENT'S HEAP -- `match t { (r, k) => { let m = r; .. | 38db382 |
 | B-2026-09-02-33 | parser | low | THREE KEYWORD/POSITION CELLS STILL REPORT ON THE PUNCTUATION INSTEAD OF THE KEYWORD, because the word starts a construct the parser commits to before… | 2075c22 |
 | B-2026-09-02-34 | codegen | high | B-2026-09-02-27's FIX REACHES ONLY A FLAT PATTERN OVER AN IDENTIFIER SCRUTINEE, LEAVING TWO SHAPES STILL DOUBLE-FREEING -- `match w.t { (r, k) => { l… | 32a1c92 |
