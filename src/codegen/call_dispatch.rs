@@ -7680,6 +7680,30 @@ impl<'ctx> super::Codegen<'ctx> {
             // `Identifier` arm resolves through `var_type_names`, which is the
             // LOCAL case and precisely the wrong answer.
             ExprKind::Identifier(n) => self.fresh_bare_unit_variant_enum(n),
+            // B-2026-09-13-24 — the QUALIFIED-WITH-GENERIC-ARGS spelling,
+            // `Ho[R].Full(..)`, which parses as a `MethodCall` and so reached
+            // none of the arms above. It mints a fresh enum value exactly as
+            // the `Call` arm's constructor does; 6a27618 gave the unqualified
+            // `Ho.Full(..)` its payload body at this position and left this
+            // spelling silent on every surface, interpreter included.
+            //
+            // Recognized LOCALLY rather than by giving `enum_name_of_expr` a
+            // `MethodCall` arm: that helper has ~20 other callers, and its
+            // answer for a method call today is `None` by construction — a
+            // real `recv.method()` whose receiver happens to be enum-typed
+            // must keep answering `None` here or the receiver's binding and
+            // this arm would both own the value. `is_qualified_enum_variant_
+            // ctor` is the existing predicate for exactly this node shape
+            // (single-segment path, generic args present, not shadowed by a
+            // local, and the segment names an enum with this variant), and
+            // `optres_arg_is_unowned_temp` already routes the seeded pair's
+            // qualified spelling through it for the same reason.
+            ExprKind::MethodCall { object, .. } if self.is_qualified_enum_variant_ctor(arg) => {
+                match &object.kind {
+                    ExprKind::Path { segments, .. } => segments.first().cloned(),
+                    _ => None,
+                }
+            }
             _ => None,
         };
         if let Some(enum_name) = fresh_enum_temp {
@@ -12367,6 +12391,21 @@ impl<'ctx> super::Codegen<'ctx> {
                 // Zeroing `len` makes the element walk skip too, fully neutralizing
                 // the moved-out source's drop. Harmless for a `Vec`/`String` with no
                 // shared-bearing element (no such walk exists).
+                //
+                // B-2026-09-15-16 — "harmless" is wrong, and the reason it is wrong
+                // is worth keeping HERE rather than only in the ledger, because the
+                // obvious repair makes the tree worse. `len` is what a READ of the
+                // moved-from field returns, so this blanks it: `p.s` prints empty
+                // after `Ws.Full(p)` on every compiled surface against `--interp`.
+                // But narrowing this zero to the shared-element case (the walk that
+                // needs it) does NOT restore the read — it turns it into a
+                // USE-AFTER-FREE. Measured at `-O0`: valgrind `Invalid read of size
+                // 2`, `0 bytes inside a block of size 23 free'd`. The source's `ptr`
+                // dangles the moment the destination frees, and `len = 0` is the
+                // only thing stopping it from being dereferenced. The blank read is
+                // accidental masking of a dangling pointer, not a design, and the
+                // real repair is the defensive copy the CALL-ARGUMENT spelling
+                // already takes. Do not narrow this without landing that first.
                 if let Ok(len_ptr) =
                     self.builder
                         .build_struct_gep(vec_ty, field_ptr, 1, &format!("smv.f{i}.len"))

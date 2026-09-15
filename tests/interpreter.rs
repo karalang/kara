@@ -60862,14 +60862,31 @@ fn test_tuple_literal_of_a_projected_field_runs_one_body_at_the_owner() {
 /// free -- so only an output comparison catches this class. That is the argument
 /// for pinning cell 10 here rather than relying on the sanitizer suite.
 ///
-/// CELL 3 PINS A KNOWN REMAINING GAP, deliberately, at its measured value: the
-/// spelling qualified WITH generic args (`Ho[R].Full(..)`) reaches neither backend
-/// — `enum_name_of_expr` has no `MethodCall` arm and the interpreter's fresh-temp
-/// arg walk does not register that node either — so it runs the body on NO
-/// surface. That is an AGREED gap, not a divergence, and it stays on
-/// B-2026-09-13-24. Pinned here so that fixing one backend alone turns this cell
-/// red instead of silently creating a run-vs-build split, which is what that row's
-/// own arithmetic warns about.
+/// CELL 3 WAS THE PINNED GAP AND IS NOW FIXED (B-2026-09-13-24). The spelling
+/// qualified WITH generic args (`Ho[R].Full(..)`) parses as a `MethodCall` whose
+/// receiver is a one-segment path carrying generic args, and neither fresh-temp
+/// registrar had an arm for that node: `enum_name_of_expr` has none, and the
+/// interpreter's `fresh_temp_arg_type_name` had none either. Both gained one, in
+/// the same commit, because the cell was AGREED-silent and repairing either
+/// backend alone would have converted an agreed gap into a fresh divergence —
+/// which is precisely what the pin was here to catch, and it did: the codegen
+/// half alone turned this cell red.
+///
+/// CELL 13 IS THE BOXED TWIN OF CELL 3, and measuring it corrected the row. The
+/// "runs on NO surface" framing is true only for the INLINE payload: with a
+/// three-`String` payload the box's own interior drop already carried the body on
+/// the compiled backends, so `holdw(Ho[W].Full(mkw()))` was `hw / end` on the
+/// interpreter against `hw / dW4 / end` compiled — a live run-vs-build divergence,
+/// not an agreed gap. The interpreter arm repairs it, and the cell pins that the
+/// codegen arm did NOT add a second owner on top of the box route (the doubling
+/// that cells 10-12 exist for).
+///
+/// CELL 14 IS THE OVER-CLAIM CONTROL. `Ho[R].mk(R { id: 7 })` — an associated
+/// function on the same generic enum — has the IDENTICAL node shape to cell 3 and
+/// must not be claimed by either registrar, since its result is owned by whatever
+/// the callee returns. Both predicates ask `qualified_enum_variant_is_unit`, which
+/// answers `None` for a name that is not a variant, and this cell is what holds
+/// that distinction in place.
 ///
 /// Twin in the other backend's suite under the same name, same table.
 #[test]
@@ -60880,6 +60897,7 @@ fn test_generic_enum_ctor_temp_arg_runs_its_payload_drop_body() {
                impl Drop for W { fn drop(mut ref self) { println(f\"dW{self.a.len()}\") } }\n\
                fn mkw() -> W { return W { a: f\"aaa{1}\", b: f\"bbb{1}\", c: f\"ccc{1}\" }; }\n\
                enum Ho[T] { Full(T), Empty }\n\
+                   impl[T] Ho[T] { fn mk(v: T) -> Ho[T] { return Ho.Full(v); } }\n\
                enum Mo { Whole(R), Nil }\n\
                enum Bo { Wide(W), Nil }\n\
                fn takeit(x: Ho[R]) { match x { Full(r) => { println(f\"f:{r.id}\") } Empty => { println(\"e\") } } }\n\
@@ -60900,9 +60918,9 @@ fn test_generic_enum_ctor_temp_arg_runs_its_payload_drop_body() {
             "f:5\ndR5\nend\n",
         ),
         (
-            "KNOWN GAP: generic enum, ctor qualified WITH generic args",
+            "generic enum, ctor qualified WITH generic args",
             "takeit(Ho[R].Full(R { id: 5 }));",
-            "f:5\nend\n",
+            "f:5\ndR5\nend\n",
         ),
         (
             "control: monomorphic enum, bare ctor temp",
@@ -60949,6 +60967,16 @@ fn test_generic_enum_ctor_temp_arg_runs_its_payload_drop_body() {
             "control: boxed payload in a MONOMORPHIC enum, arm binds it",
             "takebo(Bo.Wide(mkw()));",
             "w:4\ndW4\nend\n",
+        ),
+        (
+            "the BOXED twin of cell 3 — was interp-vs-compiled divergent",
+            "holdw(Ho[W].Full(mkw()));",
+            "hw\ndW4\nend\n",
+        ),
+        (
+            "control: an ASSOC FN with the same node shape is not a ctor",
+            "takeit(Ho[R].mk(R { id: 7 }));",
+            "dR7\nf:7\nend\n",
         ),
     ] {
         let src = format!("{hdr}fn main() {{\n{stmts}\nprintln(\"end\");\n}}\n");

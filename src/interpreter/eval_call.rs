@@ -4208,6 +4208,44 @@ impl<'a> super::Interpreter<'a> {
             // `Some` for the VARIANT exactly as it does for a local, and
             // `consume(B)` ran no body while `consume(E.B)` ran one.
             ExprKind::Identifier(v) => self.fresh_bare_unit_variant_enum(v),
+            // B-2026-09-13-24 — the QUALIFIED-WITH-GENERIC-ARGS constructor,
+            // `takeit(Ho[R].Full(..))`, which parses as a `MethodCall` whose
+            // receiver is a one-segment path carrying generic args. None of
+            // the arms above sees that shape, so this walk claimed no owner
+            // and the payload's `Drop` body ran on NO surface — the unqualified
+            // `Ho.Full(..)` twin one spelling over was correct here, and the
+            // seeded `Option[R].Some(..)` is correct in the same position,
+            // which is what isolated the spelling rather than the enum.
+            //
+            // The predicate mirrors codegen's `is_qualified_enum_variant_ctor`
+            // clause for clause — single segment, generic args present, not
+            // shadowed by a binding, and the segment names an enum that really
+            // has this variant — because the two halves have to agree about
+            // which node is a constructor. Disagreeing either way is a
+            // measurable defect: this walk claiming a temp codegen does not
+            // gives the body two owners, and codegen claiming one this walk
+            // does not is the run-vs-build split the row was filed for.
+            //
+            // BOTH HALVES LAND TOGETHER, which this row's own arithmetic
+            // requires: the cell is AGREED-silent today, so repairing either
+            // backend alone converts an agreed gap into a fresh divergence.
+            ExprKind::MethodCall { object, method, .. } => {
+                let ExprKind::Path {
+                    segments,
+                    generic_args: Some(_),
+                } = &object.kind
+                else {
+                    return None;
+                };
+                let [en] = segments.as_slice() else {
+                    return None;
+                };
+                if self.env.get(en).is_some() && !self.env.is_outermost_only(en) {
+                    return None;
+                }
+                self.qualified_enum_variant_is_unit(en, method)
+                    .map(|_| en.clone())
+            }
             _ => None,
         }
     }
