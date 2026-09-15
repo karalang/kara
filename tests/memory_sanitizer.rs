@@ -93001,6 +93001,168 @@ fn main() {
         );
     }
 
+    /// B-2026-09-15-31 — an index-assign over a container of TUPLES reclaims
+    /// the displaced tuple's heap elements, on the `Array` AND `Vec` legs.
+    /// 10 B in 1 block at `-O0` on each before the fix.
+    ///
+    /// The `Vec` cell is not a control here, it is half the bug: unlike
+    /// B-2026-09-14-29, both legs lost this, because both reach the same
+    /// emitter and it returned at its `TypeKind::Path` shape test — a tuple
+    /// has no name for the `struct_types` lookup that follows.
+    ///
+    /// THE `Drop`-BEARING CELL PINS A DELIBERATE NON-CHANGE. `(D, i64)` with
+    /// an `impl Drop for D` still prints NO `dD1` for the displaced element,
+    /// on every surface, and that is correct-for-now rather than a miss: the
+    /// interpreter does not run it either (`value_runs_user_drop` classifies a
+    /// bare Tuple/Array value as false at top level on purpose), so it is an
+    /// AGREED gap. Running the body on the compiled side alone would turn an
+    /// agreed gap into a divergence. What this asserts is that the memory is
+    /// reclaimed WITHOUT the body moving.
+    ///
+    /// MUST BE READ AT `-O0`, and this is not boilerplate: MEASURED on the
+    /// unfixed tree, these cells PASS at the default `-O2` (LLVM deletes an
+    /// orphan nothing observes) and FAIL at `-O0` with LeakSanitizer
+    /// reporting 13 bytes. So a green `cargo test --features llvm` proves
+    /// nothing here — `scripts/asan-o0-leg.sh` is the gate that holds them.
+    #[test]
+    fn asan_index_store_frees_the_displaced_tuple_element() {
+        // The `Array` leg.
+        assert_clean_asan_run(
+            "fn main() {\n\
+             \x20   let mut a: Array[(String, i64), 2] = [(f\"aaaaaaaaaaaa1\", 1), (f\"bbbbbbbbbbbb2\", 2)];\n\
+             \x20   a[0] = (f\"MUTATEDMUTATED3\", 3);\n\
+             \x20   println(f\"a0:{a[0].1}\");\n\
+             }\n",
+            &["a0:3"],
+            "b31-tuple-elem-array-leg",
+        );
+        // The `Vec` leg — the same 10 B, which is what says this was never an
+        // Array-vs-Vec asymmetry.
+        assert_clean_asan_run(
+            "fn main() {\n\
+             \x20   let mut a: Vec[(String, i64)] = [(f\"aaaaaaaaaaaa1\", 1), (f\"bbbbbbbbbbbb2\", 2)];\n\
+             \x20   a[0] = (f\"MUTATEDMUTATED3\", 3);\n\
+             \x20   println(f\"a0:{a[0].1}\");\n\
+             }\n",
+            &["a0:3"],
+            "b31-tuple-elem-vec-leg",
+        );
+        // A NESTED tuple — the inner tuple's heap is reached too.
+        assert_clean_asan_run(
+            "fn main() {\n\
+             \x20   let mut a: Array[((String, i64), i64), 2] = [((f\"aaaaaaaaaaaa1\", 1), 1), ((f\"bbbbbbbbbbbb2\", 2), 2)];\n\
+             \x20   a[0] = ((f\"MUTATEDMUTATED3\", 3), 3);\n\
+             \x20   println(f\"a0:{a[0].1}\");\n\
+             }\n",
+            &["a0:3"],
+            "b31-nested-tuple-elem",
+        );
+        // A tuple carrying a `Drop`-bearing struct: memory reclaimed, body
+        // deliberately still silent on BOTH backends (see the doc comment).
+        assert_clean_asan_run(
+            "struct D { s: String, id: i64 }\n\
+             impl Drop for D { fn drop(mut ref self) { println(f\"dD{self.id}\") } }\n\
+             fn main() {\n\
+             \x20   let mut a: Array[(D, i64), 2] = [(D { s: f\"aaaaaaaaaaaa1\", id: 1 }, 1), (D { s: f\"bbbbbbbbbbbb2\", id: 2 }, 2)];\n\
+             \x20   a[0] = (D { s: f\"MUTATEDMUTATED3\", id: 3 }, 3);\n\
+             \x20   println(\"mid\");\n\
+             }\n",
+            &["dD3", "dD2", "mid"],
+            "b31-tuple-elem-with-drop-body",
+        );
+        // THE UNBOUNDED CASE — three trips, so a per-store leak compounds.
+        assert_clean_asan_run(
+            "fn main() {\n\
+             \x20   let mut a: Array[(String, i64), 2] = [(f\"aaaaaaaaaaaa0\", 0), (f\"bbbbbbbbbbbb0\", 0)];\n\
+             \x20   let mut i = 1;\n\
+             \x20   while i < 4 {\n\
+             \x20       a[0] = (f\"MUTATEDMUTATED{i}\", i);\n\
+             \x20       i = i + 1;\n\
+             \x20   }\n\
+             \x20   println(\"end\");\n\
+             }\n",
+            &["end"],
+            "b31-tuple-elem-loop",
+        );
+    }
+
+    /// B-2026-09-15-32 — an index-assign over a container whose element is a
+    /// NESTED ARRAY reclaims that inner array's elements' heap. 10 B in 1
+    /// block at `-O0` before the fix.
+    ///
+    /// MEMORY ONLY, and the row is explicit about why: the displaced inner
+    /// array's element `Drop` bodies are missing on BOTH backends, so closing
+    /// only the compiled half would manufacture a divergence. These cells
+    /// assert the heap is reclaimed while the body sequences stay exactly as
+    /// they were — `dD3 dD2`, never `dD1`.
+    ///
+    /// The mixed spellings matter because the outer container kind and the
+    /// inner one are separate lookups: `Vec[Array[..]]` reaches the emitter
+    /// through the vec element table and `Array[Vec[..]]` through the array
+    /// one, so a fix keyed on only one of them passes half of this.
+    ///
+    /// MUST BE READ AT `-O0`, and this is not boilerplate: MEASURED on the
+    /// unfixed tree, these cells PASS at the default `-O2` (LLVM deletes an
+    /// orphan nothing observes) and FAIL at `-O0` with LeakSanitizer
+    /// reporting 13 bytes. So a green `cargo test --features llvm` proves
+    /// nothing here — `scripts/asan-o0-leg.sh` is the gate that holds them.
+    #[test]
+    fn asan_index_store_frees_the_displaced_nested_array_element() {
+        const D: &str = "struct D { s: String, id: i64 }\n";
+        // The row's own repro.
+        assert_clean_asan_run(
+            &format!(
+                "{D}fn main() {{\n\
+                 \x20   let mut a: Array[Array[D, 1], 2] = [[D {{ s: f\"aaaaaaaaaaaa1\", id: 1 }}], [D {{ s: f\"bbbbbbbbbbbb2\", id: 2 }}]];\n\
+                 \x20   a[0] = [D {{ s: f\"MUTATEDMUTATED3\", id: 3 }}];\n\
+                 \x20   println(\"mid\");\n\
+                 }}\n"
+            ),
+            &["mid"],
+            "b32-nested-array-elem",
+        );
+        // `Vec` outer, `Array` inner.
+        assert_clean_asan_run(
+            &format!(
+                "{D}fn main() {{\n\
+                 \x20   let mut a: Vec[Array[D, 1]] = [[D {{ s: f\"aaaaaaaaaaaa1\", id: 1 }}], [D {{ s: f\"bbbbbbbbbbbb2\", id: 2 }}]];\n\
+                 \x20   a[0] = [D {{ s: f\"MUTATEDMUTATED3\", id: 3 }}];\n\
+                 \x20   println(\"mid\");\n\
+                 }}\n"
+            ),
+            &["mid"],
+            "b32-vec-outer-array-inner",
+        );
+        // DEPTH 3 — the synthesizer is recursive, so one call covers each level.
+        assert_clean_asan_run(
+            &format!(
+                "{D}fn main() {{\n\
+                 \x20   let mut a: Array[Array[Array[D, 1], 1], 2] = [[[D {{ s: f\"aaaaaaaaaaaa1\", id: 1 }}]], [[D {{ s: f\"bbbbbbbbbbbb2\", id: 2 }}]]];\n\
+                 \x20   a[0] = [[D {{ s: f\"MUTATEDMUTATED3\", id: 3 }}]];\n\
+                 \x20   println(\"mid\");\n\
+                 }}\n"
+            ),
+            &["mid"],
+            "b32-nested-array-depth-three",
+        );
+        // THE UNBOUNDED CASE.
+        assert_clean_asan_run(
+            &format!(
+                "{D}fn main() {{\n\
+                 \x20   let mut a: Array[Array[D, 1], 2] = [[D {{ s: f\"aaaaaaaaaaaa0\", id: 0 }}], [D {{ s: f\"bbbbbbbbbbbb0\", id: 0 }}]];\n\
+                 \x20   let mut i = 1;\n\
+                 \x20   while i < 4 {{\n\
+                 \x20       a[0] = [D {{ s: f\"MUTATEDMUTATED{{i}}\", id: i }}];\n\
+                 \x20       i = i + 1;\n\
+                 \x20   }}\n\
+                 \x20   println(\"end\");\n\
+                 }}\n"
+            ),
+            &["end"],
+            "b32-nested-array-loop",
+        );
+    }
+
     /// B-2026-09-14-29 — an index-assign over an `Array[T, N]` of user
     /// structs reclaims the displaced element's heap fields. 10 B in 1 block
     /// at `-O0` before the fix.

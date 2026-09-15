@@ -85288,8 +85288,8 @@ fn main() {
         // THIS CELL SHIPPED WITH A STALE EXPECTATION -- `dD1 a0:3`, recorded
         // without the two survivors -- and that value matched NO tree on `main`.
         // It is this fix (`bfeeb86`, the displaced element's release) composed
-        // with `645ea3b`'s Array-typed-struct-field element walk, which had
-        // already landed. Measured on the parent commit `8a68502`, the
+        // with `645ea3b`'s Array-typed-struct-field element walk (B-2026-09-15-26,
+        // filed off this fix's own probe sweep), which had already landed. Measured on the parent commit `8a68502`, the
         // field-rooted output was `a0:3 dD3 dD2`: the walk present, the
         // displaced body missing. So `dD1 a0:3` could only have come from a
         // branch forked BEFORE `645ea3b`, measured there, and not re-run after

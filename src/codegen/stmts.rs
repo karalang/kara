@@ -21513,6 +21513,30 @@ impl<'ctx> super::Codegen<'ctx> {
     /// buffers are orphaned by the store whether the value died or moved, and
     /// the cap-guarded synthesizer no-ops on an already-moved element. Only the
     /// observable bodies are gated.
+    /// Element pointer for the displaced-element drop, on whichever leg the
+    /// container is (B-2026-09-14-29).
+    ///
+    /// The Array leg needs the binding's own slot and takes the same
+    /// bounds-checked GEP every other Array indexed-receiver lowering uses. A
+    /// slot whose LLVM type is not an ArrayType — a borrowed
+    /// `mut ref Array[T, N]` param, whose slot holds a POINTER — makes
+    /// `lower_indexed_elem_ptr_array` return Err, and every caller then
+    /// declines rather than GEPing through a pointer it cannot describe.
+    fn lower_displaced_elem_ptr(
+        &mut self,
+        container: &str,
+        container_is_array: bool,
+        index: &Expr,
+    ) -> Option<inkwell::values::PointerValue<'ctx>> {
+        let lowered = if container_is_array {
+            let slot = self.variables.get(container).copied()?;
+            self.lower_indexed_elem_ptr_array(slot, index)
+        } else {
+            self.lower_indexed_elem_ptr_vec(container, index)
+        };
+        lowered.ok().map(|(ptr, _)| ptr)
+    }
+
     fn emit_displaced_index_elem_drop(
         &mut self,
         object: &Expr,
@@ -21693,6 +21717,93 @@ impl<'ctx> super::Codegen<'ctx> {
                 None => return,
             },
         };
+        // B-2026-09-15-31 / B-2026-09-15-32 — element shapes with NO NAME.
+        // Everything below this point is keyed on a `TypeKind::Path` whose head
+        // is in `struct_types` or `enum_layouts`, so a TUPLE element
+        // (`Array[(String, i64), N]`, `Vec[(String, i64)]`) and a NESTED ARRAY
+        // element (`Array[Array[D, 1], M]`) returned at the very first shape
+        // test and the displaced value's heap was simply orphaned — 10 B in 1
+        // block at `-O0` for each, on BOTH the Array and the Vec leg.
+        //
+        // MEMORY ONLY, deliberately, and this is the load-bearing scope
+        // decision rather than an omission. The displaced element's `Drop`
+        // BODIES are also missing for these shapes, but they are missing on
+        // BOTH BACKENDS: the interpreter's `value_runs_user_drop` classifies a
+        // bare Tuple/Array value as false at top level on purpose, "keeping the
+        // dedicated container walkers the sole firers for direct bindings", and
+        // codegen's gate agrees with it. So the body half is an AGREED gap, not
+        // a divergence, and running bodies here would make the compiled
+        // backends disagree with the interpreter — the direction B-2026-09-15-32
+        // records as strictly worse. Memory has no such hazard: it is not
+        // observable, so closing it on one backend cannot create a divergence.
+        //
+        // Both synthesizers carry their own admit gates and answer `None` when
+        // the element owns no heap, which is why they are consulted BEFORE the
+        // element pointer is lowered — lowering emits a bounds check and a GEP,
+        // and a decline afterwards would leave that IR behind with no user.
+        if let TypeKind::Tuple(elem_tes) = &elem_te.kind {
+            {
+                let elem_tes = elem_tes.clone();
+                let inkwell::types::BasicTypeEnum::StructType(agg_ty) =
+                    self.llvm_type_for_type_expr(&elem_te)
+                else {
+                    return;
+                };
+                let Some(f) = self.synthesize_tuple_drop_fn_te(agg_ty, &elem_tes) else {
+                    return;
+                };
+                let container = container.clone();
+                let Some(elem_ptr) =
+                    self.lower_displaced_elem_ptr(&container, container_is_array, index)
+                else {
+                    return;
+                };
+                self.builder.build_call(f, &[elem_ptr.into()], "").unwrap();
+                return;
+            }
+        }
+        // A NESTED ARRAY element. Note the spelling: in this position an
+        // `Array[D, 1]` element is recorded as a `TypeKind::Path` whose head is
+        // "Array" with `[Type(D), Const(1)]` generic args, NOT as the dedicated
+        // `TypeKind::Array { element, size }` variant — measured, after an arm
+        // written against that variant silently never fired. Both are accepted
+        // so neither spelling depends on which one the annotation happened to
+        // produce.
+        {
+            let inner_te = match &elem_te.kind {
+                TypeKind::Array { element, .. } => Some((**element).clone()),
+                TypeKind::Path(p) if p.segments.first().map(String::as_str) == Some("Array") => {
+                    match p.generic_args.as_ref().and_then(|a| a.first()) {
+                        Some(GenericArg::Type(t)) => Some(t.clone()),
+                        _ => None,
+                    }
+                }
+                _ => None,
+            };
+            if let Some(inner_te) = inner_te {
+                let inkwell::types::BasicTypeEnum::ArrayType(at) =
+                    self.llvm_type_for_type_expr(&elem_te)
+                else {
+                    return;
+                };
+                // Taking `n` off the LLVM array type rather than const-folding
+                // the `size` expression keeps this in step with whatever the
+                // layout actually built.
+                let Some(f) =
+                    self.synthesize_array_drop_fn_te(at.get_element_type(), &inner_te, at.len())
+                else {
+                    return;
+                };
+                let container = container.clone();
+                let Some(elem_ptr) =
+                    self.lower_displaced_elem_ptr(&container, container_is_array, index)
+                else {
+                    return;
+                };
+                self.builder.build_call(f, &[elem_ptr.into()], "").unwrap();
+                return;
+            }
+        }
         let TypeKind::Path(p) = &elem_te.kind else {
             return;
         };
@@ -21720,22 +21831,8 @@ impl<'ctx> super::Codegen<'ctx> {
             return;
         }
         let container = container.clone();
-        // The Array leg needs the binding's own slot, and takes the same
-        // bounds-checked GEP every other Array indexed-receiver lowering
-        // uses. A slot whose LLVM type is not an ArrayType — a borrowed
-        // `mut ref Array[T, N]` param, whose slot holds a POINTER — makes
-        // `lower_indexed_elem_ptr_array` return Err, and this declines
-        // exactly as it did before rather than GEPing through a pointer it
-        // cannot describe.
-        let lowered = if container_is_array {
-            match self.variables.get(container.as_str()).copied() {
-                Some(slot) => self.lower_indexed_elem_ptr_array(slot, index),
-                None => return,
-            }
-        } else {
-            self.lower_indexed_elem_ptr_vec(&container, index)
-        };
-        let Ok((elem_ptr, _)) = lowered else {
+        let Some(elem_ptr) = self.lower_displaced_elem_ptr(&container, container_is_array, index)
+        else {
             return;
         };
         if run_bodies && self.type_runs_user_drop(&etn, &mut Vec::new()) {
