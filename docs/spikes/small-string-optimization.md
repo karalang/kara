@@ -12,22 +12,39 @@ boundary and the read path.
 Everything under this section is a running log in date order, so **the further
 down you read, the older the numbers are.** The current picture:
 
-**Rail deltas** (`bench/sso/bench.sh`, 2026-09-15, x86-64, `RUNS=15`, two
-samples, `KARAC_AUTO_PAR=0`). Negative = SSO faster:
+**Rail deltas — and they are NOT portable across machines.** Same compiler
+(`karac` at `27466ba`, built and run on both hosts), `RUNS=15`, two samples,
+`KARAC_AUTO_PAR=0`. Negative = SSO faster:
 
-| wins | | losses | |
-|---|---|---|---|
-| `lexer` | −17.6% | `substr` | **+31…34%** |
-| `lexlike` | −13% | `pfx_idx` | +15% |
-| `pfx_chars` | −10% | `builder20` | +15% |
-| | | `builder60` | +12% |
-| | | `promote` | +8% |
+| rail | host A | host B (`nproc=4`) |
+|---|---|---|
+| `lexer` | −17.7% | −13…−17% |
+| `lexlike` | **−13%** | **+23%** |
+| `substr` | +34% | **+73%** |
+| `builder20` | +15% | +3% |
+| `builder60` | +12% | +3% |
+| `promote` | +8% | +0.8% |
+| `pfx_idx` | +15% | +16% |
+| `pfx_chars` | −10% | −7.6% |
+| **`substr` − `lexlike`** | **46–48 pts** | **49–51 pts** |
 
-**Anything in this document dated before 2026-09-15 was measured with auto-par
-ON** and is not comparable to the table above — `bench.sh` did not pin the
-control until `375118d`. The correction is not cosmetic: it moved `pfx_idx` ~3x
-and flips `substr`'s SIGN. Two figures that were carried here for days turned out
-to describe workloads that no longer existed; both are now marked in place.
+**A rail's SSO ratio is a property of the rail AND the host**, which this
+document and `bench.sh` both denied until 2026-09-15 — the harness header
+claimed its back-to-back build made "the verdict a RATIO" and disclaimed only
+absolute milliseconds. Different rails are bound by different subsystems, so a
+different CPU allocation reprices them non-uniformly. Established rather than
+assumed: the old compiler on host B reproduces host B's column, so twenty
+commits moved these rails by nothing and the whole difference is the machine.
+
+**So: never compare a rail delta to a number from a previous session, including
+every number in this document.** Re-run both legs on one machine. What survives
+across hosts is the GAP between two rails measured together — which is why
+B-2026-09-15-6 is written about the ~47–51 point `substr`/`lexlike` gap and not
+about either rail's level.
+
+**Anything here dated before 2026-09-15 additionally had auto-par ON**
+(`bench.sh` did not pin the control until `375118d`), which is a separate and
+compounding reason not to compare against it.
 
 **Kata corpus** (17 residual regressions, sweep already pinned): median +1.4%,
 aggregate +5.7%, 4 regressed ≥5%, 2 improved ≥5%.
@@ -38,12 +55,13 @@ aggregate +5.7%, 4 regressed ≥5%, 2 improved ≥5%.
   de-inline probe was ruled out by measurement (removing it moved the kata 1.3
   points) and `prefix_string` was ruled out too (an exact mirror runs 9–15%
   *faster* under SSO). Largest single item in the corpus.
-- **B-2026-09-15-6** — `substr` is −14.7% (SSO wins) under default auto-par and
-  +30.9% (SSO loses) pinned: same commit, same rail, a sign flip decided by the
-  scheduler. Pinned it is the worst rail here, while `lexlike` — the *same*
-  slice/compare/discard shape through slice syntax rather than
-  `String.substring` — wins 13%. A 44-point gap between two spellings of one
-  workload. Never profiled; this track has never had a profiler pointed at it.
+- **B-2026-09-15-6** — `substr` (via `String.substring`) and `lexlike` (via
+  slice syntax) do *identical* work and differ by **~47–51 points on every host
+  and compiler tested**, while neither rail's own delta is portable. The
+  differential is the finding; the levels are not. Never profiled; this track
+  has never had a profiler pointed at it. (An earlier framing of this row as an
+  auto-par "sign flip" was withdrawn — the −14.7% did not reproduce, and a
+  `KARAC_PAR_WORKERS` sweep gives ≈0 at 1/2/4/8/18 workers.)
 
 **Correctness is not the blocker.** The inline path is pinned by
 `test_sso_de_inline_rides_the_string_growth_test` (`tests/cli.rs`), verified

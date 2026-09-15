@@ -2,11 +2,34 @@
 # sso — is small-string optimization a net win, and where does it lose?
 #
 # Self-calibrating: every rail is rebuilt and re-timed on the machine in front
-# of you, back to back, so the verdict is a RATIO. Absolute milliseconds from
-# this track are NOT comparable across machines or across days — see
-# docs/spikes/small-string-optimization.md § "ABSOLUTE TIMINGS IN THIS DOC ARE
-# NOT COMPARABLE ACROSS SESSIONS". One day's run of the lexer rail moved 3.4x
-# for a reason unrelated to SSO while the SSO ratio held at 13-16%.
+# of you, back to back. Absolute milliseconds are obviously not comparable
+# across machines or days.
+#
+# THE RATIOS ARE NOT COMPARABLE EITHER, and this header said the opposite until
+# 2026-09-15. It claimed the back-to-back build made "the verdict a RATIO",
+# disclaiming only the milliseconds — and the whole track relied on that. It is
+# false. Measured on two containers with the SAME COMPILER (karac built at
+# 27466ba, run on both):
+#
+#   rail        host A           host B (nproc=4)   
+#   lexlike     -12.7 / -13.7%   +22.9%             36 pts, SIGN FLIPS
+#   substr      +33.7 / +34.3%   +73.6%             doubles
+#   builder20   +15.1 / +14.1%   +3.1%              12 pts better
+#   promote     +7.8 / +7.9%     +0.0%              
+#   pfx_idx     +14.1 / +15.9%   +15.9%             portable, near-exactly
+#
+# A rail's SSO ratio is a property of the rail AND the host: different rails are
+# bound by different subsystems, so a different CPU allocation reprices them
+# non-uniformly — the malloc-dominated rails got relatively cheaper against
+# SSO's overhead while the memory-bound ones got worse. That is also why
+# opposite-direction movement is NOT evidence against a host change, which is
+# the wrong inference that delayed finding this (B-2026-09-15-6).
+#
+# PRACTICAL RULE: never compare a rail delta against a number from a previous
+# session's table. Re-run both legs on one machine. What DOES survive across
+# hosts is the GAP between two rails measured together — substr minus lexlike
+# is 46-48 pts on host A and 49-51 on host B — so differentials are the durable
+# unit here, not levels.
 #
 # Three workloads, chosen because they disagree:
 #

@@ -179,45 +179,60 @@ Do not make a rail's accumulated value depend on the accumulator itself (e.g.
 `let k = (i + total) % 21`). That shape is silently miscompiled under auto-par --
 B-2026-09-14-31.
 
-## Last measured (2026-09-15, x86-64, RUNS=15, auto-par pinned off)
+## Last measured — and why there are two columns
 
-Two independent samples; `delta` is `SSO=1` relative to `SSO=0`, negative means
-SSO is faster.
+**A rail's SSO ratio is a property of the rail AND the host.** Same compiler
+(`karac` at `27466ba`, built and run on both), `RUNS=15`, auto-par pinned off:
 
-| rail | SSO=0 | SSO=1 | delta |
+| rail | host A | host B (`nproc=4`) | portable? |
 |---|---|---|---|
-| `lexer` | 2860 / 2844 ms | 2355 / 2345 ms | **-17.7 / -17.5%** |
-| `lexlike` | 259 / 262 ms | 226 / 226 ms | **-12.7 / -13.7%** |
-| `substr` | 172 / 172 ms | 230 / 231 ms | +33.7 / +34.3% |
-| `builder20` | 219 / 220 ms | 252 / 251 ms | +15.1 / +14.1% |
-| `builder60` | 329 / 329 ms | 368 / 370 ms | +11.9 / +12.5% |
-| `promote` | 179 / 178 ms | 193 / 192 ms | +7.8 / +7.9% |
-| `pfx_idx` | 64 / 63 ms | 73 / 73 ms | +14.1 / +15.9% |
-| `pfx_chars` | 175 / 175 ms | 157 / 157 ms | **-10.3 / -10.3%** |
+| `lexer` | −17.7 / −17.5% | −13.4 / −17.0% | roughly |
+| `lexlike` | **−12.7 / −13.7%** | **+22.9 / +23.3%** | **no — sign flips** |
+| `substr` | +33.7 / +34.3% | +72.2 / +72.8% | **no — doubles** |
+| `builder20` | +15.1 / +14.1% | +2.5 / +3.1% | no |
+| `builder60` | +11.9 / +12.5% | +2.4 / +3.2% | no |
+| `promote` | +7.8 / +7.9% | +0.8% | no |
+| `pfx_idx` | +14.1 / +15.9% | +15.9% | yes, near-exactly |
+| `pfx_chars` | −10.3% | −7.6 / −7.5% | roughly |
+| **`substr` − `lexlike`** | **46.4 / 48.0 pts** | **49.3 / 49.5 pts** | **yes** |
 
-**`lexlike` did not "stop regressing" — it never regressed here.** An earlier
-revision of this file said it went +34% → −13% and called that an unexplained
-win. Building the committed rail at five commits spanning 09-12..09-15 gives
-−12 to −14% at every one, including `bab0491`, the commit the +34% was
-attributed to. `bench/sso/lexlike.kara` was committed by `5bcafe9` at
-09-13 00:04, 1h42m AFTER `bab0491`, and `5bcafe9` also wrote the header line
-carrying the +34%: the figure measured a pre-harness workload and was
-transcribed above rails that replaced it. Refuted and recorded as
-B-2026-09-15-1 (invalid). The lesson is narrow and worth keeping: two numbers
-from different dates disagreeing is not a finding until both are reproduced on
-the same workload.
+Different rails are bound by different subsystems, so a different CPU
+allocation reprices them non-uniformly: the malloc-dominated rails
+(`builder*`, `promote`) got relatively cheaper against SSO's overhead while the
+memory-bound ones (`lexlike`, `substr`) got relatively worse.
 
-**`substr` flips SIGN with the auto-par setting, and that IS the open question.**
-At one commit, best-of-9: default auto-par −14.7% (SSO wins), pinned +30.9%
-(SSO loses). Not a compressed magnitude — the opposite conclusion. Both legs get
-~2.3x faster fanned out (175 → 75 ms at `SSO=0`), so the rail parallelises
-fine; the two legs just do not scale equally. `lexlike` is the control: the
-analyzer declines to fan it out, and its delta is identical under both settings
-(−13.0% / −13.4%).
+**Never compare a rail delta against a number from a previous session's table.**
+Re-run both legs on one machine. Differentials between two rails measured
+together are the durable unit here; levels are not.
 
-So pinned, `substr` (+31%) and `lexlike` (−13%) differ by 44 points while doing
-the same slice/compare/discard work, one through `String.substring` and one
-through slice syntax. Nothing attributes that, and no profiler has ever been
-pointed at this track. Filed as B-2026-09-15-6; the next step written there is
-to diff the two rails' IR at `KARAC_SSO=1` pinned, since they differ only in how
-the 3-byte piece is produced.
+This was established, not assumed: building `karac` at `27466ba` and running it
+on host B reproduces host B's column, not host A's. Twenty commits, seven
+touching `src/`, moved these rails by nothing.
+
+**`lexlike` did not "stop regressing" — it never regressed on host A, and it
+does regress on host B.** An earlier revision said it went +34% → −13% and
+called that an unexplained win. Building the committed rail at five commits
+spanning 09-12..09-15 gave −12 to −14% at every one, including `bab0491`, the
+commit the +34% was attributed to; `bench/sso/lexlike.kara` was committed by
+`5bcafe9` 1h42m AFTER `bab0491`, so that figure measured a pre-harness workload
+and was transcribed above rails that replaced it. Refuted as B-2026-09-15-1
+(invalid). On host B the same rail is +23%, which is the host effect above, not
+a regression. Two numbers from different dates — or different boxes —
+disagreeing is not a finding until both are reproduced together.
+
+**Auto-par MASKS the pinned regression, which is what the pin is for.** An
+earlier revision claimed `substr` was a 14.7% SSO *win* under default auto-par
+and a 30.9% loss pinned — a sign flip. The win half does not reproduce: three
+fresh trials at the default give −1.7% / 0.0% / −1.7%, and a
+`KARAC_PAR_WORKERS` sweep gives roughly zero at 1, 2, 4, 8 and 18 workers. That
+−14.7% was one run on a loaded box. The correct, weaker statement: fanned out,
+`substr`'s delta collapses to about zero while pinned it is the worst rail
+here. Consistent with the pre-pin header's "+5%".
+
+**The open question is the GAP.** `substr` and `lexlike` do identical work —
+slice a 3-byte token, compare, discard — one through `String.substring`, one
+through slice syntax, and they differ by ~47–51 points on BOTH hosts and both
+compilers tested. Unlike the levels, that is a property of the code. Filed as
+B-2026-09-15-6; the next step there is to diff the two rails' IR at
+`KARAC_SSO=1` pinned, on one host, since they differ only in how the piece is
+produced. Never profiled.
