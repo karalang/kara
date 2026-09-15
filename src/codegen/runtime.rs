@@ -3132,12 +3132,33 @@ impl<'ctx> super::Codegen<'ctx> {
     ) {
         if !matches!(
             &arg.kind,
-            ExprKind::StructLiteral { .. } | ExprKind::Call { .. } | ExprKind::Path { .. }
+            ExprKind::StructLiteral { .. }
+                | ExprKind::Call { .. }
+                | ExprKind::Path { .. }
+                | ExprKind::MethodCall { .. }
         ) {
             return;
         }
-        let Some(ename) = self.enum_name_of_expr(arg) else {
-            return;
+        // B-2026-09-13-30 — a CALL whose DECLARED RETURN TYPE names an enum.
+        // `enum_name_of_expr` reads CONSTRUCTOR spellings (`E.V { .. }`,
+        // `E.V(..)`, `E.V`) and a bare `Identifier`; a method or assoc fn
+        // returning `E` is none of those, so `m.get(g.mke(0))` reached no leg
+        // at all and lost its payload once per lookup (measured 18 B / 1).
+        // Ordered AFTER the constructor resolver so nothing already understood
+        // changes route, and keyed through `fresh_owned_key_callee_key`, whose
+        // fresh-owned gate is what keeps this from touching a let-bound enum —
+        // the double free this leg's doc warns about.
+        let ename = match self.enum_name_of_expr(arg) {
+            Some(n) => n,
+            None => {
+                let Some(name) = self
+                    .fresh_owned_key_callee_key(arg)
+                    .and_then(|k| self.fn_sig.fn_return_type_names.get(&k).cloned())
+                else {
+                    return;
+                };
+                name
+            }
         };
         // `shared` enums release through the RC path, never a value drop.
         if self
@@ -3270,9 +3291,11 @@ impl<'ctx> super::Codegen<'ctx> {
             // call — so `expr_yields_fresh_owned_temp`, which matches
             // `Call`/`MethodCall` only, is not the gate for it.
             ExprKind::Tuple(_) => self.infer_arg_elem_te(arg),
-            // A CALL temp, gated by the established fresh-owned predicate.
-            ExprKind::Call { callee, .. } if self.expr_yields_fresh_owned_temp(arg) => {
-                let ExprKind::Identifier(fn_name) = &callee.kind else {
+            // A CALL temp — a free function, a METHOD, or an associated fn —
+            // gated and keyed by `fresh_owned_key_callee_key`
+            // (B-2026-09-13-30).
+            _ => {
+                let Some(key) = self.fresh_owned_key_callee_key(arg) else {
                     return;
                 };
                 // Cloned out before any `&mut self` call below. The generic
@@ -3282,21 +3305,20 @@ impl<'ctx> super::Codegen<'ctx> {
                 let Some(te) = self
                     .fn_sig
                     .fn_return_type_exprs
-                    .get(fn_name)
-                    .or_else(|| {
-                        self.mono_state
-                            .generic_fns
-                            .get(fn_name)?
-                            .return_type
-                            .as_ref()
-                    })
+                    .get(&key)
+                    .or_else(|| self.mono_state.generic_fns.get(&key)?.return_type.as_ref())
                     .cloned()
                 else {
                     return;
                 };
-                te
+                // A generic callee's declared return can be a bare `T`; the
+                // call's own substitution frame is what makes it the type the
+                // monomorph lowers, exactly as `discarded_call_array_parts`
+                // does it. A no-op when no frame is recorded, and an
+                // unsubstituted param simply fails the resolver below — the
+                // fail-closed direction.
+                self.callee_param_te_for_call(&te, &arg.span)
             }
-            _ => return,
         };
         // A `String` / `Vec` key is the `free_fresh_owned_str_arg` overlay
         // path's, which runs at every one of these sites; the resolver would
@@ -3312,6 +3334,22 @@ impl<'ctx> super::Codegen<'ctx> {
             ) {
                 return;
             }
+            // B-2026-09-13-30 — AN ENUM RETURN IS THE ENUM LEG'S, and the
+            // early `enum_name_of_expr` check at the top of this function does
+            // NOT cover it: that resolver reads constructor spellings, so for
+            // `m.get(g.mke(0))` it answers `None` here exactly as it does
+            // there. The dispatcher runs both legs back to back, so without
+            // this the enum leg's new call route and this one would each free
+            // the same payload — a double free where the bug was a leak. The
+            // exclusion is stated on the RESOLVED return type, the one thing
+            // both legs now agree on.
+            if path
+                .segments
+                .first()
+                .is_some_and(|s| self.type_decls.enum_layouts.contains_key(s.as_str()))
+            {
+                return;
+            }
         }
         let Some(drop_fn) = self.map_key_drop_fn_for_type_expr(&key_te) else {
             return;
@@ -3323,21 +3361,92 @@ impl<'ctx> super::Codegen<'ctx> {
         let _ = self.builder.build_call(drop_fn, &[slot.into()], "");
     }
 
+    /// B-2026-09-13-30 — the key under which a fresh-owned-temp CALL's
+    /// DECLARED RETURN TYPE is recorded, for the three key legs that need it.
+    ///
+    /// All three legs of [`Self::free_fresh_owned_struct_key_arg`] have to
+    /// answer the same question — "what does this callee hand back?" — and all
+    /// three used to key it on a BARE `Identifier` callee, so two of the three
+    /// spellings that can produce a key temporary reached no leg at all.
+    /// MEASURED at `KARAC_OPT_LEVEL=0` under valgrind, one lookup each, before
+    /// this resolver existed:
+    ///
+    /// ```text
+    /// m.get(g.make(0))     (String, String)   32 B / 2  LEAKED  nameless leg
+    /// m.get(g.make(0))     Array[String, 2]   32 B / 2  LEAKED  nameless leg
+    /// m.get(g.make(0))     (String, i64)      18 B / 1  LEAKED  nameless leg
+    /// m.get(g.mks(0))      struct Kk          32 B / 2  LEAKED  struct leg
+    /// m.get(g.mke(0))      enum Tg            18 B / 1  LEAKED  enum leg
+    /// m.get(Mk.build(0))   (String, String)   32 B / 2  LEAKED  assoc fn
+    /// s.contains(g.make(0)) / v.contains(..)  32 B / 2  LEAKED  each
+    /// m.contains_key(..) + m.remove(..)       64 B / 4  LEAKED  two lookups
+    /// 5x m.get(g.make(0)) in a loop          160 B / 10 LEAKED  linear
+    /// m.get(mkk(0))        free fn            clean  <- the covered spelling
+    /// let k = g.make(0); m.get(k)            clean  <- another owner
+    /// m.get(g.make(0))     Array[i64, 2]      clean  <- heapless element
+    /// m.get(g.make(0))     Vec[String]        clean  <- the str overlay's
+    /// ```
+    ///
+    /// THE ROW'S STATED ROOT CAUSE WAS WRONG, and the correction is the whole
+    /// fix. It read "a method's return type is absent from
+    /// `fn_return_type_exprs`, so the nameless leg has no `TypeExpr` to
+    /// resolve", and proposed a new method-return map as the remedy. There is
+    /// nothing to add: `make_impl_method_function` mints each impl method as a
+    /// `Function` named `Type.method`, `declare_function` records THAT name in
+    /// the same `fn_return_type_exprs` / `fn_return_type_names` pair every free
+    /// function uses, and an associated fn's two-segment path is the identical
+    /// symbol. The information was always recorded — only the lookup KEY was
+    /// missing, so building a second source of truth for method return types
+    /// would have duplicated a table that already had the answer.
+    ///
+    /// THE `ref`-RETURNING METHOD IS EXCLUDED HERE rather than by the shared
+    /// predicate, because [`Self::expr_yields_fresh_owned_temp`] consults
+    /// `is_borrow_returning_call_expr`, which screens the FREE-FUNCTION
+    /// spelling only — its doc says the method half is screened upstream in
+    /// `compile_method_call`, and a key argument never goes through that gate.
+    /// (`m.get(h.peek())` over `-> ref (String, String)` is independently
+    /// broken today — it faults before any reclaim question arises, on unfixed
+    /// `main` and with this resolver alike — so the exclusion is what keeps
+    /// this row from being blamed for it. Filed separately.)
+    fn fresh_owned_key_callee_key(&self, arg: &crate::ast::Expr) -> Option<String> {
+        if !self.expr_yields_fresh_owned_temp(arg) {
+            return None;
+        }
+        match &arg.kind {
+            ExprKind::Call { callee, .. } => match &callee.kind {
+                ExprKind::Identifier(fn_name) => Some(fn_name.clone()),
+                ExprKind::Path { segments, .. } if segments.len() >= 2 => Some(format!(
+                    "{}.{}",
+                    segments[segments.len() - 2],
+                    segments[segments.len() - 1]
+                )),
+                _ => None,
+            },
+            ExprKind::MethodCall { object, method, .. }
+                if !self.user_ref_method_names.contains(method.as_str()) =>
+            {
+                Some(format!("{}.{}", self.type_name_of(object)?, method))
+            }
+            _ => None,
+        }
+    }
+
     /// The struct type name of a key expression that yields a FRESH owned
     /// aggregate — an inline `S { .. }` literal, or a call returning `S`.
     /// `None` for anything owned elsewhere (an identifier, a field read, an
     /// index), which is what keeps [`Self::free_fresh_owned_struct_key_arg`]
     /// from freeing a value someone else will free.
+    ///
+    /// The call spellings it admits are
+    /// [`Self::fresh_owned_key_callee_key`]'s, which is what extends it from a
+    /// free function to a method and an associated fn (B-2026-09-13-30).
     fn fresh_owned_struct_key_type_name(&self, arg: &crate::ast::Expr) -> Option<String> {
         let name = match &arg.kind {
             ExprKind::StructLiteral { path, .. } => path.last().cloned()?,
-            ExprKind::Call { callee, .. } if self.expr_yields_fresh_owned_temp(arg) => {
-                let ExprKind::Identifier(fn_name) = &callee.kind else {
-                    return None;
-                };
-                self.fn_sig.fn_return_type_names.get(fn_name).cloned()?
+            _ => {
+                let key = self.fresh_owned_key_callee_key(arg)?;
+                self.fn_sig.fn_return_type_names.get(&key).cloned()?
             }
-            _ => return None,
         };
         self.type_decls
             .struct_types

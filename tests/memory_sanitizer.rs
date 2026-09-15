@@ -91357,10 +91357,18 @@ fn main() {
         // one-policy resolver the map's storage side uses for both halves, so
         // this adds no third notion of what a key owns.
         //
-        // STILL OPEN, measured and left on the row: a METHOD-call temp
-        // (`m.get(g.make(0))`, 32 B / 2), whose return type is absent from
-        // `fn_return_type_exprs` -- there is no TypeExpr to resolve without a
-        // method-return map, which is a larger change than this row.
+        // THE METHOD-CALL TEMP left open here (`m.get(g.make(0))`, 32 B / 2)
+        // is CLOSED by B-2026-09-13-30 -- see
+        // `asan_a_method_call_map_key_temporary_is_reclaimed_at_every_lookup`
+        // below. The reason recorded here for leaving it, that "its return type
+        // is absent from `fn_return_type_exprs`" and so needs a method-return
+        // map, was WRONG: impl methods are minted as `Function`s named
+        // `Type.method` and recorded in that very table, so only the lookup KEY
+        // was missing and no new map was built. Kept rather than deleted
+        // because the wrong inference is the instructive part -- the leg's
+        // `let ExprKind::Identifier(fn_name) = &callee.kind else { return }`
+        // makes an unlooked-up key and an unrecorded type look identical from
+        // the outside.
         // 1 -- THE ROW'S OWN SHAPE. A lookup BORROWS its key, so a fresh
         //      owned temporary is the caller's to reclaim; a tuple has no type
         //      NAME, so both existing legs declined it. 64 B in 4 blocks
@@ -91616,6 +91624,442 @@ fn main() {
              }",
             &["g:7", "len:1"],
             "map-get-heapless-array-key-control",
+        );
+    }
+
+    #[test]
+    fn asan_a_method_call_map_key_temporary_is_reclaimed_at_every_lookup() {
+        // B-2026-09-13-30. The remainder B-2026-09-13-20 measured and left
+        // open: a lookup key produced by a METHOD call was lost once per
+        // lookup. Sweeping the CALL-SPELLING axis before writing the fix --
+        // the same discipline that found the array and nested-tuple shapes on
+        // the parent row -- turned a one-leg gap into a three-leg one, because
+        // all three legs of `free_fresh_owned_struct_key_arg` ask the same
+        // question ("what does this callee hand back?") and all three keyed it
+        // on a BARE `Identifier` callee.
+        //
+        // MEASURED at `KARAC_OPT_LEVEL=0` under valgrind, one lookup each:
+        //
+        //     m.get(g.make(0))      (String, String)   32 B / 2  -> clean
+        //     m.get(g.make(0))      Array[String, 2]   32 B / 2  -> clean
+        //     m.get(g.make(0))      (String, i64)      18 B / 1  -> clean
+        //     m.get(g.mks(0))       struct Kk          32 B / 2  -> clean
+        //     m.get(g.mke(0))       enum Tg            18 B / 1  -> clean
+        //     m.get(Mk.build(0))    assoc fn           32 B / 2  -> clean
+        //     m.get(g.make(0))      generic receiver   32 B / 2  -> clean
+        //     s.contains(g.make(0))                    32 B / 2  -> clean
+        //     v.contains(g.make(0))                    32 B / 2  -> clean
+        //     m.contains_key(..) + m.remove(..)        64 B / 4  -> clean
+        //     5x m.get(g.make(0)) in a loop           160 B / 10 -> clean
+        //     m.get(h.pair())       -> self.pr copy    34 B / 2  -> clean
+        //     m.get(mkk(0))         free fn            clean     -> clean
+        //     let k = g.make(0); m.get(k)              clean     -> clean
+        //     m.get(g.make(0))      Array[i64, 2]      clean     -> clean
+        //     m.get(g.make(0))      Vec[String]        clean     -> clean
+        //
+        // THE PARENT ROW'S STATED ROOT CAUSE WAS WRONG, and correcting it IS
+        // the fix. It read "a method's return type is absent from
+        // `fn_return_type_exprs`" and proposed a new method-return map keyed on
+        // (receiver type, method name). No such map was needed:
+        // `make_impl_method_function` mints every impl method as a `Function`
+        // named `Type.method`, `declare_function` records THAT name in the same
+        // `fn_return_type_exprs` / `fn_return_type_names` pair free functions
+        // use, and an associated fn's two-segment path is the identical symbol.
+        // The answer was always in the table under a key nobody looked up --
+        // which is why the remedy is one shared key resolver
+        // (`fresh_owned_key_callee_key`) and not a new source of truth.
+        //
+        // THE ASSOC-FN SPELLING WAS NOT ON THE ROW AT ALL. `m.get(Mk.build(0))`
+        // is an `ExprKind::Call` whose callee is a `Path`, so the leg's
+        // `let ExprKind::Identifier(fn_name) = &callee.kind else { return }`
+        // dropped it on the floor exactly as it dropped the method call. Found
+        // by enumerating what can spell a call rather than by reading the row.
+        //
+        // A DOUBLE FREE WAS INTRODUCED AND CAUGHT IN THE SAME CHANGE, and cell
+        // 6 is its guard. The dispatcher runs the enum leg and the nameless leg
+        // back to back, relying on the nameless leg's opening
+        // `enum_name_of_expr` check to keep them exclusive -- but that resolver
+        // reads CONSTRUCTOR spellings, so for `g.mke(0)` it answers `None` in
+        // both places and both legs claimed the payload. The exclusion is now
+        // stated on the RESOLVED return type, the one thing the two legs agree
+        // on.
+
+        // 1 -- THE ROW'S OWN SHAPE: a method-returned tuple key.
+        assert_clean_asan_run(
+            r#"
+struct Mk { p: String }
+impl Mk { fn make(ref self, n: i64) -> (String, String) {
+    return (f"aaaaaaaaaaaaaaaa-{n}", f"bbbbbbbbbbbb-{n}");
+} }
+fn main() {
+    let mut m: Map[(String, String), i64] = Map.new();
+    let g: Mk = Mk { p: f"x" };
+    m.insert(g.make(0i64), 0i64);
+    match m.get(g.make(0i64)) {
+        Some(v) => { println(f"g:{v}"); } None => { println("missing"); }
+    }
+    println(f"len:{m.len()}");
+}
+"#,
+            &["g:0", "len:1"],
+            "map-get-method-call-tuple-key",
+        );
+
+        // 2 -- the `Array[String, N]` key, the shape the parent row had to add
+        //      a second measurement round for on the free-function side.
+        assert_clean_asan_run(
+            r#"
+struct Mk { p: String }
+impl Mk { fn make(ref self, n: i64) -> Array[String, 2] {
+    return [f"aaaaaaaaaaaaaaaa-{n}", f"bbbbbbbbbbbb-{n}"];
+} }
+fn main() {
+    let mut m: Map[Array[String, 2], i64] = Map.new();
+    let g: Mk = Mk { p: f"x" };
+    m.insert(g.make(0i64), 0i64);
+    match m.get(g.make(0i64)) {
+        Some(v) => { println(f"g:{v}"); } None => { println("missing"); }
+    }
+    println(f"len:{m.len()}");
+}
+"#,
+            &["g:0", "len:1"],
+            "map-get-method-call-array-key",
+        );
+
+        // 3 -- THE ASSOCIATED-FN SPELLING. A `Path` callee, not a method, and
+        //      not mentioned on the row; same 32 B / 2.
+        assert_clean_asan_run(
+            r#"
+struct Mk { p: String }
+impl Mk { fn build(n: i64) -> (String, String) {
+    return (f"aaaaaaaaaaaaaaaa-{n}", f"bbbbbbbbbbbb-{n}");
+} }
+fn main() {
+    let mut m: Map[(String, String), i64] = Map.new();
+    m.insert(Mk.build(0i64), 0i64);
+    match m.get(Mk.build(0i64)) {
+        Some(v) => { println(f"g:{v}"); } None => { println("missing"); }
+    }
+    println(f"len:{m.len()}");
+}
+"#,
+            &["g:0", "len:1"],
+            "map-get-assoc-fn-tuple-key",
+        );
+
+        // 4 -- a GENERIC receiver. The declared return is concrete here, so
+        //      this pins the `Type.method` key resolving for a monomorphized
+        //      impl; a generic RETURN goes through
+        //      `callee_param_te_for_call` and fails closed if unresolved.
+        assert_clean_asan_run(
+            r#"
+struct Gk[T] { p: T }
+impl[T] Gk[T] { fn make(ref self, n: i64) -> (String, String) {
+    return (f"aaaaaaaaaaaaaaaa-{n}", f"bbbbbbbbbbbb-{n}");
+} }
+fn main() {
+    let mut m: Map[(String, String), i64] = Map.new();
+    let g: Gk[i64] = Gk { p: 7i64 };
+    m.insert(g.make(0i64), 0i64);
+    match m.get(g.make(0i64)) {
+        Some(v) => { println(f"g:{v}"); } None => { println("missing"); }
+    }
+    println(f"len:{m.len()}");
+}
+"#,
+            &["g:0", "len:1"],
+            "map-get-generic-receiver-method-key",
+        );
+
+        // 5 -- THE STRUCT LEG. Not on the row, which named the nameless leg
+        //      only: `fresh_owned_struct_key_type_name` reads
+        //      `fn_return_type_names` under the same bare-`Identifier` key, so
+        //      a method returning a named struct leaked identically.
+        assert_clean_asan_run(
+            r#"
+#[derive(Hash, Eq, PartialEq)]
+struct Kk { a: String, b: String }
+struct Mk { p: String }
+impl Mk { fn mks(ref self, n: i64) -> Kk {
+    return Kk { a: f"aaaaaaaaaaaaaaaa-{n}", b: f"bbbbbbbbbbbb-{n}" };
+} }
+fn main() {
+    let mut m: Map[Kk, i64] = Map.new();
+    let g: Mk = Mk { p: f"x" };
+    m.insert(g.mks(0i64), 0i64);
+    match m.get(g.mks(0i64)) {
+        Some(v) => { println(f"g:{v}"); } None => { println("missing"); }
+    }
+    println(f"len:{m.len()}");
+}
+"#,
+            &["g:0", "len:1"],
+            "map-get-method-call-struct-key",
+        );
+
+        // 6 -- THE ENUM LEG, and the double-free guard described above. This
+        //      is the cell that fails loudly if the two legs ever both claim
+        //      the payload again.
+        assert_clean_asan_run(
+            r#"
+#[derive(Hash, Eq, PartialEq)]
+enum Tg { Named { s: String }, Num { n: i64 } }
+struct Mk { p: String }
+impl Mk { fn mke(ref self, n: i64) -> Tg {
+    return Tg.Named { s: f"aaaaaaaaaaaaaaaa-{n}" };
+} }
+fn main() {
+    let mut m: Map[Tg, i64] = Map.new();
+    let g: Mk = Mk { p: f"x" };
+    m.insert(g.mke(0i64), 0i64);
+    match m.get(g.mke(0i64)) {
+        Some(v) => { println(f"g:{v}"); } None => { println("missing"); }
+    }
+    println(f"len:{m.len()}");
+}
+"#,
+            &["g:0", "len:1"],
+            "map-get-method-call-enum-key",
+        );
+
+        // 7 -- `Set.contains` and `Vec.contains`. All the lookup entry points
+        //      share the helper, so one resolution covers them; pinned because
+        //      that sharing is the fix's whole economy.
+        assert_clean_asan_run(
+            r#"
+struct Mk { p: String }
+impl Mk { fn make(ref self, n: i64) -> (String, String) {
+    return (f"aaaaaaaaaaaaaaaa-{n}", f"bbbbbbbbbbbb-{n}");
+} }
+fn main() {
+    let mut s: Set[(String, String)] = Set.new();
+    let mut v: Vec[(String, String)] = Vec.new();
+    let g: Mk = Mk { p: f"x" };
+    s.insert(g.make(0i64));
+    v.push(g.make(0i64));
+    if s.contains(g.make(0i64)) { println("s:hit"); } else { println("s:miss"); }
+    if v.contains(g.make(0i64)) { println("v:hit"); } else { println("v:miss"); }
+    println(f"len:{s.len()}");
+}
+"#,
+            &["s:hit", "v:hit", "len:1"],
+            "set-vec-contains-method-call-key",
+        );
+
+        // 8 -- `contains_key` + `remove`, 64 B / 4 over the two lookups.
+        assert_clean_asan_run(
+            r#"
+struct Mk { p: String }
+impl Mk { fn make(ref self, n: i64) -> (String, String) {
+    return (f"aaaaaaaaaaaaaaaa-{n}", f"bbbbbbbbbbbb-{n}");
+} }
+fn main() {
+    let mut m: Map[(String, String), i64] = Map.new();
+    let g: Mk = Mk { p: f"x" };
+    m.insert(g.make(0i64), 0i64);
+    if m.contains_key(g.make(0i64)) { println("has"); } else { println("no"); }
+    m.remove(g.make(0i64));
+    println(f"len:{m.len()}");
+}
+"#,
+            &["has", "len:0"],
+            "map-contains-key-remove-method-call-key",
+        );
+
+        // 9 -- THE LOOP, which is what makes a bounded-per-lookup leak matter:
+        //      160 B in 10 blocks over five lookups, linear in lookup count.
+        //      An immediate drop is what gets this right; a scope-exit
+        //      registration would free the LAST key and leak the other four.
+        assert_clean_asan_run(
+            r#"
+struct Mk { p: String }
+impl Mk { fn make(ref self, n: i64) -> (String, String) {
+    return (f"aaaaaaaaaaaaaaaa-{n}", f"bbbbbbbbbbbb-{n}");
+} }
+fn main() {
+    let mut m: Map[(String, String), i64] = Map.new();
+    let g: Mk = Mk { p: f"x" };
+    m.insert(g.make(0i64), 0i64);
+    let mut hits: i64 = 0i64;
+    for i in 0i64..5i64 {
+        match m.get(g.make(0i64)) {
+            Some(v) => { hits = hits + 1i64; } None => { }
+        }
+    }
+    println(f"hits:{hits}");
+    println(f"len:{m.len()}");
+}
+"#,
+            &["hits:5", "len:1"],
+            "map-get-method-call-key-in-a-loop",
+        );
+
+        // 10 -- A METHOD RETURNING A PROJECTION OF `self`, which looked like
+        //       the fix's soundness boundary and is not. `fn pair(ref self) ->
+        //       (String, String) { return self.pr; }` plainly does not take
+        //       `self`'s buffers -- `h.pr.0` is still readable afterwards, and
+        //       this cell asserts that it is -- yet it LEAKED 34 B / 2 before
+        //       the fix. That leak is the proof the return DEEP-COPIES, so
+        //       freeing the copy is the only reclaim rather than a second one;
+        //       an alias would have had nothing extra to lose. The
+        //       free-function twin was already clean under the parent row's
+        //       fix, which is the precedent this follows.
+        assert_clean_asan_run(
+            r#"
+struct Hold { pr: (String, String) }
+impl Hold { fn pair(ref self) -> (String, String) { return self.pr; } }
+fn main() {
+    let mut m: Map[(String, String), i64] = Map.new();
+    let h: Hold = Hold { pr: (f"aaaaaaaaaaaaaaaa-0", f"bbbbbbbbbbbb-0") };
+    m.insert(h.pair(), 0i64);
+    match m.get(h.pair()) {
+        Some(v) => { println(f"g:{v}"); } None => { println("missing"); }
+    }
+    println(f"h0:{h.pr.0}");
+    println(f"len:{m.len()}");
+}
+"#,
+            &["g:0", "h0:aaaaaaaaaaaaaaaa-0", "len:1"],
+            "map-get-method-self-projection-key",
+        );
+
+        // 11 -- NEGATIVE CONTROLS, one program per boundary the fix must not
+        //       cross. A BOUND key is owned by its binding (the row's
+        //       documented workaround); a `Vec[String]` key belongs to the
+        //       `free_fresh_owned_str_arg` overlay and freeing it here would
+        //       double-free; an `Array[i64, N]` key has no heap at all and the
+        //       resolver must keep declining it.
+        assert_clean_asan_run(
+            r#"
+struct Mk { p: String }
+impl Mk { fn make(ref self, n: i64) -> (String, String) {
+    return (f"aaaaaaaaaaaaaaaa-{n}", f"bbbbbbbbbbbb-{n}");
+} }
+fn main() {
+    let mut m: Map[(String, String), i64] = Map.new();
+    let g: Mk = Mk { p: f"x" };
+    m.insert(g.make(0i64), 0i64);
+    let probe: (String, String) = g.make(0i64);
+    match m.get(probe) {
+        Some(v) => { println(f"g:{v}"); } None => { println("missing"); }
+    }
+    println(f"len:{m.len()}");
+}
+"#,
+            &["g:0", "len:1"],
+            "map-get-bound-method-call-key-control",
+        );
+        assert_clean_asan_run(
+            r#"
+struct Mk { p: String }
+impl Mk { fn make(ref self, n: i64) -> Vec[String] {
+    let mut v: Vec[String] = Vec.new();
+    v.push(f"aaaaaaaaaaaaaaaa-{n}");
+    v.push(f"bbbbbbbbbbbb-{n}");
+    return v;
+} }
+fn main() {
+    let mut m: Map[Vec[String], i64] = Map.new();
+    let g: Mk = Mk { p: f"x" };
+    m.insert(g.make(0i64), 0i64);
+    match m.get(g.make(0i64)) {
+        Some(v) => { println(f"g:{v}"); } None => { println("missing"); }
+    }
+    println(f"len:{m.len()}");
+}
+"#,
+            &["g:0", "len:1"],
+            "map-get-vec-key-method-call-control",
+        );
+        assert_clean_asan_run(
+            r#"
+struct Mk { p: String }
+impl Mk { fn make(ref self, n: i64) -> Array[i64, 2] {
+    return [n, n + 1i64];
+} }
+fn main() {
+    let mut m: Map[Array[i64, 2], i64] = Map.new();
+    let g: Mk = Mk { p: f"x" };
+    m.insert(g.make(0i64), 0i64);
+    match m.get(g.make(0i64)) {
+        Some(v) => { println(f"g:{v}"); } None => { println("missing"); }
+    }
+    println(f"len:{m.len()}");
+}
+"#,
+            &["g:0", "len:1"],
+            "map-get-heapless-array-key-method-call-control",
+        );
+
+        // 12 -- THE FREE-FUNCTION TWIN as the oracle. Already clean under the
+        //       parent row's fix, and re-asserted here because this change
+        //       rewrites the key the covered spelling resolves through: if
+        //       `fresh_owned_key_callee_key` ever stops answering for a bare
+        //       `Identifier` callee, this is the cell that says so.
+        assert_clean_asan_run(
+            r#"
+fn mkk(n: i64) -> (String, String) {
+    return (f"aaaaaaaaaaaaaaaa-{n}", f"bbbbbbbbbbbb-{n}");
+}
+fn main() {
+    let mut m: Map[(String, String), i64] = Map.new();
+    m.insert(mkk(0i64), 0i64);
+    match m.get(mkk(0i64)) {
+        Some(v) => { println(f"g:{v}"); } None => { println("missing"); }
+    }
+    println(f"len:{m.len()}");
+}
+"#,
+            &["g:0", "len:1"],
+            "map-get-free-fn-tuple-key-oracle",
+        );
+
+        // 13 -- TWO MORE NEGATIVE CONTROLS, each guarding a boundary the
+        //       shared resolver could have crossed but must not. A method
+        //       returning `String` is the `free_fresh_owned_str_arg` overlay's
+        //       and the dispatcher's `vec_struct_type()` gate is what turns it
+        //       away BEFORE any leg keys a name -- so this cell fails as a
+        //       double free, not a leak, if that ordering is ever lost. A
+        //       NESTED tuple is the shape the parent row added after its first
+        //       pass, re-asserted through the method spelling.
+        assert_clean_asan_run(
+            r#"
+struct Mk { p: String }
+impl Mk { fn mkstr(ref self, n: i64) -> String {
+    return f"aaaaaaaaaaaaaaaa-{n}";
+} }
+fn main() {
+    let mut m: Map[String, i64] = Map.new();
+    let g: Mk = Mk { p: f"x" };
+    m.insert(g.mkstr(0i64), 0i64);
+    match m.get(g.mkstr(0i64)) {
+        Some(v) => { println(f"g:{v}"); } None => { println("missing"); }
+    }
+    println(f"len:{m.len()}");
+}
+"#,
+            &["g:0", "len:1"],
+            "map-get-string-key-method-call-control",
+        );
+        assert_clean_asan_run(
+            r#"
+struct Mk { p: String }
+impl Mk { fn make(ref self, n: i64) -> ((String, String), i64) {
+    return ((f"aaaaaaaaaaaaaaaa-{n}", f"bbbbbbbbbbbb-{n}"), n);
+} }
+fn main() {
+    let mut m: Map[((String, String), i64), i64] = Map.new();
+    let g: Mk = Mk { p: f"x" };
+    m.insert(g.make(0i64), 0i64);
+    match m.get(g.make(0i64)) {
+        Some(v) => { println(f"g:{v}"); } None => { println("missing"); }
+    }
+    println(f"len:{m.len()}");
+}
+"#,
+            &["g:0", "len:1"],
+            "map-get-method-call-nested-tuple-key",
         );
     }
     #[test]
