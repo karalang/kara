@@ -7610,7 +7610,9 @@ impl<'ctx> super::Codegen<'ctx> {
         // wired into that path instead. What is broken is the ARGUMENT
         // hand-off, which retracts the caller's drop, and this helper is the
         // arg-position hook the container movers (`Vec.push`, `Map.insert`)
-        // already funnel through.
+        // already funnel through. (The tuple-literal carve-out this once
+        // carried was retired by B-2026-09-15-11, which gave the tuple's drop
+        // walker an `Array` arm and its literal the matching disarm.)
         //
         // Excluded in RETURN position for the reason the wrapper above gives
         // for the whole family: there the read is already reconciled, and
