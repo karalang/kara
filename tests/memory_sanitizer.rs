@@ -92929,4 +92929,113 @@ fn main() {
             "enum-tuple-payload-directly-shared-element",
         );
     }
+
+    /// B-2026-09-15-20 — a whole-container reassignment over a FIXED
+    /// `Array[T, N]` stranded the displaced elements' heap.
+    ///
+    /// The MEMORY twin of B-2026-09-14-23, which gave that same displacement
+    /// its `Drop` BODIES. The two are separate channels (B-2026-08-28-57) and
+    /// the bodies walker frees nothing on purpose — "the array's memory stays
+    /// owned by the scope-exit `__karac_drop_array_te_*`", which is right for a
+    /// slot that survives to scope exit and wrong for one being OVERWRITTEN:
+    /// the displaced generation gets no later visit.
+    ///
+    /// The `Vec` spelling is the control that localizes it to the fixed-array
+    /// position — it reclaims its displaced buffer via the eager-free path and
+    /// measured 0 lost both before and after.
+    ///
+    /// MUST be read at `-O0`: at `-O2` LLVM deletes the allocation for these
+    /// short element strings and the cell asserts nothing, which is the
+    /// `asan-o0-leg.sh` case exactly.
+    #[test]
+    fn asan_fixed_array_reassign_frees_the_displaced_elements() {
+        const H: &str = "struct D { id: i64, s: String }\n\
+             impl Drop for D { fn drop(mut ref self) { println(f\"dD{self.id}\") } }\n\
+             fn mkd(i: i64) -> D { return D { id: i, s: f\"tttttttttttttttt{i}\" } }\n";
+        // Flat `Array[D, 2]`: 34 B in 2 blocks before the fix.
+        assert_clean_asan_run(
+            &format!(
+                "{H}fn main() {{\n\
+                 \x20   let mut v: Array[D, 2] = [mkd(1), mkd(2)];\n\
+                 \x20   v = [mkd(3), mkd(4)];\n\
+                 \x20   println(\"mid\");\n\
+                 \x20   println(\"end\");\n\
+                 }}\n"
+            ),
+            &["dD1", "dD2", "dD3", "dD4", "mid", "end"],
+            "b20-array-reassign-flat",
+        );
+        // Nested `Array[Array[D, 1], 2]`: the same 34 B, through the recursive
+        // element drop rather than the leaf one.
+        assert_clean_asan_run(
+            &format!(
+                "{H}fn main() {{\n\
+                 \x20   let mut v: Array[Array[D, 1], 2] = [[mkd(1)], [mkd(2)]];\n\
+                 \x20   v = [[mkd(3)], [mkd(4)]];\n\
+                 \x20   println(\"mid\");\n\
+                 \x20   println(\"end\");\n\
+                 }}\n"
+            ),
+            &["dD1", "dD2", "dD3", "dD4", "mid", "end"],
+            "b20-array-reassign-nested",
+        );
+        // THE UNBOUNDED CASE, and the reason the severity is what it is: three
+        // trips stranded 102 B in 6 blocks, growing with the loop. Also the
+        // cell that would catch a fix which frees the NEW generation instead of
+        // the displaced one — that reads as a double free here rather than as a
+        // leak.
+        assert_clean_asan_run(
+            &format!(
+                "{H}fn main() {{\n\
+                 \x20   let mut v: Array[D, 2] = [mkd(0), mkd(0)];\n\
+                 \x20   let mut i = 1;\n\
+                 \x20   while i < 4 {{\n\
+                 \x20       v = [mkd(i), mkd(i)];\n\
+                 \x20       i = i + 1;\n\
+                 \x20   }}\n\
+                 \x20   println(\"end\");\n\
+                 }}\n"
+            ),
+            &[
+                "dD0", "dD0", "dD1", "dD1", "dD2", "dD2", "dD3", "dD3", "end",
+            ],
+            "b20-array-reassign-loop",
+        );
+        // CONTROL — the `Vec` spelling, clean before and after. A widening that
+        // started double-freeing the Vec path shows up here.
+        assert_clean_asan_run(
+            &format!(
+                "{H}fn main() {{\n\
+                 \x20   let mut v: Vec[D] = [mkd(1), mkd(2)];\n\
+                 \x20   v = [mkd(3), mkd(4)];\n\
+                 \x20   println(\"mid\");\n\
+                 \x20   println(\"end\");\n\
+                 }}\n"
+            ),
+            &["dD1", "dD2", "dD3", "dD4", "mid", "end"],
+            "b20-vec-reassign-control",
+        );
+        // An element whose heap is a `Vec` rather than a `String` — the same
+        // position, reached through the element's own recursive drop, and the
+        // largest of these cells: 164 B in 6 blocks before the fix (96 direct
+        // + 68 INDIRECT), against 34 B in 2 for the String-bearing element.
+        // The indirect half is what makes it worth its own cell: it is the one
+        // that says the displaced element's drop is reached in full rather
+        // than just at its first level.
+        assert_clean_asan_run(
+            "struct D { id: i64, v: Vec[String] }\n\
+             impl Drop for D { fn drop(mut ref self) { println(f\"dD{self.id}\") } }\n\
+             fn mkd(i: i64) -> D {\n\
+             \x20   return D { id: i, v: [f\"tttttttttttttttt{i}\", f\"uuuuuuuuuuuuuuuu{i}\"] }\n\
+             }\n\
+             fn main() {\n\
+             \x20   let mut v: Array[D, 2] = [mkd(1), mkd(2)];\n\
+             \x20   v = [mkd(3), mkd(4)];\n\
+             \x20   println(\"mid\");\n\
+             \x20   println(\"end\");\n\
+             }\n",
+            &["dD1", "dD2", "dD3", "dD4", "mid", "end"],
+            "b20-array-reassign-vec-heap",
+        );
+    }
 }

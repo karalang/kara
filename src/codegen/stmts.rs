@@ -12871,6 +12871,41 @@ impl<'ctx> super::Codegen<'ctx> {
                                         .build_call(bodies, &[slot.ptr.into()], "")
                                         .unwrap();
                                 }
+                                // B-2026-09-15-20 — the MEMORY peer of the
+                                // bodies call above, and the reason it is a
+                                // second call rather than a wider first one:
+                                // `emit_array_elem_user_drop_bodies_fn` frees
+                                // nothing by design ("the array's memory stays
+                                // owned by the scope-exit
+                                // `__karac_drop_array_te_*`"), which is right
+                                // for a slot that survives to scope exit and
+                                // wrong for one being OVERWRITTEN — the
+                                // displaced generation gets no later visit, so
+                                // its elements' heap was simply stranded (34 B
+                                // in 2 blocks for `Array[D, 2]` over a
+                                // String-bearing `D`, and unbounded in a loop:
+                                // 102 B in 6 blocks over three trips).
+                                //
+                                // Ordering is load-bearing: bodies FIRST, then
+                                // the free, so each body reads fields the free
+                                // is about to reclaim. Same order the `Vec`
+                                // half of B-2026-09-14-23 keeps a few lines
+                                // below.
+                                //
+                                // Safe against the scope-exit drop registered
+                                // on this same slot because that one runs over
+                                // whatever the slot holds THEN — the NEW
+                                // generation stored just below — while this
+                                // call runs over the old one. The elements are
+                                // cap-guarded, so a disarmed element is skipped
+                                // either way.
+                                if let Some(mem) =
+                                    self.synthesize_array_drop_fn_te(elem_ty, &elem_te, n)
+                                {
+                                    self.builder
+                                        .build_call(mem, &[slot.ptr.into()], "")
+                                        .unwrap();
+                                }
                             }
                         }
                     }
