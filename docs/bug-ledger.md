@@ -92,11 +92,11 @@ distinguish "bugs flattening" from "we stopped writing them down."
 
 | class | total |
 |---|---|
-| run-vs-build | 412 |
-| miscompile | 410 |
+| run-vs-build | 414 |
+| miscompile | 411 |
 | leak | 355 |
 | double-free | 234 |
-| missing-feature | 198 |
+| missing-feature | 199 |
 | codegen-gap | 178 |
 | diagnostics | 126 |
 | perf | 113 |
@@ -110,14 +110,14 @@ distinguish "bugs flattening" from "we stopped writing them down."
 
 | surface | total |
 |---|---|
-| codegen | 1769 |
-| interp | 441 |
-| typecheck | 300 |
+| codegen | 1772 |
+| interp | 443 |
+| typecheck | 301 |
 | other | 90 |
 | ownership | 75 |
 | cli | 73 |
 | autopar | 56 |
-| parser | 47 |
+| parser | 48 |
 | runtime | 44 |
 | effect | 29 |
 | resolver | 29 |
@@ -177,7 +177,6 @@ _Generated from `bug-ledger.jsonl` by `scripts/bug-curve.py` (2026-05-20 → 202
 | B-2026-09-14-16 | 2026-09-14 | codegen+interp | low | PROJECTING ONE FIELD OFF A FRESH TEMP DROPS THE TEMP'S OTHER `Drop` BODIES ON EVERY SURFACE -- `let w = (mkw(7).r, 1);` runs the moved leaf's body but never the untouched sibling field's, while a bare discarded `mkw(7);` runs both | — |
 | B-2026-09-14-18 | 2026-09-14 | codegen+interp | medium | AN UNMOVED PART OF AN OWNED `Option` PAYLOAD LOSES ITS `Drop` BODY ON ALL FOUR SURFACES when the arm DESTRUCTURES the payload and returns a different part -- `Some((a, b)) => { return b; }` over `Option[(R, i64)]` prints `got:9 end` everywhere against the due `dR5 got:9 end`, and the two-Drop-element cell loses `dR6` everywhere, so the A/B parity rule sees nothing; this is the cell B-2026-09-13-5 recorded as 'correct on all four surfaces', which its `(R, i64)` sibling could not show | — |
 | B-2026-09-14-22 | 2026-09-14 | codegen | medium | A GENERIC ENUM'S BOXED PAYLOAD LOSES ITS `Drop` BODY ON EVERY COMPILED SURFACE ONCE THE CONSUMING ARM BINDS IT -- `takew(Ho.Full(mkw()))` over a three-`String` payload prints `w:4 end` on JIT/AOT against `--interp`'s `w:4 dW4 end`, and the named-local spelling splits the same way, while the identical callee that does NOT bind the payload is correct on all four and the MONOMORPHIC twin is correct in both shapes -- so the axis is `clear_boxed_enum_inner_drop` retracting the box's interior walk with nothing picking the body up | — |
-| B-2026-09-14-24 | 2026-09-14 | typecheck | low | A NESTED `[..]` LITERAL UNDER A `Vec`-OUTER ANNOTATION DOES NOT TAKE THE INNER `Array[T, N]` TYPE -- `let v: Vec[Array[D, 1]] = [[mkd(1)], [mkd(2)]];` is rejected as `found 'Vec[Vec[D]]'` while the `Array`-outer spelling accepts the identical literal, so the annotation propagates through an `Array` level and not through a `Vec` one | — |
 | B-2026-09-14-26 | 2026-09-14 | codegen | medium | A CONSUMING ARM OVER A BOXED TUPLE ENUM PAYLOAD LEAKS ITS ELEMENTS -- `T.A(p) => taket(p)` over `enum T { A((String, String)), B }` loses 159 B in 6 blocks (21 allocs / 15 frees) while the READ-ONLY arm over the same enum is clean, so it is arm-dependent and distinct from B-2026-09-12-10; it also REFUTES B-2026-09-14-17's guess that a boxed tuple shares the array's double free -- box-only arms leak where interior-walking arms abort | — |
 | B-2026-09-14-28 | 2026-09-14 | codegen | medium | `vertical`'s +85% SSO REGRESSION IS NOT THE DE-INLINE PROBE AND NOT `prefix_string` -- both were ruled out by measurement (c1adb9c removed the probe: +84.1% -> +85.4%; an exact mirror of `prefix_string` runs 9-15% FASTER under SSO), so the worst regression in the corpus is now UNATTRIBUTED. `shortest_distance_iii` (+36%) and `shortest_distance` (+61%) are the same shape. Reachable only at KARAC_SSO=1, which is off by default. | — |
 | B-2026-09-14-29 | 2026-09-14 | codegen | medium | AN INDEX-ASSIGN DISPLACING A STRUCT ELEMENT OF AN `Array` LOSES ITS `Drop` BODY ON THE COMPILED BACKENDS ONLY, AND ITS MEMORY ON BOTH -- `a[0] = D { .. }` over `Array[D, 2]` prints `dD1` under `--interp` and NOT under `karac build`, so the body half is a RUN/BUILD DIVERGENCE the A/B gate can see, while the 10 B `String` field agrees and leaks on both; the `Vec[D]` twin is fully correct, so the owner is `emit_displaced_index_elem_drop`, which resolves its element type from the VEC table only -- and the one-line array-table fallback is a measured TRAP (garbage `dD33`, a cell with no output at all, valgrind MEMERR), because the emitter's element-POINTER path is Vec-shaped too | — |
@@ -190,6 +189,10 @@ _Generated from `bug-ledger.jsonl` by `scripts/bug-curve.py` (2026-05-20 → 202
 | B-2026-09-15-7 | 2026-09-15 | codegen | low | AN INDEX-STORE FREES ONLY THE OUTER BUFFER OF THE `Vec` ELEMENT IT DISPLACES, STRANDING THAT ELEMENT'S OWN ELEMENTS -- `a[0] = <new>` over `Array[Vec[String], 2]` loses the displaced Vec's 5-byte String at -O0, and the `Vec[Vec[String]]` TWIN loses the identical 5 bytes, so this is NOT Array-specific and not B-2026-09-14-30's; it is the outer-buffer-only bound both legs were deliberately given, now measured as a real loss rather than a documented caveat | — |
 | B-2026-09-15-20 | 2026-09-15 | codegen | medium | A WHOLE-CONTAINER REASSIGNMENT OVER A FIXED `Array[T, N]` STRANDS THE DISPLACED ELEMENTS' HEAP -- `let mut v: Array[D, 2] = [..]; v = [..];` loses 34 B in 2 blocks at `-O0` with the output correct and `karac check` clean, while the same reassignment over a `Vec[D]` reclaims its displaced buffer; the MEMORY twin of B-2026-09-14-23's bodies half, on the separate channel B-2026-08-28-57 describes | — |
 | B-2026-09-15-21 | 2026-09-15 | codegen | medium | AN ARM-BOUND PAYLOAD ASSIGNED OVER A `mut` LOCAL STRANDS THE DISPLACED VALUE'S HEAP FIELD, BUT ONLY WHEN THE ENUM ARRIVED AS A BY-VALUE PARAM -- `out = r` inside `fn take(b: E)` loses 2 B per call at -O0 while the identical body in `main`, or over an inline-literal scrutinee, is clean; the displaced value's `Drop` BODY still runs, so only the memory is lost | — |
+| B-2026-09-15-22 | 2026-09-15 | codegen | medium | A `VecDeque` BUILT AS A NESTED SEQUENCE-LITERAL ELEMENT MISCOMPILES ON EVERY COMPILED SURFACE -- `let v: Array[VecDeque[i64], 1] = [[1]];` prints `x:1` under `--interp` and NOTHING AT ALL from `karac run` and both builds, while a flat `VecDeque[i64] = [1, 2, 3]`, a `VecDeque` built by `push`, and every other nested element type (`Array`, `Vec`, `Slice`, `String`) are byte-identical across all four | — |
+| B-2026-09-15-23 | 2026-09-15 | interp+codegen | medium | A NESTED CONTAINER IN A STRUCT FIELD LOSES ITS ELEMENT'S `Drop` BODY ON ALL FOUR SURFACES -- `struct H { xs: Vec[Vec[D]] }` with `H { xs: [[mkd(1)]] }` prints `n:1 end` where the same `Vec[D]` field prints `n:1 dD1 end`, so the field is the variable and no A/B comparison can see it | — |
+| B-2026-09-15-24 | 2026-09-15 | interp+codegen | medium | A USER-DEFINED METHOD THAT DISCARDS A BORROW-PROJECTION ARGUMENT RUNS THE FIELD'S `Drop` BODY TWICE UNDER `--interp` AND ONCE ON EVERY COMPILED SURFACE -- `b.put(w.r)` diverges on all three receiver forms while the identical free and associated spellings agree at one body, because the real discriminator is whether the CALLEE KEEPS THE VALUE, not the call spelling B-2026-09-14-10 reads it as | — |
+| B-2026-09-15-25 | 2026-09-15 | parser+typecheck | low | TWO OF THE FIVE PREFIX-COLLECTION-LITERAL TYPES design.md NAMES DO NOT PARSE -- `VecDeque[1, 2]` reports `'VecDeque' is a type, not a function` and `SortedMap["a": 1]` is a raw parse error on the `:`, while the spec says the form is supported by `Vec`, `Set`, `Map`, `VecDeque`, and `SortedMap` | — |
 
 ### Relocated
 
@@ -2581,6 +2584,7 @@ _Generated from `bug-ledger.jsonl` by `scripts/bug-curve.py` (2026-05-20 → 202
 | B-2026-09-14-20 | codegen | medium | SSO's PROMOTE-ON-MUTATION COSTS 32-40% ON CHAR-BY-CHAR STRING BUILDING, and it is the whole of the remaining corpus regression -- `sso_deinline_in_pl… | c1adb9c |
 | B-2026-09-14-21 | codegen | medium | A DISCARDED ENUM TEMP TAKES THE BY-TRANSFER STAND-DOWN THAT ONLY AN ARGUMENT SHOULD -- `Ex.mk(i);` and its `if`/`match`-tail spellings over an enum w… | 10008a1 |
 | B-2026-09-14-23 | codegen | medium | A WHOLE-CONTAINER REASSIGNMENT LOSES THE DISPLACED CONTAINER'S ELEMENT `Drop` BODIES ON EVERY COMPILED BACKEND -- `let mut v: Vec[D] = [..]; v = [..]… | be0c605 |
+| B-2026-09-14-24 | typecheck | low | A NESTED `[..]` LITERAL UNDER A `Vec`-OUTER ANNOTATION DOES NOT TAKE THE INNER `Array[T, N]` TYPE -- `let v: Vec[Array[D, 1]] = [[mkd(1)], [mkd(2)]];… | 3dc6bbf |
 | B-2026-09-14-25 | codegen | high | AN `Array[D, N]` ENUM PAYLOAD WHOSE ELEMENT CARRIES BOTH HEAP AND A USER `Drop` BODY DOUBLE-FREES ON A CONSUMING ARM -- `Bd.A(a) => takeb(a)` over `e… | a56b9a2 |
 | B-2026-09-14-27 | ownership+codegen | high | READING A NAMED `Array[T, N]` LOCAL AFTER PASSING IT BY VALUE PRINTS GARBAGE ON EVERY COMPILED BACKEND AT EXIT 0 -- `let n = take(a); println(a[0])`… | 9a56c60 |
 | B-2026-09-14-30 | codegen | medium | AN INDEX-ASSIGN WHOSE RHS IS A NAMED LOCAL DOUBLE-FREES THE MOVED-IN VALUE FOR A HEAP-OWNING ARRAY ELEMENT -- `a[0] = v3` over `Array[Vec[i64], 2]` r… | 666d673 |
