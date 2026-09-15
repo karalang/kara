@@ -11456,6 +11456,25 @@ impl<'ctx> super::Codegen<'ctx> {
     /// for `Set`/`SortedSet`, whose elements live in the key half, so a Map
     /// key walk is that same configuration with the Map's own stride
     /// (`key_size + val_size`, which the loop already computes).
+    /// B-2026-09-15-14 — is `name` a PLAIN user enum whose elements need the
+    /// enum drop walk?
+    ///
+    /// `Option` / `Result` are excluded because their payloads are handled by
+    /// the tag-guarded `emit_optres_payload_user_drop_bodies_fn` arm above, and
+    /// a `shared` enum because it releases through the RC path instead — the
+    /// same two exclusions [`Self::emit_vec_elem_user_drop_bodies_fn_mono`]
+    /// makes for the `Vec` element position, kept in lockstep deliberately so
+    /// the two container walks cannot drift apart again.
+    fn enum_elem_needs_drop_walk(&self, name: &str) -> bool {
+        name != "Option"
+            && name != "Result"
+            && self
+                .type_decls
+                .enum_layouts
+                .get(name)
+                .is_some_and(|l| !l.is_shared)
+    }
+
     pub(super) fn emit_map_key_user_drop_bodies_fn(
         &mut self,
         map_te: &TypeExpr,
@@ -11549,11 +11568,40 @@ impl<'ctx> super::Codegen<'ctx> {
             let val_te = val_te.clone();
             Some(self.emit_optres_payload_user_drop_bodies_fn(&val_te)?)
         } else {
-            if !self.type_decls.struct_types.contains_key(&vname)
+            // B-2026-09-15-14 — an ENUM element of a hash container. This gate
+            // asked `struct_types` alone, which an enum name is never in, so
+            // the whole walk declined and a `Set[E]` / `Map[E, _]` / `Map[_, E]`
+            // element ran NO user `Drop` body at all — not late, not doubled,
+            // never. The storage was still reclaimed exactly once, which is why
+            // neither ASAN nor either ratchet leg could see it.
+            //
+            // The hash-container peer of B-2026-08-28-55 (the `Vec` element),
+            // B-2026-08-28-47 (the tuple element) and B-2026-08-28-40 (the
+            // struct field): the same asymmetry, in the last container position
+            // where the enum arm was never written.
+            //
+            // The element's own body and its live-variant PAYLOAD bodies are
+            // emitted at the two call sites below, beside the struct legs, NOT
+            // routed through `nested_val_walker` — that binding REPLACES the
+            // own-body call rather than adding to it, so handing it the payload
+            // walker would have traded a missing payload body for a missing
+            // own body. `type_runs_user_drop` already answers the decline for
+            // an enum (its own `impl Drop` via `drop_method_keys`, or a
+            // Drop-bearing payload via B-2026-08-28-54's leg).
+            let is_enum = self.enum_elem_needs_drop_walk(&vname);
+            if (!is_enum && !self.type_decls.struct_types.contains_key(&vname))
                 || !self.type_runs_user_drop(&vname, &mut Vec::new())
             {
                 return None;
             }
+            None
+        };
+        // B-2026-09-15-14 — the payload half for an enum element, resolved once
+        // here so both emission sites (the sorted walk and the bucket walk) run
+        // the same symbol.
+        let enum_payload_walker = if self.enum_elem_needs_drop_walk(&vname) {
+            self.emit_enum_payload_user_drop_bodies_fn(&vname)
+        } else {
             None
         };
 
@@ -11726,6 +11774,10 @@ impl<'ctx> super::Codegen<'ctx> {
                 if let Some(f) = self.emit_user_drop_field_bodies_fn(&vname, &val_subst) {
                     self.builder.build_call(f, &[tptr.into()], "").unwrap();
                 }
+                // B-2026-09-15-14 — the enum element's live-variant payload.
+                if let Some(f) = enum_payload_walker {
+                    self.builder.build_call(f, &[tptr.into()], "").unwrap();
+                }
             }
             let next_i = self
                 .builder
@@ -11867,6 +11919,10 @@ impl<'ctx> super::Codegen<'ctx> {
                 self.builder.build_call(f, &[vptr.into()], "").unwrap();
             }
             if let Some(f) = self.emit_user_drop_field_bodies_fn(&vname, &val_subst) {
+                self.builder.build_call(f, &[vptr.into()], "").unwrap();
+            }
+            // B-2026-09-15-14 — the enum element's live-variant payload.
+            if let Some(f) = enum_payload_walker {
                 self.builder.build_call(f, &[vptr.into()], "").unwrap();
             }
         }

@@ -67643,3 +67643,95 @@ fn test_every_lookup_entry_point_runs_its_key_temporarys_body() {
         assert_eq!(run(&src), want, "[{label}]");
     }
 }
+
+/// B-2026-09-15-14 — the interpreter half. An enum element of a `Map`/`Set`
+/// ran no user `Drop` body at all, because a plain enum variant fell past the
+/// `Value::Struct` destructure in both map walks — the twin of codegen's
+/// `struct_types`-only gate, silent in exactly the same way on both backends.
+///
+/// The codegen twin is `tests/codegen.rs`'s
+/// `e2e_hash_container_enum_element_runs_its_body`, which asserts the same
+/// cells through `karac build`; both must stay in step, since the whole defect
+/// was the two agreeing on ZERO.
+#[test]
+fn test_hash_container_enum_element_runs_its_body() {
+    const H: &str = "#[derive(Hash, Eq, PartialEq)]\n\
+         enum Tg { Named { s: String }, Num { n: i64 } }\n\
+         impl Drop for Tg { fn drop(mut ref self) { println(\"dD\") } }\n\
+         fn mkd(n: i64) -> Tg { return Tg.Named { s: f\"aaaaaaaaaaaaaaaa-{n}\" }; }\n";
+    for (label, body) in [
+        (
+            "set-element",
+            "fn main() {\n\
+             \x20   let mut s: Set[Tg] = Set.new();\n\
+             \x20   s.insert(mkd(0i64));\n\
+             \x20   println(f\"len:{s.len()}\");\n\
+             }\n",
+        ),
+        (
+            "map-key",
+            "fn main() {\n\
+             \x20   let mut m: Map[Tg, i64] = Map.new();\n\
+             \x20   m.insert(mkd(0i64), 7i64);\n\
+             \x20   println(f\"len:{m.len()}\");\n\
+             }\n",
+        ),
+        (
+            "map-value",
+            "fn main() {\n\
+             \x20   let mut m: Map[i64, Tg] = Map.new();\n\
+             \x20   m.insert(3i64, mkd(0i64));\n\
+             \x20   println(f\"len:{m.len()}\");\n\
+             }\n",
+        ),
+        // The struct-FIELD spelling goes through `run_field_map_half_user_drops`
+        // rather than `run_map_half_user_drops`. The interpreter has two arms
+        // where codegen has one walker, so fixing only the binding arm left
+        // this cell reading `interp=0 build=1` — a run-vs-build divergence
+        // traded for the agreement it replaced. Both arms are patched; this
+        // pins the second.
+        (
+            "set-in-struct-field",
+            "struct Holder { mut s: Set[Tg] }\n\
+             fn main() {\n\
+             \x20   let mut h = Holder { s: Set.new() };\n\
+             \x20   h.s.insert(mkd(0i64));\n\
+             \x20   println(f\"len:{h.s.len()}\");\n\
+             }\n",
+        ),
+    ] {
+        assert_eq!(
+            run(&format!("{H}{body}")),
+            "len:1\ndD\n",
+            "{label}: one body is owed at the container's destruction"
+        );
+    }
+    // CONTROLS — correct before the fix, and what isolate the axis: a `Vec` of
+    // the same enum says the axis is the hash container, a STRUCT element in
+    // the same `Map` says the other half is the element being an enum. A
+    // widening that fired per-container rather than per-element doubles these.
+    assert_eq!(
+        run(&format!(
+            "{H}fn main() {{\n\
+             \x20   let mut v: Vec[Tg] = Vec.new();\n\
+             \x20   v.push(mkd(0i64));\n\
+             \x20   println(f\"len:{{v.len()}}\");\n\
+             }}\n"
+        )),
+        "len:1\ndD\n",
+        "Vec of the same enum"
+    );
+    assert_eq!(
+        run("#[derive(Hash, Eq, PartialEq)]\n\
+             struct Dk { s: String }\n\
+             impl Drop for Dk { fn drop(mut ref self) { println(\"dD\") } }\n\
+             fn mks(n: i64) -> Dk { return Dk { s: f\"aaaaaaaaaaaaaaaa-{n}\" }; }\n\
+             fn main() {\n\
+             \x20   let mut m: Map[Dk, i64] = Map.new();\n\
+             \x20   m.insert(mks(0i64), 7i64);\n\
+             \x20   println(f\"len:{m.len()}\");\n\
+             }\n"),
+        "len:1\ndD\n",
+        "struct element in the same Map"
+    );
+}

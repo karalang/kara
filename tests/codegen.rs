@@ -26387,6 +26387,134 @@ fn main() {
     /// `drop_method_keys` alone. Running it in the interpreter is a one-line
     /// change and was measured to produce exactly the run-vs-build divergence
     /// this row is meant to remove; the shape is real and filed separately.
+    /// B-2026-09-15-14 — an enum element of a HASH CONTAINER ran no user
+    /// `Drop` body at all: not late, not doubled, never. The storage was still
+    /// reclaimed exactly once, so ASAN and both ratchet legs were blind to it,
+    /// and both backends were silent identically so an A/B kata could not see
+    /// it either.
+    ///
+    /// The last container position whose enum arm was never written — the peer
+    /// of B-2026-08-28-55 (`Vec` element), B-2026-08-28-47 (tuple element) and
+    /// B-2026-08-28-40 (struct field). Codegen declined because
+    /// `emit_map_half_user_drop_bodies_fn` gated on `struct_types`, which an
+    /// enum name is never in; the interpreter declined because a plain enum
+    /// variant fell past the `Value::Struct` destructure in both map walks.
+    ///
+    /// The CONTROL rows are the half that pins the axis: a `Vec` of the same
+    /// enum and a `Map` with a STRUCT element were both already correct, so the
+    /// defect is hash-container storage of an ENUM specifically, not enums and
+    /// not containers.
+    #[test]
+    fn e2e_hash_container_enum_element_runs_its_body() {
+        const H: &str = "#[derive(Hash, Eq, PartialEq)]\n\
+             enum Tg { Named { s: String }, Num { n: i64 } }\n\
+             impl Drop for Tg { fn drop(mut ref self) { println(\"dD\") } }\n\
+             fn mkd(n: i64) -> Tg { return Tg.Named { s: f\"aaaaaaaaaaaaaaaa-{n}\" }; }\n";
+        for (label, body, want) in [
+            // The row's own cell: a Set element, insert only, no lookup.
+            (
+                "set-element",
+                "fn main() {\n\
+                 \x20   let mut s: Set[Tg] = Set.new();\n\
+                 \x20   s.insert(mkd(0i64));\n\
+                 \x20   println(f\"len:{s.len()}\");\n\
+                 }\n",
+                "len:1\ndD\n",
+            ),
+            (
+                "map-key",
+                "fn main() {\n\
+                 \x20   let mut m: Map[Tg, i64] = Map.new();\n\
+                 \x20   m.insert(mkd(0i64), 7i64);\n\
+                 \x20   println(f\"len:{m.len()}\");\n\
+                 }\n",
+                "len:1\ndD\n",
+            ),
+            // NOT in the row, measured on this fix: the enum as the map's
+            // VALUE. The row listed it as the open question that would say
+            // whether the defect is about KEYS or about hash-container
+            // elements generally. It is the latter — this was silent too.
+            (
+                "map-value",
+                "fn main() {\n\
+                 \x20   let mut m: Map[i64, Tg] = Map.new();\n\
+                 \x20   m.insert(3i64, mkd(0i64));\n\
+                 \x20   println(f\"len:{m.len()}\");\n\
+                 }\n",
+                "len:1\ndD\n",
+            ),
+            // Also not in the row: the container held as a struct FIELD rather
+            // than a local binding. Codegen reaches both spellings through one
+            // walker, but the interpreter has two — patching only the binding
+            // one turned this cell into a run-vs-build divergence mid-fix
+            // (`interp=0 build=1`), which is what put the second arm in scope.
+            (
+                "set-in-struct-field",
+                "struct Holder { mut s: Set[Tg] }\n\
+                 fn main() {\n\
+                 \x20   let mut h = Holder { s: Set.new() };\n\
+                 \x20   h.s.insert(mkd(0i64));\n\
+                 \x20   println(f\"len:{h.s.len()}\");\n\
+                 }\n",
+                "len:1\ndD\n",
+            ),
+        ] {
+            let prog = format!("{H}{body}");
+            assert_eq!(run_program(&prog).as_deref(), Some(want), "{label}");
+        }
+        // The SORTED sibling, the row's other open question: it destroys in KEY
+        // order through a different walk (the `karac_map_sorted_keys` leg), and
+        // was silent in the same way. Its own prelude because `SortedSet`
+        // requires `#[derive(Ord)]` on the element.
+        assert_eq!(
+            run_program(
+                "#[derive(Hash, Eq, PartialEq, Ord)]\n\
+                 enum Tg { Named { s: String }, Num { n: i64 } }\n\
+                 impl Drop for Tg { fn drop(mut ref self) { println(\"dD\") } }\n\
+                 fn mkd(n: i64) -> Tg { return Tg.Named { s: f\"aaaaaaaaaaaaaaaa-{n}\" }; }\n\
+                 fn main() {\n\
+                 \x20   let mut s: SortedSet[Tg] = SortedSet.new();\n\
+                 \x20   s.insert(mkd(0i64));\n\
+                 \x20   println(f\"len:{s.len()}\");\n\
+                 }\n"
+            )
+            .as_deref(),
+            Some("len:1\ndD\n"),
+            "sorted-set element — the sorted walk had the same hole"
+        );
+        // CONTROLS — both already correct before the fix, and both are what
+        // isolate the axis. A widening that fired per-container rather than
+        // per-element shows up here as a doubled body.
+        const CH: &str = "#[derive(Hash, Eq, PartialEq)]\n\
+             struct Dk { s: String }\n\
+             impl Drop for Dk { fn drop(mut ref self) { println(\"dD\") } }\n\
+             fn mks(n: i64) -> Dk { return Dk { s: f\"aaaaaaaaaaaaaaaa-{n}\" }; }\n";
+        assert_eq!(
+            run_program(&format!(
+                "{CH}fn main() {{\n\
+                 \x20   let mut m: Map[Dk, i64] = Map.new();\n\
+                 \x20   m.insert(mks(0i64), 7i64);\n\
+                 \x20   println(f\"len:{{m.len()}}\");\n\
+                 }}\n"
+            ))
+            .as_deref(),
+            Some("len:1\ndD\n"),
+            "struct element in the same Map — the control that says the axis is the ENUM"
+        );
+        assert_eq!(
+            run_program(&format!(
+                "{H}fn main() {{\n\
+                 \x20   let mut v: Vec[Tg] = Vec.new();\n\
+                 \x20   v.push(mkd(0i64));\n\
+                 \x20   println(f\"len:{{v.len()}}\");\n\
+                 }}\n"
+            ))
+            .as_deref(),
+            Some("len:1\ndD\n"),
+            "Vec of the same enum — the control that says the axis is the HASH CONTAINER"
+        );
+    }
+
     #[test]
     fn e2e_own_drop_enum_member_runs_its_body_when_never_destructured() {
         const H: &str = "enum E { A(R), B }\n\

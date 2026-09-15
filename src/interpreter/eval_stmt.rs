@@ -4517,6 +4517,24 @@ impl<'a> super::Interpreter<'a> {
                     self.run_discarded_value_user_drops(v);
                     continue;
                 }
+                // B-2026-09-15-14 — the struct-FIELD peer of the binding-level
+                // enum leg in `run_map_half_user_drops`, with the same hole:
+                // a plain user enum variant fell past the `Value::Struct`
+                // destructure below and ran no body.
+                //
+                // Fixed here rather than left for a follow-up because codegen
+                // reaches BOTH spellings through the one
+                // `emit_map_half_user_drop_bodies_fn`, so the codegen half of
+                // this fix already covers the field spelling. Patching only the
+                // binding arm would have turned a two-backend agreement
+                // (silent/silent) into a run-vs-build DIVERGENCE — measured
+                // exactly that way mid-fix: `struct Holder { s: Set[Tg] }` read
+                // `interp=0 build=1` with the binding arm patched and this one
+                // not.
+                if declared_head.as_deref() == Some(enum_name.as_str()) || val_is_own_param {
+                    self.run_discarded_value_user_drops(v);
+                }
+                continue;
             }
             // B-2026-08-03-7 — the TUPLE-valued sibling, silent here for the
             // same reason: a tuple TE has no declared head for the gate below.
@@ -7511,6 +7529,30 @@ impl<'a> super::Interpreter<'a> {
                     self.run_discarded_value_user_drops(v);
                     continue;
                 }
+                // B-2026-09-15-14 — a PLAIN user enum element. Without this
+                // leg the variant fell past the `Value::Struct` destructure
+                // below and was skipped outright, so a `Set[E]` / `Map[E, _]` /
+                // `Map[_, E]` element ran NO user `Drop` body at all — the
+                // interpreter twin of the `struct_types`-only gate in codegen's
+                // `emit_map_half_user_drop_bodies_fn`, wrong by the same
+                // omission and measuring identically on both backends.
+                //
+                // Routed through `run_discarded_value_user_drops` rather than
+                // open-coded because its enum arm already draws the
+                // own-`Drop`-vs-payload distinction this needs, and states why:
+                // an own-`impl Drop` enum runs its OWN body only (firing
+                // payloads too would print bodies `karac build` does not,
+                // B-2026-08-01-2 probe p3), while a user value enum takes the
+                // declared-type-driven payload walk. Open-coding it would have
+                // been a second copy of that rule to drift.
+                //
+                // Declared-head gated exactly like the struct arm below, so the
+                // walk fires only for the element type the container was
+                // declared with.
+                if declared_head.as_deref() == Some(enum_name.as_str()) {
+                    self.run_discarded_value_user_drops(v);
+                }
+                continue;
             }
             // B-2026-08-03-7 — a TUPLE-valued V (`Map[i64, (Option[Res], i64)]`).
             // A tuple TE has no declared HEAD, so the name gate below can never
