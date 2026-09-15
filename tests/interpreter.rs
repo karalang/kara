@@ -37149,6 +37149,51 @@ fn main() {
     );
 }
 
+/// B-2026-09-01-27 — the INTERPRETER half of the enum-shell / payload `Drop`
+/// body ORDER pin; `tests/codegen.rs`'s
+/// `e2e_enum_shell_body_follows_its_moved_out_payload_body` holds the compiled
+/// side against this same string.
+///
+/// This is the side the row reported as wrong: `--interp` ran the payload's
+/// body BEFORE the shell's while both compiled backends ran the shell first,
+/// so the COUNTS agreed and only the sequence differed. At `edb7236~1` the
+/// interpreter had additionally started running `dR8` twice, and
+/// B-2026-09-03-7's fix closed both halves in one commit.
+///
+/// The `named` cell is the control: identical on both sides of that fix, which
+/// is what puts the defect on the FRESH TEMP rather than on the destructure.
+#[test]
+fn test_enum_shell_body_follows_its_moved_out_payload_body() {
+    assert_eq!(
+        run(r#"struct R { id: i64 }
+impl Drop for R { fn drop(mut ref self) { println(f"  dR{self.id}") } }
+enum E { A(R), B }
+impl Drop for E { fn drop(mut ref self) { println("  dE") } }
+struct T { n: i64 }
+
+impl T {
+    fn take(ref self, b: E) -> i64 {
+        let mut out: R = R { id: 0 };
+        match b { E.A(r) => { out = r; } E.B => { } }
+        println("  m"); return out.id;
+    }
+}
+
+fn main() {
+    let t: T = T { n: 1 };
+    println("fresh");
+    let v: i64 = t.take(E.A(R { id: 8 })); println(f"  v{v}")
+    println("named");
+    let e: E = E.A(R { id: 9 });
+    let w: i64 = t.take(e); println(f"  w{w}")
+    println("done")
+}
+"#),
+        "fresh\n  dR0\n  m\n  dE\n  dR8\n  v8\nnamed\n  dR0\n  m\n  dE\n  dR9\n  w9\ndone\n",
+        "an enum shell's Drop body runs before the payload it handed out"
+    );
+}
+
 #[test]
 fn test_struct_pattern_destructure_of_owned_param_is_a_view() {
     assert_eq!(

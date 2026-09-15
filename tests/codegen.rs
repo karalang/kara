@@ -19743,6 +19743,62 @@ fn main() {
         );
     }
 
+    /// B-2026-09-01-27 — the ORDER of an enum shell's `Drop` body against the
+    /// body of the payload it handed out, for a FRESH-TEMP method argument.
+    ///
+    /// The row reported `--interp` running the payload's body BEFORE the
+    /// shell's (`dR0 m dR8 dE v8`) where both compiled backends ran the shell
+    /// first, so the counts agreed and only the sequence differed. By the time
+    /// it was re-measured the interpreter had ALSO started running `dR8`
+    /// twice — `dR0 m dR8 dE dR8 v8` at `edb7236~1` — and B-2026-09-03-7's fix
+    /// (`edb7236`, a method's fresh-temp argument runs its body after the call
+    /// returns) closed both halves at once: same shape, same hook, one commit.
+    ///
+    /// The `named` cell is the CONTROL, and is why this pin carries two. It
+    /// printed the correct string on BOTH sides of that fix, which is what
+    /// localizes the defect to the fresh temp rather than to the destructure or
+    /// to the enum's own `Drop`: with a named binding the caller owns the value
+    /// and fires it, and the frame merely retracts.
+    ///
+    /// `R` deliberately carries NO heap field. The same shape WITH one
+    /// (`tag: String`) strands 2 bytes per call at `-O0` — a separate, still
+    /// open leak whose discriminator is the enum arriving as a BY-VALUE PARAM —
+    /// and this pin is about PLACEMENT, so it must not go red when that is
+    /// fixed.
+    #[test]
+    fn e2e_enum_shell_body_follows_its_moved_out_payload_body() {
+        assert_eq!(
+            run_program(
+                r#"struct R { id: i64 }
+impl Drop for R { fn drop(mut ref self) { println(f"  dR{self.id}") } }
+enum E { A(R), B }
+impl Drop for E { fn drop(mut ref self) { println("  dE") } }
+struct T { n: i64 }
+
+impl T {
+    fn take(ref self, b: E) -> i64 {
+        let mut out: R = R { id: 0 };
+        match b { E.A(r) => { out = r; } E.B => { } }
+        println("  m"); return out.id;
+    }
+}
+
+fn main() {
+    let t: T = T { n: 1 };
+    println("fresh");
+    let v: i64 = t.take(E.A(R { id: 8 })); println(f"  v{v}")
+    println("named");
+    let e: E = E.A(R { id: 9 });
+    let w: i64 = t.take(e); println(f"  w{w}")
+    println("done")
+}
+"#
+            ),
+            Some("fresh\n  dR0\n  m\n  dE\n  dR8\n  v8\nnamed\n  dR0\n  m\n  dE\n  dR9\n  w9\ndone\n".to_string()),
+            "an enum shell's Drop body runs before the payload it handed out"
+        );
+    }
+
     #[test]
     fn e2e_struct_pattern_destructure_of_owned_param_is_a_view() {
         let Some(out) = run_program(
