@@ -94,8 +94,8 @@ distinguish "bugs flattening" from "we stopped writing them down."
 |---|---|
 | run-vs-build | 416 |
 | miscompile | 414 |
-| leak | 363 |
-| double-free | 236 |
+| leak | 364 |
+| double-free | 237 |
 | missing-feature | 199 |
 | codegen-gap | 178 |
 | diagnostics | 126 |
@@ -110,7 +110,7 @@ distinguish "bugs flattening" from "we stopped writing them down."
 
 | surface | total |
 |---|---|
-| codegen | 1791 |
+| codegen | 1793 |
 | interp | 453 |
 | typecheck | 301 |
 | other | 94 |
@@ -187,10 +187,11 @@ _Generated from `bug-ledger.jsonl` by `scripts/bug-curve.py` (2026-05-20 → 202
 | B-2026-09-16-6 | 2026-09-16 | codegen+interp | medium | TWO BODIES-CHANNEL GAPS FOR AN `Array[T, N]` HELD IN A TUPLE, both found while pinning the output twin of B-2026-09-13-23's memory fix and both memory-clean under it: a tuple in a STRUCT FIELD runs no element `Drop` body on ANY backend, and a DESTRUCTURED tuple runs them under `--interp` and on NEITHER compiled backend -- an agreed silence and a run-vs-build divergence in the same family | — |
 | B-2026-09-16-7 | 2026-09-16 | other | medium | THE ARCHIVE FRESHNESS CHECK COVERS ONLY THE TWO ASAN LEGS -- `link_or_skip` is still PRESENCE-ONLY, so the ordinary `cargo test --features llvm` run (the one everybody actually runs, and the one CI runs) still executes E2E fixtures against a runtime archive of any age with nothing to say so; `karac_jit_runner` has the identical exposure and is not checked either; and a `KARAC_RUNTIME=<path>` override outside `target/release/` is not inspected at all. B-2026-09-16-4 fixed the legs and NAMED these three in its closing prose, which is where work goes to be forgotten. | — |
 | B-2026-09-16-8 | 2026-09-16 | other | medium | `bug-lint.sh` SKIPS ITS FIX-SHA RESOLVABILITY CHECK ON EVERY CLOUD CONTAINER, WHICH IS WHERE THE ORPHANS ARE CREATED -- the check is disabled outright on a shallow clone (`rev-parse --is-shallow-repository`), and cloud sessions are shallow by default, so the one detector for a row citing a commit that exists nowhere on `main` is off in exactly the environment that produces them. EIGHT rows now carry a `SHA NOTE` recording an orphan, against the two CLAUDE.md names; the most recent was created and caught by hand 2026-09-16, with the lint reporting 0 errors on the same tree. | — |
-| B-2026-09-16-10 | 2026-09-16 | codegen | high | A GENERIC SINGLE-FIELD VARIANT AT `T = Array[String, N]` SEGFAULTS ON EVERY COMPILED BACKEND -- `G1.Y(a)` over `enum G1[T] { Y(T), N }` passed to a generic `fn glen[T](g: G1[T])` exits 139 with NO OUTPUT AT ALL, five invalid reads under valgrind, and B-2026-09-15-18 records this exact shape as its CLEAN CONTROL | — |
 | B-2026-09-16-11 | 2026-09-16 | codegen | low | THE ENUM TWIN OF B-2026-09-05-32'S IDENTITY ARM STILL LEAKS -- `e = if c { pass(e) } else { e }` over `enum E { A(String), B }` loses 36 bytes in 1 block (12 allocs / 11 frees at -O0) while the all-owned-calls spelling `else { mk() }` is 12 / 12 clean on the same tree; the enum overwrite path consumes the STRICT `roundtrip_frees_old` because it has no distinctness guard, so widening the shared predicate would have traded the leak for a use-after-free there | — |
 | B-2026-09-16-13 | 2026-09-16 | codegen | medium | A USER ENUM RETURNED BY A CALL AND PASSED BY VALUE LEAKS ITS PAYLOAD -- `eat(mk(i))` over `enum T { A(String), B }` loses 58 B in 2 blocks (13 allocs / 11 frees) with a callee that never reads the argument, while the SAME value through a named local is clean; not the callee's body, not the payload shape, and not `Option`/`Result` | — |
 | B-2026-09-16-14 | 2026-09-16 | interp | low | THE INTERPRETER RUNS A TRANSFERRED STRUCT-FIELD LEAF'S `Drop` BODY TWICE WHERE EVERY COMPILED BACKEND RUNS IT ONCE -- `let c = H2 { r: mk(1) }; match c { H2 { r } => { let m: R = r; return m.id } }` prints `dR1 dR1` under `--interp` and `dR1` on jit / aot / `KARAC_AUTO_PAR=0`; the enum-leaf spellings double the whole `dE dR` pair, and `return e` out of the arm runs a full pair AT THE ARM before the value reaches the caller, who then runs it again | — |
+| B-2026-09-16-15 | 2026-09-16 | codegen | medium | A BOXED GENERIC-ENUM PAYLOAD'S INTERIOR IS LOST IN TWO SHAPES ONCE THE CRASH IS OUT OF THE WAY -- `Array[String, N]` strands its element buffers (64 B in 4 over two rounds) and a payload matched into an UNUSED arm binding strands the payload itself (10 B per call); the second is attributed to `boxed_payload_interior_taken_by_arm` answering TRUE for a bare generic parameter through its `_ => p.generic_args.is_none()` tail, a spelling B-2026-09-12-5 never enumerated | — |
+| B-2026-09-16-16 | 2026-09-16 | codegen | medium | A PASSTHROUGH GENERIC PARAM OVER A BOXED ENUM PAYLOAD DOUBLE FREES -- `fn idG[T](g: G1[T]) -> G1[T] { return g }` over `enum G1[T] { Y(T), N }` at `T = String` exits 139 with two `Invalid free()` and 12 allocs / 14 frees against a correct `--interp`; B-2026-09-16-10's fix cannot reach it by construction, because the prologue declines an escaping param so BOTH halves correctly stand down and the second owner is elsewhere | — |
 
 ### Relocated
 
@@ -2622,6 +2623,7 @@ _Generated from `bug-ledger.jsonl` by `scripts/bug-curve.py` (2026-05-20 → 202
 | B-2026-09-16-1 | codegen | medium | `s[a..b]` STILL REACHES SSO CONSTRUCTION THROUGH AN OPAQUE CALL -- `karac_string_slice_into`, the slice-syntax sibling of the `karac_string_try_inlin… | 066695ffc |
 | B-2026-09-16-4 | other | medium | THE ASAN RATCHET LEGS RUN THE OPT-IN-ARCHIVE FIXTURES AGAINST A RUNTIME THAT CAN BE ARBITRARILY OLD, AND NOTHING DETECTS IT -- every archive check in… | d7a2486 |
 | B-2026-09-16-9 | codegen | high | REGRESSION ON `main`: `506a91d` TURNED THE `(Array[String, 2], i64)` ENUM-PAYLOAD CELL FROM A LEAK INTO AN INVALID FREE -- valgrind reports `Invalid… | 49e75a8 |
+| B-2026-09-16-10 | codegen | high | A GENERIC SINGLE-FIELD VARIANT AT `T = Array[String, N]` SEGFAULTS ON EVERY COMPILED BACKEND -- `G1.Y(a)` over `enum G1[T] { Y(T), N }` passed to a g… | 55a8db2 |
 | B-2026-09-16-12 | interp+codegen | medium | A MIXED BIND-AND-WILDCARD MATCH ARM LOSES THE WILDCARDED PAYLOAD FIELD'S `Drop` BODY -- `let w = W2.Two(mk(41), mk(42)); match w { W2.Two(a, _) => {… | c9432558c |
 
 </details>
