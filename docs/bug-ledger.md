@@ -92,7 +92,7 @@ distinguish "bugs flattening" from "we stopped writing them down."
 
 | class | total |
 |---|---|
-| run-vs-build | 417 |
+| run-vs-build | 418 |
 | miscompile | 415 |
 | leak | 365 |
 | double-free | 237 |
@@ -111,7 +111,7 @@ distinguish "bugs flattening" from "we stopped writing them down."
 | surface | total |
 |---|---|
 | codegen | 1799 |
-| interp | 458 |
+| interp | 459 |
 | typecheck | 301 |
 | other | 94 |
 | ownership | 75 |
@@ -176,7 +176,6 @@ _Generated from `bug-ledger.jsonl` by `scripts/bug-curve.py` (2026-05-20 → 202
 | B-2026-09-15-29 | 2026-09-15 | codegen | low | THE `if let` SIBLING OF B-2026-09-02-31 STILL LEAKS ITS MOVED-OUT PAYLOAD -- `(if let Ve.A(s) = mkVe(i) { s } else { .. }).len()` in a nested expression position loses 310 B over 20 evaluations at -O0, unchanged by that row's fix, because the escaping-value discriminator it added has exactly one consuming read site and that site is `compile_match` | — |
 | B-2026-09-15-30 | 2026-09-15 | codegen | low | A MONOMORPH BODY NEVER INSTALLS `discarded_branch_spans`, so every branch inside a generic instantiation reads as NON-DISCARDED -- the sibling of the gap B-2026-09-02-31 fixed for its own span set, left alone there because it is a behaviour change that row did not measure | — |
 | B-2026-09-15-33 | 2026-09-15 | codegen+interp | medium | AN INDEX-ASSIGN WHOSE RHS IS A NAMED LOCAL RUNS THE DISPLACED ELEMENT'S `Drop` BODY UNDER `--interp` AND ON NO COMPILED SURFACE -- `a[0] = b` diverges on the `Array` AND `Vec` legs alike while the fresh-literal RHS agrees, because `store_destroys_displaced` classifies an identifier RHS as a RELOCATION on purpose (B-2026-08-26-21); the open question is whether `a[0] = b` is a relocation at all, not why the call is missing | — |
-| B-2026-09-15-34 | 2026-09-15 | interp | medium | A SHADOWED BINDING REBOUND THROUGH A CALL RUNS ITS USER `Drop` BODY TWICE IN THE INTERPRETER -- `let q = mk(15); let q = idr(q);` prints `dR15 dR15` under `karac run --interp` against one body on both compiled backends; needs BOTH the shadowing and the call, and two controls show each is necessary | — |
 | B-2026-09-16-3 | 2026-09-16 | codegen | low | THE NESTED STORE `d[i][j] = x` LEAKS THE DISPLACED TUPLE'S HEAP -- 5 B in 1 block at `-O0` over `Vec[Vec[(String, i64)]]`, and the one-line fix the shape invites (a tuple arm in `emit_elem_store_releasing_displaced`) is a DOUBLE FREE, because that helper also runs for the single-level store which 6c0f802 already releases through the drop emitter | — |
 | B-2026-09-16-5 | 2026-09-16 | codegen | low | A BY-VALUE TUPLE PARAM HOLDING AN `Array[T, N]` STILL LEAKS ITS ELEMENTS IN TWO SHAPES -- a param moved to a LOCAL inside the callee, and a FRESH TEMPORARY argument whose param is returned -- because the two available ownership models each break the other's cell: the entry copy orphans a temporary's buffers, and transfer needs a caller-side disarm that has no hook for a tuple argument | — |
 | B-2026-09-16-6 | 2026-09-16 | codegen+interp | medium | TWO BODIES-CHANNEL GAPS FOR AN `Array[T, N]` HELD IN A TUPLE, both found while pinning the output twin of B-2026-09-13-23's memory fix and both memory-clean under it: a tuple in a STRUCT FIELD runs no element `Drop` body on ANY backend, and a DESTRUCTURED tuple runs them under `--interp` and on NEITHER compiled backend -- an agreed silence and a run-vs-build divergence in the same family | — |
@@ -191,6 +190,7 @@ _Generated from `bug-ledger.jsonl` by `scripts/bug-curve.py` (2026-05-20 → 202
 | B-2026-09-16-19 | 2026-09-16 | codegen+interp | medium | A `Vec`-NESTING INSIDE AN `Option` OR `Map` FIELD RUNS ITS ELEMENT'S `Drop` BODY ON `--interp` AND ON NO COMPILED SURFACE -- `H { xs: Option[Vec[D]] }` and `H { xs: Map[i64, Vec[D]] }` both print `dD1` under the tree-walk backend and nothing under the JIT or either `build`, which REFUTES the premise `type_runs_user_drop`'s own comment rests on | — |
 | B-2026-09-16-20 | 2026-09-16 | codegen | low | `karac_string_try_inline_into` IS DEAD ABI SURFACE -- no caller anywhere in the compiler since `9d3ceb9` removed its declaration from `runtime_fns.rs` and `codegen.rs`, and the JIT is not a second path (it goes through the same codegen), so no compiled Kara program on any backend references it; it remains a `#[no_mangle]` export in `runtime/src/clone.rs`, exercised only by its own unit tests and by the encoding-contract test. Keep-or-remove was deliberately deferred as 'a separate decision' and nothing tracks it. | — |
 | B-2026-09-16-22 | 2026-09-16 | codegen+interp | low | AN OWNED ENUM RECEIVER THAT ESCAPES THROUGH THE RETURN RUNS ITS SHELL `Drop` BODY TWICE, AND A CHAINED CALL OVER THE SAME SHAPE RUNS NO BODY AT ALL -- `let b = a.ret_self()` prints `dE dR6 dE` and `E.A(mk(14)).ret_self().none()` prints nothing, both agreed on all four surfaces with memory balanced | — |
+| B-2026-09-16-23 | 2026-09-16 | interp | low | TWO SHADOW-REBIND SPELLINGS STILL DOUBLE THE `Drop` BODY IN THE INTERPRETER -- a NESTED BLOCK (`{ let q = idr(q); .. }`) and an `if`-WRAPPED RHS both print `dR15 dR15` against one body on `karac build`; the first is out of the retraction's SCOPE and the second is a genuine per-path question the all-paths predicate correctly declines, so they need different repairs | — |
 
 ### Relocated
 
@@ -2621,6 +2621,7 @@ _Generated from `bug-ledger.jsonl` by `scripts/bug-curve.py` (2026-05-20 → 202
 | B-2026-09-15-28 | interp+codegen | medium | A `Vec[T]`-TYPED STRUCT FIELD ASSIGNED A FRESH CONTAINER LOSES THE DISPLACED ELEMENTS' `Drop` BODIES -- `h.v = [..]` prints the surviving elements' b… | ad35a8a |
 | B-2026-09-15-31 | codegen | low | AN INDEX-ASSIGN OVER A CONTAINER OF TUPLES LEAKS THE DISPLACED TUPLE'S HEAP ELEMENTS, ON BOTH THE `Array` AND THE `Vec` LEG -- 10 B in 1 block at `-O… | 6c0f802 |
 | B-2026-09-15-32 | codegen+interp | medium | A NESTED `Array[Array[T, N], M]` INDEX-ASSIGN LOSES THE DISPLACED INNER ARRAY'S ELEMENT `Drop` BODIES AND LEAKS THEIR HEAP, ON BOTH BACKENDS -- `a[0]… | 6c0f802 |
+| B-2026-09-15-34 | interp | medium | A SHADOWED BINDING REBOUND THROUGH A CALL RUNS ITS USER `Drop` BODY TWICE IN THE INTERPRETER -- `let q = mk(15); let q = idr(q);` prints `dR15 dR15`… | 1cf1d8e |
 | B-2026-09-15-35 | codegen+interp | low | A STRUCT FIELD DECLARED AS A BARE GENERIC PARAM BOUND TO A CONTAINER LOSES ITS ELEMENTS' `Drop` BODIES ON ALL FOUR SURFACES -- `G[T] { a: T }` at `T… | 19a6674 |
 | B-2026-09-15-36 | other | medium | THE CODEGEN E2E HARNESS IGNORES TYPECHECK ERRORS, so a fixture cell whose program DOES NOT COMPILE runs on the interpreter anyway and passes green wh… | 5daa730 |
 | B-2026-09-16-1 | codegen | medium | `s[a..b]` STILL REACHES SSO CONSTRUCTION THROUGH AN OPAQUE CALL -- `karac_string_slice_into`, the slice-syntax sibling of the `karac_string_try_inlin… | 066695ffc |
