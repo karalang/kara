@@ -13082,6 +13082,13 @@ impl<'ctx> super::Codegen<'ctx> {
                     let rhs_mentions_lhs = crate::deque_head::expr_mentions_name_deep(value, name);
                     let roundtrip_frees_old =
                         rhs_mentions_lhs && self.assign_rhs_is_owned_user_call(value);
+                    // B-2026-09-05-32 — the same question with an identity arm
+                    // admitted. Used ONLY by the struct overwrite-cleanup gate
+                    // and its guarded arm below, both of which compare the old
+                    // and incoming values before freeing; every other consumer
+                    // of `roundtrip_frees_old` stays on the strict predicate.
+                    let roundtrip_frees_old_guarded = rhs_mentions_lhs
+                        && self.assign_rhs_is_owned_user_call_or_identity(value, name.as_str());
                     if lhs_is_tracked_struct
                         && !rhs_is_self_alias
                         && self
@@ -13094,7 +13101,7 @@ impl<'ctx> super::Codegen<'ctx> {
                                     .get(tn.as_str())
                                     .is_none_or(|ps| ps.is_empty())
                             })
-                        && (!rhs_mentions_lhs || roundtrip_frees_old)
+                        && (!rhs_mentions_lhs || roundtrip_frees_old_guarded)
                     {
                         if let (Some(tn), Some(slot)) = (
                             self.var_types.var_type_names.get(name.as_str()).cloned(),
@@ -13105,9 +13112,110 @@ impl<'ctx> super::Codegen<'ctx> {
                                 // Drop and non-Drop structs alike — the
                                 // wrapper would also run the body, doubling
                                 // the NLL fire.
-                                _ if roundtrip_frees_old => {
+                                _ if roundtrip_frees_old_guarded => {
                                     if let Some(f) = self.emit_struct_drop_synthesis(&tn) {
-                                        self.builder.build_call(f, &[slot.ptr.into()], "").unwrap();
+                                        // B-2026-09-05-32 — GUARDED on the old
+                                        // and incoming values being DISTINCT.
+                                        //
+                                        // `e = if c { pass(e) } else { e }` was
+                                        // declined entirely by
+                                        // `assign_rhs_is_owned_user_call`, because
+                                        // a bare identifier arm is not a `Call`:
+                                        // admitting it unguarded would free the
+                                        // very buffer the store is about to write
+                                        // back, trading a leak for a
+                                        // use-after-free on the taken-else path.
+                                        // So the shape leaked (12 allocs / 11
+                                        // frees at `-O0`) and had to.
+                                        //
+                                        // A BIT-IDENTITY TEST IS THE EXACT
+                                        // DISCRIMINATOR, not a heuristic, and the
+                                        // reason is easy to miss: `pass(r) { return
+                                        // r }` reads as an identity function, so
+                                        // both arms look like they alias. They do
+                                        // not — owned args are DEEP-COPIED at
+                                        // callee entry (caller-retains), so the
+                                        // roundtrip arm returns a buffer at a
+                                        // different address and the old one is
+                                        // genuinely orphaned by the store, while
+                                        // `else { e }` yields the old value itself.
+                                        // Comparing the two aggregates therefore
+                                        // no-ops on precisely the arm that would
+                                        // have become a use-after-free and fires on
+                                        // precisely the one that leaks.
+                                        //
+                                        // Done with `memcmp` over the whole struct
+                                        // rather than per-heap-field pointer
+                                        // compares, so this needs no field
+                                        // classification and no second synthesis
+                                        // emitter: the equal case is exactly
+                                        // "nothing about the value changed", which
+                                        // is when there is nothing to reclaim.
+                                        let guarded = (|| {
+                                            let st =
+                                                *self.type_decls.struct_types.get(tn.as_str())?;
+                                            let size =
+                                                self.ensure_target_data().ok()?.get_store_size(&st);
+                                            let fn_val = self.current_fn?;
+                                            let tmp = self
+                                                .builder
+                                                .build_alloca(st, "reassign.new.cmp")
+                                                .ok()?;
+                                            self.builder.build_store(tmp, val).ok()?;
+                                            let i64_t = self.context.i64_type();
+                                            let rc = self
+                                                .builder
+                                                .build_call(
+                                                    self.runtime_fns.memcmp_fn,
+                                                    &[
+                                                        slot.ptr.into(),
+                                                        tmp.into(),
+                                                        i64_t.const_int(size, false).into(),
+                                                    ],
+                                                    "reassign.memcmp",
+                                                )
+                                                .ok()?
+                                                .try_as_basic_value()
+                                                .unwrap_basic()
+                                                .into_int_value();
+                                            let differs = self
+                                                .builder
+                                                .build_int_compare(
+                                                    inkwell::IntPredicate::NE,
+                                                    rc,
+                                                    self.context.i32_type().const_int(0, false),
+                                                    "reassign.differs",
+                                                )
+                                                .ok()?;
+                                            let free_bb = self
+                                                .context
+                                                .append_basic_block(fn_val, "reassign.free");
+                                            let skip_bb = self
+                                                .context
+                                                .append_basic_block(fn_val, "reassign.skip");
+                                            self.builder
+                                                .build_conditional_branch(differs, free_bb, skip_bb)
+                                                .ok()?;
+                                            self.builder.position_at_end(free_bb);
+                                            self.builder
+                                                .build_call(f, &[slot.ptr.into()], "")
+                                                .ok()?;
+                                            self.builder
+                                                .build_unconditional_branch(skip_bb)
+                                                .ok()?;
+                                            self.builder.position_at_end(skip_bb);
+                                            Some(())
+                                        })();
+                                        if guarded.is_none() {
+                                            // No struct type, no target data, or no
+                                            // enclosing fn: fall back to the
+                                            // unguarded call, which is the
+                                            // pre-B-2026-09-05-32 behaviour for
+                                            // every shape that reached here before.
+                                            self.builder
+                                                .build_call(f, &[slot.ptr.into()], "")
+                                                .unwrap();
+                                        }
                                     }
                                 }
                                 // A Drop-declaring type fires only while the
@@ -22336,6 +22444,33 @@ impl<'ctx> super::Codegen<'ctx> {
                     Some(crate::ast::TypeKind::Ref(_) | crate::ast::TypeKind::MutRef(_))
                 ))
         })
+    }
+
+    /// B-2026-09-05-32 — [`Self::assign_rhs_is_owned_user_call`] widened to
+    /// admit an IDENTITY ARM, for the one caller that guards the free.
+    ///
+    /// `e = if c { pass(e) } else { e }` is the shape the strict predicate
+    /// declines, and declining it was right while the free was unguarded: the
+    /// `else` arm's value IS the old value, so freeing the old slot's heap
+    /// before the store would free the buffer about to be written back — a leak
+    /// traded for a use-after-free. With the overwrite cleanup now gated on the
+    /// old and incoming values being DISTINCT (see the `roundtrip_frees_old`
+    /// arm in `compile_stmt_inner`), the identity arm is safe to admit: it
+    /// compares equal and the free is skipped, while the roundtripping arm
+    /// compares unequal and the free fires.
+    ///
+    /// Deliberately a SEPARATE predicate rather than a widening of its sibling.
+    /// `roundtrip_frees_old` also feeds the enum paths further down, which have
+    /// no such guard, so admitting the identity arm there would reintroduce
+    /// exactly the use-after-free this one avoids.
+    fn assign_rhs_is_owned_user_call_or_identity(&self, value: &Expr, target: &str) -> bool {
+        let mut tails = Vec::new();
+        Self::assign_rhs_value_tails(value, &mut tails);
+        !tails.is_empty()
+            && tails.iter().all(|t| {
+                self.tail_is_owned_user_call(t)
+                    || matches!(&t.kind, ExprKind::Identifier(n) if n == target)
+            })
     }
 
     fn assign_rhs_is_owned_user_call(&self, value: &Expr) -> bool {

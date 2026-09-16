@@ -6491,14 +6491,15 @@ fn main() {
     /// `bnest`, `bil` and `belif` were all listed NOT MEASURED on the row and
     /// were confirmed to leak identically while fixing it.
     ///
-    /// NOT FIXED, and deliberately left as it was: an arm that hands the
-    /// binding back UNCHANGED (`e = if c { pass(e) } else { e }`). Its value IS
-    /// the old value, so the cleanup would free the buffer about to be stored
-    /// back — a leak traded for a use-after-free. A bare identifier is not a
-    /// `Call`, so the predicate declines the whole branch and that spelling is
-    /// byte-for-byte unchanged (measured 12 / 11 both before and after, with no
-    /// new ASAN error). Tracked on its own row; it is absent here because this
-    /// fixture asserts a CLEAN run and that shape still leaks.
+    /// THE IDENTITY ARM was left out of this fixture and is now FIXED on its own
+    /// row (B-2026-09-05-32), with its own fixture directly below —
+    /// `asan_self_assign_identity_arm_frees_only_the_distinct_value`. The note
+    /// that stood here said the shape was declined because freeing would trade a
+    /// leak for a use-after-free; that was true of an UNGUARDED free, and the
+    /// fix guards it on the old and incoming values being distinct rather than
+    /// widening the predicate blindly. It is still absent from THIS fixture
+    /// because this one pins the strict predicate's reach, which deliberately
+    /// does not include it.
     ///
     /// COVERAGE, weaker than it looks and stated for the same reason the
     /// sibling states it: the leak is OPTIMIZATION-DEPENDENT. Measured pre-fix
@@ -6581,6 +6582,89 @@ fn main() {
                 "bnod 9",
             ],
             "asan_self_assign_branch_arms_free_the_overwritten_value",
+        );
+    }
+
+    /// B-2026-09-05-32 — the IDENTITY-ARM spelling of the row above:
+    /// `e = if c { pass(e) } else { e }`, where one arm hands the binding back
+    /// unchanged.
+    ///
+    /// Its parent's predicate declines this outright — a bare identifier is not
+    /// a `Call` — and that was correct while the overwrite cleanup was
+    /// UNGUARDED: the `else` arm's value IS the old value, so freeing the old
+    /// slot's heap before the store would free the buffer about to be written
+    /// back, trading a 2-byte leak for a use-after-free. The fix guards the free
+    /// on the old and incoming values being DISTINCT, then admits the shape.
+    ///
+    /// WHY A BIT-IDENTITY TEST IS THE EXACT DISCRIMINATOR, and not a heuristic:
+    /// `pass(r) { return r }` reads as an identity function, so both arms look
+    /// like they alias. They do not. Owned args are DEEP-COPIED at callee entry
+    /// (caller-retains), so the roundtripping arm returns a buffer at a
+    /// different address and the old one is genuinely orphaned by the store,
+    /// while `else { e }` yields the old value itself. The comparison therefore
+    /// no-ops on precisely the arm that would have become a use-after-free and
+    /// fires on precisely the one that leaks.
+    ///
+    /// FOUR CELLS, and the middle two are the ones that matter:
+    ///   `a`  the ROUNDTRIPPING arm taken — the leak, 12 allocs / 11 frees
+    ///        at `-O0` pre-fix, 12 / 12 after.
+    ///   `b`  the IDENTITY arm taken — the use-after-free hazard. It prints its
+    ///        `name` field AFTER the assignment, so a freed buffer surfaces as
+    ///        garbage or a sanitizer report rather than passing quietly.
+    ///   `c`  a 20-iteration loop ALTERNATING the two arms, which is where the
+    ///        leak is unbounded and where a wrong guard would fail on one
+    ///        iteration in two.
+    ///   `d`  MIXED arms (`else { mk(9) }`), the shape the parent already
+    ///        covers, kept here so a regression that narrowed the guard too far
+    ///        shows up beside the widening rather than only in the parent.
+    ///
+    /// Every cell prints its `name` after the store for the reason cell `b`
+    /// does: the output assertion is what makes this a use-after-free test and
+    /// not only a leak test, and it fails at BOTH opt levels if the guard ever
+    /// inverts. The memory half is `-O0`-carried as the parent's is — at `-O2`
+    /// LLVM deletes the redundant allocation.
+    #[test]
+    fn asan_self_assign_identity_arm_frees_only_the_distinct_value() {
+        assert_clean_asan_run(
+            r#"
+struct R { id: i64, name: String }
+impl Drop for R { fn drop(mut ref self) { println(f"drop {self.id}") } }
+fn pass(r: R) -> R { return r; }
+fn mk(n: i64) -> R { return R { id: n, name: f"e{n}" } }
+fn main() {
+    let mut a = mk(1);
+    let t: bool = true;
+    a = if t { pass(a) } else { a };
+    println(f"A use {a.id} {a.name}");
+
+    let mut b = mk(2);
+    let f: bool = false;
+    b = if f { pass(b) } else { b };
+    println(f"B use {b.id} {b.name}");
+
+    let mut c = mk(3);
+    let mut i: i64 = 0;
+    while i < 20 { c = if i % 2 == 0 { pass(c) } else { c }; i = i + 1; }
+    println(f"C use {c.id} {c.name}");
+
+    let mut d = mk(4);
+    d = if t { pass(d) } else { mk(9) };
+    println(f"D use {d.id} {d.name}");
+    println("end");
+}
+"#,
+            &[
+                "A use 1 e1",
+                "drop 1",
+                "B use 2 e2",
+                "drop 2",
+                "C use 3 e3",
+                "drop 3",
+                "D use 4 e4",
+                "drop 4",
+                "end",
+            ],
+            "self_assign_identity_arm_frees_only_the_distinct_value",
         );
     }
 
