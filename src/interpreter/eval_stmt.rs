@@ -1060,7 +1060,7 @@ impl<'a> super::Interpreter<'a> {
     fn freeze_shadowed_drop_slots(
         &mut self,
         stmt: &Stmt,
-        cleanup: &mut [CleanupAction],
+        cleanup: &mut Vec<CleanupAction>,
         shadowed: &[(String, Value)],
     ) {
         if shadowed.is_empty() {
@@ -1070,17 +1070,91 @@ impl<'a> super::Interpreter<'a> {
             return;
         }
         for (name, value) in shadowed {
+            // B-2026-09-15-34 — a value that travelled OUT THROUGH A CALL AND
+            // BACK is the SAME object the new binding now holds, so freezing a
+            // copy of it here gives one object two owners and runs its user
+            // `Drop` body twice: `let q = mk(15); let q = idr(q);` printed
+            // `dR15 dR15` under `--interp` against one body on both compiled
+            // backends, and three-deep shadowing printed three.
+            //
+            // The freeze itself is right and load-bearing for every other
+            // spelling — `let q = mk(16)` must still run the shadowed value's
+            // body, and so must `let q = takeb(q, mk(16))` and
+            // `let q = fresh(q)`, where the call consumes `q` but hands back a
+            // DIFFERENT object. All three agree with codegen today and are
+            // pinned as controls.
+            //
+            // So the discriminator is not "does the RHS mention the name" (that
+            // admits the two cases above) and not structural equality (a callee
+            // may return an equal-but-distinct value). It is whether the callee
+            // hands THAT argument back on every path, which is exactly
+            // `fn_always_returns_param` — already the predicate the
+            // interpreter's own method frame uses to decide which by-value
+            // params it owns at exit. When it answers yes the callee owns
+            // nothing at its exit, the returned value IS the argument, and the
+            // new binding is its single owner.
+            let hands_back = self.let_rhs_hands_shadowed_binding_back(stmt, name);
             let Some(idx) = cleanup
                 .iter()
                 .rposition(|a| matches!(a, CleanupAction::Drop { name: n } if n == name))
             else {
                 continue;
             };
+            if hands_back {
+                // RETRACT rather than freeze, which is the correction to this
+                // fix's first shape. Skipping the freeze alone left the stale
+                // `Drop { name }` slot in place beside the one
+                // `push_drops_for_stmt` is about to add for the new binding,
+                // and BOTH re-read `env[name]` at fire time — so the object
+                // still ran its body twice, just through two plain slots
+                // instead of a frozen copy. `let q = q` reaches scope exit with
+                // one slot because `suppress_let_rebind_user_drop` retracted
+                // the source; this is that same retraction, for the spelling
+                // whose move goes out through a call and back.
+                cleanup.remove(idx);
+                continue;
+            }
             cleanup[idx] = CleanupAction::DropShadowed {
                 name: name.clone(),
                 value: value.clone(),
             };
         }
+    }
+
+    /// B-2026-09-15-34 — does this `let`'s value expression hand `name`'s
+    /// value straight back, so the new binding holds the very object the old
+    /// one did?
+    ///
+    /// True only for a CALL that passes `name` at an argument position the
+    /// callee returns on every path. `fn_always_returns_param` is the
+    /// all-paths form deliberately: a callee that returns the argument on
+    /// SOME paths lets it die inside on the others, and the frozen copy is
+    /// what runs its body there.
+    ///
+    /// Free functions only. A method or associated call reaches this with a
+    /// `Path` callee and answers `false`, which keeps today's behaviour for
+    /// every spelling not measured on the row.
+    fn let_rhs_hands_shadowed_binding_back(&self, stmt: &Stmt, name: &str) -> bool {
+        let StmtKind::Let { value, .. } = &stmt.kind else {
+            return false;
+        };
+        let ExprKind::Call { callee, args } = &value.kind else {
+            return false;
+        };
+        let ExprKind::Identifier(fn_name) = &callee.kind else {
+            return false;
+        };
+        let Some(arg_index) = args
+            .iter()
+            .position(|a| matches!(&a.value.kind, ExprKind::Identifier(n) if n == name))
+        else {
+            return false;
+        };
+        self.program.items.iter().any(|item| {
+            matches!(item, crate::ast::Item::Function(f)
+                if &f.name == fn_name
+                    && crate::ast::fn_always_returns_param(Some(self.program), f, arg_index))
+        })
     }
 
     /// Fire any `Drop` slot whose binding's last use was the just-    /// Fire any `Drop` slot whose binding's last use was the just-

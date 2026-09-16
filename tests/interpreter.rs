@@ -40787,6 +40787,123 @@ fn test_shadowed_binding_drops_its_own_value() {
     }
 }
 
+/// B-2026-09-15-34 — a shadowed binding whose `let` sends the value OUT THROUGH
+/// A CALL AND BACK ran its user `Drop` body TWICE under `--interp`, against one
+/// body on both compiled backends. Three-deep shadowing ran it three times.
+///
+/// The interpreter's cleanup slots are NAME-KEYED and resolve through the env
+/// when they fire, so two live slots for one name both land on the survivor.
+/// `let q = q` avoids that because `suppress_let_rebind_user_drop` retracts the
+/// source's slot; that helper reads a bare identifier or a struct-literal field
+/// initializer, and a value that travels out through `idr(q)` and back is moved
+/// just as surely but was not seen. The repair retracts the stale slot for
+/// exactly that spelling.
+///
+/// THE DISCRIMINATOR IS "DOES THE CALLEE HAND THAT ARGUMENT BACK", not "does the
+/// RHS mention the name", and the three guard rails below are why. `let q =
+/// mk(16)` does not mention `q` and must still freeze the shadowed value's body.
+/// `takeb(q, mk(16))` and `fresh(q)` DO consume `q` and still must freeze,
+/// because each hands back a DIFFERENT object — so a rule keyed on mentioning
+/// the name, or on the new value being `Drop`-bearing, or on structural
+/// equality (a callee may return an equal-but-distinct value) gets all three
+/// wrong. `fn_always_returns_param` answers it directly, and its ALL-PATHS form
+/// is deliberate: a callee that returns the argument on only some paths lets it
+/// die inside on the others, where the frozen copy is what runs its body.
+///
+/// Every expectation here is the measured output of `karac run --interp` and
+/// `karac build` on the same program, so this is a parity pin: the compiled
+/// column was correct throughout and is what the interpreter is being held to.
+///
+/// TWO SPELLINGS ARE KNOWN TO REMAIN and are filed rather than pinned green
+/// here: shadowing inside a NESTED BLOCK, where the outer binding's slot lives
+/// in a cleanup list this retraction cannot reach, and an `if`/`match`-WRAPPED
+/// RHS, which hands the value back on one path only and so is the "some paths"
+/// case the all-paths predicate correctly declines.
+#[test]
+fn test_shadowed_rebind_through_a_call_drops_once() {
+    const HDR: &str = "struct R { id: i64 }\n\
+                       impl Drop for R { fn drop(mut ref self) { println(f\"dR{self.id}\") } }\n\
+                       fn mk(n: i64) -> R { R { id: n } }\n\
+                       fn idr(r: R) -> R { r }\n\
+                       fn eat(r: R) -> i64 { r.id }\n\
+                       fn two(a: R, b: R) -> R { a }\n\
+                       fn takeb(a: R, b: R) -> R { b }\n\
+                       fn fresh(a: R) -> R { R { id: 99 } }\n";
+    for (label, src, want) in [
+        (
+            "shadow-through-call",
+            format!("{HDR}fn main() {{ let q = mk(15); let q = idr(q); println(f\"q={{q.id}}\") }}\n"),
+            "q=15\ndR15\n",
+        ),
+        (
+            "shadow-through-call-unread",
+            format!("{HDR}fn main() {{ let q = mk(15); let q = idr(q); println(\"mid\") }}\n"),
+            "dR15\nmid\n",
+        ),
+        (
+            "shadow-through-call-three-deep",
+            format!(
+                "{HDR}fn main() {{ let q = mk(15); let q = idr(q); let q = idr(q); println(f\"q={{q.id}}\") }}\n"
+            ),
+            "q=15\ndR15\n",
+        ),
+        (
+            "shadow-through-two-arg-call",
+            format!(
+                "{HDR}fn main() {{ let q = mk(15); let b = mk(16); let q = two(q, b); println(f\"q={{q.id}}\") }}\n"
+            ),
+            "dR16\nq=15\ndR15\n",
+        ),
+        // Guard rail: the callee consumes `q` and hands back a DIFFERENT
+        // object, so the shadowed value still needs its frozen body.
+        (
+            "guard-callee-returns-other-arg",
+            format!(
+                "{HDR}fn main() {{ let q = mk(15); let q = takeb(q, mk(16)); println(f\"q={{q.id}}\") }}\n"
+            ),
+            "q=16\ndR16\ndR15\n",
+        ),
+        (
+            "guard-callee-returns-fresh",
+            format!("{HDR}fn main() {{ let q = mk(15); let q = fresh(q); println(f\"q={{q.id}}\") }}\n"),
+            "q=99\ndR99\ndR15\n",
+        ),
+        // Guard rail: the RHS does not mention `q` at all — the freeze is what
+        // runs the shadowed value's body and must stay.
+        (
+            "guard-shadow-unrelated-value",
+            format!("{HDR}fn main() {{ let q = mk(15); let q = mk(16); println(f\"q={{q.id}}\") }}\n"),
+            // The never-read `q`(15) dies at the block's endpoint here rather
+            // than at its own `let`, because the `println` is the block's FINAL
+            // EXPRESSION; the statement spelling gives `dR15 q=16 dR16`. Both
+            // backends agree on both spellings, which is what makes either a
+            // legitimate pin.
+            "q=16\ndR16\ndR15\n",
+        ),
+        // Guard rail: the call consumes `q` and returns a scalar, so the new
+        // binding owns nothing and the frozen body is the only one.
+        (
+            "guard-call-returns-scalar",
+            format!("{HDR}fn main() {{ let q = mk(15); let q = eat(q); println(f\"n={{q}}\") }}\n"),
+            "n=15\ndR15\n",
+        ),
+        // Guard rail: the pre-existing bare-rebind and renamed spellings, which
+        // were correct before this and must stay at one body.
+        (
+            "guard-bare-rebind",
+            format!("{HDR}fn main() {{ let q = mk(15); let q = q; println(f\"q={{q.id}}\") }}\n"),
+            "q=15\ndR15\n",
+        ),
+        (
+            "guard-renamed-through-call",
+            format!("{HDR}fn main() {{ let q = mk(15); let r = idr(q); println(f\"r={{r.id}}\") }}\n"),
+            "r=15\ndR15\n",
+        ),
+    ] {
+        assert_eq!(run(&src), want, "case {label}");
+    }
+}
+
 /// The codegen twin is `e2e_owned_param_temps_drop_in_reverse_argument_order`
 /// and asserts the SAME expected output for every case here, which is the whole
 /// point: the counts always agreed, so nothing but an absolute expectation on
