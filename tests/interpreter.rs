@@ -34645,6 +34645,84 @@ fn test_set_element_drop_bodies_fire() {
 /// all three now follow the declared-type-driven walk codegen's
 /// `__karac_dropelems_enum_<E>` admits, so the backends agree on every
 /// quadrant.
+/// B-2026-09-09-21 — a discarded TUPLE return ran no element `Drop` body on
+/// ANY backend: `f(mk(20));` over `fn f(r: R) -> (R, i64)` printed only its
+/// trailing statement. The value is built, handed to `f`, returned inside a
+/// tuple and dropped on the floor at the `;`, so it owes exactly one body.
+///
+/// Because all four surfaces agreed, the A/B rule (`run` == `build`) passed and
+/// every parity gate in the tree was silent — only reading the expected output
+/// showed it. That is why the fix moved BOTH backends in one commit: the row
+/// deliberately left the compiled side bodyless when it fixed the matching LEAK
+/// (`asan_discarded_tuple_temp_frees_its_interior` pinned the bodyless stdout
+/// as an interlock), because a compiled-only body would have turned a silent
+/// agreed-wrong into a run-vs-build divergence — strictly worse.
+///
+/// Cells 3-5 are the controls that matter. A discarded BARE struct already
+/// fired before this fix, so the gap was the aggregate wrapper rather than the
+/// discard position; a tuple with no `Drop`-bearing element must stay silent;
+/// and a BOUND tuple must still run exactly ONE body at its binding's end, not
+/// a second from the discard walk.
+#[test]
+fn test_discarded_tuple_return_runs_its_element_drop_body() {
+    let prelude = "struct R { id: i64, name: String }\n\
+                   impl Drop for R { fn drop(mut ref self) { println(f\"dR{self.id}\") } }\n\
+                   fn mk(i: i64) -> R { return R { id: i, name: f\"h{i}\" }; }\n\
+                   fn f(r: R) -> (R, i64) { return (r, 9); }\n";
+
+    // 1 -- the row's shape: a bare discard statement.
+    assert_eq!(
+        run(&format!(
+            "{prelude}fn main() {{ f(mk(20)); println(\"ok\"); }}\n"
+        )),
+        "dR20\nok\n"
+    );
+
+    // 2 -- the `let _ =` spelling. The row recorded this path as a different
+    //      one (`discarded_movable_literal_tail`) and NOT measured; it was
+    //      broken the same way and is fixed by the same pair.
+    assert_eq!(
+        run(&format!(
+            "{prelude}fn main() {{ let _ = f(mk(22)); println(\"ok\"); }}\n"
+        )),
+        "dR22\nok\n"
+    );
+
+    // 3 -- CONTROL: the discarded BARE struct, correct before this fix.
+    assert_eq!(
+        run(&format!(
+            "{prelude}fn main() {{ mk(21); println(\"ok\"); }}\n"
+        )),
+        "dR21\nok\n"
+    );
+
+    // 4 -- CONTROL: a tuple whose elements have no user `Drop` must stay
+    //      silent. The emitter's own type gate is what keeps it so.
+    assert_eq!(
+        run("fn g(i: i64) -> (i64, i64) { return (i, 9); }\n\
+             fn main() { g(5); println(\"ok\"); }\n"),
+        "ok\n"
+    );
+
+    // 5 -- CONTROL, and the one that would catch a double fire: a BOUND tuple
+    //      owns its destructured element's body, so the discard walk must not
+    //      add a second. Exactly one `dR24`.
+    //
+    //      It lands BEFORE `ok`, not after: `a` is never read again, so its
+    //      live range ends at the `let` and design.md § Part 8 puts the body at
+    //      the live-range end rather than at scope exit. Pinned in the order
+    //      the implementation actually produces — the first draft of this cell
+    //      asserted `ok` first and failed on that, which is worth recording
+    //      because the COUNT (one) is what this control is for and the count
+    //      was right all along.
+    assert_eq!(
+        run(&format!(
+            "{prelude}fn main() {{ let (a, b) = f(mk(24)); println(\"ok\"); }}\n"
+        )),
+        "dR24\nok\n"
+    );
+}
+
 #[test]
 fn test_enum_return_discard_runs_payload_body() {
     // B-2026-09-10-2 — the `e` quadrant's ORACLE CHANGED. The note above

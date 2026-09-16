@@ -23212,6 +23212,13 @@ impl<'ctx> super::Codegen<'ctx> {
             && !handled_boxed_result
             && !handled_boxed_option
             && self.try_track_discarded_tuple_temp(tail, val);
+        // B-2026-09-09-21 — the BODIES half the arm above declined, now that
+        // the interpreter half lands with it. After the memory registration:
+        // the drain is LIFO, so this runs BEFORE those frees, which is the
+        // order a body that reads its element needs.
+        if handled_tuple {
+            self.track_discarded_tuple_return_bodies(tail, val);
+        }
         // B-2026-09-12-2 — a discarded fixed-`Array` temp (`passthru(a);` over
         // `fn passthru(x: Array[String, 2]) -> Array[String, 2]`), the sibling
         // of the tuple arm above and reached for the same reason: every arm is
@@ -23685,6 +23692,91 @@ impl<'ctx> super::Codegen<'ctx> {
         self.track_user_drop_var_with_fn(
             "",
             "__disc_optres_tmp",
+            slot,
+            bodies,
+            UserDropKind::ContainerElemBodies,
+        );
+    }
+
+    /// B-2026-09-09-21 — the BODIES peer of the discarded tuple temp's MEMORY
+    /// walk, and the tuple sibling of
+    /// [`Self::track_discarded_optres_payload_bodies`].
+    ///
+    /// `f(mk(20));` over `fn f(r: R) -> (R, i64)` dropped the returned tuple on
+    /// the floor at the `;` running NO element body, on every backend — the
+    /// value dies and its destructor is never called, and because all four
+    /// surfaces agreed the A/B rule was silent on it. The discarded BARE struct
+    /// (`mk(20);`) already fired, so the gap was the aggregate wrapper rather
+    /// than the discard position.
+    ///
+    /// WHY NOT THROUGH THE AGGREGATE REGISTRAR. `track_discarded_owned_aggregate_temp`
+    /// owns the MEMORY half for this shape, and its bodies leg is gated
+    /// ALL-FRESH and keyed on the tail EXPRESSION's elements — a call tail has
+    /// none to read, and `declared_elem_tes` is the channel for supplying them.
+    /// Threading it in from here would put a new caller into a registrar whose
+    /// own comments record repeated double-fire regressions at this exact site
+    /// (B-2026-08-01-8, B-2026-08-28-2, B-2026-09-05-33/-36, B-2026-09-06-17).
+    /// This peer instead does what the optres one does: resolve the type, emit
+    /// the bodies fn, register it on the discard frame. The two are disjoint by
+    /// construction — a CALL tail here, a literal tail there.
+    ///
+    /// A tuple LITERAL tail is therefore excluded: it has its own leg in the
+    /// discard arm, and registering here too would double every element body.
+    /// B-2026-09-09-21 — the BODIES half of [`Self::try_track_discarded_tuple_temp`],
+    /// whose own comment records that bodies were deliberately left out: at the
+    /// time `--interp` ran none either, so registering here alone would have
+    /// turned a silent agreed-wrong into a run-vs-build divergence out of a
+    /// leak fix. The interpreter half lands in the same commit as this, which
+    /// is what makes it safe to add — and the pinned expectations in
+    /// `asan_discarded_tuple_temp_frees_its_interior` are updated there too,
+    /// the interlock that row set up on purpose.
+    ///
+    /// `f(mk(20));` over `fn f(r: R) -> (R, i64)` builds an `R`, hands it to
+    /// `f`, gets it back inside a tuple and drops it on the floor at the `;`.
+    /// The value dies, so its `Drop` body owes exactly one run, and no backend
+    /// gave one. The discarded BARE struct (`mk(20);`) already fired through
+    /// `try_track_discarded_user_drop_temp`, so the gap was the aggregate
+    /// wrapper rather than the discard position.
+    ///
+    /// Element types come from `tuple_binding_elem_tes`, the same helper the
+    /// memory walk uses, so the two halves can never disagree about what the
+    /// tuple holds. Registered AFTER the memory battery for the reason the
+    /// optres peer states: the drain is LIFO, so a later registration runs
+    /// EARLIER, and a body must read its element before the memory walk frees
+    /// it.
+    fn track_discarded_tuple_return_bodies(&mut self, tail: &Expr, val: BasicValueEnum<'ctx>) {
+        let BasicValueEnum::StructValue(sv) = val else {
+            return;
+        };
+        let Some(elem_tes) = self.tuple_binding_elem_tes(None, tail) else {
+            return;
+        };
+        let agg_ty = sv.get_type();
+        if agg_ty == self.vec_struct_type() || agg_ty.count_fields() as usize != elem_tes.len() {
+            return;
+        }
+        let Some(cur_fn) = self
+            .builder
+            .get_insert_block()
+            .and_then(|bb| bb.get_parent())
+        else {
+            return;
+        };
+        // Emitted BEFORE the alloca and store: the sub-emitters may synthesize a
+        // function and move the builder's insert block — the hazard
+        // `vec_element_drain_fn`'s doc states for its own callers. The emitter
+        // declines a tuple with no user-`Drop`-bearing element, which is the
+        // type gate this function needs and does not repeat.
+        let Some(bodies) = self.emit_tuple_elem_user_drop_bodies_fn(agg_ty, &elem_tes) else {
+            return;
+        };
+        let slot = self.create_entry_alloca(cur_fn, "__disc_tuple_bodies", agg_ty.into());
+        if self.builder.build_store(slot, val).is_err() {
+            return;
+        }
+        self.track_user_drop_var_with_fn(
+            "",
+            "__disc_tuple_bodies",
             slot,
             bodies,
             UserDropKind::ContainerElemBodies,

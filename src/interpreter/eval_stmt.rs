@@ -9530,6 +9530,30 @@ impl<'a> super::Interpreter<'a> {
                                         self.run_enum_payload_user_drops_value(&payload_src);
                                     }
                                 }
+                            } else if matches!(&discarded, Value::Tuple(_)) {
+                                // B-2026-09-09-21 — a discarded TUPLE return
+                                // (`f(mk(20));` over `fn f(r: R) -> (R, i64)`).
+                                // The chain below asks for the callee's declared
+                                // return TYPE NAME, and a tuple has none, so this
+                                // shape fell out of the dispatch entirely and ran
+                                // no element body — on this backend and on all
+                                // three compiled ones, which is why the A/B rule
+                                // never reported it.
+                                //
+                                // The shared walker already recurses tuple
+                                // elements; only this site's routing was missing.
+                                // Gated on the VALUE being a tuple rather than on
+                                // the callee's signature, which is what makes it
+                                // disjoint from the named-return arm below: a
+                                // named struct return is a `Value::Struct`.
+                                //
+                                // Codegen twin: `track_discarded_tuple_return_bodies`,
+                                // landed in the same commit. Either half alone would
+                                // turn a silent agreed-wrong into a run-vs-build
+                                // divergence, which is why B-2026-09-09-21 left the
+                                // memory-only fix in place and pinned the parity in
+                                // `asan_discarded_tuple_temp_frees_its_interior`.
+                                self.run_discarded_value_user_drops(discarded);
                             } else if let Some(tn) = self.user_fn_return_type_name(fn_name) {
                                 // B-2026-09-06-1 — a GENERIC callee's declared
                                 // return is its own parameter; the value says

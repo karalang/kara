@@ -87112,7 +87112,14 @@ fn main() {
              fn mk(i: i64) -> R { return R { id: i, name: f\"hhhhhhhh{i}{seed()}\", inner: Inner { v: i } }; }\n\
              fn f(r: R) -> (R, i64) { return (r, 9); }\n\
              fn main() { f(mk(20)); println(\"ok\"); }\n",
-            &["ok"],
+            // B-2026-09-09-21 — `dR20` is NEW here, and this cell is the
+            // interlock that row built on purpose. It pinned the bodyless
+            // parity so that whichever commit gave this shape its `Drop` body
+            // would FAIL here and be forced to move the interpreter in the same
+            // change, rather than shipping a compiled-only body and turning a
+            // silent agreed-wrong into a run-vs-build divergence. Both halves
+            // landed together; all four surfaces now print exactly one body.
+            &["dR20", "ok"],
             "b14-discarded-tuple-shared-field",
         );
 
