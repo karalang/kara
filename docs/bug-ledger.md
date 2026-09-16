@@ -2614,7 +2614,7 @@ _Generated from `bug-ledger.jsonl` by `scripts/bug-curve.py` (2026-05-20 → 202
 | B-2026-09-15-32 | codegen+interp | medium | A NESTED `Array[Array[T, N], M]` INDEX-ASSIGN LOSES THE DISPLACED INNER ARRAY'S ELEMENT `Drop` BODIES AND LEAKS THEIR HEAP, ON BOTH BACKENDS -- `a[0]… | 6c0f802 |
 | B-2026-09-15-36 | other | medium | THE CODEGEN E2E HARNESS IGNORES TYPECHECK ERRORS, so a fixture cell whose program DOES NOT COMPILE runs on the interpreter anyway and passes green wh… | 5daa730 |
 | B-2026-09-16-1 | codegen | medium | `s[a..b]` STILL REACHES SSO CONSTRUCTION THROUGH AN OPAQUE CALL -- `karac_string_slice_into`, the slice-syntax sibling of the `karac_string_try_inlin… | 066695ffc |
-| B-2026-09-16-4 | other | medium | THE ASAN RATCHET LEGS RUN THE OPT-IN-ARCHIVE FIXTURES AGAINST A RUNTIME THAT CAN BE ARBITRARILY OLD, AND NOTHING DETECTS IT -- every archive check in… | 9f1ba4f |
+| B-2026-09-16-4 | other | medium | THE ASAN RATCHET LEGS RUN THE OPT-IN-ARCHIVE FIXTURES AGAINST A RUNTIME THAT CAN BE ARBITRARILY OLD, AND NOTHING DETECTS IT -- every archive check in… | d7a2486 |
 
 </details>
 
