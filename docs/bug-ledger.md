@@ -101,7 +101,7 @@ distinguish "bugs flattening" from "we stopped writing them down."
 | diagnostics | 126 |
 | other | 121 |
 | perf | 114 |
-| false-positive | 107 |
+| false-positive | 108 |
 | soundness | 95 |
 | crash | 83 |
 | use-after-free | 42 |
@@ -112,7 +112,7 @@ distinguish "bugs flattening" from "we stopped writing them down."
 |---|---|
 | codegen | 1799 |
 | interp | 459 |
-| typecheck | 301 |
+| typecheck | 302 |
 | other | 94 |
 | ownership | 75 |
 | cli | 73 |
@@ -130,7 +130,6 @@ _Generated from `bug-ledger.jsonl` by `scripts/bug-curve.py` (2026-05-20 → 202
 
 | id | date | surface | sev | title | tracker |
 |---|---|---|---|---|---|
-| B-2026-09-06-23 | 2026-09-06 | interp+codegen | low | THE COPY A MATERIALIZING `match` ARM TAKES OFF A BORROW-PROJECTION SCRUTINEE NEVER RUNS THE ENUM SHELL'S OWN `Drop` BODY, ON EVERY BACKEND -- `match h.e { E.A(r) => { let m = r; return m.id; } .. }` through `mut ref h` prints `dR1 dE dR1` (the copy's payload body, then the original's shell and payload) where the `let e = h.e; match e { .. }` spelling of the same copy prints `dE dR1 dE dR1`; a fresh-temp or local scrutinee (`match mk(7) { .. }`, `let e = mk(8); match e { .. }`) does run its shell's `dE` after the payload moves out | — |
 | B-2026-09-06-39 | 2026-09-06 | interp+codegen | low | A READ-ONLY ARM OVER AN OWNED ENUM RECEIVER RUNS THE PAYLOAD'S `Drop` BODY BEFORE THE SHELL'S ON EVERY SURFACE -- `a.m_read()` prints `dR1 dE`, the reverse of the local-scrutinee order B-2026-08-28-67 established (`dE dR`, shell then fields per design.md § Part 8), so the same read-only arm orders its two bodies differently depending on whether the scrutinee is `self` or a local | — |
 | B-2026-09-06-54 | 2026-09-06 | interp+codegen | low | AN OWNED-`self` ENUM RECEIVER'S PAYLOAD `Drop` BODY RUNS NOWHERE WHEN THE CALLEE BINDS NOTHING OUT -- `fn plain(self, c: bool) -> i64 { return 1; }` called on `E.A(mk(16))` prints `dE` and never `dR16`, on --interp / jit / aot / `KARAC_AUTO_PAR=0` alike, for a named receiver and a fresh temp; the same receiver prints `dR16 dE` the moment the callee matches on `self` | — |
 | B-2026-09-07-1 | 2026-09-07 | interp+codegen | low | A DEEP-CHAIN MOVE-OUT WHOSE HOP IS THEN BOUND OUT RUNS THE MOVED LEAF'S `Drop` BODY TWICE, AND THE SECOND FIRE READS A HUSK ON THE COMPILED BACKENDS -- `let x = o.h.r; let Outer { h, k } = o;` prints `dR1 dR2 dR1` on all four surfaces, and with a `String` field the compiled second fire is `dR1/` (empty name) against `--interp`'s `dR1/n1` | — |
@@ -2632,6 +2631,7 @@ _Generated from `bug-ledger.jsonl` by `scripts/bug-curve.py` (2026-05-20 → 202
 | B-2026-09-16-12 | interp+codegen | medium | A MIXED BIND-AND-WILDCARD MATCH ARM LOSES THE WILDCARDED PAYLOAD FIELD'S `Drop` BODY -- `let w = W2.Two(mk(41), mk(42)); match w { W2.Two(a, _) => {… | c9432558c |
 | B-2026-09-16-17 | codegen+interp | medium | AN ENUM VARIANT'S PAYLOAD FIELDS RUN THEIR `Drop` BODIES IN DECLARATION ORDER ON ALL FOUR SURFACES, while a struct's run in REVERSE declaration order… | ef5ce6f |
 | B-2026-09-16-21 | codegen+interp | medium | AN OWNED ENUM RECEIVER'S PAYLOAD `Drop` BODY IS LOST WHENEVER THE CALLEE NEVER DESTRUCTURES `self` -- `let a = E.A(mk(1)); a.none()` over `fn none(se… | 0b97e71 |
+| B-2026-09-16-24 | typecheck | medium | `partial_move_of_drop_enum` REJECTS A BORROW-PROJECTION SCRUTINEE, and it is a false positive by the rule's OWN stated terms -- the rule documents it… | 84030e8 |
 
 </details>
 
