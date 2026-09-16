@@ -99,10 +99,10 @@ distinguish "bugs flattening" from "we stopped writing them down."
 | missing-feature | 199 |
 | codegen-gap | 178 |
 | diagnostics | 126 |
-| other | 123 |
+| other | 124 |
 | perf | 114 |
 | false-positive | 108 |
-| soundness | 95 |
+| soundness | 96 |
 | crash | 84 |
 | use-after-free | 42 |
 
@@ -110,8 +110,8 @@ distinguish "bugs flattening" from "we stopped writing them down."
 
 | surface | total |
 |---|---|
-| codegen | 1806 |
-| interp | 462 |
+| codegen | 1808 |
+| interp | 463 |
 | typecheck | 302 |
 | other | 94 |
 | ownership | 75 |
@@ -130,7 +130,6 @@ _Generated from `bug-ledger.jsonl` by `scripts/bug-curve.py` (2026-05-20 → 202
 
 | id | date | surface | sev | title | tracker |
 |---|---|---|---|---|---|
-| B-2026-09-09-21 | 2026-09-09 | codegen+interp | low | A DISCARDED TUPLE'S `Drop` BODY RUNS ON NEITHER BACKEND -- `f(mk(20));` over `fn f(r: R) -> (R, i64)` prints no `dR20` under `karac build` OR `--interp`, so the value dies with its destructor never running and the A/B rule passes because both surfaces are wrong the same way. The discarded BARE struct (`mk(20);`) does run its body, so the gap is the aggregate wrapper. a159b15e1 gave this shape its memory walk and deliberately left the body alone -- adding it on the compiled side alone would convert a silent agreed-wrong into a run-vs-build divergence | — |
 | B-2026-09-09-24 | 2026-09-09 | codegen | low | AN `Array` PAYLOAD BINDING THAT IS INDEXED STRANDS ITS ELEMENTS AT `-O0` -- 18 B in 2 blocks for `Some(t) => t[0]` over `Option[Array[String, 2]]` and 48 B in 1 for a user enum's `Array[Vec[String], 2]` read two levels deep, while the same binding never indexed and the same index off a `let` are both clean | none |
 | B-2026-09-10-7 | 2026-09-10 | codegen+interp | low | AN ARM-BOUND `Array` PAYLOAD NEVER RUNS ITS ELEMENTS' `Drop` BODIES, and the rebind spelling runs them on the COMPILED backends only -- `Some(t) => { t[0].tag }` over `Array[S, 2]` prints no `drop:` line on any backend, while `Some(t) => { let u: Array[S, 2] = t; .. }` prints both on `karac build`/`karac run` and none on `--interp` | none |
 | B-2026-09-10-11 | 2026-09-10 | codegen | low | A SHARED-PAYLOAD ENUM ON THE RETURN ROUTE STRANDS ITS 16-BYTE REFCOUNT BLOCK -- `let z = passt(mket(3))` over `enum Et { A(Sh), B }` with `shared struct Sh` loses 16 B in 1 block at -O0, because the admission gate's `shared` clause asks whether the ENUM is shared and not whether its PAYLOAD is | — |
@@ -189,6 +188,8 @@ _Generated from `bug-ledger.jsonl` by `scripts/bug-curve.py` (2026-05-20 → 202
 | B-2026-09-16-29 | 2026-09-16 | interp+codegen | low | A BARE-`self` ARM THAT PASSES ITS PAYLOAD ON BY VALUE STILL RUNS THE PAYLOAD BODY BEFORE THE SHELL'S -- `match self { E.A(r) => eat(r), .. }` prints `dR6 x6 dE` where the projection-only `r.id` spelling one line up prints `x1 dE dR1`, because B-2026-09-06-39's read-only walk counts a bare mention in ANY non-projection position as a take and so cannot tell `eat(r)` (caller-retains, safe) from `Some(r)` (a real move) | — |
 | B-2026-09-16-30 | 2026-09-16 | codegen | medium | A `shared enum` RECEIVER'S PAYLOAD `Drop` BODY RUNS UNDER `--interp` AND ON NO COMPILED BACKEND -- `Sh.A(mk(16))` over `shared enum Sh { A(R), B }` with `fn read(self) -> i64 { match self { Sh.A(r) => r.id, .. } }` prints `dR16 x16` interpreted and a bare `x16` on jit / `karac build` / `KARAC_AUTO_PAR=0 build`; a REAL A/B divergence, unlike the value-enum siblings around it | — |
 | B-2026-09-16-31 | 2026-09-16 | codegen | high | A GENERIC ENUM WITH A GENERIC `impl[T] Drop` SEGFAULTS AT RUNTIME ON EVERY COMPILED BACKEND WHEN AN OWNED-`self` METHOD MATCHES ON IT -- `enum G[T] { X(T), Y }` + `impl[T] Drop for G[T]` + `fn read(self) { match self { G.X(t) => .. } }` exits 139 under `karac build` and `KARAC_AUTO_PAR=0 karac build` alike, where `--interp` runs it correctly | — |
+| B-2026-09-16-32 | 2026-09-16 | codegen | medium | `String.substring`'s heap result is NOT NUL-terminated while every other String producer's is, which is the exact shape a past printf overread was fixed by changing | B-2026-09-16-1 |
+| B-2026-09-16-33 | 2026-09-16 | codegen+interp | low | A DISCARDED ARRAY RETURN'S ELEMENT `Drop` BODIES RUN ON NEITHER BACKEND -- `passthru([mk(30), mk(31)]);` over `fn passthru(x: Array[R, 2]) -> Array[R, 2]` prints `ok` and nothing else on all four surfaces, so TWO bodies are owed and zero run. It is the exact ARRAY twin of B-2026-09-09-21 (the tuple shape, fixed), and it has been tracked nowhere: B-2026-09-12-2 installed this arm's MEMORY walk and left bodies out deliberately -- because `--interp` ran none either, so adding one compiled-side alone would have created a run-vs-build divergence out of a leak fix -- and that row is CLOSED `fixed` for the leak, so the deferral had no open home | — |
 
 ### Relocated
 
@@ -2496,6 +2497,7 @@ _Generated from `bug-ledger.jsonl` by `scripts/bug-curve.py` (2026-05-20 → 202
 | B-2026-09-09-18 | codegen+interp | medium | A FRESH-TEMP `Option`/`Result` ARGUMENT RUNS ITS PAYLOAD'S `Drop` BODY IN NO FRAME AT ALL -- filed as a by-value PARAM defect and the param is not th… | 14d886c57 |
 | B-2026-09-09-19 | codegen | low | A BOXED ENUM PAYLOAD'S INTERIOR IS UNOWNED ONE LEVEL DEEPER, INSIDE A STRUCT FIELD -- `fn show(h: Holder)` over `struct Holder { k: Option[K], n: i64… | 827b31a |
 | B-2026-09-09-20 | codegen+interp | low | AN `Option` PAYLOAD THAT IS ITSELF A TUPLE RUNS ITS `Drop` BODY NOWHERE ON THE INTERPRETER AND TOO EARLY ON THE COMPILED BACKEND -- `fn f(r: R) -> Op… | a56142bd8 |
+| B-2026-09-09-21 | codegen+interp | low | A DISCARDED TUPLE'S `Drop` BODY RUNS ON NEITHER BACKEND -- `f(mk(20));` over `fn f(r: R) -> (R, i64)` prints no `dR20` under `karac build` OR `--inte… | 8377932 |
 | B-2026-09-09-22 | codegen | medium | A `Vec[Vec[String]]` PAYLOAD BOUND OUT OF AN `Option` OR `Result` ARM DOUBLE FREES ON EVERY COMPILED BACKEND -- `match x { Some(t) => t[0][0] }` abor… | ce145d9 |
 | B-2026-09-09-23 | codegen | medium | REBINDING AN `Array[Vec[T], N]` DUPLICATES ITS ELEMENT OWNERS -- `let b: Array[Vec[i64], 2] = a;` with no index anywhere in the program aborts `free(… | 1e4e74a |
 | B-2026-09-09-25 | codegen | low | THE INDEX-STORE HALF OF B-2026-09-09-9 IS STILL REFUSED FOR AN `Array` OUTER -- `a[0][1] = 99` over `Array[Vec[i64], 2]` fails `codegen: Index assign… | b441621 |
