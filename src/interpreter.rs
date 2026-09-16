@@ -600,6 +600,29 @@ pub struct Interpreter<'a> {
     /// `emit_enum_payload_user_drop_bodies_fn_skipping`, keyed on the same
     /// (variant, index) pair.
     pub(crate) moved_out_enum_payload_slots: HashSet<(String, usize)>,
+    /// B-2026-09-16-12 — `(binding, variant, declared payload index)` slots a
+    /// `match` / `if let` / `while let` ARM moved out, so the binding's payload
+    /// walk skips exactly those and still runs every position the arm left
+    /// behind.
+    ///
+    /// Distinct from `moved_out_enum_payload_bindings`, which is keyed on the
+    /// BINDING alone and stands the whole walk down. That was right only while
+    /// an arm was assumed to take everything: `match w { W2.Two(a, _) => … }`
+    /// consumes position 0, and the binding-level disarm took position 1's body
+    /// with it, so the wildcarded field's `Drop` ran nowhere. The whole-binding
+    /// form is still used when the arms' union covers every Drop-bearing
+    /// position, which keeps the common case byte-for-byte.
+    ///
+    /// Keyed on the VARIANT as well as the index because different arms match
+    /// different variants, and position 0 of `Two` is not position 0 of
+    /// `Three`. Codegen's twin skip set carries the same `(variant, index)`
+    /// pair for the same reason.
+    ///
+    /// Deliberately NOT `moved_out_enum_payload_slots`, whose per-slot blanking
+    /// this borrows: `masked_payload_view_names` reads that set to conclude a
+    /// binding is a VIEW and must NOT be stashed as an arm-scoped Drop slot,
+    /// which is the opposite conclusion from the one here.
+    pub(crate) moved_out_enum_payload_body_slots: HashSet<(String, String, usize)>,
     /// B-2026-07-30-11 (Option/Result leg) — the resolved `Option[P]` /
     /// `Result[O, E]` instantiation per let-bound variable, recorded by the
     /// Let arm through the SAME static resolution chain codegen's
@@ -1143,6 +1166,7 @@ impl<'a> Interpreter<'a> {
             moved_out_tuple_elem_payload_bodies: HashSet::new(),
             pending_payload_masked_fields: None,
             moved_out_enum_payload_slots: HashSet::new(),
+            moved_out_enum_payload_body_slots: HashSet::new(),
             optres_payload_bodies_tes: HashMap::new(),
             tuple_var_elem_tes: HashMap::new(),
             self_param_stack: Vec::new(),

@@ -6386,6 +6386,7 @@ impl<'ctx> Codegen<'ctx> {
                 cond_returned_owned_params: std::collections::HashSet::new(),
                 field_view_flags: HashMap::new(),
                 deep_copy_rc_inc_bare_shared: false,
+                arm_moved_enum_payload_positions: HashMap::new(),
                 enum_drop_fns: HashMap::new(),
                 struct_drop_fns: HashMap::new(),
                 struct_drop_in_progress: HashSet::new(),

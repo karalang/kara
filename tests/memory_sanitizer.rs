@@ -1816,6 +1816,96 @@ fn main() {
         );
     }
 
+    /// B-2026-09-16-12 — the MEMORY half of
+    /// `e2e_mixed_bind_and_wildcard_arm_keeps_the_unbound_payload_body`
+    /// (tests/codegen.rs), pinning the half the row says was never broken.
+    ///
+    /// That row is BODIES-only: the husk's payload-bodies walker was retracted
+    /// wholesale when an arm consumed any Drop-bearing position, so a
+    /// wildcarded position's `Drop` body ran nowhere. The MEMORY channel beside
+    /// it — `suppress_destructured_enum_payload_cleanup`'s per-field cap-zeroing
+    /// — was already per-position and stayed correct throughout: 52 allocs / 52
+    /// frees, valgrind-clean at `KARAC_OPT_LEVEL=0`, measured on this exact
+    /// program both before and after the fix.
+    ///
+    /// It is pinned anyway because the fix hands the husk back positions it had
+    /// stopped walking, and "run a body over a payload whose buffer the arm's
+    /// binding already freed" is the use-after-free that mistake would produce.
+    /// This is the cell that would catch it; the output assertion above it is
+    /// not, because a body reading freed bytes still prints something.
+    #[test]
+    fn asan_mixed_bind_and_wildcard_arm_payload_ownership_is_balanced() {
+        assert_clean_asan_run(
+            r#"struct R { id: i64, tag: String }
+impl Drop for R { fn drop(mut ref self) { println(f"  dR{self.id}") } }
+fn mk(i: i64) -> R { return R { id: i, tag: f"t{i}" } }
+enum W2 { Two(R, R), None2 }
+enum W3 { A(R, R), B(R), None3 }
+fn take(r: R) -> i64 { return r.id; }
+fn first_bound() -> i64 { let w: W2 = W2.Two(mk(1), mk(2)); match w { W2.Two(a, _) => { return a.id; } W2.None2 => { return 0; } } }
+fn second_bound() -> i64 { let w: W2 = W2.Two(mk(3), mk(4)); match w { W2.Two(_, b) => { return b.id; } W2.None2 => { return 0; } } }
+fn moved_out() -> i64 { let w: W2 = W2.Two(mk(5), mk(6)); match w { W2.Two(a, _) => { return take(a); } W2.None2 => { return 0; } } }
+fn rebound() -> i64 { let w: W2 = W2.Two(mk(7), mk(8)); match w { W2.Two(a, _) => { let m: R = a; return m.id; } W2.None2 => { return 0; } } }
+fn iflet() -> i64 { let w: W2 = W2.Two(mk(9), mk(10)); if let W2.Two(a, _) = w { return a.id; } return 0; }
+fn both_wild() -> i64 { let w: W2 = W2.Two(mk(11), mk(12)); match w { W2.Two(_, _) => { return 1; } W2.None2 => { return 0; } } }
+fn both_bound() -> i64 { let w: W2 = W2.Two(mk(13), mk(14)); match w { W2.Two(a, b) => { return a.id + b.id; } W2.None2 => { return 0; } } }
+fn other_variant_live() -> i64 { let w: W3 = W3.B(mk(22)); match w { W3.A(a, _) => { return a.id; } W3.B(_) => { return 99; } W3.None3 => { return 0; } } }
+fn each_variant_takes() -> i64 { let w: W3 = W3.A(mk(30), mk(31)); match w { W3.A(a, _) => { return a.id; } W3.B(c) => { return c.id; } W3.None3 => { return 0; } } }
+fn main() {
+    println("first_bound"); let a: i64 = first_bound(); println(f"  ={a}");
+    println("second_bound"); let b: i64 = second_bound(); println(f"  ={b}");
+    println("moved_out"); let c: i64 = moved_out(); println(f"  ={c}");
+    println("rebound"); let d: i64 = rebound(); println(f"  ={d}");
+    println("iflet"); let e: i64 = iflet(); println(f"  ={e}");
+    println("both_wild"); let f: i64 = both_wild(); println(f"  ={f}");
+    println("both_bound"); let g: i64 = both_bound(); println(f"  ={g}");
+    println("other_variant_live"); let h: i64 = other_variant_live(); println(f"  ={h}");
+    println("each_variant_takes"); let i: i64 = each_variant_takes(); println(f"  ={i}");
+    println("end");
+}
+"#,
+            &[
+                "first_bound",
+                "  dR1",
+                "  dR2",
+                "  =1",
+                "second_bound",
+                "  dR3",
+                "  dR4",
+                "  =4",
+                "moved_out",
+                "  dR5",
+                "  dR6",
+                "  =5",
+                "rebound",
+                "  dR7",
+                "  dR8",
+                "  =7",
+                "iflet",
+                "  dR9",
+                "  dR10",
+                "  =9",
+                "both_wild",
+                "  dR11",
+                "  dR12",
+                "  =1",
+                "both_bound",
+                "  dR13",
+                "  dR14",
+                "  =27",
+                "other_variant_live",
+                "  dR22",
+                "  =99",
+                "each_variant_takes",
+                "  dR30",
+                "  dR31",
+                "  =30",
+                "end",
+            ],
+            "mixed_bind_and_wildcard_arm_payload_ownership_is_balanced",
+        );
+    }
+
     /// B-2026-09-06-37 — the MEMORY half of
     /// `e2e_wildcard_arm_over_owned_enum_receiver_runs_payload_body`
     /// (tests/codegen.rs). The lowering-pass rewrite turns a wildcard payload

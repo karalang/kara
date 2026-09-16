@@ -2187,6 +2187,8 @@ impl<'a> super::Interpreter<'a> {
                     // B-2026-08-29-24 — and the enum-payload SLOT mask, for the
                     // same name-keyed reason.
                     std::mem::take(&mut self.moved_out_enum_payload_slots),
+                    // B-2026-09-16-12 — the arm-move slot mask, name-keyed beside it.
+                    std::mem::take(&mut self.moved_out_enum_payload_body_slots),
                     // B-2026-08-29-47 — the param-view FIELD record, name-keyed
                     // like the masks above and isolated for the same reason.
                     std::mem::take(&mut self.param_view_struct_fields),
@@ -2225,6 +2227,7 @@ impl<'a> super::Interpreter<'a> {
                     self.moved_out_struct_field_payload_bodies,
                     self.moved_out_tuple_elem_payload_bodies,
                     self.moved_out_enum_payload_slots,
+                    self.moved_out_enum_payload_body_slots,
                     self.param_view_struct_fields,
                     self.param_view_tuple_elems,
                 ) = saved_moved_out;

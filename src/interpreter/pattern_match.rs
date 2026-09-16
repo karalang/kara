@@ -623,7 +623,48 @@ impl<'a> super::Interpreter<'a> {
         if self.match_disarms_payload_walk(&enum_name, arms)
             && !self.frame_is_sole_owner_of_param(&name)
         {
-            self.moved_out_enum_payload_bindings.insert(name);
+            // B-2026-09-16-12 — disarm the POSITIONS the arms take, not the
+            // whole binding, unless they take all of them.
+            //
+            // `match_disarms_payload_walk` is an `arms.iter().any(..)` over a
+            // per-arm BOOLEAN, so `match w { W2.Two(a, _) => … }` — which takes
+            // position 0 and leaves position 1 with the husk — stood the whole
+            // walk down and position 1's `Drop` body ran nowhere. The union of
+            // what the qualifying arms actually take is the right disarm, and
+            // when that union covers every Drop-bearing position it IS the
+            // whole-binding disarm, which is why that form is kept rather than
+            // replaced: every existing fixture is a fully-consuming arm and
+            // keeps its exact behaviour.
+            //
+            // Cross-ARM coarseness is unchanged and deliberate — the union is
+            // over every qualifying arm, not the taken one — because codegen's
+            // twin retraction is a compile-time removal that cannot be
+            // path-sensitive, and the two backends have to agree. Only the
+            // per-POSITION half is new, and codegen gained the same half in the
+            // same commit.
+            let taken: std::collections::HashSet<(String, usize)> = arms
+                .iter()
+                .filter(|arm| {
+                    self.pattern_consumes_user_drop_payload(&enum_name, &arm.pattern)
+                        && !self.arm_only_reads_payload_through(
+                            &enum_name,
+                            &arm.pattern,
+                            &arm.body,
+                            arm.guard.as_ref(),
+                        )
+                })
+                .flat_map(|arm| {
+                    self.pattern_consumed_user_drop_payload_positions(&enum_name, &arm.pattern)
+                })
+                .collect();
+            if taken.is_empty() || self.enum_payload_body_positions_are_total(&enum_name, &taken) {
+                self.moved_out_enum_payload_bindings.insert(name);
+            } else {
+                for (variant, pos) in taken {
+                    self.moved_out_enum_payload_body_slots
+                        .insert((name.clone(), variant, pos));
+                }
+            }
         }
     }
 
@@ -755,7 +796,29 @@ impl<'a> super::Interpreter<'a> {
         };
         let enum_name = enum_name.clone();
         if takes_payload(self, &enum_name) && !self.frame_is_sole_owner_of_param(&name) {
-            self.moved_out_enum_payload_bindings.insert(name);
+            // B-2026-09-16-12 — the `if let` / `while let` / `let … else`
+            // spelling of the `match` form's per-position disarm. Same rule,
+            // one pattern instead of a set of arms: `if let W2.Two(a, _) = w`
+            // took position 0 and the whole-binding disarm took position 1's
+            // body with it, so the wildcarded field's `Drop` ran nowhere.
+            //
+            // Kept in lockstep with the `match` form deliberately — a
+            // spelling-dependent split in this family is the exact shape
+            // B-2026-08-28-63, B-2026-08-29-17, B-2026-08-31-32 and
+            // B-2026-09-01-28 each had to close, and every one of them was the
+            // same rule written out more than once.
+            let taken: std::collections::HashSet<(String, usize)> = self
+                .pattern_consumed_user_drop_payload_positions(&enum_name, pattern)
+                .into_iter()
+                .collect();
+            if taken.is_empty() || self.enum_payload_body_positions_are_total(&enum_name, &taken) {
+                self.moved_out_enum_payload_bindings.insert(name);
+            } else {
+                for (variant, pos) in taken {
+                    self.moved_out_enum_payload_body_slots
+                        .insert((name.clone(), variant, pos));
+                }
+            }
         }
     }
 
@@ -1522,6 +1585,110 @@ impl<'a> super::Interpreter<'a> {
             _ => {}
         }
         out
+    }
+
+    /// B-2026-09-16-12 — the `(variant, declared position)` pairs `pattern`
+    /// moves out of `enum_name` whose declared type runs a user `Drop` body.
+    ///
+    /// The per-position form of [`Self::pattern_consumes_user_drop_payload`],
+    /// which asks the same question and answers `true` if ANY position
+    /// qualifies. Written as a sibling rather than by refactoring that one into
+    /// this: the boolean is consulted by callers that only need the admission
+    /// test, and the two must never drift, so the position filter here is the
+    /// same expression verbatim.
+    ///
+    /// EMPTY for `Option`/`Result`. Their gate up there is SHAPE-only (there is
+    /// no source `EnumDef`, and the declared payload is a bare generic param),
+    /// so there are no declared types to filter positions by. An empty result
+    /// routes the caller to the whole-binding disarm, i.e. to today's
+    /// behaviour, which is what the seeded pair has always had.
+    fn pattern_consumed_user_drop_payload_positions(
+        &self,
+        enum_name: &str,
+        pattern: &Pattern,
+    ) -> Vec<(String, usize)> {
+        if enum_name == "Option" || enum_name == "Result" {
+            return Vec::new();
+        }
+        let variant = match &pattern.kind {
+            PatternKind::TupleVariant { path, .. } | PatternKind::Struct { path, .. } => {
+                match path.last() {
+                    Some(v) => v.clone(),
+                    None => return Vec::new(),
+                }
+            }
+            _ => return Vec::new(),
+        };
+        let Some(decls) = self.variant_payload_decls(enum_name, &variant) else {
+            return Vec::new();
+        };
+        let consumed: Vec<usize> = match &pattern.kind {
+            PatternKind::TupleVariant { patterns, .. } => patterns
+                .iter()
+                .enumerate()
+                .filter(|(_, sub)| Self::pattern_claims_ownership(sub))
+                .map(|(i, _)| i)
+                .collect(),
+            PatternKind::Struct { fields, .. } => fields
+                .iter()
+                .filter(|fp| {
+                    fp.pattern
+                        .as_ref()
+                        .is_none_or(Self::pattern_claims_ownership)
+                })
+                .filter_map(|fp| {
+                    decls
+                        .iter()
+                        .position(|(n, _)| n.as_deref() == Some(fp.name.as_str()))
+                })
+                .collect(),
+            _ => return Vec::new(),
+        };
+        let own_params = self.enum_generic_param_names(enum_name);
+        consumed
+            .into_iter()
+            .filter(|pos| {
+                decls
+                    .get(*pos)
+                    .map(|(_, te)| {
+                        matches!(&te.kind, crate::ast::TypeKind::Path(p)
+                            if p.segments.first().is_some_and(|n| own_params.contains(n)))
+                            || self.type_expr_runs_user_drop(te)
+                    })
+                    .unwrap_or(false)
+            })
+            .map(|pos| (variant.clone(), pos))
+            .collect()
+    }
+
+    /// B-2026-09-16-12 — does `taken` already cover every Drop-BEARING payload
+    /// position of every variant of `enum_name`?
+    ///
+    /// When it does, masking those positions and standing the whole walk down
+    /// are the same thing, and the whole-binding form is kept so the common
+    /// fully-consuming arm behaves byte-for-byte as before. Only Drop-bearing
+    /// positions count, because those are the only ones the walk would run a
+    /// body for.
+    fn enum_payload_body_positions_are_total(
+        &self,
+        enum_name: &str,
+        taken: &std::collections::HashSet<(String, usize)>,
+    ) -> bool {
+        let Some(variants) = self.enum_variant_names(enum_name) else {
+            return false;
+        };
+        let own_params = self.enum_generic_param_names(enum_name);
+        variants.iter().all(|vname| {
+            let Some(decls) = self.variant_payload_decls(enum_name, vname) else {
+                return true;
+            };
+            decls.iter().enumerate().all(|(i, (_, te))| {
+                let runs = matches!(&te.kind, crate::ast::TypeKind::Path(p)
+                    if p.segments.first().is_some_and(|n| own_params.contains(n)))
+                    || self.type_expr_runs_user_drop(te);
+                !runs || taken.contains(&(vname.clone(), i))
+            })
+        })
     }
 
     /// Does `pattern` bind out a payload position of `enum_name` whose declared

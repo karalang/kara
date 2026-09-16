@@ -366,6 +366,22 @@ pub(crate) struct DropRc<'ctx> {
     /// leaked because the drop side hadn't yet been reconciled — it since was, so
     /// the entry-copy inc is now balanced.)
     pub(crate) deep_copy_rc_inc_bare_shared: bool,
+    /// B-2026-09-16-12 — per-binding accumulator of the `(variant, field
+    /// index)` payload positions a `match` / `if let` arm has MOVED OUT of that
+    /// binding, so the binding's payload-bodies walker can be re-emitted with
+    /// exactly those positions masked instead of retracted wholesale.
+    ///
+    /// It has to accumulate, and that is the whole reason it is state rather
+    /// than a local. `suppress_destructured_enum_payload_cleanup` runs once PER
+    /// ARM, and `mask_enum_payload_bodies_for_var` re-emits the walker from the
+    /// enum's declaration each time — so arm 2's mask would REPLACE arm 1's and
+    /// re-arm the position arm 1's binding had already taken, doubling that
+    /// body. Unioning here keeps the union of every arm's take, which is the
+    /// same cross-arm coarseness the whole-var retraction had (codegen's
+    /// retraction is a compile-time removal and cannot be path-sensitive) —
+    /// only the per-POSITION half is new.
+    pub(crate) arm_moved_enum_payload_positions:
+        HashMap<String, std::collections::BTreeSet<(String, usize)>>,
     /// Phase 7.2 Slice DP — per-enum drop function cache (enum name →
     /// `__karac_drop_<EnumName>` `FunctionValue`). Lazily populated by
     /// `emit_enum_drop_switch` on first registration of a value-type

@@ -1707,6 +1707,13 @@ impl<'ctx> super::Codegen<'ctx> {
         self.accel.dataframe_var_infos.clear();
         self.drop_rc.scope_cleanup_actions.clear();
         self.drop_rc.scope_cleanup_actions.push(Vec::new());
+        // B-2026-09-16-12 — function-scoped like `variables` above, and for
+        // exactly the reason spelled out there: the accumulator is keyed on the
+        // scrutinee's NAME, so a `w` whose arms consumed every position in one
+        // function would hand the next function's `w` a TOTAL mask and lose
+        // every body it did not take. Measured: three functions each matching
+        // their own `let w`, the third losing the field its own arm wildcarded.
+        self.drop_rc.arm_moved_enum_payload_positions.clear();
         // Slice 10: reseed module-binding side-tables after the per-fn
         // clear. Module bindings live for the program's lifetime but
         // the clear above wipes their `var_type_names` / `vec_elem_types`

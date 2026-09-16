@@ -2058,11 +2058,25 @@ impl<'a> super::Interpreter<'a> {
         // mask's idiom one container over: the walk skips a slot that is not a
         // `Value::Struct`, and blanking preserves index alignment with the
         // declared payload list, which removing an item would not.
+        // B-2026-09-16-12 — the ARM-move mask joins the constructor-view one
+        // here. Same blanking, same index alignment; only the writer differs,
+        // and the arm's entries carry the VARIANT so an index taken out of
+        // `Two` cannot blank the same index of a live `Three`.
+        let live_variant = match value {
+            Value::EnumVariant { variant, .. } => Some(variant.clone()),
+            _ => None,
+        };
         let masked: Vec<usize> = self
             .moved_out_enum_payload_slots
             .iter()
             .filter(|(n, _)| n == name)
             .map(|(_, i)| *i)
+            .chain(
+                self.moved_out_enum_payload_body_slots
+                    .iter()
+                    .filter(|(n, v, _)| n == name && live_variant.as_deref() == Some(v.as_str()))
+                    .map(|(_, _, i)| *i),
+            )
             .collect();
         if !masked.is_empty() {
             if let Value::EnumVariant {
@@ -2248,6 +2262,27 @@ impl<'a> super::Interpreter<'a> {
                     .find_map(|(_, p)| scan(&p.items, enum_name))
             })
             .unwrap_or_default()
+    }
+
+    /// B-2026-09-16-12 — every variant NAME of `enum_name`, in declaration
+    /// order. `None` when the enum has no source `EnumDef` to scan (the seeded
+    /// `Option`/`Result` pair reach this through the stdlib arm like any
+    /// other). Same two sources — user program, then baked stdlib — as
+    /// `variant_payload_decls` and `enum_generic_param_names` beside it.
+    pub(crate) fn enum_variant_names(&self, enum_name: &str) -> Option<Vec<String>> {
+        fn scan(items: &[Item], enum_name: &str) -> Option<Vec<String>> {
+            items.iter().find_map(|item| match item {
+                Item::EnumDef(e) if e.name == enum_name => {
+                    Some(e.variants.iter().map(|v| v.name.clone()).collect())
+                }
+                _ => None,
+            })
+        }
+        scan(&self.program.items, enum_name).or_else(|| {
+            crate::prelude::STDLIB_PROGRAMS
+                .iter()
+                .find_map(|(_, p)| scan(&p.items, enum_name))
+        })
     }
 
     /// `(field name, declared type)` for each payload position of
@@ -6896,6 +6931,8 @@ impl<'a> super::Interpreter<'a> {
         // B-2026-08-31-50 — the enum-ctor slot mask is per binding now that a
         // rebind inherits it; a FRESH value under the same name must not.
         self.moved_out_enum_payload_slots.retain(|(n, _)| n != name);
+        self.moved_out_enum_payload_body_slots
+            .retain(|(n, _, _)| n != name);
         self.moved_out_user_drop_bindings.remove(name);
     }
 

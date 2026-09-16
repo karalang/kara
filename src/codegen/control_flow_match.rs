@@ -9439,7 +9439,46 @@ impl<'ctx> super::Codegen<'ctx> {
         // could exist — a fresh temp has no binding name and never registered
         // one.
         if self.enum_pattern_consumes_user_drop_payload(&enum_name, pattern) {
-            self.suppress_container_elem_bodies_for_var(scrut_name);
+            // B-2026-09-16-12 — mask the positions this arm TAKES, rather than
+            // retracting the binding's whole walker.
+            //
+            // The gate above is a BOOLEAN ("does this pattern consume ANY
+            // Drop-bearing position?"), and the retraction it used to reach is
+            // whole-var, so `match w { W2.Two(a, _) => … }` stood the husk's
+            // entire payload-bodies walk down and field 1's body ran nowhere —
+            // on this backend once the arm moved `a` out, and on the
+            // interpreter unconditionally. Memory was never affected: the
+            // cap-zeroing half above is already per-position, and its own doc
+            // says a wildcard sub-pattern "doesn't claim ownership, so the
+            // source's drop must still fire". This is that same sentence
+            // applied to the BODIES channel.
+            //
+            // `enum_pattern_consumed_positions` is the per-position answer the
+            // boolean is computed from, so the two cannot disagree about which
+            // positions an arm takes. `mask_enum_payload_bodies_for_var` falls
+            // back to the whole-var retraction when the accumulated mask is
+            // TOTAL, so a fully-consuming arm — the overwhelmingly common case
+            // and every case any existing fixture covers — keeps today's
+            // behaviour byte-for-byte.
+            let masked = match self.enum_pattern_consumed_positions(&enum_name, pattern) {
+                Some((variant, positions)) if !positions.is_empty() => {
+                    let acc = self
+                        .drop_rc
+                        .arm_moved_enum_payload_positions
+                        .entry(scrut_name.to_string())
+                        .or_default();
+                    for pos in positions {
+                        acc.insert((variant.clone(), pos));
+                    }
+                    let skip = acc.clone();
+                    self.mask_enum_payload_bodies_for_var(scrut_name, &enum_name, &skip);
+                    true
+                }
+                _ => false,
+            };
+            if !masked {
+                self.suppress_container_elem_bodies_for_var(scrut_name);
+            }
             // B-2026-09-10-2 — the MEMORY half of the same move-out for a
             // heap-BOXED generic payload. The arm's binding owns the interior;
             // the box drop keeps the envelope and must give up the interior

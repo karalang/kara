@@ -41537,6 +41537,130 @@ end
         );
     }
 
+    /// B-2026-09-16-12 — a MIXED bind-and-wildcard arm lost the WILDCARDED payload
+    /// field's `Drop` body: `let w = W2.Two(mk(1), mk(2)); match w { W2.Two(a, _) =>
+    /// { return a.id } .. }` ran `dR1` alone on `--interp` while the compiled
+    /// backends ran `dR1 dR2`, and once the arm MOVED the bound field out
+    /// (`let m = a`, or `take(a)`) EVERY surface lost `dR2` — the agreed-silence
+    /// profile no A/B gate can report.
+    ///
+    /// Both backends keyed the payload-BODIES disarm on the BINDING rather than on
+    /// the consumed POSITION: codegen asked the boolean
+    /// `enum_pattern_consumes_user_drop_payload` and then retracted the husk's
+    /// whole `ContainerElemBodies` action, and the interpreter asked the same
+    /// boolean through `match_disarms_payload_walk` and inserted the scrutinee NAME
+    /// into `moved_out_enum_payload_bindings`. The MEMORY half beside each was
+    /// already per-position — its own doc says a wildcard sub-pattern "doesn't
+    /// claim ownership, so the source's drop must still fire" — so this is that
+    /// sentence applied to the bodies channel. Memory was never affected: 52 allocs
+    /// / 52 frees, valgrind-clean at `KARAC_OPT_LEVEL=0`, before and after.
+    ///
+    /// Both sides now mask the positions the arms TAKE and fall back to the
+    /// whole-binding disarm when that union covers every Drop-bearing position, so
+    /// a fully-consuming arm — every case any pre-existing fixture covers — is
+    /// byte-for-byte unchanged. The mask carries the VARIANT as well as the index,
+    /// because position 0 of `Two` is not position 0 of `Three`; `other_variant_live`
+    /// is the cell that pins it.
+    ///
+    /// CELLS. `first_bound` / `second_bound` (bind one, wildcard the other, on each
+    /// side), `moved_out` and `rebound` (the arm hands the bound field on — the
+    /// every-surface half), `iflet` (the `if let` spelling, which had the same hole
+    /// in the interpreter and was fixed in lockstep to avoid the
+    /// spelling-dependent split this family has closed four times:
+    /// B-2026-08-28-63, B-2026-08-29-17, B-2026-08-31-32, B-2026-09-01-28),
+    /// `other_variant_live` (arm A takes a position, variant B is live — the mask
+    /// must not blank B's), `each_variant_takes` (both arms take, different
+    /// variants). Controls: `both_wild` (nothing consumed, always correct) and
+    /// `both_bound` (fully consuming, the totality fallback).
+    ///
+    /// THE TWO BACKENDS STILL DIFFER ON TWO CELLS, and deliberately so: in
+    /// `second_bound` and `both_bound` the interpreter prints the BOUND position's
+    /// body before the husk's, the compiled backends print both from the husk in
+    /// field order. That is B-2026-09-06-21 — where and in what order the CONSUMED
+    /// positions fire — which this row does not touch. What this row fixes is the
+    /// SET, and the set is now identical on `--interp`, jit, `KARAC_AUTO_PAR=0` and
+    /// the default auto-par build (the three compiled surfaces are byte-identical
+    /// to each other). When -06-21 lands, one of these two pinned strings changes
+    /// and the other does not.
+    ///
+    /// Twin of `tests/interpreter.rs`'s
+    /// `test_mixed_bind_and_wildcard_arm_keeps_the_unbound_payload_body`.
+    #[test]
+    fn e2e_mixed_bind_and_wildcard_arm_keeps_the_unbound_payload_body() {
+        let Some(out) = run_program(
+            r#"struct R { id: i64, tag: String }
+impl Drop for R { fn drop(mut ref self) { println(f"  dR{self.id}") } }
+fn mk(i: i64) -> R { return R { id: i, tag: f"t{i}" } }
+enum W2 { Two(R, R), None2 }
+enum W3 { A(R, R), B(R), None3 }
+fn take(r: R) -> i64 { return r.id; }
+fn first_bound() -> i64 { let w: W2 = W2.Two(mk(1), mk(2)); match w { W2.Two(a, _) => { return a.id; } W2.None2 => { return 0; } } }
+fn second_bound() -> i64 { let w: W2 = W2.Two(mk(3), mk(4)); match w { W2.Two(_, b) => { return b.id; } W2.None2 => { return 0; } } }
+fn moved_out() -> i64 { let w: W2 = W2.Two(mk(5), mk(6)); match w { W2.Two(a, _) => { return take(a); } W2.None2 => { return 0; } } }
+fn rebound() -> i64 { let w: W2 = W2.Two(mk(7), mk(8)); match w { W2.Two(a, _) => { let m: R = a; return m.id; } W2.None2 => { return 0; } } }
+fn iflet() -> i64 { let w: W2 = W2.Two(mk(9), mk(10)); if let W2.Two(a, _) = w { return a.id; } return 0; }
+fn both_wild() -> i64 { let w: W2 = W2.Two(mk(11), mk(12)); match w { W2.Two(_, _) => { return 1; } W2.None2 => { return 0; } } }
+fn both_bound() -> i64 { let w: W2 = W2.Two(mk(13), mk(14)); match w { W2.Two(a, b) => { return a.id + b.id; } W2.None2 => { return 0; } } }
+fn other_variant_live() -> i64 { let w: W3 = W3.B(mk(22)); match w { W3.A(a, _) => { return a.id; } W3.B(_) => { return 99; } W3.None3 => { return 0; } } }
+fn each_variant_takes() -> i64 { let w: W3 = W3.A(mk(30), mk(31)); match w { W3.A(a, _) => { return a.id; } W3.B(c) => { return c.id; } W3.None3 => { return 0; } } }
+fn main() {
+    println("first_bound"); let a: i64 = first_bound(); println(f"  ={a}");
+    println("second_bound"); let b: i64 = second_bound(); println(f"  ={b}");
+    println("moved_out"); let c: i64 = moved_out(); println(f"  ={c}");
+    println("rebound"); let d: i64 = rebound(); println(f"  ={d}");
+    println("iflet"); let e: i64 = iflet(); println(f"  ={e}");
+    println("both_wild"); let f: i64 = both_wild(); println(f"  ={f}");
+    println("both_bound"); let g: i64 = both_bound(); println(f"  ={g}");
+    println("other_variant_live"); let h: i64 = other_variant_live(); println(f"  ={h}");
+    println("each_variant_takes"); let i: i64 = each_variant_takes(); println(f"  ={i}");
+    println("end");
+}
+"#,
+        ) else {
+            return;
+        };
+        assert_eq!(
+            out,
+            r#"first_bound
+  dR1
+  dR2
+  =1
+second_bound
+  dR3
+  dR4
+  =4
+moved_out
+  dR5
+  dR6
+  =5
+rebound
+  dR7
+  dR8
+  =7
+iflet
+  dR9
+  dR10
+  =9
+both_wild
+  dR11
+  dR12
+  =1
+both_bound
+  dR13
+  dR14
+  =27
+other_variant_live
+  dR22
+  =99
+each_variant_takes
+  dR30
+  dR31
+  =30
+end
+"#
+        );
+    }
+
     /// B-2026-09-06-37 — a WILDCARD arm over an owned ENUM receiver ran the payload's
     /// `Drop` body on no surface: `impl E { fn m_wild(self) -> i64 { match self {
     /// E.A(_) => { return 1; } E.B => { return 0; } } } }` printed `dE x1` for a named
