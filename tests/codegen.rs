@@ -41679,6 +41679,132 @@ end
         );
     }
 
+    /// B-2026-09-06-36 — a `match` / `if let` over a LOCAL struct scrutinee whose
+    /// ENUM leaf the arm never consumes lost that leaf's `Drop` body on every
+    /// compiled backend: `let c = H1 { e: E.A(mk(1)) }; match c { H1 { e } => { .. } }`
+    /// with `e` untouched printed `m` alone under `karac run` / `karac build` /
+    /// `KARAC_AUTO_PAR=0`, against `m dE dR1` on `--interp`. Memory was balanced
+    /// throughout — a lost BODY, not a leak.
+    ///
+    /// `disarm_arm_destructured_struct_field_bodies` masked a field's bodies
+    /// whenever its sub-pattern was a bare binding, without asking whether the arm
+    /// used it. That mask is a HANDOVER — its own doc says it exists so a moved-out
+    /// field is not walked twice — and with nothing moved out there is nobody to
+    /// hand to.
+    ///
+    /// The repair registers a bodies-only walker on the BINDING rather than
+    /// declining the mask, because the MEMORY half beside it has already given the
+    /// binding the field's heap ("the binding owns the field's entire heap
+    /// subtree"). Leaving the body with the source ran it over the husk the
+    /// cap-zeroing left: measured `dR0` where `dR34` was due — the exact symptom
+    /// the disarm's own doc records. Body and memory stay with one owner.
+    ///
+    /// TWO EXCLUSIONS, each established by a measured double rather than by
+    /// argument, and each pinned by a cell here:
+    ///   * an owned-PARAM scrutinee (`by_value_param`, and the `self`-receiver) —
+    ///     the leaf is a view of the callee's entry copy whose body the CALLER runs
+    ///     (caller-retains). Registering here too gave `dE dR7 dE dR7`.
+    ///   * a STRUCT leaf (`struct_leaf`) — already covered by the source's own
+    ///     field-bodies walker; registering gave `s dR8 dR8`. The row scoped itself
+    ///     to an ENUM leaf and listed the struct leaf as NOT MEASURED. This is that
+    ///     measurement, and it says leave it alone.
+    ///
+    /// `let … else` is deliberately untouched: its binding escapes into the
+    /// enclosing block, so there is no scope to classify it against, and it keeps
+    /// today's mask — the same `scope: None` convention the interpreter's twin
+    /// states.
+    ///
+    /// CELLS: `unread` (the row's own shape), `bound_result` (match result bound
+    /// rather than discarded — the row notes the discard/bound distinction is not
+    /// the discriminator), `iflet` (the `if let` spelling the row lists as NOT
+    /// MEASURED, which diverged identically), `read_only` (leaf bound beside a
+    /// scalar the arm returns), `consumed` (the arm hands the leaf to a call, which under
+    /// caller-retains is NOT a transfer, so the binding still owes the body —
+    /// the cell is named for its shape, not for a handover), `by_value_param` and
+    /// `struct_leaf` (the two
+    /// exclusions), `wildcard` (`e: _`, which never masked and was always right).
+    ///
+    /// All four surfaces — `--interp`, `karac run`, `KARAC_AUTO_PAR=0` and the
+    /// default auto-par build — now print this string byte-identically, so the
+    /// twinned pair is pinned to ONE expected output rather than two.
+    ///
+    /// Twin of `tests/interpreter.rs`'s
+    /// `test_unconsumed_enum_leaf_of_a_local_struct_scrutinee_runs_its_body`.
+    #[test]
+    fn e2e_unconsumed_enum_leaf_of_a_local_struct_scrutinee_runs_its_body() {
+        let Some(out) = run_program(
+            r#"struct R { id: i64, tag: String, xs: Vec[i64] }
+impl Drop for R { fn drop(mut ref self) { println(f"  dR{self.id}") } }
+enum E { A(R), B }
+impl Drop for E { fn drop(mut ref self) { println("  dE") } }
+struct H1 { e: E }
+struct H2 { r: R }
+struct H3 { e: E, k: i64 }
+fn mk(i: i64) -> R { return R { id: i, tag: f"t{i}", xs: [i] } }
+fn eat(e: E) -> i64 { match e { E.A(r) => { return r.id; } E.B => { return 0; } } }
+
+fn unread() { let c: H1 = H1 { e: E.A(mk(1)) }; match c { H1 { e } => { println("  m"); } } }
+fn bound_result() -> i64 { let c: H1 = H1 { e: E.A(mk(2)) }; let k: i64 = match c { H1 { e } => { 9 } }; return k; }
+fn iflet() { let c: H1 = H1 { e: E.A(mk(3)) }; if let H1 { e } = c { println("  i"); } }
+fn read_only() -> i64 { let c: H3 = H3 { e: E.A(mk(4)), k: 5 }; match c { H3 { e, k } => { return k; } } }
+fn consumed() -> i64 { let c: H1 = H1 { e: E.A(mk(6)) }; match c { H1 { e } => { return eat(e); } } }
+fn by_value_param(h: H1) -> i64 { match h { H1 { e } => { return 9; } } }
+fn struct_leaf() { let c: H2 = H2 { r: mk(8) }; match c { H2 { r } => { println("  s"); } } }
+fn wildcard() { let c: H1 = H1 { e: E.A(mk(9)) }; match c { H1 { e: _ } => { println("  w"); } } }
+
+fn main() {
+    println("unread"); unread();
+    println("bound_result"); let a: i64 = bound_result(); println(f"  ={a}");
+    println("iflet"); iflet();
+    println("read_only"); let b: i64 = read_only(); println(f"  ={b}");
+    println("consumed"); let c2: i64 = consumed(); println(f"  ={c2}");
+    println("by_value_param"); let d: i64 = by_value_param(H1 { e: E.A(mk(7)) }); println(f"  ={d}");
+    println("struct_leaf"); struct_leaf();
+    println("wildcard"); wildcard();
+    println("end");
+}
+"#,
+        ) else {
+            return;
+        };
+        assert_eq!(
+            out,
+            r#"unread
+  m
+  dE
+  dR1
+bound_result
+  dE
+  dR2
+  =9
+iflet
+  i
+  dE
+  dR3
+read_only
+  dE
+  dR4
+  =5
+consumed
+  dE
+  dR6
+  =6
+by_value_param
+  dE
+  dR7
+  =9
+struct_leaf
+  s
+  dR8
+wildcard
+  w
+  dE
+  dR9
+end
+"#
+        );
+    }
+
     /// B-2026-09-06-37 — a WILDCARD arm over an owned ENUM receiver ran the payload's
     /// `Drop` body on no surface: `impl E { fn m_wild(self) -> i64 { match self {
     /// E.A(_) => { return 1; } E.B => { return 0; } } } }` printed `dE x1` for a named

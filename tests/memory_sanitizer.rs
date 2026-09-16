@@ -1906,6 +1906,89 @@ fn main() {
         );
     }
 
+    /// B-2026-09-06-36 — the MEMORY half of
+    /// `e2e_unconsumed_enum_leaf_of_a_local_struct_scrutinee_runs_its_body`
+    /// (tests/codegen.rs), pinning the half that was never broken.
+    ///
+    /// That row is BODY-only and the row says so: valgrind was clean at `-O0`
+    /// before the fix and is clean after (40 allocs / 40 frees, ERROR SUMMARY
+    /// 0). It is pinned anyway because the fix hands a bodies-only walker to a
+    /// binding whose heap the memory half already gave it, and getting that
+    /// pairing wrong is a use-after-free rather than a miscount — an output
+    /// assertion would not catch it, since a body reading freed bytes still
+    /// prints.
+    #[test]
+    fn asan_unconsumed_enum_leaf_of_a_local_struct_scrutinee_is_balanced() {
+        assert_clean_asan_run(
+            r#"struct R { id: i64, tag: String, xs: Vec[i64] }
+impl Drop for R { fn drop(mut ref self) { println(f"  dR{self.id}") } }
+enum E { A(R), B }
+impl Drop for E { fn drop(mut ref self) { println("  dE") } }
+struct H1 { e: E }
+struct H2 { r: R }
+struct H3 { e: E, k: i64 }
+fn mk(i: i64) -> R { return R { id: i, tag: f"t{i}", xs: [i] } }
+fn eat(e: E) -> i64 { match e { E.A(r) => { return r.id; } E.B => { return 0; } } }
+
+fn unread() { let c: H1 = H1 { e: E.A(mk(1)) }; match c { H1 { e } => { println("  m"); } } }
+fn bound_result() -> i64 { let c: H1 = H1 { e: E.A(mk(2)) }; let k: i64 = match c { H1 { e } => { 9 } }; return k; }
+fn iflet() { let c: H1 = H1 { e: E.A(mk(3)) }; if let H1 { e } = c { println("  i"); } }
+fn read_only() -> i64 { let c: H3 = H3 { e: E.A(mk(4)), k: 5 }; match c { H3 { e, k } => { return k; } } }
+fn consumed() -> i64 { let c: H1 = H1 { e: E.A(mk(6)) }; match c { H1 { e } => { return eat(e); } } }
+fn by_value_param(h: H1) -> i64 { match h { H1 { e } => { return 9; } } }
+fn struct_leaf() { let c: H2 = H2 { r: mk(8) }; match c { H2 { r } => { println("  s"); } } }
+fn wildcard() { let c: H1 = H1 { e: E.A(mk(9)) }; match c { H1 { e: _ } => { println("  w"); } } }
+
+fn main() {
+    println("unread"); unread();
+    println("bound_result"); let a: i64 = bound_result(); println(f"  ={a}");
+    println("iflet"); iflet();
+    println("read_only"); let b: i64 = read_only(); println(f"  ={b}");
+    println("consumed"); let c2: i64 = consumed(); println(f"  ={c2}");
+    println("by_value_param"); let d: i64 = by_value_param(H1 { e: E.A(mk(7)) }); println(f"  ={d}");
+    println("struct_leaf"); struct_leaf();
+    println("wildcard"); wildcard();
+    println("end");
+}
+"#,
+            &[
+                "unread",
+                "  m",
+                "  dE",
+                "  dR1",
+                "bound_result",
+                "  dE",
+                "  dR2",
+                "  =9",
+                "iflet",
+                "  i",
+                "  dE",
+                "  dR3",
+                "read_only",
+                "  dE",
+                "  dR4",
+                "  =5",
+                "consumed",
+                "  dE",
+                "  dR6",
+                "  =6",
+                "by_value_param",
+                "  dE",
+                "  dR7",
+                "  =9",
+                "struct_leaf",
+                "  s",
+                "  dR8",
+                "wildcard",
+                "  w",
+                "  dE",
+                "  dR9",
+                "end",
+            ],
+            "unconsumed_enum_leaf_of_a_local_struct_scrutinee_is_balanced",
+        );
+    }
+
     /// B-2026-09-06-37 — the MEMORY half of
     /// `e2e_wildcard_arm_over_owned_enum_receiver_runs_payload_body`
     /// (tests/codegen.rs). The lowering-pass rewrite turns a wildcard payload

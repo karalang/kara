@@ -1159,7 +1159,20 @@ impl<'ctx> super::Codegen<'ctx> {
                 // zeroes the moved-out fields' memory in the source; without
                 // this the source's bodies walk still visited them and ran a
                 // user `Drop` body a second time on the cleared husk.
-                self.disarm_arm_destructured_struct_field_bodies(scrutinee, &arm.pattern);
+                {
+                    let arm_body = arm.body.clone();
+                    let arm_guard = arm.guard.clone();
+                    self.disarm_arm_destructured_struct_field_bodies(
+                        scrutinee,
+                        &arm.pattern,
+                        &|n: &str| {
+                            !super::consume_class::binding_only_borrowed(n, &arm_body)
+                                || arm_guard.as_ref().is_some_and(|g| {
+                                    !super::consume_class::binding_only_borrowed(n, g)
+                                })
+                        },
+                    );
+                }
                 // B-2026-07-21-7: ref-chain struct clone — the expr-based
                 // suppression above bails on the borrowed root, so fire the
                 // same per-field cap-zeroing against the CLONE slot instead
@@ -10628,10 +10641,30 @@ impl<'ctx> super::Codegen<'ctx> {
     /// below: this runs inside a match ARM whose cleanup frame is inner to the
     /// owner's, and a re-register would move the owner's walk into the arm and
     /// drain it there.
+    ///
+    /// B-2026-09-06-36 — takes `binding_is_consumed`, the caller's answer to
+    /// "does this arm / block actually MOVE the named field binding out?".
+    ///
+    /// The whole-move arm below masked a field's bodies whenever its
+    /// sub-pattern was a bare binding, without ever asking whether the arm used
+    /// it. So `let c = H1 { e: E.A(mk(34)) }; match c { H1 { e } => { .. } }`
+    /// with `e` never touched masked `e`'s bodies in the source and gave the
+    /// binding none of its own — the leaf's `Drop` body ran NOWHERE on the
+    /// compiled backends, against `dE dR34` on `--interp`. The disarm is a
+    /// HANDOVER (the doc above says so: it exists so the moved-out field is not
+    /// walked twice), and with nothing moved out there is no one to hand to.
+    ///
+    /// The predicate is a closure rather than a scope argument because the four
+    /// callers hold different things: `compile_match` has the arm's body
+    /// `Expr`, `compile_if_let` / `compile_while_let` have a `Block`, and
+    /// `compile_let_else` has NO scope for the binding at all (it escapes into
+    /// the enclosing block), so it answers a constant `true` and keeps today's
+    /// mask — the same `scope: None` convention the interpreter's twin states.
     pub(super) fn disarm_arm_destructured_struct_field_bodies(
         &mut self,
         scrutinee: &Expr,
         pattern: &Pattern,
+        binding_is_consumed: &dyn Fn(&str) -> bool,
     ) {
         // A borrow-mode arm binds a VIEW: the source keeps ownership and its
         // walk must stay armed. Same gate the Option/Result field sibling
@@ -10685,6 +10718,83 @@ impl<'ctx> super::Codegen<'ctx> {
                 Some(p) => matches!(p.kind, PatternKind::Binding(_)),
             };
             if whole_move {
+                // B-2026-09-06-36 — the mask is a HANDOVER, and an UNCONSUMED
+                // binding has no downstream owner to hand to. `let c = H1 { e:
+                // E.A(mk(34)) }; match c { H1 { e } => { .. } }` with `e` never
+                // touched masked `e`'s bodies in the source and gave the
+                // binding none of its own, so the leaf's `Drop` body ran
+                // NOWHERE on the compiled backends against `dE dR34` on
+                // `--interp`.
+                //
+                // Register the bodies on the BINDING rather than declining the
+                // mask, because the MEMORY half beside this one has already
+                // handed the field's heap to the binding (its doc: "the binding
+                // owns the field's entire heap subtree"). Leaving the body with
+                // the source would run it over the husk the cap-zeroing left —
+                // measured `dR0` for `dR34`, the exact symptom this function's
+                // own doc records. Body and memory stay with one owner.
+                //
+                // Safe to resolve the binding by name HERE and not at the
+                // memory suppressor: this site runs INSIDE the arm, after
+                // `bind_pattern_values`, so `variables` holds this arm's
+                // binding. The earlier attempt recorded on the row put the
+                // registration in `suppress_destructured_struct_pattern_cleanup_at`,
+                // which is shared with the `let`-destructure path and runs
+                // BEFORE its bind, where the same lookup could resolve a STALE
+                // same-named binding from an earlier statement.
+                let bound_name = match &field_pat.pattern {
+                    None => Some(field_pat.name.clone()),
+                    Some(p) => match &p.kind {
+                        PatternKind::Binding(n) => Some(n.clone()),
+                        _ => None,
+                    },
+                };
+                // NOT for an owned-PARAM scrutinee (named or `self`): there
+                // the leaf is a view of the callee's entry copy and the CALLER
+                // runs its body (caller-retains), which is why the by-value
+                // param and `self`-receiver spellings were already correct on
+                // all four surfaces. Registering here as well doubled them —
+                // measured `dE dR54 dE dR54` against `dE dR54`.
+                let scrut_is_owned_param = self.scrutinee_is_owned_param_binding(scrutinee);
+                if let Some(bound) = bound_name
+                    .filter(|_| !scrut_is_owned_param)
+                    .filter(|n| !binding_is_consumed(n.as_str()))
+                {
+                    // ENUM-typed leaves only. A STRUCT leaf is already
+                    // correct: the source's own field-bodies walker covers it,
+                    // and registering here as well doubled it — measured
+                    // `m dR2 dR2` against `--interp`'s `m dR2` for
+                    // `struct H2 { r: R }`, and `dR6 dR6` against `dR6` for a
+                    // struct leaf beside a scalar. The row scoped itself to an
+                    // ENUM leaf and listed the struct leaf as NOT MEASURED;
+                    // this is that measurement, and it says leave it alone.
+                    // `Option`/`Result` keep their own payload machinery, and a
+                    // `shared` enum drops through refcounts rather than a walk.
+                    if let Some(field_ty) =
+                        field_type_names.get(idx).cloned().flatten().filter(|t| {
+                            !matches!(t.as_str(), "Option" | "Result")
+                                && self
+                                    .type_decls
+                                    .enum_layouts
+                                    .get(t.as_str())
+                                    .is_some_and(|l| !l.is_shared)
+                        })
+                    {
+                        if let Some(slot) = self.variables.get(bound.as_str()).map(|s| s.ptr) {
+                            if let Some(bodies) =
+                                self.emit_struct_user_drop_bodies_only_fn(&field_ty)
+                            {
+                                self.track_user_drop_var_with_fn(
+                                    &field_ty,
+                                    &bound,
+                                    slot,
+                                    bodies,
+                                    UserDropKind::StructFieldBodies,
+                                );
+                            }
+                        }
+                    }
+                }
                 self.type_decls
                     .struct_moved_field_bodies
                     .entry(var_name.clone())

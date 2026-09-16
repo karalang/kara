@@ -400,7 +400,9 @@ impl<'ctx> super::Codegen<'ctx> {
             // still visits the moved-out field and runs its user `Drop` body a
             // second time on the husk the cap-zeroing just left
             // (B-2026-08-31-26).
-            self.disarm_arm_destructured_struct_field_bodies(value, pattern);
+            self.disarm_arm_destructured_struct_field_bodies(value, pattern, &|n: &str| {
+                !super::consume_class::binding_only_borrowed_block(n, then_block)
+            });
         }
         // B-2026-06-10-6: a variable `Option[String]`/`Option[Vec]` scrutinee
         // with a `FreeInlineOptionPayload` needs its source `cap` zeroed when
@@ -1186,7 +1188,9 @@ impl<'ctx> super::Codegen<'ctx> {
             // still visits the moved-out field and runs its user `Drop` body a
             // second time on the husk the cap-zeroing just left
             // (B-2026-08-31-26).
-            self.disarm_arm_destructured_struct_field_bodies(value, pattern);
+            self.disarm_arm_destructured_struct_field_bodies(value, pattern, &|n: &str| {
+                !super::consume_class::binding_only_borrowed_block(n, body)
+            });
         }
         // B-2026-06-10-6: variable inline-`Option` scrutinee source-cap
         // suppression (see `compile_if_let`). No-op for temp / non-inline.
@@ -2089,7 +2093,11 @@ impl<'ctx> super::Codegen<'ctx> {
             // still visits the moved-out field and runs its user `Drop` body a
             // second time on the husk the cap-zeroing just left
             // (B-2026-08-31-26).
-            self.disarm_arm_destructured_struct_field_bodies(value, pattern);
+            // B-2026-09-06-36 — `let … else` binds into the ENCLOSING block, so
+            // there is no scope here to classify the binding against. Answer
+            // "consumed" and keep today's mask, the same `scope: None`
+            // convention the interpreter's twin states.
+            self.disarm_arm_destructured_struct_field_bodies(value, pattern, &|_n: &str| true);
         }
         // B-2026-06-10-6: variable inline-`Option` scrutinee — `s` binds into
         // the enclosing scope where x's `FreeInlineOptionPayload` also lives,
