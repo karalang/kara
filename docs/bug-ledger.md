@@ -99,7 +99,7 @@ distinguish "bugs flattening" from "we stopped writing them down."
 | missing-feature | 199 |
 | codegen-gap | 178 |
 | diagnostics | 126 |
-| other | 115 |
+| other | 116 |
 | perf | 114 |
 | false-positive | 107 |
 | soundness | 95 |
@@ -113,7 +113,7 @@ distinguish "bugs flattening" from "we stopped writing them down."
 | codegen | 1784 |
 | interp | 450 |
 | typecheck | 301 |
-| other | 91 |
+| other | 92 |
 | ownership | 75 |
 | cli | 73 |
 | autopar | 56 |
@@ -192,6 +192,7 @@ _Generated from `bug-ledger.jsonl` by `scripts/bug-curve.py` (2026-05-20 → 202
 | B-2026-09-16-1 | 2026-09-16 | codegen | medium | `s[a..b]` STILL REACHES SSO CONSTRUCTION THROUGH AN OPAQUE CALL -- `karac_string_slice_into`, the slice-syntax sibling of the `karac_string_try_inline_into` that B-2026-09-15-13 just removed from `String.substring`. The `lexlike` rail is unchanged at 215ms against a 176ms KARAC_SSO=0 baseline (+23%) while `substr`, which did identical work through the other spelling, went 217ms -> 22ms in 9d3ceb9. Same opaque-call shape, same fix available, one extra obstacle: this entrypoint also performs the UTF-8 boundary validation, which codegen already emits inline for `substring` via `emit_substring_boundary_checks`. | — |
 | B-2026-09-16-2 | 2026-09-16 | codegen+interp | medium | THE DISPLACED ELEMENT'S USER `Drop` BODY NEVER RUNS FOR A TUPLE OR NESTED-ARRAY ELEMENT SHAPE, ON EITHER BACKEND -- `a[0] = <new>` over `Array[(D, i64), N]` or `Array[Array[D, 1], M]` prints nothing for the displaced value on all four surfaces; the split-out body remainder of B-2026-09-15-31 and -15-32, resting on a DELIBERATE invariant in each backend (`value_runs_user_drop` classifies a bare Tuple/Array as false at top level to keep the container walkers the sole firers), so a one-sided fix would convert an agreed gap into a divergence | — |
 | B-2026-09-16-3 | 2026-09-16 | codegen | low | THE NESTED STORE `d[i][j] = x` LEAKS THE DISPLACED TUPLE'S HEAP -- 5 B in 1 block at `-O0` over `Vec[Vec[(String, i64)]]`, and the one-line fix the shape invites (a tuple arm in `emit_elem_store_releasing_displaced`) is a DOUBLE FREE, because that helper also runs for the single-level store which 6c0f802 already releases through the drop emitter | — |
+| B-2026-09-16-4 | 2026-09-16 | other | medium | THE ASAN RATCHET LEGS RUN THE OPT-IN-ARCHIVE FIXTURES AGAINST A RUNTIME THAT CAN BE ARBITRARILY OLD, AND NOTHING DETECTS IT -- every archive check in the tree is PRESENCE-ONLY (`link_or_skip` discriminates on `undefined symbol`, the leg's carve-out keys on archive FILENAMES, nothing anywhere compares an archive's mtime to `runtime/src`), so a BEHAVIOUR-ONLY runtime change leaves the ~6 regex/arrow/unicode fixtures linking cleanly and running the old semantics. Measured on this container 2026-09-16: those three archives were built Sep 11 21:12-21:13 and `runtime/src` has moved three times since, so the legs reported 1641/1641 green with six fixtures executing a runtime four days stale -- including one commit (`bab0491`) that is a pure behaviour change. | — |
 
 ### Relocated
 
