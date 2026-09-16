@@ -4328,13 +4328,26 @@ fn jit_broken_pipe_stops_the_program_like_a_native_binary() {
     );
 }
 
-/// The pid/comm table, as `(pid, ppid, comm)`. `ps -A -o …` with the trailing
-/// `=` on each field suppresses the header and is the one spelling that works
-/// identically on Linux and macOS — `/proc` would be Linux-only.
+/// The process table, as `(pid, ppid, state, comm)`. `ps -A -o …` with the
+/// trailing `=` on each field suppresses the header and is the one spelling
+/// that works identically on Linux and macOS — `/proc` would be Linux-only.
+///
+/// B-2026-09-09-5 — `state` is here because a ZOMBIE is listed by `ps` and
+/// KEEPS ITS `comm`, so a pid/comm table alone cannot tell "still running"
+/// from "exited, not yet reaped". That distinction is the whole subject of
+/// `runner_alive`. Measured on this container: after the parent is killed and
+/// reaped, the runner reparents to pid 1, exits ~0.25s later, and then sits in
+/// `Z` for a further ~1.2-1.7s before pid 1 reaps it — a window in which a
+/// comm-only check calls a dead runner a surviving orphan. The state column
+/// costs nothing (same `ps` call) and is portable, which `/proc/<pid>/stat`
+/// is not.
+///
+/// A state token can carry flags (`Ss`, `R+`), so tests on it match the FIRST
+/// character rather than the whole string.
 #[cfg(all(feature = "llvm", unix))]
-fn process_table() -> Vec<(u32, u32, String)> {
+fn process_table() -> Vec<(u32, u32, String, String)> {
     let out = match std::process::Command::new("ps")
-        .args(["-A", "-o", "pid=,ppid=,comm="])
+        .args(["-A", "-o", "pid=,ppid=,state=,comm="])
         .output()
     {
         Ok(o) => o,
@@ -4346,9 +4359,40 @@ fn process_table() -> Vec<(u32, u32, String)> {
             let mut f = line.split_whitespace();
             let pid = f.next()?.parse().ok()?;
             let ppid = f.next()?.parse().ok()?;
-            Some((pid, ppid, f.collect::<Vec<_>>().join(" ")))
+            let state = f.next()?.to_owned();
+            Some((pid, ppid, state, f.collect::<Vec<_>>().join(" ")))
         })
         .collect()
+}
+
+/// Whether `state` is a zombie — exited, awaiting reap. Not alive for any
+/// purpose these tests care about.
+#[cfg(all(feature = "llvm", unix))]
+fn is_zombie(state: &str) -> bool {
+    state.starts_with('Z')
+}
+
+/// The runner's row as `ps` currently reports it, for an assertion message.
+/// B-2026-09-09-5 asked for exactly this: two failures of the test below were
+/// recorded with no assertion text, so neither could be attributed, and the
+/// row's note says "a session that hits it again should keep the unfiltered
+/// stderr". Printing the state at the assert makes the failure name its own
+/// mechanism instead.
+#[cfg(all(feature = "llvm", unix))]
+fn proc_row(pid: u32) -> String {
+    match process_table().into_iter().find(|(p, ..)| *p == pid) {
+        Some((_, ppid, state, comm)) => {
+            let note = if is_zombie(&state) {
+                " (ZOMBIE — it has already exited and is awaiting reap by its \
+                 new parent, so this is a reaping delay and NOT a surviving \
+                 orphan)"
+            } else {
+                ""
+            };
+            format!("ppid={ppid} state={state} comm={comm}{note}")
+        }
+        None => "not in the process table at all".to_owned(),
+    }
 }
 
 /// Linux's `comm` is capped at 15 bytes, so `karac_jit_runner` shows up as
@@ -4360,8 +4404,10 @@ const RUNNER_COMM: &str = "karac_jit_runne";
 fn runner_child_of(parent: u32) -> Option<u32> {
     process_table()
         .into_iter()
-        .find(|(_, ppid, comm)| *ppid == parent && comm.contains(RUNNER_COMM))
-        .map(|(pid, _, _)| pid)
+        .find(|(_, ppid, state, comm)| {
+            *ppid == parent && comm.contains(RUNNER_COMM) && !is_zombie(state)
+        })
+        .map(|(pid, ..)| pid)
 }
 
 /// Whether `pid` is STILL the runner. Checking liveness alone would be a pid
@@ -4371,7 +4417,7 @@ fn runner_child_of(parent: u32) -> Option<u32> {
 fn runner_alive(pid: u32) -> bool {
     process_table()
         .into_iter()
-        .any(|(p, _, comm)| p == pid && comm.contains(RUNNER_COMM))
+        .any(|(p, _, state, comm)| p == pid && comm.contains(RUNNER_COMM) && !is_zombie(&state))
 }
 
 #[cfg(all(feature = "llvm", unix))]
@@ -4493,15 +4539,22 @@ fn signalling_karac_run_does_not_orphan_the_jit_runner() {
             )),
             "SIG{sig} to `karac run` (pid {karac_pid}) left karac_jit_runner \
              (pid {runner_pid}) alive — it is spinning at 100% CPU with no \
-             handle on it, which is B-2026-09-05-24"
+             handle on it, which is B-2026-09-05-24. Runner now: {}",
+            proc_row(runner_pid)
         );
 
         assert!(
             poll_until(std::time::Duration::from_secs(5), || !ir.exists()),
             "SIG{sig} to `karac run` leaked the handoff IR file {} — the parent \
              cannot unlink it on a path where it is killed outright, so the \
-             runner has to",
-            ir.display()
+             runner has to. Runner now: {}. This assert has a 5s deadline \
+             against the 15s one above, and B-2026-09-10-10 measured this leg \
+             racy at 2 of 4 full-gate runs against 0 of 2 isolated, so a \
+             load-correlated failure of this TEST is likelier to be this \
+             assert than the orphan one — check which line failed before \
+             attributing it (B-2026-09-09-5)",
+            ir.display(),
+            proc_row(runner_pid)
         );
     }
 }
