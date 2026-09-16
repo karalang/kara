@@ -10524,6 +10524,56 @@ impl<'ctx> super::Codegen<'ctx> {
             .entry(var_name.to_string())
             .or_default();
         skip.insert(field_idx);
+        self.remask_struct_field_bodies_for_var_inner(var_name, &struct_name, slot, &subst);
+    }
+
+    /// B-2026-09-07-1 — RE-EMIT `var_name`'s field-bodies walker under whatever
+    /// masks its maps currently hold, adding none.
+    ///
+    /// The tail of [`Self::disarm_struct_field_bodies_at`], lifted so a caller
+    /// that has already WRITTEN a mask can apply it without inventing a
+    /// top-level field index to pass. The destructure leaf hand-off needs
+    /// exactly that: a deep chain (`let x = o.h.g.r;`) leaves the leaf `h` a
+    /// remainder path `[g] -> {r}` and no top-level index at all, so calling
+    /// the `_at` entry point would have had to mask a whole field to trigger a
+    /// re-emit — masking strictly more than moved.
+    ///
+    /// Every guard below is that function's; keeping ONE copy is the point,
+    /// since each one is a measured regression (an own-`Drop` parent has no
+    /// per-binding walker to replace, a param view that owns no walk must not
+    /// have one minted, and the walker is swapped in place so a move-out
+    /// compiled inside an `if` body does not drain in the inner frame).
+    pub(super) fn remask_struct_field_bodies_for_var(&mut self, var_name: &str) {
+        let Some(struct_name) = self.var_types.var_type_names.get(var_name).cloned() else {
+            return;
+        };
+        let Some(slot) = self.variables.get(var_name).copied() else {
+            return;
+        };
+        let subst = self
+            .type_decls
+            .enum_inst_var_types
+            .get(var_name)
+            .cloned()
+            .map(|i| self.generic_struct_subst_from_inst(&struct_name, &i))
+            .unwrap_or_default();
+        self.remask_struct_field_bodies_for_var_inner(var_name, &struct_name, slot, &subst);
+    }
+
+    fn remask_struct_field_bodies_for_var_inner(
+        &mut self,
+        var_name: &str,
+        struct_name: &str,
+        slot: crate::codegen::VarSlot<'ctx>,
+        subst: &std::collections::HashMap<String, crate::ast::TypeExpr>,
+    ) {
+        let struct_name = struct_name.to_string();
+        let subst = subst.clone();
+        let skip = self
+            .type_decls
+            .struct_moved_field_bodies
+            .entry(var_name.to_string())
+            .or_default();
         // B-2026-08-28-23 — this site masks whole TOP-LEVEL fields (a field
         // moved out of the binding), so its tree carries `here` and no nested
         // level; the tree shape exists for the caller-side argument sites,

@@ -8679,6 +8679,63 @@ impl<'a> super::Interpreter<'a> {
                 for bound in pattern.binding_names() {
                     self.rearm_container_bodies_for_name(&bound);
                 }
+                // B-2026-09-07-1 — HAND THE LEAF THE SOURCE'S MOVE-OUT MASKS.
+                // AFTER the bind and its re-arm, deliberately: binding a name
+                // clears that name's stale masks (a fresh binding must start
+                // unmasked, or a shadowing `let` would inherit them), so a mask
+                // seeded before `bind_pattern` is wiped by it — measured, the
+                // leaf's walk read `flat=[]`.
+                //
+                // `let x = o.h.r;` records `(o, ["h", "r"])` in
+                // `moved_out_nested_field_bodies` and the SOURCE's own walk
+                // consults it. But `let Outer { h, k } = o;` gives the bound
+                // leaf `h` a Drop slot of its OWN, keyed on `h`, and nothing
+                // rewrote the record onto that key — so `h`'s field walk found
+                // no mask and ran `r`'s body a second time over `o`'s copy
+                // (`dR1 dR2 dR1`, on all four surfaces).
+                //
+                // The record is a PATH rooted at the source, so the translation
+                // is a prefix strip: `(o, ["h", "r"])` bound at leaf `h` becomes
+                // `(h, "r")` — the flat per-field mask for a depth-1 remainder,
+                // the path map for anything deeper. The WILDCARD spelling was
+                // already correct (B-2026-09-06-55 masks the moved leaf out of
+                // the discarded value), which is what puts the axis on the bound
+                // leaf rather than on the destructure. Codegen twin: the
+                // prefix-strip block at the end of
+                // `finish_owned_struct_destructure`.
+                if let (crate::ast::PatternKind::Struct { fields, .. }, ExprKind::Identifier(src)) =
+                    (&pattern.kind, &value.kind)
+                {
+                    let nested: Vec<Vec<String>> = self
+                        .moved_out_nested_field_bodies
+                        .iter()
+                        .filter(|(n, _)| n == src)
+                        .map(|(_, p)| p.clone())
+                        .collect();
+                    for fp in fields {
+                        let leaf = match &fp.pattern {
+                            None => Some(fp.name.clone()),
+                            Some(p) => match &p.kind {
+                                crate::ast::PatternKind::Binding(n) => Some(n.clone()),
+                                _ => None,
+                            },
+                        };
+                        let Some(leaf) = leaf else { continue };
+                        for path in &nested {
+                            if path.len() < 2 || path[0] != fp.name {
+                                continue;
+                            }
+                            if path.len() == 2 {
+                                self.moved_out_struct_field_bodies
+                                    .insert((leaf.clone(), path[1].clone()));
+                            } else {
+                                self.moved_out_nested_field_bodies
+                                    .insert((leaf.clone(), path[1..].to_vec()));
+                            }
+                        }
+                    }
+                }
+
                 // B-2026-07-30-11 (Option/Result leg): record (or clear) the
                 // binding's payload-bodies te — the registration moment,
                 // mirroring codegen's let-site walker registration.

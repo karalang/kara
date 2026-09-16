@@ -69011,3 +69011,57 @@ fn main() {
 "#);
     assert_eq!(out, "none\n  x5\n  dE\n  dR1\ntemp\n  dE\n  dR2\n  x5\nnodrop\n  x5\n  dR3\ngeneric\n  x5\n  dR4\nmatches\n  dR5\n  x5\n  dE\nret_self\n  dE\n  dR6\n  dE\n  got\nwrap\n  dE\n  dR7\n  dE\n  got\nrefm\n  x3\n  dE\n  dR8\nplain\n  dE\n  dR9\n  x9\nend\n", "got:\n{out}");
 }
+
+/// B-2026-09-07-1 — A DEEP-CHAIN MOVE-OUT WHOSE HOP IS THEN BOUND OUT RAN THE
+/// MOVED LEAF'S `Drop` BODY TWICE, and the compiled second fire read a HUSK.
+///
+/// `let x = o.h.r;` records the move as a PATH on the source (`(o, [h, r])`),
+/// and the source's own walk honours it. But `let Outer { h, k } = o;` gives
+/// the bound leaf `h` a walker of its OWN, keyed on `h`, and nothing rewrote
+/// the record onto that key — so `h` ran `r`'s body a second time over `o`'s
+/// copy. The WILDCARD spelling was already correct, which is what put the axis
+/// on the bound leaf rather than on the destructure.
+///
+/// THE `String` FIELD IS LOAD-BEARING and the row that filed this said so: with
+/// a plain `i64` payload both backends print `dR1 dR2 dR1` and the agreement
+/// reads as "both wrong the same way". Add a heap field and they split — the
+/// compiled copy's `name` was cap-zeroed by the move-out, so it printed
+/// `dR1/` where `--interp` printed `dR1/n1`. So this is a run-vs-build
+/// divergence as well as a doubled body, and only the `String` spelling shows
+/// it. MEMORY IS BALANCED throughout (83 allocs, 83 frees, 0 errors) — a
+/// doubled body over an intact free set, which no sanitizer can see and only a
+/// body-COUNT assertion catches.
+///
+/// `bound` is the row's cell; `renamed` (`h: hh`) and `two_outs` (two moves out
+/// of one hop, which doubled TWICE) are the same axis through other spellings;
+/// `deep` is the three-hop chain, and it is the cell that forced the two
+/// backends to move together — the interpreter applies its map at WALK time and
+/// was fixed by the record alone, while codegen emits the leaf's walker eagerly
+/// and needed an explicit re-emit, so fixing only the obvious half would have
+/// left a fresh divergence behind. `wild`, `nosplit` and `nestedpat` are the
+/// controls that must not move.
+///
+/// Twin of `tests/codegen.rs`'s
+/// `e2e_deep_chain_move_out_then_bound_hop_runs_each_body_once`, byte-identical source and expectation.
+#[test]
+fn test_deep_chain_move_out_then_bound_hop_runs_each_body_once() {
+    let out = run(r#"struct R { id: i64, name: String }
+impl Drop for R { fn drop(mut ref self) { println(f"  dR{self.id}/{self.name}") } }
+fn mk(i: i64) -> R { return R { id: i, name: f"n{i}" } }
+struct Inner { r: R, q: R }
+struct Deep { g: Inner, z: i64 }
+struct Outer { h: Inner, k: R }
+struct OuterD { h: Deep, k: R }
+fn main() {
+    println("bound");     { let o: Outer = Outer { h: Inner { r: mk(1), q: mk(2) }, k: mk(3) }; let x: R = o.h.r; let Outer { h, k } = o; println("  mid"); println(f"  v={k.id}") }
+    println("renamed");   { let o: Outer = Outer { h: Inner { r: mk(4), q: mk(5) }, k: mk(6) }; let x: R = o.h.r; let Outer { h: hh, k } = o; println("  mid"); println(f"  v={k.id}") }
+    println("two_outs");  { let o: Outer = Outer { h: Inner { r: mk(7), q: mk(8) }, k: mk(9) }; let x: R = o.h.r; let y: R = o.h.q; let Outer { h, k } = o; println("  mid"); println(f"  v={k.id}") }
+    println("deep");      { let o: OuterD = OuterD { h: Deep { g: Inner { r: mk(10), q: mk(11) }, z: 1 }, k: mk(12) }; let x: R = o.h.g.r; let OuterD { h, k } = o; println("  mid"); println(f"  v={k.id}") }
+    println("wild");      { let o: Outer = Outer { h: Inner { r: mk(13), q: mk(14) }, k: mk(15) }; let x: R = o.h.r; let Outer { h: _, k } = o; println("  mid"); println(f"  v={k.id}") }
+    println("nosplit");   { let o: Outer = Outer { h: Inner { r: mk(16), q: mk(17) }, k: mk(18) }; let Outer { h, k } = o; println("  mid"); println(f"  v={k.id}") }
+    println("nestedpat"); { let o: Outer = Outer { h: Inner { r: mk(19), q: mk(20) }, k: mk(21) }; let Outer { h: Inner { r, q }, k } = o; println("  mid"); println(f"  v={k.id}") }
+    println("end");
+}
+"#);
+    assert_eq!(out, "bound\n  dR1/n1\n  dR2/n2\n  mid\n  v=3\n  dR3/n3\nrenamed\n  dR4/n4\n  dR5/n5\n  mid\n  v=6\n  dR6/n6\ntwo_outs\n  dR7/n7\n  dR8/n8\n  mid\n  v=9\n  dR9/n9\ndeep\n  dR10/n10\n  dR11/n11\n  mid\n  v=12\n  dR12/n12\nwild\n  dR13/n13\n  dR14/n14\n  mid\n  v=15\n  dR15/n15\nnosplit\n  dR17/n17\n  dR16/n16\n  mid\n  v=18\n  dR18/n18\nnestedpat\n  dR20/n20\n  dR19/n19\n  mid\n  v=21\n  dR21/n21\nend\n", "got:\n{out}");
+}

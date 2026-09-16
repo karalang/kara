@@ -16554,6 +16554,89 @@ impl<'ctx> super::Codegen<'ctx> {
                 self.fire_struct_field_bodies_now(src);
             }
         }
+        // B-2026-09-07-1 — HAND EACH BOUND LEAF THE SOURCE'S MOVE-OUT MASKS.
+        // `let x = o.h.r;` records `struct_moved_nested_field_bodies[o][[h]] =
+        // {r}`, and the SOURCE's walk honours it. But this destructure gives
+        // the bound leaf `h` a walker of its OWN, keyed on `h`, emitted
+        // UNMASKED — so `h` ran `r`'s body a second time over `o`'s copy, and
+        // on the compiled backends that second read is a HUSK: the move-out
+        // cap-zeroed the copy's `name`, so `dR1/` printed where `--interp`
+        // printed `dR1/n1`. A doubled body over an intact free set, so valgrind
+        // and ASAN are both clean on it.
+        //
+        // The record is a PATH rooted at the source, so the translation is a
+        // prefix strip — `[h] -> {r}` bound at leaf `h` becomes a top-level
+        // mask of `r` on `h`. `disarm_struct_field_bodies_at` is the right
+        // instrument rather than a fresh emit: it re-reads EVERY mask through
+        // `field_skip_tree_for_var` and carries the guards this site would
+        // otherwise have to repeat (an own-`Drop` parent masks its wrapper, a
+        // param view with no walk gets none minted, and the walker is swapped
+        // in place rather than re-registered into an inner frame).
+        //
+        // The WILDCARD spelling was already correct on both backends, which is
+        // what puts the axis on the bound leaf rather than on the destructure.
+        // Interpreter twin: the prefix-strip block in `eval_stmt.rs`, after
+        // `bind_pattern`.
+        if let Some(src) = place_body_src.as_deref() {
+            let nested: Vec<(Vec<usize>, Vec<usize>)> = self
+                .type_decls
+                .struct_moved_nested_field_bodies
+                .get(src)
+                .map(|m| {
+                    m.iter()
+                        .map(|(path, idxs)| (path.clone(), idxs.iter().copied().collect()))
+                        .collect()
+                })
+                .unwrap_or_default();
+            if !nested.is_empty() {
+                for fp in fields {
+                    // Only a WHOLE-leaf binding takes the hop's value; a nested
+                    // sub-pattern destructures further and its own leaves are
+                    // registered by their own bindings.
+                    let leaf = match &fp.pattern {
+                        None => Some(fp.name.clone()),
+                        Some(p) => match &p.kind {
+                            PatternKind::Binding(n) => Some(n.clone()),
+                            _ => None,
+                        },
+                    };
+                    let (Some(leaf), Some(hop_idx)) =
+                        (leaf, field_names.iter().position(|n| *n == fp.name))
+                    else {
+                        continue;
+                    };
+                    for (path, idxs) in &nested {
+                        if path.first() != Some(&hop_idx) {
+                            continue;
+                        }
+                        if path.len() == 1 {
+                            for i in idxs {
+                                self.disarm_struct_field_bodies_at(&leaf, *i);
+                            }
+                        } else {
+                            // A DEEPER chain (`let x = o.h.g.r;`): the remainder
+                            // is still a path on the leaf, so re-key it and
+                            // re-emit under it. The re-emit is NOT optional —
+                            // the leaf's walker was already emitted unmasked
+                            // earlier in this function, so writing the record
+                            // alone left codegen doubling (`dR19/`, a husk
+                            // read) while the interpreter, which applies its
+                            // map at walk time, was already correct. That
+                            // asymmetry is exactly the divergence this row
+                            // warns has to move in one commit.
+                            self.type_decls
+                                .struct_moved_nested_field_bodies
+                                .entry(leaf.clone())
+                                .or_default()
+                                .entry(path[1..].to_vec())
+                                .or_default()
+                                .extend(idxs.iter().copied());
+                            self.remask_struct_field_bodies_for_var(&leaf);
+                        }
+                    }
+                }
+            }
+        }
         Ok(())
     }
 
