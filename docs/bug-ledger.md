@@ -95,7 +95,7 @@ distinguish "bugs flattening" from "we stopped writing them down."
 | run-vs-build | 415 |
 | miscompile | 413 |
 | leak | 361 |
-| double-free | 235 |
+| double-free | 236 |
 | missing-feature | 199 |
 | codegen-gap | 178 |
 | diagnostics | 126 |
@@ -110,7 +110,7 @@ distinguish "bugs flattening" from "we stopped writing them down."
 
 | surface | total |
 |---|---|
-| codegen | 1786 |
+| codegen | 1787 |
 | interp | 451 |
 | typecheck | 301 |
 | other | 94 |
@@ -193,6 +193,7 @@ _Generated from `bug-ledger.jsonl` by `scripts/bug-curve.py` (2026-05-20 → 202
 | B-2026-09-16-6 | 2026-09-16 | codegen+interp | medium | TWO BODIES-CHANNEL GAPS FOR AN `Array[T, N]` HELD IN A TUPLE, both found while pinning the output twin of B-2026-09-13-23's memory fix and both memory-clean under it: a tuple in a STRUCT FIELD runs no element `Drop` body on ANY backend, and a DESTRUCTURED tuple runs them under `--interp` and on NEITHER compiled backend -- an agreed silence and a run-vs-build divergence in the same family | — |
 | B-2026-09-16-7 | 2026-09-16 | other | medium | THE ARCHIVE FRESHNESS CHECK COVERS ONLY THE TWO ASAN LEGS -- `link_or_skip` is still PRESENCE-ONLY, so the ordinary `cargo test --features llvm` run (the one everybody actually runs, and the one CI runs) still executes E2E fixtures against a runtime archive of any age with nothing to say so; `karac_jit_runner` has the identical exposure and is not checked either; and a `KARAC_RUNTIME=<path>` override outside `target/release/` is not inspected at all. B-2026-09-16-4 fixed the legs and NAMED these three in its closing prose, which is where work goes to be forgotten. | — |
 | B-2026-09-16-8 | 2026-09-16 | other | medium | `bug-lint.sh` SKIPS ITS FIX-SHA RESOLVABILITY CHECK ON EVERY CLOUD CONTAINER, WHICH IS WHERE THE ORPHANS ARE CREATED -- the check is disabled outright on a shallow clone (`rev-parse --is-shallow-repository`), and cloud sessions are shallow by default, so the one detector for a row citing a commit that exists nowhere on `main` is off in exactly the environment that produces them. EIGHT rows now carry a `SHA NOTE` recording an orphan, against the two CLAUDE.md names; the most recent was created and caught by hand 2026-09-16, with the lint reporting 0 errors on the same tree. | — |
+| B-2026-09-16-9 | 2026-09-16 | codegen | high | REGRESSION ON `main`: `506a91d` TURNED THE `(Array[String, 2], i64)` ENUM-PAYLOAD CELL FROM A LEAK INTO AN INVALID FREE -- valgrind reports `Invalid free()` plus two uninitialised-value contexts (24-26 errors, stable) where `506a91d^` reported a plain leak with 1; the same commit correctly fixed the plain-local and struct-field positions, so it is a regression in KIND at one position rather than a partial fix, and it is the SECOND time this tuple/Array element walk has introduced corruption after `da73ec3c8` was reverted for the same class | — |
 
 ### Relocated
 
