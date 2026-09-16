@@ -4127,6 +4127,7 @@ fn main() {
                 "  v=15",
                 "plain",
                 "  dE",
+                "  dR16",
                 "  v=1",
                 "borrowed",
                 "  dE",

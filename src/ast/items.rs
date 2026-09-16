@@ -1656,6 +1656,87 @@ fn type_name_can_contain(
 /// callee frame registers nothing for an owned `self` (caller-retains), so an
 /// unconditional stand-down would lose the body on the non-rebinding path —
 /// the B-2026-08-28-22 class. Those spellings keep today's behaviour.
+/// B-2026-09-06-39 — does `f` DESTRUCTURE a bare `self` in a `match` /
+/// `if let` / `while let`?
+///
+/// The ENUM-receiver companion to [`fn_binds_self_part_out`], and it exists
+/// because that predicate deliberately answers `false` here. Its
+/// B-2026-09-06-15 note explains why: for a bare owned STRUCT receiver both
+/// backends bind the arms as VIEWS (`bare_self_is_owned_struct_receiver` and
+/// its interpreter twin), so `match self { H1 { e } => .. }` hands nothing out
+/// and the caller's walk is the one body owner.
+///
+/// An ENUM receiver is the opposite, and the interpreter says so in as many
+/// words: "A bare owned ENUM `self` keeps its transfer semantics: neither
+/// registrar walks an enum receiver's bodies, so the arm channel is still
+/// their only owner." So for an enum the arm DOES take the payload, and a
+/// caller-side walk on top of it fires the body twice — measured, as
+/// `dR2 x2 dE dR2`, when this predicate was missing and the enum disarm was
+/// gated on `fn_binds_self_part_out` alone.
+///
+/// The two together are the real question at the disarm: is there an arm
+/// channel to hand this receiver's payload to? `fn_binds_self_part_out` covers
+/// the `let` transfer, this covers the match spelling, and neither alone is
+/// sufficient. A WILDCARD arm counts (`E.A(_)`) — the arm channel fires the
+/// payload there too, measured — so the test is the scrutinee, not the
+/// pattern's bindings.
+pub fn fn_matches_on_bare_self(f: &Function) -> bool {
+    fn is_bare_self(e: &Expr) -> bool {
+        matches!(&e.kind, ExprKind::SelfValue)
+    }
+    fn walk_expr(e: &Expr) -> bool {
+        match &e.kind {
+            ExprKind::Match { scrutinee, arms } => {
+                is_bare_self(scrutinee)
+                    || walk_expr(scrutinee)
+                    || arms.iter().any(|a| walk_expr(&a.body))
+            }
+            ExprKind::IfLet {
+                value,
+                then_block,
+                else_branch,
+                ..
+            } => {
+                is_bare_self(value)
+                    || walk_expr(value)
+                    || walk_block(then_block)
+                    || else_branch.as_deref().is_some_and(walk_expr)
+            }
+            ExprKind::WhileLet { value, body, .. } => {
+                is_bare_self(value) || walk_expr(value) || walk_block(body)
+            }
+            ExprKind::Block(b)
+            | ExprKind::Unsafe(b)
+            | ExprKind::Try(b)
+            | ExprKind::Seq(b)
+            | ExprKind::Par(b) => walk_block(b),
+            ExprKind::If {
+                condition,
+                then_block,
+                else_branch,
+            } => {
+                walk_expr(condition)
+                    || walk_block(then_block)
+                    || else_branch.as_deref().is_some_and(walk_expr)
+            }
+            ExprKind::While { body, .. }
+            | ExprKind::For { body, .. }
+            | ExprKind::Loop { body, .. }
+            | ExprKind::LabeledBlock { body, .. } => walk_block(body),
+            _ => false,
+        }
+    }
+    fn walk_block(b: &Block) -> bool {
+        b.stmts.iter().any(|st| match &st.kind {
+            StmtKind::Let { value, .. } | StmtKind::LetElse { value, .. } => walk_expr(value),
+            StmtKind::Expr(e) => walk_expr(e),
+            StmtKind::Defer { body } | StmtKind::ErrDefer { body, .. } => walk_block(body),
+            _ => false,
+        }) || b.final_expr.as_deref().is_some_and(walk_expr)
+    }
+    walk_block(&f.body)
+}
+
 pub fn fn_rebinds_self_whole(f: &Function) -> bool {
     f.body.stmts.iter().any(|st| {
         matches!(&st.kind, StmtKind::Let { pattern, value, .. }

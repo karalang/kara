@@ -7592,6 +7592,48 @@ impl<'ctx> super::Codegen<'ctx> {
                         .var_type_names
                         .get(recv_name.as_str())
                         .is_some_and(|tn| self.type_decls.enum_layouts.contains_key(tn.as_str()))
+                        // B-2026-09-06-39 — ...but only when there IS an arm to
+                        // hand the payload to. This disarm is a HAND-OFF, and
+                        // B-2026-08-01-7 wrote it for the callee that matches on
+                        // `self`; a callee that never destructures `self`
+                        // (`fn m_none(self) -> i64 { return 5 }`) has no arm
+                        // channel, so the hand-off reached NOBODY and the
+                        // payload's `Drop` body was lost outright — on every
+                        // surface, with memory still balanced, so no A/B check
+                        // and no ASAN fixture could see it.
+                        //
+                        // `fn_binds_self_part_out` is the same predicate the
+                        // receiver-TEMP registrar already gates `owned_self_shell`
+                        // on, and it answers exactly this question: does the
+                        // callee bind a field, a destructure leaf, or a payload
+                        // out of `self`? When it does, the arm owns the payload
+                        // and this disarm is still required (B-2026-08-01-7's
+                        // doubled body). When it does not, the caller keeps its
+                        // walk, which is what the STRUCT receiver beside it has
+                        // always done.
+                        && self.find_impl_method_ast(&receiver_type, method).is_some_and(|f| {
+                            let items = self
+                                .program_snapshot
+                                .as_deref()
+                                .map(|p| p.items.as_slice())
+                                .unwrap_or(&[]);
+                            // Disarm when ANYONE else owns the payload:
+                            //  * an arm channel does (the callee destructures
+                            //    `self`, by `let` transfer or by matching on it), or
+                            //  * the RESULT does — a return that can carry the
+                            //    receiver (`-> Self`, `-> E`, `-> W { e: E }`)
+                            //    hands it to the caller's result binding.
+                            // Keeping the walk on that second shape added a
+                            // second payload body on top of an already-doubled
+                            // shell (`dE dR5 dE` -> `dE dR5 dE dR5`), measured.
+                            crate::ast::fn_binds_self_part_out(f)
+                                || crate::ast::fn_matches_on_bare_self(f)
+                                || !crate::ast::owned_self_return_cannot_carry_receiver(
+                                    f,
+                                    &receiver_type,
+                                    items,
+                                )
+                        })
                     {
                         let recv_name = recv_name.clone();
                         self.suppress_container_elem_bodies_for_var(&recv_name);
@@ -11136,7 +11178,15 @@ impl<'ctx> super::Codegen<'ctx> {
                                     f, &type_name, items,
                                 ) && !crate::ast::fn_binds_self_part_out(f)
                             });
-                    if ref_self_borrows {
+                    // B-2026-09-06-39 — an owned `self` temp gets the payload
+                    // walk too, but ONLY where no arm channel claims it:
+                    // `E.A(mk(13)).matches()` fires the payload from the arm,
+                    // and registering the walk beside it printed `dR13 dE dR13`.
+                    let owned_self_enum_payload = owned_self_shell
+                        && !self
+                            .find_impl_method_ast(&type_name, method)
+                            .is_some_and(crate::ast::fn_matches_on_bare_self);
+                    if ref_self_borrows || owned_self_enum_payload {
                         if let Some(walk) = self.emit_enum_payload_user_drop_bodies_fn(&type_name) {
                             self.track_user_drop_var_with_fn(
                                 &type_name,

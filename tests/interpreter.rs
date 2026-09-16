@@ -48160,6 +48160,14 @@ fn test_ref_self_match_borrowed_payload_silent() {
 /// `e2e_owned_self_enum_receiver_single_fire`, same source and expected
 /// string. Pre-fix both backends double-fired the match-consume shape
 /// identically (arm channel + the receiver binding's still-armed walk).
+///
+/// B-2026-09-06-39 — CELL `b` WAS PINNING A LOST BODY, and its own label said
+/// so: `just_three(self)` never destructures `self`, and this fixture recorded
+/// `w=3` with no `drop 8 e8` under the words "consumed silently". The disarm
+/// cell `a` needed is a HAND-OFF to the arm channel, and cell `b` has no arm —
+/// so the hand-off reached nobody and the payload's body was lost on every
+/// surface. Both cells now fire exactly once: `a` from the arm, `b` from the
+/// caller's restored walk. The label is corrected to match.
 #[test]
 fn test_owned_self_enum_receiver_single_fire() {
     assert_eq!(
@@ -48189,14 +48197,14 @@ fn test_owned_self_enum_receiver_single_fire() {
                  let b = mk_e(7);\n\
                  let v = b.into_id();\n\
                  println(f\"v={v}\");\n\
-                 println(\"b: owned-self non-consuming — consumed silently\");\n\
+                 println(\"b: owned-self non-consuming — runs its payload body\");\n\
                  let c = mk_e(8);\n\
                  let w = c.just_three();\n\
                  println(f\"w={w}\");\n\
                  println(\"end\");\n\
              }\n"),
         "a: owned-self match-consume fires once via the arm\ndrop 7 e7\nv=7\n\
-         b: owned-self non-consuming — consumed silently\nw=3\nend\n"
+         b: owned-self non-consuming — runs its payload body\ndrop 8 e8\nw=3\nend\n"
     );
 }
 
@@ -58274,6 +58282,7 @@ top_let
   v=15
 plain
   dE
+  dR16
   v=1
 borrowed
   dE
@@ -68812,4 +68821,76 @@ fn main() {
          dR14\ndR13\ndR12\ne=25\n",
         "got:\n{out}"
     );
+}
+
+/// B-2026-09-06-39 — AN OWNED ENUM RECEIVER'S PAYLOAD `Drop` BODY IS LOST
+/// WHENEVER THE CALLEE NEVER DESTRUCTURES `self`.
+///
+/// `let a = E.A(mk(1)); a.none()` over `fn none(self) -> i64 { return 5 }` ran
+/// the enum's SHELL body and never the payload's, on all four surfaces, with
+/// memory balanced — so no A/B check and no ASAN fixture could see it. The
+/// STRUCT receiver beside it was always correct (`S { r }.s_none()` prints
+/// `dS dR`), which is what localises the fault: both registrars deliberately
+/// "walk a STRUCT receiver's bodies caller-side and leave an ENUM receiver's to
+/// the match-arm channel" — and with no match, that channel does not exist.
+///
+/// The disarm was a HAND-OFF written for the callee that matches on `self`
+/// (B-2026-08-01-7's doubled body), applied unconditionally. It now fires only
+/// when someone else really owns the payload: an arm channel does
+/// (`fn_binds_self_part_out`, or the new `fn_matches_on_bare_self` for the
+/// `match self` spelling a struct receiver treats as views), or the RESULT does
+/// (a return that can carry the receiver).
+///
+/// `none` / `temp` / `nodrop` / `generic` are the fixed cells — local receiver,
+/// fresh temp, an enum with NO `impl Drop` of its own, and a generic enum. The
+/// rest are the controls that must not move, each covering one clause of the
+/// gate: `matches` (the arm owns it — the shape whose double this disarm exists
+/// to prevent), `ret_self` and `wrap` (the result owns it), `refm` (`ref self`,
+/// already correct), `plain` (no call at all — the reference order, `dE` then
+/// `dR`, per design.md § Part 8 "the user's `fn drop` body runs first, then the
+/// compiler drops each field").
+///
+/// TWO PRE-EXISTING DEFECTS ARE PINNED AS-IS HERE RATHER THAN BLESSED, both
+/// measured identical before and after this fix and filed separately: the
+/// `dE … dE` in `ret_self` and `wrap` is a DOUBLED SHELL body on a receiver
+/// that escapes via the return, and `E.A(mk(n)).ret_self().none()` (a chain)
+/// runs NO body at all. Neither is this row's, and pinning them keeps this
+/// fixture honest about what it measured.
+///
+/// Twin of `tests/codegen.rs`'s
+/// `e2e_owned_enum_receiver_runs_its_payload_body_when_no_arm_claims_it`, byte-identical source and expectation — the only fixture
+/// shape that can hold an agreed gap closed.
+#[test]
+fn test_owned_enum_receiver_runs_its_payload_body_when_no_arm_claims_it() {
+    let out = run(r#"struct R { id: i64, tag: String, xs: Vec[i64] }
+impl Drop for R { fn drop(mut ref self) { println(f"  dR{self.id}") } }
+fn mk(i: i64) -> R { return R { id: i, tag: f"t{i}", xs: [i] } }
+enum E { A(R), B }
+impl Drop for E { fn drop(mut ref self) { println("  dE") } }
+enum N { A(R), B }
+enum G[T] { X(T), Y }
+struct W { e: E }
+impl E {
+    fn none(self) -> i64 { return 5 }
+    fn matches(self) -> i64 { match self { E.A(r) => { return r.id; } E.B => { return 0; } } }
+    fn ret_self(self) -> E { return self }
+    fn wrap(self) -> W { return W { e: self } }
+    fn refm(ref self) -> i64 { return 3 }
+}
+impl N { fn none(self) -> i64 { return 5 } }
+impl G[R] { fn none(self) -> i64 { return 5 } }
+fn main() {
+    println("none");     { let a: E = E.A(mk(1)); println(f"  x{a.none()}") }
+    println("temp");     { println(f"  x{E.A(mk(2)).none()}") }
+    println("nodrop");   { let a: N = N.A(mk(3)); println(f"  x{a.none()}") }
+    println("generic");  { let g: G[R] = G.X(mk(4)); println(f"  x{g.none()}") }
+    println("matches");  { let a: E = E.A(mk(5)); println(f"  x{a.matches()}") }
+    println("ret_self"); { let a: E = E.A(mk(6)); let b: E = a.ret_self(); println("  got") }
+    println("wrap");     { let a: E = E.A(mk(7)); let w: W = a.wrap(); println("  got") }
+    println("refm");     { let a: E = E.A(mk(8)); println(f"  x{a.refm()}") }
+    println("plain");    { let a: E = E.A(mk(9)); println("  x9") }
+    println("end");
+}
+"#);
+    assert_eq!(out, "none\n  x5\n  dE\n  dR1\ntemp\n  dE\n  dR2\n  x5\nnodrop\n  x5\n  dR3\ngeneric\n  x5\n  dR4\nmatches\n  dR5\n  x5\n  dE\nret_self\n  dE\n  dR6\n  dE\n  got\nwrap\n  dE\n  dR7\n  dE\n  got\nrefm\n  x3\n  dE\n  dR8\nplain\n  dE\n  dR9\n  x9\nend\n", "got:\n{out}");
 }

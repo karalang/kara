@@ -513,7 +513,33 @@ impl<'a> super::Interpreter<'a> {
                                     self.moved_out_struct_field_payload_bodies
                                         .insert((recv_name.clone(), names));
                                 }
-                                if matches!(obj, Value::EnumVariant { .. }) {
+                                // B-2026-09-06-39 — ...but only when there IS
+                                // an arm to hand the payload to. This disarm is
+                                // a HAND-OFF to the arm channel, and a callee
+                                // that never destructures `self`
+                                // (`fn m_none(self) -> i64 { return 5 }`) has no
+                                // arm channel, so it reached NOBODY and the
+                                // payload's `Drop` body was lost outright.
+                                // Codegen twin: the `suppress_container_elem_
+                                // bodies_for_var` gate in method_call.rs.
+                                if matches!(obj, Value::EnumVariant { .. })
+                                    && self
+                                        .find_impl_method_ast(&type_name, method)
+                                        .is_some_and(|f| {
+                                            // ...or the RESULT owns it: a return
+                                            // that can carry the receiver hands
+                                            // the payload to the caller's result
+                                            // binding, so the local's walk must
+                                            // still stand down.
+                                            crate::ast::fn_binds_self_part_out(f)
+                                                || crate::ast::fn_matches_on_bare_self(f)
+                                                || !crate::ast::owned_self_return_cannot_carry_receiver(
+                                                    f,
+                                                    &type_name,
+                                                    &self.program.items,
+                                                )
+                                        })
+                                {
                                     self.moved_out_container_bodies_bindings
                                         .insert(recv_name.clone());
                                 }
@@ -1093,7 +1119,18 @@ impl<'a> super::Interpreter<'a> {
                 if self.program.drop_method_keys.contains_key(&tn) {
                     self.run_user_drop_body_only(&tn, obj.clone());
                 }
-                if ref_self {
+                // B-2026-09-06-39 — an OWNED `self` temp gets the payload walk
+                // too, whenever no arm channel claims it. The comment above is
+                // right that the arm owns the payload when the callee matches
+                // on `self`; when it does not, nobody did, and the body was
+                // lost. Shell first, then the payload — design.md § Part 8
+                // ("the user's `fn drop` body runs first, then the compiler
+                // drops each field"), which is the order a named local prints.
+                let owned_self_enum_payload = owned_self_enum_shell
+                    && !self
+                        .find_impl_method_ast(type_name, method)
+                        .is_some_and(crate::ast::fn_matches_on_bare_self);
+                if ref_self || owned_self_enum_payload {
                     self.run_enum_payload_user_drops_value(obj);
                 }
             }
