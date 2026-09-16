@@ -4874,6 +4874,176 @@ impl<'ctx> super::Codegen<'ctx> {
         // also not a new call — the allocating path already made one.
         if self.sso_on() {
             let out = self.sso_descriptor_alloca(fn_val, "slice.out");
+            // Separate slot for the inline route. `out` is handed to the
+            // runtime call below, so its address escapes and LLVM must keep it
+            // in memory; a slot touched only by memcpy/memset stays
+            // promotable, which is what lets the fast path keep the descriptor
+            // in registers.
+            let fout = self.sso_descriptor_alloca(fn_val, "slice.fout");
+            // B-2026-09-16-1 — the fast path, mirroring what 9d3ceb9 did for
+            // `substring`. The call below is opaque to LLVM and is the whole
+            // cost on short slices; `lexlike` sat at 6.9x `substr` on arm64
+            // purely because it still made it.
+            //
+            // Everything here is a GUARD on taking the inline route. Any
+            // condition that fails falls through to the untouched call, which
+            // re-validates and keeps its exit paths and their messages exactly
+            // as they are — so this cannot change behaviour on any input the
+            // runtime would have rejected, only on ones it would have accepted.
+            let i8_t = self.context.i8_type();
+            let n = self
+                .builder
+                .build_int_nsw_sub(end_i, start_i, "slice.n")
+                .unwrap();
+            let zero = i64_t.const_zero();
+            let ge0 = self
+                .builder
+                .build_int_compare(inkwell::IntPredicate::SGE, start_i, zero, "slice.ge0")
+                .unwrap();
+            let ord = self
+                .builder
+                .build_int_compare(inkwell::IntPredicate::SGE, end_i, start_i, "slice.ord")
+                .unwrap();
+            let fits_len = self
+                .builder
+                .build_int_compare(inkwell::IntPredicate::SLE, end_i, str_len, "slice.inlen")
+                .unwrap();
+            let b1 = self.builder.build_and(ge0, ord, "slice.b1").unwrap();
+            let bounds_ok = self.builder.build_and(b1, fits_len, "slice.bok").unwrap();
+
+            let chk_bb = self.context.append_basic_block(fn_val, "slice.chk");
+            let slow_bb = self.context.append_basic_block(fn_val, "slice.slow");
+            let empty_bb = self.context.append_basic_block(fn_val, "slice.empty");
+            let enc_bb = self.context.append_basic_block(fn_val, "slice.enc");
+            let enc_done_bb = self.context.append_basic_block(fn_val, "slice.encd");
+            let cont_bb = self.context.append_basic_block(fn_val, "slice.cont");
+            self.builder
+                .build_conditional_branch(bounds_ok, chk_bb, slow_bb)
+                .unwrap();
+
+            // The boundary probes dereference `data`, so they belong here and
+            // not above: on the false edge those indices are exactly the ones
+            // that would read out of bounds.
+            self.builder.position_at_end(chk_bb);
+            let is_boundary = |this: &Self, idx: inkwell::values::IntValue<'ctx>, tag: &str| {
+                let at_zero = this
+                    .builder
+                    .build_int_compare(inkwell::IntPredicate::EQ, idx, zero, &format!("{tag}.z"))
+                    .unwrap();
+                let at_len = this
+                    .builder
+                    .build_int_compare(inkwell::IntPredicate::EQ, idx, str_len, &format!("{tag}.l"))
+                    .unwrap();
+                let p = unsafe {
+                    this.builder
+                        .build_gep(i8_t, data_ptr, &[idx], &format!("{tag}.p"))
+                        .unwrap()
+                };
+                let byte = this
+                    .builder
+                    .build_load(i8_t, p, &format!("{tag}.b"))
+                    .unwrap()
+                    .into_int_value();
+                let masked = this
+                    .builder
+                    .build_and(byte, i8_t.const_int(0xC0, false), &format!("{tag}.m"))
+                    .unwrap();
+                let not_cont = this
+                    .builder
+                    .build_int_compare(
+                        inkwell::IntPredicate::NE,
+                        masked,
+                        i8_t.const_int(0x80, false),
+                        &format!("{tag}.nc"),
+                    )
+                    .unwrap();
+                let e = this
+                    .builder
+                    .build_or(at_zero, at_len, &format!("{tag}.e"))
+                    .unwrap();
+                this.builder
+                    .build_or(e, not_cont, &format!("{tag}.ok"))
+                    .unwrap()
+            };
+            // `idx == len` short-circuits in the runtime before its own index,
+            // but an `or` evaluates both sides, so the load at `len` still
+            // happens. It is in bounds for every String this path can see: the
+            // buffer always has a byte at `len` (heap slices are NUL-terminated
+            // and the inline overlay's byte 23 is the flag), and the value is
+            // discarded when `at_len` is true.
+            let sb = is_boundary(self, start_i, "slice.sb");
+            let eb = is_boundary(self, end_i, "slice.eb");
+            let bounds2 = self.builder.build_and(sb, eb, "slice.bnd2").unwrap();
+            let short = self
+                .builder
+                .build_int_compare(
+                    inkwell::IntPredicate::SLE,
+                    n,
+                    i64_t.const_int(Self::STRING_INLINE_CAPACITY, false),
+                    "slice.short",
+                )
+                .unwrap();
+            let fast = self.builder.build_and(bounds2, short, "slice.fast").unwrap();
+            let is_empty = self
+                .builder
+                .build_int_compare(inkwell::IntPredicate::EQ, n, zero, "slice.n0")
+                .unwrap();
+            let take_empty = self.builder.build_and(fast, is_empty, "slice.tke").unwrap();
+            let take_enc = self
+                .builder
+                .build_and(
+                    fast,
+                    self.builder.build_not(is_empty, "slice.nn0").unwrap(),
+                    "slice.tkc",
+                )
+                .unwrap();
+            let after_empty = self.context.append_basic_block(fn_val, "slice.chk2");
+            self.builder
+                .build_conditional_branch(take_empty, empty_bb, after_empty)
+                .unwrap();
+            self.builder.position_at_end(after_empty);
+            self.builder
+                .build_conditional_branch(take_enc, enc_bb, slow_bb)
+                .unwrap();
+
+            // n == 0 is `{null, 0, 0}` in the runtime, NOT an inline empty.
+            self.builder.position_at_end(empty_bb);
+            let ptr_ty = self.context.ptr_type(AddressSpace::default());
+            let mut e_agg = str_ty_sso.get_undef();
+            e_agg = self
+                .builder
+                .build_insert_value(e_agg, ptr_ty.const_null(), 0, "slice.e.p")
+                .unwrap()
+                .into_struct_value();
+            e_agg = self
+                .builder
+                .build_insert_value(e_agg, zero, 1, "slice.e.l")
+                .unwrap()
+                .into_struct_value();
+            e_agg = self
+                .builder
+                .build_insert_value(e_agg, zero, 2, "slice.e.c")
+                .unwrap()
+                .into_struct_value();
+            let empty_end_bb = self.builder.get_insert_block().unwrap();
+            self.builder.build_unconditional_branch(cont_bb).unwrap();
+
+            self.builder.position_at_end(enc_bb);
+            let src = unsafe {
+                self.builder
+                    .build_gep(i8_t, data_ptr, &[start_i], "slice.src")
+                    .unwrap()
+            };
+            self.sso_emit_inline_construct(src, n, fout, enc_done_bb, slow_bb, "slice.inl");
+            self.builder.position_at_end(enc_done_bb);
+            let enc_val = self
+                .builder
+                .build_load(str_ty_sso, fout, "slice.enc.v")
+                .unwrap();
+            let enc_end_bb = self.builder.get_insert_block().unwrap();
+            self.builder.build_unconditional_branch(cont_bb).unwrap();
+
+            self.builder.position_at_end(slow_bb);
             self.builder
                 .build_call(
                     self.runtime_fns.karac_string_slice_into_fn,
@@ -4887,11 +5057,21 @@ impl<'ctx> super::Codegen<'ctx> {
                     "",
                 )
                 .unwrap();
-            let loaded = self
+            let slow_val = self
                 .builder
-                .build_load(str_ty_sso, out, "slice.sso")
+                .build_load(str_ty_sso, out, "slice.slow.v")
                 .unwrap();
-            return Ok(loaded);
+            let slow_end_bb = self.builder.get_insert_block().unwrap();
+            self.builder.build_unconditional_branch(cont_bb).unwrap();
+
+            self.builder.position_at_end(cont_bb);
+            let phi = self.builder.build_phi(str_ty_sso, "slice.sso").unwrap();
+            phi.add_incoming(&[
+                (&e_agg, empty_end_bb),
+                (&enc_val, enc_end_bb),
+                (&slow_val, slow_end_bb),
+            ]);
+            return Ok(phi.as_basic_value());
         }
 
         // karac_string_slice(data, len, start, end) -> new buffer ptr.

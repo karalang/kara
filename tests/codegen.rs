@@ -19072,6 +19072,62 @@ done
         assert_eq!(out, "dR101\ndR1\none\nn\ndR102\ndR2\ntwo\nin\ndR103\ndR3\nthree\ndR104\ndR4\nfour\nn\ndR105\ndR5\nfive\nin\ndR106\ndR6\nsix\ndR107\ndR7\nin\nseven\nin\ndR8\neight\ndR9\nnine\nn\nten\nend\n");
     }
 
+    /// B-2026-09-16-1 — `s[a..b]` builds its descriptor inline instead of
+    /// through `karac_string_slice_into`.
+    ///
+    /// The fast path re-implements the runtime's bounds test, its UTF-8
+    /// boundary test and its inline encoding in IR, and takes the call only
+    /// when one of them declines. Three ways that can go wrong and none of them
+    /// change the printed answer on the happy path alone, so the cases below
+    /// pin the edges:
+    ///
+    ///  * the EMPTY slice is `{null, 0, 0}` in the runtime, not an inline
+    ///    empty — a descriptor that disagreed would compare unequal to
+    ///    `String.new()`, which case 3 checks directly;
+    ///  * 23 bytes is the inline capacity and 24 must fall to the heap route;
+    ///  * a multibyte index that is not a char boundary must still reach the
+    ///    runtime's fatal path, and one that IS a boundary must be sliced.
+    ///
+    /// Case 8 is the aliasing question: the slice must own its bytes, so
+    /// growing the source afterwards cannot disturb it.
+    #[test]
+    fn e2e_string_slice_inline_fast_path_matches_the_runtime() {
+        let Some(out) = run_program(
+            "fn main() {\n\
+             \x20   let s = \"let mut fn if else while return for in match struct enum impl\";\n\
+             \x20   let mut i = 0;\n\
+             \x20   let mut n = 0;\n\
+             \x20   while i < 20 { let t = s[i..(i + 3)]; n = n + t.len(); i = i + 1; }\n\
+             \x20   println(f\"1 {n}\")\n\
+             \x20   let e = s[5..5];\n\
+             \x20   println(f\"2 {e.len()}\")\n\
+             \x20   let e2 = String.new();\n\
+             \x20   println(f\"3 {e == e2}\")\n\
+             \x20   let a = s[0..23];\n\
+             \x20   let b = s[0..24];\n\
+             \x20   println(f\"4 {a.len()} {b.len()} [{a}] [{b}]\")\n\
+             \x20   let full = s[0..s.len()];\n\
+             \x20   println(f\"5 {full.len()} {full == s}\")\n\
+             \x20   let m = \"h\\u{e9}llo w\\u{f6}rld\";\n\
+             \x20   println(f\"6 [{m[0..1]}] [{m[1..3]}]\")\n\
+             \x20   let mut src = String.new();\n\
+             \x20   src.push_str(\"abcdefghij\");\n\
+             \x20   let keep = src[2..6];\n\
+             \x20   src.push_str(\"XXXXXXXXXX\");\n\
+             \x20   println(f\"7 [{keep}]\")\n\
+             \x20   println(\"end\")\n\
+             }\n\
+             ",
+        ) else {
+            return;
+        };
+        assert_eq!(
+            out,
+            "1 60\n2 0\n3 true\n4 23 24 [let mut fn if else whil] [let mut fn if else while]\n\
+             5 61 true\n6 [h] [\u{e9}]\n7 [cdef]\nend\n"
+        );
+    }
+
     /// B-2026-09-13-22 — `a + b + c` is ONE allocation sized to the total, not
     /// one per `+`.
     ///
