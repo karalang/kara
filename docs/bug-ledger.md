@@ -94,7 +94,7 @@ distinguish "bugs flattening" from "we stopped writing them down."
 |---|---|
 | run-vs-build | 415 |
 | miscompile | 414 |
-| leak | 362 |
+| leak | 363 |
 | double-free | 236 |
 | missing-feature | 199 |
 | codegen-gap | 178 |
@@ -110,7 +110,7 @@ distinguish "bugs flattening" from "we stopped writing them down."
 
 | surface | total |
 |---|---|
-| codegen | 1790 |
+| codegen | 1791 |
 | interp | 452 |
 | typecheck | 301 |
 | other | 94 |
@@ -169,7 +169,6 @@ _Generated from `bug-ledger.jsonl` by `scripts/bug-curve.py` (2026-05-20 → 202
 | B-2026-09-14-16 | 2026-09-14 | codegen+interp | low | PROJECTING ONE FIELD OFF A FRESH TEMP DROPS THE TEMP'S OTHER `Drop` BODIES ON EVERY SURFACE -- `let w = (mkw(7).r, 1);` runs the moved leaf's body but never the untouched sibling field's, while a bare discarded `mkw(7);` runs both | — |
 | B-2026-09-14-18 | 2026-09-14 | codegen+interp | medium | AN UNMOVED PART OF AN OWNED `Option` PAYLOAD LOSES ITS `Drop` BODY ON ALL FOUR SURFACES when the arm DESTRUCTURES the payload and returns a different part -- `Some((a, b)) => { return b; }` over `Option[(R, i64)]` prints `got:9 end` everywhere against the due `dR5 got:9 end`, and the two-Drop-element cell loses `dR6` everywhere, so the A/B parity rule sees nothing; this is the cell B-2026-09-13-5 recorded as 'correct on all four surfaces', which its `(R, i64)` sibling could not show | — |
 | B-2026-09-14-22 | 2026-09-14 | codegen | medium | A GENERIC ENUM'S BOXED PAYLOAD LOSES ITS `Drop` BODY ON EVERY COMPILED SURFACE ONCE THE CONSUMING ARM BINDS IT -- `takew(Ho.Full(mkw()))` over a three-`String` payload prints `w:4 end` on JIT/AOT against `--interp`'s `w:4 dW4 end`, and the named-local spelling splits the same way, while the identical callee that does NOT bind the payload is correct on all four and the MONOMORPHIC twin is correct in both shapes -- so the axis is `clear_boxed_enum_inner_drop` retracting the box's interior walk with nothing picking the body up | — |
-| B-2026-09-14-26 | 2026-09-14 | codegen | medium | A CONSUMING ARM OVER A BOXED TUPLE ENUM PAYLOAD LEAKS ITS ELEMENTS -- `T.A(p) => taket(p)` over `enum T { A((String, String)), B }` loses 159 B in 6 blocks (21 allocs / 15 frees) while the READ-ONLY arm over the same enum is clean, so it is arm-dependent and distinct from B-2026-09-12-10; it also REFUTES B-2026-09-14-17's guess that a boxed tuple shares the array's double free -- box-only arms leak where interior-walking arms abort | — |
 | B-2026-09-14-28 | 2026-09-14 | codegen | medium | `vertical`'s +85% SSO REGRESSION IS NOT THE DE-INLINE PROBE AND NOT `prefix_string` -- both were ruled out by measurement (c1adb9c removed the probe: +84.1% -> +85.4%; an exact mirror of `prefix_string` runs 9-15% FASTER under SSO), so the worst regression in the corpus is now UNATTRIBUTED. `shortest_distance_iii` (+36%) and `shortest_distance` (+61%) are the same shape. Reachable only at KARAC_SSO=1, which is off by default. | — |
 | B-2026-09-15-10 | 2026-09-15 | codegen | medium | A `shared enum` WHOSE PAYLOAD IS A NAMELESS AGGREGATE STRANDS ITS PAYLOAD BOX -- `Sh.S(a)` over `shared enum Sh { S(Array[String, 2]), N }` loses a 48 B envelope at `-O0`, `Array[i64, 2]` loses a bare 16 B with no heap anywhere, and a `(String, i64)` TUPLE payload loses 24 B, while `String`, a named struct, an OVERSIZE named struct and the same tuple on a NON-shared enum are all clean -- so the axis is `shared` x nameless aggregate, the box is one per CONSTRUCTION shared across handles, and relaxing the classifier's shared exclusion would double-free rather than fix it | — |
 | B-2026-09-15-12 | 2026-09-15 | codegen | low | A `-> ref` METHOD WHOSE INNER IS AN `Array[T, N]` OR A NAMED STRUCT IS DECLINED BY CODEGEN AT EVERY VALUE-POSITION CONSUMER -- `h.peek()[0]` says `Index operator applied to non-array type` and `h.peek().a` says `cannot resolve field 'a' on this receiver`, both while `--interp` prints the right answer; the TUPLE inner of the same shape now lowers (B-2026-09-15-4) and these two are the inners that fix deliberately declined to widen to | — |
@@ -194,6 +193,7 @@ _Generated from `bug-ledger.jsonl` by `scripts/bug-curve.py` (2026-05-20 → 202
 | B-2026-09-16-8 | 2026-09-16 | other | medium | `bug-lint.sh` SKIPS ITS FIX-SHA RESOLVABILITY CHECK ON EVERY CLOUD CONTAINER, WHICH IS WHERE THE ORPHANS ARE CREATED -- the check is disabled outright on a shallow clone (`rev-parse --is-shallow-repository`), and cloud sessions are shallow by default, so the one detector for a row citing a commit that exists nowhere on `main` is off in exactly the environment that produces them. EIGHT rows now carry a `SHA NOTE` recording an orphan, against the two CLAUDE.md names; the most recent was created and caught by hand 2026-09-16, with the lint reporting 0 errors on the same tree. | — |
 | B-2026-09-16-10 | 2026-09-16 | codegen | high | A GENERIC SINGLE-FIELD VARIANT AT `T = Array[String, N]` SEGFAULTS ON EVERY COMPILED BACKEND -- `G1.Y(a)` over `enum G1[T] { Y(T), N }` passed to a generic `fn glen[T](g: G1[T])` exits 139 with NO OUTPUT AT ALL, five invalid reads under valgrind, and B-2026-09-15-18 records this exact shape as its CLEAN CONTROL | — |
 | B-2026-09-16-11 | 2026-09-16 | codegen | low | THE ENUM TWIN OF B-2026-09-05-32'S IDENTITY ARM STILL LEAKS -- `e = if c { pass(e) } else { e }` over `enum E { A(String), B }` loses 36 bytes in 1 block (12 allocs / 11 frees at -O0) while the all-owned-calls spelling `else { mk() }` is 12 / 12 clean on the same tree; the enum overwrite path consumes the STRICT `roundtrip_frees_old` because it has no distinctness guard, so widening the shared predicate would have traded the leak for a use-after-free there | — |
+| B-2026-09-16-13 | 2026-09-16 | codegen | medium | A USER ENUM RETURNED BY A CALL AND PASSED BY VALUE LEAKS ITS PAYLOAD -- `eat(mk(i))` over `enum T { A(String), B }` loses 58 B in 2 blocks (13 allocs / 11 frees) with a callee that never reads the argument, while the SAME value through a named local is clean; not the callee's body, not the payload shape, and not `Option`/`Result` | — |
 
 ### Relocated
 
@@ -2595,6 +2595,7 @@ _Generated from `bug-ledger.jsonl` by `scripts/bug-curve.py` (2026-05-20 → 202
 | B-2026-09-14-23 | codegen | medium | A WHOLE-CONTAINER REASSIGNMENT LOSES THE DISPLACED CONTAINER'S ELEMENT `Drop` BODIES ON EVERY COMPILED BACKEND -- `let mut v: Vec[D] = [..]; v = [..]… | be0c605 |
 | B-2026-09-14-24 | typecheck | low | A NESTED `[..]` LITERAL UNDER A `Vec`-OUTER ANNOTATION DOES NOT TAKE THE INNER `Array[T, N]` TYPE -- `let v: Vec[Array[D, 1]] = [[mkd(1)], [mkd(2)]];… | 3dc6bbf |
 | B-2026-09-14-25 | codegen | high | AN `Array[D, N]` ENUM PAYLOAD WHOSE ELEMENT CARRIES BOTH HEAP AND A USER `Drop` BODY DOUBLE-FREES ON A CONSUMING ARM -- `Bd.A(a) => takeb(a)` over `e… | a56b9a2 |
+| B-2026-09-14-26 | codegen | medium | A CONSUMING ARM OVER A BOXED TUPLE ENUM PAYLOAD LEAKS ITS ELEMENTS -- `T.A(p) => taket(p)` over `enum T { A((String, String)), B }` loses 159 B in 6… | 96915f9 |
 | B-2026-09-14-27 | ownership+codegen | high | READING A NAMED `Array[T, N]` LOCAL AFTER PASSING IT BY VALUE PRINTS GARBAGE ON EVERY COMPILED BACKEND AT EXIT 0 -- `let n = take(a); println(a[0])`… | 9a56c60 |
 | B-2026-09-14-29 | codegen | medium | AN INDEX-ASSIGN DISPLACING A STRUCT ELEMENT OF AN `Array` LOSES ITS `Drop` BODY ON THE COMPILED BACKENDS ONLY, AND ITS MEMORY ON BOTH -- `a[0] = D { . | bfeeb86 |
 | B-2026-09-14-30 | codegen | medium | AN INDEX-ASSIGN WHOSE RHS IS A NAMED LOCAL DOUBLE-FREES THE MOVED-IN VALUE FOR A HEAP-OWNING ARRAY ELEMENT -- `a[0] = v3` over `Array[Vec[i64], 2]` r… | 666d673 |
