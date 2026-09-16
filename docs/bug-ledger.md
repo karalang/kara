@@ -99,7 +99,7 @@ distinguish "bugs flattening" from "we stopped writing them down."
 | missing-feature | 199 |
 | codegen-gap | 178 |
 | diagnostics | 126 |
-| other | 121 |
+| other | 122 |
 | perf | 114 |
 | false-positive | 108 |
 | soundness | 95 |
@@ -110,8 +110,8 @@ distinguish "bugs flattening" from "we stopped writing them down."
 
 | surface | total |
 |---|---|
-| codegen | 1799 |
-| interp | 459 |
+| codegen | 1800 |
+| interp | 460 |
 | typecheck | 302 |
 | other | 94 |
 | ownership | 75 |
@@ -131,7 +131,6 @@ _Generated from `bug-ledger.jsonl` by `scripts/bug-curve.py` (2026-05-20 → 202
 | id | date | surface | sev | title | tracker |
 |---|---|---|---|---|---|
 | B-2026-09-06-39 | 2026-09-06 | interp+codegen | low | A READ-ONLY ARM OVER AN OWNED ENUM RECEIVER RUNS THE PAYLOAD'S `Drop` BODY BEFORE THE SHELL'S ON EVERY SURFACE -- `a.m_read()` prints `dR1 dE`, the reverse of the local-scrutinee order B-2026-08-28-67 established (`dE dR`, shell then fields per design.md § Part 8), so the same read-only arm orders its two bodies differently depending on whether the scrutinee is `self` or a local | — |
-| B-2026-09-06-54 | 2026-09-06 | interp+codegen | low | AN OWNED-`self` ENUM RECEIVER'S PAYLOAD `Drop` BODY RUNS NOWHERE WHEN THE CALLEE BINDS NOTHING OUT -- `fn plain(self, c: bool) -> i64 { return 1; }` called on `E.A(mk(16))` prints `dE` and never `dR16`, on --interp / jit / aot / `KARAC_AUTO_PAR=0` alike, for a named receiver and a fresh temp; the same receiver prints `dR16 dE` the moment the callee matches on `self` | — |
 | B-2026-09-07-1 | 2026-09-07 | interp+codegen | low | A DEEP-CHAIN MOVE-OUT WHOSE HOP IS THEN BOUND OUT RUNS THE MOVED LEAF'S `Drop` BODY TWICE, AND THE SECOND FIRE READS A HUSK ON THE COMPILED BACKENDS -- `let x = o.h.r; let Outer { h, k } = o;` prints `dR1 dR2 dR1` on all four surfaces, and with a `String` field the compiled second fire is `dR1/` (empty name) against `--interp`'s `dR1/n1` | — |
 | B-2026-09-09-5 | 2026-09-09 | other | low | THREE LOAD-SENSITIVE TESTS IN THE REQUIRED GATE SET ARE STILL UNEXPLAINED after B-2026-09-09-1's named one turned out NOT to be flaky -- that one was a deterministic watchdog race that never armed (fixed 32223a5a6, 2-in-6 permanent orphans under load -> 0 in 8), so its resolution transfers no conclusion to the rest. Leading hypothesis for the ASAN pair is the vacuous-fixture floor: n=102 against a per-process HOST FLOOR of 90 measured on a box running dozens of concurrent ASAN processes, a 12-allocation margin that a drifting floor would trip with nothing wrong in the compiler -- with the counter-argument that a shared OnceLock floor should fail many fixtures at once, and only one failed | — |
 | B-2026-09-09-7 | 2026-09-09 | other | medium | A FULL DISK FAILS THE GATE SET AS AN LLVM CRASH, A LINKER BUS ERROR, OR A LOST OUTPUT STREAM -- never as a named test -- and it hit ELEVEN times across seven unrelated slices in one session. The session allowance is ~38 GiB (df's '252G size' is the host volume and is meaningless), ONE leg of `cargo test --no-run` costs 19.6 GiB in test binaries (134 executables x ~250 MiB at the default debug=2), so the SECOND feature leg cannot start. The obvious suspect is wrong: both clippy legs together cost 1.19 GiB. `CARGO_PROFILE_TEST_DEBUG=line-tables-only` cuts a test binary 252 -> 97 MiB and makes both legs fit | — |
@@ -190,6 +189,7 @@ _Generated from `bug-ledger.jsonl` by `scripts/bug-curve.py` (2026-05-20 → 202
 | B-2026-09-16-20 | 2026-09-16 | codegen | low | `karac_string_try_inline_into` IS DEAD ABI SURFACE -- no caller anywhere in the compiler since `9d3ceb9` removed its declaration from `runtime_fns.rs` and `codegen.rs`, and the JIT is not a second path (it goes through the same codegen), so no compiled Kara program on any backend references it; it remains a `#[no_mangle]` export in `runtime/src/clone.rs`, exercised only by its own unit tests and by the encoding-contract test. Keep-or-remove was deliberately deferred as 'a separate decision' and nothing tracks it. | — |
 | B-2026-09-16-22 | 2026-09-16 | codegen+interp | low | AN OWNED ENUM RECEIVER THAT ESCAPES THROUGH THE RETURN RUNS ITS SHELL `Drop` BODY TWICE, AND A CHAINED CALL OVER THE SAME SHAPE RUNS NO BODY AT ALL -- `let b = a.ret_self()` prints `dE dR6 dE` and `E.A(mk(14)).ret_self().none()` prints nothing, both agreed on all four surfaces with memory balanced | — |
 | B-2026-09-16-23 | 2026-09-16 | interp | low | TWO SHADOW-REBIND SPELLINGS STILL DOUBLE THE `Drop` BODY IN THE INTERPRETER -- a NESTED BLOCK (`{ let q = idr(q); .. }`) and an `if`-WRAPPED RHS both print `dR15 dR15` against one body on `karac build`; the first is out of the retraction's SCOPE and the second is a genuine per-path question the all-paths predicate correctly declines, so they need different repairs | — |
+| B-2026-09-16-25 | 2026-09-16 | interp+codegen | low | THE OWNED-`self` ENUM RECEIVER PAYLOAD-BODY SUPPRESSION IS ALL-PATHS, NOT PATH-SENSITIVE -- a callee that takes the payload on SOME path still suppresses the caller's walk on the paths it does NOT take, so `if c { match self { E.A(r) => .. } } return 0;` called with `c == false` prints a bare `dE` and loses `dR`; same for a zero-trip `while` and an unselected match arm; B-2026-09-16-21's fix answered the ALL-PATHS-NO case only | — |
 
 ### Relocated
 
@@ -2381,6 +2381,7 @@ _Generated from `bug-ledger.jsonl` by `scripts/bug-curve.py` (2026-05-20 → 202
 | B-2026-09-06-51 | codegen | medium | THE -O0 ASAN RATCHET HAS BEEN RED ON `main` SINCE edb7236 -- six fixtures that commit ADDED fail `scripts/asan-o0-leg.sh` unquarantined, so the gate… | f2ec7d6ac |
 | B-2026-09-06-52 | codegen | high | A TOP-LEVEL WHOLE REBIND OF A BY-VALUE PARAM WHOSE STRUCT HAS A DIRECT `shared` FIELD DOUBLE-FREES ON EVERY COMPILED SURFACE -- `fn topreb(r: R) -> i… | 0083494 |
 | B-2026-09-06-53 | interp+codegen | medium | A `Drop`-BEARING LOCAL BUILT FROM THE ENCLOSING FUNCTION'S PARAMETER RUNS NO `Drop` BODY AT ALL, ON EVERY SURFACE -- `fn a(i: i64) { let x = mkUses(i… | 35aff00 |
+| B-2026-09-06-54 | interp+codegen | low | AN OWNED-`self` ENUM RECEIVER'S PAYLOAD `Drop` BODY RUNS NOWHERE WHEN THE CALLEE BINDS NOTHING OUT -- `fn plain(self, c: bool) -> i64 { return 1; }`… | 0b97e7113 |
 | B-2026-09-06-55 | interp+codegen | low | A DEEP-CHAIN FIELD MOVE-OUT STILL LOSES THE MOVED HOP'S SIBLING ONE LEVEL DOWN, ON EVERY SURFACE -- `let o = Outer { h: Inner { r: mk(1), q: mk(2) },… | c68b7c2 |
 | B-2026-09-06-56 | codegen | low | THE `Result` SPELLING OF B-2026-09-06-50 LEAKS ITS WHOLE BOXED STRUCT PAYLOAD -- 192 B in 3 blocks over three calls for `fn show(x: Result[P, i64])`… | 6a0daa1 |
 | B-2026-09-06-57 | codegen | high | `main` IS RED: B-2026-09-06-45's OWN TWO REGRESSION TESTS FAIL ON A CLEAN CHECKOUT OF 6138e02 -- `asan_nested_self_rebind_keeps_one_owner` double-fre… | d3b39b8 |
