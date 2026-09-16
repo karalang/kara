@@ -99,7 +99,7 @@ distinguish "bugs flattening" from "we stopped writing them down."
 | missing-feature | 199 |
 | codegen-gap | 178 |
 | diagnostics | 126 |
-| other | 118 |
+| other | 119 |
 | perf | 114 |
 | false-positive | 107 |
 | soundness | 95 |
@@ -110,7 +110,7 @@ distinguish "bugs flattening" from "we stopped writing them down."
 
 | surface | total |
 |---|---|
-| codegen | 1796 |
+| codegen | 1797 |
 | interp | 456 |
 | typecheck | 301 |
 | other | 94 |
@@ -191,6 +191,7 @@ _Generated from `bug-ledger.jsonl` by `scripts/bug-curve.py` (2026-05-20 → 202
 | B-2026-09-16-16 | 2026-09-16 | codegen | medium | A PASSTHROUGH GENERIC PARAM OVER A BOXED ENUM PAYLOAD DOUBLE FREES -- `fn idG[T](g: G1[T]) -> G1[T] { return g }` over `enum G1[T] { Y(T), N }` at `T = String` exits 139 with two `Invalid free()` and 12 allocs / 14 frees against a correct `--interp`; B-2026-09-16-10's fix cannot reach it by construction, because the prologue declines an escaping param so BOTH halves correctly stand down and the second owner is elsewhere | — |
 | B-2026-09-16-18 | 2026-09-16 | codegen+interp | medium | A FRESH-TEMP STRUCT SCRUTINEE'S UNBOUND FIELDS LOSE THEIR `Drop` BODIES AND LEAK THEIR HEAP ON EVERY SURFACE -- `match S3 { a: mk(44), b: mk(45) } { S3 { a, .. } => .. }` runs `dR44` alone and `S3 { .. }` runs NOTHING, on --interp / jit / aot / `KARAC_AUTO_PAR=0` alike; valgrind at `-O0` reports 24 allocs / 20 frees, 12 bytes definitely lost in 4 blocks, one `name` buffer per unbound field. The NAMED-scrutinee spelling is correct on all four, so the husk of a temp with no binding is owned by nobody | — |
 | B-2026-09-16-19 | 2026-09-16 | codegen+interp | medium | A `Vec`-NESTING INSIDE AN `Option` OR `Map` FIELD RUNS ITS ELEMENT'S `Drop` BODY ON `--interp` AND ON NO COMPILED SURFACE -- `H { xs: Option[Vec[D]] }` and `H { xs: Map[i64, Vec[D]] }` both print `dD1` under the tree-walk backend and nothing under the JIT or either `build`, which REFUTES the premise `type_runs_user_drop`'s own comment rests on | — |
+| B-2026-09-16-20 | 2026-09-16 | codegen | low | `karac_string_try_inline_into` IS DEAD ABI SURFACE -- no caller anywhere in the compiler since `9d3ceb9` removed its declaration from `runtime_fns.rs` and `codegen.rs`, and the JIT is not a second path (it goes through the same codegen), so no compiled Kara program on any backend references it; it remains a `#[no_mangle]` export in `runtime/src/clone.rs`, exercised only by its own unit tests and by the encoding-contract test. Keep-or-remove was deliberately deferred as 'a separate decision' and nothing tracks it. | — |
 
 ### Relocated
 

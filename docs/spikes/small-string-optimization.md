@@ -192,13 +192,79 @@ non-vacuous by backing the fold out — the `KARAC_SSO=1` leg then SIGSEGVs whil
 the `=0` leg stays byte-identical to the oracle, which is why a default-off suite
 cannot catch this class on its own.
 
-**What a flip decision needs** has changed shape. The `substr` question is
-answered, and answered against this campaign's own framing: with SSO's inline
-encoding emitted as IR rather than called, the rail that was the track's worst
-regression becomes its largest win (B-2026-09-15-13). **The flip has been
-weighed against the cost of a call, not against the cost of SSO.** Still
-missing: whether that holds beyond one rail — the lexer, the corpus, `vertical`,
-arm64, none of them measured — and an attribution for `vertical`.
+## THE DECISION BRIEF — the measurement phase is closed (2026-09-16)
+
+**Everything measurement can settle here is settled. What is left is a
+judgement, not an experiment.** This section is the decision record; read it
+instead of reconstructing the argument from the 2,600 lines below, which are the
+working notes that produced it.
+
+### What SSO buys
+
+Construction gets cheaper, and after `9d3ceb9` and `066695ff` **every
+construction rail wins** (`0382953`, `RUNS=9`, `ITERS=3M`, auto-par pinned,
+x86-64):
+
+| `substr` | `lexlike` | `pfx_chars` | `promote` | `lexer` | `builder20/60` |
+|---|---|---|---|---|---|
+| −78% | −21% | −24% | −21% | −19% | −6% |
+
+The self-hosted lexer — the workload this campaign was opened for — wins 19%.
+
+### What SSO costs
+
+Reads get more expensive, and **the cost is intrinsic rather than a defect**. A
+tag-aware view needs three loads and a select where an untagged one needs two
+loads; on a rail whose whole body is view construction that is +86%
+(`vecread`). Four candidate mechanisms were tested and refuted: the duplicate
+`cap` load (already folded by LLVM), aliasing (`!invariant.load`, +0), the
+branchless select's dependency chain (a branch measured identical — the
+branch-free design is correct), and vectorization (neither arm emits SIMD).
+There is no peephole.
+
+**The cost is per VIEW CONSTRUCTION, not per read.** The same byte reads through
+a view built once measure **+0.0%** (`vechoist`) — exact parity. That single
+fact is the whole shape of the problem.
+
+### So the rule is about workload, not about SSO
+
+SSO helps programs that CONSTRUCT short strings and hurts programs that
+repeatedly build VIEWS over strings they already hold. The lexer is the first.
+`vertical` is the second: it contains zero `substring` calls and scans
+`strs[s].bytes()` per (column, string), which is why both construction fixes
+moved it by 0.003%.
+
+Corpus, seven established regressions (`scripts/sso-corpus-sweep.sh`,
+PASSES=3, RUNS=15): `vertical` +52%, `atoi` +15%, `alien_seq` +12%, `alien` ~0;
+three did not converge on a cloud container and need a quiet host.
+
+### The three options
+
+- **(a) Leave `KARAC_SSO` OFF.** Banks nothing, risks nothing. The flag works,
+  is correct on every surface probed, and is pinned by
+  `test_sso_de_inline_rides_the_string_growth_test`.
+- **(b) Flip it ON.** Wins the lexer and every construction-shaped workload;
+  regresses read-bound programs by up to ~50%. Defensible only if the corpus is
+  believed unrepresentative of real Kāra code.
+- **(c) Do the structural work first** — view CSE across an immutable borrow, or
+  loop versioning on an all-heap guard — then re-decide. Both need codegen to
+  model things it does not model today. The payoff is bounded by a corpus this
+  infrastructure cannot currently measure reliably.
+
+**Recommendation: (a) until someone commits to (c).** And a warning that this
+track earned the hard way: **do not flip on the strength of the rail table.**
+Every rail in `bench/sso` except `vecread`/`vechoist` measures construction,
+which is exactly how a week went into construction while the corpus regression
+sat in reads.
+
+### Where the remainder lives
+
+- **B-2026-09-14-28** — the one open row on this track. Carries the read-path
+  attribution, the four refuted mechanisms, and the corpus sweep.
+- **B-2026-09-16-20** — `karac_string_try_inline_into` is now dead ABI surface:
+  no compiler caller since `9d3ceb9`, still exported.
+- This document is the tracker for the DECISION itself. If it is ever taken,
+  record it here and close Task #5 against this section.
 
 **Slice 2 inline construction is LIVE behind `KARAC_SSO=1`, default OFF.** It
 works and it is correct on every surface probed. Both construction sites are
