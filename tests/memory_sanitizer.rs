@@ -93954,4 +93954,392 @@ fn main() {
             "b26-array-field-bodies-memory-control",
         );
     }
+    /// B-2026-09-13-23 — an `Array[T, N]` held in a TUPLE frees its element
+    /// buffers, in every position the tuple can occupy.
+    ///
+    /// FIVE SITES. Four are the walk and its disarms; the fifth is a LAYOUT
+    /// guard, and leaving it out is what made the first attempt at this row
+    /// (`506a91d`) ship an invalid free and get reverted (`49e75a8`,
+    /// B-2026-09-16-9). See `asan_array_in_a_tuple_enum_payload_is_not_corrupted`
+    /// below, which is the cell that catches it.
+    ///
+    /// An array spells as `Path(["Array"], [Type(T), Const(N)])`, so it reaches
+    /// the `Path` arm of each tuple helper and then falls through every test in
+    /// it:
+    ///
+    ///   1 `tuple_elem_needs_deep_drop` never ARMED the tuple's deep drop.
+    ///   2 `emit_tuple_elem_drops` dispatched `"Array"` into a catch-all that
+    ///     tests only shared/enum/struct and so emitted nothing.
+    ///   3 the MOVE-SUPPRESSION dual, which is where two earlier attempts
+    ///     stalled. Pieces 1+2 alone turn the leak into a DOUBLE FREE on
+    ///     `let t2 = t;`, which is strictly worse, and both attempts reverted.
+    ///     It is not one site but two, reached by different shapes: a bare
+    ///     tuple move goes through `zero_aggregate_field_caps` (gated by
+    ///     `aggregate_has_heap_field`, which is LLVM-type-driven and reads a
+    ///     `[2 x {ptr,len,cap}]` field as no-heap), while a tuple held in a
+    ///     STRUCT field goes through `zero_tuple_elem_cap_at`. Both were
+    ///     measured double-freeing independently; fixing either alone leaves
+    ///     the other. That is why the earlier attempt's `zero_tuple_elem_cap_at`
+    ///     arm "changed nothing" — it is the right arm for the struct shape and
+    ///     was tested against the bare-tuple cell, which never reaches it.
+    ///   4 the by-value PARAM entry copy. `make_tuple_param_callee_owned` gates
+    ///     on `type_expr_has_drop_heap`, array-blind too, so the param aliased
+    ///     the caller's buffers — harmless while nothing walked the array, a
+    ///     double free once something did and the value escaped by `return`.
+    ///   5 the ENUM-PAYLOAD layout guard in `declare_enums`. Site 1 widens
+    ///     `tuple_elem_needs_deep_drop`, which the enum drop CLASSIFIER also
+    ///     consults, so a tuple payload holding an array newly classified
+    ///     `EnumDropKind::NestedTuple` — a kind that hands the payload's word
+    ///     region straight to the tuple's drop fn. The region is two words wide
+    ///     and the tuple is seven, because a source-written array sizes as the
+    ///     conservative 1 word, so the walker strode through a boxed payload
+    ///     and freed a `String`'s length word as a pointer. Not visible from
+    ///     any position a tuple occupies in a function BODY, which is where all
+    ///     28 of the first attempt's cells came from.
+    ///
+    /// THE `let t2 = t;` CELL IS FIRST ON PURPOSE. With pieces 1+2 in and the
+    /// suppression missing, both ASAN ratchet legs matched their quarantine
+    /// lists exactly and the whole suite passed — nothing in it exercised a
+    /// whole-tuple move of a tuple holding an array. The green suite was not
+    /// evidence for either earlier attempt and is not evidence now; this
+    /// fixture is what makes it one.
+    ///
+    /// MUST be read at `-O0`: at `-O2` LLVM deletes the allocations, which is
+    /// the `scripts/asan-o0-leg.sh` case.
+    ///
+    /// TWO SHAPES REMAIN LEAKING and are deliberately NOT asserted clean here:
+    /// a by-value param moved to a local inside the callee, and a FRESH
+    /// TEMPORARY argument whose param is returned. Both leak 20 B on `main`
+    /// before this fix and the identical 20 B after it — unchanged, not
+    /// regressed. They need the param-ownership model resolved (the entry copy
+    /// orphans a temporary's buffers, while transfer needs a caller-side
+    /// disarm that has no hook for a tuple argument), which is its own row.
+    #[test]
+    fn asan_array_inside_a_tuple_frees_its_element_buffers() {
+        const H: &str = "fn pay(i: i64) -> String { return f\"tttttttttttttttt{i}\" }\n";
+        // THE BLOCKING CELL — a whole-tuple move. Double-frees with pieces 1+2
+        // and no suppression dual; nothing else in the suite covers it.
+        assert_clean_asan_run(
+            &format!(
+                "{H}fn main() {{\n\
+                 \x20   let t: (Array[String, 2], i64) = ([pay(1), pay(2)], 7);\n\
+                 \x20   let t2 = t;\n\
+                 \x20   println(f\"a0:{{t2.0[0]}}\");\n\
+                 }}\n"
+            ),
+            &["a0:tttttttttttttttt1"],
+            "b23-tuple-array-whole-move",
+        );
+        // The row's own repro: a plain annotated `let`, 20 B in 2 blocks.
+        assert_clean_asan_run(
+            &format!(
+                "{H}fn main() {{\n\
+                 \x20   let t: (Array[String, 2], i64) = ([pay(1), pay(2)], 7);\n\
+                 \x20   println(f\"a0:{{t.0[0]}}\");\n\
+                 \x20   println(f\"n:{{t.1}}\");\n\
+                 }}\n"
+            ),
+            &["a0:tttttttttttttttt1", "n:7"],
+            "b23-tuple-array-let",
+        );
+        // A STRUCT FIELD holding the tuple, then a move of the STRUCT — the
+        // second suppression site, which double-freed while only the
+        // bare-tuple one was fixed.
+        assert_clean_asan_run(
+            &format!(
+                "{H}struct W {{ t: (Array[String, 2], i64) }}\n\
+                 fn main() {{\n\
+                 \x20   let w: W = W {{ t: ([pay(1), pay(2)], 7) }};\n\
+                 \x20   let w2 = w;\n\
+                 \x20   println(f\"a0:{{w2.t.0[0]}}\");\n\
+                 }}\n"
+            ),
+            &["a0:tttttttttttttttt1"],
+            "b23-tuple-array-struct-field-move",
+        );
+        // A by-value PARAM returned — the fourth site. Double-freed until the
+        // param gained its entry copy.
+        assert_clean_asan_run(
+            &format!(
+                "{H}fn thru(p: (Array[String, 2], i64)) -> (Array[String, 2], i64) {{ return p; }}\n\
+                 fn main() {{\n\
+                 \x20   let t: (Array[String, 2], i64) = ([pay(1), pay(2)], 7);\n\
+                 \x20   let u = thru(t);\n\
+                 \x20   println(f\"a0:{{u.0[0]}}\");\n\
+                 }}\n"
+            ),
+            &["a0:tttttttttttttttt1"],
+            "b23-tuple-array-param-returned",
+        );
+        // A RETURN of a freshly built tuple, and a DESTRUCTURE.
+        assert_clean_asan_run(
+            &format!(
+                "{H}fn mk() -> (Array[String, 2], i64) {{ return ([pay(1), pay(2)], 7); }}\n\
+                 fn main() {{\n\
+                 \x20   let t = mk();\n\
+                 \x20   let (a, j) = t;\n\
+                 \x20   println(f\"a0:{{a[0]}} j:{{j}}\");\n\
+                 }}\n"
+            ),
+            &["a0:tttttttttttttttt1 j:7"],
+            "b23-tuple-array-return-destructure",
+        );
+        // An array of CONTAINERS, moved.
+        assert_clean_asan_run(
+            &format!(
+                "{H}fn main() {{\n\
+                 \x20   let t: (Array[Vec[String], 2], i64) = ([[pay(1)], [pay(2)]], 7);\n\
+                 \x20   let t2 = t;\n\
+                 \x20   println(f\"n:{{t2.1}}\");\n\
+                 }}\n"
+            ),
+            &["n:7"],
+            "b23-tuple-array-of-vecs-move",
+        );
+        // A user `Drop` element: memory clean AND the bodies still exactly
+        // once. The row measured this shape as memory-only — bodies were
+        // already correct — so it guards against the memory fix buying itself
+        // a duplicated body (B-2026-08-28-57: separate channels).
+        assert_clean_asan_run(
+            "struct D { id: i64, s: String }\n\
+             impl Drop for D { fn drop(mut ref self) { println(f\"dD{self.id}\") } }\n\
+             fn mkd(i: i64) -> D { return D { id: i, s: f\"ssssssssssssssss{i}\" } }\n\
+             fn main() {\n\
+             \x20   let t: (Array[D, 2], i64) = ([mkd(1), mkd(2)], 7);\n\
+             \x20   let t2 = t;\n\
+             \x20   println(f\"n:{t2.1}\");\n\
+             }\n",
+            &["n:7", "dD1", "dD2"],
+            "b23-tuple-array-user-drop-move",
+        );
+        // CONTROLS — a scalar array stays a no-op, the plain `Array` local
+        // (always clean) must not acquire a second owner, and the `Vec`
+        // element spelling is the positive control that identified the
+        // working disarm path.
+        assert_clean_asan_run(
+            &format!(
+                "{H}fn main() {{\n\
+                 \x20   let t: (Array[i64, 2], i64) = ([3, 4], 7);\n\
+                 \x20   let t2 = t;\n\
+                 \x20   println(f\"a0:{{t2.0[0]}}\");\n\
+                 }}\n"
+            ),
+            &["a0:3"],
+            "b23-tuple-scalar-array-control",
+        );
+        assert_clean_asan_run(
+            &format!(
+                "{H}fn main() {{\n\
+                 \x20   let a: Array[String, 2] = [pay(1), pay(2)];\n\
+                 \x20   println(f\"a0:{{a[0]}}\");\n\
+                 }}\n"
+            ),
+            &["a0:tttttttttttttttt1"],
+            "b23-plain-array-local-control",
+        );
+        assert_clean_asan_run(
+            &format!(
+                "{H}fn main() {{\n\
+                 \x20   let t: (Vec[String], i64) = ([pay(1), pay(2)], 7);\n\
+                 \x20   let t2 = t;\n\
+                 \x20   println(f\"a0:{{t2.0[0]}}\");\n\
+                 }}\n"
+            ),
+            &["a0:tttttttttttttttt1"],
+            "b23-tuple-vec-move-control",
+        );
+    }
+
+    /// B-2026-09-13-23, THE GATE CELL — a tuple holding an `Array[T, N]` as an
+    /// ENUM PAYLOAD must not be corrupted by the array walk this row adds.
+    ///
+    /// THIS IS THE FIXTURE THAT WOULD HAVE CAUGHT `506a91d`. That commit landed
+    /// the four body-position sites without the layout guard, and this exact
+    /// shape went from a 448 B leak to `free(): invalid pointer` — a regression
+    /// in KIND, on `main`, reverted as `49e75a8` and filed by another session as
+    /// B-2026-09-16-9 (high) before this one noticed.
+    ///
+    /// WHY NOTHING CAUGHT IT: all 28 cells of that attempt were positions a
+    /// tuple can occupy in a function BODY — local, struct field, return,
+    /// destructure, by-value param, chained move, nested array, array of Vecs.
+    /// Not one put the tuple inside an enum payload, and no fixture in the
+    /// suite did either, so both ASAN ratchet legs matched their quarantine
+    /// lists exactly and seven gate legs went green over undefined behaviour.
+    /// The transferable rule, which this fixture exists to enforce: WHEN A FIX
+    /// WIDENS A SHARED WALKER, DERIVE THE CELL SET FROM THE WALKER'S CALLERS,
+    /// NOT FROM THE BUG'S SYMPTOMS. `emit_tuple_elem_drops` has an
+    /// enum-payload caller; the cell set never asked who calls it.
+    ///
+    /// THE MECHANISM, measured rather than argued. Site 1 widens
+    /// `tuple_elem_needs_deep_drop`, and the enum drop CLASSIFIER
+    /// (`declare_enums`) consults that same predicate — so the variant newly
+    /// classified `EnumDropKind::NestedTuple`, which hands the payload's word
+    /// region to the tuple's own drop fn. Traced side by side with the `Vec`
+    /// spelling, which is the positive control:
+    ///
+    ///     (Vec[String], i64)        enum `{i64, i64, i64, i64, i64}`  4 payload words, tuple is 4  INLINE, correct
+    ///     (Array[String, 2], i64)   enum `{i64, i64, i64}`            2 payload words, tuple is 7  BOXED, corrupt
+    ///
+    /// Two words because a variant declaration can only spell an array as
+    /// `Path(["Array"], [Type(T), Const(N)])` and
+    /// `payload_word_count_for_type_expr`'s real-width arm is keyed on
+    /// `TypeKind::Array`, a kind only inference produces. The walker strode
+    /// seven words through two and freed `0x11` — a `String`'s length word.
+    ///
+    /// THE FIX IS THE KIND, NOT THE WIDTH, and that direction was measured too.
+    /// Correcting the width so the payload lands inline regresses a DIRECT
+    /// array payload (`enum E { A(Array[String, 2]) }`) from clean to a 34 B
+    /// leak: the conservative 1 is load-bearing there, being exactly what
+    /// routes such a payload to the pack side's boxing where
+    /// `EnumDropKind::BoxedArray` frees it correctly — as that pass's own
+    /// comment says. So the guard stands the KIND down instead, and the
+    /// position keeps its PRE-EXISTING leak (56 B box + 34 B elements,
+    /// identical before and after), which is B-2026-09-12-10's remaining
+    /// enum-payload cell rather than this row's. A leak is the correct floor to
+    /// land on; the alternative is UB.
+    ///
+    /// VISIBLE ONLY AT `-O0`, SO THIS IS A GATE ON `scripts/asan-o0-leg.sh` AND
+    /// NOT ON THE DEFAULT `--features llvm` LEG. Measured three ways with the
+    /// guard removed and a marker `grep -c` printing zero first:
+    ///
+    ///     no fix at all      leak fixture FAILS, this one passes (nothing walks the array)
+    ///     sites 1-4 only     leak fixture passes, THIS ONE FAILS
+    ///     all five           both pass
+    ///
+    /// At the harness default the failing run is green, because the
+    /// allocations LLVM deletes take the corruption with them — the same reason
+    /// the row's own history insists a leak class is read at `-O0`. The ASAN
+    /// report at `-O0` names the route exactly:
+    ///
+    ///     karac_free_buf <- karac_drop_String <- karac_drop_Array_String_2
+    ///       <- __karac_drop_tuple_te_Array_gString_xg_i64$in... <- __karac_drop_E
+    ///     Address 0x0000000011 is a wild pointer
+    ///
+    /// LEAK CHECKING IS THEREFORE OFF — that leak is a known open row, and this
+    /// fixture asserts the narrower thing it can assert honestly: no memory
+    /// ERROR, and the right answer. Flip it to `assert_clean_asan_run` when
+    /// B-2026-09-12-10 closes.
+    #[test]
+    fn asan_array_in_a_tuple_enum_payload_is_not_corrupted() {
+        if !asan_available() {
+            eprintln!("[b23-enum-payload] ASAN unavailable on this host — skipping");
+            return;
+        }
+        const H: &str = "fn pay(i: i64) -> String { return f\"tttttttttttttttt{i}\" }\n";
+        // Three spellings: a named local moved in, an inline literal, and an
+        // arm that binds the payload but reads only its SCALAR element. The
+        // first two corrupted identically under `506a91d`, which is what ruled
+        // out an unowned temporary as the cause.
+        let cells: [(&str, &str); 3] = [
+            (
+                "b23-enum-payload-named-local",
+                "\x20   let t: (Array[String, 2], i64) = ([pay(1), pay(2)], 7);\n\
+                 \x20   let e = E.A(t);\n",
+            ),
+            (
+                "b23-enum-payload-inline-literal",
+                "\x20   let e = E.A(([pay(1), pay(2)], 7));\n",
+            ),
+            (
+                "b23-enum-payload-repeated",
+                "\x20   let mut e = E.B;\n\
+                 \x20   for _i in 0..4 { e = E.A(([pay(1), pay(2)], 7)); }\n",
+            ),
+        ];
+        for (label, build) in cells {
+            let src = format!(
+                "{H}enum E {{ A((Array[String, 2], i64)), B }}\n\
+                 fn main() {{\n\
+                 {build}\
+                 \x20   match e {{\n\
+                 \x20       E.A(u) => {{ println(f\"a0:{{u.0[0]}} n:{{u.1}}\") }}\n\
+                 \x20       E.B => {{ println(\"b\") }}\n\
+                 \x20   }}\n\
+                 }}\n"
+            );
+            let Some((stdout, stderr, status)) = run_under_asan_no_leak_check(&src, label) else {
+                eprintln!("[{label}] setup failed — skipping");
+                return;
+            };
+            // ASAN's own exit code is 23; an invalid free aborts here rather
+            // than merely printing, so a non-zero status IS the regression.
+            assert!(
+                status.success(),
+                "[{label}] expected a clean exit, got {:?} — a memory ERROR in the \
+                 enum-payload position. This is the B-2026-09-16-9 shape: the array \
+                 walk is being pointed at a BOXED payload's word region. \
+                 stdout: {stdout:?}, stderr: {stderr:?}",
+                status.code(),
+            );
+            assert!(
+                stdout.contains("a0:tttttttttttttttt1 n:7"),
+                "[{label}] wrong payload read back; stdout: {stdout:?}, stderr: {stderr:?}",
+            );
+        }
+        // A NESTED tuple around the array — `((Array[String, 2], i64), i64)`.
+        // The guard's width helper recurses, so this stands down for the same
+        // reason rather than corrupting one level in. Leak-unchecked for the
+        // same reason as the cells above.
+        {
+            let label = "b23-enum-payload-nested-tuple";
+            let src = format!(
+                "{H}enum E {{ A(((Array[String, 2], i64), i64)), B }}\n\
+                 fn main() {{\n\
+                 \x20   let e = E.A(((Array[pay(1), pay(2)], 7), 9));\n\
+                 \x20   match e {{\n\
+                 \x20       E.A(u) => {{ println(f\"a0:{{u.0.0[0]}} k:{{u.1}}\") }}\n\
+                 \x20       E.B => {{ println(\"b\") }}\n\
+                 \x20   }}\n\
+                 }}\n"
+            );
+            let Some((stdout, stderr, status)) = run_under_asan_no_leak_check(&src, label) else {
+                eprintln!("[{label}] setup failed — skipping");
+                return;
+            };
+            assert!(
+                status.success(),
+                "[{label}] expected a clean exit, got {:?}. stdout: {stdout:?}, stderr: {stderr:?}",
+                status.code(),
+            );
+            assert!(
+                stdout.contains("a0:tttttttttttttttt1 k:9"),
+                "[{label}] wrong payload read back; stdout: {stdout:?}, stderr: {stderr:?}",
+            );
+        }
+        // The `Vec` spelling is the POSITIVE CONTROL: its payload really is
+        // inline, so it keeps `NestedTuple` and must stay fully clean — leak
+        // checking included. If the guard ever widened to stand this down too,
+        // the leak it would reintroduce fails HERE rather than quietly.
+        assert_clean_asan_run(
+            &format!(
+                "{H}enum E {{ A((Vec[String], i64)), B }}\n\
+                 fn main() {{\n\
+                 \x20   let e = E.A(([pay(1), pay(2)], 7));\n\
+                 \x20   match e {{\n\
+                 \x20       E.A(u) => {{ println(f\"a0:{{u.0[0]}} n:{{u.1}}\") }}\n\
+                 \x20       E.B => {{ println(\"b\") }}\n\
+                 \x20   }}\n\
+                 }}\n"
+            ),
+            &["a0:tttttttttttttttt1 n:7"],
+            "b23-enum-payload-vec-control",
+        );
+        // A WIDE tuple payload with no array at all: its slot width is exact,
+        // so the guard must not fire and this must stay clean. The guard's own
+        // blast radius, pinned.
+        assert_clean_asan_run(
+            &format!(
+                "{H}enum E {{ A((String, String, String)), B }}\n\
+                 fn main() {{\n\
+                 \x20   let e = E.A((pay(1), pay(2), pay(3)));\n\
+                 \x20   match e {{\n\
+                 \x20       E.A(u) => {{ println(f\"a0:{{u.0}} a2:{{u.2}}\") }}\n\
+                 \x20       E.B => {{ println(\"b\") }}\n\
+                 \x20   }}\n\
+                 }}\n"
+            ),
+            &["a0:tttttttttttttttt1 a2:tttttttttttttttt3"],
+            "b23-enum-payload-wide-string-tuple-control",
+        );
+    }
 }

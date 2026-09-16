@@ -5079,6 +5079,38 @@ impl<'ctx> super::Codegen<'ctx> {
                         .build_struct_gep(tuple_ty, base_ptr, idx, "drop.tup.elem.p")
                         .unwrap();
                     match name.as_str() {
+                        // B-2026-09-13-23 — a fixed `Array[T, N]` element.
+                        // `"Array"` used to land in the catch-all below, which
+                        // tests only `shared_types` / `enum_layouts` /
+                        // `struct_types` and so did nothing, leaking every
+                        // element's buffer.
+                        //
+                        // `emit_drop_fn_for_array` is the same walker a plain
+                        // `Array` binding registers — which is why the
+                        // plain-`let` control was always clean — and it
+                        // declines a heapless element, so `Array[i64, N]`
+                        // stays a no-op. `field_ptr` IS the array's storage:
+                        // a fixed array is laid out inline in the tuple, which
+                        // is exactly what that walker expects.
+                        //
+                        // The move-suppression dual for this arm is NOT
+                        // `zero_tuple_elem_cap_at` (an array has no cap word of
+                        // its own) but the `has_array_of_heap` branch in
+                        // `suppress_source_vec_cleanup_for_arg_ex`'s
+                        // tuple-move disarm — see the note there. The two must
+                        // agree or a moved tuple double-frees, which is the
+                        // wall two earlier attempts at this row hit.
+                        "Array" => {
+                            if let Some((inner, n)) = self.array_elem_and_len(te) {
+                                if n > 0 {
+                                    if let Some(f) = self.emit_drop_fn_for_array(&inner, n) {
+                                        self.builder
+                                            .build_call(f, &[field_ptr.into()], "")
+                                            .unwrap();
+                                    }
+                                }
+                            }
+                        }
                         // Both String spellings — inferred tuple tes spell
                         // `str` (the 3p trap; this emitter is the drop half,
                         // `zero_tuple_elem_cap_at` the move-suppression dual
@@ -5299,6 +5331,28 @@ impl<'ctx> super::Codegen<'ctx> {
         else {
             return;
         };
+        // B-2026-09-13-23 — a fixed `Array[T, N]` element, in BOTH spellings
+        // (the inference-recovered `TypeKind::Array` node and the source-written
+        // `Path(["Array"], [Type(T), Const(N)])`), so it is tested before the
+        // `Path` arm below rather than inside it.
+        //
+        // This is the move-suppression dual of `emit_tuple_elem_drops`'s
+        // `"Array"` arm, and it is reached by a DIFFERENT shape than the
+        // bare-tuple one: a struct field holding the tuple
+        // (`struct W { t: (Array[String, 2], i64) }`, `let w2 = w;`) routes
+        // through `zero_struct_move_caps_mono` -> `zero_tuple_elem_caps` ->
+        // here, while a bare `let t2 = t;` takes
+        // `zero_aggregate_field_caps` instead. Measured: fixing only the
+        // bare-tuple path left the struct move double-freeing, 16 allocs
+        // against 18 frees.
+        if let Some((_, n)) = self.array_elem_and_len(te) {
+            if n > 0 {
+                if let inkwell::types::BasicTypeEnum::ArrayType(at) = llvm_field {
+                    self.zero_array_elem_caps(field_ptr, at);
+                }
+            }
+            return;
+        }
         match &te.kind {
             TypeKind::Tuple(inner) => {
                 if let inkwell::types::BasicTypeEnum::StructType(fst) = llvm_field {
@@ -9559,6 +9613,15 @@ impl<'ctx> super::Codegen<'ctx> {
             TypeKind::Path(_) => {
                 crate::codegen::helpers::vec_inner_type_expr(te)
                     .is_some_and(|inner| self.type_expr_has_drop_heap(&inner))
+                    // B-2026-09-13-23 — a fixed `Array[T, N]` element whose T
+                    // owns heap. The Array-shaped sibling of the
+                    // `vec_inner_type_expr` disjunct above: an array spells as
+                    // `Path(["Array"], [Type(T), Const(N)])`, so it reaches
+                    // this `Path` arm and then fell through every test in it,
+                    // and the tuple's deep drop was never ARMED.
+                    || self.array_elem_and_len(te).is_some_and(|(inner, n)| {
+                        n > 0 && self.type_expr_has_drop_heap(&inner)
+                    })
                     // B-2026-08-03-3 — an `Option[P]` / `Result[O, E]` element.
                     // `type_expr_has_drop_heap` hardcodes `Option | Result =>
                     // false` (load-bearing, must not change), so a tuple whose

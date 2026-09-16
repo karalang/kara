@@ -3791,6 +3791,72 @@ impl<'ctx> super::Codegen<'ctx> {
                     }
                 }
 
+                // B-2026-09-13-23 — the `NestedTuple` twin of the `BoxedArray`
+                // pass above, and it asks that pass's question for the same
+                // reason: whether the payload the drop switch is about to walk
+                // is actually laid out INLINE.
+                //
+                // `EnumDropKind::NestedTuple` hands the payload's WORD REGION
+                // to the tuple's own drop fn, which is only a pointer to the
+                // tuple when the layout gave the field as many words as the
+                // tuple really occupies. An `Array[T, N]` element breaks that:
+                // a variant declaration can only spell one as
+                // `Path(["Array"], [Type(T), Const(N)])`, and
+                // `payload_word_count_for_type_expr`'s real-width arm is keyed
+                // on `TypeKind::Array` — a kind only inference produces — so
+                // the Path spelling falls to the conservative 1 exactly as the
+                // pass above documents for a bare array field. That
+                // under-sizing is LOAD-BEARING there (it is what routes a bare
+                // array payload to the pack side's boxing, which
+                // `BoxedArray` then frees correctly — correcting the width
+                // instead was measured and turns two clean cells into 34 B
+                // leaks), so this pass corrects the KIND rather than the width.
+                //
+                // Concretely, `enum E { A((Array[String, 2], i64)), B }` sizes
+                // its payload at TWO words against a SEVEN-word tuple, the pack
+                // side boxes it, and word 0 then holds the box POINTER. Handing
+                // that region to a seven-word walker reads a `String`'s length
+                // word as a pointer and calls `free(0x11)`. That is the invalid
+                // free `506a91d` shipped and `49e75a8` reverted
+                // (B-2026-09-16-9): the walk itself is right, and it was being
+                // pointed at the wrong bytes.
+                //
+                // Standing the kind down restores this position to its
+                // pre-existing LEAK (56 B box + 34 B elements), which is
+                // B-2026-09-12-10's remaining enum-payload cell rather than
+                // this row's. A leak is the correct floor to land on; the
+                // alternative is UB.
+                //
+                // `real` is computed AST-side, like the pass above and for the
+                // same reason (struct LLVM types do not exist yet inside
+                // `declare_enums`), and by the same rule: an array element
+                // contributes its element width times N, everything else its
+                // own `payload_word_count_for_type_expr`.
+                for (vname, kinds) in field_drop_kinds.iter_mut() {
+                    let Some(v) = e.variants.iter().find(|v| &v.name == vname) else {
+                        continue;
+                    };
+                    let field_tys: Vec<&TypeExpr> = match &v.kind {
+                        VariantKind::Unit => continue,
+                        VariantKind::Tuple(tys) => tys.iter().collect(),
+                        VariantKind::Struct(fields) => fields.iter().map(|f| &f.ty).collect(),
+                    };
+                    for (fi, field_ty) in field_tys.into_iter().enumerate() {
+                        if kinds.get(fi) != Some(&EnumDropKind::NestedTuple) {
+                            continue;
+                        }
+                        let field_words = field_word_offsets
+                            .get(vname)
+                            .and_then(|offs| offs.get(fi))
+                            .map(|(_, w)| *w)
+                            .unwrap_or(1);
+                        let real = self.real_payload_words_for_type_expr(field_ty, &e.name, vname);
+                        if real > field_words {
+                            kinds[fi] = EnumDropKind::None;
+                        }
+                    }
+                }
+
                 // Build the unified LLVM type: { i64 tag, i64 w0, ..., i64 wN }
                 let i64_t: BasicTypeEnum<'ctx> = self.context.i64_type().into();
                 let mut field_types: Vec<BasicTypeEnum<'ctx>> = vec![i64_t]; // tag
@@ -4041,6 +4107,46 @@ impl<'ctx> super::Codegen<'ctx> {
             TypeKind::MutSlice(_) => 2,                  // { ptr, len }
             _ => 1,
         }
+    }
+
+    /// B-2026-09-13-23 — the REAL AST-side word width of an enum payload type,
+    /// as opposed to the SLOT width [`Self::payload_word_count_for_type_expr`]
+    /// hands the layout.
+    ///
+    /// The two differ for exactly one reason, and deliberately: a source-written
+    /// `Array[T, N]` spells `Path(["Array"], [Type(T), Const(N)])`, which that
+    /// function sizes at the conservative 1 word. That under-sizing is what
+    /// routes a bare array payload to the pack side's boxing, where
+    /// `EnumDropKind::BoxedArray` frees it correctly, so it must not be
+    /// "corrected" (measured: doing so turns a clean direct-array payload into a
+    /// 34 B leak). This helper answers the other question — how wide the value
+    /// really is — so a caller can tell a boxed payload from an inline one
+    /// without disturbing the slot.
+    ///
+    /// Recursive through tuples, so `((Array[String, 2], i64), i64)` reports 8
+    /// rather than 3. Everything that is not an array or a tuple defers to the
+    /// slot width, which is exact for it.
+    pub(super) fn real_payload_words_for_type_expr(
+        &self,
+        ty: &TypeExpr,
+        outer_enum: &str,
+        outer_variant: &str,
+    ) -> usize {
+        if let Some((elem, n)) = self.array_elem_and_len(ty) {
+            if n > 0 {
+                return self.real_payload_words_for_type_expr(&elem, outer_enum, outer_variant)
+                    * (n as usize);
+            }
+        }
+        if let TypeKind::Tuple(elems) = &ty.kind {
+            if !elems.is_empty() {
+                return elems
+                    .iter()
+                    .map(|t| self.real_payload_words_for_type_expr(t, outer_enum, outer_variant))
+                    .sum();
+            }
+        }
+        self.payload_word_count_for_type_expr(ty, outer_enum, outer_variant)
     }
 
     /// Compute the i64-word count of an LLVM aggregate type. Used by
