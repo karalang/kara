@@ -11829,6 +11829,13 @@ impl<'ctx> super::Codegen<'ctx> {
                     self.forget_moved_payload_box_mirror(enum_name, pattern, pos);
                 }
             }
+            // B-2026-09-14-26 — a whole-TUPLE payload binding registers no
+            // drop of its own, so the zeroing right below hands the position's
+            // buffers to NOBODY unless the arm goes on to mint a second owner.
+            // Register the binding's own tuple drop here, at the single point
+            // the source gives the position up, so the hand-off is balanced
+            // for every arm shape rather than only the ones that rebind.
+            self.register_tuple_payload_binding_drop(enum_name, &variant_name, pattern, pos);
             for w in 0..num_words {
                 let word_index = (start_word + 1 + w) as u32;
                 if let Ok(word_ptr) = self.builder.build_struct_gep(
@@ -11840,6 +11847,80 @@ impl<'ctx> super::Codegen<'ctx> {
                     let _ = self.builder.build_store(word_ptr, zero);
                 }
             }
+        }
+    }
+
+    /// B-2026-09-14-26 — give a whole-TUPLE payload binding the scope drop it
+    /// never had, at the moment the source is disarmed for its position.
+    ///
+    /// Every other inline payload shape already registers one from
+    /// `bind_pattern_values` — `String`/`Vec` on the buffer channel, a user
+    /// struct or enum on theirs — which is why `T.A(p) => taket(p)` leaked
+    /// only for a tuple: the disarm below is right, and the binding it hands
+    /// to owned nothing. A tuple has no type name to key those channels on, so
+    /// the drop is synthesized per element list
+    /// (`synthesize_tuple_drop_fn_te`), exactly as the seeded `Option`/`Result`
+    /// box path already does for its own whole-tuple binding.
+    ///
+    /// Balanced rather than doubled, because the arms that DO mint a second
+    /// owner (`let q = p`, `v.push(p)`, a struct literal, a per-element
+    /// destructure) reach the ordinary source-disarm helpers on that move and
+    /// stand this action down with it; the arms that mint none — a free-fn or
+    /// method argument, which the callee entry-copies under caller-retains —
+    /// keep it and free once.
+    ///
+    /// Declines a position whose binding already owns a `StructDrop` on the
+    /// same slot, so a shape that is registered elsewhere keeps its single
+    /// owner instead of gaining a second.
+    fn register_tuple_payload_binding_drop(
+        &mut self,
+        enum_name: &str,
+        variant_name: &str,
+        pattern: &Pattern,
+        pos: usize,
+    ) {
+        let PatternKind::TupleVariant { patterns, .. } = &pattern.kind else {
+            return;
+        };
+        let Some(PatternKind::Binding(name)) = patterns.get(pos).map(|p| &p.kind) else {
+            return;
+        };
+        let name = name.clone();
+        let Some(te) = self
+            .enum_variant_field_type_exprs(enum_name)
+            .into_iter()
+            .find(|(_, v, _)| v == variant_name)
+            .and_then(|(_, _, tes)| tes.get(pos).cloned())
+        else {
+            return;
+        };
+        let crate::ast::TypeKind::Tuple(elem_tes) = &te.kind else {
+            return;
+        };
+        let elem_tes = elem_tes.clone();
+        let Some(slot) = self.variables.get(name.as_str()).map(|s| s.ptr) else {
+            return;
+        };
+        let already_owned = self.drop_rc.scope_cleanup_actions.iter().any(|frame| {
+            frame.iter().any(|a| {
+                matches!(a, crate::codegen::state::CleanupAction::StructDrop { struct_alloca, .. }
+                    if *struct_alloca == slot)
+            })
+        });
+        if already_owned {
+            return;
+        }
+        let BasicTypeEnum::StructType(agg_ty) = self.llvm_type_for_type_expr(&te) else {
+            return;
+        };
+        let Some(drop_fn) = self.synthesize_tuple_drop_fn_te(agg_ty, &elem_tes) else {
+            return;
+        };
+        if let Some(frame) = self.drop_rc.scope_cleanup_actions.last_mut() {
+            frame.push(crate::codegen::state::CleanupAction::StructDrop {
+                struct_alloca: slot,
+                drop_fn,
+            });
         }
     }
 

@@ -90916,6 +90916,161 @@ fn main() {
         );
     }
 
+    /// B-2026-09-14-26 — a match arm that CONSUMES a whole-TUPLE enum payload
+    /// leaked its elements: `500 B in 18 blocks`, `111 allocs / 93 frees` over
+    /// the ten cells below, exit 0 with the RIGHT output on every surface, so
+    /// nothing but a leak checker could see it.
+    ///
+    /// WHY ONLY A TUPLE. The disarm at the arm is correct and shared by every
+    /// payload shape: `suppress_destructured_enum_payload_cleanup_at_limited`
+    /// zeroes the source's payload words for each position the pattern moves
+    /// out, on the stated understanding that "the bound binding's own cleanup
+    /// frees it once". For `String`/`Vec`, a user struct and an `Array` that
+    /// understanding holds — `bind_pattern_values` registers the binding on the
+    /// buffer, struct or array channel, each keyed on a TYPE NAME. A tuple has
+    /// no type name, so it reached none of them and the zeroing handed its
+    /// buffers to nobody. Measured directly: the `String`, `Vec[String]`,
+    /// `Array[String, 2]` and user-struct payloads are all clean on the same
+    /// free-fn-arg arm that loses 132 B for `(String, String)`.
+    ///
+    /// WHY THE ROW'S OWN CANDIDATE WAS NOT IT, which its `NOT MEASURED` note
+    /// half-predicted. `clear_boxed_enum_inner_drop` /
+    /// `boxed_payload_interior_taken_by_arm` govern a BOXED payload, and a
+    /// 6-word `(String, String)` fits `T`'s inline payload area — the enum is a
+    /// flat `{i64 x 7}` and no box exists to retract. The backtrace from the
+    /// zeroing site named `compile_match` directly.
+    ///
+    /// THE REPAIR registers the binding's own `synthesize_tuple_drop_fn_te`
+    /// drop at the one point the source gives the position up, so both halves
+    /// of the hand-off are written in the same place. It is balanced rather
+    /// than doubled because an arm that mints a SECOND owner reaches the
+    /// ordinary source-disarm helpers on that move and stands the new action
+    /// down with it — which is why `rebind`, `structlit`, `push` and the
+    /// per-element `destructure` cells are pinned here: every one of them was
+    /// already clean and has the identical alloc/free count after.
+    ///
+    /// DELIBERATELY NOT INCLUDED: an owned-PARAM scrutinee
+    /// (`fn f(e: T) { match e { T.A(p) => take(p) } }`). This fix halves its
+    /// leak (220 B / 8 blocks → 110 B / 4) and does not close it, and the
+    /// residual is NOT tuple-specific — the same cell loses 58 B with a
+    /// `String` payload, 110 B with a user struct and 96 B with a
+    /// `Vec[String]`, all of them clean under a LOCAL scrutinee. That is a
+    /// different defect with its own row (B-2026-09-16-13) rather than a
+    /// half-measured widening of this one.
+    #[test]
+    fn asan_consuming_arm_over_a_whole_tuple_enum_payload_frees_its_elements() {
+        assert_clean_asan_run(
+            r#"
+enum T { A((String, String)), B }
+enum U { A((String, i64)), B }
+struct H { p: (String, String) }
+
+fn mk(n: i64) -> T {
+    return T.A((f"b1426-left-aaaaaaaaaaaaaaaa-{n}", f"b1426-right-bbbbbbbbbbbb-{n}"));
+}
+fn mku(n: i64) -> U { return U.A((f"b1426-mixed-cccccccccccccccc-{n}", n)); }
+
+fn take(p: (String, String)) -> i64 { return p.0.len() + p.1.len(); }
+fn takeu(p: (String, i64)) -> i64 { return p.0.len() + p.1; }
+fn takes(s: String) -> i64 { return s.len(); }
+
+struct Sink { n: i64 }
+impl Sink { fn eat(mut ref self, p: (String, String)) -> i64 { self.n = self.n + 1; return p.0.len(); } }
+
+fn main() {
+    let mut s = Sink { n: 0 };
+    let mut i: i64 = 0;
+    while i < 2 {
+        let e1: T = mk(i);
+        match e1 {
+            T.A(p) => { println(f"freefn:{take(p)}"); }
+            T.B => {}
+        }
+
+        match mk(i) {
+            T.A(p) => { println(f"freshtemp:{take(p)}"); }
+            T.B => {}
+        }
+
+        let e2: T = mk(i);
+        if let T.A(p) = e2 { println(f"iflet:{take(p)}"); }
+
+        let e3: T = mk(i);
+        match e3 {
+            T.A(p) => { println(f"methodarg:{s.eat(p)}"); }
+            T.B => {}
+        }
+
+        let e4: U = mku(i);
+        match e4 {
+            U.A(p) => { println(f"mixed:{takeu(p)}"); }
+            U.B => {}
+        }
+
+        let e5: T = mk(i);
+        match e5 {
+            T.A(p) => { println(f"readonly:{p.1.len()}"); }
+            T.B => {}
+        }
+
+        let e6: T = mk(i);
+        match e6 {
+            T.A(p) => { let q = p; println(f"rebind:{take(q)}"); }
+            T.B => {}
+        }
+
+        let e7: T = mk(i);
+        match e7 {
+            T.A(p) => { let h = H { p: p }; println(f"structlit:{h.p.0.len()}"); }
+            T.B => {}
+        }
+
+        let e8: T = mk(i);
+        let mut v: Vec[(String, String)] = Vec.new();
+        match e8 {
+            T.A(p) => { v.push(p); }
+            T.B => {}
+        }
+        println(f"push:{v.len()}");
+
+        let e9: T = mk(i);
+        match e9 {
+            T.A((a, b)) => { println(f"destructure:{takes(a) + takes(b)}"); }
+            T.B => {}
+        }
+
+        i = i + 1;
+    }
+    println(f"sink:{s.n}");
+}
+"#,
+            &[
+                "freefn:55",
+                "freshtemp:55",
+                "iflet:55",
+                "methodarg:29",
+                "mixed:30",
+                "readonly:26",
+                "rebind:55",
+                "structlit:29",
+                "push:1",
+                "destructure:55",
+                "freefn:55",
+                "freshtemp:55",
+                "iflet:55",
+                "methodarg:29",
+                "mixed:31",
+                "readonly:26",
+                "rebind:55",
+                "structlit:29",
+                "push:1",
+                "destructure:55",
+                "sink:2",
+            ],
+            "asan_consuming_arm_over_a_whole_tuple_enum_payload_frees_its_elements",
+        );
+    }
+
     /// B-2026-09-14-25 — an `Array[D, N]` enum payload whose element carries
     /// BOTH heap and a user `Drop` body double-freed its element buffers on a
     /// consuming arm: `exit 134`, 2 invalid frees, `15 allocs / 17 frees`, at
