@@ -92,7 +92,7 @@ distinguish "bugs flattening" from "we stopped writing them down."
 
 | class | total |
 |---|---|
-| run-vs-build | 418 |
+| run-vs-build | 420 |
 | miscompile | 415 |
 | leak | 366 |
 | double-free | 238 |
@@ -103,15 +103,15 @@ distinguish "bugs flattening" from "we stopped writing them down."
 | perf | 114 |
 | false-positive | 108 |
 | soundness | 95 |
-| crash | 83 |
+| crash | 84 |
 | use-after-free | 42 |
 
 ### By surface
 
 | surface | total |
 |---|---|
-| codegen | 1803 |
-| interp | 461 |
+| codegen | 1806 |
+| interp | 462 |
 | typecheck | 302 |
 | other | 94 |
 | ownership | 75 |
@@ -130,7 +130,6 @@ _Generated from `bug-ledger.jsonl` by `scripts/bug-curve.py` (2026-05-20 → 202
 
 | id | date | surface | sev | title | tracker |
 |---|---|---|---|---|---|
-| B-2026-09-06-39 | 2026-09-06 | interp+codegen | low | A READ-ONLY ARM OVER AN OWNED ENUM RECEIVER RUNS THE PAYLOAD'S `Drop` BODY BEFORE THE SHELL'S ON EVERY SURFACE -- `a.m_read()` prints `dR1 dE`, the reverse of the local-scrutinee order B-2026-08-28-67 established (`dE dR`, shell then fields per design.md § Part 8), so the same read-only arm orders its two bodies differently depending on whether the scrutinee is `self` or a local | — |
 | B-2026-09-09-21 | 2026-09-09 | codegen+interp | low | A DISCARDED TUPLE'S `Drop` BODY RUNS ON NEITHER BACKEND -- `f(mk(20));` over `fn f(r: R) -> (R, i64)` prints no `dR20` under `karac build` OR `--interp`, so the value dies with its destructor never running and the A/B rule passes because both surfaces are wrong the same way. The discarded BARE struct (`mk(20);`) does run its body, so the gap is the aggregate wrapper. a159b15e1 gave this shape its memory walk and deliberately left the body alone -- adding it on the compiled side alone would convert a silent agreed-wrong into a run-vs-build divergence | — |
 | B-2026-09-09-24 | 2026-09-09 | codegen | low | AN `Array` PAYLOAD BINDING THAT IS INDEXED STRANDS ITS ELEMENTS AT `-O0` -- 18 B in 2 blocks for `Some(t) => t[0]` over `Option[Array[String, 2]]` and 48 B in 1 for a user enum's `Array[Vec[String], 2]` read two levels deep, while the same binding never indexed and the same index off a `let` are both clean | none |
 | B-2026-09-10-7 | 2026-09-10 | codegen+interp | low | AN ARM-BOUND `Array` PAYLOAD NEVER RUNS ITS ELEMENTS' `Drop` BODIES, and the rebind spelling runs them on the COMPILED backends only -- `Some(t) => { t[0].tag }` over `Array[S, 2]` prints no `drop:` line on any backend, while `Some(t) => { let u: Array[S, 2] = t; .. }` prints both on `karac build`/`karac run` and none on `--interp` | none |
@@ -187,6 +186,9 @@ _Generated from `bug-ledger.jsonl` by `scripts/bug-curve.py` (2026-05-20 → 202
 | B-2026-09-16-26 | 2026-09-16 | interp+codegen | low | A DEPTH-1 FIELD MOVE-OUT WHOSE FIELD IS THEN BOUND BY A DESTRUCTURE RUNS THAT FIELD'S `Drop` BODY TWICE -- `let x = o.k; let Outer { h, k } = o;` prints `dR18 dR18 dR17 dR16` on all four surfaces with memory balanced; the NESTED sibling is fixed (B-2026-09-07-1) and this is not, because at depth 1 the leaf IS the moved field and owes no body at all rather than a masked one | — |
 | B-2026-09-16-27 | 2026-09-16 | codegen | medium | A NESTED STRUCT MOVED INTO A VARIANT CONSTRUCTOR ABORTS WITH A DOUBLE FREE -- `Wn.Full(o)` over `struct Out { i: In }` / `struct In { s: String }` dies with `free(): double free detected in tcache 2` on `karac build` against a correct `--interp`, identical before and after B-2026-09-15-16's fix, so one level of nesting turns that row's silent blank read into an abort | — |
 | B-2026-09-16-28 | 2026-09-16 | codegen | low | A BARE GENERIC-PARAM FIELD MOVED INTO AN OWNING SINK STILL LEAKS 24 B AFTER B-2026-09-15-16 -- that fix closes the BLANK READ half for `Box2[T] { f: T }` at `T = String` (`b ` -> `b b1516-baret-...`) and leaves the leak unchanged, because the `bare_t_heap` arm zeroes words 1 and 2 ahead of every dispatched arm and does not consult `uam_copied_sites` | — |
+| B-2026-09-16-29 | 2026-09-16 | interp+codegen | low | A BARE-`self` ARM THAT PASSES ITS PAYLOAD ON BY VALUE STILL RUNS THE PAYLOAD BODY BEFORE THE SHELL'S -- `match self { E.A(r) => eat(r), .. }` prints `dR6 x6 dE` where the projection-only `r.id` spelling one line up prints `x1 dE dR1`, because B-2026-09-06-39's read-only walk counts a bare mention in ANY non-projection position as a take and so cannot tell `eat(r)` (caller-retains, safe) from `Some(r)` (a real move) | — |
+| B-2026-09-16-30 | 2026-09-16 | codegen | medium | A `shared enum` RECEIVER'S PAYLOAD `Drop` BODY RUNS UNDER `--interp` AND ON NO COMPILED BACKEND -- `Sh.A(mk(16))` over `shared enum Sh { A(R), B }` with `fn read(self) -> i64 { match self { Sh.A(r) => r.id, .. } }` prints `dR16 x16` interpreted and a bare `x16` on jit / `karac build` / `KARAC_AUTO_PAR=0 build`; a REAL A/B divergence, unlike the value-enum siblings around it | — |
+| B-2026-09-16-31 | 2026-09-16 | codegen | high | A GENERIC ENUM WITH A GENERIC `impl[T] Drop` SEGFAULTS AT RUNTIME ON EVERY COMPILED BACKEND WHEN AN OWNED-`self` METHOD MATCHES ON IT -- `enum G[T] { X(T), Y }` + `impl[T] Drop for G[T]` + `fn read(self) { match self { G.X(t) => .. } }` exits 139 under `karac build` and `KARAC_AUTO_PAR=0 karac build` alike, where `--interp` runs it correctly | — |
 
 ### Relocated
 
@@ -2365,6 +2367,7 @@ _Generated from `bug-ledger.jsonl` by `scripts/bug-curve.py` (2026-05-20 → 202
 | B-2026-09-06-36 | codegen | low | A MATCH OVER A LOCAL STRUCT SCRUTINEE WITH AN UNCONSUMED ENUM LEAF LOSES THE LEAF'S `Drop` BODY ON THE COMPILED BACKENDS -- `let c = H1 { e: E.A(mk(3… | 530dff687 |
 | B-2026-09-06-37 | interp+codegen | medium | A WILDCARD ARM OVER AN OWNED ENUM RECEIVER RUNS THE PAYLOAD'S `Drop` BODY ON NO SURFACE -- `impl E { fn m_none(self) -> i64 { match self { E.A(_) =>… | 3df184c |
 | B-2026-09-06-38 | interp+codegen | low | A FRESH-TEMP OWNED ENUM RECEIVER LOSES THE ENUM SHELL'S OWN `Drop` BODY ON EVERY SURFACE -- `E.A(mk(2)).m_read()` prints `dR2 x2` and never `dE` on -… | 420338b |
+| B-2026-09-06-39 | interp+codegen | low | A READ-ONLY ARM OVER AN OWNED ENUM RECEIVER RUNS THE PAYLOAD'S `Drop` BODY BEFORE THE SHELL'S ON EVERY SURFACE -- `a.m_read()` prints `dR1 dE`, the r… | c0c0faecf |
 | B-2026-09-06-40 | interp+codegen | low | A REORDERED STRUCT `let` PATTERN DROPS ITS LEAVES IN REVERSE PATTERN ORDER ON THE INTERPRETER AND REVERSE DECLARATION ORDER ON EVERY COMPILED BACKEND… | 1a08132fc |
 | B-2026-09-06-41 | interp | high | THE INTERPRETER PANICS WHEN A SCALAR FIELD IS READ OFF A LEAF DESTRUCTURED OUT OF A BY-VALUE PARAM WHOSE TYPE HAS ITS OWN `Drop` -- `fn g(s: S3) -> i… | 66ccafe |
 | B-2026-09-06-42 | interp+codegen | high | `let e = self` INSIDE AN OWNED-`self` METHOD ON A VALUE ENUM WITH ITS OWN `Drop` DOUBLE-FREES THE PAYLOAD AT -O0 AND UNDER THE JIT -- `impl E { fn m_… | 21b6553 |
