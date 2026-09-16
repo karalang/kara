@@ -270,10 +270,18 @@ here. Consistent with the pre-pin header's "+5%".
 rails cost the SAME under SSO. Best-of-15, auto-par pinned, both printing
 `200000`:
 
-| rail | `KARAC_SSO=0` | `KARAC_SSO=1` |
-|---|---|---|
-| `substr` | **126 ms** | 217 ms |
-| `lexlike` | **176 ms** | 215 ms |
+| rail | `KARAC_SSO=0` | `KARAC_SSO=1` (pre-`9d3ceb9`) | `KARAC_SSO=1` now |
+|---|---|---|---|
+| `substr` | **126 ms** | 217 ms | **22 ms** |
+| `lexlike` | **176 ms** | 215 ms | 215 ms (unchanged) |
+
+**`9d3ceb9` moved `substr` and nothing else.** It made `String.substring` emit
+its inline encoding as IR instead of calling `karac_string_try_inline_into`:
+5.7x faster than the `KARAC_SSO=0` baseline on x86-64, and 13.9x faster than it
+on arm64 (6.8x over the call). `lexlike` is untouched because `s[a..b]` routes
+through `karac_string_slice_into`, a different entrypoint with the same
+opaque-call shape — so the two rails that used to be equal at `SSO=1` no longer
+are, and the reason is which construction path each one takes.
 
 0.9% apart at `SSO=1`, samples interleaving. The "46–52 point gap" was
 (+72%) − (+23%) — two ratios with **equal numerators** and unequal denominators.
@@ -296,9 +304,10 @@ in each leg:
 lowering was call-free and SSO adds one, so it lands where `lexlike` already
 was. Replacing that call with the equivalent IR — `memcpy`, zero-fill, byte-23
 `0x80 | len` flag, exactly `KaracString::write_inline` — runs the rail in
-**22 ms** against 212 ms: 9.6x faster than the current SSO path and **5.7x
-faster than the non-SSO baseline**, with correct output and linear scaling at
-10M / 20M / 40M iterations.
+**22 ms** against 212 ms: 9.6x faster than the call and **5.7x faster than the
+non-SSO baseline**, with correct output and linear scaling at 10M / 20M / 40M
+iterations. Shipped as `9d3ceb9`; real codegen measures 22 ms, matching the
+hand-patched prediction.
 
 Two hypotheses were refuted on the way, both of them ours. Annotating the call
 `memory(argmem: readwrite) nounwind willreturn` did nothing (213 vs 212 ms), and

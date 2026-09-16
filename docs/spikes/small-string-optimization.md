@@ -14,13 +14,22 @@ down you read, the older the numbers are.** The current picture:
 
 **Rail deltas — and they are NOT portable across machines.** Same compiler
 (`karac` at `27466ba`, built and run on both hosts), `RUNS=15`, two samples,
-`KARAC_AUTO_PAR=0`. Negative = SSO faster:
+`KARAC_AUTO_PAR=0`. Negative = SSO faster.
+
+**Every number in this table PREDATES `9d3ceb9` and `substr`'s row is now
+wrong by an order of magnitude.** That commit made `String.substring` emit its
+inline encoding as IR instead of calling `karac_string_try_inline_into`, and the
+rail went `+73% → −83%` (217 ms → 22 ms against a 126 ms `KARAC_SSO=0`
+baseline) on host B; on arm64 it is 13.9x faster than `KARAC_SSO=0` and 6.8x
+faster than the call. The rest of the table is untouched by that commit —
+`lexlike` still routes through `karac_string_slice_into` and still reads +23%.
+Re-run before quoting any of it:
 
 | rail | host A | host B (`nproc=4`) |
 |---|---|---|
 | `lexer` | −17.7% | −13…−17% |
 | `lexlike` | **−13%** | **+23%** |
-| `substr` | +34% | **+73%** |
+| `substr` (pre-`9d3ceb9`) | +34% | **+73%** → now **−83%** |
 | `builder20` | +15% | +3% |
 | `builder60` | +12% | +3% |
 | `promote` | +8% | +0.8% |
@@ -128,13 +137,27 @@ number that does not describe arm64.
   `lexlike` 215 ms, 0.9% apart, samples interleaving. The "~46–52 point gap" was
   (+72%) − (+23%) — two ratios with **equal numerators** and unequal
   denominators. They differ only at `KARAC_SSO=0` (126 ms vs 176 ms).
-- **B-2026-09-15-13 replaces it, and it is the actionable one.** SSO reaches
+- **B-2026-09-15-13 replaced it and is now FIXED (`9d3ceb9`).** SSO reached
   inline construction through an **opaque runtime call**
-  (`karac_string_try_inline_into`). Emitting that encoding as IR instead takes
-  the same rail from **212 ms to 22 ms** — 9.6x faster than the current SSO path
-  and **5.7x faster than the non-SSO baseline** — with identical output at three
-  iteration counts and linear scaling. The `+73%` this track called its blocker
-  is the cost of the call, not of SSO.
+  (`karac_string_try_inline_into`); `String.substring` now emits the encoding as
+  IR. The rail went **217 ms → 22 ms** on x86-64 — 5.7x faster than the
+  `KARAC_SSO=0` baseline — and **13.9x** faster than that baseline on arm64. The
+  `+73%` this track called its blocker was the cost of the call, not of SSO.
+- **But that did NOT clear the corpus blocker, and the claim that it might is
+  refuted.** This document said "if that holds on the lexer and the corpus, the
+  flip decision is being made against the wrong number." Measured on arm64: it
+  does not hold for `vertical`, the corpus's largest single regression, whose
+  SSO=1 instruction count moves by **0.003%** — because
+  `14-longest-common-prefix/bench/vertical.kara` contains **zero `substring`
+  calls**. It reads through `.bytes()`, `.chars()` and `.len()`.
+- **So the track has (at least) two INDEPENDENT costs**, and only one is fixed:
+  1. **Construction** via `substring` — an opaque call. Fixed in `9d3ceb9`.
+  2. **Reads** through `.bytes()` / `.chars()` / `.len()` — untouched by (1),
+     and the whole of `vertical`'s regression (B-2026-09-14-28). A construction
+     fix was never going to reach it: different path.
+- **`karac_string_slice_into` is the construction path that was NOT fixed.**
+  `s[a..b]` still routes through it and `lexlike` still measures +23%; it is the
+  same opaque-call shape, with UTF-8 validation folded in. Tracked separately.
 
 **Correctness is not the blocker.** The inline path is pinned by
 `test_sso_de_inline_rides_the_string_growth_test` (`tests/cli.rs`), verified

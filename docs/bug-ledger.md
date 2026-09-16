@@ -99,8 +99,8 @@ distinguish "bugs flattening" from "we stopped writing them down."
 | missing-feature | 199 |
 | codegen-gap | 178 |
 | diagnostics | 126 |
+| perf | 114 |
 | other | 114 |
-| perf | 113 |
 | false-positive | 107 |
 | soundness | 95 |
 | crash | 82 |
@@ -110,7 +110,7 @@ distinguish "bugs flattening" from "we stopped writing them down."
 
 | surface | total |
 |---|---|
-| codegen | 1781 |
+| codegen | 1782 |
 | interp | 449 |
 | typecheck | 301 |
 | other | 91 |
@@ -124,7 +124,7 @@ distinguish "bugs flattening" from "we stopped writing them down."
 | lexer | 8 |
 ## Current state
 
-_Generated from `bug-ledger.jsonl` by `scripts/bug-curve.py` (2026-05-20 → 2026-09-15). Do not edit this block by hand; edit the ledger and regenerate._
+_Generated from `bug-ledger.jsonl` by `scripts/bug-curve.py` (2026-05-20 → 2026-09-16). Do not edit this block by hand; edit the ledger and regenerate._
 
 ### Open
 
@@ -192,6 +192,7 @@ _Generated from `bug-ledger.jsonl` by `scripts/bug-curve.py` (2026-05-20 → 202
 | B-2026-09-15-34 | 2026-09-15 | interp | medium | A SHADOWED BINDING REBOUND THROUGH A CALL RUNS ITS USER `Drop` BODY TWICE IN THE INTERPRETER -- `let q = mk(15); let q = idr(q);` prints `dR15 dR15` under `karac run --interp` against one body on both compiled backends; needs BOTH the shadowing and the call, and two controls show each is necessary | — |
 | B-2026-09-15-35 | 2026-09-15 | codegen+interp | low | A STRUCT FIELD DECLARED AS A BARE GENERIC PARAM BOUND TO A CONTAINER LOSES ITS ELEMENTS' `Drop` BODIES ON ALL FOUR SURFACES -- `G[T] { a: T }` at `T = Array[R, 2]` and at `T = Vec[R]` both print nothing, where the SAME parameter bound to a plain Drop struct fires correctly (B-2026-08-02-14) and the same containers spelled CONCRETELY in the field both fire, so the erasure is the variable and not the container. | — |
 | B-2026-09-15-36 | 2026-09-15 | other | medium | THE CODEGEN E2E HARNESS IGNORES TYPECHECK ERRORS, so a fixture cell whose program DOES NOT COMPILE runs on the interpreter anyway and passes green whenever its expected output happens to match -- which is exactly the shape of the ~hundreds of "agreed silence" cells that expect only a trailing marker line. | — |
+| B-2026-09-16-1 | 2026-09-16 | codegen | medium | `s[a..b]` STILL REACHES SSO CONSTRUCTION THROUGH AN OPAQUE CALL -- `karac_string_slice_into`, the slice-syntax sibling of the `karac_string_try_inline_into` that B-2026-09-15-13 just removed from `String.substring`. The `lexlike` rail is unchanged at 215ms against a 176ms KARAC_SSO=0 baseline (+23%) while `substr`, which did identical work through the other spelling, went 217ms -> 22ms in 9d3ceb9. Same opaque-call shape, same fix available, one extra obstacle: this entrypoint also performs the UTF-8 boundary validation, which codegen already emits inline for `substring` via `emit_substring_boundary_checks`. | — |
 
 ### Relocated
 

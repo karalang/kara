@@ -51,7 +51,8 @@
 # pinned off (see the tunables note below; numbers from before 2026-09-15 were
 # NOT pinned and are not comparable). ON HOST B -- read the table above before
 # comparing these to anything, and re-run rather than trusting them:
-#   lexer -13.4..-19.1   lexlike +20.9..+24.0   substr +72.2..+74.4
+#   lexer -13.4..-19.1   lexlike +20.9..+24.0   substr +72..+74 (PRE-9d3ceb9;
+#   now about -83%)
 #   builder20 +1.8..+3.7   builder60 +2.4..+3.6   promote -0.8..+0.8 (zero)
 #   pfx_idx +15.9..+18.2   pfx_chars -7.5..-8.5
 #
@@ -75,9 +76,15 @@
 # The two rails cost the SAME under SSO. Best-of-15, pinned, both printing
 # 200000:
 #
-#   rail       KARAC_SSO=0   KARAC_SSO=1
-#   substr        126 ms        217 ms
-#   lexlike       176 ms        215 ms
+#   rail       KARAC_SSO=0   KARAC_SSO=1 (pre-9d3ceb9)   now
+#   substr        126 ms          217 ms                22 ms
+#   lexlike       176 ms          215 ms               215 ms
+#
+# 9d3ceb9 MOVED substr AND NOTHING ELSE: `String.substring` now emits its inline
+# encoding as IR instead of calling karac_string_try_inline_into (5.7x over the
+# KARAC_SSO=0 baseline on x86-64, 13.9x on arm64). `lexlike` is untouched --
+# `s[a..b]` goes through karac_string_slice_into, the same opaque-call shape on a
+# different entrypoint. So re-measure before quoting ANY substr figure below.
 #
 # 0.9% apart at SSO=1, samples interleaving. The "46-52 point gap" was
 # (+72%) - (+23%): two ratios with EQUAL NUMERATORS and unequal denominators.
