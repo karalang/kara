@@ -65,6 +65,81 @@ UPDATE=0
 # say so; `0` restores the old behaviour.
 REQUIRE_ARCHIVE="${KARAC_REQUIRE_RUNTIME_ARCHIVE:-1}"
 
+# ── Archive FRESHNESS (B-2026-09-16-4) ───────────────────────────────────────
+#
+# Every other archive guard in this tree tests PRESENCE. `link_or_skip`
+# discriminates on `undefined symbol`, which is the LOUD half of staleness
+# (B-2026-07-28-1): an archive missing a symbol codegen emits. REQUIRE_ARCHIVE
+# above turns a soft-skip into a panic — presence again. The opt-in carve-out
+# below greps the failure log for archive FILENAMES, and has to, so that a
+# missing REQUIRED archive stays a hard failure.
+#
+# None of that can see the SILENT half: a commit that changes what an EXISTING
+# `karac_*` symbol DOES. Same name, same signature, different semantics. The
+# link succeeds and the fixture runs the old behaviour, green.
+#
+# Measured 2026-09-16, which is why this exists: after rebuilding the lean and
+# full archives (the two commands most people run), this container's opt-in
+# regex/arrow/unicode archives were five days old, `runtime/src` had moved three
+# times since — one of them a pure behaviour change — and both legs reported
+# 1641/1641 green with six fixtures executing a stale runtime. The opt-in
+# archives are the worst case precisely because CLAUDE.md tells everyone to SKIP
+# building them, so they are the ones nobody ever rebuilds; the hazard is
+# created by having built them ONCE.
+#
+# The comparison is the archive's mtime against the COMMIT TIME of the last
+# change to `runtime/src`, not against file mtimes — a fresh clone stamps every
+# file at checkout, so file mtimes say nothing.
+if [[ "${KARAC_ALLOW_STALE_ARCHIVE:-0}" != "1" ]]; then
+  runtime_ct="$(git log -1 --format=%ct -- runtime/src 2>/dev/null || true)"
+  if [[ -z "$runtime_ct" ]]; then
+    # A shallow clone (cloud containers, actions/checkout depth-1) may not carry
+    # the commit that last touched runtime/src. Say so rather than pass quietly:
+    # a skipped check that looks like a passed one is this row's whole subject.
+    echo ">> archive freshness: SKIPPED — no runtime/src history (shallow clone?)"
+  else
+    # Only the archives THIS leg can link. A `_wasm` / `_wasm_threads` archive
+    # is for `karac build --target=wasm_*` and can never reach a
+    # memory_sanitizer fixture, so failing on one would be noise — and a gate
+    # that fires on irrelevant things gets routed around with the override
+    # below, which would defeat the whole check. They are reported separately.
+    stale_archives=()
+    stale_other=()
+    for a in target/release/libkarac_runtime*.a; do
+      [[ -e "$a" ]] || continue
+      a_mt="$(stat -c %Y "$a" 2>/dev/null || stat -f %m "$a" 2>/dev/null || echo 0)"
+      [[ "$a_mt" -lt "$runtime_ct" ]] || continue
+      case "$a" in
+        *_wasm.a|*_wasm_threads.a) stale_other+=("$a") ;;
+        *) stale_archives+=("$a") ;;
+      esac
+    done
+    if [[ ${#stale_other[@]} -gt 0 ]]; then
+      echo ">> note: stale wasm archive(s), not linkable by this suite so not fatal:"
+      printf '     %s\n' "${stale_other[@]}"
+      echo "   Rebuild them before trusting any --target=wasm_* result."
+    fi
+    if [[ ${#stale_archives[@]} -gt 0 ]]; then
+      echo "!! STALE RUNTIME ARCHIVE(S) — older than the last runtime/src change."
+      echo "   runtime/src last changed: $(git log -1 --format='%h %ci  %s' -- runtime/src)"
+      for a in "${stale_archives[@]}"; do
+        printf '     %s  built %s\n' "$a" \
+          "$(date -d "@$(stat -c %Y "$a" 2>/dev/null || stat -f %m "$a")" '+%Y-%m-%d %H:%M' 2>/dev/null \
+             || date -r "$(stat -f %m "$a" 2>/dev/null || echo 0)" '+%Y-%m-%d %H:%M' 2>/dev/null)"
+      done
+      echo "   These link cleanly and run the OLD behaviour — nothing else in the"
+      echo "   tree detects that. Rebuild before trusting this leg (CLAUDE.md"
+      echo "   § Commands has the recipe; the opt-in regex/arrow/gpu/unicode"
+      echo "   archives need their own --features rebuild, lean-then-full order"
+      echo "   applies to the canonical name)."
+      echo "   Override with KARAC_ALLOW_STALE_ARCHIVE=1 if you know the change"
+      echo "   cannot affect what these fixtures execute."
+      exit 3
+    fi
+    echo ">> archive freshness: OK — all present archives postdate runtime/src@$(git log -1 --format=%h -- runtime/src)"
+  fi
+fi
+
 echo ">> [$LEG] KARAC_OPT_LEVEL=$OPT_LEVEL cargo test --features llvm --test memory_sanitizer (--test-threads=$THREADS)"
 KARAC_OPT_LEVEL="$OPT_LEVEL" KARAC_REQUIRE_RUNTIME_ARCHIVE="$REQUIRE_ARCHIVE" \
   cargo test --features llvm --test memory_sanitizer \
