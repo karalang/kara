@@ -34816,6 +34816,131 @@ fn main() {
         }
     }
 
+    /// B-2026-09-13-23 — the BODIES half of an `Array[T, N]` held in a tuple:
+    /// each element's user `Drop` runs exactly once, on both backends, in
+    /// every position the tuple can occupy.
+    ///
+    /// The row is a LEAK row and measured its own bodies channel as already
+    /// correct — `(Array[D, 2], i64)` printed `dD1 dD2` while leaking 20 B —
+    /// so this fixture is not asserting a behaviour change. It is the guard
+    /// that the MEMORY fix did not buy itself a duplicated or lost body:
+    /// bodies and memory are separate channels (B-2026-08-28-57), the fix
+    /// touches four ownership sites including a param entry copy, and a
+    /// doubled body is invisible to the alloc/free counts the ASAN sibling
+    /// (`asan_array_inside_a_tuple_frees_its_element_buffers`) reads.
+    ///
+    /// The `let t2 = t;` cell is the one that matters: a whole-tuple move is
+    /// where a copy-vs-transfer mistake shows up as two bodies rather than
+    /// one, and it is also the cell the memory fix was blocked on.
+    #[test]
+    fn e2e_array_in_a_tuple_runs_each_element_drop_body_once() {
+        const HDR: &str = "struct D { id: i64, s: String }\n\
+                           impl Drop for D { fn drop(mut ref self) { println(f\"dD{self.id}\") } }\n\
+                           fn mkd(n: i64) -> D { return D { id: n, s: f\"ss{n}\" }; }\n";
+        for (label, decls, body, want) in [
+            (
+                "a plain annotated let",
+                "",
+                "let t: (Array[D, 2], i64) = ([mkd(1), mkd(2)], 7);\nprintln(f\"n:{t.1}\");",
+                "n:7\ndD1\ndD2\nend\n",
+            ),
+            (
+                "a whole-tuple MOVE — the cell the memory fix was blocked on",
+                "",
+                "let t: (Array[D, 2], i64) = ([mkd(1), mkd(2)], 7);\nlet t2 = t;\nprintln(f\"n:{t2.1}\");",
+                "n:7\ndD1\ndD2\nend\n",
+            ),
+            (
+                // PINNED AT AN AGREED SILENCE, measured on all four surfaces
+                // and confirmed pre-existing on the fix commit's PARENT tree
+                // (parent checkout + marker guard, not a stash — see the
+                // destructure note below for why that distinction matters).
+                // A tuple held in a STRUCT FIELD runs no element body here,
+                // while the identical tuple as a LOCAL (the first two cells)
+                // runs both — the nested-container-in-a-struct-field bodies
+                // gap, B-2026-09-15-23's family one level further in, and NOT
+                // something this row's memory fix changes: the same shape's
+                // MEMORY is clean and asserted by
+                // `b23-tuple-array-struct-field-move` in the ASAN sibling.
+                //
+                // Kept as a cell rather than dropped, because it is the
+                // position where a future bodies fix has to show up, and
+                // because it records that memory and bodies really did come
+                // apart here (B-2026-08-28-57).
+                "pinned: a struct field holding the tuple runs no body on any backend",
+                "struct W { t: (Array[D, 2], i64) }\n",
+                "let w: W = W { t: ([mkd(1), mkd(2)], 7) };\nlet w2 = w;\nprintln(f\"n:{w2.t.1}\");",
+                "n:7\nend\n",
+            ),
+            (
+                "a by-value param returned — the fourth ownership site",
+                "fn thru(p: (Array[D, 2], i64)) -> (Array[D, 2], i64) { return p; }\n",
+                "let t: (Array[D, 2], i64) = ([mkd(1), mkd(2)], 7);\nlet u = thru(t);\nprintln(f\"n:{u.1}\");",
+                "n:7\ndD1\ndD2\nend\n",
+            ),
+            (
+                "control: a scalar array element runs nothing",
+                "",
+                "let t: (Array[i64, 2], i64) = ([3, 4], 7);\nlet t2 = t;\nprintln(f\"a0:{t2.0[0]}\");",
+                "a0:3\nend\n",
+            ),
+        ] {
+            let src = format!("{HDR}{decls}fn main() {{\n{body}\nprintln(\"end\");\n}}\n");
+            let (interp_out, interp_errs, _, _) = karac::run_program_full(&src);
+            assert!(
+                interp_errs.is_empty(),
+                "[{label}] interp errored: {interp_errs:?}"
+            );
+            assert_eq!(interp_out.join(""), want, "[{label}] interpreter");
+            if let Some(aot) = run_program(&src) {
+                assert_eq!(aot, want, "[{label}] AOT");
+            }
+        }
+        // A DESTRUCTURE is a RUN-VS-BUILD DIVERGENCE and is pinned as one,
+        // with a separate expectation per backend, because a single `want`
+        // would force a choice between two behaviours that really do differ.
+        //
+        // PRE-EXISTING, not this row's doing. Measured on the fix commit's
+        // PARENT tree (`git checkout <fix>~1 -- src/`, with a marker count
+        // printed as the guard): interp `dD1 dD2 j:7 end`, both compiled
+        // backends `j:7 end` — identical to the post-fix reading. Its MEMORY
+        // is clean before and after (`b23-tuple-array-return-destructure`
+        // asserts that), so this is purely the bodies channel and is filed
+        // separately.
+        //
+        // The first attempt at this check used `git stash push src/` and was
+        // WORTHLESS: the fix was already committed, so the stash took nothing
+        // and both "before" and "after" measured the same fixed tree. That is
+        // CLAUDE.md's documented trap, and the marker guard is what catches it.
+        //
+        // The interpreter also fires the bodies EARLY, at the destructure
+        // rather than at scope end, which is the same shape the array-field
+        // move-out shows; that ordering is part of what the new row records.
+        {
+            let src = format!(
+                "{HDR}fn main() {{\n\
+                 let t: (Array[D, 2], i64) = ([mkd(1), mkd(2)], 7);\n\
+                 let (a, j) = t;\n\
+                 println(f\"j:{{j}}\");\n\
+                 println(\"end\");\n\
+                 }}\n"
+            );
+            let (interp_out, interp_errs, _, _) = karac::run_program_full(&src);
+            assert!(interp_errs.is_empty(), "destructure: {interp_errs:?}");
+            assert_eq!(
+                interp_out.join(""),
+                "dD1\ndD2\nj:7\nend\n",
+                "destructure, interpreter (bodies fire, and early)"
+            );
+            if let Some(aot) = run_program(&src) {
+                assert_eq!(
+                    aot, "j:7\nend\n",
+                    "destructure, AOT (no bodies — the divergence)"
+                );
+            }
+        }
+    }
+
     /// B-2026-09-15-26 / B-2026-09-15-27 — an `Array[T, N]`-typed STRUCT
     /// FIELD runs its elements' `Drop` bodies, and a `Vec[Array[T, N]]` field
     /// frees their heap.
