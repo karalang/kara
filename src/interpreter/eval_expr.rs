@@ -1202,13 +1202,69 @@ impl<'a> super::Interpreter<'a> {
                     // the `match` spelling (fixed by this row) ran one — the
                     // spelling-dependent split this family keeps having to
                     // close.
+                    // B-2026-09-06-35 — a NAMED struct scrutinee is admitted
+                    // too, now that the stash has a per-FIELD retraction to
+                    // pair with (`moved_out_struct_field_bodies`, written
+                    // below). Moving with the `match` leg in the same commit:
+                    // this family has closed a spelling-dependent split four
+                    // times (B-2026-08-28-63, -08-29-17, -08-31-32,
+                    // -09-01-28), and leaving `if let` behind here would have
+                    // made a fifth — measured `dR35 dR34` against the `match`
+                    // spelling's `dR34 dR35` on the identical program.
+                    let struct_named_scrut = matches!(val, Value::Struct { .. })
+                        && !Self::struct_scrutinee_has_no_other_owner(value);
                     let consuming_scrutinee = !reads_through
                         && matches!(val, Value::EnumVariant { .. } | Value::Struct { .. })
                         && self.scrutinee_expr_is_consuming(value)
                         && (matches!(val, Value::EnumVariant { .. })
-                            || Self::struct_scrutinee_has_no_other_owner(value));
+                            || Self::struct_scrutinee_has_no_other_owner(value)
+                            || struct_named_scrut);
                     let stash_names: Vec<String> = if consuming_scrutinee {
-                        if matches!(val, Value::Struct { .. }) {
+                        if struct_named_scrut {
+                            // B-2026-09-06-35 — the named-scrutinee leg. Only
+                            // WHOLE-field bindings, and each one masked out of
+                            // the scrutinee's own walk as it is stashed, so the
+                            // two stay in lockstep. The root is a plain name or
+                            // `self`; anything else has no walk to retract and
+                            // keeps today's behaviour.
+                            let root = match &value.kind {
+                                ExprKind::Identifier(n) => Some(n.clone()),
+                                ExprKind::SelfValue => Some("self".to_string()),
+                                _ => None,
+                            };
+                            match root {
+                                Some(root) => {
+                                    // Masked VIEW fields are excluded here for
+                                    // the reason the `match` leg states: the
+                                    // caller owns that body, and stashing one
+                                    // doubles it.
+                                    let views = self.masked_payload_view_names(pattern, value);
+                                    let mut out = Vec::new();
+                                    for (field, bound) in
+                                        Self::struct_pattern_whole_field_bindings(pattern)
+                                    {
+                                        if views.contains(&bound) {
+                                            continue;
+                                        }
+                                        self.moved_out_struct_field_bodies
+                                            .insert((root.clone(), field));
+                                        out.push(bound);
+                                    }
+                                    for (path, bound) in
+                                        Self::struct_pattern_nested_field_bindings(pattern)
+                                    {
+                                        if views.contains(&bound) {
+                                            continue;
+                                        }
+                                        self.moved_out_nested_field_bodies
+                                            .insert((root.clone(), path));
+                                        out.push(bound);
+                                    }
+                                    out
+                                }
+                                None => Vec::new(),
+                            }
+                        } else if matches!(val, Value::Struct { .. }) {
                             // Unfiltered: the loop below decides which of these
                             // actually owe a body, and it runs AFTER
                             // `bind_pattern`. Filtering here consults `env`

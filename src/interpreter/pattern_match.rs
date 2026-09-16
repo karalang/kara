@@ -311,6 +311,82 @@ impl<'a> super::Interpreter<'a> {
                                 self.pending_arm_drop_bindings.push(n);
                             }
                         }
+                    } else if matches!(scrutinee, Value::Struct { .. }) {
+                        // B-2026-09-06-35 — the NAMED struct scrutinee the
+                        // paragraph above declines, now that there IS a
+                        // retraction to pair the stash with.
+                        //
+                        // Without one, this backend swept the WHOLE struct in
+                        // reverse declaration order and let the bound field
+                        // ride along: `let s = S3 { a: mk(2), b: mk(3) };
+                        // match s { S3 { a, .. } => .. }` gave `dR3 dR2` where
+                        // every compiled backend gave `dR2 dR3`, and the
+                        // three-field `S4 { b, .. }` gave `c b a` against
+                        // `b c a`. The count was right on both, so only the
+                        // sequence diverged.
+                        //
+                        // design.md settles which side moves. § "Interaction
+                        // with move semantics": "Moving a value out of a
+                        // binding ends that binding's live range — the
+                        // destination takes over responsibility for running
+                        // `Drop` when *its* live range ends". The bound field
+                        // is moved into the arm's binding, so its final owner
+                        // is that binding and it dies at the ARM's end;
+                        // § "Field drop order is reverse declaration order"
+                        // then governs only the fields the struct still owns.
+                        // The three-field cell is what makes this decisive:
+                        // sweeping `c b a` puts the moved-out `b` back inside
+                        // the struct's order, which is exactly what the move
+                        // rule forbids.
+                        //
+                        // So: stash each whole-field binding that owes a body
+                        // (it fires at the arm's end, LIFO) and mask that field
+                        // out of the scrutinee's own walk through
+                        // `moved_out_struct_field_bodies` — the same
+                        // `(binding, field)` mask a `let x = h.f` move-out
+                        // already uses, whose walk "resolves each declared
+                        // field through `fields.get(..)` and skips a missing
+                        // one". Stash and mask are written together, per field,
+                        // because the two must agree or the body fires twice or
+                        // not at all.
+                        let root = scrutinee_place.and_then(|sp| match &sp.kind {
+                            ExprKind::Identifier(n) => Some(n.clone()),
+                            ExprKind::SelfValue => Some("self".to_string()),
+                            _ => None,
+                        });
+                        if let Some(root) = root {
+                            for (field, bound) in
+                                Self::struct_pattern_whole_field_bindings(&arm.pattern)
+                            {
+                                // NOT a masked VIEW: the field was filled
+                                // from a param view, so the CALLER runs its
+                                // body. Stashing one here doubles it — measured
+                                // `dR2 dR1 dR1` against `dR2 dR1`, which is the
+                                // failure `masked_payload_view_names`' struct
+                                // arm exists to prevent and which the enum leg
+                                // above already filters on.
+                                if self.pattern_binding_owes_drop_body(&bound)
+                                    && !masked_view_names.contains(&bound)
+                                {
+                                    self.pending_arm_drop_bindings.push(bound);
+                                    self.moved_out_struct_field_bodies
+                                        .insert((root.clone(), field));
+                                }
+                            }
+                            // The nested leaves, through the PATH-keyed mask —
+                            // the outer field keeps every other body it owes.
+                            for (path, bound) in
+                                Self::struct_pattern_nested_field_bindings(&arm.pattern)
+                            {
+                                if self.pattern_binding_owes_drop_body(&bound)
+                                    && !masked_view_names.contains(&bound)
+                                {
+                                    self.pending_arm_drop_bindings.push(bound);
+                                    self.moved_out_nested_field_bodies
+                                        .insert((root.clone(), path));
+                                }
+                            }
+                        }
                     }
                     if let Value::EnumVariant { enum_name, .. } = scrutinee {
                         for n in self.arm_moved_user_drop_payload_bindings(enum_name, &arm.pattern)
@@ -666,6 +742,86 @@ impl<'a> super::Interpreter<'a> {
                 }
             }
         }
+    }
+
+    /// B-2026-09-06-35 — `(field name, binding name)` for each field of a
+    /// struct `pattern` that is moved WHOLE into a single binding: the
+    /// shorthand `{ a }` (field and binding share the name) and the renamed
+    /// `{ a: x }`. Empty for a non-struct pattern.
+    ///
+    /// A NESTED sub-pattern (`{ a: Inner { .. } }`) or a wildcard (`{ a: _ }`)
+    /// is deliberately absent: neither takes the whole field, so the field
+    /// stays with the scrutinee and must keep riding its walk. That is the same
+    /// line the codegen twin draws for its own whole-move test, and the same
+    /// one the memory suppressor draws when it declines a partial destructure.
+    /// B-2026-09-06-35 — the DEEP sibling of
+    /// [`Self::struct_pattern_whole_field_bindings`]: `(field-name PATH,
+    /// binding name)` for each leaf a NESTED struct sub-pattern moves whole out
+    /// of the scrutinee (`Outer { i: Inner { p }, .. }` yields
+    /// `(["i", "p"], "p")`).
+    ///
+    /// A path rather than a field name because the outer field is NOT wholly
+    /// moved — only the leaf inside it is — so masking the outer field would
+    /// lose every other body it owes. That is the same distinction
+    /// `moved_out_nested_field_bodies` was built for, and this feeds it.
+    ///
+    /// Depth-first in declaration order, so the caller stashes in pattern order
+    /// and the arm-end LIFO drain reverses it, exactly as the flat leg does.
+    pub(super) fn struct_pattern_nested_field_bindings(
+        pattern: &Pattern,
+    ) -> Vec<(Vec<String>, String)> {
+        fn walk(pattern: &Pattern, prefix: &mut Vec<String>, out: &mut Vec<(Vec<String>, String)>) {
+            let PatternKind::Struct { fields, .. } = &pattern.kind else {
+                return;
+            };
+            for fp in fields {
+                let Some(sub) = &fp.pattern else { continue };
+                match &sub.kind {
+                    PatternKind::Struct { .. } => {
+                        prefix.push(fp.name.clone());
+                        walk(sub, prefix, out);
+                        prefix.pop();
+                    }
+                    PatternKind::Binding(n) if !prefix.is_empty() => {
+                        let mut path = prefix.clone();
+                        path.push(fp.name.clone());
+                        out.push((path, n.clone()));
+                    }
+                    _ => {}
+                }
+            }
+            // A shorthand field inside a NESTED pattern (`Inner { p }`) has no
+            // sub-pattern, so it is collected here rather than in the loop
+            // above, which requires one.
+            if !prefix.is_empty() {
+                for fp in fields {
+                    if fp.pattern.is_none() {
+                        let mut path = prefix.clone();
+                        path.push(fp.name.clone());
+                        out.push((path, fp.name.clone()));
+                    }
+                }
+            }
+        }
+        let mut out = Vec::new();
+        walk(pattern, &mut Vec::new(), &mut out);
+        out
+    }
+
+    pub(super) fn struct_pattern_whole_field_bindings(pattern: &Pattern) -> Vec<(String, String)> {
+        let PatternKind::Struct { fields, .. } = &pattern.kind else {
+            return Vec::new();
+        };
+        fields
+            .iter()
+            .filter_map(|fp| match &fp.pattern {
+                None => Some((fp.name.clone(), fp.name.clone())),
+                Some(p) => match &p.kind {
+                    PatternKind::Binding(n) => Some((fp.name.clone(), n.clone())),
+                    _ => None,
+                },
+            })
+            .collect()
     }
 
     /// B-2026-08-29-36 — resolve a chain of struct FIELD accesses rooted at a

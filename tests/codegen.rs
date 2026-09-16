@@ -41972,6 +41972,150 @@ end
         );
     }
 
+    /// B-2026-09-06-35 — a partial struct `match` pattern destroyed the `..` REST
+    /// fields BEFORE the bound leaf on the interpreter and AFTER it on every
+    /// compiled backend: `let s = S3 { a: mk(1), b: mk(2) }; match s { S3 { a, .. }
+    /// => .. }` printed `dR2 dR1` under `--interp` and `dR1 dR2` under jit / aot /
+    /// `KARAC_AUTO_PAR=0`. Count-correct on both, so only the sequence diverged.
+    ///
+    /// THE ROW ASKED WHICH BACKEND IS WRONG AND design.md ANSWERS IT.
+    /// § "Interaction with move semantics": "Moving a value out of a binding ends
+    /// that binding's live range — the destination takes over responsibility for
+    /// running `Drop` when *its* live range ends". A whole-field binding in the
+    /// pattern moves that field into the ARM's binding, so the arm's binding is its
+    /// final owner and it dies at the arm's end; § "Field drop order is reverse
+    /// declaration order" then governs only the fields the scrutinee still owns.
+    /// The compiled backends already do exactly that, so the interpreter moves.
+    ///
+    /// `bind_middle` is what makes it decisive, and it is not in the row: for
+    /// `S4 { b, .. }` the interpreter printed `c b a` — reverse declaration order
+    /// over ALL THREE fields, putting the moved-out `b` back inside the struct's
+    /// own sweep, which is precisely what the move rule forbids. The compiled
+    /// `b c a` is the bound leaf at the arm's end followed by the husk in reverse
+    /// declaration order. The row's two-field cells cannot tell those models apart,
+    /// which is why its own explanation of the `{ b, .. }` mirror ("both sequences
+    /// happen to read `b` then `a`") does not survive a third field.
+    ///
+    /// The interpreter now stashes each WHOLE-field binding as an arm-scoped Drop
+    /// slot and masks that field out of the scrutinee's own walk in the same step —
+    /// through `moved_out_struct_field_bodies` for a flat field and the path-keyed
+    /// `moved_out_nested_field_bodies` for a leaf inside a nested sub-pattern,
+    /// where the outer field is NOT wholly moved and must keep every other body it
+    /// owes. Stash and mask are written together, per field, because the two must
+    /// agree or the body fires twice or not at all.
+    ///
+    /// CELLS. `bind_first` (the row's own shape), `bind_last` (its mirror, which
+    /// agreed before and still does), `bind_middle` (the three-field discriminator),
+    /// `renamed` (`a: x`, where field and binding names differ), `nested_leaf`
+    /// (the path-masked case), `iflet_named` (the `if let` spelling, which had the
+    /// same divergence and moves in the same commit — this family has closed a
+    /// spelling-dependent split four times), `scalar_beside` (a non-Drop field in
+    /// the rest), `moved_on` (the arm hands the leaf to a call). Controls that must
+    /// not move: `bind_all` (nothing left in the rest), `bind_none` (nothing
+    /// bound), `wild_field` (`a: _` takes nothing).
+    ///
+    /// All four surfaces now print this string byte-identically, so the twinned
+    /// pair is pinned to ONE expected output. valgrind at `KARAC_OPT_LEVEL=0`:
+    /// 68 allocs / 68 frees, ERROR SUMMARY 0.
+    ///
+    /// Twin of `tests/interpreter.rs`'s
+    /// `test_partial_struct_match_pattern_drops_the_bound_leaf_first`.
+    #[test]
+    fn e2e_partial_struct_match_pattern_drops_the_bound_leaf_first() {
+        let Some(out) = run_program(
+            r#"struct R { id: i64, name: String }
+impl Drop for R { fn drop(mut ref self) { println(f"  dR{self.id}") } }
+fn mk(i: i64) -> R { return R { id: i, name: f"n{i}" }; }
+struct S3 { a: R, b: R }
+struct S4 { a: R, b: R, c: R }
+struct Mix { a: R, k: i64, c: R }
+struct Inner { p: R }
+struct Outer { i: Inner, z: R }
+fn eat(r: R) -> i64 { return r.id; }
+
+fn bind_first() -> i64 { let s: S3 = S3 { a: mk(1), b: mk(2) }; match s { S3 { a, .. } => { return a.id; } } }
+fn bind_last() -> i64 { let s: S3 = S3 { a: mk(3), b: mk(4) }; match s { S3 { b, .. } => { return b.id; } } }
+fn bind_middle() -> i64 { let s: S4 = S4 { a: mk(5), b: mk(6), c: mk(7) }; match s { S4 { b, .. } => { return b.id; } } }
+fn bind_all() -> i64 { let s: S3 = S3 { a: mk(8), b: mk(9) }; match s { S3 { a, b } => { return a.id + b.id; } } }
+fn bind_none() -> i64 { let s: S3 = S3 { a: mk(10), b: mk(11) }; match s { S3 { .. } => { return 1; } } }
+fn renamed() -> i64 { let s: S3 = S3 { a: mk(12), b: mk(13) }; match s { S3 { a: x, .. } => { return x.id; } } }
+fn wild_field() -> i64 { let s: S3 = S3 { a: mk(14), b: mk(15) }; match s { S3 { a: _, .. } => { return 1; } } }
+fn nested_leaf() -> i64 { let o: Outer = Outer { i: Inner { p: mk(16) }, z: mk(17) }; match o { Outer { i: Inner { p }, .. } => { return p.id; } } }
+fn scalar_beside() -> i64 { let s: Mix = Mix { a: mk(18), k: 5, c: mk(19) }; match s { Mix { a, .. } => { return a.id; } } }
+fn iflet_named() -> i64 { let s: S3 = S3 { a: mk(20), b: mk(21) }; if let S3 { a, .. } = s { return a.id; } return 0; }
+fn moved_on() -> i64 { let s: S4 = S4 { a: mk(22), b: mk(23), c: mk(24) }; match s { S4 { b, .. } => { return eat(b); } } }
+
+fn main() {
+    println("bind_first"); let a: i64 = bind_first(); println(f"  v={a}");
+    println("bind_last"); let b: i64 = bind_last(); println(f"  v={b}");
+    println("bind_middle"); let c: i64 = bind_middle(); println(f"  v={c}");
+    println("bind_all"); let d: i64 = bind_all(); println(f"  v={d}");
+    println("bind_none"); let e: i64 = bind_none(); println(f"  v={e}");
+    println("renamed"); let f: i64 = renamed(); println(f"  v={f}");
+    println("wild_field"); let g: i64 = wild_field(); println(f"  v={g}");
+    println("nested_leaf"); let h: i64 = nested_leaf(); println(f"  v={h}");
+    println("scalar_beside"); let i: i64 = scalar_beside(); println(f"  v={i}");
+    println("iflet_named"); let j: i64 = iflet_named(); println(f"  v={j}");
+    println("moved_on"); let k: i64 = moved_on(); println(f"  v={k}");
+    println("end");
+}
+"#,
+        ) else {
+            return;
+        };
+        assert_eq!(
+            out,
+            r#"bind_first
+  dR1
+  dR2
+  v=1
+bind_last
+  dR4
+  dR3
+  v=4
+bind_middle
+  dR6
+  dR7
+  dR5
+  v=6
+bind_all
+  dR9
+  dR8
+  v=17
+bind_none
+  dR11
+  dR10
+  v=1
+renamed
+  dR12
+  dR13
+  v=12
+wild_field
+  dR15
+  dR14
+  v=1
+nested_leaf
+  dR16
+  dR17
+  v=16
+scalar_beside
+  dR18
+  dR19
+  v=18
+iflet_named
+  dR20
+  dR21
+  v=20
+moved_on
+  dR23
+  dR24
+  dR22
+  v=23
+end
+"#
+        );
+    }
+
     /// B-2026-09-06-37 — a WILDCARD arm over an owned ENUM receiver ran the payload's
     /// `Drop` body on no surface: `impl E { fn m_wild(self) -> i64 { match self {
     /// E.A(_) => { return 1; } E.B => { return 0; } } } }` printed `dE x1` for a named
