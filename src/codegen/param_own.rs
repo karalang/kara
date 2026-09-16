@@ -551,17 +551,61 @@ impl<'ctx> super::Codegen<'ctx> {
         agg_ty: StructType<'ctx>,
         slot: PointerValue<'ctx>,
     ) -> bool {
-        if !elems.iter().any(|e| self.type_expr_has_drop_heap(e)) {
+        // B-2026-09-13-23 — a tuple whose heap hangs off a fixed `Array[T, N]`
+        // ELEMENT. `type_expr_has_drop_heap` has no `Array` arm, so such a
+        // tuple read as heapless here and the param took the caller-retains
+        // fallback: `p` aliased the caller's storage. Harmless while nothing
+        // walked the array, and a DOUBLE FREE once the tuple's drop learned to
+        // (pieces 1+2 of this row) and the value escaped by `return` -- the
+        // caller's source and the returned binding then both owned it.
+        // Measured: `eat(t)` stayed clean (one owner) while
+        // `let u = thru(t)` went to 16 allocs / 18 frees.
+        //
+        // TRANSFER, NOT COPY, matching `make_array_param_callee_owned`'s model
+        // for a bare array param -- "a fixed array is passed by value
+        // transferring ownership, so the callee is the sole owner and a copy
+        // would create a second one". The bare-array spelling of this exact
+        // cell is clean today for that reason, which is what identifies the
+        // model rather than the deep copy the Vec tuple uses.
+        let array_heap = elems.iter().any(|e| {
+            self.array_elem_and_len(e)
+                .is_some_and(|(inner, n)| n > 0 && self.type_expr_has_drop_heap(&inner))
+        });
+        if !elems.iter().any(|e| self.type_expr_has_drop_heap(e)) && !array_heap {
             return false;
         }
         let mut stack = Vec::new();
-        if !elems
-            .iter()
-            .all(|e| self.field_copy_supported(e, &mut stack))
-        {
+        if !elems.iter().all(|e| match self.array_elem_and_len(e) {
+            // An array element is copyable exactly when its ELEMENT is —
+            // asked HERE rather than inside `field_copy_supported`, which is
+            // shared with the STRUCT param path. Widening it there gave a
+            // `struct W { a: Array[String, 2] }` by-value param an entry copy
+            // it never had, and two shipped ASAN fixtures
+            // (`asan_array_struct_field_drops_its_elements`,
+            // `asan_array_binding_moved_into_struct_field_has_one_owner`)
+            // went red. A bare array param has its own ownership model
+            // (`make_array_param_callee_owned`, transfer not copy) and must
+            // keep it.
+            Some((inner, n)) => n == 0 || self.field_copy_supported(&inner, &mut stack),
+            None => self.field_copy_supported(e, &mut stack),
+        }) {
             return false;
         }
         for (j, ete) in elems.iter().enumerate() {
+            // Same containment: the array copy is emitted here, not through
+            // the shared `deep_copy_one_aggregate_field`.
+            if let Some((elem_te, n)) = self.array_elem_and_len(ete) {
+                if n > 0 {
+                    if let (Ok(field_ptr), Some(BasicTypeEnum::ArrayType(arr_ty))) = (
+                        self.builder
+                            .build_struct_gep(agg_ty, slot, j as u32, "p14.tup.af"),
+                        agg_ty.get_field_type_at_index(j as u32),
+                    ) {
+                        self.deep_copy_array_elems_in_place(field_ptr, arr_ty, &elem_te, n);
+                    }
+                }
+                continue;
+            }
             self.deep_copy_one_aggregate_field(slot, agg_ty, j as u32, ete);
         }
         match self.synthesize_tuple_drop_fn_te(agg_ty, elems) {

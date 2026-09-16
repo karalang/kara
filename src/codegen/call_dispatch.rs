@@ -14116,7 +14116,23 @@ impl<'ctx> super::Codegen<'ctx> {
                 .get(var_name)
                 .is_some_and(|n| self.type_decls.struct_types.contains_key(n.as_str()));
             if !named && agg_ty != vec_ty {
-                if self.aggregate_has_heap_field(agg_ty) {
+                // B-2026-09-13-23 — `aggregate_has_heap_field` is LLVM-type-
+                // driven and sees a `[2 x {ptr,len,cap}]` field as no-heap, so
+                // a tuple holding `Array[String, 2]` fell past this branch to
+                // the `elem_tes` one below, whose per-element worker
+                // (`zero_tuple_elem_cap_at`) has no `Array` arm and no-ops.
+                // The source was therefore never disarmed, and once the
+                // tuple's drop learned to walk the array (the `"Array"` arm of
+                // `emit_tuple_elem_drops`) `let t2 = t;` double-freed.
+                //
+                // THIS is the branch the working `Vec` case takes — measured:
+                // `(Vec[String], i64)` reports has_heap_field=true here and is
+                // clean across the same move, while `(Array[String, 2], i64)`
+                // reported false. Two earlier attempts at this row extended
+                // `zero_tuple_elem_cap_at` instead, which is the OTHER branch's
+                // worker and is not on the proven path; both hit the same wall.
+                if self.aggregate_has_heap_field(agg_ty) || self.aggregate_has_array_of_heap(agg_ty)
+                {
                     // A directly-visible Vec/String field — the reliable
                     // LLVM-type walk (zeroes each `cap`). Kept FIRST so the
                     // proven Vec/String tuple-move suppression is unchanged; the

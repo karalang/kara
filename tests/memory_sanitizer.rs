@@ -93542,4 +93542,183 @@ fn main() {
             "b26-array-field-bodies-memory-control",
         );
     }
+    /// B-2026-09-13-23 — an `Array[T, N]` held in a TUPLE frees its element
+    /// buffers, in every position the tuple can occupy.
+    ///
+    /// FOUR SITES, and the row had mapped two of them. An array spells as
+    /// `Path(["Array"], [Type(T), Const(N)])`, so it reaches the `Path` arm of
+    /// each tuple helper and then falls through every test in it:
+    ///
+    ///   1 `tuple_elem_needs_deep_drop` never ARMED the tuple's deep drop.
+    ///   2 `emit_tuple_elem_drops` dispatched `"Array"` into a catch-all that
+    ///     tests only shared/enum/struct and so emitted nothing.
+    ///   3 the MOVE-SUPPRESSION dual, which is where two earlier attempts
+    ///     stalled. Pieces 1+2 alone turn the leak into a DOUBLE FREE on
+    ///     `let t2 = t;`, which is strictly worse, and both attempts reverted.
+    ///     It is not one site but two, reached by different shapes: a bare
+    ///     tuple move goes through `zero_aggregate_field_caps` (gated by
+    ///     `aggregate_has_heap_field`, which is LLVM-type-driven and reads a
+    ///     `[2 x {ptr,len,cap}]` field as no-heap), while a tuple held in a
+    ///     STRUCT field goes through `zero_tuple_elem_cap_at`. Both were
+    ///     measured double-freeing independently; fixing either alone leaves
+    ///     the other. That is why the earlier attempt's `zero_tuple_elem_cap_at`
+    ///     arm "changed nothing" — it is the right arm for the struct shape and
+    ///     was tested against the bare-tuple cell, which never reaches it.
+    ///   4 the by-value PARAM entry copy. `make_tuple_param_callee_owned` gates
+    ///     on `type_expr_has_drop_heap`, array-blind too, so the param aliased
+    ///     the caller's buffers — harmless while nothing walked the array, a
+    ///     double free once something did and the value escaped by `return`.
+    ///
+    /// THE `let t2 = t;` CELL IS FIRST ON PURPOSE. With pieces 1+2 in and the
+    /// suppression missing, both ASAN ratchet legs matched their quarantine
+    /// lists exactly and the whole suite passed — nothing in it exercised a
+    /// whole-tuple move of a tuple holding an array. The green suite was not
+    /// evidence for either earlier attempt and is not evidence now; this
+    /// fixture is what makes it one.
+    ///
+    /// MUST be read at `-O0`: at `-O2` LLVM deletes the allocations, which is
+    /// the `scripts/asan-o0-leg.sh` case.
+    ///
+    /// TWO SHAPES REMAIN LEAKING and are deliberately NOT asserted clean here:
+    /// a by-value param moved to a local inside the callee, and a FRESH
+    /// TEMPORARY argument whose param is returned. Both leak 20 B on `main`
+    /// before this fix and the identical 20 B after it — unchanged, not
+    /// regressed. They need the param-ownership model resolved (the entry copy
+    /// orphans a temporary's buffers, while transfer needs a caller-side
+    /// disarm that has no hook for a tuple argument), which is its own row.
+    #[test]
+    fn asan_array_inside_a_tuple_frees_its_element_buffers() {
+        const H: &str = "fn pay(i: i64) -> String { return f\"tttttttttttttttt{i}\" }\n";
+        // THE BLOCKING CELL — a whole-tuple move. Double-frees with pieces 1+2
+        // and no suppression dual; nothing else in the suite covers it.
+        assert_clean_asan_run(
+            &format!(
+                "{H}fn main() {{\n\
+                 \x20   let t: (Array[String, 2], i64) = ([pay(1), pay(2)], 7);\n\
+                 \x20   let t2 = t;\n\
+                 \x20   println(f\"a0:{{t2.0[0]}}\");\n\
+                 }}\n"
+            ),
+            &["a0:tttttttttttttttt1"],
+            "b23-tuple-array-whole-move",
+        );
+        // The row's own repro: a plain annotated `let`, 20 B in 2 blocks.
+        assert_clean_asan_run(
+            &format!(
+                "{H}fn main() {{\n\
+                 \x20   let t: (Array[String, 2], i64) = ([pay(1), pay(2)], 7);\n\
+                 \x20   println(f\"a0:{{t.0[0]}}\");\n\
+                 \x20   println(f\"n:{{t.1}}\");\n\
+                 }}\n"
+            ),
+            &["a0:tttttttttttttttt1", "n:7"],
+            "b23-tuple-array-let",
+        );
+        // A STRUCT FIELD holding the tuple, then a move of the STRUCT — the
+        // second suppression site, which double-freed while only the
+        // bare-tuple one was fixed.
+        assert_clean_asan_run(
+            &format!(
+                "{H}struct W {{ t: (Array[String, 2], i64) }}\n\
+                 fn main() {{\n\
+                 \x20   let w: W = W {{ t: ([pay(1), pay(2)], 7) }};\n\
+                 \x20   let w2 = w;\n\
+                 \x20   println(f\"a0:{{w2.t.0[0]}}\");\n\
+                 }}\n"
+            ),
+            &["a0:tttttttttttttttt1"],
+            "b23-tuple-array-struct-field-move",
+        );
+        // A by-value PARAM returned — the fourth site. Double-freed until the
+        // param gained its entry copy.
+        assert_clean_asan_run(
+            &format!(
+                "{H}fn thru(p: (Array[String, 2], i64)) -> (Array[String, 2], i64) {{ return p; }}\n\
+                 fn main() {{\n\
+                 \x20   let t: (Array[String, 2], i64) = ([pay(1), pay(2)], 7);\n\
+                 \x20   let u = thru(t);\n\
+                 \x20   println(f\"a0:{{u.0[0]}}\");\n\
+                 }}\n"
+            ),
+            &["a0:tttttttttttttttt1"],
+            "b23-tuple-array-param-returned",
+        );
+        // A RETURN of a freshly built tuple, and a DESTRUCTURE.
+        assert_clean_asan_run(
+            &format!(
+                "{H}fn mk() -> (Array[String, 2], i64) {{ return ([pay(1), pay(2)], 7); }}\n\
+                 fn main() {{\n\
+                 \x20   let t = mk();\n\
+                 \x20   let (a, j) = t;\n\
+                 \x20   println(f\"a0:{{a[0]}} j:{{j}}\");\n\
+                 }}\n"
+            ),
+            &["a0:tttttttttttttttt1 j:7"],
+            "b23-tuple-array-return-destructure",
+        );
+        // An array of CONTAINERS, moved.
+        assert_clean_asan_run(
+            &format!(
+                "{H}fn main() {{\n\
+                 \x20   let t: (Array[Vec[String], 2], i64) = ([[pay(1)], [pay(2)]], 7);\n\
+                 \x20   let t2 = t;\n\
+                 \x20   println(f\"n:{{t2.1}}\");\n\
+                 }}\n"
+            ),
+            &["n:7"],
+            "b23-tuple-array-of-vecs-move",
+        );
+        // A user `Drop` element: memory clean AND the bodies still exactly
+        // once. The row measured this shape as memory-only — bodies were
+        // already correct — so it guards against the memory fix buying itself
+        // a duplicated body (B-2026-08-28-57: separate channels).
+        assert_clean_asan_run(
+            "struct D { id: i64, s: String }\n\
+             impl Drop for D { fn drop(mut ref self) { println(f\"dD{self.id}\") } }\n\
+             fn mkd(i: i64) -> D { return D { id: i, s: f\"ssssssssssssssss{i}\" } }\n\
+             fn main() {\n\
+             \x20   let t: (Array[D, 2], i64) = ([mkd(1), mkd(2)], 7);\n\
+             \x20   let t2 = t;\n\
+             \x20   println(f\"n:{t2.1}\");\n\
+             }\n",
+            &["n:7", "dD1", "dD2"],
+            "b23-tuple-array-user-drop-move",
+        );
+        // CONTROLS — a scalar array stays a no-op, the plain `Array` local
+        // (always clean) must not acquire a second owner, and the `Vec`
+        // element spelling is the positive control that identified the
+        // working disarm path.
+        assert_clean_asan_run(
+            &format!(
+                "{H}fn main() {{\n\
+                 \x20   let t: (Array[i64, 2], i64) = ([3, 4], 7);\n\
+                 \x20   let t2 = t;\n\
+                 \x20   println(f\"a0:{{t2.0[0]}}\");\n\
+                 }}\n"
+            ),
+            &["a0:3"],
+            "b23-tuple-scalar-array-control",
+        );
+        assert_clean_asan_run(
+            &format!(
+                "{H}fn main() {{\n\
+                 \x20   let a: Array[String, 2] = [pay(1), pay(2)];\n\
+                 \x20   println(f\"a0:{{a[0]}}\");\n\
+                 }}\n"
+            ),
+            &["a0:tttttttttttttttt1"],
+            "b23-plain-array-local-control",
+        );
+        assert_clean_asan_run(
+            &format!(
+                "{H}fn main() {{\n\
+                 \x20   let t: (Vec[String], i64) = ([pay(1), pay(2)], 7);\n\
+                 \x20   let t2 = t;\n\
+                 \x20   println(f\"a0:{{t2.0[0]}}\");\n\
+                 }}\n"
+            ),
+            &["a0:tttttttttttttttt1"],
+            "b23-tuple-vec-move-control",
+        );
+    }
 }
