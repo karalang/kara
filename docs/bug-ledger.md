@@ -93,8 +93,8 @@ distinguish "bugs flattening" from "we stopped writing them down."
 | class | total |
 |---|---|
 | run-vs-build | 415 |
-| miscompile | 413 |
-| leak | 361 |
+| miscompile | 414 |
+| leak | 362 |
 | double-free | 236 |
 | missing-feature | 199 |
 | codegen-gap | 178 |
@@ -110,8 +110,8 @@ distinguish "bugs flattening" from "we stopped writing them down."
 
 | surface | total |
 |---|---|
-| codegen | 1788 |
-| interp | 451 |
+| codegen | 1790 |
+| interp | 452 |
 | typecheck | 301 |
 | other | 94 |
 | ownership | 75 |
@@ -130,7 +130,6 @@ _Generated from `bug-ledger.jsonl` by `scripts/bug-curve.py` (2026-05-20 → 202
 
 | id | date | surface | sev | title | tracker |
 |---|---|---|---|---|---|
-| B-2026-09-05-32 | 2026-09-05 | codegen | low | THE IDENTITY-ARM SPELLING OF B-2026-09-01-1 STILL LEAKS -- `e = if c { pass(e) } else { e }` loses a block (12 allocs / 11 frees at -O0) because the branch is DECLINED on purpose: an arm that hands the binding back unchanged yields the OLD value, so the overwrite cleanup would free the buffer about to be stored back; the one shape that genuinely needs a per-arm or aliasing-aware cleanup, and like its parent clean at -O2 | — |
 | B-2026-09-06-21 | 2026-09-06 | interp+codegen | low | TWO FRESH PAYLOADS BOUND OUT OF A `match` ARM DIE IN OPPOSITE ORDERS ON THE TWO BACKENDS -- `let w = W2.Two(mk(16), mk(17)); match w { W2.Two(a, b) => { return a.id; } .. }` prints `dR16 dR17` on jit / aot / `KARAC_AUTO_PAR=0` (declaration order) and `dR17 dR16` under `--interp` (reverse); the body COUNT is right on both, only the arm-end sequence differs | — |
 | B-2026-09-06-23 | 2026-09-06 | interp+codegen | low | THE COPY A MATERIALIZING `match` ARM TAKES OFF A BORROW-PROJECTION SCRUTINEE NEVER RUNS THE ENUM SHELL'S OWN `Drop` BODY, ON EVERY BACKEND -- `match h.e { E.A(r) => { let m = r; return m.id; } .. }` through `mut ref h` prints `dR1 dE dR1` (the copy's payload body, then the original's shell and payload) where the `let e = h.e; match e { .. }` spelling of the same copy prints `dE dR1 dE dR1`; a fresh-temp or local scrutinee (`match mk(7) { .. }`, `let e = mk(8); match e { .. }`) does run its shell's `dE` after the payload moves out | — |
 | B-2026-09-06-35 | 2026-09-06 | interp+codegen | low | A PARTIAL STRUCT `match` PATTERN DROPS THE `..` REST FIELD BEFORE THE BOUND FIELD ON THE INTERPRETER AND AFTER IT ON EVERY COMPILED BACKEND -- `let s = S3 { a: mk(2), b: mk(3) }; match s { S3 { a, .. } => { return a.id; } }` prints `dR3 dR2` under `--interp` and `dR2 dR3` under jit / aot / `KARAC_AUTO_PAR=0`; every body runs exactly once on every surface, the sequence alone diverges | — |
@@ -194,6 +193,8 @@ _Generated from `bug-ledger.jsonl` by `scripts/bug-curve.py` (2026-05-20 → 202
 | B-2026-09-16-7 | 2026-09-16 | other | medium | THE ARCHIVE FRESHNESS CHECK COVERS ONLY THE TWO ASAN LEGS -- `link_or_skip` is still PRESENCE-ONLY, so the ordinary `cargo test --features llvm` run (the one everybody actually runs, and the one CI runs) still executes E2E fixtures against a runtime archive of any age with nothing to say so; `karac_jit_runner` has the identical exposure and is not checked either; and a `KARAC_RUNTIME=<path>` override outside `target/release/` is not inspected at all. B-2026-09-16-4 fixed the legs and NAMED these three in its closing prose, which is where work goes to be forgotten. | — |
 | B-2026-09-16-8 | 2026-09-16 | other | medium | `bug-lint.sh` SKIPS ITS FIX-SHA RESOLVABILITY CHECK ON EVERY CLOUD CONTAINER, WHICH IS WHERE THE ORPHANS ARE CREATED -- the check is disabled outright on a shallow clone (`rev-parse --is-shallow-repository`), and cloud sessions are shallow by default, so the one detector for a row citing a commit that exists nowhere on `main` is off in exactly the environment that produces them. EIGHT rows now carry a `SHA NOTE` recording an orphan, against the two CLAUDE.md names; the most recent was created and caught by hand 2026-09-16, with the lint reporting 0 errors on the same tree. | — |
 | B-2026-09-16-10 | 2026-09-16 | codegen | high | A GENERIC SINGLE-FIELD VARIANT AT `T = Array[String, N]` SEGFAULTS ON EVERY COMPILED BACKEND -- `G1.Y(a)` over `enum G1[T] { Y(T), N }` passed to a generic `fn glen[T](g: G1[T])` exits 139 with NO OUTPUT AT ALL, five invalid reads under valgrind, and B-2026-09-15-18 records this exact shape as its CLEAN CONTROL | — |
+| B-2026-09-16-11 | 2026-09-16 | codegen | low | THE ENUM TWIN OF B-2026-09-05-32'S IDENTITY ARM STILL LEAKS -- `e = if c { pass(e) } else { e }` over `enum E { A(String), B }` loses 36 bytes in 1 block (12 allocs / 11 frees at -O0) while the all-owned-calls spelling `else { mk() }` is 12 / 12 clean on the same tree; the enum overwrite path consumes the STRICT `roundtrip_frees_old` because it has no distinctness guard, so widening the shared predicate would have traded the leak for a use-after-free there | — |
+| B-2026-09-16-12 | 2026-09-16 | interp+codegen | medium | A MIXED BIND-AND-WILDCARD MATCH ARM LOSES THE WILDCARDED PAYLOAD FIELD'S `Drop` BODY -- `let w = W2.Two(mk(41), mk(42)); match w { W2.Two(a, _) => { return a.id } .. }` runs `dR41` alone on `--interp` while both compiled backends run `dR41 dR42`, and once the arm MOVES the bound field out (`let m = a`) EVERY surface loses `dR42`; the enum payload disarm is keyed on the BINDING, not on the consumed POSITION, so consuming any one Drop-bearing position stands the whole husk's walk down | — |
 
 ### Relocated
 
@@ -2328,6 +2329,7 @@ _Generated from `bug-ledger.jsonl` by `scripts/bug-curve.py` (2026-05-20 → 202
 | B-2026-09-05-29 | codegen | medium | A DISCARDED GENERIC CALL RESULT RUNS NO `Drop` BODY AND LEAKS when the callee returns its WHOLE by-value param and the argument is a TEMPORARY -- `fn… | 3fb2293 |
 | B-2026-09-05-30 | interp | medium | A MATCH ARM OVER AN OWNED BY-VALUE TUPLE PARAM THAT NEVER USES A BOUND ELEMENT LOSES THAT ELEMENT'S `Drop` BODY UNDER `--interp` -- `fn pf(t: (R, i64… | 23dbecd |
 | B-2026-09-05-31 | codegen | medium | A NAMED-LOCAL ARGUMENT TO A GENERIC WHOLE-PARAM CALLEE LEAKS ITS HEAP WHILE RUNNING ITS `Drop` BODY EXACTLY ONCE -- `let g = mk(3); let _ = passG(g);… | 8aeb5bb |
+| B-2026-09-05-32 | codegen | low | THE IDENTITY-ARM SPELLING OF B-2026-09-01-1 STILL LEAKS -- `e = if c { pass(e) } else { e }` loses a block (12 allocs / 11 frees at -O0) because the… | 4cb49eb4e |
 | B-2026-09-05-33 | codegen | high | A MATCH ARM OVER AN OWNED BY-VALUE TUPLE PARAM WHOSE ELEMENT ESCAPES BY A ROUTE OTHER THAN A BARE/ALIAS RETURN RUNS A SECOND `Drop` BODY OR DOUBLE-FR… | c85964f |
 | B-2026-09-05-34 | codegen | high | AN `if let (r, k) = t` OVER AN OWNED BY-VALUE TUPLE PARAM DOUBLE-FREES UNDER `karac run` (JIT) ONLY -- `fn t_iflet(t: (R, i64)) -> i64 { if let (r, k… | cd96ef9 |
 | B-2026-09-05-35 | interp+codegen | medium | A MATCH ARM OVER AN OWNED BY-VALUE ENUM PARAM WHOSE PAYLOAD BINDING IS CONSUMED BY A BY-VALUE CALLEE OR NEVER USED LOSES THE PAYLOAD'S `Drop` BODY ON… | 5b19120 |
