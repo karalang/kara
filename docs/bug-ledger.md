@@ -103,14 +103,14 @@ distinguish "bugs flattening" from "we stopped writing them down."
 | perf | 114 |
 | false-positive | 107 |
 | soundness | 95 |
-| crash | 82 |
+| crash | 83 |
 | use-after-free | 42 |
 
 ### By surface
 
 | surface | total |
 |---|---|
-| codegen | 1787 |
+| codegen | 1788 |
 | interp | 451 |
 | typecheck | 301 |
 | other | 94 |
@@ -161,6 +161,7 @@ _Generated from `bug-ledger.jsonl` by `scripts/bug-curve.py` (2026-05-20 → 202
 | B-2026-09-13-7 | 2026-09-13 | codegen+interp | medium | AN ENUM VARIANT'S `Vec[T]` PAYLOAD RUNS NO ELEMENT `Drop` BODY ON ANY BACKEND AND ANY ENUM HEAD, AND `Slot[Array[R, N]]` RUNS THEM ON THE FIVE COMPILED SURFACES ONLY -- the two cells B-2026-09-12-24 measured and did not fix; the shared bodies core has a tuple arm and an array arm and no `Vec` arm, and the interpreter has no instantiation chain for a user generic enum the way it has one for the seeded pair | — |
 | B-2026-09-13-11 | 2026-09-13 | codegen+interp | low | A DESTRUCTURED ENUM PAYLOAD'S OWN `Drop` BODY RUNS ON NO SURFACE ONCE THE ARM MOVES ITS FIELD OUT -- `match x { Option.Some(K.A(r)) => { acc.push(r) } .. }` over `enum K { A(R2), B }` with `impl Drop for K` prints NO `dK` on `--interp`, `-O0`, `-O0` autopar or `-O2` autopar, while the READ-ONLY twin of the same program (`println(f"a:{r.s}")` for the arm body) prints exactly one on all four. The husk is still a `K`, so the count is arguable in both directions -- but it cannot be arguable PER ARM BODY: whether the leaf was moved on or merely read decides whether the enclosing enum's body runs at all, and nothing in the language says a move erases its owner's `Drop` | — |
 | B-2026-09-13-13 | 2026-09-13 | codegen | medium | A CONDITIONALLY-RETURNED PARAM WHOSE OTHER EXIT LEAF MENTIONS IT STILL RUNS ITS `Drop` BODY TWICE AT THE ASSOCIATED AND METHOD CALL POSITIONS -- `if flag { return r } return R { id: 90 + r.id }` prints `dR1 / k:1 / dR1` at -O0, -O0 autopar and -O2 autopar against `--interp`'s `k:1 / dR1`, where replacing `90 + r.id` with a constant makes every surface agree. `fn_conditionally_returns_param_bare`'s condition 3 declines the mention CORRECTLY -- no per-path flag clears a leaf that READS the param -- but the assoc/method registrars read that `false` as "no other frame can own this argument" and hang the full `karac_drop_<T>` wrapper on the caller's temp; the FREE position is correct here because it gates on the `fn_returns_param` union instead | — |
+| B-2026-09-13-23 | 2026-09-13 | codegen | low | AN `Array[String, N]` INSIDE A TUPLE LEAKS ITS ELEMENT BUFFERS -- 20 B in 2 blocks at -O0 for `let t: (Array[String, 2], i64) = ([f"a{n}", f"b{n}"], 7)`, while the SAME array in a plain `let` is clean. PRE-EXISTING rather than introduced by B-2026-09-10-38: the `Array[..]` PREFIX spelling, which typechecked before that fix, leaks the identical 20 B against the PRE-FIX compiler -- so the tuple POSITION owns the defect and the annotation fix merely made it reachable by a second spelling | — |
 | B-2026-09-13-31 | 2026-09-13 | codegen | medium | Three map katas are 5-8% slower under the group-scan default, and no runtime signal is known that would route them back to the byte walk | B-2026-09-07-53 |
 | B-2026-09-14-6 | 2026-09-14 | codegen+interp | medium | AN `Option` PAYLOAD SUB-VALUE MOVED OUT RUNS ITS `Drop` BODY TWICE ON ALL THREE BACKENDS in two spellings -- a NAMED-LOCAL argument, and a payload whose field is heap-carrying -- so the A/B parity rule sees nothing and the duplicate is invisible to every gate | — |
 | B-2026-09-14-7 | 2026-09-14 | codegen+interp | low | AN `Option`-PAYLOAD ELEMENT MOVED OUT AND NOT RETURNED DIES AT OPPOSITE ENDS OF THE ARM -- `Some(t) => { let x = t.0; println("mid"); }` prints `mid dR5` under `--interp` against the compiled backends' `dR5 mid`, so the COUNT agrees and only the sequence differs | — |
@@ -192,7 +193,7 @@ _Generated from `bug-ledger.jsonl` by `scripts/bug-curve.py` (2026-05-20 → 202
 | B-2026-09-16-6 | 2026-09-16 | codegen+interp | medium | TWO BODIES-CHANNEL GAPS FOR AN `Array[T, N]` HELD IN A TUPLE, both found while pinning the output twin of B-2026-09-13-23's memory fix and both memory-clean under it: a tuple in a STRUCT FIELD runs no element `Drop` body on ANY backend, and a DESTRUCTURED tuple runs them under `--interp` and on NEITHER compiled backend -- an agreed silence and a run-vs-build divergence in the same family | — |
 | B-2026-09-16-7 | 2026-09-16 | other | medium | THE ARCHIVE FRESHNESS CHECK COVERS ONLY THE TWO ASAN LEGS -- `link_or_skip` is still PRESENCE-ONLY, so the ordinary `cargo test --features llvm` run (the one everybody actually runs, and the one CI runs) still executes E2E fixtures against a runtime archive of any age with nothing to say so; `karac_jit_runner` has the identical exposure and is not checked either; and a `KARAC_RUNTIME=<path>` override outside `target/release/` is not inspected at all. B-2026-09-16-4 fixed the legs and NAMED these three in its closing prose, which is where work goes to be forgotten. | — |
 | B-2026-09-16-8 | 2026-09-16 | other | medium | `bug-lint.sh` SKIPS ITS FIX-SHA RESOLVABILITY CHECK ON EVERY CLOUD CONTAINER, WHICH IS WHERE THE ORPHANS ARE CREATED -- the check is disabled outright on a shallow clone (`rev-parse --is-shallow-repository`), and cloud sessions are shallow by default, so the one detector for a row citing a commit that exists nowhere on `main` is off in exactly the environment that produces them. EIGHT rows now carry a `SHA NOTE` recording an orphan, against the two CLAUDE.md names; the most recent was created and caught by hand 2026-09-16, with the lint reporting 0 errors on the same tree. | — |
-| B-2026-09-16-9 | 2026-09-16 | codegen | high | REGRESSION ON `main`: `506a91d` TURNED THE `(Array[String, 2], i64)` ENUM-PAYLOAD CELL FROM A LEAK INTO AN INVALID FREE -- valgrind reports `Invalid free()` plus two uninitialised-value contexts (24-26 errors, stable) where `506a91d^` reported a plain leak with 1; the same commit correctly fixed the plain-local and struct-field positions, so it is a regression in KIND at one position rather than a partial fix, and it is the SECOND time this tuple/Array element walk has introduced corruption after `da73ec3c8` was reverted for the same class | — |
+| B-2026-09-16-10 | 2026-09-16 | codegen | high | A GENERIC SINGLE-FIELD VARIANT AT `T = Array[String, N]` SEGFAULTS ON EVERY COMPILED BACKEND -- `G1.Y(a)` over `enum G1[T] { Y(T), N }` passed to a generic `fn glen[T](g: G1[T])` exits 139 with NO OUTPUT AT ALL, five invalid reads under valgrind, and B-2026-09-15-18 records this exact shape as its CLEAN CONTROL | — |
 
 ### Relocated
 
@@ -2568,7 +2569,6 @@ _Generated from `bug-ledger.jsonl` by `scripts/bug-curve.py` (2026-05-20 → 202
 | B-2026-09-13-20 | codegen | low | A FRESH-OWNED TUPLE KEY TEMPORARY LEAKS AT EVERY `Map` LOOKUP SITE -- `m.get(mk(j))` over `Map[(String, String), i64]` loses 36 B per lookup, while t… | 8fd717f |
 | B-2026-09-13-21 | codegen+interp | high | AN ARM THAT BINDS A WHOLE BOXED TUPLE PAYLOAD AND MOVES IT ONWARD DOUBLE-FREES ON EVERY COMPILED BACKEND -- `match m.remove(k) { Some(a) => { keep.pu… | 9b9fe76 |
 | B-2026-09-13-22 | codegen | high | A chained string concatenation allocates one buffer per `+`, so `a + b + c` costs two allocations where one sized to the total would do — 36% of kata… | fea7ac09b |
-| B-2026-09-13-23 | codegen | low | AN `Array[String, N]` INSIDE A TUPLE LEAKS ITS ELEMENT BUFFERS -- 20 B in 2 blocks at -O0 for `let t: (Array[String, 2], i64) = ([f"a{n}", f"b{n}"],… | 506a91d |
 | B-2026-09-13-24 | codegen+interp | medium | A USER ENUM'S VARIANT-CONSTRUCTOR TEMP LOSES ITS `Drop` BODY -- `takeit(Ho.Full(R { id: 5 }))` over `enum Ho[T] { Full(T), Empty }` prints `f:5` alon… | 8e32454 |
 | B-2026-09-13-25 | typecheck | low | THE FIELD-LESS QUALIFIED VARIANT `Ho[i64].Empty` IS STILL REJECTED as `'Ho' is a type, not a function`, where design.md § 588 lists a qualified field… | bfb60dd |
 | B-2026-09-13-26 | interp+codegen | medium | A DISCARDED ARRAY LITERAL OF Drop-BEARING STRUCTS RUNS NO ELEMENT BODIES AT ALL -- `let _ = if c { [W { r: mkd(7), b: 1 }] } else { . | 122b991 |
@@ -2618,6 +2618,7 @@ _Generated from `bug-ledger.jsonl` by `scripts/bug-curve.py` (2026-05-20 → 202
 | B-2026-09-15-36 | other | medium | THE CODEGEN E2E HARNESS IGNORES TYPECHECK ERRORS, so a fixture cell whose program DOES NOT COMPILE runs on the interpreter anyway and passes green wh… | 5daa730 |
 | B-2026-09-16-1 | codegen | medium | `s[a..b]` STILL REACHES SSO CONSTRUCTION THROUGH AN OPAQUE CALL -- `karac_string_slice_into`, the slice-syntax sibling of the `karac_string_try_inlin… | 066695ffc |
 | B-2026-09-16-4 | other | medium | THE ASAN RATCHET LEGS RUN THE OPT-IN-ARCHIVE FIXTURES AGAINST A RUNTIME THAT CAN BE ARBITRARILY OLD, AND NOTHING DETECTS IT -- every archive check in… | d7a2486 |
+| B-2026-09-16-9 | codegen | high | REGRESSION ON `main`: `506a91d` TURNED THE `(Array[String, 2], i64)` ENUM-PAYLOAD CELL FROM A LEAK INTO AN INVALID FREE -- valgrind reports `Invalid… | 49e75a8 |
 
 </details>
 
