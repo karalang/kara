@@ -784,6 +784,62 @@ pub fn run_program_full(
     })
 }
 
+/// [`run_program_full`], with the TYPECHECK diagnostics asserted empty first
+/// (B-2026-09-15-36).
+///
+/// `run_program_full` deliberately does not abort on type errors — the
+/// tree-walk interpreter is dynamically typed and runs partially-typed
+/// programs on purpose, and `tests/typechecker.rs` depends on that. The
+/// consequence is that a FIXTURE whose program does not compile still runs,
+/// still reports `interp_errs == []` (that `Vec` carries RUNTIME errors only),
+/// and still passes whenever its expected output happens to match.
+///
+/// That is not a hypothetical shape. The pinned-agreed-silence cell — a
+/// program whose expected output is just a trailing marker like `"end\n"` —
+/// is a common idiom in the codegen suite, and its entire value is going RED
+/// when a gate moves. A cell that does not typecheck is INERT: it can never go
+/// red, it pins nothing, and nothing in the test output distinguishes it from
+/// a working one. The case that exposed this was caught only because its
+/// expected output was long enough for the mismatch to be loud.
+///
+/// So fixtures call this instead. It re-runs the analysis half of the pipeline
+/// (parse → desugar → gated-import splice → resolve → typecheck) and asserts
+/// before delegating. The double analysis is deliberate: keeping
+/// `run_program_full` byte-for-byte preserves the callers that legitimately
+/// feed it ill-typed programs, and the cost is a second parse of a
+/// fixture-sized source.
+pub fn run_program_full_checked(
+    source: &str,
+) -> (
+    Vec<String>,
+    Vec<interpreter::RuntimeError>,
+    Vec<interpreter::ErrorTraceFrame>,
+    bool,
+) {
+    let mut parsed = parse(source);
+    assert!(
+        parsed.errors.is_empty(),
+        "Parse errors: {:?}",
+        parsed.errors
+    );
+    desugar_program(&mut parsed.program);
+    crate::prelude::expand_gated_stdlib_imports(&mut parsed.program);
+    let resolved = resolve(&parsed.program);
+    assert!(
+        resolved.errors.is_empty(),
+        "Resolve errors: {:?}",
+        resolved.errors
+    );
+    let typed = typecheck(&parsed.program, &resolved);
+    assert!(
+        typed.errors.is_empty(),
+        "Typecheck errors in a codegen fixture — the program does not compile, \
+         so this cell pins nothing (B-2026-09-15-36): {:?}",
+        typed.errors
+    );
+    run_program_full(source)
+}
+
 // ── Browser playground entry point ──────────────────────────────────
 //
 // Tracker line 703 — `play.kara-lang.org`. Single source string in,

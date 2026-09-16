@@ -791,7 +791,7 @@ mod codegen_tests {
                  }}"
             );
             // Interpreter oracle, in-process.
-            let (interp_out, interp_errs, _, _) = karac::run_program_full(&src);
+            let (interp_out, interp_errs, _, _) = karac::run_program_full_checked(&src);
             assert!(
                 interp_errs.is_empty(),
                 "{label}: interpreter errors: {interp_errs:?}"
@@ -962,7 +962,7 @@ mod codegen_tests {
         ];
         for (label, body, want) in cases {
             let src = format!("fn main() {{\n{body}\n}}\n");
-            let (interp_out, interp_errs, _, _) = karac::run_program_full(&src);
+            let (interp_out, interp_errs, _, _) = karac::run_program_full_checked(&src);
             assert!(
                 interp_errs.is_empty(),
                 "{label}: interpreter errored: {interp_errs:?}"
@@ -1073,7 +1073,7 @@ mod codegen_tests {
         ];
         for (label, body, want) in cases {
             let src = format!("fn main() {{\n{body}\n}}\n");
-            let (interp_out, interp_errs, _, _) = karac::run_program_full(&src);
+            let (interp_out, interp_errs, _, _) = karac::run_program_full_checked(&src);
             assert!(
                 interp_errs.is_empty(),
                 "{label}: interpreter errored: {interp_errs:?}"
@@ -1321,7 +1321,7 @@ mod codegen_tests {
         ];
         for (label, body) in cases {
             let src = format!("fn main() {{\n{body}\n}}\n");
-            let (interp_out, interp_errs, _, _) = karac::run_program_full(&src);
+            let (interp_out, interp_errs, _, _) = karac::run_program_full_checked(&src);
             assert!(
                 interp_errs.is_empty(),
                 "{label}: interpreter errored — lane arithmetic WRAPS, it must \
@@ -1387,7 +1387,7 @@ mod codegen_tests {
         ];
         for (label, body) in cases {
             let src = format!("fn main() {{\n{body}\n}}\n");
-            let (interp_out, interp_errs, _, _) = karac::run_program_full(&src);
+            let (interp_out, interp_errs, _, _) = karac::run_program_full_checked(&src);
             assert!(
                 interp_errs.is_empty(),
                 "{label}: interpreter errors: {interp_errs:?}"
@@ -1551,7 +1551,7 @@ mod codegen_tests {
         ];
         for (label, body) in cases {
             let src = format!("fn main() {{\n{body}\n}}");
-            let (interp_out, interp_errs, _, _) = karac::run_program_full(&src);
+            let (interp_out, interp_errs, _, _) = karac::run_program_full_checked(&src);
             assert!(
                 interp_errs.is_empty(),
                 "{label}: interpreter errors: {interp_errs:?}"
@@ -1653,7 +1653,7 @@ mod codegen_tests {
                      println(f\"<{{b}}>\");\n\
                  }}"
             );
-            let (interp_out, interp_errs, _, _) = karac::run_program_full(&src);
+            let (interp_out, interp_errs, _, _) = karac::run_program_full_checked(&src);
             assert!(
                 interp_errs.is_empty(),
                 "{label}: interpreter errors: {interp_errs:?}"
@@ -34438,7 +34438,7 @@ fn main() {
             ),
         ] {
             let src = format!("{HDR}fn main() {{\nlet n = 0;\n{body}\nprintln(\"mid\");\n}}\n");
-            let (interp_out, interp_errs, _, _) = karac::run_program_full(&src);
+            let (interp_out, interp_errs, _, _) = karac::run_program_full_checked(&src);
             assert!(
                 interp_errs.is_empty(),
                 "[{label}] interp errored: {interp_errs:?}"
@@ -34546,7 +34546,7 @@ fn main() {
             ),
         ] {
             let src = format!("{HDR}fn main() {{\n{body}\nprintln(\"mid\");\n}}\n");
-            let (interp_out, interp_errs, _, _) = karac::run_program_full(&src);
+            let (interp_out, interp_errs, _, _) = karac::run_program_full_checked(&src);
             assert!(
                 interp_errs.is_empty(),
                 "[{label}] interp errored: {interp_errs:?}"
@@ -34734,7 +34734,7 @@ fn main() {
             ),
         ] {
             let src = format!("{HDR}fn main() {{\n{body}\nprintln(\"mid\");\n}}\n");
-            let (interp_out, interp_errs, _, _) = karac::run_program_full(&src);
+            let (interp_out, interp_errs, _, _) = karac::run_program_full_checked(&src);
             assert!(
                 interp_errs.is_empty(),
                 "[{label}] interp errored: {interp_errs:?}"
@@ -34933,7 +34933,7 @@ fn main() {
             ),
         ] {
             let src = format!("{HDR}{decls}fn main() {{\n{body}\nprintln(\"end\");\n}}\n");
-            let (interp_out, interp_errs, _, _) = karac::run_program_full(&src);
+            let (interp_out, interp_errs, _, _) = karac::run_program_full_checked(&src);
             assert!(
                 interp_errs.is_empty(),
                 "[{label}] interp errored: {interp_errs:?}"
@@ -35030,7 +35030,7 @@ fn main() {
             ),
         ] {
             let src = format!("{HDR}fn main() {{\n{body}\nprintln(\"end\");\n}}\n");
-            let (interp_out, interp_errs, _, _) = karac::run_program_full(&src);
+            let (interp_out, interp_errs, _, _) = karac::run_program_full_checked(&src);
             assert!(
                 interp_errs.is_empty(),
                 "[{label}] interp errored: {interp_errs:?}"
@@ -35166,7 +35166,7 @@ fn main() {
             ),
         ] {
             let src = format!("{HDR}fn main() {{\n{body}\n}}\n");
-            let (interp_out, interp_errs, _, _) = karac::run_program_full(&src);
+            let (interp_out, interp_errs, _, _) = karac::run_program_full_checked(&src);
             assert!(
                 interp_errs.is_empty(),
                 "[{label}] interp errored: {interp_errs:?}"
@@ -35272,7 +35272,7 @@ fn main() {
             ),
         ] {
             let src = format!("{HDR}{fns}fn main() {{\n{body}\n}}\n");
-            let (interp_out, interp_errs, _, _) = karac::run_program_full(&src);
+            let (interp_out, interp_errs, _, _) = karac::run_program_full_checked(&src);
             assert!(
                 interp_errs.is_empty(),
                 "[{label}] interp errored: {interp_errs:?}"
@@ -35424,7 +35424,7 @@ fn main() {
             ),
         ] {
             let src = format!("{HDR}fn main() {{\n{body}\n}}\n");
-            let (interp_out, interp_errs, _, _) = karac::run_program_full(&src);
+            let (interp_out, interp_errs, _, _) = karac::run_program_full_checked(&src);
             assert!(
                 interp_errs.is_empty(),
                 "[{label}] interp errored: {interp_errs:?}"
@@ -35577,7 +35577,7 @@ fn main() {
             ),
         ] {
             let src = format!("{HDR}fn main() {{\n{body}\n}}\n");
-            let (interp_out, interp_errs, _, _) = karac::run_program_full(&src);
+            let (interp_out, interp_errs, _, _) = karac::run_program_full_checked(&src);
             assert!(
                 interp_errs.is_empty(),
                 "[{label}] interp errored: {interp_errs:?}"
@@ -35717,7 +35717,7 @@ fn main() {
             ),
         ] {
             let src = format!("{HDR}fn main() {{\n{body}\nprintln(\"mid\");\n}}\n");
-            let (interp_out, interp_errs, _, _) = karac::run_program_full(&src);
+            let (interp_out, interp_errs, _, _) = karac::run_program_full_checked(&src);
             assert!(
                 interp_errs.is_empty(),
                 "[{label}] interp errored: {interp_errs:?}"
@@ -35798,7 +35798,7 @@ fn main() {
                 "{PRE}fn takeA(x: Option[Array[E1, 2]]) {{ match x {{ Option.Some(t) => {{ println(f\"s{{t[0].id}}\"); }} Option.None => {{ println(\"n\"); }} }} }}\n\
                  fn main() {{\n{body}\nprintln(\"mid\");\n}}\n"
             );
-            let (interp_out, interp_errs, _, _) = karac::run_program_full(&src);
+            let (interp_out, interp_errs, _, _) = karac::run_program_full_checked(&src);
             assert!(interp_errs.is_empty(), "[{label}] interp errored: {interp_errs:?}");
             assert_eq!(interp_out.join(""), want, "[{label}] interpreter");
             if let Some(aot) = run_program(&src) {
@@ -43532,6 +43532,34 @@ impl BuildHasher for SumBuild {\n\
         super::common::output_with_hang_watchdog(cmd, std::time::Duration::from_secs(15))
     }
 
+    /// B-2026-09-15-36 — the fixture entry point REJECTS a program that does
+    /// not typecheck, instead of running it on the interpreter and passing.
+    ///
+    /// `run_program_full` deliberately does not abort on type errors (the
+    /// tree-walk interpreter is dynamically typed on purpose, and
+    /// `tests/typechecker.rs` relies on it), and the `Vec` it returns in slot
+    /// 2 carries RUNTIME errors only. So an ill-typed fixture used to return
+    /// `errs == []` and produce output — measured on this exact source:
+    /// `out=["end\n"] errs=[] errs_empty=true`. Any cell whose expected
+    /// output is a bare trailing marker would have passed on that, pinning
+    /// nothing and never going red when the gate it guarded moved.
+    ///
+    /// This is the source from the row: struct-literal field shorthand naming
+    /// a field that does not exist, which the CLI correctly rejects with two
+    /// errors. `should_panic` on the message rather than on any panic, so a
+    /// fixture that fails for some unrelated reason cannot satisfy it.
+    #[test]
+    #[should_panic(expected = "Typecheck errors in a codegen fixture")]
+    fn e2e_fixture_entry_point_rejects_a_program_that_does_not_typecheck() {
+        let src = "struct H { f: i64 }\n\
+                   fn main() {\n\
+                   \x20   let a: i64 = 1;\n\
+                   \x20   let h = H { a };\n\
+                   \x20   println(\"end\");\n\
+                   }\n";
+        let _ = karac::run_program_full_checked(src);
+    }
+
     fn run_program(src: &str) -> Option<String> {
         run_program_capturing(src).map(|c| c.stdout)
     }
@@ -45136,7 +45164,7 @@ fn main() {
     println(f"20 {ss.contains(b)} {ss.contains(200i64)}");
 }
 "#;
-        let (interp_out, interp_errs, _, _) = karac::run_program_full(src);
+        let (interp_out, interp_errs, _, _) = karac::run_program_full_checked(src);
         assert!(
             interp_errs.is_empty(),
             "interpreter errors: {interp_errs:?}"
@@ -45200,7 +45228,7 @@ fn main() {
     }
 }
 "#;
-        let (interp_out, interp_errs, _, _) = karac::run_program_full(src);
+        let (interp_out, interp_errs, _, _) = karac::run_program_full_checked(src);
         assert!(
             interp_errs.is_empty(),
             "interpreter errors: {interp_errs:?}"
@@ -68657,7 +68685,7 @@ fn main() {
                  fn mk3(n: i64) -> E {{ if n < 3 {{ return E.A(R {{ id: n }}) }} return E.B }}\n\
                  fn main() {{\n    {body}\n    println(\"after\");\n}}\n"
             );
-            let (interp_out, interp_errs, _, _) = karac::run_program_full(&src);
+            let (interp_out, interp_errs, _, _) = karac::run_program_full_checked(&src);
             assert!(
                 interp_errs.is_empty(),
                 "{label}: interpreter errored: {interp_errs:?}"
@@ -81929,7 +81957,7 @@ fn driver() -> i64 {
         ];
         for (label, body) in cases {
             let src = format!("fn main() {{\n{body}\n}}\n");
-            let (interp_out, interp_errs, _, _) = karac::run_program_full(&src);
+            let (interp_out, interp_errs, _, _) = karac::run_program_full_checked(&src);
             assert!(
                 interp_errs.is_empty(),
                 "{label}: interpreter errored: {interp_errs:?}"
@@ -81979,7 +82007,7 @@ fn driver() -> i64 {
                            Err(e) => { println(\"oom\"); }\n\
                        }\n\
                    }";
-        let (interp_out, interp_errs, _, _) = karac::run_program_full(src);
+        let (interp_out, interp_errs, _, _) = karac::run_program_full_checked(src);
         assert!(
             interp_errs.is_empty(),
             "interpreter errored: {interp_errs:?}"
@@ -82011,8 +82039,8 @@ fn driver() -> i64 {
                              println(f\"{a.len()} {a[0]} {a[8]}\");\n\
                              println(f\"n {a.len()}\");\n\
                          }";
-        let (f_out, f_errs, _, _) = karac::run_program_full(fallible);
-        let (p_out, p_errs, _, _) = karac::run_program_full(panicking);
+        let (f_out, f_errs, _, _) = karac::run_program_full_checked(fallible);
+        let (p_out, p_errs, _, _) = karac::run_program_full_checked(panicking);
         assert!(
             f_errs.is_empty() && p_errs.is_empty(),
             "{f_errs:?} {p_errs:?}"
@@ -82061,7 +82089,7 @@ fn driver() -> i64 {
         ];
         for (label, body) in cases {
             let src = format!("fn main() {{\n{body}\n}}\n");
-            let (interp_out, interp_errs, _, _) = karac::run_program_full(&src);
+            let (interp_out, interp_errs, _, _) = karac::run_program_full_checked(&src);
             assert!(
                 interp_errs.is_empty(),
                 "{label}: interpreter errored: {interp_errs:?}"
@@ -82136,7 +82164,7 @@ fn driver() -> i64 {
         ];
         for (label, body) in cases {
             let src = format!("fn main() {{\n{body}\n}}\n");
-            let (interp_out, interp_errs, _, _) = karac::run_program_full(&src);
+            let (interp_out, interp_errs, _, _) = karac::run_program_full_checked(&src);
             assert!(
                 interp_errs.is_empty(),
                 "{label}: interpreter errored: {interp_errs:?}"
@@ -82163,8 +82191,8 @@ fn driver() -> i64 {
              let a: Vec[i64] = (0..8).map(|x| x * 3).collect();\n\
              println(f\"{a.len()} {a[0]} {a[7]}\");\n\
          }\n";
-        let (interp_a, errs_a, _, _) = karac::run_program_full(via_from_iter);
-        let (interp_b, errs_b, _, _) = karac::run_program_full(via_collect);
+        let (interp_a, errs_a, _, _) = karac::run_program_full_checked(via_from_iter);
+        let (interp_b, errs_b, _, _) = karac::run_program_full_checked(via_collect);
         assert!(
             errs_a.is_empty() && errs_b.is_empty(),
             "{errs_a:?} {errs_b:?}"
@@ -82218,7 +82246,7 @@ fn driver() -> i64 {
                            Err(e) => { println(\"alloc failed\"); }\n\
                        }\n\
                    }";
-        let (interp_out, interp_errs, _, _) = karac::run_program_full(src);
+        let (interp_out, interp_errs, _, _) = karac::run_program_full_checked(src);
         assert!(
             interp_errs.is_empty(),
             "interpreter errored: {interp_errs:?}"
@@ -82253,7 +82281,7 @@ fn driver() -> i64 {
                            Err(e) => { println(\"alloc failed\"); }\n\
                        }\n\
                    }";
-        let (interp_out, interp_errs, _, _) = karac::run_program_full(src);
+        let (interp_out, interp_errs, _, _) = karac::run_program_full_checked(src);
         assert!(
             interp_errs.is_empty(),
             "interpreter errored: {interp_errs:?}"
@@ -82450,7 +82478,7 @@ fn driver() -> i64 {
                 c.stderr
             );
         }
-        let (interp_out, interp_errs, _, _) = karac::run_program_full(src);
+        let (interp_out, interp_errs, _, _) = karac::run_program_full_checked(src);
         assert!(
             interp_errs.is_empty(),
             "interpreter errored on the twin: {interp_errs:?}"
@@ -82555,7 +82583,7 @@ fn driver() -> i64 {
                 c.stderr
             );
         }
-        let (interp_out, interp_errs, _, _) = karac::run_program_full(src);
+        let (interp_out, interp_errs, _, _) = karac::run_program_full_checked(src);
         assert!(
             interp_errs.is_empty(),
             "interpreter errored on the twin: {interp_errs:?}"
@@ -82705,7 +82733,7 @@ fn driver() -> i64 {
                 c.stderr
             );
         }
-        let (interp_out, interp_errs, _, _) = karac::run_program_full(src);
+        let (interp_out, interp_errs, _, _) = karac::run_program_full_checked(src);
         assert!(
             interp_errs.is_empty(),
             "interpreter errored on the twin: {interp_errs:?}"
@@ -88873,7 +88901,7 @@ fn main() {
         ];
 
         for (label, src, line, col) in cases {
-            let (_out, errs, _trace, _) = karac::run_program_full(src);
+            let (_out, errs, _trace, _) = karac::run_program_full_checked(src);
             assert!(
                 !errs.is_empty(),
                 "{label}: the interpreter must trap on this program"
@@ -143028,7 +143056,7 @@ fn main() {
                         true\nfalse\n\
                         1,2\n1,9\n2,1\n";
         assert_eq!(run_program(src), Some(expected.to_string()));
-        let (interp_out, interp_errs, _, _) = karac::run_program_full(src);
+        let (interp_out, interp_errs, _, _) = karac::run_program_full_checked(src);
         assert!(
             interp_errs.is_empty(),
             "interpreter errored on the twin: {interp_errs:?}"
@@ -143139,7 +143167,7 @@ fn main() {
                         true\nfalse\n\
                         true\nfalse\ntrue\n";
         assert_eq!(run_program(src), Some(expected.to_string()));
-        let (interp_out, interp_errs, _, _) = karac::run_program_full(src);
+        let (interp_out, interp_errs, _, _) = karac::run_program_full_checked(src);
         assert!(
             interp_errs.is_empty(),
             "interpreter errored on the twin: {interp_errs:?}"
@@ -143500,7 +143528,7 @@ fn main() {
     println(f"11 {tag(r1.cmp(r2))}");
 }
 "#;
-        let (interp_out, interp_errs, _, _) = karac::run_program_full(src);
+        let (interp_out, interp_errs, _, _) = karac::run_program_full_checked(src);
         assert!(
             interp_errs.is_empty(),
             "interpreter errors: {interp_errs:?}"
@@ -143576,7 +143604,7 @@ fn main() {
     println(f"04 {fruit_tag(Color.Red.to_fruit())} {fruit_tag(Color.Green.to_fruit())}");
 }
 "#;
-        let (interp_out, interp_errs, _, _) = karac::run_program_full(src);
+        let (interp_out, interp_errs, _, _) = karac::run_program_full_checked(src);
         assert!(
             interp_errs.is_empty(),
             "interpreter errors: {interp_errs:?}"
@@ -143686,7 +143714,7 @@ fn main() {
                  }}"
             );
             // The checker admits this element type...
-            let (interp_out, interp_errs, _, _) = karac::run_program_full(&src);
+            let (interp_out, interp_errs, _, _) = karac::run_program_full_checked(&src);
             assert!(
                 interp_errs.is_empty(),
                 "[{label}] the sort gate rejected an element type codegen supports — \
@@ -143731,7 +143759,7 @@ fn main() {
                      }}\n\
                  }}"
             );
-            let (bs_interp, bs_errs, _, _) = karac::run_program_full(&bs_src);
+            let (bs_interp, bs_errs, _, _) = karac::run_program_full_checked(&bs_src);
             assert!(
                 bs_errs.is_empty(),
                 "[{label}] the element gate rejected `binary_search` on a type it admits \
@@ -143829,7 +143857,7 @@ fn main() {
                         04 0\n\
                         05 3\n\
                         06 absent\n";
-        let (interp_out, interp_errs, _, _) = karac::run_program_full(src);
+        let (interp_out, interp_errs, _, _) = karac::run_program_full_checked(src);
         assert!(
             interp_errs.is_empty(),
             "interpreter errors: {interp_errs:?}"
@@ -143951,7 +143979,7 @@ fn main() {
                         08 1 1 1\n\
                         09 true true\n\
                         10 0 true\n";
-        let (interp_out, interp_errs, _, _) = karac::run_program_full(src);
+        let (interp_out, interp_errs, _, _) = karac::run_program_full_checked(src);
         assert!(
             interp_errs.is_empty(),
             "interpreter errors: {interp_errs:?}"
@@ -144054,7 +144082,7 @@ fn main() {
     println(f"10 {tag(r.cmp(Rev { v: 2 }))}");
 }
 "#;
-        let (interp_out, interp_errs, _, _) = karac::run_program_full(src);
+        let (interp_out, interp_errs, _, _) = karac::run_program_full_checked(src);
         assert!(
             interp_errs.is_empty(),
             "interpreter errors: {interp_errs:?}"
@@ -144135,7 +144163,7 @@ fn main() {
     println(c.to_tag().n);
 }
 "#;
-        let (interp_out, interp_errs, _, _) = karac::run_program_full(src);
+        let (interp_out, interp_errs, _, _) = karac::run_program_full_checked(src);
         assert!(
             interp_errs.is_empty(),
             "interpreter errors: {interp_errs:?}"
@@ -144186,7 +144214,7 @@ fn main() {
     println(x.n);
 }
 "#;
-        let (interp_out, interp_errs, _, _) = karac::run_program_full(src);
+        let (interp_out, interp_errs, _, _) = karac::run_program_full_checked(src);
         assert!(
             interp_errs.is_empty(),
             "interpreter errors: {interp_errs:?}"
@@ -144280,7 +144308,7 @@ fn main() {
     println(o.0.n);
 }
 "#;
-        let (interp_out, interp_errs, _, _) = karac::run_program_full(src);
+        let (interp_out, interp_errs, _, _) = karac::run_program_full_checked(src);
         assert!(
             interp_errs.is_empty(),
             "interpreter errors: {interp_errs:?}"
@@ -144358,7 +144386,7 @@ fn main() {
     println(t.name);
 }
 "#;
-        let (interp_out, interp_errs, _, _) = karac::run_program_full(src);
+        let (interp_out, interp_errs, _, _) = karac::run_program_full_checked(src);
         assert!(
             interp_errs.is_empty(),
             "interpreter errors: {interp_errs:?}"
@@ -144422,7 +144450,7 @@ fn main() {
     println(ret_r(mkq()).name);
 }
 "#;
-        let (interp_out, interp_errs, _, _) = karac::run_program_full(src);
+        let (interp_out, interp_errs, _, _) = karac::run_program_full_checked(src);
         assert!(
             interp_errs.is_empty(),
             "interpreter errors: {interp_errs:?}"
@@ -144484,7 +144512,7 @@ fn main() {
     println(p.0.name);
 }
 "#;
-        let (interp_out, interp_errs, _, _) = karac::run_program_full(src);
+        let (interp_out, interp_errs, _, _) = karac::run_program_full_checked(src);
         assert!(
             interp_errs.is_empty(),
             "interpreter errors: {interp_errs:?}"
@@ -144536,7 +144564,7 @@ fn main() {
     println(v.pair.1);
 }
 "#;
-        let (interp_out, interp_errs, _, _) = karac::run_program_full(src);
+        let (interp_out, interp_errs, _, _) = karac::run_program_full_checked(src);
         assert!(
             interp_errs.is_empty(),
             "interpreter errors: {interp_errs:?}"
@@ -144601,7 +144629,7 @@ fn main() {
     println(h.peek());
 }
 "#;
-        let (interp_out, interp_errs, _, _) = karac::run_program_full(src);
+        let (interp_out, interp_errs, _, _) = karac::run_program_full_checked(src);
         assert!(
             interp_errs.is_empty(),
             "interpreter errors: {interp_errs:?}"
@@ -144668,7 +144696,7 @@ fn main() {
     println(d.1);
 }
 "#;
-        let (interp_out, interp_errs, _, _) = karac::run_program_full(src);
+        let (interp_out, interp_errs, _, _) = karac::run_program_full_checked(src);
         assert!(
             interp_errs.is_empty(),
             "interpreter errors: {interp_errs:?}"
@@ -144730,7 +144758,7 @@ fn main() {
     println(if let Option.Some(v) = o { Tag { n: v } } else { Tag { n: 0 } }.n);
 }
 "#;
-        let (interp_out, interp_errs, _, _) = karac::run_program_full(src);
+        let (interp_out, interp_errs, _, _) = karac::run_program_full_checked(src);
         assert!(
             interp_errs.is_empty(),
             "interpreter errors: {interp_errs:?}"
@@ -144794,7 +144822,7 @@ fn main() {
     println(b.v);
 }
 "#;
-        let (interp_out, interp_errs, _, _) = karac::run_program_full(src);
+        let (interp_out, interp_errs, _, _) = karac::run_program_full_checked(src);
         assert!(
             interp_errs.is_empty(),
             "interpreter errors: {interp_errs:?}"
@@ -144867,7 +144895,7 @@ fn main() {
     println(make(13).tag + "!");
 }
 "#;
-        let (interp_out, interp_errs, _, _) = karac::run_program_full(src);
+        let (interp_out, interp_errs, _, _) = karac::run_program_full_checked(src);
         assert!(
             interp_errs.is_empty(),
             "interpreter errors: {interp_errs:?}"
@@ -145942,7 +145970,7 @@ fn main() {
             ),
         ];
         for (label, src, want) in cases {
-            let (interp_out, interp_errs, _, _) = karac::run_program_full(src);
+            let (interp_out, interp_errs, _, _) = karac::run_program_full_checked(src);
             assert!(
                 interp_errs.is_empty(),
                 "{label}: interpreter errored: {interp_errs:?}"
@@ -146134,7 +146162,7 @@ fn main() {
             ),
         ];
         for (label, src, want) in cases {
-            let (interp_out, interp_errs, _, _) = karac::run_program_full(src);
+            let (interp_out, interp_errs, _, _) = karac::run_program_full_checked(src);
             assert!(
                 interp_errs.is_empty(),
                 "{label}: interpreter errored: {interp_errs:?}"
@@ -146287,7 +146315,7 @@ fn main() {
             ),
         ];
         for (label, src, want) in cases {
-            let (interp_out, interp_errs, _, _) = karac::run_program_full(src);
+            let (interp_out, interp_errs, _, _) = karac::run_program_full_checked(src);
             assert!(
                 interp_errs.is_empty(),
                 "{label}: interpreter errored: {interp_errs:?}"
@@ -146394,7 +146422,7 @@ fn main() {
         ];
         for (label, decls, want) in cases {
             let src = format!("{PRELUDE}{decls}\nfn main() {{ println(f\"v={{take()}}\"); }}\n");
-            let (interp_out, interp_errs, _, _) = karac::run_program_full(&src);
+            let (interp_out, interp_errs, _, _) = karac::run_program_full_checked(&src);
             assert!(
                 interp_errs.is_empty(),
                 "{label}: interpreter errored: {interp_errs:?}"
@@ -146622,7 +146650,7 @@ fn main() {
         ];
         for (label, decls, want) in cases {
             let src = format!("{PRELUDE}{decls}\nfn main() {{ println(f\"v={{take()}}\"); }}\n");
-            let (interp_out, interp_errs, _, _) = karac::run_program_full(&src);
+            let (interp_out, interp_errs, _, _) = karac::run_program_full_checked(&src);
             assert!(
                 interp_errs.is_empty(),
                 "{label}: interpreter errored: {interp_errs:?}"
@@ -146729,7 +146757,7 @@ fn main() {
         ];
         for (label, decls, want) in cases {
             let src = format!("{PRELUDE}{decls}\nfn main() {{ println(f\"v={{take()}}\"); }}\n");
-            let (interp_out, interp_errs, _, _) = karac::run_program_full(&src);
+            let (interp_out, interp_errs, _, _) = karac::run_program_full_checked(&src);
             assert!(
                 interp_errs.is_empty(),
                 "{label}: interpreter errored: {interp_errs:?}"
@@ -146831,7 +146859,7 @@ fn main() {
         ];
         for (label, decls, want) in cases {
             let src = format!("{PRELUDE}{decls}\nfn main() {{ println(f\"v={{take()}}\"); }}\n");
-            let (interp_out, interp_errs, _, _) = karac::run_program_full(&src);
+            let (interp_out, interp_errs, _, _) = karac::run_program_full_checked(&src);
             assert!(
                 interp_errs.is_empty(),
                 "{label}: interpreter errored: {interp_errs:?}"
@@ -146946,7 +146974,7 @@ fn main() {
         ];
         for (label, decls, want) in cases {
             let src = format!("{PRELUDE}{decls}\nfn main() {{ println(f\"v={{take()}}\"); }}\n");
-            let (interp_out, interp_errs, _, _) = karac::run_program_full(&src);
+            let (interp_out, interp_errs, _, _) = karac::run_program_full_checked(&src);
             assert!(
                 interp_errs.is_empty(),
                 "{label}: interpreter errored: {interp_errs:?}"
@@ -147078,7 +147106,7 @@ fn main() {
         ];
         for (label, decls, want) in cases {
             let src = format!("{PRELUDE}{decls}\nfn main() {{ println(f\"v={{take()}}\"); }}\n");
-            let (interp_out, interp_errs, _, _) = karac::run_program_full(&src);
+            let (interp_out, interp_errs, _, _) = karac::run_program_full_checked(&src);
             assert!(
                 interp_errs.is_empty(),
                 "{label}: interpreter errored: {interp_errs:?}"
@@ -147239,7 +147267,7 @@ fn main() {
                  println(\"mid\"); return 7; }}\n\
                  fn main() {{ println(f\"v={{go()}}\"); }}\n"
             );
-            let (interp_out, interp_errs, _, _) = karac::run_program_full(&src);
+            let (interp_out, interp_errs, _, _) = karac::run_program_full_checked(&src);
             assert!(
                 interp_errs.is_empty(),
                 "{label}: interpreter errored: {interp_errs:?}"
@@ -147378,7 +147406,7 @@ fn main() {
                 "{PRELUDE}fn go(c: bool) -> i64 {{ {stmt}\n return 7; }}\n\
                  fn main() {{ println(f\"v={{go({arg})}}\"); }}\n"
             );
-            let (interp_out, interp_errs, _, _) = karac::run_program_full(&src);
+            let (interp_out, interp_errs, _, _) = karac::run_program_full_checked(&src);
             assert!(
                 interp_errs.is_empty(),
                 "{label}: interpreter errored: {interp_errs:?}"
@@ -147533,7 +147561,7 @@ fn main() {
         ];
         for (label, decls, want) in cases {
             let src = format!("{PRELUDE}{decls}\nfn main() {{ println(f\"v={{take()}}\"); }}\n");
-            let (interp_out, interp_errs, _, _) = karac::run_program_full(&src);
+            let (interp_out, interp_errs, _, _) = karac::run_program_full_checked(&src);
             assert!(
                 interp_errs.is_empty(),
                 "{label}: interpreter errored: {interp_errs:?}"
@@ -147657,7 +147685,7 @@ fn main() {
         ];
         for (label, decls, want) in cases {
             let src = format!("{PRELUDE}{decls}\nfn main() {{ println(f\"v={{take()}}\"); }}\n");
-            let (interp_out, interp_errs, _, _) = karac::run_program_full(&src);
+            let (interp_out, interp_errs, _, _) = karac::run_program_full_checked(&src);
             assert!(
                 interp_errs.is_empty(),
                 "{label}: interpreter errored: {interp_errs:?}"
@@ -147772,7 +147800,7 @@ fn main() {
             ),
         ];
         for (label, src, want) in cases {
-            let (interp_out, interp_errs, _, _) = karac::run_program_full(src);
+            let (interp_out, interp_errs, _, _) = karac::run_program_full_checked(src);
             assert!(
                 interp_errs.is_empty(),
                 "{label}: interpreter errored: {interp_errs:?}"
@@ -147905,7 +147933,7 @@ fn main() {
                 "{PRELUDE}fn main() {{\n    {stmts}\n    let extra: String = payload(9);\n    \
                  println(extra.len());\n    println(\"end\");\n}}\n"
             );
-            let (interp_out, interp_errs, _, _) = karac::run_program_full(&src);
+            let (interp_out, interp_errs, _, _) = karac::run_program_full_checked(&src);
             assert!(
                 interp_errs.is_empty(),
                 "{label}: interpreter errored: {interp_errs:?}"
@@ -148006,7 +148034,7 @@ fn main() {
                 "{PRELUDE}fn main() {{\n    {stmts}\n    let extra: String = pad(2);\n    \
                  println(extra.len());\n    println(\"end\");\n}}\n"
             );
-            let (interp_out, interp_errs, _, _) = karac::run_program_full(&src);
+            let (interp_out, interp_errs, _, _) = karac::run_program_full_checked(&src);
             assert!(
                 interp_errs.is_empty(),
                 "{label}: interpreter errored: {interp_errs:?}"
@@ -148079,7 +148107,7 @@ fn main() {
         ];
         for (label, body, want) in cases {
             let src = format!("{PRELUDE}fn main() {{\n    {body}\n    println(\"end\");\n}}\n");
-            let (interp_out, interp_errs, _, _) = karac::run_program_full(&src);
+            let (interp_out, interp_errs, _, _) = karac::run_program_full_checked(&src);
             assert!(
                 interp_errs.is_empty(),
                 "{label}: interpreter errored: {interp_errs:?}"
@@ -148280,7 +148308,7 @@ fn main() {
         ];
         for (label, body, want_interp, want_compiled) in cases {
             let src = format!("{PRELUDE}fn main() {{\n    {body}\n    println(\"end\");\n}}\n");
-            let (interp_out, interp_errs, _, _) = karac::run_program_full(&src);
+            let (interp_out, interp_errs, _, _) = karac::run_program_full_checked(&src);
             assert!(
                 interp_errs.is_empty(),
                 "{label}: interpreter errored: {interp_errs:?}"
@@ -148497,7 +148525,7 @@ fn main() {
         ];
         for (label, body, want_interp, want_compiled) in cases {
             let src = format!("{PRELUDE}fn main() {{\n    {body}\n    println(\"end\");\n}}\n");
-            let (interp_out, interp_errs, _, _) = karac::run_program_full(&src);
+            let (interp_out, interp_errs, _, _) = karac::run_program_full_checked(&src);
             assert!(
                 interp_errs.is_empty(),
                 "{label}: interpreter errored: {interp_errs:?}"
@@ -148661,7 +148689,7 @@ fn main() {
         ];
         for (label, body, want) in cases {
             let src = format!("{PRELUDE}fn main() {{\n    {body}\n    println(\"end\");\n}}\n");
-            let (interp_out, interp_errs, _, _) = karac::run_program_full(&src);
+            let (interp_out, interp_errs, _, _) = karac::run_program_full_checked(&src);
             assert!(
                 interp_errs.is_empty(),
                 "{label}: interpreter errored: {interp_errs:?}"
@@ -148822,7 +148850,7 @@ fn main() {
         ];
         for (label, body, want) in cases {
             let src = format!("{PRELUDE}fn main() {{\n    {body}\n    println(\"after\");\n}}\n");
-            let (interp_out, interp_errs, _, _) = karac::run_program_full(&src);
+            let (interp_out, interp_errs, _, _) = karac::run_program_full_checked(&src);
             assert!(
                 interp_errs.is_empty(),
                 "{label}: interpreter errored: {interp_errs:?}"
@@ -149022,7 +149050,7 @@ fn main() {
             } else {
                 format!("{PRELUDE}fn main() {{\n    {body}\n    println(\"mid\");\n}}\n")
             };
-            let (interp_out, interp_errs, _, _) = karac::run_program_full(&src);
+            let (interp_out, interp_errs, _, _) = karac::run_program_full_checked(&src);
             assert!(
                 interp_errs.is_empty(),
                 "{label}: interpreter errored: {interp_errs:?}"
@@ -149231,7 +149259,7 @@ fn main() {
         ];
         for (label, body, want) in cases {
             let src = format!("{PRELUDE}#[allow(partial_move_of_drop_enum)]\nfn main() {{\n    {body}\n    println(\"after\");\n}}\n");
-            let (interp_out, interp_errs, _, _) = karac::run_program_full(&src);
+            let (interp_out, interp_errs, _, _) = karac::run_program_full_checked(&src);
             assert!(
                 interp_errs.is_empty(),
                 "{label}: interpreter errored: {interp_errs:?}"
@@ -149405,7 +149433,7 @@ fn main() {
         ];
         for (label, body, want) in cases {
             let src = format!("{PRELUDE}fn main() {{\n    {body}\n    println(\"after\");\n}}\n");
-            let (interp_out, interp_errs, _, _) = karac::run_program_full(&src);
+            let (interp_out, interp_errs, _, _) = karac::run_program_full_checked(&src);
             assert!(
                 interp_errs.is_empty(),
                 "{label}: interpreter errored: {interp_errs:?}"
@@ -149515,7 +149543,7 @@ fn main() {
             ),
         ];
         for (label, src, want) in cases {
-            let (interp_out, interp_errs, _, _) = karac::run_program_full(src);
+            let (interp_out, interp_errs, _, _) = karac::run_program_full_checked(src);
             assert!(
                 interp_errs.is_empty(),
                 "{label}: interpreter errored: {interp_errs:?}"
