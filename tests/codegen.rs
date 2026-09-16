@@ -35325,6 +35325,153 @@ fn main() {
         }
     }
 
+    /// B-2026-09-16-2 — an index-assign runs the DISPLACED element's `Drop`
+    /// body when the element is a tuple, a nested array, or a nested
+    /// `Vec`/`VecDeque`.
+    ///
+    /// `a[0] = <new>` over `Array[(D, i64), N]`, `Array[Array[D, 1], M]` or
+    /// `Vec[Vec[D]]` printed nothing for the displaced value on all four
+    /// surfaces, where the flat `Array[D, N]` beside them prints correctly.
+    /// B-2026-09-15-31/-32 closed the MEMORY half of these shapes and
+    /// deliberately left the bodies, because the interpreter declined too and
+    /// firing one side alone converts an agreed gap into a divergence.
+    ///
+    /// THE INVARIANT IS SCOPED, NOT RELAXED. The interpreter's
+    /// `value_runs_user_drop` classifies a bare Tuple/Array as false at top
+    /// level to keep "the dedicated container walkers the sole firers FOR
+    /// DIRECT BINDINGS" — and a displacement is not a direct binding. That
+    /// invariant has a premise: a container walker comes later and is the
+    /// firer. At a displacement the slot is overwritten, so no scope-exit walk
+    /// ever visits the old value (the same observation that made
+    /// B-2026-09-15-20 a real bug), and design.md line 866 puts the body at
+    /// the value's live-range end. A direct binding of a bare Tuple/Array
+    /// still classifies false.
+    ///
+    /// SIX SITES, and the two that made the first attempts INERT are the
+    /// interesting ones:
+    ///
+    ///   * `store_destroys_displaced`, the destroy-vs-relocate discriminator
+    ///     that feeds `run_bodies`, listed only `StructLiteral | Call |
+    ///     MethodCall`. A tuple literal and an array literal — this row's two
+    ///     shapes — answered RELOCATE, so widening codegen's shape arms
+    ///     measured as NO behaviour change at all: the arms were reached and
+    ///     their memory half ran (which is why -15-31/-15-32's fixtures pass),
+    ///     but bodies were gated off upstream.
+    ///   * and `ArrayLiteral` was not enough, because `lowering.rs`
+    ///     canonicalizes a `Vec`-typed array literal into
+    ///     `PrefixCollectionLiteral` (B-2026-09-15-22's arm: codegen's array
+    ///     literal emits a fixed `[N x T]` aggregate where a Vec needs a
+    ///     `{ptr,len,cap}` handle). So two RHSs that are the SAME literal in
+    ///     source answered differently — `Vec[(D, i64)]` true, `Vec[Vec[D]]`
+    ///     false. Found by probing `run_bodies` at the call site; reading the
+    ///     dispatch chain had produced two confident wrong answers first.
+    ///
+    ///   The other four: codegen's tuple / nested-array / `Vec`-element arms
+    ///   of `emit_displaced_index_elem_drop`, and the interpreter's TWO
+    ///   index-assign displacement blocks (field-rooted and identifier-rooted,
+    ///   which is also how the row's unmeasured `h.xs[0] = ..` question got
+    ///   answered).
+    ///
+    /// The `Vec`-element arm is BODIES ONLY, measured rather than assumed:
+    /// valgrind on `Vec[Vec[D]]` with `v[0] = [mkd(3)]` at `-O0` reports 17
+    /// allocs / 17 frees and 0 errors before the change, so the displaced
+    /// inner buffer is already freed on another channel and a memory call
+    /// there would double-free it.
+    ///
+    /// RELOCATION is the hazard this must not step into —
+    /// B-2026-08-26-21's five-bodies-for-two-values. Two things keep it out,
+    /// both measured: the caller's `expr_mentions_name_deep` alias guard
+    /// returns before any shape arm, and `a[i] = a[j]` on a non-`Copy` element
+    /// does not typecheck at all (`E_INDEX_MOVE_NON_COPY`, whose diagnostic
+    /// points at `v.swap(i, j)`). `v.swap(0, 1)` gives exactly two bodies for
+    /// two values, unchanged, and is a cell below.
+    #[test]
+    fn e2e_index_store_runs_the_displaced_aggregate_elements_drop_body() {
+        const HDR: &str = "struct D { s: String, id: i64 }\n\
+                           impl Drop for D { fn drop(mut ref self) { println(f\"dD{self.id}\") } }\n\
+                           fn mkd(n: i64) -> D { return D { s: f\"heap-{n}\", id: n }; }\n";
+        for (label, body, want) in [
+            (
+                "the row's first cell — a TUPLE element",
+                "let mut a: Array[(D, i64), 2] = [(mkd(1), 10), (mkd(2), 20)];\n\
+                 a[0] = (mkd(3), 30);",
+                "dD1\ndD3\ndD2\nmid\n",
+            ),
+            (
+                "the row's second cell — a NESTED ARRAY element",
+                "let mut a: Array[Array[D, 1], 2] = [[mkd(1)], [mkd(2)]];\n\
+                 a[0] = [mkd(3)];",
+                "dD1\ndD3\ndD2\nmid\n",
+            ),
+            (
+                // Not in the row as filed: reached by the interpreter's new arm
+                // the moment it landed (a `Vec` element is a `Value::Array` at
+                // runtime exactly as a fixed array is), so it had to close in
+                // the same commit or be a fresh divergence.
+                "a nested Vec element — the divergence this fix would otherwise have created",
+                "let mut v: Vec[Vec[D]] = [[mkd(1)], [mkd(2)]];\n\
+                 v[0] = [mkd(3)];",
+                "dD1\ndD3\ndD2\nmid\n",
+            ),
+            (
+                "the Vec container leg with a tuple element",
+                "let mut v: Vec[(D, i64)] = [(mkd(1), 10), (mkd(2), 20)];\n\
+                 v[0] = (mkd(3), 30);",
+                "dD1\ndD3\ndD2\nmid\n",
+            ),
+            (
+                // The row lists the field-rooted spelling as NOT MEASURED.
+                // Both interpreter displacement blocks are structurally
+                // identical, so answering it cost nothing.
+                "the FIELD-rooted spelling (the row's unmeasured question)",
+                "let mut h: Hh = Hh { xs: [(mkd(1), 10), (mkd(2), 20)] };\n\
+                 h.xs[0] = (mkd(3), 30);",
+                "dD1\ndD3\ndD2\nmid\n",
+            ),
+            (
+                "control: the flat named-struct element, correct since B-2026-09-14-29",
+                "let mut a: Array[D, 2] = [mkd(1), mkd(2)];\n\
+                 a[0] = mkd(3);",
+                "dD1\ndD3\ndD2\nmid\n",
+            ),
+            (
+                // RELOCATION, via the idiom the typechecker actually offers.
+                // Exactly two bodies for two values — B-2026-08-26-21's
+                // five-for-two is what a regression here would look like.
+                "control: relocation via v.swap — two bodies for two values, not more",
+                "let mut v: Vec[D] = [mkd(1), mkd(2)];\n\
+                 v.swap(0, 1);",
+                "dD2\ndD1\nmid\n",
+            ),
+            (
+                "control: the same for a tuple element",
+                "let mut v: Vec[(D, i64)] = [(mkd(1), 10), (mkd(2), 20)];\n\
+                 v.swap(0, 1);",
+                "dD2\ndD1\nmid\n",
+            ),
+            (
+                "control: a non-Drop tuple element runs nothing",
+                "let mut a: Array[(i64, i64), 2] = [(1, 10), (2, 20)];\n\
+                 a[0] = (3, 30);\n\
+                 println(f\"v:{a[0].0}\");",
+                "v:3\nmid\n",
+            ),
+        ] {
+            let src = format!(
+                "{HDR}struct Hh {{ xs: Array[(D, i64), 2] }}\nfn main() {{\n{body}\nprintln(\"mid\");\n}}\n"
+            );
+            let (interp_out, interp_errs, _, _) = karac::run_program_full_checked(&src);
+            assert!(
+                interp_errs.is_empty(),
+                "[{label}] interp errored: {interp_errs:?}"
+            );
+            assert_eq!(interp_out.join(""), want, "[{label}] interpreter");
+            if let Some(aot) = run_program(&src) {
+                assert_eq!(aot, want, "[{label}] AOT");
+            }
+        }
+    }
+
     /// B-2026-09-15-23 — a `Vec`/`VecDeque` STRUCT FIELD whose ELEMENT is
     /// itself an aggregate runs the innermost value's `Drop` body.
     ///

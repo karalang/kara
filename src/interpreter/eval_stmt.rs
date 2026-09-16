@@ -9090,6 +9090,48 @@ impl<'a> super::Interpreter<'a> {
                                         }
                                         self.run_enum_payload_user_drops_value(&old);
                                     }
+                                    // B-2026-09-16-2 — a TUPLE or NESTED-ARRAY
+                                    // element being displaced by `a[i] = <new>`.
+                                    // Both fell to `_ => {}`, so the displaced
+                                    // value's `Drop` bodies ran nowhere, on this
+                                    // backend and on every compiled one alike
+                                    // (-15-31/-15-32 closed only the memory half
+                                    // for these shapes).
+                                    //
+                                    // `value_runs_user_drop` cannot be the route:
+                                    // it classifies a bare Tuple/Array as false at
+                                    // top level BY DESIGN, "keeping the dedicated
+                                    // container walkers the sole firers for direct
+                                    // bindings". A displacement is not a direct
+                                    // binding, and that invariant has a premise —
+                                    // that a container walker comes later and is
+                                    // the firer. Here the slot is OVERWRITTEN, so
+                                    // no scope-exit walk ever visits the old value
+                                    // and there is no later firer to be sole
+                                    // (the same observation that made
+                                    // B-2026-09-15-20 a real bug). design.md line
+                                    // 866 puts the body at the value's live-range
+                                    // end, which for a displaced value is this
+                                    // store. So the invariant is SCOPED here, not
+                                    // relaxed: a direct binding of a bare
+                                    // Tuple/Array still classifies false.
+                                    //
+                                    // RELOCATION is the hazard to stay out of
+                                    // (B-2026-08-26-21's five-bodies-for-two-
+                                    // values; B-2026-09-15-33's subject). The
+                                    // guard is already on this path:
+                                    // `expr_mentions_name_deep(value, vname)`
+                                    // makes the swap idiom `a[i] = a[j]` skip the
+                                    // whole block, so a relocated value never
+                                    // reaches this arm.
+                                    //
+                                    // Codegen twin: the tuple and nested-array
+                                    // arms of `emit_displaced_index_elem_drop`,
+                                    // which gain their bodies call in the same
+                                    // commit.
+                                    Value::Array(_) | Value::Tuple(_) => {
+                                        self.run_discarded_value_user_drops(old.clone());
+                                    }
                                     _ => {}
                                 }
                             }
@@ -9130,6 +9172,48 @@ impl<'a> super::Interpreter<'a> {
                                             self.run_user_drop_body_on_value(&tn, old.clone());
                                         }
                                         self.run_enum_payload_user_drops_value(&old);
+                                    }
+                                    // B-2026-09-16-2 — a TUPLE or NESTED-ARRAY
+                                    // element being displaced by `a[i] = <new>`.
+                                    // Both fell to `_ => {}`, so the displaced
+                                    // value's `Drop` bodies ran nowhere, on this
+                                    // backend and on every compiled one alike
+                                    // (-15-31/-15-32 closed only the memory half
+                                    // for these shapes).
+                                    //
+                                    // `value_runs_user_drop` cannot be the route:
+                                    // it classifies a bare Tuple/Array as false at
+                                    // top level BY DESIGN, "keeping the dedicated
+                                    // container walkers the sole firers for direct
+                                    // bindings". A displacement is not a direct
+                                    // binding, and that invariant has a premise —
+                                    // that a container walker comes later and is
+                                    // the firer. Here the slot is OVERWRITTEN, so
+                                    // no scope-exit walk ever visits the old value
+                                    // and there is no later firer to be sole
+                                    // (the same observation that made
+                                    // B-2026-09-15-20 a real bug). design.md line
+                                    // 866 puts the body at the value's live-range
+                                    // end, which for a displaced value is this
+                                    // store. So the invariant is SCOPED here, not
+                                    // relaxed: a direct binding of a bare
+                                    // Tuple/Array still classifies false.
+                                    //
+                                    // RELOCATION is the hazard to stay out of
+                                    // (B-2026-08-26-21's five-bodies-for-two-
+                                    // values; B-2026-09-15-33's subject). The
+                                    // guard is already on this path:
+                                    // `expr_mentions_name_deep(value, vname)`
+                                    // makes the swap idiom `a[i] = a[j]` skip the
+                                    // whole block, so a relocated value never
+                                    // reaches this arm.
+                                    //
+                                    // Codegen twin: the tuple and nested-array
+                                    // arms of `emit_displaced_index_elem_drop`,
+                                    // which gain their bodies call in the same
+                                    // commit.
+                                    Value::Array(_) | Value::Tuple(_) => {
+                                        self.run_discarded_value_user_drops(old.clone());
                                     }
                                     _ => {}
                                 }

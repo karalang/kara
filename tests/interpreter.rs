@@ -68340,6 +68340,94 @@ fn test_hash_container_enum_element_runs_its_body() {
     );
 }
 
+/// B-2026-09-16-2 — an index-assign runs the DISPLACED element's `Drop` body
+/// for a tuple, nested-array or nested-`Vec` element, on the tree-walk backend.
+///
+/// The interpreter twin of the codegen E2E
+/// (`e2e_index_store_runs_the_displaced_aggregate_elements_drop_body`), which
+/// lives behind `--features llvm` and so is invisible to the DEFAULT leg. Both
+/// backends declined here, so the row moved both in one commit; this keeps the
+/// interpreter half under the gate CI actually runs.
+///
+/// This side is two sites, both index-assign displacement blocks — the
+/// field-rooted (`h.xs[0] = ..`) and identifier-rooted (`a[0] = ..`) paths,
+/// which are structurally identical and each had the same `_ => {}` hole for an
+/// `Array`/`Tuple` old value. `value_runs_user_drop` could not be the route: it
+/// classifies a bare Tuple/Array as false at top level BY DESIGN, to keep the
+/// container walkers the sole firers for DIRECT BINDINGS. A displacement is not
+/// one — the slot is overwritten, so no scope-exit walk ever visits the old
+/// value, and design.md line 866 puts the body at the live-range end.
+///
+/// The relocation guard stays in force: `expr_mentions_name_deep(value, vname)`
+/// makes the swap idiom skip the whole block, and `a[i] = a[j]` on a non-`Copy`
+/// element does not typecheck anyway. `v.swap(0, 1)` is a cell below at exactly
+/// two bodies for two values (B-2026-08-26-21's five-for-two is the regression
+/// shape).
+#[test]
+fn test_index_store_runs_the_displaced_aggregate_elements_drop_body() {
+    const H: &str = "struct D { s: String, id: i64 }\n\
+         impl Drop for D { fn drop(mut ref self) { println(f\"dD{self.id}\") } }\n\
+         fn mkd(n: i64) -> D { return D { s: f\"heap-{n}\", id: n }; }\n\
+         struct Hh { xs: Array[(D, i64), 2] }\n";
+    for (label, body, want) in [
+        (
+            "a TUPLE element",
+            "let mut a: Array[(D, i64), 2] = [(mkd(1), 10), (mkd(2), 20)];\n\
+             a[0] = (mkd(3), 30);",
+            "dD1\ndD3\ndD2\nmid\n",
+        ),
+        (
+            "a NESTED ARRAY element",
+            "let mut a: Array[Array[D, 1], 2] = [[mkd(1)], [mkd(2)]];\n\
+             a[0] = [mkd(3)];",
+            "dD1\ndD3\ndD2\nmid\n",
+        ),
+        (
+            "a nested Vec element",
+            "let mut v: Vec[Vec[D]] = [[mkd(1)], [mkd(2)]];\n\
+             v[0] = [mkd(3)];",
+            "dD1\ndD3\ndD2\nmid\n",
+        ),
+        (
+            "the Vec container leg with a tuple element",
+            "let mut v: Vec[(D, i64)] = [(mkd(1), 10), (mkd(2), 20)];\n\
+             v[0] = (mkd(3), 30);",
+            "dD1\ndD3\ndD2\nmid\n",
+        ),
+        (
+            "the FIELD-rooted spelling",
+            "let mut h: Hh = Hh { xs: [(mkd(1), 10), (mkd(2), 20)] };\n\
+             h.xs[0] = (mkd(3), 30);",
+            "dD1\ndD3\ndD2\nmid\n",
+        ),
+        (
+            "control: the flat named-struct element",
+            "let mut a: Array[D, 2] = [mkd(1), mkd(2)];\n\
+             a[0] = mkd(3);",
+            "dD1\ndD3\ndD2\nmid\n",
+        ),
+        (
+            "control: relocation via v.swap — two bodies for two values",
+            "let mut v: Vec[D] = [mkd(1), mkd(2)];\n\
+             v.swap(0, 1);",
+            "dD2\ndD1\nmid\n",
+        ),
+        (
+            "control: a non-Drop tuple element runs nothing",
+            "let mut a: Array[(i64, i64), 2] = [(1, 10), (2, 20)];\n\
+             a[0] = (3, 30);\n\
+             println(f\"v:{a[0].0}\");",
+            "v:3\nmid\n",
+        ),
+    ] {
+        assert_eq!(
+            run(&format!("{H}fn main() {{\n{body}\nprintln(\"mid\");\n}}\n")),
+            want,
+            "{label}"
+        );
+    }
+}
+
 /// B-2026-09-15-23 — a `Vec`/`VecDeque` STRUCT FIELD whose ELEMENT is itself
 /// an aggregate runs the innermost value's `Drop` body on the tree-walk
 /// backend.

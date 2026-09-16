@@ -93518,14 +93518,27 @@ fn main() {
     /// emitter and it returned at its `TypeKind::Path` shape test — a tuple
     /// has no name for the `struct_types` lookup that follows.
     ///
-    /// THE `Drop`-BEARING CELL PINS A DELIBERATE NON-CHANGE. `(D, i64)` with
-    /// an `impl Drop for D` still prints NO `dD1` for the displaced element,
-    /// on every surface, and that is correct-for-now rather than a miss: the
-    /// interpreter does not run it either (`value_runs_user_drop` classifies a
-    /// bare Tuple/Array value as false at top level on purpose), so it is an
-    /// AGREED gap. Running the body on the compiled side alone would turn an
-    /// agreed gap into a divergence. What this asserts is that the memory is
-    /// reclaimed WITHOUT the body moving.
+    /// THE `Drop`-BEARING CELL PINNED A DELIBERATE NON-CHANGE, AND
+    /// B-2026-09-16-2 MOVED IT. `(D, i64)` with an `impl Drop for D` printed
+    /// NO `dD1` for the displaced element on every surface, which was
+    /// correct-for-now rather than a miss: the interpreter did not run it
+    /// either (`value_runs_user_drop` classifies a bare Tuple/Array value as
+    /// false at top level on purpose), so it was an AGREED gap, and running the
+    /// body on the compiled side alone would have made it a divergence.
+    ///
+    /// -16-2 moved BOTH backends in one commit, so the cell now asserts `dD1`.
+    /// The licence was in the invariant's own wording: it keeps the container
+    /// walkers the sole firers FOR DIRECT BINDINGS, and a displacement is not
+    /// one — the slot is overwritten, so no scope-exit walk ever visits the old
+    /// value and there is no later firer to be sole. design.md line 866 puts
+    /// the body at the value's live-range end, which here is the store.
+    ///
+    /// What this cell asserts now is that the body moved WITHOUT the memory
+    /// moving: ASAN stays clean on it (it did before and does after), so the
+    /// two channels are still separate (B-2026-08-28-57). A `dD1` printed
+    /// TWICE here would mean the fix had started double-firing on relocation,
+    /// which is B-2026-08-26-21's hazard; `v.swap(i, j)` is measured at exactly
+    /// two bodies for two values.
     ///
     /// MUST BE READ AT `-O0`, and this is not boilerplate: MEASURED on the
     /// unfixed tree, these cells PASS at the default `-O2` (LLVM deletes an
@@ -93565,8 +93578,9 @@ fn main() {
             &["a0:3"],
             "b31-nested-tuple-elem",
         );
-        // A tuple carrying a `Drop`-bearing struct: memory reclaimed, body
-        // deliberately still silent on BOTH backends (see the doc comment).
+        // A tuple carrying a `Drop`-bearing struct: memory reclaimed AND, since
+        // B-2026-09-16-2, the displaced element's body run — on both backends
+        // together (see the doc comment).
         assert_clean_asan_run(
             "struct D { s: String, id: i64 }\n\
              impl Drop for D { fn drop(mut ref self) { println(f\"dD{self.id}\") } }\n\
@@ -93575,7 +93589,7 @@ fn main() {
              \x20   a[0] = (D { s: f\"MUTATEDMUTATED3\", id: 3 }, 3);\n\
              \x20   println(\"mid\");\n\
              }\n",
-            &["dD3", "dD2", "mid"],
+            &["dD1", "dD3", "dD2", "mid"],
             "b31-tuple-elem-with-drop-body",
         );
         // THE UNBOUNDED CASE — three trips, so a per-store leak compounds.

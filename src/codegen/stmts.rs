@@ -21636,7 +21636,48 @@ impl<'ctx> super::Codegen<'ctx> {
     fn store_destroys_displaced(rhs: &Expr) -> bool {
         matches!(
             rhs.kind,
-            ExprKind::StructLiteral { .. } | ExprKind::Call { .. } | ExprKind::MethodCall { .. }
+            ExprKind::StructLiteral { .. }
+                | ExprKind::Call { .. }
+                | ExprKind::MethodCall { .. }
+                // B-2026-09-16-2 — a TUPLE or ARRAY literal RHS. This predicate
+                // is the DESTROY-vs-RELOCATE discriminator, and it listed only
+                // three expression kinds, so `a[0] = (mkd(3), 30)` and
+                // `a[0] = [mkd(3)]` answered RELOCATE and their displaced
+                // element's bodies were gated off. That is the THIRD gate behind
+                // this row's silence, and the one that made widening the two
+                // shape arms of `emit_displaced_index_elem_drop` measure as no
+                // behaviour change at all: the arms were reached and the memory
+                // half ran (which is why -15-31/-15-32's fixtures pass), but
+                // `run_bodies` was false for exactly these two RHS shapes.
+                //
+                // A literal is the most obviously-FRESH right-hand side there
+                // is: it constructs a new aggregate in place, so the store ends
+                // the displaced value's life rather than moving it. The
+                // relocation hazard this predicate exists for (B-2026-08-26-21's
+                // five-bodies-for-two-values) is a value read OUT of the same
+                // container, and two independent things already exclude that
+                // here — the caller's `expr_mentions_name_deep(rhs, container)`
+                // alias guard returns before any shape arm, and an index-move of
+                // a non-`Copy` element does not typecheck at all
+                // (`E_INDEX_MOVE_NON_COPY`, whose diagnostic points at
+                // `v.swap(i, j)` instead). Both measured.
+                | ExprKind::Tuple(..)
+                | ExprKind::ArrayLiteral(..)
+                // `PrefixCollectionLiteral` is the same literal one lowering
+                // step later, and leaving it out made the fix INERT for a
+                // `Vec`-typed element: `lowering.rs` canonicalizes a
+                // `Vec`-typed `ArrayLiteral` into the `Vec[…]` prefix form
+                // (B-2026-09-15-22's arm, because codegen's array literal
+                // emits a fixed `[N x T]` aggregate and a Vec needs a
+                // `{ptr,len,cap}` handle), so by the time this predicate runs
+                // the node is no longer an `ArrayLiteral` at all. Found by
+                // probing `run_bodies` at the call site rather than by reading
+                // the dispatch: `Vec[(D, i64)]` reported true and
+                // `Vec[Vec[D]]` false, on two RHSs that are the same literal
+                // in the source. `RepeatLiteral` (`[x; N]`) is the third
+                // spelling of a fresh container literal and rides along.
+                | ExprKind::PrefixCollectionLiteral { .. }
+                | ExprKind::RepeatLiteral { .. }
         )
     }
 
@@ -21873,17 +21914,38 @@ impl<'ctx> super::Codegen<'ctx> {
         // test and the displaced value's heap was simply orphaned — 10 B in 1
         // block at `-O0` for each, on BOTH the Array and the Vec leg.
         //
-        // MEMORY ONLY, deliberately, and this is the load-bearing scope
-        // decision rather than an omission. The displaced element's `Drop`
-        // BODIES are also missing for these shapes, but they are missing on
-        // BOTH BACKENDS: the interpreter's `value_runs_user_drop` classifies a
-        // bare Tuple/Array value as false at top level on purpose, "keeping the
-        // dedicated container walkers the sole firers for direct bindings", and
-        // codegen's gate agrees with it. So the body half is an AGREED gap, not
-        // a divergence, and running bodies here would make the compiled
-        // backends disagree with the interpreter — the direction B-2026-09-15-32
-        // records as strictly worse. Memory has no such hazard: it is not
-        // observable, so closing it on one backend cannot create a divergence.
+        // MEMORY AND, since B-2026-09-16-2, BODIES. -15-31/-15-32 closed the
+        // memory half only, deliberately: the displaced element's `Drop` BODIES
+        // were missing for these shapes on BOTH BACKENDS, because the
+        // interpreter's `value_runs_user_drop` classifies a bare Tuple/Array
+        // value as false at top level on purpose, and codegen's gate agreed
+        // with it. Running bodies on one side alone would have made the
+        // compiled backends disagree with the interpreter — strictly worse than
+        // the silence.
+        //
+        // B-2026-09-16-2 moves BOTH gates, and the invariant's own wording is
+        // what licenses it. It reads "keeping the dedicated container walkers
+        // the sole firers FOR DIRECT BINDINGS" — and a displacement is not a
+        // direct binding. The invariant has a premise: that a container walker
+        // comes along later and is the firer. At a displacement the slot is
+        // overwritten, so no scope-exit walk ever visits the old value and
+        // there is no later firer to be sole. design.md line 866 puts a value's
+        // body at its live-range end, and a displaced value's live range ends
+        // at the store. So this is the invariant SCOPED to the positions where
+        // its premise holds, not relaxed: a direct binding of a bare
+        // Tuple/Array still classifies false and still gets its bodies from the
+        // container walkers alone.
+        //
+        // The interpreter's twin arms (the two index-assign displacement blocks
+        // in `eval_stmt.rs`, field-rooted and identifier-rooted) land in the
+        // same commit, so the two backends stay in step.
+        //
+        // RELOCATION, not destruction, is the hazard this must not step into —
+        // B-2026-08-26-21's five-bodies-for-two-values, and B-2026-09-15-33's
+        // subject. The guard is already at the site: `expr_mentions_name_deep`
+        // makes the swap idiom (`a[i] = a[j]`) skip this whole path, so a
+        // relocated value never reaches these arms. Measured below as
+        // unchanged.
         //
         // Both synthesizers carry their own admit gates and answer `None` when
         // the element owns no heap, which is why they are consulted BEFORE the
@@ -21897,16 +21959,38 @@ impl<'ctx> super::Codegen<'ctx> {
                 else {
                     return;
                 };
-                let Some(f) = self.synthesize_tuple_drop_fn_te(agg_ty, &elem_tes) else {
-                    return;
+                // Both walkers self-gate and answer `None` when there is
+                // nothing to do, so both are consulted BEFORE the element
+                // pointer is lowered — lowering emits a bounds check and a GEP,
+                // and a decline afterwards would leave that IR behind with no
+                // user. Bodies are asked for separately from memory precisely
+                // so a MEMORY decline (a tuple owning no heap, e.g.
+                // `(D, i64)` where `D`'s body prints but the tuple's own
+                // synthesizer finds no buffer) no longer skips the bodies: the
+                // old code returned on that `None` and that is one of the two
+                // ways this shape stayed silent.
+                let bodies_fn = if run_bodies {
+                    self.emit_tuple_elem_user_drop_bodies_fn(agg_ty, &elem_tes)
+                } else {
+                    None
                 };
+                let mem_fn = self.synthesize_tuple_drop_fn_te(agg_ty, &elem_tes);
+                if bodies_fn.is_none() && mem_fn.is_none() {
+                    return;
+                }
                 let container = container.clone();
                 let Some(elem_ptr) =
                     self.lower_displaced_elem_ptr(&container, container_is_array, index)
                 else {
                     return;
                 };
-                self.builder.build_call(f, &[elem_ptr.into()], "").unwrap();
+                // Bodies before memory, matching the named-struct arm below.
+                if let Some(bf) = bodies_fn {
+                    self.builder.build_call(bf, &[elem_ptr.into()], "").unwrap();
+                }
+                if let Some(f) = mem_fn {
+                    self.builder.build_call(f, &[elem_ptr.into()], "").unwrap();
+                }
                 return;
             }
         }
@@ -21937,20 +22021,70 @@ impl<'ctx> super::Codegen<'ctx> {
                 // Taking `n` off the LLVM array type rather than const-folding
                 // the `size` expression keeps this in step with whatever the
                 // layout actually built.
-                let Some(f) =
-                    self.synthesize_array_drop_fn_te(at.get_element_type(), &inner_te, at.len())
-                else {
-                    return;
+                //
+                // B-2026-09-16-2 — bodies alongside memory, asked separately
+                // for the reason the tuple arm above gives.
+                let bodies_fn = if run_bodies {
+                    self.emit_array_elem_user_drop_bodies_fn(
+                        at.get_element_type(),
+                        &inner_te,
+                        at.len(),
+                    )
+                } else {
+                    None
                 };
+                let mem_fn =
+                    self.synthesize_array_drop_fn_te(at.get_element_type(), &inner_te, at.len());
+                if bodies_fn.is_none() && mem_fn.is_none() {
+                    return;
+                }
                 let container = container.clone();
                 let Some(elem_ptr) =
                     self.lower_displaced_elem_ptr(&container, container_is_array, index)
                 else {
                     return;
                 };
-                self.builder.build_call(f, &[elem_ptr.into()], "").unwrap();
+                if let Some(bf) = bodies_fn {
+                    self.builder.build_call(bf, &[elem_ptr.into()], "").unwrap();
+                }
+                if let Some(f) = mem_fn {
+                    self.builder.build_call(f, &[elem_ptr.into()], "").unwrap();
+                }
                 return;
             }
+        }
+        // B-2026-09-16-2 — a `Vec`/`VecDeque` ELEMENT (`Vec[Vec[D]]`,
+        // `Array[Vec[D], N]`, `Vec[VecDeque[D]]`). The Path arm below admits
+        // only a head in `struct_types` or `enum_layouts`, and `Vec` is in
+        // neither, so this shape returned there — while the interpreter's new
+        // displacement arm DOES reach it, because a `Vec` element is a
+        // `Value::Array` at runtime exactly as a fixed array is. Measured as a
+        // run-vs-build divergence the moment the tuple and nested-array arms
+        // above started firing, which is what put this arm in the same commit
+        // rather than in a follow-up.
+        //
+        // BODIES ONLY here, and that is measured rather than assumed: valgrind
+        // on `Vec[Vec[D]]` with `v[0] = [mkd(3)]` at `-O0` reports 17 allocs /
+        // 17 frees and 0 errors, so the displaced inner buffer is already freed
+        // on another channel. Adding a memory call here would double-free it.
+        //
+        // `emit_nested_vec_elem_bodies_fn` takes the INNER element type and
+        // emits a walker whose parameter is a pointer to the vec HEADER —
+        // which the displaced element slot is — so this is a call, not new
+        // machinery. It recurses, so `Vec[Vec[Vec[D]]]` is covered too.
+        if let Some(inner) = crate::codegen::helpers::vec_inner_type_expr(&elem_te) {
+            if run_bodies {
+                if let Some(w) = self.emit_nested_vec_elem_bodies_fn(&inner) {
+                    let container = container.clone();
+                    let Some(elem_ptr) =
+                        self.lower_displaced_elem_ptr(&container, container_is_array, index)
+                    else {
+                        return;
+                    };
+                    self.builder.build_call(w, &[elem_ptr.into()], "").unwrap();
+                }
+            }
+            return;
         }
         let TypeKind::Path(p) = &elem_te.kind else {
             return;
