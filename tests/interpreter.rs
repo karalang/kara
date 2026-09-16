@@ -45088,6 +45088,53 @@ fn test_field_rooted_index_assign_displaced_elem_bodies() {
     );
 }
 
+/// B-2026-09-15-28 — a `Vec[T]`-typed struct FIELD assigned a fresh container
+/// runs the DISPLACED elements' `Drop` bodies, not only the surviving ones.
+///
+/// `h.v = [..]` ran the new generation's bodies at scope exit and none for the
+/// generation it displaced, so this printed `dD3 dD4 mid end` where the
+/// IDENTIFIER position (`v = [..]`, correct since B-2026-09-14-23) printed all
+/// four. Both backends were silent here rather than divergent — the
+/// interpreter's displaced-field `match` handled `Value::Struct` and
+/// `Value::EnumVariant` and let a `Value::Array` fall through, while codegen's
+/// `emit_displaced_field_bodies` gate keyed on the field's head type name and
+/// so admitted only a struct or enum field. Both halves were fixed in one
+/// commit: moving one alone converts an agreed gap into a run-vs-build
+/// divergence, which is what B-2026-09-15-23 measured when a sibling was tried
+/// codegen-first.
+///
+/// The assertion is the IDENTIFIER control's string verbatim — the whole point
+/// is that the two positions now agree, ordering included.
+#[test]
+fn test_field_assign_runs_the_displaced_containers_element_bodies() {
+    const SRC: &str = "struct D { id: i64, s: String }\n\
+         impl Drop for D { fn drop(mut ref self) { println(f\"dD{self.id}\") } }\n\
+         fn mkd(n: i64) -> D { return D { id: n, s: f\"heap-{n}\" }; }\n";
+    // The FIELD position — the row's own shape.
+    assert_eq!(
+        run(&format!(
+            "{SRC}struct H {{ v: Vec[D] }}\n\
+             fn main() {{\n\
+             \x20   let mut h: H = H {{ v: [mkd(1), mkd(2)] }};\n\
+             \x20   h.v = [mkd(3), mkd(4)];\n\
+             \x20   println(\"mid\");\n\
+             }}\n"
+        )),
+        "dD1\ndD2\ndD3\ndD4\nmid\n"
+    );
+    // The IDENTIFIER position, unchanged by this fix and the oracle for it.
+    assert_eq!(
+        run(&format!(
+            "{SRC}fn main() {{\n\
+             \x20   let mut v: Vec[D] = [mkd(1), mkd(2)];\n\
+             \x20   v = [mkd(3), mkd(4)];\n\
+             \x20   println(\"mid\");\n\
+             }}\n"
+        )),
+        "dD1\ndD2\ndD3\ndD4\nmid\n"
+    );
+}
+
 /// B-2026-08-01-23 — interpreter twin of `tests/codegen.rs`'s
 /// `e2e_nested_container_elem_bodies`, same source and expected string.
 #[test]

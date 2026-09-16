@@ -26626,10 +26626,28 @@ fn main() {
         }
         // AGREED SILENCES, measured on both backends and NOT this row's shape:
         // a struct FIELD assigned a fresh container, and a displaced `Map`.
-        // Both were among the row's NOT MEASURED items; both answer "gap, not
-        // divergence", so they are pinned here rather than fixed, and a later
+        // Both were among the row's NOT MEASURED items; both answered "gap, not
+        // divergence", so they were pinned here rather than fixed, and a later
         // widening that starts printing their displaced bodies on one backend
         // only has to move this assertion deliberately.
+        //
+        // B-2026-09-15-28 MOVED THE FIRST OF THEM, deliberately and on the
+        // condition this comment sets. The struct-FIELD silence is fixed: the
+        // displaced elements' bodies now run, so the expectation below is the
+        // same string the IDENTIFIER position asserts above. Crucially it moved
+        // on BOTH backends in one commit — codegen's
+        // `emit_displaced_field_bodies` head-name gate and the interpreter's
+        // displaced-field `match`, whose struct and enum arms let a
+        // `Value::Array` fall through — which is precisely the "on one backend
+        // only" outcome this pin exists to catch. Paired fixtures assert the
+        // shared string: `e2e_field_assign_runs_the_displaced_containers_element_bodies`
+        // and `test_field_assign_runs_the_displaced_containers_element_bodies`.
+        //
+        // The displaced `Map` silence below is UNMOVED and still pinned: the
+        // fix resolves a field's element type through `vec_inner_type_expr`,
+        // which answers only for `Vec`/`VecDeque`, so a `Map` field never
+        // reaches the new arm. That this assertion still passes is the evidence
+        // the widening is scoped rather than blanket.
         assert_eq!(
             run_program(&format!(
                 "{H}struct Hold {{ mut v: Vec[D] }}\n\
@@ -26641,8 +26659,8 @@ fn main() {
                  }}\n"
             ))
             .as_deref(),
-            Some("dD3\ndD4\nmid\nend\n"),
-            "struct-field target: displaced bodies are an AGREED silence on both backends"
+            Some("dD1\ndD2\ndD3\ndD4\nmid\nend\n"),
+            "struct-field target: displaced bodies now run on both backends (B-2026-09-15-28)"
         );
     }
 
@@ -85584,6 +85602,60 @@ fn main() {
     /// The no-heap `F` cell isolates the BODY half with nothing to leak, so a
     /// fix that only closed the memory half fails here while the sanitizer
     /// suite stays green.
+    /// B-2026-09-15-28 — a `Vec[T]`-typed struct FIELD assigned a fresh
+    /// container runs the DISPLACED elements' `Drop` bodies.
+    ///
+    /// `emit_displaced_field_bodies` keys on the field's HEAD type name, so a
+    /// container field answered `"Vec"` — no declared struct, no enum layout —
+    /// and the gate returned before any bodies ran. The surviving generation
+    /// fired at scope exit and the displaced one never did, so this printed
+    /// `dD3 dD4 mid` where the IDENTIFIER position (correct since
+    /// B-2026-09-14-23) printed all four.
+    ///
+    /// Both backends were silent rather than divergent — the interpreter's
+    /// displaced-field `match` let a `Value::Array` fall through its struct and
+    /// enum arms — so both halves landed in ONE commit. Moving one alone turns
+    /// an agreed gap into a run-vs-build divergence, which is what
+    /// B-2026-09-15-23 measured when a sibling was tried codegen-first; the
+    /// interpreter twin is `test_field_assign_runs_the_displaced_containers_element_bodies`
+    /// and asserts this same string.
+    ///
+    /// BODIES ONLY: the displaced buffer's memory is already reclaimed by
+    /// `compile_field_store`'s old-value drop, which is why this row measured
+    /// valgrind-clean before the fix and still does after (`All heap blocks
+    /// were freed`, 0 errors).
+    #[test]
+    fn e2e_field_assign_runs_the_displaced_containers_element_bodies() {
+        const H: &str = "struct D { id: i64, s: String }\n\
+             impl Drop for D { fn drop(mut ref self) { println(f\"dD{self.id}\") } }\n\
+             fn mkd(n: i64) -> D { return D { id: n, s: f\"heap-{n}\" }; }\n";
+        // The FIELD position — the row's shape.
+        assert_eq!(
+            run_program(&format!(
+                "{H}struct H2 {{ v: Vec[D] }}\n\
+                 fn main() {{\n\
+                 \x20   let mut h: H2 = H2 {{ v: [mkd(1), mkd(2)] }};\n\
+                 \x20   h.v = [mkd(3), mkd(4)];\n\
+                 \x20   println(\"mid\");\n\
+                 }}"
+            ))
+            .as_deref(),
+            Some("dD1\ndD2\ndD3\ndD4\nmid\n")
+        );
+        // THE ORACLE — the identifier position, correct before and after.
+        assert_eq!(
+            run_program(&format!(
+                "{H}fn main() {{\n\
+                 \x20   let mut v: Vec[D] = [mkd(1), mkd(2)];\n\
+                 \x20   v = [mkd(3), mkd(4)];\n\
+                 \x20   println(\"mid\");\n\
+                 }}"
+            ))
+            .as_deref(),
+            Some("dD1\ndD2\ndD3\ndD4\nmid\n")
+        );
+    }
+
     #[test]
     fn e2e_array_index_store_runs_the_displaced_elements_drop_body() {
         const H: &str = "struct D { s: String, id: i64 }\n\

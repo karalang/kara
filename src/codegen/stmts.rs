@@ -22163,7 +22163,64 @@ impl<'ctx> super::Codegen<'ctx> {
                 .enum_layouts
                 .get(&ftn)
                 .is_some_and(|l| !l.is_shared);
-        if !is_struct_field && !is_enum_field {
+        // B-2026-09-15-28 — a `Vec`/`VecDeque` FIELD displaced by an assign
+        // (`h.v = [mkd(3), mkd(4)]`). `ftn` is only the field's HEAD type name,
+        // so a container field answers `"Vec"` -- no declared struct, no enum
+        // layout -- and this gate returned before any bodies ran. The result
+        // was that the SURVIVING elements fired at scope exit and the DISPLACED
+        // generation's bodies never did, identically on every surface (the
+        // memory side is already correct: valgrind reports all blocks freed,
+        // because `compile_field_store`'s old-value drop reclaims the buffer).
+        //
+        // The interpreter's twin gate had the same hole -- its displaced-field
+        // `match` handled `Value::Struct` and `Value::EnumVariant` and dropped
+        // a `Value::Array` on the floor -- which is why the two backends AGREED
+        // here. Both halves land in one commit for that reason: moving one
+        // alone converts an agreed gap into a run-vs-build divergence, which is
+        // the outcome B-2026-09-15-23 measured when a sibling fix was tried
+        // codegen-first.
+        let container_elem_te = if is_struct_field || is_enum_field {
+            None
+        } else {
+            self.type_decls
+                .struct_field_type_exprs
+                .get(&base_tn)
+                .and_then(|v| v.get(idx))
+                .and_then(super::helpers::vec_inner_type_expr)
+        };
+        if !is_struct_field && !is_enum_field && container_elem_te.is_none() {
+            return;
+        }
+        // B-2026-09-15-28 — the container field's emission, ahead of the
+        // head-name `type_runs_user_drop` check below, which answers for
+        // `"Vec"` (not a declared type) and would return before any bodies ran.
+        //
+        // `emit_nested_vec_elem_bodies_fn` is the element-bodies walker the Vec
+        // LOCAL displacement already uses (B-2026-09-14-23's arm), and it
+        // recurses through nested containers, so a `Vec[Vec[D]]` field is
+        // covered by the same call. BODIES ONLY: the displaced buffer's memory
+        // is already reclaimed by `compile_field_store`'s old-value drop, which
+        // is why this row measures valgrind-clean, so emitting a free here
+        // would double-free what that path owns.
+        //
+        // Runs before the store, while the displaced elements are still live in
+        // the field slot -- the bodies-then-memory order every sibling keeps.
+        if let Some(elem_te) = container_elem_te {
+            if let Some(w) = self.emit_nested_vec_elem_bodies_fn(&elem_te) {
+                let Some(fp) = self
+                    .builder
+                    .build_struct_gep(
+                        self.llvm_type_for_name(&base_tn).into_struct_type(),
+                        base_ptr,
+                        idx as u32,
+                        "dispf.container.p",
+                    )
+                    .ok()
+                else {
+                    return;
+                };
+                self.builder.build_call(w, &[fp.into()], "").unwrap();
+            }
             return;
         }
         if !self.type_runs_user_drop(&ftn, &mut Vec::new()) {

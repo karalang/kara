@@ -8905,6 +8905,36 @@ impl<'a> super::Interpreter<'a> {
                                         }
                                         self.run_enum_payload_user_drops_value(&old);
                                     }
+                                    // B-2026-09-15-28 — a CONTAINER old value
+                                    // (`h.v = [mkd(3), mkd(4)]` over a `Vec[D]`
+                                    // field). The two arms above take a struct
+                                    // and a user enum, so a displaced
+                                    // `Value::Array` fell to the `_` below and
+                                    // ran nothing: the SURVIVING elements' bodies
+                                    // fired at scope exit and the DISPLACED
+                                    // generation's never did, on every surface.
+                                    //
+                                    // Codegen's twin gate
+                                    // (`emit_displaced_field_bodies`, which keys
+                                    // on the field's HEAD type name and so admits
+                                    // only a struct or enum field) had the same
+                                    // hole, which is why the two backends AGREED
+                                    // here rather than diverging -- and why both
+                                    // halves land in one commit: moving one alone
+                                    // turns an agreed gap into a run-vs-build
+                                    // divergence, the outcome B-2026-09-15-23
+                                    // measured when a sibling was tried
+                                    // codegen-first.
+                                    //
+                                    // `run_discarded_value_user_drops` is the
+                                    // value-driven walker with a `Value::Array`
+                                    // arm that recurses, so a nested container
+                                    // element rides the same call. Bodies only --
+                                    // interp values are GC'd, so there is no
+                                    // memory channel here to disturb.
+                                    Value::Array(_) => {
+                                        self.run_discarded_value_user_drops(old.clone());
+                                    }
                                     _ => {}
                                 }
                             }
