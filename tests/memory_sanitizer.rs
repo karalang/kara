@@ -91497,6 +91497,129 @@ fn main() {
         );
     }
 
+    /// B-2026-09-16-27 — a NESTED-STRUCT field moved out of a match arm's
+    /// payload binding, or out of a `for` loop's aggregate element, double-freed
+    /// its inner buffer: `free(): double free detected in tcache 2` / valgrind
+    /// `Invalid free() … 0 bytes inside a block of size 24 free'd`, at BOTH opt
+    /// levels and with auto-par on and off, against a correct `--interp`.
+    ///
+    /// THE ROW'S OWN LEAD IS REFUTED BY THE MINIMAL CASE, and that is worth
+    /// recording because it names B-2026-09-15-16's defensive copy as the thing
+    /// that fails to reach a nested field. It reaches it: instrumenting
+    /// `uam_defensive_copy` shows the struct arm firing on `Out` and
+    /// `deep_copy_struct_heap_fields_in_place` recursing into `In`. The minimal
+    /// reproducer has no use-after-move at all —
+    /// `let w = Wn.Full(Out { i: In { s: … } }); nlen(w)` — so that copy is not
+    /// on the path. The `arm` cell here is that reproducer.
+    ///
+    /// THE TWO OWNERS, read straight off the IR. `nlen`'s arm emits
+    /// `call __karac_drop_struct_In(%i8)` and `call __karac_drop_Wn(%w)` ten
+    /// bytes apart, and the disarm between them writes `store i64 0` through
+    /// `%q` — a SEPARATE alloca filled by `extractvalue` from a register load of
+    /// `%w`. `suppress_struct_field_move_by_name` GEPs the root BINDING's slot,
+    /// and for these two roots that slot is a bit-copy of storage owned
+    /// elsewhere, so the zeroing lands where nobody frees through and `%w`'s
+    /// payload stays armed.
+    ///
+    /// WHY THE FLAT SHAPE WAS ALREADY CLEAN, which is what hid this: a
+    /// `String` field of the same binding IS copied — by
+    /// `deep_copy_owned_struct_param_field_move`, whose `is_param_field` gate
+    /// admits `borrowed_agg_payload_struct_vars` explicitly. That helper is only
+    /// ever reached from the Vec/String `let` path, so a struct destination
+    /// never saw it. The repair is the shape symmetry, not a new policy.
+    ///
+    /// THE TWO ROOTS DELIBERATELY NOT ADMITTED are the `param` cell (a by-value
+    /// struct param, entry-copied, so its own slot IS what its drop reads and
+    /// the disarm reaches the owner) and a `shared` enum payload. Both were
+    /// measured clean before the fix and would LEAK if copied here.
+    ///
+    /// `push`, `ctor` and `call` are controls the row listed as NOT MEASURED and
+    /// that turn out to have been correct throughout — the `Vec.push` and
+    /// variant-constructor sinks reached for the same field, and the
+    /// call-argument spelling. `ctorsrc`/`src` pin B-2026-09-15-16's own shape
+    /// (the source stays readable after the move) so this fix cannot regress it.
+    #[test]
+    fn asan_nested_struct_field_moved_off_a_bitcopy_root_is_freed_once() {
+        assert_clean_asan_run(
+            r#"
+struct In { s: String }
+struct Out { i: In }
+struct A3 { s: String }
+struct B3 { a: A3 }
+struct C3 { b: B3 }
+
+enum Wn { Full(Out), Empty }
+enum W3 { Full(C3), Empty }
+enum Bx { One(In), None }
+
+fn arm_move(w: Wn) -> i64 {
+    match w { Wn.Full(q) => { let i = q.i; return i.s.len(); } Wn.Empty => { return 0; } }
+}
+fn arm_move_d3(w: W3) -> i64 {
+    match w { W3.Full(q) => { let b = q.b; let a = b.a; return a.s.len(); } W3.Empty => { return 0; } }
+}
+fn arm_push(w: Wn) -> i64 {
+    match w {
+        Wn.Full(q) => { let mut v: Vec[In] = []; v.push(q.i); return v[0].s.len(); }
+        Wn.Empty => { return 0; }
+    }
+}
+fn arm_ctor(w: Wn) -> i64 {
+    match w {
+        Wn.Full(q) => {
+            let b = Bx.One(q.i);
+            match b { Bx.One(k) => { return k.s.len(); } Bx.None => { return 0; } }
+        }
+        Wn.Empty => { return 0; }
+    }
+}
+fn ilen(i: In) -> i64 { return i.s.len(); }
+fn arm_call(w: Wn) -> i64 {
+    match w { Wn.Full(q) => { return ilen(q.i); } Wn.Empty => { return 0; } }
+}
+fn param_move(o: Out) -> i64 { let i = o.i; return i.s.len(); }
+
+fn main() {
+    println(f"arm {arm_move(Wn.Full(Out { i: In { s: f"b1627-arm-aaaaaaaaaaaa" } }))}");
+    println(f"d3 {arm_move_d3(W3.Full(C3 { b: B3 { a: A3 { s: f"b1627-d3-bbbbbbbbbbbbb" } } }))}");
+    println(f"push {arm_push(Wn.Full(Out { i: In { s: f"b1627-push-dddddddddddd" } }))}");
+    println(f"ctor {arm_ctor(Wn.Full(Out { i: In { s: f"b1627-ctor-eeeeeeeeeeee" } }))}");
+
+    let mut v: Vec[Out] = [];
+    v.push(Out { i: In { s: f"b1627-loop-ffffffffffff" } });
+    v.push(Out { i: In { s: f"b1627-loop-gggggggggggg" } });
+    let mut total = 0;
+    for e in v {
+        let i = e.i;
+        total = total + i.s.len();
+    }
+    println(f"loop {total}");
+
+    println(f"param {param_move(Out { i: In { s: f"b1627-param-hhhhhhhhhhh" } })}");
+
+    println(f"call {arm_call(Wn.Full(Out { i: In { s: f"b1627-call-jjjjjjjjjjjj" } }))}");
+
+    let o = Out { i: In { s: f"b1627-live-iiiiiiiiiiii" } };
+    { let w = Wn.Full(o); println(f"ctorsrc {arm_move(w)}"); }
+    let k = o.i;
+    println(f"src {k.s}");
+}
+"#,
+            &[
+                "arm 22",
+                "d3 22",
+                "push 23",
+                "ctor 23",
+                "loop 46",
+                "param 23",
+                "call 23",
+                "ctorsrc 23",
+                "src b1627-live-iiiiiiiiiiii",
+            ],
+            "asan_nested_struct_field_moved_off_a_bitcopy_root_is_freed_once",
+        );
+    }
+
     /// B-2026-09-14-25 — an `Array[D, N]` enum payload whose element carries
     /// BOTH heap and a user `Drop` body double-freed its element buffers on a
     /// consuming arm: `exit 134`, 2 invalid frees, `15 allocs / 17 frees`, at

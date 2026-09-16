@@ -3506,6 +3506,80 @@ impl<'ctx> super::Codegen<'ctx> {
         }
     }
 
+    /// B-2026-09-16-27 — the NESTED-STRUCT sibling of
+    /// [`Self::deep_copy_owned_struct_param_field_move`], for the two retaining
+    /// roots whose storage the SOURCE DISARM cannot reach.
+    ///
+    /// `let i = q.i` over `struct Out { i: In }` / `struct In { s: String }`
+    /// binds a bit-copy of `q`'s nested-struct field and registers a
+    /// `__karac_drop_struct_In` for it. The disarm that is supposed to stand the
+    /// source down — `suppress_struct_field_move_by_name` — GEPs the ROOT
+    /// BINDING'S OWN SLOT, and for these two roots that slot is itself a copy of
+    /// storage owned somewhere else:
+    ///
+    ///   * a match arm's payload binding over a by-value enum
+    ///     (`borrowed_agg_payload_struct_vars`) is a bit-copy of the enum's
+    ///     payload words; the enum's `__karac_drop_<E>` reads the ENUM's slot;
+    ///   * a `for` loop's aggregate element (`for_loop_owned_agg_vars`) is a
+    ///     bit-copy of a Vec element; the container's per-element drain reads
+    ///     the BUFFER.
+    ///
+    /// So the zeroing lands on a slot nobody frees through, both owners keep a
+    /// live `{ptr,len,cap}` into one buffer, and both free it. Measured at
+    /// `KARAC_OPT_LEVEL=0 KARAC_AUTO_PAR=0`, `--interp` correct on both:
+    /// `match w { Wn.Full(q) => { let i = q.i; … } }` aborts with
+    /// `free(): double free detected in tcache 2`, and the `for e in v` spelling
+    /// gives valgrind `Invalid free() … 0 bytes inside a block of size 24
+    /// free'd`.
+    ///
+    /// COPYING, not a wider disarm, for the reason
+    /// `deep_copy_owned_struct_param_field_move`'s doc records at length: the
+    /// owner is still live and may be read again, so its buffer has to stay
+    /// intact, and the destination is the side that needs one of its own. That
+    /// is also exactly what the Vec/String field of these SAME two roots already
+    /// does — the third clause of that helper's `is_param_field` gate admits
+    /// both of them — so this is the shape symmetry, not a new policy: a
+    /// `String` field moved out of `q` is copied today and a `struct` field
+    /// carrying that same `String` one level down is not.
+    ///
+    /// The two roots that are NOT admitted here are measured clean and would
+    /// LEAK if they were: a by-value struct param (`owned_struct_params`) is
+    /// entry-copied, so its slot IS what its drop reads and the disarm reaches
+    /// the owner; a `shared` enum payload view drops through refcounts. Both
+    /// print correctly under valgrind with no invalid free.
+    fn deep_copy_aliased_root_struct_field_move(
+        &mut self,
+        value: &Expr,
+        alloca: PointerValue<'ctx>,
+        struct_name: &str,
+    ) {
+        let ExprKind::FieldAccess { object, .. } = &value.kind else {
+            return;
+        };
+        let ExprKind::Identifier(root) = &object.kind else {
+            return;
+        };
+        if !self
+            .borrow_vars
+            .for_loop_owned_agg_vars
+            .contains(root.as_str())
+            && !self
+                .borrow_vars
+                .borrowed_agg_payload_struct_vars
+                .contains(root.as_str())
+        {
+            return;
+        }
+        // Clone-on-extract mode, the same flag `uam_defensive_copy`'s user-struct
+        // arm and the for-loop whole-element move both raise: this copy gets its
+        // own cleanup, so a bare `shared` field must be rc-INC'd or the clone
+        // co-owns the box without a count.
+        let saved = self.drop_rc.deep_copy_rc_inc_bare_shared;
+        self.drop_rc.deep_copy_rc_inc_bare_shared = true;
+        self.deep_copy_struct_heap_fields_in_place(alloca, struct_name);
+        self.drop_rc.deep_copy_rc_inc_bare_shared = saved;
+    }
+
     /// Emit the ARC setter store for an `Option[shared T]` lvalue: save the
     /// old inner pointer, store the new Option value at `dest_ptr`, retain the
     /// new inner (unless the RHS already carries a +1 transfer), then release
@@ -11548,6 +11622,18 @@ impl<'ctx> super::Codegen<'ctx> {
                                 && !self.type_decls.shared_types.contains_key(&struct_name)
                             {
                                 self.deep_copy_for_loop_agg_element_move(
+                                    value,
+                                    alloca,
+                                    &struct_name,
+                                );
+                                // B-2026-09-16-27 — the `let x = a.field` shape
+                                // of the same hazard, for a NESTED-STRUCT field.
+                                // The line above covers the whole-element move
+                                // and the struct-literal spelling; a bare field
+                                // projection off a root whose slot is a bit-copy
+                                // reached neither, and nothing else copies a
+                                // struct destination.
+                                self.deep_copy_aliased_root_struct_field_move(
                                     value,
                                     alloca,
                                     &struct_name,
