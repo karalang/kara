@@ -94,13 +94,13 @@ distinguish "bugs flattening" from "we stopped writing them down."
 |---|---|
 | run-vs-build | 414 |
 | miscompile | 413 |
-| leak | 359 |
+| leak | 360 |
 | double-free | 235 |
 | missing-feature | 199 |
 | codegen-gap | 178 |
 | diagnostics | 126 |
+| other | 115 |
 | perf | 114 |
-| other | 114 |
 | false-positive | 107 |
 | soundness | 95 |
 | crash | 82 |
@@ -110,8 +110,8 @@ distinguish "bugs flattening" from "we stopped writing them down."
 
 | surface | total |
 |---|---|
-| codegen | 1782 |
-| interp | 449 |
+| codegen | 1784 |
+| interp | 450 |
 | typecheck | 301 |
 | other | 91 |
 | ownership | 75 |
@@ -186,13 +186,13 @@ _Generated from `bug-ledger.jsonl` by `scripts/bug-curve.py` (2026-05-20 → 202
 | B-2026-09-15-28 | 2026-09-15 | interp+codegen | medium | A `Vec[T]`-TYPED STRUCT FIELD ASSIGNED A FRESH CONTAINER LOSES THE DISPLACED ELEMENTS' `Drop` BODIES -- `h.v = [..]` prints the surviving elements' bodies and none for the displaced ones on every surface, the FIELD-position analogue of B-2026-09-14-23; agreed on both backends rather than divergent, and nothing leaks | — |
 | B-2026-09-15-29 | 2026-09-15 | codegen | low | THE `if let` SIBLING OF B-2026-09-02-31 STILL LEAKS ITS MOVED-OUT PAYLOAD -- `(if let Ve.A(s) = mkVe(i) { s } else { .. }).len()` in a nested expression position loses 310 B over 20 evaluations at -O0, unchanged by that row's fix, because the escaping-value discriminator it added has exactly one consuming read site and that site is `compile_match` | — |
 | B-2026-09-15-30 | 2026-09-15 | codegen | low | A MONOMORPH BODY NEVER INSTALLS `discarded_branch_spans`, so every branch inside a generic instantiation reads as NON-DISCARDED -- the sibling of the gap B-2026-09-02-31 fixed for its own span set, left alone there because it is a behaviour change that row did not measure | — |
-| B-2026-09-15-31 | 2026-09-15 | codegen | low | AN INDEX-ASSIGN OVER A CONTAINER OF TUPLES LEAKS THE DISPLACED TUPLE'S HEAP ELEMENTS, ON BOTH THE `Array` AND THE `Vec` LEG -- 10 B in 1 block at `-O0` for a `(String, i64)` element, with both backends agreeing (a tuple has no `Drop` body), so it is NOT the Array-vs-Vec asymmetry B-2026-09-14-29 rests on and could not be folded into it | — |
-| B-2026-09-15-32 | 2026-09-15 | codegen+interp | medium | A NESTED `Array[Array[T, N], M]` INDEX-ASSIGN LOSES THE DISPLACED INNER ARRAY'S ELEMENT `Drop` BODIES AND LEAKS THEIR HEAP, ON BOTH BACKENDS -- `a[0] = [D { .. }]` prints no `dD1` under `--interp` OR compiled and loses 10 B in 1 block at `-O0`; an AGREED gap, so fixing only codegen would manufacture a NEW divergence, which is why B-2026-09-14-29's fix declines this shape | — |
 | B-2026-09-15-33 | 2026-09-15 | codegen+interp | medium | AN INDEX-ASSIGN WHOSE RHS IS A NAMED LOCAL RUNS THE DISPLACED ELEMENT'S `Drop` BODY UNDER `--interp` AND ON NO COMPILED SURFACE -- `a[0] = b` diverges on the `Array` AND `Vec` legs alike while the fresh-literal RHS agrees, because `store_destroys_displaced` classifies an identifier RHS as a RELOCATION on purpose (B-2026-08-26-21); the open question is whether `a[0] = b` is a relocation at all, not why the call is missing | — |
 | B-2026-09-15-34 | 2026-09-15 | interp | medium | A SHADOWED BINDING REBOUND THROUGH A CALL RUNS ITS USER `Drop` BODY TWICE IN THE INTERPRETER -- `let q = mk(15); let q = idr(q);` prints `dR15 dR15` under `karac run --interp` against one body on both compiled backends; needs BOTH the shadowing and the call, and two controls show each is necessary | — |
 | B-2026-09-15-35 | 2026-09-15 | codegen+interp | low | A STRUCT FIELD DECLARED AS A BARE GENERIC PARAM BOUND TO A CONTAINER LOSES ITS ELEMENTS' `Drop` BODIES ON ALL FOUR SURFACES -- `G[T] { a: T }` at `T = Array[R, 2]` and at `T = Vec[R]` both print nothing, where the SAME parameter bound to a plain Drop struct fires correctly (B-2026-08-02-14) and the same containers spelled CONCRETELY in the field both fire, so the erasure is the variable and not the container. | — |
 | B-2026-09-15-36 | 2026-09-15 | other | medium | THE CODEGEN E2E HARNESS IGNORES TYPECHECK ERRORS, so a fixture cell whose program DOES NOT COMPILE runs on the interpreter anyway and passes green whenever its expected output happens to match -- which is exactly the shape of the ~hundreds of "agreed silence" cells that expect only a trailing marker line. | — |
 | B-2026-09-16-1 | 2026-09-16 | codegen | medium | `s[a..b]` STILL REACHES SSO CONSTRUCTION THROUGH AN OPAQUE CALL -- `karac_string_slice_into`, the slice-syntax sibling of the `karac_string_try_inline_into` that B-2026-09-15-13 just removed from `String.substring`. The `lexlike` rail is unchanged at 215ms against a 176ms KARAC_SSO=0 baseline (+23%) while `substr`, which did identical work through the other spelling, went 217ms -> 22ms in 9d3ceb9. Same opaque-call shape, same fix available, one extra obstacle: this entrypoint also performs the UTF-8 boundary validation, which codegen already emits inline for `substring` via `emit_substring_boundary_checks`. | — |
+| B-2026-09-16-2 | 2026-09-16 | codegen+interp | medium | THE DISPLACED ELEMENT'S USER `Drop` BODY NEVER RUNS FOR A TUPLE OR NESTED-ARRAY ELEMENT SHAPE, ON EITHER BACKEND -- `a[0] = <new>` over `Array[(D, i64), N]` or `Array[Array[D, 1], M]` prints nothing for the displaced value on all four surfaces; the split-out body remainder of B-2026-09-15-31 and -15-32, resting on a DELIBERATE invariant in each backend (`value_runs_user_drop` classifies a bare Tuple/Array as false at top level to keep the container walkers the sole firers), so a one-sided fix would convert an agreed gap into a divergence | — |
+| B-2026-09-16-3 | 2026-09-16 | codegen | low | THE NESTED STORE `d[i][j] = x` LEAKS THE DISPLACED TUPLE'S HEAP -- 5 B in 1 block at `-O0` over `Vec[Vec[(String, i64)]]`, and the one-line fix the shape invites (a tuple arm in `emit_elem_store_releasing_displaced`) is a DOUBLE FREE, because that helper also runs for the single-level store which 6c0f802 already releases through the drop emitter | — |
 
 ### Relocated
 
@@ -2610,6 +2610,8 @@ _Generated from `bug-ledger.jsonl` by `scripts/bug-curve.py` (2026-05-20 → 202
 | B-2026-09-15-22 | codegen | medium | AN `Array[T, N]` WHOSE ELEMENT IS A `VecDeque` BUILT FROM A NESTED `[..]` LITERAL FAULTS AT SCOPE-EXIT DROP ON EVERY COMPILED SURFACE -- `let v: Arra… | 37ee5b1 |
 | B-2026-09-15-26 | interp+codegen | medium | AN `Array[T, N]`-TYPED STRUCT FIELD NEVER RUNS ITS ELEMENTS' `Drop` BODIES -- `struct H { a: Array[D, 2] }` prints nothing at scope exit where the sa… | 645ea3b |
 | B-2026-09-15-27 | codegen | medium | A `Vec[Array[T, N]]`-TYPED STRUCT FIELD LEAKS ITS ELEMENTS' HEAP -- 34 bytes in 2 blocks definitely lost on a plain `let h: H` with no reassignment,… | 645ea3b |
+| B-2026-09-15-31 | codegen | low | AN INDEX-ASSIGN OVER A CONTAINER OF TUPLES LEAKS THE DISPLACED TUPLE'S HEAP ELEMENTS, ON BOTH THE `Array` AND THE `Vec` LEG -- 10 B in 1 block at `-O… | 6c0f802 |
+| B-2026-09-15-32 | codegen+interp | medium | A NESTED `Array[Array[T, N], M]` INDEX-ASSIGN LOSES THE DISPLACED INNER ARRAY'S ELEMENT `Drop` BODIES AND LEAKS THEIR HEAP, ON BOTH BACKENDS -- `a[0]… | 6c0f802 |
 
 </details>
 
