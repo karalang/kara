@@ -18926,6 +18926,90 @@ done
         assert_eq!(out, "in\ndR1\none10\nin\ndR2\ntwo10\nin\nmoved\ndR3\nthree10\nin\nmoved\ndR4\nfour10\nin\ndR5\nfive10\nin\nmoved\ndR6\nsix10\nend\n");
     }
 
+    /// B-2026-09-16-17 + B-2026-09-06-21 — the COMPILED twin of
+    /// `test_enum_payload_drops_reverse_and_readonly_arm_bindings_are_borrows`,
+    /// byte-identical source and byte-identical expectation. That identity is
+    /// the point: these two defects were an ordering question, and an ordering
+    /// question is only settled when both backends print the same bytes AND
+    /// those bytes are the ones design.md names.
+    ///
+    /// THE ENUM HALF WAS AN AGREED GAP, so no A/B check could have found it.
+    /// design.md § `Drop` Field drop order pins reverse declaration order for a
+    /// struct "or enum variant" alike; the struct walker complied and the enum
+    /// one ran declaration order, on all four surfaces at once —
+    /// `struct P2 { a: R, b: R }` printed `dR2 dR1` while
+    /// `enum E2 { T(R, R) }` printed `dR1 dR2`. Both backends being wrong
+    /// together is exactly the class the A/B rule is blind to, which is why the
+    /// `structs()` line is kept here beside `enums()`: it is the control that
+    /// makes the asymmetry visible in one transcript.
+    ///
+    /// THE ARM half is codegen's control rather than its fix — the compiled
+    /// backends already treated a read-only arm binding as a borrow of the
+    /// husk, which design.md § Match Arm Binding Modes says is correct
+    /// ("bindings that are only read BORROW from the already-owned value").
+    /// B-2026-09-06-21 concluded the opposite, that codegen was the side to
+    /// move; it was the interpreter. This test pins the compiled side so a
+    /// future attempt to "fix" it here fails loudly.
+    #[test]
+    fn e2e_enum_payload_fields_drop_in_reverse_declaration_order() {
+        let Some(out) = run_program(
+            "struct R { id: i64, name: String }\n\
+             impl Drop for R { fn drop(mut ref self) { println(f\"dR{self.id}\") } }\n\
+             fn mk(i: i64) -> R { return R { id: i, name: f\"nnnnnnnn{i}\" } }\n\
+             struct P2 { a: R, b: R }\n\
+             enum E2 { T(R, R), N }\n\
+             enum E1 { O(R), N1 }\n\
+             fn take(r: R) -> i64 { return r.id }\n\
+             fn structs() { let p: P2 = P2 { a: mk(1), b: mk(2) }; println(\"-structs\") }\n\
+             fn enums() { let w: E2 = E2.T(mk(1), mk(2)); println(\"-enums\") }\n\
+             fn two_locals() -> i64 {\n\
+             \x20   let w: E2 = E2.T(mk(1), mk(2));\n\
+             \x20   let z: R = mk(3);\n\
+             \x20   match w { E2.T(a, b) => { return a.id + z.id; } E2.N => { return 0; } }\n\
+             }\n\
+             fn single() -> i64 {\n\
+             \x20   let w: E1 = E1.O(mk(4));\n\
+             \x20   let z: R = mk(5);\n\
+             \x20   match w { E1.O(a) => { return a.id + z.id; } E1.N1 => { return 0; } }\n\
+             }\n\
+             fn wildcard() -> i64 {\n\
+             \x20   let w: E2 = E2.T(mk(6), mk(7));\n\
+             \x20   let z: R = mk(8);\n\
+             \x20   match w { E2.T(a, _) => { return a.id + z.id; } E2.N => { return 0; } }\n\
+             }\n\
+             fn consuming() -> i64 {\n\
+             \x20   let w: E2 = E2.T(mk(9), mk(10));\n\
+             \x20   let z: R = mk(11);\n\
+             \x20   match w { E2.T(a, b) => { return take(a) + b.id + z.id; } E2.N => { return 0; } }\n\
+             }\n\
+             fn fresh_temp() -> i64 {\n\
+             \x20   let z: R = mk(12);\n\
+             \x20   match E2.T(mk(13), mk(14)) { E2.T(a, b) => { return a.id + z.id; } E2.N => { return 0; } }\n\
+             }\n\
+             fn main() {\n\
+             \x20   structs(); enums();\n\
+             \x20   println(f\"a={two_locals()}\");\n\
+             \x20   println(f\"b={single()}\");\n\
+             \x20   println(f\"c={wildcard()}\");\n\
+             \x20   println(f\"d={consuming()}\");\n\
+             \x20   println(f\"e={fresh_temp()}\");\n\
+             }\n\
+             ",
+        ) else {
+            return;
+        };
+        assert_eq!(
+            out,
+            "dR2\ndR1\n-structs\n\
+             dR2\ndR1\n-enums\n\
+             dR3\ndR2\ndR1\na=4\n\
+             dR5\ndR4\nb=9\n\
+             dR8\ndR7\ndR6\nc=14\n\
+             dR10\ndR9\ndR11\nd=30\n\
+             dR14\ndR13\ndR12\ne=25\n"
+        );
+    }
+
     /// B-2026-09-03-32 / B-2026-09-04-23 / B-2026-09-05-25 — a destructure
     /// DESTROYS THE FIELDS IT DISCARDS INSIDE THE STATEMENT, before an unread
     /// leaf's NLL death; several discards die in reverse declaration order;
@@ -41723,12 +41807,12 @@ fn main() {
         assert_eq!(
             out,
             r#"first_bound
-  dR1
   dR2
+  dR1
   =1
 second_bound
-  dR3
   dR4
+  dR3
   =4
 moved_out
   dR5
@@ -41739,23 +41823,23 @@ rebound
   dR8
   =7
 iflet
-  dR9
   dR10
+  dR9
   =9
 both_wild
-  dR11
   dR12
+  dR11
   =1
 both_bound
-  dR13
   dR14
+  dR13
   =27
 other_variant_live
   dR22
   =99
 each_variant_takes
-  dR30
   dR31
+  dR30
   =30
 end
 "#
@@ -43584,7 +43668,7 @@ end
         ) else {
             return;
         };
-        assert_eq!(out, "21\n1\n22\n2\n23\n24\n3\n25\n4\n5\n999\n");
+        assert_eq!(out, "21\n1\n22\n2\n24\n23\n3\n25\n4\n5\n999\n");
     }
 
     /// B-2026-07-30-11 (enum leg) — a `match` / `if let` arm that BINDS the

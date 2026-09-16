@@ -1457,15 +1457,87 @@ impl<'a> super::Interpreter<'a> {
         // read-only arm that the compiled backends run. A generic enum is
         // admitted on the strength of its parameters; the empty-names check
         // below still decides whether this pattern binds anything out.
+        // B-2026-09-06-21 — a MONOMORPHIC user enum is admitted on the same
+        // ground B-2026-09-10-2 admitted a generic one, and leaving it out was
+        // the last hole in that reasoning. `enum W2 { Two(R, R), None2 }`
+        // declares no `Drop` of its own and has no parameters, so it bailed
+        // here, every arm over it counted as CONSUMING, and the interpreter
+        // stashed the arm's bindings as real arm-scoped `Drop` slots. Those
+        // ran the payload bodies at the ARM's end — before an outer local
+        // declared after the scrutinee — while the compiled backends kept the
+        // bindings as views of the husk and ran them in the enclosing LIFO.
+        //
+        // design.md § Match Arm Binding Modes settles which side is right:
+        // "If the scrutinee is an owned value ... bindings that are only read
+        // BORROW from the already-owned value". A read-only arm binding owes
+        // no drop of its own, so the husk keeps the payload and the compiled
+        // order is the spec'd one.
+        //
+        // The enum's OWN `impl Drop` was never the question when the PAYLOAD is
+        // what owes a body — the sentence B-2026-09-10-2 wrote for the generic
+        // case, and it is just as true here. `names.is_empty()` below is what
+        // actually decides whether this pattern binds a Drop-bearing payload
+        // out, so admitting the enum costs nothing where it does not.
+        // Option/Result keep their carve-out: they ride their own walker.
         if !self.program.drop_method_keys.contains_key(enum_name)
-            && (matches!(enum_name, "Option" | "Result")
-                || self.enum_generic_param_names(enum_name).is_empty())
+            && matches!(enum_name, "Option" | "Result")
         {
+            return false;
+        }
+        // ...but only where the HUSK'S OWN WALK will actually run the body the
+        // stand-down hands back to it, and a `shared`/`par` payload is the one
+        // place it will not: `run_enum_payload_user_drops_value` walks the
+        // declared payload as a plain value, and an RC payload drops through
+        // the RC machinery instead (the same `layout.is_shared` bail codegen's
+        // `emit_enum_payload_user_drop_bodies_fn` takes).
+        //
+        // MEASURED, and this is the hazard the surrounding doc comments warn
+        // about — "standing the stash down there hands the payload to NOBODY".
+        // `enum Outer { O(Inner), Zo }` over a `shared enum Inner { I(R), Zi }`
+        // went from `dR1 dR3` under `--interp` against `dR3` compiled, to `dR3`
+        // on both: an AGREEMENT reached by LOSING a body, which is strictly
+        // worse than the divergence it replaces (B-2026-09-10-17; bodies are
+        // their own channel, B-2026-08-28-57). Declining here keeps that shape
+        // exactly as it was — the compiled gap is its own row, not this one's
+        // to close by deleting the interpreter's correct body.
+        if self.enum_payload_is_rc_backed(enum_name) {
             return false;
         }
         let names = self.arm_moved_user_drop_payload_bindings(enum_name, pattern);
         // Nothing bound out: leave the caller's own gate to decide, unchanged.
         !names.is_empty() && names.iter().all(|n| f(n))
+    }
+
+    /// Does any variant of `enum_name` declare a payload whose type is a
+    /// `shared` / `par` struct or enum? B-2026-09-06-21.
+    ///
+    /// Such a payload is REFERENCE-backed, so neither backend's declared-type
+    /// payload walk runs its body — both defer to the RC machinery. That makes
+    /// it the one shape where handing the arm's body back to the scrutinee's
+    /// own walk loses it outright rather than re-homing it, so the read-through
+    /// stand-down must decline here. See the call site for the measurement.
+    fn enum_payload_is_rc_backed(&self, enum_name: &str) -> bool {
+        let head_is_rc = |te: &TypeExpr| -> bool {
+            let TypeKind::Path(p) = &te.kind else {
+                return false;
+            };
+            let Some(name) = p.segments.last() else {
+                return false;
+            };
+            self.program.items.iter().any(|it| match it {
+                Item::EnumDef(e) => &e.name == name && (e.is_shared || e.is_par),
+                Item::StructDef(sd) => &sd.name == name && (sd.is_shared || sd.is_par),
+                _ => false,
+            })
+        };
+        self.program.items.iter().any(|it| match it {
+            Item::EnumDef(e) if e.name == enum_name => e.variants.iter().any(|v| match &v.kind {
+                VariantKind::Tuple(tys) => tys.iter().any(head_is_rc),
+                VariantKind::Struct(fields) => fields.iter().any(|f| head_is_rc(&f.ty)),
+                VariantKind::Unit => false,
+            }),
+            _ => false,
+        })
     }
 
     /// Is `te` — a declared payload type of `enum_name` — one of that enum's

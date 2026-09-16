@@ -10300,7 +10300,16 @@ impl<'ctx> super::Codegen<'ctx> {
             // walk over `EnumData::Tuple` / `Struct`. (Struct FIELDS drop in
             // reverse declaration order; a variant's payload SLOTS do not, and
             // both backends agree on that split — same rule as tuple elements.)
-            for (field_idx, sname, num_words, array_parts) in fields {
+            // B-2026-09-16-17 — REVERSE declaration order. design.md
+            // § `Drop` Field drop order pins it for a struct "or ENUM VARIANT":
+            // "fields are dropped in the reverse of the order they are
+            // declared". `fields` is built forward from
+            // `enum_variant_field_type_exprs`, so this walker ran the bodies in
+            // DECLARATION order while the struct walker beside it already ran
+            // them in reverse — `struct P { a: R, b: R }` printed `dR2 dR1` and
+            // `enum E { T(R, R) }` printed `dR1 dR2`, measured on all four
+            // surfaces. Both backends agreed, so no A/B check could see it.
+            for (field_idx, sname, num_words, array_parts) in fields.into_iter().rev() {
                 let fp = self
                     .builder
                     .build_struct_gep(layout.llvm_type, p_arg, field_idx, "de.payload.p")

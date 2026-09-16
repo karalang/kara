@@ -48663,7 +48663,7 @@ fn test_enum_payload_runs_user_drop_bodies() {
                  { let q = Plain.B(7); println(5); }\n\
                  println(999);\n\
              }\n"),
-        "21\n1\n22\n2\n23\n24\n3\n25\n4\n5\n999\n"
+        "21\n1\n22\n2\n24\n23\n3\n25\n4\n5\n999\n"
     );
 }
 
@@ -60168,15 +60168,27 @@ end
 /// variants). Controls: `both_wild` (nothing consumed, always correct) and
 /// `both_bound` (fully consuming, the totality fallback).
 ///
-/// THE TWO BACKENDS STILL DIFFER ON TWO CELLS, and deliberately so: in
-/// `second_bound` and `both_bound` the interpreter prints the BOUND position's
-/// body before the husk's, the compiled backends print both from the husk in
-/// field order. That is B-2026-09-06-21 — where and in what order the CONSUMED
-/// positions fire — which this row does not touch. What this row fixes is the
-/// SET, and the set is now identical on `--interp`, jit, `KARAC_AUTO_PAR=0` and
-/// the default auto-par build (the three compiled surfaces are byte-identical
-/// to each other). When -06-21 lands, one of these two pinned strings changes
-/// and the other does not.
+/// THE TWO BACKENDS AGREED ON THE SET AND DIFFERED ON TWO CELLS' ORDER —
+/// `second_bound` and `both_bound` — and this comment predicted that "when
+/// -06-21 lands, one of these two pinned strings changes and the other does
+/// not". -06-21 landed (with B-2026-09-16-17) and BOTH changed, converging on
+/// one string, which is why the twin in `tests/codegen.rs` now pins the same
+/// bytes this does. Two independent corrections met here:
+///
+///   * B-2026-09-16-17 — an enum VARIANT's payload fields ran their bodies in
+///     DECLARATION order on every surface, against design.md § `Drop` Field
+///     drop order ("within a single struct or enum variant ... the reverse of
+///     the order they are declared"). That flipped every husk-run pair on both
+///     backends: `first_bound`, `iflet`, `both_wild`, `each_variant_takes`.
+///   * B-2026-09-06-21 — the interpreter stashed a READ-ONLY arm binding as an
+///     arm-scoped `Drop` slot, so it ran the body at the arm's end rather than
+///     leaving it to the husk. design.md § Match Arm Binding Modes: "bindings
+///     that are only read BORROW from the already-owned value". That is what
+///     `second_bound` and `both_bound` were pinning, and it is why the two
+///     strings could differ at all.
+///
+/// The set is unchanged by both, on `--interp`, jit, `KARAC_AUTO_PAR=0` and the
+/// default auto-par build.
 ///
 /// Twin of `tests/codegen.rs`'s
 /// `e2e_mixed_bind_and_wildcard_arm_keeps_the_unbound_payload_body`.
@@ -60212,8 +60224,8 @@ fn main() {
 }
 "#),
         r#"first_bound
-  dR1
   dR2
+  dR1
   =1
 second_bound
   dR4
@@ -60228,12 +60240,12 @@ rebound
   dR8
   =7
 iflet
-  dR9
   dR10
+  dR9
   =9
 both_wild
-  dR11
   dR12
+  dR11
   =1
 both_bound
   dR14
@@ -60243,8 +60255,8 @@ other_variant_live
   dR22
   =99
 each_variant_takes
-  dR30
   dR31
+  dR30
   =30
 end
 "#
@@ -68238,5 +68250,92 @@ fn test_array_typed_struct_field_runs_its_element_drop_bodies() {
         )),
         "end\n",
         "pinned: Vec[Array[D, 1]] field bodies stay silent (B-2026-09-15-23)"
+    );
+}
+
+/// B-2026-09-16-17 + B-2026-09-06-21 — an ENUM VARIANT's payload fields drop in
+/// REVERSE declaration order, and a READ-ONLY match arm binding does not take
+/// ownership of the payload.
+///
+/// design.md § `Drop` Field drop order: "Within a single struct **or enum
+/// variant**, fields are dropped in the reverse of the order they are
+/// declared". The struct walker did that; the enum one ran DECLARATION order,
+/// so `struct P { a: R, b: R }` printed `dR2 dR1` while `enum E { T(R, R) }`
+/// printed `dR1 dR2`. BOTH BACKENDS AGREED on the wrong answer, which is why no
+/// A/B check ever reported it — the compiled twin is
+/// `e2e_enum_payload_fields_drop_in_reverse_declaration_order`.
+///
+/// design.md § Match Arm Binding Modes settles the second half: "If the
+/// scrutinee is an owned value ... bindings that are only read BORROW from the
+/// already-owned value". So a read-only arm binding owes no `Drop` of its own —
+/// the husk keeps the payload and it dies in the ENCLOSING scope's LIFO, after
+/// a local declared later. The interpreter instead stashed such bindings as
+/// real arm-scoped `Drop` slots and ran the bodies at the ARM's end, i.e.
+/// BEFORE that later local. B-2026-09-06-21 read this the other way round —
+/// "the compiled arm walker is the side to move" — which is backwards, and is
+/// the one thing worth carrying forward from it.
+///
+/// `two_locals` is the cell that pins the position: `w` declared first, `z`
+/// second, both live into the arm, so `z` dies first. `single`, `wildcard` and
+/// `guard` are the same shape through the other three spellings. `consuming`
+/// and `fresh_temp` are the controls that were ALWAYS agreed — an arm that
+/// genuinely consumes a binding does take the payload, per the same spec
+/// sentence — and they must not move.
+#[test]
+fn test_enum_payload_drops_reverse_and_readonly_arm_bindings_are_borrows() {
+    let out = run(r#"
+struct R { id: i64, name: String }
+impl Drop for R { fn drop(mut ref self) { println(f"dR{self.id}") } }
+fn mk(i: i64) -> R { return R { id: i, name: f"nnnnnnnn{i}" } }
+struct P2 { a: R, b: R }
+enum E2 { T(R, R), N }
+enum E1 { O(R), N1 }
+fn take(r: R) -> i64 { return r.id }
+fn structs() { let p: P2 = P2 { a: mk(1), b: mk(2) }; println("-structs") }
+fn enums() { let w: E2 = E2.T(mk(1), mk(2)); println("-enums") }
+fn two_locals() -> i64 {
+    let w: E2 = E2.T(mk(1), mk(2));
+    let z: R = mk(3);
+    match w { E2.T(a, b) => { return a.id + z.id; } E2.N => { return 0; } }
+}
+fn single() -> i64 {
+    let w: E1 = E1.O(mk(4));
+    let z: R = mk(5);
+    match w { E1.O(a) => { return a.id + z.id; } E1.N1 => { return 0; } }
+}
+fn wildcard() -> i64 {
+    let w: E2 = E2.T(mk(6), mk(7));
+    let z: R = mk(8);
+    match w { E2.T(a, _) => { return a.id + z.id; } E2.N => { return 0; } }
+}
+fn consuming() -> i64 {
+    let w: E2 = E2.T(mk(9), mk(10));
+    let z: R = mk(11);
+    match w { E2.T(a, b) => { return take(a) + b.id + z.id; } E2.N => { return 0; } }
+}
+fn fresh_temp() -> i64 {
+    let z: R = mk(12);
+    match E2.T(mk(13), mk(14)) { E2.T(a, b) => { return a.id + z.id; } E2.N => { return 0; } }
+}
+fn main() {
+    structs(); enums();
+    println(f"a={two_locals()}");
+    println(f"b={single()}");
+    println(f"c={wildcard()}");
+    println(f"d={consuming()}");
+    println(f"e={fresh_temp()}");
+}
+"#);
+    assert_eq!(
+        out,
+        // structs: reverse, as it always was. enums: reverse, the fix.
+        "dR2\ndR1\n-structs\n\
+         dR2\ndR1\n-enums\n\
+         dR3\ndR2\ndR1\na=4\n\
+         dR5\ndR4\nb=9\n\
+         dR8\ndR7\ndR6\nc=14\n\
+         dR10\ndR9\ndR11\nd=30\n\
+         dR14\ndR13\ndR12\ne=25\n",
+        "got:\n{out}"
     );
 }

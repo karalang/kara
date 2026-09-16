@@ -2146,7 +2146,13 @@ impl<'a> super::Interpreter<'a> {
                 })
                 .collect(),
         };
-        for (declared_head, payload) in payloads {
+        // B-2026-09-16-17 — REVERSE declaration order, the interpreter half
+        // of the same correction. `payloads` is collected forward from the
+        // variant's declared positions; design.md § `Drop` Field drop order
+        // pins reverse declaration order for a struct "or enum variant" alike.
+        // Codegen twin: the `.rev()` on `fields` in
+        // `emit_enum_payload_user_drop_bodies_fn_skipping`.
+        for (declared_head, payload) in payloads.into_iter().rev() {
             // B-2026-09-12-24 — the `Array` PAYLOAD arm. The `Value::Struct`
             // destructure below drops an array payload on the floor, so an
             // enum variant declaring `Array[R, N]` ran its elements' `Drop`
