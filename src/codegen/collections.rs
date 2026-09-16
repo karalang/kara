@@ -4983,7 +4983,10 @@ impl<'ctx> super::Codegen<'ctx> {
                     "slice.short",
                 )
                 .unwrap();
-            let fast = self.builder.build_and(bounds2, short, "slice.fast").unwrap();
+            let fast = self
+                .builder
+                .build_and(bounds2, short, "slice.fast")
+                .unwrap();
             let is_empty = self
                 .builder
                 .build_int_compare(inkwell::IntPredicate::EQ, n, zero, "slice.n0")
