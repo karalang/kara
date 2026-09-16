@@ -5629,7 +5629,12 @@ impl<'a> super::TypeChecker<'a> {
                 let prev_blk = self
                     .current_arm_body_block
                     .replace(std::rc::Rc::new(then_block.clone()));
+                // B-2026-09-16-24 — see `reject_partial_move_variant_pattern`.
+                let scrut_bp = self.projection_rooted_in_borrow(value);
+                let prev_bp =
+                    std::mem::replace(&mut self.current_scrutinee_borrow_projection, scrut_bp);
                 self.check_pattern_against(pattern, &dispatch_ty, mode);
+                self.current_scrutinee_borrow_projection = prev_bp;
                 self.current_arm_body_block = prev_blk;
                 // B-2026-09-06-14 — see `arm_materializes_scrutinee_copy`.
                 if self.block_materializes_scrutinee_copy(pattern, then_block) {
@@ -6272,7 +6277,12 @@ impl<'a> super::TypeChecker<'a> {
                 let prev_blk = self
                     .current_arm_body_block
                     .replace(std::rc::Rc::new(body.clone()));
+                // B-2026-09-16-24 — see `reject_partial_move_variant_pattern`.
+                let scrut_bp = self.projection_rooted_in_borrow(value);
+                let prev_bp =
+                    std::mem::replace(&mut self.current_scrutinee_borrow_projection, scrut_bp);
                 self.check_pattern_against(pattern, &dispatch_ty, mode);
+                self.current_scrutinee_borrow_projection = prev_bp;
                 self.current_arm_body_block = prev_blk;
                 // B-2026-09-06-14 — see `arm_materializes_scrutinee_copy`.
                 if self.block_materializes_scrutinee_copy(pattern, body) {

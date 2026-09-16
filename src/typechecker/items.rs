@@ -4712,19 +4712,29 @@ impl<'a> super::TypeChecker<'a> {
     /// nothing but its visibility. It is offered only when the type actually
     /// has a `.clone()` (B-2026-07-29-31's standing lesson — a confident wrong
     /// steer is worse than no fix-it).
-    pub(super) fn warn_borrow_projection_copy(&mut self, value: &Expr, ty: &Type) {
+    /// Is `value` a FIELD / tuple projection whose chain root is a BORROW — a
+    /// `ref` / `mut ref` parameter, or `ref self`, still bound as one at this
+    /// point in the body?
+    ///
+    /// Extracted from [`Self::warn_borrow_projection_copy`], whose whole
+    /// subject is the copy such a projection makes, so that
+    /// [`Self::reject_partial_move_variant_pattern`] can DECLINE on exactly
+    /// the same class rather than re-deriving it (B-2026-09-16-24). The two
+    /// rules want opposite things from one predicate: one REPORTS the copy,
+    /// the other must not call that copy a partial move of the original.
+    pub(super) fn projection_rooted_in_borrow(&self, value: &Expr) -> bool {
         if !matches!(
             value.kind,
             ExprKind::FieldAccess { .. } | ExprKind::TupleIndex { .. }
         ) {
-            return;
+            return false;
         }
         // Walk to the chain's root. Only projection hops: an `Index` hop is
         // the sibling rule's business, and anything else (a call, a literal)
         // produces a fresh value that nobody else owns — no copy, nothing to
         // report.
         let mut cur = value;
-        let rooted_in_borrow = loop {
+        loop {
             match &cur.kind {
                 ExprKind::FieldAccess { object, .. } | ExprKind::TupleIndex { object, .. } => {
                     cur = object;
@@ -4745,10 +4755,13 @@ impl<'a> super::TypeChecker<'a> {
                         )
                 }
                 ExprKind::SelfValue => break self.current_fn_ref_params.contains("self"),
-                _ => return,
+                _ => return false,
             }
-        };
-        if !rooted_in_borrow {
+        }
+    }
+
+    pub(super) fn warn_borrow_projection_copy(&mut self, value: &Expr, ty: &Type) {
+        if !self.projection_rooted_in_borrow(value) {
             return;
         }
         if matches!(ty, Type::Error | Type::Never) || self.is_copy_type_during_check(ty) {
@@ -5039,6 +5052,45 @@ impl<'a> super::TypeChecker<'a> {
     ) {
         use crate::typechecker::types::ScrutineeMode;
         if !matches!(mode, ScrutineeMode::Owned) {
+            return;
+        }
+        // B-2026-09-16-24 — a scrutinee that is a PROJECTION OFF A BORROW is
+        // this rule's one false-positive class, and it is a false positive by
+        // the rule's OWN stated terms: the doc above says it fires on "an
+        // OWNED scrutinee only (under `ref` / `mut ref` the bindings are
+        // borrows and nothing leaves)", which is exactly the situation here —
+        // but `ScrutineeMode::classify` answers `Owned`, because the
+        // projection's TYPE is `E` rather than `ref E`.
+        //
+        // Nothing leaves the original, so this rule's message ("its drop body
+        // runs over a payload that is already gone") is FALSE at such a site.
+        // design.md § "Field projection off a borrow" settles which reading is
+        // right: "The pattern spellings copy at the materialization, not at
+        // the scrutinee" — the binding is a view, and the copy taken where an
+        // arm materializes it is a copy of the BINDING. The enum whose
+        // destructor later runs is the ORIGINAL, whose payload is intact.
+        //
+        // Measured on `enum E { A(R), B }` with `impl Drop` on both, through
+        // `mut ref h` and `ref h`, identical on all four surfaces (`--interp`,
+        // JIT, `-O0`, default auto-par) and valgrind-clean with a `String`
+        // payload — the original's body prints its content, so the deep copy
+        // really is a second live value rather than an alias:
+        //
+        //     match h.e { E.A(r) => { let m = r; .. } }   dR1 dE dR1
+        //     if let E.A(r) = h.e { let m = r; .. }       dR7 dE dR7
+        //     let E.A(r) = h.e else { .. }                dR5 dE dR5
+        //
+        // Each is the materialized payload copy, then the original's complete
+        // shell+payload pair. The CONTROL that must keep firing is a
+        // projection off an OWNED local (`let mut h = ..; match h.e { .. }`),
+        // which prints `got9 dR9 dE` — ONE payload body, and `dE` over a
+        // payload that really did leave. The borrow root separates the two.
+        //
+        // The suggested fix-it is wrong here too: "bind the whole value"
+        // spells `let e: E = h.e`, which copies the WHOLE ENUM and so really
+        // does run a shell body over a moved-out payload (`dR2 dE dE dR2`) —
+        // it introduces the hazard this rule exists to prevent.
+        if self.current_scrutinee_borrow_projection {
             return;
         }
         let has_drop =
@@ -5470,7 +5522,12 @@ impl<'a> super::TypeChecker<'a> {
                 if pattern.contains_at_binding() {
                     let (mode, dispatch_ty) = ScrutineeMode::classify(&expected_ty);
                     let dispatch_ty = dispatch_ty.clone();
+                    // B-2026-09-16-24 — see `reject_partial_move_variant_pattern`.
+                    let scrut_bp = self.projection_rooted_in_borrow(value);
+                    let prev_bp =
+                        std::mem::replace(&mut self.current_scrutinee_borrow_projection, scrut_bp);
                     self.check_pattern_against(pattern, &dispatch_ty, mode);
+                    self.current_scrutinee_borrow_projection = prev_bp;
                 }
             }
             StmtKind::LetUninit {
@@ -5533,7 +5590,12 @@ impl<'a> super::TypeChecker<'a> {
                 // to `Type::Error`, which left `x` untyped.)
                 let (mode, dispatch_ty) = ScrutineeMode::classify(&expected_ty);
                 let dispatch_ty = dispatch_ty.clone();
+                // B-2026-09-16-24 — see `reject_partial_move_variant_pattern`.
+                let scrut_bp = self.projection_rooted_in_borrow(value);
+                let prev_bp =
+                    std::mem::replace(&mut self.current_scrutinee_borrow_projection, scrut_bp);
                 self.check_pattern_against(pattern, &dispatch_ty, mode);
+                self.current_scrutinee_borrow_projection = prev_bp;
             }
             StmtKind::Defer { body } => {
                 let prev = self.in_defer;

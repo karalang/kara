@@ -48768,6 +48768,219 @@ fn partial_move_of_drop_enum_fires_on_moves_and_not_on_reads() {
     );
 }
 
+/// B-2026-09-16-24 — `partial_move_of_drop_enum` fired on a scrutinee that is
+/// a PROJECTION OFF A BORROW (`match h.e` where `h: mut ref H3`), and that is
+/// a false positive by the rule's OWN stated terms: it documents itself as
+/// firing on "an OWNED scrutinee only (under `ref` / `mut ref` the bindings
+/// are borrows and nothing leaves)", which is exactly this situation — but
+/// `ScrutineeMode::classify` answers `Owned`, because a projection's TYPE is
+/// `E3` rather than `ref E3`.
+///
+/// Since the rule became `Deny` (`66149c2`) that misclassification REJECTED
+/// working code, and the message's claim — "its drop body runs over a payload
+/// that is already gone" — is false at these sites. design.md § "Field
+/// projection off a borrow" says why: "The pattern spellings copy at the
+/// materialization, not at the scrutinee", so the binding is a view, the copy
+/// is a copy of the BINDING, and the enum whose destructor later runs is the
+/// ORIGINAL, with its payload intact.
+///
+/// Measured (B-2026-09-06-23's invalidation), identical on all four surfaces
+/// and valgrind-clean at `-O0` with a `String` payload — the original's body
+/// prints its content, so the deep copy really is a second live value:
+///
+/// ```text
+/// match h.e { E.A(r) => { let m = r; .. } }   dR1 dE dR1
+/// if let E.A(r) = h.e { let m = r; .. }       dR7 dE dR7
+/// let E.A(r) = h.e else { .. }                dR5 dE dR5
+/// ```
+///
+/// Each is the materialized payload copy, then the original's complete
+/// shell+payload pair — one body per value. This fix is diagnostics-only: all
+/// fourteen probe cells print byte-identically before and after.
+///
+/// CELLS 5 AND 6 ARE THE POINT OF THE TEST, not the acceptances. The borrow
+/// ROOT is the whole distinction, so an exemption keyed one hop too wide would
+/// silence the genuine hazard: a projection off an OWNED local really does
+/// move the payload out (`got9 dR9 dE` — ONE payload body, and `dE` over a
+/// payload that left), and that is what the rule exists for.
+#[test]
+fn partial_move_of_drop_enum_declines_on_a_borrow_projection_scrutinee() {
+    let prelude = "struct R3 { s: String, id: i64 }\n\
+                   impl Drop for R3 { fn drop(mut ref self) { println(f\"dR{self.id}\") } }\n\
+                   enum E3 { A(R3), B }\n\
+                   impl Drop for E3 { fn drop(mut ref self) { println(\"dE\") } }\n\
+                   struct H3 { e: E3 }\n\
+                   fn mk3(id: i64) -> E3 { return E3.A(R3 { s: f\"h\", id: id }); }\n";
+
+    // 1 -- `match` over a `mut ref` projection: the shape B-2026-09-06-23
+    //      filed. Accepted.
+    let via_match = format!(
+        "{prelude}\
+         fn via_match(h: mut ref H3) -> i64 {{\n\
+         \x20\x20\x20\x20match h.e {{ E3.A(r) => {{ let m: R3 = r; return m.id; }} \
+         E3.B => {{ return 0; }} }}\n\
+         }}\n\
+         fn main() {{ let mut h: H3 = H3 {{ e: mk3(1) }}; \
+         println(f\"n:{{via_match(mut h)}}\"); }}\n"
+    );
+    assert_eq!(
+        partial_move_enum_diagnostics(&via_match),
+        0,
+        "match over a `mut ref` projection"
+    );
+
+    // 2 -- the same through a plain `ref`. Both borrow forms behave
+    //      identically (measured `dR6 dE dR6`), so both must be exempt.
+    let via_ref = format!(
+        "{prelude}\
+         fn via_ref(h: ref H3) -> i64 {{\n\
+         \x20\x20\x20\x20match h.e {{ E3.A(r) => {{ let m: R3 = r; return m.id; }} \
+         E3.B => {{ return 0; }} }}\n\
+         }}\n\
+         fn main() {{ let h: H3 = H3 {{ e: mk3(2) }}; println(f\"n:{{via_ref(h)}}\"); }}\n"
+    );
+    assert_eq!(
+        partial_move_enum_diagnostics(&via_ref),
+        0,
+        "match over a `ref` projection"
+    );
+
+    // 3 -- `if let` over the same projection. design.md names `match`,
+    //      `if let` and `while let` together as the view-binding spellings.
+    let via_iflet = format!(
+        "{prelude}\
+         fn via_iflet(h: mut ref H3) -> i64 {{\n\
+         \x20\x20\x20\x20if let E3.A(r) = h.e {{ let m: R3 = r; return m.id; }} \
+         else {{ return 0; }}\n\
+         }}\n\
+         fn main() {{ let mut h: H3 = H3 {{ e: mk3(3) }}; \
+         println(f\"n:{{via_iflet(mut h)}}\"); }}\n"
+    );
+    assert_eq!(
+        partial_move_enum_diagnostics(&via_iflet),
+        0,
+        "if let over a projection"
+    );
+
+    // 4 -- let-else, which design.md calls "the one pattern spelling that
+    //      copies unconditionally". It copies the BINDING, so the original is
+    //      still intact (`dR5 dE dR5`) and the rule must decline here too.
+    let via_letelse = format!(
+        "{prelude}\
+         fn via_letelse(h: mut ref H3) -> i64 {{\n\
+         \x20\x20\x20\x20let E3.A(r) = h.e else {{ return 0; }};\n\
+         \x20\x20\x20\x20let m: R3 = r;\n\
+         \x20\x20\x20\x20return m.id;\n\
+         }}\n\
+         fn main() {{ let mut h: H3 = H3 {{ e: mk3(4) }}; \
+         println(f\"n:{{via_letelse(mut h)}}\"); }}\n"
+    );
+    assert_eq!(
+        partial_move_enum_diagnostics(&via_letelse),
+        0,
+        "let-else over a projection"
+    );
+
+    // 5 -- CONTROL: a projection off an OWNED local is NOT a borrow
+    //      projection. The payload really does move out and the enum's own
+    //      `dE` really does run over a gone payload, so the rule must fire.
+    let owned_proj = format!(
+        "{prelude}\
+         fn main() {{\n\
+         \x20\x20\x20\x20let mut h: H3 = H3 {{ e: mk3(9) }};\n\
+         \x20\x20\x20\x20match h.e {{ E3.A(r) => {{ let m: R3 = r; println(f\"g:{{m.id}}\") }} \
+         E3.B => {{}} }}\n\
+         }}\n"
+    );
+    assert_eq!(
+        partial_move_enum_diagnostics(&owned_proj),
+        1,
+        "projection off an OWNED local still fires"
+    );
+
+    // 6 -- CONTROL: a fresh-temp owned scrutinee, the class whose divergence
+    //      B-2026-09-13-12 measured and B-2026-09-13-14 promoted to `Deny`.
+    //      Untouched.
+    let fresh_temp = format!(
+        "{prelude}\
+         fn f6() -> i64 {{\n\
+         \x20\x20\x20\x20match mk3(7) {{ E3.A(r) => {{ let m: R3 = r; return m.id; }} \
+         E3.B => {{ return 0; }} }}\n\
+         }}\n\
+         fn main() {{ println(f\"n:{{f6()}}\"); }}\n"
+    );
+    assert_eq!(
+        partial_move_enum_diagnostics(&fresh_temp),
+        1,
+        "fresh-temp owned scrutinee still fires"
+    );
+
+    // 7 -- the ACCURATE diagnostic for this shape must survive. Cell 1 kept
+    //      its `borrow_projection_copy` warning, which describes what really
+    //      happens ("an independent value rather than a view ... any user
+    //      `Drop` body runs a second time"). Silencing the false error by
+    //      widening something that also took this warning out would leave the
+    //      copy unreported.
+    let parsed = parse(&via_match);
+    assert!(parsed.errors.is_empty(), "parse: {:?}", parsed.errors);
+    let resolved = resolve(&parsed.program);
+    assert!(resolved.errors.is_empty(), "resolve: {:?}", resolved.errors);
+    let checked = typecheck(&parsed.program, &resolved);
+    assert_eq!(
+        checked
+            .warnings
+            .iter()
+            .filter(|w| w.lint_name.as_deref() == Some("borrow_projection_copy"))
+            .count(),
+        1,
+        "the accurate projection-copy warning must still fire"
+    );
+
+    // 8 -- a DEEPER chain (`w.s.e`, two projection hops) off the same borrow.
+    //      The predicate walks to the chain's ROOT, so depth is irrelevant;
+    //      pinned because a root test written as "is the object a borrow"
+    //      rather than "is the root a borrow" passes cells 1-4 and fails here.
+    //      Measured `dR11 dE dR11` on all four surfaces — the one-hop shape.
+    let deep = format!(
+        "{prelude}\
+         struct W3 {{ s: H3 }}\n\
+         fn deep(w: mut ref W3) -> i64 {{\n\
+         \x20\x20\x20\x20match w.s.e {{ E3.A(r) => {{ let m: R3 = r; return m.id; }} \
+         E3.B => {{ return 0; }} }}\n\
+         }}\n\
+         fn main() {{ let mut w: W3 = W3 {{ s: H3 {{ e: mk3(11) }} }}; \
+         println(f\"n:{{deep(mut w)}}\"); }}\n"
+    );
+    assert_eq!(
+        partial_move_enum_diagnostics(&deep),
+        0,
+        "deeper projection chain off a borrow"
+    );
+
+    // 9 -- CONTROL, and the subtlest one: a `ref` parameter SHADOWED by an
+    //      owned local of the same name. At the match the root `s` is owned,
+    //      so the payload really does move out and the rule must still fire.
+    //      This is the case `warn_borrow_projection_copy`'s comments record
+    //      ("an inner `let s = S { .. };` ... whose projection is a MOVE"),
+    //      and sharing its predicate is what carries the handling over — a
+    //      signature-only test would answer "borrow" here and go silent.
+    let shadowed = format!(
+        "{prelude}\
+         fn shadowed(s: ref H3) -> i64 {{\n\
+         \x20\x20\x20\x20let s: H3 = H3 {{ e: mk3(12) }};\n\
+         \x20\x20\x20\x20match s.e {{ E3.A(r) => {{ let m: R3 = r; return m.id; }} \
+         E3.B => {{ return 0; }} }}\n\
+         }}\n\
+         fn main() {{ let h: H3 = H3 {{ e: mk3(13) }}; \
+         println(f\"n:{{shadowed(h)}}\"); }}\n"
+    );
+    assert_eq!(
+        partial_move_enum_diagnostics(&shadowed),
+        1,
+        "ref param shadowed by an owned local still fires"
+    );
+}
+
 /// B-2026-09-01-38 — design.md § Part 8 `Drop`, "Interaction with move
 /// semantics", was UNIMPLEMENTED: *"Partial moves out of a struct field are
 /// rejected if the struct has a `Drop` impl."*

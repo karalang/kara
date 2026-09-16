@@ -2098,6 +2098,20 @@ pub struct TypeChecker<'a> {
     /// a `Block` rather than a single arm expression, and
     /// `consume_class::binding_only_borrowed_block` is the matching predicate.
     pub(super) current_arm_body_block: Option<std::rc::Rc<crate::ast::Block>>,
+
+    /// B-2026-09-16-24 — set while checking the PATTERN of a construct whose
+    /// SCRUTINEE is a projection off a borrow (`match h.e`, `if let .. = h.e`,
+    /// `let .. = h.e else`). Plain data, carried in the same channel as
+    /// [`Self::current_arm_body`] and for the same reason: the scrutinee
+    /// EXPRESSION is not in scope where the rule needs it, because pattern
+    /// checking recurses carrying only the pattern and the `ScrutineeMode`,
+    /// and `ScrutineeMode` cannot answer this — a borrow projection classifies
+    /// as `Owned` (its type is `E`, not `ref E`), which is exactly the
+    /// misclassification `partial_move_of_drop_enum` fired on.
+    ///
+    /// Set around the pattern check only, never across an arm BODY, so a
+    /// nested `match` inside an arm is judged on its own scrutinee.
+    pub(super) current_scrutinee_borrow_projection: bool,
     pub(super) errors: Vec<TypeError>,
     pub(super) warnings: Vec<TypeError>,
     pub(super) expr_types: FxHashMap<SpanKey, Type>,
@@ -2774,6 +2788,7 @@ impl<'a> TypeChecker<'a> {
             owned_at_binding_outers: Vec::new(),
             current_arm_body: None,
             current_arm_body_block: None,
+            current_scrutinee_borrow_projection: false,
             errors: Vec::new(),
             warnings: Vec::new(),
             expr_types: FxHashMap::default(),
