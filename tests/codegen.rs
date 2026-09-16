@@ -42309,6 +42309,152 @@ end
         );
     }
 
+    /// B-2026-09-06-40 — a REORDERED struct `let` pattern drained its leaves in
+    /// reverse PATTERN order on the interpreter and reverse DECLARATION order on
+    /// every compiled backend: `let s = S3 { a: mk(3), b: mk(4) };
+    /// let S3 { b, a } = s;` printed `dR3 dR4` under `--interp` and `dR4 dR3` under
+    /// jit / aot / `KARAC_AUTO_PAR=0`. Every body ran once; only the sequence
+    /// diverged, and only a pattern that reorders fields shows it.
+    ///
+    /// THE ROW ASKED WHICH READING IS RIGHT AND A CONTROL ANSWERS IT, which is why
+    /// `desugared_control` is a cell here rather than a remark. `let b = s.b;
+    /// let a = s.a;` is unambiguously two `let` bindings, and BOTH backends drain
+    /// it `a` then `b` — LIFO of binding order. The destructure is sugar for
+    /// exactly that, so the interpreter's reverse-pattern order is the one that
+    /// generalizes and the compiled side is what moved. design.md agrees twice
+    /// over: § "Interaction with move semantics" makes each moved-out leaf's own
+    /// binding its final owner rather than the struct's field, so § "Field drop
+    /// order is reverse declaration order" no longer governs it; and the
+    /// destructor rule drains "ordered by program-order of introduction", which
+    /// for a single `let` is the order the pattern writes its bindings.
+    ///
+    /// The alternative reading — that a destructure is the struct's own field-drop
+    /// pass — is what the compiled side implemented. It explains the in-order
+    /// pattern (where the two orders coincide, so `in_order` and `in_order_three`
+    /// pin it unchanged) but not the desugared control, which it would have to
+    /// drain by declaration too. It does not.
+    ///
+    /// The fix is a visit-order change in the struct-destructure loop of
+    /// `src/codegen/stmts.rs`: it still walks the DECLARED slot for extraction,
+    /// dispatch and the discard branch — `idx` is unchanged — but visits the
+    /// fields in the order the pattern binds them, so the cleanups it registers
+    /// land in that order and the frame's LIFO drain reverses it. Fields the
+    /// pattern does not BIND sort after the bound ones and keep declaration order
+    /// among themselves.
+    ///
+    /// CELLS. `swapped` (the row's shape), `three_rotated` (`{c, a, b}`, which
+    /// distinguishes the orders more sharply than any two-field cell can),
+    /// `renamed_swap` (`{b: y, a: x}`, where binding and field names differ),
+    /// `desugared_control` (the cell that settles the reading), `rest_swapped`
+    /// (`..` alongside a reorder), `wild_mixed` (`b: _` between two bound fields),
+    /// `scalar_between` (a non-Drop field in the middle), `nested_swapped` (a
+    /// nested sub-pattern, which binds no leaf itself and must not move),
+    /// `moved_leaf` (a leaf handed to a call). Controls that must not move:
+    /// `in_order` and `in_order_three`.
+    ///
+    /// All four surfaces print this string byte-identically; valgrind at
+    /// `KARAC_OPT_LEVEL=0` is 72 allocs / 72 frees, ERROR SUMMARY 0.
+    ///
+    /// Twin of `tests/interpreter.rs`'s
+    /// `test_reordered_struct_let_pattern_drops_in_pattern_order`.
+    #[test]
+    fn e2e_reordered_struct_let_pattern_drops_in_pattern_order() {
+        let Some(out) = run_program(
+            r#"struct R { id: i64, name: String }
+impl Drop for R { fn drop(mut ref self) { println(f"  dR{self.id}") } }
+fn mk(i: i64) -> R { return R { id: i, name: f"n{i}" }; }
+struct S3 { a: R, b: R }
+struct S4 { a: R, b: R, c: R }
+struct Mix { a: R, k: i64, c: R }
+struct Inner { p: R }
+struct Outer { i: Inner, z: R }
+fn eat(r: R) -> i64 { return r.id; }
+
+fn in_order() -> i64 { let s: S3 = S3 { a: mk(1), b: mk(2) }; let S3 { a, b } = s; return a.id + b.id; }
+fn swapped() -> i64 { let s: S3 = S3 { a: mk(3), b: mk(4) }; let S3 { b, a } = s; return a.id + b.id; }
+fn three_rotated() -> i64 { let s: S4 = S4 { a: mk(5), b: mk(6), c: mk(7) }; let S4 { c, a, b } = s; return a.id + b.id + c.id; }
+fn renamed_swap() -> i64 { let s: S3 = S3 { a: mk(8), b: mk(9) }; let S3 { b: y, a: x } = s; return x.id + y.id; }
+fn desugared_control() -> i64 { let s: S3 = S3 { a: mk(10), b: mk(11) }; let b: R = s.b; let a: R = s.a; return a.id + b.id; }
+fn rest_swapped() -> i64 { let s: S4 = S4 { a: mk(12), b: mk(13), c: mk(14) }; let S4 { c, a, .. } = s; return a.id + c.id; }
+fn wild_mixed() -> i64 { let s: S4 = S4 { a: mk(15), b: mk(16), c: mk(17) }; let S4 { c, b: _, a } = s; return a.id + c.id; }
+fn scalar_between() -> i64 { let s: Mix = Mix { a: mk(18), k: 9, c: mk(19) }; let Mix { c, a, k } = s; return a.id + c.id + k; }
+fn nested_swapped() -> i64 { let o: Outer = Outer { i: Inner { p: mk(20) }, z: mk(21) }; let Outer { z, i } = o; return z.id + i.p.id; }
+fn moved_leaf() -> i64 { let s: S3 = S3 { a: mk(22), b: mk(23) }; let S3 { b, a } = s; return eat(b) + a.id; }
+fn in_order_three() -> i64 { let s: S4 = S4 { a: mk(24), b: mk(25), c: mk(26) }; let S4 { a, b, c } = s; return a.id + b.id + c.id; }
+
+fn main() {
+    println("in_order"); let v1: i64 = in_order(); println(f"  v={v1}");
+    println("swapped"); let v2: i64 = swapped(); println(f"  v={v2}");
+    println("three_rotated"); let v3: i64 = three_rotated(); println(f"  v={v3}");
+    println("renamed_swap"); let v4: i64 = renamed_swap(); println(f"  v={v4}");
+    println("desugared_control"); let v5: i64 = desugared_control(); println(f"  v={v5}");
+    println("rest_swapped"); let v6: i64 = rest_swapped(); println(f"  v={v6}");
+    println("wild_mixed"); let v7: i64 = wild_mixed(); println(f"  v={v7}");
+    println("scalar_between"); let v8: i64 = scalar_between(); println(f"  v={v8}");
+    println("nested_swapped"); let v9: i64 = nested_swapped(); println(f"  v={v9}");
+    println("moved_leaf"); let v10: i64 = moved_leaf(); println(f"  v={v10}");
+    println("in_order_three"); let v11: i64 = in_order_three(); println(f"  v={v11}");
+    println("end");
+}
+"#,
+        ) else {
+            return;
+        };
+        assert_eq!(
+            out,
+            r#"in_order
+  dR2
+  dR1
+  v=3
+swapped
+  dR3
+  dR4
+  v=7
+three_rotated
+  dR6
+  dR5
+  dR7
+  v=18
+renamed_swap
+  dR8
+  dR9
+  v=17
+desugared_control
+  dR10
+  dR11
+  v=21
+rest_swapped
+  dR13
+  dR12
+  dR14
+  v=26
+wild_mixed
+  dR16
+  dR15
+  dR17
+  v=32
+scalar_between
+  dR18
+  dR19
+  v=46
+nested_swapped
+  dR20
+  dR21
+  v=41
+moved_leaf
+  dR22
+  dR23
+  v=45
+in_order_three
+  dR26
+  dR25
+  dR24
+  v=75
+end
+"#
+        );
+    }
+
     /// B-2026-09-06-37 — a WILDCARD arm over an owned ENUM receiver ran the payload's
     /// `Drop` body on no surface: `impl E { fn m_wild(self) -> i64 { match self {
     /// E.A(_) => { return 1; } E.B => { return 0; } } } }` printed `dE x1` for a named
@@ -162831,10 +162977,18 @@ fn main() {
     /// `a`'s buffer was freed by the leaf AND by the source's own drop
     /// (`free(): double free` on the JIT, `dR2 dR2 dR1 v=2` on AOT) and
     /// `b`'s payload was never dropped. Codegen-only: the interpreter loses
-    /// the `..` rest field's body outright here (B-2026-09-06-34) and drops
-    /// a reordered pattern's leaves in the other order (B-2026-09-06-40), so
-    /// this string is the compiled backends' own, pinned so the value and
-    /// the once-each body count hold. ASAN twin:
+    /// the `..` rest field's body outright here (B-2026-09-06-34), so this
+    /// string is the compiled backends' own, pinned so the value and the
+    /// once-each body count hold.
+    ///
+    /// B-2026-09-06-40 UPDATED THE `two` CELL. This doc used to add "and drops
+    /// a reordered pattern's leaves in the other order (B-2026-09-06-40)" —
+    /// i.e. the string deliberately pinned the behaviour that row called a bug.
+    /// That row has since landed and the compiled backends drain a reordered
+    /// pattern in PATTERN order, so `two` reads `dR7 dR8 dR6` where it read
+    /// `dR8 dR7 dR6`. Nothing about THIS row's subject moved: the binding is
+    /// still by name, each body still runs once, and the value is unchanged.
+    /// ASAN twin:
     /// `asan_partial_struct_let_pattern_with_drop_fields_clean`.
     #[test]
     fn e2e_partial_struct_let_pattern_with_drop_fields_binds_by_name() {
@@ -162856,7 +163010,7 @@ fn main() {
         ) else {
             return;
         };
-        assert_eq!(out, "dR2\ndR3\ndR1\nv=3\none\ndR8\ndR7\ndR6\nv=807\ntwo\ndR12\ndR13\ndR11\nv=13\nthree\nend\n");
+        assert_eq!(out, "dR2\ndR3\ndR1\nv=3\none\ndR7\ndR8\ndR6\nv=807\ntwo\ndR12\ndR13\ndR11\nv=13\nthree\nend\n");
     }
 
     /// B-2026-09-06-46 — the same partial destructure, over a source ONE of

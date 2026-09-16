@@ -84244,6 +84244,11 @@ fn main() {
         );
     }
 
+    /// B-2026-09-06-40 UPDATED THE `two` CELL: the compiled backends now drain a
+    /// reordered `let` pattern in PATTERN order, so it reads `dR7 dR8 dR6`
+    /// where it read `dR8 dR7 dR6`. This fixture's own subject is unchanged —
+    /// ASAN is clean either way and each body still runs exactly once; only
+    /// the sequence of the two reordered leaves moved.
     /// B-2026-09-06-33 — ASAN twin of `tests/codegen.rs`'s
     /// `e2e_partial_struct_let_pattern_with_drop_fields_binds_by_name`: a
     /// partial / reordered / renamed struct `let` pattern over heap-carrying
@@ -84284,7 +84289,7 @@ fn main() {
         assert_eq!(
             stdout.trim().lines().collect::<Vec<_>>(),
             vec![
-                "dR2", "dR3", "dR1", "v=3", "one", "dR8", "dR7", "dR6", "v=807", "two", "dR12",
+                "dR2", "dR3", "dR1", "v=3", "one", "dR7", "dR8", "dR6", "v=807", "two", "dR12",
                 "dR13", "dR11", "v=13", "three", "end"
             ],
             "[{label}] unexpected stdout (ASAN passed, output mismatched)"

@@ -15650,7 +15650,47 @@ impl<'ctx> super::Codegen<'ctx> {
             _ => std::collections::HashSet::new(),
         };
 
-        for (idx, fname) in field_names.iter().enumerate() {
+        // B-2026-09-06-40 — walk the declared fields in the order the PATTERN
+        // introduces its bindings, rather than in declaration order.
+        //
+        // The cleanups this loop registers land in the order it visits fields,
+        // and the frame's LIFO drain reverses that — so a pattern that reorders
+        // fields drained by declaration order: `let s = S3 { a: mk(3), b: mk(4) };
+        // let S3 { b, a } = s;` gave `dR4 dR3` against `--interp`'s `dR3 dR4`.
+        //
+        // The hand-desugared control settles which is right, and it is a
+        // measurement rather than a reading of prose: `let b = s.b; let a = s.a;`
+        // drains `a` then `b` on BOTH backends, and the destructure is sugar for
+        // exactly that. design.md agrees twice over — § "Interaction with move
+        // semantics" makes each moved-out leaf's own binding its final owner
+        // rather than the struct's field, and the destructor rule drains
+        // "ordered by program-order of introduction", which for a single `let`
+        // is the order the pattern writes its bindings.
+        //
+        // `idx` is still the DECLARED slot, so extraction, dispatch and the
+        // discard branch are unaffected — only the visit order changes, and
+        // with it the registration order. Fields the pattern does not BIND
+        // (wildcard, nested sub-pattern, `..`-elided) sort after the bound ones
+        // and keep declaration order among themselves. An in-order pattern is a
+        // no-op here, which is why every pre-existing fixture keeps its string.
+        let destructure_visit_order: Vec<(usize, &String)> = {
+            let mut v: Vec<(usize, &String)> = field_names.iter().enumerate().collect();
+            v.sort_by_key(|(idx, fname)| {
+                let rank = fields
+                    .iter()
+                    .position(|f| {
+                        &f.name == *fname
+                            && match &f.pattern {
+                                None => true,
+                                Some(p) => matches!(p.kind, PatternKind::Binding(_)),
+                            }
+                    })
+                    .unwrap_or(usize::MAX);
+                (rank, *idx)
+            });
+            v
+        };
+        for (idx, fname) in destructure_visit_order {
             let Some(field_te) = field_tes.get(idx).cloned() else {
                 continue;
             };
