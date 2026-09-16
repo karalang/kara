@@ -4363,7 +4363,37 @@ impl<'a> super::Interpreter<'a> {
             // Declared-type gated like the struct arm below; one container
             // level (nested Vec[Vec[..]] is the recorded residual).
             if let Value::Array(rc) = &field_value {
-                if matches!(declared_head.as_deref(), Some("Vec") | Some("VecDeque")) {
+                // B-2026-09-15-35 — `|| declared_is_own_param`: a field
+                // declared as a BARE GENERIC PARAM bound to a CONTAINER
+                // (`G[T] { a: T }` at `T = Vec[R]` or `T = Array[R, 2]`).
+                // Both container kinds are one runtime value here, and the
+                // declared head for such a field is `"T"`, so the arm above
+                // (which wants an `Array[..]` TE) and this one (which wants a
+                // `Vec`/`VecDeque` head) BOTH turned the field away — and this
+                // arm's `continue` sits outside its own `if`, so the field then
+                // left the loop with nothing walked. Same erasure exception
+                // B-2026-08-02-14 established for a bare-param field bound to
+                // a plain Drop struct, which fires value-driven for exactly
+                // this reason; the container position is the one it never
+                // reached.
+                //
+                // Widening THIS arm rather than adding a value-driven one is
+                // deliberate and was measured. A separate arm routed through
+                // `run_discarded_value_user_drops` recurses into a container
+                // ELEMENT, so `T = Vec[Vec[R]]` printed `dR1` on `--interp`
+                // and nothing on the three compiled surfaces — an agreed gap
+                // (B-2026-09-15-23, the same silence one position over) traded
+                // for a run-vs-build divergence. This arm's dispatch is one
+                // level and struct/enum-only, which is exactly what the
+                // codegen twin's gate admits: `vec_field_elem_head` answers
+                // only for a plain named element, and the array leg beside it
+                // is restricted to one as well.
+                let declared_is_own_param = declared_head
+                    .as_deref()
+                    .is_some_and(|h| generic_param_names.iter().any(|p| p == h));
+                if matches!(declared_head.as_deref(), Some("Vec") | Some("VecDeque"))
+                    || declared_is_own_param
+                {
                     let elems: Vec<Value> = rc.read().map(|g| g.clone()).unwrap_or_default();
                     for e in elems {
                         match &e {

@@ -68143,17 +68143,88 @@ fn test_array_typed_struct_field_runs_its_element_drop_bodies() {
         "dD1\ndD2\nend\n",
         "a generic parent whose field is Array[T, N]"
     );
-    // PINNED — a bare generic param bound to a CONTAINER is silent on all four
-    // surfaces, and is why the codegen selector resolves the array's ELEMENT
-    // rather than the whole field TypeExpr: substituting the whole thing lets
-    // codegen walk a field this gate cannot see, which is a divergence rather
-    // than a fix. Its own row, not this one's.
+    // B-2026-09-15-35 — a bare generic param bound to a CONTAINER. PINNED AT
+    // SILENCE here while this row's selector resolved the array's ELEMENT
+    // rather than the whole field TypeExpr, because the whole-TE substitution
+    // reaches it on the codegen side and this walk gated on a DECLARED
+    // container type that `Path("T")` is not — a divergence rather than a fix.
+    //
+    // -15-35 moved both gates in one commit, so the pins move with them: this
+    // walk's `Vec`/`VecDeque` arm gained the bare-generic-param exception
+    // B-2026-08-02-14 established for the plain-struct case, and codegen gained
+    // a `bare_param_container` leg in `user_drop_field_indices_mono` (only the
+    // GATE was missing there — its emitter arms already key off the
+    // whole-TE-substituted field TE).
+    //
+    // ONE LEVEL, plain named element, on both sides. The first attempt here
+    // routed through `run_discarded_value_user_drops`, which RECURSES, and
+    // `T = Vec[Vec[D]]` then printed `dD1` on this backend alone — the nested
+    // cell below is pinned against exactly that.
     assert_eq!(
         run(&format!(
             "{H}struct G[T] {{ a: T }}\n             fn main() {{\n             \x20   let g: G[Array[D, 2]] = G {{ a: [mkd(1), mkd(2)] }};\n             \x20   println(\"end\");\n             }}\n"
         )),
+        "dD1\ndD2\nend\n",
+        "a bare generic param bound to an Array (B-2026-09-15-35)"
+    );
+    assert_eq!(
+        run(&format!(
+            "{H}struct G[T] {{ a: T }}\n             fn main() {{\n             \x20   let g: G[Vec[D]] = G {{ a: [mkd(1), mkd(2)] }};\n             \x20   println(\"end\");\n             }}\n"
+        )),
+        "dD1\ndD2\nend\n",
+        "a bare generic param bound to a Vec (B-2026-09-15-35)"
+    );
+    assert_eq!(
+        run(&format!(
+            "{H}struct G[T] {{ a: T }}\n\
+             fn main() {{\n\
+             \x20   let mut d: VecDeque[D] = VecDeque.new();\n\
+             \x20   d.push_back(mkd(1));\n\
+             \x20   d.push_back(mkd(2));\n\
+             \x20   let g: G[VecDeque[D]] = G {{ a: d }};\n\
+             \x20   println(\"end\");\n\
+             }}\n"
+        )),
+        "dD1\ndD2\nend\n",
+        "a bare generic param bound to a VecDeque (B-2026-09-15-35)"
+    );
+    assert_eq!(
+        run(&format!(
+            "{H}struct G[T] {{ a: T }}\n\
+             fn main() {{\n\
+             \x20   let v: Vec[D] = [mkd(1), mkd(2)];\n\
+             \x20   let g: G[Vec[D]] = G {{ a: v }};\n\
+             \x20   println(\"end\");\n\
+             }}\n"
+        )),
+        "dD1\ndD2\nend\n",
+        "the container is MOVED into the bare-param field from a local (B-2026-09-15-35)"
+    );
+    // PINNED — a CONTAINER element under the bare param stays an agreed
+    // silence: codegen's leg holds itself to a plain named element so the two
+    // backends keep asking one question. B-2026-09-15-23's subject, one
+    // position over.
+    assert_eq!(
+        run(&format!(
+            "{H}struct G[T] {{ a: T }}\n\
+             fn main() {{\n\
+             \x20   let g: G[Vec[Vec[D]]] = G {{ a: [[mkd(1), mkd(2)]] }};\n\
+             \x20   println(\"end\");\n\
+             }}\n"
+        )),
         "end\n",
-        "pinned: a bare generic param bound to an Array"
+        "pinned: a bare param bound to Vec[Vec[D]] stays an agreed silence"
+    );
+    assert_eq!(
+        run(&format!(
+            "{H}struct G[T] {{ a: T }}\n\
+             fn main() {{\n\
+             \x20   let g: G[Array[Vec[D], 1]] = G {{ a: [[mkd(1)]] }};\n\
+             \x20   println(\"end\");\n\
+             }}\n"
+        )),
+        "end\n",
+        "pinned: likewise a bare param bound to Array[Vec[D], 1]"
     );
     // PINNED — a nested container in a `Vec` field is still an agreed silence
     // on both backends (B-2026-09-15-23), so the two gates stay in step.

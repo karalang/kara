@@ -35099,24 +35099,107 @@ fn main() {
                 "dD1\nend\n",
             ),
             (
-                // PINNED, and the reason the selector resolves the ELEMENT
-                // rather than the whole field TypeExpr. Substituting the whole
-                // thing also resolves a field declared as the bare param, which
-                // codegen could then walk and the interpreter could not — its
-                // gate needs a DECLARED array TE and `Path("T")` is not one.
-                // Measured: whole-TE substitution flipped these two to
-                // compiled-fires / interp-silent, trading one divergence for
-                // another. They are an agreed silence and belong to their own
-                // row.
-                "pinned: a bare generic param bound to an Array is silent on all four",
+                // B-2026-09-15-35 — these two were PINNED AT SILENCE here,
+                // as the reason this row's selector resolved the array's
+                // ELEMENT rather than the whole field TypeExpr: the whole-TE
+                // substitution reaches them on the codegen side, and the
+                // interpreter's field walk gated on a DECLARED container type
+                // that `Path("T")` is not, so landing it alone traded the
+                // agreed silence for a run-vs-build divergence.
+                //
+                // Both gates moved together in -15-35 and the pins move with
+                // them. Codegen gained a `bare_param_container` leg in
+                // `user_drop_field_indices_mono` (only the GATE was missing —
+                // the emitter's array and Vec arms already key off the
+                // whole-TE-substituted `field_te_resolved`), and the
+                // interpreter's `Vec`/`VecDeque` field arm gained the
+                // bare-generic-param exception B-2026-08-02-14 established for
+                // the plain-struct case.
+                //
+                // ONE LEVEL, plain named element, on BOTH sides — which is why
+                // the nested-container cells below still read `end`. The first
+                // interpreter attempt routed through
+                // `run_discarded_value_user_drops`, which recurses, and
+                // `G[T] { a: T }` at `T = Vec[Vec[D]]` then printed `dD1` on
+                // `--interp` alone: B-2026-09-15-23's agreed gap converted into
+                // a divergence from the other direction.
+                "a bare generic param bound to an Array (B-2026-09-15-35)",
                 "struct G[T] { a: T }\n",
                 "let g: G[Array[D, 2]] = G { a: [mkd(1), mkd(2)] };",
+                "dD1\ndD2\nend\n",
+            ),
+            (
+                "the same with the param bound to a Vec (B-2026-09-15-35)",
+                "struct G[T] { a: T }\n",
+                "let g: G[Vec[D]] = G { a: [mkd(1), mkd(2)] };",
+                "dD1\ndD2\nend\n",
+            ),
+            (
+                // Neither backend can tell a `Vec` from a `VecDeque` from the
+                // runtime value alone, and the interpreter arm that gained the
+                // exception serves both — so this rides along rather than
+                // needing its own gate.
+                "a bare generic param bound to a VecDeque (B-2026-09-15-35)",
+                "struct G[T] { a: T }\n",
+                "let mut d: VecDeque[D] = VecDeque.new();\n                 d.push_back(mkd(1));\n                 d.push_back(mkd(2));\n                 let g: G[VecDeque[D]] = G { a: d };",
+                "dD1\ndD2\nend\n",
+            ),
+            (
+                // The MOVED-LOCAL spelling of the field initializer, which the
+                // row measured silent beside the literal one: fires exactly
+                // once, the source binding keeps no second walk.
+                "the container is MOVED into the bare-param field from a local (B-2026-09-15-35)",
+                "struct G[T] { a: T }\n",
+                "let v: Vec[D] = [mkd(1), mkd(2)];\nlet g: G[Vec[D]] = G { a: v };",
+                "dD1\ndD2\nend\n",
+            ),
+            (
+                // A sibling scalar field proves the widened leg admits the
+                // FIELD rather than the whole struct, and that reverse
+                // declaration order still holds around it.
+                "a bare-param container field beside a scalar one (B-2026-09-15-35)",
+                "struct G[T] { a: T, n: i64 }\n",
+                "let g: G[Vec[D]] = G { a: [mkd(1)], n: 7 };",
+                "dD1\nend\n",
+            ),
+            (
+                // Control: the widening is keyed on the element running a user
+                // `Drop`, not on the field being a container.
+                "control: a bare-param container of non-Drop elements runs nothing",
+                "struct G[T] { a: T }\n",
+                "let g: G[Vec[N]] = G { a: [N { v: 1 }, N { v: 2 }] };",
                 "end\n",
             ),
             (
-                "pinned: the same with the param bound to a Vec",
+                // PINNED at the agreed silence: a CONTAINER element in a
+                // bare-param container field. Codegen's new leg holds itself to
+                // a plain named element for exactly this reason, so the two
+                // backends stay on one question. B-2026-09-15-23's subject, one
+                // position over, and not this row's.
+                "pinned: a bare param bound to Vec[Vec[D]] stays an agreed silence",
                 "struct G[T] { a: T }\n",
-                "let g: G[Vec[D]] = G { a: [mkd(1), mkd(2)] };",
+                "let g: G[Vec[Vec[D]]] = G { a: [[mkd(1), mkd(2)]] };",
+                "end\n",
+            ),
+            (
+                "pinned: likewise a bare param bound to Array[Vec[D], 1]",
+                "struct G[T] { a: T }\n",
+                "let g: G[Array[Vec[D], 1]] = G { a: [[mkd(1)]] };",
+                "end\n",
+            ),
+            (
+                "pinned: likewise a bare param bound to Vec[(D, i64)]",
+                "struct G[T] { a: T }\n",
+                "let g: G[Vec[(D, i64)]] = G { a: [(mkd(1), 5)] };",
+                "end\n",
+            ),
+            (
+                // A hashed container under the bare param is a different
+                // runtime value (`Value::Map`), so neither half of -15-35
+                // reaches it — pinned so that stays deliberate.
+                "pinned: likewise a bare param bound to Map[i64, D]",
+                "struct G[T] { a: T }\n",
+                "let mut m: Map[i64, D] = Map.new();\n                 m.insert(1, mkd(1));\n                 let g: G[Map[i64, D]] = G { a: m };",
                 "end\n",
             ),
             (

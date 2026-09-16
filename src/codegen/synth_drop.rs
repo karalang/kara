@@ -4161,6 +4161,62 @@ impl<'ctx> super::Codegen<'ctx> {
                         n > 0 && self.elem_te_runs_user_drop(&elem)
                     })
                 });
+                // B-2026-09-15-35 — a field declared as a BARE GENERIC
+                // PARAM bound to a CONTAINER: `G[T] { a: T }` at
+                // `T = Vec[R]` or `T = Array[R, 2]`. Every leg above asks a
+                // HEAD-NAME question and then resolves that name through the
+                // subst, which is exactly the shape a container defeats:
+                // `direct` resolves `T` to `Vec` and asks
+                // `type_runs_user_drop("Vec")` (false — `Vec` is no declared
+                // Drop type), while `vec_elem` / `array_elem` read the
+                // DECLARED TE's structure, and a bare `Path("T")` is neither a
+                // `Vec[..]` nor an `Array[..]`. So the field never entered the
+                // walk set, `emit_user_drop_field_bodies_fn_skipping` declined
+                // for an empty set, and the elements' bodies ran on NO backend.
+                //
+                // Only the GATE was missing: the emitter's array and Vec arms
+                // both key off `field_te_resolved`, which is the WHOLE field TE
+                // substituted through the mono subst, so `T -> Vec[R]` already
+                // reaches `vec_field_elem_head` -> `R` there. That is why the
+                // whole-TE substitution was measured to fix the compiled half
+                // on its own (B-2026-09-12-21's note) — and why it could not
+                // land alone: the interpreter's field walk gates on the
+                // DECLARED type, so `Path("T")` turned it away and the pair
+                // would have become a run-vs-build divergence. Its twin arm
+                // (the bare-param `Value::Array` leg of
+                // `drop_user_drop_fields_of_value`) lands in the same commit.
+                //
+                // Scoped to a field whose declared head IS a subst key, so the
+                // concretely-spelled shapes keep answering through the legs
+                // above rather than through a second, wider route.
+                let bare_param_container = name.as_deref().is_some_and(|n| {
+                    subst.contains_key(n)
+                        && field_te.is_some_and(|te| {
+                            let r =
+                                crate::codegen::helpers::subst_type_params_in_type_expr(te, subst);
+                            // ONE level, plain named element only, on BOTH
+                            // legs. `vec_field_elem_head` already answers only
+                            // for a plain named element; the array leg is held
+                            // to the same bar rather than to
+                            // `elem_te_runs_user_drop`, which admits an
+                            // aggregate element and would have this position
+                            // walk deeper than the interpreter's twin arm can.
+                            // A container element therefore stays silent on
+                            // every surface — B-2026-09-15-23, the same gap one
+                            // position over, and not this row.
+                            let plain_named_drop_elem = |elem: &TypeExpr| match &elem.kind {
+                                TypeKind::Path(p) if p.generic_args.is_none() => p
+                                    .segments
+                                    .last()
+                                    .is_some_and(|h| self.type_runs_user_drop(h, &mut Vec::new())),
+                                _ => false,
+                            };
+                            self.array_elem_and_len(&r)
+                                .is_some_and(|(elem, n)| n > 0 && plain_named_drop_elem(&elem))
+                                || Self::vec_field_elem_head(&r)
+                                    .is_some_and(|h| self.type_runs_user_drop(&h, &mut Vec::new()))
+                        })
+                });
                 (direct
                     || vec_elem
                     || map_val
@@ -4168,7 +4224,8 @@ impl<'ctx> super::Codegen<'ctx> {
                     || optres_payload
                     || optres_envelope
                     || nested_generic
-                    || array_elem)
+                    || array_elem
+                    || bare_param_container)
                     .then_some(idx)
             })
             .collect()
