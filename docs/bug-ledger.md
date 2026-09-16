@@ -93,7 +93,7 @@ distinguish "bugs flattening" from "we stopped writing them down."
 | class | total |
 |---|---|
 | run-vs-build | 416 |
-| miscompile | 414 |
+| miscompile | 415 |
 | leak | 364 |
 | double-free | 237 |
 | missing-feature | 199 |
@@ -110,8 +110,8 @@ distinguish "bugs flattening" from "we stopped writing them down."
 
 | surface | total |
 |---|---|
-| codegen | 1793 |
-| interp | 453 |
+| codegen | 1794 |
+| interp | 454 |
 | typecheck | 301 |
 | other | 94 |
 | ownership | 75 |
@@ -130,7 +130,6 @@ _Generated from `bug-ledger.jsonl` by `scripts/bug-curve.py` (2026-05-20 → 202
 
 | id | date | surface | sev | title | tracker |
 |---|---|---|---|---|---|
-| B-2026-09-06-21 | 2026-09-06 | interp+codegen | low | TWO FRESH PAYLOADS BOUND OUT OF A `match` ARM DIE IN OPPOSITE ORDERS ON THE TWO BACKENDS -- `let w = W2.Two(mk(16), mk(17)); match w { W2.Two(a, b) => { return a.id; } .. }` prints `dR16 dR17` on jit / aot / `KARAC_AUTO_PAR=0` (declaration order) and `dR17 dR16` under `--interp` (reverse); the body COUNT is right on both, only the arm-end sequence differs | — |
 | B-2026-09-06-23 | 2026-09-06 | interp+codegen | low | THE COPY A MATERIALIZING `match` ARM TAKES OFF A BORROW-PROJECTION SCRUTINEE NEVER RUNS THE ENUM SHELL'S OWN `Drop` BODY, ON EVERY BACKEND -- `match h.e { E.A(r) => { let m = r; return m.id; } .. }` through `mut ref h` prints `dR1 dE dR1` (the copy's payload body, then the original's shell and payload) where the `let e = h.e; match e { .. }` spelling of the same copy prints `dE dR1 dE dR1`; a fresh-temp or local scrutinee (`match mk(7) { .. }`, `let e = mk(8); match e { .. }`) does run its shell's `dE` after the payload moves out | — |
 | B-2026-09-06-35 | 2026-09-06 | interp+codegen | low | A PARTIAL STRUCT `match` PATTERN DROPS THE `..` REST FIELD BEFORE THE BOUND FIELD ON THE INTERPRETER AND AFTER IT ON EVERY COMPILED BACKEND -- `let s = S3 { a: mk(2), b: mk(3) }; match s { S3 { a, .. } => { return a.id; } }` prints `dR3 dR2` under `--interp` and `dR2 dR3` under jit / aot / `KARAC_AUTO_PAR=0`; every body runs exactly once on every surface, the sequence alone diverges | — |
 | B-2026-09-06-39 | 2026-09-06 | interp+codegen | low | A READ-ONLY ARM OVER AN OWNED ENUM RECEIVER RUNS THE PAYLOAD'S `Drop` BODY BEFORE THE SHELL'S ON EVERY SURFACE -- `a.m_read()` prints `dR1 dE`, the reverse of the local-scrutinee order B-2026-08-28-67 established (`dE dR`, shell then fields per design.md § Part 8), so the same read-only arm orders its two bodies differently depending on whether the scrutinee is `self` or a local | — |
@@ -2352,6 +2351,7 @@ _Generated from `bug-ledger.jsonl` by `scripts/bug-curve.py` (2026-05-20 → 202
 | B-2026-09-06-18 | interp+codegen | medium | A BY-VALUE `Drop` PARAM WRAPPED IN A USER ENUM VARIANT ON SOME EXITS RUNS THE BODY TWICE ON THE HAND-BACK PATH -- `fn fslot(r: R, k: bool) -> Slot {… | 50c8f4a |
 | B-2026-09-06-19 | interp+codegen | medium | A BY-VALUE `Drop` PARAM WRAPPED TWICE THROUGH A LOCAL ON SOME EXITS RUNS THE BODY TWICE ON THE HAND-BACK PATH -- `fn ftwo(r: R, k: bool) -> Box2 { if… | fe47a2e |
 | B-2026-09-06-20 | interp | medium | A `match` THAT DESTRUCTURES A MIXED WRAP'S VIEW SLOT RUNS THE VIEW'S `Drop` BODY TWICE IN THE INTERPRETER ALONE -- `fn m(r: R) -> i64 { let w = W2.Tw… | a5219e4 |
+| B-2026-09-06-21 | interp+codegen | low | TWO FRESH PAYLOADS BOUND OUT OF A `match` ARM DIE IN OPPOSITE ORDERS ON THE TWO BACKENDS -- `let w = W2.Two(mk(16), mk(17)); match w { W2.Two(a, b) =… | ef5ce6f |
 | B-2026-09-06-22 | codegen | medium | A `match` THAT DESTRUCTURES A MIXED STRUCT LITERAL'S VIEW FIELD RUNS THE VIEW'S `Drop` BODY TWICE ON EVERY COMPILED BACKEND -- `let s = S3 { a: r, b:… | 94b4c94 |
 | B-2026-09-06-24 | codegen | medium | A READ-ONLY `if let` / `while let` OVER A BORROW-PROJECTION SCRUTINEE COPIES THE PAYLOAD OUT UNDER CODEGEN AND BINDS A VIEW IN THE INTERPRETER -- `if… | d20a701 |
 | B-2026-09-06-25 | interp | medium | THE INTERPRETER TAKES NO COPY WHEN A VIEW BOUND OFF A BORROW-PROJECTION SCRUTINEE IS MATERIALIZED BY AN ARM VALUE OR A BY-VALUE CALL ARGUMENT -- `let… | b3aa3e3 |
@@ -2625,6 +2625,7 @@ _Generated from `bug-ledger.jsonl` by `scripts/bug-curve.py` (2026-05-20 → 202
 | B-2026-09-16-9 | codegen | high | REGRESSION ON `main`: `506a91d` TURNED THE `(Array[String, 2], i64)` ENUM-PAYLOAD CELL FROM A LEAK INTO AN INVALID FREE -- valgrind reports `Invalid… | 49e75a8 |
 | B-2026-09-16-10 | codegen | high | A GENERIC SINGLE-FIELD VARIANT AT `T = Array[String, N]` SEGFAULTS ON EVERY COMPILED BACKEND -- `G1.Y(a)` over `enum G1[T] { Y(T), N }` passed to a g… | 55a8db2 |
 | B-2026-09-16-12 | interp+codegen | medium | A MIXED BIND-AND-WILDCARD MATCH ARM LOSES THE WILDCARDED PAYLOAD FIELD'S `Drop` BODY -- `let w = W2.Two(mk(41), mk(42)); match w { W2.Two(a, _) => {… | c9432558c |
+| B-2026-09-16-17 | codegen+interp | medium | AN ENUM VARIANT'S PAYLOAD FIELDS RUN THEIR `Drop` BODIES IN DECLARATION ORDER ON ALL FOUR SURFACES, while a struct's run in REVERSE declaration order… | ef5ce6f |
 
 </details>
 
