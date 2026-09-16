@@ -1943,6 +1943,16 @@ impl<'ctx> super::Codegen<'ctx> {
         let mut payload_consuming_generic_params: Option<
             std::collections::HashMap<String, std::collections::HashSet<String>>,
         > = None;
+        // B-2026-09-16-10 — the CALLER-side escape set, memoised like its
+        // three siblings above. Deliberately `by_value_nonescaping_param_names`
+        // and not `nonescaping_param_names`: the mono prologue's gate is the
+        // UNION of both sets, and this one is documented as a strict superset
+        // of the other, so asking it alone reproduces that gate exactly. The
+        // two halves have to agree name-for-name — a caller that disarms where
+        // the prologue declines strands the box, and the reverse double-frees
+        // it.
+        let mut by_value_nonescaping_generic_params: Option<std::collections::HashSet<String>> =
+            None;
         for (i, a) in args.iter().enumerate() {
             let val = arg_vals[i];
             // B-2026-07-14-12: a fresh-heap `String` TEMP arg to a generic fn
@@ -2050,6 +2060,57 @@ impl<'ctx> super::Codegen<'ctx> {
                     || param_cannot_reach_return);
             if is_fresh_string_temp || is_fresh_vec_temp_for_owned_param {
                 self.materialize_owned_temp(val, arg_key);
+            }
+            // B-2026-09-16-10 — the CALLER's half of the box hand-off that
+            // `compile_function`'s prologue already performs the callee's half
+            // of, and which this path never performed at all.
+            //
+            // A by-value generic-enum param whose payload THIS INSTANTIATION
+            // boxes gets a `BoxedEnumDrop` registered in the monomorph's
+            // prologue (`user_enum_boxed_payload_variants`), so the callee frees
+            // the box at its scope exit. On the NON-generic path the caller
+            // zeroes its own slot at the argument (`compile_call`'s
+            // `suppress_inline_option_result_binding_move`) and the two balance.
+            // `compile_generic_call` never reaches that loop, so a named binding
+            // passed to a generic function kept its let-site box drop AND handed
+            // the same pointer to a callee that frees it: both ran, and the
+            // caller's drop then read through freed memory.
+            //
+            // Measured at `KARAC_OPT_LEVEL=0 KARAC_AUTO_PAR=0`, `enum G[T] { Y(T) }`
+            // with `fn glen[T](g: G[T])`: SIGSEGV, exit 139, five `Invalid read
+            // of size 8` contexts and no output at all, at `T = String`,
+            // `Vec[String]` and `Array[String, N]` alike, against a correct
+            // `--interp`. The monomorphic twin `fn glen(g: G[String])` emits the
+            // zero and is clean, which is what identifies the missing store
+            // rather than the callee's free as the defect.
+            //
+            // GATED ON THE PROLOGUE'S OWN PREDICATE, asked of the same
+            // instantiated type, so the two halves cannot drift: a multi-field
+            // variant is declined by `user_enum_boxed_payload_variants`'
+            // `tys.len() != 1` filter, the prologue registers nothing for it,
+            // and this correctly emits nothing — that shape's box is owned by
+            // nobody, which is B-2026-09-15-18's leak and not this row's to
+            // fix from here.
+            let param_box_taken_by_callee = generic_fn.params.get(i).is_some_and(|p| {
+                if matches!(p.ty.kind, TypeKind::Ref { .. } | TypeKind::MutRef { .. }) {
+                    return false;
+                }
+                let PatternKind::Binding(pname) = &p.pattern.kind else {
+                    return false;
+                };
+                if !by_value_nonescaping_generic_params
+                    .get_or_insert_with(|| {
+                        crate::result_escape::by_value_nonescaping_param_names(&generic_fn)
+                    })
+                    .contains(pname.as_str())
+                {
+                    return false;
+                }
+                let inst = self.callee_param_te_for_call(&p.ty, call_span);
+                !self.user_enum_boxed_payload_variants(&inst).is_empty()
+            });
+            if param_box_taken_by_callee {
+                self.suppress_inline_option_result_binding_move(&a.value);
             }
             // B-2026-09-02-46 — a fresh-temp `Option`/`Result` argument whose
             // payload THIS INSTANTIATION heap-boxes. The box is malloc'd by

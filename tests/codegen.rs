@@ -85938,6 +85938,103 @@ fn main() {
         );
     }
 
+    /// B-2026-09-16-10 — a by-value GENERIC-enum argument to a GENERIC function
+    /// segfaulted on every compiled backend: exit 139 with NO OUTPUT AT ALL,
+    /// five `Invalid read of size 8` contexts, against a correct `--interp`.
+    ///
+    /// THE ROW'S SHAPE IS NARROWER THAN ITS TITLE AND ITS CAUSE IS WIDER. It is
+    /// filed as `T = Array[String, N]` with a `match` in the callee; neither is
+    /// required. Measured: `T = String` and `T = Vec[String]` crash identically,
+    /// `T = Array[i64, N]` aborts with `free(): double free` instead, and a
+    /// callee whose whole body is `return 7` crashes just as well. What IS
+    /// required is all four of: a generic ENUM (a generic STRUCT is clean), a
+    /// variant with exactly ONE field (adding a second is clean), `T` bound to
+    /// a heap-bearing type (`i64` is clean), and passing it BY VALUE to a
+    /// GENERIC function (the monomorphic `fn glen(g: G1[String])` is clean, and
+    /// so are `ref` and a direct `match` in `main`).
+    ///
+    /// THE DEFECT IS ONE MISSING STORE. The monomorph's prologue registers a
+    /// `BoxedEnumDrop` for such a param (`user_enum_boxed_payload_variants`), so
+    /// the callee frees the box at its scope exit; on the NON-generic path the
+    /// caller zeroes its own slot at the argument and the two balance. IR from
+    /// the two spellings, side by side -- the monomorphic caller emits
+    /// `store {i64, i64} zeroinitializer` into its slot before the call and the
+    /// generic caller emits nothing at all.
+    ///
+    /// `compile_generic_call` never reaches `compile_call`'s argument loop -- its
+    /// own doc says it "runs neither half" -- so the disarm was never emitted and
+    /// the caller's let-site box drop then read through memory the callee had
+    /// freed. The repair emits it there, gated on the PROLOGUE'S OWN predicate
+    /// asked of the same instantiated type, so the two halves cannot drift.
+    ///
+    /// FOUR DISTINCT SYMPTOMS FROM ONE SHAPE, which is what says the defect is a
+    /// mishandled pointer rather than a drop-ownership slip: `T = String` /
+    /// `Vec[String]` / `Array[String, N]` / a struct / a tuple all SEGV,
+    /// `Array[i64, N]` aborts with `free(): double free`, `Vec[i64]` HANGS (a
+    /// sibling session measured it still running at 1708 s), and `i64` alone is
+    /// correct. All ten cells below are pinned, the hang included, because a
+    /// regression that reappears as a hang is the one a crash-only assertion
+    /// would sit through until the harness timed out.
+    ///
+    /// THIS FIXTURE PINS THE CRASH ONLY, deliberately. Two shapes in the same
+    /// family still leak and are filed rather than folded in: the box INTERIOR
+    /// of an `Array[String, N]` payload (its element buffers), and a payload
+    /// matched out into an unused arm binding. Both are exit-0 leaks here, so
+    /// the memory fixture next door carries only the subset that is fully clean
+    /// and this one asserts the output that used to not exist at all.
+    #[test]
+    fn e2e_by_value_generic_enum_arg_to_a_generic_fn_does_not_crash() {
+        assert_eq!(
+            run_program(
+                "             struct P { a: String, b: i64 }\n\
+             enum G1[T] { Y(T), N }\n\
+             enum G2[T] { Y(T) }\n\
+             \n\
+             fn glen[T](g: G1[T]) -> i64 {\n\
+                 match g { G1.Y(v) => { return 1; } G1.N => { return 0; } }\n\
+             }\n\
+             fn gplain[T](g: G1[T]) -> i64 { return 7; }\n\
+             fn g2len[T](g: G2[T]) -> i64 { return 7; }\n\
+             \n\
+             fn main() {\n\
+                 let a: Array[String, 2] = [f\"b1610-arr-aaaaaaaaaaaa\", f\"b1610-arr-bbbbbbbbbbbb\"];\n\
+                 let ga: G1[Array[String, 2]] = G1.Y(a);\n\
+                 println(f\"arr {glen(ga)}\");\n\
+             \n\
+                 let a1: Array[String, 1] = [f\"b1610-one-cccccccccccc\"];\n\
+                 let g1: G1[Array[String, 1]] = G1.Y(a1);\n\
+                 println(f\"one {glen(g1)}\");\n\
+             \n\
+                 let gi: G1[Array[i64, 2]] = G1.Y([3, 4]);\n\
+                 println(f\"ints {glen(gi)}\");\n\
+             \n\
+                 let gs: G1[String] = G1.Y(f\"b1610-str-dddddddddddd\");\n\
+                 println(f\"str {glen(gs)}\");\n\
+             \n\
+                 let gv: G1[Vec[String]] = G1.Y([f\"b1610-vec-eeeeeeeeeeee\"]);\n\
+                 println(f\"vec {gplain(gv)}\");\n\
+             \n\
+                 let gn: G1[String] = G1.Y(f\"b1610-nomatch-ffffffffffff\");\n\
+                 println(f\"nomatch {gplain(gn)}\");\n\
+             \n\
+                 let gu: G2[String] = G2.Y(f\"b1610-unit-gggggggggggg\");\n\
+                 println(f\"unit {g2len(gu)}\");\n\
+             \n\
+                 let gp: G1[P] = G1.Y(P { a: f\"b1610-struct-hhhhhhhhhhhh\", b: 2 });\n\
+                 println(f\"struct {glen(gp)}\");\n\
+             \n\
+                 let gt: G1[(String, i64)] = G1.Y((f\"b1610-tuple-iiiiiiiiiiii\", 3));\n\
+                 println(f\"tuple {glen(gt)}\");\n\
+             \n\
+                 let gvi: G1[Vec[i64]] = G1.Y([1, 2]);\n\
+                 println(f\"veci {glen(gvi)}\");\n\
+             }"
+            )
+            .as_deref(),
+            Some("arr 1\none 1\nints 1\nstr 1\nvec 7\nnomatch 7\nunit 7\nstruct 1\ntuple 1\nveci 1\n")
+        );
+    }
+
     /// B-2026-08-21-4 — `as_slice()` on a `ref`-mode receiver, and a call
     /// declared to return `Slice[T]`.
     ///

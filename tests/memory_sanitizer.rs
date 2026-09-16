@@ -91154,6 +91154,97 @@ fn main() {
         );
     }
 
+    /// B-2026-09-16-10 — the MEMORY half of the generic-enum-argument crash.
+    /// Ten spellings, all of them SIGSEGV before the fix (exit 139, invalid
+    /// reads AND invalid frees in this program), all clean after: 49 allocs /
+    /// 49 frees, zero errors, identical output on `--interp`, the JIT and
+    /// `karac build`.
+    ///
+    /// The crash is that both the caller and the monomorph's prologue freed the
+    /// same payload box: the prologue registers a `BoxedEnumDrop` for a by-value
+    /// generic-enum param, and `compile_generic_call` never emitted the
+    /// caller-side disarm that `compile_call` emits for the monomorphic twin.
+    ///
+    /// SIX OF THE TEN CELLS ARE CONTROLS and each one pins a condition the
+    /// repair is gated on, so a future widening has to break one of them
+    /// visibly: a `ref` param (the prologue declines it), a generic STRUCT, a
+    /// bare-`T` param, an `Option` payload (the seeded pair keeps its own
+    /// path), a monomorphic callee (already correct, must stay byte-identical),
+    /// and an `Array[i64, N]` payload with no inner heap — which aborted with
+    /// `free(): double free` rather than segfaulting, the same defect wearing a
+    /// different failure.
+    ///
+    /// THE FULLY-CLEAN SUBSET ONLY, and the exclusions are deliberate rather
+    /// than convenient. `G[Array[String, N]]` still strands its element buffers
+    /// (64 B in 4 blocks over two rounds) and a payload matched into an unused
+    /// arm binding still strands the payload itself (10 B per call); both are
+    /// exit-0 leaks in the same family, filed on their own rows. The codegen
+    /// fixture `e2e_by_value_generic_enum_arg_to_a_generic_fn_does_not_crash`
+    /// carries those shapes and asserts the OUTPUT, which is what the crash
+    /// took away.
+    #[test]
+    fn asan_by_value_generic_enum_arg_frees_its_payload_box_once() {
+        assert_clean_asan_run(
+            r#"
+enum G1[T] { Y(T), N }
+enum G2[T] { Y(T) }
+struct S1[T] { v: T }
+
+fn gplain[T](g: G1[T]) -> i64 { return 7; }
+fn g2len[T](g: G2[T]) -> i64 { return 7; }
+fn gints[T](g: G1[T]) -> i64 {
+    match g { G1.Y(v) => { return 1; } G1.N => { return 0; } }
+}
+fn gref[T](g: ref G1[T]) -> i64 { return 7; }
+fn slen[T](s: S1[T]) -> i64 { return 7; }
+fn bare[T](x: T) -> i64 { return 7; }
+fn optlen[T](o: Option[T]) -> i64 { return 7; }
+fn monolen(g: G1[String]) -> i64 { return 7; }
+fn mkg(n: i64) -> G1[String] { return G1.Y(f"b1610-fresh-aaaaaaaaaaaa-{n}"); }
+
+fn main() {
+    let mut t = 0;
+    let mut i = 0;
+    while i < 2 {
+        let a: G2[String] = G2.Y(f"b1610-unit-bbbbbbbbbbbb-{i}");
+        t = t + g2len(a);
+
+        let b: G1[Vec[String]] = G1.Y([f"b1610-vec-cccccccccccc-{i}"]);
+        t = t + gplain(b);
+
+        let c: G1[Array[i64, 2]] = G1.Y([i, i + 1]);
+        t = t + gints(c);
+
+        t = t + gplain(mkg(i));
+
+        let d: G1[String] = G1.Y(f"b1610-loop-dddddddddddd-{i}");
+        t = t + gplain(d);
+
+        let e: G1[String] = G1.Y(f"b1610-ref-eeeeeeeeeeee-{i}");
+        t = t + gref(e);
+
+        let f2: S1[String] = S1 { v: f"b1610-struct-ffffffffffff-{i}" };
+        t = t + slen(f2);
+
+        let g2: String = f"b1610-baret-gggggggggggg-{i}";
+        t = t + bare(g2);
+
+        let h: Option[Array[String, 2]] = Option.Some([f"b1610-opt-hhhhhhhhhhhh-{i}", f"b1610-opt-iiiiiiiiiiii-{i}"]);
+        t = t + optlen(h);
+
+        let j: G1[String] = G1.Y(f"b1610-mono-jjjjjjjjjjjj-{i}");
+        t = t + monolen(j);
+
+        i = i + 1;
+    }
+    println(f"total {t}");
+}
+"#,
+            &["total 128"],
+            "asan_by_value_generic_enum_arg_frees_its_payload_box_once",
+        );
+    }
+
     /// B-2026-09-14-25 — an `Array[D, N]` enum payload whose element carries
     /// BOTH heap and a user `Drop` body double-freed its element buffers on a
     /// consuming arm: `exit 134`, 2 invalid frees, `15 allocs / 17 frees`, at
