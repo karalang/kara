@@ -140,6 +140,11 @@ if [[ "${KARAC_ALLOW_STALE_ARCHIVE:-0}" != "1" ]]; then
   fi
 fi
 
+# B-2026-09-09-7 — put the TRUE allowance in the log before the leg spends it.
+# Advisory only: a hard refusal here would turn a tight-but-workable box red,
+# which is worse than the failure it guards against.
+bash "$REPO/scripts/disk-guard.sh" preflight 8 "$LEG leg" || true
+
 echo ">> [$LEG] KARAC_OPT_LEVEL=$OPT_LEVEL cargo test --features llvm --test memory_sanitizer (--test-threads=$THREADS)"
 KARAC_OPT_LEVEL="$OPT_LEVEL" KARAC_REQUIRE_RUNTIME_ARCHIVE="$REQUIRE_ARCHIVE" \
   cargo test --features llvm --test memory_sanitizer \
@@ -152,6 +157,11 @@ echo ">> suite exited $?"
 # one level up).
 if ! grep -qE '^test result:' "$LOG"; then
   echo "!! no test-result line — the suite did not run to completion:"
+  # B-2026-09-09-7 — this is exactly where a FULL DISK lands, and it arrives
+  # disguised: an LLVM "PLEASE submit a bug report" banner, a linker SIGBUS, or
+  # no output at all. Say which before printing the tail, so the tail is read
+  # in the right frame.
+  bash "$REPO/scripts/disk-guard.sh" classify "$LOG" || true
   tail -30 "$LOG"
   exit 2
 fi
@@ -256,5 +266,12 @@ fi
 if [[ "$status" == "0" ]]; then
   n=$(echo "$expected" | sed '/^$/d' | wc -l | tr -d ' ')
   echo ">> $LEG leg matches the quarantine list exactly ($n known failure(s))"
+else
+  # B-2026-09-09-7 shape 5 — named fixtures with ordinary-looking failures can
+  # still be a full disk, with no disk message anywhere in the log. Only the
+  # free space can tell, so check it before this red is attributed to the
+  # change under test.
+  echo
+  bash "$REPO/scripts/disk-guard.sh" classify "$LOG" || true
 fi
 exit "$status"

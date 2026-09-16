@@ -193,6 +193,39 @@ cargo clean -p karac    # ~20-24 GiB back in seconds; run between feature legs
 and variable DWARF. **Check `df` before concluding anything from a red gate** --
 a gate that failed with no named test may not have run one.
 
+**`scripts/disk-guard.sh` now does this checking for you, so the rule above no
+longer has to be remembered** (B-2026-09-09-7, the same argument that put the
+archive-freshness check into the ASAN legs). Both ASAN legs call it at three
+points -- an advisory `preflight` that logs the TRUE allowance before the leg
+spends it, and `classify` on the two failure paths. Run it around your own gate
+legs too:
+
+```bash
+bash scripts/disk-guard.sh allowance            # used+avail, ignoring df's host 'size'
+bash scripts/disk-guard.sh preflight 8 "llvm leg"
+bash scripts/disk-guard.sh classify gate.log    # exit 4 = this red was disk
+```
+
+`preflight` is deliberately ADVISORY and always exits 0: a hard refusal would
+turn a tight-but-workable box red, which is a worse failure than the one it
+guards against. Its job is to get the real number into the log, because `df`'s
+size column is the host volume and reading it is what invites the wrong
+conclusion.
+
+**There is a FIFTH shape the four above do not cover, and no signature can find
+it.** A full disk can fail NAMED tests with ordinary-looking assertion diffs and
+NO disk message anywhere -- the tests that write files fail first. Measured
+twice: the `BufReader` cluster in `tests/interpreter.rs` (B-2026-09-09-5), and
+on 2026-09-16 a `git_fetch` / `registry_proxy` cluster whose count assertions
+read `left: 0 right: 1`, where the gate script had freed 23 GiB immediately
+before the leg and the leg's own linking spent it. Both look exactly like
+load-sensitive flakes, and both pass in isolation, which is what makes them
+convincing. So CLAUDE.md's "no named test" heuristic is necessary but not
+sufficient: the other tells are WHICH tests failed (file-writing ones, with no
+path to the change under test) and reading `df` **after** the failing leg rather
+than before it, since the leg is what consumes the space. `classify` checks free
+space for exactly this reason and SUSPECTS rather than asserts when it fires.
+
 ## Branch management
 
 **Two environments, two workflows — pick by where the session runs.** The worktree rules in the rest of this section govern the **local multi-worktree checkout** (the primary machine, where sibling worktrees run parallel slices and the primary's clean `git status` is load-bearing). They do **not** apply to an **ephemeral cloud container** (Claude Code on the web / a fresh clone discarded when the session ends): there are no sibling worktrees, no parallel slices, and nothing to isolate from, so `EnterWorktree` + a feature branch buys nothing but ceremony. In a cloud container, **work directly on `main`** — commit straight to `main`, no feature branch, no PR unless explicitly asked (owner-authorized 2026-07-07, overriding the mandatory-worktree default below for this environment only).
