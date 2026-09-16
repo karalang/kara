@@ -1733,6 +1733,15 @@ impl<'ctx> super::Codegen<'ctx> {
                 // arm (B-2026-08-13-15).
                 let key_val = self.coerce_scalar_to_type_from(key_val, key_ty, &args[0].value);
                 let val_val = self.compile_expr(&args[1].value)?;
+                // B-2026-09-15-16 — the `insert` sink's half of the same pair
+                // the variant constructor and `push` take. A WHOLE non-shared
+                // struct inserted while the source is READ AFTER THE MOVE needs
+                // its own buffer, or the move suppression below zeroes the
+                // source's `len` with its `cap` and the later read comes back
+                // EMPTY. `uam_defensive_copy` records the site and
+                // `suppress_source_vec_cleanup_for_arg_ex` already declines for
+                // a recorded one, so copy and skip land together.
+                let val_val = self.uam_defensive_copy(&args[1].value, val_val);
                 self.suppress_fstr_acc_if_moved_out(&args[1].value);
                 let val_val = self.maybe_defensive_copy_param_arg(&args[1].value, val_val);
                 // Declared-value-width coercion, same reason as the `insert`
@@ -1945,6 +1954,15 @@ impl<'ctx> super::Codegen<'ctx> {
                     None
                 };
                 let val_val = self.compile_expr(&args[1].value)?;
+                // B-2026-09-15-16 — the `insert` sink's half of the same pair
+                // the variant constructor and `push` take. A WHOLE non-shared
+                // struct inserted while the source is READ AFTER THE MOVE needs
+                // its own buffer, or the move suppression below zeroes the
+                // source's `len` with its `cap` and the later read comes back
+                // EMPTY. `uam_defensive_copy` records the site and
+                // `suppress_source_vec_cleanup_for_arg_ex` already declines for
+                // a recorded one, so copy and skip land together.
+                let val_val = self.uam_defensive_copy(&args[1].value, val_val);
                 // Same consume-site pair for the value argument.
                 self.suppress_fstr_acc_if_moved_out(&args[1].value);
                 let val_val = self.maybe_defensive_copy_param_arg(&args[1].value, val_val);

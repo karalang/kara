@@ -3284,6 +3284,21 @@ impl<'ctx> super::Codegen<'ctx> {
                     return Err("Vec.push requires an argument".to_string());
                 }
                 let elem_val = self.compile_expr(&args[0].value)?;
+                // B-2026-09-15-16 — the `push` sink's half of the same pair the
+                // variant constructor takes. A WHOLE non-shared struct pushed
+                // while the source is READ AFTER THE MOVE needs its own buffer,
+                // or the move suppression below zeroes the source's `len` along
+                // with its `cap` and the later read comes back EMPTY:
+                // `v.push(p)` then `println(p.s)` printed nothing on every
+                // compiled surface against `--interp`'s string.
+                //
+                // Per sink, deliberately. `uam_defensive_copy` records the site
+                // and `suppress_source_vec_cleanup_for_arg_ex` already declines
+                // for a recorded one, so copy and skip land together; a copy at
+                // a destination that still takes the source's memory would
+                // strand the buffer instead (44 B, measured on the sibling
+                // position in `maybe_defensive_copy_param_arg`'s own note).
+                let elem_val = self.uam_defensive_copy(&args[0].value, elem_val);
                 // F-string argument (`v.push(f"…")`): the accumulator's
                 // queued scope-exit `FreeVecBuffer` must be disarmed —
                 // the container takes the buffer (move), and without the

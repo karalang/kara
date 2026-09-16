@@ -10170,6 +10170,27 @@ impl<'ctx> super::Codegen<'ctx> {
                 .unwrap_or_default();
             for (i, arg) in args.iter().enumerate() {
                 let val = self.compile_expr(&arg.value)?;
+                // B-2026-09-15-16 — a WHOLE non-shared struct moved into a variant
+                // constructor while the source is READ AFTER THE MOVE gets the same
+                // defensive copy the struct-literal field init takes. Without it the move
+                // suppression below zeroes the source's `len` as well as its `cap`
+                // (B-2026-07-10-1, for a drop walk that is len-driven and not under the cap
+                // guard), and `len` is what a READ returns: `p.s` printed EMPTY after
+                // `Ws.Full(p)` on every compiled surface while `--interp` printed the string.
+                //
+                // THE COPY, NOT A NARROWING OF THE ZERO. Narrowing that zero to the case its
+                // walk needs was measured and makes the tree worse: it turns the blank read
+                // into a USE-AFTER-FREE, because the source's `ptr` dangles from the moment
+                // the destination frees and `len = 0` is the only thing stopping a
+                // dereference. Giving the SOURCE its own buffer removes the aliasing instead
+                // of hiding it, which is why the CALL-ARGUMENT spelling of the same program
+                // was already correct — its entry copy does exactly this.
+                //
+                // The copy and the skip are ONE PAIR: `uam_defensive_copy` records the site
+                // in `uam_copied_sites`, and `suppress_source_vec_cleanup_for_arg_ex`
+                // already declines for a recorded site, so the source keeps its buffer AND
+                // its drop. Landing the copy alone would strand it.
+                let val = self.uam_defensive_copy(&arg.value, val);
                 // B-2026-08-31-34 — a variant-constructor ARGUMENT that READS A
                 // HEAP FIELD OFF A FRESH TEMP (`Some(mkp(1).a)`, `T.V(mkp(1).a)`)
                 // is a MOVE, exactly as `let a = mkp(1).a;` is. The let / assign /
@@ -10285,6 +10306,27 @@ impl<'ctx> super::Codegen<'ctx> {
             .unwrap_or_default();
         for (i, arg) in args.iter().enumerate() {
             let val = self.compile_expr(&arg.value)?;
+            // B-2026-09-15-16 — a WHOLE non-shared struct moved into a variant
+            // constructor while the source is READ AFTER THE MOVE gets the same
+            // defensive copy the struct-literal field init takes. Without it the move
+            // suppression below zeroes the source's `len` as well as its `cap`
+            // (B-2026-07-10-1, for a drop walk that is len-driven and not under the cap
+            // guard), and `len` is what a READ returns: `p.s` printed EMPTY after
+            // `Ws.Full(p)` on every compiled surface while `--interp` printed the string.
+            //
+            // THE COPY, NOT A NARROWING OF THE ZERO. Narrowing that zero to the case its
+            // walk needs was measured and makes the tree worse: it turns the blank read
+            // into a USE-AFTER-FREE, because the source's `ptr` dangles from the moment
+            // the destination frees and `len = 0` is the only thing stopping a
+            // dereference. Giving the SOURCE its own buffer removes the aliasing instead
+            // of hiding it, which is why the CALL-ARGUMENT spelling of the same program
+            // was already correct — its entry copy does exactly this.
+            //
+            // The copy and the skip are ONE PAIR: `uam_defensive_copy` records the site
+            // in `uam_copied_sites`, and `suppress_source_vec_cleanup_for_arg_ex`
+            // already declines for a recorded site, so the source keeps its buffer AND
+            // its drop. Landing the copy alone would strand it.
+            let val = self.uam_defensive_copy(&arg.value, val);
             // B-2026-08-31-34 — a variant-constructor ARGUMENT that READS A
             // HEAP FIELD OFF A FRESH TEMP (`Some(mkp(1).a)`, `T.V(mkp(1).a)`)
             // is a MOVE, exactly as `let a = mkp(1).a;` is. The let / assign /

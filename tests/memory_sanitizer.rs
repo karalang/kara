@@ -91251,6 +91251,112 @@ fn main() {
         );
     }
 
+    /// B-2026-09-15-16 — a plain struct moved into an OWNING SINK left the
+    /// source's heap field reading EMPTY on every compiled backend, against a
+    /// correct `--interp`: `Ws.Full(p)` then `println(p.s)` printed nothing, and
+    /// so did `v.push(p)` and `m.insert(1, p)`. Exit 0, `karac check` clean apart
+    /// from the advisory move warning, and valgrind-quiet — so nothing reported
+    /// it.
+    ///
+    /// `UseAfterMove` is advisory on the compiled surface BY CONSTRUCTION, and
+    /// the promise that rests on is that the value the reuse reads is still
+    /// intact. The CALL-ARGUMENT spelling of the identical program honours it —
+    /// its entry copy is what keeps the source intact — so the same program was
+    /// right or wrong depending only on which sink it moved into.
+    ///
+    /// THE MECHANISM is the whole-struct move suppression, which zeroes the
+    /// moved-out field's `len` as well as its `cap` (B-2026-07-10-1, for a drop
+    /// walk that is len-driven and not under the cap guard). `len` is what a
+    /// READ returns, so the source blanks.
+    ///
+    /// NARROWING THAT ZERO IS NOT THE REPAIR, and this fixture exists partly to
+    /// keep that from being re-attempted: a sibling session implemented the
+    /// narrowing and measured it turning the blank read into a USE-AFTER-FREE
+    /// (`Invalid read of size 2`, `0 bytes inside a block of size 23 free'd`).
+    /// The source's `ptr` dangles the moment the destination frees; `len = 0` is
+    /// the only thing stopping a dereference, so the blank read was accidental
+    /// masking of a dangling pointer.
+    ///
+    /// THE REPAIR IS THE DEFENSIVE COPY the call-argument spelling already
+    /// takes, added at the three OWNING sinks — variant constructor, `Vec.push`,
+    /// `Map.insert`. The machinery was already present and only its first half
+    /// was wired: `uam_defensive_copy` has a user-struct arm that duplicates the
+    /// heap fields and records `uam_copied_sites`, and
+    /// `suppress_source_vec_cleanup_for_arg_ex` already declines for a recorded
+    /// site. So the copy and the skip land as ONE PAIR by construction, which
+    /// matters — a copy at a destination that still takes the source's memory
+    /// strands the buffer instead.
+    ///
+    /// THE LAST CELLS ARE CONTROLS. `alive` reads the source while the sink is
+    /// STILL LIVE, the timing that proves the blanking was the MOVE rather than
+    /// the sink's death. `call` is the oracle that was correct throughout and
+    /// must stay byte-identical. `e` pins a `Vec`-typed field and `d` a struct
+    /// with TWO heap fields — both blanked before, and both shapes a per-field
+    /// repair could have missed.
+    #[test]
+    fn asan_struct_moved_into_an_owning_sink_keeps_the_source_readable() {
+        assert_clean_asan_run(
+            r#"
+struct P { s: String }
+struct P2 { s: String, t: String }
+struct Pv { v: Vec[String] }
+enum Ws { Full(P), Empty }
+
+fn wlen(w: Ws) -> i64 { match w { Ws.Full(q) => { return q.s.len(); } Ws.Empty => { return 0; } } }
+fn takep(p: P) -> i64 { return p.s.len(); }
+fn mkp(n: i64) -> P { return P { s: f"b1516-src-aaaaaaaaaaaa-{n}" }; }
+
+fn main() {
+    let a = mkp(1);
+    { let w = Ws.Full(a); println(f"ctor {wlen(w)}"); }
+    println(f"a {a.s}");
+
+    let b = mkp(2);
+    { let mut v: Vec[P] = []; v.push(b); println(f"push {v.len()}"); }
+    println(f"b {b.s}");
+
+    let c = mkp(3);
+    { let mut m: Map[i64, P] = Map.new(); m.insert(1, c); println(f"insert {m.len()}"); }
+    println(f"c {c.s}");
+
+    let d = P2 { s: f"b1516-two-bbbbbbbbbbbb", t: f"b1516-two-cccccccccccc" };
+    { let mut v: Vec[P2] = []; v.push(d); println(f"two {v.len()}"); }
+    println(f"d {d.s} {d.t}");
+
+    let e = Pv { v: [f"b1516-vecf-dddddddddddd"] };
+    { let mut v: Vec[Pv] = []; v.push(e); println(f"vecf {v.len()}"); }
+    println(f"e {e.v.len()}");
+
+    let f = mkp(6);
+    { let w = Ws.Full(f); println(f"alive {f.s}"); println(f"w {wlen(w)}"); }
+    println(f"f {f.s}");
+
+    let g = mkp(7);
+    { println(f"call {takep(g)}"); }
+    println(f"g {g.s}");
+}
+"#,
+            &[
+                "ctor 24",
+                "a b1516-src-aaaaaaaaaaaa-1",
+                "push 1",
+                "b b1516-src-aaaaaaaaaaaa-2",
+                "insert 1",
+                "c b1516-src-aaaaaaaaaaaa-3",
+                "two 1",
+                "d b1516-two-bbbbbbbbbbbb b1516-two-cccccccccccc",
+                "vecf 1",
+                "e 1",
+                "alive b1516-src-aaaaaaaaaaaa-6",
+                "w 24",
+                "f b1516-src-aaaaaaaaaaaa-6",
+                "call 24",
+                "g b1516-src-aaaaaaaaaaaa-7",
+            ],
+            "asan_struct_moved_into_an_owning_sink_keeps_the_source_readable",
+        );
+    }
+
     /// B-2026-09-14-25 — an `Array[D, N]` enum payload whose element carries
     /// BOTH heap and a user `Drop` body double-freed its element buffers on a
     /// consuming arm: `exit 134`, 2 invalid frees, `15 allocs / 17 frees`, at
