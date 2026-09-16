@@ -1,0 +1,47 @@
+// READ-PATH rail: a `Vec[String]` element read through `.bytes()`, in a hot
+// loop, with NO construction inside the timed region — the Vec is filled once.
+//
+// Every other rail in this directory measures CONSTRUCTION. This one exists
+// because B-2026-09-14-28 went two days unattributed while the harness had no
+// way to isolate a read: `vertical`'s +85% is entirely this shape, and the two
+// construction fixes (9d3ceb9, 066695ff) moved it by 0.003%.
+//
+// Pair it with `vechoist.kara`, which does the SAME byte reads through a
+// view built ONCE. That pair is the finding: per-read view +80%, hoisted view
+// +0.0%. The cost is `.bytes()` view construction — a tag test whose select
+// lands on the ADDRESS the next byte load uses — not the reads themselves.
+fn scan(strs: ref Vec[String], col: i64) -> i64 {
+    let n = strs.len();
+    let mut hits = 0;
+    let mut s = 0;
+    while s < n {
+        let other = strs[s].bytes();
+        if col < other.len() and other[col] == 97 {
+            hits = hits + 1;
+        }
+        s = s + 1;
+    }
+    hits
+}
+
+fn main() {
+    let mut v: Vec[String] = Vec.new();
+    let mut i = 0;
+    while i < 16 {
+        let mut s: String = "";
+        let mut j = 0;
+        while j < LEN {
+            s.push('a');
+            j = j + 1;
+        }
+        v.push(s);
+        i = i + 1;
+    }
+    let mut total = 0;
+    let mut k = 0;
+    while k < ITERS {
+        total = total + scan(v, k % LEN);
+        k = k + 1;
+    }
+    println(total);
+}

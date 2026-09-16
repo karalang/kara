@@ -72,6 +72,18 @@
 # committed rail at five commits spanning 09-12..09-15 gives -12 to -14% at
 # every one of them, flat. Recorded as B-2026-09-15-1 (invalid).
 #
+# THE READ PATH IS WHERE SSO STILL LOSES, and it is a different axis from
+# everything else in this header. `vecread` / `vechoist` measure it:
+# a Vec[String] element read via `.bytes()` costs +80% under SSO when the view
+# is built per read, and +0.0% when the same reads go through a view built
+# once. So SSO costs nothing to READ a materialized slice; all of it is view
+# construction — a tag test whose select lands on the ADDRESS the next byte
+# load uses. It is UNCONDITIONAL: an all-inline Vec (SSO's best case) still
+# pays +71%, because the select is branchless and both operands are computed
+# whatever the tag says. That is the whole of `vertical`'s regression
+# (B-2026-09-14-28), and it is why the two CONSTRUCTION fixes moved that kata
+# by 0.003%.
+#
 # THE substr/lexlike GAP WAS NOT A FINDING -- B-2026-09-15-6 is closed invalid.
 # The two rails cost the SAME under SSO. Best-of-15, pinned, both printing
 # 200000:
@@ -187,6 +199,12 @@ MICRO=(
   "promote:promote:$BITERS:20"
   "pfx_idx:pfx_idx:$BITERS:20"
   "pfx_chars:pfx_chars:$BITERS:20"
+  # READ-PATH pair (B-2026-09-14-28). Every rail above measures CONSTRUCTION;
+  # these two measure a `Vec[String]` element read with none in the timed loop.
+  # `vecread` builds the `.bytes()` view PER read, `vechoist` builds it
+  # ONCE — read them together, the difference IS the finding.
+  "vecread:vecread:$ITERS:10"
+  "vechoist:vechoist:$ITERS:10"
 )
 for spec in "${MICRO[@]}"; do
   IFS=: read -r name srcf it ln <<< "$spec"
@@ -225,7 +243,7 @@ for sso in 0 1; do
   done
 done
 
-for rail in lexer lexlike substr builder20 builder60 promote pfx_idx pfx_chars; do
+for rail in lexer lexlike substr builder20 builder60 promote pfx_idx pfx_chars vecread vechoist; do
   a=${T[${rail}0]}; b=${T[${rail}1]}
   pct=$(awk -v a="$a" -v b="$b" 'BEGIN{ printf "%+.1f%%", (b-a)*100.0/a }')
   note=$(awk -v a="$a" -v b="$b" 'BEGIN{ print (b<a) ? "SSO wins" : "SSO loses" }')

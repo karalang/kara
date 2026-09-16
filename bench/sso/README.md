@@ -6,9 +6,34 @@ SSO is **off by default** (`KARAC_SSO=1` turns it on); this track exists to
 decide whether that should change.
 
 ```bash
-bash bench/sso/bench.sh                 # all three rails, both settings
+bash bench/sso/bench.sh                 # all ten rails, both settings
 ITERS=1000000 PASSES=20 bash bench/sso/bench.sh   # fast iteration
 ```
+
+## Current rail set — `0382953`
+
+| rail | `SSO=0` | `SSO=1` | delta |
+|---|---|---|---|
+| `lexer` | 1831 ms | 1481 ms | −19.1% |
+| `lexlike` | 47 ms | 37 ms | −21.3% |
+| `substr` | 32 ms | 7 ms | −78.1% |
+| `builder20` | 50 ms | 47 ms | −6.0% |
+| `builder60` | 72 ms | 68 ms | −5.6% |
+| `promote` | 38 ms | 30 ms | −21.1% |
+| `pfx_idx` | 13 ms | 13 ms | +0.0% |
+| `pfx_chars` | 34 ms | 26 ms | −23.5% |
+| **`vecread`** | 26 ms | 48 ms | **+84.6%** |
+| `vechoist` | 4 ms | 4 ms | +0.0% |
+
+**Read this table before any other in this file.** Every construction rail is a
+win; `vecread` is the only loser. `vecread` / `vechoist` are the read-path pair
+(view per read vs view built once) — their difference IS the finding, and
+`vechoist`'s +0.0% is what says the cost is view construction rather than
+reading. B-2026-09-14-28.
+
+Numbers elsewhere in this file are older and carry their own dates; when they
+disagree with this table, this table is newer and neither is portable to your
+machine. Re-run.
 
 ## The rails, and why they disagree
 

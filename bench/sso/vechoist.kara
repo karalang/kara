@@ -1,0 +1,37 @@
+// The CONTROL for `vecread.kara`: identical byte reads, but the tag-aware view
+// is built ONCE outside the hot loop instead of per iteration.
+//
+// Measured together (5M iters, KARAC_AUTO_PAR=0, best-of-9, x86-64):
+//     vecread          40ms -> 79ms   +97.5%
+//     vechoist   6ms ->  6ms    +0.0%
+// so SSO costs nothing to READ a materialized slice. All of it is view
+// construction. Two fixes were tested and REFUTED on the way: the duplicate
+// `cap` load codegen emits is already folded by LLVM, and marking the
+// descriptor loads `!invariant.load` changes nothing (80 -> 79ms) — the
+// selects depend on an inner-loop induction variable, so no aliasing fact
+// lets LICM hoist them. B-2026-09-14-28.
+fn main() {
+    let mut v: Vec[String] = Vec.new();
+    let mut i = 0;
+    while i < 16 {
+        let mut s: String = "";
+        let mut j = 0;
+        while j < LEN {
+            s.push('a');
+            j = j + 1;
+        }
+        v.push(s);
+        i = i + 1;
+    }
+    let other = v[0].bytes();
+    let mut total = 0;
+    let mut k = 0;
+    while k < ITERS {
+        let col = k % LEN;
+        if col < other.len() and other[col] == 97 {
+            total = total + 16;
+        }
+        k = k + 1;
+    }
+    println(total);
+}

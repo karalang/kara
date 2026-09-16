@@ -12,6 +12,33 @@ boundary and the read path.
 Everything under this section is a running log in date order, so **the further
 down you read, the older the numbers are.** The current picture:
 
+**CURRENT RAIL SET — measured at `0382953`, `RUNS=9`, `ITERS=3M`,
+`KARAC_AUTO_PAR=0`, x86-64.** Every figure below carries the commit it was taken
+at, because this table has gone stale three times in two days: rail levels are
+host-dependent AND the compiler moved underneath them twice.
+
+| rail | `SSO=0` | `SSO=1` | delta |
+|---|---|---|---|
+| `lexer` | 1831 ms | 1481 ms | −19.1% |
+| `lexlike` | 47 ms | 37 ms | −21.3% |
+| `substr` | 32 ms | 7 ms | −78.1% |
+| `builder20` | 50 ms | 47 ms | −6.0% |
+| `builder60` | 72 ms | 68 ms | −5.6% |
+| `promote` | 38 ms | 30 ms | −21.1% |
+| `pfx_idx` | 13 ms | 13 ms | +0.0% |
+| `pfx_chars` | 34 ms | 26 ms | −23.5% |
+| **`vecread`** | 26 ms | 48 ms | **+84.6%** |
+| `vechoist` | 4 ms | 4 ms | +0.0% |
+
+**Every CONSTRUCTION rail is now a win, and the read-path rail is the only
+loser.** After `9d3ceb9` and `066695ff`, `lexlike` went +23% → −21% and `substr`
++73% → −78%. `vecread` (a `Vec[String]` element read through `.bytes()`, no
+construction in the timed loop) is +85%, and `vechoist` — the same reads through
+a view built ONCE — is +0.0%. So SSO costs nothing to read a materialized
+slice; all of it is view construction, and it is unconditional (an all-inline
+`Vec` still pays +71%). That is the whole of `vertical`'s regression,
+B-2026-09-14-28, and the SSO track is now one open question rather than several.
+
 **Rail deltas — and they are NOT portable across machines.** Same compiler
 (`karac` at `27466ba`, built and run on both hosts), `RUNS=15`, two samples,
 `KARAC_AUTO_PAR=0`. Negative = SSO faster.
