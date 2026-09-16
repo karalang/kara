@@ -1190,8 +1190,12 @@ impl<'a> super::Interpreter<'a> {
                                 )
                                 // B-2026-09-06-27 — never for a bare owned ENUM
                                 // `self`; see the `match` leg.
+                                // B-2026-09-06-39 — ...unless the enum has its
+                                // own `impl Drop`, where the caller's walk owns
+                                // the payload again and the arms bind views.
                                 && !(matches!(value.kind, ExprKind::SelfValue)
-                                    && self.bare_self_is_owned_enum_receiver())
+                                    && self.bare_self_is_owned_enum_receiver()
+                                    && !self.bare_self_is_owned_drop_enum_receiver())
                         }
                         _ => false,
                     };
@@ -1614,8 +1618,12 @@ impl<'a> super::Interpreter<'a> {
                                     .let_form_only_reads_payload_through(enum_name, pattern, body)
                                 // B-2026-09-06-27 — never for a bare owned ENUM
                                 // `self`; see the `match` leg.
+                                // B-2026-09-06-39 — ...unless the enum has its
+                                // own `impl Drop`, where the caller's walk owns
+                                // the payload again and the arms bind views.
                                 && !(matches!(value.kind, ExprKind::SelfValue)
-                                    && self.bare_self_is_owned_enum_receiver())
+                                    && self.bare_self_is_owned_enum_receiver()
+                                    && !self.bare_self_is_owned_drop_enum_receiver())
                         }
                         _ => false,
                     };

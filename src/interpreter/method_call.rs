@@ -532,7 +532,25 @@ impl<'a> super::Interpreter<'a> {
                                             // binding, so the local's walk must
                                             // still stand down.
                                             crate::ast::fn_binds_self_part_out(f)
-                                                || crate::ast::fn_matches_on_bare_self(f)
+                                                // B-2026-09-06-39 — ...unless
+                                                // the arm binds a VIEW rather
+                                                // than taking the payload over,
+                                                // which a bare-`self` arm over
+                                                // an enum with its own
+                                                // `impl Drop` now does. There
+                                                // the caller is the payload's
+                                                // owner, and this disarm lost
+                                                // the body outright; standing it
+                                                // down is what puts the payload's
+                                                // body AFTER the shell's.
+                                                || (crate::ast::fn_matches_on_bare_self(f)
+                                                    && !(self
+                                                        .owned_enum_receiver_arms_bind_views(
+                                                            &type_name,
+                                                        )
+                                                        && crate::ast::fn_bare_self_arms_bind_views(
+                                                            f,
+                                                        )))
                                                 || !crate::ast::owned_self_return_cannot_carry_receiver(
                                                     f,
                                                     &type_name,
@@ -571,6 +589,17 @@ impl<'a> super::Interpreter<'a> {
                                 }
                             }
                         }
+                        // B-2026-09-06-39 — the callee's own answer to "do my
+                        // bare-`self` arms bind views?", pushed in lockstep with
+                        // the self-mode so `bare_self_is_owned_drop_enum_receiver`
+                        // reads the frame it is actually in. The CALL SITE above
+                        // asks the same predicate of the same AST, which is what
+                        // keeps caller and callee agreeing about who owns the
+                        // payload's `Drop` body.
+                        self.self_arms_bind_views_stack.push(
+                            self.find_impl_method_ast(&type_name, method)
+                                .is_some_and(crate::ast::fn_bare_self_arms_bind_views),
+                        );
                         self.self_param_stack.push(sp);
                         true
                     }
@@ -811,6 +840,7 @@ impl<'a> super::Interpreter<'a> {
                 self.method_frame_sole_owned.pop();
                 if pushed_self_mode {
                     self.self_param_stack.pop();
+                    self.self_arms_bind_views_stack.pop();
                 }
                 if pushed_impl_subs {
                     self.type_subs_stack.pop();
@@ -1032,7 +1062,20 @@ impl<'a> super::Interpreter<'a> {
             },
             _ => false,
         };
-        if !fresh {
+        // B-2026-09-06-39 — a CHAIN LINK receiver (`E.A(mk(11)).me().m_read()`)
+        // is not "fresh" and stays body-silent, which was right while the arm
+        // channel owned an enum receiver's payload. Once the callee's arms bind
+        // views (`fn_bare_self_arms_bind_views`), nobody else does, and the
+        // payload's body was lost outright — `chain/temp` printed `x11` where it
+        // had printed `dR11 x11`. So the chain link is admitted for the PAYLOAD
+        // registration alone, below; its shell body stays lost, which is the
+        // pre-existing residual this row does not touch.
+        let chain_views = matches!(&object.kind, ExprKind::MethodCall { .. })
+            && self.owned_enum_receiver_arms_bind_views(type_name)
+            && self
+                .find_impl_method_ast(type_name, method)
+                .is_some_and(crate::ast::fn_bare_self_arms_bind_views);
+        if !fresh && !chain_views {
             return;
         }
         // B-2026-09-04-30 — an OWNED-`self` method joins the borrowing ones,
@@ -1076,7 +1119,7 @@ impl<'a> super::Interpreter<'a> {
                         &self.program.items,
                     ) && !crate::ast::fn_binds_self_part_out(f)
                 });
-        if !ref_self && !owned_self_consumes && !owned_self_enum_shell {
+        if !ref_self && !owned_self_consumes && !owned_self_enum_shell && !chain_views {
             return;
         }
         if self.method_returns_borrow(type_name, method) {
@@ -1116,7 +1159,7 @@ impl<'a> super::Interpreter<'a> {
                     ) =>
             {
                 let tn = enum_name.clone();
-                if self.program.drop_method_keys.contains_key(&tn) {
+                if fresh && self.program.drop_method_keys.contains_key(&tn) {
                     self.run_user_drop_body_only(&tn, obj.clone());
                 }
                 // B-2026-09-06-39 — an OWNED `self` temp gets the payload walk
@@ -1126,16 +1169,41 @@ impl<'a> super::Interpreter<'a> {
                 // lost. Shell first, then the payload — design.md § Part 8
                 // ("the user's `fn drop` body runs first, then the compiler
                 // drops each field"), which is the order a named local prints.
-                let owned_self_enum_payload = owned_self_enum_shell
-                    && !self
-                        .find_impl_method_ast(type_name, method)
-                        .is_some_and(crate::ast::fn_matches_on_bare_self);
+                // B-2026-09-06-39 — ...and the arm only claims it when it
+                // takes the payload OVER; a bare-`self` arm over an enum with
+                // its own `impl Drop` binds a view, so this walk is that
+                // payload's only owner, exactly as for the no-match callee.
+                let owned_self_enum_payload = (owned_self_enum_shell || chain_views)
+                    && ((self.owned_enum_receiver_arms_bind_views(&tn)
+                        && self
+                            .find_impl_method_ast(type_name, method)
+                            .is_some_and(crate::ast::fn_bare_self_arms_bind_views))
+                        || !self
+                            .find_impl_method_ast(type_name, method)
+                            .is_some_and(crate::ast::fn_matches_on_bare_self));
                 if ref_self || owned_self_enum_payload {
                     self.run_enum_payload_user_drops_value(obj);
                 }
             }
             _ => {}
         }
+    }
+
+    /// B-2026-09-06-39 — does an owned-`self` method's bare-`self` match arm
+    /// bind a VIEW of this receiver rather than take its payload over?
+    ///
+    /// The interpreter twin of codegen's
+    /// `owned_enum_receiver_arms_bind_views`, and the caller-side spelling of
+    /// [`Self::bare_self_is_owned_drop_enum_receiver`]: the two halves have to
+    /// answer from the same facts — a value enum, not shared, with its own
+    /// `impl Drop` — or they disagree about who owns the payload.
+    pub(super) fn owned_enum_receiver_arms_bind_views(&self, type_name: &str) -> bool {
+        self.program.drop_method_keys.contains_key(type_name)
+            && self
+                .program
+                .items
+                .iter()
+                .any(|it| matches!(it, Item::EnumDef(e) if e.name == type_name && !e.is_shared))
     }
 
     /// Does the user impl method `type_name.method` declare a `ref`/`mut

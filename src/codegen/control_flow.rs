@@ -1695,7 +1695,18 @@ impl<'ctx> super::Codegen<'ctx> {
                 // run the payload's body in the arm AND in that walk. A bare
                 // owned ENUM `self` stays on the transfer path: both
                 // registrars leave enum receiver bodies to the arm channel.
-                ExprKind::SelfValue if hops > 0 || self.bare_self_is_owned_struct_receiver() => {
+                // B-2026-09-06-39 — and a bare owned ENUM `self` whose enum
+                // has its own `impl Drop` joins them, for the reason
+                // `bare_self_is_owned_drop_enum_receiver` states: that payload
+                // cannot leave the arm, so the arm binds a view and the
+                // caller's walk runs the body AFTER the shell's, the design
+                // order. A value-enum receiver with no `impl Drop` stays on the
+                // transfer path.
+                ExprKind::SelfValue
+                    if hops > 0
+                        || self.bare_self_is_owned_struct_receiver()
+                        || self.bare_self_is_owned_drop_enum_receiver() =>
+                {
                     "self"
                 }
                 _ => return false,
@@ -1722,7 +1733,12 @@ impl<'ctx> super::Codegen<'ctx> {
     pub(super) fn scrutinee_is_transfer_owned_enum_param(&self, e: &Expr) -> bool {
         let name: &str = match &e.kind {
             ExprKind::Identifier(n) => n.as_str(),
-            ExprKind::SelfValue => "self",
+            // B-2026-09-06-39 — a bare owned ENUM `self` whose enum has its own
+            // `impl Drop` is caller-retained, not transfer-owned: its arms bind
+            // views now (`scrutinee_is_owned_param_binding` admits it) and the
+            // caller runs the payload bodies. Leaving it here would tell
+            // `bind_pattern_values`'s copy-supported gate the opposite.
+            ExprKind::SelfValue if !self.bare_self_is_owned_drop_enum_receiver() => "self",
             _ => return false,
         };
         // B-2026-09-07-41 — a WHOLE-VALUE REBIND of the param (`let v = w;`
@@ -1776,6 +1792,52 @@ impl<'ctx> super::Codegen<'ctx> {
             .struct_types
             .iter()
             .any(|(name, &t)| t == st && !self.type_decls.shared_types.contains_key(name.as_str()))
+    }
+
+    /// B-2026-09-06-39 — is a bare `self` scrutinee an OWNED VALUE-ENUM
+    /// receiver whose enum has its OWN `impl Drop`?
+    ///
+    /// The enum sibling of [`Self::bare_self_is_owned_struct_receiver`], and
+    /// the narrower `impl Drop` clause is what makes it safe rather than
+    /// stylistic. Two facts hold for exactly this shape and for no other enum
+    /// receiver:
+    ///
+    ///  * The order is OBSERVABLE. The shell's own body is the thing the
+    ///    payload's has to come after (design.md § Part 8: "the user's `fn drop`
+    ///    body runs first, then the compiler drops each field"), and an enum
+    ///    with no `impl Drop` has no shell body to be ordered against.
+    ///  * The payload provably CANNOT escape the arm. `partial_move_of_drop_enum`
+    ///    rejects every move of a payload out of a variant of an enum that has
+    ///    its own `Drop` — `return r`, `let q = r`, `v.push(r)` all error at
+    ///    typecheck — so a bare-`self` arm over such an enum can only READ
+    ///    through its binding, which is precisely design.md § Match Arm Binding
+    ///    Modes' "bindings that are only read borrow from the already-owned
+    ///    value". Passing it on (`eat(r)`) is admitted and is not an escape:
+    ///    caller-retains means the callee's callee takes no ownership either.
+    ///
+    /// So for this shape the arms bind VIEWS and the CALLER runs the payload
+    /// bodies, which is what puts them after the shell's. A value-enum receiver
+    /// WITHOUT its own `Drop` keeps the transfer semantics
+    /// [`Self::scrutinee_is_transfer_owned_enum_param`] describes: its arms may
+    /// legally move the payload out, so the arm channel stays its owner.
+    pub(super) fn bare_self_is_owned_drop_enum_receiver(&self) -> bool {
+        if !self.fn_ctx.current_fn_param_names.contains("self")
+            || self.borrow_vars.ref_params.contains_key("self")
+        {
+            return false;
+        }
+        if !self.fn_ctx.self_arms_bind_views {
+            return false;
+        }
+        let Some(tn) = self.var_types.var_type_names.get("self") else {
+            return false;
+        };
+        self.type_decls.enum_layouts.contains_key(tn.as_str())
+            && !self.type_decls.shared_types.contains_key(tn.as_str())
+            && self
+                .program_snapshot
+                .as_deref()
+                .is_some_and(|p| p.drop_method_keys.contains_key(tn.as_str()))
     }
 
     /// Is this scrutinee expression a FRESH OWNING temp — a call, or a

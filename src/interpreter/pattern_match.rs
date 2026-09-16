@@ -266,9 +266,17 @@ impl<'a> super::Interpreter<'a> {
                             // Stashing the read-only binding is that same channel:
                             // the body fires at the arm's end, before the shell's,
                             // which is the compiled order for this receiver.
+                            //
+                            // B-2026-09-06-39 — ...except where the CALLER does
+                            // run that walk after all, which is now the case for
+                            // an enum with its own `impl Drop`: the call-site
+                            // disarm stands down for it and the arms bind views,
+                            // so stashing here would fire the body a second time
+                            // (and at the wrong end — before the shell's).
                             && !scrutinee_place.is_some_and(|sp| {
                                 matches!(sp.kind, ExprKind::SelfValue)
                                     && self.bare_self_is_owned_enum_receiver()
+                                    && !self.bare_self_is_owned_drop_enum_receiver()
                             })
                     }
                     _ => false,
@@ -1065,11 +1073,19 @@ impl<'a> super::Interpreter<'a> {
                 // temp. A bare owned ENUM `self` keeps its transfer semantics:
                 // neither registrar walks an enum receiver's bodies, so the
                 // arm channel is still their only owner.
+                // B-2026-09-06-39 — and so does a bare owned ENUM `self`
+                // whose enum has its own `impl Drop`
+                // (`bare_self_is_owned_drop_enum_receiver`): that payload
+                // cannot leave the arm, so the arm binds a view and the
+                // caller's walk runs its body AFTER the shell's. A value enum
+                // with no `impl Drop` stays on the transfer path.
                 ExprKind::SelfValue => {
                     return matches!(
                         self.self_param_stack.last(),
                         Some(crate::ast::SelfParam::Owned)
-                    ) && (hops > 0 || self.bare_self_is_owned_struct_receiver());
+                    ) && (hops > 0
+                        || self.bare_self_is_owned_struct_receiver()
+                        || self.bare_self_is_owned_drop_enum_receiver());
                 }
                 _ => return false,
             }
@@ -1113,6 +1129,46 @@ impl<'a> super::Interpreter<'a> {
             .rev()
             .find_map(|s| s.get("self"))
             .is_some_and(|v| matches!(v, Value::EnumVariant { .. }))
+    }
+
+    /// B-2026-09-06-39 — the NARROWER sibling of
+    /// [`Self::bare_self_is_owned_enum_receiver`]: is a bare `self` an owned
+    /// value-enum receiver whose enum has its OWN `impl Drop`?
+    ///
+    /// The interpreter twin of codegen's
+    /// `bare_self_is_owned_drop_enum_receiver`, and the `impl Drop` clause is
+    /// load-bearing on both sides for the same two reasons. The order is only
+    /// OBSERVABLE when there is a shell body for the payload's to come after
+    /// (design.md § Part 8), and `partial_move_of_drop_enum` rejects every move
+    /// of a payload out of such an enum (`return r`, `let q = r`,
+    /// `v.push(r)` all error at typecheck), so a bare-`self` arm over it can
+    /// only READ through its binding — design.md § Match Arm Binding Modes'
+    /// "bindings that are only read borrow from the already-owned value".
+    /// Passing it on (`eat(r)`) is admitted and is not an escape: caller-retains
+    /// means the callee's callee takes no ownership either.
+    ///
+    /// So this receiver's arms bind VIEWS and the CALLER runs the payload's
+    /// body, after the shell's. A value enum with NO `impl Drop` keeps the
+    /// transfer semantics `bare_self_is_owned_enum_receiver` describes, because
+    /// its arms may legally move the payload out.
+    pub(super) fn bare_self_is_owned_drop_enum_receiver(&self) -> bool {
+        matches!(
+            self.self_param_stack.last(),
+            Some(crate::ast::SelfParam::Owned)
+        ) && self.self_arms_bind_views_stack.last().copied() == Some(true)
+            && self
+                .env
+                .scopes
+                .iter()
+                .rev()
+                .find_map(|s| s.get("self"))
+                .is_some_and(|v| match v {
+                    Value::EnumVariant { enum_name, .. } => self
+                        .program
+                        .drop_method_keys
+                        .contains_key(enum_name.as_str()),
+                    _ => false,
+                })
     }
 
     /// Is `name` an owned parameter of a method frame that the CALLER is not
@@ -1170,11 +1226,14 @@ impl<'a> super::Interpreter<'a> {
             // like any other (the caller retains its bodies), so it is NOT
             // consuming; an owned ENUM receiver keeps the transfer (see
             // `place_root_is_owned_param`'s `SelfValue` arm).
+            // B-2026-09-06-39 — the DROP-enum receiver joins the struct one:
+            // its arms bind views now, so it is not consuming either.
             ExprKind::SelfValue => {
                 matches!(
                     self.self_param_stack.last(),
                     Some(crate::ast::SelfParam::Owned)
                 ) && !self.bare_self_is_owned_struct_receiver()
+                    && !self.bare_self_is_owned_drop_enum_receiver()
             }
             ExprKind::MethodCall { method, .. } => {
                 !matches!(method.as_str(), "get" | "first" | "last")

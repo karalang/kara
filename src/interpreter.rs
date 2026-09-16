@@ -660,6 +660,17 @@ pub struct Interpreter<'a> {
     /// each user method body by `try_eval_impl_method`. Read by
     /// `scrutinee_expr_is_consuming`: a `self` scrutinee is consuming only
     /// under an OWNED receiver (B-2026-08-01-6).
+    /// B-2026-09-06-39 — per method frame, does the callee's bare-`self` match
+    /// / `if let` / `while let` arm only READ THROUGH its payload binding
+    /// (`crate::ast::fn_bare_self_arms_bind_views`)?
+    ///
+    /// Pushed and popped in lockstep with [`Self::self_param_stack`], because
+    /// the answer is a property of the frame's own function and
+    /// `bare_self_is_owned_drop_enum_receiver` is consulted deep inside the
+    /// body. The CALL SITE asks the same predicate of the same AST before
+    /// deciding whether to disarm the receiver's payload walk, so the two
+    /// halves cannot disagree about who owns the payload's `Drop` body.
+    pub(crate) self_arms_bind_views_stack: Vec<bool>,
     pub(crate) self_param_stack: Vec<crate::ast::SelfParam>,
     /// Owned (by-value) parameter names of the actively-executing user
     /// functions, innermost last — pushed around each free-fn body by
@@ -1169,6 +1180,7 @@ impl<'a> Interpreter<'a> {
             moved_out_enum_payload_body_slots: HashSet::new(),
             optres_payload_bodies_tes: HashMap::new(),
             tuple_var_elem_tes: HashMap::new(),
+            self_arms_bind_views_stack: Vec::new(),
             self_param_stack: Vec::new(),
             owned_param_names_stack: Vec::new(),
             whole_param_alias_stack: Vec::new(),

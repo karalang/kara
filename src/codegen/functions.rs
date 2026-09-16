@@ -1412,6 +1412,12 @@ impl<'ctx> super::Codegen<'ctx> {
         // tail escapes via the return → it gets a reference-counted HEAP env
         // (so its captures outlive the frame). Record its span for
         // `compile_closure`, and reset the per-function heap-env-binding set.
+        // B-2026-09-06-39 — this function's own answer to "do my bare-`self`
+        // arms bind views?", recorded here because it is the one place codegen
+        // has the AST of the function it is compiling. Read by
+        // `bare_self_is_owned_drop_enum_receiver`; the call site asks the same
+        // predicate of this same AST, so caller and callee cannot disagree.
+        self.fn_ctx.self_arms_bind_views = crate::ast::fn_bare_self_arms_bind_views(func);
         self.fn_ctx.current_fn_heap_closure_spans.clear();
         // B-2026-08-23-19: never inherit a parked cleanup-body error from a
         // function that bailed out before reaching the report site.

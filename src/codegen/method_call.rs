@@ -7627,7 +7627,20 @@ impl<'ctx> super::Codegen<'ctx> {
                             // second payload body on top of an already-doubled
                             // shell (`dE dR5 dE` -> `dE dR5 dE dR5`), measured.
                             crate::ast::fn_binds_self_part_out(f)
-                                || crate::ast::fn_matches_on_bare_self(f)
+                                // B-2026-09-06-39 — ...unless the arm binds a
+                                // VIEW rather than taking the payload over,
+                                // which is what a bare-`self` arm over an enum
+                                // with its own `impl Drop` now does (codegen's
+                                // `bare_self_is_owned_drop_enum_receiver`,
+                                // the interpreter's twin). There the caller is
+                                // the payload's owner, and keeping this disarm
+                                // lost the body outright; standing it down is
+                                // what puts the payload's body AFTER the
+                                // shell's, the design order a local scrutinee
+                                // and a by-value param have always printed.
+                                || (crate::ast::fn_matches_on_bare_self(f)
+                                    && !(self.owned_enum_receiver_arms_bind_views(&receiver_type)
+                                        && crate::ast::fn_bare_self_arms_bind_views(f)))
                                 || !crate::ast::owned_self_return_cannot_carry_receiver(
                                     f,
                                     &receiver_type,
@@ -10601,6 +10614,24 @@ impl<'ctx> super::Codegen<'ctx> {
     /// [`Self::impl_method_self_and_borrow_return`] extracts. Same target-type
     /// and method matching as that one, so the two never disagree about which
     /// method they are describing.
+    /// B-2026-09-06-39 — does an owned-`self` method's bare-`self` match arm
+    /// bind a VIEW of this receiver rather than take its payload over?
+    ///
+    /// The CALLER-side spelling of the callee-side
+    /// [`Self::bare_self_is_owned_drop_enum_receiver`], and it must answer the
+    /// same question from the same facts or the two halves disagree about who
+    /// owns the payload: a value enum, not shared, with its own `impl Drop`.
+    /// The callee reads that off its own `self` slot; here only the receiver's
+    /// type name is in hand, which is all the predicate needs.
+    pub(super) fn owned_enum_receiver_arms_bind_views(&self, type_name: &str) -> bool {
+        self.type_decls.enum_layouts.contains_key(type_name)
+            && !self.type_decls.shared_types.contains_key(type_name)
+            && self
+                .program_snapshot
+                .as_deref()
+                .is_some_and(|p| p.drop_method_keys.contains_key(type_name))
+    }
+
     pub(super) fn find_impl_method_ast<'a>(
         &'a self,
         type_name: &str,
@@ -11045,6 +11076,20 @@ impl<'ctx> super::Codegen<'ctx> {
                     &object.kind,
                     ExprKind::StructLiteral { .. } | ExprKind::Call { .. }
                 );
+                // B-2026-09-06-39 — a CHAIN LINK receiver
+                // (`E.A(mk(11)).me().m_read()`) fails `shape_ok` and stays
+                // body-silent, which was right while the arm channel owned an
+                // enum receiver's payload. Once the callee's arms bind views
+                // nobody else does, and the payload's body was lost outright
+                // (`chain/temp`: `x11` where it had printed `dR11 x11`). Admits
+                // the chain link for the PAYLOAD walk alone; its shell body
+                // stays lost, the pre-existing residual this row does not touch.
+                let chain_views = matches!(&object.kind, ExprKind::MethodCall { .. })
+                    && !self.user_ref_method_names.contains(method)
+                    && self.owned_enum_receiver_arms_bind_views(&type_name)
+                    && self
+                        .find_impl_method_ast(&type_name, method)
+                        .is_some_and(crate::ast::fn_bare_self_arms_bind_views);
                 // B-2026-09-04-30 — an OWNED-`self` receiver joins the
                 // borrowing ones here, behind the return-opacity gate.
                 //
@@ -11182,10 +11227,20 @@ impl<'ctx> super::Codegen<'ctx> {
                     // walk too, but ONLY where no arm channel claims it:
                     // `E.A(mk(13)).matches()` fires the payload from the arm,
                     // and registering the walk beside it printed `dR13 dE dR13`.
-                    let owned_self_enum_payload = owned_self_shell
-                        && !self
-                            .find_impl_method_ast(&type_name, method)
-                            .is_some_and(crate::ast::fn_matches_on_bare_self);
+                    // B-2026-09-06-39 — ...and the arm only claims it when it
+                    // takes the payload OVER. A bare-`self` arm over an enum
+                    // with its own `impl Drop` binds a view now
+                    // (`bare_self_is_owned_drop_enum_receiver`), so the temp's
+                    // walk is that payload's only owner, exactly as it is for
+                    // the no-match callee.
+                    let owned_self_enum_payload = (owned_self_shell || chain_views)
+                        && ((self.owned_enum_receiver_arms_bind_views(&type_name)
+                            && self
+                                .find_impl_method_ast(&type_name, method)
+                                .is_some_and(crate::ast::fn_bare_self_arms_bind_views))
+                            || !self
+                                .find_impl_method_ast(&type_name, method)
+                                .is_some_and(crate::ast::fn_matches_on_bare_self));
                     if ref_self_borrows || owned_self_enum_payload {
                         if let Some(walk) = self.emit_enum_payload_user_drop_bodies_fn(&type_name) {
                             self.track_user_drop_var_with_fn(

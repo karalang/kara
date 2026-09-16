@@ -6585,6 +6585,7 @@ impl<'ctx> Codegen<'ctx> {
                 current_fn_err_payload_type_name: None,
                 current_fn_returns_ref: false,
                 current_fn_boxes_return: false,
+                self_arms_bind_views: false,
                 current_fn_name: String::new(),
                 current_fn_caller_loc: None,
                 current_fn_arm64_return_coercion: None,

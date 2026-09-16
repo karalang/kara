@@ -60042,6 +60042,13 @@ end
 /// surface (B-2026-09-04-30's registrar declined enum receiver bodies) — closed as
 /// B-2026-09-06-38: the temp cells now carry their `dE` at the statement's end.
 ///
+/// B-2026-09-06-39 — REPINNED. Every cell whose arm only READS through its
+/// binding — `read/*`, `none/*`, `print/*`, `iflet/*`, `whilelet`, `guard` —
+/// now prints `dE` before `dR`, the design.md § Part 8 order this fixture's own
+/// `free/*` and a local scrutinee always printed. The arms bind views and the
+/// caller owns the payload's body; `r/*` (a hand-back) and `noshell/*` (no shell
+/// body to order against) are unchanged.
+///
 /// Twin of `tests/codegen.rs`'s `e2e_read_only_arm_on_owned_enum_receiver_runs_payload_body`, pinned to the same string.
 #[test]
 fn test_read_only_arm_on_owned_enum_receiver_runs_payload_body() {
@@ -60086,12 +60093,12 @@ fn main() {
 }
 "#),
         r#"read/local
-  dR1
   dE
+  dR1
   x1
 read/temp
-  dR2
   dE
+  dR2
   x2
 r/local
   dE
@@ -60102,21 +60109,21 @@ r/temp
   y4
   dR4
 none/local
-  dR5
   dE
+  dR5
   z1
 none/temp
-  dR6
   dE
+  dR6
   z1
 print/local
   p7
-  dR7
   dE
+  dR7
 print/temp
   p8
-  dR8
   dE
+  dR8
 noshell/local
   dR9
   w9
@@ -60132,20 +60139,20 @@ free/temp
   dR12
   v12
 iflet/local
-  dR21
   dE
+  dR21
   q21
 iflet/temp
-  dR22
   dE
+  dR22
   q22
 whilelet/local
-  dR23
   dE
+  dR23
   q23
 guard/local
-  dR24
   dE
+  dR24
   q25
 end
 "#
@@ -60820,6 +60827,12 @@ end
 /// channel still fires the payload before the shell (B-2026-09-06-39), pinned as
 /// it stands.
 ///
+/// B-2026-09-06-39 — REPINNED. `wild/*`, `bound/local` and `ifwild/*` print the
+/// shell's body first now; `half/local` and `both/local` likewise put `dT` ahead
+/// of the two payload bodies, which then fall in reverse position order. The
+/// `free/*` and `localmatch` controls did not move, which is the point: those
+/// were already in the design order the receiver spelling has now joined.
+///
 /// Twin of `tests/codegen.rs`'s `e2e_wildcard_arm_over_owned_enum_receiver_runs_payload_body`, pinned to the same string.
 #[test]
 fn test_wildcard_arm_over_owned_enum_receiver_runs_payload_body() {
@@ -60860,24 +60873,24 @@ fn main() {
 }
 "#),
         r#"wild/local
-  dR1
   dE
+  dR1
   x1
 wild/temp
-  dR2
   dE
+  dR2
   x1
 bound/local
-  dR3
   dE
+  dR3
   y3
 ifwild/local
-  dR4
   dE
+  dR4
   z1
 ifwild/temp
-  dR5
   dE
+  dR5
   z1
 noshell/local
   dR6
@@ -60886,14 +60899,14 @@ noshell/temp
   dR7
   w1
 half/local
+  dT
   dR108
   dR8
-  dT
   v108
 both/local
+  dT
   dR109
   dR9
-  dT
   v2
 free/local
   dE
@@ -60940,6 +60953,14 @@ end
 /// bodies-only fns behind the unchanged `track_enum_var` free). The chain link
 /// (`E.A(mk(11)).me().m_read()`, `chain/temp`) stays shell-less, the struct side's
 /// recorded residual; `unit/temp` (`E.B.m_read()`) was already right.
+///
+/// B-2026-09-06-39 — REPINNED. `read/*`, `print/temp` and `iflet/temp` now print
+/// the shell's body before the payload's (`dE dR1` for `dR1 dE`), the design.md
+/// § Part 8 order: a read-only bare-`self` arm over an enum with its own `Drop`
+/// binds VIEWS now and the caller owns the payload's body. `r/*` (the arm hands
+/// the payload back) and `chain/temp` are unchanged — the first because the arm
+/// really does take it, the second because the fresh-temp registrar was widened
+/// to admit a chain-link receiver for that walk rather than lose it.
 ///
 /// Twin of `tests/codegen.rs`'s `e2e_fresh_temp_owned_enum_receiver_runs_the_shell_body`, pinned to the same string.
 #[test]
@@ -60991,12 +61012,12 @@ fn main() {
 }
 "#),
         r#"read/local
-  dR1
   dE
+  dR1
   x1
 read/temp
-  dR2
   dE
+  dR2
   x2
 r/local
   dE
@@ -61008,16 +61029,16 @@ r/temp
   dR4
 print/temp
   p5
-  dR5
   dE
+  dR5
   after
 ref/temp
   dE
   dR6
   x6
 iflet/temp
-  dR7
   dE
+  dR7
   x7
 unit/temp
   dE
@@ -68974,6 +68995,11 @@ fn main() {
 /// runs NO body at all. Neither is this row's, and pinning them keeps this
 /// fixture honest about what it measured.
 ///
+/// B-2026-09-06-39 — REPINNED. `matches` reads `x5 dE dR5` for `dR5 x5 dE`: its
+/// read-only arm binds a view now, so the caller runs the payload's body after
+/// the shell's instead of the arm running it first. Every other cell, this row's
+/// own included, is byte-identical.
+///
 /// Twin of `tests/codegen.rs`'s
 /// `e2e_owned_enum_receiver_runs_its_payload_body_when_no_arm_claims_it`, byte-identical source and expectation — the only fixture
 /// shape that can hold an agreed gap closed.
@@ -69009,7 +69035,164 @@ fn main() {
     println("end");
 }
 "#);
-    assert_eq!(out, "none\n  x5\n  dE\n  dR1\ntemp\n  dE\n  dR2\n  x5\nnodrop\n  x5\n  dR3\ngeneric\n  x5\n  dR4\nmatches\n  dR5\n  x5\n  dE\nret_self\n  dE\n  dR6\n  dE\n  got\nwrap\n  dE\n  dR7\n  dE\n  got\nrefm\n  x3\n  dE\n  dR8\nplain\n  dE\n  dR9\n  x9\nend\n", "got:\n{out}");
+    assert_eq!(out, "none\n  x5\n  dE\n  dR1\ntemp\n  dE\n  dR2\n  x5\nnodrop\n  x5\n  dR3\ngeneric\n  x5\n  dR4\nmatches\n  x5\n  dE\n  dR5\nret_self\n  dE\n  dR6\n  dE\n  got\nwrap\n  dE\n  dR7\n  dE\n  got\nrefm\n  x3\n  dE\n  dR8\nplain\n  dE\n  dR9\n  x9\nend\n", "got:\n{out}");
+}
+
+/// B-2026-09-06-39 — A READ-ONLY ARM OVER AN OWNED ENUM RECEIVER NOW RUNS THE
+/// PAYLOAD'S `Drop` BODY **AFTER** THE SHELL'S, the design.md § Part 8 order
+/// ("the user's `fn drop` body runs first, then the compiler drops each field").
+///
+/// `let a = E.A(mk(1)); a.read()` over a read-only `match self` arm printed
+/// `dR1 dE` on all four surfaces — the REVERSE of what the same arm prints over a
+/// local scrutinee (`dE dR`, since B-2026-08-28-67) and over a by-value param
+/// (`param` here). Agreed across the backends, so no A/B gate saw it, and memory
+/// was balanced: it was the ORDER.
+///
+/// The cause was ownership, not sequencing, so the fix is a RE-HOMING and the
+/// order falls out of it. A bare-`self` arm over an enum with its own `impl Drop`
+/// whose bindings are only READ now binds VIEWS — design.md § Match Arm Binding
+/// Modes' "bindings that are only read borrow from the already-owned value" —
+/// exactly as a bare owned STRUCT receiver's arms have since B-2026-09-06-15, and
+/// the CALLER keeps the payload's bodies. Three predicates decide it and all
+/// three had to be there: `fn_bare_self_arms_bind_views` (every arm
+/// projection-only, and no `let e = self` beside it), the receiver being a
+/// non-shared value enum with its own `Drop`, and the callee-side
+/// `bare_self_is_owned_drop_enum_receiver` reading a per-frame flag so caller and
+/// callee cannot disagree about who owns the body.
+///
+/// `named/read`, `temp/read`, `named/wild` and `named/iflet` are the fixed cells
+/// — the `match`, fresh-temp, wildcard and `if let` spellings. `chain/read` is
+/// the chain-link receiver, whose payload walk had no owner at all once the arm
+/// stopped claiming it (`x5` alone); the fresh-temp registrar now admits a
+/// MethodCall receiver for that walk. Its missing `dE` is pre-existing and
+/// untouched.
+///
+/// TWO RESIDUALS ARE PINNED AS THEY STAND rather than blessed. `named/call`
+/// (`eat(r)`) still prints payload-then-shell: the read-only walk counts a bare
+/// mention in ANY non-projection position as a take, which `Some(r)` really is
+/// (it doubled the body without the clause) and `eat(r)` is not — the walk cannot
+/// tell them apart syntactically and over-approximates, because an
+/// over-approximation costs this mis-order while an under-approximation costs a
+/// doubled body. That is B-2026-09-16-29. `ret_self` / `wrap` keep the doubled
+/// `dE` of B-2026-09-16-22.
+///
+/// Controls that must not move: `named/none` (no arm at all, B-2026-09-16-21),
+/// `named/letself` (a whole rebind — the callee owns it, so the arms must NOT
+/// bind views), `refm` (`ref self`), `plain` (no call — the reference order),
+/// `param` (the by-value twin), and `nodrop/read` / `nodrop/out` (an enum with no
+/// `impl Drop`, which keeps transfer semantics because its arm may legally move
+/// the payload out).
+///
+/// Twin of `tests/codegen.rs`'s `e2e_read_only_arm_on_owned_enum_receiver_orders_payload_after_shell`, pinned to the same string.
+#[test]
+fn test_read_only_arm_on_owned_enum_receiver_orders_payload_after_shell() {
+    assert_eq!(
+        run(r#"struct R { id: i64, tag: String, xs: Vec[i64] }
+impl Drop for R { fn drop(mut ref self) { println(f"  dR{self.id}") } }
+fn mk(i: i64) -> R { return R { id: i, tag: f"t{i}", xs: [i] } }
+fn eat(r: R) -> i64 { return r.id; }
+enum E { A(R), B }
+impl Drop for E { fn drop(mut ref self) { println("  dE") } }
+enum N { A(R), B }
+struct W { e: E }
+impl E {
+    fn read(self) -> i64 { match self { E.A(r) => { return r.id; } E.B => { return 0; } } }
+    fn wild(self) -> i64 { match self { E.A(_) => { return 1; } E.B => { return 0; } } }
+    fn iflet(self) -> i64 { if let E.A(r) = self { return r.id; } return 0; }
+    fn call(self) -> i64 { match self { E.A(r) => { return eat(r); } E.B => { return 0; } } }
+    fn me(self) -> E { return self; }
+    fn none(self) -> i64 { return 5 }
+    fn letself(self) -> i64 { let e = self; match e { E.A(r) => { return r.id; } E.B => { return 0; } } }
+    fn ret_self(self) -> E { return self }
+    fn wrap(self) -> W { return W { e: self } }
+    fn refm(ref self) -> i64 { match self { E.A(r) => { return r.id; } E.B => { return 0; } } }
+}
+impl N {
+    fn read(self) -> i64 { match self { N.A(r) => { return r.id; } N.B => { return 0; } } }
+    fn out(self) -> R { match self { N.A(r) => { return r; } N.B => { return mk(0); } } }
+}
+fn f_read(e: E) -> i64 { match e { E.A(r) => { return r.id; } E.B => { return 0; } } }
+fn main() {
+    println("named/read");   { let a: E = E.A(mk(1)); println(f"  x{a.read()}") }
+    println("temp/read");    { println(f"  x{E.A(mk(2)).read()}") }
+    println("named/wild");   { let a: E = E.A(mk(3)); println(f"  x{a.wild()}") }
+    println("named/iflet");  { let a: E = E.A(mk(4)); println(f"  x{a.iflet()}") }
+    println("chain/read");   { println(f"  x{E.A(mk(5)).me().read()}") }
+    println("named/call");   { let a: E = E.A(mk(6)); println(f"  x{a.call()}") }
+    println("named/none");   { let a: E = E.A(mk(7)); println(f"  x{a.none()}") }
+    println("named/letself");{ let a: E = E.A(mk(8)); println(f"  x{a.letself()}") }
+    println("ret_self");     { let a: E = E.A(mk(9)); let b: E = a.ret_self(); println("  got") }
+    println("wrap");         { let a: E = E.A(mk(10)); let w: W = a.wrap(); println("  got") }
+    println("refm");         { let a: E = E.A(mk(11)); println(f"  x{a.refm()}") }
+    println("plain");        { let a: E = E.A(mk(12)); println("  x12") }
+    println("param");        { let a: E = E.A(mk(13)); println(f"  x{f_read(a)}") }
+    println("nodrop/read");  { let a: N = N.A(mk(14)); println(f"  x{a.read()}") }
+    println("nodrop/out");   { let a: N = N.A(mk(15)); let r: R = a.out(); println(f"  x{r.id}") }
+    println("end");
+}
+"#),
+        r#"named/read
+  x1
+  dE
+  dR1
+temp/read
+  dE
+  dR2
+  x2
+named/wild
+  x1
+  dE
+  dR3
+named/iflet
+  x4
+  dE
+  dR4
+chain/read
+  dR5
+  x5
+named/call
+  dR6
+  x6
+  dE
+named/none
+  x5
+  dE
+  dR7
+named/letself
+  dE
+  dR8
+  x8
+ret_self
+  dE
+  dR9
+  dE
+  got
+wrap
+  dE
+  dR10
+  dE
+  got
+refm
+  x11
+  dE
+  dR11
+plain
+  dE
+  dR12
+  x12
+param
+  x13
+  dE
+  dR13
+nodrop/read
+  dR14
+  x14
+nodrop/out
+  x15
+  dR15
+end
+"#
+    );
 }
 
 /// B-2026-09-07-1 — A DEEP-CHAIN MOVE-OUT WHOSE HOP IS THEN BOUND OUT RAN THE

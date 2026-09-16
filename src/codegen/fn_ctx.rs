@@ -117,6 +117,17 @@ pub(crate) struct FnCtx<'ctx> {
     /// the tail- and explicit-`return` sites to box before `ret`.
     pub(crate) current_fn_boxes_return: bool,
     /// Name of the function currently being compiled (for rc_fallback_fns lookup).
+    /// B-2026-09-06-39 — does THIS function's bare-`self` match / `if let` /
+    /// `while let` arm only read through its payload binding
+    /// (`crate::ast::fn_bare_self_arms_bind_views`)?
+    ///
+    /// Set once per function in `compile_function`, because the question is
+    /// about the function being compiled and codegen holds no handle on its own
+    /// AST anywhere below that. `bare_self_is_owned_drop_enum_receiver` reads
+    /// it to decide whether a bare `self` scrutinee binds VIEWS, and the CALL
+    /// SITE asks the same predicate of the callee's AST, so the two halves
+    /// agree about who owns the payload's `Drop` body.
+    pub(crate) self_arms_bind_views: bool,
     pub(crate) current_fn_name: String,
     /// `#[track_caller]` slice 4/5: when the function currently being compiled
     /// is `#[track_caller]`, its three hidden trailing params — the received

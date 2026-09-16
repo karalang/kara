@@ -2001,6 +2001,133 @@ fn main() {
     /// bound payload, the `if let` spelling, an enum without its own `Drop`, and
     /// the local-scrutinee / by-value-param controls the rewrite must not touch.
     /// valgrind measured 0 errors at -O0 and -O2 before this landed as a test.
+    ///
+    /// B-2026-09-06-39 — the ASAN twin of
+    /// `tests/codegen.rs`'s `e2e_read_only_arm_on_owned_enum_receiver_orders_payload_after_shell`:
+    /// the row is an ORDER row, so what this adds is the proof that the re-homing
+    /// moved no free. Bodies changed hands (the arm's view-bound payload is now the
+    /// caller's to run), and two registrations are new — the caller's payload walk
+    /// on a named receiver, and the fresh-temp registrar's walk on a CHAIN-LINK
+    /// receiver — either of which would show here as a double free or a leak if it
+    /// had been paired with a memory action by mistake. Both are bodies-only.
+    #[test]
+    fn asan_read_only_arm_on_owned_enum_receiver_orders_payload_after_shell() {
+        assert_clean_asan_run(
+            r#"struct R { id: i64, tag: String, xs: Vec[i64] }
+impl Drop for R { fn drop(mut ref self) { println(f"  dR{self.id}") } }
+fn mk(i: i64) -> R { return R { id: i, tag: f"t{i}", xs: [i] } }
+fn eat(r: R) -> i64 { return r.id; }
+enum E { A(R), B }
+impl Drop for E { fn drop(mut ref self) { println("  dE") } }
+enum N { A(R), B }
+struct W { e: E }
+impl E {
+    fn read(self) -> i64 { match self { E.A(r) => { return r.id; } E.B => { return 0; } } }
+    fn wild(self) -> i64 { match self { E.A(_) => { return 1; } E.B => { return 0; } } }
+    fn iflet(self) -> i64 { if let E.A(r) = self { return r.id; } return 0; }
+    fn call(self) -> i64 { match self { E.A(r) => { return eat(r); } E.B => { return 0; } } }
+    fn me(self) -> E { return self; }
+    fn none(self) -> i64 { return 5 }
+    fn letself(self) -> i64 { let e = self; match e { E.A(r) => { return r.id; } E.B => { return 0; } } }
+    fn ret_self(self) -> E { return self }
+    fn wrap(self) -> W { return W { e: self } }
+    fn refm(ref self) -> i64 { match self { E.A(r) => { return r.id; } E.B => { return 0; } } }
+}
+impl N {
+    fn read(self) -> i64 { match self { N.A(r) => { return r.id; } N.B => { return 0; } } }
+    fn out(self) -> R { match self { N.A(r) => { return r; } N.B => { return mk(0); } } }
+}
+fn f_read(e: E) -> i64 { match e { E.A(r) => { return r.id; } E.B => { return 0; } } }
+fn main() {
+    println("named/read");   { let a: E = E.A(mk(1)); println(f"  x{a.read()}") }
+    println("temp/read");    { println(f"  x{E.A(mk(2)).read()}") }
+    println("named/wild");   { let a: E = E.A(mk(3)); println(f"  x{a.wild()}") }
+    println("named/iflet");  { let a: E = E.A(mk(4)); println(f"  x{a.iflet()}") }
+    println("chain/read");   { println(f"  x{E.A(mk(5)).me().read()}") }
+    println("named/call");   { let a: E = E.A(mk(6)); println(f"  x{a.call()}") }
+    println("named/none");   { let a: E = E.A(mk(7)); println(f"  x{a.none()}") }
+    println("named/letself");{ let a: E = E.A(mk(8)); println(f"  x{a.letself()}") }
+    println("ret_self");     { let a: E = E.A(mk(9)); let b: E = a.ret_self(); println("  got") }
+    println("wrap");         { let a: E = E.A(mk(10)); let w: W = a.wrap(); println("  got") }
+    println("refm");         { let a: E = E.A(mk(11)); println(f"  x{a.refm()}") }
+    println("plain");        { let a: E = E.A(mk(12)); println("  x12") }
+    println("param");        { let a: E = E.A(mk(13)); println(f"  x{f_read(a)}") }
+    println("nodrop/read");  { let a: N = N.A(mk(14)); println(f"  x{a.read()}") }
+    println("nodrop/out");   { let a: N = N.A(mk(15)); let r: R = a.out(); println(f"  x{r.id}") }
+    println("end");
+}
+"#,
+            &[
+                "named/read",
+                "  x1",
+                "  dE",
+                "  dR1",
+                "temp/read",
+                "  dE",
+                "  dR2",
+                "  x2",
+                "named/wild",
+                "  x1",
+                "  dE",
+                "  dR3",
+                "named/iflet",
+                "  x4",
+                "  dE",
+                "  dR4",
+                "chain/read",
+                "  dR5",
+                "  x5",
+                "named/call",
+                "  dR6",
+                "  x6",
+                "  dE",
+                "named/none",
+                "  x5",
+                "  dE",
+                "  dR7",
+                "named/letself",
+                "  dE",
+                "  dR8",
+                "  x8",
+                "ret_self",
+                "  dE",
+                "  dR9",
+                "  dE",
+                "  got",
+                "wrap",
+                "  dE",
+                "  dR10",
+                "  dE",
+                "  got",
+                "refm",
+                "  x11",
+                "  dE",
+                "  dR11",
+                "plain",
+                "  dE",
+                "  dR12",
+                "  x12",
+                "param",
+                "  x13",
+                "  dE",
+                "  dR13",
+                "nodrop/read",
+                "  dR14",
+                "  x14",
+                "nodrop/out",
+                "  x15",
+                "  dR15",
+                "end",
+            ],
+            "asan_read_only_arm_on_owned_enum_receiver_orders_payload_after_shell",
+        );
+    }
+
+    /// B-2026-09-06-39 — REPINNED (ASAN itself unchanged: the mismatch this caught
+    /// was stdout only, with memory balanced before and after). The shell body now
+    /// precedes the payload bodies — `dE dR1`, and `dT` ahead of both `dR`s in
+    /// `half`/`both` — because a read-only bare-`self` arm over an enum with its own
+    /// `Drop` binds VIEWS and the caller owns the payload's body.
     #[test]
     fn asan_wildcard_arm_over_owned_enum_receiver_is_balanced() {
         assert_clean_asan_run(
@@ -2041,24 +2168,24 @@ fn main() {
 "#,
             &[
                 "wild/local",
-                "  dR1",
                 "  dE",
+                "  dR1",
                 "  x1",
                 "wild/temp",
-                "  dR2",
                 "  dE",
+                "  dR2",
                 "  x1",
                 "bound/local",
-                "  dR3",
                 "  dE",
+                "  dR3",
                 "  y3",
                 "ifwild/local",
-                "  dR4",
                 "  dE",
+                "  dR4",
                 "  z1",
                 "ifwild/temp",
-                "  dR5",
                 "  dE",
+                "  dR5",
                 "  z1",
                 "noshell/local",
                 "  dR6",
@@ -2067,14 +2194,14 @@ fn main() {
                 "  dR7",
                 "  w1",
                 "half/local",
+                "  dT",
                 "  dR108",
                 "  dR8",
-                "  dT",
                 "  v108",
                 "both/local",
+                "  dT",
                 "  dR109",
                 "  dR9",
-                "  dT",
                 "  v2",
                 "free/local",
                 "  dE",
@@ -2102,6 +2229,12 @@ fn main() {
     /// pins that every body reads live storage and nothing frees twice across
     /// the whole cell battery of `e2e_fresh_temp_owned_enum_receiver_runs_the_shell_body`.
     /// valgrind measured 0 errors at -O0 and -O2 before this landed as a test.
+    ///
+    /// B-2026-09-06-39 — REPINNED (stdout only; ASAN stayed clean throughout).
+    /// `read/*`, `print/temp` and `iflet/temp` put the shell's body first now. `r/*`
+    /// (a hand-back) and `chain/temp` are unchanged — the chain link keeps its
+    /// payload body because the fresh-temp registrar was widened to admit a
+    /// MethodCall receiver for that walk.
     #[test]
     fn asan_fresh_temp_owned_enum_receiver_runs_the_shell_body_balanced() {
         assert_clean_asan_run(
@@ -2153,12 +2286,12 @@ fn main() {
 "#,
             &[
                 "read/local",
-                "  dR1",
                 "  dE",
+                "  dR1",
                 "  x1",
                 "read/temp",
-                "  dR2",
                 "  dE",
+                "  dR2",
                 "  x2",
                 "r/local",
                 "  dE",
@@ -2170,16 +2303,16 @@ fn main() {
                 "  dR4",
                 "print/temp",
                 "  p5",
-                "  dR5",
                 "  dE",
+                "  dR5",
                 "  after",
                 "ref/temp",
                 "  dE",
                 "  dR6",
                 "  x6",
                 "iflet/temp",
-                "  dR7",
                 "  dE",
+                "  dR7",
                 "  x7",
                 "unit/temp",
                 "  dE",
