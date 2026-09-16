@@ -92,9 +92,9 @@ distinguish "bugs flattening" from "we stopped writing them down."
 
 | class | total |
 |---|---|
-| run-vs-build | 414 |
+| run-vs-build | 415 |
 | miscompile | 413 |
-| leak | 360 |
+| leak | 361 |
 | double-free | 235 |
 | missing-feature | 199 |
 | codegen-gap | 178 |
@@ -110,8 +110,8 @@ distinguish "bugs flattening" from "we stopped writing them down."
 
 | surface | total |
 |---|---|
-| codegen | 1784 |
-| interp | 450 |
+| codegen | 1786 |
+| interp | 451 |
 | typecheck | 301 |
 | other | 92 |
 | ownership | 75 |
@@ -162,7 +162,6 @@ _Generated from `bug-ledger.jsonl` by `scripts/bug-curve.py` (2026-05-20 → 202
 | B-2026-09-13-7 | 2026-09-13 | codegen+interp | medium | AN ENUM VARIANT'S `Vec[T]` PAYLOAD RUNS NO ELEMENT `Drop` BODY ON ANY BACKEND AND ANY ENUM HEAD, AND `Slot[Array[R, N]]` RUNS THEM ON THE FIVE COMPILED SURFACES ONLY -- the two cells B-2026-09-12-24 measured and did not fix; the shared bodies core has a tuple arm and an array arm and no `Vec` arm, and the interpreter has no instantiation chain for a user generic enum the way it has one for the seeded pair | — |
 | B-2026-09-13-11 | 2026-09-13 | codegen+interp | low | A DESTRUCTURED ENUM PAYLOAD'S OWN `Drop` BODY RUNS ON NO SURFACE ONCE THE ARM MOVES ITS FIELD OUT -- `match x { Option.Some(K.A(r)) => { acc.push(r) } .. }` over `enum K { A(R2), B }` with `impl Drop for K` prints NO `dK` on `--interp`, `-O0`, `-O0` autopar or `-O2` autopar, while the READ-ONLY twin of the same program (`println(f"a:{r.s}")` for the arm body) prints exactly one on all four. The husk is still a `K`, so the count is arguable in both directions -- but it cannot be arguable PER ARM BODY: whether the leaf was moved on or merely read decides whether the enclosing enum's body runs at all, and nothing in the language says a move erases its owner's `Drop` | — |
 | B-2026-09-13-13 | 2026-09-13 | codegen | medium | A CONDITIONALLY-RETURNED PARAM WHOSE OTHER EXIT LEAF MENTIONS IT STILL RUNS ITS `Drop` BODY TWICE AT THE ASSOCIATED AND METHOD CALL POSITIONS -- `if flag { return r } return R { id: 90 + r.id }` prints `dR1 / k:1 / dR1` at -O0, -O0 autopar and -O2 autopar against `--interp`'s `k:1 / dR1`, where replacing `90 + r.id` with a constant makes every surface agree. `fn_conditionally_returns_param_bare`'s condition 3 declines the mention CORRECTLY -- no per-path flag clears a leaf that READS the param -- but the assoc/method registrars read that `false` as "no other frame can own this argument" and hang the full `karac_drop_<T>` wrapper on the caller's temp; the FREE position is correct here because it gates on the `fn_returns_param` union instead | — |
-| B-2026-09-13-23 | 2026-09-13 | codegen | low | AN `Array[String, N]` INSIDE A TUPLE LEAKS ITS ELEMENT BUFFERS -- 20 B in 2 blocks at -O0 for `let t: (Array[String, 2], i64) = ([f"a{n}", f"b{n}"], 7)`, while the SAME array in a plain `let` is clean. PRE-EXISTING rather than introduced by B-2026-09-10-38: the `Array[..]` PREFIX spelling, which typechecked before that fix, leaks the identical 20 B against the PRE-FIX compiler -- so the tuple POSITION owns the defect and the annotation fix merely made it reachable by a second spelling | — |
 | B-2026-09-13-31 | 2026-09-13 | codegen | medium | Three map katas are 5-8% slower under the group-scan default, and no runtime signal is known that would route them back to the byte walk | B-2026-09-07-53 |
 | B-2026-09-14-6 | 2026-09-14 | codegen+interp | medium | AN `Option` PAYLOAD SUB-VALUE MOVED OUT RUNS ITS `Drop` BODY TWICE ON ALL THREE BACKENDS in two spellings -- a NAMED-LOCAL argument, and a payload whose field is heap-carrying -- so the A/B parity rule sees nothing and the duplicate is invisible to every gate | — |
 | B-2026-09-14-7 | 2026-09-14 | codegen+interp | low | AN `Option`-PAYLOAD ELEMENT MOVED OUT AND NOT RETURNED DIES AT OPPOSITE ENDS OF THE ARM -- `Some(t) => { let x = t.0; println("mid"); }` prints `mid dR5` under `--interp` against the compiled backends' `dR5 mid`, so the COUNT agrees and only the sequence differs | — |
@@ -188,10 +187,11 @@ _Generated from `bug-ledger.jsonl` by `scripts/bug-curve.py` (2026-05-20 → 202
 | B-2026-09-15-33 | 2026-09-15 | codegen+interp | medium | AN INDEX-ASSIGN WHOSE RHS IS A NAMED LOCAL RUNS THE DISPLACED ELEMENT'S `Drop` BODY UNDER `--interp` AND ON NO COMPILED SURFACE -- `a[0] = b` diverges on the `Array` AND `Vec` legs alike while the fresh-literal RHS agrees, because `store_destroys_displaced` classifies an identifier RHS as a RELOCATION on purpose (B-2026-08-26-21); the open question is whether `a[0] = b` is a relocation at all, not why the call is missing | — |
 | B-2026-09-15-34 | 2026-09-15 | interp | medium | A SHADOWED BINDING REBOUND THROUGH A CALL RUNS ITS USER `Drop` BODY TWICE IN THE INTERPRETER -- `let q = mk(15); let q = idr(q);` prints `dR15 dR15` under `karac run --interp` against one body on both compiled backends; needs BOTH the shadowing and the call, and two controls show each is necessary | — |
 | B-2026-09-15-35 | 2026-09-15 | codegen+interp | low | A STRUCT FIELD DECLARED AS A BARE GENERIC PARAM BOUND TO A CONTAINER LOSES ITS ELEMENTS' `Drop` BODIES ON ALL FOUR SURFACES -- `G[T] { a: T }` at `T = Array[R, 2]` and at `T = Vec[R]` both print nothing, where the SAME parameter bound to a plain Drop struct fires correctly (B-2026-08-02-14) and the same containers spelled CONCRETELY in the field both fire, so the erasure is the variable and not the container. | — |
-| B-2026-09-16-1 | 2026-09-16 | codegen | medium | `s[a..b]` STILL REACHES SSO CONSTRUCTION THROUGH AN OPAQUE CALL -- `karac_string_slice_into`, the slice-syntax sibling of the `karac_string_try_inline_into` that B-2026-09-15-13 just removed from `String.substring`. The `lexlike` rail is unchanged at 215ms against a 176ms KARAC_SSO=0 baseline (+23%) while `substr`, which did identical work through the other spelling, went 217ms -> 22ms in 9d3ceb9. Same opaque-call shape, same fix available, one extra obstacle: this entrypoint also performs the UTF-8 boundary validation, which codegen already emits inline for `substring` via `emit_substring_boundary_checks`. | — |
 | B-2026-09-16-2 | 2026-09-16 | codegen+interp | medium | THE DISPLACED ELEMENT'S USER `Drop` BODY NEVER RUNS FOR A TUPLE OR NESTED-ARRAY ELEMENT SHAPE, ON EITHER BACKEND -- `a[0] = <new>` over `Array[(D, i64), N]` or `Array[Array[D, 1], M]` prints nothing for the displaced value on all four surfaces; the split-out body remainder of B-2026-09-15-31 and -15-32, resting on a DELIBERATE invariant in each backend (`value_runs_user_drop` classifies a bare Tuple/Array as false at top level to keep the container walkers the sole firers), so a one-sided fix would convert an agreed gap into a divergence | — |
 | B-2026-09-16-3 | 2026-09-16 | codegen | low | THE NESTED STORE `d[i][j] = x` LEAKS THE DISPLACED TUPLE'S HEAP -- 5 B in 1 block at `-O0` over `Vec[Vec[(String, i64)]]`, and the one-line fix the shape invites (a tuple arm in `emit_elem_store_releasing_displaced`) is a DOUBLE FREE, because that helper also runs for the single-level store which 6c0f802 already releases through the drop emitter | — |
 | B-2026-09-16-4 | 2026-09-16 | other | medium | THE ASAN RATCHET LEGS RUN THE OPT-IN-ARCHIVE FIXTURES AGAINST A RUNTIME THAT CAN BE ARBITRARILY OLD, AND NOTHING DETECTS IT -- every archive check in the tree is PRESENCE-ONLY (`link_or_skip` discriminates on `undefined symbol`, the leg's carve-out keys on archive FILENAMES, nothing anywhere compares an archive's mtime to `runtime/src`), so a BEHAVIOUR-ONLY runtime change leaves the ~6 regex/arrow/unicode fixtures linking cleanly and running the old semantics. Measured on this container 2026-09-16: those three archives were built Sep 11 21:12-21:13 and `runtime/src` has moved three times since, so the legs reported 1641/1641 green with six fixtures executing a runtime four days stale -- including one commit (`bab0491`) that is a pure behaviour change. | — |
+| B-2026-09-16-5 | 2026-09-16 | codegen | low | A BY-VALUE TUPLE PARAM HOLDING AN `Array[T, N]` STILL LEAKS ITS ELEMENTS IN TWO SHAPES -- a param moved to a LOCAL inside the callee, and a FRESH TEMPORARY argument whose param is returned -- because the two available ownership models each break the other's cell: the entry copy orphans a temporary's buffers, and transfer needs a caller-side disarm that has no hook for a tuple argument | — |
+| B-2026-09-16-6 | 2026-09-16 | codegen+interp | medium | TWO BODIES-CHANNEL GAPS FOR AN `Array[T, N]` HELD IN A TUPLE, both found while pinning the output twin of B-2026-09-13-23's memory fix and both memory-clean under it: a tuple in a STRUCT FIELD runs no element `Drop` body on ANY backend, and a DESTRUCTURED tuple runs them under `--interp` and on NEITHER compiled backend -- an agreed silence and a run-vs-build divergence in the same family | — |
 
 ### Relocated
 
@@ -2566,6 +2566,7 @@ _Generated from `bug-ledger.jsonl` by `scripts/bug-curve.py` (2026-05-20 → 202
 | B-2026-09-13-20 | codegen | low | A FRESH-OWNED TUPLE KEY TEMPORARY LEAKS AT EVERY `Map` LOOKUP SITE -- `m.get(mk(j))` over `Map[(String, String), i64]` loses 36 B per lookup, while t… | 8fd717f |
 | B-2026-09-13-21 | codegen+interp | high | AN ARM THAT BINDS A WHOLE BOXED TUPLE PAYLOAD AND MOVES IT ONWARD DOUBLE-FREES ON EVERY COMPILED BACKEND -- `match m.remove(k) { Some(a) => { keep.pu… | 9b9fe76 |
 | B-2026-09-13-22 | codegen | high | A chained string concatenation allocates one buffer per `+`, so `a + b + c` costs two allocations where one sized to the total would do — 36% of kata… | fea7ac09b |
+| B-2026-09-13-23 | codegen | low | AN `Array[String, N]` INSIDE A TUPLE LEAKS ITS ELEMENT BUFFERS -- 20 B in 2 blocks at -O0 for `let t: (Array[String, 2], i64) = ([f"a{n}", f"b{n}"],… | 506a91d |
 | B-2026-09-13-24 | codegen+interp | medium | A USER ENUM'S VARIANT-CONSTRUCTOR TEMP LOSES ITS `Drop` BODY -- `takeit(Ho.Full(R { id: 5 }))` over `enum Ho[T] { Full(T), Empty }` prints `f:5` alon… | 8e32454 |
 | B-2026-09-13-25 | typecheck | low | THE FIELD-LESS QUALIFIED VARIANT `Ho[i64].Empty` IS STILL REJECTED as `'Ho' is a type, not a function`, where design.md § 588 lists a qualified field… | bfb60dd |
 | B-2026-09-13-26 | interp+codegen | medium | A DISCARDED ARRAY LITERAL OF Drop-BEARING STRUCTS RUNS NO ELEMENT BODIES AT ALL -- `let _ = if c { [W { r: mkd(7), b: 1 }] } else { . | 122b991 |
@@ -2613,6 +2614,7 @@ _Generated from `bug-ledger.jsonl` by `scripts/bug-curve.py` (2026-05-20 → 202
 | B-2026-09-15-31 | codegen | low | AN INDEX-ASSIGN OVER A CONTAINER OF TUPLES LEAKS THE DISPLACED TUPLE'S HEAP ELEMENTS, ON BOTH THE `Array` AND THE `Vec` LEG -- 10 B in 1 block at `-O… | 6c0f802 |
 | B-2026-09-15-32 | codegen+interp | medium | A NESTED `Array[Array[T, N], M]` INDEX-ASSIGN LOSES THE DISPLACED INNER ARRAY'S ELEMENT `Drop` BODIES AND LEAKS THEIR HEAP, ON BOTH BACKENDS -- `a[0]… | 6c0f802 |
 | B-2026-09-15-36 | other | medium | THE CODEGEN E2E HARNESS IGNORES TYPECHECK ERRORS, so a fixture cell whose program DOES NOT COMPILE runs on the interpreter anyway and passes green wh… | 5daa730 |
+| B-2026-09-16-1 | codegen | medium | `s[a..b]` STILL REACHES SSO CONSTRUCTION THROUGH AN OPAQUE CALL -- `karac_string_slice_into`, the slice-syntax sibling of the `karac_string_try_inlin… | 066695ffc |
 
 </details>
 
