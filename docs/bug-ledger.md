@@ -194,7 +194,6 @@ _Generated from `bug-ledger.jsonl` by `scripts/bug-curve.py` (2026-05-20 → 202
 | B-2026-09-16-8 | 2026-09-16 | other | medium | `bug-lint.sh` SKIPS ITS FIX-SHA RESOLVABILITY CHECK ON EVERY CLOUD CONTAINER, WHICH IS WHERE THE ORPHANS ARE CREATED -- the check is disabled outright on a shallow clone (`rev-parse --is-shallow-repository`), and cloud sessions are shallow by default, so the one detector for a row citing a commit that exists nowhere on `main` is off in exactly the environment that produces them. EIGHT rows now carry a `SHA NOTE` recording an orphan, against the two CLAUDE.md names; the most recent was created and caught by hand 2026-09-16, with the lint reporting 0 errors on the same tree. | — |
 | B-2026-09-16-10 | 2026-09-16 | codegen | high | A GENERIC SINGLE-FIELD VARIANT AT `T = Array[String, N]` SEGFAULTS ON EVERY COMPILED BACKEND -- `G1.Y(a)` over `enum G1[T] { Y(T), N }` passed to a generic `fn glen[T](g: G1[T])` exits 139 with NO OUTPUT AT ALL, five invalid reads under valgrind, and B-2026-09-15-18 records this exact shape as its CLEAN CONTROL | — |
 | B-2026-09-16-11 | 2026-09-16 | codegen | low | THE ENUM TWIN OF B-2026-09-05-32'S IDENTITY ARM STILL LEAKS -- `e = if c { pass(e) } else { e }` over `enum E { A(String), B }` loses 36 bytes in 1 block (12 allocs / 11 frees at -O0) while the all-owned-calls spelling `else { mk() }` is 12 / 12 clean on the same tree; the enum overwrite path consumes the STRICT `roundtrip_frees_old` because it has no distinctness guard, so widening the shared predicate would have traded the leak for a use-after-free there | — |
-| B-2026-09-16-12 | 2026-09-16 | interp+codegen | medium | A MIXED BIND-AND-WILDCARD MATCH ARM LOSES THE WILDCARDED PAYLOAD FIELD'S `Drop` BODY -- `let w = W2.Two(mk(41), mk(42)); match w { W2.Two(a, _) => { return a.id } .. }` runs `dR41` alone on `--interp` while both compiled backends run `dR41 dR42`, and once the arm MOVES the bound field out (`let m = a`) EVERY surface loses `dR42`; the enum payload disarm is keyed on the BINDING, not on the consumed POSITION, so consuming any one Drop-bearing position stands the whole husk's walk down | — |
 
 ### Relocated
 
@@ -2621,6 +2620,7 @@ _Generated from `bug-ledger.jsonl` by `scripts/bug-curve.py` (2026-05-20 → 202
 | B-2026-09-16-1 | codegen | medium | `s[a..b]` STILL REACHES SSO CONSTRUCTION THROUGH AN OPAQUE CALL -- `karac_string_slice_into`, the slice-syntax sibling of the `karac_string_try_inlin… | 066695ffc |
 | B-2026-09-16-4 | other | medium | THE ASAN RATCHET LEGS RUN THE OPT-IN-ARCHIVE FIXTURES AGAINST A RUNTIME THAT CAN BE ARBITRARILY OLD, AND NOTHING DETECTS IT -- every archive check in… | d7a2486 |
 | B-2026-09-16-9 | codegen | high | REGRESSION ON `main`: `506a91d` TURNED THE `(Array[String, 2], i64)` ENUM-PAYLOAD CELL FROM A LEAK INTO AN INVALID FREE -- valgrind reports `Invalid… | 49e75a8 |
+| B-2026-09-16-12 | interp+codegen | medium | A MIXED BIND-AND-WILDCARD MATCH ARM LOSES THE WILDCARDED PAYLOAD FIELD'S `Drop` BODY -- `let w = W2.Two(mk(41), mk(42)); match w { W2.Two(a, _) => {… | c9432558c |
 
 </details>
 
