@@ -99,7 +99,7 @@ distinguish "bugs flattening" from "we stopped writing them down."
 | missing-feature | 199 |
 | codegen-gap | 178 |
 | diagnostics | 126 |
-| other | 119 |
+| other | 121 |
 | perf | 114 |
 | false-positive | 107 |
 | soundness | 95 |
@@ -110,8 +110,8 @@ distinguish "bugs flattening" from "we stopped writing them down."
 
 | surface | total |
 |---|---|
-| codegen | 1797 |
-| interp | 456 |
+| codegen | 1799 |
+| interp | 458 |
 | typecheck | 301 |
 | other | 94 |
 | ownership | 75 |
@@ -190,6 +190,7 @@ _Generated from `bug-ledger.jsonl` by `scripts/bug-curve.py` (2026-05-20 → 202
 | B-2026-09-16-18 | 2026-09-16 | codegen+interp | medium | A FRESH-TEMP STRUCT SCRUTINEE'S UNBOUND FIELDS LOSE THEIR `Drop` BODIES AND LEAK THEIR HEAP ON EVERY SURFACE -- `match S3 { a: mk(44), b: mk(45) } { S3 { a, .. } => .. }` runs `dR44` alone and `S3 { .. }` runs NOTHING, on --interp / jit / aot / `KARAC_AUTO_PAR=0` alike; valgrind at `-O0` reports 24 allocs / 20 frees, 12 bytes definitely lost in 4 blocks, one `name` buffer per unbound field. The NAMED-scrutinee spelling is correct on all four, so the husk of a temp with no binding is owned by nobody | — |
 | B-2026-09-16-19 | 2026-09-16 | codegen+interp | medium | A `Vec`-NESTING INSIDE AN `Option` OR `Map` FIELD RUNS ITS ELEMENT'S `Drop` BODY ON `--interp` AND ON NO COMPILED SURFACE -- `H { xs: Option[Vec[D]] }` and `H { xs: Map[i64, Vec[D]] }` both print `dD1` under the tree-walk backend and nothing under the JIT or either `build`, which REFUTES the premise `type_runs_user_drop`'s own comment rests on | — |
 | B-2026-09-16-20 | 2026-09-16 | codegen | low | `karac_string_try_inline_into` IS DEAD ABI SURFACE -- no caller anywhere in the compiler since `9d3ceb9` removed its declaration from `runtime_fns.rs` and `codegen.rs`, and the JIT is not a second path (it goes through the same codegen), so no compiled Kara program on any backend references it; it remains a `#[no_mangle]` export in `runtime/src/clone.rs`, exercised only by its own unit tests and by the encoding-contract test. Keep-or-remove was deliberately deferred as 'a separate decision' and nothing tracks it. | — |
+| B-2026-09-16-22 | 2026-09-16 | codegen+interp | low | AN OWNED ENUM RECEIVER THAT ESCAPES THROUGH THE RETURN RUNS ITS SHELL `Drop` BODY TWICE, AND A CHAINED CALL OVER THE SAME SHAPE RUNS NO BODY AT ALL -- `let b = a.ret_self()` prints `dE dR6 dE` and `E.A(mk(14)).ret_self().none()` prints nothing, both agreed on all four surfaces with memory balanced | — |
 
 ### Relocated
 
@@ -2629,6 +2630,7 @@ _Generated from `bug-ledger.jsonl` by `scripts/bug-curve.py` (2026-05-20 → 202
 | B-2026-09-16-10 | codegen | high | A GENERIC SINGLE-FIELD VARIANT AT `T = Array[String, N]` SEGFAULTS ON EVERY COMPILED BACKEND -- `G1.Y(a)` over `enum G1[T] { Y(T), N }` passed to a g… | 55a8db2 |
 | B-2026-09-16-12 | interp+codegen | medium | A MIXED BIND-AND-WILDCARD MATCH ARM LOSES THE WILDCARDED PAYLOAD FIELD'S `Drop` BODY -- `let w = W2.Two(mk(41), mk(42)); match w { W2.Two(a, _) => {… | c9432558c |
 | B-2026-09-16-17 | codegen+interp | medium | AN ENUM VARIANT'S PAYLOAD FIELDS RUN THEIR `Drop` BODIES IN DECLARATION ORDER ON ALL FOUR SURFACES, while a struct's run in REVERSE declaration order… | ef5ce6f |
+| B-2026-09-16-21 | codegen+interp | medium | AN OWNED ENUM RECEIVER'S PAYLOAD `Drop` BODY IS LOST WHENEVER THE CALLEE NEVER DESTRUCTURES `self` -- `let a = E.A(mk(1)); a.none()` over `fn none(se… | 0b97e71 |
 
 </details>
 
