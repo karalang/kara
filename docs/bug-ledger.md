@@ -92,7 +92,7 @@ distinguish "bugs flattening" from "we stopped writing them down."
 
 | class | total |
 |---|---|
-| run-vs-build | 416 |
+| run-vs-build | 417 |
 | miscompile | 415 |
 | leak | 365 |
 | double-free | 237 |
@@ -110,8 +110,8 @@ distinguish "bugs flattening" from "we stopped writing them down."
 
 | surface | total |
 |---|---|
-| codegen | 1795 |
-| interp | 455 |
+| codegen | 1796 |
+| interp | 456 |
 | typecheck | 301 |
 | other | 94 |
 | ownership | 75 |
@@ -172,7 +172,6 @@ _Generated from `bug-ledger.jsonl` by `scripts/bug-curve.py` (2026-05-20 → 202
 | B-2026-09-15-17 | 2026-09-15 | codegen | low | AN `Array[R, N]` WHOSE ELEMENT RUNS A USER `Drop` BODY, MOVED INTO AN ENUM VARIANT CONSTRUCTOR, RUNS THOSE BODIES BEFORE THE CONSUMING CALL ON EVERY COMPILED BACKEND and after it under `--interp` -- the identical program with a plain function call in place of the constructor is correctly ordered on both, which puts the divergence at the constructor rather than at the array | — |
 | B-2026-09-15-18 | 2026-09-15 | codegen | medium | A GENERIC MULTI-FIELD VARIANT STILL STRANDS ITS BOXED `Array[T, N]` PAYLOAD after B-2026-09-15-15 -- `G2.Y(a, 5)` over `enum G2[T] { Y(T, i64), N }` at `T = Array[String, 2]` loses 48 B + 44 B indirect at `-O0`, byte-identical before and after that fix, because an ERASED `T` cannot be classified at declaration and the monomorphic path that would catch it declines multi-field variants of its own | — |
 | B-2026-09-15-21 | 2026-09-15 | codegen | medium | AN ARM-BOUND PAYLOAD ASSIGNED OVER A `mut` LOCAL STRANDS THE DISPLACED VALUE'S HEAP FIELD, BUT ONLY WHEN THE ENUM ARRIVED AS A BY-VALUE PARAM -- `out = r` inside `fn take(b: E)` loses 2 B per call at -O0 while the identical body in `main`, or over an inline-literal scrutinee, is clean; the displaced value's `Drop` BODY still runs, so only the memory is lost | — |
-| B-2026-09-15-23 | 2026-09-15 | interp+codegen | medium | A NESTED CONTAINER IN A STRUCT FIELD LOSES ITS ELEMENT'S `Drop` BODY ON ALL FOUR SURFACES -- `struct H { xs: Vec[Vec[D]] }` with `H { xs: [[mkd(1)]] }` prints `n:1 end` where the same `Vec[D]` field prints `n:1 dD1 end`, so the field is the variable and no A/B comparison can see it | — |
 | B-2026-09-15-24 | 2026-09-15 | interp+codegen | medium | A USER-DEFINED METHOD THAT DISCARDS A BORROW-PROJECTION ARGUMENT RUNS THE FIELD'S `Drop` BODY TWICE UNDER `--interp` AND ONCE ON EVERY COMPILED SURFACE -- `b.put(w.r)` diverges on all three receiver forms while the identical free and associated spellings agree at one body, because the real discriminator is whether the CALLEE KEEPS THE VALUE, not the call spelling B-2026-09-14-10 reads it as | — |
 | B-2026-09-15-25 | 2026-09-15 | parser+typecheck | low | TWO OF THE FIVE PREFIX-COLLECTION-LITERAL TYPES design.md NAMES DO NOT PARSE -- `VecDeque[1, 2]` reports `'VecDeque' is a type, not a function` and `SortedMap["a": 1]` is a raw parse error on the `:`, while the spec says the form is supported by `Vec`, `Set`, `Map`, `VecDeque`, and `SortedMap` | — |
 | B-2026-09-15-29 | 2026-09-15 | codegen | low | THE `if let` SIBLING OF B-2026-09-02-31 STILL LEAKS ITS MOVED-OUT PAYLOAD -- `(if let Ve.A(s) = mkVe(i) { s } else { .. }).len()` in a nested expression position loses 310 B over 20 evaluations at -O0, unchanged by that row's fix, because the escaping-value discriminator it added has exactly one consuming read site and that site is `compile_match` | — |
@@ -191,6 +190,7 @@ _Generated from `bug-ledger.jsonl` by `scripts/bug-curve.py` (2026-05-20 → 202
 | B-2026-09-16-15 | 2026-09-16 | codegen | medium | A BOXED GENERIC-ENUM PAYLOAD'S INTERIOR IS LOST IN TWO SHAPES ONCE THE CRASH IS OUT OF THE WAY -- `Array[String, N]` strands its element buffers (64 B in 4 over two rounds) and a payload matched into an UNUSED arm binding strands the payload itself (10 B per call); the second is attributed to `boxed_payload_interior_taken_by_arm` answering TRUE for a bare generic parameter through its `_ => p.generic_args.is_none()` tail, a spelling B-2026-09-12-5 never enumerated | — |
 | B-2026-09-16-16 | 2026-09-16 | codegen | medium | A PASSTHROUGH GENERIC PARAM OVER A BOXED ENUM PAYLOAD DOUBLE FREES -- `fn idG[T](g: G1[T]) -> G1[T] { return g }` over `enum G1[T] { Y(T), N }` at `T = String` exits 139 with two `Invalid free()` and 12 allocs / 14 frees against a correct `--interp`; B-2026-09-16-10's fix cannot reach it by construction, because the prologue declines an escaping param so BOTH halves correctly stand down and the second owner is elsewhere | — |
 | B-2026-09-16-18 | 2026-09-16 | codegen+interp | medium | A FRESH-TEMP STRUCT SCRUTINEE'S UNBOUND FIELDS LOSE THEIR `Drop` BODIES AND LEAK THEIR HEAP ON EVERY SURFACE -- `match S3 { a: mk(44), b: mk(45) } { S3 { a, .. } => .. }` runs `dR44` alone and `S3 { .. }` runs NOTHING, on --interp / jit / aot / `KARAC_AUTO_PAR=0` alike; valgrind at `-O0` reports 24 allocs / 20 frees, 12 bytes definitely lost in 4 blocks, one `name` buffer per unbound field. The NAMED-scrutinee spelling is correct on all four, so the husk of a temp with no binding is owned by nobody | — |
+| B-2026-09-16-19 | 2026-09-16 | codegen+interp | medium | A `Vec`-NESTING INSIDE AN `Option` OR `Map` FIELD RUNS ITS ELEMENT'S `Drop` BODY ON `--interp` AND ON NO COMPILED SURFACE -- `H { xs: Option[Vec[D]] }` and `H { xs: Map[i64, Vec[D]] }` both print `dD1` under the tree-walk backend and nothing under the JIT or either `build`, which REFUTES the premise `type_runs_user_drop`'s own comment rests on | — |
 
 ### Relocated
 
@@ -2614,6 +2614,7 @@ _Generated from `bug-ledger.jsonl` by `scripts/bug-curve.py` (2026-05-20 → 202
 | B-2026-09-15-7 | codegen | low | AN INDEX-STORE FREES ONLY THE OUTER BUFFER OF THE `Vec` ELEMENT IT DISPLACES, STRANDING THAT ELEMENT'S OWN ELEMENTS -- `a[0] = <new>` over `Array[Vec… | bfeeb86 |
 | B-2026-09-15-20 | codegen | medium | A WHOLE-CONTAINER REASSIGNMENT OVER A FIXED `Array[T, N]` STRANDS THE DISPLACED ELEMENTS' HEAP -- `let mut v: Array[D, 2] = [..]; v = [..];` loses 34… | e529564 |
 | B-2026-09-15-22 | codegen | medium | AN `Array[T, N]` WHOSE ELEMENT IS A `VecDeque` BUILT FROM A NESTED `[..]` LITERAL FAULTS AT SCOPE-EXIT DROP ON EVERY COMPILED SURFACE -- `let v: Arra… | 37ee5b1 |
+| B-2026-09-15-23 | interp+codegen | medium | A NESTED CONTAINER IN A STRUCT FIELD LOSES ITS ELEMENT'S `Drop` BODY ON ALL FOUR SURFACES -- `struct H { xs: Vec[Vec[D]] }` with `H { xs: [[mkd(1)]]… | 01a1e08 |
 | B-2026-09-15-26 | interp+codegen | medium | AN `Array[T, N]`-TYPED STRUCT FIELD NEVER RUNS ITS ELEMENTS' `Drop` BODIES -- `struct H { a: Array[D, 2] }` prints nothing at scope exit where the sa… | 645ea3b |
 | B-2026-09-15-27 | codegen | medium | A `Vec[Array[T, N]]`-TYPED STRUCT FIELD LEAKS ITS ELEMENTS' HEAP -- 34 bytes in 2 blocks definitely lost on a plain `let h: H` with no reassignment,… | 645ea3b |
 | B-2026-09-15-28 | interp+codegen | medium | A `Vec[T]`-TYPED STRUCT FIELD ASSIGNED A FRESH CONTAINER LOSES THE DISPLACED ELEMENTS' `Drop` BODIES -- `h.v = [..]` prints the surviving elements' b… | ad35a8a |
