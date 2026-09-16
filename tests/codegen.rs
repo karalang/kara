@@ -9908,12 +9908,26 @@ fn main() {
     ///
     ///   1. A `shared struct` in a struct FIELD runs its body exactly once.
     ///      (The interpreter ran it ZERO times; this side always ran it.)
-    ///   2. WHERE it runs. `Mx { r: R, s: S }` splits: the plain field's body
-    ///      fires at the binding's NLL endpoint, the shared field's release at
-    ///      SCOPE EXIT — `dR1` before `post`, `dS2` after it. That split is
-    ///      the whole reason the interpreter parks its release rather than
-    ///      firing it beside the plain walk, so a change that collapsed the
-    ///      two placements here would silently un-match the two backends.
+    ///   2. WHERE it runs. `Mx { r: R, s: S }` used to SPLIT — the plain
+    ///      field's body at the binding's live-range end, the shared field's
+    ///      release at SCOPE EXIT — and B-2026-09-04-32 collapsed the two onto
+    ///      the live-range end, on BOTH backends in one commit. The split was
+    ///      never a backend divergence (all four surfaces agreed) but a joint
+    ///      departure from design.md § Drop ordering within a branch, which
+    ///      names RC decrements explicitly — "Destructor calls — including
+    ///      `Rc` and `Arc` reference-count decrements — ... fire at each
+    ///      binding's live-range end, not lexical scope end" — and excludes
+    ///      the scope-exit stack outright for a mid-branch last use. ONE
+    ///      BINDING CANNOT HAVE TWO LIVE-RANGE ENDS, and a BARE `shared`
+    ///      binding was already correct, which made the aggregate the outlier
+    ///      rather than the rule. `dR1` then `dS2`, both before `two`.
+    ///
+    ///      Scoped to PLAIN STRUCT holders, which is exactly what codegen can
+    ///      pair (the holder's `UserDrop` with its `StructDrop`, same alloca).
+    ///      A `Vec[S]` / tuple holder releases through a different action that
+    ///      still drains at scope exit on both backends, so those shapes are
+    ///      unchanged and still agree — moving one backend alone would trade a
+    ///      shared spec deviation for a run-vs-build divergence.
     ///   3. Two holders of ONE shared value release it once, at the last one.
     ///
     /// Kept in one program so the three answers are read off a single output
@@ -9946,7 +9960,7 @@ fn main() {
             // use. Block 2: `dR1` at the NLL endpoint, `dS2` at scope exit,
             // with `two` between them. Block 3: exactly one `dS3`, at the last
             // holder's release.
-            "v14\none\ndS14\nv2\ndR1\ntwo\ndS2\nv33\nthree\ndS3\nend\n"
+            "v14\none\ndS14\nv2\ndR1\ndS2\ntwo\nv33\nthree\ndS3\nend\n"
         );
     }
 

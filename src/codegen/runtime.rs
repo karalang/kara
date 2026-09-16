@@ -11522,6 +11522,14 @@ impl<'ctx> super::Codegen<'ctx> {
                 ptr: PointerValue<'c>,
                 heap_type: StructType<'c>,
             },
+            /// B-2026-09-04-32 — the paired `StructDrop` of a PLAIN holder that
+            /// carries a Drop-relevant `shared` field. Matched to its holder by
+            /// ALLOCA, because `StructDrop` carries no binding name and the
+            /// holder's own `UserDrop` in the same frame carries both.
+            Struct {
+                ptr: PointerValue<'c>,
+                drop_fn: FunctionValue<'c>,
+            },
         }
         let due: Vec<DueDrop<'ctx>> = {
             let Some(frame) = self.drop_rc.scope_cleanup_actions.last() else {
@@ -11581,7 +11589,52 @@ impl<'ctx> super::Codegen<'ctx> {
                 })
                 .collect()
         };
-        if due.is_empty() {
+        // B-2026-09-04-32 — a PLAIN holder's `shared` field released at its
+        // live-range end rather than at lexical scope exit. `Mx { r: R, s: S }`
+        // ended `r` here and `s` at scope exit, so ONE binding had two
+        // live-range ends; design.md § Drop ordering within a branch names RC
+        // decrements explicitly and excludes the scope-exit stack for a
+        // mid-branch last use. The interpreter moved in the same commit.
+        //
+        // PAIRED BY ALLOCA: `StructDrop` carries no binding name and this pass
+        // is name-keyed, so the holder's own `UserDrop` — same frame, same
+        // alloca — supplies both the name and the type. That avoids threading a
+        // name through ~29 `StructDrop` sites, several of which serve tuples.
+        let paired: Vec<DueDrop<'ctx>> = {
+            let fired_allocas: Vec<(PointerValue<'ctx>, String)> = due
+                .iter()
+                .filter_map(|d| match d {
+                    DueDrop::User { ptr, type_name, .. } => Some((*ptr, type_name.clone())),
+                    _ => None,
+                })
+                .collect();
+            if fired_allocas.is_empty() {
+                Vec::new()
+            } else {
+                let Some(frame) = self.drop_rc.scope_cleanup_actions.last() else {
+                    return;
+                };
+                frame
+                    .iter()
+                    .filter_map(|a| match a {
+                        CleanupAction::StructDrop {
+                            struct_alloca,
+                            drop_fn,
+                        } if fired_allocas.iter().any(|(p, tn)| {
+                            p == struct_alloca && self.plain_holder_holds_drop_relevant_shared(tn)
+                        }) =>
+                        {
+                            Some(DueDrop::Struct {
+                                ptr: *struct_alloca,
+                                drop_fn: *drop_fn,
+                            })
+                        }
+                        _ => None,
+                    })
+                    .collect()
+            }
+        };
+        if due.is_empty() && paired.is_empty() {
             return;
         }
         // Fetched here rather than as an early-return guard on the whole
@@ -11649,6 +11702,9 @@ impl<'ctx> super::Codegen<'ctx> {
                 // scope-exit arm carries a reassignment reload and a null
                 // guard (a slot whose `let` never ran), and an early fire
                 // needs both for the same reasons.
+                // `due` never carries a paired StructDrop — those are collected
+                // into `paired` and fired after this loop (B-2026-09-04-32).
+                DueDrop::Struct { .. } => {}
                 DueDrop::Rc {
                     name,
                     ptr,
@@ -11685,7 +11741,8 @@ impl<'ctx> super::Codegen<'ctx> {
             .iter()
             .filter_map(|d| match d {
                 DueDrop::User { name, drop_fn, .. } => Some((name.as_str(), *drop_fn)),
-                DueDrop::Rc { .. } => None,
+                // Retired on its own (alloca, drop_fn) key below, not this one.
+                DueDrop::Rc { .. } | DueDrop::Struct { .. } => None,
             })
             .collect();
         // The RC leg's retire key is (name, slot). A name alone would be
@@ -11696,6 +11753,18 @@ impl<'ctx> super::Codegen<'ctx> {
         //
         // Empty when `rc_ctx` was `None`: nothing was emitted, so nothing may
         // be retired — retiring an action that did not fire is not a retiming,
+        // B-2026-09-04-32 — the paired `StructDrop`s, AFTER the `due` loop so a
+        // holder's own body and its plain-field walk run before its shared
+        // field's release. That is the order the interpreter already uses, so
+        // collapsing the two placements keeps the sequence both backends agree
+        // on and moves only WHERE it happens.
+        for p in &paired {
+            if let DueDrop::Struct { ptr, drop_fn } = p {
+                self.builder
+                    .build_call(*drop_fn, &[(*ptr).into()], "")
+                    .unwrap();
+            }
+        }
         // it is a dropped decrement, i.e. a leak.
         let fired_rc: Vec<(&str, PointerValue<'ctx>)> = due
             .iter()
@@ -11710,6 +11779,11 @@ impl<'ctx> super::Codegen<'ctx> {
                     if fired_rc.iter().any(|(n, p)| *n == name.as_str() && p == ptr))
                     && !matches!(a, CleanupAction::UserDrop { binding_name, drop_fn, .. }
                     if fired.iter().any(|(n, f)| *n == binding_name.as_str() && f == drop_fn))
+                    // B-2026-09-04-32 — retire the paired StructDrop too, or the
+                    // scope-exit drain runs the release a second time.
+                    && !matches!(a, CleanupAction::StructDrop { struct_alloca, drop_fn }
+                    if paired.iter().any(|d| matches!(d,
+                        DueDrop::Struct { ptr, drop_fn: f } if ptr == struct_alloca && f == drop_fn)))
             });
         }
     }

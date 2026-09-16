@@ -5440,6 +5440,34 @@ impl<'ctx> super::Codegen<'ctx> {
         })
     }
 
+    /// B-2026-09-04-32 — the MIRROR of [`Self::shared_holder_runs_field_bodies`]:
+    /// does this PLAIN struct hold a `shared` field whose release is
+    /// Drop-relevant (the shared type has its own `impl Drop`, or runs bodies
+    /// for its own plain fields)?
+    ///
+    /// The two together cover the whole "one holder, two tiers" surface.
+    /// B-2026-09-04-13 admitted the shared holder with plain field bodies to
+    /// NLL firing; this admits the plain holder with a shared field, which was
+    /// the half still landing at lexical scope exit while the SAME binding's
+    /// plain field fired at its live-range end. One binding cannot have two
+    /// live-range ends, and a BARE `shared` binding was already correct — the
+    /// aggregate was the outlier rather than the rule.
+    pub(super) fn plain_holder_holds_drop_relevant_shared(&self, struct_name: &str) -> bool {
+        if self.type_decls.shared_types.contains_key(struct_name) {
+            return false;
+        }
+        let Some(heads) = self.type_decls.struct_field_type_names.get(struct_name) else {
+            return false;
+        };
+        heads.iter().any(|h| {
+            h.as_deref().is_some_and(|n| {
+                self.type_decls.shared_types.contains_key(n)
+                    && (self.drop_rc.user_drop_wrapper_fns.contains_key(n)
+                        || self.shared_holder_runs_field_bodies(n))
+            })
+        })
+    }
+
     /// Whether `name`, or a plain struct reachable through its fields,
     /// declares `impl Drop`. Depth-bounded like its walk sibling.
     fn plain_struct_has_user_drop_deep(&self, name: &str, depth: u32) -> bool {

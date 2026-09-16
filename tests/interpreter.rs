@@ -7920,11 +7920,14 @@ fn test_user_drop_shared_struct_alias_fires_once_at_last_ref() {
 /// not got. Both compiled backends ran it exactly once, so this was a
 /// run-vs-build divergence on the shipping side.
 ///
-/// The trailing `post` is load-bearing: it pins the release to SCOPE EXIT
-/// rather than the holder's NLL endpoint, which is where the compiled
-/// backends put it (see the sibling placement test).
+/// The trailing `post` is load-bearing: it pins WHERE the release lands.
+/// B-2026-09-04-32 moved that from scope exit to the holder's LIVE-RANGE END —
+/// `a`'s last use is `a.s.id`, so `dS14` belongs before `post`, not after it —
+/// and moved both backends together. design.md § Drop ordering within a branch
+/// names RC decrements explicitly and excludes the scope-exit stack for a
+/// mid-branch last use; the old placement had ONE binding ending in two places.
 #[test]
-fn test_user_drop_field_held_shared_struct_fires_once_at_scope_exit() {
+fn test_user_drop_field_held_shared_struct_fires_once_at_its_live_range_end() {
     let (output, _drops) = run_program_with_drops(
         "shared struct S { id: i64 }\n\
          impl Drop for S { fn drop(mut ref self) { println(f\"dS{self.id}\"); } }\n\
@@ -7940,19 +7943,28 @@ fn test_user_drop_field_held_shared_struct_fires_once_at_scope_exit() {
              println(\"post\");\n\
          }",
     );
-    assert_eq!(output.concat(), "mid\nv14\npost\ndS14\n");
+    assert_eq!(output.concat(), "mid\nv14\ndS14\npost\n");
 }
 
-/// B-2026-09-03-9 — the two halves of one holder land in DIFFERENT places,
-/// and both compiled backends agree on that split.
+/// B-2026-09-03-9, corrected by B-2026-09-04-32 — the two halves of one holder
+/// land in the SAME place, and all four surfaces agree on it.
 ///
-/// `Mx { r: R, s: S }` runs the plain field's body at the binding's NLL
-/// endpoint (`dR1` before `post`) and releases the shared field at scope exit
-/// (`dS2` after it). Firing the shared half beside the plain one would run the
-/// right body in the wrong place — a visible divergence rather than a silent
-/// gap — so this asserts the interleaving, not just the bodies.
+/// This test used to assert the opposite, in its name as well as its
+/// expectation: `Mx { r: R, s: S }` ran the plain field's body at the binding's
+/// live-range end (`dR1` before `post`) and released the shared field at scope
+/// exit (`dS2` after it). That split was not a backend divergence — every
+/// surface agreed — but a joint departure from design.md § Drop ordering within
+/// a branch, which puts an RC decrement at "each binding's live-range end, not
+/// lexical scope end" and says a mid-branch last use "does not appear in the
+/// end-of-branch cleanup stack at all". ONE BINDING CANNOT HAVE TWO LIVE-RANGE
+/// ENDS, and a bare `shared` binding already fired at its own, which is what
+/// made the aggregate the outlier rather than the rule.
+///
+/// So the interleaving is still what is asserted, not just the bodies — it is
+/// simply the interleaving the spec names: `dR1` then `dS2`, both before
+/// `post`.
 #[test]
-fn test_user_drop_field_held_shared_release_lands_at_scope_exit_not_nll() {
+fn test_user_drop_field_held_shared_release_lands_at_its_live_range_end() {
     let (output, _drops) = run_program_with_drops(
         "shared struct S { id: i64 }\n\
          impl Drop for S { fn drop(mut ref self) { println(f\"dS{self.id}\"); } }\n\
@@ -7965,7 +7977,7 @@ fn test_user_drop_field_held_shared_release_lands_at_scope_exit_not_nll() {
              println(\"post\");\n\
          }",
     );
-    assert_eq!(output.concat(), "v2\ndR1\npost\ndS2\n");
+    assert_eq!(output.concat(), "v2\ndR1\ndS2\npost\n");
 }
 
 /// B-2026-09-03-9 — two holders of ONE shared value fire the body exactly

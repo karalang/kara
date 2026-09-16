@@ -400,6 +400,11 @@ impl<'a> super::Interpreter<'a> {
             // here too — that's the "let _ = expensive(); …" case
             // where NLL says the value dies at its declaration.
             self.fire_due_drops(&mut cleanup, &last_use, stmt_idx);
+            // B-2026-09-04-32 — a parked field-held `shared` release whose
+            // holder just became the last reference is due HERE, at the
+            // binding's live-range end, not at lexical scope exit. After
+            // `fire_due_drops` so that path's in-flight clone is already gone.
+            self.drain_due_shared_releases();
         }
         if is_fn_body {
             // B-2026-08-28-51 — the third escaping site: a function (or
@@ -1692,6 +1697,102 @@ impl<'a> super::Interpreter<'a> {
             self.run_user_drop_body_on_value(&type_name, value);
         }
         true
+    }
+
+    /// B-2026-09-04-32 — would [`Self::run_field_held_shared_user_drops`]
+    /// actually FIRE something for `name` right now?
+    ///
+    /// The same two computations that function opens with — the occurrence walk
+    /// and the "this holder accounts for every live reference" filter — with no
+    /// clone and no side effect. It exists because that function's `true` does
+    /// NOT mean "fired": it means "this holder had Drop-relevant shared
+    /// content", which is the signal its scope-exit caller needs to release the
+    /// holder's slot. A caller that wants to fire EARLY has to ask the sharper
+    /// question, and asking the blunt one instead consumes the release without
+    /// running anything — measured while building this, as
+    /// `vec_element_shared_struct` running 1 of 4 bodies.
+    fn shared_release_is_due(&self, name: &str) -> bool {
+        let Some(slot) = self.env.slot_ref(name) else {
+            return false;
+        };
+        // PLAIN STRUCT HOLDERS ONLY, matching codegen's reach exactly.
+        //
+        // Codegen fires the early release by pairing the holder's `UserDrop`
+        // with its `StructDrop`, which exists for a struct binding and not for
+        // a `Vec[S]` / `Vec[(S, i64)]` / tuple holder — those release their
+        // elements through a different action that still drains at scope exit.
+        // Widening here alone would fix the spec deviation on ONE backend and
+        // manufacture a run-vs-build divergence, which is strictly worse than
+        // the shared deviation: measured as `v1 dS1 one` interpreted against
+        // `v1 one dS1` on all three compiled surfaces. The container shapes are
+        // left to a follow-up that moves both backends together.
+        if !matches!(slot, Value::Struct { .. }) {
+            return false;
+        }
+        let mut occurrences = Vec::new();
+        self.collect_field_held_shared(slot, &mut occurrences, 0);
+        if occurrences.is_empty() {
+            return false;
+        }
+        occurrences.iter().any(|(_, ptr, count)| {
+            *count == occurrences.iter().filter(|(_, p, _)| p == ptr).count()
+        })
+    }
+
+    /// B-2026-09-04-32 — fire every parked field-held `shared` release whose
+    /// holder has BECOME the last reference, at a statement boundary rather
+    /// than at lexical scope exit.
+    ///
+    /// design.md § Drop ordering within a branch puts an RC decrement at its
+    /// binding's live-range end — "Destructor calls — including `Rc` and `Arc`
+    /// reference-count decrements — ... fire at each binding's live-range end,
+    /// not lexical scope end" — and a mid-branch last use "does not appear in
+    /// the end-of-branch cleanup stack at all". `struct Mx { r: R, s: S }` was
+    /// the shape that showed the gap: the PLAIN field obeyed that and the
+    /// SHARED one waited for scope exit, so one binding had two live-range
+    /// ends.
+    ///
+    /// DRAINING RATHER THAN RETIMING IS THE POINT. `pending_shared_releases` is
+    /// a RETRY QUEUE, not a placement delay: a release fires only where its
+    /// holder accounts for every live reference, and the park is what gives a
+    /// declined one a second chance once its siblings drain. Moving the firing
+    /// point instead of adding drain opportunities loses bodies outright, which
+    /// is a zero-run regression rather than a reordering. So entries still
+    /// park, still drain at scope exit, and simply get asked EARLIER whether
+    /// they are due — an entry that is not stays queued exactly as before.
+    ///
+    /// Called after `fire_due_drops`, so the holder's own NLL drop has already
+    /// run and released the in-flight clone that path holds. That clone is why
+    /// the answer differs across the two points at all: with it live the Arc
+    /// count is one higher and every release reads as not-due.
+    fn drain_due_shared_releases(&mut self) {
+        let depth = self.env.scope_depth();
+        let mut due: Vec<String> = Vec::new();
+        let mut i = 0;
+        while i < self.pending_shared_releases.len() {
+            let (d, entry) = &self.pending_shared_releases[i];
+            let fire = *d >= depth
+                && match entry {
+                    PendingRelease::Binding(name) => self.shared_release_is_due(name),
+                    // A captured value has no slot to re-read and no holder to
+                    // become last — its own last-reference test belongs to the
+                    // scope-exit drain, which is where it stays.
+                    PendingRelease::Captured(..) => false,
+                };
+            if fire {
+                if let PendingRelease::Binding(name) = &self.pending_shared_releases[i].1 {
+                    due.push(name.clone());
+                }
+                self.pending_shared_releases.remove(i);
+            } else {
+                i += 1;
+            }
+        }
+        for name in due {
+            if self.run_field_held_shared_user_drops(&name) {
+                self.env.remove_local(&name);
+            }
+        }
     }
 
     /// Pass 1 of [`Self::run_field_held_shared_user_drops`]: every
