@@ -68198,6 +68198,110 @@ fn test_hash_container_enum_element_runs_its_body() {
     );
 }
 
+/// B-2026-09-15-23 — a `Vec`/`VecDeque` STRUCT FIELD whose ELEMENT is itself
+/// an aggregate runs the innermost value's `Drop` body on the tree-walk
+/// backend.
+///
+/// The interpreter twin of the codegen E2E
+/// (`e2e_nested_container_in_a_vec_field_runs_its_innermost_drop_bodies`),
+/// which lives behind `--features llvm` and so is invisible to the DEFAULT leg.
+/// Both backends were silent here, so the row moved all six gates in one
+/// commit; this fixture keeps the interpreter half under the gate CI runs.
+///
+/// Two sites on this side. `field_te_runs_user_drop` read the element's HEAD
+/// NAME, so it asked `"Vec"` / `"Array"` and answered false, and a tuple
+/// element is not a `Path` at all and fell off its `_ => false` tail — the
+/// field classified drop-free and no walk was registered. Then the walk itself
+/// (`drop_user_drop_fields_of_value`) dispatched per element on `Value::Struct`
+/// / user `Value::EnumVariant` only, so an `Array`, `Tuple` or `Option`
+/// element fell to `_ => {}`.
+///
+/// The `Option` element is the one this row's own fix broke before fixing:
+/// with the five other sites in place and that arm absent, `Vec[Option[D]]`
+/// fired on the three compiled surfaces and stayed silent here, because
+/// codegen's `emit_nested_vec_elem_bodies_fn` has an Option arm. Measured
+/// agreed-silent before, agreed-firing after.
+#[test]
+fn test_nested_container_in_a_vec_field_runs_its_innermost_drop_bodies() {
+    const H: &str = "struct D { id: i64, s: String }\n\
+         impl Drop for D { fn drop(mut ref self) { println(f\"dD{self.id}\") } }\n\
+         fn mkd(n: i64) -> D { return D { id: n, s: f\"heap-{n}\" }; }\n";
+    for (label, decls, body, want) in [
+        (
+            "the row's own cell — a Vec[Vec[D]] field",
+            "struct H { xs: Vec[Vec[D]] }\n",
+            "let h: H = H { xs: [[mkd(1)]] };",
+            "dD1\nend\n",
+        ),
+        (
+            "a Vec of fixed Arrays",
+            "struct H { xs: Vec[Array[D, 2]] }\n",
+            "let h: H = H { xs: [[mkd(1), mkd(2)]] };",
+            "dD1\ndD2\nend\n",
+        ),
+        (
+            "a Vec of tuples",
+            "struct H { xs: Vec[(D, i64)] }\n",
+            "let h: H = H { xs: [(mkd(1), 5)] };",
+            "dD1\nend\n",
+        ),
+        (
+            "three container levels",
+            "struct H { xs: Vec[Vec[Vec[D]]] }\n",
+            "let h: H = H { xs: [[[mkd(1)]]] };",
+            "dD1\nend\n",
+        ),
+        (
+            "an Option element — the arm this row's fix needed before it was correct",
+            "struct H { xs: Vec[Option[D]] }\n",
+            "let h: H = H { xs: [Some(mkd(1))] };",
+            "dD1\nend\n",
+        ),
+        (
+            "the push-built spelling of the same field",
+            "struct H { xs: Vec[Vec[D]] }\n",
+            "let mut v: Vec[Vec[D]] = [];\n\
+             let e: Vec[D] = [mkd(1)];\n\
+             v.push(e);\n\
+             let h: H = H { xs: v };",
+            "dD1\nend\n",
+        ),
+        (
+            "the holder declares its own Drop — own body first",
+            "struct H { xs: Vec[Vec[D]] }\n\
+             impl Drop for H { fn drop(mut ref self) { println(\"dH\") } }\n",
+            "let h: H = H { xs: [[mkd(1)]] };",
+            "dH\ndD1\nend\n",
+        ),
+        (
+            "control: the flat Vec[D] field",
+            "struct H { xs: Vec[D] }\n",
+            "let h: H = H { xs: [mkd(1)] };",
+            "dD1\nend\n",
+        ),
+        (
+            "control: an EMPTY outer vec fires no body",
+            "struct H { xs: Vec[Vec[D]] }\n",
+            "let h: H = H { xs: [] };",
+            "end\n",
+        ),
+        (
+            "pinned: a shared holder stays an agreed silence",
+            "shared struct H { xs: Vec[Vec[D]] }\n",
+            "let h: H = H { xs: [[mkd(1)]] };",
+            "end\n",
+        ),
+    ] {
+        assert_eq!(
+            run(&format!(
+                "{H}{decls}fn main() {{\n{body}\nprintln(\"end\");\n}}\n"
+            )),
+            want,
+            "{label}"
+        );
+    }
+}
+
 /// B-2026-09-15-26 — an `Array[T, N]`-typed STRUCT FIELD runs its elements'
 /// `Drop` bodies on the tree-walk backend.
 ///
@@ -68364,8 +68468,8 @@ fn test_array_typed_struct_field_runs_its_element_drop_bodies() {
              \x20   println(\"end\");\n\
              }}\n"
         )),
-        "end\n",
-        "pinned: a bare param bound to Vec[Vec[D]] stays an agreed silence"
+        "dD1\ndD2\nend\n",
+        "a bare param bound to Vec[Vec[D]] — the two rows' legs composing (B-2026-09-15-23)"
     );
     assert_eq!(
         run(&format!(
@@ -68375,8 +68479,8 @@ fn test_array_typed_struct_field_runs_its_element_drop_bodies() {
              \x20   println(\"end\");\n\
              }}\n"
         )),
-        "end\n",
-        "pinned: likewise a bare param bound to Array[Vec[D], 1]"
+        "dD1\nend\n",
+        "likewise a bare param bound to Array[Vec[D], 1] (B-2026-09-15-23)"
     );
     // PINNED — a nested container in a `Vec` field is still an agreed silence
     // on both backends (B-2026-09-15-23), so the two gates stay in step.
@@ -68388,8 +68492,8 @@ fn test_array_typed_struct_field_runs_its_element_drop_bodies() {
              \x20   println(\"end\");\n\
              }}\n"
         )),
-        "end\n",
-        "pinned: Vec[Array[D, 1]] field bodies stay silent (B-2026-09-15-23)"
+        "dD1\ndD2\nend\n",
+        "a Vec[Array[D, 1]] field runs its innermost bodies (B-2026-09-15-23)"
     );
 }
 

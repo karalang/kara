@@ -93982,7 +93982,7 @@ fn main() {
                  \x20   println(\"end\");\n\
                  }}\n"
             ),
-            &["end"],
+            &["dD1", "dD2", "end"],
             "b27-vec-of-arrays-field-literal",
         );
         // The PUSH-BUILT spelling, and the cell that refutes the premise the
@@ -93999,7 +93999,7 @@ fn main() {
                  \x20   println(\"end\");\n\
                  }}\n"
             ),
-            &["end"],
+            &["dD1", "end"],
             "b27-vec-of-arrays-field-pushed",
         );
         // An element with more than one slot, so a fix that walks only index 0
@@ -94013,7 +94013,7 @@ fn main() {
              \x20   let h: H = H { f: [[mkd(1), mkd(2)], [mkd(3), mkd(4)]] };\n\
              \x20   println(\"end\");\n\
              }\n",
-            &["end"],
+            &["dD1", "dD2", "dD3", "dD4", "end"],
             "b27-vec-of-two-slot-arrays-field",
         );
         // CONTROL — the same type as a LOCAL, clean before and after. This is

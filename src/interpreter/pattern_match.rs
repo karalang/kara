@@ -2236,6 +2236,44 @@ impl<'a> super::Interpreter<'a> {
                 if self.type_name_runs_user_drop(head, seen) {
                     return true;
                 }
+                // B-2026-09-15-23 — a `Vec`/`VecDeque` whose ELEMENT is an
+                // AGGREGATE (`Vec[Vec[D]]`, `Vec[Array[D, 2]]`,
+                // `Vec[(D, i64)]`, `Vec[VecDeque[D]]`, and the fully nested
+                // `Vec[Vec[Vec[D]]]`). The `idxs` leg below reads the
+                // element's HEAD NAME, so it asked `"Vec"` / `"Array"` and
+                // answered false, and a tuple element is not a `Path` at all
+                // and fell off the `_ => false` tail — the field classified
+                // drop-free, no walk was registered, and the innermost value's
+                // body ran on no surface. Codegen's `user_drop_field_indices_
+                // mono` had the matching hole, which is what made the silence
+                // AGREED rather than a divergence.
+                //
+                // Recursive through this same predicate, like the
+                // `array_field_elem_te` leg above, so a chain of container
+                // levels is followed to its leaf — matching codegen's
+                // `vec_elem_te_reaches_user_drop_nested`, which recurses in
+                // step with the emitter it gates. Both gates must classify
+                // identically or the backends print different things
+                // (B-2026-09-10-17).
+                //
+                // Scoped to a NON-plain-named element, and to `Vec`/`VecDeque`
+                // rather than the whole `idxs` set. A plain named element still
+                // answers through the leg below, so every existing answer is
+                // byte-for-byte unchanged; and `Map` / `Option` / `Result`
+                // element positions are left on the head-name read because
+                // codegen's new leg does not reach them either — widening one
+                // side alone is how this family's divergences are made.
+                if matches!(head.as_str(), "Vec" | "VecDeque") {
+                    if let Some(crate::ast::GenericArg::Type(inner)) =
+                        p.generic_args.as_ref().and_then(|a| a.first())
+                    {
+                        let plain_named =
+                            matches!(&inner.kind, TypeKind::Path(ip) if ip.generic_args.is_none());
+                        if !plain_named && self.field_te_runs_user_drop(inner, seen) {
+                            return true;
+                        }
+                    }
+                }
                 // B-2026-08-03-1 — Option/Result are a container level too:
                 // BOTH of Result's arms can be live and either can carry a
                 // Drop, so unlike the single-slot collections this checks a

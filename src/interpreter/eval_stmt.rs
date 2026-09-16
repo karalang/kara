@@ -4419,6 +4419,48 @@ impl<'a> super::Interpreter<'a> {
                                 }
                                 self.run_enum_payload_user_drops_value(&e);
                             }
+                            // B-2026-09-15-23 — an AGGREGATE element: a nested
+                            // container (`Vec[Vec[D]]`, `Vec[Array[D, 2]]`,
+                            // `Vec[VecDeque[D]]`) or a tuple (`Vec[(D, i64)]`).
+                            // Both fell to the `_ => {}` below, so the
+                            // innermost value's body ran nowhere while the flat
+                            // `Vec[D]` field beside it ran correctly.
+                            //
+                            // `run_discarded_value_user_drops` is the recursive
+                            // value walk, and it is the twin of codegen's
+                            // `emit_nested_vec_elem_bodies_fn` — which this
+                            // field position now calls and which recurses
+                            // through exactly these element shapes. Recursing
+                            // here is therefore MATCHING the compiled backends
+                            // rather than overshooting them, the distinction
+                            // B-2026-09-15-35 turned on: there the codegen arm
+                            // was the one-level `vec_field_elem_head` loop, so
+                            // a recursive interpreter arm diverged.
+                            //
+                            // Bodies only; the elements' heap is freed on the
+                            // parent's memory channel (B-2026-08-28-57).
+                            Value::Array(_) | Value::Tuple(_) => {
+                                self.run_discarded_value_user_drops(e.clone());
+                            }
+                            // An `Option`/`Result` ELEMENT (`Vec[Option[D]]`).
+                            // The user-enum arm above excludes the built-ins by
+                            // guard, so without this they fell to `_ => {}` —
+                            // and codegen's `emit_nested_vec_elem_bodies_fn` HAS
+                            // an Option/Result arm, so widening the gates for
+                            // this row made the compiled backends fire while
+                            // this walk stayed silent. MEASURED: agreed-silent
+                            // on all four surfaces before this row, then
+                            // compiled-fires / interp-silent with the gates
+                            // widened and this arm absent. Built-ins have no
+                            // source `EnumDef`, so the shared value recursion
+                            // is the route, exactly as the direct
+                            // `Option`/`Result` FIELD arm at the top of this
+                            // loop uses it.
+                            Value::EnumVariant { enum_name, .. }
+                                if enum_name == "Option" || enum_name == "Result" =>
+                            {
+                                self.run_discarded_value_user_drops(e.clone());
+                            }
                             _ => {}
                         }
                     }

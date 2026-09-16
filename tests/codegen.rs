@@ -35260,22 +35260,22 @@ fn main() {
                 // a plain named element for exactly this reason, so the two
                 // backends stay on one question. B-2026-09-15-23's subject, one
                 // position over, and not this row's.
-                "pinned: a bare param bound to Vec[Vec[D]] stays an agreed silence",
+                "a bare param bound to Vec[Vec[D]] — the two rows' legs composing (B-2026-09-15-23)",
                 "struct G[T] { a: T }\n",
                 "let g: G[Vec[Vec[D]]] = G { a: [[mkd(1), mkd(2)]] };",
-                "end\n",
+                "dD1\ndD2\nend\n",
             ),
             (
-                "pinned: likewise a bare param bound to Array[Vec[D], 1]",
+                "likewise a bare param bound to Array[Vec[D], 1] (B-2026-09-15-23)",
                 "struct G[T] { a: T }\n",
                 "let g: G[Array[Vec[D], 1]] = G { a: [[mkd(1)]] };",
-                "end\n",
+                "dD1\nend\n",
             ),
             (
-                "pinned: likewise a bare param bound to Vec[(D, i64)]",
+                "likewise a bare param bound to Vec[(D, i64)] (B-2026-09-15-23)",
                 "struct G[T] { a: T }\n",
                 "let g: G[Vec[(D, i64)]] = G { a: [(mkd(1), 5)] };",
-                "end\n",
+                "dD1\nend\n",
             ),
             (
                 // A hashed container under the bare param is a different
@@ -35291,24 +35291,217 @@ fn main() {
                 // field. Silent on BOTH backends, so it is an agreed gap and
                 // not a divergence — pinned here to make a change to that gate
                 // visible from this row.
-                "pinned: Vec[Vec[D]] field bodies stay an agreed silence (B-2026-09-15-23)",
+                "a Vec[Vec[D]] field runs its innermost bodies (B-2026-09-15-23)",
                 "struct H { f: Vec[Vec[D]] }\n",
                 "let h: H = H { f: [[mkd(1), mkd(2)]] };",
-                "end\n",
+                "dD1\ndD2\nend\n",
             ),
             (
-                "pinned: Vec[Array[D, 1]] field bodies likewise — its HEAP is this row's (-15-27)",
+                "a Vec[Array[D, 1]] field likewise — its HEAP was -15-27's (B-2026-09-15-23)",
                 "struct H { f: Vec[Array[D, 1]] }\n",
                 "let h: H = H { f: [[mkd(1)], [mkd(2)]] };",
-                "end\n",
+                "dD1\ndD2\nend\n",
             ),
             (
-                "pinned: the push-built spelling of the same field",
+                "the push-built spelling of the same field (B-2026-09-15-23)",
                 "struct H { f: Vec[Array[D, 1]] }\n",
                 "let mut v: Vec[Array[D, 1]] = [];\n\
                  let e1: Array[D, 1] = [mkd(1)];\n\
                  v.push(e1);\n\
                  let h: H = H { f: v };",
+                "dD1\nend\n",
+            ),
+        ] {
+            let src = format!("{HDR}{decls}fn main() {{\n{body}\nprintln(\"end\");\n}}\n");
+            let (interp_out, interp_errs, _, _) = karac::run_program_full_checked(&src);
+            assert!(
+                interp_errs.is_empty(),
+                "[{label}] interp errored: {interp_errs:?}"
+            );
+            assert_eq!(interp_out.join(""), want, "[{label}] interpreter");
+            if let Some(aot) = run_program(&src) {
+                assert_eq!(aot, want, "[{label}] AOT");
+            }
+        }
+    }
+
+    /// B-2026-09-15-23 — a `Vec`/`VecDeque` STRUCT FIELD whose ELEMENT is
+    /// itself an aggregate runs the innermost value's `Drop` body.
+    ///
+    /// Agreed-silent on all four surfaces before this: `Vec[Vec[D]]`,
+    /// `Vec[Array[D, 2]]`, `Vec[(D, i64)]`, `Vec[VecDeque[D]]` and
+    /// `Vec[Vec[Vec[D]]]` fields all printed nothing where the flat `Vec[D]`
+    /// field beside them printed correctly. A lost BODY with the memory
+    /// channel intact is invisible to ASAN, to valgrind and to both ratchet
+    /// legs (B-2026-08-28-57), and invisible to the kata A/B rule too because
+    /// all four surfaces agreed — they were simply all wrong together. An
+    /// output comparison is the only thing that sees it, which is what this
+    /// fixture is.
+    ///
+    /// SIX SITES, because three gates stand in front of the walk on each side
+    /// and every one was keyed on a HEAD NAME that a container defeats:
+    ///
+    ///   * codegen `type_runs_user_drop` — the type-level classifier. Its own
+    ///     comment records that this `Vec`-level recursion was DELIBERATELY
+    ///     declined in B-2026-09-10-17, on the ground that repairing codegen
+    ///     alone would leave the interpreter silent and manufacture
+    ///     divergences. That reasoning was right; the missing piece was the
+    ///     interpreter's matching recursion, which lands with it here.
+    ///   * codegen `user_drop_field_indices_mono` — which fields enter the set.
+    ///   * codegen `emit_user_drop_field_bodies_fn_skipping` — its hand-written
+    ///     loop admits only a plain named struct/enum element, so an aggregate
+    ///     fell through. The arm added is a call to
+    ///     `emit_nested_vec_elem_bodies_fn`, the walker the `Vec` LOCAL
+    ///     position already uses, whose parameter is a pointer to the vec
+    ///     HEADER — which the field slot is.
+    ///   * interpreter `field_te_runs_user_drop` — the classifier twin.
+    ///   * interpreter `drop_user_drop_fields_of_value` — the walk's
+    ///     per-element dispatch, where an `Array`/`Tuple` element fell to
+    ///     `_ => {}`.
+    ///   * the same dispatch again, for an `Option`/`Result` element. That one
+    ///     is a defect this row's own fix introduced and then measured: the
+    ///     first five sites made `Vec[Option[D]]` fire on the three compiled
+    ///     surfaces while `--interp` stayed silent, because codegen's walker
+    ///     has an Option arm the dispatch lacked. Agreed-silent before, agreed
+    ///     -firing after; the intermediate state is why a per-element-shape
+    ///     sweep is the check and symmetric gate-widening is not.
+    ///
+    /// POSITION, not just presence: the bodies land BEFORE the holder's last
+    /// statement, at its live-range end (design.md line 866), matching the flat
+    /// control exactly. The route this row first tried — the `FieldDrop::
+    /// VecOrString` arm of `emit_struct_drop_synthesis_impl`, whose
+    /// `vec_element_drain_fn` returns a MEMORY drain for a container element —
+    /// fired at frame exit instead, AFTER that statement. The bodies channel is
+    /// this function, already called at the right point, so the position comes
+    /// out right without touching any ordering.
+    #[test]
+    fn e2e_nested_container_in_a_vec_field_runs_its_innermost_drop_bodies() {
+        const HDR: &str = "struct D { id: i64, s: String }\n\
+                           impl Drop for D { fn drop(mut ref self) { println(f\"dD{self.id}\") } }\n\
+                           fn mkd(n: i64) -> D { return D { id: n, s: f\"heap-{n}\" }; }\n\
+                           struct N { v: i64 }\n";
+        for (label, decls, body, want) in [
+            (
+                "the row's own cell — a Vec[Vec[D]] field",
+                "struct H { xs: Vec[Vec[D]] }\n",
+                "let h: H = H { xs: [[mkd(1)]] };",
+                "dD1\nend\n",
+            ),
+            (
+                "a Vec of fixed Arrays",
+                "struct H { xs: Vec[Array[D, 2]] }\n",
+                "let h: H = H { xs: [[mkd(1), mkd(2)]] };",
+                "dD1\ndD2\nend\n",
+            ),
+            (
+                "a Vec of tuples — no head name at all on the element",
+                "struct H { xs: Vec[(D, i64)] }\n",
+                "let h: H = H { xs: [(mkd(1), 5)] };",
+                "dD1\nend\n",
+            ),
+            (
+                "three container levels — the gate and the emitter recurse in step",
+                "struct H { xs: Vec[Vec[Vec[D]]] }\n",
+                "let h: H = H { xs: [[[mkd(1)]]] };",
+                "dD1\nend\n",
+            ),
+            (
+                "a VecDeque inner",
+                "struct H { xs: Vec[VecDeque[D]] }\n",
+                "let mut d: VecDeque[D] = VecDeque.new();\n\
+                 d.push_back(mkd(1));\n\
+                 let h: H = H { xs: [d] };",
+                "dD1\nend\n",
+            ),
+            (
+                // The divergence the first five sites created. See the note above.
+                "an Option element — codegen's walker had the arm, the interpreter's dispatch did not",
+                "struct H { xs: Vec[Option[D]] }\n",
+                "let h: H = H { xs: [Some(mkd(1))] };",
+                "dD1\nend\n",
+            ),
+            (
+                // The row's own "single most decisive missing cell": it
+                // separates the field's drop synthesis from the literal's
+                // element ownership. Fires exactly once — the push disarms the
+                // source local.
+                "the field is built through push rather than a literal (the row's decisive cell)",
+                "struct H { xs: Vec[Vec[D]] }\n",
+                "let mut v: Vec[Vec[D]] = [];\n\
+                 let e: Vec[D] = [mkd(1)];\n\
+                 v.push(e);\n\
+                 let h: H = H { xs: v };",
+                "dD1\nend\n",
+            ),
+            (
+                "a tuple element that itself holds a Vec",
+                "struct H { xs: Vec[(Vec[D], i64)] }\n",
+                "let h: H = H { xs: [([mkd(1)], 3)] };",
+                "dD1\nend\n",
+            ),
+            (
+                "the holder declares its own Drop — own body first, then the elements",
+                "struct H { xs: Vec[Vec[D]] }\n\
+                 impl Drop for H { fn drop(mut ref self) { println(\"dH\") } }\n",
+                "let h: H = H { xs: [[mkd(1)]] };",
+                "dH\ndD1\nend\n",
+            ),
+            (
+                "one struct deeper",
+                "struct H { xs: Vec[Vec[D]] }\nstruct G { h: H }\n",
+                "let g: G = G { h: H { xs: [[mkd(1)]] } };",
+                "dD1\nend\n",
+            ),
+            (
+                "two inner elements, and a sibling scalar field",
+                "struct H { xs: Vec[Vec[D]], n: i64 }\n",
+                "let h: H = H { xs: [[mkd(1), mkd(2)]], n: 7 };\nprintln(f\"k:{h.n}\");",
+                "k:7\ndD1\ndD2\nend\n",
+            ),
+            // Controls that must not move.
+            (
+                "control: the flat Vec[D] field, which always worked",
+                "struct H { xs: Vec[D] }\n",
+                "let h: H = H { xs: [mkd(1)] };",
+                "dD1\nend\n",
+            ),
+            (
+                "control: non-Drop inner elements run nothing",
+                "struct H { xs: Vec[Vec[N]] }\n",
+                "let h: H = H { xs: [[N { v: 1 }]] };",
+                "end\n",
+            ),
+            (
+                "control: an EMPTY outer vec fires no body",
+                "struct H { xs: Vec[Vec[D]] }\n",
+                "let h: H = H { xs: [] };\nprintln(f\"n:{h.xs.len()}\");",
+                "n:0\nend\n",
+            ),
+            (
+                // PINNED at the agreed silence. `type_runs_user_drop` returns
+                // false for a `shared` type on its first line, and an RC
+                // holder's hook fires from `rc == 0` rather than from scope
+                // exit — a different channel, and the row's own open question
+                // about it. Not this row's to move.
+                "pinned: a shared holder stays an agreed silence",
+                "shared struct H { xs: Vec[Vec[D]] }\n",
+                "let h: H = H { xs: [[mkd(1)]] };",
+                "end\n",
+            ),
+            (
+                // PINNED: both gates now ADMIT this field (the element's
+                // map-value head reaches `D` through
+                // `elem_te_runs_user_drop`), but `emit_nested_vec_elem_bodies_fn`
+                // has no `Map` arm and returns `None`, and the interpreter's
+                // dispatch has no `Value::Map` arm — so it stays agreed-silent.
+                // A gate admitting what its walker declines is a no-op rather
+                // than a wrong answer, but it is the shape that produces silent
+                // no-ops, so it is pinned deliberately.
+                "pinned: a Map element stays an agreed silence — the walkers have no Map arm",
+                "struct H { xs: Vec[Map[i64, D]] }\n",
+                "let mut m: Map[i64, D] = Map.new();\n\
+                 m.insert(1, mkd(1));\n\
+                 let h: H = H { xs: [m] };",
                 "end\n",
             ),
         ] {
@@ -157077,10 +157270,10 @@ fn main() {
             // close, and is silent on the interpreter too. Printing here means
             // a divergence was just created.
             (
-                "boundary-vec-of-vec-stays-silent",
+                "vec-of-vec-now-fires-B-2026-09-15-23",
                 "struct Wj { xs: Vec[Vec[Re]] }\n\
                  fn main() { let w = Wj { xs: [[Re { id: 71, name: f\"a\" }]] }; println(\"ok\"); println(\"done\") }\n",
-                "ok\ndone\n",
+                "dRe71\nok\ndone\n",
             ),
             // BOUNDARY — an envelope chain that ends in a `Vec`. The recursion
             // must stop at the `Vec` head, not walk through it.
@@ -157092,10 +157285,10 @@ fn main() {
             ),
             // BOUNDARY — a `Vec` of envelopes, the mirror of the one above.
             (
-                "boundary-vec-of-option-stays-silent",
+                "vec-of-option-now-fires-B-2026-09-15-23",
                 "struct Wl { xs: Vec[Option[Re]] }\n\
                  fn main() { let w = Wl { xs: [Some(Re { id: 71, name: f\"a\" })] }; println(\"ok\"); println(\"done\") }\n",
-                "ok\ndone\n",
+                "dRe71\nok\ndone\n",
             ),
         ] {
             let Some(out) = run_program(&format!("{PRE}{body}")) else {

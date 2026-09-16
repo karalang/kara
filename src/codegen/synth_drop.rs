@@ -3790,6 +3790,32 @@ impl<'ctx> super::Codegen<'ctx> {
                             break 'tes;
                         }
                     }
+                    // B-2026-09-15-23 — a `Vec`/`VecDeque` field whose ELEMENT
+                    // is an AGGREGATE. This is the gate the envelope note above
+                    // deliberately did NOT widen, and its reasoning was sound
+                    // at the time: recursing here repairs codegen while the
+                    // interpreter's `field_te_runs_user_drop` keeps the same
+                    // one-level horizon, which turns an agreed silence into a
+                    // divergence. That is why this leg lands together with the
+                    // matching recursion in that predicate — the condition the
+                    // note names as missing, now supplied, so the two type-level
+                    // gates still classify identically.
+                    //
+                    // Scoped to a non-plain-named element, so every answer the
+                    // head-name walk above already gives is unchanged; and to
+                    // `Vec`/`VecDeque` only, NOT to the `Option`/`Map` element
+                    // positions the note lists beside them, which stay on the
+                    // head-name read because neither backend's WALK reaches
+                    // them. Widening a gate past its walker is the silent
+                    // no-op this family keeps producing.
+                    if let Some(elem) = crate::codegen::helpers::vec_inner_type_expr(te) {
+                        let plain_named =
+                            matches!(&elem.kind, TypeKind::Path(p) if p.generic_args.is_none());
+                        if !plain_named && self.vec_elem_te_reaches_user_drop_nested(&elem) {
+                            found = true;
+                            break 'tes;
+                        }
+                    }
                     // B-2026-09-05-5 — a field that is a GENERIC STRUCT
                     // INSTANTIATION (`inner: Gd[R]`). The head-name walk above
                     // asks `type_runs_user_drop("Gd")`, which reads
@@ -4194,29 +4220,70 @@ impl<'ctx> super::Codegen<'ctx> {
                         && field_te.is_some_and(|te| {
                             let r =
                                 crate::codegen::helpers::subst_type_params_in_type_expr(te, subst);
-                            // ONE level, plain named element only, on BOTH
-                            // legs. `vec_field_elem_head` already answers only
-                            // for a plain named element; the array leg is held
-                            // to the same bar rather than to
-                            // `elem_te_runs_user_drop`, which admits an
-                            // aggregate element and would have this position
-                            // walk deeper than the interpreter's twin arm can.
-                            // A container element therefore stays silent on
-                            // every surface — B-2026-09-15-23, the same gap one
-                            // position over, and not this row.
-                            let plain_named_drop_elem = |elem: &TypeExpr| match &elem.kind {
-                                TypeKind::Path(p) if p.generic_args.is_none() => p
-                                    .segments
-                                    .last()
-                                    .is_some_and(|h| self.type_runs_user_drop(h, &mut Vec::new())),
-                                _ => false,
-                            };
-                            self.array_elem_and_len(&r)
-                                .is_some_and(|(elem, n)| n > 0 && plain_named_drop_elem(&elem))
-                                || Self::vec_field_elem_head(&r)
-                                    .is_some_and(|h| self.type_runs_user_drop(&h, &mut Vec::new()))
+                            // B-2026-09-15-23 — RECURSIVE, where
+                            // B-2026-09-15-35 first wrote this leg as
+                            // plain-named-only. That restriction was right for
+                            // exactly as long as the interpreter's bare-param
+                            // arm was ONE level deep: that arm shares the
+                            // `Vec`/`VecDeque` field arm's per-element
+                            // dispatch, which then admitted only a plain named
+                            // struct/enum element, so admitting an aggregate
+                            // here would have walked deeper than the
+                            // interpreter could follow.
+                            //
+                            // B-2026-09-15-23 gave that same dispatch its
+                            // `Array` / `Tuple` / `Option` element arms, which
+                            // silently invalidated that justification: with
+                            // this leg still plain-named-only,
+                            // `G[T] { a: T }` at `T = Vec[Vec[D]]` fired under
+                            // `--interp` and on NO compiled surface. Neither
+                            // row is wrong alone — their legs failed to
+                            // COMPOSE, and the gate set's own pinned cells are
+                            // what caught it.
+                            //
+                            // The emitter needs nothing: its arm keys off the
+                            // whole-TE-substituted field TE and hands
+                            // `Vec[Vec[D]]` to `emit_nested_vec_elem_bodies_fn`,
+                            // which recurses through container levels.
+                            self.array_elem_and_len(&r).is_some_and(|(elem, n)| {
+                                n > 0 && self.vec_elem_te_reaches_user_drop_nested(&elem)
+                            }) || crate::codegen::helpers::vec_inner_type_expr(&r).is_some_and(
+                                |elem| self.vec_elem_te_reaches_user_drop_nested(&elem),
+                            )
                         })
                 });
+                // B-2026-09-15-23 — a `Vec`/`VecDeque` field whose ELEMENT
+                // is itself an aggregate: `Vec[Vec[D]]`, `Vec[Array[D, 2]]`,
+                // `Vec[(D, i64)]`, `Vec[VecDeque[D]]`, `Vec[Vec[Vec[D]]]`.
+                // The `vec_elem` leg above reads one HEAD NAME through
+                // `vec_field_elem_head`, so it asks `type_runs_user_drop("Vec")`
+                // (or `"Array"`) and answers false, and a tuple element has no
+                // head name at all — so the field never entered the walk set,
+                // this fn's caller declined for an empty set, and the innermost
+                // value's `Drop` body ran on NO surface while the flat
+                // `Vec[D]` field beside it ran correctly.
+                //
+                // The row that filed this looked at the MEMORY drop
+                // (`emit_struct_drop_synthesis_impl`'s `FieldDrop::VecOrString`
+                // arm, whose `vec_element_drain_fn` returns a memory drain for
+                // a container element) and measured a fix there as landing the
+                // body AFTER the holder's last statement — frame exit rather
+                // than the live-range end design.md line 866 specifies, where
+                // the flat control's body lands. The BODIES channel is this
+                // function, which is already called at the right point, so the
+                // position comes out right without touching the ordering.
+                //
+                // Predicate recurses in step with the emitter
+                // (`emit_nested_vec_elem_bodies_fn`) — see the helper's note on
+                // why that recursion is not folded into
+                // `elem_te_runs_user_drop`.
+                let vec_elem_container = field_te
+                    .and_then(crate::codegen::helpers::vec_inner_type_expr)
+                    .is_some_and(|elem| {
+                        let elem = crate::desugar::subst_type_expr(&elem, subst);
+                        !matches!(&elem.kind, TypeKind::Path(p) if p.generic_args.is_none())
+                            && self.vec_elem_te_reaches_user_drop_nested(&elem)
+                    });
                 (direct
                     || vec_elem
                     || map_val
@@ -4225,7 +4292,8 @@ impl<'ctx> super::Codegen<'ctx> {
                     || optres_envelope
                     || nested_generic
                     || array_elem
-                    || bare_param_container)
+                    || bare_param_container
+                    || vec_elem_container)
                     .then_some(idx)
             })
             .collect()
@@ -4784,6 +4852,34 @@ impl<'ctx> super::Codegen<'ctx> {
                             self.builder.position_at_end(done_bb);
                             continue;
                         }
+                    }
+                }
+            }
+            // B-2026-09-15-23 — a `Vec`/`VecDeque` field whose ELEMENT is an
+            // AGGREGATE. The hand-written loop above admits only a plain named
+            // struct/enum element (`is_struct_elem || is_enum_elem`), so a
+            // container, array or tuple element fell straight through to the
+            // field's own body below and its interior never ran.
+            //
+            // `emit_nested_vec_elem_bodies_fn` is the walker the `Vec` LOCAL
+            // position already uses for exactly these element shapes, and it
+            // takes a pointer to the vec HEADER — which `field_ptr` is — so this
+            // is a call and not new machinery. BODIES ONLY, like every sibling
+            // arm here: the elements' heap is freed on the parent's memory
+            // channel, which this does not touch (B-2026-08-28-57).
+            //
+            // Placed AFTER the plain-element loop so that arm keeps its exact
+            // behaviour; the two cannot both fire, because it `continue`s.
+            if let Some(elem_te) = field_te_resolved
+                .as_ref()
+                .and_then(crate::codegen::helpers::vec_inner_type_expr)
+            {
+                let is_plain_named =
+                    matches!(&elem_te.kind, TypeKind::Path(p) if p.generic_args.is_none());
+                if !is_plain_named {
+                    if let Some(w) = self.emit_nested_vec_elem_bodies_fn(&elem_te) {
+                        self.builder.build_call(w, &[field_ptr.into()], "").unwrap();
+                        continue;
                     }
                 }
             }
@@ -9834,6 +9930,28 @@ impl<'ctx> super::Codegen<'ctx> {
     /// head NAME and so reads `Vec[Res]` as the drop-free "Vec"), assembled
     /// from the same three head extractors that widened it for struct fields.
     /// Interpreter twin: `field_te_runs_user_drop`.
+    /// B-2026-09-15-23 — does a `Vec`/`VecDeque` FIELD's element reach a user
+    /// `Drop` body, recursing through nested container levels the way
+    /// [`Self::emit_nested_vec_elem_bodies_fn`] does?
+    ///
+    /// [`Self::elem_te_runs_user_drop`] cannot answer this, and deliberately:
+    /// its `vec_field_elem_head` leg reads one HEAD NAME, so asked about a
+    /// `Vec[Vec[D]]` element it looks up `"Vec"` and says no. Widening THAT
+    /// predicate would change the array walker and the tuple selector that
+    /// also consult it, so the recursion lives here instead, scoped to the one
+    /// gate leg that needs it.
+    ///
+    /// The recursion matches the EMITTER's exactly, which is the parity this
+    /// whole family of defects is shaped by: a gate that reaches further than
+    /// the walker admits fields the walker then declines, which measures as
+    /// "no behaviour change" rather than as a failure.
+    pub(super) fn vec_elem_te_reaches_user_drop_nested(&self, elem_te: &TypeExpr) -> bool {
+        if let Some(inner) = crate::codegen::helpers::vec_inner_type_expr(elem_te) {
+            return self.vec_elem_te_reaches_user_drop_nested(&inner);
+        }
+        self.elem_te_runs_user_drop(elem_te)
+    }
+
     pub(super) fn elem_te_runs_user_drop(&self, te: &TypeExpr) -> bool {
         // B-2026-08-03-3 — a NESTED tuple element (`((Option[Res], i64), 7)`).
         // The `tuple_field_elem_heads` leg below only reads the inner elements'
