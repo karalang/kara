@@ -98,7 +98,7 @@ distinguish "bugs flattening" from "we stopped writing them down."
 | double-free | 242 |
 | missing-feature | 199 |
 | codegen-gap | 178 |
-| other | 129 |
+| other | 130 |
 | diagnostics | 126 |
 | perf | 115 |
 | false-positive | 108 |
@@ -113,7 +113,7 @@ distinguish "bugs flattening" from "we stopped writing them down."
 | codegen | 1828 |
 | interp | 468 |
 | typecheck | 302 |
-| other | 95 |
+| other | 96 |
 | ownership | 75 |
 | cli | 73 |
 | autopar | 56 |
@@ -2661,6 +2661,7 @@ _Generated from `bug-ledger.jsonl` by `scripts/bug-curve.py` (2026-05-20 → 202
 | B-2026-09-16-37 | interp+codegen | low | THE DISCARDED-TUPLE BODY ARM FIRES FOR A GENERIC CALLEE ITS CODEGEN TWIN STRUCTURALLY CANNOT SEE -- `fgen(mk(31));` over `fn fgen[T](t: T) -> (T, i64… | 1d75252 |
 | B-2026-09-17-10 | codegen | medium | e312de9cd's SEEDED-CTOR SOURCE DISARM STRANDS THE INTERIOR WHEN THE CONSUMER IS A GENERIC CALLEE -- `fn takesG[T](x: Option[Array[T, 2]])` over a nam… | 52abf6a |
 | B-2026-09-17-9 | codegen | medium | B-2026-09-17-4's FIX LEAKS THE SAME BUFFERS IT STOPPED DOUBLE-FREEING, WHEN THE CONSUMER IS A GENERIC CALLEE -- `e312de9` narrowed `disarm_array_sour… | 52abf6a |
+| B-2026-09-17-18 | other | medium | A FIX SHA AN ORPHANING REBASE LEFT BEHIND STILL RESOLVES, SO B-2026-09-16-8's FIX CANNOT SEE THE CASE IT WAS WRITTEN FOR -- `3b2a932` narrowed `bug-l… | cbe88b6 |
 
 </details>
 
