@@ -5743,6 +5743,55 @@ impl<'ctx> super::Codegen<'ctx> {
     /// position. A let-site-only hook leaves those uncovered while the walk is
     /// already armed — measured as `free(): double free detected in tcache 2`
     /// on exactly that spelling.
+    /// B-2026-09-17-4 — does a SEEDED (`Option`/`Result`) ctor need the array
+    /// source disarmed after all?
+    ///
+    /// b98707ee9 excluded the seeded pair from
+    /// [`Self::suppress_array_local_move_into_ctor`] deliberately, and its
+    /// reasoning holds: "a SEEDED `Option`/`Result` payload is owned by a
+    /// different channel this does not arm, so disarming there retracts without
+    /// arming -- the LEAK mirror of the same mistake". That was measured over
+    /// `Array[String, 2]`, whose element runs no user `Drop`, and for that
+    /// element it is still exactly right.
+    ///
+    /// An element that DOES run a user `Drop` and owns a heap field has a second
+    /// channel which frees, so the blanket exclusion left the named source armed
+    /// alongside it: `let a: Array[S, 2] = [..]; let x: Option[Array[S, 2]] =
+    /// Some(a);` aborted with `free(): double free detected in tcache 2` on every
+    /// compiled backend against a correct `--interp`, needing no `match`, no call
+    /// and no index. Four-way conjunction, and removing any one of the four was
+    /// clean: seeded envelope, NAMED local source, user-`Drop` element, heap
+    /// field in that element. A user enum, a `Drop`-less element, an element with
+    /// no heap field and a fresh temp all stayed clean throughout.
+    ///
+    /// So the exclusion becomes CONDITIONAL rather than lifted, and the
+    /// condition is the predicate that already answers this question for the arm
+    /// channel two files away (`register_arm_container_payload_elem_bodies`):
+    /// does the element run a user `Drop`? `owned_array_params` is the element
+    /// type's source here, the same table the disarm itself keys on, so the two
+    /// cannot disagree about which slot is meant.
+    pub(super) fn seeded_array_ctor_source_needs_disarm(
+        &self,
+        enum_name: &str,
+        arg: &Expr,
+    ) -> bool {
+        if !self.type_decls.seeded_enum_names.contains(enum_name) {
+            return false;
+        }
+        // `shared` stays out for b98707ee9's other reason, unchanged: RC-managed,
+        // not box-owned.
+        if self.type_decls.shared_types.contains_key(enum_name) {
+            return false;
+        }
+        let ExprKind::Identifier(root) = &arg.kind else {
+            return false;
+        };
+        let Some((elem_te, _)) = self.borrow_vars.owned_array_params.get(root.as_str()) else {
+            return false;
+        };
+        self.elem_te_runs_user_drop(elem_te)
+    }
+
     pub(super) fn suppress_array_local_move_into_ctor(&mut self, arg: &Expr) {
         // B-2026-09-14-27 — the SOURCE of a `UseAfterMove` keeps its drop when
         // the consumer has been handed an independent copy

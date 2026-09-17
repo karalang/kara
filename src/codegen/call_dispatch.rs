@@ -10347,7 +10347,13 @@ impl<'ctx> super::Codegen<'ctx> {
             // its own ahead of every payload -- see the note beside
             // `disarm_array_sources` above. The copy on the line before is the
             // record this consults, so the two only agree in this order.
-            if disarm_array_sources {
+            // B-2026-09-17-4 — the seeded pair joins the disarm for a
+            // user-`Drop` element only; see
+            // `seeded_array_ctor_source_needs_disarm` for why the exclusion is
+            // narrowed rather than lifted.
+            if disarm_array_sources
+                || self.seeded_array_ctor_source_needs_disarm(&enum_name, &arg.value)
+            {
                 self.suppress_array_local_move_into_ctor(&arg.value);
             }
             // B-2026-07-16-5: a payload sourced from a BORROW — `Some(s)`

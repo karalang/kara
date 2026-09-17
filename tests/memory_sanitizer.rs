@@ -87939,6 +87939,127 @@ fn main() {
         );
     }
 
+    /// B-2026-09-17-4 — a NAMED `Array` local moved into an `Option` ctor used to
+    /// DOUBLE FREE its elements' heap fields on every compiled backend.
+    ///
+    /// `let a: Array[S, 2] = [..]; let x: Option[Array[S, 2]] = Some(a);` aborted
+    /// with `free(): double free detected in tcache 2` under jit / `karac build`
+    /// / `KARAC_AUTO_PAR=0 build`, against a correct `--interp`. No `match`, no
+    /// call and no index were needed — constructing the envelope and holding it
+    /// was enough. At `-O0` valgrind reported two `Invalid free()`s, one per
+    /// element, each naming an already-freed block: the source local's cleanup
+    /// and the envelope's payload drop taking the same buffers.
+    ///
+    /// THE CONJUNCTION IS FOUR-WAY and every cell below is one leg removed.
+    /// `try_compile_enum_variant_at` excluded the SEEDED pair from
+    /// `suppress_array_local_move_into_ctor`, so the named source kept its
+    /// element cleanup. That exclusion is b98707ee9's and is NOT simply wrong —
+    /// its message states the reason, "a SEEDED `Option`/`Result` payload is
+    /// owned by a different channel this does not arm, so disarming there
+    /// retracts without arming", and it measured that over `Array[String, 2]`,
+    /// whose element runs no user `Drop`. For such an element the exclusion is
+    /// still exactly right, which is what `nodrop/elem` and `bare/string` pin.
+    /// An element that DOES run a user `Drop` and owns a heap field has a second
+    /// channel which frees, and there the source had to stand down. So the
+    /// exclusion is now CONDITIONAL on `elem_te_runs_user_drop` — the predicate
+    /// the arm channel already uses for this question — rather than lifted.
+    ///
+    /// `userenum` is the control that located the fault: the same move into
+    /// `enum W { P(Array[S, 2]), N }` was clean throughout, because a user enum
+    /// was never excluded. `noheap/elem` (a `Drop` with no heap field),
+    /// `freshtemp` (no named source) and `localrebind` (no envelope at all) are
+    /// the other three legs. `arg/seeded` is the same fault in ARGUMENT
+    /// position, which is the spelling b98707ee9 hooked the disarm at.
+    ///
+    /// THE LEAK MIRROR IS THE THING TO RE-MEASURE when touching this, and it is
+    /// `asan_boxed_array_payload_interior_has_exactly_one_owner`'s
+    /// `b49-generic-callee-named-control` cell: a fix that trades this double
+    /// free for that leak has moved the bug rather than closed it. That fixture
+    /// passes at `-O0` with this change, verified as its own run.
+    ///
+    /// `-O0` IS THE ONLY LEG THAT SEES ANY OF THIS, as for B-2026-09-09-24's
+    /// sibling fixture: at `-O2` the optimizer deletes these allocations, so a
+    /// green `--features llvm` run is no evidence either way. The crash,
+    /// however, aborted at BOTH opt levels before the fix.
+    ///
+    /// ONE CELL IS PINNED AS IT STANDS RATHER THAN AS IT SHOULD BE. Every
+    /// envelope cell here runs its element bodies at the CONSTRUCTOR statement
+    /// rather than at the holder's death — `local/seeded` prints both `dS` lines
+    /// before `held`, though `x` owns the array until the block ends. That is
+    /// pre-existing and agreed on all four surfaces (`userenum` printed exactly
+    /// this before the fix, when it was the clean control), so it is pinned as
+    /// measured and filed as its own row rather than quietly blessed here.
+    ///
+    /// Measured on this tree: 0 bytes in 0 blocks at `-O0` under
+    /// `valgrind --leak-check=full`, and the stdout below is byte-identical
+    /// across `--interp` / jit / `karac build` / `KARAC_AUTO_PAR=0 karac build`.
+    #[test]
+    fn asan_named_array_local_into_seeded_ctor_has_one_owner() {
+        assert_clean_asan_run(
+            r#"struct S { tag: String }
+impl Drop for S { fn drop(mut ref self) { println(f"  dS{self.tag}") } }
+struct N { id: i64 }
+impl Drop for N { fn drop(mut ref self) { println(f"  dN{self.id}") } }
+struct P { tag: String }
+enum W { P(Array[S, 2]), N }
+fn takes(x: Option[Array[S, 2]]) { println("  in") }
+fn takesP(x: Option[Array[P, 2]]) { println("  in") }
+fn readsIt(x: Option[Array[S, 2]]) {
+    match x { Some(t) => { println(f"  r:{t[0].tag}") } None => { println("  n") } }
+}
+fn main() {
+    println("local/seeded");   { let a: Array[S, 2] = [S { tag: f"aaaaaaaa0" }, S { tag: f"aaaaaaaa1" }]; let x: Option[Array[S, 2]] = Some(a); println("  held") }
+    println("arg/seeded");     { let a: Array[S, 2] = [S { tag: f"bbbbbbbb0" }, S { tag: f"bbbbbbbb1" }]; takes(Some(a)) }
+    println("arg/read");       { let a: Array[S, 2] = [S { tag: f"cccccccc0" }, S { tag: f"cccccccc1" }]; readsIt(Some(a)) }
+    println("userenum");       { let a: Array[S, 2] = [S { tag: f"dddddddd0" }, S { tag: f"dddddddd1" }]; let w: W = W.P(a); println("  held") }
+    println("noheap/elem");    { let a: Array[N, 2] = [N { id: 1 }, N { id: 2 }]; let x: Option[Array[N, 2]] = Some(a); println("  held") }
+    println("nodrop/elem");    { let a: Array[P, 2] = [P { tag: f"eeeeeeee0" }, P { tag: f"eeeeeeee1" }]; takesP(Some(a)); println("  held") }
+    println("bare/string");    { let a: Array[String, 2] = [f"ffffffff0", f"ffffffff1"]; let x: Option[Array[String, 2]] = Some(a); println("  held") }
+    println("freshtemp");      { readsIt(Some([S { tag: f"gggggggg0" }, S { tag: f"gggggggg1" }])) }
+    println("localrebind");    { let a: Array[S, 2] = [S { tag: f"hhhhhhhh0" }, S { tag: f"hhhhhhhh1" }]; let b: Array[S, 2] = a; println(f"  r:{b[0].tag}") }
+    println("end");
+}
+"#,
+            &[
+                "local/seeded",
+                "  dSaaaaaaaa0",
+                "  dSaaaaaaaa1",
+                "  held",
+                "arg/seeded",
+                "  in",
+                "  dSbbbbbbbb0",
+                "  dSbbbbbbbb1",
+                "arg/read",
+                "  r:cccccccc0",
+                "  dScccccccc0",
+                "  dScccccccc1",
+                "userenum",
+                "  dSdddddddd0",
+                "  dSdddddddd1",
+                "  held",
+                "noheap/elem",
+                "  dN1",
+                "  dN2",
+                "  held",
+                "nodrop/elem",
+                "  in",
+                "  held",
+                "bare/string",
+                "  held",
+                "freshtemp",
+                "  r:gggggggg0",
+                "  dSgggggggg0",
+                "  dSgggggggg1",
+                "localrebind",
+                "  r:hhhhhhhh0",
+                "  dShhhhhhhh0",
+                "  dShhhhhhhh1",
+                "end",
+            ],
+            "asan_named_array_local_into_seeded_ctor_has_one_owner",
+        );
+    }
+
     /// B-2026-09-09-24 — the two `Array`-payload-INDEXED shapes that
     /// `asan_boxed_array_payload_interior_has_exactly_one_owner` had to leave out
     /// are clean now, and this is the fixture that stops them regressing.
