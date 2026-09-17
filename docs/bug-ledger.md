@@ -95,10 +95,10 @@ distinguish "bugs flattening" from "we stopped writing them down."
 | run-vs-build | 432 |
 | miscompile | 416 |
 | leak | 374 |
-| double-free | 243 |
+| double-free | 244 |
 | missing-feature | 199 |
 | codegen-gap | 179 |
-| other | 132 |
+| other | 133 |
 | diagnostics | 126 |
 | perf | 115 |
 | false-positive | 108 |
@@ -110,8 +110,8 @@ distinguish "bugs flattening" from "we stopped writing them down."
 
 | surface | total |
 |---|---|
-| codegen | 1842 |
-| interp | 472 |
+| codegen | 1844 |
+| interp | 473 |
 | typecheck | 302 |
 | other | 96 |
 | ownership | 75 |
@@ -196,6 +196,8 @@ _Generated from `bug-ledger.jsonl` by `scripts/bug-curve.py` (2026-05-20 → 202
 | B-2026-09-17-31 | 2026-09-17 | interp+codegen | medium | THE METHOD-CALL SPELLING LOSES AN UNMOVED `Drop`-BEARING SIBLING PART ON ALL FOUR SURFACES where the free-function spelling is now correct on the interpreter -- `impl H { fn eat(ref self, o: Option[(R, R)]) -> R { match o { Some(t) => { return t.0; } .. } } }` called `h.eat(Some((R { id: 5 }, R { id: 6 })))` prints `got:5 dR5 end` everywhere against the due `dR6 got:5 dR5 end`, so element 1's owed body runs NOWHERE and the A/B parity rule is satisfied by it; the identical FREE function reaches `run_fresh_temp_arg_drops`' optres arm and is correct on `--interp` since B-2026-09-13-5's fix, while the method spelling is `continue`d past it by the whole-argument `callee_owns_arg_beyond_call` stand-down, so the part-precise mask has nothing to mask | — |
 | B-2026-09-17-32 | 2026-09-17 | interp+codegen | medium | B-2026-08-28-22's PER-PATH CONDITIONAL-ESCAPE FLAG COVERS AN `if`/`else` TAIL AND NOT A `match` ARM TAIL, so a by-value param that escapes on only one ARM loses its `Drop` body on all four surfaces -- `fn pick(o: Option[i64], d: W) -> W { match o { Some(n) => { return W { id: n }; } None => { return d; } } }` called `pick(Some(7), W { id: 108 })` prints `7 dW7 end` against the due `dW108 7 dW7 end`, while -28-22's own headline `if k { return r; } return W { id: 99 }` shape measures correct on the same tree; the two programs differ only in the shape of the branch, and being AGREED on every surface the A/B rule cannot see it | — |
 | B-2026-09-17-33 | 2026-09-17 | codegen+interp | medium | A NON-YIELDING EXIT LEAF THAT CONSUMES THE PARAM THROUGH A CALL LOSES THE CONSUMED VALUE'S `Drop` BODY, AND WHICH SURFACES LOSE IT DEPENDS ON THE CALL POSITION -- `fn pick(r: R, flag: bool) -> R { if flag { return r } return R { name: f"z", id: eat(r) } }` called with `flag = false` prints `k:1 dR1/z end` on all four surfaces as a FREE function (agreed loss, invisible to the A/B rule), loses it on `--interp` only as an ASSOCIATED fn (divergence), and is correct as a METHOD -- the same three-way split B-2026-09-13-13's reading leaf had on this path, which is the reason to expect one root cause rather than three; `eat` takes `x: R` by value and drops it, so the body owed is inside `eat` and `pick`'s own argument registration should not decide whether it fires | — |
+| B-2026-09-17-34 | 2026-09-17 | codegen | high | MOVING A HEAP-CARRYING `Drop` FIELD OUT OF AN `Option` PAYLOAD STRUCT ABORTS EVERY COMPILED SURFACE WITH A DOUBLE FREE -- `fn eat(o: Option[Hd]) { match o { Some(t) => { let x = t.r; println("mid") } .. } }` over `struct Hd { r: R, n: i64 }` (no `Drop` of its own) and `struct R { name: String, id: i64 }` (with one) prints `free(): double free detected in tcache 2` and exits 134 with NO program output at all, on `build`, `build KARAC_AUTO_PAR=0` and `karac run` alike -- valgrind at `-O0`: 11 allocs / 12 frees, `Invalid free()`, 1 error, the `String` buffer freed twice. FOUR spellings abort including a purely LOCAL `Option` with no call in the program, so this is not a caller/callee ownership question; the READ-ONLY twin is clean, the same projection off a plain struct local with NO enum head is clean AND at the due answer, and the `Result` head is clean too -- so the trigger is one token wide. The TUPLE-payload sibling does not abort but runs TWO bodies, the second reading a freed string (`dR5/a mid dR5/d end`) | — |
+| B-2026-09-17-35 | 2026-09-17 | codegen+interp | medium | A `Drop`-BEARING ELEMENT MOVED OUT OF A BY-VALUE TUPLE PARAM RUNS ITS BODY AFTER THE ARM'S STATEMENTS ON ALL FOUR SURFACES, where design.md § 866 says it is owed at the `let` -- `fn eat(t: (R, i64)) { let x = t.0; println("mid") }` prints `mid dR5 end` everywhere against the due `dR5 mid end`, and because the four surfaces AGREE the kata A/B parity rule cannot see it. The controls show both backends already implement the rule elsewhere: an unused local drops at its `let` in a bare block and in a match arm on every surface, and a local genuinely used later drops later -- only the move-out-of-a-param shape defers it. Distinct from B-2026-09-14-7, which is the `Option`-payload spelling of the same due answer and IS a run-vs-build divergence; here both backends defer, so the mechanism is the caller-retains convention for a by-value tuple param rather than that row's arm-binding view classification | — |
 
 ### Relocated
 
