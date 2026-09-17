@@ -93,7 +93,7 @@ distinguish "bugs flattening" from "we stopped writing them down."
 | class | total |
 |---|---|
 | run-vs-build | 430 |
-| miscompile | 415 |
+| miscompile | 416 |
 | leak | 371 |
 | double-free | 242 |
 | missing-feature | 199 |
@@ -110,7 +110,7 @@ distinguish "bugs flattening" from "we stopped writing them down."
 
 | surface | total |
 |---|---|
-| codegen | 1833 |
+| codegen | 1834 |
 | interp | 469 |
 | typecheck | 302 |
 | other | 96 |
@@ -197,6 +197,7 @@ _Generated from `bug-ledger.jsonl` by `scripts/bug-curve.py` (2026-05-20 → 202
 | B-2026-09-17-22 | 2026-09-17 | codegen | medium | A `shared enum`'s UNIT VARIANT STRANDS ITS RC SHELL -- `{ let s = Sh.N; }` over `shared enum Sh { S(Array[String, 2]), N }` loses 24 B at `-O0`, which is the whole `{ i64 rc, i64 tag, i64 w0 }` heap layout rather than any payload box, byte-identical before and after B-2026-09-15-10's payload-box fix, and reproducing inside a mixed program (an A/B/N sequence reads 24 B, the same program without the `N` block reads 0) | — |
 | B-2026-09-17-23 | 2026-09-17 | codegen | medium | THE MONOMORPH PROLOGUE RUNS NONE OF THE BY-VALUE `Option`/`Result` PARAM ARMS, so a HEAP-BEARING generic payload's `Drop` body has no owner anywhere -- `fn gh[T](o: Option[(T, i64)]) { match o { Some(t) => t.1 } }` over a `W` WITH a `String` field prints `g9` on jit / `-O0` / `-O2` against `--interp`'s `dW2/n2 g9`. The payload BOXES, so the caller must stand down (its walk runs after the call, and the callee's `BoxedEnumDrop` frees the box before returning) -- and the callee-side arm is never reached: probes show NO gate and NO callee line for the param on the generic path, where the concrete twin prints both. B-2026-09-10-22's caller-side policy fix cannot reach this leg | — |
 | B-2026-09-17-24 | 2026-09-17 | codegen | low | A DESTRUCTURING ARM THAT RETURNS A GENERIC TUPLE-PAYLOAD ELEMENT FAILS MODULE VERIFICATION -- `fn e3[T](o: Option[(T, i64)], d: T) -> T { match o { Some((a, b)) => { return a; } ... } }` stops `karac build` with `Function return type does not match operand type of return inst! ret i64 %a6 { i64, { ptr, i64, i64 } }`, i.e. the erased one-word image of `T` reaching the `return` while the signature is monomorphised to the concrete struct. The WHOLE-VALUE spelling of the same move (`Some(t) => return t.0`) builds and runs correctly, which is what makes the destructuring arm the axis. LOUD, and `--interp` answers it | — |
+| B-2026-09-17-25 | 2026-09-17 | codegen | medium | A NAMED LOCAL MOVED INTO A `shared enum` CONSTRUCTOR LEAVES A PAYLOAD-BODY ACTION READING THE ZEROED STAGING SLOT -- `let r = mkr(1); { let s = SMono.P(r); }` prints `d2:0` on every compiled backend where `--interp` prints `d2:9`, the body running over the moved-from husk while the live payload sits unread in the heap box; the action fires at `s`'s death rather than `r`'s, takes a NAMED source (a fresh temp is silent instead), and is what blocks B-2026-09-17-19's `rc == 0` fix from landing as one run | — |
 
 ### Relocated
 
