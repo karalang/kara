@@ -92,14 +92,14 @@ distinguish "bugs flattening" from "we stopped writing them down."
 
 | class | total |
 |---|---|
-| run-vs-build | 420 |
+| run-vs-build | 421 |
 | miscompile | 415 |
 | leak | 366 |
 | double-free | 238 |
 | missing-feature | 199 |
 | codegen-gap | 178 |
 | diagnostics | 126 |
-| other | 124 |
+| other | 125 |
 | perf | 114 |
 | false-positive | 108 |
 | soundness | 96 |
@@ -110,8 +110,8 @@ distinguish "bugs flattening" from "we stopped writing them down."
 
 | surface | total |
 |---|---|
-| codegen | 1809 |
-| interp | 463 |
+| codegen | 1811 |
+| interp | 465 |
 | typecheck | 302 |
 | other | 94 |
 | ownership | 75 |
@@ -124,7 +124,7 @@ distinguish "bugs flattening" from "we stopped writing them down."
 | lexer | 8 |
 ## Current state
 
-_Generated from `bug-ledger.jsonl` by `scripts/bug-curve.py` (2026-05-20 → 2026-09-16). Do not edit this block by hand; edit the ledger and regenerate._
+_Generated from `bug-ledger.jsonl` by `scripts/bug-curve.py` (2026-05-20 → 2026-09-17). Do not edit this block by hand; edit the ledger and regenerate._
 
 ### Open
 
@@ -190,6 +190,8 @@ _Generated from `bug-ledger.jsonl` by `scripts/bug-curve.py` (2026-05-20 → 202
 | B-2026-09-16-32 | 2026-09-16 | codegen | medium | `String.substring`'s heap result is NOT NUL-terminated while every other String producer's is, which is the exact shape a past printf overread was fixed by changing | B-2026-09-16-1 |
 | B-2026-09-16-33 | 2026-09-16 | codegen+interp | low | A DISCARDED ARRAY RETURN'S ELEMENT `Drop` BODIES RUN ON NEITHER BACKEND -- `passthru([mk(30), mk(31)]);` over `fn passthru(x: Array[R, 2]) -> Array[R, 2]` prints `ok` and nothing else on all four surfaces, so TWO bodies are owed and zero run. It is the exact ARRAY twin of B-2026-09-09-21 (the tuple shape, fixed), and it has been tracked nowhere: B-2026-09-12-2 installed this arm's MEMORY walk and left bodies out deliberately -- because `--interp` ran none either, so adding one compiled-side alone would have created a run-vs-build divergence out of a leak fix -- and that row is CLOSED `fixed` for the leak, so the deferral had no open home | — |
 | B-2026-09-16-34 | 2026-09-16 | codegen | medium | A NON-SHARED STRUCT CARRYING A BARE `shared` FIELD, AS AN INLINE ENUM PAYLOAD PASSED BY VALUE, READS AND WRITES ITS REFCOUNT BLOCK AFTER FREE -- `fn f(w: Wsh)` over `enum Wsh { Full(ShOut), Empty }` / `struct ShOut { i: ShIn }` / `shared struct ShIn` gives valgrind `Invalid read of size 8` + `Invalid write of size 8` on a freed 32-byte block with a BALANCED 11 allocs / 11 frees, on a callee whose body never touches the param and whose output is correct on every surface | — |
+| B-2026-09-17-1 | 2026-09-17 | codegen+interp | medium | A DISCARDED `match` WHOSE ARM VALUE IS A TUPLE-RETURNING CALL RUNS ITS ELEMENT `Drop` BODY ON THE INTERPRETER AND NOWHERE ELSE -- `match n { 1 => f(mk(44)), _ => f(mk(45)) };` over `fn f(r: R) -> (R, i64)` prints `dR44` under `--interp` and nothing on `karac run` JIT, `-O0` build or default auto-par build. A REAL run-vs-build divergence rather than an agreed gap, and PRE-EXISTING: measured identically on `8377932~1`, the tree before B-2026-09-09-21's fix, with that row's own shape reading `ok` on all four there as the control proving the tree was pre-fix | — |
+| B-2026-09-17-2 | 2026-09-17 | codegen+interp | low | THE METHOD SPELLING OF B-2026-09-09-21 RUNS NO DISCARDED-TUPLE ELEMENT `Drop` BODY ON ANY BACKEND -- `h.wrap(mk(43));` over `fn wrap(ref self, r: R) -> (R, i64)` prints `ok` and nothing else on all four surfaces, where the free-function spelling `f(mk(43));` now prints `dR43`. An AGREED gap, so no A/B gate sees it; it is the method peer of the shape B-2026-09-09-21 fixed, and it was deliberately left out of that fix rather than missed | — |
 
 ### Relocated
 
