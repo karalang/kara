@@ -8455,7 +8455,7 @@ impl<'ctx> super::Codegen<'ctx> {
     /// Enum owning a bare variant-constructor name (`Some` / `Ok` / a user
     /// variant), preferring a user-declared enum over the seeded built-ins on
     /// a name collision — same disambiguation as `try_compile_enum_variant`.
-    fn enum_name_for_variant_ctor(&self, variant: &str) -> Option<String> {
+    pub(super) fn enum_name_for_variant_ctor(&self, variant: &str) -> Option<String> {
         let mut user = None;
         let mut seed = None;
         for (en, l) in &self.type_decls.enum_layouts {

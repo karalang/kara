@@ -18960,6 +18960,187 @@ done
         );
     }
 
+    /// B-2026-09-10-25 — A **BARE** ENUM-VARIANT CONSTRUCTOR AS A TUPLE ELEMENT
+    /// MUST RUN ITS `Drop` WORK, EXACTLY AS THE QUALIFIED SPELLING ABOVE DOES.
+    ///
+    /// `optArg((Some(mk(11)), 7))` printed nothing on `--interp`, the JIT and
+    /// both builds, where one `dR11` is owed — an AGREED gap, so no parity rule
+    /// saw it. `qualtemp`, one line down, is the same call with
+    /// `Option.Some(..)` and was correct on all four throughout: the
+    /// discriminator is the CONSTRUCTOR SPELLING, not the argument position the
+    /// filing row blamed.
+    ///
+    /// TWO SITES, and neither is sufficient alone. The freshness gate
+    /// (`discard_tuple_elem_is_fresh_expr`, and its interpreter twin) admitted a
+    /// `Path` callee and, for an `Identifier` callee, only a user FUNCTION name
+    /// — `Some` is neither, so the element read as non-fresh, and ONE non-fresh
+    /// element disqualifies the whole literal, which is why `mixed` lost its
+    /// plain-struct element's body too. Widening only that gate left codegen
+    /// registering the walk and still skipping the `Option` element, because
+    /// `infer_arg_elem_te`'s B-2026-09-03-21 arm recovers the payload type from
+    /// a 2-segment PATH callee only and a bare ctor fell through to the bare
+    /// head `Option` with no generic args, which every optres walker declines.
+    /// Measured in that intermediate state: `mixed` printed `dR19` and not
+    /// `dR18` compiled while the interpreter printed both — a run-vs-build
+    /// divergence manufactured by half a fix, which is why both sites and both
+    /// backends land in one commit.
+    ///
+    /// `discard` is the second POSITION the one gate governs (`let _ = (..)`,
+    /// and the bare-statement spelling with it), broken identically and fixed
+    /// by the same change — the filing row reports only the argument one.
+    /// `movedplace` pins exactly ONE body where the payload is a moved binding,
+    /// `barenone` that a payload-free variant runs nothing, `bareuv` / `qualuv`
+    /// that a user enum behaves the same both ways, and `bareok` the `Result`
+    /// head of the bare spelling.
+    ///
+    /// SHARED / `par` enums are deliberately EXCLUDED from the widened gate and
+    /// are pinned separately by `e2e_bare_shared_enum_tuple_elem_stays_silent`.
+    /// Their QUALIFIED spelling is already a run-vs-build divergence
+    /// (B-2026-09-17-19), so admitting the bare one would have opened a second
+    /// divergence rather than closed a gap.
+    ///
+    /// Memory is UNMOVED by this change — every cell reports byte-identical
+    /// valgrind numbers before and after, which is the whole of its memory
+    /// claim. It is NOT a claim that these shapes are clean: a tuple whose only
+    /// heap-bearing element is the `Option` (`(Option[R], i64)`) already leaked
+    /// 32 B + 1 B at `-O0` on the parent tree, in the bare and qualified
+    /// spellings alike, and still does. That leak is orthogonal, pre-existing
+    /// and filed separately; the sibling fixture above is clean because its
+    /// tuple carries a plain `R` element as well.
+    ///
+    /// Twin of `tests/interpreter.rs`'s
+    /// `test_bare_variant_ctor_tuple_elem_runs_its_drop_body`, pinned to the
+    /// same string.
+    #[test]
+    fn e2e_bare_variant_ctor_tuple_elem_runs_its_drop_body() {
+        let Some(out) = run_program(
+            r#"struct R { id: i64, tag: String }
+impl Drop for R { fn drop(mut ref self) { println(f"dR{self.id}/{self.tag}") } }
+enum W { A(R), N }
+fn mk(i: i64) -> R { return R { id: i, tag: f"t{i}" }; }
+
+fn optArg(t: (Option[R], i64)) -> i64 { println(f"  in{t.1}"); return 0; }
+fn twoArg(t: (Option[R], Option[R])) -> i64 { println("  in2"); return 0; }
+fn sndArg(t: (i64, Option[R])) -> i64 { println(f"  in{t.0}"); return 0; }
+fn uvArg(t: (W, i64)) -> i64 { println(f"  in{t.1}"); return 0; }
+fn mixArg(t: (Option[R], R)) -> i64 { println(f"  in{t.1.id}"); return 0; }
+fn nestArg(t: ((Option[R], i64), i64)) -> i64 { println(f"  in{t.1}"); return 0; }
+fn resArg(t: (Result[R, i64], i64)) -> i64 { println(f"  in{t.1}"); return 0; }
+
+fn main() {
+    println("baretemp");   let _ = optArg((Some(mk(11)), 7));                println("baretemp end")
+    println("qualtemp");   let _ = optArg((Option.Some(mk(12)), 7));         println("qualtemp end")
+    println("twobare");    let _ = twoArg((Some(mk(13)), Some(mk(14))));     println("twobare end")
+    println("secondpos");  let _ = sndArg((7, Some(mk(15))));                println("secondpos end")
+    println("bareuv");     let _ = uvArg((A(mk(16)), 7));                    println("bareuv end")
+    println("qualuv");     let _ = uvArg((W.A(mk(17)), 7));                  println("qualuv end")
+    println("mixed");      let _ = mixArg((Some(mk(18)), mk(19)));           println("mixed end")
+    println("nested");     let _ = nestArg(((Some(mk(20)), 7), 9));          println("nested end")
+    println("bareok");     let _ = resArg((Ok(mk(21)), 7));                  println("bareok end")
+    println("barenone");   let _ = optArg((None, 7));                        println("barenone end")
+    println("discard");    let _ = (Some(mk(22)), 7);                        println("discard end")
+    println("movedplace"); let r = mk(23); let _ = optArg((Some(r), 7));     println("movedplace end")
+    println("done")
+}
+"#,
+        ) else {
+            return;
+        };
+        assert_eq!(
+            out,
+            r#"baretemp
+  in7
+dR11/t11
+baretemp end
+qualtemp
+  in7
+dR12/t12
+qualtemp end
+twobare
+  in2
+dR13/t13
+dR14/t14
+twobare end
+secondpos
+  in7
+dR15/t15
+secondpos end
+bareuv
+  in7
+dR16/t16
+bareuv end
+qualuv
+  in7
+dR17/t17
+qualuv end
+mixed
+  in19
+dR18/t18
+dR19/t19
+mixed end
+nested
+  in9
+dR20/t20
+nested end
+bareok
+  in7
+dR21/t21
+bareok end
+barenone
+  in7
+barenone end
+discard
+dR22/t22
+discard end
+movedplace
+  in7
+dR23/t23
+movedplace end
+done
+"#
+        );
+    }
+
+    /// B-2026-09-10-25's CARVE-OUT, pinned so it cannot be widened by accident.
+    ///
+    /// A `shared` / `par` enum's drop is refcount-driven, and the two backends
+    /// do not agree about this shape: the QUALIFIED `(Sh.S(mk(1)), 7)` runs the
+    /// payload body under `--interp` and on NO compiled surface, in the
+    /// argument and `let _ =` positions alike. That divergence predates this
+    /// row and is B-2026-09-17-19, which owns the same lost body one wrapping
+    /// in (a BARE `shared enum` local); these tuple-element cells are a second
+    /// repro of it rather than a separate defect. What matters here is that the
+    /// BARE spelling
+    /// is AGREED-silent, so the gate widened by B-2026-09-10-25 excludes shared
+    /// and `par` heads. Admitting them would have converted an agreed gap into
+    /// a second divergence — strictly worse.
+    ///
+    /// The BARE cell below agrees on all four surfaces (silent), which is why
+    /// it is a genuine twin of
+    /// `tests/interpreter.rs`'s
+    /// `test_bare_shared_enum_tuple_elem_stays_silent` and pinned to the same
+    /// string. It is pinning a KNOWN GAP rather than correct behaviour: when
+    /// the qualified divergence is fixed, both halves move together and this
+    /// expectation is what should change.
+    #[test]
+    fn e2e_bare_shared_enum_tuple_elem_stays_silent() {
+        let Some(out) = run_program(
+            r#"struct R { id: i64, tag: String }
+impl Drop for R { fn drop(mut ref self) { println(f"dR{self.id}/{self.tag}") } }
+shared enum Sh { S(R), Z }
+fn mk(i: i64) -> R { return R { id: i, tag: f"t{i}" }; }
+fn shArg(t: (Sh, i64)) -> i64 { println(f"  in{t.1}"); return 0; }
+fn main() {
+    println("bare"); let _ = shArg((S(mk(1)), 7)); println("bare end")
+    println("done")
+}
+"#,
+        ) else {
+            return;
+        };
+        assert_eq!(out, "bare\n  in7\nbare end\ndone\n");
+    }
+
     /// B-2026-09-04-22 — a heap-BOXED `Result` payload bound out of an agg
     /// destructure leaf (tuple element or struct field) and handed to a
     /// by-value call keeps its `Drop` body, which runs AFTER the call — the

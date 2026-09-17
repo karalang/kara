@@ -65246,6 +65246,147 @@ fn main() {
     );
 }
 
+/// B-2026-09-10-25 — interpreter twin of `tests/codegen.rs`'s
+/// `e2e_bare_variant_ctor_tuple_elem_runs_its_drop_body`, same program, pinned
+/// to the same string.
+///
+/// A BARE enum-variant constructor as a tuple element (`(Some(mk(11)), 7)`)
+/// ran no `Drop` work on ANY surface, where the qualified `Option.Some(..)`
+/// twin one cell down was correct on all four — so the discriminator is the
+/// CONSTRUCTOR SPELLING, not the tuple-argument position the filing row
+/// blamed. `discard_tuple_elem_is_fresh` admitted a `Path` callee and, for an
+/// `Identifier` callee, only a user FUNCTION name, and ONE non-fresh element
+/// disqualifies the whole literal — which is why `mixed` lost its plain-struct
+/// element's body as well.
+///
+/// The lookup behind the new arm scans the BAKED STDLIB as well as
+/// `program.items`, and that is not incidental: `Some` / `Ok` / `Err` are
+/// declared there, so a user-program-only scan answers `None` for the
+/// commonest spelling the arm exists to admit, while codegen's
+/// `enum_name_for_variant_ctor` reads `enum_layouts` and answers `Option`.
+/// Measured in exactly that state — `mixed` printed `dR19` alone compiled and
+/// both bodies here — which is a run-vs-build divergence rather than a fix.
+///
+/// `discard` covers the second POSITION the same gate governs; `movedplace`
+/// pins exactly ONE body when the payload is a moved binding; `barenone` that
+/// a payload-free variant runs nothing.
+#[test]
+fn test_bare_variant_ctor_tuple_elem_runs_its_drop_body() {
+    assert_eq!(
+        run(r#"struct R { id: i64, tag: String }
+impl Drop for R { fn drop(mut ref self) { println(f"dR{self.id}/{self.tag}") } }
+enum W { A(R), N }
+fn mk(i: i64) -> R { return R { id: i, tag: f"t{i}" }; }
+
+fn optArg(t: (Option[R], i64)) -> i64 { println(f"  in{t.1}"); return 0; }
+fn twoArg(t: (Option[R], Option[R])) -> i64 { println("  in2"); return 0; }
+fn sndArg(t: (i64, Option[R])) -> i64 { println(f"  in{t.0}"); return 0; }
+fn uvArg(t: (W, i64)) -> i64 { println(f"  in{t.1}"); return 0; }
+fn mixArg(t: (Option[R], R)) -> i64 { println(f"  in{t.1.id}"); return 0; }
+fn nestArg(t: ((Option[R], i64), i64)) -> i64 { println(f"  in{t.1}"); return 0; }
+fn resArg(t: (Result[R, i64], i64)) -> i64 { println(f"  in{t.1}"); return 0; }
+
+fn main() {
+    println("baretemp");   let _ = optArg((Some(mk(11)), 7));                println("baretemp end")
+    println("qualtemp");   let _ = optArg((Option.Some(mk(12)), 7));         println("qualtemp end")
+    println("twobare");    let _ = twoArg((Some(mk(13)), Some(mk(14))));     println("twobare end")
+    println("secondpos");  let _ = sndArg((7, Some(mk(15))));                println("secondpos end")
+    println("bareuv");     let _ = uvArg((A(mk(16)), 7));                    println("bareuv end")
+    println("qualuv");     let _ = uvArg((W.A(mk(17)), 7));                  println("qualuv end")
+    println("mixed");      let _ = mixArg((Some(mk(18)), mk(19)));           println("mixed end")
+    println("nested");     let _ = nestArg(((Some(mk(20)), 7), 9));          println("nested end")
+    println("bareok");     let _ = resArg((Ok(mk(21)), 7));                  println("bareok end")
+    println("barenone");   let _ = optArg((None, 7));                        println("barenone end")
+    println("discard");    let _ = (Some(mk(22)), 7);                        println("discard end")
+    println("movedplace"); let r = mk(23); let _ = optArg((Some(r), 7));     println("movedplace end")
+    println("done")
+}
+"#),
+        r#"baretemp
+  in7
+dR11/t11
+baretemp end
+qualtemp
+  in7
+dR12/t12
+qualtemp end
+twobare
+  in2
+dR13/t13
+dR14/t14
+twobare end
+secondpos
+  in7
+dR15/t15
+secondpos end
+bareuv
+  in7
+dR16/t16
+bareuv end
+qualuv
+  in7
+dR17/t17
+qualuv end
+mixed
+  in19
+dR18/t18
+dR19/t19
+mixed end
+nested
+  in9
+dR20/t20
+nested end
+bareok
+  in7
+dR21/t21
+bareok end
+barenone
+  in7
+barenone end
+discard
+dR22/t22
+discard end
+movedplace
+  in7
+dR23/t23
+movedplace end
+done
+"#
+    );
+}
+
+/// B-2026-09-10-25's CARVE-OUT — interpreter twin of `tests/codegen.rs`'s
+/// `e2e_bare_shared_enum_tuple_elem_stays_silent`, same program and string.
+///
+/// A `shared` / `par` enum's drop is refcount-driven, and the two backends do
+/// not agree about the shape: the QUALIFIED `(Sh.S(mk(1)), 7)` runs the payload
+/// body HERE and on no compiled surface, in the argument and `let _ =`
+/// positions alike. That divergence predates this row and is B-2026-09-17-19,
+/// which owns the same lost body one wrapping in (a BARE `shared enum` local);
+/// these tuple-element cells are a second repro of it, not a separate defect.
+/// The BARE spelling is agreed-silent on all four, so the gate widened by
+/// B-2026-09-10-25 excludes shared and `par` heads rather than converting an
+/// agreed gap into a second divergence.
+///
+/// This pins a KNOWN GAP, not correct behaviour. When the qualified divergence
+/// is fixed, both halves move together and this expectation is what changes.
+#[test]
+fn test_bare_shared_enum_tuple_elem_stays_silent() {
+    assert_eq!(
+        run(r#"struct R { id: i64, tag: String }
+impl Drop for R { fn drop(mut ref self) { println(f"dR{self.id}/{self.tag}") } }
+shared enum Sh { S(R), Z }
+fn mk(i: i64) -> R { return R { id: i, tag: f"t{i}" }; }
+fn shArg(t: (Sh, i64)) -> i64 { println(f"  in{t.1}"); return 0; }
+fn main() {
+    println("bare"); let _ = shArg((S(mk(1)), 7)); println("bare end")
+    println("done")
+}
+"#),
+        "bare\n  in7\nbare end\ndone\n"
+    );
+}
+
 /// B-2026-09-04-22 — interpreter twin of `tests/codegen.rs`'s
 /// `e2e_result_agg_leaf_boxed_payload_by_value_call_keeps_body`, same program
 /// and string. The interpreter was the correct reference throughout.

@@ -9479,8 +9479,36 @@ impl<'ctx> super::Codegen<'ctx> {
         // also rides in the emitted symbol name, so a `Result[R, ]` walker can
         // never alias the `Result[R, i64]` one a fully-known spelling produces.
         if let ExprKind::Call { callee, args } = &e.kind {
-            if let ExprKind::Path { segments, .. } = &callee.kind {
-                if segments.len() == 2 {
+            // B-2026-09-10-25 — the BARE spelling of the same constructor.
+            // This arm resolved a 2-segment PATH callee only, so `Some(mk(1))`
+            // fell straight through to the namers below and came back as the
+            // bare head `Option` with `generic_args: None` — which
+            // `emit_optres_payload_user_drop_bodies_fn` and
+            // `tuple_elem_optres_drop_ok` both decline outright, exactly as
+            // B-2026-09-03-21 describes for the erasure it fixed one spelling
+            // over. The head is recovered through `enum_name_for_variant_ctor`,
+            // the same resolver `discard_tuple_elem_is_fresh_expr`'s gate uses
+            // for this node, so the gate and the type derivation cannot
+            // disagree about what a bare constructor is.
+            //
+            // Both sites were needed and neither is sufficient: with only the
+            // gate widened, codegen registered the walk and still skipped the
+            // `Option` element (measured — a `(Some(R { .. }), mk(72))`
+            // argument printed `dR72` and not `dR71`), while the interpreter
+            // fired both. That intermediate state is a run-vs-build divergence,
+            // which is why the two live in one commit.
+            let head_variant: Option<(String, String)> = match &callee.kind {
+                ExprKind::Path { segments, .. } if segments.len() == 2 => {
+                    Some((segments[0].clone(), segments[1].clone()))
+                }
+                ExprKind::Identifier(n) => {
+                    self.enum_name_for_variant_ctor(n).map(|en| (en, n.clone()))
+                }
+                _ => None,
+            };
+            if let Some((head, variant)) = head_variant {
+                let segments = [head, variant];
+                {
                     let unknown = || TypeExpr {
                         kind: TypeKind::Path(crate::ast::PathExpr {
                             segments: vec![String::new()],

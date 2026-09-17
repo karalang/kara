@@ -6493,15 +6493,87 @@ impl<'a> super::Interpreter<'a> {
             ExprKind::Tuple(elems) => elems.iter().all(|el| self.discard_tuple_elem_is_fresh(el)),
             ExprKind::Call { callee, .. } => match &callee.kind {
                 ExprKind::Path { .. } => true,
-                ExprKind::Identifier(n) => self
-                    .program
-                    .items
-                    .iter()
-                    .any(|it| matches!(it, Item::Function(f) if &f.name == n)),
+                // B-2026-09-10-25 — a BARE enum-variant constructor
+                // (`(Some(R { .. }), 7)`, `(A(R { .. }), 7)`) is as fresh as
+                // the qualified `Option.Some(..)` / `Tv.A(..)` the `Path` arm
+                // one line up already admits: the call MINTS an enum value, so
+                // nothing live aliases it. Only a user FUNCTION name was
+                // recognised here, and `Some` is not one, so this answered
+                // `false` — and one non-fresh element disqualifies the WHOLE
+                // literal, so no element's body ran at all. Measured silent on
+                // `--interp`, the JIT and both builds, in the call-argument
+                // position AND both discard spellings (`let _ = (..)`, a bare
+                // statement), against the qualified twin being correct on all
+                // four in every one of them.
+                //
+                // SHARED / `par` enums are EXCLUDED, and that carve-out is
+                // load-bearing rather than cautious. Their drop is
+                // refcount-driven — the same reason the shared-struct filter
+                // in `fresh_temp_arg_type_name` gives — and measurement says
+                // the two backends do not currently agree about them: the
+                // QUALIFIED `(Sh.S(R { .. }), 7)` already diverges here
+                // (this walk fires the body, every compiled surface is
+                // silent), in the argument and discard positions alike. The
+                // bare spelling is AGREED-silent today, so admitting it would
+                // convert an agreed gap into a fresh divergence — strictly
+                // worse, and exactly what this row's own arithmetic forbids.
+                // Filed as its own row; when it is fixed, this filter is what
+                // should be revisited.
+                ExprKind::Identifier(n) => {
+                    self.program
+                        .items
+                        .iter()
+                        .any(|it| matches!(it, Item::Function(f) if &f.name == n))
+                        || self.fresh_bare_variant_ctor_enum(n).is_some()
+                }
                 _ => false,
             },
             _ => false,
         }
+    }
+
+    /// B-2026-09-10-25 — the enum a BARE tuple-variant constructor call
+    /// (`Some(x)`, `A(x)`) mints, when that enum's drop is ours to run.
+    ///
+    /// Codegen twin: the `enum_name_for_variant_ctor` clause of
+    /// `discard_tuple_elem_is_fresh_expr`. The two must answer identically or
+    /// the element's body is lost on one backend and run on the other — both
+    /// are silent on this shape today, so a disagreement introduced by
+    /// repairing one side is a run-vs-build divergence rather than a fix.
+    /// Codegen folds `par` into its layout's `is_shared` flag
+    /// (`declarations.rs`, `is_shared: e.is_shared || e.is_par`), which is why
+    /// this tests BOTH flags to mean the same thing.
+    fn fresh_bare_variant_ctor_enum(&self, variant: &str) -> Option<String> {
+        fn scan(items: &[Item], variant: &str) -> Option<String> {
+            items.iter().find_map(|item| match item {
+                Item::EnumDef(e)
+                    if !e.is_shared
+                        && !e.is_par
+                        && e.variants.iter().any(|v| v.name == variant) =>
+                {
+                    Some(e.name.clone())
+                }
+                _ => None,
+            })
+        }
+        // The BAKED-STDLIB half is not optional: `Some` / `Ok` / `Err` are
+        // declared there rather than in `program.items`, so a lookup over the
+        // user program alone answers `None` for the commonest spelling this
+        // arm exists to admit — while codegen's `enum_name_for_variant_ctor`
+        // reads `enum_layouts`, which carries the seeded enums, and answers
+        // `Some("Option")`. Measured: with the user-only scan, a bare
+        // `(Some(R { .. }), mk(72))` argument printed `dR72` on the three
+        // compiled surfaces and nothing under `--interp` — a fresh
+        // divergence manufactured by fixing one backend, which is the precise
+        // failure this row's both-halves-together rule is about. The user
+        // program is scanned FIRST so a user enum shadowing a stdlib variant
+        // name resolves to the user's, matching
+        // `qualified_enum_variant_is_unit`.
+        scan(&self.program.items, variant).or_else(|| {
+            crate::prelude::STDLIB_PROGRAMS
+                .iter()
+                .find_map(|(_, p)| scan(&p.items, variant))
+        })
     }
 
     /// B-2026-07-30-11 (discarded-temp leg) — run the user Drop work a

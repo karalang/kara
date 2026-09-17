@@ -24795,8 +24795,34 @@ impl<'ctx> super::Codegen<'ctx> {
                 .all(|el| self.discard_tuple_elem_is_fresh_expr(el)),
             ExprKind::Call { callee, .. } => match &callee.kind {
                 ExprKind::Path { .. } => true,
+                // B-2026-09-10-25 — a BARE enum-variant constructor
+                // (`(Some(R { .. }), 7)`, `(A(R { .. }), 7)`) MINTS its value,
+                // exactly as the qualified `Option.Some(..)` the `Path` arm
+                // above already admits, so nothing live aliases it. Only a
+                // user function name was recognised here and `Some` is not
+                // one, so this answered `false`; one non-fresh element
+                // disqualifies the WHOLE literal, so the registrar never ran
+                // and no element body fired — silent on every surface, in the
+                // call-argument position and both discard spellings alike.
+                //
+                // SHARED / `par` enums stay out: their drop is refcount
+                // driven, and the QUALIFIED spelling is currently a
+                // run-vs-build divergence on this shape (the interpreter's
+                // walk fires the body, this backend does not). The bare
+                // spelling is agreed-silent, so admitting it here would open a
+                // second divergence instead of closing a gap. `is_shared` on
+                // an enum layout already folds `par` in (`declarations.rs`),
+                // so this one flag covers both; the interpreter twin
+                // (`fresh_bare_variant_ctor_enum`) tests `is_shared || is_par`
+                // on the AST to mean the same thing.
                 ExprKind::Identifier(n) => {
                     self.fn_sig.fn_return_type_names.contains_key(n.as_str())
+                        || self.enum_name_for_variant_ctor(n).is_some_and(|en| {
+                            self.type_decls
+                                .enum_layouts
+                                .get(&en)
+                                .is_some_and(|l| !l.is_shared)
+                        })
                 }
                 _ => false,
             },

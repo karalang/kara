@@ -4488,6 +4488,74 @@ fn main() {
         );
     }
 
+    /// B-2026-09-10-25 — the MEMORY half of `tests/codegen.rs`'s
+    /// `e2e_bare_variant_ctor_tuple_elem_runs_its_drop_body` under ASAN +
+    /// LSan.
+    ///
+    /// The fix gives a BARE enum-variant constructor in a tuple element the
+    /// same ownership its qualified twin already had, so the question this
+    /// fixture answers is whether the newly-claimed owner double-frees or
+    /// strands anything. Each cell's bodies must fire exactly once and the run
+    /// must be clean.
+    ///
+    /// The cells are the two shapes of the family that are CLEAN on the parent
+    /// tree as well, paired with their qualified twins, so a regression here is
+    /// unambiguously this change's. The row's own repro shape
+    /// (`(Option[R], i64)` — a tuple whose ONLY heap-bearing element is the
+    /// `Option`) is deliberately ABSENT: it already leaked 32 B + 1 B at `-O0`
+    /// before this change, in the bare and qualified spellings alike, and still
+    /// does. That leak is orthogonal and filed separately; including the shape
+    /// here would quarantine a pre-existing leak under this row's name rather
+    /// than measure anything. The parent-vs-fixed sweep found every cell's
+    /// valgrind numbers byte-identical, which is this change's actual memory
+    /// claim.
+    #[test]
+    fn asan_bare_variant_ctor_tuple_elem_keeps_one_owner() {
+        assert_clean_asan_run(
+            "struct R { id: i64, tag: String }\n\
+             impl Drop for R { fn drop(mut ref self) { println(f\"  dR{self.id}/{self.tag}\") } }\n\
+             enum W { A(R), N }\n\
+             fn mk(i: i64) -> R { return R { id: i, tag: f\"t{i}\" }; }\n\
+             fn uvArg(t: (W, i64)) -> i64 { println(f\"  in{t.1}\"); return 0; }\n\
+             fn mixArg(t: (Option[R], R)) -> i64 { println(f\"  in{t.1.id}\"); return 0; }\n\
+             \n\
+             fn main() {\n\
+             \x20\x20\x20\x20println(\"bareuv\");    { let _ = uvArg((A(mk(16)), 7)); println(\"  x\") }\n\
+             \x20\x20\x20\x20println(\"qualuv\");    { let _ = uvArg((W.A(mk(17)), 7)); println(\"  x\") }\n\
+             \x20\x20\x20\x20println(\"mixed\");     { let _ = mixArg((Some(mk(18)), mk(19))); println(\"  x\") }\n\
+             \x20\x20\x20\x20println(\"qualmixed\"); { let _ = mixArg((Option.Some(mk(20)), mk(21))); println(\"  x\") }\n\
+             \x20\x20\x20\x20println(\"unitvar\");   { let _ = uvArg((N, 7)); println(\"  x\") }\n\
+             \x20\x20\x20\x20println(\"end\")\n\
+             }\n\
+",
+            &[
+                "bareuv",
+                "  in7",
+                "  dR16/t16",
+                "  x",
+                "qualuv",
+                "  in7",
+                "  dR17/t17",
+                "  x",
+                "mixed",
+                "  in19",
+                "  dR18/t18",
+                "  dR19/t19",
+                "  x",
+                "qualmixed",
+                "  in21",
+                "  dR20/t20",
+                "  dR21/t21",
+                "  x",
+                "unitvar",
+                "  in7",
+                "  x",
+                "end",
+            ],
+            "bare_variant_ctor_tuple_elem_one_owner",
+        );
+    }
+
     /// B-2026-09-06-45 — the MEMORY half of `tests/codegen.rs`'s
     /// `e2e_nested_self_rebind_runs_each_body_once` under ASAN + LSan. The
     /// callee-side registration is the binding's OWN wrapper rather than a
