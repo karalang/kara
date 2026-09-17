@@ -2273,6 +2273,59 @@ impl<'a> super::Interpreter<'a> {
                     continue;
                 }
             }
+            // B-2026-09-10-20 — the `Vec` PAYLOAD arm, the sibling the `Array`
+            // one above names in its own doc ("every `Vec` payload (silent on
+            // both) stay in the row"). Same discriminator and same reason: the
+            // interpreter represents `Array[T, N]` and `Vec[T]` with one
+            // `Value::Array`, so only the DECLARED head tells them apart, and
+            // only a MONOMORPHIC declaration has one — the generic cell's head
+            // is the type parameter and stays with B-2026-09-17-15.
+            //
+            // `enum H4 { P(Vec[Mono]), Q }` ran its elements' `Drop` bodies on
+            // NO backend (`x` against the struct-payload control's `d2:9 x`),
+            // which is an AGREED gap: both sides silent, so no A/B rule saw it
+            // and memory was balanced, so no sanitizer leg did either.
+            //
+            // The element dispatch is WIDER than the array arm's and has to be:
+            // that arm handles a `Value::Struct` element only, and the shape
+            // this row reports is `Vec[Mono]` over a user ENUM whose payload
+            // owns the body. Codegen's twin resolves the same two element kinds
+            // through `emit_vec_elem_user_drop_bodies_fn_mono`, which takes a
+            // struct OR a non-shared enum layout, so admitting both here is
+            // what keeps the two walks equal rather than widening past them.
+            if let Some("Vec") = declared_head.as_deref() {
+                if let Value::Array(cell) = &payload {
+                    let elems: Vec<Value> = match cell.read() {
+                        Ok(g) => g.clone(),
+                        Err(_) => continue,
+                    };
+                    // Forward order, own body per element — what the compiled
+                    // element walker emits for the same handle.
+                    for e in elems {
+                        match &e {
+                            Value::Struct { name: en, .. } => {
+                                if self.program.drop_method_keys.contains_key(en) {
+                                    let en = en.clone();
+                                    self.run_user_drop_body_only(&en, e.clone());
+                                }
+                            }
+                            Value::EnumVariant { enum_name: en, .. } => {
+                                // The element's OWN body first, then its
+                                // payload's — design.md § Part 8's order, and
+                                // the order `run_enum_payload_user_drops_value`
+                                // is called in everywhere else.
+                                if self.program.drop_method_keys.contains_key(en) {
+                                    let en = en.clone();
+                                    self.run_user_drop_body_only(&en, e.clone());
+                                }
+                                self.run_enum_payload_user_drops_value(&e);
+                            }
+                            _ => {}
+                        }
+                    }
+                    continue;
+                }
+            }
             let Value::Struct { name: tn, .. } = &payload else {
                 continue;
             };

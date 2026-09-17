@@ -19491,6 +19491,92 @@ done
         assert_eq!(out, "bind\n  x\n  hit\n  dR1\n  dR2\nread\n  x\n  hit3\n  dR3\n  dR4\niflet\n  x\n  hit\n  dR5\n  dR6\nwhilet\n  x\n  hit\n  dR7\n  dR8\n  end\nresult\n  x\n  hit\n  dR9\n  dR10\ntwice\n  x\n  a\n  b\n  dR11\n  dR12\nafter\n  x\n  hit\n  dR13\n  dR14\n  end\nwild\n  x\n  hit\n  dR15\n  dR16\nstruct\n  x\n  hit\n  dW18\n  dR17\nsingle\n  x\n  hit\n  dR19\nret\n  x\n  dR30\n  dR31\n  hit\neat\n  x\n  eat\n  hit7\nnomatch\n  dR22\n  dR23\n  x\nnone\n  x\n  n\ntlocal\n  dR24\n  dR25\n  x\nend\n");
     }
 
+    /// B-2026-09-10-20 — AN ENUM VARIANT DECLARING A `Vec[E]` PAYLOAD NOW RUNS
+    /// ITS ELEMENTS' `Drop` BODIES.
+    ///
+    /// `enum H4 { P(Vec[Mono]), Q }` printed `x` where `d2:9 x` is due, on
+    /// `--interp`, the JIT, `-O0` and `-O2` auto-par alike — an AGREED gap, so
+    /// no A/B rule saw it, with memory balanced so no sanitizer leg did either.
+    ///
+    /// THE CAUSE IS ONE MISSING FIELD ROW. The name-keyed payload-bodies head
+    /// gained an `Array[E, N]` arm in B-2026-09-12-24; `array_elem_and_len`
+    /// needs a compile-time length, so a `Vec[E]` payload fell past it to the
+    /// struct gate, whose `struct_types` lookup answers `None` for the head
+    /// `Vec`. No field row, no walker, no bodies. The predicate was already
+    /// written (`payload_vec_bodies_parts`, B-2026-09-13-29) and only the
+    /// shared seeded-pair core was using it.
+    ///
+    /// `EnumPayloadBodyField` gains a FIFTH slot rather than reusing the array
+    /// one, because the two shapes' boxing arithmetic differs: an `Array[E, N]`
+    /// payload is an `[N x E]` aggregate `N` elements wide, a `Vec[E]` payload
+    /// is the three-word `{ptr, len, cap}` handle however wide its elements
+    /// are. `vecmixed` is the cell that proves the field INDEX is right — a
+    /// two-field variant `P(Vec[S1], i64)` walks the handle at its own word.
+    ///
+    /// BOTH BACKENDS IN ONE COMMIT, which B-2026-09-12-6 and B-2026-09-12-24
+    /// both state as a rule: wiring only codegen turns a both-silent bug into a
+    /// run-vs-build divergence, which is strictly worse under the A/B rule. The
+    /// interpreter arm is keyed on the same DECLARED head, and has to be — the
+    /// interpreter represents `Array[T, N]` and `Vec[T]` with one
+    /// `Value::Array`, so no value-shaped test can tell them apart.
+    ///
+    /// THE INTERPRETER ARM IS WIDER THAN THE ARRAY ONE AND HAS TO BE: that arm
+    /// handles a `Value::Struct` element only, and the shape the row reports is
+    /// `Vec[Mono]` over a user ENUM whose payload owns the body. Codegen's
+    /// `emit_vec_elem_user_drop_bodies_fn_mono` takes a struct OR a non-shared
+    /// enum layout, so admitting both element kinds is what keeps the two walks
+    /// equal rather than widening past them (`vecenum` vs `vecstruct`).
+    ///
+    /// THREE CELLS ARE PINNED AS-IS, all three still silent on every surface
+    /// and none of them this half's: `sharedec` (`enum H3 { P(SMono) }`) is a
+    /// `shared` enum payload, which the `targets` filter excludes for a
+    /// DIFFERENT reason — it admits "a user ENUM running a user drop" and a
+    /// shared enum's drop is refcount-driven — so it needs its own answer.
+    /// `genvec` and `gensh` are the GENERIC spellings, whose declared payload
+    /// head is the type parameter; telling `G[Vec[R]]` from `G[Array[R, N]]`
+    /// needs the binding's instantiation, which is B-2026-09-17-15's subject.
+    ///
+    /// Twin of `tests/interpreter.rs`'s
+    /// `test_declared_vec_enum_payload_runs_element_drop_bodies`, byte-identical
+    /// source and expectation — the only fixture shape that can hold an agreed
+    /// gap closed.
+    #[test]
+    fn e2e_declared_vec_enum_payload_runs_element_drop_bodies() {
+        let Some(out) = run_program(
+            r#"struct R2 { s: String, t: String, u: String }
+    impl Drop for R2 { fn drop(mut ref self) { println(f"  d2:{self.s.len()}") } }
+    fn mkr(i: i64) -> R2 { return R2 { s: f"aaaaaaaaa", t: f"b", u: f"c" } }
+    struct S1 { v: i64 }
+    impl Drop for S1 { fn drop(mut ref self) { println(f"  dS{self.v}") } }
+    enum Mono { P(R2), Q }
+    shared enum SMono { P(R2), Q }
+    enum G[T] { X(T), Y }
+    enum H3 { P(SMono), Q }
+    enum H4 { P(Vec[Mono]), Q }
+    enum H5 { P(Vec[S1]), Q }
+    enum H6 { P(Vec[S1], i64), Q }
+    enum H7 { P(Array[S1, 2]), Q }
+
+    fn main() {
+        println("vecenum"); { let mut w: Vec[Mono] = []; w.push(Mono.P(mkr(1))); let h = H4.P(w); println("  x") }
+        println("vecstruct"); { let mut w: Vec[S1] = []; w.push(S1 { v: 7 }); w.push(S1 { v: 8 }); let h = H5.P(w); println("  x") }
+        println("vecmixed"); { let mut w: Vec[S1] = []; w.push(S1 { v: 9 }); let h = H6.P(w, 3); println("  x") }
+        println("vecempty"); { let w: Vec[S1] = []; let h = H5.P(w); println("  x") }
+        println("unitvar"); { let h = H5.Q; println("  x") }
+        println("array"); { let h = H7.P([S1 { v: 1 }, S1 { v: 2 }]); println("  x") }
+        println("struct"); { let g = G.X(mkr(1)); println("  x") }
+        println("sharedec"); { let h = H3.P(SMono.P(mkr(1))); println("  x") }
+        println("genvec"); { let mut w: Vec[Mono] = []; w.push(Mono.P(mkr(1))); let g = G.X(w); println("  x") }
+        println("gensh"); { let g = G.X(SMono.P(mkr(1))); println("  x") }
+        println("end")
+    }
+"#,
+        ) else {
+            return;
+        };
+        assert_eq!(out, "vecenum\n  d2:9\n  x\nvecstruct\n  dS7\n  dS8\n  x\nvecmixed\n  dS9\n  x\nvecempty\n  x\nunitvar\n  x\narray\n  dS1\n  dS2\n  x\nstruct\n  d2:9\n  x\nsharedec\n  x\ngenvec\n  x\ngensh\n  x\nend\n");
+    }
+
     /// B-2026-09-06-39 — A READ-ONLY ARM OVER AN OWNED ENUM RECEIVER NOW RUNS THE
     /// PAYLOAD'S `Drop` BODY **AFTER** THE SHELL'S, the design.md § Part 8 order
     /// ("the user's `fn drop` body runs first, then the compiler drops each field").
@@ -159544,17 +159630,21 @@ fn main() {
                  fn main() { let b: Bin = Bare; println(\"end\") }\n",
                 "end\n",
             ),
-            // BOUNDARY — the `Vec` payload of the same shape is silent on
-            // EVERY backend and stays that way here. It is the honest
-            // remainder of B-2026-09-12-24 (the shared bodies core has a tuple
-            // arm and an array arm and no `Vec` arm, for any enum head
-            // including `Option`), pinned so whoever writes that arm has to
-            // move both backends at once rather than half of it.
+            // B-2026-09-10-20 — REPINNED, and this cell is why it was pinned.
+            // It read `end` alone and its note asked that "whoever writes that
+            // arm has to move both backends at once rather than half of it".
+            // That arm is written: the name-keyed payload-bodies head now
+            // carries a `Vec` field row beside its `Array` one, the interpreter
+            // carries the matching DECLARED-head arm, and this program prints
+            // `dRa1 dRa2 end` on `--interp`, the JIT, `-O0` and `-O2` auto-par
+            // alike (valgrind at `-O0`: 0 errors, nothing lost). The cell keeps
+            // its name and its place so the boundary it guards is still
+            // legible — what moved is which side of it this shape sits on.
             (
                 "boundary-mono-enum-vec-payload-stays-silent",
                 "enum Vbin { V(Vec[Ra]), Z }\n\
                  fn main() { let v: Vbin = Vbin.V(Vec[Ra { id: 1 }, Ra { id: 2 }]); println(\"end\") }\n",
-                "end\n",
+                "dRa1\ndRa2\nend\n",
             ),
         ] {
             let Some(out) = run_program(&format!("{PRE}{body}")) else {

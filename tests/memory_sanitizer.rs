@@ -4404,6 +4404,90 @@ fn main() {
         );
     }
 
+    /// B-2026-09-10-20 — the MEMORY half of `tests/codegen.rs`'s
+    /// `e2e_declared_vec_enum_payload_runs_element_drop_bodies` under
+    /// ASAN + LSan.
+    ///
+    /// The row is a BODIES-channel gap — every `Vec` cell was memory-balanced
+    /// before the fix, which is exactly why no sanitizer leg could see it. This
+    /// fixture holds the other direction: the new walker reads through a
+    /// `{ptr, len, cap}` handle at a payload word and runs a body per element,
+    /// so a wrong field index, a wrong boxing threshold or a double walk all
+    /// land here as a use-after-free or a double free rather than as a
+    /// transcript diff. `vecmixed` (a two-field variant `P(Vec[S1], i64)`) is
+    /// the cell that pins the index, `vecempty` and `unitvar` pin the
+    /// zero-element and no-payload paths.
+    ///
+    /// THE `gensh` CELL OF THE TRANSCRIPT TWIN IS DELIBERATELY ABSENT HERE.
+    /// `G.X(SMono.P(..))` strands its 88-byte RC control block — a real leak,
+    /// measured identically before and after this fix, and B-2026-09-17-15's
+    /// subject rather than this row's. Carrying it would redden LSan for
+    /// something this commit does not touch; quarantining it would put a live
+    /// entry on a ratchet list that is otherwise fully drained. The cell stays
+    /// pinned in the transcript fixtures, where it is visible without being
+    /// load-bearing.
+    #[test]
+    fn asan_declared_vec_enum_payload_elements_keep_one_owner() {
+        assert_clean_asan_run(
+            "struct R2 { s: String, t: String, u: String }\n\
+             impl Drop for R2 { fn drop(mut ref self) { println(f\"  d2:{self.s.len()}\") } }\n\
+             fn mkr(i: i64) -> R2 { return R2 { s: f\"aaaaaaaaa\", t: f\"b\", u: f\"c\" } }\n\
+             struct S1 { v: i64 }\n\
+             impl Drop for S1 { fn drop(mut ref self) { println(f\"  dS{self.v}\") } }\n\
+             enum Mono { P(R2), Q }\n\
+             shared enum SMono { P(R2), Q }\n\
+             enum G[T] { X(T), Y }\n\
+             enum H3 { P(SMono), Q }\n\
+             enum H4 { P(Vec[Mono]), Q }\n\
+             enum H5 { P(Vec[S1]), Q }\n\
+             enum H6 { P(Vec[S1], i64), Q }\n\
+             enum H7 { P(Array[S1, 2]), Q }\n\
+             \n\
+             fn main() {\n\
+             \x20\x20\x20\x20println(\"vecenum\"); { let mut w: Vec[Mono] = []; w.push(Mono.P(mkr(1))); let h = H4.P(w); println(\"  x\") }\n\
+             \x20\x20\x20\x20println(\"vecstruct\"); { let mut w: Vec[S1] = []; w.push(S1 { v: 7 }); w.push(S1 { v: 8 }); let h = H5.P(w); println(\"  x\") }\n\
+             \x20\x20\x20\x20println(\"vecmixed\"); { let mut w: Vec[S1] = []; w.push(S1 { v: 9 }); let h = H6.P(w, 3); println(\"  x\") }\n\
+             \x20\x20\x20\x20println(\"vecempty\"); { let w: Vec[S1] = []; let h = H5.P(w); println(\"  x\") }\n\
+             \x20\x20\x20\x20println(\"unitvar\"); { let h = H5.Q; println(\"  x\") }\n\
+             \x20\x20\x20\x20println(\"array\"); { let h = H7.P([S1 { v: 1 }, S1 { v: 2 }]); println(\"  x\") }\n\
+             \x20\x20\x20\x20println(\"struct\"); { let g = G.X(mkr(1)); println(\"  x\") }\n\
+             \x20\x20\x20\x20println(\"sharedec\"); { let h = H3.P(SMono.P(mkr(1))); println(\"  x\") }\n\
+             \x20\x20\x20\x20println(\"genvec\"); { let mut w: Vec[Mono] = []; w.push(Mono.P(mkr(1))); let g = G.X(w); println(\"  x\") }\n\
+             \x20\x20\x20\x20println(\"end\")\n\
+             }\n\
+",
+            &[
+                "vecenum",
+                "  d2:9",
+                "  x",
+                "vecstruct",
+                "  dS7",
+                "  dS8",
+                "  x",
+                "vecmixed",
+                "  dS9",
+                "  x",
+                "vecempty",
+                "  x",
+                "unitvar",
+                "  x",
+                "array",
+                "  dS1",
+                "  dS2",
+                "  x",
+                "struct",
+                "  d2:9",
+                "  x",
+                "sharedec",
+                "  x",
+                "genvec",
+                "  x",
+                "end",
+            ],
+            "declared_vec_enum_payload_one_owner",
+        );
+    }
+
     /// B-2026-09-06-45 — the MEMORY half of `tests/codegen.rs`'s
     /// `e2e_nested_self_rebind_runs_each_body_once` under ASAN + LSan. The
     /// callee-side registration is the binding's OWN wrapper rather than a

@@ -128,7 +128,20 @@ impl FieldSkipTree {
 /// an empty `String` where a struct carries its name — because the case body
 /// dispatches on it rather than on the name, and a name is what an array does
 /// not have.
-type EnumPayloadBodyField = (u32, String, usize, Option<(TypeExpr, u32)>);
+/// B-2026-09-10-20 — the FIFTH slot is `Some(element `TypeExpr`)` for a
+/// `Vec[E]` payload, held apart from `array_parts` rather than folded into it.
+/// The two are not the same shape and their boxing arithmetic differs: an
+/// `Array[E, N]` payload is an `[N x E]` AGGREGATE whose width is `N` elements,
+/// while a `Vec[E]` payload is a three-word `{ptr, len, cap}` HANDLE whose
+/// length is a runtime word. Reusing the array slot would have to invent an `N`
+/// for the handle.
+type EnumPayloadBodyField = (
+    u32,
+    String,
+    usize,
+    Option<(TypeExpr, u32)>,
+    Option<TypeExpr>,
+);
 type EnumPayloadBodyTargets = Vec<(u64, String, Vec<EnumPayloadBodyField>)>;
 type EnumPayloadBodyCase<'ctx> = (BasicBlock<'ctx>, Vec<EnumPayloadBodyField>);
 
@@ -10616,6 +10629,32 @@ impl<'ctx> super::Codegen<'ctx> {
                         String::new(),
                         num_words,
                         Some((elem_te, n)),
+                        None,
+                    ));
+                    continue;
+                }
+                // B-2026-09-10-20 — the `Vec` payload, beside the array arm and
+                // for the reason it is NOT that arm (see
+                // `payload_vec_bodies_parts`): `array_elem_and_len` needs a
+                // compile-time length, so `Vec[E]` fell past it to the struct
+                // gate below, whose `struct_types` lookup answers `None` for
+                // the head `Vec`. No field row, no walker, and
+                // `enum H4 { P(Vec[Mono]), Q }` ran its elements' bodies on NO
+                // backend — an AGREED gap, invisible to the A/B rule, with
+                // memory balanced so no sanitizer leg saw it either.
+                //
+                // The interpreter half lands in the same commit, keyed on the
+                // same DECLARED head. Wiring only this side is the trade
+                // B-2026-09-12-6 refused and B-2026-09-12-24 restates: it turns
+                // a both-silent bug into a run-vs-build divergence, which is
+                // strictly worse under the A/B rule.
+                if let Some(elem_te) = self.payload_vec_bodies_parts(te) {
+                    fields.push((
+                        (start_word + 1) as u32,
+                        String::new(),
+                        num_words,
+                        None,
+                        Some(elem_te),
                     ));
                     continue;
                 }
@@ -10625,7 +10664,7 @@ impl<'ctx> super::Codegen<'ctx> {
                     continue;
                 }
                 if self.type_runs_user_drop(&name, &mut Vec::new()) {
-                    fields.push(((start_word + 1) as u32, name, num_words, None));
+                    fields.push(((start_word + 1) as u32, name, num_words, None, None));
                 }
             }
             if !fields.is_empty() {
@@ -10700,7 +10739,7 @@ impl<'ctx> super::Codegen<'ctx> {
             // them in reverse — `struct P { a: R, b: R }` printed `dR2 dR1` and
             // `enum E { T(R, R) }` printed `dR1 dR2`, measured on all four
             // surfaces. Both backends agreed, so no A/B check could see it.
-            for (field_idx, sname, num_words, array_parts) in fields.into_iter().rev() {
+            for (field_idx, sname, num_words, array_parts, vec_elem) in fields.into_iter().rev() {
                 let fp = self
                     .builder
                     .build_struct_gep(layout.llvm_type, p_arg, field_idx, "de.payload.p")
@@ -10719,12 +10758,18 @@ impl<'ctx> super::Codegen<'ctx> {
                 // struct is, and the word holds the box pointer. Resolved here
                 // rather than in the match below so both payload kinds share
                 // the one null-guarded walk.
-                let payload_llvm_words = match &array_parts {
-                    Some((elem_te, n)) => {
+                let payload_llvm_words = match (&array_parts, &vec_elem) {
+                    (Some((elem_te, n)), _) => {
                         let elem_ty = self.llvm_type_for_type_expr(elem_te);
                         Self::llvm_type_word_count(elem_ty).saturating_mul(*n as usize)
                     }
-                    None => self
+                    // B-2026-09-10-20 — a `Vec` payload is the three-word
+                    // `{ptr, len, cap}` HANDLE however wide its elements are,
+                    // so its boxing question is asked against 3 and not against
+                    // an element count. That is the whole reason it could not
+                    // reuse the array slot above.
+                    (None, Some(_)) => Self::llvm_type_word_count(self.vec_struct_type().into()),
+                    (None, None) => self
                         .type_decls
                         .struct_types
                         .get(&sname)
@@ -10764,6 +10809,50 @@ impl<'ctx> super::Codegen<'ctx> {
                     let elem_ty = self.llvm_type_for_type_expr(&elem_te);
                     if let Some(f) = self.emit_array_elem_user_drop_bodies_fn(elem_ty, &elem_te, n)
                     {
+                        self.builder.build_call(f, &[fp.into()], "").unwrap();
+                    }
+                    if let Some(nb) = box_next {
+                        self.builder.build_unconditional_branch(nb).unwrap();
+                        self.builder.position_at_end(nb);
+                    }
+                    continue;
+                }
+                // B-2026-09-10-20 — the `Vec` payload's element bodies, over
+                // the `{ptr, len, cap}` handle at `fp`, walking its runtime
+                // length. Dispatched exactly as the shared core's `vec_elem`
+                // arm dispatches (B-2026-09-13-29) and as a `let`-bound `Vec`
+                // registers, so a payload reached through this name-keyed head
+                // and one reached through the seeded pair's head resolve the
+                // SAME walker: the mono element walk for a struct or non-shared
+                // user-enum element, the te-driven recursive one otherwise.
+                if let Some(elem_te) = vec_elem {
+                    let elem_ty = self.llvm_type_for_type_expr(&elem_te);
+                    let elem_struct_name = match &elem_te.kind {
+                        TypeKind::Path(ep) => ep
+                            .segments
+                            .first()
+                            .filter(|n| {
+                                let n = n.as_str();
+                                self.type_decls.struct_types.contains_key(n)
+                                    || (n != "Option"
+                                        && n != "Result"
+                                        && self
+                                            .type_decls
+                                            .enum_layouts
+                                            .get(n)
+                                            .is_some_and(|l| !l.is_shared))
+                            })
+                            .cloned(),
+                        _ => None,
+                    };
+                    let f = match elem_struct_name {
+                        Some(en) => {
+                            let subst = self.generic_struct_subst_from_inst(&en, &elem_te);
+                            self.emit_vec_elem_user_drop_bodies_fn_mono(&en, elem_ty, &subst)
+                        }
+                        None => self.emit_nested_vec_elem_bodies_fn(&elem_te),
+                    };
+                    if let Some(f) = f {
                         self.builder.build_call(f, &[fp.into()], "").unwrap();
                     }
                     if let Some(nb) = box_next {

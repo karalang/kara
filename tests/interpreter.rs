@@ -18581,10 +18581,17 @@ fn test_a_boxed_array_payload_runs_its_element_drop_bodies() {
         "s:1\ndAr1\ndAr2\nx\n"
     );
 
-    // BOUNDARY — the `Vec` payload of the same shape is silent on EVERY
-    // backend and stays that way. The honest remainder of this row: the shared
-    // bodies core has a tuple arm and an array arm and no `Vec` arm, for any
-    // enum head. Pinned on both sides so that arm has to move both at once.
+    // B-2026-09-10-20 — REPINNED, and this cell is why it was pinned. It read
+    // `x` alone, as the BOUNDARY twin of the codegen cell
+    // `boundary-mono-enum-vec-payload-stays-silent`, and its note asked that
+    // the missing `Vec` arm "move both at once". That arm is written: the
+    // name-keyed payload-bodies head in codegen now carries a `Vec` field row
+    // beside its `Array` one, this file\'s `Some("Vec")` DECLARED-head arm is
+    // the interpreter half, and the program prints `dAr1 dAr2 x` on
+    // `--interp`, the JIT, `-O0` and `-O2` auto-par alike (valgrind at `-O0`:
+    // 0 errors, nothing lost). The cell keeps its place so the boundary it
+    // guards stays legible — what moved is which side of it this shape sits
+    // on.
     assert_eq!(
         run(&format!(
             "{PRELUDE}enum Vbin {{ V(Vec[Ar]), Z }}\n\
@@ -18592,7 +18599,7 @@ fn test_a_boxed_array_payload_runs_its_element_drop_bodies() {
              \x20   let v: Vbin = Vbin.V(Vec[Ar {{ id: 1 }}, Ar {{ id: 2 }}]);\n\
              \x20   println(\"x\");\n}}\n"
         )),
-        "x\n"
+        "dAr1\ndAr2\nx\n"
     );
 }
 
@@ -69348,6 +69355,49 @@ fn main() {
 }
 "#);
     assert_eq!(out, "bind\n  x\n  hit\n  dR1\n  dR2\nread\n  x\n  hit3\n  dR3\n  dR4\niflet\n  x\n  hit\n  dR5\n  dR6\nwhilet\n  x\n  hit\n  dR7\n  dR8\n  end\nresult\n  x\n  hit\n  dR9\n  dR10\ntwice\n  x\n  a\n  b\n  dR11\n  dR12\nafter\n  x\n  hit\n  dR13\n  dR14\n  end\nwild\n  x\n  hit\n  dR15\n  dR16\nstruct\n  x\n  hit\n  dW18\n  dR17\nsingle\n  x\n  hit\n  dR19\nret\n  x\n  dR30\n  dR31\n  hit\neat\n  x\n  eat\n  hit7\nnomatch\n  dR22\n  dR23\n  x\nnone\n  x\n  n\ntlocal\n  dR24\n  dR25\n  x\nend\n", "got:\n{out}");
+}
+
+/// B-2026-09-10-20 — the INTERPRETER twin of `tests/codegen.rs`'s
+/// `e2e_declared_vec_enum_payload_runs_element_drop_bodies`, byte-identical
+/// source and expectation.
+///
+/// This side was silent too — the gap was AGREED, so a one-backend fix would
+/// have turned a missing body into an A/B divergence, which is the trade
+/// B-2026-09-12-6 refused and B-2026-09-12-24 restates as a rule. Both arms are
+/// keyed on the same DECLARED payload head, which is what makes them answer
+/// alike: `Array[T, N]` and `Vec[T]` share one `Value::Array` here, so nothing
+/// about the value could have told them apart.
+#[test]
+fn test_declared_vec_enum_payload_runs_element_drop_bodies() {
+    let out = run(r#"struct R2 { s: String, t: String, u: String }
+impl Drop for R2 { fn drop(mut ref self) { println(f"  d2:{self.s.len()}") } }
+fn mkr(i: i64) -> R2 { return R2 { s: f"aaaaaaaaa", t: f"b", u: f"c" } }
+struct S1 { v: i64 }
+impl Drop for S1 { fn drop(mut ref self) { println(f"  dS{self.v}") } }
+enum Mono { P(R2), Q }
+shared enum SMono { P(R2), Q }
+enum G[T] { X(T), Y }
+enum H3 { P(SMono), Q }
+enum H4 { P(Vec[Mono]), Q }
+enum H5 { P(Vec[S1]), Q }
+enum H6 { P(Vec[S1], i64), Q }
+enum H7 { P(Array[S1, 2]), Q }
+
+fn main() {
+    println("vecenum"); { let mut w: Vec[Mono] = []; w.push(Mono.P(mkr(1))); let h = H4.P(w); println("  x") }
+    println("vecstruct"); { let mut w: Vec[S1] = []; w.push(S1 { v: 7 }); w.push(S1 { v: 8 }); let h = H5.P(w); println("  x") }
+    println("vecmixed"); { let mut w: Vec[S1] = []; w.push(S1 { v: 9 }); let h = H6.P(w, 3); println("  x") }
+    println("vecempty"); { let w: Vec[S1] = []; let h = H5.P(w); println("  x") }
+    println("unitvar"); { let h = H5.Q; println("  x") }
+    println("array"); { let h = H7.P([S1 { v: 1 }, S1 { v: 2 }]); println("  x") }
+    println("struct"); { let g = G.X(mkr(1)); println("  x") }
+    println("sharedec"); { let h = H3.P(SMono.P(mkr(1))); println("  x") }
+    println("genvec"); { let mut w: Vec[Mono] = []; w.push(Mono.P(mkr(1))); let g = G.X(w); println("  x") }
+    println("gensh"); { let g = G.X(SMono.P(mkr(1))); println("  x") }
+    println("end")
+}
+"#);
+    assert_eq!(out, "vecenum\n  d2:9\n  x\nvecstruct\n  dS7\n  dS8\n  x\nvecmixed\n  dS9\n  x\nvecempty\n  x\nunitvar\n  x\narray\n  dS1\n  dS2\n  x\nstruct\n  d2:9\n  x\nsharedec\n  x\ngenvec\n  x\ngensh\n  x\nend\n", "got:\n{out}");
 }
 
 /// B-2026-09-06-39 — A READ-ONLY ARM OVER AN OWNED ENUM RECEIVER NOW RUNS THE
