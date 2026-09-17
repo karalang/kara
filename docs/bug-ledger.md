@@ -100,7 +100,7 @@ distinguish "bugs flattening" from "we stopped writing them down."
 | codegen-gap | 178 |
 | diagnostics | 126 |
 | other | 126 |
-| perf | 114 |
+| perf | 115 |
 | false-positive | 108 |
 | soundness | 96 |
 | crash | 84 |
@@ -110,7 +110,7 @@ distinguish "bugs flattening" from "we stopped writing them down."
 
 | surface | total |
 |---|---|
-| codegen | 1813 |
+| codegen | 1814 |
 | interp | 465 |
 | typecheck | 302 |
 | other | 95 |
@@ -2646,6 +2646,7 @@ _Generated from `bug-ledger.jsonl` by `scripts/bug-curve.py` (2026-05-20 → 202
 | B-2026-09-16-21 | codegen+interp | medium | AN OWNED ENUM RECEIVER'S PAYLOAD `Drop` BODY IS LOST WHENEVER THE CALLEE NEVER DESTRUCTURES `self` -- `let a = E.A(mk(1)); a.none()` over `fn none(se… | 0b97e71 |
 | B-2026-09-16-24 | typecheck | medium | `partial_move_of_drop_enum` REJECTS A BORROW-PROJECTION SCRUTINEE, and it is a false positive by the rule's OWN stated terms -- the rule documents it… | 84030e8 |
 | B-2026-09-16-27 | codegen | medium | A NESTED STRUCT MOVED INTO A VARIANT CONSTRUCTOR ABORTS WITH A DOUBLE FREE -- `Wn.Full(o)` over `struct Out { i: In }` / `struct In { s: String }` di… | 602a4bd |
+| B-2026-09-16-36 | codegen | medium | the SSO slice fast path still called `karac_string_slice_into` on two cold edges, and the escaping out-pointer cost 2.50x on every iteration that nev… | 356883caa |
 
 </details>
 
