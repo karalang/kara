@@ -37190,6 +37190,73 @@ end
 "#
     );
 }
+/// B-2026-09-10-21 — the interpreter twin of
+/// `tests/codegen.rs`'s `e2e_arm_bound_nested_tuple_payload_field_read_resolves`,
+/// and deliberately NOT pinned to the same string.
+///
+/// The field READS are what this row is about and they are identical on both
+/// backends. What differs is the payload elements' `Drop` bodies: the compiled
+/// backends run them (correct — the arm binding owns the payload, and the one-hop
+/// `n8` agrees on both), and the interpreter runs NONE of them once the payload
+/// element is itself a TUPLE. That is B-2026-09-17-20, filed, and it became
+/// observable only when this row's fix let the compiled side build at all.
+///
+/// Pinning the interpreter's own transcript here rather than the agreed one is
+/// what keeps the divergence VISIBLE in the pair: whoever fixes -19 makes this
+/// string gain the `dW…` lines its twin already has, and the two fixtures then
+/// hold the same text.
+#[test]
+fn test_arm_bound_nested_tuple_payload_field_read_resolves() {
+    assert_eq!(
+        run(r#"struct W { id: i64, tag: String }
+impl W { fn get(ref self) -> i64 { return self.id; } }
+impl Drop for W { fn drop(mut ref self) { println(f"dW{self.id}/{self.tag}") } }
+fn mk(i: i64) -> W { return W { id: i, tag: f"t{i}" }; }
+fn src(i: i64) -> Option[((W, W), i64)] { if i > 0 { return Some(((mk(i), mk(i + 100)), 5)); } return None; }
+
+fn n1() { let o: Option[((W, W), i64)] = Some(((mk(1), mk(101)), 5));
+          match o { Some(t) => { println(f"  a{t.0.0.id}/{t.0.0.tag}") } None => { println("  n") } } }
+fn n2() { let o: Result[((W, W), i64), i64] = Ok(((mk(2), mk(102)), 5));
+          match o { Ok(t) => { println(f"  b{t.0.1.id}") } Err(e) => { println(f"  e{e}") } } }
+fn n3() { let o: Option[((W, W), i64)] = Some(((mk(3), mk(103)), 5));
+          if let Some(t) = o { println(f"  c{t.0.0.id}") } else { println("  n") } }
+fn n4() { let mut k = 4; while let Some(t) = src(k) { println(f"  d{t.0.0.id}"); k = 0; } }
+fn n5() { let o: Option[(((W, W), i64), i64)] = Some((((mk(5), mk(105)), 5), 6));
+          match o { Some(t) => { println(f"  e{t.0.0.0.id}") } None => { println("  n") } } }
+fn n6() { let o: Option[((i64, i64), i64)] = Some(((6, 60), 600));
+          match o { Some(t) => { println(f"  f{t.0.0}/{t.0.1}/{t.1}") } None => { println("  n") } } }
+fn n7() { let o: Option[((W, W), i64)] = Some(((mk(7), mk(107)), 5));
+          match o { Some(t) => { println(f"  g{t.0.0.get()}/{t.1}") } None => { println("  n") } } }
+fn n8() { let o: Option[(W, i64)] = Some((mk(8), 80));
+          match o { Some(t) => { println(f"  h{t.0.id}") } None => { println("  n") } } }
+
+fn main() {
+    println("n1"); n1(); println("n2"); n2(); println("n3"); n3();
+    println("n4"); n4(); println("n5"); n5(); println("n6"); n6();
+    println("n7"); n7(); println("n8"); n8(); println("end");
+}
+"#),
+        r#"n1
+  a1/t1
+n2
+  b102
+n3
+  c3
+n4
+  d4
+n5
+  e5
+n6
+  f6/60/600
+n7
+  g7/5
+n8
+  h8
+dW8/t8
+end
+"#
+    );
+}
 /// B-2026-09-02-38 — the STRUCT-PATTERN spelling of B-2026-09-02-25: a
 /// `let S { r, k } = s;` over an owned struct param binds VIEWS of the callee's
 /// entry copy, so a later `let m = r;` must MOVE the body rather than mint a

@@ -1652,6 +1652,11 @@ impl<'ctx> super::Codegen<'ctx> {
         // above turns a shape you had to construct on purpose into one any two
         // functions sharing a param name would hit.
         self.var_types.tuple_var_elem_type_exprs.clear();
+        // B-2026-09-10-21 — the same per-function reset, for the same reason as
+        // its two siblings above: this table is keyed by binding NAME, so a
+        // stale `t` from one function must not type a field read through the
+        // next function's same-named `t`.
+        self.var_types.arm_binding_tuple_elem_tes.clear();
         self.var_types.array_var_elem_te.clear();
         self.tuple_moved_elem_bodies.clear();
         self.tuple_moved_elem_payload_bodies.clear();

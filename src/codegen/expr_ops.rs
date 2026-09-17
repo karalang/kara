@@ -4510,6 +4510,27 @@ impl<'ctx> super::Codegen<'ctx> {
                         }
                     }
                 }
+                // B-2026-09-10-21 — a NESTED tuple element inside a
+                // MATCH-ARM PAYLOAD BINDING (`match o { Some(t) =>
+                // t.0.0.id }` over an `Option[((W, W), i64)]`). The names
+                // registry B-2026-09-10-16 populates is name-valued and a tuple
+                // element has no name, so element 0 is recorded `None` BY
+                // CONSTRUCTION and the second hop resolved against nothing —
+                // the same loud refusal that row fixed, one hop further in.
+                // `--interp` answered it throughout.
+                //
+                // Read from this row's own table rather than from
+                // `tuple_var_elem_type_exprs`, and answered HERE rather than in
+                // `place_chain_tuple_tes`, for the two reasons the arm above
+                // gives and its own doc repeats: that registry drives the drop
+                // walk, and that helper feeds cap-zeroing suppressors. Both
+                // would take a resolution fix and turn it into an ownership
+                // change — B-2026-09-03-12's fixture measures the double free
+                // that follows. This arm is pure resolution: it names a type, it
+                // neutralizes nothing.
+                if let Some(n) = self.arm_bound_nested_tuple_elem_type_name(object, *index) {
+                    return Some(n);
+                }
                 None
             }
             // #32 — element struct type of an indexed collection. For an
@@ -12112,5 +12133,54 @@ impl<'ctx> super::Codegen<'ctx> {
             .build_int_sub(end_val, start_val, "slice.new.len")
             .unwrap();
         Ok(self.build_slice_header(slice_ty, elem_ptr, new_len))
+    }
+}
+
+impl<'ctx> super::Codegen<'ctx> {
+    /// B-2026-09-10-21 — the type NAME of a NESTED tuple element read through a
+    /// MATCH-ARM payload binding, e.g. `W` for `t.0.0` where `t` is bound by
+    /// `match o { Some(t) => … }` over an `Option[((W, W), i64)]`.
+    ///
+    /// Walks the `TupleIndex` hops down to the identifier root, then walks the
+    /// same indices through the element `TypeExpr`s the arm binder recorded in
+    /// `VarTypes::arm_binding_tuple_elem_tes`.
+    ///
+    /// FAIL-CLOSED at the end: the walk must land on a `Path` naming a type
+    /// codegen has a LAYOUT for. A scalar leaf (`((i64, i64), i64)`) and an
+    /// unsubstituted type parameter both resolve to `None` and keep refusing
+    /// loudly — which is also what keeps this from moving any program that
+    /// builds today, since the only reads it newly answers are ones codegen
+    /// currently rejects outright.
+    fn arm_bound_nested_tuple_elem_type_name(&self, object: &Expr, index: u64) -> Option<String> {
+        // Hops, innermost LAST: `t.0.1` collects [1, 0] with the root `t`.
+        let mut hops: Vec<u64> = vec![index];
+        let mut cur = object;
+        let root = loop {
+            match &cur.kind {
+                ExprKind::TupleIndex { object, index } => {
+                    hops.push(*index);
+                    cur = object;
+                }
+                ExprKind::Identifier(n) => break n.as_str(),
+                _ => return None,
+            }
+        };
+        let mut te = TypeExpr {
+            kind: TypeKind::Tuple(self.var_types.arm_binding_tuple_elem_tes.get(root)?.clone()),
+            span: crate::token::Span::default(),
+        };
+        for hop in hops.iter().rev() {
+            let TypeKind::Tuple(elems) = &te.kind else {
+                return None;
+            };
+            te = elems.get(*hop as usize)?.clone();
+        }
+        let TypeKind::Path(p) = &te.kind else {
+            return None;
+        };
+        p.segments
+            .last()
+            .filter(|n| self.is_known_layout_type_name(n))
+            .cloned()
     }
 }

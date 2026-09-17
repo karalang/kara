@@ -6346,6 +6346,7 @@ impl<'ctx> Codegen<'ctx> {
                 slice_elem_types: HashMap::new(),
                 binding_layouts: HashMap::new(),
                 tuple_var_elem_tes: HashMap::new(),
+                arm_binding_tuple_elem_tes: HashMap::new(),
                 array_var_elem_te: HashMap::new(),
                 optres_var_payload_tes: HashMap::new(),
                 var_elem_type_exprs: HashMap::new(),

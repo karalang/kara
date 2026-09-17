@@ -20616,6 +20616,116 @@ end
 "#
         );
     }
+    /// B-2026-09-10-21 — a NESTED tuple element inside a MATCH-ARM PAYLOAD
+    /// BINDING resolves, so `t.0.0.id` lowers instead of refusing.
+    ///
+    /// The remainder of B-2026-09-10-16 (the ONE-hop read, `t.0.id`), and it failed
+    /// the same loud way one level in: `karac build` printed "cannot resolve field
+    /// 'id' on this receiver (its type was not recorded for codegen)" while `karac
+    /// check` accepted the program and `--interp` answered it. The cause is a data
+    /// shape, not a narrowing — that row's registry is name-valued
+    /// (`HashMap<String, Vec<Option<String>>>`) and a TUPLE element has no name, so
+    /// `((W, W), i64)` records `None` for element 0 BY CONSTRUCTION and the second
+    /// hop had nothing to resolve against.
+    ///
+    /// STRICT `assert_eq!(…, Some(…))`, not the tolerant `let Some(out) = … else {
+    /// return }` its sibling uses, and that is deliberate: the pre-fix failure is a
+    /// CODEGEN refusal, so `run_program` returns `None` and the tolerant form
+    /// returns early and reports green. The one fixture shape that cannot see this
+    /// bug class is the one most of this file uses.
+    ///
+    /// `n1`–`n3` are the three binders (`match` over `Option`, over `Result`, and
+    /// `if let`); `n5` is a THREE-level nest, which the row listed as not measured;
+    /// `n7` reads a METHOD through the nested element and a scalar sibling.
+    ///
+    /// The controls are `n6` and `n8`, both of which BUILT before the fix and must
+    /// not move: a nested tuple of SCALARS (no field read to resolve, and the
+    /// fail-closed gate keeps it resolving to nothing), and the one-hop spelling the
+    /// parent row fixed.
+    ///
+    /// `n4`'s missing bodies are B-2026-09-10-14's documented `while let` case — its
+    /// scrutinee is a CALL, so the payload is a fresh temp with no named place to
+    /// keep a walk.
+    ///
+    /// THIS TRANSCRIPT IS NOT THE INTERPRETER'S, and the difference is
+    /// B-2026-09-17-20, not this row: the compiled backends run the nested payload
+    /// elements' `Drop` bodies (correct — the arm binding owns the payload) and the
+    /// interpreter runs NONE of them for a nested tuple, though it runs them for the
+    /// one-hop `n8`. The divergence was unobservable until this fix, because the
+    /// compiled side refused to build at all. Memory is balanced either way:
+    /// 48 allocs / 48 frees, 0 valgrind errors, "All heap blocks were freed" at
+    /// `KARAC_OPT_LEVEL=0`.
+    ///
+    /// Twin: `tests/interpreter.rs`'s
+    /// `test_arm_bound_nested_tuple_payload_field_read_resolves`, pinned to the
+    /// INTERPRETER's transcript for the reason above.
+    #[test]
+    fn e2e_arm_bound_nested_tuple_payload_field_read_resolves() {
+        assert_eq!(
+            run_program(
+                r#"struct W { id: i64, tag: String }
+impl W { fn get(ref self) -> i64 { return self.id; } }
+impl Drop for W { fn drop(mut ref self) { println(f"dW{self.id}/{self.tag}") } }
+fn mk(i: i64) -> W { return W { id: i, tag: f"t{i}" }; }
+fn src(i: i64) -> Option[((W, W), i64)] { if i > 0 { return Some(((mk(i), mk(i + 100)), 5)); } return None; }
+
+fn n1() { let o: Option[((W, W), i64)] = Some(((mk(1), mk(101)), 5));
+          match o { Some(t) => { println(f"  a{t.0.0.id}/{t.0.0.tag}") } None => { println("  n") } } }
+fn n2() { let o: Result[((W, W), i64), i64] = Ok(((mk(2), mk(102)), 5));
+          match o { Ok(t) => { println(f"  b{t.0.1.id}") } Err(e) => { println(f"  e{e}") } } }
+fn n3() { let o: Option[((W, W), i64)] = Some(((mk(3), mk(103)), 5));
+          if let Some(t) = o { println(f"  c{t.0.0.id}") } else { println("  n") } }
+fn n4() { let mut k = 4; while let Some(t) = src(k) { println(f"  d{t.0.0.id}"); k = 0; } }
+fn n5() { let o: Option[(((W, W), i64), i64)] = Some((((mk(5), mk(105)), 5), 6));
+          match o { Some(t) => { println(f"  e{t.0.0.0.id}") } None => { println("  n") } } }
+fn n6() { let o: Option[((i64, i64), i64)] = Some(((6, 60), 600));
+          match o { Some(t) => { println(f"  f{t.0.0}/{t.0.1}/{t.1}") } None => { println("  n") } } }
+fn n7() { let o: Option[((W, W), i64)] = Some(((mk(7), mk(107)), 5));
+          match o { Some(t) => { println(f"  g{t.0.0.get()}/{t.1}") } None => { println("  n") } } }
+fn n8() { let o: Option[(W, i64)] = Some((mk(8), 80));
+          match o { Some(t) => { println(f"  h{t.0.id}") } None => { println("  n") } } }
+
+fn main() {
+    println("n1"); n1(); println("n2"); n2(); println("n3"); n3();
+    println("n4"); n4(); println("n5"); n5(); println("n6"); n6();
+    println("n7"); n7(); println("n8"); n8(); println("end");
+}
+"#
+            ),
+            Some(
+                r#"n1
+  a1/t1
+dW1/t1
+dW101/t101
+n2
+  b102
+dW2/t2
+dW102/t102
+n3
+  c3
+dW3/t3
+dW103/t103
+n4
+  d4
+n5
+  e5
+dW5/t5
+dW105/t105
+n6
+  f6/60/600
+n7
+  g7/5
+dW7/t7
+dW107/t107
+n8
+  h8
+dW8/t8
+end
+"#
+                .to_string()
+            )
+        );
+    }
     /// B-2026-09-02-38 — the STRUCT-PATTERN spelling of B-2026-09-02-25: a
     /// `let S { r, k } = s;` over an owned struct param binds VIEWS of the callee's
     /// entry copy, so a later `let m = r;` must MOVE the body rather than mint a

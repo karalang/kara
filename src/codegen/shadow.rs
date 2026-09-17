@@ -54,6 +54,7 @@ pub(super) struct VarMetadataSnapshot<'ctx> {
     var_type_names: Option<String>,
     tuple_var_elem_type_names: Option<Vec<Option<String>>>,
     tuple_var_elem_type_exprs: Option<Vec<TypeExpr>>,
+    arm_binding_tuple_elem_tes: Option<Vec<TypeExpr>>,
     atomic_var_inner_is_bool: bool,
     closure_fn_types: Option<FunctionType<'ctx>>,
     len_alias: Option<String>,
@@ -98,6 +99,7 @@ impl<'ctx> super::Codegen<'ctx> {
             var_type_names: self.var_types.var_type_names.remove(name),
             tuple_var_elem_type_names: self.var_types.tuple_var_elem_type_names.remove(name),
             tuple_var_elem_type_exprs: self.var_types.tuple_var_elem_type_exprs.remove(name),
+            arm_binding_tuple_elem_tes: self.var_types.arm_binding_tuple_elem_tes.remove(name),
             atomic_var_inner_is_bool: self.atomic_var_inner_is_bool.remove(name),
             closure_fn_types: self.closure_state.closure_fn_types.remove(name),
             len_alias: self.bce.len_alias.remove(name),
@@ -160,6 +162,11 @@ impl<'ctx> super::Codegen<'ctx> {
         if let Some(v) = snap.tuple_var_elem_type_exprs {
             self.var_types
                 .tuple_var_elem_type_exprs
+                .insert(key.clone(), v);
+        }
+        if let Some(v) = snap.arm_binding_tuple_elem_tes {
+            self.var_types
+                .arm_binding_tuple_elem_tes
                 .insert(key.clone(), v);
         }
         if snap.atomic_var_inner_is_bool {

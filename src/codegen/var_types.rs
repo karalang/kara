@@ -121,6 +121,28 @@ pub(crate) struct VarTypes<'ctx> {
     /// the body would then run on one backend and not the other. Cleared per
     /// function alongside `enum_inst_var_types`.
     pub(crate) tuple_var_elem_tes: HashMap<String, Vec<TypeExpr>>,
+    /// Element `TypeExpr`s of a MATCH-ARM payload binding that binds a whole
+    /// TUPLE (`match o { Some(t) => … }` over an `Option[(A, B)]`), recorded
+    /// from the typechecker's own record for that binding and substituted
+    /// through the active monomorph (B-2026-09-10-21).
+    ///
+    /// DELIBERATELY ITS OWN TABLE WITH ONE READER, and that is the whole design.
+    /// The obvious place for this is `tuple_var_elem_type_exprs`, which
+    /// `tuple_var_elem_tes()` prefers wholesale — but that registry also DRIVES
+    /// THE DROP WALK, and B-2026-09-03-12's regression test carries the warning
+    /// in capitals: recording element `TypeExpr`s there gives the binding a
+    /// bodies walker while the owning container's drop still frees the same
+    /// buffers, an immediate double free. The gap this closes is a pure
+    /// RESOLUTION gap — `t.0.0.id` refusing to lower at all — so it is answered
+    /// where names are resolved (`type_name_of_expr`'s `TupleIndex` arm) and
+    /// nowhere else, leaving every ownership decision exactly where it was.
+    ///
+    /// Read FAIL-CLOSED: the walked element must end at a type codegen has a
+    /// layout for, so a scalar or an unsubstituted parameter still resolves to
+    /// nothing and still refuses loudly, rather than binding a field read to
+    /// whatever unrelated type shares the name (the trade B-2026-08-27-49
+    /// measured and rejected).
+    pub(crate) arm_binding_tuple_elem_tes: HashMap<String, Vec<TypeExpr>>,
     /// The array twin of [`Self::tuple_var_elem_tes`]: element `TypeExpr` and
     /// length per let-bound fixed `Array[T, N]` variable, recorded where the
     /// let-site resolves them (annotation, else the un-annotated path's

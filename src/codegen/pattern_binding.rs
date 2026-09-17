@@ -634,6 +634,31 @@ impl<'ctx> super::Codegen<'ctx> {
                                     self.var_types
                                         .tuple_var_elem_type_names
                                         .insert(name.clone(), names);
+                                    // B-2026-09-10-21 — and the FULL element
+                                    // `TypeExpr`s beside them, because a NESTED
+                                    // tuple element cannot be spelled as a NAME
+                                    // at all: the names above map a `Path` to
+                                    // its last segment and everything else to
+                                    // `None`, so `((W, W), i64)` records `None`
+                                    // for element 0 BY CONSTRUCTION and the
+                                    // second hop of `t.0.0.id` had nothing to
+                                    // resolve against — the loud "cannot
+                                    // resolve field ... its type was not
+                                    // recorded for codegen" one level in from
+                                    // the read B-2026-09-10-16 fixed.
+                                    //
+                                    // A SEPARATE TABLE, not
+                                    // `tuple_var_elem_type_exprs`: see its doc
+                                    // in `var_types.rs`. That registry drives
+                                    // the drop walk, and arming a bodies walker
+                                    // here while the owning container still
+                                    // frees the same buffers is the measured
+                                    // double free B-2026-09-03-12's fixture
+                                    // warns about in capitals. This one has a
+                                    // single reader, in name resolution.
+                                    self.var_types
+                                        .arm_binding_tuple_elem_tes
+                                        .insert(name.clone(), elems.clone());
                                 }
                             }
                             _ => {}
