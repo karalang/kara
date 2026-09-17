@@ -94,7 +94,7 @@ distinguish "bugs flattening" from "we stopped writing them down."
 |---|---|
 | run-vs-build | 429 |
 | miscompile | 415 |
-| leak | 369 |
+| leak | 371 |
 | double-free | 242 |
 | missing-feature | 199 |
 | codegen-gap | 178 |
@@ -110,7 +110,7 @@ distinguish "bugs flattening" from "we stopped writing them down."
 
 | surface | total |
 |---|---|
-| codegen | 1829 |
+| codegen | 1831 |
 | interp | 469 |
 | typecheck | 302 |
 | other | 96 |
@@ -151,7 +151,6 @@ _Generated from `bug-ledger.jsonl` by `scripts/bug-curve.py` (2026-05-20 → 202
 | B-2026-09-14-18 | 2026-09-14 | codegen+interp | medium | AN UNMOVED PART OF AN OWNED `Option` PAYLOAD LOSES ITS `Drop` BODY ON ALL FOUR SURFACES when the arm DESTRUCTURES the payload and returns a different part -- `Some((a, b)) => { return b; }` over `Option[(R, i64)]` prints `got:9 end` everywhere against the due `dR5 got:9 end`, and the two-Drop-element cell loses `dR6` everywhere, so the A/B parity rule sees nothing; this is the cell B-2026-09-13-5 recorded as 'correct on all four surfaces', which its `(R, i64)` sibling could not show | — |
 | B-2026-09-14-22 | 2026-09-14 | codegen | medium | A GENERIC ENUM'S BOXED PAYLOAD LOSES ITS `Drop` BODY ON EVERY COMPILED SURFACE ONCE THE CONSUMING ARM BINDS IT -- `takew(Ho.Full(mkw()))` over a three-`String` payload prints `w:4 end` on JIT/AOT against `--interp`'s `w:4 dW4 end`, and the named-local spelling splits the same way, while the identical callee that does NOT bind the payload is correct on all four and the MONOMORPHIC twin is correct in both shapes -- so the axis is `clear_boxed_enum_inner_drop` retracting the box's interior walk with nothing picking the body up | — |
 | B-2026-09-14-28 | 2026-09-14 | codegen | medium | `vertical`'s +85% SSO REGRESSION IS NOT THE DE-INLINE PROBE AND NOT `prefix_string` -- both were ruled out by measurement (c1adb9c removed the probe: +84.1% -> +85.4%; an exact mirror of `prefix_string` runs 9-15% FASTER under SSO), so the worst regression in the corpus is now UNATTRIBUTED. `shortest_distance_iii` (+36%) and `shortest_distance` (+61%) are the same shape. Reachable only at KARAC_SSO=1, which is off by default. | — |
-| B-2026-09-15-10 | 2026-09-15 | codegen | medium | A `shared enum` WHOSE PAYLOAD IS A NAMELESS AGGREGATE STRANDS ITS PAYLOAD BOX -- `Sh.S(a)` over `shared enum Sh { S(Array[String, 2]), N }` loses a 48 B envelope at `-O0`, `Array[i64, 2]` loses a bare 16 B with no heap anywhere, and a `(String, i64)` TUPLE payload loses 24 B, while `String`, a named struct, an OVERSIZE named struct and the same tuple on a NON-shared enum are all clean -- so the axis is `shared` x nameless aggregate, the box is one per CONSTRUCTION shared across handles, and relaxing the classifier's shared exclusion would double-free rather than fix it | — |
 | B-2026-09-15-12 | 2026-09-15 | codegen | low | A `-> ref` METHOD WHOSE INNER IS AN `Array[T, N]` OR A NAMED STRUCT IS DECLINED BY CODEGEN AT EVERY VALUE-POSITION CONSUMER -- `h.peek()[0]` says `Index operator applied to non-array type` and `h.peek().a` says `cannot resolve field 'a' on this receiver`, both while `--interp` prints the right answer; the TUPLE inner of the same shape now lowers (B-2026-09-15-4) and these two are the inners that fix deliberately declined to widen to | — |
 | B-2026-09-15-17 | 2026-09-15 | codegen | low | AN `Array[R, N]` WHOSE ELEMENT RUNS A USER `Drop` BODY, MOVED INTO AN ENUM VARIANT CONSTRUCTOR, RUNS THOSE BODIES BEFORE THE CONSUMING CALL ON EVERY COMPILED BACKEND and after it under `--interp` -- the identical program with a plain function call in place of the constructor is correctly ordered on both, which puts the divergence at the constructor rather than at the array | — |
 | B-2026-09-15-18 | 2026-09-15 | codegen | medium | A GENERIC MULTI-FIELD VARIANT STILL STRANDS ITS BOXED `Array[T, N]` PAYLOAD after B-2026-09-15-15 -- `G2.Y(a, 5)` over `enum G2[T] { Y(T, i64), N }` at `T = Array[String, 2]` loses 48 B + 44 B indirect at `-O0`, byte-identical before and after that fix, because an ERASED `T` cannot be classified at declaration and the monomorphic path that would catch it declines multi-field variants of its own | — |
@@ -195,6 +194,8 @@ _Generated from `bug-ledger.jsonl` by `scripts/bug-curve.py` (2026-05-20 → 202
 | B-2026-09-17-17 | 2026-09-17 | interp+codegen | medium | A TUPLE `Option` PAYLOAD HANDED TO A FREE FUNCTION FROM A READ-ONLY ARM LOSES ITS ELEMENT `Drop` BODIES ON BOTH BACKENDS -- `match o { Some(t) => eat(t) }` prints no body where the by-value callee is caller-retains, the one cell where the two ownership classifiers disagree and B-2026-09-10-14 chose the agreed answer over a divergence | — |
 | B-2026-09-17-19 | 2026-09-17 | codegen | medium | A BARE `shared enum` LOCAL RUNS ITS PAYLOAD'S `Drop` BODY UNDER `--interp` AND ON NO COMPILED BACKEND -- `let s: SMono = SMono.P(mkr(1));` over `shared enum SMono { P(R2), Q }` prints `d2:9` interpreted and nothing under jit / `-O0` / `-O2`, with memory clean on both; found as a MIS-MEASURED CONTROL in B-2026-09-10-20, which records this cell as running the body | — |
 | B-2026-09-17-20 | 2026-09-17 | interp | medium | AN ARM-BOUND PAYLOAD WHOSE ELEMENT IS ITSELF A TUPLE RUNS NO ELEMENT `Drop` BODY IN THE INTERPRETER, and both bodies on every compiled surface -- `match o { Some(t) => ... }` over `Option[((W, W), i64)]` prints `e5` interpreted against `e5 dW5 dW105` under jit / `-O0` / `-O2`. The compiled side is RIGHT (the arm binding owns the payload). Not the nested walk and not the field read: the identical nested tuple bound by a plain `let` runs both bodies interpreted, and an arm whose body never touches the payload loses them the same way. Became observable only when B-2026-09-10-21's fix let the compiled side build at all | — |
+| B-2026-09-17-21 | 2026-09-17 | codegen | medium | A `shared enum`'s BOXED NAMELESS-AGGREGATE PAYLOAD STILL STRANDS ITS INTERIOR WHEN THE PAYLOAD CAME FROM A TEMPORARY -- B-2026-09-15-10's envelope free reclaims the box and thereby CONVERTS the elements from indirectly to directly lost (`Sh.S(mka("x"))` 48/34 -> 34/0, a `while` of three 144/132 -> 132/0, two `Vec[Sh]` elements 96/80 -> 80/0), while the same programs sourcing the payload from a NAMED LOCAL reach 0/0 -- so the axis is whether a named source still owns the interior, and the parent's tag switch cannot see that because it is a fact about the construction site rather than about the box | — |
+| B-2026-09-17-22 | 2026-09-17 | codegen | medium | A `shared enum`'s UNIT VARIANT STRANDS ITS RC SHELL -- `{ let s = Sh.N; }` over `shared enum Sh { S(Array[String, 2]), N }` loses 24 B at `-O0`, which is the whole `{ i64 rc, i64 tag, i64 w0 }` heap layout rather than any payload box, byte-identical before and after B-2026-09-15-10's payload-box fix, and reproducing inside a mixed program (an A/B/N sequence reads 24 B, the same program without the `N` block reads 0) | — |
 
 ### Relocated
 
@@ -2623,6 +2624,7 @@ _Generated from `bug-ledger.jsonl` by `scripts/bug-curve.py` (2026-05-20 → 202
 | B-2026-09-15-4 | codegen | high | A METHOD RETURNING `ref (T, U)` IS MISHANDLED AT EVERY VALUE-POSITION CONSUMER -- `m.get(h.peek())` over a heap tuple SIGSEGVs, `h.peek().0` prints `… | 6027ab1 |
 | B-2026-09-15-8 | codegen | medium | AN `Array[S, N]` OF A `shared struct` LEAKS EVERY ELEMENT'S REFCOUNT BLOCK, WITH NO STORE AND NO MOVE ANYWHERE IN THE PROGRAM -- a bare `let a: Array… | 844a233cc |
 | B-2026-09-15-9 | codegen | medium | AN ENUM PAYLOAD TUPLE CONTAINING A FIXED `Array` STRANDS ITS PAYLOAD BOX ON EVERY COMPILED BACKEND, INDEPENDENTLY OF THE INTERIOR -- `T2.P(mka("x"),… | c6adcae |
+| B-2026-09-15-10 | codegen | medium | A `shared enum` WHOSE PAYLOAD IS A NAMELESS AGGREGATE STRANDS ITS PAYLOAD BOX -- `Sh.S(a)` over `shared enum Sh { S(Array[String, 2]), N }` loses a 4… | 932022c |
 | B-2026-09-15-13 | codegen | medium | SSO'S INLINE CONSTRUCTION GOES THROUGH AN OPAQUE RUNTIME CALL AND COSTS 10x WHAT THE ENCODING COSTS -- `String.substring` at KARAC_SSO=1 calls `karac… | 9d3ceb9 |
 | B-2026-09-15-14 | interp+codegen | medium | AN ENUM STORED IN A `Map` OR `Set` NEVER RUNS ITS USER `Drop` BODY AT ALL -- `s.insert(mkd(0))` over `Set[Tg]` with `impl Drop for Tg`, no lookup any… | 2ad3103 |
 | B-2026-09-15-15 | codegen | medium | A MULTI-FIELD ENUM VARIANT STRANDS ITS BOXED `Array[T, N]` PAYLOAD ON EVERY COMPILED BACKEND -- `Both(a, b)` loses 96 B + 92 B indirect at `-O0` and… | c6adcae |
