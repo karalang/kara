@@ -94,11 +94,11 @@ distinguish "bugs flattening" from "we stopped writing them down."
 |---|---|
 | run-vs-build | 426 |
 | miscompile | 415 |
-| leak | 370 |
+| leak | 369 |
 | double-free | 242 |
 | missing-feature | 199 |
 | codegen-gap | 178 |
-| other | 127 |
+| other | 128 |
 | diagnostics | 126 |
 | perf | 115 |
 | false-positive | 108 |
