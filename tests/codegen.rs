@@ -21113,6 +21113,15 @@ end
     /// `test_generic_by_value_optres_param_payload_body_runs`, pinned to the
     /// INTERPRETER's transcript, which differs only in `g8`'s doubled line.
     #[test]
+    /// `dW108` — the unused `d` argument's body on the `Some` path — is absent
+    /// from this transcript and from its interpreter twin's, and always was.
+    /// `g8[T](o: Option[(T, i64)], d: T) -> T` returns `d` only on the `None`
+    /// arm; this call takes `Some`, so `d` dies inside `g8` and exactly one
+    /// body is owed. No surface runs it. That is B-2026-09-17-32 —
+    /// B-2026-08-28-22's per-path conditional-escape flag recognises an
+    /// `if`/`else` tail and not a `match` arm tail — and it is agreed on all
+    /// four surfaces, so the A/B rule cannot see it. Whoever fixes it adds a
+    /// `dW108` line here and to the twin.
     fn e2e_generic_by_value_optres_param_payload_body_runs() {
         assert_eq!(
             run_program(
@@ -37299,11 +37308,14 @@ fn main() {
     /// exactly when its LEAF carries no `Drop` body.
     ///
     /// CELL 3 IS THE ONE THAT KEEPS THE RULE HONEST. `return t.0` is a real
-    /// part move and must STILL decline; it is unchanged by this row and still
-    /// loses its sibling's body, which is defect 2 (B-2026-09-14-18,
+    /// part move and must STILL decline; the AOT side is unchanged by this row
+    /// and still loses its sibling's body, which is defect 2 (B-2026-09-14-18,
     /// B-2026-09-13-5) and deliberately not repaired here. Pinned at its
     /// measured value so a later part-precision fix has to move it
-    /// deliberately rather than silently.
+    /// deliberately rather than silently — which is exactly what happened:
+    /// B-2026-09-13-5's fix made the INTERPRETER part-precise and this cell's
+    /// interpreter expectation moved to the due sequence, deliberately, with
+    /// the AOT pin untouched. The compiled half is now B-2026-09-17-30.
     ///
     /// CELLS 6-7 ARE THE TUPLE BOUNDARY, measured rather than assumed. The
     /// first cut applied the leaf policy to every payload shape and DOUBLED a
@@ -37321,11 +37333,12 @@ fn main() {
                            impl Drop for In { fn drop(mut ref self) { println(f\"dIn{self.id}\") } }\n\
                            struct Plain { inner: In }\n";
         // Each cell carries its own interpreter expectation, because ONE of
-        // them legitimately differs: the real-part-move control is
-        // B-2026-09-13-5's interpreter DOUBLE (`dR5 dR6 got:5 dR5`) against
+        // them legitimately differs: the real-part-move control is the
+        // interpreter's part-precise (and due) `dR6 got:5 dR5` against
         // codegen's under-run, a divergence this row does not touch. Pinning
         // both sides separately keeps that cell honest instead of dropping the
-        // interpreter assertion for the whole table.
+        // interpreter assertion for the whole table — and it is what let
+        // B-2026-09-13-5 move one side without touching the other.
         for (label, fns, body, want, interp_want) in [
             (
                 "a Copy leaf: t.1",
@@ -37346,11 +37359,25 @@ fn main() {
                 "fn eat(o: Option[(R, R)]) -> R { match o { Some(t) => { return t.0; } None => { return R { id: 0 }; } } }\n",
                 "let got: R = eat(Option.Some((R { id: 5 }, R { id: 6 })));\nprintln(f\"got:{got.id}\");\nprintln(\"end\");",
                 "got:5\ndR5\nend\n",
-                // B-2026-09-13-5: the interpreter runs the moved-out part's
-                // body at the payload's death AND the caller runs it at the
-                // binding, so it prints one more than codegen. Neither is the
-                // due `dR6 got:5 dR5 end`; both are pinned as measured.
-                "dR5\ndR6\ngot:5\ndR5\nend\n",
+                // B-2026-09-13-5, FIXED — the interpreter reaches the due
+                // `dR6 got:5 dR5 end` here now. It used to print
+                // `dR5 dR6 got:5 dR5 end`: the moved-out part's body ran at
+                // the payload's death AND again at the caller's binding, one
+                // more than codegen. Its fresh-temp argument walk is now
+                // part-precise (it masks exactly the projected-out part and
+                // keeps the siblings), so element 1's body still runs at the
+                // payload's death and element 0's only at the receiver.
+                //
+                // THE CELL IS STILL A DIVERGENCE, which is why the two
+                // expectations stay separate: codegen runs NO part's body
+                // when one escapes, so it loses `dR6`. That is defect 2's
+                // compiled half, now the only half left — tracked by
+                // B-2026-09-17-30 for this projection spelling and by
+                // B-2026-09-14-18 for the destructure one. This cell was
+                // divergent BEFORE the interpreter fix too (the two strings
+                // above differed then as well), so making one side correct
+                // traded nothing away.
+                "dR6\ngot:5\ndR5\nend\n",
             ),
             (
                 "control: no projection at all was always correct",
@@ -37384,6 +37411,210 @@ fn main() {
             if let Some(aot) = run_program(&src) {
                 assert_eq!(aot, want, "[{label}] AOT");
             }
+        }
+    }
+
+    /// B-2026-09-13-5 — the cross-backend twin of
+    /// `tests/interpreter.rs`'s
+    /// `test_optres_arg_payload_projection_runs_each_part_body_once`, and the
+    /// place the ROW's own A/B claim is asserted: byte-identical source, both
+    /// surfaces measured, the expectations derived from the ownership rule
+    /// rather than from either backend.
+    ///
+    /// The row: the interpreter ran a payload part's `Drop` body TWICE when an
+    /// arm bound a by-value `Option`/`Result` payload WHOLE and returned only
+    /// a PROJECTION of it (`Some(t) => return t.0`), while the three compiled
+    /// surfaces were correct. Its fresh-temp argument walk is now
+    /// part-precise: it masks exactly the projected-out parts and keeps the
+    /// siblings.
+    ///
+    /// ELEVEN OF THE FOURTEEN CELLS NOW AGREE ON ALL FOUR SURFACES and are
+    /// asserted with one expectation. The three that do not are the compiled
+    /// side's own defect 2 — when any part of a TUPLE payload escapes, codegen
+    /// runs NO part's body — and they carry a second expectation so the
+    /// divergence is pinned rather than papered over:
+    ///
+    /// ```text
+    ///   tuple-two-droppers-first-returned    due dR6 got:5 dR5 end   AOT got:5 dR5 end
+    ///   tuple-two-droppers-second-returned   due dR5 got:6 dR6 end   AOT got:6 dR6 end
+    ///   nested-projection                    due dR5 got:6 dR6 end   AOT got:6 dR6 end
+    /// ```
+    ///
+    /// ALL THREE WERE DIVERGENT BEFORE THIS ROW'S FIX TOO — the interpreter
+    /// printed `dR5 dR6 got:5 dR5 end` for the first, one MORE than codegen —
+    /// so making the interpreter correct traded nothing away. It did change
+    /// what the A/B gate can see: the counts now differ in a direction that
+    /// names the remaining defect, which is why `B-2026-09-17-30` exists.
+    ///
+    /// THE STRUCT PAYLOAD IS THE SHARP BOUNDARY, measured rather than assumed:
+    /// `struct-field-returned-dropping-sibling` is the same shape with a NAMED
+    /// payload instead of a tuple and it is correct on all four surfaces, so
+    /// the compiled loss is specific to a tuple payload — for a named one the
+    /// callee's own param machinery owns the surviving field's body. That is
+    /// the same boundary B-2026-09-14-5's fix had to draw for the copy-read
+    /// policy, arrived at from the other side.
+    ///
+    /// BODY-ONLY, so no sanitizer or ASAN ratchet leg can see any of it: a
+    /// `Drop` body frees nothing, and the row records `0 errors` / `0 bytes`
+    /// at `-O0` on every cell.
+    #[test]
+    fn e2e_optres_arg_payload_projection_runs_each_part_body_once() {
+        const R: &str = "struct R { id: i64 }\n\
+             impl Drop for R { fn drop(mut ref self) { println(f\"dR{self.id}\") } }\n";
+        // (label, source tail, AOT expectation, interpreter expectation)
+        for (label, prog, want, interp_want) in [
+            (
+                "tuple-elem-returned",
+                format!(
+                    "{R}fn eat(o: Option[(R, i64)]) -> R {{ match o {{ Some(t) => {{ return t.0; }} None => {{ return R {{ id: 0 }}; }} }} }}\n\
+                     fn main() {{ let got = eat(Some((R {{ id: 5 }}, 9i64))); println(f\"got:{{got.id}}\"); println(\"end\") }}\n"
+                ),
+                "got:5\ndR5\nend\n",
+                "got:5\ndR5\nend\n",
+            ),
+            (
+                // DIVERGENT: codegen loses element 1's body. B-2026-09-17-30.
+                "tuple-two-droppers-first-returned",
+                format!(
+                    "{R}fn eat(o: Option[(R, R)]) -> R {{ match o {{ Some(t) => {{ return t.0; }} None => {{ return R {{ id: 0 }}; }} }} }}\n\
+                     fn main() {{ let got = eat(Some((R {{ id: 5 }}, R {{ id: 6 }}))); println(f\"got:{{got.id}}\"); println(\"end\") }}\n"
+                ),
+                "got:5\ndR5\nend\n",
+                "dR6\ngot:5\ndR5\nend\n",
+            ),
+            (
+                // DIVERGENT: codegen loses element 0's body. B-2026-09-17-30.
+                "tuple-two-droppers-second-returned",
+                format!(
+                    "{R}fn eat(o: Option[(R, R)]) -> R {{ match o {{ Some(t) => {{ return t.1; }} None => {{ return R {{ id: 0 }}; }} }} }}\n\
+                     fn main() {{ let got = eat(Some((R {{ id: 5 }}, R {{ id: 6 }}))); println(f\"got:{{got.id}}\"); println(\"end\") }}\n"
+                ),
+                "got:6\ndR6\nend\n",
+                "dR5\ngot:6\ndR6\nend\n",
+            ),
+            (
+                "struct-field-returned",
+                format!(
+                    "{R}struct Hd {{ r: R, n: i64 }}\n\
+                     fn eat(o: Option[Hd]) -> R {{ match o {{ Some(t) => {{ return t.r; }} None => {{ return R {{ id: 0 }}; }} }} }}\n\
+                     fn main() {{ let got = eat(Some(Hd {{ r: R {{ id: 5 }}, n: 9i64 }})); println(f\"got:{{got.id}}\"); println(\"end\") }}\n"
+                ),
+                "got:5\ndR5\nend\n",
+                "got:5\ndR5\nend\n",
+            ),
+            (
+                // THE BOUNDARY CELL: a NAMED payload with a surviving
+                // `Drop`-bearing sibling is correct on all four surfaces, where
+                // the tuple spelling above is not.
+                "struct-field-returned-dropping-sibling",
+                format!(
+                    "{R}struct Hd2 {{ r: R, q: R }}\n\
+                     fn eat(o: Option[Hd2]) -> R {{ match o {{ Some(t) => {{ return t.r; }} None => {{ return R {{ id: 0 }}; }} }} }}\n\
+                     fn main() {{ let got = eat(Some(Hd2 {{ r: R {{ id: 5 }}, q: R {{ id: 6 }} }})); println(f\"got:{{got.id}}\"); println(\"end\") }}\n"
+                ),
+                "dR6\ngot:5\ndR5\nend\n",
+                "dR6\ngot:5\ndR5\nend\n",
+            ),
+            (
+                "result-payload-elem-returned",
+                format!(
+                    "{R}fn eat(o: Result[(R, i64), i64]) -> R {{ match o {{ Ok(t) => {{ return t.0; }} Err(e) => {{ return R {{ id: 0 }}; }} }} }}\n\
+                     fn main() {{ let got = eat(Ok((R {{ id: 5 }}, 9i64))); println(f\"got:{{got.id}}\"); println(\"end\") }}\n"
+                ),
+                "got:5\ndR5\nend\n",
+                "got:5\ndR5\nend\n",
+            ),
+            (
+                "if-let-spelling",
+                format!(
+                    "{R}fn eat(o: Option[(R, i64)]) -> R {{ if let Some(t) = o {{ return t.0; }} return R {{ id: 0 }}; }}\n\
+                     fn main() {{ let got = eat(Some((R {{ id: 5 }}, 9i64))); println(f\"got:{{got.id}}\"); println(\"end\") }}\n"
+                ),
+                "got:5\ndR5\nend\n",
+                "got:5\ndR5\nend\n",
+            ),
+            (
+                // The arm TAIL, no `return`: a yield site only because the
+                // `match` sits in the function's tail position.
+                "arm-tail-no-return",
+                format!(
+                    "{R}fn eat(o: Option[(R, i64)]) -> R {{ match o {{ Some(t) => {{ t.0 }} None => {{ R {{ id: 0 }} }} }} }}\n\
+                     fn main() {{ let got = eat(Some((R {{ id: 5 }}, 9i64))); println(f\"got:{{got.id}}\"); println(\"end\") }}\n"
+                ),
+                "got:5\ndR5\nend\n",
+                "got:5\ndR5\nend\n",
+            ),
+            (
+                // DIVERGENT: a nested projection, same compiled loss.
+                // B-2026-09-17-30.
+                "nested-projection",
+                format!(
+                    "{R}fn eat(o: Option[((R, R), i64)]) -> R {{ match o {{ Some(t) => {{ return t.0.1; }} None => {{ return R {{ id: 0 }}; }} }} }}\n\
+                     fn main() {{ let got = eat(Some(((R {{ id: 5 }}, R {{ id: 6 }}), 9i64))); println(f\"got:{{got.id}}\"); println(\"end\") }}\n"
+                ),
+                "got:6\ndR6\nend\n",
+                "dR5\ngot:6\ndR6\nend\n",
+            ),
+            (
+                "guard-whole-binding-returned",
+                format!(
+                    "{R}fn eat(o: Option[(R, R)]) -> (R, R) {{ match o {{ Some(t) => {{ return t; }} None => {{ return (R {{ id: 0 }}, R {{ id: 1 }}); }} }} }}\n\
+                     fn main() {{ let got = eat(Some((R {{ id: 5 }}, R {{ id: 6 }}))); println(f\"got:{{got.0.id}}\"); println(\"end\") }}\n"
+                ),
+                "got:5\ndR5\ndR6\nend\n",
+                "got:5\ndR5\ndR6\nend\n",
+            ),
+            (
+                "guard-scalar-leaf-through-dropper",
+                format!(
+                    "{R}fn eat(o: Option[(R, i64)]) -> i64 {{ match o {{ Some(t) => {{ return t.0.id; }} None => {{ return 0i64; }} }} }}\n\
+                     fn main() {{ let got = eat(Some((R {{ id: 5 }}, 9i64))); println(f\"got:{{got}}\"); println(\"end\") }}\n"
+                ),
+                "dR5\ngot:5\nend\n",
+                "dR5\ngot:5\nend\n",
+            ),
+            (
+                "guard-scalar-sibling-read",
+                format!(
+                    "{R}fn eat(o: Option[(R, i64)]) -> i64 {{ match o {{ Some(t) => {{ return t.1; }} None => {{ return 0i64; }} }} }}\n\
+                     fn main() {{ let got = eat(Some((R {{ id: 5 }}, 9i64))); println(f\"got:{{got}}\"); println(\"end\") }}\n"
+                ),
+                "dR5\ngot:9\nend\n",
+                "dR5\ngot:9\nend\n",
+            ),
+            (
+                "guard-nested-destructure",
+                format!(
+                    "{R}fn eat(o: Option[(R, i64)]) -> R {{ match o {{ Some((a, b)) => {{ return a; }} None => {{ return R {{ id: 0 }}; }} }} }}\n\
+                     fn main() {{ let got = eat(Some((R {{ id: 5 }}, 9i64))); println(f\"got:{{got.id}}\"); println(\"end\") }}\n"
+                ),
+                "got:5\ndR5\nend\n",
+                "got:5\ndR5\nend\n",
+            ),
+            (
+                // The one that made the scan record only at the arm's own
+                // statement level: a union over branches would mask `t.r` on
+                // this `k = false` run and lose `dR5` on BOTH backends.
+                "guard-conditional-escape-not-taken",
+                format!(
+                    "{R}struct Hd3 {{ r: R, n: i64 }}\n\
+                     fn eat(o: Option[Hd3], k: bool) -> R {{ match o {{ Some(t) => {{ if k {{ return t.r; }} return R {{ id: 1 }}; }} None => {{ return R {{ id: 0 }}; }} }} }}\n\
+                     fn main() {{ let got = eat(Some(Hd3 {{ r: R {{ id: 5 }}, n: 9i64 }}), false); println(f\"got:{{got.id}}\"); println(\"end\") }}\n"
+                ),
+                "dR5\ngot:1\ndR1\nend\n",
+                "dR5\ngot:1\ndR1\nend\n",
+            ),
+        ] {
+            let (interp_out, interp_errs, _, _) = karac::run_program_full_checked(&prog);
+            assert!(
+                interp_errs.is_empty(),
+                "[{label}] interp errored: {interp_errs:?}"
+            );
+            assert_eq!(interp_out.join(""), interp_want, "[{label}] interpreter");
+            let Some(aot) = run_program(&prog) else {
+                continue;
+            };
+            assert_eq!(aot, want, "[{label}] AOT");
         }
     }
 
@@ -160257,8 +160488,11 @@ fn main() {
     /// THE TWO `guard-*-moves-*` CELLS DID NOT MOVE, and that is the rule
     /// rather than an exemption: there the body is handed to the RECEIVER, so
     /// it is owed at the caller's binding and legitimately runs after the read.
-    /// (The interpreter DOUBLES on both — `dIn5 g:5 dIn5` — which is the
-    /// separate B-2026-09-13-5 defect and why these assert the compiled order.)
+    /// (The interpreter used to DOUBLE on both — `dIn5 g:5 dIn5` — which was
+    /// the separate B-2026-09-13-5 defect and why these assert the compiled
+    /// order. That row is fixed: the interpreter now prints `g:5 dIn5` on both,
+    /// the same sequence asserted here, so the two backends agree on these two
+    /// cells and no longer only happen to.)
     #[test]
     fn e2e_optres_arg_payload_body_survives_a_projecting_arm() {
         const PRE: &str = "struct Tr { tag: i64 }\n\

@@ -3394,6 +3394,57 @@ impl<'a> super::Interpreter<'a> {
             .collect()
     }
 
+    /// B-2026-09-13-5 — remove from `value` the payload PARTS the named callee
+    /// hands out of its frame, so the caller's fresh-temp payload walk runs
+    /// every part's body EXCEPT those a new owner already holds.
+    ///
+    /// `value` is the `Option` / `Result` argument temp itself; `Option` and
+    /// `Result` carry exactly one payload slot, so the paths the predicate
+    /// reports — rooted at the arm binding — are paths into that slot.
+    ///
+    /// The LEAF gate is the one every sibling mask in this loop applies, and it
+    /// is what keeps `Some(t) => return t.0.id` at its (correct) current
+    /// answer: a scalar leaf owns nothing, so declining its mask loses no
+    /// owner, while removing it would hand the enclosing struct's own body a
+    /// hole to read.
+    fn mask_optres_payload_escaping_parts(
+        &self,
+        callee_name: &str,
+        method_owner: Option<&str>,
+        arg_index: usize,
+        variant: &str,
+        value: &mut Value,
+    ) {
+        if self.callee_param_is_borrow(callee_name, method_owner, arg_index) {
+            return;
+        }
+        let Some(f) = self.callee_fn_for_ownership_guard_of(callee_name, method_owner) else {
+            return;
+        };
+        let paths = crate::ast::fn_escaping_param_payload_part_paths(f, arg_index, Some(variant));
+        if paths.is_empty() {
+            return;
+        }
+        let Value::EnumVariant { data, .. } = value else {
+            return;
+        };
+        let payload = match data {
+            EnumData::Tuple(vs) if vs.len() == 1 => &mut vs[0],
+            // A `Unit` variant has no payload, and a multi-slot or
+            // struct-shaped one is not a spelling `Option` / `Result` has —
+            // leave anything else exactly as it behaves today.
+            _ => return,
+        };
+        for path in paths {
+            let names = Self::param_path_names(&path);
+            let leaf_owns =
+                Self::value_at_name_path(payload, &names).is_some_and(Self::value_leaf_can_own);
+            if leaf_owns {
+                Self::remove_field_at_path(payload, &names);
+            }
+        }
+    }
+
     /// B-2026-09-06-10 / -11 — a part path as the NAME path the value-side
     /// masks speak: a field by name, a tuple hop as `#<i>`.
     pub(super) fn param_path_names(path: &[crate::ast::ParamPart]) -> Vec<String> {
@@ -3937,9 +3988,34 @@ impl<'a> super::Interpreter<'a> {
             // name to resolve a declared type through, and the live value
             // already says which variant is present.
             if Self::optres_freshtemp_scrutinee(&arg.value) {
-                if let Some(v @ Value::EnumVariant { enum_name, .. }) = arg_vals.get(i) {
+                if let Some(
+                    v @ Value::EnumVariant {
+                        enum_name, variant, ..
+                    },
+                ) = arg_vals.get(i)
+                {
                     if enum_name == "Option" || enum_name == "Result" {
-                        let v = v.clone();
+                        let mut v = v.clone();
+                        // B-2026-09-13-5 — PART-PRECISE, not all-or-nothing.
+                        // The `callee_owns_arg_beyond_call` guard above stands
+                        // the WHOLE argument down when the callee hands the
+                        // payload back bare (`Some(t) => return t`), and an arm
+                        // that returns only a PROJECTION of it
+                        // (`Some(t) => return t.0`) escapes it, so this walk
+                        // ran the handed-back part's body a second time under
+                        // the result's owner. Mask exactly the escaping parts
+                        // out of the value this walk sees and keep the rest:
+                        // suppressing the walk instead would lose a SIBLING
+                        // part's only body, which is the trade every other
+                        // part channel in this loop exists to avoid.
+                        let variant = variant.clone();
+                        self.mask_optres_payload_escaping_parts(
+                            callee_name,
+                            method_owner,
+                            i,
+                            &variant,
+                            &mut v,
+                        );
                         self.run_optres_payload_user_drops_value(&v);
                         continue;
                     }

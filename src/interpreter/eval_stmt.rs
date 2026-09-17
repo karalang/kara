@@ -3260,7 +3260,7 @@ impl<'a> super::Interpreter<'a> {
     /// under a rebind, say. The mask is an optimisation of ownership, and
     /// declining to apply one is the pre-fix behaviour rather than a new
     /// failure mode.
-    fn remove_field_at_path(v: &mut Value, path: &[String]) {
+    pub(super) fn remove_field_at_path(v: &mut Value, path: &[String]) {
         let Some((head, rest)) = path.split_first() else {
             return;
         };
