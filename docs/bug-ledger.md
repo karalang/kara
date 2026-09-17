@@ -94,7 +94,7 @@ distinguish "bugs flattening" from "we stopped writing them down."
 |---|---|
 | run-vs-build | 423 |
 | miscompile | 415 |
-| leak | 367 |
+| leak | 368 |
 | double-free | 242 |
 | missing-feature | 199 |
 | codegen-gap | 178 |
@@ -110,7 +110,7 @@ distinguish "bugs flattening" from "we stopped writing them down."
 
 | surface | total |
 |---|---|
-| codegen | 1820 |
+| codegen | 1821 |
 | interp | 467 |
 | typecheck | 302 |
 | other | 95 |
@@ -189,12 +189,10 @@ _Generated from `bug-ledger.jsonl` by `scripts/bug-curve.py` (2026-05-20 → 202
 | B-2026-09-16-35 | 2026-09-16 | other | medium | the ASAN suite has never run at `KARAC_SSO=1`, so the entire inline-String surface — including a codegen-owned heap allocation — has no sanitizer coverage at all | — |
 | B-2026-09-17-1 | 2026-09-17 | codegen+interp | medium | A DISCARDED `match` WHOSE ARM VALUE IS A TUPLE-RETURNING CALL RUNS ITS ELEMENT `Drop` BODY ON THE INTERPRETER AND NOWHERE ELSE -- `match n { 1 => f(mk(44)), _ => f(mk(45)) };` over `fn f(r: R) -> (R, i64)` prints `dR44` under `--interp` and nothing on `karac run` JIT, `-O0` build or default auto-par build. A REAL run-vs-build divergence rather than an agreed gap, and PRE-EXISTING: measured identically on `8377932~1`, the tree before B-2026-09-09-21's fix, with that row's own shape reading `ok` on all four there as the control proving the tree was pre-fix | — |
 | B-2026-09-17-2 | 2026-09-17 | codegen+interp | low | THE METHOD SPELLING OF B-2026-09-09-21 RUNS NO DISCARDED-TUPLE ELEMENT `Drop` BODY ON ANY BACKEND -- `h.wrap(mk(43));` over `fn wrap(ref self, r: R) -> (R, i64)` prints `ok` and nothing else on all four surfaces, where the free-function spelling `f(mk(43));` now prints `dR43`. An AGREED gap, so no A/B gate sees it; it is the method peer of the shape B-2026-09-09-21 fixed, and it was deliberately left out of that fix rather than missed | — |
-| B-2026-09-17-3 | 2026-09-17 | codegen | high | A READ-ONLY MATCH ARM OVER AN `Option[Array[S, N]]` PAYLOAD DOUBLE FREES ON EVERY COMPILED SURFACE -- `match x { Option.Some(t) => { println(f"s:{t[0].tag}") } .. }` where `S` has a user `impl Drop` aborts with `free(): double free detected in tcache 2` under `karac run` (JIT), `-O0 build` and default auto-par `build`, valgrind reporting `Invalid free()`, while `--interp` prints the correct transcript. THREE CONDITIONS ARE ALL REQUIRED and each was measured off independently: drop the `impl Drop` and all four surfaces are clean; drop the `Option` wrapper and pass the array directly and all four are clean; keep both and the compiled ones abort. NO GATE IN THE TREE CATCHES IT -- a full cycle an hour before filing read 27570 passed / 0 failed with both ASAN ratchet legs matching their quarantine lists exactly | — |
 | B-2026-09-17-5 | 2026-09-17 | codegen | medium | AN ARM-BOUND `Array` PAYLOAD REBOUND INTO A LOCAL RUNS ITS ELEMENTS' `Drop` BODIES TWICE ON THE COMPILED BACKENDS -- `match x { Some(t) => { let u: Array[S, 2] = t; .. } }` over a by-value `Option[Array[S, 2]]` param prints `dS0 dS1 dS0 dS1` under jit / `karac build` / `KARAC_AUTO_PAR=0 build` against `--interp`'s single pair; memory is clean, so it is the BODIES channel alone | — |
 | B-2026-09-17-6 | 2026-09-17 | codegen+interp | low | AN ENVELOPE'S `Array` PAYLOAD RUNS ITS ELEMENTS' `Drop` BODIES AT THE CONSTRUCTOR STATEMENT, NOT AT THE HOLDER'S DEATH -- `let a: Array[S, 2] = [..]; let x: Option[Array[S, 2]] = Some(a); println("held")` prints both bodies BEFORE `held` on all four surfaces, though `x` owns the array until the end of the block | — |
 | B-2026-09-17-7 | 2026-09-17 | codegen | medium | A MIXED-PATH GENERIC CALLEE THAT MAY HAND ITS BOXED ENUM PAYLOAD BACK DOUBLE FREES -- `fn mid[T](g: G1[T], c: bool) -> G1[T] { if c { return g; } return G1.N; }` at `T = String` dies with no stdout at all, 4 valgrind errors and 12 allocs / 14 frees against a correct `--interp`; B-2026-09-16-16's fix declines it BY DESIGN (its gate is the ALL-PATHS `fn_always_returns_param`) and no static answer at the call site is right for both legs | — |
 | B-2026-09-17-8 | 2026-09-17 | codegen | medium | THE `Option`/`Result` HEAD OF THE PASSTHROUGH-GENERIC DOUBLE FREE IS A DIFFERENT CHANNEL, AND STILL BROKEN -- `fn idOpt[T](g: Option[T]) -> Option[T] { return g }` at `T = String` aborts with `free(): double free detected in tcache 2` and 11 allocs / 12 frees; the ONE extra free (against B-2026-09-16-16's two) is the tell that the payload is INLINE, so it rides `inline_option_payload_vars` rather than the boxed channel that row's gate can see | — |
-| B-2026-09-17-10 | 2026-09-17 | codegen | medium | e312de9cd's SEEDED-CTOR SOURCE DISARM STRANDS THE INTERIOR WHEN THE CONSUMER IS A GENERIC CALLEE -- `fn takesG[T](x: Option[Array[T, 2]])` over a named `Array[S, 2]` local whose element runs a user `Drop` leaks 18 B in 2 blocks at `-O0`, where the same program was CLEAN before that commit; the concrete-callee twin and the plain-element twin are both clean either side, so it is the generic monomorph alone | — |
 
 ### Relocated
 
@@ -2651,8 +2649,11 @@ _Generated from `bug-ledger.jsonl` by `scripts/bug-curve.py` (2026-05-20 → 202
 | B-2026-09-16-27 | codegen | medium | A NESTED STRUCT MOVED INTO A VARIANT CONSTRUCTOR ABORTS WITH A DOUBLE FREE -- `Wn.Full(o)` over `struct Out { i: In }` / `struct In { s: String }` di… | 602a4bd |
 | B-2026-09-16-32 | codegen | medium | `String.substring`'s heap result is NOT NUL-terminated while every other String producer's is, which is the exact shape a past printf overread was fi… | d284a009d |
 | B-2026-09-16-36 | codegen | medium | the SSO slice fast path still called `karac_string_slice_into` on two cold edges, and the escaping out-pointer cost 2.50x on every iteration that nev… | 356883caa |
+| B-2026-09-17-3 | codegen | high | A READ-ONLY MATCH ARM OVER AN `Option[Array[S, N]]` PAYLOAD DOUBLE FREES ON EVERY COMPILED SURFACE -- `match x { Option.Some(t) => { println(f"s:{t[0… | e312de9 |
 | B-2026-09-17-4 | codegen | high | A NAMED `Array` LOCAL MOVED INTO AN `Option` CTOR DOUBLE FREES ITS ELEMENTS' HEAP FIELDS ON EVERY COMPILED BACKEND -- `let a: Array[S, 2] = [..]; let… | e312de9cd |
 | B-2026-09-16-37 | interp+codegen | low | THE DISCARDED-TUPLE BODY ARM FIRES FOR A GENERIC CALLEE ITS CODEGEN TWIN STRUCTURALLY CANNOT SEE -- `fgen(mk(31));` over `fn fgen[T](t: T) -> (T, i64… | 1d75252 |
+| B-2026-09-17-10 | codegen | medium | e312de9cd's SEEDED-CTOR SOURCE DISARM STRANDS THE INTERIOR WHEN THE CONSUMER IS A GENERIC CALLEE -- `fn takesG[T](x: Option[Array[T, 2]])` over a nam… | 52abf6a |
+| B-2026-09-17-9 | codegen | medium | B-2026-09-17-4's FIX LEAKS THE SAME BUFFERS IT STOPPED DOUBLE-FREEING, WHEN THE CONSUMER IS A GENERIC CALLEE -- `e312de9` narrowed `disarm_array_sour… | 52abf6a |
 
 </details>
 
