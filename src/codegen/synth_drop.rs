@@ -609,6 +609,74 @@ impl<'ctx> super::Codegen<'ctx> {
                                 self.builder.position_at_end(skip_bb);
                             }
                         }
+                        EnumDropKind::BoxedTuple => {
+                            // B-2026-09-12-10 — the TUPLE peer of the
+                            // `BoxedArray` arm above, and structurally the same
+                            // arm: deref the box word, walk the interior, free
+                            // the envelope, re-zero.
+                            //
+                            // It walks the interior for `BoxedArray`'s stated
+                            // reason — classifying the field at all stands the
+                            // five explicit `BoxedEnumDrop` registrations down,
+                            // and each of those freed the box AND its interior,
+                            // so a box-only arm would move the envelope's owner
+                            // and drop the interior's.
+                            //
+                            // `enum_boxed_payload_interior_drop` already answers
+                            // for a TUPLE payload — its own doc opens with the
+                            // two shapes that are not a bare `Path`, and a tuple
+                            // is the first of them — so this needs no new
+                            // resolver. Resolved BEFORE any basic block is
+                            // opened, the same discipline the two arms around it
+                            // document: the sub-emitter may synthesize a
+                            // function and move the builder's insert block.
+                            let inner_drop = variant_field_tes
+                                .iter()
+                                .find(|(n, _)| n == variant_name)
+                                .and_then(|(_, tes)| tes.get(fi))
+                                .cloned()
+                                .and_then(|te| self.enum_boxed_payload_interior_drop(&te, true));
+                            let w_idx = (*start_word + 1) as u32;
+                            if let Ok(word_ptr) = self.builder.build_struct_gep(
+                                layout.llvm_type,
+                                p_arg,
+                                w_idx,
+                                "drop.boxtup.wp",
+                            ) {
+                                let w = self
+                                    .builder
+                                    .build_load(i64_t, word_ptr, "drop.boxtup.w")
+                                    .unwrap()
+                                    .into_int_value();
+                                let box_ptr = self
+                                    .builder
+                                    .build_int_to_ptr(w, ptr_ty, "drop.boxtup.p")
+                                    .unwrap();
+                                let is_null = self
+                                    .builder
+                                    .build_is_null(box_ptr, "drop.boxtup.isnull")
+                                    .unwrap();
+                                let free_bb =
+                                    self.context.append_basic_block(drop_fn, "drop.boxtup.free");
+                                let skip_bb =
+                                    self.context.append_basic_block(drop_fn, "drop.boxtup.skip");
+                                self.builder
+                                    .build_conditional_branch(is_null, skip_bb, free_bb)
+                                    .unwrap();
+                                self.builder.position_at_end(free_bb);
+                                if let Some(f) = inner_drop {
+                                    self.builder.build_call(f, &[box_ptr.into()], "").unwrap();
+                                }
+                                self.builder
+                                    .build_call(self.runtime_fns.free_fn, &[box_ptr.into()], "")
+                                    .unwrap();
+                                self.builder
+                                    .build_store(word_ptr, i64_t.const_int(0, false))
+                                    .unwrap();
+                                self.builder.build_unconditional_branch(skip_bb).unwrap();
+                                self.builder.position_at_end(skip_bb);
+                            }
+                        }
                         EnumDropKind::BoxedOptRes => {
                             // B-2026-08-05-7 — free the heap box the pack side
                             // minted for an `Option`/`Result` payload. Its

@@ -400,6 +400,37 @@ pub(crate) enum EnumDropKind {
     /// clone, or the two enums' boxes hold the same element buffers and the
     /// interior walk here frees them twice.
     BoxedArray,
+    /// B-2026-09-12-10 — the TUPLE peer of [`Self::BoxedArray`], for the one
+    /// position B-2026-09-13-23's layout guard stands `NestedTuple` down in.
+    ///
+    /// That guard exists because `NestedTuple` hands the payload's WORD REGION
+    /// to the tuple's own drop fn, which is only a pointer to the tuple when the
+    /// layout gave the field as many words as the tuple really occupies. An
+    /// `Array[T, N]` element breaks it — `enum E { A((Array[String, 2], i64)), B }`
+    /// sizes its payload at TWO words against a SEVEN-word tuple, so the pack
+    /// side boxes it and word 0 holds the box POINTER. Pointing the seven-word
+    /// walker at that region read a `String`'s length word as a pointer and
+    /// called `free(0x11)`; the guard's `None` restored the pre-existing LEAK,
+    /// which its own comment calls "the correct floor to land on".
+    ///
+    /// This kind is the floor above it: the walk was never wrong, it was aimed
+    /// at the wrong bytes. Deref the box pointer first and the SAME interior
+    /// walker is correct, which is exactly what `BoxedArray` does one pass up.
+    /// So this changes neither the width (load-bearing — correcting it turns two
+    /// clean bare-array cells into 34 B leaks) nor the walker, only where it is
+    /// pointed.
+    ///
+    /// INTERIOR AND ENVELOPE, like `BoxedArray` and unlike `BoxedOptRes`, and
+    /// for that kind's stated reason: classifying the field at all stands the
+    /// five explicit `BoxedEnumDrop` registrations down
+    /// (`user_enum_boxed_payload_variants` skips a variant whose kind is not
+    /// `None`), and each of those freed the box AND its interior. A box-only arm
+    /// would hand the envelope a new owner and drop the interior's on the floor.
+    ///
+    /// [`Self::is_heap_bearing`] is FALSE, on the same grounds as its two
+    /// siblings: the by-value entry deep-copy must not duplicate the box and the
+    /// match-out suppression must not zero this word.
+    BoxedTuple,
 }
 
 impl EnumDropKind {
@@ -424,6 +455,7 @@ impl EnumDropKind {
                 | EnumDropKind::BoxedArray
                 // B-2026-09-10-11 — an RC handle is never entry-copied.
                 | EnumDropKind::SharedRc
+                | EnumDropKind::BoxedTuple
         )
     }
 }

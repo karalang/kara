@@ -92872,6 +92872,136 @@ fn main() {
         );
     }
 
+    /// B-2026-09-12-10 — `EnumDropKind::BoxedTuple`, closing this row's
+    /// `(Array[String, 2], i64)` enum-payload cell, measured across every
+    /// POSITION the enum can occupy rather than only the one the row reports.
+    ///
+    /// THE ROW ALREADY REDUCED THIS ONE, and the reduction is what made it
+    /// small: B-2026-09-13-23's layout guard stands `NestedTuple` down for this
+    /// payload because the tuple is BOXED (two payload words against seven), so
+    /// handing the word region to a seven-word walker freed a `String`'s length
+    /// word — the invalid free `506a91d` shipped and `49e75a8` reverted. The
+    /// guard's `None` restored the LEAK, which its own comment calls "the
+    /// correct floor to land on". The walk was never wrong; it was aimed at the
+    /// wrong bytes. `BoxedTuple` derefs the box word first and runs the SAME
+    /// interior walker, exactly as `BoxedArray` does one pass up.
+    ///
+    /// NEITHER THE WIDTH NOR THE WALKER MOVES, which is the whole reason this is
+    /// safe where the obvious repair is not. The row measured correcting
+    /// `payload_word_count_for_type_expr` instead and found it regresses two
+    /// currently-clean cells to 34 B leaks, because the conservative 1 is
+    /// load-bearing — it is what routes a BARE array payload to the pack side's
+    /// boxing where `BoxedArray` frees it. Both of those cells are here (`bare`,
+    /// `bare2`) and are clean before and after.
+    ///
+    /// THE POSITION MATRIX is the point of this fixture. The guard's history is
+    /// two reverts, both of which traded a leak for corruption, so the cells are
+    /// derived from where a boxed enum payload can be REACHED rather than from
+    /// the row's symptom: a by-value param, a return, a `Vec` element, a
+    /// whole-payload move out of an arm, a multi-field variant, `N = 3`, a
+    /// `Vec`-typed element, a `shared` element, and the unit variant that must
+    /// touch nothing. `vectup` is the positive control the guard must never fire
+    /// for — its payload really is inline, so it keeps `NestedTuple`.
+    ///
+    /// MEASURED at `KARAC_OPT_LEVEL=0`, valgrind, the whole program: 66 allocs
+    /// against 33 frees before, 552 B directly and 431 B indirectly lost —
+    /// exactly half the frees missing — and 66 / 66 with nothing lost after, on
+    /// all four opt/auto-par surfaces and byte-identical to `--interp`.
+    ///
+    /// `dropelem` PRINTS NO `dR`, deliberately pinned that way. A user `Drop`
+    /// BODY on an array element inside a tuple payload runs on no backend, and
+    /// it AGREES between `--interp` and compiled code, so it is not a divergence
+    /// and not this row's — it is the B-2026-09-12-6 / B-2026-09-15-17 family.
+    /// Pinned so that whoever fixes the body channel sees this cell change here
+    /// rather than discovering it downstream; the MEMORY half is what this
+    /// fixture asserts and it is clean.
+    ///
+    /// LIKE ITS SIBLING, THIS CLASS IS VISIBLE ONLY AT `-O0`. At the default opt
+    /// level LLVM deletes the allocations, so a green default `--features llvm`
+    /// run proves nothing here — `scripts/asan-o0-leg.sh` is the gate.
+    #[test]
+    fn asan_boxed_tuple_enum_payload_is_freed_in_every_position() {
+        assert_clean_asan_run(
+            r#"
+shared struct S { s: String }
+struct R { s: String }
+impl Drop for R { fn drop(mut ref self) { println(f"dR") } }
+
+enum M { P((Array[String, 2], i64)), Q }
+enum M3 { P((Array[String, 3], i64)), Q }
+enum Mf { P((Array[String, 2], i64), i64), Q }
+enum Mv { P((Array[Vec[String], 2], i64)), Q }
+enum Ms { P((Array[S, 2], i64)), Q }
+enum Mr { P((Array[R, 2], i64)), Q }
+enum Bare { A(Array[String, 2]), B }
+enum Bare2 { A(Array[String, 2], i64), B }
+enum Tv { P((Vec[String], i64)), Q }
+
+fn pay(i: i64) -> String { return f"tttttttttttttttt{i}" }
+fn eat(m: M) -> i64 { return 1; }
+fn mk(i: i64) -> M { return M.P(([pay(i), pay(i + 1i64)], i)); }
+
+fn main() {
+    println(f"byval {eat(M.P(([pay(1), pay(2)], 7)))}");
+
+    let g = mk(3);
+    match g { M.P(t) => { println(f"ret {t.1}"); } M.Q => { println(f"q"); } }
+
+    let mut v: Vec[M] = [];
+    v.push(M.P(([pay(4), pay(5)], 8)));
+    v.push(M.P(([pay(6), pay(7)], 9)));
+    println(f"vec {v.len()}");
+
+    let h = M.P(([pay(10), pay(11)], 12));
+    match h { M.P(t) => { let u = t; println(f"move {u.1}"); } M.Q => { println(f"q"); } }
+
+    let a3 = M3.P(([pay(13), pay(14), pay(15)], 16));
+    match a3 { M3.P(t) => { println(f"n3 {t.1}"); } M3.Q => { println(f"q"); } }
+
+    let mf = Mf.P(([pay(17), pay(18)], 19), 20);
+    println(f"mf ok");
+
+    let mv = Mv.P(([[pay(21)], [pay(22)]], 23));
+    println(f"vecelem ok");
+
+    let x = S { s: f"shared-tttttttttt" };
+    let ms = Ms.P(([x, x], 24));
+    println(f"shared ok");
+
+    let mr = Mr.P(([R { s: pay(25) }, R { s: pay(26) }], 27));
+    println(f"dropelem ok");
+
+    let b1 = Bare.A([pay(28), pay(29)]);
+    println(f"bare ok");
+    let b2 = Bare2.A([pay(30), pay(31)], 32);
+    println(f"bare2 ok");
+
+    let tv = Tv.P(([pay(33), pay(34)], 35));
+    match tv { Tv.P(t) => { println(f"vectup {t.1}"); } Tv.Q => { println(f"q"); } }
+
+    let e = M.Q;
+    match e { M.P(t) => { println(f"p {t.1}"); } M.Q => { println(f"unit ok"); } }
+}
+"#,
+            &[
+                "byval 1",
+                "ret 3",
+                "vec 2",
+                "move 12",
+                "n3 16",
+                "mf ok",
+                "vecelem ok",
+                "shared ok",
+                "dropelem ok",
+                "bare ok",
+                "bare2 ok",
+                "vectup 35",
+                "unit ok",
+            ],
+            "asan_boxed_tuple_enum_payload_is_freed_in_every_position",
+        );
+    }
+
     /// B-2026-09-14-25 — an `Array[D, N]` enum payload whose element carries
     /// BOTH heap and a user `Drop` body double-freed its element buffers on a
     /// consuming arm: `exit 134`, 2 invalid frees, `15 allocs / 17 frees`, at
@@ -95947,10 +96077,18 @@ fn main() {
     ///       <- __karac_drop_tuple_te_Array_gString_xg_i64$in... <- __karac_drop_E
     ///     Address 0x0000000011 is a wild pointer
     ///
-    /// LEAK CHECKING IS THEREFORE OFF — that leak is a known open row, and this
-    /// fixture asserts the narrower thing it can assert honestly: no memory
-    /// ERROR, and the right answer. Flip it to `assert_clean_asan_run` when
-    /// B-2026-09-12-10 closes.
+    /// LEAK CHECKING IS NOW ON (B-2026-09-12-10). It was off while the guard's
+    /// `None` left this position with its pre-existing leak, and that row's
+    /// enum-payload cell is now closed by `EnumDropKind::BoxedTuple` — the guard
+    /// still stands `NestedTuple` down, and hands the position a kind that
+    /// DEREFS the box word before running the same interior walk. So the
+    /// paragraph above still describes the layout exactly; only the floor moved,
+    /// from "leak rather than UB" to "neither".
+    ///
+    /// The row itself does NOT close on that: its other open cell is
+    /// `(bool, String)`, a sub-word-packed tuple `type_expr_word_aligned`
+    /// declines deliberately, which is a layout change and a different shape
+    /// from anything here.
     #[test]
     fn asan_array_in_a_tuple_enum_payload_is_not_corrupted() {
         if !asan_available() {
@@ -95989,24 +96127,15 @@ fn main() {
                  \x20   }}\n\
                  }}\n"
             );
-            let Some((stdout, stderr, status)) = run_under_asan_no_leak_check(&src, label) else {
-                eprintln!("[{label}] setup failed — skipping");
-                return;
-            };
-            // ASAN's own exit code is 23; an invalid free aborts here rather
-            // than merely printing, so a non-zero status IS the regression.
-            assert!(
-                status.success(),
-                "[{label}] expected a clean exit, got {:?} — a memory ERROR in the \
-                 enum-payload position. This is the B-2026-09-16-9 shape: the array \
-                 walk is being pointed at a BOXED payload's word region. \
-                 stdout: {stdout:?}, stderr: {stderr:?}",
-                status.code(),
-            );
-            assert!(
-                stdout.contains("a0:tttttttttttttttt1 n:7"),
-                "[{label}] wrong payload read back; stdout: {stdout:?}, stderr: {stderr:?}",
-            );
+            // B-2026-09-12-10 — LEAK CHECKING IS NOW ON. The doc above asked for
+            // this flip once that row's enum-payload cell closed, and
+            // `EnumDropKind::BoxedTuple` closes it: the guard below still stands
+            // `NestedTuple` down, but it now hands the position a kind that
+            // DEREFS the box word before running the same interior walk, so the
+            // 56 B envelope and its 34 B of elements are freed instead of
+            // stranded. The no-error assertion this replaces is subsumed —
+            // `assert_clean_asan_run` fails on an ASAN report just as loudly.
+            assert_clean_asan_run(&src, &["a0:tttttttttttttttt1 n:7"], label);
         }
         // A NESTED tuple around the array — `((Array[String, 2], i64), i64)`.
         // The guard's width helper recurses, so this stands down for the same
@@ -96024,19 +96153,10 @@ fn main() {
                  \x20   }}\n\
                  }}\n"
             );
-            let Some((stdout, stderr, status)) = run_under_asan_no_leak_check(&src, label) else {
-                eprintln!("[{label}] setup failed — skipping");
-                return;
-            };
-            assert!(
-                status.success(),
-                "[{label}] expected a clean exit, got {:?}. stdout: {stdout:?}, stderr: {stderr:?}",
-                status.code(),
-            );
-            assert!(
-                stdout.contains("a0:tttttttttttttttt1 k:9"),
-                "[{label}] wrong payload read back; stdout: {stdout:?}, stderr: {stderr:?}",
-            );
+            // B-2026-09-12-10 — leak-checked too, for the same reason: the
+            // guard's width helper recurses, so a nested tuple around the array
+            // reaches `BoxedTuple` at the outer level and is freed.
+            assert_clean_asan_run(&src, &["a0:tttttttttttttttt1 k:9"], label);
         }
         // The `Vec` spelling is the POSITIVE CONTROL: its payload really is
         // inline, so it keeps `NestedTuple` and must stay fully clean — leak

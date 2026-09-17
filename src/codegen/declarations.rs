@@ -3852,7 +3852,16 @@ impl<'ctx> super::Codegen<'ctx> {
                             .unwrap_or(1);
                         let real = self.real_payload_words_for_type_expr(field_ty, &e.name, vname);
                         if real > field_words {
-                            kinds[fi] = EnumDropKind::None;
+                            // B-2026-09-12-10 — `BoxedTuple` rather than `None`.
+                            // The paragraph above is still the whole diagnosis:
+                            // the walk is right and was aimed at the wrong
+                            // bytes. Standing it down landed on the LEAK this
+                            // row's remaining enum-payload cell measures; giving
+                            // it a kind that DEREFS the box word first aims the
+                            // same walker correctly, which is what `BoxedArray`
+                            // does one pass up for the bare-array spelling.
+                            // Neither the width nor the walker moves.
+                            kinds[fi] = EnumDropKind::BoxedTuple;
                         }
                     }
                 }
