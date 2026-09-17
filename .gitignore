@@ -79,3 +79,8 @@ bench/compile_speed/pr-body.md
 # Python bytecode caches (bench/mend/scripts helpers).
 __pycache__/
 *.pyc
+
+# Scratch gate/A-B logs written into the repo root by long-running verification
+# runs. These were swept onto `main` nine times by `git add -A` before this
+# entry existed; keep them untracked so a fix commit cannot carry one again.
+/*.log
