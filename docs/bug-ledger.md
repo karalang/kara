@@ -92,12 +92,12 @@ distinguish "bugs flattening" from "we stopped writing them down."
 
 | class | total |
 |---|---|
-| run-vs-build | 429 |
+| run-vs-build | 430 |
 | miscompile | 415 |
 | leak | 371 |
 | double-free | 242 |
 | missing-feature | 199 |
-| codegen-gap | 178 |
+| codegen-gap | 179 |
 | other | 130 |
 | diagnostics | 126 |
 | perf | 115 |
@@ -110,7 +110,7 @@ distinguish "bugs flattening" from "we stopped writing them down."
 
 | surface | total |
 |---|---|
-| codegen | 1831 |
+| codegen | 1833 |
 | interp | 469 |
 | typecheck | 302 |
 | other | 96 |
@@ -131,7 +131,6 @@ _Generated from `bug-ledger.jsonl` by `scripts/bug-curve.py` (2026-05-20 → 202
 | id | date | surface | sev | title | tracker |
 |---|---|---|---|---|---|
 | B-2026-09-10-20 | 2026-09-10 | codegen | low | A `Vec` OR `shared enum` ENUM PAYLOAD LOSES ITS `Drop` BODY ON EVERY BACKEND, AND THE GENERIC SPELLING ALSO LEAKS -- `G.X(w)` over `Vec[Mono]` prints nothing and strands 320 B + 27 B, `G.X(SMono.P(..))` and its DECLARED twin `enum H3 { P(SMono) }` each strand 88 B + 27 B, while the same envelope over a plain struct payload is correct and clean -- so the two remedies `E_ENUM_NESTED_ENUM_PAYLOAD` recommends are both broken | — |
-| B-2026-09-10-22 | 2026-09-10 | codegen+interp | low | A WHOLE-PAYLOAD ARM BINDING OVER A GENERIC BY-VALUE `Option[(T, i64)]` PARAM LOSES THE ELEMENT'S `Drop` BODY ON EVERY COMPILED SURFACE -- `fn take[T](o: Option[(T, i64)]) { match o { Some(t) => t.1 } }` prints `g9` compiled where `--interp` prints `dW3 g9`, while the CONCRETE twin of the same function runs the body on both backends; the generic is the axis, measured against a non-generic control | none |
 | B-2026-09-10-23 | 2026-09-10 | codegen | low | A WHOLE-PAYLOAD ARM BINDING OVER A BY-VALUE `Option[(W, i64)]` PARAM LEAKS THE TUPLE ELEMENT'S INTERIOR -- 2 B in 1 block at -O0, in the GENERIC and CONCRETE legs alike; the by-value param and the match are BOTH required (either alone is clean), making this the TUPLE-payload sibling of B-2026-09-07-44's struct-payload leak | none |
 | B-2026-09-10-25 | 2026-09-10 | codegen+interp | low | A FRESH TUPLE TEMP PASSED AS A CALL ARGUMENT RUNS ITS `Option` ELEMENT'S `Drop` BODY ON NEITHER BACKEND -- `eat((Some(R { .. }), 7))` over `fn eat(p: (Option[R], i64))` prints `eat done` under `--interp`, `-O0` and `-O2` auto-par alike, where one `dR71` is owed; the BINDING spelling of the same value (`let p = (Some(R { .. }), 7);`) is correct on all four surfaces since B-2026-09-10-18, so the element types resolve and what is missing is an owner for a tuple ARGUMENT temp's element bodies. Both backends agree, so no parity rule catches it and repairing either side alone would convert it into a divergence. Memory is balanced (0 valgrind errors, nothing lost) | none |
 | B-2026-09-12-1 | 2026-09-12 | runtime | low | `coroutine_ws_over_tls_concurrent_handlers_all_execute` GOES RED IN THE REQUIRED GATE SET BUT IS NOT REPRODUCIBLE ON DEMAND -- five reds across both KARAC_SSO legs against 22 consecutive passes under deliberately harsher standalone conditions. The three preserved reds report 15, 15 and 11 of 16 handlers echoing, so the count is VARIABLE (an earlier two-observation reading of it as a stable 15/16 is retracted in the detail). What holds is the discriminator the row was filed for: `left > 0` every time, so the server DOES come up -- a coroutine-resume / accept-path race, not a port or fixture problem. | — |
@@ -196,6 +195,8 @@ _Generated from `bug-ledger.jsonl` by `scripts/bug-curve.py` (2026-05-20 → 202
 | B-2026-09-17-20 | 2026-09-17 | interp | medium | AN ARM-BOUND PAYLOAD WHOSE ELEMENT IS ITSELF A TUPLE RUNS NO ELEMENT `Drop` BODY IN THE INTERPRETER, and both bodies on every compiled surface -- `match o { Some(t) => ... }` over `Option[((W, W), i64)]` prints `e5` interpreted against `e5 dW5 dW105` under jit / `-O0` / `-O2`. The compiled side is RIGHT (the arm binding owns the payload). Not the nested walk and not the field read: the identical nested tuple bound by a plain `let` runs both bodies interpreted, and an arm whose body never touches the payload loses them the same way. Became observable only when B-2026-09-10-21's fix let the compiled side build at all | — |
 | B-2026-09-17-21 | 2026-09-17 | codegen | medium | A `shared enum`'s BOXED NAMELESS-AGGREGATE PAYLOAD STILL STRANDS ITS INTERIOR WHEN THE PAYLOAD CAME FROM A TEMPORARY -- B-2026-09-15-10's envelope free reclaims the box and thereby CONVERTS the elements from indirectly to directly lost (`Sh.S(mka("x"))` 48/34 -> 34/0, a `while` of three 144/132 -> 132/0, two `Vec[Sh]` elements 96/80 -> 80/0), while the same programs sourcing the payload from a NAMED LOCAL reach 0/0 -- so the axis is whether a named source still owns the interior, and the parent's tag switch cannot see that because it is a fact about the construction site rather than about the box | — |
 | B-2026-09-17-22 | 2026-09-17 | codegen | medium | A `shared enum`'s UNIT VARIANT STRANDS ITS RC SHELL -- `{ let s = Sh.N; }` over `shared enum Sh { S(Array[String, 2]), N }` loses 24 B at `-O0`, which is the whole `{ i64 rc, i64 tag, i64 w0 }` heap layout rather than any payload box, byte-identical before and after B-2026-09-15-10's payload-box fix, and reproducing inside a mixed program (an A/B/N sequence reads 24 B, the same program without the `N` block reads 0) | — |
+| B-2026-09-17-23 | 2026-09-17 | codegen | medium | THE MONOMORPH PROLOGUE RUNS NONE OF THE BY-VALUE `Option`/`Result` PARAM ARMS, so a HEAP-BEARING generic payload's `Drop` body has no owner anywhere -- `fn gh[T](o: Option[(T, i64)]) { match o { Some(t) => t.1 } }` over a `W` WITH a `String` field prints `g9` on jit / `-O0` / `-O2` against `--interp`'s `dW2/n2 g9`. The payload BOXES, so the caller must stand down (its walk runs after the call, and the callee's `BoxedEnumDrop` frees the box before returning) -- and the callee-side arm is never reached: probes show NO gate and NO callee line for the param on the generic path, where the concrete twin prints both. B-2026-09-10-22's caller-side policy fix cannot reach this leg | — |
+| B-2026-09-17-24 | 2026-09-17 | codegen | low | A DESTRUCTURING ARM THAT RETURNS A GENERIC TUPLE-PAYLOAD ELEMENT FAILS MODULE VERIFICATION -- `fn e3[T](o: Option[(T, i64)], d: T) -> T { match o { Some((a, b)) => { return a; } ... } }` stops `karac build` with `Function return type does not match operand type of return inst! ret i64 %a6 { i64, { ptr, i64, i64 } }`, i.e. the erased one-word image of `T` reaching the `return` while the signature is monomorphised to the concrete struct. The WHOLE-VALUE spelling of the same move (`Some(t) => return t.0`) builds and runs correctly, which is what makes the destructuring arm the axis. LOUD, and `--interp` answers it | — |
 
 ### Relocated
 
@@ -2528,6 +2529,7 @@ _Generated from `bug-ledger.jsonl` by `scripts/bug-curve.py` (2026-05-20 → 202
 | B-2026-09-10-18 | codegen | low | A WHOLE-BINDING LOCAL TUPLE HOLDING AN `Option[R]` ELEMENT RUNS NO PAYLOAD `Drop` BODY ON THE COMPILED BACKENDS -- a never-read `let p = (Some(R { id… | e056b1540 |
 | B-2026-09-10-19 | codegen | low | A NESTED DESTRUCTURING ARM BINDING LOSES ITS `Drop` BODY ON THE COMPILED BACKENDS -- `match x { Some(Some(r)) => { println(f"a{r.id}") } . | 41717852a |
 | B-2026-09-10-21 | codegen | low | A NESTED TUPLE ELEMENT INSIDE AN ARM-BOUND PAYLOAD STILL NEVER LOWERS -- `match o { Some(t) => t.0.0.id }` over `Option[((W, W), i64)]` fails `karac… | 1705c1e |
+| B-2026-09-10-22 | codegen+interp | low | A WHOLE-PAYLOAD ARM BINDING OVER A GENERIC BY-VALUE `Option[(T, i64)]` PARAM LOSES THE ELEMENT'S `Drop` BODY ON EVERY COMPILED SURFACE -- `fn take[T]… | 7d8d23e |
 | B-2026-09-10-24 | codegen | medium | AN `Option`/`Result`-TYPED LOCAL MOVED INTO A TUPLE LITERAL LOSES ITS PAYLOAD'S `Drop` BODY, AND THE THREE-LINE FIX FOR IT DOUBLE-FREES -- `let o: Op… | ebe9a5e18 |
 | B-2026-09-10-26 | codegen | medium | AN `Array` WHOSE ELEMENT IS ITSELF AN `Array` LEAKS ITS WHOLE INTERIOR -- `Array[Array[String, 2], 2]` loses all four `String` buffers (36 B at `-O0`… | 1e99113 |
 | B-2026-09-10-27 | interp+codegen | medium | A BOXED `Array` PAYLOAD'S ELEMENT `Drop` BODIES RUN ON NO BACKEND -- `Option[Array[R, 2]]` over `impl Drop for R` prints no `dR` under `--interp`, th… | 49f09d8eb |
