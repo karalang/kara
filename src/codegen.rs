@@ -1853,6 +1853,23 @@ pub(super) struct Codegen<'ctx> {
     /// one buffer. A projection has no such registrar, which is the whole
     /// asymmetry this window exists to express.
     pub(crate) discarded_stmt_literal_span: Option<(usize, usize)>,
+    /// B-2026-09-16-16 — the SPAN of a DISCARDED EXPRESSION STATEMENT's whole
+    /// value expression (`idG(g);`), live only while that statement compiles.
+    ///
+    /// The two siblings above are about a discarded aggregate LITERAL's field
+    /// sources. This one is about a discarded CALL's arguments, and it exists
+    /// for the same reason stated one construct out: a disarm hands ownership
+    /// to whoever consumes the value, and a discarded statement consumes
+    /// nothing. `let back = idG(g);` gives the box to `back` and the argument
+    /// binding must stand down; `idG(g);` gives it to nobody, so standing the
+    /// argument down strands it — measured as 24 B definitely lost, on a
+    /// program that is clean both before the disarm arm and after this window.
+    ///
+    /// Read only by `compile_generic_call`'s hand-back disarm. The other
+    /// argument disarms are keyed on the CALLEE taking the value over, which is
+    /// true whether or not the caller keeps the result, so none of them wants
+    /// this window.
+    pub(crate) discarded_stmt_value_span: Option<(usize, usize)>,
     /// B-2026-08-28-44 — merge-point owner slots, keyed by the branch
     /// EXPRESSION's span (not the condition/scrutinee's), so a consuming
     /// destination takes the merged value over through the usual funnel and
@@ -6418,6 +6435,7 @@ impl<'ctx> Codegen<'ctx> {
             branch_arm_value_discarded: false,
             discarded_arm_tail_span: None,
             discarded_stmt_literal_span: None,
+            discarded_stmt_value_span: None,
             branch_tail_owner_slots: std::collections::HashMap::new(),
             current_branch_expr_span: None,
             container_elem_struct_clone_slots: std::collections::HashMap::new(),
@@ -9037,6 +9055,9 @@ impl<'ctx> Codegen<'ctx> {
             if let Some(b) = saved {
                 self.builder.position_at_end(b);
             }
+        }
+        if let Ok(path) = std::env::var("B1616_IR") {
+            let _ = std::fs::write(&path, self.module.print_to_string().to_string());
         }
         self.module.verify().map_err(|e| {
             // A verifier failure is otherwise a one-line ICE with no module to

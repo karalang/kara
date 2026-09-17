@@ -2112,6 +2112,74 @@ impl<'ctx> super::Codegen<'ctx> {
             if param_box_taken_by_callee {
                 self.suppress_inline_option_result_binding_move(&a.value);
             }
+            // B-2026-09-16-16 — the OTHER half of the same ownership question,
+            // for the param the arm above correctly declines.
+            //
+            // A param that is RETURNED is in neither escape set, so the
+            // prologue registers no box drop and the arm above emits nothing —
+            // both halves stand down in step, exactly as designed. But the box
+            // does not stay with the caller's ARGUMENT binding either: it is
+            // handed out and the caller's RESULT binding owns it, which is the
+            // convention B-2026-09-02-46's own gate is written against ("the
+            // caller's RESULT binding owns it"). So the argument binding has to
+            // stand down too, and nothing was doing that.
+            //
+            // MEASURED on `fn idG[T](g: G1[T]) -> G1[T] { return g; }` over
+            // `enum G1[T] { Y(T), N }` at `T = String`, at
+            // `KARAC_OPT_LEVEL=0 KARAC_AUTO_PAR=0`, `--interp` correct: SIGSEGV,
+            // exit 139, no stdout, `12 allocs / 14 frees`. The IR names the two
+            // owners directly — `main` emits a `BoxedEnumDrop` for `back` AND
+            // one for `g`, over one box word. The two extra frees are the box
+            // (freed by both) and the `String` interior (freed by the arm's
+            // binding and again by `g`'s inner drop), which is why `back`'s
+            // action is correctly box-only: its interior was taken by the arm.
+            //
+            // THE MONOMORPHIC TWIN IS CLEAN, and the reason is the whole
+            // asymmetry: `enum G1 { Y(String), N }` has an INLINE payload, so
+            // the by-value param entry-copies and `back` holds its own buffer
+            // (`12 / 12`). Only the erased generic boxes, and only the box is
+            // passed by pointer.
+            //
+            // ALL-PATHS (`fn_always_returns_param`), not the may-return
+            // predicate, for the reason its own doc records about this family:
+            // the stand-down is the SUPPRESSING direction, and a mixed-path
+            // callee's dies-inside leg would lose its only owner.
+            //
+            // THE TRANSFER ENTRY POINT rather than the plain one: the
+            // destination owns the box afterwards, which is exactly the case
+            // `suppress_inline_option_agg_binding_transfer` is written for. The
+            // plain entry point's population is the consuming-but-not-
+            // transferring position, where the caller's slot stays the owner.
+            //
+            // AND NOT INSIDE A DISCARDED STATEMENT. `idG(g);` hands the box to
+            // nobody, so standing the argument down strands it — 24 B
+            // definitely lost, measured, on a cell that is clean both before
+            // this arm and after this guard. The disarm's whole premise is that
+            // some destination took the value over.
+            let param_box_handed_back =
+                !self.discarded_stmt_value_span.is_some_and(|(off, len)| {
+                    let s = a.value.span.offset;
+                    s >= off && s < off.saturating_add(len)
+                }) && generic_fn.params.get(i).is_some_and(|p| {
+                    if matches!(p.ty.kind, TypeKind::Ref { .. } | TypeKind::MutRef { .. }) {
+                        return false;
+                    }
+                    if !matches!(p.pattern.kind, PatternKind::Binding(_)) {
+                        return false;
+                    }
+                    if !crate::ast::fn_always_returns_param(
+                        self.program_snapshot.as_deref(),
+                        &generic_fn,
+                        i,
+                    ) {
+                        return false;
+                    }
+                    let inst = self.callee_param_te_for_call(&p.ty, call_span);
+                    !self.user_enum_boxed_payload_variants(&inst).is_empty()
+                });
+            if param_box_handed_back {
+                self.suppress_inline_option_agg_binding_transfer(&a.value);
+            }
             // B-2026-09-02-46 — a fresh-temp `Option`/`Result` argument whose
             // payload THIS INSTANTIATION heap-boxes. The box is malloc'd by
             // `coerce_to_payload_words`' oversize arm at this call site and,

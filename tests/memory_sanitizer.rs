@@ -91924,6 +91924,106 @@ fn main() {
         );
     }
 
+    /// B-2026-09-16-16 — a PASSTHROUGH generic param over a boxed enum payload
+    /// double-freed: `fn idG[T](g: G1[T]) -> G1[T] { return g; }` over
+    /// `enum G1[T] { Y(T), N }` at `T = String` SIGSEGVed with no stdout at all,
+    /// `12 allocs / 14 frees`, against a correct `--interp`.
+    ///
+    /// THE TWO OWNERS, read off the IR: `main` emits a `BoxedEnumDrop` for the
+    /// RESULT binding AND one for the ARGUMENT binding, over one box word. The
+    /// two extra frees are the box (freed by both) and the `String` interior
+    /// (freed by the arm's binding and again by the argument's inner drop) —
+    /// which is why the result's action is correctly box-only: `interior_arm_owned`
+    /// cleared its inner drop because the arm takes the interior.
+    ///
+    /// THE MONOMORPHIC TWIN IS CLEAN, and that asymmetry is what located it:
+    /// `enum M1 { Y(String), N }` has an INLINE payload, so the by-value param
+    /// entry-copies and the result holds its own buffer. Only the erased
+    /// generic boxes, and only the box is passed by pointer. The `mono` and
+    /// `pod` cells pin both halves of that.
+    ///
+    /// WHY B-2026-09-16-10'S FIX COULD NOT REACH IT, which the row states and
+    /// which holds up: that fix gates on the mono prologue's own escape
+    /// predicate, and a RETURNED param is in neither escape set — so the
+    /// prologue registers nothing and the caller-side disarm correctly emits
+    /// nothing. Both halves stand down in step. The box simply does not stay
+    /// with the ARGUMENT binding either: it is handed out, and the convention
+    /// B-2026-09-02-46 is written against is that the caller's RESULT binding
+    /// owns it. Nothing was standing the argument down.
+    ///
+    /// `disc` IS THE GUARD ON THE FIX, not a decoration. `idG(d);` hands the
+    /// box to nobody, so the same disarm strands it — 24 B definitely lost,
+    /// measured, on a cell that was clean before the fix. The repair carries a
+    /// discarded-statement window for exactly that, and this cell is what fails
+    /// if the window is ever dropped (LSan catches it; plain valgrind under the
+    /// default check does not report it as an error).
+    ///
+    /// `drop` pins that the payload's user `Drop` body fires exactly ONCE
+    /// through the hand-off, and `noarm` the same shape with no match arm to
+    /// take the interior — both were double frees before. `mk` (result-only
+    /// ownership) and `eat` (B-2026-09-16-10's non-escaping shape) are controls
+    /// that were correct throughout and must stay byte-identical.
+    ///
+    /// Two neighbours are deliberately NOT here because they are still broken
+    /// and out of this fix's reach by construction: a MIXED-path callee (the
+    /// all-paths gate declines it, correctly — no static answer at the call is
+    /// right for both legs) and the `Option`/`Result` head (an inline payload,
+    /// so a different channel with a one-free signature). Both filed.
+    #[test]
+    fn asan_passthrough_generic_boxed_payload_arg_is_freed_once() {
+        assert_clean_asan_run(
+            r#"
+struct D { s: String }
+impl Drop for D { fn drop(mut ref self) { println(f"dD"); } }
+
+enum G1[T] { Y(T), N }
+enum M1 { Y(String), N }
+
+fn idG[T](g: G1[T]) -> G1[T] { return g; }
+fn idM(g: M1) -> M1 { return g; }
+fn mk[T](x: T) -> G1[T] { return G1.Y(x); }
+fn eat[T](g: G1[T]) -> i64 { return 1; }
+
+fn main() {
+    let a: G1[String] = G1.Y(f"b1616-esc-aaaaaaaaaa");
+    let back = idG(a);
+    match back { G1.Y(v) => { println(f"esc {v.len()}"); } G1.N => { println(f"esc 0"); } }
+
+    let b: G1[String] = G1.Y(f"b1616-noarm-bbbbbbbb");
+    let back2 = idG(b);
+    println(f"noarm ok");
+
+    let c: G1[D] = G1.Y(D { s: f"b1616-drop-cccccccccc" });
+    let back3 = idG(c);
+    match back3 { G1.Y(v) => { println(f"drop {v.s.len()}"); } G1.N => { println(f"drop 0"); } }
+
+    let d: G1[String] = G1.Y(f"b1616-disc-dddddddddd");
+    idG(d);
+    println(f"disc ok");
+
+    let e: M1 = M1.Y(f"b1616-mono-eeeeeeeeee");
+    let back4 = idM(e);
+    match back4 { M1.Y(v) => { println(f"mono {v.len()}"); } M1.N => { println(f"mono 0"); } }
+
+    let f: G1[i64] = G1.Y(42);
+    let back5 = idG(f);
+    match back5 { G1.Y(v) => { println(f"pod {v}"); } G1.N => { println(f"pod 0"); } }
+
+    let back6 = mk(f"b1616-mk-ffffffffffff");
+    match back6 { G1.Y(v) => { println(f"mk {v.len()}"); } G1.N => { println(f"mk 0"); } }
+
+    let g: G1[String] = G1.Y(f"b1616-eat-gggggggggg");
+    println(f"eat {eat(g)}");
+}
+"#,
+            &[
+                "esc 20", "noarm ok", "drop 21", "dD", "disc ok", "mono 21", "pod 42", "mk 21",
+                "eat 1",
+            ],
+            "asan_passthrough_generic_boxed_payload_arg_is_freed_once",
+        );
+    }
+
     /// B-2026-09-14-25 — an `Array[D, N]` enum payload whose element carries
     /// BOTH heap and a user `Drop` body double-freed its element buffers on a
     /// consuming arm: `exit 134`, 2 invalid frees, `15 allocs / 17 frees`, at

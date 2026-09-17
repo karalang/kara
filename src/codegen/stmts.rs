@@ -12064,7 +12064,15 @@ impl<'ctx> super::Codegen<'ctx> {
                 if let Some(lit) = Self::discarded_stmt_aggregate_literal(expr) {
                     self.discarded_stmt_literal_span = Some((lit.span.offset, lit.span.length));
                 }
+                // B-2026-09-16-16 — the whole discarded value's span, for the
+                // argument disarm that has to know nothing consumes the result.
+                // Saved and restored beside its literal sibling so a nested
+                // statement answers for itself.
+                let saved_discarded_value = self
+                    .discarded_stmt_value_span
+                    .replace((expr.span.offset, expr.span.length));
                 let val = self.compile_expr(expr);
+                self.discarded_stmt_value_span = saved_discarded_value;
                 self.discarded_stmt_literal_span = saved_discarded_stmt;
                 let val = val?;
                 // B-2026-08-28-53 — the argument/result boundary on this

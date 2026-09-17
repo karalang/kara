@@ -1,0 +1,10 @@
+Updated 1 path from the index
+guard markers (expect 0): 0
+PREFIX disc: out=[disc done|] errs=0 total heap usage: 11 allocs, 11 frees LOST=
+PREFIX mixed: out=[] errs=4 total heap usage: 12 allocs, 14 frees LOST=
+PREFIX noarm: out=[] errs=4 total heap usage: 11 allocs, 13 frees LOST=
+PREFIX drp: out=[] errs=4 total heap usage: 14 allocs, 16 frees LOST=
+PREFIX r: out=[] errs=4 total heap usage: 12 allocs, 14 frees LOST=
+PREFIX opt: out=[free(): double free detected in tcache 2|] errs=1 total heap usage: 11 allocs, 12 frees LOST=
+restored markers: 1
+AB DONE
