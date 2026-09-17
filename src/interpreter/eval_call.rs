@@ -4707,6 +4707,24 @@ impl<'a> super::Interpreter<'a> {
         }
     }
 
+    /// B-2026-09-16-37 — does user function `fn_name` declare generic params?
+    ///
+    /// The discarded-tuple arm needs this because the two backends resolve that
+    /// shape from DIFFERENT things. Codegen reads the callee's DECLARED element
+    /// types, so `fn fgen[T](t: T) -> (T, i64)` hands it an erased `T` it
+    /// structurally cannot emit a body for — the blindness probe p5 recorded
+    /// for the enum-payload walk — and it declines. The interpreter reads the
+    /// runtime VALUE, which knows perfectly well it is an `R`, so gating on the
+    /// value alone made it fire where codegen could not: `dR9` under `--interp`
+    /// against nothing compiled. Declining here is PARITY, not conservatism;
+    /// the erased-generic tuple discard stays an agreed gap on its own row.
+    pub(crate) fn user_fn_is_generic(&self, fn_name: &str) -> bool {
+        self.program.items.iter().any(|item| match item {
+            crate::ast::Item::Function(f) if f.name == fn_name => f.generic_params.is_some(),
+            _ => false,
+        })
+    }
+
     pub(crate) fn user_fn_return_type_name(&self, fn_name: &str) -> Option<String> {
         self.program.items.iter().find_map(|item| match item {
             crate::ast::Item::Function(f) if f.name == fn_name => {

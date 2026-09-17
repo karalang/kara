@@ -34696,6 +34696,36 @@ fn test_discarded_tuple_return_runs_its_element_drop_body() {
         "dR21\nok\n"
     );
 
+    // 3b -- B-2026-09-16-37, A REGRESSION THIS FIX INTRODUCED AND A FOLLOW-UP
+    //       REMOVED. A GENERIC callee is declined, and that is PARITY rather
+    //       than conservatism: codegen resolves this shape from the DECLARED
+    //       element types, so an erased `T` yields no walker, while the
+    //       interpreter reads the runtime value and knows it is an `R`. Gating
+    //       on the value alone printed `dR31` here against nothing compiled.
+    //       The erased-generic tuple discard stays an AGREED gap.
+    assert_eq!(
+        run(&format!(
+            "{prelude}fn fgen[T](t: T) -> (T, i64) {{ return (t, 5); }}\n\
+             fn main() {{ fgen(mk(31)); println(\"ok\"); }}\n"
+        )),
+        "ok\n"
+    );
+
+    // 3c -- B-2026-09-16-37, the other half. A METHOD callee is declined for
+    //       the same parity reason, and on the compiled side it was worse than
+    //       a divergence: the receiver's own walk already owns the element the
+    //       method moved into the tuple, so registering bodies on the memory
+    //       walk's verdict printed `dR dR`. Exactly one `dR32`, from the
+    //       receiver, and the method spelling stays an agreed gap.
+    assert_eq!(
+        run(&format!(
+            "{prelude}struct S {{ r: R }}\n\
+             impl S {{ fn m(self) -> (R, i64) {{ return (self.r, 3); }} }}\n\
+             fn main() {{ let s: S = S {{ r: mk(32) }}; s.m(); println(\"ok\"); }}\n"
+        )),
+        "dR32\nok\n"
+    );
+
     // 4 -- CONTROL: a tuple whose elements have no user `Drop` must stay
     //      silent. The emitter's own type gate is what keeps it so.
     assert_eq!(

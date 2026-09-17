@@ -9553,7 +9553,18 @@ impl<'a> super::Interpreter<'a> {
                                 // divergence, which is why B-2026-09-09-21 left the
                                 // memory-only fix in place and pinned the parity in
                                 // `asan_discarded_tuple_temp_frees_its_interior`.
-                                self.run_discarded_value_user_drops(discarded);
+                                //
+                                // B-2026-09-16-37 — ...but NOT for a generic
+                                // callee. Gating on the value alone fires here
+                                // where codegen structurally cannot: it resolves
+                                // the shape from the DECLARED element types and
+                                // an erased `T` yields no walker, so
+                                // `fn fgen[T](t: T) -> (T, i64)` discarded
+                                // printed `dR` under `--interp` against nothing
+                                // compiled. See `user_fn_is_generic`.
+                                if !self.user_fn_is_generic(fn_name) {
+                                    self.run_discarded_value_user_drops(discarded);
+                                }
                             } else if let Some(tn) = self.user_fn_return_type_name(fn_name) {
                                 // B-2026-09-06-1 — a GENERIC callee's declared
                                 // return is its own parameter; the value says

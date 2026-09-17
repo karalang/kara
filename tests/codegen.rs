@@ -19421,6 +19421,100 @@ end
         };
         assert_eq!(out, "bound\n  dR1/n1\n  dR2/n2\n  mid\n  v=3\n  dR3/n3\nrenamed\n  dR4/n4\n  dR5/n5\n  mid\n  v=6\n  dR6/n6\ntwo_outs\n  dR7/n7\n  dR8/n8\n  mid\n  v=9\n  dR9/n9\ndeep\n  dR10/n10\n  dR11/n11\n  mid\n  v=12\n  dR12/n12\nwild\n  dR13/n13\n  dR14/n14\n  mid\n  v=15\n  dR15/n15\nnosplit\n  dR17/n17\n  dR16/n16\n  mid\n  v=18\n  dR18/n18\nnestedpat\n  dR20/n20\n  dR19/n19\n  mid\n  v=21\n  dR21/n21\nend\n");
     }
+
+    /// B-2026-09-09-21 / B-2026-09-16-37 — the CODEGEN twin of
+    /// `tests/interpreter.rs`'s `test_discarded_tuple_return_runs_its_element_drop_body`,
+    /// same cells and same expectations.
+    ///
+    /// IT EXISTS BECAUSE ITS ABSENCE COST A DOUBLED BODY. `8377932` fixed the
+    /// discarded-tuple body on both backends but pinned only the INTERPRETER
+    /// side, so a codegen-only regression in the same commit went unseen: the
+    /// bodies registration was gated on the MEMORY walk's verdict, which also
+    /// claims a method-call tail, and for `impl S {{ fn m(self) -> (R, i64) }}`
+    /// the receiver's own walk already owns the element the method moved into
+    /// the tuple — `s.m();` printed `dR dR` compiled against one interpreted.
+    /// An A/B pair pinning the SAME bytes is what makes that impossible; an
+    /// interpreter-only fixture cannot see a compiled double.
+    #[test]
+    fn e2e_discarded_tuple_return_runs_its_element_drop_body() {
+        // 1 — the row's shape: a bare discard statement.
+        let Some(out) = run_program(
+            "struct R { id: i64, name: String }\n\
+             impl Drop for R { fn drop(mut ref self) { println(f\"dR{self.id}\") } }\n\
+             fn mk(i: i64) -> R { return R { id: i, name: f\"h{i}\" }; }\n\
+             fn f(r: R) -> (R, i64) { return (r, 9); }\n\
+             fn main() { f(mk(20)); println(\"ok\"); }\n",
+        ) else {
+            return;
+        };
+        assert_eq!(out, "dR20\nok\n");
+
+        // 2 — the `let _ =` spelling, broken the same way and fixed by the
+        //     same pair.
+        let Some(out) = run_program(
+            "struct R { id: i64, name: String }\n\
+             impl Drop for R { fn drop(mut ref self) { println(f\"dR{self.id}\") } }\n\
+             fn mk(i: i64) -> R { return R { id: i, name: f\"h{i}\" }; }\n\
+             fn f(r: R) -> (R, i64) { return (r, 9); }\n\
+             fn main() { let _ = f(mk(22)); println(\"ok\"); }\n",
+        ) else {
+            return;
+        };
+        assert_eq!(out, "dR22\nok\n");
+
+        // 3 — CONTROL: the discarded BARE struct, correct before the fix.
+        let Some(out) = run_program(
+            "struct R { id: i64, name: String }\n\
+             impl Drop for R { fn drop(mut ref self) { println(f\"dR{self.id}\") } }\n\
+             fn mk(i: i64) -> R { return R { id: i, name: f\"h{i}\" }; }\n\
+             fn f(r: R) -> (R, i64) { return (r, 9); }\n\
+             fn main() { mk(21); println(\"ok\"); }\n",
+        ) else {
+            return;
+        };
+        assert_eq!(out, "dR21\nok\n");
+
+        // 3b — B-2026-09-16-37: a GENERIC callee is declined, because codegen
+        //      resolves this shape from the DECLARED element types and an
+        //      erased `T` yields no walker. Agreed gap, both backends silent.
+        let Some(out) = run_program(
+            "struct R { id: i64, name: String }\n\
+             impl Drop for R { fn drop(mut ref self) { println(f\"dR{self.id}\") } }\n\
+             fn mk(i: i64) -> R { return R { id: i, name: f\"h{i}\" }; }\n\
+             fn f(r: R) -> (R, i64) { return (r, 9); }\n\
+             fn fgen[T](t: T) -> (T, i64) { return (t, 5); }\n\
+             fn main() { fgen(mk(31)); println(\"ok\"); }\n",
+        ) else {
+            return;
+        };
+        assert_eq!(out, "ok\n");
+
+        // 3c — B-2026-09-16-37: THE CELL THAT CATCHES THE DOUBLE. A method
+        //      callee is declined; the receiver's own walk owns the element.
+        //      Exactly one `dR32`.
+        let Some(out) = run_program(
+            "struct R { id: i64, name: String }\n\
+             impl Drop for R { fn drop(mut ref self) { println(f\"dR{self.id}\") } }\n\
+             fn mk(i: i64) -> R { return R { id: i, name: f\"h{i}\" }; }\n\
+             fn f(r: R) -> (R, i64) { return (r, 9); }\n\
+             struct S { r: R }\n\
+             impl S { fn m(self) -> (R, i64) { return (self.r, 3); } }\n\
+             fn main() { let s: S = S { r: mk(32) }; s.m(); println(\"ok\"); }\n",
+        ) else {
+            return;
+        };
+        assert_eq!(out, "dR32\nok\n");
+
+        // 4 — CONTROL: no Drop-bearing element, stays silent.
+        let Some(out) = run_program(
+            "fn g(i: i64) -> (i64, i64) { return (i, 9); }\n\
+             fn main() { g(5); println(\"ok\"); }\n",
+        ) else {
+            return;
+        };
+        assert_eq!(out, "ok\n");
+    }
+
     /// B-2026-09-03-32 / B-2026-09-04-23 / B-2026-09-05-25 — a destructure
     /// DESTROYS THE FIELDS IT DISCARDS INSIDE THE STATEMENT, before an unread
     /// leaf's NLL death; several discards die in reverse declaration order;
