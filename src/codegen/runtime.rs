@@ -724,6 +724,11 @@ impl<'ctx> super::Codegen<'ctx> {
             .unwrap();
 
         self.builder.position_at_end(free_bb);
+        // B-2026-09-15-10 — a SHARED enum's heap-BOXED payload, freed here
+        // because this is the only point that knows the last handle is going
+        // away. Self-gated to a shared enum that actually boxes a payload, so
+        // it emits nothing for every other heap type.
+        self.emit_shared_enum_payload_box_free(heap_type, ptr);
         // Dispatch to the per-struct recursive drop fn when one was
         // synthesized for this heap_type. Otherwise plain `free`. The
         // drop fn includes `free(ptr)` after its field walk, so we
@@ -795,6 +800,163 @@ impl<'ctx> super::Codegen<'ctx> {
         self.builder.build_unconditional_branch(done_bb).unwrap();
 
         self.builder.position_at_end(done_bb);
+    }
+
+    /// B-2026-09-15-10 — free a `shared enum`'s heap-BOXED payload when its
+    /// last handle goes away.
+    ///
+    /// A variant DECLARATION can only spell an array as
+    /// `Path(["Array"], [Type(T), Const(N)])`, and
+    /// `payload_word_count_for_type_expr`'s real-width arm is keyed on
+    /// `TypeKind::Array` — a kind only INFERENCE produces — so the field is
+    /// sized at the conservative 1 word and `coerce_to_payload_words` boxes it.
+    /// That box had NO owner: `%karac.shared.E` is malloc'd, the payload box is
+    /// malloc'd and stored into a payload word, and the release path freed the
+    /// SHELL only. Measured at `-O0` under valgrind: `Array[String, 2]` lost
+    /// 48 B, `Array[i64, 2]` a bare 16 B with no heap anywhere — the cleanest
+    /// available proof that the ENVELOPE is what is unowned, since there is no
+    /// interior for any walk to have missed — while `String`, a named struct
+    /// and an oversize named struct payload were all clean.
+    ///
+    /// HERE RATHER THAN IN THE CLASSIFIER, which is the trap this row records.
+    /// `user_enum_boxed_payload_variants` bails on a shared enum, and relaxing
+    /// that would feed five per-binding `BoxedEnumDrop` registrations — but the
+    /// box is ONE PER CONSTRUCTION, shared by every handle (measured: two
+    /// handles lose one box, three constructions lose three). Two handles would
+    /// then register two frees of one box, turning a leak into a double free.
+    /// This site runs at `rc == 0`, so it fires exactly once for the last
+    /// handle however many there were.
+    ///
+    /// ENVELOPE ONLY, deliberately. The payload's INTERIOR belongs to whoever
+    /// owns it, and for a shared enum that is still the SOURCE: the constructor
+    /// excludes shared enums from `disarm_array_sources` (B-2026-09-13-15),
+    /// so a named local keeps its own drop and frees the elements. Walking the
+    /// interior here would double-free exactly that, the most common spelling.
+    /// The fresh-temp spelling (`Sh.S(mka("x"))`) has no such owner and keeps
+    /// its ~34 B indirect loss; that is a narrower, separate question and is
+    /// filed rather than guessed at here.
+    ///
+    /// Reads the kinds the pack side already wrote (`field_drop_kinds` is built
+    /// for shared enums too — the boxing passes in `declare_enums` carry no
+    /// `is_shared` gate), so the free cannot disagree with the boxing decision.
+    /// `BoxedArray` ONLY: a `BoxedTuple` payload's box is already freed and its
+    /// INTERIOR is what leaks, which is the opposite channel and a different
+    /// row.
+    fn emit_shared_enum_payload_box_free(
+        &self,
+        heap_type: StructType<'ctx>,
+        ptr: PointerValue<'ctx>,
+    ) {
+        let Some(name) = self
+            .type_decls
+            .shared_types
+            .iter()
+            .find(|(_, i)| i.heap_type == heap_type)
+            .map(|(n, _)| n.clone())
+        else {
+            return;
+        };
+        let Some(layout) = self.type_decls.enum_layouts.get(name.as_str()) else {
+            return;
+        };
+        if !layout.is_shared {
+            return;
+        }
+        // `{ rc, tag, w0, .. }`, or `{ strong, weak, tag, w0, .. }` for a
+        // weak-headered box — so the tag index moves and the payload words
+        // move with it.
+        let tag_idx: u32 = if self.heap_type_is_weak_headered(heap_type) {
+            2
+        } else {
+            1
+        };
+        let mut by_tag: Vec<(u64, Vec<u32>)> = Vec::new();
+        for (vname, kinds) in &layout.field_drop_kinds {
+            let (Some(tag), Some(offs)) =
+                (layout.tags.get(vname), layout.field_word_offsets.get(vname))
+            else {
+                continue;
+            };
+            let mut words: Vec<u32> = Vec::new();
+            for (fi, kind) in kinds.iter().enumerate() {
+                if *kind != super::state::EnumDropKind::BoxedArray {
+                    continue;
+                }
+                if let Some((start_word, _)) = offs.get(fi) {
+                    words.push(tag_idx + 1 + *start_word as u32);
+                }
+            }
+            if !words.is_empty() {
+                by_tag.push((*tag, words));
+            }
+        }
+        if by_tag.is_empty() {
+            return;
+        }
+        by_tag.sort_by_key(|(t, _)| *t);
+
+        let Some(cur_fn) = self.current_fn else {
+            return;
+        };
+        let i64_t = self.context.i64_type();
+        let ptr_ty = self.context.ptr_type(AddressSpace::default());
+        let Ok(tag_ptr) = self
+            .builder
+            .build_struct_gep(heap_type, ptr, tag_idx, "shbox.tag.p")
+        else {
+            return;
+        };
+        let tag = self
+            .builder
+            .build_load(i64_t, tag_ptr, "shbox.tag")
+            .unwrap()
+            .into_int_value();
+        let join_bb = self.context.append_basic_block(cur_fn, "shbox.join");
+        let mut cases: Vec<(IntValue<'ctx>, inkwell::basic_block::BasicBlock<'ctx>)> = Vec::new();
+        let mut bodies: Vec<(inkwell::basic_block::BasicBlock<'ctx>, Vec<u32>)> = Vec::new();
+        for (t, words) in &by_tag {
+            let bb = self.context.append_basic_block(cur_fn, "shbox.free");
+            cases.push((i64_t.const_int(*t, false), bb));
+            bodies.push((bb, words.clone()));
+        }
+        self.builder.build_switch(tag, join_bb, &cases).unwrap();
+        for (bb, words) in bodies {
+            self.builder.position_at_end(bb);
+            for w in words {
+                let Ok(wp) = self
+                    .builder
+                    .build_struct_gep(heap_type, ptr, w, "shbox.w.p")
+                else {
+                    continue;
+                };
+                let raw = self
+                    .builder
+                    .build_load(i64_t, wp, "shbox.w")
+                    .unwrap()
+                    .into_int_value();
+                let bp = self
+                    .builder
+                    .build_int_to_ptr(raw, ptr_ty, "shbox.p")
+                    .unwrap();
+                let is_null = self.builder.build_is_null(bp, "shbox.isnull").unwrap();
+                let do_bb = self.context.append_basic_block(cur_fn, "shbox.do");
+                let skip_bb = self.context.append_basic_block(cur_fn, "shbox.skip");
+                self.builder
+                    .build_conditional_branch(is_null, skip_bb, do_bb)
+                    .unwrap();
+                self.builder.position_at_end(do_bb);
+                self.builder
+                    .build_call(self.runtime_fns.free_fn, &[bp.into()], "")
+                    .unwrap();
+                // Re-zero so a re-entrant release is a no-op, the same defence
+                // the `BoxedArray` / `BoxedOptRes` drop arms carry.
+                self.builder.build_store(wp, i64_t.const_zero()).unwrap();
+                self.builder.build_unconditional_branch(skip_bb).unwrap();
+                self.builder.position_at_end(skip_bb);
+            }
+            self.builder.build_unconditional_branch(join_bb).unwrap();
+        }
+        self.builder.position_at_end(join_bb);
     }
 
     /// Recursively test whether `agg_ty` (a tuple / struct LLVM type) holds
@@ -1634,6 +1796,13 @@ impl<'ctx> super::Codegen<'ctx> {
             .unwrap();
 
         self.builder.position_at_end(free_bb);
+        // B-2026-09-15-10 — the atomic twin of the payload-box free in
+        // `emit_rc_dec_guarded`. A `par enum` is registered in
+        // `shared_types` exactly like a `shared enum` and boxes its
+        // nameless-aggregate payload the same way, but it releases through
+        // THIS function, so without the call here the box leaks for every
+        // `par` spelling of the same shape.
+        self.emit_shared_enum_payload_box_free(heap_type, ptr);
         // Mirror `emit_rc_dec`'s drop-fn dispatch on the atomic
         // path. The drop fn body uses non-atomic field walks
         // internally — the last decrement happens HERE (atomicrmw

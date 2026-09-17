@@ -96278,4 +96278,153 @@ fn main() {
             "b23-enum-payload-wide-string-tuple-control",
         );
     }
+
+    /// B-2026-09-15-10 — a `shared enum` (or `par enum`) whose variant payload
+    /// is a NAMELESS AGGREGATE heap-boxes that payload, and until this fix
+    /// nothing ever freed the box.
+    ///
+    /// The declaration spells the payload `Array[T, N]`, i.e.
+    /// `Path(["Array"], [Type(T), Const(N)])`, so
+    /// `payload_word_count_for_type_expr`'s real-width arm — keyed on
+    /// `TypeKind::Array`, a kind only INFERENCE produces — never fires, the
+    /// field is sized at the conservative 1 word, and the pack side boxes it.
+    /// On a NON-shared enum the per-binding `BoxedEnumDrop` scope-exit
+    /// registration frees that box. On a shared one
+    /// `user_enum_boxed_payload_variants` bails out, correctly: the box is
+    /// per-CONSTRUCTION and shared by every handle, so a per-binding
+    /// registration would free it once per handle. That left it owned by
+    /// nobody.
+    ///
+    /// The free now sits where the last handle is known —
+    /// `emit_rc_dec_guarded`'s `rc_free` block and its atomic twin
+    /// `emit_arc_dec`'s `arc_free` — as a tag switch over the box's own tag
+    /// word, driven by the `EnumDropKind::BoxedArray` entries the pack side
+    /// already wrote into `EnumLayout::field_drop_kinds`. Additive-safe
+    /// precisely because the box had no owner before.
+    ///
+    /// ENVELOPE ONLY, DELIBERATELY. The constructor excludes shared enums from
+    /// `disarm_array_sources`, so a NAMED array local keeps its own element
+    /// drop and frees the interior itself; walking the interior here would
+    /// double-free that spelling. Every cell below therefore sources its
+    /// payload from a named local. The FRESH-TEMP spellings keep an indirect
+    /// residual that this fix converts from indirect to direct rather than
+    /// reclaiming (`Sh.S(mka("x"))`: 48 direct + 34 indirect → 34 direct), and
+    /// they are deliberately NOT here — asserting them clean would tie this
+    /// guard to a row that is still open.
+    ///
+    /// Measured at `KARAC_OPT_LEVEL=0` under `valgrind --leak-check=full`,
+    /// pre-fix → post-fix, definitely-lost bytes, with a marker `grep -c`
+    /// printing zero on the unfixed tree first. No cell reports an invalid
+    /// read, invalid free or mismatched free on either side — checked per cell
+    /// rather than read off `ERROR SUMMARY`, which counts a leak record as an
+    /// error once `--leak-check=full` is on and so cannot tell the two apart:
+    ///
+    ///     Array[String, 2], named local        48 → 0
+    ///     Array[i64, 2], no interior at all     16 → 0
+    ///     two handles, `let s2 = s1`            48 → 0   (ONE free, not two)
+    ///     two boxing variants A and B           72 → 0   (48 + 24, one per arm)
+    ///     nested Array[Array[String, 2], 2]     96 → 0
+    ///     `par enum`, named local, Arc path     48 → 0
+    ///
+    /// THE RC CELLS ARE A GATE ON `scripts/asan-o0-leg.sh`, NOT ON THE DEFAULT
+    /// `--features llvm` LEG, and that is measured rather than assumed. On the
+    /// unfixed tree at the harness default opt level the first five cells PASS
+    /// — LLVM deletes allocations nothing observes — and the fixture fails at
+    /// the sixth, the `par` cell, whose atomics survive that. At
+    /// `KARAC_OPT_LEVEL=0` the same fixture fails at the FIRST cell, so every
+    /// cell is live there. A green default-leg run on this fixture alone is
+    /// therefore evidence about the Arc path only.
+    ///
+    /// The two-handles cell is what pins the PLACEMENT: the box is one per
+    /// construction, so a per-binding registration would have double-freed it
+    /// where this leaks. The `par` cell is what forced the second call site —
+    /// a `par enum` is registered in `shared_types` and boxes identically
+    /// (`EnumLayout`'s `is_shared` is `e.is_shared || e.is_par`) but releases
+    /// through `emit_arc_dec`, so the `emit_rc_dec_guarded`-only patch left
+    /// every `par` spelling leaking. Delete either call and this reddens.
+    ///
+    /// NO CELL CONSTRUCTS A UNIT VARIANT, and that omission is load-bearing
+    /// rather than incidental: `Sh.N` alone strands 24 B — `{rc, tag, w0}`,
+    /// the RC SHELL rather than any payload box — byte-identical before and
+    /// after this change. That is B-2026-09-17-22, and a cell carrying it would make
+    /// this fixture red for a reason that is not its own.
+    #[test]
+    fn asan_shared_enum_nameless_aggregate_payload_box_is_freed() {
+        const STRS: &str = "[f\"aaaaaaaaaaaaaaaaaaaa\", f\"bbbbbbbbbbbbbbbbbbbb\"]";
+
+        let single = format!(
+            "shared enum Sh {{ S(Array[String, 2]), N }}\n\
+             fn main() {{\n\
+             \x20   let a: Array[String, 2] = {STRS};\n\
+             \x20   {{ let s = Sh.S(a); println(f\"one\"); }}\n\
+             \x20   println(f\"done\");\n\
+             }}\n"
+        );
+        assert_clean_asan_run(&single, &["one", "done"], "b1510-named-local");
+
+        // No interior at all — the clearest proof that the ENVELOPE is what was
+        // unowned, since there is nothing here for any interior walk to reach.
+        assert_clean_asan_run(
+            "shared enum Sh { S(Array[i64, 2]), N }\n\
+             fn main() {\n\
+             \x20   let a: Array[i64, 2] = [1, 2];\n\
+             \x20   { let s = Sh.S(a); println(f\"one\"); }\n\
+             \x20   println(f\"done\");\n\
+             }\n",
+            &["one", "done"],
+            "b1510-scalar-no-interior",
+        );
+
+        // TWO handles to ONE box. Exactly one free must happen: a leak here
+        // means the fix regressed, an ASAN double-free report means it was
+        // moved to a per-binding registration.
+        let handles = format!(
+            "shared enum Sh {{ S(Array[String, 2]), N }}\n\
+             fn main() {{\n\
+             \x20   let a: Array[String, 2] = {STRS};\n\
+             \x20   {{ let s1 = Sh.S(a); let s2 = s1; println(f\"two\"); }}\n\
+             \x20   println(f\"done\");\n\
+             }}\n"
+        );
+        assert_clean_asan_run(&handles, &["two", "done"], "b1510-two-handles-one-box");
+
+        // TWO boxing variants: the switch needs an arm per boxing variant, not
+        // just the one the program happens to construct.
+        let two = format!(
+            "shared enum Sh {{ A(Array[String, 2]), B(Array[i64, 3]), N }}\n\
+             fn main() {{\n\
+             \x20   let x: Array[String, 2] = {STRS};\n\
+             \x20   {{ let s = Sh.A(x); println(f\"a\"); }}\n\
+             \x20   let y: Array[i64, 3] = [1, 2, 3];\n\
+             \x20   {{ let s = Sh.B(y); println(f\"b\"); }}\n\
+             }}\n"
+        );
+        assert_clean_asan_run(&two, &["a", "b"], "b1510-two-boxing-variants");
+
+        // A NESTED aggregate — the box holds arrays of arrays.
+        assert_clean_asan_run(
+            "shared enum Sh { S(Array[Array[String, 2], 2]), N }\n\
+             fn main() {\n\
+             \x20   let a: Array[Array[String, 2], 2] =\n\
+             \x20       [[f\"aaaaaaaaaaaaaaaa\", f\"bbbbbbbbbbbbbbbb\"],\n\
+             \x20        [f\"cccccccccccccccc\", f\"dddddddddddddddd\"]];\n\
+             \x20   { let s = Sh.S(a); println(f\"n\"); }\n\
+             \x20   println(f\"done\");\n\
+             }\n",
+            &["n", "done"],
+            "b1510-nested-array-payload",
+        );
+
+        // The Arc path. Same layout, different release function — this is the
+        // cell the first cut of the fix left leaking.
+        let par = format!(
+            "par enum Sh {{ S(Array[String, 2]), N }}\n\
+             fn main() {{\n\
+             \x20   let a: Array[String, 2] = {STRS};\n\
+             \x20   {{ let s = Sh.S(a); println(f\"one\"); }}\n\
+             \x20   println(f\"done\");\n\
+             }}\n"
+        );
+        assert_clean_asan_run(&par, &["one", "done"], "b1510-par-enum-arc-path");
+    }
 }
