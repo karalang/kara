@@ -23831,6 +23831,26 @@ impl<'ctx> super::Codegen<'ctx> {
     /// EARLIER, and a body must read its element before the memory walk frees
     /// it.
     fn track_discarded_tuple_return_bodies(&mut self, tail: &Expr, val: BasicValueEnum<'ctx>) {
+        // A FREE-FUNCTION call tail only, and the restriction is load-bearing
+        // rather than tidy. The interpreter twin routes this shape from the
+        // `Call` arm of its discard dispatch, which reaches an `Identifier`
+        // callee; a METHOD tail (`h.wrap(mk(43));`) lands in a different arm
+        // there and is NOT routed, so registering bodies here for one would
+        // fire on all three compiled surfaces against an interpreter that
+        // stays silent — a run-vs-build divergence, which is exactly the
+        // outcome B-2026-09-09-21 was written to avoid. Measured: an earlier
+        // draft of this function omitted the gate and produced
+        // `h.wrap(mk(43));` => `dR43` compiled / nothing interpreted.
+        //
+        // The method spelling is a real gap and is filed separately. It needs
+        // the same both-halves-in-one-commit treatment this shape got, not a
+        // widened gate here.
+        let ExprKind::Call { callee, .. } = &tail.kind else {
+            return;
+        };
+        if !matches!(&callee.kind, ExprKind::Identifier(_)) {
+            return;
+        }
         let BasicValueEnum::StructValue(sv) = val else {
             return;
         };
