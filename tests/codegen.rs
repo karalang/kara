@@ -8347,6 +8347,117 @@ fn main() { println(build2().v); }
         }
     }
 
+    /// B-2026-09-16-1 — the slice failure path reports the ACTUAL range, not a
+    /// constant message.
+    ///
+    /// The fast path's cold edge is a `noreturn` call to
+    /// `karac_string_slice_fail` specifically so this text survives. The
+    /// cheaper thing to emit there is `emit_panic`, which is also `noreturn`
+    /// and measured within 5% — but its message is a compile-time constant, so
+    /// `start`, `end`, `len` and the `E_…` code would all be gone. The existing
+    /// boundary test asserts only that the code appears, which `emit_panic`
+    /// with a hand-copied string would satisfy; these assert the values, which
+    /// only routing through the runtime's own `slice_validate` can produce.
+    /// COVERS THE DEFAULT (`KARAC_SSO=0`) ARM ONLY, and the name has to be read
+    /// that way. `KARAC_SSO` is read once per process through a `OnceLock` at
+    /// codegen time and defaults to off; `tests/codegen.rs` compiles
+    /// in-process, so nothing here can turn it on. The inline/heap fast-path
+    /// routes this describes are covered at `KARAC_SSO=1` by
+    /// `test_sso_string_slice_routes_match_the_interpreter` in `tests/cli.rs`,
+    /// which spawns `karac`. Measured: with the heap route's result aggregate
+    /// deliberately pointing into the SOURCE buffer — a guaranteed double free
+    /// — every fixture in this file stayed green and the cli.rs one aborted.
+    #[test]
+    fn e2e_string_slice_failure_reports_the_actual_range() {
+        // Out of range. `n` is computed so the bound is not a constant the
+        // compiler could fold into a static diagnostic.
+        if let Some(cap) = run_program_capturing(
+            "fn main() {\n\
+             \x20   let s = \"hello\";\n\
+             \x20   let n = s.len() + 5;\n\
+             \x20   println(s[0..n]);\n\
+             }",
+        ) {
+            assert!(
+                cap.stderr
+                    .contains("string slice bounds 0..10 out of range (len 5)"),
+                "expected the range and length in the message, got stderr={:?}",
+                cap.stderr,
+            );
+        }
+        // Mid-char. Same requirement on the other predicate.
+        if let Some(cap) = run_program_capturing(
+            "fn main() {\n\
+             \x20   let s = \"h\\u{e9}llo\";\n\
+             \x20   let k = s.len() - 4;\n\
+             \x20   println(s[0..k]);\n\
+             }",
+        ) {
+            assert!(
+                cap.stderr.contains("E_STRING_SLICE_NOT_AT_CHAR_BOUNDARY")
+                    && cap.stderr.contains("byte range 0..2"),
+                "expected the code AND the byte range, got stderr={:?}",
+                cap.stderr,
+            );
+        }
+    }
+
+    /// B-2026-09-16-1 — the inlined heap route matches what the runtime wrote.
+    ///
+    /// Slices longer than the 23-byte overlay no longer call
+    /// `karac_string_slice_into`; codegen emits the allocation itself. The
+    /// contract it has to reproduce is the runtime's, not the simpler one
+    /// `substring` uses: `n + 1` bytes with a NUL at `[n]`, because
+    /// `runtime/src/clone.rs` records a printf overread fixed by adding
+    /// exactly that spare byte. A sliced String is freely interchangeable with
+    /// a cloned one, so the two must agree on every observable.
+    /// COVERS THE DEFAULT (`KARAC_SSO=0`) ARM ONLY, and the name has to be read
+    /// that way. `KARAC_SSO` is read once per process through a `OnceLock` at
+    /// codegen time and defaults to off; `tests/codegen.rs` compiles
+    /// in-process, so nothing here can turn it on. The inline/heap fast-path
+    /// routes this describes are covered at `KARAC_SSO=1` by
+    /// `test_sso_string_slice_routes_match_the_interpreter` in `tests/cli.rs`,
+    /// which spawns `karac`. Measured: with the heap route's result aggregate
+    /// deliberately pointing into the SOURCE buffer — a guaranteed double free
+    /// — every fixture in this file stayed green and the cli.rs one aborted.
+    #[test]
+    fn e2e_string_slice_heap_route_matches_the_clone_contract() {
+        let Some(out) = run_program(
+            "fn main() {\n\
+             \x20   let s = \"the quick brown fox jumps over the lazy dog, twice over\";\n\
+             \x20   let a = s[0..24];\n\
+             \x20   let b = s[4..40];\n\
+             \x20   let c = s[0..s.len()];\n\
+             \x20   println(f\"1 {a.len()} [{a}]\")\n\
+             \x20   println(f\"2 {b.len()} [{b}]\")\n\
+             \x20   println(f\"3 {c == s}\")\n\
+             \x20   let d = c.clone();\n\
+             \x20   println(f\"4 {d == c} {d.len() == c.len()}\")\n\
+             \x20   let mut e = s[10..40];\n\
+             \x20   e.push_str(\"!\");\n\
+             \x20   println(f\"5 {e.len()} [{e}]\")\n\
+             \x20   let mut v: Vec[String] = Vec.new();\n\
+             \x20   let mut i = 0;\n\
+             \x20   while i < 8 { v.push(s[i..(i + 30)]); i = i + 1; }\n\
+             \x20   println(f\"6 {v.len()} {v[0].len()} [{v[7]}]\")\n\
+             \x20   println(\"end\")\n\
+             }\n\
+             ",
+        ) else {
+            return;
+        };
+        assert_eq!(
+            out,
+            "1 24 [the quick brown fox jump]\n\
+             2 36 [quick brown fox jumps over the lazy ]\n\
+             3 true\n\
+             4 true true\n\
+             5 31 [brown fox jumps over the lazy !]\n\
+             6 8 30 [ck brown fox jumps over the la]\n\
+             end\n"
+        );
+    }
+
     // ── Basic arithmetic ─────────────────────────────────────────
 
     #[test]
@@ -19474,6 +19585,15 @@ end
     ///
     /// Case 8 is the aliasing question: the slice must own its bytes, so
     /// growing the source afterwards cannot disturb it.
+    /// COVERS THE DEFAULT (`KARAC_SSO=0`) ARM ONLY, and the name has to be read
+    /// that way. `KARAC_SSO` is read once per process through a `OnceLock` at
+    /// codegen time and defaults to off; `tests/codegen.rs` compiles
+    /// in-process, so nothing here can turn it on. The inline/heap fast-path
+    /// routes this describes are covered at `KARAC_SSO=1` by
+    /// `test_sso_string_slice_routes_match_the_interpreter` in `tests/cli.rs`,
+    /// which spawns `karac`. Measured: with the heap route's result aggregate
+    /// deliberately pointing into the SOURCE buffer — a guaranteed double free
+    /// — every fixture in this file stayed green and the cli.rs one aborted.
     #[test]
     fn e2e_string_slice_inline_fast_path_matches_the_runtime() {
         let Some(out) = run_program(

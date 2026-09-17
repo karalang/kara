@@ -6029,22 +6029,31 @@ impl<'ctx> Codegen<'ctx> {
             Some(Linkage::External),
         );
 
-        // karac_string_slice_into(data, len, start, end, out: ptr) -> void
-        // SSO sibling of karac_string_slice: validates identically (shared
-        // `slice_validate`), then writes a COMPLETE {ptr,len,cap} descriptor
-        // to `out` — inline (no allocation) when the slice fits the 23-byte
-        // overlay, heap otherwise. Codegen owns no encoding: it calls this
-        // and loads the 24 bytes back, so the layout has exactly one
-        // implementation (`runtime/src/sso.rs`'s `new_inline`).
-        // Reached only when `KARAC_SSO` is on. See `runtime/src/clone.rs`.
-        let string_slice_into_ty = context
+        // karac_string_slice_fail(data, len, start, end) -> ! (noreturn)
+        // The FAILURE half of karac_string_slice_into, split out so the inline
+        // slice fast path can report a bad slice without keeping a
+        // value-returning call on its cold edge. That call is what made the
+        // fast path expensive: it takes the {ptr,len,cap} descriptor by
+        // address, so the alloca escapes and SROA cannot keep the fast path's
+        // descriptor in registers. Measured 2.58x on bench/sso/lexlike.kara
+        // (B-2026-09-16-1). Marked cold + noreturn below; it calls the SAME
+        // `slice_validate`, so the diagnostics are identical by construction.
+        let string_slice_fail_ty = context
             .void_type()
-            .fn_type(&[ptr_md, i64_ty, i64_ty, i64_ty, ptr_md], false);
-        let karac_string_slice_into_fn = module.add_function(
-            "karac_string_slice_into",
-            string_slice_into_ty,
+            .fn_type(&[ptr_md, i64_ty, i64_ty, i64_ty], false);
+        let karac_string_slice_fail_fn = module.add_function(
+            "karac_string_slice_fail",
+            string_slice_fail_ty,
             Some(Linkage::External),
         );
+        for attr_name in ["cold", "noreturn"] {
+            let kind = inkwell::attributes::Attribute::get_named_enum_kind_id(attr_name);
+            debug_assert!(kind != 0, "{attr_name} attribute kind-id must resolve");
+            karac_string_slice_fail_fn.add_attribute(
+                inkwell::attributes::AttributeLoc::Function,
+                context.create_enum_attribute(kind, 0),
+            );
+        }
 
         // karac_string_slice_borrow(data, len, start, end) -> ptr
         // Validates identically to karac_string_slice but returns a pointer
@@ -6483,7 +6492,7 @@ impl<'ctx> Codegen<'ctx> {
                 karac_map_lookup_slot_fn,
                 karac_string_clone_fn,
                 karac_string_slice_fn,
-                karac_string_slice_into_fn,
+                karac_string_slice_fail_fn,
                 karac_string_slice_borrow_fn,
                 karac_unicode_normalize_fn,
                 karac_dbg_quote_str_fn,

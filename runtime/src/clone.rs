@@ -196,6 +196,54 @@ pub unsafe extern "C" fn karac_string_slice_into(
     }
 }
 
+/// Report a failed `s[start..end]` validation and exit. Never returns.
+///
+/// B-2026-09-16-1. Codegen's inline slice fast path re-implements
+/// `slice_validate`'s two predicates exactly (numeric bounds, then a UTF-8
+/// boundary probe at each index) and, when both pass, serves the slice itself
+/// — inline for `n <= 23`, heap otherwise. The only thing it still needs from
+/// the runtime is the FAILURE report, and routing that back through
+/// `karac_string_slice_into` cost 2.58x: a call that returns a value forces
+/// the `{ptr,len,cap}` descriptor through an address-taken alloca, which
+/// blocks the SROA that would otherwise keep the fast path's descriptor in
+/// registers. Measured on `bench/sso/lexlike.kara`, 10M iterations, arm64:
+/// 651,383,097 instructions with the call present against 252,816,414 with
+/// this entry point instead, `_main` 5121 -> 86 bytes.
+///
+/// A dedicated `-> !` entry point is what makes that free WITHOUT giving up
+/// the diagnostics: `emit_panic` would also have been noreturn, but its
+/// message is a compile-time constant, so the `start`/`end`/`len` values and
+/// the `E_STRING_SLICE_NOT_AT_CHAR_BOUNDARY` code would have been lost. This
+/// calls the SAME `slice_validate` the non-fast path calls, so the text is
+/// identical by construction rather than by transcription.
+///
+/// The final `exit` is not dead in the way it looks. It is reached only if
+/// codegen's inline predicates are STRICTER than `slice_validate`'s — a
+/// compiler bug rather than a user error — and saying so is better than
+/// returning into a `noreturn` declaration, which is UB.
+///
+/// # Safety
+///
+/// Same contract as [`karac_string_slice_into`]: `data` must point to a
+/// readable buffer of at least `len` bytes when `len > 0`.
+#[no_mangle]
+pub unsafe extern "C" fn karac_string_slice_fail(
+    data: *const u8,
+    len: i64,
+    start: i64,
+    end: i64,
+) -> ! {
+    unsafe {
+        slice_validate(data, len, start, end);
+    }
+    crate::fatal::eprint_fmt(format_args!(
+        "runtime error: internal: karac_string_slice_fail called on a slice \
+         {start}..{end} (len {len}) that validates — codegen's inline slice \
+         predicates are stricter than slice_validate's\n"
+    ));
+    std::process::exit(1);
+}
+
 /// Try to build an INLINE `String` descriptor from `n` bytes at `src`.
 /// Returns 1 if it did, 0 if `n` exceeds the inline capacity — in which case
 /// `out` is NOT written and the caller must take its own heap path.

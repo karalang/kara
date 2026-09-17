@@ -36772,6 +36772,216 @@ fn test_sso_inline_string_survives_the_env_ffi_boundary() {
     let _ = std::fs::remove_dir_all(&tmp);
 }
 
+/// B-2026-09-16-1 — `s[a..b]` at `KARAC_SSO=1`, where codegen now serves the
+/// slice itself instead of calling `karac_string_slice_into`.
+///
+/// **Why this is in cli.rs and not codegen.rs.** `KARAC_SSO` is read once per
+/// process through a `OnceLock` at codegen time and defaults to OFF, so a
+/// fixture in `tests/codegen.rs` — which compiles in-process — exercises the
+/// non-SSO path no matter what it is named. That is not hypothetical: the
+/// first three fixtures written for this change all lived there, all passed,
+/// and a deliberately broken heap route (the result aggregate pointing into
+/// the SOURCE buffer instead of its own allocation — a guaranteed double free,
+/// which a direct `KARAC_SSO=1` build aborts on immediately) left every one of
+/// them green. Spawning `karac` is what makes the flag per-fixture.
+///
+/// **What the fast path now owns.** Three routes reach the join where one
+/// runtime call used to: `n == 0` builds `{null, 0, 0}`, `n <= 23` writes the
+/// inline overlay, and `n > 23` allocates. The last is the new one, and it has
+/// to reproduce `karac_string_slice_into`'s heap arm exactly — `n + 1` bytes
+/// with a NUL at `[n]`, not the tighter `n` that `String.substring` uses,
+/// because `runtime/src/clone.rs` records a printf overread fixed by adding
+/// precisely that spare byte. A sliced String is interchangeable with a cloned
+/// one, so the two must agree on every observable.
+///
+/// The cells walk both sides of the 23-byte boundary, the empty slice, the
+/// whole string, a slice that is grown afterwards (so the buffer is
+/// reallocated and the free must land on the new pointer), and slices stored
+/// in a `Vec` that outlives the expression producing them.
+#[cfg(feature = "llvm")]
+#[test]
+fn test_sso_string_slice_routes_match_the_interpreter() {
+    use std::process::Command;
+
+    let tmp = scratch_project("sso-slice-routes");
+    let src = "fn main() {\n\
+               \x20   let s = \"the quick brown fox jumps over the lazy dog, twice over\";\n\
+               \x20   let a = s[0..23];\n\
+               \x20   let b = s[0..24];\n\
+               \x20   println(f\"1 {a.len()} [{a}]\");\n\
+               \x20   println(f\"2 {b.len()} [{b}]\");\n\
+               \x20   let e = s[7..7];\n\
+               \x20   let full = s[0..s.len()];\n\
+               \x20   println(f\"3 {e.len()} {full == s}\");\n\
+               \x20   let d = full.clone();\n\
+               \x20   println(f\"4 {d == full} {d.len() == full.len()}\");\n\
+               \x20   let mut g = s[10..40];\n\
+               \x20   g.push_str(\"-grown\");\n\
+               \x20   println(f\"5 {g.len()} [{g}]\");\n\
+               \x20   let mut v: Vec[String] = Vec.new();\n\
+               \x20   let mut i = 0;\n\
+               \x20   while i < 8 { v.push(s[i..(i + 30)]); i = i + 1; }\n\
+               \x20   println(f\"6 {v.len()} {v[0].len()} [{v[7]}]\");\n\
+               \x20   let m = \"h\\u{e9}llo w\\u{f6}rld, a string long enough to need the heap\";\n\
+               \x20   println(f\"7 [{m[0..1]}] [{m[1..3]}] {m[0..m.len()].len()}\");\n\
+               \x20   println(\"end\");\n\
+               }\n";
+    write(&tmp.join("slice.kara"), src);
+
+    // The interpreter is the oracle: it has no descriptor layout and no fast
+    // path to get wrong.
+    let interp = Command::new(env!("CARGO_BIN_EXE_karac"))
+        .current_dir(&tmp)
+        .args(["run", "--interp", "slice.kara"])
+        .output()
+        .expect("spawn karac run --interp");
+    assert!(
+        interp.status.success(),
+        "interpreter run failed: {}",
+        String::from_utf8_lossy(&interp.stderr)
+    );
+    let want = String::from_utf8_lossy(&interp.stdout).to_string();
+    assert!(
+        want.contains("\nend\n") && want.contains("1 23 "),
+        "oracle produced nothing usable: {want:?}"
+    );
+
+    for sso in ["0", "1"] {
+        let out = Command::new(env!("CARGO_BIN_EXE_karac"))
+            .current_dir(&tmp)
+            .env("KARAC_SSO", sso)
+            .args(["run", "slice.kara"])
+            .output()
+            .expect("spawn karac run");
+        assert!(
+            out.status.success(),
+            "KARAC_SSO={sso} karac run died: status {:?}, stderr {}",
+            out.status.code(),
+            String::from_utf8_lossy(&out.stderr)
+        );
+        assert_eq!(
+            String::from_utf8_lossy(&out.stdout),
+            want,
+            "KARAC_SSO={sso} JIT lane must match the interpreter"
+        );
+    }
+
+    let mut aot_legs_run = 0;
+    for sso in ["0", "1"] {
+        let exe = tmp.join("slice");
+        let _ = std::fs::remove_file(&exe);
+        let built = Command::new(env!("CARGO_BIN_EXE_karac"))
+            .current_dir(&tmp)
+            .env("KARAC_SSO", sso)
+            .args(["build", "slice.kara"])
+            .output();
+        if !built.map(|o| o.status.success()).unwrap_or(false) || !exe.exists() {
+            continue;
+        }
+        aot_legs_run += 1;
+        let out = Command::new(&exe).output().expect("run built binary");
+        assert!(
+            out.status.success(),
+            "KARAC_SSO={sso} built binary died: status {:?}, stderr {}. A \
+             non-zero exit with no stdout here is the shape a mis-owned heap \
+             slice takes — libmalloc aborts on the second free.",
+            out.status.code(),
+            String::from_utf8_lossy(&out.stderr)
+        );
+        assert_eq!(
+            String::from_utf8_lossy(&out.stdout),
+            want,
+            "KARAC_SSO={sso} AOT lane must match the interpreter"
+        );
+    }
+    if std::env::var("KARAC_REQUIRE_RUNTIME_ARCHIVE").is_ok() {
+        assert_eq!(
+            aot_legs_run, 2,
+            "KARAC_REQUIRE_RUNTIME_ARCHIVE is set, so both AOT legs must have \
+             built and run; only {aot_legs_run} did. Build the runtime archives \
+             (lean then full) per CLAUDE.md."
+        );
+    }
+    let _ = std::fs::remove_dir_all(&tmp);
+}
+
+/// B-2026-09-16-1 — the slice failure path reports the ACTUAL range at
+/// `KARAC_SSO=1`, not a constant message.
+///
+/// The fast path's cold edge is a `noreturn` call to `karac_string_slice_fail`
+/// rather than `emit_panic`, and the difference is exactly this text.
+/// `emit_panic` is also `cold` + `noinline` + `noreturn` and measured within 5%
+/// of it, so there is a standing temptation to swap it in — but its message is
+/// a compile-time constant, which would drop `start`, `end`, `len` and the
+/// `E_…` code. `karac_string_slice_fail` re-runs the runtime's own
+/// `slice_validate`, so the two arms are identical by construction.
+///
+/// Both bounds are computed rather than written as literals, so a future
+/// constant-folded diagnostic cannot satisfy these by accident.
+#[cfg(feature = "llvm")]
+#[test]
+fn test_sso_string_slice_failure_reports_the_actual_range() {
+    use std::process::Command;
+
+    let tmp = scratch_project("sso-slice-fail");
+    let cases: [(&str, &str, &str); 2] = [
+        (
+            "oob",
+            "fn main() {\n\
+             \x20   let s = \"hello\";\n\
+             \x20   let n = s.len() + 5;\n\
+             \x20   println(s[0..n]);\n\
+             }\n",
+            "string slice bounds 0..10 out of range (len 5)",
+        ),
+        (
+            "boundary",
+            "fn main() {\n\
+             \x20   let s = \"h\\u{e9}llo\";\n\
+             \x20   let k = s.len() - 4;\n\
+             \x20   println(s[0..k]);\n\
+             }\n",
+            "E_STRING_SLICE_NOT_AT_CHAR_BOUNDARY: byte range 0..2",
+        ),
+    ];
+    let mut aot_legs_run = 0;
+    for (label, src, want) in cases {
+        write(&tmp.join("fail.kara"), src);
+        for sso in ["0", "1"] {
+            let exe = tmp.join("fail");
+            let _ = std::fs::remove_file(&exe);
+            let built = Command::new(env!("CARGO_BIN_EXE_karac"))
+                .current_dir(&tmp)
+                .env("KARAC_SSO", sso)
+                .args(["build", "fail.kara"])
+                .output();
+            if !built.map(|o| o.status.success()).unwrap_or(false) || !exe.exists() {
+                continue;
+            }
+            aot_legs_run += 1;
+            let out = Command::new(&exe).output().expect("run built binary");
+            assert!(
+                !out.status.success(),
+                "[{label}] KARAC_SSO={sso} an invalid slice must exit non-zero"
+            );
+            let err = String::from_utf8_lossy(&out.stderr);
+            assert!(
+                err.contains(want),
+                "[{label}] KARAC_SSO={sso} expected {want:?} on stderr, got {err:?}"
+            );
+        }
+    }
+    if std::env::var("KARAC_REQUIRE_RUNTIME_ARCHIVE").is_ok() {
+        assert_eq!(
+            aot_legs_run, 4,
+            "KARAC_REQUIRE_RUNTIME_ARCHIVE is set, so all four legs must have \
+             built and run; only {aot_legs_run} did. Build the runtime archives \
+             (lean then full) per CLAUDE.md."
+        );
+    }
+    let _ = std::fs::remove_dir_all(&tmp);
+}
+
 /// SSO Slice 3 — the de-inline check lives INSIDE the `push`/`push_str` growth
 /// test (`B-2026-09-14-20`, `src/codegen/vec_method.rs`), and this is what
 /// stops it being removed.

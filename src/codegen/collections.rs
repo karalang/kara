@@ -4873,12 +4873,11 @@ impl<'ctx> super::Codegen<'ctx> {
         // a layout mismatch between the two is silent data corruption. It is
         // also not a new call — the allocating path already made one.
         if self.sso_on() {
-            let out = self.sso_descriptor_alloca(fn_val, "slice.out");
-            // Separate slot for the inline route. `out` is handed to the
-            // runtime call below, so its address escapes and LLVM must keep it
-            // in memory; a slot touched only by memcpy/memset stays
-            // promotable, which is what lets the fast path keep the descriptor
-            // in registers.
+            // One slot, touched only by memcpy/memset, so it stays promotable
+            // and the fast path keeps its descriptor in registers. There used
+            // to be a second slot here for the runtime call's out-pointer; the
+            // call is gone (see `slice.slow` below) and with it the escape
+            // that made two slots necessary.
             let fout = self.sso_descriptor_alloca(fn_val, "slice.fout");
             // B-2026-09-16-1 — the fast path, mirroring what 9d3ceb9 did for
             // `substring`. The call below is opaque to LLVM and is the whole
@@ -4916,6 +4915,8 @@ impl<'ctx> super::Codegen<'ctx> {
             let empty_bb = self.context.append_basic_block(fn_val, "slice.empty");
             let enc_bb = self.context.append_basic_block(fn_val, "slice.enc");
             let enc_done_bb = self.context.append_basic_block(fn_val, "slice.encd");
+            let heap_chk_bb = self.context.append_basic_block(fn_val, "slice.hchk");
+            let heap_bb = self.context.append_basic_block(fn_val, "slice.heap");
             let cont_bb = self.context.append_basic_block(fn_val, "slice.cont");
             self.builder
                 .build_conditional_branch(bounds_ok, chk_bb, slow_bb)
@@ -5006,7 +5007,18 @@ impl<'ctx> super::Codegen<'ctx> {
                 .unwrap();
             self.builder.position_at_end(after_empty);
             self.builder
-                .build_conditional_branch(take_enc, enc_bb, slow_bb)
+                .build_conditional_branch(take_enc, enc_bb, heap_chk_bb)
+                .unwrap();
+
+            // Reaching here means neither inline route was taken, so `bounds2`
+            // alone separates the two remaining cases: a VALIDATED slice too
+            // long for the overlay (heap route) from one the runtime must
+            // reject (the call, which re-validates and reports). `!short` is
+            // implied rather than retested — `take_empty` and `take_enc` cover
+            // every `short` case between them.
+            self.builder.position_at_end(heap_chk_bb);
+            self.builder
+                .build_conditional_branch(bounds2, heap_bb, slow_bb)
                 .unwrap();
 
             // n == 0 is `{null, 0, 0}` in the runtime, NOT an inline empty.
@@ -5037,7 +5049,11 @@ impl<'ctx> super::Codegen<'ctx> {
                     .build_gep(i8_t, data_ptr, &[start_i], "slice.src")
                     .unwrap()
             };
-            self.sso_emit_inline_construct(src, n, fout, enc_done_bb, slow_bb, "slice.inl");
+            // The `on_too_long` edge cannot fire — `short` tested the same
+            // predicate above — but it points at the heap route rather than
+            // the runtime call so that the fallback, if it ever did fire,
+            // would serve the slice instead of re-validating a valid one.
+            self.sso_emit_inline_construct(src, n, fout, enc_done_bb, heap_bb, "slice.inl");
             self.builder.position_at_end(enc_done_bb);
             let enc_val = self
                 .builder
@@ -5046,33 +5062,106 @@ impl<'ctx> super::Codegen<'ctx> {
             let enc_end_bb = self.builder.get_insert_block().unwrap();
             self.builder.build_unconditional_branch(cont_bb).unwrap();
 
+            // B-2026-09-16-1 — the heap route, inline. This is the edge the
+            // measurement in 6ec15baf3 attributed the whole 3.4x to: making
+            // the VALIDATION failure noreturn moved nothing (661,401,472 vs
+            // 661,419,595 instructions, `_main` unchanged at 5122), because
+            // the cost is not the branch — it is that a call returning a value
+            // forces the descriptor through memory and blocks the SROA that
+            // keeps the inline routes in registers.
+            //
+            // The bytes emitted are `karac_string_slice_into`'s heap arm
+            // exactly: `n + 1` bytes, `n` copied, NUL at [n], `cap = n`. That
+            // contract is deliberate on the runtime side — clone.rs records a
+            // printf overread fixed by adding the spare byte — so it is
+            // reproduced rather than simplified. `substring`'s heap path is
+            // still the pre-fix shape; that is B-2026-09-16-32, not this.
+            self.builder.position_at_end(heap_bb);
+            let hsrc = unsafe {
+                self.builder
+                    .build_gep(i8_t, data_ptr, &[start_i], "slice.h.src")
+                    .unwrap()
+            };
+            let nbytes = self
+                .builder
+                .build_int_nsw_add(n, i64_t.const_int(1, false), "slice.h.nb")
+                .unwrap();
+            let hbuf = self
+                .builder
+                .build_call(
+                    self.runtime_fns.alloc_or_panic_fn,
+                    &[nbytes.into()],
+                    "slice.h.buf",
+                )
+                .unwrap()
+                .try_as_basic_value()
+                .unwrap_basic()
+                .into_pointer_value();
+            self.builder.build_memcpy(hbuf, 1, hsrc, 1, n).unwrap();
+            let htail = unsafe {
+                self.builder
+                    .build_gep(i8_t, hbuf, &[n], "slice.h.tailp")
+                    .unwrap()
+            };
+            self.builder.build_store(htail, i8_t.const_zero()).unwrap();
+            let mut h_agg = str_ty_sso.get_undef();
+            h_agg = self
+                .builder
+                .build_insert_value(h_agg, hbuf, 0, "slice.h.p")
+                .unwrap()
+                .into_struct_value();
+            h_agg = self
+                .builder
+                .build_insert_value(h_agg, n, 1, "slice.h.l")
+                .unwrap()
+                .into_struct_value();
+            h_agg = self
+                .builder
+                .build_insert_value(h_agg, n, 2, "slice.h.c")
+                .unwrap()
+                .into_struct_value();
+            let heap_end_bb = self.builder.get_insert_block().unwrap();
+            self.builder.build_unconditional_branch(cont_bb).unwrap();
+
+            // The cold edge. Both inline routes and the heap route above cover
+            // every range `slice_validate` accepts, so arriving here means the
+            // range is INVALID and the only thing left to do is report it.
+            //
+            // It is a NORETURN call rather than a value-returning one, and that
+            // is the whole point: `karac_string_slice_into` writes its result
+            // through an out-pointer, so keeping it here would take the address
+            // of `out`, defeat SROA, and force the fast path's descriptor
+            // through memory. Measured on bench/sso/lexlike.kara (10M
+            // iterations, arm64): 651,383,097 instructions with the call
+            // against 252,816,414 without it, `_main` 5121 -> 86 bytes.
+            //
+            // `emit_panic` would have been noreturn too and is NOT used, because
+            // its message is a compile-time constant: the runtime's text carries
+            // the actual `start`/`end`/`len` and the
+            // `E_STRING_SLICE_NOT_AT_CHAR_BOUNDARY` code. `karac_string_slice_fail`
+            // re-runs the same `slice_validate`, so the diagnostics are
+            // identical by construction rather than by transcription.
             self.builder.position_at_end(slow_bb);
             self.builder
                 .build_call(
-                    self.runtime_fns.karac_string_slice_into_fn,
+                    self.runtime_fns.karac_string_slice_fail_fn,
                     &[
                         data_ptr.into(),
                         str_len.into(),
                         start_i.into(),
                         end_i.into(),
-                        out.into(),
                     ],
                     "",
                 )
                 .unwrap();
-            let slow_val = self
-                .builder
-                .build_load(str_ty_sso, out, "slice.slow.v")
-                .unwrap();
-            let slow_end_bb = self.builder.get_insert_block().unwrap();
-            self.builder.build_unconditional_branch(cont_bb).unwrap();
+            self.builder.build_unreachable().unwrap();
 
             self.builder.position_at_end(cont_bb);
             let phi = self.builder.build_phi(str_ty_sso, "slice.sso").unwrap();
             phi.add_incoming(&[
                 (&e_agg, empty_end_bb),
                 (&enc_val, enc_end_bb),
-                (&slow_val, slow_end_bb),
+                (&h_agg, heap_end_bb),
             ]);
             return Ok(phi.as_basic_value());
         }

@@ -23980,6 +23980,93 @@ fn main() {
         }
     }
 
+    /// B-2026-09-16-1 — a heap slice is allocated by CODEGEN now, and still
+    /// has exactly one owner.
+    ///
+    /// Slices longer than the 23-byte overlay used to be allocated inside
+    /// `karac_string_slice_into` and freed by the emitted scope cleanup. The
+    /// allocation moved into codegen; the free did not move. That is precisely
+    /// the split where an ownership mistake hides, and none of it is visible in
+    /// the printed bytes:
+    ///
+    ///  - the slice is allocated but never tracked, and every iteration leaks
+    ///    (LSan on the Linux leg; invisible on macOS, which is why this is a
+    ///    ratcheted `-O0` cell and not a local spot-check);
+    ///  - it is tracked twice, or tracked and also freed by a `push_str`
+    ///    reallocation, and the second free is a double free;
+    ///  - the INLINE route's descriptor — which owns nothing — is queued for a
+    ///    free, and libmalloc aborts on a stack address.
+    ///
+    /// The cells walk the boundary in both directions (23 and 24 bytes), the
+    /// grow-after-slice case where the buffer is reallocated, a slice stored
+    /// into a container that outlives the expression, and a loop where a leak
+    /// compounds rather than showing up once.
+    /// COVERS THE DEFAULT (`KARAC_SSO=0`) ARM ONLY — `karac_string_slice`'s
+    /// allocation, not the codegen-owned one. This file compiles in-process and
+    /// `KARAC_SSO` is a per-process `OnceLock` defaulting to off, so no fixture
+    /// here can reach the inline-String surface at all. That is a real coverage
+    /// gap rather than a property of this fixture (B-2026-09-16-35): the ASAN
+    /// suite has never seen an inline descriptor. The `KARAC_SSO=1` ownership
+    /// check that exists today is `test_sso_string_slice_routes_match_the_interpreter`
+    /// in `tests/cli.rs`, which catches a mis-owned buffer by the abort rather
+    /// than by a sanitizer report.
+    #[test]
+    fn asan_heap_string_slice_has_one_owner() {
+        const H: &str = "fn seed() -> i64 { env.args().len() }\n\
+             fn mk() -> String { f\"slice-me-{seed()}-abcdefghijklmnopqrstuvwxyz-0123456789\" }\n";
+        for (label, body, want) in [
+            // Either side of the 23-byte overlay boundary, in one program: the
+            // inline route owns nothing, the heap route owns its buffer, and
+            // the two leave through the same scope cleanup.
+            (
+                "boundary-both-sides",
+                "fn main() { let s = mk();\n\
+                 \x20  let a = s[0..23]; let b = s[0..24];\n\
+                 \x20  println(f\"n:{a.len()}/{b.len()}\"); println(\"end\") }\n",
+                vec!["n:23/24", "end"],
+            ),
+            // Grown after slicing: `push_str` reallocates the codegen-allocated
+            // buffer, so the free must land on the NEW pointer exactly once.
+            (
+                "grow-after-slice",
+                "fn main() { let s = mk(); let mut a = s[0..30];\n\
+                 \x20  a.push_str(\"-tail-tail-tail-tail\");\n\
+                 \x20  println(f\"n:{a.len()}\"); println(\"end\") }\n",
+                vec!["n:50", "end"],
+            ),
+            // Outliving the expression that made it: the Vec owns the slices
+            // and frees them at scope exit, not the slice site.
+            (
+                "stored-in-a-vec",
+                "fn main() { let s = mk(); let mut v: Vec[String] = Vec.new();\n\
+                 \x20  let mut i = 0;\n\
+                 \x20  while i < 12 { v.push(s[i..(i + 30)]); i = i + 1; }\n\
+                 \x20  println(f\"n:{v.len()}/{v[11].len()}\"); println(\"end\") }\n",
+                vec!["n:12/30", "end"],
+            ),
+            // A leak of one buffer per iteration is a rounding error once and
+            // obvious at 200.
+            (
+                "slice-in-a-loop",
+                "fn main() { let s = mk(); let mut i = 0; let mut n = 0;\n\
+                 \x20  while i < 200 { let t = s[0..(24 + (i % 10))]; n = n + t.len(); i = i + 1; }\n\
+                 \x20  println(f\"n:{n > 0}\"); println(\"end\") }\n",
+                vec!["n:true", "end"],
+            ),
+            // The whole string, and the empty slice — the two ends that take
+            // neither the inline nor the ordinary heap route.
+            (
+                "full-and-empty",
+                "fn main() { let s = mk(); let f = s[0..s.len()]; let e = s[3..3];\n\
+                 \x20  println(f\"n:{f.len() > 0}/{e.len()}\"); println(\"end\") }\n",
+                vec!["n:true/0", "end"],
+            ),
+        ] {
+            let src = format!("{H}{body}");
+            assert_clean_asan_run(&src, &want, label);
+        }
+    }
+
     /// B-2026-09-12-28 — the MEMORY twin of
     /// `e2e_map_get_wide_enum_payload_survives_stack_boxing`.
     ///
