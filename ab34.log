@@ -1,0 +1,10 @@
+Updated 1 path from the index
+guard markers (expect 0): 0
+PREFIX u_direct: errs=0 total heap usage: 12 allocs, 10 frees LOST=definitely lost: 32 bytes
+PREFIX u_mixed: errs=2 total heap usage: 14 allocs, 14 frees LOST=
+PREFIX u_extra: errs=2 total heap usage: 12 allocs, 12 frees LOST=
+PREFIX u_tuple: errs=2 total heap usage: 12 allocs, 12 frees LOST=
+PREFIX u_struct1: errs=0 total heap usage: 12 allocs, 12 frees LOST=
+PREFIX fix: errs=16 total heap usage: 49 allocs, 47 frees LOST=definitely lost: 32 bytes
+restored markers: 1
+AB34 DONE

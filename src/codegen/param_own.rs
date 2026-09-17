@@ -524,7 +524,39 @@ impl<'ctx> super::Codegen<'ctx> {
                 }
                 return true;
             }
+            // B-2026-09-16-34 — CLONE-ON-EXTRACT mode, because the line below
+            // makes this param a SECOND OWNER.
+            //
+            // `deep_copy_one_aggregate_field`'s bare-`shared` arm is gated on
+            // this flag, and the entry-copy path left it false — so a payload
+            // struct's `shared` field was bit-copied with NO rc-INC while
+            // `track_enum_var` armed a scope-exit `__karac_drop_<E>` that
+            // rc-DECs it. One INC against two DECs, and the second DEC reads
+            // and writes a refcount block the first already freed.
+            //
+            // Read straight off the IR: the callee's `p14e.Full` entry-copy
+            // block emits a GEP and nothing else, then `p14e.merge` calls
+            // `__karac_drop_Wsh(%w)` — while the caller's own
+            // `__karac_drop_Wsh(%__owned_agg_tmp)` decs the same box.
+            //
+            // MEASURED at `KARAC_OPT_LEVEL=0 KARAC_AUTO_PAR=0`, `--interp`
+            // correct and the compiled output correct too — the program prints
+            // the right answer and corrupts the allocator:
+            // `Invalid read of size 8` + `Invalid write of size 8`, "0 bytes
+            // inside a block of size 32 free'd", on a BALANCED 11 allocs / 11
+            // frees. Two `shared` fields give four errors, one pair each, which
+            // is what says it is per-field and not per-payload.
+            //
+            // THE FLAG'S OWN DOC WARNS THAT A BUMP HERE LEAKED, and that
+            // warning is about the STRUCT-param entry copy, which registers no
+            // separate owner. This is the ENUM-param one, three lines above a
+            // `track_enum_var` that does — the same pairing
+            // `uam_defensive_copy`'s user-struct arm and the for-loop
+            // whole-element move both raise it for.
+            let saved_rc_inc = self.drop_rc.deep_copy_rc_inc_bare_shared;
+            self.drop_rc.deep_copy_rc_inc_bare_shared = true;
             self.deep_copy_enum_heap_payload_in_place(type_name, slot, &layout);
+            self.drop_rc.deep_copy_rc_inc_bare_shared = saved_rc_inc;
             self.track_enum_var(type_name, slot);
             return true;
         }

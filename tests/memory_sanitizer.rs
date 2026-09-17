@@ -92175,6 +92175,107 @@ fn main() {
         );
     }
 
+    /// B-2026-09-16-34 — a bare `shared` FIELD of a by-value enum param's
+    /// payload was bit-copied with no rc-INC while the callee registered a
+    /// scope-exit drop that rc-DECs it: one INC against two DECs, and the
+    /// second DEC reads and writes a refcount block the first already freed.
+    /// `Invalid read of size 8` + `Invalid write of size 8`, "0 bytes inside a
+    /// block of size 32 free'd", at BOTH opt levels, on a BALANCED 11 allocs /
+    /// 11 frees and a program that prints the right answer.
+    ///
+    /// THE COUNT IS PER-FIELD, which is what says where the defect lives: two
+    /// `shared` fields give FOUR errors, one pair each. The `two` cell pins
+    /// that; `mixed` (a `shared` field beside a `String`) and `extra` (beside
+    /// an `i64`) pin that the sibling fields are not involved.
+    ///
+    /// READ OFF THE IR rather than inferred. The callee's `p14e.Full`
+    /// entry-copy block emits a GEP and nothing else, then `p14e.merge` calls
+    /// `__karac_drop_Wsh(%w)` — while the caller's own
+    /// `__karac_drop_Wsh(%__owned_agg_tmp)` decs the same box.
+    /// `deep_copy_one_aggregate_field`'s bare-`shared` arm is gated on
+    /// `deep_copy_rc_inc_bare_shared`, and this entry-copy path left it false.
+    ///
+    /// THE FLAG'S OWN DOC WARNS THAT A BUMP "LEAKED", and that warning is about
+    /// the STRUCT-param entry copy, which registers no separate owner. This is
+    /// the ENUM-param one, three lines above a `track_enum_var` that does — the
+    /// same pairing `uam_defensive_copy`'s user-struct arm and the for-loop
+    /// whole-element move both raise the flag for. `struct` is the cell that
+    /// keeps the two apart: a by-value struct param over the same payload type
+    /// was clean before and stays clean.
+    ///
+    /// `tuple` rides along and was broken the same way — the enum walker
+    /// reaches a tuple payload's elements through the same
+    /// `deep_copy_one_aggregate_field`, so a `shared` element had the identical
+    /// missing INC. `read` is a consuming arm that reaches through the payload,
+    /// `named` the non-temp spelling, and `nocall` the control that never
+    /// passes the enum by value and was clean throughout.
+    ///
+    /// ONE NEIGHBOUR IS DELIBERATELY ABSENT because it is a different defect
+    /// and still open: a `shared struct` used as the payload DIRECTLY
+    /// (`enum Wd { Full(ShIn) }`) LEAKS its refcount block — 32 B, 12 allocs /
+    /// 10 frees — identically before and after this fix, so it loses its DEC
+    /// entirely rather than running one too many. Filed separately.
+    #[test]
+    fn asan_shared_field_of_an_enum_param_payload_keeps_its_refcount() {
+        assert_clean_asan_run(
+            r#"
+shared struct ShIn { s: String }
+struct One { i: ShIn }
+struct Two { a: ShIn, b: ShIn }
+struct Mixed { i: ShIn, t: String }
+struct Extra { i: ShIn, n: i64 }
+
+enum W1 { Full(One), Empty }
+enum W2 { Full(Two), Empty }
+enum Wm { Full(Mixed), Empty }
+enum We { Full(Extra), Empty }
+enum Wt { Full((ShIn, i64)), Empty }
+
+fn e1(w: W1) -> i64 { return 7; }
+fn e2(w: W2) -> i64 { return 7; }
+fn em(w: Wm) -> i64 { return 7; }
+fn ee(w: We) -> i64 { return 7; }
+fn et(w: Wt) -> i64 { return 7; }
+fn eread(w: W1) -> i64 {
+    match w { W1.Full(q) => { let i = q.i; return i.s.len(); } W1.Empty => { return 0; } }
+}
+fn estruct(o: One) -> i64 { return 7; }
+
+fn main() {
+    println(f"one {e1(W1.Full(One { i: ShIn { s: f"b1634-one-aaaaaaaaaa" } }))}");
+
+    let x = ShIn { s: f"b1634-two-bbbbbbbbbb" };
+    println(f"two {e2(W2.Full(Two { a: x, b: x }))}");
+
+    println(f"mixed {em(Wm.Full(Mixed { i: ShIn { s: f"b1634-m1-cccccccccc" }, t: f"b1634-m2-dddddddddd" }))}");
+    println(f"extra {ee(We.Full(Extra { i: ShIn { s: f"b1634-ex-eeeeeeeeee" }, n: 3 }))}");
+    println(f"tuple {et(Wt.Full((ShIn { s: f"b1634-tu-ffffffffff" }, 3)))}");
+
+    let w = W1.Full(One { i: ShIn { s: f"b1634-named-hhhhhhhh" } });
+    println(f"named {e1(w)}");
+
+    println(f"read {eread(W1.Full(One { i: ShIn { s: f"b1634-read-iiiiiiiiii" } }))}");
+    println(f"struct {estruct(One { i: ShIn { s: f"b1634-st-jjjjjjjjjj" } })}");
+
+    let k = W1.Full(One { i: ShIn { s: f"b1634-nocall-kkkkkkkk" } });
+    println(f"nocall ok");
+}
+"#,
+            &[
+                "one 7",
+                "two 7",
+                "mixed 7",
+                "extra 7",
+                "tuple 7",
+                "named 7",
+                "read 21",
+                "struct 7",
+                "nocall ok",
+            ],
+            "asan_shared_field_of_an_enum_param_payload_keeps_its_refcount",
+        );
+    }
+
     /// B-2026-09-14-25 — an `Array[D, N]` enum payload whose element carries
     /// BOTH heap and a user `Drop` body double-freed its element buffers on a
     /// consuming arm: `exit 134`, 2 invalid frees, `15 allocs / 17 frees`, at
