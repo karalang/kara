@@ -8458,6 +8458,92 @@ fn main() { println(build2().v); }
         );
     }
 
+    /// B-2026-09-16-32 — `String.substring`'s heap result is NUL-terminated,
+    /// like every other heap `String` in the language.
+    ///
+    /// The three producers of a heap `String` had two different buffer
+    /// contracts. `karac_string_clone` and `karac_string_slice_into` allocate
+    /// `n + 1` and write a NUL at `[n]`; `substring`'s copy branch allocated
+    /// exactly `n` and wrote no terminator. `runtime/src/clone.rs` records what
+    /// that costs — the runtime allocated exactly `len` once too, and
+    /// `printf("%s", data)` read one byte past the end, an ASAN
+    /// heap-buffer-overflow. The spare byte is that fix, and `substring` was
+    /// the last producer still in the pre-fix shape.
+    ///
+    /// **Why this asserts on IR rather than on output.** The defect is latent:
+    /// `println` passes pointer+length, so nothing in the language reads to a
+    /// NUL today and no program can observe the difference. Measured under
+    /// guardmalloc at both SSO arms before the fix, a 30-byte substring read
+    /// nothing past its allocation. So a behavioural fixture here would pass
+    /// either way — the assertion has to be on what is emitted.
+    ///
+    /// `cap` deliberately stays `n`: it reports usable content bytes, and the
+    /// spare byte is not one. That matches `karac_string_clone` exactly, so the
+    /// two remain interchangeable in every field a program can read.
+    #[test]
+    fn substring_heap_result_is_nul_terminated_like_every_other_string() {
+        let ir = ir_for(
+            "fn main() {\n\
+             \x20   let s = \"the quick brown fox jumps over the lazy dog\";\n\
+             \x20   let t = s.substring(0, 30);\n\
+             \x20   println(t);\n\
+             }",
+        );
+        // The copy branch: allocate the content bytes PLUS one.
+        assert!(
+            ir.contains("ss.alloc_bytes"),
+            "substring's heap arm must size its allocation as new_len + 1; \
+             no `ss.alloc_bytes` in the emitted IR. Relevant lines:\n{}",
+            ir.lines()
+                .filter(|l| l.contains("ss."))
+                .collect::<Vec<_>>()
+                .join("\n")
+        );
+        let alloc_line = ir
+            .lines()
+            .find(|l| l.contains("ss.alloc_bytes ="))
+            .unwrap_or_else(|| {
+                panic!(
+                    "no defining line for ss.alloc_bytes:\n{}",
+                    ir.lines()
+                        .filter(|l| l.contains("ss."))
+                        .collect::<Vec<_>>()
+                        .join("\n")
+                )
+            });
+        assert!(
+            alloc_line.contains("add") && alloc_line.contains(" 1"),
+            "ss.alloc_bytes must be `new_len + 1`, got: {alloc_line}"
+        );
+        // ... and write the terminator at [new_len].
+        assert!(
+            ir.contains("ss.nul.p"),
+            "substring's heap arm must store a NUL at [new_len]; no `ss.nul.p` \
+             in the emitted IR. Relevant lines:\n{}",
+            ir.lines()
+                .filter(|l| l.contains("ss."))
+                .collect::<Vec<_>>()
+                .join("\n")
+        );
+        let nul_store = ir
+            .lines()
+            .find(|l| l.contains("store i8 0") && l.contains("ss.nul.p"));
+        assert!(
+            nul_store.is_some(),
+            "expected `store i8 0, ptr %ss.nul.p`; ss.nul lines:\n{}",
+            ir.lines()
+                .filter(|l| l.contains("ss.nul"))
+                .collect::<Vec<_>>()
+                .join("\n")
+        );
+        // `cap` is still the content length, not the allocation size — the
+        // spare byte is not usable capacity. Same convention as clone.
+        assert!(
+            ir.contains("ss.copy.cap"),
+            "the copy branch should still build a cap field"
+        );
+    }
+
     // ── Basic arithmetic ─────────────────────────────────────────
 
     #[test]

@@ -2151,9 +2151,20 @@ impl<'ctx> super::Codegen<'ctx> {
                 // encoding still has one owner: the capacity is read from
                 // `RuntimeKaracString::INLINE_CAPACITY` at compile time and
                 // the byte packing is asserted against `write_inline` itself.
-                // The heap arm below keeps its OWN buffer contract (exactly
-                // `n` bytes from `karac_alloc_or_panic`, no NUL) rather than
-                // inheriting `karac_string_slice_into`'s different one.
+                // The heap arm allocates `n + 1` and NUL-terminates, matching
+                // `karac_string_clone` and `karac_string_slice_into`. It used
+                // to allocate exactly `n` with no NUL, described here as
+                // keeping its "OWN buffer contract" rather than inheriting a
+                // different one — but the two contracts are not peers.
+                // `runtime/src/clone.rs` records that the runtime allocated
+                // exactly `len` once too, and that `printf("%s", data)` then
+                // read one byte past the allocation (ASAN heap-buffer-overflow,
+                // caught by `asan_vec_extend_from_slice_string_*`). The spare
+                // byte is that fix. `substring` was the last producer still in
+                // the pre-fix shape, so a `String` from `s.substring(a, b)`
+                // and one from `s[a..b]` — the same type, freely interchanged
+                // — disagreed on whether reading to a NUL was safe
+                // (B-2026-09-16-32).
                 let inline_bb = if self.sso_on() {
                     Some(self.context.append_basic_block(fn_val, "ss.inline"))
                 } else {
@@ -2215,11 +2226,18 @@ impl<'ctx> super::Codegen<'ctx> {
                     .builder
                     .build_int_nsw_sub(end, start, "ss.new_len")
                     .unwrap();
+                // `n + 1`: the content bytes plus the NUL. `cap` still reports
+                // `n` — usable content bytes, with the spare byte excluded —
+                // exactly as `karac_string_clone` does.
+                let alloc_bytes = self
+                    .builder
+                    .build_int_nsw_add(new_len, i64_t.const_int(1, false), "ss.alloc_bytes")
+                    .unwrap();
                 let buf = self
                     .builder
                     .build_call(
                         self.runtime_fns.alloc_or_panic_fn,
-                        &[new_len.into()],
+                        &[alloc_bytes.into()],
                         "ss.buf",
                     )
                     .unwrap()
@@ -2233,6 +2251,14 @@ impl<'ctx> super::Codegen<'ctx> {
                         .unwrap()
                 };
                 self.builder.build_memcpy(buf, 1, src, 1, new_len).unwrap();
+                let nul_at = unsafe {
+                    self.builder
+                        .build_gep(self.context.i8_type(), buf, &[new_len], "ss.nul.p")
+                        .unwrap()
+                };
+                self.builder
+                    .build_store(nul_at, self.context.i8_type().const_zero())
+                    .unwrap();
                 let mut copy_agg = str_ty.get_undef();
                 copy_agg = self
                     .builder
