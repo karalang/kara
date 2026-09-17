@@ -95,7 +95,7 @@ distinguish "bugs flattening" from "we stopped writing them down."
 | run-vs-build | 423 |
 | miscompile | 415 |
 | leak | 366 |
-| double-free | 240 |
+| double-free | 242 |
 | missing-feature | 199 |
 | codegen-gap | 178 |
 | other | 127 |
@@ -110,7 +110,7 @@ distinguish "bugs flattening" from "we stopped writing them down."
 
 | surface | total |
 |---|---|
-| codegen | 1817 |
+| codegen | 1819 |
 | interp | 467 |
 | typecheck | 302 |
 | other | 95 |
@@ -173,7 +173,6 @@ _Generated from `bug-ledger.jsonl` by `scripts/bug-curve.py` (2026-05-20 → 202
 | B-2026-09-16-13 | 2026-09-16 | codegen | medium | A USER ENUM RETURNED BY A CALL AND PASSED BY VALUE LEAKS ITS PAYLOAD -- `eat(mk(i))` over `enum T { A(String), B }` loses 58 B in 2 blocks (13 allocs / 11 frees) with a callee that never reads the argument, while the SAME value through a named local is clean; not the callee's body, not the payload shape, and not `Option`/`Result` | — |
 | B-2026-09-16-14 | 2026-09-16 | interp | low | THE INTERPRETER RUNS A TRANSFERRED STRUCT-FIELD LEAF'S `Drop` BODY TWICE WHERE EVERY COMPILED BACKEND RUNS IT ONCE -- `let c = H2 { r: mk(1) }; match c { H2 { r } => { let m: R = r; return m.id } }` prints `dR1 dR1` under `--interp` and `dR1` on jit / aot / `KARAC_AUTO_PAR=0`; the enum-leaf spellings double the whole `dE dR` pair, and `return e` out of the arm runs a full pair AT THE ARM before the value reaches the caller, who then runs it again | — |
 | B-2026-09-16-15 | 2026-09-16 | codegen | medium | A BOXED GENERIC-ENUM PAYLOAD'S INTERIOR IS LOST IN TWO SHAPES ONCE THE CRASH IS OUT OF THE WAY -- `Array[String, N]` strands its element buffers (64 B in 4 over two rounds) and a payload matched into an UNUSED arm binding strands the payload itself (10 B per call); the second is attributed to `boxed_payload_interior_taken_by_arm` answering TRUE for a bare generic parameter through its `_ => p.generic_args.is_none()` tail, a spelling B-2026-09-12-5 never enumerated | — |
-| B-2026-09-16-16 | 2026-09-16 | codegen | medium | A PASSTHROUGH GENERIC PARAM OVER A BOXED ENUM PAYLOAD DOUBLE FREES -- `fn idG[T](g: G1[T]) -> G1[T] { return g }` over `enum G1[T] { Y(T), N }` at `T = String` exits 139 with two `Invalid free()` and 12 allocs / 14 frees against a correct `--interp`; B-2026-09-16-10's fix cannot reach it by construction, because the prologue declines an escaping param so BOTH halves correctly stand down and the second owner is elsewhere | — |
 | B-2026-09-16-18 | 2026-09-16 | codegen+interp | medium | A FRESH-TEMP STRUCT SCRUTINEE'S UNBOUND FIELDS LOSE THEIR `Drop` BODIES AND LEAK THEIR HEAP ON EVERY SURFACE -- `match S3 { a: mk(44), b: mk(45) } { S3 { a, .. } => .. }` runs `dR44` alone and `S3 { .. }` runs NOTHING, on --interp / jit / aot / `KARAC_AUTO_PAR=0` alike; valgrind at `-O0` reports 24 allocs / 20 frees, 12 bytes definitely lost in 4 blocks, one `name` buffer per unbound field. The NAMED-scrutinee spelling is correct on all four, so the husk of a temp with no binding is owned by nobody | — |
 | B-2026-09-16-19 | 2026-09-16 | codegen+interp | medium | A `Vec`-NESTING INSIDE AN `Option` OR `Map` FIELD RUNS ITS ELEMENT'S `Drop` BODY ON `--interp` AND ON NO COMPILED SURFACE -- `H { xs: Option[Vec[D]] }` and `H { xs: Map[i64, Vec[D]] }` both print `dD1` under the tree-walk backend and nothing under the JIT or either `build`, which REFUTES the premise `type_runs_user_drop`'s own comment rests on | — |
 | B-2026-09-16-20 | 2026-09-16 | codegen | low | `karac_string_try_inline_into` IS DEAD ABI SURFACE -- no caller anywhere in the compiler since `9d3ceb9` removed its declaration from `runtime_fns.rs` and `codegen.rs`, and the JIT is not a second path (it goes through the same codegen), so no compiled Kara program on any backend references it; it remains a `#[no_mangle]` export in `runtime/src/clone.rs`, exercised only by its own unit tests and by the encoding-contract test. Keep-or-remove was deliberately deferred as 'a separate decision' and nothing tracks it. | — |
@@ -194,6 +193,8 @@ _Generated from `bug-ledger.jsonl` by `scripts/bug-curve.py` (2026-05-20 → 202
 | B-2026-09-17-3 | 2026-09-17 | codegen | high | A READ-ONLY MATCH ARM OVER AN `Option[Array[S, N]]` PAYLOAD DOUBLE FREES ON EVERY COMPILED SURFACE -- `match x { Option.Some(t) => { println(f"s:{t[0].tag}") } .. }` where `S` has a user `impl Drop` aborts with `free(): double free detected in tcache 2` under `karac run` (JIT), `-O0 build` and default auto-par `build`, valgrind reporting `Invalid free()`, while `--interp` prints the correct transcript. THREE CONDITIONS ARE ALL REQUIRED and each was measured off independently: drop the `impl Drop` and all four surfaces are clean; drop the `Option` wrapper and pass the array directly and all four are clean; keep both and the compiled ones abort. NO GATE IN THE TREE CATCHES IT -- a full cycle an hour before filing read 27570 passed / 0 failed with both ASAN ratchet legs matching their quarantine lists exactly | — |
 | B-2026-09-17-5 | 2026-09-17 | codegen | medium | AN ARM-BOUND `Array` PAYLOAD REBOUND INTO A LOCAL RUNS ITS ELEMENTS' `Drop` BODIES TWICE ON THE COMPILED BACKENDS -- `match x { Some(t) => { let u: Array[S, 2] = t; .. } }` over a by-value `Option[Array[S, 2]]` param prints `dS0 dS1 dS0 dS1` under jit / `karac build` / `KARAC_AUTO_PAR=0 build` against `--interp`'s single pair; memory is clean, so it is the BODIES channel alone | — |
 | B-2026-09-17-6 | 2026-09-17 | codegen+interp | low | AN ENVELOPE'S `Array` PAYLOAD RUNS ITS ELEMENTS' `Drop` BODIES AT THE CONSTRUCTOR STATEMENT, NOT AT THE HOLDER'S DEATH -- `let a: Array[S, 2] = [..]; let x: Option[Array[S, 2]] = Some(a); println("held")` prints both bodies BEFORE `held` on all four surfaces, though `x` owns the array until the end of the block | — |
+| B-2026-09-17-7 | 2026-09-17 | codegen | medium | A MIXED-PATH GENERIC CALLEE THAT MAY HAND ITS BOXED ENUM PAYLOAD BACK DOUBLE FREES -- `fn mid[T](g: G1[T], c: bool) -> G1[T] { if c { return g; } return G1.N; }` at `T = String` dies with no stdout at all, 4 valgrind errors and 12 allocs / 14 frees against a correct `--interp`; B-2026-09-16-16's fix declines it BY DESIGN (its gate is the ALL-PATHS `fn_always_returns_param`) and no static answer at the call site is right for both legs | — |
+| B-2026-09-17-8 | 2026-09-17 | codegen | medium | THE `Option`/`Result` HEAD OF THE PASSTHROUGH-GENERIC DOUBLE FREE IS A DIFFERENT CHANNEL, AND STILL BROKEN -- `fn idOpt[T](g: Option[T]) -> Option[T] { return g }` at `T = String` aborts with `free(): double free detected in tcache 2` and 11 allocs / 12 frees; the ONE extra free (against B-2026-09-16-16's two) is the tell that the payload is INLINE, so it rides `inline_option_payload_vars` rather than the boxed channel that row's gate can see | — |
 
 ### Relocated
 
@@ -2643,6 +2644,7 @@ _Generated from `bug-ledger.jsonl` by `scripts/bug-curve.py` (2026-05-20 → 202
 | B-2026-09-16-9 | codegen | high | REGRESSION ON `main`: `506a91d` TURNED THE `(Array[String, 2], i64)` ENUM-PAYLOAD CELL FROM A LEAK INTO AN INVALID FREE -- valgrind reports `Invalid… | 49e75a8 |
 | B-2026-09-16-10 | codegen | high | A GENERIC SINGLE-FIELD VARIANT AT `T = Array[String, N]` SEGFAULTS ON EVERY COMPILED BACKEND -- `G1.Y(a)` over `enum G1[T] { Y(T), N }` passed to a g… | 55a8db2 |
 | B-2026-09-16-12 | interp+codegen | medium | A MIXED BIND-AND-WILDCARD MATCH ARM LOSES THE WILDCARDED PAYLOAD FIELD'S `Drop` BODY -- `let w = W2.Two(mk(41), mk(42)); match w { W2.Two(a, _) => {… | c9432558c |
+| B-2026-09-16-16 | codegen | medium | A PASSTHROUGH GENERIC PARAM OVER A BOXED ENUM PAYLOAD DOUBLE FREES -- `fn idG[T](g: G1[T]) -> G1[T] { return g }` over `enum G1[T] { Y(T), N }` at `T… | 8b00e96 |
 | B-2026-09-16-17 | codegen+interp | medium | AN ENUM VARIANT'S PAYLOAD FIELDS RUN THEIR `Drop` BODIES IN DECLARATION ORDER ON ALL FOUR SURFACES, while a struct's run in REVERSE declaration order… | ef5ce6f |
 | B-2026-09-16-21 | codegen+interp | medium | AN OWNED ENUM RECEIVER'S PAYLOAD `Drop` BODY IS LOST WHENEVER THE CALLEE NEVER DESTRUCTURES `self` -- `let a = E.A(mk(1)); a.none()` over `fn none(se… | 0b97e71 |
 | B-2026-09-16-24 | typecheck | medium | `partial_move_of_drop_enum` REJECTS A BORROW-PROJECTION SCRUTINEE, and it is a false positive by the rule's OWN stated terms -- the rule documents it… | 84030e8 |
