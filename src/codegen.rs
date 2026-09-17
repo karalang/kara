@@ -9057,7 +9057,18 @@ impl<'ctx> Codegen<'ctx> {
                 self.builder.position_at_end(b);
             }
         }
-        if let Ok(path) = std::env::var("B1616_IR") {
+        // `KARAC_DUMP_IR=<path>` writes the finished module unconditionally,
+        // before verification. The sibling below only fires when the verifier
+        // REJECTS the module, which is the wrong half for the commonest
+        // investigation: a program that compiles and runs but emits a call
+        // nobody can account for. Internal-linkage drop walkers are exactly
+        // that shape — `nm` on the linked binary shows none of them, so the IR
+        // is the only place the call is visible.
+        //
+        // Replaces a `B1616_IR` hook this file carried from `8b00e96`: a
+        // bug-id-named env var is unfindable by the next person who needs it,
+        // and the need recurs.
+        if let Ok(path) = std::env::var("KARAC_DUMP_IR") {
             let _ = std::fs::write(&path, self.module.print_to_string().to_string());
         }
         self.module.verify().map_err(|e| {
