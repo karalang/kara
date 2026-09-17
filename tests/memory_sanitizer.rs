@@ -87190,12 +87190,20 @@ fn main() {
     /// and `2` alike.
     ///
     /// The cells were CHOSEN by measuring, not assumed. Two neighbouring shapes
-    /// that the same fix unblocks are deliberately absent because they are NOT
-    /// clean at `-O0` — a user-enum `Array[Vec[String], 2]` payload loses 48 B
-    /// in 1 block, and an `Array[String, 2]` payload indexed once loses 18 B in
-    /// 2. The second needs no part of this fix to build (a single index never
-    /// reaches the nested-read path), which is what places both in the
+    /// that the same fix unblocks were deliberately absent because they were NOT
+    /// clean at `-O0` — a user-enum `Array[Vec[String], 2]` payload lost 48 B
+    /// in 1 block, and an `Array[String, 2]` payload indexed once lost 18 B in
+    /// 2. The second needed no part of this fix to build (a single index never
+    /// reaches the nested-read path), which is what placed both in the
     /// pre-existing Array-element-interior class rather than in this one.
+    ///
+    /// THAT EXCLUSION IS LIFTED (B-2026-09-09-24). Both are clean now — shape 1
+    /// at `4dc4bdf4e`, shape 2 not until `b98707ee9` — and both are pinned, with
+    /// the row's own two controls, in
+    /// `asan_indexed_array_payload_interior_has_exactly_one_owner` just below.
+    /// The cells stay out of THIS fixture rather than being folded in, because
+    /// what they guard is a different fix; the paragraph above is kept in the
+    /// past tense as the record of why they were ever apart.
     /// B-2026-09-09-18 — the fresh-temp `Option`/`Result` argument now runs its
     /// payload's `Drop` body in the CALLER's frame, and this is the guard on
     /// the one way that could go wrong.
@@ -87841,6 +87849,94 @@ fn main() {
              }\n",
             &["o:[aaaaaaaa0, bbbbbbbb0]", "c1"],
             "b49-passthrough-escape-control",
+        );
+    }
+
+    /// B-2026-09-09-24 — the two `Array`-payload-INDEXED shapes that
+    /// `asan_boxed_array_payload_interior_has_exactly_one_owner` had to leave out
+    /// are clean now, and this is the fixture that stops them regressing.
+    ///
+    /// That row recorded both as leaking at `KARAC_OPT_LEVEL=0` and clean at `=2`:
+    /// an `Array[String, 2]` bound out of an `Option` arm and indexed once lost
+    /// 18 B in 2 blocks (both elements), and a user enum carrying
+    /// `Array[Vec[String], 2]` read two levels deep lost 48 B in 1. Its neighbour
+    /// fixture names them in its own doc-comment as deliberately absent, which is
+    /// the interlock working as intended — the exclusion was a placeholder for
+    /// this fixture.
+    ///
+    /// NEITHER WAS FIXED HERE, and both were fixed separately, which is why the
+    /// row closes against two SHAs rather than one. Bisected over the 184 commits
+    /// since the row was filed, each step rebuilt and re-measured under
+    /// `valgrind --leak-check=full` at `-O0`:
+    ///
+    ///   * shape 1 → `4dc4bdf4e` ("a boxed Array payload's interior gets exactly
+    ///     one owner"): 18 B at its parent, clean at it.
+    ///   * shape 2 → `b98707ee9` ("the box owns its array interior — disarm the
+    ///     source at the ctor instead of withholding the walk"): still 48 B at
+    ///     `4dc4bdf4e`, clean at `b98707ee9`.
+    ///
+    /// The cells answer the two questions the row left open. `3:` is the N=3
+    /// payload form — the row could not tell whether the loss scaled with N,
+    /// because the only N=3 control it had was let-bound and therefore clean;
+    /// with the leak gone the cell can only guard the fix, but it guards it at a
+    /// second arity. `ov:` is the `Option` envelope over shape 2's payload, the
+    /// reverse of the question B-2026-09-09-9's `Vec` sibling raised, where the
+    /// envelope was the whole discriminator: here it is not — user enum and
+    /// `Option` behave alike.
+    ///
+    /// `1b:` is the single-index spelling of shape 1 (the row's own repro reads
+    /// both elements). `ni:` is the payload binding NEVER indexed and `let:` the
+    /// same index off a `let` — the row's two controls, which were clean
+    /// throughout and must stay that way, since it was their cleanliness that
+    /// placed the fault in the conjunction rather than in either half.
+    ///
+    /// THIS FIXTURE ONLY BITES ON THE `-O0` RATCHET LEG, and that has to be said
+    /// here because the plain `--features llvm` leg finds it VACUOUS. That leg
+    /// builds at `-O2`, where the optimizer deletes exactly these allocations —
+    /// which is why the row recorded both shapes as clean at `=2` in the first
+    /// place. Measured, rather than assumed: against `4dc4bdf4e^` and
+    /// `b98707ee9^` (`git checkout <sha> -- src/`, `tests/` kept at HEAD) this
+    /// test PASSES under a default `cargo test --features llvm` and FAILS under
+    /// `KARAC_OPT_LEVEL=0` — 243 B in 16 allocations at the first, 66 B in 4 at
+    /// the second, with HEAD clean before and after. So `scripts/asan-o0-leg.sh`
+    /// is its gate; a green `--features llvm` run is no evidence about it at all.
+    ///
+    /// Measured on this tree: 0 bytes in 0 blocks at `-O0` under
+    /// `valgrind --leak-check=full`, and the stdout below is byte-identical
+    /// across `--interp` / jit / `karac build` / `KARAC_AUTO_PAR=0 karac build`.
+    #[test]
+    fn asan_indexed_array_payload_interior_has_exactly_one_owner() {
+        assert_clean_asan_run(
+            r#"enum E { A(Array[Vec[String], 2]), B }
+fn p1(x: Option[Array[String, 2]]) { match x { Some(t) => { println(f"1:{t[0]}|{t[1]}") } None => { println("n") } } }
+fn p1b(x: Option[Array[String, 2]]) { match x { Some(t) => { println(f"1b:{t[0]}") } None => { println("n") } } }
+fn p3(x: Option[Array[String, 3]]) { match x { Some(t) => { println(f"3:{t[0]}|{t[2]}") } None => { println("n") } } }
+fn pe(x: E) { match x { E.A(t) => { println(f"e:{t[1][0]}") } E.B => { println("n") } } }
+fn pov(x: Option[Array[Vec[String], 2]]) { match x { Some(t) => { println(f"ov:{t[1][0]}") } None => { println("n") } } }
+fn pnoidx(x: Option[Array[String, 2]]) { match x { Some(t) => { println(f"ni:{t}") } None => { println("n") } } }
+fn main() {
+    p1(Some([f"aaaaaaaa0", f"bbbbbbbb1"]));
+    p1b(Some([f"cccccccc0", f"dddddddd1"]));
+    p3(Some([f"eeeeeeee0", f"ffffffff1", f"gggggggg2"]));
+    pe(E.A([[f"hhhhhhhh0"], [f"iiiiiiii1"]]));
+    pov(Some([[f"jjjjjjjj0"], [f"kkkkkkkk1"]]));
+    pnoidx(Some([f"llllllll0", f"mmmmmmmm1"]));
+    let a: Array[String, 2] = [f"nnnnnnnn0", f"oooooooo1"];
+    println(f"let:{a[0]}|{a[1]}");
+    println("end");
+}
+"#,
+            &[
+                "1:aaaaaaaa0|bbbbbbbb1",
+                "1b:cccccccc0",
+                "3:eeeeeeee0|gggggggg2",
+                "e:iiiiiiii1",
+                "ov:kkkkkkkk1",
+                "ni:[llllllll0, mmmmmmmm1]",
+                "let:nnnnnnnn0|oooooooo1",
+                "end",
+            ],
+            "asan_indexed_array_payload_interior_has_exactly_one_owner",
         );
     }
 
