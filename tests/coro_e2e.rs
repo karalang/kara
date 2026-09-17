@@ -2685,17 +2685,59 @@ mod tests {
 
         // Fire N concurrent wss echo round-trips; every one must complete.
         const N: usize = 16;
-        let results: std::sync::Arc<Mutex<Vec<bool>>> =
-            std::sync::Arc::new(Mutex::new(vec![false; N]));
+        // B-2026-09-12-1 — CAPTURE WHICH CONNECTION WEDGED, not just how many.
+        //
+        // That row has nine preserved reds from the required gate set and has
+        // asked the same question in three successive addenda: "the next
+        // preserved red should record the index, not just the count". The index
+        // was already being collected here and thrown away — the `Vec<bool>` was
+        // folded to a count before the assertion, so every red could say 15/16
+        // and none could say WHICH one. This records the reason and the elapsed
+        // time per connection alongside it, and prints all three on failure.
+        //
+        // WHY THOSE THREE FIELDS. The row's open question is what separates "the
+        // accept path missed a readiness edge" from "the coroutine resumed but
+        // its write never flushed", and its distribution (15/16 x7, 14/16 x1,
+        // 11/16 x1) keeps load-scaling explanations in scope. The INDEX says
+        // whether the casualty is positional (always the tail — an accept storm
+        // or backlog limit) or arbitrary (a resume race); the REASON separates a
+        // TLS handshake that never completed from an established connection that
+        // never echoed; and the ELAPSED time separates a fast refusal from a
+        // connection that hung until the server was killed. None of the three
+        // costs a reproduction attempt, which is the point — this test resists
+        // reproduction (22 consecutive passes standalone, including under 16 CPU
+        // burners) and only reds inside a full 109-binary cycle, so the next red
+        // has to be made to pay for itself.
+        //
+        // Deliberately NOT server-side state (whether the listener was readable
+        // at that moment), which is the row's third want: reaching it means
+        // changing the Kara server program under test, and instrumenting a race
+        // from inside the thing racing is how the window moves.
+        type Outcome = (bool, String, u128);
+        let results: std::sync::Arc<Mutex<Vec<Outcome>>> = std::sync::Arc::new(Mutex::new(
+            (0..N)
+                .map(|_| (false, "thread never reported".to_string(), 0u128))
+                .collect(),
+        ));
         let mut handles = Vec::new();
         for i in 0..N {
             let results = std::sync::Arc::clone(&results);
             handles.push(std::thread::spawn(move || {
-                let ok = matches!(
-                    wss_echo_roundtrip(port, b"PINGconc"),
-                    Ok(body) if body.starts_with(b"PINGconc")
-                );
-                results.lock().unwrap_or_else(|p| p.into_inner())[i] = ok;
+                let t0 = std::time::Instant::now();
+                let outcome = match wss_echo_roundtrip(port, b"PINGconc") {
+                    Ok(body) if body.starts_with(b"PINGconc") => (true, String::new(), 0),
+                    // Established and echoed the WRONG bytes — a different
+                    // defect from wedging, and one the count could never show.
+                    Ok(body) => (
+                        false,
+                        format!("echoed {} unexpected bytes", body.len()),
+                        t0.elapsed().as_millis(),
+                    ),
+                    Err(e) => (false, e, t0.elapsed().as_millis()),
+                };
+                let ms = t0.elapsed().as_millis();
+                let mut g = results.lock().unwrap_or_else(|p| p.into_inner());
+                g[i] = (outcome.0, outcome.1, if outcome.0 { ms } else { outcome.2 });
             }));
         }
         for h in handles {
@@ -2705,17 +2747,34 @@ mod tests {
         let _ = child.wait();
         let _ = std::fs::remove_file(&exe_path);
 
-        let oks = results
-            .lock()
-            .unwrap_or_else(|p| p.into_inner())
-            .iter()
-            .filter(|&&b| b)
-            .count();
-        assert_eq!(
-            oks, N,
-            "only {oks}/{N} concurrent WS-over-TLS handlers echoed — the rest \
-             wedged (coroutine resume race / accept-path handshake-pool mismatch)"
-        );
+        let snapshot = results.lock().unwrap_or_else(|p| p.into_inner()).clone();
+        let oks = snapshot.iter().filter(|(ok, _, _)| *ok).count();
+        if oks != N {
+            let failed: Vec<String> = snapshot
+                .iter()
+                .enumerate()
+                .filter(|(_, (ok, _, _))| !*ok)
+                .map(|(i, (_, why, ms))| format!("#{i} after {ms}ms: {why}"))
+                .collect();
+            let ok_ms: Vec<u128> = snapshot
+                .iter()
+                .filter(|(ok, _, _)| *ok)
+                .map(|(_, _, ms)| *ms)
+                .collect();
+            let span = match (ok_ms.iter().min(), ok_ms.iter().max()) {
+                (Some(lo), Some(hi)) => format!("{lo}..{hi}ms"),
+                _ => "n/a".to_string(),
+            };
+            panic!(
+                "only {oks}/{N} concurrent WS-over-TLS handlers echoed — the rest \
+                 wedged (coroutine resume race / accept-path handshake-pool mismatch)\n\
+                 B-2026-09-12-1: wedged connections, in submission order:\n  {}\n\
+                 the {oks} that succeeded took {span}. An index-clustered tail points at \
+                 the accept path / backlog; an arbitrary index points at the resume race. \
+                 PRESERVE THIS LOG before running anything else.",
+                failed.join("\n  ")
+            );
+        }
     }
 
     #[test]
