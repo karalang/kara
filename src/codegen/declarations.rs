@@ -5842,6 +5842,53 @@ impl<'ctx> super::Codegen<'ctx> {
         }
     }
 
+    /// B-2026-09-12-10 — do the tuple's OWN LLVM field offsets coincide with the
+    /// enum payload's WORD offsets, measured rather than assumed?
+    ///
+    /// [`Self::type_expr_word_aligned`] is a conservative SYNTACTIC stand-in for
+    /// that question: any sub-8-byte primitive element rejects the whole tuple,
+    /// because "a `(bool, i32, String)` packs its first two elements into one
+    /// word while the payload image gives each its own". True of that shape, and
+    /// NOT true of every shape it rejects — `(bool, String)` pads to the same
+    /// offsets, which is why it leaked 192 B over 8 rounds at `-O0` while
+    /// `(String, i64)` beside it was clean. The row's own reading is that
+    /// widening the syntactic gate is the wrong repair, and this does not widen
+    /// it: it asks the precondition the `NestedTuple` arm actually documents.
+    ///
+    /// The comparison is against the WORD image because that is what the pack
+    /// site writes. `coerce_to_payload_words` extracts each field and pushes ITS
+    /// words, so element `i` lands at word `sum(word_count(e) for e before i)` —
+    /// a word-EXPANDED image, never a memcpy of the tuple value. So the overlay
+    /// is valid exactly when every element's LLVM offset equals `8 *` its word
+    /// index, which is what this returns.
+    ///
+    /// FAIL CLOSED on anything it cannot measure: no `TargetData` yet (the
+    /// classifier runs during the declaration passes, where it may be absent), a
+    /// non-struct lowering, or a field count that disagrees with the element
+    /// count all answer `false`, leaving the syntactic verdict alone. So this can
+    /// only ever ADMIT a shape the gate already rejected, never reject one it
+    /// accepted.
+    fn tuple_payload_overlays_words(&self, elems: &[TypeExpr], ty: &TypeExpr) -> bool {
+        let Some(td) = self.target_data.as_ref() else {
+            return false;
+        };
+        let inkwell::types::BasicTypeEnum::StructType(agg) = self.llvm_type_for_type_expr(ty)
+        else {
+            return false;
+        };
+        if agg.count_fields() as usize != elems.len() {
+            return false;
+        }
+        let mut word: u64 = 0;
+        for (i, e) in elems.iter().enumerate() {
+            if td.offset_of_element(&agg, i as u32) != Some(word * 8) {
+                return false;
+            }
+            word += self.payload_word_count_for_type_expr(e, "", "") as u64;
+        }
+        true
+    }
+
     pub(super) fn enum_drop_kind_for_type_expr(&self, ty: &TypeExpr) -> EnumDropKind {
         match &ty.kind {
             TypeKind::Path(path) => {
@@ -6012,9 +6059,15 @@ impl<'ctx> super::Codegen<'ctx> {
             // `(Option[Res], i64)` payload from being read as owning nothing
             // (B-2026-08-03-3 / B-2026-08-03-7, the same correction one table
             // over).
+            // B-2026-09-12-10 — the second disjunct is the MEASURED form of the
+            // precondition the syntactic one stands in for; see
+            // `tuple_payload_overlays_words`. It can only admit a shape the
+            // syntactic gate rejected, so every shape that classifies
+            // `NestedTuple` today keeps doing so.
             TypeKind::Tuple(elems)
                 if !elems.is_empty()
-                    && self.type_expr_word_aligned(ty, &mut Vec::new())
+                    && (self.type_expr_word_aligned(ty, &mut Vec::new())
+                        || self.tuple_payload_overlays_words(elems, ty))
                     && elems.iter().any(|e| {
                         self.type_expr_has_drop_heap(e) || self.tuple_elem_needs_deep_drop(e)
                     }) =>

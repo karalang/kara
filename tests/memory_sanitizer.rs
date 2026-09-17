@@ -96554,6 +96554,166 @@ fn main() {
         );
     }
 
+    /// B-2026-09-12-10 — the row's LAST cell: a tuple enum payload with a
+    /// SUB-WORD element gets its drop, when the overlay the drop needs actually
+    /// holds.
+    ///
+    /// `enum M { P((bool, String)), Q }` lost 192 B over 8 rounds at `-O0`, while
+    /// `(String, i64)` beside it was clean. `type_expr_word_aligned` rejects any
+    /// tuple with a sub-8-byte element, because the `NestedTuple` drop hands the
+    /// payload's WORD REGION to the tuple's own drop fn and that is only sound
+    /// when the tuple's LLVM fields sit at the word offsets. The gate is a
+    /// SYNTACTIC stand-in for that, and it is wrong in one direction: a `bool`
+    /// followed by an 8-byte-aligned element pads to exactly those offsets.
+    ///
+    /// So the gate is not widened — the row is right that widening it is the
+    /// wrong repair. A second disjunct asks the precondition itself, measured
+    /// against `TargetData`: element `i`'s LLVM offset must equal `8 *` its word
+    /// index, the word image being what `coerce_to_payload_words` writes (one
+    /// word stream per field, never a memcpy of the tuple value). It fails closed
+    /// on anything unmeasurable, so it can only admit a shape the syntactic gate
+    /// rejected.
+    ///
+    /// `bis` IS THE CELL THAT MUST STAY DECLINED, and it is what makes the
+    /// distinction real rather than verbal: in `(bool, i32, String)` the `i32`
+    /// genuinely shares the `bool`'s word while the payload image gives it its
+    /// own, so the offsets disagree, the disjunct answers false, and the payload
+    /// keeps leaking. That remainder is B-2026-09-17-28 — it needs the
+    /// word-per-element pack layout the row describes, not this predicate.
+    /// It is deliberately NOT a cell here (it would redden the suite for its own
+    /// row); the assertion that it stays declined is the leak it still has.
+    ///
+    /// THREE CELLS THE ROW DID NOT LIST are fixed by the same two lines, and they
+    /// are here because each was measured before and after: `(i32, String)`
+    /// 192 B/8 -> clean, `(bool, String, String)` 368 B/16 -> clean, and
+    /// `(bool, Rec)` with a user `Drop` on `Rec` 66 B/3 -> clean.
+    ///
+    /// THE TWO BARE-ARRAY CELLS are the regression guard, not coverage: the row
+    /// measured the OTHER candidate repair (widening
+    /// `payload_word_count_for_type_expr`) regressing both from clean to 34 B,
+    /// because the under-sizing is load-bearing for `EnumDropKind::BoxedArray`.
+    /// This fix touches neither the width nor the walker, and they are clean
+    /// before and after.
+    ///
+    /// `(bool, Rec)` RUNS ITS USER `Drop` BODY ON NO BACKEND, before and after,
+    /// `--interp` included — so it is agreed rather than divergent, and it is the
+    /// B-2026-09-12-6 body-channel family, not this row. Recorded here so whoever
+    /// repairs that channel sees this position.
+    ///
+    /// OBSERVABLE ONLY AT `-O0`, which the row insists on and which makes the
+    /// ordinary `--features llvm` run of this fixture VACUOUS: at the default opt
+    /// level LLVM deletes an allocation nothing observes, and adding a read of the
+    /// payload does not rescue it. `scripts/asan-o0-leg.sh` is where the unfixed
+    /// tree reports the leak, so a green default run here is not evidence.
+    #[test]
+    fn asan_subword_element_tuple_enum_payload_is_dropped() {
+        const EIGHT: [&str; 9] = ["t", "t", "t", "t", "t", "t", "t", "t", "end"];
+        const ROUNDS: &str = "    let mut i: i64 = 0i64;\n\
+             \x20   while i < 8i64 {\n";
+
+        // The row's own cell.
+        assert_clean_asan_run(
+            &format!(
+                "enum M {{ P((bool, String)), Q }}\n\
+                 fn main() {{\n{ROUNDS}\
+                 \x20       let g: M = P((true, f\"row-aaaaaaaaaaaaaaaa-{{i}}\"));\n\
+                 \x20       println(f\"t\");\n\
+                 \x20       i = i + 1i64;\n\
+                 \x20   }}\n\
+                 \x20   println(f\"end\");\n\
+                 }}\n"
+            ),
+            &EIGHT,
+            "b1210-bool-string",
+        );
+
+        // Sub-word element FIRST, a different primitive width.
+        assert_clean_asan_run(
+            &format!(
+                "enum M {{ P((i32, String)), Q }}\n\
+                 fn main() {{\n{ROUNDS}\
+                 \x20       let g: M = P((3i32, f\"row-aaaaaaaaaaaaaaaa-{{i}}\"));\n\
+                 \x20       println(f\"t\");\n\
+                 \x20       i = i + 1i64;\n\
+                 \x20   }}\n\
+                 \x20   println(f\"end\");\n\
+                 }}\n"
+            ),
+            &EIGHT,
+            "b1210-i32-string",
+        );
+
+        // TWO heap elements after the sub-word one.
+        assert_clean_asan_run(
+            &format!(
+                "enum M {{ P((bool, String, String)), Q }}\n\
+                 fn main() {{\n{ROUNDS}\
+                 \x20       let g: M = P((true, f\"row-aaaaaaaaaaaaaaaa-{{i}}\", f\"two-bbbbbbbbbbbbbbbb-{{i}}\"));\n\
+                 \x20       println(f\"t\");\n\
+                 \x20       i = i + 1i64;\n\
+                 \x20   }}\n\
+                 \x20   println(f\"end\");\n\
+                 }}\n"
+            ),
+            &EIGHT,
+            "b1210-bool-two-strings",
+        );
+
+        // A user-`Drop` STRUCT element behind the sub-word one. Its body runs on
+        // no backend (B-2026-09-12-6); the memory is this row's and is clean.
+        assert_clean_asan_run(
+            "struct Rec { id: i64, s: String }\n\
+             impl Drop for Rec { fn drop(mut ref self) { println(f\"dR{self.id}\") } }\n\
+             enum M { P((bool, Rec)), Q }\n\
+             fn main() {\n\
+             \x20   let mut i: i64 = 0i64;\n\
+             \x20   while i < 3i64 {\n\
+             \x20       let g: M = P((true, Rec { id: i, s: f\"row-aaaaaaaaaaaaaaaa-{i}\" }));\n\
+             \x20       println(f\"t\");\n\
+             \x20       i = i + 1i64;\n\
+             \x20   }\n\
+             \x20   println(f\"end\");\n\
+             }\n",
+            &["t", "t", "t", "end"],
+            "b1210-drop-struct-element",
+        );
+
+        // ── regression guard: the two bare-array cells the OTHER candidate fix
+        //    regressed from clean to 34 B. Clean before and after this one.
+        for (src, label) in [
+            (
+                "enum E { A(Array[String, 2]), B }\n\
+                 fn main() {\n\
+                 \x20   let mut i: i64 = 0i64;\n\
+                 \x20   while i < 8i64 {\n\
+                 \x20       let a: Array[String, 2] = [f\"one-aaaaaaaaaaaaaaaa-{i}\", f\"two-bbbbbbbbbbbbbbbb-{i}\"];\n\
+                 \x20       let g: E = A(a);\n\
+                 \x20       println(f\"t\");\n\
+                 \x20       i = i + 1i64;\n\
+                 \x20   }\n\
+                 \x20   println(f\"end\");\n\
+                 }\n",
+                "b1210-bare-array-guard",
+            ),
+            (
+                "enum E { A(Array[String, 2], i64), B }\n\
+                 fn main() {\n\
+                 \x20   let mut i: i64 = 0i64;\n\
+                 \x20   while i < 8i64 {\n\
+                 \x20       let a: Array[String, 2] = [f\"one-aaaaaaaaaaaaaaaa-{i}\", f\"two-bbbbbbbbbbbbbbbb-{i}\"];\n\
+                 \x20       let g: E = A(a, 7i64);\n\
+                 \x20       println(f\"t\");\n\
+                 \x20       i = i + 1i64;\n\
+                 \x20   }\n\
+                 \x20   println(f\"end\");\n\
+                 }\n",
+                "b1210-bare-array-two-field-guard",
+            ),
+        ] {
+            assert_clean_asan_run(src, &EIGHT, label);
+        }
+    }
+
     #[test]
     fn asan_shared_enum_nameless_aggregate_payload_box_is_freed() {
         const STRS: &str = "[f\"aaaaaaaaaaaaaaaaaaaa\", f\"bbbbbbbbbbbbbbbbbbbb\"]";
