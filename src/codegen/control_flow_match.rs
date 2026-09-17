@@ -9459,46 +9459,98 @@ impl<'ctx> super::Codegen<'ctx> {
         // / `self` scrutinee, which is exactly where a let-site registration
         // could exist — a fresh temp has no binding name and never registered
         // one.
+        // B-2026-09-14-22 — the BODIES mask below must stand down where it is
+        // the payload's ONLY bodies channel, which is one conjunction of three
+        // and every term is load-bearing. Computed here because the mask runs
+        // first.
+        //
+        // 1. A READ-ONLY arm. A read registers no body of its own, so the mask
+        //    has nobody to hand the body to. An arm that CONSUMES its binding
+        //    is a different mechanism and still a gap (see the row's split-out
+        //    follow-up); skipping the mask there was never measured and is the
+        //    shape that doubles below.
+        // 2. A GENERIC payload. The instantiation-keyed walker
+        //    (`__karac_dropelems_genum_<te>`) is the only bodies channel such a
+        //    payload has, because the name-keyed one skips a payload declared
+        //    as the enum's own parameter (B-2026-08-03-5). Measured in the IR:
+        //    the non-binding arm's callee carries `@__karac_dropelems_genum_Ho_W`
+        //    and the binding arm's does not, which is the whole of that row.
+        //    The MONOMORPHIC twin has a SECOND channel in the enum's own
+        //    `__karac_drop_<E>` switch, which this mask never touched, so
+        //    widening the gate to it gives that arm two bodies.
+        // 3. A HEAP-BOXED payload (`var_has_boxed_enum_drop`). An INLINE
+        //    generic payload has its own bodies channel — the fresh-temp /
+        //    let-site registration of B-2026-09-12-17 — so the mask is right
+        //    for it and standing it down printed the body twice, measured on
+        //    `e2e_generic_enum_ctor_temp_arg_runs_its_payload_drop_body`'s
+        //    first cell. The question has to be asked of the INSTANTIATION,
+        //    which is why it reads the registered box action rather than the
+        //    declared payload type (spelled `T`, one word, never boxed).
+        // 4. A BY-VALUE PARAM scrutinee. `scrutinee_is_owned_param_binding` is
+        //    that question already: it is what decides whether the payload
+        //    binding is a VIEW, whose drop is the memory-only
+        //    `__karac_drop_struct_<T>`, or an owner with its own body-running
+        //    `karac_drop_<T>`. A NAMED LOCAL scrutinee gets the second, so
+        //    skipping the mask there printed the body twice — measured, on the
+        //    local-from-a-call and local-from-a-ctor cells alike.
+        let arm_binds = Self::variant_arm_binds(pattern);
+        let arm_reads_only = body.is_some_and(|b| {
+            !arm_binds.is_empty()
+                && arm_binds
+                    .iter()
+                    .all(|v| super::consume_class::binding_only_borrowed(v, b))
+        });
+        let bodies_mask_is_sole_channel = arm_reads_only
+            && self.scrutinee_is_owned_param_binding(scrutinee)
+            && self.var_has_boxed_enum_drop(scrut_name)
+            && self.arm_consumes_only_generic_payload(&enum_name, pattern);
         if self.enum_pattern_consumes_user_drop_payload(&enum_name, pattern) {
-            // B-2026-09-16-12 — mask the positions this arm TAKES, rather than
-            // retracting the binding's whole walker.
-            //
-            // The gate above is a BOOLEAN ("does this pattern consume ANY
-            // Drop-bearing position?"), and the retraction it used to reach is
-            // whole-var, so `match w { W2.Two(a, _) => … }` stood the husk's
-            // entire payload-bodies walk down and field 1's body ran nowhere —
-            // on this backend once the arm moved `a` out, and on the
-            // interpreter unconditionally. Memory was never affected: the
-            // cap-zeroing half above is already per-position, and its own doc
-            // says a wildcard sub-pattern "doesn't claim ownership, so the
-            // source's drop must still fire". This is that same sentence
-            // applied to the BODIES channel.
-            //
-            // `enum_pattern_consumed_positions` is the per-position answer the
-            // boolean is computed from, so the two cannot disagree about which
-            // positions an arm takes. `mask_enum_payload_bodies_for_var` falls
-            // back to the whole-var retraction when the accumulated mask is
-            // TOTAL, so a fully-consuming arm — the overwhelmingly common case
-            // and every case any existing fixture covers — keeps today's
-            // behaviour byte-for-byte.
-            let masked = match self.enum_pattern_consumed_positions(&enum_name, pattern) {
-                Some((variant, positions)) if !positions.is_empty() => {
-                    let acc = self
-                        .drop_rc
-                        .arm_moved_enum_payload_positions
-                        .entry(scrut_name.to_string())
-                        .or_default();
-                    for pos in positions {
-                        acc.insert((variant.clone(), pos));
+            // Only the BODIES mask is gated: the MEMORY retraction at the end
+            // of this block is what stops the box drop and the binding from
+            // both freeing a boxed payload, and skipping it for a read-only
+            // arm is a double free — measured, `free(): double free detected
+            // in tcache 2`, exit 134.
+            if !bodies_mask_is_sole_channel {
+                // B-2026-09-16-12 — mask the positions this arm TAKES, rather than
+                // retracting the binding's whole walker.
+                //
+                // The gate above is a BOOLEAN ("does this pattern consume ANY
+                // Drop-bearing position?"), and the retraction it used to reach is
+                // whole-var, so `match w { W2.Two(a, _) => … }` stood the husk's
+                // entire payload-bodies walk down and field 1's body ran nowhere —
+                // on this backend once the arm moved `a` out, and on the
+                // interpreter unconditionally. Memory was never affected: the
+                // cap-zeroing half above is already per-position, and its own doc
+                // says a wildcard sub-pattern "doesn't claim ownership, so the
+                // source's drop must still fire". This is that same sentence
+                // applied to the BODIES channel.
+                //
+                // `enum_pattern_consumed_positions` is the per-position answer the
+                // boolean is computed from, so the two cannot disagree about which
+                // positions an arm takes. `mask_enum_payload_bodies_for_var` falls
+                // back to the whole-var retraction when the accumulated mask is
+                // TOTAL, so a fully-consuming arm — the overwhelmingly common case
+                // and every case any existing fixture covers — keeps today's
+                // behaviour byte-for-byte.
+                let masked = match self.enum_pattern_consumed_positions(&enum_name, pattern) {
+                    Some((variant, positions)) if !positions.is_empty() => {
+                        let acc = self
+                            .drop_rc
+                            .arm_moved_enum_payload_positions
+                            .entry(scrut_name.to_string())
+                            .or_default();
+                        for pos in positions {
+                            acc.insert((variant.clone(), pos));
+                        }
+                        let skip = acc.clone();
+                        self.mask_enum_payload_bodies_for_var(scrut_name, &enum_name, &skip);
+                        true
                     }
-                    let skip = acc.clone();
-                    self.mask_enum_payload_bodies_for_var(scrut_name, &enum_name, &skip);
-                    true
+                    _ => false,
+                };
+                if !masked {
+                    self.suppress_container_elem_bodies_for_var(scrut_name);
                 }
-                _ => false,
-            };
-            if !masked {
-                self.suppress_container_elem_bodies_for_var(scrut_name);
             }
             // B-2026-09-10-2 — the MEMORY half of the same move-out for a
             // heap-BOXED generic payload. The arm's binding owns the interior;
@@ -9515,14 +9567,10 @@ impl<'ctx> super::Codegen<'ctx> {
             // for the channel and much too coarse to decide ownership, so the
             // shape half rides on the registration and the consumption half is
             // computed here.
-            let binds = Self::variant_arm_binds(pattern);
-            let arm_only_borrows = body.is_some_and(|b| {
-                !binds.is_empty()
-                    && binds
-                        .iter()
-                        .all(|v| super::consume_class::binding_only_borrowed(v, b))
-            });
-            self.clear_boxed_enum_inner_drop(scrut_name, arm_only_borrows);
+            // B-2026-09-14-22 — the same answer the bodies gate at the top of
+            // this block computes; one `arm_reads_only` for both channels, so
+            // they cannot drift apart on what an arm does with its binding.
+            self.clear_boxed_enum_inner_drop(scrut_name, arm_reads_only);
         }
     }
 
@@ -12190,6 +12238,60 @@ impl<'ctx> super::Codegen<'ctx> {
             _ => return None,
         };
         Some((variant_name, positions))
+    }
+
+    /// B-2026-09-14-22 — are ALL of this arm's consumed payload positions
+    /// declared as one of the enum's OWN generic parameters?
+    ///
+    /// The narrowing the bodies mask needs. A generic payload's bodies ride the
+    /// instantiation-keyed `__karac_dropelems_genum_<te>` walker alone, because
+    /// the name-keyed one skips a payload declared as `T` (B-2026-08-03-5); a
+    /// concretely-declared payload has that walker AND the enum's own
+    /// `__karac_drop_<E>` switch. So masking the bodies for a read-only arm is
+    /// a LOST body in the first case and would be a DOUBLED one in the second,
+    /// which is why the gate asks about the DECLARATION rather than about the
+    /// arm alone.
+    ///
+    /// The `Option`/`Result` carve-out is
+    /// [`Self::enum_pattern_consumes_user_drop_payload`]'s, for its reason: the
+    /// seeded pair is declared generic in the baked stdlib and its payload
+    /// bodies ride the separate `optres` machinery, so admitting it here would
+    /// disarm a channel this gate knows nothing about.
+    ///
+    /// FAIL-CLOSED: an arm whose positions cannot be resolved, or which mixes a
+    /// generic position with a concrete one, answers `false` and keeps today's
+    /// mask. A lost body is the status quo; a doubled one is a regression.
+    fn arm_consumes_only_generic_payload(&self, enum_name: &str, pattern: &Pattern) -> bool {
+        if matches!(enum_name, "Option" | "Result") {
+            return false;
+        }
+        let Some((variant_name, consumed)) =
+            self.enum_pattern_consumed_positions(enum_name, pattern)
+        else {
+            return false;
+        };
+        if consumed.is_empty() {
+            return false;
+        }
+        let Some((_, _, tes)) = self
+            .enum_variant_field_type_exprs(enum_name)
+            .into_iter()
+            .find(|(_, n, _)| *n == variant_name)
+        else {
+            return false;
+        };
+        let own_params = self.enum_generic_param_names(enum_name);
+        if own_params.is_empty() {
+            return false;
+        }
+        consumed.into_iter().all(|pos| {
+            tes.get(pos)
+                .and_then(|te| match &te.kind {
+                    TypeKind::Path(p) => p.segments.first().cloned(),
+                    _ => None,
+                })
+                .is_some_and(|n| own_params.contains(&n))
+        })
     }
 
     /// B-2026-07-30-11 (enum leg) — does `pattern` move out a payload position

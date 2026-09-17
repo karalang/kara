@@ -45696,6 +45696,128 @@ end
         }
     }
 
+    /// B-2026-09-14-22 — a GENERIC enum's BOXED payload keeps its `Drop` body when the
+    /// consuming arm BINDS that payload read-only.
+    ///
+    /// `suppress_destructured_enum_payload_cleanup` masks the scrutinee's payload-BODIES
+    /// walk for every position the arm consumes, on the premise that the arm's binding
+    /// now owns the body. For a GENERIC payload behind a BY-VALUE PARAM scrutinee that
+    /// premise fails on both halves at once: the instantiation-keyed walker
+    /// `__karac_dropelems_genum_<te>` is the only bodies channel a generic payload has
+    /// (the name-keyed one skips a payload declared as the enum's own parameter —
+    /// B-2026-08-03-5's guard), and a param scrutinee's arm binds a VIEW whose drop is
+    /// the memory-only `__karac_drop_struct_<T>`. So the mask retracted the one channel
+    /// and handed the body to a binding that runs none: `w:4 / end` compiled against
+    /// `w:4 / dW4 / end` on the interpreter, a live run-vs-build divergence.
+    ///
+    /// The gate is THREE predicates and every one of them earns its place, each pinned
+    /// by a cell that went wrong when it was missing:
+    ///
+    /// * read-only arm (`binding_only_borrowed`) — cell 10 is the consuming arm, still a
+    ///   gap and pinned as one below.
+    /// * generic payload (`arm_consumes_only_generic_payload`) — cells 4-5 and 8 are the
+    ///   MONOMORPHIC twin, which has a SECOND channel in the enum's own
+    ///   `__karac_drop_<E>` switch; skipping the mask there DOUBLES the body.
+    /// * param scrutinee (`scrutinee_is_owned_param_binding`) — cells 6-7 match a NAMED
+    ///   LOCAL, whose arm binding gets its own body-running `karac_drop_<T>`; skipping
+    ///   the mask there printed `w:4 / dW4 / dW4 / end`, measured.
+    ///
+    /// AND THE MEMORY HALF OF THE SAME BLOCK IS NOT GATED. `clear_boxed_enum_inner_drop`
+    /// is what stops the box drop and the binding from both freeing a boxed payload; the
+    /// first cut of this fix skipped the whole block and turned cells 6-7 into
+    /// `free(): double free detected in tcache 2`, exit 134. Only the BODIES mask is
+    /// gated — hence the inner `if` rather than a condition on the outer one.
+    ///
+    /// INLINE PAYLOADS ARE A DIFFERENT CELL ALREADY GREEN, which is why this row is
+    /// separate from `(test|e2e)_generic_enum_ctor_temp_arg_runs_its_payload_drop_body`:
+    /// that table's one-word `R` payload rides the inline route and was never masked.
+    /// Three `String`s (9 words) outgrow the erased one-word payload area and heap-box,
+    /// which is the whole of this row.
+    ///
+    /// CELL 9 IS THE TWO-PARAMETER DECLARATION (`enum Ro[T, E]`), which the row listed as
+    /// NOT MEASURED: divergent before the fix, correct on all four surfaces after, so the
+    /// gate keys on the payload rather than on the enum's arity.
+    ///
+    /// CELL 10 IS THE REMAINING GAP, split out as its own open row rather than buried
+    /// here: an arm that CONSUMES its binding (`let z = r`) still loses the body on every
+    /// compiled surface. It is pinned at the divergent value in this suite and at the
+    /// correct one in the interpreter's twin, deliberately, so the split is visible in
+    /// both tables rather than quietly absent from one.
+    ///
+    /// Twin in the other backend's suite under the same name, same table.
+    #[test]
+    fn e2e_generic_boxed_enum_payload_body_survives_a_read_only_binding_arm() {
+        let hdr = "struct W { a: String, b: String, c: String }\n\
+                  impl Drop for W { fn drop(mut ref self) { println(f\"dW{self.a.len()}\") } }\n\
+                  fn mkw() -> W { return W { a: f\"aaa{1}\", b: f\"bbb{1}\", c: f\"ccc{1}\" }; }\n\
+                  enum Ho[T] { Full(T), Empty }\n\
+                  enum Mo { Full(W), Empty }\n\
+                  enum Ro[T, E] { Good(T), Bad(E) }\n\
+                  fn taker(x: Ro[W, i64]) { match x { Good(r) => { println(f\"w:{r.a.len()}\") } Bad(n) => { println(f\"b{n}\") } } }\n\
+                  fn takew(x: Ho[W]) { match x { Full(r) => { println(f\"w:{r.a.len()}\") } Empty => { println(\"e\") } } }\n\
+                  fn holdw(x: Ho[W]) { match x { Full(_) => { println(\"w\") } Empty => { println(\"e\") } } }\n\
+                  fn takem(x: Mo) { match x { Full(r) => { println(f\"w:{r.a.len()}\") } Empty => { println(\"e\") } } }\n\
+                  fn holdm(x: Mo) { match x { Full(_) => { println(\"w\") } Empty => { println(\"e\") } } }\n\
+                  fn consumew(x: Ho[W]) { match x { Full(r) => { let z = r; println(f\"w:{z.a.len()}\") } Empty => { println(\"e\") } } }\n\
+                  fn mkho() -> Ho[W] { return Ho.Full(mkw()); }\n\
+                  fn mkmo() -> Mo { return Mo.Full(mkw()); }\n";
+        for (label, stmts, want) in [
+            (
+                "generic, boxed payload, read-only binding arm, fresh ctor temp",
+                "takew(Ho.Full(mkw()));",
+                "w:4\ndW4\nend\n",
+            ),
+            (
+                "generic, same arm, a named local moved into the callee",
+                "let g: Ho[W] = Ho.Full(mkw());\ntakew(g);",
+                "w:4\ndW4\nend\n",
+            ),
+            (
+                "control: the arm does NOT bind (wildcard) — never masked, never lost",
+                "holdw(Ho.Full(mkw()));",
+                "w\ndW4\nend\n",
+            ),
+            (
+                "control: MONOMORPHIC twin, binding arm — has a second channel, must not double",
+                "takem(Mo.Full(mkw()));",
+                "w:4\ndW4\nend\n",
+            ),
+            (
+                "control: MONOMORPHIC twin, non-binding arm",
+                "holdm(Mo.Full(mkw()));",
+                "w\ndW4\nend\n",
+            ),
+            (
+                "control: generic, NAMED LOCAL scrutinee from a call — arm owns, must not double",
+                "let g = mkho();\nmatch g { Full(r) => { println(f\"w:{r.a.len()}\") } Empty => { println(\"e\") } }",
+                "w:4\ndW4\nend\n",
+            ),
+            (
+                "control: generic, NAMED LOCAL scrutinee from a ctor",
+                "let g: Ho[W] = Ho.Full(mkw());\nmatch g { Full(r) => { println(f\"w:{r.a.len()}\") } Empty => { println(\"e\") } }",
+                "w:4\ndW4\nend\n",
+            ),
+            (
+                "control: MONOMORPHIC named local scrutinee from a call",
+                "let g = mkmo();\nmatch g { Full(r) => { println(f\"w:{r.a.len()}\") } Empty => { println(\"e\") } }",
+                "w:4\ndW4\nend\n",
+            ),
+            (
+                "generic with TWO parameters — the `Result`-shaped declaration",
+                "taker(Ro.Good(mkw()));",
+                "w:4\ndW4\nend\n",
+            ),
+            (
+                "PINNED GAP: the arm CONSUMES its binding (`let z = r`) — body lost when compiled",
+                "consumew(Ho.Full(mkw()));",
+                "w:4\nend\n",
+            ),
+        ] {
+            let src = format!("{hdr}fn main() {{\n{stmts}\nprintln(\"end\");\n}}\n");
+            assert_eq!(run_program(&src).as_deref(), Some(want), "[{label}]");
+        }
+    }
+
     #[test]
     fn e2e_wildcard_let_discard_owns_what_its_arm_hands_out() {
         let hdr = "struct R { id: i64, name: String }\n\

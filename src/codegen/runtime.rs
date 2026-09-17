@@ -13498,6 +13498,26 @@ impl<'ctx> super::Codegen<'ctx> {
     ///
     /// Callers that have already established consumption pass `false` and are
     /// byte-identical to before.
+    /// B-2026-09-14-22 — does `name` carry a heap-BOX drop action for its enum
+    /// payload? The boxed-vs-inline discriminator the payload-bodies gate in
+    /// `suppress_destructured_enum_payload_cleanup` needs.
+    ///
+    /// An INLINE generic payload already has a bodies channel of its own — the
+    /// fresh-temp / let-site registration of B-2026-09-12-17 — so the mask is
+    /// RIGHT for it and standing the mask down doubles the body. Measured:
+    /// `e2e_generic_enum_ctor_temp_arg_runs_its_payload_drop_body`'s first
+    /// cell went `f:5 dR5 dR5 end` when the gate admitted the inline shape.
+    /// Asking whether the box action is actually here answers for the
+    /// instantiation rather than for the declaration, which is what
+    /// `enum_payload_is_boxed` cannot do from a payload spelled `T`.
+    pub(super) fn var_has_boxed_enum_drop(&self, name: &str) -> bool {
+        self.drop_rc.scope_cleanup_actions.iter().any(|frame| {
+            frame
+                .iter()
+                .any(|a| matches!(a, CleanupAction::BoxedEnumDrop { name: n, .. } if n == name))
+        })
+    }
+
     pub(super) fn clear_boxed_enum_inner_drop(&mut self, name: &str, arm_only_borrows: bool) {
         for frame in self.drop_rc.scope_cleanup_actions.iter_mut().rev() {
             for action in frame.iter_mut() {
