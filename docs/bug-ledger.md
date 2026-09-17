@@ -94,7 +94,7 @@ distinguish "bugs flattening" from "we stopped writing them down."
 |---|---|
 | run-vs-build | 430 |
 | miscompile | 416 |
-| leak | 373 |
+| leak | 374 |
 | double-free | 242 |
 | missing-feature | 199 |
 | codegen-gap | 179 |
@@ -110,7 +110,7 @@ distinguish "bugs flattening" from "we stopped writing them down."
 
 | surface | total |
 |---|---|
-| codegen | 1836 |
+| codegen | 1837 |
 | interp | 469 |
 | typecheck | 302 |
 | other | 96 |
@@ -132,7 +132,6 @@ _Generated from `bug-ledger.jsonl` by `scripts/bug-curve.py` (2026-05-20 → 202
 |---|---|---|---|---|---|
 | B-2026-09-10-20 | 2026-09-10 | codegen | low | A `Vec` OR `shared enum` ENUM PAYLOAD LOSES ITS `Drop` BODY ON EVERY BACKEND, AND THE GENERIC SPELLING ALSO LEAKS -- `G.X(w)` over `Vec[Mono]` prints nothing and strands 320 B + 27 B, `G.X(SMono.P(..))` and its DECLARED twin `enum H3 { P(SMono) }` each strand 88 B + 27 B, while the same envelope over a plain struct payload is correct and clean -- so the two remedies `E_ENUM_NESTED_ENUM_PAYLOAD` recommends are both broken | — |
 | B-2026-09-12-1 | 2026-09-12 | runtime | low | `coroutine_ws_over_tls_concurrent_handlers_all_execute` GOES RED IN THE REQUIRED GATE SET BUT IS NOT REPRODUCIBLE ON DEMAND -- five reds across both KARAC_SSO legs against 22 consecutive passes under deliberately harsher standalone conditions. The three preserved reds report 15, 15 and 11 of 16 handlers echoing, so the count is VARIABLE (an earlier two-observation reading of it as a stable 15/16 is retracted in the detail). What holds is the discriminator the row was filed for: `left > 0` every time, so the server DOES come up -- a coroutine-resume / accept-path race, not a port or fixture problem. | — |
-| B-2026-09-12-10 | 2026-09-12 | codegen | medium | THREE TUPLE-PAYLOAD ELEMENT SHAPES STILL LEAK INSIDE AN ENUM -- `(bool, String)` is declined on purpose by the word-alignment gate B-2026-09-12-8's fix relies on, while `(Rec, i64)` carrying a user `Drop` and `(Option[String], i64)` are declined for reasons not yet attributed; all three measured unchanged by that fix rather than worse | — |
 | B-2026-09-13-2 | 2026-09-13 | codegen | medium | THE `Option[Array[T, N]]` A `Map` HANDS BACK IS OWNED BY NOBODY -- `insert`'s displaced old value leaks 336 B in 14 blocks and `remove`'s return 192 B in 4 + 192 indirect, while the `Vec[String]` and `String` twins at both call sites are clean; the 48 B direct blocks are the boxed payload and the indirect ones the `String`s inside it | — |
 | B-2026-09-13-4 | 2026-09-13 | other | low | THE DIFFERENTIAL CANNOT COMPARE A MATCHED PARAMETER'S PAYLOAD AT ALL, so B-2026-09-12-27's now-correct schedule for that population is unwatched -- rule 2 excludes it because codegen discharges the payload in the CALLER while the comparison is per-callee, and three of the four measured cells are CORRECT programs that would report false divergences if compared. Closing it needs a cross-function discharge check (a callee obligation covered by the caller's record), which `differential_check` cannot express: it walks functions independently and `param_names_by_function` is its only call-boundary information | — |
 | B-2026-09-13-5 | 2026-09-13 | interp | medium | THE INTERPRETER RUNS A `Drop` BODY TWICE WHEN AN ARM MOVES A SUB-VALUE OUT OF A BY-VALUE `Option` PAYLOAD, and the COMPILED backends are the correct ones here -- `fn eat(o: Option[(R, i64)]) -> R { match o { Some(t) => { return t.0; } .. } }` prints `dR5 got:5 dR5 end` under `--interp` against JIT/AOT/AOT-at-`KARAC_AUTO_PAR=0`'s `got:5 dR5 end`, and the plain-struct spelling (`Holder2 { inner: Inner }` with no `Drop` of its own, `return t.inner;`) prints `dI5 got:5 dI5 end` against `got:5 dI5 end`. The value is MOVED into the caller's binding, so exactly one owner exists and exactly one body is owed; the interpreter counts two. DIRECTION IS THE REVERSE of B-2026-09-13-3 / B-2026-09-12-15 / B-2026-09-09-18 / B-2026-09-12-17, which are all 'compiled loses a body' -- a fix that treats the interpreter as the oracle will make this worse | — |
@@ -198,6 +197,7 @@ _Generated from `bug-ledger.jsonl` by `scripts/bug-curve.py` (2026-05-20 → 202
 | B-2026-09-17-25 | 2026-09-17 | codegen | medium | A NAMED LOCAL MOVED INTO A `shared enum` CONSTRUCTOR LEAVES A PAYLOAD-BODY ACTION READING THE ZEROED STAGING SLOT -- `let r = mkr(1); { let s = SMono.P(r); }` prints `d2:0` on every compiled backend where `--interp` prints `d2:9`, the body running over the moved-from husk while the live payload sits unread in the heap box; the action fires at `s`'s death rather than `r`'s, takes a NAMED source (a fresh temp is silent instead), and is what blocks B-2026-09-17-19's `rc == 0` fix from landing as one run | — |
 | B-2026-09-17-26 | 2026-09-17 | codegen | low | THE `Result` LEG OF THE ARM-BOUND TUPLE-PAYLOAD LEAK IS A THIRD OWNER PATH -- `fn take(o: Result[(W, i64), i64]) { match o { Ok(t) => t.1 } }` over `struct W { id: i64, name: String }` loses 2 B in 1 block at `-O0` with output correct and identical on all four surfaces. NOT B-2026-09-10-23's mechanism: probes show its retraction never fires for this cell (`takes=None` before and after that fix) and the leak is unchanged, so the interior is stranded somewhere else. Answers that row's unmeasured `Result` axis -- differently from how it expected | — |
 | B-2026-09-17-27 | 2026-09-17 | codegen | low | A DESTRUCTURING ARM OVER A BY-VALUE TUPLE PAYLOAD RETRACTS THE INTERIOR WALKER UNCONDITIONALLY -- `match o { Some((a, b)) => b }` over `Option[(W, i64)]` loses 2 B in 1 block at `-O0`, and B-2026-09-10-23's borrow-premise fix cannot reach it because `boxed_tuple_payload_arm_takes_ownership` ends `(destructures || (whole_tuple_binding && !arm_only_borrows))` -- the verdict is not consulted for a tuple pattern. Its stated premise, that each heap element gets its own `track_vec_var` owner, holds for a `Vec`/`String` element and fails for a user STRUCT element | — |
+| B-2026-09-17-28 | 2026-09-17 | codegen | low | TWO SUB-WORD TUPLE ELEMENTS SHARING A WORD STILL LOSE THE ENUM PAYLOAD -- `enum M { P((bool, i32, String)), Q }` loses 192 B over 8 rounds at `-O0`, unchanged by B-2026-09-12-10's fix and correctly so: the `i32` sits at LLVM offset 4 inside the `bool`'s word while the pack site gives it word 1, so the measured overlay precondition genuinely fails and the payload classifies `EnumDropKind::None`. Dropping through the word region here would free from the wrong offset -- the repair class this family reverted twice. The fix is the LAYOUT (word-per-element packing, or a drop that reads the real packed layout), which is what the parent row said before either of its cells was worked | — |
 
 ### Relocated
 
@@ -2559,6 +2559,7 @@ _Generated from `bug-ledger.jsonl` by `scripts/bug-curve.py` (2026-05-20 → 202
 | B-2026-09-12-7 | codegen | high | A NESTED ENVELOPE DESTRUCTURE WHOSE INNER VARIANT NAME COLLIDES WITH THE ENCLOSING ENVELOPE'S OWN VARIANT SET SEGFAULTS COMPILED -- `enum MyOpt { Som… | 5b939778c |
 | B-2026-09-12-8 | codegen | medium | A MONOMORPHIC ENUM'S TUPLE PAYLOAD LEAKED ITS ELEMENTS' HEAP -- `enum_drop_kind_for_type_expr` matched only `TypeKind::Path`, so a tuple fell to the… | 9f9ef8b |
 | B-2026-09-12-9 | other | medium | THE DROP FUZZER EMITS A METHOD THAT DOES NOT EXIST -- `bool` has no `to_i64`, so every program reaching `tracked_into_opt_then_displace`'s displacing… | 8d509c655 |
+| B-2026-09-12-10 | codegen | medium | THREE TUPLE-PAYLOAD ELEMENT SHAPES STILL LEAK INSIDE AN ENUM -- `(bool, String)` is declined on purpose by the word-alignment gate B-2026-09-12-8's f… | 14aed0d |
 | B-2026-09-12-11 | codegen | medium | A QUALIFIED CONSTRUCTOR AT AN ARGUMENT POSITION LOSES ITS PAYLOAD'S `Drop` BODY ON EVERY COMPILED BACKEND -- `plainD(Option[(R, R)].Some((R { . | 458c43491 |
 | B-2026-09-12-12 | codegen | medium | AN ENUM'S `Array[T, N]` PAYLOAD IS HEAP-BOXED BY A SIZING FALLBACK AND THEN FREED BY NOBODY -- 384 B direct plus 384 B indirect per 8 rounds for `enu… | de0ad99 |
 | B-2026-09-12-13 | codegen | medium | AN `Array` HELD AS A `Map` VALUE LEAKS ITS ELEMENTS -- 384 B in 16 blocks for `Map[i64, Array[String, 2]]`, the one cell of a 38-cell position x type… | 95489c4 |
