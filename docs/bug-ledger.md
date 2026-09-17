@@ -2648,7 +2648,7 @@ _Generated from `bug-ledger.jsonl` by `scripts/bug-curve.py` (2026-05-20 → 202
 | B-2026-09-16-21 | codegen+interp | medium | AN OWNED ENUM RECEIVER'S PAYLOAD `Drop` BODY IS LOST WHENEVER THE CALLEE NEVER DESTRUCTURES `self` -- `let a = E.A(mk(1)); a.none()` over `fn none(se… | 0b97e71 |
 | B-2026-09-16-24 | typecheck | medium | `partial_move_of_drop_enum` REJECTS A BORROW-PROJECTION SCRUTINEE, and it is a false positive by the rule's OWN stated terms -- the rule documents it… | 84030e8 |
 | B-2026-09-16-27 | codegen | medium | A NESTED STRUCT MOVED INTO A VARIANT CONSTRUCTOR ABORTS WITH A DOUBLE FREE -- `Wn.Full(o)` over `struct Out { i: In }` / `struct In { s: String }` di… | 602a4bd |
-| B-2026-09-16-31 | codegen | high | A GENERIC ENUM WITH A GENERIC `impl[T] Drop` SEGFAULTS AT RUNTIME ON EVERY COMPILED BACKEND WHEN AN OWNED-`self` METHOD MATCHES ON IT -- `enum G[T] {… | 93c1014 |
+| B-2026-09-16-31 | codegen | high | A GENERIC ENUM WITH A GENERIC `impl[T] Drop` SEGFAULTS AT RUNTIME ON EVERY COMPILED BACKEND WHEN AN OWNED-`self` METHOD MATCHES ON IT -- `enum G[T] {… | 3fb151a |
 | B-2026-09-16-32 | codegen | medium | `String.substring`'s heap result is NOT NUL-terminated while every other String producer's is, which is the exact shape a past printf overread was fi… | d284a009d |
 | B-2026-09-16-34 | codegen | medium | A NON-SHARED STRUCT CARRYING A BARE `shared` FIELD, AS AN INLINE ENUM PAYLOAD PASSED BY VALUE, READS AND WRITES ITS REFCOUNT BLOCK AFTER FREE -- `fn… | 4320e25 |
 | B-2026-09-16-36 | codegen | medium | the SSO slice fast path still called `karac_string_slice_into` on two cold edges, and the escaping out-pointer cost 2.50x on every iteration that nev… | 356883caa |
