@@ -94,7 +94,7 @@ distinguish "bugs flattening" from "we stopped writing them down."
 |---|---|
 | run-vs-build | 423 |
 | miscompile | 415 |
-| leak | 366 |
+| leak | 367 |
 | double-free | 242 |
 | missing-feature | 199 |
 | codegen-gap | 178 |
@@ -110,7 +110,7 @@ distinguish "bugs flattening" from "we stopped writing them down."
 
 | surface | total |
 |---|---|
-| codegen | 1819 |
+| codegen | 1820 |
 | interp | 467 |
 | typecheck | 302 |
 | other | 95 |
@@ -194,6 +194,7 @@ _Generated from `bug-ledger.jsonl` by `scripts/bug-curve.py` (2026-05-20 → 202
 | B-2026-09-17-6 | 2026-09-17 | codegen+interp | low | AN ENVELOPE'S `Array` PAYLOAD RUNS ITS ELEMENTS' `Drop` BODIES AT THE CONSTRUCTOR STATEMENT, NOT AT THE HOLDER'S DEATH -- `let a: Array[S, 2] = [..]; let x: Option[Array[S, 2]] = Some(a); println("held")` prints both bodies BEFORE `held` on all four surfaces, though `x` owns the array until the end of the block | — |
 | B-2026-09-17-7 | 2026-09-17 | codegen | medium | A MIXED-PATH GENERIC CALLEE THAT MAY HAND ITS BOXED ENUM PAYLOAD BACK DOUBLE FREES -- `fn mid[T](g: G1[T], c: bool) -> G1[T] { if c { return g; } return G1.N; }` at `T = String` dies with no stdout at all, 4 valgrind errors and 12 allocs / 14 frees against a correct `--interp`; B-2026-09-16-16's fix declines it BY DESIGN (its gate is the ALL-PATHS `fn_always_returns_param`) and no static answer at the call site is right for both legs | — |
 | B-2026-09-17-8 | 2026-09-17 | codegen | medium | THE `Option`/`Result` HEAD OF THE PASSTHROUGH-GENERIC DOUBLE FREE IS A DIFFERENT CHANNEL, AND STILL BROKEN -- `fn idOpt[T](g: Option[T]) -> Option[T] { return g }` at `T = String` aborts with `free(): double free detected in tcache 2` and 11 allocs / 12 frees; the ONE extra free (against B-2026-09-16-16's two) is the tell that the payload is INLINE, so it rides `inline_option_payload_vars` rather than the boxed channel that row's gate can see | — |
+| B-2026-09-17-10 | 2026-09-17 | codegen | medium | e312de9cd's SEEDED-CTOR SOURCE DISARM STRANDS THE INTERIOR WHEN THE CONSUMER IS A GENERIC CALLEE -- `fn takesG[T](x: Option[Array[T, 2]])` over a named `Array[S, 2]` local whose element runs a user `Drop` leaks 18 B in 2 blocks at `-O0`, where the same program was CLEAN before that commit; the concrete-callee twin and the plain-element twin are both clean either side, so it is the generic monomorph alone | — |
 
 ### Relocated
 
