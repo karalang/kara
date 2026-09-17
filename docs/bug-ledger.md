@@ -92,7 +92,7 @@ distinguish "bugs flattening" from "we stopped writing them down."
 
 | class | total |
 |---|---|
-| run-vs-build | 423 |
+| run-vs-build | 425 |
 | miscompile | 415 |
 | leak | 369 |
 | double-free | 242 |
@@ -110,7 +110,7 @@ distinguish "bugs flattening" from "we stopped writing them down."
 
 | surface | total |
 |---|---|
-| codegen | 1822 |
+| codegen | 1824 |
 | interp | 467 |
 | typecheck | 302 |
 | other | 95 |
@@ -183,7 +183,6 @@ _Generated from `bug-ledger.jsonl` by `scripts/bug-curve.py` (2026-05-20 → 202
 | B-2026-09-16-28 | 2026-09-16 | codegen | low | A BARE GENERIC-PARAM FIELD MOVED INTO AN OWNING SINK STILL LEAKS 24 B AFTER B-2026-09-15-16 -- that fix closes the BLANK READ half for `Box2[T] { f: T }` at `T = String` (`b ` -> `b b1516-baret-...`) and leaves the leak unchanged, because the `bare_t_heap` arm zeroes words 1 and 2 ahead of every dispatched arm and does not consult `uam_copied_sites` | — |
 | B-2026-09-16-29 | 2026-09-16 | interp+codegen | low | A BARE-`self` ARM THAT PASSES ITS PAYLOAD ON BY VALUE STILL RUNS THE PAYLOAD BODY BEFORE THE SHELL'S -- `match self { E.A(r) => eat(r), .. }` prints `dR6 x6 dE` where the projection-only `r.id` spelling one line up prints `x1 dE dR1`, because B-2026-09-06-39's read-only walk counts a bare mention in ANY non-projection position as a take and so cannot tell `eat(r)` (caller-retains, safe) from `Some(r)` (a real move) | — |
 | B-2026-09-16-30 | 2026-09-16 | codegen | medium | A `shared enum` RECEIVER'S PAYLOAD `Drop` BODY RUNS UNDER `--interp` AND ON NO COMPILED BACKEND -- `Sh.A(mk(16))` over `shared enum Sh { A(R), B }` with `fn read(self) -> i64 { match self { Sh.A(r) => r.id, .. } }` prints `dR16 x16` interpreted and a bare `x16` on jit / `karac build` / `KARAC_AUTO_PAR=0 build`; a REAL A/B divergence, unlike the value-enum siblings around it | — |
-| B-2026-09-16-31 | 2026-09-16 | codegen | high | A GENERIC ENUM WITH A GENERIC `impl[T] Drop` SEGFAULTS AT RUNTIME ON EVERY COMPILED BACKEND WHEN AN OWNED-`self` METHOD MATCHES ON IT -- `enum G[T] { X(T), Y }` + `impl[T] Drop for G[T]` + `fn read(self) { match self { G.X(t) => .. } }` exits 139 under `karac build` and `KARAC_AUTO_PAR=0 karac build` alike, where `--interp` runs it correctly | — |
 | B-2026-09-16-33 | 2026-09-16 | codegen+interp | low | A DISCARDED ARRAY RETURN'S ELEMENT `Drop` BODIES RUN ON NEITHER BACKEND -- `passthru([mk(30), mk(31)]);` over `fn passthru(x: Array[R, 2]) -> Array[R, 2]` prints `ok` and nothing else on all four surfaces, so TWO bodies are owed and zero run. It is the exact ARRAY twin of B-2026-09-09-21 (the tuple shape, fixed), and it has been tracked nowhere: B-2026-09-12-2 installed this arm's MEMORY walk and left bodies out deliberately -- because `--interp` ran none either, so adding one compiled-side alone would have created a run-vs-build divergence out of a leak fix -- and that row is CLOSED `fixed` for the leak, so the deferral had no open home | — |
 | B-2026-09-16-35 | 2026-09-16 | other | medium | the ASAN suite has never run at `KARAC_SSO=1`, so the entire inline-String surface — including a codegen-owned heap allocation — has no sanitizer coverage at all | — |
 | B-2026-09-17-1 | 2026-09-17 | codegen+interp | medium | A DISCARDED `match` WHOSE ARM VALUE IS A TUPLE-RETURNING CALL RUNS ITS ELEMENT `Drop` BODY ON THE INTERPRETER AND NOWHERE ELSE -- `match n { 1 => f(mk(44)), _ => f(mk(45)) };` over `fn f(r: R) -> (R, i64)` prints `dR44` under `--interp` and nothing on `karac run` JIT, `-O0` build or default auto-par build. A REAL run-vs-build divergence rather than an agreed gap, and PRE-EXISTING: measured identically on `8377932~1`, the tree before B-2026-09-09-21's fix, with that row's own shape reading `ok` on all four there as the control proving the tree was pre-fix | — |
@@ -193,6 +192,8 @@ _Generated from `bug-ledger.jsonl` by `scripts/bug-curve.py` (2026-05-20 → 202
 | B-2026-09-17-7 | 2026-09-17 | codegen | medium | A MIXED-PATH GENERIC CALLEE THAT MAY HAND ITS BOXED ENUM PAYLOAD BACK DOUBLE FREES -- `fn mid[T](g: G1[T], c: bool) -> G1[T] { if c { return g; } return G1.N; }` at `T = String` dies with no stdout at all, 4 valgrind errors and 12 allocs / 14 frees against a correct `--interp`; B-2026-09-16-16's fix declines it BY DESIGN (its gate is the ALL-PATHS `fn_always_returns_param`) and no static answer at the call site is right for both legs | — |
 | B-2026-09-17-8 | 2026-09-17 | codegen | medium | THE `Option`/`Result` HEAD OF THE PASSTHROUGH-GENERIC DOUBLE FREE IS A DIFFERENT CHANNEL, AND STILL BROKEN -- `fn idOpt[T](g: Option[T]) -> Option[T] { return g }` at `T = String` aborts with `free(): double free detected in tcache 2` and 11 allocs / 12 frees; the ONE extra free (against B-2026-09-16-16's two) is the tell that the payload is INLINE, so it rides `inline_option_payload_vars` rather than the boxed channel that row's gate can see | — |
 | B-2026-09-17-11 | 2026-09-17 | codegen | medium | A `shared` PAYLOAD UNDER A BY-VALUE ENUM PARAM LOSES ITS rc-DEC ENTIRELY IN TWO SHAPES -- a `shared struct` used as the payload DIRECTLY (`enum Wd { Full(ShIn) }`) strands 32 B at 12 allocs / 10 frees, and the `Option` head over a struct carrying a `shared` FIELD strands 32 B at 11 / 9; both are the OPPOSITE of B-2026-09-16-34 (which ran one DEC too many over the same surface) and both are invisible to everything but a leak check | — |
+| B-2026-09-17-12 | 2026-09-17 | codegen | low | A GENERIC ENUM'S OWN `Drop` BODY RUNS AFTER ITS PAYLOAD'S ON EVERY COMPILED SURFACE WHEN THE PAYLOAD IS HEAP-BOXED -- `match g { G.X(t) => .. }` over a local, and `take(g: G[R])` by value, both print `dR20 dG` where `--interp` prints `dG dR20` (design.md Part 8: the user's `fn drop` body runs first, then the fields) | — |
+| B-2026-09-17-13 | 2026-09-17 | codegen | medium | A CONCRETE `impl G[R]` METHOD THAT MATCHES ON OWNED `self` LOSES THE GENERIC ENUM PAYLOAD'S `Drop` BODY ON EVERY COMPILED SURFACE -- `impl G[R] { fn read(self) { match self { G.X(t) => .. } } }` prints `x1` where `--interp` prints `dR23 x1`, with memory balanced so no sanitizer sees it | — |
 
 ### Relocated
 
@@ -2647,6 +2648,7 @@ _Generated from `bug-ledger.jsonl` by `scripts/bug-curve.py` (2026-05-20 → 202
 | B-2026-09-16-21 | codegen+interp | medium | AN OWNED ENUM RECEIVER'S PAYLOAD `Drop` BODY IS LOST WHENEVER THE CALLEE NEVER DESTRUCTURES `self` -- `let a = E.A(mk(1)); a.none()` over `fn none(se… | 0b97e71 |
 | B-2026-09-16-24 | typecheck | medium | `partial_move_of_drop_enum` REJECTS A BORROW-PROJECTION SCRUTINEE, and it is a false positive by the rule's OWN stated terms -- the rule documents it… | 84030e8 |
 | B-2026-09-16-27 | codegen | medium | A NESTED STRUCT MOVED INTO A VARIANT CONSTRUCTOR ABORTS WITH A DOUBLE FREE -- `Wn.Full(o)` over `struct Out { i: In }` / `struct In { s: String }` di… | 602a4bd |
+| B-2026-09-16-31 | codegen | high | A GENERIC ENUM WITH A GENERIC `impl[T] Drop` SEGFAULTS AT RUNTIME ON EVERY COMPILED BACKEND WHEN AN OWNED-`self` METHOD MATCHES ON IT -- `enum G[T] {… | 93c1014 |
 | B-2026-09-16-32 | codegen | medium | `String.substring`'s heap result is NOT NUL-terminated while every other String producer's is, which is the exact shape a past printf overread was fi… | d284a009d |
 | B-2026-09-16-34 | codegen | medium | A NON-SHARED STRUCT CARRYING A BARE `shared` FIELD, AS AN INLINE ENUM PAYLOAD PASSED BY VALUE, READS AND WRITES ITS REFCOUNT BLOCK AFTER FREE -- `fn… | 4320e25 |
 | B-2026-09-16-36 | codegen | medium | the SSO slice fast path still called `karac_string_slice_into` on two cold edges, and the escaping out-pointer cost 2.50x on every iteration that nev… | 356883caa |
