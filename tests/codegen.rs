@@ -19721,6 +19721,68 @@ fn main() {
     /// `test_declared_vec_enum_payload_runs_element_drop_bodies`, byte-identical
     /// source and expectation — the only fixture shape that can hold an agreed
     /// gap closed.
+    /// B-2026-09-17-25 — a NAMED local moved into a `shared enum` tuple-variant
+    /// constructor no longer runs its `Drop` body over the moved-from husk.
+    ///
+    /// `suppress_source_vec_cleanup_for_arg` disarms the MEMORY half of that
+    /// move by zeroing the source struct's String/Vec `cap` and `len`, so its
+    /// buffer frees (gated on `cap > 0`) no-op and the payload box is sole
+    /// owner. It left the source's user `Drop` BODY registered, so the body ran
+    /// anyway — over the husk the zeroing had just made. `self.s.len()` is 9 for
+    /// a live `R2` and 0 for a moved-from one, which is what makes the defect
+    /// legible in the output rather than merely suspected:
+    ///
+    ///     let r = mkr(1);
+    ///     { let s = SMono.P(r); println("B") }   --interp   d2:9 B C
+    ///     println("C")                           compiled   B d2:0 C
+    ///
+    /// Wrong CONTENT, not a missing line — and invisible to every sanitizer
+    /// leg, because the zeroing is exactly what keeps the memory balanced
+    /// (measured: 0 definitely-lost, 0 invalid accesses, before and after).
+    ///
+    /// THE ASSERTION IS THE ABSENCE OF `d2:0`, and the fresh-temp cell beside
+    /// it is what keeps that honest: it was silent before this fix and is
+    /// silent after, so a regression that re-armed the body everywhere would
+    /// still redden the first cell. The `--interp` side prints `d2:9` and is
+    /// NOT asserted here: it runs the moved-from source's body too, which is
+    /// the same defect on the other backend and is its own row — this fixture
+    /// pins the compiled surfaces only.
+    ///
+    /// SCOPE IS THE TUPLE VARIANT. The struct-variant spelling
+    /// (`Sv.P { f: r }`) reaches a different path that is silent on the
+    /// compiled backends before and after, and whose interpreter side runs the
+    /// body TWICE; it is recorded on the row as unexplained rather than
+    /// changed here.
+    #[test]
+    fn e2e_shared_enum_ctor_named_source_runs_no_husk_drop_body() {
+        let Some(out) = run_program(
+            r#"struct R2 { s: String, t: String, u: String }
+    impl Drop for R2 { fn drop(mut ref self) { println(f"d2:{self.s.len()}") } }
+    fn mkr(i: i64) -> R2 { return R2 { s: f"ssssssss{i}", t: f"tttttttt{i}", u: f"uuuuuuuu{i}" } }
+    shared enum SMono { P(R2), Q }
+
+    fn main() {
+        println("named");
+        let r = mkr(1);
+        { let s = SMono.P(r); println("  B") }
+        println("  C");
+        println("temp");
+        { let s2 = SMono.P(mkr(2)); println("  B2") }
+        println("  C2");
+        println("end")
+    }
+"#,
+        ) else {
+            return;
+        };
+        assert_eq!(
+            out, "named\n  B\n  C\ntemp\n  B2\n  C2\nend\n",
+            "a moved-from source must run no Drop body; `d2:0` here is the husk \
+             body B-2026-09-17-25 removed, and `d2:9` would mean it ran on live \
+             memory the payload box also owns"
+        );
+    }
+
     #[test]
     fn e2e_declared_vec_enum_payload_runs_element_drop_bodies() {
         let Some(out) = run_program(

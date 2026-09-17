@@ -10350,6 +10350,24 @@ impl<'ctx> super::Codegen<'ctx> {
                 // `suppress_source_vec_cleanup_for_arg` for the
                 // shape-detection path.
                 self.suppress_source_vec_cleanup_for_arg(&arg.value);
+                // B-2026-09-17-25 — and the BODY half, which the cap-zeroing
+                // above does not cover. That zeroing neutralizes the source's
+                // buffer FREES (they are gated on `cap > 0`) and leaves its
+                // user `Drop` BODY registered, so a moved-from source still
+                // ran it -- over the husk. Measured at `-O0`:
+                // `let r = mkr(1); { let s = SMono.P(r); }` printed `d2:0`
+                // where `--interp` prints `d2:9`, because `self.s.len()` reads
+                // the `len` this pass just stored 0 into. Wrong CONTENT, not a
+                // missing line, and invisible to every sanitizer leg because
+                // the memory is balanced.
+                //
+                // A moved-from value owes no body at all, so the action is
+                // retracted rather than re-pointed. `_keeping_memory` is the
+                // right strength: the field-cleanup walker it downgrades to is
+                // a no-op against the zeroed caps, and dropping the action
+                // WHOLE would orphan a heap field the zeroing did not reach
+                // (the measurement in that helper's own doc).
+                self.suppress_moved_source_user_drop_body(&arg.value);
                 // Boxed / inline-heap `Option`/`Result` binding moved whole into
                 // this shared tuple-variant payload — mirrors the struct-literal
                 // / struct-variant field-init paths.

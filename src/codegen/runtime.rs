@@ -13278,6 +13278,20 @@ impl<'ctx> super::Codegen<'ctx> {
     /// (`suppress_container_elem_bodies_for_var`,
     /// `suppress_struct_field_bodies_for_var`) and free nothing, so downgrading
     /// them would be meaningless.
+    /// B-2026-09-17-25 — the BODY half of a whole-value move into a `shared
+    /// enum` payload box, beside `suppress_source_vec_cleanup_for_arg`'s
+    /// memory half.
+    ///
+    /// Takes the ARGUMENT EXPRESSION rather than a name so the two halves are
+    /// gated alike: only an `Identifier` source has a binding whose action
+    /// could be registered, and a temporary has none to retract.
+    pub(super) fn suppress_moved_source_user_drop_body(&mut self, arg: &Expr) {
+        if let ExprKind::Identifier(n) = &arg.kind {
+            let n = n.clone();
+            self.suppress_user_drop_body_keeping_memory(&n);
+        }
+    }
+
     pub(super) fn suppress_user_drop_body_keeping_memory(&mut self, name: &str) {
         // SELF-ASSIGNMENT DECLINES. `e = pass(e);` stores the callee's result
         // back into this very binding, so `e` does not die at the call — it
