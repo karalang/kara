@@ -37618,6 +37618,160 @@ fn main() {
         }
     }
 
+    /// B-2026-09-14-7 — a payload part MOVED INTO A LOCAL that dies inside the
+    /// callee's own frame drops at that local's live-range end, not after the
+    /// call returns.
+    ///
+    /// ```text
+    /// fn eat(o: Option[(R, i64)]) { match o { Some(t) => { let x = t.0; println("mid"); } .. } }
+    /// ```
+    ///
+    /// The row was filed with its direction reversed and corrected later: the
+    /// three COMPILED surfaces print `dR5 mid end` and are right, the
+    /// interpreter printed `mid dR5 end`. design.md § 866 settles it -- "a
+    /// value whose last use is mid-scope is dropped at that use and does not
+    /// appear in the end-of-scope stack at all" -- and `x` is never read after
+    /// its `let`, so the body is owed BEFORE `mid`. The count agreed
+    /// everywhere, so this was a pure ORDERING divergence that no count-based
+    /// assertion could have caught.
+    ///
+    /// MECHANISM: `let x = t.0` off an arm binding of a by-value
+    /// `Option`/`Result` param reads identically to `let x = h.r` off the param
+    /// itself, so the interpreter's `let_reads_param_view_field` classified `x`
+    /// a VIEW of the caller's value and registered no Drop slot for it; the
+    /// caller's fresh-temp walk ran the body after the call. The repair is an
+    /// ownership transfer across the call boundary, not a placement tweak --
+    /// `fn_consumed_param_payload_part_paths` is consulted from BOTH ends of
+    /// the same call, so the callee's new slot and the caller's stand-down
+    /// cannot disagree.
+    ///
+    /// THE METHOD SPELLING IS A CELL BECAUSE IT MOVED THE OTHER WAY. A method
+    /// frame already registered the slot (its `caller_retains_args` bail), so
+    /// it printed `dR5 mid dR5` -- a DOUBLED body, not a late one -- and the
+    /// caller half of this fix is what brings it to one. The two spellings
+    /// were wrong in opposite directions through one missing channel.
+    ///
+    /// TWO CELLS ARE PINNED DIVERGENT AND NEITHER IS THIS ROW'S. The named-
+    /// local argument doubles on every COMPILED surface (`dR5 mid dR5 end`)
+    /// and the Drop-bearing SIBLING part is lost on every compiled surface --
+    /// both measured at this commit, both pre-existing, both filed separately.
+    /// They are cells here because this row's fix moves the interpreter side
+    /// of each, and pinning both halves is what keeps a later compiled fix
+    /// from landing silently.
+    ///
+    /// THE ESCAPE CONTROL IS THE ONE THAT KEEPS THE RULE HONEST: `let x = t.0;
+    /// return x;` hands the part OUT of the frame, so the consumed channel
+    /// must decline it and leave the shape exactly as it behaves today. Its
+    /// interpreter double is B-2026-09-13-5's alias spelling, untouched here.
+    ///
+    /// BODY-ONLY, so no sanitizer leg can see any of it: the row records `-O0`
+    /// valgrind at `0 bytes in 0 blocks` / `0 errors` on its own cell.
+    #[test]
+    fn e2e_optres_payload_part_consumed_in_frame_drops_at_its_own_live_range_end() {
+        const R: &str = "struct R { id: i64 }\n\
+             impl Drop for R { fn drop(mut ref self) { println(f\"dR{self.id}\") } }\n";
+        // (label, source, AOT expectation, interpreter expectation)
+        for (label, prog, want, interp_want) in [
+            (
+                "the row's cell: Option head, fresh-temp argument",
+                format!(
+                    "{R}fn eat(o: Option[(R, i64)]) {{ match o {{ Some(t) => {{ let x = t.0; println(\"mid\"); }} None => {{ println(\"n\"); }} }} }}\n\
+                     fn main() {{ eat(Some((R {{ id: 5 }}, 9i64))); println(\"end\") }}\n"
+                ),
+                "dR5\nmid\nend\n",
+                "dR5\nmid\nend\n",
+            ),
+            (
+                "Result head",
+                format!(
+                    "{R}fn eat(o: Result[(R, i64), i64]) {{ match o {{ Ok(t) => {{ let x = t.0; println(\"mid\"); }} Err(e) => {{ println(\"n\"); }} }} }}\n\
+                     fn main() {{ eat(Result.Ok((R {{ id: 5 }}, 9i64))); println(\"end\") }}\n"
+                ),
+                "dR5\nmid\nend\n",
+                "dR5\nmid\nend\n",
+            ),
+            (
+                "method spelling -- was a DOUBLED body in the interpreter",
+                format!(
+                    "{R}struct H {{ n: i64 }}\n\
+                     impl H {{ fn eat(ref self, o: Option[(R, i64)]) {{ match o {{ Some(t) => {{ let x = t.0; println(\"mid\"); }} None => {{ println(\"n\"); }} }} }} }}\n\
+                     fn main() {{ let h = H {{ n: 1 }}; h.eat(Some((R {{ id: 5 }}, 9i64))); println(\"end\") }}\n"
+                ),
+                "dR5\nmid\nend\n",
+                "dR5\nmid\nend\n",
+            ),
+            (
+                "if let spelling",
+                format!(
+                    "{R}fn eat(o: Option[(R, i64)]) {{ if let Some(t) = o {{ let x = t.0; println(\"mid\"); }} }}\n\
+                     fn main() {{ eat(Some((R {{ id: 5 }}, 9i64))); println(\"end\") }}\n"
+                ),
+                "dR5\nmid\nend\n",
+                "dR5\nmid\nend\n",
+            ),
+            (
+                "control: the local IS read later, so its body is owed later",
+                format!(
+                    "{R}fn eat(o: Option[(R, i64)]) {{ match o {{ Some(t) => {{ let x = t.0; println(\"mid\"); println(f\"v:{{x.id}}\"); }} None => {{ println(\"n\"); }} }} }}\n\
+                     fn main() {{ eat(Some((R {{ id: 5 }}, 9i64))); println(\"end\") }}\n"
+                ),
+                "mid\nv:5\ndR5\nend\n",
+                "mid\nv:5\ndR5\nend\n",
+            ),
+            (
+                "control: `return x` ESCAPES, so the consumed channel declines",
+                format!(
+                    "{R}fn eat(o: Option[(R, i64)]) -> R {{ match o {{ Some(t) => {{ let x = t.0; println(\"mid\"); return x; }} None => {{ return R {{ id: 0 }}; }} }} }}\n\
+                     fn main() {{ let g = eat(Some((R {{ id: 5 }}, 9i64))); println(f\"got:{{g.id}}\"); println(\"end\") }}\n"
+                ),
+                "mid\ngot:5\ndR5\nend\n",
+                // B-2026-09-13-5's ALIAS spelling: the escape predicate reads
+                // `return <local>`, not `return t.0`, so the interpreter still
+                // doubles here. Pinned, not repaired -- this row's channel must
+                // decline the shape, and that it does is what this cell proves.
+                "mid\ndR5\ngot:5\ndR5\nend\n",
+            ),
+            (
+                "control: the name-keyed mask does not leak into a deeper frame",
+                format!(
+                    "{R}fn eat(o: Option[(R, i64)]) {{ match o {{ Some(t) => {{ let x = t.0; println(\"mid\"); }} None => {{ println(\"n\"); }} }} }}\n\
+                     fn inner() {{ let a: Option[(R, i64)] = Some((R {{ id: 7 }}, 1i64)); println(\"in\") }}\n\
+                     fn main() {{ let a = Some((R {{ id: 5 }}, 9i64)); eat(a); inner(); println(\"end\") }}\n"
+                ),
+                "dR5\nmid\ndR5\ndR7\nin\nend\n",
+                "dR5\nmid\ndR7\nin\nend\n",
+            ),
+            (
+                "pinned: a NAMED-local argument doubles on every compiled surface",
+                format!(
+                    "{R}fn eat(o: Option[(R, i64)]) {{ match o {{ Some(t) => {{ let x = t.0; println(\"mid\"); }} None => {{ println(\"n\"); }} }} }}\n\
+                     fn main() {{ let a = Some((R {{ id: 5 }}, 9i64)); eat(a); println(\"end\") }}\n"
+                ),
+                "dR5\nmid\ndR5\nend\n",
+                "dR5\nmid\nend\n",
+            ),
+            (
+                "pinned: a Drop-bearing SIBLING part is lost on every compiled surface",
+                format!(
+                    "{R}fn eat(o: Option[(R, R)]) {{ match o {{ Some(t) => {{ let x = t.0; println(\"mid\"); }} None => {{ println(\"n\"); }} }} }}\n\
+                     fn main() {{ eat(Some((R {{ id: 5 }}, R {{ id: 6 }}))); println(\"end\") }}\n"
+                ),
+                "dR5\nmid\nend\n",
+                "dR5\nmid\ndR6\nend\n",
+            ),
+        ] {
+            let (interp_out, interp_errs, _, _) = karac::run_program_full_checked(&prog);
+            assert!(
+                interp_errs.is_empty(),
+                "[{label}] interp errored: {interp_errs:?}"
+            );
+            assert_eq!(interp_out.join(""), interp_want, "[{label}] interpreter");
+            if let Some(aot) = run_program(&prog) {
+                assert_eq!(aot, want, "[{label}] AOT");
+            }
+        }
+    }
+
     /// B-2026-09-13-11 — the BODY COUNT for a read-only destructure of an
     /// own-`Drop` enum's payload: exactly one enclosing body, on the
     /// interpreter and AOT alike.

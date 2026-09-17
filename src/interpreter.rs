@@ -708,6 +708,33 @@ pub struct Interpreter<'a> {
     /// hand-over the caller's part channel already stands down for. Empty for
     /// a closure frame.
     pub(crate) whole_param_alias_stack: Vec<HashSet<String>>,
+    /// B-2026-09-14-7 — parallel to `owned_param_names_stack`, one entry per
+    /// frame: the LOCAL NAMES this frame binds by moving a part out of a
+    /// by-value `Option`/`Result` parameter's payload and then letting it die
+    /// in the frame (`fn_consumed_param_payload_part_paths`).
+    ///
+    /// Such a local is NOT a view of the caller's value even though
+    /// `let_reads_param_view_field` cannot tell the difference: the caller's
+    /// walk stands down for exactly these paths, so the local owes its own
+    /// `Drop` body at its own live-range end. Without the distinction the
+    /// interpreter registered no slot and the body ran after the call
+    /// returned — `mid dR5 end` against the compiled backends' `dR5 mid end`.
+    ///
+    /// COMPUTED BY THE CALLER and pushed here, from the same predicate the
+    /// caller's mask reads, so the two ends of one call cannot disagree about
+    /// which parts changed hands. Empty for a closure frame, and for a callee
+    /// this frame cannot resolve to a program function.
+    pub(crate) consumed_payload_local_names_stack: Vec<HashSet<String>>,
+    /// B-2026-09-14-7 — the NAMED-LOCAL half of the consumed-part stand-down,
+    /// keyed `(binding, path)` exactly as `moved_out_nested_field_bodies` is.
+    ///
+    /// A fresh-temp `Option`/`Result` argument is masked in the walk itself
+    /// (`mask_optres_payload_consumed_parts`), but a NAMED local argument's
+    /// payload bodies run later, at the binding's own live-range end through
+    /// `optres_payload_bodies_tes`. Without a mask there the callee's new slot
+    /// and the caller's binding both fired — one body became two the moment
+    /// the callee stopped treating the local as a view.
+    pub(crate) moved_out_optres_payload_bodies: HashSet<(String, Vec<String>)>,
     /// B-2026-08-27-48 — parallel to `owned_param_names_stack`, one entry per
     /// frame: `true` when that frame is an IMPL METHOD body, `false` for a
     /// free fn (and for a closure, whose param set is empty anyway).
@@ -1202,6 +1229,8 @@ impl<'a> Interpreter<'a> {
             self_arms_bind_views_stack: Vec::new(),
             self_param_stack: Vec::new(),
             owned_param_names_stack: Vec::new(),
+            consumed_payload_local_names_stack: Vec::new(),
+            moved_out_optres_payload_bodies: HashSet::new(),
             whole_param_alias_stack: Vec::new(),
             owned_param_frame_is_method: Vec::new(),
             method_frame_caller_retains_args: Vec::new(),

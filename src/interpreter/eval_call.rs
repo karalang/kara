@@ -2144,6 +2144,20 @@ impl<'a> super::Interpreter<'a> {
                         .unwrap_or_default()
                 };
                 self.whole_param_alias_stack.push(whole_aliases);
+                // B-2026-09-14-7 — the frame-entry half of the
+                // consumed-part channel. Computed HERE, by the caller, from
+                // the same predicate the caller's own mask reads, so the
+                // callee's slot decision and the caller's stand-down cannot
+                // disagree about which payload parts changed hands.
+                let consumed_locals = if closure_env.is_some() {
+                    std::collections::HashSet::new()
+                } else {
+                    self.callee_fn_for_param_ownership(&fn_name)
+                        .map(Self::consumed_payload_local_names)
+                        .unwrap_or_default()
+                };
+                self.consumed_payload_local_names_stack
+                    .push(consumed_locals);
                 self.owned_param_frame_is_method.push(false);
                 // B-2026-08-09-10 — `moved_out_user_drop_bindings` is keyed by
                 // NAME with no frame scoping, so a callee that moves a payload
@@ -2194,6 +2208,13 @@ impl<'a> super::Interpreter<'a> {
                     std::mem::take(&mut self.param_view_struct_fields),
                     // B-2026-09-01-3 — the tuple peer, isolated beside it.
                     std::mem::take(&mut self.param_view_tuple_elems),
+                    // B-2026-09-14-7 — the consumed-part mask, name-keyed like
+                    // every mask above and isolated for B-2026-08-09-10's
+                    // reason: it is written in the CALLER's frame after a call
+                    // returns, so a deeper frame's local sharing the binding's
+                    // name would otherwise have its own payload walk masked and
+                    // lose the body outright.
+                    std::mem::take(&mut self.moved_out_optres_payload_bodies),
                 );
                 // B-2026-08-28-22 — hand the callee ownership of the `Drop`
                 // BODY of any owned param it returns on some tail paths and not
@@ -2230,6 +2251,7 @@ impl<'a> super::Interpreter<'a> {
                     self.moved_out_enum_payload_body_slots,
                     self.param_view_struct_fields,
                     self.param_view_tuple_elems,
+                    self.moved_out_optres_payload_bodies,
                 ) = saved_moved_out;
                 // B-2026-08-30-33 — restore with the rest of the per-frame
                 // move bookkeeping. Left un-restored, a callee's parameter name
@@ -2243,6 +2265,7 @@ impl<'a> super::Interpreter<'a> {
                 self.cond_store_param_names = saved_cond_store_params;
                 self.owned_param_names_stack.pop();
                 self.whole_param_alias_stack.pop();
+                self.consumed_payload_local_names_stack.pop();
                 self.owned_param_frame_is_method.pop();
                 if is_stdlib_wrapper {
                     self.stdlib_wrapper_call_spans.pop();
@@ -3445,6 +3468,74 @@ impl<'a> super::Interpreter<'a> {
         }
     }
 
+    /// B-2026-09-14-7 — every LOCAL NAME `f` binds by moving a part out of a
+    /// by-value `Option`/`Result` parameter's payload and letting it die in
+    /// the frame, over all of `f`'s parameters.
+    ///
+    /// Asked with `variant: None` deliberately: the callee end only needs to
+    /// know whether a given `let` owns what it binds, and only the arm the run
+    /// actually takes ever executes its `let`s. The CALLER end asks the same
+    /// predicate with the argument's runtime variant, so it masks exactly the
+    /// arm that ran.
+    pub(super) fn consumed_payload_local_names(
+        f: &crate::ast::Function,
+    ) -> std::collections::HashSet<String> {
+        let mut out = std::collections::HashSet::new();
+        for i in 0..f.params.len() {
+            for (name, _) in crate::ast::fn_consumed_param_payload_part_paths(f, i, None) {
+                out.insert(name);
+            }
+        }
+        out
+    }
+
+    /// B-2026-09-14-7 — the CONSUMED-INSIDE sibling of
+    /// [`Self::mask_optres_payload_escaping_parts`]: remove from `value` the
+    /// payload parts the named callee moved into a local of its own frame, so
+    /// the caller's fresh-temp walk runs every part's body EXCEPT those the
+    /// callee already owns and fires at its own live-range end.
+    ///
+    /// The two masks differ only in where the new owner lives — outside the
+    /// frame for the escaping channel, inside it for this one — and the caller
+    /// has to stand down identically for both. Same leaf gate, for the same
+    /// reason: a scalar leaf owns nothing, so declining its mask loses no
+    /// owner while removing it would hand the enclosing value's own body a
+    /// hole to read.
+    fn mask_optres_payload_consumed_parts(
+        &self,
+        callee_name: &str,
+        method_owner: Option<&str>,
+        arg_index: usize,
+        variant: &str,
+        value: &mut Value,
+    ) {
+        if self.callee_param_is_borrow(callee_name, method_owner, arg_index) {
+            return;
+        }
+        let Some(f) = self.callee_fn_for_ownership_guard_of(callee_name, method_owner) else {
+            return;
+        };
+        let paths = crate::ast::fn_consumed_param_payload_part_paths(f, arg_index, Some(variant));
+        if paths.is_empty() {
+            return;
+        }
+        let Value::EnumVariant { data, .. } = value else {
+            return;
+        };
+        let payload = match data {
+            EnumData::Tuple(vs) if vs.len() == 1 => &mut vs[0],
+            _ => return,
+        };
+        for (_, path) in paths {
+            let names = Self::param_path_names(&path);
+            let leaf_owns =
+                Self::value_at_name_path(payload, &names).is_some_and(Self::value_leaf_can_own);
+            if leaf_owns {
+                Self::remove_field_at_path(payload, &names);
+            }
+        }
+    }
+
     /// B-2026-09-06-10 / -11 — a part path as the NAME path the value-side
     /// masks speak: a field by name, a tuple hop as `#<i>`.
     pub(super) fn param_path_names(path: &[crate::ast::ParamPart]) -> Vec<String> {
@@ -3853,6 +3944,33 @@ impl<'a> super::Interpreter<'a> {
             // path names something INSIDE an element, which the per-element
             // skip cannot express (B-2026-08-28-23).
             if let ExprKind::Identifier(src) = &arg.value.kind {
+                // B-2026-09-14-7 — the NAMED-LOCAL twin of the fresh-temp
+                // mask below. The callee now owns the parts it moved into a
+                // local of its own frame, so the binding's own payload walk
+                // (`run_optres_payload_user_drops`, fired at the local's
+                // live-range end) has to skip exactly those paths.
+                if let Some(Value::EnumVariant {
+                    enum_name, variant, ..
+                }) = arg_vals.get(i)
+                {
+                    if enum_name == "Option" || enum_name == "Result" {
+                        let variant = variant.clone();
+                        if !self.callee_param_is_borrow(callee_name, method_owner, i) {
+                            if let Some(f) =
+                                self.callee_fn_for_ownership_guard_of(callee_name, method_owner)
+                            {
+                                for (_, path) in crate::ast::fn_consumed_param_payload_part_paths(
+                                    f,
+                                    i,
+                                    Some(&variant),
+                                ) {
+                                    self.moved_out_optres_payload_bodies
+                                        .insert((src.clone(), Self::param_path_names(&path)));
+                                }
+                            }
+                        }
+                    }
+                }
                 if matches!(arg_vals.get(i), Some(Value::Tuple(_))) {
                     // B-2026-09-05-28 / -30 — the match-arm and call-forwarded
                     // escapes join the returned-part ones here, now that the
@@ -4010,6 +4128,20 @@ impl<'a> super::Interpreter<'a> {
                         // part channel in this loop exists to avoid.
                         let variant = variant.clone();
                         self.mask_optres_payload_escaping_parts(
+                            callee_name,
+                            method_owner,
+                            i,
+                            &variant,
+                            &mut v,
+                        );
+                        // B-2026-09-14-7 — and the parts the callee moved
+                        // into a local of its OWN frame, which change hands
+                        // just as completely; the only difference is that the
+                        // new owner fires inside the call rather than after
+                        // it. Standing down for one channel and not the other
+                        // would leave this walk running a body the callee had
+                        // already run.
+                        self.mask_optres_payload_consumed_parts(
                             callee_name,
                             method_owner,
                             i,

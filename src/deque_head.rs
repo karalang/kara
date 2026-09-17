@@ -181,6 +181,24 @@ pub fn expr_mentions_name_outside_field_projection(expr: &Expr, name: &str) -> b
     bad
 }
 
+/// [`expr_mentions_name_outside_field_projection`] asked of a whole BLOCK —
+/// every statement's child expressions and the block's tail. Added by
+/// B-2026-09-14-7, whose consumed-part predicate has to decide whether a local
+/// leaves the frame by ANY route, which is a question about the function body
+/// rather than about one expression.
+pub fn block_mentions_name_outside_field_projection(b: &Block, name: &str) -> bool {
+    let mut bad = false;
+    for s in &b.stmts {
+        crate::rc_elide::walk_stmt_children_pub(s, &mut |e| {
+            walk_outside_projection(e, name, &mut bad)
+        });
+    }
+    if let Some(e) = &b.final_expr {
+        walk_outside_projection(e, name, &mut bad);
+    }
+    bad
+}
+
 fn walk_outside_projection(expr: &Expr, name: &str, bad: &mut bool) {
     if *bad {
         return;

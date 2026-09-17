@@ -3771,6 +3771,27 @@ impl<'a> super::Interpreter<'a> {
             // codegen, which this same row fixes from two down to one.
             if let PatternKind::Binding(bname) = &pattern.kind {
                 if self.let_reads_param_view_field(value) {
+                    // B-2026-09-14-7 — unless the CALLER has already stood
+                    // down for this exact part. `let x = t.0` off an arm
+                    // binding of a by-value `Option`/`Result` param reads the
+                    // same way as `let x = h.r` off the param itself, so this
+                    // predicate cannot tell them apart; the frame-entry set
+                    // can, because the caller computed it from the same AST
+                    // predicate its own mask reads. A view registers no slot,
+                    // so without this the body ran at the caller AFTER the
+                    // call returned — `mid dR5 end` against the three compiled
+                    // surfaces' `dR5 mid end`. Returning `false` lets
+                    // `push_drops_for_stmt` register an ordinary slot, which
+                    // `compute_block_last_use` already places at the right
+                    // statement (the row's own instrumentation confirmed the
+                    // NLL endpoint was right and only the slot was missing).
+                    if self
+                        .consumed_payload_local_names_stack
+                        .last()
+                        .is_some_and(|s| s.contains(bname.as_str()))
+                    {
+                        return false;
+                    }
                     let bname = bname.clone();
                     if let Some(top) = self.owned_param_names_stack.last_mut() {
                         top.insert(bname);
@@ -8287,9 +8308,23 @@ impl<'a> super::Interpreter<'a> {
         let EnumData::Tuple(items) = data else {
             return;
         };
-        let Some(payload) = items.first().cloned() else {
+        let Some(mut payload) = items.first().cloned() else {
             return;
         };
+        // B-2026-09-14-7 — remove the parts a callee moved into a local of its
+        // own frame and already fired at that local's live-range end. Same
+        // shape as `moved_out_nested_field_bodies`' effect on the struct walk:
+        // the value this walk sees loses the part, so the walk cannot run its
+        // body a second time.
+        let masked: Vec<Vec<String>> = self
+            .moved_out_optres_payload_bodies
+            .iter()
+            .filter(|(b, _)| b == name)
+            .map(|(_, path)| path.clone())
+            .collect();
+        for path in masked {
+            Self::remove_field_at_path(&mut payload, &path);
+        }
         self.run_optres_payload_bodies_for(&payload_te, &payload);
     }
 

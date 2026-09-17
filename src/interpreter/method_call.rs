@@ -657,6 +657,19 @@ impl<'a> super::Interpreter<'a> {
                     .map(|f| crate::ast::fn_whole_param_aliases(self.program, f))
                     .unwrap_or_default();
                 self.whole_param_alias_stack.push(whole_aliases);
+                // B-2026-09-14-7 — the frame-entry half of the
+                // consumed-part channel; see the free-fn twin in `eval_call`.
+                // A method frame already registers these slots (the
+                // `method_frame_caller_retains_args` bail), so this set is
+                // what lets the CALLER stand down for them: the interpreter
+                // ran both bodies here (`dR5 mid dR5`) where the compiled
+                // backends ran one.
+                let consumed_locals = self
+                    .impl_method_ast(&type_name, method)
+                    .map(Self::consumed_payload_local_names)
+                    .unwrap_or_default();
+                self.consumed_payload_local_names_stack
+                    .push(consumed_locals);
                 // A method frame hands its args to no caller-side fire — see
                 // `owned_param_frame_is_method`.
                 self.owned_param_frame_is_method.push(true);
@@ -766,6 +779,13 @@ impl<'a> super::Interpreter<'a> {
                     std::mem::take(&mut self.param_view_struct_fields),
                     // B-2026-09-01-3 — the tuple peer, isolated beside it.
                     std::mem::take(&mut self.param_view_tuple_elems),
+                    // B-2026-09-14-7 — the consumed-part mask, name-keyed like
+                    // every mask above and isolated for B-2026-08-09-10's
+                    // reason: it is written in the CALLER's frame after a call
+                    // returns, so a deeper frame's local sharing the binding's
+                    // name would otherwise have its own payload walk masked and
+                    // lose the body outright.
+                    std::mem::take(&mut self.moved_out_optres_payload_bodies),
                 );
                 // B-2026-08-29-9 — the callee frame's moved-out sets are
                 // deliberately NOT isolated here, though `eval_call` isolates a
@@ -823,6 +843,7 @@ impl<'a> super::Interpreter<'a> {
                     self.moved_out_struct_field_bodies,
                     self.param_view_struct_fields,
                     self.param_view_tuple_elems,
+                    self.moved_out_optres_payload_bodies,
                 ) = saved_moved_out;
                 // B-2026-08-30-33 — restored with the rest of this frame's
                 // move bookkeeping, so a parameter name cannot outlive the
@@ -835,6 +856,7 @@ impl<'a> super::Interpreter<'a> {
                 self.record_method_arg_moves(&type_name, method, args);
                 self.owned_param_names_stack.pop();
                 self.whole_param_alias_stack.pop();
+                self.consumed_payload_local_names_stack.pop();
                 self.owned_param_frame_is_method.pop();
                 self.method_frame_caller_retains_args.pop();
                 self.method_frame_sole_owned.pop();

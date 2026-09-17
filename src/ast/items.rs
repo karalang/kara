@@ -5152,6 +5152,58 @@ pub fn fn_returns_param_payload_of(
     }
 }
 
+/// The one name an arm pattern binds when it binds an `Option`/`Result`
+/// payload WHOLE (`Some(t)` / `Ok(t)`), and only for the variant asked about.
+/// A destructuring pattern (`Some((a, b))`) binds the PARTS and is the
+/// tuple-arm channel's business, not this one's.
+///
+/// Lifted out of [`fn_escaping_param_payload_part_paths`] by B-2026-09-14-7 so
+/// its CONSUMED-INSIDE complement asks the same question of the same arms: the
+/// two channels mask the same caller walk from opposite directions, so a
+/// divergence between their notions of "the arm binds the payload whole" would
+/// show up as a body run twice or not at all.
+fn optres_whole_payload_binding<'p>(p: &'p Pattern, variant: Option<&str>) -> Option<&'p str> {
+    let PatternKind::TupleVariant { path, patterns } = &p.kind else {
+        return None;
+    };
+    let last = path.last()?;
+    if variant.is_some_and(|v| last != v) {
+        return None;
+    }
+    match patterns.as_slice() {
+        [sub] => match &sub.kind {
+            PatternKind::Binding(n) => Some(n.as_str()),
+            _ => None,
+        },
+        _ => None,
+    }
+}
+
+/// The path `e` denotes off `root`, where an EMPTY path is the whole binding.
+/// `None` for anything that is not a projection chain bottoming out at `root`.
+/// Lifted alongside [`optres_whole_payload_binding`], for its reason.
+fn optres_part_denote(e: &Expr, root: &str) -> Option<ParamPath> {
+    let mut path: Vec<ParamPart> = Vec::new();
+    let mut cur = e;
+    loop {
+        match &cur.kind {
+            ExprKind::FieldAccess { object, field } => {
+                path.push(ParamPart::Field(field.clone()));
+                cur = object;
+            }
+            ExprKind::TupleIndex { object, index } => {
+                path.push(ParamPart::TupleIndex(*index as usize));
+                cur = object;
+            }
+            ExprKind::Identifier(n) if n == root => {
+                path.reverse();
+                return Some(path);
+            }
+            _ => return None,
+        }
+    }
+}
+
 /// B-2026-09-13-5 — the PART-PRECISE sibling of
 /// [`fn_escaping_param_payload_variants`]: which paths INSIDE the payload of
 /// by-value `Option` / `Result` parameter `arg_index` does `f` hand out of its
@@ -5212,52 +5264,6 @@ pub fn fn_escaping_param_payload_part_paths(
         return Vec::new();
     };
 
-    /// The one name an arm pattern binds when it binds the payload WHOLE
-    /// (`Some(t)` / `Ok(t)`), and only for the variant asked about. A
-    /// destructuring pattern (`Some((a, b))`) binds the PARTS and is the
-    /// tuple-arm channel's business, not this one's.
-    fn whole_payload_binding<'p>(p: &'p Pattern, variant: Option<&str>) -> Option<&'p str> {
-        let PatternKind::TupleVariant { path, patterns } = &p.kind else {
-            return None;
-        };
-        let last = path.last()?;
-        if variant.is_some_and(|v| last != v) {
-            return None;
-        }
-        match patterns.as_slice() {
-            [sub] => match &sub.kind {
-                PatternKind::Binding(n) => Some(n.as_str()),
-                _ => None,
-            },
-            _ => None,
-        }
-    }
-
-    /// The path `e` denotes off `root`, where an EMPTY path is the whole
-    /// binding. `None` for anything that is not a projection chain bottoming
-    /// out at `root`.
-    fn denote(e: &Expr, root: &str) -> Option<ParamPath> {
-        let mut path: Vec<ParamPart> = Vec::new();
-        let mut cur = e;
-        loop {
-            match &cur.kind {
-                ExprKind::FieldAccess { object, field } => {
-                    path.push(ParamPart::Field(field.clone()));
-                    cur = object;
-                }
-                ExprKind::TupleIndex { object, index } => {
-                    path.push(ParamPart::TupleIndex(*index as usize));
-                    cur = object;
-                }
-                ExprKind::Identifier(n) if n == root => {
-                    path.reverse();
-                    return Some(path);
-                }
-                _ => return None,
-            }
-        }
-    }
-
     /// Every yield site inside `e`, asked what it denotes off `root`.
     ///
     /// `top` is "still on the arm body's own statement list", i.e. not inside a
@@ -5289,7 +5295,7 @@ pub fn fn_escaping_param_payload_part_paths(
         top: bool,
         tail: bool,
     ) {
-        let mut record = |e: &Expr, top: bool| match denote(e, root) {
+        let mut record = |e: &Expr, top: bool| match optres_part_denote(e, root) {
             Some(p) if p.is_empty() => *whole = true,
             Some(p) if top => {
                 if !out.contains(&p) {
@@ -5382,7 +5388,7 @@ pub fn fn_escaping_param_payload_part_paths(
         match &e.kind {
             ExprKind::Match { scrutinee, arms } if is_param(scrutinee) => {
                 for a in arms {
-                    if let Some(bind) = whole_payload_binding(&a.pattern, variant) {
+                    if let Some(bind) = optres_whole_payload_binding(&a.pattern, variant) {
                         returns_in(&a.body, bind, out, whole, true, tail);
                     }
                 }
@@ -5393,7 +5399,7 @@ pub fn fn_escaping_param_payload_part_paths(
                 then_block,
                 ..
             } if is_param(value) => {
-                if let Some(bind) = whole_payload_binding(pattern, variant) {
+                if let Some(bind) = optres_whole_payload_binding(pattern, variant) {
                     returns_in_block(then_block, bind, out, whole, true, tail);
                 }
             }
@@ -5403,7 +5409,7 @@ pub fn fn_escaping_param_payload_part_paths(
                 body,
                 ..
             } if is_param(value) => {
-                if let Some(bind) = whole_payload_binding(pattern, variant) {
+                if let Some(bind) = optres_whole_payload_binding(pattern, variant) {
                     // A loop body's tail is not the function's value.
                     returns_in_block(body, bind, out, whole, true, false);
                 }
@@ -5479,6 +5485,223 @@ pub fn fn_escaping_param_payload_part_paths(
     if whole {
         return Vec::new();
     }
+    out
+}
+
+/// B-2026-09-14-7 — the CONSUMED-INSIDE complement of
+/// [`fn_escaping_param_payload_part_paths`]: which paths INSIDE the payload of
+/// by-value `Option` / `Result` parameter `arg_index` does `f` move into a
+/// LOCAL that lives and dies inside the frame, in an arm that binds the
+/// payload WHOLE?
+///
+/// ```text
+/// fn eat(o: Option[(R, i64)]) { match o { Some(t) => { let x = t.0; println("mid"); } .. } }
+/// // -> [("x", [#0])]
+/// ```
+///
+/// The escaping sibling answers "a new owner outside the frame holds this
+/// part". This one answers "an owner INSIDE the frame holds it", and the
+/// caller has to stand down for both: the part is gone from the argument
+/// either way, and the only difference is where its body runs. Without it the
+/// interpreter gave the local no slot at all (`let_reads_param_view_field`
+/// classified it a view of the caller's value) and the caller's fresh-temp
+/// walk ran the body AFTER the call returned — `mid dR5 end` against the three
+/// compiled surfaces' `dR5 mid end`, a pure ordering divergence with the count
+/// right everywhere. design.md § 866 settles which side is correct: "a value
+/// whose last use is mid-scope is dropped at that use", and `x` is never read
+/// after its `let`.
+///
+/// Returns the local's NAME beside the path, because the two consumers need
+/// different halves of one answer and MUST NOT compute it separately. The
+/// callee-side gate (`let_destructures_owned_param`) asks by NAME whether this
+/// `let` takes a slot of its own; the caller-side mask
+/// (`mask_optres_payload_consumed_parts`) removes the PATH from the value its
+/// walk sees. One predicate, consulted from both ends of the same call, is
+/// what keeps them from drifting into a lost body (both stand down) or a
+/// doubled one (neither does).
+///
+/// DELIBERATELY UNDER-APPROXIMATE, the direction every predicate on this
+/// channel keeps. The local must be:
+///
+///   * bound by a plain `let <x> = <projection off the arm binding>;` on the
+///     arm body's OWN statement list — not inside a nested `if` / loop, whose
+///     branch this predicate cannot see (the escaping sibling's `top` rule,
+///     and for its reason: this is consulted with the argument's runtime
+///     variant but has no idea which branch a run takes); and
+///   * used NOWHERE in the function except as the direct base of a field or
+///     tuple-index read. A bare mention in any other position — `return x`,
+///     `takes(x)`, `let y = x`, `x.method()`, an assignment target — could
+///     transfer the value on, which is a DIFFERENT owner's business, so the
+///     shape keeps its pre-existing (late) answer instead of gaining a lost
+///     body.
+///
+/// A MISSED consumption keeps today's ordering defect; a FALSE one would
+/// suppress the only body that runs. That asymmetry is why the escape check
+/// is a whole-function walk rather than an arm-local one.
+pub fn fn_consumed_param_payload_part_paths(
+    f: &Function,
+    arg_index: usize,
+    variant: Option<&str>,
+) -> Vec<(String, ParamPath)> {
+    let Some(param) = f.params.get(arg_index) else {
+        return Vec::new();
+    };
+    // A projection off a BORROW is an implicit copy, so the caller's walk
+    // stays the only owner and nothing here may stand it down — the escaping
+    // sibling's guard, asked for its reason.
+    if matches!(
+        param.ty.kind,
+        crate::ast::TypeKind::Ref(_) | crate::ast::TypeKind::MutRef(_)
+    ) {
+        return Vec::new();
+    }
+    // `Option` / `Result` HEAD only. The escaping sibling needs no such gate
+    // because both of its ends are already keyed on that head; this channel's
+    // callee end is a bare name lookup, so a user enum with a single-binding
+    // tuple variant (`E.A(t)`) would stand a slot up here against a caller
+    // that never masks — the doubled body this predicate exists to avoid.
+    let head_is_optres = match &param.ty.kind {
+        crate::ast::TypeKind::Path(p) => p
+            .segments
+            .last()
+            .is_some_and(|seg| seg == "Option" || seg == "Result"),
+        _ => false,
+    };
+    if !head_is_optres {
+        return Vec::new();
+    }
+    let PatternKind::Binding(param_name) = &param.pattern.kind else {
+        return Vec::new();
+    };
+
+    /// The `let <x> = <projection off `bind`>;` statements on `b`'s OWN list.
+    fn consumed_lets_in(b: &Block, bind: &str, out: &mut Vec<(String, ParamPath)>) {
+        for st in &b.stmts {
+            let StmtKind::Let { pattern, value, .. } = &st.kind else {
+                continue;
+            };
+            let PatternKind::Binding(x) = &pattern.kind else {
+                continue;
+            };
+            let Some(path) = optres_part_denote(value, bind) else {
+                continue;
+            };
+            // An EMPTY path is a whole-payload rebind, which the whole-payload
+            // predicate answers; answering on both channels would mask one
+            // walk twice.
+            if path.is_empty() {
+                continue;
+            }
+            if !out.iter().any(|(n, p)| n == x && *p == path) {
+                out.push((x.clone(), path));
+            }
+        }
+    }
+
+    /// Every `match` / `if let` / `while let` whose SCRUTINEE is the bare
+    /// parameter, asked for its whole-payload arms' consumed `let`s. Mirrors
+    /// the escaping sibling's `scan` shape so the two channels see the same
+    /// set of arms.
+    fn scan(e: &Expr, param: &str, variant: Option<&str>, out: &mut Vec<(String, ParamPath)>) {
+        let is_param = |s: &Expr| matches!(&s.kind, ExprKind::Identifier(n) if n == param);
+        match &e.kind {
+            ExprKind::Match { scrutinee, arms } if is_param(scrutinee) => {
+                for a in arms {
+                    if let Some(bind) = optres_whole_payload_binding(&a.pattern, variant) {
+                        if let ExprKind::Block(b) = &a.body.kind {
+                            consumed_lets_in(b, bind, out);
+                        }
+                    }
+                }
+            }
+            ExprKind::IfLet {
+                pattern,
+                value,
+                then_block,
+                ..
+            } if is_param(value) => {
+                if let Some(bind) = optres_whole_payload_binding(pattern, variant) {
+                    consumed_lets_in(then_block, bind, out);
+                }
+            }
+            ExprKind::WhileLet {
+                pattern,
+                value,
+                body,
+                ..
+            } if is_param(value) => {
+                if let Some(bind) = optres_whole_payload_binding(pattern, variant) {
+                    consumed_lets_in(body, bind, out);
+                }
+            }
+            _ => {}
+        }
+        // Nested positions: the construct above may sit anywhere in the body.
+        match &e.kind {
+            ExprKind::Block(b)
+            | ExprKind::Unsafe(b)
+            | ExprKind::Try(b)
+            | ExprKind::Seq(b)
+            | ExprKind::Par(b) => scan_block(b, param, variant, out),
+            ExprKind::Return(Some(inner)) => scan(inner, param, variant, out),
+            ExprKind::If {
+                then_block,
+                else_branch,
+                ..
+            } => {
+                scan_block(then_block, param, variant, out);
+                if let Some(x) = else_branch.as_deref() {
+                    scan(x, param, variant, out);
+                }
+            }
+            ExprKind::IfLet {
+                then_block,
+                else_branch,
+                ..
+            } => {
+                scan_block(then_block, param, variant, out);
+                if let Some(x) = else_branch.as_deref() {
+                    scan(x, param, variant, out);
+                }
+            }
+            ExprKind::Match { arms, .. } => {
+                for a in arms {
+                    scan(&a.body, param, variant, out);
+                }
+            }
+            ExprKind::While { body, .. }
+            | ExprKind::WhileLet { body, .. }
+            | ExprKind::For { body, .. }
+            | ExprKind::Loop { body, .. }
+            | ExprKind::LabeledBlock { body, .. } => scan_block(body, param, variant, out),
+            _ => {}
+        }
+    }
+    fn scan_block(
+        b: &Block,
+        param: &str,
+        variant: Option<&str>,
+        out: &mut Vec<(String, ParamPath)>,
+    ) {
+        for st in &b.stmts {
+            match &st.kind {
+                StmtKind::Expr(e) => scan(e, param, variant, out),
+                StmtKind::Let { value, .. } => scan(value, param, variant, out),
+                _ => {}
+            }
+        }
+        if let Some(fe) = b.final_expr.as_deref() {
+            scan(fe, param, variant, out);
+        }
+    }
+
+    let mut out: Vec<(String, ParamPath)> = Vec::new();
+    scan_block(&f.body, param_name, variant, &mut out);
+    // The escape check, over the WHOLE function body rather than the arm: a
+    // local that leaves the frame by any route keeps its pre-existing answer.
+    out.retain(|(x, _)| {
+        !crate::deque_head::block_mentions_name_outside_field_projection(&f.body, x)
+    });
     out
 }
 
