@@ -933,10 +933,31 @@ impl<'a> super::TypeChecker<'a> {
                 let arg_ty = self.infer_expr(&arg.value);
                 self.check_assignable(param, &arg_ty, arg.value.span);
                 self.warn_partial_move_of_drop_struct(&arg.value, param);
-                // B-2026-09-06-31 — the borrowed-root twin. A METHOD argument copies
-                // (`v.push(w.r)`, measured two bodies) where a FREE-function argument
-                // does not (`consume(w.r)`, measured one) — see the note on
-                // `warn_borrow_projection_copy`, which is why only this arm gets it.
+                // B-2026-09-06-31 — the borrowed-root twin.
+                //
+                // B-2026-09-14-10 — THE RATIONALE THAT USED TO SIT HERE WAS
+                // WRONG TWICE OVER, and is corrected in place because the call
+                // itself is still right for this path. It read "A METHOD
+                // argument copies (`v.push(w.r)`, measured two bodies) where a
+                // FREE-function argument does not (`consume(w.r)`, measured
+                // one) ... which is why only this arm gets it".
+                //
+                // First, the free/method split is not the mechanism: measured
+                // on four surfaces, a free function that STORES its argument
+                // copies exactly as `Vec.push` does, and an associated function
+                // that DISCARDS it copies no more than `consume` does. Whether
+                // the callee keeps the value is the variable.
+                //
+                // Second, `v.push(w.r)` is not this arm's example at all — it
+                // is the BUILTIN container arm's
+                // (`method_vec_mutation.rs`'s own call). This function is
+                // `dispatch_trait_assoc_fn`, so an ordinary inherent
+                // `impl K { fn put(mut ref self, x: R) }` call never reaches
+                // here: measured, no USER method argument warns today, storing
+                // or discarding, on any of the three receiver modes. The call
+                // stays because a trait assoc-fn argument is a value position
+                // like any other; it just does not cover what the old comment
+                // claimed it covered.
                 self.warn_borrow_projection_copy(&arg.value, param);
             }
         }

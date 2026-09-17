@@ -4702,10 +4702,36 @@ impl<'a> super::TypeChecker<'a> {
     /// ## Scope
     ///
     /// The two value positions the sibling rule covers: a `let` initializer and
-    /// an assignment RHS. Both were measured to copy, on all three surfaces. A
-    /// CALL ARGUMENT (`eat(s.r)`) is deliberately NOT included — measured, it
-    /// mints no copy and runs the `Drop` body exactly once, so a warning there
-    /// would be a false claim rather than a wider net.
+    /// an assignment RHS. Both were measured to copy, on all three surfaces.
+    ///
+    /// B-2026-09-14-10 — THE CALL-ARGUMENT SENTENCE THAT USED TO STAND HERE WAS
+    /// A FALSE CLAIM, and is corrected rather than deleted because the
+    /// exemption it justified is still in force. It read "A CALL ARGUMENT
+    /// (`eat(s.r)`) is deliberately NOT included — measured, it mints no copy
+    /// and runs the `Drop` body exactly once". That is true of a callee that
+    /// DISCARDS the argument and false of one that STORES it, on every call
+    /// spelling. Measured, four surfaces per cell:
+    ///
+    /// ```text
+    ///   consume(w.r)      free fn, discards    ONE body
+    ///   v.push(w.r)       builtin, stores      TWO
+    ///   keep(w.r, mut v)  free fn, stores      TWO
+    ///   Sk.take(w.r)      assoc fn, discards   ONE
+    ///   k.put(w.r)        method, stores       TWO
+    /// ```
+    ///
+    /// So the copy tracks whether the callee KEEPS the value, and the call
+    /// spelling decides nothing. The exemption stays for now because widening
+    /// it needs the callee's AST `Function` at the general argument site
+    /// (`exprs.rs`, beside `warn_partial_move_of_drop_struct`), which has the
+    /// parameter type and not the callee — `fn_moves_param_into_outliving_place`
+    /// and its `_via_call` sibling are the predicates it would ask — and
+    /// because B-2026-09-14-10's open question is whether the discarding
+    /// cells' single body is the behaviour that stays. A warning widened
+    /// before that is decided may have to be withdrawn.
+    ///
+    /// What the exemption is NOT is a statement about call arguments as a
+    /// class: every storing callee copies today, unreported.
     ///
     /// The `.clone()` fix-it is behaviour-PRESERVING, exactly as the index
     /// rule's is: the read already copies, so spelling the copy changes
