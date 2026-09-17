@@ -37618,6 +37618,104 @@ fn main() {
         }
     }
 
+    /// B-2026-09-13-11 — the BODY COUNT for a read-only destructure of an
+    /// own-`Drop` enum's payload: exactly one enclosing body, on the
+    /// interpreter and AOT alike.
+    ///
+    /// That row was filed because the count DEPENDED ON THE ARM BODY. The same
+    /// `enum K { A(R2), B }` with `impl Drop for K` printed one `dK` when the
+    /// arm only read the leaf and NONE when the arm moved it on — agreed on all
+    /// four surfaces, so no A/B gate saw it, and as the row argued, the count is
+    /// arguable in both directions but cannot be arguable per arm body.
+    ///
+    /// IT IS CLOSED BY REJECTION, not by choosing a count.
+    /// `partial_move_of_drop_enum` is `Deny` since B-2026-09-13-14, so the
+    /// moving arm no longer compiles and the dependence is unreachable; what is
+    /// left to pin is that the READING arm still runs its one body. This is
+    /// that pin, and it is a body-count assertion rather than a diagnostic one,
+    /// which is why it is here and not beside
+    /// `partial_move_of_drop_enum_fires_on_moves_and_not_on_reads`.
+    ///
+    /// THE MOVING SPELLING IS DELIBERATELY NOT A CELL. It is a compile error
+    /// now, so `run_program` has nothing to return; the diagnostic is asserted
+    /// in the typechecker test, whose cells 10-15 also carry this row's five
+    /// closing measurements (a `Result` head, `while let`, a two-field variant
+    /// moving one field and reading the other, that variant read in full, and a
+    /// `Vec` element in both directions).
+    ///
+    /// Behind an explicit `#[allow(partial_move_of_drop_enum)]` the moving
+    /// spelling still compiles and still prints NO `dK`, measured on all four
+    /// surfaces. That is the annotation doing its job — it exists to keep the
+    /// pre-rule shape reachable for the fixtures that pin drop behaviour — not
+    /// a residue of this row, and it is memory-clean (`-O0` valgrind: 13
+    /// allocs, 13 frees, 0 bytes in use at exit, 0 errors, no invalid access).
+    #[test]
+    fn e2e_read_only_enum_payload_destructure_runs_one_enclosing_body() {
+        for (label, prog, want) in [
+            (
+                // The row's own read-only twin, `acc` left empty on purpose so
+                // the `len:0` says the leaf really did not travel.
+                "match arm reads the leaf",
+                "struct R2 { s: String }\n\
+                 enum K { A(R2), B }\n\
+                 impl Drop for K { fn drop(mut ref self) { println(\"dK\") } }\n\
+                 fn show(x: Option[K], acc: mut ref Vec[R2]) {\n\
+                 match x { Option.Some(K.A(r)) => { println(f\"a:{r.s}\") } Option.Some(K.B) => {} Option.None => {} }\n\
+                 }\n\
+                 fn main() { let mut acc: Vec[R2] = []; show(Option.Some(K.A(R2 { s: f\"z\" })), mut acc); println(f\"len:{acc.len()}\"); println(\"end\") }\n",
+                "a:z\ndK\nlen:0\nend\n",
+            ),
+            (
+                // Two payload fields, both read: still ONE body, so the count
+                // is per VALUE and not per bound field.
+                "two-field variant, both fields read",
+                "struct R2 { s: String }\n\
+                 enum K2 { A(R2, R2), B }\n\
+                 impl Drop for K2 { fn drop(mut ref self) { println(\"dK2\") } }\n\
+                 fn show(x: Option[K2]) {\n\
+                 match x { Option.Some(K2.A(p, q)) => { println(f\"{p.s}/{q.s}\") } Option.Some(K2.B) => {} Option.None => {} }\n\
+                 }\n\
+                 fn main() { show(Option.Some(K2.A(R2 { s: f\"p\" }, R2 { s: f\"q\" }))); println(\"end\") }\n",
+                "p/q\ndK2\nend\n",
+            ),
+            (
+                // A `Vec` ELEMENT of the same enum — the container-bodies
+                // channel the row listed as unmeasured. One body per element.
+                "Vec element, arm reads the leaf",
+                "struct R2 { s: String }\n\
+                 enum K { A(R2), B }\n\
+                 impl Drop for K { fn drop(mut ref self) { println(\"dK\") } }\n\
+                 fn main() { let v: Vec[K] = [K.A(R2 { s: f\"z\" })];\n\
+                 for e in v { match e { K.A(r) => { println(f\"a:{r.s}\") } K.B => {} } }\n\
+                 println(\"end\") }\n",
+                "a:z\ndK\nend\n",
+            ),
+            (
+                // A SCALAR projection is a read (the `copy_read` oracle's
+                // cell), and the body is owed just the same.
+                "scalar projection off the leaf",
+                "struct R2 { s: String, id: i64 }\n\
+                 enum K { A(R2), B }\n\
+                 impl Drop for K { fn drop(mut ref self) { println(\"dK\") } }\n\
+                 fn show(x: Option[K]) -> i64 {\n\
+                 match x { Option.Some(K.A(r)) => { return r.id; } Option.Some(K.B) => { return 0; } Option.None => { return 0; } }\n\
+                 }\n\
+                 fn main() { println(f\"n:{show(Option.Some(K.A(R2 { s: f\"z\", id: 7 })))}\"); println(\"end\") }\n",
+                "dK\nn:7\nend\n",
+            ),
+        ] {
+            let (interp_out, interp_errs, _, _) = karac::run_program_full_checked(prog);
+            assert!(
+                interp_errs.is_empty(),
+                "[{label}] interp errored: {interp_errs:?}"
+            );
+            assert_eq!(interp_out.join(""), want, "[{label}] interpreter");
+            if let Some(aot) = run_program(prog) {
+                assert_eq!(aot, want, "[{label}] AOT");
+            }
+        }
+    }
+
     /// B-2026-09-15-15 — a MULTI-FIELD enum variant owns its boxed
     /// `Array[T, N]` payload, and an arm that hands that payload on is
     /// disarmed in both pattern shapes.

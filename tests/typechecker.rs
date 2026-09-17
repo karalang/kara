@@ -48610,10 +48610,28 @@ fn partial_move_enum_diagnostics(source: &str) -> usize {
 /// — so the rule supplies a `copy_read` oracle keyed on the FIELD's type.
 /// Without that cell, the fix for it has nothing holding it in place.
 ///
-/// The rule is `Warn`, not the `Deny` that would actually remove the
-/// divergence, because `--features llvm` fixtures are written in this shape
-/// and each pins drop behaviour for a bug fixed in it. Promotion is tracked
-/// separately, exactly as B-2026-09-01-43 promoted the struct rule.
+/// The rule is `Deny` since B-2026-09-13-14, which is what actually removed
+/// the divergence — at `Warn` both programs still compiled and still printed
+/// what the table above records. Promotion waited on the `--features llvm`
+/// fixtures written in this shape, each pinning drop behaviour for a bug fixed
+/// in it; they carry `#[allow(partial_move_of_drop_enum)]` on the enclosing
+/// declaration, exactly as B-2026-09-01-43 promoted the struct rule.
+///
+/// CELLS 10-15 ARE B-2026-09-13-11's CLOSING SWEEP — the five spellings that
+/// row listed as NOT MEASURED, each measured against the promoted rule:
+/// a `Result` head, `while let`, a two-field variant whose arm moves one field
+/// and reads the other, the same variant read in full, and a `Vec` ELEMENT of
+/// the same enum in both directions. The four MOVING ones are rejected and the
+/// two READING ones are silent, so the gate is per-ARM consumption rather than
+/// per-field or per-head — which is the answer that closes that row: the
+/// arm-body dependence it was filed for is unreachable once the moving arm
+/// does not compile, and the reading arm keeps its one body.
+///
+/// The BODY COUNT those reading cells produce is asserted in
+/// `tests/codegen.rs`'s
+/// `e2e_read_only_enum_payload_destructure_runs_one_enclosing_body`, on the
+/// interpreter and AOT together. It belongs there rather than here: this test
+/// sees diagnostics, and the row's claim was about what runs.
 #[test]
 fn partial_move_of_drop_enum_fires_on_moves_and_not_on_reads() {
     let prelude = "struct R2 { s: String, id: i64 }\n\
@@ -48765,6 +48783,107 @@ fn partial_move_of_drop_enum_fires_on_moves_and_not_on_reads() {
         partial_move_enum_diagnostics(&iflet_infer),
         0,
         "if let, scalar projection, infer position"
+    );
+
+    // 10 -- B-2026-09-13-11's first NOT-MEASURED item: a `Result` head. The
+    //       rule is about the PAYLOAD enum's `Drop`, not the wrapper's, so the
+    //       head it is nested under cannot matter — pinned rather than assumed.
+    let result_move = format!(
+        "{prelude}\
+         fn show(x: Result[K, i64], acc: mut ref Vec[R2]) {{\n\
+         \x20\x20\x20\x20match x {{ Result.Ok(K.A(r)) => {{ acc.push(r) }} \
+         Result.Ok(K.B) => {{}} Result.Err(e) => {{}} }}\n\
+         }}\n\
+         fn main() {{ let mut acc: Vec[R2] = []; \
+         show(Result.Ok(K.A(R2 {{ s: f\"z\", id: 1 }})), mut acc); }}\n"
+    );
+    assert_eq!(
+        partial_move_enum_diagnostics(&result_move),
+        1,
+        "Result head, moving arm"
+    );
+
+    // 11 -- the `while let` spelling, the third pattern construct. Its scope
+    //       is a BLOCK, like `if let`'s, and cells 5-9 are why that is worth a
+    //       cell of its own: the two constructs reach the rule through
+    //       different typechecker paths and one of them was broken.
+    let whilelet_move = format!(
+        "{prelude}\
+         fn src(i: i64) -> Option[K] {{ if i > 0 {{ return Option.Some(K.A(R2 {{ s: f\"z\", id: 1 }})); }} return Option.None; }}\n\
+         fn main() {{ let mut acc: Vec[R2] = []; let mut k = 1;\n\
+         \x20\x20\x20\x20while let Option.Some(K.A(r)) = src(k) {{ acc.push(r); k = 0; }}\n\
+         }}\n"
+    );
+    assert_eq!(
+        partial_move_enum_diagnostics(&whilelet_move),
+        1,
+        "while let, moving arm"
+    );
+
+    // 12 -- THE SHAPE QUESTION B-2026-09-13-11 ASKED DIRECTLY: a two-field
+    //       variant whose arm MOVES one field and READS the other. It fires,
+    //       so the gate is per-ARM and not per-field — one moved field is
+    //       enough, which is the conservative direction here (the enum still
+    //       reaches its destructor over a payload that is partly gone).
+    let two_mixed = "struct R2 { s: String, id: i64 }\n\
+                     enum K2 { A(R2, R2), B }\n\
+                     impl Drop for K2 { fn drop(mut ref self) { println(\"dK2\") } }\n\
+                     fn show(x: Option[K2], acc: mut ref Vec[R2]) {\n\
+                     \x20\x20\x20\x20match x { Option.Some(K2.A(p, q)) => { println(f\"q:{q.s}\"); acc.push(p) } \
+                     Option.Some(K2.B) => {} Option.None => {} }\n\
+                     }\n\
+                     fn main() { let mut acc: Vec[R2] = []; \
+                     show(Option.Some(K2.A(R2 { s: f\"p\", id: 1 }, R2 { s: f\"q\", id: 2 })), mut acc); }\n";
+    assert_eq!(
+        partial_move_enum_diagnostics(two_mixed),
+        1,
+        "two-field variant, one moved one read"
+    );
+
+    // 13 -- and its control: the same variant with BOTH fields only read.
+    //       Silent, so cell 12 fires on the move and not on the arity.
+    let two_read = "struct R2 { s: String, id: i64 }\n\
+                    enum K2 { A(R2, R2), B }\n\
+                    impl Drop for K2 { fn drop(mut ref self) { println(\"dK2\") } }\n\
+                    fn show(x: Option[K2]) {\n\
+                    \x20\x20\x20\x20match x { Option.Some(K2.A(p, q)) => { println(f\"{p.s}/{q.s}\") } \
+                    Option.Some(K2.B) => {} Option.None => {} }\n\
+                    }\n\
+                    fn main() { show(Option.Some(K2.A(R2 { s: f\"p\", id: 1 }, R2 { s: f\"q\", id: 2 }))); }\n";
+    assert_eq!(
+        partial_move_enum_diagnostics(two_read),
+        0,
+        "two-field variant, both read"
+    );
+
+    // 14 -- a `Vec` ELEMENT of the same enum, destructured in a `for` body.
+    //       B-2026-09-13-11 listed this as "the container-bodies channel
+    //       rather than this one"; measured, the rule reaches it, because the
+    //       loop variable is an owned element and the arm consumes its payload
+    //       exactly as a parameter's would.
+    let vec_move = format!(
+        "{prelude}\
+         fn main() {{ let mut acc: Vec[R2] = []; let v: Vec[K] = [K.A(R2 {{ s: f\"z\", id: 1 }})];\n\
+         \x20\x20\x20\x20for e in v {{ match e {{ K.A(r) => {{ acc.push(r) }} K.B => {{}} }} }}\n\
+         }}\n"
+    );
+    assert_eq!(
+        partial_move_enum_diagnostics(&vec_move),
+        1,
+        "Vec element, moving arm"
+    );
+
+    // 15 -- its reading control, for cell 14's reason.
+    let vec_read = format!(
+        "{prelude}\
+         fn main() {{ let v: Vec[K] = [K.A(R2 {{ s: f\"z\", id: 1 }})];\n\
+         \x20\x20\x20\x20for e in v {{ match e {{ K.A(r) => {{ println(f\"a:{{r.s}}\") }} K.B => {{}} }} }}\n\
+         }}\n"
+    );
+    assert_eq!(
+        partial_move_enum_diagnostics(&vec_read),
+        0,
+        "Vec element, reading arm"
     );
 }
 
