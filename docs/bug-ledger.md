@@ -94,7 +94,7 @@ distinguish "bugs flattening" from "we stopped writing them down."
 |---|---|
 | run-vs-build | 426 |
 | miscompile | 415 |
-| leak | 369 |
+| leak | 370 |
 | double-free | 242 |
 | missing-feature | 199 |
 | codegen-gap | 178 |
@@ -110,7 +110,7 @@ distinguish "bugs flattening" from "we stopped writing them down."
 
 | surface | total |
 |---|---|
-| codegen | 1825 |
+| codegen | 1826 |
 | interp | 467 |
 | typecheck | 302 |
 | other | 95 |
@@ -130,7 +130,6 @@ _Generated from `bug-ledger.jsonl` by `scripts/bug-curve.py` (2026-05-20 → 202
 
 | id | date | surface | sev | title | tracker |
 |---|---|---|---|---|---|
-| B-2026-09-10-11 | 2026-09-10 | codegen | low | A SHARED-PAYLOAD ENUM ON THE RETURN ROUTE STRANDS ITS 16-BYTE REFCOUNT BLOCK -- `let z = passt(mket(3))` over `enum Et { A(Sh), B }` with `shared struct Sh` loses 16 B in 1 block at -O0, because the admission gate's `shared` clause asks whether the ENUM is shared and not whether its PAYLOAD is | — |
 | B-2026-09-10-14 | 2026-09-10 | codegen+interp | low | A WHOLE-PAYLOAD ARM BINDING OVER A LOCAL `Option[(R, R)]` RUNS NO ELEMENT `Drop` BODY ON EITHER BACKEND -- `match o { Some(t) => { println("hit") } .. }` prints `x hit` where `x hit dR1 dR2` is due, on `--interp`, `-O0` and `-O2` auto-par alike; the DESTRUCTURING arm `Some((a, b))` over the same local is correct on all three, and so is the same local with no `match` at all, so the gap is the whole-value binding rather than the payload shape. Memory is balanced (0 valgrind errors, nothing lost), so the absent output is the only observable | none |
 | B-2026-09-10-20 | 2026-09-10 | codegen | low | A `Vec` OR `shared enum` ENUM PAYLOAD LOSES ITS `Drop` BODY ON EVERY BACKEND, AND THE GENERIC SPELLING ALSO LEAKS -- `G.X(w)` over `Vec[Mono]` prints nothing and strands 320 B + 27 B, `G.X(SMono.P(..))` and its DECLARED twin `enum H3 { P(SMono) }` each strand 88 B + 27 B, while the same envelope over a plain struct payload is correct and clean -- so the two remedies `E_ENUM_NESTED_ENUM_PAYLOAD` recommends are both broken | — |
 | B-2026-09-10-21 | 2026-09-10 | codegen | low | A NESTED TUPLE ELEMENT INSIDE AN ARM-BOUND PAYLOAD STILL NEVER LOWERS -- `match o { Some(t) => t.0.0.id }` over `Option[((W, W), i64)]` fails `karac build` with the same "cannot resolve field 'id' ... its type was not recorded for codegen" B-2026-09-10-16 fixed one hop out, because a tuple element cannot be spelled as a NAME and the registry that row populates is name-valued; resolving it needs the full-`TypeExpr` registry, which carries B-2026-09-03-12's measured double-free hazard. LOUD, and `--interp` answers it | none |
@@ -195,6 +194,7 @@ _Generated from `bug-ledger.jsonl` by `scripts/bug-curve.py` (2026-05-20 → 202
 | B-2026-09-17-12 | 2026-09-17 | codegen | low | A GENERIC ENUM'S OWN `Drop` BODY RUNS AFTER ITS PAYLOAD'S ON EVERY COMPILED SURFACE WHEN THE PAYLOAD IS HEAP-BOXED -- `match g { G.X(t) => .. }` over a local, and `take(g: G[R])` by value, both print `dR20 dG` where `--interp` prints `dG dR20` (design.md Part 8: the user's `fn drop` body runs first, then the fields) | — |
 | B-2026-09-17-13 | 2026-09-17 | codegen | medium | A CONCRETE `impl G[R]` METHOD THAT MATCHES ON OWNED `self` LOSES THE GENERIC ENUM PAYLOAD'S `Drop` BODY ON EVERY COMPILED SURFACE -- `impl G[R] { fn read(self) { match self { G.X(t) => .. } } }` prints `x1` where `--interp` prints `dR23 x1`, with memory balanced so no sanitizer sees it | — |
 | B-2026-09-17-14 | 2026-09-17 | codegen | medium | A DESTRUCTURED TUPLE PAYLOAD DROPS ITS ELEMENTS IN DECLARATION ORDER ON THE COMPILED BACKENDS AND REVERSE ORDER UNDER `--interp` -- `match o { Some((a, b)) => .. }` over `Option[(R, R)]` prints `dR4 dR3` interpreted and `dR3 dR4` on jit / `-O0` / `-O2`; design.md Part 8's reverse-declaration rule makes the interpreter right, and the compiled backends honour that rule for other aggregates | — |
+| B-2026-09-17-15 | 2026-09-17 | codegen | low | A GENERIC ENUM'S `shared` PAYLOAD IS NEVER RC-RELEASED, BECAUSE THE DROP KIND IS CLASSIFIED ON THE ERASED TYPE PARAM -- `enum Box2[T] { V(T), N }` over `shared struct Sh` leaks 16 B in 1 block at `-O0` (32 B for two compared values) where the concrete `enum Et { A(Sh), B }` twin is clean since B-2026-09-10-11's fix, because `field_drop_kinds` is written ONCE PER ENUM NAME in `declare_enums` and classifies `T`, which no name-keyed set can contain; `Box2[String]` is clean, so something already resolves the instantiation for a buffer payload | — |
 
 ### Relocated
 
@@ -2517,6 +2517,7 @@ _Generated from `bug-ledger.jsonl` by `scripts/bug-curve.py` (2026-05-20 → 202
 | B-2026-09-10-8 | codegen | low | AN `Array[Array[T, N], M]` PAYLOAD LEAKS ITS INNER ARRAYS' ELEMENTS -- 36 B in 4 blocks at `-O0` for `Some(t) => t[0][0]` over `Array[Array[String, 2… | 1e99113 |
 | B-2026-09-10-9 | codegen | high | EVERY ELEMENT OF A BOXED TUPLE PAYLOAD RUNS ITS `Drop` BODY OVER A BOX THE CALLEE HAS ALREADY FREED -- `fn takeR(x: Option[(R, R)])` reads freed memo… | a56142bd8 |
 | B-2026-09-10-10 | cli | low | SIGKILL TO `karac run` PERMANENTLY LEAKS THE HANDOFF IR FILE -- `/tmp/karac_run_<pid>_jit.ll` is still on disk 30 minutes after the run, so the 5-sec… | 8ac991a |
+| B-2026-09-10-11 | codegen | low | A SHARED-PAYLOAD ENUM ON THE RETURN ROUTE STRANDS ITS 16-BYTE REFCOUNT BLOCK -- `let z = passt(mket(3))` over `enum Et { A(Sh), B }` with `shared str… | d2212b3 |
 | B-2026-09-10-12 | codegen | medium | THE -O0 ASAN RATCHET IS RED ON `main`: `asan_arm_bound_array_rebind_leaves_memory_with_one_owner` (2d991e9's own fixture) leaks 48 B in 1 allocation… | 92eeb8a |
 | B-2026-09-10-13 | codegen+interp | low | A GENERIC ENVELOPE NESTED INSIDE A GENERIC ENVELOPE RUNS NO `Drop` BODY AND LEAKS 72 B DIRECT + 27 B INDIRECT -- `let n = G.X(G.X(mkr(4)));` over `en… | 2201cdc |
 | B-2026-09-10-15 | codegen | medium | AN `Option[Option[R]]` PAYLOAD RUNS ITS `Drop` BODY ON THE INTERPRETER AND NOWHERE ON THE COMPILED BACKENDS -- `fn takeR(x: Option[Option[R]])` over… | e9d902b4b |
