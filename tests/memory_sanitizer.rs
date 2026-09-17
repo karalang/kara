@@ -96714,6 +96714,119 @@ fn main() {
         }
     }
 
+    /// B-2026-09-13-2 — the last of the four hand-back shapes: an arm-bound
+    /// `Array[T, N]` payload the arm MOVES ON had an owner on neither side.
+    ///
+    /// `match m.remove(k) { Some(a) => { let b = a; read } }` over
+    /// `Map[i64, Array[String, 2]]` lost 176 B in 8 blocks over four hand-backs
+    /// at `-O0`, with the box reclaimed and nothing indirectly lost — exactly
+    /// the element buffers.
+    ///
+    /// TWO REGISTRATIONS, EACH CORRECT ALONE, BOTH DISCLAIMING THIS SHAPE.
+    /// `track_freshtemp_boxed_enum_scrutinee`'s array arm withholds the box's
+    /// interior walker when the arm consumes the binding, because registering it
+    /// there double-freed `push`, a struct literal and `m.insert` — all three of
+    /// which acquire an owner at the destination.
+    /// `rebind_source_keeps_array_memory` then stands the `let b = a;`
+    /// DESTINATION down because the source is an arm-bound array, on the mirror
+    /// premise that "the ARM frees the payload". The withholding is now recorded
+    /// and that guard answers `false` for those sources alone.
+    ///
+    /// THE FOUR MOVE CELLS ARE THE POINT OF THIS FIXTURE, not the leak cell.
+    /// This row has been attempted four times; `push`, `lit` and `insert` are
+    /// the exact spellings that double-freed on attempts one and two, and they
+    /// are here so the next attempt cannot repeat it silently. Each is clean
+    /// before and after this fix — the set the fix consults is read at one site
+    /// and a rebind is the only destination that reaches it.
+    ///
+    /// `read` and `empty` are the non-moving controls, clean throughout: they
+    /// are what establish that the interior IS owned when the arm keeps it, so
+    /// the leak is the consuming path and not the hand-back.
+    ///
+    /// NOT A CELL, DELIBERATELY: `Some(a) => { eat(a) }` — a by-value array
+    /// param, which is CALLEE-owned. The row records it clean on 2026-09-16;
+    /// measured on the unfixed tree today it is an `Invalid free`, i.e. a
+    /// regression from something that landed in between. It has no rebind in it,
+    /// so this fix cannot reach it (measured identical before and after) and it
+    /// is filed as its own corruption-class row. Including it would redden the
+    /// suite for that row's defect.
+    ///
+    /// Observable at `-O0` only, like every cell in this family: at the default
+    /// opt level LLVM deletes an allocation nothing observes, so the ordinary
+    /// `--features llvm` run of this fixture is vacuous and
+    /// `scripts/asan-o0-leg.sh` is what exercises it.
+    #[test]
+    fn asan_arm_bound_array_payload_moved_on_has_an_owner() {
+        // `HDR` builds the map, `FTR` closes the removal loop; a cell is just
+        // its arm body, so the cells differ in exactly the thing under test.
+        // Four removals against eight inserts, so the `None` arm never runs and
+        // every cell exercises the hand-back four times. Each arm prints a
+        // fixed marker — a READ of the moved payload where the shape has one,
+        // via `.len()`, so the buffer has to be alive to answer.
+        const HDR: &str = "fn eat(a: Array[String, 2]) -> i64 { return a[0].len() as i64; }\n\
+             struct Bx { a: Array[String, 2], k: i64 }\n\
+             fn main() {\n\
+             \x20   let mut v: Map[i64, Array[String, 2]] = Map.new();\n\
+             \x20   let mut i: i64 = 0i64;\n\
+             \x20   while i < 8i64 {\n\
+             \x20       v.insert(i, [f\"row-aaaaaaaaaaaaaaaa-{i}\", f\"col-bbbbbbbbbbbbbbbb-{i}\"]);\n\
+             \x20       i = i + 1i64;\n\
+             \x20   }\n\
+             \x20   let mut j: i64 = 0i64;\n\
+             \x20   while j < 4i64 {\n";
+        const FTR: &str = "\x20       j = j + 1i64;\n\
+             \x20   }\n\
+             \x20   println(f\"end\");\n\
+             }\n";
+        let four = |m: &str| -> Vec<String> {
+            let mut v: Vec<String> = (0..4).map(|_| m.to_string()).collect();
+            v.push("end".to_string());
+            v
+        };
+
+        for (arm, marker, label) in [
+            // The row's cell.
+            (
+                "        match v.remove(j) { Option.Some(a) => { let b = a; println(f\"b:{b[0].len()}\"); } Option.None => { println(f\"n\") } }\n",
+                "b:22",
+                "b1302-rebind-to-local",
+            ),
+            // The three spellings that double-freed on the earlier attempts.
+            (
+                "        let mut keep: Vec[Array[String, 2]] = Vec.new();\n\
+                 \x20       match v.remove(j) { Option.Some(a) => { keep.push(a); println(f\"p\") } Option.None => { println(f\"n\") } }\n",
+                "p",
+                "b1302-move-into-vec",
+            ),
+            (
+                "        match v.remove(j) { Option.Some(a) => { v.insert(100i64 + j, a); println(f\"i\") } Option.None => { println(f\"n\") } }\n",
+                "i",
+                "b1302-move-back-into-map",
+            ),
+            (
+                "        match v.remove(j) { Option.Some(a) => { let x = Bx { a: a, k: j }; println(f\"x:{x.a[0].len()}\") } Option.None => { println(f\"n\") } }\n",
+                "x:22",
+                "b1302-move-into-struct-literal",
+            ),
+            // The non-moving controls.
+            (
+                "        match v.remove(j) { Option.Some(a) => { println(f\"b:{a[0].len()}\") } Option.None => { println(f\"n\") } }\n",
+                "b:22",
+                "b1302-read-only-arm",
+            ),
+            (
+                "        match v.remove(j) { Option.Some(a) => { println(f\"h\") } Option.None => { println(f\"n\") } }\n",
+                "h",
+                "b1302-empty-arm",
+            ),
+        ] {
+            let src = format!("{HDR}{arm}{FTR}");
+            let expected = four(marker);
+            let refs: Vec<&str> = expected.iter().map(String::as_str).collect();
+            assert_clean_asan_run(&src, &refs, label);
+        }
+    }
+
     #[test]
     fn asan_shared_enum_nameless_aggregate_payload_box_is_freed() {
         const STRS: &str = "[f\"aaaaaaaaaaaaaaaaaaaa\", f\"bbbbbbbbbbbbbbbbbbbb\"]";

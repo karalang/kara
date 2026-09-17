@@ -16601,6 +16601,21 @@ impl<'ctx> super::Codegen<'ctx> {
                     .is_some_and(|body| self.arm_payload_binding_only_borrowed(pat, body)),
                 _ => false,
             };
+            // B-2026-09-13-2 — when the interior is WITHHELD for a consuming
+            // arm, say so, so the one destination that also stands itself down
+            // can stop doing that. See
+            // `PayloadVars::arm_array_payload_unowned_interior`.
+            if !scrutinee_is_borrow && !array_arm_owns_interior {
+                if let Some(pte) = self.optres_scrutinee_payload_te_for(scrutinee, &variant) {
+                    if self.array_elem_and_len(&pte).is_some() {
+                        for b in Self::variant_arm_binds(pat) {
+                            self.payload_vars
+                                .arm_array_payload_unowned_interior
+                                .insert(b);
+                        }
+                    }
+                }
+            }
             if !scrutinee_is_borrow && array_arm_owns_interior {
                 if let Some(pte) = self.optres_scrutinee_payload_te_for(scrutinee, &variant) {
                     if self.array_elem_and_len(&pte).is_some() {

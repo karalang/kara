@@ -5673,6 +5673,21 @@ impl<'ctx> super::Codegen<'ctx> {
         let ExprKind::Identifier(src) = &value.kind else {
             return false;
         };
+        // B-2026-09-13-2 — the one source this must NOT keep: an arm-bound
+        // array payload whose box was registered without its interior walker
+        // because the arm consumes the binding. This guard's premise is that
+        // "the ARM frees the payload"; for that source the arm does not, and
+        // standing the destination down as well left the element buffers with
+        // no owner (176 B in 8 blocks over four hand-backs at `-O0`). Answering
+        // `false` hands them to the destination through the transfer machinery
+        // a bare array rebind already uses.
+        if self
+            .payload_vars
+            .arm_array_payload_unowned_interior
+            .contains(src.as_str())
+        {
+            return false;
+        }
         self.borrow_vars
             .owned_array_params
             .contains_key(src.as_str())

@@ -1544,6 +1544,7 @@ impl<'ctx> super::Codegen<'ctx> {
         self.payload_vars.boxed_payload_alias.clear();
         self.payload_vars.boxed_array_payload_alias.clear();
         self.payload_vars.boxed_optres_payload_view_vars.clear();
+        self.payload_vars.arm_array_payload_unowned_interior.clear();
         self.payload_vars.deboxed_payload_box_ptrs.clear();
         self.payload_vars.deferred_payload_box_ptrs.clear();
         self.payload_vars.pending_box_field_zeroes.clear();

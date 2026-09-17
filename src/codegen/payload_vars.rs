@@ -336,6 +336,27 @@ pub(crate) struct PayloadVars<'ctx> {
     /// Keyed by binding name and snapshotted with the rest of the per-arm var
     /// environment, so an arm's view cannot leak into a sibling arm.
     pub(crate) boxed_optres_payload_view_vars: HashMap<String, inkwell::values::PointerValue<'ctx>>,
+    /// B-2026-09-13-2 — arm-bound `Array[T, N]` payload bindings whose box was
+    /// registered WITHOUT its interior walker, because the arm CONSUMES the
+    /// binding.
+    ///
+    /// `track_freshtemp_boxed_enum_scrutinee`'s array arm withholds the
+    /// interior drop for a consuming arm deliberately: registering it there
+    /// double-freed three move shapes (`push`, a struct literal, `m.insert`),
+    /// each of which acquires its own owner at the destination. The premise is
+    /// that the destination owns the payload — and for one destination it does
+    /// not. `rebind_source_keeps_array_memory` stands a `let b = a;` rebind's
+    /// DESTINATION down whenever the source is an arm-bound array, on the
+    /// mirror-image premise that "the ARM frees the payload". Both are right
+    /// about every other case and both disclaim this one, so the element
+    /// buffers had no owner at all: 176 B in 8 blocks over four hand-backs at
+    /// `-O0`, box reclaimed, nothing indirectly lost.
+    ///
+    /// Membership says exactly "the arm did NOT keep this payload's interior",
+    /// which is what lets that guard answer `false` for this source alone and
+    /// leave every other consuming destination on the settled answer it
+    /// already had. Cleared per function with its sibling above.
+    pub(crate) arm_array_payload_unowned_interior: std::collections::HashSet<String>,
     /// B-2026-08-06-10 — match-arm payload bindings that were DEBOXED out of an
     /// enum payload box: `binding slot -> box pointer`.
     ///
