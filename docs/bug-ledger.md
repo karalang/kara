@@ -104,13 +104,13 @@ distinguish "bugs flattening" from "we stopped writing them down."
 | false-positive | 108 |
 | soundness | 96 |
 | crash | 84 |
-| use-after-free | 42 |
+| use-after-free | 43 |
 
 ### By surface
 
 | surface | total |
 |---|---|
-| codegen | 1808 |
+| codegen | 1809 |
 | interp | 463 |
 | typecheck | 302 |
 | other | 94 |
@@ -183,13 +183,13 @@ _Generated from `bug-ledger.jsonl` by `scripts/bug-curve.py` (2026-05-20 → 202
 | B-2026-09-16-23 | 2026-09-16 | interp | low | TWO SHADOW-REBIND SPELLINGS STILL DOUBLE THE `Drop` BODY IN THE INTERPRETER -- a NESTED BLOCK (`{ let q = idr(q); .. }`) and an `if`-WRAPPED RHS both print `dR15 dR15` against one body on `karac build`; the first is out of the retraction's SCOPE and the second is a genuine per-path question the all-paths predicate correctly declines, so they need different repairs | — |
 | B-2026-09-16-25 | 2026-09-16 | interp+codegen | low | THE OWNED-`self` ENUM RECEIVER PAYLOAD-BODY SUPPRESSION IS ALL-PATHS, NOT PATH-SENSITIVE -- a callee that takes the payload on SOME path still suppresses the caller's walk on the paths it does NOT take, so `if c { match self { E.A(r) => .. } } return 0;` called with `c == false` prints a bare `dE` and loses `dR`; same for a zero-trip `while` and an unselected match arm; B-2026-09-16-21's fix answered the ALL-PATHS-NO case only | — |
 | B-2026-09-16-26 | 2026-09-16 | interp+codegen | low | A DEPTH-1 FIELD MOVE-OUT WHOSE FIELD IS THEN BOUND BY A DESTRUCTURE RUNS THAT FIELD'S `Drop` BODY TWICE -- `let x = o.k; let Outer { h, k } = o;` prints `dR18 dR18 dR17 dR16` on all four surfaces with memory balanced; the NESTED sibling is fixed (B-2026-09-07-1) and this is not, because at depth 1 the leaf IS the moved field and owes no body at all rather than a masked one | — |
-| B-2026-09-16-27 | 2026-09-16 | codegen | medium | A NESTED STRUCT MOVED INTO A VARIANT CONSTRUCTOR ABORTS WITH A DOUBLE FREE -- `Wn.Full(o)` over `struct Out { i: In }` / `struct In { s: String }` dies with `free(): double free detected in tcache 2` on `karac build` against a correct `--interp`, identical before and after B-2026-09-15-16's fix, so one level of nesting turns that row's silent blank read into an abort | — |
 | B-2026-09-16-28 | 2026-09-16 | codegen | low | A BARE GENERIC-PARAM FIELD MOVED INTO AN OWNING SINK STILL LEAKS 24 B AFTER B-2026-09-15-16 -- that fix closes the BLANK READ half for `Box2[T] { f: T }` at `T = String` (`b ` -> `b b1516-baret-...`) and leaves the leak unchanged, because the `bare_t_heap` arm zeroes words 1 and 2 ahead of every dispatched arm and does not consult `uam_copied_sites` | — |
 | B-2026-09-16-29 | 2026-09-16 | interp+codegen | low | A BARE-`self` ARM THAT PASSES ITS PAYLOAD ON BY VALUE STILL RUNS THE PAYLOAD BODY BEFORE THE SHELL'S -- `match self { E.A(r) => eat(r), .. }` prints `dR6 x6 dE` where the projection-only `r.id` spelling one line up prints `x1 dE dR1`, because B-2026-09-06-39's read-only walk counts a bare mention in ANY non-projection position as a take and so cannot tell `eat(r)` (caller-retains, safe) from `Some(r)` (a real move) | — |
 | B-2026-09-16-30 | 2026-09-16 | codegen | medium | A `shared enum` RECEIVER'S PAYLOAD `Drop` BODY RUNS UNDER `--interp` AND ON NO COMPILED BACKEND -- `Sh.A(mk(16))` over `shared enum Sh { A(R), B }` with `fn read(self) -> i64 { match self { Sh.A(r) => r.id, .. } }` prints `dR16 x16` interpreted and a bare `x16` on jit / `karac build` / `KARAC_AUTO_PAR=0 build`; a REAL A/B divergence, unlike the value-enum siblings around it | — |
 | B-2026-09-16-31 | 2026-09-16 | codegen | high | A GENERIC ENUM WITH A GENERIC `impl[T] Drop` SEGFAULTS AT RUNTIME ON EVERY COMPILED BACKEND WHEN AN OWNED-`self` METHOD MATCHES ON IT -- `enum G[T] { X(T), Y }` + `impl[T] Drop for G[T]` + `fn read(self) { match self { G.X(t) => .. } }` exits 139 under `karac build` and `KARAC_AUTO_PAR=0 karac build` alike, where `--interp` runs it correctly | — |
 | B-2026-09-16-32 | 2026-09-16 | codegen | medium | `String.substring`'s heap result is NOT NUL-terminated while every other String producer's is, which is the exact shape a past printf overread was fixed by changing | B-2026-09-16-1 |
 | B-2026-09-16-33 | 2026-09-16 | codegen+interp | low | A DISCARDED ARRAY RETURN'S ELEMENT `Drop` BODIES RUN ON NEITHER BACKEND -- `passthru([mk(30), mk(31)]);` over `fn passthru(x: Array[R, 2]) -> Array[R, 2]` prints `ok` and nothing else on all four surfaces, so TWO bodies are owed and zero run. It is the exact ARRAY twin of B-2026-09-09-21 (the tuple shape, fixed), and it has been tracked nowhere: B-2026-09-12-2 installed this arm's MEMORY walk and left bodies out deliberately -- because `--interp` ran none either, so adding one compiled-side alone would have created a run-vs-build divergence out of a leak fix -- and that row is CLOSED `fixed` for the leak, so the deferral had no open home | — |
+| B-2026-09-16-34 | 2026-09-16 | codegen | medium | A NON-SHARED STRUCT CARRYING A BARE `shared` FIELD, AS AN INLINE ENUM PAYLOAD PASSED BY VALUE, READS AND WRITES ITS REFCOUNT BLOCK AFTER FREE -- `fn f(w: Wsh)` over `enum Wsh { Full(ShOut), Empty }` / `struct ShOut { i: ShIn }` / `shared struct ShIn` gives valgrind `Invalid read of size 8` + `Invalid write of size 8` on a freed 32-byte block with a BALANCED 11 allocs / 11 frees, on a callee whose body never touches the param and whose output is correct on every surface | — |
 
 ### Relocated
 
@@ -2640,6 +2640,7 @@ _Generated from `bug-ledger.jsonl` by `scripts/bug-curve.py` (2026-05-20 → 202
 | B-2026-09-16-17 | codegen+interp | medium | AN ENUM VARIANT'S PAYLOAD FIELDS RUN THEIR `Drop` BODIES IN DECLARATION ORDER ON ALL FOUR SURFACES, while a struct's run in REVERSE declaration order… | ef5ce6f |
 | B-2026-09-16-21 | codegen+interp | medium | AN OWNED ENUM RECEIVER'S PAYLOAD `Drop` BODY IS LOST WHENEVER THE CALLEE NEVER DESTRUCTURES `self` -- `let a = E.A(mk(1)); a.none()` over `fn none(se… | 0b97e71 |
 | B-2026-09-16-24 | typecheck | medium | `partial_move_of_drop_enum` REJECTS A BORROW-PROJECTION SCRUTINEE, and it is a false positive by the rule's OWN stated terms -- the rule documents it… | 84030e8 |
+| B-2026-09-16-27 | codegen | medium | A NESTED STRUCT MOVED INTO A VARIANT CONSTRUCTOR ABORTS WITH A DOUBLE FREE -- `Wn.Full(o)` over `struct Out { i: In }` / `struct In { s: String }` di… | 602a4bd |
 
 </details>
 

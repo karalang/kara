@@ -1,0 +1,37 @@
+### asan-o0
+>> archive freshness: OK — all present archives postdate runtime/src@9d3ceb9
+>> disk before -O0 leg: used=14G avail=22G allowance=36G (host 'size' column is meaningless)
+>> [-O0] KARAC_OPT_LEVEL=0 cargo test --features llvm --test memory_sanitizer (--test-threads=4)
+>> suite exited 101
+>> test result: FAILED. 1645 passed; 5 failed; 9 ignored; 0 measured; 0 filtered out; finished in 363.47s
+
+>> SKIPPED — opt-in runtime archive absent (NOT counted as pass or fail):
+     memory_sanitizer_tests::asan_arrow_ipc_no_leak
+     memory_sanitizer_tests::asan_regex_compile_is_match_heap_pattern_no_leak
+     memory_sanitizer_tests::asan_regex_find_all_vec_match_heap_no_leak
+     memory_sanitizer_tests::asan_regex_find_option_match_heap_no_leak
+     memory_sanitizer_tests::asan_regex_replace_all_owned_string_heap_no_leak
+   Build the archive named in the failure to cover these; CLAUDE.md
+   § Commands deliberately leaves them unbuilt on an ordinary checkout.
+>> -O0 leg matches the quarantine list exactly (0 known failure(s))
+ASAN_O0_EXIT=0
+DISK: used=18G avail=19G allowance=37G (df's 'size' column is the host volume — ignore it)
+### asan-instrumented
+>> archive freshness: OK — all present archives postdate runtime/src@9d3ceb9
+>> disk before instrumented -O0 leg: used=18G avail=19G allowance=37G (host 'size' column is meaningless)
+>> [instrumented -O0] KARAC_OPT_LEVEL=0 cargo test --features llvm --test memory_sanitizer (--test-threads=4)
+>> suite exited 101
+>> test result: FAILED. 1645 passed; 5 failed; 9 ignored; 0 measured; 0 filtered out; finished in 371.73s
+
+>> SKIPPED — opt-in runtime archive absent (NOT counted as pass or fail):
+     memory_sanitizer_tests::asan_arrow_ipc_no_leak
+     memory_sanitizer_tests::asan_regex_compile_is_match_heap_pattern_no_leak
+     memory_sanitizer_tests::asan_regex_find_all_vec_match_heap_no_leak
+     memory_sanitizer_tests::asan_regex_find_option_match_heap_no_leak
+     memory_sanitizer_tests::asan_regex_replace_all_owned_string_heap_no_leak
+   Build the archive named in the failure to cover these; CLAUDE.md
+   § Commands deliberately leaves them unbuilt on an ordinary checkout.
+>> instrumented -O0 leg matches the quarantine list exactly (0 known failure(s))
+ASAN_INSTR_EXIT=0
+DISK: used=18G avail=19G allowance=37G (df's 'size' column is the host volume — ignore it)
+ASAN LEGS DONE
