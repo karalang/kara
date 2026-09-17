@@ -96416,6 +96416,144 @@ fn main() {
     /// the RC SHELL rather than any payload box — byte-identical before and
     /// after this change. That is B-2026-09-17-22, and a cell carrying it would make
     /// this fixture red for a reason that is not its own.
+    /// B-2026-09-10-23 — a whole-payload arm binding over a BY-VALUE
+    /// `Option[(W, i64)]` param leaked the tuple element's INTERIOR.
+    ///
+    /// 2 B in 1 block at `-O0` for `struct W { id: i64, name: String }`, the
+    /// `String` being the only allocation of that size in the program. Output
+    /// was correct on every surface, so the leak was the only observable.
+    ///
+    /// THE MECHANISM IS A RETRACTION FIRING ON A FALSE PREMISE, and the
+    /// `Some(_)` cell below is what localises it: the param's own cleanup is
+    /// perfectly capable of freeing the interior and does so when no arm binds
+    /// the payload. When an arm DOES bind it,
+    /// `retract_boxed_tuple_inner_drop_for_arm` stands the box's interior
+    /// walker down on the premise that the binding now owns the interior — and
+    /// the binding registers BODIES only, never a memory owner. The premise was
+    /// decided by the syntactic classifier, which calls every projection off the
+    /// binding a partial move, so `return t.1` on an `i64` read as a take. The
+    /// retraction now asks a leaf-aware predicate restricted to PRIMITIVE
+    /// leaves, where a wrong answer cannot cost a double free.
+    ///
+    /// THE LOSS SCALES WITH THE INTERIOR, which is what says the whole interior
+    /// was stranded rather than one particular buffer — and is more than the row
+    /// recorded: `vecelem` lost 32 B for a `Vec[i64]` element and `twostr` lost
+    /// 12 B in 2 blocks for two `String` fields. Both are cells here.
+    ///
+    /// THE CONTROLS ARE THE ROW'S OWN, plus one it listed as unmeasured. `wild`
+    /// (`Some(_)`), `nomatch` (no match at all) and `nolocal` (the same match
+    /// over a LOCAL) were clean before the fix and must stay clean — they are
+    /// what establish that BOTH the by-value param and the arm binding are
+    /// required. `refparam` answers the unmeasured item: a `ref` parameter mode
+    /// is clean, which confirms the by-value entry copy is the mechanism.
+    /// `structpay` is the already-fixed named-struct sibling (B-2026-09-07-44),
+    /// whose arm registers a `StructDrop` for exactly this purpose.
+    ///
+    /// THREE SPELLINGS STILL LEAK AND ARE NOT THIS ROW, each through a
+    /// different path, all measured at 2 B:
+    ///   * the GENERIC leg (`fn take[T](o: Option[(T, i64)])`) — no retraction
+    ///     fires there at all; it also loses the element's `Drop` body, which
+    ///     is the boxed-generic gap B-2026-09-17-23 records (the monomorph
+    ///     prologue runs none of the by-value param arms).
+    ///   * the `Result` leg — the body runs correctly on all four surfaces and
+    ///     the interior still leaks, so it is a third owner path.
+    ///     B-2026-09-17-25.
+    ///   * the DESTRUCTURING arm (`Some((a, b))`) — the admission test retracts
+    ///     UNCONDITIONALLY for a tuple pattern, on the stated premise that "each
+    ///     heap element gets its own `track_vec_var` owner". True for a
+    ///     `Vec`/`String` element, false for a user-STRUCT element.
+    ///     B-2026-09-17-26.
+    ///
+    /// Keeping them out of this fixture is deliberate: each would redden the
+    /// suite for a defect its own row owns.
+    #[test]
+    fn asan_by_value_optres_tuple_param_arm_keeps_the_interior() {
+        const W: &str = "struct W { id: i64, name: String }\n\
+             impl Drop for W { fn drop(mut ref self) { println(f\"dW{self.id}/{self.name}\") } }\n";
+
+        // The row's own repro: the whole-payload binding, read through a scalar
+        // projection.
+        assert_clean_asan_run(
+            &format!(
+                "{W}fn take(o: Option[(W, i64)]) -> i64 {{ match o {{ Some(t) => {{ return t.1; }} None => {{ return 0; }} }} }}\n\
+                 fn main() {{ println(f\"g{{take(Some((W {{ id: 3, name: f\"n3\" }}, 9)))}}\") }}\n"
+            ),
+            &["dW3/n3", "g9"],
+            "b1023-whole-binding",
+        );
+
+        // The interior is a `Vec` buffer rather than a `String` — 32 B before
+        // the fix, which is what shows the loss tracks the interior's size.
+        assert_clean_asan_run(
+            "struct W { id: i64, xs: Vec[i64] }\n\
+             impl Drop for W { fn drop(mut ref self) { println(f\"dW{self.id}/{self.xs.len()}\") } }\n\
+             fn take(o: Option[(W, i64)]) -> i64 { match o { Some(t) => { return t.1; } None => { return 0; } } }\n\
+             fn main() { let mut v: Vec[i64] = Vec.new(); v.push(7); v.push(8);\n\
+             \x20           println(f\"g{take(Some((W { id: 3, xs: v }, 9)))}\") }\n",
+            &["dW3/2", "g9"],
+            "b1023-vec-interior",
+        );
+
+        // TWO heap fields, both stranded before the fix (12 B in 2 blocks).
+        assert_clean_asan_run(
+            "struct W { id: i64, a: String, b: String }\n\
+             impl Drop for W { fn drop(mut ref self) { println(f\"dW{self.id}/{self.a}/{self.b}\") } }\n\
+             fn take(o: Option[(W, i64)]) -> i64 { match o { Some(t) => { return t.1; } None => { return 0; } } }\n\
+             fn main() { println(f\"g{take(Some((W { id: 3, a: f\"aaaa1\", b: f\"bbbbbb2\" }, 9)))}\") }\n",
+            &["dW3/aaaa1/bbbbbb2", "g9"],
+            "b1023-two-heap-fields",
+        );
+
+        // ── controls, all clean BEFORE the fix ──────────────────────────────
+        // No arm binds the payload: the param's own cleanup frees the interior.
+        assert_clean_asan_run(
+            &format!(
+                "{W}fn take(o: Option[(W, i64)]) -> i64 {{ match o {{ Some(_) => {{ return 9; }} None => {{ return 0; }} }} }}\n\
+                 fn main() {{ println(f\"g{{take(Some((W {{ id: 3, name: f\"n3\" }}, 9)))}}\") }}\n"
+            ),
+            &["dW3/n3", "g9"],
+            "b1023-wildcard-arm",
+        );
+        // A by-value param with no match at all.
+        assert_clean_asan_run(
+            &format!(
+                "{W}fn take(o: Option[(W, i64)]) -> i64 {{ return 9; }}\n\
+                 fn main() {{ println(f\"g{{take(Some((W {{ id: 3, name: f\"n3\" }}, 9)))}}\") }}\n"
+            ),
+            &["dW3/n3", "g9"],
+            "b1023-param-no-match",
+        );
+        // The same match over a LOCAL — the local owns the whole payload.
+        assert_clean_asan_run(
+            &format!(
+                "{W}fn main() {{ let o: Option[(W, i64)] = Some((W {{ id: 3, name: f\"n3\" }}, 9));\n\
+                 \x20           match o {{ Some(t) => {{ println(f\"g{{t.1}}\") }} None => {{ println(f\"n\") }} }} }}\n"
+            ),
+            &["g9", "dW3/n3"],
+            "b1023-local-scrutinee",
+        );
+        // A `ref` parameter mode — the caller keeps the value, so no entry copy
+        // and nothing to strand. The row listed this as unmeasured.
+        assert_clean_asan_run(
+            &format!(
+                "{W}fn take(o: ref Option[(W, i64)]) -> i64 {{ match o {{ Some(t) => {{ return t.1; }} None => {{ return 0; }} }} }}\n\
+                 fn main() {{ let o: Option[(W, i64)] = Some((W {{ id: 3, name: f\"n3\" }}, 9)); println(f\"g{{take(o)}}\") }}\n"
+            ),
+            &["g9", "dW3/n3"],
+            "b1023-ref-param",
+        );
+        // The named-STRUCT payload sibling (B-2026-09-07-44), whose arm
+        // registers a `StructDrop` — the arrangement the tuple envelope lacks.
+        assert_clean_asan_run(
+            &format!(
+                "{W}fn take(o: Option[W]) -> i64 {{ match o {{ Some(t) => {{ return t.id; }} None => {{ return 0; }} }} }}\n\
+                 fn main() {{ println(f\"g{{take(Some(W {{ id: 3, name: f\"n3\" }}))}}\") }}\n"
+            ),
+            &["dW3/n3", "g3"],
+            "b1023-struct-payload",
+        );
+    }
+
     #[test]
     fn asan_shared_enum_nameless_aggregate_payload_box_is_freed() {
         const STRS: &str = "[f\"aaaaaaaaaaaaaaaaaaaa\", f\"bbbbbbbbbbbbbbbbbbbb\"]";

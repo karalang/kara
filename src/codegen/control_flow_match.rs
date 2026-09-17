@@ -13002,6 +13002,117 @@ impl<'ctx> super::Codegen<'ctx> {
         binds
     }
 
+    /// B-2026-09-10-23 — the SCALAR-leaf map for an arm's payload bindings, and
+    /// the `copy_read` policy built from it.
+    ///
+    /// The retractions below stand the box's INTERIOR walker down on the premise
+    /// that the arm's binding owns the interior, and they decide that with the
+    /// syntactic classifier, which calls every projection off the binding a
+    /// partial move. `binding_only_borrowed_with`'s doc says that bias "is safe
+    /// for a drop-DISARM decision — over-reporting a take leaves the existing
+    /// owner alone". MEASURED, that is backwards at THIS disarm: over-reporting
+    /// a take is what ENABLES the retraction, so the interior walker is removed
+    /// and the binding registers bodies only — the payload's interior is then
+    /// owned by nobody. `fn take(o: Option[(W, i64)]) { match o { Some(t) =>
+    /// t.1 } }` over `struct W { id: i64, name: String }` lost the `String` at
+    /// `-O0` (2 B in 1 block), and the loss scales with the interior: 32 B for a
+    /// `Vec[i64]` element, 12 B in 2 blocks for two `String` fields. The
+    /// `Some(_)` arm on the same program is clean, which is what says the
+    /// param's own cleanup can free the interior and the retraction is what
+    /// takes it away (B-2026-09-10-23).
+    ///
+    /// So the premise is asked leaf-aware, and DELIBERATELY only for the shapes
+    /// where a wrong answer cannot cost a double free: a use is a copy read only
+    /// when it resolves to a PRIMITIVE scalar — a bare binding whose own type is
+    /// primitive (`Some((a, b))`'s `b`), or one tuple-index hop off a
+    /// whole-tuple binding (`t.1`). Every other shape keeps the syntactic
+    /// verdict byte-for-byte, so a `String`/`Vec`/struct leaf still reads as a
+    /// take and still retracts. That asymmetry is the point: a missed copy read
+    /// costs today's leak, while a wrongly-admitted one would leave two owners.
+    fn arm_binding_scalar_tes(
+        &self,
+        pattern: &Pattern,
+    ) -> std::collections::HashMap<String, TypeExpr> {
+        let mut out = std::collections::HashMap::new();
+        let PatternKind::TupleVariant { patterns, .. } = &pattern.kind else {
+            return out;
+        };
+        for sub in patterns {
+            let key = (sub.span.offset, sub.span.length);
+            let recorded = self
+                .pattern_state
+                .pattern_binding_inner_types
+                .get(&key)
+                .cloned()
+                .map(|te| self.subst_monomorph_type_params(&te));
+            match &sub.kind {
+                PatternKind::Binding(n) => {
+                    if let Some(te) = recorded {
+                        out.insert(n.clone(), te);
+                    }
+                }
+                // A tuple PATTERN binds the elements. Two sources, because the
+                // typechecker records the inner type per BINDING and the tuple
+                // pattern itself may carry none: prefer each leaf's own record,
+                // and fall back to mapping positionally off the tuple type when
+                // the tuple pattern does carry one. Whichever answers, an
+                // unresolved leaf is simply absent from the map and keeps the
+                // syntactic verdict.
+                PatternKind::Tuple(elems) => {
+                    let positional = match recorded.as_ref().map(|te| &te.kind) {
+                        Some(TypeKind::Tuple(tes)) => Some(tes.clone()),
+                        _ => None,
+                    };
+                    for (i, ep) in elems.iter().enumerate() {
+                        let PatternKind::Binding(n) = &ep.kind else {
+                            continue;
+                        };
+                        let leaf_key = (ep.span.offset, ep.span.length);
+                        let te = self
+                            .pattern_state
+                            .pattern_binding_inner_types
+                            .get(&leaf_key)
+                            .cloned()
+                            .map(|te| self.subst_monomorph_type_params(&te))
+                            .or_else(|| positional.as_ref().and_then(|tes| tes.get(i).cloned()));
+                        if let Some(te) = te {
+                            out.insert(n.clone(), te);
+                        }
+                    }
+                }
+                _ => {}
+            }
+        }
+        out
+    }
+
+    /// Is `e` a read that provably carries nothing away, given the arm's
+    /// binding types? See [`Self::arm_binding_scalar_tes`] for why this is
+    /// restricted to primitive leaves.
+    fn arm_binding_scalar_copy_read(
+        tes: &std::collections::HashMap<String, TypeExpr>,
+        e: &Expr,
+    ) -> bool {
+        let te = match &e.kind {
+            ExprKind::Identifier(n) => tes.get(n.as_str()),
+            ExprKind::TupleIndex { object, index } => match &object.kind {
+                ExprKind::Identifier(n) => match tes.get(n.as_str()).map(|t| &t.kind) {
+                    Some(TypeKind::Tuple(elems)) => elems.get(*index as usize),
+                    _ => None,
+                },
+                _ => None,
+            },
+            _ => None,
+        };
+        match te.map(|t| &t.kind) {
+            Some(TypeKind::Path(p)) => p
+                .segments
+                .last()
+                .is_some_and(|n| crate::codegen::param_own::is_primitive_type_name(n)),
+            _ => false,
+        }
+    }
+
     /// `match`-arm entry point for the retraction above.
     pub(super) fn retract_boxed_tuple_inner_drop_for_arm(
         &mut self,
@@ -13011,10 +13122,15 @@ impl<'ctx> super::Codegen<'ctx> {
         guard: Option<&Expr>,
     ) {
         let binds = Self::variant_arm_binds(pattern);
+        // B-2026-09-10-23 — leaf-aware; see `arm_binding_scalar_tes`.
+        let tes = self.arm_binding_scalar_tes(pattern);
+        let copy_read = |e: &Expr| Self::arm_binding_scalar_copy_read(&tes, e);
         let only_borrows = !binds.is_empty()
             && binds.iter().all(|v| {
-                super::consume_class::binding_only_borrowed(v, body)
-                    && guard.is_none_or(|g| super::consume_class::binding_only_borrowed(v, g))
+                crate::consume_class::binding_only_borrowed_with(v, body, &copy_read)
+                    && guard.is_none_or(|g| {
+                        crate::consume_class::binding_only_borrowed_with(v, g, &copy_read)
+                    })
             });
         if let Some(name) =
             self.boxed_tuple_payload_arm_takes_ownership(scrutinee, pattern, only_borrows)
@@ -13035,11 +13151,15 @@ impl<'ctx> super::Codegen<'ctx> {
         block: Option<&crate::ast::Block>,
     ) {
         let binds = Self::variant_arm_binds(pattern);
+        // B-2026-09-10-23 — the `if let` / `while let` sibling of the arm site's
+        // leaf-aware premise; same policy, block classifier.
+        let tes = self.arm_binding_scalar_tes(pattern);
+        let copy_read = |e: &Expr| Self::arm_binding_scalar_copy_read(&tes, e);
         let only_borrows = block.is_some_and(|b| {
             !binds.is_empty()
-                && binds
-                    .iter()
-                    .all(|v| super::consume_class::binding_only_borrowed_block(v, b))
+                && binds.iter().all(|v| {
+                    crate::consume_class::binding_only_borrowed_block_with(v, b, &copy_read)
+                })
         });
         if let Some(name) =
             self.boxed_tuple_payload_arm_takes_ownership(scrutinee, pattern, only_borrows)
