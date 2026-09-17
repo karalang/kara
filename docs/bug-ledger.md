@@ -92,7 +92,7 @@ distinguish "bugs flattening" from "we stopped writing them down."
 
 | class | total |
 |---|---|
-| run-vs-build | 425 |
+| run-vs-build | 426 |
 | miscompile | 415 |
 | leak | 369 |
 | double-free | 242 |
@@ -110,7 +110,7 @@ distinguish "bugs flattening" from "we stopped writing them down."
 
 | surface | total |
 |---|---|
-| codegen | 1824 |
+| codegen | 1825 |
 | interp | 467 |
 | typecheck | 302 |
 | other | 95 |
@@ -194,6 +194,7 @@ _Generated from `bug-ledger.jsonl` by `scripts/bug-curve.py` (2026-05-20 → 202
 | B-2026-09-17-11 | 2026-09-17 | codegen | medium | A `shared` PAYLOAD UNDER A BY-VALUE ENUM PARAM LOSES ITS rc-DEC ENTIRELY IN TWO SHAPES -- a `shared struct` used as the payload DIRECTLY (`enum Wd { Full(ShIn) }`) strands 32 B at 12 allocs / 10 frees, and the `Option` head over a struct carrying a `shared` FIELD strands 32 B at 11 / 9; both are the OPPOSITE of B-2026-09-16-34 (which ran one DEC too many over the same surface) and both are invisible to everything but a leak check | — |
 | B-2026-09-17-12 | 2026-09-17 | codegen | low | A GENERIC ENUM'S OWN `Drop` BODY RUNS AFTER ITS PAYLOAD'S ON EVERY COMPILED SURFACE WHEN THE PAYLOAD IS HEAP-BOXED -- `match g { G.X(t) => .. }` over a local, and `take(g: G[R])` by value, both print `dR20 dG` where `--interp` prints `dG dR20` (design.md Part 8: the user's `fn drop` body runs first, then the fields) | — |
 | B-2026-09-17-13 | 2026-09-17 | codegen | medium | A CONCRETE `impl G[R]` METHOD THAT MATCHES ON OWNED `self` LOSES THE GENERIC ENUM PAYLOAD'S `Drop` BODY ON EVERY COMPILED SURFACE -- `impl G[R] { fn read(self) { match self { G.X(t) => .. } } }` prints `x1` where `--interp` prints `dR23 x1`, with memory balanced so no sanitizer sees it | — |
+| B-2026-09-17-14 | 2026-09-17 | codegen | medium | A DESTRUCTURED TUPLE PAYLOAD DROPS ITS ELEMENTS IN DECLARATION ORDER ON THE COMPILED BACKENDS AND REVERSE ORDER UNDER `--interp` -- `match o { Some((a, b)) => .. }` over `Option[(R, R)]` prints `dR4 dR3` interpreted and `dR3 dR4` on jit / `-O0` / `-O2`; design.md Part 8's reverse-declaration rule makes the interpreter right, and the compiled backends honour that rule for other aggregates | — |
 
 ### Relocated
 
