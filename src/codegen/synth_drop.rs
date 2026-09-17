@@ -1756,6 +1756,132 @@ impl<'ctx> super::Codegen<'ctx> {
         }
     }
 
+    /// B-2026-09-16-31 — [`Self::struct_drop_mono_suffix`] widened to a
+    /// generic ENUM, for the three USER-DROP-WRAPPER steps only.
+    ///
+    /// `struct_generic_params` is populated from `Item::StructDef` alone, so a
+    /// generic enum's params are not in it and the suffix came back `None` for
+    /// `G[R]`. That sent `emit_user_drop_wrapper_mono` down its non-generic
+    /// fallback, whose whole content is `module.get_function("G.drop")` — the
+    /// one symbol a generic impl never emits, because `drop` is the single impl
+    /// method a program never calls and the declaration pass parks a generic
+    /// impl's methods in `generic_fns` awaiting a call site. So an
+    /// `impl[T] Drop for G[T]` body ran on `--interp` and on NO compiled
+    /// surface, with memory balanced throughout (the enum's payload and box
+    /// walks are registered separately and were unaffected) — the exact
+    /// B-2026-09-04-4 defect one type-shape over, and invisible to ASAN for
+    /// the same reason.
+    ///
+    /// Deliberately NOT a widening of `struct_generic_params` or of
+    /// `generic_struct_subst_from_inst`: the latter has 45-odd call sites that
+    /// would each start seeing a non-empty subst for an enum receiver, and the
+    /// former feeds the LLVM-layout pass. This answers only the question the
+    /// user-drop wrapper asks — "which of this type's params does `subst`
+    /// bind?" — and the struct table is still consulted first, so every
+    /// existing struct answer is byte-for-byte unchanged.
+    pub(super) fn user_drop_mono_suffix(
+        &self,
+        type_name: &str,
+        subst: &std::collections::HashMap<String, TypeExpr>,
+    ) -> Option<String> {
+        if let Some(suf) = self.struct_drop_mono_suffix(type_name, subst) {
+            return Some(suf);
+        }
+        if self
+            .type_decls
+            .struct_generic_params
+            .contains_key(type_name)
+        {
+            return None;
+        }
+        if !self.type_decls.enum_layouts.contains_key(type_name) {
+            return None;
+        }
+        let params = self.enum_generic_param_names(type_name);
+        let mut suf = String::new();
+        for p in &params {
+            if let Some(te) = subst.get(p) {
+                suf.push('$');
+                suf.push_str(&Self::drop_mono_mangle_component(te));
+            }
+        }
+        if suf.is_empty() {
+            None
+        } else {
+            Some(suf)
+        }
+    }
+
+    /// B-2026-09-16-31 — `ensure_generic_impl_method_mono` for a `Type.drop`
+    /// body, with the caller's PAYLOAD tables put back afterwards.
+    ///
+    /// Every other nested-mono entry is reached from a CALL, where the caller's
+    /// per-variable tables are saved by `take_var_side_tables` and the handful
+    /// it does not cover are ones a call site does not read across the
+    /// instantiation. A drop wrapper is reached from the middle of a `let`, and
+    /// `compile_function` opens by CLEARING sixteen `payload_vars` tables — so
+    /// instantiating `G.drop$R` there deleted the `let`'s own
+    /// `boxed_enum_payload_vars` entry for the binding being registered.
+    ///
+    /// What that costs is not the wrapper: it is the NEXT statement.
+    /// `suppress_inline_option_result_binding_move` decides whether a by-value
+    /// argument's source slot is zeroed by asking that set, so with the entry
+    /// gone `take(g)` moved the box to the callee AND left the caller's box
+    /// drop armed. Measured on `fn take(g: G[R])` over a generic enum with an
+    /// `impl[T] Drop`: SIGSEGV at -O0 and -O2, valgrind showing three invalid
+    /// reads and an invalid free of the 56-byte payload box, against a
+    /// concrete-`impl Drop for G[R]` twin that is valgrind-clean. Restoring
+    /// the tables around the nested compile is what makes the two spellings
+    /// emit the same IR again.
+    fn drop_mono_preserving_payload_vars(
+        &mut self,
+        type_name: &str,
+        subst: &std::collections::HashMap<String, TypeExpr>,
+    ) -> Option<FunctionValue<'ctx>> {
+        let saved = self.payload_vars.clone();
+        let f = self.ensure_generic_impl_method_mono(&format!("{type_name}.drop"), subst);
+        self.payload_vars = saved;
+        f
+    }
+
+    /// B-2026-09-16-31 — the param→arg map a generic ENUM's user-drop wrapper
+    /// needs, the sibling of [`Self::user_drop_mono_suffix`] and for the same
+    /// reason: `generic_struct_subst_from_inst` reads `struct_generic_params`,
+    /// which holds no enum, so `G[R]` produced an EMPTY subst and the suffix
+    /// above had nothing to fold in.
+    pub(super) fn user_drop_subst_from_inst(
+        &self,
+        type_name: &str,
+        inst: &TypeExpr,
+    ) -> std::collections::HashMap<String, TypeExpr> {
+        let subst = self.generic_struct_subst_from_inst(type_name, inst);
+        if !subst.is_empty()
+            || self
+                .type_decls
+                .struct_generic_params
+                .contains_key(type_name)
+        {
+            return subst;
+        }
+        let mut subst = std::collections::HashMap::new();
+        if let TypeKind::Path(p) = &inst.kind {
+            if p.segments.last().map(String::as_str) == Some(type_name) {
+                if let Some(args) = p.generic_args.as_ref() {
+                    for (param, arg) in self
+                        .enum_generic_param_names(type_name)
+                        .iter()
+                        .zip(args.iter())
+                    {
+                        if let GenericArg::Type(te) = arg {
+                            subst.insert(param.clone(), te.clone());
+                        }
+                    }
+                }
+            }
+        }
+        subst
+    }
+
     fn emit_struct_drop_synthesis_impl(
         &mut self,
         struct_name: &str,
@@ -8178,7 +8304,7 @@ impl<'ctx> super::Codegen<'ctx> {
         subst: &std::collections::HashMap<String, TypeExpr>,
     ) -> Option<FunctionValue<'ctx>> {
         let suffix = self
-            .struct_drop_mono_suffix(type_name, subst)
+            .user_drop_mono_suffix(type_name, subst)
             .unwrap_or_default();
         let fn_name = format!("karac_dropnf_{type_name}{suffix}");
         if let Some(f) = self.module.get_function(&fn_name) {
@@ -12470,10 +12596,8 @@ impl<'ctx> super::Codegen<'ctx> {
         if !owns_body {
             return None;
         }
-        if self.struct_drop_mono_suffix(type_name, subst).is_some() {
-            if let Some(f) =
-                self.ensure_generic_impl_method_mono(&format!("{type_name}.drop"), subst)
-            {
+        if self.user_drop_mono_suffix(type_name, subst).is_some() {
+            if let Some(f) = self.drop_mono_preserving_payload_vars(type_name, subst) {
                 return Some(f);
             }
         }
@@ -12514,7 +12638,7 @@ impl<'ctx> super::Codegen<'ctx> {
         type_name: &str,
         subst: &std::collections::HashMap<String, TypeExpr>,
     ) -> Option<FunctionValue<'ctx>> {
-        let Some(suffix) = self.struct_drop_mono_suffix(type_name, subst) else {
+        let Some(suffix) = self.user_drop_mono_suffix(type_name, subst) else {
             return self.emit_user_drop_wrapper(type_name);
         };
         let cache_key = format!("{type_name}{suffix}");
@@ -12524,8 +12648,7 @@ impl<'ctx> super::Codegen<'ctx> {
         // Instantiate the user body FIRST — it compiles a whole function
         // inline, with its own builder/state save-restore, so it must not run
         // while the builder is positioned inside the half-built wrapper.
-        let user_drop_fn =
-            self.ensure_generic_impl_method_mono(&format!("{type_name}.drop"), subst)?;
+        let user_drop_fn = self.drop_mono_preserving_payload_vars(type_name, subst)?;
 
         let fn_name = format!("karac_drop_{cache_key}");
         if let Some(f) = self.module.get_function(&fn_name) {

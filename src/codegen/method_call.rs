@@ -9709,6 +9709,71 @@ impl<'ctx> super::Codegen<'ctx> {
         // fns are keyed by bare name).
         if let Some(receiver_type) = self.inferred_receiver_type(object) {
             let qualified = format!("{}.{}", receiver_type, method);
+            if self.mono_state.generic_fns.contains_key(&qualified) {
+                // B-2026-09-16-31 — the GENERIC-impl twin of the owned-`self`
+                // receiver disarm B-2026-08-01-7 wrote for the non-generic
+                // path. That block sits inside
+                // `module.get_function(&qualified).filter(|_| !generic_fns…)`,
+                // so a method declared in an `impl[T] G[T]` block — whose key
+                // IS in `generic_fns` — never reached it. The callee's arm
+                // channel took the boxed payload over (it copies the value out
+                // of the box and runs `karac_drop_<T>` at the arm's end, body
+                // AND interior) while the named receiver kept both its
+                // payload-bodies walker and its box's interior drop: a double
+                // free of the payload's heap on every compiled surface,
+                // SIGSEGV at -O2 and `free(): double free detected` at -O0,
+                // where `--interp` printed the correct `dR23 x1`.
+                //
+                // TWO actions, because the receiver is BOXED here and is not on
+                // the non-generic path: an erased `G[T]` payload wider than the
+                // one-word area is heap-boxed, so the caller holds a
+                // `BoxedEnumDrop` whose interior step frees exactly what the
+                // arm just freed. The box itself stays the caller's — the
+                // callee copied the payload out and freed nothing of the
+                // envelope — so only the INNER step is cleared and `free(box)`
+                // survives.
+                //
+                // Gated on the same question the non-generic block asks: does
+                // anyone else own the payload? A callee that never destructures
+                // `self` (`fn none(self) -> i64 { return 5 }`) has no arm
+                // channel, and standing the caller down for it would lose the
+                // body outright — the B-2026-09-16-21 failure one spelling
+                // over.
+                if let ExprKind::Identifier(recv_name) = &object.kind {
+                    if matches!(
+                        self.impl_method_self_and_borrow_return(&receiver_type, method),
+                        Some((crate::ast::SelfParam::Owned, _))
+                    ) && self
+                        .var_types
+                        .var_type_names
+                        .get(recv_name.as_str())
+                        .is_some_and(|tn| self.type_decls.enum_layouts.contains_key(tn.as_str()))
+                        && self
+                            .find_impl_method_ast(&receiver_type, method)
+                            .is_some_and(|f| {
+                                let items = self
+                                    .program_snapshot
+                                    .as_deref()
+                                    .map(|p| p.items.as_slice())
+                                    .unwrap_or(&[]);
+                                crate::ast::fn_binds_self_part_out(f)
+                                    || (crate::ast::fn_matches_on_bare_self(f)
+                                        && !(self
+                                            .owned_enum_receiver_arms_bind_views(&receiver_type)
+                                            && crate::ast::fn_bare_self_arms_bind_views(f)))
+                                    || !crate::ast::owned_self_return_cannot_carry_receiver(
+                                        f,
+                                        &receiver_type,
+                                        items,
+                                    )
+                            })
+                    {
+                        let recv_name = recv_name.clone();
+                        self.suppress_container_elem_bodies_for_var(&recv_name);
+                        self.clear_boxed_enum_inner_drop(&recv_name, false);
+                    }
+                }
+            }
             if let Some(generic_fn) = self.mono_state.generic_fns.get(&qualified) {
                 let mut all_args: Vec<CallArg> = Vec::with_capacity(args.len() + 1);
                 all_args.push(CallArg {
@@ -11163,6 +11228,39 @@ impl<'ctx> super::Codegen<'ctx> {
                     // before this free). Unchanged from the memory-only arm
                     // this was until B-2026-09-06-38.
                     self.track_enum_var(&type_name, slot);
+                    // B-2026-09-16-31 — the BOXED-payload half of that memory,
+                    // which this arm never had. `track_enum_var` reads the
+                    // ERASED layout, and a payload declared as one of the
+                    // enum's own generic params records no heap there, so the
+                    // call above is a no-op for a `G[R]` temp: the box envelope
+                    // and everything under it were nobody's. Measured at `-O0`
+                    // on `P.X(mk(27)).pnone()` and `mkp(28).pnone()` —
+                    // 56 direct + 11 indirect bytes lost per call, PRE-EXISTING
+                    // and identical before this fix, which is what says the
+                    // hole is this arm's and not the ownership move above.
+                    //
+                    // The same three-line shape as the `let` site
+                    // (`stmts.rs`, B-2026-09-13-15), the by-value param site
+                    // (`functions.rs`) and the discarded-return site
+                    // (`call_dispatch.rs`, B-2026-09-14-9), `true` included:
+                    // the constructor lowering stands every array source down,
+                    // so the box owns its interior on every spelling.
+                    if let Some(inst) = recv_inst.clone() {
+                        let inst = self.subst_monomorph_type_params(&inst);
+                        for (enum_name, variant, payload_te) in
+                            self.user_enum_boxed_payload_variants(&inst)
+                        {
+                            let inner = self.enum_boxed_payload_interior_drop(&payload_te, true);
+                            self.track_boxed_enum_var_with_inner_drop_for_payload(
+                                "__urecv_drop_tmp",
+                                slot,
+                                &enum_name,
+                                &variant,
+                                inner,
+                                &payload_te,
+                            );
+                        }
+                    }
                     // B-2026-09-06-38 — an ENUM receiver temp's BODIES. This
                     // arm was memory-only (B-2026-08-01-5) on the reasoning
                     // that a ref-self method matching on `self` fires the
@@ -11250,6 +11348,39 @@ impl<'ctx> super::Codegen<'ctx> {
                                 walk,
                                 UserDropKind::ContainerElemBodies,
                             );
+                        }
+                        // B-2026-09-16-31 — the GENERIC-PAYLOAD complement. The
+                        // name-keyed walker above declines a variant whose
+                        // payload is a bare generic param by contract
+                        // (B-2026-09-10-2), so a `G[R]` temp receiver reached
+                        // this arm and registered NOTHING: the payload's `Drop`
+                        // body was lost on every compiled surface for the
+                        // concrete impl block (`impl G[R]`) and only survived
+                        // for the generic one (`impl[T] G[T]`) by way of the
+                        // monomorph's own param registration — the very
+                        // registration that double-freed a NAMED-local receiver
+                        // and is now stood down for `self`. Registering the
+                        // instantiation-keyed sibling here is what makes the
+                        // two impl spellings agree, and makes caller-retains
+                        // the single answer for an owned-`self` receiver.
+                        //
+                        // Both walkers, not one or the other: they are exact
+                        // complements (name-keyed takes the concretely-declared
+                        // payloads, this one the generic-param payloads), so an
+                        // enum with both kinds of variant needs both and
+                        // neither can double the other.
+                        if let Some(inst) = recv_inst.as_ref() {
+                            if let Some(walk) =
+                                self.emit_generic_enum_payload_user_drop_bodies_fn(inst)
+                            {
+                                self.track_user_drop_var_with_fn(
+                                    &type_name,
+                                    "__urecv_drop_tmp",
+                                    slot,
+                                    walk,
+                                    UserDropKind::ContainerElemBodies,
+                                );
+                            }
                         }
                     }
                     if (ref_self_borrows || owned_self_shell) && has_user_drop {

@@ -69146,6 +69146,76 @@ fn main() {
     assert_eq!(out, "none\n  x5\n  dE\n  dR1\ntemp\n  dE\n  dR2\n  x5\nnodrop\n  x5\n  dR3\ngeneric\n  x5\n  dR4\nmatches\n  x5\n  dE\n  dR5\nret_self\n  dE\n  dR6\n  dE\n  got\nwrap\n  dE\n  dR7\n  dE\n  got\nrefm\n  x3\n  dE\n  dR8\nplain\n  dE\n  dR9\n  x9\nend\n", "got:\n{out}");
 }
 
+/// B-2026-09-16-31 — the INTERPRETER twin of `tests/codegen.rs`'s
+/// `e2e_generic_enum_with_generic_drop_impl_survives_an_owned_self_method`,
+/// byte-identical source and expectation.
+///
+/// Every cell here already passed on `--interp` when the row was filed: the
+/// crash and the three lost/doubled bodies it turned out to be hiding were all
+/// on the compiled side. That is exactly why the twin is worth having — this
+/// side is the ORACLE the compiled transcript is measured against, and without
+/// it in the tree nothing stops a later change moving both halves together
+/// into a new agreed gap.
+#[test]
+fn test_generic_enum_with_generic_drop_impl_survives_an_owned_self_method() {
+    let out = run(r#"struct R { id: i64, tag: String, xs: Vec[i64] }
+impl Drop for R { fn drop(mut ref self) { println(f"  dR{self.id}") } }
+fn mk(i: i64) -> R { return R { id: i, tag: f"t{i}", xs: [i] } }
+
+enum G[T] { X(T), Y }
+impl[T] Drop for G[T] { fn drop(mut ref self) { println("  dG") } }
+impl[T] G[T] {
+    fn gread(self) -> i64 { match self { G.X(t) => { return 1; } G.Y => { return 0; } } }
+    fn gnone(self) -> i64 { return 5 }
+}
+
+enum K[T] { X(T), Y }
+impl Drop for K[R] { fn drop(mut ref self) { println("  dK") } }
+impl[T] K[T] { fn kread(self) -> i64 { match self { K.X(t) => { return 1; } K.Y => { return 0; } } } }
+
+enum H[T] { X(T), Y }
+impl[T] H[T] {
+    fn hnone(self) -> i64 { return 5 }
+    fn hread(self) -> i64 { match self { H.X(t) => { return 1; } H.Y => { return 0; } } }
+}
+
+enum P[T] { X(T), Y }
+impl P[R] { fn pnone(self) -> i64 { return 5 } }
+fn mkp(i: i64) -> P[R] { return P.X(mk(i)) }
+
+enum E { A(R), B }
+impl Drop for E { fn drop(mut ref self) { println("  dE") } }
+impl E {
+    fn eread(self) -> i64 { match self { E.A(t) => { return 1; } E.B => { return 0; } } }
+    fn enone(self) -> i64 { return 5 }
+}
+
+struct S[T] { v: T }
+impl[T] Drop for S[T] { fn drop(mut ref self) { println("  dS") } }
+impl[T] S[T] { fn snone(self) -> i64 { return 5 } }
+
+fn main() {
+    println("repro");  { let g: G[R] = G.X(mk(20)); println(f"  x{g.gread()}") }
+    println("gnone");  { let g: G[R] = G.X(mk(21)); println(f"  x{g.gnone()}") }
+    println("glocal"); { let g: G[i64] = G.X(7); println("  x1") }
+    println("gnarrow");{ let g: G[i64] = G.X(7); println(f"  x{g.gnone()}") }
+    println("kread");  { let k: K[R] = K.X(mk(22)); println(f"  x{k.kread()}") }
+    println("hnone");  { let h: H[R] = H.X(mk(23)); println(f"  x{h.hnone()}") }
+    println("hread");  { let h: H[R] = H.X(mk(24)); println(f"  x{h.hread()}") }
+    println("htemp");  { println(f"  x{H.X(mk(25)).hnone()}") }
+    println("pnone");  { let p: P[R] = P.X(mk(26)); println(f"  x{p.pnone()}") }
+    println("ptemp");  { println(f"  x{P.X(mk(27)).pnone()}") }
+    println("pcall");  { println(f"  x{mkp(28).pnone()}") }
+    println("twomono");{ let a: G[R] = G.X(mk(29)); println(f"  x{a.gnone()}"); let b: G[i64] = G.X(7); println(f"  y{b.gnone()}") }
+    println("enone");  { let e: E = E.A(mk(30)); println(f"  x{e.enone()}") }
+    println("eread");  { let e: E = E.A(mk(31)); println(f"  x{e.eread()}") }
+    println("snone");  { let s: S[R] = S { v: mk(32) }; println(f"  x{s.snone()}") }
+    println("end")
+}
+"#);
+    assert_eq!(out, "repro\n  x1\n  dG\n  dR20\ngnone\n  x5\n  dG\n  dR21\nglocal\n  dG\n  x1\ngnarrow\n  x5\n  dG\nkread\n  x1\n  dK\n  dR22\nhnone\n  x5\n  dR23\nhread\n  dR24\n  x1\nhtemp\n  dR25\n  x5\npnone\n  x5\n  dR26\nptemp\n  dR27\n  x5\npcall\n  dR28\n  x5\ntwomono\n  x5\n  dG\n  dR29\n  y5\n  dG\nenone\n  x5\n  dE\n  dR30\neread\n  x1\n  dE\n  dR31\nsnone\n  x5\n  dS\n  dR32\nend\n", "got:\n{out}");
+}
+
 /// B-2026-09-06-39 — A READ-ONLY ARM OVER AN OWNED ENUM RECEIVER NOW RUNS THE
 /// PAYLOAD'S `Drop` BODY **AFTER** THE SHELL'S, the design.md § Part 8 order
 /// ("the user's `fn drop` body runs first, then the compiler drops each field").

@@ -10879,8 +10879,12 @@ impl<'ctx> super::Codegen<'ctx> {
         binding_ptr: PointerValue<'ctx>,
         inst: Option<&TypeExpr>,
     ) -> bool {
+        // B-2026-09-16-31 — the enum-aware subst: `generic_struct_subst_from_inst`
+        // reads the struct-only param table, so a generic ENUM binding resolved
+        // to an empty map and the wrapper below fell through to the `G.drop`
+        // symbol a generic impl never emits.
         let subst = match inst {
-            Some(i) => self.generic_struct_subst_from_inst(type_name, i),
+            Some(i) => self.user_drop_subst_from_inst(type_name, i),
             None => std::collections::HashMap::new(),
         };
         let Some(drop_fn) = self.emit_user_drop_wrapper_mono(type_name, &subst) else {

@@ -1359,6 +1359,10 @@ impl<'ctx> super::Codegen<'ctx> {
                                     .pattern_state
                                     .current_bare_tuple_bindings
                                     .contains(name.as_str())
+                                    // B-2026-09-16-31 — nor a VIEW onto a
+                                    // payload BOX the caller still owns. See
+                                    // `bare_self_view_payload_aliases_box`.
+                                    && !self.bare_self_view_payload_aliases_box(tn)
                                 {
                                     // B-2026-09-02-23 — a bare-tuple element
                                     // binding owns nothing: it is a bit-copy of

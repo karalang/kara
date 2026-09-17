@@ -1840,6 +1840,49 @@ impl<'ctx> super::Codegen<'ctx> {
                 .is_some_and(|p| p.drop_method_keys.contains_key(tn.as_str()))
     }
 
+    /// B-2026-09-16-31 — is this arm's payload binding a bare-copy VIEW onto a
+    /// payload BOX that the caller, not this frame, owns?
+    ///
+    /// [`Self::bare_self_is_owned_drop_enum_receiver`] says the arms of an
+    /// owned-`self` method over a `Drop`-bearing enum bind views, and the
+    /// binding site backs that with a MEMORY-only registration: the arm frees
+    /// the copy's buffers and the caller runs the body. That is exactly right
+    /// while the copy is a real one — an owned enum param's prologue deep-copies
+    /// its payload heap in place (`deep_copy_enum_heap_payload_in_place`), so
+    /// caller and callee hold independent buffers.
+    ///
+    /// It is wrong the moment the payload is HEAP-BOXED, because that prologue
+    /// walks the enum's BASE layout and a payload declared as one of the enum's
+    /// own generic params is a single erased word there — nothing it recognises
+    /// as heap-bearing, so no copy is made. `reconstruct_payload_value` then
+    /// loads the struct straight out of the box, and the arm's memory drop frees
+    /// buffers the caller's box drop frees again: measured on
+    /// `enum G[T] { X(T), Y }` + `impl Drop for G[R]` + an owned-`self` arm as
+    /// `free(): double free detected in tcache 2` at `-O0` (valgrind: two
+    /// invalid frees, no leak), and clean at `-O2` only because the optimizer
+    /// removes the pair.
+    ///
+    /// The predicate is `coerce_to_payload_words`' own boxing test — the
+    /// binding's LLVM width against the enum's erased payload area — so an
+    /// INLINE payload of the same shape (`enum E { A(R), B }`, area 7, `R` 7)
+    /// answers false and keeps the registration it has always had.
+    pub(super) fn bare_self_view_payload_aliases_box(&self, tn: &str) -> bool {
+        if !self.bare_self_is_owned_drop_enum_receiver() {
+            return false;
+        }
+        let Some(enum_name) = self.var_types.var_type_names.get("self") else {
+            return false;
+        };
+        let Some(layout) = self.type_decls.enum_layouts.get(enum_name.as_str()) else {
+            return false;
+        };
+        let area = (layout.llvm_type.count_fields() as usize).saturating_sub(1);
+        let Some(st) = self.type_decls.struct_types.get(tn).copied() else {
+            return false;
+        };
+        Self::llvm_type_word_count(st.into()) > area
+    }
+
     /// Is this scrutinee expression a FRESH OWNING temp — a call, or a
     /// method call that isn't a borrow accessor (`scrutinee_is_borrow_call`)?
     /// The codegen twin of the interpreter's `scrutinee_expr_is_consuming`

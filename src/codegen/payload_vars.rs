@@ -12,6 +12,18 @@
 
 use std::collections::{HashMap, HashSet};
 
+/// B-2026-09-16-31 — `Clone` so a nested mono compile started from inside a
+/// STATEMENT can be undone. `compile_function` clears sixteen of these tables
+/// on entry, which is right for the function being compiled and wrong for the
+/// caller when the compile is nested: `emit_user_drop_wrapper_mono` instantiates
+/// a generic `impl[T] Drop` body from the middle of a `let`, and the clear took
+/// the `let`'s own `boxed_enum_payload_vars` entry with it. The argument-move
+/// disarm one statement later then could not see the binding and skipped its
+/// slot zero, so a by-value call both moved the box to the callee and left the
+/// caller's box drop armed — a use-after-free plus double free of the payload,
+/// SIGSEGV at every opt level. `take_var_side_tables` is the same idea for the
+/// twenty tables it covers; this one is not among them.
+#[derive(Clone)]
 pub(crate) struct PayloadVars<'ctx> {
     /// Names of `Option[T]` bindings that registered a
     /// `CleanupAction::FreeInlineOptionPayload` (T is an inline heap
@@ -455,6 +467,7 @@ pub(crate) struct PayloadVars<'ctx> {
 /// drain point is whatever the surrounding cleanup happens to be under, not the
 /// move site's. That is the same "hand the slot's own layout down" discipline
 /// B-2026-08-06-2 established for `zero_struct_field_move_cap_in`.
+#[derive(Clone)]
 pub(crate) struct PendingBoxFieldZero<'ctx> {
     pub(crate) box_ptr: inkwell::values::PointerValue<'ctx>,
     pub(crate) struct_name: String,

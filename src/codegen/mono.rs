@@ -3229,6 +3229,8 @@ impl<'ctx> super::Codegen<'ctx> {
             // body's `clear()` would erase the enclosing function's own params
             // for everything after the call.
             let saved_fn_param_names = std::mem::take(&mut self.fn_ctx.current_fn_param_names);
+            // B-2026-09-16-31 — per-function, set by `compile_mono_function`.
+            let saved_self_arms_bind_views = std::mem::take(&mut self.fn_ctx.self_arms_bind_views);
             let saved_owned_struct_params =
                 std::mem::take(&mut self.borrow_vars.owned_struct_params);
             let saved_param_view_locals = std::mem::take(&mut self.payload_vars.param_view_locals);
@@ -3294,6 +3296,7 @@ impl<'ctx> super::Codegen<'ctx> {
             self.borrow_vars.ref_params = saved_ref_params;
             self.borrow_vars.signature_ref_params = saved_signature_ref_params;
             self.fn_ctx.current_fn_param_names = saved_fn_param_names;
+            self.fn_ctx.self_arms_bind_views = saved_self_arms_bind_views;
             self.borrow_vars.owned_struct_params = saved_owned_struct_params;
             self.payload_vars.param_view_locals = saved_param_view_locals;
             self.drop_rc.param_view_callee_owned = saved_param_view_callee_owned;
@@ -4046,6 +4049,8 @@ impl<'ctx> super::Codegen<'ctx> {
         let saved_signature_ref_params = std::mem::take(&mut self.borrow_vars.signature_ref_params);
         // B-2026-09-03-23 — see the twin in `compile_generic_call`.
         let saved_fn_param_names = std::mem::take(&mut self.fn_ctx.current_fn_param_names);
+        // B-2026-09-16-31 — per-function, set by `compile_mono_function`.
+        let saved_self_arms_bind_views = std::mem::take(&mut self.fn_ctx.self_arms_bind_views);
         let saved_owned_struct_params = std::mem::take(&mut self.borrow_vars.owned_struct_params);
         let saved_param_view_locals = std::mem::take(&mut self.payload_vars.param_view_locals);
         let saved_param_view_callee_owned =
@@ -4093,6 +4098,7 @@ impl<'ctx> super::Codegen<'ctx> {
         self.borrow_vars.ref_params = saved_ref_params;
         self.borrow_vars.signature_ref_params = saved_signature_ref_params;
         self.fn_ctx.current_fn_param_names = saved_fn_param_names;
+        self.fn_ctx.self_arms_bind_views = saved_self_arms_bind_views;
         self.borrow_vars.owned_struct_params = saved_owned_struct_params;
         self.payload_vars.param_view_locals = saved_param_view_locals;
         self.drop_rc.param_view_callee_owned = saved_param_view_callee_owned;
@@ -4267,6 +4273,18 @@ impl<'ctx> super::Codegen<'ctx> {
         // (`compile_generic_call`, the layout-mono path) save and restore the
         // caller's sets around the call, exactly as they already do for
         // `variables` / `ref_params`.
+        // B-2026-09-16-31 — the mono body's own answer to "do my bare-`self`
+        // arms bind views?", the peer of `compile_function`'s line and for the
+        // same reason: this is per-FUNCTION state, and a mono is compiled
+        // INLINE inside its caller, so leaving it unset made the mono read the
+        // CALLER's answer. For a method declared in an `impl[T] G[T]` block over
+        // an enum with its own `Drop`, the caller (a `main` with no `self` at
+        // all) answers false, so the mono's arm TOOK the payload while the
+        // caller's named receiver kept it — `free(): double free detected` on
+        // every compiled surface, against a concrete-`impl G[R]` twin that is
+        // correct. Restored by `ensure_mono_generated` / `compile_generic_call`
+        // alongside `current_fn_param_names`.
+        self.fn_ctx.self_arms_bind_views = crate::ast::fn_bare_self_arms_bind_views(func);
         self.fn_ctx.current_fn_param_names.clear();
         for p in &func.params {
             if let crate::ast::PatternKind::Binding(n) = &p.pattern.kind {
@@ -4476,7 +4494,33 @@ impl<'ctx> super::Codegen<'ctx> {
             // INLINE inside its caller's, so that field still holds the caller's
             // set and writing to it would corrupt the caller's `Result[shared]`
             // arm.
+            //
+            // NOT the `self` RECEIVER, and that carve-out is the whole of
+            // B-2026-09-16-31. The pair this arm belongs to is
+            // callee-owns + `compile_generic_call` retracts the caller's
+            // drop, and that retraction is written for ARGUMENTS: a method
+            // call's receiver never passes through it. So an owned-`self`
+            // method on a GENERIC impl block registered the receiver's box
+            // free and its payload `Drop` body here while the caller kept
+            // both — `impl[T] G[T] { fn none(self) }` over `let g: G[R]`
+            // freed `R`'s interior twice and SIGSEGV'd in `free` on every
+            // compiled surface, at both opt levels, where `--interp` ran it
+            // correctly.
+            //
+            // Caller-retains is the answer rather than a matching receiver
+            // retraction, because it is what every neighbouring spelling
+            // already does and the only one that is A/B-correct: the
+            // CONCRETE impl block on the same generic enum
+            // (`impl G[R] { fn none(self) }`) registers nothing here and
+            // prints `x5 dR20`, the interpreter's order, and a generic
+            // STRUCT receiver (`impl[T] S[T]`) never reached this arm at
+            // all. A receiver retraction would have balanced the memory and
+            // left the transcript at `dR20 x5` — the named local's body
+            // firing BEFORE the statement that consumed it, which is the
+            // divergence the by-value generic free fn still shows
+            // (filed separately).
             if !self.borrow_vars.ref_params.contains_key(&param_name)
+                && param_name != "self"
                 && nonescaping_params.contains(&param_name)
             {
                 let mono_ty = self.subst_monomorph_type_params(&param.ty);

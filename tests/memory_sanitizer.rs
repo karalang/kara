@@ -4140,6 +4140,144 @@ fn main() {
         );
     }
 
+    /// B-2026-09-16-31 — the MEMORY half of `tests/codegen.rs`'s
+    /// `e2e_generic_enum_with_generic_drop_impl_survives_an_owned_self_method`
+    /// under ASAN + LSan, same fifteen cells and same transcript.
+    ///
+    /// The row was a SIGSEGV, so the free side is the half that has to stay
+    /// pinned: two of its four defects were an owner registered twice (the
+    /// monomorph's `self` prologue against the caller's binding; the generic
+    /// impl's arm channel against the named receiver), and two more were owners
+    /// missing entirely (a `G[R]` temp receiver's box and interior, 56 + 11
+    /// bytes per call under valgrind at `-O0`, which the CONCRETE `impl G[R]`
+    /// spelling leaked before this row too).
+    ///
+    /// The fifth hazard is the one only a sanitizer can hold: instantiating
+    /// `G.drop$R` from inside a `let` cleared the caller's `payload_vars`
+    /// tables, so the NEXT statement's by-value call moved the box to the
+    /// callee and left the caller's box drop armed — three invalid reads and an
+    /// invalid free of one 56-byte block, and clean at `-O2` only because the
+    /// optimizer removes the pair. A transcript fixture cannot see that; this
+    /// one can.
+    #[test]
+    fn asan_generic_enum_with_generic_drop_impl_keeps_one_owner() {
+        assert_clean_asan_run(
+            "struct R { id: i64, tag: String, xs: Vec[i64] }\n\
+             impl Drop for R { fn drop(mut ref self) { println(f\"  dR{self.id}\") } }\n\
+             fn mk(i: i64) -> R { return R { id: i, tag: f\"t{i}\", xs: [i] } }\n\
+             \n\
+             enum G[T] { X(T), Y }\n\
+             impl[T] Drop for G[T] { fn drop(mut ref self) { println(\"  dG\") } }\n\
+             impl[T] G[T] {\n\
+             \x20\x20\x20\x20fn gread(self) -> i64 { match self { G.X(t) => { return 1; } G.Y => { return 0; } } }\n\
+             \x20\x20\x20\x20fn gnone(self) -> i64 { return 5 }\n\
+             }\n\
+             \n\
+             enum K[T] { X(T), Y }\n\
+             impl Drop for K[R] { fn drop(mut ref self) { println(\"  dK\") } }\n\
+             impl[T] K[T] { fn kread(self) -> i64 { match self { K.X(t) => { return 1; } K.Y => { return 0; } } } }\n\
+             \n\
+             enum H[T] { X(T), Y }\n\
+             impl[T] H[T] {\n\
+             \x20\x20\x20\x20fn hnone(self) -> i64 { return 5 }\n\
+             \x20\x20\x20\x20fn hread(self) -> i64 { match self { H.X(t) => { return 1; } H.Y => { return 0; } } }\n\
+             }\n\
+             \n\
+             enum P[T] { X(T), Y }\n\
+             impl P[R] { fn pnone(self) -> i64 { return 5 } }\n\
+             fn mkp(i: i64) -> P[R] { return P.X(mk(i)) }\n\
+             \n\
+             enum E { A(R), B }\n\
+             impl Drop for E { fn drop(mut ref self) { println(\"  dE\") } }\n\
+             impl E {\n\
+             \x20\x20\x20\x20fn eread(self) -> i64 { match self { E.A(t) => { return 1; } E.B => { return 0; } } }\n\
+             \x20\x20\x20\x20fn enone(self) -> i64 { return 5 }\n\
+             }\n\
+             \n\
+             struct S[T] { v: T }\n\
+             impl[T] Drop for S[T] { fn drop(mut ref self) { println(\"  dS\") } }\n\
+             impl[T] S[T] { fn snone(self) -> i64 { return 5 } }\n\
+             \n\
+             fn main() {\n\
+             \x20\x20\x20\x20println(\"repro\");  { let g: G[R] = G.X(mk(20)); println(f\"  x{g.gread()}\") }\n\
+             \x20\x20\x20\x20println(\"gnone\");  { let g: G[R] = G.X(mk(21)); println(f\"  x{g.gnone()}\") }\n\
+             \x20\x20\x20\x20println(\"glocal\"); { let g: G[i64] = G.X(7); println(\"  x1\") }\n\
+             \x20\x20\x20\x20println(\"gnarrow\");{ let g: G[i64] = G.X(7); println(f\"  x{g.gnone()}\") }\n\
+             \x20\x20\x20\x20println(\"kread\");  { let k: K[R] = K.X(mk(22)); println(f\"  x{k.kread()}\") }\n\
+             \x20\x20\x20\x20println(\"hnone\");  { let h: H[R] = H.X(mk(23)); println(f\"  x{h.hnone()}\") }\n\
+             \x20\x20\x20\x20println(\"hread\");  { let h: H[R] = H.X(mk(24)); println(f\"  x{h.hread()}\") }\n\
+             \x20\x20\x20\x20println(\"htemp\");  { println(f\"  x{H.X(mk(25)).hnone()}\") }\n\
+             \x20\x20\x20\x20println(\"pnone\");  { let p: P[R] = P.X(mk(26)); println(f\"  x{p.pnone()}\") }\n\
+             \x20\x20\x20\x20println(\"ptemp\");  { println(f\"  x{P.X(mk(27)).pnone()}\") }\n\
+             \x20\x20\x20\x20println(\"pcall\");  { println(f\"  x{mkp(28).pnone()}\") }\n\
+             \x20\x20\x20\x20println(\"twomono\");{ let a: G[R] = G.X(mk(29)); println(f\"  x{a.gnone()}\"); let b: G[i64] = G.X(7); println(f\"  y{b.gnone()}\") }\n\
+             \x20\x20\x20\x20println(\"enone\");  { let e: E = E.A(mk(30)); println(f\"  x{e.enone()}\") }\n\
+             \x20\x20\x20\x20println(\"eread\");  { let e: E = E.A(mk(31)); println(f\"  x{e.eread()}\") }\n\
+             \x20\x20\x20\x20println(\"snone\");  { let s: S[R] = S { v: mk(32) }; println(f\"  x{s.snone()}\") }\n\
+             \x20\x20\x20\x20println(\"end\")\n\
+             }\n\
+",
+            &[
+                "repro",
+                "  x1",
+                "  dG",
+                "  dR20",
+                "gnone",
+                "  x5",
+                "  dG",
+                "  dR21",
+                "glocal",
+                "  dG",
+                "  x1",
+                "gnarrow",
+                "  x5",
+                "  dG",
+                "kread",
+                "  x1",
+                "  dK",
+                "  dR22",
+                "hnone",
+                "  x5",
+                "  dR23",
+                "hread",
+                "  dR24",
+                "  x1",
+                "htemp",
+                "  dR25",
+                "  x5",
+                "pnone",
+                "  x5",
+                "  dR26",
+                "ptemp",
+                "  dR27",
+                "  x5",
+                "pcall",
+                "  dR28",
+                "  x5",
+                "twomono",
+                "  x5",
+                "  dG",
+                "  dR29",
+                "  y5",
+                "  dG",
+                "enone",
+                "  x5",
+                "  dE",
+                "  dR30",
+                "eread",
+                "  x1",
+                "  dE",
+                "  dR31",
+                "snone",
+                "  x5",
+                "  dS",
+                "  dR32",
+                "end",
+            ],
+            "generic_enum_generic_drop_one_owner",
+        );
+    }
+
     /// B-2026-09-06-45 — the MEMORY half of `tests/codegen.rs`'s
     /// `e2e_nested_self_rebind_runs_each_body_once` under ASAN + LSan. The
     /// callee-side registration is the binding's OWN wrapper rather than a
