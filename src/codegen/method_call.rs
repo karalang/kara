@@ -7583,6 +7583,49 @@ impl<'ctx> super::Codegen<'ctx> {
                         );
                     }
                 }
+                // B-2026-09-10-11 — the MEMORY leg of the same hand-off,
+                // and the split is the usual one: everything above this line
+                // disarms the receiver's BODIES walk, and memory does not
+                // follow the move by itself (B-2026-08-28-57).
+                //
+                // `move_declined_copy_struct_arg_for` is reached for every
+                // ARGUMENT a few dozen lines below, and its own doc calls
+                // itself "the shared by-value-owned-arg choke point so every
+                // call-arg site is covered". A method RECEIVER is not an arg,
+                // so it never reached it: a named binding moved into an owned
+                // `self` kept its `CleanupAction::EnumDrop` while the callee's
+                // frame owned the same value. Two owners.
+                //
+                // Invisible until an enum's drop switch actually does work.
+                // For a `shared` payload the switch was a no-op (this row's
+                // own bug), and for a buffer payload the callee's entry copy
+                // (`deep_copy_enum_heap_payload_in_place`) duplicates it, so
+                // the caller's drop frees a DIFFERENT buffer. Take away either
+                // mask and the two drops hit one allocation: measured as
+                // `Invalid read` + `Invalid write` on a freed 16-byte RC block
+                // for `a.passm()` and `Et.A(Sh { .. }).passm()` over
+                // `fn passm(self) -> Et`, while `use2(z)` over a by-value param
+                // — the arg spelling of the same move — was clean throughout.
+                //
+                // The retraction's own gate is what keeps the buffer payload
+                // out: `enum_param_owned_by_transfer` admits only an enum whose
+                // entry copy "has no arm for the kind at all, so the callee's
+                // slot is the caller's box", which is true of a `shared`
+                // payload and false of a `VecOrString` one. So this cannot
+                // retract a drop the entry copy still needs — the mirror
+                // failure B-2026-09-14-12 measured at 7 invalid frees when that
+                // predicate answered wrongly.
+                //
+                // A BORROWING receiver takes no ownership and must keep its
+                // drop, which the `SelfParam::Owned` test above already
+                // decides — `a.peek()` over `ref self` is the cell that pins
+                // it.
+                if matches!(
+                    self.impl_method_self_and_borrow_return(&receiver_type, method),
+                    Some((crate::ast::SelfParam::Owned, _))
+                ) {
+                    self.move_declined_copy_enum_arg(object);
+                }
                 if let ExprKind::Identifier(recv_name) = &object.kind {
                     if matches!(
                         self.impl_method_self_and_borrow_return(&receiver_type, method),

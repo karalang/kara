@@ -88349,6 +88349,338 @@ fn main() {
         );
     }
 
+    /// B-2026-09-10-11 — a `shared` / `par` type used DIRECTLY as a
+    /// non-shared enum variant payload was never rc-dec'd: the payload word
+    /// holds an RC pointer and nothing released it. 16 B in 1 block per value
+    /// at `-O0`, correct output on every surface.
+    ///
+    /// THE ROW'S OWN ATTRIBUTION WAS WRONG, and recording that is half the
+    /// point of this fixture. It blamed the caller-side entry-copy predicates
+    /// on the return route (`arg_is_entry_copied_heap_enum`), from a repro that
+    /// went through two function calls. It reproduces with NO FUNCTION CALL IN
+    /// THE PROGRAM — cell 1 is `let z = Et.A(Sh { n: 3 });` — so no argument
+    /// gate is involved, and neither of the two repairs the row proposed
+    /// (exclude a shared payload from those predicates / give that registrar an
+    /// rc-dec arm) would have touched it.
+    ///
+    /// WHERE IT WAS: a TABLE-TIMING hazard in `enum_drop_kind_for_type_expr`.
+    /// All three of its struct arms mean to exclude a shared payload and none
+    /// of them can — their guard is `!shared_types.contains_key(..)`, and
+    /// `shared_types` is filled by the struct LLVM build, which runs AFTER
+    /// `declare_enums`. So a shared struct payload classified `NestedStruct`,
+    /// an INLINE aggregate, and that arm walked the RC pointer as the struct's
+    /// own fields and called a value-drop that does not exist for a shared
+    /// type: the emitted switch GEP'd the payload word and did nothing at all.
+    /// A shared ENUM payload fell to the `_ => None` tail instead, whose doc
+    /// premise ("handled by the shared-type RC machinery") holds for a payload
+    /// of a SHARED enum and not for one of a plain enum.
+    ///
+    /// The classifier now asks `shared_type_decl_names` — the name-only set
+    /// `register_struct_metadata` fills for exactly this window, whose doc says
+    /// B-2026-06-14-28 added it so this classifier could see that a struct
+    /// FIELD's type is shared. The DIRECT payload position was never wired to
+    /// it. B-2026-09-12-10 hit the same hazard from the TUPLE-payload side and
+    /// fixed it the same way with the sibling name-only set, which is why this
+    /// is a third instance of one pattern rather than a new one.
+    ///
+    /// THIS FIXTURE ONLY BITES ON THE `-O0` RATCHET LEG. Measured, not assumed:
+    /// against the pre-fix `src/` these cells are CLEAN at `KARAC_OPT_LEVEL=2`
+    /// (8 allocs / 8 frees — the optimizer deletes the RC allocation wholesale
+    /// for a value nothing reads) and LEAK at `=0` (9 allocs / 8 frees). Same
+    /// caveat, same reason, as `asan_indexed_array_payload_interior_has_exactly_one_owner`:
+    /// a green `--features llvm` run is no evidence about it, and
+    /// `scripts/asan-o0-leg.sh` is its gate.
+    ///
+    /// Cells 8-11 are the positions that were ALREADY clean and must stay so —
+    /// they are what placed the fault in this one classification rather than in
+    /// the RC machinery. Cell 11 is the classifier's OTHER consumer: a `par`
+    /// channel element reaches `enum_drop_kind_for_type_expr` from
+    /// `channel.rs`'s `elem_keeps_source_owner` during function compilation,
+    /// when `shared_types` IS populated, so it was already getting the `None`
+    /// tail and is byte-identical across this change. (A `shared` non-`par`
+    /// type cannot cross a channel at all — the typechecker rejects it with
+    /// `E_NOT_CROSS_TASK` — which is why that cell must be spelled `par`.)
+    ///
+    /// THE CLASSIFIER ARM ALONE IS NOT THE WHOLE FIX, and cells 12-17 are why.
+    /// Making the drop switch real exposed a latent second owner that the
+    /// no-op switch had been masking: a binding moved into an owned `self`
+    /// keeps its `EnumDrop`, because a method RECEIVER never reaches
+    /// `move_declined_copy_struct_arg_for` — "the shared by-value-owned-arg
+    /// choke point so every call-arg site is covered". Two decs on one RC
+    /// block. So the fix is four gates that must agree, and each cell below
+    /// pins one of them:
+    ///
+    ///   * the classifier arm (`shared_type_decl_names`) — cells 1-11;
+    ///   * the receiver-side memory retraction, the peer of the BODIES one
+    ///     B-2026-08-01-7 already put beside it — cells 12, 13, gated on
+    ///     `SelfParam::Owned` so cell 14 keeps its drop;
+    ///   * `enum_param_owned_by_transfer`, which the retraction asks and which
+    ///     admits a payload the entry copy cannot duplicate — cell 17 is the
+    ///     payload it CAN duplicate and must stay clean;
+    ///   * `enum_needs_scope_exit_owner`, the callee's half of that same
+    ///     bargain — cell 15 leaked with the caller standing down and the
+    ///     callee registering nothing, and cell 16 had no owner at all.
+    ///
+    /// ONE REMAINDER, on its own row because it is a different mechanism: a
+    /// GENERIC enum (`enum Box2[T] { V(T) }` over a shared `T`) classifies the
+    /// ERASED `T`, which no name set can contain, so it needs
+    /// per-instantiation drop synthesis — `field_drop_kinds` is written once
+    /// per enum NAME in `declare_enums`. `Box2[String]` is clean, so something
+    /// already resolves the instantiation for a buffer payload.
+    ///
+    /// Measured on this tree: all seventeen cells clean at `-O0` under
+    /// `valgrind --leak-check=full` — and the verdict asserts on
+    /// `ERROR SUMMARY: 0 errors` as well as on the leak line, because
+    /// `All heap blocks were freed -- no leaks are possible` PRINTS ALONGSIDE
+    /// `Invalid read` / `Invalid write` when a use-after-free frees everything
+    /// exactly once. A leak-only verdict read cells 12 and 13 as passing; that
+    /// is what a per-cell PASS/FAIL line has to guard against. Each stdout
+    /// below is byte-identical across `--interp` / jit / `karac build` /
+    /// `KARAC_AUTO_PAR=0 karac build`, at both opt levels.
+    #[test]
+    fn asan_shared_payload_in_plain_enum_is_rc_released() {
+        // 1 — THE MINIMAL REPRO. No function call in the program.
+        assert_clean_asan_run(
+            r#"shared struct Sh { n: i64 }
+enum Et { A(Sh), B }
+fn main() { let z = Et.A(Sh { n: 3 }); println("ok"); }
+"#,
+            &["ok"],
+            "b1011-bare-let-shared-payload",
+        );
+        // 2 — a shared ENUM payload, which fell to the `None` tail rather than
+        //     to `NestedStruct`. Same leak, other half of the classifier.
+        assert_clean_asan_run(
+            r#"shared enum Inner { X(i64), Y }
+enum Et { A(Inner), B }
+fn main() { let z = Et.A(Inner.X(3)); println("ok"); }
+"#,
+            &["ok"],
+            "b1011-shared-enum-payload",
+        );
+        // 3 — a `par` payload. `shared_type_decl_names` records `is_par` too,
+        //     and the RC machinery is the same; a fix keyed on `shared` alone
+        //     would leave this one leaking.
+        assert_clean_asan_run(
+            r#"par struct Pa { n: i64 }
+enum Et { A(Pa), B }
+fn main() { let z = Et.A(Pa { n: 3 }); println("ok"); }
+"#,
+            &["ok"],
+            "b1011-par-payload",
+        );
+        // 4 — a payload WIDER than its allotted payload word, where the word is
+        //     still the RC pointer. 32 B rather than 16, and the cell that would
+        //     fail if the fix ever read the word as a heap BOX pointer.
+        assert_clean_asan_run(
+            r#"shared struct Big { a: i64, b: i64, c: i64 }
+enum Et { A(Big), B }
+fn main() {
+    let z = Et.A(Big { a: 1, b: 2, c: 3 });
+    match z { Et.A(g) => { println(f"a:{g.a} b:{g.b} c:{g.c}") } Et.B => { println("b") } }
+}
+"#,
+            &["a:1 b:2 c:3"],
+            "b1011-wide-shared-payload-read",
+        );
+        // 5 — THE ROW'S OWN REPRO, the return route through two calls. Kept
+        //     because it is what the row reported, not because the calls matter.
+        assert_clean_asan_run(
+            r#"shared struct Sh { n: i64 }
+enum Et { A(Sh), B }
+fn mket(i: i64) -> Et { return Et.A(Sh { n: i }); }
+fn passt(e: Et) -> Et { return e; }
+fn main() { let z = passt(mket(3)); println("ok"); }
+"#,
+            &["ok"],
+            "b1011-return-route-repro",
+        );
+        // 6 — MOVED OUT and dropped once. `passt` zeroes the payload word
+        //     (`move.enum.suppress.wp`) before dropping its vacated param, so
+        //     the new null guard is what keeps this at exactly ONE dec. Without
+        //     that guard this cell is a double free, not a leak.
+        assert_clean_asan_run(
+            r#"shared struct Sh { n: i64 }
+enum Et { A(Sh), B }
+fn passt(e: Et) -> Et { return e; }
+fn main() {
+    let z = passt(Et.A(Sh { n: 5 }));
+    match z { Et.A(s) => { println(f"n:{s.n}") } Et.B => { println("b") } }
+}
+"#,
+            &["n:5"],
+            "b1011-moved-out-decs-once",
+        );
+        // 7 — TWO payload-bearing variants and a non-shared heap one beside
+        //     them: both RC blocks released, and the `String` still freed by the
+        //     arm it always was.
+        assert_clean_asan_run(
+            r#"shared struct Sh { n: i64 }
+enum Et { A(Sh), C(Sh), S(String), B }
+fn main() {
+    let z = Et.A(Sh { n: 3 });
+    let w = Et.C(Sh { n: 4 });
+    let y = Et.S(f"b1011-aaaaaaaaaa");
+    println("ok");
+}
+"#,
+            &["ok"],
+            "b1011-two-shared-plus-string",
+        );
+        // 8 — CONTROL: the shared value wrapped in ONE plain struct, which is
+        //     B-2026-06-14-28's `struct_owns_shared_field` arm. Clean
+        //     throughout, and the cell that localised the fault: one field of
+        //     indirection away, the rc-dec was already emitted.
+        assert_clean_asan_run(
+            r#"shared struct Sh { n: i64 }
+struct Wrap { e: Sh }
+enum Et { A(Wrap), B }
+fn main() { let z = Et.A(Wrap { e: Sh { n: 3 } }); println("ok"); }
+"#,
+            &["ok"],
+            "b1011-struct-wrapped-control",
+        );
+        // 9 — CONTROL: a plain (non-shared) struct payload, the class
+        //     `NestedStruct` is actually for. Must keep its inline walk.
+        assert_clean_asan_run(
+            r#"struct Sh2 { n: i64 }
+enum Et { A(Sh2), B }
+fn mket(i: i64) -> Et { return Et.A(Sh2 { n: i }); }
+fn passt(e: Et) -> Et { return e; }
+fn main() { let z = passt(mket(3)); println("ok"); }
+"#,
+            &["ok"],
+            "b1011-plain-payload-control",
+        );
+        // 10 — CONTROL: a SHARED enum wrapper, where the box's own rc-drop
+        //      already owns the payload. `emit_enum_drop_switch` declines such
+        //      an enum outright (`layout.is_shared`), which is what makes the
+        //      new arm incapable of doubling with it — this cell is the proof.
+        assert_clean_asan_run(
+            r#"shared struct Sh { n: i64 }
+shared enum Et { A(Sh), B }
+fn mket(i: i64) -> Et { return Et.A(Sh { n: i }); }
+fn passt(e: Et) -> Et { return e; }
+fn main() { let z = passt(mket(3)); println("ok"); }
+"#,
+            &["ok"],
+            "b1011-shared-enum-wrapper-control",
+        );
+        // 11 — CONTROL: the classifier's OTHER consumer. A `par` channel
+        //      element asks the same predicate from `channel.rs`, after
+        //      `shared_types` is populated, so it was already getting `None`
+        //      and must be byte-identical.
+        assert_clean_asan_run(
+            r#"par struct Pa { n: i64 }
+fn main() {
+    let (tx, rx): (Sender[Pa], Receiver[Pa]) = Channel.new();
+    let s = Pa { n: 7 };
+    tx.send(s);
+    let v = rx.recv();
+    println(f"got:{v.n}")
+}
+"#,
+            &["got:7"],
+            "b1011-par-channel-elem-control",
+        );
+        // 12 — AN OWNED-`self` METHOD, named receiver. THE UAF CELL: making the
+        //      drop switch real exposed that a binding moved into an owned
+        //      `self` keeps its `EnumDrop` while the callee's frame owns the
+        //      same value. Two decs on one RC block — `Invalid read` +
+        //      `Invalid write` on a freed 16-byte block, and
+        //      `malloc(): unaligned tcache chunk detected` under `karac run`.
+        //      A method RECEIVER is not an ARG, so it never reached
+        //      `move_declined_copy_struct_arg_for`, "the shared
+        //      by-value-owned-arg choke point so every call-arg site is
+        //      covered".
+        assert_clean_asan_run(
+            r#"shared struct Sh { n: i64 }
+enum Et { A(Sh), B }
+impl Et { fn passm(self) -> Et { return self; } }
+fn main() { let a = Et.A(Sh { n: 3 }); let z = a.passm(); println("ok"); }
+"#,
+            &["ok"],
+            "b1011-owned-self-method-named-recv",
+        );
+        // 13 — the same method on a FRESH TEMP receiver, which is materialized
+        //      into a synth `__urecv_tmp` slot. A second spelling of cell 12
+        //      reached through a different caller-side slot, so a fix that only
+        //      handles the named binding still fails here.
+        assert_clean_asan_run(
+            r#"shared struct Sh { n: i64 }
+enum Et { A(Sh), B }
+impl Et { fn passm(self) -> Et { return self; } }
+fn main() { let z = Et.A(Sh { n: 3 }).passm(); println("ok"); }
+"#,
+            &["ok"],
+            "b1011-owned-self-method-temp-recv",
+        );
+        // 14 — CONTROL: a BORROWING receiver takes no ownership, so it must
+        //      KEEP its drop. The cell that fails if the receiver retraction
+        //      forgets to ask about `self`'s mode — the opposite polarity to
+        //      cells 12 and 13, and the reason the gate is
+        //      `SelfParam::Owned` rather than "is a method".
+        assert_clean_asan_run(
+            r#"shared struct Sh { n: i64 }
+enum Et { A(Sh), B }
+impl Et { fn peek(ref self) -> i64 { match self { Et.A(s) => { return s.n; } Et.B => { return 0; } } } }
+fn main() { let a = Et.A(Sh { n: 3 }); println(f"p:{a.peek()}"); }
+"#,
+            &["p:3"],
+            "b1011-ref-self-receiver-keeps-its-drop",
+        );
+        // 15 — A BY-VALUE PARAM, the ARG spelling of cells 12-13's move. This
+        //      is the cell that LEAKED once the caller-side retraction was
+        //      admitted for this kind and the callee-side registration was not:
+        //      `enum_needs_scope_exit_owner` returns early on a payload
+        //      `enum_has_heap_payload` cannot see, so the callee registered
+        //      nothing while the caller stood down. Both frames key off one
+        //      predicate on purpose; this cell is what proves they agree.
+        assert_clean_asan_run(
+            r#"shared struct Sh { n: i64 }
+enum Et { A(Sh), B }
+fn use2(e: Et) { match e { Et.A(s) => { println(f"u:{s.n}") } Et.B => { println("b") } } }
+fn main() { let z = Et.A(Sh { n: 3 }); use2(z); println("ok"); }
+"#,
+            &["u:3", "ok"],
+            "b1011-by-value-param-both-frames-agree",
+        );
+        // 16 — A DISCARDED ctor result. It registers no cleanup action of its
+        //      own, so it was the one spelling still leaking after the
+        //      classifier arm alone; the scope-exit-owner gate is what gives it
+        //      an owner. NOT the discard in general — the same statement over a
+        //      `String` payload was clean throughout (cell 17).
+        assert_clean_asan_run(
+            r#"shared struct Sh { n: i64 }
+enum Et { A(Sh), B }
+fn mket(i: i64) -> Et { return Et.A(Sh { n: i }); }
+fn main() { mket(3); println("ok"); }
+"#,
+            &["ok"],
+            "b1011-discarded-ctor-result",
+        );
+        // 17 — CONTROL: the BUFFER payload through the same owned-`self`
+        //      method. It is clean both before and after, and it must stay
+        //      clean, because there the callee's entry copy
+        //      (`deep_copy_enum_heap_payload_in_place`) really does duplicate
+        //      the payload — so the caller's original still needs its own free
+        //      and standing it down would be a LEAK. That asymmetry is why the
+        //      retraction's gate is `enum_param_owned_by_transfer` ("the entry
+        //      copy has no arm for the kind") rather than "the receiver moved".
+        assert_clean_asan_run(
+            r#"enum Et { S(String), B }
+impl Et { fn passm(self) -> Et { return self; } }
+fn main() {
+    let a = Et.S(f"b1011-buffer-aaaaaaaa");
+    let z = a.passm();
+    match z { Et.S(s) => { println(f"s:{s}") } Et.B => { println("b") } }
+}
+"#,
+            &["s:b1011-buffer-aaaaaaaa"],
+            "b1011-buffer-payload-owned-self-control",
+        );
+    }
+
     /// B-2026-09-09-24 — the two `Array`-payload-INDEXED shapes that
     /// `asan_boxed_array_payload_interior_has_exactly_one_owner` had to leave out
     /// are clean now, and this is the fixture that stops them regressing.

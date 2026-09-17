@@ -283,6 +283,85 @@ impl<'ctx> super::Codegen<'ctx> {
                 {
                     match kind {
                         EnumDropKind::None => {}
+                        EnumDropKind::SharedRc => {
+                            // B-2026-09-10-11 — the payload word holds an RC
+                            // POINTER (a `shared` / `par` struct or enum used
+                            // directly as a variant payload). Rc-dec it,
+                            // null-guarded. This switch is never emitted for a
+                            // SHARED enum (`layout.is_shared` returns above),
+                            // so this is the sole dec of the enum's one ref and
+                            // cannot double with the box rc-drop that handles
+                            // the shared-enum case.
+                            //
+                            // Null-guarded because the guard is load-bearing
+                            // rather than defensive: a MOVE out of the enum
+                            // zeroes this very word (`move.enum.suppress.wp`)
+                            // precisely so the vacated source's drop is a
+                            // no-op, which is what keeps `let z = passt(e)`
+                            // at exactly one dec.
+                            let pte = variant_field_tes
+                                .iter()
+                                .find(|(n, _)| n == variant_name)
+                                .and_then(|(_, tes)| tes.get(fi))
+                                .cloned();
+                            if let Some(pte) = pte {
+                                // Force-synthesize the recursive RC drop fn
+                                // BEFORE the dec, for the reason
+                                // `emit_nested_struct_shared_rc_decs_ex_mono`
+                                // gives at length: a dec emitted before
+                                // `__karac_rc_drop_<T>` is registered falls
+                                // back to a plain inline `free` of the box and
+                                // STRANDS its heap children.
+                                self.force_synth_shared_rc_drop_for_type_expr(&pte);
+                                if let Some(heap_ty) = self.shared_heap_type_for_type_expr(&pte) {
+                                    let ptr_ty =
+                                        self.context.ptr_type(inkwell::AddressSpace::default());
+                                    let field_idx = (*start_word + 1) as u32;
+                                    if let Ok(word_ptr) = self.builder.build_struct_gep(
+                                        layout.llvm_type,
+                                        p_arg,
+                                        field_idx,
+                                        "drop.shrc.p",
+                                    ) {
+                                        let inner = self
+                                            .builder
+                                            .build_load(ptr_ty, word_ptr, "drop.shrc.ptr")
+                                            .unwrap()
+                                            .into_pointer_value();
+                                        let is_null = self
+                                            .builder
+                                            .build_is_null(inner, "drop.shrc.isnull")
+                                            .unwrap();
+                                        let do_bb = self
+                                            .context
+                                            .append_basic_block(drop_fn, "drop.shrc.do");
+                                        let skip_bb = self
+                                            .context
+                                            .append_basic_block(drop_fn, "drop.shrc.skip");
+                                        self.builder
+                                            .build_conditional_branch(is_null, skip_bb, do_bb)
+                                            .unwrap();
+                                        self.builder.position_at_end(do_bb);
+                                        // `emit_refcount_dec_by_type` appends
+                                        // its own rc_is_zero / rc_free / rc_done
+                                        // blocks to `self.current_fn`, which on
+                                        // this VALUE-drop path still points at
+                                        // the outer fn that triggered the
+                                        // synthesis — the cross-function block
+                                        // reference B-2026-06-14-34 records.
+                                        // Scoped to `drop_fn` for the dec only,
+                                        // exactly as the nested-struct walker
+                                        // scopes it.
+                                        let saved_fn = self.current_fn;
+                                        self.current_fn = Some(drop_fn);
+                                        self.emit_refcount_dec_by_type(heap_ty, inner);
+                                        self.current_fn = saved_fn;
+                                        self.builder.build_unconditional_branch(skip_bb).unwrap();
+                                        self.builder.position_at_end(skip_bb);
+                                    }
+                                }
+                            }
+                        }
                         EnumDropKind::VecOrString => {
                             // Field index in `llvm_type` is `start_word + 1`
                             // for the data ptr (tag is field 0); +2 for len;

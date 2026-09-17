@@ -280,6 +280,33 @@ pub(crate) enum EnumDropKind {
     /// them leaked, because the classifier is keyed on `TypeKind::Path` and a
     /// tuple has no path spelling to look up.
     NestedTuple,
+    /// B-2026-09-10-11 — payload field whose type is ITSELF a `shared` / `par`
+    /// struct or enum, so the payload word holds an RC POINTER rather than an
+    /// inline aggregate. Dropped by rc-dec'ing that pointer, null-guarded
+    /// (`emit_enum_drop_switch`).
+    ///
+    /// WHY IT NEEDED A KIND OF ITS OWN, rather than falling to `None` as the
+    /// three struct arms' `!shared_types` guards intended. `None`'s doc says an
+    /// RC-pointer payload is "handled by the shared-type RC machinery", and for
+    /// a payload of a SHARED enum that is true — the box's own rc-drop walks it,
+    /// and `emit_enum_drop_switch` declines such an enum outright
+    /// (`layout.is_shared`). For a payload of a PLAIN enum there is no box and
+    /// no walker, so nobody dec'd it: measured as 16 B in 1 block per value at
+    /// `-O0`, correct output on every surface, across every spelling (a bare
+    /// `let`, a ctor argument, a call argument, a discarded call, a match arm),
+    /// both widths, `shared` and `par` alike, and the generic
+    /// `enum Box2[T] { V(T) }` leg. Clean in every OTHER position a shared
+    /// value can hold — a plain struct field, a `Vec` element, a struct that is
+    /// itself the payload (`A(Wrap { e: Sh })`, B-2026-06-14-28's arm) — which
+    /// is what placed the fault in this one classification.
+    ///
+    /// `is_heap_bearing()` is FALSE, like the two boxed kinds and for the same
+    /// reason: a shared handle must never be deep-copied at callee entry (RC is
+    /// what owns it), so the entry-copy and move-suppression symmetry must not
+    /// see it. That also makes this kind INVISIBLE to the classifier's
+    /// non-`declare_enums` callers, which is deliberate — see the classifier
+    /// arm's own note on why they were already getting `None`.
+    SharedRc,
     /// B-2026-09-05-26: payload field is a named non-shared user struct that
     /// the two `NestedStruct` admissions DECLINE — not copy-supported (a
     /// `Drop`-bearing field, a `Map` field) and owning no shared field — yet
@@ -392,7 +419,11 @@ impl EnumDropKind {
     pub(crate) fn is_heap_bearing(self) -> bool {
         !matches!(
             self,
-            EnumDropKind::None | EnumDropKind::BoxedOptRes | EnumDropKind::BoxedArray
+            EnumDropKind::None
+                | EnumDropKind::BoxedOptRes
+                | EnumDropKind::BoxedArray
+                // B-2026-09-10-11 — an RC handle is never entry-copied.
+                | EnumDropKind::SharedRc
         )
     }
 }

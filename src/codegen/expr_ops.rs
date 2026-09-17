@@ -8611,10 +8611,24 @@ impl<'ctx> super::Codegen<'ctx> {
                 .enum_layouts
                 .get(enum_name)
                 .is_some_and(|l| {
-                    l.field_drop_kinds
-                        .values()
-                        .flatten()
-                        .any(|k| *k == super::state::EnumDropKind::BoxedArray)
+                    l.field_drop_kinds.values().flatten().any(|k| {
+                        matches!(
+                            k,
+                            // B-2026-09-10-11 — a directly-`shared` payload
+                            // joins the `BoxedArray` disjunct for its reason:
+                            // `enum_has_heap_payload` answers about BUFFERS, and
+                            // an RC handle is not one, so neither kind is visible
+                            // to it while both need an owner at scope exit. The
+                            // callee-side transfer registration in
+                            // `param_own.rs` returns early on this predicate, so
+                            // without the kind here the caller retracts (its
+                            // `enum_param_owned_by_transfer` clause admits it)
+                            // and the callee registers nothing — measured as
+                            // 16 B in 1 block on `use2(z)` over a by-value param.
+                            super::state::EnumDropKind::BoxedArray
+                                | super::state::EnumDropKind::SharedRc
+                        )
+                    })
                 })
     }
 

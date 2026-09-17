@@ -5865,6 +5865,44 @@ impl<'ctx> super::Codegen<'ctx> {
                     // `is_heap_bearing()` stays FALSE for this kind so the
                     // entry-copy / move-suppression symmetry is unchanged.
                     "Option" | "Result" => EnumDropKind::BoxedOptRes,
+                    // B-2026-09-10-11 — the payload type is ITSELF `shared`
+                    // / `par`, so the word holds an RC pointer. Ahead of the
+                    // three struct arms below because each of them means to
+                    // exclude exactly this case and none of them can: their
+                    // guard is `!shared_types.contains_key(..)`, and
+                    // `shared_types` is filled by the STRUCT LLVM build, which
+                    // runs AFTER `declare_enums`. So for a shared struct that
+                    // guard is vacuously true and the payload classified
+                    // `NestedStruct` — an inline aggregate — whose emit arm then
+                    // walked the RC pointer as if it were the struct's fields
+                    // and called a value-drop that does not exist for a shared
+                    // type. Net effect: the drop switch GEP'd the payload word
+                    // and did nothing at all.
+                    //
+                    // `shared_type_decl_names` is the name-only set
+                    // `register_struct_metadata` fills for precisely this
+                    // window, and its doc says so: B-2026-06-14-28 added it so
+                    // this classifier could see that a struct FIELD's type is
+                    // shared. The DIRECT payload position was never wired to
+                    // it. B-2026-09-12-10 hit the same timing hazard from the
+                    // TUPLE-payload side and fixed it there the same way, with
+                    // the sibling `shared_type_names` set.
+                    //
+                    // The heap LAYOUT still comes from `shared_types` at EMIT
+                    // time, which is populated by then — the split this table
+                    // exists to provide.
+                    //
+                    // Only the callers inside `declare_enums` see the change.
+                    // Every other caller (`channel.rs`'s `elem_keeps_source_owner`,
+                    // `expr_ops.rs`'s heap-payload test) runs during function
+                    // compilation, when `shared_types` IS populated, so it was
+                    // already getting the `_ => None` tail for a shared payload
+                    // — and `SharedRc` is, like `None`, neither `NestedStruct`
+                    // nor heap-bearing. Measured: a `par` channel element and a
+                    // generic `Box2[Sh]` are byte-identical across the change.
+                    other if self.type_decls.shared_type_decl_names.contains(other) => {
+                        EnumDropKind::SharedRc
+                    }
                     // B-2026-06-13-13: a named non-shared user struct laid out
                     // inline in the variant payload (e.g. the lexer's
                     // `CStringLiteral(CStr{Vec[u8]})`). Its own

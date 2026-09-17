@@ -2690,11 +2690,20 @@ impl<'ctx> super::Codegen<'ctx> {
         // whole point of the predicate: the caller's retraction
         // (`move_declined_copy_enum_arg`) cannot read the callee's prologue, so
         // the two frames reach the same answer only by asking this.
-        if layout
-            .field_drop_kinds
-            .values()
-            .any(|ks| ks.contains(&EnumDropKind::BoxedArray))
-        {
+        // B-2026-09-10-11 — a directly-`shared` payload joins for the very
+        // reason the `BoxedArray` clause above it was added: the entry copy
+        // has no arm for the kind, so it duplicates NOTHING and the callee's
+        // slot is the caller's RC handle. Both frames reach one answer only by
+        // asking this predicate, which is what makes adding the kind here the
+        // whole change rather than a second hand-rolled test.
+        //
+        // And it must NOT be widened to a `VecOrString` payload, which is the
+        // mirror: there the entry copy really does duplicate, so the caller's
+        // original still needs its own free and standing it down is a leak.
+        if layout.field_drop_kinds.values().any(|ks| {
+            ks.iter()
+                .any(|k| matches!(k, EnumDropKind::BoxedArray | EnumDropKind::SharedRc))
+        }) {
             return true;
         }
         layout.field_drop_kinds.iter().any(|(vname, kinds)| {
