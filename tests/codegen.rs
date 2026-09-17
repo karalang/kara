@@ -20812,6 +20812,124 @@ end
             )
         );
     }
+    /// B-2026-09-10-22 — a whole-payload arm binding over a GENERIC by-value
+    /// `Option[(T, i64)]` param runs the payload element's `Drop` body.
+    ///
+    /// `fn take[T](o: Option[(T, i64)]) { match o { Some(t) => t.1 } }` printed `g9`
+    /// on the JIT, `-O0` and `-O2` auto-par alike against `--interp`'s `dW3 g9` — the
+    /// body ran on NO compiled surface — while the CONCRETE twin of the same function
+    /// was correct throughout. A run-vs-build divergence, so the kata A/B rule catches
+    /// it where a body count cannot.
+    ///
+    /// THE CAUSE IS WHICH ESCAPE MAP THE TWO CALL PATHS ASK. `compile_call` resolves a
+    /// per-projection policy from the param type (B-2026-09-14-5: a projection is a
+    /// READ exactly when its leaf carries no `Drop` body), while
+    /// `compile_generic_call` asked `optres_payload_escaping_param_variants` — the
+    /// fixed, fully projection-INTOLERANT end of that axis. So on the monomorph leg
+    /// `t.1` read as an escape, the caller stood down for a taker that does not exist,
+    /// and nobody ran the body. Both paths now call one helper,
+    /// `optres_payload_escape_map`, which is what keeps them from drifting again.
+    ///
+    /// `g3` answers the row's first unmeasured axis: `Result` behaves identically.
+    /// `g6` is the `let x = t.1; return x;` spelling, which loses it the same way.
+    ///
+    /// THE CONTROLS ARE WHAT LOCATE THE AXIS, and three of them were already correct
+    /// before the fix: `g2` (the concrete twin), `g4` (`Some(_)`, which never names the
+    /// payload), `g5` (`println(f"{t.1}")`, a copy read that does not `return`) and
+    /// `g7` (a BARE `T` payload). `g7` is the row's second unmeasured axis and it
+    /// answers no: the monomorph alone is not the trigger — it takes a generic
+    /// callee AND a projection of a tuple payload flowing into `return`.
+    ///
+    /// `g8` IS THE OVER-REACH CONTROL, in the opposite direction: `return t.0` really
+    /// does move the `Drop`-bearing element out, so the returned value owns the body
+    /// and exactly ONE must run. Applying the copy-read policy to it would register a
+    /// second one in the caller — the `dR1 / len:1 / dR1` double B-2026-09-12-15
+    /// measured. It stays at one here, which is what says the policy is per-projection
+    /// rather than tolerant.
+    ///
+    /// TWO THINGS IN THIS TRANSCRIPT ARE OTHER ROWS. `g8`'s interpreter line runs
+    /// TWICE where the compiled backends run it once — B-2026-09-13-5, open, and this
+    /// fixture adds that the GENERIC spelling behaves exactly like the concrete one it
+    /// was filed on. And `g8`'s `d` param (`W { id: 108 }`) runs its body on no
+    /// surface because the `None` arm returns it — the conditionally-returned-param
+    /// family, B-2026-09-13-13. Neither moved with this fix.
+    ///
+    /// THE HEAP-BEARING PAYLOAD IS A DIFFERENT LEG AND IS STILL BROKEN: give `W` a
+    /// `String` field and the payload BOXES, the caller correctly stands down because
+    /// the box is the callee's, and the monomorph prologue never runs the by-value
+    /// `Option`/`Result` param arms at all — so the body has no owner anywhere. Filed
+    /// as B-2026-09-17-23 with the probe evidence; deliberately not fixed here,
+    /// because it needs the mono prologue to gain those arms rather than a policy
+    /// change. This fixture's `W` is scalar on purpose, which is the shape the row was
+    /// filed on.
+    ///
+    /// Memory at `KARAC_OPT_LEVEL=0`: 25 allocs / 25 frees, `ERROR SUMMARY: 0 errors`,
+    /// "All heap blocks were freed".
+    ///
+    /// Twin: `tests/interpreter.rs`'s
+    /// `test_generic_by_value_optres_param_payload_body_runs`, pinned to the
+    /// INTERPRETER's transcript, which differs only in `g8`'s doubled line.
+    #[test]
+    fn e2e_generic_by_value_optres_param_payload_body_runs() {
+        assert_eq!(
+            run_program(
+                r#"struct W { id: i64 }
+impl Drop for W { fn drop(mut ref self) { println(f"dW{self.id}") } }
+
+fn g1[T](o: Option[(T, i64)]) -> i64 { match o { Some(t) => { return t.1; } None => { return 0; } } }
+fn g2(o: Option[(W, i64)]) -> i64 { match o { Some(t) => { return t.1; } None => { return 0; } } }
+fn g3[T](o: Result[(T, i64), i64]) -> i64 { match o { Ok(t) => { return t.1; } Err(e) => { return e; } } }
+fn g4[T](o: Option[(T, i64)]) -> i64 { match o { Some(_) => { return 5; } None => { return 0; } } }
+fn g5[T](o: Option[(T, i64)]) -> i64 { match o { Some(t) => { println(f"    p{t.1}"); return 0; } None => { return 0; } } }
+fn g6[T](o: Option[(T, i64)]) -> i64 { match o { Some(t) => { let x = t.1; return x; } None => { return 0; } } }
+fn g7[T](o: Option[T]) -> i64 { match o { Some(t) => { return 1; } None => { return 0; } } }
+fn g8[T](o: Option[(T, i64)], d: T) -> T { match o { Some(t) => { return t.0; } None => { return d; } } }
+
+fn main() {
+  println("g1"); println(f"  {g1(Some((W { id: 1 }, 9)))}");
+  println("g2"); println(f"  {g2(Some((W { id: 2 }, 9)))}");
+  println("g3"); println(f"  {g3(Ok((W { id: 3 }, 9)))}");
+  println("g4"); println(f"  {g4(Some((W { id: 4 }, 9)))}");
+  println("g5"); println(f"  {g5(Some((W { id: 5 }, 9)))}");
+  println("g6"); println(f"  {g6(Some((W { id: 6 }, 9)))}");
+  println("g7"); println(f"  {g7(Some(W { id: 7 }))}");
+  println("g8"); let r = g8(Some((W { id: 8 }, 9)), W { id: 108 }); println(f"  {r.id}");
+  println("end");
+}
+"#
+            ),
+            Some(
+                r#"g1
+dW1
+  9
+g2
+dW2
+  9
+g3
+dW3
+  9
+g4
+dW4
+  5
+g5
+    p9
+dW5
+  0
+g6
+dW6
+  9
+g7
+dW7
+  1
+g8
+  8
+dW8
+end
+"#
+                .to_string()
+            )
+        );
+    }
     /// B-2026-09-02-38 — the STRUCT-PATTERN spelling of B-2026-09-02-25: a
     /// `let S { r, k } = s;` over an owned struct param binds VIEWS of the callee's
     /// entry copy, so a later `let m = r;` must MOVE the body rather than mint a

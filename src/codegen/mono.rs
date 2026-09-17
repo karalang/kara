@@ -1937,9 +1937,6 @@ impl<'ctx> super::Codegen<'ctx> {
         // only when a boxed-payload `Option`/`Result` temp argument turns up.
         let mut nonescaping_generic_params: Option<std::collections::HashSet<String>> = None;
         // B-2026-09-06-48 — memoised beside its sibling above; see the use site.
-        let mut payload_escaping_generic_params: Option<
-            std::collections::HashMap<String, std::collections::HashSet<String>>,
-        > = None;
         let mut payload_consuming_generic_params: Option<
             std::collections::HashMap<String, std::collections::HashSet<String>>,
         > = None;
@@ -2266,19 +2263,31 @@ impl<'ctx> super::Codegen<'ctx> {
                     // The BODIES question needs the ESCAPE map, not `taken`:
                     // `taken` reports a nested destructure as taking the
                     // payload, which is right for the box above and wrong here.
-                    let escaping = payload_escaping_generic_params
-                        .get_or_insert_with(|| {
-                            crate::result_escape::optres_payload_escaping_param_variants(
-                                &generic_fn,
-                            )
-                        })
+                    //
+                    // B-2026-09-10-22 — and the map is
+                    // `optres_payload_escape_map`, the same one `compile_call`
+                    // asks, rather than the fixed
+                    // `optres_payload_escaping_param_variants` this site used
+                    // to call. That map is the fully projection-INTOLERANT end
+                    // of the axis, so `match o { Some(t) => return t.1 }` over
+                    // `Option[(T, i64)]` read as an escape, this gate declined,
+                    // and the body ran on NO compiled surface against
+                    // `--interp`'s one (`g9` for a due `dW3 g9`) — while the
+                    // CONCRETE twin of the same function, which goes through
+                    // `compile_call`, was correct throughout. Keyed on `inst`,
+                    // never on `p.ty`: the policy resolves a projection's LEAF
+                    // type, and the erased `Option[(T, i64)]`'s bare `T`
+                    // resolves nothing, which answers "not a copy read" for
+                    // every projection and reproduces the bug.
+                    let ctor_variant = self.ctor_variant_name_of_arg(&a.value);
+                    let escaping = self
+                        .optres_payload_escape_map(&generic_fn, &inst, ctor_variant.as_deref())
                         .get(match &p.pattern.kind {
                             crate::ast::PatternKind::Binding(n) => n.as_str(),
                             _ => "",
                         })
                         .cloned()
                         .unwrap_or_default();
-                    let ctor_variant = self.ctor_variant_name_of_arg(&a.value);
                     let variant_escapes = match ctor_variant.as_deref() {
                         Some(v) => escaping.contains(v),
                         None => !escaping.is_empty(),

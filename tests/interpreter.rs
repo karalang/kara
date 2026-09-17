@@ -37264,6 +37264,74 @@ end
 "#
     );
 }
+/// B-2026-09-10-22 — the interpreter twin of `tests/codegen.rs`'s
+/// `e2e_generic_by_value_optres_param_payload_body_runs`.
+///
+/// The interpreter was the CORRECT backend for this row (it ran the payload
+/// element's body all along; the compiled surfaces lost it on the generic leg), so
+/// this fixture's job is to pin that it did not move. It is not pinned to the same
+/// string as its twin for one line: `g8`'s `dW8` runs TWICE here, which is
+/// B-2026-09-13-5 — the interpreter double-running a sub-value moved out of a
+/// by-value `Option` payload — and that row records the compiled backends as the
+/// right ones. Whoever fixes it drops the second `dW8` from this string, at which
+/// point the pair holds one transcript.
+#[test]
+fn test_generic_by_value_optres_param_payload_body_runs() {
+    assert_eq!(
+        run(r#"struct W { id: i64 }
+impl Drop for W { fn drop(mut ref self) { println(f"dW{self.id}") } }
+
+fn g1[T](o: Option[(T, i64)]) -> i64 { match o { Some(t) => { return t.1; } None => { return 0; } } }
+fn g2(o: Option[(W, i64)]) -> i64 { match o { Some(t) => { return t.1; } None => { return 0; } } }
+fn g3[T](o: Result[(T, i64), i64]) -> i64 { match o { Ok(t) => { return t.1; } Err(e) => { return e; } } }
+fn g4[T](o: Option[(T, i64)]) -> i64 { match o { Some(_) => { return 5; } None => { return 0; } } }
+fn g5[T](o: Option[(T, i64)]) -> i64 { match o { Some(t) => { println(f"    p{t.1}"); return 0; } None => { return 0; } } }
+fn g6[T](o: Option[(T, i64)]) -> i64 { match o { Some(t) => { let x = t.1; return x; } None => { return 0; } } }
+fn g7[T](o: Option[T]) -> i64 { match o { Some(t) => { return 1; } None => { return 0; } } }
+fn g8[T](o: Option[(T, i64)], d: T) -> T { match o { Some(t) => { return t.0; } None => { return d; } } }
+
+fn main() {
+  println("g1"); println(f"  {g1(Some((W { id: 1 }, 9)))}");
+  println("g2"); println(f"  {g2(Some((W { id: 2 }, 9)))}");
+  println("g3"); println(f"  {g3(Ok((W { id: 3 }, 9)))}");
+  println("g4"); println(f"  {g4(Some((W { id: 4 }, 9)))}");
+  println("g5"); println(f"  {g5(Some((W { id: 5 }, 9)))}");
+  println("g6"); println(f"  {g6(Some((W { id: 6 }, 9)))}");
+  println("g7"); println(f"  {g7(Some(W { id: 7 }))}");
+  println("g8"); let r = g8(Some((W { id: 8 }, 9)), W { id: 108 }); println(f"  {r.id}");
+  println("end");
+}
+"#),
+        r#"g1
+dW1
+  9
+g2
+dW2
+  9
+g3
+dW3
+  9
+g4
+dW4
+  5
+g5
+    p9
+dW5
+  0
+g6
+dW6
+  9
+g7
+dW7
+  1
+g8
+dW8
+  8
+dW8
+end
+"#
+    );
+}
 /// B-2026-09-02-38 — the STRUCT-PATTERN spelling of B-2026-09-02-25: a
 /// `let S { r, k } = s;` over an owned struct param binds VIEWS of the callee's
 /// entry copy, so a later `let m = r;` must MOVE the body rather than mint a
