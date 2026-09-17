@@ -95,7 +95,7 @@ distinguish "bugs flattening" from "we stopped writing them down."
 | run-vs-build | 421 |
 | miscompile | 415 |
 | leak | 366 |
-| double-free | 239 |
+| double-free | 240 |
 | missing-feature | 199 |
 | codegen-gap | 178 |
 | diagnostics | 126 |
@@ -110,7 +110,7 @@ distinguish "bugs flattening" from "we stopped writing them down."
 
 | surface | total |
 |---|---|
-| codegen | 1812 |
+| codegen | 1813 |
 | interp | 465 |
 | typecheck | 302 |
 | other | 94 |
@@ -192,6 +192,7 @@ _Generated from `bug-ledger.jsonl` by `scripts/bug-curve.py` (2026-05-20 → 202
 | B-2026-09-17-1 | 2026-09-17 | codegen+interp | medium | A DISCARDED `match` WHOSE ARM VALUE IS A TUPLE-RETURNING CALL RUNS ITS ELEMENT `Drop` BODY ON THE INTERPRETER AND NOWHERE ELSE -- `match n { 1 => f(mk(44)), _ => f(mk(45)) };` over `fn f(r: R) -> (R, i64)` prints `dR44` under `--interp` and nothing on `karac run` JIT, `-O0` build or default auto-par build. A REAL run-vs-build divergence rather than an agreed gap, and PRE-EXISTING: measured identically on `8377932~1`, the tree before B-2026-09-09-21's fix, with that row's own shape reading `ok` on all four there as the control proving the tree was pre-fix | — |
 | B-2026-09-17-2 | 2026-09-17 | codegen+interp | low | THE METHOD SPELLING OF B-2026-09-09-21 RUNS NO DISCARDED-TUPLE ELEMENT `Drop` BODY ON ANY BACKEND -- `h.wrap(mk(43));` over `fn wrap(ref self, r: R) -> (R, i64)` prints `ok` and nothing else on all four surfaces, where the free-function spelling `f(mk(43));` now prints `dR43`. An AGREED gap, so no A/B gate sees it; it is the method peer of the shape B-2026-09-09-21 fixed, and it was deliberately left out of that fix rather than missed | — |
 | B-2026-09-17-3 | 2026-09-17 | codegen | high | A READ-ONLY MATCH ARM OVER AN `Option[Array[S, N]]` PAYLOAD DOUBLE FREES ON EVERY COMPILED SURFACE -- `match x { Option.Some(t) => { println(f"s:{t[0].tag}") } .. }` where `S` has a user `impl Drop` aborts with `free(): double free detected in tcache 2` under `karac run` (JIT), `-O0 build` and default auto-par `build`, valgrind reporting `Invalid free()`, while `--interp` prints the correct transcript. THREE CONDITIONS ARE ALL REQUIRED and each was measured off independently: drop the `impl Drop` and all four surfaces are clean; drop the `Option` wrapper and pass the array directly and all four are clean; keep both and the compiled ones abort. NO GATE IN THE TREE CATCHES IT -- a full cycle an hour before filing read 27570 passed / 0 failed with both ASAN ratchet legs matching their quarantine lists exactly | — |
+| B-2026-09-17-4 | 2026-09-17 | codegen | high | A NAMED `Array` LOCAL MOVED INTO AN `Option` CTOR DOUBLE FREES ITS ELEMENTS' HEAP FIELDS ON EVERY COMPILED BACKEND -- `let a: Array[S, 2] = [..]; let x: Option[Array[S, 2]] = Some(a);` aborts with `free(): double free detected in tcache 2` under jit / `karac build` / `KARAC_AUTO_PAR=0 build` while `--interp` runs it correctly, needing no `match`, no call and no index; the same move into a USER enum (`W.P(a)`) is clean, which is where the fault is | — |
 
 ### Relocated
 
