@@ -193,13 +193,45 @@ DANGLING_GRANDFATHERED = {
 # the check would report ~900 false violations. Skip loudly rather than lie —
 # and note that `actions/checkout` is depth-1 BY DEFAULT, which is why the CI
 # job that runs this sets `fetch-depth: 0`.
+#
+# B-2026-09-16-8 — THE SKIP AND THE DEFECT WERE IN DISJOINT ENVIRONMENTS, which
+# is why eight rows accumulated a `SHA NOTE` against the two CLAUDE.md names.
+# A fix SHA can only be orphaned by a rebase between close and push; rebases
+# happen on `main`-tracking sessions; those run SHALLOW clones. CI has the
+# history (`fetch-depth: 0`) and never rebases, so it never creates one. The
+# only detector was off in exactly the environment that produces the defect.
+#
+# So a shallow clone no longer skips OUTRIGHT: it checks the rows THIS TREE
+# CHANGES against `origin/main`. Those are the rows the session is creating, and
+# their SHAs are local by construction whatever the clone depth — which is the
+# row's own option (c), "catches the creation moment rather than auditing
+# history". Everything else still needs full history and is still skipped, with
+# the count said out loud so a narrowed check cannot read as a complete one.
+_shallow = _git("rev-parse", "--is-shallow-repository").stdout.strip() == "true"
+_restrict = None
+if _shallow:
+    _pub = _git("show", "origin/main:docs/bug-ledger.jsonl")
+    if _pub.returncode != 0:
+        warns.append(
+            "shallow clone and no origin/main — skipped fix-SHA resolvability check "
+            "entirely (needs full history; set `fetch-depth: 0` on actions/checkout)"
+        )
+        _restrict = set()
+    else:
+        _published = {}
+        for _l in _pub.stdout.splitlines():
+            try:
+                _o = json.loads(_l)
+            except Exception:
+                continue
+            _published[_o.get("id")] = _o.get("fix", "") or ""
+        _restrict = {
+            r["id"] for r in rows
+            if (r.get("fix", "") or "") != _published.get(r["id"], None)
+        }
+
 if _git("rev-parse", "--git-dir").returncode != 0:
     warns.append("not a git repository — skipped fix-SHA resolvability check")
-elif _git("rev-parse", "--is-shallow-repository").stdout.strip() == "true":
-    warns.append(
-        "shallow clone — skipped fix-SHA resolvability check "
-        "(needs full history; set `fetch-depth: 0` on actions/checkout)"
-    )
 else:
     # A `fix` field may reference a commit in the SIBLING kara-katas repo (an
     # `audit`/`kata-gap` source often does), written `kara-katas <sha>`. That
@@ -247,6 +279,16 @@ else:
 
     split = {r["id"]: _split_shas(r.get("fix", "")) for r in rows}
     split = {k: v for k, v in split.items() if v[0] or v[1]}
+    # B-2026-09-16-8 — on a shallow clone, only the rows this tree changes.
+    if _restrict is not None:
+        _total = len(split)
+        split = {k: v for k, v in split.items() if k in _restrict}
+        warns.append(
+            f"shallow clone — fix-SHA resolvability checked for the {len(split)} row(s) "
+            f"this tree changes against origin/main; {_total - len(split)} pre-existing "
+            "row(s) skipped (they need full history; set `fetch-depth: 0` on "
+            "actions/checkout)"
+        )
     cites = {k: (v[0] | v[1]) for k, v in split.items()}
     every = sorted({t for v in cites.values() for t in v})
     if every:
@@ -283,9 +325,15 @@ else:
                 f"{stale} grandfathered row(s) still cite a dangling fix SHA — "
                 "see DANGLING_GRANDFATHERED in scripts/bug-lint.sh; the list exists to shrink"
             )
-        for bid in sorted(DANGLING_GRANDFATHERED - {b for b in cites if cites[b] & gone}):
-            warns.append(f"{bid}: grandfathered as dangling but now resolves — "
-                         "remove it from DANGLING_GRANDFATHERED")
+        # B-2026-09-16-8 — SKIP THIS SWEEP ON A SHALLOW CLONE. It reports a
+        # grandfathered row whose sha now resolves, and on a narrowed run every
+        # such row is simply unchecked rather than resolved, so it would print
+        # ~47 false "now resolves" lines. The narrowing has to shrink what is
+        # REPORTED as well as what is probed, or it trades one lie for another.
+        if _restrict is None:
+            for bid in sorted(DANGLING_GRANDFATHERED - {b for b in cites if cites[b] & gone}):
+                warns.append(f"{bid}: grandfathered as dangling but now resolves — "
+                             "remove it from DANGLING_GRANDFATHERED")
 
 # 7. NO PUBLISHED ROW HAS DISAPPEARED.
 #

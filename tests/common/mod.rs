@@ -234,6 +234,132 @@ pub const OWNERSHIP_GATE_GRANDFATHERED: &[&str] = &[
 /// Triage a `link_executable` failure: soft-skip a genuinely archive-less
 /// environment, but PANIC on a stale archive.
 ///
+/// B-2026-09-16-7 — is any runtime artifact this suite can execute older than
+/// the last change to `runtime/src`?
+///
+/// The Rust peer of the check `scripts/asan-o0-leg.sh` already performs, ported
+/// here because those two scripts are the only things that ran it and CLAUDE.md
+/// is explicit that neither is part of the default leg, the `--features llvm`
+/// leg, or the clippy legs. This is the leg everybody actually runs.
+///
+/// THREE ARTIFACTS, which is one more than the shell check looks at:
+///
+///   * the runtime archives under `target/release/`, minus the `_wasm` pair —
+///     those are for `karac build --target=wasm_*` and can never reach a native
+///     E2E fixture, so failing on one would be noise, and a gate that fires on
+///     irrelevant things gets routed around;
+///   * `KARAC_RUNTIME=<path>` when set, checked INSTEAD of the glob and
+///     verbatim, because CLAUDE.md is explicit that the named file is the
+///     linked file with no lean-sibling substitution — so the glob never sees
+///     the archive such a run actually links;
+///   * `karac_jit_runner`, in both profile dirs. It statically links the
+///     runtime too, and a stale one means `karac run` executes old semantics
+///     while `karac build` executes new ones — which presents as a
+///     run-vs-build divergence, a whole bug class in this ledger, and would be
+///     attributed to codegen.
+///
+/// THE COMPARISON IS AGAINST THE COMMIT TIME of the last `runtime/src` change,
+/// not against file mtimes: a fresh clone stamps every file at checkout, so
+/// file mtimes say nothing. A shallow clone may not carry that commit at all —
+/// cloud containers and `actions/checkout` default to depth 1 — and there the
+/// check says it was skipped rather than passing quietly, because a skipped
+/// check that looks like a passed one is this row's whole subject.
+///
+/// COST: one `git log -1` per test PROCESS, behind a `OnceLock`, not per link.
+/// Measured on this tree at roughly 5 ms, against an E2E suite that links
+/// ~1260 times and runs for minutes.
+///
+/// WARN BY DEFAULT, FAIL UNDER `KARAC_REQUIRE_RUNTIME_ARCHIVE=1`. That mirrors
+/// how the ABSENT-archive case is already handled a few lines below: an
+/// ordinary checkout gets a loud line on stderr, and the runs that are supposed
+/// to prove they exercised real binaries — CI's archive-building jobs and the
+/// two ASAN legs, which all set that variable — turn it into a hard failure.
+/// `KARAC_ALLOW_STALE_ARCHIVE=1` disables it outright, the same escape hatch
+/// and the same spelling the shell check uses.
+fn stale_runtime_artifacts() -> Option<String> {
+    use std::path::PathBuf;
+
+    if std::env::var("KARAC_ALLOW_STALE_ARCHIVE").as_deref() == Ok("1") {
+        return None;
+    }
+    let root = PathBuf::from(env!("CARGO_MANIFEST_DIR"));
+    let out = Command::new("git")
+        .args(["log", "-1", "--format=%ct", "--", "runtime/src"])
+        .current_dir(&root)
+        .output()
+        .ok()?;
+    let ct: u64 = String::from_utf8_lossy(&out.stdout).trim().parse().ok()?;
+
+    let mtime = |p: &PathBuf| -> Option<u64> {
+        use std::os::unix::fs::MetadataExt;
+        std::fs::metadata(p).ok().map(|m| m.mtime() as u64)
+    };
+
+    // The override is checked INSTEAD of the glob: a run that pins an archive is
+    // not also linking the ones in `target/release/`.
+    let mut candidates: Vec<PathBuf> = Vec::new();
+    match std::env::var("KARAC_RUNTIME") {
+        Ok(p) if !p.is_empty() => candidates.push(PathBuf::from(p)),
+        _ => {
+            if let Ok(rd) = std::fs::read_dir(root.join("target/release")) {
+                for e in rd.flatten() {
+                    let name = e.file_name().to_string_lossy().into_owned();
+                    if !name.starts_with("libkarac_runtime") || !name.ends_with(".a") {
+                        continue;
+                    }
+                    if name.ends_with("_wasm.a") || name.ends_with("_wasm_threads.a") {
+                        continue;
+                    }
+                    candidates.push(e.path());
+                }
+            }
+        }
+    }
+    for prof in ["release", "debug"] {
+        let p = root.join("target").join(prof).join("karac_jit_runner");
+        if p.exists() {
+            candidates.push(p);
+        }
+    }
+
+    let mut stale: Vec<String> = candidates
+        .iter()
+        .filter(|p| mtime(p).is_some_and(|m| m < ct))
+        .map(|p| p.display().to_string())
+        .collect();
+    if stale.is_empty() {
+        return None;
+    }
+    stale.sort();
+    Some(format!(
+        "STALE RUNTIME ARTIFACT(S) — older than the last runtime/src change.\n\
+         These link cleanly and run the OLD behaviour; nothing else in this \
+         suite detects that (`link_or_skip` discriminates on `undefined \
+         symbol`, which is the LOUD half only).\n\
+         \x20 {}\n\
+         Rebuild (CLAUDE.md § Commands, lean FIRST then full), and rebuild the \
+         opt-in regex/arrow/gpu/unicode archives with their own --features if \
+         you have them. `karac_jit_runner` needs `cargo build --features llvm` \
+         with no --bin filter.\n\
+         Override with KARAC_ALLOW_STALE_ARCHIVE=1 if the change cannot affect \
+         what these fixtures execute.",
+        stale.join("\n\x20 ")
+    ))
+}
+
+/// Report [`stale_runtime_artifacts`] at most once per test process.
+fn warn_or_fail_on_stale_runtime() {
+    static REPORT: std::sync::OnceLock<Option<String>> = std::sync::OnceLock::new();
+    let Some(msg) = REPORT.get_or_init(stale_runtime_artifacts) else {
+        return;
+    };
+    if std::env::var("KARAC_REQUIRE_RUNTIME_ARCHIVE").as_deref() == Ok("1") {
+        panic!("{msg}");
+    }
+    static WARNED: std::sync::Once = std::sync::Once::new();
+    WARNED.call_once(|| eprintln!("!! {msg}"));
+}
+
 /// Every E2E harness links against `libkarac_runtime.a` and soft-skips
 /// (`.ok()?` → `None`) when linking fails, because a checkout without the
 /// archive built is a legitimate skip (CLAUDE.md's documented "skip with a
@@ -259,6 +385,17 @@ pub const OWNERSHIP_GATE_GRANDFATHERED: &[&str] = &[
 ///
 /// Returns `Some(())` to continue; `None` to soft-skip (propagate with `?`).
 pub fn link_or_skip(result: Result<(), String>) -> Option<()> {
+    // B-2026-09-16-7 — the SILENT half of staleness, checked on BOTH paths.
+    //
+    // Everything below this call is about the LOUD half: a link that fails with
+    // an undefined symbol. A runtime change that rewrites what an EXISTING
+    // `karac_*` symbol does links perfectly and runs the OLD behaviour, and the
+    // ~1260 E2E call sites downstream see nothing — which is the gate CI runs
+    // and the gate every session runs before declaring work done.
+    //
+    // Deliberately before the `Ok` early-return: the case that matters is the
+    // one where linking SUCCEEDS.
+    warn_or_fail_on_stale_runtime();
     let Err(e) = result else {
         return Some(());
     };
