@@ -96457,12 +96457,12 @@ fn main() {
     ///     prologue runs none of the by-value param arms).
     ///   * the `Result` leg — the body runs correctly on all four surfaces and
     ///     the interior still leaks, so it is a third owner path.
-    ///     B-2026-09-17-25.
+    ///     B-2026-09-17-26.
     ///   * the DESTRUCTURING arm (`Some((a, b))`) — the admission test retracts
     ///     UNCONDITIONALLY for a tuple pattern, on the stated premise that "each
     ///     heap element gets its own `track_vec_var` owner". True for a
     ///     `Vec`/`String` element, false for a user-STRUCT element.
-    ///     B-2026-09-17-26.
+    ///     B-2026-09-17-27.
     ///
     /// Keeping them out of this fixture is deliberate: each would redden the
     /// suite for a defect its own row owns.
