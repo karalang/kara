@@ -2665,14 +2665,70 @@ mod tests {
         if let Err(e) = compile_link_coro(&src, &exe_path, None) {
             panic!("compile/link failed: {e}");
         }
+        // B-2026-09-12-1 — SERVER-SIDE STATE ON A RED, at zero cost to the
+        // program under test.
+        //
+        // That row asks three times for server-side state at the moment of the
+        // wedge, and DECLINES to get it on the reasoning that "reaching it
+        // means changing the Kara server program under test, and instrumenting
+        // a race from inside the thing racing is how the window moves". The
+        // reasoning is sound and the conclusion was still wrong: the runtime
+        // already reports this, behind `KARAC_WS_STATS`, from the handshake
+        // pool rather than from the Kara source. The server's stderr was being
+        // PIPED AND NEVER DRAINED, so all nine preserved reds threw the answer
+        // away — the same shape as the casualty index that was already sitting
+        // in a `Vec<bool>` one line above the assertion.
+        //
+        // What the reporter gives, once a second: `submit_total`, `done_total`,
+        // `in_flight`, `work_q` and — the discriminating one — `done_q`. A
+        // COMPLETED handshake sitting unclaimed in `done_q` while the client
+        // waits is an accept-side wedge; a connection that never reaches
+        // `done_total` is a handshake that never finished; both queues drained
+        // with the client still waiting is "the coroutine resumed but its write
+        // never flushed". Per-step failure counters and up to 32 captured error
+        // strings (`[karac_ws_stats:err]`) come with it.
+        //
+        // COST, stated because this row is about a race and the observer is not
+        // free: one reporter thread sleeping 1s between ticks, a few `Relaxed`
+        // atomic adds per handshake, and a lock taken only on a FAILING one.
+        // Successful connections here complete in 5..50ms, so the first tick
+        // lands well after they finish; the ticks that matter are the ones
+        // during a multi-second wedge. If a future red ever looks timing-shifted
+        // by this, suspect it first.
         let mut child = Command::new(&exe_path)
             .stdin(Stdio::null())
+            .env("KARAC_WS_STATS", "1")
             .stdout(Stdio::piped())
             .stderr(Stdio::piped())
             .spawn()
             .expect("spawn wss coro server");
         let stdout = child.stdout.take().expect("child stdout");
         let (rx, _join) = spawn_stdout_reader(stdout);
+        let server_log: std::sync::Arc<Mutex<Vec<String>>> =
+            std::sync::Arc::new(Mutex::new(Vec::new()));
+        {
+            let stderr = child.stderr.take().expect("child stderr");
+            let sink = std::sync::Arc::clone(&server_log);
+            std::thread::spawn(move || {
+                let mut reader = BufReader::new(stderr);
+                let mut line = String::new();
+                loop {
+                    line.clear();
+                    match reader.read_line(&mut line) {
+                        Ok(0) | Err(_) => break,
+                        Ok(_) => {
+                            let mut g = sink.lock().unwrap_or_else(|p| p.into_inner());
+                            // Bounded: a wedge is diagnosed from the last few
+                            // ticks, and an unbounded sink on a hung server is
+                            // its own failure mode.
+                            if g.len() < 256 {
+                                g.push(line.trim_end().to_string());
+                            }
+                        }
+                    }
+                }
+            });
+        }
         let port = match rx.recv_timeout(Duration::from_secs(15)) {
             Ok(p) => p,
             Err(_) => {
@@ -2765,12 +2821,35 @@ mod tests {
                 (Some(lo), Some(hi)) => format!("{lo}..{hi}ms"),
                 _ => "n/a".to_string(),
             };
+            // The server's own view, from `KARAC_WS_STATS` (see the spawn
+            // above). Read the LAST tick before the wedge resolved: `done_q`
+            // non-zero with the client still waiting is an accept-side wedge;
+            // `done_total` short of `submit_total` is a handshake that never
+            // finished; both queues empty is a handler that resumed and never
+            // flushed. Empty here means the reporter never ticked — the run
+            // finished inside its first 1s sleep — which is itself informative:
+            // no wedge lasted long enough to observe.
+            let srv = {
+                let g = server_log.lock().unwrap_or_else(|p| p.into_inner());
+                if g.is_empty() {
+                    "(no [karac_ws_stats] output — reporter never ticked)".to_string()
+                } else {
+                    g.iter()
+                        .rev()
+                        .take(12)
+                        .rev()
+                        .cloned()
+                        .collect::<Vec<_>>()
+                        .join("\n  ")
+                }
+            };
             panic!(
                 "only {oks}/{N} concurrent WS-over-TLS handlers echoed — the rest \
                  wedged (coroutine resume race / accept-path handshake-pool mismatch)\n\
                  B-2026-09-12-1: wedged connections, in submission order:\n  {}\n\
                  the {oks} that succeeded took {span}. An index-clustered tail points at \
-                 the accept path / backlog; an arbitrary index points at the resume race. \
+                 the accept path / backlog; an arbitrary index points at the resume race.\n\
+                 B-2026-09-12-1: server-side, last ticks:\n  {srv}\n\
                  PRESERVE THIS LOG before running anything else.",
                 failed.join("\n  ")
             );
