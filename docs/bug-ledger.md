@@ -92,7 +92,7 @@ distinguish "bugs flattening" from "we stopped writing them down."
 
 | class | total |
 |---|---|
-| run-vs-build | 427 |
+| run-vs-build | 428 |
 | miscompile | 415 |
 | leak | 369 |
 | double-free | 242 |
@@ -110,7 +110,7 @@ distinguish "bugs flattening" from "we stopped writing them down."
 
 | surface | total |
 |---|---|
-| codegen | 1828 |
+| codegen | 1829 |
 | interp | 468 |
 | typecheck | 302 |
 | other | 96 |
@@ -194,6 +194,7 @@ _Generated from `bug-ledger.jsonl` by `scripts/bug-curve.py` (2026-05-20 → 202
 | B-2026-09-17-15 | 2026-09-17 | codegen | low | A GENERIC ENUM'S `shared` PAYLOAD IS NEVER RC-RELEASED, BECAUSE THE DROP KIND IS CLASSIFIED ON THE ERASED TYPE PARAM -- `enum Box2[T] { V(T), N }` over `shared struct Sh` leaks 16 B in 1 block at `-O0` (32 B for two compared values) where the concrete `enum Et { A(Sh), B }` twin is clean since B-2026-09-10-11's fix, because `field_drop_kinds` is written ONCE PER ENUM NAME in `declare_enums` and classifies `T`, which no name-keyed set can contain; `Box2[String]` is clean, so something already resolves the instantiation for a buffer payload | — |
 | B-2026-09-17-16 | 2026-09-17 | codegen | medium | AN ARM THAT REBINDS A TUPLE `Option` PAYLOAD (`let u = t`), AND THE `let ... else` FORM, RUN THE ELEMENT `Drop` BODIES ON `--interp` AND LOSE THEM ON EVERY COMPILED SURFACE -- the two spellings B-2026-09-10-14's fix deliberately leaves alone, because both MATERIALIZE the binding and the destination it is handed to registers nothing | — |
 | B-2026-09-17-17 | 2026-09-17 | interp+codegen | medium | A TUPLE `Option` PAYLOAD HANDED TO A FREE FUNCTION FROM A READ-ONLY ARM LOSES ITS ELEMENT `Drop` BODIES ON BOTH BACKENDS -- `match o { Some(t) => eat(t) }` prints no body where the by-value callee is caller-retains, the one cell where the two ownership classifiers disagree and B-2026-09-10-14 chose the agreed answer over a divergence | — |
+| B-2026-09-17-19 | 2026-09-17 | codegen | medium | A BARE `shared enum` LOCAL RUNS ITS PAYLOAD'S `Drop` BODY UNDER `--interp` AND ON NO COMPILED BACKEND -- `let s: SMono = SMono.P(mkr(1));` over `shared enum SMono { P(R2), Q }` prints `d2:9` interpreted and nothing under jit / `-O0` / `-O2`, with memory clean on both; found as a MIS-MEASURED CONTROL in B-2026-09-10-20, which records this cell as running the body | — |
 
 ### Relocated
 
