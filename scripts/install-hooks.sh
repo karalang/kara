@@ -9,7 +9,9 @@ echo "core.hooksPath set to 'hooks' — pre-push bug-ledger lint is now active."
 echo "Disable with: git config --unset core.hooksPath"
 if [ -f .git/shallow ]; then
     echo
-    echo "NOTE: this is a shallow clone, so the fix-SHA resolvability check will be"
-    echo "skipped (git cannot resolve historical SHAs). Run 'git fetch --unshallow'"
-    echo "for the hook to catch dangling pre-rebase fix SHAs."
+    echo "NOTE: this is a shallow clone, so bug-lint rule 6 runs only over the rows"
+    echo "this tree changes and its full-tree audit is skipped — git cannot resolve"
+    echo "historical SHAs. Rule 6b runs at any depth and is the check that catches the"
+    echo "case this hook exists for: a fix SHA a rebase orphaned, which still RESOLVES"
+    echo "in the clone that made it. Run 'git fetch --unshallow' for rule 6 in full."
 fi

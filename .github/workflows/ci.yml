@@ -118,6 +118,15 @@ jobs:
       - name: Bug-ledger integrity
         run: ./scripts/bug-lint.sh
 
+      # Rule 6b (the fix-SHA orphan detector) fails SILENTLY when it breaks: a
+      # lint that checks nothing is indistinguishable from one that finds
+      # nothing, which is how rule 6 stayed skipped in every cloud container for
+      # months (B-2026-09-16-8). This builds a throwaway SHALLOW clone, orphans
+      # a commit in it the way a rebase does, and asserts the lint catches it —
+      # so the gate that guards the ledger's traceability is itself guarded.
+      - name: Bug-ledger rule-6b selftest
+        run: ./scripts/bug-lint-selftest.sh
+
       # Pure-python and milliseconds — it parses this file and greps tests/,
       # it does not build. Answers "which `#[cfg(feature = "llvm")]` tests does
       # no CI job run?", which was previously answerable only by redoing a

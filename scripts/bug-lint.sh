@@ -10,6 +10,9 @@
 #   5. cross-repo (if kara-katas is found): every `kata:N` ledger row is cited by
 #      that kata's README, and every B-ID in a kata README exists in the ledger
 #   6. every SHA cited in a `fix` field resolves to a commit in this repo
+#  6b. every fix SHA this working copy just wrote is REACHABLE from HEAD or
+#      origin/main — an orphaned commit still resolves in the clone that made
+#      it, so presence (rule 6) cannot see the case rule 6b exists for
 #   7. no PUBLISHED row has disappeared — every B-ID on origin/main is still here
 #   8. canonical JSON encoding — see scripts/bug-ledger-normalize.py
 set -euo pipefail
@@ -189,6 +192,50 @@ DANGLING_GRANDFATHERED = {
     "B-2026-08-09-21", "B-2026-08-10-3", "B-2026-08-10-21",
 }
 
+# A `fix` field may reference a commit in the SIBLING kara-katas repo (an
+# `audit`/`kata-gap` source often does), written `kara-katas <sha>`. That
+# sha legitimately does not resolve HERE, and rule 6 is a same-repo check —
+# flagging it is the "false accusation" the token rule above is written to
+# avoid. Mask those references out before extracting, so only THIS repo's
+# fix SHAs are validated. The mask is narrow: it drops a sha ONLY when
+# immediately preceded by `kara-katas` (with an optional `commit`/`repo`),
+# so it can never hide a genuine dangling same-repo SHA.
+KATAS_SHA = re.compile(
+    r"kara-katas\s+(?:commit\s+|repo\s+)?"
+    r"(?=[0-9a-f]*\d)(?=[0-9a-f]*[a-f])[0-9a-f]{7,40}\b"
+)
+def _repo_shas(fix):
+    return set(SHA.findall(KATAS_SHA.sub("kara-katas", fix or "")))
+
+# HEADLINE sha vs sha merely MENTIONED in the prose. What this rule
+# protects is traceability: a closed row must land you on its commit via
+# `git show`, and that is the sha in the opening `FIXED by <sha>.` clause —
+# the one `bug-close.py` requires and the one a reader reaches for first.
+#
+# A sha further down the prose is a REFERENCE, and a dangling one there is
+# frequently DELIBERATE: the row is recording its own history ("this note
+# first cited `a6f6572` … that sha is orphaned; the live commit is
+# `d135d02`" — B-2026-08-29-48). Erroring on that punishes a row for being
+# honest about a rebase, and the only way to silence it is to delete the
+# record, which is the opposite of what the ledger is for. So: headline
+# dangling is an ERROR, prose dangling is one aggregated WARN.
+#
+# A row whose fix does NOT open with the convention (about a thousand
+# legacy rows do not) has no distinguishable headline, so every sha in it
+# is treated as headline-class — the pre-2026-08-30 behaviour, which is
+# what DANGLING_GRANDFATHERED is calibrated against.
+OPENER = re.compile(r"(?i)^\s*(?:fixed|fix|closed|resolved)\s+(?:by|in|at|via|with)\b")
+def _split_shas(fix):
+    masked = KATAS_SHA.sub("kara-katas", fix or "")
+    allshas = set(SHA.findall(masked))
+    if not OPENER.match(masked):
+        return allshas, set()
+    # First sentence only: a period that ends a sentence is followed by
+    # whitespace or end-of-string, which leaves `docs/foo.md` intact.
+    head = re.split(r"\.(?=\s|$)", masked, maxsplit=1)[0]
+    headline = set(SHA.findall(head))
+    return headline, allshas - headline
+
 # A SHALLOW clone has almost no history, so every SHA would look dangling and
 # the check would report ~900 false violations. Skip loudly rather than lie —
 # and note that `actions/checkout` is depth-1 BY DEFAULT, which is why the CI
@@ -233,49 +280,6 @@ if _shallow:
 if _git("rev-parse", "--git-dir").returncode != 0:
     warns.append("not a git repository — skipped fix-SHA resolvability check")
 else:
-    # A `fix` field may reference a commit in the SIBLING kara-katas repo (an
-    # `audit`/`kata-gap` source often does), written `kara-katas <sha>`. That
-    # sha legitimately does not resolve HERE, and rule 6 is a same-repo check —
-    # flagging it is the "false accusation" the token rule above is written to
-    # avoid. Mask those references out before extracting, so only THIS repo's
-    # fix SHAs are validated. The mask is narrow: it drops a sha ONLY when
-    # immediately preceded by `kara-katas` (with an optional `commit`/`repo`),
-    # so it can never hide a genuine dangling same-repo SHA.
-    KATAS_SHA = re.compile(
-        r"kara-katas\s+(?:commit\s+|repo\s+)?"
-        r"(?=[0-9a-f]*\d)(?=[0-9a-f]*[a-f])[0-9a-f]{7,40}\b"
-    )
-    def _repo_shas(fix):
-        return set(SHA.findall(KATAS_SHA.sub("kara-katas", fix or "")))
-
-    # HEADLINE sha vs sha merely MENTIONED in the prose. What this rule
-    # protects is traceability: a closed row must land you on its commit via
-    # `git show`, and that is the sha in the opening `FIXED by <sha>.` clause —
-    # the one `bug-close.py` requires and the one a reader reaches for first.
-    #
-    # A sha further down the prose is a REFERENCE, and a dangling one there is
-    # frequently DELIBERATE: the row is recording its own history ("this note
-    # first cited `a6f6572` … that sha is orphaned; the live commit is
-    # `d135d02`" — B-2026-08-29-48). Erroring on that punishes a row for being
-    # honest about a rebase, and the only way to silence it is to delete the
-    # record, which is the opposite of what the ledger is for. So: headline
-    # dangling is an ERROR, prose dangling is one aggregated WARN.
-    #
-    # A row whose fix does NOT open with the convention (about a thousand
-    # legacy rows do not) has no distinguishable headline, so every sha in it
-    # is treated as headline-class — the pre-2026-08-30 behaviour, which is
-    # what DANGLING_GRANDFATHERED is calibrated against.
-    OPENER = re.compile(r"(?i)^\s*(?:fixed|fix|closed|resolved)\s+(?:by|in|at|via|with)\b")
-    def _split_shas(fix):
-        masked = KATAS_SHA.sub("kara-katas", fix or "")
-        allshas = set(SHA.findall(masked))
-        if not OPENER.match(masked):
-            return allshas, set()
-        # First sentence only: a period that ends a sentence is followed by
-        # whitespace or end-of-string, which leaves `docs/foo.md` intact.
-        head = re.split(r"\.(?=\s|$)", masked, maxsplit=1)[0]
-        headline = set(SHA.findall(head))
-        return headline, allshas - headline
 
     split = {r["id"]: _split_shas(r.get("fix", "")) for r in rows}
     split = {k: v for k, v in split.items() if v[0] or v[1]}
@@ -287,7 +291,9 @@ else:
             f"shallow clone — fix-SHA resolvability checked for the {len(split)} row(s) "
             f"this tree changes against origin/main; {_total - len(split)} pre-existing "
             "row(s) skipped (they need full history; set `fetch-depth: 0` on "
-            "actions/checkout)"
+            "actions/checkout). Resolvability is object PRESENCE, which a live orphan "
+            "still has in the clone that made it — rule 6b below is the half that "
+            "catches those."
         )
     cites = {k: (v[0] | v[1]) for k, v in split.items()}
     every = sorted({t for v in cites.values() for t in v})
@@ -334,6 +340,121 @@ else:
             for bid in sorted(DANGLING_GRANDFATHERED - {b for b in cites if cites[b] & gone}):
                 warns.append(f"{bid}: grandfathered as dangling but now resolves — "
                              "remove it from DANGLING_GRANDFATHERED")
+
+# ── 6b. fix SHAs THIS working copy just wrote must be REACHABLE ───────────
+# Rule 6 asks whether a cited sha RESOLVES — whether the object is in this
+# clone's store — and 3b2a932 narrowed that question to the rows this tree
+# changes so it could run on a shallow clone at all. That narrowing is right and
+# it is not sufficient, because PRESENCE IS THE WRONG TEST FOR AN ORPHAN: a
+# commit a rebase replaced keeps its object (the reflog holds it) and so resolves
+# perfectly in the very container that orphaned it. CLAUDE.md says as much about
+# the class — "it resolves fine locally (the reflog keeps it) and resolves
+# nowhere for anyone who clones `main`". MEASURED 2026-09-17, against the
+# narrowed rule 6 on a shallow clone with a real rebase orphan in a changed row:
+# `1 row(s) ... checked`, `0 errors` (scripts/bug-lint-selftest.sh cell 1).
+#
+# So this rule asks REACHABILITY instead, which needs no history either: of the
+# fix SHAs this working copy just wrote, is each reachable from `HEAD` or
+# `origin/main`? An orphan is reachable from neither; a live commit this session
+# made is a few steps down from HEAD, inside the shallow window by construction.
+#
+# Candidates come from two sources, because neither alone covers both moments a
+# close can happen at:
+#   (i)  a headline sha in the local row that its `origin/main` copy does NOT
+#        cite — i.e. one this working copy added or corrected. Restricting to
+#        NEW shas is what keeps an untouched old row out: editing a 2026-06 row
+#        must not put its 2026-06 fix sha (long outside a shallow graph) on
+#        trial.
+#   (ii) the `<bid> <sha>` pairs `bug-close.py` appends to
+#        `.git/kara-closed-fix-shas`. That file lives outside the worktree, so
+#        it survives the push and survives (i) going empty — which is what keeps
+#        the rule meaningful when the rebase was triggered BY the push (`git
+#        push` → non-fast-forward → fetch, rebase, retry, all inside one
+#        command), the shape that defeats the "close after the final rebase"
+#        prose rule, because close and push are then the same instant.
+#
+# WHY NOT THE OBVIOUS GENERALIZATION — flag EVERY cited sha that is present
+# locally but unreachable? MEASURED 2026-09-17 on this container: 21 false
+# positives out of 181 locally-present SHAs. Repeated `git fetch origin main`
+# accumulates each fetch's objects while `.git/shallow` keeps the graph
+# truncated, so a fix commit from before the shallow boundary is present and
+# unreachable for a reason that has nothing to do with a rebase. Narrowing to
+# what this working copy wrote is what makes the rule exact rather than noisy.
+if _git("rev-parse", "--git-dir").returncode != 0:
+    pass  # already reported above
+else:
+    # HEAD's reflog holds every commit this clone CREATED (each was HEAD the
+    # moment it was made), and a `git fetch` never moves HEAD. So on a shallow
+    # clone it separates the two unreachable populations: a rebase orphan is in
+    # it, a truncation artifact is not. It only decides ERROR vs WARN — the
+    # verdict itself is reachability.
+    reflog = set(_git("reflog", "--format=%H", "HEAD").stdout.split())
+
+    def _reach(sha):
+        return (_git("merge-base", "--is-ancestor", sha, "HEAD").returncode == 0
+                or _git("merge-base", "--is-ancestor", sha, "origin/main").returncode == 0)
+
+    def _headlines_by_id(text):
+        out = {}
+        for line in text.splitlines():
+            if not line.strip():
+                continue
+            try:
+                j = json.loads(line)
+            except Exception:
+                continue
+            out[j.get("id", "")] = _split_shas(j.get("fix", ""))[0]
+        return out
+
+    cand = {}  # sha -> {B-ID, ...}
+    pub6b = _git("show", f"origin/main:{ledger}")
+    if pub6b.returncode == 0:
+        was = _headlines_by_id(pub6b.stdout)
+        now = _headlines_by_id(pathlib.Path(ledger).read_text())
+        for bid, shas in now.items():
+            for t in shas - was.get(bid, set()):
+                cand.setdefault(t, set()).add(bid)
+    recorded = pathlib.Path(_git("rev-parse", "--git-path", "kara-closed-fix-shas").stdout.strip())
+    if recorded.is_file():
+        for line in recorded.read_text().splitlines():
+            f = line.split()
+            if len(f) >= 2:
+                cand.setdefault(f[1], set()).add(f[0])
+
+    unverifiable = []
+    for t in sorted(cand):
+        if _reach(t):
+            continue
+        rowids = ", ".join(sorted(cand[t]))
+        here = _git("cat-file", "-e", t + "^{commit}").returncode == 0
+        made_here = here and any(h.startswith(t) for h in reflog)
+        if _shallow and not (here and made_here):
+            # Either absent, or present-but-truncated and not created in this
+            # clone — the population measured above. Nothing to conclude here;
+            # rule 6 on a full clone (CI) is what judges those.
+            unverifiable.append(f"{rowids} ({t}{'' if here else ', object absent'})")
+            continue
+        hint = ""
+        if here:
+            subj = _git("log", "-1", "--format=%s", t).stdout.strip()
+            if subj:
+                twin = _git("log", "-n", "1", "--format=%h", "--fixed-strings",
+                            f"--grep={subj}", "HEAD").stdout.split()
+                if twin:
+                    hint = (f" A commit in HEAD carries the same subject: {twin[0]} — "
+                            "that is almost certainly the post-rebase twin; cite it.")
+        errs.append(
+            f"{rowids}: fix cites {t}, which is reachable from neither HEAD nor origin/main — "
+            "a rebase orphaned it after the row was written, so the row points at a commit that "
+            f"exists only in this container.{hint} Re-read the sha from `git log` and correct the "
+            "row before pushing."
+        )
+    if unverifiable:
+        warns.append(
+            f"{len(unverifiable)} just-written fix sha(s) could not be verified on this shallow "
+            f"clone (absent, or present-but-truncated and not created here): "
+            f"{'; '.join(unverifiable)}"
+        )
 
 # 7. NO PUBLISHED ROW HAS DISAPPEARED.
 #

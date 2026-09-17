@@ -10,12 +10,19 @@
 # Bypass a single push when you deliberately need to:
 #     git push --no-verify
 #
-# COVERAGE CAVEAT — this is the whole reason these SHAs slip through: the
-# fix-SHA resolvability check (bug-lint rule 6) can only run on a FULL clone.
-# On a shallow clone git cannot resolve historical SHAs, so the lint SKIPS that
-# rule (printing "shallow clone — skipped fix-SHA resolvability check") and a
-# dangling pre-rebase SHA sails past. Since that is exactly what this hook
-# exists to catch, keep the working clone un-shallow:  git fetch --unshallow
+# COVERAGE — bug-lint rule 6 asks whether a fix SHA RESOLVES, which needs
+# history, so on a shallow clone it runs only over the rows the tree changes and
+# its full-tree audit is skipped. Neither half sees the case this hook was
+# written for: an orphaned commit keeps its object in the clone that made it, so
+# it resolves there and the check passes (B-2026-09-16-8). Rule 6b is the half
+# that catches it — reachability from HEAD/origin/main, which needs no history at
+# all. Rule 6's full-tree audit still wants an un-shallow clone, so
+# `git fetch --unshallow` remains worth it where it is cheap.
+#
+# NOTE ON REACH — this hook is opt-in per clone (core.hooksPath is not set by
+# `git clone`), so in a fresh container it is INERT until install-hooks.sh runs.
+# Do not treat it as the only gate: run scripts/bug-lint.sh explicitly after a
+# close, which is what CLAUDE.md's ledger workflow asks for.
 set -euo pipefail
 
 repo_root="$(git rev-parse --show-toplevel)"

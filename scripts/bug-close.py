@@ -85,6 +85,81 @@ def describe(row: dict) -> str:
     )
 
 
+def git(*a: str) -> subprocess.CompletedProcess:
+    return subprocess.run(["git", "-C", str(ROOT), *a], capture_output=True, text=True)
+
+
+def check_sha_live(sha: str, allow: bool) -> None:
+    """Refuse a fix SHA that a rebase has ALREADY orphaned.
+
+    A fix SHA is volatile until it is pushed: the workflow rebases onto
+    `origin/main` before every push, which rewrites the very commit the row is
+    about to cite. Recording it from memory — or closing after a rebase with the
+    pre-rebase sha in hand — writes a row that resolves fine here and nowhere
+    else. Eight rows carry a `SHA NOTE` about exactly that (B-2026-09-16-8), and
+    `bug-lint.sh` rule 6 cannot catch it: it asks whether the sha RESOLVES, and
+    an orphan keeps its object in the clone that made it, so it does.
+
+    Reachable from `HEAD` or `origin/main` is the test, and it needs no history:
+    a live commit this session made is a few steps down from HEAD, while an
+    orphan is reachable from neither and survives only in the reflog. An
+    UNRESOLVABLE sha is a different case and only a note — on a shallow clone it
+    is usually a commit from before the graph was truncated, and `--sha` may
+    legitimately name a commit in the sibling kara-katas repo.
+    """
+    if git("rev-parse", "--git-dir").returncode != 0:
+        return
+    if git("cat-file", "-e", sha + "^{commit}").returncode != 0:
+        print(
+            f"bug-close: NOTE — {sha} resolves to no commit in this clone, so it could "
+            f"not be checked.\n"
+            f"  On a shallow clone that is expected for an older commit; if {sha} is a "
+            f"sibling-repo\n"
+            f"  commit, write it in the prose as `kara-katas {sha}` so the lint masks it.",
+            file=sys.stderr,
+        )
+        return
+    for ref in ("HEAD", "origin/main"):
+        if git("merge-base", "--is-ancestor", sha, ref).returncode == 0:
+            return
+    subj = git("log", "-1", "--format=%s", sha).stdout.strip()
+    twin = git("log", "-n", "1", "--format=%h", "--fixed-strings",
+               f"--grep={subj}", "HEAD").stdout.split() if subj else []
+    hint = (f"\n    A commit in HEAD carries the same subject: {twin[0]} — that is almost\n"
+            f"    certainly the post-rebase twin. Cite that one." if twin else "")
+    if allow:
+        print(f"bug-close: NOTE — {sha} is unreachable from HEAD and origin/main; "
+              f"writing anyway (--allow-unreachable-sha).{hint}", file=sys.stderr)
+        return
+    sys.exit(
+        f"bug-close: REFUSING TO WRITE — {sha} is reachable from neither HEAD nor\n"
+        f"    origin/main, so a rebase has already orphaned it. A row citing it points\n"
+        f"    at a commit that exists only in this container.{hint}\n"
+        f"    Re-read the sha from `git log` and re-run. Pass --allow-unreachable-sha\n"
+        f"    only if you know the commit will be pushed under this sha."
+    )
+
+
+def record_close(bid: str, sha: str) -> None:
+    """Leave the (row, sha) pair where `bug-lint.sh` rule 6b can re-check it.
+
+    The file lives in `.git`, outside the worktree, so it survives the push —
+    which is what keeps the check meaningful when the rebase is triggered BY the
+    push (`git push` -> non-fast-forward -> fetch, rebase, retry, all inside one
+    command). In that shape "close after the final rebase" and "before the push"
+    are the same instant, so a pre-push lint cannot see the orphan and only a
+    later run can.
+    """
+    path = git("rev-parse", "--git-path", "kara-closed-fix-shas").stdout.strip()
+    if not path:
+        return
+    try:
+        with open(path, "a") as f:
+            f.write(f"{bid} {sha}\n")
+    except OSError:
+        pass
+
+
 def main() -> None:
     ap = argparse.ArgumentParser(add_help=True)
     ap.add_argument("bid", help="B-ID to close, e.g. B-2026-08-11-9")
@@ -105,6 +180,9 @@ def main() -> None:
                     help="set the row's `tracker` field — where the work now "
                          "lives. REQUIRED by --status relocated (a relocation "
                          "whose pointer is missing is just a disappearance).")
+    ap.add_argument("--allow-unreachable-sha", action="store_true",
+                    help="permit a fix SHA that is reachable from neither HEAD "
+                         "nor origin/main (default: refuse — a rebase orphaned it)")
     ap.add_argument("--allow-reclose", action="store_true",
                     help="permit closing a row that is already closed (default: refuse)")
     ap.add_argument("--dry-run", action="store_true")
@@ -164,6 +242,8 @@ def main() -> None:
             f"  passing a SHA that happens to appear in the text."
         )
 
+    check_sha_live(args.sha, args.allow_unreachable_sha)
+
     new = dict(row)
     new["status"] = args.status
     if args.tracker:
@@ -193,6 +273,7 @@ def main() -> None:
     lines[idx] = json.dumps(new, ensure_ascii=False) + "\n"  # canonical form
     LEDGER.write_text("".join(lines))
     print(f"bug-close: {args.bid} -> {args.status} ({args.sha})")
+    record_close(args.bid, args.sha)
 
     r = subprocess.run(
         [sys.executable, str(ROOT / "scripts" / "bug-curve.py"), "--inject", str(ROLLUP)],
@@ -203,6 +284,13 @@ def main() -> None:
         die(f"row written, but rollup regeneration FAILED:\n{r.stderr}")
     print("bug-close: regenerated docs/bug-ledger.md")
     print("bug-close: now run scripts/bug-lint.sh before committing")
+    if not git("config", "core.hooksPath").stdout.strip():
+        # `git clone` does not set core.hooksPath, so the committed pre-push
+        # hook — whose whole job is to run this lint before a push — is INERT in
+        # a fresh clone, which is every cloud container. Say so once, here,
+        # because this is the moment a fix SHA starts being able to go stale.
+        print("bug-close: NOTE — core.hooksPath is unset, so hooks/pre-push is not "
+              "active in this clone; run scripts/install-hooks.sh to arm it.")
 
 
 if __name__ == "__main__":
