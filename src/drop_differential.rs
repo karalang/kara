@@ -271,6 +271,11 @@ pub fn differential_check_on(src: &str, tree: OracleTree) -> DiffOutcome {
         }
     }
 
+    // Rule 6's call-boundary inputs. Built from the same tree the oracle
+    // analyzed, so a param's index and a call site's argument index agree.
+    let params_order = param_order_by_function(&parsed.program);
+    let call_sites = call_site_args(&parsed.program);
+
     let mut drops_checked = 0usize;
     let mut divergences = Vec::new();
     for f in &oracle.functions {
@@ -350,11 +355,43 @@ pub fn differential_check_on(src: &str, tree: OracleTree) -> DiffOutcome {
             .drops
             .iter()
             .map(|d| (d.place.as_str(), d.via.as_deref()))
-            .filter(|(p, via)| {
-                !fn_params.contains(*p) && !via.is_some_and(|v| fn_params.contains(v))
-            })
+            .filter(|(p, _)| !fn_params.contains(*p))
             .collect();
         for (place, via) in scheduled {
+            // RULE 6 — CROSS-FUNCTION DISCHARGE (B-2026-09-13-4), the successor
+            // to rule 2's blanket exclusion of a matched PARAM's payload.
+            //
+            // Rule 2 excluded the whole population because the obligation is
+            // discharged in the CALLER and the comparison is per-callee. That
+            // was the only available answer while `param_names_by_function` was
+            // the sole call-boundary information: it can say "this is a
+            // parameter" and nothing about which caller-side place covers it.
+            // `call_site_args` supplies the missing half, so the obligation can
+            // be RESOLVED instead of dropped.
+            //
+            // THE DEFAULT IS STILL EXCLUSION, and that is the soundness
+            // property rather than caution: every branch that cannot PROVE
+            // coverage one way or the other falls back to today's behaviour.
+            // A divergence is reported only when the call-site set is known
+            // complete, every argument at that position is a nameable place,
+            // and one of those places is absent from its own caller's records.
+            if let Some(v) = via.filter(|v| fn_params.contains(*v)) {
+                match cross_fn_discharge(&f.function, v, &params_order, &call_sites, &cg) {
+                    CrossFn::Unresolvable => continue,
+                    CrossFn::Covered => {
+                        drops_checked += 1;
+                        continue;
+                    }
+                    CrossFn::Uncovered => {
+                        drops_checked += 1;
+                        divergences.push(Divergence {
+                            function: f.function.clone(),
+                            place: place.to_string(),
+                        });
+                        continue;
+                    }
+                }
+            }
             drops_checked += 1;
             let emitted =
                 cg_places.is_some_and(|s| s.contains(place) || via.is_some_and(|v| s.contains(v)));
@@ -370,6 +407,162 @@ pub fn differential_check_on(src: &str, tree: OracleTree) -> DiffOutcome {
         drops_checked,
         divergences,
     }
+}
+
+/// Rule 6's verdict for one callee obligation discharged across the call
+/// boundary. See the comment at its use site for why `Unresolvable` is the
+/// default rather than a failure.
+#[derive(Clone, Copy, PartialEq, Eq, Debug)]
+enum CrossFn {
+    /// Every call site passes a nameable place at this position, and every one
+    /// of those places is recorded by its own caller. The obligation is met.
+    Covered,
+    /// Every call site passes a nameable place, and at least one caller emitted
+    /// no record for it — a missing drop, localized to the callee's place.
+    Uncovered,
+    /// Nothing can be concluded: no call site was found (the callee is
+    /// unreferenced, or reached only through a method call, which
+    /// `call_site_args` deliberately does not collect), or some argument is a
+    /// TEMPORARY, which codegen discharges through a synthesized place
+    /// (`__optbox_arg_tmp0`) that no source name can match. Excluded exactly as
+    /// rule 2 excluded it.
+    Unresolvable,
+}
+
+/// Resolve a callee obligation whose `via` is the parameter `param` of
+/// `callee`: is the place each caller passes at that position recorded as
+/// dropped by that caller?
+fn cross_fn_discharge(
+    callee: &str,
+    param: &str,
+    params_order: &HashMap<String, Vec<String>>,
+    call_sites: &HashMap<(String, usize), Vec<CallSiteArg>>,
+    cg: &BTreeMap<&str, BTreeSet<&str>>,
+) -> CrossFn {
+    let Some(idx) = params_order
+        .get(callee)
+        .and_then(|ps| ps.iter().position(|p| p == param))
+    else {
+        return CrossFn::Unresolvable;
+    };
+    let Some(sites) = call_sites.get(&(callee.to_string(), idx)) else {
+        return CrossFn::Unresolvable;
+    };
+    if sites.is_empty() {
+        return CrossFn::Unresolvable;
+    }
+    let mut all_covered = true;
+    for site in sites {
+        let Some(root) = site.root.as_deref() else {
+            return CrossFn::Unresolvable;
+        };
+        if !cg
+            .get(site.caller.as_str())
+            .is_some_and(|places| places.contains(root))
+        {
+            all_covered = false;
+        }
+    }
+    if all_covered {
+        CrossFn::Covered
+    } else {
+        CrossFn::Uncovered
+    }
+}
+
+/// For each function, the parameter NAMES in declaration order — the index side
+/// of [`param_names_by_function`]'s set, so a call site's argument position can
+/// be matched to the parameter it binds.
+fn param_order_by_function(program: &Program) -> HashMap<String, Vec<String>> {
+    let mut out: HashMap<String, Vec<String>> = HashMap::new();
+    let mut add = |name: &str, f: &Function| {
+        out.insert(
+            name.to_string(),
+            f.params
+                .iter()
+                .map(|p| p.name().unwrap_or("").to_string())
+                .collect(),
+        );
+    };
+    for item in &program.items {
+        match item {
+            Item::Function(f) => add(&f.name, f),
+            Item::ImplBlock(b) => {
+                for it in &b.items {
+                    if let ImplItem::Method(m) = it {
+                        add(&m.name, m);
+                    }
+                }
+            }
+            _ => {}
+        }
+    }
+    out
+}
+
+/// One argument at one call site: which function contains the call, and the
+/// caller-side ROOT PLACE the argument is rooted at (`None` for a temporary —
+/// a constructor, a call result, a literal).
+#[derive(Clone, Debug)]
+struct CallSiteArg {
+    caller: String,
+    root: Option<String>,
+}
+
+/// Every `f(..)` call site in the surface tree, keyed by
+/// `(callee name, argument index)`.
+///
+/// B-2026-09-13-4 — the call-boundary information rule 2's successor needs.
+/// `param_names_by_function` could only answer "is this place a parameter",
+/// which is why the matched-param population could only be EXCLUDED: the
+/// obligation is discharged in the caller, and nothing here could say which
+/// caller-side place discharged it.
+///
+/// COMPLETENESS IS THE SOUNDNESS CONDITION, and it is why this reuses
+/// `codegen::param_transfer::visit_block` rather than a local walker. A MISSED
+/// call site reads as "this obligation has no caller that covers it", i.e. a
+/// false divergence on correct code — the exact failure the exclusion existed to
+/// avoid. That walker is exhaustive over `ExprKind` by construction (no `_`
+/// arm, so a new variant fails the build there), so the set is complete or the
+/// compiler says so.
+///
+/// Method calls are NOT collected: resolving a receiver to an impl block needs
+/// the type, which this pass does not carry, and a wrongly-attributed call site
+/// is the unsound direction. They stay excluded, as they are today.
+fn call_site_args(program: &Program) -> HashMap<(String, usize), Vec<CallSiteArg>> {
+    use crate::codegen::param_transfer::{place_root, visit_block, Node};
+    let mut out: HashMap<(String, usize), Vec<CallSiteArg>> = HashMap::new();
+    let mut collect = |caller: &str, body: &crate::ast::Block| {
+        visit_block(body, &mut |n| {
+            let Node::Expr(e) = n else { return };
+            let crate::ast::ExprKind::Call { callee, args } = &e.kind else {
+                return;
+            };
+            let crate::ast::ExprKind::Identifier(name) = &callee.kind else {
+                return;
+            };
+            for (i, a) in args.iter().enumerate() {
+                out.entry((name.clone(), i)).or_default().push(CallSiteArg {
+                    caller: caller.to_string(),
+                    root: place_root(&a.value).map(|s| s.to_string()),
+                });
+            }
+        });
+    };
+    for item in &program.items {
+        match item {
+            Item::Function(f) => collect(&f.name, &f.body),
+            Item::ImplBlock(b) => {
+                for it in &b.items {
+                    if let ImplItem::Method(m) = it {
+                        collect(&m.name, &m.body);
+                    }
+                }
+            }
+            _ => {}
+        }
+    }
+    out
 }
 
 /// Parameter names of every free function and impl method in the surface tree,

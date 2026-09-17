@@ -765,3 +765,78 @@ fn a_valid_program_is_still_checked() {
         other => panic!("expected Checked, got {other:?}"),
     }
 }
+
+/// B-2026-09-13-4 — RULE 6, the cross-function discharge check, replacing
+/// rule 2's blanket exclusion of a matched PARAMETER's payload.
+///
+/// The oracle schedules a matched param's payload under the ARM BINDING's name
+/// with `via` set to the parameter (`t` via `o`). Codegen discharges it in the
+/// CALLER, so a per-callee comparison sees an empty record set for the callee
+/// and rule 2 excluded the whole class — leaving the oracle's schedule for it
+/// unwatched, which is what that row was filed for.
+///
+/// Rule 6 resolves the obligation instead: it maps the parameter to its index,
+/// finds every call site, and asks whether the place each caller passes there
+/// is recorded as dropped BY THAT CALLER.
+///
+/// NON-VACUITY IS THE `drops_checked` COUNT, and it is asserted rather than
+/// described: this shape checked 1 obligation before rule 6 (`ot` in `main`)
+/// and checks 3 after (plus `t` via `o` and `Option.None` via `o` in `eat`).
+/// A regression that re-excluded the class would drop it back to 1 while
+/// keeping `divergences` empty — green, and blind again.
+#[test]
+fn matched_param_payload_is_discharged_by_the_caller() {
+    let src = "struct Held { tag: i64, buf: String }\n\
+         impl Drop for Held { fn drop(mut ref self) { println(f\"dH:{self.tag}\") } }\n\
+         fn mk(i: i64) -> Held { return Held { tag: i, buf: f\"bbbbbbbbbbbbbbbb{i}\" } }\n\
+         fn eat(o: Option[Held]) -> i64 {\n\
+         \x20   match o {\n\
+         \x20       Option.Some(t) => { return t.tag }\n\
+         \x20       Option.None => { return 0 }\n\
+         \x20   }\n\
+         }\n\
+         fn main() {\n\
+         \x20   let ot: Option[Held] = Option.Some(mk(1));\n\
+         \x20   let n = eat(ot);\n\
+         \x20   println(f\"n:{n}\");\n\
+         }\n";
+    assert_eq!(
+        assert_clean(src),
+        3,
+        "rule 6 must compare the two matched-param obligations in `eat`, not \
+         just `ot` in `main`"
+    );
+}
+
+/// The other half of rule 6, and the reason it is a resolution rather than a
+/// widening: a TEMPORARY argument stays excluded.
+///
+/// `eat(Option.Some(mk(1)))` passes no nameable place — codegen discharges the
+/// payload through a synthesized `__optbox_arg_tmp0`, which no source name can
+/// match — so the verdict is `Unresolvable` and the obligation is excluded
+/// exactly as rule 2 excluded it. Asserting the count stays 0 is what keeps a
+/// future widening from reporting those as divergences on correct code: this
+/// program is correct (measured: `dH:1` exactly once, valgrind-clean, on all
+/// four surfaces).
+#[test]
+fn matched_param_payload_from_a_temporary_stays_excluded() {
+    let src = "struct Held { tag: i64, buf: String }\n\
+         impl Drop for Held { fn drop(mut ref self) { println(f\"dH:{self.tag}\") } }\n\
+         fn mk(i: i64) -> Held { return Held { tag: i, buf: f\"bbbbbbbbbbbbbbbb{i}\" } }\n\
+         fn eat(o: Option[Held]) -> i64 {\n\
+         \x20   match o {\n\
+         \x20       Option.Some(t) => { return t.tag }\n\
+         \x20       Option.None => { return 0 }\n\
+         \x20   }\n\
+         }\n\
+         fn main() {\n\
+         \x20   let n = eat(Option.Some(mk(1)));\n\
+         \x20   println(f\"n:{n}\");\n\
+         }\n";
+    assert_eq!(
+        assert_clean(src),
+        0,
+        "a temporary argument has no caller-side place to resolve against, so \
+         the obligation must stay excluded rather than be reported"
+    );
+}

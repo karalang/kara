@@ -132,7 +132,7 @@ mod mono_state;
 mod once;
 mod par_blocks;
 mod param_own;
-mod param_transfer;
+pub(crate) mod param_transfer;
 mod pattern_binding;
 mod pattern_state;
 mod payload_vars;

@@ -541,7 +541,11 @@ fn pattern_names(k: &PatternKind, out: &mut FxHashSet<String>) {
 
 /// The root binding name of a place expression — `h` for `h.r`, `v` for
 /// `v[i].f`. `None` when the place is not rooted at a plain identifier.
-fn place_root(e: &Expr) -> Option<&str> {
+///
+/// B-2026-09-13-4 — `pub(crate)` so the drop differential can resolve a call
+/// ARGUMENT to the caller-side place codegen records a drop against. Same
+/// question this module asks of a transfer source, asked one call boundary out.
+pub(crate) fn place_root(e: &Expr) -> Option<&str> {
     match &e.kind {
         ExprKind::Identifier(n) => Some(n),
         ExprKind::FieldAccess { object, .. }
@@ -552,14 +556,14 @@ fn place_root(e: &Expr) -> Option<&str> {
 }
 
 /// What [`visit_block`] hands its visitor.
-enum Node<'a> {
+pub(crate) enum Node<'a> {
     Stmt(&'a Stmt),
     Expr(&'a Expr),
 }
 
 // ── The exhaustive traversal ─────────────────────────────────────
 
-fn visit_block<'a, F: FnMut(Node<'a>)>(b: &'a Block, f: &mut F) {
+pub(crate) fn visit_block<'a, F: FnMut(Node<'a>)>(b: &'a Block, f: &mut F) {
     for s in &b.stmts {
         visit_stmt(s, f);
     }
