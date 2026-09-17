@@ -3374,6 +3374,87 @@ pub fn option_result_ctor_payload(e: &Expr) -> Option<&Expr> {
     }
 }
 
+/// B-2026-09-13-13 — is `name` one of the built-in scalar type names, i.e. the
+/// receiver of a DESUGARED operator call (`i64.add`, `f64.mul`, `bool.not`)?
+///
+/// The same head set [`type_expr_is_owned_scalar`] admits, minus `Unit`, which
+/// has no operators. Kept here rather than reaching for
+/// `codegen::param_own::is_primitive_type_name` because codegen containment
+/// runs the other way: `ast` must not depend on the backend.
+fn is_primitive_type_name(name: &str) -> bool {
+    matches!(
+        name,
+        "i8" | "i16"
+            | "i32"
+            | "i64"
+            | "i128"
+            | "isize"
+            | "u8"
+            | "u16"
+            | "u32"
+            | "u64"
+            | "u128"
+            | "usize"
+            | "f32"
+            | "f64"
+            | "bool"
+            | "char"
+    )
+}
+
+/// B-2026-09-13-13 — the field names of the struct `ty` names whose own
+/// declared type is an owned SCALAR, so a projection onto one of them
+/// (`r.id` where `id: i64`) is a COPY READ and carries nothing out of the
+/// frame.
+///
+/// Resolved from the PROGRAM's declarations rather than from a type
+/// environment, which is what lets both backends ask the question and get the
+/// same answer by construction — the same reason the hash, Arrow-IPC and
+/// normalization twins share one implementation instead of two that agree by
+/// convention. `fn_conditionally_returns_param_bare` is consulted by codegen
+/// (four call legs) and by the interpreter (five sites); an oracle only one of
+/// them could compute would be a run-vs-build divergence waiting to happen.
+///
+/// DELIBERATELY SYNTACTIC AND UNDER-APPROXIMATE. A generic head, a type alias,
+/// a `shared` field, a tuple-typed parameter and any field whose own type is
+/// not one of [`type_expr_is_owned_scalar`]'s heads all yield nothing, which
+/// reproduces today's behaviour for that shape. Erring this way costs a missed
+/// body; erring the other way would admit a leaf that really does carry the
+/// param out, which is what condition 3 exists to refuse.
+fn param_scalar_field_names(program: Option<&crate::Program>, ty: &TypeExpr) -> Vec<String> {
+    let Some(p) = program else {
+        return Vec::new();
+    };
+    let crate::ast::TypeKind::Path(path) = &ty.kind else {
+        return Vec::new();
+    };
+    if path.generic_args.is_some() || path.segments.len() != 1 {
+        return Vec::new();
+    }
+    let head = path.segments[0].as_str();
+    for it in &p.items {
+        let Item::StructDef(s) = it else {
+            continue;
+        };
+        if s.name != head {
+            continue;
+        }
+        // A `shared struct` is reference-semantics: a projection off one is a
+        // different question (the RC channel's), so decline the whole type
+        // rather than field by field.
+        if s.is_shared || s.is_par {
+            return Vec::new();
+        }
+        return s
+            .fields
+            .iter()
+            .filter(|f| type_expr_is_owned_scalar(&f.ty))
+            .map(|f| f.name.clone())
+            .collect();
+    }
+    Vec::new()
+}
+
 /// B-2026-08-28-22 — is `f`'s positional parameter `arg_index` returned on SOME
 /// tail paths and not others, by a route the conditional-move drop flag can
 /// actually clear?
@@ -3460,6 +3541,11 @@ pub fn fn_conditionally_returns_param_bare(
     mention_names.extend(wraps.iter().map(|(a, _)| a.clone()));
     let name: &[String] = &mention_names;
     let wraps: &[(String, ParamPath)] = &wraps;
+    // B-2026-09-13-13 — the param type's own scalar fields, so a leaf that
+    // mentions the param only by reading one of them is an exit rather than an
+    // escape. Empty for every shape the syntactic resolution cannot settle,
+    // which reproduces today's answer.
+    let copy_fields = param_scalar_field_names(program, &param.ty);
 
     /// May `e` mention `name`? Conservative in the DECLINING direction: any
     /// shape not explicitly recognized answers `true`, which fails condition 3
@@ -3537,6 +3623,112 @@ pub fn fn_conditionally_returns_param_bare(
     }
     fn is_bare(e: &Expr, name: &[String]) -> bool {
         matches!(&e.kind, ExprKind::Identifier(n) if name.iter().any(|a| a == n))
+    }
+    /// B-2026-09-13-13 — are ALL of `e`'s mentions of the param COPY READS off
+    /// it (`r.id` where `id: i64`), rather than routes the value can leave by?
+    ///
+    /// Condition 3 declines any leaf that mentions the param at all, on the
+    /// stated grounds that "no per-path flag clears a leaf that READS the
+    /// param". That is true of `consume(r)` and `r.take()` and NOT of a scalar
+    /// field read: `return R { id: 90 + r.id }` reads a word out of `r` and
+    /// leaves `r` to die inside the callee exactly as a constant leaf would, so
+    /// the flag has nothing to clear and the per-path registration is safe.
+    ///
+    /// The cost of getting this wrong was a body count wrong in BOTH directions
+    /// at once, and the two halves hid each other. Declining the function left
+    /// no per-path owner at the callee, and the two caller legs then disagreed
+    /// about what to do with that: the ASSOCIATED and METHOD legs gate on this
+    /// predicate, so `false` read as "nobody else can own this argument" and
+    /// they hung the full `karac_drop_<T>` wrapper on the caller's temp —
+    /// `dR1 k:1 dR1` on every compiled surface against `--interp`'s correct
+    /// `k:1 dR1`. The FREE leg gates on the `fn_returns_param` UNION instead,
+    /// so it stood down on BOTH paths and the dies-inside path lost its body on
+    /// all four surfaces — agreed, and therefore invisible to the A/B rule,
+    /// which is why the row recorded the free position as "correct here".
+    ///
+    /// So the fix is the CALLEE side, not either caller's gate. The 2026-09-14
+    /// attempt on this row widened `escapes_frame` to the union on the
+    /// associated and method legs and was reverted: it fixed the hand-back path
+    /// and turned the dies-inside path into a fresh divergence, because
+    /// standing the caller down is only sound once the callee registers the
+    /// per-path owner. Admitting the copy read is what makes the callee
+    /// register it, and both caller legs then land on the same answer.
+    ///
+    /// A BARE mention is not a read, and a NON-scalar field is not either
+    /// (`return R { s: r.s }` moves the string out) — `copy_fields` is keyed on
+    /// the param type's scalar fields precisely so the two cannot be confused.
+    /// A `Call` or `MethodCall` that mentions the param is declined whole:
+    /// `consume(r)` hands it away and `r.take()` may, so they keep condition
+    /// 3's answer. Every shape not listed declines, which is this family's
+    /// standing direction — a missed body, never a double drop.
+    fn mentions_only_as_copy_read(e: &Expr, name: &[String], copy_fields: &[String]) -> bool {
+        match &e.kind {
+            // THE one admitted shape. Does not recurse into `object`: this arm
+            // IS the mention, and it carries nothing away.
+            ExprKind::FieldAccess { object, field } => {
+                if matches!(&object.kind, ExprKind::Identifier(n) if name.iter().any(|a| a == n)) {
+                    return copy_fields.iter().any(|f| f == field);
+                }
+                mentions_only_as_copy_read(object, name, copy_fields)
+            }
+            ExprKind::Identifier(n) => !name.iter().any(|a| a == n),
+            ExprKind::Integer(..)
+            | ExprKind::Float(..)
+            | ExprKind::CharLit(_)
+            | ExprKind::ByteLit(_)
+            | ExprKind::StringLit(_)
+            | ExprKind::MultiStringLit(_)
+            | ExprKind::Bool(_)
+            | ExprKind::SelfValue
+            | ExprKind::Path { .. } => true,
+            ExprKind::InterpolatedStringLit(parts) => parts.iter().all(|p| match p {
+                crate::ast::ParsedInterpolationPart::Text(_) => true,
+                crate::ast::ParsedInterpolationPart::Expr(e, _) => {
+                    mentions_only_as_copy_read(e, name, copy_fields)
+                }
+            }),
+            ExprKind::StructLiteral { fields, .. } => fields
+                .iter()
+                .all(|f| mentions_only_as_copy_read(&f.value, name, copy_fields)),
+            ExprKind::Tuple(elems) => elems
+                .iter()
+                .all(|el| mentions_only_as_copy_read(el, name, copy_fields)),
+            ExprKind::Binary { left, right, .. } => {
+                mentions_only_as_copy_read(left, name, copy_fields)
+                    && mentions_only_as_copy_read(right, name, copy_fields)
+            }
+            ExprKind::Unary { operand, .. } => {
+                mentions_only_as_copy_read(operand, name, copy_fields)
+            }
+            // A DESUGARED SCALAR OPERATOR, which is what `90 + r.id` actually
+            // is by the time any predicate sees it: the parser lowers every
+            // binary operator to a `Call` on a qualified path
+            // (`i64.add(90, r.id)`), so the `Binary` arm above is not the arm
+            // this row's leaf takes. Measured — the declining leaf printed as
+            // `Call { callee: Path { segments: ["i64", "add"] }, .. }`, which
+            // is why "a leaf that READS the param" and "a leaf containing a
+            // call" are the same shape here and the `Call` arm below declined
+            // it.
+            //
+            // Recursing into the arguments is sound because the receiver is a
+            // PRIMITIVE type: `i64.add` cannot take an `R`, so no argument of
+            // such a call can be the param itself, and each one is checked on
+            // its own terms anyway. A call on any other path keeps the refusal.
+            ExprKind::Call { callee, args }
+                if matches!(
+                    &callee.kind,
+                    ExprKind::Path { segments, .. }
+                        if segments.len() == 2 && is_primitive_type_name(&segments[0])
+                ) =>
+            {
+                args.iter()
+                    .all(|a| mentions_only_as_copy_read(&a.value, name, copy_fields))
+            }
+            // A call that does not mention the param at all is fine; one that
+            // does keeps condition 3's refusal, whatever it does with it.
+            ExprKind::Call { .. } | ExprKind::MethodCall { .. } => !may_mention(e, name),
+            _ => false,
+        }
     }
     /// B-2026-09-02-4 — does the leaf hand the param out: bare, inside an
     /// `Option`/`Result` constructor, or moved into a returned AGGREGATE
@@ -3769,8 +3961,15 @@ pub fn fn_conditionally_returns_param_bare(
         if yields_wrapped_named(leaf, name, wraps, program, f.name.as_str()) {
             yields_bare = true;
         } else if may_mention(leaf, name) {
-            // Condition 3 — an escape route the flag cannot clear.
-            return false;
+            // Condition 3 — an escape route the flag cannot clear, UNLESS every
+            // mention is a scalar-field COPY READ (B-2026-09-13-13). A read
+            // leaves the param to die inside the callee exactly as a constant
+            // leaf would, so this counts as a non-yielding exit rather than a
+            // refusal; see `mentions_only_as_copy_read` for what that cost.
+            if !mentions_only_as_copy_read(leaf, name, &copy_fields) {
+                return false;
+            }
+            yields_nothing = true;
         } else {
             yields_nothing = true;
         }

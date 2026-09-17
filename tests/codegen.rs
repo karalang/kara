@@ -37716,6 +37716,231 @@ fn main() {
         }
     }
 
+    /// B-2026-09-13-13 — a conditionally-returned param whose OTHER exit leaf
+    /// merely READS it keeps exactly one `Drop` body, at every call position
+    /// and on every surface.
+    ///
+    /// `if flag { return r } return R { id: 90 + r.id }` was wrong in BOTH
+    /// directions at once, and the two halves hid each other:
+    ///
+    /// ```text
+    ///   position   flag=true                        flag=false
+    ///   assoc      aot dR1 k:1 dR1 / interp k:1 dR1  interp k:91 dR91 / aot dR1 k:91 dR91
+    ///   method     aot dR1 k:1 dR1 / interp k:1 dR1  correct on all four
+    ///   free       correct on all four              ALL FOUR k:91 dR91  (dR1 lost)
+    /// ```
+    ///
+    /// The row was filed for the top-left cell — a doubled body on the
+    /// associated and method legs — and recorded the free position as "correct
+    /// here". It is not: the free leg is correct on the hand-back path and
+    /// silently loses the body on the dies-inside one, agreed by all four
+    /// surfaces and therefore invisible to the A/B rule. That is the cell this
+    /// fixture adds to the row, and it is what shows the defect was one root
+    /// cause rather than a leg-specific gate.
+    ///
+    /// THE ROOT CAUSE IS THE CALLEE, NOT EITHER CALLER'S GATE.
+    /// `fn_conditionally_returns_param_bare`'s condition 3 declined the whole
+    /// function because a leaf mentioned the param, so the callee registered no
+    /// per-path owner at all. The associated and method legs read that `false`
+    /// as "nobody else can own this argument" and hung the full
+    /// `karac_drop_<T>` wrapper on the caller's temp; the free leg gates on the
+    /// `fn_returns_param` UNION instead, stood down on both paths, and left the
+    /// dies-inside path with no owner anywhere. The 2026-09-14 attempt on this
+    /// row widened the two legs to the union and was reverted for exactly that
+    /// reason — it traded the double for a fresh loss.
+    ///
+    /// Condition 3 now admits a leaf whose every mention of the param is a
+    /// SCALAR-FIELD copy read, so the callee registers the per-path owner and
+    /// all three legs land on the same answer.
+    ///
+    /// THE LEAF IS A `Call`, NOT A `Binary`, AND THAT IS WHY THE FIRST CUT DID
+    /// NOTHING. The parser desugars every binary operator to a qualified call,
+    /// so `90 + r.id` reaches the predicate as
+    /// `i64.add(90, r.id)` — measured by printing the declining leaf. A
+    /// classifier with a `Binary` arm and no operator arm changed not one cell.
+    ///
+    /// THE TWO GUARD CELLS ARE DELIBERATELY STILL WRONG, and pinned as
+    /// measured. A leaf that CONSUMES the param through a call
+    /// (`R { id: eat(r) }`) is still declined — admitting it would register a
+    /// body for a value handed to `eat` — and it keeps the same three-way
+    /// split this row's leaf had: the free spelling loses the body on both
+    /// surfaces, the associated spelling loses it on the interpreter only, the
+    /// method spelling is correct. Filed as B-2026-09-17-33. Reading a
+    /// NON-scalar field (`R { name: r.name }`) cannot reach the question at
+    /// all — `partial_move_of_drop_struct` rejects it at the front end — so the
+    /// scalar-field keying is belt-and-braces there rather than the only guard.
+    ///
+    /// MEMORY IS CLEAN AND THE DIES-INSIDE READ IS INTACT, which is the thing a
+    /// body-count fix could plausibly break: with a heap-carrying `R { name:
+    /// String, id: i64 }` the `flag = false` path prints `dR1/a` with the
+    /// string readable, and `-O0` valgrind reports 12-14 allocs with equal
+    /// frees, `0 bytes in 0 blocks` at exit, `0 errors` and no invalid access
+    /// on every cell.
+    #[test]
+    fn e2e_conditionally_returned_param_with_a_reading_leaf_runs_one_body() {
+        const R: &str = "struct R { id: i64 }\n\
+             impl Drop for R { fn drop(mut ref self) { println(f\"dR{self.id}\") } }\n";
+        const RH: &str = "struct R { name: String, id: i64 }\n\
+             impl Drop for R { fn drop(mut ref self) { println(f\"dR{self.id}/{self.name}\") } }\n";
+        // (label, program, AOT expectation, interpreter expectation)
+        for (label, prog, want, interp_want) in [
+            // 1-2 — ASSOCIATED, the row's headline position.
+            (
+                "assoc, hand-back path",
+                format!(
+                    "{R}struct Sk {{ n: i64 }}\n\
+                     impl Sk {{ fn pick(r: R, flag: bool) -> R {{ if flag {{ return r }} return R {{ id: 90 + r.id }} }} }}\n\
+                     fn main() {{ let k = Sk.pick(R {{ id: 1 }}, true); println(f\"k:{{k.id}}\"); println(\"end\") }}\n"
+                ),
+                "k:1\ndR1\nend\n",
+                "k:1\ndR1\nend\n",
+            ),
+            (
+                "assoc, dies-inside path",
+                format!(
+                    "{R}struct Sk {{ n: i64 }}\n\
+                     impl Sk {{ fn pick(r: R, flag: bool) -> R {{ if flag {{ return r }} return R {{ id: 90 + r.id }} }} }}\n\
+                     fn main() {{ let k = Sk.pick(R {{ id: 1 }}, false); println(f\"k:{{k.id}}\"); println(\"end\") }}\n"
+                ),
+                "dR1\nk:91\ndR91\nend\n",
+                // Was `k:91 dR91 end` under `--interp` — the interpreter's own
+                // half of this shape, filed as B-2026-09-14-8 for the
+                // associated position specifically. Same root cause, so it
+                // moves with this fix.
+                "dR1\nk:91\ndR91\nend\n",
+            ),
+            // 3-4 — METHOD. The hand-back path doubled; the dies-inside path
+            //       was already correct and must stay so.
+            (
+                "method, hand-back path",
+                format!(
+                    "{R}struct Sk {{ n: i64 }}\n\
+                     impl Sk {{ fn pick(ref self, r: R, flag: bool) -> R {{ if flag {{ return r }} return R {{ id: 90 + r.id }} }} }}\n\
+                     fn main() {{ let s = Sk {{ n: 1 }}; let k = s.pick(R {{ id: 1 }}, true); println(f\"k:{{k.id}}\"); println(\"end\") }}\n"
+                ),
+                "k:1\ndR1\nend\n",
+                "k:1\ndR1\nend\n",
+            ),
+            (
+                "method, dies-inside path",
+                format!(
+                    "{R}struct Sk {{ n: i64 }}\n\
+                     impl Sk {{ fn pick(ref self, r: R, flag: bool) -> R {{ if flag {{ return r }} return R {{ id: 90 + r.id }} }} }}\n\
+                     fn main() {{ let s = Sk {{ n: 1 }}; let k = s.pick(R {{ id: 1 }}, false); println(f\"k:{{k.id}}\"); println(\"end\") }}\n"
+                ),
+                "dR1\nk:91\ndR91\nend\n",
+                "dR1\nk:91\ndR91\nend\n",
+            ),
+            // 5-6 — FREE. Cell 6 is the one the row did not have: an agreed
+            //       loss on all four surfaces, which is why it read as correct.
+            (
+                "free, hand-back path",
+                format!(
+                    "{R}fn pick(r: R, flag: bool) -> R {{ if flag {{ return r }} return R {{ id: 90 + r.id }} }}\n\
+                     fn main() {{ let k = pick(R {{ id: 1 }}, true); println(f\"k:{{k.id}}\"); println(\"end\") }}\n"
+                ),
+                "k:1\ndR1\nend\n",
+                "k:1\ndR1\nend\n",
+            ),
+            (
+                "free, dies-inside path",
+                format!(
+                    "{R}fn pick(r: R, flag: bool) -> R {{ if flag {{ return r }} return R {{ id: 90 + r.id }} }}\n\
+                     fn main() {{ let k = pick(R {{ id: 1 }}, false); println(f\"k:{{k.id}}\"); println(\"end\") }}\n"
+                ),
+                "dR1\nk:91\ndR91\nend\n",
+                "dR1\nk:91\ndR91\nend\n",
+            ),
+            // 7-8 — CONTROLS: the CONSTANT leaf, which condition 3 always
+            //       admitted (B-2026-09-12-26's headline). Correct before and
+            //       after; here so a regression in the admitted path shows.
+            (
+                "control: assoc, constant leaf, hand-back",
+                format!(
+                    "{R}struct Sk {{ n: i64 }}\n\
+                     impl Sk {{ fn pick(r: R, flag: bool) -> R {{ if flag {{ return r }} return R {{ id: 90 }} }} }}\n\
+                     fn main() {{ let k = Sk.pick(R {{ id: 1 }}, true); println(f\"k:{{k.id}}\"); println(\"end\") }}\n"
+                ),
+                "k:1\ndR1\nend\n",
+                "k:1\ndR1\nend\n",
+            ),
+            (
+                "control: assoc, constant leaf, dies-inside",
+                format!(
+                    "{R}struct Sk {{ n: i64 }}\n\
+                     impl Sk {{ fn pick(r: R, flag: bool) -> R {{ if flag {{ return r }} return R {{ id: 90 }} }} }}\n\
+                     fn main() {{ let k = Sk.pick(R {{ id: 1 }}, false); println(f\"k:{{k.id}}\"); println(\"end\") }}\n"
+                ),
+                "dR1\nk:90\ndR90\nend\n",
+                "dR1\nk:90\ndR90\nend\n",
+            ),
+            // 9 — the HEAP-CARRYING payload on the dies-inside path: the body
+            //     reads its own string, so the read-then-drop order is right
+            //     and this is not a use-after-move.
+            (
+                "heap payload, dies-inside path reads its string",
+                format!(
+                    "{RH}struct Sk {{ n: i64 }}\n\
+                     impl Sk {{ fn pick(r: R, flag: bool) -> R {{ if flag {{ return r }} return R {{ name: f\"z\", id: 90 + r.id }} }} }}\n\
+                     fn main() {{ let k = Sk.pick(R {{ name: f\"a\", id: 1 }}, false); println(f\"k:{{k.id}}\"); println(\"end\") }}\n"
+                ),
+                "dR1/a\nk:91\ndR91/z\nend\n",
+                "dR1/a\nk:91\ndR91/z\nend\n",
+            ),
+            // 10-11 — GUARDS: a leaf that CONSUMES the param through a call is
+            //     still declined, and still wrong in the way this row's leaf
+            //     used to be. Pinned as measured; B-2026-09-17-33.
+            (
+                // 12 — B-2026-09-14-8's headline distinction: adding a
+                //      `mut ref self` receiver to the identical body made the
+                //      interpreter correct where the ASSOCIATED spelling lost
+                //      the body. Both are correct now, and that row's one
+                //      unmeasured question — whether a FREE function with the
+                //      same body loses it too — is cell 6: it did, on all four
+                //      surfaces, which is why it was invisible.
+                "mut ref self receiver, dies-inside path",
+                format!(
+                    "{R}struct Sk {{ n: i64 }}\n\
+                     impl Sk {{ fn pick(mut ref self, r: R, flag: bool) -> R {{ if flag {{ return r }} return R {{ id: 90 + r.id }} }} }}\n\
+                     fn main() {{ let mut s = Sk {{ n: 0 }}; let k = s.pick(R {{ id: 1 }}, false); println(f\"k:{{k.id}}\"); println(\"end\") }}\n"
+                ),
+                "dR1\nk:91\ndR91\nend\n",
+                "dR1\nk:91\ndR91\nend\n",
+            ),
+            (
+                "guard: assoc, consuming leaf — still divergent",
+                format!(
+                    "{RH}fn eat(x: R) -> i64 {{ return x.id; }}\n\
+                     struct Sk {{ n: i64 }}\n\
+                     impl Sk {{ fn pick(r: R, flag: bool) -> R {{ if flag {{ return r }} return R {{ name: f\"z\", id: eat(r) }} }} }}\n\
+                     fn main() {{ let k = Sk.pick(R {{ name: f\"a\", id: 1 }}, false); println(f\"k:{{k.id}}\"); println(\"end\") }}\n"
+                ),
+                "dR1/a\nk:1\ndR1/z\nend\n",
+                "k:1\ndR1/z\nend\n",
+            ),
+            (
+                "guard: free, consuming leaf — agreed loss",
+                format!(
+                    "{RH}fn eat(x: R) -> i64 {{ return x.id; }}\n\
+                     fn pick(r: R, flag: bool) -> R {{ if flag {{ return r }} return R {{ name: f\"z\", id: eat(r) }} }}\n\
+                     fn main() {{ let k = pick(R {{ name: f\"a\", id: 1 }}, false); println(f\"k:{{k.id}}\"); println(\"end\") }}\n"
+                ),
+                "k:1\ndR1/z\nend\n",
+                "k:1\ndR1/z\nend\n",
+            ),
+        ] {
+            let (interp_out, interp_errs, _, _) = karac::run_program_full_checked(&prog);
+            assert!(
+                interp_errs.is_empty(),
+                "[{label}] interp errored: {interp_errs:?}"
+            );
+            assert_eq!(interp_out.join(""), interp_want, "[{label}] interpreter");
+            if let Some(aot) = run_program(&prog) {
+                assert_eq!(aot, want, "[{label}] AOT");
+            }
+        }
+    }
+
     /// B-2026-09-15-15 — a MULTI-FIELD enum variant owns its boxed
     /// `Array[T, N]` payload, and an arm that hands that payload on is
     /// disarmed in both pattern shapes.
