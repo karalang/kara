@@ -7937,6 +7937,27 @@ impl<'ctx> super::Codegen<'ctx> {
                                             });
                                     if takes_over {
                                         self.suppress_array_binding_move_arg(payload_arg);
+                                        // B-2026-09-17-9 — the user-`Drop`
+                                        // element half, for the reason the
+                                        // call-ARGUMENT peer of this pair in
+                                        // `call_dispatch.rs` gives: the
+                                        // retraction above declines such an
+                                        // element on purpose
+                                        // (`array_param_elem_is_callee_owned`)
+                                        // while the registration just below
+                                        // arms the box's interior walk over it
+                                        // anyway. `takes_over` is this site's
+                                        // "the box takes the interior", so the
+                                        // arming and the retraction stay one
+                                        // decision -- which is what the note
+                                        // above means by the first shape of
+                                        // -09-06-49 leaking 54 B.
+                                        if self.seeded_array_source_needs_disarm(
+                                            Self::seeded_variant_enum(rhs_variant),
+                                            payload_arg,
+                                        ) {
+                                            self.suppress_array_local_move_into_ctor(payload_arg);
+                                        }
                                     }
                                 }
                                 for (enum_name, variant, inner) in &boxed {

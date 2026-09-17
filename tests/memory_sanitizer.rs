@@ -88060,6 +88060,157 @@ fn main() {
         );
     }
 
+    /// B-2026-09-17-9 — the LEAK MIRROR its own row's fix walked into, and the
+    /// shape that fix's controls could not reach.
+    ///
+    /// B-2026-09-17-4 (`e312de9`) narrowed `disarm_array_sources`' seeded
+    /// exclusion with `elem_te_runs_user_drop`, at the CONSTRUCTOR. That is the
+    /// right predicate in the wrong place: `try_compile_enum_variant_at` cannot
+    /// see who consumes the box it builds, and for a GENERIC callee the
+    /// monomorph gives the argument temp a plain `free` and no interior walk at
+    /// all, so standing the named source down leaves the elements' heap with NO
+    /// owner. Retract without arming — precisely the mirror b98707ee9's
+    /// exclusion existed to prevent, and precisely the mistake
+    /// B-2026-09-06-49's own first shape made in this same function.
+    ///
+    /// WHY IT WENT GREEN THROUGH EVERY GATE, which is the part worth keeping.
+    /// The standing control for this mirror is
+    /// `b49-generic-callee-named-control` in
+    /// `asan_boxed_array_payload_interior_has_exactly_one_owner`, and its
+    /// element is a bare `String` — so it runs no user `Drop`, never satisfies
+    /// the new predicate, and is untouched by construction. `-17-4` re-measured
+    /// exactly that cell, correctly found it clean, and concluded the mirror was
+    /// clear. The mirror needs an element that runs a user `Drop` AND owns heap
+    /// — the same two conditions its own double free needed — reached through a
+    /// GENERIC callee rather than a concrete one. One generic parameter away
+    /// from every cell either row pinned.
+    ///
+    /// Measured at `-O0` under `valgrind --leak-check=full` on `e312de9`:
+    /// cell 1 lost 18 B in 2 blocks, cell 2 lost 4 B in 2 blocks, and a
+    /// printing-`Drop` variant of cell 1 lost 4 B in 2 blocks. All three read
+    /// `All heap blocks were freed` with the retraction moved to the two
+    /// consumer sites that hold the arming decision.
+    ///
+    /// Cell 1's `Drop` body prints NOTHING on purpose. A generic callee's
+    /// element bodies are separately missing on the compiled backends, so a
+    /// printing body would make this cell assert THAT defect's output and redden
+    /// when it is fixed. What it asserts is the memory, which is the channel
+    /// this row is about. Cell 2's body does print, because the passthrough
+    /// spelling's bodies are correct on all four surfaces.
+    ///
+    /// B-2026-09-17-10 is `e312de9`'s author's own row for this same
+    /// regression, filed independently with their own measurements and
+    /// deliberately numbered to leave `-17-9` free. Cell 4 is their repro, and
+    /// it earns its place rather than restating cells 1-2: their payload is
+    /// spelled `Option[Array[T, 2]]`, which is INLINE and syntactically an
+    /// array, so it is declined for a different reason than a bare
+    /// `Option[T]`. Their row judged the retract half unfixable -- "nothing at
+    /// the ctor site can see its consumer... so 'disarm only when the consumer
+    /// is concrete' cannot be spelled there" -- and that is exactly right about
+    /// the ctor. It is why the ask moves to the consumer, where two sites
+    /// already held the arming gate; the ARM-half repair that row proposes
+    /// (teach the generic monomorph to own the interior) stays available and
+    /// is the larger change.
+    ///
+    /// Measured on this tree: all four cells `All heap blocks were freed` with
+    /// `ERROR SUMMARY: 0 errors` at `-O0`, and each stdout below
+    /// byte-identical across `--interp` / jit / `karac build` /
+    /// `KARAC_AUTO_PAR=0 karac build`.
+    #[test]
+    fn asan_generic_callee_seeded_array_source_keeps_its_owner() {
+        // 1 — THE MIRROR. A bare-type-param callee: the monomorph arms no
+        //     interior walk, so the named source must KEEP its drop.
+        assert_clean_asan_run(
+            r#"struct Q179 { tag: String }
+impl Drop for Q179 { fn drop(mut ref self) { } }
+fn takesOpt[T](x: Option[T]) -> i64 {
+    match x { Some(_) => { println("s"); 1 } None => { println("n"); 0 } }
+}
+fn main() {
+    let a: Array[Q179, 2] = [Q179 { tag: f"b179-aaaaaaaa0" }, Q179 { tag: f"b179-bbbbbbbb1" }];
+    let c = takesOpt(Some(a));
+    println(f"c{c}");
+}
+"#,
+            &["s", "c1"],
+            "b179-generic-callee-leak-mirror",
+        );
+        // 2 — the PASSTHROUGH spelling of the same mirror. The `let` RECEIVES
+        //     a box built at the call's argument site, so the `let` site must
+        //     decline as well — `takes_over` is what declines it.
+        assert_clean_asan_run(
+            r#"struct S179 { tag: String }
+impl Drop for S179 { fn drop(mut ref self) { println(f"drop:{self.tag}") } }
+fn passthru[T](x: Option[T]) -> Option[T] { return x; }
+fn takesOpt[T](x: Option[T]) -> i64 {
+    match x { Some(_) => { println("o"); 1 } None => { println("n"); 0 } }
+}
+fn main() {
+    let e: Array[S179, 2] = [S179 { tag: f"b179-cccccccc0" }, S179 { tag: f"b179-dddddddd1" }];
+    let back = passthru(Some(e));
+    let c = takesOpt(back);
+    println(f"c{c}");
+}
+"#,
+            &["o", "drop:b179-cccccccc0", "drop:b179-dddddddd1", "c1"],
+            "b179-passthrough-user-drop-leak-mirror",
+        );
+        // 3 — THE OTHER SIDE OF THE PARTITION, kept here so the fixture states
+        //     it rather than implying it: a CONCRETE callee DOES take the
+        //     interior, so the same source MUST be retracted. Without this
+        //     cell, "decline the generic case" could be satisfied by declining
+        //     everything, which is the double free `-17-4` closed.
+        assert_clean_asan_run(
+            r#"struct S179b { tag: String }
+impl Drop for S179b { fn drop(mut ref self) { println(f"drop:{self.tag}") } }
+fn takesOpt(o: Option[Array[S179b, 2]]) {
+    match o { Some(v) => { println(f"v:{v[0].tag}") } None => { println("n") } }
+}
+fn main() {
+    let a: Array[S179b, 2] = [S179b { tag: f"b179-eeeeeeee0" }, S179b { tag: f"b179-ffffffff1" }];
+    takesOpt(Some(a));
+    println("held");
+}
+"#,
+            &[
+                "v:b179-eeeeeeee0",
+                "drop:b179-eeeeeeee0",
+                "drop:b179-ffffffff1",
+                "held",
+            ],
+            "b179-concrete-callee-still-retracts",
+        );
+        // 4 — THE INLINE-PAYLOAD spelling of the mirror, `Option[Array[T, 2]]`
+        //     rather than `Option[T]`. A different path and not a restatement:
+        //     `Array[S, 2]` is two words, so this payload does NOT box, and the
+        //     annotated payload IS syntactically an array — so
+        //     `callee_takes_boxed_array_payload_interior` declines it on
+        //     `option_payload_is_boxed` rather than on the array test that
+        //     declines cells 1 and 2. Two independent reasons for the same
+        //     answer, and a later widening could break either one alone.
+        //
+        //     This is B-2026-09-17-10's own repro, filed by `e312de9`'s author
+        //     for the same regression; measured at `-O0` it lost 28 B in 2
+        //     blocks with a silent `Drop` body and 18 B in 2 blocks with their
+        //     printing one. Silent here for cell 1's reason: their row records
+        //     that the element bodies were already missing on this shape before
+        //     `e312de9` and are missing after, so a printing body would assert
+        //     that separate defect's output.
+        assert_clean_asan_run(
+            r#"struct Z179 { tag: String }
+impl Drop for Z179 { fn drop(mut ref self) { } }
+fn takesG[T](x: Option[Array[T, 2]]) { println("in") }
+fn main() {
+    let a: Array[Z179, 2] = [Z179 { tag: f"b179-gggggggg0" }, Z179 { tag: f"b179-hhhhhhhh1" }];
+    takesG(Some(a));
+    println("held");
+}
+"#,
+            &["in", "held"],
+            "b179-inline-payload-generic-callee-mirror",
+        );
+    }
+
     /// B-2026-09-09-24 — the two `Array`-payload-INDEXED shapes that
     /// `asan_boxed_array_payload_interior_has_exactly_one_owner` had to leave out
     /// are clean now, and this is the fixture that stops them regressing.

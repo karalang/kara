@@ -2280,6 +2280,25 @@ impl<'ctx> super::Codegen<'ctx> {
             if let Some((variant, inner)) = Self::seeded_variant_arg_payload(&a.value) {
                 if self.callee_takes_boxed_array_payload_interior(&name, i, variant) {
                     self.suppress_array_binding_move_arg(inner);
+                    // B-2026-09-17-9 — the USER-`Drop`-element half, which the
+                    // retraction above declines by design.
+                    // `suppress_array_binding_move_arg` gates on
+                    // `array_param_elem_is_callee_owned`, whose
+                    // `!elem_te_runs_user_drop` conjunct deliberately keeps
+                    // such an element CALLER-owned (B-2026-09-14-25 -- the
+                    // bodies ride a caller-side channel). The box's interior
+                    // walk, which the gate one line up has just established
+                    // this callee takes, frees the same buffers anyway.
+                    //
+                    // The sibling retraction, which carries no callee-owns
+                    // gate. Gated on the ELEMENT so every shape the line above
+                    // already answers keeps the behaviour it was measured
+                    // with.
+                    if self
+                        .seeded_array_source_needs_disarm(Self::seeded_variant_enum(variant), inner)
+                    {
+                        self.suppress_array_local_move_into_ctor(inner);
+                    }
                 }
             }
             // B-2026-09-10-6 — the OTHER end of the same handover: an arm's
@@ -3476,6 +3495,23 @@ impl<'ctx> super::Codegen<'ctx> {
             return None;
         };
         matches!(only.value.kind, ExprKind::Identifier(_)).then_some((variant, &only.value))
+    }
+
+    /// Which seeded enum does a variant name returned by
+    /// [`Self::seeded_variant_arg_payload`] / [`Self::seeded_variant_ctor_name`]
+    /// belong to? B-2026-09-17-9.
+    ///
+    /// Those two answer `"Some"` / `"Ok"` / `"Err"` and nothing else, so this is
+    /// total over their range. It exists so the two consumer-side disarm sites
+    /// can name the enum for `seeded_array_source_needs_disarm` without
+    /// re-resolving it: at both, the enum is already known to be seeded because
+    /// the variant is one of those three.
+    pub(super) fn seeded_variant_enum(variant: &str) -> &'static str {
+        if variant == "Some" {
+            "Option"
+        } else {
+            "Result"
+        }
     }
 
     /// Is this expression a seeded variant CONSTRUCTOR — `Some(..)`, `Ok(..)`,
@@ -10347,13 +10383,14 @@ impl<'ctx> super::Codegen<'ctx> {
             // its own ahead of every payload -- see the note beside
             // `disarm_array_sources` above. The copy on the line before is the
             // record this consults, so the two only agree in this order.
-            // B-2026-09-17-4 — the seeded pair joins the disarm for a
-            // user-`Drop` element only; see
-            // `seeded_array_ctor_source_needs_disarm` for why the exclusion is
-            // narrowed rather than lifted.
-            if disarm_array_sources
-                || self.seeded_array_ctor_source_needs_disarm(&enum_name, &arg.value)
-            {
+            // B-2026-09-17-4's seeded narrowing was written HERE and had to
+            // move -- see `seeded_array_source_needs_disarm`. This site cannot
+            // see who consumes the box it builds, so the seeded disjunct also
+            // disarmed the source for a GENERIC callee, whose monomorph gives
+            // the argument temp a plain `free` and no interior walk: retract
+            // without arming, the LEAK mirror that exclusion existed to
+            // prevent. The two consumer sites that CAN see it carry it now.
+            if disarm_array_sources {
                 self.suppress_array_local_move_into_ctor(&arg.value);
             }
             // B-2026-07-16-5: a payload sourced from a BORROW — `Some(s)`

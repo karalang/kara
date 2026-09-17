@@ -5770,11 +5770,31 @@ impl<'ctx> super::Codegen<'ctx> {
     /// does the element run a user `Drop`? `owned_array_params` is the element
     /// type's source here, the same table the disarm itself keys on, so the two
     /// cannot disagree about which slot is meant.
-    pub(super) fn seeded_array_ctor_source_needs_disarm(
-        &self,
-        enum_name: &str,
-        arg: &Expr,
-    ) -> bool {
+    ///
+    /// B-2026-09-17-9 — WHERE THIS IS ASKED changed, and that is the whole of
+    /// the correction. It was a disjunct on `try_compile_enum_variant_at`'s
+    /// `disarm_array_sources`, at the CONSTRUCTOR, which cannot see who
+    /// consumes the box it builds. For a GENERIC callee the monomorph gives the
+    /// argument temp a plain `free` and no interior walk at all, so disarming
+    /// the source there stood the ONLY owner down -- retract without arming,
+    /// exactly the leak mirror b98707ee9's exclusion existed to prevent, on a
+    /// shape `b49-generic-callee-named-control` cannot reach because its
+    /// element is a bare `String` and so never satisfies the predicate below.
+    /// Measured at `-O0` under `valgrind --leak-check=full` on `e312de9`:
+    /// `fn takesOpt[T](x: Option[T])` over `Array[S, 2]` lost 4 B in 2 blocks,
+    /// 18 B in 2 blocks with longer element strings, and the
+    /// `passthru[T](Some(e))` spelling 4 B in 2 blocks -- while every
+    /// double-free cell that row pinned stayed clean, which is why its own
+    /// gates were green.
+    ///
+    /// So this is now asked from the TWO CONSUMER SITES that hold the arming
+    /// decision, and only inside it: `callee_takes_boxed_array_payload_interior`
+    /// at the call-argument site and `takes_over` at the `let` site. Both
+    /// decline the generic callee for free, because the annotated `Option[T]`
+    /// payload is not syntactically an array -- the same mechanism
+    /// B-2026-09-06-49's own correction leaned on when its first shape made
+    /// this identical mistake in this identical place.
+    pub(super) fn seeded_array_source_needs_disarm(&self, enum_name: &str, arg: &Expr) -> bool {
         if !self.type_decls.seeded_enum_names.contains(enum_name) {
             return false;
         }
