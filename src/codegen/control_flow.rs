@@ -437,7 +437,9 @@ impl<'ctx> super::Codegen<'ctx> {
         // program), so the retraction is right there and the escaped
         // binding's own drop runs the body.
         if optres_bindings_owned {
-            self.suppress_optres_payload_bodies_for_match(value, pattern);
+            // B-2026-09-10-14 — the `if let` leg's scope verdict, block form.
+            let takes = crate::binding_use::optres_block_takes_whole_payload(pattern, then_block);
+            self.suppress_optres_payload_bodies_for_match_scoped(value, pattern, takes);
         }
         // B-2026-07-21-16: `if let Some(s) = a.opt { … }` over an OWNED place
         // — zero the source field in the then-arm (the binding owns the
@@ -1211,7 +1213,9 @@ impl<'ctx> super::Codegen<'ctx> {
         // compiled backends. See the `compile_if_let` site for why an ungated
         // retraction loses the body and how it was measured.
         if optres_bindings_owned {
-            self.suppress_optres_payload_bodies_for_match(value, pattern);
+            // B-2026-09-10-14 — the `while let` leg's scope verdict.
+            let takes = crate::binding_use::optres_block_takes_whole_payload(pattern, body);
+            self.suppress_optres_payload_bodies_for_match_scoped(value, pattern, takes);
         }
         self.suppress_inline_option_map_payload_cleanup(value, pattern);
         // B-2026-07-03-31: skip disarming the source payload drop when the

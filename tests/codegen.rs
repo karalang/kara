@@ -19405,6 +19405,92 @@ done
         assert_eq!(out, "repro\n  x1\n  dG\n  dR20\ngnone\n  x5\n  dG\n  dR21\nglocal\n  dG\n  x1\ngnarrow\n  x5\n  dG\nkread\n  x1\n  dK\n  dR22\nhnone\n  x5\n  dR23\nhread\n  dR24\n  x1\nhtemp\n  dR25\n  x5\npnone\n  x5\n  dR26\nptemp\n  dR27\n  x5\npcall\n  dR28\n  x5\ntwomono\n  x5\n  dG\n  dR29\n  y5\n  dG\nenone\n  x5\n  dE\n  dR30\neread\n  x1\n  dE\n  dR31\nsnone\n  x5\n  dS\n  dR32\nend\n");
     }
 
+    /// B-2026-09-10-14 — A WHOLE-PAYLOAD ARM BINDING OVER AN
+    /// `Option`/`Result` WHOSE PAYLOAD IS A TUPLE NOW RUNS THE ELEMENTS'
+    /// `Drop` BODIES.
+    ///
+    /// `let o: Option[(R, R)] = Some(..); match o { Some(t) => { println("hit")
+    /// } .. }` printed `x hit` where `x hit dR1 dR2` is due — on `--interp`,
+    /// the JIT, `-O0` and `-O2` auto-par alike. BOTH backends were wrong the
+    /// same way, so no A/B rule saw it, and memory was balanced (0 valgrind
+    /// errors, nothing lost), so no sanitizer leg did either. The absent output
+    /// was the only observable.
+    ///
+    /// THE DISARM WAS RIGHT AND ITS PREMISE WAS UNFUNDED.
+    /// `suppress_optres_payload_bodies_for_match` retracts the PLACE's
+    /// payload-bodies walk whenever an arm binds a Drop-bearing position, on
+    /// the premise that "the arm's binding owns the resource from then on".
+    /// Every other payload shape funds that at the bind site — a struct payload
+    /// registers a drop of its own (`struct` here), a destructure's leaves each
+    /// take an element — and a TUPLE-typed whole-value binding funds nothing,
+    /// because a tuple has no type NAME to key those arms on. So the walk went
+    /// to a holder that never ran it.
+    ///
+    /// THE PLACE KEEPS THE WALK, rather than the binding being given one, and
+    /// that is measured rather than stylistic: the binding is a bit-copy VIEW
+    /// of a place the match does not consume, so `twice` binds it again a
+    /// statement later. Funding the binding ran the bodies once per arm
+    /// (`x a dR11 dR12 b dR11 dR12`); the place's single walk gives one set at
+    /// `o`'s real last use. It is also exactly what `wild` — correct all along
+    /// — already does.
+    ///
+    /// The arm predicate lives in `binding_use`, SHARED with the interpreter
+    /// rather than reimplemented: two backends can only be moved off an agreed
+    /// gap together if they read the same AST through the same function. It is
+    /// the READ-THROUGH classifier and not a borrow one, which is the module's
+    /// own stated reason for existing.
+    ///
+    /// TWO CELLS ARE PINNED AS-IS RATHER THAN BLESSED. `eat` (`x eat hit7`)
+    /// still loses the bodies: `eat(t)` materializes the binding by the
+    /// read-through classifier, so the disarm stands, and the agreed-and-wrong
+    /// answer is kept rather than traded for an A/B divergence — filed
+    /// separately. `ret` is the CONTROL for that decision: `return t` hands the
+    /// tuple to the caller's binding, which runs the bodies once, and leaving
+    /// the place armed there was measured at `dR30 dR31 dR30 dR31`.
+    ///
+    /// Twin of `tests/interpreter.rs`'s
+    /// `test_whole_payload_arm_binding_over_a_tuple_payload_runs_element_bodies`,
+    /// byte-identical source and expectation — the only fixture shape that can
+    /// hold an agreed gap closed.
+    #[test]
+    fn e2e_whole_payload_arm_binding_over_a_tuple_payload_runs_element_bodies() {
+        let Some(out) = run_program(
+            r#"struct R { id: i64, name: String }
+    impl Drop for R { fn drop(mut ref self) { println(f"  dR{self.id}") } }
+    struct W { r: R, n: i64 }
+    impl Drop for W { fn drop(mut ref self) { println(f"  dW{self.n}") } }
+    fn mk(i: i64) -> R { return R { id: i, name: f"n{i}" } }
+    fn eat(t: (R, R)) -> i64 { println("  eat"); return 7 }
+    fn giveback() -> (R, R) {
+        let o: Option[(R, R)] = Some((mk(30), mk(31)));
+        match o { Some(t) => { return t } None => { return (mk(90), mk(91)) } }
+    }
+
+    fn main() {
+        println("bind");    { let o: Option[(R, R)] = Some((mk(1), mk(2))); println("  x"); match o { Some(t) => { println("  hit") } None => { println("  n") } } }
+        println("read");    { let o: Option[(R, R)] = Some((mk(3), mk(4))); println("  x"); match o { Some(t) => { println(f"  hit{t.0.id}") } None => { println("  n") } } }
+        println("iflet");   { let o: Option[(R, R)] = Some((mk(5), mk(6))); println("  x"); if let Some(t) = o { println("  hit") } }
+        println("whilet");  { let mut o: Option[(R, R)] = Some((mk(7), mk(8))); println("  x"); while let Some(t) = o { println("  hit"); o = None; } println("  end") }
+        println("result");  { let o: Result[(R, R), i64] = Ok((mk(9), mk(10))); println("  x"); match o { Ok(t) => { println("  hit") } Err(e) => { println("  n") } } }
+        println("twice");   { let o: Option[(R, R)] = Some((mk(11), mk(12))); println("  x"); match o { Some(t) => { println("  a") } None => { println("  n") } } match o { Some(t) => { println("  b") } None => { println("  n") } } }
+        println("after");   { let o: Option[(R, R)] = Some((mk(13), mk(14))); println("  x"); match o { Some(t) => { println("  hit") } None => { println("  n") } } println("  end") }
+        println("wild");    { let o: Option[(R, R)] = Some((mk(15), mk(16))); println("  x"); match o { Some(_) => { println("  hit") } None => { println("  n") } } }
+        println("struct");  { let o: Option[W] = Some(W { r: mk(17), n: 18 }); println("  x"); match o { Some(t) => { println("  hit") } None => { println("  n") } } }
+        println("single");  { let o: Option[R] = Some(mk(19)); println("  x"); match o { Some(t) => { println("  hit") } None => { println("  n") } } }
+        println("ret");     { println("  x"); let v = giveback(); println("  hit") }
+        println("eat");     { let o: Option[(R, R)] = Some((mk(20), mk(21))); println("  x"); match o { Some(t) => { println(f"  hit{eat(t)}") } None => { println("  n") } } }
+        println("nomatch"); { let o: Option[(R, R)] = Some((mk(22), mk(23))); println("  x") }
+        println("none");    { let o: Option[(R, R)] = None; println("  x"); match o { Some(t) => { println("  hit") } None => { println("  n") } } }
+        println("tlocal");  { let t: (R, R) = (mk(24), mk(25)); println("  x") }
+        println("end")
+    }
+"#,
+        ) else {
+            return;
+        };
+        assert_eq!(out, "bind\n  x\n  hit\n  dR1\n  dR2\nread\n  x\n  hit3\n  dR3\n  dR4\niflet\n  x\n  hit\n  dR5\n  dR6\nwhilet\n  x\n  hit\n  dR7\n  dR8\n  end\nresult\n  x\n  hit\n  dR9\n  dR10\ntwice\n  x\n  a\n  b\n  dR11\n  dR12\nafter\n  x\n  hit\n  dR13\n  dR14\n  end\nwild\n  x\n  hit\n  dR15\n  dR16\nstruct\n  x\n  hit\n  dW18\n  dR17\nsingle\n  x\n  hit\n  dR19\nret\n  x\n  dR30\n  dR31\n  hit\neat\n  x\n  eat\n  hit7\nnomatch\n  dR22\n  dR23\n  x\nnone\n  x\n  n\ntlocal\n  dR24\n  dR25\n  x\nend\n");
+    }
+
     /// B-2026-09-06-39 — A READ-ONLY ARM OVER AN OWNED ENUM RECEIVER NOW RUNS THE
     /// PAYLOAD'S `Drop` BODY **AFTER** THE SHELL'S, the design.md § Part 8 order
     /// ("the user's `fn drop` body runs first, then the compiler drops each field").
@@ -20454,6 +20540,21 @@ done
     ///
     /// Twin of `tests/interpreter.rs`'s
     /// `test_arm_bound_tuple_payload_field_read_resolves`, pinned to the same string.
+    ///
+    /// B-2026-09-10-14 — REPINNED, and the direction is the whole point: cells
+    /// u1 (`match`), u2 (`Result`), u3 (`if let`) and u7 (a method receiver and a
+    /// second element) GAINED the payload elements' `Drop` bodies, which this
+    /// string had been recording as absent. They were absent on BOTH backends, so
+    /// this fixture and its twin pinned the gap rather than a divergence, and the
+    /// new transcript is byte-identical on both again. u5 (a destructure, whose
+    /// leaves each own an element) and u6 (no `Drop` anywhere) are untouched,
+    /// which is what says the repin is the tuple whole-value binding and nothing
+    /// wider.
+    ///
+    /// u4 stays bodiless and is NOT this row's: its scrutinee is a CALL
+    /// (`while let Some(t) = src(n)`), so the payload is a fresh temp with no
+    /// named place to keep a walk, and the disarm this row narrowed never runs
+    /// for it.
     #[test]
     fn e2e_arm_bound_tuple_payload_field_read_resolves() {
         let Some(out) = run_program(
@@ -20490,10 +20591,16 @@ fn main() {
             out,
             r#"u1
   a1/t1
+dR1/t1
+dR101/t101
 u2
   b2/t2
+dR2/t2
+dR102/t102
 u3
   c3/t3
+dR3/t3
+dR103/t103
 u4
   d4/t4
 u5
@@ -20503,6 +20610,8 @@ u6
   f6
 u7
   g7/t107
+dR7/t7
+dR107/t107
 end
 "#
         );

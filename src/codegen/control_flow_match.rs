@@ -1011,7 +1011,15 @@ impl<'ctx> super::Codegen<'ctx> {
                     self.suppress_tuple_elem_optres_payload_cleanup(scrutinee, &arm.pattern);
                     // B-2026-07-30-11 (Option/Result leg): bodies retraction
                     // beside the memory suppressions — see the fn's doc.
-                    self.suppress_optres_payload_bodies_for_match(scrutinee, &arm.pattern);
+                    self.suppress_optres_payload_bodies_for_match_scoped(
+                        scrutinee,
+                        &arm.pattern,
+                        crate::binding_use::optres_arm_takes_whole_payload(
+                            &arm.pattern,
+                            &arm.body,
+                            arm.guard.as_ref(),
+                        ),
+                    );
                     // Fresh-temp inline `Result` scrutinee (B-2026-07-12-2 gap
                     // 2): suppress the source's payload free on a CONSUMING arm so
                     // the binding / consumer owns the buffer — UNLESS the arm only
@@ -13925,10 +13933,55 @@ impl<'ctx> super::Codegen<'ctx> {
     /// Static like every compile-time retraction here: one consuming arm
     /// disarms every path, and a non-taken arm's residual is a leak — the
     /// safe side.
+    /// B-2026-09-10-14 — is the recorded `Option`/`Result` instantiation of
+    /// `name`'s payload a TUPLE?
+    ///
+    /// The one payload shape whose whole-value arm binding registers no drop of
+    /// its own, and so the one where the disarm's premise is unfunded. A struct
+    /// payload keys the bind site's `tn`-driven arms; a tuple has no type name
+    /// and reaches none of them. Read from `enum_inst_var_types`, the same
+    /// record the box registration and the `let`-site bodies walker consult, so
+    /// this cannot disagree with them about which monomorph the place is.
+    fn optres_scrutinee_payload_is_tuple(&self, name: &str) -> bool {
+        let Some(inst) = self.type_decls.enum_inst_var_types.get(name) else {
+            return false;
+        };
+        let TypeKind::Path(p) = &inst.kind else {
+            return false;
+        };
+        if !matches!(
+            p.segments.last().map(String::as_str),
+            Some("Option" | "Result")
+        ) {
+            return false;
+        }
+        p.generic_args.as_ref().is_some_and(|args| {
+            args.iter()
+                .any(|g| matches!(g, GenericArg::Type(te) if matches!(te.kind, TypeKind::Tuple(_))))
+        })
+    }
+
     pub(super) fn suppress_optres_payload_bodies_for_match(
         &mut self,
         scrutinee: &Expr,
         pattern: &Pattern,
+    ) {
+        self.suppress_optres_payload_bodies_for_match_scoped(scrutinee, pattern, true)
+    }
+
+    /// B-2026-09-10-14 — [`Self::suppress_optres_payload_bodies_for_match`]
+    /// with the caller's verdict on whether the arm/block actually TAKES the
+    /// payload it binds.
+    ///
+    /// `takes_payload` is `false` only where every whole-value binding of a
+    /// `Some`/`Ok`/`Err` pattern is borrowed rather than materialized, by the
+    /// same `consume_class::binding_only_borrowed` classifier the arm loop uses
+    /// per binding. `true` reproduces every pre-existing caller exactly.
+    pub(super) fn suppress_optres_payload_bodies_for_match_scoped(
+        &mut self,
+        scrutinee: &Expr,
+        pattern: &Pattern,
+        takes_payload: bool,
     ) {
         let name = match &scrutinee.kind {
             ExprKind::Identifier(n) => n.clone(),
@@ -13994,6 +14047,40 @@ impl<'ctx> super::Codegen<'ctx> {
         // `Ok(Ok(r))` spelling, a three-deep `Some(Some(Some(r)))`, an arm that
         // MOVES the leaf into another call, and an arm that never reads it all
         // lost the body identically.
+        // B-2026-09-10-14 — a WHOLE-VALUE binding of a TUPLE payload that the
+        // arm only borrows. Nothing else will own it, so the place keeps its
+        // walk.
+        //
+        // The disarm's premise — "the arm's binding owns the resource from then
+        // on" — is funded for every other payload shape by the binding
+        // registering a drop of its own at the bind site: a struct payload gets
+        // `track_user_drop_var` / the field-bodies walk, a destructure's leaves
+        // each take an element. A TUPLE-typed whole-value binding reaches none
+        // of those arms (a tuple has no type NAME to key them on), so the walk
+        // was handed to a holder that never ran it and BOTH backends printed no
+        // body: `let o: Option[(R, R)] = Some(..); match o { Some(t) => {
+        // println("hit") } .. }` gave `x hit` against the due `x hit dR1 dR2`
+        // on --interp, JIT, -O0 and -O2 auto-par alike, with memory balanced
+        // (0 valgrind errors, nothing lost). An agreed gap, so no A/B gate saw
+        // it and no sanitizer leg could.
+        //
+        // KEEPING THE PLACE ARMED rather than funding the binding, and the
+        // difference is measurable rather than stylistic: the binding is a
+        // bit-copy VIEW of a place the match does not consume, so a second
+        // `match o { .. }` later in the same scope binds it again. Registering
+        // per binding ran the bodies once per arm — measured
+        // `x hit dR1 dR2 mid again dR1 dR2` on the two-match cell — where the
+        // place's single walk gives one set at `o`'s real last use. It is also
+        // what `Some(_)` already does, and that cell was correct all along.
+        //
+        // BORROWED-ONLY, by the same `consume_class::binding_only_borrowed`
+        // classifier the arm loop applies per binding: an arm that returns the
+        // binding, rebinds it, or otherwise materializes it has given the
+        // bodies to whoever took them, and leaving the place armed ran them
+        // twice (measured `dR1 dR2 dR1 dR2` on the `return t` cell).
+        if !takes_payload && self.optres_scrutinee_payload_is_tuple(&name) {
+            return;
+        }
         if self
             .payload_vars
             .callee_owned_payload_bodies_params

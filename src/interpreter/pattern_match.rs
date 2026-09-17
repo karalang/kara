@@ -700,10 +700,62 @@ impl<'a> super::Interpreter<'a> {
             }
             return;
         }
-        let Value::EnumVariant { enum_name, .. } = scrutinee else {
+        let Value::EnumVariant {
+            enum_name, data, ..
+        } = scrutinee
+        else {
             return;
         };
         let enum_name = enum_name.clone();
+        // B-2026-09-10-14 — is the live payload a TUPLE, and does NO arm
+        // materialize it? Then the place keeps its walk, because nothing else
+        // will run the body.
+        //
+        // The codegen twin
+        // (`suppress_optres_payload_bodies_for_match_scoped`) carries the same
+        // two clauses and the same measurement: `let o: Option[(R, R)] =
+        // Some(..); match o { Some(t) => { println("hit") } .. }` printed
+        // `x hit` on --interp, the JIT, `-O0` and `-O2` auto-par alike against
+        // the due `x hit dR1 dR2`. BOTH backends were wrong the same way, so no
+        // A/B rule saw it, and memory was balanced (0 valgrind errors, nothing
+        // lost) so no sanitizer leg did either — the absent output was the only
+        // observable.
+        //
+        // The TUPLE clause is what makes leaving it armed safe: every other
+        // payload shape funds the disarm's premise at the bind site (a struct
+        // payload registers a drop of its own, a destructure's leaves each take
+        // an element), and a tuple-typed whole-value binding funds nothing —
+        // measured directly, `Option[W]` over a `Drop`-bearing struct and
+        // `Some((a, b))` over this very payload were both already correct.
+        //
+        // The arm predicate is `binding_use`'s, SHARED with codegen rather than
+        // reimplemented here: two backends can only be moved off an agreed gap
+        // together if they read the same AST through the same function. It is
+        // deliberately the read-through classifier and not a borrow one — see
+        // that module's docs, and the `eat(t)` cell named at the codegen site,
+        // which stays agreed-and-wrong rather than becoming a divergence.
+        //
+        // Cross-ARM, matching the coarseness the disarm below already has and
+        // for the reason stated there: if ANY arm takes the payload the walk
+        // stands down for the whole match, so the stand-down needs EVERY arm to
+        // be read-only.
+        let payload_is_tuple = matches!(
+            data,
+            crate::interpreter::value::EnumData::Tuple(vals)
+                if matches!(vals.first(), Some(Value::Tuple(_)))
+        );
+        if matches!(enum_name.as_str(), "Option" | "Result")
+            && payload_is_tuple
+            && arms.iter().all(|arm| {
+                !crate::binding_use::optres_arm_takes_whole_payload(
+                    &arm.pattern,
+                    &arm.body,
+                    arm.guard.as_ref(),
+                )
+            })
+        {
+            return;
+        }
         if self.match_disarms_payload_walk(&enum_name, arms)
             && !self.frame_is_sole_owner_of_param(&name)
         {
@@ -955,10 +1007,38 @@ impl<'a> super::Interpreter<'a> {
             }
             return;
         }
-        let Value::EnumVariant { enum_name, .. } = scrutinee else {
+        let Value::EnumVariant {
+            enum_name, data, ..
+        } = scrutinee
+        else {
             return;
         };
         let enum_name = enum_name.clone();
+        // B-2026-09-10-14, `if let` / `while let` leg — the block-scope
+        // spelling of the `match` form's stand-down above, kept in lockstep
+        // with it deliberately: a spelling-dependent split in this family is
+        // the shape B-2026-08-28-63, -08-29-17, -08-31-32 and -09-01-28 each
+        // had to close. Measured the same way — `if let Some(t) = o { println(
+        // "hit") }` over `Option[(R, R)]` printed `x hit` here against the
+        // compiled backends' `x hit dR1 dR2` once the `match` leg landed, which
+        // is an agreed gap turning into a DIVERGENCE if only one form is fixed.
+        //
+        // `scope: None` (`let … else`) keeps the disarm: that binding escapes
+        // into the enclosing block and is materialized by definition, which is
+        // the carve-out `let_form_only_reads_payload_through` already makes and
+        // the one codegen's let-else leg makes too.
+        let payload_is_tuple = matches!(
+            data,
+            crate::interpreter::value::EnumData::Tuple(vals)
+                if matches!(vals.first(), Some(Value::Tuple(_)))
+        );
+        if matches!(enum_name.as_str(), "Option" | "Result")
+            && payload_is_tuple
+            && scope
+                .is_some_and(|b| !crate::binding_use::optres_block_takes_whole_payload(pattern, b))
+        {
+            return;
+        }
         if takes_payload(self, &enum_name) && !self.frame_is_sole_owner_of_param(&name) {
             // B-2026-09-16-12 — the `if let` / `while let` / `let … else`
             // spelling of the `match` form's per-position disarm. Same rule,

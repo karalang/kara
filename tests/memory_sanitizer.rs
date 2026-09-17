@@ -4278,6 +4278,132 @@ fn main() {
         );
     }
 
+    /// B-2026-09-10-14 — the MEMORY half of `tests/codegen.rs`'s
+    /// `e2e_whole_payload_arm_binding_over_a_tuple_payload_runs_element_bodies`
+    /// under ASAN + LSan, same fifteen cells and same transcript.
+    ///
+    /// The row itself is a BODIES-channel gap — memory was balanced before the
+    /// fix (0 valgrind errors, nothing lost), which is precisely why no
+    /// sanitizer leg could see it. This fixture is here for the OTHER
+    /// direction: the fix re-homes who runs the payload walk, and the two
+    /// rejected alternatives each cost a free rather than a body. Funding the
+    /// BINDING instead of the place ran the walk once per arm over one payload
+    /// (`twice`); leaving the place armed through a materializing arm ran it
+    /// beside the caller's owner (`ret`, measured `dR30 dR31 dR30 dR31`). Both
+    /// are double frees of the element interiors, and only a sanitizer holds
+    /// them closed.
+    #[test]
+    fn asan_whole_payload_arm_binding_over_a_tuple_payload_keeps_one_owner() {
+        assert_clean_asan_run(
+            "struct R { id: i64, name: String }\n\
+             impl Drop for R { fn drop(mut ref self) { println(f\"  dR{self.id}\") } }\n\
+             struct W { r: R, n: i64 }\n\
+             impl Drop for W { fn drop(mut ref self) { println(f\"  dW{self.n}\") } }\n\
+             fn mk(i: i64) -> R { return R { id: i, name: f\"n{i}\" } }\n\
+             fn eat(t: (R, R)) -> i64 { println(\"  eat\"); return 7 }\n\
+             fn giveback() -> (R, R) {\n\
+             \x20\x20\x20\x20let o: Option[(R, R)] = Some((mk(30), mk(31)));\n\
+             \x20\x20\x20\x20match o { Some(t) => { return t } None => { return (mk(90), mk(91)) } }\n\
+             }\n\
+             \n\
+             fn main() {\n\
+             \x20\x20\x20\x20println(\"bind\");    { let o: Option[(R, R)] = Some((mk(1), mk(2))); println(\"  x\"); match o { Some(t) => { println(\"  hit\") } None => { println(\"  n\") } } }\n\
+             \x20\x20\x20\x20println(\"read\");    { let o: Option[(R, R)] = Some((mk(3), mk(4))); println(\"  x\"); match o { Some(t) => { println(f\"  hit{t.0.id}\") } None => { println(\"  n\") } } }\n\
+             \x20\x20\x20\x20println(\"iflet\");   { let o: Option[(R, R)] = Some((mk(5), mk(6))); println(\"  x\"); if let Some(t) = o { println(\"  hit\") } }\n\
+             \x20\x20\x20\x20println(\"whilet\");  { let mut o: Option[(R, R)] = Some((mk(7), mk(8))); println(\"  x\"); while let Some(t) = o { println(\"  hit\"); o = None; } println(\"  end\") }\n\
+             \x20\x20\x20\x20println(\"result\");  { let o: Result[(R, R), i64] = Ok((mk(9), mk(10))); println(\"  x\"); match o { Ok(t) => { println(\"  hit\") } Err(e) => { println(\"  n\") } } }\n\
+             \x20\x20\x20\x20println(\"twice\");   { let o: Option[(R, R)] = Some((mk(11), mk(12))); println(\"  x\"); match o { Some(t) => { println(\"  a\") } None => { println(\"  n\") } } match o { Some(t) => { println(\"  b\") } None => { println(\"  n\") } } }\n\
+             \x20\x20\x20\x20println(\"after\");   { let o: Option[(R, R)] = Some((mk(13), mk(14))); println(\"  x\"); match o { Some(t) => { println(\"  hit\") } None => { println(\"  n\") } } println(\"  end\") }\n\
+             \x20\x20\x20\x20println(\"wild\");    { let o: Option[(R, R)] = Some((mk(15), mk(16))); println(\"  x\"); match o { Some(_) => { println(\"  hit\") } None => { println(\"  n\") } } }\n\
+             \x20\x20\x20\x20println(\"struct\");  { let o: Option[W] = Some(W { r: mk(17), n: 18 }); println(\"  x\"); match o { Some(t) => { println(\"  hit\") } None => { println(\"  n\") } } }\n\
+             \x20\x20\x20\x20println(\"single\");  { let o: Option[R] = Some(mk(19)); println(\"  x\"); match o { Some(t) => { println(\"  hit\") } None => { println(\"  n\") } } }\n\
+             \x20\x20\x20\x20println(\"ret\");     { println(\"  x\"); let v = giveback(); println(\"  hit\") }\n\
+             \x20\x20\x20\x20println(\"eat\");     { let o: Option[(R, R)] = Some((mk(20), mk(21))); println(\"  x\"); match o { Some(t) => { println(f\"  hit{eat(t)}\") } None => { println(\"  n\") } } }\n\
+             \x20\x20\x20\x20println(\"nomatch\"); { let o: Option[(R, R)] = Some((mk(22), mk(23))); println(\"  x\") }\n\
+             \x20\x20\x20\x20println(\"none\");    { let o: Option[(R, R)] = None; println(\"  x\"); match o { Some(t) => { println(\"  hit\") } None => { println(\"  n\") } } }\n\
+             \x20\x20\x20\x20println(\"tlocal\");  { let t: (R, R) = (mk(24), mk(25)); println(\"  x\") }\n\
+             \x20\x20\x20\x20println(\"end\")\n\
+             }\n\
+",
+            &[
+                "bind",
+                "  x",
+                "  hit",
+                "  dR1",
+                "  dR2",
+                "read",
+                "  x",
+                "  hit3",
+                "  dR3",
+                "  dR4",
+                "iflet",
+                "  x",
+                "  hit",
+                "  dR5",
+                "  dR6",
+                "whilet",
+                "  x",
+                "  hit",
+                "  dR7",
+                "  dR8",
+                "  end",
+                "result",
+                "  x",
+                "  hit",
+                "  dR9",
+                "  dR10",
+                "twice",
+                "  x",
+                "  a",
+                "  b",
+                "  dR11",
+                "  dR12",
+                "after",
+                "  x",
+                "  hit",
+                "  dR13",
+                "  dR14",
+                "  end",
+                "wild",
+                "  x",
+                "  hit",
+                "  dR15",
+                "  dR16",
+                "struct",
+                "  x",
+                "  hit",
+                "  dW18",
+                "  dR17",
+                "single",
+                "  x",
+                "  hit",
+                "  dR19",
+                "ret",
+                "  x",
+                "  dR30",
+                "  dR31",
+                "  hit",
+                "eat",
+                "  x",
+                "  eat",
+                "  hit7",
+                "nomatch",
+                "  dR22",
+                "  dR23",
+                "  x",
+                "none",
+                "  x",
+                "  n",
+                "tlocal",
+                "  dR24",
+                "  dR25",
+                "  x",
+                "end",
+            ],
+            "tuple_payload_arm_binding_one_owner",
+        );
+    }
+
     /// B-2026-09-06-45 — the MEMORY half of `tests/codegen.rs`'s
     /// `e2e_nested_self_rebind_runs_each_body_once` under ASAN + LSan. The
     /// callee-side registration is the binding's OWN wrapper rather than a

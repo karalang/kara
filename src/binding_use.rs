@@ -36,6 +36,58 @@
 
 use crate::ast::{Block, Expr, ExprKind, ParsedInterpolationPart, Stmt, StmtKind};
 
+/// B-2026-09-10-14 — does this `match` arm MATERIALIZE the whole-value
+/// bindings of an `Option`/`Result` pattern, or only read through them?
+///
+/// `false` only when every top-level sub-pattern is a plain binding (or a
+/// wildcard, which binds nothing) AND every bound name is read-through here.
+/// A DESTRUCTURE (`Some((a, b))`) answers `true` by construction: its leaves
+/// each take an element and each register a body of their own, which is the
+/// case the payload-walk disarm was written for and gets right.
+///
+/// Lives in THIS module rather than in either backend so the two cannot drift:
+/// codegen's `suppress_optres_payload_bodies_for_match_scoped` and the
+/// interpreter's `record_enum_payload_arm_moves` call the same function on the
+/// same AST and reach the same verdict by construction, which is the property
+/// an agreed gap needs — both backends were wrong the same way, so only a
+/// shared answer can move them together.
+pub(crate) fn optres_arm_takes_whole_payload(
+    pattern: &crate::ast::Pattern,
+    body: &Expr,
+    guard: Option<&Expr>,
+) -> bool {
+    let crate::ast::PatternKind::TupleVariant { patterns, .. } = &pattern.kind else {
+        return true;
+    };
+    patterns.iter().any(|sub| match &sub.kind {
+        crate::ast::PatternKind::Wildcard => false,
+        crate::ast::PatternKind::Binding(n) => {
+            !binding_only_read_through(n, body)
+                || !guard.is_none_or(|g| binding_only_read_through(n, g))
+        }
+        _ => true,
+    })
+}
+
+/// `Block` sibling of [`optres_arm_takes_whole_payload`], for the `if let` /
+/// `while let` scopes whose binding lives in a block rather than an arm
+/// expression. Deliberately not offered to `let … else`, whose binding escapes
+/// into the enclosing scope and is materialized by definition — the same
+/// carve-out the interpreter's `let_form_only_reads_payload_through` makes.
+pub(crate) fn optres_block_takes_whole_payload(
+    pattern: &crate::ast::Pattern,
+    block: &Block,
+) -> bool {
+    let crate::ast::PatternKind::TupleVariant { patterns, .. } = &pattern.kind else {
+        return true;
+    };
+    patterns.iter().any(|sub| match &sub.kind {
+        crate::ast::PatternKind::Wildcard => false,
+        crate::ast::PatternKind::Binding(n) => !binding_only_read_through_block(n, block),
+        _ => true,
+    })
+}
+
 /// True iff every occurrence of `name` inside `e` is a read THROUGH the
 /// binding rather than a use OF it. See the module docs.
 pub(crate) fn binding_only_read_through(name: &str, e: &Expr) -> bool {
