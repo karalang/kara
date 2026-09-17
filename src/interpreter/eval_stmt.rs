@@ -2830,6 +2830,108 @@ impl<'a> super::Interpreter<'a> {
         }
     }
 
+    /// B-2026-09-14-16 — run the REMAINING `Drop` bodies of a fresh temp whose
+    /// field `value` projected out, if `value` is the projection that was
+    /// staged at the read.
+    ///
+    /// The interpreter peer of codegen's `consume_freshtemp_field_move`, and
+    /// deliberately the same shape: matched on field name AND object span, so a
+    /// stale stash can never be consumed by an unrelated statement.
+    ///
+    /// The projected field is MASKED because its new owner runs its body; every
+    /// other Drop-bearing field of the temp has no owner at all without this,
+    /// which is the whole of the row. Fires HERE, at the consuming statement,
+    /// because that is where the temp's live range ends — design.md § 866 fires
+    /// a destructor at the live-range end, and the NAMED-source spelling
+    /// (`let t = mkw(7); let w = (t.r, 1);`) already prints the sibling's body
+    /// at the source's own last use for that reason, on all four surfaces.
+    fn consume_freshtemp_field_move(&mut self, value: &Expr) {
+        let ExprKind::FieldAccess { object, field } = &value.kind else {
+            return;
+        };
+        let Some((tempv, ch_field, span_key)) = self.freshtemp_field_obj.clone() else {
+            return;
+        };
+        if &ch_field != field || span_key != (object.span.offset, object.span.length) {
+            return;
+        }
+        self.freshtemp_field_obj = None;
+        // REMOVE the projected field from the value this walk sees, rather than
+        // masking it through `pending_payload_masked_fields`: that channel masks
+        // a field's PAYLOAD bodies (the `payload_here` cut), not the field
+        // itself, so it left the projected field's own body running here BESIDE
+        // the consumer's — measured `dD107 dD7 idx1 dD7` where `dD107 idx1 dD7`
+        // is due. `drop_user_drop_fields_of_value` resolves each DECLARED field
+        // by name against the value, so a removed one is simply not found and
+        // not walked, which is the same device every param-view mask in this
+        // file uses.
+        let mut tempv = tempv;
+        Self::remove_field_at_path(&mut tempv, std::slice::from_ref(field));
+        self.drop_user_drop_fields_of_value(&tempv);
+    }
+
+    /// The CONSUMING positions of a `let` initializer, for
+    /// [`Self::consume_freshtemp_field_move`]: the initializer itself, each
+    /// element / field of a tuple or struct literal it builds, and the same
+    /// through any branch that produces the initializer's value.
+    ///
+    /// Exactly codegen's set — `exprs.rs`'s struct-literal field sites,
+    /// `expr_ops.rs`'s tuple-element site, and the bare initializer — so the two
+    /// backends consume the same stash at the same statement. A position not in
+    /// this set leaves the stash alone, which reproduces today's behaviour for
+    /// that spelling rather than guessing at it.
+    ///
+    /// THE BRANCH ARMS ARE IN THE SET, and leaving them out was measured as a
+    /// fresh run-vs-build divergence rather than a conservative omission:
+    /// `let w = if n == 0 { (mkw(7).r, 1) } else { (mkd(2), 2) };` reaches
+    /// codegen's per-element site through the taken arm's tuple literal, so the
+    /// compiled side printed `dD107` while this backend did not — the exact
+    /// trade the agreed loss forbids. Descending is SAFE without knowing which
+    /// arm ran, because the stash is keyed on the projection's object SPAN and
+    /// only the arm that actually evaluated it can have written one.
+    pub(super) fn consume_freshtemp_field_moves_in(&mut self, value: &Expr) {
+        match &value.kind {
+            ExprKind::Tuple(elems) => {
+                for e in elems {
+                    self.consume_freshtemp_field_move(e);
+                }
+            }
+            ExprKind::StructLiteral { fields, .. } => {
+                for f in fields {
+                    self.consume_freshtemp_field_move(&f.value);
+                }
+            }
+            ExprKind::If {
+                then_block,
+                else_branch,
+                ..
+            }
+            | ExprKind::IfLet {
+                then_block,
+                else_branch,
+                ..
+            } => {
+                if let Some(t) = then_block.final_expr.as_deref() {
+                    self.consume_freshtemp_field_moves_in(t);
+                }
+                if let Some(x) = else_branch.as_deref() {
+                    self.consume_freshtemp_field_moves_in(x);
+                }
+            }
+            ExprKind::Match { arms, .. } => {
+                for a in arms {
+                    self.consume_freshtemp_field_moves_in(&a.body);
+                }
+            }
+            ExprKind::Block(b) => {
+                if let Some(t) = b.final_expr.as_deref() {
+                    self.consume_freshtemp_field_moves_in(t);
+                }
+            }
+            _ => self.consume_freshtemp_field_move(value),
+        }
+    }
+
     /// B-2026-08-29-24 — the tuple sibling of
     /// [`Self::mask_param_view_struct_literal_fields`]. `let t = (r, 5);` moves
     /// a param VIEW into an element; the caller runs that value's body, so this
@@ -8435,6 +8537,12 @@ impl<'a> super::Interpreter<'a> {
                             self.pending_let_ty = saved_let_ty;
                             return Err(cf);
                         }
+                        // B-2026-09-14-16 — the projected field has just been
+                        // taken by this binding, so the fresh temp it came out
+                        // of dies here and its REMAINING fields' bodies are
+                        // owed. AFTER evaluation, because the stash is written
+                        // during it.
+                        self.consume_freshtemp_field_moves_in(value);
                         v
                     }
                 } else {

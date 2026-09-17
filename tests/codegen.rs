@@ -37941,6 +37941,133 @@ fn main() {
         }
     }
 
+    /// B-2026-09-14-16 — projecting one field off a FRESH TEMP runs the temp's
+    /// OTHER `Drop`-bearing fields' bodies, at the projection.
+    ///
+    /// `let w = (mkw(7).r, 1);` over `struct W { r: D, s: D, b: i64 }` printed
+    /// `idx1 dD7 end` on all four surfaces: the moved leaf's body ran at the
+    /// consumer and `s`'s — which nothing moved and nothing else owns — ran
+    /// NOWHERE. Agreed, so no A/B gate saw it. The control is a bare discarded
+    /// `mkw(7);`, which reaches the discard route, takes the value whole and
+    /// runs both.
+    ///
+    /// THE BODY RUNS AT THE PROJECTION, not at the consumer's drop, and the
+    /// NAMED-source spelling is why: `let t = mkw(7); let w = (t.r, 1);` is
+    /// correct today and prints `dD107` at `t`'s own last use — which is the
+    /// projection — because design.md § 866 fires a destructor at the
+    /// live-range end. A fresh temp's last use is the same projection, so the
+    /// due sequence is the named spelling's.
+    ///
+    /// BOTH BACKENDS MOVE TOGETHER, which they had to: the loss was agreed, so
+    /// fixing one alone would have manufactured a run-vs-build divergence out
+    /// of it. Codegen registers a masked field-bodies walk beside the cap zero
+    /// `consume_freshtemp_field_move` already emitted; the interpreter stages
+    /// the temp's VALUE at the read (it cannot re-evaluate the producer) and
+    /// consumes it at the same statement.
+    ///
+    /// THE PROJECTED FIELD IS EXCLUDED BY REMOVING IT FROM THE VALUE the
+    /// interpreter's walk sees, not by `pending_payload_masked_fields`: that
+    /// channel masks a field's PAYLOAD bodies rather than the field itself, and
+    /// using it left the projected field's own body running here beside the
+    /// consumer's — measured `dD107 dD7 idx1 dD7` against the due
+    /// `dD107 idx1 dD7`.
+    ///
+    /// CELLS 6-8 ARE THE READ-THROUGH POSITIONS AND ARE PINNED AS MEASURED,
+    /// NOT FIXED: a scalar read through the projection
+    /// (`println(f"v{mkw(7).r.id}")`), a scalar FIELD read (`mkw(7).b`) and the
+    /// projection passed straight to a discarding callee (`eat(mkw(7).r)`) run
+    /// NO bodies at all, on both surfaces. That is a wider, pre-existing and
+    /// agreed loss — the temp is never consumed by a statement in this fix's
+    /// set, so its stash is left alone by design — and it is filed separately.
+    /// Keeping them here is what shows the fix did not disturb them.
+    ///
+    /// MEMORY IS CLEAN AND THE STRINGS ARE INTACT with a heap-carrying `D`:
+    /// `-O0` valgrind reports 12-13 allocs with equal frees, `0 bytes in 0
+    /// blocks` at exit, `0 errors` and no invalid access on every cell, and
+    /// each body prints its own name.
+    #[test]
+    fn e2e_projecting_a_field_off_a_fresh_temp_runs_the_siblings_bodies() {
+        const H: &str = "struct D { id: i64 }\n\
+             impl Drop for D { fn drop(mut ref self) { println(f\"dD{self.id}\") } }\n\
+             fn mkd(n: i64) -> D { return D { id: n }; }\n\
+             struct W { r: D, s: D, b: i64 }\n\
+             fn mkw(n: i64) -> W { return W { r: mkd(n), s: mkd(n + 100), b: n }; }\n";
+        for (label, prog, want) in [
+            (
+                // 1 — the row's headline cell: a tuple literal built from the
+                //     projection.
+                "tuple literal of a projected field",
+                format!(
+                    "{H}fn main() {{ let w = (mkw(7).r, 1i64); println(f\"idx{{w.1}}\"); println(\"end\") }}\n"
+                ),
+                "dD107\nidx1\ndD7\nend\n",
+            ),
+            (
+                // 2 — CONTROL: a bare discarded temp, which was always correct
+                //     and is the proof the sibling's body is owed at all.
+                "control: bare discarded temp runs both",
+                format!("{H}fn main() {{ mkw(7); println(\"mid\"); println(\"end\") }}\n"),
+                "dD107\ndD7\nmid\nend\n",
+            ),
+            (
+                // 3 — the STRUCT-literal spelling, a different consuming site
+                //     with the identical loss.
+                "struct literal of a projected field",
+                format!(
+                    "{H}struct V {{ r: D, b: i64 }}\n\
+                     fn main() {{ let w = V {{ r: mkw(7).r, b: 1i64 }}; println(f\"idx{{w.b}}\"); println(\"end\") }}\n"
+                ),
+                "dD107\nidx1\ndD7\nend\n",
+            ),
+            (
+                // 4 — CONTROL: the NAMED source, correct before this change and
+                //     the oracle the due sequence comes from.
+                "control: named source",
+                format!(
+                    "{H}fn main() {{ let t = mkw(7); let w = (t.r, 1i64); println(f\"idx{{w.1}}\"); println(\"end\") }}\n"
+                ),
+                "dD107\nidx1\ndD7\nend\n",
+            ),
+            (
+                // 5 — the plainest spelling: the projection bound directly.
+                "bare let of a projected field",
+                format!(
+                    "{H}fn main() {{ let x = mkw(7).r; println(f\"idx{{x.id}}\"); println(\"end\") }}\n"
+                ),
+                "dD107\nidx7\ndD7\nend\n",
+            ),
+            (
+                // 6-8 — PINNED AS MEASURED, not fixed. See the note above.
+                "pinned: scalar read through the projection",
+                format!("{H}fn main() {{ println(f\"v{{mkw(7).r.id}}\"); println(\"end\") }}\n"),
+                "v7\nend\n",
+            ),
+            (
+                "pinned: scalar field read off the temp",
+                format!("{H}fn main() {{ println(f\"v{{mkw(7).b}}\"); println(\"end\") }}\n"),
+                "v7\nend\n",
+            ),
+            (
+                "pinned: projection into a discarding callee",
+                format!(
+                    "{H}fn eat(d: D) -> i64 {{ return d.id; }}\n\
+                     fn main() {{ println(f\"v{{eat(mkw(7).r)}}\"); println(\"end\") }}\n"
+                ),
+                "v7\nend\n",
+            ),
+        ] {
+            let (interp_out, interp_errs, _, _) = karac::run_program_full_checked(&prog);
+            assert!(
+                interp_errs.is_empty(),
+                "[{label}] interp errored: {interp_errs:?}"
+            );
+            assert_eq!(interp_out.join(""), want, "[{label}] interpreter");
+            if let Some(aot) = run_program(&prog) {
+                assert_eq!(aot, want, "[{label}] AOT");
+            }
+        }
+    }
+
     /// B-2026-09-15-15 — a MULTI-FIELD enum variant owns its boxed
     /// `Array[T, N]` payload, and an arm that hands that payload on is
     /// disarmed in both pattern shapes.
@@ -45346,20 +45473,33 @@ end
                 "pre\ndD7\npost\nidx1\ndD107\nend\n",
             ),
             (
+                // B-2026-09-14-16 — was `pre post idx1 dD7 end`, which PINNED
+                // the loss: `s`'s body ran nowhere, on this backend and the
+                // interpreter alike. It now runs at the projection, which is
+                // where the temp's live range ends — exactly where the NAMED
+                // source above prints it. The interpreter twin of this cell
+                // moved in the same commit; the loss was agreed, so one side
+                // moving alone would have made a divergence of it.
                 "fresh-temp projection, no named source",
                 "println(\"pre\");\n\
                  let w = (mkw(7).r, 1);\n\
                  println(\"post\");\n\
                  println(f\"idx{w.1}\");",
-                "pre\npost\nidx1\ndD7\nend\n",
+                "pre\ndD107\npost\nidx1\ndD7\nend\n",
             ),
             (
+                // B-2026-09-14-16 — the projection inside an `if` ARM moved too, and
+                // had to: codegen reaches its per-element consuming site through the
+                // taken arm, so leaving the interpreter out of the branch arms was
+                // measured as a fresh run-vs-build divergence rather than a
+                // conservative omission. The stash is keyed on the projection's object
+                // SPAN, so descending into both arms is safe without knowing which ran.
                 "fresh-temp projection through an if",
                 "println(\"pre\");\n\
                  let w = if n == 0 { (mkw(7).r, 1) } else { (mkd(2), 2) };\n\
                  println(\"post\");\n\
                  println(f\"idx{w.1}\");",
-                "pre\npost\nidx1\ndD7\nend\n",
+                "pre\ndD107\npost\nidx1\ndD7\nend\n",
             ),
             (
                 "control: whole-local element",

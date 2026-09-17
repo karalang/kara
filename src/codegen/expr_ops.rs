@@ -1608,6 +1608,41 @@ impl<'ctx> super::Codegen<'ctx> {
         }
         self.freshtemp_field_access_slot = None;
         self.zero_struct_field_move_cap(slot, &name, field);
+        // B-2026-09-14-16 — and run the REMAINDER's user `Drop` BODIES here.
+        //
+        // The cap zero above hands the projected field's MEMORY to the
+        // consumer and leaves the temp's struct drop freeing the unread
+        // remainder, which is the whole of what this fn used to do. The
+        // remainder's BODIES had no owner anywhere: `let w = (mkw(7).r, 1);`
+        // over `struct W { r: D, s: D, b: i64 }` ran `dD7` (the moved leaf's,
+        // at the consumer) and never `dD107` (`s`'s, which nothing moved and
+        // nothing else owns) -- on all four surfaces, so no A/B gate saw it.
+        // The control is a bare discarded `mkw(7);`, which reaches the
+        // discard route, takes the value whole and runs both.
+        //
+        // HERE rather than at the temp's drop, because HERE is where the temp
+        // dies: its last use is this projection, and design.md § 866 fires a
+        // destructor at the live-range end. Measured against the NAMED-source
+        // spelling, which is correct today and prints `dD107` at the source's
+        // own last use for the same reason (`let t = mkw(7); let w = (t.r, 1);`
+        // -> `dD107 idx1 dD7 end`).
+        //
+        // The projected field is masked out because the consumer now owns it
+        // and runs its body; `emit_user_drop_field_bodies_fn_skipping` folds
+        // the surviving index list into the symbol name, so this masked walker
+        // cannot alias the full one in the module memo.
+        let skip_idx = self
+            .type_decls
+            .struct_field_names
+            .get(name.as_str())
+            .and_then(|fs| fs.iter().position(|f| f == field));
+        if let Some(idx) = skip_idx {
+            let mut skip = super::synth_drop::FieldSkipTree::default();
+            skip.here.insert(idx);
+            if let Some(bodies) = self.field_bodies_fn_for_owned_temp_skipping(&name, &skip) {
+                self.builder.build_call(bodies, &[slot.into()], "").unwrap();
+            }
+        }
     }
 
     /// FFI union field read helper — phase 5 line 569 slice 4. Returns

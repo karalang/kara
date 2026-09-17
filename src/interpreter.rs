@@ -591,6 +591,24 @@ pub struct Interpreter<'a> {
     /// taken) before the walker recurses into a nested struct field, so a
     /// two-hop mask reaches the level that owns the enum.
     pub(crate) pending_payload_masked_fields: Option<HashSet<Vec<String>>>,
+    /// B-2026-09-14-16 — the value of a FRESH TEMP whose field is being
+    /// projected out, staged at the read and consumed by the statement that
+    /// takes the projected field.
+    ///
+    /// `(temp value, field name, (object span offset, length))`. The interpreter
+    /// peer of codegen's `freshtemp_field_access_slot`, and keyed the same way
+    /// (field name AND object span) so a stale entry can never be consumed by
+    /// an unrelated `let`.
+    ///
+    /// It exists because the projected field's new owner runs ITS body and
+    /// nothing anywhere ran the temp's OTHER Drop-bearing fields':
+    /// `let w = (mkw(7).r, 1);` over `struct W { r: D, s: D, b: i64 }` printed
+    /// `dD7` and never `dD107`, on all four surfaces, while a bare discarded
+    /// `mkw(7);` — which reaches the discard route and takes the value whole —
+    /// printed both. The temp's value has to be captured at the READ because
+    /// re-evaluating the producer at the consuming statement would run `mkw`
+    /// again.
+    pub(crate) freshtemp_field_obj: Option<(Value, String, (usize, usize))>,
     /// B-2026-08-29-24 — the enum-PAYLOAD peer of the two sets above: `(enum
     /// binding, declared payload index)` slots whose body belongs to somebody
     /// else, today because a variant constructor moved a param VIEW into that
@@ -1176,6 +1194,7 @@ impl<'a> Interpreter<'a> {
             pending_shared_releases: Vec::new(),
             moved_out_tuple_elem_payload_bodies: HashSet::new(),
             pending_payload_masked_fields: None,
+            freshtemp_field_obj: None,
             moved_out_enum_payload_slots: HashSet::new(),
             moved_out_enum_payload_body_slots: HashSet::new(),
             optres_payload_bodies_tes: HashMap::new(),

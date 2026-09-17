@@ -656,6 +656,24 @@ impl<'a> super::Interpreter<'a> {
                     }
                 }
                 let obj = self.eval_expr_inner(object);
+                // B-2026-09-14-16 — stage a FRESH TEMP whose field is being
+                // projected out, so the statement that CONSUMES the projected
+                // field can run the temp's remaining fields' bodies. The value
+                // is captured here because re-evaluating `object` later would
+                // run the producer a second time. Codegen's peer is
+                // `track_freshtemp_field_access_object`, keyed identically on
+                // field name plus object span.
+                if matches!(
+                    object.kind,
+                    ExprKind::Call { .. } | ExprKind::MethodCall { .. } | ExprKind::Block(_)
+                ) && matches!(obj, Value::Struct { .. })
+                {
+                    self.freshtemp_field_obj = Some((
+                        obj.clone(),
+                        field.clone(),
+                        (object.span.offset, object.span.length),
+                    ));
+                }
                 self.read_field(obj, field, &expr.span)
             }
 

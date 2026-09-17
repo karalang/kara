@@ -61810,20 +61810,33 @@ fn test_tuple_literal_of_a_projected_field_runs_one_body_at_the_owner() {
             "pre\ndD7\npost\nidx1\ndD107\nend\n",
         ),
         (
+            // B-2026-09-14-16 — was `pre post idx1 dD7 end`, which PINNED the
+            // loss: `s`'s body ran nowhere, because a fresh temp has no
+            // binding whose field walk survives the move-out. It now runs at
+            // the projection, which is where the temp's live range ends —
+            // exactly where cell 1's NAMED source prints it. The two cells
+            // were the row's own oracle pair and now agree on the sibling's
+            // position.
             "fresh-temp projection, no named source",
             "println(\"pre\");\n\
              let w = (mkw(7).r, 1);\n\
              println(\"post\");\n\
              println(f\"idx{w.1}\");",
-            "pre\npost\nidx1\ndD7\nend\n",
+            "pre\ndD107\npost\nidx1\ndD7\nend\n",
         ),
         (
+            // B-2026-09-14-16 — the projection inside an `if` ARM moved too, and
+            // had to: codegen reaches its per-element consuming site through the
+            // taken arm, so leaving the interpreter out of the branch arms was
+            // measured as a fresh run-vs-build divergence rather than a
+            // conservative omission. The stash is keyed on the projection's object
+            // SPAN, so descending into both arms is safe without knowing which ran.
             "fresh-temp projection through an if",
             "println(\"pre\");\n\
              let w = if n == 0 { (mkw(7).r, 1) } else { (mkd(2), 2) };\n\
              println(\"post\");\n\
              println(f\"idx{w.1}\");",
-            "pre\npost\nidx1\ndD7\nend\n",
+            "pre\ndD107\npost\nidx1\ndD7\nend\n",
         ),
         (
             "control: whole-local element",
