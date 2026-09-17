@@ -92,7 +92,7 @@ distinguish "bugs flattening" from "we stopped writing them down."
 
 | class | total |
 |---|---|
-| run-vs-build | 421 |
+| run-vs-build | 422 |
 | miscompile | 415 |
 | leak | 366 |
 | double-free | 240 |
@@ -110,8 +110,8 @@ distinguish "bugs flattening" from "we stopped writing them down."
 
 | surface | total |
 |---|---|
-| codegen | 1814 |
-| interp | 465 |
+| codegen | 1815 |
+| interp | 466 |
 | typecheck | 302 |
 | other | 95 |
 | ownership | 75 |
@@ -2647,6 +2647,7 @@ _Generated from `bug-ledger.jsonl` by `scripts/bug-curve.py` (2026-05-20 → 202
 | B-2026-09-16-24 | typecheck | medium | `partial_move_of_drop_enum` REJECTS A BORROW-PROJECTION SCRUTINEE, and it is a false positive by the rule's OWN stated terms -- the rule documents it… | 84030e8 |
 | B-2026-09-16-27 | codegen | medium | A NESTED STRUCT MOVED INTO A VARIANT CONSTRUCTOR ABORTS WITH A DOUBLE FREE -- `Wn.Full(o)` over `struct Out { i: In }` / `struct In { s: String }` di… | 602a4bd |
 | B-2026-09-16-36 | codegen | medium | the SSO slice fast path still called `karac_string_slice_into` on two cold edges, and the escaping out-pointer cost 2.50x on every iteration that nev… | 356883caa |
+| B-2026-09-16-37 | interp+codegen | low | THE DISCARDED-TUPLE BODY ARM FIRES FOR A GENERIC CALLEE ITS CODEGEN TWIN STRUCTURALLY CANNOT SEE -- `fgen(mk(31));` over `fn fgen[T](t: T) -> (T, i64… | 1d75252 |
 
 </details>
 
