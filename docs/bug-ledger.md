@@ -92,7 +92,7 @@ distinguish "bugs flattening" from "we stopped writing them down."
 
 | class | total |
 |---|---|
-| run-vs-build | 432 |
+| run-vs-build | 433 |
 | miscompile | 416 |
 | leak | 374 |
 | double-free | 244 |
@@ -110,7 +110,7 @@ distinguish "bugs flattening" from "we stopped writing them down."
 
 | surface | total |
 |---|---|
-| codegen | 1845 |
+| codegen | 1846 |
 | interp | 474 |
 | typecheck | 302 |
 | other | 96 |
@@ -124,7 +124,7 @@ distinguish "bugs flattening" from "we stopped writing them down."
 | lexer | 8 |
 ## Current state
 
-_Generated from `bug-ledger.jsonl` by `scripts/bug-curve.py` (2026-05-20 → 2026-09-17). Do not edit this block by hand; edit the ledger and regenerate._
+_Generated from `bug-ledger.jsonl` by `scripts/bug-curve.py` (2026-05-20 → 2026-09-18). Do not edit this block by hand; edit the ledger and regenerate._
 
 ### Open
 
@@ -137,7 +137,6 @@ _Generated from `bug-ledger.jsonl` by `scripts/bug-curve.py` (2026-05-20 → 202
 | B-2026-09-14-7 | 2026-09-14 | codegen+interp | low | AN `Option`-PAYLOAD ELEMENT MOVED OUT AND NOT RETURNED DIES AT OPPOSITE ENDS OF THE ARM -- `Some(t) => { let x = t.0; println("mid"); }` prints `mid dR5` under `--interp` against the compiled backends' `dR5 mid`, so the COUNT agrees and only the sequence differs | — |
 | B-2026-09-14-10 | 2026-09-14 | codegen+interp | low | A BORROW PROJECTION COPIES AS A METHOD ARGUMENT BUT NOT AS A FREE-FUNCTION ONE -- `v.push(w.r)` runs the field's `Drop` body TWICE and `consume(w.r)` runs it ONCE, same syntactic position, same borrow, on all four surfaces alike | — |
 | B-2026-09-14-18 | 2026-09-14 | codegen+interp | medium | AN UNMOVED PART OF AN OWNED `Option` PAYLOAD LOSES ITS `Drop` BODY ON ALL FOUR SURFACES when the arm DESTRUCTURES the payload and returns a different part -- `Some((a, b)) => { return b; }` over `Option[(R, i64)]` prints `got:9 end` everywhere against the due `dR5 got:9 end`, and the two-Drop-element cell loses `dR6` everywhere, so the A/B parity rule sees nothing; this is the cell B-2026-09-13-5 recorded as 'correct on all four surfaces', which its `(R, i64)` sibling could not show | — |
-| B-2026-09-14-22 | 2026-09-14 | codegen | medium | A GENERIC ENUM'S BOXED PAYLOAD LOSES ITS `Drop` BODY ON EVERY COMPILED SURFACE ONCE THE CONSUMING ARM BINDS IT -- `takew(Ho.Full(mkw()))` over a three-`String` payload prints `w:4 end` on JIT/AOT against `--interp`'s `w:4 dW4 end`, and the named-local spelling splits the same way, while the identical callee that does NOT bind the payload is correct on all four and the MONOMORPHIC twin is correct in both shapes -- so the axis is `clear_boxed_enum_inner_drop` retracting the box's interior walk with nothing picking the body up | — |
 | B-2026-09-14-28 | 2026-09-14 | codegen | medium | `vertical`'s +85% SSO REGRESSION IS NOT THE DE-INLINE PROBE AND NOT `prefix_string` -- both were ruled out by measurement (c1adb9c removed the probe: +84.1% -> +85.4%; an exact mirror of `prefix_string` runs 9-15% FASTER under SSO), so the worst regression in the corpus is now UNATTRIBUTED. `shortest_distance_iii` (+36%) and `shortest_distance` (+61%) are the same shape. Reachable only at KARAC_SSO=1, which is off by default. | — |
 | B-2026-09-15-12 | 2026-09-15 | codegen | low | A `-> ref` METHOD WHOSE INNER IS AN `Array[T, N]` OR A NAMED STRUCT IS DECLINED BY CODEGEN AT EVERY VALUE-POSITION CONSUMER -- `h.peek()[0]` says `Index operator applied to non-array type` and `h.peek().a` says `cannot resolve field 'a' on this receiver`, both while `--interp` prints the right answer; the TUPLE inner of the same shape now lowers (B-2026-09-15-4) and these two are the inners that fix deliberately declined to widen to | — |
 | B-2026-09-15-17 | 2026-09-15 | codegen | low | AN `Array[R, N]` WHOSE ELEMENT RUNS A USER `Drop` BODY, MOVED INTO AN ENUM VARIANT CONSTRUCTOR, RUNS THOSE BODIES BEFORE THE CONSUMING CALL ON EVERY COMPILED BACKEND and after it under `--interp` -- the identical program with a plain function call in place of the constructor is correctly ordered on both, which puts the divergence at the constructor rather than at the array | — |
@@ -197,6 +196,7 @@ _Generated from `bug-ledger.jsonl` by `scripts/bug-curve.py` (2026-05-20 → 202
 | B-2026-09-17-34 | 2026-09-17 | codegen | high | MOVING A HEAP-CARRYING `Drop` FIELD OUT OF A BOXED (SPILLED) `Option`/`Result` PAYLOAD STRUCT ABORTS EVERY COMPILED SURFACE WITH A DOUBLE FREE -- `fn eat(o: Option[Hd]) { match o { Some(t) => { let x = t.r; println("mid") } .. } }` over `struct Hd { r: R, n: i64 }` (no `Drop` of its own) and `struct R { name: String, id: i64 }` (with one) prints `free(): double free detected in tcache 2` and exits 134 with NO program output at all, on `build`, `build KARAC_AUTO_PAR=0` and `karac run` alike -- valgrind at `-O0`: 11 allocs / 12 frees, `Invalid free()`, 1 error, the `String` buffer freed twice. FOUR spellings abort including a purely LOCAL `Option` with no call in the program, so this is not a caller/callee ownership question; the READ-ONLY twin is clean and the same projection off a plain struct local with NO enum head is clean AND at the due answer. The `Result` head escapes it only until the payload spills ITS wider inline area -- a 6-word `Result` payload aborts identically -- so the trigger is the BOXING, not the head. The INLINE-payload sibling does not abort but runs TWO bodies, the second reading a freed string (`dR5/a mid dR5/d end`) | — |
 | B-2026-09-17-35 | 2026-09-17 | codegen+interp | medium | A `Drop`-BEARING ELEMENT MOVED OUT OF A BY-VALUE TUPLE PARAM RUNS ITS BODY AFTER THE ARM'S STATEMENTS ON ALL FOUR SURFACES, where design.md § 866 says it is owed at the `let` -- `fn eat(t: (R, i64)) { let x = t.0; println("mid") }` prints `mid dR5 end` everywhere against the due `dR5 mid end`, and because the four surfaces AGREE the kata A/B parity rule cannot see it. The controls show both backends already implement the rule elsewhere: an unused local drops at its `let` in a bare block and in a match arm on every surface, and a local genuinely used later drops later -- only the move-out-of-a-param shape defers it. Distinct from B-2026-09-14-7, which is the `Option`-payload spelling of the same due answer and IS a run-vs-build divergence; here both backends defer, so the mechanism is the caller-retains convention for a by-value tuple param rather than that row's arm-binding view classification | — |
 | B-2026-09-17-36 | 2026-09-17 | codegen+interp | medium | A FRESH TEMP READ THROUGH A PROJECTION RUNS NO `Drop` BODIES AT ALL, where two are owed -- `println(f"v{mkw(7).r.id}")`, `println(f"v{mkw(7).b}")` and `println(f"v{eat(mkw(7).r)}")` over `struct W { r: D, s: D, b: i64 }` with `impl Drop for D` each print `v7 end` on all four surfaces, so the A/B parity rule is satisfied by every one of them; the control is one token away and correct -- a bare discarded `mkw(7);` reaches the discard route, takes the value WHOLE and prints both bodies. Distinct from B-2026-09-14-16 (fixed): that row's fix is a CONSUMER-side hook at the statement that takes the projected field, and none of these positions is a consuming one -- the projection is read through or handed to a call, and no statement takes it, so the fix is correctly inert here and all three are pinned as measured in its fixture | — |
+| B-2026-09-18-1 | 2026-09-18 | codegen | medium | A GENERIC ENUM'S BOXED PAYLOAD STILL LOSES ITS `Drop` BODY WHEN THE ARM *CONSUMES* ITS BINDING -- `match x { Full(r) => { let z = r; .. } }` over a three-`String` payload prints `w:4 end` on JIT/AOT against `--interp`'s `w:4 dW4 end`, while the READ-ONLY twin is correct on all four since B-2026-09-14-22, so the remaining loss is the arm moving its binding into a local and `z` acquiring no body for it | — |
 
 ### Relocated
 
@@ -2624,6 +2624,7 @@ _Generated from `bug-ledger.jsonl` by `scripts/bug-curve.py` (2026-05-20 → 202
 | B-2026-09-14-19 | codegen | medium | WHERE THE COMPILED BACKENDS KEEP AN OWNED `Option` PAYLOAD'S `Drop` BODY THEY RUN IT AT THE CALLER'S SCOPE EXIT, NOT AT THE PAYLOAD'S DEATH -- `fn ea… | f0d31a0 |
 | B-2026-09-14-20 | codegen | medium | SSO's PROMOTE-ON-MUTATION COSTS 32-40% ON CHAR-BY-CHAR STRING BUILDING, and it is the whole of the remaining corpus regression -- `sso_deinline_in_pl… | c1adb9c |
 | B-2026-09-14-21 | codegen | medium | A DISCARDED ENUM TEMP TAKES THE BY-TRANSFER STAND-DOWN THAT ONLY AN ARGUMENT SHOULD -- `Ex.mk(i);` and its `if`/`match`-tail spellings over an enum w… | 10008a1 |
+| B-2026-09-14-22 | codegen | medium | A GENERIC ENUM'S BOXED PAYLOAD LOSES ITS `Drop` BODY ON EVERY COMPILED SURFACE ONCE THE CONSUMING ARM BINDS IT -- `takew(Ho.Full(mkw()))` over a thre… | 2addf0e |
 | B-2026-09-14-23 | codegen | medium | A WHOLE-CONTAINER REASSIGNMENT LOSES THE DISPLACED CONTAINER'S ELEMENT `Drop` BODIES ON EVERY COMPILED BACKEND -- `let mut v: Vec[D] = [..]; v = [..]… | be0c605 |
 | B-2026-09-14-24 | typecheck | low | A NESTED `[..]` LITERAL UNDER A `Vec`-OUTER ANNOTATION DOES NOT TAKE THE INNER `Array[T, N]` TYPE -- `let v: Vec[Array[D, 1]] = [[mkd(1)], [mkd(2)]];… | 3dc6bbf |
 | B-2026-09-14-25 | codegen | high | AN `Array[D, N]` ENUM PAYLOAD WHOSE ELEMENT CARRIES BOTH HEAP AND A USER `Drop` BODY DOUBLE-FREES ON A CONSUMING ARM -- `Bd.A(a) => takeb(a)` over `e… | a56b9a2 |
