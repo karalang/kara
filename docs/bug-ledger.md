@@ -92,9 +92,9 @@ distinguish "bugs flattening" from "we stopped writing them down."
 
 | class | total |
 |---|---|
-| run-vs-build | 441 |
+| run-vs-build | 442 |
 | miscompile | 424 |
-| leak | 378 |
+| leak | 379 |
 | double-free | 249 |
 | missing-feature | 202 |
 | codegen-gap | 181 |
@@ -110,8 +110,8 @@ distinguish "bugs flattening" from "we stopped writing them down."
 
 | surface | total |
 |---|---|
-| codegen | 1870 |
-| interp | 480 |
+| codegen | 1871 |
+| interp | 481 |
 | typecheck | 302 |
 | other | 101 |
 | ownership | 75 |
@@ -171,7 +171,6 @@ _Generated from `bug-ledger.jsonl` by `scripts/bug-curve.py` (2026-05-20 → 202
 | B-2026-09-17-17 | 2026-09-17 | interp+codegen | medium | A TUPLE `Option` PAYLOAD HANDED TO A FREE FUNCTION FROM A READ-ONLY ARM LOSES ITS ELEMENT `Drop` BODIES ON BOTH BACKENDS -- `match o { Some(t) => eat(t) }` prints no body where the by-value callee is caller-retains, the one cell where the two ownership classifiers disagree and B-2026-09-10-14 chose the agreed answer over a divergence | — |
 | B-2026-09-17-20 | 2026-09-17 | interp | medium | AN ARM-BOUND PAYLOAD WHOSE ELEMENT IS ITSELF A TUPLE RUNS NO ELEMENT `Drop` BODY IN THE INTERPRETER, and both bodies on every compiled surface -- `match o { Some(t) => ... }` over `Option[((W, W), i64)]` prints `e5` interpreted against `e5 dW5 dW105` under jit / `-O0` / `-O2`. The compiled side is RIGHT (the arm binding owns the payload). Not the nested walk and not the field read: the identical nested tuple bound by a plain `let` runs both bodies interpreted, and an arm whose body never touches the payload loses them the same way. Became observable only when B-2026-09-10-21's fix let the compiled side build at all | — |
 | B-2026-09-17-21 | 2026-09-17 | codegen | medium | A `shared enum`'s BOXED NAMELESS-AGGREGATE PAYLOAD STILL STRANDS ITS INTERIOR WHEN THE PAYLOAD CAME FROM A TEMPORARY -- B-2026-09-15-10's envelope free reclaims the box and thereby CONVERTS the elements from indirectly to directly lost (`Sh.S(mka("x"))` 48/34 -> 34/0, a `while` of three 144/132 -> 132/0, two `Vec[Sh]` elements 96/80 -> 80/0), while the same programs sourcing the payload from a NAMED LOCAL reach 0/0 -- so the axis is whether a named source still owns the interior, and the parent's tag switch cannot see that because it is a fact about the construction site rather than about the box | — |
-| B-2026-09-17-22 | 2026-09-17 | codegen | medium | A `shared enum`'s UNIT VARIANT STRANDS ITS RC SHELL -- `{ let s = Sh.N; }` over `shared enum Sh { S(Array[String, 2]), N }` loses 24 B at `-O0`, which is the whole `{ i64 rc, i64 tag, i64 w0 }` heap layout rather than any payload box, byte-identical before and after B-2026-09-15-10's payload-box fix, and reproducing inside a mixed program (an A/B/N sequence reads 24 B, the same program without the `N` block reads 0) | — |
 | B-2026-09-17-23 | 2026-09-17 | codegen | medium | THE MONOMORPH PROLOGUE RUNS NONE OF THE BY-VALUE `Option`/`Result` PARAM ARMS, so a HEAP-BEARING generic payload's `Drop` body has no owner anywhere -- `fn gh[T](o: Option[(T, i64)]) { match o { Some(t) => t.1 } }` over a `W` WITH a `String` field prints `g9` on jit / `-O0` / `-O2` against `--interp`'s `dW2/n2 g9`. The payload BOXES, so the caller must stand down (its walk runs after the call, and the callee's `BoxedEnumDrop` frees the box before returning) -- and the callee-side arm is never reached: probes show NO gate and NO callee line for the param on the generic path, where the concrete twin prints both. B-2026-09-10-22's caller-side policy fix cannot reach this leg | — |
 | B-2026-09-17-24 | 2026-09-17 | codegen | low | A DESTRUCTURING ARM THAT RETURNS A GENERIC TUPLE-PAYLOAD ELEMENT FAILS MODULE VERIFICATION -- `fn e3[T](o: Option[(T, i64)], d: T) -> T { match o { Some((a, b)) => { return a; } ... } }` stops `karac build` with `Function return type does not match operand type of return inst! ret i64 %a6 { i64, { ptr, i64, i64 } }`, i.e. the erased one-word image of `T` reaching the `return` while the signature is monomorphised to the concrete struct. The WHOLE-VALUE spelling of the same move (`Some(t) => return t.0`) builds and runs correctly, which is what makes the destructuring arm the axis. LOUD, and `--interp` answers it | — |
 | B-2026-09-17-26 | 2026-09-17 | codegen | low | THE `Result` LEG OF THE ARM-BOUND TUPLE-PAYLOAD LEAK IS A THIRD OWNER PATH -- `fn take(o: Result[(W, i64), i64]) { match o { Ok(t) => t.1 } }` over `struct W { id: i64, name: String }` loses 2 B in 1 block at `-O0` with output correct and identical on all four surfaces. NOT B-2026-09-10-23's mechanism: probes show its retraction never fires for this cell (`takes=None` before and after that fix) and the leak is unchanged, so the interior is stranded somewhere else. Answers that row's unmeasured `Result` axis -- differently from how it expected | — |
@@ -201,6 +200,8 @@ _Generated from `bug-ledger.jsonl` by `scripts/bug-curve.py` (2026-05-20 → 202
 | B-2026-09-19-34 | 2026-09-19 | codegen | medium | A PROJECTION OUT OF A **BOXED** `Option` TUPLE PAYLOAD RUNS THE ESCAPING PART'S `Drop` BODY TWICE ON EVERY COMPILED BACKEND -- `fn eat(o: Option[(H, H)]) -> H { match o { Some(t) => { return t.0; } .. } }` with `struct H { id: i64, s: String }` prints `dH5 dH6 got:5 dH5 end` against the interpreter's correct `dH6 got:5 dH5 end`, so element 0's body runs once in the callee and again at the caller's binding; the NARROW payload (`struct R { id: i64 }`, which rides inline) is correct on all four surfaces since B-2026-09-17-30, so the trigger is the boxed channel | — |
 | B-2026-09-19-35 | 2026-09-19 | codegen | low | A CALL RESULT BINDING ARMS NO BOX DROP FOR A GENERIC ENUM A FIELD DEEP, so the payload leaks once B-2026-09-19-21's fix stops a wrong free from standing in for the missing one -- `let h = wrap(g, true); match h.g { G1.Y(v) => .. }` loses 24 B in 1 block at `-O0` where the IDENTICAL match on a bare `G1[T]` result binding (`bare`/`bareF`) is clean, so the aggregate is the variable and the inline `match` is not | — |
 | B-2026-09-19-36 | 2026-09-19 | codegen | medium | AN `Option`-WRAPPED FIELD IN THE RETURNED AGGREGATE STILL DOUBLE FREES, the remainder B-2026-09-19-21's fix cannot reach -- `struct Ho[T] { g: Option[G1[T]] }` returned by `Ho { g: Option.Some(g) }` prints `free(): double free detected in tcache 2` where `--interp` prints `mx 10`; the payload is coerced into `Option`'s payload words, so no leaf of the return carries the argument's type and the hand-back scan declines | — |
+| B-2026-09-19-37 | 2026-09-19 | interp | medium | THE INTERPRETER IGNORES A LOCAL BINDING THAT SHADOWS A UNIT ENUM VARIANT'S NAME -- `{ let Uc = 7; let s = Uc; println(f"n{s}") }` prints `nUc` under `--interp` and `n7` on jit / `karac build` / `-O0` / `KARAC_AUTO_PAR=0`, so the interpreter constructs the VARIANT where every compiled surface reads the local; on a `shared enum` it additionally runs that variant's `Drop` body, giving a line no compiled surface prints, and a plain enum diverges identically so it is not about `shared` | — |
+| B-2026-09-19-38 | 2026-09-19 | codegen | medium | A `shared enum`'s UNIT VARIANT CONSTRUCTED IN AN UNBOUND POSITION STILL STRANDS ITS RC SHELL -- `take(U.A)` as an inline call argument, `match U.A { .. }` as a scrutinee and a discarded `U.A;` each lose the whole `{ i64 rc, i64 tag, .. }` allocation at `-O0`, unbounded in a loop (80 B over 5 iterations), byte-identical before and after B-2026-09-17-22's fix, which covered the BOUND spellings only; the same three positions are clean for a payload-carrying variant (`take(U.A(3))`) and for a call result (`take(mk())`), so what is missing is a caller-side temp owner for the one fresh-ref source that is not an `ExprKind::Call` | — |
 
 ### Relocated
 
@@ -2695,6 +2696,7 @@ _Generated from `bug-ledger.jsonl` by `scripts/bug-curve.py` (2026-05-20 → 202
 | B-2026-09-17-9 | codegen | medium | B-2026-09-17-4's FIX LEAKS THE SAME BUFFERS IT STOPPED DOUBLE-FREEING, WHEN THE CONSUMER IS A GENERIC CALLEE -- `e312de9` narrowed `disarm_array_sour… | 52abf6a |
 | B-2026-09-17-18 | other | medium | A FIX SHA AN ORPHANING REBASE LEFT BEHIND STILL RESOLVES, SO B-2026-09-16-8's FIX CANNOT SEE THE CASE IT WAS WRITTEN FOR -- `3b2a932` narrowed `bug-l… | cbe88b6 |
 | B-2026-09-17-19 | codegen | medium | A BARE `shared enum` LOCAL RUNS ITS PAYLOAD'S `Drop` BODY UNDER `--interp` AND ON NO COMPILED BACKEND -- `let s: SMono = SMono.P(mkr(1));` over `shar… | 851501e |
+| B-2026-09-17-22 | codegen | medium | A `shared enum`'s UNIT VARIANT STRANDS ITS RC SHELL -- `{ let s = Sh.N; }` over `shared enum Sh { S(Array[String, 2]), N }` loses 24 B at `-O0`, whic… | 808a4d8 |
 | B-2026-09-17-25 | codegen | medium | A NAMED LOCAL MOVED INTO A `shared enum` CONSTRUCTOR LEAVES A PAYLOAD-BODY ACTION READING THE ZEROED STAGING SLOT -- `let r = mkr(1); { let s = SMono… | dbac00e |
 | B-2026-09-17-29 | codegen | high | A REMOVED `Map` VALUE HANDED STRAIGHT TO A BY-VALUE `Array[T, N]` PARAM IS FREED TWICE -- `match v.remove(j) { Some(a) => eat(a) }` over `Map[i64, Ar… | c0520ef |
 | B-2026-09-17-30 | codegen | medium | THE COMPILED BACKENDS RUN NO PART'S `Drop` BODY WHEN ONE PART OF A BY-VALUE `Option`/`Result` TUPLE PAYLOAD ESCAPES THROUGH A PROJECTION -- `fn eat(o… | 37fbf43 |
