@@ -1069,6 +1069,15 @@ impl Lexer {
             } else if self.peek() == b'\\' {
                 text.push_str(self.src.substring(run_start, self.current));
                 self.advance();
+                // Mirrors `string()` above and `src/lexer.rs`'s
+                // `interpolated_string` (B-2026-09-19-1). Without it a trailing
+                // backslash at EOF falls through to the `Unknown escape
+                // sequence` arm below, where the seed lexer reports an
+                // unterminated string -- a port divergence the oracle corpus
+                // had no input for.
+                if self.is_at_end() {
+                    return self.make_spanned(Token.Error("Unterminated interpolated string: trailing backslash".to_string()));
+                }
                 let e = self.peek();
                 if e == b'n' {
                     text.push('\n');

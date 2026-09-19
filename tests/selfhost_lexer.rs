@@ -340,6 +340,18 @@ const CORPUS: &[&str] = &[
     "t.1.1",
     "t.1.0",
     "tup.0.1.2 x = 1.5",
+    // B-2026-09-19-1 — a trailing backslash at EOF. The seed lexer PANICKED on
+    // the f-string form (`advance()` one past the end of `source`) while the
+    // port fell through to its `Unknown escape sequence` arm, so the two
+    // disagreed and the oracle could not see it: there was no corpus input that
+    // ends inside an escape. Both now report the unterminated string.
+    //
+    // The plain-string twin is included as the control that never diverged —
+    // `string()` has carried this guard on both sides all along, which is what
+    // made the f-string omission easy to miss.
+    r#"f"bd\"#,
+    r#"f"bd\\\"#,
+    r#""a\"#,
 ];
 
 /// Render one Rust `SpannedToken` in the Kāra lexer's canonical one-line
