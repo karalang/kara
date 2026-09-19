@@ -1378,6 +1378,10 @@ impl<'ctx> super::Codegen<'ctx> {
         // B-2026-08-01-13 — see `compile_match`'s twin derivation.
         self.pattern_state.pattern_binding_scrutinee_is_owned_param =
             self.scrutinee_is_owned_param_binding(scrutinee);
+        // B-2026-09-15-21 — see `compile_match`'s twin derivation.
+        self.pattern_state
+            .pattern_binding_scrutinee_param_memory_is_callee_owned =
+            self.scrutinee_carries_callee_owned_param_memory(scrutinee);
         // B-2026-09-07-38 — see `compile_match`'s twin derivation.
         self.pattern_state
             .pattern_binding_scrutinee_is_transfer_owned_enum =
@@ -1428,6 +1432,9 @@ impl<'ctx> super::Codegen<'ctx> {
         self.pattern_state
             .pattern_binding_scrutinee_is_fresh_owning_temp = saved.3;
         self.pattern_state.pattern_binding_scrutinee_is_owned_param = saved.4;
+        // B-2026-09-15-21 — cleared rather than restored; see the field's doc.
+        self.pattern_state
+            .pattern_binding_scrutinee_param_memory_is_callee_owned = false;
         // B-2026-09-06-20 — cleared rather than restored: the enclosing
         // construct's arm bindings were bound before this one compiled.
         self.pattern_state.pattern_binding_masked_view_names.clear();
@@ -1758,6 +1765,49 @@ impl<'ctx> super::Codegen<'ctx> {
             return (self.fn_ctx.current_fn_param_names.contains(name)
                 && !self.borrow_vars.ref_params.contains_key(name))
                 || self.payload_vars.param_view_locals.contains(name);
+        }
+    }
+
+    /// B-2026-09-15-21 — does this scrutinee's heap belong to THIS frame,
+    /// rather than being a view onto the caller's?
+    ///
+    /// The MEMORY companion of [`Self::scrutinee_is_owned_param_binding`]
+    /// directly above, walking the same projection chain so the two agree
+    /// about which name they are talking about, and then asking
+    /// [`Self::source_carries_callee_owned_param_memory`] instead of the
+    /// body-ownership question. That predicate is the one place this codebase
+    /// records the answer, exclusions included, so it is called rather than
+    /// re-derived.
+    ///
+    /// A PROJECTION keeps the walk for the same reason the body predicate
+    /// does: `match self.e { .. }` reaches the receiver's memory exactly as a
+    /// bare param name reaches its own.
+    pub(super) fn scrutinee_carries_callee_owned_param_memory(&self, e: &Expr) -> bool {
+        let mut cur = e;
+        let mut hops = 0usize;
+        loop {
+            let name: &str = match &cur.kind {
+                ExprKind::FieldAccess { object, .. } => {
+                    cur = object;
+                    hops += 1;
+                    continue;
+                }
+                ExprKind::TupleIndex { object, .. } => {
+                    cur = object;
+                    hops += 1;
+                    continue;
+                }
+                ExprKind::Identifier(n) => n.as_str(),
+                ExprKind::SelfValue
+                    if hops > 0
+                        || self.bare_self_is_owned_struct_receiver()
+                        || self.bare_self_is_owned_drop_enum_receiver() =>
+                {
+                    "self"
+                }
+                _ => return false,
+            };
+            return self.source_carries_callee_owned_param_memory(name);
         }
     }
 

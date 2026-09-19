@@ -1355,6 +1355,52 @@ impl<'ctx> super::Codegen<'ctx> {
                                 if payload_of_owned_param || payload_of_masked_slot {
                                     self.payload_vars.param_view_locals.insert(name.clone());
                                 }
+                                // B-2026-09-15-21 — and record the MEMORY
+                                // ownership separately, which the line above
+                                // does not and was being read as if it did.
+                                //
+                                // `param_view_locals` says who runs the BODY.
+                                // `param_view_callee_owned` says whose heap the
+                                // buffers are, and it is the set
+                                // `source_carries_callee_owned_param_memory`
+                                // consults — so an arm binding out of an
+                                // entry-copied param answered "not mine" there
+                                // and every consumer that asks before taking
+                                // ownership declined. `out = r` inside
+                                // `fn take(b: E)` is the measured one: the
+                                // assignment disarms the target's
+                                // `cond_move_drop_flags` bit (correctly — the
+                                // body is the caller's) and then asks
+                                // `register_param_view_mem_drop` to supply the
+                                // free that withholding the body withheld.
+                                // That registration declined on this predicate,
+                                // so the buffers the store moved into `out` had
+                                // no owner at all: 18 B per call at
+                                // `KARAC_OPT_LEVEL=0` and unbounded across
+                                // calls, with the `Drop` body still firing in
+                                // the right place, so only a sanitizer sees it.
+                                //
+                                // GATED ON THE MEMORY PREDICATE, not on
+                                // `payload_of_owned_param`: the body flag is
+                                // true for a `ref` projection, an RC-promoted
+                                // param and a caller-retained aggregate alike,
+                                // and each of those admitted here would be a
+                                // SECOND owner of the caller's buffer rather
+                                // than a first owner of ours — the failure this
+                                // codebase trades leaks to avoid.
+                                //
+                                // `payload_of_masked_slot` deliberately does
+                                // NOT reach this: that view is a slot of a
+                                // LOCAL scrutinee the constructor moved a param
+                                // into, so the memory question there is the
+                                // mask's and not this predicate's.
+                                if payload_of_owned_param
+                                    && self
+                                        .pattern_state
+                                        .pattern_binding_scrutinee_param_memory_is_callee_owned
+                                {
+                                    self.drop_rc.param_view_callee_owned.insert(name.clone());
+                                }
                                 // B-2026-09-02-11 — the same split for a
                                 // heap-ELEMENT index scrutinee. `match v[i]`
                                 // destructures a defensive deep clone of an

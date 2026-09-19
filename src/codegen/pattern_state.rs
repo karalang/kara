@@ -164,6 +164,28 @@ pub(crate) struct PatternState<'ctx> {
     /// runs it twice.
     pub(crate) pattern_binding_arm_borrowed_only_names: std::collections::HashSet<String>,
     pub(crate) pattern_binding_scrutinee_is_owned_param: bool,
+    /// B-2026-09-15-21 — true while binding a pattern whose scrutinee's own
+    /// heap this FRAME owns, i.e. the MEMORY half of the flag above.
+    ///
+    /// The two are not the same question and had no business sharing an
+    /// answer. `pattern_binding_scrutinee_is_owned_param` says who runs the
+    /// payload's `Drop` BODY, and for a by-value param the answer is "the
+    /// caller", which is why `bind_pattern_values` registers the binding
+    /// memory-only. This says whether the buffers that binding names were
+    /// deep-copied into this frame by the prologue — which is what makes the
+    /// binding eligible to be a memory OWNER when the arm hands it on.
+    ///
+    /// Derived from [`Codegen::source_carries_callee_owned_param_memory`], so
+    /// it inherits that predicate's three exclusions verbatim (a `ref` param,
+    /// an RC-promoted one, and one the caller retains) rather than restating
+    /// them — each of those was added because admitting it turned a leak into
+    /// a double free.
+    ///
+    /// Cleared rather than restored on the way out, like
+    /// `pattern_binding_masked_view_names` beside it: `false` declines, and a
+    /// stale `true` leaking into an enclosing construct is the direction that
+    /// registers an owner nobody asked for.
+    pub(crate) pattern_binding_scrutinee_param_memory_is_callee_owned: bool,
     /// B-2026-09-07-38 — true while binding a pattern whose scrutinee is a
     /// by-value ENUM param the callee owns BY TRANSFER
     /// (`enum_param_owned_by_transfer`, B-2026-09-07-16).

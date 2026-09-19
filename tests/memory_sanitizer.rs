@@ -82110,6 +82110,121 @@ fn main() {
         );
     }
 
+    /// B-2026-09-15-21 — the same statement as the fixture above, with the
+    /// source one level in: an ARM-BOUND payload rather than the param itself.
+    ///
+    /// `out = r` inside `match b { E.A(r) => … }`, where `b` is a by-value
+    /// param, freed the moved-in buffers NOWHERE. The assignment correctly
+    /// disarms the target's `cond_move_drop_flags` bit — for a by-value param
+    /// the `Drop` body is the caller's — and then asks
+    /// `register_param_view_mem_drop` to supply the free that withholding the
+    /// body withheld, exactly as the fixture above does. That registration
+    /// asks `source_carries_callee_owned_param_memory` about the SOURCE, and an
+    /// arm binding was in neither of the two sets that predicate reads: the
+    /// arm-binding site recorded the view in `param_view_locals` (who runs the
+    /// body) and never in `param_view_callee_owned` (whose heap it is). So the
+    /// registration declined and nothing owned the buffers.
+    ///
+    /// Measured at `KARAC_OPT_LEVEL=0` under `valgrind --leak-check=full` on a
+    /// nine-shape sweep, before the fix: 406 B in 24 blocks across five
+    /// contexts, 146 allocations against 121 frees. After: one context and 144
+    /// frees, and the one remaining is a `shared struct` cell that is
+    /// byte-identical on both sides and is filed on its own row. The three
+    /// assignment spellings here — plain, `if let`, and via an intermediate
+    /// `let m = r` rebind — each lost 18 B per call, and the loop cell lost
+    /// 320 B in 20 blocks, which is what makes this unbounded rather than a
+    /// fixed cost.
+    ///
+    /// `none` IS THE CELL AN OVER-EAGER FIX FAILS, and it is why the
+    /// registration is per-path rather than static: it passes `E.B`, so the
+    /// assignment never runs and `out` still holds the value its own `let`
+    /// gave it. That value must be freed by `out`'s ordinary drop, which the
+    /// flag leaves armed on this path. A fix that retracted unconditionally
+    /// instead would leak here, and the `dR0` in the expected output is what
+    /// pins the body half of the same path.
+    ///
+    /// `read` and `borrow` are the controls that were always clean: an arm that
+    /// only reads its binding hands it to nobody, and a `ref` param's heap is
+    /// the caller's throughout. `borrow` is not decoration — it is one of the
+    /// three exclusions `source_carries_callee_owned_param_memory` carries, and
+    /// admitting it here would make this frame a SECOND owner of the caller's
+    /// buffer, which is a double free rather than a leak. The other two
+    /// exclusions (an RC-promoted param, a caller-retained aggregate) are not
+    /// reachable from this shape and are guarded by that predicate's own
+    /// fixtures.
+    ///
+    /// FLOORED at 24 allocations, and the floor is doing real work here: the
+    /// row records that `KARAC_OPT_LEVEL=2` reports no leak at all, because
+    /// LLVM deletes an allocation nothing observes. So this cell is non-vacuous
+    /// only on the `-O0` leg — `scripts/asan-o0-leg.sh` — and a green default
+    /// `--features llvm` run is no evidence about it. Verified both ways
+    /// against the pre-fix tree.
+    #[test]
+    fn asan_arm_bound_payload_assigned_over_a_mut_local_has_an_owner() {
+        assert_clean_asan_run_min_allocs(
+            r#"
+struct R { id: i64, tag: String }
+impl Drop for R { fn drop(mut ref self) { println(f"dR{self.id}") } }
+enum E { A(R), B }
+
+fn mkr(i: i64) -> R { return R { id: i, tag: f"b1521-pay-{i}-aaaaaaaaaaaaaaaa" }; }
+
+fn asg(b: E) -> i64 {
+    let mut out: R = R { id: 0, tag: f"b1521-out-aaaaaaaaaaaaaaaa" };
+    match b { E.A(r) => { out = r; } E.B => { } }
+    return out.id;
+}
+fn iflet(b: E) -> i64 {
+    let mut out: R = R { id: 0, tag: f"b1521-out-aaaaaaaaaaaaaaaa" };
+    if let E.A(r) = b { out = r; }
+    return out.id;
+}
+fn rebind(b: E) -> i64 {
+    let mut out: R = R { id: 0, tag: f"b1521-out-aaaaaaaaaaaaaaaa" };
+    match b { E.A(r) => { let m = r; out = m; } E.B => { } }
+    return out.id;
+}
+fn readonly(b: E) -> i64 {
+    match b { E.A(r) => { return r.id; } E.B => { return 0; } }
+}
+fn borrowed(b: ref E) -> i64 {
+    match b { E.A(r) => { return r.id; } E.B => { return 0; } }
+}
+
+fn main() {
+    let a1: i64 = asg(E.A(mkr(8)));
+    println(f"asg:{a1}");
+    let a2: i64 = asg(E.B);
+    println(f"none:{a2}");
+    let a3: i64 = iflet(E.A(mkr(7)));
+    println(f"iflet:{a3}");
+    let a4: i64 = rebind(E.A(mkr(6)));
+    println(f"rebind:{a4}");
+    let a5: i64 = readonly(E.A(mkr(5)));
+    println(f"read:{a5}");
+    let k: E = E.A(mkr(4));
+    let a6: i64 = borrowed(k);
+    println(f"borrow:{a6}");
+    let mut i: i64 = 0;
+    let mut acc: i64 = 0;
+    while i < 3 {
+        let one: i64 = asg(E.A(mkr(1)));
+        acc = acc + one;
+        i = i + 1;
+    }
+    println(f"loop:{acc}");
+}
+"#,
+            &[
+                "dR0", "dR8", "asg:8", "dR0", "none:0", "dR0", "dR7", "iflet:7", "dR0", "dR6",
+                "rebind:6", "dR5", "read:5", "dR4", "borrow:4", "dR0", "dR1", "dR0", "dR1", "dR0",
+                "dR1", "loop:3",
+            ],
+            "asan_arm_bound_payload_assigned_over_a_mut_local_has_an_owner",
+            24,
+        );
+    }
+
     /// B-2026-09-03-31 — a struct with its own `impl Drop` never released a
     /// `shared struct` field's RC box.
     ///
