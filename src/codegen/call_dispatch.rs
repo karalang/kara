@@ -4589,20 +4589,30 @@ impl<'ctx> super::Codegen<'ctx> {
                     // it owed to nobody on every surface.
                     Some(v) => {
                         let parts = self.optres_payload_escape_parts(f, &p.ty, Some(v));
-                        let escaping = parts.get(pname.as_str()).and_then(|m| m.get(v))?;
-                        // An empty set cannot occur (the narrowed map is only
-                        // written where the map above is), and a set covering
-                        // every part is the old answer spelled out — in both
-                        // cases there is nothing to narrow, so decline exactly
-                        // as before. `?` above covers the third case: no
-                        // per-part answer at all, because the arm is not an
-                        // element-wise tuple destructure.
+                        // B-2026-09-17-30 — when the element-wise walk has no
+                        // answer, the arm binds the payload WHOLE and reaches
+                        // its parts by PROJECTION (`Some(t) => return t.0`).
+                        // That spelling has a part-precise answer of its own,
+                        // the one the interpreter has used since
+                        // B-2026-09-13-5, so ask it rather than standing the
+                        // whole payload down.
+                        let escaping = match parts.get(pname.as_str()).and_then(|m| m.get(v)) {
+                            Some(s) => s.clone(),
+                            None => Self::optres_payload_projected_escaping_elems(f, ast_i, v),
+                        };
+                        // An empty set means nothing to narrow — either the
+                        // element-wise map could not occur empty (it is only
+                        // written where the map above is) or the projection
+                        // channel declined, which it does for a struct payload
+                        // and for a conditional hand-back. A set covering every
+                        // part is the old answer spelled out. Both decline
+                        // exactly as before.
                         if escaping.is_empty()
                             || self.tuple_payload_arity(&p.ty, v) == Some(escaping.len())
                         {
                             return None;
                         }
-                        return Some((p.ty.clone(), escaping.clone()));
+                        return Some((p.ty.clone(), escaping));
                     }
                     // The argument is not a constructor and so cannot say
                     // which variant it is. Decline, which leaves the status quo
@@ -4674,6 +4684,59 @@ impl<'ctx> super::Codegen<'ctx> {
             f,
             &leaf_is_copy_read,
         )
+    }
+
+    /// B-2026-09-17-30 — the TOP-LEVEL tuple indices a callee hands out of a
+    /// WHOLE-bound `Option`/`Result` payload by projection
+    /// (`Some(t) => return t.0`).
+    ///
+    /// The element-wise walk in `result_escape` deliberately declines this
+    /// spelling — `tuple_payload_binding_parts` requires a tuple PATTERN, and
+    /// `Some(t)` binds one part, itself — so before this the whole payload was
+    /// stood down and the surviving sibling's body ran nowhere. Measured on
+    /// `fn eat(o: Option[(R, R)]) -> R { match o { Some(t) => { return t.0; } .. } }`:
+    /// `got:5 dR5 end` on every compiled surface against the interpreter's
+    /// already-correct `dR6 got:5 dR5 end`.
+    ///
+    /// Answered by the SHARED predicate rather than a codegen-local walk, so
+    /// the two backends cannot drift: `fn_escaping_param_payload_part_paths` is
+    /// what `mask_optres_payload_escaping_parts` feeds on the interpreter side,
+    /// and it already carries that side's conventions — a projection off a
+    /// BORROW yields nothing, and a CONDITIONAL hand-back records nothing
+    /// (`PartScanCx`'s statement-level rule), so both keep their pre-existing
+    /// behaviour here by construction.
+    ///
+    /// ONLY THE FIRST HOP, which is a real limit rather than a simplification.
+    /// `PayloadBodiesMask::TupleElems` is a flat index set, so it can say "skip
+    /// element 0" and cannot say "skip element 1 OF element 0" — and saying the
+    /// latter as the former would be a FALSE escape that loses a sibling's
+    /// body, the exact trade that mask's own doc warns about. A deeper path
+    /// (`return t.0.1` over `Option[((R, R), i64)]`) therefore reports its
+    /// first hop, which a caller must reject; the caller's arity check does
+    /// not catch that, so the depth filter is HERE: a path longer than one hop
+    /// contributes nothing and the whole answer stays empty, which the caller
+    /// reads as "decline". Filed as B-2026-09-19-33.
+    fn optres_payload_projected_escaping_elems(
+        f: &crate::ast::Function,
+        arg_index: usize,
+        variant: &str,
+    ) -> std::collections::BTreeSet<usize> {
+        let paths = crate::ast::fn_escaping_param_payload_part_paths(f, arg_index, Some(variant));
+        let mut out = std::collections::BTreeSet::new();
+        for path in paths {
+            match path.as_slice() {
+                [crate::ast::ParamPart::TupleIndex(i)] => {
+                    out.insert(*i);
+                }
+                // A struct payload (`Field`) has a callee-side owner for the
+                // surviving field already, which is why its cells are correct
+                // on all four surfaces; and a deeper tuple path cannot be
+                // expressed by this mask. Either one makes the whole answer
+                // unusable, not merely incomplete.
+                _ => return std::collections::BTreeSet::new(),
+            }
+        }
+        out
     }
 
     /// The number of elements in `param_te`'s payload for `variant`, when that

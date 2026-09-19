@@ -38007,15 +38007,18 @@ fn main() {
     /// per projection with the payload's type in hand: a projection is a READ
     /// exactly when its LEAF carries no `Drop` body.
     ///
-    /// CELL 3 IS THE ONE THAT KEEPS THE RULE HONEST. `return t.0` is a real
-    /// part move and must STILL decline; the AOT side is unchanged by this row
-    /// and still loses its sibling's body, which is defect 2 (B-2026-09-14-18,
-    /// B-2026-09-13-5) and deliberately not repaired here. Pinned at its
-    /// measured value so a later part-precision fix has to move it
-    /// deliberately rather than silently — which is exactly what happened:
-    /// B-2026-09-13-5's fix made the INTERPRETER part-precise and this cell's
-    /// interpreter expectation moved to the due sequence, deliberately, with
-    /// the AOT pin untouched. The compiled half is now B-2026-09-17-30.
+    /// CELL 3 IS THE ONE THAT KEPT THE RULE HONEST, and it has now been paid
+    /// out in full. `return t.0` is a real part move and must STILL decline on
+    /// the copy-read axis this row is about; what it must NOT do is stand the
+    /// whole payload down, which is what cost its sibling a body. It was
+    /// pinned at its measured value precisely so a later part-precision fix
+    /// would have to move it deliberately rather than silently, and both
+    /// halves of that duly happened, in two separate commits:
+    /// B-2026-09-13-5's fix made the INTERPRETER part-precise and moved this
+    /// cell's interpreter expectation to the due sequence with the AOT pin
+    /// untouched, and B-2026-09-17-30's fix did the same for the COMPILED
+    /// side. The cell now asserts ONE string for both surfaces, which is the
+    /// shape a fully closed defect takes here.
     ///
     /// CELLS 6-7 ARE THE TUPLE BOUNDARY, measured rather than assumed. The
     /// first cut applied the leaf policy to every payload shape and DOUBLED a
@@ -38055,10 +38058,18 @@ fn main() {
                 "dR5\ngot:5\nend\n",
             ),
             (
-                "control: a REAL part move still declines — defect 2, unchanged",
+                "a REAL part move — both backends now at the due sequence",
                 "fn eat(o: Option[(R, R)]) -> R { match o { Some(t) => { return t.0; } None => { return R { id: 0 }; } } }\n",
                 "let got: R = eat(Option.Some((R { id: 5 }, R { id: 6 })));\nprintln(f\"got:{got.id}\");\nprintln(\"end\");",
-                "got:5\ndR5\nend\n",
+                // B-2026-09-17-30, FIXED — this AOT pin read `got:5 dR5 end`,
+                // the all-or-nothing decline that ran element 1's body
+                // nowhere, and B-2026-09-14-18's row named this exact cell as
+                // the control a part-precision fix would have to move: "a
+                // part-precision fix must move both together and the pin will
+                // say so." It said so, and this is the deliberate move. The
+                // two expectations are now the same string, which is the
+                // point.
+                "dR6\ngot:5\ndR5\nend\n",
                 // B-2026-09-13-5, FIXED — the interpreter reaches the due
                 // `dR6 got:5 dR5 end` here now. It used to print
                 // `dR5 dR6 got:5 dR5 end`: the moved-out part's body ran at
@@ -38128,23 +38139,36 @@ fn main() {
     /// part-precise: it masks exactly the projected-out parts and keeps the
     /// siblings.
     ///
-    /// ELEVEN OF THE FOURTEEN CELLS NOW AGREE ON ALL FOUR SURFACES and are
-    /// asserted with one expectation. The three that do not are the compiled
-    /// side's own defect 2 — when any part of a TUPLE payload escapes, codegen
-    /// runs NO part's body — and they carry a second expectation so the
-    /// divergence is pinned rather than papered over:
+    /// B-2026-09-17-30 CLOSED THE COMPILED HALF, and this fixture is where its
+    /// two headline cells changed. `tuple-two-droppers-first-returned` and
+    /// `tuple-two-droppers-second-returned` carried a second, DIVERGENT AOT
+    /// expectation recording that codegen ran NO part's body; both now match
+    /// the interpreter at the due sequence, and the pins were moved
+    /// deliberately rather than regenerated, which is what that row asked for.
+    ///
+    /// TWO CELLS REMAIN PINNED DIVERGENT AND NEITHER IS FIXABLE FROM HERE:
     ///
     /// ```text
-    ///   tuple-two-droppers-first-returned    due dR6 got:5 dR5 end   AOT got:5 dR5 end
-    ///   tuple-two-droppers-second-returned   due dR5 got:6 dR6 end   AOT got:6 dR6 end
-    ///   nested-projection                    due dR5 got:6 dR6 end   AOT got:6 dR6 end
+    ///   nested-projection       due dR5 got:6 dR6 end   AOT got:6 dR6 end
+    ///   boxed-payload-...       due dH6 got:5 dH5 end   AOT dH5 dH6 got:5 dH5 end
     /// ```
     ///
-    /// ALL THREE WERE DIVERGENT BEFORE THIS ROW'S FIX TOO — the interpreter
-    /// printed `dR5 dR6 got:5 dR5 end` for the first, one MORE than codegen —
-    /// so making the interpreter correct traded nothing away. It did change
-    /// what the A/B gate can see: the counts now differ in a direction that
-    /// names the remaining defect, which is why `B-2026-09-17-30` exists.
+    /// The first is a mask-shape limit: `PayloadBodiesMask::TupleElems` is a
+    /// flat index set and cannot say "skip element 1 OF element 0", so the
+    /// depth filter declines rather than report a first hop that would be a
+    /// FALSE escape. The second is a different channel entirely — a payload
+    /// too wide to ride inline boxes, and there the projection spelling runs
+    /// the ESCAPING part's body twice. Both measured identical before and
+    /// after; filed as B-2026-09-19-33 and B-2026-09-19-34.
+    ///
+    /// ONE CELL AGREES AT A WRONG ANSWER, deliberately:
+    /// `conditional-projection-branch-taken`. The escape scan records a
+    /// hand-back only at the arm's own statement level, so a `return t.0`
+    /// inside an `if` is not masked and element 0's body runs twice. This fix
+    /// brings codegen onto the interpreter's long-standing answer there,
+    /// trading a divergence for an agreed double; being right on both branches
+    /// needs a path-sensitive escape answer neither backend has
+    /// (B-2026-09-19-31).
     ///
     /// THE STRUCT PAYLOAD IS THE SHARP BOUNDARY, measured rather than assumed:
     /// `struct-field-returned-dropping-sibling` is the same shape with a NAMED
@@ -38173,23 +38197,28 @@ fn main() {
                 "got:5\ndR5\nend\n",
             ),
             (
-                // DIVERGENT: codegen loses element 1's body. B-2026-09-17-30.
+                // FIXED by B-2026-09-17-30: the AOT pin below recorded the
+                // compiled loss of element 1's body and now matches the
+                // interpreter at the due sequence. Moved deliberately, which
+                // is what that row asked of whoever fixed it.
                 "tuple-two-droppers-first-returned",
                 format!(
                     "{R}fn eat(o: Option[(R, R)]) -> R {{ match o {{ Some(t) => {{ return t.0; }} None => {{ return R {{ id: 0 }}; }} }} }}\n\
                      fn main() {{ let got = eat(Some((R {{ id: 5 }}, R {{ id: 6 }}))); println(f\"got:{{got.id}}\"); println(\"end\") }}\n"
                 ),
-                "got:5\ndR5\nend\n",
+                "dR6\ngot:5\ndR5\nend\n",
                 "dR6\ngot:5\ndR5\nend\n",
             ),
             (
-                // DIVERGENT: codegen loses element 0's body. B-2026-09-17-30.
+                // FIXED by B-2026-09-17-30, the mirror of the cell above — the
+                // element that leaves is 1, so the mask must name 1 and not a
+                // prefix. Its AOT pin moved with it.
                 "tuple-two-droppers-second-returned",
                 format!(
                     "{R}fn eat(o: Option[(R, R)]) -> R {{ match o {{ Some(t) => {{ return t.1; }} None => {{ return R {{ id: 0 }}; }} }} }}\n\
                      fn main() {{ let got = eat(Some((R {{ id: 5 }}, R {{ id: 6 }}))); println(f\"got:{{got.id}}\"); println(\"end\") }}\n"
                 ),
-                "got:6\ndR6\nend\n",
+                "dR5\ngot:6\ndR6\nend\n",
                 "dR5\ngot:6\ndR6\nend\n",
             ),
             (
@@ -38245,8 +38274,13 @@ fn main() {
                 "got:5\ndR5\nend\n",
             ),
             (
-                // DIVERGENT: a nested projection, same compiled loss.
-                // B-2026-09-17-30.
+                // STILL DIVERGENT after B-2026-09-17-30's fix, and for a
+                // stated reason: `PayloadBodiesMask::TupleElems` is a flat
+                // index set, so it can say "skip element 0" and cannot say
+                // "skip element 1 OF element 0". Reporting the first hop alone
+                // would be a FALSE escape that loses element 0's sibling, so
+                // the depth filter declines and this cell keeps its compiled
+                // loss. Filed as B-2026-09-19-33.
                 "nested-projection",
                 format!(
                     "{R}fn eat(o: Option[((R, R), i64)]) -> R {{ match o {{ Some(t) => {{ return t.0.1; }} None => {{ return R {{ id: 0 }}; }} }} }}\n\
@@ -38303,6 +38337,58 @@ fn main() {
                 ),
                 "dR5\ngot:1\ndR1\nend\n",
                 "dR5\ngot:1\ndR1\nend\n",
+            ),
+            (
+                // B-2026-09-17-30 — the TUPLE spelling of the cell above, on
+                // the branch that is NOT taken. Element 1 leaves at the arm's
+                // own statement level, so the scan records it, element 0's
+                // body stays here, and both backends now say so. Divergent
+                // before this fix (the compiled side ran neither body).
+                "conditional-projection-branch-not-taken",
+                format!(
+                    "{R}fn eat(o: Option[(R, R)], k: bool) -> R {{ match o {{ Some(t) => {{ if k {{ return t.0; }} return t.1; }} None => {{ return R {{ id: 0 }}; }} }} }}\n\
+                     fn main() {{ let got = eat(Some((R {{ id: 5 }}, R {{ id: 6 }})), false); println(f\"got:{{got.id}}\"); println(\"end\") }}\n"
+                ),
+                "dR5\ngot:6\ndR6\nend\n",
+                "dR5\ngot:6\ndR6\nend\n",
+            ),
+            (
+                // AGREED AND WRONG, pinned as it stands rather than blessed.
+                // The SAME program on the branch that IS taken: `t.0` leaves
+                // through the `if`, which the statement-level rule does not
+                // record, so element 0 is not masked and its body runs BOTH
+                // here and at the caller's `got` -- `dR5 got:5 dR5` against the
+                // due `dR6 got:5 dR5`. The interpreter has answered this way
+                // since B-2026-09-13-5; this fix brings codegen onto the same
+                // answer, which trades a DIVERGENCE (the compiled side ran
+                // neither body) for an agreed double. Being right on both
+                // branches needs a PATH-SENSITIVE escape answer, which neither
+                // backend has -- B-2026-09-19-31.
+                "conditional-projection-branch-taken",
+                format!(
+                    "{R}fn eat(o: Option[(R, R)], k: bool) -> R {{ match o {{ Some(t) => {{ if k {{ return t.0; }} return t.1; }} None => {{ return R {{ id: 0 }}; }} }} }}\n\
+                     fn main() {{ let got = eat(Some((R {{ id: 5 }}, R {{ id: 6 }})), true); println(f\"got:{{got.id}}\"); println(\"end\") }}\n"
+                ),
+                "dR5\ngot:5\ndR5\nend\n",
+                "dR5\ngot:5\ndR5\nend\n",
+            ),
+            (
+                // DIVERGENT AND PRE-EXISTING, not this row's. A payload too
+                // wide to ride inline heap-BOXES and takes the callee-owned
+                // bodies channel, where the projection spelling runs element
+                // 0's body twice -- once here, once at the caller's `got`.
+                // Measured identical before and after this fix, so the cell is
+                // here to make a later repair visible rather than to record
+                // this one. B-2026-09-19-34.
+                "boxed-payload-projection-doubles-the-escaping-part",
+                format!(
+                    "{R}struct H {{ id: i64, s: String }}\n\
+                     impl Drop for H {{ fn drop(mut ref self) {{ println(f\"dH{{self.id}}\") }} }}\n\
+                     fn eat(o: Option[(H, H)]) -> H {{ match o {{ Some(t) => {{ return t.0; }} None => {{ return H {{ id: 0, s: \"zzzzzzzzzzzz\" }}; }} }} }}\n\
+                     fn main() {{ let got = eat(Some((H {{ id: 5, s: \"aaaaaaaaaaaa\" }}, H {{ id: 6, s: \"bbbbbbbbbbbb\" }}))); println(f\"got:{{got.id}}\"); println(\"end\") }}\n"
+                ),
+                "dH5\ndH6\ngot:5\ndH5\nend\n",
+                "dH6\ngot:5\ndH5\nend\n",
             ),
         ] {
             let (interp_out, interp_errs, _, _) = karac::run_program_full_checked(&prog);
