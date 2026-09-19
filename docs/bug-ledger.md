@@ -96,7 +96,7 @@ distinguish "bugs flattening" from "we stopped writing them down."
 | miscompile | 423 |
 | leak | 376 |
 | double-free | 248 |
-| missing-feature | 200 |
+| missing-feature | 202 |
 | codegen-gap | 181 |
 | other | 137 |
 | diagnostics | 127 |
@@ -117,11 +117,11 @@ distinguish "bugs flattening" from "we stopped writing them down."
 | ownership | 75 |
 | cli | 73 |
 | autopar | 56 |
-| parser | 48 |
+| parser | 49 |
 | runtime | 45 |
 | effect | 29 |
 | resolver | 29 |
-| lexer | 10 |
+| lexer | 11 |
 ## Current state
 
 _Generated from `bug-ledger.jsonl` by `scripts/bug-curve.py` (2026-05-20 → 2026-09-19). Do not edit this block by hand; edit the ledger and regenerate._
@@ -196,6 +196,8 @@ _Generated from `bug-ledger.jsonl` by `scripts/bug-curve.py` (2026-05-20 → 202
 | B-2026-09-19-23 | 2026-09-19 | codegen | medium | A TEMP GENERIC ENUM ARGUMENT WHOSE RESULT IS DISCARDED LEAKS ITS PAYLOAD BOX -- `mid(G1.Y(f"aaaaaaaa-1"), true);` loses 34 bytes (24 direct, 10 indirect) where the NAMED spelling of the same call is clean, so B-2026-09-16-16's discarded-statement window does not cover the one argument that has no binding to keep a drop | — |
 | B-2026-09-19-24 | 2026-09-19 | codegen | medium | THE `Option`/`Result` HEAD OF B-2026-09-17-7 IS UNFIXED -- `fn midopt[T](g: Option[T], c: bool) -> Option[T] { if c { return g } return Option.None }` at `T = Array[String, 2]` dies with 10 `Invalid read of size 8` against a correct `--interp`; the runtime compare that fixed the user-enum head is gated on `user_enum_boxed_payload_variants`, which returns nothing for the seeded heads by design | — |
 | B-2026-09-19-25 | 2026-09-19 | codegen | medium | AUDIT THE REST OF THE ONE-WAY-CLEAR POPULATION THAT B-2026-09-17-8 FIXED BY CONSTRUCTION -- nine payload-ownership registries were wiped for the remainder of ANY caller that made a generic call, so every caller that used an `Option`/`Result`/boxed-payload binding after a generic call was exposed, and only the eleven shapes in that row's fixture have actually been measured | — |
+| B-2026-09-19-27 | 2026-09-19 | parser | low | THE SELF-HOSTED PARSER DOES NOT MODEL `IntegerOutOfRange` EITHER, so the token the port lexer can now produce has no consumer -- the seed folds it in six places across `exprs.rs` and `patterns.rs` (the unary-minus `i64::MIN` fold, the unsigned-suffix wrap that buys a precise range diagnostic, and both again for literal and range patterns) and `selfhost/src/parser.kara` has no arm for it at all | — |
+| B-2026-09-19-28 | 2026-09-19 | lexer | low | THE `(u64::MAX, i128::MAX]` BAND IS THE ONE THE PORT LEXER STILL CANNOT REACH -- `100000000000000000000i128` is a plain `Integer` in the seed and an `Error` in the port, because `Token.Integer` carries an i64; B-2026-09-19-26 ported the other three bands and named this one in its own close without a tracker | — |
 
 ### Relocated
 
