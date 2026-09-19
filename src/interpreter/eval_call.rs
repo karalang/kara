@@ -2654,6 +2654,61 @@ impl<'a> super::Interpreter<'a> {
     /// B-2026-08-28-70 — the owned params of IMPL METHOD `type_name.method`
     /// whose `Drop` body this frame must own.
     ///
+    /// Does this METHOD ARGUMENT expression name a place whose user `Drop`
+    /// body some CALLER-side binding still fires?
+    ///
+    /// B-2026-09-15-24. The three method-frame ownership predicates below all
+    /// used to ask this as `matches!(.., ExprKind::Identifier(_))`, which is
+    /// the answer for a whole binding and the WRONG answer for a projection
+    /// out of one. `b.put(w.r)` reads a field of `w`; `w` is still a live
+    /// caller binding, and its death fires every Drop-bearing field through
+    /// `drop_user_drop_fields_of_binding`. So the caller was firing `w.r`'s
+    /// body all along, the frame claimed the parameter as well, and the body
+    /// ran TWICE under `--interp` against once on every compiled surface.
+    ///
+    /// Measured on three spellings of the projection — out of a `ref`
+    /// parameter, out of an owned local, and out of a local rebound from a
+    /// nested struct — each `dR<n> dR<n>` under the interpreter against a
+    /// single `dR<n>` from the AOT binary. The free-function twin of the same
+    /// program ran one on both, which is what places the defect on this path:
+    /// `eval_call` claims only conditionally-returned params
+    /// (`cond_returned_param_drop_names`) and never consults an argument's
+    /// shape, so a projection there has always reached the caller's fire alone.
+    ///
+    /// Admitted: a chain of FIELD and TUPLE-INDEX projections rooted at an
+    /// identifier or `self`. `Index` is deliberately NOT here — an element of
+    /// a container is a different ownership shape, with its own walker, and no
+    /// measurement backs it; the same line `push_drops_for_stmt`'s `Slice`
+    /// note draws.
+    ///
+    /// The escape guards stay where they are. This answers only "is there a
+    /// caller-side fire"; whether that fire is the LAST word is the
+    /// `fn_always_returns_param` / `fn_conditionally_returns_param_bare` pair's
+    /// question, and each caller below keeps asking it. Cell 6 of the probe
+    /// pins that: `b.hand(w.r)` where the callee returns the parameter runs two
+    /// bodies on BOTH backends today, and still does — that arm exits through
+    /// `fn_always_returns_param` before ever reaching here.
+    pub(crate) fn arg_place_reaches_caller_drop_fire(e: &Expr) -> bool {
+        let mut cur = e;
+        let mut hops = 0usize;
+        loop {
+            match &cur.kind {
+                ExprKind::FieldAccess { object, .. } | ExprKind::TupleIndex { object, .. } => {
+                    cur = object;
+                    hops += 1;
+                }
+                // A bare identifier is the original whole-binding case.
+                ExprKind::Identifier(_) => return true,
+                // `self.f` inside a method: the receiver binding fires its
+                // fields exactly as any other binding does. A BARE `self` is
+                // not admitted — that is the receiver itself, whose ownership
+                // the `self_param` mode decides, not this predicate.
+                ExprKind::SelfValue => return hops > 0,
+                _ => return false,
+            }
+        }
+    }
+
     /// The method sibling of [`Self::cond_returned_param_drop_names`], and it
     /// admits a STRICTLY WIDER set, because the two frames differ in who else
     /// could fire. A free function's argument reaches the caller's
@@ -2789,11 +2844,15 @@ impl<'a> super::Interpreter<'a> {
             //
             // `fn_always_returns_param` is not in the union because the loop
             // above already skipped those params outright.
-            let caller_still_owns =
-                matches!(
-                    args.get(i).map(|a| &a.value.kind),
-                    Some(ExprKind::Identifier(_))
-                ) && !crate::ast::fn_conditionally_returns_param_bare(Some(self.program), f, i);
+            //
+            // B-2026-09-15-24 — a PROJECTION out of a caller binding (`w.r`)
+            // reaches that binding's field walk, so it belongs on this side of
+            // the question exactly as a bare identifier does. See
+            // `arg_place_reaches_caller_drop_fire`.
+            let caller_still_owns = args
+                .get(i)
+                .is_some_and(|a| Self::arg_place_reaches_caller_drop_fire(&a.value))
+                && !crate::ast::fn_conditionally_returns_param_bare(Some(self.program), f, i);
             if caller_still_owns {
                 continue;
             }
@@ -2884,12 +2943,23 @@ impl<'a> super::Interpreter<'a> {
             // frame bailed, and the leaf owned the body — which placed it at
             // the leaf's NLL death against every compiled backend's
             // after-the-call.
-            (matches!(
-                args.get(i).map(|a| &a.value.kind),
-                Some(ExprKind::Identifier(_))
-            ) || args.get(i).is_some_and(|a| {
-                self.caller_fires_fresh_temp_arg(method, Some(type_name), i, &a.value)
-            })) && !crate::ast::fn_always_returns_param(Some(self.program), f, i)
+            // B-2026-09-15-24 — a PROJECTION argument (`b.reb(w.r)`) reaches
+            // the caller's field walk, so it joins the identifier case here for
+            // the reason it joins it in `method_param_drop_names`: the two sites
+            // "decide one question between them", and a frame still claiming
+            // what the caller fires kept its let-rebind and destructure slots.
+            // Measured, against the AOT binary's single body each: a whole-move
+            // rebind (`let y: R = x;`) ran `dR11 dR11`, and a struct
+            // destructure (`let Hold { r, n } = h;`) ran `dR12 dR12` — both
+            // still doubled after the `method_param_drop_names` half alone, and
+            // both single afterwards.
+            (args
+                .get(i)
+                .is_some_and(|a| Self::arg_place_reaches_caller_drop_fire(&a.value))
+                || args.get(i).is_some_and(|a| {
+                    self.caller_fires_fresh_temp_arg(method, Some(type_name), i, &a.value)
+                }))
+                && !crate::ast::fn_always_returns_param(Some(self.program), f, i)
                 && !crate::ast::fn_conditionally_returns_param_bare(Some(self.program), f, i)
         })
     }
@@ -2926,16 +2996,14 @@ impl<'a> super::Interpreter<'a> {
                 ) {
                     return None;
                 }
-                let caller_fires =
-                    matches!(
-                        args.get(i).map(|a| &a.value.kind),
-                        Some(ExprKind::Identifier(_))
-                    ) && !crate::ast::fn_always_returns_param(Some(self.program), f, i)
-                        && !crate::ast::fn_conditionally_returns_param_bare(
-                            Some(self.program),
-                            f,
-                            i,
-                        );
+                // B-2026-09-15-24 — the projection joins the identifier case
+                // here too: this frame is not the SOLE owner of a value the
+                // caller's field walk also fires.
+                let caller_fires = args
+                    .get(i)
+                    .is_some_and(|a| Self::arg_place_reaches_caller_drop_fire(&a.value))
+                    && !crate::ast::fn_always_returns_param(Some(self.program), f, i)
+                    && !crate::ast::fn_conditionally_returns_param_bare(Some(self.program), f, i);
                 if caller_fires
                     || crate::ast::fn_returns_param(f, i)
                     || crate::ast::fn_returns_param_payload(f, i)

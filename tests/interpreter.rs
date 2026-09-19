@@ -71163,3 +71163,157 @@ fn main() {
 "#);
     assert_eq!(out, "row\n  dR5\n  mid\n  dR6\n  out\nsecond\n  dR6\n  mid\n  dR5\n  out\nresult\n  dR5\n  mid\n  dR6\n  out\nmethod\n  dR5\n  mid\n  dR6\n  out\nthree\n  dR5\n  mid\n  dR6\n  dR7\n  out\niflet\n  dR5\n  mid\n  dR6\n  out\ncall-arg\n  dR5\n  mid\n  dR6\n  out\nlater\n  mid\n  v5\n  dR5\n  dR6\n  out\nctl-named-arg\n  dR5\n  mid\n  dR6\n  out\nctl-nomove\n  mid\n  dR5\n  dR6\n  out\nctl-scalar\n  dR5\n  mid\n  out\nctl-both\n  dR5\n  dR6\n  mid\n  out\nctl-escape\n  dR6\n  got5\n  dR5\n  out\nctl-struct\n  dR5\n  mid\n  dR6\n  out\nend\n", "got:\n{out}");
 }
+
+/// B-2026-09-15-24 — a METHOD ARGUMENT that is a PROJECTION out of a caller
+/// binding (`k.eat(w.r)`) ran the projected value's user `Drop` body TWICE
+/// under `--interp` against once on the JIT and the AOT binary.
+///
+/// The caller still owns `w`, and `w`'s death fires every Drop-bearing field
+/// through `drop_user_drop_fields_of_binding` — so the caller was already
+/// firing `w.r`'s body. The three method-frame ownership predicates asked
+/// "does the caller still own this argument?" as
+/// `matches!(.., ExprKind::Identifier(_))`, which answers for a whole binding
+/// and says NO for a projection out of one, so the frame claimed the parameter
+/// as well and both fired. The FREE-FUNCTION spelling of the same program was
+/// always correct, and that is what places the defect on the method path:
+/// `eval_call` claims only conditionally-returned parameters
+/// (`cond_returned_param_drop_names`) and never consults an argument's shape.
+///
+/// Fixed by `arg_place_reaches_caller_drop_fire`, which admits a chain of
+/// field / tuple-index projections rooted at an identifier or `self`, at all
+/// three sites — `method_param_drop_names` (the parameter's own slot),
+/// `method_frame_caller_retains_args` (the let-rebind and destructure slots
+/// inside the body), and `method_frame_sole_owned_params`. The first alone
+/// fixes the plain cell and leaves the rebind and destructure cells doubled,
+/// which is why all three moved together.
+///
+/// The escape guards are untouched, and the last two rows are what pins that:
+/// a callee that HANDS THE PROJECTION BACK and one that STORES it each run two
+/// bodies on every surface, before the fix and after — those parameters exit
+/// through `fn_always_returns_param` / `fn_always_moves_param_into_outliving_place`
+/// before the predicate is ever consulted. They are also rows 3 and 5 of the
+/// table in `warn_borrow_projection_copy`'s doc, whose subject is this same
+/// copy; that table still reads exactly as written.
+///
+/// MEMORY: bodies only, no second free. The AOT binary is valgrind-clean on
+/// the whole program — 47 allocs / 47 frees, 0 errors — before and after.
+#[test]
+fn test_method_projection_arg_runs_one_body() {
+    let hdr = "struct R { id: i64, name: String }\n\
+                impl Drop for R { fn drop(mut ref self) { println(f\"drop {self.id} {self.name}\") } }\n\
+                fn mk(i: i64) -> R { return R { id: i, name: f\"h{i}\" }; }\n\
+                struct W { r: R }\n\
+                struct Hold { r: R, n: i64 }\n\
+                struct Wh { h: Hold }\n\
+                struct K { n: i64, xs: Vec[R] }\n\
+                impl K {\n\
+                \x20\x20\x20\x20fn eat(mut ref self, x: R) -> i64 { return x.id; }\n\
+                \x20\x20\x20\x20fn reb(mut ref self, x: R) -> i64 { let y: R = x; return y.id; }\n\
+                \x20\x20\x20\x20fn des(mut ref self, h: Hold) -> i64 { let Hold { r, n } = h; return r.id + n; }\n\
+                \x20\x20\x20\x20fn hand(mut ref self, x: R) -> R { return x; }\n\
+                \x20\x20\x20\x20fn store(mut ref self, x: R) -> i64 { let n: i64 = x.id; self.xs.push(x); return n; }\n\
+                }\n\
+                struct Outer { w: W, k: K }\n\
+                impl Outer { fn go(mut ref self) -> i64 { return self.k.eat(self.w.r); } }\n\
+                fn viaref(w: ref W) -> i64 { let mut k: K = K { n: 0, xs: Vec.new() }; return k.eat(w.r); }\n\
+                trait Eater { fn chew(ref self, x: R) -> i64; }\n\
+                struct E1 { n: i64 }\n\
+                impl Eater for E1 { fn chew(ref self, x: R) -> i64 { return x.id; } }\n\
+                fn viagen[T: Eater](e: ref T, w: ref W) -> i64 { return e.chew(w.r); }\n\
+                struct Bref { n: i64 }\n\
+                impl Bref { fn peek(ref self, x: ref R) -> i64 { return x.id; } }\n
+                ";
+    for (label, body, want) in [
+        (
+            "the row: projection out of a `ref` parameter",
+            "let w: W = W { r: mk(1) };\n\
+              println(f\"a{viaref(w)}\");",
+            "a1\ndrop 1 h1\n",
+        ),
+        (
+            "projection out of an OWNED local",
+            "let w: W = W { r: mk(2) };\n\
+              let mut k: K = K { n: 0, xs: Vec.new() };\n\
+              println(f\"b{k.eat(w.r)}\");",
+            "b2\ndrop 2 h2\n",
+        ),
+        (
+            "projection whose callee REBINDS the param whole (`let y = x;`)",
+            "let w: W = W { r: mk(3) };\n\
+              let mut k: K = K { n: 0, xs: Vec.new() };\n\
+              println(f\"c{k.reb(w.r)}\");",
+            "c3\ndrop 3 h3\n",
+        ),
+        (
+            "projection whose callee DESTRUCTURES the param",
+            "let wh: Wh = Wh { h: Hold { r: mk(4), n: 1 } };\n\
+              let mut k: K = K { n: 0, xs: Vec.new() };\n\
+              println(f\"d{k.des(wh.h)}\");",
+            "d5\ndrop 4 h4\n",
+        ),
+        (
+            "projection rooted at `self` inside another method",
+            "let mut o: Outer = Outer { w: W { r: mk(9) }, k: K { n: 0, xs: Vec.new() } };\n\
+              println(f\"j{o.go()}\");",
+            "j9\ndrop 9 h9\n",
+        ),
+        (
+            "control: a NAMED binding argument — always agreed",
+            "let r: R = mk(5);\n\
+              let mut k: K = K { n: 0, xs: Vec.new() };\n\
+              println(f\"e{k.eat(r)}\");",
+            "e5\ndrop 5 h5\n",
+        ),
+        (
+            "control: a FRESH TEMP argument — always agreed",
+            "let mut k: K = K { n: 0, xs: Vec.new() };\n\
+              println(f\"f{k.eat(mk(6))}\");",
+            "drop 6 h6\nf6\n",
+        ),
+        (
+            "control: the callee HANDS THE PROJECTION BACK — two bodies on every surface, before and after",
+            "let w: W = W { r: mk(7) };\n\
+              let mut k: K = K { n: 0, xs: Vec.new() };\n\
+              let o: R = k.hand(w.r);\n\
+              println(f\"g{o.id}\");",
+            "drop 7 h7\ng7\ndrop 7 h7\n",
+        ),
+        (
+            "control: the callee STORES the projection — two bodies on every surface, before and after",
+            "let w: W = W { r: mk(8) };\n\
+              let mut k: K = K { n: 0, xs: Vec.new() };\n\
+              println(f\"i{k.store(w.r)}\");",
+            "i8\ndrop 8 h8\ndrop 8 h8\n",
+        ),
+        // B-2026-09-15-24's last two NOT-MEASURED items, answered as
+        // controls rather than as fixes: neither spelling ever diverged, and
+        // both are here so a later widening of the predicate cannot move them
+        // without saying so.
+        //
+        // A trait method reached through a GENERIC BOUND takes a different
+        // dispatch route in the typechecker (`dispatch_trait_assoc_fn`, the
+        // one arm that warns W0299 on a method argument), so it is worth its
+        // own row: measured agreeing 15/15 runs on all three surfaces, on the
+        // fixed tree and on the parent.
+        (
+            "control: a trait method through a generic bound",
+            "let w: W = W { r: mk(10) };\n\
+             let e: E1 = E1 { n: 0 };\n\
+             println(f\"k{viagen(e, w)}\");",
+            "k10\ndrop 10 h10\n",
+        ),
+        // A `ref R` PARAMETER separates the projection READ from the by-value
+        // parameter: the read alone was never the defect, which is why this
+        // one body was always right on every surface.
+        (
+            "control: a `ref R` parameter — the read alone is not the defect",
+            "let w: W = W { r: mk(11) };\n\
+             let b: Bref = Bref { n: 0 };\n\
+             println(f\"m{b.peek(w.r)}\");",
+            "m11\ndrop 11 h11\n",
+        ),
+    ] {
+        let src = format!("{hdr}fn main() {{\n{body}\nprintln(\"end\");\n}}\n");
+        assert_eq!(run(&src), format!("{want}end\n"), "[{label}]");
+    }
+}
