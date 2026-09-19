@@ -97440,4 +97440,65 @@ fn main() {
             "b11911-tuple-payload-sibling-heap-nomove",
         );
     }
+
+    /// B-2026-09-19-13 — the mask an arm accumulates must not outlive the arm.
+    ///
+    /// `boxed_payload_moved_fields` records which payload elements an arm has
+    /// moved out, and both boxed-payload suppressors accumulate-then-re-read it
+    /// so a second `let y = t.1` in ONE arm masks both. The map is keyed by
+    /// BINDING NAME and was cleared only per FUNCTION, so that union outlived
+    /// its arm: a later match in the same function binding the same name
+    /// inherited it and masked an element whose body nothing else ran.
+    ///
+    /// The cells are a PAIR and only the pair is evidence. The `bleed` cell
+    /// puts a site that moves BOTH elements ahead of one that moves only the
+    /// second; `control` is that second site alone. Before the fix `bleed`
+    /// dropped `dP7` and `control` was already correct — so a single-site
+    /// fixture would have passed on the broken tree, and the contrast is what
+    /// identifies this as a scoping defect rather than a walker defect.
+    ///
+    /// Both `Drop` types are HEAP-FREE, for the reason
+    /// `asan_boxed_tuple_payload_elem_move_out_no_double_body`'s `two` cell
+    /// gives: this fixture is about a body that does not run, and a heap
+    /// payload would couple it to the sibling-heap row. Memory is balanced
+    /// throughout, so these assert on OUTPUT rather than on byte counts.
+    #[test]
+    fn asan_boxed_payload_moved_mask_does_not_outlive_its_arm() {
+        const DECLS: &str = "struct P { id: i64 }\n\
+             impl Drop for P { fn drop(mut ref self) { println(f\"dP{self.id}\") } }\n\
+             struct Q { id: i64 }\n\
+             impl Drop for Q { fn drop(mut ref self) { println(f\"dQ{self.id}\") } }\n";
+
+        // A site that moves BOTH elements, then a site that moves only the
+        // second. The second site's element 0 body is the one that vanished.
+        assert_clean_asan_run(
+            &format!(
+                "{DECLS}\
+                 fn eat() {{\n\
+                 \x20   let a: Option[(P, Q, i64, i64)] = Option.Some((P {{ id: 4 }}, Q {{ id: 5 }}, 2, 3));\n\
+                 \x20   match a {{ Option.Some(t) => {{ let x = t.0; let y = t.1; println(\"mid1\"); }} Option.None => {{ println(\"n\"); }} }}\n\
+                 \x20   let b: Option[(P, Q, i64, i64)] = Option.Some((P {{ id: 6 }}, Q {{ id: 7 }}, 2, 3));\n\
+                 \x20   match b {{ Option.Some(t) => {{ let y = t.1; println(\"mid2\"); }} Option.None => {{ println(\"n\"); }} }}\n\
+                 }}\n\
+                 fn main() {{ eat(); println(\"end\"); }}\n"
+            ),
+            &["dP4", "dQ5", "mid1", "dQ7", "mid2", "dP6", "end"],
+            "b11913-moved-mask-arm-scope-bleed",
+        );
+
+        // The same second site with no sibling ahead of it. Correct before the
+        // fix and after it, which is what makes the cell above discriminating.
+        assert_clean_asan_run(
+            &format!(
+                "{DECLS}\
+                 fn eat() {{\n\
+                 \x20   let b: Option[(P, Q, i64, i64)] = Option.Some((P {{ id: 6 }}, Q {{ id: 7 }}, 2, 3));\n\
+                 \x20   match b {{ Option.Some(t) => {{ let y = t.1; println(\"mid2\"); }} Option.None => {{ println(\"n\"); }} }}\n\
+                 }}\n\
+                 fn main() {{ eat(); println(\"end\"); }}\n"
+            ),
+            &["dQ7", "mid2", "dP6", "end"],
+            "b11913-moved-mask-arm-scope-control",
+        );
+    }
 }

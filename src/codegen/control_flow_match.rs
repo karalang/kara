@@ -608,11 +608,21 @@ impl<'ctx> super::Codegen<'ctx> {
         // must not be inherited by a later one that reuses the name.
         let saved_boxed_payload_alias = self.payload_vars.boxed_payload_alias.clone();
         let saved_boxed_array_payload_alias = self.payload_vars.boxed_array_payload_alias.clone();
+        // B-2026-09-19-13 — the third map on this hook, for the third time the
+        // same reason (B-2026-08-31-14, B-2026-08-31-23): keyed by BINDING
+        // NAME, cleared only per FUNCTION. It accumulates the payload
+        // field/element indices an arm has moved out, and the two suppressors
+        // that write it re-read the WHOLE set so a second `let y = t.1` in one
+        // arm masks both. Without this snapshot that union outlived its arm, so
+        // a later match in the same function binding the same name inherited
+        // it and masked an element whose body nothing else ran.
+        let saved_boxed_payload_moved_fields = self.type_decls.boxed_payload_moved_fields.clone();
         for (i, arm) in arms.iter().enumerate() {
             self.borrow_vars.borrowed_agg_payload_struct_vars =
                 saved_borrowed_agg_payload_vars.clone();
             self.payload_vars.boxed_payload_alias = saved_boxed_payload_alias.clone();
             self.payload_vars.boxed_array_payload_alias = saved_boxed_array_payload_alias.clone();
+            self.type_decls.boxed_payload_moved_fields = saved_boxed_payload_moved_fields.clone();
             let arm_bb = next_bb;
             // Always create a fresh fail_bb — never reuse merge_bb directly.
             // If the last pattern condition is false (non-exhaustive match or
@@ -1645,6 +1655,7 @@ impl<'ctx> super::Codegen<'ctx> {
         self.borrow_vars.borrowed_agg_payload_struct_vars = saved_borrowed_agg_payload_vars;
         self.payload_vars.boxed_payload_alias = saved_boxed_payload_alias;
         self.payload_vars.boxed_array_payload_alias = saved_boxed_array_payload_alias;
+        self.type_decls.boxed_payload_moved_fields = saved_boxed_payload_moved_fields;
 
         // Wire the entry block. With a qualifying string-dispatch plan, branch
         // `entry_bb` through the switch tree straight into the arm bodies;
