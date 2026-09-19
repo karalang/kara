@@ -196,7 +196,6 @@ _Generated from `bug-ledger.jsonl` by `scripts/bug-curve.py` (2026-05-20 → 202
 | B-2026-09-19-23 | 2026-09-19 | codegen | medium | A TEMP GENERIC ENUM ARGUMENT WHOSE RESULT IS DISCARDED LEAKS ITS PAYLOAD BOX -- `mid(G1.Y(f"aaaaaaaa-1"), true);` loses 34 bytes (24 direct, 10 indirect) where the NAMED spelling of the same call is clean, so B-2026-09-16-16's discarded-statement window does not cover the one argument that has no binding to keep a drop | — |
 | B-2026-09-19-24 | 2026-09-19 | codegen | medium | THE `Option`/`Result` HEAD OF B-2026-09-17-7 IS UNFIXED -- `fn midopt[T](g: Option[T], c: bool) -> Option[T] { if c { return g } return Option.None }` at `T = Array[String, 2]` dies with 10 `Invalid read of size 8` against a correct `--interp`; the runtime compare that fixed the user-enum head is gated on `user_enum_boxed_payload_variants`, which returns nothing for the seeded heads by design | — |
 | B-2026-09-19-25 | 2026-09-19 | codegen | medium | AUDIT THE REST OF THE ONE-WAY-CLEAR POPULATION THAT B-2026-09-17-8 FIXED BY CONSTRUCTION -- nine payload-ownership registries were wiped for the remainder of ANY caller that made a generic call, so every caller that used an `Option`/`Result`/boxed-payload binding after a generic call was exposed, and only the eleven shapes in that row's fixture have actually been measured | — |
-| B-2026-09-19-26 | 2026-09-19 | lexer | low | THE SELF-HOSTED LEXER DOES NOT MODEL `IntegerOutOfRange`, so a 19+ digit literal is an Error token in the port and a real token in the seed -- `18446744073709551615usize` has been in the oracle corpus since B-2026-08-19-29 and passed, both sides spelling it `ERROR` | — |
 
 ### Relocated
 
@@ -2709,6 +2708,7 @@ _Generated from `bug-ledger.jsonl` by `scripts/bug-curve.py` (2026-05-20 → 202
 | B-2026-09-19-15 | codegen | medium | THE EMPTY PREFIX-LITERAL SPELLING design.md SANCTIONS COMPILES ON NEITHER `Map` NOR `Set` -- `let m: Map[K, V] = Map[];` runs under `--interp` and di… | a6c3432 |
 | B-2026-09-19-16 | other | medium | `karac fmt` TURNED EVERY MAP LITERAL INTO A PARSE ERROR -- the formatter printed `["a": 1]` as a BRACE form `{\n "a": 1,\n}` that is not Kara syntax,… | a6c3432 |
 | B-2026-09-19-20 | codegen | low | AN INDEXED-RECEIVER METHOD WHOSE CONTAINER IS A CALL IS REFUSED BY CODEGEN -- `mk(n)[0].len()` says `indexed-receiver method 'len' requires the index… | 28132fd |
+| B-2026-09-19-26 | lexer | low | THE SELF-HOSTED LEXER DOES NOT MODEL `IntegerOutOfRange`, so a 19+ digit literal is an Error token in the port and a real token in the seed -- `18446… | 01a3dad |
 
 </details>
 
