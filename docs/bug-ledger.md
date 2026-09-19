@@ -98,7 +98,7 @@ distinguish "bugs flattening" from "we stopped writing them down."
 | double-free | 245 |
 | missing-feature | 199 |
 | codegen-gap | 180 |
-| other | 136 |
+| other | 137 |
 | diagnostics | 127 |
 | perf | 115 |
 | false-positive | 108 |
@@ -113,7 +113,7 @@ distinguish "bugs flattening" from "we stopped writing them down."
 | codegen | 1853 |
 | interp | 474 |
 | typecheck | 302 |
-| other | 99 |
+| other | 100 |
 | ownership | 75 |
 | cli | 73 |
 | autopar | 56 |
@@ -187,7 +187,6 @@ _Generated from `bug-ledger.jsonl` by `scripts/bug-curve.py` (2026-05-20 → 202
 | B-2026-09-17-26 | 2026-09-17 | codegen | low | THE `Result` LEG OF THE ARM-BOUND TUPLE-PAYLOAD LEAK IS A THIRD OWNER PATH -- `fn take(o: Result[(W, i64), i64]) { match o { Ok(t) => t.1 } }` over `struct W { id: i64, name: String }` loses 2 B in 1 block at `-O0` with output correct and identical on all four surfaces. NOT B-2026-09-10-23's mechanism: probes show its retraction never fires for this cell (`takes=None` before and after that fix) and the leak is unchanged, so the interior is stranded somewhere else. Answers that row's unmeasured `Result` axis -- differently from how it expected | — |
 | B-2026-09-17-27 | 2026-09-17 | codegen | low | A DESTRUCTURING ARM OVER A BY-VALUE TUPLE PAYLOAD RETRACTS THE INTERIOR WALKER UNCONDITIONALLY -- `match o { Some((a, b)) => b }` over `Option[(W, i64)]` loses 2 B in 1 block at `-O0`, and B-2026-09-10-23's borrow-premise fix cannot reach it because `boxed_tuple_payload_arm_takes_ownership` ends `(destructures || (whole_tuple_binding && !arm_only_borrows))` -- the verdict is not consulted for a tuple pattern. Its stated premise, that each heap element gets its own `track_vec_var` owner, holds for a `Vec`/`String` element and fails for a user STRUCT element | — |
 | B-2026-09-17-28 | 2026-09-17 | codegen | low | TWO SUB-WORD TUPLE ELEMENTS SHARING A WORD STILL LOSE THE ENUM PAYLOAD -- `enum M { P((bool, i32, String)), Q }` loses 192 B over 8 rounds at `-O0`, unchanged by B-2026-09-12-10's fix and correctly so: the `i32` sits at LLVM offset 4 inside the `bool`'s word while the pack site gives it word 1, so the measured overlay precondition genuinely fails and the payload classifies `EnumDropKind::None`. Dropping through the word region here would free from the wrong offset -- the repair class this family reverted twice. The fix is the LAYOUT (word-per-element packing, or a drop that reads the real packed layout), which is what the parent row said before either of its cells was worked | — |
-| B-2026-09-17-29 | 2026-09-17 | codegen | high | A REMOVED `Map` VALUE HANDED STRAIGHT TO A BY-VALUE `Array[T, N]` PARAM IS FREED TWICE -- `match v.remove(j) { Some(a) => eat(a) }` over `Map[i64, Array[String, 2]]` reports `Invalid free()` under valgrind at `-O0`, with `--interp` correct. B-2026-09-13-2 lists this exact cell as `CLEAN <- killed attempt 2; clean now`, and that is WRONG: bracketed over five probes from 2026-09-15 to now it corrupts identically at every one, so it is not a regression and no recent commit owns it. It read clean because an `Invalid free` that leaks nothing is invisible to the `definitely lost` / `indirectly lost` verdict that row prescribes -- a leak-only check cannot see corruption | — |
 | B-2026-09-17-30 | 2026-09-17 | codegen | medium | THE COMPILED BACKENDS RUN NO PART'S `Drop` BODY WHEN ONE PART OF A BY-VALUE `Option`/`Result` TUPLE PAYLOAD ESCAPES THROUGH A PROJECTION -- `fn eat(o: Option[(R, R)]) -> R { match o { Some(t) => { return t.0; } .. } }` prints `got:5 dR5 end` on JIT/AOT/AOT-at-`KARAC_AUTO_PAR=0` against the interpreter's now-correct `dR6 got:5 dR5 end`, so element 1's owed body runs NOWHERE; the STRUCT spelling of the same shape (`Hd2 { r: R, q: R }` with no `Drop` of its own, `return t.r`) is correct on all four surfaces, which puts the defect on the tuple payload's missing callee-side owner rather than on the projection. This is defect 2 of B-2026-09-13-5 / B-2026-09-14-5's shared table, compiled half; the interpreter half landed in B-2026-09-13-5, so the A/B rule now points here unambiguously | — |
 | B-2026-09-17-31 | 2026-09-17 | interp+codegen | medium | THE METHOD-CALL SPELLING LOSES AN UNMOVED `Drop`-BEARING SIBLING PART ON ALL FOUR SURFACES where the free-function spelling is now correct on the interpreter -- `impl H { fn eat(ref self, o: Option[(R, R)]) -> R { match o { Some(t) => { return t.0; } .. } } }` called `h.eat(Some((R { id: 5 }, R { id: 6 })))` prints `got:5 dR5 end` everywhere against the due `dR6 got:5 dR5 end`, so element 1's owed body runs NOWHERE and the A/B parity rule is satisfied by it; the identical FREE function reaches `run_fresh_temp_arg_drops`' optres arm and is correct on `--interp` since B-2026-09-13-5's fix, while the method spelling is `continue`d past it by the whole-argument `callee_owns_arg_beyond_call` stand-down, so the part-precise mask has nothing to mask | — |
 | B-2026-09-17-32 | 2026-09-17 | interp+codegen | medium | B-2026-08-28-22's PER-PATH CONDITIONAL-ESCAPE FLAG COVERS AN `if`/`else` TAIL AND NOT A `match` ARM TAIL, so a by-value param that escapes on only one ARM loses its `Drop` body on all four surfaces -- `fn pick(o: Option[i64], d: W) -> W { match o { Some(n) => { return W { id: n }; } None => { return d; } } }` called `pick(Some(7), W { id: 108 })` prints `7 dW7 end` against the due `dW108 7 dW7 end`, while -28-22's own headline `if k { return r; } return W { id: 99 }` shape measures correct on the same tree; the two programs differ only in the shape of the branch, and being AGREED on every surface the A/B rule cannot see it | — |
@@ -2684,6 +2683,7 @@ _Generated from `bug-ledger.jsonl` by `scripts/bug-curve.py` (2026-05-20 → 202
 | B-2026-09-17-9 | codegen | medium | B-2026-09-17-4's FIX LEAKS THE SAME BUFFERS IT STOPPED DOUBLE-FREEING, WHEN THE CONSUMER IS A GENERIC CALLEE -- `e312de9` narrowed `disarm_array_sour… | 52abf6a |
 | B-2026-09-17-18 | other | medium | A FIX SHA AN ORPHANING REBASE LEFT BEHIND STILL RESOLVES, SO B-2026-09-16-8's FIX CANNOT SEE THE CASE IT WAS WRITTEN FOR -- `3b2a932` narrowed `bug-l… | cbe88b6 |
 | B-2026-09-17-25 | codegen | medium | A NAMED LOCAL MOVED INTO A `shared enum` CONSTRUCTOR LEAVES A PAYLOAD-BODY ACTION READING THE ZEROED STAGING SLOT -- `let r = mkr(1); { let s = SMono… | dbac00e |
+| B-2026-09-17-29 | codegen | high | A REMOVED `Map` VALUE HANDED STRAIGHT TO A BY-VALUE `Array[T, N]` PARAM IS FREED TWICE -- `match v.remove(j) { Some(a) => eat(a) }` over `Map[i64, Ar… | c0520ef |
 | B-2026-09-17-34 | codegen | high | MOVING A HEAP-CARRYING `Drop` FIELD OUT OF A BOXED (SPILLED) `Option`/`Result` PAYLOAD STRUCT ABORTS EVERY COMPILED SURFACE WITH A DOUBLE FREE -- `fn… | 25bb7b7 |
 | B-2026-09-19-1 | lexer | medium | A TRAILING BACKSLASH AT EOF IN AN f-STRING BODY PANICS THE LEXER -- `f"bd\` runs `advance()` one past the end of `source`, where the sibling `string(… | 9d7b9b3 |
 | B-2026-09-19-2 | other | medium | THE RUNTIME-ARCHIVE STALENESS CHECK'S mtime HELPER IS UNIX-ONLY AND FAILS THE WHOLE `Test (windows-latest)` JOB AT BUILD TIME -- an ungated `std::os:… | 845d8e2 |
@@ -2692,6 +2692,7 @@ _Generated from `bug-ledger.jsonl` by `scripts/bug-curve.py` (2026-05-20 → 202
 | B-2026-09-19-5 | other | medium | A CRASHED `karac_jit_runner` IS REPORTED AS AN EMPTY-STDOUT ASSERTION FAILURE, DISCARDING THE SIGNAL AND STDERR -- so a JIT-lane double free reads as… | f4dc90f |
 | B-2026-09-19-7 | codegen | high | AN `Array[Vec[D], 1]`-TYPED STRUCT FIELD MOVED FROM A NAMED LOCAL SEGFAULTS AT THE DEFAULT `-O2` -- `karac build` emits a binary that dies with SIGSE… | 3b79cef |
 | B-2026-09-19-8 | codegen+runtime | high | A `u64`-KEYED `Map` / `Set` / `SortedMap` CANNOT FIND A KEY IT JUST INSERTED, ON EVERY LANE AND OPT LEVEL -- the per-key hash fn codegen synthesizes… | 416a038 |
+| B-2026-09-19-10 | other | low | A TRACKED BUT DEAD SECOND COPY OF `consume_class` SAT AT `src/codegen/consume_class.rs` -- 662 lines compiled by nothing, drifted 243 lines from the… | 7f5f89b |
 
 </details>
 
