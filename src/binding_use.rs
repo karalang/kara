@@ -69,6 +69,56 @@ pub(crate) fn optres_arm_takes_whole_payload(
     })
 }
 
+/// B-2026-09-19-12 — the TOP-LEVEL tuple element indices an arm MATERIALIZES
+/// out of a whole-value `Option`/`Result` payload binding.
+///
+/// The companion to [`optres_arm_takes_whole_payload`], for the gap that
+/// predicate deliberately leaves: `Some(t) => { let x = t.0 }` reads through
+/// `t` — a `t.0` projection is a read of the binding — so the whole-payload
+/// question answers `false` and the scrutinee keeps its walk. That is right
+/// about `t` and wrong about ELEMENT 0, which the arm has taken, so the walk
+/// must skip that one index and keep the rest.
+///
+/// Answered by the same walk, with the target one hop deeper: an index is
+/// materialized when some mention of `name.<i>` is NOT itself read through.
+/// Lives here for the reason the whole-payload predicate does — codegen asks
+/// the same question at its move site and the two must not drift.
+///
+/// A mention count of zero means the arm never touches that element, which is
+/// read-through by the same convention and so is not reported.
+pub(crate) fn optres_arm_moved_tuple_elems(
+    pattern: &crate::ast::Pattern,
+    body: &Expr,
+    guard: Option<&Expr>,
+    arity: usize,
+) -> std::collections::BTreeSet<usize> {
+    let mut out = std::collections::BTreeSet::new();
+    let crate::ast::PatternKind::TupleVariant { patterns, .. } = &pattern.kind else {
+        return out;
+    };
+    for sub in patterns {
+        let crate::ast::PatternKind::Binding(n) = &sub.kind else {
+            continue;
+        };
+        for i in 0..arity {
+            if !tuple_elem_only_read_through(n, i, body)
+                || !guard.is_none_or(|g| tuple_elem_only_read_through(n, i, g))
+            {
+                out.insert(i);
+            }
+        }
+    }
+    out
+}
+
+/// True iff every mention of `name.<idx>` inside `e` is a read THROUGH that
+/// element rather than a use of it; vacuously true when there is none.
+fn tuple_elem_only_read_through(name: &str, idx: usize, e: &Expr) -> bool {
+    let mut t = Tally::default();
+    walk_expr(Target::Elem(name, idx), e, &mut t);
+    !t.captured && t.mentions == t.read_through
+}
+
 /// `Block` sibling of [`optres_arm_takes_whole_payload`], for the `if let` /
 /// `while let` scopes whose binding lives in a block rather than an arm
 /// expression. Deliberately not offered to `let … else`, whose binding escapes
@@ -92,7 +142,7 @@ pub(crate) fn optres_block_takes_whole_payload(
 /// binding rather than a use OF it. See the module docs.
 pub(crate) fn binding_only_read_through(name: &str, e: &Expr) -> bool {
     let mut t = Tally::default();
-    walk_expr(name, e, &mut t);
+    walk_expr(Target::Bare(name), e, &mut t);
     t.verdict()
 }
 
@@ -117,7 +167,7 @@ pub(crate) fn binding_only_read_through_borrow_aware(
         borrows: Some(borrows),
         ..Default::default()
     };
-    walk_expr(name, e, &mut t);
+    walk_expr(Target::Bare(name), e, &mut t);
     t.verdict()
 }
 
@@ -126,7 +176,7 @@ pub(crate) fn binding_only_read_through_borrow_aware(
 /// block rather than in a single arm expression.
 pub(crate) fn binding_only_read_through_block(name: &str, b: &Block) -> bool {
     let mut t = Tally::default();
-    walk_block(name, b, &mut t);
+    walk_block(Target::Bare(name), b, &mut t);
     t.verdict()
 }
 
@@ -145,7 +195,7 @@ pub(crate) fn binding_only_read_through_block(name: &str, b: &Block) -> bool {
 #[cfg_attr(not(feature = "llvm"), allow(dead_code))]
 pub(crate) fn binding_only_nested_match_scrutinee(name: &str, e: &Expr) -> bool {
     let mut t = Tally::default();
-    walk_expr(name, e, &mut t);
+    walk_expr(Target::Bare(name), e, &mut t);
     !t.captured && t.mentions > 0 && t.mentions == t.match_scrutinee
 }
 
@@ -159,7 +209,7 @@ pub(crate) fn binding_only_nested_match_scrutinee(name: &str, e: &Expr) -> bool 
 #[cfg_attr(not(feature = "llvm"), allow(dead_code))]
 pub(crate) fn binding_only_nested_match_scrutinee_block(name: &str, b: &Block) -> bool {
     let mut t = Tally::default();
-    walk_block(name, b, &mut t);
+    walk_block(Target::Bare(name), b, &mut t);
     !t.captured && t.mentions > 0 && t.mentions == t.match_scrutinee
 }
 
@@ -209,8 +259,36 @@ fn is_bare(name: &str, e: &Expr) -> bool {
     matches!(&e.kind, ExprKind::Identifier(n) if n == name)
 }
 
-fn walk_expr(name: &str, e: &Expr, t: &mut Tally<'_>) {
-    if is_bare(name, e) {
+/// B-2026-09-19-12 — what the walk is tallying mentions OF.
+///
+/// `Bare` is the original subject, a binding named by identifier. `Elem` is one
+/// TOP-LEVEL tuple element of such a binding (`t.0`), which lets the same walk
+/// answer the same read-through-vs-materialized question one hop deeper
+/// without a second, divergence-prone copy of it. Everything else about the
+/// walk is unchanged: it still counts a mention wherever the target appears and
+/// explains it wherever the target sits under a projection or as a receiver, so
+/// `t.0.name` reads through while `let x = t.0` does not.
+#[derive(Clone, Copy)]
+enum Target<'a> {
+    Bare(&'a str),
+    Elem(&'a str, usize),
+}
+
+impl Target<'_> {
+    fn matches(&self, e: &Expr) -> bool {
+        match self {
+            Target::Bare(name) => is_bare(name, e),
+            Target::Elem(name, idx) => matches!(
+                &e.kind,
+                ExprKind::TupleIndex { object, index }
+                    if *index as usize == *idx && is_bare(name, object)
+            ),
+        }
+    }
+}
+
+fn walk_expr(tgt: Target<'_>, e: &Expr, t: &mut Tally<'_>) {
+    if tgt.matches(e) {
         t.mentions += 1;
     }
     // A bare `name` in one of these positions is read, not taken. Counting the
@@ -223,7 +301,7 @@ fn walk_expr(name: &str, e: &Expr, t: &mut Tally<'_>) {
         | ExprKind::Index { object, .. }
         | ExprKind::MethodCall { object, .. }
         | ExprKind::OptionalChain { object, .. }
-            if is_bare(name, object) =>
+            if tgt.matches(object) =>
         {
             t.read_through += 1;
         }
@@ -235,7 +313,7 @@ fn walk_expr(name: &str, e: &Expr, t: &mut Tally<'_>) {
         }
         | ExprKind::IfLet { value: head, .. }
         | ExprKind::WhileLet { value: head, .. }
-            if is_bare(name, head) =>
+            if tgt.matches(head) =>
         {
             t.match_scrutinee += 1;
         }
@@ -265,7 +343,7 @@ fn walk_expr(name: &str, e: &Expr, t: &mut Tally<'_>) {
         | ExprKind::Question(x)
         | ExprKind::FieldAccess { object: x, .. }
         | ExprKind::TupleIndex { object: x, .. }
-        | ExprKind::Cast { expr: x, .. } => walk_expr(name, x, t),
+        | ExprKind::Cast { expr: x, .. } => walk_expr(tgt, x, t),
         // ── Two children ──────────────────────────────────────────────────
         ExprKind::Binary {
             left: a, right: b, ..
@@ -279,36 +357,36 @@ fn walk_expr(name: &str, e: &Expr, t: &mut Tally<'_>) {
         | ExprKind::RepeatLiteral {
             value: a, count: b, ..
         } => {
-            walk_expr(name, a, t);
-            walk_expr(name, b, t);
+            walk_expr(tgt, a, t);
+            walk_expr(tgt, b, t);
         }
         // ── Calls ─────────────────────────────────────────────────────────
         ExprKind::Call { callee: obj, args } => {
-            walk_expr(name, obj, t);
+            walk_expr(tgt, obj, t);
             for (i, a) in args.iter().enumerate() {
                 // B-2026-08-31-3 — a borrow-position argument is a READ. Only
                 // with an oracle: without one this falls through to the mention
                 // tally exactly as before.
-                if is_bare(name, &a.value) && t.borrows.is_some_and(|f| f(obj, i)) {
+                if tgt.matches(&a.value) && t.borrows.is_some_and(|f| f(obj, i)) {
                     t.mentions += 1;
                     t.read_through += 1;
                     continue;
                 }
-                walk_expr(name, &a.value, t);
+                walk_expr(tgt, &a.value, t);
             }
         }
         ExprKind::MethodCall {
             object: obj, args, ..
         } => {
-            walk_expr(name, obj, t);
+            walk_expr(tgt, obj, t);
             for a in args {
-                walk_expr(name, &a.value, t);
+                walk_expr(tgt, &a.value, t);
             }
         }
         ExprKind::OptionalChain { object, args, .. } => {
-            walk_expr(name, object, t);
+            walk_expr(tgt, object, t);
             for a in args.iter().flatten() {
-                walk_expr(name, &a.value, t);
+                walk_expr(tgt, &a.value, t);
             }
         }
         // ── Sequences ─────────────────────────────────────────────────────
@@ -316,36 +394,36 @@ fn walk_expr(name: &str, e: &Expr, t: &mut Tally<'_>) {
         | ExprKind::ArrayLiteral(items)
         | ExprKind::PrefixCollectionLiteral { items, .. } => {
             for x in items {
-                walk_expr(name, x, t);
+                walk_expr(tgt, x, t);
             }
         }
         ExprKind::MapLiteral(pairs) => {
             for (k, v) in pairs {
-                walk_expr(name, k, t);
-                walk_expr(name, v, t);
+                walk_expr(tgt, k, t);
+                walk_expr(tgt, v, t);
             }
         }
         ExprKind::StructLiteral { fields, spread, .. } => {
             for f in fields {
-                walk_expr(name, &f.value, t);
+                walk_expr(tgt, &f.value, t);
             }
             if let Some(s) = spread.as_deref() {
-                walk_expr(name, s, t);
+                walk_expr(tgt, s, t);
             }
         }
         ExprKind::InterpolatedStringLit(parts) => {
             for p in parts {
                 if let ParsedInterpolationPart::Expr(x, _) = p {
-                    walk_expr(name, x, t);
+                    walk_expr(tgt, x, t);
                 }
             }
         }
         ExprKind::Range { start, end, .. } => {
             if let Some(s) = start.as_deref() {
-                walk_expr(name, s, t);
+                walk_expr(tgt, s, t);
             }
             if let Some(x) = end.as_deref() {
-                walk_expr(name, x, t);
+                walk_expr(tgt, x, t);
             }
         }
         // ── Blocks ────────────────────────────────────────────────────────
@@ -356,17 +434,17 @@ fn walk_expr(name: &str, e: &Expr, t: &mut Tally<'_>) {
         | ExprKind::Seq(b)
         | ExprKind::Par(b)
         | ExprKind::Loop { body: b, .. }
-        | ExprKind::LabeledBlock { body: b, .. } => walk_block(name, b, t),
+        | ExprKind::LabeledBlock { body: b, .. } => walk_block(tgt, b, t),
         // ── Control flow ──────────────────────────────────────────────────
         ExprKind::If {
             condition: head,
             then_block,
             else_branch,
         } => {
-            walk_expr(name, head, t);
-            walk_block(name, then_block, t);
+            walk_expr(tgt, head, t);
+            walk_block(tgt, then_block, t);
             if let Some(x) = else_branch.as_deref() {
-                walk_expr(name, x, t);
+                walk_expr(tgt, x, t);
             }
         }
         ExprKind::IfLet {
@@ -375,19 +453,19 @@ fn walk_expr(name: &str, e: &Expr, t: &mut Tally<'_>) {
             else_branch,
             ..
         } => {
-            walk_expr(name, value, t);
-            walk_block(name, then_block, t);
+            walk_expr(tgt, value, t);
+            walk_block(tgt, then_block, t);
             if let Some(x) = else_branch.as_deref() {
-                walk_expr(name, x, t);
+                walk_expr(tgt, x, t);
             }
         }
         ExprKind::Match { scrutinee, arms } => {
-            walk_expr(name, scrutinee, t);
+            walk_expr(tgt, scrutinee, t);
             for a in arms {
                 if let Some(g) = &a.guard {
-                    walk_expr(name, g, t);
+                    walk_expr(tgt, g, t);
                 }
-                walk_expr(name, &a.body, t);
+                walk_expr(tgt, &a.body, t);
             }
         }
         ExprKind::While {
@@ -406,29 +484,29 @@ fn walk_expr(name: &str, e: &Expr, t: &mut Tally<'_>) {
         | ExprKind::Lock {
             mutex: head, body, ..
         } => {
-            walk_expr(name, head, t);
-            walk_block(name, body, t);
+            walk_expr(tgt, head, t);
+            walk_block(tgt, body, t);
         }
         ExprKind::Providers { bindings, body } => {
             for b in bindings {
-                walk_expr(name, &b.value, t);
+                walk_expr(tgt, &b.value, t);
             }
-            walk_block(name, body, t);
+            walk_block(tgt, body, t);
         }
         ExprKind::Return(x) => {
             if let Some(x) = x.as_deref() {
-                walk_expr(name, x, t);
+                walk_expr(tgt, x, t);
             }
         }
         ExprKind::Break { value, .. } => {
             if let Some(x) = value.as_deref() {
-                walk_expr(name, x, t);
+                walk_expr(tgt, x, t);
             }
         }
         // ── Capture ───────────────────────────────────────────────────────
         ExprKind::Closure { body, .. } => {
             let before = t.mentions;
-            walk_expr(name, body, t);
+            walk_expr(tgt, body, t);
             if t.mentions > before {
                 t.captured = true;
             }
@@ -436,41 +514,41 @@ fn walk_expr(name: &str, e: &Expr, t: &mut Tally<'_>) {
     }
 }
 
-fn walk_block(name: &str, b: &Block, t: &mut Tally<'_>) {
+fn walk_block(tgt: Target<'_>, b: &Block, t: &mut Tally<'_>) {
     for s in &b.stmts {
-        walk_stmt(name, s, t);
+        walk_stmt(tgt, s, t);
     }
     if let Some(e) = b.final_expr.as_deref() {
-        walk_expr(name, e, t);
+        walk_expr(tgt, e, t);
     }
 }
 
-fn walk_stmt(name: &str, s: &Stmt, t: &mut Tally<'_>) {
+fn walk_stmt(tgt: Target<'_>, s: &Stmt, t: &mut Tally<'_>) {
     match &s.kind {
-        StmtKind::Let { value, .. } => walk_expr(name, value, t),
+        StmtKind::Let { value, .. } => walk_expr(tgt, value, t),
         StmtKind::LetUninit { .. } => {}
         StmtKind::LetElse {
             value, else_block, ..
         } => {
-            walk_expr(name, value, t);
-            walk_block(name, else_block, t);
+            walk_expr(tgt, value, t);
+            walk_block(tgt, else_block, t);
         }
-        StmtKind::Defer { body } | StmtKind::ErrDefer { body, .. } => walk_block(name, body, t),
+        StmtKind::Defer { body } | StmtKind::ErrDefer { body, .. } => walk_block(tgt, body, t),
         // A write THROUGH the binding (`b.f = x`) mutates in place and takes
         // nothing, so the target is walked on the same footing as a read.
         StmtKind::Assign { target, value } | StmtKind::CompoundAssign { target, value, .. } => {
-            walk_expr(name, target, t);
-            walk_expr(name, value, t);
+            walk_expr(tgt, target, t);
+            walk_expr(tgt, value, t);
         }
         StmtKind::MultiAssign { targets, values } => {
             for x in targets {
-                walk_expr(name, x, t);
+                walk_expr(tgt, x, t);
             }
             for x in values {
-                walk_expr(name, x, t);
+                walk_expr(tgt, x, t);
             }
         }
-        StmtKind::Expr(e) => walk_expr(name, e, t),
+        StmtKind::Expr(e) => walk_expr(tgt, e, t),
     }
 }
 

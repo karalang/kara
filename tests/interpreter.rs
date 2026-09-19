@@ -69713,6 +69713,61 @@ fn main() {
     assert_eq!(out, "bind\n  x\n  hit\n  dR1\n  dR2\nread\n  x\n  hit3\n  dR3\n  dR4\niflet\n  x\n  hit\n  dR5\n  dR6\nwhilet\n  x\n  hit\n  dR7\n  dR8\n  end\nresult\n  x\n  hit\n  dR9\n  dR10\ntwice\n  x\n  a\n  b\n  dR11\n  dR12\nafter\n  x\n  hit\n  dR13\n  dR14\n  end\nwild\n  x\n  hit\n  dR15\n  dR16\nstruct\n  x\n  hit\n  dW18\n  dR17\nsingle\n  x\n  hit\n  dR19\nret\n  x\n  dR30\n  dR31\n  hit\neat\n  x\n  eat\n  hit7\nnomatch\n  dR22\n  dR23\n  x\nnone\n  x\n  n\ntlocal\n  dR24\n  dR25\n  x\nend\n", "got:\n{out}");
 }
 
+/// B-2026-09-19-12 — an ELEMENT moved out of a boxed tuple payload must not
+/// have its `Drop` body run again by the envelope's walk.
+///
+/// `Some(t) => { let x = t.0 }` reads THROUGH `t` — a projection is a read of
+/// the binding — so `optres_arm_takes_whole_payload` answers false and the
+/// scrutinee keeps its element walk. That is right about `t` and wrong about
+/// element 0, which `x` now owns: both ran its body, the second time over a
+/// husk. The codegen twin masks per element at the move site
+/// (B-2026-09-19-9); this is the interpreter's copy of that mask, asked of the
+/// SAME shared predicate one hop deeper, so the two cannot drift.
+///
+/// The cells, and what each one is for:
+///
+///   one        the row's own spelling, one `Drop` element moved.
+///   two        a SIBLING the arm never touched, which must still run — the
+///              cell that forbids retracting the walk outright.
+///   both       every element moved, where the walk owes nothing.
+///   second     only element 1 moved, so the mask must be per element and not
+///              a high-water mark. Element 0's body is due AFTER `mid`.
+///   readonly   an arm that reads and moves nothing: the walk is the sole
+///              owner of both elements.
+///   inline     an INLINE scrutinee (`match mko()`), which was already correct
+///              and stays so — the row's narrowing said the defect was the
+///              LOCAL spelling only.
+///   struct     a struct payload, the shape B-2026-09-17-34 already covered.
+///   none       the `None` arm, where nothing is bound at all.
+///
+/// Twin of `tests/codegen.rs`'s
+/// `e2e_boxed_tuple_payload_elem_move_runs_each_body_once`, byte-identical
+/// source and expectation. This side was the only wrong one, but the fixture
+/// is paired anyway: the codegen half is what holds the agreement, and a
+/// one-sided fixture cannot see an A/B divergence reopen.
+#[test]
+fn test_boxed_tuple_payload_elem_move_runs_each_body_once() {
+    let out = run(r#"struct R { id: i64 }
+impl Drop for R { fn drop(mut ref self) { println(f"  dR{self.id}") } }
+struct W { r: R, n: i64, p: i64, q: i64 }
+fn mk(i: i64) -> R { return R { id: i } }
+fn mko() -> Option[(R, i64, i64, i64)] { return Some((mk(40), 1, 2, 3)) }
+
+fn main() {
+    println("one");      { let o: Option[(R, i64, i64, i64)] = Some((mk(1), 1, 2, 3)); match o { Some(t) => { let x = t.0; println("  mid") } None => { println("  n") } } println("  end") }
+    println("two");      { let o: Option[(R, R, i64, i64)] = Some((mk(2), mk(3), 2, 3)); match o { Some(t) => { let x = t.0; println("  mid") } None => { println("  n") } } println("  end") }
+    println("both");     { let o: Option[(R, R, i64, i64)] = Some((mk(4), mk(5), 2, 3)); match o { Some(t) => { let x = t.0; let y = t.1; println("  mid") } None => { println("  n") } } println("  end") }
+    println("second");   { let o: Option[(R, R, i64, i64)] = Some((mk(6), mk(7), 2, 3)); match o { Some(t) => { let y = t.1; println("  mid") } None => { println("  n") } } println("  end") }
+    println("readonly"); { let o: Option[(R, R, i64, i64)] = Some((mk(9), mk(10), 2, 3)); match o { Some(t) => { println(f"  mid{t.0.id}") } None => { println("  n") } } println("  end") }
+    println("inline");   { match mko() { Some(t) => { let x = t.0; println("  mid") } None => { println("  n") } } println("  end") }
+    println("struct");   { let o: Option[W] = Some(W { r: mk(12), n: 1, p: 2, q: 3 }); match o { Some(t) => { let x = t.r; println("  mid") } None => { println("  n") } } println("  end") }
+    println("none");     { let o: Option[(R, i64, i64, i64)] = None; match o { Some(t) => { let x = t.0; println("  mid") } None => { println("  n") } } println("  end") }
+    println("end")
+}
+"#);
+    assert_eq!(out, "one\n  dR1\n  mid\n  end\ntwo\n  dR2\n  mid\n  dR3\n  end\nboth\n  dR4\n  dR5\n  mid\n  end\nsecond\n  dR7\n  mid\n  dR6\n  end\nreadonly\n  mid9\n  dR9\n  dR10\n  end\ninline\n  dR40\n  mid\n  end\nstruct\n  dR12\n  mid\n  end\nnone\n  n\n  end\nend\n", "got:\n{out}");
+}
+
 /// B-2026-09-10-20 — the INTERPRETER twin of `tests/codegen.rs`'s
 /// `e2e_declared_vec_enum_payload_runs_element_drop_bodies`, byte-identical
 /// source and expectation.

@@ -754,6 +754,45 @@ impl<'a> super::Interpreter<'a> {
                 )
             })
         {
+            // B-2026-09-19-12 — the walk stays, but not for the ELEMENTS an
+            // arm took. `Some(t) => { let x = t.0 }` reads through `t` — a
+            // projection is a read of the binding — so the clause above keeps
+            // the walk armed, which is right about `t` and wrong about element
+            // 0: `x` owns it now, and both ran its `Drop` body. The codegen
+            // twin has no such gap because it masks per element at the move
+            // site (B-2026-09-19-9); this is the interpreter's copy of that
+            // mask, asked of the SAME shared predicate one hop deeper.
+            //
+            // Per element, so a sibling the arm never touched keeps its body:
+            // `Option[(R, R, i64, i64)]` with only `t.0` moved printed
+            // `dR5 mid dR5 dR6` before and `dR5 mid dR6` after.
+            let arity = match data {
+                crate::interpreter::value::EnumData::Tuple(vals) => match vals.first() {
+                    Some(Value::Tuple(elems)) => elems.len(),
+                    _ => 0,
+                },
+                _ => 0,
+            };
+            let mut moved = std::collections::BTreeSet::new();
+            for arm in arms {
+                moved.extend(crate::binding_use::optres_arm_moved_tuple_elems(
+                    &arm.pattern,
+                    &arm.body,
+                    arm.guard.as_ref(),
+                    arity,
+                ));
+            }
+            for i in moved {
+                // The `#<i>` tuple-hop spelling `remove_field_at_path` reads,
+                // into the channel `run_optres_payload_user_drops` already
+                // masks with: the walk then finds a unit where the element was
+                // and every sibling still dies there.
+                // `moved_out_tuple_elem_bodies` is the wrong table for this —
+                // it masks a walk keyed on a binding whose VALUE is a tuple,
+                // and `name` here is the envelope.
+                self.moved_out_optres_payload_bodies
+                    .insert((name.clone(), vec![format!("#{i}")]));
+            }
             return;
         }
         if self.match_disarms_payload_walk(&enum_name, arms)

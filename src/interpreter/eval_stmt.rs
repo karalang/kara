@@ -7326,6 +7326,15 @@ impl<'a> super::Interpreter<'a> {
             .retain(|(n, _)| n != name);
         self.moved_out_tuple_elem_payload_bodies
             .retain(|(n, _)| n != name);
+        // B-2026-09-19-12 — the PATH-keyed payload mask clears with the rest.
+        // It was the one member of this family not re-armed, which did not
+        // show while its only writer recorded parts a callee had already
+        // fired; once a `match` arm could write it, every later binding of the
+        // same name inherited the silence. Measured on a `main` whose blocks
+        // each bind their own `o`: one arm's `let x = t.0` masked element 0 of
+        // EVERY later `o`, including a read-only one that owed both bodies.
+        self.moved_out_optres_payload_bodies
+            .retain(|(n, _)| n != name);
         self.moved_out_drop_field_bindings.remove(name);
         self.moved_out_enum_payload_bindings.remove(name);
         // B-2026-08-31-50 — the enum-ctor slot mask is per binding now that a
