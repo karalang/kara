@@ -13646,6 +13646,75 @@ fn main() {
     /// `moved-on` is the row that matters most: the rebind fallback registers
     /// the walk for the DESTINATION after the move disarms the source. Register
     /// it per-owner rather than per-value and both fire over the same elements.
+    /// B-2026-09-19-3 / B-2026-09-19-7 — a container-typed struct field that
+    /// receives a MOVE OUT OF A NAMED LOCAL, one row per container shape.
+    ///
+    /// This is the spelling nothing in the tree exercised. Every array-field
+    /// cell in `tests/codegen.rs` built the value as a LITERAL into the field,
+    /// which has no source binding to leave a second owner behind, so the
+    /// family read as covered while the moved-from-local form had two owners:
+    /// the local's `StructDrop` and the struct's field walk. `Array[D, 2]` and
+    /// `Array[Array[D, 1], 2]` double-freed, and `Array[Vec[D], 1]` SEGV'd at
+    /// the DEFAULT `-O2`.
+    ///
+    /// The `-O0` leg is what makes these rows mean anything: at `-O2` the
+    /// optimizer ELIDED the duplicate free for the two `Array`-outer shapes, so
+    /// they printed correctly and exited 0 while the emitted code was wrong.
+    /// That is CLAUDE.md's "an `-O2`-only zero is evidence of nothing", and it
+    /// is why this belongs here and not only in the codegen suite.
+    ///
+    /// The two `Vec`-outer rows are CONTROLS — always clean, because
+    /// `suppress_source_vec_cleanup_for_arg` covers them. They are what makes
+    /// the `Array` rows evidence about the OUTER type rather than about moving.
+    #[test]
+    fn asan_container_struct_field_moved_from_a_local_is_memory_balanced() {
+        const H: &str = "struct D { id: i64, s: String }\n\
+             impl Drop for D { fn drop(mut ref self) { println(f\"dD{self.id}\") } }\n\
+             fn mkd(n: i64) -> D { return D { id: n, s: f\"ss{n}\" }; }\n";
+        for (ty, init, label) in [
+            ("Array[D, 2]", "[mkd(1), mkd(2)]", "array-of-struct"),
+            (
+                "Array[Array[D, 1], 2]",
+                "[[mkd(1)], [mkd(2)]]",
+                "array-of-array",
+            ),
+            ("Array[Vec[D], 1]", "[[mkd(1), mkd(2)]]", "array-of-vec"),
+            // Controls — the `Vec`-outer twins, clean before the fix too.
+            ("Vec[D]", "[mkd(1), mkd(2)]", "control-vec-of-struct"),
+            (
+                "Vec[Array[D, 1]]",
+                "[[mkd(1)], [mkd(2)]]",
+                "control-vec-of-array",
+            ),
+        ] {
+            assert_clean_asan_run(
+                &format!(
+                    "{H}struct W {{ f: {ty} }}\n\
+                     fn main() {{ let a: {ty} = {init};\n\
+                     \x20            let h = W {{ f: a }};\n\
+                     \x20            println(\"end\"); }}\n"
+                ),
+                &["dD1", "dD2", "end"],
+                label,
+            );
+        }
+        // The DISCARDED-aggregate spelling stays clean the other way: `W { f: a };`
+        // as a statement takes nothing over, so the source keeps its owner and a
+        // widening of the retraction would LEAK here instead. This row is the one
+        // that fails if the `in_discarded_aggregate_tail` gate at the call site is
+        // ever dropped.
+        assert_clean_asan_run(
+            &format!(
+                "{H}struct W {{ f: Array[D, 2] }}\n\
+                 fn main() {{ let a: Array[D, 2] = [mkd(1), mkd(2)];\n\
+                 \x20            W {{ f: a }};\n\
+                 \x20            println(\"end\"); }}\n"
+            ),
+            &["dD1", "dD2", "end"],
+            "discarded-aggregate-tail",
+        );
+    }
+
     #[test]
     fn asan_fixed_array_element_bodies_are_memory_balanced() {
         const H: &str = "struct S { id: i64, name: String }\n\

@@ -3923,7 +3923,13 @@ impl<'ctx> super::Codegen<'ctx> {
                 // leak in 2 blocks, trading this row's double free for a leak
                 // one statement over.
                 if !self.in_discarded_aggregate_tail(&field_init.value) {
-                    self.suppress_array_binding_move_arg(&field_init.value);
+                    // The AGGREGATE spelling, not the callee-param one: this
+                    // struct's field drop walks the elements whatever their
+                    // type, so a user-`Drop` element must stand the source
+                    // down too (B-2026-09-19-3 / -7). The param predicate
+                    // excludes exactly that case, for a reason that does not
+                    // apply where there is no callee.
+                    self.suppress_array_binding_move_into_aggregate(&field_init.value);
                 }
                 // B-2026-08-28-15 — and the deeper-place peer, `S { f: p.0.name }`.
                 self.suppress_place_field_struct_move_source(&field_init.value);

@@ -36548,6 +36548,43 @@ fn main() {
                 "let a: Array[D, 2] = [mkd(1), mkd(2)];\nlet h = H { f: a };",
                 "dD1\ndD2\nend\n",
             ),
+            // B-2026-09-19-3 / B-2026-09-19-7 — the MOVED-FROM-A-NAMED-LOCAL
+            // spelling for every container shape beside the flat `Array` above.
+            // Each shape already had a cell in this test, and every one of them
+            // was written as a LITERAL into the field, which is the spelling
+            // that has no source binding to leave a second owner behind. So the
+            // whole family passed while the moved-from-local form double-freed
+            // (`Array`-outer) or segfaulted (`Array[Vec[D], 1]`), with nothing
+            // in the tree exercising it.
+            //
+            // The `Vec`-outer pair are controls: they were always clean, because
+            // `suppress_source_vec_cleanup_for_arg` covers them. Keeping them
+            // here is what makes the `Array`-outer rows evidence about the
+            // OUTER type rather than about moving in general.
+            (
+                "an Array-of-Array field MOVED from a local (B-2026-09-19-3)",
+                "struct H { f: Array[Array[D, 1], 2] }\n",
+                "let a: Array[Array[D, 1], 2] = [[mkd(1)], [mkd(2)]];\nlet h = H { f: a };",
+                "dD1\ndD2\nend\n",
+            ),
+            (
+                "an Array-of-Vec field MOVED from a local — SEGV'd at the DEFAULT -O2 (B-2026-09-19-7)",
+                "struct H { f: Array[Vec[D], 1] }\n",
+                "let a: Array[Vec[D], 1] = [[mkd(1), mkd(2)]];\nlet h = H { f: a };",
+                "dD1\ndD2\nend\n",
+            ),
+            (
+                "control: a flat Vec field MOVED from a local — always was clean",
+                "struct H { f: Vec[D] }\n",
+                "let a: Vec[D] = [mkd(1), mkd(2)];\nlet h = H { f: a };",
+                "dD1\ndD2\nend\n",
+            ),
+            (
+                "control: a Vec-of-Array field MOVED from a local — always was clean",
+                "struct H { f: Vec[Array[D, 1]] }\n",
+                "let a: Vec[Array[D, 1]] = [[mkd(1)], [mkd(2)]];\nlet h = H { f: a };",
+                "dD1\ndD2\nend\n",
+            ),
             (
                 // B-2026-09-12-21, the GENERIC half, and a REGRESSION this row
                 // introduced before catching it: the interpreter arm above

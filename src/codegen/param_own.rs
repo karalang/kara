@@ -92,6 +92,18 @@ fn body_may_take_field(body: &Block, binding: &str, field: &str) -> bool {
 
 use super::state::{EnumDropKind, EnumLayout};
 
+/// Where a moved-out `Array` binding's ownership is going, for
+/// [`CodeGen::suppress_array_binding_move`]. The two destinations ask different
+/// ownership questions — see
+/// [`CodeGen::suppress_array_binding_move_into_aggregate`].
+#[derive(Copy, Clone, PartialEq, Eq)]
+pub(super) enum ArrayMoveDest {
+    /// A by-value `Array` parameter of a call.
+    CalleeParam,
+    /// A field of a struct literal this scope is building.
+    AggregateField,
+}
+
 impl<'ctx> super::Codegen<'ctx> {
     /// Make an owned by-value aggregate parameter callee-owned: emit the entry
     /// deep-copy of its heap fields and register its scope-exit drop. Returns
@@ -6096,6 +6108,45 @@ impl<'ctx> super::Codegen<'ctx> {
     }
 
     pub(super) fn suppress_array_binding_move_arg(&mut self, arg: &Expr) {
+        self.suppress_array_binding_move(arg, ArrayMoveDest::CalleeParam);
+    }
+
+    /// The same retraction for a move INTO AN AGGREGATE THIS SCOPE BUILDS -- a
+    /// struct-literal field -- rather than into a callee's parameter.
+    ///
+    /// Split from the param spelling because the two ask DIFFERENT ownership
+    /// questions and only one of them is about a callee. See
+    /// [`Self::array_param_elem_is_callee_owned`]: it is deliberately FALSE for
+    /// an element that runs a user `Drop` BODY, because a by-value param's
+    /// bodies ride a caller-side channel and the caller still holds the value
+    /// when they run, so letting the callee free the element heap makes the
+    /// caller read freed memory (B-2026-09-14-25 / -27).
+    ///
+    /// A struct literal has no callee. `H { f: a }` hands the array to an
+    /// aggregate whose own field drop walks those elements unconditionally, so
+    /// the source local must stand down whatever the element type is --
+    /// including a user-`Drop` one, which the callee predicate excludes. With
+    /// the callee gate here the local kept its `StructDrop` while the struct's
+    /// field drop ran too: two owners, one buffer (B-2026-09-19-3 /
+    /// B-2026-09-19-7).
+    ///
+    /// So this spelling asks only `array_elem_owns_callee_drop` -- "does this
+    /// array own a drop at all" -- which is the same predicate
+    /// [`Self::make_array_param_callee_owned`] admits on when it registers the
+    /// `let`-local's `StructDrop` in the first place. Retracting exactly what
+    /// that registered keeps the two sides of the transfer in agreement, which
+    /// is the invariant this family keeps breaking in one direction or the
+    /// other (retract without registering: no owner, a leak; register without
+    /// retracting: two owners, a double free).
+    ///
+    /// The DISCARDED-aggregate case is gated at the call site, not here, by
+    /// `in_discarded_aggregate_tail` -- `H { f: a };` as a statement takes
+    /// nothing over, so its source keeps its owner.
+    pub(super) fn suppress_array_binding_move_into_aggregate(&mut self, arg: &Expr) {
+        self.suppress_array_binding_move(arg, ArrayMoveDest::AggregateField);
+    }
+
+    fn suppress_array_binding_move(&mut self, arg: &Expr, dest: ArrayMoveDest) {
         // B-2026-09-14-27 — the SOURCE of a `UseAfterMove` keeps its drop when
         // the consumer has been handed an independent copy
         // (`uam_array_defensive_copy`). Retracting here would leave the
@@ -6135,7 +6186,13 @@ impl<'ctx> super::Codegen<'ctx> {
         let Some((elem_te, _)) = self.borrow_vars.owned_array_params.get(&root).cloned() else {
             return;
         };
-        if !self.array_param_elem_is_callee_owned(&elem_te) {
+        let transfers = match dest {
+            ArrayMoveDest::CalleeParam => self.array_param_elem_is_callee_owned(&elem_te),
+            // No callee, so the user-`Drop`-body exclusion does not apply — see
+            // `suppress_array_binding_move_into_aggregate`'s doc.
+            ArrayMoveDest::AggregateField => self.array_elem_owns_callee_drop(&elem_te),
+        };
+        if !transfers {
             return;
         }
         self.borrow_vars.owned_array_params.remove(&root);
