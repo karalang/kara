@@ -865,10 +865,8 @@ fn generation_endpoints(
                     }
                 }
             }
-            StmtKind::LetUninit { name, .. } => {
-                if owned.contains(name) {
-                    defs.entry(name.clone()).or_default().push(idx);
-                }
+            StmtKind::LetUninit { name, .. } if owned.contains(name) => {
+                defs.entry(name.clone()).or_default().push(idx);
             }
             _ => {}
         }

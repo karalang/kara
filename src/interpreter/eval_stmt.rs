@@ -4268,7 +4268,7 @@ impl<'a> super::Interpreter<'a> {
                         picked.push((idx, mask_leaves(fname, v)));
                     }
                 }
-                picked.sort_by(|a, b| b.0.cmp(&a.0));
+                picked.sort_by_key(|a| std::cmp::Reverse(a.0));
                 discarded.extend(picked.into_iter().map(|(_, v)| v));
             }
             _ => return,

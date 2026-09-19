@@ -4587,12 +4587,13 @@ fn returned_param_part_paths_impl(
                     }
                 }
             }
-            ExprKind::MethodCall { object, args, .. } => {
-                if cx.program.is_some() && outliving_store::place_root_outlives(object, cx.roots) {
-                    for a in args {
-                        if matches!(&a.value.kind, ExprKind::Identifier(_)) {
-                            note(&a.value, out);
-                        }
+            ExprKind::MethodCall { object, args, .. }
+                if cx.program.is_some()
+                    && outliving_store::place_root_outlives(object, cx.roots) =>
+            {
+                for a in args {
+                    if matches!(&a.value.kind, ExprKind::Identifier(_)) {
+                        note(&a.value, out);
                     }
                 }
             }
@@ -5297,10 +5298,8 @@ pub fn fn_escaping_param_payload_part_paths(
     ) {
         let mut record = |e: &Expr, top: bool| match optres_part_denote(e, root) {
             Some(p) if p.is_empty() => *whole = true,
-            Some(p) if top => {
-                if !out.contains(&p) {
-                    out.push(p);
-                }
+            Some(p) if top && !out.contains(&p) => {
+                out.push(p);
             }
             _ => {}
         };
