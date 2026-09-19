@@ -15292,6 +15292,44 @@ impl<'ctx> super::Codegen<'ctx> {
     /// bias is fixed: a declined mask keeps today's behaviour (a doubled body),
     /// a wrong-arm mask LOSES a body that nothing else runs. So
     /// `Result[(R, i64), (R, i64)]` is left alone rather than guessed at.
+    /// B-2026-09-19-41 — the NAMED-STRUCT sibling of
+    /// [`Self::sole_tuple_payload_te`]: the payload struct of a seeded
+    /// `Option`/`Result` instantiation, when exactly ONE arm names a struct
+    /// this module declares.
+    ///
+    /// The decline when BOTH arms name structs is the tuple sibling's rule and
+    /// its reason, unchanged: a field INDEX means nothing without knowing which
+    /// arm's struct it indexes, and this family's bias is fixed — a declined
+    /// mask keeps today's behaviour (a doubled body), a wrong-arm mask loses a
+    /// body nothing else runs.
+    pub(super) fn sole_struct_payload_name(&self, te: &TypeExpr) -> Option<String> {
+        let TypeKind::Path(p) = &te.kind else {
+            return None;
+        };
+        if !matches!(
+            p.segments.last().map(|s| s.as_str()),
+            Some("Option" | "Result")
+        ) {
+            return None;
+        }
+        let mut structs = p.generic_args.as_ref()?.iter().filter_map(|a| match a {
+            GenericArg::Type(t) => match &t.kind {
+                TypeKind::Path(ip) if ip.generic_args.is_none() => ip
+                    .segments
+                    .last()
+                    .filter(|n| self.type_decls.struct_field_names.contains_key(n.as_str()))
+                    .cloned(),
+                _ => None,
+            },
+            _ => None,
+        });
+        let first = structs.next()?;
+        if structs.next().is_some() {
+            return None;
+        }
+        Some(first)
+    }
+
     pub(super) fn sole_tuple_payload_te(te: &TypeExpr) -> Option<TypeExpr> {
         let TypeKind::Path(p) = &te.kind else {
             return None;

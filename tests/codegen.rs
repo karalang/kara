@@ -38884,7 +38884,15 @@ fn main() {
     /// `struct P { r: R, n: i64 }` does not double — it runs the body LATE
     /// (`mid dR5` against `--interp`'s `dR5 mid`), an ordering divergence on a
     /// different channel that is byte-identical before and after this commit.
-    /// B-2026-09-19-39; a cell here would pin it.
+    /// That is B-2026-09-19-41, now fixed and pinned by
+    /// `e2e_named_struct_optres_payload_part_drops_at_its_own_live_range_end`.
+    ///
+    /// ID CORRECTION: this paragraph shipped citing B-2026-09-19-39, an id
+    /// another session had taken minutes earlier for an unrelated generic
+    /// `BoxedEnumDrop` row. The id was read before the final `git fetch`,
+    /// which is the one thing CLAUDE.md's allocation rule says not to do; the
+    /// ROW itself was allocated late and came out as -41, so only this comment
+    /// was ever wrong.
     ///
     /// BODY-ONLY, so no sanitizer leg sees it: every cell is `0 errors` and
     /// `0 bytes definitely lost` under `-O0` valgrind, before and after.
@@ -38924,6 +38932,147 @@ fn main() {
             return;
         };
         assert_eq!(out, "named\n  dR5\n  mid\n  out\ntemp\n  dR5\n  mid\n  out\nresult\n  dR5\n  mid\n  out\nmethod\n  dR5\n  mid\n  out\nassoc\n  dR5\n  mid\n  out\nsecond\n  dR5\n  mid\n  out\nsibling\n  dR5\n  mid\n  dR6\n  out\nnomove\n  mid9\n  dR5\n  out\nmixed\n  dR6\n  mid\n  dR5\n  got5\n  dR5\n  out\nend\n");
+    }
+
+    /// B-2026-09-19-41 — a `Drop`-bearing NAMED FIELD moved out of an
+    /// `Option` payload runs its body at the binding's live-range end, on
+    /// every compiled surface.
+    ///
+    /// `Some(t) => { let x = t.r; println("mid") }` over `Option[P]` for
+    /// `struct P { r: R, n: i64 }`. `x` is never read after its `let`, so
+    /// design.md § 866 puts the body BEFORE `mid`: "Destructors fire at each
+    /// binding's live-range end, not at lexical scope end". The TUPLE spelling
+    /// (`t.0`) has printed it there since B-2026-09-14-7; the field spelling
+    /// came out three different ways instead, all wrong and all from one cause.
+    ///
+    /// WHAT THE PARENT TREE PRINTS on these same cells, measured:
+    ///
+    /// ```text
+    ///   named   mid dR5            LATE  (the caller's walk ran it)
+    ///   temp    mid                LOST  (nobody ran it)
+    ///   after   mid after dR5      LATE  (and at the callee's FRAME exit,
+    ///                                     not the arm's close)
+    ///   method  mid dR5            LATE
+    ///   assoc   mid dR5            LATE
+    /// ```
+    ///
+    /// Five of the eleven cells; the other six are byte-identical before and
+    /// after, which is what makes this a fix rather than a re-balance.
+    ///
+    /// THE CAUSE IS ONE GATE, and the three faces are the caller's doing. The
+    /// callee's move-out disarms the field from the arm binding's own walk
+    /// (statically, or through the `fvflag.t.r` bit
+    /// `conditional_field_move_takes_runtime_flag` emits) and then
+    /// B-2026-08-29-47's param-view suppression ALSO withheld a body from the
+    /// destination, so the field had no owner in the callee at all. What the
+    /// program printed then depended on what the caller happened to hold: a
+    /// named local's walk ran it late, a fresh temp's — minted already masked —
+    /// ran it nowhere. Both ends move in this commit; masking one and not the
+    /// other is what produced two of the three.
+    ///
+    /// TWO CELLS ARE PINNED DIVERGENT, both pre-existing and byte-identical on
+    /// the parent tree:
+    ///
+    /// ```text
+    ///   nomove  peek9 dR5 dR5      (the arm moves NOTHING; body runs twice)
+    ///   two     dR5 mid dR6 dR6    (the UNMOVED sibling's body runs twice)
+    /// ```
+    ///
+    /// One question, not two: for a STRUCT payload both the callee's arm
+    /// binding and the caller's named local believe they own the payload's
+    /// bodies, where the tuple spelling has exactly one owner. That is
+    /// B-2026-09-17-38's subject — the sibling part's owner — reached from the
+    /// doubling side rather than the losing side, and deliberately NOT closed
+    /// here: this fix gives the MOVED field an owner, and re-homing the walk
+    /// for the UNMOVED ones is a different change with its own measurements.
+    /// Pinned so it cannot move silently.
+    ///
+    /// The `heap` cell is the discriminator worth keeping: give the payload's
+    /// field a `String` and every symptom vanishes on the parent tree too, so a
+    /// payload struct that is plain data apart from its own `Drop` is what
+    /// takes the broken path.
+    ///
+    /// BODY-ONLY, so no sanitizer leg sees it: `-O0` valgrind reads
+    /// `22 allocs, 22 frees`, `0 bytes in 0 blocks` in use at exit and
+    /// `0 errors`, before and after. `karac run`, `karac build` and `karac
+    /// build` at `KARAC_AUTO_PAR=0` are byte-identical on every cell.
+    ///
+    /// The INTERPRETER twin is `tests/interpreter.rs`'s
+    /// `test_named_struct_optres_payload_part_drops_at_its_own_live_range_end`,
+    /// byte-identical source, its expectation differing in exactly the two
+    /// pinned cells above.
+    #[test]
+    fn e2e_named_struct_optres_payload_part_drops_at_its_own_live_range_end() {
+        let Some(out) = run_program(
+            r#"struct R { id: i64 }
+impl Drop for R { fn drop(mut ref self) { println(f"  dR{self.id}") } }
+struct P { r: R, n: i64 }
+struct Q { r: R, s: R }
+struct H { name: String, id: i64 }
+impl Drop for H { fn drop(mut ref self) { println(f"  dH{self.id}") } }
+struct Ph { h: H, n: i64 }
+
+fn eat(o: Option[P]) { match o { Option.Some(t) => { let x = t.r; println("  mid") } Option.None => { println("  n") } } }
+fn eat_after(o: Option[P]) { match o { Option.Some(t) => { let x = t.r; println("  mid") } Option.None => { println("  n") } } println("  after") }
+fn eat_two(o: Option[Q]) { match o { Option.Some(t) => { let x = t.r; println("  mid") } Option.None => { println("  n") } } }
+fn eat_heap(o: Option[Ph]) { match o { Option.Some(t) => { let x = t.h; println("  mid") } Option.None => { println("  n") } } }
+fn eat_tuple(o: Option[(R, i64)]) { match o { Option.Some(t) => { let x = t.0; println("  mid") } Option.None => { println("  n") } } }
+fn eat_nomove(o: Option[P]) { match o { Option.Some(t) => { println(f"  peek{t.n}") } Option.None => { println("  n") } } }
+
+struct Sink { tag: i64 }
+impl Sink {
+  fn take(ref self, o: Option[P]) { match o { Option.Some(t) => { let x = t.r; println("  mid") } Option.None => { println("  n") } } }
+  fn grab(o: Option[P]) { match o { Option.Some(t) => { let x = t.r; println("  mid") } Option.None => { println("  n") } } }
+}
+
+fn main() {
+  println("named")
+  { let a = Option.Some(P { r: R { id: 5 }, n: 9 }); eat(a) }
+  println("  out")
+
+  println("temp")
+  eat(Option.Some(P { r: R { id: 5 }, n: 9 }))
+  println("  out")
+
+  println("after")
+  { let a = Option.Some(P { r: R { id: 5 }, n: 9 }); eat_after(a) }
+  println("  out")
+
+  println("heap")
+  { let a = Option.Some(Ph { h: H { name: "n5", id: 5 }, n: 9 }); eat_heap(a) }
+  println("  out")
+
+  println("tuple")
+  { let a = Option.Some((R { id: 5 }, 9)); eat_tuple(a) }
+  println("  out")
+
+  println("nomove")
+  { let a = Option.Some(P { r: R { id: 5 }, n: 9 }); eat_nomove(a) }
+  println("  out")
+
+  println("method")
+  { let s = Sink { tag: 1 }; let a = Option.Some(P { r: R { id: 5 }, n: 9 }); s.take(a) }
+  println("  out")
+
+  println("assoc")
+  { let a = Option.Some(P { r: R { id: 5 }, n: 9 }); Sink.grab(a) }
+  println("  out")
+
+  println("two")
+  { let a = Option.Some(Q { r: R { id: 5 }, s: R { id: 6 } }); eat_two(a) }
+  println("  out")
+
+  println("none")
+  { let a: Option[P] = Option.None; eat(a) }
+  println("  out")
+
+  println("end")
+}
+"#,
+        ) else {
+            return;
+        };
+        assert_eq!(out, "named\n  dR5\n  mid\n  out\ntemp\n  dR5\n  mid\n  out\nafter\n  dR5\n  mid\n  after\n  out\nheap\n  dH5\n  mid\n  out\ntuple\n  dR5\n  mid\n  out\nnomove\n  peek9\n  dR5\n  dR5\n  out\nmethod\n  dR5\n  mid\n  out\nassoc\n  dR5\n  mid\n  out\ntwo\n  dR5\n  mid\n  dR6\n  dR6\n  out\nnone\n  n\n  out\nend\n", "got:\n{out}");
     }
     /// B-2026-09-13-11 — the BODY COUNT for a read-only destructure of an
     /// own-`Drop` enum's payload: exactly one enclosing body, on the

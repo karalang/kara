@@ -3528,31 +3528,81 @@ impl<'ctx> super::Codegen<'ctx> {
         // already is at this site: the local's runtime variant is not recorded
         // here, and a union over arms cannot over-mask, because a walk on the
         // other variant has no tuple payload to reach in the first place.
-        let mut consumed = std::collections::BTreeSet::new();
+        let mut elems = std::collections::BTreeSet::new();
+        let mut fields: Vec<String> = Vec::new();
         for (_, path) in crate::ast::fn_consumed_param_payload_part_paths(func, ast_i, None) {
             match path.as_slice() {
                 [crate::ast::ParamPart::TupleIndex(n)] => {
-                    consumed.insert(*n);
+                    elems.insert(*n);
+                }
+                // B-2026-09-19-41 — the NAMED-FIELD spelling of the same
+                // consumption, which this helper used to fall through to the
+                // `_ => return` below. Standing down here left the caller's
+                // walk running a body the callee had already taken, which is
+                // the row's LATE and DOUBLED cells; the callee half of that
+                // row (the `src_owns_its_own_walk` carve-out at the field
+                // move-out `let`) is what makes the callee the owner, and
+                // masking here is what stops the caller being a second one.
+                [crate::ast::ParamPart::Field(f)] => {
+                    fields.push(f.clone());
                 }
                 _ => return,
             }
         }
-        if consumed.is_empty() {
+        // MIXED or deeper paths decline, for the flat mask's own reason: a
+        // `StructFields` set and a `TupleElems` set are both `usize` and name
+        // different things, and one call emits one walker. A payload cannot be
+        // both shapes at once, so a mix means this read did not describe the
+        // payload and guessing would mask the wrong parts.
+        if !elems.is_empty() && !fields.is_empty() {
             return;
         }
-        // The SOLE tuple generic arg names the payload being masked, and the
-        // mangled form is the identity every other `TupleElems` caller keys on,
-        // so no two of them can name one walker differently. A `Result` whose
-        // BOTH arms are tuples answers `None` and declines, rather than guess
-        // which arm these indices belong to.
-        let Some(key) = Self::sole_tuple_payload_te(&env_te).map(|te| Self::display_mangle_te(&te))
-        else {
+        if elems.is_empty() && fields.is_empty() {
             return;
+        }
+        // The SOLE tuple / struct generic arg names the payload being masked,
+        // and the mangled form (or the struct's own name) is the identity every
+        // other caller of that mask arm keys on, so no two of them can name one
+        // walker differently. A `Result` whose BOTH arms are tuples — or both
+        // structs — answers `None` and declines, rather than guess which arm
+        // these indices belong to.
+        let (key, mask_is_struct, consumed) = if fields.is_empty() {
+            let Some(k) =
+                Self::sole_tuple_payload_te(&env_te).map(|te| Self::display_mangle_te(&te))
+            else {
+                return;
+            };
+            (k, false, elems)
+        } else {
+            let Some(sname) = self.sole_struct_payload_name(&env_te) else {
+                return;
+            };
+            let Some(names) = self
+                .type_decls
+                .struct_field_names
+                .get(sname.as_str())
+                .cloned()
+            else {
+                return;
+            };
+            let mut idxs = std::collections::BTreeSet::new();
+            for f in &fields {
+                // A field this payload does not declare means the read was
+                // about some other type; decline whole rather than mask a
+                // partial set.
+                let Some(i) = names.iter().position(|n| n == f) else {
+                    return;
+                };
+                idxs.insert(i);
+            }
+            (sname, true, idxs)
         };
-        let masked = self.emit_optres_payload_user_drop_bodies_fn_skipping(
-            &env_te,
-            super::synth_drop::PayloadBodiesMask::TupleElems(&key, &consumed),
-        );
+        let mask = if mask_is_struct {
+            super::synth_drop::PayloadBodiesMask::StructFields(&key, &consumed)
+        } else {
+            super::synth_drop::PayloadBodiesMask::TupleElems(&key, &consumed)
+        };
+        let masked = self.emit_optres_payload_user_drop_bodies_fn_skipping(&env_te, mask);
         let mut found = false;
         for frame in self.drop_rc.scope_cleanup_actions.iter_mut() {
             for action in frame.iter_mut() {

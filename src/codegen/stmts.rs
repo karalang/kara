@@ -11723,7 +11723,72 @@ impl<'ctx> super::Codegen<'ctx> {
                             // printed twice. Placed beside the wrap mask
                             // because it retracts the registration made above,
                             // for the same reason that one does.
-                            if self.field_move_out_source_is_param_view(value) {
+                            // B-2026-09-19-41 — NOT when the source owns a
+                            // bodies walk of its own that the move-out just
+                            // took this field OUT of. The suppression above
+                            // is right whenever the root's body is the
+                            // CALLER's and stays the caller's: a by-value
+                            // param owns no `StructFieldBodies` action (see
+                            // `var_owns_struct_field_bodies`'s own note at the
+                            // destructure gate), so `fn eat(p: P) { let x =
+                            // p.r; }` keeps exactly the handling it had, which
+                            // is B-2026-09-17-35's agreed-late family and not
+                            // this row's.
+                            //
+                            // An ARM BINDING over an `Option`/`Result` payload
+                            // is the other case and reads identically here,
+                            // because it is in `param_view_locals` too. It
+                            // DOES own a walk, and the move-out disarm a few
+                            // statements up has already removed this field
+                            // from it -- statically, or through the
+                            // `fvflag.<t>.<f>` runtime bit
+                            // `conditional_field_move_takes_runtime_flag`
+                            // emits. Suppressing the destination on top of
+                            // that left the field with NO owner in the callee
+                            // at all, and what the program printed then
+                            // depended entirely on the caller: the caller's
+                            // own payload walk ran it LATE for a named local
+                            // (`mid dR5` against `--interp`'s `dR5 mid`), ran
+                            // a surviving sibling TWICE (`mid dR6 dR6 dR5`),
+                            // and LOST it outright for a fresh temp, whose
+                            // walk is minted already masked (`mid dR6`, with
+                            // `dR5` owed and printed nowhere).
+                            //
+                            // The TUPLE spelling of every one of those cells is
+                            // correct, and the reason is this gate: a
+                            // `TupleIndex` initializer takes a different `let`
+                            // branch and never reaches here, so its destination
+                            // kept the body. This brings the field spelling
+                            // level with it rather than inventing a rule. The
+                            // caller half rides the same commit
+                            // (`remask_named_tuple_payload_arg`'s `Field`
+                            // arm); masking one end and not the other is what
+                            // produced two of the three symptoms above.
+                            //
+                            // NARROWED to a root that is a view IN ITS OWN
+                            // RIGHT, which is the (1) of the two ways
+                            // `field_move_out_source_is_param_view` answers
+                            // true. Its (2) is a MIXED wrap -- `let s = S { r:
+                            // <a view>, q: <fresh> }` -- whose root never
+                            // becomes a view because it still owns its fresh
+                            // fields, and which therefore DOES hold a walk of
+                            // its own. Keying on the walk alone admitted it and
+                            // gave the destination a second body for a field
+                            // the caller still runs: measured `dR1 dR2 dR1`
+                            // against the due `dR2 dR1` on
+                            // `e2e_param_view_field_moved_back_out_runs_one_body`
+                            // and `test_e2e_moving_one_field_out_leaves_the_others_their_drop_bodies`.
+                            // A by-value PARAM root needs no mention here: it
+                            // owns no `StructFieldBodies` action, so the second
+                            // conjunct excludes it on its own.
+                            let src_owns_its_own_walk =
+                                Self::place_root_ident(value).is_some_and(|root| {
+                                    self.payload_vars.param_view_locals.contains(root)
+                                        && self.var_owns_struct_field_bodies(root)
+                                });
+                            if self.field_move_out_source_is_param_view(value)
+                                && !src_owns_its_own_walk
+                            {
                                 self.suppress_user_drop_for_var(var_name);
                                 // Propagate view-ness, so a later `let y = x;`
                                 // inherits the withholding instead of re-arming

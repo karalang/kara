@@ -69860,6 +69860,83 @@ fn main() {
     assert_eq!(out, "named\n  dR5\n  mid\n  out\ntemp\n  dR5\n  mid\n  out\nresult\n  dR5\n  mid\n  out\nmethod\n  dR5\n  mid\n  out\nassoc\n  dR5\n  mid\n  out\nsecond\n  dR5\n  mid\n  out\nsibling\n  dR5\n  mid\n  dR6\n  out\nnomove\n  mid9\n  dR5\n  out\nmixed\n  dR6\n  mid\n  dR5\n  got5\n  dR5\n  out\nend\n", "got:\n{out}");
 }
 
+/// B-2026-09-19-41 — the interpreter twin of `tests/codegen.rs`'s
+/// `e2e_named_struct_optres_payload_part_drops_at_its_own_live_range_end`.
+/// Byte-identical source; the expectation differs in exactly the two cells
+/// that row pins divergent (`nomove` and `two`), where the interpreter runs
+/// the payload body ONCE and the compiled backends run it twice. Everything
+/// else agrees, and this output is unchanged by the commit — the fix is
+/// codegen-only, which is what the twin is here to hold.
+#[test]
+fn test_named_struct_optres_payload_part_drops_at_its_own_live_range_end() {
+    let out = run(r#"struct R { id: i64 }
+impl Drop for R { fn drop(mut ref self) { println(f"  dR{self.id}") } }
+struct P { r: R, n: i64 }
+struct Q { r: R, s: R }
+struct H { name: String, id: i64 }
+impl Drop for H { fn drop(mut ref self) { println(f"  dH{self.id}") } }
+struct Ph { h: H, n: i64 }
+
+fn eat(o: Option[P]) { match o { Option.Some(t) => { let x = t.r; println("  mid") } Option.None => { println("  n") } } }
+fn eat_after(o: Option[P]) { match o { Option.Some(t) => { let x = t.r; println("  mid") } Option.None => { println("  n") } } println("  after") }
+fn eat_two(o: Option[Q]) { match o { Option.Some(t) => { let x = t.r; println("  mid") } Option.None => { println("  n") } } }
+fn eat_heap(o: Option[Ph]) { match o { Option.Some(t) => { let x = t.h; println("  mid") } Option.None => { println("  n") } } }
+fn eat_tuple(o: Option[(R, i64)]) { match o { Option.Some(t) => { let x = t.0; println("  mid") } Option.None => { println("  n") } } }
+fn eat_nomove(o: Option[P]) { match o { Option.Some(t) => { println(f"  peek{t.n}") } Option.None => { println("  n") } } }
+
+struct Sink { tag: i64 }
+impl Sink {
+  fn take(ref self, o: Option[P]) { match o { Option.Some(t) => { let x = t.r; println("  mid") } Option.None => { println("  n") } } }
+  fn grab(o: Option[P]) { match o { Option.Some(t) => { let x = t.r; println("  mid") } Option.None => { println("  n") } } }
+}
+
+fn main() {
+  println("named")
+  { let a = Option.Some(P { r: R { id: 5 }, n: 9 }); eat(a) }
+  println("  out")
+
+  println("temp")
+  eat(Option.Some(P { r: R { id: 5 }, n: 9 }))
+  println("  out")
+
+  println("after")
+  { let a = Option.Some(P { r: R { id: 5 }, n: 9 }); eat_after(a) }
+  println("  out")
+
+  println("heap")
+  { let a = Option.Some(Ph { h: H { name: "n5", id: 5 }, n: 9 }); eat_heap(a) }
+  println("  out")
+
+  println("tuple")
+  { let a = Option.Some((R { id: 5 }, 9)); eat_tuple(a) }
+  println("  out")
+
+  println("nomove")
+  { let a = Option.Some(P { r: R { id: 5 }, n: 9 }); eat_nomove(a) }
+  println("  out")
+
+  println("method")
+  { let s = Sink { tag: 1 }; let a = Option.Some(P { r: R { id: 5 }, n: 9 }); s.take(a) }
+  println("  out")
+
+  println("assoc")
+  { let a = Option.Some(P { r: R { id: 5 }, n: 9 }); Sink.grab(a) }
+  println("  out")
+
+  println("two")
+  { let a = Option.Some(Q { r: R { id: 5 }, s: R { id: 6 } }); eat_two(a) }
+  println("  out")
+
+  println("none")
+  { let a: Option[P] = Option.None; eat(a) }
+  println("  out")
+
+  println("end")
+}
+"#);
+    assert_eq!(out, "named\n  dR5\n  mid\n  out\ntemp\n  dR5\n  mid\n  out\nafter\n  dR5\n  mid\n  after\n  out\nheap\n  dH5\n  mid\n  out\ntuple\n  dR5\n  mid\n  out\nnomove\n  peek9\n  dR5\n  out\nmethod\n  dR5\n  mid\n  out\nassoc\n  dR5\n  mid\n  out\ntwo\n  dR5\n  mid\n  dR6\n  out\nnone\n  n\n  out\nend\n", "got:\n{out}");
+}
+
 /// B-2026-09-17-19 — A `shared enum`'s VARIANT PAYLOAD RUNS ITS `Drop` BODY,
 /// AND THE RELEASE LANDS AT THE BINDING'S LIVE-RANGE END.
 ///
