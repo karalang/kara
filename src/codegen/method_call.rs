@@ -8620,11 +8620,11 @@ impl<'ctx> super::Codegen<'ctx> {
                     // because a callee whose arm TAKES the payload out already
                     // has an owner for the body; see its doc for the two
                     // measured double-runs that establishes.
-                    if let Some(param_te) =
+                    if let Some((param_te, skip_parts)) =
                         self.callee_by_value_optres_param_bodies_te(&qualified, pidx, &a.value)
                     {
                         if self.optres_arg_is_unowned_temp(&a.value) {
-                            self.track_optres_arg_temp_bodies(val, &param_te);
+                            self.track_optres_arg_temp_bodies(val, &param_te, &skip_parts);
                         }
                     }
                     // Signedness-carrying scalar coercion at the METHOD arg

@@ -32,7 +32,7 @@
 use crate::ast::{
     Block, CallArg, Expr, ExprKind, Function, MatchArm, ParsedInterpolationPart, Stmt, StmtKind,
 };
-use std::collections::{HashMap, HashSet};
+use std::collections::{BTreeSet, HashMap, HashSet};
 
 /// Per-binding-name use tally: `(total Identifier uses, uses that are a direct
 /// `match` scrutinee, uses that are a READ-ONLY position)`.
@@ -89,6 +89,27 @@ struct Acc<'a> {
     /// read, so it cannot carry a body out of the callee. The caller knows the
     /// payload type and picks the map; the walk just supplies both answers.
     payload_escapers_proj: HashMap<&'a str, HashSet<&'a str>>,
+    /// B-2026-09-14-18 — [`Acc::payload_escapers_proj`] read PER PART, for the
+    /// one payload shape that has parts: a TUPLE destructured element-wise by
+    /// the arm (`Some((a, b))`).
+    ///
+    /// The two maps above collapse an arm to one bit per variant, which is the
+    /// whole defect this answers. `Some((a, b)) => return b` escapes part 1 and
+    /// nothing else, but a bit per variant can only say "Some escapes", so the
+    /// caller stands the WHOLE payload down and `a`'s owed `Drop` body is run
+    /// by nobody — on every surface, so no A/B comparison can see it.
+    ///
+    /// ABSENCE IS NOT "nothing escapes": it means the arm is not an
+    /// element-wise tuple destructure and has no parts to speak of, so the
+    /// caller must fall back to the all-or-nothing maps. A present entry whose
+    /// set is EMPTY cannot occur — an arm that escapes no part is never
+    /// recorded in `payload_escapers_proj` either, so there is nothing for the
+    /// caller to narrow.
+    ///
+    /// Recorded beside `payload_escapers_proj` and under the same copy-read
+    /// policy, at every one of its four sites, so the two cannot disagree about
+    /// which names count as escaping.
+    payload_escaper_parts: HashMap<&'a str, HashMap<&'a str, BTreeSet<usize>>>,
     /// True while walking inside a closure body. A reference to an OUTER binding
     /// there is a CAPTURE — an escape into an env that can outlive the binding's
     /// scope — so `match`-scrutinee safety is suppressed (even `match d` inside a
@@ -301,6 +322,55 @@ pub fn optres_payload_escaping_param_variants_with(
         .collect()
 }
 
+/// B-2026-09-14-18 — [`optres_payload_escaping_param_variants_with`] answered
+/// PER PART, for the one payload shape that has parts.
+///
+/// Keyed param -> variant -> the positional indices of a TUPLE payload that the
+/// callee lets outlive the call. A param or variant MISSING from this map has
+/// no per-part answer (the arm is not an element-wise tuple destructure), which
+/// is a different statement from "escapes nothing" — see
+/// `Acc::payload_escaper_parts`. A caller must therefore treat absence as
+/// "fall back to the all-or-nothing map", never as an empty escape set.
+///
+/// Computed under the SAME `copy_read` policy as the map it narrows and
+/// recorded at the same four sites, so the two agree by construction about
+/// which names escape. The narrowing is only ever a REFINEMENT: this map can
+/// say "of the parts Some escapes, only part 1 does", and cannot say that Some
+/// escapes when the other map says it does not.
+///
+/// WHY THIS EXISTS. `Some((a, b)) => return b` over `Option[(R, i64)]` escapes
+/// part 1 and nothing else, but a bit per variant can only say "Some escapes",
+/// so the caller stood the whole payload down and `a`'s owed `Drop` body was
+/// run by nobody. Measured `got:9 end` against a due `dR5 got:9 end`, on all
+/// four surfaces — which is why no A/B comparison between the backends could
+/// ever see it.
+pub fn optres_payload_escaping_param_variant_parts_with(
+    func: &Function,
+    copy_read: &dyn Fn(&Expr) -> bool,
+) -> HashMap<String, HashMap<String, BTreeSet<usize>>> {
+    let mut acc = Acc {
+        copy_read: Some(copy_read),
+        ..Default::default()
+    };
+    walk_block(&func.body, &mut acc);
+    func.params
+        .iter()
+        .filter_map(|p| {
+            let crate::ast::PatternKind::Binding(name) = &p.pattern.kind else {
+                return None;
+            };
+            acc.payload_escaper_parts.get(name.as_str()).map(|vs| {
+                (
+                    name.clone(),
+                    vs.iter()
+                        .map(|(v, parts)| ((*v).to_string(), parts.clone()))
+                        .collect::<HashMap<String, BTreeSet<usize>>>(),
+                )
+            })
+        })
+        .collect()
+}
+
 /// B-2026-09-13-3 — [`optres_payload_escaping_param_variants`] for a payload
 /// that CANNOT be partially moved, so a projection off it is always a read.
 ///
@@ -478,6 +548,107 @@ fn variant_arm_payload_escapes_proj<'a>(
             })
     }))
     .then_some(variant)
+}
+
+/// B-2026-09-14-18 — [`variant_arm_payload_escapes_proj`] answered PER PART.
+///
+/// Returns the variant and the positional indices of a TUPLE payload's parts
+/// that the arm lets outlive the call, or `None` when the arm is not an
+/// element-wise tuple destructure — there being no parts to speak of then, and
+/// `None` meaning exactly that rather than "escapes nothing" (see
+/// `Acc::payload_escaper_parts`).
+///
+/// A WILDCARD position binds no name and so can escape nothing, which is the
+/// answer that makes `Some((_, b)) => return b` keep part 0's body: the arm
+/// never names it, so nothing can carry it out.
+///
+/// Uses the SAME `binding_only_borrowed_with` test, under the same policy, as
+/// the map this narrows — so a part is in this set exactly when its name is
+/// one of the names that put the variant in `payload_escapers_proj`.
+fn variant_arm_payload_escaping_parts<'a>(
+    pattern: &'a crate::ast::Pattern,
+    guard: Option<&Expr>,
+    body: &Expr,
+    copy_read: &dyn Fn(&Expr) -> bool,
+) -> Option<(&'a str, BTreeSet<usize>)> {
+    let variant = optres_variant_of_pattern(pattern)?;
+    let parts = tuple_payload_binding_parts(pattern)?;
+    let escaping: BTreeSet<usize> = parts
+        .iter()
+        .enumerate()
+        .filter_map(|(i, name)| {
+            let v = (*name)?;
+            let borrowed = crate::consume_class::binding_only_borrowed_with(v, body, copy_read)
+                && guard.is_none_or(|g| {
+                    crate::consume_class::binding_only_borrowed_with(v, g, &projection_is_read)
+                });
+            (!borrowed).then_some(i)
+        })
+        .collect();
+    Some((variant, escaping))
+}
+
+/// Block sibling of [`variant_arm_payload_escaping_parts`].
+fn variant_arm_payload_escaping_parts_block<'a>(
+    pattern: &'a crate::ast::Pattern,
+    block: Option<&Block>,
+    copy_read: &dyn Fn(&Expr) -> bool,
+) -> Option<(&'a str, BTreeSet<usize>)> {
+    let variant = optres_variant_of_pattern(pattern)?;
+    let parts = tuple_payload_binding_parts(pattern)?;
+    // `None` for the block is `let`-else: the bindings outlive the construct,
+    // so every NAMED part escapes. Wildcards still bind nothing.
+    let escaping: BTreeSet<usize> = parts
+        .iter()
+        .enumerate()
+        .filter_map(|(i, name)| {
+            let v = (*name)?;
+            match block {
+                None => Some(i),
+                Some(b) => {
+                    (!crate::consume_class::binding_only_borrowed_block_with(v, b, copy_read))
+                        .then_some(i)
+                }
+            }
+        })
+        .collect();
+    Some((variant, escaping))
+}
+
+/// The positional binding names of a payload destructured ELEMENT-WISE as a
+/// tuple (`Some((a, _, c))`), one entry per tuple position and `None` where the
+/// position is a wildcard.
+///
+/// `None` for anything else, and the exclusions are what keep the per-part
+/// answer honest rather than merely available:
+///
+///   - `Some(t)` binds the payload WHOLE; it has one part, itself, and the
+///     all-or-nothing maps already say the right thing about it.
+///   - a nested sub-pattern at any position (`Some((K.A(r), b))`) binds names
+///     this cannot map back to a single tuple index, so there is no per-part
+///     answer to give and the caller must keep its old behaviour.
+///
+/// Both fall out of requiring every inner pattern to be a plain `Binding` or
+/// `Wildcard`, which is the same bar [`variant_payload_binds`] sets one level
+/// up for the same reason.
+fn tuple_payload_binding_parts(pattern: &crate::ast::Pattern) -> Option<Vec<Option<&str>>> {
+    let crate::ast::PatternKind::TupleVariant { patterns, .. } = &pattern.kind else {
+        return None;
+    };
+    let [only] = patterns.as_slice() else {
+        return None;
+    };
+    let crate::ast::PatternKind::Tuple(elems) = &only.kind else {
+        return None;
+    };
+    elems
+        .iter()
+        .map(|p| match &p.kind {
+            crate::ast::PatternKind::Binding(n) => Some(Some(n.as_str())),
+            crate::ast::PatternKind::Wildcard => Some(None),
+            _ => None,
+        })
+        .collect()
 }
 
 /// Block sibling of [`variant_arm_payload_escapes_proj`].
@@ -691,6 +862,17 @@ fn walk_stmt<'a>(s: &'a Stmt, acc: &mut Acc<'a>) {
                             .entry(n.as_str())
                             .or_default()
                             .insert(v);
+                        // B-2026-09-14-18 — see the `Match` site.
+                        if let Some((pv, parts)) =
+                            variant_arm_payload_escaping_parts_block(pattern, None, cr)
+                        {
+                            acc.payload_escaper_parts
+                                .entry(n.as_str())
+                                .or_default()
+                                .entry(pv)
+                                .or_default()
+                                .extend(parts);
+                        }
                     }
                 }
             }
@@ -761,6 +943,21 @@ fn walk_expr<'a>(e: &'a Expr, acc: &mut Acc<'a>) {
                             .entry(n.as_str())
                             .or_default()
                             .insert(v);
+                        // B-2026-09-14-18 — recorded only alongside the map it
+                        // narrows, so a part set can never contradict it.
+                        if let Some((pv, parts)) = variant_arm_payload_escaping_parts(
+                            &a.pattern,
+                            a.guard.as_ref(),
+                            &a.body,
+                            cr,
+                        ) {
+                            acc.payload_escaper_parts
+                                .entry(n.as_str())
+                                .or_default()
+                                .entry(pv)
+                                .or_default()
+                                .extend(parts);
+                        }
                     }
                 }
             }
@@ -883,6 +1080,17 @@ fn walk_expr<'a>(e: &'a Expr, acc: &mut Acc<'a>) {
                         .entry(n.as_str())
                         .or_default()
                         .insert(v);
+                    // B-2026-09-14-18 — see the `Match` site.
+                    if let Some((pv, parts)) =
+                        variant_arm_payload_escaping_parts_block(pattern, Some(then_block), cr)
+                    {
+                        acc.payload_escaper_parts
+                            .entry(n.as_str())
+                            .or_default()
+                            .entry(pv)
+                            .or_default()
+                            .extend(parts);
+                    }
                 }
             }
             walk_block(then_block, acc);
@@ -923,6 +1131,17 @@ fn walk_expr<'a>(e: &'a Expr, acc: &mut Acc<'a>) {
                         .entry(n.as_str())
                         .or_default()
                         .insert(v);
+                    // B-2026-09-14-18 — see the `Match` site.
+                    if let Some((pv, parts)) =
+                        variant_arm_payload_escaping_parts_block(pattern, Some(body), cr)
+                    {
+                        acc.payload_escaper_parts
+                            .entry(n.as_str())
+                            .or_default()
+                            .entry(pv)
+                            .or_default()
+                            .extend(parts);
+                    }
                 }
             }
             walk_block(body, acc);

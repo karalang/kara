@@ -2838,11 +2838,11 @@ impl<'ctx> super::Codegen<'ctx> {
                 // gate plus that question; the memory sibling above keeps the
                 // plain form, because taking the payload out does not change who
                 // frees the BOX.
-                if let Some(param_te) =
+                if let Some((param_te, skip_parts)) =
                     self.callee_by_value_optres_param_bodies_te(&name, i, &a.value)
                 {
                     if self.optres_arg_is_unowned_temp(&a.value) {
-                        self.track_optres_arg_temp_bodies(val, &param_te);
+                        self.track_optres_arg_temp_bodies(val, &param_te, &skip_parts);
                     }
                 }
                 // B-2026-08-07-2 shapes 1+2 — the NESTED-box sibling of the
@@ -4535,16 +4535,26 @@ impl<'ctx> super::Codegen<'ctx> {
         Some(cur)
     }
 
+    /// The `Option`/`Result` param type whose payload `Drop` BODIES this call's
+    /// caller still owes, plus — B-2026-09-14-18 — the positional parts of a
+    /// TUPLE payload it no longer owes because the callee lets them outlive the
+    /// call.
+    ///
+    /// An EMPTY part set is the historical answer: the caller owes every body
+    /// in the payload. A non-empty one narrows that, and is only ever reached
+    /// on the path that used to answer `None` outright.
     pub(super) fn callee_by_value_optres_param_bodies_te(
         &self,
         callee_name: &str,
         arg_index: usize,
         arg: &Expr,
-    ) -> Option<TypeExpr> {
+    ) -> Option<(TypeExpr, std::collections::BTreeSet<usize>)> {
         let program = self.program_snapshot.as_deref()?;
         let bare = callee_name.rsplit('.').next().unwrap_or(callee_name);
         let want_variant = self.ctor_variant_name_of_arg(arg);
-        let check = |f: &crate::ast::Function, ast_i: usize| -> Option<TypeExpr> {
+        let check = |f: &crate::ast::Function,
+                     ast_i: usize|
+         -> Option<(TypeExpr, std::collections::BTreeSet<usize>)> {
             let p = f.params.get(ast_i)?;
             let TypeKind::Path(path) = &p.ty.kind else {
                 return None;
@@ -4571,14 +4581,36 @@ impl<'ctx> super::Codegen<'ctx> {
                     // `Err`'s owes the caller nothing for `Ok` and everything
                     // for `Err`.
                     Some(v) if !vs.contains(v) => {}
-                    // Either this variant is taken, or the argument is not a
-                    // constructor and so cannot say which variant it is. Both
-                    // decline, which leaves the status quo rather than the
-                    // double run.
+                    // B-2026-09-14-18 — this variant IS taken, but "taken" was
+                    // one bit for a payload that has parts. Ask which parts
+                    // before standing the whole thing down: `Some((a, b)) =>
+                    // return b` hands out part 1 and leaves part 0's `Drop`
+                    // body owed to this frame, and declining here is what left
+                    // it owed to nobody on every surface.
+                    Some(v) => {
+                        let parts = self.optres_payload_escape_parts(f, &p.ty, Some(v));
+                        let escaping = parts.get(pname.as_str()).and_then(|m| m.get(v))?;
+                        // An empty set cannot occur (the narrowed map is only
+                        // written where the map above is), and a set covering
+                        // every part is the old answer spelled out — in both
+                        // cases there is nothing to narrow, so decline exactly
+                        // as before. `?` above covers the third case: no
+                        // per-part answer at all, because the arm is not an
+                        // element-wise tuple destructure.
+                        if escaping.is_empty()
+                            || self.tuple_payload_arity(&p.ty, v) == Some(escaping.len())
+                        {
+                            return None;
+                        }
+                        return Some((p.ty.clone(), escaping.clone()));
+                    }
+                    // The argument is not a constructor and so cannot say
+                    // which variant it is. Decline, which leaves the status quo
+                    // rather than the double run.
                     _ => return None,
                 }
             }
-            Some(p.ty.clone())
+            Some((p.ty.clone(), std::collections::BTreeSet::new()))
         };
         program.items.iter().find_map(|item| match item {
             crate::ast::Item::Function(f) if f.name == callee_name => check(f, arg_index),
@@ -4595,6 +4627,63 @@ impl<'ctx> super::Codegen<'ctx> {
             }),
             _ => None,
         })
+    }
+
+    /// B-2026-09-14-18 — [`Self::optres_payload_escape_map`] answered PER PART.
+    ///
+    /// Same function, same policy selection, narrower question: of the parts of
+    /// a TUPLE payload, which ones does the callee let outlive the call. The
+    /// policy is re-derived here rather than returned alongside the map above,
+    /// because that map is asked in four places that do not want the extra
+    /// answer and one of them is the monomorph leg, where the two maps must
+    /// stay interchangeable.
+    ///
+    /// A param or variant absent from the result has NO per-part answer. That
+    /// is not "escapes nothing" — see
+    /// `result_escape::optres_payload_escaping_param_variant_parts_with` — so
+    /// the one caller treats absence as "keep the old all-or-nothing verdict".
+    pub(super) fn optres_payload_escape_parts(
+        &self,
+        f: &crate::ast::Function,
+        param_te: &TypeExpr,
+        want_variant: Option<&str>,
+    ) -> std::collections::HashMap<
+        String,
+        std::collections::HashMap<String, std::collections::BTreeSet<usize>>,
+    > {
+        // The `payload_owns_its_drop_body` arm of the map above has no part
+        // question to answer: a payload that declares its own `impl Drop`
+        // cannot be destructured element-wise in the first place, so the
+        // per-part walk records nothing for it and the fully tolerant policy
+        // is the right one to pass.
+        let payload_te_for_policy = optres_payload_te(param_te, want_variant)
+            .filter(|te| matches!(te.kind, TypeKind::Tuple(_)));
+        let leaf_is_copy_read = |e: &Expr| -> bool {
+            let Some(root) = payload_te_for_policy.as_ref() else {
+                return false;
+            };
+            let Some(chain) = Self::projection_accessor_chain(e) else {
+                return false;
+            };
+            let Some(leaf) = self.te_at_accessor_chain(root, &chain) else {
+                return false;
+            };
+            !self.elem_te_runs_user_drop(&leaf)
+        };
+        crate::result_escape::optres_payload_escaping_param_variant_parts_with(
+            f,
+            &leaf_is_copy_read,
+        )
+    }
+
+    /// The number of elements in `param_te`'s payload for `variant`, when that
+    /// payload is a tuple. `None` for every other shape, which the one caller
+    /// reads as "cannot narrow".
+    pub(super) fn tuple_payload_arity(&self, param_te: &TypeExpr, variant: &str) -> Option<usize> {
+        match optres_payload_te(param_te, Some(variant))?.kind {
+            TypeKind::Tuple(elems) => Some(elems.len()),
+            _ => None,
+        }
     }
 
     /// B-2026-09-10-22 — WHICH escape map answers "does the callee take this
@@ -4747,6 +4836,7 @@ impl<'ctx> super::Codegen<'ctx> {
         &mut self,
         val: BasicValueEnum<'ctx>,
         param_te: &TypeExpr,
+        skip_parts: &std::collections::BTreeSet<usize>,
     ) {
         // B-2026-09-10-9 — stand down when the payload BOXES into a box the
         // CALLEE owns. `functions.rs`'s param-site arm registers a
@@ -4778,7 +4868,37 @@ impl<'ctx> super::Codegen<'ctx> {
         {
             return;
         }
-        let Some(bodies) = self.emit_optres_payload_user_drop_bodies_fn(param_te) else {
+        // B-2026-09-14-18 — the parts the callee hands out are masked OUT of
+        // this walk, rather than the walk being dropped entirely. An empty set
+        // is the historical case and takes the unmasked emitter, so nothing
+        // that worked before changes shape.
+        //
+        // The emitter answering `None` under a mask means NOTHING survives it,
+        // which is the old "decline outright" answer arrived at from the other
+        // side — so returning here is right, not a missed body. The gate that
+        // built `skip_parts` already refuses a full-arity set, so this is
+        // reachable only for a payload whose surviving parts carry no body of
+        // their own.
+        let bodies = if skip_parts.is_empty() {
+            self.emit_optres_payload_user_drop_bodies_fn(param_te)
+        } else {
+            // The SOLE tuple generic arg names the payload being masked, and
+            // the mangled form of it is the same identity
+            // `PayloadBodiesMask::TupleElems`' other caller uses — so the two
+            // cannot key one walker differently. A `Result` whose BOTH arms are
+            // tuples answers `None` here rather than guessing which one the
+            // indices belong to.
+            let payload_key =
+                Self::sole_tuple_payload_te(param_te).map(|te| Self::display_mangle_te(&te));
+            match payload_key {
+                Some(key) => self.emit_optres_payload_user_drop_bodies_fn_skipping(
+                    param_te,
+                    super::synth_drop::PayloadBodiesMask::TupleElems(&key, skip_parts),
+                ),
+                None => None,
+            }
+        };
+        let Some(bodies) = bodies else {
             return;
         };
         let inkwell::types::BasicTypeEnum::StructType(agg_ty) = val.get_type() else {

@@ -3430,6 +3430,70 @@ impl<'a> super::Interpreter<'a> {
     /// answer: a scalar leaf owns nothing, so declining its mask loses no
     /// owner, while removing it would hand the enclosing struct's own body a
     /// hole to read.
+    /// B-2026-09-14-18 — does this callee hand out SOME but not all of the
+    /// argument's element-wise destructured tuple payload, and is that the only
+    /// claim it makes on the argument?
+    ///
+    /// Both halves matter. If the callee also returns or stores the argument
+    /// itself, the whole thing has a new owner and the caller's walk must stay
+    /// down whatever the parts say. If EVERY element is handed out, the walk
+    /// has nothing left to run and firing it would read parts that moved.
+    ///
+    /// Codegen reaches the same verdict through
+    /// `optres_payload_escape_parts` + `tuple_payload_arity`, on a different
+    /// analysis of the same arm; the two are held together by the paired
+    /// output fixtures rather than by shared code, since one walks values and
+    /// the other types.
+    fn optres_payload_escapes_only_some_parts(
+        &self,
+        callee_name: &str,
+        method_owner: Option<&str>,
+        arg_index: usize,
+        variant: Option<&str>,
+        arg_val: Option<&Value>,
+    ) -> bool {
+        let Some(variant) = variant else {
+            return false;
+        };
+        if self.callee_param_is_borrow(callee_name, method_owner, arg_index) {
+            return false;
+        }
+        let Some(f) = self.callee_fn_for_ownership_guard_of(callee_name, method_owner) else {
+            return false;
+        };
+        if self.callee_owns_arg_beyond_call_ignoring_payload(
+            callee_name,
+            method_owner,
+            arg_index,
+            Some(variant),
+        ) {
+            return false;
+        }
+        let escaping = crate::ast::fn_escaping_param_payload_destructured_elems(
+            self.program,
+            f,
+            arg_index,
+            Some(variant),
+        );
+        if escaping.is_empty() {
+            return false;
+        }
+        // The arity comes from the VALUE in hand rather than from the declared
+        // type: the interpreter has the live payload, and a tuple's element
+        // count is exactly what it holds.
+        let arity = match arg_val {
+            Some(Value::EnumVariant {
+                data: EnumData::Tuple(vs),
+                ..
+            }) if vs.len() == 1 => match &vs[0] {
+                Value::Tuple(items) => items.len(),
+                _ => return false,
+            },
+            _ => return false,
+        };
+        escaping.len() < arity
+    }
+
     fn mask_optres_payload_escaping_parts(
         &self,
         callee_name: &str,
@@ -3444,7 +3508,26 @@ impl<'a> super::Interpreter<'a> {
         let Some(f) = self.callee_fn_for_ownership_guard_of(callee_name, method_owner) else {
             return;
         };
-        let paths = crate::ast::fn_escaping_param_payload_part_paths(f, arg_index, Some(variant));
+        let mut paths =
+            crate::ast::fn_escaping_param_payload_part_paths(f, arg_index, Some(variant));
+        // B-2026-09-14-18 — the DESTRUCTURE spelling of the same hand-out.
+        // `fn_escaping_param_payload_part_paths` answers only an arm that binds
+        // the payload WHOLE and returns a projection of it; an arm that
+        // destructures the payload element-wise (`Some((a, b)) => return b`)
+        // reports there as a whole-payload escape and used to stand this walk
+        // down completely, losing the sibling part's only body. The two
+        // channels partition the arm shapes, so appending cannot mask one
+        // element twice.
+        paths.extend(
+            crate::ast::fn_escaping_param_payload_destructured_elems(
+                self.program,
+                f,
+                arg_index,
+                Some(variant),
+            )
+            .into_iter()
+            .map(|i| vec![crate::ast::ParamPart::TupleIndex(i)]),
+        );
         if paths.is_empty() {
             return;
         }
@@ -4077,7 +4160,28 @@ impl<'a> super::Interpreter<'a> {
                 Some(Value::EnumVariant { variant, .. }) => Some(variant.as_str()),
                 _ => None,
             };
-            if self.callee_owns_arg_beyond_call(callee_name, method_owner, i, variant) {
+            // B-2026-09-14-18 — a payload whose parts leave SEPARATELY does not
+            // stand the whole argument down. `Some((a, b)) => return b` hands
+            // out part 1 and leaves part 0's `Drop` body owed to this frame;
+            // `continue`ing here left it owed to nobody, on every surface.
+            //
+            // The relaxation is narrow on purpose: it applies only when the
+            // payload-escape disjunct is the SOLE reason this guard fired
+            // (`_ignoring_payload` re-asks without it), and only when the arm
+            // hands out SOME but not all of an element-wise destructured
+            // payload. Any other reason — the callee returns the argument
+            // itself, stores it, moves it into an outliving place — still owns
+            // the whole thing, and falling through for those would run a body
+            // the new owner also runs.
+            if self.callee_owns_arg_beyond_call(callee_name, method_owner, i, variant)
+                && !self.optres_payload_escapes_only_some_parts(
+                    callee_name,
+                    method_owner,
+                    i,
+                    variant,
+                    arg_vals.get(i),
+                )
+            {
                 continue;
             }
             // B-2026-09-09-18 — the `Option`/`Result` fresh-temp argument, which
@@ -4519,6 +4623,36 @@ impl<'a> super::Interpreter<'a> {
         i: usize,
         variant: Option<&str>,
     ) -> bool {
+        self.callee_owns_arg_beyond_call_impl(callee_name, method_owner, i, variant, true)
+    }
+
+    /// B-2026-09-14-18 — [`Self::callee_owns_arg_beyond_call`] with the
+    /// PAYLOAD-escape disjunct left out.
+    ///
+    /// The partial-escape relaxation needs to know whether that disjunct is the
+    /// SOLE reason the guard fires: a callee that also returns or stores the
+    /// argument itself owns the whole thing, and letting a per-part mask
+    /// through for it would run a body its new owner also runs. Asking the
+    /// question this way keeps the two readings of one predicate in one place
+    /// rather than reconstructing the other disjuncts at the call site.
+    fn callee_owns_arg_beyond_call_ignoring_payload(
+        &self,
+        callee_name: &str,
+        method_owner: Option<&str>,
+        i: usize,
+        variant: Option<&str>,
+    ) -> bool {
+        self.callee_owns_arg_beyond_call_impl(callee_name, method_owner, i, variant, false)
+    }
+
+    fn callee_owns_arg_beyond_call_impl(
+        &self,
+        callee_name: &str,
+        method_owner: Option<&str>,
+        i: usize,
+        variant: Option<&str>,
+        include_payload_escape: bool,
+    ) -> bool {
         // B-2026-09-03-7 — on the METHOD path, also ask the question by RETURN
         // TYPE, exactly as B-2026-09-04-30's receiver gate does and through the
         // same shared predicate. The structural walks below recognise a bare
@@ -4581,7 +4715,8 @@ impl<'a> super::Interpreter<'a> {
                     // it over (`consume(r)`) dies inside, and a sibling
                     // arm's hand-back (`E.B(k) => k`) is that variant's
                     // business, not this argument's.
-                    || crate::ast::fn_returns_param_payload_of(self.program, f, i, variant)
+                    || (include_payload_escape
+                        && crate::ast::fn_returns_param_payload_of(self.program, f, i, variant))
                     || crate::ast::fn_moves_param_into_outliving_place(f, i)
                     || crate::ast::fn_moves_param_into_outliving_place_via_call(self.program, f, i)
                     // B-2026-08-31-46 — a conditional hand-back the callee

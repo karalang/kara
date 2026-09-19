@@ -3393,11 +3393,11 @@ impl<'ctx> super::Codegen<'ctx> {
                     // argument loops. `Sink.eat(Some(R { id: 1 }))` printed no
                     // body compiled; see the method site's note for why only
                     // the memory halves were ever wired here.
-                    if let Some(param_te) =
+                    if let Some((param_te, skip_parts)) =
                         self.callee_by_value_optres_param_bodies_te(&qualified, i, &a.value)
                     {
                         if self.optres_arg_is_unowned_temp(&a.value) {
-                            self.track_optres_arg_temp_bodies(val, &param_te);
+                            self.track_optres_arg_temp_bodies(val, &param_te, &skip_parts);
                         }
                     }
                     // A fresh bare-`shared` (RC-box) result passed by value:

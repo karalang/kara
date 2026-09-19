@@ -6015,51 +6015,6 @@ pub fn fn_returns_param_tuple_arm_elems(
         fn_body: &f.body,
         roots: &roots,
     };
-    fn note(out: &mut Vec<usize>, i: usize) {
-        if !out.contains(&i) {
-            out.push(i);
-        }
-    }
-    /// The arm's bindings, ELEMENT by element: does element `i`'s binding set
-    /// leave the frame through `body`? Four routes: handed back (bare, via an
-    /// alias, inside a returned aggregate, or through a call that returns
-    /// it), assigned into a place the function then returns, stored under an
-    /// outliving root directly (`v.push(r)`), or handed to a callee that
-    /// stores it (`stash(r, v)`). The last is what a STATEMENT-position call
-    /// needs: the return-site walks only look at tails and `return`s.
-    fn arm_elems(pats: &[Pattern], body: &Expr, cx: TupleArmCx<'_>, out: &mut Vec<usize>) {
-        let rule = CallYieldRule::ReturnsIt(cx.program);
-        for (i, p) in pats.iter().enumerate() {
-            let names: Vec<String> = p.binding_names();
-            if !names.is_empty()
-                && (names.iter().any(|n| payload_yields(body, n, rule))
-                    || payload_returns_any(body, &names, rule)
-                    || payload_escapes_by_assignment(body, &names, cx.fn_body, rule)
-                    || names.iter().any(|n| {
-                        outliving_store::stores(body, n, cx.roots)
-                            || stored_via_call(body, n, cx.program)
-                    }))
-            {
-                note(out, i);
-            }
-        }
-    }
-    fn block_elems(pats: &[Pattern], body: &Block, cx: TupleArmCx<'_>, out: &mut Vec<usize>) {
-        let rule = CallYieldRule::ReturnsIt(cx.program);
-        for (i, p) in pats.iter().enumerate() {
-            let names: Vec<String> = p.binding_names();
-            if !names.is_empty()
-                && (payload_returns_any_block(body, &names, rule)
-                    || payload_escapes_by_assignment_block(body, &names, cx.fn_body, rule)
-                    || names.iter().any(|n| {
-                        outliving_store::walk_block(body, n, cx.roots)
-                            || stored_via_call_block(body, n, cx.program)
-                    }))
-            {
-                note(out, i);
-            }
-        }
-    }
     fn walk(e: &Expr, param: &str, cx: TupleArmCx<'_>, out: &mut Vec<usize>) {
         let scrutinee_is_param =
             |s: &Expr| matches!(&s.kind, ExprKind::Identifier(n) if n == param);
@@ -6069,7 +6024,7 @@ pub fn fn_returns_param_tuple_arm_elems(
                 for a in arms {
                     if scrutinee_is_param(scrutinee) {
                         if let PatternKind::Tuple(pats) = &a.pattern.kind {
-                            arm_elems(pats, &a.body, cx, out);
+                            tuple_arm_escaping_elems(pats, &a.body, cx, out);
                         }
                     }
                     walk(&a.body, param, cx, out);
@@ -6083,7 +6038,7 @@ pub fn fn_returns_param_tuple_arm_elems(
             } => {
                 if scrutinee_is_param(value) {
                     if let PatternKind::Tuple(pats) = &pattern.kind {
-                        block_elems(pats, then_block, cx, out);
+                        tuple_arm_escaping_elems_block(pats, then_block, cx, out);
                     }
                 }
                 walk(value, param, cx, out);
@@ -6100,7 +6055,7 @@ pub fn fn_returns_param_tuple_arm_elems(
             } => {
                 if scrutinee_is_param(value) {
                     if let PatternKind::Tuple(pats) = &pattern.kind {
-                        block_elems(pats, body, cx, out);
+                        tuple_arm_escaping_elems_block(pats, body, cx, out);
                     }
                 }
                 walk(value, param, cx, out);
@@ -6148,11 +6103,280 @@ pub fn fn_returns_param_tuple_arm_elems(
     out
 }
 
+/// B-2026-09-14-18 — lifted out of [`fn_returns_param_tuple_arm_elems`]
+/// so the PAYLOAD-destructure sibling below asks the same four escape
+/// routes of the same arm shape. Two copies of this judgement would drift,
+/// and the two predicates have to agree: one answers a tuple PARAMETER's
+/// arm, the other a tuple PAYLOAD's, and a part is handed out under exactly
+/// the same conditions in both.
+fn note_elem(out: &mut Vec<usize>, i: usize) {
+    if !out.contains(&i) {
+        out.push(i);
+    }
+}
+/// The arm's bindings, ELEMENT by element: does element `i`'s binding set
+/// leave the frame through `body`? Four routes: handed back (bare, via an
+/// alias, inside a returned aggregate, or through a call that returns
+/// it), assigned into a place the function then returns, stored under an
+/// outliving root directly (`v.push(r)`), or handed to a callee that
+/// stores it (`stash(r, v)`). The last is what a STATEMENT-position call
+/// needs: the return-site walks only look at tails and `return`s.
+pub(crate) fn tuple_arm_escaping_elems(
+    pats: &[Pattern],
+    body: &Expr,
+    cx: TupleArmCx<'_>,
+    out: &mut Vec<usize>,
+) {
+    let rule = CallYieldRule::ReturnsIt(cx.program);
+    for (i, p) in pats.iter().enumerate() {
+        let names: Vec<String> = p.binding_names();
+        if !names.is_empty()
+            && (names.iter().any(|n| payload_yields(body, n, rule))
+                || payload_returns_any(body, &names, rule)
+                || payload_escapes_by_assignment(body, &names, cx.fn_body, rule)
+                || names.iter().any(|n| {
+                    outliving_store::stores(body, n, cx.roots)
+                        || stored_via_call(body, n, cx.program)
+                }))
+        {
+            note_elem(out, i);
+        }
+    }
+}
+pub(crate) fn tuple_arm_escaping_elems_block(
+    pats: &[Pattern],
+    body: &Block,
+    cx: TupleArmCx<'_>,
+    out: &mut Vec<usize>,
+) {
+    let rule = CallYieldRule::ReturnsIt(cx.program);
+    for (i, p) in pats.iter().enumerate() {
+        let names: Vec<String> = p.binding_names();
+        if !names.is_empty()
+            && (payload_returns_any_block(body, &names, rule)
+                || payload_escapes_by_assignment_block(body, &names, cx.fn_body, rule)
+                || names.iter().any(|n| {
+                    outliving_store::walk_block(body, n, cx.roots)
+                        || stored_via_call_block(body, n, cx.program)
+                }))
+        {
+            note_elem(out, i);
+        }
+    }
+}
+
+/// B-2026-09-14-18 — [`fn_returns_param_tuple_arm_elems`] one level deeper:
+/// which ELEMENTS of a by-value `Option`/`Result` parameter's TUPLE PAYLOAD
+/// does `f` hand out of its frame, when the arm destructures that payload
+/// element-wise?
+///
+/// ```text
+/// fn eat(o: Option[(R, i64)]) -> i64 { match o { Some((a, b)) => return b, .. } }  // [1]
+/// fn eat(o: Option[(R, R)]) -> R     { match o { Some((a, b)) => return a, .. } }  // [0]
+/// fn eat(o: Option[(R, R)]) -> i64   { match o { Some((a, b)) => a.id + b.id, .. } } // []
+/// ```
+///
+/// THE GAP THIS FILLS. `fn_returns_param_payload_of` answers the same arms with
+/// one bit — "Some escapes" — and the caller then stands the WHOLE payload
+/// down, so the sibling part that stayed behind had its owed `Drop` body run by
+/// nobody. Measured `got:9 end` against a due `dR5 got:9 end`, and
+/// `got:5 dR5 end` against `dR6 got:5 dR5 end`, on ALL FOUR surfaces — which is
+/// why no comparison between the backends could see it and why it sat open
+/// through four sessions of this family's work.
+///
+/// `fn_escaping_param_payload_part_paths` is the PROJECTION sibling
+/// (`Some(t) => return t.0`) and deliberately reports nothing for a
+/// destructure; this reports nothing for a whole-payload binding. The two
+/// channels partition the arms rather than overlapping, so a caller may apply
+/// both masks without running one twice.
+///
+/// Escape is the same four routes the tuple-PARAMETER predicate uses, through
+/// the same lifted helpers, so the two cannot drift: handed back, assigned into
+/// a returned place, stored under an outliving root, or handed to a callee that
+/// stores it.
+pub fn fn_escaping_param_payload_destructured_elems(
+    program: &crate::Program,
+    f: &Function,
+    arg_index: usize,
+    variant: Option<&str>,
+) -> Vec<usize> {
+    let Some(param) = f.params.get(arg_index) else {
+        return Vec::new();
+    };
+    // A borrow hands nothing of the caller's value out, so the caller's own
+    // walk stays the only owner — the same first test every sibling on this
+    // channel applies.
+    if matches!(
+        param.ty.kind,
+        crate::ast::TypeKind::Ref(_) | crate::ast::TypeKind::MutRef(_)
+    ) {
+        return Vec::new();
+    }
+    let PatternKind::Binding(param_name) = &param.pattern.kind else {
+        return Vec::new();
+    };
+    let mut roots: Vec<&str> = Vec::new();
+    if matches!(f.self_param, Some(SelfParam::Ref) | Some(SelfParam::MutRef)) {
+        roots.push("self");
+    }
+    for p in &f.params {
+        if !matches!(
+            p.ty.kind,
+            crate::ast::TypeKind::Ref(_) | crate::ast::TypeKind::MutRef(_)
+        ) {
+            continue;
+        }
+        if let PatternKind::Binding(n) = &p.pattern.kind {
+            roots.push(n.as_str());
+        }
+    }
+    let cx = TupleArmCx {
+        program,
+        fn_body: &f.body,
+        roots: &roots,
+    };
+    /// The tuple sub-patterns of an arm that destructures the payload of the
+    /// variant asked about, or `None` for every other arm shape.
+    ///
+    /// `Some(t)` (whole binding) and `Some(K.A(r))` (a nested non-tuple
+    /// sub-pattern) both answer `None`: neither has elements this predicate can
+    /// index, and reporting on them would collide with the channel that does
+    /// own them.
+    fn payload_tuple_pats<'p>(
+        pattern: &'p Pattern,
+        variant: Option<&str>,
+    ) -> Option<&'p [Pattern]> {
+        let PatternKind::TupleVariant { path, patterns } = &pattern.kind else {
+            return None;
+        };
+        let v = path.last()?.as_str();
+        if !matches!(v, "Some" | "Ok" | "Err") {
+            return None;
+        }
+        if variant.is_some_and(|want| want != v) {
+            return None;
+        }
+        let [only] = patterns.as_slice() else {
+            return None;
+        };
+        match &only.kind {
+            PatternKind::Tuple(elems) => Some(elems.as_slice()),
+            _ => None,
+        }
+    }
+    fn walk(
+        e: &Expr,
+        param: &str,
+        variant: Option<&str>,
+        cx: TupleArmCx<'_>,
+        out: &mut Vec<usize>,
+    ) {
+        let scrutinee_is_param =
+            |s: &Expr| matches!(&s.kind, ExprKind::Identifier(n) if n == param);
+        match &e.kind {
+            ExprKind::Match { scrutinee, arms } => {
+                walk(scrutinee, param, variant, cx, out);
+                for a in arms {
+                    if scrutinee_is_param(scrutinee) {
+                        if let Some(pats) = payload_tuple_pats(&a.pattern, variant) {
+                            tuple_arm_escaping_elems(pats, &a.body, cx, out);
+                        }
+                    }
+                    walk(&a.body, param, variant, cx, out);
+                }
+            }
+            ExprKind::IfLet {
+                pattern,
+                value,
+                then_block,
+                else_branch,
+            } => {
+                if scrutinee_is_param(value) {
+                    if let Some(pats) = payload_tuple_pats(pattern, variant) {
+                        tuple_arm_escaping_elems_block(pats, then_block, cx, out);
+                    }
+                }
+                walk(value, param, variant, cx, out);
+                walk_block(then_block, param, variant, cx, out);
+                if let Some(x) = else_branch.as_deref() {
+                    walk(x, param, variant, cx, out);
+                }
+            }
+            ExprKind::WhileLet {
+                pattern,
+                value,
+                body,
+                ..
+            } => {
+                if scrutinee_is_param(value) {
+                    if let Some(pats) = payload_tuple_pats(pattern, variant) {
+                        tuple_arm_escaping_elems_block(pats, body, cx, out);
+                    }
+                }
+                walk(value, param, variant, cx, out);
+                walk_block(body, param, variant, cx, out);
+            }
+            ExprKind::Block(b)
+            | ExprKind::Unsafe(b)
+            | ExprKind::Try(b)
+            | ExprKind::Seq(b)
+            | ExprKind::Par(b) => walk_block(b, param, variant, cx, out),
+            ExprKind::Return(Some(inner)) => walk(inner, param, variant, cx, out),
+            ExprKind::If {
+                condition,
+                then_block,
+                else_branch,
+            } => {
+                walk(condition, param, variant, cx, out);
+                walk_block(then_block, param, variant, cx, out);
+                if let Some(x) = else_branch.as_deref() {
+                    walk(x, param, variant, cx, out);
+                }
+            }
+            ExprKind::While {
+                condition, body, ..
+            } => {
+                walk(condition, param, variant, cx, out);
+                walk_block(body, param, variant, cx, out);
+            }
+            ExprKind::For { iterable, body, .. } => {
+                walk(iterable, param, variant, cx, out);
+                walk_block(body, param, variant, cx, out);
+            }
+            ExprKind::Loop { body, .. } => walk_block(body, param, variant, cx, out),
+            ExprKind::LabeledBlock { body, .. } => walk_block(body, param, variant, cx, out),
+            _ => {}
+        }
+    }
+    fn walk_block(
+        b: &Block,
+        param: &str,
+        variant: Option<&str>,
+        cx: TupleArmCx<'_>,
+        out: &mut Vec<usize>,
+    ) {
+        for st in &b.stmts {
+            match &st.kind {
+                StmtKind::Expr(e) => walk(e, param, variant, cx, out),
+                StmtKind::Let { value, .. } => walk(value, param, variant, cx, out),
+                _ => {}
+            }
+        }
+        if let Some(fe) = b.final_expr.as_deref() {
+            walk(fe, param, variant, cx, out);
+        }
+    }
+    let mut out = Vec::new();
+    walk_block(&f.body, param_name, variant, cx, &mut out);
+    out.sort_unstable();
+    out
+}
+
 /// What [`fn_returns_param_tuple_arm_elems`]'s walks carry: the program (for
 /// the callee lookups), the whole function body (for the assignment route),
 /// and the outliving roots (for the store routes).
 #[derive(Clone, Copy)]
-struct TupleArmCx<'a> {
+pub(crate) struct TupleArmCx<'a> {
     program: &'a crate::Program,
     fn_body: &'a Block,
     roots: &'a [&'a str],

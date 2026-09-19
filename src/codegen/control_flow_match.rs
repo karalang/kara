@@ -1021,15 +1021,25 @@ impl<'ctx> super::Codegen<'ctx> {
                     self.suppress_tuple_elem_optres_payload_cleanup(scrutinee, &arm.pattern);
                     // B-2026-07-30-11 (Option/Result leg): bodies retraction
                     // beside the memory suppressions — see the fn's doc.
-                    self.suppress_optres_payload_bodies_for_match_scoped(
+                    // B-2026-09-14-18 — try the PER-ELEMENT narrowing first; it
+                    // returns false for every shape the all-or-nothing disarm
+                    // below already gets right.
+                    if !self.narrow_callee_owned_tuple_payload_bodies_for_arm(
                         scrutinee,
                         &arm.pattern,
-                        crate::binding_use::optres_arm_takes_whole_payload(
+                        &arm.body,
+                        arm.guard.as_ref(),
+                    ) {
+                        self.suppress_optres_payload_bodies_for_match_scoped(
+                            scrutinee,
                             &arm.pattern,
-                            &arm.body,
-                            arm.guard.as_ref(),
-                        ),
-                    );
+                            crate::binding_use::optres_arm_takes_whole_payload(
+                                &arm.pattern,
+                                &arm.body,
+                                arm.guard.as_ref(),
+                            ),
+                        );
+                    }
                     // Fresh-temp inline `Result` scrutinee (B-2026-07-12-2 gap
                     // 2): suppress the source's payload free on a CONSUMING arm so
                     // the binding / consumer owns the buffer — UNLESS the arm only
@@ -15132,7 +15142,7 @@ impl<'ctx> super::Codegen<'ctx> {
     /// bias is fixed: a declined mask keeps today's behaviour (a doubled body),
     /// a wrong-arm mask LOSES a body that nothing else runs. So
     /// `Result[(R, i64), (R, i64)]` is left alone rather than guessed at.
-    fn sole_tuple_payload_te(te: &TypeExpr) -> Option<TypeExpr> {
+    pub(super) fn sole_tuple_payload_te(te: &TypeExpr) -> Option<TypeExpr> {
         let TypeKind::Path(p) = &te.kind else {
             return None;
         };
@@ -15151,6 +15161,122 @@ impl<'ctx> super::Codegen<'ctx> {
             return None;
         }
         Some(first)
+    }
+
+    /// B-2026-09-14-18 — narrow the CALLEE-OWNED boxed tuple payload's body
+    /// walk to the elements the arm did NOT take, instead of standing the
+    /// whole walk down.
+    ///
+    /// `suppress_optres_payload_bodies_for_match_scoped` is all-or-nothing: an
+    /// arm that materializes ANY leaf of a `Some((a, b))` destructure disarms
+    /// the place's walk entirely, on the premise that a destructure's leaves
+    /// each take an element and each register a body of their own. That is
+    /// true of the leaves the arm takes and false of the ones it leaves
+    /// behind, and a boxed payload is where it bites: the box's interior walk
+    /// is the ONLY holder of the untaken leaf's body, so disarming it runs
+    /// that body nowhere.
+    ///
+    /// Measured on `fn eat(o: Option[(H, i64)]) -> i64 { match o {
+    /// Some((a, b)) => { return b } .. } }` with a `Drop`-bearing `H`: both
+    /// backends printed `n9 / end` against the due `dH1 / n9 / end`, and the
+    /// same silence for `(H, H)` with either half returned. An agreed gap, so
+    /// no A/B gate saw it — which is why it is being closed on both backends
+    /// in one change rather than on whichever one noticed first.
+    ///
+    /// Returns `true` when it re-homed the walk, in which case the caller
+    /// SKIPS the all-or-nothing disarm; `false` leaves every pre-existing
+    /// path byte-identical (a whole-payload binding, a non-tuple payload, an
+    /// arm that takes every element, an arm that takes none).
+    pub(super) fn narrow_callee_owned_tuple_payload_bodies_for_arm(
+        &mut self,
+        scrutinee: &Expr,
+        pattern: &Pattern,
+        body: &Expr,
+        guard: Option<&Expr>,
+    ) -> bool {
+        let name = match &scrutinee.kind {
+            ExprKind::Identifier(n) => n.clone(),
+            ExprKind::SelfValue => "self".to_string(),
+            _ => return false,
+        };
+        // The boxed, callee-owned channel only. The inline one hands the
+        // bodies to the CALLER (which B-2026-09-14-18's other half narrows at
+        // the call site), so its walk is not the untaken leaf's only holder.
+        if !self
+            .payload_vars
+            .callee_owned_payload_bodies_params
+            .contains(&name)
+        {
+            return false;
+        }
+        let PatternKind::TupleVariant { path, .. } = &pattern.kind else {
+            return false;
+        };
+        if !matches!(
+            path.last().map(|s| s.as_str()),
+            Some("Some") | Some("Ok") | Some("Err")
+        ) {
+            return false;
+        }
+        let (arity, moved) =
+            crate::binding_use::optres_arm_moved_destructured_elems(pattern, body, guard);
+        // Nothing taken: the existing path already keeps the walk armed.
+        // Everything taken: the leaves really do own it all, which is the case
+        // the all-or-nothing disarm was written for.
+        if arity == 0 || moved.is_empty() || moved.len() == arity {
+            return false;
+        }
+        let Some(env_te) = self
+            .type_decls
+            .enum_inst_var_types
+            .get(name.as_str())
+            .cloned()
+        else {
+            return false;
+        };
+        let Some(payload_te) = Self::sole_tuple_payload_te(&env_te) else {
+            return false;
+        };
+        let payload_key = Self::display_mangle_te(&payload_te);
+        // Accumulate, then re-read — a second `Some` arm over the same
+        // scrutinee has to mask its elements too, and re-homing from the
+        // single new set would put the earlier arm's back.
+        let masked = {
+            let acc = self
+                .type_decls
+                .boxed_payload_moved_fields
+                .entry(name.clone())
+                .or_default();
+            acc.extend(moved.iter().copied());
+            acc.clone()
+        };
+        if masked.len() >= arity {
+            return false;
+        }
+        let Some(masked_walker) = self.emit_optres_payload_user_drop_bodies_fn_skipping(
+            &env_te,
+            super::synth_drop::PayloadBodiesMask::TupleElems(&payload_key, &masked),
+        ) else {
+            return false;
+        };
+        let mut hit = false;
+        for frame in self.drop_rc.scope_cleanup_actions.iter_mut() {
+            for action in frame.iter_mut() {
+                if let super::state::CleanupAction::UserDrop {
+                    binding_name,
+                    kind: super::state::UserDropKind::ContainerElemBodies,
+                    drop_fn,
+                    ..
+                } = action
+                {
+                    if binding_name == &name {
+                        *drop_fn = masked_walker;
+                        hit = true;
+                    }
+                }
+            }
+        }
+        hit
     }
 
     pub(super) fn suppress_boxed_payload_view_tuple_elem_move(

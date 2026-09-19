@@ -111,6 +111,66 @@ pub(crate) fn optres_arm_moved_tuple_elems(
     out
 }
 
+/// B-2026-09-14-18 — the tuple-element indices an arm MATERIALIZES out of a
+/// DESTRUCTURED `Option`/`Result` payload (`Some((a, b)) => { return b }`).
+///
+/// The third member of the family: [`optres_arm_takes_whole_payload`] answers
+/// the whole-payload question and reports `true` for a destructure by
+/// construction, and [`optres_arm_moved_tuple_elems`] answers it per element
+/// for the `Some(t)` + `t.0` spelling. Neither can see INSIDE a destructure,
+/// where each element has a NAME of its own rather than an index — so a
+/// caller that needs to know which halves of `(a, b)` left had to treat the
+/// pattern as all-or-nothing.
+///
+/// An element counts as moved when its leaf binding is materialized anywhere
+/// in the body or the guard, by the same [`binding_only_read_through`] walk
+/// the whole-payload predicate uses. A wildcard leaf moves nothing; any other
+/// leaf shape (a nested destructure, a literal) is reported as moved, which is
+/// the conservative direction here — it masks a body out rather than running
+/// one that someone else also runs.
+///
+/// Returns an empty set for any pattern that is not a single tuple
+/// destructure, so a caller can treat "empty" as "nothing to narrow".
+///
+/// Its only caller today is codegen's boxed-payload arm suppressor, so the
+/// DEFAULT feature leg sees it as dead — the same `cfg_attr` its two neighbours
+/// below carry, and the same trap CLAUDE.md records for `src/cli.rs`. The
+/// interpreter needs no caller here because it has no boxed channel to narrow:
+/// a payload's parts are values, not a layout.
+#[cfg_attr(not(feature = "llvm"), allow(dead_code))]
+pub(crate) fn optres_arm_moved_destructured_elems(
+    pattern: &crate::ast::Pattern,
+    body: &Expr,
+    guard: Option<&Expr>,
+) -> (usize, std::collections::BTreeSet<usize>) {
+    let mut out = std::collections::BTreeSet::new();
+    let crate::ast::PatternKind::TupleVariant { patterns, .. } = &pattern.kind else {
+        return (0, out);
+    };
+    let [sub] = patterns.as_slice() else {
+        return (0, out);
+    };
+    let crate::ast::PatternKind::Tuple(leaves) = &sub.kind else {
+        return (0, out);
+    };
+    for (i, leaf) in leaves.iter().enumerate() {
+        match &leaf.kind {
+            crate::ast::PatternKind::Wildcard => {}
+            crate::ast::PatternKind::Binding(n) => {
+                if !binding_only_read_through(n, body)
+                    || !guard.is_none_or(|g| binding_only_read_through(n, g))
+                {
+                    out.insert(i);
+                }
+            }
+            _ => {
+                out.insert(i);
+            }
+        }
+    }
+    (leaves.len(), out)
+}
+
 /// True iff every mention of `name.<idx>` inside `e` is a read THROUGH that
 /// element rather than a use of it; vacuously true when there is none.
 fn tuple_elem_only_read_through(name: &str, idx: usize, e: &Expr) -> bool {

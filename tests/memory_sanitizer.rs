@@ -98236,4 +98236,90 @@ fn main() {
             "b91530-caller-spans",
         );
     }
+
+    /// B-2026-09-14-18 — the MEMORY half of the two paired output fixtures.
+    ///
+    /// The row itself is body-only: it measured `9-10 allocs with equal frees,
+    /// 0 errors, 0 bytes lost` on both its cells, and the fix moves who runs a
+    /// `Drop` BODY, which frees nothing. So this fixture is not re-measuring
+    /// the defect — it is guarding the fix's own mechanism, which is a mask.
+    ///
+    /// Both backends now narrow a payload walk to the parts the callee did NOT
+    /// hand out. Codegen masks tuple elements out of the emitted walker
+    /// (`PayloadBodiesMask::TupleElems`); the interpreter REMOVES them from the
+    /// value the walk sees. A mask that takes too much loses a body, which the
+    /// output twins catch — and a mask that takes too little runs one twice,
+    /// which on a payload carrying HEAP is a double free rather than a
+    /// duplicate line. Every part here carries a `String` for exactly that
+    /// reason; the output fixtures' `R` is scalar and could not tell the two
+    /// apart.
+    ///
+    /// The cells are the boundaries of the narrowing: one part out, every part
+    /// out, no part out, a part that is READ but not taken, and three parts
+    /// with the middle one leaving.
+    ///
+    /// The WILDCARD position (`Some((_, b)) => return b`) belongs to this set
+    /// and is deliberately absent: the compiled backends return the `None`
+    /// arm's value for it, which reproduces on a clean checkout with this fix
+    /// reverted and is a wrong VALUE rather than a misplaced body. Filed
+    /// separately so this fixture keeps measuring one thing.
+    #[test]
+    fn asan_destructured_payload_mask_leaves_one_owner_per_part() {
+        const DECLS: &str = "struct H { id: i64, s: String }\n\
+             impl Drop for H { fn drop(mut ref self) { println(f\"dH{self.id}\") } }\n\
+             fn oneOut(o: Option[(H, i64)]) -> i64 { match o { Option.Some((a, b)) => { return b; } Option.None => { return 0; } } }\n\
+             fn dropOut(o: Option[(H, H)]) -> H { match o { Option.Some((a, b)) => { return a; } Option.None => { return H { id: 0, s: \"z\" }; } } }\n\
+             fn bothOut(o: Option[(H, H)]) -> (H, H) { match o { Option.Some((a, b)) => { return (a, b); } Option.None => { return (H { id: 0, s: \"z\" }, H { id: 0, s: \"z\" }); } } }\n\
+             fn noneOut(o: Option[(H, H)]) -> i64 { match o { Option.Some((a, b)) => { return a.id + b.id; } Option.None => { return 0; } } }\n\
+             fn readOut(o: Option[(H, i64)]) -> i64 { match o { Option.Some((a, b)) => { println(f\"in{a.id}\"); return b; } Option.None => { return 0; } } }\n\
+             fn midOut(o: Option[(H, H, H)]) -> H { match o { Option.Some((a, b, c)) => { return b; } Option.None => { return H { id: 0, s: \"z\" }; } } }\n";
+
+        // One part out, and the sibling's `String` must still reach exactly one
+        // owner.
+        assert_clean_asan_run(
+            &format!(
+                "{DECLS}\
+                 fn main() {{\n\
+                 \x20   {{ let g: i64 = oneOut(Option.Some((H {{ id: 1, s: \"aaaaaaaaaaaa\" }}, 9))); println(f\"n{{g}}\"); }}\n\
+                 \x20   {{ let g = dropOut(Option.Some((H {{ id: 2, s: \"bbbbbbbbbbbb\" }}, H {{ id: 3, s: \"cccccccccccc\" }}))); println(f\"n{{g.id}}\"); }}\n\
+                 \x20   println(\"end\");\n\
+                 }}\n"
+            ),
+            &["dH1", "n9", "dH3", "n2", "dH2", "end"],
+            "b91418-one-part-out",
+        );
+
+        // EVERY part out, and NO part out — the two ends the narrowing must
+        // not touch. The first has nothing left for the caller's walk; the
+        // second is the walk running in full.
+        assert_clean_asan_run(
+            &format!(
+                "{DECLS}\
+                 fn main() {{\n\
+                 \x20   {{ let g = bothOut(Option.Some((H {{ id: 4, s: \"dddddddddddd\" }}, H {{ id: 5, s: \"eeeeeeeeeeee\" }}))); println(f\"n{{g.0.id}}\"); }}\n\
+                 \x20   {{ let g: i64 = noneOut(Option.Some((H {{ id: 6, s: \"ffffffffffff\" }}, H {{ id: 7, s: \"gggggggggggg\" }}))); println(f\"n{{g}}\"); }}\n\
+                 \x20   println(\"end\");\n\
+                 }}\n"
+            ),
+            &["n4", "dH4", "dH5", "dH6", "dH7", "n13", "end"],
+            "b91418-both-ends",
+        );
+
+        // A part the arm READS but does not take — a projection is not a
+        // hand-off, so its body still belongs to the callee — beside a
+        // three-part payload whose MIDDLE part leaves, the case an index set
+        // gets wrong if it is read as a count.
+        assert_clean_asan_run(
+            &format!(
+                "{DECLS}\
+                 fn main() {{\n\
+                 \x20   {{ let g: i64 = readOut(Option.Some((H {{ id: 8, s: \"hhhhhhhhhhhh\" }}, 9))); println(f\"n{{g}}\"); }}\n\
+                 \x20   {{ let g = midOut(Option.Some((H {{ id: 9, s: \"iiiiiiiiiiii\" }}, H {{ id: 10, s: \"jjjjjjjjjjjj\" }}, H {{ id: 11, s: \"kkkkkkkkkkkk\" }}))); println(f\"n{{g.id}}\"); }}\n\
+                 \x20   println(\"end\");\n\
+                 }}\n"
+            ),
+            &["in8", "dH8", "n9", "dH9", "dH11", "n10", "dH10", "end"],
+            "b91418-read-and-middle",
+        );
+    }
 }

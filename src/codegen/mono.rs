@@ -2483,11 +2483,48 @@ impl<'ctx> super::Codegen<'ctx> {
                         Some(v) => escaping.contains(v),
                         None => !escaping.is_empty(),
                     };
-                    if !variant_escapes
-                        && matches!(&inst.kind, TypeKind::Path(pp)
+                    // B-2026-09-14-18 — the PER-PART narrowing `compile_call`
+                    // performs, mirrored here for the same reason
+                    // B-2026-09-10-22 gave for the map itself: a generic
+                    // callee and its concrete twin must answer one question
+                    // the same way, or the two legs disagree about one
+                    // program. `Some((a, b)) => return b` escapes part 1 and
+                    // owes part 0's body to this frame.
+                    //
+                    // Reached only on the leg that used to register NOTHING,
+                    // so a variant that does not escape keeps the unmasked
+                    // walk exactly as before.
+                    let skip_parts = if variant_escapes {
+                        // An argument that does not name its variant has no
+                        // per-part answer to ask for, so it declines exactly
+                        // as it did before.
+                        ctor_variant.as_deref().and_then(|v| {
+                            let pname = match &p.pattern.kind {
+                                crate::ast::PatternKind::Binding(n) => n.as_str(),
+                                _ => "",
+                            };
+                            let parts =
+                                self.optres_payload_escape_parts(&generic_fn, &inst, Some(v));
+                            match parts.get(pname).and_then(|m| m.get(v)) {
+                                Some(esc)
+                                    if !esc.is_empty()
+                                        && self.tuple_payload_arity(&inst, v)
+                                            != Some(esc.len()) =>
+                                {
+                                    Some(esc.clone())
+                                }
+                                _ => None,
+                            }
+                        })
+                    } else {
+                        Some(std::collections::BTreeSet::new())
+                    };
+                    if let Some(skip_parts) = skip_parts {
+                        if matches!(&inst.kind, TypeKind::Path(pp)
                             if pp.segments.last().is_some_and(|h| h == "Option" || h == "Result"))
-                    {
-                        self.track_optres_arg_temp_bodies(val, &inst);
+                        {
+                            self.track_optres_arg_temp_bodies(val, &inst, &skip_parts);
+                        }
                     }
                 }
             }

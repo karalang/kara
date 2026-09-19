@@ -20262,6 +20262,166 @@ fn main() {
         assert_eq!(out, "stmt\n  1\nloop\n  2\nblock\n  3\nmatch\n  4\nkept\n  kept 26\n  5\nnested\n  6\ncallerdiscard\n  26\ncallerkept\n  26\n  26\ntwoinst\n  7\n  8\nend\n");
     }
 
+    /// B-2026-09-14-18 — an UNMOVED part of an owned `Option`/`Result` payload
+    /// lost its `Drop` body when the arm destructured the payload and handed back
+    /// a DIFFERENT part.
+    ///
+    /// `Some((a, b)) => return b` over `Option[(R, i64)]` printed `got:9 end`
+    /// where `dR5 got:9 end` is due, and the two-`Drop`-element cell lost `dR6`.
+    /// On ALL FOUR surfaces, so no comparison between the backends could see it —
+    /// which is why the row sat open through four sessions of this family's work,
+    /// each of which correctly found its own defect elsewhere.
+    ///
+    /// The cause was one bit where a set was needed. The escape answer was per
+    /// VARIANT ("Some escapes"), so a caller holding a payload whose parts leave
+    /// SEPARATELY stood the whole payload down and the part that stayed behind was
+    /// owed a body by nobody. It is now per PART, on both backends: codegen through
+    /// `result_escape::optres_payload_escaping_param_variant_parts_with` feeding
+    /// `PayloadBodiesMask::TupleElems`, the interpreter through
+    /// `ast::fn_escaping_param_payload_destructured_elems` feeding the mask that
+    /// the projection spelling already used.
+    ///
+    /// THE CELLS THAT MUST NOT MOVE are as much the point as the two that do.
+    /// `readonly` escapes nothing, `bothout` escapes everything, `wholeout` binds
+    /// the payload whole, and `wildkept` keeps a position the arm never names —
+    /// the first three are the boundaries of the narrowing and the fourth is the
+    /// case where a part cannot escape because nothing can refer to it.
+    ///
+    /// `condfalse` is a KNOWN remaining gap, pinned here rather than fixed: the
+    /// escape predicate declines a CONDITIONAL hand-back by long-standing
+    /// convention on this channel (recording it would mask a part that really did
+    /// die on the other branch), so `dR19` is still owed and still lost. Measured
+    /// identical before this fix. Filed separately rather than left implicit.
+    ///
+    /// The INTERPRETER twin is `tests/interpreter.rs`'s
+    /// `test_destructured_payload_keeps_the_unmoved_parts_body`, byte-identical
+    /// source and expectation — and byte-identical is the assertion here, since
+    /// an agreed defect can only be closed by moving both backends together.
+    #[test]
+    fn e2e_destructured_payload_keeps_the_unmoved_parts_body() {
+        let Some(out) = run_program(
+            r#"struct R { id: i64 }
+impl Drop for R { fn drop(mut ref self) { println(f"  dR{self.id}") } }
+
+struct Sink { n: i64 }
+impl Sink {
+    fn eat(ref self, o: Option[(R, i64)]) -> i64 { match o { Option.Some((a, b)) => { return b; } Option.None => { return 0; } } }
+}
+
+fn scalarOut(o: Option[(R, i64)]) -> i64 { match o { Option.Some((a, b)) => { return b; } Option.None => { return 0; } } }
+fn dropOut(o: Option[(R, R)]) -> R { match o { Option.Some((a, b)) => { return a; } Option.None => { return R { id: 0 }; } } }
+fn resultOut(o: Result[(R, i64), i64]) -> i64 { match o { Result.Ok((a, b)) => { return b; } Result.Err(e) => { return 0; } } }
+fn wildKept(o: Option[(R, i64)]) -> i64 { match o { Option.Some((_, b)) => { return b; } Option.None => { return 0; } } }
+fn middleOut(o: Option[(R, R, R)]) -> R { match o { Option.Some((a, b, c)) => { return b; } Option.None => { return R { id: 0 }; } } }
+fn bothOut(o: Option[(R, R)]) -> (R, R) { match o { Option.Some((a, b)) => { return (a, b); } Option.None => { return (R { id: 0 }, R { id: 0 }); } } }
+fn readOnly(o: Option[(R, R)]) -> i64 { match o { Option.Some((a, b)) => { return a.id + b.id; } Option.None => { return 0; } } }
+fn wholeOut(o: Option[(R, i64)]) -> (R, i64) { match o { Option.Some(t) => { return t; } Option.None => { return (R { id: 0 }, 0); } } }
+fn condOut(o: Option[(R, R)], k: bool) -> R { match o { Option.Some((a, b)) => { if k { return a; } return b; } Option.None => { return R { id: 0 }; } } }
+fn genOut[T](o: Option[(R, T)], d: T) -> T { match o { Option.Some((a, b)) => { return b; } Option.None => { return d; } } }
+
+fn main() {
+    println("scalarout");  { let got: i64 = scalarOut(Option.Some((R { id: 5 }, 9))); println(f"  got:{got}") }
+    println("dropout");    { let got = dropOut(Option.Some((R { id: 6 }, R { id: 7 }))); println(f"  got:{got.id}") }
+    println("resultout");  { let got: i64 = resultOut(Result.Ok((R { id: 8 }, 9))); println(f"  got:{got}") }
+    println("wildkept");   { let got: i64 = wildKept(Option.Some((R { id: 10 }, 9))); println(f"  got:{got}") }
+    println("middleout");  { let got = middleOut(Option.Some((R { id: 11 }, R { id: 12 }, R { id: 13 }))); println(f"  got:{got.id}") }
+    println("bothout");    { let got = bothOut(Option.Some((R { id: 14 }, R { id: 15 }))); println(f"  got:{got.0.id}") }
+    println("readonly");   { let got: i64 = readOnly(Option.Some((R { id: 16 }, R { id: 17 }))); println(f"  got:{got}") }
+    println("wholeout");   { let got = wholeOut(Option.Some((R { id: 18 }, 9))); println(f"  got:{got.1}") }
+    println("condfalse");  { let got = condOut(Option.Some((R { id: 19 }, R { id: 20 })), false); println(f"  got:{got.id}") }
+    println("genout");     { let got: i64 = genOut(Option.Some((R { id: 21 }, 9)), 0); println(f"  got:{got}") }
+    println("method");     { let s = Sink { n: 1 }; let got: i64 = s.eat(Option.Some((R { id: 22 }, 9))); println(f"  got:{got}") }
+    println("unused");     { dropOut(Option.Some((R { id: 23 }, R { id: 24 }))); println("  x") }
+    println("end")
+}
+"#,
+        ) else {
+            return;
+        };
+        assert_eq!(out, "scalarout\n  dR5\n  got:9\ndropout\n  dR7\n  got:6\n  dR6\nresultout\n  dR8\n  got:9\nwildkept\n  dR10\n  got:9\nmiddleout\n  dR11\n  dR13\n  got:12\n  dR12\nbothout\n  got:14\n  dR14\n  dR15\nreadonly\n  dR16\n  dR17\n  got:33\nwholeout\n  got:9\n  dR18\ncondfalse\n  got:20\n  dR20\ngenout\n  dR21\n  got:9\nmethod\n  dR22\n  got:9\nunused\n  dR24\n  dR23\n  x\nend\n");
+    }
+
+    /// B-2026-09-14-18 (BOXED leg) — the same defect on the OTHER channel, where
+    /// the payload is too wide to sit inline and the bodies belong to the CALLEE.
+    ///
+    /// A payload of at most three words rides inside the envelope and the CALLER
+    /// keeps its `Drop` bodies, which is the channel the sibling fixture
+    /// (`e2e_destructured_payload_keeps_the_unmoved_parts_body`) pins. A wider one — `(H, i64)`
+    /// with `H { id: i64, s: String }` — heap-boxes, and the box's interior walk
+    /// becomes the ONLY holder of the bodies. Both channels had the same one-bit
+    /// answer and so the same defect, and fixing only the one that happened to be
+    /// measured first would have left the two backends disagreeing on the other.
+    ///
+    /// Measured before the fix, identical on `--interp`, the JIT, `-O0` and `-O2`
+    /// auto-par: `scalarOut` printed `got:9` where `dH1 got:9` is due, and the
+    /// `(H, H)` cells lost whichever element the arm did not return. Agreed and
+    /// wrong, so no A/B gate saw it.
+    ///
+    /// The cause here is not the escape answer but the DISARM:
+    /// `suppress_optres_payload_bodies_for_match_scoped` stands the whole walk
+    /// down as soon as an arm materializes ANY leaf of a destructure, on the
+    /// premise that a destructure's leaves each take an element and each register
+    /// a body of their own. True of the leaves the arm takes, false of the ones it
+    /// leaves behind. `narrow_callee_owned_tuple_payload_bodies_for_arm` now
+    /// re-homes the walk onto a `PayloadBodiesMask::TupleElems` walker that skips
+    /// only the taken indices, and declines — leaving every pre-existing path
+    /// byte-identical — for a whole-payload binding, a non-tuple payload, an arm
+    /// that takes every element, and an arm that takes none.
+    ///
+    /// `noneout` and `bothtouched` are the boundaries: the first takes nothing and
+    /// must keep both bodies in the callee, the second reads one and returns the
+    /// other, so one body runs in the callee and one at the caller's `g`. `middle`
+    /// pins the three-element shape, where the mask has to name index 1 and not a
+    /// contiguous prefix. `resultout` is the `Result.Ok` spelling.
+    ///
+    /// The WILDCARD spelling (`Some((_, b)) => return b`) is deliberately ABSENT:
+    /// it returns the `None` arm's value on the compiled backends — a wrong value,
+    /// not a missing body — which reproduces on a clean checkout with this fix
+    /// reverted and is filed as its own row.
+    ///
+    /// Byte-identical to the interpreter twin, which is the assertion, since an
+    /// agreed defect can only be closed by moving both backends together.
+    #[test]
+    fn e2e_boxed_destructured_payload_keeps_the_unmoved_parts_body() {
+        let Some(out) = run_program(
+            r#"struct H { id: i64, s: String }
+impl Drop for H { fn drop(mut ref self) { println(f"  dH{self.id}") } }
+
+fn scalarOut(o: Option[(H, i64)]) -> i64 { match o { Option.Some((a, b)) => { return b; } Option.None => { return 0; } } }
+fn readAndScalarOut(o: Option[(H, i64)]) -> i64 { match o { Option.Some((a, b)) => { println(f"  in{a.id}"); return b; } Option.None => { return 0; } } }
+fn firstOut(o: Option[(H, H)]) -> H { match o { Option.Some((a, b)) => { return a; } Option.None => { return H { id: 0, s: "zzzzzzzzzzzz" }; } } }
+fn secondOut(o: Option[(H, H)]) -> H { match o { Option.Some((a, b)) => { return b; } Option.None => { return H { id: 0, s: "zzzzzzzzzzzz" }; } } }
+fn middleOut(o: Option[(H, H, H)]) -> H { match o { Option.Some((a, b, c)) => { return b; } Option.None => { return H { id: 0, s: "zzzzzzzzzzzz" }; } } }
+fn bothOut(o: Option[(H, H)]) -> H { match o { Option.Some((a, b)) => { println(f"  keep{b.id}"); return a; } Option.None => { return H { id: 0, s: "zzzzzzzzzzzz" }; } } }
+fn noneOut(o: Option[(H, H)]) -> i64 { match o { Option.Some((a, b)) => { return a.id + b.id; } Option.None => { return 0; } } }
+fn resultOut(r: Result[(H, i64), i64]) -> i64 { match r { Result.Ok((a, b)) => { return b; } Result.Err(e) => { return e; } } }
+
+fn main() {
+    println("scalar");
+    { let g: i64 = scalarOut(Option.Some((H { id: 1, s: "aaaaaaaaaaaa" }, 9))); println(f"  got:{g}"); }
+    println("readscalar");
+    { let g: i64 = readAndScalarOut(Option.Some((H { id: 2, s: "bbbbbbbbbbbb" }, 8))); println(f"  got:{g}"); }
+    println("first");
+    { let g = firstOut(Option.Some((H { id: 3, s: "cccccccccccc" }, H { id: 4, s: "dddddddddddd" }))); println(f"  got:{g.id}"); }
+    println("second");
+    { let g = secondOut(Option.Some((H { id: 5, s: "eeeeeeeeeeee" }, H { id: 6, s: "ffffffffffff" }))); println(f"  got:{g.id}"); }
+    println("middle");
+    { let g = middleOut(Option.Some((H { id: 7, s: "gggggggggggg" }, H { id: 8, s: "hhhhhhhhhhhh" }, H { id: 9, s: "iiiiiiiiiiii" }))); println(f"  got:{g.id}"); }
+    println("bothtouched");
+    { let g = bothOut(Option.Some((H { id: 10, s: "jjjjjjjjjjjj" }, H { id: 11, s: "kkkkkkkkkkkk" }))); println(f"  got:{g.id}"); }
+    println("noneout");
+    { let g: i64 = noneOut(Option.Some((H { id: 12, s: "llllllllllll" }, H { id: 13, s: "mmmmmmmmmmmm" }))); println(f"  got:{g}"); }
+    println("resultout");
+    { let g: i64 = resultOut(Result.Ok((H { id: 14, s: "nnnnnnnnnnnn" }, 7))); println(f"  got:{g}"); }
+    println("end");
+}
+"#,
+        ) else {
+            return;
+        };
+        assert_eq!(out, "scalar\n  dH1\n  got:9\nreadscalar\n  in2\n  dH2\n  got:8\nfirst\n  dH4\n  got:3\n  dH3\nsecond\n  dH5\n  got:6\n  dH6\nmiddle\n  dH7\n  dH9\n  got:8\n  dH8\nbothtouched\n  keep11\n  dH11\n  got:10\n  dH10\nnoneout\n  dH12\n  dH13\n  got:25\nresultout\n  dH14\n  got:7\nend\n");
+    }
+
     #[test]
     fn e2e_declared_vec_enum_payload_runs_element_drop_bodies() {
         let Some(out) = run_program(
