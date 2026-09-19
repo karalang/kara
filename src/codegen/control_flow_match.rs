@@ -9654,7 +9654,40 @@ impl<'ctx> super::Codegen<'ctx> {
             // B-2026-09-14-22 — the same answer the bodies gate at the top of
             // this block computes; one `arm_reads_only` for both channels, so
             // they cannot drift apart on what an arm does with its binding.
-            self.clear_boxed_enum_inner_drop(scrut_name, arm_reads_only);
+            //
+            // B-2026-09-19-40 — with ONE correction the bodies gate must not
+            // share. `arm_reads_only` comes from the syntactic consumption
+            // classifier, whose founding assumption is that handing a value to
+            // a user function transfers nothing: the callee entry-copies its
+            // by-value params, so the caller still owns the original. A
+            // by-value `Array[T, N]` param whose elements own a callee drop is
+            // the one exception (B-2026-09-13-15 / -16) — there the CALLEE
+            // frees the element buffers. So an arm that only hands its payload
+            // to such a parameter reads as "read-only", the retraction below
+            // declines, and the box's interior drop frees buffers the callee
+            // has already freed: measured as 2 invalid frees and
+            // `free(): double free detected in tcache 2`, exit 134, on
+            // `E.A(a) => { eat(a); }` over a heap-boxed `Array[String, 2]`
+            // payload.
+            //
+            // Only the MEMORY channel is corrected. The bodies gate keeps the
+            // uncorrected `arm_reads_only`, because the question it asks is a
+            // different one — whether a user `Drop` BODY runs — and a
+            // callee-owned array element by construction runs none
+            // (`array_param_elem_is_callee_owned` excludes every element that
+            // does). Widening the bodies gate here would move
+            // `bodies_mask_is_sole_channel` for a case it has no stake in.
+            let arm_hands_to_callee_owned_array = body.is_some_and(|b| {
+                arm_binds.iter().any(|v| {
+                    !super::consume_class::binding_only_borrowed_with_callee_owns(v, b, &|c, i| {
+                        self.free_fn_param_is_callee_owned_array(c, i)
+                    })
+                })
+            });
+            self.clear_boxed_enum_inner_drop(
+                scrut_name,
+                arm_reads_only && !arm_hands_to_callee_owned_array,
+            );
         }
     }
 

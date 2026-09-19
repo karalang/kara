@@ -66,6 +66,32 @@ pub(crate) fn binding_only_borrowed_with(
         name,
         copy_read,
         free_fn_arg_transfers: false,
+        callee_owns_arg: &|_, _| false,
+    };
+    !(value_derived_from(&c, e) || has_consuming_sink(&c, e))
+}
+
+/// [`binding_only_borrowed`] with the `callee_owns_arg` knob supplied
+/// (B-2026-09-19-40) — the syntactic walk, plus the caller's typed answer to
+/// "does this callee OWN and free the value at argument position `i`".
+///
+/// Only the codegen side can answer that (it needs the callee's declared
+/// parameter types), and only one decision needs it: the MEMORY retraction
+/// `clear_boxed_enum_inner_drop` performs for a boxed enum payload. Every
+/// other caller of the syntactic walk keeps the blanket "a free-fn argument
+/// transfers nothing", which is correct for every parameter shape except a
+/// by-value `Array` of callee-owned elements.
+#[cfg(feature = "llvm")]
+pub(crate) fn binding_only_borrowed_with_callee_owns(
+    name: &str,
+    e: &Expr,
+    callee_owns_arg: &dyn Fn(&str, usize) -> bool,
+) -> bool {
+    let c = Ctx {
+        name,
+        copy_read: &|_| false,
+        free_fn_arg_transfers: false,
+        callee_owns_arg,
     };
     !(value_derived_from(&c, e) || has_consuming_sink(&c, e))
 }
@@ -80,6 +106,7 @@ pub(crate) fn binding_only_borrowed_block_with(
         name,
         copy_read,
         free_fn_arg_transfers: false,
+        callee_owns_arg: &|_, _| false,
     };
     !block_consumes(&c, b)
 }
@@ -124,6 +151,7 @@ pub(crate) fn binding_materialized(
         name,
         copy_read,
         free_fn_arg_transfers: true,
+        callee_owns_arg: &|_, _| false,
     };
     value_derived_from(&c, e) || has_consuming_sink(&c, e)
 }
@@ -139,6 +167,7 @@ pub(crate) fn binding_materialized_block(
         name,
         copy_read,
         free_fn_arg_transfers: true,
+        callee_owns_arg: &|_, _| false,
     };
     block_consumes(&c, b)
 }
@@ -162,6 +191,27 @@ struct Ctx<'a> {
     copy_read: &'a dyn Fn(&Expr) -> bool,
     /// Whether a derived FREE-FUNCTION argument counts as a transfer.
     free_fn_arg_transfers: bool,
+    /// B-2026-09-19-40 — the PER-CALLEE exception to `free_fn_arg_transfers`
+    /// being `false`: `(callee name, arg index) -> "this parameter is
+    /// callee-owns"`.
+    ///
+    /// The blanket `false` encodes "the callee entry-copies its by-value
+    /// params, so handing it a value transfers nothing", and that is right for
+    /// every parameter shape but one. A by-value `Array` parameter whose
+    /// elements own a callee drop is callee-OWNS (B-2026-09-13-15 / -16): the
+    /// callee frees the element buffers, so passing the binding there really is
+    /// a transfer and the caller-side owner has to stand down. With this
+    /// answered `false` for such a call, an arm that hands a heap-boxed
+    /// `Array` payload to `eat(x)` kept the box's interior drop AND let the
+    /// callee free the same buffers — measured as 2 invalid frees and
+    /// `free(): double free detected in tcache 2`, exit 134.
+    ///
+    /// A knob rather than a flag flip, for the reason `copy_read` is one: the
+    /// answer needs the callee's declared parameter types, which this module
+    /// does not have and deliberately does not grow a dependency on. Callers
+    /// that cannot answer pass the `false` closure and are byte-identical to
+    /// before.
+    callee_owns_arg: &'a dyn Fn(&str, usize) -> bool,
 }
 
 impl<'a> Ctx<'a> {
@@ -170,6 +220,7 @@ impl<'a> Ctx<'a> {
             name,
             copy_read: &|_| false,
             free_fn_arg_transfers: false,
+            callee_owns_arg: &|_, _| false,
         }
     }
 }
@@ -273,8 +324,21 @@ fn has_consuming_sink(c: &Ctx<'_>, e: &Expr) -> bool {
                 || is_lowered_primitive_operator(callee);
             if is_free_fn && !c.free_fn_arg_transfers {
                 // Entry-copied args: a derived arg is fine; only recurse for
-                // nested sinks.
-                args.iter().any(|a| has_consuming_sink(c, &a.value))
+                // nested sinks. The one exception is a parameter the CALLEE
+                // owns and frees (a by-value `Array` of callee-drop elements,
+                // B-2026-09-19-40) — there the hand-off really is a transfer,
+                // and only the caller can answer which positions those are.
+                let fname = match &callee.kind {
+                    ExprKind::Identifier(n) => Some(n.as_str()),
+                    _ => None,
+                };
+                let callee_owned_sink = fname.is_some_and(|n| {
+                    args.iter()
+                        .enumerate()
+                        .any(|(i, a)| (c.callee_owns_arg)(n, i) && derived(&a.value))
+                });
+                callee_owned_sink
+                    || args.iter().any(|a| has_consuming_sink(c, &a.value))
                     || has_consuming_sink(c, callee)
             } else {
                 args.iter().any(|a| derived(&a.value))

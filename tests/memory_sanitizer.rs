@@ -99113,4 +99113,73 @@ fn main() {
             "b91418-read-and-middle",
         );
     }
+
+    /// B-2026-09-19-40 — AN ARM THAT ONLY HANDS ITS BOXED `Array` PAYLOAD TO A
+    /// FREE FUNCTION DOUBLE-FREED THE ELEMENT BUFFERS.
+    ///
+    /// `src/consume_class.rs`'s founding assumption is that passing a value to
+    /// a user function transfers nothing: the callee entry-copies its by-value
+    /// params, so the caller still owns the original. A by-value
+    /// `Array[T, N]` param whose elements own a callee drop is the one
+    /// exception (B-2026-09-13-15 / B-2026-09-13-16) — there the CALLEE frees
+    /// the element buffers.
+    ///
+    /// So `G.Y(x) => { return eats(x); }` over a heap-boxed `Array[String, 2]`
+    /// payload classified as READ-ONLY, `clear_boxed_enum_inner_drop` declined
+    /// to retract the box's interior walk, and both sides freed the same two
+    /// `String` buffers: `free(): double free detected in tcache 2`, exit 134
+    /// on AOT and under `karac run`, against a correct `--interp`. Valgrind
+    /// counted 2 invalid frees.
+    ///
+    /// Three rows, and the two controls are the point rather than padding: the
+    /// MONO spelling was already correct (it retracts through a different
+    /// channel — the `field_drop_kinds` alias, which a generic enum's
+    /// declaration, spelled `T`, never reaches), and a read-only arm that hands
+    /// the payload NOWHERE must keep its interior drop, which is the double
+    /// free this fix would cause if it over-retracted.
+    #[test]
+    fn asan_boxed_array_payload_handed_to_callee_owned_param_no_double_free() {
+        assert_clean_asan_run(
+            r#"
+enum G[T] { Y(T), N }
+enum M { M(Array[String, 2]), N }
+
+fn eats(a: Array[String, 2]) -> i64 { return a[0].len(); }
+
+fn hand_gen(g: G[Array[String, 2]]) -> i64 {
+    match g { G.Y(x) => { return eats(x); } G.N => { return 0; } }
+}
+
+fn hand_mono(g: M) -> i64 {
+    match g { M.M(x) => { return eats(x); } M.N => { return 0; } }
+}
+
+fn read_gen(g: G[Array[String, 2]]) -> i64 {
+    match g { G.Y(x) => { return x[0].len(); } G.N => { return 0; } }
+}
+
+fn main() {
+    let mut n = 0;
+    while n < 3 {
+        let a: Array[String, 2] = [f"hand-{n}-padpad", f"snd-{n}-padpad"];
+        let g: G[Array[String, 2]] = G.Y(a);
+        println(f"hg:{hand_gen(g)}");
+        let b: Array[String, 2] = [f"mono-{n}-padpad", f"snd-{n}-padpad"];
+        let m: M = M.M(b);
+        println(f"hm:{hand_mono(m)}");
+        let c: Array[String, 2] = [f"read-{n}-padpad", f"snd-{n}-padpad"];
+        let r: G[Array[String, 2]] = G.Y(c);
+        println(f"rg:{read_gen(r)}");
+        n = n + 1;
+    }
+    println("end");
+}
+"#,
+            &[
+                "hg:13", "hm:13", "rg:13", "hg:13", "hm:13", "rg:13", "hg:13", "hm:13", "rg:13",
+                "end",
+            ],
+            "asan_boxed_array_payload_handed_to_callee_owned_param_no_double_free",
+        );
+    }
 }

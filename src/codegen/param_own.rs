@@ -790,6 +790,28 @@ impl<'ctx> super::Codegen<'ctx> {
         self.array_elem_owns_callee_drop(elem_te) && !self.elem_te_runs_user_drop(elem_te)
     }
 
+    /// B-2026-09-19-40 — the CALL-SITE spelling of
+    /// [`Self::owned_array_param_te`]: does free function `callee` own and free
+    /// the value handed to it at argument position `idx`?
+    ///
+    /// This is the one parameter shape for which "passing a value to a user
+    /// function is not a transfer" — `src/consume_class.rs`'s founding
+    /// assumption — is false, so the consumption classifier takes it as a knob
+    /// rather than growing a dependency on the callee's declared types.
+    ///
+    /// The two-map lookup is [`Self::callee_tuple_param_elem_type_exprs`]'s,
+    /// for its reason: a GENERIC callee is registered in `mono_state.generic_fns`
+    /// and not in `fn_sig.fn_asts`, and a generic enum payload handed to a
+    /// generic callee is exactly the shape this row measured.
+    pub(super) fn free_fn_param_is_callee_owned_array(&self, callee: &str, idx: usize) -> bool {
+        self.fn_sig
+            .fn_asts
+            .get(callee)
+            .or_else(|| self.mono_state.generic_fns.get(callee))
+            .and_then(|f| f.params.get(idx))
+            .is_some_and(|p| self.owned_array_param_te(&p.ty).is_some())
+    }
+
     pub(super) fn make_array_param_callee_owned(
         &mut self,
         param_name: &str,

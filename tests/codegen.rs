@@ -168009,6 +168009,59 @@ fn main() {
             );
         }
     }
+
+    /// B-2026-09-19-40's output twin — the boxed `Array` payload handed to a
+    /// callee-owned param aborted the compiled program (`free(): double free
+    /// detected in tcache 2`, exit 134) while `--interp` printed correctly, so
+    /// the run-vs-build claim is the one worth pinning here; the memory claim
+    /// lives in `tests/memory_sanitizer.rs`.
+    ///
+    /// The mono and read-only rows are controls: the mono spelling retracts
+    /// through the `field_drop_kinds` alias a generic declaration (spelled `T`)
+    /// never reaches, and the read-only arm must KEEP its interior drop, which
+    /// is what an over-broad retraction would break.
+    #[test]
+    fn e2e_boxed_array_payload_handed_to_callee_owned_param() {
+        let src = r#"
+enum G[T] { Y(T), N }
+enum M { M(Array[String, 2]), N }
+
+fn eats(a: Array[String, 2]) -> i64 { return a[0].len(); }
+
+fn hand_gen(g: G[Array[String, 2]]) -> i64 {
+    match g { G.Y(x) => { return eats(x); } G.N => { return 0; } }
+}
+
+fn hand_mono(g: M) -> i64 {
+    match g { M.M(x) => { return eats(x); } M.N => { return 0; } }
+}
+
+fn read_gen(g: G[Array[String, 2]]) -> i64 {
+    match g { G.Y(x) => { return x[0].len(); } G.N => { return 0; } }
+}
+
+fn main() {
+    let mut n = 0;
+    while n < 3 {
+        let a: Array[String, 2] = [f"hand-{n}-padpad", f"snd-{n}-padpad"];
+        let g: G[Array[String, 2]] = G.Y(a);
+        println(f"hg:{hand_gen(g)}");
+        let b: Array[String, 2] = [f"mono-{n}-padpad", f"snd-{n}-padpad"];
+        let m: M = M.M(b);
+        println(f"hm:{hand_mono(m)}");
+        let c: Array[String, 2] = [f"read-{n}-padpad", f"snd-{n}-padpad"];
+        let r: G[Array[String, 2]] = G.Y(c);
+        println(f"rg:{read_gen(r)}");
+        n = n + 1;
+    }
+    println("end");
+}
+"#;
+        assert_eq!(
+            run_program(src).as_deref(),
+            Some("hg:13\nhm:13\nrg:13\nhg:13\nhm:13\nrg:13\nhg:13\nhm:13\nrg:13\nend\n"),
+        );
+    }
 }
 
 #[cfg(feature = "llvm")]
