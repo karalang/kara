@@ -4782,10 +4782,31 @@ impl<'ctx> super::Codegen<'ctx> {
                         // the one the interpreter has used since
                         // B-2026-09-13-5, so ask it rather than standing the
                         // whole payload down.
-                        let escaping = match parts.get(pname.as_str()).and_then(|m| m.get(v)) {
+                        let mut taken = match parts.get(pname.as_str()).and_then(|m| m.get(v)) {
                             Some(s) => s.clone(),
                             None => Self::optres_payload_projected_escaping_elems(f, ast_i, v),
                         };
+                        // B-2026-09-17-38 — a part can also leave the argument
+                        // WITHOUT leaving the frame. `Some(t) => { let x = t.0;
+                        // println("mid") }` moves element 0 into a local that
+                        // lives and dies inside the callee, so nothing escapes
+                        // and both channels above answer the empty set — which
+                        // this gate read as "cannot narrow" and stood the whole
+                        // walk down, leaving element 1's body owed to NOBODY
+                        // (`dR5 mid end` on every compiled surface against the
+                        // interpreter's `dR5 mid dR6 end`).
+                        //
+                        // The caller's question is which parts the callee OWNS,
+                        // not which ones outlive it; where the body runs is the
+                        // difference between the two channels and is no
+                        // business of this walk. So union in
+                        // `fn_consumed_param_payload_part_paths`, the predicate
+                        // B-2026-09-14-7 already consults from the CALLEE end
+                        // to stand that local's own slot up — one answer read
+                        // from both ends of the call, which is what keeps them
+                        // from drifting into a lost body (both stand down) or a
+                        // doubled one (neither does).
+                        taken.extend(Self::optres_payload_consumed_elems(f, ast_i, v));
                         // An empty set means nothing to narrow — either the
                         // element-wise map could not occur empty (it is only
                         // written where the map above is) or the projection
@@ -4793,12 +4814,12 @@ impl<'ctx> super::Codegen<'ctx> {
                         // and for a conditional hand-back. A set covering every
                         // part is the old answer spelled out. Both decline
                         // exactly as before.
-                        if escaping.is_empty()
-                            || self.tuple_payload_arity(&p.ty, v) == Some(escaping.len())
+                        if taken.is_empty()
+                            || self.tuple_payload_arity(&p.ty, v) == Some(taken.len())
                         {
                             return None;
                         }
-                        return Some((p.ty.clone(), escaping));
+                        return Some((p.ty.clone(), taken));
                     }
                     // The argument is not a constructor and so cannot say
                     // which variant it is. Decline, which leaves the status quo
@@ -4919,6 +4940,37 @@ impl<'ctx> super::Codegen<'ctx> {
                 // on all four surfaces; and a deeper tuple path cannot be
                 // expressed by this mask. Either one makes the whole answer
                 // unusable, not merely incomplete.
+                _ => return std::collections::BTreeSet::new(),
+            }
+        }
+        out
+    }
+
+    /// B-2026-09-17-38 — the CONSUMED-IN-FRAME sibling of
+    /// [`Self::optres_payload_projected_escaping_elems`]: which TUPLE elements
+    /// of `variant`'s payload does `f` move into a local of its own frame.
+    ///
+    /// Same shape, same conservatism, different channel:
+    /// [`crate::ast::fn_consumed_param_payload_part_paths`] is the predicate
+    /// B-2026-09-14-7 wrote for the callee end of this exact call, and reading
+    /// it here is what keeps the two ends on one answer. A `Field` path means a
+    /// STRUCT payload, whose surviving field already has a callee-side owner —
+    /// the reason the struct cells of this shape are correct on all four
+    /// surfaces — and a deeper path cannot be expressed by the element mask, so
+    /// either one makes the whole answer unusable rather than merely
+    /// incomplete.
+    fn optres_payload_consumed_elems(
+        f: &crate::ast::Function,
+        arg_index: usize,
+        variant: &str,
+    ) -> std::collections::BTreeSet<usize> {
+        let paths = crate::ast::fn_consumed_param_payload_part_paths(f, arg_index, Some(variant));
+        let mut out = std::collections::BTreeSet::new();
+        for (_, path) in paths {
+            match path.as_slice() {
+                [crate::ast::ParamPart::TupleIndex(i)] => {
+                    out.insert(*i);
+                }
                 _ => return std::collections::BTreeSet::new(),
             }
         }

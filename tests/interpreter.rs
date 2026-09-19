@@ -71113,3 +71113,53 @@ fn main() {
 "#);
     assert_eq!(out, "scalar\n  dH1\n  got:9\nreadscalar\n  in2\n  dH2\n  got:8\nfirst\n  dH4\n  got:3\n  dH3\nsecond\n  dH5\n  got:6\n  dH6\nmiddle\n  dH7\n  dH9\n  got:8\n  dH8\nbothtouched\n  keep11\n  dH11\n  got:10\n  dH10\nnoneout\n  dH12\n  dH13\n  got:25\nresultout\n  dH14\n  got:7\nend\n", "got:\n{out}");
 }
+
+/// B-2026-09-17-38 — the interpreter twin of `tests/codegen.rs`'s
+/// `e2e_optres_payload_sibling_part_keeps_its_body_when_its_peer_is_consumed`.
+/// The same fourteen shapes in one program; the interpreter was the surface
+/// that was already RIGHT on every one of them, so this output is unchanged by
+/// the commit. That is exactly what the twin is here to hold: the fix is
+/// codegen-only, and a later change that "fixes" the interpreter into
+/// agreement with the old compiled answer would lose element 1's body on both
+/// backends at once, where no A/B rule could see it.
+#[test]
+fn test_optres_payload_sibling_part_keeps_its_body_when_its_peer_is_consumed() {
+    let out = run(r#"struct R { id: i64 }
+impl Drop for R { fn drop(mut ref self) { println(f"  dR{self.id}") } }
+struct P { r: R, q: R }
+struct H { n: i64 }
+impl H { fn eat(ref self, o: Option[(R, R)]) { match o { Option.Some(t) => { let x = t.0; println("  mid") } Option.None => { println("  n") } } } }
+
+fn eat(o: Option[(R, R)]) { match o { Option.Some(t) => { let x = t.0; println("  mid") } Option.None => { println("  n") } } }
+fn eat1(o: Option[(R, R)]) { match o { Option.Some(t) => { let x = t.1; println("  mid") } Option.None => { println("  n") } } }
+fn eatr(o: Result[(R, R), i64]) { match o { Result.Ok(t) => { let x = t.0; println("  mid") } Result.Err(e) => { println("  n") } } }
+fn eat3(o: Option[(R, R, R)]) { match o { Option.Some(t) => { let x = t.0; println("  mid") } Option.None => { println("  n") } } }
+fn eatif(o: Option[(R, R)]) { if let Option.Some(t) = o { let x = t.0; println("  mid") } }
+fn later(o: Option[(R, R)]) { match o { Option.Some(t) => { let x = t.0; println("  mid"); println(f"  v{x.id}") } Option.None => { println("  n") } } }
+fn nomove(o: Option[(R, R)]) { match o { Option.Some(t) => { println("  mid") } Option.None => { println("  n") } } }
+fn scalar(o: Option[(R, i64)]) { match o { Option.Some(t) => { let x = t.0; println("  mid") } Option.None => { println("  n") } } }
+fn both(o: Option[(R, R)]) { match o { Option.Some(t) => { let x = t.0; let y = t.1; println("  mid") } Option.None => { println("  n") } } }
+fn hands(o: Option[(R, R)]) -> R { match o { Option.Some(t) => { return t.0 } Option.None => { return R { id: 0 } } } }
+fn named(o: Option[P]) { match o { Option.Some(t) => { let x = t.r; println("  mid") } Option.None => { println("  n") } } }
+fn mk() -> (R, R) { (R { id: 5 }, R { id: 6 }) }
+
+fn main() {
+    println("row");      { eat(Option.Some((R { id: 5 }, R { id: 6 }))) } println("  out")
+    println("second");   { eat1(Option.Some((R { id: 5 }, R { id: 6 }))) } println("  out")
+    println("result");   { eatr(Result.Ok((R { id: 5 }, R { id: 6 }))) } println("  out")
+    println("method");   { let h = H { n: 1 }; h.eat(Option.Some((R { id: 5 }, R { id: 6 }))) } println("  out")
+    println("three");    { eat3(Option.Some((R { id: 5 }, R { id: 6 }, R { id: 7 }))) } println("  out")
+    println("iflet");    { eatif(Option.Some((R { id: 5 }, R { id: 6 }))) } println("  out")
+    println("call-arg"); { eat(Option.Some(mk())) } println("  out")
+    println("later");    { later(Option.Some((R { id: 5 }, R { id: 6 }))) } println("  out")
+    println("ctl-named-arg"); { let a = Option.Some((R { id: 5 }, R { id: 6 })); eat(a) } println("  out")
+    println("ctl-nomove"); { nomove(Option.Some((R { id: 5 }, R { id: 6 }))) } println("  out")
+    println("ctl-scalar"); { scalar(Option.Some((R { id: 5 }, 9))) } println("  out")
+    println("ctl-both");   { both(Option.Some((R { id: 5 }, R { id: 6 }))) } println("  out")
+    println("ctl-escape"); { let g = hands(Option.Some((R { id: 5 }, R { id: 6 }))); println(f"  got{g.id}") } println("  out")
+    println("ctl-struct"); { named(Option.Some(P { r: R { id: 5 }, q: R { id: 6 } })) } println("  out")
+    println("end")
+}
+"#);
+    assert_eq!(out, "row\n  dR5\n  mid\n  dR6\n  out\nsecond\n  dR6\n  mid\n  dR5\n  out\nresult\n  dR5\n  mid\n  dR6\n  out\nmethod\n  dR5\n  mid\n  dR6\n  out\nthree\n  dR5\n  mid\n  dR6\n  dR7\n  out\niflet\n  dR5\n  mid\n  dR6\n  out\ncall-arg\n  dR5\n  mid\n  dR6\n  out\nlater\n  mid\n  v5\n  dR5\n  dR6\n  out\nctl-named-arg\n  dR5\n  mid\n  dR6\n  out\nctl-nomove\n  mid\n  dR5\n  dR6\n  out\nctl-scalar\n  dR5\n  mid\n  out\nctl-both\n  dR5\n  dR6\n  mid\n  out\nctl-escape\n  dR6\n  got5\n  dR5\n  out\nctl-struct\n  dR5\n  mid\n  dR6\n  out\nend\n", "got:\n{out}");
+}

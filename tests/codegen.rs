@@ -38675,8 +38675,12 @@ fn main() {
     /// closed the named-local half, and this fixture is where it showed --
     /// that cell AND the deeper-frame control both moved to agreement in the
     /// same commit, the second of them a cell nobody had noticed was carrying
-    /// the same double. The SIBLING cell is still divergent and is
-    /// B-2026-09-17-38.
+    /// the same double. The SIBLING cell was closed in turn by
+    /// B-2026-09-17-38, whose own fixture is
+    /// `e2e_optres_payload_sibling_part_keeps_its_body_when_its_peer_is_consumed`;
+    /// both cells here now read the same on both halves, so this fixture pins
+    /// nothing divergent except the two `return`-escape controls it names
+    /// above, which belong to other rows.
     ///
     /// THE ESCAPE CONTROL IS THE ONE THAT KEEPS THE RULE HONEST: `let x = t.0;
     /// return x;` hands the part OUT of the frame, so the consumed channel
@@ -38773,12 +38777,15 @@ fn main() {
                 "dR5\nmid\nend\n",
             ),
             (
-                "pinned: a Drop-bearing SIBLING part is lost on every compiled surface",
+                // B-2026-09-17-38 — this cell was pinned DIVERGENT here, the
+                // compiled surfaces printing `dR5 mid end` for element 1's
+                // body owed to nobody. Both halves now read the same.
+                "B-2026-09-17-38: the Drop-bearing SIBLING part keeps its body",
                 format!(
                     "{R}fn eat(o: Option[(R, R)]) {{ match o {{ Some(t) => {{ let x = t.0; println(\"mid\"); }} None => {{ println(\"n\"); }} }} }}\n\
                      fn main() {{ eat(Some((R {{ id: 5 }}, R {{ id: 6 }}))); println(\"end\") }}\n"
                 ),
-                "dR5\nmid\nend\n",
+                "dR5\nmid\ndR6\nend\n",
                 "dR5\nmid\ndR6\nend\n",
             ),
         ] {
@@ -38788,6 +38795,198 @@ fn main() {
                 "[{label}] interp errored: {interp_errs:?}"
             );
             assert_eq!(interp_out.join(""), interp_want, "[{label}] interpreter");
+            if let Some(aot) = run_program(&prog) {
+                assert_eq!(aot, want, "[{label}] AOT");
+            }
+        }
+    }
+
+    /// B-2026-09-17-38 — A `Drop`-BEARING SIBLING PART KEEPS ITS BODY WHEN ITS
+    /// PEER IS CONSUMED BY AN IN-FRAME LOCAL.
+    ///
+    /// `eat(Some((R { id: 5 }, R { id: 6 })))` over
+    /// `fn eat(o: Option[(R, R)]) { match o { Some(t) => { let x = t.0; println("mid"); } .. } }`
+    /// printed `dR5 mid end` on jit / `karac build` / `KARAC_AUTO_PAR=0`
+    /// against the interpreter's `dR5 mid dR6 end`. Element 1 is never moved
+    /// out and nothing else can own it, so exactly one body is owed at the
+    /// payload's death; the compiled backends ran zero.
+    ///
+    /// MECHANISM: the caller's fresh-temp payload-bodies walk is gated by
+    /// `callee_by_value_optres_param_bodies_te`, which narrows an all-or-
+    /// nothing "the callee takes this payload" bit to a set of PARTS before
+    /// standing the walk down. Both of its part channels answer ESCAPE —
+    /// `optres_payload_escape_parts` and the projection sibling B-2026-09-17-30
+    /// added — and `let x = t.0` escapes nothing, so both returned the empty
+    /// set, the gate read that as "cannot narrow", and declined outright. The
+    /// coarse map above it had already flagged the variant as taken (a
+    /// projection whose leaf runs a user `Drop` is not a copy read), so the
+    /// decline was total: no walk at all in the IR, not a walk with element 1
+    /// masked out. Element 1's body was then owed to nobody, the callee's arm
+    /// binding being a param VIEW that owns none of it.
+    ///
+    /// THE REPAIR is to ask the question the caller actually has: which parts
+    /// does the callee OWN, not which ones outlive it. Where the body runs is
+    /// the difference between the two channels and is no business of this
+    /// walk. `fn_consumed_param_payload_part_paths` is the predicate
+    /// B-2026-09-14-7 wrote for the CALLEE end of this exact call — it is what
+    /// stands `x`'s own slot up — so reading it here unions one answer into
+    /// both ends, which is what keeps them from drifting into a lost body
+    /// (both stand down) or a doubled one (neither does).
+    ///
+    /// THE CELLS ARE THE ROW'S OWN "NOT MEASURED" LIST, and every one of them
+    /// was wrong: the `Result` head, the method spelling, three elements, and
+    /// `second` (the reversed cell — the loss is not "the last one"). `iflet`
+    /// and `call-arg` are two more argument spellings that reach the same
+    /// gate. `later-read` is the cell nobody predicted: moving the `let`'s
+    /// read after `mid` pushes element 0's body late by design.md § 866 and
+    /// STILL lost element 1, so the loss does not depend on the consumed
+    /// part's placement.
+    ///
+    /// THE SIX CONTROLS ARE BYTE-IDENTICAL BEFORE AND AFTER, which is what
+    /// says the fix narrows rather than widens. `named` was closed by
+    /// B-2026-09-17-37 and must stay single; `nomove` moves nothing, so the
+    /// gate must never be reached; `scalar-sibling` has no second body to owe;
+    /// `both` consumes the whole payload, the full-arity case the gate already
+    /// declined and must keep declining; `escape` hands element 0 OUT, which
+    /// is a different owner's business; `struct` is the named-payload shape
+    /// whose callee-side machinery already owns the surviving field — the
+    /// reason B-2026-09-17-30 and this row both read correct there.
+    ///
+    /// BODY-ONLY, so no sanitizer leg sees it: the row records `-O0` valgrind
+    /// at `0 bytes in 0 blocks` / `0 errors` on its own cell, before and
+    /// after.
+    ///
+    /// The INTERPRETER twin is `tests/interpreter.rs`'s
+    /// `test_optres_payload_sibling_part_keeps_its_body_when_its_peer_is_consumed`,
+    /// asserting the same programs against the same expectation.
+    #[test]
+    fn e2e_optres_payload_sibling_part_keeps_its_body_when_its_peer_is_consumed() {
+        const R: &str = "struct R { id: i64 }\n\
+             impl Drop for R { fn drop(mut ref self) { println(f\"dR{self.id}\") } }\n";
+        // (label, source, expectation -- both backends, all four surfaces)
+        for (label, prog, want) in [
+            (
+                "the row's cell: Option head, fresh-temp argument",
+                format!(
+                    "{R}fn eat(o: Option[(R, R)]) {{ match o {{ Some(t) => {{ let x = t.0; println(\"mid\"); }} None => {{ println(\"n\"); }} }} }}\n\
+                     fn main() {{ eat(Some((R {{ id: 5 }}, R {{ id: 6 }}))); println(\"end\") }}\n"
+                ),
+                "dR5\nmid\ndR6\nend\n",
+            ),
+            (
+                "second: the consumed part is index 1, so the lost one was index 0",
+                format!(
+                    "{R}fn eat(o: Option[(R, R)]) {{ match o {{ Some(t) => {{ let x = t.1; println(\"mid\"); }} None => {{ println(\"n\"); }} }} }}\n\
+                     fn main() {{ eat(Some((R {{ id: 5 }}, R {{ id: 6 }}))); println(\"end\") }}\n"
+                ),
+                "dR6\nmid\ndR5\nend\n",
+            ),
+            (
+                "Result head",
+                format!(
+                    "{R}fn eat(o: Result[(R, R), i64]) {{ match o {{ Ok(t) => {{ let x = t.0; println(\"mid\"); }} Err(e) => {{ println(\"n\"); }} }} }}\n\
+                     fn main() {{ eat(Result.Ok((R {{ id: 5 }}, R {{ id: 6 }}))); println(\"end\") }}\n"
+                ),
+                "dR5\nmid\ndR6\nend\n",
+            ),
+            (
+                "method spelling",
+                format!(
+                    "{R}struct H {{ n: i64 }}\n\
+                     impl H {{ fn eat(ref self, o: Option[(R, R)]) {{ match o {{ Some(t) => {{ let x = t.0; println(\"mid\"); }} None => {{ println(\"n\"); }} }} }} }}\n\
+                     fn main() {{ let h = H {{ n: 1 }}; h.eat(Some((R {{ id: 5 }}, R {{ id: 6 }}))); println(\"end\") }}\n"
+                ),
+                "dR5\nmid\ndR6\nend\n",
+            ),
+            (
+                "three elements: both survivors keep their bodies",
+                format!(
+                    "{R}fn eat(o: Option[(R, R, R)]) {{ match o {{ Some(t) => {{ let x = t.0; println(\"mid\"); }} None => {{ println(\"n\"); }} }} }}\n\
+                     fn main() {{ eat(Some((R {{ id: 5 }}, R {{ id: 6 }}, R {{ id: 7 }}))); println(\"end\") }}\n"
+                ),
+                "dR5\nmid\ndR6\ndR7\nend\n",
+            ),
+            (
+                "if let spelling",
+                format!(
+                    "{R}fn eat(o: Option[(R, R)]) {{ if let Some(t) = o {{ let x = t.0; println(\"mid\"); }} }}\n\
+                     fn main() {{ eat(Some((R {{ id: 5 }}, R {{ id: 6 }}))); println(\"end\") }}\n"
+                ),
+                "dR5\nmid\ndR6\nend\n",
+            ),
+            (
+                "the payload comes from a CALL rather than a literal tuple",
+                format!(
+                    "{R}fn mk() -> (R, R) {{ (R {{ id: 5 }}, R {{ id: 6 }}) }}\n\
+                     fn eat(o: Option[(R, R)]) {{ match o {{ Some(t) => {{ let x = t.0; println(\"mid\"); }} None => {{ println(\"n\"); }} }} }}\n\
+                     fn main() {{ eat(Some(mk())); println(\"end\") }}\n"
+                ),
+                "dR5\nmid\ndR6\nend\n",
+            ),
+            (
+                "later-read: element 0 is owed LATE and element 1 was still lost",
+                format!(
+                    "{R}fn eat(o: Option[(R, R)]) {{ match o {{ Some(t) => {{ let x = t.0; println(\"mid\"); println(f\"v:{{x.id}}\"); }} None => {{ println(\"n\"); }} }} }}\n\
+                     fn main() {{ eat(Some((R {{ id: 5 }}, R {{ id: 6 }}))); println(\"end\") }}\n"
+                ),
+                "mid\nv:5\ndR5\ndR6\nend\n",
+            ),
+            (
+                "control: a NAMED-local argument stays single (B-2026-09-17-37)",
+                format!(
+                    "{R}fn eat(o: Option[(R, R)]) {{ match o {{ Some(t) => {{ let x = t.0; println(\"mid\"); }} None => {{ println(\"n\"); }} }} }}\n\
+                     fn main() {{ let a = Some((R {{ id: 5 }}, R {{ id: 6 }})); eat(a); println(\"end\") }}\n"
+                ),
+                "dR5\nmid\ndR6\nend\n",
+            ),
+            (
+                "control: the arm moves NOTHING, so the gate is never reached",
+                format!(
+                    "{R}fn eat(o: Option[(R, R)]) {{ match o {{ Some(t) => {{ println(\"mid\"); }} None => {{ println(\"n\"); }} }} }}\n\
+                     fn main() {{ eat(Some((R {{ id: 5 }}, R {{ id: 6 }}))); println(\"end\") }}\n"
+                ),
+                "mid\ndR5\ndR6\nend\n",
+            ),
+            (
+                "control: a SCALAR sibling owes no second body",
+                format!(
+                    "{R}fn eat(o: Option[(R, i64)]) {{ match o {{ Some(t) => {{ let x = t.0; println(\"mid\"); }} None => {{ println(\"n\"); }} }} }}\n\
+                     fn main() {{ eat(Some((R {{ id: 5 }}, 9i64))); println(\"end\") }}\n"
+                ),
+                "dR5\nmid\nend\n",
+            ),
+            (
+                "control: BOTH parts consumed is the full-arity decline",
+                format!(
+                    "{R}fn eat(o: Option[(R, R)]) {{ match o {{ Some(t) => {{ let x = t.0; let y = t.1; println(\"mid\"); }} None => {{ println(\"n\"); }} }} }}\n\
+                     fn main() {{ eat(Some((R {{ id: 5 }}, R {{ id: 6 }}))); println(\"end\") }}\n"
+                ),
+                "dR5\ndR6\nmid\nend\n",
+            ),
+            (
+                "control: `return t.0` ESCAPES, a different owner's business",
+                format!(
+                    "{R}fn eat(o: Option[(R, R)]) -> R {{ match o {{ Some(t) => {{ return t.0; }} None => {{ return R {{ id: 0 }}; }} }} }}\n\
+                     fn main() {{ let g = eat(Some((R {{ id: 5 }}, R {{ id: 6 }}))); println(f\"got:{{g.id}}\"); println(\"end\") }}\n"
+                ),
+                "dR6\ngot:5\ndR5\nend\n",
+            ),
+            (
+                "control: a NAMED-struct payload was correct throughout",
+                format!(
+                    "{R}struct P {{ r: R, q: R }}\n\
+                     fn eat(o: Option[P]) {{ match o {{ Some(t) => {{ let x = t.r; println(\"mid\"); }} None => {{ println(\"n\"); }} }} }}\n\
+                     fn main() {{ eat(Some(P {{ r: R {{ id: 5 }}, q: R {{ id: 6 }} }})); println(\"end\") }}\n"
+                ),
+                "dR5\nmid\ndR6\nend\n",
+            ),
+        ] {
+            let (interp_out, interp_errs, _, _) = karac::run_program_full_checked(&prog);
+            assert!(
+                interp_errs.is_empty(),
+                "[{label}] interp errored: {interp_errs:?}"
+            );
+            assert_eq!(interp_out.join(""), want, "[{label}] interpreter");
             if let Some(aot) = run_program(&prog) {
                 assert_eq!(aot, want, "[{label}] AOT");
             }
