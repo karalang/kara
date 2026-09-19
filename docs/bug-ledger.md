@@ -93,8 +93,8 @@ distinguish "bugs flattening" from "we stopped writing them down."
 | class | total |
 |---|---|
 | run-vs-build | 434 |
-| miscompile | 418 |
-| leak | 374 |
+| miscompile | 419 |
+| leak | 375 |
 | double-free | 245 |
 | missing-feature | 199 |
 | codegen-gap | 180 |
@@ -110,8 +110,8 @@ distinguish "bugs flattening" from "we stopped writing them down."
 
 | surface | total |
 |---|---|
-| codegen | 1853 |
-| interp | 474 |
+| codegen | 1854 |
+| interp | 475 |
 | typecheck | 302 |
 | other | 100 |
 | ownership | 75 |
@@ -197,7 +197,8 @@ _Generated from `bug-ledger.jsonl` by `scripts/bug-curve.py` (2026-05-20 → 202
 | B-2026-09-17-38 | 2026-09-17 | codegen | medium | A `Drop`-BEARING SIBLING PART IS LOST ON EVERY COMPILED SURFACE WHEN ITS PEER IS CONSUMED BY AN IN-FRAME LOCAL -- `fn eat(o: Option[(R, R)]) { match o { Some(t) => { let x = t.0; println("mid"); } .. } }` prints `dR5 mid end` on JIT/AOT/AOT-at-`KARAC_AUTO_PAR=0` against the interpreter's now-correct `dR5 mid dR6 end`, so element 1's owed body runs NOWHERE; the CONSUMED-IN-FRAME twin of B-2026-09-17-30, which reaches the same loss through an ESCAPE | — |
 | B-2026-09-18-1 | 2026-09-18 | codegen | medium | A GENERIC ENUM'S BOXED PAYLOAD STILL LOSES ITS `Drop` BODY WHEN THE ARM *CONSUMES* ITS BINDING -- `match x { Full(r) => { let z = r; .. } }` over a three-`String` payload prints `w:4 end` on JIT/AOT against `--interp`'s `w:4 dW4 end`, while the READ-ONLY twin is correct on all four since B-2026-09-14-22, so the remaining loss is the arm moving its binding into a local and `z` acquiring no body for it | — |
 | B-2026-09-19-6 | 2026-09-19 | other | low | THE SELF-HOST LEXER ORACLE DISCARDS `Token::Error` MESSAGES, SO A DIAGNOSTIC-TEXT DIVERGENCE BETWEEN SEED AND PORT IS INVISIBLE EVEN WITH A CORPUS INPUT FOR IT | — |
-| B-2026-09-19-9 | 2026-09-19 | codegen | medium | THE TUPLE-PAYLOAD SIBLING OF B-2026-09-17-34 STILL RUNS TWO `Drop` BODIES WITH THE SECOND READING A FREED STRING -- `match o { Some(t) => { let x = t.0 } }` over `Option[(R, i64, i64, i64)]` prints `dR5/a mid dR5/d end` on every compiled surface where `dR5/a mid end` is due, with 12 allocs / 12 frees and one valgrind `Invalid read`. No abort, so its parent's memory-balance fix leaves it untouched in both directions; the struct-level mask that row built is field-index keyed and a tuple element needs the tuple walker's own `_skipping` form threaded plus a memory-side skip that does not exist yet. Balanced memory is what hides it -- a leak-only verdict reads this cell as CLEAN | — |
+| B-2026-09-19-11 | 2026-09-19 | codegen | medium | A TUPLE ELEMENT MOVED OUT OF A BOXED `Option`/`Result` PAYLOAD STRANDS ITS UNMOVED SIBLING'S HEAP -- `match o { Some(t) => { let x = t.0 } }` over `Option[(R, R, i64, i64)]` frees one block fewer than it allocates, and the leaked byte count tracks the SIBLING's `String` length (32 bytes when the sibling is long and the moved element short, 1 byte when swapped), so it is element 1's buffer. Printed output is CORRECT and identical on both backends, so only LSan/valgrind can see it | — |
+| B-2026-09-19-12 | 2026-09-19 | interp | medium | THE INTERPRETER RUNS A TUPLE PAYLOAD ELEMENT'S `Drop` BODY TWICE ON THE LOCAL-SCRUTINEE SPELLING -- `let o: Option[(R, i64, i64, i64)] = ...; match o { Some(t) => { let x = t.0 } }` prints `dR5/a mid dR5/a end` under `--interp` where `dR5/a mid end` is due; compiled builds are CORRECT here (11 allocs / 11 frees, 0 invalid ops). This inverts the family's usual direction, so the surface every sibling row uses as its oracle is the wrong one on this spelling | — |
 
 ### Relocated
 
@@ -2692,6 +2693,7 @@ _Generated from `bug-ledger.jsonl` by `scripts/bug-curve.py` (2026-05-20 → 202
 | B-2026-09-19-5 | other | medium | A CRASHED `karac_jit_runner` IS REPORTED AS AN EMPTY-STDOUT ASSERTION FAILURE, DISCARDING THE SIGNAL AND STDERR -- so a JIT-lane double free reads as… | f4dc90f |
 | B-2026-09-19-7 | codegen | high | AN `Array[Vec[D], 1]`-TYPED STRUCT FIELD MOVED FROM A NAMED LOCAL SEGFAULTS AT THE DEFAULT `-O2` -- `karac build` emits a binary that dies with SIGSE… | 3b79cef |
 | B-2026-09-19-8 | codegen+runtime | high | A `u64`-KEYED `Map` / `Set` / `SortedMap` CANNOT FIND A KEY IT JUST INSERTED, ON EVERY LANE AND OPT LEVEL -- the per-key hash fn codegen synthesizes… | 416a038 |
+| B-2026-09-19-9 | codegen | medium | THE TUPLE-PAYLOAD SIBLING OF B-2026-09-17-34 STILL RUNS TWO `Drop` BODIES WITH THE SECOND READING A FREED STRING -- `match o { Some(t) => { let x = t… | 0898818 |
 | B-2026-09-19-10 | other | low | A TRACKED BUT DEAD SECOND COPY OF `consume_class` SAT AT `src/codegen/consume_class.rs` -- 662 lines compiled by nothing, drifted 243 lines from the… | 7f5f89b |
 
 </details>
