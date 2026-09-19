@@ -5257,12 +5257,35 @@ impl<'ctx> super::Codegen<'ctx> {
         // contract frame directly above is: a mono is compiled INLINE inside
         // its caller, so the caller's own set is live across this call.
         //
-        // NOTE the sibling `discarded_branch_spans` has the SAME gap here and
-        // is deliberately left alone — it is a behaviour change this row did
-        // not measure. Filed as its own row rather than fixed in passing.
         let saved_escaping_spans = std::mem::replace(
             &mut self.pattern_state.fn_escaping_branch_spans,
             crate::codegen::borrow_elision::compute_fn_escaping_branch_spans(&func.body),
+        );
+        // B-2026-09-15-30 — the sibling set, which this entry point likewise
+        // never installed. `compile_function` computes BOTH; this one computed
+        // neither until B-2026-09-02-31 added the escaping half above, and the
+        // note that stood here said the discarded half was a behaviour change
+        // that row had not measured. It is measured now, and it was a leak.
+        //
+        // `branch_value_is_owned` answers `!discarded_branch_spans.contains(..)`,
+        // so an empty set says every branch in a monomorph is OWNED and every
+        // discarded one clones a container element that nothing will free. All
+        // four discarding positions leak at `-O0`, 27 B each, with the
+        // monomorphic twin of the same program clean:
+        //
+        //     fn pick[T](v: Vec[String], c: bool, t: T) -> T {
+        //         if c { v[0] } else { v[1] };   // 27 B definitely lost
+        //         return t;
+        //     }
+        //
+        // Saved and restored for the same reason as the escaping half: the
+        // mono is compiled INLINE inside its caller, so overwriting would hand
+        // the caller a set keyed over a foreign body — which reads as EMPTY,
+        // turning the caller's own discarded branches back into the same leak
+        // one frame up. That regression has its own cell.
+        let saved_discarded_spans = std::mem::replace(
+            &mut self.pattern_state.discarded_branch_spans,
+            crate::codegen::borrow_elision::compute_discarded_branch_spans(&func.body),
         );
 
         let mut result = self.compile_block(&func.body)?;
@@ -5399,6 +5422,8 @@ impl<'ctx> super::Codegen<'ctx> {
         // is finished at the returns above (B-2026-08-21-21).
         self.restore_contract_frame(saved_contract_frame);
         self.pattern_state.fn_escaping_branch_spans = saved_escaping_spans;
+        // B-2026-09-15-30 — see the install site.
+        self.pattern_state.discarded_branch_spans = saved_discarded_spans;
         // Leave the frame stack as the caller swapped it in
         // (`compile_generic_call` restores its own); clearing keeps the
         // post-body state tidy and matches `compile_function`'s exit.

@@ -98142,4 +98142,98 @@ fn main() {
             "b91708-drop-payloads",
         );
     }
+
+    /// B-2026-09-15-30 — a discarded branch inside a GENERIC function cloned
+    /// a container element that nothing would free.
+    ///
+    /// `compile_mono_function` never installed `discarded_branch_spans`, the
+    /// span set `compile_function` computes for every ordinary body, so while
+    /// a monomorph was being emitted the set held whatever the last
+    /// non-generic function left there — in practice empty, since the keys are
+    /// spans over a DIFFERENT body and a foreign span cannot match.
+    /// `branch_value_is_owned` answers `!discarded_branch_spans.contains(..)`,
+    /// so an empty set says every branch in a monomorph is OWNED, and the
+    /// arm-tail clone was emitted with no owner to free it.
+    ///
+    /// This is the leak gate; the output twins in `tests/codegen.rs` and
+    /// `tests/interpreter.rs` cannot see it, because the leak changes no
+    /// output at all — the unfixed tree prints the right answer and loses
+    /// 216 B over these shapes.
+    ///
+    /// All four discarding positions `compute_discarded_branch_spans`
+    /// documents are here, since each is recorded by its own rule and a fix
+    /// that installs the set covers all four at once only if the set is
+    /// really the thing that was missing.
+    ///
+    /// The last two cells are the OPPOSITE direction, and they are why the
+    /// set is saved and restored rather than overwritten. A monomorph is
+    /// compiled INLINE inside its caller, so an overwrite hands the caller a
+    /// set keyed over the mono's body — which reads empty, turning the
+    /// caller's own discarded branch back into the same leak one frame up.
+    /// Measured: with the restore line disabled and everything else in place,
+    /// `callerdiscard` alone loses 27 B.
+    #[test]
+    fn asan_discarded_branch_in_a_generic_body_clones_nothing() {
+        const DECLS: &str = "fn mkVec() -> Vec[String] {\n\
+             \x20   let mut v: Vec[String] = Vec.new();\n\
+             \x20   v.push(f\"aaaaaaaaaaaaaaaaaaaaaaaa-0\");\n\
+             \x20   v.push(f\"bbbbbbbbbbbbbbbbbbbbbbbb-1\");\n\
+             \x20   return v;\n\
+             }\n\
+             fn ident[T](t: T) -> T { return t; }\n";
+
+        // The four discarding positions, each inside a generic body.
+        assert_clean_asan_run(
+            &format!(
+                "{DECLS}\
+                 fn stmtD[T](v: Vec[String], c: bool, t: T) -> T {{ if c {{ v[0] }} else {{ v[1] }}; return t; }}\n\
+                 fn loopD[T](v: Vec[String], t: T) -> T {{ for i in 0..2 {{ if i == 0 {{ v[0] }} else {{ v[1] }} }} return t; }}\n\
+                 fn blockD[T](v: Vec[String], c: bool, t: T) -> T {{ {{ if c {{ v[0] }} else {{ v[1] }} }}; return t; }}\n\
+                 fn matchD[T](v: Vec[String], c: i64, t: T) -> T {{ match c {{ 0 => {{ v[0] }} _ => {{ v[1] }} }}; return t; }}\n\
+                 fn main() {{\n\
+                 \x20   println(f\"n{{stmtD(mkVec(), true, 1)}}\");\n\
+                 \x20   println(f\"n{{loopD(mkVec(), 2)}}\");\n\
+                 \x20   println(f\"n{{blockD(mkVec(), true, 3)}}\");\n\
+                 \x20   println(f\"n{{matchD(mkVec(), 0, 4)}}\");\n\
+                 \x20   println(\"end\");\n\
+                 }}\n"
+            ),
+            &["n1", "n2", "n3", "n4", "end"],
+            "b91530-discard-positions",
+        );
+
+        // A generic body whose branch value IS kept, and one generic calling
+        // another. The kept cell is the double-free direction: installing the
+        // set must not suppress a clone that has an owner.
+        assert_clean_asan_run(
+            &format!(
+                "{DECLS}\
+                 fn keptV[T](v: Vec[String], c: bool, t: T) -> T {{ let s = if c {{ v[0] }} else {{ v[1] }}; println(f\"k{{s.len()}}\"); return t; }}\n\
+                 fn innerD[T](v: Vec[String], c: bool, t: T) -> T {{ if c {{ v[0] }} else {{ v[1] }}; return t; }}\n\
+                 fn outerC[T](v: Vec[String], c: bool, t: T) -> T {{ let r = innerD(v, c, t); return r; }}\n\
+                 fn main() {{\n\
+                 \x20   println(f\"n{{keptV(mkVec(), true, 5)}}\");\n\
+                 \x20   println(f\"n{{outerC(mkVec(), true, 6)}}\");\n\
+                 \x20   println(\"end\");\n\
+                 }}\n"
+            ),
+            &["k26", "n5", "n6", "end"],
+            "b91530-kept-and-nested",
+        );
+
+        // The caller's OWN branches, with a generic call compiled inline just
+        // before each. These are what the restore line protects.
+        assert_clean_asan_run(
+            &format!(
+                "{DECLS}\
+                 fn main() {{\n\
+                 \x20   {{ let vc = mkVec(); let c = ident(true); if c {{ vc[0] }} else {{ vc[1] }}; println(f\"d{{vc[0].len()}}\"); }}\n\
+                 \x20   {{ let vk = mkVec(); let k = ident(true); let s = if k {{ vk[0] }} else {{ vk[1] }}; println(f\"k{{s.len()}}\"); println(f\"r{{vk[0].len()}}\"); }}\n\
+                 \x20   println(\"end\");\n\
+                 }}\n"
+            ),
+            &["d26", "k26", "r26", "end"],
+            "b91530-caller-spans",
+        );
+    }
 }

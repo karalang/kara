@@ -70505,3 +70505,52 @@ fn main() {
 "#);
     assert_eq!(out, "inline\n  10\nresult\n  10\nnoarm\n  out\ntwocalls\n  10\n  10\nbody\n  got 6\n  dD6\nbodyboxed\n  got 7\n  dW7\nbodynoarm\n  dW8\n  out\nmonoinline\n  10\nmonobody\n  got 10\n  dD10\nnocall\n  got 11\n  dD11\nend\n", "got:\n{out}");
 }
+
+/// B-2026-09-15-30 — the ORACLE for the codegen twin, and the reason the
+/// compiled half can be trusted to be measuring the right program.
+///
+/// The defect is compiled-only: `compile_mono_function` never installed
+/// `discarded_branch_spans`, so a discarded branch inside a generic body
+/// cloned a container element with no owner to free it. The interpreter has
+/// never had that gap, so this fixture's job is to pin the expectation rather
+/// than to reproduce anything — it printed exactly this before the fix and
+/// exactly this after.
+///
+/// The CODEGEN twin is `tests/codegen.rs`'s
+/// `e2e_discarded_branch_in_a_generic_body_clones_nothing`, byte-identical
+/// source and expectation; the leak itself is gated in
+/// `tests/memory_sanitizer.rs`.
+#[test]
+fn test_discarded_branch_in_a_generic_body_clones_nothing() {
+    let out = run(
+        r#"fn stmtDiscard[T](v: Vec[String], c: bool, t: T) -> T { if c { v[0] } else { v[1] }; return t; }
+fn loopDiscard[T](v: Vec[String], t: T) -> T { for i in 0..2 { if i == 0 { v[0] } else { v[1] } } return t; }
+fn blockDiscard[T](v: Vec[String], c: bool, t: T) -> T { { if c { v[0] } else { v[1] } }; return t; }
+fn matchDiscard[T](v: Vec[String], c: i64, t: T) -> T { match c { 0 => { v[0] } _ => { v[1] } }; return t; }
+fn keptValue[T](v: Vec[String], c: bool, t: T) -> T { let s = if c { v[0] } else { v[1] }; println(f"  kept {s.len()}"); return t; }
+fn innerDiscard[T](v: Vec[String], c: bool, t: T) -> T { if c { v[0] } else { v[1] }; return t; }
+fn outerCalls[T](v: Vec[String], c: bool, t: T) -> T { let r = innerDiscard(v, c, t); return r; }
+fn ident[T](t: T) -> T { return t; }
+fn mkVec() -> Vec[String] {
+    let mut v: Vec[String] = Vec.new();
+    v.push(f"aaaaaaaaaaaaaaaaaaaaaaaa-0");
+    v.push(f"bbbbbbbbbbbbbbbbbbbbbbbb-1");
+    return v;
+}
+
+fn main() {
+    println("stmt");   println(f"  {stmtDiscard(mkVec(), true, 1)}");
+    println("loop");   println(f"  {loopDiscard(mkVec(), 2)}");
+    println("block");  println(f"  {blockDiscard(mkVec(), true, 3)}");
+    println("match");  println(f"  {matchDiscard(mkVec(), 0, 4)}");
+    println("kept");   println(f"  {keptValue(mkVec(), true, 5)}");
+    println("nested"); println(f"  {outerCalls(mkVec(), true, 6)}");
+    { let vc = mkVec(); let c = ident(true); if c { vc[0] } else { vc[1] }; println("callerdiscard"); println(f"  {vc[0].len()}") }
+    { let vk = mkVec(); let ck = ident(true); let s = if ck { vk[0] } else { vk[1] }; println("callerkept"); println(f"  {s.len()}"); println(f"  {vk[0].len()}") }
+    println("twoinst"); println(f"  {stmtDiscard(mkVec(), true, 7)}"); println(f"  {stmtDiscard(mkVec(), false, 8)}");
+    println("end")
+}
+"#,
+    );
+    assert_eq!(out, "stmt\n  1\nloop\n  2\nblock\n  3\nmatch\n  4\nkept\n  kept 26\n  5\nnested\n  6\ncallerdiscard\n  26\ncallerkept\n  26\n  26\ntwoinst\n  7\n  8\nend\n", "got:\n{out}");
+}

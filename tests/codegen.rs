@@ -20136,6 +20136,64 @@ fn main() {
         assert_eq!(out, "inline\n  10\nresult\n  10\nnoarm\n  out\ntwocalls\n  10\n  10\nbody\n  got 6\n  dD6\nbodyboxed\n  got 7\n  dW7\nbodynoarm\n  dW8\n  out\nmonoinline\n  10\nmonobody\n  got 10\n  dD10\nnocall\n  got 11\n  dD11\nend\n");
     }
 
+    /// B-2026-09-15-30 — the OUTPUT half of a leak, which is a deliberate
+    /// choice rather than an oversight.
+    ///
+    /// `compile_mono_function` never installed `discarded_branch_spans`, so
+    /// every branch inside a generic instantiation read as NON-discarded and
+    /// its arm-tail clone was emitted with no owner. That loses 216 B over the
+    /// shapes below and changes NO output, so the gate that actually catches
+    /// it is `tests/memory_sanitizer.rs`'s
+    /// `asan_discarded_branch_in_a_generic_body_clones_nothing`.
+    ///
+    /// What this fixture holds is the other direction. Per
+    /// `compute_discarded_branch_spans`' own doc, "missing a position here
+    /// costs a leak; wrongly INCLUDING one costs a double free" — so
+    /// installing the set is a switch that can go wrong loudly, and `kept`,
+    /// `callerkept` and `twoinst` are the cells that would say so. They print
+    /// a length read back out of the container AFTER the branch, which is
+    /// exactly what a suppressed-but-needed clone destroys.
+    ///
+    /// The INTERPRETER twin is `tests/interpreter.rs`'s
+    /// `test_discarded_branch_in_a_generic_body_clones_nothing`, byte-identical
+    /// source and expectation.
+    #[test]
+    fn e2e_discarded_branch_in_a_generic_body_clones_nothing() {
+        let Some(out) = run_program(
+            r#"fn stmtDiscard[T](v: Vec[String], c: bool, t: T) -> T { if c { v[0] } else { v[1] }; return t; }
+fn loopDiscard[T](v: Vec[String], t: T) -> T { for i in 0..2 { if i == 0 { v[0] } else { v[1] } } return t; }
+fn blockDiscard[T](v: Vec[String], c: bool, t: T) -> T { { if c { v[0] } else { v[1] } }; return t; }
+fn matchDiscard[T](v: Vec[String], c: i64, t: T) -> T { match c { 0 => { v[0] } _ => { v[1] } }; return t; }
+fn keptValue[T](v: Vec[String], c: bool, t: T) -> T { let s = if c { v[0] } else { v[1] }; println(f"  kept {s.len()}"); return t; }
+fn innerDiscard[T](v: Vec[String], c: bool, t: T) -> T { if c { v[0] } else { v[1] }; return t; }
+fn outerCalls[T](v: Vec[String], c: bool, t: T) -> T { let r = innerDiscard(v, c, t); return r; }
+fn ident[T](t: T) -> T { return t; }
+fn mkVec() -> Vec[String] {
+    let mut v: Vec[String] = Vec.new();
+    v.push(f"aaaaaaaaaaaaaaaaaaaaaaaa-0");
+    v.push(f"bbbbbbbbbbbbbbbbbbbbbbbb-1");
+    return v;
+}
+
+fn main() {
+    println("stmt");   println(f"  {stmtDiscard(mkVec(), true, 1)}");
+    println("loop");   println(f"  {loopDiscard(mkVec(), 2)}");
+    println("block");  println(f"  {blockDiscard(mkVec(), true, 3)}");
+    println("match");  println(f"  {matchDiscard(mkVec(), 0, 4)}");
+    println("kept");   println(f"  {keptValue(mkVec(), true, 5)}");
+    println("nested"); println(f"  {outerCalls(mkVec(), true, 6)}");
+    { let vc = mkVec(); let c = ident(true); if c { vc[0] } else { vc[1] }; println("callerdiscard"); println(f"  {vc[0].len()}") }
+    { let vk = mkVec(); let ck = ident(true); let s = if ck { vk[0] } else { vk[1] }; println("callerkept"); println(f"  {s.len()}"); println(f"  {vk[0].len()}") }
+    println("twoinst"); println(f"  {stmtDiscard(mkVec(), true, 7)}"); println(f"  {stmtDiscard(mkVec(), false, 8)}");
+    println("end")
+}
+"#,
+        ) else {
+            return;
+        };
+        assert_eq!(out, "stmt\n  1\nloop\n  2\nblock\n  3\nmatch\n  4\nkept\n  kept 26\n  5\nnested\n  6\ncallerdiscard\n  26\ncallerkept\n  26\n  26\ntwoinst\n  7\n  8\nend\n");
+    }
+
     #[test]
     fn e2e_declared_vec_enum_payload_runs_element_drop_bodies() {
         let Some(out) = run_program(
