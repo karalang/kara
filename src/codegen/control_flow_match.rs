@@ -8399,6 +8399,27 @@ impl<'ctx> super::Codegen<'ctx> {
             // literal (int / bool / char / float) really is one word.
             // B-2026-08-20-11.
             PatternKind::Literal(LiteralPattern::String(_)) => 3,
+            // B-2026-09-19-30 — a WILDCARD leaf spans its type's real width,
+            // not the `_ => 1` default. The sum this function returns is what
+            // the debox predicate in `reconstruct_payload_value` tests
+            // (`want > field_words.len()`), so one under-counted leaf is
+            // enough to make a BOXED payload look inline: the arm then rebuilt
+            // the tuple out of the envelope words and handed the named sibling
+            // the box pointer (or a zero past the end of the area) as its
+            // value. `Some((_, b)) => b` over `Option[(H, i64)]` returned 0
+            // where `Some((a, b)) => b` returned 9 — the same program, one
+            // leaf renamed. The type comes from the typechecker's
+            // `bind_pattern_types`, which has it at the `_` and used to drop
+            // it; absent (an older tree's table, or a wildcard the walk never
+            // reached) this still falls back to 1, so it can only ever widen.
+            PatternKind::Wildcard => {
+                let key = (pat.span.offset, pat.span.length);
+                self.pattern_state
+                    .pattern_binding_inner_types
+                    .get(&key)
+                    .map(|te| Self::llvm_type_word_count(self.llvm_type_for_type_expr(te)).max(1))
+                    .unwrap_or(1)
+            }
             // Nested enum-variant sub-pattern (`Option.Some(x)` as the
             // payload of another variant — `Option.Some(Option.Some(x))`,
             // `Wrap.W(Option.Some(x))`): the payload's natural width is the
@@ -8598,6 +8619,20 @@ impl<'ctx> super::Codegen<'ctx> {
             // debox load must read the `{ ptr, len, cap }` vec struct, not the
             // i64 default. B-2026-08-20-11.
             PatternKind::Literal(LiteralPattern::String(_)) => self.vec_struct_type().into(),
+            // B-2026-09-19-30 — the load-shape twin of the word-count arm. The
+            // Tuple arm below builds the debox load's struct type element by
+            // element, so a wildcard left at the i64 default would load a
+            // narrower tuple than was stored and shift every element after it.
+            // Widening the count without widening the type would trade a wrong
+            // value for a misaligned one, so the two arms move together.
+            PatternKind::Wildcard => {
+                let key = (pat.span.offset, pat.span.length);
+                self.pattern_state
+                    .pattern_binding_inner_types
+                    .get(&key)
+                    .map(|te| self.llvm_type_for_type_expr(te))
+                    .unwrap_or_else(|| self.context.i64_type().into())
+            }
             PatternKind::Tuple(elems) => {
                 let elem_tys: Vec<BasicTypeEnum<'ctx>> = elems
                     .iter()
@@ -8809,6 +8844,22 @@ impl<'ctx> super::Codegen<'ctx> {
             } else {
                 field_words
             };
+        // B-2026-09-19-30 — a WILDCARD leaf binds nothing, but its slot in the
+        // rebuilt tuple still has to CARRY its type, because the elements
+        // after it are placed by offset. Now that the arms above size and type
+        // a wildcard from the leaf type the typechecker records, the word
+        // count is right and the slot type is right; without this arm the
+        // recursion fell through to the width-keyed tail below, which read the
+        // four words of a `struct H { id: i64, s: String }` as the 3-word
+        // `{ ptr, len, cap }` shape and emitted an `insertvalue { ptr, i64,
+        // i64 } into { i64, { ptr, i64, i64 } }` that failed module
+        // verification. That tail keys its shapes off `pattern_binding_types`,
+        // which a `_` deliberately has no entry in, so it cannot answer this;
+        // the width-general reassembler can, being handed the type directly.
+        if matches!(sub_pat.kind, PatternKind::Wildcard) {
+            let want_ty = self.pattern_payload_llvm_type(sub_pat);
+            return self.rebuild_value_from_payload_word_slice(want_ty, field_words);
+        }
         // Tuple sub-pattern: walk per-element, reconstruct each into its
         // own LLVM aggregate (or single word for primitive elements),
         // then pack into a tuple struct value. The element word counts

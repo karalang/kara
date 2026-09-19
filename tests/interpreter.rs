@@ -70884,6 +70884,85 @@ fn main() {
     assert_eq!(out, "scalarout\n  dR5\n  got:9\ndropout\n  dR7\n  got:6\n  dR6\nresultout\n  dR8\n  got:9\nwildkept\n  dR10\n  got:9\nmiddleout\n  dR11\n  dR13\n  got:12\n  dR12\nbothout\n  got:14\n  dR14\n  dR15\nreadonly\n  dR16\n  dR17\n  got:33\nwholeout\n  got:9\n  dR18\ncondfalse\n  got:20\n  dR20\ngenout\n  dR21\n  got:9\nmethod\n  dR22\n  got:9\nunused\n  dR24\n  dR23\n  x\nend\n", "got:\n{out}");
 }
 
+/// B-2026-09-19-30 — a WILDCARD leaf in a heap-BOXED destructured payload made
+/// its NAMED siblings read from the wrong offset, returning a silently wrong
+/// value on every compiled backend.
+///
+/// The row that filed this read the symptom as "the arm returns the `None`
+/// arm's value", because the cell's `None` arm returned literal 0 and the bug
+/// returned 0. It is not: with the `None` arm changed to return 77 the wildcard
+/// spelling still returns 0, and in the FIRST position (`Some((b, _))` over
+/// `Option[(i64, H)]`) it returns a pointer-shaped integer. The arm is selected
+/// correctly — the payload's `Drop` body runs — and only the binding is wrong.
+///
+/// The cause is that the payload's width was computed from the PATTERN.
+/// `pattern_payload_word_count` sizes each leaf from the type the typechecker
+/// recorded for it, and a `_` binds nothing so nothing was recorded: it fell to
+/// the 1-word default. That sum is what the debox predicate in
+/// `reconstruct_payload_value` tests (`want > field_words.len()`), so one
+/// under-counted leaf made a boxed payload look inline, and the arm rebuilt the
+/// tuple out of the ENVELOPE words instead of loading through the box. The
+/// envelope's word 0 is the box POINTER, which is where the pointer-shaped
+/// integer came from; word 1 is past the end of the area, which is the zero.
+///
+/// The fix records the wildcard's type in `check_pattern_against`, which is
+/// handed it and used to walk past. The IR diff is the whole defect in two
+/// lines: the named spelling emits `inttoptr` + `load` of the real tuple, the
+/// wildcard spelling emitted `insertvalue { i64, i64 }` straight from the
+/// envelope words.
+///
+/// `named` is the control that was always correct, `allwild` the one that binds
+/// nothing and so never read an offset, and `narrow` the payload that rides
+/// INLINE (`struct R { id: i64 }`, under the three-word area) and therefore
+/// never took the boxed channel at all. `strwild` is a `String` leaf with no
+/// user struct in the payload, `twoof3` and `twowild` are the arities where the
+/// wildcard is not a lone prefix, and `okside` / `errside` are the two `Result`
+/// channels — all measured wrong before the fix, all agreeing after.
+///
+/// The `if let` spelling is deliberately ABSENT: it loses the payload's `Drop`
+/// body on the compiled backends, which reproduces with this fix reverted and
+/// is a separate defect with its own row. Its VALUE is fixed here like the
+/// rest; including the cell would pin that missing body instead.
+///
+/// Byte-identical to the codegen twin, which is the assertion, and identical on
+/// `--interp`, the JIT, `-O0` and `-O2`; valgrind reports no errors and no
+/// leaks on the compiled program.
+#[test]
+fn test_wildcard_leaf_in_a_boxed_payload_binds_its_siblings_at_the_right_offset() {
+    let out = run(r#"struct H { id: i64, s: String }
+impl Drop for H { fn drop(mut ref self) { println(f"  dH{self.id}") } }
+struct R { id: i64 }
+
+fn second(o: Option[(H, i64)]) -> i64 { match o { Option.Some((_, b)) => { return b; } Option.None => { return 77; } } }
+fn first(o: Option[(i64, H)]) -> i64 { match o { Option.Some((b, _)) => { return b; } Option.None => { return 77; } } }
+fn named(o: Option[(H, i64)]) -> i64 { match o { Option.Some((a, b)) => { return b; } Option.None => { return 77; } } }
+fn twoOfThree(o: Option[(H, i64, i64)]) -> i64 { match o { Option.Some((_, b, c)) => { return b + c; } Option.None => { return 77; } } }
+fn allWild(o: Option[(H, i64)]) -> i64 { match o { Option.Some((_, _)) => { return 55; } Option.None => { return 77; } } }
+fn twoWild(o: Option[(H, H, i64)]) -> i64 { match o { Option.Some((_, _, c)) => { return c; } Option.None => { return 77; } } }
+fn strWild(o: Option[(String, i64)]) -> i64 { match o { Option.Some((_, b)) => { return b; } Option.None => { return 77; } } }
+fn narrow(o: Option[(R, i64)]) -> i64 { match o { Option.Some((_, b)) => { return b; } Option.None => { return 77; } } }
+fn okSide(r: Result[(H, i64), i64]) -> i64 { match r { Result.Ok((_, b)) => { return b; } Result.Err(e) => { return e; } } }
+fn errSide(r: Result[i64, (H, i64)]) -> i64 { match r { Result.Ok(v) => { return v; } Result.Err((_, b)) => { return b; } } }
+
+fn main() {
+    println("second");  { let g = second(Option.Some((H { id: 1, s: "aaaaaaaaaaaa" }, 9))); println(f"  n{g}") }
+    println("second2"); { let g = second(Option.Some((H { id: 2, s: "aaaaaaaaaaaa" }, 4242))); println(f"  n{g}") }
+    println("first");   { let g = first(Option.Some((9, H { id: 3, s: "aaaaaaaaaaaa" }))); println(f"  n{g}") }
+    println("named");   { let g = named(Option.Some((H { id: 4, s: "aaaaaaaaaaaa" }, 9))); println(f"  n{g}") }
+    println("twoof3");  { let g = twoOfThree(Option.Some((H { id: 5, s: "aaaaaaaaaaaa" }, 9, 100))); println(f"  n{g}") }
+    println("allwild"); { let g = allWild(Option.Some((H { id: 6, s: "aaaaaaaaaaaa" }, 9))); println(f"  n{g}") }
+    println("twowild"); { let g = twoWild(Option.Some((H { id: 7, s: "aaaaaaaaaaaa" }, H { id: 8, s: "aaaaaaaaaaaa" }, 66))); println(f"  n{g}") }
+    println("strwild"); { let g = strWild(Option.Some(("wwwwwwwwwwwwww", 88))); println(f"  n{g}") }
+    println("narrow");  { let g = narrow(Option.Some((R { id: 9 }, 44))); println(f"  n{g}") }
+    println("okside");  { let g = okSide(Result.Ok((H { id: 10, s: "aaaaaaaaaaaa" }, 11))); println(f"  n{g}") }
+    println("errside"); { let g = errSide(Result.Err((H { id: 11, s: "aaaaaaaaaaaa" }, 22))); println(f"  n{g}") }
+    println("nonearm"); { let g = second(Option.None); println(f"  n{g}") }
+    println("end")
+}
+"#);
+    assert_eq!(out, "second\n  dH1\n  n9\nsecond2\n  dH2\n  n4242\nfirst\n  dH3\n  n9\nnamed\n  dH4\n  n9\ntwoof3\n  dH5\n  n109\nallwild\n  dH6\n  n55\ntwowild\n  dH7\n  dH8\n  n66\nstrwild\n  n88\nnarrow\n  n44\nokside\n  dH10\n  n11\nerrside\n  dH11\n  n22\nnonearm\n  n77\nend\n", "got:\n{out}");
+}
+
 /// B-2026-09-14-18 (BOXED leg) — the same defect on the OTHER channel, where
 /// the payload is too wide to sit inline and the bodies belong to the CALLEE.
 ///
@@ -70907,10 +70986,14 @@ fn main() {
 /// pins the three-element shape, where the mask has to name index 1 and not a
 /// contiguous prefix. `resultout` is the `Result.Ok` spelling.
 ///
-/// The WILDCARD spelling (`Some((_, b)) => return b`) is deliberately ABSENT:
-/// it returns the `None` arm's value on the compiled backends — a wrong value,
-/// not a missing body — which reproduces on a clean checkout and is filed as
-/// its own row.
+/// The WILDCARD spelling (`Some((_, b)) => return b`) is deliberately ABSENT,
+/// and stays so now that it is fixed: it was a wrong VALUE rather than a
+/// missing body — the wildcard leaf under-counted the payload's width, so the
+/// arm read its named siblings from the envelope instead of through the box —
+/// and it has its own fixture in
+/// `test_wildcard_leaf_in_a_boxed_payload_binds_its_siblings_at_the_right_offset`
+/// (B-2026-09-19-30). Keeping the two apart is what lets each keep measuring
+/// one thing.
 ///
 /// The CODEGEN twin is `tests/codegen.rs`'s
 /// `e2e_boxed_destructured_payload_keeps_the_unmoved_parts_body`,

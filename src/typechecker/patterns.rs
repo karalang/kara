@@ -912,7 +912,39 @@ impl<'a> super::TypeChecker<'a> {
         mode: ScrutineeMode,
     ) {
         match &pattern.kind {
-            PatternKind::Wildcard => {}
+            // B-2026-09-19-30 — a WILDCARD leaf's type, recorded SOLELY so
+            // codegen can SIZE it. `_` binds nothing, so this arm walked past
+            // with `expected` in hand and recorded nothing, and codegen's
+            // `pattern_payload_word_count` fell through to its 1-word default.
+            // That width is what the debox predicate
+            // (`want > field_words.len()` in `reconstruct_payload_value`)
+            // tests, so one under-counted leaf made a heap-BOXED payload look
+            // inline: the arm rebuilt the tuple out of the ENVELOPE words
+            // instead of loading through the box, and handed the named sibling
+            // the box pointer — or a zero from past the end of the payload
+            // area — as its value. `Some((_, b)) => b` over `Option[(H, i64)]`
+            // returned 0 where `Some((a, b)) => b` returned 9, the same
+            // program with one leaf renamed, and nothing in the output said so.
+            //
+            // Recorded here rather than in `bind_pattern_types`, whose
+            // `TupleVariant` arm recurses with `Type::Error` and so never
+            // learns a payload leaf's type. Recorded into
+            // `pattern_binding_inner_types` rather than a map of its own
+            // because a wildcard's span cannot collide with a binding's, every
+            // consumer looks that table up BY the span of the pattern it is
+            // asking about, and the monomorph swap already carries it — so a
+            // generic payload's wildcard is substituted along with everything
+            // else for free. `pattern_binding_types` is deliberately NOT
+            // written: a `_` is not a binding, and an entry there would make
+            // codegen's Binding arms treat it as one.
+            PatternKind::Wildcard => {
+                if !matches!(expected, Type::Error) {
+                    self.pattern_binding_inner_types.insert(
+                        SpanKey::from_span(&pattern.span),
+                        Self::type_to_type_expr(expected),
+                    );
+                }
+            }
             PatternKind::Binding(name) => {
                 // Check if this binding name is actually an enum variant
                 // (unit variants are parsed as Binding since the parser can't distinguish)
