@@ -93,12 +93,12 @@ distinguish "bugs flattening" from "we stopped writing them down."
 | class | total |
 |---|---|
 | run-vs-build | 439 |
-| miscompile | 423 |
+| miscompile | 424 |
 | leak | 376 |
 | double-free | 248 |
 | missing-feature | 202 |
 | codegen-gap | 181 |
-| other | 137 |
+| other | 138 |
 | diagnostics | 127 |
 | perf | 115 |
 | false-positive | 108 |
@@ -110,8 +110,8 @@ distinguish "bugs flattening" from "we stopped writing them down."
 
 | surface | total |
 |---|---|
-| codegen | 1863 |
-| interp | 479 |
+| codegen | 1865 |
+| interp | 480 |
 | typecheck | 302 |
 | other | 101 |
 | ownership | 75 |
@@ -135,7 +135,6 @@ _Generated from `bug-ledger.jsonl` by `scripts/bug-curve.py` (2026-05-20 → 202
 | B-2026-09-13-7 | 2026-09-13 | codegen+interp | medium | AN ENUM VARIANT'S `Vec[T]` PAYLOAD RUNS NO ELEMENT `Drop` BODY ON ANY BACKEND AND ANY ENUM HEAD, AND `Slot[Array[R, N]]` RUNS THEM ON THE FIVE COMPILED SURFACES ONLY -- the two cells B-2026-09-12-24 measured and did not fix; the shared bodies core has a tuple arm and an array arm and no `Vec` arm, and the interpreter has no instantiation chain for a user generic enum the way it has one for the seeded pair | — |
 | B-2026-09-14-6 | 2026-09-14 | codegen+interp | medium | AN `Option` PAYLOAD SUB-VALUE MOVED OUT RUNS ITS `Drop` BODY TWICE ON ALL THREE BACKENDS in two spellings -- a NAMED-LOCAL argument, and a payload whose field is heap-carrying -- so the A/B parity rule sees nothing and the duplicate is invisible to every gate | — |
 | B-2026-09-14-10 | 2026-09-14 | codegen+interp | low | A BORROW PROJECTION COPIES AS A METHOD ARGUMENT BUT NOT AS A FREE-FUNCTION ONE -- `v.push(w.r)` runs the field's `Drop` body TWICE and `consume(w.r)` runs it ONCE, same syntactic position, same borrow, on all four surfaces alike | — |
-| B-2026-09-14-18 | 2026-09-14 | codegen+interp | medium | AN UNMOVED PART OF AN OWNED `Option` PAYLOAD LOSES ITS `Drop` BODY ON ALL FOUR SURFACES when the arm DESTRUCTURES the payload and returns a different part -- `Some((a, b)) => { return b; }` over `Option[(R, i64)]` prints `got:9 end` everywhere against the due `dR5 got:9 end`, and the two-Drop-element cell loses `dR6` everywhere, so the A/B parity rule sees nothing; this is the cell B-2026-09-13-5 recorded as 'correct on all four surfaces', which its `(R, i64)` sibling could not show | — |
 | B-2026-09-14-28 | 2026-09-14 | codegen | medium | `vertical`'s +85% SSO REGRESSION IS NOT THE DE-INLINE PROBE AND NOT `prefix_string` -- both were ruled out by measurement (c1adb9c removed the probe: +84.1% -> +85.4%; an exact mirror of `prefix_string` runs 9-15% FASTER under SSO), so the worst regression in the corpus is now UNATTRIBUTED. `shortest_distance_iii` (+36%) and `shortest_distance` (+61%) are the same shape. Reachable only at KARAC_SSO=1, which is off by default. | — |
 | B-2026-09-15-17 | 2026-09-15 | codegen | low | AN `Array[R, N]` WHOSE ELEMENT RUNS A USER `Drop` BODY, MOVED INTO AN ENUM VARIANT CONSTRUCTOR, RUNS THOSE BODIES BEFORE THE CONSUMING CALL ON EVERY COMPILED BACKEND and after it under `--interp` -- the identical program with a plain function call in place of the constructor is correctly ordered on both, which puts the divergence at the constructor rather than at the array | — |
 | B-2026-09-15-18 | 2026-09-15 | codegen | medium | A GENERIC MULTI-FIELD VARIANT STILL STRANDS ITS BOXED `Array[T, N]` PAYLOAD after B-2026-09-15-15 -- `G2.Y(a, 5)` over `enum G2[T] { Y(T, i64), N }` at `T = Array[String, 2]` loses 48 B + 44 B indirect at `-O0`, byte-identical before and after that fix, because an ERASED `T` cannot be classified at declaration and the monomorphic path that would catch it declines multi-field variants of its own | — |
@@ -198,6 +197,8 @@ _Generated from `bug-ledger.jsonl` by `scripts/bug-curve.py` (2026-05-20 → 202
 | B-2026-09-19-27 | 2026-09-19 | parser | low | THE SELF-HOSTED PARSER DOES NOT MODEL `IntegerOutOfRange` EITHER, so the token the port lexer can now produce has no consumer -- the seed folds it in six places across `exprs.rs` and `patterns.rs` (the unary-minus `i64::MIN` fold, the unsigned-suffix wrap that buys a precise range diagnostic, and both again for literal and range patterns) and `selfhost/src/parser.kara` has no arm for it at all | — |
 | B-2026-09-19-28 | 2026-09-19 | lexer | low | THE `(u64::MAX, i128::MAX]` BAND IS THE ONE THE PORT LEXER STILL CANNOT REACH -- `100000000000000000000i128` is a plain `Integer` in the seed and an `Error` in the port, because `Token.Integer` carries an i64; B-2026-09-19-26 ported the other three bands and named this one in its own close without a tracker | — |
 | B-2026-09-19-29 | 2026-09-19 | interp | medium | TWO HOLDERS BUILT FROM ONE `shared enum` BINDING RUN ITS PAYLOAD'S `Drop` BODY TWICE UNDER `--interp` AND ONCE ON EVERY COMPILED BACKEND -- `struct Hs { m: SMono }` built twice from one `s` prints `A d2:9 d2:9 ok` against `A ok d2:9`, in every one of the five holder positions, because an alias of a shared enum is a deep VALUE CLONE in this backend and there is no refcount to consult | — |
+| B-2026-09-19-30 | 2026-09-19 | codegen | high | A WILDCARD LEAF IN A DESTRUCTURED **BOXED** `Option` PAYLOAD MAKES THE ARM RETURN THE `None` ARM'S VALUE ON EVERY COMPILED BACKEND -- `fn wildOut(o: Option[(H, i64)]) -> i64 { match o { Some((_, b)) => { return b; } None => { return 0; } } }` with `struct H { id: i64, s: String }` prints `n0` against `--interp`'s `n9`, i.e. a WRONG VALUE silently returned, not a misplaced `Drop` body; naming the leaf (`Some((a, b))`) is correct on every surface and a NARROWER payload (`struct R { id: i64 }`, which rides inline rather than boxing) is correct too, so the trigger is a wildcard leaf on the boxed payload channel | — |
+| B-2026-09-19-31 | 2026-09-19 | codegen+interp | medium | A CONDITIONALLY HANDED-BACK PART OF AN OWNED `Option` PAYLOAD LOSES THE PART THAT DIED, ON ALL FOUR SURFACES -- `fn eat(o: Option[(R, R)], k: bool) -> R { match o { Some((a, b)) => { if k { return a; } return b; } .. } }` called with `k = false` prints `got:6 dR6 end` against the due `dR5 got:6 dR6 end` everywhere, so the A/B parity rule sees nothing; the UNCONDITIONAL spelling of the same arm is correct since B-2026-09-14-18, which is what leaves this shape behind as the family's last all-surface loss | — |
 
 ### Relocated
 
@@ -2623,6 +2624,7 @@ _Generated from `bug-ledger.jsonl` by `scripts/bug-curve.py` (2026-05-20 → 202
 | B-2026-09-14-15 | interp+codegen | medium | A NESTED FIXED `Array` (`Array[Array[D, N], M]`) RUNS ITS INNERMOST ELEMENTS' `Drop` BODIES UNDER `--interp` AND ON NEITHER COMPILED BACKEND -- no en… | 338a535 |
 | B-2026-09-14-16 | codegen+interp | low | PROJECTING ONE FIELD OFF A FRESH TEMP DROPS THE TEMP'S OTHER `Drop` BODIES ON EVERY SURFACE -- `let w = (mkw(7).r, 1);` runs the moved leaf's body bu… | 258bb28 |
 | B-2026-09-14-17 | codegen | high | A MATCH ARM THAT CONSUMES A BOXED `Array` PAYLOAD FREES ITS ELEMENT BUFFERS TWICE AND ABORTS THE PROGRAM -- `match e { E.A(a) => take(a) }` over `enu… | 1a5d7f9 |
+| B-2026-09-14-18 | codegen+interp | medium | AN UNMOVED PART OF AN OWNED `Option` PAYLOAD LOSES ITS `Drop` BODY ON ALL FOUR SURFACES when the arm DESTRUCTURES the payload and returns a different… | b119925 |
 | B-2026-09-14-19 | codegen | medium | WHERE THE COMPILED BACKENDS KEEP AN OWNED `Option` PAYLOAD'S `Drop` BODY THEY RUN IT AT THE CALLER'S SCOPE EXIT, NOT AT THE PAYLOAD'S DEATH -- `fn ea… | f0d31a0 |
 | B-2026-09-14-20 | codegen | medium | SSO's PROMOTE-ON-MUTATION COSTS 32-40% ON CHAR-BY-CHAR STRING BUILDING, and it is the whole of the remaining corpus regression -- `sso_deinline_in_pl… | c1adb9c |
 | B-2026-09-14-21 | codegen | medium | A DISCARDED ENUM TEMP TAKES THE BY-TRANSFER STAND-DOWN THAT ONLY AN ARGUMENT SHOULD -- `Ex.mk(i);` and its `if`/`match`-tail spellings over an enum w… | 10008a1 |
