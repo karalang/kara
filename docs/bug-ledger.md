@@ -92,14 +92,14 @@ distinguish "bugs flattening" from "we stopped writing them down."
 
 | class | total |
 |---|---|
-| run-vs-build | 433 |
+| run-vs-build | 434 |
 | miscompile | 417 |
 | leak | 374 |
-| double-free | 244 |
+| double-free | 245 |
 | missing-feature | 199 |
 | codegen-gap | 180 |
-| other | 135 |
-| diagnostics | 126 |
+| other | 136 |
+| diagnostics | 127 |
 | perf | 115 |
 | false-positive | 108 |
 | soundness | 96 |
@@ -110,10 +110,10 @@ distinguish "bugs flattening" from "we stopped writing them down."
 
 | surface | total |
 |---|---|
-| codegen | 1848 |
+| codegen | 1850 |
 | interp | 474 |
 | typecheck | 302 |
-| other | 97 |
+| other | 99 |
 | ownership | 75 |
 | cli | 73 |
 | autopar | 56 |
@@ -198,6 +198,9 @@ _Generated from `bug-ledger.jsonl` by `scripts/bug-curve.py` (2026-05-20 → 202
 | B-2026-09-17-37 | 2026-09-17 | codegen | medium | A NAMED-LOCAL `Option` ARGUMENT DOUBLES A CONSUMED PAYLOAD PART'S `Drop` BODY ON EVERY COMPILED SURFACE -- `let a = Some((R { id: 5 }, 9)); eat(a);` over `fn eat(o: Option[(R, i64)]) { match o { Some(t) => { let x = t.0; println("mid"); } .. } }` prints `dR5 mid dR5 end` on JIT/AOT/AOT-at-`KARAC_AUTO_PAR=0` against the interpreter's now-correct `dR5 mid end`, while the FRESH-TEMP spelling of the identical `eat` is correct on all four surfaces | — |
 | B-2026-09-17-38 | 2026-09-17 | codegen | medium | A `Drop`-BEARING SIBLING PART IS LOST ON EVERY COMPILED SURFACE WHEN ITS PEER IS CONSUMED BY AN IN-FRAME LOCAL -- `fn eat(o: Option[(R, R)]) { match o { Some(t) => { let x = t.0; println("mid"); } .. } }` prints `dR5 mid end` on JIT/AOT/AOT-at-`KARAC_AUTO_PAR=0` against the interpreter's now-correct `dR5 mid dR6 end`, so element 1's owed body runs NOWHERE; the CONSUMED-IN-FRAME twin of B-2026-09-17-30, which reaches the same loss through an ESCAPE | — |
 | B-2026-09-18-1 | 2026-09-18 | codegen | medium | A GENERIC ENUM'S BOXED PAYLOAD STILL LOSES ITS `Drop` BODY WHEN THE ARM *CONSUMES* ITS BINDING -- `match x { Full(r) => { let z = r; .. } }` over a three-`String` payload prints `w:4 end` on JIT/AOT against `--interp`'s `w:4 dW4 end`, while the READ-ONLY twin is correct on all four since B-2026-09-14-22, so the remaining loss is the arm moving its binding into a local and `z` acquiring no body for it | — |
+| B-2026-09-19-3 | 2026-09-19 | codegen | high | AN `Array[D, N]` MOVED FROM A NAMED LOCAL INTO A STRUCT FIELD DOUBLE-FREES ON THE JIT LANE -- `karac run` aborts with `free(): double free detected in tcache 2` and prints NOTHING, where the interpreter and AOT are both correct; the array-LITERAL spelling of the same field is clean on all three | — |
+| B-2026-09-19-4 | 2026-09-19 | codegen | medium | ON arm64 THE JIT LANE RENDERS A `SortedMap[u64, u64]` VALUE AT OR ABOVE 2^63 AS `0` -- `SortedMap{18446744073709551615: 0}` where the interpreter gives the full value; the KEY at the same magnitude is correct | — |
+| B-2026-09-19-6 | 2026-09-19 | other | low | THE SELF-HOST LEXER ORACLE DISCARDS `Token::Error` MESSAGES, SO A DIAGNOSTIC-TEXT DIVERGENCE BETWEEN SEED AND PORT IS INVISIBLE EVEN WITH A CORPUS INPUT FOR IT | — |
 
 ### Relocated
 
@@ -2685,6 +2688,7 @@ _Generated from `bug-ledger.jsonl` by `scripts/bug-curve.py` (2026-05-20 → 202
 | B-2026-09-17-25 | codegen | medium | A NAMED LOCAL MOVED INTO A `shared enum` CONSTRUCTOR LEAVES A PAYLOAD-BODY ACTION READING THE ZEROED STAGING SLOT -- `let r = mkr(1); { let s = SMono… | dbac00e |
 | B-2026-09-19-1 | lexer | medium | A TRAILING BACKSLASH AT EOF IN AN f-STRING BODY PANICS THE LEXER -- `f"bd\` runs `advance()` one past the end of `source`, where the sibling `string(… | 9d7b9b3 |
 | B-2026-09-19-2 | other | medium | THE RUNTIME-ARCHIVE STALENESS CHECK'S mtime HELPER IS UNIX-ONLY AND FAILS THE WHOLE `Test (windows-latest)` JOB AT BUILD TIME -- an ungated `std::os:… | 845d8e2 |
+| B-2026-09-19-5 | other | medium | A CRASHED `karac_jit_runner` IS REPORTED AS AN EMPTY-STDOUT ASSERTION FAILURE, DISCARDING THE SIGNAL AND STDERR -- so a JIT-lane double free reads as… | f4dc90f |
 
 </details>
 
