@@ -1368,6 +1368,18 @@ impl<'a> Lexer<'a> {
                 });
             } else if self.peek() == b'\\' {
                 self.advance(); // consume backslash
+
+                // A backslash as the last byte of input: `peek()` hands back the
+                // `b'\0'` EOF sentinel, which `consume_codepoint()` treats as an
+                // ASCII byte and `advance()`s past the end of `source`. The
+                // sibling `string()` lexer already guards exactly this
+                // (B-2026-09-19-1); the f-string body did not, and both `Fuzz`
+                // targets found it.
+                if self.is_at_end() {
+                    return self.make_spanned(Token::Error(
+                        "Unterminated interpolated string: trailing backslash".to_string(),
+                    ));
+                }
                 match self.peek() {
                     b'n' => {
                         self.advance();

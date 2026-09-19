@@ -2147,3 +2147,72 @@ fn unsuffixed_128bit_magnitudes_still_error() {
         toks.first()
     );
 }
+
+/// A trailing backslash at EOF must not panic the lexer, in ANY string kind.
+///
+/// Both `Fuzz` targets went red on this class (`fuzz_lexer` and `fuzz_parser`
+/// crashed at the same site, `src/lexer.rs`'s `advance()`, on
+/// `0;f"bd\\\` and `||c"D\<f"[r\`). The shape is: an escape site consumes the
+/// backslash unconditionally, then reads the escaped character through
+/// `consume_codepoint()`. At EOF `peek()` hands back the `b'\0'` sentinel,
+/// which is `< 0x80`, so `consume_codepoint()` took its ASCII fast path and
+/// called `advance()` — indexing `self.source[self.current]` one past the end.
+///
+/// Every cell is reported independently rather than asserted in sequence: a
+/// panic in the first would otherwise hide the rest, and the whole point of
+/// this fixture is that the class is closed across all six string lexers, not
+/// just the two spellings the fuzzer happened to reach.
+#[test]
+fn trailing_backslash_at_eof_never_panics_in_any_string_kind() {
+    // (label, source). Each must lex to a `Token::Error`, never a panic.
+    let cells: &[(&str, &str)] = &[
+        ("plain string", "\"a\\"),
+        ("plain string, bare backslash", "\"\\"),
+        ("plain string, escaped backslash then bare", "\"a\\\\\\"),
+        ("f-string", "f\"bd\\"),
+        ("f-string, escaped backslash then bare", "f\"bd\\\\\\"),
+        ("f-string inside interpolation", "f\"{a\\"),
+        ("c-string", "c\"a\\"),
+        ("byte string", "b\"a\\"),
+        ("char literal", "'\\"),
+        ("byte literal", "b'\\"),
+        ("multi-line string", "\"\"\"a\\"),
+        // The two inputs `cargo fuzz` minimized, verbatim.
+        ("fuzz_lexer crash-0b96c999", "0;f\"bd\\\\\\"),
+        ("fuzz_parser crash-0953b53e", "||c\"D\\<f\"[r\\"),
+    ];
+
+    let mut panicked: Vec<&str> = Vec::new();
+    let mut not_an_error: Vec<&str> = Vec::new();
+
+    for (label, src) in cells {
+        let out = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| tokens_only(src)));
+        match out {
+            Err(_) => {
+                eprintln!("FAIL (panic) {label}: {src:?}");
+                panicked.push(label);
+            }
+            Ok(tokens) => {
+                // The lexer's contract here is a structured diagnostic, not a
+                // panic and not silent acceptance.
+                if tokens.iter().any(|t| matches!(t, Token::Error(_))) {
+                    eprintln!("PASS {label}: {src:?}");
+                } else {
+                    eprintln!("FAIL (no Error token) {label}: {src:?} -> {tokens:?}");
+                    not_an_error.push(label);
+                }
+            }
+        }
+    }
+
+    assert!(
+        panicked.is_empty(),
+        "the lexer panicked on {} cell(s): {panicked:?}",
+        panicked.len()
+    );
+    assert!(
+        not_an_error.is_empty(),
+        "no lexer diagnostic for {} cell(s): {not_an_error:?}",
+        not_an_error.len()
+    );
+}
