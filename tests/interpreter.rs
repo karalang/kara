@@ -70041,6 +70041,49 @@ fn main() {
 /// same DECLARED payload head, which is what makes them answer alike:
 /// `Array[T, N]` and `Vec[T]` share one `Value::Array` here, so nothing about
 /// the value could have told them apart.
+///
+/// B-2026-09-10-20 PIECE 3 — SEVEN CELLS ADDED AND `genvec` MOVED. The row
+/// called its generic spellings a lost observable and handed them to
+/// B-2026-09-17-15's instantiation chain. Measured on the parent tree, all four
+/// surfaces, that was true of ONE of them and the other three were RUN-VS-BUILD
+/// DIVERGENCES, which is a higher class and a different fix:
+///
+///     cell          parent --interp   parent compiled   now (both)
+///     genarr        x                 dS6 dS7 x         dS6 dS7 x
+///     genarrenum    x                 d2:9 x            d2:9 x
+///     gentuple      x                 dS8 dS9 x         dS8 dS9 x
+///     genvec        x                 x                 d2:9 x
+///     arrenum       x                 d2:9 x            d2:9 x
+///
+/// Codegen's instantiation-keyed head has taken the array and tuple arms since
+/// B-2026-09-12-6 and this side never followed, so three cells printed nothing
+/// under `--interp` and their bodies compiled. `genvec` was the agreed-silent
+/// one, because that head passed `include_vec: false`.
+///
+/// NO INSTANTIATION CHAIN WAS NEEDED, and the reason the row thought one was is
+/// worth keeping. Its objection — repeated in the `Array` arm's own doc — is
+/// that no DECLARED head can tell `G[Array[R, N]]` from `G[Vec[R]]`, since the
+/// interpreter gives both one `Value::Array`; admitting the generic cell by the
+/// value's shape therefore fired for the `Vec` spelling too, where codegen was
+/// silent. That is an argument about the OTHER backend, not about this one's
+/// reach, and it dissolves once both containers run on both sides: the sibling
+/// commit flips that head's `include_vec`, so shape is a sufficient
+/// discriminator and the chain is not wanted. Doing either half alone opens the
+/// divergence B-2026-09-12-6 refuses, which is why they are one commit.
+///
+/// `arrenum` is a fourth divergence found beside them and fixed with them: the
+/// DECLARED `Array` arm admitted a `Value::Struct` element only, while the
+/// compiled array walker runs a user-ENUM element's own body and then its
+/// payload's. Both containers now share one element walk.
+///
+/// THREE RESIDUALS ARE PINNED, not blessed. `gensh` is unchanged and is
+/// B-2026-09-17-15's: a generic enum's `field_drop_kinds` classifies the erased
+/// `T`, so the shared payload is never rc-released and no compiled surface runs
+/// its body. `genoptvec` (`G[Option[Vec[S1]]]`) is silent on all four and must
+/// stay so — threading the flipped flag through the envelope recursion took it
+/// to `dS2` compiled and silent here, which is why the emission core now asks
+/// the nested question separately. `tupledecl` (`enum H9 { P((S1, S1)), Q }`)
+/// is silent on all four, the name-keyed head's own tuple gap, filed on its own.
 #[test]
 fn test_declared_vec_enum_payload_runs_element_drop_bodies() {
     let out = run(r#"struct R2 { s: String, t: String, u: String }
@@ -70056,6 +70099,8 @@ enum H4 { P(Vec[Mono]), Q }
 enum H5 { P(Vec[S1]), Q }
 enum H6 { P(Vec[S1], i64), Q }
 enum H7 { P(Array[S1, 2]), Q }
+enum H8 { P(Array[Mono, 1]), Q }
+enum H9 { P((S1, S1)), Q }
 
 fn main() {
     println("vecenum"); { let mut w: Vec[Mono] = []; w.push(Mono.P(mkr(1))); let h = H4.P(w); println("  x") }
@@ -70068,10 +70113,17 @@ fn main() {
     println("sharedec"); { let h = H3.P(SMono.P(mkr(1))); println("  x") }
     println("genvec"); { let mut w: Vec[Mono] = []; w.push(Mono.P(mkr(1))); let g = G.X(w); println("  x") }
     println("gensh"); { let g = G.X(SMono.P(mkr(1))); println("  x") }
+    println("genvecst"); { let mut w: Vec[S1] = []; w.push(S1 { v: 4 }); w.push(S1 { v: 5 }); let g = G.X(w); println("  x") }
+    println("genarr"); { let a: Array[S1, 2] = [S1 { v: 6 }, S1 { v: 7 }]; let g = G.X(a); println("  x") }
+    println("genarrenum"); { let a: Array[Mono, 1] = [Mono.P(mkr(2))]; let g = G.X(a); println("  x") }
+    println("gentuple"); { let g = G.X((S1 { v: 8 }, S1 { v: 9 })); println("  x") }
+    println("arrenum"); { let a: Array[Mono, 1] = [Mono.P(mkr(3))]; let h = H8.P(a); println("  x") }
+    println("genoptvec"); { let mut w: Vec[S1] = []; w.push(S1 { v: 2 }); let o: Option[Vec[S1]] = Option.Some(w); let g = G.X(o); println("  x") }
+    println("tupledecl"); { let h = H9.P((S1 { v: 3 }, S1 { v: 1 })); println("  x") }
     println("end")
 }
 "#);
-    assert_eq!(out, "vecenum\n  d2:9\n  x\nvecstruct\n  dS7\n  dS8\n  x\nvecmixed\n  dS9\n  x\nvecempty\n  x\nunitvar\n  x\narray\n  dS1\n  dS2\n  x\nstruct\n  d2:9\n  x\nsharedec\n  d2:9\n  x\ngenvec\n  x\ngensh\n  x\nend\n", "got:\n{out}");
+    assert_eq!(out, "vecenum\n  d2:9\n  x\nvecstruct\n  dS7\n  dS8\n  x\nvecmixed\n  dS9\n  x\nvecempty\n  x\nunitvar\n  x\narray\n  dS1\n  dS2\n  x\nstruct\n  d2:9\n  x\nsharedec\n  d2:9\n  x\ngenvec\n  d2:9\n  x\ngensh\n  x\ngenvecst\n  dS4\n  dS5\n  x\ngenarr\n  dS6\n  dS7\n  x\ngenarrenum\n  d2:9\n  x\ngentuple\n  dS8\n  dS9\n  x\narrenum\n  d2:9\n  x\ngenoptvec\n  x\ntupledecl\n  x\nend\n", "got:\n{out}");
 }
 
 /// B-2026-09-06-39 — A READ-ONLY ARM OVER AN OWNED ENUM RECEIVER NOW RUNS THE

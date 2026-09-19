@@ -2339,6 +2339,41 @@ impl<'a> super::Interpreter<'a> {
         // Codegen twin: the `.rev()` on `fields` in
         // `emit_enum_payload_user_drop_bodies_fn_skipping`.
         for (declared_head, payload) in payloads.into_iter().rev() {
+            // Declared-type-driven, exactly like the struct-field walk: a
+            // payload whose declared head names a DIFFERENT concrete type than
+            // the value carries is an inconsistency, and running a body over it
+            // would run the wrong one.
+            //
+            // B-2026-09-10-2 — the one admitted exception, and it used to be
+            // the rule. A payload declared as one of the enum's OWN generic
+            // params never equals the value's type name, so this skipped it,
+            // on the stated reasoning that codegen was erased there too and
+            // "both backends skip it — the safe direction". Codegen is no
+            // longer silent: the instantiation-keyed walker
+            // (`emit_generic_enum_payload_user_drop_bodies_fn`) runs the body
+            // for exactly these payloads, so keeping the skip here is what
+            // WOULD now be the divergence. The interpreter has the concrete
+            // value in hand and needs no instantiation to reach it; the
+            // narrowness matters, which is why this admits the enum's declared
+            // params by name rather than dropping the check.
+            //
+            // The SEEDED pair is excluded. `enum Option[+T]` IS declared with a
+            // parameter in the baked stdlib, so it answers YES to this test —
+            // and must not, because an `Option`/`Result` payload body rides the
+            // instantiation-driven `run_optres_payload_user_drops` and
+            // `run_discarded_value_user_drops` arms instead. Admitting it ran
+            // the body a SECOND time beside those, measured as `dW7 dW7` on a
+            // declined `if let Ok(w) = mkerr()`.
+            //
+            // B-2026-09-10-20 — HOISTED above the container arms below, which
+            // now ask it too. It was computed just before the concrete-name
+            // check it guards; nothing else about it changed.
+            let declared_is_own_param = !matches!(enum_name.as_str(), "Option" | "Result")
+                && declared_head.as_deref().is_some_and(|h| {
+                    self.enum_generic_param_names(enum_name)
+                        .iter()
+                        .any(|p| p == h)
+                });
             // B-2026-09-12-24 — the `Array` PAYLOAD arm. The `Value::Struct`
             // destructure below drops an array payload on the floor, so an
             // enum variant declaring `Array[R, N]` ran its elements' `Drop`
@@ -2361,27 +2396,34 @@ impl<'a> super::Interpreter<'a> {
             // closing the first. Telling those two apart here needs the
             // BINDING'S instantiation, the chain `record_optres_payload_te`
             // builds for the seeded pair and no user generic enum has yet.
-            // `Slot[Array[R, N]]` (compiled-right, interpreted-silent) and every
-            // `Vec` payload (silent on both) stay in the row.
+            // B-2026-09-10-20 — THAT PARAGRAPH'S CONCLUSION NO LONGER HOLDS
+            // and the generic cell is now taken, by the container arm further
+            // down rather than here. It is right that no DECLARED head can tell
+            // `Slot[Array[R, N]]` from `Slot[Vec[R]]`, and right that admitting
+            // the generic cell by the value's shape alone used to manufacture a
+            // divergence — but only because codegen's generic head took the
+            // array arm and declined the `Vec` one. Both now move together, so
+            // the value's shape is enough and no instantiation is needed. See
+            // the container arm's own doc for the pair of changes.
+            //
+            // THE ELEMENT DISPATCH WIDENED WITH IT, and that was a divergence in
+            // its own right rather than tidying. This arm admitted a
+            // `Value::Struct` element only, while the compiled walker reaches
+            // each element through `emit_slot_drop_bodies_at`, whose user-ENUM
+            // arm runs the element's own body and then its live variant's
+            // payload bodies. Measured on the parent tree: an
+            // `enum Ha { P(Array[Mono, 1]), Q }` over `enum Mono { P(R2), Q }`
+            // printed nothing under `--interp` and `d2:9` on jit, `-O0` and
+            // `-O2`. It is the same widening the `Vec` arm below already
+            // carries, for the same reason, so the two containers now share one
+            // element walk.
             if let Some("Array") = declared_head.as_deref() {
                 if let Value::Array(cell) = &payload {
                     let elems: Vec<Value> = match cell.read() {
                         Ok(g) => g.clone(),
                         Err(_) => continue,
                     };
-                    // Forward order, own body per element, no recursion into
-                    // fields — what the compiled walker
-                    // (`emit_array_elem_user_drop_bodies_fn`) emits for the
-                    // same cell.
-                    for e in elems {
-                        let Value::Struct { name: en, .. } = &e else {
-                            continue;
-                        };
-                        if self.program.drop_method_keys.contains_key(en) {
-                            let en = en.clone();
-                            self.run_user_drop_body_only(&en, e.clone());
-                        }
-                    }
+                    self.run_container_elem_user_drop_bodies(elems);
                     continue;
                 }
             }
@@ -2390,8 +2432,11 @@ impl<'a> super::Interpreter<'a> {
             // both) stay in the row"). Same discriminator and same reason: the
             // interpreter represents `Array[T, N]` and `Vec[T]` with one
             // `Value::Array`, so only the DECLARED head tells them apart, and
-            // only a MONOMORPHIC declaration has one — the generic cell's head
-            // is the type parameter and stays with B-2026-09-17-15.
+            // only a MONOMORPHIC declaration has one. The generic cell no
+            // longer needs one: it is taken by the container arm below, which
+            // does not have to separate them because both backends now run
+            // both. Only the `shared enum` payload still waits on
+            // B-2026-09-17-15.
             //
             // `enum H4 { P(Vec[Mono]), Q }` ran its elements' `Drop` bodies on
             // NO backend (`x` against the struct-payload control's `d2:9 x`),
@@ -2411,31 +2456,71 @@ impl<'a> super::Interpreter<'a> {
                         Ok(g) => g.clone(),
                         Err(_) => continue,
                     };
-                    // Forward order, own body per element — what the compiled
-                    // element walker emits for the same handle.
-                    for e in elems {
-                        match &e {
-                            Value::Struct { name: en, .. } => {
-                                if self.program.drop_method_keys.contains_key(en) {
-                                    let en = en.clone();
-                                    self.run_user_drop_body_only(&en, e.clone());
-                                }
-                            }
-                            Value::EnumVariant { enum_name: en, .. } => {
-                                // The element's OWN body first, then its
-                                // payload's — design.md § Part 8's order, and
-                                // the order `run_enum_payload_user_drops_value`
-                                // is called in everywhere else.
-                                if self.program.drop_method_keys.contains_key(en) {
-                                    let en = en.clone();
-                                    self.run_user_drop_body_only(&en, e.clone());
-                                }
-                                self.run_enum_payload_user_drops_value(&e);
-                            }
-                            _ => {}
-                        }
-                    }
+                    self.run_container_elem_user_drop_bodies(elems);
                     continue;
+                }
+            }
+            // B-2026-09-10-20 piece 3 — THE GENERIC PAYLOAD'S CONTAINER ARM.
+            // `enum G[T] { X(T), Y }` declares its payload as the type
+            // PARAMETER, so neither arm above can fire for it; the walk then
+            // fell to the `Value::Struct` / `Value::EnumVariant` destructure
+            // below and dropped a container payload on the floor. Measured on
+            // the parent tree, all four surfaces, `-O0` / `KARAC_AUTO_PAR=0`:
+            //
+            //     G.X(a) over Array[S1, 2]      x            / dS1 dS2 x
+            //     G.X(a) over Array[Mono, 1]    x            / d2:9 x
+            //     G.X((S1, S1))                 x            / dS3 dS4 x
+            //     G.X(w) over Vec[Mono]         x            / x
+            //                                   (--interp)   / (jit, -O0, -O2)
+            //
+            // THREE OF THE FOUR WERE RUN-VS-BUILD DIVERGENCES, not the lost
+            // observable the row was filed as: codegen's instantiation-keyed
+            // head (`emit_generic_enum_payload_user_drop_bodies_fn`) has taken
+            // the array and tuple arms since B-2026-09-12-6 and this side never
+            // followed. Only the `Vec` cell was silent on both, and only
+            // because that head passed `include_vec: false`.
+            //
+            // THE VALUE'S SHAPE IS ENOUGH HERE, which is what this row's own
+            // earlier entries — and the `Array` arm's doc above — said it could
+            // not be. Their objection was specific and it was about the OTHER
+            // backend: admitting the generic cell by shape fires for
+            // `G[Vec[R]]` as well as `G[Array[R, N]]`, and codegen ran only the
+            // second, so this side alone would have started printing. The
+            // sibling change flips that head's `include_vec` to `true`, so both
+            // containers now run on both backends and nothing is left for a
+            // declared head to separate. That is why the two halves are one
+            // commit: either alone is a new divergence, the trade
+            // B-2026-09-12-6 refuses.
+            //
+            // `Value::Tuple` rides along because the same destructure dropped
+            // it and codegen's tuple arm already ran it — the `gentup` cell
+            // above. A tuple payload spelled CONCRETELY (`enum Ht { P((S1, S1)),
+            // Q }`) is silent on every backend and is NOT this arm's: it is an
+            // agreed gap in the name-keyed head, filed separately.
+            //
+            // The `shared enum` payload stays out, as it does everywhere in
+            // this walk: `G.X(SMono.P(..))` is silent on every compiled surface
+            // because a generic enum's `field_drop_kinds` classifies the erased
+            // `T` and never rc-releases it, which is B-2026-09-17-15. Firing a
+            // body here would be this side alone again. It cannot reach this
+            // arm in any case — a `shared enum` is a `Value::EnumVariant`, not
+            // a container.
+            if declared_is_own_param {
+                match &payload {
+                    Value::Array(cell) => {
+                        let elems: Vec<Value> = match cell.read() {
+                            Ok(g) => g.clone(),
+                            Err(_) => continue,
+                        };
+                        self.run_container_elem_user_drop_bodies(elems);
+                        continue;
+                    }
+                    Value::Tuple(items) => {
+                        let items = items.clone();
+                        self.run_container_elem_user_drop_bodies(items);
+                        continue;
+                    }
+                    _ => {}
                 }
             }
             // B-2026-09-19-17 — an ENUM payload. The destructure this replaced
@@ -2494,37 +2579,6 @@ impl<'a> super::Interpreter<'a> {
                 _ => continue,
             };
             let tn = &payload_type;
-            // Declared-type-driven, exactly like the struct-field walk: a
-            // payload whose declared head names a DIFFERENT concrete type than
-            // the value carries is an inconsistency, and running a body over it
-            // would run the wrong one.
-            //
-            // B-2026-09-10-2 — the one admitted exception, and it used to be
-            // the rule. A payload declared as one of the enum's OWN generic
-            // params never equals the value's type name, so this skipped it,
-            // on the stated reasoning that codegen was erased there too and
-            // "both backends skip it — the safe direction". Codegen is no
-            // longer silent: the instantiation-keyed walker
-            // (`emit_generic_enum_payload_user_drop_bodies_fn`) runs the body
-            // for exactly these payloads, so keeping the skip here is what
-            // WOULD now be the divergence. The interpreter has the concrete
-            // value in hand and needs no instantiation to reach it; the
-            // narrowness matters, which is why this admits the enum's declared
-            // params by name rather than dropping the check.
-            //
-            // The SEEDED pair is excluded. `enum Option[+T]` IS declared with a
-            // parameter in the baked stdlib, so it answers YES to this test —
-            // and must not, because an `Option`/`Result` payload body rides the
-            // instantiation-driven `run_optres_payload_user_drops` and
-            // `run_discarded_value_user_drops` arms instead. Admitting it ran
-            // the body a SECOND time beside those, measured as `dW7 dW7` on a
-            // declined `if let Ok(w) = mkerr()`.
-            let declared_is_own_param = !matches!(enum_name.as_str(), "Option" | "Result")
-                && declared_head.as_deref().is_some_and(|h| {
-                    self.enum_generic_param_names(enum_name)
-                        .iter()
-                        .any(|p| p == h)
-                });
             // B-2026-09-19-17 — the own-param exception above is for a STRUCT
             // payload only, and an ENUM payload must name its type exactly.
             // Measured: `enum G[T] { X(T), Y }` at `T = SMono` is SILENT on
@@ -2555,6 +2609,50 @@ impl<'a> super::Interpreter<'a> {
                 self.run_enum_payload_user_drops_value(&payload);
             } else {
                 self.drop_user_drop_fields_of_value(&payload);
+            }
+        }
+    }
+
+    /// B-2026-09-10-20 — the one element walk behind every container PAYLOAD
+    /// arm of [`Self::run_enum_payload_user_drops_value`]: an `Array[T, N]`, a
+    /// `Vec[T]`, a tuple, and the generic cell that is one of those three
+    /// without saying so.
+    ///
+    /// Forward order, the element's OWN body first and then its content, which
+    /// is design.md § Part 8's order and the one every other caller of
+    /// `run_enum_payload_user_drops_value` keeps. A struct element stops at its
+    /// own body; an ENUM element continues into its live variant's payloads.
+    /// Those are exactly the two element kinds the compiled walkers reach —
+    /// `emit_vec_elem_user_drop_bodies_fn_mono` takes a struct or a non-shared
+    /// enum layout, and the array arm's `emit_slot_drop_bodies_at` runs an enum
+    /// element's own body and then its payload bodies — so the walks are equal
+    /// by construction rather than by convention.
+    ///
+    /// A `shared` element is skipped by falling through: its drop is
+    /// refcount-driven and the compiled side declines it at the same place
+    /// (`emit_vec_elem_user_drop_bodies_fn_mono`'s `shared_types` gate,
+    /// `emit_slot_drop_bodies_at`'s early return).
+    ///
+    /// Frees nothing — bodies only. The element memory stays on the
+    /// container's own channel, the invariant every walker in this family
+    /// holds.
+    fn run_container_elem_user_drop_bodies(&mut self, elems: Vec<Value>) {
+        for e in elems {
+            match &e {
+                Value::Struct { name: en, .. } => {
+                    if self.program.drop_method_keys.contains_key(en) {
+                        let en = en.clone();
+                        self.run_user_drop_body_only(&en, e.clone());
+                    }
+                }
+                Value::EnumVariant { enum_name: en, .. } => {
+                    if self.program.drop_method_keys.contains_key(en) {
+                        let en = en.clone();
+                        self.run_user_drop_body_only(&en, e.clone());
+                    }
+                    self.run_enum_payload_user_drops_value(&e);
+                }
+                _ => {}
             }
         }
     }

@@ -4418,6 +4418,22 @@ fn main() {
     /// the cell that pins the index, `vecempty` and `unitvar` pin the
     /// zero-element and no-payload paths.
     ///
+    /// B-2026-09-10-20 PIECE 3 — SIX GENERIC-PAYLOAD CELLS ADDED, and the
+    /// question they answer is the same one in a new container. The generic
+    /// head now reaches a `Vec`, an `Array`, a tuple, and an `Array` of user
+    /// enums through an ERASED payload area, so the boxing decision is made on
+    /// the instantiation rather than on a declared width: `genarr` and
+    /// `genarrenum` are the cells where a wrong threshold reads a box pointer
+    /// as a value. `genoptvec` and `tupledecl` are residual cells, silent on
+    /// every surface and carried here only so the walk is exercised over them.
+    ///
+    /// THE `arrenum` CELL OF THE TRANSCRIPT TWIN IS ABSENT for the same reason
+    /// `gensh` is, and it is a SECOND pre-existing leak rather than this one.
+    /// `enum H8 { P(Array[Mono, 1]), Q }` strands 80 B + 11 B at `-O0`,
+    /// measured identically on the parent tree (where the cell also ran no
+    /// body under `--interp`) and after. Its transcript half moves with this
+    /// commit; its memory half is filed on its own.
+    ///
     /// THE `gensh` CELL OF THE TRANSCRIPT TWIN IS DELIBERATELY ABSENT HERE.
     /// `G.X(SMono.P(..))` strands its 88-byte RC control block — a real leak,
     /// measured identically before and after this fix, and B-2026-09-17-15's
@@ -4442,6 +4458,7 @@ fn main() {
              enum H5 { P(Vec[S1]), Q }\n\
              enum H6 { P(Vec[S1], i64), Q }\n\
              enum H7 { P(Array[S1, 2]), Q }\n\
+             enum H9 { P((S1, S1)), Q }\n\
              \n\
              fn main() {\n\
              \x20\x20\x20\x20println(\"vecenum\"); { let mut w: Vec[Mono] = []; w.push(Mono.P(mkr(1))); let h = H4.P(w); println(\"  x\") }\n\
@@ -4453,6 +4470,12 @@ fn main() {
              \x20\x20\x20\x20println(\"struct\"); { let g = G.X(mkr(1)); println(\"  x\") }\n\
              \x20\x20\x20\x20println(\"sharedec\"); { let h = H3.P(SMono.P(mkr(1))); println(\"  x\") }\n\
              \x20\x20\x20\x20println(\"genvec\"); { let mut w: Vec[Mono] = []; w.push(Mono.P(mkr(1))); let g = G.X(w); println(\"  x\") }\n\
+             \x20\x20\x20\x20println(\"genvecst\"); { let mut w: Vec[S1] = []; w.push(S1 { v: 4 }); w.push(S1 { v: 5 }); let g = G.X(w); println(\"  x\") }\n\
+             \x20\x20\x20\x20println(\"genarr\"); { let a: Array[S1, 2] = [S1 { v: 6 }, S1 { v: 7 }]; let g = G.X(a); println(\"  x\") }\n\
+             \x20\x20\x20\x20println(\"genarrenum\"); { let a: Array[Mono, 1] = [Mono.P(mkr(2))]; let g = G.X(a); println(\"  x\") }\n\
+             \x20\x20\x20\x20println(\"gentuple\"); { let g = G.X((S1 { v: 8 }, S1 { v: 9 })); println(\"  x\") }\n\
+             \x20\x20\x20\x20println(\"genoptvec\"); { let mut w: Vec[S1] = []; w.push(S1 { v: 2 }); let o: Option[Vec[S1]] = Option.Some(w); let g = G.X(o); println(\"  x\") }\n\
+             \x20\x20\x20\x20println(\"tupledecl\"); { let h = H9.P((S1 { v: 3 }, S1 { v: 1 })); println(\"  x\") }\n\
              \x20\x20\x20\x20println(\"end\")\n\
              }\n\
 ",
@@ -4485,6 +4508,29 @@ fn main() {
                 // stays clean; only the line is new.
                 "  d2:9",
                 "genvec",
+                // B-2026-09-10-20 piece 3 — the generic `Vec` payload's element
+                // body now runs on every surface. ASAN was clean here before
+                // and stays clean; only the line is new.
+                "  d2:9",
+                "  x",
+                "genvecst",
+                "  dS4",
+                "  dS5",
+                "  x",
+                "genarr",
+                "  dS6",
+                "  dS7",
+                "  x",
+                "genarrenum",
+                "  d2:9",
+                "  x",
+                "gentuple",
+                "  dS8",
+                "  dS9",
+                "  x",
+                "genoptvec",
+                "  x",
+                "tupledecl",
                 "  x",
                 "end",
             ],

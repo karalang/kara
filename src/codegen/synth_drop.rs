@@ -11386,7 +11386,14 @@ impl<'ctx> super::Codegen<'ctx> {
         // both-silent bug is B-2026-09-10-27 and is its own open row, with its
         // own interpreter half to write; closing half of it from here would
         // leave the backends disagreeing and that row looking fixed.
-        self.emit_payload_user_drop_bodies_core(fn_name, layout_key, arms, include_vec, mask)
+        self.emit_payload_user_drop_bodies_core(
+            fn_name,
+            layout_key,
+            arms,
+            include_vec,
+            include_vec,
+            mask,
+        )
     }
 
     /// B-2026-09-12-5 — will the MATCH ARM that binds this boxed payload out
@@ -11761,15 +11768,29 @@ impl<'ctx> super::Codegen<'ctx> {
             return None;
         }
         let fn_name = format!("__karac_dropelems_genum_{}", Self::display_mangle_te(te));
-        // The generic-enum head DOES take the array arm: its interpreter twin
-        // descends into an `Array` payload too (B-2026-09-12-6), so both
-        // backends move together.
+        // The generic-enum head takes the array and tuple arms, and since
+        // B-2026-09-10-20 the `Vec` arm as well.
         //
-        // It does NOT take the `Vec` arm (B-2026-09-13-29): that arm's
-        // interpreter half exists only for the seeded pair's DISCARD position,
-        // so admitting it here would give this head bodies the interpreter does
-        // not run.
-        self.emit_payload_user_drop_bodies_core(fn_name, enum_name, arms, false, None)
+        // IT USED TO PASS `false` HERE, and the reason it did was true when it
+        // was written: "that arm's interpreter half exists only for the seeded
+        // pair's DISCARD position, so admitting it here would give this head
+        // bodies the interpreter does not run" (B-2026-09-13-29). The
+        // interpreter's payload walk now has a container arm for a payload
+        // declared as one of the enum's own generic params
+        // (`run_enum_payload_user_drops_value`, the `declared_is_own_param`
+        // arm), which descends into a `Value::Array` — the one representation
+        // it uses for `Array[T, N]` AND `Vec[T]` alike.
+        //
+        // THAT IS WHY THE FLAG HAD TO MOVE RATHER THAN THE INTERPRETER ALONE.
+        // No DECLARED head can separate the two containers in a generic cell,
+        // so that arm cannot admit `G[Array[R, N]]` and decline `G[Vec[R]]`;
+        // with this head still passing `false` it would have printed where the
+        // compiled backends were silent. Measured on the parent tree: the
+        // array, array-of-enum and tuple cells were already compiled-loud and
+        // interpreted-silent (three run-vs-build divergences), and the `Vec`
+        // cell alone was silent on both. Flipping this and writing that arm in
+        // one commit takes all four to agreement; either alone opens one.
+        self.emit_payload_user_drop_bodies_core(fn_name, enum_name, arms, true, false, None)
     }
 
     /// The shared emission core behind
@@ -11870,6 +11891,21 @@ impl<'ctx> super::Codegen<'ctx> {
         layout_key: &str,
         arms: Vec<(u64, TypeExpr, usize)>,
         include_vec: bool,
+        // B-2026-09-10-20 — the same question for an `Option` / `Result`
+        // ENVELOPE payload one level in, and it is a SEPARATE question because
+        // the two heads answer it differently.
+        //
+        // It used to ride `include_vec`, which was harmless while the only
+        // caller passing `true` was the seeded pair's own head. The generic
+        // enum head now passes `true` as well, and threading it into the
+        // recursion took `G[Option[Vec[S1]]]` from silent on every backend to
+        // `dS5` on jit / `-O0` / `-O2` and still silent under `--interp` — a
+        // fresh run-vs-build divergence opened by the very commit closing four
+        // others, which is the trade B-2026-09-12-6 refuses. The interpreter's
+        // container arm reaches a `Value::Array` payload, not a `Value::Array`
+        // nested inside an `Option` payload, so that cell is not this row's to
+        // move; it stays agreed-silent and is filed on its own.
+        nested_include_vec: bool,
         // B-2026-09-17-34 / B-2026-09-19-9 — the moved-out parts to mask out,
         // keyed by the arm they belong to; see `PayloadBodiesMask` and
         // `emit_optres_payload_user_drop_bodies_fn_skipping`.
@@ -12224,7 +12260,7 @@ impl<'ctx> super::Codegen<'ctx> {
                 // the recursion needs no reshaping. Body-only like every
                 // sibling arm: the inner envelope's box and interior are
                 // owned by the value's free channel, unchanged by this.
-                self.emit_optres_payload_user_drop_bodies_fn_ex(&pte, include_vec)
+                self.emit_optres_payload_user_drop_bodies_fn_ex(&pte, nested_include_vec)
             } else if let Some(elem_tes) = &tuple_elems {
                 // B-2026-09-05-14 — the tuple payload: run each Drop-carrying
                 // element's body over the tuple aggregate at `target_ptr`
