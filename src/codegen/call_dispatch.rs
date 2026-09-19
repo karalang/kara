@@ -2284,6 +2284,12 @@ impl<'ctx> super::Codegen<'ctx> {
             // carries onto the masked one.
             if let ExprKind::Identifier(argn) = &a.value.kind {
                 self.remask_named_boxed_payload_arg(argn, &name, i);
+                // B-2026-09-17-37 — the TUPLE-payload sibling, for the parts
+                // the callee consumes in its own frame. Separate rather than
+                // folded into the call above because the two read different
+                // predicates over different payload shapes, and each declines
+                // where the other applies.
+                self.remask_named_tuple_payload_arg(argn, &name, i);
             }
             // B-2026-09-06-49 / B-2026-09-10-6 — retract the caller's array
             // local when it is moved whole into a seeded variant that the
@@ -3444,6 +3450,136 @@ impl<'ctx> super::Codegen<'ctx> {
             }
         }
         out
+    }
+
+    /// B-2026-09-17-37 — the TUPLE-payload sibling of
+    /// [`Self::remask_named_boxed_payload_arg`], for the parts the callee
+    /// consumes INSIDE its own frame rather than hands out.
+    ///
+    /// `let a = Some((R { id: 5 }, 9)); eat(a);` over
+    /// `fn eat(o: Option[(R, i64)]) { match o { Some(t) => { let x = t.0; .. } .. } }`
+    /// printed `dR5 mid dR5 end` on every compiled surface against the
+    /// interpreter's `dR5 mid end`: the callee's in-frame local already runs
+    /// the moved part's body at its own live-range end (the first `dR5`), and
+    /// the caller's let-site payload-bodies walk ran it AGAIN. The FRESH-TEMP
+    /// spelling of the identical callee is correct, which is what isolates the
+    /// named local's registration rather than the callee's transfer as the
+    /// second owner — a temp has no let site, so its walk is minted at the call
+    /// and `track_optres_arg_temp_bodies` builds it masked from the start.
+    ///
+    /// The interpreter half was fixed in B-2026-09-14-7 with a `(binding,
+    /// path)` mask populated from `fn_consumed_param_payload_part_paths`. This
+    /// is that mask's compiled twin, reading THE SAME predicate — which is the
+    /// point: the two ends of one call must not compute "did the callee consume
+    /// this part" separately, or they drift into a lost body (both stand down)
+    /// or a doubled one (neither does).
+    ///
+    /// CONSUMED, NOT ESCAPING, and the two are deliberately not unioned here.
+    /// A part the callee RETURNS is doubled for a named local too, but
+    /// identically on both backends (`dR5 got:5 dR5` under `--interp` and at
+    /// `-O0` alike), so it is an agreed answer rather than a divergence and
+    /// masking it here would close one gap by opening another. The escaping
+    /// channel's caller-side mask is `callee_by_value_optres_param_bodies_te`,
+    /// which is gated on a NON-escaping param and so cannot serve this shape at
+    /// all: a callee that returns one element and consumes another declines
+    /// there while still owing this mask for the element it consumed.
+    ///
+    /// ONE-HOP ONLY. `PayloadBodiesMask::TupleElems` is a flat index set, so a
+    /// deeper path (`t.0.1`) cannot be expressed and the whole remask declines
+    /// rather than report a first hop that would mask an element whose OTHER
+    /// half still owes its body — the same depth filter, for the same reason,
+    /// that B-2026-09-17-30 drew and B-2026-09-19-33 tracks.
+    pub(super) fn remask_named_tuple_payload_arg(
+        &mut self,
+        arg_name: &str,
+        callee: &str,
+        i: usize,
+    ) {
+        let Some(env_te) = self.type_decls.enum_inst_var_types.get(arg_name).cloned() else {
+            return;
+        };
+        let Some(program) = self.program_snapshot.as_deref() else {
+            return;
+        };
+        // Free fn or impl method, resolved exactly as
+        // `callee_by_value_optres_param_bodies_te` resolves the same name — the
+        // `self`-param index adjustment included, since `i` is the ARGUMENT
+        // index at every one of the three loops that call this and a method's
+        // receiver occupies slot 0 there but not in `f.params`.
+        let bare = callee.rsplit('.').next().unwrap_or(callee);
+        let Some((func, ast_i)) = program.items.iter().find_map(|item| match item {
+            Item::Function(f) if f.name == callee => Some((f, i)),
+            Item::ImplBlock(b) => b.items.iter().find_map(|ii| match ii {
+                crate::ast::ImplItem::Method(f) if f.name == bare => {
+                    let ast_i = if f.self_param.is_some() {
+                        i.checked_sub(1)?
+                    } else {
+                        i
+                    };
+                    Some((&**f, ast_i))
+                }
+                _ => None,
+            }),
+            _ => None,
+        }) else {
+            return;
+        };
+        // Variant-agnostic, as the boxed sibling's `param_payload_moved_out_fields`
+        // already is at this site: the local's runtime variant is not recorded
+        // here, and a union over arms cannot over-mask, because a walk on the
+        // other variant has no tuple payload to reach in the first place.
+        let mut consumed = std::collections::BTreeSet::new();
+        for (_, path) in crate::ast::fn_consumed_param_payload_part_paths(func, ast_i, None) {
+            match path.as_slice() {
+                [crate::ast::ParamPart::TupleIndex(n)] => {
+                    consumed.insert(*n);
+                }
+                _ => return,
+            }
+        }
+        if consumed.is_empty() {
+            return;
+        }
+        // The SOLE tuple generic arg names the payload being masked, and the
+        // mangled form is the identity every other `TupleElems` caller keys on,
+        // so no two of them can name one walker differently. A `Result` whose
+        // BOTH arms are tuples answers `None` and declines, rather than guess
+        // which arm these indices belong to.
+        let Some(key) = Self::sole_tuple_payload_te(&env_te).map(|te| Self::display_mangle_te(&te))
+        else {
+            return;
+        };
+        let masked = self.emit_optres_payload_user_drop_bodies_fn_skipping(
+            &env_te,
+            super::synth_drop::PayloadBodiesMask::TupleElems(&key, &consumed),
+        );
+        let mut found = false;
+        for frame in self.drop_rc.scope_cleanup_actions.iter_mut() {
+            for action in frame.iter_mut() {
+                if let super::state::CleanupAction::UserDrop {
+                    binding_name,
+                    kind: super::state::UserDropKind::ContainerElemBodies,
+                    drop_fn,
+                    ..
+                } = action
+                {
+                    if binding_name == arg_name {
+                        found = true;
+                        if let Some(f) = masked {
+                            *drop_fn = f;
+                        }
+                    }
+                }
+            }
+        }
+        if found && masked.is_none() {
+            // Nothing survives the mask: every part with a body belongs to the
+            // callee's own frame now, so retract rather than leave the unmasked
+            // walker registered. Amending where anything DOES survive, for the
+            // boxed sibling's reason — retracting there loses the parts the
+            // callee never touched.
+            self.suppress_container_elem_bodies_for_var(arg_name);
+        }
     }
 
     /// B-2026-09-17-34 — swap a NAMED boxed-payload local's registered interior

@@ -8627,6 +8627,15 @@ impl<'ctx> super::Codegen<'ctx> {
                             self.track_optres_arg_temp_bodies(val, &param_te, &skip_parts);
                         }
                     }
+                    // B-2026-09-17-37 — the NAMED-LOCAL body mask, the sibling of
+                    // the fresh-temp registration above. A named local's walk
+                    // comes from its own `let` and has to be AMENDED in place;
+                    // see the helper for why the consumed and escaping channels
+                    // stay separate.
+                    if let ExprKind::Identifier(argn) = &a.value.kind {
+                        let argn = argn.clone();
+                        self.remask_named_tuple_payload_arg(&argn, &qualified, pidx);
+                    }
                     // Signedness-carrying scalar coercion at the METHOD arg
                     // boundary, the twin of the free-fn site in
                     // `call_dispatch.rs`. The boundary sweep below sees only

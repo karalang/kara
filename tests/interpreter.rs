@@ -69813,6 +69813,53 @@ fn main() {
     assert_eq!(out, "qual\n  dU\n  mid\n  out\nbare\n  dU\n  mid\n  out\ntwo\n  dU\n  dU\n  mid\n  out\nalias\n  dU\n  mid\n  out\nuselater\n  mid\n  t1\n  dU\n  out\nreassign\n  dU\n  dU\n  mid\n  out\nnodrop\n  mid\n  out\npar\n  dW\n  mid\n  out\nplain\n  dP\n  mid\n  out\nend\n", "got:\n{out}");
 }
 
+/// B-2026-09-17-37 — A NAMED-LOCAL `Option`/`Result` ARGUMENT NO LONGER
+/// DOUBLES THE `Drop` BODY OF A PART THE CALLEE CONSUMES.
+///
+/// The INTERPRETER side of this was already correct — B-2026-09-14-7 gave it
+/// the `(binding, path)` mask that the compiled fix is now the twin of, read
+/// from the SAME predicate (`fn_consumed_param_payload_part_paths`) so the two
+/// ends of one call cannot compute "did the callee consume this part"
+/// separately and drift into a lost body or a doubled one.
+///
+/// What this pins is that the correct half stays put while the compiled half
+/// moves to meet it. `mixed` is the cell to read first: it consumes one tuple
+/// element and RETURNS the other, and its `dR5 got5 dR5` is an agreed double on
+/// both backends that the compiled fix deliberately does not touch.
+///
+/// The CODEGEN twin is `tests/codegen.rs`'s
+/// `e2e_named_optres_arg_does_not_double_a_consumed_part_body`, byte-identical
+/// source and expectation.
+#[test]
+fn test_named_optres_arg_does_not_double_a_consumed_part_body() {
+    let out = run(r#"struct R { id: i64 }
+impl Drop for R { fn drop(mut ref self) { println(f"  dR{self.id}") } }
+struct Hd { n: i64 }
+impl Hd { fn eat(ref self, o: Option[(R, i64)]) { match o { Option.Some(t) => { let x = t.0; println("  mid"); } Option.None => { println("  n"); } } } }
+struct Snk { n: i64 }
+impl Snk { fn eat(o: Option[(R, i64)]) { match o { Option.Some(t) => { let x = t.0; println("  mid"); } Option.None => { println("  n"); } } } }
+fn eat(o: Option[(R, i64)]) { match o { Option.Some(t) => { let x = t.0; println("  mid"); } Option.None => { println("  n"); } } }
+fn eatr(o: Result[(R, i64), i64]) { match o { Result.Ok(t) => { let x = t.0; println("  mid"); } Result.Err(e) => { println("  n"); } } }
+fn eat1(o: Option[(i64, R)]) { match o { Option.Some(t) => { let x = t.1; println("  mid"); } Option.None => { println("  n"); } } }
+fn eat2(o: Option[(R, R)]) { match o { Option.Some(t) => { let x = t.0; println("  mid"); } Option.None => { println("  n"); } } }
+fn peek(o: Option[(R, i64)]) { match o { Option.Some(t) => { println(f"  mid{t.1}"); } Option.None => { println("  n"); } } }
+fn hands(o: Option[(R, R)]) -> R { match o { Option.Some(t) => { let y = t.1; println("  mid"); return t.0; } Option.None => { return R { id: 0 }; } } }
+fn main() {
+    println("named");    { let a = Option.Some((R { id: 5 }, 9)); eat(a); } println("  out")
+    println("temp");     { eat(Option.Some((R { id: 5 }, 9))); } println("  out")
+    println("result");   { let a: Result[(R, i64), i64] = Result.Ok((R { id: 5 }, 9)); eatr(a); } println("  out")
+    println("method");   { let h = Hd { n: 1 }; let a = Option.Some((R { id: 5 }, 9)); h.eat(a); } println("  out")
+    println("assoc");    { let a = Option.Some((R { id: 5 }, 9)); Snk.eat(a); } println("  out")
+    println("second");   { let a = Option.Some((9, R { id: 5 })); eat1(a); } println("  out")
+    println("sibling");  { let a = Option.Some((R { id: 5 }, R { id: 6 })); eat2(a); } println("  out")
+    println("nomove");   { let a = Option.Some((R { id: 5 }, 9)); peek(a); } println("  out")
+    println("mixed");    { let a = Option.Some((R { id: 5 }, R { id: 6 })); let r = hands(a); println(f"  got{r.id}"); } println("  out")
+    println("end")
+}
+"#);
+    assert_eq!(out, "named\n  dR5\n  mid\n  out\ntemp\n  dR5\n  mid\n  out\nresult\n  dR5\n  mid\n  out\nmethod\n  dR5\n  mid\n  out\nassoc\n  dR5\n  mid\n  out\nsecond\n  dR5\n  mid\n  out\nsibling\n  dR5\n  mid\n  dR6\n  out\nnomove\n  mid9\n  dR5\n  out\nmixed\n  dR6\n  mid\n  dR5\n  got5\n  dR5\n  out\nend\n", "got:\n{out}");
+}
+
 /// B-2026-09-17-19 — A `shared enum`'s VARIANT PAYLOAD RUNS ITS `Drop` BODY,
 /// AND THE RELEASE LANDS AT THE BINDING'S LIVE-RANGE END.
 ///

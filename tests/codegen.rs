@@ -38574,13 +38574,18 @@ fn main() {
     /// caller half of this fix is what brings it to one. The two spellings
     /// were wrong in opposite directions through one missing channel.
     ///
-    /// TWO CELLS ARE PINNED DIVERGENT AND NEITHER IS THIS ROW'S. The named-
-    /// local argument doubles on every COMPILED surface (`dR5 mid dR5 end`)
+    /// TWO CELLS WERE PINNED DIVERGENT AND NEITHER WAS THIS ROW'S. The named-
+    /// local argument doubled on every COMPILED surface (`dR5 mid dR5 end`)
     /// and the Drop-bearing SIBLING part is lost on every compiled surface --
     /// both measured at this commit, both pre-existing, both filed separately.
     /// They are cells here because this row's fix moves the interpreter side
     /// of each, and pinning both halves is what keeps a later compiled fix
-    /// from landing silently.
+    /// from landing silently. That is exactly what it did: B-2026-09-17-37
+    /// closed the named-local half, and this fixture is where it showed --
+    /// that cell AND the deeper-frame control both moved to agreement in the
+    /// same commit, the second of them a cell nobody had noticed was carrying
+    /// the same double. The SIBLING cell is still divergent and is
+    /// B-2026-09-17-38.
     ///
     /// THE ESCAPE CONTROL IS THE ONE THAT KEEPS THE RULE HONEST: `let x = t.0;
     /// return x;` hands the part OUT of the frame, so the consumed channel
@@ -38661,16 +38666,19 @@ fn main() {
                      fn inner() {{ let a: Option[(R, i64)] = Some((R {{ id: 7 }}, 1i64)); println(\"in\") }}\n\
                      fn main() {{ let a = Some((R {{ id: 5 }}, 9i64)); eat(a); inner(); println(\"end\") }}\n"
                 ),
-                "dR5\nmid\ndR5\ndR7\nin\nend\n",
+                // B-2026-09-17-37 — the second `dR5` here was the named-local
+                // double, not a frame-leak. Both halves of this cell now read
+                // the same, which is what the control was asking.
+                "dR5\nmid\ndR7\nin\nend\n",
                 "dR5\nmid\ndR7\nin\nend\n",
             ),
             (
-                "pinned: a NAMED-local argument doubles on every compiled surface",
+                "B-2026-09-17-37: a NAMED-local argument no longer doubles",
                 format!(
                     "{R}fn eat(o: Option[(R, i64)]) {{ match o {{ Some(t) => {{ let x = t.0; println(\"mid\"); }} None => {{ println(\"n\"); }} }} }}\n\
                      fn main() {{ let a = Some((R {{ id: 5 }}, 9i64)); eat(a); println(\"end\") }}\n"
                 ),
-                "dR5\nmid\ndR5\nend\n",
+                "dR5\nmid\nend\n",
                 "dR5\nmid\nend\n",
             ),
             (
@@ -38695,6 +38703,86 @@ fn main() {
         }
     }
 
+    /// B-2026-09-17-37 — A NAMED-LOCAL `Option`/`Result` ARGUMENT NO LONGER
+    /// DOUBLES THE `Drop` BODY OF A PART THE CALLEE CONSUMES.
+    ///
+    /// `let a = Some((R { id: 5 }, 9)); eat(a);` over
+    /// `fn eat(o: Option[(R, i64)]) { match o { Some(t) => { let x = t.0; .. } .. } }`
+    /// printed `dR5 mid dR5 end` on jit / `karac build` / `KARAC_AUTO_PAR=0`
+    /// against the interpreter's `dR5 mid end`. The callee's in-frame local
+    /// already runs the moved part's body at its own live-range end — the
+    /// FIRST `dR5`, before `mid` — and the caller's let-site payload-bodies
+    /// walk ran it again after the call.
+    ///
+    /// `temp` is what isolated it: the FRESH-TEMP spelling of the identical
+    /// callee was always correct, because a temp has no let site and its walk
+    /// is minted at the call already masked. So the second owner is the named
+    /// local's registration, not the callee's transfer.
+    ///
+    /// `method` and `assoc` are cells because the fix is three wirings of one
+    /// helper, one per argument loop — the shape B-2026-09-12-15 records for
+    /// this same channel, where the bodies half was wired at the free-function
+    /// loop only and the two method spellings stayed wrong for a week.
+    /// `result`, `second` and `sibling` answer three of the four questions the
+    /// row listed as NOT MEASURED: the `Result` head doubles identically, so
+    /// does a part at tuple index 1, and with two `Drop`-bearing elements it is
+    /// the CONSUMED one that doubled while the untouched sibling was always
+    /// right.
+    ///
+    /// `nomove` and `mixed` are the controls with teeth. `nomove` reads the
+    /// payload without moving anything, so nothing may be masked; `mixed`
+    /// consumes one element and RETURNS the other, which is the shape that
+    /// rules out reusing `callee_by_value_optres_param_bodies_te` — that gate
+    /// declines an escaping param outright and would have left the consumed
+    /// element unmasked. Its `dR5 got5 dR5` is an agreed double on BOTH
+    /// backends (B-2026-09-13-5's alias spelling) and must stay exactly as it
+    /// is: masking it here would close one divergence by opening another.
+    ///
+    /// NO NAMED-STRUCT CELL, deliberately. `Option[P]` for
+    /// `struct P { r: R, n: i64 }` does not double — it runs the body LATE
+    /// (`mid dR5` against `--interp`'s `dR5 mid`), an ordering divergence on a
+    /// different channel that is byte-identical before and after this commit.
+    /// B-2026-09-19-39; a cell here would pin it.
+    ///
+    /// BODY-ONLY, so no sanitizer leg sees it: every cell is `0 errors` and
+    /// `0 bytes definitely lost` under `-O0` valgrind, before and after.
+    ///
+    /// The INTERPRETER twin is `tests/interpreter.rs`'s
+    /// `test_named_optres_arg_does_not_double_a_consumed_part_body`,
+    /// byte-identical source and expectation.
+    #[test]
+    fn e2e_named_optres_arg_does_not_double_a_consumed_part_body() {
+        let Some(out) = run_program(
+            r#"struct R { id: i64 }
+impl Drop for R { fn drop(mut ref self) { println(f"  dR{self.id}") } }
+struct Hd { n: i64 }
+impl Hd { fn eat(ref self, o: Option[(R, i64)]) { match o { Option.Some(t) => { let x = t.0; println("  mid"); } Option.None => { println("  n"); } } } }
+struct Snk { n: i64 }
+impl Snk { fn eat(o: Option[(R, i64)]) { match o { Option.Some(t) => { let x = t.0; println("  mid"); } Option.None => { println("  n"); } } } }
+fn eat(o: Option[(R, i64)]) { match o { Option.Some(t) => { let x = t.0; println("  mid"); } Option.None => { println("  n"); } } }
+fn eatr(o: Result[(R, i64), i64]) { match o { Result.Ok(t) => { let x = t.0; println("  mid"); } Result.Err(e) => { println("  n"); } } }
+fn eat1(o: Option[(i64, R)]) { match o { Option.Some(t) => { let x = t.1; println("  mid"); } Option.None => { println("  n"); } } }
+fn eat2(o: Option[(R, R)]) { match o { Option.Some(t) => { let x = t.0; println("  mid"); } Option.None => { println("  n"); } } }
+fn peek(o: Option[(R, i64)]) { match o { Option.Some(t) => { println(f"  mid{t.1}"); } Option.None => { println("  n"); } } }
+fn hands(o: Option[(R, R)]) -> R { match o { Option.Some(t) => { let y = t.1; println("  mid"); return t.0; } Option.None => { return R { id: 0 }; } } }
+fn main() {
+    println("named");    { let a = Option.Some((R { id: 5 }, 9)); eat(a); } println("  out")
+    println("temp");     { eat(Option.Some((R { id: 5 }, 9))); } println("  out")
+    println("result");   { let a: Result[(R, i64), i64] = Result.Ok((R { id: 5 }, 9)); eatr(a); } println("  out")
+    println("method");   { let h = Hd { n: 1 }; let a = Option.Some((R { id: 5 }, 9)); h.eat(a); } println("  out")
+    println("assoc");    { let a = Option.Some((R { id: 5 }, 9)); Snk.eat(a); } println("  out")
+    println("second");   { let a = Option.Some((9, R { id: 5 })); eat1(a); } println("  out")
+    println("sibling");  { let a = Option.Some((R { id: 5 }, R { id: 6 })); eat2(a); } println("  out")
+    println("nomove");   { let a = Option.Some((R { id: 5 }, 9)); peek(a); } println("  out")
+    println("mixed");    { let a = Option.Some((R { id: 5 }, R { id: 6 })); let r = hands(a); println(f"  got{r.id}"); } println("  out")
+    println("end")
+}
+"#,
+        ) else {
+            return;
+        };
+        assert_eq!(out, "named\n  dR5\n  mid\n  out\ntemp\n  dR5\n  mid\n  out\nresult\n  dR5\n  mid\n  out\nmethod\n  dR5\n  mid\n  out\nassoc\n  dR5\n  mid\n  out\nsecond\n  dR5\n  mid\n  out\nsibling\n  dR5\n  mid\n  dR6\n  out\nnomove\n  mid9\n  dR5\n  out\nmixed\n  dR6\n  mid\n  dR5\n  got5\n  dR5\n  out\nend\n");
+    }
     /// B-2026-09-13-11 — the BODY COUNT for a read-only destructure of an
     /// own-`Drop` enum's payload: exactly one enclosing body, on the
     /// interpreter and AOT alike.
