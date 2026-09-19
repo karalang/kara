@@ -1395,6 +1395,40 @@ pub fn fn_returns_param(f: &Function, arg_index: usize) -> bool {
                 fields.iter().any(|f| expr_is_ident(&f.value, name, wraps))
             }
             ExprKind::Tuple(elems) => elems.iter().any(|el| expr_is_ident(el, name, wraps)),
+            // B-2026-09-19-36 — an `Option`/`Result` CONSTRUCTOR carries the
+            // param out exactly as the struct literal and tuple arms above do.
+            // `return Ho { g: Option.Some(g) }` hands `g`'s box to the caller's
+            // result binding just as `return Ho { g: g }` does, and recognizing
+            // only the latter left the caller's argument still owning a box the
+            // returned wrapper also held — `free(): double free detected in
+            // tcache 2` where `--interp` was correct.
+            //
+            // `Option` and `Result` by name, rather than a general
+            // variant-constructor test, because telling a user enum's
+            // constructor from an associated function call needs the
+            // declarations and this predicate has only the function (the
+            // `program`-carrying sibling `yields_wrapped_named` does exactly
+            // that, and still would not catch these two — they are BUILT-IN, so
+            // `is_user_variant_ctor` finds no `EnumDef` for them).
+            //
+            // Naming them is not a shortcut here, it is COMPLETE for this shape:
+            // `E_ENUM_NESTED_ENUM_PAYLOAD` rejects a user enum with a plain enum
+            // payload outright (`enum W[T] { S(G1[T]), N }` does not compile), so
+            // `Option` and `Result` are the only wrappers a plain generic enum
+            // can reach. A `shared`/`par` inner enum is an RC pointer on a
+            // different channel, and a `Vec` layer owns its elements itself.
+            ExprKind::Call { callee, args } => {
+                let ExprKind::Path { segments, .. } = &callee.kind else {
+                    return false;
+                };
+                let [head, _variant] = segments.as_slice() else {
+                    return false;
+                };
+                if head != "Option" && head != "Result" {
+                    return false;
+                }
+                args.iter().any(|a| expr_is_ident(&a.value, name, wraps))
+            }
             _ => false,
         }
     }

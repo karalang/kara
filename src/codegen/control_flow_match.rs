@@ -14482,7 +14482,39 @@ impl<'ctx> super::Codegen<'ctx> {
         depth: u32,
         out: &mut Vec<inkwell::values::IntValue<'ctx>>,
     ) {
-        if depth > 3 || out.len() >= 8 {
+        if depth > 4 || out.len() >= 16 {
+            return;
+        }
+        // B-2026-09-19-36 — a BARE i64 leaf is a candidate too, not only a leaf
+        // whose type matches the slot's. When the argument is placed inside an
+        // `Option`/`Result` before going into the field
+        // (`Ho { g: Option.Some(g) }`), `coerce_to_payload_words` decomposes its
+        // envelope into the OUTER envelope's payload words, so the box word
+        // survives as a plain i64 at some index and NO leaf of the return
+        // carries the argument's type any more. Type identity cannot find it;
+        // only the word can.
+        //
+        // WHY COMPARING THE EXTRA WORDS IS SAFE, which is the whole argument for
+        // widening a predicate whose job is to suppress a free. The words this
+        // now reaches beyond the typed leaf are an enum TAG, a zero pad, or a
+        // sibling payload word. A tag is 0 or 1 and a pad is 0; `src_w0` is a
+        // live `malloc` result, so neither can equal it. A sibling payload word
+        // could in principle, and that is the direction this is allowed to be
+        // wrong in: a spurious match disarms a drop the return does not really
+        // own, which STRANDS the box — a bounded leak — whereas failing to match
+        // frees it twice. The existing predicate already rests on that asymmetry
+        // and this only widens the same side of it.
+        //
+        // The one shape that could fold badly is a genuinely `undef` word, since
+        // `icmp eq undef, %p` may fold either way. At a call site every word
+        // here is an `extractvalue` off the call's own result, which is not a
+        // constant, so a statically-undef word cannot reach the compare; a
+        // callee that returns an uninitialized field can still produce one at
+        // runtime, and it lands on the stranding side above.
+        if let inkwell::values::BasicValueEnum::IntValue(iv) = val {
+            if iv.get_type().get_bit_width() == 64 {
+                out.push(iv);
+            }
             return;
         }
         let inkwell::values::BasicValueEnum::StructValue(sv) = val else {

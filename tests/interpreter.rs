@@ -71040,6 +71040,77 @@ fn main() {
     assert_eq!(out, "second\n  dH1\n  n9\nsecond2\n  dH2\n  n4242\nfirst\n  dH3\n  n9\nnamed\n  dH4\n  n9\ntwoof3\n  dH5\n  n109\nallwild\n  dH6\n  n55\ntwowild\n  dH7\n  dH8\n  n66\nstrwild\n  n88\nnarrow\n  n44\nokside\n  dH10\n  n11\nerrside\n  dH11\n  n22\nnonearm\n  n77\nend\n", "got:\n{out}");
 }
 
+/// B-2026-09-19-36 — the remainder of B-2026-09-19-21, one `Option` layer
+/// deeper. A generic callee that wraps its boxed payload parameter in
+/// `Option.Some` before placing it in the returned aggregate
+/// (`return Ho { g: Option.Some(g) }`) left two owners on one box:
+/// `free(): double free detected in tcache 2` where `--interp` printed `mx 10`.
+///
+/// TWO gates declined it, not one, which is why the earlier fix did not reach
+/// it. `fn_returns_param` decides whether the argument is even a hand-back
+/// CANDIDATE, and its `expr_is_ident` recognized a bare identifier, a struct
+/// literal and a tuple — but not a variant constructor, so `Option.Some(g)`
+/// answered `false` and the disarm was never attempted. Past that,
+/// `collect_handback_box_words` looked only for a leaf whose TYPE equals the
+/// argument slot's; `coerce_to_payload_words` decomposes the argument's
+/// envelope into the OUTER envelope's payload words, so the box survives as a
+/// plain `i64` at some index and no leaf carries that type any more.
+///
+/// Naming `Option` and `Result` in the predicate is COMPLETE rather than a
+/// shortcut: `E_ENUM_NESTED_ENUM_PAYLOAD` rejects a user enum with a plain
+/// enum payload outright, so those two are the only wrappers a plain generic
+/// enum can reach.
+///
+/// `optF` / `resF` / `bareF` are the dies-inside legs and carry the weight
+/// here, because a WIDER disarm is the direction that strands boxes: the
+/// callee keeps the argument and returns a payload-free variant, so the
+/// caller must still free its own. `discard` hands the result to nobody.
+/// `diesin` never wraps at all. `optAll` is the all-paths spelling, whose
+/// argument was already disarmed statically and which this must not disturb.
+/// `bareT` answers the row's own open question — a bare `Option[G1[T]]`
+/// return with no surrounding struct had the same double free, and the same
+/// fix reaches it.
+///
+/// Measured per cell against the parent tree: `optT`, `resT` and `bareT`
+/// aborted at exit 134 with one `Invalid free()` each and now exit 0; no
+/// negative cell moved. As with B-2026-09-19-21, the three repaired cells
+/// trade the double free for a 24-byte leak, and `optAll` is the proof that
+/// leak pre-dates the change — it is the one cell already disarmed on the
+/// parent tree and the one cell that already leaked there. B-2026-09-19-35
+/// owns that missing drop.
+///
+/// Byte-identical to the codegen twin, which is the assertion.
+#[test]
+fn test_option_wrapped_handback_leaves_one_owner_on_the_payload_box() {
+    let out = run(r#"enum G1[T] { Y(T), N }
+struct Ho[T] { g: Option[G1[T]] }
+struct Hr[T] { g: Result[G1[T], i64] }
+
+fn optW[T](g: G1[T], c: bool) -> Ho[T] { if c { return Ho { g: Option.Some(g) } } return Ho { g: Option.None }; }
+fn optAll[T](g: G1[T]) -> Ho[T] { return Ho { g: Option.Some(g) }; }
+fn resW[T](g: G1[T], c: bool) -> Hr[T] { if c { return Hr { g: Result.Ok(g) } } return Hr { g: Result.Err(7) }; }
+fn optBare[T](g: G1[T], c: bool) -> Option[G1[T]] { if c { return Option.Some(g) } return Option.None; }
+fn eats[T](g: G1[T], c: bool) -> i64 { match g { G1.Y(v) => { return 1; } G1.N => { return 0; } } }
+
+fn shwO(o: Option[G1[String]]) { match o { Option.Some(i) => { match i { G1.Y(v) => { println(f"  mx {v.len()}") } G1.N => { println("  mx 0") } } } Option.None => { println("  none") } } }
+fn shwR(r: Result[G1[String], i64]) { match r { Result.Ok(i) => { match i { G1.Y(v) => { println(f"  mx {v.len()}") } G1.N => { println("  mx 0") } } } Result.Err(e) => { println("  err") } } }
+
+fn main() {
+    println("optT");     { let g: G1[String] = G1.Y(f"aaaaaaaa-1"); let h = optW(g, true); shwO(h.g) }
+    println("optF");     { let g: G1[String] = G1.Y(f"aaaaaaaa-2"); let h = optW(g, false); shwO(h.g) }
+    println("optAll");   { let g: G1[String] = G1.Y(f"aaaaaaaa-3"); let h = optAll(g); shwO(h.g) }
+    println("resT");     { let g: G1[String] = G1.Y(f"aaaaaaaa-4"); let h = resW(g, true); shwR(h.g) }
+    println("resF");     { let g: G1[String] = G1.Y(f"aaaaaaaa-5"); let h = resW(g, false); shwR(h.g) }
+    println("bareT");    { let g: G1[String] = G1.Y(f"aaaaaaaa-6"); let o = optBare(g, true); shwO(o) }
+    println("bareF");    { let g: G1[String] = G1.Y(f"aaaaaaaa-7"); let o = optBare(g, false); shwO(o) }
+    println("diesin");   { let g: G1[String] = G1.Y(f"aaaaaaaa-8"); let n = eats(g, true); println(f"  e{n}") }
+    println("discard");  { let g: G1[String] = G1.Y(f"aaaaaaaa-9"); optW(g, true); println("  x") }
+    println("end");
+}
+"#);
+    assert_eq!(out, "optT\n  mx 10\noptF\n  none\noptAll\n  mx 10\nresT\n  mx 10\nresF\n  err\nbareT\n  mx 10\nbareF\n  none\ndiesin\n  e1\ndiscard\n  x\nend\n", "got:\n{out}");
+}
+
 /// B-2026-09-14-18 (BOXED leg) — the same defect on the OTHER channel, where
 /// the payload is too wide to sit inline and the bodies belong to the CALLEE.
 ///

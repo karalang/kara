@@ -98842,6 +98842,89 @@ fn main() {
         );
     }
 
+    /// B-2026-09-19-36 — the MEMORY half. The widened hand-back disarm is
+    /// allowed to be wrong only in the STRANDING direction, so these are the
+    /// cells that catch it going wrong: every one of them is a leg where the
+    /// callee KEEPS the argument and the caller must still free its own box.
+    ///
+    /// `optF` / `resF` / `bareF` return a payload-free variant
+    /// (`Ho { g: Option.None }`, `Hr { g: Result.Err(7) }`, `Option.None`), so
+    /// nothing of the argument leaves the frame and disarming would strand the
+    /// box. `discard` hands the result to nobody, which is the window
+    /// B-2026-09-16-16 guards and which the disarm must stay out of.
+    ///
+    /// The `c == true` legs are deliberately ABSENT, and that is the whole
+    /// reason this fixture is only four cells: they leak 24 bytes each, because
+    /// the caller's result binding arms no box drop for a generic enum inside a
+    /// returned aggregate's field once the argument is disarmed. That is
+    /// B-2026-09-19-35's missing drop, pre-dating this change (the all-paths
+    /// spelling already leaked on the parent tree), and it would fail the Linux
+    /// LeakSanitizer leg here rather than measure this row. Their VALUES are
+    /// pinned by the output fixture pair instead.
+    ///
+    /// THIS FIXTURE ONLY REPORTS ON THE `-O0` LEG, and that is worth knowing
+    /// before trusting a green run of it. Verified by fault injection rather
+    /// than assumed: forcing the disarm unconditionally (`handed = live`, so
+    /// the argument stands down whatever the return holds) strands all three
+    /// cells — `valgrind` puts them at 24 bytes each where they were 0 — and
+    /// this fixture still PASSED under a plain `cargo test --features llvm`.
+    /// At `-O2` LLVM deletes an allocation nothing observes, so the leak never
+    /// reaches LeakSanitizer. Re-run at `KARAC_OPT_LEVEL=0` and the same
+    /// injected fault fails it, which is what `scripts/asan-o0-leg.sh` does and
+    /// why that leg is the authoritative one for a cell of this class.
+    #[test]
+    fn asan_option_wrapped_handback_does_not_strand_the_dies_inside_legs() {
+        const DECLS: &str = "enum G1[T] { Y(T), N }\n\
+             struct Ho[T] { g: Option[G1[T]] }\n\
+             struct Hr[T] { g: Result[G1[T], i64] }\n\
+             fn optW[T](g: G1[T], c: bool) -> Ho[T] { if c { return Ho { g: Option.Some(g) } } return Ho { g: Option.None }; }\n\
+             fn resW[T](g: G1[T], c: bool) -> Hr[T] { if c { return Hr { g: Result.Ok(g) } } return Hr { g: Result.Err(7) }; }\n\
+             fn optBare[T](g: G1[T], c: bool) -> Option[G1[T]] { if c { return Option.Some(g) } return Option.None; }\n\
+             fn shwO(o: Option[G1[String]]) { match o { Option.Some(i) => { match i { G1.Y(v) => { println(f\"mx {v.len()}\") } G1.N => { println(\"mx 0\") } } } Option.None => { println(\"none\") } } }\n\
+             fn shwR(r: Result[G1[String], i64]) { match r { Result.Ok(i) => { match i { G1.Y(v) => { println(f\"mx {v.len()}\") } G1.N => { println(\"mx 0\") } } } Result.Err(e) => { println(\"err\") } } }\n";
+
+        // The callee keeps the argument and returns a payload-free variant —
+        // through a struct field, on both the `Option` and `Result` channels.
+        assert_clean_asan_run(
+            &format!(
+                "{DECLS}\
+                 fn main() {{\n\
+                 \x20   {{ let g: G1[String] = G1.Y(\"aaaaaaaa-1\"); let h = optW(g, false); shwO(h.g) }}\n\
+                 \x20   {{ let g: G1[String] = G1.Y(\"bbbbbbbb-2\"); let h = resW(g, false); shwR(h.g) }}\n\
+                 \x20   println(\"end\");\n\
+                 }}\n"
+            ),
+            &["none", "err", "end"],
+            "b91936-dies-inside",
+        );
+
+        // The BARE return with no surrounding struct, same leg.
+        assert_clean_asan_run(
+            &format!(
+                "{DECLS}\
+                 fn main() {{\n\
+                 \x20   {{ let g: G1[String] = G1.Y(\"cccccccc-3\"); let o = optBare(g, false); shwO(o) }}\n\
+                 \x20   println(\"end\");\n\
+                 }}\n"
+            ),
+            &["none", "end"],
+            "b91936-bare-dies-inside",
+        );
+
+        // The result consumed by nobody — the discarded-statement window.
+        assert_clean_asan_run(
+            &format!(
+                "{DECLS}\
+                 fn main() {{\n\
+                 \x20   {{ let g: G1[String] = G1.Y(\"dddddddd-4\"); optW(g, false); println(\"x\") }}\n\
+                 \x20   println(\"end\");\n\
+                 }}\n"
+            ),
+            &["x", "end"],
+            "b91936-discarded",
+        );
+    }
+
     /// B-2026-09-14-18 — the MEMORY half of the two paired output fixtures.
     ///
     /// The row itself is body-only: it measured `9-10 allocs with equal frees,
