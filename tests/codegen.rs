@@ -75072,6 +75072,34 @@ fn main() {
         let _ = std::fs::remove_file(&ir_path);
 
         let output = output?;
+
+        // A SIGNAL death here is a crash of the JIT runner, and `run_program`
+        // keeps only `.stdout` — so without this a crash surfaces as
+        // `left: ""` against the expected output, with the actual cause
+        // discarded. B-2026-09-19-3 was a `free(): double free detected in
+        // tcache 2` that cost a full investigation to see, because nothing in
+        // the failure report mentioned it: buffered stdout is lost to the
+        // abort, so the assertion compares "" and blames the backend.
+        //
+        // Two things make this safe to report unconditionally. A test that
+        // asserts on a deliberate non-zero EXIT uses `run_program_capturing`
+        // and reads `.status` itself, so this does not steal its case; and a
+        // signal is never a program's own choice, unlike an exit code.
+        #[cfg(unix)]
+        {
+            use std::os::unix::process::ExitStatusExt;
+            if let Some(sig) = output.status.signal() {
+                eprintln!(
+                    "[jit-lane] karac_jit_runner died on SIGNAL {sig} with {} byte(s) of \
+                     stdout — the assertion below compares that truncated output, not a \
+                     backend result. NOTE: a label reading \"AOT\" in the failing test is a \
+                     hardcoded string and runs on this lane too. Runner stderr:\n{}",
+                    output.stdout.len(),
+                    String::from_utf8_lossy(&output.stderr),
+                );
+            }
+        }
+
         Some(CapturedRun {
             stdout: String::from_utf8_lossy(&output.stdout).to_string(),
             stderr: String::from_utf8_lossy(&output.stderr).to_string(),
