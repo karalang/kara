@@ -96,7 +96,7 @@ distinguish "bugs flattening" from "we stopped writing them down."
 | miscompile | 423 |
 | leak | 376 |
 | double-free | 248 |
-| missing-feature | 199 |
+| missing-feature | 200 |
 | codegen-gap | 181 |
 | other | 137 |
 | diagnostics | 127 |
@@ -121,7 +121,7 @@ distinguish "bugs flattening" from "we stopped writing them down."
 | runtime | 45 |
 | effect | 29 |
 | resolver | 29 |
-| lexer | 9 |
+| lexer | 10 |
 ## Current state
 
 _Generated from `bug-ledger.jsonl` by `scripts/bug-curve.py` (2026-05-20 → 2026-09-19). Do not edit this block by hand; edit the ledger and regenerate._
@@ -190,7 +190,6 @@ _Generated from `bug-ledger.jsonl` by `scripts/bug-curve.py` (2026-05-20 → 202
 | B-2026-09-17-37 | 2026-09-17 | codegen | medium | A NAMED-LOCAL `Option` ARGUMENT DOUBLES A CONSUMED PAYLOAD PART'S `Drop` BODY ON EVERY COMPILED SURFACE -- `let a = Some((R { id: 5 }, 9)); eat(a);` over `fn eat(o: Option[(R, i64)]) { match o { Some(t) => { let x = t.0; println("mid"); } .. } }` prints `dR5 mid dR5 end` on JIT/AOT/AOT-at-`KARAC_AUTO_PAR=0` against the interpreter's now-correct `dR5 mid end`, while the FRESH-TEMP spelling of the identical `eat` is correct on all four surfaces | — |
 | B-2026-09-17-38 | 2026-09-17 | codegen | medium | A `Drop`-BEARING SIBLING PART IS LOST ON EVERY COMPILED SURFACE WHEN ITS PEER IS CONSUMED BY AN IN-FRAME LOCAL -- `fn eat(o: Option[(R, R)]) { match o { Some(t) => { let x = t.0; println("mid"); } .. } }` prints `dR5 mid end` on JIT/AOT/AOT-at-`KARAC_AUTO_PAR=0` against the interpreter's now-correct `dR5 mid dR6 end`, so element 1's owed body runs NOWHERE; the CONSUMED-IN-FRAME twin of B-2026-09-17-30, which reaches the same loss through an ESCAPE | — |
 | B-2026-09-18-1 | 2026-09-18 | codegen | medium | A GENERIC ENUM'S BOXED PAYLOAD STILL LOSES ITS `Drop` BODY WHEN THE ARM *CONSUMES* ITS BINDING -- `match x { Full(r) => { let z = r; .. } }` over a three-`String` payload prints `w:4 end` on JIT/AOT against `--interp`'s `w:4 dW4 end`, while the READ-ONLY twin is correct on all four since B-2026-09-14-22, so the remaining loss is the arm moving its binding into a local and `z` acquiring no body for it | — |
-| B-2026-09-19-6 | 2026-09-19 | other | low | THE SELF-HOST LEXER ORACLE DISCARDS `Token::Error` MESSAGES, SO A DIAGNOSTIC-TEXT DIVERGENCE BETWEEN SEED AND PORT IS INVISIBLE EVEN WITH A CORPUS INPUT FOR IT | — |
 | B-2026-09-19-17 | 2026-09-19 | interp | medium | A `shared enum` HELD IN A PLAIN ENUM'S PAYLOAD NEVER RELEASES UNDER `--interp`, BECAUSE THE INTERPRETER HAS NO REFCOUNT FOR ONE -- `H3.P(SMono.P(mkr(1)))` prints `d2:9` on jit / `-O0` / `-O2` since B-2026-09-17-19 and still nothing interpreted; a `shared struct` in the same position was fixed in that commit and now agrees, which isolates the gap to `Value::EnumVariant` carrying no `Arc` rather than to a missing walk | — |
 | B-2026-09-19-18 | 2026-09-19 | codegen | medium | A PLAIN STRUCT, `Vec` OR `Option` HOLDING A `shared enum` RELEASES IT AT LEXICAL SCOPE EXIT ON THE COMPILED BACKENDS AND AT THE BINDING'S LIVE-RANGE END UNDER `--interp` -- one body either way, three spellings, and design.md :866 says the interpreter's placement is the correct one; the DIRECT binding was fixed in B-2026-09-17-19 and these are one indirection out | — |
 | B-2026-09-19-19 | 2026-09-19 | interp | medium | THE INTERPRETER RUNS A `shared enum` PAYLOAD'S `Drop` BODY AT THE BLOCK'S END WHILE THE VALUE IS STILL LIVE IN A `Vec` THAT OUTLIVES IT -- `{ let s = SMono.P(mkr(1)); v.push(s) }` prints `d2:9` before `out` interpreted and after it on every compiled surface, which B-2026-09-17-19 records as a fact without filing and which that commit turns into a live divergence with a known right answer | — |
@@ -199,6 +198,7 @@ _Generated from `bug-ledger.jsonl` by `scripts/bug-curve.py` (2026-05-20 → 202
 | B-2026-09-19-23 | 2026-09-19 | codegen | medium | A TEMP GENERIC ENUM ARGUMENT WHOSE RESULT IS DISCARDED LEAKS ITS PAYLOAD BOX -- `mid(G1.Y(f"aaaaaaaa-1"), true);` loses 34 bytes (24 direct, 10 indirect) where the NAMED spelling of the same call is clean, so B-2026-09-16-16's discarded-statement window does not cover the one argument that has no binding to keep a drop | — |
 | B-2026-09-19-24 | 2026-09-19 | codegen | medium | THE `Option`/`Result` HEAD OF B-2026-09-17-7 IS UNFIXED -- `fn midopt[T](g: Option[T], c: bool) -> Option[T] { if c { return g } return Option.None }` at `T = Array[String, 2]` dies with 10 `Invalid read of size 8` against a correct `--interp`; the runtime compare that fixed the user-enum head is gated on `user_enum_boxed_payload_variants`, which returns nothing for the seeded heads by design | — |
 | B-2026-09-19-25 | 2026-09-19 | codegen | medium | AUDIT THE REST OF THE ONE-WAY-CLEAR POPULATION THAT B-2026-09-17-8 FIXED BY CONSTRUCTION -- nine payload-ownership registries were wiped for the remainder of ANY caller that made a generic call, so every caller that used an `Option`/`Result`/boxed-payload binding after a generic call was exposed, and only the eleven shapes in that row's fixture have actually been measured | — |
+| B-2026-09-19-26 | 2026-09-19 | lexer | low | THE SELF-HOSTED LEXER DOES NOT MODEL `IntegerOutOfRange`, so a 19+ digit literal is an Error token in the port and a real token in the seed -- `18446744073709551615usize` has been in the oracle corpus since B-2026-08-19-29 and passed, both sides spelling it `ERROR` | — |
 
 ### Relocated
 
@@ -2697,6 +2697,7 @@ _Generated from `bug-ledger.jsonl` by `scripts/bug-curve.py` (2026-05-20 → 202
 | B-2026-09-19-3 | codegen | high | AN `Array[D, N]` MOVED FROM A NAMED LOCAL INTO A STRUCT FIELD DOUBLE-FREES ON BOTH COMPILED BACKENDS AT `-O0`, AND THE OPTIMIZER HIDES IT AT `-O1`+ -… | 3b79cef |
 | B-2026-09-19-4 | codegen | medium | ON arm64 THE JIT LANE RENDERS A `SortedMap[u64, u64]` VALUE AT OR ABOVE 2^63 AS `0` -- `SortedMap{18446744073709551615: 0}` where the interpreter giv… | 416a038 |
 | B-2026-09-19-5 | other | medium | A CRASHED `karac_jit_runner` IS REPORTED AS AN EMPTY-STDOUT ASSERTION FAILURE, DISCARDING THE SIGNAL AND STDERR -- so a JIT-lane double free reads as… | f4dc90f |
+| B-2026-09-19-6 | other | low | THE SELF-HOST LEXER ORACLE DISCARDS `Token::Error` MESSAGES, SO A DIAGNOSTIC-TEXT DIVERGENCE BETWEEN SEED AND PORT IS INVISIBLE EVEN WITH A CORPUS IN… | bdd1246 |
 | B-2026-09-19-7 | codegen | high | AN `Array[Vec[D], 1]`-TYPED STRUCT FIELD MOVED FROM A NAMED LOCAL SEGFAULTS AT THE DEFAULT `-O2` -- `karac build` emits a binary that dies with SIGSE… | 3b79cef |
 | B-2026-09-19-8 | codegen+runtime | high | A `u64`-KEYED `Map` / `Set` / `SortedMap` CANNOT FIND A KEY IT JUST INSERTED, ON EVERY LANE AND OPT LEVEL -- the per-key hash fn codegen synthesizes… | 416a038 |
 | B-2026-09-19-9 | codegen | medium | THE TUPLE-PAYLOAD SIBLING OF B-2026-09-17-34 STILL RUNS TWO `Drop` BODIES WITH THE SECOND READING A FREED STRING -- `match o { Some(t) => { let x = t… | 0898818 |
