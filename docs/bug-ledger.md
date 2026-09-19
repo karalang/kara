@@ -197,7 +197,6 @@ _Generated from `bug-ledger.jsonl` by `scripts/bug-curve.py` (2026-05-20 → 202
 | B-2026-09-17-38 | 2026-09-17 | codegen | medium | A `Drop`-BEARING SIBLING PART IS LOST ON EVERY COMPILED SURFACE WHEN ITS PEER IS CONSUMED BY AN IN-FRAME LOCAL -- `fn eat(o: Option[(R, R)]) { match o { Some(t) => { let x = t.0; println("mid"); } .. } }` prints `dR5 mid end` on JIT/AOT/AOT-at-`KARAC_AUTO_PAR=0` against the interpreter's now-correct `dR5 mid dR6 end`, so element 1's owed body runs NOWHERE; the CONSUMED-IN-FRAME twin of B-2026-09-17-30, which reaches the same loss through an ESCAPE | — |
 | B-2026-09-18-1 | 2026-09-18 | codegen | medium | A GENERIC ENUM'S BOXED PAYLOAD STILL LOSES ITS `Drop` BODY WHEN THE ARM *CONSUMES* ITS BINDING -- `match x { Full(r) => { let z = r; .. } }` over a three-`String` payload prints `w:4 end` on JIT/AOT against `--interp`'s `w:4 dW4 end`, while the READ-ONLY twin is correct on all four since B-2026-09-14-22, so the remaining loss is the arm moving its binding into a local and `z` acquiring no body for it | — |
 | B-2026-09-19-6 | 2026-09-19 | other | low | THE SELF-HOST LEXER ORACLE DISCARDS `Token::Error` MESSAGES, SO A DIAGNOSTIC-TEXT DIVERGENCE BETWEEN SEED AND PORT IS INVISIBLE EVEN WITH A CORPUS INPUT FOR IT | — |
-| B-2026-09-19-14 | 2026-09-19 | codegen | medium | moving ONE field out of a boxed struct payload runs an UNMOVED sibling's Drop body twice | — |
 
 ### Relocated
 
@@ -2697,6 +2696,7 @@ _Generated from `bug-ledger.jsonl` by `scripts/bug-curve.py` (2026-05-20 → 202
 | B-2026-09-19-11 | codegen | medium | A TUPLE ELEMENT MOVED OUT OF A BOXED `Option`/`Result` PAYLOAD STRANDS ITS UNMOVED SIBLING'S HEAP -- `match o { Some(t) => { let x = t.0 } }` over `O… | e18ad64 |
 | B-2026-09-19-12 | interp | medium | THE INTERPRETER RUNS A TUPLE PAYLOAD ELEMENT'S `Drop` BODY TWICE ON THE LOCAL-SCRUTINEE SPELLING -- `let o: Option[(R, i64, i64, i64)] = ...; match o… | f409177 |
 | B-2026-09-19-13 | codegen | medium | a boxed payload's moved-element mask outlived its arm, so a later match in the same function lost a Drop body | 7dc58da |
+| B-2026-09-19-14 | codegen | medium | moving ONE field out of a boxed struct payload runs an UNMOVED sibling's Drop body twice | 9d0f336 |
 
 </details>
 
