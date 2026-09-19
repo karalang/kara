@@ -94,8 +94,8 @@ distinguish "bugs flattening" from "we stopped writing them down."
 |---|---|
 | run-vs-build | 442 |
 | miscompile | 424 |
-| leak | 379 |
-| double-free | 249 |
+| leak | 380 |
+| double-free | 250 |
 | missing-feature | 202 |
 | codegen-gap | 181 |
 | other | 138 |
@@ -110,7 +110,7 @@ distinguish "bugs flattening" from "we stopped writing them down."
 
 | surface | total |
 |---|---|
-| codegen | 1871 |
+| codegen | 1873 |
 | interp | 481 |
 | typecheck | 302 |
 | other | 101 |
@@ -137,7 +137,6 @@ _Generated from `bug-ledger.jsonl` by `scripts/bug-curve.py` (2026-05-20 → 202
 | B-2026-09-14-10 | 2026-09-14 | codegen+interp | low | A BORROW PROJECTION COPIES AS A METHOD ARGUMENT BUT NOT AS A FREE-FUNCTION ONE -- `v.push(w.r)` runs the field's `Drop` body TWICE and `consume(w.r)` runs it ONCE, same syntactic position, same borrow, on all four surfaces alike | — |
 | B-2026-09-14-28 | 2026-09-14 | codegen | medium | `vertical`'s +85% SSO REGRESSION IS NOT THE DE-INLINE PROBE AND NOT `prefix_string` -- both were ruled out by measurement (c1adb9c removed the probe: +84.1% -> +85.4%; an exact mirror of `prefix_string` runs 9-15% FASTER under SSO), so the worst regression in the corpus is now UNATTRIBUTED. `shortest_distance_iii` (+36%) and `shortest_distance` (+61%) are the same shape. Reachable only at KARAC_SSO=1, which is off by default. | — |
 | B-2026-09-15-17 | 2026-09-15 | codegen | low | AN `Array[R, N]` WHOSE ELEMENT RUNS A USER `Drop` BODY, MOVED INTO AN ENUM VARIANT CONSTRUCTOR, RUNS THOSE BODIES BEFORE THE CONSUMING CALL ON EVERY COMPILED BACKEND and after it under `--interp` -- the identical program with a plain function call in place of the constructor is correctly ordered on both, which puts the divergence at the constructor rather than at the array | — |
-| B-2026-09-15-18 | 2026-09-15 | codegen | medium | A GENERIC MULTI-FIELD VARIANT STILL STRANDS ITS BOXED `Array[T, N]` PAYLOAD after B-2026-09-15-15 -- `G2.Y(a, 5)` over `enum G2[T] { Y(T, i64), N }` at `T = Array[String, 2]` loses 48 B + 44 B indirect at `-O0`, byte-identical before and after that fix, because an ERASED `T` cannot be classified at declaration and the monomorphic path that would catch it declines multi-field variants of its own | — |
 | B-2026-09-15-21 | 2026-09-15 | codegen | medium | AN ARM-BOUND PAYLOAD ASSIGNED OVER A `mut` LOCAL STRANDS THE DISPLACED VALUE'S HEAP FIELD, BUT ONLY WHEN THE ENUM ARRIVED AS A BY-VALUE PARAM -- `out = r` inside `fn take(b: E)` loses 2 B per call at -O0 while the identical body in `main`, or over an inline-literal scrutinee, is clean; the displaced value's `Drop` BODY still runs, so only the memory is lost | — |
 | B-2026-09-15-24 | 2026-09-15 | interp+codegen | medium | A USER-DEFINED METHOD THAT DISCARDS A BORROW-PROJECTION ARGUMENT RUNS THE FIELD'S `Drop` BODY TWICE UNDER `--interp` AND ONCE ON EVERY COMPILED SURFACE -- `b.put(w.r)` diverges on all three receiver forms while the identical free and associated spellings agree at one body, because the real discriminator is whether the CALLEE KEEPS THE VALUE, not the call spelling B-2026-09-14-10 reads it as | — |
 | B-2026-09-15-33 | 2026-09-15 | codegen+interp | medium | AN INDEX-ASSIGN WHOSE RHS IS A NAMED LOCAL RUNS THE DISPLACED ELEMENT'S `Drop` BODY UNDER `--interp` AND ON NO COMPILED SURFACE -- `a[0] = b` diverges on the `Array` AND `Vec` legs alike while the fresh-literal RHS agrees, because `store_destroys_displaced` classifies an identifier RHS as a RELOCATION on purpose (B-2026-08-26-21); the open question is whether `a[0] = b` is a relocation at all, not why the call is missing | — |
@@ -202,6 +201,8 @@ _Generated from `bug-ledger.jsonl` by `scripts/bug-curve.py` (2026-05-20 → 202
 | B-2026-09-19-36 | 2026-09-19 | codegen | medium | AN `Option`-WRAPPED FIELD IN THE RETURNED AGGREGATE STILL DOUBLE FREES, the remainder B-2026-09-19-21's fix cannot reach -- `struct Ho[T] { g: Option[G1[T]] }` returned by `Ho { g: Option.Some(g) }` prints `free(): double free detected in tcache 2` where `--interp` prints `mx 10`; the payload is coerced into `Option`'s payload words, so no leaf of the return carries the argument's type and the hand-back scan declines | — |
 | B-2026-09-19-37 | 2026-09-19 | interp | medium | THE INTERPRETER IGNORES A LOCAL BINDING THAT SHADOWS A UNIT ENUM VARIANT'S NAME -- `{ let Uc = 7; let s = Uc; println(f"n{s}") }` prints `nUc` under `--interp` and `n7` on jit / `karac build` / `-O0` / `KARAC_AUTO_PAR=0`, so the interpreter constructs the VARIANT where every compiled surface reads the local; on a `shared enum` it additionally runs that variant's `Drop` body, giving a line no compiled surface prints, and a plain enum diverges identically so it is not about `shared` | — |
 | B-2026-09-19-38 | 2026-09-19 | codegen | medium | A `shared enum`'s UNIT VARIANT CONSTRUCTED IN AN UNBOUND POSITION STILL STRANDS ITS RC SHELL -- `take(U.A)` as an inline call argument, `match U.A { .. }` as a scrutinee and a discarded `U.A;` each lose the whole `{ i64 rc, i64 tag, .. }` allocation at `-O0`, unbounded in a loop (80 B over 5 iterations), byte-identical before and after B-2026-09-17-22's fix, which covered the BOUND spellings only; the same three positions are clean for a payload-carrying variant (`take(U.A(3))`) and for a call result (`take(mk())`), so what is missing is a caller-side temp owner for the one fresh-ref source that is not an `ExprKind::Call` | — |
+| B-2026-09-19-39 | 2026-09-19 | codegen | medium | A GENERIC MULTI-FIELD VARIANT WITH A HEAP-BEARING SIBLING CANNOT TAKE A `BoxedEnumDrop` WITHOUT LOSING THE SIBLING -- `enum Gh[T] { Y(T, String), N }` at `T = Array[String, 2]` trades its 96 B box for the sibling `String`s, because the argument-move suppressor zeroes the WHOLE payload slot and so clears the sibling's `cap > 0` guard along with the box's tag guard; B-2026-09-15-18 declines the shape rather than take that trade, so its box is still stranded | — |
+| B-2026-09-19-40 | 2026-09-19 | codegen | high | AN ARM THAT HANDS A GENERIC BOXED `Array` PAYLOAD TO A BY-VALUE CALLEE INVALID-FREES ON STOCK `main` -- `match g { G1.Y(x) => eat(x) }` over `G1[Array[String, 2]]` reports 4 valgrind errors from 2 contexts at `-O0` with output still correct on every backend, because `consume_class` treats a function argument as non-consuming while a by-value `Array` param is callee-owns, so the arm's interior drop is never retracted | — |
 
 ### Relocated
 
@@ -2651,6 +2652,7 @@ _Generated from `bug-ledger.jsonl` by `scripts/bug-curve.py` (2026-05-20 → 202
 | B-2026-09-15-14 | interp+codegen | medium | AN ENUM STORED IN A `Map` OR `Set` NEVER RUNS ITS USER `Drop` BODY AT ALL -- `s.insert(mkd(0))` over `Set[Tg]` with `impl Drop for Tg`, no lookup any… | 2ad3103 |
 | B-2026-09-15-15 | codegen | medium | A MULTI-FIELD ENUM VARIANT STRANDS ITS BOXED `Array[T, N]` PAYLOAD ON EVERY COMPILED BACKEND -- `Both(a, b)` loses 96 B + 92 B indirect at `-O0` and… | c6adcae |
 | B-2026-09-15-16 | codegen | medium | A PLAIN STRUCT MOVED INTO AN OWNING SINK LEAVES THE SOURCE'S HEAP FIELD READING EMPTY ON EVERY COMPILED BACKEND -- `Ws.Full(p)` then `println(p.s)` p… | 83602bc |
+| B-2026-09-15-18 | codegen | medium | A GENERIC MULTI-FIELD VARIANT STILL STRANDS ITS BOXED `Array[T, N]` PAYLOAD after B-2026-09-15-15 -- `G2.Y(a, 5)` over `enum G2[T] { Y(T, i64), N }`… | e8ac5cb |
 | B-2026-09-15-19 | codegen | high | A SINGLE-FIELD STRUCT-SHAPED VARIANT WHOSE ARM HANDS ITS `Array[T, N]` PAYLOAD ON DOUBLE FREES ON BOTH COMPILED BACKENDS -- `match s { St1.S { a } =>… | c6adcae |
 | B-2026-09-15-5 | interp+codegen | medium | A MAP-LOOKUP KEY TEMPORARY'S USER `Drop` BODY NEVER RUNS -- `m.get(mkd(0))` over `Map[Dk, i64]` with `impl Drop for Dk` reclaims the key's storage bu… | c75268b |
 | B-2026-09-15-7 | codegen | low | AN INDEX-STORE FREES ONLY THE OUTER BUFFER OF THE `Vec` ELEMENT IT DISPLACES, STRANDING THAT ELEMENT'S OWN ELEMENTS -- `a[0] = <new>` over `Array[Vec… | bfeeb86 |
