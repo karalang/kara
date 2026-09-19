@@ -103,14 +103,14 @@ distinguish "bugs flattening" from "we stopped writing them down."
 | perf | 115 |
 | false-positive | 108 |
 | soundness | 96 |
-| crash | 85 |
+| crash | 86 |
 | use-after-free | 43 |
 
 ### By surface
 
 | surface | total |
 |---|---|
-| codegen | 1850 |
+| codegen | 1851 |
 | interp | 474 |
 | typecheck | 302 |
 | other | 99 |
@@ -201,6 +201,7 @@ _Generated from `bug-ledger.jsonl` by `scripts/bug-curve.py` (2026-05-20 → 202
 | B-2026-09-19-3 | 2026-09-19 | codegen | high | AN `Array[D, N]` MOVED FROM A NAMED LOCAL INTO A STRUCT FIELD DOUBLE-FREES ON BOTH COMPILED BACKENDS AT `-O0`, AND THE OPTIMIZER HIDES IT AT `-O1`+ -- so the DEFAULT `-O2` `karac build` silently carries it while `karac run` aborts with `free(): double free detected in tcache 2`; the array-LITERAL spelling is clean everywhere | — |
 | B-2026-09-19-4 | 2026-09-19 | codegen | medium | ON arm64 THE JIT LANE RENDERS A `SortedMap[u64, u64]` VALUE AT OR ABOVE 2^63 AS `0` -- `SortedMap{18446744073709551615: 0}` where the interpreter gives the full value; the KEY at the same magnitude is correct | — |
 | B-2026-09-19-6 | 2026-09-19 | other | low | THE SELF-HOST LEXER ORACLE DISCARDS `Token::Error` MESSAGES, SO A DIAGNOSTIC-TEXT DIVERGENCE BETWEEN SEED AND PORT IS INVISIBLE EVEN WITH A CORPUS INPUT FOR IT | — |
+| B-2026-09-19-7 | 2026-09-19 | codegen | high | AN `Array[Vec[D], 1]`-TYPED STRUCT FIELD MOVED FROM A NAMED LOCAL SEGFAULTS AT THE DEFAULT `-O2` -- `karac build` emits a binary that dies with SIGSEGV printing NOTHING, where the array-LITERAL spelling of the identical field is correct and the interpreter is correct | — |
 
 ### Relocated
 
