@@ -92,8 +92,8 @@ distinguish "bugs flattening" from "we stopped writing them down."
 
 | class | total |
 |---|---|
-| run-vs-build | 447 |
-| miscompile | 424 |
+| run-vs-build | 448 |
+| miscompile | 425 |
 | leak | 382 |
 | double-free | 250 |
 | missing-feature | 202 |
@@ -110,8 +110,8 @@ distinguish "bugs flattening" from "we stopped writing them down."
 
 | surface | total |
 |---|---|
-| codegen | 1881 |
-| interp | 483 |
+| codegen | 1883 |
+| interp | 484 |
 | typecheck | 302 |
 | other | 101 |
 | ownership | 75 |
@@ -130,7 +130,6 @@ _Generated from `bug-ledger.jsonl` by `scripts/bug-curve.py` (2026-05-20 → 202
 
 | id | date | surface | sev | title | tracker |
 |---|---|---|---|---|---|
-| B-2026-09-10-20 | 2026-09-10 | codegen | medium | A `Vec` OR `shared enum` ENUM PAYLOAD LOSES ITS `Drop` BODY ON EVERY BACKEND, AND THE GENERIC SPELLING ALSO LEAKS -- `G.X(w)` over `Vec[Mono]` prints nothing and strands 320 B + 27 B, `G.X(SMono.P(..))` and its DECLARED twin `enum H3 { P(SMono) }` each strand 88 B + 27 B, while the same envelope over a plain struct payload is correct and clean -- so the two remedies `E_ENUM_NESTED_ENUM_PAYLOAD` recommends are both broken | — |
 | B-2026-09-12-1 | 2026-09-12 | runtime | low | `coroutine_ws_over_tls_concurrent_handlers_all_execute` GOES RED IN THE REQUIRED GATE SET BUT IS NOT REPRODUCIBLE ON DEMAND -- five reds across both KARAC_SSO legs against 22 consecutive passes under deliberately harsher standalone conditions. The three preserved reds report 15, 15 and 11 of 16 handlers echoing, so the count is VARIABLE (an earlier two-observation reading of it as a stable 15/16 is retracted in the detail). What holds is the discriminator the row was filed for: `left > 0` every time, so the server DOES come up -- a coroutine-resume / accept-path race, not a port or fixture problem. | — |
 | B-2026-09-13-7 | 2026-09-13 | codegen+interp | medium | AN ENUM VARIANT'S `Vec[T]` PAYLOAD RUNS NO ELEMENT `Drop` BODY ON ANY BACKEND AND ANY ENUM HEAD, AND `Slot[Array[R, N]]` RUNS THEM ON THE FIVE COMPILED SURFACES ONLY -- the two cells B-2026-09-12-24 measured and did not fix; the shared bodies core has a tuple arm and an array arm and no `Vec` arm, and the interpreter has no instantiation chain for a user generic enum the way it has one for the seeded pair | — |
 | B-2026-09-14-6 | 2026-09-14 | codegen+interp | medium | AN `Option` PAYLOAD SUB-VALUE MOVED OUT RUNS ITS `Drop` BODY TWICE ON ALL THREE BACKENDS in two spellings -- a NAMED-LOCAL argument, and a payload whose field is heap-carrying -- so the A/B parity rule sees nothing and the duplicate is invisible to every gate | — |
@@ -204,6 +203,8 @@ _Generated from `bug-ledger.jsonl` by `scripts/bug-curve.py` (2026-05-20 → 202
 | B-2026-09-19-46 | 2026-09-19 | codegen+interp | low | A DECLARED TUPLE ENUM PAYLOAD RUNS NO ELEMENT `Drop` BODY ON ANY BACKEND -- `enum Ht { P((S1, S1)), Q }` prints nothing on `--interp`, the JIT, `-O0` and `-O2` alike, while the GENERIC spelling `G.X((S1, S1))` runs both on every compiled surface and neither under `--interp`, so codegen's tuple walk is reached through one head and not the other and the interpreter reaches it through neither | — |
 | B-2026-09-19-47 | 2026-09-19 | codegen+interp | low | A `Vec` INSIDE AN `Option` INSIDE A GENERIC ENUM PAYLOAD RUNS NO ELEMENT `Drop` BODY ON ANY BACKEND -- `G.X(o)` over `Option[Vec[S1]]` prints nothing on all four surfaces where the one-level-shallower control `let o: Option[Vec[S1]]` prints `dS6`, and the codegen half is one parameter away while the interpreter half wants B-2026-09-17-15's instantiation chain | — |
 | B-2026-09-19-48 | 2026-09-19 | codegen | medium | A NAMED-LOCAL `Option` ARGUMENT WHOSE PAYLOAD IS A NAMED STRUCT RUNS THE SURVIVING FIELD'S `Drop` BODY TWICE ON EVERY COMPILED SURFACE, and an arm that moves NOTHING doubles BOTH fields -- `let a = Some(Q { r, s }); take(a)` over `fn take(o: Option[Q]) { match o { Some(t) => { let x = t.r; .. } .. } }` prints `dR5 mid dR6 dR6` on jit / `karac build` / `KARAC_AUTO_PAR=0` against the interpreter's `dR5 mid dR6`; the exact complement of B-2026-09-17-38, which LOST the surviving part for a TUPLE payload at the same commit, and the FRESH-TEMP spelling of both struct cells is correct throughout | — |
+| B-2026-09-19-49 | 2026-09-19 | codegen | high | AN `Array[S, 1]` ENUM PAYLOAD RUNS ITS ELEMENT'S `Drop` BODY AGAINST THE WRONG MEMORY ON EVERY COMPILED SURFACE -- `enum D1 { P(Array[Sd, 1]), Q }` prints `dS0` for an element whose field holds 41, on the JIT, `-O0` and `-O2` alike, while `--interp` prints `dS41`; wrong at all three positions measured (let-bound, discarded, fresh-temp argument), with valgrind CLEAN, so no sanitizer leg in the tree can see it and only an A/B against the interpreter can. The boundary is INLINE-vs-BOXED payload WIDTH, not the element count: `Array[Sd, 2]`, `Array[S2w, 1]` and `Array[S3w, 1]` are all correct and a one-word element in a two-field variant is still wrong | — |
+| B-2026-09-19-50 | 2026-09-19 | codegen+interp | medium | A DECLARED `Array[E, N]` PAYLOAD WHOSE ELEMENT IS A USER ENUM RUNS THE ELEMENT'S PAYLOAD `Drop` BODIES ON EVERY COMPILED SURFACE AND NONE UNDER `--interp` -- `enum Ha { P(Array[Mono, 1]), Q }` over `enum Mono { P(R), Q }` diverges at four positions (let-bound, discarded, whole move, consuming match arm) and is an agreed silence at two (fresh-temp argument, struct field), while the struct-element control `Array[R, 2]` agrees on all four surfaces at every position. The two halves have DIFFERENT causes -- the interpreter's declared-`Array` arm dispatches a `Value::Struct` element only, and the two gaps are a measured payload-WIDTH artifact -- so it cannot be closed one position at a time | — |
 
 ### Relocated
 
@@ -2536,6 +2537,7 @@ _Generated from `bug-ledger.jsonl` by `scripts/bug-curve.py` (2026-05-20 → 202
 | B-2026-09-10-17 | codegen | low | A STRUCT FIELD TYPED `Option[Option[R]]` RUNS NO INNER `Drop` BODY ON THE COMPILED BACKENDS -- `struct W { o: Option[Option[R]] }` with a never-read… | fe25a2b8f |
 | B-2026-09-10-18 | codegen | low | A WHOLE-BINDING LOCAL TUPLE HOLDING AN `Option[R]` ELEMENT RUNS NO PAYLOAD `Drop` BODY ON THE COMPILED BACKENDS -- a never-read `let p = (Some(R { id… | e056b1540 |
 | B-2026-09-10-19 | codegen | low | A NESTED DESTRUCTURING ARM BINDING LOSES ITS `Drop` BODY ON THE COMPILED BACKENDS -- `match x { Some(Some(r)) => { println(f"a{r.id}") } . | 41717852a |
+| B-2026-09-10-20 | codegen | medium | A `Vec` OR `shared enum` ENUM PAYLOAD LOSES ITS `Drop` BODY ON EVERY BACKEND, AND THE GENERIC SPELLING ALSO LEAKS -- `G.X(w)` over `Vec[Mono]` prints… | c5ac7a2 |
 | B-2026-09-10-21 | codegen | low | A NESTED TUPLE ELEMENT INSIDE AN ARM-BOUND PAYLOAD STILL NEVER LOWERS -- `match o { Some(t) => t.0.0.id }` over `Option[((W, W), i64)]` fails `karac… | 1705c1e |
 | B-2026-09-10-22 | codegen+interp | low | A WHOLE-PAYLOAD ARM BINDING OVER A GENERIC BY-VALUE `Option[(T, i64)]` PARAM LOSES THE ELEMENT'S `Drop` BODY ON EVERY COMPILED SURFACE -- `fn take[T]… | 7d8d23e |
 | B-2026-09-10-23 | codegen | low | A WHOLE-PAYLOAD ARM BINDING OVER A BY-VALUE `Option[(W, i64)]` PARAM LEAKS THE TUPLE ELEMENT'S INTERIOR -- 2 B in 1 block at -O0, in the GENERIC and… | 42c607d |
