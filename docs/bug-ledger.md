@@ -94,7 +94,7 @@ distinguish "bugs flattening" from "we stopped writing them down."
 |---|---|
 | run-vs-build | 439 |
 | miscompile | 424 |
-| leak | 376 |
+| leak | 377 |
 | double-free | 248 |
 | missing-feature | 202 |
 | codegen-gap | 181 |
@@ -110,7 +110,7 @@ distinguish "bugs flattening" from "we stopped writing them down."
 
 | surface | total |
 |---|---|
-| codegen | 1865 |
+| codegen | 1866 |
 | interp | 480 |
 | typecheck | 302 |
 | other | 101 |
@@ -140,7 +140,6 @@ _Generated from `bug-ledger.jsonl` by `scripts/bug-curve.py` (2026-05-20 → 202
 | B-2026-09-15-18 | 2026-09-15 | codegen | medium | A GENERIC MULTI-FIELD VARIANT STILL STRANDS ITS BOXED `Array[T, N]` PAYLOAD after B-2026-09-15-15 -- `G2.Y(a, 5)` over `enum G2[T] { Y(T, i64), N }` at `T = Array[String, 2]` loses 48 B + 44 B indirect at `-O0`, byte-identical before and after that fix, because an ERASED `T` cannot be classified at declaration and the monomorphic path that would catch it declines multi-field variants of its own | — |
 | B-2026-09-15-21 | 2026-09-15 | codegen | medium | AN ARM-BOUND PAYLOAD ASSIGNED OVER A `mut` LOCAL STRANDS THE DISPLACED VALUE'S HEAP FIELD, BUT ONLY WHEN THE ENUM ARRIVED AS A BY-VALUE PARAM -- `out = r` inside `fn take(b: E)` loses 2 B per call at -O0 while the identical body in `main`, or over an inline-literal scrutinee, is clean; the displaced value's `Drop` BODY still runs, so only the memory is lost | — |
 | B-2026-09-15-24 | 2026-09-15 | interp+codegen | medium | A USER-DEFINED METHOD THAT DISCARDS A BORROW-PROJECTION ARGUMENT RUNS THE FIELD'S `Drop` BODY TWICE UNDER `--interp` AND ONCE ON EVERY COMPILED SURFACE -- `b.put(w.r)` diverges on all three receiver forms while the identical free and associated spellings agree at one body, because the real discriminator is whether the CALLEE KEEPS THE VALUE, not the call spelling B-2026-09-14-10 reads it as | — |
-| B-2026-09-15-29 | 2026-09-15 | codegen | low | THE `if let` SIBLING OF B-2026-09-02-31 STILL LEAKS ITS MOVED-OUT PAYLOAD -- `(if let Ve.A(s) = mkVe(i) { s } else { .. }).len()` in a nested expression position loses 310 B over 20 evaluations at -O0, unchanged by that row's fix, because the escaping-value discriminator it added has exactly one consuming read site and that site is `compile_match` | — |
 | B-2026-09-15-33 | 2026-09-15 | codegen+interp | medium | AN INDEX-ASSIGN WHOSE RHS IS A NAMED LOCAL RUNS THE DISPLACED ELEMENT'S `Drop` BODY UNDER `--interp` AND ON NO COMPILED SURFACE -- `a[0] = b` diverges on the `Array` AND `Vec` legs alike while the fresh-literal RHS agrees, because `store_destroys_displaced` classifies an identifier RHS as a RELOCATION on purpose (B-2026-08-26-21); the open question is whether `a[0] = b` is a relocation at all, not why the call is missing | — |
 | B-2026-09-16-3 | 2026-09-16 | codegen | low | THE NESTED STORE `d[i][j] = x` LEAKS THE DISPLACED TUPLE'S HEAP -- 5 B in 1 block at `-O0` over `Vec[Vec[(String, i64)]]`, and the one-line fix the shape invites (a tuple arm in `emit_elem_store_releasing_displaced`) is a DOUBLE FREE, because that helper also runs for the single-level store which 6c0f802 already releases through the drop emitter | — |
 | B-2026-09-16-5 | 2026-09-16 | codegen | low | A BY-VALUE TUPLE PARAM HOLDING AN `Array[T, N]` STILL LEAKS ITS ELEMENTS IN TWO SHAPES -- a param moved to a LOCAL inside the callee, and a FRESH TEMPORARY argument whose param is returned -- because the two available ownership models each break the other's cell: the entry copy orphans a temporary's buffers, and transfer needs a caller-side disarm that has no hook for a tuple argument | — |
@@ -199,6 +198,7 @@ _Generated from `bug-ledger.jsonl` by `scripts/bug-curve.py` (2026-05-20 → 202
 | B-2026-09-19-29 | 2026-09-19 | interp | medium | TWO HOLDERS BUILT FROM ONE `shared enum` BINDING RUN ITS PAYLOAD'S `Drop` BODY TWICE UNDER `--interp` AND ONCE ON EVERY COMPILED BACKEND -- `struct Hs { m: SMono }` built twice from one `s` prints `A d2:9 d2:9 ok` against `A ok d2:9`, in every one of the five holder positions, because an alias of a shared enum is a deep VALUE CLONE in this backend and there is no refcount to consult | — |
 | B-2026-09-19-30 | 2026-09-19 | codegen | high | A WILDCARD LEAF IN A DESTRUCTURED **BOXED** `Option` PAYLOAD MAKES THE ARM RETURN THE `None` ARM'S VALUE ON EVERY COMPILED BACKEND -- `fn wildOut(o: Option[(H, i64)]) -> i64 { match o { Some((_, b)) => { return b; } None => { return 0; } } }` with `struct H { id: i64, s: String }` prints `n0` against `--interp`'s `n9`, i.e. a WRONG VALUE silently returned, not a misplaced `Drop` body; naming the leaf (`Some((a, b))`) is correct on every surface and a NARROWER payload (`struct R { id: i64 }`, which rides inline rather than boxing) is correct too, so the trigger is a wildcard leaf on the boxed payload channel | — |
 | B-2026-09-19-31 | 2026-09-19 | codegen+interp | medium | A CONDITIONALLY HANDED-BACK PART OF AN OWNED `Option` PAYLOAD LOSES THE PART THAT DIED, ON ALL FOUR SURFACES -- `fn eat(o: Option[(R, R)], k: bool) -> R { match o { Some((a, b)) => { if k { return a; } return b; } .. } }` called with `k = false` prints `got:6 dR6 end` against the due `dR5 got:6 dR6 end` everywhere, so the A/B parity rule sees nothing; the UNCONDITIONAL spelling of the same arm is correct since B-2026-09-14-18, which is what leaves this shape behind as the family's last all-surface loss | — |
+| B-2026-09-19-32 | 2026-09-19 | codegen | low | THE ESCAPING DEBOX LEAKS ITS MOVED-OUT PAYLOAD WHEN THE ENUM HAS NO `impl Drop` -- `fn take(o: Ve) -> String { if let Ve.A(s) = o { s } else { .. } }` loses 310 B over 20 calls at -O0, identically on the `match` spelling, and adding a Drop impl to the same enum makes both clean | — |
 
 ### Relocated
 
@@ -2658,6 +2658,7 @@ _Generated from `bug-ledger.jsonl` by `scripts/bug-curve.py` (2026-05-20 → 202
 | B-2026-09-15-26 | interp+codegen | medium | AN `Array[T, N]`-TYPED STRUCT FIELD NEVER RUNS ITS ELEMENTS' `Drop` BODIES -- `struct H { a: Array[D, 2] }` prints nothing at scope exit where the sa… | 645ea3b |
 | B-2026-09-15-27 | codegen | medium | A `Vec[Array[T, N]]`-TYPED STRUCT FIELD LEAKS ITS ELEMENTS' HEAP -- 34 bytes in 2 blocks definitely lost on a plain `let h: H` with no reassignment,… | 645ea3b |
 | B-2026-09-15-28 | interp+codegen | medium | A `Vec[T]`-TYPED STRUCT FIELD ASSIGNED A FRESH CONTAINER LOSES THE DISPLACED ELEMENTS' `Drop` BODIES -- `h.v = [..]` prints the surviving elements' b… | ad35a8a |
+| B-2026-09-15-29 | codegen | low | THE `if let` SIBLING OF B-2026-09-02-31 STILL LEAKS ITS MOVED-OUT PAYLOAD -- `(if let Ve.A(s) = mkVe(i) { s } else { . | 2e8910d |
 | B-2026-09-15-30 | codegen | low | A MONOMORPH BODY NEVER INSTALLS `discarded_branch_spans`, so every branch inside a generic instantiation reads as NON-DISCARDED -- the sibling of the… | 51b916f |
 | B-2026-09-15-31 | codegen | low | AN INDEX-ASSIGN OVER A CONTAINER OF TUPLES LEAKS THE DISPLACED TUPLE'S HEAP ELEMENTS, ON BOTH THE `Array` AND THE `Vec` LEG -- 10 B in 1 block at `-O… | 6c0f802 |
 | B-2026-09-15-32 | codegen+interp | medium | A NESTED `Array[Array[T, N], M]` INDEX-ASSIGN LOSES THE DISPLACED INNER ARRAY'S ELEMENT `Drop` BODIES AND LEAKS THEIR HEAP, ON BOTH BACKENDS -- `a[0]… | 6c0f802 |
