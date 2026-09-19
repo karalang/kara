@@ -264,7 +264,15 @@ fn render(tok: SpannedToken) -> String {
             line.push_str(text);
         }
         Eof => line.push_str("EOF"),
-        Error(msg) => line.push_str("ERROR"),
+        // `ERROR <message>`, not a bare `ERROR`: comparing only the KIND and
+        // SPAN let the two lexers report completely different diagnostics for
+        // the same bad input with the oracle still green (B-2026-09-19-6). The
+        // message goes through `escape_for_render` because several of them
+        // quote a backslash escape.
+        Error(msg) => {
+            line.push_str("ERROR ");
+            line.push_str(escape_for_render(msg));
+        }
         ReservedFuture(kw) => {
             line.push_str("RESERVED ");
             line.push_str(kw);

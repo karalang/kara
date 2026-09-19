@@ -446,7 +446,10 @@ impl Lexer {
                     // Non-ASCII lead byte: emit one codepoint-spanning error.
                     self.non_ascii_at_lead(c)
                 } else {
-                    self.make_spanned(Token.Error("Unexpected character".to_string()))
+                    let mut m = "Unexpected character: '".to_string();
+                    m.push(byte_as_char(c));
+                    m.push_str("'");
+                    self.make_spanned(Token.Error(m))
                 }
             }
         }
@@ -538,7 +541,20 @@ impl Lexer {
         let sfx = self.try_int_suffix();
         match i64.from_str_radix(text, radix) {
             Some(v) => self.make_spanned(Token.Integer(v, sfx)),
-            None => self.make_spanned(Token.Error("Invalid radix literal".to_string())),
+            None => {
+                // The seed names the radix ("Invalid hex literal"), so the one
+                // shared "Invalid radix literal" diverged on all three.
+                let mut m = "Invalid ".to_string();
+                if radix == 16 {
+                    m.push_str("hex");
+                } else if radix == 2 {
+                    m.push_str("binary");
+                } else {
+                    m.push_str("octal");
+                }
+                m.push_str(" literal");
+                self.make_spanned(Token.Error(m))
+            }
         }
     }
 
@@ -674,16 +690,26 @@ impl Lexer {
                     self.advance();
                 } else if e == b'u' {
                     self.advance();
+                    let u_brace = self.current;
                     let cp = self.scan_unicode_escape();
                     if cp < 0 {
-                        return self.make_spanned(Token.Error("Invalid unicode escape".to_string()));
+                        let m = self.unicode_escape_error_msg(u_brace);
+                        return self.make_spanned(Token.Error(m));
                     }
                     match char.try_from(cp) {
                         Ok(c) => value.push(c),
-                        Err(_) => return self.make_spanned(Token.Error("Invalid unicode scalar value".to_string())),
+                        Err(_) => {
+                            let m = self.unicode_scalar_error_msg(u_brace);
+                            return self.make_spanned(Token.Error(m));
+                        }
                     }
                 } else {
-                    return self.make_spanned(Token.Error("Unknown escape sequence".to_string()));
+                    // The seed consumes the escape's codepoint before erroring,
+                    // so its span covers it: consume it here too, and quote it.
+                    let bad = self.consume_codepoint();
+                    let mut m = "Unknown escape sequence: \\".to_string();
+                    m.push(bad);
+                    return self.make_spanned(Token.Error(m));
                 }
                 run_start = self.current;
             } else if self.peek() == b'\n' {
@@ -760,19 +786,27 @@ impl Lexer {
             } else if e == b'0' {
                 ch = '\0';
             } else if e == b'u' {
+                let u_brace = self.current;
                 let cp = self.scan_unicode_escape();
                 if cp < 0 {
-                    return self.make_spanned(Token.Error("Invalid unicode escape".to_string()));
+                    let m = self.unicode_escape_error_msg(u_brace);
+                    return self.make_spanned(Token.Error(m));
                 }
                 // Value-position match with a diverging `Err` arm — relies on
                 // the #12 never-as-bottom coercion (the `return` arm coerces to
                 // the `char` the `Ok` arm yields). Dogfoods that fix.
                 ch = match char.try_from(cp) {
                     Ok(c) => c,
-                    Err(_) => return self.make_spanned(Token.Error("Invalid unicode scalar value".to_string())),
+                    Err(_) => {
+                        let m = self.unicode_scalar_error_msg(u_brace);
+                        return self.make_spanned(Token.Error(m));
+                    }
                 };
             } else {
-                return self.make_spanned(Token.Error("Unknown escape sequence in character literal".to_string()));
+                let bad = self.consumed_escape_char(e);
+                let mut m = "Unknown escape sequence in character literal: \\".to_string();
+                m.push(bad);
+                return self.make_spanned(Token.Error(m));
             }
         } else {
             ch = self.consume_codepoint();
@@ -809,6 +843,91 @@ impl Lexer {
             Some(code) => code,
             None => -1,
         }
+    }
+
+    // The seed's `parse_unicode_escape` has THREE distinct Err texts and quotes
+    // the escape body in two of them; `scan_unicode_escape` collapses all three
+    // into -1, so the caller rebuilds the message from the only state it kept:
+    // `brace`, its `current` as the call began (pointing at the `{`).
+    fn unicode_escape_error_msg(ref self, brace: i64) -> String {
+        if self.current == brace {
+            // Nothing consumed: there was no `{` (or input ended first).
+            return "Expected '{' after \\u".to_string();
+        }
+        if self.is_at_end() and self.bytes[self.current - 1] != b'}' {
+            // Ran to EOF without a closing `}`.
+            return "Unterminated unicode escape".to_string();
+        }
+        let mut m = "Invalid unicode escape: \\u{".to_string();
+        m.push_str(self.src.substring(brace + 1, self.current - 1));
+        m.push_str("}");
+        m
+    }
+
+    // The hex parsed but is not a Unicode scalar (surrogate / above U+10FFFF).
+    // `current` is one past the closing `}`, so the body is `brace+1 ..
+    // current-1` — the SOURCE text, which is what the seed echoes.
+    fn unicode_scalar_error_msg(ref self, brace: i64) -> String {
+        let mut m = "Invalid unicode scalar value: \\u{".to_string();
+        m.push_str(self.src.substring(brace + 1, self.current - 1));
+        m.push_str("}");
+        m
+    }
+
+    // Two hex digits, each CONSUMED as it is validated — `parse_hex_byte_escape`
+    // does the same, so a `b"\\x4` that runs out mid-escape spans the digit it
+    // did read. Peeking both digits and erroring without advancing left the port
+    // one byte short of the seed on exactly that input (B-2026-09-19-6).
+    // Returns the byte value, or -1 with `current` at the offending position.
+    fn scan_hex_byte_escape(mut ref self) -> i64 {
+        let mut v = 0;
+        let mut i = 0;
+        while i < 2 {
+            if self.is_at_end() {
+                return -1;
+            }
+            let d = hex_val(self.peek());
+            if d < 0 {
+                return -1;
+            }
+            v = v * 16 + d;
+            self.advance();
+            i = i + 1;
+        }
+        v
+    }
+
+    // The escape body whose LEAD byte the caller already consumed. The seed
+    // reads these arms with `consume_codepoint()`, which takes the WHOLE UTF-8
+    // sequence; the char / byte-char / byte-string lexers here consume the lead
+    // byte before dispatching, so a non-ASCII escape body (`'\\é'`) came out
+    // short in the span and Latin-1-mangled in the message. `advance()` already
+    // counted the lead as one column and the continuation bytes belong to the
+    // same codepoint, so only `current` moves.
+    fn consumed_escape_char(mut ref self, lead: u8) -> char {
+        if lead < 0x80 {
+            return byte_as_char(lead);
+        }
+        let lead_at = self.current - 1;
+        let len = utf8_byte_len(lead);
+        if lead_at + len > self.bytes.len() {
+            return byte_as_char(lead);
+        }
+        self.current = lead_at + len;
+        first_char(self.src.substring(lead_at, lead_at + len))
+    }
+
+    // The seed tells the two `\\xHH` failures apart — input ran out, or that
+    // byte is not a hex digit — and quotes the byte in the second. `current` is
+    // where `scan_hex_byte_escape` stopped, which is the failing position.
+    fn hex_escape_error_msg(ref self) -> String {
+        if self.is_at_end() {
+            return "\\xHH escape requires exactly two hex digits".to_string();
+        }
+        let mut m = "\\xHH escape requires two hex digits; found `".to_string();
+        m.push(byte_as_char(self.peek()));
+        m.push_str("`");
+        m
     }
 
     // `b'A'` byte char literal. The leading `b'` is consumed. One ASCII byte or
@@ -861,7 +980,10 @@ impl Lexer {
                 }
                 return self.make_spanned(Token.Error("Unicode escapes are not permitted in byte literals — use \\xFF for byte 0xFF.".to_string()));
             } else {
-                return self.make_spanned(Token.Error("Unknown escape sequence in byte literal".to_string()));
+                let bad = self.consumed_escape_char(e);
+                let mut m = "Unknown escape sequence in byte literal: \\".to_string();
+                m.push(bad);
+                return self.make_spanned(Token.Error(m));
             }
         } else {
             let b = self.peek();
@@ -871,13 +993,16 @@ impl Lexer {
                 // below; no oracle case reached it until B-2026-08-21-17 added
                 // `b'é'`, so the two lexers had been silently disagreeing on
                 // that input's error span.
-                self.consume_codepoint();
+                let bad = self.consume_codepoint();
                 // Eat the trailing `'` too, as the Rust twin does, so recovery
                 // is clean and the error spans the whole literal.
                 if self.peek() == b'\'' {
                     self.advance();
                 }
-                return self.make_spanned(Token.Error("non-ASCII character in byte literal".to_string()));
+                let mut m = "non-ASCII character `".to_string();
+                m.push(bad);
+                m.push_str("` in byte literal — byte literals must be a single ASCII byte; use \\xHH for byte values");
+                return self.make_spanned(Token.Error(m));
             }
             self.advance();
             byte = b;
@@ -930,14 +1055,12 @@ impl Lexer {
                 } else if e == b'0' {
                     bytes.push(0);
                 } else if e == b'x' {
-                    let hi = hex_val(self.peek());
-                    let lo = hex_val(self.peek_at(1));
-                    if hi < 0 or lo < 0 {
-                        return self.make_spanned(Token.Error("\\xHH escape requires two hex digits".to_string()));
+                    let v = self.scan_hex_byte_escape();
+                    if v < 0 {
+                        let m = self.hex_escape_error_msg();
+                        return self.make_spanned(Token.Error(m));
                     }
-                    self.advance();
-                    self.advance();
-                    bytes.push(byte_of(hi * 16 + lo));
+                    bytes.push(byte_of(v));
                 } else if e == b'u' {
                     // Consume `{…}` and the closing quote so the Error span
                     // matches the Rust seed's extent byte for byte.
@@ -955,7 +1078,10 @@ impl Lexer {
                     }
                     return self.make_spanned(Token.Error("Unicode escapes are not permitted in byte literals — use \\xFF for byte 0xFF.".to_string()));
                 } else {
-                    return self.make_spanned(Token.Error("Unknown escape sequence in byte literal".to_string()));
+                    let bad = self.consumed_escape_char(e);
+                    let mut m = "Unknown escape sequence in byte literal: \\".to_string();
+                    m.push(bad);
+                    return self.make_spanned(Token.Error(m));
                 }
             } else if c == b'\n' {
                 return self.make_spanned(Token.Error("Unterminated byte string literal: a raw newline is not permitted; use \\n".to_string()));
@@ -964,8 +1090,11 @@ impl Lexer {
                 // `consume_codepoint` does — returning without advancing left
                 // the error span 2 bytes where Rust reported 4
                 // (B-2026-08-21-17).
-                self.consume_codepoint();
-                return self.make_spanned(Token.Error("non-ASCII character in byte string literal".to_string()));
+                let bad = self.consume_codepoint();
+                let mut m = "non-ASCII character `".to_string();
+                m.push(bad);
+                m.push_str("` in byte string literal — use \\xHH for byte values above 0x7F");
+                return self.make_spanned(Token.Error(m));
             } else {
                 self.advance();
                 bytes.push(c);
@@ -1046,7 +1175,7 @@ impl Lexer {
                         // instead, WITHOUT consuming the `\`, so the span runs
                         // from `start` to the backslash (byte-identical to the
                         // seed's `make_spanned`).
-                        return self.make_spanned(Token.Error("unexpected backslash in f-string interpolation; interpolation expressions use plain quotes".to_string()));
+                        return self.make_spanned(Token.Error("unexpected '\\' in f-string interpolation `{…}`; string literals inside an interpolation use plain quotes — write `{f(\"x\")}`, not escaped quotes".to_string()));
                     }
                     if bc == b'\n' {
                         self.line = self.line + 1;
@@ -1105,16 +1234,26 @@ impl Lexer {
                     self.advance();
                 } else if e == b'u' {
                     self.advance();
+                    let u_brace = self.current;
                     let cp = self.scan_unicode_escape();
                     if cp < 0 {
-                        return self.make_spanned(Token.Error("Invalid unicode escape".to_string()));
+                        let m = self.unicode_escape_error_msg(u_brace);
+                        return self.make_spanned(Token.Error(m));
                     }
                     match char.try_from(cp) {
                         Ok(c) => text.push(c),
-                        Err(_) => return self.make_spanned(Token.Error("Invalid unicode scalar value".to_string())),
+                        Err(_) => {
+                            let m = self.unicode_scalar_error_msg(u_brace);
+                            return self.make_spanned(Token.Error(m));
+                        }
                     }
                 } else {
-                    return self.make_spanned(Token.Error("Unknown escape sequence".to_string()));
+                    // The seed consumes the escape's codepoint before erroring,
+                    // so its span covers it: consume it here too, and quote it.
+                    let bad = self.consume_codepoint();
+                    let mut m = "Unknown escape sequence: \\".to_string();
+                    m.push(bad);
+                    return self.make_spanned(Token.Error(m));
                 }
                 run_start = self.current;
             } else if self.peek() == b'\n' {
@@ -1166,30 +1305,29 @@ impl Lexer {
                     bytes.push(b'"');
                     self.advance();
                 } else if e == b'0' {
-                    return self.make_spanned(Token.Error("interior NUL bytes are not permitted in C-string literals".to_string()));
+                    return self.make_spanned(Token.Error("error[E_INTERIOR_NUL_IN_C_STRING]: interior NUL bytes are not permitted in C-string literals; remove the `\\0` escape".to_string()));
                 } else if e == b'x' {
                     self.advance();
-                    let hi = hex_val(self.peek());
-                    let lo = hex_val(self.peek_at(1));
-                    if hi < 0 or lo < 0 {
-                        return self.make_spanned(Token.Error("\\xHH escape requires two hex digits".to_string()));
+                    let v = self.scan_hex_byte_escape();
+                    if v < 0 {
+                        let m = self.hex_escape_error_msg();
+                        return self.make_spanned(Token.Error(m));
                     }
-                    let v = hi * 16 + lo;
                     if v == 0 {
-                        return self.make_spanned(Token.Error("interior NUL bytes are not permitted in C-string literals".to_string()));
+                        return self.make_spanned(Token.Error("error[E_INTERIOR_NUL_IN_C_STRING]: interior NUL bytes are not permitted in C-string literals; remove the `\\x00` escape".to_string()));
                     }
-                    self.advance();
-                    self.advance();
                     bytes.push(byte_of(v));
                 } else if e == b'u' {
                     self.advance();
+                    let u_brace = self.current;
                     let cp = self.scan_unicode_escape();
                     if cp < 0 {
-                        return self.make_spanned(Token.Error("Invalid unicode escape".to_string()));
+                        let m = self.unicode_escape_error_msg(u_brace);
+                        return self.make_spanned(Token.Error(m));
                     }
                     // `\u{0}` would embed a NUL — same rejection as `\0` / `\x00`.
                     if cp == 0 {
-                        return self.make_spanned(Token.Error("interior NUL bytes are not permitted in C-string literals".to_string()));
+                        return self.make_spanned(Token.Error("error[E_INTERIOR_NUL_IN_C_STRING]: interior NUL bytes are not permitted in C-string literals; remove the `\\u{0}` escape".to_string()));
                     }
                     match char.try_from(cp) {
                         Ok(c) => {
@@ -1202,10 +1340,16 @@ impl Lexer {
                                 bytes.push(b);
                             }
                         }
-                        Err(_) => return self.make_spanned(Token.Error("Invalid unicode scalar value".to_string())),
+                        Err(_) => {
+                            let m = self.unicode_scalar_error_msg(u_brace);
+                            return self.make_spanned(Token.Error(m));
+                        }
                     }
                 } else {
-                    return self.make_spanned(Token.Error("Unknown escape sequence in C-string".to_string()));
+                    let bad = self.consume_codepoint();
+                    let mut m = "Unknown escape sequence in C-string: \\".to_string();
+                    m.push(bad);
+                    return self.make_spanned(Token.Error(m));
                 }
             } else {
                 // ASCII copies through verbatim; a multi-byte codepoint encodes
@@ -1247,7 +1391,9 @@ impl Lexer {
             folding = progressed;
         }
         if non_ascii_seen {
-            return self.make_spanned(Token.Error("non-ASCII identifier is deferred to a future edition".to_string()));
+            let run = self.src.substring(self.start, self.current);
+            let m = non_ascii_ident_msg(first_non_ascii_char(run));
+            return self.make_spanned(Token.Error(m));
         }
         let text = self.src.substring(self.start, self.current);
         // Natural form (#14 FIXED): the by-value aggregate param `token` is
@@ -1302,7 +1448,10 @@ impl Lexer {
         if self.peek() == b'"' {
             self.advance(); // closing quote
         }
-        self.make_spanned(Token.Error("reserved string prefix".to_string()))
+        let mut m = "string prefix '".to_string();
+        m.push(byte_as_char(self.bytes[self.start]));
+        m.push_str("\"...\"' is reserved for future use; only `f\"...\"` and `c\"...\"` are recognized in v1");
+        self.make_spanned(Token.Error(m))
     }
 
     // Reserved `#`-guarded string syntax (Rust-style raw strings: `#"…"#`,
@@ -1342,7 +1491,19 @@ impl Lexer {
                 }
             }
         }
-        self.make_spanned(Token.Error("reserved hash-guarded string".to_string()))
+        let mut m = "".to_string();
+        if consumed_string {
+            m.push_str("`#`-guarded string syntax (`");
+            m.push_str(repeat_hash(leading_hashes));
+            m.push_str("\"...\"");
+            m.push_str(repeat_hash(leading_hashes));
+            m.push_str("`) is reserved for future use; not available in v1");
+        } else {
+            m.push_str("`");
+            m.push_str(repeat_hash(leading_hashes));
+            m.push_str("` (multi-`#` cluster) is reserved for future use; only `#[...]` attribute syntax is recognized in v1");
+        }
+        self.make_spanned(Token.Error(m))
     }
 
     // Non-ASCII lead byte (>= 0x80): consume the rest of the UTF-8 codepoint
@@ -1454,9 +1615,13 @@ impl Lexer {
                 }
                 folding = progressed;
             }
-            self.make_spanned(Token.Error("non-ASCII identifier is deferred to a future edition".to_string()))
+            let m = non_ascii_ident_msg(cp);
+            self.make_spanned(Token.Error(m))
         } else {
-            self.make_spanned(Token.Error("unexpected non-ASCII character".to_string()))
+            let mut m = "Unexpected character: '".to_string();
+            m.push(cp);
+            m.push_str("'");
+            self.make_spanned(Token.Error(m))
         }
     }
 }
@@ -1582,7 +1747,7 @@ fn keyword_or_ident(text: String) -> Token {
             // else is an ordinary identifier. (`r#expr_2026` bypasses this via
             // raw_identifier, matching the Rust seed's structural exemption.)
             if is_reserved_fragment_specifier_namespace(text) {
-                Token.Error("reserved fragment-specifier identifier".to_string())
+                reserved_fragment_specifier_error(text)
             } else {
                 Token.Identifier(text)
             }
@@ -1710,6 +1875,55 @@ fn first_char(s: String) -> char {
         return c;
     }
     '?'
+}
+
+// A byte as the codepoint of the same value — the port's stand-in for the
+// seed's `b as char`, which the diagnostics that quote an offending byte use.
+fn byte_as_char(b: u8) -> char {
+    match char.try_from(b as i64) {
+        Ok(c) => c,
+        Err(_) => '?',
+    }
+}
+
+// The first non-ASCII codepoint in `text`. `identifier` folds a whole run into
+// one Error and the seed's message names the first non-ASCII codepoint it saw,
+// which — the run being scanned left to right — is this one.
+fn first_non_ascii_char(text: String) -> char {
+    let mut i = 0;
+    for b in text.bytes() {
+        if b >= 0x80 {
+            return first_char(text.substring(i, i + utf8_byte_len(b)));
+        }
+        i = i + 1;
+    }
+    '?'
+}
+
+fn non_ascii_ident_msg(c: char) -> String {
+    let mut m = "non-ASCII identifier (containing '".to_string();
+    m.push(c);
+    m.push_str("') is deferred to a future edition; identifiers must be ASCII in v1");
+    m
+}
+
+fn repeat_hash(n: i64) -> String {
+    let mut out = "".to_string();
+    let mut i = 0;
+    while i < n {
+        out.push('#');
+        i = i + 1;
+    }
+    out
+}
+
+fn reserved_fragment_specifier_error(text: String) -> Token {
+    let mut m = "'".to_string();
+    m.push_str(text);
+    m.push_str("' is a reserved identifier name; this naming convention is reserved for future edition-versionable syntax categories in macros / comptime fragment specifiers — use 'r#");
+    m.push_str(text);
+    m.push_str("' if you need this exact identifier today, or rename to a non-year-suffixed form");
+    Token.Error(m)
 }
 
 pub fn lex_all(src: String) -> Vec[SpannedToken] with panics {

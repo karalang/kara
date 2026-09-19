@@ -89,6 +89,12 @@ its corpus exercises. A seed lexer change with no matching corpus input can let
 the Kāra port (selfhost/src/main.kara) silently diverge while the oracle stays
 green (see follow-on #31).
 
+Since B-2026-09-19-6 the oracle compares an Error token's MESSAGE, not just its
+kind and span, so rewording a diagnostic is a behaviour-affecting change too:
+the port has to be reworded with it, and the corpus needs an input that reaches
+the message. Before that, a corpus input could exercise an error path and still
+pin nothing about what either lexer said.
+
 Fix ONE of:
   • Add a corpus input to $ORACLE that exercises the changed behaviour, and
     mirror the change in selfhost/src/main.kara (the port). This is the path you

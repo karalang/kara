@@ -146,7 +146,18 @@ const CORPUS: &[&str] = &[
     // oracle passes vacuously on it: both lexers agree because neither is ever
     // handed one. The bare `usize` identifier is included deliberately, since
     // the port's scanner must consume the suffix ONLY when it trails a number.
-    "7usize 18446744073709551615usize usize",
+    //
+    // The large literal is `i64::MAX`, not the `18446744073709551615` (u64::MAX)
+    // this entry carried until B-2026-09-19-6. That magnitude is out of i64
+    // range, so the seed emits `IntegerOutOfRange` while the port — which
+    // parses straight into i64 — emits `Error("Invalid integer literal")`: a
+    // genuine port gap, not a `usize` question. Both sides rendered a bare
+    // `ERROR` and the entry passed anyway, which is precisely the masking
+    // B-2026-09-19-6 closed; rendering the message exposed it. The gap is
+    // tracked as its own row (the port must model the variant), and the entry
+    // for it belongs with that fix — as with `b"…"` above, no oracle case may
+    // use a form the Kāra lexer has not caught up to.
+    "7usize 9223372036854775807usize usize",
     "0xffu8 0b1010i32 0o17u64 0xdeadi128",
     "1_000i64 1.5e3f64 2e10f32",
     // f16 / bf16 float suffixes (un-reserved in 09a2fc88 / B-2026-07-14-2); `bf16`
@@ -200,11 +211,12 @@ const CORPUS: &[&str] = &[
     // RE-ENABLED now that the print path uses NUL-safe `fwrite` and string
     // literals/f-string text are stored as byte-array globals that preserve
     // interior NULs (L5, phase-12). The c-string `\u{0}` interior-NUL *rejection*
-    // below is a separate path (renders bare ERROR, no NUL in output).
+    // below is a separate path (an Error token, no NUL in the output).
     r#"'\0'"#,
     r#""a\0b""#,
     r#"f"pre \0 post""#,
-    // Error-span parity (Error renders bare `ERROR`; offset/length must match).
+    // Error parity: offset/length AND the message text must match (since
+    // B-2026-09-19-6 the render carries the message).
     r#"'\u{D800}'"#,
     r#"'\u{110000}'"#,
     r#""\u{D800}""#,
@@ -212,8 +224,10 @@ const CORPUS: &[&str] = &[
     r#"c"\u{0}""#,
     // Slice E: raw idents, reserved string prefixes / `#`-guarded strings,
     // reserved future keywords, the `expr_<year>` fragment-specifier namespace,
-    // and single-codepoint non-ASCII recovery. Error tokens render as bare
-    // `ERROR`, so these assert SPAN parity (offset/length/line/column).
+    // and single-codepoint non-ASCII recovery. These assert span parity
+    // (offset/length/line/column) and, since B-2026-09-19-6, message parity —
+    // several of these messages quote the offending prefix, hash run or
+    // codepoint, which is where the port diverged.
     // Raw identifiers `r#NAME` — payload is bare NAME, span covers `r#NAME`.
     "r#match r#type r#fn",
     "r#x + r#y",
@@ -274,8 +288,9 @@ const CORPUS: &[&str] = &[
     // carries the scalar, not a mis-split byte, and a c-string body encodes the
     // codepoint's UTF-8 bytes); `non_ascii_at_lead` / `identifier` fold a RUN of
     // Unicode letter/digit continuation codepoints into ONE Error token (gated on
-    // #13's `char.is_alphabetic` / `is_numeric` classifier). Error tokens render
-    // bare `ERROR`, so the folded-identifier cases assert SPAN parity.
+    // #13's `char.is_alphabetic` / `is_numeric` classifier). The folded-identifier
+    // cases assert span parity, and the message names the first non-ASCII codepoint
+    // of the run, so they also pin which codepoint each lexer blamed.
     // 2-/3-/4-byte char-literal bodies.
     r#"'λ' '€' '🦀'"#,
     r#"'é' 'Ω' '中'"#,
@@ -330,8 +345,8 @@ const CORPUS: &[&str] = &[
     r#"f"{ m["a}b"] }""#,
     // An escaped quote in *expression* position is invalid input (interpolation
     // expressions use plain quotes). The seed emits a clear lex Error here; the
-    // port must too, consuming the byte-identical extent (Error renders bare
-    // `ERROR`, so this asserts SPAN parity from `f` up to the backslash).
+    // port must too, consuming the byte-identical extent (so this asserts span
+    // parity from `f` up to the backslash, and the message text with it).
     r#"f"{ id(\"hi\") }""#,
     // Chained tuple index `t.1.1` / `t.1.0`: a number whose preceding char is `.`
     // is a tuple index, never a float — the lexer must emit `t . 1 . 1`, not
@@ -352,6 +367,62 @@ const CORPUS: &[&str] = &[
     r#"f"bd\"#,
     r#"f"bd\\\"#,
     r#""a\"#,
+    // B-2026-09-19-6 — diagnostic-TEXT coverage. Until this slice the corpus
+    // reached 13 of the lexer's error messages and the oracle compared none of
+    // them; `render` now carries the message, so these inputs pin the text of
+    // the paths nothing else exercises. Each line names the message it is here
+    // for, because an input whose error text is not obvious from reading it is
+    // how a path ends up covered on paper and unpinned in fact.
+    //
+    // `Unknown escape sequence…` — one per body lexer, each with its own
+    // wording, and each quoting the offending codepoint (so a port that emits
+    // the bare sentence no longer agrees).
+    r#""\q""#,
+    r#"'\q'"#,
+    r#"b'\q'"#,
+    r#"b"\q""#,
+    r#"c"\q""#,
+    r#"f"\q""#,
+    // A NON-ASCII escape body. The seed reads the whole codepoint before it
+    // errors, so both the span and the quoted character depend on it; three of
+    // the port's body lexers consumed only the lead byte, which no ASCII case
+    // can tell apart.
+    r#"'\é'"#,
+    r#"b'\é'"#,
+    r#"b"\é""#,
+    r#""\é""#,
+    r#"c"\é""#,
+    // `\u{…}` syntax failures: no brace, no closing brace, un-parseable hex.
+    // The last two quote the escape body, which the port discarded entirely.
+    r#""\uZ""#,
+    r#""\u{41"#,
+    r#""\u{ZZ}""#,
+    // `\xHH`: "ran out of input" and "that byte is not a hex digit" are
+    // different sentences in the seed, and the second quotes the byte.
+    r#"b"\xZZ""#,
+    r#"c"\xZ""#,
+    r#"b"\x4"#,
+    // The C-string interior-NUL refusals — one message per escape spelling,
+    // each carrying the `error[E_INTERIOR_NUL_IN_C_STRING]` code.
+    r#"c"a\0b""#,
+    r#"c"a\x00b""#,
+    // Radix literals with no digits: the seed names the radix.
+    "0x 0b 0o",
+    // Byte-literal arity: empty body and a two-byte body are distinct messages.
+    r#"b'' b'AB'"#,
+    // A raw newline inside a byte string.
+    "b\"a\nb\"",
+    // Unterminated bodies, one per literal form.
+    r#""open"#,
+    r#""""open"#,
+    r#"c"open"#,
+    r#"f"open"#,
+    r#"'a"#,
+    // A `#` cluster with no string after it takes the other branch of the
+    // reserved-`#` diagnostic, which quotes the run.
+    "## x",
+    // An exponent with no digits.
+    "1e",
 ];
 
 /// Render one Rust `SpannedToken` in the Kāra lexer's canonical one-line
@@ -560,25 +631,38 @@ fn render_rust(t: &SpannedToken) -> String {
         Token::ModuleDocComment(t) => return body_with(s, &format!("MODDOC {t}")),
         // Error tokens (slice E: raw-ident structural markers, reserved string
         // prefixes / `#`-guarded strings, reserved future keywords, reserved
-        // fragment-specifier idents, non-ASCII recovery). The Kāra `render`
-        // discards the message and emits a bare `ERROR`, so only the SPAN is
-        // compared — each error path must consume the identical byte extent.
-        Token::Error(_) => "ERROR",
-        // B-2026-08-06-13. The seed lexer now hands an out-of-i64-range
-        // magnitude to the PARSER (which folds `-9223372036854775808` to
-        // i64::MIN and rejects everything else) instead of erroring in the
-        // lexer. Rendered as `ERROR` because that is what the KĀRA port
-        // genuinely emits for the same bytes — its `lex_all` still parses
-        // straight into i64 and fails — and the span is identical either way,
-        // since only the token variant changed on the seed side.
+        // fragment-specifier idents, non-ASCII recovery), rendered as
+        // `ERROR <message>`.
         //
-        // Stated plainly rather than left implicit: the port does NOT model
-        // this variant. No CORPUS entry reaches it today (nothing there has a
-        // 19+ digit literal), so nothing is currently masked; but a corpus
-        // entry with an out-of-range literal would agree only because both
-        // sides spell it `ERROR`, not because the port learned the new token.
-        // Teaching the port is a self-host change, tracked separately.
-        Token::IntegerOutOfRange(..) => "ERROR",
+        // Both sides used to render a bare `ERROR`, comparing only the KIND and
+        // the SPAN. That made every diagnostic-TEXT divergence invisible, even
+        // for an input the corpus exercises: measured on B-2026-09-19-6, the
+        // f-string trailing-backslash input passed with `selfhost/src/lexer.kara`
+        // reverted to its pre-fix state, because both lexers stopped at the same
+        // cursor and both said `ERROR` while the seed reported an unterminated
+        // string and the port an unknown escape. Rendering the message compares
+        // the text too, so the port cannot agree by coincidence.
+        //
+        // `escape_for_render` because several messages quote a backslash escape
+        // (`Unknown escape sequence: \q`) — the same treatment string payloads
+        // get, and the port's `render` applies it identically.
+        Token::Error(msg) => return body_with(s, &format!("ERROR {}", escape_for_render(msg))),
+        // B-2026-08-06-13. The seed lexer hands an out-of-i64-range magnitude
+        // to the PARSER (which folds `-9223372036854775808` to i64::MIN and
+        // rejects everything else) instead of erroring in the lexer; the KĀRA
+        // port does not model the variant — its `lex_all` parses straight into
+        // i64 and emits `Error("Invalid integer literal")`.
+        //
+        // Its own kind carrying the magnitude, for the reason `RESERVED` and
+        // `RAWDENIED` are their own kinds: rendering it as an `ERROR` let the
+        // port agree by spelling rather than by modelling the token. That was
+        // harmless only because no corpus entry reaches it (nothing there has a
+        // 19+ digit unsuffixed literal) — and "harmless until someone adds an
+        // input" is the shape B-2026-09-19-6 closed. A corpus entry that lands
+        // here now fails, which is the true answer: the port has not caught up.
+        Token::IntegerOutOfRange(m, sfx) => {
+            return body_with(s, &format!("INTRANGE {m}{}", int_suffix_str(*sfx)))
+        }
         // Rendered as `RESERVED <lexeme>`, its own kind — not `KW` (no v1
         // construct accepts one) and not `ERROR` (it is no longer a lexer
         // error). Carrying the lexeme means the oracle compares the SPELLING,
