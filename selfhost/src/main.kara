@@ -187,6 +187,18 @@ fn render(tok: SpannedToken) -> String {
                 line.push_str(sfx);
             }
         }
+        // `INTRANGE <magnitude><suffix>` — its own kind, not an `ERROR` and not
+        // an `INT`: the seed's magnitude does not fit the port's `Integer`
+        // carrier, so rendering it as either would let the two agree by
+        // spelling rather than by modelling the token (B-2026-09-19-26).
+        IntegerOutOfRange(mag, sfx) => {
+            line.push_str("INTRANGE ");
+            line.push_str(mag);
+            if sfx.len() > 0 {
+                line.push_str(" ");
+                line.push_str(sfx);
+            }
+        }
         Float(v, sfx) => {
             line.push_str("FLOAT ");
             line.push_str(v.to_string());

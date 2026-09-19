@@ -196,6 +196,20 @@ pub enum Token {
     // Literals / special
     Identifier(String),
     Integer(i64, String),
+    // A magnitude past `i64::MAX`, handed to the PARSER rather than rejected
+    // here: only the parser knows whether a preceding `-` is unary (making
+    // `9223372036854775808` the legal spelling of i64::MIN) or binary (making
+    // it an out-of-range error). The Rust twin's `Token::IntegerOutOfRange`,
+    // which carries a `u128`; the port has no integer type that wide, so the
+    // magnitude travels as its DECIMAL TEXT — normalized (underscores and
+    // leading zeros stripped, radix converted), which is what the seed's
+    // `{m}` renders and therefore what the oracle compares.
+    //
+    // Modelled here for the reason `ReservedFuture` and `RawIdentNotAllowed`
+    // are: without it the port emitted `Error("Invalid integer literal")` for
+    // an input the seed lexes into a real token, and the oracle rendered both
+    // as a bare `ERROR` and passed (B-2026-09-19-26).
+    IntegerOutOfRange(String, String),
     Float(f64, String),
     StringLiteral(String),
     MultiStringLiteral(String),

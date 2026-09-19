@@ -146,18 +146,30 @@ const CORPUS: &[&str] = &[
     // oracle passes vacuously on it: both lexers agree because neither is ever
     // handed one. The bare `usize` identifier is included deliberately, since
     // the port's scanner must consume the suffix ONLY when it trails a number.
+    // The large literal is u64::MAX, which is also the first `IntegerOutOfRange`
+    // case — see the band below.
+    "7usize 18446744073709551615usize usize",
+    // B-2026-09-19-26 — the out-of-range magnitude band. A literal past
+    // i64::MAX is not an error: the seed hands it to the PARSER as
+    // `IntegerOutOfRange`, because only the parser knows whether a leading `-`
+    // makes `9223372036854775808` the legal spelling of i64::MIN. The port
+    // parsed straight into i64 and called it `Error("Invalid integer literal")`,
+    // and with both sides rendering a bare `ERROR` the entry above passed for
+    // four weeks while the two lexers produced different TOKENS.
     //
-    // The large literal is `i64::MAX`, not the `18446744073709551615` (u64::MAX)
-    // this entry carried until B-2026-09-19-6. That magnitude is out of i64
-    // range, so the seed emits `IntegerOutOfRange` while the port — which
-    // parses straight into i64 — emits `Error("Invalid integer literal")`: a
-    // genuine port gap, not a `usize` question. Both sides rendered a bare
-    // `ERROR` and the entry passed anyway, which is precisely the masking
-    // B-2026-09-19-6 closed; rendering the message exposed it. The gap is
-    // tracked as its own row (the port must model the variant), and the entry
-    // for it belongs with that fix — as with `b"…"` above, no oracle case may
-    // use a form the Kāra lexer has not caught up to.
-    "7usize 9223372036854775807usize usize",
+    // Decimal, at the bottom of the band and at the top.
+    "9223372036854775808",
+    "18446744073709551615",
+    // Every radix reaches it, and the magnitude renders in DECIMAL whatever the
+    // spelling — which is the whole reason the port has to convert rather than
+    // carry the source digits.
+    "0xFFFFFFFFFFFFFFFF",
+    "0o1777777777777777777777",
+    "0b1000000000000000000000000000000000000000000000000000000000000000",
+    // Past u64::MAX the band closes again unless an explicit 128-bit suffix
+    // opens it, so these two differ only in the suffix.
+    "99999999999999999999999999999999999999999",
+    "340282366920938463463374607431768211455u128",
     "0xffu8 0b1010i32 0o17u64 0xdeadi128",
     "1_000i64 1.5e3f64 2e10f32",
     // f16 / bf16 float suffixes (un-reserved in 09a2fc88 / B-2026-07-14-2); `bf16`

@@ -522,9 +522,15 @@ impl Lexer {
         } else {
             let text = strip_underscores(self.src.substring(self.start, self.current));
             let sfx = self.try_int_suffix();
+            // `i64.parse` consumes `text`, and the out-of-range path needs the
+            // digits again, so keep a copy across the match.
+            let digits = text.substring(0, text.len());
             match i64.parse(text) {
                 Some(v) => self.make_spanned(Token.Integer(v, sfx)),
-                None => self.make_spanned(Token.Error("Invalid integer literal".to_string())),
+                None => {
+                    let t = out_of_range_int(digits, 10, sfx);
+                    self.make_spanned(t)
+                }
             }
         }
     }
@@ -539,21 +545,12 @@ impl Lexer {
         }
         let text = strip_underscores(self.src.substring(self.start + 2, self.current));
         let sfx = self.try_int_suffix();
+        let digits = text.substring(0, text.len());
         match i64.from_str_radix(text, radix) {
             Some(v) => self.make_spanned(Token.Integer(v, sfx)),
             None => {
-                // The seed names the radix ("Invalid hex literal"), so the one
-                // shared "Invalid radix literal" diverged on all three.
-                let mut m = "Invalid ".to_string();
-                if radix == 16 {
-                    m.push_str("hex");
-                } else if radix == 2 {
-                    m.push_str("binary");
-                } else {
-                    m.push_str("octal");
-                }
-                m.push_str(" literal");
-                self.make_spanned(Token.Error(m))
+                let t = out_of_range_int(digits, radix, sfx);
+                self.make_spanned(t)
             }
         }
     }
@@ -1898,6 +1895,126 @@ fn first_non_ascii_char(text: String) -> char {
         i = i + 1;
     }
     '?'
+}
+
+// The decimal spelling of `text` read in `radix`, normalized the way the
+// seed's `{m}` prints a parsed magnitude: leading zeros dropped, radix
+// converted. `""` means the text is not a literal at all (no digits, or a
+// digit out of range for the radix) — `0x` with nothing after it.
+//
+// Schoolbook multiply-accumulate over a little-endian decimal digit vector,
+// because the magnitudes this exists for (up to u128::MAX) do not fit any
+// integer type the port has. The seed gets this free from `u64::parse`.
+fn radix_to_decimal(text: String, radix: i64) -> String {
+    let mut digits: Vec[u8] = Vec.new();
+    digits.push(0);
+    let mut any = false;
+    for b in text.bytes() {
+        let d = hex_val(b);
+        if d < 0 or d >= radix {
+            return "".to_string();
+        }
+        any = true;
+        let mut carry = d;
+        let mut i = 0;
+        while i < digits.len() {
+            let cur = (digits[i] as i64) * radix + carry;
+            digits[i] = byte_of(cur % 10);
+            carry = cur / 10;
+            i = i + 1;
+        }
+        while carry > 0 {
+            digits.push(byte_of(carry % 10));
+            carry = carry / 10;
+        }
+    }
+    if not any {
+        return "".to_string();
+    }
+    let mut n = digits.len();
+    while n > 1 and digits[n - 1] == 0 {
+        n = n - 1;
+    }
+    let mut out = "".to_string();
+    let mut i = n;
+    while i > 0 {
+        i = i - 1;
+        out.push(byte_as_char(byte_of(48 + (digits[i] as i64))));
+    }
+    out
+}
+
+// `a <= b` for two normalized decimal strings: longer is larger, equal lengths
+// compare byte-wise. Needed because the band edges (u64::MAX, i128::MAX,
+// u128::MAX) are themselves too wide to hold.
+fn decimal_le(a: String, b: String) -> bool {
+    if a.len() != b.len() {
+        return a.len() < b.len();
+    }
+    let mut ab: Vec[u8] = Vec.new();
+    for c in a.bytes() {
+        ab.push(c);
+    }
+    let mut i = 0;
+    for c in b.bytes() {
+        if ab[i] != c {
+            return ab[i] < c;
+        }
+        i = i + 1;
+    }
+    true
+}
+
+fn invalid_int_literal_msg(radix: i64) -> String {
+    if radix == 10 {
+        return "Invalid integer literal".to_string();
+    }
+    // The seed names the radix ("Invalid hex literal"), so one shared
+    // "Invalid radix literal" diverged on all three (B-2026-09-19-6).
+    let mut m = "Invalid ".to_string();
+    if radix == 16 {
+        m.push_str("hex");
+    } else if radix == 2 {
+        m.push_str("binary");
+    } else {
+        m.push_str("octal");
+    }
+    m.push_str(" literal");
+    m
+}
+
+// The seed's out-of-range banding, reached when the magnitude does not fit
+// `i64` (`src/lexer.rs::number` / `hex_number` / … and `int_128_token`):
+//
+//   (i64::MAX, u64::MAX]                    -> IntegerOutOfRange, any suffix
+//   (u64::MAX, i128::MAX]  with i128/u128   -> Integer, which the port CANNOT
+//                                              represent (its carrier is i64)
+//   (i128::MAX, u128::MAX] with i128/u128   -> IntegerOutOfRange
+//   anything else                           -> the invalid-literal error
+//
+// The second band is the one gap left: modelling it needs `Token.Integer` to
+// carry more than an i64, which is a wider change than this row. No corpus
+// input reaches it, and one must not be added until the carrier widens — the
+// same rule `b"…"` and this row itself were written under.
+fn out_of_range_int(text: String, radix: i64, sfx: String) -> Token {
+    let mag = radix_to_decimal(text, radix);
+    if mag.len() == 0 {
+        return Token.Error(invalid_int_literal_msg(radix));
+    }
+    // `decimal_le` consumes its left argument, so each test gets its own copy
+    // and `mag` itself survives to be carried in the token.
+    if decimal_le(mag.substring(0, mag.len()), "18446744073709551615") {
+        return Token.IntegerOutOfRange(mag, sfx);
+    }
+    if sfx == "i128" or sfx == "u128" {
+        if decimal_le(mag.substring(0, mag.len()), "170141183460469231731687303715884105727") {
+            return Token.Error(invalid_int_literal_msg(radix));
+        }
+        if decimal_le(mag.substring(0, mag.len()), "340282366920938463463374607431768211455") {
+            return Token.IntegerOutOfRange(mag, sfx);
+        }
+    }
+    Token.Error(invalid_int_literal_msg(radix))
 }
 
 fn non_ascii_ident_msg(c: char) -> String {
