@@ -12140,9 +12140,23 @@ impl<'ctx> super::Codegen<'ctx> {
                 // argument disarm that has to know nothing consumes the result.
                 // Saved and restored beside its literal sibling so a nested
                 // statement answers for itself.
-                let saved_discarded_value = self
-                    .discarded_stmt_value_span
-                    .replace((expr.span.offset, expr.span.length));
+                //
+                // B-2026-09-17-7 — through a BLOCK to its tail, because a
+                // block's own span covers statements whose values are NOT
+                // discarded. `{ let a = …; let b = mid(a, true); match b { … } }`
+                // written as a statement armed the window over the WHOLE block,
+                // so every call inside it read as "nothing consumes the result"
+                // and both hand-back disarms declined — the one below and the
+                // dynamic one in `mono.rs`. Only the tail expression's value is
+                // the block's value; each inner statement arms its own window
+                // when it is an expression statement, and a `let` has a binding
+                // that owns the result outright. A block with no tail discards
+                // nothing, so the window stays closed.
+                let discarded_value = Self::discarded_value_expr(expr);
+                let saved_discarded_value = std::mem::replace(
+                    &mut self.discarded_stmt_value_span,
+                    discarded_value.map(|e| (e.span.offset, e.span.length)),
+                );
                 let val = self.compile_expr(expr);
                 self.discarded_stmt_value_span = saved_discarded_value;
                 self.discarded_stmt_literal_span = saved_discarded_stmt;
@@ -24198,6 +24212,37 @@ impl<'ctx> super::Codegen<'ctx> {
                 .as_deref()
                 .and_then(Self::discarded_stmt_aggregate_literal),
             _ => None,
+        }
+    }
+
+    /// B-2026-09-17-7 — the expression whose VALUE a discarded statement
+    /// throws away, which is not always the statement's own expression.
+    ///
+    /// `discarded_stmt_value_span` arms a window that two disarms read as
+    /// "nothing consumes this call's result", so it has to name the expression
+    /// that is actually unconsumed. Armed over a BLOCK's span it named far more
+    /// than that: `{ let a = …; let b = mid(a, true); match b { … } }` written
+    /// as a statement covered the inner call as well, whose result `b` owns
+    /// outright, and both disarms declined for every call in the block. The
+    /// measured cost was a use-after-free at the block's exit — `b`'s box freed
+    /// first, then `a`'s, the same pointer — on a cell whose flat twin (the
+    /// same statements without the braces) was clean.
+    ///
+    /// So follow a block to its tail, which is the only part of it whose value
+    /// is the block's value. A block with no tail discards nothing and returns
+    /// `None`, leaving the window closed. A branch or `match` is NOT followed,
+    /// for the reason its literal sibling above gives: each arm carries its own
+    /// window, armed by `compile_block_with_frame`.
+    fn discarded_value_expr(expr: &Expr) -> Option<&Expr> {
+        match &expr.kind {
+            ExprKind::Block(block)
+            | ExprKind::Seq(block)
+            | ExprKind::Unsafe(block)
+            | ExprKind::LabeledBlock { body: block, .. } => block
+                .final_expr
+                .as_deref()
+                .and_then(Self::discarded_value_expr),
+            _ => Some(expr),
         }
     }
 

@@ -14238,6 +14238,113 @@ impl<'ctx> super::Codegen<'ctx> {
         let _ = self.builder.build_store(slot.ptr, zero_val);
     }
 
+    /// B-2026-09-17-7 — the DYNAMIC sibling of
+    /// [`Self::suppress_inline_option_agg_binding_transfer`], for a callee that
+    /// hands a by-value param's box back on SOME exits and lets it die inside
+    /// on others.
+    ///
+    /// The static suppressor answers at compile time, which is right only when
+    /// the callee's answer is the same on every path. A mixed-path callee has
+    /// no such answer: disarming strands the box on the dies-inside leg and
+    /// leaving it armed double frees on the hand-back leg. This asks the
+    /// question the only way it can be asked — of the VALUE that came back.
+    ///
+    /// Emits, after the call:
+    ///
+    /// ```text
+    ///   %ret.w0  = extractvalue <enum> %call, 1
+    ///   %cur     = load <enum>, ptr %src
+    ///   %src.w0  = extractvalue <enum> %cur, 1
+    ///   %same    = icmp eq i64 %ret.w0, %src.w0
+    ///   %live    = icmp ne i64 %src.w0, 0
+    ///   %handed  = and i1 %same, %live
+    ///   store <enum> (select %handed, zeroinitializer, %cur), ptr %src
+    /// ```
+    ///
+    /// A `select` rather than a branch, so this adds no basic block and cannot
+    /// disturb a block the caller is mid-way through building.
+    ///
+    /// EVERY GATE IS STRUCTURAL, not a guess about the callee: the returned
+    /// LLVM type must be the slot's own type, and that type must be a struct
+    /// whose word 1 is the `i64` box word. Anything else emits nothing and
+    /// leaves the binding exactly as it is today.
+    ///
+    /// The `boxed_enum_payload_vars` membership — which is what says the
+    /// binding's cleanup IS the null-guarded `BoxedEnumDrop` this zeroing
+    /// neutralizes — is asked by the CALLER, at the argument, and not here.
+    /// It has to be: compiling the monomorph body between the two points takes
+    /// the name back out of the set, so asking after the call reads `false` for
+    /// a binding whose box drop the IR demonstrably still emits.
+    ///
+    /// The NULL test matters as much as the equality one. A dies-inside leg
+    /// that returns a payload-free variant carries `w0 == 0`, and a caller
+    /// whose own slot was already zeroed carries `w0 == 0` too — without
+    /// `%live` those two would compare equal and the store would be a harmless
+    /// no-op, but the intent is to disarm only a LIVE box that left the frame,
+    /// so the test says so rather than relying on the store being idempotent.
+    pub(super) fn zero_boxed_binding_if_call_returned_its_box(
+        &mut self,
+        src: &str,
+        ret: inkwell::values::BasicValueEnum<'ctx>,
+    ) {
+        let Some(slot) = self.variables.get(src).copied() else {
+            return;
+        };
+        let inkwell::types::BasicTypeEnum::StructType(st) = slot.ty else {
+            return;
+        };
+        if st.count_fields() < 2 || ret.get_type() != slot.ty {
+            return;
+        }
+        let i64t = self.context.i64_type();
+        if st.get_field_type_at_index(1) != Some(i64t.into()) {
+            return;
+        }
+        let Ok(ret_w0) =
+            self.builder
+                .build_extract_value(ret.into_struct_value(), 1, "handback.ret.w0")
+        else {
+            return;
+        };
+        let Ok(cur) = self.builder.build_load(st, slot.ptr, "handback.cur") else {
+            return;
+        };
+        let Ok(src_w0) =
+            self.builder
+                .build_extract_value(cur.into_struct_value(), 1, "handback.src.w0")
+        else {
+            return;
+        };
+        let Ok(same) = self.builder.build_int_compare(
+            inkwell::IntPredicate::EQ,
+            ret_w0.into_int_value(),
+            src_w0.into_int_value(),
+            "handback.same",
+        ) else {
+            return;
+        };
+        let Ok(live) = self.builder.build_int_compare(
+            inkwell::IntPredicate::NE,
+            src_w0.into_int_value(),
+            i64t.const_zero(),
+            "handback.live",
+        ) else {
+            return;
+        };
+        let Ok(handed) = self.builder.build_and(same, live, "handback.handed") else {
+            return;
+        };
+        let Ok(next) = self.builder.build_select(
+            handed,
+            st.const_zero(),
+            cur.into_struct_value(),
+            "handback.next",
+        ) else {
+            return;
+        };
+        let _ = self.builder.build_store(slot.ptr, next);
+    }
+
     /// B-2026-09-04-1's probe — an arm whose VALUE is one of its own payload
     /// bindings hands that binding's resource to the match result, so the
     /// binding's `UserDrop` must go with it.

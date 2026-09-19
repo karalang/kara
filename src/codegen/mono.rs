@@ -1950,6 +1950,10 @@ impl<'ctx> super::Codegen<'ctx> {
         // it.
         let mut by_value_nonescaping_generic_params: Option<std::collections::HashSet<String>> =
             None;
+        // B-2026-09-17-7 — argument bindings whose box this call MAY hand
+        // back. Resolved in the loop below and consumed after the call, where
+        // the returned value exists to compare against.
+        let mut maybe_handed_back_args: Vec<String> = Vec::new();
         for (i, a) in args.iter().enumerate() {
             let val = arg_vals[i];
             // B-2026-07-14-12: a fresh-heap `String` TEMP arg to a generic fn
@@ -2176,6 +2180,75 @@ impl<'ctx> super::Codegen<'ctx> {
                 });
             if param_box_handed_back {
                 self.suppress_inline_option_agg_binding_transfer(&a.value);
+            }
+            // B-2026-09-17-7 — the MIXED-PATH sibling of the arm above, which
+            // that arm declines BY DESIGN and which double frees as a result.
+            //
+            // `fn mid[T](g: G1[T], c: bool) -> G1[T] { if c { return g } return
+            // G1.N }` hands the box back on one leg and lets the param die
+            // inside on the other. Both are true of ONE call site, so NO STATIC
+            // answer here is right for both: disarming the argument strands the
+            // box on the dies-inside leg, and leaving it armed frees the box
+            // twice on the hand-back leg. Measured at
+            // `KARAC_OPT_LEVEL=0 KARAC_AUTO_PAR=0` on the `c == true` call: no
+            // stdout at all, `Invalid read of size 8`, 12 allocs / 14 frees
+            // against a correct `--interp` — the same two owners and the same
+            // count signature as B-2026-09-16-16, differing only in the gate.
+            //
+            // SO THE ANSWER IS DYNAMIC, which is what that row's remainder says
+            // it has to be, and the check is the cheapest possible form of it:
+            // after the call, compare the RETURNED box word against the one
+            // this argument handed in and zero the argument's slot only when
+            // they are the same pointer. No callee change, no per-leg
+            // monomorph, no ownership flag in the ABI.
+            //
+            // IT CANNOT BE WRONG IN THE SUPPRESSING DIRECTION, which is what
+            // makes the union predicate safe to use here where the static arm
+            // could not. `fn_returns_param` is deliberately generous — it is
+            // true of an AGGREGATE-LITERAL return that merely moves the param
+            // into a NEW value — but such a return carries a different box word
+            // (or none), the compare fails, and the argument keeps the drop it
+            // has today. The disarm happens only when the pointer coming back
+            // IS the pointer that went in, which is precisely when a second
+            // owner exists.
+            //
+            // AND NOT INSIDE A DISCARDED STATEMENT, for the reason the arm
+            // above records: `mid(g, true);` hands the box to nobody, so the
+            // caller's binding is its only owner and standing it down strands
+            // it. The guard is the same window.
+            let param_box_maybe_handed_back = !param_box_handed_back
+                && !self.discarded_stmt_value_span.is_some_and(|(off, len)| {
+                    let s = a.value.span.offset;
+                    s >= off && s < off.saturating_add(len)
+                })
+                && generic_fn.params.get(i).is_some_and(|p| {
+                    if matches!(p.ty.kind, TypeKind::Ref { .. } | TypeKind::MutRef { .. }) {
+                        return false;
+                    }
+                    if !matches!(p.pattern.kind, PatternKind::Binding(_)) {
+                        return false;
+                    }
+                    if !crate::ast::fn_returns_param(&generic_fn, i) {
+                        return false;
+                    }
+                    let inst = self.callee_param_te_for_call(&p.ty, call_span);
+                    !self.user_enum_boxed_payload_variants(&inst).is_empty()
+                });
+            if param_box_maybe_handed_back {
+                if let ExprKind::Identifier(n) = &a.value.kind {
+                    // Membership asked HERE and not at the post-call hook:
+                    // compiling the monomorph body in between takes the name
+                    // back out of `boxed_enum_payload_vars`, so the later read
+                    // is `false` for a binding whose box drop is still emitted.
+                    let owner = self.moved_arg_owner_name(n);
+                    if self
+                        .payload_vars
+                        .boxed_enum_payload_vars
+                        .contains(owner.as_str())
+                    {
+                        maybe_handed_back_args.push(owner);
+                    }
+                }
             }
             // B-2026-09-02-46 — a fresh-temp `Option`/`Result` argument whose
             // payload THIS INSTANTIATION heap-boxes. The box is malloc'd by
@@ -3777,6 +3850,10 @@ impl<'ctx> super::Codegen<'ctx> {
             Ok(self.context.i64_type().const_int(0, false).into())
         } else {
             let v = basic_val.unwrap_basic();
+            // B-2026-09-17-7 — see the mixed-path arm in the argument loop.
+            for src in &maybe_handed_back_args {
+                self.zero_boxed_binding_if_call_returned_its_box(src, v);
+            }
             // LazyFrame codegen twin — rule 3, the generic-call twin of the
             // `compile_call` hook: a generic fn DECLARED to return LazyExpr/
             // LazyFrame (`std.lazy`'s `lit[T]`) hands back an escaping +1;

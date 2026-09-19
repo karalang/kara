@@ -97795,4 +97795,101 @@ fn main() {
             "b11914-payload-view-readonly-control",
         );
     }
+
+    /// B-2026-09-17-7 — the memory half of the two paired output fixtures.
+    ///
+    /// A generic callee that MAY hand its boxed payload back (`fn mid[T](g:
+    /// G[T], c: bool) -> G[T] { if c { return g } return G.N }`) left two
+    /// owners on one box when it did, and stranded the box when a disarm was
+    /// applied statically to stop that. The runtime compare-and-zero after the
+    /// call is what tells the two legs apart, so every cell below is the same
+    /// call under a different answer: handed back, kept inside, always handed
+    /// back, never handed back, and handed to nobody.
+    ///
+    /// The last two cells are the ones that fail in OPPOSITE directions, which
+    /// is why they are both here. `discarded` and `blocktail` leak one box each
+    /// if the disarm fires where nothing consumes the result; `handback` and
+    /// `braced` double-free if it does not fire where something does. `braced`
+    /// is the shape a discarded BLOCK statement hid: its flat twin was clean
+    /// throughout, so only the braces make it visible.
+    #[test]
+    fn asan_generic_handback_leaves_exactly_one_owner_on_the_payload_box() {
+        const DECLS: &str = "enum G[T] { Y(T), N }\n\
+             fn mid[T](g: G[T], c: bool) -> G[T] { if c { return g } return G.N }\n\
+             fn allpaths[T](g: G[T]) -> G[T] { return g }\n\
+             fn diesinside[T](g: G[T]) -> G[T] { return G.N }\n\
+             fn show(g: G[String]) { match g { G.Y(v) => { println(f\"n{v.len()}\") } G.N => { println(\"none\") } } }\n";
+
+        // Handed back: the caller's binding and the result are the same box.
+        assert_clean_asan_run(
+            &format!(
+                "{DECLS}\
+                 fn main() {{\n\
+                 \x20   let a: G[String] = G.Y(\"aaaaaaaa-1\");\n\
+                 \x20   let b = mid(a, true);\n\
+                 \x20   show(b);\n\
+                 \x20   println(\"end\");\n\
+                 }}\n"
+            ),
+            &["n10", "end"],
+            "b91707-handback",
+        );
+
+        // The same call BRACED, with a statement after it. Only this spelling
+        // armed the discarded-statement window over the inner call.
+        assert_clean_asan_run(
+            &format!(
+                "{DECLS}\
+                 fn main() {{\n\
+                 \x20   {{ let a: G[String] = G.Y(\"aaaaaaaa-1\"); let b = mid(a, true); show(b) }}\n\
+                 \x20   println(\"end\");\n\
+                 }}\n"
+            ),
+            &["n10", "end"],
+            "b91707-braced",
+        );
+
+        // Kept inside: the callee owns the box and frees it.
+        assert_clean_asan_run(
+            &format!(
+                "{DECLS}\
+                 fn main() {{\n\
+                 \x20   {{ let a: G[String] = G.Y(\"bbbbbbbb-2\"); let b = mid(a, false); show(b) }}\n\
+                 \x20   println(\"end\");\n\
+                 }}\n"
+            ),
+            &["none", "end"],
+            "b91707-kept-inside",
+        );
+
+        // Handed back on EVERY path, and on none: the two static twins.
+        assert_clean_asan_run(
+            &format!(
+                "{DECLS}\
+                 fn main() {{\n\
+                 \x20   {{ let a: G[String] = G.Y(\"cccccccc-3\"); let b = allpaths(a); show(b) }}\n\
+                 \x20   {{ let a: G[String] = G.Y(\"dddddddd-4\"); let b = diesinside(a); show(b) }}\n\
+                 \x20   println(\"end\");\n\
+                 }}\n"
+            ),
+            &["n10", "none", "end"],
+            "b91707-static-twins",
+        );
+
+        // Handed to NOBODY, in both spellings the window has to stay armed for:
+        // the call as the discarded statement, and the call as a discarded
+        // block's tail. Each leaks one box if the disarm fires here.
+        assert_clean_asan_run(
+            &format!(
+                "{DECLS}\
+                 fn main() {{\n\
+                 \x20   {{ let a: G[String] = G.Y(\"eeeeeeee-5\"); mid(a, true); }}\n\
+                 \x20   {{ let a: G[String] = G.Y(\"ffffffff-6\"); mid(a, true) }};\n\
+                 \x20   println(\"end\");\n\
+                 }}\n"
+            ),
+            &["end"],
+            "b91707-discarded",
+        );
+    }
 }

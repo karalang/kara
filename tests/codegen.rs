@@ -19999,6 +19999,77 @@ fn main() {
         };
         assert_eq!(out, "temp\n  d2:9\n  out\nnamed\n  d2:9\n  out\ntwo\n  d2:9\n  out\nlive\n  d2:9\n  mid\n  out\nnoheap\n  dZ5\n  mid\n  out\nunitvar\n  mid\n  out\nqvar\n  mid\n  out\nuselater\n  mid\n  t1\n  d2:9\n  out\npsh\n  mid\n  dS5\n  out\ncontrol\n  d2:9\n  mid\n  out\nend\n");
     }
+    /// B-2026-09-17-7 — a generic callee that MAY hand its boxed payload back
+    /// freed the box twice, and the check that stops it was blind inside braces.
+    ///
+    /// `fn mid[T](g: G[T], c: bool) -> G[T] { if c { return g } return G.N }`
+    /// returns its own parameter on one leg and lets it die inside on the other.
+    /// Both legs belong to ONE call site, so no static answer there is right for
+    /// both: disarming the argument strands the box when the callee kept it, and
+    /// leaving it armed frees the box twice when the callee handed it back. The
+    /// `handback` cell measured the second — no stdout at all, `Invalid read of
+    /// size 8`, the caller freeing `a`'s box after `b`'s box, one pointer.
+    ///
+    /// The answer is a runtime compare, the cheapest dynamic form: after the call
+    /// the caller zeroes the argument's slot only when the returned box word IS
+    /// the word that went in. It cannot be wrong in the suppressing direction,
+    /// which is what makes the UNION predicate `fn_returns_param` usable here
+    /// where the all-paths one was needed before — a return that merely moves the
+    /// parameter into a new value carries a different word, the compare fails, and
+    /// the argument keeps the drop it has today. `keptinside`, `diesinside` and
+    /// `mono` are the negative cells.
+    ///
+    /// The second half is why every cell here is BRACED. The window that tells
+    /// that disarm "nothing consumes this result" was armed over a discarded
+    /// statement's whole expression, so a braced block written as a statement
+    /// covered every call inside it — including calls whose result a `let` binding
+    /// owns outright. The flat twin of `handback` was clean while the braced one
+    /// died at the block's exit. The window now follows a block to its tail, the
+    /// only part of it whose value the statement throws away; `discarded` and
+    /// `blocktail` are the cells that keep it armed where it does belong, and each
+    /// leaks one box if it stops firing.
+    ///
+    /// The INTERPRETER twin is `tests/interpreter.rs`'s
+    /// `test_generic_callee_may_hand_its_boxed_payload_back`, byte-identical source and expectation.
+    #[test]
+    fn e2e_generic_callee_may_hand_its_boxed_payload_back() {
+        let Some(out) = run_program(
+            r#"struct R { id: i64, s: String }
+impl Drop for R { fn drop(mut ref self) { println(f"  dR{self.id}") } }
+enum G[T] { Y(T), N }
+enum M { Y(String), N }
+fn mid[T](g: G[T], c: bool) -> G[T] { if c { return g } return G.N }
+fn allpaths[T](g: G[T]) -> G[T] { return g }
+fn diesinside[T](g: G[T]) -> G[T] { return G.N }
+fn tailmatch[T](g: G[T], c: i64) -> G[T] { match c { 1 => { return g } _ => { return G.N } } }
+fn pick[T](a: G[T], b: G[T], c: bool) -> G[T] { if c { return a } return G.N }
+fn midmono(g: M, c: bool) -> M { if c { return g } return M.N }
+fn show[T](g: G[String]) { match g { G.Y(v) => { println(f"  {v.len()}") } G.N => { println("  none") } } }
+
+fn main() {
+    println("handback");  { let a: G[String] = G.Y(f"aaaaaaaa-1"); let b = mid(a, true); show(b) }
+    println("keptinside");{ let a: G[String] = G.Y(f"bbbbbbbb-2"); let b = mid(a, false); show(b) }
+    println("allpaths");  { let a: G[String] = G.Y(f"cccccccc-3"); let b = allpaths(a); show(b) }
+    println("diesinside");{ let a: G[String] = G.Y(f"dddddddd-4"); let b = diesinside(a); show(b) }
+    println("discarded"); { let a: G[String] = G.Y(f"eeeeeeee-5"); mid(a, true); println("  out") }
+    println("unread");    { let a: G[String] = G.Y(f"ffffffff-6"); let b = mid(a, true); println("  out") }
+    println("userdrop");  { let a: G[R] = G.Y(R { id: 7, s: f"ssssssss" }); let b = mid(a, true); println("  out") }
+    println("i64");       { let a: G[i64] = G.Y(5); let b = mid(a, true); match b { G.Y(v) => { println(f"  {v}") } G.N => { println("  none") } } }
+    println("twoargs");   { let x: G[String] = G.Y(f"iiiiiiii-9"); let y: G[String] = G.Y(f"jjjjjjjj-10"); let b = pick(x, y, true); show(b) }
+    println("vecpayload");{ let a: G[Vec[String]] = G.Y([f"kkkkkkkk-11", f"llllllll-12"]); let b = mid(a, true); match b { G.Y(v) => { println(f"  {v.len()}") } G.N => { println("  none") } } }
+    println("arrpayload");{ let a: G[Array[String, 2]] = G.Y([f"mmmmmmmm-13", f"nnnnnnnn-14"]); let b = mid(a, true); match b { G.Y(v) => { println("  arr") } G.N => { println("  none") } } }
+    println("matchtail"); { let a: G[String] = G.Y(f"oooooooo-15"); let b = tailmatch(a, 1); show(b) }
+    println("chain");     { let a: G[String] = G.Y(f"pppppppp-16"); let b = mid(mid(a, true), true); show(b) }
+    println("blocktail"); { let a: G[String] = G.Y(f"rrrrrrrr-18"); mid(a, true) }; println("  out")
+    println("mono");      { let a: M = M.Y(f"qqqqqqqq-17"); let b = midmono(a, true); match b { M.Y(v) => { println(f"  {v.len()}") } M.N => { println("  none") } } }
+    println("end")
+}
+"#,
+        ) else {
+            return;
+        };
+        assert_eq!(out, "handback\n  10\nkeptinside\n  none\nallpaths\n  10\ndiesinside\n  none\ndiscarded\n  out\nunread\n  out\nuserdrop\n  dR7\n  out\ni64\n  5\ntwoargs\n  10\nvecpayload\n  2\narrpayload\n  arr\nmatchtail\n  11\nchain\n  11\nblocktail\n  out\nmono\n  11\nend\n");
+    }
 
     #[test]
     fn e2e_declared_vec_enum_payload_runs_element_drop_bodies() {
