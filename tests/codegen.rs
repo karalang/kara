@@ -20166,6 +20166,74 @@ fn main() {
     /// `blocktail` are the cells that keep it armed where it does belong, and each
     /// leaks one box if it stops firing.
     ///
+    /// B-2026-09-17-22 — A `shared enum`'s UNIT VARIANT STRANDS ITS RC SHELL,
+    /// AND WITH IT THE `Drop` BODY THAT SHELL WAS SUPPOSED TO RUN.
+    ///
+    /// `{ let s = U.Ua; }` over `shared enum U { Ua, Ub }` lost the whole
+    /// `{ i64 rc, i64 tag, .. }` allocation on every compiled surface — 16 B
+    /// here, 24 B and 64 B in the two shapes the row was filed on, because the
+    /// leaked block is the shell and the shell is sized to the enum's widest
+    /// variant. The payload-carrying variant of the same enum was always clean,
+    /// which is what localizes this to the UNIT spelling rather than to `shared
+    /// enum` as such.
+    ///
+    /// The leak is the invisible half. The visible half is this fixture: the
+    /// shell's free is what runs the enum's own `Drop` body, so a body that
+    /// never reached refcount 0 never ran at all. Every `dU` / `dW` line below
+    /// is a line `--interp` printed and no compiled surface did — six cells of
+    /// run/build divergence hiding behind a leak nobody had to look at.
+    ///
+    /// The cause is a receive-inc the constructor had already paid for.
+    /// `emit_rc_alloc` stores `rc = 1`, and `rhs_yields_fresh_ref` — the
+    /// predicate that tells the `let` / assign site not to retain a value that
+    /// arrives fresh — matched `Call` / `MethodCall` / `StructLiteral` and
+    /// nothing else. A unit variant is the one fresh-ref source spelled as
+    /// something else: `U.Ua` parses as a two-segment `Path` and a bare `Ub` as
+    /// an `Identifier`, so both fell to that predicate's `_ => false` arm. The
+    /// count went to 2, the single scope-exit dec left it at 1, and the
+    /// `rc_free` block LLVM had faithfully emitted was unreachable at runtime.
+    ///
+    /// `bare` is the unqualified spelling and `reassign` the assign site, since
+    /// both read the same predicate. `uselater` pins that the body lands at the
+    /// binding's live-range end rather than at the construction statement — the
+    /// distinction B-2026-09-17-19's fixture of the same name exists for, and
+    /// the two coincide in every other cell. `par` is the Arc path, which
+    /// leaked identically. `nodrop` and `plain` are the negative cells: a
+    /// shared enum with no body prints nothing either way, and a plain enum has
+    /// no shell to strand, so its body always ran.
+    ///
+    /// The INTERPRETER twin is `tests/interpreter.rs`'s
+    /// `test_shared_enum_unit_variant_runs_its_drop_body`, byte-identical
+    /// source and expectation.
+    #[test]
+    fn e2e_shared_enum_unit_variant_runs_its_drop_body() {
+        let Some(out) = run_program(
+            r#"shared enum U { Ua, Ub }
+impl Drop for U { fn drop(mut ref self) { println(f"  dU") } }
+shared enum V { Va, Vb }
+par enum W { Wa, Wb }
+impl Drop for W { fn drop(mut ref self) { println(f"  dW") } }
+enum Plain { Pa, Pb }
+impl Drop for Plain { fn drop(mut ref self) { println(f"  dP") } }
+fn tag(u: ref U) -> i64 { match u { U.Ua => { return 1 } U.Ub => { return 0 } } }
+fn main() {
+    println("qual");     { let s = U.Ua; println("  mid") } println("  out")
+    println("bare");     { let s = Ub; println("  mid") } println("  out")
+    println("two");      { let s = U.Ua; let t = U.Ub; println("  mid") } println("  out")
+    println("alias");    { let s = U.Ua; let t = s; println("  mid") } println("  out")
+    println("uselater"); { let s = U.Ua; println("  mid"); println(f"  t{tag(s)}") } println("  out")
+    println("reassign"); { let mut s = U.Ua; s = U.Ub; println("  mid") } println("  out")
+    println("nodrop");   { let s = V.Va; println("  mid") } println("  out")
+    println("par");      { let s = W.Wa; println("  mid") } println("  out")
+    println("plain");    { let s = Plain.Pa; println("  mid") } println("  out")
+    println("end")
+}
+"#,
+        ) else {
+            return;
+        };
+        assert_eq!(out, "qual\n  dU\n  mid\n  out\nbare\n  dU\n  mid\n  out\ntwo\n  dU\n  dU\n  mid\n  out\nalias\n  dU\n  mid\n  out\nuselater\n  mid\n  t1\n  dU\n  out\nreassign\n  dU\n  dU\n  mid\n  out\nnodrop\n  mid\n  out\npar\n  dW\n  mid\n  out\nplain\n  dP\n  mid\n  out\nend\n");
+    }
     /// The INTERPRETER twin is `tests/interpreter.rs`'s
     /// `test_generic_callee_may_hand_its_boxed_payload_back`, byte-identical source and expectation.
     #[test]

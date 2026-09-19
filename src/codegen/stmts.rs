@@ -25256,8 +25256,91 @@ impl<'ctx> super::Codegen<'ctx> {
             ExprKind::Match { arms, .. } => {
                 !arms.is_empty() && arms.iter().all(|arm| self.rhs_yields_fresh_ref(&arm.body))
             }
-            _ => false,
+            // B-2026-09-17-22 — a `shared enum`'s UNIT variant is a
+            // CONSTRUCTION, not an alias, and it is the one fresh-ref source
+            // whose source shape is an `Identifier` / `FieldAccess` rather than
+            // a `Call`. `U.A` parses as `FieldAccess(Identifier("U"), "A")` and
+            // a bare `A` as `Identifier("A")`, so both fell to the `_ => false`
+            // arm and the let/assign site took a receive-inc on top of the
+            // `emit_rc_alloc`'s own `rc = 1`. The count then sat at 2 against a
+            // single scope-exit dec, the `rc_free` block was unreachable at
+            // runtime, and every such construction stranded its 2-word RC shell
+            // (16 B, valgrind `definitely lost`, once per evaluation).
+            //
+            // The payload-carrying variant was never affected: `U.A(3)` is an
+            // `ExprKind::Call`, already fresh, which is why the leak reads as
+            // "unit variants only" rather than as a shared-enum leak.
+            _ => self.shared_unit_variant_construction(expr),
         }
+    }
+
+    /// True when `expr` CONSTRUCTS a unit variant of a `shared` enum — the
+    /// `EnumName.Variant` (`FieldAccess`) or bare `Variant` (`Identifier`)
+    /// spelling that `try_unit_enum_variant` lowers to a fresh `emit_rc_alloc`.
+    /// Used by [`Self::rhs_yields_fresh_ref`] so the receive site does not
+    /// increment a refcount the constructor already set to 1 (B-2026-09-17-22).
+    ///
+    /// Resolution mirrors `compile_expr`'s exactly, which is what keeps the
+    /// answer honest in both directions. The bare form defers to
+    /// [`Self::fresh_bare_unit_variant_enum`], which first rules out every
+    /// binding that shadows the name — a local `let A = 7;` makes `let s = A;`
+    /// an ordinary read, and calling that fresh would skip an inc the alias
+    /// genuinely owes. The qualified form re-resolves through
+    /// `bare_unit_variant_owner` rather than trusting the written enum name,
+    /// because the `EnumName.Variant` arm in `compile_field_access` constructs
+    /// through that same bare-name scan; asking the written name instead would
+    /// disagree with the IR whenever two enums declare the variant.
+    ///
+    /// Restricted to `shared` enums on purpose: a plain enum's unit variant is
+    /// an inline aggregate with no refcount, so no site reading this predicate
+    /// has anything to do differently for one.
+    fn shared_unit_variant_construction(&self, expr: &Expr) -> bool {
+        let owner = match &expr.kind {
+            ExprKind::Identifier(name) => self.fresh_bare_unit_variant_enum(name),
+            // `U.A` is the SPELLING this bug is reported in, and it does not
+            // reach the `FieldAccess` arm below: the parser greedily folds an
+            // uppercase-led dotted chain into one `Path`
+            // (`src/parser/exprs.rs`), so `compile_path_expr` is what lowers
+            // it. That arm resolves by the WRITTEN type name rather than
+            // through the bare-name scan, and this mirrors it — including the
+            // value-binding-rooted guard it checks first, so `OUTER.inner`
+            // (a module binding whose field happens to name a variant) stays a
+            // read.
+            ExprKind::Path { segments, .. } if segments.len() == 2 => {
+                if self.variables.contains_key(&segments[0])
+                    || self.mod_bindings.module_bindings.contains_key(&segments[0])
+                {
+                    return false;
+                }
+                let declares_unit =
+                    self.type_decls
+                        .enum_layouts
+                        .get(&segments[0])
+                        .is_some_and(|l| {
+                            l.tags.contains_key(&segments[1])
+                                && l.field_counts.get(&segments[1]).copied().unwrap_or(0) == 0
+                        });
+                if !declares_unit {
+                    return false;
+                }
+                Some(segments[0].clone())
+            }
+            ExprKind::FieldAccess { object, field } => {
+                let ExprKind::Identifier(en) = &object.kind else {
+                    return false;
+                };
+                let declares_unit = self.type_decls.enum_layouts.get(en).is_some_and(|l| {
+                    l.tags.contains_key(field)
+                        && l.field_counts.get(field).copied().unwrap_or(0) == 0
+                });
+                if !declares_unit {
+                    return false;
+                }
+                self.bare_unit_variant_owner(field)
+            }
+            _ => return false,
+        };
+        owner.is_some_and(|en| self.type_decls.shared_types.contains_key(&en))
     }
 
     /// True when `expr` is `<map>.get(k)` on a Map (or SortedMap) whose VALUE

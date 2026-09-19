@@ -69768,6 +69768,51 @@ fn main() {
     assert_eq!(out, "one\n  dR1\n  mid\n  end\ntwo\n  dR2\n  mid\n  dR3\n  end\nboth\n  dR4\n  dR5\n  mid\n  end\nsecond\n  dR7\n  mid\n  dR6\n  end\nreadonly\n  mid9\n  dR9\n  dR10\n  end\ninline\n  dR40\n  mid\n  end\nstruct\n  dR12\n  mid\n  end\nnone\n  n\n  end\nend\n", "got:\n{out}");
 }
 
+/// B-2026-09-17-22 — A `shared enum`'s UNIT VARIANT STRANDS ITS RC SHELL,
+/// AND WITH IT THE `Drop` BODY THAT SHELL WAS SUPPOSED TO RUN.
+///
+/// This is the INTERPRETER side of the fix, and every line of it was already
+/// correct: the interpreter has always run these bodies. What it pins is that
+/// it still does, unchanged, now that the compiled backends agree — so a later
+/// change on either side cannot quietly re-open the gap by moving this half.
+///
+/// The compiled half lost the whole `{ i64 rc, i64 tag, .. }` allocation on
+/// `{ let s = U.Ua; }`, because the `let` site retained a value
+/// `emit_rc_alloc` had already set to `rc = 1` — `rhs_yields_fresh_ref` matched
+/// `Call` / `MethodCall` / `StructLiteral`, and a unit variant is the one
+/// fresh-ref source spelled as a `Path` (`U.Ua`) or a bare `Identifier`
+/// (`Ub`). The count never reached 0, so the free never ran, so the body never
+/// ran: six of these cells printed nothing at all on every compiled surface.
+///
+/// The CODEGEN twin is `tests/codegen.rs`'s
+/// `e2e_shared_enum_unit_variant_runs_its_drop_body`, byte-identical source and
+/// expectation.
+#[test]
+fn test_shared_enum_unit_variant_runs_its_drop_body() {
+    let out = run(r#"shared enum U { Ua, Ub }
+impl Drop for U { fn drop(mut ref self) { println(f"  dU") } }
+shared enum V { Va, Vb }
+par enum W { Wa, Wb }
+impl Drop for W { fn drop(mut ref self) { println(f"  dW") } }
+enum Plain { Pa, Pb }
+impl Drop for Plain { fn drop(mut ref self) { println(f"  dP") } }
+fn tag(u: ref U) -> i64 { match u { U.Ua => { return 1 } U.Ub => { return 0 } } }
+fn main() {
+    println("qual");     { let s = U.Ua; println("  mid") } println("  out")
+    println("bare");     { let s = Ub; println("  mid") } println("  out")
+    println("two");      { let s = U.Ua; let t = U.Ub; println("  mid") } println("  out")
+    println("alias");    { let s = U.Ua; let t = s; println("  mid") } println("  out")
+    println("uselater"); { let s = U.Ua; println("  mid"); println(f"  t{tag(s)}") } println("  out")
+    println("reassign"); { let mut s = U.Ua; s = U.Ub; println("  mid") } println("  out")
+    println("nodrop");   { let s = V.Va; println("  mid") } println("  out")
+    println("par");      { let s = W.Wa; println("  mid") } println("  out")
+    println("plain");    { let s = Plain.Pa; println("  mid") } println("  out")
+    println("end")
+}
+"#);
+    assert_eq!(out, "qual\n  dU\n  mid\n  out\nbare\n  dU\n  mid\n  out\ntwo\n  dU\n  dU\n  mid\n  out\nalias\n  dU\n  mid\n  out\nuselater\n  mid\n  t1\n  dU\n  out\nreassign\n  dU\n  dU\n  mid\n  out\nnodrop\n  mid\n  out\npar\n  dW\n  mid\n  out\nplain\n  dP\n  mid\n  out\nend\n", "got:\n{out}");
+}
+
 /// B-2026-09-17-19 — A `shared enum`'s VARIANT PAYLOAD RUNS ITS `Drop` BODY,
 /// AND THE RELEASE LANDS AT THE BINDING'S LIVE-RANGE END.
 ///

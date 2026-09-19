@@ -97946,15 +97946,27 @@ fn main() {
             "b91719-shared-enum-payload-two-handles",
         );
 
-        // NO UNIT-VARIANT CELL HERE, deliberately. `{ let s: SMono = SMono.Q; }`
-        // strands its whole RC shell — 64 B at `-O0`, the `{ i64 rc, i64 tag,
-        // .. }` allocation itself — which is B-2026-09-17-22 and has nothing to
-        // do with payload bodies. B-2026-09-15-10's fixture leaves the same
-        // construction out for the same reason, in its own words: "a cell
-        // carrying this leak would make the fixture red for a reason that is not
-        // its own". The payload-free variant IS covered for the question this
-        // commit is about — whether it runs a body — by the `qvar` cell of the
-        // paired output fixtures, where no allocation is asserted on.
+        // THE UNIT-VARIANT CELL, which this fixture deliberately left out until
+        // B-2026-09-17-22 was fixed. `{ let s: SMono = SMono.Q; }` used to
+        // strand its whole RC shell — 64 B at `-O0`, the `{ i64 rc, i64 tag,
+        // .. }` allocation itself — so a cell carrying it would have made this
+        // fixture red for a reason that is not its own (B-2026-09-15-10's
+        // fixture left the same construction out, in those words). It is in now
+        // because the construction is clean, and it belongs here rather than
+        // only in that row's own fixture: it is this fixture's enum, so if the
+        // payload work ever regresses the shell free, the cell that catches it
+        // sits beside the cells that caused it.
+        assert_clean_asan_run(
+            &format!(
+                "{DECLS}\
+                 fn main() {{\n\
+                 \x20   {{ let s: SMono = SMono.Q; }}\n\
+                 \x20   println(\"end\");\n\
+                 }}\n"
+            ),
+            &["end"],
+            "b91719-shared-enum-unit-variant",
+        );
 
         // A NAMED source moved into the constructor. This is the cell
         // `e2e_shared_enum_ctor_named_source_runs_no_husk_drop_body` warns
@@ -97973,6 +97985,142 @@ fn main() {
             ),
             &["dR8", "end"],
             "b91719-shared-enum-payload-named-source",
+        );
+    }
+
+    /// B-2026-09-17-22 — A `shared enum`'s UNIT VARIANT FREES ITS RC SHELL.
+    ///
+    /// `{ let s = U.Ua; }` over `shared enum U { Ua, Ub }` lost the whole
+    /// `{ i64 rc, i64 tag, .. }` allocation on every compiled surface, once per
+    /// evaluation and so unbounded in a loop. The leaked block is the shell
+    /// itself, sized to the enum's widest variant — 16 B here, 24 B and 64 B in
+    /// the two shapes the row was filed on — and the payload-carrying variant of
+    /// the same enum was always clean, which is what localizes this to the UNIT
+    /// spelling.
+    ///
+    /// The `let` site retained a value `emit_rc_alloc` had already set to
+    /// `rc = 1`: `rhs_yields_fresh_ref` matched `Call` / `MethodCall` /
+    /// `StructLiteral`, and a unit variant is the one fresh-ref source spelled
+    /// as a two-segment `Path` (`U.Ua`) or a bare `Identifier` (`Ub`). So the
+    /// count sat at 2 against a single scope-exit dec and LLVM's `rc_free`
+    /// block was unreachable at runtime.
+    ///
+    /// The cells are the spellings that read that one predicate: qualified,
+    /// bare, the assign site, a second handle on the same box, and a use after
+    /// the binding. `par` is the Arc path, which leaked identically. `shadow`
+    /// is the cell with teeth in the OTHER direction — a local binding whose
+    /// name is a variant's makes `let s = Uc;` an ordinary read, and calling
+    /// that fresh would skip an inc the alias genuinely owes, which is a use
+    /// after free rather than a leak. It asserts the compiled answer (`n7`);
+    /// `--interp` prints the VARIANT there instead, a shadowing divergence that
+    /// predates this row and is B-2026-09-19-37, which is why the paired output
+    /// fixtures have no `shadow` cell.
+    ///
+    /// The output twins are `tests/codegen.rs`'s
+    /// `e2e_shared_enum_unit_variant_runs_its_drop_body` and its interpreter
+    /// sibling — the bodies below are the visible half of the same defect, since
+    /// the shell's free is what runs them.
+    #[test]
+    fn asan_shared_enum_unit_variant_frees_its_rc_shell() {
+        const DECLS: &str = "shared enum U { Ua, Ub, Uc }\n\
+             impl Drop for U { fn drop(mut ref self) { println(f\"dU\") } }\n\
+             par enum W { Wa, Wb }\n\
+             impl Drop for W { fn drop(mut ref self) { println(f\"dW\") } }\n\
+             fn tag(u: ref U) -> i64 { match u { U.Ua => { return 1 } U.Ub => { return 0 } U.Uc => { return 2 } } }\n";
+
+        // The qualified spelling — the shape the row was filed on.
+        assert_clean_asan_run(
+            &format!(
+                "{DECLS}\
+                 fn main() {{\n\
+                 \x20   {{ let s = U.Ua; }}\n\
+                 \x20   println(\"end\");\n\
+                 }}\n"
+            ),
+            &["dU", "end"],
+            "b91722-unit-variant-qualified",
+        );
+
+        // The bare spelling, which reaches the same predicate by a different
+        // `ExprKind`.
+        assert_clean_asan_run(
+            &format!(
+                "{DECLS}\
+                 fn main() {{\n\
+                 \x20   {{ let s = Ub; }}\n\
+                 \x20   println(\"end\");\n\
+                 }}\n"
+            ),
+            &["dU", "end"],
+            "b91722-unit-variant-bare",
+        );
+
+        // The ASSIGN site reads the predicate too, and leaked one shell per
+        // store: 32 B for these two constructions.
+        assert_clean_asan_run(
+            &format!(
+                "{DECLS}\
+                 fn main() {{\n\
+                 \x20   {{ let mut s = U.Ua; s = U.Ub; }}\n\
+                 \x20   println(\"end\");\n\
+                 }}\n"
+            ),
+            &["dU", "dU", "end"],
+            "b91722-unit-variant-reassign",
+        );
+
+        // A second handle on one box: the body fires once, at the last one.
+        assert_clean_asan_run(
+            &format!(
+                "{DECLS}\
+                 fn main() {{\n\
+                 \x20   {{ let s = U.Ua; let t = s; }}\n\
+                 \x20   println(\"end\");\n\
+                 }}\n"
+            ),
+            &["dU", "end"],
+            "b91722-unit-variant-alias",
+        );
+
+        // A use AFTER the binding — the release lands at the live-range end, so
+        // the read must still be on live memory.
+        assert_clean_asan_run(
+            &format!(
+                "{DECLS}\
+                 fn main() {{\n\
+                 \x20   {{ let s = U.Ua; println(f\"t{{tag(s)}}\"); }}\n\
+                 \x20   println(\"end\");\n\
+                 }}\n"
+            ),
+            &["t1", "dU", "end"],
+            "b91722-unit-variant-use-later",
+        );
+
+        // The Arc path, which leaked identically.
+        assert_clean_asan_run(
+            &format!(
+                "{DECLS}\
+                 fn main() {{\n\
+                 \x20   {{ let s = W.Wa; }}\n\
+                 \x20   println(\"end\");\n\
+                 }}\n"
+            ),
+            &["dW", "end"],
+            "b91722-unit-variant-par",
+        );
+
+        // The guard in the other direction: a local binding shadows the variant
+        // name, so this is a READ and must keep the inc it owes.
+        assert_clean_asan_run(
+            &format!(
+                "{DECLS}\
+                 fn main() {{\n\
+                 \x20   {{ let Uc = 7; let s = Uc; println(f\"n{{s}}\"); }}\n\
+                 \x20   println(\"end\");\n\
+                 }}\n"
+            ),
+            &["n7", "end"],
+            "b91722-unit-variant-shadowed",
         );
     }
 
