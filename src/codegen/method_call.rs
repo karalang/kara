@@ -11310,10 +11310,14 @@ impl<'ctx> super::Codegen<'ctx> {
                     // so the box owns its interior on every spelling.
                     if let Some(inst) = recv_inst.clone() {
                         let inst = self.subst_monomorph_type_params(&inst);
-                        for (enum_name, variant, payload_te) in
+                        for (enum_name, variant, payload_te, box_field, box_only) in
                             self.user_enum_boxed_payload_variants(&inst)
                         {
-                            let inner = self.enum_boxed_payload_interior_drop(&payload_te, true);
+                            let inner = if box_only {
+                                None
+                            } else {
+                                self.enum_boxed_payload_interior_drop(&payload_te, true)
+                            };
                             self.track_boxed_enum_var_with_inner_drop_for_payload(
                                 "__urecv_drop_tmp",
                                 slot,
@@ -11321,6 +11325,7 @@ impl<'ctx> super::Codegen<'ctx> {
                                 &variant,
                                 inner,
                                 &payload_te,
+                                box_field,
                             );
                         }
                     }

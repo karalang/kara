@@ -732,6 +732,7 @@ impl<'ctx> super::Codegen<'ctx> {
                 heap_type,
             },
             SlotOwnership::BoxedEnum {
+                payload_field_index,
                 enum_ty,
                 inner_drop_fn,
                 some_tag,
@@ -748,6 +749,7 @@ impl<'ctx> super::Codegen<'ctx> {
                 // re-deriving it here could disagree with the site that knew
                 // the payload type.
                 interior_arm_owned,
+                payload_field_index,
                 deeper_tags: deeper_tags.clone(),
             },
             SlotOwnership::SharedElided => CleanupAction::FreeSharedElided {
@@ -2730,6 +2732,7 @@ impl<'ctx> super::Codegen<'ctx> {
                                 inner_drop_fn,
                                 some_tag,
                                 interior_arm_owned,
+                                payload_field_index,
                                 deeper_tags,
                                 ..
                             } if Some(*enum_slot) == local_ptr => Some(SlotOwnership::BoxedEnum {
@@ -2737,6 +2740,7 @@ impl<'ctx> super::Codegen<'ctx> {
                                 inner_drop_fn: *inner_drop_fn,
                                 some_tag: *some_tag,
                                 interior_arm_owned: *interior_arm_owned,
+                                payload_field_index: *payload_field_index,
                                 deeper_tags: deeper_tags.clone(),
                             }),
                             _ => None,

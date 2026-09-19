@@ -6750,7 +6750,7 @@ impl<'ctx> super::Codegen<'ctx> {
         // envelope plus its interior were nobody's. Registered in the same
         // memory-before-bodies position, for the same LIFO reason.
         if let Some(te) = discarded_generic_enum_te.as_ref() {
-            for (enum_name, variant, payload_te) in
+            for (enum_name, variant, payload_te, box_field, box_only) in
                 self.user_enum_boxed_payload_variants(&te.clone())
             {
                 // B-2026-09-14-9 — `true`, matching the `let` site
@@ -6763,7 +6763,11 @@ impl<'ctx> super::Codegen<'ctx> {
                 // too. With the fall-through above but this still `false`, the
                 // discarded box was freed and its 8 `String`s were not
                 // (136 B in 8 blocks at `-O0`).
-                let inner = self.enum_boxed_payload_interior_drop(&payload_te, true);
+                let inner = if box_only {
+                    None
+                } else {
+                    self.enum_boxed_payload_interior_drop(&payload_te, true)
+                };
                 self.track_boxed_enum_var_with_inner_drop_for_payload(
                     "__owned_agg_tmp",
                     slot,
@@ -6771,6 +6775,7 @@ impl<'ctx> super::Codegen<'ctx> {
                     &variant,
                     inner,
                     &payload_te,
+                    box_field,
                 );
             }
         }

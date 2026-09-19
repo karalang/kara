@@ -2593,6 +2593,12 @@ impl<'ctx> super::Codegen<'ctx> {
     /// gives about this family: the registration sites are many and only a few
     /// have the information, so widening them all would spread the blast radius
     /// past where it was measured.
+    /// B-2026-09-15-18 — `payload_field_index` is the enum-struct field the
+    /// box word sits in, which all five callers now know because the
+    /// classifier reports it. Before that row it was a hard-coded 1 at the
+    /// emit, correct only because every admitted variant had exactly one
+    /// field.
+    #[allow(clippy::too_many_arguments)]
     pub(super) fn track_boxed_enum_var_with_inner_drop_for_payload(
         &mut self,
         name: &str,
@@ -2601,9 +2607,10 @@ impl<'ctx> super::Codegen<'ctx> {
         payload_variant: &str,
         inner_drop_fn: Option<FunctionValue<'ctx>>,
         payload_te: &crate::ast::TypeExpr,
+        payload_field_index: u32,
     ) {
         let interior_arm_owned = self.boxed_payload_interior_taken_by_arm(payload_te);
-        self.track_boxed_enum_var_with_chain(
+        self.track_boxed_enum_var_with_chain_at_field(
             name,
             enum_slot,
             enum_name,
@@ -2611,6 +2618,7 @@ impl<'ctx> super::Codegen<'ctx> {
             inner_drop_fn,
             Vec::new(),
             interior_arm_owned,
+            payload_field_index,
         );
     }
 
@@ -2635,6 +2643,37 @@ impl<'ctx> super::Codegen<'ctx> {
         deeper_tags: Vec<u64>,
         interior_arm_owned: bool,
     ) {
+        self.track_boxed_enum_var_with_chain_at_field(
+            name,
+            enum_slot,
+            enum_name,
+            payload_variant,
+            inner_drop_fn,
+            deeper_tags,
+            interior_arm_owned,
+            1,
+        );
+    }
+
+    /// [`Self::track_boxed_enum_var_with_chain`] with the box's enum-struct
+    /// FIELD INDEX named explicitly (B-2026-09-15-18).
+    ///
+    /// A separate entry point rather than an eighth parameter, for the reason
+    /// the function above gives about this family: only the classifier-driven
+    /// registrations know which field of a multi-field variant the box sits
+    /// in, and every other site's answer is the pre-existing 1.
+    #[allow(clippy::too_many_arguments)]
+    pub(super) fn track_boxed_enum_var_with_chain_at_field(
+        &mut self,
+        name: &str,
+        enum_slot: PointerValue<'ctx>,
+        enum_name: &str,
+        payload_variant: &str,
+        inner_drop_fn: Option<FunctionValue<'ctx>>,
+        deeper_tags: Vec<u64>,
+        interior_arm_owned: bool,
+        payload_field_index: u32,
+    ) {
         // B-2026-08-29-2 — the two USED to be mutually exclusive here, asserted
         // on the reading that "the chain walks envelopes, the drop owns the
         // interior". Both halves are still true; what was wrong is treating
@@ -2657,6 +2696,7 @@ impl<'ctx> super::Codegen<'ctx> {
                 inner_drop_fn,
                 some_tag,
                 interior_arm_owned,
+                payload_field_index,
                 deeper_tags,
             });
         }
@@ -16701,6 +16741,7 @@ impl<'ctx> super::Codegen<'ctx> {
                 // the time cleanup is emitted the retraction has already
                 // decided whether `inner_drop_fn` survives.
                 interior_arm_owned: _,
+                payload_field_index,
                 deeper_tags,
             } => {
                 let tag_ptr = self
@@ -16728,9 +16769,18 @@ impl<'ctx> super::Codegen<'ctx> {
                     .build_conditional_branch(is_some, do_bb, join_bb)
                     .unwrap();
                 self.builder.position_at_end(do_bb);
+                // B-2026-09-15-18 — the field the box word actually sits
+                // in, not a hard-coded 1. Identical for every registration
+                // that predates that row (a single-field variant's only field
+                // starts at word 0), and the difference for a multi-field one.
                 let w0_ptr = self
                     .builder
-                    .build_struct_gep(*enum_ty, *enum_slot, 1, &format!("{}_box_w0_ptr", name))
+                    .build_struct_gep(
+                        *enum_ty,
+                        *enum_slot,
+                        *payload_field_index,
+                        &format!("{}_box_w0_ptr", name),
+                    )
                     .unwrap();
                 let w0 = self
                     .builder

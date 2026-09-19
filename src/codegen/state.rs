@@ -1208,6 +1208,19 @@ pub(crate) enum CleanupAction<'ctx> {
         /// payload type this box was installed for, and the retraction site
         /// has the binding name but not the instantiated payload type.
         interior_arm_owned: bool,
+        /// B-2026-09-15-18 — the enum-struct FIELD INDEX holding this box's
+        /// pointer word: `1 + field_word_offsets[variant][fi].0`, the `1`
+        /// being the enum's own tag at field 0.
+        ///
+        /// Every registration before this row's was for a SINGLE-field
+        /// variant, whose only field starts at word 0, so the emit hard-coded
+        /// field 1 and was right every time. Admitting a MULTI-field variant
+        /// makes that a coincidence: `Y(i64, Array[String, 2])` keeps its box
+        /// at field 2, and freeing field 1 hands `free` an `i64` that was
+        /// never a pointer. Carried per registration rather than derived at
+        /// emit because the emit holds the layout's LLVM type but not the
+        /// variant name the offsets are keyed by.
+        payload_field_index: u32,
         /// Tags of the further ENVELOPE boxes reachable *inside* this box,
         /// outermost first — empty for the single-box shape, which is every
         /// registration site but the let site. B-2026-08-07-6.
@@ -1744,6 +1757,11 @@ pub(crate) enum SlotOwnership<'ctx> {
         /// knew the instantiated payload type gave. See
         /// `CleanupAction::BoxedEnumDrop`'s field of the same name.
         interior_arm_owned: bool,
+        /// B-2026-09-15-18 — carried across the par hand-off for the same
+        /// reason as the flag above: re-deriving it on the parent frame would
+        /// have to re-resolve the variant, and getting it wrong frees the
+        /// wrong word. See `CleanupAction::BoxedEnumDrop`'s field of this name.
+        payload_field_index: u32,
         deeper_tags: Vec<u64>,
     },
 }

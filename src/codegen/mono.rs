@@ -4766,11 +4766,15 @@ impl<'ctx> super::Codegen<'ctx> {
                 && nonescaping_params.contains(&param_name)
             {
                 let mono_ty = self.subst_monomorph_type_params(&param.ty);
-                for (enum_name, variant, payload_te) in
+                for (enum_name, variant, payload_te, box_field, box_only) in
                     self.user_enum_boxed_payload_variants(&mono_ty)
                 {
                     // B-2026-09-10-2 — the interior, as at the other two sites.
-                    let inner = self.enum_boxed_payload_interior_drop(&payload_te, false);
+                    let inner = if box_only {
+                        None
+                    } else {
+                        self.enum_boxed_payload_interior_drop(&payload_te, false)
+                    };
                     self.track_boxed_enum_var_with_inner_drop_for_payload(
                         &param_name,
                         alloca,
@@ -4778,6 +4782,7 @@ impl<'ctx> super::Codegen<'ctx> {
                         &variant,
                         inner,
                         &payload_te,
+                        box_field,
                     );
                 }
                 // B-2026-09-10-2 — the bodies half, mirroring the

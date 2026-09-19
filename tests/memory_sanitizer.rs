@@ -12309,6 +12309,124 @@ fn main() {
         );
     }
 
+    /// B-2026-09-15-18 — the GENERIC twin of the fixture above: a multi-field
+    /// variant whose boxed field is the erased parameter `T`.
+    ///
+    /// B-2026-09-15-15 gave the NON-generic spelling an owner by classifying
+    /// the field `BoxedArray` at declaration time. A generic variant's field
+    /// type is the parameter, so `array_elem_and_len` answers `None` there and
+    /// nothing is classified; the monomorphic path that would catch it
+    /// (`user_enum_boxed_payload_variants`) declined any variant with more than
+    /// one field, so the box was nobody's. Measured broken at `-O0` under
+    /// `valgrind --leak-check=full`, two rounds each, `Array[i64, 4]` payloads:
+    ///
+    ///     mix / mix2 / struct / hand / out  64 B per cell (one 32 B box a round)
+    ///     two                               128 B (two boxes a round)
+    ///     single                            clean — the control the row names
+    ///
+    /// THE PAYLOAD ELEMENT TYPE IS `i64` ON PURPOSE, and that is the one thing
+    /// to know before editing this. An `Array[String, N]` payload leaks its
+    /// ELEMENTS whatever this row does — the registration is box-only, and the
+    /// interior is B-2026-09-16-15's subject — so a `String`-element cell could
+    /// not appear in a clean-run fixture at all. With `i64` elements the box is
+    /// the only heap in the program, which makes the cells measure exactly the
+    /// thing this row fixed and nothing else. The row's own reproduction notes
+    /// the same shape: "192 B for an `Array[i64, 3]` that owns no heap at all
+    /// and leaked purely the needless box."
+    ///
+    /// ONE SHAPE IS DELIBERATELY ABSENT. A variant mixing the erased field with
+    /// a heap-bearing SIBLING — `enum Gh[T] { Y(T, String), N }` — is declined
+    /// by the classifier and still strands its box, so it is not here. That is
+    /// not caution: admitting it was measured, and it traded the box for the
+    /// sibling. At `T = Array[String, 2]`, two rounds, passing the value to
+    /// `fn gh(g: Gh[Array[String, 2]])`, the box (96 B over two rounds) came
+    /// back and the two sibling `String`s (10 B in 2 blocks) stopped being
+    /// freed, because membership of `boxed_enum_payload_vars` arms an
+    /// argument-move suppressor that zeroes the WHOLE slot and so neutralizes
+    /// the sibling's `cap > 0` guard along with the box's tag guard. Its
+    /// non-generic twin is the `heapsib` cell in the fixture above, which stays
+    /// correct because both of its fields are classified at declaration and
+    /// neither takes this registration. See the whole-variant stand-down in
+    /// `user_enum_boxed_payload_variants` for the full note.
+    ///
+    /// `hand` (the arm hands the array to a by-value callee) and `out` (the arm
+    /// returns it) are here because they are where a widened classifier turns a
+    /// leak into a DOUBLE FREE if the box gains a second owner — the hazard the
+    /// row's own "worth checking when it is done" paragraph names. Both are
+    /// clean, and valgrind reports no invalid free on either.
+    ///
+    /// FLOORED at 12 allocations: the stranded boxes are exactly what LLVM
+    /// deletes when nothing observes them, so an `-O2`-only zero proves
+    /// nothing.
+    ///
+    /// AND THAT IS NOT A FLOOR REMARK HERE, IT IS THE WHOLE GUARD: this cell is
+    /// non-vacuous ONLY at `-O0`, so `scripts/asan-o0-leg.sh` is what catches a
+    /// regression in it and the default `--features llvm` run is not. Measured
+    /// both ways on the pre-fix tree, with the fix stashed out of `src/` and a
+    /// marker `grep -c` printed as the guard that the stash really took:
+    /// at the harness default it reported `ok`, and at `KARAC_OPT_LEVEL=0` it
+    /// failed with exit 23 and `ERROR: LeakSanitizer`. The mechanism behind the
+    /// green default run was not isolated — CLAUDE.md's standing reason (at
+    /// `-O2` LLVM deletes an allocation nothing observes) fits, and so does a
+    /// stale stack slot keeping the box reachable for LSan's conservative scan;
+    /// which one it is does not change what to run.
+    /// Do not read a green default run as evidence about this fixture.
+    #[test]
+    fn asan_generic_multi_field_variant_owns_its_boxed_array_payload() {
+        assert_clean_asan_run_min_allocs(
+            r#"
+enum Ga[T] { Y(T, i64), N }
+enum Gb[T] { Y(i64, T), N }
+enum Gt[T] { Y(T, T), N }
+enum Gs[T] { Y { a: T, n: i64 }, N }
+enum G1[T] { Y(T), N }
+
+fn mki(t: i64) -> Array[i64, 4] { return [t, t + 1, t + 2, t + 3]; }
+fn eat(a: Array[i64, 4]) -> i64 { return a[0]; }
+
+fn ga(g: Ga[Array[i64, 4]]) -> i64 { match g { Ga.Y(x, k) => { return x[0] + k; } Ga.N => { return 0; } } }
+fn gb(g: Gb[Array[i64, 4]]) -> i64 { match g { Gb.Y(k, x) => { return x[0] + k; } Gb.N => { return 0; } } }
+fn gt(g: Gt[Array[i64, 4]]) -> i64 { match g { Gt.Y(x, y) => { return x[0] + y[1]; } Gt.N => { return 0; } } }
+fn gs(g: Gs[Array[i64, 4]]) -> i64 { match g { Gs.Y { a, n } => { return a[0] + n; } Gs.N => { return 0; } } }
+fn ghand(g: Ga[Array[i64, 4]]) -> i64 { match g { Ga.Y(x, k) => { return eat(x) + k; } Ga.N => { return 0; } } }
+fn gout(g: Ga[Array[i64, 4]]) -> Array[i64, 4] { match g { Ga.Y(x, k) => { return x; } Ga.N => { return mki(0); } } }
+fn g1(g: G1[Array[i64, 4]]) -> i64 { match g { G1.Y(x) => { return x[0]; } G1.N => { return 0; } } }
+
+fn main() {
+    let mut i: i64 = 0;
+    while i < 2 {
+        { let g = Ga.Y(mki(10 + i), 5); println(f"mix:{ga(g)}"); }
+        { let g = Gb.Y(5, mki(20 + i)); println(f"mix2:{gb(g)}"); }
+        { let g = Gt.Y(mki(30 + i), mki(40 + i)); println(f"two:{gt(g)}"); }
+        { let g = Gs.Y { a: mki(50 + i), n: 5 }; println(f"struct:{gs(g)}"); }
+        { let g = Ga.Y(mki(60 + i), 5); println(f"hand:{ghand(g)}"); }
+        { let g = Ga.Y(mki(70 + i), 5); let r = gout(g); println(f"out:{r[1]}"); }
+        { let g = G1.Y(mki(80 + i)); println(f"single:{g1(g)}"); }
+        i = i + 1;
+    }
+}
+"#,
+            &[
+                "mix:15",
+                "mix2:25",
+                "two:71",
+                "struct:55",
+                "hand:65",
+                "out:71",
+                "single:80",
+                "mix:16",
+                "mix2:26",
+                "two:73",
+                "struct:56",
+                "hand:66",
+                "out:72",
+                "single:81",
+            ],
+            "asan_generic_multi_field_variant_owns_its_boxed_array_payload",
+            12,
+        );
+    }
+
     /// B-2026-09-15-3 — the MEMORY half of an `Array[T, N]` local moved into a
     /// user ENUM VARIANT CONSTRUCTOR.
     ///

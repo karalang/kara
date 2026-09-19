@@ -6393,6 +6393,10 @@ impl<'ctx> super::Codegen<'ctx> {
                 enum_ty: slot_ty,
                 inner_drop_fn: None,
                 some_tag,
+                // B-2026-09-15-18 — an envelope box is always word 0 of the
+                // payload area: it IS the whole payload, so there is no
+                // sibling field to offset past.
+                payload_field_index: 1,
                 // The envelopes below the parked one — see the call site for
                 // why claiming them here is a FIRST owner. Empty for the
                 // single-box shape, which is every field whose payload does not

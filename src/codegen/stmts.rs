@@ -8324,7 +8324,7 @@ impl<'ctx> super::Codegen<'ctx> {
                                 .then(|| self.variables.get(var_name.as_str()).copied())
                                 .flatten()
                             {
-                                for (enum_name, variant, payload_te) in boxed {
+                                for (enum_name, variant, payload_te, box_field, box_only) in boxed {
                                     // B-2026-09-10-2 — the INTERIOR this site
                                     // passed as `None`. See the param site in
                                     // `functions.rs` for why the resolver is
@@ -8338,8 +8338,11 @@ impl<'ctx> super::Codegen<'ctx> {
                                     // down, so the box owns the interior on every
                                     // spelling and the in-place question no longer
                                     // decides ownership.
-                                    let inner =
-                                        self.enum_boxed_payload_interior_drop(&payload_te, true);
+                                    let inner = if box_only {
+                                        None
+                                    } else {
+                                        self.enum_boxed_payload_interior_drop(&payload_te, true)
+                                    };
                                     self.track_boxed_enum_var_with_inner_drop_for_payload(
                                         var_name,
                                         slot.ptr,
@@ -8347,6 +8350,7 @@ impl<'ctx> super::Codegen<'ctx> {
                                         &variant,
                                         inner,
                                         &payload_te,
+                                        box_field,
                                     );
                                 }
                             }

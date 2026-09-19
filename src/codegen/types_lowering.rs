@@ -5062,7 +5062,7 @@ impl<'ctx> super::Codegen<'ctx> {
     pub(super) fn user_enum_boxed_payload_variants(
         &self,
         te: &TypeExpr,
-    ) -> Vec<(String, String, TypeExpr)> {
+    ) -> Vec<(String, String, TypeExpr, u32, bool)> {
         let TypeKind::Path(p) = &te.kind else {
             return vec![];
         };
@@ -5122,10 +5122,101 @@ impl<'ctx> super::Codegen<'ctx> {
         };
         let mut out = Vec::new();
         for (_tag, vname, tys) in self.enum_variant_field_type_exprs(enum_name) {
-            // Single-payload variants only. A multi-field variant packs its
-            // fields across the area rather than boxing one value, and getting
-            // that wrong frees a pointer that was never a box.
-            if tys.len() != 1 {
+            if tys.is_empty() {
+                continue;
+            }
+            // B-2026-09-15-18 — a MULTI-FIELD variant is admitted now, and
+            // only on the narrow terms the `multi_field_boxed_field` helper
+            // states. The gate this replaces read "single-payload variants
+            // only ... a multi-field variant packs its fields across the area
+            // rather than boxing one value, and getting that wrong frees a
+            // pointer that was never a box". Both halves were true and neither
+            // is an argument for declining: the pack side boxes per FIELD, on
+            // that field's own slot, and the freed word is now that field's
+            // own too (`payload_field_index`) rather than a hard-coded word 0.
+            //
+            // What is NOT widened is the test. The single-field population
+            // keeps `> area` verbatim, because its correctness rests on a
+            // decade of measurements this row did not re-take; the new
+            // population gets the pack side's own per-field test instead. The
+            // two therefore cannot disagree about a payload they both see —
+            // they never see the same one.
+            let single_field = tys.len() == 1;
+            let kinds = layout.field_drop_kinds.get(&vname);
+            let offsets = layout.field_word_offsets.get(&vname);
+            if !single_field {
+                // WHOLE-VARIANT stand-down, the same question the single-field
+                // arm below asks, and it is deliberately not the per-FIELD form
+                // this started as. Two things rest on it.
+                //
+                // The first is what the per-field form was written for, and it
+                // keeps working either way: the NON-generic multi-field
+                // variants stay out, because `declarations.rs` classified them
+                // `BoxedArray` at declare time (B-2026-09-15-15) and the drop
+                // switch already owns their boxes. The gap left is the generic
+                // one, whose erased `T` field cannot be classified there at
+                // all — and an all-`None` variant is exactly that gap.
+                //
+                // The second is the reason it had to be widened, and it was
+                // MEASURED rather than reasoned: a variant that mixes an erased
+                // field with a heap-bearing SIBLING cannot take this
+                // registration, because the box is not the only heap in the
+                // slot and the argument-move suppressor zeroes the slot whole.
+                // `enum Gh[T] { Y(T, String), N }` at `T = Array[String, 2]`,
+                // `-O0`, two rounds, `valgrind --leak-check=full`, passing the
+                // value to `fn gh(g: Gh[Array[String, 2]])`:
+                //
+                //     before  196 B — 96 direct (the 2 boxes) + 100 indirect
+                //                     (the 4 element `String`s); the sibling
+                //                     `String`s are FREED
+                //     per-field
+                //             110 B — 10 B in 2 blocks (the siblings, NEW)
+                //                     + 100 B (the elements, unchanged)
+                //
+                // The box does get recovered, so the byte count improves; a
+                // previously-freed buffer leaking is still a regression, and
+                // trading one for the other is not this row's call to make.
+                // `suppress_inline_option_result_binding_move_impl` says why in
+                // its own words — "zeroing the whole slot below neutralizes
+                // every shape's guard at once" — and that is sound for every
+                // shape it was written against, where the box IS the payload.
+                // Membership of `boxed_enum_payload_vars` is what arms it, and
+                // this registration is what grants that membership, so the
+                // caller stops freeing the sibling and the callee's box-only
+                // drop never starts.
+                //
+                // Fixing that means teaching the suppressor to zero one WORD
+                // rather than the slot, across a shape-blind path a dozen
+                // shapes share. That is a separate row with its own reduction,
+                // exactly as this row's own opener says of the edit that
+                // created it. Declining here leaves `Gh` at its status quo
+                // ante — the box leaks, as it did before this change — rather
+                // than half-fixing it into a new divergence.
+                //
+                // Every shape this row was filed for is all-`None` and is
+                // admitted unchanged: `Y(T, i64)`, `Y(i64, T)`, `Y(T, T)` and
+                // `Y { a: T, n: i64 }` all measured clean of their boxes.
+                if kinds.is_some_and(|ks| ks.iter().any(|k| *k != EnumDropKind::None)) {
+                    continue;
+                }
+                for (fi, fty) in tys.iter().enumerate() {
+                    let concrete = Self::subst_type_params(fty, &subst);
+                    let Some((start_word, field_words)) = offsets.and_then(|o| o.get(fi)).copied()
+                    else {
+                        continue;
+                    };
+                    if let Some(payload_te) =
+                        self.multi_field_boxed_field(&concrete, field_words, enum_name, &vname)
+                    {
+                        out.push((
+                            enum_name.to_string(),
+                            vname.clone(),
+                            payload_te,
+                            (start_word + 1) as u32,
+                            true,
+                        ));
+                    }
+                }
                 continue;
             }
             // B-2026-09-12-12 — admit a variant ONLY when the drop switch does
@@ -5139,11 +5230,7 @@ impl<'ctx> super::Codegen<'ctx> {
             // gap. The generic case is unaffected — an erased `T` payload
             // classifies `None` already, so the set it returned before is
             // returned unchanged.
-            if layout
-                .field_drop_kinds
-                .get(&vname)
-                .is_some_and(|ks| ks.iter().any(|k| *k != EnumDropKind::None))
-            {
+            if kinds.is_some_and(|ks| ks.iter().any(|k| *k != EnumDropKind::None)) {
                 continue;
             }
             let concrete = Self::subst_type_params(&tys[0], &subst);
@@ -5166,11 +5253,75 @@ impl<'ctx> super::Codegen<'ctx> {
             if !subst.is_empty() || self.array_elem_and_len(&concrete).is_some() {
                 let ll = self.llvm_type_for_type_expr(&concrete);
                 if Self::llvm_type_word_count(ll) > area {
-                    out.push((enum_name.to_string(), vname, concrete));
+                    // A single field starts at word 0, so its box has always
+                    // been at enum field 1 — which is what the emit hard-coded
+                    // before B-2026-09-15-18 and why it was right every time.
+                    let idx = offsets
+                        .and_then(|o| o.first())
+                        .map_or(1, |(sw, _)| *sw as u32 + 1);
+                    out.push((enum_name.to_string(), vname, concrete, idx, false));
                 }
             }
         }
         out
+    }
+
+    /// B-2026-09-15-18 — is `concrete` a payload the pack side BOXED in a
+    /// multi-field variant's field whose slot is `field_words` words?
+    ///
+    /// Split out from [`Self::user_enum_boxed_payload_variants`] because the
+    /// multi-field population is admitted on its own terms, and those terms
+    /// are three restrictions that each have a measurement behind them:
+    ///
+    ///  1. THE TEST IS THE PACK SIDE'S, against the field's OWN slot rather
+    ///     than the enum-wide area. `coerce_to_payload_words` boxes when a
+    ///     value's real width exceeds the `num_words` the layout gave that
+    ///     field, and for an array that is always the conservative 1 — a
+    ///     variant DECLARATION can only spell one as
+    ///     `Path(["Array"], [Type(T), Const(N)])`, which
+    ///     `payload_word_count_for_type_expr`'s real-width arm does not match.
+    ///     `declarations.rs`'s own `BoxedArray` pass records that reading the
+    ///     AREA here was measured and is wrong in the direction that leaves
+    ///     the bug open.
+    ///  2. ARRAY-ONLY. B-2026-09-12-12 measured what happens without this
+    ///     limit on the single-field path: admitting every oversize payload
+    ///     double-freed the self-hosted parser, because large STRUCT payloads
+    ///     (`Item.Func`, `Stmt.Let`) already have box owners. Nothing about
+    ///     those shapes changes for a multi-field variant, and a generic
+    ///     multi-field variant carrying a non-array oversize payload is a
+    ///     separate population that this row did not measure.
+    ///  3. AN ELEMENT THAT RUNS A USER `Drop` BODY IS DECLINED, mirroring the
+    ///     declaration pass's `!single_field && elem_runs_body` clause exactly.
+    ///     That clause is not caution: admitting such an element trades an
+    ///     agreed both-backends leak for a NEW run-vs-build divergence, since
+    ///     B-2026-09-15-17 has the bodies running before the consuming call on
+    ///     the compiled backends and after it under `--interp`. Both clauses
+    ///     come out together when that row closes, and they are worded the
+    ///     same so a grep finds the pair.
+    fn multi_field_boxed_field(
+        &self,
+        concrete: &TypeExpr,
+        field_words: usize,
+        enum_name: &str,
+        variant: &str,
+    ) -> Option<TypeExpr> {
+        let (elem_te, _n) = self.array_elem_and_len(concrete)?;
+        let elem_name = match &elem_te.kind {
+            TypeKind::Path(p) => p.segments.first().cloned(),
+            _ => None,
+        };
+        if let Some(n) = elem_name {
+            if self.type_runs_user_drop(&n, &mut Vec::new()) {
+                return None;
+            }
+        }
+        let _ = (enum_name, variant);
+        let ll = self.llvm_type_for_type_expr(concrete);
+        if Self::llvm_type_word_count(ll) > field_words {
+            Some(concrete.clone())
+        } else {
+            None
+        }
     }
 
     /// Recover the source `TypeExpr` of an *untyped* `let`'s RHS when it is a
