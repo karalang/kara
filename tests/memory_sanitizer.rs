@@ -26812,6 +26812,75 @@ fn main() {
         );
     }
 
+    /// B-2026-09-16-35 — the range-slice HEAP route, which is the only fixture
+    /// in this file that reaches it.
+    ///
+    /// THIS FIXTURE EXISTS FOR `scripts/asan-sso-leg.sh`, and at the default
+    /// `KARAC_SSO=0` it asserts almost nothing new: every `String[a..b]` there
+    /// takes one allocating path regardless of length, already covered above.
+    /// At `KARAC_SSO=1` the same source splits in two — a slice of 23 bytes or
+    /// fewer becomes an INLINE descriptor that allocates nothing, and a longer
+    /// one takes the heap route `compile_string_slice` owns, where codegen
+    /// emits the allocation and the scope-exit drop frees it. That split is a
+    /// codegen-owned `malloc` paired with a runtime-owned `free`, which is
+    /// exactly the seam an ownership mistake hides in.
+    ///
+    /// WHY THE LENGTHS ARE WHAT THEY ARE. `src[0..30]` is over the 23-byte
+    /// inline capacity (`Codegen::STRING_INLINE_CAPACITY`) and so is the only
+    /// thing here that allocates at SSO=1; `src[0..9]` and `src[0..5]` are
+    /// under it and must allocate NOTHING, so a spurious free of an inline
+    /// descriptor's interior shows up as an invalid free rather than as a leak.
+    /// `tail30` returns a 30-byte slice across a call boundary, so the heap
+    /// descriptor is moved out of the frame that built it. The loop runs the
+    /// pair three times, which is what turns a leak from 30 bytes into a
+    /// growing one LSan reports rather than rounds off.
+    ///
+    /// MEASURED, and the measurement is the reason the fixture is here rather
+    /// than the lane alone. Reproducing the fault the filing row used — the
+    /// result aggregate made to point into the SOURCE buffer instead of its own
+    /// allocation — the whole `asan_string_*` set stayed GREEN at both
+    /// `KARAC_SSO=0` and `KARAC_SSO=1`, because no fixture sliced past 23 bytes
+    /// and the heap route was never entered. With this fixture the injected
+    /// fault aborts the run (`free(): double free detected in tcache 2`) on the
+    /// SSO lane and still passes at SSO=0, where the route is dead code. So the
+    /// lane and the fixture are each necessary and neither is sufficient.
+    #[test]
+    fn asan_sso_string_range_slice_heap_route_is_balanced() {
+        assert_clean_asan_run(
+            r#"
+fn tail30(s: ref String) -> String {
+    s[6..36]
+}
+
+fn main() {
+    let src = "abcdefghijklmnopqrstuvwxyz0123456789".to_string();
+    let mut i = 0;
+    while i < 3 {
+        let big = src[0..30];
+        let small = src[0..9];
+        println(big);
+        println(small);
+        i = i + 1;
+    }
+    println(src[0..5]);
+    let esc = tail30(src);
+    println(esc);
+}
+"#,
+            &[
+                "abcdefghijklmnopqrstuvwxyz0123",
+                "abcdefghi",
+                "abcdefghijklmnopqrstuvwxyz0123",
+                "abcdefghi",
+                "abcdefghijklmnopqrstuvwxyz0123",
+                "abcdefghi",
+                "abcde",
+                "ghijklmnopqrstuvwxyz0123456789",
+            ],
+            "sso_string_range_slice_heap_route",
+        );
+    }
+
     // ── `collect_all_vec` gather (phase-6 slice 1b) ───────────────
     //
     // Lowers a runtime Vec of closures into parallel `karac_par_run`

@@ -1,0 +1,54 @@
+# Fixtures that FAIL the memory_sanitizer suite at KARAC_SSO=1 (Small-String
+# Optimization ON) and KARAC_OPT_LEVEL=0. Consumed by scripts/asan-sso-leg.sh.
+# B-2026-09-16-35.
+#
+# Every entry names the bug row that owns it. Nothing goes on this list without
+# one — an unattributed entry is indistinguishable from a fixture someone
+# silenced.
+#
+# THE LIST ONLY SHRINKS. The leg fails both when an unlisted fixture starts
+# failing (a regression) and when a listed one starts PASSING (the owning bug
+# got fixed and the line is now stale). That second direction is what keeps this
+# from decaying into a permanent allowlist.
+#
+# WHY THIS LIST IS SEPARATE from tests/asan-o0-known-failures.txt and from
+# tests/asan-instrumented-known-failures.txt. Those two legs run the SAME
+# emitted code under different checking. This one runs DIFFERENT emitted code:
+# at KARAC_SSO=1 a short String lives inline in its 24-byte descriptor, reads
+# go through tag-aware accessors, and de-inlining allocates a buffer that does
+# not exist at SSO=0. So the failure sets are not comparable in either
+# direction — sharing a list would let an SSO-surface regression hide behind an
+# allocator-class entry naming the same fixture, and would equally make an
+# SSO-only failure read as an -O0 regression.
+#
+# A LEGITIMATE ENTRY HERE IS OFTEN NOT A DEFECT IN ITS FIXTURE. 231 fixtures in
+# the suite assert a FLOOR on the process malloc count
+# (`assert_clean_asan_run_min_allocs`), and inlining a short String is exactly
+# an allocation that stops happening. Such a fixture failing here means its
+# floor was calibrated on the SSO=0 representation, and the entry belongs to the
+# SSO campaign rather than to whatever the fixture was originally written for.
+# Say which in the comment, because the two read identically on the leg's
+# output.
+#
+# SEEDED 2026-09-19 on 6a77677, x86_64 Linux, lean + full + unicode archives
+# present, KARAC_SSO=1 KARAC_OPT_LEVEL=0, --test-threads=8:
+# 1673 passed / 5 failed / 9 ignored in 318s. That seeding run predates this
+# row's own fixture; the tree as pushed reads 1674 / 5 / 9 in 311s, and the
+# -O0 and instrumented legs agree at 1674 on the same tree. All five "failures"
+# are the regex and arrow fixtures whose OPT-IN archives an ordinary checkout
+# does not build;
+# the leg subtracts and reports those as SKIPPED rather than failed, so the
+# quarantine set is EMPTY and every fixture in the suite is expected to pass at
+# KARAC_SSO=1.
+#
+# WHAT THAT GREEN DID NOT MEAN, recorded because it is the trap this row is
+# about one level up. Seeding the lane on a clean tree proves nothing about
+# whether the lane can SEE anything. Reproducing the fault the filing row used —
+# the range-slice result aggregate made to point into the SOURCE buffer instead
+# of its own allocation — the entire `asan_string_*` set stayed green at BOTH
+# KARAC_SSO=0 and KARAC_SSO=1, because the heap route is only entered by a slice
+# longer than the 23-byte inline capacity and no fixture made one.
+# `asan_sso_string_range_slice_heap_route_is_balanced` was written for exactly
+# that gap: with it, the injected fault aborts on this lane and still passes at
+# SSO=0, where the route is dead code. The lane and that fixture are each
+# necessary and neither is sufficient.

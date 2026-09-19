@@ -1068,6 +1068,71 @@ jobs:
       - name: Memory sanitizer at KARAC_OPT_LEVEL=0 (ratcheted against known failures)
         run: scripts/asan-o0-leg.sh
 
+  # SSO sibling of `memory-sanitizer-o0` (B-2026-09-16-35). `KARAC_SSO` is read
+  # once per process through a `OnceLock` defaulting to OFF, and
+  # tests/memory_sanitizer.rs compiles every fixture IN-PROCESS, so no fixture
+  # in that file can turn Small-String Optimization on for itself. Until this
+  # job existed, every one of the ~1660 ASAN cells exercised the non-SSO String
+  # paths only — and since B-2026-09-16-1 the inline surface includes a heap
+  # allocation CODEGEN owns while the free stays in the runtime, which is the
+  # seam a sanitizer is for.
+  #
+  # Runs through `scripts/asan-sso-leg.sh`, which exports the variable for the
+  # whole cargo run and ratchets against `tests/asan-sso-known-failures.txt` —
+  # its OWN list, not the -O0 one, because the two legs run DIFFERENT emitted
+  # code for the same fixture rather than the same code under different
+  # checking.
+  #
+  # That list is EMPTY as seeded (2026-09-19): 1674 passed / 0 failed, the only
+  # 5 non-passes being the regex + arrow fixtures whose opt-in archives this job
+  # does build. So any failure here is a real one.
+  #
+  # NON-REQUIRED, matching the other sanitizer legs. It is also not a pre-push
+  # gate for ordinary work: SSO is still staged behind the default-off flag, so
+  # a red run here is a defect in the unfinished SSO surface rather than a
+  # regression on the shipping default. The default flip is what promotes it.
+  memory-sanitizer-sso:
+    name: Memory sanitizer KARAC_SSO=1 (inline String surface)
+    runs-on: ubuntu-latest
+    env:
+      KARAC_REQUIRE_RUNTIME_ARCHIVE: "1"
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install LLVM 18
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y llvm-18 llvm-18-dev
+          echo "LLVM_SYS_181_PREFIX=$(llvm-config-18 --prefix)" >> "$GITHUB_ENV"
+          echo "LD_LIBRARY_PATH=$(llvm-config-18 --libdir)" >> "$GITHUB_ENV"
+
+      - name: Install Rust toolchain
+        uses: dtolnay/rust-toolchain@stable
+
+      - name: Cache dependencies
+        uses: Swatinem/rust-cache@v2
+        with:
+          key: memsan-sso
+
+      # Same lean -> regex -> arrow -> unicode -> full order as memory-sanitizer-o0:
+      # every build emits the canonical name, so each rename happens before the
+      # next build and the plain full build runs LAST.
+      - name: Build runtime staticlib archives (lean → regex → arrow → unicode → full)
+        run: |
+          cargo rustc -p karac-runtime --release --no-default-features --features net --crate-type staticlib
+          cp target/release/libkarac_runtime.a target/release/libkarac_runtime_min.a
+          cargo rustc -p karac-runtime --release --features regex --crate-type staticlib
+          cp target/release/libkarac_runtime.a target/release/libkarac_runtime_regex.a
+          cargo rustc -p karac-runtime --release --features arrow --crate-type staticlib
+          cp target/release/libkarac_runtime.a target/release/libkarac_runtime_arrow.a
+          cargo rustc -p karac-runtime --release --features unicode --crate-type staticlib
+          cp target/release/libkarac_runtime.a target/release/libkarac_runtime_unicode.a
+          cargo rustc -p karac-runtime --release --crate-type staticlib
+
+      - name: Memory sanitizer at KARAC_SSO=1 (ratcheted against known failures)
+        run: scripts/asan-sso-leg.sh
+
   # ── GPU execution lane (lavapipe software Vulkan) ───────────────────────
   # The first CI coverage of `#[gpu]` kernels EXECUTING. Before this lane the
   # repo had ~101 GPU tests across seven files and not one ran a shader — they
