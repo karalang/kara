@@ -263,6 +263,42 @@ pub unsafe extern "C" fn karac_string_slice_fail(
 /// learns the number. A wasted call on the heap path is noise against the
 /// `malloc` + `memcpy` that path was already going to do.
 ///
+/// # No caller in this repository, and that is a decision rather than a
+/// leftover (B-2026-09-16-20)
+///
+/// `9d3ceb9` (B-2026-09-15-13) replaced this function's one call site with
+/// inline IR and deleted codegen's `module.add_function` declaration along
+/// with it — leaving the declaration tripped `dead_code` on the `-D warnings`
+/// gate. So codegen does not DECLARE the symbol at all, and no emitted module
+/// on any backend can reference it. The JIT is not a second path: it goes
+/// through the same codegen. The tests below and
+/// `sso::codegen_inline_encoding_contract` are the only things that run it.
+///
+/// It stays anyway, and the two numbers that decide it were measured on
+/// 2026-09-19:
+///
+/// * It costs **86 bytes** of code in the archive (`nm --print-size` on
+///   `libkarac_runtime.a`) and **zero** in any linked binary. The AOT path
+///   extracts archive members by name, so the linker never pulls in a member
+///   nothing references — `nm` on a `karac build` executable finds this symbol
+///   absent while the one `karac_string` symbol that program does use is
+///   present. Archive size is therefore the ONLY cost, and it is 86 bytes.
+/// * It is a `#[no_mangle]` export of a staticlib that ships as a public
+///   artifact. Removing it is an ABI break for any embedder or FFI consumer
+///   linking the archive, which is a larger thing to spend than 86 bytes
+///   nothing links.
+///
+/// The tests below are also the only executable check of the VERDICT protocol
+/// this function documents — `codegen_inline_encoding_contract` asserts
+/// codegen's inlined bytes against `write_inline` directly and would not
+/// notice this function changing.
+///
+/// If codegen ever declares the symbol again, nothing here needs changing: the
+/// `__preserve_no_mangle_symbols` entry in `lib.rs` already covers the JIT
+/// lookup. Verify the "no caller" claim with a `grep` of `src/` rather than
+/// trusting this paragraph — it is true as of `9d3ceb9` and nothing enforces
+/// it.
+///
 /// # Safety
 ///
 /// * `src` must point to a readable buffer of at least `n` bytes when `n > 0`.

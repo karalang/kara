@@ -537,6 +537,13 @@ pub fn __preserve_no_mangle_symbols() -> usize {
         clone::karac_string_slice,
         clone::karac_string_slice_into,
         clone::karac_string_slice_fail,
+        // The next entry is DEFENSIVE, not required (B-2026-09-16-20): codegen
+        // has not declared that symbol since `9d3ceb9`, so nothing the JIT
+        // links can look it up today. Kept so a future re-add needs no change
+        // here; see the function's own doc comment in `clone.rs` for why it
+        // survives at all. Named obliquely on purpose — `extern_keep_list.rs`
+        // harvests every runtime-symbol token in this function's body,
+        // comments included, so spelling one here forges a keep-list entry.
         clone::karac_string_try_inline_into,
         clone::karac_string_slice_borrow,
         clone::karac_string_decode_char,
