@@ -4043,6 +4043,95 @@ impl<'ctx> super::Codegen<'ctx> {
                         return true;
                     }
                 }
+                // B-2026-09-10-20 — a CONTAINER payload. The loop above reads
+                // the payload's HEAD NAME, and the head of `Array[R, 2]` is
+                // `Array` — no declared struct or enum — so an enum whose only
+                // Drop-bearing content sits behind a container answered false
+                // here. That is the same blindness this leg's own doc comment
+                // describes one level up, on the other axis: a head-name walk
+                // cannot see through a container any more than it could see
+                // through a variant payload.
+                //
+                // The consequence was NOT at the enum's own binding, which
+                // registers its payload walker directly and has been correct
+                // since B-2026-09-12-6 / B-2026-09-13-29. It was at the struct
+                // FIELD position: `user_drop_field_indices_mono` gates every
+                // field on this predicate, so `struct G { h: Hs }` never
+                // entered the walk set, `emit_user_drop_field_bodies_fn_
+                // skipping` declined for an empty set, and the field's enum arm
+                // — which already calls `emit_enum_payload_user_drop_bodies_fn`
+                // and would have walked the container correctly — was never
+                // reached. Only the GATE was missing, the shape B-2026-09-15-35
+                // records for the bare-param field.
+                //
+                // Measured as THREE run-vs-build divergences, one gate:
+                // `Array[R, 2]`, `Vec[R]` and `Vec[Mono]` payloads each ran
+                // their element bodies under `--interp` and on NO compiled
+                // surface when the enum sat in a struct field, while the same
+                // enum bound to a local agreed on all four. Position, not
+                // payload type, is what separates them — which is why this was
+                // invisible to a cell matrix that varies only the type.
+                //
+                // THE ELEMENT TEST MIRRORS THE INTERPRETER'S ELEMENT DISPATCH,
+                // ARM FOR ARM, and the asymmetry between the two arms below is
+                // the whole reason this is not one call to
+                // `elem_te_runs_user_drop`. That predicate is the EMITTER's
+                // gate and reaches further than the interpreter does:
+                // `run_enum_payload_user_drops_value`'s declared-`Array` arm
+                // dispatches a `Value::Struct` element only, while its
+                // declared-`Vec` arm takes a struct OR a non-shared user enum.
+                // Asking the wider question here admits `Array[Mono, N]` over a
+                // user enum, whose compiled field position then prints where
+                // the interpreter stays silent — measured, and it is a FRESH
+                // divergence traded for the three above. Five more cells of
+                // that same enum-element family sit one head over
+                // (B-2026-09-10-20's own remainder) and none of them is closed
+                // by widening this gate, so buying one here buys nothing.
+                //
+                // Tuple payloads are excluded for the same reason and are
+                // filed separately (B-2026-09-19-46): the interpreter's walker
+                // has no tuple arm at all, so every tuple cell is an AGREED
+                // silence today and admitting it here would open a sixth
+                // divergence.
+                let elem_head_runs_body = |this: &Self, elem: &TypeExpr, seen: &mut Vec<String>| {
+                    let TypeKind::Path(ep) = &elem.kind else {
+                        return (false, false);
+                    };
+                    let Some(eh) = ep.segments.first() else {
+                        return (false, false);
+                    };
+                    if generic_params.iter().any(|g| g == eh) {
+                        return (false, false);
+                    }
+                    let is_struct = this
+                        .type_decls
+                        .struct_field_type_exprs
+                        .contains_key(eh.as_str());
+                    let is_user_enum = eh != "Option"
+                        && eh != "Result"
+                        && this
+                            .type_decls
+                            .enum_layouts
+                            .get(eh.as_str())
+                            .is_some_and(|l| !l.is_shared);
+                    let runs = this.type_runs_user_drop(eh, seen);
+                    (is_struct && runs, is_user_enum && runs)
+                };
+                for te in &tes {
+                    if let Some((elem, n)) = self.array_elem_and_len(te) {
+                        // Struct elements only — the declared-`Array` arm's reach.
+                        if n > 0 && elem_head_runs_body(self, &elem, seen).0 {
+                            return true;
+                        }
+                    }
+                    if let Some(elem) = crate::codegen::helpers::vec_inner_type_expr(te) {
+                        // Struct OR user-enum elements — the declared-`Vec` arm's.
+                        let (st, en) = elem_head_runs_body(self, &elem, seen);
+                        if st || en {
+                            return true;
+                        }
+                    }
+                }
             }
         }
         let mut found = self

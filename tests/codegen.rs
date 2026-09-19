@@ -20725,6 +20725,86 @@ fn main() {
         assert_eq!(out, "scalar\n  dH1\n  got:9\nreadscalar\n  in2\n  dH2\n  got:8\nfirst\n  dH4\n  got:3\n  dH3\nsecond\n  dH5\n  got:6\n  dH6\nmiddle\n  dH7\n  dH9\n  got:8\n  dH8\nbothtouched\n  keep11\n  dH11\n  got:10\n  dH10\nnoneout\n  dH12\n  dH13\n  got:25\nresultout\n  dH14\n  got:7\nend\n");
     }
 
+    /// B-2026-09-10-20 — an enum's CONTAINER payload held in a STRUCT FIELD.
+    ///
+    /// The sibling of `tests/interpreter.rs`'s
+    /// `test_enum_container_payload_in_struct_field_runs_element_drop_bodies`, on the
+    /// axis that row's earlier sessions never varied: POSITION. Both of its previous
+    /// fixes were measured across payload TYPES — `Vec` vs `Array` vs tuple, declared
+    /// vs generic — with every cell written at the same `let`-bound position, and both
+    /// were reverted. A cell matrix that varies only the type cannot see a defect
+    /// whose whole shape is which registration site fires.
+    ///
+    /// `f-arr` / `f-vec` / `f-venum` are the fixed cells, and THIS is the side that
+    /// was wrong: an `Array[R, 2]`, `Vec[R]` or `Vec[Mono]` payload whose enum sits in
+    /// a struct field ran its element bodies under `--interp` and on no compiled
+    /// surface — three run-vs-build divergences from ONE gate.
+    /// `type_runs_user_drop`'s enum leg reads the payload's HEAD NAME, and the head of
+    /// `Array[R, 2]` is `Array`, so `user_drop_field_indices_mono` never admitted the
+    /// field, `emit_user_drop_field_bodies_fn_skipping` declined for an empty set, and
+    /// the field walker's enum arm — which already calls
+    /// `emit_enum_payload_user_drop_bodies_fn` and walks the container correctly — was
+    /// never reached. Only the gate was missing, the shape B-2026-09-15-35 records for
+    /// the bare-param field.
+    ///
+    /// `f-bind` varies how the field is INITIALIZED (a named local rather than a fresh
+    /// temp) and `f-second` puts the enum at field index 1 behind a scalar, which pins
+    /// the GEP rather than the admission.
+    ///
+    /// `l-arr` / `l-vec` are the non-regression controls: the same payloads at the
+    /// `let`-bound position, correct since B-2026-09-12-6 / B-2026-09-13-29 and
+    /// unmoved by this commit.
+    ///
+    /// THE THREE `b-` CELLS ARE THE DELIBERATE BOUNDARY AND MUST STAY SILENT.
+    /// `b-arrenum` (`Array[Mono, 1]`, a user ENUM element) and `b-tuple` are AGREED
+    /// silences today, and the gate is narrowed to mirror
+    /// `run_enum_payload_user_drops_value`'s element dispatch arm for arm so they stay
+    /// that way: its declared-`Array` arm takes a `Value::Struct` element only, while
+    /// its declared-`Vec` arm takes a struct OR a non-shared user enum. Asking the
+    /// emitter's wider `elem_te_runs_user_drop` here instead was measured to make
+    /// `b-arrenum` print on all three compiled surfaces and nowhere under `--interp`
+    /// — one fresh divergence bought for three closed, which is what 0eba4d1's revert
+    /// was about. `b-arrenum`'s family is the row's remainder; `b-tuple` is
+    /// B-2026-09-19-46.
+    #[test]
+    fn e2e_enum_container_payload_in_struct_field_runs_element_drop_bodies() {
+        let Some(out) = run_program(
+            r#"struct R { id: i64, s: String }
+impl Drop for R { fn drop(mut ref self) { println(f"d{self.id}") } }
+fn mkr(i: i64) -> R { return R { id: i, s: f"aaa" } }
+enum Mono { P(R), Q }
+enum Ea { P(Array[R, 2]), Q }
+enum Ev { P(Vec[R]), Q }
+enum Em { P(Vec[Mono]), Q }
+enum En { P(Array[Mono, 1]), Q }
+enum Et { P((R, R)), Q }
+struct Ha { h: Ea }
+struct Hv { h: Ev }
+struct Hm { h: Em }
+struct Hn { h: En }
+struct Ht { h: Et }
+struct Hw { lead: i64, h: Ea }
+
+fn main() {
+    println("f-arr");   { let a: Array[R, 2] = [mkr(1), mkr(2)]; let g = Ha { h: Ea.P(a) }; println("m") }
+    println("f-vec");   { let mut w: Vec[R] = []; w.push(mkr(3)); let g = Hv { h: Ev.P(w) }; println("m") }
+    println("f-venum"); { let mut w: Vec[Mono] = []; w.push(Mono.P(mkr(4))); let g = Hm { h: Em.P(w) }; println("m") }
+    println("f-bind");  { let a: Array[R, 2] = [mkr(5), mkr(6)]; let h = Ea.P(a); let g = Ha { h: h }; println("m") }
+    println("f-second"); { let a: Array[R, 2] = [mkr(7), mkr(8)]; let g = Hw { lead: 9, h: Ea.P(a) }; println("m") }
+    println("l-arr");   { let a: Array[R, 2] = [mkr(10), mkr(11)]; let h = Ea.P(a); println("m") }
+    println("l-vec");   { let mut w: Vec[R] = []; w.push(mkr(12)); let h = Ev.P(w); println("m") }
+    println("b-arrenum"); { let a: Array[Mono, 1] = [Mono.P(mkr(13))]; let g = Hn { h: En.P(a) }; println("m") }
+    println("b-tuple");  { let g = Ht { h: Et.P((mkr(14), mkr(15))) }; println("m") }
+    println("b-unit");   { let g = Ha { h: Ea.Q }; println("m") }
+    println("end")
+}
+"#,
+        ) else {
+            return;
+        };
+        assert_eq!(out, "f-arr\nd1\nd2\nm\nf-vec\nd3\nm\nf-venum\nd4\nm\nf-bind\nd5\nd6\nm\nf-second\nd7\nd8\nm\nl-arr\nd10\nd11\nm\nl-vec\nd12\nm\nb-arrenum\nm\nb-tuple\nm\nb-unit\nm\nend\n", "got:\n{out}");
+    }
+
     #[test]
     fn e2e_declared_vec_enum_payload_runs_element_drop_bodies() {
         let Some(out) = run_program(

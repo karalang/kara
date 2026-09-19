@@ -4405,6 +4405,109 @@ fn main() {
     }
 
     /// B-2026-09-10-20 — the MEMORY half of `tests/codegen.rs`'s
+    /// `e2e_enum_container_payload_in_struct_field_runs_element_drop_bodies` under
+    /// ASAN + LSan.
+    ///
+    /// The transcript twin proves the bodies now RUN at the struct-field position;
+    /// this proves they run exactly once. The fix admits a field into
+    /// `user_drop_field_indices_mono` that the gate previously excluded, so the
+    /// parent's bodies walker is emitted where none was before and reaches the enum's
+    /// payload container through `emit_enum_payload_user_drop_bodies_fn`. Every way
+    /// that can be wrong — a walk that duplicates the element bodies the value's own
+    /// scope-exit channel already runs, a GEP at the wrong field index, a handle read
+    /// after the payload moved — lands here as a double free or a use-after-free
+    /// rather than as a transcript diff.
+    ///
+    /// `f-second` is the cell that pins the index (the enum sits at field 1 behind a
+    /// scalar) and `f-bind` the one that pins a field initialized from a named local
+    /// rather than a fresh temp, which is the spelling where the local's own drop and
+    /// the parent's could both claim the elements.
+    ///
+    /// `b-unit` holds the no-payload path, and the whole-program valgrind profile at
+    /// `KARAC_OPT_LEVEL=0` is byte-identical before and after the fix — the change is
+    /// on the BODIES channel, which is why no sanitizer leg could have caught the
+    /// defect it closes.
+    ///
+    /// THE `b-arrenum` CELL OF THE TRANSCRIPT TWINS IS DELIBERATELY ABSENT HERE,
+    /// for the reason `gensh` is absent from
+    /// `asan_declared_vec_enum_payload_elements_keep_one_owner` one row over.
+    /// `En.P([Mono.P(mkr(13))])` in a struct field strands 40 B + 3 B, and that
+    /// leak is the direct consequence of the silence the twins pin: a `Drop` body
+    /// that never runs is a payload that is never freed. Measured IDENTICALLY on
+    /// the parent tree and on this one, per cell under valgrind at
+    /// `KARAC_OPT_LEVEL=0`, so it is this commit's BOUNDARY rather than its
+    /// doing. Carrying it here reddens the `-O0` ratchet leg for something the
+    /// commit does not touch -- it did, on this fixture's first run, which is
+    /// what that leg is for -- and quarantining it would put a live entry on a
+    /// list that is otherwise fully drained. It stays pinned in the transcript
+    /// fixtures, where it is visible without being load-bearing, and it is the
+    /// cell that must move when its own row closes.
+    #[test]
+    fn asan_enum_container_payload_in_struct_field_keeps_one_owner() {
+        assert_clean_asan_run(
+            "struct R { id: i64, s: String }\n\
+             impl Drop for R { fn drop(mut ref self) { println(f\"d{self.id}\") } }\n\
+             fn mkr(i: i64) -> R { return R { id: i, s: f\"aaa\" } }\n\
+             enum Mono { P(R), Q }\n\
+             enum Ea { P(Array[R, 2]), Q }\n\
+             enum Ev { P(Vec[R]), Q }\n\
+             enum Em { P(Vec[Mono]), Q }\n\
+             enum Et { P((R, R)), Q }\n\
+             struct Ha { h: Ea }\n\
+             struct Hv { h: Ev }\n\
+             struct Hm { h: Em }\n\
+             struct Ht { h: Et }\n\
+             struct Hw { lead: i64, h: Ea }\n\
+             \n\
+             fn main() {\n\
+             \x20\x20\x20\x20println(\"f-arr\");   { let a: Array[R, 2] = [mkr(1), mkr(2)]; let g = Ha { h: Ea.P(a) }; println(\"m\") }\n\
+             \x20\x20\x20\x20println(\"f-vec\");   { let mut w: Vec[R] = []; w.push(mkr(3)); let g = Hv { h: Ev.P(w) }; println(\"m\") }\n\
+             \x20\x20\x20\x20println(\"f-venum\"); { let mut w: Vec[Mono] = []; w.push(Mono.P(mkr(4))); let g = Hm { h: Em.P(w) }; println(\"m\") }\n\
+             \x20\x20\x20\x20println(\"f-bind\");  { let a: Array[R, 2] = [mkr(5), mkr(6)]; let h = Ea.P(a); let g = Ha { h: h }; println(\"m\") }\n\
+             \x20\x20\x20\x20println(\"f-second\"); { let a: Array[R, 2] = [mkr(7), mkr(8)]; let g = Hw { lead: 9, h: Ea.P(a) }; println(\"m\") }\n\
+             \x20\x20\x20\x20println(\"l-arr\");   { let a: Array[R, 2] = [mkr(10), mkr(11)]; let h = Ea.P(a); println(\"m\") }\n\
+             \x20\x20\x20\x20println(\"l-vec\");   { let mut w: Vec[R] = []; w.push(mkr(12)); let h = Ev.P(w); println(\"m\") }\n\
+             \x20\x20\x20\x20println(\"b-tuple\");  { let g = Ht { h: Et.P((mkr(14), mkr(15))) }; println(\"m\") }\n\
+             \x20\x20\x20\x20println(\"b-unit\");   { let g = Ha { h: Ea.Q }; println(\"m\") }\n\
+             \x20\x20\x20\x20println(\"end\")\n\
+             }\n",
+            &[
+                    "f-arr",
+                    "d1",
+                    "d2",
+                    "m",
+                    "f-vec",
+                    "d3",
+                    "m",
+                    "f-venum",
+                    "d4",
+                    "m",
+                    "f-bind",
+                    "d5",
+                    "d6",
+                    "m",
+                    "f-second",
+                    "d7",
+                    "d8",
+                    "m",
+                    "l-arr",
+                    "d10",
+                    "d11",
+                    "m",
+                    "l-vec",
+                    "d12",
+                    "m",
+                    "b-tuple",
+                    "m",
+                    "b-unit",
+                    "m",
+                    "end",
+            ],
+            "enum_container_payload_in_struct_field_keeps_one_owner",
+        );
+    }
+
+    /// B-2026-09-10-20 — the MEMORY half of `tests/codegen.rs`'s
     /// `e2e_declared_vec_enum_payload_runs_element_drop_bodies` under
     /// ASAN + LSan.
     ///
