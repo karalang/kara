@@ -89351,6 +89351,100 @@ fn main() {
         );
     }
 
+    /// B-2026-09-19-20 — an indexed-receiver method whose CONTAINER is a call.
+    ///
+    /// `mkv(k)[0].len()` died on "indexed-receiver method 'len' requires the
+    /// indexed container to be a named variable in v1", and so did every
+    /// borrow-returning spelling of the same shape, while `--interp` printed
+    /// the right answer for all of them.
+    ///
+    /// THREE DEFECTS, not one, which is why the cells below are grouped the
+    /// way they are.
+    ///
+    /// `boundarr:` is the first and the one that is not about calls at all: a
+    /// ref-local bound to a borrowed `Array[T, N]` never recorded its element
+    /// type, so even `let a: ref Array[String, 2] = h.pa(); a[1].len()` failed
+    /// — on "element TypeExpr unknown (outer is not a tracked Vec/Slice/Array
+    /// variable)", a DIFFERENT message from the other cells, on a binding that
+    /// plainly is one. The `ref Vec[String]` sibling one line away worked,
+    /// because an Array records its element type in its own table
+    /// (B-2026-07-30-3) and the hand-rolled ladder had only the Vec arm. Two
+    /// copies of that ladder had drifted apart; they are one shared registrar
+    /// now, which is what stops the next asymmetry costing two fixes.
+    ///
+    /// `borrmeth:` / `borrvec:` / `borrfree:` are the second: a
+    /// borrow-returning call container, hoisted to an anonymous ref-local —
+    /// the fourth member of a hoist family this function already had, and the
+    /// closest sibling of its `map.get(k).unwrap()` arm. Non-owning, like all
+    /// three before it.
+    ///
+    /// `ownfree:` / `ownmeth:` / `nested:` are the third, and the one that is
+    /// NOT a hoist. Every existing hoist points its synth at storage somebody
+    /// else owns — a field, a tuple element, a map's bucket, a borrow's
+    /// referent — so its teardown emits no IR. A call's result is a fresh
+    /// owned temp, so hoisting it as a container would leak the whole thing.
+    /// That arm lowers the INDEX instead, through machinery that has dropped
+    /// exactly this temporary since B-2026-07-15-27, and binds the standalone
+    /// element it hands back.
+    ///
+    /// `once:` is the cell that pins single evaluation. The container call
+    /// prints, so a hoist that let a later arm re-compile the receiver would
+    /// show a second `once` line here rather than in a leak count — and the
+    /// whole point of emitting the accessor at the top of this function is
+    /// that it happens once. `orig:` reads the borrowed fields after three
+    /// borrows of them, so an over-eager teardown dangles rather than leaks.
+    ///
+    /// NOT COVERED, deliberately: the RANGE spelling (`mkv(k)[1..3].len()`).
+    /// `container[a..b]` is a slice rather than an element, so both new arms
+    /// decline it and the container-must-be-a-named-variable diagnostic fires
+    /// unchanged — the same fail-closed move the older hoists make when their
+    /// own lookup comes up empty.
+    #[test]
+    fn test_e2e_indexed_receiver_method_on_a_call_container() {
+        assert_eq!(
+            run_program(
+                "struct Hold { arr: Array[String, 2], v: Vec[String] }\n\
+                 impl Hold {\n\
+                 \x20   fn pa(ref self) -> ref Array[String, 2] { return self.arr; }\n\
+                 \x20   fn pv(ref self) -> ref Vec[String] { return self.v; }\n\
+                 }\n\
+                 struct Mk {}\n\
+                 impl Mk {\n\
+                 \x20   fn arr(ref self, n: i64) -> Array[String, 2] {\n\
+                 \x20       return Array[f\"marr-{n}\", f\"mbrr-{n}\"];\n\
+                 \x20   }\n\
+                 }\n\
+                 fn pav(h: ref Hold) -> ref Vec[String] { return h.v; }\n\
+                 fn mkv(n: i64) -> Vec[String] { return [f\"free-{n}\", f\"beta-{n}\"]; }\n\
+                 fn mkn(n: i64) -> Vec[Vec[i64]] { return [[n, n + 1, n + 2], [n]]; }\n\
+                 fn shout(n: i64) -> Vec[String] { println(\"once\"); return [f\"sh-{n}\"]; }\n\
+                 fn main() {\n\
+                 \x20   let k = 7;\n\
+                 \x20   let h = Hold {\n\
+                 \x20       arr: [f\"harr-{k}\", f\"hbrr-{k}\"],\n\
+                 \x20       v: [f\"hvec-{k}\", f\"hwec-{k}\"],\n\
+                 \x20   };\n\
+                 \x20   let m = Mk {};\n\
+                 \x20   println(f\"ownfree:{mkv(k)[0].len()}\");\n\
+                 \x20   println(f\"ownmeth:{m.arr(k)[1].to_uppercase()}\");\n\
+                 \x20   println(f\"borrmeth:{h.pa()[0].len()}\");\n\
+                 \x20   println(f\"borrvec:{h.pv()[1].to_uppercase()}\");\n\
+                 \x20   println(f\"borrfree:{pav(h)[0].len()}\");\n\
+                 \x20   let a: ref Array[String, 2] = h.pa();\n\
+                 \x20   println(f\"boundarr:{a[1].len()}\");\n\
+                 \x20   println(f\"nested:{mkn(k)[0].len()}\");\n\
+                 \x20   println(f\"once:{shout(k)[0].len()}\");\n\
+                 \x20   println(f\"orig:{h.arr[0]}/{h.v[1]}\");\n\
+                 }"
+            )
+            .as_deref(),
+            Some(
+                "ownfree:6\nownmeth:MBRR-7\nborrmeth:6\nborrvec:HWEC-7\nborrfree:6\n\
+                 boundarr:6\nnested:3\nonce\nonce:4\norig:harr-7/hwec-7\n"
+            )
+        );
+    }
+
     /// B-2026-09-14-29 — an index-assign over an `Array[T, N]` runs the
     /// DISPLACED element's `Drop` body, at the store, on every compiled
     /// surface. The interpreter always did, so this was a run/build

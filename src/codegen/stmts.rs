@@ -4924,50 +4924,7 @@ impl<'ctx> super::Codegen<'ctx> {
                             self.accel.tensor_var_infos.insert(var_name.clone(), info);
                             return Ok(());
                         }
-                        let inner_llvm = self.llvm_type_for_type_expr(&inner_te);
-                        self.borrow_vars
-                            .ref_params
-                            .insert(var_name.clone(), inner_llvm);
-                        // Make use-site dispatch (field access, method calls,
-                        // print formatting) see the borrowed value's type.
-                        if let TypeKind::Path(p) = &inner_te.kind {
-                            if let Some(seg) = p.segments.first() {
-                                self.var_types
-                                    .var_type_names
-                                    .insert(var_name.clone(), seg.clone());
-                            }
-                        }
-                        // Register the borrowed Vec/String element type so the
-                        // value-receiver method dispatch (`compile_vec_method`,
-                        // gated on `vec_elem_types`) fires for read-only methods
-                        // beyond `len`/`is_empty` — `n.get(i)`, `n.contains(x)`,
-                        // `n.first()`, `n.chars()`, `n.starts_with(p)`, …
-                        // (B-2026-06-07-5). `get_data_ptr` already derefs the
-                        // borrow ptr to the borrowed `{ptr,len,cap}`, so those
-                        // arms read through the borrow correctly. This queues NO
-                        // `FreeVecBuffer` — `vec_elem_types` is a type registry,
-                        // not a drop list (the borrow-local arm returns before
-                        // `track_vec_var`), so the source's buffer is never
-                        // double-freed. Mutating methods can't reach here: `ref
-                        // T` is an immutable borrow, so the typechecker rejects
-                        // them upstream.
-                        if let Some(elem_ty) = self.extract_vec_elem_type(&inner_te) {
-                            self.var_types
-                                .vec_elem_types
-                                .insert(var_name.clone(), elem_ty);
-                            if let Some(inner) = vec_inner_type_expr(&inner_te) {
-                                self.var_types
-                                    .var_elem_type_exprs
-                                    .insert(var_name.clone(), inner);
-                            }
-                        } else if self.is_string_type_expr(&inner_te) {
-                            self.var_types
-                                .vec_elem_types
-                                .insert(var_name.clone(), self.context.i8_type().into());
-                        }
-                        if self.is_string_type_expr(&inner_te) {
-                            self.var_types.string_vars.insert(var_name.clone());
-                        }
+                        self.register_borrow_ref_local_tables(var_name, &inner_te);
                         return Ok(());
                     }
                 }
@@ -20976,6 +20933,75 @@ impl<'ctx> super::Codegen<'ctx> {
             && self
                 .ref_return_inner_types
                 .contains_key(&(e.span.offset, e.span.length))
+    }
+
+    /// Register the use-site dispatch tables for a ref-local bound to a
+    /// BORROW — `let r: ref T = h.view();` and the anonymous synthetic form
+    /// [`Self::bind_ref_return_borrow_synth`] mints. The caller has already
+    /// stored the borrow pointer and handled the `ref Tensor` case, which
+    /// binds a borrowed tensor var instead of reaching here.
+    ///
+    /// Every table below is a TYPE registry, never a drop list: the borrow
+    /// owns nothing, and the ref-local arm returns before `track_vec_var`, so
+    /// the source's buffer is never double-freed. Mutating methods cannot
+    /// reach a binding registered here — `ref T` is an immutable borrow, so
+    /// the typechecker rejects them upstream.
+    ///
+    /// SHARED BY BOTH BINDING SITES ON PURPOSE (B-2026-09-19-20). The two had
+    /// hand-rolled the same ladder, and the copies drifted: neither grew an
+    /// `Array[T, N]` arm, so `let a: ref Array[String, 2] = h.pa(); a[0].len()`
+    /// died on "element TypeExpr unknown (outer is not a tracked
+    /// Vec/Slice/Array variable)" while the `ref Vec[String]` spelling one
+    /// line away worked. An Array records its element type in its OWN table
+    /// rather than `var_elem_type_exprs` (B-2026-07-30-3), which is exactly
+    /// the sort of asymmetry a second copy of a ladder forgets.
+    pub(super) fn register_borrow_ref_local_tables(&mut self, name: &str, inner_te: &TypeExpr) {
+        let inner_llvm = self.llvm_type_for_type_expr(inner_te);
+        self.borrow_vars
+            .ref_params
+            .insert(name.to_string(), inner_llvm);
+        // Make use-site dispatch (field access, method calls, print
+        // formatting) see the borrowed value's type.
+        if let TypeKind::Path(p) = &inner_te.kind {
+            if let Some(seg) = p.segments.first() {
+                self.var_types
+                    .var_type_names
+                    .insert(name.to_string(), seg.clone());
+            }
+        }
+        // The borrowed `Array[T, N]` element type, into the array-only table
+        // its ~170 shared-table readers are deliberately kept out of
+        // (B-2026-07-30-3). `compile_indexed_receiver_method` reads it as a
+        // fallback, which is what makes `a[0].len()` dispatch.
+        if let Some(inner) = array_inner_type_expr(inner_te) {
+            self.var_types
+                .array_elem_type_exprs
+                .insert(name.to_string(), inner);
+        }
+        // The borrowed Vec/String element type, so value-receiver method
+        // dispatch (`compile_vec_method`, gated on `vec_elem_types`) fires for
+        // read-only methods beyond `len`/`is_empty` — `n.get(i)`,
+        // `n.contains(x)`, `n.first()`, `n.chars()`, `n.starts_with(p)`, …
+        // (B-2026-06-07-5). `get_data_ptr` already derefs the borrow pointer to
+        // the borrowed `{ptr,len,cap}`, so those arms read through it
+        // correctly.
+        if let Some(elem_ty) = self.extract_vec_elem_type(inner_te) {
+            self.var_types
+                .vec_elem_types
+                .insert(name.to_string(), elem_ty);
+            if let Some(inner) = vec_inner_type_expr(inner_te) {
+                self.var_types
+                    .var_elem_type_exprs
+                    .insert(name.to_string(), inner);
+            }
+        } else if self.is_string_type_expr(inner_te) {
+            self.var_types
+                .vec_elem_types
+                .insert(name.to_string(), self.context.i8_type().into());
+        }
+        if self.is_string_type_expr(inner_te) {
+            self.var_types.string_vars.insert(name.to_string());
+        }
     }
 
     pub(super) fn expr_yields_fresh_owned_temp(&self, expr: &Expr) -> bool {

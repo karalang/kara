@@ -12509,6 +12509,93 @@ fn main() {
         );
     }
 
+    /// B-2026-09-19-20 — the MEMORY half of an indexed-receiver method whose
+    /// CONTAINER is a call.
+    ///
+    /// The OWNED spelling (`own:`, `ownclone:`, `nested:`) is why this cell
+    /// exists. Every container hoist that existed before this row pointed its
+    /// synth at storage somebody else owns — a struct field, a tuple element,
+    /// a map's live bucket, a borrow's referent — so each one's teardown is
+    /// registry bookkeeping that emits no IR. A call's result is a fresh owned
+    /// temp, so the fix had to emit a real `free` for the first time on this
+    /// path: the index is lowered through machinery that already drops the
+    /// container (B-2026-07-15-27), and the standalone element it hands back
+    /// becomes this arm's own temp, dropped after the method returns.
+    ///
+    /// One `free` too few leaks per evaluation and one too many double-frees,
+    /// and neither shows in the output half
+    /// (`test_e2e_indexed_receiver_method_on_a_call_container` in
+    /// `tests/codegen.rs`), which is what splits the two tests. The loop is
+    /// load-bearing for the same reason: a per-evaluation imbalance
+    /// accumulates here instead of hiding in a single teardown.
+    ///
+    /// The BORROW cells (`borrarr:`, `borrvec:`, `borrfree:`, `bound:`) are
+    /// the control, and they are the half that must NOT free: their owner is
+    /// the receiver, still live. `orig:` reads those borrowed fields after
+    /// three borrows of them in the same iteration, so an over-eager teardown
+    /// dangles rather than merely leaking.
+    #[test]
+    fn asan_indexed_receiver_method_on_a_call_container_is_balanced() {
+        assert_clean_asan_run(
+            r#"
+struct Hold { arr: Array[String, 2], v: Vec[String] }
+impl Hold {
+    fn pa(ref self) -> ref Array[String, 2] { return self.arr; }
+    fn pv(ref self) -> ref Vec[String] { return self.v; }
+}
+fn pav(h: ref Hold) -> ref Vec[String] { return h.v; }
+fn mkv(n: i64) -> Vec[String] { return [f"b191920-own-aaaaaaaaaaaaaaaa-{n}", f"b191920-own-bbbb-{n}"]; }
+fn mkn(n: i64) -> Vec[Vec[i64]] { return [[n, n + 1, n + 2], [n]]; }
+fn main() {
+    let mut i: i64 = 0;
+    while i < 3 {
+        let h = Hold {
+            arr: [f"b191920-arr-cccccccccccccccc-{i}", f"b191920-arr-dddd-{i}"],
+            v: [f"b191920-vec-eeeeeeeeeeeeeeee-{i}", f"b191920-vec-ffff-{i}"],
+        };
+        println(f"own:{mkv(i)[0].len()}");
+        println(f"ownclone:{mkv(i)[1].clone()}");
+        println(f"borrarr:{h.pa()[0].len()}");
+        println(f"borrvec:{h.pv()[1].len()}");
+        println(f"borrfree:{pav(h)[0].len()}");
+        let a: ref Array[String, 2] = h.pa();
+        println(f"bound:{a[1].len()}");
+        println(f"nested:{mkn(i)[0].len()}");
+        println(f"orig:{h.arr[0].len()}");
+        i = i + 1;
+    }
+}
+"#,
+            &[
+                "own:30",
+                "ownclone:b191920-own-bbbb-0",
+                "borrarr:30",
+                "borrvec:18",
+                "borrfree:30",
+                "bound:18",
+                "nested:3",
+                "orig:30",
+                "own:30",
+                "ownclone:b191920-own-bbbb-1",
+                "borrarr:30",
+                "borrvec:18",
+                "borrfree:30",
+                "bound:18",
+                "nested:3",
+                "orig:30",
+                "own:30",
+                "ownclone:b191920-own-bbbb-2",
+                "borrarr:30",
+                "borrvec:18",
+                "borrfree:30",
+                "bound:18",
+                "nested:3",
+                "orig:30",
+            ],
+            "asan_indexed_receiver_method_on_a_call_container_is_balanced",
+        );
+    }
+
     #[test]
     fn asan_array_struct_field_drops_its_elements() {
         assert_clean_asan_run(

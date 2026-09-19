@@ -64,6 +64,45 @@ impl<'ctx> super::Codegen<'ctx> {
         self.mapset.set_elem_type_exprs.remove(name);
     }
 
+    /// The ELEMENT `TypeExpr` of an owned (non-`ref`) `Vec[T]` / `Array[T, N]`
+    /// returned by `inner`, when `inner` is a call whose result is therefore a
+    /// fresh owned temporary. `None` for everything else, which leaves the
+    /// existing container-must-be-a-named-variable diagnostic to fire
+    /// unchanged (B-2026-09-19-20).
+    ///
+    /// Free functions key `fn_return_type_exprs` by name; an impl method keys
+    /// the SAME table under `Type.method`, because `make_impl_method_function`
+    /// mints it as a `Function` of that name and `declare_function` records it
+    /// there — there is no separate method-return map to consult, a point
+    /// B-2026-09-16-2's fix had to establish the hard way.
+    ///
+    /// A `Ref`/`MutRef` return is excluded here rather than merely unmatched:
+    /// that is a BORROW, and it has its own hoist, which must not be shadowed
+    /// by an arm that would drop somebody else's storage.
+    fn owned_call_container_elem_te(&self, inner: &Expr) -> Option<TypeExpr> {
+        let key = match &inner.kind {
+            ExprKind::Call { callee, .. } => match &callee.kind {
+                ExprKind::Identifier(name) => name.clone(),
+                ExprKind::Path { segments, .. } if segments.len() >= 2 => format!(
+                    "{}.{}",
+                    segments[segments.len() - 2],
+                    segments[segments.len() - 1]
+                ),
+                _ => return None,
+            },
+            ExprKind::MethodCall { object, method, .. } => {
+                format!("{}.{}", self.type_name_of(object)?, method)
+            }
+            _ => return None,
+        };
+        let te = self.fn_sig.fn_return_type_exprs.get(&key)?;
+        if matches!(te.kind, TypeKind::Ref(_) | TypeKind::MutRef(_)) {
+            return None;
+        }
+        super::helpers::vec_inner_type_expr(te)
+            .or_else(|| super::helpers::array_inner_type_expr(te))
+    }
+
     /// Slice MR helper: lower an indexed-receiver method call
     /// `obj[i].method(args)`. Computes the element pointer through the outer
     /// container's index machinery, synthesizes an identifier name pointing
@@ -208,6 +247,89 @@ impl<'ctx> super::Codegen<'ctx> {
             }
         }
 
+        // B-2026-09-19-20: an OWNED CALL container — `mk(n)[i].method()`,
+        // where `mk` returns a bare (non-`ref`) `Vec[T]` or `Array[T, N]`.
+        //
+        // NOT one of the hoists below, and the difference is ownership. Each of
+        // those four points a synth at storage SOMEBODY ELSE OWNS — a struct
+        // field, a tuple element, a map's live bucket, a borrow's referent — so
+        // the teardown is registry bookkeeping and emits no IR. A call's result
+        // is a fresh owned temp that nothing else will free, so hoisting it as
+        // a container would leak the whole thing.
+        //
+        // So this arm does not lower the container at all: it lowers the whole
+        // INDEX through `compile_index`, which has handled exactly this
+        // temporary since B-2026-07-15-27 — materialize, deep-clone the
+        // element, drop the temp — and then binds that standalone element to a
+        // synth local for the method to dispatch against. One `free` is added
+        // here, for the cloned element itself, because the element is now this
+        // arm's temp and no scope-exit walk knows about it.
+        //
+        // A `mut ref self` method is not a hazard the way it is for the SoA
+        // receiver above, which needs a write-back: the container died inside
+        // `compile_index`, so a mutation of its element is unobservable by
+        // construction rather than silently discarded.
+        //
+        // A RANGE index is declined, here and in the borrow hoist below, and
+        // the reason is not symmetry: `container[a..b]` is a SLICE, not an
+        // element, so binding its value under the element `TypeExpr` this arm
+        // resolves would describe it wrongly. `mkv(k)[1..3].len()` failed
+        // loudly on a scalar element ("no handler for method 'len' on
+        // variable '__call_elem_1'") and there is no reason to trust that it
+        // would keep failing loudly on every element type. Declining leaves
+        // the container-must-be-a-named-variable diagnostic to fire unchanged,
+        // which is what the three hoists below do whenever their own lookup
+        // comes up empty.
+        if matches!(
+            inner.kind,
+            ExprKind::Call { .. } | ExprKind::MethodCall { .. }
+        ) && !matches!(index.kind, ExprKind::Range { .. })
+            && self.ref_return_inner_for_call_pub(inner).is_none()
+        {
+            if let Some(elem_te) = self.owned_call_container_elem_te(inner) {
+                let fn_val = self
+                    .current_fn
+                    .ok_or_else(|| format!("codegen: indexed-receiver '{method}' outside a fn"))?;
+                let elem = self.compile_index(inner, index)?;
+                let elem_ll = elem.get_type();
+                let slot = self.create_entry_alloca(fn_val, "__callelem", elem_ll);
+                self.builder.build_store(slot, elem).unwrap();
+
+                let synth = format!("__call_elem_{}", self.indexed_elem_counter);
+                self.indexed_elem_counter += 1;
+                self.variables.insert(
+                    synth.clone(),
+                    VarSlot {
+                        ptr: slot,
+                        ty: elem_ll,
+                    },
+                );
+                self.register_var_from_type_expr(&synth, &elem_te);
+                let synth_expr = Expr {
+                    kind: ExprKind::Identifier(synth.clone()),
+                    span: inner.span,
+                };
+                let out = self.compile_method_call(&synth_expr, method, args, call_span, call_span);
+
+                // The element is this arm's own temp. Drop it whatever the
+                // method returned — a `?` here would strand it on the error
+                // path, and the IR is already emitted either way.
+                let drop_fn = self.emit_drop_fn_for_type_expr(&elem_te);
+                self.builder
+                    .build_call(drop_fn, &[slot.into()], "")
+                    .unwrap();
+
+                self.variables.remove(&synth);
+                self.var_types.vec_elem_types.remove(&synth);
+                self.var_types.array_elem_type_exprs.remove(&synth);
+                self.var_types.var_elem_type_exprs.remove(&synth);
+                self.var_types.slice_elem_types.remove(&synth);
+                self.var_types.var_type_names.remove(&synth);
+                self.var_types.string_vars.remove(&synth);
+                return out;
+            }
+        }
+
         // B-2026-07-09-1: hoist a FieldAccess container — `self.names[i].m()` —
         // to a synth Vec/Slice identifier so the identifier-keyed lowering
         // below applies unchanged. Surfaced by std.protobuf `#[derive(Message)]`
@@ -220,6 +342,9 @@ impl<'ctx> super::Codegen<'ctx> {
         // place), and rewrite `inner` to that synth identifier. Cleaned up at
         // the end alongside the element synth.
         let mut hoisted_container: Option<String> = None;
+        // B-2026-09-19-20's borrow-call hoist, torn down through its own
+        // helper rather than the registry sweep `hoisted_container` gets.
+        let mut hoisted_borrow: Option<(String, bool)> = None;
         let inner_synth: Option<Expr> = if let ExprKind::FieldAccess { object, field } = &inner.kind
         {
             // `self` parses as `SelfValue`; normalise to the "self" binding the
@@ -342,6 +467,36 @@ impl<'ctx> super::Codegen<'ctx> {
                 // Not actually a Vec struct — leave for the diagnostic below.
                 None
             }
+        } else if let Some(borrow_te) = self
+            .ref_return_inner_for_call_pub(inner)
+            .filter(|_| !matches!(index.kind, ExprKind::Range { .. }))
+        {
+            // B-2026-09-19-20: hoist a BORROW-RETURNING CALL container —
+            // `h.peek()[i].method()` where `peek(ref self) -> ref Array[T, N]`
+            // (or `-> ref Vec[T]`, or the free-function spelling). The fourth
+            // member of the hoist family above, and the closest sibling of the
+            // `map.get(k).unwrap()` arm: the callee lowers to the `ptr` borrow
+            // ABI, so the value IS the container's address and the synth is a
+            // deref-on-use ref-local over it.
+            //
+            // NON-OWNING, like all three arms above it — which is what makes
+            // this the safe half of the row. The borrow's owner is the
+            // receiver, still live across this call, so there is nothing to
+            // tear down but registry entries; `release_ref_return_borrow_synth`
+            // is that teardown and it emits no IR. The OWNED spelling
+            // (`mk(n)[i].method()`) is a different question and is NOT handled
+            // here — see the diagnostic below.
+            //
+            // The accessor is emitted exactly ONCE, here, and every path after
+            // this point sees an identifier. That matters more than usual: a
+            // hoist that fell through and let a later arm compile `inner`
+            // again would call the accessor twice per expression.
+            let (synth, is_tensor) = self.bind_ref_return_borrow_synth(inner, &borrow_te)?;
+            hoisted_borrow = Some((synth.clone(), is_tensor));
+            Some(Expr {
+                kind: ExprKind::Identifier(synth),
+                span: inner.span,
+            })
         } else {
             None
         };
@@ -605,6 +760,12 @@ impl<'ctx> super::Codegen<'ctx> {
             self.mapset.set_elem_types.remove(&c);
             self.mapset.set_elem_type_names.remove(&c);
             self.mapset.set_elem_type_exprs.remove(&c);
+        }
+
+        // B-2026-09-19-20: and the hoisted borrow-call synth, whose registry
+        // set is its binder's rather than the one above.
+        if let Some((c, is_tensor)) = hoisted_borrow {
+            self.release_ref_return_borrow_synth(&c, is_tensor);
         }
 
         result

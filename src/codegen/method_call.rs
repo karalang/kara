@@ -10676,30 +10676,7 @@ impl<'ctx> super::Codegen<'ctx> {
             self.accel.tensor_var_infos.insert(synth.clone(), info);
             is_tensor = true;
         } else {
-            let inner_llvm = self.llvm_type_for_type_expr(inner_te);
-            self.borrow_vars
-                .ref_params
-                .insert(synth.clone(), inner_llvm);
-            if let TypeKind::Path(p) = &inner_te.kind {
-                if let Some(seg) = p.segments.first() {
-                    self.var_types
-                        .var_type_names
-                        .insert(synth.clone(), seg.clone());
-                }
-            }
-            if let Some(elem_ty) = self.extract_vec_elem_type(inner_te) {
-                self.var_types.vec_elem_types.insert(synth.clone(), elem_ty);
-                if let Some(inner) = super::helpers::vec_inner_type_expr(inner_te) {
-                    self.var_types
-                        .var_elem_type_exprs
-                        .insert(synth.clone(), inner);
-                }
-            } else if self.is_string_type_expr(inner_te) {
-                self.var_types
-                    .vec_elem_types
-                    .insert(synth.clone(), self.context.i8_type().into());
-                self.var_types.string_vars.insert(synth.clone());
-            }
+            self.register_borrow_ref_local_tables(&synth, inner_te);
         }
 
         Ok((synth, is_tensor))
@@ -10712,6 +10689,9 @@ impl<'ctx> super::Codegen<'ctx> {
         self.var_types.var_type_names.remove(synth);
         self.var_types.vec_elem_types.remove(synth);
         self.var_types.var_elem_type_exprs.remove(synth);
+        // Paired with the `Array[T, N]` arm the shared registrar gained for
+        // B-2026-09-19-20 — a synth left in this table outlives its pointer.
+        self.var_types.array_elem_type_exprs.remove(synth);
         self.var_types.string_vars.remove(synth);
         self.borrow_vars.ref_params.remove(synth);
         if is_tensor {
