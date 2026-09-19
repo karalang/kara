@@ -11865,6 +11865,11 @@ impl<'ctx> super::Codegen<'ctx> {
                 .is_some_and(|n| {
                     self.drop_rc.user_drop_wrapper_fns.contains_key(&n)
                         || self.shared_holder_runs_field_bodies(&n)
+                        // B-2026-09-17-19 — the enum sibling of the clause
+                        // above, admitted for the same reason and in the
+                        // commit that made a shared enum's PAYLOAD bodies
+                        // run at all.
+                        || self.shared_enum_runs_payload_bodies(&n)
                 })
                 .then_some(name.as_str()),
             // B-2026-07-30-11 / B-2026-08-27-8 (container element bodies),

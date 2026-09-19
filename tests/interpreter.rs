@@ -69768,13 +69768,87 @@ fn main() {
     assert_eq!(out, "one\n  dR1\n  mid\n  end\ntwo\n  dR2\n  mid\n  dR3\n  end\nboth\n  dR4\n  dR5\n  mid\n  end\nsecond\n  dR7\n  mid\n  dR6\n  end\nreadonly\n  mid9\n  dR9\n  dR10\n  end\ninline\n  dR40\n  mid\n  end\nstruct\n  dR12\n  mid\n  end\nnone\n  n\n  end\nend\n", "got:\n{out}");
 }
 
+/// B-2026-09-17-19 — A `shared enum`'s VARIANT PAYLOAD RUNS ITS `Drop` BODY,
+/// AND THE RELEASE LANDS AT THE BINDING'S LIVE-RANGE END.
+///
+/// `let s: SMono = SMono.P(mkr(1));` over `shared enum SMono {{ P(R2), Q }}` with
+/// `impl Drop for R2` printed `d2:9` under `--interp` and NOTHING on jit /
+/// `karac build` / `KARAC_AUTO_PAR=0 build`. `emit_enum_payload_user_drop_bodies_fn_skipping`
+/// defers a shared enum to "the RC machinery", and the RC machinery ran the
+/// enum's own body and the memory walk but never the payload's — so no pass
+/// owned it.
+///
+/// `live` and `uselater` are the second half and do not follow from the first:
+/// once the bodies ran, they ran at the CLOSING BRACE while `--interp` ran them
+/// at `s`'s last use. `uselater` is the cell that PINS that — with a use after
+/// the `let`, the body lands after the use, which separates live-range-end
+/// firing from firing at the construction statement (the two coincide in every
+/// other cell here, and the plain-enum convention this tree already had is the
+/// latter). B-2026-09-04-13 made the same admission for a shared
+/// STRUCT's plain fields and wrote down this exact consequence — a holder
+/// "invisible while its field bodies never ran" that "became a run/build
+/// divergence the moment they did". `noheap` is what forces the whole-fn gate
+/// to widen rather than just the per-variant one: a payload that owns a body
+/// but no heap is not walkable, so the drop fn used to decline outright.
+///
+/// `psh` is a separate defect the same work uncovered, on the INTERPRETER
+/// side: the shared-release walk covered struct, tuple and array holders and
+/// stopped at an enum, so a `shared struct` in a plain enum's payload released
+/// nothing here while every compiled surface ran its body. `control`, `qvar`
+/// and `unitvar` are the negative cells — a plain enum, a payload-free variant
+/// of a payload-carrying enum, and an enum with no payload anywhere.
+///
+/// The CODEGEN twin is `tests/codegen.rs`'s
+/// `e2e_shared_enum_payload_runs_its_drop_body`, byte-identical source and
+/// expectation.
+#[test]
+fn test_shared_enum_payload_runs_its_drop_body() {
+    let out = run(r#"struct R2 { s: String, t: String, u: String }
+impl Drop for R2 { fn drop(mut ref self) { println(f"  d2:{self.s.len()}") } }
+fn mkr(i: i64) -> R2 { return R2 { s: f"ssssssss{i}", t: f"tttttttt{i}", u: f"uuuuuuuu{i}" } }
+struct Z { n: i64 }
+impl Drop for Z { fn drop(mut ref self) { println(f"  dZ{self.n}") } }
+shared struct Sr { s: String }
+impl Drop for Sr { fn drop(mut ref self) { println(f"  dS{self.s.len()}") } }
+enum Mono { P(R2), Q }
+shared enum SMono { P(R2), Q }
+shared enum Sz { P(Z), Q }
+shared enum Unit { P, Q }
+enum HoldSr { P(Sr), Q }
+fn tag(e: ref SMono) -> i64 { match e { SMono.P(_) => { return 1 } SMono.Q => { return 0 } } }
+
+fn main() {
+    println("temp");    { let s: SMono = SMono.P(mkr(1)); } println("  out")
+    println("named");   { let r = mkr(2); let s: SMono = SMono.P(r); } println("  out")
+    println("two");     { let a: SMono = SMono.P(mkr(3)); let b = a; } println("  out")
+    println("live");    { let s: SMono = SMono.P(mkr(4)); println("  mid") } println("  out")
+    println("noheap");  { let s: Sz = Sz.P(Z { n: 5 }); println("  mid") } println("  out")
+    println("unitvar"); { let s: Unit = Unit.Q; println("  mid") } println("  out")
+    println("qvar");    { let s: SMono = SMono.Q; println("  mid") } println("  out")
+    println("uselater"); { let s: SMono = SMono.P(mkr(9)); println("  mid"); println(f"  t{tag(s)}") } println("  out")
+    println("psh");     { let h: HoldSr = HoldSr.P(Sr { s: "sssss" }); println("  mid") } println("  out")
+    println("control"); { let m: Mono = Mono.P(mkr(8)); println("  mid") } println("  out")
+    println("end")
+}
+"#);
+    assert_eq!(out, "temp\n  d2:9\n  out\nnamed\n  d2:9\n  out\ntwo\n  d2:9\n  out\nlive\n  d2:9\n  mid\n  out\nnoheap\n  dZ5\n  mid\n  out\nunitvar\n  mid\n  out\nqvar\n  mid\n  out\nuselater\n  mid\n  t1\n  d2:9\n  out\npsh\n  mid\n  dS5\n  out\ncontrol\n  d2:9\n  mid\n  out\nend\n", "got:\n{out}");
+}
+
 /// B-2026-09-10-20 — the INTERPRETER twin of `tests/codegen.rs`'s
 /// `e2e_declared_vec_enum_payload_runs_element_drop_bodies`, byte-identical
 /// source and expectation.
 ///
 /// This side was silent too — the gap was AGREED, so a one-backend fix would
 /// have turned a missing body into an A/B divergence, which is the trade
-/// B-2026-09-12-6 refused and B-2026-09-12-24 restates as a rule. Both arms are
+/// B-2026-09-12-6 refused and B-2026-09-12-24 restates as a rule.
+///
+/// B-2026-09-17-19 — and the `sharedec` cell is now exactly that divergence,
+/// knowingly. `H3.P(SMono.P(mkr(1)))` prints `d2:9` on the compiled backends
+/// and still nothing here, because a `shared enum` value is a plain
+/// `Value::EnumVariant` with no `Arc`: the refcount the release would have to
+/// consult does not exist in this backend's value model, so this is not a walk
+/// to add. See the note on the codegen twin's expectation for why running the
+/// destructor was preferred to preserving the agreement. Both arms are
 /// keyed on the same DECLARED payload head, which is what makes them answer
 /// alike: `Array[T, N]` and `Vec[T]` share one `Value::Array` here, so nothing
 /// about the value could have told them apart.

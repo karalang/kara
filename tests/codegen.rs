@@ -19906,12 +19906,98 @@ fn main() {
         ) else {
             return;
         };
+        // B-2026-09-17-19 — BOTH BLOCKS NOW PRINT `d2:9`, and this fixture's
+        // warning about that reading needs the correction rather than the
+        // assertion being weakened. It said `d2:9` "would mean it ran on live
+        // memory the payload box also owns", which was the right inference when
+        // the ONLY thing that could produce a body here was the husk action
+        // firing off the moved-from staging slot. There is now a second, correct
+        // producer: `__karac_rc_drop_SMono` runs the payload's body when the
+        // refcount hits zero, before the memory walk, so it reads its own live
+        // buffers and the box is being torn down around it. `len 9` rather than
+        // `len 0` is exactly what distinguishes the two — a husk reads the
+        // zeroed slot. The ASAN twin
+        // (`asan_shared_enum_payload_body_runs_once_before_the_memory_walk`,
+        // which carries this same named-source cell) is what proves there is no
+        // use-after-free or double free behind it, and `--interp` prints the
+        // identical line, which it did NOT before: this expectation was
+        // codegen-only and encoded the missing body.
         assert_eq!(
-            out, "named\n  B\n  C\ntemp\n  B2\n  C2\nend\n",
-            "a moved-from source must run no Drop body; `d2:0` here is the husk \
-             body B-2026-09-17-25 removed, and `d2:9` would mean it ran on live \
-             memory the payload box also owns"
+            out, "named\nd2:9\n  B\n  C\ntemp\nd2:9\n  B2\n  C2\nend\n",
+            "a moved-from source must run no HUSK body: `d2:0` is the husk body \
+             B-2026-09-17-25 removed and must never come back, while `d2:9` is \
+             the payload's own body at the refcount's 0-transition"
         );
+    }
+
+    /// B-2026-09-17-19 — A `shared enum`'s VARIANT PAYLOAD RUNS ITS `Drop` BODY,
+    /// AND THE RELEASE LANDS AT THE BINDING'S LIVE-RANGE END.
+    ///
+    /// `let s: SMono = SMono.P(mkr(1));` over `shared enum SMono {{ P(R2), Q }}` with
+    /// `impl Drop for R2` printed `d2:9` under `--interp` and NOTHING on jit /
+    /// `karac build` / `KARAC_AUTO_PAR=0 build`. `emit_enum_payload_user_drop_bodies_fn_skipping`
+    /// defers a shared enum to "the RC machinery", and the RC machinery ran the
+    /// enum's own body and the memory walk but never the payload's — so no pass
+    /// owned it.
+    ///
+    /// `live` and `uselater` are the second half and do not follow from the first:
+    /// once the bodies ran, they ran at the CLOSING BRACE while `--interp` ran them
+    /// at `s`'s last use. `uselater` is the cell that PINS that — with a use after
+    /// the `let`, the body lands after the use, which separates live-range-end
+    /// firing from firing at the construction statement (the two coincide in every
+    /// other cell here, and the plain-enum convention this tree already had is the
+    /// latter). B-2026-09-04-13 made the same admission for a shared
+    /// STRUCT's plain fields and wrote down this exact consequence — a holder
+    /// "invisible while its field bodies never ran" that "became a run/build
+    /// divergence the moment they did". `noheap` is what forces the whole-fn gate
+    /// to widen rather than just the per-variant one: a payload that owns a body
+    /// but no heap is not walkable, so the drop fn used to decline outright.
+    ///
+    /// `psh` is a separate defect the same work uncovered, on the INTERPRETER
+    /// side: the shared-release walk covered struct, tuple and array holders and
+    /// stopped at an enum, so a `shared struct` in a plain enum's payload released
+    /// nothing here while every compiled surface ran its body. `control`, `qvar`
+    /// and `unitvar` are the negative cells — a plain enum, a payload-free variant
+    /// of a payload-carrying enum, and an enum with no payload anywhere.
+    ///
+    /// The INTERPRETER twin is `tests/interpreter.rs`'s
+    /// `test_shared_enum_payload_runs_its_drop_body`, byte-identical source and
+    /// expectation.
+    #[test]
+    fn e2e_shared_enum_payload_runs_its_drop_body() {
+        let Some(out) = run_program(
+            r#"struct R2 { s: String, t: String, u: String }
+impl Drop for R2 { fn drop(mut ref self) { println(f"  d2:{self.s.len()}") } }
+fn mkr(i: i64) -> R2 { return R2 { s: f"ssssssss{i}", t: f"tttttttt{i}", u: f"uuuuuuuu{i}" } }
+struct Z { n: i64 }
+impl Drop for Z { fn drop(mut ref self) { println(f"  dZ{self.n}") } }
+shared struct Sr { s: String }
+impl Drop for Sr { fn drop(mut ref self) { println(f"  dS{self.s.len()}") } }
+enum Mono { P(R2), Q }
+shared enum SMono { P(R2), Q }
+shared enum Sz { P(Z), Q }
+shared enum Unit { P, Q }
+enum HoldSr { P(Sr), Q }
+fn tag(e: ref SMono) -> i64 { match e { SMono.P(_) => { return 1 } SMono.Q => { return 0 } } }
+
+fn main() {
+    println("temp");    { let s: SMono = SMono.P(mkr(1)); } println("  out")
+    println("named");   { let r = mkr(2); let s: SMono = SMono.P(r); } println("  out")
+    println("two");     { let a: SMono = SMono.P(mkr(3)); let b = a; } println("  out")
+    println("live");    { let s: SMono = SMono.P(mkr(4)); println("  mid") } println("  out")
+    println("noheap");  { let s: Sz = Sz.P(Z { n: 5 }); println("  mid") } println("  out")
+    println("unitvar"); { let s: Unit = Unit.Q; println("  mid") } println("  out")
+    println("qvar");    { let s: SMono = SMono.Q; println("  mid") } println("  out")
+    println("uselater"); { let s: SMono = SMono.P(mkr(9)); println("  mid"); println(f"  t{tag(s)}") } println("  out")
+    println("psh");     { let h: HoldSr = HoldSr.P(Sr { s: "sssss" }); println("  mid") } println("  out")
+    println("control"); { let m: Mono = Mono.P(mkr(8)); println("  mid") } println("  out")
+    println("end")
+}
+"#,
+        ) else {
+            return;
+        };
+        assert_eq!(out, "temp\n  d2:9\n  out\nnamed\n  d2:9\n  out\ntwo\n  d2:9\n  out\nlive\n  d2:9\n  mid\n  out\nnoheap\n  dZ5\n  mid\n  out\nunitvar\n  mid\n  out\nqvar\n  mid\n  out\nuselater\n  mid\n  t1\n  d2:9\n  out\npsh\n  mid\n  dS5\n  out\ncontrol\n  d2:9\n  mid\n  out\nend\n");
     }
 
     #[test]
@@ -19948,7 +20034,21 @@ fn main() {
         ) else {
             return;
         };
-        assert_eq!(out, "vecenum\n  d2:9\n  x\nvecstruct\n  dS7\n  dS8\n  x\nvecmixed\n  dS9\n  x\nvecempty\n  x\nunitvar\n  x\narray\n  dS1\n  dS2\n  x\nstruct\n  d2:9\n  x\nsharedec\n  x\ngenvec\n  x\ngensh\n  x\nend\n");
+        // B-2026-09-17-19 — `sharedec` MOVED, and it is the one cell of this
+        // fixture whose interpreter twin no longer matches. The shared enum's
+        // payload bodies now run at the refcount's 0-transition, so
+        // `H3.P(SMono.P(mkr(1)))` prints `d2:9` at the holder's death here and
+        // still prints nothing under `--interp`. That is a one-backend fix to
+        // an AGREED gap, which B-2026-09-12-6 refuses as a rule — taken
+        // deliberately here because the interpreter half is not a walk that is
+        // missing but a REPRESENTATION that does not exist: a `shared enum`
+        // value is a plain `Value::EnumVariant` with no `Arc`, so nothing can
+        // answer "is this the last handle" for one held inside another value.
+        // The alternative was to keep the agreement by NOT running a
+        // destructor the compiled backend can run, which is the worse trade.
+        // The remainder is filed separately; this fixture's twin keeps the
+        // `x`-only expectation and says why.
+        assert_eq!(out, "vecenum\n  d2:9\n  x\nvecstruct\n  dS7\n  dS8\n  x\nvecmixed\n  dS9\n  x\nvecempty\n  x\nunitvar\n  x\narray\n  dS1\n  dS2\n  x\nstruct\n  d2:9\n  x\nsharedec\n  x\n  d2:9\ngenvec\n  x\ngensh\n  x\nend\n");
     }
 
     /// B-2026-09-06-39 — A READ-ONLY ARM OVER AN OWNED ENUM RECEIVER NOW RUNS THE

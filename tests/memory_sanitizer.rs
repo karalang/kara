@@ -4480,6 +4480,10 @@ fn main() {
                 "  x",
                 "sharedec",
                 "  x",
+                // B-2026-09-17-19 — the shared enum payload's body now runs at
+                // the refcount's 0-transition. ASAN was already clean here and
+                // stays clean; only the line is new.
+                "  d2:9",
                 "genvec",
                 "  x",
                 "end",
@@ -97539,6 +97543,97 @@ fn main() {
     /// Both `Drop` types are HEAP-FREE and memory is balanced throughout, so
     /// these assert on OUTPUT rather than on byte counts. Each asserts the
     /// interpreter's own output, which was correct on every cell here.
+    /// B-2026-09-17-19 — a `shared enum`'s payload `Drop` body now runs on the
+    /// refcount's 0-transition, and it runs BEFORE the memory walk that frees
+    /// the payload's buffers. That ordering is the whole risk of the change: a
+    /// body reads its own fields (`self.s.len()` here), so running it after the
+    /// walk would be a use-after-free, and running it twice — once as a payload
+    /// body, once through some other owner — would be a double free of the
+    /// `String`s it drops.
+    ///
+    /// The cells are the three payload shapes the drop fn now has to reach: a
+    /// heap-owning struct, a heap-FREE struct (the case that forced the
+    /// whole-fn gate to widen, since it is not "walkable"), and a second handle
+    /// on the same box (where the body must fire once, at the last one).
+    #[test]
+    fn asan_shared_enum_payload_body_runs_once_before_the_memory_walk() {
+        const DECLS: &str = "struct R { s: String, t: String }\n\
+             impl Drop for R { fn drop(mut ref self) { println(f\"dR{self.s.len()}\") } }\n\
+             struct Z { n: i64 }\n\
+             impl Drop for Z { fn drop(mut ref self) { println(f\"dZ{self.n}\") } }\n\
+             shared enum SMono { P(R), Q }\n\
+             shared enum Sz { P(Z), Q }\n";
+
+        // A heap-owning payload: the body reads `self.s` before the walk frees it.
+        assert_clean_asan_run(
+            &format!(
+                "{DECLS}\
+                 fn main() {{\n\
+                 \x20   {{ let s: SMono = SMono.P(R {{ s: \"ssssssss\", t: \"tttttttt\" }}); }}\n\
+                 \x20   println(\"end\");\n\
+                 }}\n"
+            ),
+            &["dR8", "end"],
+            "b91719-shared-enum-payload-heap",
+        );
+
+        // A heap-FREE payload with a body: not walkable, so the drop fn used to
+        // decline outright and nothing ran.
+        assert_clean_asan_run(
+            &format!(
+                "{DECLS}\
+                 fn main() {{\n\
+                 \x20   {{ let s: Sz = Sz.P(Z {{ n: 5 }}); }}\n\
+                 \x20   println(\"end\");\n\
+                 }}\n"
+            ),
+            &["dZ5", "end"],
+            "b91719-shared-enum-payload-noheap",
+        );
+
+        // Two handles on one box: once, at the last one.
+        assert_clean_asan_run(
+            &format!(
+                "{DECLS}\
+                 fn main() {{\n\
+                 \x20   {{ let a: SMono = SMono.P(R {{ s: \"ssssssss\", t: \"tttttttt\" }}); let b = a; }}\n\
+                 \x20   println(\"end\");\n\
+                 }}\n"
+            ),
+            &["dR8", "end"],
+            "b91719-shared-enum-payload-two-handles",
+        );
+
+        // NO UNIT-VARIANT CELL HERE, deliberately. `{ let s: SMono = SMono.Q; }`
+        // strands its whole RC shell — 64 B at `-O0`, the `{ i64 rc, i64 tag,
+        // .. }` allocation itself — which is B-2026-09-17-22 and has nothing to
+        // do with payload bodies. B-2026-09-15-10's fixture leaves the same
+        // construction out for the same reason, in its own words: "a cell
+        // carrying this leak would make the fixture red for a reason that is not
+        // its own". The payload-free variant IS covered for the question this
+        // commit is about — whether it runs a body — by the `qvar` cell of the
+        // paired output fixtures, where no allocation is asserted on.
+
+        // A NAMED source moved into the constructor. This is the cell
+        // `e2e_shared_enum_ctor_named_source_runs_no_husk_drop_body` warns
+        // about: `d2:0` there is the husk body B-2026-09-17-25 removed, firing
+        // off the zeroed staging slot, and this asserts that the `len 8` line
+        // it now prints instead comes from live memory with no use-after-free
+        // and no double free behind it.
+        assert_clean_asan_run(
+            &format!(
+                "{DECLS}\
+                 fn main() {{\n\
+                 \x20   let r = R {{ s: \"ssssssss\", t: \"tttttttt\" }};\n\
+                 \x20   {{ let s: SMono = SMono.P(r); }}\n\
+                 \x20   println(\"end\");\n\
+                 }}\n"
+            ),
+            &["dR8", "end"],
+            "b91719-shared-enum-payload-named-source",
+        );
+    }
+
     #[test]
     fn asan_boxed_payload_view_does_not_mint_a_second_bodies_walk() {
         const DECLS: &str = "struct P { id: i64 }\n\

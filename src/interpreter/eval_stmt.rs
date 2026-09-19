@@ -1457,6 +1457,33 @@ impl<'a> super::Interpreter<'a> {
         if depth > 8 {
             return false;
         }
+        // B-2026-09-17-19 — a shared ENUM carries VARIANT PAYLOADS rather than
+        // fields, so `find_struct_def` turned it away and its holder stayed
+        // invisible to the walk above. Same question, asked of the payloads:
+        // codegen's twin is `shared_enum_runs_payload_bodies`.
+        if self.find_struct_def(type_name).is_none() {
+            let Some(def) = self.program.items.iter().find_map(|it| match it {
+                Item::EnumDef(e) if e.name == type_name => Some(e),
+                _ => None,
+            }) else {
+                return false;
+            };
+            let variants = def.variants.clone();
+            return variants.iter().any(|v| {
+                let tys: Vec<TypeExpr> = match &v.kind {
+                    VariantKind::Unit => Vec::new(),
+                    VariantKind::Tuple(tys) => tys.clone(),
+                    VariantKind::Struct(fs) => fs.iter().map(|f| f.ty.clone()).collect(),
+                };
+                tys.iter().any(|te| {
+                    let Some(head) = Self::declared_field_type_head(te) else {
+                        return false;
+                    };
+                    self.program.drop_method_keys.contains_key(&head)
+                        || self.holder_has_drop_bearing_field_inner(&head, depth + 1)
+                })
+            });
+        }
         let Some(def) = self.find_struct_def(type_name) else {
             return false;
         };
@@ -1467,6 +1494,37 @@ impl<'a> super::Interpreter<'a> {
             self.program.drop_method_keys.contains_key(&head)
                 || self.holder_has_drop_bearing_field_inner(&head, depth + 1)
         })
+    }
+
+    /// B-2026-09-17-19 — the declared field names of the variant a
+    /// `EnumData::Struct` payload belongs to, in declaration order.
+    ///
+    /// The payload is a `HashMap`, whose iteration order is not stable run to
+    /// run (CLAUDE.md § `Map` / `Set` iteration order), so a walk that observes
+    /// bodies has to take its order from the source instead. Empty when the
+    /// enum has no source `EnumDef` (a built-in) or no variant matches, which
+    /// leaves the payload unwalked rather than walked in an arbitrary order.
+    fn enum_variant_declared_field_names(&self, enum_name: &str, data: &EnumData) -> Vec<String> {
+        let EnumData::Struct(m) = data else {
+            return Vec::new();
+        };
+        let Some(def) = self.program.items.iter().find_map(|it| match it {
+            Item::EnumDef(e) if e.name == enum_name => Some(e),
+            _ => None,
+        }) else {
+            return Vec::new();
+        };
+        def.variants
+            .iter()
+            .find_map(|v| match &v.kind {
+                VariantKind::Struct(fs)
+                    if fs.len() == m.len() && fs.iter().all(|f| m.contains_key(&f.name)) =>
+                {
+                    Some(fs.iter().map(|f| f.name.clone()).collect())
+                }
+                _ => None,
+            })
+            .unwrap_or_default()
     }
 
     fn invoke_user_drop_if_applicable(&mut self, name: &str) {
@@ -1942,6 +2000,38 @@ impl<'a> super::Interpreter<'a> {
                     }
                 }
             }
+            // B-2026-09-17-19 — an ENUM PAYLOAD that holds a shared value.
+            // The walk covered Struct / Tuple / Array holders and stopped at
+            // an enum, so `enum H { P(S), Q }` over a `shared struct S` with
+            // `impl Drop` released nothing under `--interp` while every
+            // compiled surface ran the body — and the shared-ENUM spelling
+            // `H.P(SMono.P(..))` was silent on BOTH, which is the half this
+            // commit's codegen change moves. Same ownership line as the arms
+            // above: this descends INTO a plain enum's payload and the
+            // `SharedStruct` arm still stops at a shared one.
+            Value::EnumVariant {
+                enum_name, data, ..
+            } => match data {
+                EnumData::Unit => {}
+                EnumData::Tuple(vs) => {
+                    for v in vs.iter().rev() {
+                        self.collect_field_held_shared(v, out, depth + 1);
+                    }
+                }
+                EnumData::Struct(m) => {
+                    // Declared order, reversed, for the reason the struct arm
+                    // gives: the payload map's iteration order is not stable.
+                    for f in self
+                        .enum_variant_declared_field_names(enum_name, data)
+                        .into_iter()
+                        .rev()
+                    {
+                        if let Some(fv) = m.get(&f) {
+                            self.collect_field_held_shared(fv, out, depth + 1);
+                        }
+                    }
+                }
+            },
             _ => {}
         }
     }
@@ -1994,6 +2084,28 @@ impl<'a> super::Interpreter<'a> {
                     }
                 }
             }
+            // B-2026-09-17-19 — same arm as pass 1.
+            Value::EnumVariant {
+                enum_name, data, ..
+            } => match data {
+                EnumData::Unit => {}
+                EnumData::Tuple(vs) => {
+                    for v in vs.iter().rev() {
+                        self.collect_field_held_shared_values(v, firing, seen, out, depth + 1);
+                    }
+                }
+                EnumData::Struct(m) => {
+                    for f in self
+                        .enum_variant_declared_field_names(enum_name, data)
+                        .into_iter()
+                        .rev()
+                    {
+                        if let Some(fv) = m.get(&f) {
+                            self.collect_field_held_shared_values(fv, firing, seen, out, depth + 1);
+                        }
+                    }
+                }
+            },
             _ => {}
         }
     }

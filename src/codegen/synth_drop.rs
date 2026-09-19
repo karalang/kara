@@ -6056,6 +6056,64 @@ impl<'ctx> super::Codegen<'ctx> {
         })
     }
 
+    /// B-2026-09-17-19 — the ENUM sibling of
+    /// [`Self::shared_holder_runs_field_bodies`]: does this `shared enum` run a
+    /// user `Drop` body for one of its VARIANT PAYLOADS?
+    ///
+    /// Exists for [`Self::nll_fireable_binding`], which admits a `shared`
+    /// binding to live-range-end firing only when its refcount's 0-transition
+    /// is observable. B-2026-09-04-13 made that argument for a shared struct's
+    /// plain FIELDS and wrote down what happens when a case is missed: the
+    /// holder "was invisible while its field bodies never ran and became a
+    /// run/build divergence the moment they did". Payload bodies started
+    /// running in this same commit, so this is that prediction coming due —
+    /// without this clause `shared enum SMono { P(R2), Q }` fired `R2`'s body
+    /// at the closing brace while `--interp` fired it at `s`'s last use.
+    ///
+    /// Structurally mirrors [`Self::shared_payload_bodies_only_fn`]'s gate
+    /// rather than calling it, because that one mints a function and this
+    /// question is asked from a `&self` predicate. A payload that is itself a
+    /// plain ENUM answers `false` here (`plain_struct_has_user_drop_deep` walks
+    /// struct fields) — a conservative residual that leaves the body at scope
+    /// exit, never a double fire.
+    pub(super) fn shared_enum_runs_payload_bodies(&self, enum_name: &str) -> bool {
+        if !self.type_decls.shared_types.contains_key(enum_name) {
+            return false;
+        }
+        let Some(prog) = self.program_snapshot.as_ref() else {
+            return false;
+        };
+        let Some(variants) = prog.items.iter().find_map(|it| match it {
+            Item::EnumDef(e) if e.name == enum_name => Some(&e.variants),
+            _ => None,
+        }) else {
+            return false;
+        };
+        variants.iter().any(|v| {
+            let tys: Vec<&TypeExpr> = match &v.kind {
+                VariantKind::Unit => Vec::new(),
+                VariantKind::Tuple(tys) => tys.iter().collect(),
+                VariantKind::Struct(fields) => fields.iter().map(|f| &f.ty).collect(),
+            };
+            tys.iter().any(|te| {
+                let TypeKind::Path(pth) = &te.kind else {
+                    return false;
+                };
+                let Some(n) = pth.segments.last() else {
+                    return false;
+                };
+                !self.type_decls.shared_types.contains_key(n.as_str())
+                    && n != "Option"
+                    && n != "Result"
+                    && self
+                        .type_decls
+                        .struct_field_type_names
+                        .contains_key(n.as_str())
+                    && self.plain_struct_has_user_drop_deep(n, 0)
+            })
+        })
+    }
+
     /// B-2026-09-04-32 — the MIRROR of [`Self::shared_holder_runs_field_bodies`]:
     /// does this PLAIN struct hold a `shared` field whose release is
     /// Drop-relevant (the shared type has its own `impl Drop`, or runs bodies
@@ -6079,7 +6137,11 @@ impl<'ctx> super::Codegen<'ctx> {
             h.as_deref().is_some_and(|n| {
                 self.type_decls.shared_types.contains_key(n)
                     && (self.drop_rc.user_drop_wrapper_fns.contains_key(n)
-                        || self.shared_holder_runs_field_bodies(n))
+                        || self.shared_holder_runs_field_bodies(n)
+                        // B-2026-09-17-19 — a shared ENUM field whose variant
+                        // payload runs a body is Drop-relevant for the same
+                        // reason the two clauses above are.
+                        || self.shared_enum_runs_payload_bodies(n))
             })
         })
     }
@@ -7535,6 +7597,34 @@ impl<'ctx> super::Codegen<'ctx> {
     /// (`shared enum Expr { Bin(Expr, Expr) }`) resolves to the in-progress fn.
     /// Returns `None` (and caches it) when no variant owns heap and there's no
     /// user `impl Drop` — `emit_rc_dec` then uses plain `free`.
+    /// B-2026-09-17-19 — the bodies-only walker for one `shared enum` payload
+    /// field, or `None` when that field's bodies are someone else's to run.
+    ///
+    /// Declines a SHARED child (its own rc-drop runs them when ITS count hits
+    /// zero, so running them here would double), and `Option`/`Result` (which
+    /// keep their own payload machinery). What is left is a plain struct or a
+    /// non-shared user enum, which is exactly what
+    /// [`Self::emit_struct_user_drop_bodies_only_fn`] walks: the type's own
+    /// `Drop` body plus its fields' and nested enum payloads', and no frees.
+    fn shared_payload_bodies_only_fn(&mut self, te: &TypeExpr) -> Option<FunctionValue<'ctx>> {
+        let TypeKind::Path(p) = &te.kind else {
+            return None;
+        };
+        let name = p.segments.last()?.clone();
+        if self.type_decls.shared_types.contains_key(name.as_str())
+            || name == "Option"
+            || name == "Result"
+        {
+            return None;
+        }
+        if !self.type_decls.struct_types.contains_key(name.as_str())
+            && !self.type_decls.enum_layouts.contains_key(name.as_str())
+        {
+            return None;
+        }
+        self.emit_struct_user_drop_bodies_only_fn(&name)
+    }
+
     pub(super) fn emit_shared_enum_rc_drop_fn(
         &mut self,
         enum_name: &str,
@@ -7631,7 +7721,33 @@ impl<'ctx> super::Codegen<'ctx> {
             .program_snapshot
             .as_ref()
             .is_some_and(|p| p.drop_method_keys.contains_key(enum_name));
-        if !any_walkable && !has_user_drop {
+        // B-2026-09-17-19 — the PAYLOAD's own `Drop` body, which nothing ran.
+        //
+        // `emit_enum_payload_user_drop_bodies_fn_skipping` defers a shared enum
+        // to "the RC machinery" (`if layout.is_shared { return None }`), and the
+        // RC machinery ran the enum's own body and the memory walk but never the
+        // payload's. So `shared enum SMono { P(R2), Q }` over an `R2` with
+        // `impl Drop` printed nothing on every compiled backend where `--interp`
+        // printed `d2:9`.
+        //
+        // Emitted PER VARIANT FIELD and up front, before any block exists,
+        // because minting a walker repositions the builder. The map is keyed by
+        // (variant index, field index) and consulted inside each variant block.
+        let payload_bodies: std::collections::HashMap<(usize, usize), FunctionValue<'ctx>> = {
+            let mut m = std::collections::HashMap::new();
+            for (vi, (_, tys)) in variants.iter().enumerate() {
+                for (fi, te) in tys.iter().enumerate() {
+                    if let Some(f) = self.shared_payload_bodies_only_fn(te) {
+                        m.insert((vi, fi), f);
+                    }
+                }
+            }
+            m
+        };
+        // A heap-free payload that owns a body (`struct Z { n: i64 }` with
+        // `impl Drop`) is not walkable, so without this the whole fn declined
+        // and the body had nowhere to run.
+        if !any_walkable && !has_user_drop && payload_bodies.is_empty() {
             self.drop_rc.rc_drop_fns.insert(enum_name.to_string(), None);
             return None;
         }
@@ -7725,8 +7841,9 @@ impl<'ctx> super::Codegen<'ctx> {
             inkwell::values::IntValue<'ctx>,
             inkwell::basic_block::BasicBlock<'ctx>,
         )> = Vec::new();
-        for (vname, tys) in &variants {
-            if !tys.iter().any(|te| field_is_walkable(self, te)) {
+        for (vi, (vname, tys)) in variants.iter().enumerate() {
+            let has_payload_body = (0..tys.len()).any(|fi| payload_bodies.contains_key(&(vi, fi)));
+            if !tys.iter().any(|te| field_is_walkable(self, te)) && !has_payload_body {
                 continue;
             }
             let Some(&tagv) = layout.tags.get(vname) else {
@@ -7741,6 +7858,28 @@ impl<'ctx> super::Codegen<'ctx> {
                 .context
                 .append_basic_block(drop_fn, &format!("rcedrop.v.{vname}"));
             self.builder.position_at_end(vbb);
+            // BODIES BEFORE MEMORY, so a body still reads its own buffers
+            // rather than a freed husk. Refcount is already zero here, which
+            // design.md § :866 / :9204 make the right moment: a destructor
+            // fires at the value's LIVE-RANGE END, and a shared value's ends
+            // when the last handle dies.
+            for (fi, _) in tys.iter().enumerate() {
+                let Some(&bodies) = payload_bodies.get(&(vi, fi)) else {
+                    continue;
+                };
+                let (start_word, _) = offsets.get(fi).copied().unwrap_or((fi, 1));
+                // +2: skip the `{rc, tag}` prefix, as the memory walk does.
+                let fp = self
+                    .builder
+                    .build_struct_gep(
+                        heap_type,
+                        p_arg,
+                        (start_word + 2) as u32,
+                        &format!("rcedrop.{vname}.b{fi}.p"),
+                    )
+                    .unwrap();
+                self.builder.build_call(bodies, &[fp.into()], "").unwrap();
+            }
             for (i, te) in tys.iter().enumerate() {
                 let (start_word, num_words) = offsets.get(i).copied().unwrap_or((i, 1));
                 // +2: skip the `{rc, tag}` prefix in the heap box.
