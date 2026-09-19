@@ -95,7 +95,7 @@ distinguish "bugs flattening" from "we stopped writing them down."
 | run-vs-build | 448 |
 | miscompile | 425 |
 | leak | 382 |
-| double-free | 250 |
+| double-free | 251 |
 | missing-feature | 202 |
 | codegen-gap | 181 |
 | other | 139 |
@@ -110,7 +110,7 @@ distinguish "bugs flattening" from "we stopped writing them down."
 
 | surface | total |
 |---|---|
-| codegen | 1883 |
+| codegen | 1884 |
 | interp | 484 |
 | typecheck | 302 |
 | other | 101 |
@@ -205,6 +205,7 @@ _Generated from `bug-ledger.jsonl` by `scripts/bug-curve.py` (2026-05-20 → 202
 | B-2026-09-19-48 | 2026-09-19 | codegen | medium | A NAMED-LOCAL `Option` ARGUMENT WHOSE PAYLOAD IS A NAMED STRUCT RUNS THE SURVIVING FIELD'S `Drop` BODY TWICE ON EVERY COMPILED SURFACE, and an arm that moves NOTHING doubles BOTH fields -- `let a = Some(Q { r, s }); take(a)` over `fn take(o: Option[Q]) { match o { Some(t) => { let x = t.r; .. } .. } }` prints `dR5 mid dR6 dR6` on jit / `karac build` / `KARAC_AUTO_PAR=0` against the interpreter's `dR5 mid dR6`; the exact complement of B-2026-09-17-38, which LOST the surviving part for a TUPLE payload at the same commit, and the FRESH-TEMP spelling of both struct cells is correct throughout | — |
 | B-2026-09-19-49 | 2026-09-19 | codegen | high | AN `Array[S, 1]` ENUM PAYLOAD RUNS ITS ELEMENT'S `Drop` BODY AGAINST THE WRONG MEMORY ON EVERY COMPILED SURFACE -- `enum D1 { P(Array[Sd, 1]), Q }` prints `dS0` for an element whose field holds 41, on the JIT, `-O0` and `-O2` alike, while `--interp` prints `dS41`; wrong at all three positions measured (let-bound, discarded, fresh-temp argument), with valgrind CLEAN, so no sanitizer leg in the tree can see it and only an A/B against the interpreter can. The boundary is INLINE-vs-BOXED payload WIDTH, not the element count: `Array[Sd, 2]`, `Array[S2w, 1]` and `Array[S3w, 1]` are all correct and a one-word element in a two-field variant is still wrong | — |
 | B-2026-09-19-50 | 2026-09-19 | codegen+interp | medium | A DECLARED `Array[E, N]` PAYLOAD WHOSE ELEMENT IS A USER ENUM RUNS THE ELEMENT'S PAYLOAD `Drop` BODIES ON EVERY COMPILED SURFACE AND NONE UNDER `--interp` -- `enum Ha { P(Array[Mono, 1]), Q }` over `enum Mono { P(R), Q }` diverges at four positions (let-bound, discarded, whole move, consuming match arm) and is an agreed silence at two (fresh-temp argument, struct field), while the struct-element control `Array[R, 2]` agrees on all four surfaces at every position. The two halves have DIFFERENT causes -- the interpreter's declared-`Array` arm dispatches a `Value::Struct` element only, and the two gaps are a measured payload-WIDTH artifact -- so it cannot be closed one position at a time | — |
+| B-2026-09-19-51 | 2026-09-19 | codegen | medium | A STRUCT'S ENUM FIELD HANDED TO A BY-VALUE CALLEE IS FREED TWICE, because a moved-out enum field is never neutralised the way a moved-out `Vec`/`String` field is -- `eatb(h.g)` over `struct Hb { g: Eb }` with `enum Eb { A(Array[String, 2]), B }` reports 11 allocs / 14 frees, 3 Invalid free and 4 Invalid read all in `main`, where `--interp` is correct; NOTHING in the cell is generic | — |
 
 ### Relocated
 
