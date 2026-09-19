@@ -94,8 +94,8 @@ distinguish "bugs flattening" from "we stopped writing them down."
 |---|---|
 | run-vs-build | 448 |
 | miscompile | 425 |
-| leak | 382 |
-| double-free | 251 |
+| leak | 383 |
+| double-free | 253 |
 | missing-feature | 202 |
 | codegen-gap | 181 |
 | other | 139 |
@@ -110,7 +110,7 @@ distinguish "bugs flattening" from "we stopped writing them down."
 
 | surface | total |
 |---|---|
-| codegen | 1884 |
+| codegen | 1887 |
 | interp | 484 |
 | typecheck | 302 |
 | other | 101 |
@@ -195,7 +195,6 @@ _Generated from `bug-ledger.jsonl` by `scripts/bug-curve.py` (2026-05-20 → 202
 | B-2026-09-19-37 | 2026-09-19 | interp | medium | THE INTERPRETER IGNORES A LOCAL BINDING THAT SHADOWS A UNIT ENUM VARIANT'S NAME -- `{ let Uc = 7; let s = Uc; println(f"n{s}") }` prints `nUc` under `--interp` and `n7` on jit / `karac build` / `-O0` / `KARAC_AUTO_PAR=0`, so the interpreter constructs the VARIANT where every compiled surface reads the local; on a `shared enum` it additionally runs that variant's `Drop` body, giving a line no compiled surface prints, and a plain enum diverges identically so it is not about `shared` | — |
 | B-2026-09-19-38 | 2026-09-19 | codegen | medium | A `shared enum`'s UNIT VARIANT CONSTRUCTED IN AN UNBOUND POSITION STILL STRANDS ITS RC SHELL -- `take(U.A)` as an inline call argument, `match U.A { .. }` as a scrutinee and a discarded `U.A;` each lose the whole `{ i64 rc, i64 tag, .. }` allocation at `-O0`, unbounded in a loop (80 B over 5 iterations), byte-identical before and after B-2026-09-17-22's fix, which covered the BOUND spellings only; the same three positions are clean for a payload-carrying variant (`take(U.A(3))`) and for a call result (`take(mk())`), so what is missing is a caller-side temp owner for the one fresh-ref source that is not an `ExprKind::Call` | — |
 | B-2026-09-19-39 | 2026-09-19 | codegen | medium | A GENERIC MULTI-FIELD VARIANT WITH A HEAP-BEARING SIBLING CANNOT TAKE A `BoxedEnumDrop` WITHOUT LOSING THE SIBLING -- `enum Gh[T] { Y(T, String), N }` at `T = Array[String, 2]` trades its 96 B box for the sibling `String`s, because the argument-move suppressor zeroes the WHOLE payload slot and so clears the sibling's `cap > 0` guard along with the box's tag guard; B-2026-09-15-18 declines the shape rather than take that trade, so its box is still stranded | — |
-| B-2026-09-19-40 | 2026-09-19 | codegen | high | AN ARM THAT HANDS A GENERIC BOXED `Array` PAYLOAD TO A BY-VALUE CALLEE INVALID-FREES ON STOCK `main` -- `match g { G1.Y(x) => eat(x) }` over `G1[Array[String, 2]]` reports 4 valgrind errors from 2 contexts at `-O0` with output still correct on every backend, because `consume_class` treats a function argument as non-consuming while a by-value `Array` param is callee-owns, so the arm's interior drop is never retracted | — |
 | B-2026-09-19-42 | 2026-09-19 | codegen | medium | AN ASSIGNMENT OVER A `mut` LOCAL STRANDS THE DISPLACED VALUE'S `shared` RC BOX -- `out = w` over `struct Ws { h: Sh }` with `shared struct Sh` loses 32 B plus its 6 B interior per call at `-O0` with correct output and no valgrind errors, where the plain-`String` twin of the same statement (B-2026-09-15-21) releases its displaced value correctly; the no-assignment control over the same three types is clean at 11 allocs / 11 frees | — |
 | B-2026-09-19-43 | 2026-09-19 | codegen | medium | A BODIES-ONLY CARRIER ASSIGNED FROM AN ARM-BOUND PARAM PAYLOAD LOSES THE MOVED-IN VALUE'S `Drop` BODY UNDER AOT -- `struct Hold { r: R, n: i64 }` with no `impl Drop` of its own prints `dR0` where `--interp` prints `dR0 dR4`, with memory clean on both sides (12 allocs / 12 frees, 0 errors), so no sanitizer can see it; the `impl Drop`-bearing spelling of the same statement is correct on both backends | — |
 | B-2026-09-19-44 | 2026-09-19 | codegen | medium | A DESTRUCTURING `if let` LOSES ITS BOXED PAYLOAD'S `Drop` BODY ON EVERY COMPILED BACKEND, where the `match` SPELLING OF THE SAME PATTERN KEEPS IT -- `if let Some((_, b)) = o { return b; }` over `Option[(H, i64)]` with `struct H { id: i64, s: String }` prints `n9` where `--interp` prints `dH1 n9`, and the NAMED spelling `Some((a, b))` loses it identically, so the trigger is the `if let` form and not the wildcard; binding the payload WHOLE (`Some(t)`, reading `t.1`) through the same `if let` is correct, as is the inline-channel payload, so it is a destructuring `if let` on the heap-BOXED channel. Values are correct and valgrind is clean, so only the user-visible body is lost -- invisible to every memory gate including the ASAN legs | — |
@@ -206,6 +205,9 @@ _Generated from `bug-ledger.jsonl` by `scripts/bug-curve.py` (2026-05-20 → 202
 | B-2026-09-19-49 | 2026-09-19 | codegen | high | AN `Array[S, 1]` ENUM PAYLOAD RUNS ITS ELEMENT'S `Drop` BODY AGAINST THE WRONG MEMORY ON EVERY COMPILED SURFACE -- `enum D1 { P(Array[Sd, 1]), Q }` prints `dS0` for an element whose field holds 41, on the JIT, `-O0` and `-O2` alike, while `--interp` prints `dS41`; wrong at all three positions measured (let-bound, discarded, fresh-temp argument), with valgrind CLEAN, so no sanitizer leg in the tree can see it and only an A/B against the interpreter can. The boundary is INLINE-vs-BOXED payload WIDTH, not the element count: `Array[Sd, 2]`, `Array[S2w, 1]` and `Array[S3w, 1]` are all correct and a one-word element in a two-field variant is still wrong | — |
 | B-2026-09-19-50 | 2026-09-19 | codegen+interp | medium | A DECLARED `Array[E, N]` PAYLOAD WHOSE ELEMENT IS A USER ENUM RUNS THE ELEMENT'S PAYLOAD `Drop` BODIES ON EVERY COMPILED SURFACE AND NONE UNDER `--interp` -- `enum Ha { P(Array[Mono, 1]), Q }` over `enum Mono { P(R), Q }` diverges at four positions (let-bound, discarded, whole move, consuming match arm) and is an agreed silence at two (fresh-temp argument, struct field), while the struct-element control `Array[R, 2]` agrees on all four surfaces at every position. The two halves have DIFFERENT causes -- the interpreter's declared-`Array` arm dispatches a `Value::Struct` element only, and the two gaps are a measured payload-WIDTH artifact -- so it cannot be closed one position at a time | — |
 | B-2026-09-19-51 | 2026-09-19 | codegen | medium | A STRUCT'S ENUM FIELD HANDED TO A BY-VALUE CALLEE IS FREED TWICE, because a moved-out enum field is never neutralised the way a moved-out `Vec`/`String` field is -- `eatb(h.g)` over `struct Hb { g: Eb }` with `enum Eb { A(Array[String, 2]), B }` reports 11 allocs / 14 frees, 3 Invalid free and 4 Invalid read all in `main`, where `--interp` is correct; NOTHING in the cell is generic | — |
+| B-2026-09-19-52 | 2026-09-19 | codegen | high | A STRUCT-SHAPED VARIANT'S BOXED `Array` PAYLOAD HANDED TO A BY-VALUE CALLEE ABORTS ON BOTH SPELLINGS -- `match g { G.S { a } => eat(a) }` over `Array[String, 2]` exits 134 with 4 valgrind errors, generic AND mono alike, while the tuple-variant spelling of the same program is clean after B-2026-09-19-40 and the read-only arm of this one is clean too, so the hand-on fault survives wherever the pattern is struct-shaped | — |
+| B-2026-09-19-53 | 2026-09-19 | codegen | high | A `shared enum`'s HEAP PAYLOAD IS NEVER FREED, whatever the arm does and whatever the payload is -- a read-only arm over `shared enum G[T] { Y(T), N }` strands 96 B for `Array[String, 2]` and 48 B for `Vec[String]` with output correct on every backend, and the `Array` hand-on arm additionally ABORTS at exit 134 with 96 B still lost, so there are two faults layered on one shape | — |
+| B-2026-09-19-54 | 2026-09-19 | codegen | medium | A GENERIC BOXED `Array[String, N]` PAYLOAD REBOUND TO A LOCAL IN THE ARM INVALID-FREES -- `match g { G.Y(x) => { let y = x; return y[0].len(); } }` reports 2 valgrind errors at `-O0` with output correct on every backend, while its mono twin and all three other arm shapes of the same payload are clean, so the move-binding path has a second owner the hand-on path does not | — |
 
 ### Relocated
 
@@ -2733,6 +2735,7 @@ _Generated from `bug-ledger.jsonl` by `scripts/bug-curve.py` (2026-05-20 → 202
 | B-2026-09-19-26 | lexer | low | THE SELF-HOSTED LEXER DOES NOT MODEL `IntegerOutOfRange`, so a 19+ digit literal is an Error token in the port and a real token in the seed -- `18446… | 01a3dad |
 | B-2026-09-19-30 | codegen | high | A WILDCARD LEAF IN A DESTRUCTURED **BOXED** PAYLOAD MADE ITS NAMED SIBLINGS READ FROM THE WRONG OFFSET ON EVERY COMPILED BACKEND -- `fn wildOut(o: Op… | ea5228a |
 | B-2026-09-19-36 | codegen | medium | AN `Option`-WRAPPED FIELD IN THE RETURNED AGGREGATE STILL DOUBLE FREES, the remainder B-2026-09-19-21's fix cannot reach -- `struct Ho[T] { g: Option… | 6633381 |
+| B-2026-09-19-40 | codegen | high | AN ARM THAT HANDS A GENERIC BOXED `Array` PAYLOAD TO A BY-VALUE CALLEE INVALID-FREES ON STOCK `main` -- `match g { G1.Y(x) => eat(x) }` over `G1[Arra… | 7934c5b |
 | B-2026-09-19-41 | codegen | medium | A `Drop`-BEARING NAMED FIELD MOVED OUT OF AN `Option` PAYLOAD RUNS ITS BODY LATE, TWICE, OR NOT AT ALL ON THE COMPILED BACKENDS -- `Some(t) => { let… | c6c4cf8 |
 
 </details>
