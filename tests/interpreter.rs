@@ -70444,3 +70444,64 @@ fn main() {
 "#);
     assert_eq!(out, "handback\n  10\nkeptinside\n  none\nallpaths\n  10\ndiesinside\n  none\ndiscarded\n  out\nunread\n  out\nuserdrop\n  dR7\n  out\ni64\n  5\ntwoargs\n  10\nvecpayload\n  2\narrpayload\n  arr\nmatchtail\n  11\nchain\n  11\nblocktail\n  out\nmono\n  11\nend\n", "got:\n{out}");
 }
+
+/// B-2026-09-17-8 — compiling a monomorph mid-caller wiped the CALLER's
+/// payload-ownership records, and the caller then gave the same payload two
+/// owners.
+///
+/// Nine registries are cleared at the mono body entry and none of them was
+/// swapped out around the nested compile, so the clear was one-way.
+/// `let b = idOpt(a);` over `fn idOpt[T](g: Option[T]) -> Option[T] { return
+/// g }` records `passthrough_owner_alias[b] = a` and registers no owner for
+/// `b`, on B-2026-08-06-27's rule that the source stays sole owner — but only
+/// while `a` is still in `inline_option_payload_vars` when that `let`
+/// compiles. The monomorph compiled for that very call had emptied the set, so
+/// the alias was never recorded and `b` took a second registration over `a`'s
+/// payload: `free(): double free detected in tcache 2`, 11 allocs / 12 frees.
+/// `monoinline`, `monobody` and `nocall` are the cells that were always clean,
+/// and the first two are clean for one reason — nothing clears the set.
+///
+/// The second half is the BODIES channel, which the memory fix exposed rather
+/// than caused. `compile_call` has retracted a handed-back argument's payload
+/// walk since B-2026-08-09-15; `compile_generic_call` never did, so with the
+/// source correctly registered again both `a` and `b` fired it — `dD / got 6 /
+/// dD` against the interpreter's `got 6 / dD`, on balanced memory. `body`,
+/// `bodyboxed` and `bodynoarm` are the three cells that double without it, and
+/// they double across both payload classes: `D` is one word and rides the
+/// inline channel, `W` is four and boxes.
+///
+/// `twocalls` is the cell that refutes the argument-side disarm this row first
+/// reached for: standing the argument down fixes the first call to a monomorph
+/// and leaks every later one, because the inline channel's contract is the
+/// opposite of the boxed one — there the source is the sole owner, not the
+/// second.
+///
+/// The CODEGEN twin is `tests/codegen.rs`'s
+/// `e2e_generic_call_keeps_the_callers_payload_ownership`, byte-identical source and expectation.
+#[test]
+fn test_generic_call_keeps_the_callers_payload_ownership() {
+    let out = run(r#"struct D { id: i64 }
+impl Drop for D { fn drop(mut ref self) { println(f"  dD{self.id}") } }
+struct W { id: i64, s: String }
+impl Drop for W { fn drop(mut ref self) { println(f"  dW{self.id}") } }
+fn idOpt[T](g: Option[T]) -> Option[T] { return g }
+fn idRes[T](g: Result[T, i64]) -> Result[T, i64] { return g }
+fn idOptMono(g: Option[String]) -> Option[String] { return g }
+fn idDMono(g: Option[D]) -> Option[D] { return g }
+
+fn main() {
+    println("inline");   { let a: Option[String] = Option.Some(f"aaaaaaaa-1"); let b = idOpt(a); match b { Option.Some(v) => { println(f"  {v.len()}") } Option.None => { println("  none") } } }
+    println("result");   { let a: Result[String, i64] = Result.Ok(f"bbbbbbbb-2"); let b = idRes(a); match b { Result.Ok(v) => { println(f"  {v.len()}") } Result.Err(e) => { println("  err") } } }
+    println("noarm");    { let a: Option[String] = Option.Some(f"cccccccc-3"); let b = idOpt(a); println("  out") }
+    println("twocalls"); { let a: Option[String] = Option.Some(f"dddddddd-4"); let x = idOpt(a); let c: Option[String] = Option.Some(f"eeeeeeee-5"); let y = idOpt(c); match x { Option.Some(v) => { println(f"  {v.len()}") } Option.None => { println("  none") } } match y { Option.Some(v) => { println(f"  {v.len()}") } Option.None => { println("  none") } } }
+    println("body");     { let a: Option[D] = Option.Some(D { id: 6 }); let b = idOpt(a); match b { Option.Some(v) => { println(f"  got {v.id}") } Option.None => { println("  none") } } }
+    println("bodyboxed");{ let a: Option[W] = Option.Some(W { id: 7, s: f"ssssssss" }); let b = idOpt(a); match b { Option.Some(v) => { println(f"  got {v.id}") } Option.None => { println("  none") } } }
+    println("bodynoarm");{ let a: Option[W] = Option.Some(W { id: 8, s: f"tttttttt" }); let b = idOpt(a); println("  out") }
+    println("monoinline"); { let a: Option[String] = Option.Some(f"ffffffff-9"); let b = idOptMono(a); match b { Option.Some(v) => { println(f"  {v.len()}") } Option.None => { println("  none") } } }
+    println("monobody");   { let a: Option[D] = Option.Some(D { id: 10 }); let b = idDMono(a); match b { Option.Some(v) => { println(f"  got {v.id}") } Option.None => { println("  none") } } }
+    println("nocall");     { let a: Option[D] = Option.Some(D { id: 11 }); match a { Option.Some(v) => { println(f"  got {v.id}") } Option.None => { println("  none") } } }
+    println("end")
+}
+"#);
+    assert_eq!(out, "inline\n  10\nresult\n  10\nnoarm\n  out\ntwocalls\n  10\n  10\nbody\n  got 6\n  dD6\nbodyboxed\n  got 7\n  dW7\nbodynoarm\n  dW8\n  out\nmonoinline\n  10\nmonobody\n  got 10\n  dD10\nnocall\n  got 11\n  dD11\nend\n", "got:\n{out}");
+}

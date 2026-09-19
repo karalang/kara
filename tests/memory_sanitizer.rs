@@ -97979,4 +97979,98 @@ fn main() {
             "b91707-discarded",
         );
     }
+
+    /// B-2026-09-17-8 — the memory half of the two paired output fixtures.
+    ///
+    /// Compiling a monomorph mid-caller wiped the caller's payload-ownership
+    /// records, so the binding that received a passthrough generic's result
+    /// took a second registration over the argument's payload and both freed
+    /// it. The cells are the shapes that told the channels apart while the
+    /// root cause was being found: an inline `Option` payload, the `Result`
+    /// head, no match arm at all, and two calls to ONE monomorph — the last
+    /// being the cell that refutes the argument-side disarm this row first
+    /// reached for, which fixes the first call and leaks every later one.
+    ///
+    /// The `Drop`-bearing cells are here for the opposite failure. They are
+    /// memory-balanced either way, so nothing in this file catches the body
+    /// doubling the memory fix exposed — that is the paired output fixtures'
+    /// job. What they assert here is that retracting the source's payload
+    /// walk did not also strand its heap: `W` carries a `String`, and
+    /// dropping the walk without the memory would lose that buffer.
+    #[test]
+    fn asan_generic_passthrough_leaves_one_owner_on_the_payload() {
+        const DECLS: &str = "struct D { id: i64 }\n\
+             impl Drop for D { fn drop(mut ref self) { println(f\"dD{self.id}\") } }\n\
+             struct W { id: i64, s: String }\n\
+             impl Drop for W { fn drop(mut ref self) { println(f\"dW{self.id}\") } }\n\
+             fn idOpt[T](g: Option[T]) -> Option[T] { return g }\n\
+             fn idRes[T](g: Result[T, i64]) -> Result[T, i64] { return g }\n";
+
+        // The inline `Option` payload — the row's own repro.
+        assert_clean_asan_run(
+            &format!(
+                "{DECLS}\
+                 fn main() {{\n\
+                 \x20   let a: Option[String] = Option.Some(\"aaaaaaaa-1\");\n\
+                 \x20   let b = idOpt(a);\n\
+                 \x20   match b {{ Option.Some(v) => {{ println(f\"n{{v.len()}}\") }} Option.None => {{ println(\"none\") }} }}\n\
+                 \x20   println(\"end\");\n\
+                 }}\n"
+            ),
+            &["n10", "end"],
+            "b91708-inline-option",
+        );
+
+        // The `Result` head, and the no-arm spelling: the defect needs
+        // neither a match arm nor a consumed result.
+        assert_clean_asan_run(
+            &format!(
+                "{DECLS}\
+                 fn main() {{\n\
+                 \x20   {{ let a: Result[String, i64] = Result.Ok(\"bbbbbbbb-2\"); let b = idRes(a); match b {{ Result.Ok(v) => {{ println(f\"n{{v.len()}}\") }} Result.Err(e) => {{ println(\"err\") }} }} }}\n\
+                 \x20   {{ let a: Option[String] = Option.Some(\"cccccccc-3\"); let b = idOpt(a); }}\n\
+                 \x20   println(\"end\");\n\
+                 }}\n"
+            ),
+            &["n10", "end"],
+            "b91708-result-and-noarm",
+        );
+
+        // TWO calls to one monomorph. The argument-side disarm this row first
+        // reached for fixes the first and leaks every later one, so a
+        // single-call cell cannot tell the two repairs apart.
+        assert_clean_asan_run(
+            &format!(
+                "{DECLS}\
+                 fn main() {{\n\
+                 \x20   let a: Option[String] = Option.Some(\"dddddddd-4\");\n\
+                 \x20   let x = idOpt(a);\n\
+                 \x20   let c: Option[String] = Option.Some(\"eeeeeeee-5\");\n\
+                 \x20   let y = idOpt(c);\n\
+                 \x20   match x {{ Option.Some(v) => {{ println(f\"n{{v.len()}}\") }} Option.None => {{ println(\"none\") }} }}\n\
+                 \x20   match y {{ Option.Some(v) => {{ println(f\"n{{v.len()}}\") }} Option.None => {{ println(\"none\") }} }}\n\
+                 \x20   println(\"end\");\n\
+                 }}\n"
+            ),
+            &["n10", "n10", "end"],
+            "b91708-two-calls",
+        );
+
+        // The two `Drop`-bearing payload classes, one word and four. Balanced
+        // either way, so what these assert is that retracting the source's
+        // payload walk left `W`'s `String` with an owner.
+        assert_clean_asan_run(
+            &format!(
+                "{DECLS}\
+                 fn main() {{\n\
+                 \x20   {{ let a: Option[D] = Option.Some(D {{ id: 6 }}); let b = idOpt(a); match b {{ Option.Some(v) => {{ println(f\"g{{v.id}}\") }} Option.None => {{ println(\"none\") }} }} }}\n\
+                 \x20   {{ let a: Option[W] = Option.Some(W {{ id: 7, s: \"ssssssss\" }}); let b = idOpt(a); match b {{ Option.Some(v) => {{ println(f\"g{{v.id}}\") }} Option.None => {{ println(\"none\") }} }} }}\n\
+                 \x20   {{ let a: Option[W] = Option.Some(W {{ id: 8, s: \"tttttttt\" }}); let b = idOpt(a); }}\n\
+                 \x20   println(\"end\");\n\
+                 }}\n"
+            ),
+            &["g6", "dD6", "g7", "dW7", "dW8", "end"],
+            "b91708-drop-payloads",
+        );
+    }
 }

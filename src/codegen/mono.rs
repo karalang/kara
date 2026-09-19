@@ -151,6 +151,39 @@ pub(super) struct SavedVarSideTables<'ctx> {
     atomic_var_inner_is_bool: std::collections::HashSet<String>,
     owned_vecstr_params: std::collections::HashSet<String>,
     closure_fn_types: HashMap<String, inkwell::types::FunctionType<'ctx>>,
+    /// B-2026-09-17-8 — the nine PAYLOAD-OWNERSHIP registries. Every one of
+    /// them is `clear()`ed at the mono body entry (`compile_mono_function`,
+    /// beside `binding_layouts` and `soa_return_locals`) and none of them was
+    /// ever swapped out here, so the clear was ONE-WAY: compiling any
+    /// monomorph mid-caller wiped that caller's registries for the rest of the
+    /// caller.
+    ///
+    /// The measured symptom was a double free. `let back = idOpt(a);` over
+    /// `fn idOpt[T](g: Option[T]) -> Option[T] { return g }` records
+    /// `passthrough_owner_alias[back] = a` and registers no owner for `back`,
+    /// on B-2026-08-06-27's rule that the source stays sole owner — but only
+    /// if `a` is still in `inline_option_payload_vars` when the `let` compiles.
+    /// The monomorph compiled for that very call had emptied the set, so
+    /// `call_passthrough_armed_inline_source` answered `None`, no alias was
+    /// recorded, and `back` took a second ownership registration over `a`'s
+    /// payload. The non-generic twin is clean for exactly one reason: nothing
+    /// clears the set.
+    ///
+    /// They belong in the bundle rather than at the two call sites because
+    /// both nested-compile entry points already route through
+    /// `take_var_side_tables` / `restore_var_side_tables`, so one place covers
+    /// both — and the next registry added to the mono-entry clear is more
+    /// likely to be noticed here than in two lists 800 lines apart.
+    inline_option_payload_vars: std::collections::HashSet<String>,
+    inline_result_payload_vars: std::collections::HashSet<String>,
+    inline_option_map_payload_vars: std::collections::HashSet<String>,
+    inline_option_agg_payload_vars: std::collections::HashSet<String>,
+    inline_result_agg_payload_vars: std::collections::HashSet<String>,
+    boxed_enum_payload_vars: std::collections::HashSet<String>,
+    boxed_optres_payload_view_vars: HashMap<String, inkwell::values::PointerValue<'ctx>>,
+    arm_array_payload_unowned_interior: std::collections::HashSet<String>,
+    deboxed_payload_box_ptrs:
+        HashMap<inkwell::values::PointerValue<'ctx>, inkwell::values::PointerValue<'ctx>>,
 }
 
 impl<'ctx> super::Codegen<'ctx> {
@@ -1626,6 +1659,32 @@ impl<'ctx> super::Codegen<'ctx> {
             atomic_var_inner_is_bool: std::mem::take(&mut self.atomic_var_inner_is_bool),
             owned_vecstr_params: std::mem::take(&mut self.borrow_vars.owned_vecstr_params),
             closure_fn_types: std::mem::take(&mut self.closure_state.closure_fn_types),
+            // B-2026-09-17-8 — see the field comments.
+            inline_option_payload_vars: std::mem::take(
+                &mut self.payload_vars.inline_option_payload_vars,
+            ),
+            inline_result_payload_vars: std::mem::take(
+                &mut self.payload_vars.inline_result_payload_vars,
+            ),
+            inline_option_map_payload_vars: std::mem::take(
+                &mut self.payload_vars.inline_option_map_payload_vars,
+            ),
+            inline_option_agg_payload_vars: std::mem::take(
+                &mut self.payload_vars.inline_option_agg_payload_vars,
+            ),
+            inline_result_agg_payload_vars: std::mem::take(
+                &mut self.payload_vars.inline_result_agg_payload_vars,
+            ),
+            boxed_enum_payload_vars: std::mem::take(&mut self.payload_vars.boxed_enum_payload_vars),
+            boxed_optres_payload_view_vars: std::mem::take(
+                &mut self.payload_vars.boxed_optres_payload_view_vars,
+            ),
+            arm_array_payload_unowned_interior: std::mem::take(
+                &mut self.payload_vars.arm_array_payload_unowned_interior,
+            ),
+            deboxed_payload_box_ptrs: std::mem::take(
+                &mut self.payload_vars.deboxed_payload_box_ptrs,
+            ),
         }
     }
 
@@ -1651,6 +1710,17 @@ impl<'ctx> super::Codegen<'ctx> {
         self.atomic_var_inner_is_bool = saved.atomic_var_inner_is_bool;
         self.borrow_vars.owned_vecstr_params = saved.owned_vecstr_params;
         self.closure_state.closure_fn_types = saved.closure_fn_types;
+        // B-2026-09-17-8 — see the field comments.
+        self.payload_vars.inline_option_payload_vars = saved.inline_option_payload_vars;
+        self.payload_vars.inline_result_payload_vars = saved.inline_result_payload_vars;
+        self.payload_vars.inline_option_map_payload_vars = saved.inline_option_map_payload_vars;
+        self.payload_vars.inline_option_agg_payload_vars = saved.inline_option_agg_payload_vars;
+        self.payload_vars.inline_result_agg_payload_vars = saved.inline_result_agg_payload_vars;
+        self.payload_vars.boxed_enum_payload_vars = saved.boxed_enum_payload_vars;
+        self.payload_vars.boxed_optres_payload_view_vars = saved.boxed_optres_payload_view_vars;
+        self.payload_vars.arm_array_payload_unowned_interior =
+            saved.arm_array_payload_unowned_interior;
+        self.payload_vars.deboxed_payload_box_ptrs = saved.deboxed_payload_box_ptrs;
     }
 
     /// B-2026-08-15-7 — the CONTAINER sibling of
@@ -2180,6 +2250,54 @@ impl<'ctx> super::Codegen<'ctx> {
                 });
             if param_box_handed_back {
                 self.suppress_inline_option_agg_binding_transfer(&a.value);
+            }
+            // B-2026-09-17-8 — the BODIES half of a by-value argument the
+            // callee hands back, which `compile_call` has performed since
+            // B-2026-08-09-15 and this path never did.
+            //
+            // `let back = idOpt(a);` over `fn idOpt[T](g: Option[T]) ->
+            // Option[T] { return g }` leaves the payload's user `Drop` body
+            // registered against BOTH `a` and `back`, and both fire at their
+            // own live-range ends: `dD / drop 21 / dD` against the
+            // interpreter's `drop 21 / dD`, with the first `dD` landing
+            // immediately after the call. The non-generic twin is clean for
+            // one reason only — it goes through `compile_call`, which retracts
+            // the source's walk right here.
+            //
+            // The MEMORY half is deliberately NOT ported with it. Over there
+            // the same block goes on to retract the binding's own wrapper (and
+            // sometimes its memory) for an entry-copied or forwarded param;
+            // here the memory channel is already balanced once the payload
+            // registries survive the nested compile, and every cell is
+            // valgrind- and LSan-clean without it. Porting the rest would be
+            // changing a channel that is not broken, on a path whose
+            // measurements are all of the body.
+            //
+            // Same predicates as `compile_call`'s gate, so the two call paths
+            // answer the same question of the same callee: a whole hand-off
+            // retracts the walk outright, and a callee that hands out only
+            // SOME variants' payloads gets the walker re-emitted with those
+            // variants masked (B-2026-09-05-35). Conservative-true on a
+            // mixed-path callee, which is that gate's documented trade —
+            // leak-of-side-effect on the dies-inside leg, never a double body.
+            if !self.borrowed_arg_skip(name, i) {
+                let payload_escape = self.callee_enum_arg_payload_escape(name, i);
+                let whole_escape = self.call_arg_flows_into_return(name, i)
+                    || self.callee_hands_arg_off(name, i)
+                    || self.call_arg_moves_into_outliving_place(name, i, false)
+                    || self.callee_always_hands_arg_back_via_call(name, i);
+                if whole_escape || payload_escape.is_some() {
+                    if let ExprKind::Identifier(var_name) = &a.value.kind {
+                        let var_name = var_name.clone();
+                        match (&payload_escape, whole_escape) {
+                            (Some((en, vs)), false) => {
+                                let skip = self.enum_payload_skip_for_variants(en, vs);
+                                self.mask_enum_payload_bodies_for_var(&var_name, en, &skip);
+                            }
+                            _ => self.suppress_container_elem_bodies_for_var(&var_name),
+                        }
+                    }
+                }
             }
             // B-2026-09-17-7 — the MIXED-PATH sibling of the arm above, which
             // that arm declines BY DESIGN and which double frees as a result.
