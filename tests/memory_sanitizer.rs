@@ -11081,6 +11081,110 @@ fn main() {
         assert_eq!(out, "dVe\nfstr[payloadpayload0]\ndVe\nnamed[payloadpayload0]\ndVe\ndVe\nlet[payloadpayload0]\ndVe\nescape[payloadpayload0]\ndVe\nfstr[payloadpayload1]\ndVe\nnamed[payloadpayload1]\ndVe\ndVe\nlet[payloadpayload1]\ndVe\nescape[payloadpayload1]\ndVe\nfstr[payloadpayload2]\ndVe\nnamed[payloadpayload2]\ndVe\ndVe\nlet[payloadpayload2]\ndVe\nescape[payloadpayload2]\ntotal 45\nend\n", "unexpected transcript:\n{out}");
     }
 
+    /// B-2026-09-15-29 — the `if let` sibling of the two rows above, split out
+    /// at B-2026-09-02-31's close because that fix's only consuming read site
+    /// is inside `compile_match`.
+    ///
+    /// WHAT WAS ACTUALLY MISSING, which is not what the row guessed. The row
+    /// asks whether `compile_if_let` needs the same discriminator or a
+    /// different one, and warns that "something else is declining the owner
+    /// here". It is the same discriminator, and nothing else declines it: the
+    /// then-arm DOES produce an owner record, and
+    /// `own_escaping_tail_value_at` then throws it away because the frame the
+    /// record names is the arm's OWN frame, which the hand-rolled
+    /// `drain_top_frame_with_emit` a few lines earlier has already popped. The
+    /// `match` path reaches the identical state and survives it only because
+    /// B-2026-09-02-31 gave it `rehome_drained_frame`; the `if let` site passes
+    /// that argument as a hard `false`. So the fix is the re-home gate, not a
+    /// new record and not a new channel.
+    ///
+    /// THE GATE'S FIRST DISJUNCT DOES NOT TRANSPLANT. The match's
+    /// `arm_pending_is_block || !match_escapes_fn` cannot be copied verbatim:
+    /// this arm compiles through a plain `compile_block`, never through
+    /// `compile_block_with_frame`, so its record always arrives on the bare
+    /// `vecstr_source_disarmed` channel and `arm_pending_is_block` would be a
+    /// constant `false`. What remains is the escaping-set lookup itself.
+    ///
+    /// AND THAT LOOKUP IS LOAD-BEARING — measured, not argued. Replacing it
+    /// with `true` leaves EVERY leg of this fixture clean, including
+    /// `deboxIfLet`, so a single-level escaping control proves nothing here.
+    /// The program that catches it is the GENERIC one: with the gate dropped,
+    /// `getIfLet[T]` fails to compile at all, with
+    /// `Module verification failed: "Instruction does not dominate all uses!"`
+    /// on `%branchown` — the verifier catching the premature free before it can
+    /// run, exactly as B-2026-09-02-31 records for its own monomorph hole. That
+    /// is why `generic` and `genericvec` are legs of this fixture rather than a
+    /// note in its prose.
+    ///
+    /// LEGS. Three that leaked (`fstr`, the `sink(…)` call argument, `named`),
+    /// the `Vec`-payload leg folded into `total`, and four controls: `let`
+    /// (destination owns it, always clean), `escape` (`deboxIfLet`), `step`
+    /// (the `while let` shape, which the row lists as unmeasured and which was
+    /// already clean), and the two `getIfLet` monomorphs above.
+    ///
+    /// NON-VACUITY, measured against the parent commit's `src/` with `tests/`
+    /// kept at HEAD and a `grep -c` of this row's id printed as a guard either
+    /// side (0 -> 1): `AddressSanitizer: 186 byte(s) leaked in 9 allocation(s)`.
+    /// Nine is the three `String` legs times the three iterations; the aggregate
+    /// is quoted rather than split per leg because LSan reports it as one
+    /// number and this fixture is what produces it.
+    #[test]
+    fn asan_nested_if_let_owns_its_moved_out_payload() {
+        let Some((out, status)) = run_under_asan(
+            r#"enum Ve { A(String), B }
+impl Drop for Ve { fn drop(mut ref self) { println("dVe") } }
+fn mkVe(n: i64) -> Ve { return Ve.A(f"payloadpayload{n}") }
+fn sink(s: String) -> i64 { return s.len() }
+
+enum Vv { A(Vec[i64]), B }
+fn mkVv(n: i64) -> Vv { let mut v: Vec[i64] = Vec.new(); v.push(n); v.push(n + 1); v.push(n + 2); v.push(n + 3); return Vv.A(v) }
+
+fn mkStep(n: i64) -> Ve { if n >= 3 { return Ve.B } return Ve.A(f"steppayload{n}") }
+
+#[allow(partial_move_of_drop_enum)]
+fn deboxIfLet(v: Ve) -> String { if let Ve.A(s) = v { s } else { "none".to_string() } }
+
+enum Opt[T] { Yes(T), No }
+fn getIfLet[T](o: Opt[T], d: T) -> T { if let Opt.Yes(v) = o { v } else { d } }
+
+#[allow(partial_move_of_drop_enum)]
+fn main() {
+    let mut i = 0;
+    let mut total = 0;
+    while i < 3 {
+        println(f"fstr[{if let Ve.A(s) = mkVe(i) { s } else { "none".to_string() }}]");
+        total = total + sink(if let Ve.A(s) = mkVe(i) { s } else { "none".to_string() });
+        let v = mkVe(i);
+        println(f"named[{if let Ve.A(s) = v { s } else { "none".to_string() }}]");
+        let out = if let Ve.A(s) = mkVe(i) { s } else { "none".to_string() };
+        println(f"let[{out}]");
+        println(f"escape[{deboxIfLet(mkVe(i))}]");
+        total = total + (if let Vv.A(w) = mkVv(i) { w } else { Vec.new() }).len();
+        i = i + 1;
+    }
+    let mut j = 0;
+    while let Ve.A(s) = mkStep(j) {
+        println(f"step[{s}]");
+        j = j + 1;
+    }
+    let g = getIfLet(Opt.Yes("genericpayload".to_string()), "d".to_string());
+    println(f"generic[{g}]");
+    let mut gv: Vec[i64] = Vec.new();
+    gv.push(7);
+    gv.push(8);
+    println(f"genericvec[{getIfLet(Opt.Yes(gv), Vec.new()).len()}]");
+    println(f"total {total}");
+    println("end");
+}
+"#,
+            "asan_nested_if_let_owns_its_moved_out_payload",
+        ) else {
+            return;
+        };
+        assert!(status.success(), "ASAN/LSan reported a problem:\n{out}");
+        assert_eq!(out, "dVe\nfstr[payloadpayload0]\ndVe\nnamed[payloadpayload0]\ndVe\ndVe\nlet[payloadpayload0]\ndVe\nescape[payloadpayload0]\ndVe\nfstr[payloadpayload1]\ndVe\nnamed[payloadpayload1]\ndVe\ndVe\nlet[payloadpayload1]\ndVe\nescape[payloadpayload1]\ndVe\nfstr[payloadpayload2]\ndVe\nnamed[payloadpayload2]\ndVe\ndVe\nlet[payloadpayload2]\ndVe\nescape[payloadpayload2]\nstep[steppayload0]\ndVe\nstep[steppayload1]\ndVe\nstep[steppayload2]\ndVe\ndVe\ngeneric[genericpayload]\ngenericvec[2]\ntotal 57\nend\n", "unexpected transcript:\n{out}");
+    }
+
     /// B-2026-08-31-19 — the memory half of teaching codegen to render an
     /// `Array[T, N]`.
     ///

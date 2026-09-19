@@ -725,7 +725,47 @@ impl<'ctx> super::Codegen<'ctx> {
             if let (Some(span), Some(v)) = (self.current_branch_expr_span, then_val) {
                 let pending = then_disarmed;
                 if own_value && !arms_all_mint {
-                    self.register_pending_arm_owner(pending, v, span, Some(pre_branch_bb));
+                    // B-2026-09-15-29 — the `if let` sibling of B-2026-09-02-31,
+                    // and the re-home gate is what this arm was missing rather
+                    // than the discriminator: the record IS produced here
+                    // (measured `pending = Some((elem_ty, frame 2))`), and
+                    // `own_escaping_tail_value_at` then declines it because
+                    // frame 2 is this arm's OWN frame, drained by the
+                    // `drain_top_frame_with_emit` a few lines above. In a nested
+                    // expression position — `(if let Ve.A(s) = mkVe(i) { s }
+                    // else { .. }).len()` — nothing downstream registers an
+                    // owner either, so the moved-out payload was freed by
+                    // nobody: 310 B in 20 blocks at `-O0`, against a clean
+                    // `match` spelling of the same program.
+                    //
+                    // Same three conditions as the match arm's `arm_rehome`,
+                    // minus its first disjunct. `arm_pending_is_block` has no
+                    // meaning here: this arm hand-rolls its frame against a
+                    // plain `compile_block` (the B-2026-08-27-34 note above),
+                    // so it never reports through `compile_block_with_frame`'s
+                    // `arm_pending_tail_owner` and its record always comes from
+                    // the bare `vecstr_source_disarmed` channel. What remains is
+                    // the discriminator that fix added — the construct's value
+                    // must not BE the function's return value, or re-homing
+                    // frees it inside the callee — plus the `Option[shared]`
+                    // tail guard and the variant-payload requirement, which is
+                    // what keeps a whole-value rebind (already owned
+                    // downstream) out.
+                    let iflet_escapes_fn = self
+                        .pattern_state
+                        .fn_escaping_branch_spans
+                        .contains(&crate::resolver::SpanKey::from_span(&value.span));
+                    let rehome = !iflet_escapes_fn
+                        && tail.is_none()
+                        && self.variant_pattern_enum_name(pattern).is_some();
+                    self.register_pending_arm_owner_at(
+                        pending,
+                        v,
+                        span,
+                        Some(pre_branch_bb),
+                        None,
+                        rehome,
+                    );
                 }
             }
         } else {
