@@ -71466,3 +71466,51 @@ fn test_method_projection_arg_runs_one_body() {
         assert_eq!(run(&src), format!("{want}end\n"), "[{label}]");
     }
 }
+
+/// B-2026-09-17-31 — the interpreter half of the method-call payload-part
+/// stand-down, and the half that actually moved: every `method-*` cell below
+/// printed the handed-out part's body and NOT the untouched sibling's, where
+/// `free-fn` — the identical body as a free function — was correct. The
+/// compiled twin is `tests/codegen.rs`'s
+/// `e2e_method_call_keeps_an_unmoved_payload_parts_drop_body`, which asserts
+/// the same shapes against both backends.
+///
+/// `ctl-whole` is the control with teeth: the callee returns the ARGUMENT, so
+/// the whole-argument stand-down the fix narrows must still fire, and both
+/// bodies must stay with the result rather than doubling here.
+#[test]
+fn test_method_call_keeps_an_unmoved_payload_parts_drop_body() {
+    let out = run(r#"struct R { id: i64 }
+impl Drop for R { fn drop(mut ref self) { println(f"  dR{self.id}") } }
+struct Q { r: R, s: R }
+struct H { n: i64 }
+impl H {
+  fn mref(ref self, o: Option[(R, R)]) -> R { match o { Option.Some(t) => { return t.0 } Option.None => { return R { id: 0 } } } }
+  fn mown(self, o: Option[(R, R)]) -> R { match o { Option.Some(t) => { return t.0 } Option.None => { return R { id: 0 } } } }
+  fn mres(ref self, o: Result[(R, R), i64]) -> R { match o { Result.Ok(t) => { return t.0 } Result.Err(e) => { return R { id: 0 } } } }
+  fn msnd(ref self, o: Option[(R, R)]) -> R { match o { Option.Some(t) => { return t.1 } Option.None => { return R { id: 0 } } } }
+  fn mstr(ref self, o: Option[Q]) -> R { match o { Option.Some(t) => { return t.r } Option.None => { return R { id: 0 } } } }
+  fn mdes(ref self, o: Option[(R, R)]) -> R { match o { Option.Some((a, b)) => { return a } Option.None => { return R { id: 0 } } } }
+  fn mnom(ref self, o: Option[(R, R)]) { match o { Option.Some(t) => { println("  mid") } Option.None => { println("  n") } } }
+  fn mwho(ref self, o: Option[(R, R)]) -> Option[(R, R)] { return o }
+}
+struct A {}
+impl A { fn atup(o: Option[(R, R)]) -> R { match o { Option.Some(t) => { return t.0 } Option.None => { return R { id: 0 } } } } }
+fn ffn(o: Option[(R, R)]) -> R { match o { Option.Some(t) => { return t.0 } Option.None => { return R { id: 0 } } } }
+
+fn main() {
+  println("free-fn");       { let g = ffn(Option.Some((R { id: 5 }, R { id: 6 }))); println(f"  got{g.id}") } println("  out")
+  println("method-ref");    { let h = H { n: 1 }; let g = h.mref(Option.Some((R { id: 5 }, R { id: 6 }))); println(f"  got{g.id}") } println("  out")
+  println("method-owned");  { let h = H { n: 1 }; let g = h.mown(Option.Some((R { id: 5 }, R { id: 6 }))); println(f"  got{g.id}") } println("  out")
+  println("method-result"); { let h = H { n: 1 }; let g = h.mres(Result.Ok((R { id: 5 }, R { id: 6 }))); println(f"  got{g.id}") } println("  out")
+  println("method-second"); { let h = H { n: 1 }; let g = h.msnd(Option.Some((R { id: 5 }, R { id: 6 }))); println(f"  got{g.id}") } println("  out")
+  println("method-struct"); { let h = H { n: 1 }; let g = h.mstr(Option.Some(Q { r: R { id: 5 }, s: R { id: 6 } })); println(f"  got{g.id}") } println("  out")
+  println("method-destr");  { let h = H { n: 1 }; let g = h.mdes(Option.Some((R { id: 5 }, R { id: 6 }))); println(f"  got{g.id}") } println("  out")
+  println("ctl-nomove");    { let h = H { n: 1 }; h.mnom(Option.Some((R { id: 5 }, R { id: 6 }))) } println("  out")
+  println("ctl-whole");     { let h = H { n: 1 }; let g = h.mwho(Option.Some((R { id: 5 }, R { id: 6 }))); println("  kept") } println("  out")
+  println("ctl-assoc");     { let g = A.atup(Option.Some((R { id: 5 }, R { id: 6 }))); println(f"  got{g.id}") } println("  out")
+  println("end")
+}
+"#);
+    assert_eq!(out, "free-fn\n  dR6\n  got5\n  dR5\n  out\nmethod-ref\n  dR6\n  got5\n  dR5\n  out\nmethod-owned\n  dR6\n  got5\n  dR5\n  out\nmethod-result\n  dR6\n  got5\n  dR5\n  out\nmethod-second\n  dR5\n  got6\n  dR6\n  out\nmethod-struct\n  dR6\n  got5\n  dR5\n  out\nmethod-destr\n  dR6\n  got5\n  dR5\n  out\nctl-nomove\n  mid\n  dR5\n  dR6\n  out\nctl-whole\n  dR5\n  dR6\n  kept\n  out\nctl-assoc\n  dR6\n  got5\n  dR5\n  out\nend\n", "got:\n{out}");
+}

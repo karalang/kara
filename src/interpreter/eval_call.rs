@@ -4713,6 +4713,35 @@ impl<'a> super::Interpreter<'a> {
         self.callee_owns_arg_beyond_call_impl(callee_name, method_owner, i, variant, false)
     }
 
+    /// B-2026-09-17-31 — is `te` an `Option` / `Result`, i.e. a parameter
+    /// whose payload is classified and masked PART BY PART rather than as a
+    /// whole?
+    ///
+    /// The free-function path is the existence proof that the coarse
+    /// return-type test adds nothing for this param shape: it never consults
+    /// that test, reaches its answer through the structural walks plus
+    /// `mask_optres_payload_escaping_parts` / `_consumed_parts`, and is
+    /// correct for a TUPLE payload and a named-STRUCT payload alike. The
+    /// method path consulted it and lost the untouched part's only body on
+    /// both.
+    ///
+    /// No variant is in hand here, so the answer is by HEAD only. Declining
+    /// the type-level stand-down is the conservative direction: a callee that
+    /// really hands the whole argument back is still caught structurally, by
+    /// `fn_returns_param` and its siblings below.
+    fn optres_param_is_part_classified(te: &crate::ast::TypeExpr) -> bool {
+        let crate::ast::TypeKind::Path(path) = &te.kind else {
+            return false;
+        };
+        let Some(head) = path.segments.last() else {
+            return false;
+        };
+        if head != "Option" && head != "Result" {
+            return false;
+        }
+        true
+    }
+
     fn callee_owns_arg_beyond_call_impl(
         &self,
         callee_name: &str,
@@ -4750,11 +4779,39 @@ impl<'a> super::Interpreter<'a> {
                     // and lost `a`'s body, and the `continue` it triggers
                     // skipped the named-local mask below, so `h.m_ret(t)` ran
                     // the handed-out element's body twice.
-                    let tuple_param = f
-                        .params
-                        .get(i)
-                        .is_some_and(|p| matches!(p.ty.kind, crate::ast::TypeKind::Tuple(_)));
-                    (!tuple_param && !crate::ast::owned_self_return_is_opaque_to_receiver(f, probe))
+                    // B-2026-09-17-31 — and not for an `Option`/`Result`
+                    // param whose PAYLOAD is a tuple, for the identical
+                    // reason one level in. Its parts are classified
+                    // separately by `optres_payload_escapes_only_some_parts`
+                    // and masked one at a time by
+                    // `mask_optres_payload_escaping_parts`, so this
+                    // type-level test is strictly coarser than the channel
+                    // that owns the question. `fn eat(ref self, o:
+                    // Option[(R, R)]) -> R { match o { Some(t) => return t.0
+                    // } }` returns `R`, which is not opaque, so the whole
+                    // argument stood down; the `continue` it triggers is
+                    // ahead of the part-precise walk, so element 1's body ran
+                    // NOWHERE in the interpreter while the free-function
+                    // spelling of the same body was correct. The part channel
+                    // re-asks this guard through `_ignoring_payload`, which
+                    // is why the relaxation has to happen HERE and not at the
+                    // call site: with the return-type test firing, the
+                    // payload escape is never the "sole reason" that channel
+                    // requires.
+                    //
+                    // The structural walks below are untouched, so a method
+                    // that really does hand the whole argument back --
+                    // `return o`, a ctor wrap of it, a store into an
+                    // outliving place -- still stands the walk down through
+                    // `fn_returns_param` and its siblings. What is given up
+                    // is only the TYPE-LEVEL catch-all, for the one param
+                    // shape that has a finer answer.
+                    let parted_param = f.params.get(i).is_some_and(|p| {
+                        matches!(p.ty.kind, crate::ast::TypeKind::Tuple(_))
+                            || Self::optres_param_is_part_classified(&p.ty)
+                    });
+                    (!parted_param
+                        && !crate::ast::owned_self_return_is_opaque_to_receiver(f, probe))
                         // The one shape the compiled backends keep INSIDE the
                         // callee: the parameter handed to a local aggregate,
                         // which owns it from there. Firing caller-side as well

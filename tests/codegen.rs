@@ -38956,6 +38956,216 @@ fn main() {
         }
     }
 
+    /// B-2026-09-17-31 — A METHOD CALL KEEPS AN UNMOVED PAYLOAD PART'S `Drop`
+    /// BODY, WHERE THE FREE-FUNCTION SPELLING OF THE SAME BODY ALWAYS DID.
+    ///
+    /// `h.eat(Some((R { id: 5 }, R { id: 6 })))` over
+    /// `fn eat(ref self, o: Option[(R, R)]) -> R { match o { Some(t) => { return t.0; } .. } }`
+    /// printed `got:5 dR5 end` under `--interp` against the three compiled
+    /// surfaces' correct `dR6 got:5 dR5 end`. Element 1 is never moved out and
+    /// nothing else can own it, so exactly one body is owed; the interpreter
+    /// ran zero. The identical FREE function was correct on all four.
+    ///
+    /// THE ROW'S DIRECTION HAD FLIPPED BY THE TIME IT WAS FIXED. It was filed
+    /// as an AGREED loss on all four surfaces -- invisible to the kata A/B
+    /// rule, which is the only automatic check on this class -- and
+    /// B-2026-09-17-30's fix moved the three compiled surfaces to correct
+    /// without moving the interpreter, turning it into an ordinary run-vs-build
+    /// divergence. Re-rated at close; the fix site moved from codegen to the
+    /// interpreter with it.
+    ///
+    /// MECHANISM: `run_fresh_temp_arg_drops` stands a whole argument down when
+    /// `callee_owns_arg_beyond_call` says the callee keeps it past the call,
+    /// and B-2026-09-03-7 gave the METHOD path an extra, TYPE-LEVEL disjunct:
+    /// a return type that could carry the argument out licenses the
+    /// stand-down, because the structural walks miss a constructor wrap
+    /// (`return Option.Some(r)`). `-> R` is such a type, so the whole argument
+    /// stood down and the `continue` it triggers sits AHEAD of the part-precise
+    /// walk, leaving nothing to mask. B-2026-09-05-33 had already carved a bare
+    /// TUPLE parameter out of that test for the identical reason one level out;
+    /// the repair carves out an `Option`/`Result` parameter too. The free path
+    /// is the existence proof that nothing is lost by it: that path never
+    /// consults the type-level test, reaches its answer structurally plus
+    /// `mask_optres_payload_escaping_parts`, and is correct for both payload
+    /// shapes.
+    ///
+    /// THE CELLS ARE THE ROW'S OWN "NOT MEASURED" LIST and every one was
+    /// wrong: the OWNED-`self` receiver, the `Result` head, and the
+    /// struct-payload spelling the row named as its boundary. `second` and
+    /// `destr` are two more arm spellings through the same gate.
+    ///
+    /// THE THREE CONTROLS ARE BYTE-IDENTICAL BEFORE AND AFTER. `nomove` moves
+    /// nothing, so the gate must never be reached. `whole` returns the
+    /// argument ITSELF, which is the shape the stand-down exists for -- the
+    /// structural `fn_returns_param` still catches it, and both bodies stay
+    /// with the result. `assoc` is an associated function, whose caller-side
+    /// walk was already correct.
+    ///
+    /// BODY-ONLY, so no sanitizer leg sees it.
+    ///
+    /// The INTERPRETER twin is `tests/interpreter.rs`'s
+    /// `test_method_call_keeps_an_unmoved_payload_parts_drop_body`, the half
+    /// that actually moved.
+    #[test]
+    fn e2e_method_call_keeps_an_unmoved_payload_parts_drop_body() {
+        const R: &str = "struct R { id: i64 }\n\
+             impl Drop for R { fn drop(mut ref self) { println(f\"dR{self.id}\") } }\n";
+        const ARG: &str = "Some((R { id: 5 }, R { id: 6 }))";
+        // (label, source, expectation -- both backends, all four surfaces)
+        for (label, prog, want) in [
+            (
+                "the row's cell: ref self, Option head",
+                format!(
+                    "{R}struct H {{ n: i64 }}\n\
+                     impl H {{ fn eat(ref self, o: Option[(R, R)]) -> R {{ match o {{ Some(t) => {{ return t.0; }} None => {{ return R {{ id: 0 }}; }} }} }} }}\n\
+                     fn main() {{ let h = H {{ n: 1 }}; let g = h.eat({ARG}); println(f\"got:{{g.id}}\"); println(\"end\") }}\n"
+                ),
+                "dR6\ngot:5\ndR5\nend\n",
+            ),
+            (
+                "owned self receiver",
+                format!(
+                    "{R}struct H {{ n: i64 }}\n\
+                     impl H {{ fn eat(self, o: Option[(R, R)]) -> R {{ match o {{ Some(t) => {{ return t.0; }} None => {{ return R {{ id: 0 }}; }} }} }} }}\n\
+                     fn main() {{ let h = H {{ n: 1 }}; let g = h.eat({ARG}); println(f\"got:{{g.id}}\"); println(\"end\") }}\n"
+                ),
+                "dR6\ngot:5\ndR5\nend\n",
+            ),
+            (
+                "Result head",
+                format!(
+                    "{R}struct H {{ n: i64 }}\n\
+                     impl H {{ fn eat(ref self, o: Result[(R, R), i64]) -> R {{ match o {{ Ok(t) => {{ return t.0; }} Err(e) => {{ return R {{ id: 0 }}; }} }} }} }}\n\
+                     fn main() {{ let h = H {{ n: 1 }}; let g = h.eat(Result.Ok((R {{ id: 5 }}, R {{ id: 6 }}))); println(f\"got:{{g.id}}\"); println(\"end\") }}\n"
+                ),
+                "dR6\ngot:5\ndR5\nend\n",
+            ),
+            (
+                "the handed-out part is index 1, so the lost one was index 0",
+                format!(
+                    "{R}struct H {{ n: i64 }}\n\
+                     impl H {{ fn eat(ref self, o: Option[(R, R)]) -> R {{ match o {{ Some(t) => {{ return t.1; }} None => {{ return R {{ id: 0 }}; }} }} }} }}\n\
+                     fn main() {{ let h = H {{ n: 1 }}; let g = h.eat({ARG}); println(f\"got:{{g.id}}\"); println(\"end\") }}\n"
+                ),
+                "dR5\ngot:6\ndR6\nend\n",
+            ),
+            (
+                "named-STRUCT payload -- the row's own boundary case",
+                format!(
+                    "{R}struct Q {{ r: R, s: R }}\n\
+                     struct H {{ n: i64 }}\n\
+                     impl H {{ fn eat(ref self, o: Option[Q]) -> R {{ match o {{ Some(t) => {{ return t.r; }} None => {{ return R {{ id: 0 }}; }} }} }} }}\n\
+                     fn main() {{ let h = H {{ n: 1 }}; let g = h.eat(Some(Q {{ r: R {{ id: 5 }}, s: R {{ id: 6 }} }})); println(f\"got:{{g.id}}\"); println(\"end\") }}\n"
+                ),
+                "dR6\ngot:5\ndR5\nend\n",
+            ),
+            (
+                "the DESTRUCTURING arm spelling of the same hand-out",
+                format!(
+                    "{R}struct H {{ n: i64 }}\n\
+                     impl H {{ fn eat(ref self, o: Option[(R, R)]) -> R {{ match o {{ Some((a, b)) => {{ return a; }} None => {{ return R {{ id: 0 }}; }} }} }} }}\n\
+                     fn main() {{ let h = H {{ n: 1 }}; let g = h.eat({ARG}); println(f\"got:{{g.id}}\"); println(\"end\") }}\n"
+                ),
+                "dR6\ngot:5\ndR5\nend\n",
+            ),
+            (
+                "control: the arm moves NOTHING, so the gate is never reached",
+                format!(
+                    "{R}struct H {{ n: i64 }}\n\
+                     impl H {{ fn eat(ref self, o: Option[(R, R)]) {{ match o {{ Some(t) => {{ println(\"mid\"); }} None => {{ println(\"n\"); }} }} }} }}\n\
+                     fn main() {{ let h = H {{ n: 1 }}; h.eat({ARG}); println(\"end\") }}\n"
+                ),
+                "mid\ndR5\ndR6\nend\n",
+            ),
+            (
+                "control: the callee returns the ARGUMENT, the shape the stand-down is for",
+                format!(
+                    "{R}struct H {{ n: i64 }}\n\
+                     impl H {{ fn eat(ref self, o: Option[(R, R)]) -> Option[(R, R)] {{ return o; }} }}\n\
+                     fn main() {{ let h = H {{ n: 1 }}; let g = h.eat({ARG}); println(\"kept\"); println(\"end\") }}\n"
+                ),
+                "dR5\ndR6\nkept\nend\n",
+            ),
+            (
+                "control: an ASSOCIATED function was already correct",
+                format!(
+                    "{R}struct A {{}}\n\
+                     impl A {{ fn eat(o: Option[(R, R)]) -> R {{ match o {{ Some(t) => {{ return t.0; }} None => {{ return R {{ id: 0 }}; }} }} }} }}\n\
+                     fn main() {{ let g = A.eat({ARG}); println(f\"got:{{g.id}}\"); println(\"end\") }}\n"
+                ),
+                "dR6\ngot:5\ndR5\nend\n",
+            ),
+            (
+                "use site: the result is DISCARDED",
+                format!(
+                    "{R}struct H {{ n: i64 }}\n\
+                     impl H {{ fn eat(ref self, o: Option[(R, R)]) -> R {{ match o {{ Some(t) => {{ return t.0; }} None => {{ return R {{ id: 0 }}; }} }} }} }}\n\
+                     fn main() {{ let h = H {{ n: 1 }}; h.eat({ARG}); println(\"after\"); println(\"end\") }}\n"
+                ),
+                "dR6\ndR5\nafter\nend\n",
+            ),
+            (
+                "use site: the result is stored in a STRUCT FIELD",
+                format!(
+                    "{R}struct B {{ v: R }}\n\
+                     struct H {{ n: i64 }}\n\
+                     impl H {{ fn eat(ref self, o: Option[(R, R)]) -> R {{ match o {{ Some(t) => {{ return t.0; }} None => {{ return R {{ id: 0 }}; }} }} }} }}\n\
+                     fn main() {{ let h = H {{ n: 1 }}; let b = B {{ v: h.eat({ARG}) }}; println(f\"in:{{b.v.id}}\"); println(\"end\") }}\n"
+                ),
+                "dR6\nin:5\ndR5\nend\n",
+            ),
+            (
+                "use site: the call is in a LOOP, so one sibling body per iteration",
+                format!(
+                    "{R}struct H {{ n: i64 }}\n\
+                     impl H {{ fn eat(ref self, o: Option[(R, R)]) -> R {{ match o {{ Some(t) => {{ return t.0; }} None => {{ return R {{ id: 0 }}; }} }} }} }}\n\
+                     fn main() {{ let h = H {{ n: 1 }}; let mut i = 0i64; while i < 2 {{ let g = h.eat({ARG}); println(f\"it:{{g.id}}\"); i = i + 1; }} println(\"end\") }}\n"
+                ),
+                "dR6\nit:5\ndR5\ndR6\nit:5\ndR5\nend\n",
+            ),
+            (
+                // B-2026-09-17-31's probe found a SECOND, unrelated loss at
+                // this use site and it is pinned rather than repaired: the
+                // method result handed straight to a consuming free function
+                // runs `sink`'s own by-value param body NOWHERE, on all four
+                // surfaces. `sink(R { .. })`, `sink(mk(2))` and
+                // `sink(<named local>)` all run it, so the trigger is the
+                // METHOD-call result specifically. Byte-identical before and
+                // after this commit on the compiled side; the interpreter's
+                // half of this cell moved only in the sibling's body (`dR6`),
+                // which is this row's fix. Filed as B-2026-09-19-56, whose
+                // sibling B-2026-09-19-57 records the different answer a
+                // HEAP-carrying payload gives at this same use site.
+                "pinned: a method result consumed by a free fn loses THAT fn's param body",
+                format!(
+                    "{R}struct H {{ n: i64 }}\n\
+                     impl H {{ fn eat(ref self, o: Option[(R, R)]) -> R {{ match o {{ Some(t) => {{ return t.0; }} None => {{ return R {{ id: 0 }}; }} }} }} }}\n\
+                     fn sink(r: R) {{ println(f\"sank:{{r.id}}\") }}\n\
+                     fn main() {{ let h = H {{ n: 1 }}; sink(h.eat({ARG})); println(\"end\") }}\n"
+                ),
+                "dR6\nsank:5\nend\n",
+            ),
+            (
+                "control: the FREE function, correct throughout",
+                format!(
+                    "{R}fn eat(o: Option[(R, R)]) -> R {{ match o {{ Some(t) => {{ return t.0; }} None => {{ return R {{ id: 0 }}; }} }} }}\n\
+                     fn main() {{ let g = eat({ARG}); println(f\"got:{{g.id}}\"); println(\"end\") }}\n"
+                ),
+                "dR6\ngot:5\ndR5\nend\n",
+            ),
+        ] {
+            let (interp_out, interp_errs, _, _) = karac::run_program_full_checked(&prog);
+            assert!(
+                interp_errs.is_empty(),
+                "[{label}] interp errored: {interp_errs:?}"
+            );
+            assert_eq!(interp_out.join(""), want, "[{label}] interpreter");
+            if let Some(aot) = run_program(&prog) {
+                assert_eq!(aot, want, "[{label}] AOT");
+            }
+        }
+    }
+
     /// B-2026-09-17-38 — A `Drop`-BEARING SIBLING PART KEEPS ITS BODY WHEN ITS
     /// PEER IS CONSUMED BY AN IN-FRAME LOCAL.
     ///
