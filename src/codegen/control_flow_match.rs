@@ -10689,9 +10689,29 @@ impl<'ctx> super::Codegen<'ctx> {
         // `fn g(s: S3)` printed `mid dR6 dR6 dR5` on every compiled backend
         // against `mid dR6 dR5` under `--interp` (the destructure spelling,
         // which never reaches this disarm, was already at one body).
+        // B-2026-09-19-14 — an arm binding over a heap-BOXED `Option`/`Result`
+        // payload is the third member of that same category, and minting here
+        // ran an UNMOVED sibling field's body twice. `t` is a bit-copy view of
+        // the box interior; the ENVELOPE's walk already covers those bodies,
+        // and B-2026-09-17-34's suppressor masks that walk per moved field at
+        // this very statement. A `$keep` walk minted on `t` is therefore a
+        // SECOND owner of every field the mask leaves alive. Measured on
+        // `Option[W]`, `W { a: R, b: R, .. }`, arm `let y = t.b`: the emitted
+        // arm called `__karac_dropbodies_W$keep0$s1(t)` and
+        // `__karac_dropelems_opt_W_v$skipW_1(o)` back to back, printing
+        // `dR7 mid dR6 dR6 end` against `dR7 mid dR6 end` under `--interp`.
+        //
+        // The guard is on the MINT only, as above, and it asks whether the
+        // ENVELOPE still owns a bodies walk rather than merely whether the
+        // binding is a view. That distinction is the whole guard: a by-value
+        // PARAM scrutinee's envelope owns no walk in the callee, so the mint
+        // there is the SOLE owner and skipping it LOSES the sibling's body --
+        // measured as `dR7 mid end` against a due `dR7 mid dR6 end` on the
+        // first draft, which keyed on the view alone.
         if !self.var_owns_struct_field_bodies(var_name)
             && (self.payload_vars.param_view_locals.contains(var_name)
-                || self.fn_ctx.current_fn_param_names.contains(var_name))
+                || self.fn_ctx.current_fn_param_names.contains(var_name)
+                || self.boxed_payload_view_envelope_owns_bodies_walk(var_name))
         {
             return;
         }
@@ -14933,6 +14953,54 @@ impl<'ctx> super::Codegen<'ctx> {
         // MEMORY.
         self.zero_boxed_payload_field_cap(slot, enum_ty, some_tag, &struct_name, field);
         true
+    }
+
+    /// B-2026-09-19-14 — whether `var_name` is an arm binding over a boxed
+    /// `Option`/`Result` payload WHOSE ENVELOPE still owns the payload's bodies
+    /// walk.
+    ///
+    /// True is exactly the condition under which minting a `$keep` walk on the
+    /// binding would create a second owner: the envelope's walk covers the same
+    /// fields, and [`Self::suppress_boxed_payload_view_field_move`] masks it per
+    /// moved field at the same statement. False for a by-value param, whose
+    /// envelope owns nothing in the callee — there the mint is the only owner.
+    fn boxed_payload_view_envelope_owns_bodies_walk(&self, var_name: &str) -> bool {
+        let Some(slot) = self
+            .payload_vars
+            .boxed_optres_payload_view_vars
+            .get(var_name)
+            .copied()
+        else {
+            return false;
+        };
+        let mut env_name: Option<String> = None;
+        for frame in self.drop_rc.scope_cleanup_actions.iter() {
+            for action in frame.iter() {
+                if let super::state::CleanupAction::BoxedEnumDrop {
+                    name, enum_slot, ..
+                } = action
+                {
+                    if *enum_slot == slot {
+                        env_name = Some(name.clone());
+                    }
+                }
+            }
+        }
+        let Some(env_name) = env_name else {
+            return false;
+        };
+        self.drop_rc.scope_cleanup_actions.iter().any(|frame| {
+            frame.iter().any(|action| {
+                matches!(
+                    action,
+                    super::state::CleanupAction::UserDrop {
+                        binding_name,
+                        kind: super::state::UserDropKind::ContainerElemBodies,
+                        ..
+                    } if *binding_name == env_name
+                )
+            })
+        })
     }
 
     /// B-2026-09-19-9 — the TUPLE-ELEMENT sibling of

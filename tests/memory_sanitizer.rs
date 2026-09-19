@@ -97501,4 +97501,121 @@ fn main() {
             "b11913-moved-mask-arm-scope-control",
         );
     }
+
+    /// B-2026-09-19-14 — an arm binding over a boxed payload must not MINT a
+    /// second bodies walk beside the envelope's.
+    ///
+    /// `Some(t) => { let y = t.b }` is a field move out of a struct payload,
+    /// so it reaches the ordinary move-out disarm, which mints a masked
+    /// `$keep` walk on any binding that holds none. `t` holds none — it is a
+    /// bit-copy VIEW of the box interior — but the ENVELOPE's walk already
+    /// covers those bodies, and B-2026-09-17-34's suppressor masks that walk
+    /// per moved field at the same statement. So the mint became a second
+    /// owner of every field the mask left alive, and the emitted arm called
+    /// `__karac_dropbodies_W$keep0$s1(t)` and
+    /// `__karac_dropelems_opt_W_v$skipW_1(o)` back to back.
+    ///
+    /// The guard asks whether the ENVELOPE still owns a bodies walk, not
+    /// merely whether the binding is a view — the `param` cell below is why.
+    ///
+    /// The cells:
+    ///
+    ///   second    the row's own spelling: two `Drop` fields, the SECOND
+    ///             moved. The unmoved first field's body is the one that
+    ///             doubled.
+    ///   first     the same with the FIRST moved, so the defect is not about
+    ///             which index survives.
+    ///   param     a by-value PARAM scrutinee, where the envelope owns no walk
+    ///             in the callee and the mint is the SOLE owner. Keying the
+    ///             guard on the view alone made this print `dQ7 mid end`,
+    ///             losing `dP6` — a lost body traded for a doubled one, which
+    ///             is the worse direction. It is the cell that shaped the fix.
+    ///   one       a single `Drop` field, where the mask empties the walk and
+    ///             an older early return already retracted the envelope's copy
+    ///             — correct before this fix, by accident of that path.
+    ///   readonly  an arm that moves nothing, where the envelope's walk is the
+    ///             sole owner of both fields and must keep running.
+    ///
+    /// Both `Drop` types are HEAP-FREE and memory is balanced throughout, so
+    /// these assert on OUTPUT rather than on byte counts. Each asserts the
+    /// interpreter's own output, which was correct on every cell here.
+    #[test]
+    fn asan_boxed_payload_view_does_not_mint_a_second_bodies_walk() {
+        const DECLS: &str = "struct P { id: i64 }\n\
+             impl Drop for P { fn drop(mut ref self) { println(f\"dP{self.id}\") } }\n\
+             struct Q { id: i64 }\n\
+             impl Drop for Q { fn drop(mut ref self) { println(f\"dQ{self.id}\") } }\n\
+             struct W { a: P, b: Q, n: i64, p: i64 }\n";
+
+        // Two Drop fields, the SECOND moved: the first field's body doubled.
+        assert_clean_asan_run(
+            &format!(
+                "{DECLS}\
+                 fn eat() {{\n\
+                 \x20   let o: Option[W] = Option.Some(W {{ a: P {{ id: 6 }}, b: Q {{ id: 7 }}, n: 2, p: 3 }});\n\
+                 \x20   match o {{ Option.Some(t) => {{ let y = t.b; println(\"mid\"); }} Option.None => {{ println(\"n\"); }} }}\n\
+                 }}\n\
+                 fn main() {{ eat(); println(\"end\"); }}\n"
+            ),
+            &["dQ7", "mid", "dP6", "end"],
+            "b11914-payload-view-second-field-moved",
+        );
+
+        // The FIRST moved, so this is not about which index survives.
+        assert_clean_asan_run(
+            &format!(
+                "{DECLS}\
+                 fn eat() {{\n\
+                 \x20   let o: Option[W] = Option.Some(W {{ a: P {{ id: 6 }}, b: Q {{ id: 7 }}, n: 2, p: 3 }});\n\
+                 \x20   match o {{ Option.Some(t) => {{ let y = t.a; println(\"mid\"); }} Option.None => {{ println(\"n\"); }} }}\n\
+                 }}\n\
+                 fn main() {{ eat(); println(\"end\"); }}\n"
+            ),
+            &["dP6", "mid", "dQ7", "end"],
+            "b11914-payload-view-first-field-moved",
+        );
+
+        // A by-value PARAM scrutinee: the mint is the SOLE owner here, so the
+        // guard must NOT fire. Correct before this fix and after it.
+        assert_clean_asan_run(
+            &format!(
+                "{DECLS}\
+                 fn eat(o: Option[W]) {{\n\
+                 \x20   match o {{ Option.Some(t) => {{ let y = t.b; println(\"mid\"); }} Option.None => {{ println(\"n\"); }} }}\n\
+                 }}\n\
+                 fn main() {{ eat(Option.Some(W {{ a: P {{ id: 6 }}, b: Q {{ id: 7 }}, n: 2, p: 3 }})); println(\"end\"); }}\n"
+            ),
+            &["dQ7", "mid", "dP6", "end"],
+            "b11914-payload-view-by-value-param",
+        );
+
+        // ONE Drop field: the mask empties the walk, which an older early
+        // return already handled. Control.
+        assert_clean_asan_run(
+            "struct P { id: i64 }\n\
+             impl Drop for P { fn drop(mut ref self) { println(f\"dP{self.id}\") } }\n\
+             struct V { a: P, n: i64, p: i64, q: i64 }\n\
+             fn eat() {\n\
+             \x20   let o: Option[V] = Option.Some(V { a: P { id: 6 }, n: 1, p: 2, q: 3 });\n\
+             \x20   match o { Option.Some(t) => { let y = t.a; println(\"mid\"); } Option.None => { println(\"n\"); } }\n\
+             }\n\
+             fn main() { eat(); println(\"end\"); }\n",
+            &["dP6", "mid", "end"],
+            "b11914-payload-view-single-drop-field-control",
+        );
+
+        // Nothing moved: the envelope's walk owes both bodies. Control.
+        assert_clean_asan_run(
+            &format!(
+                "{DECLS}\
+                 fn eat() {{\n\
+                 \x20   let o: Option[W] = Option.Some(W {{ a: P {{ id: 6 }}, b: Q {{ id: 7 }}, n: 2, p: 3 }});\n\
+                 \x20   match o {{ Option.Some(t) => {{ println(f\"mid{{t.a.id}}\"); }} Option.None => {{ println(\"n\"); }} }}\n\
+                 }}\n\
+                 fn main() {{ eat(); println(\"end\"); }}\n"
+            ),
+            &["mid6", "dQ7", "dP6", "end"],
+            "b11914-payload-view-readonly-control",
+        );
+    }
 }
