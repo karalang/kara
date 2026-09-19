@@ -97120,4 +97120,119 @@ fn main() {
             "b1734-boxed-payload-field-move-readonly-control",
         );
     }
+
+    /// B-2026-09-17-29 — a boxed `Option`/`Result` payload handed to an owning
+    /// callee from INSIDE an f-string interpolation hole.
+    ///
+    /// `consume_class` decides whether a match arm merely reads its payload
+    /// binding or hands it to a new owner, and the boxed-`Array` interior walk
+    /// (B-2026-09-14-13) is registered only for a reading arm — a consuming one
+    /// already has an owner in the callee's `make_array_param_callee_owned`
+    /// copy. Neither of the two walks that answer that question had an arm for
+    /// `ExprKind::InterpolatedStringLit`, so a call sitting in a hole fell
+    /// through their catch-alls and the arm scored borrow-only. The walk then
+    /// became a SECOND owner of every element buffer.
+    ///
+    /// The cells, and what each one is for:
+    ///
+    ///   interp    the row's own spelling, `println(f"e:{eat(a)}")` over a
+    ///             `Map[i64, Array[String, 2]]`. Aborted `free(): double free
+    ///             detected in tcache 2`, 39 allocs against 46 frees.
+    ///   nomap     the same arm with NO container — a plain
+    ///             `fn mk() -> Option[Array[String, 2]]`. This is what settles
+    ///             that the container is not the axis: it aborted identically,
+    ///             24 allocs against 32 frees, so the bug is the hand-back.
+    ///   letbound  `let n = eat(a); println(f"e:{n}")`. The SAME transfer with
+    ///             the call lifted out of the hole, which was already clean
+    ///             (24/24) and is what isolated the interpolation as the cause.
+    ///             It is here so a future narrowing cannot quietly re-blind the
+    ///             hole while this file still reports green.
+    ///   readonly  an arm that reads the array and hands it to nobody. The
+    ///             control for the opposite error: the walk is the SOLE owner
+    ///             here, so a fix that retracted it outright would leak instead.
+    ///
+    /// Each asserts the interpreter's own output, which was correct throughout.
+    #[test]
+    fn asan_boxed_array_payload_consumed_in_fstring_hole_no_double_free() {
+        const EAT: &str = "fn eat(a: Array[String, 2]) -> i64 { return a[0].len() as i64; }\n";
+
+        // The row's headline cell: the consuming call lives in a hole.
+        assert_clean_asan_run(
+            &format!(
+                "{EAT}\
+                 fn main() {{\n\
+                 \x20   let mut v: Map[i64, Array[String, 2]] = Map.new();\n\
+                 \x20   let mut i: i64 = 0i64;\n\
+                 \x20   while i < 4i64 {{ v.insert(i, [f\"row-aaaaaaaaaaaaaaaa-{{i}}\", f\"col-bbbbbbbbbbbbbbbb-{{i}}\"]); i = i + 1i64; }}\n\
+                 \x20   let mut j: i64 = 0i64;\n\
+                 \x20   while j < 2i64 {{\n\
+                 \x20       match v.remove(j) {{ Option.Some(a) => {{ println(f\"e:{{eat(a)}}\") }} Option.None => {{ println(\"n\") }} }}\n\
+                 \x20       j = j + 1i64;\n\
+                 \x20   }}\n\
+                 \x20   println(\"end\");\n\
+                 }}\n"
+            ),
+            &["e:22", "e:22", "end"],
+            "b1729-fstring-hole-consumes-array-payload-interp",
+        );
+
+        // No container anywhere — the hand-back is the axis, not the `Map`.
+        assert_clean_asan_run(
+            &format!(
+                "{EAT}\
+                 fn mk(i: i64) -> Option[Array[String, 2]] {{\n\
+                 \x20   return Option.Some([f\"row-aaaaaaaaaaaaaaaa-{{i}}\", f\"col-bbbbbbbbbbbbbbbb-{{i}}\"]);\n\
+                 }}\n\
+                 fn main() {{\n\
+                 \x20   let mut j: i64 = 0i64;\n\
+                 \x20   while j < 2i64 {{\n\
+                 \x20       match mk(j) {{ Option.Some(a) => {{ println(f\"e:{{eat(a)}}\") }} Option.None => {{ println(\"n\") }} }}\n\
+                 \x20       j = j + 1i64;\n\
+                 \x20   }}\n\
+                 \x20   println(\"end\");\n\
+                 }}\n"
+            ),
+            &["e:22", "e:22", "end"],
+            "b1729-fstring-hole-consumes-array-payload-nomap",
+        );
+
+        // The same transfer with the call lifted OUT of the hole. Clean before
+        // the fix; here so a narrowing cannot re-blind the hole unnoticed.
+        assert_clean_asan_run(
+            &format!(
+                "{EAT}\
+                 fn mk(i: i64) -> Option[Array[String, 2]] {{\n\
+                 \x20   return Option.Some([f\"row-aaaaaaaaaaaaaaaa-{{i}}\", f\"col-bbbbbbbbbbbbbbbb-{{i}}\"]);\n\
+                 }}\n\
+                 fn main() {{\n\
+                 \x20   let mut j: i64 = 0i64;\n\
+                 \x20   while j < 2i64 {{\n\
+                 \x20       match mk(j) {{ Option.Some(a) => {{ let n = eat(a); println(f\"e:{{n}}\") }} Option.None => {{ println(\"n\") }} }}\n\
+                 \x20       j = j + 1i64;\n\
+                 \x20   }}\n\
+                 \x20   println(\"end\");\n\
+                 }}\n"
+            ),
+            &["e:22", "e:22", "end"],
+            "b1729-fstring-hole-consumes-array-payload-letbound",
+        );
+
+        // The opposite-error control: nobody else takes the array, so the
+        // interior walk must STAY. A fix that retracted it outright leaks here.
+        assert_clean_asan_run(
+            "fn mk(i: i64) -> Option[Array[String, 2]] {\n\
+             \x20   return Option.Some([f\"row-aaaaaaaaaaaaaaaa-{i}\", f\"col-bbbbbbbbbbbbbbbb-{i}\"]);\n\
+             }\n\
+             fn main() {\n\
+             \x20   let mut j: i64 = 0i64;\n\
+             \x20   while j < 2i64 {\n\
+             \x20       match mk(j) { Option.Some(a) => { println(f\"e:{a[0].len()}\") } Option.None => { println(\"n\") } }\n\
+             \x20       j = j + 1i64;\n\
+             \x20   }\n\
+             \x20   println(\"end\");\n\
+             }\n",
+            &["e:22", "e:22", "end"],
+            "b1729-fstring-hole-readonly-control",
+        );
+    }
 }

@@ -345,6 +345,26 @@ fn has_consuming_sink(c: &Ctx<'_>, e: &Expr) -> bool {
                         || has_consuming_sink(c, &a.body)
                 })
         }
+        // B-2026-09-17-29 — an f-string's interpolation HOLES are ordinary
+        // expressions, and this match had no arm for them, so every hole fell
+        // into the catch-all below and read as "holds no sink".
+        //
+        // That is this module's unsafe direction, stated in its own header: a
+        // false "only-borrowed" drops a cleanup suppression and risks a DOUBLE
+        // FREE, while a false "consumed" costs at worst a leak. B-2026-08-04-11
+        // leg (a) taught the FIELD spelling about holes with a hand-rolled walk
+        // inside `binding_fields_passed_to_free_fn_arg`; this arm and the
+        // `walk_exprs` one below are the same lesson for every other shape.
+        //
+        // The hole itself is a formatted READ, not a transfer — `f"{v}"` writes
+        // into a fresh buffer and leaves `v`'s alive — so a hole whose value is
+        // merely DERIVED from the binding is not a sink. Only genuine sinks nested
+        // inside it are, which is exactly the shape the free-fn `Call` arm
+        // above uses for its entry-copied arguments.
+        ExprKind::InterpolatedStringLit(parts) => parts.iter().any(|p| match p {
+            crate::ast::ParsedInterpolationPart::Expr(x, _) => has_consuming_sink(c, x),
+            crate::ast::ParsedInterpolationPart::Text(_) => false,
+        }),
         // Everything else (literals, identifiers, paths, …) holds no sink.
         _ => false,
     }
@@ -541,6 +561,31 @@ fn walk_exprs(e: &Expr, f: &mut impl FnMut(&Expr)) {
             }
             if let Some(en) = end.as_deref() {
                 walk_exprs(en, f);
+            }
+        }
+        // B-2026-09-17-29 — the half that actually decided the row's cell.
+        //
+        // This walker backs `bindings_passed_whole_to_free_fn_arg`, whose own
+        // doc calls itself the "same blind spot, one level up" as the FIELD
+        // sibling — but the sibling walks holes by hand (B-2026-08-04-11 leg a)
+        // and this one inherited `walk_exprs`, which had no arm for them. So
+        // the whole-binding check could not see `eat(a)` inside
+        // `println(f"e:{eat(a)}")`, `arm_payload_binding_only_borrowed` scored
+        // the arm borrow-only, and the boxed-`Array` interior walk was
+        // registered for a CONSUMING arm — a second owner of every element
+        // buffer alongside the callee's own `make_array_param_callee_owned`
+        // free. Measured on `Option[Array[String, 2]]`: the interpolated
+        // spelling aborted `free(): double free detected in tcache 2` with 24
+        // allocs against 32 frees, while the let-bound `let n = eat(a);
+        // println(f"e:{n}")` ran 24/24 clean and differs in nothing else.
+        //
+        // It also un-blinds `expr_mentions`, whose miss is a closure capture a
+        // binding makes only inside a hole.
+        ExprKind::InterpolatedStringLit(parts) => {
+            for part in parts {
+                if let crate::ast::ParsedInterpolationPart::Expr(x, _) = part {
+                    walk_exprs(x, f);
+                }
             }
         }
         _ => {}
