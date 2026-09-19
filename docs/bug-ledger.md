@@ -92,7 +92,7 @@ distinguish "bugs flattening" from "we stopped writing them down."
 
 | class | total |
 |---|---|
-| run-vs-build | 438 |
+| run-vs-build | 439 |
 | miscompile | 423 |
 | leak | 376 |
 | double-free | 248 |
@@ -111,7 +111,7 @@ distinguish "bugs flattening" from "we stopped writing them down."
 | surface | total |
 |---|---|
 | codegen | 1863 |
-| interp | 478 |
+| interp | 479 |
 | typecheck | 302 |
 | other | 101 |
 | ownership | 75 |
@@ -188,7 +188,6 @@ _Generated from `bug-ledger.jsonl` by `scripts/bug-curve.py` (2026-05-20 → 202
 | B-2026-09-17-37 | 2026-09-17 | codegen | medium | A NAMED-LOCAL `Option` ARGUMENT DOUBLES A CONSUMED PAYLOAD PART'S `Drop` BODY ON EVERY COMPILED SURFACE -- `let a = Some((R { id: 5 }, 9)); eat(a);` over `fn eat(o: Option[(R, i64)]) { match o { Some(t) => { let x = t.0; println("mid"); } .. } }` prints `dR5 mid dR5 end` on JIT/AOT/AOT-at-`KARAC_AUTO_PAR=0` against the interpreter's now-correct `dR5 mid end`, while the FRESH-TEMP spelling of the identical `eat` is correct on all four surfaces | — |
 | B-2026-09-17-38 | 2026-09-17 | codegen | medium | A `Drop`-BEARING SIBLING PART IS LOST ON EVERY COMPILED SURFACE WHEN ITS PEER IS CONSUMED BY AN IN-FRAME LOCAL -- `fn eat(o: Option[(R, R)]) { match o { Some(t) => { let x = t.0; println("mid"); } .. } }` prints `dR5 mid end` on JIT/AOT/AOT-at-`KARAC_AUTO_PAR=0` against the interpreter's now-correct `dR5 mid dR6 end`, so element 1's owed body runs NOWHERE; the CONSUMED-IN-FRAME twin of B-2026-09-17-30, which reaches the same loss through an ESCAPE | — |
 | B-2026-09-18-1 | 2026-09-18 | codegen | medium | A GENERIC ENUM'S BOXED PAYLOAD STILL LOSES ITS `Drop` BODY WHEN THE ARM *CONSUMES* ITS BINDING -- `match x { Full(r) => { let z = r; .. } }` over a three-`String` payload prints `w:4 end` on JIT/AOT against `--interp`'s `w:4 dW4 end`, while the READ-ONLY twin is correct on all four since B-2026-09-14-22, so the remaining loss is the arm moving its binding into a local and `z` acquiring no body for it | — |
-| B-2026-09-19-17 | 2026-09-19 | interp | medium | A `shared enum` HELD IN A PLAIN ENUM'S PAYLOAD NEVER RELEASES UNDER `--interp`, BECAUSE THE INTERPRETER HAS NO REFCOUNT FOR ONE -- `H3.P(SMono.P(mkr(1)))` prints `d2:9` on jit / `-O0` / `-O2` since B-2026-09-17-19 and still nothing interpreted; a `shared struct` in the same position was fixed in that commit and now agrees, which isolates the gap to `Value::EnumVariant` carrying no `Arc` rather than to a missing walk | — |
 | B-2026-09-19-18 | 2026-09-19 | codegen | medium | A PLAIN STRUCT, `Vec` OR `Option` HOLDING A `shared enum` RELEASES IT AT LEXICAL SCOPE EXIT ON THE COMPILED BACKENDS AND AT THE BINDING'S LIVE-RANGE END UNDER `--interp` -- one body either way, three spellings, and design.md :866 says the interpreter's placement is the correct one; the DIRECT binding was fixed in B-2026-09-17-19 and these are one indirection out | — |
 | B-2026-09-19-19 | 2026-09-19 | interp | medium | THE INTERPRETER RUNS A `shared enum` PAYLOAD'S `Drop` BODY AT THE BLOCK'S END WHILE THE VALUE IS STILL LIVE IN A `Vec` THAT OUTLIVES IT -- `{ let s = SMono.P(mkr(1)); v.push(s) }` prints `d2:9` before `out` interpreted and after it on every compiled surface, which B-2026-09-17-19 records as a fact without filing and which that commit turns into a live divergence with a known right answer | — |
 | B-2026-09-19-21 | 2026-09-19 | codegen | medium | AN AGGREGATE-LITERAL RETURN THAT WRAPS A GENERIC ENUM PARAMETER DOUBLE FREES -- `fn wrap[T](g: G1[T], c: bool) -> H[T] { if c { return H { g: g } } return H { g: G1.N } }` prints `free(): double free detected in tcache 2` where `--interp` prints `mx 10`; B-2026-09-17-7's runtime compare declines it because the returned box word sits inside a struct rather than at word 1 of the return | — |
@@ -198,6 +197,7 @@ _Generated from `bug-ledger.jsonl` by `scripts/bug-curve.py` (2026-05-20 → 202
 | B-2026-09-19-25 | 2026-09-19 | codegen | medium | AUDIT THE REST OF THE ONE-WAY-CLEAR POPULATION THAT B-2026-09-17-8 FIXED BY CONSTRUCTION -- nine payload-ownership registries were wiped for the remainder of ANY caller that made a generic call, so every caller that used an `Option`/`Result`/boxed-payload binding after a generic call was exposed, and only the eleven shapes in that row's fixture have actually been measured | — |
 | B-2026-09-19-27 | 2026-09-19 | parser | low | THE SELF-HOSTED PARSER DOES NOT MODEL `IntegerOutOfRange` EITHER, so the token the port lexer can now produce has no consumer -- the seed folds it in six places across `exprs.rs` and `patterns.rs` (the unary-minus `i64::MIN` fold, the unsigned-suffix wrap that buys a precise range diagnostic, and both again for literal and range patterns) and `selfhost/src/parser.kara` has no arm for it at all | — |
 | B-2026-09-19-28 | 2026-09-19 | lexer | low | THE `(u64::MAX, i128::MAX]` BAND IS THE ONE THE PORT LEXER STILL CANNOT REACH -- `100000000000000000000i128` is a plain `Integer` in the seed and an `Error` in the port, because `Token.Integer` carries an i64; B-2026-09-19-26 ported the other three bands and named this one in its own close without a tracker | — |
+| B-2026-09-19-29 | 2026-09-19 | interp | medium | TWO HOLDERS BUILT FROM ONE `shared enum` BINDING RUN ITS PAYLOAD'S `Drop` BODY TWICE UNDER `--interp` AND ONCE ON EVERY COMPILED BACKEND -- `struct Hs { m: SMono }` built twice from one `s` prints `A d2:9 d2:9 ok` against `A ok d2:9`, in every one of the five holder positions, because an alias of a shared enum is a deep VALUE CLONE in this backend and there is no refcount to consult | — |
 
 ### Relocated
 
@@ -2709,6 +2709,7 @@ _Generated from `bug-ledger.jsonl` by `scripts/bug-curve.py` (2026-05-20 → 202
 | B-2026-09-19-14 | codegen | medium | moving ONE field out of a boxed struct payload runs an UNMOVED sibling's Drop body twice | 9d0f336 |
 | B-2026-09-19-15 | codegen | medium | THE EMPTY PREFIX-LITERAL SPELLING design.md SANCTIONS COMPILES ON NEITHER `Map` NOR `Set` -- `let m: Map[K, V] = Map[];` runs under `--interp` and di… | a6c3432 |
 | B-2026-09-19-16 | other | medium | `karac fmt` TURNED EVERY MAP LITERAL INTO A PARSE ERROR -- the formatter printed `["a": 1]` as a BRACE form `{\n "a": 1,\n}` that is not Kara syntax,… | a6c3432 |
+| B-2026-09-19-17 | interp | medium | A `shared enum` HELD IN A PLAIN ENUM'S PAYLOAD NEVER RELEASES UNDER `--interp`, BECAUSE THE INTERPRETER HAS NO REFCOUNT FOR ONE -- `H3.P(SMono.P(mkr(… | f32c86c |
 | B-2026-09-19-20 | codegen | low | AN INDEXED-RECEIVER METHOD WHOSE CONTAINER IS A CALL IS REFUSED BY CODEGEN -- `mk(n)[0].len()` says `indexed-receiver method 'len' requires the index… | 28132fd |
 | B-2026-09-19-26 | lexer | low | THE SELF-HOSTED LEXER DOES NOT MODEL `IntegerOutOfRange`, so a 19+ digit literal is an Error token in the port and a real token in the seed -- `18446… | 01a3dad |
 
