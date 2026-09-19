@@ -92,7 +92,7 @@ distinguish "bugs flattening" from "we stopped writing them down."
 
 | class | total |
 |---|---|
-| run-vs-build | 435 |
+| run-vs-build | 438 |
 | miscompile | 422 |
 | leak | 375 |
 | double-free | 245 |
@@ -110,8 +110,8 @@ distinguish "bugs flattening" from "we stopped writing them down."
 
 | surface | total |
 |---|---|
-| codegen | 1857 |
-| interp | 475 |
+| codegen | 1858 |
+| interp | 477 |
 | typecheck | 302 |
 | other | 101 |
 | ownership | 75 |
@@ -177,7 +177,6 @@ _Generated from `bug-ledger.jsonl` by `scripts/bug-curve.py` (2026-05-20 → 202
 | B-2026-09-17-15 | 2026-09-17 | codegen | low | A GENERIC ENUM'S `shared` PAYLOAD IS NEVER RC-RELEASED, BECAUSE THE DROP KIND IS CLASSIFIED ON THE ERASED TYPE PARAM -- `enum Box2[T] { V(T), N }` over `shared struct Sh` leaks 16 B in 1 block at `-O0` (32 B for two compared values) where the concrete `enum Et { A(Sh), B }` twin is clean since B-2026-09-10-11's fix, because `field_drop_kinds` is written ONCE PER ENUM NAME in `declare_enums` and classifies `T`, which no name-keyed set can contain; `Box2[String]` is clean, so something already resolves the instantiation for a buffer payload | — |
 | B-2026-09-17-16 | 2026-09-17 | codegen | medium | AN ARM THAT REBINDS A TUPLE `Option` PAYLOAD (`let u = t`), AND THE `let ... else` FORM, RUN THE ELEMENT `Drop` BODIES ON `--interp` AND LOSE THEM ON EVERY COMPILED SURFACE -- the two spellings B-2026-09-10-14's fix deliberately leaves alone, because both MATERIALIZE the binding and the destination it is handed to registers nothing | — |
 | B-2026-09-17-17 | 2026-09-17 | interp+codegen | medium | A TUPLE `Option` PAYLOAD HANDED TO A FREE FUNCTION FROM A READ-ONLY ARM LOSES ITS ELEMENT `Drop` BODIES ON BOTH BACKENDS -- `match o { Some(t) => eat(t) }` prints no body where the by-value callee is caller-retains, the one cell where the two ownership classifiers disagree and B-2026-09-10-14 chose the agreed answer over a divergence | — |
-| B-2026-09-17-19 | 2026-09-17 | codegen | medium | A BARE `shared enum` LOCAL RUNS ITS PAYLOAD'S `Drop` BODY UNDER `--interp` AND ON NO COMPILED BACKEND -- `let s: SMono = SMono.P(mkr(1));` over `shared enum SMono { P(R2), Q }` prints `d2:9` interpreted and nothing under jit / `-O0` / `-O2`, with memory clean on both; found as a MIS-MEASURED CONTROL in B-2026-09-10-20, which records this cell as running the body | — |
 | B-2026-09-17-20 | 2026-09-17 | interp | medium | AN ARM-BOUND PAYLOAD WHOSE ELEMENT IS ITSELF A TUPLE RUNS NO ELEMENT `Drop` BODY IN THE INTERPRETER, and both bodies on every compiled surface -- `match o { Some(t) => ... }` over `Option[((W, W), i64)]` prints `e5` interpreted against `e5 dW5 dW105` under jit / `-O0` / `-O2`. The compiled side is RIGHT (the arm binding owns the payload). Not the nested walk and not the field read: the identical nested tuple bound by a plain `let` runs both bodies interpreted, and an arm whose body never touches the payload loses them the same way. Became observable only when B-2026-09-10-21's fix let the compiled side build at all | — |
 | B-2026-09-17-21 | 2026-09-17 | codegen | medium | A `shared enum`'s BOXED NAMELESS-AGGREGATE PAYLOAD STILL STRANDS ITS INTERIOR WHEN THE PAYLOAD CAME FROM A TEMPORARY -- B-2026-09-15-10's envelope free reclaims the box and thereby CONVERTS the elements from indirectly to directly lost (`Sh.S(mka("x"))` 48/34 -> 34/0, a `while` of three 144/132 -> 132/0, two `Vec[Sh]` elements 96/80 -> 80/0), while the same programs sourcing the payload from a NAMED LOCAL reach 0/0 -- so the axis is whether a named source still owns the interior, and the parent's tag switch cannot see that because it is a fact about the construction site rather than about the box | — |
 | B-2026-09-17-22 | 2026-09-17 | codegen | medium | A `shared enum`'s UNIT VARIANT STRANDS ITS RC SHELL -- `{ let s = Sh.N; }` over `shared enum Sh { S(Array[String, 2]), N }` loses 24 B at `-O0`, which is the whole `{ i64 rc, i64 tag, i64 w0 }` heap layout rather than any payload box, byte-identical before and after B-2026-09-15-10's payload-box fix, and reproducing inside a mixed program (an A/B/N sequence reads 24 B, the same program without the `N` block reads 0) | — |
@@ -196,6 +195,9 @@ _Generated from `bug-ledger.jsonl` by `scripts/bug-curve.py` (2026-05-20 → 202
 | B-2026-09-17-38 | 2026-09-17 | codegen | medium | A `Drop`-BEARING SIBLING PART IS LOST ON EVERY COMPILED SURFACE WHEN ITS PEER IS CONSUMED BY AN IN-FRAME LOCAL -- `fn eat(o: Option[(R, R)]) { match o { Some(t) => { let x = t.0; println("mid"); } .. } }` prints `dR5 mid end` on JIT/AOT/AOT-at-`KARAC_AUTO_PAR=0` against the interpreter's now-correct `dR5 mid dR6 end`, so element 1's owed body runs NOWHERE; the CONSUMED-IN-FRAME twin of B-2026-09-17-30, which reaches the same loss through an ESCAPE | — |
 | B-2026-09-18-1 | 2026-09-18 | codegen | medium | A GENERIC ENUM'S BOXED PAYLOAD STILL LOSES ITS `Drop` BODY WHEN THE ARM *CONSUMES* ITS BINDING -- `match x { Full(r) => { let z = r; .. } }` over a three-`String` payload prints `w:4 end` on JIT/AOT against `--interp`'s `w:4 dW4 end`, while the READ-ONLY twin is correct on all four since B-2026-09-14-22, so the remaining loss is the arm moving its binding into a local and `z` acquiring no body for it | — |
 | B-2026-09-19-6 | 2026-09-19 | other | low | THE SELF-HOST LEXER ORACLE DISCARDS `Token::Error` MESSAGES, SO A DIAGNOSTIC-TEXT DIVERGENCE BETWEEN SEED AND PORT IS INVISIBLE EVEN WITH A CORPUS INPUT FOR IT | — |
+| B-2026-09-19-17 | 2026-09-19 | interp | medium | A `shared enum` HELD IN A PLAIN ENUM'S PAYLOAD NEVER RELEASES UNDER `--interp`, BECAUSE THE INTERPRETER HAS NO REFCOUNT FOR ONE -- `H3.P(SMono.P(mkr(1)))` prints `d2:9` on jit / `-O0` / `-O2` since B-2026-09-17-19 and still nothing interpreted; a `shared struct` in the same position was fixed in that commit and now agrees, which isolates the gap to `Value::EnumVariant` carrying no `Arc` rather than to a missing walk | — |
+| B-2026-09-19-18 | 2026-09-19 | codegen | medium | A PLAIN STRUCT, `Vec` OR `Option` HOLDING A `shared enum` RELEASES IT AT LEXICAL SCOPE EXIT ON THE COMPILED BACKENDS AND AT THE BINDING'S LIVE-RANGE END UNDER `--interp` -- one body either way, three spellings, and design.md :866 says the interpreter's placement is the correct one; the DIRECT binding was fixed in B-2026-09-17-19 and these are one indirection out | — |
+| B-2026-09-19-19 | 2026-09-19 | interp | medium | THE INTERPRETER RUNS A `shared enum` PAYLOAD'S `Drop` BODY AT THE BLOCK'S END WHILE THE VALUE IS STILL LIVE IN A `Vec` THAT OUTLIVES IT -- `{ let s = SMono.P(mkr(1)); v.push(s) }` prints `d2:9` before `out` interpreted and after it on every compiled surface, which B-2026-09-17-19 records as a fact without filing and which that commit turns into a live divergence with a known right answer | — |
 
 ### Relocated
 
@@ -2681,6 +2683,7 @@ _Generated from `bug-ledger.jsonl` by `scripts/bug-curve.py` (2026-05-20 → 202
 | B-2026-09-17-10 | codegen | medium | e312de9cd's SEEDED-CTOR SOURCE DISARM STRANDS THE INTERIOR WHEN THE CONSUMER IS A GENERIC CALLEE -- `fn takesG[T](x: Option[Array[T, 2]])` over a nam… | 52abf6a |
 | B-2026-09-17-9 | codegen | medium | B-2026-09-17-4's FIX LEAKS THE SAME BUFFERS IT STOPPED DOUBLE-FREEING, WHEN THE CONSUMER IS A GENERIC CALLEE -- `e312de9` narrowed `disarm_array_sour… | 52abf6a |
 | B-2026-09-17-18 | other | medium | A FIX SHA AN ORPHANING REBASE LEFT BEHIND STILL RESOLVES, SO B-2026-09-16-8's FIX CANNOT SEE THE CASE IT WAS WRITTEN FOR -- `3b2a932` narrowed `bug-l… | cbe88b6 |
+| B-2026-09-17-19 | codegen | medium | A BARE `shared enum` LOCAL RUNS ITS PAYLOAD'S `Drop` BODY UNDER `--interp` AND ON NO COMPILED BACKEND -- `let s: SMono = SMono.P(mkr(1));` over `shar… | 851501e |
 | B-2026-09-17-25 | codegen | medium | A NAMED LOCAL MOVED INTO A `shared enum` CONSTRUCTOR LEAVES A PAYLOAD-BODY ACTION READING THE ZEROED STAGING SLOT -- `let r = mkr(1); { let s = SMono… | dbac00e |
 | B-2026-09-17-29 | codegen | high | A REMOVED `Map` VALUE HANDED STRAIGHT TO A BY-VALUE `Array[T, N]` PARAM IS FREED TWICE -- `match v.remove(j) { Some(a) => eat(a) }` over `Map[i64, Ar… | c0520ef |
 | B-2026-09-17-34 | codegen | high | MOVING A HEAP-CARRYING `Drop` FIELD OUT OF A BOXED (SPILLED) `Option`/`Result` PAYLOAD STRUCT ABORTS EVERY COMPILED SURFACE WITH A DOUBLE FREE -- `fn… | 25bb7b7 |
