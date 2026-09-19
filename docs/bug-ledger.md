@@ -94,8 +94,8 @@ distinguish "bugs flattening" from "we stopped writing them down."
 |---|---|
 | run-vs-build | 441 |
 | miscompile | 424 |
-| leak | 377 |
-| double-free | 248 |
+| leak | 378 |
+| double-free | 249 |
 | missing-feature | 202 |
 | codegen-gap | 181 |
 | other | 138 |
@@ -110,7 +110,7 @@ distinguish "bugs flattening" from "we stopped writing them down."
 
 | surface | total |
 |---|---|
-| codegen | 1868 |
+| codegen | 1870 |
 | interp | 480 |
 | typecheck | 302 |
 | other | 101 |
@@ -187,7 +187,6 @@ _Generated from `bug-ledger.jsonl` by `scripts/bug-curve.py` (2026-05-20 → 202
 | B-2026-09-18-1 | 2026-09-18 | codegen | medium | A GENERIC ENUM'S BOXED PAYLOAD STILL LOSES ITS `Drop` BODY WHEN THE ARM *CONSUMES* ITS BINDING -- `match x { Full(r) => { let z = r; .. } }` over a three-`String` payload prints `w:4 end` on JIT/AOT against `--interp`'s `w:4 dW4 end`, while the READ-ONLY twin is correct on all four since B-2026-09-14-22, so the remaining loss is the arm moving its binding into a local and `z` acquiring no body for it | — |
 | B-2026-09-19-18 | 2026-09-19 | codegen | medium | A PLAIN STRUCT, `Vec` OR `Option` HOLDING A `shared enum` RELEASES IT AT LEXICAL SCOPE EXIT ON THE COMPILED BACKENDS AND AT THE BINDING'S LIVE-RANGE END UNDER `--interp` -- one body either way, three spellings, and design.md :866 says the interpreter's placement is the correct one; the DIRECT binding was fixed in B-2026-09-17-19 and these are one indirection out | — |
 | B-2026-09-19-19 | 2026-09-19 | interp | medium | THE INTERPRETER RUNS A `shared enum` PAYLOAD'S `Drop` BODY AT THE BLOCK'S END WHILE THE VALUE IS STILL LIVE IN A `Vec` THAT OUTLIVES IT -- `{ let s = SMono.P(mkr(1)); v.push(s) }` prints `d2:9` before `out` interpreted and after it on every compiled surface, which B-2026-09-17-19 records as a fact without filing and which that commit turns into a live divergence with a known right answer | — |
-| B-2026-09-19-21 | 2026-09-19 | codegen | medium | AN AGGREGATE-LITERAL RETURN THAT WRAPS A GENERIC ENUM PARAMETER DOUBLE FREES -- `fn wrap[T](g: G1[T], c: bool) -> H[T] { if c { return H { g: g } } return H { g: G1.N } }` prints `free(): double free detected in tcache 2` where `--interp` prints `mx 10`; B-2026-09-17-7's runtime compare declines it because the returned box word sits inside a struct rather than at word 1 of the return | — |
 | B-2026-09-19-22 | 2026-09-19 | interp | medium | THE INTERPRETER LOSES A BY-VALUE GENERIC ENUM PARAMETER'S `Drop` BODY ON THE DIES-INSIDE LEG -- `let back = mid(g, false)` over `fn mid[T](g: G1[T], c: bool) -> G1[T]` at `T = R` prints `mx done` alone under `--interp` where every compiled surface prints `dR9` first; the hand-back leg of the same callee runs the body on both backends | — |
 | B-2026-09-19-23 | 2026-09-19 | codegen | medium | A TEMP GENERIC ENUM ARGUMENT WHOSE RESULT IS DISCARDED LEAKS ITS PAYLOAD BOX -- `mid(G1.Y(f"aaaaaaaa-1"), true);` loses 34 bytes (24 direct, 10 indirect) where the NAMED spelling of the same call is clean, so B-2026-09-16-16's discarded-statement window does not cover the one argument that has no binding to keep a drop | — |
 | B-2026-09-19-24 | 2026-09-19 | codegen | medium | THE `Option`/`Result` HEAD OF B-2026-09-17-7 IS UNFIXED -- `fn midopt[T](g: Option[T], c: bool) -> Option[T] { if c { return g } return Option.None }` at `T = Array[String, 2]` dies with 10 `Invalid read of size 8` against a correct `--interp`; the runtime compare that fixed the user-enum head is gated on `user_enum_boxed_payload_variants`, which returns nothing for the seeded heads by design | — |
@@ -200,6 +199,8 @@ _Generated from `bug-ledger.jsonl` by `scripts/bug-curve.py` (2026-05-20 → 202
 | B-2026-09-19-32 | 2026-09-19 | codegen | low | THE ESCAPING DEBOX LEAKS ITS MOVED-OUT PAYLOAD WHEN THE ENUM HAS NO `impl Drop` -- `fn take(o: Ve) -> String { if let Ve.A(s) = o { s } else { .. } }` loses 310 B over 20 calls at -O0, identically on the `match` spelling, and adding a Drop impl to the same enum makes both clean | — |
 | B-2026-09-19-33 | 2026-09-19 | codegen | medium | A NESTED PROJECTION OUT OF A BY-VALUE `Option` TUPLE PAYLOAD STILL SILENCES ITS INNER SIBLING ON EVERY COMPILED BACKEND -- `fn eat(o: Option[((R, R), i64)]) -> R { match o { Some(t) => { return t.0.1; } .. } }` prints `got:6 dR6 end` against the interpreter's correct `dR5 got:6 dR6 end`, because `PayloadBodiesMask::TupleElems` is a FLAT index set that can say "skip element 0" and cannot say "skip element 1 OF element 0"; the one-hop spellings of the same shape were fixed by B-2026-09-17-30, whose depth filter deliberately declines this one rather than report a first hop that would be a FALSE escape losing the inner sibling | — |
 | B-2026-09-19-34 | 2026-09-19 | codegen | medium | A PROJECTION OUT OF A **BOXED** `Option` TUPLE PAYLOAD RUNS THE ESCAPING PART'S `Drop` BODY TWICE ON EVERY COMPILED BACKEND -- `fn eat(o: Option[(H, H)]) -> H { match o { Some(t) => { return t.0; } .. } }` with `struct H { id: i64, s: String }` prints `dH5 dH6 got:5 dH5 end` against the interpreter's correct `dH6 got:5 dH5 end`, so element 0's body runs once in the callee and again at the caller's binding; the NARROW payload (`struct R { id: i64 }`, which rides inline) is correct on all four surfaces since B-2026-09-17-30, so the trigger is the boxed channel | — |
+| B-2026-09-19-35 | 2026-09-19 | codegen | low | A CALL RESULT BINDING ARMS NO BOX DROP FOR A GENERIC ENUM A FIELD DEEP, so the payload leaks once B-2026-09-19-21's fix stops a wrong free from standing in for the missing one -- `let h = wrap(g, true); match h.g { G1.Y(v) => .. }` loses 24 B in 1 block at `-O0` where the IDENTICAL match on a bare `G1[T]` result binding (`bare`/`bareF`) is clean, so the aggregate is the variable and the inline `match` is not | — |
+| B-2026-09-19-36 | 2026-09-19 | codegen | medium | AN `Option`-WRAPPED FIELD IN THE RETURNED AGGREGATE STILL DOUBLE FREES, the remainder B-2026-09-19-21's fix cannot reach -- `struct Ho[T] { g: Option[G1[T]] }` returned by `Ho { g: Option.Some(g) }` prints `free(): double free detected in tcache 2` where `--interp` prints `mx 10`; the payload is coerced into `Option`'s payload words, so no leaf of the return carries the argument's type and the hand-back scan declines | — |
 
 ### Relocated
 
@@ -2716,6 +2717,7 @@ _Generated from `bug-ledger.jsonl` by `scripts/bug-curve.py` (2026-05-20 → 202
 | B-2026-09-19-16 | other | medium | `karac fmt` TURNED EVERY MAP LITERAL INTO A PARSE ERROR -- the formatter printed `["a": 1]` as a BRACE form `{\n "a": 1,\n}` that is not Kara syntax,… | a6c3432 |
 | B-2026-09-19-17 | interp | medium | A `shared enum` HELD IN A PLAIN ENUM'S PAYLOAD NEVER RELEASES UNDER `--interp`, BECAUSE THE INTERPRETER HAS NO REFCOUNT FOR ONE -- `H3.P(SMono.P(mkr(… | f32c86c |
 | B-2026-09-19-20 | codegen | low | AN INDEXED-RECEIVER METHOD WHOSE CONTAINER IS A CALL IS REFUSED BY CODEGEN -- `mk(n)[0].len()` says `indexed-receiver method 'len' requires the index… | 28132fd |
+| B-2026-09-19-21 | codegen | medium | AN AGGREGATE-LITERAL RETURN THAT WRAPS A GENERIC ENUM PARAMETER DOUBLE FREES -- `fn wrap[T](g: G1[T], c: bool) -> H[T] { if c { return H { g: g } } r… | c0c50ee |
 | B-2026-09-19-26 | lexer | low | THE SELF-HOSTED LEXER DOES NOT MODEL `IntegerOutOfRange`, so a 19+ digit literal is an Error token in the port and a real token in the seed -- `18446… | 01a3dad |
 
 </details>
