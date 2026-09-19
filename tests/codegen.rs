@@ -19930,6 +19930,74 @@ fn main() {
         );
     }
 
+    /// B-2026-09-19-17, the COMPILED half — this side was already right, and
+    /// the fixture exists to keep it that way while the interpreter caught up.
+    ///
+    /// B-2026-09-17-19 made a `shared enum`'s payload body run here and filed
+    /// the interpreter half as its remainder, on the reading that that backend
+    /// needed a refcounted representation it does not have. It did not: the
+    /// interpreter's enum-payload walk simply stopped at an enum payload,
+    /// where its struct / tuple / `Vec` / `Option` siblings already ran the
+    /// body. So every cell below agrees with the twin ON THE COUNT.
+    ///
+    /// WHAT THIS PINS THAT THE TWIN CANNOT is the placement it still
+    /// disagrees about, written out rather than left implicit. The four holder
+    /// cells (`nested`, `par`, `owndrop`, `noheap`) print their body AFTER
+    /// `mid` here and before it there — lexical scope exit against the
+    /// binding's live-range end. That is B-2026-09-19-18, open, and design.md
+    /// `:866` ("Destructor calls ... fire at each binding's LIVE-RANGE END")
+    /// says the twin's placement is the correct one, so it is THIS
+    /// expectation that should move when that row lands. `reclist`, `control`,
+    /// `qvar` and `unitvar` are byte-identical to the twin and are not part of
+    /// that trade.
+    ///
+    /// `par` is not decoration: `E_ENUM_NESTED_ENUM_PAYLOAD` names `shared`
+    /// and `par` as the only two ways to write an enum inside an enum
+    /// variant's payload at all, so the pair is the whole population of the
+    /// shape and both halves have to be measured.
+    ///
+    /// The INTERPRETER twin is `tests/interpreter.rs`'s
+    /// `test_shared_enum_in_plain_enum_payload_runs_its_drop_body`,
+    /// byte-identical SOURCE and a deliberately different expectation.
+    #[test]
+    fn e2e_shared_enum_in_plain_enum_payload_runs_its_drop_body() {
+        let Some(out) = run_program(
+            r#"struct R2 { s: String, t: String, u: String }
+impl Drop for R2 { fn drop(mut ref self) { println(f"  d2:{self.s.len()}") } }
+fn mkr(i: i64) -> R2 { return R2 { s: f"aaaaaaaaa", t: f"b", u: f"c" } }
+struct Z { n: i64 }
+impl Drop for Z { fn drop(mut ref self) { println(f"  dZ{self.n}") } }
+shared enum SMono { P(R2), Q }
+shared enum Sdd { P(R2), Q }
+impl Drop for Sdd { fn drop(mut ref self) { println("  dSdd") } }
+shared enum Sz { P(Z), Q }
+par enum PMono { P(R2), Q }
+enum H3 { P(SMono), Q }
+enum Hd { P(Sdd), Q }
+enum Hz { P(Sz), Q }
+enum Hp { P(PMono), Q }
+enum Hn { P(SMono), Q }
+shared enum Lst { Cons(R2, Lst), Nil }
+enum Plain { P(R2), Q }
+
+fn main() {
+    println("nested");   { let h: H3 = H3.P(SMono.P(mkr(1))); println("  mid") } println("  out")
+    println("par");      { let h: Hp = Hp.P(PMono.P(mkr(2))); println("  mid") } println("  out")
+    println("owndrop");  { let h: Hd = Hd.P(Sdd.P(mkr(3))); println("  mid") } println("  out")
+    println("noheap");   { let h: Hz = Hz.P(Sz.P(Z { n: 4 })); println("  mid") } println("  out")
+    println("qvar");     { let h: Hn = Hn.P(SMono.Q); println("  mid") } println("  out")
+    println("unitvar");  { let h: Hn = Hn.Q; println("  mid") } println("  out")
+    println("reclist");  { let a: Lst = Lst.Cons(mkr(5), Lst.Nil); let b: Lst = Lst.Cons(mkr(6), a); println("  mid") } println("  out")
+    println("control");  { let p: Plain = Plain.P(mkr(7)); println("  mid") } println("  out")
+    println("end")
+}
+"#,
+        ) else {
+            return;
+        };
+        assert_eq!(out, "nested\n  mid\n  d2:9\n  out\npar\n  mid\n  d2:9\n  out\nowndrop\n  mid\n  dSdd\n  d2:9\n  out\nnoheap\n  mid\n  dZ4\n  out\nqvar\n  mid\n  out\nunitvar\n  mid\n  out\nreclist\n  d2:9\n  d2:9\n  mid\n  out\ncontrol\n  d2:9\n  mid\n  out\nend\n");
+    }
+
     /// B-2026-09-17-19 — A `shared enum`'s VARIANT PAYLOAD RUNS ITS `Drop` BODY,
     /// AND THE RELEASE LANDS AT THE BINDING'S LIVE-RANGE END.
     ///
@@ -20228,20 +20296,30 @@ fn main() {
         ) else {
             return;
         };
-        // B-2026-09-17-19 — `sharedec` MOVED, and it is the one cell of this
-        // fixture whose interpreter twin no longer matches. The shared enum's
-        // payload bodies now run at the refcount's 0-transition, so
-        // `H3.P(SMono.P(mkr(1)))` prints `d2:9` at the holder's death here and
-        // still prints nothing under `--interp`. That is a one-backend fix to
-        // an AGREED gap, which B-2026-09-12-6 refuses as a rule — taken
-        // deliberately here because the interpreter half is not a walk that is
-        // missing but a REPRESENTATION that does not exist: a `shared enum`
-        // value is a plain `Value::EnumVariant` with no `Arc`, so nothing can
-        // answer "is this the last handle" for one held inside another value.
-        // The alternative was to keep the agreement by NOT running a
-        // destructor the compiled backend can run, which is the worse trade.
-        // The remainder is filed separately; this fixture's twin keeps the
-        // `x`-only expectation and says why.
+        // B-2026-09-17-19 — `sharedec` MOVED here, and its interpreter twin
+        // stopped matching: the shared enum's payload bodies now run at the
+        // refcount's 0-transition, so `H3.P(SMono.P(mkr(1)))` printed `d2:9`
+        // at the holder's death on this side and nothing under `--interp`.
+        // That was a one-backend fix to an AGREED gap, which B-2026-09-12-6
+        // refuses as a rule, taken deliberately because the interpreter half
+        // looked like a REPRESENTATION that does not exist rather than a walk
+        // that is missing — a `shared enum` value is a plain
+        // `Value::EnumVariant` with no `Arc`.
+        //
+        // B-2026-09-19-17 CLOSED that remainder, and it needed no refcount:
+        // the interpreter's enum-payload walk simply stopped at an enum
+        // payload, where its struct / tuple / `Vec` / `Option` siblings
+        // already ran the body countless-ly and agreed with this side. So the
+        // twin now prints `d2:9` too — BEFORE its `x`, where this side prints
+        // it after, which is the placement gap the four siblings also have
+        // (B-2026-09-19-18, with design.md `:866` putting the correct point at
+        // the live-range end, i.e. the interpreter's).
+        //
+        // `gensh` is the cell that must NOT move with it, and the reason this
+        // expectation is worth reading beside the twin's: `enum G[T] { X(T), Y }`
+        // at `T = SMono` is silent here, so the twin withholds the
+        // own-generic-param exception from an enum payload rather than firing
+        // a body this side does not.
         assert_eq!(out, "vecenum\n  d2:9\n  x\nvecstruct\n  dS7\n  dS8\n  x\nvecmixed\n  dS9\n  x\nvecempty\n  x\nunitvar\n  x\narray\n  dS1\n  dS2\n  x\nstruct\n  d2:9\n  x\nsharedec\n  x\n  d2:9\ngenvec\n  x\ngensh\n  x\nend\n");
     }
 

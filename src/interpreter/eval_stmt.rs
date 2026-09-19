@@ -2438,9 +2438,62 @@ impl<'a> super::Interpreter<'a> {
                     continue;
                 }
             }
-            let Value::Struct { name: tn, .. } = &payload else {
-                continue;
+            // B-2026-09-19-17 — an ENUM payload. The destructure this replaced
+            // admitted a `Value::Struct` only, so a payload that is itself an
+            // enum fell through to `continue` and ran nothing:
+            // `enum H3 { P(SMono), Q }` over a `shared enum SMono { P(R2), Q }`
+            // was silent under `--interp` while every compiled surface ran
+            // `R2`'s body — the agreed-to-divergent trade B-2026-09-17-19 took
+            // knowingly and filed as the remainder.
+            //
+            // THE TYPE SYSTEM MAKES THIS ARM EXACTLY THE SHARED/PAR CASE, which
+            // is why it needs no `shared_types` gate of its own.
+            // `E_ENUM_NESTED_ENUM_PAYLOAD` refuses a PLAIN enum in an enum
+            // variant's payload outright — "v1 only supports up to one level of
+            // enum nesting; either flatten the variant, mark the inner enum as
+            // `shared` (RC pointer) or `par` (cross-task pointer) ..." — and
+            // `Option`/`Result` returned above, through their own
+            // instantiation-driven arm. So the only values that can reach here
+            // are a `shared` or `par` enum: the two spellings that same
+            // diagnostic names as the way to write this shape at all.
+            //
+            // NO REFCOUNT IS CONSULTED, deliberately, and that is the point on
+            // which this row was expected to be expensive. A `shared enum` is a
+            // plain `Value::EnumVariant` with no `Arc` — unlike a
+            // `shared struct`, which is `Value::SharedStruct(Arc<..>)` — so
+            // there is no count to take. None is needed to match the tree: the
+            // struct-FIELD, tuple-ELEMENT, `Vec`-ELEMENT and `Option`-payload
+            // holders of the same shared enum ALREADY fire the payload body on
+            // their holder's death with no count either, and have agreed with
+            // every compiled surface ON THE COUNT — one body — since
+            // B-2026-09-17-19. The enum holder was the one holder of the five
+            // that ran NO body at all, and this makes it the fifth rather than
+            // inventing a rule for it.
+            //
+            // IT INHERITS THE FOUR SIBLINGS' PLACEMENT GAP ALONG WITH THEIR
+            // COUNT, and that is a deliberate trade rather than an oversight.
+            // All five fire at the holder's LIVE-RANGE END here and at LEXICAL
+            // SCOPE EXIT on the compiled backends (`d2:9 ok` against
+            // `ok d2:9`), which is B-2026-09-19-18 — open, three spellings when
+            // filed, four now. design.md `:866` puts the correct placement at
+            // the live-range end, i.e. on this side, so moving the enum holder
+            // into that row's population is moving it from "runs nothing" to
+            // "runs the right body in the place design.md names, against a
+            // backend that is late" — strictly the better of the two, and the
+            // remaining half is already owned.
+            //
+            // The OVER-fire the five share when TWO holders name one shared
+            // enum is real, older than this arm, and common to all of them:
+            // `struct Hs { m: SMono }` built twice from one `s` prints
+            // `d2:9 d2:9` interpreted against a single compiled run TODAY, with
+            // no enum holder involved. Filed as its own row rather than
+            // answered by keeping this one silent.
+            let payload_type = match &payload {
+                Value::Struct { name, .. } => name.clone(),
+                Value::EnumVariant { enum_name: pn, .. } => pn.clone(),
+                _ => continue,
             };
+            let tn = &payload_type;
             // Declared-type-driven, exactly like the struct-field walk: a
             // payload whose declared head names a DIFFERENT concrete type than
             // the value carries is an inconsistency, and running a body over it
@@ -2472,14 +2525,37 @@ impl<'a> super::Interpreter<'a> {
                         .iter()
                         .any(|p| p == h)
                 });
-            if !declared_is_own_param && declared_head.as_deref() != Some(tn.as_str()) {
+            // B-2026-09-19-17 — the own-param exception above is for a STRUCT
+            // payload only, and an ENUM payload must name its type exactly.
+            // Measured: `enum G[T] { X(T), Y }` at `T = SMono` is SILENT on
+            // every compiled surface — the instantiation-keyed walker
+            // `emit_generic_enum_payload_user_drop_bodies_fn` does not reach a
+            // shared enum payload — so admitting it here would fire a body
+            // this side alone and convert an AGREED gap into a second
+            // divergence while closing the first. That is the trade
+            // B-2026-09-12-6 refuses, and the `gensh` cell of
+            // `test_declared_vec_enum_payload_runs_element_drop_bodies` is
+            // what says so: it moved when this arm was first written without
+            // the guard, and its codegen twin's expectation is `x` alone.
+            let own_param_ok =
+                declared_is_own_param && !matches!(payload, Value::EnumVariant { .. });
+            if !own_param_ok && declared_head.as_deref() != Some(tn.as_str()) {
                 continue;
             }
             if self.program.drop_method_keys.contains_key(tn) {
                 let tn = tn.clone();
                 self.run_user_drop_body_only(&tn, payload.clone());
             }
-            self.drop_user_drop_fields_of_value(&payload);
+            // B-2026-09-19-17 — own body first, then the payload's OWN content,
+            // dispatched on what the payload is. An enum's content is its live
+            // variant's payloads, which is this walk again; a struct's is its
+            // fields. Same two-step, same order, as the `Vec`-element dispatch
+            // above already uses for an enum element (design.md § Part 8).
+            if matches!(payload, Value::EnumVariant { .. }) {
+                self.run_enum_payload_user_drops_value(&payload);
+            } else {
+                self.drop_user_drop_fields_of_value(&payload);
+            }
         }
     }
 

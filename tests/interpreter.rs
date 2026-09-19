@@ -69834,6 +69834,83 @@ fn main() {
     assert_eq!(out, "temp\n  d2:9\n  out\nnamed\n  d2:9\n  out\ntwo\n  d2:9\n  out\nlive\n  d2:9\n  mid\n  out\nnoheap\n  dZ5\n  mid\n  out\nunitvar\n  mid\n  out\nqvar\n  mid\n  out\nuselater\n  mid\n  t1\n  d2:9\n  out\npsh\n  mid\n  dS5\n  out\ncontrol\n  d2:9\n  mid\n  out\nend\n", "got:\n{out}");
 }
 
+/// B-2026-09-19-17 — A `shared` OR `par` ENUM HELD IN A PLAIN ENUM'S PAYLOAD
+/// RUNS ITS PAYLOAD'S `Drop` BODY, once, UNDER `--interp`.
+///
+/// `enum H3 { P(SMono), Q }` over `shared enum SMono { P(R2), Q }` ran NOTHING
+/// here while every compiled surface ran `R2`'s body — the one cell
+/// B-2026-09-17-19 moved from AGREED to DIVERGENT and filed rather than fixed,
+/// on the reading that the interpreter half needed a refcounted representation
+/// for a `shared enum` (which is a plain `Value::EnumVariant` with no `Arc`,
+/// unlike `shared struct`'s `Value::SharedStruct(Arc<..>)`).
+///
+/// IT NEEDED NO REFCOUNT, and the cheap question that row named first is the
+/// one that answered it. The four SIBLING holders of a shared enum — a struct
+/// FIELD, a tuple ELEMENT, a `Vec` ELEMENT and an `Option` payload — already
+/// fire the payload body on their holder's death with no count consulted, and
+/// already agree with all three compiled surfaces on the COUNT. The enum
+/// holder was the one position whose walk stopped short:
+/// `run_enum_payload_user_drops_value` destructured a `Value::Struct` payload
+/// and let an enum payload fall through to `continue`.
+///
+/// `E_ENUM_NESTED_ENUM_PAYLOAD` IS WHAT MAKES THE NEW ARM SAFE without a
+/// `shared_types` gate of its own, and `par` is here to pin that. A PLAIN enum
+/// cannot be an enum variant's payload at all — "v1 only supports up to one
+/// level of enum nesting; ... mark the inner enum as `shared` (RC pointer) or
+/// `par` (cross-task pointer)" — and `Option` / `Result` route through their
+/// own instantiation-driven arm before this one, so the only values the arm
+/// can ever see are the two spellings that diagnostic prescribes.
+///
+/// `owndrop` pins the ORDER (the holder's own body, then its payload's —
+/// design.md § Part 8), `noheap` a payload that owns a body but no heap,
+/// `reclist` a self-referential `shared enum` whose recursion this arm has to
+/// terminate (and which moved from ONE body to TWO, matching the compiled
+/// side exactly). `qvar`, `unitvar` and `control` are the negative cells: a
+/// payload-free variant of a payload-carrying shared enum, a payload-free
+/// holder, and a plain struct payload that was always right.
+///
+/// THE CODEGEN TWIN IS NOT BYTE-IDENTICAL, deliberately, and that is the
+/// remaining half rather than a defect in either side. The four holder cells
+/// print their body BEFORE `mid` here and after it there: one body either way,
+/// at the binding's live-range end on this side and at lexical scope exit on
+/// that one. That is B-2026-09-19-18, which this row joins as a fourth
+/// spelling; design.md `:866` ("Destructor calls ... fire at each binding's
+/// LIVE-RANGE END") puts the correct point on this side.
+#[test]
+fn test_shared_enum_in_plain_enum_payload_runs_its_drop_body() {
+    let out = run(r#"struct R2 { s: String, t: String, u: String }
+impl Drop for R2 { fn drop(mut ref self) { println(f"  d2:{self.s.len()}") } }
+fn mkr(i: i64) -> R2 { return R2 { s: f"aaaaaaaaa", t: f"b", u: f"c" } }
+struct Z { n: i64 }
+impl Drop for Z { fn drop(mut ref self) { println(f"  dZ{self.n}") } }
+shared enum SMono { P(R2), Q }
+shared enum Sdd { P(R2), Q }
+impl Drop for Sdd { fn drop(mut ref self) { println("  dSdd") } }
+shared enum Sz { P(Z), Q }
+par enum PMono { P(R2), Q }
+enum H3 { P(SMono), Q }
+enum Hd { P(Sdd), Q }
+enum Hz { P(Sz), Q }
+enum Hp { P(PMono), Q }
+enum Hn { P(SMono), Q }
+shared enum Lst { Cons(R2, Lst), Nil }
+enum Plain { P(R2), Q }
+
+fn main() {
+    println("nested");   { let h: H3 = H3.P(SMono.P(mkr(1))); println("  mid") } println("  out")
+    println("par");      { let h: Hp = Hp.P(PMono.P(mkr(2))); println("  mid") } println("  out")
+    println("owndrop");  { let h: Hd = Hd.P(Sdd.P(mkr(3))); println("  mid") } println("  out")
+    println("noheap");   { let h: Hz = Hz.P(Sz.P(Z { n: 4 })); println("  mid") } println("  out")
+    println("qvar");     { let h: Hn = Hn.P(SMono.Q); println("  mid") } println("  out")
+    println("unitvar");  { let h: Hn = Hn.Q; println("  mid") } println("  out")
+    println("reclist");  { let a: Lst = Lst.Cons(mkr(5), Lst.Nil); let b: Lst = Lst.Cons(mkr(6), a); println("  mid") } println("  out")
+    println("control");  { let p: Plain = Plain.P(mkr(7)); println("  mid") } println("  out")
+    println("end")
+}
+"#);
+    assert_eq!(out, "nested\n  d2:9\n  mid\n  out\npar\n  d2:9\n  mid\n  out\nowndrop\n  dSdd\n  d2:9\n  mid\n  out\nnoheap\n  dZ4\n  mid\n  out\nqvar\n  mid\n  out\nunitvar\n  mid\n  out\nreclist\n  d2:9\n  d2:9\n  mid\n  out\ncontrol\n  d2:9\n  mid\n  out\nend\n", "got:\n{out}");
+}
+
 /// B-2026-09-10-20 — the INTERPRETER twin of `tests/codegen.rs`'s
 /// `e2e_declared_vec_enum_payload_runs_element_drop_bodies`, byte-identical
 /// source and expectation.
@@ -69842,16 +69919,36 @@ fn main() {
 /// have turned a missing body into an A/B divergence, which is the trade
 /// B-2026-09-12-6 refused and B-2026-09-12-24 restates as a rule.
 ///
-/// B-2026-09-17-19 — and the `sharedec` cell is now exactly that divergence,
-/// knowingly. `H3.P(SMono.P(mkr(1)))` prints `d2:9` on the compiled backends
-/// and still nothing here, because a `shared enum` value is a plain
-/// `Value::EnumVariant` with no `Arc`: the refcount the release would have to
-/// consult does not exist in this backend's value model, so this is not a walk
-/// to add. See the note on the codegen twin's expectation for why running the
-/// destructor was preferred to preserving the agreement. Both arms are
-/// keyed on the same DECLARED payload head, which is what makes them answer
-/// alike: `Array[T, N]` and `Vec[T]` share one `Value::Array` here, so nothing
-/// about the value could have told them apart.
+/// B-2026-09-17-19 made the `sharedec` cell a knowing divergence, and
+/// B-2026-09-19-17 CLOSED IT: `H3.P(SMono.P(mkr(1)))` now prints `d2:9` here
+/// as well as on the compiled backends. That row expected the fix to be
+/// expensive — "a `shared enum` value is a plain `Value::EnumVariant` with no
+/// `Arc`", so there is no refcount to consult — and the measurement that made
+/// it cheap is that NO REFCOUNT IS NEEDED to match the compiled count. The
+/// four sibling holders of a shared enum (a struct FIELD, a tuple ELEMENT, a
+/// `Vec` ELEMENT, an `Option` payload) already fire the payload body on their
+/// holder's death with no count, and agree with every compiled surface on it;
+/// the enum holder was the one position whose walk stopped short, because
+/// `run_enum_payload_user_drops_value` destructured a `Value::Struct` payload
+/// and let an enum payload fall through. `E_ENUM_NESTED_ENUM_PAYLOAD` is what
+/// makes the new arm safe without a `shared_types` gate: a PLAIN enum cannot
+/// be an enum variant's payload at all, so the arm can only ever see the
+/// `shared` / `par` spelling the diagnostic itself prescribes.
+///
+/// The `d2:9` lands BEFORE `x` here and after it on the compiled backends —
+/// one body either way. That placement gap is the four siblings' too, and is
+/// B-2026-09-19-18 rather than this cell's; design.md `:866` puts the correct
+/// firing point at the binding's live-range end, which is this side.
+///
+/// `gensh` is the cell that KEEPS the arm narrow and must not move with it.
+/// `enum G[T] { X(T), Y }` at `T = SMono` is silent on every compiled surface,
+/// so the B-2026-09-10-2 own-generic-param exception — which exists because
+/// codegen's instantiation-keyed walker DOES run a struct payload's body there
+/// — is withheld from an enum payload. Admitting it fired a body on this side
+/// alone, measured while writing the arm. Both container arms are keyed on the
+/// same DECLARED payload head, which is what makes them answer alike:
+/// `Array[T, N]` and `Vec[T]` share one `Value::Array` here, so nothing about
+/// the value could have told them apart.
 #[test]
 fn test_declared_vec_enum_payload_runs_element_drop_bodies() {
     let out = run(r#"struct R2 { s: String, t: String, u: String }
@@ -69882,7 +69979,7 @@ fn main() {
     println("end")
 }
 "#);
-    assert_eq!(out, "vecenum\n  d2:9\n  x\nvecstruct\n  dS7\n  dS8\n  x\nvecmixed\n  dS9\n  x\nvecempty\n  x\nunitvar\n  x\narray\n  dS1\n  dS2\n  x\nstruct\n  d2:9\n  x\nsharedec\n  x\ngenvec\n  x\ngensh\n  x\nend\n", "got:\n{out}");
+    assert_eq!(out, "vecenum\n  d2:9\n  x\nvecstruct\n  dS7\n  dS8\n  x\nvecmixed\n  dS9\n  x\nvecempty\n  x\nunitvar\n  x\narray\n  dS1\n  dS2\n  x\nstruct\n  d2:9\n  x\nsharedec\n  d2:9\n  x\ngenvec\n  x\ngensh\n  x\nend\n", "got:\n{out}");
 }
 
 /// B-2026-09-06-39 — A READ-ONLY ARM OVER AN OWNED ENUM RECEIVER NOW RUNS THE
