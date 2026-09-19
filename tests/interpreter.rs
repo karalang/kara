@@ -70474,6 +70474,71 @@ fn map_literal_spellings_still_build_a_plain_map() {
     }
 }
 
+/// B-2026-09-19-21 — a generic callee that hands its boxed payload back
+/// INSIDE AN AGGREGATE freed the box twice.
+///
+/// `fn wrap[T](g: G1[T], c: bool) -> H[T] { if c { return H { g: g } } return
+/// H { g: G1.N } }` over `struct H[T] { g: G1[T] }` is the mixed-path callee
+/// B-2026-09-17-7 fixed, one wrapping out: the same box comes back, but inside
+/// a struct rather than as the return value. That row's runtime compare looks
+/// at word 1 of the RETURN, so with a return type of `H[T]` the two shapes did
+/// not even agree in type, the compare declined by construction, and the
+/// argument kept a box drop the wrapper's field now also owned. Measured
+/// `free(): double free detected in tcache 2` against a correct `--interp`, and
+/// under valgrind `Invalid read of size 8` then `Invalid free()`.
+///
+/// `tuple` and `nested` are the same defect through the other two aggregate
+/// shapes — a `(G1[T], i64)` return and a struct inside a struct — and both
+/// died the same way. They were this row's own NOT MEASURED list and are cells
+/// rather than a follow-up because one scan covers all three.
+///
+/// THE SCAN IS TYPE-IDENTITY-BOUNDED, and `allpaths` is what says the bound is
+/// not merely cautious. The disarm now compares against every position inside
+/// the returned aggregate whose LLVM type is the argument's own enum type,
+/// which is a strictly wider `%same` — and a wider disarm is the direction that
+/// STRANDS boxes. `allpaths` (the static all-paths spelling), `structF`,
+/// `tupleF` (the dies-inside legs, which return a payload-free variant whose
+/// box word is zero), `bare` / `bareF` (the sibling row's own cells, which must
+/// not move) and `discard` (the result consumed by nobody, where a disarm would
+/// strand the box outright) are all here for that direction. A cell that starts
+/// leaking fails the memory twin rather than this one.
+///
+/// Valgrind on this program, `-O0` / `KARAC_AUTO_PAR=0`: 12 errors from 12
+/// contexts before, `no leaks are possible` after.
+///
+/// This side was correct throughout — it is the oracle the compiled cells are
+/// measured against — so this fixture pins the expectation rather than a fix.
+/// The CODEGEN twin is `tests/codegen.rs`'s
+/// `e2e_generic_callee_hands_its_boxed_payload_back_inside_an_aggregate`,
+/// byte-identical source and expectation.
+#[test]
+fn test_generic_callee_hands_its_boxed_payload_back_inside_an_aggregate() {
+    let out = run(r#"enum G1[T] { Y(T), N }
+struct H[T] { g: G1[T] }
+struct H2[T] { h: H[T] }
+fn wrap[T](g: G1[T], c: bool) -> H[T] { if c { return H { g: g } } return H { g: G1.N } }
+fn wrapAll[T](g: G1[T]) -> H[T] { return H { g: g } }
+fn wrapTup[T](g: G1[T], c: bool) -> (G1[T], i64) { if c { return (g, 7) } return (G1.N, 7) }
+fn wrapNest[T](g: G1[T], c: bool) -> H2[T] { if c { return H2 { h: H { g: g } } } return H2 { h: H { g: G1.N } } }
+fn bare[T](g: G1[T], c: bool) -> G1[T] { if c { return g } return G1.N }
+fn shw(g: G1[String]) { match g { G1.Y(v) => { println(f"  mx {v.len()}") } G1.N => { println("  mx 0") } } }
+
+fn main() {
+    println("struct");  { let g: G1[String] = G1.Y(f"aaaaaaaa-1"); let h = wrap(g, true); shw(h.g) }
+    println("structF"); { let g: G1[String] = G1.Y(f"aaaaaaaa-2"); let h = wrap(g, false); shw(h.g) }
+    println("allpaths");{ let g: G1[String] = G1.Y(f"aaaaaaaa-3"); let h = wrapAll(g); shw(h.g) }
+    println("tuple");   { let g: G1[String] = G1.Y(f"aaaaaaaa-4"); let t = wrapTup(g, true); shw(t.0) }
+    println("tupleF");  { let g: G1[String] = G1.Y(f"aaaaaaaa-5"); let t = wrapTup(g, false); shw(t.0) }
+    println("nested");  { let g: G1[String] = G1.Y(f"aaaaaaaa-6"); let h = wrapNest(g, true); shw(h.h.g) }
+    println("bare");    { let g: G1[String] = G1.Y(f"aaaaaaaa-7"); let b = bare(g, true); shw(b) }
+    println("bareF");   { let g: G1[String] = G1.Y(f"aaaaaaaa-8"); let b = bare(g, false); shw(b) }
+    println("discard"); { let g: G1[String] = G1.Y(f"aaaaaaaa-9"); wrap(g, true); println("  x") }
+    println("end")
+}
+"#);
+    assert_eq!(out, "struct\n  mx 10\nstructF\n  mx 0\nallpaths\n  mx 10\ntuple\n  mx 10\ntupleF\n  mx 0\nnested\n  mx 10\nbare\n  mx 10\nbareF\n  mx 0\ndiscard\n  x\nend\n", "got:\n{out}");
+}
+
 /// B-2026-09-17-7 — a generic callee that MAY hand its boxed payload back
 /// freed the box twice, and the check that stops it was blind inside braces.
 ///

@@ -14274,10 +14274,32 @@ impl<'ctx> super::Codegen<'ctx> {
     /// A `select` rather than a branch, so this adds no basic block and cannot
     /// disturb a block the caller is mid-way through building.
     ///
-    /// EVERY GATE IS STRUCTURAL, not a guess about the callee: the returned
-    /// LLVM type must be the slot's own type, and that type must be a struct
-    /// whose word 1 is the `i64` box word. Anything else emits nothing and
-    /// leaves the binding exactly as it is today.
+    /// EVERY GATE IS STRUCTURAL, not a guess about the callee: the slot's type
+    /// must be a struct whose word 1 is the `i64` box word, and the returned
+    /// value must carry at least one word that COULD be it. Anything else
+    /// emits nothing and leaves the binding exactly as it is today.
+    ///
+    /// B-2026-09-19-21 — "could be it" used to mean "the return IS the slot's
+    /// own type", and that declined the whole AGGREGATE-LITERAL family by
+    /// construction. `fn wrap[T](g: G1[T], c: bool) -> H[T] { if c { return
+    /// H { g: g } } return H { g: G1.N } }` hands the same box back inside a
+    /// `struct H[T] { g: G1[T] }`, so the word to compare sits at field 1 of
+    /// field 0 of the return rather than at field 1 of the return — the types
+    /// do not even agree, the compare never ran, and the argument kept a box
+    /// drop the wrapper's field now also owned (`free(): double free detected
+    /// in tcache 2` against a correct `--interp`). The candidate set is now
+    /// every position INSIDE the returned aggregate whose LLVM type is the
+    /// slot's own, and `%same` is their disjunction.
+    ///
+    /// TYPE IDENTITY IS THE SCAN'S WHOLE DISCIPLINE, and it is why this stays
+    /// inside the "cannot be wrong in the suppressing direction" argument
+    /// rather than widening it. The walk descends only into struct fields and
+    /// stops at any position whose type equals the slot's, so the words it
+    /// compares are box words of the SAME enum type and never an arbitrary
+    /// `i64` leaf. A plain integer field of the returned struct that happened
+    /// to hold a value equal to the box pointer cannot enter the set at all —
+    /// which a bare "scan every word-sized leaf" would have allowed, and which
+    /// would have made the disarm a guess.
     ///
     /// The `boxed_enum_payload_vars` membership — which is what says the
     /// binding's cleanup IS the null-guarded `BoxedEnumDrop` this zeroing
@@ -14303,19 +14325,22 @@ impl<'ctx> super::Codegen<'ctx> {
         let inkwell::types::BasicTypeEnum::StructType(st) = slot.ty else {
             return;
         };
-        if st.count_fields() < 2 || ret.get_type() != slot.ty {
+        if st.count_fields() < 2 {
             return;
         }
         let i64t = self.context.i64_type();
         if st.get_field_type_at_index(1) != Some(i64t.into()) {
             return;
         }
-        let Ok(ret_w0) =
-            self.builder
-                .build_extract_value(ret.into_struct_value(), 1, "handback.ret.w0")
-        else {
+        // B-2026-09-19-21 — every word the return carries that could be this
+        // slot's box word. One entry for the bare hand-back (the return IS the
+        // slot's type) and one per nested position of that type in an
+        // aggregate-literal return.
+        let mut ret_words: Vec<inkwell::values::IntValue<'ctx>> = Vec::new();
+        self.collect_handback_box_words(ret, slot.ty, 0, &mut ret_words);
+        if ret_words.is_empty() {
             return;
-        };
+        }
         let Ok(cur) = self.builder.build_load(st, slot.ptr, "handback.cur") else {
             return;
         };
@@ -14325,12 +14350,25 @@ impl<'ctx> super::Codegen<'ctx> {
         else {
             return;
         };
-        let Ok(same) = self.builder.build_int_compare(
-            inkwell::IntPredicate::EQ,
-            ret_w0.into_int_value(),
-            src_w0.into_int_value(),
-            "handback.same",
-        ) else {
+        let mut same_any: Option<inkwell::values::IntValue<'ctx>> = None;
+        for w in ret_words {
+            let Ok(eq) = self.builder.build_int_compare(
+                inkwell::IntPredicate::EQ,
+                w,
+                src_w0.into_int_value(),
+                "handback.same",
+            ) else {
+                return;
+            };
+            same_any = Some(match same_any {
+                None => eq,
+                Some(prev) => match self.builder.build_or(prev, eq, "handback.same.any") {
+                    Ok(v) => v,
+                    Err(_) => return,
+                },
+            });
+        }
+        let Some(same) = same_any else {
             return;
         };
         let Ok(live) = self.builder.build_int_compare(
@@ -14353,6 +14391,55 @@ impl<'ctx> super::Codegen<'ctx> {
             return;
         };
         let _ = self.builder.build_store(slot.ptr, next);
+    }
+
+    /// B-2026-09-19-21 — every word of `val` that could be `slot_ty`'s box
+    /// word, for [`Self::zero_boxed_binding_if_call_returned_its_box`].
+    ///
+    /// `val` itself when its type IS `slot_ty` (the bare hand-back the
+    /// original check handled), and otherwise field 1 of each position inside
+    /// a returned STRUCT whose type is `slot_ty` — the aggregate-literal
+    /// return `H { g: g }`, and the same nested.
+    ///
+    /// Stops at a matching position rather than descending through it: an
+    /// enum's word 1 is the box pointer, never another enum of the same type.
+    /// Descends into struct fields only, and only into ones that could still
+    /// contain a `slot_ty`, so nothing that is not a box word of this exact
+    /// enum type can enter the set — see the caller's doc for why that
+    /// discipline is what keeps the disarm sound rather than a guess.
+    ///
+    /// Depth- and width-bounded because this runs per argument per generic
+    /// call site and emits an `extractvalue` per step; a deeply nested return
+    /// simply yields no candidate and the binding keeps the drop it has today,
+    /// which is the declining direction.
+    fn collect_handback_box_words(
+        &mut self,
+        val: inkwell::values::BasicValueEnum<'ctx>,
+        slot_ty: inkwell::types::BasicTypeEnum<'ctx>,
+        depth: u32,
+        out: &mut Vec<inkwell::values::IntValue<'ctx>>,
+    ) {
+        if depth > 3 || out.len() >= 8 {
+            return;
+        }
+        let inkwell::values::BasicValueEnum::StructValue(sv) = val else {
+            return;
+        };
+        if val.get_type() == slot_ty {
+            if let Ok(inkwell::values::BasicValueEnum::IntValue(iv)) =
+                self.builder.build_extract_value(sv, 1, "handback.ret.w0")
+            {
+                out.push(iv);
+            }
+            return;
+        }
+        let st = sv.get_type();
+        for i in 0..st.count_fields() {
+            let Ok(f) = self.builder.build_extract_value(sv, i, "handback.field") else {
+                continue;
+            };
+            self.collect_handback_box_words(f, slot_ty, depth + 1, out);
+        }
     }
 
     /// B-2026-09-04-1's probe — an arm whose VALUE is one of its own payload

@@ -98153,6 +98153,126 @@ fn main() {
         );
     }
 
+    /// B-2026-09-19-21 — the memory half, one wrapping out from
+    /// [`Self::asan_generic_handback_leaves_exactly_one_owner_on_the_payload_box`].
+    ///
+    /// A generic callee that hands its boxed payload back INSIDE AN AGGREGATE
+    /// (`fn wrap[T](g: G1[T], c: bool) -> H[T] { if c { return H { g: g } }
+    /// return H { g: G1.N } }`) left two owners on one box. B-2026-09-17-7's
+    /// runtime compare looks at word 1 of the RETURN, and with a return type of
+    /// `H[T]` the word to compare sits a field deeper — the shapes do not even
+    /// agree in type, so the compare declined by construction. The scan now
+    /// reaches every position inside the returned aggregate whose type is the
+    /// argument's own enum type.
+    ///
+    /// Every cell is the same call under a different answer, and the negative
+    /// ones carry the weight: a WIDER disarm is the direction that strands
+    /// boxes, so `structF` / `tupleF` (dies-inside legs returning a
+    /// payload-free variant, box word zero), `allpaths` (the static spelling
+    /// this change must not disturb), `bare` / `bareF` (the sibling row's own
+    /// cells) and `discard` (the result consumed by nobody) are what fail if
+    /// the scan ever admits a word it should not.
+    ///
+    /// THE RESULT IS CONSUMED BY A CALL, not by an inline `match`, and that is
+    /// deliberate rather than incidental. `let h = wrap(g, true); match h.g
+    /// { .. }` strands the box — 24 bytes, one block — because the caller's
+    /// result binding never arms a box drop for a generic enum sitting in a
+    /// returned aggregate's field. On the tree BEFORE this change that leak was
+    /// invisible on these cells: the callee argument's still-armed drop freed
+    /// the box anyway, which is the invalid second free this row is about, so
+    /// what the change really does here is stop a wrong free from standing in
+    /// for a missing one. The ALL-PATHS spelling `wrapAll` is the cell that
+    /// shows the leak pre-dates the change — its argument was already disarmed
+    /// by B-2026-09-16-16's static arm, so it leaked 24 bytes on the parent
+    /// tree too. B-2026-09-19-35 owns that missing drop; writing the cells with
+    /// an inline `match` here would pin it rather than this row's double free,
+    /// and would fail the Linux LeakSanitizer leg today.
+    #[test]
+    fn asan_generic_aggregate_handback_leaves_exactly_one_owner_on_the_payload_box() {
+        const DECLS: &str = "enum G1[T] { Y(T), N }\n\
+             struct H[T] { g: G1[T] }\n\
+             struct H2[T] { h: H[T] }\n\
+             fn wrap[T](g: G1[T], c: bool) -> H[T] { if c { return H { g: g } } return H { g: G1.N } }\n\
+             fn wrapAll[T](g: G1[T]) -> H[T] { return H { g: g } }\n\
+             fn wrapTup[T](g: G1[T], c: bool) -> (G1[T], i64) { if c { return (g, 7) } return (G1.N, 7) }\n\
+             fn wrapNest[T](g: G1[T], c: bool) -> H2[T] { if c { return H2 { h: H { g: g } } } return H2 { h: H { g: G1.N } } }\n\
+             fn bare[T](g: G1[T], c: bool) -> G1[T] { if c { return g } return G1.N }\n\
+             fn shw(g: G1[String]) { match g { G1.Y(v) => { println(f\"mx {v.len()}\") } G1.N => { println(\"mx 0\") } } }\n";
+
+        // Handed back inside a STRUCT — the cell that double freed.
+        assert_clean_asan_run(
+            &format!(
+                "{DECLS}\
+                 fn main() {{\n\
+                 \x20   {{ let g: G1[String] = G1.Y(\"aaaaaaaa-1\"); let h = wrap(g, true); shw(h.g) }}\n\
+                 \x20   println(\"end\");\n\
+                 }}\n"
+            ),
+            &["mx 10", "end"],
+            "b91921-struct",
+        );
+
+        // Inside a TUPLE and inside a NESTED struct — the same defect through
+        // the other two aggregate shapes.
+        assert_clean_asan_run(
+            &format!(
+                "{DECLS}\
+                 fn main() {{\n\
+                 \x20   {{ let g: G1[String] = G1.Y(\"bbbbbbbb-2\"); let t = wrapTup(g, true); shw(t.0) }}\n\
+                 \x20   {{ let g: G1[String] = G1.Y(\"cccccccc-3\"); let h = wrapNest(g, true); shw(h.h.g) }}\n\
+                 \x20   println(\"end\");\n\
+                 }}\n"
+            ),
+            &["mx 10", "mx 10", "end"],
+            "b91921-tuple-and-nested",
+        );
+
+        // The DIES-INSIDE legs: the callee keeps the box and returns a
+        // payload-free variant, so the caller must still free its own.
+        assert_clean_asan_run(
+            &format!(
+                "{DECLS}\
+                 fn main() {{\n\
+                 \x20   {{ let g: G1[String] = G1.Y(\"dddddddd-4\"); let h = wrap(g, false); shw(h.g) }}\n\
+                 \x20   {{ let g: G1[String] = G1.Y(\"eeeeeeee-5\"); let t = wrapTup(g, false); shw(t.0) }}\n\
+                 \x20   println(\"end\");\n\
+                 }}\n"
+            ),
+            &["mx 0", "mx 0", "end"],
+            "b91921-dies-inside",
+        );
+
+        // The cells this change must NOT disturb: the static all-paths
+        // aggregate spelling, and the sibling row's bare hand-back.
+        assert_clean_asan_run(
+            &format!(
+                "{DECLS}\
+                 fn main() {{\n\
+                 \x20   {{ let g: G1[String] = G1.Y(\"ffffffff-6\"); let h = wrapAll(g); shw(h.g) }}\n\
+                 \x20   {{ let g: G1[String] = G1.Y(\"gggggggg-7\"); let b = bare(g, true); shw(b) }}\n\
+                 \x20   {{ let g: G1[String] = G1.Y(\"hhhhhhhh-8\"); let b = bare(g, false); shw(b) }}\n\
+                 \x20   println(\"end\");\n\
+                 }}\n"
+            ),
+            &["mx 10", "mx 10", "mx 0", "end"],
+            "b91921-untouched",
+        );
+
+        // Handed to NOBODY: the result is discarded, so the caller's binding is
+        // the box's only owner and a disarm here would strand it.
+        assert_clean_asan_run(
+            &format!(
+                "{DECLS}\
+                 fn main() {{\n\
+                 \x20   {{ let g: G1[String] = G1.Y(\"iiiiiiii-9\"); wrap(g, true); }}\n\
+                 \x20   println(\"end\");\n\
+                 }}\n"
+            ),
+            &["end"],
+            "b91921-discarded",
+        );
+    }
+
     /// B-2026-09-17-8 — the memory half of the two paired output fixtures.
     ///
     /// Compiling a monomorph mid-caller wiped the caller's payload-ownership
