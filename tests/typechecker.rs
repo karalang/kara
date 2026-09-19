@@ -51388,3 +51388,60 @@ fn main() { takeit(Ho[i64].Full(7)); println("end") }"#,
 fn main() { let g = Col.B; match g { A(r) => { println(f"a:{r}") } B => { println("b") } } }"#,
     );
 }
+
+// ── prefix collection literals: VecDeque / SortedMap ─────────────
+
+/// B-2026-09-15-25 — `VecDeque[...]` and `SortedMap[k: v]` are two of the five
+/// names design.md § Collection Literals says the prefix form supports, and
+/// neither parsed. Now that they do, they must TYPE as themselves: a
+/// `SortedMap` literal that came back `Map[K, V]` would be worse than the
+/// parse error it replaced, since it would compile and silently lose ordering.
+#[test]
+fn vecdeque_and_sortedmap_prefix_literals_typecheck() {
+    // Synthesis mode — no annotation to fall back on.
+    typecheck_ok("fn main() { let d = VecDeque[1, 2, 3]; let _ = d.len(); }");
+    typecheck_ok("fn main() { let m = SortedMap[\"a\": 1]; let _ = m.len(); }");
+    // Annotated, which is what pins the type rather than merely accepting it.
+    typecheck_ok("fn main() { let d: VecDeque[i64] = VecDeque[1, 2]; }");
+    typecheck_ok("fn main() { let m: SortedMap[String, i64] = SortedMap[\"a\": 1]; }");
+    // Empty forms — design.md § "Empty prefix-literal requires an annotation".
+    typecheck_ok("fn main() { let d: VecDeque[i64] = VecDeque[]; }");
+    typecheck_ok("fn main() { let m: SortedMap[String, i64] = SortedMap[]; }");
+    // Parameter and return position, the shapes a literal has to survive to
+    // be worth having.
+    typecheck_ok(
+        "fn take(m: SortedMap[String, i64]) -> i64 { m.len() } \
+         fn make() -> SortedMap[String, i64] { SortedMap[\"z\": 3] } \
+         fn main() { let _ = take(make()); }",
+    );
+    typecheck_ok(
+        "fn take(d: VecDeque[i64]) -> i64 { d.len() } \
+         fn main() { let _ = take(VecDeque[1, 2]); }",
+    );
+    // A literal and a `.new()` value must be interchangeable, the check
+    // `map_literal_types_as_map_not_hashmap` makes for `Map`.
+    typecheck_ok(
+        "fn take(m: SortedMap[String, i64]) -> i64 { m.len() } \
+         fn main() { let a: SortedMap[String, i64] = SortedMap.new(); let _ = take(a); \
+         let _ = take(SortedMap[\"k\": 1]); }",
+    );
+}
+
+/// The ordered literal must NOT be assignable to the hashed type or the other
+/// way round — that is the whole point of carrying the prefix name through to
+/// the type. B-2026-09-15-25.
+#[test]
+fn sortedmap_literal_is_not_a_map() {
+    let errs = typecheck_errors("fn main() { let m: Map[String, i64] = SortedMap[\"a\": 1]; }");
+    assert!(
+        !errs.is_empty(),
+        "a SortedMap literal must not satisfy a Map annotation"
+    );
+    let errs = typecheck_errors("fn main() { let m: SortedMap[String, i64] = Map[\"a\": 1]; }");
+    assert!(
+        !errs.is_empty(),
+        "a Map literal must not satisfy a SortedMap annotation"
+    );
+    // The bare form stays a `Map` — it has no prefix to say otherwise.
+    typecheck_ok("fn main() { let m: Map[String, i64] = [\"a\": 1]; }");
+}

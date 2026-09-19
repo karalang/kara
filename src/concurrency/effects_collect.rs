@@ -185,7 +185,7 @@ impl<'a> super::ConcurrencyChecker<'a> {
                     self.collect_expr_effects(e, info);
                 }
             }
-            ExprKind::MapLiteral(entries) => {
+            ExprKind::MapLiteral { entries, .. } => {
                 for (k, v) in entries {
                     self.collect_expr_effects(k, info);
                     self.collect_expr_effects(v, info);

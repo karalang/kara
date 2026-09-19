@@ -763,7 +763,7 @@ impl<'a> CostEstimator<'a> {
                 }
                 c
             }
-            ExprKind::MapLiteral(entries) => {
+            ExprKind::MapLiteral { entries, .. } => {
                 let mut c: u64 = 1;
                 for (k, v) in entries {
                     c = c.saturating_add(self.estimate_expr(k));

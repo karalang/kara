@@ -7213,7 +7213,7 @@ impl<'ctx> super::Codegen<'ctx> {
             ExprKind::RepeatLiteral { value, count, .. } => {
                 self.borrow_binding_escapes(value, name) || self.borrow_binding_escapes(count, name)
             }
-            ExprKind::MapLiteral(pairs) => pairs.iter().any(|(k, v)| {
+            ExprKind::MapLiteral { entries: pairs, .. } => pairs.iter().any(|(k, v)| {
                 self.borrow_binding_escapes(k, name) || self.borrow_binding_escapes(v, name)
             }),
             ExprKind::StructLiteral { fields, spread, .. } => {

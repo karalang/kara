@@ -1579,7 +1579,7 @@ pub(crate) fn collect_free_idents_expr(
             collect_free_idents_expr(value, bound, out);
             collect_free_idents_expr(count, bound, out);
         }
-        ExprKind::MapLiteral(entries) => {
+        ExprKind::MapLiteral { entries, .. } => {
             for (k, v) in entries {
                 collect_free_idents_expr(k, bound, out);
                 collect_free_idents_expr(v, bound, out);

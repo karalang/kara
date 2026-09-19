@@ -321,7 +321,7 @@ fn walk_expr(
                 walk_expr(e, level, ffi_fns, diags);
             }
         }
-        ExprKind::MapLiteral(pairs) => {
+        ExprKind::MapLiteral { entries: pairs, .. } => {
             for (k, v) in pairs {
                 walk_expr(k, level, ffi_fns, diags);
                 walk_expr(v, level, ffi_fns, diags);

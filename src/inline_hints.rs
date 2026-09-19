@@ -385,7 +385,7 @@ fn walk_expr(
             w!(value);
             w!(count);
         }
-        ExprKind::MapLiteral(pairs) => {
+        ExprKind::MapLiteral { entries: pairs, .. } => {
             for (k, v) in pairs {
                 w!(k);
                 w!(v);

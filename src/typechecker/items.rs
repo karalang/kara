@@ -3896,7 +3896,7 @@ impl<'a> super::TypeChecker<'a> {
                     );
                 }
             },
-            ExprKind::MapLiteral(_) => {
+            ExprKind::MapLiteral { .. } => {
                 self.reject_module_binding_init(e, binding_name, "Map literal (heap-allocated)");
             }
             ExprKind::StructLiteral { fields, spread, .. } => {

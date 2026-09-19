@@ -1107,7 +1107,9 @@ impl EscapeAnalysis {
             ExprKind::Tuple(es) | ExprKind::ArrayLiteral(es) => any(es),
             ExprKind::PrefixCollectionLiteral { items, .. } => any(items),
             ExprKind::RepeatLiteral { value, count, .. } => mis(value) || mis(count),
-            ExprKind::MapLiteral(pairs) => pairs.iter().any(|(k, v)| mis(k) || mis(v)),
+            ExprKind::MapLiteral { entries: pairs, .. } => {
+                pairs.iter().any(|(k, v)| mis(k) || mis(v))
+            }
             ExprKind::StructLiteral { fields, spread, .. } => {
                 fields.iter().any(|f| mis(&f.value)) || spread.as_deref().is_some_and(mis)
             }
@@ -1314,7 +1316,9 @@ impl EscapeAnalysis {
             ExprKind::Tuple(es) | ExprKind::ArrayLiteral(es) => any(es),
             ExprKind::PrefixCollectionLiteral { items, .. } => any(items),
             ExprKind::RepeatLiteral { value, count, .. } => esc(value) || esc(count),
-            ExprKind::MapLiteral(pairs) => pairs.iter().any(|(k, v)| esc(k) || esc(v)),
+            ExprKind::MapLiteral { entries: pairs, .. } => {
+                pairs.iter().any(|(k, v)| esc(k) || esc(v))
+            }
             ExprKind::StructLiteral { fields, spread, .. } => {
                 fields.iter().any(|f| esc(&f.value)) || spread.as_deref().is_some_and(esc)
             }
@@ -1467,7 +1471,7 @@ impl EscapeAnalysis {
         }
         match &value.kind {
             ExprKind::ArrayLiteral(_)
-            | ExprKind::MapLiteral(_)
+            | ExprKind::MapLiteral { .. }
             | ExprKind::RepeatLiteral { .. } => true,
             ExprKind::PrefixCollectionLiteral { type_name, .. } => {
                 Self::is_collection_type_head(type_name)
@@ -2205,7 +2209,7 @@ impl EscapeAnalysis {
             ExprKind::RepeatLiteral { value, .. } => {
                 self.tail_escapes_capturing_closure(value, outer, capturing_vars, capturing_fields)
             }
-            ExprKind::MapLiteral(pairs) => pairs.iter().any(|(k, v)| {
+            ExprKind::MapLiteral { entries: pairs, .. } => pairs.iter().any(|(k, v)| {
                 self.tail_escapes_capturing_closure(k, outer, capturing_vars, capturing_fields)
                     || self.tail_escapes_capturing_closure(
                         v,
@@ -2445,7 +2449,7 @@ pub fn refs_in_expr(expr: &Expr, refs: &mut HashSet<String>, defs: &mut HashSet<
             refs_in_expr(value, refs, defs);
             refs_in_expr(count, refs, defs);
         }
-        ExprKind::MapLiteral(pairs) => {
+        ExprKind::MapLiteral { entries: pairs, .. } => {
             for (k, v) in pairs {
                 refs_in_expr(k, refs, defs);
                 refs_in_expr(v, refs, defs);

@@ -816,7 +816,7 @@ pub(crate) fn scan_expr_for_par_uses(
                 );
             }
         }
-        ExprKind::MapLiteral(entries) => {
+        ExprKind::MapLiteral { entries, .. } => {
             for (k, v) in entries {
                 scan_expr_for_par_uses(
                     k,

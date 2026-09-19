@@ -494,7 +494,7 @@ fn collect_edges_expr(
             collect_edges_expr(value, known, method_callee, out);
             collect_edges_expr(count, known, method_callee, out);
         }
-        ExprKind::MapLiteral(entries) => {
+        ExprKind::MapLiteral { entries, .. } => {
             for (k, v) in entries {
                 collect_edges_expr(k, known, method_callee, out);
                 collect_edges_expr(v, known, method_callee, out);

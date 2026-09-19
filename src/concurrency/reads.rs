@@ -149,7 +149,7 @@ impl<'a> super::ConcurrencyChecker<'a> {
                     self.collect_expr_reads(e, reads);
                 }
             }
-            ExprKind::MapLiteral(entries) => {
+            ExprKind::MapLiteral { entries, .. } => {
                 for (k, v) in entries {
                     self.collect_expr_reads(k, reads);
                     self.collect_expr_reads(v, reads);
@@ -512,7 +512,7 @@ impl<'a> super::ConcurrencyChecker<'a> {
                 self.collect_expr_inner_writes(value, writes);
                 self.collect_expr_inner_writes(count, writes);
             }
-            ExprKind::MapLiteral(pairs) => {
+            ExprKind::MapLiteral { entries: pairs, .. } => {
                 for (k, v) in pairs {
                     self.collect_expr_inner_writes(k, writes);
                     self.collect_expr_inner_writes(v, writes);
@@ -952,7 +952,7 @@ impl<'a> super::ConcurrencyChecker<'a> {
             ExprKind::PrefixCollectionLiteral { items, .. } => items
                 .iter()
                 .any(|e| self.expr_shares_outer_mut_borrow(e, locals)),
-            ExprKind::MapLiteral(entries) => entries.iter().any(|(k, v)| {
+            ExprKind::MapLiteral { entries, .. } => entries.iter().any(|(k, v)| {
                 self.expr_shares_outer_mut_borrow(k, locals)
                     || self.expr_shares_outer_mut_borrow(v, locals)
             }),

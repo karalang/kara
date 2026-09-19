@@ -744,7 +744,7 @@ fn visit_expr<'a, F: FnMut(Node<'a>)>(e: &'a Expr, f: &mut F) {
             visit_expr(value, f);
             visit_expr(count, f);
         }
-        ExprKind::MapLiteral(pairs) => {
+        ExprKind::MapLiteral { entries: pairs, .. } => {
             for (k, v) in pairs {
                 visit_expr(k, f);
                 visit_expr(v, f);

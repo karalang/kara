@@ -260,7 +260,7 @@ fn has_consuming_sink(c: &Ctx<'_>, e: &Expr) -> bool {
         ExprKind::RepeatLiteral { value, count, .. } => {
             derived(value) || has_consuming_sink(c, value) || has_consuming_sink(c, count)
         }
-        ExprKind::MapLiteral(pairs) => pairs.iter().any(|(k, v)| {
+        ExprKind::MapLiteral { entries: pairs, .. } => pairs.iter().any(|(k, v)| {
             derived(k) || derived(v) || has_consuming_sink(c, k) || has_consuming_sink(c, v)
         }),
         // A `Call` is a free-function call ONLY when its callee is a bare
@@ -542,7 +542,7 @@ fn walk_exprs(e: &Expr, f: &mut impl FnMut(&Expr)) {
             walk_exprs(value, f);
             walk_exprs(count, f);
         }
-        ExprKind::MapLiteral(pairs) => {
+        ExprKind::MapLiteral { entries: pairs, .. } => {
             for (k, v) in pairs {
                 walk_exprs(k, f);
                 walk_exprs(v, f);

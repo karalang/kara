@@ -196,7 +196,7 @@ impl<'a> super::OwnershipChecker<'a> {
                 self.walk_capture_body_expr(value, usage);
                 self.walk_capture_body_expr(count, usage);
             }
-            ExprKind::MapLiteral(entries) => {
+            ExprKind::MapLiteral { entries, .. } => {
                 for (k, v) in entries {
                     self.walk_capture_body_expr(k, usage);
                     self.walk_capture_body_expr(v, usage);
@@ -634,7 +634,7 @@ impl<'a> super::OwnershipChecker<'a> {
                 Self::walk_capture_paths_expr(value, pre_live, paths, reasons);
                 Self::walk_capture_paths_expr(count, pre_live, paths, reasons);
             }
-            ExprKind::MapLiteral(entries) => {
+            ExprKind::MapLiteral { entries, .. } => {
                 for (k, v) in entries {
                     Self::walk_capture_paths_expr(k, pre_live, paths, reasons);
                     Self::walk_capture_paths_expr(v, pre_live, paths, reasons);
@@ -1014,7 +1014,7 @@ impl<'a> super::OwnershipChecker<'a> {
                 self.walk_capture_path_mutations_expr(value, pre_live, paths, mutated);
                 self.walk_capture_path_mutations_expr(count, pre_live, paths, mutated);
             }
-            ExprKind::MapLiteral(entries) => {
+            ExprKind::MapLiteral { entries, .. } => {
                 for (k, v) in entries {
                     self.walk_capture_path_mutations_expr(k, pre_live, paths, mutated);
                     self.walk_capture_path_mutations_expr(v, pre_live, paths, mutated);

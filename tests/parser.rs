@@ -15915,3 +15915,99 @@ fn raw_escapes_of_escapable_keywords_still_parse() {
         assert!(errors.is_empty(), "r#{kw} should parse; got {:?}", errors);
     }
 }
+
+// ── prefix collection literals: the full design.md name list ─────
+
+/// B-2026-09-15-25 — design.md § Collection Literals says the prefix form
+/// "is supported by `Vec`, `Set`, `Map`, `VecDeque`, and `SortedMap`", but the
+/// parser's gate was `Vec | Array | Set | Map`. The two missing names failed
+/// in two different and equally misleading ways: `VecDeque[1, 2]` parsed as a
+/// CALL and came back `'VecDeque' is a type, not a function`, and
+/// `SortedMap["a": 1]` never reached the typechecker at all — it was a raw
+/// `Expected RightBracket, found Colon` on the map body's own separator.
+#[test]
+fn prefix_collection_literal_accepts_every_name_design_md_lists() {
+    // The four that always worked, so a regression in them fails here too.
+    parse_ok("fn main() { let v = Vec[1, 2]; }");
+    parse_ok("fn main() { let a = Array[1, 2]; }");
+    parse_ok("fn main() { let s = Set[1, 2]; }");
+    parse_ok("fn main() { let m = Map[\"a\": 1]; }");
+    // The two that did not.
+    parse_ok("fn main() { let d = VecDeque[1, 2]; }");
+    parse_ok("fn main() { let m = SortedMap[\"a\": 1]; }");
+    // Empty forms — design.md § "Empty prefix-literal requires an annotation"
+    // sanctions the spelling; the annotation is what types it.
+    parse_ok("fn main() { let d: VecDeque[i64] = VecDeque[]; }");
+    parse_ok("fn main() { let m: SortedMap[String, i64] = SortedMap[]; }");
+}
+
+/// The prefix name has to reach the AST, because it is the only thing that
+/// tells `SortedMap["a": 1]` apart from `Map["a": 1]` downstream — both
+/// produce `ExprKind::MapLiteral`, and the bare `["a": 1]` form produces it
+/// too. B-2026-09-15-25.
+#[test]
+fn map_literal_records_which_spelling_produced_it() {
+    fn map_literal_name(source: &str) -> Option<String> {
+        let prog = parse_ok(source);
+        let Item::Function(f) = &prog.items[0] else {
+            panic!("expected a function");
+        };
+        let StmtKind::Let { value, .. } = &f.body.stmts[0].kind else {
+            panic!("expected a let");
+        };
+        let ExprKind::MapLiteral { type_name, .. } = &value.kind else {
+            panic!("expected a MapLiteral, got {:?}", value.kind);
+        };
+        type_name.clone()
+    }
+    assert_eq!(map_literal_name("fn main() { let m = [\"a\": 1]; }"), None);
+    assert_eq!(
+        map_literal_name("fn main() { let m = Map[\"a\": 1]; }"),
+        Some("Map".to_string())
+    );
+    assert_eq!(
+        map_literal_name("fn main() { let m = SortedMap[\"a\": 1]; }"),
+        Some("SortedMap".to_string())
+    );
+}
+
+/// B-2026-09-19-16 — the formatter printed every map literal in a BRACE form
+/// (`{\n  "a": 1,\n}`) that is not Kāra syntax: feeding it back gives
+/// `Expected expression, found Colon`, so `karac fmt` turned any file holding
+/// a map literal into a parse error. Found while teaching the formatter to
+/// keep the `SortedMap` prefix (B-2026-09-15-25), which is the other half of
+/// this: dropping the name silently converts an ordered literal into a hashed
+/// one.
+#[test]
+fn map_literal_survives_a_formatter_round_trip() {
+    for source in [
+        "fn main() { let m = [\"a\": 1]; }",
+        "fn main() { let m = Map[\"a\": 1]; }",
+        "fn main() { let m = SortedMap[\"a\": 1, \"b\": 2]; }",
+        "fn main() { let d = VecDeque[1, 2]; }",
+    ] {
+        let formatted = karac::formatter::format_program(&parse_ok(source));
+        // Re-parsing is the real assertion — the old output did not.
+        let reparsed = parse(&formatted);
+        assert!(
+            reparsed.errors.is_empty(),
+            "formatted output does not re-parse:\n{}\nerrors: {}",
+            formatted,
+            reparsed
+                .errors
+                .iter()
+                .map(|e| e.to_string())
+                .collect::<Vec<_>>()
+                .join(", ")
+        );
+        // And it must still say which collection it is.
+        let second = karac::formatter::format_program(&reparsed.program);
+        assert_eq!(formatted, second, "formatting is not idempotent");
+    }
+    let sorted =
+        karac::formatter::format_program(&parse_ok("fn main() { let m = SortedMap[\"a\": 1]; }"));
+    assert!(
+        sorted.contains("SortedMap["),
+        "the SortedMap prefix was dropped: {sorted}"
+    );
+}

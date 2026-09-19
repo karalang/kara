@@ -434,23 +434,32 @@ impl super::Formatter {
                 self.format_expr(count);
                 self.write_str("]");
             }
-            ExprKind::MapLiteral(entries) => {
-                if entries.is_empty() {
-                    self.write_str("{:}");
-                    return;
+            ExprKind::MapLiteral { type_name, entries } => {
+                // `["k": v, ...]` (bare) / `Map["k": v, ...]` /
+                // `SortedMap["k": v, ...]` — the three spellings that produce
+                // this node, printed back as themselves.
+                //
+                // The prefix name has to survive the round trip or a
+                // `SortedMap` literal comes back a hashed `Map`
+                // (B-2026-09-15-25). The BRACE form this arm used to print
+                // (`{\n  "k": v,\n}`) is not Kāra syntax at all and never
+                // re-parsed — `{"a": 1}` is `Expected expression, found Colon`
+                // — so every map literal `karac fmt` touched came back a parse
+                // error (B-2026-09-19-16, found while adding the `SortedMap`
+                // spelling above).
+                if let Some(name) = type_name {
+                    self.write_ident(name);
                 }
-                self.write_str("{\n");
-                self.push_indent();
-                for (k, v) in entries {
-                    self.write_indent();
+                self.write_str("[");
+                for (i, (k, v)) in entries.iter().enumerate() {
+                    if i > 0 {
+                        self.write_str(", ");
+                    }
                     self.format_expr(k);
                     self.write_str(": ");
                     self.format_expr(v);
-                    self.write_str(",\n");
                 }
-                self.pop_indent();
-                self.write_indent();
-                self.write_str("}");
+                self.write_str("]");
             }
             ExprKind::StructLiteral {
                 path,

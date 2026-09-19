@@ -497,7 +497,7 @@ impl ScanCtx<'_> {
                 self.scan_expr(value);
                 self.scan_expr(count);
             }
-            ExprKind::MapLiteral(entries) => {
+            ExprKind::MapLiteral { entries, .. } => {
                 for (k, val) in entries {
                     self.scan_expr(k);
                     self.scan_expr(val);
@@ -1254,7 +1254,7 @@ fn walk_expr_for_returns(expr: &Expr, out: &mut FxHashSet<SpanKey>) {
             walk_expr_for_returns(value, out);
             walk_expr_for_returns(count, out);
         }
-        ExprKind::MapLiteral(pairs) => {
+        ExprKind::MapLiteral { entries: pairs, .. } => {
             for (k, v) in pairs {
                 walk_expr_for_returns(k, out);
                 walk_expr_for_returns(v, out);

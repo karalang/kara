@@ -1832,9 +1832,9 @@ The parser disambiguates from array literals by the `:` that follows the first k
 
 ```
 PREFIX_LITERAL   = COLLECTION_IDENT "[" PREFIX_CONTENT "]"
-COLLECTION_IDENT = "Array" | "Vec" | "Set" | "Map" | "VecDeque" | "TreeMap"
-PREFIX_CONTENT   = SEQ_CONTENT    // Array, Vec, Set, VecDeque, TreeMap
-                 | MAP_CONTENT    // Map only
+COLLECTION_IDENT = "Array" | "Vec" | "Set" | "Map" | "VecDeque" | "SortedMap"
+PREFIX_CONTENT   = SEQ_CONTENT    // Array, Vec, Set, VecDeque
+                 | MAP_CONTENT    // Map, SortedMap
                  | REPEAT_CONTENT // Array, Vec only
                  | ε              // empty — requires a binding annotation
 SEQ_CONTENT    = EXPR { "," EXPR } [ "," ]
@@ -1846,7 +1846,8 @@ REPEAT_CONTENT = EXPR ";" EXPR
 
 Rules:
 - **Single element** — `Array[42]` is a one-element prefix literal. `Array[i32]` where `i32` is a type name is a type error (a type is not a valid element expression).
-- **Map content** — `Map[...]` requires `key: value` pairs (`MAP_CONTENT`). `Map[a, b]` without `:` is a compile error. `Vec[...]` and `Set[...]` require plain expressions; `:` inside them is a parse error.
+- **Map content** — `Map[...]` and `SortedMap[...]` require `key: value` pairs (`MAP_CONTENT`). `Map[a, b]` without `:` is a compile error. `Vec[...]`, `Set[...]` and `VecDeque[...]` require plain expressions; `:` inside them is a parse error.
+- **`SortedMap`, not `TreeMap`** — this production named `TreeMap` until B-2026-09-15-25, and classified it under `SEQ_CONTENT`. Neither was right: `TreeMap` is not a Kāra type (the ordered map is `SortedMap`, per design.md § Collection Literals, which is also the only one of the two lists the parser was ever written against), and an ordered MAP takes `key: value` pairs like any other map. The two entries that were missing from the parser's own gate at the same time — `VecDeque` and `SortedMap` — are the reason the discrepancy went unread for as long as it did: nothing could exercise either name.
 - **Empty** — `Array[]`, `Vec[]`, `Map[]` etc. have no element type to infer and require a binding annotation. `let v: Vec[i64] = Vec[]` is valid; bare `Vec[]` is a compile error.
 
 ```

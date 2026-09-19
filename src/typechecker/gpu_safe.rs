@@ -398,7 +398,7 @@ impl<'a> super::TypeChecker<'a> {
                 self.gpu_collect_captures(value, outer, shadows, seen, out);
                 self.gpu_collect_captures(count, outer, shadows, seen, out);
             }
-            ExprKind::MapLiteral(entries) => {
+            ExprKind::MapLiteral { entries, .. } => {
                 for (k, v) in entries {
                     self.gpu_collect_captures(k, outer, shadows, seen, out);
                     self.gpu_collect_captures(v, outer, shadows, seen, out);

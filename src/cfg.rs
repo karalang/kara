@@ -1437,7 +1437,7 @@ impl<'a> CfgBuilder<'a> {
                 let c = self.lower_expr(value, cur, exit, loops);
                 self.lower_expr(count, c, exit, loops)
             }
-            ExprKind::MapLiteral(entries) => {
+            ExprKind::MapLiteral { entries, .. } => {
                 let mut c = cur;
                 for (k, v) in entries {
                     c = self.lower_expr(k, c, exit, loops);

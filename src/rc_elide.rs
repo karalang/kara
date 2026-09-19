@@ -417,7 +417,7 @@ fn walk_children(kind: &ExprKind, f: &mut dyn FnMut(&Expr)) {
             f(value);
             f(count);
         }
-        ExprKind::MapLiteral(pairs) => {
+        ExprKind::MapLiteral { entries: pairs, .. } => {
             for (k, v) in pairs {
                 f(k);
                 f(v);

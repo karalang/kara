@@ -1841,10 +1841,33 @@ impl<'a> Lowerer<'a> {
                     if type_name == "Array" {
                         let lowered_items = std::mem::take(items);
                         expr.kind = ExprKind::ArrayLiteral(lowered_items);
+                    } else if type_name == "VecDeque" {
+                        // `VecDeque[e1, e2, …]` is the `Vec` prefix form under
+                        // another name: the two share one `{ptr, len, cap}`
+                        // representation by construction (the `Vec`/`VecDeque`
+                        // `new` arm in `assoc_call.rs`), and codegen reaches
+                        // `compile_vec_prefix_literal` from a
+                        // `type_name == "Vec"` dispatch. Rename rather than
+                        // add a second dispatch arm — the same trade the
+                        // `ArrayLiteral` canonicalization above makes for a
+                        // nested `VecDeque` literal, whose comment names this
+                        // row as the reason the case could not arise yet.
+                        //
+                        // B-2026-09-15-25 — until the parser learned the
+                        // spelling, no `PrefixCollectionLiteral` could carry
+                        // `VecDeque`; the moment it could, codegen met it with
+                        // `no handler for expression kind
+                        // PrefixCollectionLiteral` while `--interp` ran it
+                        // fine, so the new syntax was born run-vs-build split.
+                        // The expression's RECORDED TYPE in `expr_types` is
+                        // untouched and still says `VecDeque[T]`, so
+                        // `push_front` / `pop_front` lowering — which keys on
+                        // the BINDING — is unaffected.
+                        *type_name = "Vec".to_string();
                     }
                 }
             }
-            ExprKind::MapLiteral(pairs) => {
+            ExprKind::MapLiteral { entries: pairs, .. } => {
                 for (k, v) in pairs {
                     self.lower_expr(k);
                     self.lower_expr(v);

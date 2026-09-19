@@ -546,7 +546,7 @@ impl<'a> super::OwnershipChecker<'a> {
                 // only.
                 Self::collect_escape_target(value, closure_lets, out);
             }
-            ExprKind::MapLiteral(pairs) => {
+            ExprKind::MapLiteral { entries: pairs, .. } => {
                 for (k, v) in pairs {
                     Self::collect_escape_target(k, closure_lets, out);
                     Self::collect_escape_target(v, closure_lets, out);
@@ -758,7 +758,7 @@ impl<'a> super::OwnershipChecker<'a> {
             ExprKind::RepeatLiteral { value, .. } => {
                 Self::walk_expr_for_calls(value, visit);
             }
-            ExprKind::MapLiteral(pairs) => {
+            ExprKind::MapLiteral { entries: pairs, .. } => {
                 for (k, v) in pairs {
                     Self::walk_expr_for_calls(k, visit);
                     Self::walk_expr_for_calls(v, visit);

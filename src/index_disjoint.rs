@@ -1299,7 +1299,7 @@ impl Prover<'_> {
                 self.walk_expr(value)?;
                 self.walk_expr(count)
             }
-            ExprKind::MapLiteral(pairs) => {
+            ExprKind::MapLiteral { entries: pairs, .. } => {
                 for (k, v) in pairs {
                     self.walk_expr(k)?;
                     self.walk_expr(v)?;
@@ -1797,7 +1797,7 @@ fn for_each_child<'a>(expr: &'a Expr, on: &mut dyn FnMut(Child<'a>)) {
             on(Child::Expr(value));
             on(Child::Expr(count));
         }
-        ExprKind::MapLiteral(pairs) => {
+        ExprKind::MapLiteral { entries: pairs, .. } => {
             for (k, v) in pairs {
                 on(Child::Expr(k));
                 on(Child::Expr(v));

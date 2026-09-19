@@ -378,7 +378,7 @@ fn collect_callees_in_expr(
             collect_callees_in_expr(value, known, methods, out);
             collect_callees_in_expr(count, known, methods, out);
         }
-        ExprKind::MapLiteral(entries) => {
+        ExprKind::MapLiteral { entries, .. } => {
             for (k, v) in entries {
                 collect_callees_in_expr(k, known, methods, out);
                 collect_callees_in_expr(v, known, methods, out);

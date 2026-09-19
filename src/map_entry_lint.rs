@@ -609,7 +609,7 @@ fn walk_expr(expr: &Expr, typed: &TypeCheckResult, src: &str, out: &mut Vec<Type
             walk_expr(value, typed, src, out);
             walk_expr(count, typed, src, out);
         }
-        ExprKind::MapLiteral(pairs) => {
+        ExprKind::MapLiteral { entries: pairs, .. } => {
             for (k, v) in pairs {
                 walk_expr(k, typed, src, out);
                 walk_expr(v, typed, src, out);

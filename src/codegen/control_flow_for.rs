@@ -5175,7 +5175,7 @@ fn rewrite_loop_ctl_expr(e: &mut Expr, cfg: &LoopCtlRewrite) {
             walk(value, cfg);
             walk(count, cfg);
         }
-        ExprKind::MapLiteral(pairs) => {
+        ExprKind::MapLiteral { entries: pairs, .. } => {
             for (k, v) in pairs {
                 walk(k, cfg);
                 walk(v, cfg);

@@ -744,7 +744,7 @@ impl Stripper<'_> {
                 self.expr(value);
                 self.expr(count);
             }
-            ExprKind::MapLiteral(pairs) => {
+            ExprKind::MapLiteral { entries: pairs, .. } => {
                 for (k, v) in pairs.iter_mut() {
                     self.expr(k);
                     self.expr(v);

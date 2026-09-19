@@ -1150,7 +1150,7 @@ impl Analyzer<'_> {
                     self.analyze_expr(s, Role::Read);
                 }
             }
-            ExprKind::MapLiteral(pairs) => {
+            ExprKind::MapLiteral { entries: pairs, .. } => {
                 for (k, v) in pairs {
                     self.analyze_expr(k, Role::Move);
                     self.analyze_expr(v, Role::Move);

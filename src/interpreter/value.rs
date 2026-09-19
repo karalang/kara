@@ -2287,6 +2287,24 @@ impl Value {
         Value::map_of(Vec::new())
     }
 
+    /// Build a `SortedMap` from entries — the ordered twin of [`Value::map_of`],
+    /// for the `SortedMap["k": v, ...]` prefix literal (B-2026-09-15-25). The
+    /// `BTreeMap` orders by key on insert, so the entry order the source wrote
+    /// is not observable, exactly as it is not for `SortedMap.new()` + inserts.
+    /// A repeated key keeps the LAST binding, matching `Map`'s literal.
+    pub fn sorted_map_of(entries: Vec<(Value, Value)>) -> Value {
+        // `OrdValue` keys carry interior mutability via the value Arc; the
+        // BTree never re-hashes on it, so the mutable-key-type lint is a false
+        // positive (the same suppression every other `SortedMap`/`SortedSet`
+        // construction site carries).
+        #[allow(clippy::mutable_key_type)]
+        let mut m = BTreeMap::new();
+        for (k, v) in entries {
+            m.insert(OrdValue(k), v);
+        }
+        Value::SortedMap(m)
+    }
+
     /// Build a `Set` from insertion-ordered items, keeping the first
     /// occurrence of any duplicate.
     pub fn set_of(items: Vec<Value>) -> Value {

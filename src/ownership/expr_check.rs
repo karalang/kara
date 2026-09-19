@@ -1450,7 +1450,7 @@ impl<'a> super::OwnershipChecker<'a> {
                     self.check_expr_reading(elem, states, param_types, param_usage);
                 }
             }
-            ExprKind::MapLiteral(entries) => {
+            ExprKind::MapLiteral { entries, .. } => {
                 for (key, val) in entries {
                     self.check_expr_reading(key, states, param_types, param_usage);
                     self.check_expr_reading(val, states, param_types, param_usage);

@@ -211,7 +211,7 @@ impl<'a> super::TypeChecker<'a> {
                     self.collect_in_expr(x, out);
                 }
             }
-            ExprKind::MapLiteral(pairs) => {
+            ExprKind::MapLiteral { entries: pairs, .. } => {
                 if !pairs.is_empty() {
                     out.push(AllocSite {
                         span: e.span,

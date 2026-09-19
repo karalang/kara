@@ -397,7 +397,7 @@ fn walk_expr(tgt: Target<'_>, e: &Expr, t: &mut Tally<'_>) {
                 walk_expr(tgt, x, t);
             }
         }
-        ExprKind::MapLiteral(pairs) => {
+        ExprKind::MapLiteral { entries: pairs, .. } => {
             for (k, v) in pairs {
                 walk_expr(tgt, k, t);
                 walk_expr(tgt, v, t);

@@ -445,7 +445,7 @@ fn walk_expr_for_with_provider(expr: &Expr, out: &mut Vec<WithProviderSite>) {
                 walk_expr_for_with_provider(e, out);
             }
         }
-        ExprKind::MapLiteral(entries) => {
+        ExprKind::MapLiteral { entries, .. } => {
             for (k, v) in entries {
                 walk_expr_for_with_provider(k, out);
                 walk_expr_for_with_provider(v, out);

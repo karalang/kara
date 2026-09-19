@@ -125181,6 +125181,60 @@ fn main() with reads(FileSystem) {
         );
     }
 
+    /// B-2026-09-15-25 — `VecDeque[e1, …]` and `SortedMap[k: v, …]` are two of
+    /// the five names design.md § Collection Literals says the prefix form
+    /// supports; neither parsed until this row, so no backend had ever seen
+    /// one. The moment the parser could produce them, the `VecDeque` spelling
+    /// was born RUN-VS-BUILD SPLIT: `--interp` ran it, and codegen met it with
+    /// `no handler for expression kind PrefixCollectionLiteral`, because
+    /// `compile_vec_prefix_literal` is reached from a `type_name == "Vec"`
+    /// dispatch and lowering only renamed the `ArrayLiteral` spelling.
+    ///
+    /// The `SortedMap` half compiled from the start (it lowers to
+    /// `ExprKind::MapLiteral`, and sortedness is a per-BINDING marker the
+    /// annotation and the recorded type both feed), which is exactly why it
+    /// belongs in the same fixture: the two halves of one syntax took
+    /// different paths to the backend and only one of them arrived.
+    ///
+    /// The ordering assertion is `SortedMap`'s alone. Its walk is in KEY
+    /// order, seed-independent and identical on every backend (CLAUDE.md
+    /// § `Map` / `Set` iteration order) — the source writes its keys out of
+    /// order here, so insertion order and key order disagree and only a real
+    /// ordered map prints them sorted.
+    #[test]
+    fn test_e2e_vecdeque_and_sortedmap_prefix_literals() {
+        let out = run_program_capturing(
+            r#"
+fn main() {
+    let m = SortedMap["c": 3, "a": 1, "b": 2];
+    for (k, v) in m { print(k); print(v); }
+    println(m);
+    let ann: SortedMap[String, i64] = SortedMap["z": 26, "y": 25];
+    for (k, v) in ann { print(k); }
+    let empty: SortedMap[String, i64] = SortedMap[];
+    println(empty.len());
+    let d = VecDeque[1, 2, 3];
+    println(d.len());
+    let mut dq = VecDeque[4, 5];
+    dq.push_front(3);
+    for x in dq { print(x); }
+    println("");
+    let ed: VecDeque[i64] = VecDeque[];
+    println(ed.len());
+}
+"#,
+        );
+        if let Some(c) = out {
+            // Byte-identical to what `karac run --interp` prints for the same
+            // source — that equality is the property under test, not the
+            // string itself.
+            assert_eq!(
+                c.stdout, "a1b2c3SortedMap{a: 1, b: 2, c: 3}\nyz0\n3\n345\n0\n",
+                "compiled output diverged from the interpreter"
+            );
+        }
+    }
+
     /// B-2026-06-07-1 regression: `tg.spawn(closure)` in a function that
     /// also declares a `Vec` (or any heap collection) — which makes the
     /// function eligible for statement-level auto-parallelization — must

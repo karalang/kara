@@ -293,7 +293,17 @@ pub enum ExprKind {
         value: Box<Expr>,
         count: Box<Expr>,
     },
-    MapLiteral(Vec<(Expr, Expr)>),
+    /// `["k": v, ...]` (bare) or `Map["k": v, ...]` / `SortedMap["k": v, ...]`
+    /// (prefix). Both spellings produce this node; the prefix name is what
+    /// distinguishes an ordered `SortedMap` literal from a hashed `Map` one,
+    /// so it has to travel on the node — a `MapLiteral` carries no other
+    /// record of which collection the author asked for. B-2026-09-15-25.
+    MapLiteral {
+        /// `None` → bare `["k": v]` (types as `Map[K, V]`);
+        /// `Some("Map")` / `Some("SortedMap")` → prefix form.
+        type_name: Option<String>,
+        entries: Vec<(Expr, Expr)>,
+    },
     StructLiteral {
         path: Vec<String>,
         fields: Vec<FieldInit>,

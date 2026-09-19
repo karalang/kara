@@ -667,7 +667,7 @@ fn mono_scan_expr(e: &Expr, s: &mut MonotoneScan) {
             mono_scan_expr(value, s);
             mono_scan_expr(count, s);
         }
-        ExprKind::MapLiteral(pairs) => {
+        ExprKind::MapLiteral { entries: pairs, .. } => {
             for (k, v) in pairs {
                 mono_scan_expr(k, s);
                 mono_scan_expr(v, s);

@@ -1505,7 +1505,7 @@ pub fn collect_assigned_roots_expr(expr: &Expr, out: &mut std::collections::Hash
             collect_assigned_roots_expr(value, out);
             collect_assigned_roots_expr(count, out);
         }
-        ExprKind::MapLiteral(entries) => {
+        ExprKind::MapLiteral { entries, .. } => {
             for (k, v) in entries {
                 collect_assigned_roots_expr(k, out);
                 collect_assigned_roots_expr(v, out);

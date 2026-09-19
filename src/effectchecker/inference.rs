@@ -1264,7 +1264,7 @@ impl<'a> super::EffectChecker<'a> {
                     self.collect_calls_in_expr(e, calls, bounds);
                 }
             }
-            ExprKind::MapLiteral(entries) => {
+            ExprKind::MapLiteral { entries, .. } => {
                 for (key, val) in entries {
                     self.collect_calls_in_expr(key, calls, bounds);
                     self.collect_calls_in_expr(val, calls, bounds);

@@ -377,7 +377,7 @@ pub(super) fn collect_captures_expr(
             collect_captures_expr(value, outer, shadows, out, seen);
             collect_captures_expr(count, outer, shadows, out, seen);
         }
-        ExprKind::MapLiteral(entries) => {
+        ExprKind::MapLiteral { entries, .. } => {
             for (k, v) in entries {
                 collect_captures_expr(k, outer, shadows, out, seen);
                 collect_captures_expr(v, outer, shadows, out, seen);

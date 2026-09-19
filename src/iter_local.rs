@@ -469,7 +469,7 @@ fn is_local(expr: &Expr, cx: &Ctx<'_>) -> bool {
         }
         ExprKind::PrefixCollectionLiteral { items, .. } => items.iter().all(|e| is_local(e, cx)),
         ExprKind::RepeatLiteral { value, count, .. } => is_local(value, cx) && is_local(count, cx),
-        ExprKind::MapLiteral(entries) => entries
+        ExprKind::MapLiteral { entries, .. } => entries
             .iter()
             .all(|(k, v)| is_local(k, cx) && is_local(v, cx)),
 
@@ -1087,7 +1087,7 @@ fn visit_children<'e>(expr: &'e Expr, v: &mut impl Visit<'e>) {
             v.on_expr(value);
             v.on_expr(count);
         }
-        ExprKind::MapLiteral(entries) => {
+        ExprKind::MapLiteral { entries, .. } => {
             for (key, value) in entries {
                 v.on_expr(key);
                 v.on_expr(value);

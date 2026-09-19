@@ -434,7 +434,7 @@ fn walk_child_exprs(expr: &Expr, f: &mut impl FnMut(&Expr) -> bool) {
             go!(value);
             go!(count);
         }
-        ExprKind::MapLiteral(pairs) => {
+        ExprKind::MapLiteral { entries: pairs, .. } => {
             for (k, v) in pairs {
                 go!(k);
                 go!(v);
@@ -695,7 +695,7 @@ impl Folder<'_> {
                 self.fold_expr(value);
                 self.fold_expr(count);
             }
-            ExprKind::MapLiteral(pairs) => {
+            ExprKind::MapLiteral { entries: pairs, .. } => {
                 for (k, v) in pairs {
                     self.fold_expr(k);
                     self.fold_expr(v);

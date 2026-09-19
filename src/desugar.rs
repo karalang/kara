@@ -1020,7 +1020,7 @@ pub(crate) fn subst_expr(expr: &mut Expr, subst: &std::collections::HashMap<Stri
             subst_expr(value, subst);
             subst_expr(count, subst);
         }
-        ExprKind::MapLiteral(pairs) => {
+        ExprKind::MapLiteral { entries: pairs, .. } => {
             for (k, v) in pairs.iter_mut() {
                 subst_expr(k, subst);
                 subst_expr(v, subst);
@@ -2031,7 +2031,7 @@ fn walk_expr(expr: &mut Expr, ret: Option<&TypeExpr>, cx: &mut WalkCx) {
             walk_expr(value, ret, cx);
             walk_expr(count, ret, cx);
         }
-        ExprKind::MapLiteral(pairs) => {
+        ExprKind::MapLiteral { entries: pairs, .. } => {
             for (k, v) in pairs.iter_mut() {
                 walk_expr(k, ret, cx);
                 walk_expr(v, ret, cx);

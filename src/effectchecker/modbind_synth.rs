@@ -431,7 +431,7 @@ fn collect_par_write_scope_expr(expr: &Expr, in_par: bool, out: &mut ParWriteSco
             ge!(value);
             ge!(count);
         }
-        ExprKind::MapLiteral(entries) => {
+        ExprKind::MapLiteral { entries, .. } => {
             for (k, v) in entries {
                 ge!(k);
                 ge!(v);
@@ -1024,7 +1024,7 @@ fn collect_mut_arg_roots_expr(expr: &Expr, out: &mut HashSet<String>) {
             collect_mut_arg_roots_expr(value, out);
             collect_mut_arg_roots_expr(count, out);
         }
-        ExprKind::MapLiteral(entries) => {
+        ExprKind::MapLiteral { entries, .. } => {
             for (k, v) in entries {
                 collect_mut_arg_roots_expr(k, out);
                 collect_mut_arg_roots_expr(v, out);
@@ -1282,7 +1282,7 @@ fn collect_par_in_expr(expr: &Expr, out: &mut Vec<(Block, Span)>) {
             collect_par_in_expr(value, out);
             collect_par_in_expr(count, out);
         }
-        ExprKind::MapLiteral(entries) => {
+        ExprKind::MapLiteral { entries, .. } => {
             for (k, v) in entries {
                 collect_par_in_expr(k, out);
                 collect_par_in_expr(v, out);
@@ -1867,7 +1867,7 @@ impl<'a> ModBindingSynthWalker<'a> {
                 self.walk_expr(value);
                 self.walk_expr(count);
             }
-            ExprKind::MapLiteral(entries) => {
+            ExprKind::MapLiteral { entries, .. } => {
                 for (k, v) in entries {
                     self.walk_expr(k);
                     self.walk_expr(v);

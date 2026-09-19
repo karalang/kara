@@ -616,12 +616,19 @@ impl<'a> super::Interpreter<'a> {
             }
 
             // Map literal
-            ExprKind::MapLiteral(entries) => {
+            ExprKind::MapLiteral { type_name, entries } => {
                 let vals: Vec<(Value, Value)> = entries
                     .iter()
                     .map(|(k, v)| (self.eval_expr_inner(k), self.eval_expr_inner(v)))
                     .collect();
-                Value::map_of(vals)
+                // The prefix name is the only record of which collection was
+                // asked for — the bare `["k": v]` form and `Map["k": v]` both
+                // build a hashed `Map`, `SortedMap["k": v]` a BTree-backed one
+                // (B-2026-09-15-25).
+                match type_name.as_deref() {
+                    Some("SortedMap") => Value::sorted_map_of(vals),
+                    _ => Value::map_of(vals),
+                }
             }
 
             // Struct literal

@@ -5996,8 +5996,13 @@ impl<'ctx> super::Codegen<'ctx> {
                     }
                 }
                 // Map.new(): emit karac_map_new with sizes and (stub) fn pointers.
+                // `Map[]` / `SortedMap[]` — the empty prefix-literal spelling
+                // of the same thing (B-2026-09-19-15) — joins here rather than
+                // getting its own arm: the two say exactly the same thing, and
+                // everything below this line (the value-bodies walk, the REPL
+                // snapshot rule) applies to both identically.
                 if let PatternKind::Binding(var_name) = &pattern.kind {
-                    if self.is_map_new_call(value)
+                    if (self.is_map_new_call(value) || self.is_empty_map_prefix_literal(value))
                         && self.mapset.map_key_types.contains_key(var_name.as_str())
                     {
                         let name = var_name.clone();
@@ -6022,7 +6027,7 @@ impl<'ctx> super::Codegen<'ctx> {
                 // lowers to Map[T, ()] at codegen — the C runtime handles
                 // val_size = 0 correctly via `(key_size + val_size).max(1)`.
                 if let PatternKind::Binding(var_name) = &pattern.kind {
-                    if self.is_set_new_call(value)
+                    if (self.is_set_new_call(value) || self.is_empty_set_prefix_literal(value))
                         && self.mapset.set_elem_types.contains_key(var_name.as_str())
                     {
                         let name = var_name.clone();
@@ -6041,7 +6046,7 @@ impl<'ctx> super::Codegen<'ctx> {
                 // Map literal: `let m: Map[K, V] = ["k": v, ...]` (bare) or
                 // `Map[k: v, ...]` (prefix). Both lower to `ExprKind::MapLiteral`.
                 if let PatternKind::Binding(var_name) = &pattern.kind {
-                    if let ExprKind::MapLiteral(entries) = &value.kind {
+                    if let ExprKind::MapLiteral { entries, .. } = &value.kind {
                         if self.mapset.map_key_types.contains_key(var_name.as_str()) {
                             let name = var_name.clone();
                             let entries = entries.clone();

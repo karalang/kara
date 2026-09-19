@@ -963,7 +963,7 @@ fn walk_expr<'a>(e: &'a Expr, acc: &mut Acc<'a>) {
             walk_expr(value, acc);
             walk_expr(count, acc);
         }
-        ExprKind::MapLiteral(pairs) => {
+        ExprKind::MapLiteral { entries: pairs, .. } => {
             for (k, v) in pairs {
                 walk_expr(k, acc);
                 walk_expr(v, acc);

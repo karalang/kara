@@ -131,7 +131,7 @@ impl<'a> super::EffectChecker<'a> {
                 self.check_with_e_in_expr(value);
                 self.check_with_e_in_expr(count);
             }
-            ExprKind::MapLiteral(pairs) => {
+            ExprKind::MapLiteral { entries: pairs, .. } => {
                 for (k, v) in pairs {
                     self.check_with_e_in_expr(k);
                     self.check_with_e_in_expr(v);

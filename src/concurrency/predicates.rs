@@ -87,7 +87,7 @@ pub(super) fn expr_is_constant_init(expr: &Expr) -> bool {
             elems.iter().all(expr_is_constant_init)
         }
         ExprKind::PrefixCollectionLiteral { items, .. } => items.iter().all(expr_is_constant_init),
-        ExprKind::MapLiteral(pairs) => pairs
+        ExprKind::MapLiteral { entries: pairs, .. } => pairs
             .iter()
             .all(|(k, v)| expr_is_constant_init(k) && expr_is_constant_init(v)),
         // Empty-collection constructors — `Vec.new()` / `String.new()` — do

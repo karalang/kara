@@ -1030,7 +1030,7 @@ impl<'a> UseClassifier<'a> {
                 self.walk_expr(value, mode);
                 self.walk_expr(count, Mode::Reading);
             }
-            ExprKind::MapLiteral(entries) => {
+            ExprKind::MapLiteral { entries, .. } => {
                 for (k, v) in entries {
                     self.walk_expr(k, mode);
                     self.walk_expr(v, mode);

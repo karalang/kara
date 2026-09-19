@@ -433,7 +433,7 @@ fn walk_expr(expr: &Expr, out: &mut Vec<TypeError>) {
             walk_expr(value, out);
             walk_expr(count, out);
         }
-        ExprKind::MapLiteral(pairs) => {
+        ExprKind::MapLiteral { entries: pairs, .. } => {
             for (k, v) in pairs {
                 walk_expr(k, out);
                 walk_expr(v, out);

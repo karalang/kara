@@ -991,7 +991,7 @@ fn collect_expr_bindings(e: &Expr, rb: &mut RegionBindings) {
             collect_expr_bindings(value, rb);
             collect_expr_bindings(count, rb);
         }
-        ExprKind::MapLiteral(pairs) => {
+        ExprKind::MapLiteral { entries: pairs, .. } => {
             for (k, v) in pairs {
                 collect_expr_bindings(k, rb);
                 collect_expr_bindings(v, rb);
@@ -1212,7 +1212,7 @@ fn for_each_block_in_expr<'a>(e: &'a Expr, f: &mut impl FnMut(&'a Block)) {
             for_each_block_in_expr(value, f);
             for_each_block_in_expr(count, f);
         }
-        ExprKind::MapLiteral(pairs) => {
+        ExprKind::MapLiteral { entries: pairs, .. } => {
             for (k, v) in pairs {
                 for_each_block_in_expr(k, f);
                 for_each_block_in_expr(v, f);
@@ -1543,7 +1543,9 @@ pub(super) fn expr_children_all<F: Fn(&Expr) -> bool + Copy>(e: &Expr, pred: F) 
         ExprKind::Tuple(exprs) | ExprKind::ArrayLiteral(exprs) => exprs.iter().all(pred),
         ExprKind::PrefixCollectionLiteral { items, .. } => items.iter().all(pred),
         ExprKind::RepeatLiteral { value, count, .. } => pred(value) && pred(count),
-        ExprKind::MapLiteral(pairs) => pairs.iter().all(|(k, v)| pred(k) && pred(v)),
+        ExprKind::MapLiteral { entries: pairs, .. } => {
+            pairs.iter().all(|(k, v)| pred(k) && pred(v))
+        }
         ExprKind::StructLiteral { fields, spread, .. } => {
             fields.iter().all(|f| pred(&f.value))
                 && spread.as_ref().map(|s| pred(s)).unwrap_or(true)

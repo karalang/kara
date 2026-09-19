@@ -755,7 +755,7 @@ impl<'a> super::TypeChecker<'a> {
                 self.walk_capture_consume(value, mode, outer, shadows, reason);
                 self.walk_capture_consume(count, CaptureWalkMode::Reading, outer, shadows, reason);
             }
-            ExprKind::MapLiteral(entries) => {
+            ExprKind::MapLiteral { entries, .. } => {
                 for (k, v) in entries {
                     self.walk_capture_consume(k, mode, outer, shadows, reason);
                     self.walk_capture_consume(v, mode, outer, shadows, reason);

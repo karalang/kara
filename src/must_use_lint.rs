@@ -625,7 +625,7 @@ impl Walker<'_> {
                     self.walk_expr(e);
                 }
             }
-            ExprKind::MapLiteral(pairs) => {
+            ExprKind::MapLiteral { entries: pairs, .. } => {
                 for (k, v) in pairs {
                     self.walk_expr(k);
                     self.walk_expr(v);

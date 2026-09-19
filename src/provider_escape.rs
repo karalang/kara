@@ -330,7 +330,7 @@ fn collect_closure_resource_refs_in_expr(expr: &Expr, out: &mut Vec<String>) {
             collect_closure_resource_refs_in_expr(value, out);
             collect_closure_resource_refs_in_expr(count, out);
         }
-        ExprKind::MapLiteral(entries) => {
+        ExprKind::MapLiteral { entries, .. } => {
             for (k, v) in entries {
                 collect_closure_resource_refs_in_expr(k, out);
                 collect_closure_resource_refs_in_expr(v, out);
@@ -802,7 +802,7 @@ impl<'a> EscapeChecker<'a> {
                 self.visit_expr(value, false);
                 self.visit_expr(count, false);
             }
-            ExprKind::MapLiteral(entries) => {
+            ExprKind::MapLiteral { entries, .. } => {
                 for (k, v) in entries {
                     self.visit_expr(k, false);
                     self.visit_expr(v, false);
@@ -1332,7 +1332,7 @@ fn collect_resource_refs(expr: &Expr, out: &mut Vec<String>) {
             collect_resource_refs(value, out);
             collect_resource_refs(count, out);
         }
-        ExprKind::MapLiteral(entries) => {
+        ExprKind::MapLiteral { entries, .. } => {
             for (k, v) in entries {
                 collect_resource_refs(k, out);
                 collect_resource_refs(v, out);

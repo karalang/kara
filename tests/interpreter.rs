@@ -70218,3 +70218,87 @@ fn test_optres_arg_payload_projection_runs_each_part_body_once() {
         assert_eq!(run(&src), want, "[{label}]");
     }
 }
+
+// ── prefix collection literals: VecDeque / SortedMap ─────────────
+
+/// B-2026-09-15-25 — the `SortedMap[k: v]` literal has to build an ORDERED
+/// map, not a hashed one wearing the name. The assertion is the interesting
+/// half: the source writes its keys out of order, so insertion order and key
+/// order disagree and only a real `SortedMap` prints them sorted.
+///
+/// Asserting iteration order is legal HERE and nowhere near a plain `Map`:
+/// `SortedMap` destroys and walks in KEY order, seed-independent and identical
+/// on every backend (CLAUDE.md § `Map` / `Set` iteration order), which is
+/// exactly what makes it the escape hatch from the per-process hash seed.
+#[test]
+fn sortedmap_prefix_literal_iterates_in_key_order() {
+    let out = run("fn main() { \
+                   let m = SortedMap[\"c\": 3, \"a\": 1, \"b\": 2]; \
+                   for (k, v) in m { print(k); print(v); } }");
+    assert_eq!(out, "a1b2c3");
+    // Annotated spelling, same answer.
+    let out = run("fn main() { \
+                   let m: SortedMap[String, i64] = SortedMap[\"c\": 3, \"a\": 1]; \
+                   for (k, v) in m { print(k); print(v); } }");
+    assert_eq!(out, "a1c3");
+    // `Display` names the type, which is the cheapest proof the literal did
+    // not quietly produce a `Map` (a `Map` renders with no prefix).
+    assert_eq!(
+        run("fn main() { let m = SortedMap[\"b\": 2, \"a\": 1]; print(m); }"),
+        "SortedMap{a: 1, b: 2}"
+    );
+    // Duplicate key keeps the last binding, as `Map`'s literal does.
+    assert_eq!(
+        run("fn main() { let m = SortedMap[\"a\": 1, \"a\": 9]; print(m); }"),
+        "SortedMap{a: 9}"
+    );
+    // Empty annotated form.
+    assert_eq!(
+        run("fn main() { let m: SortedMap[String, i64] = SortedMap[]; print(m.len()); }"),
+        "0"
+    );
+}
+
+/// The `VecDeque[...]` half. `VecDeque` shares `Vec`'s `{ptr,len,cap}`
+/// representation, so the risk is not ordering but that the literal builds
+/// something the deque-only operations cannot use. B-2026-09-15-25.
+#[test]
+fn vecdeque_prefix_literal_builds_a_usable_deque() {
+    assert_eq!(
+        run("fn main() { let d = VecDeque[1, 2, 3]; print(d.len()); }"),
+        "3"
+    );
+    // Front operations are what distinguish it from a `Vec`.
+    assert_eq!(
+        run("fn main() { let mut d = VecDeque[1, 2, 3]; \
+             d.push_front(0); \
+             for x in d { print(x); } }"),
+        "0123"
+    );
+    assert_eq!(
+        run("fn main() { let mut d = VecDeque[1, 2, 3]; \
+             let f = d.pop_front(); \
+             print(f.unwrap()); print(d.len()); }"),
+        "12"
+    );
+    // Empty annotated form.
+    assert_eq!(
+        run("fn main() { let d: VecDeque[i64] = VecDeque[]; print(d.len()); }"),
+        "0"
+    );
+}
+
+/// The bare `["k": v]` and `Map["k": v]` spellings must still build a plain
+/// hashed `Map` — the prefix name now travels on the node, so the risk is
+/// that the absent name gets read as something. Order is NOT asserted: a
+/// `Map` walks under the per-process hash seed. B-2026-09-15-25.
+#[test]
+fn map_literal_spellings_still_build_a_plain_map() {
+    for src in [
+        "fn main() { let m = [\"a\": 1]; print(m); }",
+        "fn main() { let m = Map[\"a\": 1]; print(m); }",
+        "fn main() { let m: Map[String, i64] = Map[\"a\": 1]; print(m); }",
+    ] {
+        assert_eq!(run(src), "{a: 1}", "`{src}` did not build a plain Map");
+    }
+}

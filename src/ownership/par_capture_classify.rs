@@ -456,7 +456,7 @@ fn refs_in_expr(expr: &Expr, refs: &mut HashSet<String>, defs: &mut HashSet<Stri
             refs_in_expr(value, refs, defs);
             refs_in_expr(count, refs, defs);
         }
-        ExprKind::MapLiteral(pairs) => {
+        ExprKind::MapLiteral { entries: pairs, .. } => {
             for (k, v) in pairs {
                 refs_in_expr(k, refs, defs);
                 refs_in_expr(v, refs, defs);

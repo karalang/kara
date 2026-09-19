@@ -2978,6 +2978,40 @@ impl<'ctx> super::Codegen<'ctx> {
         false
     }
 
+    /// `Map[]` / `SortedMap[]` — the EMPTY prefix-literal spelling of
+    /// `Map.new()`. design.md § Collection Literals sanctions it as
+    /// `let m: Map[K, V] = Map[];` (an empty literal has no element type to
+    /// infer, so the annotation is required), and the typechecker recovers it
+    /// from the expected type — but codegen had no handler for the node and
+    /// died with `no handler for expression kind PrefixCollectionLiteral`
+    /// while `--interp` ran it, so the sanctioned spelling was a run-vs-build
+    /// split. B-2026-09-19-15.
+    pub(super) fn is_empty_map_prefix_literal(&self, expr: &Expr) -> bool {
+        matches!(
+            &expr.kind,
+            ExprKind::PrefixCollectionLiteral { type_name, items }
+                if items.is_empty() && (type_name == "Map" || type_name == "SortedMap")
+        )
+    }
+
+    /// `Set[]` — the Set half of [`Self::is_empty_map_prefix_literal`].
+    /// B-2026-09-19-15.
+    ///
+    /// `SortedSet` is named here for the same reason
+    /// [`Self::is_set_new_call`] names it, and is unreachable for a different
+    /// one: design.md § Collection Literals lists five prefix-literal types
+    /// and `SortedSet` is not among them, so the parser does not produce the
+    /// spelling at all (B-2026-09-15-25 deliberately did not add it — that is
+    /// the spec's call, not the implementation's). If the list ever grows, the
+    /// arm is already here.
+    pub(super) fn is_empty_set_prefix_literal(&self, expr: &Expr) -> bool {
+        matches!(
+            &expr.kind,
+            ExprKind::PrefixCollectionLiteral { type_name, items }
+                if items.is_empty() && (type_name == "Set" || type_name == "SortedSet")
+        )
+    }
+
     pub(super) fn is_set_new_call(&self, expr: &Expr) -> bool {
         if let ExprKind::Call { callee, .. } = &expr.kind {
             if let ExprKind::Path { segments, .. } = &callee.kind {

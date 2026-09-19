@@ -809,7 +809,7 @@ pub(crate) fn walk_expr_children(
             on_expr(value);
             on_expr(count);
         }
-        ExprKind::MapLiteral(pairs) => {
+        ExprKind::MapLiteral { entries: pairs, .. } => {
             for (k, v) in pairs.iter_mut() {
                 on_expr(k);
                 on_expr(v);

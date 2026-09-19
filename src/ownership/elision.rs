@@ -836,7 +836,7 @@ impl<'a> OwnershipChecker<'a> {
                 self.scan_expr(value, ctx, scan);
                 self.scan_expr(count, ctx, scan);
             }
-            ExprKind::MapLiteral(pairs) => {
+            ExprKind::MapLiteral { entries: pairs, .. } => {
                 for (k, v) in pairs {
                     self.scan_expr(k, ctx, scan);
                     self.scan_expr(v, ctx, scan);
@@ -2382,7 +2382,7 @@ impl<'a> OwnershipChecker<'a> {
                 self.cluster_verify_expr(value, ctx, scan);
                 self.cluster_verify_expr(count, ctx, scan);
             }
-            ExprKind::MapLiteral(pairs) => {
+            ExprKind::MapLiteral { entries: pairs, .. } => {
                 for (k, v) in pairs {
                     self.cluster_verify_expr(k, ctx, scan);
                     self.cluster_verify_expr(v, ctx, scan);
@@ -2831,7 +2831,7 @@ fn walk_fn_exprs(block: &Block, f: &mut impl FnMut(&Expr, bool)) {
                 walk(value, false, f);
                 walk(count, false, f);
             }
-            ExprKind::MapLiteral(pairs) => {
+            ExprKind::MapLiteral { entries: pairs, .. } => {
                 for (k, v) in pairs {
                     walk(k, false, f);
                     walk(v, false, f);

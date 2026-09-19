@@ -661,7 +661,7 @@ fn visit_expr(e: &Expr, visit: &mut impl FnMut(&Span)) {
             visit_expr(value, visit);
             visit_expr(count, visit);
         }
-        ExprKind::MapLiteral(pairs) => {
+        ExprKind::MapLiteral { entries: pairs, .. } => {
             for (k, v) in pairs {
                 visit_expr(k, visit);
                 visit_expr(v, visit);
@@ -1013,7 +1013,7 @@ pub fn visit_expr_spans_mut(e: &mut Expr, visit: &mut impl FnMut(&mut Span)) {
             visit_expr_spans_mut(value, visit);
             visit_expr_spans_mut(count, visit);
         }
-        ExprKind::MapLiteral(pairs) => {
+        ExprKind::MapLiteral { entries: pairs, .. } => {
             for (k, v) in pairs {
                 visit_expr_spans_mut(k, visit);
                 visit_expr_spans_mut(v, visit);

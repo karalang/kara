@@ -499,7 +499,7 @@ fn walk_expr(expr: &Expr, lines: &[&str], level: LintLevel, diags: &mut Vec<Lint
                 walk_expr(e, lines, level, diags);
             }
         }
-        ExprKind::MapLiteral(pairs) => {
+        ExprKind::MapLiteral { entries: pairs, .. } => {
             for (k, v) in pairs {
                 walk_expr(k, lines, level, diags);
                 walk_expr(v, lines, level, diags);
@@ -1066,7 +1066,7 @@ impl OpWalker<'_> {
                     self.walk_expr(e, in_unsafe);
                 }
             }
-            ExprKind::MapLiteral(pairs) => {
+            ExprKind::MapLiteral { entries: pairs, .. } => {
                 for (k, v) in pairs {
                     self.walk_expr(k, in_unsafe);
                     self.walk_expr(v, in_unsafe);

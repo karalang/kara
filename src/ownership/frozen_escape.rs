@@ -2081,7 +2081,7 @@ fn walk_expr<'a>(e: &'a Expr, cx: &mut Cx<'a, '_>) {
             walk_expr(value, cx);
             walk_expr(count, cx);
         }
-        ExprKind::MapLiteral(entries) => {
+        ExprKind::MapLiteral { entries, .. } => {
             for (k, v) in entries {
                 walk_expr(k, cx);
                 walk_expr(v, cx);

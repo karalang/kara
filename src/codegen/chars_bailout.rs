@@ -227,7 +227,7 @@ fn expr_ok(e: &Expr, budget: &mut usize) -> bool {
         ExprKind::RepeatLiteral { value, count, .. } => {
             expr_ok(value, budget) && expr_ok(count, budget)
         }
-        ExprKind::MapLiteral(pairs) => pairs
+        ExprKind::MapLiteral { entries: pairs, .. } => pairs
             .iter()
             .all(|(k, v)| expr_ok(k, budget) && expr_ok(v, budget)),
         ExprKind::StructLiteral { fields, spread, .. } => {

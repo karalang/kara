@@ -769,7 +769,7 @@ impl<'a> super::Resolver<'a> {
                 }
             }
 
-            ExprKind::MapLiteral(entries) => {
+            ExprKind::MapLiteral { entries, .. } => {
                 for (key, val) in entries {
                     self.resolve_expr(key);
                     self.resolve_expr(val);

@@ -257,7 +257,7 @@ fn scan_expr(e: &Expr, row: &str, ok: &mut bool) {
             scan_expr(value, row, ok);
             scan_expr(count, row, ok);
         }
-        ExprKind::MapLiteral(pairs) => {
+        ExprKind::MapLiteral { entries: pairs, .. } => {
             for (k, v) in pairs {
                 scan_expr(k, row, ok);
                 scan_expr(v, row, ok);

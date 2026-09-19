@@ -1109,7 +1109,8 @@ impl<'a> super::TypeChecker<'a> {
             }
         }
 
-        // Empty prefix-literal (`Vec[]` / `Array[]` / `Set[]` / `Map[]`) at
+        // Empty prefix-literal (`Vec[]` / `Array[]` / `Set[]` / `Map[]` /
+        // `VecDeque[]` / `SortedMap[]`) at
         // a check-mode position: recover via the expected type. Synthesis-
         // mode use (no annotation, no expected-type carrier) hits the
         // matching arm in `infer_expr_inner` and emits
@@ -1122,6 +1123,10 @@ impl<'a> super::TypeChecker<'a> {
                     ("Vec", Type::Named { name, .. }) => name == "Vec",
                     ("Set", Type::Named { name, .. }) => name == "Set",
                     ("Map", Type::Named { name, .. }) => name == "Map" || name == "HashMap",
+                    // B-2026-09-15-25 — the two names design.md lists that the
+                    // parser could not produce until it did.
+                    ("VecDeque", Type::Named { name, .. }) => name == "VecDeque",
+                    ("SortedMap", Type::Named { name, .. }) => name == "SortedMap",
                     ("Array", Type::Array { .. }) => true,
                     _ => false,
                 };
@@ -6612,7 +6617,7 @@ impl<'a> super::TypeChecker<'a> {
                 }
             }
 
-            ExprKind::MapLiteral(entries) => {
+            ExprKind::MapLiteral { type_name, entries } => {
                 let (first_key, first_val) = &entries[0];
                 let key_ty = self.infer_expr(first_key);
                 let val_ty = self.infer_expr(first_val);
@@ -6631,8 +6636,19 @@ impl<'a> super::TypeChecker<'a> {
                 // `Map`-typed struct field both failed with `expected
                 // 'Map<String, i64>', found 'HashMap<String, i64>'`. Every
                 // downstream consumer already matches `"Map" | "HashMap"`.
+                //
+                // `SortedMap["k": v]` is the one spelling that types as
+                // something else (B-2026-09-15-25). The bare `["k": v]` form
+                // and the `Map[...]` prefix both carry `Map` here; only an
+                // explicit `SortedMap` prefix asks for the ordered type, and
+                // an unrecognized prefix cannot reach this arm because the
+                // parser's own gate is the same closed list.
+                let head = match type_name.as_deref() {
+                    Some("SortedMap") => "SortedMap",
+                    _ => "Map",
+                };
                 Type::Named {
-                    name: "Map".to_string(),
+                    name: head.to_string(),
                     args: vec![key_ty, val_ty],
                 }
             }

@@ -738,7 +738,7 @@ impl<'a> super::EffectChecker<'a> {
                     // `Map[K, V] = {k: v, ...}` — keys sit in the K slot,
                     // values in V. Both are checked: a function value is a
                     // legal map KEY as well as a map value.
-                    ExprKind::MapLiteral(entries) => {
+                    ExprKind::MapLiteral { entries, .. } => {
                         for (i, (k, v)) in entries.iter().enumerate() {
                             if let Some(kt) = arg_ty(0) {
                                 self.check_annotation_slots(kt, &format!("{subject} key {i}"), k);
@@ -1258,7 +1258,7 @@ impl<'a> super::EffectChecker<'a> {
                     self.check_subtyping_in_expr(s, w);
                 }
             }
-            ExprKind::MapLiteral(entries) => {
+            ExprKind::MapLiteral { entries, .. } => {
                 for (k, v) in entries {
                     self.check_subtyping_in_expr(k, w);
                     self.check_subtyping_in_expr(v, w);

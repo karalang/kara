@@ -613,7 +613,7 @@ impl YieldPointWalker<'_> {
                 self.walk_expr(value);
                 self.walk_expr(count);
             }
-            ExprKind::MapLiteral(pairs) => {
+            ExprKind::MapLiteral { entries: pairs, .. } => {
                 for (k, v) in pairs {
                     self.walk_expr(k);
                     self.walk_expr(v);
@@ -1160,7 +1160,7 @@ impl StateStructLayoutWalker<'_> {
                 self.walk_expr(value);
                 self.walk_expr(count);
             }
-            ExprKind::MapLiteral(pairs) => {
+            ExprKind::MapLiteral { entries: pairs, .. } => {
                 for (k, v) in pairs {
                     self.walk_expr(k);
                     self.walk_expr(v);

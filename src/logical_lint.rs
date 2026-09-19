@@ -269,7 +269,7 @@ fn walk_expr_children(expr: &Expr, level: LintLevel, diags: &mut Vec<LintDiagnos
                 walk_expr(e, level, diags);
             }
         }
-        ExprKind::MapLiteral(pairs) => {
+        ExprKind::MapLiteral { entries: pairs, .. } => {
             for (k, v) in pairs {
                 walk_expr(k, level, diags);
                 walk_expr(v, level, diags);

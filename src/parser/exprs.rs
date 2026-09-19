@@ -2008,7 +2008,10 @@ impl super::Parser {
             self.expect(&Token::RightBracket)?;
             return Some(Expr {
                 span: self.span_from(&start),
-                kind: ExprKind::MapLiteral(entries),
+                kind: ExprKind::MapLiteral {
+                    type_name: None,
+                    entries,
+                },
             });
         }
 
@@ -2275,8 +2278,19 @@ impl super::Parser {
         // / `Vec[v; n]` / `Array[v; n]`. Intercept before the postfix `[` index
         // loop so the bracket is consumed as part of the literal, not as a
         // subscript.
+        //
+        // The name list is design.md § Collection Literals' list —
+        // "supported by `Vec`, `Set`, `Map`, `VecDeque`, and `SortedMap`",
+        // plus `Array`, which that section introduces the form with.
+        // `VecDeque` and `SortedMap` were missing until B-2026-09-15-25, so
+        // the two spec-sanctioned spellings failed as an unrelated typecheck
+        // error (`'VecDeque' is a type, not a function`) and a raw parse error
+        // on the map body's `:`.
         if self.check(&Token::LeftBracket)
-            && matches!(name.as_str(), "Vec" | "Array" | "Set" | "Map")
+            && matches!(
+                name.as_str(),
+                "Vec" | "Array" | "Set" | "Map" | "VecDeque" | "SortedMap"
+            )
         {
             return self.parse_prefix_collection_literal(name, &start);
         }
@@ -2289,7 +2303,8 @@ impl super::Parser {
 
     /// Parse the `[...]` body of a prefix collection literal. `self.pos` must
     /// point at the opening `[`; `name` is the collection type-name (`Vec`,
-    /// `Array`, `Set`, `Map`) and `start` the span of the head token. Produces
+    /// `Array`, `Set`, `Map`, `VecDeque`, `SortedMap`) and `start` the span of
+    /// the head token. Produces
     /// `PrefixCollectionLiteral` / `RepeatLiteral` / `MapLiteral` as the body
     /// shape dictates. Shared between the `TypeName[...]` form and the
     /// `vec![...]` list-macro sugar.
@@ -2322,12 +2337,13 @@ impl super::Parser {
                 },
             });
         }
-        // `Map[k: v, k2: v2, ...]` — prefix-literal map form. The first
-        // expression is a key, followed by `:`, then the value. Switch to
-        // key-value parsing and emit `MapLiteral` (the same AST shape the
-        // bare `["k": v]` form produces, so the existing typechecker case
-        // applies unchanged).
-        if name == "Map" && self.eat(&Token::Colon) {
+        // `Map[k: v, k2: v2, ...]` / `SortedMap[k: v, ...]` — prefix-literal
+        // map form. The first expression is a key, followed by `:`, then the
+        // value. Switch to key-value parsing and emit `MapLiteral` (the same
+        // AST shape the bare `["k": v]` form produces) carrying the prefix
+        // name, which is the only thing that distinguishes the ordered
+        // literal from the hashed one downstream.
+        if matches!(name.as_str(), "Map" | "SortedMap") && self.eat(&Token::Colon) {
             let first_val = self.parse_expression()?;
             let mut entries = vec![(first, first_val)];
             while self.eat(&Token::Comma) {
@@ -2342,7 +2358,10 @@ impl super::Parser {
             self.expect(&Token::RightBracket)?;
             return Some(Expr {
                 span: self.span_from(start),
-                kind: ExprKind::MapLiteral(entries),
+                kind: ExprKind::MapLiteral {
+                    type_name: Some(name),
+                    entries,
+                },
             });
         }
         items.push(first);
