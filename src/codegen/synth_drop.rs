@@ -35,6 +35,30 @@ use super::state::EnumDropKind;
 ///
 /// `BTree*` rather than hash containers because the mangled symbol name is built
 /// by walking this, and two equal masks must produce the same string.
+/// B-2026-09-17-34 / B-2026-09-19-9 — which parts of an `Option`/`Result`
+/// PAYLOAD a bodies walker must skip, tagged by the payload SHAPE the mask
+/// belongs to.
+///
+/// The tag is load-bearing rather than decorative. A `Result` walker reaches
+/// its payload arms twice, with two different types, so a bare index set would
+/// mask part 0 of the `Err` payload as well as of the `Ok` one. Naming the
+/// shape makes the wrong arm structurally unreachable, and splitting struct
+/// from tuple does the same across shapes: a field index and an element index
+/// are both `usize` and would otherwise cross-apply silently.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) enum PayloadBodiesMask<'m> {
+    /// A named struct payload: `(struct name, masked field indices)`. Consumed
+    /// by the struct arm, which threads it to
+    /// `emit_user_drop_field_bodies_fn_skipping`.
+    StructFields(&'m str, &'m std::collections::BTreeSet<usize>),
+    /// A TUPLE payload: `(mangled payload type, masked element indices)`. A
+    /// tuple has no name, so the mangled `TypeExpr` — the same string that
+    /// names the walker's own symbol — stands in as its identity. Consumed by
+    /// the tuple arm, which threads it to
+    /// `emit_tuple_elem_user_drop_bodies_fn_skipping`.
+    TupleElems(&'m str, &'m std::collections::BTreeSet<usize>),
+}
+
 #[derive(Debug, Default, Clone, PartialEq, Eq)]
 pub(crate) struct FieldSkipTree {
     /// Fields whose bodies are skipped outright at this level.
@@ -11065,7 +11089,7 @@ impl<'ctx> super::Codegen<'ctx> {
     /// The flag stays folded into the symbol NAME so a module built before this
     /// lift and one built after cannot collide in the cache.
     /// B-2026-09-17-34 — [`Self::emit_optres_payload_user_drop_bodies_fn`] with
-    /// a STRUCT payload's moved-out fields MASKED OUT of the bodies walk.
+    /// a payload's moved-out parts MASKED OUT of the bodies walk.
     ///
     /// The capability this family was missing at the payload level. Its three
     /// siblings one level down already have it —
@@ -11089,7 +11113,7 @@ impl<'ctx> super::Codegen<'ctx> {
     pub(super) fn emit_optres_payload_user_drop_bodies_fn_skipping(
         &mut self,
         te: &TypeExpr,
-        mask: (&str, &std::collections::BTreeSet<usize>),
+        mask: PayloadBodiesMask<'_>,
     ) -> Option<FunctionValue<'ctx>> {
         self.emit_optres_payload_user_drop_bodies_fn_ex_masked(te, true, Some(mask))
     }
@@ -11106,7 +11130,7 @@ impl<'ctx> super::Codegen<'ctx> {
         &mut self,
         te: &TypeExpr,
         include_vec: bool,
-        mask: Option<(&str, &std::collections::BTreeSet<usize>)>,
+        mask: Option<PayloadBodiesMask<'_>>,
     ) -> Option<FunctionValue<'ctx>> {
         // The mask is folded into the symbol NAME, for the reason the `Vec`
         // flag above is: a masked walker and the full one must not collide in
@@ -11114,8 +11138,20 @@ impl<'ctx> super::Codegen<'ctx> {
         // later one.
         let mask_suffix: String = match mask {
             None => String::new(),
-            Some((sname, idxs)) if !idxs.is_empty() => format!(
-                "$skip{sname}_{}",
+            Some(PayloadBodiesMask::StructFields(key, idxs)) if !idxs.is_empty() => format!(
+                "$skip{key}_{}",
+                idxs.iter()
+                    .map(|i| i.to_string())
+                    .collect::<Vec<_>>()
+                    .join("_")
+            ),
+            // B-2026-09-19-9 — the tuple sibling gets its OWN prefix rather
+            // than sharing the struct one. A struct name and a mangled tuple
+            // payload cannot collide today, but the two masks select DIFFERENT
+            // arms, so keeping the symbols distinguishable makes a wrong-arm
+            // cache hit impossible rather than merely unlikely.
+            Some(PayloadBodiesMask::TupleElems(key, idxs)) if !idxs.is_empty() => format!(
+                "$skiptup{key}_{}",
                 idxs.iter()
                     .map(|i| i.to_string())
                     .collect::<Vec<_>>()
@@ -11669,10 +11705,10 @@ impl<'ctx> super::Codegen<'ctx> {
         layout_key: &str,
         arms: Vec<(u64, TypeExpr, usize)>,
         include_vec: bool,
-        // B-2026-09-17-34 — `(payload struct name, masked field indices)` for
-        // the STRUCT arm; see
+        // B-2026-09-17-34 / B-2026-09-19-9 — the moved-out parts to mask out,
+        // keyed by the arm they belong to; see `PayloadBodiesMask` and
         // `emit_optres_payload_user_drop_bodies_fn_skipping`.
-        mask: Option<(&str, &std::collections::BTreeSet<usize>)>,
+        mask: Option<PayloadBodiesMask<'_>>,
     ) -> Option<FunctionValue<'ctx>> {
         // Keep only payload arms whose type is a non-shared user struct OR
         // user enum that runs a user drop (own body or Drop-bearing content).
@@ -12029,10 +12065,36 @@ impl<'ctx> super::Codegen<'ctx> {
                 // element's body over the tuple aggregate at `target_ptr`
                 // (inline or deboxed above). Body-only, like the struct/enum
                 // arms; the tuple's heap is freed on the value's free channel.
+                //
+                // B-2026-09-19-9 — and the MASK, which this arm had no seat
+                // for. `let x = t.0` over an `Option[(R, ..)]` gives the moved
+                // element's body to `x` and left this walker running it a
+                // SECOND time over the husk, reading the `String` the first
+                // body had already freed: `dR5/a mid dR5/d end` where
+                // `dR5/a mid end` is due, one valgrind `Invalid read`, and
+                // memory BALANCED at 12 allocs / 12 frees — which is why a
+                // leak-only verdict reads the cell as clean.
+                //
+                // The walker one level down has had a `_skipping` form since
+                // B-2026-08-03-8, so this is a threading job rather than new
+                // machinery. The mask carries the MANGLED payload type rather
+                // than a bare index set, for the reason the struct variant
+                // carries a name: a `Result` reaches here once per payload arm,
+                // and an index set alone would mask element 0 of the `Err`
+                // tuple as well as the `Ok` one.
                 match self.llvm_type_for_type_expr(&pte) {
-                    inkwell::types::BasicTypeEnum::StructType(agg_ty) => {
-                        self.emit_tuple_elem_user_drop_bodies_fn(agg_ty, elem_tes)
-                    }
+                    inkwell::types::BasicTypeEnum::StructType(agg_ty) => match mask {
+                        Some(PayloadBodiesMask::TupleElems(key, idxs))
+                            if !idxs.is_empty() && key == Self::display_mangle_te(&pte) =>
+                        {
+                            let skip: std::collections::HashSet<u32> =
+                                idxs.iter().map(|i| *i as u32).collect();
+                            self.emit_tuple_elem_user_drop_bodies_fn_skipping(
+                                agg_ty, elem_tes, &skip,
+                            )
+                        }
+                        _ => self.emit_tuple_elem_user_drop_bodies_fn(agg_ty, elem_tes),
+                    },
                     _ => None,
                 }
             } else if let Some((elem_te, n)) = &array_parts {
@@ -12100,7 +12162,9 @@ impl<'ctx> super::Codegen<'ctx> {
                 // `Result` walker reaches here once per payload arm and only
                 // one of them is the struct the caller masked.
                 match mask {
-                    Some((mname, idxs)) if mname == sname && !idxs.is_empty() => {
+                    Some(PayloadBodiesMask::StructFields(mname, idxs))
+                        if mname == sname && !idxs.is_empty() =>
+                    {
                         let tree = FieldSkipTree {
                             here: idxs.clone(),
                             ..Default::default()

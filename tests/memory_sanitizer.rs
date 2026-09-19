@@ -97235,4 +97235,100 @@ fn main() {
             "b1729-fstring-hole-readonly-control",
         );
     }
+
+    /// B-2026-09-19-9 — a `Drop`-bearing element moved out of a boxed TUPLE
+    /// payload ran its body twice, the second time over freed memory.
+    ///
+    /// The tuple sibling of B-2026-09-17-34. That row masked a moved-out FIELD
+    /// of a struct payload out of the envelope's bodies walk; a tuple payload
+    /// reaches a different arm of the same walker, and that arm had no seat for
+    /// a mask. So `let x = t.0` gave the element's body to `x` and left the
+    /// envelope running it again over the husk, reading the `String` the first
+    /// body had already freed.
+    ///
+    /// MEMORY IS BALANCED THROUGHOUT — 12 allocs / 12 frees before, 11 / 11
+    /// after — so nothing aborts and a leak-only verdict reads the cell as
+    /// CLEAN. The symptom is a `Drop` body printing garbage (`dR5/d` for
+    /// `dR5/a`) plus one valgrind `Invalid read`. That is why these cells are
+    /// asserted on their OUTPUT rather than on their byte counts.
+    ///
+    /// The cells:
+    ///
+    ///   opt       the row's own spelling, `Option[(R, i64, i64, i64)]`.
+    ///   res       the `Result` head, which the row listed as unmeasured. It
+    ///             fails and is fixed identically; the head only sets how wide
+    ///             the payload must be before it spills.
+    ///   two       TWO `Drop`-bearing elements with ONE moved — the cell that
+    ///             forbids the easy fix, since retracting the walk outright
+    ///             would silence the sibling that must still run. Both elements
+    ///             are HEAP-FREE on purpose: the heap-bearing spelling strands
+    ///             the unmoved sibling's buffer, which is a SEPARATE and
+    ///             pre-existing defect (identical 1-byte loss before and after
+    ///             this fix) filed under its own row, and letting it in here
+    ///             would redden the ASAN legs for a bug this fixture is not
+    ///             about.
+    ///   readonly  an arm that reads the element and moves nothing, where the
+    ///             walker is the SOLE owner and must keep running.
+    ///
+    /// Each asserts the interpreter's own output, which was correct on every
+    /// cell here.
+    #[test]
+    fn asan_boxed_tuple_payload_elem_move_out_no_double_body() {
+        const DECLS: &str = "struct R { name: String, id: i64 }\n\
+             impl Drop for R { fn drop(mut ref self) { println(f\"dR{self.id}/{self.name}\") } }\n";
+
+        // The row's headline cell.
+        assert_clean_asan_run(
+            &format!(
+                "{DECLS}\
+                 fn eat(o: Option[(R, i64, i64, i64)]) {{\n\
+                 \x20   match o {{ Option.Some(t) => {{ let x = t.0; println(\"mid\"); }} Option.None => {{ println(\"n\"); }} }}\n\
+                 }}\n\
+                 fn main() {{ eat(Option.Some((R {{ name: f\"a\", id: 5 }}, 1, 2, 3))); println(\"end\"); }}\n"
+            ),
+            &["dR5/a", "mid", "end"],
+            "b1729b-tuple-payload-elem-move-opt",
+        );
+
+        // The `Result` head, wide enough to spill its own 5-word inline area.
+        assert_clean_asan_run(
+            &format!(
+                "{DECLS}\
+                 fn eat(o: Result[(R, i64, i64, i64, i64, i64), i64]) {{\n\
+                 \x20   match o {{ Result.Ok(t) => {{ let x = t.0; println(\"mid\"); }} Result.Err(e) => {{ println(\"n\"); }} }}\n\
+                 }}\n\
+                 fn main() {{ eat(Result.Ok((R {{ name: f\"a\", id: 5 }}, 1, 2, 3, 4, 5))); println(\"end\"); }}\n"
+            ),
+            &["dR5/a", "mid", "end"],
+            "b1729b-tuple-payload-elem-move-res",
+        );
+
+        // TWO Drop-bearing elements, ONE moved: the sibling must still run.
+        // Heap-free on both, for the reason the doc above gives.
+        assert_clean_asan_run(
+            "struct P { id: i64 }\n\
+             impl Drop for P { fn drop(mut ref self) { println(f\"dP{self.id}\") } }\n\
+             struct Q { id: i64 }\n\
+             impl Drop for Q { fn drop(mut ref self) { println(f\"dQ{self.id}\") } }\n\
+             fn eat(o: Option[(P, Q, i64, i64)]) {\n\
+             \x20   match o { Option.Some(t) => { let x = t.0; println(\"mid\"); } Option.None => { println(\"n\"); } }\n\
+             }\n\
+             fn main() { eat(Option.Some((P { id: 5 }, Q { id: 6 }, 2, 3))); println(\"end\"); }\n",
+            &["dP5", "mid", "dQ6", "end"],
+            "b1729b-tuple-payload-elem-move-two",
+        );
+
+        // Read-only arm: the walker is the sole owner and must keep running.
+        assert_clean_asan_run(
+            &format!(
+                "{DECLS}\
+                 fn eat(o: Option[(R, i64, i64, i64)]) {{\n\
+                 \x20   match o {{ Option.Some(t) => {{ println(f\"mid{{t.0.id}}\"); }} Option.None => {{ println(\"n\"); }} }}\n\
+                 }}\n\
+                 fn main() {{ eat(Option.Some((R {{ name: f\"a\", id: 5 }}, 1, 2, 3))); println(\"end\"); }}\n"
+            ),
+            &["mid5", "dR5/a", "end"],
+            "b1729b-tuple-payload-elem-move-readonly-control",
+        );
+    }
 }

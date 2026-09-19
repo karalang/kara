@@ -10355,6 +10355,37 @@ impl<'ctx> super::Codegen<'ctx> {
                         // `h` has to stop running that field's body or it fires
                         // twice (a double close for a resource type). The
                         // aggregate keeps everything else it was doing.
+                        // B-2026-09-19-9 — the TUPLE-INDEX sibling of the
+                        // `FieldAccess` block below, for `let x = t.0` where
+                        // `t` is an arm binding over a heap-BOXED
+                        // `Option`/`Result` TUPLE payload.
+                        //
+                        // The destination takes the moved element's `Drop`
+                        // body, and the envelope's payload walker kept running
+                        // it a second time over the husk — reading the `String`
+                        // the first body had already freed. Memory is balanced
+                        // throughout, so nothing aborts and a leak-only verdict
+                        // reads the cell as clean; the symptom is a body that
+                        // prints garbage.
+                        //
+                        // Narrow by construction rather than by a guard here:
+                        // the suppressor declines unless `src` is registered in
+                        // `boxed_optres_payload_view_vars`, so every other
+                        // `let x = t.0` in the language reaches this point and
+                        // leaves with today's behaviour. That matters because
+                        // B-2026-09-08-15 established that the plain tuple-
+                        // element move path is otherwise ASAN-clean and must
+                        // keep its own ownership — suppressing there would
+                        // trade this double-read for a double free.
+                        if let ExprKind::TupleIndex { object, index } = &value.kind {
+                            if let ExprKind::Identifier(src) = &object.kind {
+                                let src = src.clone();
+                                self.suppress_boxed_payload_view_tuple_elem_move(
+                                    &src,
+                                    *index as usize,
+                                );
+                            }
+                        }
                         if let ExprKind::FieldAccess {
                             object,
                             field: moved_field,

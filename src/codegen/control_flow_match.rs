@@ -14763,9 +14763,10 @@ impl<'ctx> super::Codegen<'ctx> {
         else {
             return false;
         };
-        let Some(masked_walker) =
-            self.emit_optres_payload_user_drop_bodies_fn_skipping(&env_te, (&struct_name, &masked))
-        else {
+        let Some(masked_walker) = self.emit_optres_payload_user_drop_bodies_fn_skipping(
+            &env_te,
+            super::synth_drop::PayloadBodiesMask::StructFields(&struct_name, &masked),
+        ) else {
             // Nothing survives the mask, so the whole walk is the destination's
             // now. Leaving the unmasked one registered would double every body.
             self.suppress_container_elem_bodies_for_var(&env_name);
@@ -14808,6 +14809,132 @@ impl<'ctx> super::Codegen<'ctx> {
         // MEMORY.
         self.zero_boxed_payload_field_cap(slot, enum_ty, some_tag, &struct_name, field);
         true
+    }
+
+    /// B-2026-09-19-9 — the TUPLE-ELEMENT sibling of
+    /// [`Self::suppress_boxed_payload_view_field_move`], for `let x = t.0`
+    /// over an arm binding whose payload is a tuple.
+    ///
+    /// Same shape, one channel. The field version re-homes BOTH the bodies
+    /// walk and the memory walk, because a struct payload's moved-out field
+    /// left the box's interior free armed over a buffer the destination had
+    /// taken — an abort. A tuple payload's memory is already balanced (measured
+    /// at 12 allocs / 12 frees, before and after), so only the BODIES walk is
+    /// re-homed here and there is no `cap`-zeroing peer to call.
+    ///
+    /// That asymmetry is the correction to this row's own scoping, which
+    /// predicted a missing memory-side skip: the memory half needs nothing,
+    /// and adding one would have traded a double-read for a leak.
+    /// The TUPLE payload of a seeded `Option`/`Result` instantiation, when
+    /// exactly ONE arm has one.
+    ///
+    /// Declining when BOTH arms are tuples is deliberate. The mask would then
+    /// be ambiguous between two arms that mangle identically, and this family's
+    /// bias is fixed: a declined mask keeps today's behaviour (a doubled body),
+    /// a wrong-arm mask LOSES a body that nothing else runs. So
+    /// `Result[(R, i64), (R, i64)]` is left alone rather than guessed at.
+    fn sole_tuple_payload_te(te: &TypeExpr) -> Option<TypeExpr> {
+        let TypeKind::Path(p) = &te.kind else {
+            return None;
+        };
+        if !matches!(
+            p.segments.last().map(|s| s.as_str()),
+            Some("Option" | "Result")
+        ) {
+            return None;
+        }
+        let mut tuples = p.generic_args.as_ref()?.iter().filter_map(|a| match a {
+            GenericArg::Type(t) if matches!(&t.kind, TypeKind::Tuple(_)) => Some(t.clone()),
+            _ => None,
+        });
+        let first = tuples.next()?;
+        if tuples.next().is_some() {
+            return None;
+        }
+        Some(first)
+    }
+
+    pub(super) fn suppress_boxed_payload_view_tuple_elem_move(
+        &mut self,
+        src: &str,
+        elem: usize,
+    ) -> bool {
+        // Keyed on `boxed_payload_alias` rather than on
+        // `boxed_optres_payload_view_vars`, which the field sibling uses.
+        //
+        // That registry admits a payload by TYPE NAME — a user struct or a
+        // user enum — so a tuple payload is never in it and the first draft of
+        // this suppressor declined silently on every cell. The alias map is the
+        // registration a tuple payload DOES get: the arm loop records that the
+        // binding is a bit-copy view of the envelope's box interior, which is
+        // exactly the relationship this needs, and it is populated for any
+        // seeded payload shape.
+        let Some((env_name, _container)) = self.payload_vars.boxed_payload_alias.get(src).cloned()
+        else {
+            return false;
+        };
+        let Some(env_te) = self
+            .type_decls
+            .enum_inst_var_types
+            .get(env_name.as_str())
+            .cloned()
+        else {
+            return false;
+        };
+        // The mask names the payload it belongs to by its MANGLED type, which
+        // is what the walker's own tuple arm compares against. Resolving it
+        // from the envelope's instantiation rather than from the binding keeps
+        // the two in step for a `Result`, whose arms mangle differently.
+        let Some(payload_te) = Self::sole_tuple_payload_te(&env_te) else {
+            return false;
+        };
+        let payload_key = Self::display_mangle_te(&payload_te);
+        // Accumulate, then re-read: a second `let y = t.1` in the same arm has
+        // to mask BOTH elements, and re-homing from the single new index would
+        // put the first one back.
+        self.type_decls
+            .boxed_payload_moved_fields
+            .entry(src.to_string())
+            .or_default()
+            .insert(elem);
+        let masked: std::collections::BTreeSet<usize> = self
+            .type_decls
+            .boxed_payload_moved_fields
+            .get(src)
+            .cloned()
+            .unwrap_or_default();
+        let Some(masked_walker) = self.emit_optres_payload_user_drop_bodies_fn_skipping(
+            &env_te,
+            super::synth_drop::PayloadBodiesMask::TupleElems(&payload_key, &masked),
+        ) else {
+            // Nothing survives the mask, so the whole walk belongs to the
+            // destinations now; leaving the unmasked one registered would
+            // double every body.
+            self.suppress_container_elem_bodies_for_var(&env_name);
+            return true;
+        };
+        // EVERY matching action, under EITHER name. The `let` that built the
+        // envelope registers the walker against the envelope, and the arm
+        // re-homes the same walker onto the arm BINDING, so the two copies
+        // drain at different points and masking one leaves the other running.
+        let mut hit = false;
+        for frame in self.drop_rc.scope_cleanup_actions.iter_mut() {
+            for action in frame.iter_mut() {
+                if let super::state::CleanupAction::UserDrop {
+                    binding_name,
+                    kind: super::state::UserDropKind::ContainerElemBodies,
+                    drop_fn,
+                    ..
+                } = action
+                {
+                    if binding_name == &env_name || binding_name == src {
+                        *drop_fn = masked_walker;
+                        hit = true;
+                    }
+                }
+            }
+        }
+        hit
     }
 
     /// B-2026-09-17-34 — neutralize ONE field inside a boxed `Option`/`Result`

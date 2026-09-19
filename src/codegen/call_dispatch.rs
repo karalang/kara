@@ -3514,8 +3514,10 @@ impl<'ctx> super::Codegen<'ctx> {
         let Some(env_te) = self.type_decls.enum_inst_var_types.get(arg_name).cloned() else {
             return;
         };
-        let masked_bodies =
-            self.emit_optres_payload_user_drop_bodies_fn_skipping(&env_te, (&struct_name, &moved));
+        let masked_bodies = self.emit_optres_payload_user_drop_bodies_fn_skipping(
+            &env_te,
+            super::synth_drop::PayloadBodiesMask::StructFields(&struct_name, &moved),
+        );
         for frame in self.drop_rc.scope_cleanup_actions.iter_mut() {
             for action in frame.iter_mut() {
                 if let super::state::CleanupAction::UserDrop {
