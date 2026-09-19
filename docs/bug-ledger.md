@@ -92,7 +92,7 @@ distinguish "bugs flattening" from "we stopped writing them down."
 
 | class | total |
 |---|---|
-| run-vs-build | 444 |
+| run-vs-build | 445 |
 | miscompile | 424 |
 | leak | 381 |
 | double-free | 250 |
@@ -110,7 +110,7 @@ distinguish "bugs flattening" from "we stopped writing them down."
 
 | surface | total |
 |---|---|
-| codegen | 1876 |
+| codegen | 1877 |
 | interp | 481 |
 | typecheck | 302 |
 | other | 101 |
@@ -190,7 +190,6 @@ _Generated from `bug-ledger.jsonl` by `scripts/bug-curve.py` (2026-05-20 → 202
 | B-2026-09-19-27 | 2026-09-19 | parser | low | THE SELF-HOSTED PARSER DOES NOT MODEL `IntegerOutOfRange` EITHER, so the token the port lexer can now produce has no consumer -- the seed folds it in six places across `exprs.rs` and `patterns.rs` (the unary-minus `i64::MIN` fold, the unsigned-suffix wrap that buys a precise range diagnostic, and both again for literal and range patterns) and `selfhost/src/parser.kara` has no arm for it at all | — |
 | B-2026-09-19-28 | 2026-09-19 | lexer | low | THE `(u64::MAX, i128::MAX]` BAND IS THE ONE THE PORT LEXER STILL CANNOT REACH -- `100000000000000000000i128` is a plain `Integer` in the seed and an `Error` in the port, because `Token.Integer` carries an i64; B-2026-09-19-26 ported the other three bands and named this one in its own close without a tracker | — |
 | B-2026-09-19-29 | 2026-09-19 | interp | medium | TWO HOLDERS BUILT FROM ONE `shared enum` BINDING RUN ITS PAYLOAD'S `Drop` BODY TWICE UNDER `--interp` AND ONCE ON EVERY COMPILED BACKEND -- `struct Hs { m: SMono }` built twice from one `s` prints `A d2:9 d2:9 ok` against `A ok d2:9`, in every one of the five holder positions, because an alias of a shared enum is a deep VALUE CLONE in this backend and there is no refcount to consult | — |
-| B-2026-09-19-30 | 2026-09-19 | codegen | high | A WILDCARD LEAF IN A DESTRUCTURED **BOXED** `Option` PAYLOAD MAKES THE ARM RETURN THE `None` ARM'S VALUE ON EVERY COMPILED BACKEND -- `fn wildOut(o: Option[(H, i64)]) -> i64 { match o { Some((_, b)) => { return b; } None => { return 0; } } }` with `struct H { id: i64, s: String }` prints `n0` against `--interp`'s `n9`, i.e. a WRONG VALUE silently returned, not a misplaced `Drop` body; naming the leaf (`Some((a, b))`) is correct on every surface and a NARROWER payload (`struct R { id: i64 }`, which rides inline rather than boxing) is correct too, so the trigger is a wildcard leaf on the boxed payload channel | — |
 | B-2026-09-19-31 | 2026-09-19 | codegen+interp | medium | A CONDITIONALLY HANDED-BACK PART OF AN OWNED `Option` PAYLOAD LOSES THE PART THAT DIED, ON ALL FOUR SURFACES -- `fn eat(o: Option[(R, R)], k: bool) -> R { match o { Some((a, b)) => { if k { return a; } return b; } .. } }` called with `k = false` prints `got:6 dR6 end` against the due `dR5 got:6 dR6 end` everywhere, so the A/B parity rule sees nothing; the UNCONDITIONAL spelling of the same arm is correct since B-2026-09-14-18, which is what leaves this shape behind as the family's last all-surface loss | — |
 | B-2026-09-19-32 | 2026-09-19 | codegen | low | THE ESCAPING DEBOX LEAKS ITS MOVED-OUT PAYLOAD WHEN THE ENUM HAS NO `impl Drop` -- `fn take(o: Ve) -> String { if let Ve.A(s) = o { s } else { .. } }` loses 310 B over 20 calls at -O0, identically on the `match` spelling, and adding a Drop impl to the same enum makes both clean | — |
 | B-2026-09-19-33 | 2026-09-19 | codegen | medium | A NESTED PROJECTION OUT OF A BY-VALUE `Option` TUPLE PAYLOAD STILL SILENCES ITS INNER SIBLING ON EVERY COMPILED BACKEND -- `fn eat(o: Option[((R, R), i64)]) -> R { match o { Some(t) => { return t.0.1; } .. } }` prints `got:6 dR6 end` against the interpreter's correct `dR5 got:6 dR6 end`, because `PayloadBodiesMask::TupleElems` is a FLAT index set that can say "skip element 0" and cannot say "skip element 1 OF element 0"; the one-hop spellings of the same shape were fixed by B-2026-09-17-30, whose depth filter deliberately declines this one rather than report a first hop that would be a FALSE escape losing the inner sibling | — |
@@ -204,6 +203,7 @@ _Generated from `bug-ledger.jsonl` by `scripts/bug-curve.py` (2026-05-20 → 202
 | B-2026-09-19-41 | 2026-09-19 | codegen | medium | A `Drop`-BEARING NAMED FIELD MOVED OUT OF AN `Option` PAYLOAD RUNS ITS BODY LATE, TWICE, OR NOT AT ALL ON THE COMPILED BACKENDS -- `Some(t) => { let x = t.r; println("mid") }` over `Option[P]` prints `mid dR5` against `--interp`'s due `dR5 mid`; give `P` a SECOND `Drop` field and a named-local argument doubles the sibling's body (`mid dR6 dR6 dR5`) while a fresh-temp argument LOSES the moved one (`mid dR6`); the TUPLE spelling of every cell is correct at HEAD, so B-2026-09-14-7's repair reaches `ParamPart::TupleIndex` and not `ParamPart::Field`, and giving `P`'s field a heap member makes all three symptoms vanish | — |
 | B-2026-09-19-42 | 2026-09-19 | codegen | medium | AN ASSIGNMENT OVER A `mut` LOCAL STRANDS THE DISPLACED VALUE'S `shared` RC BOX -- `out = w` over `struct Ws { h: Sh }` with `shared struct Sh` loses 32 B plus its 6 B interior per call at `-O0` with correct output and no valgrind errors, where the plain-`String` twin of the same statement (B-2026-09-15-21) releases its displaced value correctly; the no-assignment control over the same three types is clean at 11 allocs / 11 frees | — |
 | B-2026-09-19-43 | 2026-09-19 | codegen | medium | A BODIES-ONLY CARRIER ASSIGNED FROM AN ARM-BOUND PARAM PAYLOAD LOSES THE MOVED-IN VALUE'S `Drop` BODY UNDER AOT -- `struct Hold { r: R, n: i64 }` with no `impl Drop` of its own prints `dR0` where `--interp` prints `dR0 dR4`, with memory clean on both sides (12 allocs / 12 frees, 0 errors), so no sanitizer can see it; the `impl Drop`-bearing spelling of the same statement is correct on both backends | — |
+| B-2026-09-19-44 | 2026-09-19 | codegen | medium | A DESTRUCTURING `if let` LOSES ITS BOXED PAYLOAD'S `Drop` BODY ON EVERY COMPILED BACKEND, where the `match` SPELLING OF THE SAME PATTERN KEEPS IT -- `if let Some((_, b)) = o { return b; }` over `Option[(H, i64)]` with `struct H { id: i64, s: String }` prints `n9` where `--interp` prints `dH1 n9`, and the NAMED spelling `Some((a, b))` loses it identically, so the trigger is the `if let` form and not the wildcard; binding the payload WHOLE (`Some(t)`, reading `t.1`) through the same `if let` is correct, as is the inline-channel payload, so it is a destructuring `if let` on the heap-BOXED channel. Values are correct and valgrind is clean, so only the user-visible body is lost -- invisible to every memory gate including the ASAN legs | — |
 
 ### Relocated
 
@@ -2726,6 +2726,7 @@ _Generated from `bug-ledger.jsonl` by `scripts/bug-curve.py` (2026-05-20 → 202
 | B-2026-09-19-20 | codegen | low | AN INDEXED-RECEIVER METHOD WHOSE CONTAINER IS A CALL IS REFUSED BY CODEGEN -- `mk(n)[0].len()` says `indexed-receiver method 'len' requires the index… | 28132fd |
 | B-2026-09-19-21 | codegen | medium | AN AGGREGATE-LITERAL RETURN THAT WRAPS A GENERIC ENUM PARAMETER DOUBLE FREES -- `fn wrap[T](g: G1[T], c: bool) -> H[T] { if c { return H { g: g } } r… | c0c50ee |
 | B-2026-09-19-26 | lexer | low | THE SELF-HOSTED LEXER DOES NOT MODEL `IntegerOutOfRange`, so a 19+ digit literal is an Error token in the port and a real token in the seed -- `18446… | 01a3dad |
+| B-2026-09-19-30 | codegen | high | A WILDCARD LEAF IN A DESTRUCTURED **BOXED** PAYLOAD MADE ITS NAMED SIBLINGS READ FROM THE WRONG OFFSET ON EVERY COMPILED BACKEND -- `fn wildOut(o: Op… | ea5228a |
 
 </details>
 
