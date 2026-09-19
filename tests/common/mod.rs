@@ -290,9 +290,16 @@ fn stale_runtime_artifacts() -> Option<String> {
         .ok()?;
     let ct: u64 = String::from_utf8_lossy(&out.stdout).trim().parse().ok()?;
 
+    // `modified()` rather than the unix-only `MetadataExt::mtime()`: this module
+    // is compiled by every integration-test target, Windows included, and an
+    // ungated `std::os::unix` import here fails the whole `Test
+    // (windows-latest)` job at build time rather than at a test.
     let mtime = |p: &PathBuf| -> Option<u64> {
-        use std::os::unix::fs::MetadataExt;
-        std::fs::metadata(p).ok().map(|m| m.mtime() as u64)
+        let modified = std::fs::metadata(p).ok()?.modified().ok()?;
+        modified
+            .duration_since(std::time::UNIX_EPOCH)
+            .ok()
+            .map(|d| d.as_secs())
     };
 
     // The override is checked INSTEAD of the glob: a run that pins an archive is
