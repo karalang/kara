@@ -7016,7 +7016,7 @@ impl<'ctx> super::Codegen<'ctx> {
     /// group scan, with the hash computed here through the map's STORED
     /// `hash_fn` and passed in.
     ///
-    /// The hash deliberately stays on this side. Baking `karac_hash_u64` into
+    /// The hash deliberately stays on this side. Baking `karac_hash_word` into
     /// the callee would let the permutation inline into the walk, which is the
     /// shape a sibling row prototyped — and it is the B-2026-08-22-27 bug: this
     /// monomorphized body is shared across hashers, so a

@@ -1273,6 +1273,78 @@ mod codegen_tests {
         }
     }
 
+    /// B-2026-09-19-8: a `u64`-keyed `Map` / `Set` / `SortedMap` could not find
+    /// a key it had just inserted, at every opt level and on every lane. The
+    /// per-key hash fn codegen synthesizes for a `u64` key is named
+    /// `karac_hash_u64`, which was also the name of a BY-VALUE runtime extern;
+    /// the synthesizer reused the extern, the map called it with a key
+    /// POINTER, and every probe hashed a stack address. `SortedMap`'s value
+    /// lookup rides the same `karac_map_get`, so its iteration and `dbg`
+    /// printed garbage values — B-2026-09-19-4's CI symptom, where only the
+    /// arm64 JIT's stack layout happened to expose it.
+    ///
+    /// `i64` and `u32` rows are the controls: their synthesized names never
+    /// collided. The Fx row covers `karac_hash_u64_fx`, the same collision
+    /// under the `FxBuildHasher` suffix.
+    #[test]
+    fn a_u64_keyed_map_or_set_finds_the_keys_it_inserted() {
+        let cases: &[(&str, &str, &str)] = &[
+            (
+                "Map[u64, u64]",
+                "let mut m: Map[u64, u64] = Map.new();\n\
+                 m.insert(5u64, 7u64);\n\
+                 m.insert(18446744073709551615u64, 9u64);\n\
+                 println(f\"{m.contains_key(5u64)} {m.get(5u64).unwrap_or(0u64)} \
+                 {m.get(18446744073709551615u64).unwrap_or(0u64)}\");",
+                "true 7 9\n",
+            ),
+            (
+                "Map[u64, u64, FxBuildHasher]",
+                "let mut m: Map[u64, u64, FxBuildHasher] = Map.new();\n\
+                 m.insert(5u64, 7u64);\n\
+                 println(f\"{m.contains_key(5u64)} {m.get(5u64).unwrap_or(0u64)}\");",
+                "true 7\n",
+            ),
+            (
+                "Set[u64]",
+                "let mut s: Set[u64] = Set.new();\n\
+                 s.insert(5u64);\n\
+                 println(f\"{s.contains(5u64)} {s.contains(6u64)}\");",
+                "true false\n",
+            ),
+            (
+                "SortedMap[u64, i64] iteration",
+                "let mut s: SortedMap[u64, i64] = SortedMap.new();\n\
+                 s.insert(5u64, 7);\n\
+                 s.insert(3u64, 9);\n\
+                 for (k, v) in s { println(f\"{k} {v}\"); }",
+                "3 9\n5 7\n",
+            ),
+            (
+                "Map[i64, i64] control",
+                "let mut m: Map[i64, i64] = Map.new();\n\
+                 m.insert(5, 7);\n\
+                 println(f\"{m.contains_key(5)} {m.get(5).unwrap_or(0)}\");",
+                "true 7\n",
+            ),
+            (
+                "Map[u32, u64] control",
+                "let mut m: Map[u32, u64] = Map.new();\n\
+                 m.insert(5u32, 7u64);\n\
+                 println(f\"{m.contains_key(5u32)} {m.get(5u32).unwrap_or(0u64)}\");",
+                "true 7\n",
+            ),
+        ];
+        for (label, body, want) in cases {
+            let src = format!("fn main() {{\n{body}\n}}\n");
+            assert_eq!(
+                run_program(&src).as_deref(),
+                Some(*want),
+                "{label}: a key inserted into the map must be found again",
+            );
+        }
+    }
+
     /// `Vector[T, N]` integer lane arithmetic must give the SAME value in both
     /// backends (B-2026-08-26-8).
     ///

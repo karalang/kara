@@ -1248,7 +1248,7 @@ pub unsafe extern "C" fn karac_map_insert_borrowed_str_old(
 /// An earlier draft took only `(map, key)` and hashed with
 /// `karac_hash::hash_u64`. That is precisely the bug B-2026-08-22-27 fixed: the
 /// hasher is a CONSTRUCTION-time decision stored in the map's control block
-/// (`Map[K, V, FxBuildHasher]` hashes through `karac_hash_u64_fx`), the
+/// (`Map[K, V, FxBuildHasher]` hashes through `karac_hash_word_fx`), the
 /// monomorphized body is shared across hashers, and baking the default in makes
 /// a non-default map file keys under one hash and probe under another. That
 /// failure does not look like a hash bug: every resize rehashes through the
@@ -2461,7 +2461,7 @@ mod tests {
     /// It reaches the SAME walk (`lookup_hashed`) with the hash and the key
     /// compare inlined, so what this actually pins is that inlining them agrees
     /// with going through `hash_fn`/`eq_fn` — i.e. that codegen's emitted i64
-    /// hash really is `karac_hash_u64`.
+    /// hash really is `karac_hash_word`.
     #[test]
     fn typed_i64_lookup_agrees_with_the_erased_one_on_every_key() {
         unsafe extern "C" fn hash_via_runtime(p: *const c_void) -> u64 {

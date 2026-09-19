@@ -6113,10 +6113,10 @@ impl<'ctx> Codegen<'ctx> {
         // The 8-byte specialization of the same call, which is what an `i64`
         // / `u64` key — the dominant width in the corpus — actually takes.
         let hash_u64_ty = i64_type.fn_type(&[i64_ty], false);
-        module.add_function("karac_hash_u64", hash_u64_ty, Some(Linkage::External));
+        module.add_function("karac_hash_word", hash_u64_ty, Some(Linkage::External));
         // The `FxBuildHasher` siblings of the two above.
         module.add_function("karac_hash_int_fx", hash_int_ty, Some(Linkage::External));
-        module.add_function("karac_hash_u64_fx", hash_u64_ty, Some(Linkage::External));
+        module.add_function("karac_hash_word_fx", hash_u64_ty, Some(Linkage::External));
 
         // `StableHash.siphash24(bytes, k0, k1)` (B-2026-08-25-22) — the same
         // byte-oriented shape plus the caller's 128-bit key, which is what

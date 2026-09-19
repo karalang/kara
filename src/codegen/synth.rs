@@ -169,8 +169,8 @@ impl<'ctx> super::Codegen<'ctx> {
         // A user `impl Hasher` has no integer-shaped entry point -- its
         // permutation is user code -- so it alone keeps the byte path.
         let (wide_sym, narrow_sym) = match self.hash_hasher {
-            crate::hasher_kind::HasherKind::SipHash13 => ("karac_hash_u64", "karac_hash_int"),
-            crate::hasher_kind::HasherKind::Fx => ("karac_hash_u64_fx", "karac_hash_int_fx"),
+            crate::hasher_kind::HasherKind::SipHash13 => ("karac_hash_word", "karac_hash_int"),
+            crate::hasher_kind::HasherKind::Fx => ("karac_hash_word_fx", "karac_hash_int_fx"),
             crate::hasher_kind::HasherKind::User(_) => return None,
         };
         let i64_t = self.context.i64_type();
@@ -585,6 +585,18 @@ impl<'ctx> super::Codegen<'ctx> {
     ) -> FunctionValue<'ctx> {
         let fn_name = format!("karac_hash_{type_name}{}", self.hash_hasher.mangle_suffix());
         if let Some(f) = self.module.get_function(&fn_name) {
+            // B-2026-09-19-8: a runtime extern once shared this namespace
+            // (`karac_hash_u64(u64)`), and reusing it here handed the map a
+            // by-value hash that it calls with a KEY POINTER — every `u64`
+            // lookup missed. Anything found under this name must be the
+            // `(ptr) -> i64` shape the map calls, or it is a name collision.
+            let params = f.get_type().get_param_types();
+            assert!(
+                params.len() == 1 && params[0].is_pointer_type(),
+                "`{fn_name}` exists in the module but is not a `(ptr) -> i64` \
+                 per-key hash fn — a runtime symbol collides with the \
+                 synthesized `karac_hash_<Type>` namespace",
+            );
             return f;
         }
         if let Some(f) = self.try_emit_user_impl_hash_fn(type_name, &fn_name) {
