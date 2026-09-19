@@ -95,7 +95,7 @@ distinguish "bugs flattening" from "we stopped writing them down."
 | run-vs-build | 438 |
 | miscompile | 423 |
 | leak | 376 |
-| double-free | 247 |
+| double-free | 248 |
 | missing-feature | 199 |
 | codegen-gap | 181 |
 | other | 137 |
@@ -110,7 +110,7 @@ distinguish "bugs flattening" from "we stopped writing them down."
 
 | surface | total |
 |---|---|
-| codegen | 1862 |
+| codegen | 1863 |
 | interp | 478 |
 | typecheck | 302 |
 | other | 101 |
@@ -167,7 +167,6 @@ _Generated from `bug-ledger.jsonl` by `scripts/bug-curve.py` (2026-05-20 → 202
 | B-2026-09-17-2 | 2026-09-17 | codegen+interp | low | THE METHOD SPELLING OF B-2026-09-09-21 RUNS NO DISCARDED-TUPLE ELEMENT `Drop` BODY ON ANY BACKEND -- `h.wrap(mk(43));` over `fn wrap(ref self, r: R) -> (R, i64)` prints `ok` and nothing else on all four surfaces, where the free-function spelling `f(mk(43));` now prints `dR43`. An AGREED gap, so no A/B gate sees it; it is the method peer of the shape B-2026-09-09-21 fixed, and it was deliberately left out of that fix rather than missed | — |
 | B-2026-09-17-5 | 2026-09-17 | codegen | medium | AN ARM-BOUND `Array` PAYLOAD REBOUND INTO A LOCAL RUNS ITS ELEMENTS' `Drop` BODIES TWICE ON THE COMPILED BACKENDS -- `match x { Some(t) => { let u: Array[S, 2] = t; .. } }` over a by-value `Option[Array[S, 2]]` param prints `dS0 dS1 dS0 dS1` under jit / `karac build` / `KARAC_AUTO_PAR=0 build` against `--interp`'s single pair; memory is clean, so it is the BODIES channel alone | — |
 | B-2026-09-17-6 | 2026-09-17 | codegen+interp | low | AN ENVELOPE'S `Array` PAYLOAD RUNS ITS ELEMENTS' `Drop` BODIES AT THE CONSTRUCTOR STATEMENT, NOT AT THE HOLDER'S DEATH -- `let a: Array[S, 2] = [..]; let x: Option[Array[S, 2]] = Some(a); println("held")` prints both bodies BEFORE `held` on all four surfaces, though `x` owns the array until the end of the block | — |
-| B-2026-09-17-8 | 2026-09-17 | codegen | medium | THE `Option`/`Result` HEAD OF THE PASSTHROUGH-GENERIC DOUBLE FREE IS A DIFFERENT CHANNEL, AND STILL BROKEN -- `fn idOpt[T](g: Option[T]) -> Option[T] { return g }` at `T = String` aborts with `free(): double free detected in tcache 2` and 11 allocs / 12 frees; the ONE extra free (against B-2026-09-16-16's two) is the tell that the payload is INLINE, so it rides `inline_option_payload_vars` rather than the boxed channel that row's gate can see | — |
 | B-2026-09-17-11 | 2026-09-17 | codegen | medium | A `shared` PAYLOAD UNDER A BY-VALUE ENUM PARAM LOSES ITS rc-DEC ENTIRELY IN TWO SHAPES -- a `shared struct` used as the payload DIRECTLY (`enum Wd { Full(ShIn) }`) strands 32 B at 12 allocs / 10 frees, and the `Option` head over a struct carrying a `shared` FIELD strands 32 B at 11 / 9; both are the OPPOSITE of B-2026-09-16-34 (which ran one DEC too many over the same surface) and both are invisible to everything but a leak check | — |
 | B-2026-09-17-12 | 2026-09-17 | codegen | low | A GENERIC ENUM'S OWN `Drop` BODY RUNS AFTER ITS PAYLOAD'S ON EVERY COMPILED SURFACE WHEN THE PAYLOAD IS HEAP-BOXED -- `match g { G.X(t) => .. }` over a local, and `take(g: G[R])` by value, both print `dR20 dG` where `--interp` prints `dG dR20` (design.md Part 8: the user's `fn drop` body runs first, then the fields) | — |
 | B-2026-09-17-13 | 2026-09-17 | codegen | medium | A CONCRETE `impl G[R]` METHOD THAT MATCHES ON OWNED `self` LOSES THE GENERIC ENUM PAYLOAD'S `Drop` BODY ON EVERY COMPILED SURFACE -- `impl G[R] { fn read(self) { match self { G.X(t) => .. } } }` prints `x1` where `--interp` prints `dR23 x1`, with memory balanced so no sanitizer sees it | — |
@@ -200,6 +199,7 @@ _Generated from `bug-ledger.jsonl` by `scripts/bug-curve.py` (2026-05-20 → 202
 | B-2026-09-19-22 | 2026-09-19 | interp | medium | THE INTERPRETER LOSES A BY-VALUE GENERIC ENUM PARAMETER'S `Drop` BODY ON THE DIES-INSIDE LEG -- `let back = mid(g, false)` over `fn mid[T](g: G1[T], c: bool) -> G1[T]` at `T = R` prints `mx done` alone under `--interp` where every compiled surface prints `dR9` first; the hand-back leg of the same callee runs the body on both backends | — |
 | B-2026-09-19-23 | 2026-09-19 | codegen | medium | A TEMP GENERIC ENUM ARGUMENT WHOSE RESULT IS DISCARDED LEAKS ITS PAYLOAD BOX -- `mid(G1.Y(f"aaaaaaaa-1"), true);` loses 34 bytes (24 direct, 10 indirect) where the NAMED spelling of the same call is clean, so B-2026-09-16-16's discarded-statement window does not cover the one argument that has no binding to keep a drop | — |
 | B-2026-09-19-24 | 2026-09-19 | codegen | medium | THE `Option`/`Result` HEAD OF B-2026-09-17-7 IS UNFIXED -- `fn midopt[T](g: Option[T], c: bool) -> Option[T] { if c { return g } return Option.None }` at `T = Array[String, 2]` dies with 10 `Invalid read of size 8` against a correct `--interp`; the runtime compare that fixed the user-enum head is gated on `user_enum_boxed_payload_variants`, which returns nothing for the seeded heads by design | — |
+| B-2026-09-19-25 | 2026-09-19 | codegen | medium | AUDIT THE REST OF THE ONE-WAY-CLEAR POPULATION THAT B-2026-09-17-8 FIXED BY CONSTRUCTION -- nine payload-ownership registries were wiped for the remainder of ANY caller that made a generic call, so every caller that used an `Option`/`Result`/boxed-payload binding after a generic call was exposed, and only the eleven shapes in that row's fixture have actually been measured | — |
 
 ### Relocated
 
@@ -2684,6 +2684,7 @@ _Generated from `bug-ledger.jsonl` by `scripts/bug-curve.py` (2026-05-20 → 202
 | B-2026-09-17-4 | codegen | high | A NAMED `Array` LOCAL MOVED INTO AN `Option` CTOR DOUBLE FREES ITS ELEMENTS' HEAP FIELDS ON EVERY COMPILED BACKEND -- `let a: Array[S, 2] = [..]; let… | e312de9cd |
 | B-2026-09-16-37 | interp+codegen | low | THE DISCARDED-TUPLE BODY ARM FIRES FOR A GENERIC CALLEE ITS CODEGEN TWIN STRUCTURALLY CANNOT SEE -- `fgen(mk(31));` over `fn fgen[T](t: T) -> (T, i64… | 1d75252 |
 | B-2026-09-17-7 | codegen | medium | A MIXED-PATH GENERIC CALLEE THAT MAY HAND ITS BOXED ENUM PAYLOAD BACK DOUBLE FREES -- `fn mid[T](g: G1[T], c: bool) -> G1[T] { if c { return g; } ret… | 9b051ff |
+| B-2026-09-17-8 | codegen | medium | THE `Option`/`Result` HEAD OF THE PASSTHROUGH-GENERIC DOUBLE FREE IS A DIFFERENT CHANNEL, AND STILL BROKEN -- `fn idOpt[T](g: Option[T]) -> Option[T]… | 7169255 |
 | B-2026-09-17-10 | codegen | medium | e312de9cd's SEEDED-CTOR SOURCE DISARM STRANDS THE INTERIOR WHEN THE CONSUMER IS A GENERIC CALLEE -- `fn takesG[T](x: Option[Array[T, 2]])` over a nam… | 52abf6a |
 | B-2026-09-17-9 | codegen | medium | B-2026-09-17-4's FIX LEAKS THE SAME BUFFERS IT STOPPED DOUBLE-FREEING, WHEN THE CONSUMER IS A GENERIC CALLEE -- `e312de9` narrowed `disarm_array_sour… | 52abf6a |
 | B-2026-09-17-18 | other | medium | A FIX SHA AN ORPHANING REBASE LEFT BEHIND STILL RESOLVES, SO B-2026-09-16-8's FIX CANNOT SEE THE CASE IT WAS WRITTEN FOR -- `3b2a932` narrowed `bug-l… | cbe88b6 |
