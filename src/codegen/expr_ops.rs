@@ -694,6 +694,43 @@ impl<'ctx> super::Codegen<'ctx> {
         object: &Expr,
         field: &str,
     ) -> Result<BasicValueEnum<'ctx>, String> {
+        // `h.peek().a` where `peek(ref self) -> ref Pair` and `Pair` is a user
+        // struct. B-2026-09-15-12 — the twin of the `Array` inner handled at
+        // the top of `compile_index`, and the same routing for the same
+        // reason: the accessor lowers to the `ptr` borrow ABI, no arm here
+        // resolves a field on a raw pointer, and the read died on
+        // "cannot resolve field '…' on this receiver (its type was not
+        // recorded for codegen)". Binding the borrow to an anonymous ref-local
+        // registers `var_type_names` for it, which is the record that was
+        // missing, and re-dispatching reaches the ordinary ref-local field
+        // path — the one `let p: ref Pair = h.peek(); p.a` already takes.
+        //
+        // Gated on the head being a struct codegen KNOWS (`struct_field_names`)
+        // so this cannot swallow an inner the existing arms handle better:
+        // a `ref Vec[T]` / `ref String` / `ref Tensor` inner has its own path
+        // below and is not a key in that table, and a TUPLE inner reaches the
+        // value-position load in `compile_method_call` before ever arriving
+        // here. Placed FIRST for the double-call reason `compile_index`'s twin
+        // spells out.
+        if let Some(inner_te) = self.ref_return_inner_for_call_pub(object) {
+            if let TypeKind::Path(path) = &inner_te.kind {
+                let is_known_struct = path
+                    .segments
+                    .last()
+                    .is_some_and(|seg| self.type_decls.struct_field_names.contains_key(seg));
+                if is_known_struct {
+                    let (synth, is_tensor) =
+                        self.bind_ref_return_borrow_synth(object, &inner_te)?;
+                    let synth_obj = Expr {
+                        kind: ExprKind::Identifier(synth.clone()),
+                        span: object.span,
+                    };
+                    let result = self.compile_field_access(&synth_obj, field);
+                    self.release_ref_return_borrow_synth(&synth, is_tensor);
+                    return result;
+                }
+            }
+        }
         // Primitive-type associated constants — `i64.MAX` /
         // `f64.INFINITY` / `usize.MAX` etc. parse as
         // `FieldAccess(Identifier("i64"), "MAX")`. Intercept before the

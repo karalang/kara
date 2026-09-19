@@ -10595,6 +10595,52 @@ impl<'ctx> super::Codegen<'ctx> {
         // → 3 blocks, chained or bound). That residual is a pre-existing leak
         // in `-> ref String` accessors themselves (B-2026-07-29-21), which
         // refusing here would not avoid — the bound form leaks it too.
+        let (synth, is_tensor) = self.bind_ref_return_borrow_synth(object, &inner_te)?;
+
+        let synth_recv = Expr {
+            kind: ExprKind::Identifier(synth.clone()),
+            span: object.span,
+        };
+        // Synthetic caller: pass `call_span` for the paren span too, per
+        // `compile_method_call`'s contract (`method_call_key` then falls back
+        // to the receiver span, preserving prior behavior).
+        let result =
+            self.compile_method_call(&synth_recv, method, args, &object.span, &object.span);
+
+        self.release_ref_return_borrow_synth(&synth, is_tensor);
+        result.map(Some)
+    }
+
+    /// Emit a borrow-returning user accessor ONCE and bind its result pointer
+    /// to a synthetic ref-local, returning that local's name and whether it
+    /// was registered as a borrowed tensor.
+    ///
+    /// This is the registration ladder the `let` arm runs for
+    /// `let r: ref T = h.view();` (`compile_let`, `ref_return_inner_for_call`),
+    /// in the same order, under a generated name — an anonymous sanctioned
+    /// binding site. Three callers share it now: the receiver-materialization
+    /// above (`h.view().is_empty()`), and the INDEX and FIELD-ACCESS consumers
+    /// (`h.peek()[0]`, `h.peek().a`) added for B-2026-09-15-12.
+    ///
+    /// **Materializing a POINTER is the point — do not "simplify" this into a
+    /// load.** The value-position arm in `compile_method_call` loads the
+    /// pointee, which is correct for a TUPLE inner and a double free for an
+    /// `Array[String, N]` one: the loaded array becomes a second owner of the
+    /// element buffers and nothing retracts the original's drop
+    /// (`free(): double free detected in tcache 2`, measured). Binding the
+    /// pointer instead gives the consumer a view, so no second owner exists
+    /// and no ownership story is needed. That is why B-2026-09-15-12 is
+    /// closed by routing rather than by widening that filter.
+    ///
+    /// The caller MUST pair this with
+    /// [`Self::release_ref_return_borrow_synth`] once the consuming expression
+    /// is compiled; the registrations are dispatch-only and the name is unique
+    /// per call site.
+    pub(super) fn bind_ref_return_borrow_synth(
+        &mut self,
+        object: &Expr,
+        inner_te: &TypeExpr,
+    ) -> Result<(String, bool), String> {
         let fn_val = self
             .current_fn
             .ok_or_else(|| "ref-return receiver materialization outside fn".to_string())?;
@@ -10626,11 +10672,11 @@ impl<'ctx> super::Codegen<'ctx> {
         // tensor var; everything else binds as a deref-on-use ref-local plus
         // the Vec/String element registry that value-receiver dispatch needs.
         let mut is_tensor = false;
-        if let Some(info) = self.tensor_var_info_from_type_expr(&inner_te) {
+        if let Some(info) = self.tensor_var_info_from_type_expr(inner_te) {
             self.accel.tensor_var_infos.insert(synth.clone(), info);
             is_tensor = true;
         } else {
-            let inner_llvm = self.llvm_type_for_type_expr(&inner_te);
+            let inner_llvm = self.llvm_type_for_type_expr(inner_te);
             self.borrow_vars
                 .ref_params
                 .insert(synth.clone(), inner_llvm);
@@ -10641,14 +10687,14 @@ impl<'ctx> super::Codegen<'ctx> {
                         .insert(synth.clone(), seg.clone());
                 }
             }
-            if let Some(elem_ty) = self.extract_vec_elem_type(&inner_te) {
+            if let Some(elem_ty) = self.extract_vec_elem_type(inner_te) {
                 self.var_types.vec_elem_types.insert(synth.clone(), elem_ty);
-                if let Some(inner) = super::helpers::vec_inner_type_expr(&inner_te) {
+                if let Some(inner) = super::helpers::vec_inner_type_expr(inner_te) {
                     self.var_types
                         .var_elem_type_exprs
                         .insert(synth.clone(), inner);
                 }
-            } else if self.is_string_type_expr(&inner_te) {
+            } else if self.is_string_type_expr(inner_te) {
                 self.var_types
                     .vec_elem_types
                     .insert(synth.clone(), self.context.i8_type().into());
@@ -10656,27 +10702,21 @@ impl<'ctx> super::Codegen<'ctx> {
             }
         }
 
-        let synth_recv = Expr {
-            kind: ExprKind::Identifier(synth.clone()),
-            span: object.span,
-        };
-        // Synthetic caller: pass `call_span` for the paren span too, per
-        // `compile_method_call`'s contract (`method_call_key` then falls back
-        // to the receiver span, preserving prior behavior).
-        let result =
-            self.compile_method_call(&synth_recv, method, args, &object.span, &object.span);
+        Ok((synth, is_tensor))
+    }
 
-        // Dispatch-only registrations; the name is unique per call site.
-        self.variables.remove(&synth);
-        self.var_types.var_type_names.remove(&synth);
-        self.var_types.vec_elem_types.remove(&synth);
-        self.var_types.var_elem_type_exprs.remove(&synth);
-        self.var_types.string_vars.remove(&synth);
-        self.borrow_vars.ref_params.remove(&synth);
+    /// Undo [`Self::bind_ref_return_borrow_synth`]'s registrations. Every table
+    /// it writes is dispatch-only, so dropping them is the whole teardown.
+    pub(super) fn release_ref_return_borrow_synth(&mut self, synth: &str, is_tensor: bool) {
+        self.variables.remove(synth);
+        self.var_types.var_type_names.remove(synth);
+        self.var_types.vec_elem_types.remove(synth);
+        self.var_types.var_elem_type_exprs.remove(synth);
+        self.var_types.string_vars.remove(synth);
+        self.borrow_vars.ref_params.remove(synth);
         if is_tensor {
-            self.accel.tensor_var_infos.remove(&synth);
+            self.accel.tensor_var_infos.remove(synth);
         }
-        result.map(Some)
     }
 
     /// `(self mode, returns-a-borrow)` for the user impl method

@@ -12427,6 +12427,88 @@ fn main() {
         );
     }
 
+    /// B-2026-09-15-12 — the MEMORY half of a `-> ref Array[T, N]` method
+    /// result used in a value position, and the reason that row could not be
+    /// closed by widening B-2026-09-15-4's filter.
+    ///
+    /// That widening was tried: it made `h.peek()[0]` compile, and the program
+    /// then died with `free(): double free detected in tcache 2`. Loading the
+    /// pointee makes the loaded array a second owner of the element buffers
+    /// while nothing retracts the original's drop, so a compile-time refusal
+    /// would have been traded for a runtime abort. The fix routes instead —
+    /// the borrow is bound to an anonymous ref-local and the index re-dispatched
+    /// against it — and a view owns nothing, which is what this run asserts.
+    ///
+    /// THE ROUTING WAS ONLY HALF THE FIX, and this cell is what says which
+    /// half is which. With the routing alone the program compiles and still
+    /// dies: `expr_yields_fresh_owned_temp` classified the borrow-returning
+    /// accessor as a fresh owned temp, so the argument chokepoint freed the
+    /// element it had just read out of a BORROWED array. Reverting only that
+    /// second change reproduces it here as
+    /// `AddressSanitizer: heap-use-after-free … in memcpy` (measured), and
+    /// glibc reports the same defect in the single-shot spelling as
+    /// `free(): double free detected in tcache 2`.
+    ///
+    /// The output half
+    /// (`test_e2e_ref_array_and_struct_return_used_in_a_value_position` in
+    /// `tests/codegen.rs`) does notice that revert too, but only as a program
+    /// that aborts with EMPTY output — which is the same signature as a
+    /// routing failure. What this cell adds is the name of the defect and the
+    /// allocation it happened to, which is what makes the next regression
+    /// diagnosable rather than merely detected.
+    ///
+    /// `orig:` reads the original field after two borrows of it in the same
+    /// iteration, so an over-eager free would dangle rather than leak; the loop
+    /// makes a per-iteration imbalance accumulate instead of hiding in a single
+    /// teardown; and `free:` is the free-function spelling, correct all along,
+    /// kept as the oracle the method arm was made to match.
+    #[test]
+    fn asan_ref_array_and_struct_return_in_a_value_position_is_balanced() {
+        assert_clean_asan_run(
+            r#"
+struct Pair { a: String, b: String }
+struct Hold { arr: Array[String, 2] }
+struct Named { p: Pair }
+struct Seq { v: Vec[String] }
+impl Hold { fn peek(ref self) -> ref Array[String, 2] { return self.arr; } }
+impl Named { fn peek(ref self) -> ref Pair { return self.p; } }
+impl Seq { fn peek(ref self) -> ref Vec[String] { return self.v; } }
+fn peekh(h: ref Hold) -> ref Array[String, 2] { return h.arr; }
+
+fn main() {
+    let mut i: i64 = 0;
+    while i < 2 {
+        let h = Hold { arr: [f"b151212-arr-aaaaaaaaaaaaaaaa-{i}", f"b151212-arr-bbbbbbbbbbbbbbbb-{i}"] };
+        println(f"arr:{h.peek()[0]}");
+        println(f"free:{peekh(h)[1]}");
+        println(f"orig:{h.arr[0]}");
+
+        let n = Named { p: Pair { a: f"b151212-pair-cccccccccccccccc-{i}", b: f"b151212-pair-dddddddddddddddd-{i}" } };
+        println(f"fld:{n.peek().a}");
+
+        let q = Seq { v: [f"b151212-vec-eeeeeeeeeeeeeeee-{i}"] };
+        println(f"vec:{q.peek()[0]}");
+
+        i = i + 1;
+    }
+}
+"#,
+            &[
+                "arr:b151212-arr-aaaaaaaaaaaaaaaa-0",
+                "free:b151212-arr-bbbbbbbbbbbbbbbb-0",
+                "orig:b151212-arr-aaaaaaaaaaaaaaaa-0",
+                "fld:b151212-pair-cccccccccccccccc-0",
+                "vec:b151212-vec-eeeeeeeeeeeeeeee-0",
+                "arr:b151212-arr-aaaaaaaaaaaaaaaa-1",
+                "free:b151212-arr-bbbbbbbbbbbbbbbb-1",
+                "orig:b151212-arr-aaaaaaaaaaaaaaaa-1",
+                "fld:b151212-pair-cccccccccccccccc-1",
+                "vec:b151212-vec-eeeeeeeeeeeeeeee-1",
+            ],
+            "asan_ref_array_and_struct_return_in_a_value_position_is_balanced",
+        );
+    }
+
     #[test]
     fn asan_array_struct_field_drops_its_elements() {
         assert_clean_asan_run(

@@ -89150,6 +89150,98 @@ fn main() {
         );
     }
 
+    /// B-2026-09-15-12 — the `Array[T, N]` and NAMED-STRUCT inners of a
+    /// `-> ref` method used in a value position, which B-2026-09-15-4
+    /// deliberately declined to widen to.
+    ///
+    /// `h.peek()[0]` failed `karac build` with "Index operator applied to
+    /// non-array type" and `n.peek().a` with "cannot resolve field 'a' on
+    /// this receiver"; `--interp` printed the right answer for both, so these
+    /// were run-vs-build divergences as well as gaps.
+    ///
+    /// WHY THE FIX IS NOT -15-4's, WIDENED. That row teaches the consumer to
+    /// LOAD the borrow's pointee, which is right for a tuple and a DOUBLE FREE
+    /// for an `Array[String, N]`: the loaded array becomes a second owner of
+    /// the element buffers and nothing retracts the original's drop
+    /// (`free(): double free detected in tcache 2`, measured on the widened
+    /// filter before it was reverted). So these consumers bind the borrow to
+    /// an anonymous ref-local and re-dispatch against it instead — the shape
+    /// `arrbound:` / `fldbound:` below have always compiled correctly. A view
+    /// has no ownership story to get wrong.
+    ///
+    /// `arrorig:` is the cell that proves it stayed a view: it reads the
+    /// ORIGINAL field after three borrows of it, and a load-based fix that
+    /// freed through the copy would dangle here.
+    ///
+    /// The row left four things unmeasured and each has a cell. `arrfree:` /
+    /// `fldfree:` are the FREE-FUNCTION spellings — correct before the fix
+    /// (`compile_call` has loaded a borrow-returning free-fn result since
+    /// B-2026-06-07-5), so this gap was method-only exactly as -15-4's was,
+    /// and they are the oracle the method arm was made to match. `vec:` is the
+    /// `-> ref Vec[T]` inner, which the row guessed might already be covered
+    /// because `try_compile_ref_return_receiver_method` handles a `ref Vec`
+    /// RECEIVER — it was not: that is `h.peek().len()`, a method ON the
+    /// borrow, while an INDEX of it took the same fall-through and died on the
+    /// same message. `num:` is the heap-free `Array[i64, N]` control, which
+    /// compiled even before the fix and pins the defect to the element
+    /// buffers rather than to array addressing.
+    ///
+    /// The two inners were NOT the same defect, which the row also asked. The
+    /// named-struct half was pure routing — binding the borrow records
+    /// `var_type_names` for it, which is the record whose absence produced
+    /// that diagnostic. The `Array` half needed that AND a second fix: with
+    /// only the routing it compiled and still aborted, because
+    /// `expr_yields_fresh_owned_temp` classified the borrow-returning ACCESSOR
+    /// as a fresh owned temp and the argument chokepoint freed the element it
+    /// read out of a borrowed array. Three comments in the tree had justified
+    /// that predicate's free-function-only screen by pointing at the upstream
+    /// `user_ref_method_names` gate in `compile_method_call`; routing these
+    /// consumers retires that gate, so the screen had to be paid for directly.
+    #[test]
+    fn test_e2e_ref_array_and_struct_return_used_in_a_value_position() {
+        assert_eq!(
+            run_program(
+                "struct Pair { a: String, b: String }\n\
+                 struct Hold { arr: Array[String, 2] }\n\
+                 struct Nums { arr: Array[i64, 2] }\n\
+                 struct Named { p: Pair }\n\
+                 struct Seq { v: Vec[String] }\n\
+                 impl Hold { fn peek(ref self) -> ref Array[String, 2] { return self.arr; } }\n\
+                 impl Nums { fn peek(ref self) -> ref Array[i64, 2] { return self.arr; } }\n\
+                 impl Named { fn peek(ref self) -> ref Pair { return self.p; } }\n\
+                 impl Seq { fn peek(ref self) -> ref Vec[String] { return self.v; } }\n\
+                 fn peekh(h: ref Hold) -> ref Array[String, 2] { return h.arr; }\n\
+                 fn peekn(n: ref Named) -> ref Pair { return n.p; }\n\
+                 fn main() {\n\
+                 \x20   let k = 40 + 2;\n\
+                 \x20   let h = Hold { arr: [f\"arr-left-{k}\", f\"arr-right-{k}\"] };\n\
+                 \x20   println(f\"arr0:{h.peek()[0]}\");\n\
+                 \x20   println(f\"arr1:{h.peek()[1]}\");\n\
+                 \x20   println(f\"arrfree:{peekh(h)[0]}\");\n\
+                 \x20   let ab: ref Array[String, 2] = h.peek();\n\
+                 \x20   println(f\"arrbound:{ab[1]}\");\n\
+                 \x20   println(f\"arrorig:{h.arr[0]}\");\n\
+                 \x20   let s = Nums { arr: [k, k + 1] };\n\
+                 \x20   println(f\"num:{s.peek()[1]}\");\n\
+                 \x20   let n = Named { p: Pair { a: f\"pair-a-{k}\", b: f\"pair-b-{k}\" } };\n\
+                 \x20   println(f\"fld:{n.peek().a}\");\n\
+                 \x20   println(f\"fldfree:{peekn(n).b}\");\n\
+                 \x20   let pb: ref Pair = n.peek();\n\
+                 \x20   println(f\"fldbound:{pb.a}\");\n\
+                 \x20   let q = Seq { v: [f\"vec-zero-{k}\", f\"vec-one-{k}\"] };\n\
+                 \x20   println(f\"vec:{q.peek()[1]}\");\n\
+                 }"
+            )
+            .as_deref(),
+            Some(
+                "arr0:arr-left-42\narr1:arr-right-42\narrfree:arr-left-42\n\
+                 arrbound:arr-right-42\narrorig:arr-left-42\nnum:43\n\
+                 fld:pair-a-42\nfldfree:pair-b-42\nfldbound:pair-a-42\n\
+                 vec:vec-one-42\n"
+            )
+        );
+    }
+
     /// B-2026-09-14-30's cell. THE EXPECTATION IS UNCHANGED BY
     /// B-2026-09-14-29, and that is worth a note because -14-29's own prose
     /// predicted it would change here.

@@ -20938,11 +20938,38 @@ impl<'ctx> super::Codegen<'ctx> {
         }
     }
 
+    /// True when `e` is a borrow-returning **user method** call (`h.peek()`
+    /// where `peek(ref self) -> ref T`). The sibling of
+    /// [`Self::is_borrow_returning_call_expr`], which screens the FREE-FUNCTION
+    /// spelling only — and deliberately a SEPARATE predicate rather than an
+    /// extra arm on that one, because three of its callers use it to ADMIT a
+    /// call in the tail/return position of a `-> ref T` function, where the
+    /// admission rests on the callee lowering to a bare `ptr`. A method call
+    /// does not; it routes through value-position dispatch. So the two
+    /// questions only look alike.
+    ///
+    /// B-2026-09-15-12 — until that row, nothing needed this: every
+    /// value-position consumer of a `-> ref` METHOD was refused upstream by the
+    /// `user_ref_method_names` gate in `compile_method_call`, which is what
+    /// three comments in this tree cite when they say the free-fn check
+    /// "suffices" ([`Self::expr_stmt_yields_droppable_owned_temp`]'s docs,
+    /// `fresh_owned_key_callee_key`, the `clone`-only literal arm). Routing
+    /// those consumers through a materialized borrow retires that gate, so the
+    /// assumption has to be paid for here instead.
+    pub(super) fn is_borrow_returning_user_method_call(&self, e: &Expr) -> bool {
+        matches!(&e.kind, ExprKind::MethodCall { method, .. }
+            if self.user_ref_method_names.contains(method))
+            && self
+                .ref_return_inner_types
+                .contains_key(&(e.span.offset, e.span.length))
+    }
+
     pub(super) fn expr_yields_fresh_owned_temp(&self, expr: &Expr) -> bool {
         matches!(
             &expr.kind,
             ExprKind::Call { .. } | ExprKind::MethodCall { .. }
         ) && !self.is_borrow_returning_call_expr(expr)
+            && !self.is_borrow_returning_user_method_call(expr)
     }
 
     /// B-2026-08-29-27 — [`Self::expr_yields_fresh_owned_temp`] widened by the

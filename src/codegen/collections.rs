@@ -2553,6 +2553,49 @@ impl<'ctx> super::Codegen<'ctx> {
         object: &Expr,
         index: &Expr,
     ) -> Result<BasicValueEnum<'ctx>, String> {
+        // `h.peek()[0]` where `peek(ref self) -> ref Array[T, N]`.
+        // B-2026-09-15-12 — this fell through every path below and died on
+        // "Index operator applied to non-array type": the accessor lowers to
+        // the `ptr` borrow ABI, and nothing here indexes a pointer. The
+        // `let`-bound spelling of the same thing
+        // (`let a: ref Array[T, N] = h.peek(); a[0]`) has always been correct,
+        // so bind the borrow to an anonymous ref-local and re-dispatch against
+        // it — the exact shape that already works, just without a name.
+        //
+        // NOT a load of the pointee. `compile_method_call`'s value-position
+        // arm loads, which is right for a TUPLE inner and a DOUBLE FREE for an
+        // `Array[String, N]` one: the loaded array is a second owner of the
+        // element buffers and nothing retracts the original's drop. That was
+        // measured (`free(): double free detected in tcache 2`) and is why
+        // that arm filters to tuples and this one routes instead. A view has
+        // no ownership story to get wrong.
+        //
+        // Placed FIRST, ahead of every arm that compiles `object`: an arm that
+        // emits the receiver and then falls through would call the accessor
+        // twice and discard the first result — the B-2026-07-29-15 defect,
+        // harmless for a pure accessor and a leak for an allocating one.
+        //
+        // The `ref Vec[T]` inner rides along, and it is NOT redundant: the row
+        // guessed it might already be covered because
+        // `try_compile_ref_return_receiver_method` handles a `ref Vec`
+        // RECEIVER, but that is `h.peek().len()`, a method on the borrow — an
+        // INDEX of it took this same fall-through and died on the same
+        // message. `String` needs no arm: it does not support `[]` at all, so
+        // the typechecker refuses that spelling before codegen sees it.
+        if let Some(inner_te) = self.ref_return_inner_for_call_pub(object) {
+            if matches!(inner_te.kind, TypeKind::Array { .. })
+                || self.extract_vec_elem_type(&inner_te).is_some()
+            {
+                let (synth, is_tensor) = self.bind_ref_return_borrow_synth(object, &inner_te)?;
+                let synth_obj = Expr {
+                    kind: ExprKind::Identifier(synth.clone()),
+                    span: object.span,
+                };
+                let result = self.compile_index(&synth_obj, index);
+                self.release_ref_return_borrow_synth(&synth, is_tensor);
+                return result;
+            }
+        }
         // B-2026-08-18-3 — the same slice through a `let`-BOUND range:
         // `let r = 1..3; v[r]`. The block below matches an `ExprKind::Range`
         // syntactically, so a range arriving through a binding never reached
