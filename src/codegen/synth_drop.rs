@@ -1780,7 +1780,39 @@ impl<'ctx> super::Codegen<'ctx> {
         &mut self,
         struct_name: &str,
     ) -> Option<FunctionValue<'ctx>> {
-        self.emit_struct_drop_synthesis_impl(struct_name, None)
+        self.emit_struct_drop_synthesis_impl(struct_name, None, &Default::default())
+    }
+
+    /// B-2026-09-17-34 — [`Self::emit_struct_drop_synthesis`] with a set of
+    /// field indices MASKED OUT of the MEMORY walk: the struct's own
+    /// `__karac_drop_struct_<T>` minus the fields something else now owns.
+    ///
+    /// The memory-channel peer of
+    /// [`Self::emit_user_drop_field_bodies_fn_skipping`], and the capability
+    /// `synth_drop.rs` was missing for this whole family — the bodies side has
+    /// had a skipping form at every level since B-2026-08-03-8 while this side
+    /// had none at any, which is the asymmetry that made a partially-moved
+    /// payload a double free rather than a leak.
+    ///
+    /// Needed at a CALL BOUNDARY, where the cap-zero neutralizer the local
+    /// spelling uses cannot reach. A caller that hands a boxed `Option`/
+    /// `Result` payload to an owned param registers the box's interior walk in
+    /// ITS OWN frame, draining after the call returns; if the callee's arm
+    /// moved a field out, that walk frees a buffer the callee already freed.
+    /// Zeroing the field's cap is not available there: it would have to happen
+    /// BEFORE the call, and the callee reads exactly that cap to free the field
+    /// it now owns. Masking the walker instead leaves the field's words intact
+    /// for the callee and simply stops the caller walking them.
+    ///
+    /// The mask is folded into the cache key, so a masked walker and the full
+    /// one cannot collide in the module memo — the same discipline the bodies
+    /// siblings use, and the reason a per-monomorph suffix exists there too.
+    pub(super) fn emit_struct_drop_synthesis_skipping(
+        &mut self,
+        struct_name: &str,
+        skip: &std::collections::BTreeSet<usize>,
+    ) -> Option<FunctionValue<'ctx>> {
+        self.emit_struct_drop_synthesis_impl(struct_name, None, skip)
     }
 
     /// B-2026-07-11-35 (push leg) — per-MONOMORPH struct-drop synthesis. A
@@ -1805,9 +1837,9 @@ impl<'ctx> super::Codegen<'ctx> {
         subst: &std::collections::HashMap<String, TypeExpr>,
     ) -> Option<FunctionValue<'ctx>> {
         if subst.is_empty() {
-            return self.emit_struct_drop_synthesis_impl(struct_name, None);
+            return self.emit_struct_drop_synthesis_impl(struct_name, None, &Default::default());
         }
-        self.emit_struct_drop_synthesis_impl(struct_name, Some(subst))
+        self.emit_struct_drop_synthesis_impl(struct_name, Some(subst), &Default::default())
     }
 
     /// B-2026-07-15-11 — derive a NESTED struct field's own mono subst from its
@@ -2046,6 +2078,9 @@ impl<'ctx> super::Codegen<'ctx> {
         &mut self,
         struct_name: &str,
         subst: Option<&std::collections::HashMap<String, TypeExpr>>,
+        // B-2026-09-17-34 — field indices whose memory this walker must NOT
+        // free; see `emit_struct_drop_synthesis_skipping`.
+        skip: &std::collections::BTreeSet<usize>,
     ) -> Option<FunctionValue<'ctx>> {
         // Per-monomorph cache key + symbol suffix: for a generic struct with a
         // non-empty subst, append `$<concrete>` per generic param (in declared
@@ -2053,9 +2088,24 @@ impl<'ctx> super::Codegen<'ctx> {
         // symbols. Non-generic (or `None`) → bare name, unchanged.
         let mono_suffix: Option<String> =
             subst.and_then(|subst| self.struct_drop_mono_suffix(struct_name, subst));
+        // B-2026-09-17-34 — the mask is part of the identity, exactly as the
+        // monomorph suffix is. Both the memo and the LLVM symbol are keyed on
+        // this, so a masked walker can never be served to a caller that asked
+        // for the full one.
+        let skip_suffix: String = if skip.is_empty() {
+            String::new()
+        } else {
+            format!(
+                "$skip{}",
+                skip.iter()
+                    .map(|i| i.to_string())
+                    .collect::<Vec<_>>()
+                    .join("_")
+            )
+        };
         let cache_key = match &mono_suffix {
-            Some(s) => format!("{struct_name}{s}"),
-            None => struct_name.to_string(),
+            Some(s) => format!("{struct_name}{s}{skip_suffix}"),
+            None => format!("{struct_name}{skip_suffix}"),
         };
         // The active subst only drives field-element resolution when a real
         // mono suffix was produced (a generic struct with bound params); a
@@ -2955,6 +3005,29 @@ impl<'ctx> super::Codegen<'ctx> {
                     kinds[idx] = FieldDrop::ArrayField;
                     array_drops[idx] = Some((elem_te, n));
                 }
+            }
+        }
+        // B-2026-09-17-34 — the mask lands HERE, after every refinement above
+        // and immediately before the emptiness test and the emission loop.
+        //
+        // The position is the whole of it, and it was measured by getting it
+        // wrong: applied at the initial classification instead, field `r: R`
+        // was already `FieldDrop::None` (a user-struct name matches no arm of
+        // the first pass), so masking it changed nothing — and the nested-
+        // struct refinement two hundred lines down then upgraded it to
+        // `NestedStruct` and emitted the very `__karac_drop_struct_R` call the
+        // mask existed to remove. A dozen later passes can each re-arm a field
+        // (`OptionInline`, `ArrayField`, `EnumField`, the handle closers), so
+        // the only place the mask cannot be undone is past the last of them.
+        //
+        // Forcing `None` rather than filtering the emission loop is what makes
+        // the emptiness test below see the masked state too: a struct whose
+        // only Drop-bearing field is masked must emit NO walker at all, and the
+        // caller reads that `None` as "this box's interior is entirely the
+        // destination's now".
+        for &i in skip {
+            if let Some(k) = kinds.get_mut(i) {
+                *k = FieldDrop::None;
             }
         }
         let fn_name = format!("__karac_drop_struct_{cache_key}");
@@ -10991,11 +11064,65 @@ impl<'ctx> super::Codegen<'ctx> {
     ///
     /// The flag stays folded into the symbol NAME so a module built before this
     /// lift and one built after cannot collide in the cache.
+    /// B-2026-09-17-34 — [`Self::emit_optres_payload_user_drop_bodies_fn`] with
+    /// a STRUCT payload's moved-out fields MASKED OUT of the bodies walk.
+    ///
+    /// The capability this family was missing at the payload level. Its three
+    /// siblings one level down already have it —
+    /// `emit_user_drop_field_bodies_fn_skipping` (struct fields),
+    /// `emit_tuple_elem_user_drop_bodies_fn_skipping` (tuple elements) and
+    /// `emit_enum_payload_user_drop_bodies_fn_skipping` (enum payloads) — and
+    /// the struct one is exactly what this walker's struct arm dispatches to,
+    /// so the mask is THREADED rather than reinvented.
+    ///
+    /// `mask` is `(payload struct name, masked field indices)` rather than a
+    /// bare index set, and the pairing is load-bearing: a `Result` walker has
+    /// TWO payload arms of DIFFERENT types, so an index set alone would mask
+    /// field 0 of the `Err` payload as well as of the `Ok` one. Naming the
+    /// struct the mask belongs to makes the wrong arm structurally unreachable.
+    ///
+    /// Applies to the STRUCT arm only. The tuple, array, `Vec`, envelope and
+    /// user-enum arms take their own shapes of mask (a moved-out tuple element
+    /// is `emit_tuple_elem_user_drop_bodies_fn_skipping`'s question, not this
+    /// one), and silently reinterpreting a struct field index against one of
+    /// them would mask an unrelated part.
+    pub(super) fn emit_optres_payload_user_drop_bodies_fn_skipping(
+        &mut self,
+        te: &TypeExpr,
+        mask: (&str, &std::collections::BTreeSet<usize>),
+    ) -> Option<FunctionValue<'ctx>> {
+        self.emit_optres_payload_user_drop_bodies_fn_ex_masked(te, true, Some(mask))
+    }
+
     pub(super) fn emit_optres_payload_user_drop_bodies_fn_ex(
         &mut self,
         te: &TypeExpr,
         include_vec: bool,
     ) -> Option<FunctionValue<'ctx>> {
+        self.emit_optres_payload_user_drop_bodies_fn_ex_masked(te, include_vec, None)
+    }
+
+    fn emit_optres_payload_user_drop_bodies_fn_ex_masked(
+        &mut self,
+        te: &TypeExpr,
+        include_vec: bool,
+        mask: Option<(&str, &std::collections::BTreeSet<usize>)>,
+    ) -> Option<FunctionValue<'ctx>> {
+        // The mask is folded into the symbol NAME, for the reason the `Vec`
+        // flag above is: a masked walker and the full one must not collide in
+        // the module-level memo, or the first caller's shape wins for every
+        // later one.
+        let mask_suffix: String = match mask {
+            None => String::new(),
+            Some((sname, idxs)) if !idxs.is_empty() => format!(
+                "$skip{sname}_{}",
+                idxs.iter()
+                    .map(|i| i.to_string())
+                    .collect::<Vec<_>>()
+                    .join("_")
+            ),
+            Some(_) => String::new(),
+        };
         let TypeKind::Path(p) = &te.kind else {
             return None;
         };
@@ -11011,7 +11138,7 @@ impl<'ctx> super::Codegen<'ctx> {
                 let some_tag = layout.tags.get("Some").copied().unwrap_or(1);
                 (
                     format!(
-                        "__karac_dropelems_opt_{}{}",
+                        "__karac_dropelems_opt_{}{}{mask_suffix}",
                         Self::display_mangle_te(pt),
                         if include_vec { "_v" } else { "" }
                     ),
@@ -11032,7 +11159,7 @@ impl<'ctx> super::Codegen<'ctx> {
                 let err_tag = layout.tags.get("Err").copied().unwrap_or(1);
                 (
                     format!(
-                        "__karac_dropelems_res_{}_{}{}",
+                        "__karac_dropelems_res_{}_{}{}{mask_suffix}",
                         Self::display_mangle_te(ok_te),
                         Self::display_mangle_te(err_te),
                         if include_vec { "_v" } else { "" }
@@ -11058,7 +11185,7 @@ impl<'ctx> super::Codegen<'ctx> {
         // both-silent bug is B-2026-09-10-27 and is its own open row, with its
         // own interpreter half to write; closing half of it from here would
         // leave the backends disagreeing and that row looking fixed.
-        self.emit_payload_user_drop_bodies_core(fn_name, layout_key, arms, include_vec)
+        self.emit_payload_user_drop_bodies_core(fn_name, layout_key, arms, include_vec, mask)
     }
 
     /// B-2026-09-12-5 — will the MATCH ARM that binds this boxed payload out
@@ -11441,7 +11568,7 @@ impl<'ctx> super::Codegen<'ctx> {
         // interpreter half exists only for the seeded pair's DISCARD position,
         // so admitting it here would give this head bodies the interpreter does
         // not run.
-        self.emit_payload_user_drop_bodies_core(fn_name, enum_name, arms, false)
+        self.emit_payload_user_drop_bodies_core(fn_name, enum_name, arms, false, None)
     }
 
     /// The shared emission core behind
@@ -11542,6 +11669,10 @@ impl<'ctx> super::Codegen<'ctx> {
         layout_key: &str,
         arms: Vec<(u64, TypeExpr, usize)>,
         include_vec: bool,
+        // B-2026-09-17-34 — `(payload struct name, masked field indices)` for
+        // the STRUCT arm; see
+        // `emit_optres_payload_user_drop_bodies_fn_skipping`.
+        mask: Option<(&str, &std::collections::BTreeSet<usize>)>,
     ) -> Option<FunctionValue<'ctx>> {
         // Keep only payload arms whose type is a non-shared user struct OR
         // user enum that runs a user drop (own body or Drop-bearing content).
@@ -11958,7 +12089,26 @@ impl<'ctx> super::Codegen<'ctx> {
                 // to nothing. Same helper at both ends, so the gate and the
                 // walk cannot disagree.
                 let subst = self.payload_type_subst(&pte);
-                self.emit_user_drop_field_bodies_fn(&sname, &subst)
+                // B-2026-09-17-34 — the masked struct arm. A field this arm's
+                // payload has had MOVED OUT (`let x = t.r`) belongs to the
+                // destination now, body and memory both, so the payload's own
+                // walk must stop running it: the local registers a full
+                // `karac_drop_<F>` and this walker was running `<F>.drop` a
+                // second time over the same object.
+                //
+                // Keyed on the arm's payload NAME, not applied blanket: a
+                // `Result` walker reaches here once per payload arm and only
+                // one of them is the struct the caller masked.
+                match mask {
+                    Some((mname, idxs)) if mname == sname && !idxs.is_empty() => {
+                        let tree = FieldSkipTree {
+                            here: idxs.clone(),
+                            ..Default::default()
+                        };
+                        self.emit_user_drop_field_bodies_fn_skipping(&sname, &subst, &tree)
+                    }
+                    _ => self.emit_user_drop_field_bodies_fn(&sname, &subst),
+                }
             };
             if let Some(f) = inner {
                 self.builder

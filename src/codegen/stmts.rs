@@ -10527,6 +10527,21 @@ impl<'ctx> super::Codegen<'ctx> {
                                                     src, hops, &only,
                                                 );
                                             }
+                                            // B-2026-09-17-34 — a source that
+                                            // is an arm binding over a heap-
+                                            // BOXED `Option`/`Result` payload
+                                            // owns no walk of its own, so the
+                                            // disarm below has nothing to
+                                            // retract and silently did nothing
+                                            // while the ENVELOPE kept two
+                                            // walks over the moved field. Its
+                                            // own suppressor re-homes both;
+                                            // fall through when it declines.
+                                            None if self
+                                                .suppress_boxed_payload_view_field_move(
+                                                    src,
+                                                    &disarm_field,
+                                                ) => {}
                                             None => self.disarm_user_drop_fields_for_moved_field(
                                                 src,
                                                 src_slot.ptr,

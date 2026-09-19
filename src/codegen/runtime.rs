@@ -2416,6 +2416,77 @@ impl<'ctx> super::Codegen<'ctx> {
         }
     }
 
+    /// B-2026-09-17-34 — [`Self::track_boxed_enum_var`] with fields of the
+    /// payload struct MASKED OUT of the box's interior walk.
+    ///
+    /// For the CALLER of a function whose arm moves a field out of the boxed
+    /// payload it was handed. That move makes the callee's local the owner of
+    /// the field's body and its memory, while this registration — which lives
+    /// in the caller's frame and drains after the call returns — went on
+    /// freeing it: `free(): double free detected in tcache 2`, exit 134, on
+    /// every compiled surface.
+    ///
+    /// Masking rather than declining outright, and the difference is a whole
+    /// bug class. Registering `None` would be right only when the arm moves
+    /// EVERY Drop-bearing field; with two such fields and one moved, it trades
+    /// the double free for a leak of the other. The skipping synthesis frees
+    /// the survivors and leaves the moved field's words untouched for the
+    /// callee.
+    ///
+    /// DECLINES A PAYLOAD THAT OWNS A `shared` FIELD, keeping today's
+    /// registration for it. Such a struct routes its memory drop through the
+    /// COMBINED walker (`emit_vec_elem_struct_with_shared_drop_fn`), which
+    /// carries the rc-dec pass and has no skipping form; masking through the
+    /// plain synthesis instead would silently drop that pass and leak the
+    /// shared child. An honest narrowing rather than a guess — the shape is not
+    /// one this row measured, and a row that widens it can add the skipping
+    /// combined walker then.
+    pub(super) fn track_boxed_enum_var_masked(
+        &mut self,
+        name: &str,
+        enum_slot: PointerValue<'ctx>,
+        enum_name: &str,
+        payload_variant: &str,
+        inner_struct_name: Option<&str>,
+        mask: &std::collections::BTreeSet<usize>,
+    ) {
+        let can_mask = !mask.is_empty()
+            && inner_struct_name.is_some_and(|n| {
+                self.type_decls.struct_types.contains_key(n)
+                    && !self.struct_owns_shared_field(n, &mut Vec::new())
+            });
+        if !can_mask {
+            self.track_boxed_enum_var(
+                name,
+                enum_slot,
+                enum_name,
+                payload_variant,
+                inner_struct_name,
+            );
+            return;
+        }
+        let inner = inner_struct_name.expect("can_mask implies a payload struct name");
+        let inner_drop_fn = self.emit_struct_drop_synthesis_skipping(inner, mask);
+        self.track_boxed_enum_var_with_inner_drop(
+            name,
+            enum_slot,
+            enum_name,
+            payload_variant,
+            inner_drop_fn,
+        );
+        // The two registry inserts `track_boxed_enum_var` performs for a struct
+        // payload. Repeated here rather than refactored out because they are
+        // about the payload being a user struct at all, which the mask does not
+        // change: the arg-site move check and the whole-binding disarm must see
+        // this binding exactly as they would an unmasked one.
+        self.payload_vars
+            .boxed_struct_payload_vars
+            .insert(name.to_string());
+        self.payload_vars
+            .boxed_enum_payload_struct
+            .insert(name.to_string(), inner.to_string());
+    }
+
     /// Peer of [`track_boxed_enum_var`] that takes the boxed payload's inner
     /// drop fn already resolved, rather than deriving it from a user-struct
     /// name. Needed when the boxed payload is itself a nested `Option[shared T]`

@@ -96975,4 +96975,149 @@ fn main() {
         );
         assert_clean_asan_run(&par, &["one", "done"], "b1510-par-enum-arc-path");
     }
+
+    /// B-2026-09-17-34 — moving a heap-carrying `Drop` field OUT of a BOXED
+    /// (spilled) `Option`/`Result` payload struct.
+    ///
+    /// `let x = t.r` inside a whole-payload arm makes `x` the owner of the
+    /// field's body AND its memory, while the envelope kept both of its own
+    /// walks over the same object — the `__karac_dropelems_opt_*` bodies walk
+    /// and the box's interior memory walk. Three owners for one `String`
+    /// buffer: `free(): double free detected in tcache 2`, exit 134, with NO
+    /// program output at all, on `build`, `build KARAC_AUTO_PAR=0` and
+    /// `karac run` alike, against an `--interp` that printed the due answer.
+    ///
+    /// NOTHING IN THIS SUITE COVERED THE SHAPE, which is why it reached a
+    /// release-shaped abort: the neighbouring double-free fixtures are all
+    /// boxed enum payloads or nested DESTRUCTURES (B-2026-09-12-25,
+    /// B-2026-09-13-9, B-2026-09-09-22), never a `let x = t.<field>` projection
+    /// off a whole-payload arm binding. The E2E suites could not have caught it
+    /// either: their tolerant `if let Some(out) = run_program(..)` form returns
+    /// `None` on a non-zero exit, so a fixture written there would have passed
+    /// vacuously.
+    ///
+    /// Five cells, and each one is a DIFFERENT owner pair rather than a
+    /// restatement — that is what the fix had to reconcile, and every one of
+    /// them aborted before it:
+    ///
+    ///   local     no call in the program at all, so both walks sit in ONE
+    ///             function. The cell that proves this is not a caller/callee
+    ///             ownership question.
+    ///   temp      a fresh-temp argument: the caller owns the box through
+    ///             `__optbox_arg_tmp{i}` and the callee's arm owns the field.
+    ///   named     a NAMED local argument, which reaches neither of the above —
+    ///             the box is owned by the local's own `let`-site registration.
+    ///             It is the cell that needed the bodies channel masked as well
+    ///             as the memory one; with only the memory mask it stopped
+    ///             aborting and started printing a body over a freed string,
+    ///             which is strictly worse.
+    ///   two       TWO heap-carrying `Drop` fields with ONE moved. The cell that
+    ///             forbids the easy fix: retracting the interior walk outright
+    ///             stops the double free and leaks the sibling.
+    ///   wide      a `Result` payload wide enough to spill its own 5-word inline
+    ///             area. `Result` escaped the original report only because its
+    ///             narrower payload stays INLINE — the trigger is the BOXING,
+    ///             not the head, and this cell is what settles that.
+    ///
+    /// Each asserts the interpreter's own output, which was correct throughout.
+    #[test]
+    fn asan_boxed_payload_field_move_out_no_double_free() {
+        const DECLS: &str = "struct R { name: String, id: i64 }\n\
+             impl Drop for R { fn drop(mut ref self) { println(f\"dR{self.id}/{self.name}\") } }\n";
+
+        // The LOCAL cell — no call anywhere in the program.
+        assert_clean_asan_run(
+            &format!(
+                "{DECLS}\
+                 struct Hd {{ r: R, n: i64 }}\n\
+                 fn eat() {{\n\
+                 \x20   let o: Option[Hd] = Option.Some(Hd {{ r: R {{ name: f\"a\", id: 5 }}, n: 9 }});\n\
+                 \x20   match o {{ Option.Some(t) => {{ let x = t.r; println(\"mid\"); }} Option.None => {{ println(\"n\"); }} }}\n\
+                 }}\n\
+                 fn main() {{ eat(); println(\"end\"); }}\n"
+            ),
+            &["dR5/a", "mid", "end"],
+            "b1734-boxed-payload-field-move-local",
+        );
+
+        // The FRESH-TEMP argument cell — the row's own headline spelling.
+        assert_clean_asan_run(
+            &format!(
+                "{DECLS}\
+                 struct Hd {{ r: R, n: i64 }}\n\
+                 fn eat(o: Option[Hd]) {{\n\
+                 \x20   match o {{ Option.Some(t) => {{ let x = t.r; println(\"mid\"); }} Option.None => {{ println(\"n\"); }} }}\n\
+                 }}\n\
+                 fn main() {{ eat(Option.Some(Hd {{ r: R {{ name: f\"a\", id: 5 }}, n: 9 }})); println(\"end\"); }}\n"
+            ),
+            &["dR5/a", "mid", "end"],
+            "b1734-boxed-payload-field-move-temp",
+        );
+
+        // The NAMED-LOCAL argument cell — the one that needs BOTH channels.
+        assert_clean_asan_run(
+            &format!(
+                "{DECLS}\
+                 struct Hd {{ r: R, n: i64 }}\n\
+                 fn eat(o: Option[Hd]) {{\n\
+                 \x20   match o {{ Option.Some(t) => {{ let x = t.r; println(\"mid\"); }} Option.None => {{ println(\"n\"); }} }}\n\
+                 }}\n\
+                 fn main() {{\n\
+                 \x20   let a = Option.Some(Hd {{ r: R {{ name: f\"a\", id: 5 }}, n: 9 }});\n\
+                 \x20   eat(a);\n\
+                 \x20   println(\"end\");\n\
+                 }}\n"
+            ),
+            &["dR5/a", "mid", "end"],
+            "b1734-boxed-payload-field-move-named",
+        );
+
+        // TWO heap `Drop` fields, ONE moved — the sibling must still be freed
+        // AND must still run its body, which is what makes the mask per-field
+        // rather than a retraction.
+        assert_clean_asan_run(
+            &format!(
+                "{DECLS}\
+                 struct Hd2 {{ r: R, q: R }}\n\
+                 fn eat(o: Option[Hd2]) {{\n\
+                 \x20   match o {{ Option.Some(t) => {{ let x = t.r; println(\"mid\"); }} Option.None => {{ println(\"n\"); }} }}\n\
+                 }}\n\
+                 fn main() {{ eat(Option.Some(Hd2 {{ r: R {{ name: f\"a\", id: 5 }}, q: R {{ name: f\"b\", id: 6 }} }})); println(\"end\"); }}\n"
+            ),
+            &["dR5/a", "mid", "dR6/b", "end"],
+            "b1734-boxed-payload-field-move-two-fields",
+        );
+
+        // The WIDE `Result` payload — spills its own 5-word inline area, so the
+        // head that escaped the original report aborts too.
+        assert_clean_asan_run(
+            &format!(
+                "{DECLS}\
+                 struct Wide {{ r: R, a: i64, b: i64, c: i64, d: i64, e: i64 }}\n\
+                 fn eat(o: Result[Wide, i64]) {{\n\
+                 \x20   match o {{ Result.Ok(t) => {{ let x = t.r; println(\"mid\"); }} Result.Err(v) => {{ println(\"n\"); }} }}\n\
+                 }}\n\
+                 fn main() {{ eat(Result.Ok(Wide {{ r: R {{ name: f\"a\", id: 5 }}, a: 1, b: 2, c: 3, d: 4, e: 5 }})); println(\"end\"); }}\n"
+            ),
+            &["dR5/a", "mid", "end"],
+            "b1734-boxed-payload-field-move-wide-result",
+        );
+
+        // The READ-ONLY control, which was correct throughout. It is here so a
+        // future widening of the mask cannot silence a field that never moved:
+        // every cell above asserts that a body still RUNS, and this one asserts
+        // it runs for a payload the arm only reads.
+        assert_clean_asan_run(
+            &format!(
+                "{DECLS}\
+                 struct Hd {{ r: R, n: i64 }}\n\
+                 fn eat(o: Option[Hd]) {{\n\
+                 \x20   match o {{ Option.Some(t) => {{ println(f\"mid{{t.r.id}}\"); }} Option.None => {{ println(\"n\"); }} }}\n\
+                 }}\n\
+                 fn main() {{ eat(Option.Some(Hd {{ r: R {{ name: f\"a\", id: 5 }}, n: 9 }})); println(\"end\"); }}\n"
+            ),
+            &["mid5", "dR5/a", "end"],
+            "b1734-boxed-payload-field-move-readonly-control",
+        );
+    }
 }

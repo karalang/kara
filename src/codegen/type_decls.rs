@@ -161,6 +161,27 @@ pub(crate) struct TypeDecls<'ctx> {
     /// `__karac_dropbodies_*` walk is re-registered with it masked. Cleared per
     /// function alongside that map (B-2026-08-03-8).
     pub(crate) struct_moved_field_bodies: HashMap<String, std::collections::HashSet<usize>>,
+    /// B-2026-09-17-34 — struct FIELD indices moved out of a match-arm binding
+    /// over a heap-BOXED `Option`/`Result` payload (`Some(t) => { let x = t.r }`),
+    /// per arm-binding name.
+    ///
+    /// The boxed-payload sibling of `struct_moved_field_bodies`, and a separate
+    /// map because the walk it masks is a different one. That map masks a
+    /// binding's OWN `__karac_dropbodies_*` action; an arm binding over a boxed
+    /// payload owns no such action — it is a bit-copy of the box interior, and
+    /// the walk that runs its fields' bodies is the ENVELOPE's
+    /// `__karac_dropelems_opt_*`, registered against the scrutinee at the `let`
+    /// that built it. Recording the move here lets
+    /// `suppress_boxed_payload_view_field_move` re-home that envelope walker
+    /// onto a masked one.
+    ///
+    /// A `BTreeSet` rather than a `HashSet`, unlike its sibling: the indices go
+    /// straight into a symbol-name suffix, so a stable order is what keeps two
+    /// modules that mask the same fields from minting two symbols.
+    ///
+    /// Accumulates across repeated move-outs of one binding and is cleared per
+    /// function alongside its sibling.
+    pub(crate) boxed_payload_moved_fields: HashMap<String, std::collections::BTreeSet<usize>>,
     /// B-2026-08-29-33 — struct FIELD indices whose ENUM PAYLOAD bodies were
     /// taken by a consuming `match` / `if let` arm over `<var>.<field>`, per
     /// variable. Held apart from `struct_moved_field_bodies` because the mask is

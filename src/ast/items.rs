@@ -7592,3 +7592,156 @@ pub fn type_head_is_channel_endpoint(ty: &TypeExpr) -> bool {
         _ => false,
     }
 }
+
+/// B-2026-09-17-34 — the struct FIELD NAMES a function moves out of the
+/// whole-payload binding of a `match` / `if let` over by-value parameter
+/// `param_name` (`fn eat(o: Option[Hd]) { match o { Some(t) => { let x = t.r; … } } }`
+/// answers `["r"]`).
+///
+/// A CALLER question, and one the signature cannot answer. A by-value boxed
+/// `Option`/`Result` payload's interior is registered by the CALLER
+/// (`__optbox_arg_tmp{i}`, B-2026-08-05-7) and drains in the caller's frame
+/// after the call returns, so when the callee's arm moves a field out — making
+/// its local the owner of that field's body AND memory — the caller's interior
+/// walk frees a buffer the callee has already freed. The caller has to mask
+/// exactly those fields out of the walker it registers, and only the callee's
+/// body says which they are.
+///
+/// TOP-LEVEL `let`s of the arm body only, deliberately. That is precisely the
+/// set codegen's own move-out disarm fires on, so the two cannot disagree about
+/// which fields moved — and a disagreement here is a double free in one
+/// direction and a leak in the other. A move nested inside a further block or
+/// branch is not reported, and the caller then keeps the unmasked walker it has
+/// today.
+///
+/// UNDER-APPROXIMATES ON PURPOSE, the opposite direction from
+/// [`param_rebound_into_local`]. That predicate stands the caller DOWN, where a
+/// false positive costs a leak; this one narrows what the caller frees, so a
+/// false positive is a LEAK of a field nobody owns while a false negative is
+/// the double free we already have. Report a field only when the shape is
+/// exactly the one codegen disarms.
+pub fn param_payload_moved_out_fields(f: &Function, param_name: &str) -> Vec<String> {
+    let mut out: Vec<String> = Vec::new();
+    collect_payload_moved_fields_in_block(&f.body, param_name, &mut out);
+    out
+}
+
+/// The whole-payload binding of `pattern`, when it is a single-field tuple
+/// variant binding a bare name (`Some(t)` / `Ok(t)` / `Err(t)`). A destructure
+/// or a wildcard binds no such name and answers `None` — the first has its own
+/// per-part machinery, the second leaves every field the box's.
+fn whole_payload_binding(pattern: &Pattern) -> Option<&str> {
+    let PatternKind::TupleVariant { patterns, .. } = &pattern.kind else {
+        return None;
+    };
+    let [sub] = patterns.as_slice() else {
+        return None;
+    };
+    let PatternKind::Binding(name) = &sub.kind else {
+        return None;
+    };
+    Some(name.as_str())
+}
+
+/// `let <x> = <binding>.<field>;` at the top level of `body`, collecting each
+/// `<field>`. One hop only: a deeper chain (`let x = t.h.r`) names a leaf
+/// inside a hop, which is a different mask and has its own path-shaped record.
+fn collect_moved_fields_of_binding(body: &Expr, binding: &str, out: &mut Vec<String>) {
+    let ExprKind::Block(block) = &body.kind else {
+        return;
+    };
+    for stmt in &block.stmts {
+        let StmtKind::Let { value, .. } = &stmt.kind else {
+            continue;
+        };
+        let ExprKind::FieldAccess { object, field } = &value.kind else {
+            continue;
+        };
+        let ExprKind::Identifier(root) = &object.kind else {
+            continue;
+        };
+        if root == binding && !out.iter().any(|f| f == field) {
+            out.push(field.clone());
+        }
+    }
+}
+
+fn collect_payload_moved_fields_in_expr(e: &Expr, param_name: &str, out: &mut Vec<String>) {
+    match &e.kind {
+        ExprKind::Match { scrutinee, arms } => {
+            if matches!(&scrutinee.kind, ExprKind::Identifier(n) if n == param_name) {
+                for arm in arms {
+                    if let Some(binding) = whole_payload_binding(&arm.pattern) {
+                        collect_moved_fields_of_binding(&arm.body, binding, out);
+                    }
+                }
+            }
+            collect_payload_moved_fields_in_expr(scrutinee, param_name, out);
+            for arm in arms {
+                collect_payload_moved_fields_in_expr(&arm.body, param_name, out);
+            }
+        }
+        ExprKind::IfLet {
+            pattern,
+            value,
+            then_block,
+            else_branch,
+        } => {
+            if matches!(&value.kind, ExprKind::Identifier(n) if n == param_name) {
+                if let Some(binding) = whole_payload_binding(pattern) {
+                    collect_moved_fields_in_block_of_binding(then_block, binding, out);
+                }
+            }
+            collect_payload_moved_fields_in_block(then_block, param_name, out);
+            if let Some(eb) = else_branch {
+                collect_payload_moved_fields_in_expr(eb, param_name, out);
+            }
+        }
+        ExprKind::Block(b) => collect_payload_moved_fields_in_block(b, param_name, out),
+        ExprKind::If {
+            then_block,
+            else_branch,
+            ..
+        } => {
+            collect_payload_moved_fields_in_block(then_block, param_name, out);
+            if let Some(eb) = else_branch {
+                collect_payload_moved_fields_in_expr(eb, param_name, out);
+            }
+        }
+        _ => {}
+    }
+}
+
+/// [`collect_moved_fields_of_binding`] over a [`Block`] rather than a block
+/// EXPRESSION — the `if let` arm's body shape.
+fn collect_moved_fields_in_block_of_binding(b: &Block, binding: &str, out: &mut Vec<String>) {
+    for stmt in &b.stmts {
+        let StmtKind::Let { value, .. } = &stmt.kind else {
+            continue;
+        };
+        let ExprKind::FieldAccess { object, field } = &value.kind else {
+            continue;
+        };
+        let ExprKind::Identifier(root) = &object.kind else {
+            continue;
+        };
+        if root == binding && !out.iter().any(|f| f == field) {
+            out.push(field.clone());
+        }
+    }
+}
+
+fn collect_payload_moved_fields_in_block(b: &Block, param_name: &str, out: &mut Vec<String>) {
+    for stmt in &b.stmts {
+        match &stmt.kind {
+            StmtKind::Let { value, .. } => {
+                collect_payload_moved_fields_in_expr(value, param_name, out)
+            }
+            StmtKind::Expr(e) => collect_payload_moved_fields_in_expr(e, param_name, out),
+            _ => {}
+        }
+    }
+    if let Some(fe) = &b.final_expr {
+        collect_payload_moved_fields_in_expr(fe, param_name, out);
+    }
+}

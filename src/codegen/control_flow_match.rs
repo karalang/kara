@@ -14647,6 +14647,253 @@ impl<'ctx> super::Codegen<'ctx> {
         }
     }
 
+    /// B-2026-09-17-34 — the PARTIAL-move sibling of
+    /// [`Self::suppress_boxed_payload_view_move`]: one FIELD of a boxed
+    /// `Option`/`Result` payload binding is moved into a local
+    /// (`Some(t) => { let x = t.r; … }`), rather than the whole binding leaving.
+    ///
+    /// The shape the view-vars record was built for and the whole-move
+    /// suppressor could not express. `let x = t.r` makes `x` the owner of the
+    /// field's body AND its memory (design.md § "Interaction with move
+    /// semantics"), so `x` registers a full `karac_drop_<F>`; meanwhile the
+    /// envelope keeps BOTH of its own walks over the same object — the
+    /// `__karac_dropelems_opt_*` bodies walk and the `BoxedEnumDrop` interior
+    /// walk. Three owners for one `String` buffer, which aborted on every
+    /// compiled surface (`free(): double free detected in tcache 2`, exit 134)
+    /// while `--interp` printed the due answer.
+    ///
+    /// The whole-move suppressor cannot be widened to cover it. It nulls
+    /// `inner_drop_fn` outright, which is right when the WHOLE payload leaves
+    /// and wrong here: the fields the arm did NOT move are still the box's to
+    /// free, and nulling would trade the double free for a leak of every
+    /// sibling field. The cut has to be PER FIELD, on both channels:
+    ///
+    ///   BODIES  re-home the envelope's walker onto a masked one
+    ///           (`emit_optres_payload_user_drop_bodies_fn_skipping`).
+    ///   MEMORY  neutralize just this field inside the box
+    ///           (`zero_struct_field_move_cap_in`, which recurses a nested
+    ///           struct field's own caps).
+    ///
+    /// Doing only ONE of the two is measurably worse than doing neither: the
+    /// memory half alone leaves `<F>.drop` running a second time over a
+    /// cap-zeroed husk, i.e. a silent corrupt read where there had been a loud
+    /// abort. That trade is recorded in this row as its first reverted
+    /// attempt, and it is why the two halves land together here.
+    ///
+    /// Returns whether it fired, so the caller can fall through to the
+    /// ordinary move-out disarm for every source that is not a boxed-payload
+    /// view.
+    pub(super) fn suppress_boxed_payload_view_field_move(
+        &mut self,
+        src: &str,
+        field: &str,
+    ) -> bool {
+        let Some(slot) = self
+            .payload_vars
+            .boxed_optres_payload_view_vars
+            .get(src)
+            .copied()
+        else {
+            return false;
+        };
+        // The envelope's registration carries everything the two re-homes need
+        // — its name (to key the walker swap), its layout type and its
+        // payload-bearing tag (to reach the box). Reading them off the action
+        // rather than re-deriving them is what keeps this from disagreeing with
+        // the registration it is amending.
+        let mut found: Option<(String, StructType<'ctx>, u64)> = None;
+        for frame in self.drop_rc.scope_cleanup_actions.iter() {
+            for action in frame.iter() {
+                if let super::state::CleanupAction::BoxedEnumDrop {
+                    name,
+                    enum_slot,
+                    enum_ty,
+                    some_tag,
+                    ..
+                } = action
+                {
+                    if *enum_slot == slot {
+                        found = Some((name.clone(), *enum_ty, *some_tag));
+                    }
+                }
+            }
+        }
+        let Some((env_name, enum_ty, some_tag)) = found else {
+            return false;
+        };
+        let Some(struct_name) = self
+            .payload_vars
+            .boxed_enum_payload_struct
+            .get(env_name.as_str())
+            .cloned()
+        else {
+            return false;
+        };
+        let Some(idx) = self
+            .type_decls
+            .struct_field_names
+            .get(struct_name.as_str())
+            .and_then(|names| names.iter().position(|n| n == field))
+        else {
+            return false;
+        };
+        // Accumulate, then re-read: a second `let y = t.q` in the same arm must
+        // mask BOTH fields, and re-homing from the single new index would put
+        // the first one back.
+        self.type_decls
+            .boxed_payload_moved_fields
+            .entry(src.to_string())
+            .or_default()
+            .insert(idx);
+        let masked: std::collections::BTreeSet<usize> = self
+            .type_decls
+            .boxed_payload_moved_fields
+            .get(src)
+            .cloned()
+            .unwrap_or_default();
+
+        // BODIES. The envelope's instantiation is what names the walker, and it
+        // was recorded at the `let` that built it — the same `let` that chose
+        // the unmasked walker this replaces.
+        let Some(env_te) = self
+            .type_decls
+            .enum_inst_var_types
+            .get(env_name.as_str())
+            .cloned()
+        else {
+            return false;
+        };
+        let Some(masked_walker) =
+            self.emit_optres_payload_user_drop_bodies_fn_skipping(&env_te, (&struct_name, &masked))
+        else {
+            // Nothing survives the mask, so the whole walk is the destination's
+            // now. Leaving the unmasked one registered would double every body.
+            self.suppress_container_elem_bodies_for_var(&env_name);
+            self.zero_boxed_payload_field_cap(slot, enum_ty, some_tag, &struct_name, field);
+            return true;
+        };
+        // EVERY matching action, under EITHER name, and both halves of that
+        // were measured by getting them wrong first.
+        //
+        // The envelope's bodies walk is registered TWICE for a `match`, under
+        // two different names. The `let` that built the envelope registers it
+        // against the envelope (`o`), to drain at scope exit. The arm then
+        // RE-HOMES the same walker onto the arm BINDING (`t`) —
+        // `pattern_binding.rs`'s `is_boxed_optres_drop_payload` branch, which
+        // hands the body from source to binding — and that copy drains at the
+        // arm's end.
+        //
+        // So the shared `replace_user_drop_fn_for_var` helper is the wrong
+        // tool twice over: it returns on its FIRST hit, and it matches one
+        // name. Keyed on the envelope alone it masked only the scope-exit
+        // call and left the arm-local one running `<F>.drop` a second time
+        // over the cap-zeroed husk — the same corrupt read this row's first
+        // reverted attempt produced, reached from the other channel.
+        for frame in self.drop_rc.scope_cleanup_actions.iter_mut() {
+            for action in frame.iter_mut() {
+                if let super::state::CleanupAction::UserDrop {
+                    binding_name,
+                    kind: super::state::UserDropKind::ContainerElemBodies,
+                    drop_fn,
+                    ..
+                } = action
+                {
+                    if binding_name == &env_name || binding_name == src {
+                        *drop_fn = masked_walker;
+                    }
+                }
+            }
+        }
+
+        // MEMORY.
+        self.zero_boxed_payload_field_cap(slot, enum_ty, some_tag, &struct_name, field);
+        true
+    }
+
+    /// B-2026-09-17-34 — neutralize ONE field inside a boxed `Option`/`Result`
+    /// payload, so the box's interior walk skips it while still freeing every
+    /// sibling.
+    ///
+    /// Tag-guarded and null-guarded for the same reason
+    /// `suppress_boxed_payload_whole_binding` is: the arm may not be the taken
+    /// one on every path reaching here, and an already-moved payload carries a
+    /// null box pointer, so an unguarded store would write through it.
+    fn zero_boxed_payload_field_cap(
+        &mut self,
+        enum_slot: PointerValue<'ctx>,
+        enum_ty: StructType<'ctx>,
+        some_tag: u64,
+        struct_name: &str,
+        field: &str,
+    ) {
+        let Some(fn_val) = self.current_fn else {
+            return;
+        };
+        let ptr_ty = self.context.ptr_type(AddressSpace::default());
+        let i64_t = self.context.i64_type();
+        let Ok(tag_ptr) = self
+            .builder
+            .build_struct_gep(enum_ty, enum_slot, 0, "boxfld.move.tag.p")
+        else {
+            return;
+        };
+        let tag = self
+            .builder
+            .build_load(i64_t, tag_ptr, "boxfld.move.tag")
+            .unwrap()
+            .into_int_value();
+        let is_payload = self
+            .builder
+            .build_int_compare(
+                IntPredicate::EQ,
+                tag,
+                i64_t.const_int(some_tag, false),
+                "boxfld.move.ispayload",
+            )
+            .unwrap();
+        let live_bb = self.context.append_basic_block(fn_val, "boxfld.move.live");
+        let join_bb = self.context.append_basic_block(fn_val, "boxfld.move.join");
+        self.builder
+            .build_conditional_branch(is_payload, live_bb, join_bb)
+            .unwrap();
+        self.builder.position_at_end(live_bb);
+        let Ok(w0_ptr) = self
+            .builder
+            .build_struct_gep(enum_ty, enum_slot, 1, "boxfld.move.w0.p")
+        else {
+            self.builder.build_unconditional_branch(join_bb).unwrap();
+            self.builder.position_at_end(join_bb);
+            return;
+        };
+        let w0 = self
+            .builder
+            .build_load(i64_t, w0_ptr, "boxfld.move.w0")
+            .unwrap()
+            .into_int_value();
+        let box_ptr = self
+            .builder
+            .build_int_to_ptr(w0, ptr_ty, "boxfld.move.box")
+            .unwrap();
+        let is_null = self
+            .builder
+            .build_int_compare(
+                IntPredicate::EQ,
+                box_ptr,
+                ptr_ty.const_null(),
+                "boxfld.move.isnull",
+            )
+            .unwrap();
+        let do_bb = self.context.append_basic_block(fn_val, "boxfld.move.do");
+        self.builder
+            .build_conditional_branch(is_null, join_bb, do_bb)
+            .unwrap();
+        self.builder.position_at_end(do_bb);
+        let st = self.type_decls.struct_types.get(struct_name).copied();
+        self.zero_struct_field_move_cap_in(box_ptr, struct_name, field, st);
+        self.builder.build_unconditional_branch(join_bb).unwrap();
+        self.builder.position_at_end(join_bb);
+    }
+
     /// `Option[Map]`/`Option[Set]` sibling of
     /// `suppress_inline_option_payload_cleanup`. The inline handle payload
     /// has no `cap` word to zero, so a `match`/`if let` arm that binds the

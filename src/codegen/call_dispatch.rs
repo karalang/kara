@@ -2190,12 +2190,21 @@ impl<'ctx> super::Codegen<'ctx> {
                 let slot =
                     self.create_entry_alloca(cur_fn, &format!("optbox_arg_tmp{i}"), val.get_type());
                 self.builder.build_store(slot, val).unwrap();
-                self.track_boxed_enum_var(
+                // B-2026-09-17-34 — mask out whatever the callee's arm moves
+                // out of this payload. That move makes the callee's local the
+                // owner of the field's body AND its memory, while this
+                // registration went on freeing it after the call returned.
+                let moved = inner_struct
+                    .as_deref()
+                    .map(|n| self.callee_moved_payload_field_idxs(&name, i, n))
+                    .unwrap_or_default();
+                self.track_boxed_enum_var_masked(
                     &format!("__optbox_arg_tmp{i}"),
                     slot,
                     "Option",
                     "Some",
                     inner_struct.as_deref(),
+                    &moved,
                 );
             }
             // B-2026-09-06-56 — the `Result` sibling of the arm above, and the
@@ -2243,14 +2252,38 @@ impl<'ctx> super::Codegen<'ctx> {
                         .contains_key(struct_name.as_str())
                         || self.callee_keeps_param_payload_in_frame(&name, i))
                     .then_some(struct_name.as_str());
-                    self.track_boxed_enum_var(
+                    // B-2026-09-17-34 — the `Result` twin of the mask above,
+                    // and it is not optional here either: the row's own widest
+                    // cell is a `Result` payload wide enough to spill its
+                    // 5-word inline area, which aborts exactly as the `Option`
+                    // one does.
+                    let moved = inner
+                        .map(|n| self.callee_moved_payload_field_idxs(&name, i, n))
+                        .unwrap_or_default();
+                    self.track_boxed_enum_var_masked(
                         &format!("__resbox_arg_tmp{i}_{variant}"),
                         slot,
                         "Result",
                         variant,
                         inner,
+                        &moved,
                     );
                 }
+            }
+            // B-2026-09-17-34 — the NAMED-LOCAL spelling of the mask above.
+            //
+            // `let a = Some(Hd { .. }); eat(a);` never reaches the fresh-temp
+            // arms: `expr_yields_fresh_owned_temp` is false for a bare name, so
+            // the box is owned by the local's OWN `let`-site registration
+            // instead of by an `__optbox_arg_tmp{i}`, and the arg site
+            // deliberately leaves it armed (B-2026-08-06-31 — a struct payload
+            // means the caller keeps the box rather than treating the call as a
+            // move). Whoever holds the registration, the question is the same:
+            // if the callee's arm moved a field out, that field is no longer
+            // this box's to free. Re-home the interior walk the local already
+            // carries onto the masked one.
+            if let ExprKind::Identifier(argn) = &a.value.kind {
+                self.remask_named_boxed_payload_arg(argn, &name, i);
             }
             // B-2026-09-06-49 / B-2026-09-10-6 — retract the caller's array
             // local when it is moved whole into a seeded variant that the
@@ -3364,6 +3397,148 @@ impl<'ctx> super::Codegen<'ctx> {
             }),
             _ => false,
         })
+    }
+
+    /// B-2026-09-17-34 — the FIELD INDICES of `struct_name` that the callee's
+    /// arm over parameter `i` moves out of its whole-payload binding.
+    ///
+    /// The caller-side half of the fix. A boxed payload's interior walk lives in
+    /// the CALLER's frame (`__optbox_arg_tmp{i}`), so a field the CALLEE moved
+    /// into a local — taking over its body and its memory — is freed twice
+    /// unless the caller masks it out of the walker it registers. Empty for
+    /// every shape that moves nothing, which is the path every existing call
+    /// keeps.
+    ///
+    /// Resolved to INDICES here rather than in the AST helper because the field
+    /// order is a codegen fact (`struct_field_names`), and the walker's mask is
+    /// index-keyed. A name the struct does not carry is dropped rather than
+    /// guessed at.
+    pub(super) fn callee_moved_payload_field_idxs(
+        &self,
+        callee: &str,
+        i: usize,
+        struct_name: &str,
+    ) -> std::collections::BTreeSet<usize> {
+        let mut out = std::collections::BTreeSet::new();
+        let Some(program) = self.program_snapshot.as_deref() else {
+            return out;
+        };
+        let Some(func) = program.items.iter().find_map(|item| match item {
+            Item::Function(f) if f.name == callee => Some(f),
+            _ => None,
+        }) else {
+            return out;
+        };
+        let Some(param) = func.params.get(i) else {
+            return out;
+        };
+        let crate::ast::PatternKind::Binding(pname) = &param.pattern.kind else {
+            return out;
+        };
+        let Some(names) = self.type_decls.struct_field_names.get(struct_name) else {
+            return out;
+        };
+        for f in crate::ast::param_payload_moved_out_fields(func, pname) {
+            if let Some(idx) = names.iter().position(|n| *n == f) {
+                out.insert(idx);
+            }
+        }
+        out
+    }
+
+    /// B-2026-09-17-34 — swap a NAMED boxed-payload local's registered interior
+    /// walk for one that skips the fields the callee's arm moves out.
+    ///
+    /// The `__optbox_arg_tmp{i}` mask covers a FRESH-TEMP argument, where the
+    /// caller mints the registration at the call itself and can simply build it
+    /// masked. A named local's registration already exists — it was made at its
+    /// `let`, long before this call — so the mask has to be applied by
+    /// AMENDING it in place.
+    ///
+    /// Amending rather than retracting, for the reason the masked registrar
+    /// gives: retracting leaks every field the arm did not move.
+    ///
+    /// Silently does nothing when the local holds no boxed struct payload, when
+    /// the callee moves nothing out, or when the payload's memory drop is the
+    /// `shared`-carrying combined walker that has no skipping form — the same
+    /// three declines the fresh-temp path makes, so the two spellings cannot
+    /// drift apart.
+    fn remask_named_boxed_payload_arg(&mut self, arg_name: &str, callee: &str, i: usize) {
+        let Some(struct_name) = self
+            .payload_vars
+            .boxed_enum_payload_struct
+            .get(arg_name)
+            .cloned()
+        else {
+            return;
+        };
+        let moved = self.callee_moved_payload_field_idxs(callee, i, &struct_name);
+        if moved.is_empty() {
+            return;
+        }
+        if !self
+            .type_decls
+            .struct_types
+            .contains_key(struct_name.as_str())
+            || self.struct_owns_shared_field(&struct_name, &mut Vec::new())
+        {
+            return;
+        }
+        // MEMORY.
+        let masked = self.emit_struct_drop_synthesis_skipping(&struct_name, &moved);
+        for frame in self.drop_rc.scope_cleanup_actions.iter_mut() {
+            for action in frame.iter_mut() {
+                if let super::state::CleanupAction::BoxedEnumDrop {
+                    name,
+                    inner_drop_fn,
+                    ..
+                } = action
+                {
+                    if name == arg_name {
+                        *inner_drop_fn = masked;
+                    }
+                }
+            }
+        }
+
+        // BODIES, and this half is what separates the named local from the
+        // fresh temp. A temp has no binding, so the caller registered no bodies
+        // walk for it and the memory mask alone is the whole fix; a NAMED local
+        // carries an `__karac_dropelems_opt_*` from its own `let`, which went on
+        // running `<F>.drop` over the field the callee moved out — turning the
+        // abort into a silent read of a freed string rather than fixing it.
+        //
+        // The same pairing rule the local spelling documents on
+        // `suppress_boxed_payload_view_field_move`: masking one channel and not
+        // the other is worse than masking neither.
+        let Some(env_te) = self.type_decls.enum_inst_var_types.get(arg_name).cloned() else {
+            return;
+        };
+        let masked_bodies =
+            self.emit_optres_payload_user_drop_bodies_fn_skipping(&env_te, (&struct_name, &moved));
+        for frame in self.drop_rc.scope_cleanup_actions.iter_mut() {
+            for action in frame.iter_mut() {
+                if let super::state::CleanupAction::UserDrop {
+                    binding_name,
+                    kind: super::state::UserDropKind::ContainerElemBodies,
+                    drop_fn,
+                    ..
+                } = action
+                {
+                    if binding_name == arg_name {
+                        if let Some(f) = masked_bodies {
+                            *drop_fn = f;
+                        }
+                    }
+                }
+            }
+        }
+        if masked_bodies.is_none() {
+            // Nothing survives the mask: the whole payload-bodies walk belongs
+            // to the callee now, so retract it rather than leave the unmasked
+            // walker registered.
+            self.suppress_container_elem_bodies_for_var(arg_name);
+        }
     }
 
     pub(super) fn owned_boxed_option_param_struct(&self, name: &str, i: usize) -> Option<String> {
