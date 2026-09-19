@@ -1499,6 +1499,72 @@ impl<'ctx> super::Codegen<'ctx> {
     /// drop. Memoized by an element-type signature (NOT by `agg_ty` alone:
     /// `(Tok, i64)` and `(Other, i64)` share the LLVM type `{i64, i64}` but free
     /// different leaves). `None` when the tuple owns no drop-bearing heap.
+    /// B-2026-09-19-11 — [`Self::synthesize_tuple_drop_fn_te`] with a set of
+    /// top-level element indices left alone, for an arm that has handed those
+    /// elements to another owner but kept the rest.
+    ///
+    /// Before this existed the only two options at such an arm were the full
+    /// interior walk (a DOUBLE FREE of the moved element) and retracting the
+    /// walk entirely (a LEAK of every element that stayed), and the arm site
+    /// took the second. The mask is folded into the symbol name so a masked and
+    /// an unmasked walk over the same tuple cannot collide in the module, the
+    /// same rule `emit_optres_payload_user_drop_bodies_fn_skipping` follows one
+    /// channel over.
+    pub(super) fn synthesize_tuple_drop_fn_te_skipping(
+        &mut self,
+        agg_ty: StructType<'ctx>,
+        elem_tes: &[crate::ast::TypeExpr],
+        skip: &std::collections::BTreeSet<usize>,
+    ) -> Option<FunctionValue<'ctx>> {
+        if skip.is_empty() {
+            return self.synthesize_tuple_drop_fn_te(agg_ty, elem_tes);
+        }
+        // Every heap-bearing element is masked, so the walk would be empty.
+        // Returning `None` lets the caller retract outright, which is what an
+        // empty walk means and what it did before this path existed.
+        if !elem_tes.iter().enumerate().any(|(i, e)| {
+            !skip.contains(&i)
+                && (self.type_expr_has_drop_heap(e) || self.tuple_elem_needs_deep_drop(e))
+        }) {
+            return None;
+        }
+        let idxs = skip
+            .iter()
+            .map(|i| i.to_string())
+            .collect::<Vec<_>>()
+            .join("_");
+        let fn_name = format!(
+            "__karac_drop_tuple_te_{}$in{}$skipelem{}",
+            Self::tuple_te_sig(elem_tes),
+            Self::llvm_agg_shape_sig(agg_ty),
+            idxs
+        );
+        if let Some(f) = self.module.get_function(&fn_name) {
+            return Some(f);
+        }
+        let ptr_ty = self.context.ptr_type(AddressSpace::default());
+        let saved_bb = self.builder.get_insert_block();
+        let saved_fn = self.current_fn;
+        let drop_fn_ty = self.context.void_type().fn_type(&[ptr_ty.into()], false);
+        let drop_fn = self.module.add_function(
+            &fn_name,
+            drop_fn_ty,
+            Some(inkwell::module::Linkage::Internal),
+        );
+        self.current_fn = Some(drop_fn);
+        let entry = self.context.append_basic_block(drop_fn, "entry");
+        self.builder.position_at_end(entry);
+        let p = drop_fn.get_nth_param(0).unwrap().into_pointer_value();
+        let skip_u32: std::collections::HashSet<u32> = skip.iter().map(|i| *i as u32).collect();
+        self.emit_tuple_elem_drops_skipping(p, agg_ty, elem_tes, &skip_u32);
+        self.builder.build_return(None).unwrap();
+        self.current_fn = saved_fn;
+        if let Some(bb) = saved_bb {
+            self.builder.position_at_end(bb);
+        }
+        Some(drop_fn)
+    }
+
     pub(super) fn synthesize_tuple_drop_fn_te(
         &mut self,
         agg_ty: StructType<'ctx>,

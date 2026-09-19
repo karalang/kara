@@ -13237,10 +13237,123 @@ impl<'ctx> super::Codegen<'ctx> {
         if let Some(name) =
             self.boxed_tuple_payload_arm_takes_ownership(scrutinee, pattern, only_borrows)
         {
+            // B-2026-09-19-11 — a PARTIAL consumption masks rather than
+            // retracts. `Some(t) => { let x = t.0 }` hands element 0 away and
+            // keeps the rest, so retracting the whole interior walk strands
+            // every sibling's heap; the mask frees them and skips element 0.
+            // Declines (and falls back to the full retraction) for a fresh-temp
+            // scrutinee, whose key is an enum name rather than a variable.
+            if let Some(moved) = Self::arm_tuple_elem_moves(&binds, body, guard, &copy_read) {
+                if self.mask_boxed_tuple_inner_drop(&name, scrutinee, &moved) {
+                    return;
+                }
+            }
             // Consumption is already established by the admission test above,
             // so B-2026-09-12-5's borrow gate has nothing to add here.
             self.clear_boxed_enum_inner_drop(&name, false);
         }
+    }
+
+    /// B-2026-09-19-11 — the tuple element indices a whole-tuple arm binding
+    /// hands away, when those element mentions are the ONLY consuming uses of
+    /// it; `None` when anything else about the binding is consumed.
+    ///
+    /// `None` is the conservative answer and means "retract the whole interior
+    /// walk", which is what this site did unconditionally before. The positive
+    /// answer is admitted by re-running the same borrow classifier with
+    /// `v.<i>` added to the copy-read set: if the binding then reads as
+    /// borrow-only, every consumption it had was an element mention, and the
+    /// set of those mentions is the mask.
+    fn arm_tuple_elem_moves(
+        binds: &[String],
+        body: &Expr,
+        guard: Option<&Expr>,
+        copy_read: &dyn Fn(&Expr) -> bool,
+    ) -> Option<std::collections::BTreeSet<usize>> {
+        if binds.is_empty() {
+            return None;
+        }
+        let mut moved = std::collections::BTreeSet::new();
+        for v in binds {
+            let elem_read = |e: &Expr| {
+                copy_read(e)
+                    || matches!(&e.kind, ExprKind::TupleIndex { object, .. }
+                        if matches!(&object.kind, ExprKind::Identifier(n) if n == v))
+            };
+            if !crate::consume_class::binding_only_borrowed_with(v, body, &elem_read) {
+                return None;
+            }
+            if let Some(g) = guard {
+                if !crate::consume_class::binding_only_borrowed_with(v, g, &elem_read) {
+                    return None;
+                }
+            }
+            moved.extend(crate::consume_class::tuple_elem_indices_touched(v, body));
+            if let Some(g) = guard {
+                moved.extend(crate::consume_class::tuple_elem_indices_touched(v, g));
+            }
+        }
+        (!moved.is_empty()).then_some(moved)
+    }
+
+    /// B-2026-09-19-11 — swap a boxed tuple payload's interior memory walk for
+    /// one that skips `moved`, in place of retracting it. `false` when the
+    /// payload's shape cannot be resolved, which leaves the caller to retract.
+    fn mask_boxed_tuple_inner_drop(
+        &mut self,
+        name: &str,
+        scrutinee: &Expr,
+        moved: &std::collections::BTreeSet<usize>,
+    ) -> bool {
+        // The payload's element types come from the SCRUTINEE's instantiation,
+        // not from the arm binding: `sole_tuple_payload_te` declines a
+        // `Result` whose two arms are both tuples rather than guess which one
+        // an arm took, so a mask is only ever built where the answer is
+        // unambiguous.
+        let ExprKind::Identifier(var) = &scrutinee.kind else {
+            return false;
+        };
+        let Some(env_te) = self
+            .type_decls
+            .enum_inst_var_types
+            .get(var.as_str())
+            .cloned()
+        else {
+            return false;
+        };
+        let Some(payload_te) = Self::sole_tuple_payload_te(&env_te) else {
+            return false;
+        };
+        let TypeKind::Tuple(elem_tes) = &payload_te.kind else {
+            return false;
+        };
+        let elem_tes = elem_tes.clone();
+        let BasicTypeEnum::StructType(agg_ty) = self.llvm_type_for_type_expr(&payload_te) else {
+            return false;
+        };
+        let Some(masked) = self.synthesize_tuple_drop_fn_te_skipping(agg_ty, &elem_tes, moved)
+        else {
+            // Nothing survives the mask, so there is no interior left to free
+            // and the caller's retraction is exactly right.
+            return false;
+        };
+        let mut hit = false;
+        for frame in self.drop_rc.scope_cleanup_actions.iter_mut().rev() {
+            for action in frame.iter_mut() {
+                if let super::state::CleanupAction::BoxedEnumDrop {
+                    name: n,
+                    inner_drop_fn,
+                    ..
+                } = action
+                {
+                    if n == name {
+                        *inner_drop_fn = Some(masked);
+                        hit = true;
+                    }
+                }
+            }
+        }
+        hit
     }
 
     /// Block-body sibling, for the if-let `then_block` / while-let `body`

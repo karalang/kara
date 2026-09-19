@@ -459,6 +459,33 @@ fn expr_mentions(name: &str, e: &Expr) -> bool {
 /// `f` to `e` and every descendant. Only the child-bearing variants this
 /// module reasons about need enumerating; the rest have no `name` occurrence
 /// that matters for capture detection.
+/// B-2026-09-19-11 — the TOP-LEVEL tuple element indices `name.<i>` is
+/// mentioned at anywhere in `e`, blocks and nested bodies included.
+///
+/// Deliberately blind to what the mention is FOR: `t.0` handed to a sink and
+/// `t.0.name` merely read both land here. The one caller pairs this with a
+/// `binding_only_borrowed_with` run that already established every consuming
+/// use of the binding is such a mention, and then masks the memory walk by the
+/// result. Over-reporting there costs a leak of an element that was only read;
+/// under-reporting would double-free one that was moved, so the blunt answer is
+/// the safe one and a sharper predicate must keep that direction.
+// Codegen-only, like the two helpers below: dead in the default build CI lints.
+#[cfg(feature = "llvm")]
+pub(crate) fn tuple_elem_indices_touched(
+    name: &str,
+    e: &Expr,
+) -> std::collections::BTreeSet<usize> {
+    let mut out = std::collections::BTreeSet::new();
+    walk_exprs(e, &mut |x: &Expr| {
+        if let ExprKind::TupleIndex { object, index } = &x.kind {
+            if matches!(&object.kind, ExprKind::Identifier(n) if n == name) {
+                out.insert(*index as usize);
+            }
+        }
+    });
+    out
+}
+
 fn walk_exprs(e: &Expr, f: &mut impl FnMut(&Expr)) {
     f(e);
     match &e.kind {

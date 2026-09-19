@@ -5587,12 +5587,38 @@ impl<'ctx> super::Codegen<'ctx> {
         tuple_ty: StructType<'ctx>,
         elem_tes: &[TypeExpr],
     ) {
+        self.emit_tuple_elem_drops_skipping(base_ptr, tuple_ty, elem_tes, &Default::default())
+    }
+
+    /// B-2026-09-19-11 — [`Self::emit_tuple_elem_drops`] with a TOP-LEVEL skip
+    /// set: the element indices whose memory an arm has already handed to
+    /// another owner, so this walk must not free them a second time.
+    ///
+    /// The skip is deliberately top-level only. A nested tuple recurses with an
+    /// EMPTY set, because the mask its caller computed names positions in
+    /// *this* tuple; a nested element is either wholly skipped here or wholly
+    /// walked, never partially.
+    ///
+    /// Over-skipping leaks and under-skipping double-frees, so every caller
+    /// must include every index it handed away. The one caller today,
+    /// `retract_boxed_tuple_inner_drop_for_arm`, errs toward over-skipping
+    /// deliberately — see the note there.
+    pub(super) fn emit_tuple_elem_drops_skipping(
+        &mut self,
+        base_ptr: PointerValue<'ctx>,
+        tuple_ty: StructType<'ctx>,
+        elem_tes: &[TypeExpr],
+        skip: &std::collections::HashSet<u32>,
+    ) {
         let vec_ty = self.vec_struct_type();
         let i64_t = self.context.i64_type();
         let i32_t = self.context.i32_type();
         let ptr_ty = self.context.ptr_type(AddressSpace::default());
         for (i, te) in elem_tes.iter().enumerate() {
             let idx = i as u32;
+            if skip.contains(&idx) {
+                continue;
+            }
             let Some(llvm_field) = tuple_ty.get_field_type_at_index(idx) else {
                 continue;
             };

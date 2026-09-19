@@ -97264,9 +97264,11 @@ fn main() {
     ///             are HEAP-FREE on purpose: the heap-bearing spelling strands
     ///             the unmoved sibling's buffer, which is a SEPARATE and
     ///             pre-existing defect (identical 1-byte loss before and after
-    ///             this fix) filed under its own row, and letting it in here
-    ///             would redden the ASAN legs for a bug this fixture is not
-    ///             about.
+    ///             this fix), filed and since fixed as B-2026-09-19-11, whose
+    ///             own fixture below carries the heap-bearing spelling. Letting
+    ///             it in here would have reddened the ASAN legs for a bug this
+    ///             fixture is not about; it stays heap-free so the two rows
+    ///             keep failing independently.
     ///   readonly  an arm that reads the element and moves nothing, where the
     ///             walker is the SOLE owner and must keep running.
     ///
@@ -97329,6 +97331,113 @@ fn main() {
             ),
             &["mid5", "dR5/a", "end"],
             "b1729b-tuple-payload-elem-move-readonly-control",
+        );
+    }
+    /// B-2026-09-19-11 — a tuple element moved out of a BOXED `Option`/`Result`
+    /// payload must not strand its UNMOVED siblings' heap.
+    ///
+    /// The memory-channel half of B-2026-09-19-9's shape, and the reason it is
+    /// a separate row: that one is a doubled `Drop` BODY reading freed memory,
+    /// this one is a silent leak with correct output on every surface. A
+    /// program cannot see it at all — only LSan/valgrind can.
+    ///
+    /// `Some(t) => { let x = t.0 }` hands element 0 to `x`, so the box's
+    /// interior walk must not free it again. The arm site's answer was to
+    /// retract that walk ENTIRELY, which is right for element 0 and wrong for
+    /// every other element: their heap then had no owner at all. Both error
+    /// directions are live here and a probe measured each — retracting nothing
+    /// double-frees element 0 (`free(): double free detected in tcache 2`),
+    /// retracting everything leaks the siblings — so the walk has to be MASKED,
+    /// which is what `synthesize_tuple_drop_fn_te_skipping` is for.
+    ///
+    /// The cells:
+    ///
+    ///   two-heap   the row's own spelling: two `Drop`-bearing struct elements
+    ///              each owning a `String`, one moved out.
+    ///   sibling    a bare `String` sibling rather than a struct one, so the
+    ///              mask is exercised on the `Vec`/`String` arm of the element
+    ///              walk rather than the named-struct one.
+    ///   asym       the sibling's string is long and the moved element's is
+    ///              short. Before the fix the loss tracked the SIBLING's length
+    ///              (32 B here, 1 B with the lengths swapped), which is what
+    ///              identified the stranded block; the cell keeps that pinned.
+    ///   both       BOTH elements moved out, so nothing survives the mask and
+    ///              the full retraction is the correct answer. Guards the
+    ///              `synthesize_tuple_drop_fn_te_skipping` -> `None` path,
+    ///              where a mask that freed anything would double-free.
+    ///   nomove     two heap-bearing elements and no move at all: the walk is
+    ///              the sole owner and must run unmasked.
+    ///
+    /// Asserted on output AND on being leak-clean, since the output was already
+    /// correct on every cell before the fix.
+    #[test]
+    fn asan_boxed_tuple_payload_elem_move_out_frees_siblings() {
+        const DECLS: &str = "struct R { name: String, id: i64 }\n\
+             impl Drop for R { fn drop(mut ref self) { println(f\"dR{self.id}/{self.name.len()}\") } }\n";
+
+        // Two Drop-bearing, heap-owning elements; element 0 moved out.
+        assert_clean_asan_run(
+            &format!(
+                "{DECLS}\
+                 fn eat(o: Option[(R, R, i64, i64)]) {{\n\
+                 \x20   match o {{ Option.Some(t) => {{ let x = t.0; println(\"mid\"); }} Option.None => {{ println(\"n\"); }} }}\n\
+                 }}\n\
+                 fn main() {{ eat(Option.Some((R {{ name: f\"a\", id: 5 }}, R {{ name: f\"b\", id: 6 }}, 2, 3))); println(\"end\"); }}\n"
+            ),
+            &["dR5/1", "mid", "dR6/1", "end"],
+            "b11911-tuple-payload-sibling-heap-two",
+        );
+
+        // A bare `String` sibling: the Vec/String arm of the element walk.
+        assert_clean_asan_run(
+            &format!(
+                "{DECLS}\
+                 fn eat(o: Option[(R, String, i64, i64)]) {{\n\
+                 \x20   match o {{ Option.Some(t) => {{ let x = t.0; println(\"mid\"); }} Option.None => {{ println(\"n\"); }} }}\n\
+                 }}\n\
+                 fn main() {{ eat(Option.Some((R {{ name: f\"a\", id: 5 }}, f\"sibling-string-here\", 2, 3))); println(\"end\"); }}\n"
+            ),
+            &["dR5/1", "mid", "end"],
+            "b11911-tuple-payload-sibling-heap-string",
+        );
+
+        // Long sibling, short moved element: the loss tracked the sibling.
+        assert_clean_asan_run(
+            &format!(
+                "{DECLS}\
+                 fn eat(o: Option[(R, R, i64, i64)]) {{\n\
+                 \x20   match o {{ Option.Some(t) => {{ let x = t.0; println(\"mid\"); }} Option.None => {{ println(\"n\"); }} }}\n\
+                 }}\n\
+                 fn main() {{ eat(Option.Some((R {{ name: f\"a\", id: 5 }}, R {{ name: f\"bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb\", id: 6 }}, 2, 3))); println(\"end\"); }}\n"
+            ),
+            &["dR5/1", "mid", "dR6/32", "end"],
+            "b11911-tuple-payload-sibling-heap-asym",
+        );
+
+        // BOTH elements moved: nothing survives the mask, full retraction is due.
+        assert_clean_asan_run(
+            &format!(
+                "{DECLS}\
+                 fn eat(o: Option[(R, R, i64, i64)]) {{\n\
+                 \x20   match o {{ Option.Some(t) => {{ let x = t.0; let y = t.1; println(\"mid\"); }} Option.None => {{ println(\"n\"); }} }}\n\
+                 }}\n\
+                 fn main() {{ eat(Option.Some((R {{ name: f\"a\", id: 5 }}, R {{ name: f\"b\", id: 6 }}, 2, 3))); println(\"end\"); }}\n"
+            ),
+            &["dR5/1", "dR6/1", "mid", "end"],
+            "b11911-tuple-payload-sibling-heap-both",
+        );
+
+        // No move at all: the walk is the sole owner and must run unmasked.
+        assert_clean_asan_run(
+            &format!(
+                "{DECLS}\
+                 fn eat(o: Option[(R, R, i64, i64)]) {{\n\
+                 \x20   match o {{ Option.Some(t) => {{ println(f\"mid{{t.0.id}}\"); }} Option.None => {{ println(\"n\"); }} }}\n\
+                 }}\n\
+                 fn main() {{ eat(Option.Some((R {{ name: f\"a\", id: 5 }}, R {{ name: f\"b\", id: 6 }}, 2, 3))); println(\"end\"); }}\n"
+            ),
+            &["mid5", "dR5/1", "dR6/1", "end"],
+            "b11911-tuple-payload-sibling-heap-nomove",
         );
     }
 }
