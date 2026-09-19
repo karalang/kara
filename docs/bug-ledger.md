@@ -92,8 +92,8 @@ distinguish "bugs flattening" from "we stopped writing them down."
 
 | class | total |
 |---|---|
-| run-vs-build | 434 |
-| miscompile | 421 |
+| run-vs-build | 435 |
+| miscompile | 422 |
 | leak | 375 |
 | double-free | 245 |
 | missing-feature | 199 |
@@ -110,10 +110,10 @@ distinguish "bugs flattening" from "we stopped writing them down."
 
 | surface | total |
 |---|---|
-| codegen | 1856 |
+| codegen | 1857 |
 | interp | 475 |
 | typecheck | 302 |
-| other | 100 |
+| other | 101 |
 | ownership | 75 |
 | cli | 73 |
 | autopar | 56 |
@@ -142,7 +142,6 @@ _Generated from `bug-ledger.jsonl` by `scripts/bug-curve.py` (2026-05-20 → 202
 | B-2026-09-15-18 | 2026-09-15 | codegen | medium | A GENERIC MULTI-FIELD VARIANT STILL STRANDS ITS BOXED `Array[T, N]` PAYLOAD after B-2026-09-15-15 -- `G2.Y(a, 5)` over `enum G2[T] { Y(T, i64), N }` at `T = Array[String, 2]` loses 48 B + 44 B indirect at `-O0`, byte-identical before and after that fix, because an ERASED `T` cannot be classified at declaration and the monomorphic path that would catch it declines multi-field variants of its own | — |
 | B-2026-09-15-21 | 2026-09-15 | codegen | medium | AN ARM-BOUND PAYLOAD ASSIGNED OVER A `mut` LOCAL STRANDS THE DISPLACED VALUE'S HEAP FIELD, BUT ONLY WHEN THE ENUM ARRIVED AS A BY-VALUE PARAM -- `out = r` inside `fn take(b: E)` loses 2 B per call at -O0 while the identical body in `main`, or over an inline-literal scrutinee, is clean; the displaced value's `Drop` BODY still runs, so only the memory is lost | — |
 | B-2026-09-15-24 | 2026-09-15 | interp+codegen | medium | A USER-DEFINED METHOD THAT DISCARDS A BORROW-PROJECTION ARGUMENT RUNS THE FIELD'S `Drop` BODY TWICE UNDER `--interp` AND ONCE ON EVERY COMPILED SURFACE -- `b.put(w.r)` diverges on all three receiver forms while the identical free and associated spellings agree at one body, because the real discriminator is whether the CALLEE KEEPS THE VALUE, not the call spelling B-2026-09-14-10 reads it as | — |
-| B-2026-09-15-25 | 2026-09-15 | parser+typecheck | low | TWO OF THE FIVE PREFIX-COLLECTION-LITERAL TYPES design.md NAMES DO NOT PARSE -- `VecDeque[1, 2]` reports `'VecDeque' is a type, not a function` and `SortedMap["a": 1]` is a raw parse error on the `:`, while the spec says the form is supported by `Vec`, `Set`, `Map`, `VecDeque`, and `SortedMap` | — |
 | B-2026-09-15-29 | 2026-09-15 | codegen | low | THE `if let` SIBLING OF B-2026-09-02-31 STILL LEAKS ITS MOVED-OUT PAYLOAD -- `(if let Ve.A(s) = mkVe(i) { s } else { .. }).len()` in a nested expression position loses 310 B over 20 evaluations at -O0, unchanged by that row's fix, because the escaping-value discriminator it added has exactly one consuming read site and that site is `compile_match` | — |
 | B-2026-09-15-30 | 2026-09-15 | codegen | low | A MONOMORPH BODY NEVER INSTALLS `discarded_branch_spans`, so every branch inside a generic instantiation reads as NON-DISCARDED -- the sibling of the gap B-2026-09-02-31 fixed for its own span set, left alone there because it is a behaviour change that row did not measure | — |
 | B-2026-09-15-33 | 2026-09-15 | codegen+interp | medium | AN INDEX-ASSIGN WHOSE RHS IS A NAMED LOCAL RUNS THE DISPLACED ELEMENT'S `Drop` BODY UNDER `--interp` AND ON NO COMPILED SURFACE -- `a[0] = b` diverges on the `Array` AND `Vec` legs alike while the fresh-literal RHS agrees, because `store_destroys_displaced` classifies an identifier RHS as a RELOCATION on purpose (B-2026-08-26-21); the open question is whether `a[0] = b` is a relocation at all, not why the call is missing | — |
@@ -2650,6 +2649,7 @@ _Generated from `bug-ledger.jsonl` by `scripts/bug-curve.py` (2026-05-20 → 202
 | B-2026-09-15-20 | codegen | medium | A WHOLE-CONTAINER REASSIGNMENT OVER A FIXED `Array[T, N]` STRANDS THE DISPLACED ELEMENTS' HEAP -- `let mut v: Array[D, 2] = [..]; v = [..];` loses 34… | e529564 |
 | B-2026-09-15-22 | codegen | medium | AN `Array[T, N]` WHOSE ELEMENT IS A `VecDeque` BUILT FROM A NESTED `[..]` LITERAL FAULTS AT SCOPE-EXIT DROP ON EVERY COMPILED SURFACE -- `let v: Arra… | 37ee5b1 |
 | B-2026-09-15-23 | interp+codegen | medium | A NESTED CONTAINER IN A STRUCT FIELD LOSES ITS ELEMENT'S `Drop` BODY ON ALL FOUR SURFACES -- `struct H { xs: Vec[Vec[D]] }` with `H { xs: [[mkd(1)]]… | 01a1e08 |
+| B-2026-09-15-25 | parser+typecheck | low | TWO OF THE FIVE PREFIX-COLLECTION-LITERAL TYPES design.md NAMES DO NOT PARSE -- `VecDeque[1, 2]` reports `'VecDeque' is a type, not a function` and `… | a6c3432 |
 | B-2026-09-15-26 | interp+codegen | medium | AN `Array[T, N]`-TYPED STRUCT FIELD NEVER RUNS ITS ELEMENTS' `Drop` BODIES -- `struct H { a: Array[D, 2] }` prints nothing at scope exit where the sa… | 645ea3b |
 | B-2026-09-15-27 | codegen | medium | A `Vec[Array[T, N]]`-TYPED STRUCT FIELD LEAKS ITS ELEMENTS' HEAP -- 34 bytes in 2 blocks definitely lost on a plain `let h: H` with no reassignment,… | 645ea3b |
 | B-2026-09-15-28 | interp+codegen | medium | A `Vec[T]`-TYPED STRUCT FIELD ASSIGNED A FRESH CONTAINER LOSES THE DISPLACED ELEMENTS' `Drop` BODIES -- `h.v = [..]` prints the surviving elements' b… | ad35a8a |
@@ -2697,6 +2697,8 @@ _Generated from `bug-ledger.jsonl` by `scripts/bug-curve.py` (2026-05-20 → 202
 | B-2026-09-19-12 | interp | medium | THE INTERPRETER RUNS A TUPLE PAYLOAD ELEMENT'S `Drop` BODY TWICE ON THE LOCAL-SCRUTINEE SPELLING -- `let o: Option[(R, i64, i64, i64)] = ...; match o… | f409177 |
 | B-2026-09-19-13 | codegen | medium | a boxed payload's moved-element mask outlived its arm, so a later match in the same function lost a Drop body | 7dc58da |
 | B-2026-09-19-14 | codegen | medium | moving ONE field out of a boxed struct payload runs an UNMOVED sibling's Drop body twice | 9d0f336 |
+| B-2026-09-19-15 | codegen | medium | THE EMPTY PREFIX-LITERAL SPELLING design.md SANCTIONS COMPILES ON NEITHER `Map` NOR `Set` -- `let m: Map[K, V] = Map[];` runs under `--interp` and di… | a6c3432 |
+| B-2026-09-19-16 | other | medium | `karac fmt` TURNED EVERY MAP LITERAL INTO A PARSE ERROR -- the formatter printed `["a": 1]` as a BRACE form `{\n "a": 1,\n}` that is not Kara syntax,… | a6c3432 |
 
 </details>
 
