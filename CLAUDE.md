@@ -99,6 +99,26 @@ Measured twice: B-2026-09-14-1 (caught by a determinism check — a cell that re
 
 Practical rule: **check out the parent commit's tree instead — `git checkout HEAD~1 -- src/`, run, then `git checkout HEAD -- src/`** (keeping `tests/` at HEAD, so new fixtures meet old code). `git checkout` stamps fresh mtimes, so it does not have the archive-extraction problem above. And **print a guard the run itself can fail on**: a `grep -c` of the fix's bug-id in each file it touched, expected zero, before the fixtures run.
 
+**AND WHATEVER FORM THAT CHECK TAKES, IT LEAVES THE APPARATUS SET TO THE CONTROL — the tree is fixed and the BINARY is not.** Every staleness rule above is about an artifact OLDER than the tree. This one is not: `target/debug/karac` is current, freshly linked and correct, and simply built from the other arm of the experiment. `git status` is clean, the source carries the fix, and every reflex says you are on the fixed tree — which is exactly why nothing catches it. It is not a property of `git stash`: **`git checkout HEAD~1 -- src/`, the form this file recommends two paragraphs up, has it identically.** Any experiment that swaps the tree and swaps it back leaves the artifact built from whichever arm was checked out LAST.
+
+**`cargo test --test <name>` looks like the rebuild and is not.** A filtered run builds that test target and its deps, and the dep is the karac LIBRARY — `tests/codegen.rs` and `tests/memory_sanitizer.rs` both compile in process (`karac::codegen::compile_to_object_with_options` + `link_executable`), never shelling out. So the exposure is narrower and sharper than "anything run afterwards": **in-process fixture results are SOUND under a filtered run; `.kara` cells executed through `target/debug/karac` are NOT**, because nothing in that dep graph reaches the standalone bin. Unfiltered `cargo test` does rebuild the bins, which is why this stayed hidden — fixtures are what sessions run most, and they were never wrong. When you discover you were in the window, that split tells you which measurements to re-run instead of all of them.
+
+Measured 2026-09-20 (B-2026-09-19-43): a fix's own bug row reproduced its ORIGINAL failure against a compiler believed to be fixed, and a follow-up width grid then failed at all three widths including a struct structurally identical to a cell watched passing an hour earlier. Both measurements were real, reproducible, and about the control binary; the conclusion drawn was "the fix is partial", and a row saying so was minutes from being written. Two other sessions audited their own scripts within the hour and found the same defect in three more.
+
+Practical rule: **rebuild after the restore, and gate the measurement on TWO refusing columns rather than one printed warning.** They catch different failures — a behavioural fix-presence cell cannot see cargo deciding there is nothing to do when the bin happens to be correct for an unrelated reason, and an mtime assertion cannot see a bin built correctly from the wrong tree:
+
+```bash
+git checkout HEAD -- src/ && cargo build --features llvm      # THE REBUILD, not optional
+[ src/<the file you changed> -nt target/debug/karac ] && exit 3   # mtime column
+./target/debug/karac build canary.kara -o /tmp/c && /tmp/c | grep -qx 'dK2' || exit 7   # fix-presence column
+```
+
+Make the canary its OWN one-statement program rather than one of the cells under test, so it cannot come out right for a reason unrelated to the fix, and have it EXIT rather than print. A printed column is something a reader has to notice: in the measured case a loud contradiction was available — two cells of the same shape disagreeing — and the rule was still only reached for because it was loud. A cheap grid with no internal contradiction goes unchallenged.
+
+**THE SAME SHAPE ONE STEP OVER: A TEST FILTER THAT MATCHES NOTHING.** `cargo test <filter>` with a filter that names no test prints `test result: ok. 0 passed; 0 failed; 0 ignored; 0 measured; 1709 filtered out` and **exits 0**. Beside a real fixture's `1 passed`, a reader scanning for green sees two `ok` lines; the tells are `0 passed` and the filtered-out count, neither of which is where the eye goes. The mechanism here is that a fixture's LABEL — the string inside its `assert` call — and its test FUNCTION NAME are different strings, so filtering by the one you were just reading matches nothing. Measured 2026-09-20, on the check that exists to prove a keep-both-sides fixture merge did not damage another session's test: exactly where a silent zero-match is worst, because the green light certifies having checked nothing on the resolve most likely to be wrong.
+
+Practical rule: **assert the pass COUNT, not the exit status** — `cargo test <filter> 2>&1 | grep -q '1 passed'`, or run unfiltered. And note the family: a stale binary is the apparatus set to the CONTROL, an empty filter is the apparatus pointed at NOTHING, and a vacuous fixture is the apparatus measuring a value nothing observes. All three are one failure — an instrument silently reporting nothing, read as reporting a negative — and all three exit 0.
+
 **Practical rule: rebuild the archives whenever `runtime/src` changes AT ALL, not only when the symbol set does.** Symbol presence is necessary, not sufficient. The check before trusting any AOT measurement is a diff, not an `nm`:
 
 ```bash
