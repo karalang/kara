@@ -22227,12 +22227,16 @@ impl<'ctx> super::Codegen<'ctx> {
     /// Does storing `rhs` into an element slot DESTROY the value being
     /// displaced, rather than relocate it? B-2026-08-26-21.
     ///
-    /// True only for an rhs that constructs a genuinely new value — an
-    /// aggregate literal, or a call whose result is a fresh return value. A
-    /// bare identifier (`b.xs[j] = t`) or another element read
-    /// (`b.xs[i] = b.xs[j]`) is a RELOCATION: the value already existed, so the
-    /// slot's previous occupant is being shuffled rather than ended, and
-    /// running its `Drop` body would destroy something the program still holds.
+    /// True for an rhs that constructs a genuinely new value — an aggregate
+    /// literal, or a call whose result is a fresh return value — and, since
+    /// B-2026-09-15-33, for a bare identifier too.
+    ///
+    /// It used to decline an identifier (`b.xs[j] = t`) and another element
+    /// read (`b.xs[i] = b.xs[j]`) as RELOCATIONS, on the grounds that the value
+    /// already existed and firing the displaced body would destroy something
+    /// the program still holds. The second of those no longer typechecks, and
+    /// neither does the `let t = b.xs[j]` that produces the first — see the
+    /// `ExprKind::Identifier` arm below for the three measured exclusions.
     ///
     /// Conservative toward FALSE, which is the safe direction here and the
     /// opposite of the memory half's: a missed body leaks observable cleanup,
@@ -22285,6 +22289,47 @@ impl<'ctx> super::Codegen<'ctx> {
                 // spelling of a fresh container literal and rides along.
                 | ExprKind::PrefixCollectionLiteral { .. }
                 | ExprKind::RepeatLiteral { .. }
+                // B-2026-09-15-33 — a bare IDENTIFIER RHS. This is the shape the
+                // predicate was written to decline, and the reason it was
+                // written that way no longer exists: the hazard is a value read
+                // OUT of the same container, and NO SUCH PROGRAM COMPILES ANY
+                // MORE. That is the same argument B-2026-09-16-2 made ten lines
+                // up for the literal shapes, extended to the shape it names.
+                //
+                // Three independent exclusions, each measured rather than
+                // argued:
+                //
+                //  * `let t = a[i]` and `a[i] = a[j]` are both rejected by
+                //    `E_INDEX_MOVE_NON_COPY`, and — decisively — that holds for
+                //    `struct Item { id: i64 }` with an `impl Drop`, which is
+                //    B-2026-08-26-21's OWN element type: a scalar-only struct
+                //    with a `Drop` impl is not `Copy` either. Since this
+                //    predicate's answer is only observable for an element whose
+                //    `Drop` body runs, and every such element is non-`Copy`,
+                //    there is no type left for which the relocation shape
+                //    typechecks. The diagnostic is attributed to -08-26-21
+                //    itself (`src/ast/exprs.rs`), so the frontend rejection and
+                //    this gate are two responses to one bug and the rejection
+                //    subsumes the gate.
+                //  * the genuine relocation idiom is now `v.swap(i, j)`, a
+                //    codegen intrinsic (`vec_method.rs`) that geps the data
+                //    pointer and exchanges in place, never reaching this path.
+                //    `PriorityQueue.swap` delegates to it, and its stdlib
+                //    comment — written for -08-26-21 — records that swap has one
+                //    meaning, both values stay live, no body runs, and both
+                //    backends implement it identically.
+                //  * the caller's `expr_mentions_name_deep(rhs, container)`
+                //    alias guard still returns before any shape arm.
+                //
+                // Declining meanwhile cost an observable body on every compiled
+                // surface, at four spellings that all diverge identically from
+                // `--interp`: `a[i] = b` on the `Array` and `Vec` legs, a
+                // field-rooted `h.xs[i] = b`, the same store through a `mut ref`
+                // container param, and — the cell with no relocation reading
+                // available at all — a value POPPED out of the container and
+                // then stored back over another element, where `len` is already
+                // down by one before the store.
+                | ExprKind::Identifier(..)
         )
     }
 

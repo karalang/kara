@@ -21542,6 +21542,116 @@ end
         );
     }
 
+    /// B-2026-09-15-33 — an index-assign whose RHS is a bare IDENTIFIER runs
+    /// the displaced element's user `Drop` body.
+    ///
+    /// `store_destroys_displaced` is the DESTROY-vs-RELOCATE discriminator, and
+    /// it declined an identifier RHS on the grounds that the value already
+    /// existed somewhere, so the slot's previous occupant was being shuffled
+    /// rather than ended. That reasoning was B-2026-08-26-21's: a two-element
+    /// swap written `let t = b.xs[0]; b.xs[0] = b.xs[1]; b.xs[1] = t;` printed
+    /// FIVE bodies for two values.
+    ///
+    /// THAT PROGRAM NO LONGER COMPILES, which is what makes the arm safe to
+    /// add. `E_INDEX_MOVE_NON_COPY` rejects both of its legs, and it rejects
+    /// them for a scalar-only `struct Item { id: i64 }` carrying an
+    /// `impl Drop` — -08-26-21's own element type — because a `Drop` impl makes
+    /// a type non-`Copy` whatever its fields are. This predicate's answer is
+    /// observable only for an element whose `Drop` body runs, every such
+    /// element is non-`Copy`, so no type is left for which the relocation shape
+    /// typechecks at all. The surviving idiom is `v.swap(i, j)`, a codegen
+    /// intrinsic that never reaches this path.
+    ///
+    /// EVERY CELL HERE WAS BROKEN, which is the real shape of the row: the
+    /// predicate declined on the RHS's SYNTAX, so every root spelling and both
+    /// container legs went down with it. Measured against `origin/main` with a
+    /// named-tree control whose marker threshold is derived from the base tree
+    /// rather than typed: the before arm prints ten bodies where eighteen are
+    /// due, losing `d11 d21 d31 d41 d51 d61 d62 d71 d81` — one per
+    /// displacement — identically on the JIT, `-O0` and `-O2`.
+    ///
+    /// `one` is the row's own cell and `two` the `Array` leg, the two the row
+    /// reported. `three` is field-rooted and `four` stores through a `mut ref`
+    /// container param — the two spellings the row listed as NOT MEASURED, and
+    /// they diverged identically, so the gap is the STORE and not the root.
+    ///
+    /// `five` IS THE CELL WITH NO RELOCATION READING AVAILABLE, and it is why
+    /// the row's own program was not reused: the value is POPPED out of the
+    /// container before being stored back over another element, so `len` is
+    /// already down by one and the displaced element is dead beyond argument.
+    ///
+    /// `six` STORES TWICE OVER THE SAME SLOT and is the double-fire guard —
+    /// two displacements must give exactly two bodies, not three and not one.
+    /// `seven` binds the RHS to a CALL RESULT rather than to a constructor,
+    /// the one spelling in which the declined reading ("the value already
+    /// existed, so this is a shuffle") was least obviously wrong; it lost its
+    /// body too.
+    ///
+    /// THE ASSERTION IS AN EXACT-ONCE ACCOUNTING, which is the guard a
+    /// widening of a leak gate needs and the reason the expected string is
+    /// written out in full: eighteen `D` values are constructed and eighteen
+    /// bodies are expected, one per value. A widening that fired where it
+    /// should not shows up as a nineteenth. No MUST-STAY-DECLINED cell can be
+    /// written for this predicate — the relocation shape it was guarding does
+    /// not typecheck for any element type whose body is observable, per the
+    /// paragraph above — so the exact-once count and the two ASAN ratchet legs
+    /// are what stand in for one.
+    ///
+    /// `eight` stores through `self.xs[0]` inside a method taking
+    /// `mut ref self`. It is the row's defect in one more root spelling and is
+    /// fixed with the rest, and it is the ONE cell in this battery where
+    /// `--interp` is the backend that is wrong: it prints `eight:82 d82` and
+    /// loses `d81`, which the hand-derived sequence puts at the store. The fix
+    /// is codegen-only, so that divergence predates it and is filed on its own.
+    #[test]
+    fn e2e_index_assign_identifier_rhs_destroys_displaced_element() {
+        let Some(out) = run_program(
+            r#"
+struct D { id: i64, s: String }
+impl Drop for D { fn drop(mut ref self) { println(f"d{self.id}") } }
+struct Holder { xs: Vec[D] }
+struct Bag { xs: Vec[D] }
+impl Bag {
+  fn put(mut ref self, t: D) { self.xs[0] = t; }
+}
+fn mk(k: i64) -> D { return D { id: k, s: f"m{k}" } }
+fn one() { let mut a: Vec[D] = [D { id: 11, s: f"a" }]; let t: D = D { id: 12, s: f"b" }; a[0] = t; println(f"one:{a[0].id}") }
+fn two() { let mut a: Array[D, 2] = [D { id: 21, s: f"a" }, D { id: 22, s: f"b" }]; let t: D = D { id: 23, s: f"c" }; a[0] = t; println(f"two:{a[0].id}") }
+fn three() { let mut h: Holder = Holder { xs: [D { id: 31, s: f"a" }] }; let t: D = D { id: 32, s: f"b" }; h.xs[0] = t; println(f"three:{h.xs[0].id}") }
+fn four(a: mut ref Vec[D]) { let t: D = D { id: 42, s: f"b" }; a[0] = t; println(f"four:{a[0].id}") }
+fn five() { let mut a: Vec[D] = [D { id: 51, s: f"a" }, D { id: 52, s: f"b" }]; let t: D = a.pop().unwrap(); a[0] = t; println(f"five:{a[0].id}") }
+fn six() { let mut a: Vec[D] = [D { id: 61, s: f"a" }]; let p: D = D { id: 62, s: f"b" }; let q: D = D { id: 63, s: f"c" }; a[0] = p; a[0] = q; println(f"six:{a[0].id}") }
+fn seven() { let mut a: Vec[D] = [D { id: 71, s: f"a" }]; let t: D = mk(72); a[0] = t; println(f"seven:{a[0].id}") }
+fn eight() { let mut b: Bag = Bag { xs: [D { id: 81, s: f"a" }] }; b.put(D { id: 82, s: f"b" }); println(f"eight:{b.xs[0].id}") }
+fn main() {
+  one();
+  two();
+  three();
+  { let mut a: Vec[D] = [D { id: 41, s: f"a" }]; four(mut a); }
+  five();
+  six();
+  seven();
+  eight();
+  println("end")
+}
+"#,
+        ) else {
+            return;
+        };
+        assert_eq!(
+            out,
+            "d11\none:12\nd12\n\
+             d21\ntwo:23\nd23\nd22\n\
+             d31\nthree:32\nd32\n\
+             d41\nfour:42\nd42\n\
+             d51\nfive:52\nd52\n\
+             d61\nd62\nsix:63\nd63\n\
+             d71\nseven:72\nd72\n\
+             d81\neight:82\nd82\n\
+             end\n"
+        );
+    }
+
     /// B-2026-09-05-26 — a user enum's STRUCT payload owns its heap, inline or
     /// boxed, on every path: unbound (`one`, `four`), through a `_` arm
     /// (`two`, `five`), bound and unread (`three`, `six`, `eight`), and
@@ -92481,26 +92591,48 @@ fn main() {
         );
     }
 
-    /// B-2026-09-14-30's cell. THE EXPECTATION IS UNCHANGED BY
-    /// B-2026-09-14-29, and that is worth a note because -14-29's own prose
-    /// predicted it would change here.
+    /// B-2026-09-14-30's cell. THE EXPECTATION FLIPPED, under
+    /// B-2026-09-15-33, and the whole point of this note is that the flip was
+    /// PREDICTED TWICE and denied once before it happened.
     ///
-    /// That row expected closing it to add a leading `dD1` to this test. It
-    /// does not, and the reason is the RHS: `a[0] = b` stores a NAMED LOCAL,
-    /// which `store_destroys_displaced` classifies as a RELOCATION rather
-    /// than a destruction, so `run_bodies` is false and the displaced body is
-    /// deliberately suppressed (B-2026-08-26-21 — firing it is what printed
-    /// five `Drop` bodies for two values across a three-line swap). -14-29's
-    /// fix gives the emitter its missing Array element-type and addressing;
-    /// it does not touch that destroy-vs-relocate gate, so a fresh-literal
-    /// RHS gains `dD1` (see
+    /// B-2026-09-14-29's prose expected closing it to add a leading `dD1`
+    /// here. It did not, and this comment used to say why: `a[0] = b` stores
+    /// a NAMED LOCAL, which `store_destroys_displaced` classified as a
+    /// RELOCATION rather than a destruction, so `run_bodies` was false and the
+    /// displaced body was deliberately suppressed. -14-29's fix gave the
+    /// emitter its missing Array element-type and addressing and did not touch
+    /// that gate, so a fresh-literal RHS gained `dD1` (see
     /// `e2e_array_index_store_runs_the_displaced_elements_drop_body`) and this
-    /// named-local spelling does not.
+    /// named-local spelling did not. All of that was accurate, and the run/build
+    /// divergence it recorded was filed as B-2026-09-15-33 rather than resolved
+    /// by loosening the gate.
     ///
-    /// The interpreter DOES print `dD1` here, so a run/build divergence
-    /// remains at this one spelling. It is not -14-29's, and closing it means
-    /// deciding whether a moved-from local is a relocation at all — filed
-    /// separately rather than resolved by loosening the gate.
+    /// -15-33 then answered the question it was filed to ask — is `a[0] = b` a
+    /// relocation at all — and the answer turned out to be about what still
+    /// typechecks rather than about drop timing. The swap idiom the
+    /// suppression existed to protect (B-2026-08-26-21, five `Drop` bodies for
+    /// two values across three lines) NO LONGER COMPILES: `E_INDEX_MOVE_NON_COPY`
+    /// rejects its index reads, including for a scalar-only element struct,
+    /// because an `impl Drop` makes a type non-`Copy` whatever its fields are.
+    /// The gate now admits an identifier RHS, so this cell prints the leading
+    /// `dD1` that -14-29 expected and `--interp` always produced.
+    ///
+    /// THE OLD EXPECTATION PINNED A DEFECT'S ANSWER, which is why it is called
+    /// out rather than quietly edited: a test whose recorded output is the
+    /// wrong one reads green through the fix that corrects it, and the only
+    /// thing that distinguishes the two cases is a comment saying which it is.
+    /// This one is now the DUE sequence — the displaced `D{1}` has no owner
+    /// after the store and its body belongs there.
+    ///
+    /// AND THE SHAPE OF THE MISTAKE OUTLIVES THIS CELL, which is why it is
+    /// written here and not only in the ledger row: A COMMENT RECORDING THAT A
+    /// PREDICTED CHANGE DID NOT HAPPEN IS A MEASUREMENT OF ONE TREE. It decays
+    /// exactly the way a guard comment does, and the dangerous part is that it
+    /// reads as REASONING rather than as DATA, so nobody re-measures it. The
+    /// paragraph above was accurate the day it was written, stood for five
+    /// days, and was false by the time the fix it anticipated arrived — while
+    /// still reading, the whole time, like an argument for why the expectation
+    /// was correct.
     #[test]
     fn test_e2e_array_index_store_runs_the_moved_in_source_body_once() {
         assert_eq!(
@@ -92515,7 +92647,7 @@ fn main() {
                  }"
             )
             .as_deref(),
-            Some("a0:3\ndD3\ndD2\n")
+            Some("dD1\na0:3\ndD3\ndD2\n")
         );
     }
 

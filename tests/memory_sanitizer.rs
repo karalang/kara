@@ -100675,4 +100675,117 @@ fn main() {
             120,
         );
     }
+    /// B-2026-09-15-33 — the MEMORY half of the identifier-RHS widening.
+    ///
+    /// `store_destroys_displaced` gates `run_bodies`, NOT the release: the row
+    /// measured "All heap blocks were freed" on every one of its cells while
+    /// the user body was missing. So widening it adds a `Drop` body to a
+    /// displacement whose heap was ALREADY being released, which is precisely
+    /// the double-free shape a body count cannot see — an extra free is
+    /// memory-dirty and body-clean, and the codegen fixture over these same
+    /// programs would stay green through it.
+    ///
+    /// No MUST-STAY-DECLINED cell exists to pair with these: the relocation
+    /// shape the predicate was guarding (B-2026-08-26-21's three-line swap)
+    /// does not typecheck for any element type whose body is observable, since
+    /// an `impl Drop` makes a type non-`Copy` and `E_INDEX_MOVE_NON_COPY`
+    /// rejects the index reads. This leg and the exact-once body count in
+    /// `tests/codegen.rs` are what stand in for one.
+    ///
+    /// Each cell's `String` is a DISTINCT LENGTH, so a leaked or double-freed
+    /// byte count names the cell rather than the family.
+    #[test]
+    fn asan_index_store_identifier_rhs_body_does_not_double_free() {
+        // The row's own cell: a bare identifier RHS over a `Vec`.
+        assert_clean_asan_run(
+            "struct D { id: i64, s: String }
+             impl Drop for D { fn drop(mut ref self) { println(f\"d{self.id}\") } }
+             fn main() {
+                 let mut a: Vec[D] = [D { id: 11, s: f\"aaaaaaaaaaaaaaaaa-11\" }];
+                 let t: D = D { id: 12, s: f\"bbbbbbbbbbbbbbbbbbbbb-12\" };
+                 a[0] = t;
+                 println(f\"one:{a[0].id}:{a[0].s.len()}\");
+             }
+",
+            &["d11", "one:12:24", "d12"],
+            "b2026-09-15-33-vec-identifier",
+        );
+
+        // The `Array` leg, which the row measured diverging identically. The
+        // survivor at index 1 is what makes a whole-container over-release
+        // visible as well as a slot-local one.
+        assert_clean_asan_run(
+            "struct D { id: i64, s: String }
+             impl Drop for D { fn drop(mut ref self) { println(f\"d{self.id}\") } }
+             fn main() {
+                 let mut a: Array[D, 2] = [D { id: 21, s: f\"aaaaaaaaaaaaaaaaaaaaaaaaa-21\" }, D { id: 22, s: f\"bb-22\" }];
+                 let t: D = D { id: 23, s: f\"ccccccccccccccccccccccccccccc-23\" };
+                 a[0] = t;
+                 println(f\"two:{a[0].id}:{a[0].s.len()}\");
+             }
+",
+            &["d21", "two:23:32", "d23", "d22"],
+            "b2026-09-15-33-array-identifier",
+        );
+
+        // A FIELD root and a `mut ref` PARAM root in one program — two of the
+        // three spellings the row listed as NOT MEASURED. Both reach the same
+        // store, so a root-keyed over-release would show here and not above.
+        assert_clean_asan_run(
+            "struct D { id: i64, s: String }
+             impl Drop for D { fn drop(mut ref self) { println(f\"d{self.id}\") } }
+             struct Holder { xs: Vec[D] }
+             fn thru(a: mut ref Vec[D]) { let t: D = D { id: 42, s: f\"dddddddddddddddddddddddddddddddddd-42\" }; a[0] = t; println(f\"four:{a[0].s.len()}\"); }
+             fn main() {
+                 let mut h: Holder = Holder { xs: [D { id: 31, s: f\"aaaaaaaaaaaaaaaaaaaaaaaaaaaaa-31\" }] };
+                 let t: D = D { id: 32, s: f\"ccccccccccccccccccccccccccccccc-32\" };
+                 h.xs[0] = t;
+                 println(f\"three:{h.xs[0].s.len()}\");
+                 let mut a: Vec[D] = [D { id: 41, s: f\"eeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeee-41\" }];
+                 thru(mut a);
+             }
+",
+            &["d31", "three:34", "d32", "d41", "four:37", "d42"],
+            "b2026-09-15-33-field-and-mutref-roots",
+        );
+
+        // A store rooted at a field of `mut ref self`, the spelling the row
+        // never asked about. It is the one cell whose fixed answer `--interp`
+        // does not share, so the codegen fixture is the only other witness and
+        // this is its memory half.
+        assert_clean_asan_run(
+            "struct D { id: i64, s: String }
+             impl Drop for D { fn drop(mut ref self) { println(f\"d{self.id}\") } }
+             struct Bag { xs: Vec[D] }
+             impl Bag { fn put(mut ref self, t: D) { self.xs[0] = t; } }
+             fn main() {
+                 let mut b: Bag = Bag { xs: [D { id: 81, s: f\"ffffffffffffffffffffffffffffffffffff-81\" }] };
+                 b.put(D { id: 82, s: f\"gggggggggggggggggggggggggggggggggggggg-82\" });
+                 println(f\"eight:{b.xs[0].s.len()}\");
+             }
+",
+            &["d81", "eight:41", "d82"],
+            "b2026-09-15-33-self-field-root",
+        );
+
+        // TWO displacements over the SAME slot. The double-fire guard's memory
+        // half: two stores must release exactly two buffers, and a widening
+        // that released the slot's occupant twice would report a double free
+        // here before anywhere else.
+        assert_clean_asan_run(
+            "struct D { id: i64, s: String }
+             impl Drop for D { fn drop(mut ref self) { println(f\"d{self.id}\") } }
+             fn main() {
+                 let mut a: Vec[D] = [D { id: 61, s: f\"hhhhhhhhhhhhhhhhhhhhhhhhhhhhhhhhhhhhhhh-61\" }];
+                 let p: D = D { id: 62, s: f\"iiiiiiiiiiiiiiiiiiiiiiiiiiiiiiiiiiiiiiiii-62\" };
+                 let q: D = D { id: 63, s: f\"jjjjjjjjjjjjjjjjjjjjjjjjjjjjjjjjjjjjjjjjjjj-63\" };
+                 a[0] = p;
+                 a[0] = q;
+                 println(f\"six:{a[0].s.len()}\");
+             }
+",
+            &["d61", "d62", "six:46", "d63"],
+            "b2026-09-15-33-store-twice",
+        );
+    }
 }
