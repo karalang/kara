@@ -6461,6 +6461,7 @@ impl<'ctx> Codegen<'ctx> {
                 arc_fallback_fns: HashMap::new(),
                 rc_fallback_heap_types: HashMap::new(),
                 rc_fallback_box_drop_fns: Vec::new(),
+                shared_enum_boxed_interior_drop_fns: Vec::new(),
                 aggregate_drop_fns: Vec::new(),
                 clone_fn_cache: HashMap::new(),
                 try_clone_fn_cache: HashMap::new(),
@@ -8080,6 +8081,12 @@ impl<'ctx> Codegen<'ctx> {
         self.register_ord_orderable_types(program);
         self.declare_enums(program);
         self.build_struct_types(program);
+        // B-2026-09-17-21 — AFTER `build_struct_types`, because the interior walk this
+        // synthesizes recurses into the element type's own LLVM struct, and
+        // BEFORE any function body, so no drop site can be emitted against an
+        // empty table. See the fn's own note on why the constructor is the
+        // wrong site despite being the obvious one.
+        self.register_shared_enum_boxed_payload_interior_drops(program);
         // Phase 5 line 569 slice 4: lower `#[repr(C)] union Foo { ... }`
         // declarations to LLVM storage types so `size_of[Foo]` /
         // `align_of[Foo]` resolve correctly and union literals /

@@ -2412,12 +2412,32 @@ impl<'ctx> super::Codegen<'ctx> {
         let Some(layout) = self.type_decls.enum_layouts.get(enum_name).cloned() else {
             return;
         };
-        if layout.is_shared {
-            return;
-        }
         let Some((variant, _)) = self.enum_pattern_consumed_positions(enum_name, pattern) else {
             return;
         };
+        // B-2026-09-17-21 — a `shared`/`par` enum is admitted exactly when its box has been
+        // ARMED with an interior walk, and not before.
+        //
+        // The blanket `if layout.is_shared { return; }` this replaces was right
+        // for as long as a shared box freed the ENVELOPE only: there was no
+        // second walk for an arm to disarm, so recording the alias would have
+        // zeroed a box whose interior nobody was going to touch. Now that the
+        // box owns its interior, this function's own opening paragraph applies
+        // to it word for word -- "a drop switch is emitted once per enum and
+        // cannot see any arm, so when an arm hands the array to a new owner the
+        // interior gets two, and the program aborts". Measured before the
+        // widening, at `-O0` under valgrind: `fn takeout(s: Sh) -> Array[String, 2]`
+        // whose arm returns the payload reported TWO INVALID FREES, with
+        // correct stdout.
+        //
+        // Keyed on the arming rather than on `is_shared` so the two can never
+        // disagree: a shared field whose payload type yields no interior fn is
+        // still box-only, and still must not be disarmed.
+        // The per-FIELD half of this test is in the loop below, beside the
+        // kind check, because a variant's boxed array need not be its field 0.
+        if layout.is_shared && !self.shared_enum_variant_has_armed_interior(enum_name, &variant) {
+            return;
+        }
         // B-2026-09-15-15 — EVERY bound field, in BOTH pattern shapes. This
         // landed matching `TupleVariant` with exactly one sub-pattern
         // (`let [sub] = patterns.as_slice()`) and reading position 0, which
@@ -2488,6 +2508,14 @@ impl<'ctx> super::Codegen<'ctx> {
             // Read the KIND rather than re-deriving the boxing decision, so
             // this tracks whatever `declarations.rs` classified.
             if kinds.get(pos).copied() != Some(super::state::EnumDropKind::BoxedArray) {
+                continue;
+            }
+            // B-2026-09-17-21 — and for a shared enum, THIS field's box must be
+            // the one that was armed. The variant-level gate above only
+            // establishes that some field was.
+            if layout.is_shared
+                && !self.shared_enum_field_interior_is_armed(enum_name, &variant, pos)
+            {
                 continue;
             }
             let elem_runs_body = tes

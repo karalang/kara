@@ -11452,6 +11452,41 @@ impl<'ctx> super::Codegen<'ctx> {
                 // retains the free (kata-22 family, 2026-06-06).
                 self.suppress_fstr_acc_if_moved_out(&arg.value);
                 let val = self.maybe_defensive_copy_param_arg(&arg.value, val);
+                // B-2026-09-17-21 — RETRACT the named source, the half that pairs with the
+                // box's interior walk at `rc == 0`.
+                //
+                // The row that filed this reads B-2026-09-13-15's exclusion of
+                // shared enums from `disarm_array_sources` as the deliberate
+                // protection of a named source that still owns the interior.
+                // That exclusion is IRRELEVANT TO THIS PATH rather than wrong:
+                // this branch returns some eighty lines above the single place
+                // that boolean is consumed, so the shared constructor has never
+                // called the retraction at all, under any flag.
+                //
+                // It has to now, because "the named source owns the interior"
+                // is only true while the handle dies inside that source's
+                // scope. `{ let a = mka(); keep = Sh.S(a); }` with `keep`
+                // outside frees a 27-byte element string at the block's exit
+                // and reads it back through the surviving handle -- two invalid
+                // reads at `-O0`, and correct stdout, so no output oracle in
+                // this tree can see it. Handing the interior to the box makes
+                // ownership independent of which dies first.
+                //
+                // GATED ON THE ARMING, never unconditional: a field whose
+                // payload type the recursive-drop family cannot walk gets no
+                // interior fn, and retracting there would stand the only owner
+                // down -- the leak mirror B-2026-09-13-15 wrote the exclusion
+                // for and B-2026-09-17-9 hit again one site over. The helper
+                // asks the registration table itself, so the two cannot drift.
+                //
+                // `suppress_array_local_move_into_ctor` independently declines
+                // when a defensive copy happened (`uam_copied_sites`), so a
+                // source that is READ AFTER the move keeps its own buffer and
+                // its own drop while the box frees the copy -- two objects, two
+                // frees, which is why the read-after-move cell stays clean.
+                if self.shared_enum_field_interior_is_armed(&enum_name, name, i) {
+                    self.suppress_array_local_move_into_ctor(&arg.value);
+                }
                 // B-2026-07-16-5: borrow-sourced payload — zero the cap word
                 // so the stored triple is a view (see the non-shared arm).
                 let val = self.zero_cap_if_ref_heap_borrow(&arg.value, val);

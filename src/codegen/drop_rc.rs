@@ -535,6 +535,25 @@ pub(crate) struct DropRc<'ctx> {
     /// Registered as a `CleanupAction::StructDrop` by `track_tuple_var`
     /// (B-2026-06-11-4 part a).
     pub(crate) aggregate_drop_fns: Vec<(StructType<'ctx>, FunctionValue<'ctx>)>,
+    /// B-2026-09-17-21 — the INTERIOR drop fn for a `shared`/`par` enum's heap-BOXED
+    /// nameless-aggregate payload, so the box owns its elements the way the
+    /// box itself has been owned since B-2026-09-15-10.
+    ///
+    /// Keyed `(box heap type, variant tag, payload word index)` — the same
+    /// triple `emit_shared_enum_payload_box_free` already computes to find the
+    /// box pointer, so the free and the walk cannot disagree about which word
+    /// they mean. Same `Vec` + linear `StructType`-equality lookup rationale as
+    /// `rc_fallback_box_drop_fns` above.
+    ///
+    /// Populated ONCE per program by
+    /// `register_shared_enum_boxed_payload_interior_drops`, from the driver,
+    /// rather than at the constructor. The constructor would be the natural
+    /// site — it is `&mut self` and holds the payload `TypeExpr` — but a drop
+    /// of a `Sh` in a function compiled BEFORE any `Sh.S(..)` would then find
+    /// the table empty and silently emit the old envelope-only free. A
+    /// declare-time pass has no such order.
+    pub(crate) shared_enum_boxed_interior_drop_fns:
+        Vec<(StructType<'ctx>, u64, u32, FunctionValue<'ctx>)>,
     /// Per-type clone function cache. Keyed on the canonical mangled type
     /// name (`display_mangle_te`). Each emitted fn has signature
     /// `void karac_clone_<typename>(*const T src, *mut T dst)` — caller

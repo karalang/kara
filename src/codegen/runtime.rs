@@ -913,14 +913,16 @@ impl<'ctx> super::Codegen<'ctx> {
             .into_int_value();
         let join_bb = self.context.append_basic_block(cur_fn, "shbox.join");
         let mut cases: Vec<(IntValue<'ctx>, inkwell::basic_block::BasicBlock<'ctx>)> = Vec::new();
-        let mut bodies: Vec<(inkwell::basic_block::BasicBlock<'ctx>, Vec<u32>)> = Vec::new();
+        // B-2026-09-17-21 — the tag rides along so the INTERIOR walk below can be looked
+        // up by the same `(heap type, tag, word)` triple the registration used.
+        let mut bodies: Vec<(inkwell::basic_block::BasicBlock<'ctx>, u64, Vec<u32>)> = Vec::new();
         for (t, words) in &by_tag {
             let bb = self.context.append_basic_block(cur_fn, "shbox.free");
             cases.push((i64_t.const_int(*t, false), bb));
-            bodies.push((bb, words.clone()));
+            bodies.push((bb, *t, words.clone()));
         }
         self.builder.build_switch(tag, join_bb, &cases).unwrap();
-        for (bb, words) in bodies {
+        for (bb, body_tag, words) in bodies {
             self.builder.position_at_end(bb);
             for w in words {
                 let Ok(wp) = self
@@ -945,6 +947,41 @@ impl<'ctx> super::Codegen<'ctx> {
                     .build_conditional_branch(is_null, skip_bb, do_bb)
                     .unwrap();
                 self.builder.position_at_end(do_bb);
+                // B-2026-09-17-21 — the box's INTERIOR, before the box itself. B-2026-09-15-10
+                // gave the envelope an owner and deliberately left the elements
+                // to "whoever owns them, and for a shared enum that is still the
+                // SOURCE". That premise holds only while the handle dies inside
+                // the named local's scope. Measured at `-O0` under valgrind, one
+                // `shared enum Sh { S(Array[String, 2]), N }` per cell:
+                //
+                //   named local, handle dies first      0 lost, 0 invalid
+                //   named local, handle outlives block  0 lost, 2 INVALID READS
+                //   named local, handle leaves frame   54 lost, 0 invalid
+                //   temporary, every spelling       52-162 lost, 0 invalid
+                //
+                // The second regime is the one that decides this: the source's
+                // own drop frees a 27-byte element string at the block's exit
+                // and `memmove` reads it back through the surviving handle. It
+                // prints the RIGHT characters, so every output-based instrument
+                // in the tree scores that cell as correct.
+                //
+                // So the box owns its interior unconditionally, and the
+                // constructor retracts the named source to match
+                // (`suppress_array_local_move_into_ctor`, in the shared branch
+                // of `try_compile_enum_variant_at`). ARM AND RETRACT ARE ONE
+                // PAIR and land together: arming alone double-frees the
+                // dies-first cells, retracting alone leaks every one of them.
+                // That pairing is B-2026-09-13-15's own stated objection to
+                // bringing shared enums in -- "retracting there would retract
+                // without arming" -- and this is the arming it was waiting for.
+                if let Some(&(_, _, _, inner)) = self
+                    .drop_rc
+                    .shared_enum_boxed_interior_drop_fns
+                    .iter()
+                    .find(|(ty, t, word, _)| *ty == heap_type && *t == body_tag && *word == w)
+                {
+                    self.builder.build_call(inner, &[bp.into()], "").unwrap();
+                }
                 self.builder
                     .build_call(self.runtime_fns.free_fn, &[bp.into()], "")
                     .unwrap();
@@ -957,6 +994,161 @@ impl<'ctx> super::Codegen<'ctx> {
             self.builder.build_unconditional_branch(join_bb).unwrap();
         }
         self.builder.position_at_end(join_bb);
+    }
+
+    /// B-2026-09-17-21 — synthesize the INTERIOR drop fn for every `shared`/`par` enum
+    /// variant field the layout marked `EnumDropKind::BoxedArray`, so
+    /// [`Self::emit_shared_enum_payload_box_free`] can free the elements before
+    /// the box.
+    ///
+    /// FROM THE DRIVER, ONCE, rather than from the constructor. The constructor
+    /// is the obvious site — it is `&mut self` and already holds the payload
+    /// `TypeExpr` — and it is wrong for an ordering reason that leaves no trace:
+    /// a drop of an `Sh` inside a function compiled BEFORE any `Sh.S(..)` would
+    /// find the table empty and quietly emit the old envelope-only free, so the
+    /// leak would come back for some programs and not others depending on
+    /// function order. A declare-time pass has no such order. It is also why
+    /// this reads the layout's own `field_drop_kinds` instead of re-deriving
+    /// which fields are boxed: the free and the walk then cannot disagree, the
+    /// same argument the box free already makes for reading the pack side's
+    /// kinds.
+    ///
+    /// `array_interior_ok: true` for the reason B-2026-09-16-15 established at
+    /// the other four call sites — the second owner that flag was defending
+    /// against is the named source, and the constructor retracts it now.
+    pub(super) fn register_shared_enum_boxed_payload_interior_drops(
+        &mut self,
+        program: &crate::ast::Program,
+    ) {
+        use crate::ast::{Item, VariantKind};
+        // Collected first, emitted second: `enum_boxed_payload_interior_drop`
+        // needs `&mut self` and the walk above borrows `self.type_decls`.
+        let mut jobs: Vec<(StructType<'ctx>, u64, u32, crate::ast::TypeExpr)> = Vec::new();
+        for item in &program.items {
+            let Item::EnumDef(e) = item else {
+                continue;
+            };
+            let Some(info) = self.type_decls.shared_types.get(e.name.as_str()).cloned() else {
+                continue;
+            };
+            let Some(layout) = self.type_decls.enum_layouts.get(e.name.as_str()) else {
+                continue;
+            };
+            if !layout.is_shared {
+                continue;
+            }
+            let tag_idx: u32 = if self.heap_type_is_weak_headered(info.heap_type) {
+                2
+            } else {
+                1
+            };
+            for v in &e.variants {
+                let field_tys: Vec<&crate::ast::TypeExpr> = match &v.kind {
+                    VariantKind::Unit => continue,
+                    VariantKind::Tuple(tys) => tys.iter().collect(),
+                    VariantKind::Struct(fields) => fields.iter().map(|f| &f.ty).collect(),
+                };
+                let (Some(tag), Some(kinds), Some(offs)) = (
+                    layout.tags.get(&v.name),
+                    layout.field_drop_kinds.get(&v.name),
+                    layout.field_word_offsets.get(&v.name),
+                ) else {
+                    continue;
+                };
+                for (fi, fty) in field_tys.into_iter().enumerate() {
+                    if kinds.get(fi) != Some(&super::state::EnumDropKind::BoxedArray) {
+                        continue;
+                    }
+                    let Some((start_word, _)) = offs.get(fi) else {
+                        continue;
+                    };
+                    jobs.push((
+                        info.heap_type,
+                        *tag,
+                        tag_idx + 1 + *start_word as u32,
+                        fty.clone(),
+                    ));
+                }
+            }
+        }
+        for (ht, tag, word, te) in jobs {
+            if self
+                .drop_rc
+                .shared_enum_boxed_interior_drop_fns
+                .iter()
+                .any(|(t, g, w, _)| *t == ht && *g == tag && *w == word)
+            {
+                continue;
+            }
+            if let Some(f) = self.enum_boxed_payload_interior_drop(&te, true) {
+                self.drop_rc
+                    .shared_enum_boxed_interior_drop_fns
+                    .push((ht, tag, word, f));
+            }
+        }
+    }
+
+    /// B-2026-09-17-21 — is this `shared`/`par` enum variant field's box ARMED, i.e. did
+    /// [`Self::register_shared_enum_boxed_payload_interior_drops`] put an
+    /// interior walk behind it?
+    ///
+    /// The constructor's retraction of the named source is gated on this and
+    /// must be: retracting a source whose box has no interior walk stands the
+    /// ONLY owner down, which is the leak mirror this family keeps rediscovering
+    /// (B-2026-09-13-15, then B-2026-09-17-9 one site over). A payload whose
+    /// type the recursive-drop family cannot walk completely yields `None` from
+    /// `enum_boxed_payload_interior_drop`, and for that field the source keeps
+    /// its drop exactly as before this row.
+    pub(super) fn shared_enum_field_interior_is_armed(
+        &self,
+        enum_name: &str,
+        variant: &str,
+        field_index: usize,
+    ) -> bool {
+        let Some(info) = self.type_decls.shared_types.get(enum_name) else {
+            return false;
+        };
+        let Some(layout) = self.type_decls.enum_layouts.get(enum_name) else {
+            return false;
+        };
+        let (Some(tag), Some(offs)) = (
+            layout.tags.get(variant),
+            layout.field_word_offsets.get(variant),
+        ) else {
+            return false;
+        };
+        let Some((start_word, _)) = offs.get(field_index) else {
+            return false;
+        };
+        let tag_idx: u32 = if self.heap_type_is_weak_headered(info.heap_type) {
+            2
+        } else {
+            1
+        };
+        let word = tag_idx + 1 + *start_word as u32;
+        self.drop_rc
+            .shared_enum_boxed_interior_drop_fns
+            .iter()
+            .any(|(t, g, w, _)| *t == info.heap_type && *g == *tag && *w == word)
+    }
+
+    /// B-2026-09-17-21 — does ANY field of this `shared`/`par` enum variant
+    /// carry an armed box? The cheap variant-level gate; the per-field question
+    /// is [`Self::shared_enum_field_interior_is_armed`].
+    pub(super) fn shared_enum_variant_has_armed_interior(
+        &self,
+        enum_name: &str,
+        variant: &str,
+    ) -> bool {
+        let Some(layout) = self.type_decls.enum_layouts.get(enum_name) else {
+            return false;
+        };
+        let n = layout
+            .field_word_offsets
+            .get(variant)
+            .map(|o| o.len())
+            .unwrap_or(0);
+        (0..n).any(|fi| self.shared_enum_field_interior_is_armed(enum_name, variant, fi))
     }
 
     /// Recursively test whether `agg_ty` (a tuple / struct LLVM type) holds

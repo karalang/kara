@@ -100853,4 +100853,207 @@ fn main() {
             "b2026-09-20-13-reused-by-value-generic-enum-arg",
         );
     }
+    /// B-2026-09-17-21 — a `shared enum`'s heap-BOXED nameless-aggregate
+    /// payload now owns its INTERIOR, not just its envelope.
+    ///
+    /// B-2026-09-15-10 gave the box itself an owner and left the elements
+    /// "to whoever owns them, and for a shared enum that is still the SOURCE".
+    /// The row filed against that remainder described the axis as PROVENANCE —
+    /// a temporary leaks, a named local reaches 0/0 — and proposed arming the
+    /// interior for a temp source only. Measured at `KARAC_OPT_LEVEL=0
+    /// KARAC_AUTO_PAR=0` under `valgrind --leak-check=full`, with an
+    /// invalid-read column, there are THREE regimes and the axis is not
+    /// provenance but WHICH DIES FIRST:
+    ///
+    ///     named local, handle dies inside its scope    0 lost,  0 invalid
+    ///     named local, handle OUTLIVES the block       0 lost,  2 INVALID READS
+    ///     named local, handle leaves the frame        54 lost,  0 invalid
+    ///     temporary, every spelling                52-162 lost,  0 invalid
+    ///
+    /// Cell D below is the second regime. The source's own drop frees a
+    /// 27-byte element string at the block's exit and `memmove` reads it back
+    /// through the surviving handle — and it prints the RIGHT characters, so
+    /// every output oracle in this tree scores that cell as correct. Only the
+    /// invalid-read column sees it, which is why this fixture exists in the
+    /// ASAN file and has no twin in `tests/codegen.rs`.
+    ///
+    /// WHAT IS ASSERTED HERE THAT PROSE CANNOT BE: the MUST-STAY-DECLINED
+    /// cells. Arming the box without retracting the named source double-frees
+    /// every cell where the source's own drop still runs, so cells 8, 9, A, B,
+    /// H and I are the real gate on this change — a double free there is what
+    /// a wrong version of it looks like. Cell B is the read-after-move shape,
+    /// where `suppress_array_local_move_into_ctor` declines because a defensive
+    /// copy happened: two objects, two frees, and the source's own read still
+    /// intact (it prints the same string twice on purpose). Cell E is the arm
+    /// that hands the payload out of the box, which reported TWO INVALID FREES
+    /// against an intermediate version of this fix that armed the box without
+    /// admitting shared enums to `register_boxed_array_payload_alias`.
+    ///
+    /// EVERY CELL'S STRINGS HAVE A DISTINCT LENGTH, so if the widening ever
+    /// goes wrong the leaked or double-freed byte count names which cell moved
+    /// rather than leaving a total to apportion.
+    ///
+    /// NO CELL'S ELEMENT RUNS A USER `Drop` BODY, and the omission is
+    /// deliberate. `shared enum Sh { S(Array[R, 2]), N }` for an `R` with an
+    /// `impl Drop` is memory-clean under this fix (54 B leaked before, 0
+    /// after) but runs NEITHER body on the compiled backends while `--interp`
+    /// runs both — measured identically on `origin/main`, so it is not this
+    /// change's doing. That divergence is B-2026-09-20-2. A cell carrying it
+    /// would have to assert the wrong output to stay green, which is a pin on
+    /// a bug's wrong answer, so it is cited rather than written.
+    ///
+    /// FLOORED at 80 allocations for the usual reason: orphaned element
+    /// buffers are exactly what LLVM deletes when nothing observes them, so
+    /// every cell reads its payload's CONTENTS rather than its length.
+    #[test]
+    fn asan_shared_enum_boxed_array_payload_interior_has_an_owner() {
+        assert_clean_asan_run_min_allocs(
+            r#"
+shared enum Sh { S(Array[String, 2]), N }
+shared enum Nst { S(Array[Array[String, 2], 2]), N }
+shared enum Two { A(Array[String, 2]), B(Array[i64, 3]), N }
+shared enum Sc { S(Array[i64, 2]), N }
+
+fn mk1(t: String) -> Array[String, 2] { return [f"c1-{t}-a", f"c1-{t}-bb"]; }
+fn mk2(t: String) -> Array[String, 2] { return [f"c2-{t}-aaa", f"c2-{t}-bbbb"]; }
+fn mk3(t: String) -> Array[String, 2] { return [f"c3-{t}-aaaaa", f"c3-{t}-bbbbbb"]; }
+fn mk4(t: String) -> Array[String, 2] { return [f"c4-{t}-aaaaaaa", f"c4-{t}-bbbbbbbb"]; }
+fn mk7(t: String) -> Array[String, 2] { return [f"c7-{t}-aaaaaaaaa", f"c7-{t}-bbbbbbbbbb"]; }
+fn mk8(t: String) -> Array[String, 2] { return [f"c8-{t}-aaaaaaaaaaa", f"c8-{t}-bbbbbbbbbbbb"]; }
+fn mkB(t: String) -> Array[String, 2] { return [f"cB-{t}-aaaaaaaaaaaaa", f"cB-{t}-bbbbbbbbbbbbbb"]; }
+fn mkC(t: String) -> Array[String, 2] { return [f"cC-{t}-aaaaaaaaaaaaaaa", f"cC-{t}-bbbbbbbbbbbbbbbb"]; }
+fn mkD(t: String) -> Array[String, 2] { return [f"cD-{t}-aaaaaaaaaaaaaaaaa", f"cD-{t}-bbbbbbbbbbbbbbbbbb"]; }
+fn mkE(t: String) -> Array[String, 2] { return [f"cE-{t}-aaaaaaaaaaaaaaaaaaa", f"cE-{t}-bbbbbbbbbbbbbbbbbbbb"]; }
+fn mkF(t: String) -> Array[String, 2] { return [f"cF-{t}-aaaaaaaaaaaaaaaaaaaaa", f"cF-{t}-bbbbbbbbbbbbbbbbbbbbbb"]; }
+
+fn look(s: Sh) -> i64 { match s { Sh.S(x) => { return x[0].len(); } Sh.N => { return 0; } } }
+fn takeout(s: Sh) -> Array[String, 2] { match s { Sh.S(x) => { return x; } Sh.N => { return mk1("z"); } } }
+fn fwd(a: Array[String, 2]) -> Array[String, 2] { return a; }
+fn build() -> Sh { let a = mkC("fr"); return Sh.S(a); }
+
+fn main() {
+    // 1 TEMP from a call.
+    { let s = Sh.S(mk1("t")); match s { Sh.S(x) => { println(f"1:{x[0]}"); } Sh.N => { println("e"); } } }
+    // 2 TEMP, two handles to ONE box: exactly one free.
+    { let s1 = Sh.S(mk2("t")); let s2 = s1; match s2 { Sh.S(x) => { println(f"2:{x[1]}"); } Sh.N => { println("e"); } } }
+    // 3 TEMP, three constructions in a loop.
+    let mut i: i64 = 0;
+    while i < 3 {
+        { let s = Sh.S(mk3(f"{i}")); match s { Sh.S(x) => { println(f"3:{x[0]}"); } Sh.N => { println("e"); } } }
+        i = i + 1;
+    }
+    // 4 TEMP, two of them held by a Vec.
+    {
+        let mut v: Vec[Sh] = Vec.new();
+        v.push(Sh.S(mk4("p")));
+        v.push(Sh.S(mk4("q")));
+        match v[0] { Sh.S(x) => { println(f"4:{x[0]}"); } Sh.N => { println("e"); } }
+        match v[1] { Sh.S(x) => { println(f"4:{x[1]}"); } Sh.N => { println("e"); } }
+    }
+    // 5 TEMP, nested aggregate as an inline literal.
+    { let s = Nst.S([[f"c5-aaaaaaaaaaaaaaaaaaaaaaa", f"c5-bbbbbbbbbbbbbbbbbbbbbbbb"], [f"c5-ccccccccccccccccccccccccc", f"c5-dddddddddddddddddddddddddd"]]);
+      match s { Nst.S(x) => { println(f"5:{x[0][0]}/{x[1][1]}"); } Nst.N => { println("e"); } } }
+    // 6 TEMP, inline flat literal -- a literal is a temp too.
+    { let s = Sh.S([f"c6-aaaaaaaaaaaaaaaaaaaaaaaaaaa", f"c6-bbbbbbbbbbbbbbbbbbbbbbbbbbbb"]);
+      match s { Sh.S(x) => { println(f"6:{x[0]}"); } Sh.N => { println("e"); } } }
+    // 7 TEMP routed through a by-value parameter and returned.
+    { let s = Sh.S(fwd(mk7("t"))); match s { Sh.S(x) => { println(f"7:{x[0]}"); } Sh.N => { println("e"); } } }
+
+    // 8 NAMED, handle dies inside the local's scope -- MUST STAY DECLINED.
+    let a8 = mk8("n");
+    { let s = Sh.S(a8); match s { Sh.S(x) => { println(f"8:{x[0]}"); } Sh.N => { println("e"); } } }
+    // 9 NAMED nested -- MUST STAY DECLINED.
+    let a9: Array[Array[String, 2], 2] = [[f"c9-aaaaaaaaaaaaaaaaaaaaaaaaaaaaa", f"c9-bbbbbbbbbbbbbbbbbbbbbbbbbbbbbb"], [f"c9-ccccccccccccccccccccccccccccc", f"c9-dddddddddddddddddddddddddddddd"]];
+    { let s = Nst.S(a9); match s { Nst.S(x) => { println(f"9:{x[1][1]}"); } Nst.N => { println("e"); } } }
+    // A NAMED, two handles -- MUST STAY DECLINED, and still exactly one free.
+    let aA: Array[String, 2] = [f"cA-aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa", f"cA-bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb"];
+    { let s1 = Sh.S(aA); let s2 = s1; match s2 { Sh.S(x) => { println(f"A:{x[1]}"); } Sh.N => { println("e"); } } }
+    // B NAMED, READ AFTER the move: the defensive copy gives the box its own
+    // buffers, so the source keeps its drop and this must not double-free.
+    let aB = mkB("n");
+    { let s = Sh.S(aB); match s { Sh.S(x) => { println(f"B:{x[0]}"); } Sh.N => { println("e"); } } }
+    println(f"B:{aB[0]}");
+
+    // C NAMED, handle leaves the FRAME -- leaked before this fix.
+    { let s = build(); match s { Sh.S(x) => { println(f"C:{x[1]}"); } Sh.N => { println("e"); } } }
+    // D NAMED, handle OUTLIVES the local's block -- READ FREED MEMORY before.
+    let mut keep: Sh = Sh.N;
+    { let aD = mkD("n"); keep = Sh.S(aD); }
+    match keep { Sh.S(x) => { println(f"D:{x[0]}"); } Sh.N => { println("e"); } }
+
+    // E an arm RETURNS the payload out of the box: the box must not free what
+    // the arm handed on. Two invalid frees without the alias disarm.
+    { let a = takeout(Sh.S(mkE("t"))); println(f"E:{a[1]}"); }
+    // F the handle is REASSIGNED: the first box is freed exactly once.
+    { let mut s: Sh = Sh.S(mkF("one")); match s { Sh.S(x) => { println(f"F:{x[0]}"); } Sh.N => { println("e"); } }
+      s = Sh.S(mkF("two")); match s { Sh.S(x) => { println(f"F:{x[0]}"); } Sh.N => { println("e"); } } }
+    // G the handle passed BY VALUE to a function.
+    { let s = Sh.S(mk1("g")); println(f"G:{look(s)}"); }
+    // H two boxing variants, one named source each.
+    let aH: Array[String, 2] = [f"cH-aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa", f"cH-bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb"];
+    { let s = Two.A(aH); match s { Two.A(v) => { println(f"H:{v[0]}"); } Two.B(w) => { println(f"{w[0]}"); } Two.N => { println("e"); } } }
+    let aI: Array[i64, 3] = [1, 2, 3];
+    { let s = Two.B(aI); match s { Two.A(v) => { println(f"{v[0]}"); } Two.B(w) => { println(f"I:{w[2]}"); } Two.N => { println("e"); } } }
+    // J scalar payload: no interior at all, the cleanest control on the walk.
+    { let s = Sc.S([7, 8]); match s { Sc.S(x) => { println(f"J:{x[0]}/{x[1]}"); } Sc.N => { println("e"); } } }
+    println("done");
+}
+"#,
+            &[
+                "1:c1-t-a",
+                "2:c2-t-bbbb",
+                "3:c3-0-aaaaa",
+                "3:c3-1-aaaaa",
+                "3:c3-2-aaaaa",
+                "4:c4-p-aaaaaaa",
+                "4:c4-q-bbbbbbbb",
+                "5:c5-aaaaaaaaaaaaaaaaaaaaaaa/c5-dddddddddddddddddddddddddd",
+                "6:c6-aaaaaaaaaaaaaaaaaaaaaaaaaaa",
+                "7:c7-t-aaaaaaaaa",
+                "8:c8-n-aaaaaaaaaaa",
+                "9:c9-dddddddddddddddddddddddddddddd",
+                "A:cA-bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
+                "B:cB-n-aaaaaaaaaaaaa",
+                "B:cB-n-aaaaaaaaaaaaa",
+                "C:cC-fr-bbbbbbbbbbbbbbbb",
+                "D:cD-n-aaaaaaaaaaaaaaaaa",
+                "E:cE-t-bbbbbbbbbbbbbbbbbbbb",
+                "F:cF-one-aaaaaaaaaaaaaaaaaaaaa",
+                "F:cF-two-aaaaaaaaaaaaaaaaaaaaa",
+                "G:6",
+                "H:cH-aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+                "I:3",
+                "J:7/8",
+                "done",
+            ],
+            "asan_shared_enum_boxed_array_payload_interior_has_an_owner",
+            80,
+        );
+
+        // The Arc path. Same layout, different release function — the half the
+        // first cut of B-2026-09-15-10 left leaking, asked again here for the
+        // interior. Temp, named, and the escaping-named regime in one program.
+        assert_clean_asan_run(
+            r#"
+par enum Pr { S(Array[String, 2]), N }
+fn mkp(t: String) -> Array[String, 2] { return [f"p-{t}-aaaaaaaaaaaaaaaaaaaa", f"p-{t}-bbbbbbbbbbbbbbbbbbbb"]; }
+fn main() {
+    { let s = Pr.S(mkp("t")); match s { Pr.S(x) => { println(f"par-temp:{x[0]}"); } Pr.N => { println("e"); } } }
+    let a = mkp("n");
+    { let s = Pr.S(a); match s { Pr.S(x) => { println(f"par-named:{x[1]}"); } Pr.N => { println("e"); } } }
+    let mut keep: Pr = Pr.N;
+    { let b = mkp("d"); keep = Pr.S(b); }
+    match keep { Pr.S(x) => { println(f"par-escape:{x[0]}"); } Pr.N => { println("e"); } }
+    println("done");
+}
+"#,
+            &[
+                "par-temp:p-t-aaaaaaaaaaaaaaaaaaaa",
+                "par-named:p-n-bbbbbbbbbbbbbbbbbbbb",
+                "par-escape:p-d-aaaaaaaaaaaaaaaaaaaa",
+                "done",
+            ],
+            "b1721-par-enum-arc-path-interior",
+        );
+    }
 }

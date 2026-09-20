@@ -6304,12 +6304,62 @@ impl<'ctx> super::Codegen<'ctx> {
         };
         let i64_t = self.context.i64_type();
         let ptr_ty = self.context.ptr_type(inkwell::AddressSpace::default());
-        let Ok(word_ptr) = self.builder.build_struct_gep(
-            layout.llvm_type,
-            slot,
-            (start_word + 1) as u32,
-            "boxarr.alias.wp",
-        ) else {
+        // B-2026-09-17-21 — where the payload WORD lives differs by kind, and only here.
+        // A non-shared enum's slot holds the `{tag, w0, ..}` value inline. A
+        // `shared`/`par` enum's slot holds the RC HANDLE, and the words are in
+        // the heap object behind it, one index further along because of the
+        // refcount header (two for a weak-headered box). Reusing the inline GEP
+        // for a shared slot would zero whatever eight bytes follow the handle.
+        let shared_join = if layout.is_shared {
+            Some(
+                self.context
+                    .append_basic_block(cur_fn, "boxarr.alias.hjoin"),
+            )
+        } else {
+            None
+        };
+        let Ok(word_ptr) = (if let Some(hjoin) = shared_join {
+            let Some(info) = self
+                .type_decls
+                .shared_types
+                .get(enum_name.as_str())
+                .cloned()
+            else {
+                return;
+            };
+            let handle = self
+                .builder
+                .build_load(ptr_ty, slot, "boxarr.alias.h")
+                .unwrap()
+                .into_pointer_value();
+            let hnull = self
+                .builder
+                .build_is_null(handle, "boxarr.alias.hisnull")
+                .unwrap();
+            let cont = self.context.append_basic_block(cur_fn, "boxarr.alias.cont");
+            self.builder
+                .build_conditional_branch(hnull, hjoin, cont)
+                .unwrap();
+            self.builder.position_at_end(cont);
+            let tag_idx: u32 = if self.heap_type_is_weak_headered(info.heap_type) {
+                2
+            } else {
+                1
+            };
+            self.builder.build_struct_gep(
+                info.heap_type,
+                handle,
+                tag_idx + 1 + start_word as u32,
+                "boxarr.alias.wp",
+            )
+        } else {
+            self.builder.build_struct_gep(
+                layout.llvm_type,
+                slot,
+                (start_word + 1) as u32,
+                "boxarr.alias.wp",
+            )
+        }) else {
             return;
         };
         let w = self
@@ -6336,6 +6386,11 @@ impl<'ctx> super::Codegen<'ctx> {
             .unwrap();
         self.builder.build_unconditional_branch(join_bb).unwrap();
         self.builder.position_at_end(join_bb);
+        // Rejoin the handle-null guard the shared arm opened above.
+        if let Some(hjoin) = shared_join {
+            self.builder.build_unconditional_branch(hjoin).unwrap();
+            self.builder.position_at_end(hjoin);
+        }
     }
 
     fn store_enum_word(
