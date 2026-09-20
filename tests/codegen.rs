@@ -168678,6 +168678,65 @@ fn main() {
             Some("hg:13\nhm:13\nrg:13\nhg:13\nhm:13\nrg:13\nhg:13\nhm:13\nrg:13\nend\n"),
         );
     }
+
+    /// B-2026-09-19-49 — an `Array[T, N]` enum payload narrow enough to ride
+    /// INLINE keeps its VALUE.
+    ///
+    /// `coerce_to_payload_words` opens with a fast path taken when the variant
+    /// slot is one word and the value is one word wide, and it handed the value
+    /// to `coerce_to_i64`, whose tail returns a literal ZERO for any aggregate
+    /// it does not recognise — and it recognises a one-FIELD struct, not an
+    /// array. So the payload was destroyed AT THE PACK and every reader
+    /// downstream was faithfully correct about a zero. That is why the row
+    /// measured valgrind CLEAN: nothing is corrupt, the zero is simply what was
+    /// stored.
+    ///
+    /// The width is what hid it. `payload_word_count_for_type_expr` sizes a
+    /// source-written `Array[T, N]` at its conservative one-word tail, so only
+    /// an array whose elements total one word satisfies BOTH halves of that
+    /// guard — `Array[Sd, 2]` and every wider element already took the
+    /// per-element arms and were correct. An array payload wrong at exactly one
+    /// width is the signature.
+    ///
+    /// The `Option` line is a built-in control rather than extra coverage: the
+    /// seeded envelope's payload area is three words, so `num_words <= 1` is
+    /// false there and it never took the fast path. It printed the right value
+    /// before this fix and after it, which is what pins the defect to the SLOT
+    /// WIDTH rather than to arrays.
+    #[test]
+    fn e2e_inline_array_enum_payload_keeps_its_value() {
+        let src = r#"
+struct Cell { v: i64 }
+impl Drop for Cell { fn drop(mut ref self) { println(f"dc{self.v}") } }
+
+enum One { P(Array[Cell, 1]), Q }
+
+fn main() {
+    let mut n = 0;
+    while n < 3 {
+        let a: Array[Cell, 1] = [Cell { v: 10 + n }];
+        let g: One = One.P(a);
+        println("bound");
+        let b: Array[Cell, 1] = [Cell { v: 20 + n }];
+        One.P(b);
+        println("dropped");
+        let c: Array[Cell, 1] = [Cell { v: 30 + n }];
+        let o: Option[Array[Cell, 1]] = Some(c);
+        println("opt");
+        n = n + 1;
+    }
+    println("end");
+}
+"#;
+        let mut want = String::new();
+        for n in 0..3 {
+            want.push_str(&format!("dc{}\nbound\n", 10 + n));
+            want.push_str(&format!("dc{}\ndropped\n", 20 + n));
+            want.push_str(&format!("dc{}\nopt\n", 30 + n));
+        }
+        want.push_str("end\n");
+        assert_eq!(run_program(src).as_deref(), Some(want.as_str()));
+    }
 }
 
 #[cfg(feature = "llvm")]

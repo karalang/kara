@@ -15975,7 +15975,37 @@ impl<'ctx> super::Codegen<'ctx> {
         // exactly what unpack (`reconstruct_payload_value`) and drop expect, so
         // all three sites stay coherent. A genuine scalar (width ≤ 1) keeps the
         // fast path.
-        if num_words <= 1 && Self::llvm_type_word_count(val.get_type()) <= 1 {
+        // B-2026-09-19-49 — an ARRAY or VECTOR value must never take this fast
+        // path, however narrow it is. `coerce_to_i64`'s tail returns a literal
+        // ZERO for any aggregate it does not recognise, and it recognises only
+        // a one-FIELD struct; an `[1 x { i64 }]` is neither, so a one-word
+        // array payload was packed as a constant 0 and every reader downstream
+        // was correct about a value that had already been destroyed here. That
+        // is why `enum D1 { P(Array[Sd, 1]), Q }` ran its element's `Drop` body
+        // printing `dSd0` for an element constructed at 41, on the JIT, `-O0`
+        // and `-O2` alike, with valgrind CLEAN — nothing is corrupt, the zero
+        // is simply what was stored.
+        //
+        // The width is what hid it: `payload_word_count_for_type_expr` sizes a
+        // source-written `Array[T, N]` at its conservative one-word tail, so an
+        // array whose elements total one word satisfies BOTH halves of this
+        // guard and is the only array shape that reaches it. Anything wider
+        // already fell through to the per-element arms below, which is why
+        // `Array[Sd, 2]`, `Array[S2w, 1]` and `Array[S3w, 1]` were all correct.
+        //
+        // Excluding the two aggregate kinds sends them to the `ArrayValue` /
+        // struct arms below, which recurse per element and produce the same
+        // one word — correct this time. This is the same hole B-2026-08-31-18
+        // closed for an array or vector FIELD of a struct payload; it was left
+        // open for the whole value.
+        let val_is_lane_aggregate = matches!(
+            val,
+            BasicValueEnum::ArrayValue(_) | BasicValueEnum::VectorValue(_)
+        );
+        if num_words <= 1
+            && Self::llvm_type_word_count(val.get_type()) <= 1
+            && !val_is_lane_aggregate
+        {
             return Ok(vec![self.coerce_to_i64(val)?]);
         }
         let mut out: Vec<inkwell::values::IntValue<'ctx>> = Vec::with_capacity(num_words.max(1));
