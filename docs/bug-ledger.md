@@ -92,10 +92,10 @@ distinguish "bugs flattening" from "we stopped writing them down."
 
 | class | total |
 |---|---|
-| run-vs-build | 459 |
+| run-vs-build | 460 |
 | miscompile | 428 |
 | leak | 385 |
-| double-free | 259 |
+| double-free | 260 |
 | missing-feature | 202 |
 | codegen-gap | 181 |
 | other | 139 |
@@ -110,7 +110,7 @@ distinguish "bugs flattening" from "we stopped writing them down."
 
 | surface | total |
 |---|---|
-| codegen | 1908 |
+| codegen | 1910 |
 | interp | 494 |
 | typecheck | 302 |
 | other | 102 |
@@ -197,7 +197,6 @@ _Generated from `bug-ledger.jsonl` by `scripts/bug-curve.py` (2026-05-20 → 202
 | B-2026-09-19-45 | 2026-09-19 | codegen | medium | A DECLARED `Array[E, N]` ENUM PAYLOAD WHOSE ELEMENT IS A USER ENUM STRANDS THE ELEMENT'S HEAP -- `enum Ha { P(Array[Mono, 1]), Q }` over `enum Mono { P(R2), Q }` loses 80 B + 11 B at `-O0` while the GENERIC twin `G[Array[Mono, 1]]`, the same element type and count, is clean, and so is the `Vec[Mono]` payload beside it | — |
 | B-2026-09-19-46 | 2026-09-19 | codegen+interp | low | A DECLARED TUPLE ENUM PAYLOAD RUNS NO ELEMENT `Drop` BODY ON ANY BACKEND -- `enum Ht { P((S1, S1)), Q }` prints nothing on `--interp`, the JIT, `-O0` and `-O2` alike, while the GENERIC spelling `G.X((S1, S1))` runs both on every compiled surface and neither under `--interp`, so codegen's tuple walk is reached through one head and not the other and the interpreter reaches it through neither | — |
 | B-2026-09-19-47 | 2026-09-19 | codegen+interp | low | A `Vec` INSIDE AN `Option` INSIDE A GENERIC ENUM PAYLOAD RUNS NO ELEMENT `Drop` BODY ON ANY BACKEND -- `G.X(o)` over `Option[Vec[S1]]` prints nothing on all four surfaces where the one-level-shallower control `let o: Option[Vec[S1]]` prints `dS6`, and the codegen half is one parameter away while the interpreter half wants B-2026-09-17-15's instantiation chain | — |
-| B-2026-09-19-48 | 2026-09-19 | codegen | medium | A NAMED-LOCAL `Option` ARGUMENT WHOSE PAYLOAD IS A NAMED STRUCT RUNS THE SURVIVING FIELD'S `Drop` BODY TWICE ON EVERY COMPILED SURFACE, and an arm that moves NOTHING doubles BOTH fields -- `let a = Some(Q { r, s }); take(a)` over `fn take(o: Option[Q]) { match o { Some(t) => { let x = t.r; .. } .. } }` prints `dR5 mid dR6 dR6` on jit / `karac build` / `KARAC_AUTO_PAR=0` against the interpreter's `dR5 mid dR6`; the exact complement of B-2026-09-17-38, which LOST the surviving part for a TUPLE payload at the same commit, and the FRESH-TEMP spelling of both struct cells is correct throughout | — |
 | B-2026-09-19-50 | 2026-09-19 | codegen+interp | medium | A DECLARED `Array[E, N]` PAYLOAD WHOSE ELEMENT IS A USER ENUM RUNS THE ELEMENT'S PAYLOAD `Drop` BODIES ON EVERY COMPILED SURFACE AND NONE UNDER `--interp` -- `enum Ha { P(Array[Mono, 1]), Q }` over `enum Mono { P(R), Q }` diverges at four positions (let-bound, discarded, whole move, consuming match arm) and is an agreed silence at two (fresh-temp argument, struct field), while the struct-element control `Array[R, 2]` agrees on all four surfaces at every position. The two halves have DIFFERENT causes -- the interpreter's declared-`Array` arm dispatches a `Value::Struct` element only, and the two gaps are a measured payload-WIDTH artifact -- so it cannot be closed one position at a time | — |
 | B-2026-09-19-52 | 2026-09-19 | codegen | high | A STRUCT-SHAPED VARIANT'S BOXED `Array` PAYLOAD HANDED TO A BY-VALUE CALLEE ABORTS ON BOTH SPELLINGS -- `match g { G.S { a } => eat(a) }` over `Array[String, 2]` exits 134 with 4 valgrind errors, generic AND mono alike, while the tuple-variant spelling of the same program is clean after B-2026-09-19-40 and the read-only arm of this one is clean too, so the hand-on fault survives wherever the pattern is struct-shaped | — |
 | B-2026-09-19-53 | 2026-09-19 | codegen | high | A `shared enum`'s HEAP PAYLOAD IS NEVER FREED, whatever the arm does and whatever the payload is -- a read-only arm over `shared enum G[T] { Y(T), N }` strands 96 B for `Array[String, 2]` and 48 B for `Vec[String]` with output correct on every backend, and the `Array` hand-on arm additionally ABORTS at exit 134 with 96 B still lost, so there are two faults layered on one shape | — |
@@ -225,6 +224,8 @@ _Generated from `bug-ledger.jsonl` by `scripts/bug-curve.py` (2026-05-20 → 202
 | B-2026-09-20-17 | 2026-09-20 | codegen+interp | medium | REBINDING A BOXED `Option` TUPLE PAYLOAD BEFORE PROJECTING OUT OF IT RUNS THE ESCAPING PART'S `Drop` BODY TWICE ON ALL FOUR SURFACES AT ONCE -- `Some(t) => { let u = t; return u.0; }` prints `dH5 dH6 got:5 dH5 end` everywhere against a hand-derived due of `dH6 got:5 dH5 end`, so no A/B against the interpreter can see it and no sanitizer can either; the SAME arm without the intermediate local is correct since B-2026-09-19-34 and the same arm with the local and no projection doubles BOTH parts (B-2026-09-20-16), so the three spellings of taking a payload out through a local behave three different ways | — |
 | B-2026-09-20-18 | 2026-09-20 | codegen+interp | medium | TWO GUARDED `Some` ARMS OVER ONE SCRUTINEE, EACH TAKING A DIFFERENT PAYLOAD ELEMENT, ARE WRONG ON EVERY SURFACE AND THE PAYLOAD'S WIDTH PICKS THE DIRECTION -- at the INLINE width all four lose the untaken sibling's body (`got:5 dR5 end` against a due `dR6 got:5 dR5 end`, an AGREED fault); at the BOXED width the interpreter loses it while the three compiled surfaces DOUBLE the taken one, so neither backend is an oracle; every consumer of an arm's take rewrites state that is not edge-sensitive, so the last arm to write decides, and B-2026-09-19-34's narrowing declines here deliberately because masking one arm's element would LOSE the other's | — |
 | B-2026-09-20-19 | 2026-09-20 | interp+codegen | medium | THE INTERPRETER RUNS AN EXTRA `Drop` BODY FOR THE PART A CONSUMING ARM MOVES INTO ITS OWN FRAME, AT BOTH PAYLOAD WIDTHS -- `Some(t) => { let x = t.0; println("mid"); return x; }` prints `mid dH5 dH6 got:5 dH5 end` interpreted against the due `mid dH6 got:5 dH5 end`, and a nested two-local spelling behaves the same; the compiled side is CORRECT at the boxed width since B-2026-09-19-34 and LOSES the untaken sibling's body at the inline width (`mid got:5 dR5 end`), which is the second half of this row -- one shape, the width selecting which extra half is wrong | — |
+| B-2026-09-20-20 | 2026-09-20 | codegen | medium | A CALL RESULT THAT RETURNS THE WHOLE `Option` DOUBLES THE MOVED-OUT FIELD'S `Drop` BODY ON EVERY COMPILED SURFACE -- `take(mkq())` over `fn mkq() -> Option[Q]` and `fn take(o: Option[Q]) { match o { Some(t) => { let x = t.r; .. } .. } }` prints `r:50s:60 dR5 dR6 dR5` on jit / `karac build` / `-O0` / `-O2` against the interpreter's correct `r:50s:60 dR5 dR6`, where the same callee at NAMED-LOCAL and FRESH-TEMP provenance is correct and the TUPLE payload's twin `ttake(mkt())` is correct too, so the trigger is the CALL-RESULT provenance of a named-struct payload and not the move-out | — |
+| B-2026-09-20-21 | 2026-09-20 | codegen | high | COMPOSITION CHANGES THE ANSWER IN THE `Drop`-BODY-OWNERSHIP FAMILY: a boxed TUPLE `Option` payload's surviving element runs its `Drop` body twice and then double-frees, but ONLY when a NAMED-STRUCT payload cell appears earlier in the same program -- `let a = Option.Some((mkr(5), mkr(6))); ttake(a)` over `fn ttake(o: Option[(R, R)]) { match o { Some(t) => { let x = t.0; .. } .. } }` with `struct R { id: i64, v: i64 }` prints `dR5v50 dR6v60 dR6v60` and aborts with `free(): double free detected in tcache 2` on jit / `karac build` / `-O0` / `-O2`, while the identical cell alone in its own program is correct on all four surfaces -- so every one-program-per-cell sweep in this family is blind to this class by construction | — |
 
 ### Relocated
 
@@ -2758,6 +2759,7 @@ _Generated from `bug-ledger.jsonl` by `scripts/bug-curve.py` (2026-05-20 → 202
 | B-2026-09-19-39 | codegen | medium | A GENERIC MULTI-FIELD VARIANT WITH A HEAP-BEARING SIBLING CANNOT TAKE A `BoxedEnumDrop` WITHOUT LOSING THE SIBLING -- `enum Gh[T] { Y(T, String), N }… | 9648154 |
 | B-2026-09-19-40 | codegen | high | AN ARM THAT HANDS A GENERIC BOXED `Array` PAYLOAD TO A BY-VALUE CALLEE INVALID-FREES ON STOCK `main` -- `match g { G1.Y(x) => eat(x) }` over `G1[Arra… | 7934c5b |
 | B-2026-09-19-41 | codegen | medium | A `Drop`-BEARING NAMED FIELD MOVED OUT OF AN `Option` PAYLOAD RUNS ITS BODY LATE, TWICE, OR NOT AT ALL ON THE COMPILED BACKENDS -- `Some(t) => { let… | c6c4cf8 |
+| B-2026-09-19-48 | codegen | medium | A NAMED-LOCAL `Option` ARGUMENT WHOSE PAYLOAD IS A NAMED STRUCT RUNS THE SURVIVING FIELD'S `Drop` BODY TWICE ON EVERY COMPILED SURFACE, and an arm th… | 1aff971 |
 | B-2026-09-19-49 | codegen | high | AN `Array[S, 1]` ENUM PAYLOAD RUNS ITS ELEMENT'S `Drop` BODY AGAINST THE WRONG MEMORY ON EVERY COMPILED SURFACE -- `enum D1 { P(Array[Sd, 1]), Q }` p… | 5358868 |
 | B-2026-09-19-51 | codegen | medium | A STRUCT'S ENUM FIELD HANDED TO A BY-VALUE CALLEE IS FREED TWICE, because a moved-out enum field is never neutralised the way a moved-out `Vec`/`Stri… | 6431067 |
 | B-2026-09-19-55 | interp | medium | AN ASSOCIATED FUNCTION WHOSE NAME IS SHARED WITH ANOTHER INHERENT IMPL MAKES THE INTERPRETER RUN A HANDED-OUT PAYLOAD PART'S `Drop` BODY TWICE -- `A.… | 8ddde42 |
