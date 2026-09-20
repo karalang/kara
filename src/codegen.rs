@@ -2187,6 +2187,24 @@ pub(super) struct Codegen<'ctx> {
     /// `compile_stmt` is after every load in the statement and long before the
     /// owner's scope-exit drop, which is the window the zero has to land in.
     pub(crate) pending_enum_field_zeros: Vec<(inkwell::values::PointerValue<'ctx>, String)>,
+    /// B-2026-09-20-13 — caller enum values to STORE BACK at the end of the
+    /// statement, queued by [`Codegen::uam_copy_boxed_enum_arg`].
+    ///
+    /// `(slot, saved, ty)`: the copy is made IN PLACE in the caller's slot,
+    /// because `move_declined_copy_struct_arg_for` runs BEFORE the argument is
+    /// loaded and the slot is the only channel to the callee. That hands the
+    /// callee the FRESH box, which is what it is entitled to free -- and it
+    /// would leave the caller reading that same fresh box on its next use, so
+    /// the ORIGINAL is saved first and put back here. Drained at the same
+    /// statement-end point as `pending_enum_field_zeros`, for the same reason:
+    /// after every load in the statement, and long before the owner's
+    /// scope-exit drop.
+    pub(crate) pending_uam_enum_restores: Vec<(
+        inkwell::values::PointerValue<'ctx>,
+        inkwell::values::PointerValue<'ctx>,
+        inkwell::types::BasicTypeEnum<'ctx>,
+    )>,
+
     /// B-2026-08-30-2 — did the most recent
     /// `suppress_source_vec_cleanup_for_arg_ex` zero a Vec/String BINDING's
     /// `cap`, and with which element type? The same record-rather-than-rederive
@@ -6349,6 +6367,7 @@ impl<'ctx> Codegen<'ctx> {
             var_types: VarTypes {
                 var_type_names: HashMap::new(),
                 block_tail_type_names: HashMap::new(),
+                var_enum_inst_te: HashMap::new(),
                 tuple_var_elem_type_names: HashMap::new(),
                 tuple_var_elem_type_exprs: HashMap::new(),
                 int_const_locals: std::collections::HashMap::new(),
@@ -6758,6 +6777,7 @@ impl<'ctx> Codegen<'ctx> {
             block_tail_shared_transfer: false,
             shared_transfer_applied: false,
             pending_enum_field_zeros: Vec::new(),
+            pending_uam_enum_restores: Vec::new(),
             vecstr_source_disarmed: None,
             block_tail_binding_unowned: None,
             arm_tail_owner_ctx: None,

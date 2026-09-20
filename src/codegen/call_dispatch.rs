@@ -13008,6 +13008,14 @@ impl<'ctx> super::Codegen<'ctx> {
         // frees the shared buffers in both frames — a double free. Hooked at this
         // shared by-value-owned-arg choke point so every call-arg site is
         // covered. No-op for a temporary or non-owning root.
+        // B-2026-09-20-13 — FIRST, and the order is load-bearing. This runs
+        // before the argument is loaded out of the caller's slot, which is the
+        // only reason a copy placed here can reach the callee at all. The two
+        // enum retractions below then stand down for exactly the arguments it
+        // claims: with the caller's value restored at the end of the statement
+        // the caller is still an owner, so retracting its drop or zeroing its
+        // field would strand the original box instead of handing it on.
+        self.uam_copy_boxed_enum_arg(arg);
         self.suppress_array_binding_move_arg(arg);
         // B-2026-09-07-16 — the ENUM leg of the same rule, hooked at the same
         // choke point so every call-arg site is covered by one call.
@@ -13132,6 +13140,13 @@ impl<'ctx> super::Codegen<'ctx> {
     /// matches the binding's own alloca, so a shadowed generation with a
     /// different slot keeps its cleanup.
     pub(super) fn move_declined_copy_enum_arg(&mut self, arg: &Expr) {
+        // B-2026-09-20-13 — not when the callee got its own box. The retraction
+        // below is correct only because the callee becomes the sole owner; once
+        // the caller's value is restored after the statement there are two
+        // values and two owners, and giving up this drop leaks the original.
+        if self.uam_boxed_enum_arg_will_be_copied(arg) {
+            return;
+        }
         let ExprKind::Identifier(var) = &arg.kind else {
             return;
         };
@@ -13196,6 +13211,13 @@ impl<'ctx> super::Codegen<'ctx> {
     /// 8-byte pointer; zeroing through that would corrupt the caller. Same
     /// gate, same rationale, as `zero_struct_field_move_cap_impl`'s.
     pub(super) fn zero_transfer_owned_enum_field_arg(&mut self, arg: &Expr) {
+        // B-2026-09-20-13 — see `move_declined_copy_enum_arg`'s twin of this
+        // gate. Zeroing the field neutralizes the STRUCT's drop of it, which is
+        // right when the callee took the only box and wrong once the field has
+        // been restored to holding the caller's own.
+        if self.uam_boxed_enum_arg_will_be_copied(arg) {
+            return;
+        }
         let ExprKind::FieldAccess { object, field } = &arg.kind else {
             return;
         };
@@ -13311,6 +13333,379 @@ impl<'ctx> super::Codegen<'ctx> {
         for (field_ptr, ename) in pending {
             if let Some(layout) = self.type_decls.enum_layouts.get(ename.as_str()).cloned() {
                 self.zero_enum_payload_caps(field_ptr, &layout);
+            }
+        }
+    }
+
+    /// B-2026-09-20-13 — the INSTANTIATED enum `TypeExpr` behind a by-value
+    /// call argument the caller still owns, or `None`.
+    ///
+    /// Pure: it reads tables and builds no IR, which is what lets the
+    /// monomorph leg ask the same question its copy asks without the two
+    /// being able to disagree. That mattered: the monomorph path's whole-slot
+    /// move suppression runs in an EARLIER loop than its retraction, so keying
+    /// the disarm on what was really copied read false and undid the copy.
+    ///
+    /// Two spellings, matching the pair `move_declined_copy_enum_arg` and
+    /// `zero_transfer_owned_enum_field_arg` already split this family into: a
+    /// bare binding, and one struct field of a bare binding.
+    ///
+    /// THE FIELD ARM'S BOUNDARY IS GENERICITY OF THE STRUCT, NOT THE DEPTH OF
+    /// THE PLACE, and the difference was measured rather than assumed. A
+    /// CONCRETE struct records its field as `G1[String]`, so `h.g` resolves and
+    /// is fixed. A GENERIC one records the erased `G1[T]`, and nothing codegen
+    /// carries maps `T` back to `String` here — the binding's own instantiation
+    /// (`H[String]`) is not tracked, `subst_monomorph_type_params` substitutes
+    /// the enclosing MONOMORPH's parameters and `main` is not one. That cell
+    /// reads `nboxed = 0`, declines, and stays a use-after-free: 4 invalid
+    /// reads at `-O0`, byte-identical to base. Filed separately rather than
+    /// widened into a memory fix, because recovering the instantiation is a new
+    /// channel and not a predicate tweak.
+    pub(super) fn uam_boxed_enum_arg_te(&mut self, arg: &Expr) -> Option<TypeExpr> {
+        match &arg.kind {
+            ExprKind::Identifier(v) => self.var_types.var_enum_inst_te.get(v.as_str()).cloned(),
+            ExprKind::FieldAccess { object, field } => {
+                let ExprKind::Identifier(s) = &object.kind else {
+                    return None;
+                };
+                let sname = self.var_types.var_type_names.get(s.as_str()).cloned()?;
+                if self.type_decls.shared_types.contains_key(sname.as_str()) {
+                    return None;
+                }
+                let idx = self
+                    .type_decls
+                    .struct_field_names
+                    .get(sname.as_str())?
+                    .iter()
+                    .position(|n| n == field)?;
+                let fte = self
+                    .type_decls
+                    .struct_field_type_exprs
+                    .get(sname.as_str())?
+                    .get(idx)
+                    .cloned()?;
+                // A GENERIC owner records the ERASED field type (`G1[T]`), which
+                // reports no boxing variants, so without this the copy declines
+                // and the cell stays a use-after-free — measured at 4 invalid
+                // reads, byte-identical to base. The substitution is the one the
+                // match lowering already performs for the same reason: recover
+                // the object's instantiation and map the struct's declared
+                // parameters onto its arguments. A concrete owner has no
+                // parameters, `struct_field_te_subst_inst` answers `None`, and
+                // the pre-existing path below is unchanged for it.
+                if let Some(inst) = self.struct_field_te_subst_inst(sname.as_str(), object, &fte) {
+                    return Some(inst);
+                }
+                Some(self.subst_monomorph_type_params(&fte))
+            }
+            _ => None,
+        }
+    }
+
+    /// The same place, resolved to the slot the value sits in.
+    ///
+    /// Returns `(slot, held_ty, te)`. For a field the slot is the field's
+    /// address inside an OWNED inline struct — a `ref Struct` binding's slot
+    /// holds an 8-byte pointer instead, and writing an enum aggregate through
+    /// that would corrupt the caller, so the `StructType` test is a gate and
+    /// not a convenience (the same gate, for the same reason, as
+    /// `zero_transfer_owned_enum_field_arg`'s).
+    fn uam_boxed_enum_arg_place(
+        &mut self,
+        arg: &Expr,
+    ) -> Option<(
+        inkwell::values::PointerValue<'ctx>,
+        BasicTypeEnum<'ctx>,
+        TypeExpr,
+    )> {
+        let te = self.uam_boxed_enum_arg_te(arg)?;
+        match &arg.kind {
+            ExprKind::Identifier(v) => {
+                let slot = self.variables.get(v.as_str()).copied()?;
+                Some((slot.ptr, slot.ty, te))
+            }
+            ExprKind::FieldAccess { object, field } => {
+                let ExprKind::Identifier(s) = &object.kind else {
+                    return None;
+                };
+                let slot = self.variables.get(s.as_str()).copied()?;
+                let BasicTypeEnum::StructType(held) = slot.ty else {
+                    return None;
+                };
+                let sname = self.var_types.var_type_names.get(s.as_str()).cloned()?;
+                let idx = self
+                    .type_decls
+                    .struct_field_names
+                    .get(sname.as_str())?
+                    .iter()
+                    .position(|n| n == field)?;
+                let fp = self
+                    .builder
+                    .build_struct_gep(held, slot.ptr, idx as u32, "b13.fld.p")
+                    .ok()?;
+                let TypeKind::Path(p) = &te.kind else {
+                    return None;
+                };
+                let ename = p.segments.last()?;
+                let layout = self.type_decls.enum_layouts.get(ename.as_str())?;
+                Some((fp, layout.llvm_type.into(), te))
+            }
+            _ => None,
+        }
+    }
+
+    /// Whether [`Self::uam_copy_boxed_enum_arg`] would copy this argument —
+    /// asked, never inferred.
+    ///
+    /// The monomorph leg's move suppression has to stand down on exactly the
+    /// arguments the copy claims, and it runs in an earlier loop than the copy
+    /// does. Reconstructing the answer there from what had been copied so far
+    /// read FALSE and undid the copy: the cell kept its SIGSEGV with the
+    /// marker column reading 4, i.e. the copy had been emitted and then
+    /// disarmed. One predicate, consulted twice, cannot do that.
+    ///
+    /// NOT GATED ON `enum_param_owned_by_transfer`, which reads as the obvious
+    /// "does the callee own this?" test and names a DIFFERENT class: enums
+    /// whose payload the callee's entry copy DECLINES, so the callee inherits
+    /// the caller's memory. A boxed erased payload is not in it — the gate
+    /// answered false for every cell here and the whole fix sat inert, marker 0
+    /// and base-identical output, which is the shape a patch takes when it is
+    /// placed at a site the program never reaches. The question this actually
+    /// needs is the one the discard-side comment on
+    /// `user_enum_boxed_payload_variants` already states as the tree's premise:
+    /// at an ARGUMENT the callee owns the box, registered by the by-value param
+    /// site. So the boxing itself is the gate. Its two escape hatches were
+    /// measured, not reasoned: a `ref` param never reaches this hook at all,
+    /// and a callee that RETURNS the param (`fn idf(g) -> G1[String]`) still
+    /// balances — 14 allocs, 14 frees, no leak — so the widening the missing
+    /// gate looked like it was preventing does not exist.
+    pub(super) fn uam_boxed_enum_arg_will_be_copied(&mut self, arg: &Expr) -> bool {
+        if !matches!(
+            self.source_outlives_move(arg),
+            super::runtime::SourceOutlivesMove::UseAfterMove
+        ) {
+            return false;
+        }
+        let Some(te) = self.uam_boxed_enum_arg_te(arg) else {
+            return false;
+        };
+        let TypeKind::Path(p) = &te.kind else {
+            return false;
+        };
+        let Some(ename) = p.segments.last().cloned() else {
+            return false;
+        };
+        if ename == "Option" || ename == "Result" {
+            return false;
+        }
+        match self.type_decls.enum_layouts.get(ename.as_str()) {
+            Some(l) if !l.is_shared => {}
+            _ => return false,
+        }
+        !self.user_enum_boxed_payload_variants(&te).is_empty()
+    }
+
+    /// Give the CALLEE its own box, and put the CALLER's back afterwards.
+    ///
+    /// THE DIRECTION IS THE WHOLE FIX. `move_declined_copy_struct_arg_for` runs
+    /// BEFORE the argument is loaded out of the caller's slot, so the slot is
+    /// the only channel to the callee: an in-place copy necessarily hands the
+    /// callee the FRESH box. That is right — the callee is the frame that frees
+    /// it — and it leaves the caller reading that same fresh box on its next
+    /// use, with the original owned by nobody. Measured in that state: 19
+    /// valgrind errors and 24 B direct plus 13 indirect lost, in place of the
+    /// 1-error crash it replaced, while every cell printed correctly. So the
+    /// caller's value is SAVED first and stored back at the end of the
+    /// statement, after every load in the statement and long before the
+    /// owner's scope-exit drop — the window `pending_enum_field_zeros` already
+    /// drains in, and for the same reason.
+    pub(super) fn uam_copy_boxed_enum_arg(&mut self, arg: &Expr) {
+        if !self.uam_boxed_enum_arg_will_be_copied(arg) {
+            return;
+        }
+        let Some((slot, held_ty, te)) = self.uam_boxed_enum_arg_place(arg) else {
+            return;
+        };
+        let Some(fn_val) = self.current_fn else {
+            return;
+        };
+        let saved = self.create_entry_alloca(fn_val, "b13.uam.save", held_ty);
+        let Ok(orig) = self.builder.build_load(held_ty, slot, "b13.uam.orig") else {
+            return;
+        };
+        if self.builder.build_store(saved, orig).is_err() {
+            return;
+        }
+        self.deep_copy_erased_boxed_enum_payload_in_place(&te, slot);
+        self.pending_uam_enum_restores.push((slot, saved, held_ty));
+    }
+
+    /// Replace each BOXING variant's box, in place, with a fresh box holding an
+    /// independent clone of the payload.
+    ///
+    /// A SHALLOW box copy is not enough and the difference is a double free:
+    /// the callee's free of a boxed payload runs the payload's own drop, so two
+    /// boxes pointing at one `String` buffer means two frees of that buffer.
+    /// The payload's OWNING clone is what makes the callee's copy independent.
+    ///
+    /// Structured after `emit_erased_boxed_enum_payload_free_at`, whose tag
+    /// switch, null guard and per-variant word index this mirrors — the two ask
+    /// `user_enum_boxed_payload_variants` the same question of the same
+    /// instantiation, so they cannot disagree about which payloads box.
+    fn deep_copy_erased_boxed_enum_payload_in_place(
+        &mut self,
+        te: &TypeExpr,
+        base_ptr: inkwell::values::PointerValue<'ctx>,
+    ) {
+        let boxed = self.user_enum_boxed_payload_variants(te);
+        if boxed.is_empty() {
+            return;
+        }
+        let TypeKind::Path(p) = &te.kind else {
+            return;
+        };
+        let Some(ename) = p.segments.last().cloned() else {
+            return;
+        };
+        let Some(layout) = self.type_decls.enum_layouts.get(ename.as_str()).cloned() else {
+            return;
+        };
+        if layout.is_shared {
+            return;
+        }
+        let Some(fn_val) = self.current_fn else {
+            return;
+        };
+        // PRE-EMIT every clone fn before any basic block of this sequence is
+        // filled. Emitting one repositions the builder, so doing it inside the
+        // switch below would yank it out of a half-built block.
+        let mut plan: Vec<(
+            u64,
+            u32,
+            inkwell::types::BasicTypeEnum<'ctx>,
+            FunctionValue<'ctx>,
+        )> = Vec::new();
+        for (_en, vname, payload_te, box_field, _box_only) in boxed {
+            let Some(vtag) = layout.tags.get(&vname).copied() else {
+                continue;
+            };
+            let payload_ty = self.llvm_type_for_type_expr(&payload_te);
+            let clone_fn = self.emit_owning_clone_fn_for_type_expr(&payload_te);
+            plan.push((vtag, box_field, payload_ty, clone_fn));
+        }
+        if plan.is_empty() {
+            return;
+        }
+
+        let i64_t = self.context.i64_type();
+        let ptr_ty = self.context.ptr_type(AddressSpace::default());
+        let enum_ty = layout.llvm_type;
+        let Ok(tag_ptr) = self
+            .builder
+            .build_struct_gep(enum_ty, base_ptr, 0, "b13.ebox.tag.p")
+        else {
+            return;
+        };
+        let Ok(tag) = self.builder.build_load(i64_t, tag_ptr, "b13.ebox.tag") else {
+            return;
+        };
+        let tag = tag.into_int_value();
+
+        for (vtag, box_field, payload_ty, clone_fn) in plan {
+            let Ok(word_ptr) =
+                self.builder
+                    .build_struct_gep(enum_ty, base_ptr, box_field, "b13.ebox.wp")
+            else {
+                continue;
+            };
+            let is_v = self
+                .builder
+                .build_int_compare(
+                    IntPredicate::EQ,
+                    tag,
+                    i64_t.const_int(vtag, false),
+                    "b13.ebox.isv",
+                )
+                .unwrap();
+            let do_bb = self.context.append_basic_block(fn_val, "b13.ebox.do");
+            let join_bb = self.context.append_basic_block(fn_val, "b13.ebox.join");
+            self.builder
+                .build_conditional_branch(is_v, do_bb, join_bb)
+                .unwrap();
+            self.builder.position_at_end(do_bb);
+            // The null guard is not decoration: a move-suppressed slot is
+            // zeroed, and cloning through it would fault where the unfixed
+            // code merely crashed later.
+            let old_box = self
+                .builder
+                .build_load(ptr_ty, word_ptr, "b13.ebox.old")
+                .unwrap()
+                .into_pointer_value();
+            let is_null = self
+                .builder
+                .build_is_null(old_box, "b13.ebox.isnull")
+                .unwrap();
+            let copy_bb = self.context.append_basic_block(fn_val, "b13.ebox.new");
+            self.builder
+                .build_conditional_branch(is_null, join_bb, copy_bb)
+                .unwrap();
+            self.builder.position_at_end(copy_bb);
+            let raw_size = match payload_ty.size_of() {
+                Some(sz) => sz,
+                None => {
+                    self.builder.build_unconditional_branch(join_bb).unwrap();
+                    self.builder.position_at_end(join_bb);
+                    continue;
+                }
+            };
+            let size = if raw_size.get_type().get_bit_width() == 64 {
+                raw_size
+            } else {
+                self.builder
+                    .build_int_z_extend(raw_size, i64_t, "b13.ebox.sz64")
+                    .unwrap()
+            };
+            let new_box = self
+                .builder
+                .build_call(self.runtime_fns.malloc_fn, &[size.into()], "b13.ebox.m")
+                .unwrap()
+                .try_as_basic_value()
+                .unwrap_basic()
+                .into_pointer_value();
+            self.builder
+                .build_call(clone_fn, &[old_box.into(), new_box.into()], "")
+                .unwrap();
+            let new_word = self
+                .builder
+                .build_ptr_to_int(new_box, i64_t, "b13.ebox.w")
+                .unwrap();
+            self.builder.build_store(word_ptr, new_word).unwrap();
+            self.builder.build_unconditional_branch(join_bb).unwrap();
+            self.builder.position_at_end(join_bb);
+        }
+    }
+
+    /// Store back every caller value queued by
+    /// [`Self::uam_copy_boxed_enum_arg`] and clear the queue.
+    ///
+    /// Skipped when the block already has a TERMINATOR, exactly as
+    /// `flush_pending_enum_field_zeros` is and for the same reason: a statement
+    /// that diverged has nothing left to append to. The queue is cleared either
+    /// way, so a skipped entry can never restore into a later statement.
+    pub(super) fn flush_pending_uam_enum_restores(&mut self) {
+        if self.pending_uam_enum_restores.is_empty() {
+            return;
+        }
+        let pending = std::mem::take(&mut self.pending_uam_enum_restores);
+        let Some(bb) = self.builder.get_insert_block() else {
+            return;
+        };
+        if bb.get_terminator().is_some() {
+            return;
+        }
+        for (slot, saved, ty) in pending {
+            if let Ok(v) = self.builder.build_load(ty, saved, "b13.uam.back") {
+                let _ = self.builder.build_store(slot, v);
             }
         }
     }

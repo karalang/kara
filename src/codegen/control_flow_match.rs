@@ -10302,7 +10302,7 @@ impl<'ctx> super::Codegen<'ctx> {
     /// owner, for a receiver whose instantiation is not recoverable, and for an
     /// arity mismatch between declared parameters and supplied arguments. A
     /// caller that cannot substitute is no worse off than before this existed.
-    fn struct_field_te_subst_inst(
+    pub(super) fn struct_field_te_subst_inst(
         &self,
         struct_name: &str,
         object: &Expr,

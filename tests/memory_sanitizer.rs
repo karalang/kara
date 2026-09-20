@@ -100788,4 +100788,69 @@ fn main() {
             "b2026-09-15-33-store-twice",
         );
     }
+
+    /// B-2026-09-20-13 — the memory half of
+    /// `e2e_reused_by_value_generic_enum_argument_is_not_freed_under_the_caller`.
+    ///
+    /// The callee's by-value param registers the box's free
+    /// (`track_boxed_enum_var_with_inner_drop_for_payload`), on the premise —
+    /// written down at the discard-side stand-down in `call_dispatch.rs` — that
+    /// at an argument the callee owns the box. That premise holds only while
+    /// the caller does not touch the binding again. When it does, the caller
+    /// reads a freed box and its own scope-exit drop frees it a second time.
+    ///
+    /// Each block's payload has a DISTINCT LENGTH so a leaked or double-freed
+    /// byte count names the block that produced it rather than the fixture.
+    /// Un-indented on purpose: the helper trims leading whitespace on the first
+    /// line only.
+    #[test]
+    fn asan_reused_by_value_generic_enum_argument_is_freed_exactly_once() {
+        assert_clean_asan_run(
+            r#"
+enum Gen[T] { Y(T), N }
+struct Holder { g: Gen[String] }
+struct Hg[T] { g: Gen[T] }
+struct Wide { a: String, b: String, c: String }
+
+fn shw(g: Gen[String]) { match g { Gen.Y(v) => { println(f"s:{v}") } Gen.N => { println("s:none") } } }
+fn idf(g: Gen[String]) -> Gen[String] { return g }
+fn shs(g: Gen[Wide]) { match g { Gen.Y(v) => { println(f"w:{v.a}") } Gen.N => { println("w:none") } } }
+fn shv(g: Gen[Vec[String]]) { match g { Gen.Y(v) => { println(f"v:{v.len()}") } Gen.N => { println("v:none") } } }
+fn wrap[T](g: Gen[T], c: bool) -> Hg[T] { if c { return Hg { g: g } } return Hg { g: Gen.N } }
+
+fn main() {
+    let a: Gen[String] = Gen.Y(f"aa-local-2"); shw(a); shw(a)
+    let b: Gen[String] = Gen.Y(f"bbb-thrice-33"); shw(b); shw(b); shw(b)
+    let c: Holder = Holder { g: Gen.Y(f"cccc-field-444") }; shw(c.g); shw(c.g)
+    let d: Gen[Wide] = Gen.Y(Wide { a: f"ddddd-struct-5555", b: f"ddddd-struct-5556", c: f"ddddd-struct-5557" }); shs(d); shs(d)
+    let mut q: Vec[String] = Vec.new(); q.push(f"eeeeee-vecelem-66666"); let e: Gen[Vec[String]] = Gen.Y(q); shv(e); shv(e)
+    let f: Gen[String] = Gen.Y(f"fffffff-escape-777777"); let h: Gen[String] = idf(f); shw(f); shw(h)
+    let i: Hg[String] = Hg { g: Gen.Y(f"gggggggg-genfield-8888888") }; shw(i.g); shw(i.g)
+    let j: Gen[String] = Gen.Y(f"hhhhhhhhh-wrapped-99999999"); let k: Hg[String] = wrap(j, true); shw(k.g); shw(k.g)
+    println("done")
+}
+"#,
+            &[
+                "s:aa-local-2",
+                "s:aa-local-2",
+                "s:bbb-thrice-33",
+                "s:bbb-thrice-33",
+                "s:bbb-thrice-33",
+                "s:cccc-field-444",
+                "s:cccc-field-444",
+                "w:ddddd-struct-5555",
+                "w:ddddd-struct-5555",
+                "v:1",
+                "v:1",
+                "s:fffffff-escape-777777",
+                "s:fffffff-escape-777777",
+                "s:gggggggg-genfield-8888888",
+                "s:gggggggg-genfield-8888888",
+                "s:hhhhhhhhh-wrapped-99999999",
+                "s:hhhhhhhhh-wrapped-99999999",
+                "done",
+            ],
+            "b2026-09-20-13-reused-by-value-generic-enum-arg",
+        );
+    }
 }

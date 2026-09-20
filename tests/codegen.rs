@@ -170228,6 +170228,77 @@ fn main() {
         want.push_str("end\n");
         assert_eq!(run_program(src).as_deref(), Some(want.as_str()));
     }
+    /// B-2026-09-20-13 — a by-value generic enum argument whose monomorph
+    /// heap-BOXES its payload was freed by the CALLEE while the caller still
+    /// owned the binding, so every later read of it read freed memory.
+    ///
+    /// The value is reused, which `karac check` reports and deliberately does
+    /// not block on (B-2026-08-29-64): the promise the non-fatal warning rests
+    /// on is that codegen leaves the reused value INTACT. It did not. On the
+    /// parent commit the first four blocks below SIGSEGV before printing
+    /// anything and the last two print nothing with four invalid reads each;
+    /// the `Gen.N` block, which carries no payload at all, crashed too.
+    ///
+    /// Each block uses a DISTINCT payload spelling so a failure names its own
+    /// block rather than the fixture.
+    #[test]
+    fn e2e_reused_by_value_generic_enum_argument_is_not_freed_under_the_caller() {
+        let out = run_program(
+            r#"
+enum Gen[T] { Y(T), N }
+struct Holder { g: Gen[String] }
+struct Hg[T] { g: Gen[T] }
+struct Wide { a: String, b: String, c: String }
+
+fn shw(g: Gen[String]) { match g { Gen.Y(v) => { println(f"s:{v}") } Gen.N => { println("s:none") } } }
+fn idf(g: Gen[String]) -> Gen[String] { return g }
+fn shs(g: Gen[Wide]) { match g { Gen.Y(v) => { println(f"w:{v.a}") } Gen.N => { println("w:none") } } }
+fn shv(g: Gen[Vec[String]]) { match g { Gen.Y(v) => { println(f"v:{v.len()}") } Gen.N => { println("v:none") } } }
+fn wrap[T](g: Gen[T], c: bool) -> Hg[T] { if c { return Hg { g: g } } return Hg { g: Gen.N } }
+
+fn main() {
+    let a: Gen[String] = Gen.Y(f"aa-local-2"); shw(a); shw(a)
+    let b: Gen[String] = Gen.Y(f"bbb-thrice-33"); shw(b); shw(b); shw(b)
+    let c: Holder = Holder { g: Gen.Y(f"cccc-field-444") }; shw(c.g); shw(c.g)
+    let d: Gen[Wide] = Gen.Y(Wide { a: f"ddddd-struct-5555", b: f"ddddd-struct-5556", c: f"ddddd-struct-5557" }); shs(d); shs(d)
+    let mut q: Vec[String] = Vec.new(); q.push(f"eeeeee-vecelem-66666"); let e: Gen[Vec[String]] = Gen.Y(q); shv(e); shv(e)
+    let f: Gen[String] = Gen.Y(f"fffffff-escape-777777"); let h: Gen[String] = idf(f); shw(f); shw(h)
+    let i: Hg[String] = Hg { g: Gen.Y(f"gggggggg-genfield-8888888") }; shw(i.g); shw(i.g)
+    let j: Gen[String] = Gen.Y(f"hhhhhhhhh-wrapped-99999999"); let k: Hg[String] = wrap(j, true); shw(k.g); shw(k.g)
+    let n: Gen[String] = Gen.N; shw(n); shw(n)
+    println("done")
+}
+"#,
+        );
+
+        assert_eq!(
+            out.as_deref(),
+            Some(
+                "s:aa-local-2\n\
+                 s:aa-local-2\n\
+                 s:bbb-thrice-33\n\
+                 s:bbb-thrice-33\n\
+                 s:bbb-thrice-33\n\
+                 s:cccc-field-444\n\
+                 s:cccc-field-444\n\
+                 w:ddddd-struct-5555\n\
+                 w:ddddd-struct-5555\n\
+                 v:1\n\
+                 v:1\n\
+                 s:fffffff-escape-777777\n\
+                 s:fffffff-escape-777777\n\
+                 s:gggggggg-genfield-8888888\n\
+                 s:gggggggg-genfield-8888888\n\
+                 s:hhhhhhhhh-wrapped-99999999\n\
+                 s:hhhhhhhhh-wrapped-99999999\n\
+                 s:none\n\
+                 s:none\n\
+                 done\n"
+            ),
+            "a reused by-value generic enum argument read back wrong or crashed, \
+             so the callee freed the caller's box"
+        );
+    }
 }
 
 #[cfg(feature = "llvm")]

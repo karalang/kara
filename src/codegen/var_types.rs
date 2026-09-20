@@ -308,6 +308,16 @@ pub(crate) struct VarTypes<'ctx> {
     /// An unrecorded block reads back `None` and keeps the pre-existing loud
     /// "cannot resolve field" error — fail-closed, never a guess.
     pub(crate) block_tail_type_names: HashMap<(usize, usize), String>,
+    /// B-2026-09-20-13 — variable name -> the INSTANTIATED enum `TypeExpr`
+    /// the binding holds (`G1[String]`, not the erased `G1[T]`).
+    ///
+    /// Recorded at the `let`, where the annotation or the construction span
+    /// still carries the instantiation, because by the time an ARGUMENT site
+    /// sees `shw(g)` all it has is the bare name in `var_type_names`. Whether
+    /// that payload is heap-BOXED is a function of the instantiation and not
+    /// of the name, and the box is what the two frames fight over, so the
+    /// argument position cannot ask the question without this.
+    pub(crate) var_enum_inst_te: HashMap<String, TypeExpr>,
 }
 
 /// A `let`-bound bounded range's captured loop bounds — see

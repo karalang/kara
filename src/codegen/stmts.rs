@@ -96,6 +96,32 @@ impl<'ctx> super::Codegen<'ctx> {
         self.emit_generic_enum_payload_user_drop_bodies_fn(&te)
     }
 
+    /// B-2026-09-20-13 — record which MONOMORPH an enum binding holds, from the
+    /// same two sources and in the same order as the walker above.
+    ///
+    /// The argument position is where this is spent, and it is the position
+    /// that cannot compute it: `shw(g)` carries only the name `G1`, while
+    /// whether the payload is heap-BOXED -- the whole question the two frames
+    /// disagree about -- depends on `G1[String]` versus `G1[i64]`. Recording it
+    /// here rather than re-deriving it there also keeps the argument site
+    /// reading the same instantiation the binding's own drop was registered
+    /// against, so the copy and the free cannot disagree about which monomorph
+    /// this is.
+    fn record_var_enum_inst_te(&mut self, var_name: &str, ty: Option<&TypeExpr>, value: &Expr) {
+        let Some(te) = ty.cloned().or_else(|| {
+            self.type_decls
+                .enum_inst_type_exprs
+                .get(&(value.span.offset, value.span.length))
+                .cloned()
+        }) else {
+            return;
+        };
+        let te = self.subst_monomorph_type_params(&te);
+        self.var_types
+            .var_enum_inst_te
+            .insert(var_name.to_string(), te);
+    }
+
     /// Reclaim the value a `mut ref` AGGREGATE parameter is about to have
     /// overwritten — B-2026-08-05-39.
     ///
@@ -4143,6 +4169,7 @@ impl<'ctx> super::Codegen<'ctx> {
             // point because the store lands in the very field the argument was
             // loaded out of; see `zero_transfer_owned_enum_field_arg`.
             self.flush_pending_enum_field_zeros();
+            self.flush_pending_uam_enum_restores();
             self.record_loop_decl_rearm_anchor(stmt);
             self.tracing.diag_span = saved;
         }
@@ -8999,6 +9026,11 @@ impl<'ctx> super::Codegen<'ctx> {
                                 self.enum_ctor_moved_payload_slots
                                     .insert(var_name.clone(), view_slots.clone());
                             }
+                            // B-2026-09-20-13 — unconditional, before the
+                            // arms below diverge: the argument position needs
+                            // the instantiation whichever ownership arm this
+                            // binding takes.
+                            self.record_var_enum_inst_te(var_name, ty.as_ref(), value);
                             if self.enum_ctor_payload_bodies_are_caller_owned(&name, value)
                                 || self.expr_is_param_view(value)
                                 // B-2026-09-06-9 — the rebind through an
