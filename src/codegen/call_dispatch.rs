@@ -9167,7 +9167,41 @@ impl<'ctx> super::Codegen<'ctx> {
                     // inline one rather than risking a second owner for the
                     // boxed one. A lost body is the status quo; a doubled body
                     // is a regression.
-                    if !self.user_enum_boxed_payload_variants(&te).is_empty() {
+                    // B-2026-09-20-15 (bodies half) — the stand-down above is
+                    // right for an ARGUMENT and vacuous at a DISCARD, and this
+                    // is the THIRD premise at this one site that is true of a
+                    // callee-bound argument and false of a discarded temp.
+                    //
+                    // Its reason, recorded in the paragraph above, is that a
+                    // boxed payload's body already rides the box's own interior
+                    // drop, registered callee-side by the by-value param site —
+                    // so registering a walker here too gave it TWO owners and
+                    // printed the body twice. True where there is a callee.
+                    // At a discard there is none, and MEASURED: with the memory
+                    // half alone registering that same box owner, all four
+                    // discard cells went memory-clean and the body stayed
+                    // missing, so the interior drop demonstrably does not carry
+                    // it here. The two are separate omissions rather than one
+                    // seen twice, which is why both halves are needed and why
+                    // this one cannot double anything.
+                    //
+                    // The same correction B-2026-09-14-21 made to the transfer
+                    // stand-down a few lines up ("the callee owns this temp
+                    // outright" — true of an argument, vacuous at a discard),
+                    // and the same shape as `track_boxed_enum_var_with_inner_
+                    // drop_for_payload`'s "the callee's entry-copied param is
+                    // the box's only owner", which is false outright for an
+                    // erased payload. Three occurrences of one design fault:
+                    // a guard reasoning about a callee that, in this position,
+                    // does not exist.
+                    //
+                    // Scoped to the discard rather than lifted, because the
+                    // MIXED case the gate names is real. At an argument a mixed
+                    // enum keeps today's behaviour exactly — measured
+                    // byte-identical before and after on both its variants, and
+                    // both were already clean there, so the gate loses nothing
+                    // it was protecting.
+                    if !discarded_temp && !self.user_enum_boxed_payload_variants(&te).is_empty() {
                         return None;
                     }
                     self.emit_generic_enum_payload_user_drop_bodies_fn(&te)
@@ -9175,12 +9209,57 @@ impl<'ctx> super::Codegen<'ctx> {
             } else {
                 None
             };
-            if user_drop || heap_payload || walker.is_some() {
+            // B-2026-09-20-15 (memory half) — a DISCARDED generic enum whose
+            // monomorph heap-BOXES its payload had no owner for the box.
+            // `heap_payload` is keyed by enum NAME and reads an erased `T`
+            // through `enum_drop_kind_for_type_expr`'s `_ => None` tail, so it
+            // is false for every generic enum, and the bodies fallback below
+            // stands itself down on a boxed payload. Nothing else claims the
+            // value, so `let _ = Gen.Y(<wide payload>)` lost the box, the
+            // payload's heap and its `Drop` body together: 32 B direct plus 9
+            // indirect at `-O0`, and 16 B for an all-scalar two-word payload
+            // that owns no interior at all.
+            //
+            // Scoped to the discard on purpose. At an ARGUMENT the callee owns
+            // the box (`track_boxed_enum_var_with_inner_drop_for_payload` at
+            // the by-value param site), which is why a boxed generic payload is
+            // already correct there; registering here as well would be a second
+            // owner. At a discard there is no callee, so there is no first one.
+            let discarded_boxed: Vec<_> = if discarded_temp {
+                self.type_decls
+                    .enum_inst_type_exprs
+                    .get(&(arg.span.offset, arg.span.length))
+                    .cloned()
+                    .map(|te| {
+                        let te = self.subst_monomorph_type_params(&te);
+                        self.user_enum_boxed_payload_variants(&te)
+                    })
+                    .unwrap_or_default()
+            } else {
+                Vec::new()
+            };
+            if user_drop || heap_payload || walker.is_some() || !discarded_boxed.is_empty() {
                 let slot = self.create_entry_alloca(cur_fn, "__owned_agg_tmp", agg_ty.into());
                 self.builder.build_store(slot, val).unwrap();
                 // Memory first — the frame drains LIFO, so the bodies
                 // pushed below fire before the switch frees what they read
                 // (the B-2026-08-01-2 rule).
+                for (en, variant, payload_te, box_field, box_only) in discarded_boxed {
+                    let inner = if box_only {
+                        None
+                    } else {
+                        self.enum_boxed_payload_interior_drop(&payload_te, true)
+                    };
+                    self.track_boxed_enum_var_with_inner_drop_for_payload(
+                        "__owned_agg_tmp",
+                        slot,
+                        &en,
+                        &variant,
+                        inner,
+                        &payload_te,
+                        box_field,
+                    );
+                }
                 if heap_payload {
                     self.track_enum_var(&enum_name, slot);
                 }

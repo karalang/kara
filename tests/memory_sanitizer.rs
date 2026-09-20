@@ -99857,4 +99857,52 @@ fn main() {
             "b92014-tuple-element-box",
         );
     }
+    /// B-2026-09-20-15 — a DISCARDED generic enum whose monomorph's payload is
+    /// heap-BOXED had no owner, so the box leaked outright.
+    ///
+    /// The twin of `e2e_discarded_boxed_generic_enum_payload_runs_its_drop_body`
+    /// in `tests/codegen.rs`, and both are needed because the site made two
+    /// separate omissions on two separate channels. This one scores the box:
+    /// `heap_payload` is keyed on the enum's declared payload NAME, which for a
+    /// generic is the erased `T`, so it answered false and nothing freed the
+    /// allocation `coerce_to_payload_words` had just made. Measured at base,
+    /// `KARAC_OPT_LEVEL=0`: 32 B direct + 9 indirect on the `String` payload,
+    /// 16 B on the all-scalar one.
+    ///
+    /// `dN46` is the monomorph that FITS the one-word area and so never boxed;
+    /// it was clean before the fix and must stay clean, since an owner that
+    /// registered for it would free a pointer that was never allocated. The
+    /// last two blocks are the positions that already HAD an owner — the
+    /// non-payload variant of a boxing enum, and the argument position, whose
+    /// callee owns it — so a double free is what a too-wide repair looks like
+    /// here, and ASAN is the instrument that sees it.
+    #[test]
+    fn asan_discarded_boxed_generic_enum_payload_box_is_freed() {
+        assert_clean_asan_run(
+            r#"
+struct R { id: i64, s: String }
+impl Drop for R { fn drop(mut ref self) { println(f"dR{self.id}") } }
+struct W { id: i64, n2: i64 }
+impl Drop for W { fn drop(mut ref self) { println(f"dW{self.id}") } }
+struct N { id: i64 }
+impl Drop for N { fn drop(mut ref self) { println(f"dN{self.id}") } }
+enum Gen[T] { Y(T), Z }
+enum Mix[T] { W(T), N(i64) }
+fn mkR(i: i64) -> R { return R { id: i, s: f"p{i}" }; }
+fn eat(g: Gen[R]) { println("ate") }
+fn main() {
+    { let _ = Gen.Y(R { id: 47, s: f"payload-a" }); }
+    { let _ = Gen.Y(mkR(48)); }
+    { let _ = Gen.Y(W { id: 49, n2: 1 }); }
+    { let _ = Gen.Y(N { id: 46 }); }
+    { let _ = Mix.W(R { id: 62, s: f"payload-m" }); }
+    { let _ = Mix[R].N(63); }
+    { eat(Gen.Y(R { id: 64, s: f"payload-e" })); }
+    println("end")
+}
+"#,
+            &["dR47", "dR48", "dW49", "dN46", "dR62", "ate", "dR64", "end"],
+            "b92015-discarded-boxed-payload",
+        );
+    }
 }

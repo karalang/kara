@@ -39416,6 +39416,73 @@ fn main() {
         }
     }
 
+    /// B-2026-09-20-15 — a DISCARDED generic enum whose monomorph's payload is
+    /// heap-BOXED had no owner at all: the box leaked and the payload's `Drop`
+    /// body never ran.
+    ///
+    /// ```text
+    /// let _ = Gen.Y(R { id: 47, s: f"payload-a" });   // interp: dR47   compiled: (nothing)
+    /// ```
+    ///
+    /// TWO independent omissions at one site, which is why the fixture asserts
+    /// output here and a `memory_sanitizer` twin asserts the free. A generic
+    /// enum declares its payload as `T`, so `payload_word_count_for_type_expr`
+    /// sizes the payload area at ONE word and any wider monomorph is heap-boxed.
+    /// At the discard site that made BOTH owners decline: `heap_payload` is
+    /// name-keyed off the erased `T` and so answered false (nothing freed the
+    /// box), and the bodies fallback stood itself down on any variant that
+    /// boxes (nothing ran `R`'s body). Each half was measured alone — the
+    /// memory half made all four discard cells valgrind-clean with the body
+    /// still missing — so neither is redundant.
+    ///
+    /// PAYLOAD WIDTH, NOT HEAP, IS THE DISCRIMINATOR, and the `dW49` cell is
+    /// what says so: `W` is two `i64`s with no heap anywhere in the program and
+    /// it boxed and leaked exactly like the `String`-bearing `R`. `dN46` is the
+    /// one-word monomorph that FITS the erased area, so it never boxed and was
+    /// correct before the fix — the control that keeps the repair from being
+    /// read as "generic enums now walk their payloads".
+    ///
+    /// The last two blocks are the PROTECTED positions: `Mix[R].N(63)` is the
+    /// non-payload variant of a boxing enum (nothing to free, and a walker that
+    /// ran would double-free), and `eat(Gen.Y(…))` is the ARGUMENT position,
+    /// which has an owner already — the callee's. Both printed correctly at
+    /// base and must still print exactly once, which is the half of this fix
+    /// that a leak-only measurement cannot see.
+    #[test]
+    fn e2e_discarded_boxed_generic_enum_payload_runs_its_drop_body() {
+        // One program, seven scoped blocks: the repair and both protected
+        // positions have to be seen in a single frame, because the defect is a
+        // decision made per call site.
+        let prog = "struct R { id: i64, s: String }\n\
+             impl Drop for R { fn drop(mut ref self) { println(f\"dR{self.id}\") } }\n\
+             struct W { id: i64, n2: i64 }\n\
+             impl Drop for W { fn drop(mut ref self) { println(f\"dW{self.id}\") } }\n\
+             struct N { id: i64 }\n\
+             impl Drop for N { fn drop(mut ref self) { println(f\"dN{self.id}\") } }\n\
+             enum Gen[T] { Y(T), Z }\n\
+             enum Mix[T] { W(T), N(i64) }\n\
+             fn mkR(i: i64) -> R { return R { id: i, s: f\"p{i}\" }; }\n\
+             fn eat(g: Gen[R]) { println(\"ate\") }\n\
+             fn main() {\n\
+                 { let _ = Gen.Y(R { id: 47, s: f\"payload-a\" }); }\n\
+                 { let _ = Gen.Y(mkR(48)); }\n\
+                 { let _ = Gen.Y(W { id: 49, n2: 1 }); }\n\
+                 { let _ = Gen.Y(N { id: 46 }); }\n\
+                 { let _ = Mix.W(R { id: 62, s: f\"payload-m\" }); }\n\
+                 { let _ = Mix[R].N(63); }\n\
+                 { eat(Gen.Y(R { id: 64, s: f\"payload-e\" })); }\n\
+                 println(\"end\")\n\
+             }\n";
+        let want = "dR47\ndR48\ndW49\ndN46\ndR62\nate\ndR64\nend\n";
+
+        let (interp_out, interp_errs, _, _) = karac::run_program_full_checked(prog);
+        assert!(interp_errs.is_empty(), "interp errored: {interp_errs:?}");
+        assert_eq!(interp_out.join(""), want, "interpreter");
+        if let Some(aot) = run_program(prog) {
+            assert_eq!(aot, want, "AOT");
+        }
+    }
+
     /// B-2026-09-14-7 — a payload part MOVED INTO A LOCAL that dies inside the
     /// callee's own frame drops at that local's live-range end, not after the
     /// call returns.
