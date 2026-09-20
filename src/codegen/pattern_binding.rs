@@ -1451,9 +1451,69 @@ impl<'ctx> super::Codegen<'ctx> {
                                     // only off a source that owns a walk).
                                     // Register the field-bodies walk beside the
                                     // memory, as a local of this type has.
+                                    // B-2026-09-19-48 — NOT when the
+                                    // scrutinee is a by-value param the CALLER
+                                    // retains. The registration above exists
+                                    // because "the arm disarms the enum's
+                                    // payload walk in the binding's favour", so
+                                    // the binding is the only owner left; on
+                                    // this scrutinee that premise is false. The
+                                    // caller's own payload walk is still armed
+                                    // -- a named local's let-site walk, or the
+                                    // fresh-temp registrar's
+                                    // `__karac_dropelems_opt_<T>_v` -- and it
+                                    // is the one the interpreter fires, so a
+                                    // walk here is a SECOND owner. Measured on
+                                    // `fn peek(o: Option[Q]) { match o {
+                                    // Some(t) => { println("mid") } .. } }`:
+                                    // `mid dR6 dR5 dR6 dR5` on jit / `karac
+                                    // build` / `KARAC_AUTO_PAR=0` against the
+                                    // interpreter's `mid dR6 dR5`, with the
+                                    // IR showing `__karac_dropbodies_Q(%t)` at
+                                    // the end of the arm AND
+                                    // `__karac_dropelems_opt_Q_v` after the
+                                    // call. The TUPLE payload is the existence
+                                    // proof that one owner suffices: it arms no
+                                    // arm-side walk at all and is correct on
+                                    // all four surfaces.
+                                    //
+                                    // The branch just above reads the same flag
+                                    // for the same reason, and the doc at the
+                                    // flag's assignment states the rule this
+                                    // registration was missing: a payload bound
+                                    // out of an owned param is "a view of the
+                                    // callee's entry copy; their Drop bodies
+                                    // belong to the caller (caller-retains), so
+                                    // `bind_pattern_values` registers memory
+                                    // only".
                                     let tn_owned = tn.to_string();
                                     let subst = std::collections::HashMap::new();
+                                    // NARROWED to the case where the caller
+                                    // really has a walk armed. The by-value
+                                    // flag alone says "the caller retains the
+                                    // VALUE", which is true even where
+                                    // `callee_by_value_optres_param_bodies_te`
+                                    // declines to stand a walk up — and there
+                                    // standing this one down leaves the payload
+                                    // with no owner at all, measured as a lost
+                                    // `dIn5` on a copy read through a
+                                    // `Drop`-bearing field.
+                                    if self
+                                        .pattern_state
+                                        .pattern_binding_scrutinee_optres_bodies_are_caller_retained
+                                        && self
+                                            .pattern_state
+                                            .current_variant_payload_bindings
+                                            .contains(name.as_str())
+                                    {
+                                        self.payload_vars
+                                            .caller_retained_payload_arm_bindings
+                                            .insert(name.clone());
+                                    }
                                     if !self.drop_rc.user_drop_wrapper_fns.contains_key(&tn_owned)
+                                        && !self
+                                            .pattern_state
+                                            .pattern_binding_scrutinee_optres_bodies_are_caller_retained
                                         && self.type_runs_user_drop_mono(&tn_owned, &subst)
                                     {
                                         if let Some(bodies) =

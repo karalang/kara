@@ -4547,6 +4547,22 @@ impl<'ctx> super::Codegen<'ctx> {
         }
         self.borrow_vars.owned_struct_params.clear();
         self.payload_vars.param_view_locals.clear();
+        self.payload_vars
+            .caller_retained_payload_arm_bindings
+            .clear();
+        self.payload_vars.caller_retained_optres_params.clear();
+        // B-2026-09-19-48 — seeded here, where the callee's own AST is in
+        // hand, because `bind_pattern_values` has only names. See
+        // `optres_param_payload_bodies_stay_with_caller`.
+        for (i, prm) in func.params.iter().enumerate() {
+            if let crate::ast::PatternKind::Binding(n) = &prm.pattern.kind {
+                if self.optres_param_payload_bodies_stay_with_caller(func, i) {
+                    self.payload_vars
+                        .caller_retained_optres_params
+                        .insert(n.clone());
+                }
+            }
+        }
         self.drop_rc.param_view_callee_owned.clear();
         self.drop_rc.caller_retained_aggregate_memory.clear();
         // Per-binding layout carrier (slice 5): the caller's map was swapped out

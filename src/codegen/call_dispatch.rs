@@ -3506,20 +3506,33 @@ impl<'ctx> super::Codegen<'ctx> {
         // `self`-param index adjustment included, since `i` is the ARGUMENT
         // index at every one of the three loops that call this and a method's
         // receiver occupies slot 0 there but not in `f.params`.
-        let bare = callee.rsplit('.').next().unwrap_or(callee);
+        // B-2026-09-19-48 — resolved by impl TARGET as well, which is what
+        // keeps the sentence above true: two inherent impls can define one
+        // name, and this mask must come from the body actually called.
+        let (want_target, bare) = match callee.split_once('.') {
+            Some((t, m)) => (Some(t), m),
+            None => (None, callee),
+        };
         let Some((func, ast_i)) = program.items.iter().find_map(|item| match item {
             Item::Function(f) if f.name == callee => Some((f, i)),
-            Item::ImplBlock(b) => b.items.iter().find_map(|ii| match ii {
-                crate::ast::ImplItem::Method(f) if f.name == bare => {
-                    let ast_i = if f.self_param.is_some() {
-                        i.checked_sub(1)?
-                    } else {
-                        i
-                    };
-                    Some((&**f, ast_i))
-                }
-                _ => None,
-            }),
+            Item::ImplBlock(b)
+                if want_target.is_none_or(|t| {
+                    matches!(&b.target_type.kind,
+                        TypeKind::Path(p) if p.segments.first().is_some_and(|h| h == t))
+                }) =>
+            {
+                b.items.iter().find_map(|ii| match ii {
+                    crate::ast::ImplItem::Method(f) if f.name == bare => {
+                        let ast_i = if f.self_param.is_some() {
+                            i.checked_sub(1)?
+                        } else {
+                            i
+                        };
+                        Some((&**f, ast_i))
+                    }
+                    _ => None,
+                })
+            }
             _ => None,
         }) else {
             return;
@@ -4736,7 +4749,24 @@ impl<'ctx> super::Codegen<'ctx> {
         arg: &Expr,
     ) -> Option<(TypeExpr, super::synth_drop::FieldSkipTree)> {
         let program = self.program_snapshot.as_deref()?;
-        let bare = callee_name.rsplit('.').next().unwrap_or(callee_name);
+        // B-2026-09-19-48 — the impl TARGET, not just the bare name. This
+        // resolution used to take the first impl block anywhere in the program
+        // that defined a method of the bare name, which is wrong the moment two
+        // inherent impls share one (B-2026-09-19-55's shape). It did not matter
+        // while the struct arm below declined for every payload; now that the
+        // arm answers with a FIELD SET, resolving to the peer's body masks the
+        // WRONG field — measured `dR6 got:6 dR6` on `B.dup`, which hands out
+        // `s`, because `A.dup`, which hands out `r`, was found first.
+        //
+        // Same `split_once('.')` shape as `callee_param_is_by_value_optres`
+        // above, and the same ordering: a FREE function of that name still
+        // wins, which is what the shadowing control in
+        // `e2e_duplicate_assoc_fn_name_keeps_one_payload_part_drop_body`
+        // asserts.
+        let (want_target, bare) = match callee_name.split_once('.') {
+            Some((t, m)) => (Some(t), m),
+            None => (None, callee_name),
+        };
         let want_variant = self.ctor_variant_name_of_arg(arg);
         let check = |f: &crate::ast::Function,
                      ast_i: usize|
@@ -4817,11 +4847,61 @@ impl<'ctx> super::Codegen<'ctx> {
                         // from drifting into a lost body (both stand down) or a
                         // doubled one (neither does).
                         paths.extend(Self::optres_payload_consumed_paths(f, ast_i, v));
+                        // B-2026-09-19-48 — the NAMED-STRUCT arm, and it
+                        // comes first because `optres_payload_skip_tree` below
+                        // answers only for a TUPLE payload: every channel
+                        // feeding `paths` is element-wise, so for a named
+                        // struct the tree is empty, the `?` declines, and this
+                        // gate stood down for every struct payload whatever the
+                        // callee did with its fields.
+                        //
+                        // That decline is right whenever no field can be NAMED
+                        // — the escape map has flagged the variant and standing
+                        // a walk up on a payload a taker may already own is the
+                        // double this gate exists to avoid — and wrong when one
+                        // can, which is the case this arm adds and the only
+                        // one. Strictly additive: a positively named PROPER
+                        // SUBSET of the payload's fields masks, and every other
+                        // answer falls through to the pre-existing decline.
+                        //
+                        // `None` from the helper is CANNOT ANSWER (a path
+                        // deeper than one hop, a whole-payload hand-off with no
+                        // field on it at all, a field the payload does not
+                        // declare) and is NOT "nothing left". Folding the two
+                        // together stood a full walk up for a callee that had
+                        // pushed the payload into an accumulator, measured as
+                        // `dRp1 len:1 dRp1` against the due `len:1 dRp1`.
+                        //
+                        // A FLAT tree, `nested` empty: the field paths this
+                        // helper accepts are one hop by construction, so the
+                        // depth B-2026-09-19-33 added has nothing to carry
+                        // here yet. It rides the same `FieldSkipTree` as the
+                        // tuple arm so the two cannot key one walker
+                        // differently, which is the invariant
+                        // `remask_named_tuple_payload_arg` shares.
+                        //
+                        // `optres_param_payload_bodies_stay_with_caller` is the
+                        // callee-side reading of this same decision, and the
+                        // two have to move together.
+                        if let Some(arity) = self.struct_payload_arity(&p.ty, v) {
+                            match self.optres_payload_taken_fields(f, &p.ty, ast_i, v) {
+                                Some(fields) if !fields.is_empty() && fields.len() < arity => {
+                                    return Some((
+                                        p.ty.clone(),
+                                        super::synth_drop::FieldSkipTree {
+                                            here: fields,
+                                            ..Default::default()
+                                        },
+                                    ));
+                                }
+                                _ => return None,
+                            }
+                        }
                         // An empty set means nothing to narrow — either the
                         // element-wise map could not occur empty (it is only
                         // written where the map above is) or the projection
-                        // channel declined, which it does for a struct payload
-                        // and for a conditional hand-back. A set covering every
+                        // channel declined, which it does for a conditional
+                        // hand-back. A set covering every
                         // part is the old answer spelled out. Both decline
                         // exactly as before.
                         let tree = self.optres_payload_skip_tree(&p.ty, v, &paths)?;
@@ -4848,18 +4928,92 @@ impl<'ctx> super::Codegen<'ctx> {
         };
         program.items.iter().find_map(|item| match item {
             crate::ast::Item::Function(f) if f.name == callee_name => check(f, arg_index),
-            crate::ast::Item::ImplBlock(b) => b.items.iter().find_map(|ii| match ii {
-                crate::ast::ImplItem::Method(f) if f.name == bare => {
-                    let ast_i = if f.self_param.is_some() {
-                        arg_index.checked_sub(1)?
-                    } else {
-                        arg_index
-                    };
-                    check(f, ast_i)
-                }
-                _ => None,
-            }),
+            crate::ast::Item::ImplBlock(b)
+                if want_target.is_none_or(|t| {
+                    matches!(&b.target_type.kind,
+                        TypeKind::Path(p) if p.segments.first().is_some_and(|h| h == t))
+                }) =>
+            {
+                b.items.iter().find_map(|ii| match ii {
+                    crate::ast::ImplItem::Method(f) if f.name == bare => {
+                        let ast_i = if f.self_param.is_some() {
+                            arg_index.checked_sub(1)?
+                        } else {
+                            arg_index
+                        };
+                        check(f, ast_i)
+                    }
+                    _ => None,
+                })
+            }
             _ => None,
+        })
+    }
+
+    /// B-2026-09-19-48 — the CALLEE-side reading of
+    /// [`Self::callee_by_value_optres_param_bodies_te`]: for the by-value
+    /// `Option`/`Result` param at `ast_i`, does the CALLER still own the
+    /// payload's field `Drop` bodies?
+    ///
+    /// Asked once per param at frame entry (`functions.rs`, `mono.rs`) and
+    /// recorded in `payload_vars.caller_retained_optres_params`, which is what
+    /// `bind_pattern_values` reads before arming a field-bodies walk beside an
+    /// arm binding. Two owners of one payload is this row's defect; NO owner
+    /// is the same defect with the sign flipped, and both are reachable from
+    /// here, so the two ends of the call have to answer from one predicate
+    /// rather than from two that look equivalent.
+    ///
+    /// The mirror is deliberate and the conditions are in the caller's order:
+    /// a param that leaves the callee whole is the caller's outright
+    /// (`by_value_nonescaping_param_names`); a param no variant of which is
+    /// flagged gets the caller's full walk; a flagged variant is the caller's
+    /// only if every one of them names a PROPER SUBSET of the payload's
+    /// fields, which is exactly the mask the caller stands up.
+    ///
+    /// Variant-agnostic on purpose. The caller asks about the variant its
+    /// ARGUMENT constructs and this frame cannot see it, so a flagged variant
+    /// anywhere is enough to leave the walk where it already was. That errs
+    /// toward the behaviour this commit is changing rather than away from it,
+    /// which for a bodies channel means erring toward a double rather than a
+    /// loss.
+    pub(super) fn optres_param_payload_bodies_stay_with_caller(
+        &self,
+        f: &crate::ast::Function,
+        ast_i: usize,
+    ) -> bool {
+        let Some(p) = f.params.get(ast_i) else {
+            return false;
+        };
+        let TypeKind::Path(path) = &p.ty.kind else {
+            return false;
+        };
+        let Some(head) = path.segments.last() else {
+            return false;
+        };
+        if head != "Option" && head != "Result" {
+            return false;
+        }
+        let crate::ast::PatternKind::Binding(pname) = &p.pattern.kind else {
+            return false;
+        };
+        if !crate::result_escape::by_value_nonescaping_param_names(f).contains(pname.as_str()) {
+            return false;
+        }
+        let escaped = self.optres_payload_escape_map(f, &p.ty, None);
+        let Some(vs) = escaped.get(pname.as_str()) else {
+            return true;
+        };
+        if vs.is_empty() {
+            return true;
+        }
+        vs.iter().all(|v| {
+            match (
+                self.struct_payload_arity(&p.ty, v),
+                self.optres_payload_taken_fields(f, &p.ty, ast_i, v),
+            ) {
+                (Some(arity), Some(fields)) => !fields.is_empty() && fields.len() < arity,
+                _ => false,
+            }
         })
     }
 
@@ -5044,6 +5198,75 @@ impl<'ctx> super::Codegen<'ctx> {
             self.insert_tuple_skip_path(&mut tree, &elem_tes, path);
         }
         (!tree.is_empty()).then_some(tree)
+    }
+
+    /// B-2026-09-19-48 — the STRUCT-payload half of
+    /// [`Self::optres_payload_consumed_elems`] and of the ESCAPE channel above
+    /// it: the FIELD INDICES a callee's arm takes out of a named-struct
+    /// payload, whether into an in-frame local or out of the frame entirely.
+    ///
+    /// BOTH channels, in one answer, because the caller's question is which
+    /// parts it stops owning and the two ways of taking a part are
+    /// indistinguishable from here. Asking only the consumed one was this
+    /// fix's own regression: `Some(t) => { return t.r; }` consumes nothing and
+    /// escapes field `r`, so the consumed channel answered the empty set, the
+    /// struct arm read that as "the full walk", and the caller ran the body of
+    /// a field its own binding had just taken ownership of — `dR5 got:5 dR5`
+    /// against a due `got:5 dR5`, on six existing fixtures.
+    ///
+    /// Indices, not names, because that is what
+    /// [`super::synth_drop::PayloadBodiesMask::StructFields`] masks on, and
+    /// `remask_named_tuple_payload_arg`'s `Field` arm already translates the
+    /// same way — so the named-local and fresh-temp ends of one call cannot key
+    /// one walker differently.
+    ///
+    /// `None` means CANNOT ANSWER — a path deeper than one hop, or a field the
+    /// payload does not declare — and its caller must decline outright. That
+    /// is the one place this differs from the tuple sibling, which folds an
+    /// unusable path into the empty set: for a tuple the empty set already
+    /// means decline, and for a struct it means the full walk, so folding
+    /// would turn "I do not know" into the most dangerous answer available.
+    fn optres_payload_taken_fields(
+        &self,
+        f: &crate::ast::Function,
+        param_te: &TypeExpr,
+        arg_index: usize,
+        variant: &str,
+    ) -> Option<std::collections::BTreeSet<usize>> {
+        let sname = self.sole_struct_payload_name(param_te)?;
+        let names = self.type_decls.struct_field_names.get(sname.as_str())?;
+        let mut out = std::collections::BTreeSet::new();
+        let consumed =
+            crate::ast::fn_consumed_param_payload_part_paths(f, arg_index, Some(variant));
+        let escaping =
+            crate::ast::fn_escaping_param_payload_part_paths(f, arg_index, Some(variant));
+        for path in consumed
+            .into_iter()
+            .map(|(_, path)| path)
+            .chain(escaping.into_iter())
+        {
+            match path.as_slice() {
+                [crate::ast::ParamPart::Field(fname)] => {
+                    out.insert(names.iter().position(|n| n == fname)?);
+                }
+                _ => return None,
+            }
+        }
+        Some(out)
+    }
+
+    /// B-2026-09-19-48 — the STRUCT sibling of [`Self::tuple_payload_arity`]:
+    /// the field count of `param_te`'s payload for `variant` when that payload
+    /// is a named struct. Its caller reads a full-arity set as "nothing
+    /// survives the mask", which is the decline-outright answer arrived at from
+    /// the other side.
+    fn struct_payload_arity(&self, param_te: &TypeExpr, variant: &str) -> Option<usize> {
+        let _ = variant;
+        let sname = self.sole_struct_payload_name(param_te)?;
+        self.type_decls
+            .struct_field_names
+            .get(sname.as_str())
+            .map(|n| n.len())
     }
 
     /// The number of elements in `param_te`'s payload for `variant`, when that
@@ -5269,7 +5492,29 @@ impl<'ctx> super::Codegen<'ctx> {
                     param_te,
                     super::synth_drop::PayloadBodiesMask::TupleTree(&key, skip_parts),
                 ),
-                None => None,
+                // B-2026-09-19-48 — a NAMED-STRUCT payload, whose indices are
+                // field positions rather than tuple elements. The struct's own
+                // name is the identity every other caller of that mask arm keys
+                // on (`remask_named_tuple_payload_arg`'s `Field` arm builds the
+                // same one for a named local), so the temp and the local cannot
+                // name one walker differently. A payload that is neither shape
+                // still answers `None` and declines.
+                //
+                // `here` alone: the gate builds this tree from one-hop field
+                // paths only, so `nested` is empty by construction and the flat
+                // `StructFields` arm loses nothing. A field path that crosses a
+                // level makes the gate decline outright rather than arrive here
+                // with depth this arm could not carry.
+                None => match self.sole_struct_payload_name(param_te) {
+                    Some(sname) => self.emit_optres_payload_user_drop_bodies_fn_skipping(
+                        param_te,
+                        super::synth_drop::PayloadBodiesMask::StructFields(
+                            &sname,
+                            &skip_parts.here,
+                        ),
+                    ),
+                    None => None,
+                },
             }
         };
         let Some(bodies) = bodies else {

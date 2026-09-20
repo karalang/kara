@@ -493,6 +493,15 @@ impl<'ctx> super::Codegen<'ctx> {
         let saved_owned_param_flag = self.pattern_state.pattern_binding_scrutinee_is_owned_param;
         self.pattern_state.pattern_binding_scrutinee_is_owned_param =
             self.scrutinee_is_owned_param_binding(scrutinee);
+        // B-2026-09-19-48 — the narrower half of the same question, which the
+        // flag above was being read for and over-answers. See
+        // `scrutinee_optres_param_bodies_are_caller_retained`.
+        let saved_optres_bodies_flag = self
+            .pattern_state
+            .pattern_binding_scrutinee_optres_bodies_are_caller_retained;
+        self.pattern_state
+            .pattern_binding_scrutinee_optres_bodies_are_caller_retained =
+            self.scrutinee_optres_param_bodies_are_caller_retained(scrutinee);
         // B-2026-09-15-21 — the MEMORY half of the same question, which the
         // flag above was being read for and does not answer.
         self.pattern_state
@@ -1734,6 +1743,8 @@ impl<'ctx> super::Codegen<'ctx> {
         self.pattern_state
             .pattern_binding_scrutinee_is_fresh_owning_temp = saved_fresh_temp_flag;
         self.pattern_state.pattern_binding_scrutinee_is_owned_param = saved_owned_param_flag;
+        self.pattern_state
+            .pattern_binding_scrutinee_optres_bodies_are_caller_retained = saved_optres_bodies_flag;
         // B-2026-09-15-21 — cleared rather than restored; see the field's doc.
         self.pattern_state
             .pattern_binding_scrutinee_param_memory_is_callee_owned = false;
@@ -10858,10 +10869,47 @@ impl<'ctx> super::Codegen<'ctx> {
         // there is the SOLE owner and skipping it LOSES the sibling's body --
         // measured as `dR7 mid end` against a due `dR7 mid dR6 end` on the
         // first draft, which keyed on the view alone.
+        // B-2026-09-19-48 — the FOURTH member of that category, and it is the
+        // one the paragraph above explicitly ruled OUT. Its reasoning was
+        // measured and correct at the time: a by-value PARAM scrutinee's
+        // envelope owns no walk in the callee, so the mint was the sole owner
+        // of the surviving fields and skipping it lost a body.
+        //
+        // What changed is the CALLER. For a named-struct payload the caller's
+        // `callee_by_value_optres_param_bodies_te` used to decline outright
+        // (`optres_payload_consumed_elems` answers only for a TUPLE payload, so
+        // `taken` came back empty and the empty-set branch returned `None`),
+        // which is precisely why the callee's mint had to be the owner. It now
+        // arms a walk masked per consumed field, so the surviving field has a
+        // caller-side owner again and the mint is a SECOND one.
+        //
+        // Measured on `struct R { id: i64, tag: String, xs: Vec[i64] }`,
+        // `struct Q { r: R, s: R }`, `fn take(o: Option[Q])` with arm
+        // `let x = t.r`: the payload is 14 words, so it is BOXED and `t` is a
+        // boxed payload view rather than the inline binding
+        // `bind_pattern_values` registers. The emitted callee called
+        // `__karac_dropbodies_Q$keep1$s0(%t)` and the caller
+        // `__karac_dropelems_opt_Q_v$skipQ_0`, printing `mid53 dR5 dR6 dR6`
+        // against the interpreter's `mid53 dR5 dR6`. The SCALAR twin of the
+        // same program is correct, because its payload fits inline and takes
+        // `bind_pattern_values`' path instead — which is the same decision,
+        // made in the other of the two places that make it.
+        //
+        // When every field is consumed the caller declines (a full-arity mask
+        // keeps nothing), and skipping here is still right: the mint's own
+        // walk would be empty, so `emit_user_drop_field_bodies_fn_skipping`
+        // answers `None` and the binding ends up owning nothing either way.
         if !self.var_owns_struct_field_bodies(var_name)
             && (self.payload_vars.param_view_locals.contains(var_name)
                 || self.fn_ctx.current_fn_param_names.contains(var_name)
-                || self.boxed_payload_view_envelope_owns_bodies_walk(var_name))
+                || self.boxed_payload_view_envelope_owns_bodies_walk(var_name)
+                || (self
+                    .pattern_state
+                    .pattern_binding_scrutinee_optres_bodies_are_caller_retained
+                    && self
+                        .payload_vars
+                        .boxed_optres_payload_view_vars
+                        .contains_key(var_name)))
         {
             return;
         }

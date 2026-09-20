@@ -1768,6 +1768,34 @@ impl<'ctx> super::Codegen<'ctx> {
         }
     }
 
+    /// B-2026-09-19-48 — is this scrutinee a by-value `Option`/`Result` param
+    /// whose payload's field `Drop` bodies the CALLER still owns?
+    ///
+    /// The narrow companion of [`Self::scrutinee_is_owned_param_binding`]
+    /// above: that predicate answers "the caller retains this value", which is
+    /// true for every by-value param, and `bind_pattern_values` needs the
+    /// stronger "and the caller has a walk armed over its payload's fields" —
+    /// which is false exactly where
+    /// `callee_by_value_optres_param_bodies_te` declines. The answer was
+    /// computed from the callee's own AST at frame entry; this only resolves
+    /// the scrutinee to the param name it was recorded under.
+    ///
+    /// A BARE name only, unlike the two predicates around it. `match self.e`
+    /// reaches a payload through a field of the receiver, which is not a param
+    /// of this frame and has no entry in the set, and a projection's payload
+    /// bodies are a different channel's question. Answering `false` there
+    /// leaves that shape exactly as it was.
+    pub(super) fn scrutinee_optres_param_bodies_are_caller_retained(&self, e: &Expr) -> bool {
+        let name = match &e.kind {
+            ExprKind::Identifier(n) => n.as_str(),
+            ExprKind::SelfValue => "self",
+            _ => return false,
+        };
+        self.payload_vars
+            .caller_retained_optres_params
+            .contains(name)
+    }
+
     /// B-2026-09-15-21 — does this scrutinee's heap belong to THIS frame,
     /// rather than being a view onto the caller's?
     ///

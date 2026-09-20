@@ -39752,17 +39752,20 @@ fn main() {
                 "mid\ndR5\ndR6\nend\n",
             ),
             (
-                // PINNED DIVERGENCE, and it is not this row's. B-2026-09-19-48:
-                // an `Option[<named struct>]` argument whose arm moves NOTHING
-                // runs BOTH fields' bodies twice on every compiled backend. The
-                // cell below it is the same program with a UNIQUE name, which
-                // diverges identically -- so the name collision is not what
-                // makes it happen. What this row's fix changed is that the
-                // interpreter used to be wrong here in the SAME direction, so
-                // the duplicate-name spelling agreed by both halves being
-                // wrong; it is now correct and the compiled half's own defect
-                // is exposed. Both cells fail together the day -48 lands.
-                "pinned (B-2026-09-19-48): struct payload, arm moves nothing",
+                // WAS A PINNED DIVERGENCE, and it was not this row's.
+                // B-2026-09-19-48: an `Option[<named struct>]` argument whose
+                // arm moves NOTHING ran BOTH fields' bodies twice on every
+                // compiled backend. The cell below it is the same program with
+                // a UNIQUE name and diverged identically -- so the name
+                // collision was never what made it happen, which is why the
+                // two were pinned side by side. What this row's fix changed is
+                // that the interpreter used to be wrong here in the SAME
+                // direction, so the duplicate-name spelling agreed by both
+                // halves being wrong; it became correct, the compiled half's
+                // own defect was exposed, and that defect is now fixed. The
+                // note said "both cells fail together the day -48 lands", and
+                // they did; the two expectations are now one string.
+                "converged (B-2026-09-19-48): struct payload, arm moves nothing",
                 format!(
                     "{R}{Q}struct A {{}}\nstruct B {{}}\n\
                      impl A {{ fn dup(o: Option[Q]) {{ match o {{ Some(t) => {{ println(\"mid\"); }} None => {{ println(\"n\"); }} }} }} }}\n\
@@ -39770,17 +39773,17 @@ fn main() {
                      fn main() {{ A.dup({ARG}); println(\"end\") }}\n"
                 ),
                 "mid\ndR6\ndR5\nend\n",
-                "mid\ndR6\ndR5\ndR6\ndR5\nend\n",
+                "mid\ndR6\ndR5\nend\n",
             ),
             (
-                "pinned (B-2026-09-19-48): the UNIQUE-name twin diverges identically",
+                "converged (B-2026-09-19-48): the UNIQUE-name twin, same answer",
                 format!(
                     "{R}{Q}struct Z {{}}\n\
                      impl Z {{ fn zdup(o: Option[Q]) {{ match o {{ Some(t) => {{ println(\"mid\"); }} None => {{ println(\"n\"); }} }} }} }}\n\
                      fn main() {{ Z.zdup({ARG}); println(\"end\") }}\n"
                 ),
                 "mid\ndR6\ndR5\nend\n",
-                "mid\ndR6\ndR5\ndR6\ndR5\nend\n",
+                "mid\ndR6\ndR5\nend\n",
             ),
         ] {
             let (interp_out, interp_errs, _, _) = karac::run_program_full_checked(&prog);
@@ -39791,6 +39794,198 @@ fn main() {
             assert_eq!(interp_out.join(""), want_interp, "[{label}] interpreter");
             if let Some(aot) = run_program(&prog) {
                 assert_eq!(aot, want_aot, "[{label}] AOT");
+            }
+        }
+    }
+
+    /// B-2026-09-19-48 — AN `Option` ARGUMENT WHOSE PAYLOAD IS A NAMED STRUCT
+    /// RUNS A FIELD'S `Drop` BODY TWICE, AT EVERY PROVENANCE AND AT BOTH
+    /// PAYLOAD WIDTHS.
+    ///
+    /// `peek(a)` with `let a = Option.Some(Q { r: R { id: 5 }, s: R { id: 6 } })`
+    /// over `fn peek(o: Option[Q]) { match o { Some(t) => { println("mid"); } .. } }`
+    /// printed `mid dR6 dR5 dR6 dR5 end` on jit / `karac build` /
+    /// `KARAC_AUTO_PAR=0` against the interpreter's correct `mid dR6 dR5 end`.
+    /// Two `R`s are constructed and two bodies are owed; the compiled backends
+    /// ran four.
+    ///
+    /// THE ROW'S OWN FRAMING IS WRONG IN TWO WAYS, both corrected by
+    /// measurement. The named local is not the trigger — the fresh-temp
+    /// spelling diverges identically — and the associated-function spelling
+    /// behaves the same as the method one once the callee's name is unique
+    /// (the duplicate-name interaction is B-2026-09-19-55, fixed separately).
+    /// What discriminates is the PAYLOAD SHAPE: a named struct is wrong, a
+    /// TUPLE payload is correct on all four surfaces, and so are the
+    /// destructuring and wildcard spellings. Those three are the controls
+    /// here.
+    ///
+    /// MECHANISM — TWO OWNERS, and the question is decided in two different
+    /// places depending on the payload's WIDTH.
+    ///
+    /// A payload that rides INLINE reaches `bind_pattern_values`, which
+    /// registered a field-bodies walk beside the arm binding's memory. That
+    /// registration exists because a consuming arm disarms the enum's own
+    /// payload walk in the binding's favour, leaving the binding the only
+    /// owner — but on a by-value PARAM scrutinee the premise is false: the
+    /// caller retains the payload's bodies and its walk is still armed. The
+    /// tuple payload is the existence proof that one owner suffices, since it
+    /// registers no arm-side walk at all and is correct everywhere.
+    ///
+    /// A payload too WIDE to ride inline never reaches that site. It is boxed,
+    /// and `disarm_struct_field_bodies_at`'s `$keep` mint is what arms the
+    /// second owner instead — the same decision, made in the other of the two
+    /// places that make it. That mint's own guard (B-2026-09-19-14) explicitly
+    /// ruled this case out, and was correct when written: the caller used to
+    /// DECLINE for a named-struct payload, so the mint really was the sole
+    /// owner. The caller-side half of this fix is what falsifies that, which
+    /// is why the two edits are one change.
+    ///
+    /// THE CALLER-SIDE HALF: `callee_by_value_optres_param_bodies_te` now
+    /// narrows for a named-struct payload instead of declining.
+    /// `optres_payload_consumed_elems` answers only for a tuple, so `taken`
+    /// came back empty and the empty-set branch declined; with the arm-side
+    /// walk gone that decline would leave the payload with NO owner, measured
+    /// as `read5` alone where `read5 dR6 dR5` is owed. An empty set is the
+    /// FULL walk for a struct payload, and a full-arity set is the decline.
+    ///
+    /// SCORED BY SINGLE-BACKEND CONSERVATION, not by backend agreement: every
+    /// `R` a cell constructs owes exactly one body carrying the value it was
+    /// built with, counted per surface. An A/B cannot see an agreed double,
+    /// and this family has them.
+    ///
+    /// The BOXED cells carry a `String` and a `Vec[i64]`, so they move real
+    /// memory; the inline cells are body-only and no sanitizer leg sees them.
+    #[test]
+    fn e2e_named_struct_optres_payload_field_body_runs_once() {
+        for (label, prog, want) in [
+            (
+                "inline payload, NAMED LOCAL, whole binding (the row's headline)",
+                "struct R { id: i64 }\n\
+                 impl Drop for R { fn drop(mut ref self) { println(f\"dR{self.id}\") } }\n\
+                 struct Q { r: R, s: R }\n\
+                 fn peek(o: Option[Q]) { match o { Some(t) => { println(\"mid\"); } None => { println(\"n\"); } } }\n\
+                 fn main() { let a = Option.Some(Q { r: R { id: 5 }, s: R { id: 6 } }); peek(a); println(\"end\") }\n",
+                "mid\ndR6\ndR5\nend\n",
+            ),
+            (
+                "inline payload, FRESH TEMP, whole binding",
+                "struct R { id: i64 }\n\
+                 impl Drop for R { fn drop(mut ref self) { println(f\"dR{self.id}\") } }\n\
+                 struct Q { r: R, s: R }\n\
+                 fn peek(o: Option[Q]) { match o { Some(t) => { println(\"mid\"); } None => { println(\"n\"); } } }\n\
+                 fn main() { peek(Option.Some(Q { r: R { id: 5 }, s: R { id: 6 } })); println(\"end\") }\n",
+                "mid\ndR6\ndR5\nend\n",
+            ),
+            (
+                "inline payload, NAMED LOCAL, a field moved into an in-frame local",
+                "struct R { id: i64 }\n\
+                 impl Drop for R { fn drop(mut ref self) { println(f\"dR{self.id}\") } }\n\
+                 struct Q { r: R, s: R }\n\
+                 fn take(o: Option[Q]) { match o { Some(t) => { let x = t.r; println(\"mid\"); } None => { println(\"n\"); } } }\n\
+                 fn main() { let a = Option.Some(Q { r: R { id: 5 }, s: R { id: 6 } }); take(a); println(\"end\") }\n",
+                "dR5\nmid\ndR6\nend\n",
+            ),
+            (
+                "inline payload, FRESH TEMP, a field moved into an in-frame local",
+                "struct R { id: i64 }\n\
+                 impl Drop for R { fn drop(mut ref self) { println(f\"dR{self.id}\") } }\n\
+                 struct Q { r: R, s: R }\n\
+                 fn take(o: Option[Q]) { match o { Some(t) => { let x = t.r; println(\"mid\"); } None => { println(\"n\"); } } }\n\
+                 fn main() { take(Option.Some(Q { r: R { id: 5 }, s: R { id: 6 } })); println(\"end\") }\n",
+                "dR5\nmid\ndR6\nend\n",
+            ),
+            (
+                "inline payload, the SECOND field moved out",
+                "struct R { id: i64 }\n\
+                 impl Drop for R { fn drop(mut ref self) { println(f\"dR{self.id}\") } }\n\
+                 struct Q { r: R, s: R }\n\
+                 fn take2(o: Option[Q]) { match o { Some(t) => { let y = t.s; println(\"mid\"); } None => { println(\"n\"); } } }\n\
+                 fn main() { let a = Option.Some(Q { r: R { id: 5 }, s: R { id: 6 } }); take2(a); println(\"end\") }\n",
+                "dR6\nmid\ndR5\nend\n",
+            ),
+            (
+                "inline payload, BOTH fields moved out",
+                "struct R { id: i64 }\n\
+                 impl Drop for R { fn drop(mut ref self) { println(f\"dR{self.id}\") } }\n\
+                 struct Q { r: R, s: R }\n\
+                 fn both(o: Option[Q]) { match o { Some(t) => { let x = t.r; let y = t.s; println(\"mid\"); } None => { println(\"n\"); } } }\n\
+                 fn main() { let a = Option.Some(Q { r: R { id: 5 }, s: R { id: 6 } }); both(a); println(\"end\") }\n",
+                "dR5\ndR6\nmid\nend\n",
+            ),
+            (
+                "BOXED payload (String + Vec fields), FRESH TEMP, whole binding",
+                "struct R { id: i64, tag: String, xs: Vec[i64] }\n\
+                 impl Drop for R { fn drop(mut ref self) { println(f\"dR{self.id}\") } }\n\
+                 fn mkr(k: i64) -> R { return R { id: k, tag: f\"tag-number-{k}-padded-out-well-past-any-inline-capacity\", xs: [k, k, k] } }\n\
+                 struct Q { r: R, s: R }\n\
+                 fn peek(o: Option[Q]) { match o { Some(t) => { println(\"mid\"); } None => { println(\"n\"); } } }\n\
+                 fn main() { peek(Option.Some(Q { r: mkr(5), s: mkr(6) })); println(\"end\") }\n",
+                "mid\ndR6\ndR5\nend\n",
+            ),
+            (
+                "BOXED payload, FRESH TEMP, a field moved into an in-frame local",
+                "struct R { id: i64, tag: String, xs: Vec[i64] }\n\
+                 impl Drop for R { fn drop(mut ref self) { println(f\"dR{self.id}\") } }\n\
+                 fn mkr(k: i64) -> R { return R { id: k, tag: f\"tag-number-{k}-padded-out-well-past-any-inline-capacity\", xs: [k, k, k] } }\n\
+                 struct Q { r: R, s: R }\n\
+                 fn take(o: Option[Q]) { match o { Some(t) => { let x = t.r; println(\"mid\"); } None => { println(\"n\"); } } }\n\
+                 fn main() { take(Option.Some(Q { r: mkr(5), s: mkr(6) })); println(\"end\") }\n",
+                "dR5\nmid\ndR6\nend\n",
+            ),
+            (
+                "BOXED payload, NAMED LOCAL, a field moved into an in-frame local",
+                "struct R { id: i64, tag: String, xs: Vec[i64] }\n\
+                 impl Drop for R { fn drop(mut ref self) { println(f\"dR{self.id}\") } }\n\
+                 fn mkr(k: i64) -> R { return R { id: k, tag: f\"tag-number-{k}-padded-out-well-past-any-inline-capacity\", xs: [k, k, k] } }\n\
+                 struct Q { r: R, s: R }\n\
+                 fn take(o: Option[Q]) { match o { Some(t) => { let x = t.r; println(\"mid\"); } None => { println(\"n\"); } } }\n\
+                 fn main() { let a = Option.Some(Q { r: mkr(5), s: mkr(6) }); take(a); println(\"end\") }\n",
+                "dR5\nmid\ndR6\nend\n",
+            ),
+            (
+                "control: the DESTRUCTURING spelling, correct throughout",
+                "struct R { id: i64 }\n\
+                 impl Drop for R { fn drop(mut ref self) { println(f\"dR{self.id}\") } }\n\
+                 struct Q { r: R, s: R }\n\
+                 fn destr(o: Option[Q]) { match o { Some(Q { r, s }) => { println(\"mid\"); } None => { println(\"n\"); } } }\n\
+                 fn main() { let a = Option.Some(Q { r: R { id: 5 }, s: R { id: 6 } }); destr(a); println(\"end\") }\n",
+                "mid\ndR6\ndR5\nend\n",
+            ),
+            (
+                "control: a WILDCARD payload, correct throughout",
+                "struct R { id: i64 }\n\
+                 impl Drop for R { fn drop(mut ref self) { println(f\"dR{self.id}\") } }\n\
+                 struct Q { r: R, s: R }\n\
+                 fn wild(o: Option[Q]) { match o { Some(_) => { println(\"mid\"); } None => { println(\"n\"); } } }\n\
+                 fn main() { let a = Option.Some(Q { r: R { id: 5 }, s: R { id: 6 } }); wild(a); println(\"end\") }\n",
+                "mid\ndR6\ndR5\nend\n",
+            ),
+            (
+                "control: the TUPLE payload, correct throughout",
+                "struct R { id: i64 }\n\
+                 impl Drop for R { fn drop(mut ref self) { println(f\"dR{self.id}\") } }\n\
+                 fn tpeek(o: Option[(R, R)]) { match o { Some(t) => { println(\"mid\"); } None => { println(\"n\"); } } }\n\
+                 fn main() { let a = Option.Some((R { id: 5 }, R { id: 6 })); tpeek(a); println(\"end\") }\n",
+                "mid\ndR5\ndR6\nend\n",
+            ),
+            (
+                "control: the None arm, which owns nothing",
+                "struct R { id: i64 }\n\
+                 impl Drop for R { fn drop(mut ref self) { println(f\"dR{self.id}\") } }\n\
+                 struct Q { r: R, s: R }\n\
+                 fn peek(o: Option[Q]) { match o { Some(t) => { println(\"mid\"); } None => { println(\"n\"); } } }\n\
+                 fn main() { let a: Option[Q] = Option.None; peek(a); println(\"end\") }\n",
+                "n\nend\n",
+            ),
+        ] {
+            let (interp_out, interp_errs, _, _) = karac::run_program_full_checked(prog);
+            assert!(
+                interp_errs.is_empty(),
+                "[{label}] interp errored: {interp_errs:?}"
+            );
+            assert_eq!(interp_out.join(""), want, "[{label}] interpreter");
+            if let Some(aot) = run_program(prog) {
+                assert_eq!(aot, want, "[{label}] AOT");
             }
         }
     }
@@ -40112,22 +40307,23 @@ fn main() {
     /// ran it nowhere. Both ends move in this commit; masking one and not the
     /// other is what produced two of the three.
     ///
-    /// TWO CELLS ARE PINNED DIVERGENT, both pre-existing and byte-identical on
-    /// the parent tree:
+    /// TWO CELLS WERE PINNED DIVERGENT HERE AND ARE NOW CONVERGED, which is
+    /// the whole of what B-2026-09-19-48 changed in this fixture:
     ///
     /// ```text
-    ///   nomove  peek9 dR5 dR5      (the arm moves NOTHING; body runs twice)
-    ///   two     dR5 mid dR6 dR6    (the UNMOVED sibling's body runs twice)
+    ///   nomove  peek9 dR5 dR5  ->  peek9 dR5   (the arm moves NOTHING)
+    ///   two     dR5 mid dR6 dR6 -> dR5 mid dR6 (the UNMOVED sibling)
     /// ```
     ///
     /// One question, not two: for a STRUCT payload both the callee's arm
-    /// binding and the caller's named local believe they own the payload's
+    /// binding and the caller's named local believed they owned the payload's
     /// bodies, where the tuple spelling has exactly one owner. That is
     /// B-2026-09-17-38's subject — the sibling part's owner — reached from the
-    /// doubling side rather than the losing side, and deliberately NOT closed
-    /// here: this fix gives the MOVED field an owner, and re-homing the walk
-    /// for the UNMOVED ones is a different change with its own measurements.
-    /// Pinned so it cannot move silently.
+    /// doubling side rather than the losing side. It was deliberately left open
+    /// here, pinned so it could not move silently, and this is the deliberate
+    /// move: `bind_pattern_values` no longer registers a second walk on a
+    /// caller-retained payload binding, so the assertion above is now
+    /// byte-identical to the interpreter twin's, which is the point.
     ///
     /// The `heap` cell is the discriminator worth keeping: give the payload's
     /// field a `String` and every symptom vanishes on the parent tree too, so a
@@ -40214,7 +40410,7 @@ fn main() {
         ) else {
             return;
         };
-        assert_eq!(out, "named\n  dR5\n  mid\n  out\ntemp\n  dR5\n  mid\n  out\nafter\n  dR5\n  mid\n  after\n  out\nheap\n  dH5\n  mid\n  out\ntuple\n  dR5\n  mid\n  out\nnomove\n  peek9\n  dR5\n  dR5\n  out\nmethod\n  dR5\n  mid\n  out\nassoc\n  dR5\n  mid\n  out\ntwo\n  dR5\n  mid\n  dR6\n  dR6\n  out\nnone\n  n\n  out\nend\n", "got:\n{out}");
+        assert_eq!(out, "named\n  dR5\n  mid\n  out\ntemp\n  dR5\n  mid\n  out\nafter\n  dR5\n  mid\n  after\n  out\nheap\n  dH5\n  mid\n  out\ntuple\n  dR5\n  mid\n  out\nnomove\n  peek9\n  dR5\n  out\nmethod\n  dR5\n  mid\n  out\nassoc\n  dR5\n  mid\n  out\ntwo\n  dR5\n  mid\n  dR6\n  out\nnone\n  n\n  out\nend\n", "got:\n{out}");
     }
     /// B-2026-09-13-11 — the BODY COUNT for a read-only destructure of an
     /// own-`Drop` enum's payload: exactly one enclosing body, on the

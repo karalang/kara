@@ -164,6 +164,14 @@ pub(crate) struct PatternState<'ctx> {
     /// runs it twice.
     pub(crate) pattern_binding_arm_borrowed_only_names: std::collections::HashSet<String>,
     pub(crate) pattern_binding_scrutinee_is_owned_param: bool,
+    /// B-2026-09-19-48 — and does the caller have a walk ARMED over that
+    /// payload's fields? The flag above is true for every by-value param;
+    /// this one is true only where
+    /// `callee_by_value_optres_param_bodies_te` stands a walk up, which is
+    /// the condition `bind_pattern_values` actually needs before declining to
+    /// arm one of its own. Saved and restored around each `match`, beside its
+    /// neighbour.
+    pub(crate) pattern_binding_scrutinee_optres_bodies_are_caller_retained: bool,
     /// B-2026-09-15-21 — true while binding a pattern whose scrutinee's own
     /// heap this FRAME owns, i.e. the MEMORY half of the flag above.
     ///

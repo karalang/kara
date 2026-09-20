@@ -11786,10 +11786,35 @@ impl<'ctx> super::Codegen<'ctx> {
                             // A by-value PARAM root needs no mention here: it
                             // owns no `StructFieldBodies` action, so the second
                             // conjunct excludes it on its own.
+                            // B-2026-09-19-48 — a root in
+                            // `caller_retained_payload_arm_bindings` owns no
+                            // walk ON PURPOSE, and that is the opposite of the
+                            // by-value PARAM root the comment above excludes.
+                            // A param root owns none because the CALLER runs
+                            // its fields, so the destination must stand down; a
+                            // root here owns none because the caller's walk is
+                            // MASKED for exactly the field being moved out
+                            // (`remask_named_tuple_payload_arg`'s `Field` arm
+                            // for a named local, the fresh-temp registrar's
+                            // mask for a temp, both reading
+                            // `fn_consumed_param_payload_part_paths`), which
+                            // leaves the destination its only owner. Standing
+                            // it down too printed no body at all for the moved
+                            // field on every compiled surface.
+                            //
+                            // This is what brings the field spelling level with
+                            // the TUPLE spelling, exactly as the comment above
+                            // describes: a `TupleIndex` initializer never
+                            // reaches this gate and its destination keeps the
+                            // body, and a tuple payload arms no arm-side walk
+                            // either.
                             let src_owns_its_own_walk =
                                 Self::place_root_ident(value).is_some_and(|root| {
-                                    self.payload_vars.param_view_locals.contains(root)
-                                        && self.var_owns_struct_field_bodies(root)
+                                    self.payload_vars
+                                        .caller_retained_payload_arm_bindings
+                                        .contains(root)
+                                        || (self.payload_vars.param_view_locals.contains(root)
+                                            && self.var_owns_struct_field_bodies(root))
                                 });
                             if self.field_move_out_source_is_param_view(value)
                                 && !src_owns_its_own_walk

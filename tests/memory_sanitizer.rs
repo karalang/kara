@@ -99207,6 +99207,55 @@ fn main() {
         );
     }
 
+    /// B-2026-09-19-48 — A HEAP-CARRYING NAMED-STRUCT `Option` PAYLOAD HANDED
+    /// TO A BY-VALUE CALLEE HAD TWO OWNERS FOR ITS FIELD BODIES.
+    ///
+    /// The codegen twin is `tests/codegen.rs`'s
+    /// `e2e_named_struct_optres_payload_field_body_runs_once`, where the
+    /// inline-payload cells are BODY-ONLY — they double a `println` and free
+    /// nothing, so no sanitizer leg can see them. These cells give the payload
+    /// a `String` and a `Vec[i64]`, which does two things: it puts real memory
+    /// under the doubled body, and it makes the payload too wide to ride
+    /// inline, so the second owner is minted at a DIFFERENT site
+    /// (`disarm_struct_field_bodies_at`'s `$keep` mint rather than
+    /// `bind_pattern_values`' registration).
+    ///
+    /// Both spellings the row names are here — the arm that only READS the
+    /// payload and the arm that MOVES a field into an in-frame local — run in
+    /// a loop so a double free has somewhere to land. Measured at
+    /// `KARAC_OPT_LEVEL=0` under valgrind on the fix: 56 allocs, 56 frees,
+    /// 0 bytes in use at exit, 0 errors.
+    #[test]
+    fn asan_named_struct_optres_payload_field_bodies_have_one_owner() {
+        assert_clean_asan_run(
+            r#"
+struct R { id: i64, tag: String, xs: Vec[i64] }
+impl Drop for R { fn drop(mut ref self) { println(f"dR{self.id}") } }
+struct Q { r: R, s: R }
+
+fn mkr(k: i64) -> R { return R { id: k, tag: f"tag-{k}-padded-out-well-past-any-inline-capacity", xs: [k, k, k] } }
+
+fn peek(o: Option[Q]) -> i64 { match o { Option.Some(t) => { return t.r.id + 100; } Option.None => { return 0; } } }
+fn take(o: Option[Q]) -> i64 { match o { Option.Some(t) => { let x = t.r; return x.tag.len(); } Option.None => { return 0; } } }
+
+fn main() {
+    let mut n = 0;
+    while n < 3 {
+        { let g = peek(Option.Some(Q { r: mkr(n * 2), s: mkr(n * 2 + 1) })); println(f"p{g}"); }
+        { let a = Option.Some(Q { r: mkr(n * 2), s: mkr(n * 2 + 1) }); let g = take(a); println(f"t{g}"); }
+        n = n + 1;
+    }
+    println("end");
+}
+"#,
+            &[
+                "dR1", "dR0", "p100", "dR0", "dR1", "t46", "dR3", "dR2", "p102", "dR2", "dR3",
+                "t46", "dR5", "dR4", "p104", "dR4", "dR5", "t46", "end",
+            ],
+            "b91948-named-struct-payload-bodies",
+        );
+    }
+
     /// B-2026-09-19-40 — AN ARM THAT ONLY HANDS ITS BOXED `Array` PAYLOAD TO A
     /// FREE FUNCTION DOUBLE-FREED THE ELEMENT BUFFERS.
     ///

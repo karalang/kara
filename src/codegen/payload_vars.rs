@@ -455,6 +455,43 @@ pub(crate) struct PayloadVars<'ctx> {
     /// (`scrutinee_is_owned_param_binding` consults this), and its own
     /// let-site registration is memory-only. Cleared per-function.
     pub(crate) param_view_locals: HashSet<String>,
+    /// B-2026-09-19-48 — arm bindings over the WHOLE `Option`/`Result` payload
+    /// of a scrutinee the CALLER retains (a by-value param, or a param view),
+    /// for which `bind_pattern_values` deliberately registered NO field-bodies
+    /// walk.
+    ///
+    /// The caller still owns that payload's bodies — a named local's let-site
+    /// walk, or the fresh-temp registrar's `__karac_dropelems_opt_<T>_v` — and
+    /// the interpreter fires exactly that one, so an arm-side walk here would
+    /// be a second owner. A TUPLE payload has never armed one, which is why its
+    /// spelling of every cell in that row was already correct.
+    ///
+    /// Recording the decision is what keeps the move-out `let` in step with it:
+    /// `let x = t.r` reads `src_owns_its_own_walk` to decide whether the
+    /// destination keeps its body, and "the source owns no walk" means the
+    /// opposite thing for a by-value PARAM root (the caller runs the field, so
+    /// the destination must stand down) and for a root in this set (the caller
+    /// masks the field out, so the destination is its only owner). Cleared
+    /// per-function.
+    pub(crate) caller_retained_payload_arm_bindings: HashSet<String>,
+    /// B-2026-09-19-48 — the by-value `Option`/`Result` PARAM NAMES of the
+    /// function being lowered whose payload bodies the CALLER still owns, so
+    /// an arm over one of them must not arm a field-bodies walk of its own.
+    ///
+    /// It is the callee-side spelling of the answer
+    /// [`super::Codegen::callee_by_value_optres_param_bodies_te`] gives the
+    /// caller, computed from the same AST at frame entry. The two must agree
+    /// or the payload gets two owners (the caller stands a walk up and so does
+    /// the arm) or none (the caller declines and the arm stood down anyway) —
+    /// both measured, in opposite directions, on this row's own cells.
+    ///
+    /// A param the caller DECLINES for stays out, and the arm keeps its walk:
+    /// the escape map flags the variant (a copy read reached through a
+    /// `Drop`-bearing field is enough) and no channel can name which field
+    /// left, so the caller has no safe mask to stand up. Conservative in the
+    /// direction of the pre-existing behaviour rather than of the fix.
+    /// Cleared and repopulated per function.
+    pub(crate) caller_retained_optres_params: HashSet<String>,
     /// B-2026-08-29-47 — the PER-FIELD companion to [`Self::param_view_locals`]:
     /// for a binding built by a struct literal, which of its fields were filled
     /// from a param VIEW.
