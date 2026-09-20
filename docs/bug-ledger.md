@@ -92,9 +92,9 @@ distinguish "bugs flattening" from "we stopped writing them down."
 
 | class | total |
 |---|---|
-| run-vs-build | 455 |
+| run-vs-build | 456 |
 | miscompile | 427 |
-| leak | 384 |
+| leak | 385 |
 | double-free | 259 |
 | missing-feature | 202 |
 | codegen-gap | 181 |
@@ -104,13 +104,13 @@ distinguish "bugs flattening" from "we stopped writing them down."
 | false-positive | 108 |
 | soundness | 96 |
 | crash | 86 |
-| use-after-free | 45 |
+| use-after-free | 46 |
 
 ### By surface
 
 | surface | total |
 |---|---|
-| codegen | 1901 |
+| codegen | 1904 |
 | interp | 491 |
 | typecheck | 302 |
 | other | 102 |
@@ -219,6 +219,9 @@ _Generated from `bug-ledger.jsonl` by `scripts/bug-curve.py` (2026-05-20 → 202
 | B-2026-09-20-10 | 2026-09-20 | interp | medium | THE INTERPRETER, NOT THE COMPILED BACKENDS, LOSES A DISCARDED SEEDED-ENVELOPE VALUE'S `Drop` BODY -- `Some(a);` as a statement prints nothing under `--interp` where all three compiled surfaces correctly run the element's body, in 12 of 12 cells measured; the same discard in a user-declared enum is correct everywhere. Filed because it makes the interpreter a CONDITIONAL reference: every fixture in this family is written as an A/B against it | — |
 | B-2026-09-20-11 | 2026-09-20 | codegen | low | A CODEGEN DIAGNOSTIC FROM THE MODULE-VERIFICATION PATH CARRIES A FABRICATED SPAN -- a 6-line file reports `s1.kara:188:25`, a line that does not exist, while the `Index operator applied to non-array type` diagnostic on the SAME file reports a correct `4:52`. So the span is wrong only on the verifier route, which is also the route a reader is least able to sanity-check | — |
 | B-2026-09-20-12 | 2026-09-20 | codegen | high | A BY-VALUE ENUM ARGUMENT SPELLED AS A FIELD PROJECTION RUNS ITS PAYLOAD'S `Drop` BODY TWICE -- `eat(b.w)` fires the body once inside the callee and again in the caller, and the ONLY thing that turns it on is a SIBLING VARIANT carrying a shared or boxed payload; the same call spelled `eat(w)` over a named local, or `eat(W.A(..))` over a temporary, is correct. On a one-word heap-owning element the second body is a use-after-free | — |
+| B-2026-09-20-13 | 2026-09-20 | codegen | high | A BY-VALUE CALLEE FREES A GENERIC ENUM FIELD'S PAYLOAD BOX WHILE THE CALLER STILL OWNS THE STRUCT, so a SECOND use of the same field is a use-after-free -- `let h = wrap(g, true); shw(h.g); shw(h.g)` SEGFAULTS with 3 invalid reads and 2 invalid frees where one call is clean, because the callee registers the box drop from the CONCRETE `G1[String]` while the caller's `enum_param_owned_by_transfer` answers FALSE from the ERASED declaration | — |
+| B-2026-09-20-14 | 2026-09-20 | codegen | low | A GENERIC ENUM'S HEAP-BOXED PAYLOAD LEAKS ITS BOX IN A TUPLE ELEMENT AND A VEC ELEMENT -- `let t = (g, 7); match t.0 { .. }` and `v.push(g); match v[0] { .. }` each lose 32 B in 1 block at -O0 with 0 indirect, the payload's own `Drop` body running correctly, so only the envelope is lost and a due-sequence oracle cannot see the class at all | — |
+| B-2026-09-20-15 | 2026-09-20 | codegen | medium | A GENERIC ENUM'S PAYLOAD LOSES ITS USER `Drop` BODY ON ALL THREE COMPILED SURFACES when discarded or held as a Vec element and the payload is too WIDE for the erased one-word slot -- `let _ = Gen.Y(R { id, s })` prints `dR47` under --interp and nothing compiled; a ONE-WORD payload fits the slot, is not boxed, and is correct, and a payload owning no heap at all still loses its body, so the discriminator is the boxing decision rather than heap ownership | — |
 
 ### Relocated
 
