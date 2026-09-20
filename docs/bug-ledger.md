@@ -92,7 +92,7 @@ distinguish "bugs flattening" from "we stopped writing them down."
 
 | class | total |
 |---|---|
-| run-vs-build | 451 |
+| run-vs-build | 453 |
 | miscompile | 425 |
 | leak | 383 |
 | double-free | 257 |
@@ -110,8 +110,8 @@ distinguish "bugs flattening" from "we stopped writing them down."
 
 | surface | total |
 |---|---|
-| codegen | 1892 |
-| interp | 487 |
+| codegen | 1894 |
+| interp | 488 |
 | typecheck | 302 |
 | other | 101 |
 | ownership | 75 |
@@ -124,7 +124,7 @@ distinguish "bugs flattening" from "we stopped writing them down."
 | lexer | 11 |
 ## Current state
 
-_Generated from `bug-ledger.jsonl` by `scripts/bug-curve.py` (2026-05-20 → 2026-09-19). Do not edit this block by hand; edit the ledger and regenerate._
+_Generated from `bug-ledger.jsonl` by `scripts/bug-curve.py` (2026-05-20 → 2026-09-20). Do not edit this block by hand; edit the ledger and regenerate._
 
 ### Open
 
@@ -211,6 +211,8 @@ _Generated from `bug-ledger.jsonl` by `scripts/bug-curve.py` (2026-05-20 → 202
 | B-2026-09-19-59 | 2026-09-19 | codegen | high | AN `Array` ENUM PAYLOAD THAT FITS THE SEEDED ENVELOPE'S INLINE AREA IS FREED TWICE ON BOTH THE `let` AND THE `match` SPELLING -- `Array[S, 1]` over `S { tag: String }` is three words, fits `Option`'s three-word payload area, never boxes, and aborts with `free(): double free detected in tcache 2` where the four-word `Array[R, 1]` and the six-word `Array[S, 2]` are both correct. So the boundary is the INLINE/BOXED width gate rather than the element count, and it is the same gate B-2026-09-19-49's boundary measured out to -- two independent defects on one gate in two days, which is why this is worth a sweep of the gate rather than a row at a time | — |
 | B-2026-09-19-60 | 2026-09-19 | codegen | medium | A CONSUMING ARM THAT REBINDS A SEEDED `Array` PAYLOAD INTO A LOCAL LEAVES TWO OWNERS -- `match Option.Some(a) { Some(v) => { let u = v; .. } }` over a NAMED `Array[R, 2]` local aborts with two invalid frees at `-O0` against a correct `--interp`, and `@main` carries TWO `__karac_drop_array_te_R_2` calls over one element storage. No interior walk is armed for a consuming arm, so B-2026-09-19-58's paired retraction has nothing to pair with; B-2026-09-19-54 is the generic-envelope cousin (output correct, no abort) and B-2026-09-17-5 the bodies-channel twin | — |
 | B-2026-09-19-61 | 2026-09-19 | codegen+interp | high | A BY-VALUE `Array` PARAM MOVED INTO A SEEDED `match` SCRUTINEE IS FREED BY BOTH THE CALLER AND THE CALLEE -- the caller keeps its `__karac_drop_array_te_R_2` on purpose, because `array_param_elem_is_callee_owned` excludes an element that runs a user `Drop`, while the callee arms the box's interior walk over the same buffers and frees them on the way out; aborts at `-O0` with two invalid frees. The INTERPRETER independently runs the element bodies TWICE on this cell, so neither backend is the oracle for the other and a fix needs the `let`-local control instead | — |
+| B-2026-09-20-1 | 2026-09-20 | codegen | high | AN INLINE-FITTING `Array[T, 1]` ENUM PAYLOAD BOUND IN A MATCH ARM DOES NOT COMPILE -- `match g { S1.M(x) => x[0].v }` is rejected with `Index operator applied to non-array type` and the hand-on spelling fails LLVM module verification with `Call parameter type does not match function signature`, both on programs `--interp` runs correctly, because codegen binds the arm payload as a bare `i64` word that has lost its array-ness | — |
+| B-2026-09-20-2 | 2026-09-20 | codegen+interp | high | A BOXED `Array[T, N]` ENUM PAYLOAD RUNS ITS ELEMENTS' `Drop` BODIES AT THE WRONG TIME OR NOT AT ALL -- 19 of 20 cells fail, the compiled backends running the bodies BEFORE the statement that produced them where `--interp` runs them after, and every GENERIC read-only arm losing them on both sides; independent of the element's heap and of the arity, so it is the boxed payload itself rather than any property of the element | — |
 
 ### Relocated
 
