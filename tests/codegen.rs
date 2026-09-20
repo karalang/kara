@@ -170628,6 +170628,66 @@ fn main() {
             assert_eq!(out, "mid\nend\n");
         }
     }
+
+    /// B-2026-09-20-49 — a `shared` enum's box is NOT EMPTIED by an arm that
+    /// moves its inline tuple payload on.
+    ///
+    /// THE ONE CELL THAT SEPARATES THE TWO WAYS OF BALANCING THAT OWNERSHIP,
+    /// and it is an OUTPUT test rather than a memory one deliberately: both
+    /// ways are memory-clean, and only this assertion tells them apart.
+    ///
+    /// When an arm hands a shared enum's tuple payload to a new owner, the box
+    /// must stop owning the same buffers or the two double-free it. The obvious
+    /// way is to ZERO the box's payload words — it is what the non-shared path
+    /// does (`suppress_destructured_enum_payload_cleanup_at_limited`) and what
+    /// the `BoxedArray` channel's alias disarm does. It is wrong here for a
+    /// reason with no analogue on the non-shared side: a non-shared enum value
+    /// has exactly one owner, and a SHARED BOX IS REACHED BY EVERY HANDLE, so
+    /// zeroing retracts the payload out from under all of them.
+    ///
+    /// Measured on the first cut of that fix: this program printed
+    /// `L-again:0/` — an emptied box read back through a surviving handle —
+    /// against `L-again:7/L-t-aaaaaaaaaaa` from `--interp` and from the tree
+    /// before the fix. Valgrind reported zero lost bytes, zero invalid reads
+    /// and zero invalid frees on both, because THE PROGRAM IS MEMORY-BALANCED
+    /// EITHER WAY. No leak or invalid-access instrument in this project can see
+    /// a silently wrong VALUE; the interpreter was the only oracle.
+    ///
+    /// So the box RE-OWNS a deep copy instead
+    /// (`reown_shared_enum_inline_tuple_payload_on_move`): the arm's binding
+    /// keeps the ORIGINAL buffers, the box gets fresh ones, and every handle
+    /// reads the same characters.
+    ///
+    /// THIS PROGRAM DRAWS AN OWNERSHIP WARNING, and that is load-bearing rather
+    /// than sloppy. Matching a `shared` enum by value CONSUMES the handle, so a
+    /// second read after the arm is a move-then-use and the checker says so —
+    /// in every spelling tried (`let s2 = s1`, a second `match`, and `.clone()`,
+    /// which a shared enum does not have). There is therefore NO warning-free
+    /// program in which a shared box survives an arm that moved its payload,
+    /// which means the re-own keeps a WARNED-but-compiled program agreeing with
+    /// `--interp` rather than fixing a supported one. It is kept anyway,
+    /// because it is the only one of the two that agrees with the interpreter
+    /// on every program the compiler ACCEPTS, and the cheaper version is the one
+    /// that is silently wrong. Stated so a future reader can retire it
+    /// deliberately rather than by accident.
+    #[test]
+    fn test_e2e_shared_enum_tuple_payload_is_not_emptied_by_a_moving_arm() {
+        let src = r#"
+shared enum Sh { S((String, i64)), N }
+fn mkL(t: String) -> (String, i64) { return (f"L-{t}-aaaaaaaaaaa", 7); }
+fn main() {
+    let keep = Sh.S(mkL("t"));
+    match keep { Sh.S(x) => { let u = x; println(f"L:{u.0}"); } Sh.N => { println("e"); } }
+    match keep { Sh.S(y) => { println(f"L-again:{y.1}/{y.0}"); } Sh.N => { println("e2"); } }
+    println("done");
+}
+"#;
+        assert_eq!(
+            run_program(src),
+            Some("L:L-t-aaaaaaaaaaa\nL-again:7/L-t-aaaaaaaaaaa\ndone\n".to_string()),
+            "the shared box was emptied by the arm rather than re-owning a copy"
+        );
+    }
 }
 
 #[cfg(feature = "llvm")]

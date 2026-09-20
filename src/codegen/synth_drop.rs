@@ -7615,6 +7615,47 @@ impl<'ctx> super::Codegen<'ctx> {
         let i64_t = self.context.i64_type();
         let vec_ty = self.vec_struct_type();
 
+        // B-2026-09-20-49 — an INLINE TUPLE payload, answered FIRST because a
+        // tuple has no `TypeKind::Path` spelling and every arm below this one
+        // reads a path head; that is the whole of why this channel had no
+        // owner. `shared_enum_inline_tuple_payload_walk` is the single reader
+        // of the question, shared with the arm-side retraction so the two
+        // cannot drift — see its doc for why the row's `BoxedTuple` framing
+        // does not describe this shape.
+        //
+        // The words are the tuple's own, in order, starting at `word_idx`:
+        // `coerce_to_payload_words` packed each element's words consecutively
+        // and every one is 8 bytes, so the payload region reinterprets as the
+        // tuple's LLVM struct exactly as the inline-struct arm below
+        // reinterprets its own. Resolve the walker BEFORE the GEP: synthesizing
+        // it moves the builder's insert block, the discipline the two arms
+        // around this one document.
+        //
+        // NO RETRACTION IS NEEDED FOR THE SOURCE, and that is measured rather
+        // than assumed: a named tuple local moved into the constructor
+        // (`let a = mkt("n"); Sh.S(a)`) leaks the same 27 bytes as a fresh
+        // temporary, because a tuple is already disarmed on move. What DOES
+        // need one is the ARM — an arm that hands the payload to a new owner
+        // (`Sh.S(x) => { let u = x; .. }`, or one that returns it) leaves that
+        // owner freeing the same buffer this walk would — and that half lands
+        // with this one in `suppress_shared_enum_inline_tuple_payload_move`.
+        // Either alone is a regression in opposite directions, the same pairing
+        // B-2026-09-17-21 records for the array channel.
+        if let Some(elems) = self.shared_enum_inline_tuple_payload_walk(te, num_words) {
+            let tuple_drop = self.emit_tuple_drop_fn(&elems);
+            if let Ok(field_ptr) = self.builder.build_struct_gep(
+                enum_heap,
+                p_arg,
+                word_idx as u32,
+                &format!("{label}.ntup.p"),
+            ) {
+                self.builder
+                    .build_call(tuple_drop, &[field_ptr.into()], "")
+                    .unwrap();
+            }
+            return true;
+        }
+
         // Option[shared T].
         if let Some((_, inner_info)) = self.option_inner_shared_type_for_type_expr(te) {
             let child_heap = inner_info.heap_type;
@@ -8164,9 +8205,26 @@ impl<'ctx> super::Codegen<'ctx> {
             }
             false
         };
-        let any_walkable = variants
-            .iter()
-            .any(|(_, tys)| tys.iter().any(|te| field_is_walkable(self, te)));
+        // B-2026-09-20-49 — the INLINE-TUPLE question, which the closure above
+        // cannot answer: it takes a `TypeExpr` alone, and whether a tuple rides
+        // inline depends on the POSITION's allotted width. Asked through the
+        // one shared predicate, so the gate here, the walk below and the
+        // arm-side retraction all read the same answer.
+        let tuple_walkable = |slf: &Self, vname: &str, fi: usize, te: &TypeExpr| -> bool {
+            let num_words = layout
+                .field_word_offsets
+                .get(vname)
+                .and_then(|o| o.get(fi))
+                .map(|(_, w)| *w)
+                .unwrap_or(1);
+            slf.shared_enum_inline_tuple_payload_walk(te, num_words)
+                .is_some()
+        };
+        let any_walkable = variants.iter().any(|(vn, tys)| {
+            tys.iter()
+                .enumerate()
+                .any(|(fi, te)| field_is_walkable(self, te) || tuple_walkable(self, vn, fi, te))
+        });
         let has_user_drop = self
             .program_snapshot
             .as_ref()
@@ -8293,7 +8351,11 @@ impl<'ctx> super::Codegen<'ctx> {
         )> = Vec::new();
         for (vi, (vname, tys)) in variants.iter().enumerate() {
             let has_payload_body = (0..tys.len()).any(|fi| payload_bodies.contains_key(&(vi, fi)));
-            if !tys.iter().any(|te| field_is_walkable(self, te)) && !has_payload_body {
+            let any_field_walkable = tys
+                .iter()
+                .enumerate()
+                .any(|(fi, te)| field_is_walkable(self, te) || tuple_walkable(self, vname, fi, te));
+            if !any_field_walkable && !has_payload_body {
                 continue;
             }
             let Some(&tagv) = layout.tags.get(vname) else {

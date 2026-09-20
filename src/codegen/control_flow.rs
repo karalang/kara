@@ -354,7 +354,10 @@ impl<'ctx> super::Codegen<'ctx> {
             if optres_bindings_owned {
                 self.register_boxed_array_payload_alias(*alloca, enum_name, pattern);
             }
-            self.suppress_destructured_enum_payload_cleanup_at(*alloca, enum_name, pattern);
+            let reads_only = self.arm_payload_reads_only_block(pattern, then_block);
+            self.suppress_destructured_enum_payload_cleanup_at(
+                *alloca, enum_name, pattern, reads_only,
+            );
         } else if optres_bindings_owned {
             // B-2026-07-23-13: OWNED-VARIABLE user-enum scrutinee — the missing
             // mirror of the `match` path (control_flow_match.rs, the
@@ -371,7 +374,8 @@ impl<'ctx> super::Codegen<'ctx> {
             // `pattern_binding_is_borrow` and no-op here); the helper self-gates
             // to heap-bearing bound fields, so non-heap patterns no-op too. The
             // miss/else edge runs no suppression, so the drop frees `e` whole.
-            self.suppress_destructured_enum_payload_cleanup(value, pattern, None);
+            let reads_only = self.arm_payload_reads_only_block(pattern, then_block);
+            self.suppress_destructured_enum_payload_cleanup(value, pattern, None, reads_only);
             // B-2026-08-29-33 — the PROJECTION-PLACE sibling, which the `match`
             // path has run since #15 and these three legs never did. `if let
             // E.A(r) = s.e { let m = r; … }` therefore left the source struct's
@@ -1185,7 +1189,10 @@ impl<'ctx> super::Codegen<'ctx> {
             if optres_bindings_owned {
                 self.register_boxed_array_payload_alias(*alloca, enum_name, pattern);
             }
-            self.suppress_destructured_enum_payload_cleanup_at(*alloca, enum_name, pattern);
+            let reads_only = self.arm_payload_reads_only_block(pattern, body);
+            self.suppress_destructured_enum_payload_cleanup_at(
+                *alloca, enum_name, pattern, reads_only,
+            );
         } else if optres_bindings_owned {
             // B-2026-08-09-14 — the WHILE-LET leg of B-2026-07-23-13, which
             // gave this arm to `if let` and left the loop form on the raw
@@ -1209,7 +1216,8 @@ impl<'ctx> super::Codegen<'ctx> {
             // the assignment's drop of the old value reads the zeroed cap and
             // skips the payload the binding now owns, then the next
             // iteration's store re-populates and this store re-fires.
-            self.suppress_destructured_enum_payload_cleanup(value, pattern, None);
+            let reads_only = self.arm_payload_reads_only_block(pattern, body);
+            self.suppress_destructured_enum_payload_cleanup(value, pattern, None, reads_only);
             // B-2026-08-29-33, `while let` leg — see the `if let` note above.
             self.suppress_destructured_struct_field_enum_cleanup(value, pattern);
             // B-2026-08-31-30 — #16, the plain struct-pattern destructure,
@@ -2289,7 +2297,7 @@ impl<'ctx> super::Codegen<'ctx> {
             if optres_bindings_owned {
                 self.register_boxed_array_payload_alias(*alloca, enum_name, pattern);
             }
-            self.suppress_destructured_enum_payload_cleanup_at(*alloca, enum_name, pattern);
+            self.suppress_destructured_enum_payload_cleanup_at(*alloca, enum_name, pattern, None);
         } else if optres_bindings_owned {
             // B-2026-07-31-45 — the OWNED-VARIABLE disarm the match
             // (B-2026-07-23-13) and if-let sites already run: `let Full(r2)
@@ -2299,7 +2307,7 @@ impl<'ctx> super::Codegen<'ctx> {
             // while r2 is live). Zero the consumed fields so the walk skips
             // exactly what r2 now owns; the divergent else edge runs no
             // suppression and drops `w` whole.
-            self.suppress_destructured_enum_payload_cleanup(value, pattern, None);
+            self.suppress_destructured_enum_payload_cleanup(value, pattern, None, None);
             // B-2026-08-29-33, `let … else` leg — see the `if let` note above.
             self.suppress_destructured_struct_field_enum_cleanup(value, pattern);
             // B-2026-08-31-30 — #16, the plain struct-pattern destructure,

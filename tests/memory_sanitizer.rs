@@ -101685,4 +101685,166 @@ fn main() {
             "b1721-par-enum-arc-path-interior",
         );
     }
+
+    /// B-2026-09-20-49 — a `shared`/`par` enum's INLINE TUPLE payload has exactly
+    /// one owner, in every spelling that reaches it.
+    ///
+    /// THE ROW'S OWN FRAMING IS WRONG AND THE FIXTURE IS NOT, which is worth
+    /// saying at the top because the row's title says `BoxedTuple`. Read from
+    /// the emitted IR rather than from the classifier: `shared enum Sh {
+    /// S((String, i64)), N }` lays out as
+    /// `%karac.shared.Sh = type { i64, i64, i64, i64, i64, i64 }` — rc, tag and
+    /// the tuple's four words INLINE, with no payload `malloc` anywhere in the
+    /// program. `payload_word_count_for_type_expr`'s tuple arm SUMS its
+    /// elements, so this shape never reaches the oversize-boxing path at all.
+    /// Nothing walked it because `emit_shared_enum_rc_drop_fn`'s
+    /// `field_is_walkable` classifies only `TypeKind::Path` shapes and a tuple
+    /// field has no path head, so the enum declined its rc-drop fn entirely and
+    /// `emit_rc_dec` plain-`free`d the shell.
+    ///
+    /// The NON-SHARED twin of every cell below is clean on `main`, which is
+    /// what makes this a hole rather than a missing feature.
+    ///
+    /// MEASURED at `KARAC_OPT_LEVEL=0 KARAC_AUTO_PAR=0` under
+    /// `valgrind --leak-check=full`, with an invalid-read and invalid-free
+    /// column on every cell, over 35 cells A/B'd against the unfixed tree by
+    /// NAME. Definitely-lost bytes, control -> fixed:
+    ///
+    /// ```text
+    ///   A temp source, arm reads                26 -> 0
+    ///   B named source, arm reads               27 -> 0
+    ///   C handle outlives the block             28 -> 0
+    ///   D handle leaves the frame               29 -> 0
+    ///   E three constructions in a `while`      99 -> 0
+    ///   F two `Sh` elements of a `Vec`          68 -> 0
+    ///   G constructed and never matched         37 -> 0
+    ///   K the arm passes it to a free fn        28 -> 0
+    ///   M struct-shaped variant, arm reads      30 -> 0
+    ///   N a guard, then the arm reads           35 -> 0
+    ///   P `par enum`, the Arc release path      30 -> 0
+    ///   Q an arm reading ONE SCALAR ELEMENT     26 -> 0   (see below)
+    ///
+    ///   MUST STAY DECLINED -- clean on BOTH arms:
+    ///   H the arm binds the payload into a local  0 -> 0
+    ///   I the arm RETURNS the payload             0 -> 0
+    ///   J a scalar tuple, no interior at all      0 -> 0
+    /// ```
+    ///
+    /// THE LAST THREE ARE THE REAL GATE ON THIS CHANGE. The box walking its own
+    /// payload is only half of the fix: two of the fifteen original cells were
+    /// already clean because the ARM handed the payload to an owner, and
+    /// walking without standing that owner down double-frees exactly those. The
+    /// choice of which side gives way is forced rather than stylistic — in `I`
+    /// the payload OUTLIVES the box, whose release runs at that function's
+    /// exit, so retracting the arm's owner would hand the caller a freed buffer.
+    ///
+    /// AND THE BOX IS NOT EMPTIED TO ACHIEVE THAT. Zeroing the box's payload
+    /// words is the obvious mirror — it is what the non-shared path does and
+    /// what the `BoxedArray` channel's alias disarm does — and it is silent
+    /// wrong output here, because a shared box is reached by every handle.
+    /// Measured: a second handle read `0` where `--interp` and the pre-fix tree
+    /// both print `7`, valgrind clean on every column, so no memory instrument
+    /// in this project could see it. The box RE-OWNS a deep copy instead. That
+    /// cell is pinned separately, as a codegen E2E, because the only spellings
+    /// that expose it draw an ownership warning and this fixture stays
+    /// warning-free.
+    ///
+    /// CELL Q IS THE SECOND REGRESSION THIS FIXTURE GUARDS, and it is
+    /// B-2026-09-10-23's trap arriving by a different door. `fn peek(s: Sh) ->
+    /// i64 { match s { Sh.S(y) => { return y.1; } .. } }` reads the tuple's
+    /// `i64` and nothing else. The bare syntactic classifier calls any
+    /// projection off the binding a partial move, so the box handed its payload
+    /// to a binding that took nothing and had no cleanup — 26 B lost, on the
+    /// fix's own first cut. The leaf-aware `copy_read` policy that row
+    /// introduced is what answers it correctly.
+    ///
+    /// EVERY CELL'S STRING HAS A DISTINCT LENGTH, so a future regression's byte
+    /// count names which cell moved instead of leaving a total to apportion.
+    ///
+    /// NOT COVERED, and unchanged on both arms rather than broken here: an
+    /// `Array`-in-a-tuple payload (56 B), an `Option`-in-a-tuple payload
+    /// (40 B), the `let else` spelling (31 B) and a scrutinee that is a struct
+    /// FIELD (34 B). Those are B-2026-09-20-49's remainder.
+    #[test]
+    fn asan_shared_enum_inline_tuple_payload_has_an_owner() {
+        assert_clean_asan_run_min_allocs(
+            r#"
+shared enum Sh { S((String, i64)), N }
+shared enum St { S { a: (String, i64) }, N }
+shared enum Sc { S((i64, i64)), N }
+par enum Pr { S((String, i64)), N }
+
+fn mkA(t: String) -> (String, i64) { return (f"A-{t}-a", 7); }
+fn mkB(t: String) -> (String, i64) { return (f"B-{t}-aa", 7); }
+fn mkC(t: String) -> (String, i64) { return (f"C-{t}-aaa", 7); }
+fn mkD(t: String) -> (String, i64) { return (f"D-{t}-aaaa", 7); }
+fn mkE(t: String) -> (String, i64) { return (f"E-{t}-aaaaa", 7); }
+fn mkF(t: String) -> (String, i64) { return (f"F-{t}-aaaaaa", 7); }
+fn mkG(t: String) -> (String, i64) { return (f"G-{t}-aaaaaaa", 7); }
+fn mkH(t: String) -> (String, i64) { return (f"H-{t}-aaaaaaaa", 7); }
+fn mkI(t: String) -> (String, i64) { return (f"I-{t}-aaaaaaaaa", 7); }
+fn mkK(t: String) -> (String, i64) { return (f"K-{t}-aaaaaaaaaa", 7); }
+fn mkL(t: String) -> (String, i64) { return (f"L-{t}-aaaaaaaaaaa", 7); }
+fn mkM(t: String) -> (String, i64) { return (f"M-{t}-aaaaaaaaaaaa", 7); }
+fn mkN(t: String) -> (String, i64) { return (f"N-{t}-aaaaaaaaaaaaa", 7); }
+fn mkQ(t: String) -> (String, i64) { return (f"Q-{t}-aaaaaaaaaaaaaaa", 7); }
+fn mkP(t: String) -> (String, i64) { return (f"P-{t}-aaaaaaaaaaaaaa", 7); }
+
+fn mkD2() -> Sh { let a = mkD("n"); return Sh.S(a); }
+fn takeout(s: Sh) -> (String, i64) { match s { Sh.S(x) => { return x; } Sh.N => { return mkI("z"); } } }
+fn takef(t: (String, i64)) { println(f"K:{t.0}"); }
+fn peek(s: Sh) -> i64 { match s { Sh.S(y) => { return y.1; } Sh.N => { return -1; } } }
+
+fn main() {
+    { let s = Sh.S(mkA("t")); match s { Sh.S(x) => { println(f"A:{x.0}"); } Sh.N => { println("e"); } } }
+    let b = mkB("n");
+    { let s = Sh.S(b); match s { Sh.S(x) => { println(f"B:{x.0}"); } Sh.N => { println("e"); } } }
+    let mut keep = Sh.N;
+    { let c = mkC("n"); keep = Sh.S(c); }
+    match keep { Sh.S(x) => { println(f"C:{x.0}"); } Sh.N => { println("e"); } }
+    { let s = mkD2(); match s { Sh.S(x) => { println(f"D:{x.0}"); } Sh.N => { println("e"); } } }
+    let mut i = 0;
+    while i < 3 {
+        { let s = Sh.S(mkE("t")); match s { Sh.S(x) => { println(f"E:{x.0}"); } Sh.N => { println("e"); } } }
+        i = i + 1;
+    }
+    { let mut v: Vec[Sh] = Vec.new(); v.push(Sh.S(mkF("1"))); v.push(Sh.S(mkF("2"))); println(f"F:{v.len()}"); }
+    { let s = Sh.S(mkG("t")); println("G:built"); }
+    { let s = Sh.S(mkH("t")); match s { Sh.S(x) => { let u = x; println(f"H:{u.0}"); } Sh.N => { println("e"); } } }
+    { let t = takeout(Sh.S(mkI("t"))); println(f"I:{t.0}"); }
+    { let s = Sc.S((3, 4)); match s { Sc.S(x) => { println(f"J:{x.0}/{x.1}"); } Sc.N => { println("e"); } } }
+    { let s = Sh.S(mkK("t")); match s { Sh.S(x) => { takef(x); } Sh.N => { println("e"); } } }
+    { let l1 = Sh.S(mkL("t")); match l1 { Sh.S(x) => { let u = x; println(f"L:{u.0}"); } Sh.N => { println("e"); } } }
+    { let q = Sh.S(mkQ("t")); println(f"Q:{peek(q)}"); }
+    { let s = St.S { a: mkM("t") }; match s { St.S { a } => { println(f"M:{a.0}"); } St.N => { println("e"); } } }
+    { let s = Sh.S(mkN("t")); match s { Sh.S(x) if x.1 > 3 => { println(f"N:{x.0}"); } Sh.S(y) => { println(f"N2:{y.0}"); } Sh.N => { println("e"); } } }
+    { let s = Pr.S(mkP("t")); match s { Pr.S(x) => { println(f"P:{x.0}"); } Pr.N => { println("e"); } } }
+    println("done");
+}
+"#,
+            &[
+                "A:A-t-a",
+                "B:B-n-aa",
+                "C:C-n-aaa",
+                "D:D-n-aaaa",
+                "E:E-t-aaaaa",
+                "E:E-t-aaaaa",
+                "E:E-t-aaaaa",
+                "F:2",
+                "G:built",
+                "H:H-t-aaaaaaaa",
+                "I:I-t-aaaaaaaaa",
+                "J:3/4",
+                "K:K-t-aaaaaaaaaa",
+                "L:L-t-aaaaaaaaaaa",
+                "Q:7",
+                "M:M-t-aaaaaaaaaaaa",
+                "N:N-t-aaaaaaaaaaaaa",
+                "P:P-t-aaaaaaaaaaaaaa",
+                "done",
+            ],
+            "asan_shared_enum_inline_tuple_payload_has_an_owner",
+            30,
+        );
+    }
 }

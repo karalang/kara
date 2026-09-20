@@ -1132,6 +1132,105 @@ impl<'ctx> super::Codegen<'ctx> {
             .any(|(t, g, w, _)| *t == info.heap_type && *g == *tag && *w == word)
     }
 
+    /// B-2026-09-20-49 — the elements of a `shared`/`par` enum variant field
+    /// that is an INLINE tuple, or `None` when that field is not one the box
+    /// may walk.
+    ///
+    /// THE ONE READER OF THIS QUESTION, asked by both halves of the pair it
+    /// gates — the rc-drop's walk (`emit_shared_enum_field_drop`) and the
+    /// arm's retraction (`suppress_shared_enum_inline_tuple_payload_move`) —
+    /// so the two cannot disagree about which fields the box owns. That is the
+    /// same discipline `shared_enum_field_interior_is_armed` enforces for the
+    /// BOXED array channel one row over, and it is stated as a shared
+    /// PREDICATE rather than a registration table because the answer is a
+    /// property of the layout and the declared type alone: there is no
+    /// synthesis to be present or absent, so no function-order hazard of the
+    /// kind that forced B-2026-09-17-21's arming into a driver pass.
+    ///
+    /// WHAT WAS WRONG, and it is not what B-2026-09-20-49's title says. That
+    /// row reads the tuple channel as the `BoxedTuple` sibling of the array
+    /// one. It is not boxed at all: `payload_word_count_for_type_expr`'s tuple
+    /// arm SUMS its elements, so a `(String, i64)` payload is sized at its real
+    /// four words and rides INLINE in the shared box
+    /// (`%karac.shared.Sh = type { i64, i64, i64, i64, i64, i64 }`, measured in
+    /// the emitted IR — rc, tag, and the tuple's four words, with no payload
+    /// `malloc` anywhere). Nothing then walks it, because
+    /// `emit_shared_enum_rc_drop_fn`'s `field_is_walkable` classifies only
+    /// `TypeKind::Path` shapes and a tuple field has none, so the enum declines
+    /// its rc-drop fn entirely and `emit_rc_dec` plain-`free`s the shell.
+    ///
+    /// The NON-SHARED twin of all fifteen measured cells is clean, which is
+    /// what makes this a hole rather than a missing feature: the drop switch's
+    /// `NestedTuple` arm already walks the same inline words, and
+    /// `suppress_destructured_enum_payload_cleanup_at_limited` already retracts
+    /// for an arm that moves the payload on. Only the `shared` spelling reaches
+    /// neither.
+    ///
+    /// INLINE ONLY. A tuple whose natural width exceeds the position's area is
+    /// heap-boxed (`EnumDropKind::BoxedTuple`) and its payload word holds a box
+    /// pointer, which this walk would read as the first element. Answering
+    /// `None` there leaves that spelling exactly as it is today — still
+    /// leaking, and still B-2026-09-20-49's remainder rather than a regression.
+    pub(super) fn shared_enum_inline_tuple_payload_walk(
+        &self,
+        te: &crate::ast::TypeExpr,
+        num_words: usize,
+    ) -> Option<Vec<crate::ast::TypeExpr>> {
+        let crate::ast::TypeKind::Tuple(elems) = &te.kind else {
+            return None;
+        };
+        if elems.is_empty() {
+            return None;
+        }
+        // Nothing to free and nothing to double-free: a scalar tuple keeps the
+        // plain shell free it has always had.
+        if !self.type_expr_has_drop_heap(te) {
+            return None;
+        }
+        // The same completeness gate every other member of the recursive-drop
+        // family asks before promising to free a subtree.
+        if !self.te_recursive_drop_fully_supported(te) {
+            return None;
+        }
+        let tuple_ty = self.context.struct_type(
+            &elems
+                .iter()
+                .map(|e| self.llvm_type_for_type_expr(e))
+                .collect::<Vec<_>>(),
+            false,
+        );
+        if Self::llvm_type_word_count(tuple_ty.into()) > num_words {
+            return None;
+        }
+        Some(elems.clone())
+    }
+
+    /// B-2026-09-20-49 — the per-FIELD form of
+    /// [`Self::shared_enum_inline_tuple_payload_walk`], for callers holding a
+    /// variant and a position rather than a type and a width.
+    pub(super) fn shared_enum_field_inline_tuple_walk(
+        &self,
+        enum_name: &str,
+        variant: &str,
+        field_index: usize,
+    ) -> Option<Vec<crate::ast::TypeExpr>> {
+        let layout = self.type_decls.enum_layouts.get(enum_name)?;
+        if !layout.is_shared {
+            return None;
+        }
+        let (_, num_words) = layout
+            .field_word_offsets
+            .get(variant)?
+            .get(field_index)
+            .copied()?;
+        let te = self
+            .enum_variant_field_type_exprs(enum_name)
+            .into_iter()
+            .find(|(_, v, _)| v == variant)
+            .and_then(|(_, _, tes)| tes.get(field_index).cloned())?;
+        self.shared_enum_inline_tuple_payload_walk(&te, num_words)
+    }
+
     /// B-2026-09-17-21 — does ANY field of this `shared`/`par` enum variant
     /// carry an armed box? The cheap variant-level gate; the per-field question
     /// is [`Self::shared_enum_field_interior_is_armed`].

@@ -936,10 +936,12 @@ impl<'ctx> super::Codegen<'ctx> {
                     // aborting), and it has no scrutinee NAME, which is why the
                     // registry is keyed on the slot.
                     self.register_boxed_array_payload_alias(*alloca, enum_name, &arm.pattern);
+                    let reads_only = self.arm_payload_reads_only(&arm.pattern, &arm.body);
                     self.suppress_destructured_enum_payload_cleanup_at(
                         *alloca,
                         enum_name,
                         &arm.pattern,
+                        reads_only,
                     );
                 } else if let Some((alloca, struct_name)) = &freshtemp_struct {
                     // B-2026-08-30-15 — the struct twin of the line above. An
@@ -959,6 +961,7 @@ impl<'ctx> super::Codegen<'ctx> {
                         scrutinee,
                         &arm.pattern,
                         Some(&arm.body),
+                        None,
                     );
                     // B-2026-08-07-7 — the BOXED-payload struct-field channel
                     // the call above cannot reach (`is_heap_bearing()` is false
@@ -2656,12 +2659,14 @@ impl<'ctx> super::Codegen<'ctx> {
         // shapes (the four fixtures leg 2 was written to repair) on the ceiling
         // while giving the moved ones the disarm they always needed.
         let exempt = self.body_moved_payload_positions(&inner_enum, sub, body);
+        let reads_only = body.and_then(|b| self.arm_payload_reads_only(sub, b));
         self.suppress_destructured_enum_payload_cleanup_at_limited(
             box_ptr,
             &inner_enum,
             sub,
             Some(area),
             &exempt,
+            reads_only,
         );
     }
 
@@ -2802,7 +2807,7 @@ impl<'ctx> super::Codegen<'ctx> {
             .build_conditional_branch(is_null, join_bb, do_bb)
             .unwrap();
         self.builder.position_at_end(do_bb);
-        self.suppress_destructured_enum_payload_cleanup_at(box_ptr, &enum_name, pattern);
+        self.suppress_destructured_enum_payload_cleanup_at(box_ptr, &enum_name, pattern, None);
         self.builder.build_unconditional_branch(join_bb).unwrap();
         self.builder.position_at_end(join_bb);
     }
@@ -9577,6 +9582,7 @@ impl<'ctx> super::Codegen<'ctx> {
         scrutinee: &Expr,
         pattern: &Pattern,
         body: Option<&Expr>,
+        arm_reads_only: Option<bool>,
     ) {
         // An owned `self` receiver (`impl E { fn get(self) { match self { E.V(s)
         // => … } } }`) parses as `SelfValue`, not `Identifier("self")`. Without
@@ -9606,7 +9612,12 @@ impl<'ctx> super::Codegen<'ctx> {
         // never that loop — are covered by the same line. Both abort on the
         // consuming arm exactly as the `match` spelling does.
         self.register_boxed_array_payload_alias(slot.ptr, &enum_name, pattern);
-        self.suppress_destructured_enum_payload_cleanup_at(slot.ptr, &enum_name, pattern);
+        let reads_only = body
+            .and_then(|b| self.arm_payload_reads_only(pattern, b))
+            .or(arm_reads_only);
+        self.suppress_destructured_enum_payload_cleanup_at(
+            slot.ptr, &enum_name, pattern, reads_only,
+        );
         // B-2026-08-31-23 — when the scrutinee is a whole-payload binding over
         // a BOXED payload, the line above disarmed a BIT COPY. The box still
         // owns the same buffer, so disarm there too or the arm's move and the
@@ -9817,7 +9828,7 @@ impl<'ctx> super::Codegen<'ctx> {
         let Some(field_ptr) = self.field_chain_place_ptr(scrutinee) else {
             return;
         };
-        self.suppress_destructured_enum_payload_cleanup_at(field_ptr, &enum_name, pattern);
+        self.suppress_destructured_enum_payload_cleanup_at(field_ptr, &enum_name, pattern, None);
         // B-2026-08-29-33 — the BODIES half, beside the MEMORY half above.
         // Gated on the arm actually taking a body-running payload, exactly as
         // the identifier path gates its `suppress_container_elem_bodies_for_var`
@@ -12091,6 +12102,7 @@ impl<'ctx> super::Codegen<'ctx> {
         slot_ptr: PointerValue<'ctx>,
         enum_name: &str,
         pattern: &Pattern,
+        arm_reads_only: Option<bool>,
     ) {
         self.suppress_destructured_enum_payload_cleanup_at_limited(
             slot_ptr,
@@ -12098,6 +12110,77 @@ impl<'ctx> super::Codegen<'ctx> {
             pattern,
             None,
             &std::collections::HashSet::new(),
+            arm_reads_only,
+        )
+    }
+
+    /// B-2026-09-20-49 — does every payload binding this pattern introduces get
+    /// only READ by the arm body, so the source keeps its single owner?
+    ///
+    /// The question the shared inline-tuple retraction needs and the only one
+    /// its callers can answer, because it is about the BODY and the retraction
+    /// runs from a helper that never sees one. `None` where the pattern binds
+    /// nothing or no body is available; the retraction reads `None` as "may
+    /// move", which is the leak-safe direction — a missed retraction is a
+    /// double free, an unnecessary one is the leak this channel already had.
+    ///
+    /// Same classifier (`binding_only_borrowed`) the arm loop's own
+    /// borrowed-only set is built from, so the two cannot disagree about what
+    /// counts as a read.
+    pub(super) fn arm_payload_reads_only(&self, pattern: &Pattern, body: &Expr) -> Option<bool> {
+        let binds = Self::arm_payload_binds(pattern);
+        if binds.is_empty() {
+            return None;
+        }
+        // B-2026-09-10-23's LEAF-AWARE policy, not the bare syntactic walk. The
+        // syntactic classifier calls every projection off the binding a partial
+        // move, and that bias is the wrong way round at THIS decision for the
+        // reason its own doc gives one row over: over-reporting a take is what
+        // makes the box give its payload away, and an arm that took nothing
+        // then owns the original with no cleanup. Measured — `fn peek(s: Sh)
+        // -> i64 { match s { Sh.S(y) => { return y.1; } .. } }`, reading the
+        // tuple's `i64` and nothing else, leaked the 26-byte `String` beside it
+        // under the syntactic verdict and is clean under this one.
+        let tes = self.arm_binding_scalar_tes(pattern);
+        let copy_read = |e: &Expr| Self::arm_binding_scalar_copy_read(&tes, e);
+        Some(
+            binds
+                .iter()
+                .all(|v| super::consume_class::binding_only_borrowed_with(v, body, &copy_read)),
+        )
+    }
+
+    /// The payload binding names for the reads-only question above, in BOTH
+    /// variant shapes.
+    ///
+    /// Not [`Self::variant_arm_binds`], which matches `TupleVariant` alone and
+    /// returns an empty list for a struct-shaped variant — an empty list here
+    /// reads as "unknown", so `S { a }` took the leak-safe branch and kept the
+    /// leak this row is about. Measured as 30 B on the struct-shaped cell while
+    /// its tuple-shaped twin read 0.
+    fn arm_payload_binds(pattern: &Pattern) -> Vec<String> {
+        let mut binds = Vec::new();
+        Self::collect_variant_payload_binding_names(pattern, false, &mut binds);
+        binds
+    }
+
+    /// The BLOCK spelling of [`Self::arm_payload_reads_only`], for the
+    /// `if let` / `let else` / `while let` legs whose arm body is a block.
+    pub(super) fn arm_payload_reads_only_block(
+        &self,
+        pattern: &Pattern,
+        body: &crate::ast::Block,
+    ) -> Option<bool> {
+        let binds = Self::arm_payload_binds(pattern);
+        if binds.is_empty() {
+            return None;
+        }
+        let tes = self.arm_binding_scalar_tes(pattern);
+        let copy_read = |e: &Expr| Self::arm_binding_scalar_copy_read(&tes, e);
+        Some(
+            binds.iter().all(|v| {
+                super::consume_class::binding_only_borrowed_block_with(v, body, &copy_read)
+            }),
         )
     }
 
@@ -12148,6 +12231,146 @@ impl<'ctx> super::Codegen<'ctx> {
     ///
     /// `None` keeps the historical behaviour — disarm every bound position — for
     /// the callers whose scrutinee is the enum itself rather than a box.
+    /// B-2026-09-20-49 — hand the ARM the payload it moved, and give the shared
+    /// BOX a COPY, when an arm of a `shared`/`par` enum moves an inline tuple
+    /// payload on.
+    ///
+    /// THE SHARED SIBLING OF
+    /// [`Self::suppress_destructured_enum_payload_cleanup_at_limited`] IS NOT A
+    /// RETRACTION, and that is the whole of this function. Zeroing was the
+    /// obvious mirror — it is what the non-shared original does, what the
+    /// `BoxedArray` channel's alias disarm does, and what this function did
+    /// until its own grid caught it. It is wrong here for a reason that has no
+    /// analogue on the non-shared side: THE WORDS ARE NOT THIS BINDING'S. A
+    /// non-shared enum value has exactly one owner, so zeroing its payload
+    /// affects nobody else; a shared box is reached by every handle, and
+    /// zeroing its words retracts the payload out from under all of them.
+    ///
+    /// MEASURED, and it is silent wrong output rather than a memory error:
+    ///
+    /// ```text
+    /// let s1 = Sh.S(mkt("x"));
+    /// let s2 = s1;                                   // a second handle
+    /// match s2 { Sh.S(x) => { let u = x; .. } .. }   // the arm moves it on
+    /// peek(s1)                                       // reads the box again
+    /// ```
+    ///
+    /// prints `7` on `--interp` and on the tree before this row, and printed
+    /// `0` with a zeroing retraction — valgrind clean on every column, so no
+    /// leak or invalid-access instrument in this project can see it. The
+    /// interpreter is the oracle here and it is unambiguous: a `match` does not
+    /// empty the box.
+    ///
+    /// So the box RE-OWNS a copy instead. The arm's binding was materialised as
+    /// a bit copy of these very words before this runs, so deep-copying the
+    /// box's payload in place leaves the binding holding the ORIGINAL buffers —
+    /// which it or whatever it was moved to frees — and the box holding fresh
+    /// ones, which its rc-drop frees at zero. Every other handle reads the copy
+    /// and sees the same characters. Two owners, two buffers, no double free
+    /// and no retraction.
+    ///
+    /// WHAT IT COSTS AND WHY THAT IS THE RIGHT TRADE: one allocation per
+    /// element, on the arm that moves a shared enum's tuple payload out, and on
+    /// no other path. The alternative that costs nothing is the zeroing above,
+    /// and it buys the saving with an answer that is wrong.
+    ///
+    /// Reached only where the caller established that the arm MOVES its binding
+    /// rather than reading it (`arm_reads_only`), so a read-only arm copies
+    /// nothing and the box stays the single owner.
+    fn reown_shared_enum_inline_tuple_payload_on_move(
+        &mut self,
+        slot_ptr: PointerValue<'ctx>,
+        enum_name: &str,
+        pattern: &Pattern,
+    ) {
+        let Some(info) = self.type_decls.shared_types.get(enum_name).cloned() else {
+            return;
+        };
+        let Some((variant_name, consumed_positions)) =
+            self.enum_pattern_consumed_positions(enum_name, pattern)
+        else {
+            return;
+        };
+        let Some(offsets) = self
+            .type_decls
+            .enum_layouts
+            .get(enum_name)
+            .and_then(|l| l.field_word_offsets.get(&variant_name))
+            .cloned()
+        else {
+            return;
+        };
+        // `{ rc, tag, w0, .. }`, or `{ strong, weak, tag, w0, .. }` when the box
+        // carries a weak header — the same shift the rc-drop's own walk applies.
+        let tag_idx: u32 = if self.heap_type_is_weak_headered(info.heap_type) {
+            2
+        } else {
+            1
+        };
+        let targets: Vec<(usize, Vec<crate::ast::TypeExpr>)> = consumed_positions
+            .iter()
+            .filter_map(|pos| {
+                let elems =
+                    self.shared_enum_field_inline_tuple_walk(enum_name, &variant_name, *pos)?;
+                let (start_word, _) = offsets.get(*pos).copied()?;
+                Some((start_word, elems))
+            })
+            .collect();
+        if targets.is_empty() {
+            return;
+        }
+        let Some(cur_fn) = self.current_fn else {
+            return;
+        };
+        // The slot holds the box POINTER, not the enum's words. Load it and
+        // null-guard once for the whole copy: a handle can legitimately be null
+        // here (a moved-from binding), and the guard is what the rc cleanup
+        // emitted against the same slot already does.
+        let ptr_ty = self.context.ptr_type(AddressSpace::default());
+        let boxp = self
+            .builder
+            .build_load(ptr_ty, slot_ptr, "shtup.reown.boxp")
+            .unwrap()
+            .into_pointer_value();
+        let is_null = self
+            .builder
+            .build_is_null(boxp, "shtup.reown.isnull")
+            .unwrap();
+        let do_bb = self.context.append_basic_block(cur_fn, "shtup.reown.do");
+        let join_bb = self.context.append_basic_block(cur_fn, "shtup.reown.join");
+        self.builder
+            .build_conditional_branch(is_null, join_bb, do_bb)
+            .unwrap();
+        self.builder.position_at_end(do_bb);
+        // CLONE-ON-EXTRACT, not entry-copy: a bare `shared` element ends up
+        // co-owned by the box's copy and by the binding, so its handle needs the
+        // rc bump this flag turns on. Saved and restored — it is a mode, and
+        // leaving it set would change every later copy in this function body.
+        let saved_rc_inc = self.drop_rc.deep_copy_rc_inc_bare_shared;
+        self.drop_rc.deep_copy_rc_inc_bare_shared = true;
+        for (start_word, elems) in targets {
+            let field_tys: Vec<inkwell::types::BasicTypeEnum<'ctx>> = elems
+                .iter()
+                .map(|e| self.llvm_type_for_type_expr(e))
+                .collect();
+            let tuple_ty = self.context.struct_type(&field_tys, false);
+            let Ok(base) = self.builder.build_struct_gep(
+                info.heap_type,
+                boxp,
+                tag_idx + 1 + start_word as u32,
+                "shtup.reown.p",
+            ) else {
+                continue;
+            };
+            for (i, ete) in elems.iter().enumerate() {
+                self.deep_copy_one_aggregate_field(base, tuple_ty, i as u32, ete);
+            }
+        }
+        self.drop_rc.deep_copy_rc_inc_bare_shared = saved_rc_inc;
+        self.builder.build_unconditional_branch(join_bb).unwrap();
+        self.builder.position_at_end(join_bb);
+    }
+
     fn suppress_destructured_enum_payload_cleanup_at_limited(
         &mut self,
         slot_ptr: PointerValue<'ctx>,
@@ -12155,12 +12378,27 @@ impl<'ctx> super::Codegen<'ctx> {
         pattern: &Pattern,
         max_position_words: Option<usize>,
         ceiling_exempt_positions: &std::collections::HashSet<usize>,
+        arm_reads_only: Option<bool>,
     ) {
         let layout = match self.type_decls.enum_layouts.get(enum_name) {
             Some(l) => l.clone(),
             None => return,
         };
         if layout.is_shared {
+            // B-2026-09-20-49 — a `shared`/`par` enum reaches its own sibling
+            // rather than nothing. The blanket return this replaces was right
+            // for as long as a shared box owned no payload interior: with
+            // nothing on the box's side to stand down, zeroing its words would
+            // have retracted the only owner there was. Now that the box walks
+            // an inline tuple payload, this function's own hazard applies to it
+            // word for word — an arm that moves the payload on mints a second
+            // owner for the same buffers — so the retraction moves with the
+            // arming, as a pair. The addressing differs enough (a box POINTER
+            // in the slot, and an `{rc, tag}` rather than `{tag}` prefix on the
+            // words) that it is a sibling function and not a branch here.
+            if arm_reads_only != Some(true) {
+                self.reown_shared_enum_inline_tuple_payload_on_move(slot_ptr, enum_name, pattern);
+            }
             return;
         }
         let Some((variant_name, consumed_positions)) =
@@ -17025,8 +17263,9 @@ impl<'ctx> super::Codegen<'ctx> {
                 let ename = ename.clone();
                 let exempt = self.body_moved_payload_positions(&ename, sub, body);
                 let ceiling = body.is_some().then_some(area);
+                let reads_only = body.and_then(|b| self.arm_payload_reads_only(sub, b));
                 self.suppress_destructured_enum_payload_cleanup_at_limited(
-                    box_ptr, &ename, sub, ceiling, &exempt,
+                    box_ptr, &ename, sub, ceiling, &exempt, reads_only,
                 );
             }
         }
