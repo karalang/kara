@@ -92,13 +92,13 @@ distinguish "bugs flattening" from "we stopped writing them down."
 
 | class | total |
 |---|---|
-| run-vs-build | 466 |
+| run-vs-build | 467 |
 | miscompile | 430 |
 | leak | 392 |
 | double-free | 260 |
 | missing-feature | 202 |
 | codegen-gap | 181 |
-| other | 142 |
+| other | 143 |
 | diagnostics | 129 |
 | perf | 115 |
 | false-positive | 108 |
@@ -110,8 +110,8 @@ distinguish "bugs flattening" from "we stopped writing them down."
 
 | surface | total |
 |---|---|
-| codegen | 1927 |
-| interp | 498 |
+| codegen | 1928 |
+| interp | 500 |
 | typecheck | 302 |
 | other | 103 |
 | ownership | 75 |
@@ -136,7 +136,6 @@ _Generated from `bug-ledger.jsonl` by `scripts/bug-curve.py` (2026-05-20 → 202
 | B-2026-09-14-10 | 2026-09-14 | codegen+interp | low | WHETHER A BORROW-PROJECTION ARGUMENT COPIES DEPENDS ON WHETHER THE CALLEE KEEPS IT, NOT ON THE CALL SPELLING -- a storing callee runs the field's `Drop` body TWICE and a discarding one ONCE, identically for free / assoc / inherent-method / builtin and on all four surfaces; what is OPEN is whether the discard-elision should exist at all, since design.md says a by-value pass copies and does not distinguish the two | — |
 | B-2026-09-14-28 | 2026-09-14 | codegen | medium | `vertical`'s +85% SSO REGRESSION IS NOT THE DE-INLINE PROBE AND NOT `prefix_string` -- both were ruled out by measurement (c1adb9c removed the probe: +84.1% -> +85.4%; an exact mirror of `prefix_string` runs 9-15% FASTER under SSO), so the worst regression in the corpus is now UNATTRIBUTED. `shortest_distance_iii` (+36%) and `shortest_distance` (+61%) are the same shape. Reachable only at KARAC_SSO=1, which is off by default. | — |
 | B-2026-09-15-17 | 2026-09-15 | codegen | low | AN `Array[R, N]` WHOSE ELEMENT RUNS A USER `Drop` BODY, MOVED INTO AN ENUM VARIANT CONSTRUCTOR, RUNS THOSE BODIES BEFORE THE CONSUMING CALL ON EVERY COMPILED BACKEND and after it under `--interp` -- the identical program with a plain function call in place of the constructor is correctly ordered on both, which puts the divergence at the constructor rather than at the array | — |
-| B-2026-09-15-33 | 2026-09-15 | codegen+interp | medium | AN INDEX-ASSIGN WHOSE RHS IS A NAMED LOCAL RUNS THE DISPLACED ELEMENT'S `Drop` BODY UNDER `--interp` AND ON NO COMPILED SURFACE -- `a[0] = b` diverges on the `Array` AND `Vec` legs alike while the fresh-literal RHS agrees, because `store_destroys_displaced` classifies an identifier RHS as a RELOCATION on purpose (B-2026-08-26-21); the open question is whether `a[0] = b` is a relocation at all, not why the call is missing | — |
 | B-2026-09-16-5 | 2026-09-16 | codegen | low | A BY-VALUE TUPLE PARAM HOLDING AN `Array[T, N]` STILL LEAKS ITS ELEMENTS IN TWO SHAPES -- a param moved to a LOCAL inside the callee, and a FRESH TEMPORARY argument whose param is returned -- because the two available ownership models each break the other's cell: the entry copy orphans a temporary's buffers, and transfer needs a caller-side disarm that has no hook for a tuple argument | — |
 | B-2026-09-16-6 | 2026-09-16 | codegen+interp | medium | TWO BODIES-CHANNEL GAPS FOR AN `Array[T, N]` HELD IN A TUPLE, both found while pinning the output twin of B-2026-09-13-23's memory fix and both memory-clean under it: a tuple in a STRUCT FIELD runs no element `Drop` body on ANY backend, and a DESTRUCTURED tuple runs them under `--interp` and on NEITHER compiled backend -- an agreed silence and a run-vs-build divergence in the same family | — |
 | B-2026-09-16-11 | 2026-09-16 | codegen | low | THE ENUM TWIN OF B-2026-09-05-32'S IDENTITY ARM STILL LEAKS -- `e = if c { pass(e) } else { e }` over `enum E { A(String), B }` loses 36 bytes in 1 block (12 allocs / 11 frees at -O0) while the all-owned-calls spelling `else { mk() }` is 12 / 12 clean on the same tree; the enum overwrite path consumes the STRICT `roundtrip_frees_old` because it has no distinctness guard, so widening the shared predicate would have traded the leak for a use-after-free there | — |
@@ -235,6 +234,8 @@ _Generated from `bug-ledger.jsonl` by `scripts/bug-curve.py` (2026-05-20 → 202
 | B-2026-09-20-38 | 2026-09-20 | codegen | high | A BOXED GENERIC-ENUM PAYLOAD FORWARDED THROUGH A GENERIC MIDDLE FUNCTION IS FREED BY THE INNER MONOMORPH WHILE THE CALLER STILL OWNS IT -- `fn gfwd[T](g: G[T]) -> i64 { return glen(g) }` over `let g: G[String]` reads and frees the box a second time in `main` after `glen` has already freed it: 4 valgrind errors at `-O0` for a `String` payload, 8 for `Vec[String]`, 4 for a plain struct, 5 for `Array[String, 2]` and 7 three deep, while the IDENTICAL program with a CONCRETE middle function is clean. THE MEMORY IS BALANCED, so valgrind's LEAK SUMMARY prints "All heap blocks were freed" and `definitely lost: 0` -- the leak column, which is where a reader of this family looks first, AGREES WITH THE BUG, and only the `Invalid read` / `Invalid free` lines above it see anything; whether ASAN reports it is NOT measured and is the first thing to check, since `tests/memory_sanitizer.rs` asserts only that the ASAN binary exits zero | — |
 | B-2026-09-20-39 | 2026-09-20 | codegen | low | AN OWNED-`self` RECEIVER ON A GENERIC IMPL BLOCK STRANDS AN `Array[String, N]` PAYLOAD'S ELEMENT BUFFERS WHEN THE METHOD MATCHES THE RECEIVER -- 33 B in 2 blocks at `-O0`, envelope freed and nothing indirectly lost, where the NON-matching sibling of the same method on the same value is clean; `param_name != "self"` (B-2026-09-16-31) carves the receiver out of the monomorph param registration on the grounds that the CALLER retains, and the caller's element cleanup has already been stood down at the constructor, so the interior has no owner once the method destructures | — |
 | B-2026-09-20-40 | 2026-09-20 | codegen | medium | A GENERIC `shared enum` NEVER RELEASES ITS RC BOX WHEN THE PAYLOAD NEEDS A HEAP-AWARE DROP -- `let s: S[String] = S.Y(f"..")` at a plain let site with NO CALL OF ANY KIND leaks 24 B in 1 block plus its buffer indirectly, and `S[Array[String, 2]]` leaks 48 B in 1 plus 38 B in 2; the MONOMORPHIC twin `shared enum S { Y(String), N }` is clean and the same generic enum at `T = i64` is clean, so the fault is the pair (generic + a payload with heap) rather than either half, and a match that TAKES the payload drops the indirect loss to zero while the same 24 B envelope still leaks | — |
+| B-2026-09-20-42 | 2026-09-20 | codegen+interp | medium | A `ref` BINDING DOES NOT EXTEND THE BORROWED CONTAINER'S LIVE RANGE, so the container's element runs its `Drop` body BEFORE a read through the borrow, on `--interp` and `karac build -O0` alike -- `{ let mut d: Vec[Vec[D]] = [[D{31}]]; let e: ref Vec[D] = ref d[0]; println(f"x:{e[0].id}"); }` prints `d31` and THEN `x:31`, while the control differing in exactly one thing -- a single direct use of `d` after the borrow's last use, `println(f"len:{d.len()}")` -- prints the due `x:41 len:1 d41`. So `d` dies at its last SYNTACTIC mention (`ref d[0]`) and the borrow that outlives it does not count toward its range. MEMORY-CLEAN, which is what sets the severity: valgrind at `-O0` reports 13 allocs / 13 frees, 0 bytes in use at exit and 0 errors, so the fault is body ORDER and not lifetime -- the user body runs early against a value the runtime still frees correctly later. REACHABLE FROM ORDINARY CODE rather than hunted for: chained indexed field receivers (`d[0][0].id`) are deferred to v1.x, so a `ref` binding is the only way to read an element of a nested container at all. | — |
+| B-2026-09-20-43 | 2026-09-20 | interp | medium | `--interp` LOSES THE DISPLACED ELEMENT'S `Drop` BODY WHEN AN INDEX-ASSIGN IS ROOTED AT A FIELD OF `mut ref self`, and it is the only backend that does -- `struct Bag { xs: Vec[D] }` with `impl Bag { fn put(mut ref self, t: D) { self.xs[0] = t; } }` prints `eight:82 d82` under `--interp` against `d81 eight:82 d82` on `karac run`, `-O0` and `-O2` alike, and the hand-derived sequence puts `d81` at the store because the displaced `D{81}` dies there. MEASURED AS ONE CELL OF AN EIGHT-CELL INDEX-ASSIGN BATTERY in which the other seven agree on all four surfaces, so this is not the compiled side over-firing: seven cells' worth of agreement is the control. The compiled answers come from B-2026-09-15-33's fix, which touches `src/codegen/stmts.rs` and nothing else, so the interpreter's answer is unchanged by it and this divergence PREDATES it. The flat-root spelling `a[0] = t` is correct under `--interp`, so the interpreter's gap is specifically the `self`-field root. | — |
 
 ### Relocated
 
@@ -2702,6 +2703,7 @@ _Generated from `bug-ledger.jsonl` by `scripts/bug-curve.py` (2026-05-20 → 202
 | B-2026-09-15-30 | codegen | low | A MONOMORPH BODY NEVER INSTALLS `discarded_branch_spans`, so every branch inside a generic instantiation reads as NON-DISCARDED -- the sibling of the… | 51b916f |
 | B-2026-09-15-31 | codegen | low | AN INDEX-ASSIGN OVER A CONTAINER OF TUPLES LEAKS THE DISPLACED TUPLE'S HEAP ELEMENTS, ON BOTH THE `Array` AND THE `Vec` LEG -- 10 B in 1 block at `-O… | 6c0f802 |
 | B-2026-09-15-32 | codegen+interp | medium | A NESTED `Array[Array[T, N], M]` INDEX-ASSIGN LOSES THE DISPLACED INNER ARRAY'S ELEMENT `Drop` BODIES AND LEAKS THEIR HEAP, ON BOTH BACKENDS -- `a[0]… | 6c0f802 |
+| B-2026-09-15-33 | codegen+interp | medium | AN INDEX-ASSIGN WHOSE RHS IS A NAMED LOCAL RAN THE DISPLACED ELEMENT'S `Drop` BODY UNDER `--interp` AND ON NO COMPILED SURFACE, AND THE TRUE SHAPE WA… | 777dbd7 |
 | B-2026-09-15-34 | interp | medium | A SHADOWED BINDING REBOUND THROUGH A CALL RUNS ITS USER `Drop` BODY TWICE IN THE INTERPRETER -- `let q = mk(15); let q = idr(q);` prints `dR15 dR15`… | 1cf1d8e |
 | B-2026-09-15-35 | codegen+interp | low | A STRUCT FIELD DECLARED AS A BARE GENERIC PARAM BOUND TO A CONTAINER LOSES ITS ELEMENTS' `Drop` BODIES ON ALL FOUR SURFACES -- `G[T] { a: T }` at `T… | 19a6674 |
 | B-2026-09-15-36 | other | medium | THE CODEGEN E2E HARNESS IGNORES TYPECHECK ERRORS, so a fixture cell whose program DOES NOT COMPILE runs on the interpreter anyway and passes green wh… | 5daa730 |
