@@ -9715,8 +9715,23 @@ impl<'ctx> super::Codegen<'ctx> {
                     .iter()
                     .all(|v| super::consume_class::binding_only_borrowed_with(v, b, &copy_read))
         });
+        // 4b. B-2026-09-20-41 — conjunct 4 above is the question "is the
+        //    payload binding a VIEW", and a NAMED LOCAL answers no, which is
+        //    correct exactly when the payload's OWN `karac_drop_<T>` runs a
+        //    body. It does when the payload is a struct with `impl Drop`
+        //    (`Ho[W]`, the cell point 4 was measured on). It does NOT when the
+        //    payload is a CONTAINER whose only Drop-bearing thing is its
+        //    ELEMENT (`Slot[Array[R, 2]]`): there is no `karac_drop_Array`
+        //    running `R`'s body, so the genum bodies walker is the sole
+        //    channel at a named local too, and masking it printed nothing.
+        //    So the conjunct becomes a disjunction, with the new arm asking
+        //    the question of the INSTANTIATION — `arm_consumes_only_generic_
+        //    payload` and the declared variant type both spell the payload
+        //    `T`, one word, from which no container head is readable.
         let bodies_mask_is_sole_channel = arm_reads_only_bodies
-            && self.scrutinee_is_owned_param_binding(scrutinee)
+            && (self.scrutinee_is_owned_param_binding(scrutinee)
+                || self
+                    .arm_generic_payload_bodies_are_element_only(scrut_name, &enum_name, pattern))
             && self.var_has_boxed_enum_drop(scrut_name)
             && self.arm_consumes_only_generic_payload(&enum_name, pattern);
         if self.enum_pattern_consumes_user_drop_payload(&enum_name, pattern) {
@@ -12762,6 +12777,117 @@ impl<'ctx> super::Codegen<'ctx> {
     /// drop must still fire (suppressing it would leak). A struct-variant
     /// shorthand field (`{ value }`, `pattern: None`) is a direct binding and
     /// always consumes.
+    /// B-2026-09-20-41 — do the positions this arm takes instantiate to a
+    /// CONTAINER whose Drop bodies live only in its ELEMENTS?
+    ///
+    /// Asked of the INSTANTIATION, not the declaration. A generic enum's
+    /// variant declares its payload as the enum's own type parameter — `T`,
+    /// one word — so every syntactic reader of the variant type returns the
+    /// conservative default here and the container head is unreachable from
+    /// it. `var_types.var_enum_inst_te` is the instantiated type the let-site
+    /// registered, which is the only place `Array[R, 2]` is spelled.
+    ///
+    /// The distinction it draws is between two shapes that look identical at
+    /// the declaration: `Slot[Array[R, 2]]`, where only `R` runs a body and
+    /// the generic-payload bodies walker is the sole channel that can run it,
+    /// and `Ho[W]`, where `W`'s own `karac_drop_W` is a SECOND channel — so
+    /// standing the mask down there runs the body twice. Measured: dropping
+    /// the conjunct wholesale doubles `e2e_generic_boxed_enum_payload_body_
+    /// survives_a_read_only_binding_arm`'s named-local cell (`dW4` twice).
+    fn arm_generic_payload_bodies_are_element_only(
+        &self,
+        scrut_name: &str,
+        enum_name: &str,
+        pattern: &Pattern,
+    ) -> bool {
+        let Some(inst) = self.var_types.var_enum_inst_te.get(scrut_name).cloned() else {
+            return false;
+        };
+        let TypeKind::Path(p) = &inst.kind else {
+            return false;
+        };
+        let args: Vec<TypeExpr> = p
+            .generic_args
+            .as_ref()
+            .map(|gs| {
+                gs.iter()
+                    .filter_map(|g| match g {
+                        GenericArg::Type(t) => Some(t.clone()),
+                        _ => None,
+                    })
+                    .collect()
+            })
+            .unwrap_or_default();
+        if args.is_empty() {
+            return false;
+        }
+        let params = self.enum_generic_param_names(enum_name);
+        if params.is_empty() || params.len() != args.len() {
+            return false;
+        }
+        let subst: std::collections::HashMap<String, TypeExpr> =
+            params.into_iter().zip(args).collect();
+        let Some((variant_name, consumed)) =
+            self.enum_pattern_consumed_positions(enum_name, pattern)
+        else {
+            return false;
+        };
+        if consumed.is_empty() {
+            return false;
+        }
+        let Some((_, _, tes)) = self
+            .enum_variant_field_type_exprs(enum_name)
+            .into_iter()
+            .find(|(_, n, _)| *n == variant_name)
+        else {
+            return false;
+        };
+        consumed.into_iter().all(|pos| {
+            tes.get(pos).is_some_and(|te| {
+                let inst_te = Self::subst_type_params(te, &subst);
+                self.type_bodies_are_element_only(&inst_te)
+            })
+        })
+    }
+
+    /// A `Vec[E]` / `Array[E, N]` whose ELEMENT declares (or reaches) a user
+    /// `Drop` body while the container itself declares none. `Array[R, 2]` in
+    /// annotation position parses as `Path(["Array"], [R, 2])`, so the head is
+    /// read off the path segment; the `[T; N]` sugar's own `TypeKind::Array`
+    /// is accepted too, since it names the same shape.
+    fn type_bodies_are_element_only(&self, te: &TypeExpr) -> bool {
+        let elem = match &te.kind {
+            TypeKind::Path(p) => {
+                let head = p.segments.last().map(|s| s.as_str()).unwrap_or("");
+                if !matches!(head, "Vec" | "Array" | "Vector") {
+                    return false;
+                }
+                let Some(gs) = p.generic_args.as_ref() else {
+                    return false;
+                };
+                match gs.iter().find_map(|g| match g {
+                    GenericArg::Type(t) => Some(t.clone()),
+                    _ => None,
+                }) {
+                    Some(t) => t,
+                    None => return false,
+                }
+            }
+            TypeKind::Array { element, .. } => (**element).clone(),
+            _ => return false,
+        };
+        let TypeKind::Path(ep) = &elem.kind else {
+            return false;
+        };
+        if ep.generic_args.is_some() {
+            return false;
+        }
+        let Some(ename) = ep.segments.last() else {
+            return false;
+        };
+        self.plain_struct_has_user_drop_deep(ename, 0)
+    }
+
     pub(super) fn enum_pattern_consumed_positions(
         &self,
         enum_name: &str,

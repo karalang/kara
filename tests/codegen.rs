@@ -49681,6 +49681,86 @@ end
         }
     }
 
+    /// B-2026-09-20-41 — a generic enum whose payload instantiates to a
+    /// CONTAINER runs its ELEMENTS' `Drop` bodies at a read-only match arm.
+    ///
+    /// The generic-payload bodies walker is the SOLE channel that can run
+    /// `R::drop` for a `Slot[Array[R, 2]]`: there is no `karac_drop_Array`
+    /// carrying it, and the arm binds `v` read-only so the binding never
+    /// becomes an owner. The bodies mask used to stand that walker down at
+    /// every scrutinee except a by-value param, which is the right answer only
+    /// when the payload has a SECOND channel — a payload struct with its own
+    /// `impl Drop`, the `Ho[W]` cell below, where standing the mask down
+    /// prints the body twice. So the gate asks whether the payload's bodies
+    /// are ELEMENT-ONLY, and asks it of the INSTANTIATION: the variant
+    /// declares its payload as `T`, one word, from which no container head is
+    /// readable.
+    ///
+    /// The two PINNED GAPS are the remainder, both still compiled-lags-
+    /// interpreter: a `Vec` payload's walker is discarded before emission
+    /// (`define 0 / call 0`, where `Array` is `define 1 / call 0`), and a
+    /// fresh ctor temp never reaches this site at all.
+    #[test]
+    fn e2e_generic_enum_container_payload_runs_element_bodies_at_a_read_only_arm() {
+        let hdr = "struct R { id: i64 }\n\
+                   impl Drop for R { fn drop(mut ref self) { println(f\"dR{self.id}\") } }\n\
+                   fn mkr(i: i64) -> R { return R { id: i }; }\n\
+                   struct W { a: String }\n\
+                   impl Drop for W { fn drop(mut ref self) { println(f\"dW{self.a.len()}\") } }\n\
+                   fn mkw() -> W { return W { a: f\"aaa{1}\" }; }\n\
+                   enum Slot[T] { S(T), N }\n\
+                   fn seenarr(x: Slot[Array[R, 2]]) { match x { Slot.S(v) => { println(f\"x{v[0].id}\") } Slot.N => { println(\"no\") } } }\n";
+        for (label, stmts, want) in [
+            (
+                "THE FIX: Array payload, NAMED LOCAL scrutinee, read-only arm",
+                "let a: Array[R, 2] = [mkr(1), mkr(2)];\n\
+                 let s: Slot[Array[R, 2]] = Slot.S(a);\n\
+                 match s { Slot.S(v) => { println(f\"x{v[0].id}\") } Slot.N => { println(\"no\") } }",
+                "x1\ndR1\ndR2\nend\n",
+            ),
+            (
+                "control: same shape, the arm CONSUMES its binding — unchanged",
+                "let a: Array[R, 2] = [mkr(1), mkr(2)];\n\
+                 let s: Slot[Array[R, 2]] = Slot.S(a);\n\
+                 match s { Slot.S(v) => { let z = v; println(f\"x{z[0].id}\") } Slot.N => { println(\"no\") } }",
+                "x1\ndR1\ndR2\nend\n",
+            ),
+            (
+                "control: BY-VALUE PARAM scrutinee — the arm the old gate allowed",
+                "let a: Array[R, 2] = [mkr(1), mkr(2)];\nseenarr(Slot.S(a));",
+                "x1\ndR1\ndR2\nend\n",
+            ),
+            (
+                "control: no match at all — the husk's own walk, never masked",
+                "let a: Array[R, 2] = [mkr(1), mkr(2)];\n\
+                 let s: Slot[Array[R, 2]] = Slot.S(a);\n\
+                 println(\"mid\");",
+                "dR1\ndR2\nmid\nend\n",
+            ),
+            (
+                "control: payload struct with its OWN body — a second channel, must NOT double",
+                "let g: Slot[W] = Slot.S(mkw());\n\
+                 match g { Slot.S(r) => { println(f\"w:{r.a.len()}\") } Slot.N => { println(\"no\") } }",
+                "w:4\ndW4\nend\n",
+            ),
+            (
+                "PINNED GAP: a Vec payload — its walker is discarded before emission",
+                "let a: Vec[R] = [mkr(1), mkr(2)];\n\
+                 let s: Slot[Vec[R]] = Slot.S(a);\n\
+                 match s { Slot.S(v) => { println(f\"x{v[0].id}\") } Slot.N => { println(\"no\") } }",
+                "x1\nend\n",
+            ),
+            (
+                "PINNED GAP: a FRESH CTOR TEMP scrutinee never reaches this site",
+                "match Slot.S([mkr(1), mkr(2)]) { Slot.S(v) => { println(f\"x{v[0].id}\") } Slot.N => { println(\"no\") } }",
+                "x1\nend\n",
+            ),
+        ] {
+            let src = format!("{hdr}fn main() {{\n{stmts}\nprintln(\"end\");\n}}\n");
+            assert_eq!(run_program(&src).as_deref(), Some(want), "[{label}]");
+        }
+    }
+
     #[test]
     fn e2e_wildcard_let_discard_owns_what_its_arm_hands_out() {
         let hdr = "struct R { id: i64, name: String }\n\

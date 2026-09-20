@@ -6598,7 +6598,7 @@ impl<'ctx> super::Codegen<'ctx> {
 
     /// Whether `name`, or a plain struct reachable through its fields,
     /// declares `impl Drop`. Depth-bounded like its walk sibling.
-    fn plain_struct_has_user_drop_deep(&self, name: &str, depth: u32) -> bool {
+    pub(super) fn plain_struct_has_user_drop_deep(&self, name: &str, depth: u32) -> bool {
         if depth > 8 {
             return false;
         }
