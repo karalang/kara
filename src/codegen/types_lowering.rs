@@ -5196,10 +5196,32 @@ impl<'ctx> super::Codegen<'ctx> {
                 // Every shape this row was filed for is all-`None` and is
                 // admitted unchanged: `Y(T, i64)`, `Y(i64, T)`, `Y(T, T)` and
                 // `Y { a: T, n: i64 }` all measured clean of their boxes.
-                if kinds.is_some_and(|ks| ks.iter().any(|k| *k != EnumDropKind::None)) {
-                    continue;
-                }
+                //
+                // B-2026-09-19-39 — THE STAND-DOWN IS NOW PER-FIELD, which is
+                // what the paragraph above says it could not be until the
+                // suppressor stopped zeroing the whole slot. It now zeroes the
+                // box's own word for exactly this population
+                // (`boxed_enum_multi_field_box_word`), so a heap-bearing
+                // SIBLING keeps its `cap > 0` guard and the trade the
+                // whole-variant form existed to refuse is no longer on offer:
+                // measured on `enum Gh[T] { Y(T, String), N }` at
+                // `T = Array[String, 2]`, the box is recovered AND the siblings
+                // stay freed.
+                //
+                // The per-field test keeps the first half of what the
+                // whole-variant form protected, unchanged: a field the drop
+                // switch already owns has a non-`None` kind and is skipped, so
+                // the NON-generic multi-field variants that `declarations.rs`
+                // classified at declare time (B-2026-09-15-15) still never
+                // reach `multi_field_boxed_field`. What changes is only that
+                // such a field no longer takes its SIBLINGS down with it.
                 for (fi, fty) in tys.iter().enumerate() {
+                    if kinds
+                        .and_then(|ks| ks.get(fi))
+                        .is_some_and(|k| *k != EnumDropKind::None)
+                    {
+                        continue;
+                    }
                     let concrete = Self::subst_type_params(fty, &subst);
                     let Some((start_word, field_words)) = offsets.and_then(|o| o.get(fi)).copied()
                     else {

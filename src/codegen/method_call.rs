@@ -11336,6 +11336,14 @@ impl<'ctx> super::Codegen<'ctx> {
                                 &payload_te,
                                 box_field,
                             );
+                            // B-2026-09-19-39 — see the sibling site in
+                            // `functions.rs`: a multi-field variant's box shares
+                            // its slot, so only its own word may be zeroed.
+                            if box_only {
+                                self.payload_vars
+                                    .boxed_enum_multi_field_vars
+                                    .insert("__urecv_drop_tmp".to_string());
+                            }
                         }
                     }
                     // B-2026-09-06-38 — an ENUM receiver temp's BODIES. This

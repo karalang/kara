@@ -2683,6 +2683,15 @@ impl<'ctx> super::Codegen<'ctx> {
                             &payload_te,
                             box_field,
                         );
+                        // B-2026-09-19-39 — a MULTI-FIELD variant's box shares
+                        // its slot with siblings that own their own drops, so
+                        // the argument-move suppressor must zero this one word
+                        // rather than the slot.
+                        if box_only {
+                            self.payload_vars
+                                .boxed_enum_multi_field_vars
+                                .insert(param_name.clone());
+                        }
                     }
                     // B-2026-09-10-2 — the BODIES half of the same param. The
                     // name-keyed walker skips a generic-param payload by

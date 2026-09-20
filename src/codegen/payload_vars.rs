@@ -116,6 +116,48 @@ pub(crate) struct PayloadVars<'ctx> {
     /// destination still references downstream → UAF (selfhost slice 3c-iv:
     /// `TraitMethodNode { body, .. }` for `let mut body = Some(parse_block())`).
     pub(crate) boxed_enum_payload_vars: std::collections::HashSet<String>,
+    /// B-2026-09-19-39 — the subset of [`Self::boxed_enum_payload_vars`] whose
+    /// box sits in a MULTI-FIELD variant, mapped to the enum field its box word
+    /// occupies.
+    ///
+    /// Membership of the set above arms
+    /// `suppress_inline_option_result_binding_move_impl`, which disarms a moved
+    /// binding by zeroing the WHOLE slot — sound for every shape it was written
+    /// against, because in all of them the box IS the payload. A multi-field
+    /// variant breaks that premise: a heap-bearing SIBLING has its own `cap > 0`
+    /// guard in the same slot, and zeroing the slot clears it too, so the
+    /// sibling's buffer is freed by nobody. Measured on
+    /// `enum Gh[T] { Y(T, String), N }` at `T = Array[String, 2]`: the box is
+    /// recovered and the two sibling `String`s start leaking instead.
+    ///
+    /// So this records the ONE word the suppressor may zero for such a binding.
+    /// The `BoxedEnumDrop` emit already carries a defensive null-guard on the
+    /// box word (it predates this row), so a null there disarms the box drop
+    /// exactly as a zeroed tag does — and the sibling's guard is left alone.
+    ///
+    /// A separate set rather than a flag folded into the one above, because the
+    /// suppressor is a shape-blind path a dozen registration shapes share: a
+    /// binding absent from here keeps the whole-slot zero byte for byte, which
+    /// is what every one of those shapes has been tested on.
+    ///
+    /// THIS RECORDS ONLY THE FACT, NEVER THE WORDS. The words are read at the
+    /// disarm from the binding's LIVE `BoxedEnumDrop` actions, and that is not
+    /// a stylistic choice — both wrong ways were measured:
+    ///
+    ///  * one word per binding kept only the LAST registration, so
+    ///    `enum Gt[T] { Y(T, T), N }`, which registers a `BoxedEnumDrop` per
+    ///    field against one binding, left its first box armed through a move
+    ///    and freed it twice: exit 134 on a cell that had been clean.
+    ///  * a `Vec` per binding accumulated words across registrations that are
+    ///    not all in the slot at once, so the disarm zeroed a word belonging to
+    ///    a SIBLING and the leak it exists to prevent came straight back —
+    ///    `Gh` went from 12 B in 4 blocks to 22 B in 6, the extra 10 B being
+    ///    the two sibling `String`s exactly as the declined per-field form lost
+    ///    them.
+    ///
+    /// The queued actions are by construction the set that would actually fire,
+    /// so reading them answers the question the disarm is really asking.
+    pub(crate) boxed_enum_multi_field_vars: std::collections::HashSet<String>,
     /// B-2026-08-28-66 — the payload STRUCT name recorded alongside each
     /// `boxed_enum_payload_vars` entry.
     ///

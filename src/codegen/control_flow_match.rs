@@ -14337,6 +14337,83 @@ impl<'ctx> super::Codegen<'ctx> {
         // layout stays the fallback for a slot that is not a struct (an
         // indirectly-held binding), where the old store is what has been
         // tested.
+        // B-2026-09-19-39 — a MULTI-FIELD variant's box does NOT own its slot,
+        // so zeroing the slot is the wrong disarm for it. A heap-bearing
+        // SIBLING in the same variant carries its own `cap > 0` guard, and the
+        // whole-slot store clears that guard along with the box's, leaving the
+        // sibling's buffer owned by nobody: measured on
+        // `enum Gh[T] { Y(T, String), N }` at `T = Array[String, 2]`, the box is
+        // recovered and the two sibling `String`s leak in its place — a strictly
+        // worse trade, and the reason B-2026-09-15-18 declined the shape rather
+        // than register it.
+        //
+        // Zeroing the box's OWN word is a complete disarm on its own, and that
+        // is not a new guarantee: the `BoxedEnumDrop` emit already loads the
+        // word at `payload_field_index` and branches to its join on null,
+        // defensively, from long before this row. So a null there stops the box
+        // free exactly as a zeroed tag does, and every other guard in the slot
+        // is left standing.
+        //
+        // The map is populated ONLY by the multi-field population
+        // (`user_enum_boxed_payload_variants`' `box_only` arm). Every other
+        // binding that reaches here is absent from it and takes the whole-slot
+        // store below, byte for byte — which matters, because this path is
+        // shape-blind and a dozen registration shapes have their measurements
+        // written against exactly that store.
+        if self
+            .payload_vars
+            .boxed_enum_multi_field_vars
+            .contains(name.as_str())
+        {
+            // The words come from the binding's LIVE `BoxedEnumDrop` actions,
+            // never from a side record: those are by construction the boxes
+            // that would actually fire, so this disarms exactly them. A side
+            // record keyed by name went wrong in both directions — one word
+            // kept only the last registration and left `Gt.Y(T, T)`'s first box
+            // armed, and a `Vec` accumulated words that are not all in the slot
+            // at once and zeroed a SIBLING's guard, bringing back the very leak
+            // this exists to prevent.
+            let box_words: Vec<u32> = self
+                .drop_rc
+                .scope_cleanup_actions
+                .iter()
+                .flatten()
+                .filter_map(|a| match a {
+                    super::state::CleanupAction::BoxedEnumDrop {
+                        name: n,
+                        payload_field_index,
+                        ..
+                    } if n == name.as_str() => Some(*payload_field_index),
+                    _ => None,
+                })
+                .collect();
+            if let inkwell::types::BasicTypeEnum::StructType(st) = slot.ty {
+                if !box_words.is_empty() && box_words.iter().all(|w| *w < st.count_fields()) {
+                    let i64_t = self.context.i64_type();
+                    let mut all_stored = true;
+                    for w in &box_words {
+                        match self.builder.build_struct_gep(
+                            st,
+                            slot.ptr,
+                            *w,
+                            &format!("{}_mfbox_disarm_ptr", name),
+                        ) {
+                            Ok(w_ptr) => {
+                                let _ = self.builder.build_store(w_ptr, i64_t.const_zero());
+                            }
+                            Err(_) => all_stored = false,
+                        }
+                    }
+                    if all_stored {
+                        return;
+                    }
+                }
+            }
+            // The slot is not a struct, or the recorded word is out of range
+            // for it. Both mean the registration and the slot disagree, which
+            // this disarm cannot repair; fall through to the tested store
+            // rather than emit a guess.
+        }
         let zero_val: inkwell::values::BasicValueEnum<'ctx> = match slot.ty {
             inkwell::types::BasicTypeEnum::StructType(st) => st.const_zero().into(),
             _ => layout.llvm_type.const_zero().into(),

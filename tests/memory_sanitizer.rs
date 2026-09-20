@@ -99275,4 +99275,78 @@ fn main() {
             "asan_boxed_array_payload_handed_to_callee_owned_param_no_double_free",
         );
     }
+
+    /// B-2026-09-19-39 — A GENERIC MULTI-FIELD VARIANT'S BOXED `Array` PAYLOAD
+    /// WAS STRANDED, BECAUSE REGISTERING IT WOULD HAVE COST THE SIBLING.
+    ///
+    /// B-2026-09-15-18 gave such a variant a `BoxedEnumDrop` but stood the
+    /// WHOLE variant down the moment any field carried a live drop kind,
+    /// deliberately: membership of `boxed_enum_payload_vars` arms
+    /// `suppress_inline_option_result_binding_move_impl`, which disarms a moved
+    /// binding by zeroing the whole slot. That is sound for every shape it was
+    /// written against, where the box IS the payload. In a multi-field variant
+    /// a heap-bearing SIBLING has its own `cap > 0` guard in the same slot, so
+    /// the whole-slot store cleared that too and the sibling's buffer was owned
+    /// by nobody — the box recovered at the cost of a previously-freed buffer,
+    /// which that row correctly declined to trade.
+    ///
+    /// The disarm now zeroes the box's OWN words, so both stand: the stand-down
+    /// is per-FIELD and the sibling keeps its guard. Measured at `-O0` under
+    /// `valgrind --leak-check=full`, this program loses 256 B in 8 blocks
+    /// before and is clean after, with `--interp` and AOT byte-identical
+    /// throughout.
+    ///
+    /// FIVE ROWS, and three of them are here because two earlier versions of
+    /// this fix passed the first two and broke them:
+    ///
+    ///  * `Y(T, String)` — the row's own shape, box FIRST.
+    ///  * `Y(String, T)` — box SECOND, so the disarmed word is not word 0.
+    ///  * `Y(T, T)` — TWO boxes on one binding. A version that recorded one
+    ///    word per binding kept only the last and left the first box armed
+    ///    through the move: exit 134 on a cell that had been clean.
+    ///  * `Y(T, Vec[String])` — the sibling's heap is a `Vec`, not a `String`.
+    ///  * the same shape matched LOCALLY, never passed to a callee, which is
+    ///    what says the strand is the registration rather than the
+    ///    argument-move path the row guessed at.
+    ///
+    /// The element type is `i64` DELIBERATELY. An `Array[String, N]` payload
+    /// still leaks its ELEMENTS here — the registration is box-only and the
+    /// interior is B-2026-09-16-15's subject — so a `String`-element cell
+    /// cannot appear in a clean-run fixture while that row is open. Every cell
+    /// below owns exactly one box plus its sibling's heap, which is what this
+    /// row is about.
+    #[test]
+    fn asan_generic_multi_field_variant_box_and_heap_sibling_both_freed() {
+        assert_clean_asan_run(
+            r#"
+enum Gh[T] { Y(T, String), N }
+enum Ghs[T] { Y(String, T), N }
+enum Gt[T] { Y(T, T), N }
+enum Gv[T] { Y(T, Vec[String]), N }
+fn mkI(i: i64) -> Array[i64, 4] { return [i, i + 1, i + 2, i + 3]; }
+fn mkv(s: String) -> Vec[String] { let mut v: Vec[String] = Vec.new(); v.push(s); return v; }
+fn fh(g: Gh[Array[i64, 4]]) -> i64 { match g { Gh.Y(x, s) => { return x[0] + s.len(); } Gh.N => { return 0; } } }
+fn fhs(g: Ghs[Array[i64, 4]]) -> i64 { match g { Ghs.Y(s, x) => { return x[0] + s.len(); } Ghs.N => { return 0; } } }
+fn ft(g: Gt[Array[i64, 4]]) -> i64 { match g { Gt.Y(x, y) => { return x[0] + y[1]; } Gt.N => { return 0; } } }
+fn fv(g: Gv[Array[i64, 4]]) -> i64 { match g { Gv.Y(x, v) => { return x[0] + v.len(); } Gv.N => { return 0; } } }
+fn main() {
+    let mut i = 1;
+    while i < 3 {
+        { let g: Gh[Array[i64, 4]] = Gh.Y(mkI(i), f"sib-{i}-padpadpad"); println(f"h:{fh(g)}"); }
+        { let g: Ghs[Array[i64, 4]] = Ghs.Y(f"sib-{i}-padpadpad", mkI(i)); println(f"s:{fhs(g)}"); }
+        { let g: Gt[Array[i64, 4]] = Gt.Y(mkI(i), mkI(i + 10)); println(f"t:{ft(g)}"); }
+        { let g: Gv[Array[i64, 4]] = Gv.Y(mkI(i), mkv(f"v-{i}-padpadpad")); println(f"v:{fv(g)}"); }
+        { let g: Gh[Array[i64, 4]] = Gh.Y(mkI(i), f"loc-{i}-padpadpad");
+          match g { Gh.Y(x, s) => { println(f"L:{x[0] + s.len()}"); } Gh.N => { println("n"); } } }
+        i = i + 1;
+    }
+    println("end");
+}
+"#,
+            &[
+                "h:16", "s:16", "t:13", "v:2", "L:16", "h:17", "s:17", "t:15", "v:3", "L:17", "end",
+            ],
+            "asan_generic_multi_field_variant_box_and_heap_sibling_both_freed",
+        );
+    }
 }
