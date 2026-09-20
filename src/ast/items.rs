@@ -4144,7 +4144,11 @@ pub type ParamPath = Vec<ParamPart>;
 
 /// One top-level PART of an owned aggregate parameter — a tuple element or a
 /// struct field. See [`fn_returns_param_part_paths`].
-#[derive(Debug, Clone, PartialEq, Eq)]
+/// `Ord` is derived (B-2026-09-19-34) so a set of paths can be sorted into a
+/// canonical order before it is handed to a consumer. It is a total order over
+/// plain data with no semantic content — `TupleIndex` sorts before `Field`
+/// because it is declared first — and nothing reads it as a ranking.
+#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord)]
 pub enum ParamPart {
     /// Tuple element `p.<n>`, or leaf `<n>` of a one-level tuple destructure.
     TupleIndex(usize),

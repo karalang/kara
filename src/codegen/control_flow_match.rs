@@ -1029,11 +1029,19 @@ impl<'ctx> super::Codegen<'ctx> {
                     // B-2026-09-14-18 — try the PER-ELEMENT narrowing first; it
                     // returns false for every shape the all-or-nothing disarm
                     // below already gets right.
+                    // B-2026-09-19-34 — and the PROJECTION narrowing beside
+                    // it, for the whole-value binding the destructure one
+                    // declines by construction. Both return false for every
+                    // shape the all-or-nothing disarm below already gets right.
                     if !self.narrow_callee_owned_tuple_payload_bodies_for_arm(
                         scrutinee,
                         &arm.pattern,
                         &arm.body,
                         arm.guard.as_ref(),
+                    ) && !self.narrow_callee_owned_tuple_payload_bodies_for_projection(
+                        scrutinee,
+                        &arm.pattern,
+                        arms,
                     ) {
                         self.suppress_optres_payload_bodies_for_match_scoped(
                             scrutinee,
@@ -15643,6 +15651,230 @@ impl<'ctx> super::Codegen<'ctx> {
             }
         }
         hit
+    }
+
+    /// B-2026-09-19-34 — the PROJECTION sibling of
+    /// [`Self::narrow_callee_owned_tuple_payload_bodies_for_arm`]: narrow a
+    /// callee-owned boxed tuple payload's body walk to the places the arm did
+    /// NOT take, for the `Some(t)` + `t.<path>` spelling its destructure
+    /// sibling declines by construction.
+    ///
+    /// The sibling asks `optres_arm_moved_destructured_elems`, which requires a
+    /// tuple PATTERN. A WHOLE-VALUE binding reaches neither it nor the
+    /// all-or-nothing disarm below — `suppress_optres_payload_bodies_for_match_scoped`
+    /// returns early for a callee-owned param bound whole, deliberately
+    /// (B-2026-09-10-9), because the binding is given no bodies of its own and
+    /// disarming would run them nowhere. That is right for an arm that only
+    /// BORROWS the binding and wrong for one that takes a part out of it: the
+    /// caller owns the returned part and runs its body, and the still-armed
+    /// walk runs it again. Measured `dH5 dH6 got:5 dH5` against the
+    /// interpreter's correct `dH6 got:5 dH5` on every compiled surface, and
+    /// the same double for a nested path, a tuple-then-field path, a three-hop
+    /// path and a `Result` head.
+    ///
+    /// WHY A PATH AND NOT AN INDEX, which is the trap this row was filed with.
+    /// `binding_use::optres_arm_moved_tuple_elems` answers per TOP-LEVEL index
+    /// and has no consumer on this channel, so it reads as the obvious remedy.
+    /// It is not: `return t.1.0` over `Option[(H, (H, H))]` materializes
+    /// `t.1.0` alone, its own read-through contract classifies `t.1` as a read
+    /// (it sits under a further projection), and COARSENING it to report index
+    /// 1 would mask the callee's walk of the whole of `t.1` while the callee
+    /// still owes `t.1.1`. The double becomes a LOSS on the sibling — the same
+    /// false escape B-2026-09-19-33 fixed one channel over, arriving from the
+    /// other direction. So the answer is path-valued
+    /// (`optres_arm_moved_tuple_paths`) and lands in the same
+    /// [`FieldSkipTree`](super::synth_drop::FieldSkipTree) that row threaded
+    /// through `PayloadBodiesMask::TupleTree`.
+    ///
+    /// INTERSECTED OVER EVERY QUALIFYING ARM of this match rather than
+    /// accumulated. The re-home rewrites the place's cleanup action for every
+    /// path out of the construct, so a part may only be masked when EVERY arm
+    /// that binds this payload takes it; a union would mask element 0 on the
+    /// arm that took element 1 and lose its body. Computing the whole answer
+    /// from `arms` also makes the call idempotent, which matters because the
+    /// arm loop resets the per-arm maps its sibling accumulates into — so the
+    /// same answer is reached on arm 1 and arm 2 and the last writer does not
+    /// decide.
+    ///
+    /// Returns `true` when it re-homed the walk, in which case the caller
+    /// SKIPS the all-or-nothing disarm. `false` leaves every pre-existing path
+    /// byte-identical: a non-tuple payload, an inline one, a borrow-only arm,
+    /// an arm taking the payload WHOLE (which the disarm now handles), or any
+    /// match where the arms do not agree on a part.
+    pub(super) fn narrow_callee_owned_tuple_payload_bodies_for_projection(
+        &mut self,
+        scrutinee: &Expr,
+        pattern: &Pattern,
+        arms: &[crate::ast::MatchArm],
+    ) -> bool {
+        let name = match &scrutinee.kind {
+            ExprKind::Identifier(n) => n.clone(),
+            ExprKind::SelfValue => "self".to_string(),
+            _ => return false,
+        };
+        if !self
+            .payload_vars
+            .callee_owned_payload_bodies_params
+            .contains(&name)
+        {
+            return false;
+        }
+        if !Self::is_optres_whole_binding_arm(pattern) {
+            return false;
+        }
+        let Some(env_te) = self
+            .type_decls
+            .enum_inst_var_types
+            .get(name.as_str())
+            .cloned()
+        else {
+            return false;
+        };
+        // The VARIANT whose payload is the tuple, not just the type: a
+        // `Result[(H, H), i64]`'s `Err(e)` arm binds a whole payload too, and
+        // reading it as an arm that agrees about nothing declined every
+        // `Result`-headed cell (measured — the `Ok(t) => return t.0` cell
+        // stayed doubled while its `Option` twin was repaired).
+        let Some((tuple_variant, payload_te)) = Self::sole_tuple_payload_variant(&env_te) else {
+            return false;
+        };
+        let TypeKind::Tuple(elem_tes) = payload_te.kind.clone() else {
+            return false;
+        };
+        // Every arm that binds THIS variant's payload whole must agree. An arm
+        // taking it WHOLE reports no path and is not the empty answer — it is
+        // a different question, answered by the disarm — so it declines here
+        // rather than intersecting to nothing and reading as agreement.
+        let mut sets: Vec<Vec<crate::ast::ParamPath>> = Vec::new();
+        for arm in arms {
+            if !Self::is_optres_whole_binding_arm(&arm.pattern) {
+                continue;
+            }
+            let PatternKind::TupleVariant { path, .. } = &arm.pattern.kind else {
+                continue;
+            };
+            if path.last().map(|s| s.as_str()) != Some(tuple_variant) {
+                continue;
+            }
+            if crate::binding_use::optres_arm_takes_whole_payload(
+                &arm.pattern,
+                &arm.body,
+                arm.guard.as_ref(),
+            ) {
+                return false;
+            }
+            let paths = crate::binding_use::optres_arm_moved_tuple_paths(
+                &arm.pattern,
+                &arm.body,
+                arm.guard.as_ref(),
+            );
+            if paths.is_empty() {
+                return false;
+            }
+            sets.push(paths);
+        }
+        let Some((first, rest)) = sets.split_first() else {
+            return false;
+        };
+        let common: Vec<crate::ast::ParamPath> = first
+            .iter()
+            .filter(|p| rest.iter().all(|s| s.contains(p)))
+            .cloned()
+            .collect();
+        if common.is_empty() {
+            return false;
+        }
+        let mut tree = super::synth_drop::FieldSkipTree::default();
+        for path in &common {
+            self.insert_tuple_skip_path(&mut tree, &elem_tes, path);
+        }
+        if tree.is_empty() {
+            return false;
+        }
+        let payload_key = Self::display_mangle_te(&payload_te);
+        let masked = self.emit_optres_payload_user_drop_bodies_fn_skipping(
+            &env_te,
+            super::synth_drop::PayloadBodiesMask::TupleTree(&payload_key, &tree),
+        );
+        let Some(masked_walker) = masked else {
+            // Nothing survives the mask: every part is owned elsewhere on
+            // every arm, so the place owes nothing. Leaving the unmasked
+            // walker registered would double every body.
+            self.suppress_container_elem_bodies_for_var(&name);
+            return true;
+        };
+        let mut hit = false;
+        for frame in self.drop_rc.scope_cleanup_actions.iter_mut() {
+            for action in frame.iter_mut() {
+                if let super::state::CleanupAction::UserDrop {
+                    binding_name,
+                    kind: super::state::UserDropKind::ContainerElemBodies,
+                    drop_fn,
+                    ..
+                } = action
+                {
+                    if binding_name == &name {
+                        *drop_fn = masked_walker;
+                        hit = true;
+                    }
+                }
+            }
+        }
+        hit
+    }
+
+    /// An `Option`/`Result` arm whose payload is bound WHOLE by a single
+    /// name — `Some(t)`, not `Some((a, b))` and not `Some(_)`.
+    fn is_optres_whole_binding_arm(pattern: &Pattern) -> bool {
+        let PatternKind::TupleVariant { path, patterns } = &pattern.kind else {
+            return false;
+        };
+        if !matches!(
+            path.last().map(|s| s.as_str()),
+            Some("Some") | Some("Ok") | Some("Err")
+        ) {
+            return false;
+        }
+        matches!(patterns.as_slice(), [sub] if matches!(sub.kind, PatternKind::Binding(_)))
+    }
+
+    /// The `Option`/`Result` VARIANT whose payload is a tuple, with that
+    /// tuple's `TypeExpr`.
+    ///
+    /// The variant-aware sibling of [`Self::sole_tuple_payload_te`], which
+    /// answers the type alone. Its caller needs the name too, to tell an arm
+    /// that binds THIS payload from one binding the other side of a `Result` —
+    /// `Err(e)` over `Result[(H, H), i64]` binds a whole `i64` and constrains
+    /// nothing about the `Ok` payload's parts.
+    ///
+    /// `None` when BOTH sides are tuples, which is the same ambiguity the
+    /// type-only sibling declines on and for the same reason: two payloads,
+    /// one mask, and no way to say which.
+    fn sole_tuple_payload_variant(te: &TypeExpr) -> Option<(&'static str, TypeExpr)> {
+        let TypeKind::Path(p) = &te.kind else {
+            return None;
+        };
+        let head = p.segments.last()?.as_str();
+        let mut found: Option<(&'static str, TypeExpr)> = None;
+        for (i, a) in p.generic_args.as_ref()?.iter().enumerate() {
+            let GenericArg::Type(t) = a else {
+                continue;
+            };
+            if !matches!(&t.kind, TypeKind::Tuple(_)) {
+                continue;
+            }
+            let variant = match (head, i) {
+                ("Option", 0) => "Some",
+                ("Result", 0) => "Ok",
+                ("Result", 1) => "Err",
+                _ => return None,
+            };
+            if found.is_some() {
+                return None;
+            }
+            found = Some((variant, t.clone()));
+        }
+        found
     }
 
     pub(super) fn suppress_boxed_payload_view_tuple_elem_move(

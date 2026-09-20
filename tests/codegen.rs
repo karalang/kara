@@ -38595,25 +38595,35 @@ fn main() {
     /// already resolved a mixed path through declared types. Only the mask arm
     /// and this channel's answer were still flat.
     ///
-    /// ONE CELL REMAINS PINNED DIVERGENT AND IS NOT FIXABLE FROM HERE:
+    /// THE BOXED CHANNEL JOINED THIS FIXTURE WITH B-2026-09-19-34, which is
+    /// why half the cells below now carry a `boxed-projection-` label. That
+    /// row was the one cell this fixture could not reach: a payload too wide
+    /// to ride inline boxes, and the caller-side walk the cells above exercise
+    /// STANDS DOWN there by construction (`track_optres_arg_temp_bodies`
+    /// returns early for a box the callee owns), so the bodies move to the
+    /// CALLEE and the arm-scoped suppressor decides. It kept its walk armed
+    /// over a part the caller had already been handed, and the part's body ran
+    /// twice; the repair narrows that walk with the same `FieldSkipTree` the
+    /// inline channel got here, driven by a path-valued answer
+    /// (`binding_use::optres_arm_moved_tuple_paths`).
     ///
-    /// ```text
-    ///   boxed-payload-...       due dH6 got:5 dH5 end   AOT dH5 dH6 got:5 dH5 end
-    /// ```
+    /// SEVEN OF THOSE CELLS ARE THE REPAIR — one hop, nested, tuple-then-field,
+    /// three hops, a `Result` head, a whole inner tuple, consumed-into-frame —
+    /// and TWO ARE THE BOUNDARY: a borrow-only arm and a forwarded whole
+    /// binding, both of which must KEEP the walk, because there the callee is
+    /// the only holder. THREE MORE ARE PINNED WRONG on purpose: a whole
+    /// binding RETURNED (B-2026-09-20-16), a rebind-then-project that doubles on
+    /// all four surfaces at once (B-2026-09-20-17), and two guarded `Some` arms
+    /// taking different elements, where the narrowing declines and every
+    /// surface is wrong in a different direction (B-2026-09-20-18).
     ///
-    /// A different channel entirely — a payload too wide to ride inline boxes,
-    /// and the caller-side walk this fixture exercises STANDS DOWN there by
-    /// construction (`track_optres_arg_temp_bodies` returns early for a box
-    /// the callee owns), so no mask shape on this side can reach it. Measured
-    /// identical before and after B-2026-09-19-33; filed as B-2026-09-19-34.
-    ///
-    /// AND THE NESTED SHAPE IS STILL BROKEN ON THREE CHANNELS THIS FIXTURE
-    /// DOES NOT COVER, measured while fixing the one above and filed rather
-    /// than pinned here, because each belongs to a different walk: a
-    /// STRUCT-rooted path whose inner hop is a tuple (`w.p.1`) runs the
-    /// escaping element's body twice; the BOXED counterparts of every cell
-    /// here are wrong in both directions; and the NAMED-LOCAL argument
-    /// spelling is wrong on BOTH backends at once, differently.
+    /// AND THE NESTED SHAPE IS STILL BROKEN ON TWO CHANNELS THIS FIXTURE DOES
+    /// NOT COVER, measured while fixing the one above and filed rather than
+    /// pinned here, because each belongs to a different walk: a STRUCT-rooted
+    /// path whose inner hop is a tuple (`w.p.1`) runs the escaping element's
+    /// body twice (B-2026-09-20-6), and the NAMED-LOCAL argument spelling is
+    /// wrong on BOTH backends at once, differently. The third — "the BOXED
+    /// counterparts of every cell here" — is what B-2026-09-19-34 closed.
     ///
     /// ONE CELL AGREES AT A WRONG ANSWER, deliberately:
     /// `conditional-projection-branch-taken`. The escape scan records a
@@ -38881,22 +38891,235 @@ fn main() {
                 "dR5\ngot:5\ndR5\nend\n",
             ),
             (
-                // DIVERGENT AND PRE-EXISTING, not this row's. A payload too
-                // wide to ride inline heap-BOXES and takes the callee-owned
-                // bodies channel, where the projection spelling runs element
-                // 0's body twice -- once here, once at the caller's `got`.
-                // Measured identical before and after this fix, so the cell is
-                // here to make a later repair visible rather than to record
-                // this one. B-2026-09-19-34.
-                "boxed-payload-projection-doubles-the-escaping-part",
+                // FIXED by B-2026-09-19-34; the AOT pin below recorded the double and
+                // now matches the interpreter at the due sequence. Moved deliberately,
+                // which is what that row asked of whoever fixed it.
+                //
+                // Labelled `boxed-payload-projection-doubles-the-escaping-part` until
+                // that fix, which is the name the row and B-2026-09-19-33's prose cite.
+                // Renamed rather than kept, because a label asserting a double beside a
+                // correct expectation reads as a stale pin to the next person.
+                //
+                // A payload too wide to ride inline heap-BOXES and takes the
+                // callee-owned bodies channel, where the arm's walk stayed armed over a
+                // part the caller had already been handed.
+                "boxed-projection-runs-the-escaping-part-once",
                 format!(
                     "{R}struct H {{ id: i64, s: String }}\n\
                      impl Drop for H {{ fn drop(mut ref self) {{ println(f\"dH{{self.id}}\") }} }}\n\
                      fn eat(o: Option[(H, H)]) -> H {{ match o {{ Some(t) => {{ return t.0; }} None => {{ return H {{ id: 0, s: \"zzzzzzzzzzzz\" }}; }} }} }}\n\
                      fn main() {{ let got = eat(Some((H {{ id: 5, s: \"aaaaaaaaaaaa\" }}, H {{ id: 6, s: \"bbbbbbbbbbbb\" }}))); println(f\"got:{{got.id}}\"); println(\"end\") }}\n"
                 ),
-                "dH5\ndH6\ngot:5\ndH5\nend\n",
                 "dH6\ngot:5\ndH5\nend\n",
+                "dH6\ngot:5\ndH5\nend\n",
+            ),
+            (
+                // B-2026-09-19-34, NESTED path on the boxed channel. `t.1.0` is the
+                // cell that rules out the index-valued remedy the row proposed: masking
+                // its FIRST HOP would suppress the callee's walk of the whole of `t.1`
+                // while `t.1.1` (dH7) is still owed here, turning the double into a
+                // loss. Pre-fix AOT was `dH5 dH6 dH7 got:6 dH6 end`.
+                "boxed-projection-nested-inner",
+                format!(
+                    "{R}struct H {{ id: i64, s: String }}\n\
+                     impl Drop for H {{ fn drop(mut ref self) {{ println(f\"dH{{self.id}}\") }} }}\n\
+                     fn eat(o: Option[(H, (H, H))]) -> H {{ match o {{ Some(t) => {{ return t.1.0; }} None => {{ return H {{ id: 0, s: \"zzzzzzzzzzzz\" }}; }} }} }}\n\
+                     fn main() {{ let got = eat(Some((H {{ id: 5, s: \"aaaaaaaaaaaa\" }}, (H {{ id: 6, s: \"bbbbbbbbbbbb\" }}, H {{ id: 7, s: \"cccccccccccc\" }})))); println(f\"got:{{got.id}}\"); println(\"end\") }}\n"
+                ),
+                "dH5\ndH7\ngot:6\ndH6\nend\n",
+                "dH5\ndH7\ngot:6\ndH6\nend\n",
+            ),
+            (
+                // B-2026-09-19-34, a MIXED path whose second hop is a struct FIELD.
+                // Here because the two hops go through different resolvers -- the tuple
+                // level through `insert_tuple_skip_path`, the field level through
+                // `insert_skip_path` -- so a repair handling only tuple-to-tuple would
+                // pass the cell above and fail this one. Pre-fix AOT was
+                // `dH5 dH7 dH6 got:6 dH6 end`, and its extra body lands in a DIFFERENT
+                // position than the nested cell's, so the two are not one shape with a
+                // rename.
+                "boxed-projection-tuple-then-field",
+                format!(
+                    "{R}struct H {{ id: i64, s: String }}\n\
+                     impl Drop for H {{ fn drop(mut ref self) {{ println(f\"dH{{self.id}}\") }} }}\n\
+                     struct G {{ a: H, b: H }}\n\
+                     fn eat(o: Option[(H, G)]) -> H {{ match o {{ Some(t) => {{ return t.1.a; }} None => {{ return H {{ id: 0, s: \"zzzzzzzzzzzz\" }}; }} }} }}\n\
+                     fn main() {{ let got = eat(Some((H {{ id: 5, s: \"aaaaaaaaaaaa\" }}, G {{ a: H {{ id: 6, s: \"bbbbbbbbbbbb\" }}, b: H {{ id: 7, s: \"cccccccccccc\" }} }}))); println(f\"got:{{got.id}}\"); println(\"end\") }}\n"
+                ),
+                "dH5\ndH7\ngot:6\ndH6\nend\n",
+                "dH5\ndH7\ngot:6\ndH6\nend\n",
+            ),
+            (
+                // B-2026-09-19-34, THREE hops, and its elements are one-word `R`s: the
+                // payload boxes on WIDTH (four words against the seeded `Option`'s
+                // three-word inline area), not on any element owning heap. Depth is not
+                // the discriminator here, width is -- which is why this cell doubled
+                // while the three-word `tuple-two-droppers-first-returned` sibling is
+                // correct. Pre-fix AOT was `dR5 dR6 got:6 dR6 end`.
+                "boxed-projection-three-hops",
+                format!(
+                    "{R}fn eat(o: Option[(((R, R), i64), i64)]) -> R {{ match o {{ Some(t) => {{ return t.0.0.1; }} None => {{ return R {{ id: 0 }}; }} }} }}\n\
+                     fn main() {{ let got = eat(Some((((R {{ id: 5 }}, R {{ id: 6 }}), 7), 8))); println(f\"got:{{got.id}}\"); println(\"end\") }}\n"
+                ),
+                "dR5\ngot:6\ndR6\nend\n",
+                "dR5\ngot:6\ndR6\nend\n",
+            ),
+            (
+                // B-2026-09-19-34, a `Result` HEAD, which the row listed as NOT
+                // MEASURED. Not a formality: the first draft of the fix repaired every
+                // `Option` cell and left this one doubled, because it read the `Err(e)`
+                // arm as an arm that binds a whole payload and agrees about nothing. An
+                // `Err` binding constrains nothing about the `Ok` payload's parts, so
+                // the narrowing is variant-aware. Pre-fix AOT was
+                // `dH5 dH6 got:5 dH5 end`.
+                "boxed-projection-result-head",
+                format!(
+                    "{R}struct H {{ id: i64, s: String }}\n\
+                     impl Drop for H {{ fn drop(mut ref self) {{ println(f\"dH{{self.id}}\") }} }}\n\
+                     fn eat(o: Result[(H, H), i64]) -> H {{ match o {{ Ok(t) => {{ return t.0; }} Err(e) => {{ return H {{ id: 0, s: \"zzzzzzzzzzzz\" }}; }} }} }}\n\
+                     fn main() {{ let got = eat(Ok((H {{ id: 5, s: \"aaaaaaaaaaaa\" }}, H {{ id: 6, s: \"bbbbbbbbbbbb\" }}))); println(f\"got:{{got.id}}\"); println(\"end\") }}\n"
+                ),
+                "dH6\ngot:5\ndH5\nend\n",
+                "dH6\ngot:5\ndH5\nend\n",
+            ),
+            (
+                // B-2026-09-19-34, a whole INNER TUPLE taken out: two bodies leave in
+                // one move, and pre-fix both doubled
+                // (`dH5 dH6 dH7 got:6 dH6 dH7 end`). The mask lands on element 1 WHOLE
+                // here, where the nested cell needs it one level deeper on the same
+                // element -- the two directions a flat index answer cannot tell apart.
+                "boxed-projection-whole-inner-tuple",
+                format!(
+                    "{R}struct H {{ id: i64, s: String }}\n\
+                     impl Drop for H {{ fn drop(mut ref self) {{ println(f\"dH{{self.id}}\") }} }}\n\
+                     fn eat(o: Option[(H, (H, H))]) -> (H, H) {{ match o {{ Some(t) => {{ return t.1; }} None => {{ return (H {{ id: 0, s: \"zzzzzzzzzzzz\" }}, H {{ id: 1, s: \"zzzzzzzzzzzz\" }}); }} }} }}\n\
+                     fn main() {{ let got = eat(Some((H {{ id: 5, s: \"aaaaaaaaaaaa\" }}, (H {{ id: 6, s: \"bbbbbbbbbbbb\" }}, H {{ id: 7, s: \"cccccccccccc\" }})))); println(f\"got:{{got.0.id}}\"); println(\"end\") }}\n"
+                ),
+                "dH5\ngot:6\ndH6\ndH7\nend\n",
+                "dH5\ngot:6\ndH6\ndH7\nend\n",
+            ),
+            (
+                // B-2026-09-19-34, the CONSUMED-INTO-FRAME spelling at the boxed
+                // width: the arm moves two nested parts into locals of its own and
+                // returns one. Repaired by the same narrowing -- pre-fix AOT was
+                // `n:7 dH7 dH5 dH6 dH7 got:6 dH6 end`, doubling BOTH inner bodies.
+                //
+                // THE INTERPRETER IS STILL WRONG HERE and is pinned as such
+                // (B-2026-09-20-19): it prints an extra `dH6` for the part moved into
+                // the local. The two expectations differ on purpose and the AOT one is
+                // the correct sequence, which is the reverse of the usual reading in
+                // this test.
+                "boxed-projection-consumed-into-frame-nested",
+                format!(
+                    "{R}struct H {{ id: i64, s: String }}\n\
+                     impl Drop for H {{ fn drop(mut ref self) {{ println(f\"dH{{self.id}}\") }} }}\n\
+                     fn eat(o: Option[(H, (H, H))]) -> H {{ match o {{ Some(t) => {{ let a = t.1.0; let b = t.1.1; println(f\"n:{{b.id}}\"); return a; }} None => {{ return H {{ id: 0, s: \"zzzzzzzzzzzz\" }}; }} }} }}\n\
+                     fn main() {{ let got = eat(Some((H {{ id: 5, s: \"aaaaaaaaaaaa\" }}, (H {{ id: 6, s: \"bbbbbbbbbbbb\" }}, H {{ id: 7, s: \"cccccccccccc\" }})))); println(f\"got:{{got.id}}\"); println(\"end\") }}\n"
+                ),
+                "n:7\ndH7\ndH5\ngot:6\ndH6\nend\n",
+                "n:7\ndH7\ndH5\ndH6\ngot:6\ndH6\nend\n",
+            ),
+            (
+                // CONTROL for B-2026-09-19-34, pinning the boundary the narrowing must
+                // not cross. A BORROW-ONLY arm takes no part out, so the callee-owned
+                // walk is the only holder of both bodies and standing it down would run
+                // them nowhere -- the measurement B-2026-09-10-9 made when it added the
+                // early return this fix narrows. Correct on all four surfaces before and
+                // after.
+                "boxed-projection-borrow-only-keeps-the-walk",
+                format!(
+                    "{R}struct H {{ id: i64, s: String }}\n\
+                     impl Drop for H {{ fn drop(mut ref self) {{ println(f\"dH{{self.id}}\") }} }}\n\
+                     fn eat(o: Option[(H, H)]) -> i64 {{ match o {{ Some(t) => {{ return t.0.id + t.1.id; }} None => {{ return 0; }} }} }}\n\
+                     fn main() {{ let got = eat(Some((H {{ id: 5, s: \"aaaaaaaaaaaa\" }}, H {{ id: 6, s: \"bbbbbbbbbbbb\" }}))); println(f\"got:{{got}}\"); println(\"end\") }}\n"
+                ),
+                "dH5\ndH6\ngot:11\nend\n",
+                "dH5\ndH6\ngot:11\nend\n",
+            ),
+            (
+                // CONTROL, and the second half of that boundary: the same whole
+                // binding FORWARDED into another call is correct on all four surfaces.
+                // The callee-owned walk is the only holder of both bodies here, so the
+                // disarm that would repair `whole-binding-returned` below loses both in
+                // this one -- the two spellings are one `takes_payload` answer apart.
+                "boxed-projection-forwarded-whole",
+                format!(
+                    "{R}struct H {{ id: i64, s: String }}\n\
+                     impl Drop for H {{ fn drop(mut ref self) {{ println(f\"dH{{self.id}}\") }} }}\n\
+                     fn sink(t: (H, H)) -> i64 {{ return t.0.id + t.1.id }}\n\
+                     fn eat(o: Option[(H, H)]) -> i64 {{ match o {{ Some(t) => {{ return sink(t); }} None => {{ return 0; }} }} }}\n\
+                     fn main() {{ let got = eat(Some((H {{ id: 5, s: \"aaaaaaaaaaaa\" }}, H {{ id: 6, s: \"bbbbbbbbbbbb\" }}))); println(f\"got:{{got}}\"); println(\"end\") }}\n"
+                ),
+                "dH5\ndH6\ngot:11\nend\n",
+                "dH5\ndH6\ngot:11\nend\n",
+            ),
+            (
+                // DIVERGENT AND PRE-EXISTING, not this row's -- B-2026-09-20-16. The
+                // arm returns the payload WHOLE, so no projection is involved and
+                // B-2026-09-19-34's narrowing declines by construction; the callee-owned
+                // walk stays armed over both parts the caller has just been handed and
+                // runs both bodies a second time. Measured identical before and after
+                // that fix.
+                //
+                // THE OBVIOUS GATE IS THE WRONG ONE, which is why this is a row rather
+                // than a line in that fix. `optres_arm_takes_whole_payload` is already
+                // computed at the call site and is true here -- and equally true of the
+                // `forwarded-whole` cell above, which B-2026-09-10-9 measured LOSING
+                // both bodies when the walk is stood down.
+                "boxed-projection-whole-binding-returned-doubles",
+                format!(
+                    "{R}struct H {{ id: i64, s: String }}\n\
+                     impl Drop for H {{ fn drop(mut ref self) {{ println(f\"dH{{self.id}}\") }} }}\n\
+                     fn eat(o: Option[(H, H)]) -> (H, H) {{ match o {{ Some(t) => {{ return t; }} None => {{ return (H {{ id: 0, s: \"zzzzzzzzzzzz\" }}, H {{ id: 1, s: \"zzzzzzzzzzzz\" }}); }} }} }}\n\
+                     fn main() {{ let got = eat(Some((H {{ id: 5, s: \"aaaaaaaaaaaa\" }}, H {{ id: 6, s: \"bbbbbbbbbbbb\" }}))); println(f\"got:{{got.0.id}}\"); println(\"end\") }}\n"
+                ),
+                "dH5\ndH6\ngot:5\ndH5\ndH6\nend\n",
+                "got:5\ndH5\ndH6\nend\n",
+            ),
+            (
+                // AGREED AND WRONG, pinned as it stands -- B-2026-09-20-17. The arm
+                // REBINDS the payload whole (`let u = t`) and projects out of the
+                // rebinding, and element 0's body runs twice on every surface, the
+                // interpreter included. Hand-derived: `u.0` is moved out to the caller
+                // and `u.1` dies here, so the due sequence is `dH6 got:5 dH5 end` and
+                // all four print `dH5 dH6 got:5 dH5 end`.
+                //
+                // NO A/B CAN SEE THIS CELL, which is why it is pinned rather than left
+                // to a sweep: the two backends agree, and a `Drop` body frees nothing,
+                // so no sanitizer leg sees it either. Found by computing the due
+                // sequence from the ownership rule and comparing against that instead of
+                // against the interpreter.
+                "boxed-projection-rebind-then-project-doubles",
+                format!(
+                    "{R}struct H {{ id: i64, s: String }}\n\
+                     impl Drop for H {{ fn drop(mut ref self) {{ println(f\"dH{{self.id}}\") }} }}\n\
+                     fn eat(o: Option[(H, H)]) -> H {{ match o {{ Some(t) => {{ let u = t; return u.0; }} None => {{ return H {{ id: 0, s: \"zzzzzzzzzzzz\" }}; }} }} }}\n\
+                     fn main() {{ let got = eat(Some((H {{ id: 5, s: \"aaaaaaaaaaaa\" }}, H {{ id: 6, s: \"bbbbbbbbbbbb\" }}))); println(f\"got:{{got.id}}\"); println(\"end\") }}\n"
+                ),
+                "dH5\ndH6\ngot:5\ndH5\nend\n",
+                "dH5\ndH6\ngot:5\ndH5\nend\n",
+            ),
+            (
+                // DIVERGENT AND PRE-EXISTING -- B-2026-09-20-18. TWO `Some` arms over
+                // one scrutinee, separated by a guard, each taking a DIFFERENT element.
+                // B-2026-09-19-34's narrowing intersects over the arms and declines here
+                // deliberately: masking element 0 is right on the guarded arm and loses
+                // element 1's body on the other, which is the same false escape one arm
+                // further out.
+                //
+                // The interpreter is wrong too and in the OPPOSITE direction -- it
+                // prints `got:5 dH5 end`, losing element 1's body entirely, where the
+                // compiled surfaces double element 0's. All four are wrong, differently,
+                // so neither side is an oracle for the other here.
+                "boxed-projection-two-some-arms-declines",
+                format!(
+                    "{R}struct H {{ id: i64, s: String }}\n\
+                     impl Drop for H {{ fn drop(mut ref self) {{ println(f\"dH{{self.id}}\") }} }}\n\
+                     fn eat(o: Option[(H, H)], k: bool) -> H {{ match o {{ Some(t) if k => {{ return t.0; }} Some(t) => {{ return t.1; }} None => {{ return H {{ id: 0, s: \"zzzzzzzzzzzz\" }}; }} }} }}\n\
+                     fn main() {{ let got = eat(Some((H {{ id: 5, s: \"aaaaaaaaaaaa\" }}, H {{ id: 6, s: \"bbbbbbbbbbbb\" }})), true); println(f\"got:{{got.id}}\"); println(\"end\") }}\n"
+                ),
+                "dH5\ndH6\ngot:5\ndH5\nend\n",
+                "got:5\ndH5\nend\n",
             ),
         ] {
             let (interp_out, interp_errs, _, _) = karac::run_program_full_checked(&prog);

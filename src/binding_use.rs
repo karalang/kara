@@ -111,6 +111,115 @@ pub(crate) fn optres_arm_moved_tuple_elems(
     out
 }
 
+/// B-2026-09-19-34 — the PATH-VALUED sibling of
+/// [`optres_arm_moved_tuple_elems`]: which PLACES inside a whole-value
+/// `Option`/`Result` payload binding does an arm MATERIALIZE, at any depth.
+///
+/// The index-valued predicate above answers one hop, which is all its own
+/// caller — the inline channel's move suppressor — can express. The BOXED
+/// channel's caller can express a whole [`crate::codegen`] skip tree, and one
+/// hop is not merely coarse there, it is WRONG IN THE OTHER DIRECTION:
+/// `Some(t) => { return t.1.0 }` over `Option[(H, (H, H))]` materializes
+/// `t.1.0` and nothing else, and reporting its first hop would mask the
+/// callee's walk of the whole of `t.1` while the callee still owes `t.1.1`.
+/// Measured on that cell: the defect is a DOUBLE of `t.1.0`'s body, and
+/// coarsening turns it into a LOSS of `t.1.1`'s. So the answer has to carry
+/// the depth the use site carries.
+///
+/// The verdict per place is the same read-through-vs-materialized question the
+/// rest of this module asks, one target deeper: a place is materialized when
+/// some mention of it is not itself read through. That falls out of the
+/// candidate enumeration: for `return t.1.0` the walk sees `t.1.0` (mentioned
+/// once, read through never) AND its prefix `t.1` (mentioned once, as the
+/// object of a projection, so read through once), which is exactly the
+/// distinction the caller needs.
+///
+/// PRUNED to the shortest materialized place on each chain, so the answer is
+/// canonical: `t.0` and `t.0.1` both materialized means the sibling's body is
+/// gone with the parent's, and reporting both would ask the tree to mask a
+/// level below one it has already masked whole.
+///
+/// EMPTY when the binding is CAPTURED by a closure. A capture materializes the
+/// binding under the heap-env model however it is spelled inside, so no place
+/// answer about it is usable and "cannot narrow" is the honest reply — the
+/// same conservatism its two neighbours keep, and the direction that leaves
+/// today's behaviour rather than inventing a mask.
+///
+/// Its only caller today is codegen's boxed-payload arm narrowing, so the
+/// DEFAULT feature leg sees it as dead — the same `cfg_attr` its neighbours
+/// carry.
+#[cfg_attr(not(feature = "llvm"), allow(dead_code))]
+pub(crate) fn optres_arm_moved_tuple_paths(
+    pattern: &crate::ast::Pattern,
+    body: &Expr,
+    guard: Option<&Expr>,
+) -> Vec<crate::ast::ParamPath> {
+    let mut out: Vec<crate::ast::ParamPath> = Vec::new();
+    let crate::ast::PatternKind::TupleVariant { patterns, .. } = &pattern.kind else {
+        return out;
+    };
+    for sub in patterns {
+        let crate::ast::PatternKind::Binding(n) = &sub.kind else {
+            continue;
+        };
+        // A capture takes the whole binding, so nothing finer is answerable.
+        let mut cap = Tally::default();
+        walk_expr(Target::Bare(n), body, &mut cap);
+        if let Some(g) = guard {
+            walk_expr(Target::Bare(n), g, &mut cap);
+        }
+        if cap.captured {
+            return Vec::new();
+        }
+        let mut cand = Tally {
+            collect_root: Some(n),
+            ..Default::default()
+        };
+        walk_expr(Target::Bare(n), body, &mut cand);
+        if let Some(g) = guard {
+            walk_expr(Target::Bare(n), g, &mut cand);
+        }
+        let mut seen: Vec<crate::ast::ParamPath> = Vec::new();
+        for path in cand.places {
+            if !seen.contains(&path) {
+                seen.push(path);
+            }
+        }
+        for path in seen {
+            if !place_only_read_through(n, &path, body)
+                || !guard.is_none_or(|g| place_only_read_through(n, &path, g))
+            {
+                out.push(path);
+            }
+        }
+    }
+    out.sort();
+    out.dedup();
+    // Drop anything under a place already masked whole.
+    let pruned: Vec<crate::ast::ParamPath> = out
+        .iter()
+        .filter(|p| {
+            !out.iter()
+                .any(|q| q.len() < p.len() && p.starts_with(q.as_slice()))
+        })
+        .cloned()
+        .collect();
+    pruned
+}
+
+/// True iff every mention of the place `name` + `path` inside `e` is a read
+/// THROUGH it rather than a use of it; vacuously true when there is none.
+///
+/// The [`Target::Path`] sibling of [`tuple_elem_only_read_through`], and it
+/// deliberately does NOT consult `captured`: a closure capturing the ROOT is
+/// handled by its caller, which declines outright, and a tally over a place
+/// can never set that flag for anything finer.
+fn place_only_read_through(name: &str, path: &[crate::ast::ParamPart], e: &Expr) -> bool {
+    let mut t = Tally::default();
+    walk_expr(Target::Path(name, path), e, &mut t);
+    t.mentions == t.read_through
+}
+
 /// B-2026-09-14-18 — the tuple-element indices an arm MATERIALIZES out of a
 /// DESTRUCTURED `Option`/`Result` payload (`Some((a, b)) => { return b }`).
 ///
@@ -307,6 +416,19 @@ struct Tally<'a> {
     /// heap-env model, so the capture materializes the binding however it is
     /// spelled inside — `|| r.id` takes `r` with it.
     captured: bool,
+    /// B-2026-09-19-34 — when `Some(name)`, every PLACE rooted at `name` that
+    /// the walk passes is recorded in `places`, whatever its depth.
+    ///
+    /// Collection rides on THIS walk rather than on a visitor of its own
+    /// because the candidate set has to be complete over the same node set the
+    /// verdict is computed on: a second visitor that missed an `ExprKind` would
+    /// silently drop a candidate, and a dropped candidate is a part that never
+    /// gets masked — the defect, not a conservative answer.
+    collect_root: Option<&'a str>,
+    /// Every place rooted at `collect_root`, with duplicates and with every
+    /// PREFIX of a longer chain, since the recursion visits each sub-chain as
+    /// a node in its own right. The caller filters; this only enumerates.
+    places: Vec<crate::ast::ParamPath>,
 }
 
 impl Tally<'_> {
@@ -332,6 +454,17 @@ fn is_bare(name: &str, e: &Expr) -> bool {
 enum Target<'a> {
     Bare(&'a str),
     Elem(&'a str, usize),
+    /// B-2026-09-19-34 — a PLACE at arbitrary depth under such a binding
+    /// (`t.0.1`, `t.1.a`), spelled as the same [`crate::ast::ParamPath`] the
+    /// escape analysis and [`crate::codegen`]'s skip trees already use.
+    ///
+    /// The generalization of `Elem`, which answers one hop only. Both are kept
+    /// because `Elem`'s three callers ask a one-hop question by construction
+    /// and a `&[ParamPart]` there would be churn; a one-element `Path` and the
+    /// matching `Elem` agree on every expression by inspection — the loop
+    /// below reduces to `Elem`'s `matches!` when the slice has one
+    /// `TupleIndex` in it.
+    Path(&'a str, &'a [crate::ast::ParamPart]),
 }
 
 impl Target<'_> {
@@ -343,11 +476,79 @@ impl Target<'_> {
                 ExprKind::TupleIndex { object, index }
                     if *index as usize == *idx && is_bare(name, object)
             ),
+            Target::Path(name, path) => place_matches(name, path, e),
+        }
+    }
+}
+
+/// Is `e` exactly the place `name` + `path` — `t` `[TupleIndex(0),
+/// Field("a")]` against `t.0.a`?
+///
+/// Walks the chain from the OUTSIDE in, which is the direction the AST nests,
+/// so the path is consumed back to front and the recursion bottoms out on the
+/// root identifier. An empty path is the bare binding, which makes
+/// `Path(n, &[])` and `Bare(n)` the same target by construction rather than by
+/// agreement.
+fn place_matches(name: &str, path: &[crate::ast::ParamPart], e: &Expr) -> bool {
+    let mut cur = e;
+    for part in path.iter().rev() {
+        match (&cur.kind, part) {
+            (ExprKind::FieldAccess { object, field }, crate::ast::ParamPart::Field(f))
+                if field == f =>
+            {
+                cur = object;
+            }
+            (ExprKind::TupleIndex { object, index }, crate::ast::ParamPart::TupleIndex(i))
+                if *index as usize == *i =>
+            {
+                cur = object;
+            }
+            _ => return false,
+        }
+    }
+    is_bare(name, cur)
+}
+
+/// `y.f.0` → `("y", [Field(f), TupleIndex(0)])`; a bare `y` gives an empty
+/// path. `None` for anything that is not a field / tuple-index chain over an
+/// identifier.
+///
+/// The local twin of `ast::items::place_chain_root_and_path`, which is private
+/// to that module. Copied rather than exported because the two answer for
+/// different subjects — that one decomposes a place in a RETURN position over
+/// a parameter, this one every place in an arm body over a pattern binding —
+/// and a shared helper would tie this module's candidate enumeration to that
+/// one's evolution for no shared caller.
+fn place_root_and_path(e: &Expr) -> Option<(&str, crate::ast::ParamPath)> {
+    let mut chain: crate::ast::ParamPath = Vec::new();
+    let mut cur = e;
+    loop {
+        match &cur.kind {
+            ExprKind::FieldAccess { object, field } => {
+                chain.push(crate::ast::ParamPart::Field(field.clone()));
+                cur = object;
+            }
+            ExprKind::TupleIndex { object, index } => {
+                chain.push(crate::ast::ParamPart::TupleIndex(*index as usize));
+                cur = object;
+            }
+            ExprKind::Identifier(n) => {
+                chain.reverse();
+                return Some((n.as_str(), chain));
+            }
+            _ => return None,
         }
     }
 }
 
 fn walk_expr(tgt: Target<'_>, e: &Expr, t: &mut Tally<'_>) {
+    if let Some(root) = t.collect_root {
+        if let Some((r, path)) = place_root_and_path(e) {
+            if r == root && !path.is_empty() {
+                t.places.push(path);
+            }
+        }
+    }
     if tgt.matches(e) {
         t.mentions += 1;
     }
