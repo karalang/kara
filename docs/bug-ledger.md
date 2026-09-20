@@ -98,7 +98,7 @@ distinguish "bugs flattening" from "we stopped writing them down."
 | double-free | 260 |
 | missing-feature | 202 |
 | codegen-gap | 181 |
-| other | 141 |
+| other | 142 |
 | diagnostics | 129 |
 | perf | 115 |
 | false-positive | 108 |
@@ -113,7 +113,7 @@ distinguish "bugs flattening" from "we stopped writing them down."
 | codegen | 1924 |
 | interp | 498 |
 | typecheck | 302 |
-| other | 102 |
+| other | 103 |
 | ownership | 75 |
 | cli | 73 |
 | autopar | 56 |
@@ -232,6 +232,7 @@ _Generated from `bug-ledger.jsonl` by `scripts/bug-curve.py` (2026-05-20 → 202
 | B-2026-09-20-34 | 2026-09-20 | codegen | medium | A METHOD CALL IS THE NEXT SPELLING `expr_cannot_carry_container_heap` HAS NO ARM FOR, SO AN INDEX STORE WHOSE RHS MENTIONS ITS CONTAINER THROUGH `.len()` STILL LEAKS THE DISPLACED ELEMENT -- 18 B in 1 block at `-O0`, on a tree WITH B-2026-09-20-29's fix. Three cells measured, all `a[0] = S { s: f"replaced-...", k: <scalar> }` on `Vec[S]`: `k: a[0].s.len()` 13/12, `k: a[0].s.len() + 1` 13/12, `k: a.len()` 13/12, against `k: 2` at 13/13 clean. `.len()` returns an `i64` and can no more carry the element's buffer out than `a[0].k` can, so this is the same class as the two spellings -20-29 fixed. It is NOT fixed by the same mechanism, which is why it is a separate row: -20-29's resolver answers from a DECLARED type -- a container's element type, a struct field's type, a tuple component's type, all written in the source -- and a method's return type is not written anywhere it can read | — |
 | B-2026-09-20-35 | 2026-09-20 | codegen | medium | A BARE HEAP READ OUT OF A CONTAINER ELEMENT (`a[0] = S { s: a[0].s, k: 2 }`) LEAVES A SECOND COPY OF THE BUFFER THAT NOTHING FREES -- 18 B in 1 block at `-O0`, identical before and after B-2026-09-20-29's fix, so it is untouched by it and pre-existing. `expr_cannot_carry_container_heap` correctly DECLINES the displaced release here, because the RHS really does carry the old element's buffer into the new one and freeing it would be a double free; the leak is therefore not the guard misjudging, it is that the store leaves two owners of one buffer and releases neither. Measured on `Vec[S]` with `struct S { s: String, k: i64 }` at 13 allocs / 12 frees, and on `Vec[(String, i64)]` with the tuple spelling `a[0] = (a[1].0, 3)` at 15 / 14. The printed line reads `a[0].s.len()` as 18, so the new element does hold a live 18-byte buffer and the leaked block is a second copy of it | — |
 | B-2026-09-20-36 | 2026-09-20 | codegen | medium | AN INDEX-ASSIGN IS A FOURTH OWNING SINK THAT B-2026-09-15-16's FIX DOES NOT COVER, so `a[i] = p` leaves the source binding's heap field READING EMPTY on every compiled backend -- `let p = P { id: 4, s: f"four" }; a[0] = p; println(p.s)` prints `p4:` under `karac run` / `-O0` / `-O2` against `--interp`'s `p4:four`, while the THREE sinks 83602bc did cover -- a variant constructor, `Vec.push` and `Map.insert` -- are all correct in the SAME BINARY and are this row's controls; `uam_defensive_copy` has eight call sites (2 in `maps.rs`, 1 in `vec_method.rs`, 2 in `exprs.rs`, 2 in `call_dispatch.rs`, 1 at the `let` RHS in `stmts.rs`) and the index-assign store path is not among them, so this is that fix's sink list being one spelling short rather than a new mechanism; the `Array` leg and the NESTED position (`d[0][0] = p`) read empty too, so it is the index-assign STORE rather than one container's method; the ownership pass DOES diagnose the read (`warning[ownership]: value 'p' moved here, used again here`) but it is a WARNING and `karac check` exits 0, so the program compiles and the two backends then disagree about what a read of the moved-from binding yields; memory-safe and valgrind-clean at -O0 (0 errors, all heap blocks freed), so nothing but an output comparison reports it | — |
+| B-2026-09-20-37 | 2026-09-20 | other | low | THE ORPHANED-FIX-SHA GATE DOES NOT COVER A SHA CITED IN AN OPEN ROW'S PROSE, which is the only form a correction or a partial-fix citation can take -- rule 6 reads the `fix` FIELD, empty on an open row, and rule 6b reads the `<bid> <sha>` pairs `bug-close.py` leaves in `.git/kara-closed-fix-shas`, which a correction never produces; measured on the very commit that was correcting an orphaned SHA, where the lint printed `checked for the 0 row(s) this tree changes` above `0 errors` | — |
 
 ### Relocated
 
