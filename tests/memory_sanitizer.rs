@@ -87427,6 +87427,15 @@ fn main() {
     ///
     /// The output twin, which pins the `dR2` body the pre-fix tree also lost,
     /// is in `tests/codegen.rs`.
+    ///
+    /// The last three rows are the CALL SPELLING axis, added after the rest of
+    /// this grid had already gone green: every other cell here is a free
+    /// function, and the row records that a method argument leaks identically.
+    /// Measured against the named parent tree, they were not guards — a method
+    /// argument, a `Drop`-bearing method argument and an associated-function
+    /// argument together lost 120 B in 4 blocks with `dR11` ABSENT, and are
+    /// clean with the body present after. A grid can be wide on payload type
+    /// and blind on how the callee is spelled.
     #[test]
     fn asan_enum_call_return_in_argument_position_has_an_owner() {
         assert_clean_asan_run(
@@ -87454,6 +87463,12 @@ fn eatd(e: Td) -> i64 { return 7; }
 fn eatw(e: W) -> i64 { return 7; }
 fn eato(e: Option[String]) -> i64 { return 7; }
 fn takes(e: Ts) -> i64 { match e { Ts.A(s) => { return 1 }, Ts.B => { return 0 } } }
+struct H { n: i64 }
+impl H {
+    fn meth(ref self, e: Ts) -> i64 { return 7; }
+    fn methr(ref self, e: Tr) -> i64 { return 7; }
+    fn assoc(e: Ts) -> i64 { return 7; }
+}
 
 fn main() {
     println(f"s={eats(mks(1))}");
@@ -87466,12 +87481,16 @@ fn main() {
     println(f"inline={eats(Ts.A(f"b1613-payload-aaaaaaaaaaaaaaaa-7"))}");
     println(f"struct={eatw(mkw(8))}");
     println(f"option={eato(mko(9))}");
+    let h = H { n: 1 };
+    println(f"meth={h.meth(mks(10))}");
+    println(f"methr={h.methr(mkr(11))}");
+    println(f"assoc={H.assoc(mks(12))}");
     println("end");
 }
 "#,
             &[
                 "s=7", "dR2", "r=7", "v=7", "m=1", "dTd", "d=7", "local=7", "inline=7", "struct=7",
-                "option=7", "end",
+                "option=7", "meth=7", "dR11", "methr=7", "assoc=7", "end",
             ],
             "asan_enum_call_return_in_argument_position_has_an_owner",
         );

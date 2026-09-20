@@ -170217,6 +170217,15 @@ fn main() {
     /// arms by design. They pin the three spellings that were already correct,
     /// so an over-broad repair shows up as a doubled body or an invalid free
     /// rather than as a leak. The memory twin is in `tests/memory_sanitizer.rs`.
+    ///
+    /// The last three rows are the CALL SPELLING axis, added after the rest of
+    /// this grid had already gone green: every other cell here is a free
+    /// function, and the row records that a method argument leaks identically.
+    /// Measured against the named parent tree, they were not guards — a method
+    /// argument, a `Drop`-bearing method argument and an associated-function
+    /// argument together lost 120 B in 4 blocks with `dR11` ABSENT, and are
+    /// clean with the body present after. A grid can be wide on payload type
+    /// and blind on how the callee is spelled.
     #[test]
     fn e2e_enum_call_return_in_argument_position_has_an_owner() {
         let src = r#"
@@ -170243,6 +170252,12 @@ fn eatd(e: Td) -> i64 { return 7; }
 fn eatw(e: W) -> i64 { return 7; }
 fn eato(e: Option[String]) -> i64 { return 7; }
 fn takes(e: Ts) -> i64 { match e { Ts.A(s) => { return 1 }, Ts.B => { return 0 } } }
+struct H { n: i64 }
+impl H {
+    fn meth(ref self, e: Ts) -> i64 { return 7; }
+    fn methr(ref self, e: Tr) -> i64 { return 7; }
+    fn assoc(e: Ts) -> i64 { return 7; }
+}
 
 fn main() {
     println(f"s={eats(mks(1))}");
@@ -170255,12 +170270,16 @@ fn main() {
     println(f"inline={eats(Ts.A(f"b1613-payload-aaaaaaaaaaaaaaaa-7"))}");
     println(f"struct={eatw(mkw(8))}");
     println(f"option={eato(mko(9))}");
+    let h = H { n: 1 };
+    println(f"meth={h.meth(mks(10))}");
+    println(f"methr={h.methr(mkr(11))}");
+    println(f"assoc={H.assoc(mks(12))}");
     println("end");
 }
 "#;
         assert_eq!(
             run_program(src).as_deref(),
-            Some("s=7\ndR2\nr=7\nv=7\nm=1\ndTd\nd=7\nlocal=7\ninline=7\nstruct=7\noption=7\nend\n"),
+            Some("s=7\ndR2\nr=7\nv=7\nm=1\ndTd\nd=7\nlocal=7\ninline=7\nstruct=7\noption=7\nmeth=7\ndR11\nmethr=7\nassoc=7\nend\n"),
         );
     }
 
