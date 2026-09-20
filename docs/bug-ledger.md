@@ -94,7 +94,7 @@ distinguish "bugs flattening" from "we stopped writing them down."
 |---|---|
 | run-vs-build | 469 |
 | miscompile | 431 |
-| leak | 394 |
+| leak | 395 |
 | double-free | 260 |
 | missing-feature | 202 |
 | codegen-gap | 181 |
@@ -110,7 +110,7 @@ distinguish "bugs flattening" from "we stopped writing them down."
 
 | surface | total |
 |---|---|
-| codegen | 1935 |
+| codegen | 1936 |
 | interp | 502 |
 | typecheck | 302 |
 | other | 103 |
@@ -138,7 +138,6 @@ _Generated from `bug-ledger.jsonl` by `scripts/bug-curve.py` (2026-05-20 → 202
 | B-2026-09-16-5 | 2026-09-16 | codegen | low | A BY-VALUE TUPLE PARAM HOLDING AN `Array[T, N]` STILL LEAKS ITS ELEMENTS IN TWO SHAPES -- a param moved to a LOCAL inside the callee, and a FRESH TEMPORARY argument whose param is returned -- because the two available ownership models each break the other's cell: the entry copy orphans a temporary's buffers, and transfer needs a caller-side disarm that has no hook for a tuple argument | — |
 | B-2026-09-16-6 | 2026-09-16 | codegen+interp | medium | TWO BODIES-CHANNEL GAPS FOR AN `Array[T, N]` HELD IN A TUPLE, both found while pinning the output twin of B-2026-09-13-23's memory fix and both memory-clean under it: a tuple in a STRUCT FIELD runs no element `Drop` body on ANY backend, and a DESTRUCTURED tuple runs them under `--interp` and on NEITHER compiled backend -- an agreed silence and a run-vs-build divergence in the same family | — |
 | B-2026-09-16-11 | 2026-09-16 | codegen | low | THE ENUM TWIN OF B-2026-09-05-32'S IDENTITY ARM STILL LEAKS -- `e = if c { pass(e) } else { e }` over `enum E { A(String), B }` loses 36 bytes in 1 block (12 allocs / 11 frees at -O0) while the all-owned-calls spelling `else { mk() }` is 12 / 12 clean on the same tree; the enum overwrite path consumes the STRICT `roundtrip_frees_old` because it has no distinctness guard, so widening the shared predicate would have traded the leak for a use-after-free there | — |
-| B-2026-09-16-13 | 2026-09-16 | codegen | medium | A USER ENUM RETURNED BY A CALL AND PASSED BY VALUE LEAKS ITS PAYLOAD -- `eat(mk(i))` over `enum T { A(String), B }` loses 58 B in 2 blocks (13 allocs / 11 frees) with a callee that never reads the argument, while the SAME value through a named local is clean; not the callee's body, not the payload shape, and not `Option`/`Result` | — |
 | B-2026-09-16-14 | 2026-09-16 | interp | low | THE INTERPRETER RUNS A TRANSFERRED STRUCT-FIELD LEAF'S `Drop` BODY TWICE WHERE EVERY COMPILED BACKEND RUNS IT ONCE -- `let c = H2 { r: mk(1) }; match c { H2 { r } => { let m: R = r; return m.id } }` prints `dR1 dR1` under `--interp` and `dR1` on jit / aot / `KARAC_AUTO_PAR=0`; the enum-leaf spellings double the whole `dE dR` pair, and `return e` out of the arm runs a full pair AT THE ARM before the value reaches the caller, who then runs it again | — |
 | B-2026-09-16-18 | 2026-09-16 | codegen+interp | medium | A FRESH-TEMP STRUCT SCRUTINEE'S UNBOUND FIELDS LOSE THEIR `Drop` BODIES AND LEAK THEIR HEAP ON EVERY SURFACE -- `match S3 { a: mk(44), b: mk(45) } { S3 { a, .. } => .. }` runs `dR44` alone and `S3 { .. }` runs NOTHING, on --interp / jit / aot / `KARAC_AUTO_PAR=0` alike; valgrind at `-O0` reports 24 allocs / 20 frees, 12 bytes definitely lost in 4 blocks, one `name` buffer per unbound field. The NAMED-scrutinee spelling is correct on all four, so the husk of a temp with no binding is owned by nobody | — |
 | B-2026-09-16-19 | 2026-09-16 | codegen+interp | medium | A `Vec`-NESTING INSIDE AN `Option` OR `Map` FIELD RUNS ITS ELEMENT'S `Drop` BODY ON `--interp` AND ON NO COMPILED SURFACE -- `H { xs: Option[Vec[D]] }` and `H { xs: Map[i64, Vec[D]] }` both print `dD1` under the tree-walk backend and nothing under the JIT or either `build`, which REFUTES the premise `type_runs_user_drop`'s own comment rests on | — |
@@ -239,6 +238,7 @@ _Generated from `bug-ledger.jsonl` by `scripts/bug-curve.py` (2026-05-20 → 202
 | B-2026-09-20-47 | 2026-09-20 | codegen | medium | A BOXED GENERIC-ENUM PAYLOAD WHOSE `Drop`-BEARING TYPE IS A FIELD RATHER THAN THE PAYLOAD ITSELF RUNS THAT `Drop` BODY TWICE PER BY-VALUE CALL -- one value, ONE call, two `dR41`, memory-clean on every channel (14 allocs / 14 frees, ERROR SUMMARY 0), where a no-call control over the same binding runs it once; B-2026-09-20-13's copy is NOT the cause, proven without a control tree because the single-call cell emits ZERO `b13.ebox.new` markers, and B-2026-09-20-44's `Gen[Rw]` with the same width but the `Drop` type AS the payload is correct on all four surfaces, so NESTING is the axis and boxing is not | — |
 | B-2026-09-20-49 | 2026-09-20 | codegen | medium | A `shared enum`'s BOXED TUPLE PAYLOAD STRANDS ITS INTERIOR FROM EVERY SOURCE ALIKE, so unlike the `Array` channel it has no provenance axis at all -- `shared enum Sh { S((String, i64)), N }` loses 28 B (exactly the tuple's String element) whether the payload is a fresh temp `Sh.S(mkt("x"))` or a named local `let a = mkt("n"); Sh.S(a)`, both measured at 28/0 before AND after B-2026-09-17-21's fix, which deliberately leaves this channel untouched -- `emit_shared_enum_payload_box_free` is `BoxedArray` ONLY and its own note calls `BoxedTuple` "the opposite channel and a different row", the box there being freed already while the interior is what leaks | — |
 | B-2026-09-20-41 | 2026-09-20 | codegen+interp | medium | A BARE `T` ENUM PAYLOAD INSTANTIATED TO A CONTAINER RUNS NO ELEMENT `Drop` BODY ON EITHER BACKEND, AND THE TWO HALVES MUST BE FIXED TOGETHER -- `enum Slot[T] { S(T), N }` at `Slot[Vec[R]]` or `Slot[Array[R, 2]]` prints no `dR` body on `--interp`, on the JIT, or on either AOT level, in both the consuming-match and the no-match position, while the SAME element types under a payload WRITTEN as a container (`enum EVecG[T] { V(Vec[T]) }`) now run them everywhere as of B-2026-09-13-7's fix; the two spellings are the same program after instantiation, so this is a gap rather than a divergence, which is why no A/B harness in the tree can see it and why arming the compiled side alone would trade an agreed gap for a run-vs-build divergence -- the interpreter does not walk it either | — |
+| B-2026-09-20-50 | 2026-09-20 | codegen | medium | A CALL-RETURNED ENUM TEMP HANDED ONWARD TO AN OWNER THAT OUTLIVES THE CALL LEAKS ITS PAYLOAD -- `gives(mks(1))`, `puts(mut v, mks(3))` and `holds(mks(5))` lose 160 B in 5 blocks (24 allocs / 19 frees) where the SAME handoffs from a named local or an inline constructor are clean at 16/16; byte-identical on both arms of B-2026-09-16-13's fix, so pre-existing and independent of it; needs a TRANSFER of ownership to the destination, not a free at the call site, because the escape term that declines these is what stops the double free | — |
 
 ### Relocated
 
@@ -2720,6 +2720,7 @@ _Generated from `bug-ledger.jsonl` by `scripts/bug-curve.py` (2026-05-20 → 202
 | B-2026-09-16-9 | codegen | high | REGRESSION ON `main`: `506a91d` TURNED THE `(Array[String, 2], i64)` ENUM-PAYLOAD CELL FROM A LEAK INTO AN INVALID FREE -- valgrind reports `Invalid… | 49e75a8 |
 | B-2026-09-16-10 | codegen | high | A GENERIC SINGLE-FIELD VARIANT AT `T = Array[String, N]` SEGFAULTS ON EVERY COMPILED BACKEND -- `G1.Y(a)` over `enum G1[T] { Y(T), N }` passed to a g… | 55a8db2 |
 | B-2026-09-16-12 | interp+codegen | medium | A MIXED BIND-AND-WILDCARD MATCH ARM LOSES THE WILDCARDED PAYLOAD FIELD'S `Drop` BODY -- `let w = W2.Two(mk(41), mk(42)); match w { W2.Two(a, _) => {… | c9432558c |
+| B-2026-09-16-13 | codegen | medium | A USER ENUM RETURNED BY A CALL AND PASSED BY VALUE LEAKS ITS PAYLOAD -- `eat(mk(i))` over `enum T { A(String), B }` loses 58 B in 2 blocks (13 allocs… | 388a4fb |
 | B-2026-09-16-15 | codegen | medium | A BOXED GENERIC-ENUM `Array[String, N]` PAYLOAD STRANDS ITS ELEMENT BUFFERS WITH OR WITHOUT A MATCH IN THE CALLEE -- the remaining half of this row,… | cedace6 |
 | B-2026-09-16-16 | codegen | medium | A PASSTHROUGH GENERIC PARAM OVER A BOXED ENUM PAYLOAD DOUBLE FREES -- `fn idG[T](g: G1[T]) -> G1[T] { return g }` over `enum G1[T] { Y(T), N }` at `T… | 8b00e96 |
 | B-2026-09-16-17 | codegen+interp | medium | AN ENUM VARIANT'S PAYLOAD FIELDS RUN THEIR `Drop` BODIES IN DECLARATION ORDER ON ALL FOUR SURFACES, while a struct's run in REVERSE declaration order… | ef5ce6f |
