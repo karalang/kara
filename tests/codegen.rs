@@ -20805,6 +20805,56 @@ fn main() {
         assert_eq!(out, "f-arr\nd1\nd2\nm\nf-vec\nd3\nm\nf-venum\nd4\nm\nf-bind\nd5\nd6\nm\nf-second\nd7\nd8\nm\nl-arr\nd10\nd11\nm\nl-vec\nd12\nm\nb-arrenum\nm\nb-tuple\nm\nb-unit\nm\nend\n", "got:\n{out}");
     }
 
+    /// B-2026-09-19-58 — a NAMED `Array` local moved into a seeded-pair
+    /// constructor used DIRECTLY as a `match` scrutinee double-freed every
+    /// element buffer: `free(): double free detected in tcache 2` on the JIT
+    /// and at `-O0`, against a correct `--interp`. Two owners of one buffer
+    /// set — the local's own `StructDrop` and the box's interior walk — and
+    /// only the second was ever armed on purpose.
+    ///
+    /// The cells vary the two things that decide it. `m/arr`, `m/wild`,
+    /// `m/str`, `m/res` and `m/one` are the shapes that aborted; note that
+    /// `m/str`'s element runs no user `Drop` at all, so the boundary is heap
+    /// ownership rather than a `Drop` body. The `b/` cells are the ones that
+    /// must NOT move: `b/noheap` arms no interior walk, `b/fresh` has no named
+    /// source to retract, `b/let` was already correct through the `let` site's
+    /// own retraction, and `b/mono` is a user enum, which this path declines.
+    ///
+    /// The INLINE-payload width is deliberately absent. `Array[S, 1]` is three
+    /// words, fits the `Option` payload area, never boxes, and aborts on both
+    /// the `match` AND the `let` spelling — a different defect on the other
+    /// side of the same width gate, filed as its own row. Carrying it here
+    /// would pin a crash as expected output.
+    #[test]
+    fn e2e_named_array_local_into_seeded_match_scrutinee_has_one_owner() {
+        let Some(out) = run_program(
+            r#"struct S { tag: String }
+impl Drop for S { fn drop(mut ref self) { println(f"  dS{self.tag}") } }
+struct R { id: i64, s: String }
+impl Drop for R { fn drop(mut ref self) { println(f"  dR{self.id}") } }
+struct N { id: i64 }
+impl Drop for N { fn drop(mut ref self) { println(f"  dN{self.id}") } }
+enum W { P(Array[S, 2]), Q }
+fn mka() -> Array[S, 2] { return [S { tag: f"gggggggg0" }, S { tag: f"gggggggg1" }] }
+fn main() {
+    println("m/arr");    { let a: Array[S, 2] = [S { tag: f"aaaaaaaa0" }, S { tag: f"aaaaaaaa1" }]; match Option.Some(a) { Option.Some(v) => { println(f"  r:{v[0].tag}") }, Option.None => { println("  n") } } }
+    println("m/wild");   { let a: Array[S, 2] = [S { tag: f"bbbbbbbb0" }, S { tag: f"bbbbbbbb1" }]; match Option.Some(a) { Option.Some(_) => { println("  w") }, Option.None => { println("  n") } } }
+    println("m/str");    { let a: Array[String, 2] = [f"cccccccc0", f"cccccccc1"]; match Option.Some(a) { Option.Some(v) => { println(f"  r:{v[0]}") }, Option.None => { println("  n") } } }
+    println("m/res");    { let a: Array[S, 2] = [S { tag: f"dddddddd0" }, S { tag: f"dddddddd1" }]; match Result.Ok(a) { Result.Ok(v) => { println("  r") }, Result.Err(e) => { println("  n") } } }
+    println("m/one");    { let a: Array[R, 1] = [R { id: 1, s: f"eeeeeeee0" }]; match Option.Some(a) { Option.Some(v) => { println("  r") }, Option.None => { println("  n") } } }
+    println("b/noheap"); { let a: Array[N, 2] = [N { id: 2 }, N { id: 3 }]; match Option.Some(a) { Option.Some(v) => { println("  r") }, Option.None => { println("  n") } } }
+    println("b/fresh");  { match Option.Some(mka()) { Option.Some(v) => { println(f"  r:{v[0].tag}") }, Option.None => { println("  n") } } }
+    println("b/let");    { let a: Array[S, 2] = [S { tag: f"hhhhhhhh0" }, S { tag: f"hhhhhhhh1" }]; let o = Option.Some(a); match o { Option.Some(v) => { println("  r") }, Option.None => { println("  n") } } }
+    println("b/mono");   { let a: Array[S, 2] = [S { tag: f"iiiiiiii0" }, S { tag: f"iiiiiiii1" }]; match W.P(a) { W.P(v) => { println("  r") }, W.Q => { println("  n") } } }
+    println("end")
+}
+"#,
+        ) else {
+            return;
+        };
+        assert_eq!(out, "m/arr\n  r:aaaaaaaa0\n  dSaaaaaaaa0\n  dSaaaaaaaa1\nm/wild\n  w\nm/str\n  r:cccccccc0\nm/res\n  r\n  dSdddddddd0\n  dSdddddddd1\nm/one\n  r\n  dR1\nb/noheap\n  r\n  dN2\n  dN3\nb/fresh\n  r:gggggggg0\n  dSgggggggg0\n  dSgggggggg1\nb/let\n  r\n  dShhhhhhhh0\n  dShhhhhhhh1\nb/mono\n  r\nend\n", "got:\n{out}");
+    }
+
     #[test]
     fn e2e_declared_vec_enum_payload_runs_element_drop_bodies() {
         let Some(out) = run_program(

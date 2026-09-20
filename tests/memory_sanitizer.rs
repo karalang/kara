@@ -89227,6 +89227,99 @@ fn main() {
         );
     }
 
+    /// B-2026-09-19-58 — the MATCH-SCRUTINEE sibling of
+    /// `asan_named_array_local_into_seeded_ctor_has_one_owner` above, and the
+    /// spelling that row's cells never reach.
+    ///
+    /// `match Option.Some(a) { .. }` over a named `Array` local armed the box's
+    /// interior walk without retracting the local's own `StructDrop`, so every
+    /// element buffer had two owners: `free(): double free detected in tcache 2`
+    /// under the JIT and at `-O0`, with two invalid frees under valgrind and a
+    /// correct `--interp`. The registration site's own comment asserted no
+    /// disarm was owed because a fresh-temp scrutinee has "no named source still
+    /// owning the interior" — true of the ENVELOPE, false of its PAYLOAD.
+    ///
+    /// `m/str` is the cell that fixes the predicate: its element is a bare
+    /// `String`, which runs no user `Drop` at all, and it aborted identically.
+    /// So the retraction is the AGGREGATE one (`array_elem_owns_callee_drop`,
+    /// "does this array own a drop at all") rather than the callee-keyed one,
+    /// which excludes a user-`Drop` element on purpose.
+    ///
+    /// The `b/` cells must stay exactly as they are: `b/noheap` arms no interior
+    /// walk, `b/fresh` has no named source, `b/let` was already correct, and
+    /// `b/mono` is a user enum this path declines.
+    ///
+    /// The INLINE-payload width is deliberately omitted, for the reason the
+    /// `gensh` and `b-arrenum` omissions elsewhere in this file give: an
+    /// `Array[S, 1]` payload is three words, fits the `Option` area, never
+    /// boxes, and still aborts on the `let` spelling as well as this one. It is
+    /// a different defect on the other side of the same width gate, filed as its
+    /// own row; carrying it here would redden the leg for something this commit
+    /// does not touch.
+    ///
+    /// Measured on this tree: 0 bytes in 0 blocks and 0 errors at `-O0` under
+    /// `valgrind --leak-check=full`, and the stdout below is byte-identical
+    /// across `--interp` / jit / `karac build` / `KARAC_AUTO_PAR=0 karac build`.
+    #[test]
+    fn asan_named_array_local_into_seeded_match_scrutinee_has_one_owner() {
+        assert_clean_asan_run(
+            r#"struct S { tag: String }
+impl Drop for S { fn drop(mut ref self) { println(f"  dS{self.tag}") } }
+struct R { id: i64, s: String }
+impl Drop for R { fn drop(mut ref self) { println(f"  dR{self.id}") } }
+struct N { id: i64 }
+impl Drop for N { fn drop(mut ref self) { println(f"  dN{self.id}") } }
+enum W { P(Array[S, 2]), Q }
+fn mka() -> Array[S, 2] { return [S { tag: f"gggggggg0" }, S { tag: f"gggggggg1" }] }
+fn main() {
+    println("m/arr");    { let a: Array[S, 2] = [S { tag: f"aaaaaaaa0" }, S { tag: f"aaaaaaaa1" }]; match Option.Some(a) { Option.Some(v) => { println(f"  r:{v[0].tag}") }, Option.None => { println("  n") } } }
+    println("m/wild");   { let a: Array[S, 2] = [S { tag: f"bbbbbbbb0" }, S { tag: f"bbbbbbbb1" }]; match Option.Some(a) { Option.Some(_) => { println("  w") }, Option.None => { println("  n") } } }
+    println("m/str");    { let a: Array[String, 2] = [f"cccccccc0", f"cccccccc1"]; match Option.Some(a) { Option.Some(v) => { println(f"  r:{v[0]}") }, Option.None => { println("  n") } } }
+    println("m/res");    { let a: Array[S, 2] = [S { tag: f"dddddddd0" }, S { tag: f"dddddddd1" }]; match Result.Ok(a) { Result.Ok(v) => { println("  r") }, Result.Err(e) => { println("  n") } } }
+    println("m/one");    { let a: Array[R, 1] = [R { id: 1, s: f"eeeeeeee0" }]; match Option.Some(a) { Option.Some(v) => { println("  r") }, Option.None => { println("  n") } } }
+    println("b/noheap"); { let a: Array[N, 2] = [N { id: 2 }, N { id: 3 }]; match Option.Some(a) { Option.Some(v) => { println("  r") }, Option.None => { println("  n") } } }
+    println("b/fresh");  { match Option.Some(mka()) { Option.Some(v) => { println(f"  r:{v[0].tag}") }, Option.None => { println("  n") } } }
+    println("b/let");    { let a: Array[S, 2] = [S { tag: f"hhhhhhhh0" }, S { tag: f"hhhhhhhh1" }]; let o = Option.Some(a); match o { Option.Some(v) => { println("  r") }, Option.None => { println("  n") } } }
+    println("b/mono");   { let a: Array[S, 2] = [S { tag: f"iiiiiiii0" }, S { tag: f"iiiiiiii1" }]; match W.P(a) { W.P(v) => { println("  r") }, W.Q => { println("  n") } } }
+    println("end")
+}
+"#,
+            &[
+                "m/arr",
+                "  r:aaaaaaaa0",
+                "  dSaaaaaaaa0",
+                "  dSaaaaaaaa1",
+                "m/wild",
+                "  w",
+                "m/str",
+                "  r:cccccccc0",
+                "m/res",
+                "  r",
+                "  dSdddddddd0",
+                "  dSdddddddd1",
+                "m/one",
+                "  r",
+                "  dR1",
+                "b/noheap",
+                "  r",
+                "  dN2",
+                "  dN3",
+                "b/fresh",
+                "  r:gggggggg0",
+                "  dSgggggggg0",
+                "  dSgggggggg1",
+                "b/let",
+                "  r",
+                "  dShhhhhhhh0",
+                "  dShhhhhhhh1",
+                "b/mono",
+                "  r",
+                "end",
+            ],
+            "asan_named_array_local_into_seeded_match_scrutinee_has_one_owner",
+        );
+    }
+
     /// B-2026-09-17-9 — the LEAK MIRROR its own row's fix walked into, and the
     /// shape that fix's controls could not reach.
     ///

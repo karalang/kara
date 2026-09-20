@@ -17775,6 +17775,52 @@ impl<'ctx> super::Codegen<'ctx> {
                     if self.array_elem_and_len(&pte).is_some() {
                         if let Some(inner_drop) = self.enum_boxed_payload_interior_drop(&pte, true)
                         {
+                            // B-2026-09-19-58 — the PAIRED DISARM the comment
+                            // above says is unnecessary. Its reasoning is that
+                            // a FRESH TEMP scrutinee has "no named source still
+                            // owning the interior", and that is true of the
+                            // ENVELOPE and false of its PAYLOAD: in
+                            // `match Option.Some(a) { .. }` the `Option` temp is
+                            // fresh while `a` is a named local whose own
+                            // `StructDrop` (`make_array_param_callee_owned`, at
+                            // its `let`) is still queued. Arming the interior
+                            // walk below then makes two owners of one set of
+                            // element buffers, which is the "register without
+                            // retracting" half of this family's invariant --
+                            // measured as `free(): double free detected in
+                            // tcache 2` with two invalid frees at `-O0` and
+                            // under the JIT, on a seven-line program, against a
+                            // correct `--interp`.
+                            //
+                            // This is the THIRD consumer site that holds an
+                            // arming decision, after the call-argument one
+                            // (`callee_takes_boxed_array_payload_interior`) and
+                            // the `let` one (`takes_over`) that B-2026-09-17-9
+                            // moved `seeded_array_source_needs_disarm` to; it
+                            // simply was never wired. The AGGREGATE spelling is
+                            // the right one here for the reason its doc gives:
+                            // there is no callee, the box's interior drop walks
+                            // the elements unconditionally, so the source stands
+                            // down whatever the element type is. The
+                            // callee-keyed predicate excludes a user-`Drop`
+                            // element on purpose, and that element is exactly
+                            // half the measured population -- `Array[String, 2]`
+                            // (heap, no user `Drop`) and `Array[R, 2]` (both)
+                            // abort identically, while `Array[Nh, 2]` (a user
+                            // `Drop` body, no heap) is clean on every surface
+                            // and registers no interior walk to pair with.
+                            //
+                            // Placed immediately before the arming call so the
+                            // two stay ONE decision: every early return above
+                            // leaves the source armed, which is correct, because
+                            // nothing else has taken the interior over.
+                            if let Some((ctor_variant, payload_arg)) =
+                                Self::seeded_variant_arg_payload(scrutinee)
+                            {
+                                if ctor_variant == variant {
+                                    self.suppress_array_binding_move_into_aggregate(payload_arg);
+                                }
+                            }
                             self.track_boxed_enum_var_with_inner_drop(
                                 &enum_name,
                                 alloca,

@@ -70158,6 +70158,45 @@ fn main() {
     assert_eq!(out, "f-arr\nd1\nd2\nm\nf-vec\nd3\nm\nf-venum\nd4\nm\nf-bind\nd5\nd6\nm\nf-second\nd7\nd8\nm\nl-arr\nd10\nd11\nm\nl-vec\nd12\nm\nb-arrenum\nm\nb-tuple\nm\nb-unit\nm\nend\n", "got:\n{out}");
 }
 
+/// B-2026-09-19-58 — the INTERPRETER twin of `tests/codegen.rs`'s
+/// `e2e_named_array_local_into_seeded_match_scrutinee_has_one_owner`.
+///
+/// Byte-identical source and expectation. This side was already CORRECT at
+/// every cell — the compiled surfaces ABORTED before printing anything — so it
+/// is the oracle the compiled half was moved onto rather than a change of its
+/// own, and its job here is to fail loudly if a later fix moves the oracle
+/// instead of the backend.
+///
+/// The `b/` cells are the deliberate boundary; the INLINE-payload width
+/// (`Array[S, 1]`, three words, never boxed) is deliberately absent because it
+/// still aborts on both the `match` and the `let` spelling. See the codegen
+/// twin's doc for the full cell-by-cell rationale.
+#[test]
+fn test_named_array_local_into_seeded_match_scrutinee_has_one_owner() {
+    let out = run(r#"struct S { tag: String }
+impl Drop for S { fn drop(mut ref self) { println(f"  dS{self.tag}") } }
+struct R { id: i64, s: String }
+impl Drop for R { fn drop(mut ref self) { println(f"  dR{self.id}") } }
+struct N { id: i64 }
+impl Drop for N { fn drop(mut ref self) { println(f"  dN{self.id}") } }
+enum W { P(Array[S, 2]), Q }
+fn mka() -> Array[S, 2] { return [S { tag: f"gggggggg0" }, S { tag: f"gggggggg1" }] }
+fn main() {
+    println("m/arr");    { let a: Array[S, 2] = [S { tag: f"aaaaaaaa0" }, S { tag: f"aaaaaaaa1" }]; match Option.Some(a) { Option.Some(v) => { println(f"  r:{v[0].tag}") }, Option.None => { println("  n") } } }
+    println("m/wild");   { let a: Array[S, 2] = [S { tag: f"bbbbbbbb0" }, S { tag: f"bbbbbbbb1" }]; match Option.Some(a) { Option.Some(_) => { println("  w") }, Option.None => { println("  n") } } }
+    println("m/str");    { let a: Array[String, 2] = [f"cccccccc0", f"cccccccc1"]; match Option.Some(a) { Option.Some(v) => { println(f"  r:{v[0]}") }, Option.None => { println("  n") } } }
+    println("m/res");    { let a: Array[S, 2] = [S { tag: f"dddddddd0" }, S { tag: f"dddddddd1" }]; match Result.Ok(a) { Result.Ok(v) => { println("  r") }, Result.Err(e) => { println("  n") } } }
+    println("m/one");    { let a: Array[R, 1] = [R { id: 1, s: f"eeeeeeee0" }]; match Option.Some(a) { Option.Some(v) => { println("  r") }, Option.None => { println("  n") } } }
+    println("b/noheap"); { let a: Array[N, 2] = [N { id: 2 }, N { id: 3 }]; match Option.Some(a) { Option.Some(v) => { println("  r") }, Option.None => { println("  n") } } }
+    println("b/fresh");  { match Option.Some(mka()) { Option.Some(v) => { println(f"  r:{v[0].tag}") }, Option.None => { println("  n") } } }
+    println("b/let");    { let a: Array[S, 2] = [S { tag: f"hhhhhhhh0" }, S { tag: f"hhhhhhhh1" }]; let o = Option.Some(a); match o { Option.Some(v) => { println("  r") }, Option.None => { println("  n") } } }
+    println("b/mono");   { let a: Array[S, 2] = [S { tag: f"iiiiiiii0" }, S { tag: f"iiiiiiii1" }]; match W.P(a) { W.P(v) => { println("  r") }, W.Q => { println("  n") } } }
+    println("end")
+}
+"#);
+    assert_eq!(out, "m/arr\n  r:aaaaaaaa0\n  dSaaaaaaaa0\n  dSaaaaaaaa1\nm/wild\n  w\nm/str\n  r:cccccccc0\nm/res\n  r\n  dSdddddddd0\n  dSdddddddd1\nm/one\n  r\n  dR1\nb/noheap\n  r\n  dN2\n  dN3\nb/fresh\n  r:gggggggg0\n  dSgggggggg0\n  dSgggggggg1\nb/let\n  r\n  dShhhhhhhh0\n  dShhhhhhhh1\nb/mono\n  r\nend\n", "got:\n{out}");
+}
+
 /// B-2026-09-10-20 — the INTERPRETER twin of `tests/codegen.rs`'s
 /// `e2e_declared_vec_enum_payload_runs_element_drop_bodies`, byte-identical
 /// source and expectation.
