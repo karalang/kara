@@ -39753,26 +39753,27 @@ fn main() {
                 "dR6\nit:5\ndR5\ndR6\nit:5\ndR5\nend\n",
             ),
             (
-                // B-2026-09-17-31's probe found a SECOND, unrelated loss at
-                // this use site and it is pinned rather than repaired: the
-                // method result handed straight to a consuming free function
-                // runs `sink`'s own by-value param body NOWHERE, on all four
-                // surfaces. `sink(R { .. })`, `sink(mk(2))` and
-                // `sink(<named local>)` all run it, so the trigger is the
-                // METHOD-call result specifically. Byte-identical before and
-                // after this commit on the compiled side; the interpreter's
-                // half of this cell moved only in the sibling's body (`dR6`),
-                // which is this row's fix. Filed as B-2026-09-19-56, whose
-                // sibling B-2026-09-19-57 records the different answer a
-                // HEAP-carrying payload gives at this same use site.
-                "pinned: a method result consumed by a free fn loses THAT fn's param body",
+                // WAS PINNED at the wrong answer (`dR6 sank:5 end`) as
+                // B-2026-09-19-56: the method result handed straight to a
+                // consuming free function ran `sink`'s own by-value param body
+                // NOWHERE, on all four surfaces, while `sink(R { .. })`,
+                // `sink(mk(2))` and `sink(<named local>)` all ran it.
+                //
+                // FIXED, and the trigger was wider than the pin implied —
+                // nothing about the payload was involved, only the fact that
+                // an instance method was not one of the producer shapes either
+                // backend enumerates. See
+                // `e2e_method_call_result_argument_runs_the_callees_param_drop_body`,
+                // which carries the cell that settles it (a method minting a
+                // fresh value with no `Option` anywhere) and the mechanism.
+                "a method result consumed by a free fn runs THAT fn's param body",
                 format!(
                     "{R}struct H {{ n: i64 }}\n\
                      impl H {{ fn eat(ref self, o: Option[(R, R)]) -> R {{ match o {{ Some(t) => {{ return t.0; }} None => {{ return R {{ id: 0 }}; }} }} }} }}\n\
                      fn sink(r: R) {{ println(f\"sank:{{r.id}}\") }}\n\
                      fn main() {{ let h = H {{ n: 1 }}; sink(h.eat({ARG})); println(\"end\") }}\n"
                 ),
-                "dR6\nsank:5\nend\n",
+                "dR6\nsank:5\ndR5\nend\n",
             ),
             (
                 "control: the FREE function, correct throughout",
@@ -39905,21 +39906,185 @@ fn main() {
                 "dP[b]\ngot[a]\ndP[a]\nend\n",
             ),
             (
-                // B-2026-09-19-56, open. A method-call result consumed by a
-                // by-value free function runs THAT function's own param body
-                // nowhere, on all four surfaces. 52602ba removed this cell's
-                // EARLY `dP[a]` along with the free spelling's, which left the
-                // two spellings agreeing on a wrong answer -- so the pin is
-                // what keeps a later fix there from landing silently. The
-                // scalar spelling of the same loss is pinned in
-                // `e2e_method_call_keeps_an_unmoved_payload_parts_drop_body`.
-                "pinned (B-2026-09-19-56): the METHOD spelling loses `sink`'s own param body",
+                // This cell was pinned at `dP[b] sank[a]` for B-2026-09-19-56
+                // -- the method-call result whose consumer's own param body
+                // ran nowhere. 52602ba had removed the EARLY `dP[a]` along
+                // with the free spelling's, leaving the two spellings agreed
+                // on a wrong answer, which is what the pin was guarding.
+                //
+                // The pin did its job: the fix landed here rather than
+                // silently. The HEAP payload is not what the row was about --
+                // an instance method was simply not one of the producer shapes
+                // either backend enumerates -- so this cell and the scalar one
+                // in `e2e_method_call_keeps_an_unmoved_payload_parts_drop_body`
+                // moved together.
+                "the METHOD spelling, formerly B-2026-09-19-56's loss, now correct",
                 format!(
                     "{P}struct H {{ n: i64 }}\n\
                      impl H {{ fn ep(ref self, o: Option[(P, P)]) -> P {{ match o {{ Some(t) => {{ return t.0; }} None => {{ return P {{ name: \"z\" }}; }} }} }} }}\n\
                      {SINK}fn main() {{ let h = H {{ n: 1 }}; sink(h.ep({PARG})); }}\n"
                 ),
-                "dP[b]\nsank[a]\n",
+                "dP[b]\nsank[a]\ndP[a]\n",
+            ),
+        ] {
+            let (interp_out, interp_errs, _, _) = karac::run_program_full_checked(&prog);
+            assert!(
+                interp_errs.is_empty(),
+                "[{label}] interp errored: {interp_errs:?}"
+            );
+            assert_eq!(interp_out.join(""), want, "[{label}] interpreter");
+            if let Some(aot) = run_program(&prog) {
+                assert_eq!(aot, want, "[{label}] AOT");
+            }
+        }
+    }
+
+    /// B-2026-09-19-56 — A METHOD-CALL RESULT PASSED AS A BY-VALUE ARGUMENT RAN
+    /// THE CALLEE'S OWN PARAM `Drop` BODY ON NO SURFACE.
+    ///
+    /// `sink(h.eat(Some((S { id: 11 }, S { id: 12 }))))` over `fn sink(r: S)`
+    /// printed `dS12 sank11` for a due `dS12 sank11 dS11` — agreed on all four
+    /// surfaces, which is the class no A/B against the interpreter can see.
+    ///
+    /// THE ROW'S TRIGGER WAS TOO NARROW, and that is why it sat open. It was
+    /// filed around a method that hands out an `Option` payload part and
+    /// concluded "it is the METHOD-call result specifically". The `decisive`
+    /// cell below has no `Option`, no payload, no `match` and no container
+    /// anywhere — `fn mk(ref self, k: i64) -> S { return S { id: k } }` — and
+    /// lost the body just the same. Nothing about the payload was involved.
+    ///
+    /// MECHANISM, one gap wearing two hats. Both backends answer "does this
+    /// argument mint a fresh owned temp whose body the caller owes" by
+    /// enumerating PRODUCER SHAPES — `track_inline_owned_aggregate_arg_inst`
+    /// (src/codegen/call_dispatch.rs) and `fresh_temp_arg_type_name`
+    /// (src/interpreter/eval_call.rs). Each had two of the three: a free call
+    /// (`ExprKind::Call` with an `Identifier` callee) and an associated call
+    /// (a 2-segment `Path` callee). An instance method is an
+    /// `ExprKind::MethodCall` and matched neither, so nothing claimed the temp
+    /// and the callee's own by-value param body was owed to nobody.
+    ///
+    /// The associated spelling is present because B-2026-08-30-20 added it for
+    /// this exact symptom — no body on any backend, 76 bytes lost at `-O0` —
+    /// and B-2026-07-01-7 added the free one before that. This is the third
+    /// leg of a repair made twice already, each time one spelling short.
+    ///
+    /// BOTH HALVES LAND TOGETHER. The cell was AGREED-silent, so moving either
+    /// backend alone would convert an agreed gap into a fresh run-vs-build
+    /// divergence — the arithmetic the interpreter's own arm already states.
+    ///
+    /// `dup` IS A SECOND SPELLING NO ROW NAMED: an inherent
+    /// `fn dup(ref self) -> S` used as an argument ran ONE body for TWO
+    /// constructions before this. Measured against the unpatched tree rather
+    /// than assumed, because a new owner is exactly how this family produces a
+    /// double free; the count is right here in a scalar cell and in the heap
+    /// cell under `asan_method_call_result_argument_no_double_free`.
+    ///
+    /// SEVEN CONTROLS, byte-identical before and after: the free and
+    /// associated producers, a literal, a named local, the result DISCARDED,
+    /// the result BOUND, and the `self` receiver reached from inside another
+    /// method. The last is the one that exercises the `SelfValue` arm of the
+    /// receiver lookup rather than the `Identifier` arm.
+    ///
+    /// KNOWN EDGE, not closed by this: the receiver must be a plain binding or
+    /// `self`, because that is what either backend's type resolver can name. A
+    /// CHAINED or PROJECTED receiver still loses the body. That is a remaining
+    /// gap rather than a safe default — but naming the wrong receiver type
+    /// would claim a temp whose body another owner already runs, and this
+    /// family punishes a double harder than a loss.
+    #[test]
+    fn e2e_method_call_result_argument_runs_the_callees_param_drop_body() {
+        const S: &str = "struct S { id: i64 }\n\
+             impl Drop for S { fn drop(mut ref self) { println(f\"dS{self.id}\") } }\n";
+        const SINK: &str = "fn sink(r: S) { println(f\"sank{r.id}\") }\n";
+        const H: &str = "struct H { n: i64 }\n\
+             impl H { fn mk(ref self, k: i64) -> S { return S { id: k } }\n\
+                      fn viaself(ref self, k: i64) -> S { return self.mk(k) }\n\
+                      fn eat(ref self, o: Option[(S, S)]) -> S { match o { Some(t) => { return t.0; } None => { return S { id: 0 }; } } } }\n";
+        // (label, source, expectation -- both backends, all four surfaces)
+        for (label, prog, want) in [
+            (
+                "the row's own cell: a method handing out an Option payload part",
+                format!(
+                    "{S}{H}{SINK}fn main() {{ let h = H {{ n: 1 }}; sink(h.eat(Some((S {{ id: 11 }}, S {{ id: 12 }})))); }}\n"
+                ),
+                "dS12\nsank11\ndS11\n",
+            ),
+            (
+                "decisive: a method minting a fresh value -- no Option, payload or container",
+                format!("{S}{H}{SINK}fn main() {{ let h = H {{ n: 1 }}; sink(h.mk(2)); }}\n"),
+                "sank2\ndS2\n",
+            ),
+            (
+                "an OWNED-self receiver",
+                format!(
+                    "{S}struct H {{ n: i64 }}\n\
+                     impl H {{ fn omk(self, k: i64) -> S {{ return S {{ id: k }} }} }}\n\
+                     {SINK}fn main() {{ let h = H {{ n: 1 }}; sink(h.omk(3)); }}\n"
+                ),
+                "sank3\ndS3\n",
+            ),
+            (
+                "the receiver is `self`, reached from inside another method",
+                format!("{S}{H}{SINK}fn main() {{ let h = H {{ n: 1 }}; sink(h.viaself(4)); }}\n"),
+                "sank4\ndS4\n",
+            ),
+            (
+                "dup: an inherent `fn dup(ref self) -> S` -- two constructions, two bodies",
+                format!(
+                    "{S}impl S {{ fn dup(ref self) -> S {{ return S {{ id: self.id }} }} }}\n\
+                     {SINK}fn main() {{ let s = S {{ id: 11 }}; sink(s.dup()); println(\"mid\") }}\n"
+                ),
+                "sank11\ndS11\ndS11\nmid\n",
+            ),
+            (
+                "the call is in a LOOP, so one body per iteration",
+                format!(
+                    "{S}{H}{SINK}fn main() {{ let h = H {{ n: 1 }}; let mut i = 0; while i < 2 {{ sink(h.mk(i + 12)); i = i + 1; }} }}\n"
+                ),
+                "sank12\ndS12\nsank13\ndS13\n",
+            ),
+            (
+                "control: the ASSOCIATED producer, correct since B-2026-08-30-20",
+                format!(
+                    "{S}struct A {{}}\n\
+                     impl A {{ fn amk(k: i64) -> S {{ return S {{ id: k }} }} }}\n\
+                     {SINK}fn main() {{ sink(A.amk(5)); }}\n"
+                ),
+                "sank5\ndS5\n",
+            ),
+            (
+                "control: the FREE producer, correct since B-2026-07-01-7",
+                format!(
+                    "{S}fn mk(k: i64) -> S {{ return S {{ id: k }} }}\n\
+                     {SINK}fn main() {{ sink(mk(6)); }}\n"
+                ),
+                "sank6\ndS6\n",
+            ),
+            (
+                "control: a literal argument",
+                format!("{S}{SINK}fn main() {{ sink(S {{ id: 7 }}); }}\n"),
+                "sank7\ndS7\n",
+            ),
+            (
+                "control: a NAMED LOCAL, whose binding owns its own body",
+                format!(
+                    "{S}{H}{SINK}fn main() {{ let h = H {{ n: 1 }}; let t = h.mk(8); sink(t); }}\n"
+                ),
+                "sank8\ndS8\n",
+            ),
+            (
+                "control: the method result DISCARDED rather than passed",
+                format!(
+                    "{S}{H}fn main() {{ let h = H {{ n: 1 }}; h.mk(9); println(\"after\") }}\n"
+                ),
+                "dS9\nafter\n",
+            ),
+            (
+                "control: the method result BOUND rather than passed",
+                format!(
+                    "{S}{H}fn main() {{ let h = H {{ n: 1 }}; let g = h.mk(10); println(f\"got{{g.id}}\") }}\n"
+                ),
+                "got10\ndS10\n",
             ),
         ] {
             let (interp_out, interp_errs, _, _) = karac::run_program_full_checked(&prog);

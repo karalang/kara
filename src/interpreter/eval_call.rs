@@ -4771,21 +4771,59 @@ impl<'a> super::Interpreter<'a> {
             // requires: the cell is AGREED-silent today, so repairing either
             // backend alone converts an agreed gap into a fresh divergence.
             ExprKind::MethodCall { object, method, .. } => {
-                let ExprKind::Path {
+                if let ExprKind::Path {
                     segments,
                     generic_args: Some(_),
                 } = &object.kind
-                else {
-                    return None;
-                };
-                let [en] = segments.as_slice() else {
-                    return None;
-                };
-                if self.env.get(en).is_some() && !self.env.is_outermost_only(en) {
-                    return None;
+                {
+                    let [en] = segments.as_slice() else {
+                        return None;
+                    };
+                    if self.env.get(en).is_some() && !self.env.is_outermost_only(en) {
+                        return None;
+                    }
+                    return self
+                        .qualified_enum_variant_is_unit(en, method)
+                        .map(|_| en.clone());
                 }
-                self.qualified_enum_variant_is_unit(en, method)
-                    .map(|_| en.clone())
+                // B-2026-09-19-56 — the INSTANCE-METHOD producer,
+                // `sink(h.mk(2))`. The arm above claims the qualified
+                // CONSTRUCTOR, whose receiver is a type path; a real method
+                // call has a VALUE receiver and fell out of it at the
+                // `let .. else` above, so nothing claimed the temp and
+                // `sink`'s own by-value param body ran on no surface. The
+                // free (`sink(mk(2))`) and associated (`sink(A.amk(2))`)
+                // spellings of the identical body were correct, which is what
+                // localises this to the spelling rather than to the value.
+                //
+                // Keyed off the RECEIVER's type, read from the binding exactly
+                // as `cond_moved_place_tail_type_name` reads it, then through
+                // the same `assoc_fn_return_type_name` the associated arm
+                // above uses — methods and associated fns are both
+                // `ImplItem::Method` on the same inherent impl, so one lookup
+                // serves both and its ambiguity guard is inherited.
+                //
+                // A receiver that is not a plain binding or `self` keeps
+                // today's answer. That is still a LOST body rather than a safe
+                // default, so it is a remaining gap; naming the wrong type
+                // would be the worse error, since it claims a temp whose body
+                // another owner already runs.
+                //
+                // BOTH HALVES LAND TOGETHER, for the reason the arm above
+                // states: the cell is AGREED-silent on all four surfaces, so
+                // repairing either backend alone turns an agreed gap into a
+                // fresh run-vs-build divergence.
+                let recv = match &object.kind {
+                    ExprKind::Identifier(n) => self.env.get(n)?,
+                    ExprKind::SelfValue => self.env.get("self")?,
+                    _ => return None,
+                };
+                let recv_ty = match recv {
+                    Value::Struct { name, .. } => name,
+                    Value::EnumVariant { enum_name, .. } => enum_name,
+                    _ => return None,
+                };
+                self.assoc_fn_return_type_name(&recv_ty, method)
             }
             _ => None,
         }

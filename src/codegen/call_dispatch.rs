@@ -8593,24 +8593,62 @@ impl<'ctx> super::Codegen<'ctx> {
         // the struct field cleanup; enums get the dual EnumDrop payload
         // walk). Shared types stay with the rc machinery; the passthrough
         // guard at the call sites already skipped flow-through args.
-        if let ExprKind::Call { callee, .. } = &arg.kind {
-            // B-2026-08-30-21's sibling, B-2026-08-30-20 — accept BOTH callee
-            // spellings. This matched a bare `ExprKind::Identifier` only, so a
-            // free producer (`s1(mkr(1))`) was owned and the ASSOCIATED one
-            // (`s1(H.mkr(1))`, a 2-segment `Path` callee) matched nothing and
-            // was classified as carrying no user `Drop`: no body on any
-            // backend, and 76 bytes definitely lost at `-O0`.
-            //
-            // `declare_function` keys impl fns as `Type.method`, which is the
-            // same table this already reads — only the KEY had to be built
-            // from the qualified spelling.
-            let fn_key: Option<String> = match &callee.kind {
+        // B-2026-08-30-21's sibling, B-2026-08-30-20 — accept BOTH callee
+        // spellings. This matched a bare `ExprKind::Identifier` only, so a
+        // free producer (`s1(mkr(1))`) was owned and the ASSOCIATED one
+        // (`s1(H.mkr(1))`, a 2-segment `Path` callee) matched nothing and
+        // was classified as carrying no user `Drop`: no body on any
+        // backend, and 76 bytes definitely lost at `-O0`.
+        //
+        // `declare_function` keys impl fns as `Type.method`, which is the
+        // same table this already reads — only the KEY had to be built
+        // from the qualified spelling.
+        //
+        // B-2026-09-19-56 — the INSTANCE-METHOD spelling, `sink(h.mk(2))`,
+        // which is the third producer of the same value and was the only one
+        // left out. It is an `ExprKind::MethodCall`, so neither arm above saw
+        // it, nothing claimed the temp, and `sink`'s own by-value param body
+        // ran on NO surface — while the free (`sink(mk(2))`) and associated
+        // (`sink(A.amk(2))`) spellings of the identical body were correct.
+        // Keying it needs the RECEIVER's type, which `type_name_of_expr`
+        // already resolves for an `Identifier` or `self` receiver; the same
+        // `Type.method` key then reads the same table.
+        //
+        // A receiver this cannot name keeps today's answer rather than
+        // guessing one: that is still a lost body, so the decline is a
+        // remaining gap and not a safety property — but naming the wrong type
+        // would claim a temp some other owner already holds, which is the
+        // double this family pays for.
+        //
+        // The QUALIFIED-CONSTRUCTOR shape (`takeit(Ho[R].Full(..))`) is also
+        // spelled `MethodCall` and has its OWN arm below; excluded here so the
+        // two cannot both claim it.
+        //
+        // AND NOTE WHAT NO PRODUCER ARM HERE CAN REACH, so the next reader does
+        // not take this enumeration for the whole story: a `Vec`-typed argument
+        // is declined OUTRIGHT at the top of this function, before any arm is
+        // consulted, whatever minted it. Widening that early return is not this
+        // row's business — a `Vec` argument has its own ownership path, and
+        // lifting it blind is how this family produces double frees — but it
+        // means "the producer shapes are complete" is true only for the
+        // aggregates that get this far.
+        let fn_key: Option<String> = match &arg.kind {
+            ExprKind::Call { callee, .. } => match &callee.kind {
                 ExprKind::Identifier(n) => Some(n.clone()),
                 ExprKind::Path { segments, .. } if segments.len() == 2 => {
                     Some(format!("{}.{}", segments[0], segments[1]))
                 }
                 _ => None,
-            };
+            },
+            ExprKind::MethodCall { object, method, .. }
+                if !self.is_qualified_enum_variant_ctor(arg) =>
+            {
+                self.type_name_of_expr(object)
+                    .map(|recv| format!("{recv}.{method}"))
+            }
+            _ => None,
+        };
+        {
             if let Some(fn_name) = fn_key.as_ref() {
                 if let Some(ret_ty_name) = self.fn_sig.fn_return_type_names.get(fn_name).cloned() {
                     let has_user_drop = self

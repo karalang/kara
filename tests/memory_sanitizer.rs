@@ -99496,6 +99496,89 @@ fn main() {
         );
     }
 
+    /// B-2026-09-19-56 — THE MEMORY HALF OF THE METHOD-CALL-RESULT ARGUMENT,
+    /// which is where a repair of this shape goes wrong if it goes wrong.
+    ///
+    /// The row is a LOST `Drop` body: a method result passed by value ran the
+    /// callee's own param body on no surface. Fixing it means giving that temp
+    /// an owner, and in this family a new owner is the standard way a lost body
+    /// becomes a DOUBLE FREE — the caller's fresh wrapper registered beside a
+    /// callee's, freeing one buffer twice (B-2026-09-06-60 is the nearest
+    /// precedent, `free(): double free detected in tcache 2` under the JIT and
+    /// at `-O0`, a SEGV at `-O2`).
+    ///
+    /// So the body half alone would not have been enough evidence: it is
+    /// scalar, and a scalar double is invisible to every sanitizer. Every
+    /// element here carries a `String` past inline capacity and a `Vec`, and
+    /// every printed line reads BOTH lengths back, so a freed buffer cannot
+    /// pass for a live one and a doubled body shows up as a doubled line.
+    ///
+    /// Three producers per iteration, in a loop so a per-iteration leak
+    /// accumulates instead of rounding to one block: a plain method
+    /// (`h.mk(i)`), a method reached through `self` (`h.viaself`), and an
+    /// inherent `dup` whose receiver is a live local — that last one is the
+    /// cell where the ORIGINAL and the copy are both owed a body, which is the
+    /// count a double-free repair gets wrong first.
+    ///
+    /// Valgrind at `KARAC_OPT_LEVEL=0`: 83 allocs, 83 frees, 0 errors.
+    ///
+    /// The body half is
+    /// `e2e_method_call_result_argument_runs_the_callees_param_drop_body`
+    /// (tests/codegen.rs), which carries the mechanism and the seven controls.
+    #[test]
+    fn asan_method_call_result_argument_no_double_free() {
+        assert_clean_asan_run(
+            r#"
+struct P { k: i64, name: String, xs: Vec[i64] }
+impl Drop for P { fn drop(mut ref self) { println(f"d{self.k}n{self.name.len()}x{self.xs.len()}") } }
+impl P { fn dup(ref self) -> P { return P { k: self.k + 100, name: f"{self.name}-dup", xs: [self.k] } } }
+struct H { n: i64 }
+impl H {
+    fn mk(ref self, k: i64) -> P { return P { k: k, name: "alpha-padded-out-well-past-any-inline-capacity", xs: [k, k] } }
+    fn viaself(ref self, k: i64) -> P { return self.mk(k) }
+}
+fn sink(r: P) { println(f"s{r.k}n{r.name.len()}x{r.xs.len()}") }
+
+fn main() {
+    let h = H { n: 1 };
+    let mut i = 0;
+    while i < 3 {
+        sink(h.mk(i));
+        sink(h.viaself(i + 10));
+        { let p = h.mk(i + 20); sink(p.dup()); }
+        i = i + 1;
+    }
+    println("end");
+}
+"#,
+            &[
+                "s0n46x2",
+                "d0n46x2",
+                "s10n46x2",
+                "d10n46x2",
+                "s120n50x1",
+                "d120n50x1",
+                "d20n46x2",
+                "s1n46x2",
+                "d1n46x2",
+                "s11n46x2",
+                "d11n46x2",
+                "s121n50x1",
+                "d121n50x1",
+                "d21n46x2",
+                "s2n46x2",
+                "d2n46x2",
+                "s12n46x2",
+                "d12n46x2",
+                "s122n50x1",
+                "d122n50x1",
+                "d22n46x2",
+                "end",
+            ],
+            "b56-method-call-result-argument",
+        );
+    }
+
     /// B-2026-09-19-40 — AN ARM THAT ONLY HANDS ITS BOXED `Array` PAYLOAD TO A
     /// FREE FUNCTION DOUBLE-FREED THE ELEMENT BUFFERS.
     ///
