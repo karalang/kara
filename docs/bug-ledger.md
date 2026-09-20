@@ -95,7 +95,7 @@ distinguish "bugs flattening" from "we stopped writing them down."
 | run-vs-build | 451 |
 | miscompile | 425 |
 | leak | 383 |
-| double-free | 253 |
+| double-free | 257 |
 | missing-feature | 202 |
 | codegen-gap | 181 |
 | other | 139 |
@@ -110,8 +110,8 @@ distinguish "bugs flattening" from "we stopped writing them down."
 
 | surface | total |
 |---|---|
-| codegen | 1888 |
-| interp | 486 |
+| codegen | 1892 |
+| interp | 487 |
 | typecheck | 302 |
 | other | 101 |
 | ownership | 75 |
@@ -210,6 +210,9 @@ _Generated from `bug-ledger.jsonl` by `scripts/bug-curve.py` (2026-05-20 → 202
 | B-2026-09-19-55 | 2026-09-19 | interp | medium | TWO INHERENT METHODS SHARING A NAME MAKE THE INTERPRETER RUN A HANDED-OUT PAYLOAD PART'S `Drop` BODY TWICE -- `impl H { fn eats(ref self, ..) }` beside `impl A { fn eats(..) }` prints `dR6 dR5 got:5 dR5` under `--interp` against the three compiled surfaces' correct `dR6 got:5 dR5`, and RENAMING EITHER METHOD makes it correct; the caller-side payload mask resolves its callee by BARE NAME, finds two candidates, and fails open -- so the walk runs UNMASKED and doubles the part the result binding already owns | — |
 | B-2026-09-19-56 | 2026-09-19 | codegen+interp | medium | A METHOD-CALL RESULT CONSUMED BY A BY-VALUE FREE FUNCTION LOSES THAT FUNCTION'S OWN PARAM `Drop` BODY ON ALL FOUR SURFACES -- `sink(h.es(Some((S { id: 5 }, S { id: 6 }))))` over `fn sink(r: S)` prints `dS6 sank5` for a due `dS6 sank5 dS5`, while a LITERAL, a free-function call result, and the IDENTICAL body as a free function in the same argument position all run it; AGREED everywhere, so the kata A/B parity rule cannot see it | — |
 | B-2026-09-19-57 | 2026-09-19 | codegen | medium | A HEAP-CARRYING `Option` PAYLOAD PART HANDED OUT OF AN ARM RUNS ITS `Drop` BODY AN EXTRA TIME BEFORE THE CONSUMING CALL ON EVERY COMPILED BACKEND -- `sink(fp(Some((P { name: "a" }, P { name: "b" }))))` over `struct P { name: String }` prints `dP[a] dP[b] sank[a] dP[a]` against `--interp`'s correct `dP[b] sank[a] dP[a]`, so the count is two where one is due; the SCALAR twin of the same program is correct on all four surfaces, and the early body is NOT a use-after-free (the value reads back intact through 3200 B of intervening churn) | — |
+| B-2026-09-19-59 | 2026-09-19 | codegen | high | AN `Array` ENUM PAYLOAD THAT FITS THE SEEDED ENVELOPE'S INLINE AREA IS FREED TWICE ON BOTH THE `let` AND THE `match` SPELLING -- `Array[S, 1]` over `S { tag: String }` is three words, fits `Option`'s three-word payload area, never boxes, and aborts with `free(): double free detected in tcache 2` where the four-word `Array[R, 1]` and the six-word `Array[S, 2]` are both correct. So the boundary is the INLINE/BOXED width gate rather than the element count, and it is the same gate B-2026-09-19-49's boundary measured out to -- two independent defects on one gate in two days, which is why this is worth a sweep of the gate rather than a row at a time | — |
+| B-2026-09-19-60 | 2026-09-19 | codegen | medium | A CONSUMING ARM THAT REBINDS A SEEDED `Array` PAYLOAD INTO A LOCAL LEAVES TWO OWNERS -- `match Option.Some(a) { Some(v) => { let u = v; .. } }` over a NAMED `Array[R, 2]` local aborts with two invalid frees at `-O0` against a correct `--interp`, and `@main` carries TWO `__karac_drop_array_te_R_2` calls over one element storage. No interior walk is armed for a consuming arm, so B-2026-09-19-58's paired retraction has nothing to pair with; B-2026-09-19-54 is the generic-envelope cousin (output correct, no abort) and B-2026-09-17-5 the bodies-channel twin | — |
+| B-2026-09-19-61 | 2026-09-19 | codegen+interp | high | A BY-VALUE `Array` PARAM MOVED INTO A SEEDED `match` SCRUTINEE IS FREED BY BOTH THE CALLER AND THE CALLEE -- the caller keeps its `__karac_drop_array_te_R_2` on purpose, because `array_param_elem_is_callee_owned` excludes an element that runs a user `Drop`, while the callee arms the box's interior walk over the same buffers and frees them on the way out; aborts at `-O0` with two invalid frees. The INTERPRETER independently runs the element bodies TWICE on this cell, so neither backend is the oracle for the other and a fix needs the `let`-local control instead | — |
 
 ### Relocated
 
@@ -2740,6 +2743,7 @@ _Generated from `bug-ledger.jsonl` by `scripts/bug-curve.py` (2026-05-20 → 202
 | B-2026-09-19-36 | codegen | medium | AN `Option`-WRAPPED FIELD IN THE RETURNED AGGREGATE STILL DOUBLE FREES, the remainder B-2026-09-19-21's fix cannot reach -- `struct Ho[T] { g: Option… | 6633381 |
 | B-2026-09-19-40 | codegen | high | AN ARM THAT HANDS A GENERIC BOXED `Array` PAYLOAD TO A BY-VALUE CALLEE INVALID-FREES ON STOCK `main` -- `match g { G1.Y(x) => eat(x) }` over `G1[Arra… | 7934c5b |
 | B-2026-09-19-41 | codegen | medium | A `Drop`-BEARING NAMED FIELD MOVED OUT OF AN `Option` PAYLOAD RUNS ITS BODY LATE, TWICE, OR NOT AT ALL ON THE COMPILED BACKENDS -- `Some(t) => { let… | c6c4cf8 |
+| B-2026-09-19-58 | codegen | high | A NAMED `Array` LOCAL MOVED INTO A SEEDED-PAIR CONSTRUCTOR USED DIRECTLY AS A `match` SCRUTINEE IS FREED TWICE -- `let a: Array[R, 2] = [..]; match O… | adff1bf |
 
 </details>
 
