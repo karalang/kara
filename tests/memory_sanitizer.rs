@@ -9698,6 +9698,198 @@ fn main() { c_cond(); c_condf(); c_conda(); c_condy(); c_condn(); c_setm(); c_se
     }
 
     #[test]
+    /// B-2026-09-19-42 — an assignment over a LOCAL binding releases the value
+    /// it displaces, including that value's `shared` refcount block.
+    ///
+    /// The THIRD displacement site of B-2026-09-07-20's family. That row
+    /// repaired the field assign (`h.one = mk(37)`) and the index assign
+    /// (`v[0] = mk(38)`) by routing them through `displaced_struct_shared_drop`;
+    /// the plain local reassign (`out = w`) still called
+    /// `emit_struct_drop_synthesis`, the VALUE drop, which SKIPS `shared`
+    /// fields by design because a live binding releases through a separate
+    /// scope-exit channel. A displaced value has no such channel — the
+    /// binding's scope-exit action reads the slot and finds the NEW occupant —
+    /// so the overwritten value's block was released by nobody.
+    ///
+    /// EVERY DISPLACING CELL HERE LEAKED, at `KARAC_OPT_LEVEL=0` under
+    /// valgrind, on the parent: 90 allocs / 72 frees, `304 bytes in 9 blocks
+    /// definitely lost` plus 270 indirect, 9 errors from 9 contexts. On the fix
+    /// the same program is 90 allocs / 90 frees, 0 errors. Nine loss records,
+    /// one per displacement, in two sizes — seven `62 (32 direct, 30 indirect)`
+    /// for a `shared struct` box and two `70 (40 direct, 30 indirect)` for the
+    /// wider `shared enum` one:
+    ///
+    ///   * `a`/`b`/`c` — the same assignment with three RHS PROVENANCES: a call
+    ///     result, a match-arm binding and a named local. All three lost one
+    ///     block, identically, which is what says this is the SITE and not a
+    ///     provenance interaction. B-2026-09-07-20's prose records the plain
+    ///     local rebind as clean; it was clean for a different struct shape and
+    ///     is not a counterexample.
+    ///   * `d` — the `if let` spelling, listed NOT MEASURED on the row.
+    ///   * `e` — an `Option[shared]` field rather than a bare `shared` one,
+    ///     also listed NOT MEASURED.
+    ///   * `f` — TWO successive assignments over a struct whose `shared` field
+    ///     sits among scalars, losing two of the nine blocks. One block per
+    ///     overwrite is what identifies the DISPLACED value rather than the
+    ///     stored one, and it is why this cell carries two assignments.
+    ///   * `i`/`j` — a `shared ENUM` in the field position rather than a
+    ///     `shared struct`, the row's third NOT MEASURED axis, with both RHS
+    ///     spellings. These are the two 40-direct records: a different box
+    ///     layout reached through the same site.
+    ///   * `h` — no `shared` anywhere, two assignments: the guard that the
+    ///     change did not disturb the ordinary struct-reassign path it routes
+    ///     through. Clean before and after.
+    ///   * `k` — a SHADOWING `let` rather than an assignment, the row's fourth
+    ///     NOT MEASURED axis. It is not a displacement at all: the first
+    ///     binding is never overwritten and releases through its own scope
+    ///     exit, so it was already clean on the parent. It is here as the
+    ///     over-reach guard — the fix must not turn a second `let` into a
+    ///     displacement. `h` and `k` together are why the block count is 9
+    ///     rather than 11.
+    ///
+    /// WHICH VALUE LEAKS IS READ FROM THE INTERIOR, not from the IR: every
+    /// displaced string is 30 bytes (`out-<n>-` + 24 `o`) and every incoming
+    /// one is 40 (`pay-<n>-` + 34 `p`), so the `30 indirect` carried by all
+    /// nine records names the overwritten value. The two lengths are chosen to
+    /// differ for exactly that reason.
+    ///
+    /// THE PAYLOAD IS SEEDED AND ITS BYTES ARE READ, and that is load-bearing
+    /// rather than stylistic. Written with literal strings and `.len()` reads,
+    /// this same program cleared the harness's vacuity floor at 11 allocations
+    /// — the optimizer had folded the payloads away, so a green ASAN run over
+    /// it would have proved nothing. The seed is `env.args().len()`, every
+    /// string is built from it, and each cell returns `hit(s)`, which reads the
+    /// buffer's CONTENTS (`s.contains("pppp")`) rather than its length. The
+    /// floor is 45 against 56 observed at this harness's own opt level and 80
+    /// at `-O0`; it is set below the lower of the two on purpose, because the
+    /// two legs compile the same program differently and a floor tuned to the
+    /// `-O0` count reddens the ordinary leg.
+    ///
+    /// STDOUT IS BYTE-IDENTICAL ACROSS THE FIX and identical under `--interp`
+    /// and at `-O2`, so there is no output twin to pair with this: a leak of a
+    /// value nothing reads again is invisible to every output assertion. At
+    /// `-O2` the parent is clean too — LLVM folds the payloads away — which is
+    /// why the measurement above is stated at `-O0` and why this fixture's
+    /// evidence lives in the ratchet leg rather than the ordinary llvm one.
+    ///
+    /// AN `impl Drop`-BEARING CELL WAS DELIBERATELY LEFT OUT. It takes a
+    /// different arm (the user-drop wrapper) and is memory-clean before and
+    /// after, but its `Drop` body count DIVERGES between backends — `--interp`
+    /// runs it twice and all three compiled surfaces three times, byte for byte
+    /// identically before and after this fix, so it is pre-existing and filed
+    /// separately. Carrying it here would pin that divergence into a fixture
+    /// that is about something else.
+    fn asan_local_assignment_releases_the_displaced_shared_field_struct() {
+        assert_clean_asan_run_min_allocs(
+            r#"
+shared struct Sh { s: String }
+shared enum Se { V(String), N }
+struct Ws { h: Sh }
+struct Wo { h: Option[Sh] }
+struct Wm { id: i64, h: Sh, n: i64 }
+struct Ps { a: String, n: i64 }
+struct Wse { h: Se }
+
+enum Es { A(Ws), B }
+enum Eo { A(Wo), B }
+enum Ese { A(Wse), B }
+
+fn outs(n: i64) -> String { return f"out-{n}-oooooooooooooooooooooooo"; }
+fn pays(n: i64) -> String { return f"pay-{n}-pppppppppppppppppppppppppppppppppp"; }
+
+fn mkw(t: String) -> Ws { return Ws { h: Sh { s: t } }; }
+fn mkm(i: i64, t: String) -> Wm { return Wm { id: i, h: Sh { s: t }, n: i }; }
+fn mkp(n: i64, t: String) -> Ps { return Ps { a: t, n: n }; }
+
+fn hit(s: String) -> i64 { if s.contains(f"pppp") { return 1; } return 0; }
+
+fn c_call(n: i64) -> i64 {
+  let mut out: Ws = Ws { h: Sh { s: outs(n) } };
+  out = mkw(pays(n));
+  let t = out.h;
+  return hit(t.s);
+}
+fn c_arm(b: Es, n: i64) -> i64 {
+  let mut out: Ws = Ws { h: Sh { s: outs(n) } };
+  match b { Es.A(w) => { out = w; } Es.B => { } }
+  let t = out.h;
+  return hit(t.s);
+}
+fn c_local(n: i64) -> i64 {
+  let mut out: Ws = Ws { h: Sh { s: outs(n) } };
+  let w: Ws = Ws { h: Sh { s: pays(n) } };
+  out = w;
+  let t = out.h;
+  return hit(t.s);
+}
+fn c_iflet(b: Es, n: i64) -> i64 {
+  let mut out: Ws = Ws { h: Sh { s: outs(n) } };
+  if let Es.A(w) = b { out = w; }
+  let t = out.h;
+  return hit(t.s);
+}
+fn c_opt(b: Eo, n: i64) -> i64 {
+  let mut out: Wo = Wo { h: Option.Some(Sh { s: outs(n) }) };
+  match b { Eo.A(w) => { out = w; } Eo.B => { } }
+  match out.h { Option.Some(x) => { return hit(x.s); } Option.None => { return 0; } }
+}
+fn c_twice(n: i64) -> i64 {
+  let mut r: Wm = mkm(1, outs(n));
+  r = mkm(7, outs(n));
+  r = mkm(9, pays(n));
+  let t = r.h;
+  return hit(t.s);
+}
+fn c_plain(n: i64) -> i64 {
+  let mut r: Ps = mkp(1, outs(n));
+  r = mkp(7, outs(n));
+  r = mkp(9, pays(n));
+  let t = r.a;
+  return hit(t);
+}
+
+fn c_senum_arm(b: Ese, n: i64) -> i64 {
+  let mut out: Wse = Wse { h: Se.V(outs(n)) };
+  match b { Ese.A(w) => { out = w; } Ese.B => { } }
+  match out.h { Se.V(s) => { return hit(s); } Se.N => { return 0; } }
+}
+fn c_senum_inline(n: i64) -> i64 {
+  let mut out: Wse = Wse { h: Se.V(outs(n)) };
+  out = Wse { h: Se.V(pays(n)) };
+  match out.h { Se.V(s) => { return hit(s); } Se.N => { return 0; } }
+}
+fn c_shadow(b: Es, n: i64) -> i64 {
+  // NOT a displacement: a shadowing `let` leaves the first binding intact, so
+  // it must still release through its own scope exit. Deliberately unread --
+  // any read would move the field out and remove the action under test.
+  let out: Ws = Ws { h: Sh { s: outs(n) } };
+  match b { Es.A(w) => { let out2: Ws = w; let t = out2.h; return hit(t.s); } Es.B => { return 0; } }
+}
+
+fn main() {
+  let n: i64 = env.args().len();
+  println(f"a{c_call(n)}");
+  println(f"b{c_arm(Es.A(Ws { h: Sh { s: pays(n) } }), n)}");
+  println(f"c{c_local(n)}");
+  println(f"d{c_iflet(Es.A(Ws { h: Sh { s: pays(n) } }), n)}");
+  println(f"e{c_opt(Eo.A(Wo { h: Option.Some(Sh { s: pays(n) }) }), n)}");
+  println(f"f{c_twice(n)}");
+  println(f"h{c_plain(n)}");
+  println(f"i{c_senum_arm(Ese.A(Wse { h: Se.V(pays(n)) }), n)}");
+  println(f"j{c_senum_inline(n)}");
+  println(f"k{c_shadow(Es.A(Ws { h: Sh { s: pays(n) } }), n)}");
+  println("end")
+}
+"#,
+            &[
+                "a1", "b1", "c1", "d1", "e1", "f1", "h1", "i1", "j1", "k1", "end",
+            ],
+            "b0919-42-local-assign-displaced-shared",
+            45,
+        );
+    }
+
+    #[test]
     /// B-2026-09-07-5 — the FREEING half of
     /// `test_e2e_stored_argument_is_owned_by_its_new_home_not_the_caller`.
     ///

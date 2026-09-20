@@ -13516,7 +13516,42 @@ impl<'ctx> super::Codegen<'ctx> {
                                                 .unwrap();
                                         }
                                     }
-                                    if let Some(f) = self.emit_struct_drop_synthesis(&tn) {
+                                    // B-2026-09-19-42 — the COMBINED drop when the
+                                    // displaced struct owns a `shared` field, the
+                                    // THIRD displacement site to need it after the
+                                    // field-assign (`displaced_struct_combined_drop`)
+                                    // and index-assign (`emit_displaced_index_elem_drop`)
+                                    // twins. `emit_struct_drop_synthesis` is the VALUE
+                                    // drop and it SKIPS `shared` fields by design,
+                                    // because for a live binding the release rides a
+                                    // scope-exit channel; a DISPLACED value has no such
+                                    // channel, since the binding's action reads the slot
+                                    // at scope exit and finds the NEW occupant. So the
+                                    // overwritten value's refcount block is released by
+                                    // nobody. Measured over `struct Ws { h: Sh }` with
+                                    // `shared struct Sh { s: String }`: `out = w` lost
+                                    // 38 (32 direct, 6 indirect) B in 1 block at `-O0`
+                                    // with correct output and no valgrind errors, and
+                                    // the 6-byte interior identifies the DISPLACED value
+                                    // rather than the stored one — `out`'s own string is
+                                    // 6 bytes and the incoming payload's is 12.
+                                    //
+                                    // Reached identically from all three RHS
+                                    // provenances (a call result, a match-arm binding
+                                    // and a named local), each measured at the same 38
+                                    // B, so this is the site and not a provenance
+                                    // interaction. B-2026-09-07-20's prose records the
+                                    // plain local rebind as clean; that was a different
+                                    // struct shape and does not hold here.
+                                    //
+                                    // `displaced_struct_shared_drop` returns `None` for
+                                    // everything that is not a non-generic named struct
+                                    // owning a `shared` field, so every other shape
+                                    // keeps the resolver it had.
+                                    if let Some(f) = self
+                                        .displaced_struct_shared_drop(&tn)
+                                        .or_else(|| self.emit_struct_drop_synthesis(&tn))
+                                    {
                                         self.builder.build_call(f, &[slot.ptr.into()], "").unwrap();
                                     }
                                 }
