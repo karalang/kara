@@ -280,6 +280,45 @@ pub(crate) fn optres_arm_moved_destructured_elems(
     (leaves.len(), out)
 }
 
+/// B-2026-09-19-44 — `Block` sibling of
+/// [`optres_arm_moved_destructured_elems`], for the `if let` scope whose body
+/// is a block rather than a single arm expression.
+///
+/// Same question, same conservative direction, same empty-set-means-nothing-
+/// to-narrow contract; only the walk differs, exactly as
+/// [`optres_block_takes_whole_payload`] differs from its arm sibling. An
+/// `if let` has no guard, so there is no guard parameter to thread.
+#[cfg_attr(not(feature = "llvm"), allow(dead_code))]
+pub(crate) fn optres_block_moved_destructured_elems(
+    pattern: &crate::ast::Pattern,
+    block: &Block,
+) -> (usize, std::collections::BTreeSet<usize>) {
+    let mut out = std::collections::BTreeSet::new();
+    let crate::ast::PatternKind::TupleVariant { patterns, .. } = &pattern.kind else {
+        return (0, out);
+    };
+    let [sub] = patterns.as_slice() else {
+        return (0, out);
+    };
+    let crate::ast::PatternKind::Tuple(leaves) = &sub.kind else {
+        return (0, out);
+    };
+    for (i, leaf) in leaves.iter().enumerate() {
+        match &leaf.kind {
+            crate::ast::PatternKind::Wildcard => {}
+            crate::ast::PatternKind::Binding(n) => {
+                if !binding_only_read_through_block(n, block) {
+                    out.insert(i);
+                }
+            }
+            _ => {
+                out.insert(i);
+            }
+        }
+    }
+    (leaves.len(), out)
+}
+
 /// True iff every mention of `name.<idx>` inside `e` is a read THROUGH that
 /// element rather than a use of it; vacuously true when there is none.
 fn tuple_elem_only_read_through(name: &str, idx: usize, e: &Expr) -> bool {

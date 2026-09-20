@@ -441,9 +441,21 @@ impl<'ctx> super::Codegen<'ctx> {
         // program), so the retraction is right there and the escaped
         // binding's own drop runs the body.
         if optres_bindings_owned {
-            // B-2026-09-10-14 — the `if let` leg's scope verdict, block form.
-            let takes = crate::binding_use::optres_block_takes_whole_payload(pattern, then_block);
-            self.suppress_optres_payload_bodies_for_match_scoped(value, pattern, takes);
+            // B-2026-09-19-44 — try the PER-ELEMENT narrowing first, exactly as
+            // the `match` loop has since B-2026-09-14-18. The all-or-nothing
+            // disarm below stands the whole bodies walk down, so on
+            // `if let Some((a, _)) = f()` — one element moved out, one left
+            // behind — the element still owned by the source lost its `Drop`
+            // body on every compiled surface while `--interp` ran it. The
+            // narrowing returns false for every shape the disarm below already
+            // gets right, so this is a no-op outside that corner.
+            if !self.narrow_callee_owned_tuple_payload_bodies_for_block(value, pattern, then_block)
+            {
+                // B-2026-09-10-14 — the `if let` leg's scope verdict, block form.
+                let takes =
+                    crate::binding_use::optres_block_takes_whole_payload(pattern, then_block);
+                self.suppress_optres_payload_bodies_for_match_scoped(value, pattern, takes);
+            }
         }
         // B-2026-07-21-16: `if let Some(s) = a.opt { … }` over an OWNED place
         // — zero the source field in the then-arm (the binding owns the

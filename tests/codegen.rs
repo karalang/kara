@@ -39552,6 +39552,214 @@ fn main() {
         }
     }
 
+    /// B-2026-09-19-44 — a DESTRUCTURING `if let` over a boxed `Option`/`Result`
+    /// tuple payload loses the `Drop` body of every element it does NOT take.
+    ///
+    /// `if let Some((_, b)) = o { … }` moves element 1 out and leaves element 0
+    /// with the source, so the source's payload-bodies walk is the only holder
+    /// of element 0's body. `compile_if_let` called
+    /// `suppress_optres_payload_bodies_for_match_scoped`, which is
+    /// all-or-nothing: it stood the whole walk down and the body ran nowhere.
+    /// Measured `n9` on the JIT, AOT-`O0` and AOT-`O2` against `--interp`'s
+    /// `dH1 n9` — a run-vs-build divergence with the COMPILED side lagging, so
+    /// repairing codegen removes a divergence rather than manufacturing one.
+    ///
+    /// The `match` spelling has been correct since B-2026-09-14-18, which put
+    /// the same per-element narrowing in front of the same disarm in the arm
+    /// loop. The IR names the difference exactly: the losing cell stores
+    /// `i1 true` then `i1 false` into `%optresbodies.o`, so `%cmrun.armed` is
+    /// false and the walker is emitted and never called; the `match` cell calls
+    /// the MASKED walker unconditionally.
+    ///
+    /// THE FIX SHARES THE ARM VERSION'S BODY RATHER THAN COPYING IT. The two
+    /// callers differ only in how they answer "which elements did this scope
+    /// move out" — an arm asks it of an expression plus a guard, an `if let`
+    /// asks it of a block and has no guard — so that answer became an ARGUMENT
+    /// and everything below it is one function
+    /// (`narrow_callee_owned_tuple_payload_bodies_core`). The `Block` sibling
+    /// of the analyzer is `binding_use::optres_block_moved_destructured_elems`.
+    ///
+    /// NINE CELLS, of which two are the repair, six are controls that must not
+    /// move, and one is a pinned gap belonging to another row. The controls
+    /// cover both channels (boxed and inline), both heads (`Some`, `Ok`), a
+    /// whole-value binding, a borrow-only arm and an arm that takes
+    /// everything — the four ways the narrowing is supposed to decline.
+    #[test]
+    fn e2e_destructuring_if_let_runs_the_untaken_payload_elements_drop_body() {
+        // (label, program, AOT expectation, interpreter expectation)
+        for (label, prog, want, interp_want) in [
+            (
+                // THE FIX. One element is taken out by the arm and the other is
+                // left behind under a `_`, so the source is still the only
+                // holder of element 0's body. The all-or-nothing disarm stood
+                // the whole walk down and nothing ran it: `n9` on all three
+                // compiled surfaces against `--interp`'s `dH1 n9`.
+                "iflet-wildcard-elem",
+                r#"struct H { id: i64, s: String }
+impl Drop for H { fn drop(mut ref self) { println(f"dH{self.id}") } }
+fn mkh(i: i64) -> H { return H { id: i, s: f"s{i}" } }
+fn f(o: Option[(H, i64)]) -> i64 { if let Some((_, b)) = o { return b } return 0 }
+fn main() { println(f"n{f(Option.Some((mkh(1), 9)))}") }
+"#.to_string(),
+                "dH1\nn9\n".to_string(),
+                "dH1\nn9\n".to_string(),
+            ),
+            (
+                // THE FIX, NAMED SPELLING. `a` is bound rather than wildcarded
+                // and never used, which the `_` cell cannot distinguish for us
+                // -- the moved-elements analyzer classifies a binding by how
+                // the BLOCK uses it, so this cell is what proves it reads the
+                // block and not just the pattern.
+                "iflet-bound-unused-elem",
+                r#"struct H { id: i64, s: String }
+impl Drop for H { fn drop(mut ref self) { println(f"dH{self.id}") } }
+fn mkh(i: i64) -> H { return H { id: i, s: f"s{i}" } }
+fn f(o: Option[(H, i64)]) -> i64 { if let Some((a, b)) = o { return b } return 0 }
+fn main() { println(f"n{f(Option.Some((mkh(1), 9)))}") }
+"#.to_string(),
+                "dH1\nn9\n".to_string(),
+                "dH1\nn9\n".to_string(),
+            ),
+            (
+                // CONTROL: the `match` spelling of the same program, correct on
+                // every surface since B-2026-09-14-18 wired the narrowing into
+                // the arm loop. It is the oracle the `if let` cells above were
+                // moved onto, and it must not move.
+                "match-wildcard-elem",
+                r#"struct H { id: i64, s: String }
+impl Drop for H { fn drop(mut ref self) { println(f"dH{self.id}") } }
+fn mkh(i: i64) -> H { return H { id: i, s: f"s{i}" } }
+fn f(o: Option[(H, i64)]) -> i64 { match o { Option.Some((_, b)) => { return b } Option.None => { return 0 } } }
+fn main() { println(f"n{f(Option.Some((mkh(1), 9)))}") }
+"#.to_string(),
+                "dH1\nn9\n".to_string(),
+                "dH1\nn9\n".to_string(),
+            ),
+            (
+                // CONTROL: the payload bound WHOLE. No tuple pattern, so the
+                // moved-elements analyzer declines by construction and the
+                // existing path decides. Already correct.
+                "iflet-whole-binding",
+                r#"struct H { id: i64, s: String }
+impl Drop for H { fn drop(mut ref self) { println(f"dH{self.id}") } }
+fn mkh(i: i64) -> H { return H { id: i, s: f"s{i}" } }
+fn f(o: Option[(H, i64)]) -> i64 { if let Some(t) = o { return t.1 } return 0 }
+fn main() { println(f"n{f(Option.Some((mkh(1), 9)))}") }
+"#.to_string(),
+                "dH1\nn9\n".to_string(),
+                "dH1\nn9\n".to_string(),
+            ),
+            (
+                // CONTROL, THE OTHER CHANNEL: a one-word payload element rides
+                // INLINE rather than boxed, so the bodies stay with the caller
+                // and `callee_owned_payload_bodies_params` does not hold the
+                // scrutinee. The narrowing returns false at its first gate.
+                "iflet-inline-channel",
+                r#"struct N { id: i64 }
+impl Drop for N { fn drop(mut ref self) { println(f"dN{self.id}") } }
+fn mkn(i: i64) -> N { return N { id: i } }
+fn f(o: Option[(N, i64)]) -> i64 { if let Some((_, b)) = o { return b } return 0 }
+fn main() { println(f"n{f(Option.Some((mkn(1), 9)))}") }
+"#.to_string(),
+                "dN1\nn9\n".to_string(),
+                "dN1\nn9\n".to_string(),
+            ),
+            (
+                // CONTROL: BOTH elements leave the source. `moved.len() == arity`,
+                // so the narrowing declines and the all-or-nothing disarm runs
+                // -- which is the case it was written for.
+                "iflet-both-elems-moved",
+                r#"struct H { id: i64, s: String }
+impl Drop for H { fn drop(mut ref self) { println(f"dH{self.id}") } }
+fn mkh(i: i64) -> H { return H { id: i, s: f"s{i}" } }
+fn f(o: Option[(H, i64)]) -> i64 {
+    if let Some((h, b)) = o {
+        let g = h;
+        return b;
+    }
+    return 0;
+}
+fn main() { println(f"n{f(Option.Some((mkh(1), 9)))}") }
+"#.to_string(),
+                "dH1\nn9\n".to_string(),
+                "dH1\nn9\n".to_string(),
+            ),
+            (
+                // CONTROL: the `Result` head. Same shape, same fix; here to pin
+                // that the gate's `Some`/`Ok`/`Err` set is exercised by more
+                // than one member.
+                "iflet-result-head",
+                r#"struct H { id: i64, s: String }
+impl Drop for H { fn drop(mut ref self) { println(f"dH{self.id}") } }
+fn mkh(i: i64) -> H { return H { id: i, s: f"s{i}" } }
+fn f(o: Result[(H, i64), i64]) -> i64 { if let Ok((_, b)) = o { return b } return 0 }
+fn main() { println(f"n{f(Result.Ok((mkh(1), 9)))}") }
+"#.to_string(),
+                "dH1\nn9\n".to_string(),
+                "dH1\nn9\n".to_string(),
+            ),
+            (
+                // CONTROL: the arm only READS the bound element (`h.id`), so
+                // nothing leaves and the source owns both. Already correct, and
+                // the cell that would redden if the analyzer called a read a
+                // move.
+                "iflet-borrow-only",
+                r#"struct H { id: i64, s: String }
+impl Drop for H { fn drop(mut ref self) { println(f"dH{self.id}") } }
+fn mkh(i: i64) -> H { return H { id: i, s: f"s{i}" } }
+fn f(o: Option[(H, i64)]) -> i64 { if let Some((h, b)) = o { return h.id + b } return 0 }
+fn main() { println(f"n{f(Option.Some((mkh(1), 9)))}") }
+"#.to_string(),
+                "dH1\nn10\n".to_string(),
+                "dH1\nn10\n".to_string(),
+            ),
+            (
+                // PINNED GAP, filed as B-2026-09-20-65. The same divergence
+                // as the two cells at the top (compiled loses the body,
+                // `--interp` runs it) at a DIFFERENT call site:
+                // `compile_let_else` calls
+                // `suppress_optres_payload_bodies_for_match`, the
+                // unconditional `takes_payload: true` wrapper. Measured on
+                // this exact cell, before and after this fix: unmoved. Pinned
+                // at the WRONG answer so its own fix has to flip it.
+                //
+                // IT IS NOT B-2026-09-17-16, though that row names the
+                // `let ... else` form and the resemblance is close enough to
+                // mis-cite. That row's cell binds the payload WHOLE
+                // (`let Some(t) = o else`), where both bodies are lost because
+                // the DESTINATION registers nothing and the repair is to fund
+                // it. This cell DESTRUCTURES, so the untaken element never
+                // leaves the source and there is no destination to fund: the
+                // source's walk has to stay armed over it, which is this row's
+                // mechanism and not that one's. What makes the let-else leg its
+                // own row rather than a line in this fix is that its binding
+                // ESCAPES the block, so the block-scoped "only read through
+                // this block" question the analyzer here asks is the wrong one
+                // there -- every non-wildcard leaf escapes and is moved.
+                "letelse-wildcard-elem",
+                r#"struct H { id: i64, s: String }
+impl Drop for H { fn drop(mut ref self) { println(f"dH{self.id}") } }
+fn mkh(i: i64) -> H { return H { id: i, s: f"s{i}" } }
+fn f(o: Option[(H, i64)]) -> i64 { let Some((_, b)) = o else { return 0 } return b }
+fn main() { println(f"n{f(Option.Some((mkh(1), 9)))}") }
+"#.to_string(),
+                "n9\n".to_string(),
+                "dH1\nn9\n".to_string(),
+            ),
+        ] {
+            let (interp_out, interp_errs, _, _) = karac::run_program_full_checked(&prog);
+            assert!(
+                interp_errs.is_empty(),
+                "[{label}] interp errored: {interp_errs:?}"
+            );
+            assert_eq!(interp_out.join(""), interp_want, "[{label}] interpreter");
+            let Some(aot) = run_program(&prog) else {
+                continue;
+            };
+            assert_eq!(aot, want, "[{label}] AOT");
+        }
+    }
+
     /// B-2026-09-20-9 — an `Option`/`Result` argument whose payload is an
     /// `Array` or a `Vec` loses its elements' user `Drop` bodies on every
     /// compiled backend when the arm READS a scalar out of it.

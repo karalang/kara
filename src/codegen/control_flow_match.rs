@@ -16209,6 +16209,49 @@ impl<'ctx> super::Codegen<'ctx> {
         body: &Expr,
         guard: Option<&Expr>,
     ) -> bool {
+        let (arity, moved) =
+            crate::binding_use::optres_arm_moved_destructured_elems(pattern, body, guard);
+        self.narrow_callee_owned_tuple_payload_bodies_core(scrutinee, pattern, arity, moved)
+    }
+
+    /// B-2026-09-19-44 — the `if let` sibling of
+    /// [`Self::narrow_callee_owned_tuple_payload_bodies_for_arm`].
+    ///
+    /// The `if let` path reached the all-or-nothing disarm and nothing else,
+    /// so a destructure that takes SOME leaves stood the whole walk down and
+    /// the untaken leaf's body ran nowhere — while the `match` spelling of the
+    /// same pattern, which has had this narrowing since B-2026-09-14-18, was
+    /// correct. Measured on `fn f(o: Option[(H, i64)]) -> i64 { if let
+    /// Some((_, b)) = o { return b } return 0 }` with a `Drop`-bearing `H`:
+    /// `n9` on the JIT and both AOT levels against `--interp`'s due `dH1 n9`,
+    /// and the NAMED spelling `Some((a, b))` identical, so the trigger is the
+    /// construct and not the wildcard. Binding the payload WHOLE through the
+    /// same `if let`, and an inline-channel payload, were both correct.
+    ///
+    /// Everything below the moved-elements question is shared with the arm
+    /// sibling rather than copied, because the two callers differ ONLY in how
+    /// they answer it — an arm walks an `Expr` and a guard, a block walks a
+    /// `Block` and has no guard.
+    pub(super) fn narrow_callee_owned_tuple_payload_bodies_for_block(
+        &mut self,
+        scrutinee: &Expr,
+        pattern: &Pattern,
+        block: &crate::ast::Block,
+    ) -> bool {
+        let (arity, moved) =
+            crate::binding_use::optres_block_moved_destructured_elems(pattern, block);
+        self.narrow_callee_owned_tuple_payload_bodies_core(scrutinee, pattern, arity, moved)
+    }
+
+    /// The shared body of the two narrowings above, taking the moved-element
+    /// answer as an ARGUMENT rather than re-deriving it per caller.
+    fn narrow_callee_owned_tuple_payload_bodies_core(
+        &mut self,
+        scrutinee: &Expr,
+        pattern: &Pattern,
+        arity: usize,
+        moved: std::collections::BTreeSet<usize>,
+    ) -> bool {
         let name = match &scrutinee.kind {
             ExprKind::Identifier(n) => n.clone(),
             ExprKind::SelfValue => "self".to_string(),
@@ -16233,8 +16276,6 @@ impl<'ctx> super::Codegen<'ctx> {
         ) {
             return false;
         }
-        let (arity, moved) =
-            crate::binding_use::optres_arm_moved_destructured_elems(pattern, body, guard);
         // Nothing taken: the existing path already keeps the walk armed.
         // Everything taken: the leaves really do own it all, which is the case
         // the all-or-nothing disarm was written for.
