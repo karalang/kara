@@ -1288,6 +1288,13 @@ impl<'ctx> super::Codegen<'ctx> {
                     // owner, so cap-zero it in the array's slot to keep the
                     // array's scope-exit element drop from freeing it again.
                     self.suppress_array_elem_move_source(e);
+                    // B-2026-09-16-5 — the TUPLE-ELEMENT composition of the
+                    // line above (`return t.0[0];`). Neither sibling reaches
+                    // it: the array one resolves its root as an Identifier and
+                    // keys on `owned_array_params`, the tuple one has no index
+                    // arm. Measured as a use-after-free with `definitely lost:
+                    // 0` and correct stdout.
+                    self.suppress_tuple_array_elem_move_source(e);
                     // B-2026-08-28-15 — `return p.0;` moving a heap-carrying
                     // element out of an owned tuple. Explicit-`return` twin of
                     // the tail-position hook in `suppress_cleanup_for_tail_return`;
@@ -3887,6 +3894,10 @@ impl<'ctx> super::Codegen<'ctx> {
                 // move was clean.
                 self.suppress_tuple_index_move_source(&field_init.value);
                 self.suppress_array_elem_move_source(&field_init.value);
+                // B-2026-09-16-5 — `W { a: t.0[0] }`, the composition of the
+                // two lines above. Measured invalid-free here too, so the
+                // literal position needs it exactly as the returns do.
+                self.suppress_tuple_array_elem_move_source(&field_init.value);
                 // B-2026-09-12-14 — the WHOLE-ARRAY peer of the line above, and
                 // the array peer of `suppress_source_vec_cleanup_for_arg` three
                 // lines up. `suppress_array_elem_move_source` covers

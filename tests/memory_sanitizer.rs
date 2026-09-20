@@ -97761,6 +97761,232 @@ fn main() {
         );
     }
 
+    /// B-2026-09-16-5, THE SECOND FAMILY — an element moved OUT of a container
+    /// that lives inside a tuple (`return t.0[0];`). Found only because the
+    /// spelling of the callee's body was varied as an axis, which is the one
+    /// thing the cells above did not do.
+    ///
+    /// THIS IS THE FIXTURE THAT WOULD HAVE CAUGHT THE REGRESSION IN KIND. The
+    /// leak fix on its own moves `let q = p; return q.0[0];` from a 17 B leak
+    /// to a use-after-free, because it ARMS a drop on the moved-to local while
+    /// the element that escapes by return is disarmed by nothing. Leak to UB is
+    /// the regression `506a91d` shipped in this same family and `49e75a8`
+    /// reverted, and every cell in the fixture above stays green through it.
+    ///
+    /// AND FOUR OF THESE SIX CELLS WERE ALREADY BROKEN ON `main`, with no
+    /// change of this row's involved — measured on `origin/main`'s `src/` with
+    /// a marker count of 0 and a control canary proving the instrument was not
+    /// blind. On the compiled surfaces they ABORT with `free(): double free
+    /// detected in tcache 2`; the `String`-element spelling of the same cells
+    /// does not abort and reports `definitely lost: 0` with 2 invalid reads and
+    /// 1 invalid free, which every leak column in this file reads as clean.
+    /// That is why it survived: only an Invalid-read/free column sees it.
+    ///
+    /// THE LANGUAGE ALLOWS THE MOVE, and the BARE spelling is what proves it
+    /// rather than an argument. The typechecker rejects `let s = a[0];` with
+    /// `E_INDEX_MOVE_NON_COPY` and ACCEPTS `return a[0];` and `W { a: a[0] }`,
+    /// where `suppress_array_elem_move_source` disarms the source and the cells
+    /// are clean. Wrapping that identical array in a tuple changes no
+    /// typechecker answer and loses the disarm, so the two spellings agreed
+    /// about what is legal and disagreed about what is emitted. The bare-array
+    /// and bare-Vec cells are carried below as controls for exactly that.
+    ///
+    /// BOTH CONTAINER SPELLINGS, disarmed differently. An `Array[T, N]` element
+    /// sits at a constant offset in the tuple's own storage; a `Vec[T]` element
+    /// lives in the Vec's heap buffer and is reached through the loaded `data`
+    /// pointer. The bare `Vec` spelling is clean for a THIRD reason — a
+    /// defensive copy at the move site — so there was no Vec-element disarm to
+    /// extend and that arm had to be written.
+    ///
+    /// THE `Drop` BODY STILL FIRES TWICE FOR THE MOVED-OUT ELEMENT, and the
+    /// cells below PIN that as the current answer rather than as the right one.
+    /// `dR1` appears before `got:1` and again after: the tuple's element-bodies
+    /// walk runs on the element that left, and only the MEMORY channel has a
+    /// move-out disarm — "bodies follow the move; memory does not"
+    /// (B-2026-08-28-57), here with the two channels the other way round. It is
+    /// NOT this fix's doing and NOT a backend divergence: `--interp` prints the
+    /// same doubled body on `origin/main`, so all four surfaces have agreed on
+    /// it all along. Filed separately; when it closes, these expectations lose
+    /// one `dR1` each and that is the signal, not a break.
+    ///
+    /// What this fix does buy on those four cells is exact agreement with
+    /// `--interp`, where before the compiled surfaces aborted and the
+    /// interpreter did not.
+    #[test]
+    fn asan_tuple_container_elem_moved_out_has_one_owner() {
+        const H: &str = "fn pay(i: i64) -> String { return f\"tttttttttttttttt{i}\" }\n";
+
+        // The four PRE-EXISTING cells: no move to a local anywhere, so nothing
+        // this row's leak fix touches can be what breaks them.
+        assert_clean_asan_run(
+            &format!(
+                "{H}fn f(p: (Array[String, 2], i64)) -> String {{ return p.0[0]; }}\n\
+                 fn main() {{\n\
+                 \x20   let t: (Array[String, 2], i64) = ([pay(1), pay(2)], 7);\n\
+                 \x20   println(f\"a0:{{f(t)}}\");\n\
+                 }}\n"
+            ),
+            &["a0:tttttttttttttttt1"],
+            "b165e-param-elem-returned",
+        );
+        // The TAIL spelling. Measured identical to the `return` one on every
+        // arm — the statement/tail axis is NULL here — and kept because that
+        // null is a measurement, and a later change could break one and not
+        // the other.
+        assert_clean_asan_run(
+            &format!(
+                "{H}fn f(p: (Array[String, 2], i64)) -> String {{ p.0[0] }}\n\
+                 fn main() {{\n\
+                 \x20   let t: (Array[String, 2], i64) = ([pay(1), pay(2)], 7);\n\
+                 \x20   println(f\"a0:{{f(t)}}\");\n\
+                 }}\n"
+            ),
+            &["a0:tttttttttttttttt1"],
+            "b165e-param-elem-tail",
+        );
+        // NO PARAM AT ALL — a plain local tuple. This is the cell that shows
+        // the family is not about parameter ownership.
+        assert_clean_asan_run(
+            &format!(
+                "{H}fn mk() -> String {{\n\
+                 \x20   let t: (Array[String, 2], i64) = ([pay(1), pay(2)], 7);\n\
+                 \x20   return t.0[0];\n\
+                 }}\n\
+                 fn main() {{ println(f\"a0:{{mk()}}\"); }}\n"
+            ),
+            &["a0:tttttttttttttttt1"],
+            "b165e-plain-local-elem-returned",
+        );
+        // The STRUCT-LITERAL position, the third site the two sibling disarms
+        // are wired at. It reported 1 invalid free rather than the returns' 18
+        // errors, which is the same defect with a shorter blast radius.
+        assert_clean_asan_run(
+            &format!(
+                "{H}struct W2 {{ a: String }}\n\
+                 fn main() {{\n\
+                 \x20   let t: (Array[String, 2], i64) = ([pay(1), pay(2)], 7);\n\
+                 \x20   let w = W2 {{ a: t.0[0] }};\n\
+                 \x20   println(f\"a0:{{w.a}}\");\n\
+                 }}\n"
+            ),
+            &["a0:tttttttttttttttt1"],
+            "b165e-struct-literal-elem",
+        );
+        // The `Vec` spelling of the same escape — a DIFFERENT disarm, reaching
+        // through the loaded data pointer.
+        assert_clean_asan_run(
+            &format!(
+                "{H}fn f(p: (Vec[String], i64)) -> String {{ return p.0[0]; }}\n\
+                 fn main() {{\n\
+                 \x20   let t: (Vec[String], i64) = ([pay(1), pay(2)], 7);\n\
+                 \x20   println(f\"a0:{{f(t)}}\");\n\
+                 }}\n"
+            ),
+            &["a0:tttttttttttttttt1"],
+            "b165e-vec-param-elem-returned",
+        );
+        // THE TWO CELLS THIS ROW'S LEAK FIX WOULD OTHERWISE REGRESS: a param
+        // moved to a local, THEN an element returned. 17 B leak on `main`,
+        // use-after-free with the leak fix alone, clean with the disarm.
+        assert_clean_asan_run(
+            &format!(
+                "{H}fn f(p: (Array[String, 2], i64)) -> String {{ let q = p; return q.0[0]; }}\n\
+                 fn main() {{\n\
+                 \x20   let t: (Array[String, 2], i64) = ([pay(1), pay(2)], 7);\n\
+                 \x20   println(f\"a0:{{f(t)}}\");\n\
+                 }}\n"
+            ),
+            &["a0:tttttttttttttttt1"],
+            "b165e-moved-local-elem-returned",
+        );
+        assert_clean_asan_run(
+            &format!(
+                "{H}fn f(p: (Vec[String], i64)) -> String {{ let q = p; q.0[0] }}\n\
+                 fn main() {{\n\
+                 \x20   let t: (Vec[String], i64) = ([pay(1), pay(2)], 7);\n\
+                 \x20   println(f\"a0:{{f(t)}}\");\n\
+                 }}\n"
+            ),
+            &["a0:tttttttttttttttt1"],
+            "b165e-vec-moved-local-elem-tail",
+        );
+
+        // USER `Drop` ELEMENTS. Memory clean, and the body expectations below
+        // PIN TODAY'S ANSWER, WHICH IS WRONG: `dR1` fires twice for the element
+        // that was moved out. See this fixture's doc — the doubled body is
+        // pre-existing on all four surfaces including `--interp`, is filed on
+        // its own row, and when it closes these two expectations each lose
+        // their trailing `dR1`.
+        assert_clean_asan_run(
+            "struct R2 { id: i64, s: String }\n\
+             impl Drop for R2 { fn drop(mut ref self) { println(f\"dR{self.id}\") } }\n\
+             fn mkr(i: i64) -> R2 { return R2 { id: i, s: f\"ssssssssssssssss{i}\" } }\n\
+             fn f(p: (Array[R2, 2], i64)) -> R2 { return p.0[0]; }\n\
+             fn main() {\n\
+             \x20   let t: (Array[R2, 2], i64) = ([mkr(1), mkr(2)], 7);\n\
+             \x20   let r = f(t);\n\
+             \x20   println(f\"got:{r.id}\");\n\
+             \x20   println(\"end\");\n\
+             }\n",
+            &["dR1", "dR2", "got:1", "dR1", "end"],
+            "b165e-user-drop-elem-returned",
+        );
+        assert_clean_asan_run(
+            "struct R2 { id: i64, s: String }\n\
+             impl Drop for R2 { fn drop(mut ref self) { println(f\"dR{self.id}\") } }\n\
+             fn mkr(i: i64) -> R2 { return R2 { id: i, s: f\"ssssssssssssssss{i}\" } }\n\
+             fn f(p: (Vec[R2], i64)) -> R2 { return p.0[0]; }\n\
+             fn main() {\n\
+             \x20   let t: (Vec[R2], i64) = ([mkr(1), mkr(2)], 7);\n\
+             \x20   let r = f(t);\n\
+             \x20   println(f\"got:{r.id}\");\n\
+             \x20   println(\"end\");\n\
+             }\n",
+            &["dR1", "dR2", "got:1", "dR1", "end"],
+            "b165e-vec-user-drop-elem-returned",
+        );
+
+        // CONTROLS — the BARE spellings, which are clean on `main` and must
+        // stay clean. They are what identifies the defect as the tuple
+        // COMPOSITION rather than the move itself, and the bare `Vec` one is
+        // the shape a disarm added in the wrong place would turn into a leak,
+        // since its source keeps everything it had.
+        assert_clean_asan_run(
+            &format!(
+                "{H}fn f(a: Array[String, 2]) -> String {{ return a[0]; }}\n\
+                 fn main() {{\n\
+                 \x20   let x: Array[String, 2] = [pay(1), pay(2)];\n\
+                 \x20   println(f\"a0:{{f(x)}}\");\n\
+                 }}\n"
+            ),
+            &["a0:tttttttttttttttt1"],
+            "b165e-bare-array-elem-returned-control",
+        );
+        assert_clean_asan_run(
+            &format!(
+                "{H}fn mk() -> String {{\n\
+                 \x20   let v: Vec[String] = [pay(1), pay(2)];\n\
+                 \x20   return v[0];\n\
+                 }}\n\
+                 fn main() {{ println(f\"a0:{{mk()}}\"); }}\n"
+            ),
+            &["a0:tttttttttttttttt1"],
+            "b165e-bare-vec-elem-returned-control",
+        );
+        // A SCALAR element: the new disarm must stay a no-op.
+        assert_clean_asan_run(
+            &format!(
+                "{H}fn f(p: (Array[i64, 2], i64)) -> i64 {{ return p.0[1]; }}\n\
+                 fn main() {{\n\
+                 \x20   let t: (Array[i64, 2], i64) = ([3, 4], 7);\n\
+                 \x20   println(f\"a1:{{f(t)}}\");\n\
+                 }}\n"
+            ),
+            &["a1:4"],
+            "b165e-scalar-elem-control",
+        );
+    }
+
     /// B-2026-09-13-23, THE GATE CELL — a tuple holding an `Array[T, N]` as an
     /// ENUM PAYLOAD must not be corrupted by the array walk this row adds.
     ///

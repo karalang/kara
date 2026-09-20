@@ -12176,6 +12176,9 @@ impl<'ctx> super::Codegen<'ctx> {
             // sibling is in `exprs.rs`). Cap-zero the element in the array's slot
             // so its scope-exit drop skips the moved-out buffer.
             self.suppress_array_elem_move_source(expr);
+            // B-2026-09-16-5 — the tail-expression twin of the `exprs.rs`
+            // explicit-`return` hook: `t.0[0]` as a block's final expression.
+            self.suppress_tuple_array_elem_move_source(expr);
             // B-2026-08-28-15 — the TUPLE-INDEX peer of the array-element line
             // above: a tail `p.0` moving a heap-carrying element out of an
             // owned tuple. Both `let`-statement positions already call this

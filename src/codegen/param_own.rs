@@ -5683,6 +5683,211 @@ impl<'ctx> super::Codegen<'ctx> {
         }
     }
 
+    /// B-2026-09-16-5 — the TUPLE-ELEMENT composition of
+    /// [`Self::suppress_array_elem_move_source`]: `<place>.<j>[<k>]`, an
+    /// element moved out of an `Array[T, N]` OR a `Vec[T]` that lives inside a
+    /// tuple.
+    ///
+    /// The two siblings partition the spellings and left the composition to
+    /// neither. `suppress_array_elem_move_source` resolves its root with
+    /// `ExprKind::Identifier | SelfValue` and returns on anything else, so a
+    /// `TupleIndex` object never reaches its body — and even if it did, it
+    /// looks the root up in `owned_array_params`, which a tuple binding never
+    /// enters. `suppress_tuple_index_move_source` handles `t.0` (the WHOLE
+    /// element) and has no index arm. So `return t.0[0];` armed nothing and
+    /// the tuple's own element walk freed the buffer it had just handed back.
+    ///
+    /// THE LANGUAGE ALLOWS THIS MOVE and the bare spelling proves it: the
+    /// typechecker rejects `let s = a[0];` with `E_INDEX_MOVE_NON_COPY` in a
+    /// non-escaping position and ACCEPTS `return a[0];` and `W { a: a[0] }`,
+    /// where `suppress_array_elem_move_source` disarms and the cells are
+    /// clean. Wrapping that identical array in a tuple keeps every
+    /// typechecker answer and loses the disarm, so the two spellings agreed
+    /// about what is legal and disagreed about what is emitted.
+    ///
+    /// MEASURED as a USE-AFTER-FREE, not a leak, which is why it survived:
+    /// `definitely lost: 0`, all blocks freed, stdout correct, and 2 invalid
+    /// reads + 1 invalid free under valgrind. Every leak column in the suite
+    /// reads that clean; only an Invalid-read/free column sees it.
+    ///
+    /// BOTH CONTAINER SPELLINGS, because they fail identically and are
+    /// disarmed differently. An `Array[T, N]` element sits at a constant offset
+    /// in the tuple's own storage, so the cap is GEP'd directly. A `Vec[T]`
+    /// element lives in the Vec's heap buffer, so the cap is reached through
+    /// the loaded `data` pointer at the `{ptr,len,cap}` stride — and
+    /// `karac_drop_Vec_<E>` walks `len` elements calling the cap-guarded
+    /// `karac_drop_<E>` on each, which is what makes zeroing one element's cap
+    /// the correct disarm rather than a partial one.
+    ///
+    /// The BARE `Vec` spelling is clean for a different reason again — a
+    /// defensive copy at the move site, so the source keeps everything it had —
+    /// which is why no Vec-element disarm existed to extend and why this arm
+    /// had to be written rather than routed to.
+    ///
+    /// Same three declines as the siblings — the discarded-aggregate tail, a
+    /// caller-retains (`owned_struct_params`) root whose deep copy owns the
+    /// buffer, and a `UseAfterMove` site where a defensive copy already gave
+    /// the destination its own — plus const-index-only, for the reason
+    /// `suppress_array_elem_move_source` records.
+    pub(super) fn suppress_tuple_array_elem_move_source(&mut self, value: &Expr) {
+        let ExprKind::Index { object, index } = &value.kind else {
+            return;
+        };
+        if self.in_discarded_aggregate_tail(value) {
+            return;
+        }
+        let ExprKind::Integer(k, _) = &index.kind else {
+            return;
+        };
+        if *k < 0 {
+            return;
+        }
+        let ExprKind::TupleIndex {
+            object: tup,
+            index: j,
+        } = &object.kind
+        else {
+            return;
+        };
+        match Self::place_root_ident(value) {
+            Some(root) if self.borrow_vars.owned_struct_params.contains(root) => return,
+            Some(_) => {}
+            None => return,
+        }
+        if self
+            .span_tables
+            .uam_copied_sites
+            .contains(&(value.span.offset, value.span.length))
+        {
+            return;
+        }
+        // The binding's own recorded element types first: the ACCESSOR, which
+        // prefers `tuple_var_elem_type_exprs` and so answers for a by-value
+        // tuple PARAM as well as an annotated `let`. `place_chain_tuple_tes`
+        // reconstructs from recorded NAMES, where an `Array[String, 2]` cannot
+        // survive as anything `array_elem_and_len` can read — the same
+        // degenerate-spelling problem `suppress_tuple_index_move_source`
+        // patches from the let-site record.
+        let elems = match &tup.kind {
+            ExprKind::Identifier(n) => self
+                .tuple_var_elem_tes(n.as_str())
+                .or_else(|| self.place_chain_tuple_tes(tup)),
+            _ => self.place_chain_tuple_tes(tup),
+        };
+        let Some(elems) = elems else {
+            return;
+        };
+        let Some(te) = elems.get(*j as usize).cloned() else {
+            return;
+        };
+        // `Array[T, N]` first: a const index past the end is not a move this
+        // function can reason about, so it declines rather than clamping.
+        let array_shape = self.array_elem_and_len(&te);
+        // `vec_inner_type_expr`, not `extract_vec_elem_type`: the latter
+        // answers an LLVM type, and the shape test below needs the element's
+        // `TypeExpr` — the same reader `tuple_elem_needs_deep_drop` uses.
+        let vec_shape = if array_shape.is_none() {
+            crate::codegen::helpers::vec_inner_type_expr(&te)
+        } else {
+            None
+        };
+        let Some(elem_te) = array_shape
+            .as_ref()
+            .map(|(inner, _)| inner.clone())
+            .or_else(|| vec_shape.clone())
+        else {
+            return;
+        };
+        let k = *k as u32;
+        if let Some((_, n)) = array_shape.as_ref() {
+            if k >= *n {
+                return;
+            }
+        }
+        let Some(base_ptr) = self.field_chain_place_ptr(tup) else {
+            return;
+        };
+        let Some(tuple_ty) = self.place_chain_aggregate_llvm_type(tup) else {
+            return;
+        };
+        let Ok(field_ptr) =
+            self.builder
+                .build_struct_gep(tuple_ty, base_ptr, *j as u32, "tup.arr.mv.f")
+        else {
+            return;
+        };
+        let i32_t = self.context.i32_type();
+        let ep = if let Some((_, n)) = array_shape {
+            let elem_ty = self.llvm_type_for_type_expr(&elem_te);
+            let arr_ty = elem_ty.array_type(n);
+            let Ok(ep) = (unsafe {
+                self.builder.build_in_bounds_gep(
+                    arr_ty,
+                    field_ptr,
+                    &[i32_t.const_zero(), i32_t.const_int(k as u64, false)],
+                    "tup.arr.mv.ep",
+                )
+            }) else {
+                return;
+            };
+            ep
+        } else {
+            // A `Vec` element is one indirection further out: the tuple field
+            // holds `{ptr,len,cap}` and the elements live in the buffer `ptr`
+            // names. The const index is NOT bounds-checkable here (`len` is a
+            // runtime value), and it does not need to be: an out-of-range
+            // index is already a runtime trap on the READ that produced this
+            // move, so the disarm can only ever run for an index the program
+            // has already indexed successfully.
+            let vec_ty = self.vec_struct_type();
+            let Ok(data_pp) =
+                self.builder
+                    .build_struct_gep(vec_ty, field_ptr, 0, "tup.vec.mv.data.pp")
+            else {
+                return;
+            };
+            let Ok(data) = self.builder.build_load(
+                self.context.ptr_type(AddressSpace::default()),
+                data_pp,
+                "tup.vec.mv.data",
+            ) else {
+                return;
+            };
+            let Ok(ep) = (unsafe {
+                self.builder.build_in_bounds_gep(
+                    vec_ty,
+                    data.into_pointer_value(),
+                    &[i32_t.const_int(k as u64, false)],
+                    "tup.vec.mv.ep",
+                )
+            }) else {
+                return;
+            };
+            ep
+        };
+        // The same three element shapes the bare-array sibling zeroes, in the
+        // same order, so the two cannot disagree about what counts as heap.
+        if self.is_string_type_expr(&elem_te) || self.extract_vec_elem_type(&elem_te).is_some() {
+            if let Ok(cap_ptr) =
+                self.builder
+                    .build_struct_gep(self.vec_struct_type(), ep, 2, "tup.arr.mv.cap")
+            {
+                let _ = self
+                    .builder
+                    .build_store(cap_ptr, self.context.i64_type().const_int(0, false));
+            }
+        } else if let TypeKind::Path(pp) = &elem_te.kind {
+            if let Some(name) = pp.segments.last() {
+                if self.type_decls.struct_types.contains_key(name.as_str())
+                    && !self.type_decls.shared_types.contains_key(name.as_str())
+                {
+                    let name = name.clone();
+                    self.zero_struct_move_caps_mono(ep, &name, None);
+                }
+            }
+        }
+    }
+
     /// B-2026-09-10-4 — does a `let` RHS name an array binding that ALREADY
     /// holds its memory, so the destination must not register a second drop?
     ///
