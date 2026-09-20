@@ -18997,6 +18997,51 @@ impl<'ctx> super::Codegen<'ctx> {
                 if let Some(te) = self.var_types.optres_var_payload_tes.get(n.as_str()) {
                     return Some(te.clone());
                 }
+                // B-2026-09-20-14 — the USER-ENUM twin of the arm above, for the
+                // one shape where the erasure costs a FREE rather than a body.
+                //
+                // A GENERIC enum sizes its payload area from the DECLARATION, so
+                // `payload_word_count_for_type_expr` reads `T` through its
+                // `_ => 1` tail and gives one word. A monomorph whose payload is
+                // wider — `G1[String]` at three — is therefore heap-BOXED by
+                // `coerce_to_payload_words`, and that box is a `malloc` nothing
+                // else in the program owns. Its non-generic twin is never boxed
+                // (a concrete declaration sizes the area to the widest variant),
+                // which is why `c2_mono_tuple` was always clean and this cell
+                // was not.
+                //
+                // `infer_arg_elem_te` resolves an `Identifier` element through
+                // the namers, every one of which ends in `generic_args: None` —
+                // the same erasure B-2026-08-28-11 fixed for a struct literal
+                // that SPELLS its instantiation. So `let t = (g, 7)` named the
+                // element bare `G1`, `user_enum_boxed_payload_variants` could
+                // not see a concrete payload, the tuple's admit gate read it as
+                // heapless and NO tuple drop fn was synthesized at all. The box
+                // leaked: 24 B direct, 0 indirect, because the match arm already
+                // took the String's own buffer — only the envelope is lost, so
+                // the program's output says nothing is wrong.
+                //
+                // `enum_inst_var_types` is the let-site's own record of this
+                // local's resolved instantiation, exactly as
+                // `optres_var_payload_tes` is for the arm above, so this meets
+                // the same standard: prefer what the SOURCE recorded over what
+                // the name implies.
+                //
+                // GATED ON THE BOX, not on genericity. Naming the element here
+                // arms the tuple's walks, and the arm above records in full why
+                // that is only safe once the source is disarmed — it was
+                // measured as a double free before the disarm landed. Here the
+                // disarm is already present and visible in the IR: the move into
+                // the literal zeroes `g`'s payload word, and `g`'s own
+                // `boxdrop_do` reads that word, finds null and frees nothing. A
+                // monomorph that does NOT box has no such second owner to hand
+                // over, so widening this past `user_enum_boxed_payload_variants`
+                // would arm a walk over a payload the source may still own.
+                if let Some(te) = self.type_decls.enum_inst_var_types.get(n.as_str()) {
+                    if !self.user_enum_boxed_payload_variants(te).is_empty() {
+                        return Some(te.clone());
+                    }
+                }
                 let head = self.var_types.var_type_names.get(n.as_str())?;
                 if head != "Vec" && head != "VecDeque" {
                     return None;

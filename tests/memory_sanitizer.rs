@@ -99722,4 +99722,56 @@ fn main() {
             "b91951-must-stay-clean",
         );
     }
+
+    /// B-2026-09-20-14 — a GENERIC enum's heap-BOXED payload, held as a TUPLE
+    /// ELEMENT, had no owner at all.
+    ///
+    /// A generic enum sizes its payload area from the DECLARATION, so
+    /// `payload_word_count_for_type_expr` reads `T` through its `_ => 1` tail
+    /// and gives one word; a monomorph that outgrows it is heap-BOXED by
+    /// `coerce_to_payload_words`. The tuple let-site never learned that: every
+    /// namer in `infer_arg_elem_te` ends in `generic_args: None`, so
+    /// `let t = (g, 7)` named the element bare `G1`, the admit gate read the
+    /// tuple as heapless, and NO tuple drop function was synthesized. Measured
+    /// 24 B direct with ZERO indirect — only the envelope, because the match
+    /// arm already took the payload's own heap, so the program's output says
+    /// nothing is wrong.
+    ///
+    /// The last cell is the one that separates the two candidate explanations.
+    /// "The payload carries heap" is NOT the discriminator — payload WIDTH is.
+    /// `Wide` is three words of pure `i64` with no heap anywhere in the
+    /// program, and it boxed and leaked exactly like the `String` payload,
+    /// while `G1[i64]` (one word, fits) is clean on both. A matrix varying
+    /// scalar-versus-heap here is really varying inline-versus-boxed, and the
+    /// two come apart only at a payload that is scalar AND wide.
+    ///
+    /// The NEVER-MATCHED spelling (`let t = (g, 7);` with no match on `t.0`)
+    /// is deliberately absent, for the reason
+    /// `asan_generic_multi_field_variant_box_and_heap_sibling_both_freed`
+    /// gives one row over: the element walker is envelope-only, so that
+    /// spelling still leaks the payload's own 13 B and cannot appear in a
+    /// clean-run fixture while that remainder is open. It went from 24 B + 13
+    /// indirect to 13 B and stays on the row.
+    #[test]
+    fn asan_boxed_generic_enum_tuple_element_envelope_is_freed() {
+        assert_clean_asan_run(
+            r#"
+struct Wide { a: i64, b: i64, c: i64 }
+enum G1[T] { Y(T), N }
+fn main() {
+    { let g: G1[String] = G1.Y(f"payload-alpha"); let t = (g, 7);
+      match t.0 { G1.Y(s) => { println(f"mv {s}") } G1.N => { println("mv none") } } }
+    { let g: G1[String] = G1.Y(f"payload-beta"); let t = (g, 8);
+      match t.0 { G1.Y(s) => { println(f"ml {s.len()}") } G1.N => { println("ml none") } } }
+    { let g: G1[i64] = G1.Y(41); let t = (g, 9);
+      match t.0 { G1.Y(n) => { println(f"mn {n}") } G1.N => { println("mn none") } } }
+    { let g: G1[Wide] = G1.Y(Wide { a: 1, b: 2, c: 3 }); let t = (g, 10);
+      match t.0 { G1.Y(w) => { println(f"mw {w.a}{w.b}{w.c}") } G1.N => { println("mw none") } } }
+    println("end")
+}
+"#,
+            &["mv payload-alpha", "ml 12", "mn 41", "mw 123", "end"],
+            "b92014-tuple-element-box",
+        );
+    }
 }

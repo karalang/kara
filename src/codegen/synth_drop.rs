@@ -5712,6 +5712,169 @@ impl<'ctx> super::Codegen<'ctx> {
     /// must include every index it handed away. The one caller today,
     /// `retract_boxed_tuple_inner_drop_for_arm`, errs toward over-skipping
     /// deliberately — see the note there.
+    /// B-2026-09-20-14 — free a generic enum's heap-BOXED payload at a place the
+    /// NAME-keyed drop switch cannot see it.
+    ///
+    /// `emit_enum_drop_switch` is keyed by enum NAME and cached in
+    /// `drop_rc.enum_drop_fns`, so ONE generic enum has one drop function across
+    /// every instantiation. Its arms come from `field_drop_kinds`, built from the
+    /// DECLARATION, where a payload written `T` takes
+    /// `enum_drop_kind_for_type_expr`'s `_ => None` tail. The pack side meanwhile
+    /// sizes the payload area from the same erased declaration — one word — and
+    /// `coerce_to_payload_words` heap-BOXES any monomorph that outgrows it. So the
+    /// box is real and no arm of the switch frees it.
+    ///
+    /// Callers that hold the CONCRETE element type can close that gap, and the
+    /// container walkers do: a tuple element carries its own `TypeExpr` and was
+    /// calling the name-keyed switch with the instantiation sitting unused beside
+    /// it. This is the piece that reads it.
+    ///
+    /// MEASURED at `KARAC_OPT_LEVEL=0 KARAC_AUTO_PAR=0` under valgrind, one
+    /// construction per cell:
+    ///
+    /// ```text
+    ///   let t = (g, 7); match t.0 { .. }     24 B direct, 0 indirect
+    /// ```
+    ///
+    /// ZERO INDIRECT is the tell that says what to emit: the payload's own heap
+    /// and its `Drop` body are already handled by the match arm, so only the
+    /// ENVELOPE is lost. This frees the envelope and nothing else — see the
+    /// comment at the `inner` binding for why that is the only answer that
+    /// cannot make a cell worse, and for what it leaves open.
+    ///
+    /// The monomorphic twin is clean and stays untouched: a concrete declaration
+    /// sizes its area to the widest variant, so nothing is ever boxed and
+    /// `user_enum_boxed_payload_variants` returns empty. Same for a monomorph that
+    /// FITS (`G1[i64]`). Both are controls in the cell set above.
+    pub(super) fn emit_erased_boxed_enum_payload_free_at(
+        &mut self,
+        te: &TypeExpr,
+        base_ptr: PointerValue<'ctx>,
+    ) {
+        let boxed = self.user_enum_boxed_payload_variants(te);
+        if boxed.is_empty() {
+            return;
+        }
+        let TypeKind::Path(p) = &te.kind else {
+            return;
+        };
+        let Some(ename) = p.segments.last().cloned() else {
+            return;
+        };
+        let Some(layout) = self.type_decls.enum_layouts.get(ename.as_str()).cloned() else {
+            return;
+        };
+        if layout.is_shared {
+            return;
+        }
+        let Some(fn_val) = self.current_fn else {
+            return;
+        };
+        let i64_t = self.context.i64_type();
+        let ptr_ty = self.context.ptr_type(AddressSpace::default());
+        let enum_ty = layout.llvm_type;
+        let Ok(tag_ptr) = self
+            .builder
+            .build_struct_gep(enum_ty, base_ptr, 0, "b14.boxfree.tag.p")
+        else {
+            return;
+        };
+        let Ok(tag) = self.builder.build_load(i64_t, tag_ptr, "b14.boxfree.tag") else {
+            return;
+        };
+        let tag = tag.into_int_value();
+
+        for (_en, vname, _payload_te, box_field, _box_only) in boxed {
+            let Some(vtag) = layout.tags.get(&vname).copied() else {
+                continue;
+            };
+            let Ok(word_ptr) =
+                self.builder
+                    .build_struct_gep(enum_ty, base_ptr, box_field, "b14.boxfree.wp")
+            else {
+                continue;
+            };
+            // ENVELOPE ONLY, NEVER THE CONTENTS, and this is the whole
+            // difference between a fix and a regression here.
+            //
+            // A container's synthesized drop is keyed by LAYOUT and shared by
+            // every site with that layout, so it cannot know what any one site
+            // did with the payload. The let-site owner CAN: a `match g { G1.Y(s)
+            // => .. }` that moves the payload out downgrades `g`'s own
+            // `BoxedEnumDrop` to box-only through
+            // `clear_boxed_enum_inner_drop`, which is why the IR for that
+            // spelling frees the box and calls no `karac_drop_String`. There is
+            // no such channel for an ELEMENT of a container — the retraction
+            // machinery is keyed by a scrutinee NAME, and `t.0` has none.
+            //
+            // Both answers were measured, and each is wrong for a different
+            // cell. Walking the interior double-frees the consuming spelling
+            // (`match t.0 { G1.Y(s) => .. }`): the arm's binding already freed
+            // the buffer, so this walk frees it again — one invalid free, at
+            // `-O0` and `-O2`. Skipping it leaks the interior of a tuple whose
+            // element is never matched at all.
+            //
+            // Skipping is the one that cannot make anything worse. Before this
+            // fix the element got NO walker, so both the envelope and the
+            // contents leaked in every cell; freeing only the envelope strictly
+            // reduces all three (24 B -> 0 on both matching spellings, 24 B + 13
+            // indirect -> 13 B on the non-matching one) and introduces no free
+            // that any other owner also performs. The interior remainder on the
+            // never-matched spelling stays open, and needs the per-site channel
+            // above rather than a wider walk here.
+            let inner: Option<FunctionValue<'ctx>> = None;
+            let is_v = self
+                .builder
+                .build_int_compare(
+                    IntPredicate::EQ,
+                    tag,
+                    i64_t.const_int(vtag, false),
+                    "b14.boxfree.isv",
+                )
+                .unwrap();
+            let do_bb = self.context.append_basic_block(fn_val, "b14.boxfree.do");
+            let join_bb = self.context.append_basic_block(fn_val, "b14.boxfree.join");
+            self.builder
+                .build_conditional_branch(is_v, do_bb, join_bb)
+                .unwrap();
+            self.builder.position_at_end(do_bb);
+
+            // Defensive null guard, mirroring the `BoxedEnumDrop` drain's: a real
+            // payload box is never null, but a zeroed move-suppressed slot is, and
+            // freeing through it would fault where the old code merely leaked.
+            let box_ptr = self
+                .builder
+                .build_load(ptr_ty, word_ptr, "b14.boxfree.p")
+                .unwrap()
+                .into_pointer_value();
+            let is_null = self
+                .builder
+                .build_is_null(box_ptr, "b14.boxfree.isnull")
+                .unwrap();
+            let free_bb = self.context.append_basic_block(fn_val, "b14.boxfree.free");
+            self.builder
+                .build_conditional_branch(is_null, join_bb, free_bb)
+                .unwrap();
+            self.builder.position_at_end(free_bb);
+            if let Some(drop_fn) = inner {
+                self.builder
+                    .build_call(drop_fn, &[box_ptr.into()], "")
+                    .unwrap();
+            }
+            self.builder
+                .build_call(self.runtime_fns.free_fn, &[box_ptr.into()], "")
+                .unwrap();
+            // Zero the word so a second walk over the same place cannot free it
+            // twice -- the container's own drop and an arm-driven retraction can
+            // both reach one element.
+            self.builder
+                .build_store(word_ptr, i64_t.const_zero())
+                .unwrap();
+            self.builder.build_unconditional_branch(join_bb).unwrap();
+            self.builder.position_at_end(join_bb);
+        }
+    }
+
     pub(super) fn emit_tuple_elem_drops_skipping(
         &mut self,
         base_ptr: PointerValue<'ctx>,
@@ -5905,6 +6068,13 @@ impl<'ctx> super::Codegen<'ctx> {
                                         .build_call(enum_drop_fn, &[field_ptr.into()], "")
                                         .unwrap();
                                 }
+                                // B-2026-09-20-14 — and the BOX that switch cannot
+                                // see. It is keyed by enum NAME, so one generic
+                                // enum has one drop fn for every instantiation and
+                                // its arms come from the erased declaration; `te`
+                                // is this element's CONCRETE type and was sitting
+                                // unused one line above. 24 B per construction.
+                                self.emit_erased_boxed_enum_payload_free_at(te, field_ptr);
                             } else if self.type_decls.struct_types.contains_key(&name) {
                                 // B-2026-09-06-72 — the COMBINED drop when the
                                 // element owns a `shared` field, for the reason
@@ -10501,6 +10671,31 @@ impl<'ctx> super::Codegen<'ctx> {
                     // 16-byte refcount block leaked, once per tuple, with
                     // the `Drop` body correct on every surface.
                     || self.struct_elem_owns_shared_field(te)
+                    // B-2026-09-20-14 — a GENERIC enum element whose monomorph
+                    // heap-BOXES its payload. The same relation to
+                    // `type_expr_has_drop_heap` every disjunct above bears:
+                    // that predicate reads the enum's DECLARATION, where the
+                    // payload is a bare `T` and classifies
+                    // `EnumDropKind::None`, so the element looks heapless. The
+                    // pack side sizes the payload area from the same erased
+                    // declaration -- one word -- and `coerce_to_payload_words`
+                    // boxes any monomorph that outgrows it, so the box is real
+                    // and nothing was armed to free it.
+                    //
+                    // Measured: `let t = (g, 7)` over `enum G1[T] { Y(T), N }`
+                    // at `G1[String]` leaks 24 B direct with 0 indirect at
+                    // `KARAC_OPT_LEVEL=0` -- the envelope alone, because the
+                    // match arm already takes the payload's own heap and runs
+                    // its `Drop` body. The MONOMORPHIC twin
+                    // (`enum G1 { Y(String), N }`) is clean, because a concrete
+                    // declaration sizes the area to its widest variant and
+                    // nothing is ever boxed; so is `G1[i64]`, which fits. Both
+                    // are controls, and both answer `false` here because
+                    // `user_enum_boxed_payload_variants` returns empty for
+                    // them -- this admits exactly the payloads the pack side
+                    // really boxed, which is the same test that function uses
+                    // to decide boxing at all.
+                    || !self.user_enum_boxed_payload_variants(te).is_empty()
             }
             _ => false,
         }
