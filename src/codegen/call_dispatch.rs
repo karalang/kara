@@ -9362,7 +9362,32 @@ impl<'ctx> super::Codegen<'ctx> {
             // nothing and leaked. The literal's behaviour is unchanged —
             // `tuple_arg_elem_type_exprs` returns exactly the old
             // `infer_arg_elem_te` vector for that spelling.
-            if elem_tes.iter().any(|e| self.type_expr_has_drop_heap(e)) {
+            // B-2026-09-16-5 — `Array[T, N]` asked HERE, not by widening
+            // `type_expr_has_drop_heap`, which hardcodes no `Array` arm and is
+            // read by the struct-param and enum-payload gates too. The same
+            // containment `make_tuple_param_callee_owned` states in its own
+            // comment, and the reason B-2026-09-13-23's first cut had to be
+            // reverted: widening the shared helper gave `struct W { a:
+            // Array[String, 2] }` an entry copy it never had.
+            //
+            // Without it a FRESH TEMPORARY tuple argument holding an array of
+            // heap (`thru(([pay(1), pay(2)], 7))`) matched NO arm at this
+            // registrar — not this one (no `Array` in `type_expr_has_drop_heap`)
+            // and not the `aggregate_has_heap_field` fallback below, which
+            // matches `StructType` fields and an `Array` lowers to
+            // `ArrayType`. So the temp got no owner at all while the callee
+            // entry-copied its own, and the ORIGINAL two buffers were orphaned:
+            // `main` held no tuple drop call whatsoever in the emitted IR.
+            //
+            // The named-local spelling of the same call is clean today because
+            // the binding carries its own drop, and this registrar only ever
+            // claims a producer shape — so nothing here can give a named
+            // argument a second owner.
+            let array_heap_elem = elem_tes.iter().any(|e| {
+                self.array_elem_and_len(e)
+                    .is_some_and(|(inner, n)| n > 0 && self.type_expr_has_drop_heap(&inner))
+            });
+            if array_heap_elem || elem_tes.iter().any(|e| self.type_expr_has_drop_heap(e)) {
                 let slot = self.create_entry_alloca(cur_fn, "__owned_agg_tmp", agg_ty.into());
                 self.builder.build_store(slot, val).unwrap();
                 if let Some(drop_fn) = self.synthesize_tuple_drop_fn_te(agg_ty, &elem_tes) {
@@ -10374,10 +10399,42 @@ impl<'ctx> super::Codegen<'ctx> {
                 }
             })
             .collect();
-        resolved.iter().any(|e| self.type_expr_has_drop_heap(e))
-            && resolved
-                .iter()
-                .all(|e| self.field_copy_supported(e, &mut Vec::new()))
+        // B-2026-09-16-5 — both halves MIRROR `make_tuple_param_callee_owned`'s
+        // own admission gate, `Array[T, N]` arm included. This predicate exists
+        // to answer "will the callee entry-copy this tuple argument?", and the
+        // only correct way to answer it is to ask the copy's own gate the same
+        // two questions it asks itself. Written before that gate gained its
+        // array arm (B-2026-09-13-23), it answered NO for
+        // `thru(([pay(1), pay(2)], 7))` — `type_expr_has_drop_heap` has no
+        // `Array` arm and `field_copy_supported` is shared with the STRUCT-param
+        // path, so neither could see the element.
+        //
+        // The cost of the disagreement was a LEAK and it landed one caller
+        // upstream, not here: `escapes_without_entry_copy` went true, the
+        // argument registrar was never invoked AT ALL on the escape path, and
+        // the caller's original two buffers were orphaned while the callee
+        // returned its copy. Exactly the shape B-2026-08-27-44's comment
+        // describes for `passthru((Bag { .. }, 7))` — the same route, one
+        // element spelling later.
+        //
+        // The two gates have to agree in BOTH directions, which is why this
+        // mirrors rather than merely widens. Answering YES where the copy
+        // declines would retract the caller's owner against a callee that
+        // registered none (an orphan); answering NO where it copies is the leak
+        // above. The same "two questions have to be ONE predicate" rule
+        // `make_array_param_callee_owned`'s doc states for its own pair.
+        let array_heap = resolved.iter().any(|e| {
+            self.array_elem_and_len(e)
+                .is_some_and(|(inner, n)| n > 0 && self.type_expr_has_drop_heap(&inner))
+        });
+        (array_heap || resolved.iter().any(|e| self.type_expr_has_drop_heap(e)))
+            && resolved.iter().all(|e| match self.array_elem_and_len(e) {
+                // An array element is copyable exactly when its ELEMENT is —
+                // asked here, not inside `field_copy_supported`, for the
+                // containment reason that function's own caller records.
+                Some((inner, n)) => n == 0 || self.field_copy_supported(&inner, &mut Vec::new()),
+                None => self.field_copy_supported(e, &mut Vec::new()),
+            })
     }
 
     /// B-2026-09-04-26 — fill the positions `infer_arg_elem_te` could not

@@ -97383,13 +97383,26 @@ fn main() {
     /// MUST be read at `-O0`: at `-O2` LLVM deletes the allocations, which is
     /// the `scripts/asan-o0-leg.sh` case.
     ///
-    /// TWO SHAPES REMAIN LEAKING and are deliberately NOT asserted clean here:
-    /// a by-value param moved to a local inside the callee, and a FRESH
-    /// TEMPORARY argument whose param is returned. Both leak 20 B on `main`
-    /// before this fix and the identical 20 B after it — unchanged, not
-    /// regressed. They need the param-ownership model resolved (the entry copy
-    /// orphans a temporary's buffers, while transfer needs a caller-side
-    /// disarm that has no hook for a tuple argument), which is its own row.
+    /// TWO SHAPES REMAINED LEAKING when this row landed and are now CLOSED by
+    /// B-2026-09-16-5 — `asan_tuple_array_param_move_and_temp_arg_have_owners`
+    /// below asserts both clean. This paragraph is kept rather than deleted
+    /// because the shapes it names are the ones that row measured, and the
+    /// prediction it recorded turned out to be wrong in an instructive way.
+    ///
+    /// It read them as ONE fault ("the param-ownership model resolved") and
+    /// they are TWO, additive and independently reachable: a by-value tuple
+    /// param moved to a local loses its drop in BOTH the `Array` and the `Vec`
+    /// spelling (this paragraph's "the entry copy orphans a temporary's
+    /// buffers" cannot explain the named-local cell at all), while a FRESH
+    /// TEMPORARY tuple argument is orphaned in EVERY callee body — including
+    /// one that only reads its param, which no cell here or in that row ever
+    /// measured. The cell holding both leaked exactly twice 20 B, which is
+    /// what separated them.
+    ///
+    /// "A caller-side disarm that has no hook for a tuple argument" was also
+    /// wrong: the hook exists (B-2026-08-27-44 built it,
+    /// `arg_is_entry_copied_heap_tuple`) and simply could not see an `Array`,
+    /// the same blind spot as sites 1-4 above, one caller further out.
     #[test]
     fn asan_array_inside_a_tuple_frees_its_element_buffers() {
         const H: &str = "fn pay(i: i64) -> String { return f\"tttttttttttttttt{i}\" }\n";
@@ -97523,6 +97536,228 @@ fn main() {
             ),
             &["a0:tttttttttttttttt1"],
             "b23-tuple-vec-move-control",
+        );
+    }
+
+    /// B-2026-09-16-5 — the two shapes B-2026-09-13-23 left leaking. They are
+    /// TWO faults, not the one "model conflict" the row was filed as, and the
+    /// grid that separates them is the whole result.
+    ///
+    ///                              named arg          temporary arg
+    ///     callee reads p              clean              34 B          <- never measured before
+    ///     callee does `let q = p`     34 B               68 B          <- 68 is what proves they add
+    ///     callee returns p            clean              34 B          <- the row's cell (b)
+    ///
+    /// The `Vec` spelling of the same grid leaks ONLY in the `let q = p` row,
+    /// which refutes the row's "the `Vec` spelling is clean in every position"
+    /// — the sentence its COPY-versus-TRANSFER argument rests on.
+    ///
+    /// FAULT 1, the move. `let q = p` over a by-value tuple param disarms the
+    /// SOURCE (`zero_aggregate_field_caps`, which needs no element types) and
+    /// then arms nothing, because `tuple_binding_elem_tes`' bare-rebind arm
+    /// read the raw `var_types.tuple_var_elem_tes` map, where a PARAM is never
+    /// recorded — a param goes into `tuple_var_elem_type_exprs`, and the
+    /// ACCESSOR `Self::tuple_var_elem_tes()` is the reader that consults both.
+    /// The field and the method are spelled identically, so the raw read looks
+    /// exactly like the accessor. Retraction without arming, the same shape as
+    /// B-2026-09-17-21 one channel over.
+    ///
+    /// The two spellings failed DIFFERENTLY, which is why one grep could not
+    /// have found it and why both are asserted here. `Array` got no drop at
+    /// all (`aggregate_has_heap_field` matches `StructType`, and `[2 x
+    /// {ptr,len,cap}]` is an `ArrayType`); `Vec` fell through to
+    /// `track_tuple_var`'s LLVM-type walker and got a drop that frees the
+    /// Vec's BUFFER and not its elements — the erasure
+    /// `emit_aggregate_heap_field_frees`' own doc warns about. Both leak the
+    /// two `String`s; only the second leaves a drop call in the IR, so an
+    /// IR-shaped check would have called the `Vec` cell covered.
+    ///
+    /// FAULT 2, the temporary. `arg_is_entry_copied_heap_tuple` answers "will
+    /// the callee entry-copy this tuple argument?" and is read by
+    /// `escapes_without_entry_copy` one caller out. Array-blind, it said NO, so
+    /// the argument registrar was never invoked AT ALL on the escape path and
+    /// the caller's originals were orphaned while the callee returned its copy
+    /// — `main` held no tuple drop call whatsoever in the emitted IR. It now
+    /// MIRRORS `make_tuple_param_callee_owned`'s admission gate, array arm
+    /// included, because the two have to agree in both directions: YES where
+    /// the copy declines retracts the caller's owner against a callee that
+    /// registered none, and NO where it copies is this leak.
+    ///
+    /// MUST be read at `-O0` — `scripts/asan-o0-leg.sh` — for the reason the
+    /// parent fixture states: at `-O2` LLVM deletes allocations nothing
+    /// observes, so a zero there is evidence of nothing.
+    ///
+    /// The `Drop`-body cell is not decoration. Every cell above is
+    /// memory-shaped, and an over-firing body is memory-CLEAN, so no column in
+    /// this file could see a duplicated body bought by the memory fix. All
+    /// eight body cells were measured on four surfaces (`build` at `-O0` and
+    /// `-O2`, `run`, `--interp`) and agree.
+    #[test]
+    fn asan_tuple_array_param_move_and_temp_arg_have_owners() {
+        const H: &str = "fn pay(i: i64) -> String { return f\"tttttttttttttttt{i}\" }\n";
+
+        // FAULT 1 — the row's cell (a). A by-value tuple param moved to a
+        // local inside the callee.
+        assert_clean_asan_run(
+            &format!(
+                "{H}fn eat(p: (Array[String, 2], i64)) {{ let q = p; println(f\"in:{{q.0[0]}}\"); }}\n\
+                 fn main() {{\n\
+                 \x20   let t: (Array[String, 2], i64) = ([pay(1), pay(2)], 7);\n\
+                 \x20   eat(t);\n\
+                 }}\n"
+            ),
+            &["in:tttttttttttttttt1"],
+            "b165-param-moved-to-local",
+        );
+        // FAULT 1, the `Vec` spelling. The row recorded this position as
+        // clean; it is not, and nothing in the suite covered it.
+        assert_clean_asan_run(
+            &format!(
+                "{H}fn eat(p: (Vec[String], i64)) {{ let q = p; println(f\"in:{{q.0[0]}}\"); }}\n\
+                 fn main() {{\n\
+                 \x20   let t: (Vec[String], i64) = ([pay(1), pay(2)], 7);\n\
+                 \x20   eat(t);\n\
+                 }}\n"
+            ),
+            &["in:tttttttttttttttt1"],
+            "b165-param-moved-to-local-vec",
+        );
+
+        // FAULT 2 — the row's cell (b). A fresh TEMPORARY argument whose param
+        // is returned.
+        assert_clean_asan_run(
+            &format!(
+                "{H}fn thru(p: (Array[String, 2], i64)) -> (Array[String, 2], i64) {{ return p; }}\n\
+                 fn main() {{\n\
+                 \x20   let u = thru(([pay(1), pay(2)], 7));\n\
+                 \x20   println(f\"a0:{{u.0[0]}}\");\n\
+                 }}\n"
+            ),
+            &["a0:tttttttttttttttt1"],
+            "b165-temp-arg-param-returned",
+        );
+        // FAULT 2 WITH NO RETURN AND NO MOVE — the callee only READS. This is
+        // the cell that shows fault 2 is about the temporary having no owner
+        // and not about the `return` the row named, and it is the one neither
+        // row measured.
+        assert_clean_asan_run(
+            &format!(
+                "{H}fn eat(p: (Array[String, 2], i64)) {{ println(f\"in:{{p.0[0]}}\"); }}\n\
+                 fn main() {{\n\
+                 \x20   eat(([pay(1), pay(2)], 7));\n\
+                 }}\n"
+            ),
+            &["in:tttttttttttttttt1"],
+            "b165-temp-arg-read-only",
+        );
+        // BOTH FAULTS IN ONE CELL — 68 B before, two independent pairs of
+        // buffers. Keeps the two fixes from being collapsed into one.
+        assert_clean_asan_run(
+            &format!(
+                "{H}fn eat(p: (Array[String, 2], i64)) {{ let q = p; println(f\"in:{{q.0[0]}}\"); }}\n\
+                 fn main() {{\n\
+                 \x20   eat(([pay(1), pay(2)], 7));\n\
+                 }}\n"
+            ),
+            &["in:tttttttttttttttt1"],
+            "b165-temp-arg-and-param-moved",
+        );
+        // A METHOD receiver's by-value tuple param, which the row listed as
+        // NOT MEASURED.
+        assert_clean_asan_run(
+            &format!(
+                "{H}struct H2 {{ n: i64 }}\n\
+                 impl H2 {{ fn eat(ref self, p: (Array[String, 2], i64)) {{ let q = p; println(f\"in:{{q.0[0]}}\"); }} }}\n\
+                 fn main() {{\n\
+                 \x20   let h = H2 {{ n: 1 }};\n\
+                 \x20   h.eat(([pay(1), pay(2)], 7));\n\
+                 }}\n"
+            ),
+            &["in:tttttttttttttttt1"],
+            "b165-method-tuple-param-moved",
+        );
+
+        // BODIES EXACTLY ONCE, both faults' shapes. Memory-clean says nothing
+        // about this: a doubled body frees nothing twice.
+        assert_clean_asan_run(
+            "struct D { id: i64, s: String }\n\
+             impl Drop for D { fn drop(mut ref self) { println(f\"dD{self.id}\") } }\n\
+             fn mkd(i: i64) -> D { return D { id: i, s: f\"ssssssssssssssss{i}\" } }\n\
+             fn eat(p: (Array[D, 2], i64)) { let q = p; println(f\"in:{q.1}\"); }\n\
+             fn main() {\n\
+             \x20   let t: (Array[D, 2], i64) = ([mkd(1), mkd(2)], 7);\n\
+             \x20   eat(t);\n\
+             }\n",
+            &["in:7", "dD1", "dD2"],
+            "b165-param-moved-user-drop-bodies",
+        );
+        assert_clean_asan_run(
+            "struct D { id: i64, s: String }\n\
+             impl Drop for D { fn drop(mut ref self) { println(f\"dD{self.id}\") } }\n\
+             fn mkd(i: i64) -> D { return D { id: i, s: f\"ssssssssssssssss{i}\" } }\n\
+             fn thru(p: (Array[D, 2], i64)) -> (Array[D, 2], i64) { return p; }\n\
+             fn main() {\n\
+             \x20   let u = thru(([mkd(1), mkd(2)], 7));\n\
+             \x20   println(f\"n:{u.1}\");\n\
+             }\n",
+            &["n:7", "dD1", "dD2"],
+            "b165-temp-arg-returned-user-drop-bodies",
+        );
+
+        // CONTROLS. These were clean BEFORE this fix and must stay clean: each
+        // one is a position where a second owner is the failure mode, so they
+        // prove the two registrations did not widen past their cell.
+        //
+        // A NAMED-LOCAL argument whose param is returned — the binding already
+        // carries its own drop, and the argument registrar claims only
+        // producer shapes, so nothing here may give it a second.
+        assert_clean_asan_run(
+            &format!(
+                "{H}fn thru(p: (Array[String, 2], i64)) -> (Array[String, 2], i64) {{ return p; }}\n\
+                 fn main() {{\n\
+                 \x20   let t: (Array[String, 2], i64) = ([pay(1), pay(2)], 7);\n\
+                 \x20   let u = thru(t);\n\
+                 \x20   println(f\"a0:{{u.0[0]}}\");\n\
+                 }}\n"
+            ),
+            &["a0:tttttttttttttttt1"],
+            "b165-named-arg-param-returned-control",
+        );
+        // A BARE `Array[T, N]` argument — the TRANSFER model, which the row
+        // named as the one consistent alternative. Untouched by either fix and
+        // the shape a widened predicate would double-free first.
+        assert_clean_asan_run(
+            &format!(
+                "{H}fn thru(p: Array[String, 2]) -> Array[String, 2] {{ return p; }}\n\
+                 fn main() {{\n\
+                 \x20   let u = thru([pay(1), pay(2)]);\n\
+                 \x20   println(f\"a0:{{u[0]}}\");\n\
+                 }}\n"
+            ),
+            &["a0:tttttttttttttttt1"],
+            "b165-bare-array-temp-returned-control",
+        );
+        assert_clean_asan_run(
+            &format!(
+                "{H}fn eat(p: Array[String, 2]) {{ let q = p; println(f\"in:{{q[0]}}\"); }}\n\
+                 fn main() {{\n\
+                 \x20   let a: Array[String, 2] = [pay(1), pay(2)];\n\
+                 \x20   eat(a);\n\
+                 }}\n"
+            ),
+            &["in:tttttttttttttttt1"],
+            "b165-bare-array-param-moved-control",
+        );
+        // A SCALAR array element stays a no-op on both new gates.
+        assert_clean_asan_run(
+            &format!(
+                "{H}fn eat(p: (Array[i64, 2], i64)) {{ let q = p; println(f\"in:{{q.0[0]}}\"); }}\n\
+                 fn main() {{\n\
+                 \x20   eat(([3, 4], 7));\n\
+                 }}\n"
+            ),
+            &["in:3"],
+            "b165-scalar-array-control",
         );
     }
 

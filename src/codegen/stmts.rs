@@ -19434,6 +19434,37 @@ impl<'ctx> super::Codegen<'ctx> {
             if let Some(tes) = self.var_types.tuple_var_elem_tes.get(n.as_str()) {
                 return Some(tes.clone());
             }
+            // B-2026-09-16-5 — the same question asked of the ACCESSOR rather
+            // than of the raw map. A by-value tuple PARAM is registered in
+            // `tuple_var_elem_type_exprs` (`functions.rs`, the arm that also
+            // calls `make_tuple_param_callee_owned`), never in
+            // `tuple_var_elem_tes` — and `Self::tuple_var_elem_tes()` is the
+            // reader that consults both, preferring the param registry
+            // wholesale because a declared type is full-fidelity. The field and
+            // the method are spelled identically, so the raw read above looks
+            // like the accessor and silently answers `None` for every param.
+            //
+            // The consequence was a LEAK with no double-free to give it away:
+            // `fn f(p: (Array[String, 2], i64)) { let q = p; }` disarmed `p`'s
+            // caps at the move (the retraction fires off the LLVM type, which
+            // needs no element types) and then found no element types for `q`,
+            // so nothing was ARMED to replace what was retracted.
+            // `tuple_elem_needs_deep_drop` already carries both the
+            // `Vec[<heap>]` and the `Array[<heap>, N]` arms, so recovering the
+            // types is the whole fix at this site.
+            //
+            // The two spellings failed DIFFERENTLY, which is why one grep of
+            // the source could not have found this: the `Array` element got no
+            // drop at all (`aggregate_has_heap_field` matches `StructType`
+            // only, and `[2 x {ptr,i64,i64}]` is an `ArrayType`), while
+            // `(Vec[String], i64)` fell to `track_tuple_var`'s LLVM-type walker
+            // and got a drop that frees the Vec's BUFFER and not its elements
+            // — the erasure `emit_aggregate_heap_field_frees`'s own doc warns
+            // about. Both leak the two `String`s; only the second leaves a
+            // drop call in the IR.
+            if let Some(tes) = self.tuple_var_elem_tes(n.as_str()) {
+                return Some(tes);
+            }
         }
         // #24 (B-2026-06-14-2) — the call-result source with no annotation
         // (`let p = ret_tuple(i)` where `ret_tuple -> (Tok, i64)`). The RHS is a
