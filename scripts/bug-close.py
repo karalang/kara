@@ -47,6 +47,7 @@ that skips the regeneration leaves the rollup lying about the queue.
 
 import argparse
 import json
+import os
 import pathlib
 import subprocess
 import sys
@@ -160,6 +161,50 @@ def record_close(bid: str, sha: str) -> None:
         pass
 
 
+def require_armed_hooks(allow: bool) -> None:
+    """Refuse to close a row from a clone whose pre-push hook is INERT.
+
+    `git clone` does not set `core.hooksPath`, and this repo keeps its hooks in
+    `hooks/` rather than `.git/hooks`, so `hooks/pre-push` — whose whole job is
+    to run `bug-lint.sh` before a push — does nothing in a fresh clone. That is
+    every cloud container, on its first ledger change.
+
+    This used to print a NOTE, after the write, as the seventh line of output.
+    That is the shape of warning nobody reads: by the time it appears the row is
+    already on disk, the caller is reading the rollup line above it, and the
+    next command is the commit. A close is exactly the moment the check starts
+    mattering — it is when a fix SHA becomes able to go stale, and when rule 6b's
+    `.git/kara-closed-fix-shas` entry is written for a lint that will not run.
+
+    So it refuses instead, before the write, with the one command that fixes it.
+    Cheap to satisfy, and satisfying it arms the check for every later push in
+    the container rather than only for this one.
+    """
+    if git("rev-parse", "--git-dir").returncode != 0:
+        return  # not a git clone at all; nothing to arm
+    hooks_path = git("config", "core.hooksPath").stdout.strip()
+    hook = pathlib.Path(hooks_path) / "pre-push" if hooks_path else None
+    if hook and not hook.is_absolute():
+        hook = ROOT / hook
+    armed = bool(hook) and hook.exists() and os.access(hook, os.X_OK)
+    if armed:
+        return
+    why = ("core.hooksPath is unset" if not hooks_path
+           else f"{hooks_path}/pre-push is missing or not executable")
+    if allow:
+        print(f"bug-close: NOTE — {why}; writing anyway (--allow-disarmed-hooks).",
+              file=sys.stderr)
+        return
+    sys.exit(
+        f"bug-close: REFUSING TO WRITE — the pre-push hook is not armed in this\n"
+        f"    clone ({why}), so `scripts/bug-lint.sh` will NOT run before your push\n"
+        f"    and a malformed or duplicated row reaches `main` unchecked.\n"
+        f"    Arm it once per container:  scripts/install-hooks.sh\n"
+        f"    Then re-run this close. Pass --allow-disarmed-hooks to write without\n"
+        f"    it, and run scripts/bug-lint.sh by hand before you push."
+    )
+
+
 def main() -> None:
     ap = argparse.ArgumentParser(add_help=True)
     ap.add_argument("bid", help="B-ID to close, e.g. B-2026-08-11-9")
@@ -180,6 +225,12 @@ def main() -> None:
                     help="set the row's `tracker` field — where the work now "
                          "lives. REQUIRED by --status relocated (a relocation "
                          "whose pointer is missing is just a disappearance).")
+    ap.add_argument(
+        "--allow-disarmed-hooks",
+        action="store_true",
+        help="permit closing from a clone whose pre-push hook is not armed "
+             "(default: refuse — the lint will not run before your push)",
+    )
     ap.add_argument("--allow-unreachable-sha", action="store_true",
                     help="permit a fix SHA that is reachable from neither HEAD "
                          "nor origin/main (default: refuse — a rebase orphaned it)")
@@ -270,6 +321,8 @@ def main() -> None:
         print(f"      fix:    {fix_text.splitlines()[0][:150] if fix_text else '(empty)'}")
         return
 
+    require_armed_hooks(args.allow_disarmed_hooks)
+
     lines[idx] = json.dumps(new, ensure_ascii=False) + "\n"  # canonical form
     LEDGER.write_text("".join(lines))
     print(f"bug-close: {args.bid} -> {args.status} ({args.sha})")
@@ -284,13 +337,6 @@ def main() -> None:
         die(f"row written, but rollup regeneration FAILED:\n{r.stderr}")
     print("bug-close: regenerated docs/bug-ledger.md")
     print("bug-close: now run scripts/bug-lint.sh before committing")
-    if not git("config", "core.hooksPath").stdout.strip():
-        # `git clone` does not set core.hooksPath, so the committed pre-push
-        # hook — whose whole job is to run this lint before a push — is INERT in
-        # a fresh clone, which is every cloud container. Say so once, here,
-        # because this is the moment a fix SHA starts being able to go stale.
-        print("bug-close: NOTE — core.hooksPath is unset, so hooks/pre-push is not "
-              "active in this clone; run scripts/install-hooks.sh to arm it.")
 
 
 if __name__ == "__main__":
