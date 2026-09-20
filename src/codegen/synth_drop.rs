@@ -189,6 +189,17 @@ type EnumPayloadBodyField = (
 type EnumPayloadBodyTargets = Vec<(u64, String, Vec<EnumPayloadBodyField>)>;
 type EnumPayloadBodyCase<'ctx> = (BasicBlock<'ctx>, Vec<EnumPayloadBodyField>);
 
+/// One `Drop`-carrying payload arm handed to the shared bodies core:
+/// `(tag, payload type with the instantiation's args substituted in, boxing
+/// threshold, walk this arm's ELEMENTS)`.
+///
+/// The last field is per-ARM rather than per-call, and that is the whole
+/// reason this alias exists rather than a bare tuple: an enum's arms can
+/// disagree about it. `enum Mix[T] { A(T), B(Vec[T]) }` needs a container
+/// walk for `B` and not for `A`, so a call-wide flag cannot express it
+/// (B-2026-09-13-7).
+type PayloadDropArm = (u64, TypeExpr, usize, bool);
+
 impl<'ctx> super::Codegen<'ctx> {
     /// Phase 7.2 Slice DP — synthesize (or reuse) the per-enum drop
     /// function `__karac_drop_<EnumName>` for value-type enums.
@@ -11650,7 +11661,7 @@ impl<'ctx> super::Codegen<'ctx> {
         let head = p.segments.last()?.as_str();
         let args = p.generic_args.as_ref()?;
         // (tag, payload te, boxing threshold) per Drop-carrying payload arm.
-        let (fn_name, layout_key, arms): (String, &str, Vec<(u64, TypeExpr, usize)>) = match head {
+        let (fn_name, layout_key, arms): (String, &str, Vec<PayloadDropArm>) = match head {
             "Option" => {
                 let crate::ast::GenericArg::Type(pt) = args.first()? else {
                     return None;
@@ -11664,7 +11675,7 @@ impl<'ctx> super::Codegen<'ctx> {
                         if include_vec { "_v" } else { "" }
                     ),
                     "Option",
-                    vec![(some_tag, pt.clone(), 3)],
+                    vec![(some_tag, pt.clone(), 3, include_vec)],
                 )
             }
             "Result" => {
@@ -11686,7 +11697,10 @@ impl<'ctx> super::Codegen<'ctx> {
                         if include_vec { "_v" } else { "" }
                     ),
                     "Result",
-                    vec![(ok_tag, ok_te.clone(), 5), (err_tag, err_te.clone(), 5)],
+                    vec![
+                        (ok_tag, ok_te.clone(), 5, include_vec),
+                        (err_tag, err_te.clone(), 5, include_vec),
+                    ],
                 )
             }
             _ => return None,
@@ -12054,7 +12068,7 @@ impl<'ctx> super::Codegen<'ctx> {
         }
         let subst: std::collections::HashMap<String, TypeExpr> =
             params.iter().cloned().zip(args).collect();
-        let mut arms: Vec<(u64, TypeExpr, usize)> = Vec::new();
+        let mut arms: Vec<(u64, TypeExpr, usize, bool)> = Vec::new();
         for (tag, vname, tys) in self.enum_variant_field_type_exprs(enum_name) {
             // Single-payload variants only, for the reason
             // `user_enum_boxed_payload_variants` gives: a multi-field variant
@@ -12065,17 +12079,47 @@ impl<'ctx> super::Codegen<'ctx> {
             }
             // The complement gate. A concretely-declared payload belongs to the
             // name-keyed walker and must not be walked twice.
-            let TypeKind::Path(pp) = &tys[0].kind else {
-                continue;
-            };
-            let Some(declared) = pp.segments.first() else {
-                continue;
-            };
-            if !params.contains(declared) {
+            //
+            // B-2026-09-13-7 — "concretely-declared" is not the same question as
+            // "its head is not a type parameter", and this gate used to ask the
+            // second. `EArrG[T] { A(Array[T, 2]) }` has the head `Array`, so the
+            // param test failed and the arm was dropped; the name-keyed walker
+            // that owns the complement takes CONCRETE payloads only, so a
+            // payload that is neither a bare parameter nor concrete was owned by
+            // NOBODY and its elements' `Drop` bodies ran on no compiled surface
+            // while `--interp` ran them correctly. Measured at the let-bound
+            // position, both with and without a consuming match.
+            //
+            // So ask the real question: is this payload's type GENERIC-DEPENDENT
+            // — a bare parameter, or anything mentioning one. That keeps the
+            // partition exact, because a type mentioning a parameter is by
+            // construction not concrete and so is not the name-keyed walker's.
+            // `type_expr_mentions_param` already existed, in `synth.rs`, for the
+            // leftover-parameter check; it answers exactly this question, so this
+            // gate reuses it rather than growing a second copy to drift from it.
+            if !Self::type_expr_mentions_param(&tys[0], &params) {
                 continue;
             }
             let _ = &vname;
-            arms.push((tag, Self::subst_type_params(&tys[0], &subst), area));
+            // Walk a `Vec` payload only when the DECLARATION is the container —
+            // `V(Vec[T])`, whose elements are generic-dependent by spelling and
+            // whose interpreter half runs them (measured, B-2026-09-13-7). A bare
+            // `T` that merely INSTANTIATES to a `Vec` is not this arm: the
+            // interpreter is silent there on both positions, so arming it would
+            // open a divergence where today both backends agree, and that gap is
+            // its own row with its own interpreter half to write.
+            let declared_is_container = !matches!(
+                &tys[0].kind,
+                TypeKind::Path(pp) if pp.generic_args.is_none()
+                    && pp.segments.len() == 1
+                    && params.contains(&pp.segments[0])
+            );
+            arms.push((
+                tag,
+                Self::subst_type_params(&tys[0], &subst),
+                area,
+                declared_is_container,
+            ));
         }
         if arms.is_empty() {
             return None;
@@ -12188,7 +12232,14 @@ impl<'ctx> super::Codegen<'ctx> {
         &mut self,
         fn_name: String,
         layout_key: &str,
-        arms: Vec<(u64, TypeExpr, usize)>,
+        // B-2026-09-13-7 — the 4th element is this ARM's own `include_vec`.
+        // A call-wide flag cannot serve a head whose arms disagree about it:
+        // `enum Mix[T] { A(T), B(Vec[T]) }` needs the `Vec[T]` arm walked and
+        // the bare-`T` arm left alone, because the bare arm's interpreter half
+        // does not walk a `Vec` instantiation and arming it here would trade a
+        // both-backends-silent bug for a run-vs-build divergence — the trade
+        // the seeded pair's array-arm comment above refuses for the same reason.
+        arms: Vec<(u64, TypeExpr, usize, bool)>,
         include_vec: bool,
         // B-2026-09-17-34 / B-2026-09-19-9 — the moved-out parts to mask out,
         // keyed by the arm they belong to; see `PayloadBodiesMask` and
@@ -12270,7 +12321,8 @@ impl<'ctx> super::Codegen<'ctx> {
         }
         let targets: Vec<PayloadArm> = arms
             .into_iter()
-            .filter_map(|(tag, pte, thresh)| {
+            .filter_map(|(tag, pte, thresh, arm_walk_vec)| {
+                let include_vec = include_vec || arm_walk_vec;
                 if let TypeKind::Tuple(elem_tes) = &pte.kind {
                     if elem_tes.iter().any(|t| self.elem_te_runs_user_drop(t)) {
                         return Some(PayloadArm {

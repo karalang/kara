@@ -2703,7 +2703,7 @@ impl<'ctx> super::Codegen<'ctx> {
     /// True when `te` still names one of `params` anywhere in its spelling --
     /// the enum's own generic parameters, which substitution should have
     /// replaced. A leftover means the enum was reached without its arguments.
-    fn type_expr_mentions_param(te: &TypeExpr, params: &[String]) -> bool {
+    pub(super) fn type_expr_mentions_param(te: &TypeExpr, params: &[String]) -> bool {
         if params.is_empty() {
             return false;
         }

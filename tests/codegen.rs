@@ -170299,6 +170299,149 @@ fn main() {
              so the callee freed the caller's box"
         );
     }
+
+    /// B-2026-09-13-7 — an enum variant whose payload is a CONTAINER WRITTEN
+    /// OVER THE ENUM'S OWN TYPE PARAMETER runs its elements' user `Drop` bodies
+    /// on the compiled surfaces, as the interpreter already did.
+    ///
+    /// `emit_generic_enum_payload_user_drop_bodies_fn` partitions variants with
+    /// the name-keyed walker, and its half of that partition asked whether the
+    /// payload's HEAD is one of the enum's parameters. `Vec[T]` and
+    /// `Array[T, 2]` have the heads `Vec` and `Array`, so they failed that test
+    /// and went to the name-keyed walker, which takes CONCRETE payloads only —
+    /// owned by neither, so no walker was emitted and no compiled surface ran
+    /// the bodies while `--interp` ran them correctly.
+    ///
+    /// EVERY EXPECTATION BELOW IS THE COMPILED OUTPUT OF THE PROGRAM BESIDE IT,
+    /// read off the run rather than typed, and every one matches the sequence
+    /// design.md fixes — each body exactly once, at the binding's LIVE-RANGE
+    /// end, not at lexical scope end (§ Drop ordering within a branch). That is
+    /// why the no-match cell prints its bodies BEFORE the statement that
+    /// follows the `let`: the binding is never read again, so its live range
+    /// ends there. Reading that as premature is the mistake this fixture's
+    /// author made first.
+    ///
+    /// THE LAST TWO CELLS PIN A GAP RATHER THAN A FIX, and they are the point
+    /// of the fixture as much as the first three. A bare `T` payload that
+    /// merely INSTANTIATES to a container is silent on BOTH backends, and this
+    /// change deliberately leaves it silent: the interpreter does not walk it,
+    /// so arming the compiled side alone would trade a both-backends-silent gap
+    /// for a run-vs-build divergence. That gap is B-2026-09-20-41, which owns both
+    /// halves. When it is fixed these two cells MUST FLIP to printing their
+    /// bodies, and this fixture is expected to fail until they are updated — a
+    /// silent pass after that row lands means the per-arm `Vec` flag stopped
+    /// distinguishing the two spellings.
+    ///
+    /// The memory channel is unchanged by construction: this walker runs bodies
+    /// and frees nothing. Measured anyway on every program below at
+    /// `KARAC_OPT_LEVEL=0` under valgrind — balanced allocs/frees, ERROR
+    /// SUMMARY 0, no definite loss — because arming a walk that was not running
+    /// is a second-release candidate and a body assertion cannot see one.
+    #[test]
+    fn e2e_generic_enum_container_payload_runs_element_drop_bodies() {
+        const PRE: &str = "struct R { id: i64 }\n\
+             impl Drop for R { fn drop(mut ref self) { println(f\"dR{self.id}\") } }\n\
+             fn mkr(i: i64) -> R { return R { id: i } }\n";
+
+        // `Vec[T]` under a generic head, consumed by a match. Was: x1 alone.
+        if let Some(out) = run_program(&format!(
+            "{PRE}enum EVecG[T] {{ V(Vec[T]), N }}\n\
+             fn main() {{\n\
+             \x20 let a: Vec[R] = [mkr(1), mkr(2)];\n\
+             \x20 let e: EVecG[R] = EVecG.V(a);\n\
+             \x20 match e {{ EVecG.V(v) => {{ println(f\"x{{v[0].id}}\") }} EVecG.N => {{ println(\"no\") }} }}\n\
+             \x20 println(\"end\")\n\
+             }}\n"
+        )) {
+            assert_eq!(out, "x1\ndR1\ndR2\nend\n");
+        }
+
+        // `Array[T, N]` under a generic head — the other container spelling,
+        // excluded by the same gate for the same reason. Was: x1 alone.
+        if let Some(out) = run_program(&format!(
+            "{PRE}enum EArrG[T] {{ A(Array[T, 2]), N }}\n\
+             fn main() {{\n\
+             \x20 let a: Array[R, 2] = [mkr(1), mkr(2)];\n\
+             \x20 let e: EArrG[R] = EArrG.A(a);\n\
+             \x20 match e {{ EArrG.A(v) => {{ println(f\"x{{v[0].id}}\") }} EArrG.N => {{ println(\"no\") }} }}\n\
+             \x20 println(\"end\")\n\
+             }}\n"
+        )) {
+            assert_eq!(out, "x1\ndR1\ndR2\nend\n");
+        }
+
+        // The same head with NO consuming match, so the walk is reached at the
+        // binding's own live-range end rather than through an arm. Was: mid,
+        // end.
+        if let Some(out) = run_program(&format!(
+            "{PRE}enum EVecG[T] {{ V(Vec[T]), N }}\n\
+             fn main() {{\n\
+             \x20 let a: Vec[R] = [mkr(1), mkr(2)];\n\
+             \x20 let e: EVecG[R] = EVecG.V(a);\n\
+             \x20 println(\"mid\");\n\
+             \x20 println(\"end\")\n\
+             }}\n"
+        )) {
+            assert_eq!(out, "dR1\ndR2\nmid\nend\n");
+        }
+
+        // CONTROL, concrete head: the name-keyed walker's own case, correct
+        // throughout. It says the partition still holds — a payload walked
+        // twice would print each body twice here first.
+        if let Some(out) = run_program(&format!(
+            "{PRE}enum EVec {{ V(Vec[R]), N }}\n\
+             fn main() {{\n\
+             \x20 let a: Vec[R] = [mkr(1), mkr(2)];\n\
+             \x20 let e: EVec = EVec.V(a);\n\
+             \x20 match e {{ EVec.V(v) => {{ println(f\"x{{v[0].id}}\") }} EVec.N => {{ println(\"no\") }} }}\n\
+             \x20 println(\"end\")\n\
+             }}\n"
+        )) {
+            assert_eq!(out, "x1\ndR1\ndR2\nend\n");
+        }
+
+        // CONTROL, bare `T` at a PLAIN struct: the generic head's established
+        // case, unaffected by the widened gate.
+        if let Some(out) = run_program(&format!(
+            "{PRE}enum Slot[T] {{ S(T), N }}\n\
+             fn main() {{\n\
+             \x20 let a: R = mkr(1);\n\
+             \x20 let s: Slot[R] = Slot.S(a);\n\
+             \x20 match s {{ Slot.S(v) => {{ println(f\"x{{v.id}}\") }} Slot.N => {{ println(\"no\") }} }}\n\
+             \x20 println(\"end\")\n\
+             }}\n"
+        )) {
+            assert_eq!(out, "x1\ndR1\nend\n");
+        }
+
+        // MUST STAY SILENT, and see the note above: a bare `T` INSTANTIATED to
+        // a container. Both backends are silent today; arming only this one
+        // would open a divergence. B-2026-09-20-41 owns both halves and will flip these.
+        if let Some(out) = run_program(&format!(
+            "{PRE}enum Slot[T] {{ S(T), N }}\n\
+             fn main() {{\n\
+             \x20 let a: Vec[R] = [mkr(1), mkr(2)];\n\
+             \x20 let s: Slot[Vec[R]] = Slot.S(a);\n\
+             \x20 match s {{ Slot.S(v) => {{ println(f\"x{{v[0].id}}\") }} Slot.N => {{ println(\"no\") }} }}\n\
+             \x20 println(\"end\")\n\
+             }}\n"
+        )) {
+            assert_eq!(out, "x1\nend\n");
+        }
+
+        // MUST STAY SILENT, no-match position of the same spelling.
+        if let Some(out) = run_program(&format!(
+            "{PRE}enum Slot[T] {{ S(T), N }}\n\
+             fn main() {{\n\
+             \x20 let a: Vec[R] = [mkr(1), mkr(2)];\n\
+             \x20 let s: Slot[Vec[R]] = Slot.S(a);\n\
+             \x20 println(\"mid\");\n\
+             \x20 println(\"end\")\n\
+             }}\n"
+        )) {
+            assert_eq!(out, "mid\nend\n");
+        }
+    }
 }
 
 #[cfg(feature = "llvm")]
