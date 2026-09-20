@@ -4734,6 +4734,84 @@ impl<'ctx> super::Codegen<'ctx> {
         Some(cur)
     }
 
+    /// B-2026-09-20-9 — [`Self::te_at_accessor_chain`] composed with its own
+    /// chain builder, and widened by one hop kind: an INDEX into an `Array` or
+    /// `Vec`.
+    ///
+    /// Why this is not a widening of `projection_accessor_chain` +
+    /// `te_at_accessor_chain`: those two speak in `ParamPart`, which has no
+    /// index variant, and giving it one reaches `FieldSkipTree`,
+    /// `insert_tuple_skip_path` and every path-valued consumer B-2026-09-19-33
+    /// and B-2026-09-19-34 built on it. The single caller here does not want a
+    /// path — it wants the LEAF's type, to ask whether the projection carries a
+    /// `Drop` body — so the chain is walked against the type in one pass and no
+    /// path is ever materialised.
+    ///
+    /// `None` wherever the chain does not fit the type, which every caller
+    /// reads as "assume it carries a body" — the status quo.
+    fn projection_leaf_te_through_index(&self, root: &TypeExpr, e: &Expr) -> Option<TypeExpr> {
+        // Outside-in: collect the hops, then walk the type from the root.
+        enum Hop<'a> {
+            Field(&'a str),
+            TupleIndex(usize),
+            Index,
+        }
+        let mut hops: Vec<Hop<'_>> = Vec::new();
+        let mut cur = e;
+        loop {
+            match &cur.kind {
+                ExprKind::FieldAccess { object, field, .. } => {
+                    hops.push(Hop::Field(field.as_str()));
+                    cur = object;
+                }
+                ExprKind::TupleIndex { object, index, .. } => {
+                    hops.push(Hop::TupleIndex(*index as usize));
+                    cur = object;
+                }
+                // The index EXPRESSION is not walked: `a[i].v` reads a leaf
+                // whose type does not depend on `i`, and a side effect in `i`
+                // is not this question's business.
+                ExprKind::Index { object, .. } => {
+                    hops.push(Hop::Index);
+                    cur = object;
+                }
+                ExprKind::Identifier(_) | ExprKind::SelfValue => break,
+                _ => return None,
+            }
+        }
+        if hops.is_empty() {
+            return None;
+        }
+        hops.reverse();
+        let mut te = root.clone();
+        for hop in hops {
+            te = match hop {
+                Hop::TupleIndex(i) => match &te.kind {
+                    TypeKind::Tuple(elems) => elems.get(i)?.clone(),
+                    _ => return None,
+                },
+                Hop::Field(f) => {
+                    let TypeKind::Path(p) = &te.kind else {
+                        return None;
+                    };
+                    let name = p.segments.last()?;
+                    let names = self.type_decls.struct_field_names.get(name.as_str())?;
+                    let idx = names.iter().position(|n| n == f)?;
+                    self.type_decls
+                        .struct_field_type_exprs
+                        .get(name.as_str())?
+                        .get(idx)?
+                        .clone()
+                }
+                Hop::Index => match self.array_elem_and_len(&te) {
+                    Some((elem, _)) => elem,
+                    None => super::helpers::vec_inner_type_expr(&te)?,
+                },
+            };
+        }
+        Some(te)
+    }
+
     /// The `Option`/`Result` param type whose payload `Drop` BODIES this call's
     /// caller still owes, plus — B-2026-09-14-18 — the positional parts of a
     /// TUPLE payload it no longer owes because the callee lets them outlive the
@@ -5390,16 +5468,43 @@ impl<'ctx> super::Codegen<'ctx> {
         // tuple payload has no such callee-side owner, which is why its
         // projection cells LOSE the body instead of doubling it, and why
         // the two shapes need opposite answers to the same question.
-        let payload_te_for_policy = optres_payload_te(param_te, want_variant)
-            .filter(|te| matches!(te.kind, TypeKind::Tuple(_)));
+        //
+        // B-2026-09-20-9 — an ARRAY or `Vec` payload joins the tuple on that
+        // same argument. It has no name either, so no callee-side registration
+        // exists to double against, and the gate declining is a LOST body:
+        // `fn take(o: Option[Array[W1, 1]]) -> i64 { match o { Some(x) =>
+        // { return x[0].v } .. } }` printed `r:40 end` on all three compiled
+        // surfaces against the interpreter's correct `dW1_40 r:40 end`.
+        //
+        // WHY THE SHAPE READS AS A WIDTH GATE UNTIL THE ARM IS VARIED. The same
+        // cell whose arm reads `x[0].tag.len()` is CORRECT, because a method
+        // call is not a projection chain and never reaches this policy — so a
+        // sweep that varies the payload TYPE while holding the arm's expression
+        // fixed sees the split as a property of the payload, and it is not.
+        // Holding the payload at `Array[W1, 1]` and varying only the arm:
+        // `return 7` correct, `return x[0].v` lost, `return x[0].v + 0`
+        // correct. The discriminator is the ARM'S EXPRESSION.
+        //
+        // The PER-PART sibling (`optres_payload_escape_parts`) is deliberately
+        // NOT widened with this: it answers in top-level TUPLE indices, which
+        // `FieldSkipTree` and every path-valued consumer built on it can
+        // express, and an array index is not that question.
+        let payload_te_for_policy = optres_payload_te(param_te, want_variant).filter(|te| {
+            matches!(te.kind, TypeKind::Tuple(_))
+                || self.array_elem_and_len(te).is_some()
+                || super::helpers::vec_inner_type_expr(te).is_some()
+        });
         let leaf_is_copy_read = |e: &Expr| -> bool {
             let Some(root) = payload_te_for_policy.as_ref() else {
                 return false;
             };
-            let Some(chain) = Self::projection_accessor_chain(e) else {
-                return false;
-            };
-            let Some(leaf) = self.te_at_accessor_chain(root, &chain) else {
+            // `projection_accessor_chain` cannot spell an INDEX hop —
+            // `ParamPart` has only `TupleIndex` and `Field`, and widening it
+            // would reach `FieldSkipTree` and every path-valued consumer built
+            // on it. This question needs no path, only the LEAF's type, so the
+            // chain is walked against the type directly and an index hop
+            // resolves through the container's element type.
+            let Some(leaf) = self.projection_leaf_te_through_index(root, e) else {
                 return false;
             };
             !self.elem_te_runs_user_drop(&leaf)

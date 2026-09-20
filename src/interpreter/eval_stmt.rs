@@ -6548,6 +6548,41 @@ impl<'a> super::Interpreter<'a> {
                         // look like a payload-only gap rather than, on this
                         // spelling, a total miss.
                         || self.find_enum_for_variant(n).is_some()
+                        // B-2026-09-20-10 — the SEEDED constructors, which
+                        // `find_enum_for_variant` cannot see: `Option` and
+                        // `Result` have no source `EnumDef`, so `Some` / `Ok` /
+                        // `Err` found no enum, this gate answered FALSE, and
+                        // the discard walk never ran. `let _ = Some(W { v: 41
+                        // });` printed NOTHING under `--interp` while all three
+                        // compiled surfaces correctly ran the payload's body.
+                        //
+                        // Measured over five payload shapes in ONE program — a
+                        // bare struct, an `Array`, a `Vec`, a tuple, and a
+                        // named local moved in — and the interpreter lost every
+                        // one, at both provenances. The row was filed as an
+                        // `Array`-payload question; it is every payload shape,
+                        // because the miss is at the gate rather than in the
+                        // walk.
+                        //
+                        // The control that says the INTERPRETER is the wrong
+                        // side, not compiled: the identical discard over a
+                        // USER-DECLARED enum (`let _ = E.Y(..)`) is correct on
+                        // all four surfaces — and it is correct precisely
+                        // because it reaches this arm through
+                        // `find_enum_for_variant`.
+                        //
+                        // Widened HERE and not inside
+                        // `run_discarded_value_user_drops`, for the reason this
+                        // site's caller already records: that walker has 31
+                        // callers, one of them the wildcard LEAF path where
+                        // compiled runs the own body alone, so widening the
+                        // walker would trade this divergence for that one.
+                        //
+                        // The `is_none()` half keeps a program that declares
+                        // its OWN enum with a `Some` variant on the existing
+                        // path, where its source `EnumDef` answers.
+                        || (matches!(n.as_str(), "Some" | "Ok" | "Err")
+                            && self.find_enum_for_variant(n).is_none())
                 }
                 _ => false,
             },

@@ -39135,6 +39135,287 @@ fn main() {
         }
     }
 
+    /// B-2026-09-20-9 — an `Option`/`Result` argument whose payload is an
+    /// `Array` or a `Vec` loses its elements' user `Drop` bodies on every
+    /// compiled backend when the arm READS a scalar out of it.
+    ///
+    /// ```text
+    /// fn take(o: Option[Array[W, 1]]) -> i64 { match o { Some(x) => { return x[0].v } .. } }
+    /// ```
+    ///
+    /// printed `r:40 end` on the JIT and both AOT lanes against the
+    /// interpreter's correct `dW1_40 r:40 end`.
+    ///
+    /// THE DISCRIMINATOR IS THE ARM'S EXPRESSION, not the payload, and the row
+    /// was filed the other way round because a 160-cell sweep varied the
+    /// payload TYPE while holding the arm fixed. Holding the payload at
+    /// `Array[W1, 1]` and varying only the arm settles it — the four cells
+    /// `no-read-control`, `scalar-read`, `read-into-a-local` and
+    /// `arithmetic-read-control` below are exactly that experiment, and two of
+    /// them were correct before this fix.
+    ///
+    /// MECHANISM. `optres_payload_escape_map`'s per-projection copy-read policy
+    /// (`leaf_is_copy_read`) is what stops a by-copy projection out of a payload
+    /// being read as the payload ESCAPING. It was filtered to TUPLE payloads, so
+    /// `x[0].v` off an array payload was called an escape, the caller's
+    /// fresh-temp bodies walk stood down, and nothing anywhere ran the element
+    /// bodies. Two things had to move: the filter admits an array or `Vec`
+    /// payload, and the chain walk gained an INDEX hop
+    /// (`projection_leaf_te_through_index`) — written beside
+    /// `te_at_accessor_chain` rather than inside it because `ParamPart` has no
+    /// index variant and giving it one would reach `FieldSkipTree` and every
+    /// path-valued consumer built on it.
+    ///
+    /// The PER-PART sibling (`optres_payload_escape_parts`) is deliberately NOT
+    /// widened: it answers in top-level TUPLE indices, which the skip tree can
+    /// express, and an array index is not that question.
+    #[test]
+    fn e2e_optres_array_payload_scalar_read_runs_the_element_bodies() {
+        const W: &str = "struct W1 { v: i64 }\n\
+             impl Drop for W1 { fn drop(mut ref self) { println(f\"dW1_{self.v}\") } }\n";
+        // (label, source, AOT expectation, interpreter expectation)
+        for (label, prog, want, interp_want) in [
+            (
+                // The row's own cell.
+                "array-payload-scalar-read",
+                format!(
+                    "{W}fn take(o: Option[Array[W1, 1]]) -> i64 {{ match o {{ Some(x) => {{ return x[0].v }} None => {{ return 0 }} }} }}\n\
+                     fn main() {{ let r = take(Some([W1 {{ v: 40 }}])); println(f\"r:{{r}}\"); println(\"end\") }}\n"
+                ),
+                "dW1_40\nr:40\nend\n",
+                "dW1_40\nr:40\nend\n",
+            ),
+            (
+                // The `Result` head, which the row listed and did not measure.
+                // Its payload area is 5 words against `Option`'s 3, which is
+                // why a fixed-element sweep crosses one envelope's boxing
+                // boundary and not the other's — and why the two looked like
+                // separate populations when they are one.
+                "array-payload-result-head",
+                format!(
+                    "{W}fn take(o: Result[Array[W1, 1], i64]) -> i64 {{ match o {{ Ok(x) => {{ return x[0].v }} Err(e) => {{ return e }} }} }}\n\
+                     fn main() {{ let r = take(Ok([W1 {{ v: 40 }}])); println(f\"r:{{r}}\"); println(\"end\") }}\n"
+                ),
+                "dW1_40\nr:40\nend\n",
+                "dW1_40\nr:40\nend\n",
+            ),
+            (
+                // The read moved into a local first. Same channel, reached
+                // through `optres_payload_consumed_paths` instead.
+                "array-payload-read-into-a-local",
+                format!(
+                    "{W}fn take(o: Option[Array[W1, 1]]) -> i64 {{ match o {{ Some(x) => {{ let q = x[0].v; return q }} None => {{ return 0 }} }} }}\n\
+                     fn main() {{ let r = take(Some([W1 {{ v: 40 }}])); println(f\"r:{{r}}\"); println(\"end\") }}\n"
+                ),
+                "dW1_40\nr:40\nend\n",
+                "dW1_40\nr:40\nend\n",
+            ),
+            (
+                // CONTROL, correct BEFORE this fix: the same projection wrapped
+                // in arithmetic is not a bare projection chain, so it never
+                // reached the policy at all. This cell and the one below are
+                // what make the discriminator the ARM and not the payload.
+                "array-payload-arithmetic-read-control",
+                format!(
+                    "{W}fn take(o: Option[Array[W1, 1]]) -> i64 {{ match o {{ Some(x) => {{ return x[0].v + 0 }} None => {{ return 0 }} }} }}\n\
+                     fn main() {{ let r = take(Some([W1 {{ v: 40 }}])); println(f\"r:{{r}}\"); println(\"end\") }}\n"
+                ),
+                "dW1_40\nr:40\nend\n",
+                "dW1_40\nr:40\nend\n",
+            ),
+            (
+                // CONTROL, correct BEFORE this fix: an arm that reads nothing
+                // out of the payload has no projection to misclassify.
+                "array-payload-no-read-control",
+                format!(
+                    "{W}fn take(o: Option[Array[W1, 1]]) -> i64 {{ match o {{ Some(x) => {{ return 7 }} None => {{ return 0 }} }} }}\n\
+                     fn main() {{ let r = take(Some([W1 {{ v: 40 }}])); println(f\"r:{{r}}\"); println(\"end\") }}\n"
+                ),
+                "dW1_40\nr:7\nend\n",
+                "dW1_40\nr:7\nend\n",
+            ),
+            (
+                // The `Vec` twin, which the same widening repairs. Two elements,
+                // so a fix that ran one body and stopped would show here.
+                "vec-payload-index-read",
+                format!(
+                    "{W}fn take(o: Option[Vec[W1]]) -> i64 {{ match o {{ Some(x) => {{ return x[0].v }} None => {{ return 0 }} }} }}\n\
+                     fn main() {{ let r = take(Some(vec![W1 {{ v: 40 }}, W1 {{ v: 41 }}])); println(f\"r:{{r}}\"); println(\"end\") }}\n"
+                ),
+                "dW1_40\ndW1_41\nr:40\nend\n",
+                "dW1_40\ndW1_41\nr:40\nend\n",
+            ),
+            (
+                // CONTROL and the boundary this widening must not cross. For a
+                // NAMED struct payload the callee's own param machinery runs the
+                // field bodies, so reading the projection as a copy makes the
+                // caller a SECOND owner: applying the leaf policy there was
+                // measured printing `dIn5 dIn5 r:5 end`. An array and a tuple
+                // payload have no name and so no callee-side registration, which
+                // is the whole of why they can take the policy and this cannot.
+                "named-struct-payload-scalar-read-control",
+                format!(
+                    "{W}struct In {{ v: i64 }}\n\
+                     impl Drop for In {{ fn drop(mut ref self) {{ println(f\"dIn{{self.v}}\") }} }}\n\
+                     fn take(o: Option[In]) -> i64 {{ match o {{ Some(t) => {{ return t.v }} None => {{ return 0 }} }} }}\n\
+                     fn main() {{ let r = take(Some(In {{ v: 5 }})); println(f\"r:{{r}}\"); println(\"end\") }}\n"
+                ),
+                "dIn5\nr:5\nend\n",
+                "dIn5\nr:5\nend\n",
+            ),
+            (
+                // CONTROL: the arm FORWARDS the payload whole into another call,
+                // which really does hand it on. Correct before and after.
+                "array-payload-forwarded-whole-control",
+                format!(
+                    "{W}fn sink(a: Array[W1, 1]) -> i64 {{ return a[0].v }}\n\
+                     fn take(o: Option[Array[W1, 1]]) -> i64 {{ match o {{ Some(x) => {{ return sink(x) }} None => {{ return 0 }} }} }}\n\
+                     fn main() {{ let r = take(Some([W1 {{ v: 40 }}])); println(f\"r:{{r}}\"); println(\"end\") }}\n"
+                ),
+                "dW1_40\nr:40\nend\n",
+                "dW1_40\nr:40\nend\n",
+            ),
+            (
+                // CONTROL: the arm RETURNS the payload whole, so the caller's
+                // consumer owns the bodies and they run after `r:`. Correct
+                // before and after — the escape here is real.
+                "array-payload-whole-returned-control",
+                format!(
+                    "{W}fn take(o: Option[Array[W1, 1]]) -> Array[W1, 1] {{ match o {{ Some(x) => {{ return x }} None => {{ return [W1 {{ v: 0 }}] }} }} }}\n\
+                     fn main() {{ let g = take(Some([W1 {{ v: 40 }}])); println(f\"r:{{g[0].v}}\"); println(\"end\") }}\n"
+                ),
+                "r:40\ndW1_40\nend\n",
+                "r:40\ndW1_40\nend\n",
+            ),
+            (
+                // CONTROL: a BOXED payload (element wider than `Option`'s 3-word
+                // area) is a different channel entirely — the callee owns the
+                // bodies there — and is correct before and after. This is the
+                // cell that shows the fix did not simply move the boxing
+                // boundary.
+                "boxed-array-payload-control",
+                format!(
+                    "{W}struct W4 {{ v: i64, b: i64, c: i64, d: i64 }}\n\
+                     impl Drop for W4 {{ fn drop(mut ref self) {{ println(f\"dW4_{{self.v}}\") }} }}\n\
+                     fn take(o: Option[Array[W4, 1]]) -> i64 {{ match o {{ Some(x) => {{ return x[0].v }} None => {{ return 0 }} }} }}\n\
+                     fn main() {{ let r = take(Some([W4 {{ v: 40, b: 1, c: 2, d: 3 }}])); println(f\"r:{{r}}\"); println(\"end\") }}\n"
+                ),
+                "dW4_40\nr:40\nend\n",
+                "dW4_40\nr:40\nend\n",
+            ),
+            (
+                // DIVERGENT AND PRE-EXISTING, pinned as it measures and NOT this
+                // row's — B-2026-09-20-23. A NAMED-LOCAL argument's bodies are
+                // retained by the caller's `let` site and drain at ITS scope
+                // exit, so the body runs exactly once but AFTER `end`, where the
+                // interpreter runs it at the callee's arm.
+                //
+                // Pre-existing rather than introduced: the same spelling with a
+                // heap-bearing element (`struct S1 { tag: String }`) printed the
+                // identical late sequence BEFORE this fix, when this cell printed
+                // nothing at all. So the fix moves this cell from a LOSS into an
+                // existing ORDER divergence, which is strictly closer to the due
+                // sequence and valgrind-clean at `-O0` (0 errors, no leak).
+                "array-payload-named-local-argument-runs-the-body-late",
+                format!(
+                    "{W}fn take(o: Option[Array[W1, 1]]) -> i64 {{ match o {{ Some(x) => {{ return x[0].v }} None => {{ return 0 }} }} }}\n\
+                     fn main() {{ let a: Array[W1, 1] = [W1 {{ v: 40 }}]; let r = take(Some(a)); println(f\"r:{{r}}\"); println(\"end\") }}\n"
+                ),
+                "r:40\nend\ndW1_40\n",
+                "dW1_40\nr:40\nend\n",
+            ),
+        ] {
+            let (interp_out, interp_errs, _, _) = karac::run_program_full_checked(&prog);
+            assert!(
+                interp_errs.is_empty(),
+                "[{label}] interp errored: {interp_errs:?}"
+            );
+            assert_eq!(interp_out.join(""), interp_want, "[{label}] interpreter");
+            let Some(aot) = run_program(&prog) else {
+                continue;
+            };
+            assert_eq!(aot, want, "[{label}] AOT");
+        }
+    }
+
+    /// B-2026-09-20-10 — the INTERPRETER, not the compiled backends, lost a
+    /// discarded seeded-envelope value's payload `Drop` body.
+    ///
+    /// ```text
+    /// let _ = Some(W1 { v: 41 });   // --interp printed NOTHING; all three compiled surfaces ran the body
+    /// ```
+    ///
+    /// Filed as an `Array`-payload question and measured here as EVERY payload
+    /// shape, because the miss is at the GATE and not in the walk:
+    /// `discard_rhs_produces_owned_value`'s bare-constructor arm asks
+    /// `find_enum_for_variant`, which cannot see `Some` / `Ok` / `Err` —
+    /// `Option` and `Result` have no source `EnumDef`. The gate answered false
+    /// and `run_discarded_value_user_drops` was never called, whatever the
+    /// payload was.
+    ///
+    /// WHY THE INTERPRETER IS THE WRONG SIDE HERE, which matters because every
+    /// fixture in this family is written as an A/B against it: the identical
+    /// discard over a USER-DECLARED enum is correct on all four surfaces, and it
+    /// is correct precisely because it reaches that arm through
+    /// `find_enum_for_variant`. The declared spelling is the control, and it is
+    /// in the same program as the seeded ones below so a tree difference cannot
+    /// explain the split.
+    #[test]
+    fn e2e_discarded_seeded_envelope_runs_its_payload_bodies_on_every_surface() {
+        const W: &str = "struct W1 { v: i64 }\n\
+             impl Drop for W1 { fn drop(mut ref self) { println(f\"dW1_{self.v}\") } }\n";
+        // Five payload shapes and the bare-array control, in ONE program: a
+        // per-cell grid cannot show that the shapes behave alike, and the
+        // interpreter lost all five for one reason.
+        let prog = format!(
+            "{W}fn main() {{\n\
+               let _ = [W1 {{ v: 40 }}];\n\
+               println(\"m1\");\n\
+               let _ = Some(W1 {{ v: 41 }});\n\
+               println(\"m2\");\n\
+               let _ = Some([W1 {{ v: 42 }}]);\n\
+               println(\"m3\");\n\
+               let _ = Some(vec![W1 {{ v: 43 }}]);\n\
+               println(\"m4\");\n\
+               let _ = Some((W1 {{ v: 44 }}, 1));\n\
+               println(\"end\")\n\
+             }}\n"
+        );
+        let want = "dW1_40\nm1\ndW1_41\nm2\ndW1_42\nm3\ndW1_43\nm4\ndW1_44\nend\n";
+        let (interp_out, interp_errs, _, _) = karac::run_program_full_checked(&prog);
+        assert!(interp_errs.is_empty(), "interp errored: {interp_errs:?}");
+        assert_eq!(interp_out.join(""), want, "interpreter");
+        if let Some(aot) = run_program(&prog) {
+            assert_eq!(aot, want, "AOT");
+        }
+
+        // The user-declared CONTROL beside the seeded pair, both provenances.
+        // Correct on all four surfaces before and after, which is what says the
+        // gate and not the walk was missing.
+        let ctl = format!(
+            "{W}enum E {{ Y(Array[W1, 1]), N }}\n\
+             fn main() {{\n\
+               let _ = Some([W1 {{ v: 40 }}]);\n\
+               println(\"m1\");\n\
+               let a: Array[W1, 1] = [W1 {{ v: 41 }}];\n\
+               let _ = Some(a);\n\
+               println(\"m2\");\n\
+               let _ = E.Y([W1 {{ v: 42 }}]);\n\
+               println(\"m3\");\n\
+               let b: Array[W1, 1] = [W1 {{ v: 43 }}];\n\
+               let _ = E.Y(b);\n\
+               println(\"end\")\n\
+             }}\n"
+        );
+        let ctl_want = "dW1_40\nm1\ndW1_41\nm2\ndW1_42\nm3\ndW1_43\nend\n";
+        let (ctl_out, ctl_errs, _, _) = karac::run_program_full_checked(&ctl);
+        assert!(ctl_errs.is_empty(), "control interp errored: {ctl_errs:?}");
+        assert_eq!(ctl_out.join(""), ctl_want, "control interpreter");
+        if let Some(aot) = run_program(&ctl) {
+            assert_eq!(aot, ctl_want, "control AOT");
+        }
+    }
+
     /// B-2026-09-14-7 — a payload part MOVED INTO A LOCAL that dies inside the
     /// callee's own frame drops at that local's live-range end, not after the
     /// call returns.
