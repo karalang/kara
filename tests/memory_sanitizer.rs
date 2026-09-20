@@ -100499,4 +100499,180 @@ fn main() {
             "b2026-09-20-29-ctl-prefix-collection",
         );
     }
+
+    /// B-2026-09-16-15 — a boxed generic-enum payload handed to a GENERIC
+    /// callee had its box freed and its ARRAY interior stranded. The monomorph
+    /// param registration in `mono.rs` was the one site `297237c` left at
+    /// `array_interior_ok: false` after B-2026-09-13-15's constructor
+    /// retraction removed the second owner that gate was defending against, so
+    /// the caller stood down and the callee declined to pick the interior up.
+    ///
+    /// Whole program at `KARAC_OPT_LEVEL=0` under valgrind, same binary, one
+    /// line changed in `mono.rs`:
+    ///
+    ///     before   364 allocs / 274 frees, definitely lost 1,248 B in 84
+    ///              blocks, indirectly lost 90 B in 6
+    ///     after    364 allocs / 364 frees, all heap blocks freed
+    ///
+    /// with stdout byte-identical between the two arms, which is what says the
+    /// change frees memory rather than moving a `Drop` body. Per element type,
+    /// measured one cell at a time: 26 B/2 (`String`), 24 B/2 (plain struct),
+    /// 24 B/2 (`impl Drop` struct, both bodies firing on both arms), 48+24 B
+    /// (`Vec[String]`), 24 B/2 (`Option[String]`), 20 B/4 (nested `Array`).
+    /// `Array[i64, 2]` is clean on both arms — nothing to free.
+    ///
+    /// Cells 7-14 are the MUST-STAY-DECLINED controls: every spelling where a
+    /// named source could still own the interior, which is the shape
+    /// B-2026-09-12-18 measured as a double free when this arm first landed
+    /// ungated. They are clean before and after. A widening that reaches one of
+    /// them reddens this test instead of leaving a double free to be found by
+    /// the next person.
+    ///
+    /// Cell 13 uses the NON-matching `mlen`. Its matching sibling — an
+    /// owned-`self` receiver on a generic impl whose body matches the receiver
+    /// — strands the same two element buffers (33 B in 2) IDENTICALLY on both
+    /// arms, so it is a neighbour rather than this row: filed separately.
+    /// `param_name != "self"` (B-2026-09-16-31) carves the receiver out of this
+    /// registration, so the caller is meant to own it and does not.
+    #[test]
+    fn asan_generic_callee_boxed_array_payload_interior_has_an_owner() {
+        assert_clean_asan_run_min_allocs(
+            r#"
+struct Pr { a: String, b: i64 }
+struct Rec { s: String }
+impl Drop for Rec { fn drop(mut ref self) { println(f"dRec:{self.s}") } }
+struct Hold { arr: Array[String, 2] }
+enum G[T] { Y(T), N }
+
+fn gshow[T](g: G[T]) -> i64 { match g { G.Y(v) => { println(f"  p={v}"); return 1; } G.N => { return 0; } } }
+fn gnomatch[T](g: G[T]) -> i64 { return 2 }
+fn two[T](p: G[T], q: G[T]) -> i64 { return 3 }
+
+impl[T] G[T] { fn mlen(self) -> i64 { return 4 } }
+
+fn main() {
+    let base: i64 = env.args().len();
+    let mut i: i64 = 0;
+    while i < 3 {
+        let k: i64 = base + i;
+        let c1: G[Array[String, 2]] = G.Y([f"aaaaaaaaaaa-1-{k}", f"bbbbbbbbbbb-1-{k}"]);
+        println(f"inline_nomatch:{gnomatch(c1)}");
+        let c2: G[Array[String, 2]] = G.Y([f"cccccccccccc-2-{k}", f"dddddddddddd-2-{k}"]);
+        println(f"inline_match:{gshow(c2)}");
+        let c3: G[Array[Pr, 2]] = G.Y([Pr { a: f"eeeeeeeeeee-3-{k}", b: k }, Pr { a: f"fffffffffff-3-{k}", b: k }]);
+        println(f"struct_elem:{gnomatch(c3)}");
+        let c4: G[Array[Rec, 2]] = G.Y([Rec { s: f"ggggggggggg-4-{k}" }, Rec { s: f"hhhhhhhhhhh-4-{k}" }]);
+        println(f"drop_elem:{gnomatch(c4)}");
+        let c5: G[Array[Vec[String], 2]] = G.Y([vec![f"iiiiiiiiiii-5-{k}"], vec![f"jjjjjjjjjjj-5-{k}"]]);
+        println(f"vec_elem:{gshow(c5)}");
+        let c6: G[Array[Array[String, 2], 2]] = G.Y([[f"kkk-6-{k}", f"lll-6-{k}"], [f"mmm-6-{k}", f"nnn-6-{k}"]]);
+        println(f"nested_elem:{gshow(c6)}");
+        let a7: Array[String, 2] = [f"ooooooooooo-7-{k}", f"ppppppppppp-7-{k}"];
+        let c7: G[Array[String, 2]] = G.Y(a7);
+        println(f"named_local:{gshow(c7)}");
+        let a8: Array[String, 2] = [f"qqqqqqqqqqq-8-{k}", f"rrrrrrrrrrr-8-{k}"];
+        let c8: G[Array[String, 2]] = G.Y(a8);
+        println(f"read_after_move:{gnomatch(c8)} {a8[0]}");
+        let a9: Array[String, 2] = [f"sssssssssss-9-{k}", f"ttttttttttt-9-{k}"];
+        let c9: G[Array[String, 2]] = G.Y(a9);
+        println(f"call_then_read:{gnomatch(c9)}");
+        println(f"still_live:{a9[1]}");
+        let e10: String = f"uuuuuuuuuuu-10-{k}";
+        let f10: String = f"vvvvvvvvvvv-10-{k}";
+        let c10: G[Array[String, 2]] = G.Y([e10, f10]);
+        println(f"elem_locals:{gshow(c10)}");
+        let h11: Hold = Hold { arr: [f"wwwwwwwwwww-11-{k}", f"xxxxxxxxxxx-11-{k}"] };
+        let c11: G[Array[String, 2]] = G.Y(h11.arr);
+        println(f"struct_field:{gshow(c11)}");
+        let p12: G[Array[String, 2]] = G.Y([f"yyyyyyyyyyy-12-{k}", f"zzzzzzzzzzz-12-{k}"]);
+        let q12: G[Array[String, 2]] = G.Y([f"aaaaaaaaaab-12-{k}", f"bbbbbbbbbbc-12-{k}"]);
+        println(f"two_params:{two(p12, q12)}");
+        let c13: G[Array[String, 2]] = G.Y([f"ccccccccccd-13-{k}", f"ddddddddddde-13-{k}"]);
+        println(f"self_recv:{c13.mlen()}");
+        let c14: G[Array[i64, 2]] = G.Y([k, k + 1]);
+        println(f"scalar_elem:{gshow(c14)}");
+        i = i + 1;
+    }
+    println("end");
+}
+"#,
+            &[
+                "inline_nomatch:2",
+                "  p=[cccccccccccc-2-1, dddddddddddd-2-1]",
+                "inline_match:1",
+                "struct_elem:2",
+                "dRec:ggggggggggg-4-1",
+                "dRec:hhhhhhhhhhh-4-1",
+                "drop_elem:2",
+                "  p=[[iiiiiiiiiii-5-1], [jjjjjjjjjjj-5-1]]",
+                "vec_elem:1",
+                "  p=[[kkk-6-1, lll-6-1], [mmm-6-1, nnn-6-1]]",
+                "nested_elem:1",
+                "  p=[ooooooooooo-7-1, ppppppppppp-7-1]",
+                "named_local:1",
+                "read_after_move:2 qqqqqqqqqqq-8-1",
+                "call_then_read:2",
+                "still_live:ttttttttttt-9-1",
+                "  p=[uuuuuuuuuuu-10-1, vvvvvvvvvvv-10-1]",
+                "elem_locals:1",
+                "  p=[wwwwwwwwwww-11-1, xxxxxxxxxxx-11-1]",
+                "struct_field:1",
+                "two_params:3",
+                "self_recv:4",
+                "  p=[1, 2]",
+                "scalar_elem:1",
+                "inline_nomatch:2",
+                "  p=[cccccccccccc-2-2, dddddddddddd-2-2]",
+                "inline_match:1",
+                "struct_elem:2",
+                "dRec:ggggggggggg-4-2",
+                "dRec:hhhhhhhhhhh-4-2",
+                "drop_elem:2",
+                "  p=[[iiiiiiiiiii-5-2], [jjjjjjjjjjj-5-2]]",
+                "vec_elem:1",
+                "  p=[[kkk-6-2, lll-6-2], [mmm-6-2, nnn-6-2]]",
+                "nested_elem:1",
+                "  p=[ooooooooooo-7-2, ppppppppppp-7-2]",
+                "named_local:1",
+                "read_after_move:2 qqqqqqqqqqq-8-2",
+                "call_then_read:2",
+                "still_live:ttttttttttt-9-2",
+                "  p=[uuuuuuuuuuu-10-2, vvvvvvvvvvv-10-2]",
+                "elem_locals:1",
+                "  p=[wwwwwwwwwww-11-2, xxxxxxxxxxx-11-2]",
+                "struct_field:1",
+                "two_params:3",
+                "self_recv:4",
+                "  p=[2, 3]",
+                "scalar_elem:1",
+                "inline_nomatch:2",
+                "  p=[cccccccccccc-2-3, dddddddddddd-2-3]",
+                "inline_match:1",
+                "struct_elem:2",
+                "dRec:ggggggggggg-4-3",
+                "dRec:hhhhhhhhhhh-4-3",
+                "drop_elem:2",
+                "  p=[[iiiiiiiiiii-5-3], [jjjjjjjjjjj-5-3]]",
+                "vec_elem:1",
+                "  p=[[kkk-6-3, lll-6-3], [mmm-6-3, nnn-6-3]]",
+                "nested_elem:1",
+                "  p=[ooooooooooo-7-3, ppppppppppp-7-3]",
+                "named_local:1",
+                "read_after_move:2 qqqqqqqqqqq-8-3",
+                "call_then_read:2",
+                "still_live:ttttttttttt-9-3",
+                "  p=[uuuuuuuuuuu-10-3, vvvvvvvvvvv-10-3]",
+                "elem_locals:1",
+                "  p=[wwwwwwwwwww-11-3, xxxxxxxxxxx-11-3]",
+                "struct_field:1",
+                "two_params:3",
+                "self_recv:4",
+                "  p=[3, 4]",
+                "scalar_elem:1",
+                "end",
+            ],
+            "asan_generic_callee_boxed_array_payload_interior_has_an_owner",
+            120,
+        );
+    }
 }

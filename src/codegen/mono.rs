@@ -4799,10 +4799,49 @@ impl<'ctx> super::Codegen<'ctx> {
                     self.user_enum_boxed_payload_variants(&mono_ty)
                 {
                     // B-2026-09-10-2 — the interior, as at the other two sites.
+                    //
+                    // B-2026-09-16-15 — `array_interior_ok: true`, which this
+                    // site withheld long after the reason to withhold it went
+                    // away. B-2026-09-12-18 set every registration to `false`
+                    // because an ARRAY local moved in by name (`G.Y(a)`) kept
+                    // its own element drop and a second walk here was a double
+                    // free. B-2026-09-13-15 then removed that second owner at
+                    // the constructor — the retraction is the arming half of a
+                    // pair whose other half is exactly this argument — and
+                    // `297237c` flipped the let-site, `compile_function` and
+                    // method-call registrations to `true`. This one was missed,
+                    // so a boxed payload reaching a GENERIC callee had its box
+                    // freed and its interior stranded: the caller had already
+                    // stood down and the callee declined to pick it up.
+                    //
+                    // Measured at `KARAC_OPT_LEVEL=0` under valgrind, `false`
+                    // vs `true`, `enum G[T] { Y(T), N }` handed to `glen[T]`:
+                    //
+                    //     payload                  before    after
+                    //     Array[String, 2]         26 B/2    0 (all freed)
+                    //     Array[Pr, 2]             24 B/2    0
+                    //     Array[Rec, 2]            24 B/2    0  (2 dRec, both)
+                    //     Array[Vec[String], 2]    48+24 B   0
+                    //     Array[Option[String], 2] 24 B/2    0
+                    //     Array[Array[String,2],2] 20 B/4    0
+                    //     Array[i64, 2]            clean     clean
+                    //
+                    // and every MUST-STAY-DECLINED spelling — the ones
+                    // B-2026-09-12-18's table double-freed — stays clean, with
+                    // byte-identical stdout and unchanged `Drop` body counts:
+                    // payload moved from a named array local, from a struct
+                    // field, from two element locals, read after the move, read
+                    // after the call, in a loop, through a branch, two boxed
+                    // params in one callee, the same callee called twice, and
+                    // the owned-`self` receiver the `param_name != "self"`
+                    // carve-out above excludes. A SEEDED `Option` payload over
+                    // an array local is clean on both arms: it is owned by the
+                    // channel B-2026-09-13-15's retraction deliberately does
+                    // not arm, and this arm does not reach it.
                     let inner = if box_only {
                         None
                     } else {
-                        self.enum_boxed_payload_interior_drop(&payload_te, false)
+                        self.enum_boxed_payload_interior_drop(&payload_te, true)
                     };
                     self.track_boxed_enum_var_with_inner_drop_for_payload(
                         &param_name,
