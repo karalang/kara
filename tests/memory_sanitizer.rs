@@ -99256,6 +99256,54 @@ fn main() {
         );
     }
 
+    /// B-2026-09-19-57 — THE LEAK HALF OF THE EXTRA `Drop` BODY, WHICH THE ROW
+    /// LEFT AS ITS LAST UNANSWERED QUESTION.
+    ///
+    /// `sink(fp(Some((P { .. }, P { .. }))))` over a BOXED `Option[(P, P)]`
+    /// whose elements each carry a `String` past inline capacity and a `Vec`
+    /// ran `a`'s `Drop` body twice on every compiled surface, once before the
+    /// consuming call. The row measured that the early body was NOT a
+    /// use-after-free — `sink` still read `r.name` back intact through 3200 B
+    /// of intervening churn — and then asked whether the pairing leaked, since
+    /// a body that runs twice while the memory drops once should not. Nothing
+    /// answered it: the row had no fixture anywhere in the tree.
+    ///
+    /// `52602ba` (B-2026-09-19-34's fix) removed the early body. This cell is
+    /// the leak side of that, in a loop so a per-iteration leak accumulates
+    /// rather than rounding to one block, with both the `String` length and the
+    /// `Vec` length read in every printed line so a freed buffer cannot pass as
+    /// a live one.
+    ///
+    /// The body half is `e2e_heap_payload_part_handed_out_of_an_arm_runs_one_body`
+    /// (tests/codegen.rs), which also carries the cell that refutes the row's
+    /// stated trigger: the discriminator is payload WIDTH, not heap.
+    #[test]
+    fn asan_heap_payload_part_handed_out_of_an_arm_no_leak() {
+        assert_clean_asan_run(
+            r#"
+struct P { k: i64, name: String, xs: Vec[i64] }
+impl Drop for P { fn drop(mut ref self) { println(f"d{self.k}n{self.name.len()}x{self.xs.len()}") } }
+
+fn fp(o: Option[(P, P)]) -> P { match o { Some(t) => { return t.0; } None => { return P { k: 0, name: "z", xs: [0] }; } } }
+fn sink(r: P) { println(f"s{r.k}n{r.name.len()}x{r.xs.len()}") }
+
+fn main() {
+    let mut n = 0;
+    while n < 3 {
+        sink(fp(Some((P { k: n * 2, name: "alpha-padded-out-well-past-any-inline-capacity", xs: [n, n, n] }, P { k: n * 2 + 1, name: "beta-padded-out-well-past-any-inline-capacity-too", xs: [n, n] }))));
+        n = n + 1;
+    }
+    println("end");
+}
+"#,
+            &[
+                "d1n49x2", "s0n46x3", "d0n46x3", "d3n49x2", "s2n46x3", "d2n46x3", "d5n49x2",
+                "s4n46x3", "d4n46x3", "end",
+            ],
+            "b57-boxed-tuple-payload-part-handed-out",
+        );
+    }
+
     /// B-2026-09-19-40 — AN ARM THAT ONLY HANDS ITS BOXED `Array` PAYLOAD TO A
     /// FREE FUNCTION DOUBLE-FREED THE ELEMENT BUFFERS.
     ///

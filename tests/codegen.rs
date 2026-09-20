@@ -39514,6 +39514,145 @@ fn main() {
         }
     }
 
+    /// B-2026-09-19-57 — A HEAP-CARRYING `Option` PAYLOAD PART HANDED OUT OF AN
+    /// ARM RAN ITS `Drop` BODY AN EXTRA TIME BEFORE THE CONSUMING CALL.
+    ///
+    /// `sink(fp(Some((P { name: "a" }, P { name: "b" }))))` over
+    /// `fn fp(o: Option[(P, P)]) -> P { match o { Some(t) => return t.0 } }`
+    /// and `struct P { name: String }` printed `dP[a] dP[b] sank[a] dP[a]` on
+    /// every compiled backend against `--interp`'s correct
+    /// `dP[b] sank[a] dP[a]` — two bodies for one construction of `a`, the
+    /// extra one running BEFORE the consuming call.
+    ///
+    /// FIXED BY A COMMIT WRITTEN FOR A DIFFERENT ROW. `52602ba`,
+    /// B-2026-09-19-34's fix, narrowed a BOXED `Option`/`Result` payload's body
+    /// walk to the parts an arm did not take, and repaired this as a side
+    /// effect. Bisected over the night's commits: `52602ba^` and every earlier
+    /// tree print the extra body, every tree containing it does not, and
+    /// `a29ca2a` — the tree just BEFORE this family's other fix, `1aff971` —
+    /// is already correct, so none of it is owed to that one.
+    ///
+    /// THE ROW'S STATED TRIGGER IS REFUTED BY THE `widescalar` CELL. The row
+    /// concluded "the trigger is the payload element CARRYING HEAP, not the
+    /// shape of the call", because its scalar twin `(S, S)` over
+    /// `struct S { id: i64 }` was correct on all four surfaces. The real
+    /// discriminator is WIDTH: a seeded `Option` has three payload words, so
+    /// `(S, S)` rides inline and `(P, P)` — two three-word `String`s — boxes.
+    /// `(W, W)` over `struct W { a: i64, b: i64 }` carries NO heap at all and
+    /// is four words, and it printed `dW5 dW6 sank5 dW5` on all
+    /// three compiled surfaces at `52602ba^`, with no `String` or `Vec`
+    /// anywhere in the program. Heap was a proxy for
+    /// width the whole time.
+    ///
+    /// THE `method` CELL IS PINNED AT A WRONG ANSWER ON PURPOSE. It is
+    /// B-2026-09-19-56 — a method-call result consumed by a by-value free
+    /// function loses THAT function's own param body, agreed on all four
+    /// surfaces. That row pins the SCALAR spelling; this cell is the heap one,
+    /// which the fix above moved from `dP[a] dP[b] sank[a]` onto the
+    /// interpreter's `dP[b] sank[a]`. Only the EARLY body moved, so nothing
+    /// regressed — but the two spellings now agree on the wrong answer, which
+    /// is the shape no A/B cross-check can see.
+    ///
+    /// THE REMAINING CELLS ARE THE ROW'S OWN "NOT MEASURED" LIST: the `Result`
+    /// head, a payload whose heap is a `Vec` rather than a `String`, and the
+    /// result BOUND to a local instead of consumed by a call.
+    ///
+    /// THE DUE SEQUENCE IS HAND-DERIVED, not taken from the interpreter: `fp`
+    /// owns `o` by value, so the element it does not hand out dies in its
+    /// frame; the one it returns is owned by `sink`'s by-value param and dies
+    /// after the read. Two constructions, two bodies.
+    ///
+    /// The leak half is `asan_heap_payload_part_handed_out_of_an_arm_no_leak`
+    /// (tests/memory_sanitizer.rs), which answers the row's last open question.
+    #[test]
+    fn e2e_heap_payload_part_handed_out_of_an_arm_runs_one_body() {
+        const P: &str = "struct P { name: String }\n\
+             impl Drop for P { fn drop(mut ref self) { println(f\"dP[{self.name}]\") } }\n";
+        const PARG: &str = "Some((P { name: \"a\" }, P { name: \"b\" }))";
+        const SINK: &str = "fn sink(r: P) { println(f\"sank[{r.name}]\") }\n";
+        // (label, source, expectation -- both backends, all four surfaces)
+        for (label, prog, want) in [
+            (
+                "the row's own cell: a free fn, boxed heap payload",
+                format!(
+                    "{P}fn fp(o: Option[(P, P)]) -> P {{ match o {{ Some(t) => {{ return t.0; }} None => {{ return P {{ name: \"z\" }}; }} }} }}\n\
+                     {SINK}fn main() {{ sink(fp({PARG})); }}\n"
+                ),
+                "dP[b]\nsank[a]\ndP[a]\n",
+            ),
+            (
+                "control: the SCALAR twin, which the row measured as correct",
+                "struct S { id: i64 }\n\
+                     impl Drop for S { fn drop(mut ref self) { println(f\"dS{self.id}\") } }\n\
+                     fn fs(o: Option[(S, S)]) -> S { match o { Some(t) => { return t.0; } None => { return S { id: 0 }; } } }\n\
+                     fn sink(r: S) { println(f\"sank{r.id}\") }\n\
+                     fn main() { sink(fs(Some((S { id: 5 }, S { id: 6 })))); }\n".to_string(),
+                "dS6\nsank5\ndS5\n",
+            ),
+            (
+                "widescalar: FOUR scalar words, no heap at all -- the row's trigger, refuted",
+                "struct W { a: i64, b: i64 }\n\
+                     impl Drop for W { fn drop(mut ref self) { println(f\"dW{self.a}\") } }\n\
+                     fn fw(o: Option[(W, W)]) -> W { match o { Some(t) => { return t.0; } None => { return W { a: 0, b: 0 }; } } }\n\
+                     fn sink(r: W) { println(f\"sank{r.a}\") }\n\
+                     fn main() { sink(fw(Some((W { a: 5, b: 50 }, W { a: 6, b: 60 })))); }\n".to_string(),
+                "dW6\nsank5\ndW5\n",
+            ),
+            (
+                "not measured by the row: the `Result` head",
+                format!(
+                    "{P}fn fp(o: Result[(P, P), i64]) -> P {{ match o {{ Ok(t) => {{ return t.0; }} Err(e) => {{ return P {{ name: \"z\" }}; }} }} }}\n\
+                     {SINK}fn main() {{ sink(fp(Result.Ok((P {{ name: \"a\" }}, P {{ name: \"b\" }})))); }}\n"
+                ),
+                "dP[b]\nsank[a]\ndP[a]\n",
+            ),
+            (
+                "not measured by the row: the heap is a `Vec`, and both lengths are read",
+                "struct P { xs: Vec[i64], name: String }\n\
+                     impl Drop for P { fn drop(mut ref self) { println(f\"dP[{self.name}]len{self.xs.len()}\") } }\n\
+                     fn fp(o: Option[(P, P)]) -> P { match o { Some(t) => { return t.0; } None => { return P { xs: [0], name: \"z\" }; } } }\n\
+                     fn sink(r: P) { println(f\"sank[{r.name}]len{r.xs.len()}\") }\n\
+                     fn main() { sink(fp(Some((P { xs: [1, 2, 3], name: \"a\" }, P { xs: [4, 5], name: \"b\" })))); }\n".to_string(),
+                "dP[b]len2\nsank[a]len3\ndP[a]len3\n",
+            ),
+            (
+                "not measured by the row: the result is BOUND rather than consumed",
+                format!(
+                    "{P}fn fp(o: Option[(P, P)]) -> P {{ match o {{ Some(t) => {{ return t.0; }} None => {{ return P {{ name: \"z\" }}; }} }} }}\n\
+                     fn main() {{ let g = fp({PARG}); println(f\"got[{{g.name}}]\"); println(\"end\") }}\n"
+                ),
+                "dP[b]\ngot[a]\ndP[a]\nend\n",
+            ),
+            (
+                // B-2026-09-19-56, open. A method-call result consumed by a
+                // by-value free function runs THAT function's own param body
+                // nowhere, on all four surfaces. 52602ba removed this cell's
+                // EARLY `dP[a]` along with the free spelling's, which left the
+                // two spellings agreeing on a wrong answer -- so the pin is
+                // what keeps a later fix there from landing silently. The
+                // scalar spelling of the same loss is pinned in
+                // `e2e_method_call_keeps_an_unmoved_payload_parts_drop_body`.
+                "pinned (B-2026-09-19-56): the METHOD spelling loses `sink`'s own param body",
+                format!(
+                    "{P}struct H {{ n: i64 }}\n\
+                     impl H {{ fn ep(ref self, o: Option[(P, P)]) -> P {{ match o {{ Some(t) => {{ return t.0; }} None => {{ return P {{ name: \"z\" }}; }} }} }} }}\n\
+                     {SINK}fn main() {{ let h = H {{ n: 1 }}; sink(h.ep({PARG})); }}\n"
+                ),
+                "dP[b]\nsank[a]\n",
+            ),
+        ] {
+            let (interp_out, interp_errs, _, _) = karac::run_program_full_checked(&prog);
+            assert!(
+                interp_errs.is_empty(),
+                "[{label}] interp errored: {interp_errs:?}"
+            );
+            assert_eq!(interp_out.join(""), want, "[{label}] interpreter");
+            if let Some(aot) = run_program(&prog) {
+                assert_eq!(aot, want, "[{label}] AOT");
+            }
+        }
+    }
+
     /// B-2026-09-19-55 — TWO INHERENT IMPLS DEFINING AN ASSOCIATED FUNCTION OF
     /// ONE NAME MADE THE INTERPRETER RUN A HANDED-OUT PAYLOAD PART'S `Drop`
     /// BODY TWICE.
