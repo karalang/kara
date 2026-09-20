@@ -95,7 +95,7 @@ distinguish "bugs flattening" from "we stopped writing them down."
 | run-vs-build | 453 |
 | miscompile | 425 |
 | leak | 383 |
-| double-free | 257 |
+| double-free | 259 |
 | missing-feature | 202 |
 | codegen-gap | 181 |
 | other | 139 |
@@ -110,7 +110,7 @@ distinguish "bugs flattening" from "we stopped writing them down."
 
 | surface | total |
 |---|---|
-| codegen | 1894 |
+| codegen | 1896 |
 | interp | 488 |
 | typecheck | 302 |
 | other | 101 |
@@ -202,7 +202,6 @@ _Generated from `bug-ledger.jsonl` by `scripts/bug-curve.py` (2026-05-20 → 202
 | B-2026-09-19-48 | 2026-09-19 | codegen | medium | A NAMED-LOCAL `Option` ARGUMENT WHOSE PAYLOAD IS A NAMED STRUCT RUNS THE SURVIVING FIELD'S `Drop` BODY TWICE ON EVERY COMPILED SURFACE, and an arm that moves NOTHING doubles BOTH fields -- `let a = Some(Q { r, s }); take(a)` over `fn take(o: Option[Q]) { match o { Some(t) => { let x = t.r; .. } .. } }` prints `dR5 mid dR6 dR6` on jit / `karac build` / `KARAC_AUTO_PAR=0` against the interpreter's `dR5 mid dR6`; the exact complement of B-2026-09-17-38, which LOST the surviving part for a TUPLE payload at the same commit, and the FRESH-TEMP spelling of both struct cells is correct throughout | — |
 | B-2026-09-19-49 | 2026-09-19 | codegen | high | AN `Array[S, 1]` ENUM PAYLOAD RUNS ITS ELEMENT'S `Drop` BODY AGAINST THE WRONG MEMORY ON EVERY COMPILED SURFACE -- `enum D1 { P(Array[Sd, 1]), Q }` prints `dS0` for an element whose field holds 41, on the JIT, `-O0` and `-O2` alike, while `--interp` prints `dS41`; wrong at all three positions measured (let-bound, discarded, fresh-temp argument), with valgrind CLEAN, so no sanitizer leg in the tree can see it and only an A/B against the interpreter can. The boundary is INLINE-vs-BOXED payload WIDTH, not the element count: `Array[Sd, 2]`, `Array[S2w, 1]` and `Array[S3w, 1]` are all correct and a one-word element in a two-field variant is still wrong | — |
 | B-2026-09-19-50 | 2026-09-19 | codegen+interp | medium | A DECLARED `Array[E, N]` PAYLOAD WHOSE ELEMENT IS A USER ENUM RUNS THE ELEMENT'S PAYLOAD `Drop` BODIES ON EVERY COMPILED SURFACE AND NONE UNDER `--interp` -- `enum Ha { P(Array[Mono, 1]), Q }` over `enum Mono { P(R), Q }` diverges at four positions (let-bound, discarded, whole move, consuming match arm) and is an agreed silence at two (fresh-temp argument, struct field), while the struct-element control `Array[R, 2]` agrees on all four surfaces at every position. The two halves have DIFFERENT causes -- the interpreter's declared-`Array` arm dispatches a `Value::Struct` element only, and the two gaps are a measured payload-WIDTH artifact -- so it cannot be closed one position at a time | — |
-| B-2026-09-19-51 | 2026-09-19 | codegen | medium | A STRUCT'S ENUM FIELD HANDED TO A BY-VALUE CALLEE IS FREED TWICE, because a moved-out enum field is never neutralised the way a moved-out `Vec`/`String` field is -- `eatb(h.g)` over `struct Hb { g: Eb }` with `enum Eb { A(Array[String, 2]), B }` reports 11 allocs / 14 frees, 3 Invalid free and 4 Invalid read all in `main`, where `--interp` is correct; NOTHING in the cell is generic | — |
 | B-2026-09-19-52 | 2026-09-19 | codegen | high | A STRUCT-SHAPED VARIANT'S BOXED `Array` PAYLOAD HANDED TO A BY-VALUE CALLEE ABORTS ON BOTH SPELLINGS -- `match g { G.S { a } => eat(a) }` over `Array[String, 2]` exits 134 with 4 valgrind errors, generic AND mono alike, while the tuple-variant spelling of the same program is clean after B-2026-09-19-40 and the read-only arm of this one is clean too, so the hand-on fault survives wherever the pattern is struct-shaped | — |
 | B-2026-09-19-53 | 2026-09-19 | codegen | high | A `shared enum`'s HEAP PAYLOAD IS NEVER FREED, whatever the arm does and whatever the payload is -- a read-only arm over `shared enum G[T] { Y(T), N }` strands 96 B for `Array[String, 2]` and 48 B for `Vec[String]` with output correct on every backend, and the `Array` hand-on arm additionally ABORTS at exit 134 with 96 B still lost, so there are two faults layered on one shape | — |
 | B-2026-09-19-54 | 2026-09-19 | codegen | medium | A GENERIC BOXED `Array[String, N]` PAYLOAD REBOUND TO A LOCAL IN THE ARM INVALID-FREES -- `match g { G.Y(x) => { let y = x; return y[0].len(); } }` reports 2 valgrind errors at `-O0` with output correct on every backend, while its mono twin and all three other arm shapes of the same payload are clean, so the move-binding path has a second owner the hand-on path does not | — |
@@ -213,6 +212,8 @@ _Generated from `bug-ledger.jsonl` by `scripts/bug-curve.py` (2026-05-20 → 202
 | B-2026-09-19-61 | 2026-09-19 | codegen+interp | high | A BY-VALUE `Array` PARAM MOVED INTO A SEEDED `match` SCRUTINEE IS FREED BY BOTH THE CALLER AND THE CALLEE -- the caller keeps its `__karac_drop_array_te_R_2` on purpose, because `array_param_elem_is_callee_owned` excludes an element that runs a user `Drop`, while the callee arms the box's interior walk over the same buffers and frees them on the way out; aborts at `-O0` with two invalid frees. The INTERPRETER independently runs the element bodies TWICE on this cell, so neither backend is the oracle for the other and a fix needs the `let`-local control instead | — |
 | B-2026-09-20-1 | 2026-09-20 | codegen | high | AN INLINE-FITTING `Array[T, 1]` ENUM PAYLOAD BOUND IN A MATCH ARM DOES NOT COMPILE -- `match g { S1.M(x) => x[0].v }` is rejected with `Index operator applied to non-array type` and the hand-on spelling fails LLVM module verification with `Call parameter type does not match function signature`, both on programs `--interp` runs correctly, because codegen binds the arm payload as a bare `i64` word that has lost its array-ness | — |
 | B-2026-09-20-2 | 2026-09-20 | codegen+interp | high | A BOXED `Array[T, N]` ENUM PAYLOAD RUNS ITS ELEMENTS' `Drop` BODIES AT THE WRONG TIME OR NOT AT ALL -- 19 of 20 cells fail, the compiled backends running the bodies BEFORE the statement that produced them where `--interp` runs them after, and every GENERIC read-only arm losing them on both sides; independent of the element's heap and of the arity, so it is the boxed payload itself rather than any property of the element | — |
+| B-2026-09-20-3 | 2026-09-20 | codegen | medium | A CHAINED PLACE'S ENUM FIELD HANDED TO A BY-VALUE CALLEE IS STILL FREED TWICE after B-2026-09-19-51 -- `eatb(k.h.g)` over `struct Kb { h: Hb }` / `struct Hb { g: Eb }` reports 11 allocs / 14 frees and 7 errors, unchanged before and after -51's fix, because its neutraliser takes a NAMED BINDING ROOT ONLY and a two-hop place needs the GEP chain walked | — |
+| B-2026-09-20-4 | 2026-09-20 | codegen | medium | AN ENUM FIELD REACHED THROUGH AN OWNED `self` AND HANDED TO A BY-VALUE CALLEE IS FREED TWICE, and WORSE than the free-function spelling -- `eatb(self.g)` inside `impl Hb` reports 11 allocs / 17 frees and 14 errors where the free-function cell reports 14 frees / 7, so the owned receiver contributes its own over-free on top of the field hand-off; unchanged by B-2026-09-19-51 | — |
 
 ### Relocated
 
@@ -2744,6 +2745,7 @@ _Generated from `bug-ledger.jsonl` by `scripts/bug-curve.py` (2026-05-20 → 202
 | B-2026-09-19-39 | codegen | medium | A GENERIC MULTI-FIELD VARIANT WITH A HEAP-BEARING SIBLING CANNOT TAKE A `BoxedEnumDrop` WITHOUT LOSING THE SIBLING -- `enum Gh[T] { Y(T, String), N }… | 9648154 |
 | B-2026-09-19-40 | codegen | high | AN ARM THAT HANDS A GENERIC BOXED `Array` PAYLOAD TO A BY-VALUE CALLEE INVALID-FREES ON STOCK `main` -- `match g { G1.Y(x) => eat(x) }` over `G1[Arra… | 7934c5b |
 | B-2026-09-19-41 | codegen | medium | A `Drop`-BEARING NAMED FIELD MOVED OUT OF AN `Option` PAYLOAD RUNS ITS BODY LATE, TWICE, OR NOT AT ALL ON THE COMPILED BACKENDS -- `Some(t) => { let… | c6c4cf8 |
+| B-2026-09-19-51 | codegen | medium | A STRUCT'S ENUM FIELD HANDED TO A BY-VALUE CALLEE IS FREED TWICE, because a moved-out enum field is never neutralised the way a moved-out `Vec`/`Stri… | 6431067 |
 | B-2026-09-19-55 | interp | medium | AN ASSOCIATED FUNCTION WHOSE NAME IS SHARED WITH ANOTHER INHERENT IMPL MAKES THE INTERPRETER RUN A HANDED-OUT PAYLOAD PART'S `Drop` BODY TWICE -- `A.… | 8ddde42 |
 | B-2026-09-19-58 | codegen | high | A NAMED `Array` LOCAL MOVED INTO A SEEDED-PAIR CONSTRUCTOR USED DIRECTLY AS A `match` SCRUTINEE IS FREED TWICE -- `let a: Array[R, 2] = [..]; match O… | adff1bf |
 
