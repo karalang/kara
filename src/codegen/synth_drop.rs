@@ -57,6 +57,26 @@ pub(crate) enum PayloadBodiesMask<'m> {
     /// the tuple arm, which threads it to
     /// `emit_tuple_elem_user_drop_bodies_fn_skipping`.
     TupleElems(&'m str, &'m std::collections::BTreeSet<usize>),
+    /// B-2026-09-19-33 — a TUPLE payload masked at DEPTH: same identity, but
+    /// a whole [`FieldSkipTree`] in place of the flat index set, so a path
+    /// that crosses a level (`t.0.1`) masks the leaf it names instead of its
+    /// first hop.
+    ///
+    /// The flat arm above cannot express that and must not try: saying
+    /// "skip element 1 of element 0" as "skip element 0" is a FALSE escape
+    /// that loses element 0's other sibling. That is why
+    /// `optres_payload_projected_escaping_elems` used to DECLINE a path longer
+    /// than one hop outright, leaving the surviving sibling's body owed to
+    /// nobody on every compiled surface — the defect this arm closes.
+    ///
+    /// Kept SEPARATE from `TupleElems` rather than replacing it, because the
+    /// flat arm has three other construction sites whose masks are one-level
+    /// by construction; widening the type there would be churn with no cell
+    /// behind it. A flat tree and a flat set reach the identical walker —
+    /// `emit_tuple_elem_user_drop_bodies_fn_masked` is literally
+    /// `..._nested` with an empty `nested` map — so the two arms agree on
+    /// every shape the old one could express, symbol name included.
+    TupleTree(&'m str, &'m FieldSkipTree),
 }
 
 #[derive(Debug, Default, Clone, PartialEq, Eq)]
@@ -11411,6 +11431,22 @@ impl<'ctx> super::Codegen<'ctx> {
                     .collect::<Vec<_>>()
                     .join("_")
             ),
+            // B-2026-09-19-33 — the DEPTH-masked tuple arm. `FieldSkipTree`
+            // already owns a stable, collision-free rendering of a whole tree
+            // (`mangle`), built on ORDERED containers so two equal trees
+            // produce the identical string and two different ones cannot
+            // collide. Reusing it rather than re-deriving a suffix here is
+            // what keeps this symbol in step with the walker's own, which is
+            // mangled from the same tree one level down.
+            //
+            // A tree whose `nested` is empty renders exactly as the flat arm's
+            // index list would not — `$s0` against `_0` — and that is
+            // deliberate: the two arms select different emitter entry points,
+            // so a shared symbol would let one arm's memoized walker answer
+            // the other's call.
+            Some(PayloadBodiesMask::TupleTree(key, tree)) if !tree.is_empty() => {
+                format!("$skiptuptree{key}_{}", tree.mangle())
+            }
             Some(_) => String::new(),
         };
         let TypeKind::Path(p) = &te.kind else {
@@ -12346,6 +12382,16 @@ impl<'ctx> super::Codegen<'ctx> {
                             self.emit_tuple_elem_user_drop_bodies_fn_skipping(
                                 agg_ty, elem_tes, &skip,
                             )
+                        }
+                        // B-2026-09-19-33 — the DEPTH-masked sibling, which
+                        // reaches the tree-driven walker B-2026-09-06-5 built
+                        // for the struct channel's tuple-typed fields. Same
+                        // identity check as the flat arm, for the same reason:
+                        // a `Result` walker arrives here once per payload arm.
+                        Some(PayloadBodiesMask::TupleTree(key, tree))
+                            if !tree.is_empty() && key == Self::display_mangle_te(&pte) =>
+                        {
+                            self.emit_tuple_elem_user_drop_bodies_fn_tree(agg_ty, elem_tes, tree)
                         }
                         _ => self.emit_tuple_elem_user_drop_bodies_fn(agg_ty, elem_tes),
                     },

@@ -4734,13 +4734,13 @@ impl<'ctx> super::Codegen<'ctx> {
         callee_name: &str,
         arg_index: usize,
         arg: &Expr,
-    ) -> Option<(TypeExpr, std::collections::BTreeSet<usize>)> {
+    ) -> Option<(TypeExpr, super::synth_drop::FieldSkipTree)> {
         let program = self.program_snapshot.as_deref()?;
         let bare = callee_name.rsplit('.').next().unwrap_or(callee_name);
         let want_variant = self.ctor_variant_name_of_arg(arg);
         let check = |f: &crate::ast::Function,
                      ast_i: usize|
-         -> Option<(TypeExpr, std::collections::BTreeSet<usize>)> {
+         -> Option<(TypeExpr, super::synth_drop::FieldSkipTree)> {
             let p = f.params.get(ast_i)?;
             let TypeKind::Path(path) = &p.ty.kind else {
                 return None;
@@ -4782,10 +4782,20 @@ impl<'ctx> super::Codegen<'ctx> {
                         // the one the interpreter has used since
                         // B-2026-09-13-5, so ask it rather than standing the
                         // whole payload down.
-                        let mut taken = match parts.get(pname.as_str()).and_then(|m| m.get(v)) {
-                            Some(s) => s.clone(),
-                            None => Self::optres_payload_projected_escaping_elems(f, ast_i, v),
-                        };
+                        // B-2026-09-19-33 — the element-wise map answers in
+                        // TOP-LEVEL indices and the projection channel in
+                        // PATHS, so they are resolved to the same tree here
+                        // rather than to one flat set. A top-level index is
+                        // just a one-hop path, which is what keeps the two
+                        // channels expressible in one container.
+                        let mut paths: Vec<crate::ast::ParamPath> =
+                            match parts.get(pname.as_str()).and_then(|m| m.get(v)) {
+                                Some(s) => s
+                                    .iter()
+                                    .map(|i| vec![crate::ast::ParamPart::TupleIndex(*i)])
+                                    .collect(),
+                                None => Self::optres_payload_projected_escaping_paths(f, ast_i, v),
+                            };
                         // B-2026-09-17-38 — a part can also leave the argument
                         // WITHOUT leaving the frame. `Some(t) => { let x = t.0;
                         // println("mid") }` moves element 0 into a local that
@@ -4806,7 +4816,7 @@ impl<'ctx> super::Codegen<'ctx> {
                         // from both ends of the call, which is what keeps them
                         // from drifting into a lost body (both stand down) or a
                         // doubled one (neither does).
-                        taken.extend(Self::optres_payload_consumed_elems(f, ast_i, v));
+                        paths.extend(Self::optres_payload_consumed_paths(f, ast_i, v));
                         // An empty set means nothing to narrow — either the
                         // element-wise map could not occur empty (it is only
                         // written where the map above is) or the projection
@@ -4814,12 +4824,19 @@ impl<'ctx> super::Codegen<'ctx> {
                         // and for a conditional hand-back. A set covering every
                         // part is the old answer spelled out. Both decline
                         // exactly as before.
-                        if taken.is_empty()
-                            || self.tuple_payload_arity(&p.ty, v) == Some(taken.len())
+                        let tree = self.optres_payload_skip_tree(&p.ty, v, &paths)?;
+                        // A mask covering every part AT THE TOP LEVEL is the
+                        // old all-or-nothing answer spelled out, and declining
+                        // keeps the historical shape. A tree with any `nested`
+                        // level is never that, however wide its `here` is:
+                        // masking inside a surviving element is precisely the
+                        // narrowing this arm exists to express.
+                        if tree.nested.is_empty()
+                            && self.tuple_payload_arity(&p.ty, v) == Some(tree.here.len())
                         {
                             return None;
                         }
-                        return Some((p.ty.clone(), taken));
+                        return Some((p.ty.clone(), tree));
                     }
                     // The argument is not a constructor and so cannot say
                     // which variant it is. Decline, which leaves the status quo
@@ -4827,7 +4844,7 @@ impl<'ctx> super::Codegen<'ctx> {
                     _ => return None,
                 }
             }
-            Some((p.ty.clone(), std::collections::BTreeSet::new()))
+            Some((p.ty.clone(), super::synth_drop::FieldSkipTree::default()))
         };
         program.items.iter().find_map(|item| match item {
             crate::ast::Item::Function(f) if f.name == callee_name => check(f, arg_index),
@@ -4913,37 +4930,50 @@ impl<'ctx> super::Codegen<'ctx> {
     /// (`PartScanCx`'s statement-level rule), so both keep their pre-existing
     /// behaviour here by construction.
     ///
-    /// ONLY THE FIRST HOP, which is a real limit rather than a simplification.
-    /// `PayloadBodiesMask::TupleElems` is a flat index set, so it can say "skip
-    /// element 0" and cannot say "skip element 1 OF element 0" — and saying the
-    /// latter as the former would be a FALSE escape that loses a sibling's
-    /// body, the exact trade that mask's own doc warns about. A deeper path
-    /// (`return t.0.1` over `Option[((R, R), i64)]`) therefore reports its
-    /// first hop, which a caller must reject; the caller's arity check does
-    /// not catch that, so the depth filter is HERE: a path longer than one hop
-    /// contributes nothing and the whole answer stays empty, which the caller
-    /// reads as "decline". Filed as B-2026-09-19-33.
-    fn optres_payload_projected_escaping_elems(
+    /// ANY DEPTH since B-2026-09-19-33, which is what this returns PATHS for
+    /// rather than the first hop of each.
+    ///
+    /// It used to return a flat `BTreeSet<usize>` and DECLINE a path longer
+    /// than one hop, because `PayloadBodiesMask::TupleElems` can say "skip
+    /// element 0" and cannot say "skip element 1 OF element 0" — and saying
+    /// the latter as the former is a FALSE escape that loses element 0's other
+    /// sibling. The decline was the safe half of that trade and it still cost a
+    /// body: `return t.0.1` over `Option[((R, R), i64)]` printed `got:6 dR6`
+    /// against the interpreter's correct `dR5 got:6 dR6`, so element 5's body
+    /// ran on NO surface.
+    ///
+    /// The row that filed it proposed building a tree-shaped tuple mask. None
+    /// was needed: `FieldSkipTree` is index-keyed at every level, B-2026-09-06-5
+    /// already gave the tuple walker a tree-driven entry point
+    /// (`emit_tuple_elem_user_drop_bodies_fn_tree`) and a nested dispatcher that
+    /// takes a struct OR a tuple at each hop, and `insert_tuple_skip_path`
+    /// already resolves a mixed path level by level through declared types. The
+    /// only flat thing left was this answer and the mask arm carrying it, so
+    /// the repair is to hand the paths on whole and let
+    /// `Self::optres_payload_skip_tree` resolve them.
+    ///
+    /// The under-approximating direction is unchanged and still load-bearing:
+    /// `insert_tuple_skip_path` drops a path WHOLE the moment one level does
+    /// not resolve, never its prefix — a prefix would be that same false
+    /// escape arriving by another route.
+    fn optres_payload_projected_escaping_paths(
         f: &crate::ast::Function,
         arg_index: usize,
         variant: &str,
-    ) -> std::collections::BTreeSet<usize> {
+    ) -> Vec<crate::ast::ParamPath> {
         let paths = crate::ast::fn_escaping_param_payload_part_paths(f, arg_index, Some(variant));
-        let mut out = std::collections::BTreeSet::new();
-        for path in paths {
-            match path.as_slice() {
-                [crate::ast::ParamPart::TupleIndex(i)] => {
-                    out.insert(*i);
-                }
-                // A struct payload (`Field`) has a callee-side owner for the
-                // surviving field already, which is why its cells are correct
-                // on all four surfaces; and a deeper tuple path cannot be
-                // expressed by this mask. Either one makes the whole answer
-                // unusable, not merely incomplete.
-                _ => return std::collections::BTreeSet::new(),
-            }
+        // A path rooted at a `Field` means a STRUCT payload, whose surviving
+        // field has a callee-side owner already — a different channel, and
+        // answering on both would mask one walk twice. Every path must be
+        // tuple-rooted or the whole answer is unusable rather than merely
+        // incomplete, which is the conservatism this channel has always kept.
+        if paths
+            .iter()
+            .any(|p| !matches!(p.first(), Some(crate::ast::ParamPart::TupleIndex(_))))
+        {
+            return Vec::new();
         }
-        out
+        paths
     }
 
     /// B-2026-09-17-38 — the CONSUMED-IN-FRAME sibling of
@@ -4953,28 +4983,67 @@ impl<'ctx> super::Codegen<'ctx> {
     /// Same shape, same conservatism, different channel:
     /// [`crate::ast::fn_consumed_param_payload_part_paths`] is the predicate
     /// B-2026-09-14-7 wrote for the callee end of this exact call, and reading
-    /// it here is what keeps the two ends on one answer. A `Field` path means a
-    /// STRUCT payload, whose surviving field already has a callee-side owner —
-    /// the reason the struct cells of this shape are correct on all four
-    /// surfaces — and a deeper path cannot be expressed by the element mask, so
-    /// either one makes the whole answer unusable rather than merely
-    /// incomplete.
-    fn optres_payload_consumed_elems(
+    /// it here is what keeps the two ends on one answer. A `Field`-ROOTED path
+    /// means a STRUCT payload, whose surviving field already has a callee-side
+    /// owner — the reason the struct cells of this shape are correct on all
+    /// four surfaces — so it makes the whole answer unusable rather than
+    /// merely incomplete.
+    ///
+    /// B-2026-09-19-33 — a DEEPER path is no longer unusable, and this arm had
+    /// the identical defect its escaping sibling was filed for. Measured on
+    /// `Some(t) => { let x = t.0.1; println("mid"); return x.id }` over
+    /// `Option[((R, R), i64)]`: `mid dR32 got:32` on every compiled surface
+    /// against the interpreter's correct `mid dR32 dR31 got:32`, so the
+    /// sibling element's body ran nowhere. Both arms feed one tree now, which
+    /// is why one fix closes both.
+    fn optres_payload_consumed_paths(
         f: &crate::ast::Function,
         arg_index: usize,
         variant: &str,
-    ) -> std::collections::BTreeSet<usize> {
+    ) -> Vec<crate::ast::ParamPath> {
         let paths = crate::ast::fn_consumed_param_payload_part_paths(f, arg_index, Some(variant));
-        let mut out = std::collections::BTreeSet::new();
-        for (_, path) in paths {
-            match path.as_slice() {
-                [crate::ast::ParamPart::TupleIndex(i)] => {
-                    out.insert(*i);
-                }
-                _ => return std::collections::BTreeSet::new(),
-            }
+        let paths: Vec<crate::ast::ParamPath> = paths.into_iter().map(|(_, p)| p).collect();
+        if paths
+            .iter()
+            .any(|p| !matches!(p.first(), Some(crate::ast::ParamPart::TupleIndex(_))))
+        {
+            return Vec::new();
         }
-        out
+        paths
+    }
+
+    /// B-2026-09-19-33 — resolve tuple-rooted payload paths against the
+    /// payload's declared element types, into the [`FieldSkipTree`] the
+    /// tree-driven tuple walker consumes.
+    ///
+    /// The two path channels above are unioned into ONE tree deliberately.
+    /// They answer different questions — which parts outlive the call, and
+    /// which ones the callee moves into its own frame — but the caller's walk
+    /// asks only "which parts does this frame still owe a body for", and a
+    /// part is owed by nobody else in either case. Two trees would have to be
+    /// merged at the walker anyway, and merging masks is where a FALSE escape
+    /// gets introduced.
+    ///
+    /// `None` when the payload is not a tuple, or when no path resolved: both
+    /// mean "cannot narrow", which the caller reads as the historical
+    /// all-or-nothing verdict rather than as an empty mask.
+    fn optres_payload_skip_tree(
+        &self,
+        param_te: &TypeExpr,
+        variant: &str,
+        paths: &[crate::ast::ParamPath],
+    ) -> Option<super::synth_drop::FieldSkipTree> {
+        if paths.is_empty() {
+            return None;
+        }
+        let TypeKind::Tuple(elem_tes) = optres_payload_te(param_te, Some(variant))?.kind else {
+            return None;
+        };
+        let mut tree = super::synth_drop::FieldSkipTree::default();
+        for path in paths {
+            self.insert_tuple_skip_path(&mut tree, &elem_tes, path);
+        }
+        (!tree.is_empty()).then_some(tree)
     }
 
     /// The number of elements in `param_te`'s payload for `variant`, when that
@@ -5137,7 +5206,7 @@ impl<'ctx> super::Codegen<'ctx> {
         &mut self,
         val: BasicValueEnum<'ctx>,
         param_te: &TypeExpr,
-        skip_parts: &std::collections::BTreeSet<usize>,
+        skip_parts: &super::synth_drop::FieldSkipTree,
     ) {
         // B-2026-09-10-9 — stand down when the payload BOXES into a box the
         // CALLEE owns. `functions.rs`'s param-site arm registers a
@@ -5192,9 +5261,13 @@ impl<'ctx> super::Codegen<'ctx> {
             let payload_key =
                 Self::sole_tuple_payload_te(param_te).map(|te| Self::display_mangle_te(&te));
             match payload_key {
+                // B-2026-09-19-33 — the TREE arm. This site's mask can now
+                // carry depth, so it takes the tree-driven walker; the flat
+                // `TupleElems` arm stays for the three sites whose masks are
+                // one-level by construction.
                 Some(key) => self.emit_optres_payload_user_drop_bodies_fn_skipping(
                     param_te,
-                    super::synth_drop::PayloadBodiesMask::TupleElems(&key, skip_parts),
+                    super::synth_drop::PayloadBodiesMask::TupleTree(&key, skip_parts),
                 ),
                 None => None,
             }

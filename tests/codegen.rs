@@ -38579,20 +38579,41 @@ fn main() {
     /// the interpreter at the due sequence, and the pins were moved
     /// deliberately rather than regenerated, which is what that row asked for.
     ///
-    /// TWO CELLS REMAIN PINNED DIVERGENT AND NEITHER IS FIXABLE FROM HERE:
+    /// B-2026-09-19-33 CLOSED THE NESTED HALF, and it is where three more
+    /// cells joined. `nested-projection`'s divergent AOT pin now matches the
+    /// interpreter, and `nested-projection-tuple-then-field`,
+    /// `-result-head` and `-consumed-in-frame` pin the rest of that channel:
+    /// a mixed tuple-then-struct path, the `Result` head, and the arm where
+    /// the part is moved into a local that dies inside the callee. The last
+    /// had the same defect from the other path channel and is fixed by the
+    /// same tree, both channels being unioned into one mask.
+    ///
+    /// The row proposed BUILDING a tree-shaped tuple mask. None was needed:
+    /// `FieldSkipTree` is index-keyed at every level, B-2026-09-06-5 already
+    /// gave the tuple walker a tree-driven entry point and a nested dispatcher
+    /// that takes a struct OR a tuple at each hop, and `insert_tuple_skip_path`
+    /// already resolved a mixed path through declared types. Only the mask arm
+    /// and this channel's answer were still flat.
+    ///
+    /// ONE CELL REMAINS PINNED DIVERGENT AND IS NOT FIXABLE FROM HERE:
     ///
     /// ```text
-    ///   nested-projection       due dR5 got:6 dR6 end   AOT got:6 dR6 end
     ///   boxed-payload-...       due dH6 got:5 dH5 end   AOT dH5 dH6 got:5 dH5 end
     /// ```
     ///
-    /// The first is a mask-shape limit: `PayloadBodiesMask::TupleElems` is a
-    /// flat index set and cannot say "skip element 1 OF element 0", so the
-    /// depth filter declines rather than report a first hop that would be a
-    /// FALSE escape. The second is a different channel entirely — a payload
-    /// too wide to ride inline boxes, and there the projection spelling runs
-    /// the ESCAPING part's body twice. Both measured identical before and
-    /// after; filed as B-2026-09-19-33 and B-2026-09-19-34.
+    /// A different channel entirely — a payload too wide to ride inline boxes,
+    /// and the caller-side walk this fixture exercises STANDS DOWN there by
+    /// construction (`track_optres_arg_temp_bodies` returns early for a box
+    /// the callee owns), so no mask shape on this side can reach it. Measured
+    /// identical before and after B-2026-09-19-33; filed as B-2026-09-19-34.
+    ///
+    /// AND THE NESTED SHAPE IS STILL BROKEN ON THREE CHANNELS THIS FIXTURE
+    /// DOES NOT COVER, measured while fixing the one above and filed rather
+    /// than pinned here, because each belongs to a different walk: a
+    /// STRUCT-rooted path whose inner hop is a tuple (`w.p.1`) runs the
+    /// escaping element's body twice; the BOXED counterparts of every cell
+    /// here are wrong in both directions; and the NAMED-LOCAL argument
+    /// spelling is wrong on BOTH backends at once, differently.
     ///
     /// ONE CELL AGREES AT A WRONG ANSWER, deliberately:
     /// `conditional-projection-branch-taken`. The escape scan records a
@@ -38707,20 +38728,74 @@ fn main() {
                 "got:5\ndR5\nend\n",
             ),
             (
-                // STILL DIVERGENT after B-2026-09-17-30's fix, and for a
-                // stated reason: `PayloadBodiesMask::TupleElems` is a flat
-                // index set, so it can say "skip element 0" and cannot say
-                // "skip element 1 OF element 0". Reporting the first hop alone
-                // would be a FALSE escape that loses element 0's sibling, so
-                // the depth filter declines and this cell keeps its compiled
-                // loss. Filed as B-2026-09-19-33.
+                // FIXED by B-2026-09-19-33: the AOT pin below recorded the
+                // compiled loss of element 0's sibling and now matches the
+                // interpreter at the due sequence. Moved deliberately, which
+                // is what the row asked of whoever fixed it.
+                //
+                // The depth filter that produced the loss is gone rather than
+                // widened. It declined any path longer than one hop because
+                // `PayloadBodiesMask::TupleElems` is flat and reporting the
+                // first hop alone would be a FALSE escape losing element 0's
+                // sibling — a real trade, correctly made. What the row did not
+                // know is that the tree the fix needs already existed
+                // (B-2026-09-06-5's `emit_tuple_elem_user_drop_bodies_fn_tree`
+                // plus `insert_tuple_skip_path`), so the mask gained a
+                // `TupleTree` arm and the paths are now resolved at full depth
+                // instead of being truncated or declined.
                 "nested-projection",
                 format!(
                     "{R}fn eat(o: Option[((R, R), i64)]) -> R {{ match o {{ Some(t) => {{ return t.0.1; }} None => {{ return R {{ id: 0 }}; }} }} }}\n\
                      fn main() {{ let got = eat(Some(((R {{ id: 5 }}, R {{ id: 6 }}), 9i64))); println(f\"got:{{got.id}}\"); println(\"end\") }}\n"
                 ),
-                "got:6\ndR6\nend\n",
                 "dR5\ngot:6\ndR6\nend\n",
+                "dR5\ngot:6\ndR6\nend\n",
+            ),
+            (
+                // B-2026-09-19-33 — the MIXED-HOP sibling of the cell above,
+                // and the one that proves the fix resolves a path rather than
+                // special-casing a tuple-of-tuples. The inner hop is a STRUCT
+                // FIELD, so `insert_tuple_skip_path` has to cross from the
+                // tuple channel into `insert_skip_path` and mask field `s` of
+                // `P` one level down. It carried the identical compiled loss
+                // (`got:22 dR22`) and was not in the row.
+                "nested-projection-tuple-then-field",
+                format!(
+                    "{R}struct P {{ r: R, s: R }}\n\
+                     fn eat(o: Option[(P, i64)]) -> R {{ match o {{ Some(t) => {{ return t.0.s; }} None => {{ return R {{ id: 0 }}; }} }} }}\n\
+                     fn main() {{ let got = eat(Some((P {{ r: R {{ id: 21 }}, s: R {{ id: 22 }} }}, 9i64))); println(f\"got:{{got.id}}\"); println(\"end\") }}\n"
+                ),
+                "dR21\ngot:22\ndR22\nend\n",
+                "dR21\ngot:22\ndR22\nend\n",
+            ),
+            (
+                // B-2026-09-19-33 — the `Result` head, which shares the whole
+                // mechanism and is pinned because the mask is keyed on the
+                // MANGLED payload type precisely so a two-tuple-arm `Result`
+                // cannot have one arm's indices applied to the other.
+                "nested-projection-result-head",
+                format!(
+                    "{R}fn eat(o: Result[((R, R), i64), i64]) -> R {{ match o {{ Ok(t) => {{ return t.0.1; }} Err(e) => {{ return R {{ id: 0 }}; }} }} }}\n\
+                     fn main() {{ let got = eat(Ok(((R {{ id: 61 }}, R {{ id: 62 }}), 9i64))); println(f\"got:{{got.id}}\"); println(\"end\") }}\n"
+                ),
+                "dR61\ngot:62\ndR62\nend\n",
+                "dR61\ngot:62\ndR62\nend\n",
+            ),
+            (
+                // B-2026-09-19-33 — the CONSUMED-IN-FRAME arm, which had the
+                // identical defect and is fixed by the same tree because both
+                // path channels are unioned into one. The part never leaves
+                // the callee (`let x = t.0.1` dies at the arm's end), so the
+                // caller owes element 0's sibling and owed it to nobody:
+                // `mid dR32 got:32` compiled against the interpreter's
+                // `mid dR32 dR31 got:32`.
+                "nested-projection-consumed-in-frame",
+                format!(
+                    "{R}fn eat(o: Option[((R, R), i64)]) -> i64 {{ match o {{ Some(t) => {{ let x = t.0.1; println(\"mid\"); return x.id; }} None => {{ return 0i64; }} }} }}\n\
+                     fn main() {{ println(f\"got:{{eat(Some(((R {{ id: 31 }}, R {{ id: 32 }}), 9i64)))}}\"); println(\"end\") }}\n"
+                ),
+                "mid\ndR32\ndR31\ngot:32\nend\n",
+                "mid\ndR32\ndR31\ngot:32\nend\n",
             ),
             (
                 "guard-whole-binding-returned",

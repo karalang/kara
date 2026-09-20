@@ -2511,13 +2511,26 @@ impl<'ctx> super::Codegen<'ctx> {
                                         && self.tuple_payload_arity(&inst, v)
                                             != Some(esc.len()) =>
                                 {
-                                    Some(esc.clone())
+                                    // B-2026-09-19-33 — the mask is a
+                                    // `FieldSkipTree` now. This leg still
+                                    // answers in TOP-LEVEL indices only, which
+                                    // is a flat tree: it reads the element-wise
+                                    // map and never the PROJECTION channel, so
+                                    // a nested path cannot reach it in the
+                                    // first place. That asymmetry with the
+                                    // concrete leg is pre-existing and
+                                    // untouched here — widening it needs its
+                                    // own measurement, not a type change.
+                                    Some(super::synth_drop::FieldSkipTree {
+                                        here: esc.clone(),
+                                        ..Default::default()
+                                    })
                                 }
                                 _ => None,
                             }
                         })
                     } else {
-                        Some(std::collections::BTreeSet::new())
+                        Some(super::synth_drop::FieldSkipTree::default())
                     };
                     if let Some(skip_parts) = skip_parts {
                         if matches!(&inst.kind, TypeKind::Path(pp)
