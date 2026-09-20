@@ -125,7 +125,38 @@ impl<'ctx> super::Codegen<'ctx> {
         let TypeKind::Path(p) = &te.kind else {
             return None;
         };
-        let head = p.segments.last()?.clone();
+        // B-2026-09-16-15 — CANONICALIZE `str` to `String`, the same
+        // normalization `seed_synthetic_pattern_binding_type` (calls.rs)
+        // performs for the same reason and states in its own doc: the
+        // typechecker lowers `Type::Str` to the head `"str"`
+        // (`typechecker/patterns.rs`, `Type::Str => path("str", vec![])`) while
+        // the pattern tables this function is the FALLBACK for spell it
+        // `"String"`. Every consumer downstream compares against the pattern
+        // spelling, so an un-normalized head matches nothing and the binding
+        // silently acquires no metadata at all.
+        //
+        // The measured cost of the missing normalization was a leak, not a
+        // dispatch failure, which is why it survived: `bind_pattern_values`
+        // sets `bound_vec_elem` under `type_name == "String" || "CString"`, so
+        // a monomorphized `match g { G1.Y(v) => … }` over `G1[String]`
+        // registered NO end-of-arm buffer free. Meanwhile the box's own
+        // interior drop is retracted per arm by `clear_boxed_enum_inner_drop`
+        // (`interior_arm_owned` is TRUE for a String payload), so the interior
+        // was owned by nobody: 11 B in 1 block per call at `KARAC_OPT_LEVEL=0`,
+        // envelope freed and buffer stranded. The CONCRETE twin
+        // `fn c(g: G1[String])` never reaches here — the typechecker records
+        // its surface type directly — which is why only the generic callee
+        // leaked and why the row's own attribution to
+        // `boxed_payload_interior_taken_by_arm`'s `_` tail could not be right:
+        // that predicate answers TRUE for the clean concrete cell too.
+        //
+        // `StringSlice` is deliberately NOT folded in here. It is a distinct
+        // head, it is a BORROW with nothing to free, and the gate below
+        // excludes it on purpose (B-2026-08-26-13).
+        let head = match p.segments.last()?.as_str() {
+            "str" => "String".to_string(),
+            other => other.to_string(),
+        };
         let inner = p
             .generic_args
             .as_ref()

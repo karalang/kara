@@ -87603,6 +87603,102 @@ fn main() {
         );
     }
 
+    /// B-2026-09-16-15 — a boxed generic-enum `String` payload whose match arm
+    /// BINDS the payload and never USES it.
+    ///
+    /// Every pre-existing fixture in this family reads its binding —
+    /// `asan_generic_enum_boxed_string_payload_frees_its_interior`'s `take`
+    /// does `x.contains("row")` — and that is exactly why this survived. The
+    /// binding's metadata is registered from its SURFACE TYPE NAME, and the
+    /// name is what was missing, so a cell that goes on to dispatch a method
+    /// through that same table cannot be the one that notices.
+    ///
+    /// CAUSE, and it is not the one the row was filed under. The typechecker
+    /// lowers `Type::Str` to the head `"str"`
+    /// (`typechecker/patterns.rs`, `Type::Str => path("str", vec![])`) while
+    /// the pattern tables spell it `"String"`; `seed_synthetic_pattern_binding_type`
+    /// (`codegen/calls.rs`) normalizes between the two and says so in its doc.
+    /// `mono_payload_binding_surface` — the FALLBACK those tables use for a
+    /// bare-`T` payload the checker records no surface type for — did not.
+    /// So `bind_pattern_values` saw `"str"`, matched neither its
+    /// `"Vec" | "VecDeque"` arm nor its `"String" | "CString"` one, left
+    /// `bound_vec_elem` at `None`, and registered no end-of-arm buffer free —
+    /// while `clear_boxed_enum_inner_drop` retracted the box's own interior
+    /// drop for the same arm, because `boxed_payload_interior_taken_by_arm`
+    /// answers TRUE for a String payload. Envelope freed, buffer owned by
+    /// nobody.
+    ///
+    /// The row attributed it to that predicate's `_ => generic_args.is_none()`
+    /// tail answering TRUE for a bare `T`. That cannot be right, and `c3` is
+    /// the control that shows it: a CONCRETE `fn c(g: G1[String])` reaches the
+    /// same predicate with the same answer and is clean, because the checker
+    /// records its surface type directly and the fallback never runs.
+    ///
+    /// MEASURED at `KARAC_OPT_LEVEL=0`, distinct string LENGTHS so a leaked
+    /// byte count names its own cell: 11 B in 1 block per call before, 0 after,
+    /// with `c2`/`c3`/`c4`/`c5` byte-identical across the change.
+    ///
+    /// NOT FIXED HERE, and deliberately not folded in: an `Array[String, N]`
+    /// payload still strands its ELEMENT buffers, with or without a match
+    /// (measured both ways in one binary — the match is irrelevant to it, which
+    /// is why the row's "two shapes" are really one mechanism plus this one).
+    /// That path wants an element-draining registration and sits next to the
+    /// `array_interior_ok` gate B-2026-09-12-18 added to stop a measured double
+    /// free, so it is its own change with its own reduction.
+    #[test]
+    fn asan_boxed_generic_enum_string_payload_unused_arm_binding_frees_its_buffer() {
+        let mut expected: Vec<&str> = Vec::new();
+        for _ in 0..8 {
+            expected.extend_from_slice(&["c1:1", "c2:2", "c3:3", "c4", "c5:5"]);
+        }
+        expected.push("end");
+        assert_clean_asan_run_min_allocs(
+            r#"
+enum G1[T] { Y(T), N }
+
+// c1 — THE CELL. Generic callee, arm binds `va` and never reads it.
+fn g_unused[T](g: G1[T]) -> i64 { match g { Y(va) => { return 1i64; } N => { return 0i64; } } }
+// c2 — same callee, WILDCARD arm: binds nothing, so no retraction at all.
+fn g_wild[T](g: G1[T]) -> i64 { match g { Y(_) => { return 2i64; } N => { return 0i64; } } }
+// c3 — CONTROL that refutes the filed attribution. Concrete callee, same
+// boxed layout, same unused binding, clean before this fix and after it.
+fn c_unused(g: G1[String]) -> i64 { match g { Y(vc) => { return 3i64; } N => { return 0i64; } } }
+// c4 — generic callee whose arm CONSUMES its binding. Must stay a single
+// free: the arm owns the interior and the box's drop is retracted for it.
+fn g_take[T](g: G1[T]) -> G1[T] { match g { Y(vb) => { return Y(vb); } N => { return N; } } }
+// c5 — generic callee that READS its binding, the shape existing fixtures
+// already cover, included so a regression here cannot hide behind c1.
+fn g_read(g: G1[String]) -> i64 { match g { Y(vd) => { if vd.contains("row") { return 5i64; } return 9i64; } N => { return 0i64; } } }
+
+fn main() {
+    let n = env.args().len() as i64;
+    let mut i: i64 = 0i64;
+    while i < 8i64 {
+        let c1: G1[String] = Y(f"row-aaaaaaaaaaaa-{i}-{n}");
+        println(f"c1:{g_unused(c1)}");
+        let c2: G1[String] = Y(f"row-bbbbbbbbbbbb-{i}-{n}");
+        println(f"c2:{g_wild(c2)}");
+        let c3: G1[String] = Y(f"row-cccccccccccc-{i}-{n}");
+        println(f"c3:{c_unused(c3)}");
+        let c4: G1[String] = Y(f"row-dddddddddddd-{i}-{n}");
+        let r4 = g_take(c4);
+        println("c4");
+        let c5: G1[String] = Y(f"row-eeeeeeeeeeee-{i}-{n}");
+        println(f"c5:{g_read(c5)}");
+        i = i + 1i64;
+    }
+    println("end");
+}
+"#,
+            &expected,
+            "asan_boxed_generic_enum_string_payload_unused_arm_binding_frees_its_buffer",
+            // Five heap strings per round over eight rounds, minus a host
+            // floor — the same shape of floor the sibling above uses, chosen
+            // so an optimizer-folded version (~10) cannot pass.
+            30,
+        );
+    }
+
     /// B-2026-09-11-4 — the four payload shapes B-2026-09-11-3 deliberately
     /// left alone: a TUPLE, an `Array`, an `Option[String]` and a user GENERIC
     /// struct, each inside `enum Slot[T] { Filled(T), Blank }`.
