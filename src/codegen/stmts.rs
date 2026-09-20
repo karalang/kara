@@ -19462,8 +19462,22 @@ impl<'ctx> super::Codegen<'ctx> {
             // — the erasure `emit_aggregate_heap_field_frees`'s own doc warns
             // about. Both leak the two `String`s; only the second leaves a
             // drop call in the IR.
-            if let Some(tes) = self.tuple_var_elem_tes(n.as_str()) {
-                return Some(tes);
+            //
+            // ASK THE PARAM REGISTRY, NOT THE ACCESSOR. The accessor's FIRST
+            // tier is this map, and its second is a names-derived synthesis
+            // that answers for any tuple-typed name at all — including one
+            // bound by a MATCH PATTERN out of a boxed payload, which is not a
+            // by-value param and whose elements this site must not re-register.
+            // Calling the accessor here doubled element 1's `Drop` body in
+            // B-2026-09-20-17's pinned cell (`Some(t) => { let u = t; return
+            // u.0; }` over `Option[(H, H)]`), printing `dH6 dH5 dH6 got:5 dH5`
+            // where that row pins `dH5 dH6 got:5 dH5` — measured, as a named-
+            // tree control against `origin/main`. The question this site is
+            // asking is "is the source a by-value tuple param", and the
+            // registry `functions.rs` writes at its param arm answers exactly
+            // that; the synthesis answers a wider one.
+            if let Some(tes) = self.var_types.tuple_var_elem_type_exprs.get(n.as_str()) {
+                return Some(tes.clone());
             }
         }
         // #24 (B-2026-06-14-2) — the call-result source with no annotation
