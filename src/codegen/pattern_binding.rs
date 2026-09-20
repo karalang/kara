@@ -1352,7 +1352,58 @@ impl<'ctx> super::Codegen<'ctx> {
                                     .pattern_state
                                     .pattern_binding_masked_view_names
                                     .contains(name.as_str());
-                                if payload_of_owned_param || payload_of_masked_slot {
+                                // B-2026-09-19-43 — NOT when the scrutinee is a
+                                // TRANSFER-OWNED enum param. `param_view_locals`
+                                // means "the CALLER runs this binding's body",
+                                // and for that param the caller has already
+                                // stood every channel down: the ctor-argument
+                                // arm returns early on
+                                // `enum_param_owned_by_transfer` before it
+                                // registers a payload-bodies walker, so there is
+                                // no caller fire for this to defer to. Both
+                                // frames reach one answer only by asking that
+                                // predicate, which is why the flag derived from
+                                // it is read here rather than a second test
+                                // being hand-rolled.
+                                //
+                                // Left in, the membership made a later
+                                // `out = w;` look like a param-view rebind, and
+                                // that site stores `false` into the target's
+                                // `cond_move_drop_flags` bit on the premise that
+                                // the caller fires instead. Paired with the
+                                // assignment's own retraction of the SOURCE
+                                // (B-2026-07-30-11's displaced-value leg, whose
+                                // premise is the opposite one — that the LHS
+                                // fires), the body ran in no frame at all.
+                                //
+                                // The two premises are individually sound and
+                                // jointly wrong, which is why neither site looks
+                                // defective on its own and why the failing and
+                                // passing cells take byte-identical paths
+                                // through both. Measured on
+                                // `fn f(b: Ech) { let mut o = ..; match b {
+                                // Ech.A(w) => { o = w; } .. } }` over
+                                // `struct Ch { r: Rn, s: String }`: `dRn11 r:12`
+                                // on the JIT, `karac build` -O0 and -O2 against
+                                // `--interp`'s `dRn11 dRn12 r:12`.
+                                //
+                                // The all-scalar twin passed BY ACCIDENT, not by
+                                // design: `Cn { r: Rn, n: i64 }` makes
+                                // `enum_param_owned_by_transfer` false, so the
+                                // caller kept its `__karac_dropelems_enum_<E>`
+                                // walk and fired the body there. Nothing
+                                // arranged for it; no suppression was needed.
+                                // That is why payload WIDTH looked like the
+                                // discriminator and ran the wrong way — 2w/3w/4w
+                                // /5w all-scalar carriers are all correct, and a
+                                // 4w carrier with a `String` loses it.
+                                let transfer_owned_payload = payload_of_owned_param
+                                    && self
+                                        .pattern_state
+                                        .pattern_binding_scrutinee_is_transfer_owned_enum;
+                                if (payload_of_owned_param && !transfer_owned_payload)
+                                    || payload_of_masked_slot
+                                {
                                     self.payload_vars.param_view_locals.insert(name.clone());
                                 }
                                 // B-2026-09-15-21 — and record the MEMORY

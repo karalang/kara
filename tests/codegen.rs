@@ -21430,6 +21430,118 @@ end
         assert_eq!(out, "dR152\ndR52\nin\none\nin\ndR155\ndR55\ntwo\ndR156\ndR56\nin\nthree\ndR157\ndR57\nin\nfour\ndR158\ndR58\nin\nfive\ndR159\ndR59\nin\nsix\nuse60\ndR160\ndR60\nseven\ndR161\ndR61\nin\neight\nin\ndR162\ndR62\nnine\nn\ndR163\ndR63\nten\nend\n");
     }
 
+    /// B-2026-09-19-43 — a match arm's payload bound out of a TRANSFER-OWNED
+    /// enum param, then assigned to an outer local, still runs its `Drop`
+    /// body.
+    ///
+    /// TWO GATES EACH STOOD DOWN BECAUSE IT BELIEVED THE OTHER WOULD FIRE, and
+    /// neither looks defective read on its own:
+    ///
+    ///  * the CALLER's inline-constructor argument arm returns early on
+    ///    `enum_param_owned_by_transfer` before it registers the
+    ///    `__karac_dropelems_enum_<E>` payload-bodies walker, so a heap-bearing
+    ///    payload gets no caller-side fire at all;
+    ///  * the CALLEE then read the arm binding's membership in
+    ///    `param_view_locals` as a param-view rebind at `o = w;` and stored
+    ///    `false` into the target's `cond_move_drop_flags` bit, on the premise
+    ///    that the caller fires instead. The assignment's own retraction of the
+    ///    SOURCE (B-2026-07-30-11's displaced-value leg) carries the opposite
+    ///    premise — that the LHS fires — so between them the body ran in no
+    ///    frame.
+    ///
+    /// `one` is the cell: `dR11 one:12` on the JIT, `karac build` -O0 and -O2
+    /// against `--interp`'s `dR11 dR12 one:12`.
+    ///
+    /// `two` IS A CONTROL THAT USED TO PASS BY ACCIDENT, which is why the row
+    /// was filed against the wrong axis twice. An all-scalar payload makes
+    /// `enum_param_owned_by_transfer` false, so the caller KEEPS its walker and
+    /// fires the body there — nothing arranges for it, no suppression was
+    /// needed. Payload WIDTH therefore looked like the discriminator and runs
+    /// the wrong way: 2w/3w/4w/5w all-scalar carriers are all correct, and a
+    /// 4w carrier with a `String` loses it.
+    ///
+    /// `three` and `four` are the other two disarm mechanisms — Vec/String
+    /// zero a `cap` sentinel, Map/Set edit a cleanup queue — so the cell is not
+    /// one suppressor's quirk. `five` and `six` are the named-local sources,
+    /// correct throughout. `seven` (the arm only READS the payload) and
+    /// `eight` (nothing binds it) are the no-double guards: there the caller
+    /// stands down and the callee's own `__karac_dropelems_enum_<E>(%b)` fires,
+    /// and a fix that re-homed the body unconditionally would print it twice.
+    ///
+    /// `nine` is the ROW'S OWN reduction and varies the PROVENANCE of the heap:
+    /// `Hold { r: Rh, n: i64 }` puts the `String` INSIDE the `Drop`-bearing
+    /// field rather than beside it, so the carrier's own field list is
+    /// `Drop`-bearing + scalar. It printed `dRh91 nine:9` against `--interp`'s
+    /// `dRh91 dRh92 nine:9`.
+    ///
+    /// `ten` pins the WIDTH boundary, because the fix sits inside a block
+    /// guarded by a word-count test against the scrutinee's payload area and a
+    /// narrower placement would have covered `one` and missed this: `Wide` is
+    /// six words where `Ch` is four. Measured broken at 4w, 5w and 6w alike
+    /// before the fix and correct at all three after, which is the second
+    /// reason width was never the axis.
+    #[test]
+    fn e2e_transfer_owned_enum_payload_assigned_out_runs_its_body() {
+        let Some(out) = run_program(
+            "struct R { id: i64 }\n\
+             impl Drop for R { fn drop(mut ref self) { println(f\"dR{self.id}\") } }\n\
+             struct Rh { id: i64, tag: String }\n\
+             impl Drop for Rh { fn drop(mut ref self) { println(f\"dRh{self.id}\") } }\n\
+             struct Ch { r: R, s: String }\n\
+             struct Cv { r: R, v: Vec[i64] }\n\
+             struct Cm { r: R, m: Map[String, i64] }\n\
+             struct Cn { r: R, n: i64 }\n\
+             struct Hold { r: Rh, n: i64 }\n\
+             struct Wide { r: R, s: String, k: i64, j: i64 }\n\
+             enum Ech { A(Ch), B }\n\
+             enum Ecv { A(Cv), B }\n\
+             enum Ecm { A(Cm), B }\n\
+             enum Ecn { A(Cn), B }\n\
+             enum Eh { A(Hold), B }\n\
+             enum Ew { A(Wide), B }\n\
+             fn one(b: Ech) -> i64 { let mut o: Ch = Ch { r: R { id: 11 }, s: f\"OUT\" }; match b { Ech.A(w) => { o = w; } Ech.B => { } } return o.r.id }\n\
+             fn two(b: Ecn) -> i64 { let mut o: Cn = Cn { r: R { id: 21 }, n: 0 }; match b { Ecn.A(w) => { o = w; } Ecn.B => { } } return o.r.id }\n\
+             fn three(b: Ecv) -> i64 { let mut o: Cv = Cv { r: R { id: 31 }, v: Vec.new() }; match b { Ecv.A(w) => { o = w; } Ecv.B => { } } return o.r.id }\n\
+             fn four(b: Ecm) -> i64 { let mut o: Cm = Cm { r: R { id: 41 }, m: Map.new() }; match b { Ecm.A(w) => { o = w; } Ecm.B => { } } return o.r.id }\n\
+             fn five() -> i64 { let mut o: Ch = Ch { r: R { id: 51 }, s: f\"OUT\" }; let w: Ch = Ch { r: R { id: 52 }, s: f\"PAY\" }; o = w; return o.r.id }\n\
+             fn six() -> i64 { let mut o: Cn = Cn { r: R { id: 61 }, n: 0 }; let w: Cn = Cn { r: R { id: 62 }, n: 1 }; o = w; return o.r.id }\n\
+             fn seven(b: Ech) -> i64 { match b { Ech.A(w) => { return w.r.id } Ech.B => { } } return 0 }\n\
+             fn eight(b: Ech) -> i64 { return 7 }\n\
+             fn nine(b: Eh) -> i64 { let mut o: Hold = Hold { r: Rh { id: 91, tag: f\"OUTOUT\" }, n: 1 }; match b { Eh.A(w) => { o = w; } Eh.B => { } } return o.n }\n\
+             fn ten(b: Ew) -> i64 { let mut o: Wide = Wide { r: R { id: 101 }, s: f\"OUT\", k: 0, j: 0 }; match b { Ew.A(w) => { o = w; } Ew.B => { } } return o.r.id }\n\
+             fn main() {\n\
+             \x20   println(f\"one:{one(Ech.A(Ch { r: R { id: 12 }, s: f\"PAY\" }))}\");\n\
+             \x20   println(f\"two:{two(Ecn.A(Cn { r: R { id: 22 }, n: 1 }))}\");\n\
+             \x20   println(f\"three:{three(Ecv.A(Cv { r: R { id: 32 }, v: Vec.new() }))}\");\n\
+             \x20   println(f\"four:{four(Ecm.A(Cm { r: R { id: 42 }, m: Map.new() }))}\");\n\
+             \x20   println(f\"five:{five()}\");\n\
+             \x20   println(f\"six:{six()}\");\n\
+             \x20   println(f\"seven:{seven(Ech.A(Ch { r: R { id: 72 }, s: f\"PAY\" }))}\");\n\
+             \x20   println(f\"eight:{eight(Ech.A(Ch { r: R { id: 82 }, s: f\"PAY\" }))}\");\n\
+             \x20   println(f\"nine:{nine(Eh.A(Hold { r: Rh { id: 92, tag: f\"PAYPAYPAYPAY\" }, n: 9 }))}\");\n\
+             \x20   println(f\"ten:{ten(Ew.A(Wide { r: R { id: 102 }, s: f\"PAY\", k: 1, j: 2 }))}\");\n\
+             \x20   println(\"end\")\n\
+             }\n\
+             ",
+        ) else {
+            return;
+        };
+        assert_eq!(
+            out,
+            "dR11\ndR12\none:12\n\
+             dR21\ndR22\ntwo:22\n\
+             dR31\ndR32\nthree:32\n\
+             dR41\ndR42\nfour:42\n\
+             dR51\ndR52\nfive:52\n\
+             dR61\ndR62\nsix:62\n\
+             dR72\nseven:72\n\
+             dR82\neight:7\n\
+             dRh91\ndRh92\nnine:9\n\
+             dR101\ndR102\nten:102\n\
+             end\n"
+        );
+    }
+
     /// B-2026-09-05-26 — a user enum's STRUCT payload owns its heap, inline or
     /// boxed, on every path: unbound (`one`, `four`), through a `_` arm
     /// (`two`, `five`), bound and unread (`three`, `six`, `eight`), and
