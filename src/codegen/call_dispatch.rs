@@ -12472,6 +12472,12 @@ impl<'ctx> super::Codegen<'ctx> {
         // B-2026-09-07-16 — the ENUM leg of the same rule, hooked at the same
         // choke point so every call-arg site is covered by one call.
         self.move_declined_copy_enum_arg(arg);
+        // B-2026-09-19-51 — the STRUCT-FIELD spelling of the same rule, queued
+        // here and drained at the end of the statement (see
+        // `zero_transfer_owned_enum_field_arg` for why it cannot be emitted
+        // now). Hooked at this same choke point so every call-arg site is
+        // covered by one call.
+        self.zero_transfer_owned_enum_field_arg(arg);
         let ExprKind::Identifier(var) = &arg.kind else {
             return;
         };
@@ -12609,6 +12615,164 @@ impl<'ctx> super::Codegen<'ctx> {
         }
         let var = var.clone();
         self.suppress_user_drop_for_var(&var);
+    }
+
+    /// B-2026-09-19-51 — the STRUCT-FIELD spelling of
+    /// [`Self::move_declined_copy_enum_arg`], which that function declines
+    /// because it matches only a bare `Identifier`.
+    ///
+    /// A by-value enum param whose payload is BOXED is OWNED BY TRANSFER
+    /// (`enum_param_owned_by_transfer`, B-2026-09-07-16): the callee frees the
+    /// box, and `param_own`'s prologue records that this is held "in LOCKSTEP
+    /// with the three caller-side retractions". `eatb(h.g)` is a fourth caller
+    /// shape none of those three reached, so both frames owned the box:
+    /// 11 allocs / 14 frees, 3 `Invalid free` and 4 `Invalid read` in `main`,
+    /// against a correct `--interp`.
+    ///
+    /// ZEROED RATHER THAN RETRACTED, which is forced rather than chosen. The
+    /// other three sites retract a queued `CleanupAction` belonging to a
+    /// BINDING. A field's free lives inside `__karac_drop_struct_<S>`, a
+    /// function shared by every value of that type and in no scope's action
+    /// list — the same reason `gpu_zero_moved_buffer_handle` below zeroes a
+    /// moved GPU handle instead of retracting its `FreeGpuBuffer`.
+    ///
+    /// GATED ON THE TRANSFER PREDICATE, and that gate is the whole safety
+    /// argument. An INLINE payload is entry-COPIED by the callee, so the caller
+    /// still owns its own buffer and zeroing here would strand it — measured as
+    /// clean both before and after on `z_inlineenum_fn`
+    /// (`enum Ei { A(String), B }`), which stays clean precisely because this
+    /// declines it. `enum_param_owned_by_transfer` is the same type-level
+    /// predicate the callee's prologue asks, which is what lets the two frames
+    /// agree without either reading the other.
+    ///
+    /// ORDERED AFTER THE ARGUMENT IS MATERIALIZED, for the reason
+    /// `gpu_zero_moved_buffer_handle` records: the value is loaded OUT of this
+    /// field, so zeroing first would hand the callee the zeroed words. The
+    /// callee receives the enum by value — only the box travels by pointer —
+    /// so a zero landing after the load cannot reach the callee's copy.
+    ///
+    /// The slot holding a `StructType` is what proves the receiver is an OWNED
+    /// inline struct rather than a `ref Struct` borrow, whose slot is an
+    /// 8-byte pointer; zeroing through that would corrupt the caller. Same
+    /// gate, same rationale, as `zero_struct_field_move_cap_impl`'s.
+    pub(super) fn zero_transfer_owned_enum_field_arg(&mut self, arg: &Expr) {
+        let ExprKind::FieldAccess { object, field } = &arg.kind else {
+            return;
+        };
+        // A NAMED BINDING ROOT ONLY. Both exclusions are MEASURED against the
+        // stock tree, and both remain this row's double free in those
+        // spellings.
+        //
+        // `self` — `impl Hb { fn give(self) { eatb(self.g) } }` reports 14
+        // errors / 8 invalid accesses (11 allocs / 17 frees) on stock `main`
+        // and the same with this fix: unchanged, not regressed. It is WORSE
+        // than the named-binding spelling's 7 because an owned by-value struct
+        // receiver entry-copies, and that copy has no arm for a boxed enum
+        // payload, so it duplicates nothing and the receiver's copy and the
+        // caller's binding hold the SAME box — three owners rather than two.
+        //
+        // Worth recording for whoever takes it: an earlier placement of this
+        // neutralizer, emitted inline at the by-value materialization site
+        // instead of queued, took that cell from 14 to 7 — a real improvement,
+        // not a fix. The queued form loses it because `eatb(self.g)` is the
+        // whole body of `give`, so the statement-end drain finds the block
+        // already terminated and skips. Recovering it needs the placement
+        // question settled, not just the `SelfValue` arm added back.
+        //
+        // A CHAINED place (`k.h.g`) is excluded because this resolves one hop
+        // only; the walker that would reach it is
+        // `zero_nested_struct_field_move_cap`. Measured unchanged, 7 errors
+        // before and after, rather than silently assumed.
+        let ExprKind::Identifier(s) = &object.kind else {
+            return;
+        };
+        let s = s.as_str();
+        let Some(slot) = self.variables.get(s).copied() else {
+            return;
+        };
+        // The slot holding the struct INLINE is what proves an OWNED binding
+        // rather than a `ref Struct` borrow, whose slot is an 8-byte pointer —
+        // zeroing through that would corrupt the caller.
+        let BasicTypeEnum::StructType(held) = slot.ty else {
+            return;
+        };
+        let Some(sname) = self.var_types.var_type_names.get(s).cloned() else {
+            return;
+        };
+        if self.type_decls.shared_types.contains_key(sname.as_str()) {
+            return;
+        }
+        let Some(idx) = self
+            .type_decls
+            .struct_field_names
+            .get(sname.as_str())
+            .and_then(|names| names.iter().position(|n| n == field))
+        else {
+            return;
+        };
+        let Some(fte) = self
+            .type_decls
+            .struct_field_type_exprs
+            .get(sname.as_str())
+            .and_then(|v| v.get(idx))
+            .map(|te| self.subst_monomorph_type_params(te))
+        else {
+            return;
+        };
+        let TypeKind::Path(fp) = &fte.kind else {
+            return;
+        };
+        let Some(ename) = fp.segments.first().cloned() else {
+            return;
+        };
+        if ename == "Option" || ename == "Result" {
+            return;
+        }
+        if !self.enum_param_owned_by_transfer(&ename) {
+            return;
+        }
+        let Some(layout) = self.type_decls.enum_layouts.get(ename.as_str()).cloned() else {
+            return;
+        };
+        if layout.is_shared {
+            return;
+        }
+        let Ok(field_ptr) =
+            self.builder
+                .build_struct_gep(held, slot.ptr, idx as u32, "b51.enumfld.p")
+        else {
+            return;
+        };
+        let _ = &layout;
+        self.pending_enum_field_zeros.push((field_ptr, ename));
+    }
+
+    /// Emit the stores queued by [`Self::zero_transfer_owned_enum_field_arg`]
+    /// and clear the queue. Called at the end of every `compile_stmt`.
+    ///
+    /// Skipped when the current block already has a TERMINATOR — a statement
+    /// that diverged (`return eatb(h.g)`) has nothing left to append to, and
+    /// appending past a terminator is invalid IR. The queue is cleared either
+    /// way, so a skipped entry can never leak into a later statement and zero a
+    /// field whose value is still live. Skipping only leaves that spelling
+    /// exactly as it was before this fix.
+    pub(super) fn flush_pending_enum_field_zeros(&mut self) {
+        if self.pending_enum_field_zeros.is_empty() {
+            return;
+        }
+        let pending = std::mem::take(&mut self.pending_enum_field_zeros);
+        let live = self
+            .builder
+            .get_insert_block()
+            .is_some_and(|b| b.get_terminator().is_none());
+        if !live {
+            return;
+        }
+        for (field_ptr, ename) in pending {
+            if let Some(layout) = self.type_decls.enum_layouts.get(ename.as_str()).cloned() {
+                self.zero_enum_payload_caps(field_ptr, &layout);
+            }
+        }
     }
 
     /// Zero the handle word of a `GpuBuffer` binding that has just been MOVED,

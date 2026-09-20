@@ -4138,6 +4138,11 @@ impl<'ctx> super::Codegen<'ctx> {
         self.tracing.diag_span = Some(stmt.span);
         let out = self.compile_stmt_tracking_assign_target(stmt);
         if out.is_ok() {
+            // B-2026-09-19-51 — drain the enum-field move-out neutralizers this
+            // statement queued. Here rather than at the call-argument choke
+            // point because the store lands in the very field the argument was
+            // loaded out of; see `zero_transfer_owned_enum_field_arg`.
+            self.flush_pending_enum_field_zeros();
             self.record_loop_decl_rearm_anchor(stmt);
             self.tracing.diag_span = saved;
         }

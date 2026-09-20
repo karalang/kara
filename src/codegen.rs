@@ -2174,6 +2174,19 @@ pub(super) struct Codegen<'ctx> {
     /// would be wrong — `let x = { v.push(n); other };` applies a transfer for
     /// the push that has nothing to do with what the block hands out.
     pub(crate) shared_transfer_applied: bool,
+    /// B-2026-09-19-51 — struct ENUM FIELDS whose value has just been handed to
+    /// a by-value callee that owns it by TRANSFER, queued here to be zeroed
+    /// once the enclosing statement's calls have all materialized their
+    /// arguments.
+    ///
+    /// Recorded rather than emitted on the spot because the neutralizer is a
+    /// STORE into the very field the argument is loaded out of, and the
+    /// choke point that sees every call-argument site
+    /// (`move_declined_copy_struct_arg_for`) runs BEFORE that load. Zeroing
+    /// there would hand the callee the zeroed words. Draining at the end of
+    /// `compile_stmt` is after every load in the statement and long before the
+    /// owner's scope-exit drop, which is the window the zero has to land in.
+    pub(crate) pending_enum_field_zeros: Vec<(inkwell::values::PointerValue<'ctx>, String)>,
     /// B-2026-08-30-2 — did the most recent
     /// `suppress_source_vec_cleanup_for_arg_ex` zero a Vec/String BINDING's
     /// `cap`, and with which element type? The same record-rather-than-rederive
@@ -6742,6 +6755,7 @@ impl<'ctx> Codegen<'ctx> {
             last_fstr_acc: None,
             block_tail_shared_transfer: false,
             shared_transfer_applied: false,
+            pending_enum_field_zeros: Vec::new(),
             vecstr_source_disarmed: None,
             block_tail_binding_unowned: None,
             arm_tail_owner_ctx: None,

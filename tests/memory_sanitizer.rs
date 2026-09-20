@@ -99349,4 +99349,88 @@ fn main() {
             "asan_generic_multi_field_variant_box_and_heap_sibling_both_freed",
         );
     }
+
+    /// B-2026-09-19-51 — a struct's ENUM FIELD handed to a by-value callee that
+    /// owns it BY TRANSFER was freed in both frames.
+    ///
+    /// A by-value enum param whose payload is BOXED is owned by transfer
+    /// (`enum_param_owned_by_transfer`): the callee frees the box, and
+    /// `param_own`'s prologue records that this is held "in LOCKSTEP with the
+    /// three caller-side retractions". `eatb(h.g)` is a fourth caller shape
+    /// none of those three reached — they match a bare identifier, and a
+    /// field's free lives inside `__karac_drop_struct_<S>`, a function in no
+    /// scope's action list to retract. Stock `main` reported 11 allocs / 14
+    /// frees, 3 `Invalid free` and 4 `Invalid read`, all in `main`.
+    ///
+    /// THIS IS THE ONLY FIXTURE THAT CAN SEE THE DEFECT, which is why there is
+    /// no output twin for it. Every cell below prints the SAME thing before and
+    /// after the fix — the values were never wrong and `--interp` was always
+    /// correct. A transcript fixture would pass on the broken tree.
+    ///
+    /// `Eb`'s payload is `Array[String, 2]` and is boxed even though nothing
+    /// here is generic: a variant DECLARATION spells an array as
+    /// `Path(["Array"], [Type, Const])`, which `payload_word_count_for_type_expr`
+    /// measures at its conservative one-word tail (B-2026-09-12-12).
+    ///
+    /// The last three cells are the ones a WIDER neutralizer breaks, and they
+    /// are the point of the fixture as much as the first two. An INLINE-payload
+    /// enum field is entry-COPIED by the callee, so the caller still owns its
+    /// own buffer and a zero there would strand it; the `Vec` field is the same
+    /// question one type over; and the whole-struct move already had its own
+    /// neutralizer and must not gain a second.
+    ///
+    /// NOT COVERED, both measured against stock rather than assumed, both still
+    /// this row's double free: `self.g` inside a method (14 errors / 8 invalid,
+    /// unchanged — an owned by-value receiver entry-copies without duplicating
+    /// the box, so three frames own it) and a CHAINED place `k.h.g` (7 errors,
+    /// unchanged — this resolves one hop only).
+    #[test]
+    fn asan_enum_field_handed_to_a_by_value_callee_has_one_owner() {
+        const DECLS: &str = "enum Eb { A(Array[String, 2]), B }
+             struct Hb { g: Eb }
+             enum Ei { A(String), B }
+             struct Hi { g: Ei }
+             struct Hv { v: Vec[String] }
+             struct Sink { n: i64 }
+             impl Sink { fn take(ref self, g: Eb) { println(\"mtake\") } }
+             fn eatb(g: Eb) { println(\"ate\") }
+             fn eati(g: Ei) { println(\"atei\") }
+             fn eatv(v: Vec[String]) { println(f\"atev{v.len()}\") }
+             fn eath(h: Hb) { println(\"ateh\") }
+             fn mk() -> Array[String, 2] { return [f\"aaaaaaaa-1\", f\"bbbbbbbb-2\"]; }
+";
+
+        // The filed cell: a free function, and the method spelling beside it —
+        // the two the caller-side stand-down now reaches.
+        assert_clean_asan_run(
+            &format!(
+                "{DECLS}                 fn main() {{
+                 \x20   {{ let h = Hb {{ g: Eb.A(mk()) }}; eatb(h.g); }}
+                 \x20   {{ let h = Hb {{ g: Eb.A(mk()) }}; let s = Sink {{ n: 1 }}; s.take(h.g); }}
+                 \x20   println(\"end\");
+                 }}
+"
+            ),
+            &["ate", "mtake", "end"],
+            "b91951-field-to-callee",
+        );
+
+        // The direction a WIDER stand-down breaks: an inline payload and a
+        // `Vec` field are entry-copied, so the caller still owns its buffer and
+        // zeroing would strand it; the whole-struct move already stands itself
+        // down and must not do it twice.
+        assert_clean_asan_run(
+            &format!(
+                "{DECLS}                 fn main() {{
+                 \x20   {{ let h = Hi {{ g: Ei.A(f\"cccccccc-3\") }}; eati(h.g); }}
+                 \x20   {{ let mut v: Vec[String] = Vec.new(); v.push(f\"dddddddd-4\"); let h = Hv {{ v: v }}; eatv(h.v); }}
+                 \x20   {{ let h = Hb {{ g: Eb.A(mk()) }}; eath(h); }}
+                 \x20   println(\"end\");
+                 }}
+"
+            ),
+            &["atei", "atev1", "ateh", "end"],
+            "b91951-must-stay-clean",
+        );
+    }
 }
