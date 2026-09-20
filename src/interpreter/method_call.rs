@@ -1040,7 +1040,12 @@ impl<'a> super::Interpreter<'a> {
                 // correction the writeback loop above makes.
                 let recv_off = arg_vals.len().saturating_sub(args.len());
                 let owner = type_name.clone();
-                self.run_fresh_temp_arg_drops(method, Some(&owner), args, &arg_vals[recv_off..]);
+                self.run_fresh_temp_arg_drops(
+                    method,
+                    Some(super::eval_call::CalleeOwner::Instance(&owner)),
+                    args,
+                    &arg_vals[recv_off..],
+                );
                 return Some(match result {
                     Ok(v) => v,
                     Err(ControlFlow::Return(v)) => v,

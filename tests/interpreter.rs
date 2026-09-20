@@ -71553,3 +71553,58 @@ fn main() {
 "#);
     assert_eq!(out, "free-fn\n  dR6\n  got5\n  dR5\n  out\nmethod-ref\n  dR6\n  got5\n  dR5\n  out\nmethod-owned\n  dR6\n  got5\n  dR5\n  out\nmethod-result\n  dR6\n  got5\n  dR5\n  out\nmethod-second\n  dR5\n  got6\n  dR6\n  out\nmethod-struct\n  dR6\n  got5\n  dR5\n  out\nmethod-destr\n  dR6\n  got5\n  dR5\n  out\nctl-nomove\n  mid\n  dR5\n  dR6\n  out\nctl-whole\n  dR5\n  dR6\n  kept\n  out\nctl-assoc\n  dR6\n  got5\n  dR5\n  out\nend\n", "got:\n{out}");
 }
+
+/// B-2026-09-19-55 — the interpreter half of the duplicate-associated-name
+/// payload-part fix, and the half that actually moved: every `dup-*` cell below
+/// ran the UNTAKEN field's `Drop` body twice, where the same program with a
+/// unique name, or with a free function, or with the instance-method spelling,
+/// printed it once. The compiled twin is `tests/codegen.rs`'s
+/// `e2e_duplicate_assoc_fn_name_keeps_one_payload_part_drop_body`, which
+/// asserts the same shapes against both backends.
+///
+/// `peer` is the control with teeth: the two same-named functions hand out
+/// DIFFERENT fields, so a resolution that merely stopped failing — rather than
+/// resolving exactly — would keep the wrong sibling alive and be visible here.
+#[test]
+fn test_duplicate_assoc_fn_name_keeps_one_payload_part_drop_body() {
+    let out = run(r#"struct R { id: i64 }
+impl Drop for R { fn drop(mut ref self) { println(f"  dR{self.id}") } }
+struct Q { r: R, s: R }
+struct Bx { v: R }
+struct A {}
+struct B {}
+struct C {}
+struct Z {}
+struct H { n: i64 }
+impl A { fn dup(o: Option[Q]) -> R { match o { Option.Some(t) => { return t.r } Option.None => { return R { id: 0 } } } } }
+impl B { fn dup(o: Option[Q]) -> R { match o { Option.Some(t) => { return t.s } Option.None => { return R { id: 0 } } } } }
+impl C { fn dup(o: Option[Q]) -> R { match o { Option.Some(t) => { return t.r } Option.None => { return R { id: 0 } } } } }
+impl A { fn tdup(o: Option[(R, R)]) -> R { match o { Option.Some(t) => { return t.0 } Option.None => { return R { id: 0 } } } } }
+impl B { fn tdup(o: Option[(R, R)]) -> R { match o { Option.Some(t) => { return t.0 } Option.None => { return R { id: 0 } } } } }
+impl A { fn rdup(o: Result[Q, i64]) -> R { match o { Result.Ok(t) => { return t.r } Result.Err(e) => { return R { id: 0 } } } } }
+impl B { fn rdup(o: Result[Q, i64]) -> R { match o { Result.Ok(t) => { return t.r } Result.Err(e) => { return R { id: 0 } } } } }
+impl A { fn whole(o: Option[Q]) -> Option[Q] { o } }
+impl B { fn whole(o: Option[Q]) -> Option[Q] { o } }
+impl H { fn dup(ref self, o: Option[Q]) -> R { match o { Option.Some(t) => { return t.r } Option.None => { return R { id: 0 } } } } }
+impl Z { fn zdup(o: Option[Q]) -> R { match o { Option.Some(t) => { return t.r } Option.None => { return R { id: 0 } } } } }
+fn dup(o: Option[Q]) -> R { match o { Option.Some(t) => { return t.r } Option.None => { return R { id: 0 } } } }
+fn sink(r: R) { println(f"  sank{r.id}") }
+fn main() {
+  println("dup-a");      { let g = A.dup(Option.Some(Q { r: R { id: 5 }, s: R { id: 6 } })); println(f"  got{g.id}") } println("  out")
+  println("dup-c");      { let g = C.dup(Option.Some(Q { r: R { id: 5 }, s: R { id: 6 } })); println(f"  got{g.id}") } println("  out")
+  println("peer");       { let g = B.dup(Option.Some(Q { r: R { id: 5 }, s: R { id: 6 } })); println(f"  got{g.id}") } println("  out")
+  println("dup-tuple");  { let g = A.tdup(Option.Some((R { id: 5 }, R { id: 6 }))); println(f"  got{g.id}") } println("  out")
+  println("dup-result"); { let g = A.rdup(Result.Ok(Q { r: R { id: 5 }, s: R { id: 6 } })); println(f"  got{g.id}") } println("  out")
+  println("discard");    { A.dup(Option.Some(Q { r: R { id: 5 }, s: R { id: 6 } })); println("  after") } println("  out")
+  println("field");      { let b = Bx { v: A.dup(Option.Some(Q { r: R { id: 5 }, s: R { id: 6 } })) }; println(f"  in{b.v.id}") } println("  out")
+  println("to-callee");  { sink(A.dup(Option.Some(Q { r: R { id: 5 }, s: R { id: 6 } }))) } println("  out")
+  println("loop");       { let mut i = 0; while i < 2 { let g = A.dup(Option.Some(Q { r: R { id: 5 }, s: R { id: 6 } })); println(f"  it{g.id}"); i = i + 1; } } println("  out")
+  println("method");     { let h = H { n: 1 }; let g = h.dup(Option.Some(Q { r: R { id: 5 }, s: R { id: 6 } })); println(f"  got{g.id}") } println("  out")
+  println("ctl-uniq");   { let g = Z.zdup(Option.Some(Q { r: R { id: 5 }, s: R { id: 6 } })); println(f"  got{g.id}") } println("  out")
+  println("ctl-free");   { let g = dup(Option.Some(Q { r: R { id: 5 }, s: R { id: 6 } })); println(f"  got{g.id}") } println("  out")
+  println("ctl-whole");  { let g = A.whole(Option.Some(Q { r: R { id: 5 }, s: R { id: 6 } })); println("  kept") } println("  out")
+  println("end")
+}
+"#);
+    assert_eq!(out, "dup-a\n  dR6\n  got5\n  dR5\n  out\ndup-c\n  dR6\n  got5\n  dR5\n  out\npeer\n  dR5\n  got6\n  dR6\n  out\ndup-tuple\n  dR6\n  got5\n  dR5\n  out\ndup-result\n  dR6\n  got5\n  dR5\n  out\ndiscard\n  dR6\n  dR5\n  after\n  out\nfield\n  dR6\n  in5\n  dR5\n  out\nto-callee\n  dR6\n  sank5\n  dR5\n  out\nloop\n  dR6\n  it5\n  dR5\n  dR6\n  it5\n  dR5\n  out\nmethod\n  dR6\n  got5\n  dR5\n  out\nctl-uniq\n  dR6\n  got5\n  dR5\n  out\nctl-free\n  dR6\n  got5\n  dR5\n  out\nctl-whole\n  dR6\n  dR5\n  kept\n  out\nend\n", "got:\n{out}");
+}

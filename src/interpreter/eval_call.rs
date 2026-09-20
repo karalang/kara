@@ -29,6 +29,55 @@ use super::method_call::result_ok;
 use super::value::narrow_to_i64;
 use super::value::{EnumData, Value};
 
+/// B-2026-09-19-55 — which impl a call's callee lives in, for the caller-side
+/// argument walk (`run_fresh_temp_arg_drops`) and the guards it consults.
+///
+/// Two spellings reach that walk with a known owner type, and they need the
+/// same exact `(type, method)` callee resolution but NOT the same guards:
+///
+/// * `h.dup(o)` — an INSTANCE method call, dispatched by `method_call.rs`.
+/// * `A.dup(o)` — an ASSOCIATED function call, dispatched by the `Path` arm of
+///   [`super::Interpreter::eval_call`].
+///
+/// Before this the assoc spelling passed `None` and fell back to
+/// [`super::Interpreter::callee_fn_by_bare_name`], which FAILS CLOSED the
+/// moment two inherent impls define a method of that name: the guards then
+/// resolved nothing, `mask_optres_payload_escaping_parts` never ran, and the
+/// unmasked walk ran a handed-out payload part's `Drop` body a second time.
+/// Renaming either method made it correct, and the METHOD spelling of the very
+/// same call was already correct because `method_call.rs` passes its receiver
+/// type. Carrying the owner here closes that gap.
+///
+/// The variants are distinguished rather than collapsed to a bare `&str`
+/// because one guard is INSTANCE-ONLY: B-2026-09-03-7's type-level return
+/// stand-down in [`super::Interpreter::callee_owns_arg_beyond_call_impl`] is a
+/// question about the RECEIVER (`owned_self_return_is_opaque_to_receiver`), and
+/// an associated function has none. Admitting an assoc call there would widen a
+/// stand-down onto a spelling that row never measured, which is the opposite of
+/// what this fix is for — the assoc path's escapes are reached through the
+/// per-element filters, exactly as the free path's are.
+#[derive(Clone, Copy, Debug)]
+pub(crate) enum CalleeOwner<'o> {
+    /// `h.m(x)` — an instance method on this type.
+    Instance(&'o str),
+    /// `A.m(x)` — an associated function of this type.
+    Assoc(&'o str),
+}
+
+impl<'o> CalleeOwner<'o> {
+    /// The impl target type, for exact `(type, method)` callee resolution.
+    pub(crate) fn ty(self) -> &'o str {
+        match self {
+            Self::Instance(t) | Self::Assoc(t) => t,
+        }
+    }
+
+    /// Is this an INSTANCE method call? The receiver-shaped guards ask this.
+    pub(crate) fn is_instance(self) -> bool {
+        matches!(self, Self::Instance(_))
+    }
+}
+
 impl<'a> super::Interpreter<'a> {
     /// `process.exit(code)` — design.md § Stdio & Exit Control. Raises
     /// `ControlFlow::ExitUnwind`, which propagates through every pending
@@ -2027,6 +2076,32 @@ impl<'a> super::Interpreter<'a> {
                 closure_env,
                 ..
             } => {
+                // B-2026-09-19-55 — the impl target when the callee was
+                // spelled `Type.method(...)`. `register_impl_methods` keeps the
+                // owner only in the ENV KEY: `Value::Function`'s `name` is the
+                // bare method name, so every bare-name callee resolution below
+                // FAILS CLOSED the moment a second inherent impl defines an
+                // associated function of that name — and a resolver that
+                // answers `None` reads to its consumers as "this callee owns
+                // nothing", which is not conservative, it is wrong in the
+                // doubling direction. Measured: `A.dup(Option.Some(Q { .. }))`
+                // ran the untaken field's `Drop` body twice on `--interp`
+                // against once on JIT and AOT, while `h.dup(...)` — the method
+                // spelling of the identical body — was already correct, because
+                // `method_call.rs` passes its receiver type down. Computed once
+                // here and threaded to every consumer in this arm.
+                //
+                // ASSOCIATED functions only: a receiver-taking method reached
+                // through this spelling binds the receiver as `args[0]`, so its
+                // `params` — which exclude the receiver — are off by one
+                // against the indices these walks pass down. The `filter` is
+                // also what keeps this a pure no-op for every callee the
+                // bare-name scan already resolved.
+                let assoc_owner: Option<&str> =
+                    Self::assoc_callee_owner_segment(callee).filter(|ty| {
+                        self.impl_method_ast(ty, &fn_name)
+                            .is_some_and(|f| f.self_param.is_none())
+                    });
                 self.env.push_scope();
                 let pushed_subs = self.push_type_subs_for_call(span);
                 if let Some(ref captured) = closure_env {
@@ -2131,6 +2206,7 @@ impl<'a> super::Interpreter<'a> {
                 // fires inside closures.
                 let seed_params = self.owned_param_names_of_call(
                     &fn_name,
+                    assoc_owner,
                     &param_patterns,
                     closure_env.is_some(),
                 );
@@ -2139,7 +2215,7 @@ impl<'a> super::Interpreter<'a> {
                 let whole_aliases = if closure_env.is_some() {
                     std::collections::HashSet::new()
                 } else {
-                    self.callee_fn_for_param_ownership(&fn_name)
+                    self.callee_fn_for_param_ownership_of(&fn_name, assoc_owner)
                         .map(|f| crate::ast::fn_whole_param_aliases(self.program, f))
                         .unwrap_or_default()
                 };
@@ -2152,7 +2228,7 @@ impl<'a> super::Interpreter<'a> {
                 let consumed_locals = if closure_env.is_some() {
                     std::collections::HashSet::new()
                 } else {
-                    self.callee_fn_for_param_ownership(&fn_name)
+                    self.callee_fn_for_param_ownership_of(&fn_name, assoc_owner)
                         .map(Self::consumed_payload_local_names)
                         .unwrap_or_default()
                 };
@@ -2225,7 +2301,8 @@ impl<'a> super::Interpreter<'a> {
                 // the body, so `eval_block_inner` adopts it into the body
                 // block's own cleanup; the arm tail that returns the param
                 // disarms it through `record_conditional_move_tail`.
-                self.pending_param_drop_bindings = self.cond_returned_param_drop_names(&fn_name);
+                self.pending_param_drop_bindings =
+                    self.cond_returned_param_drop_names(&fn_name, assoc_owner);
                 // B-2026-08-30-33 — keep the names for the whole frame; the
                 // list above is taken by the body block before any statement
                 // runs, and the per-path disarm needs to ask later.
@@ -2438,7 +2515,24 @@ impl<'a> super::Interpreter<'a> {
                 // guard (`fn_returns_param`) — an arg the callee can RETURN
                 // flows out to the result's consumer and must not also drop
                 // here.
-                self.run_fresh_temp_arg_drops(&fn_name, None, args, &arg_vals);
+                // B-2026-09-19-55 — hand the walk the impl target when the
+                // callee was spelled `Type.method(...)`. `register_impl_methods`
+                // keeps the owner only in the ENV KEY (`Value::Function`'s
+                // `name` is the bare method name), so without this the guards
+                // fall back to `callee_fn_by_bare_name`, which returns `None`
+                // the moment a second inherent impl defines a method of the
+                // same name. Nothing then masked the parts the callee takes
+                // over, and `A.dup(Option.Some(R { id: 5 }))` ran the handed-out
+                // payload's `Drop` body twice — while `h.dup(...)`, the method
+                // spelling of the identical body, was already correct because
+                // `method_call.rs` passes its receiver type. Resolution-only:
+                // `CalleeOwner::Assoc` leaves the receiver-shaped guard off.
+                self.run_fresh_temp_arg_drops(
+                    &fn_name,
+                    assoc_owner.map(CalleeOwner::Assoc),
+                    args,
+                    &arg_vals,
+                );
                 // B-2026-08-02-23 leg 2 — the IDENTIFIER-arg sibling of the
                 // guard above: `run_fresh_temp_arg_drops` skips named bindings
                 // on the "their own NLL drop covers it" rule, which duplicates
@@ -2575,11 +2669,12 @@ impl<'a> super::Interpreter<'a> {
     fn owned_param_names_of_call(
         &self,
         fn_name: &str,
+        assoc_owner: Option<&str>,
         param_patterns: &[crate::ast::Pattern],
         is_closure: bool,
     ) -> std::collections::HashSet<String> {
         if !is_closure {
-            return self.owned_param_names_of_fn(fn_name);
+            return self.owned_param_names_of_fn(fn_name, assoc_owner);
         }
         param_patterns
             .iter()
@@ -2600,7 +2695,11 @@ impl<'a> super::Interpreter<'a> {
     /// currently be a plain struct with a user `Drop`: a shared struct drops
     /// through the RC path and never this drain, and the enum-payload channel
     /// is a different registration this row does not touch.
-    fn cond_returned_param_drop_names(&self, fn_name: &str) -> Vec<String> {
+    fn cond_returned_param_drop_names(
+        &self,
+        fn_name: &str,
+        assoc_owner: Option<&str>,
+    ) -> Vec<String> {
         // Free functions and ASSOCIATED functions — never an instance method,
         // whose caller path does not stand down for a conditionally-returned
         // arg, so flipping ownership there yields two bodies. See the codegen
@@ -2610,7 +2709,7 @@ impl<'a> super::Interpreter<'a> {
         // name, and `register_impl_methods` stores an impl method's bare name
         // even though its env key is qualified. That is what left the
         // associated spelling with no owner for a dying param (B-2026-09-01-44).
-        let Some(f) = self.callee_fn_for_param_ownership(fn_name) else {
+        let Some(f) = self.callee_fn_for_param_ownership_of(fn_name, assoc_owner) else {
             return Vec::new();
         };
         // Generics are claimed like any other shape since B-2026-08-28-71.
@@ -2773,7 +2872,12 @@ impl<'a> super::Interpreter<'a> {
             // "owned params nobody else fires", which is what its own doc
             // claimed before a caller-side fire existed on this path.
             if args.get(i).is_some_and(|a| {
-                self.caller_fires_fresh_temp_arg(method, Some(type_name), i, &a.value)
+                self.caller_fires_fresh_temp_arg(
+                    method,
+                    Some(CalleeOwner::Instance(type_name)),
+                    i,
+                    &a.value,
+                )
             }) {
                 continue;
             }
@@ -2957,7 +3061,12 @@ impl<'a> super::Interpreter<'a> {
                 .get(i)
                 .is_some_and(|a| Self::arg_place_reaches_caller_drop_fire(&a.value))
                 || args.get(i).is_some_and(|a| {
-                    self.caller_fires_fresh_temp_arg(method, Some(type_name), i, &a.value)
+                    self.caller_fires_fresh_temp_arg(
+                        method,
+                        Some(CalleeOwner::Instance(type_name)),
+                        i,
+                        &a.value,
+                    )
                 }))
                 && !crate::ast::fn_always_returns_param(Some(self.program), f, i)
                 && !crate::ast::fn_conditionally_returns_param_bare(Some(self.program), f, i)
@@ -3229,6 +3338,20 @@ impl<'a> super::Interpreter<'a> {
         }
     }
 
+    /// B-2026-09-19-55 — the impl target of a callee spelled `Type.method`.
+    ///
+    /// `impl_method_ast` matches an impl block by the HEAD segment of its
+    /// target type, which is exactly what `segments[0]` is here, so the two
+    /// agree without any normalisation. Every other callee shape — a bare name,
+    /// a longer path, a value in callee position — answers `None` and leaves
+    /// the bare-name resolution the free path has always used.
+    fn assoc_callee_owner_segment(callee: &Expr) -> Option<&str> {
+        match &callee.kind {
+            ExprKind::Path { segments, .. } if segments.len() == 2 => Some(segments[0].as_str()),
+            _ => None,
+        }
+    }
+
     /// The raw AST of impl method `type_name.method`, receiver excluded from
     /// `params`. Mirrors the lookup `method_owned_param_names` runs.
     pub(crate) fn impl_method_ast(
@@ -3254,7 +3377,11 @@ impl<'a> super::Interpreter<'a> {
         })
     }
 
-    fn owned_param_names_of_fn(&self, fn_name: &str) -> std::collections::HashSet<String> {
+    fn owned_param_names_of_fn(
+        &self,
+        fn_name: &str,
+        assoc_owner: Option<&str>,
+    ) -> std::collections::HashSet<String> {
         // B-2026-09-12-15 — resolved through `callee_fn_for_param_ownership`
         // rather than by scanning `Item::Function` here, which saw FREE
         // functions only. An ASSOCIATED function lives in an `Item::ImplBlock`,
@@ -3275,7 +3402,7 @@ impl<'a> super::Interpreter<'a> {
         // to zero. Measured: with instance methods admitted, the method cell
         // loses its body; with them dropped, method and associated spellings
         // both print exactly one.
-        self.callee_fn_for_param_ownership(fn_name)
+        self.callee_fn_for_param_ownership_of(fn_name, assoc_owner)
             .map(|f| {
                 f.params
                     .iter()
@@ -3321,11 +3448,11 @@ impl<'a> super::Interpreter<'a> {
     fn callee_param_is_borrow(
         &self,
         callee_name: &str,
-        method_owner: Option<&str>,
+        method_owner: Option<CalleeOwner<'_>>,
         arg_index: usize,
     ) -> bool {
-        let f = if let Some(ty) = method_owner {
-            self.impl_method_ast(ty, callee_name)
+        let f = if let Some(owner) = method_owner {
+            self.impl_method_ast(owner.ty(), callee_name)
         } else {
             self.program.items.iter().find_map(|item| match item {
                 crate::ast::Item::Function(f) if f.name == callee_name => Some(f),
@@ -3343,15 +3470,15 @@ impl<'a> super::Interpreter<'a> {
     fn callee_escaping_field_payload_parts(
         &self,
         callee_name: &str,
-        method_owner: Option<&str>,
+        method_owner: Option<CalleeOwner<'_>>,
         arg_index: usize,
     ) -> Vec<crate::ast::ParamPath> {
         if self.callee_param_is_borrow(callee_name, method_owner, arg_index) {
             return Vec::new();
         }
-        if let Some(ty) = method_owner {
+        if let Some(owner) = method_owner {
             return self
-                .impl_method_ast(ty, callee_name)
+                .impl_method_ast(owner.ty(), callee_name)
                 .map(|f| {
                     crate::ast::fn_escaping_param_field_payload_paths(self.program, f, arg_index)
                 })
@@ -3385,7 +3512,7 @@ impl<'a> super::Interpreter<'a> {
     fn callee_returned_param_parts(
         &self,
         callee_name: &str,
-        method_owner: Option<&str>,
+        method_owner: Option<CalleeOwner<'_>>,
         arg_index: usize,
     ) -> Vec<crate::ast::ParamPath> {
         // B-2026-09-06-25 — see `callee_param_is_borrow`.
@@ -3401,9 +3528,9 @@ impl<'a> super::Interpreter<'a> {
         // B-2026-09-05-36 — the program-aware form on both legs: a part
         // handed to a call that takes it over, or pushed under an outliving
         // root, joins the returned parts (see `fn_escaping_param_part_paths`).
-        if let Some(ty) = method_owner {
+        if let Some(owner) = method_owner {
             return self
-                .impl_method_ast(ty, callee_name)
+                .impl_method_ast(owner.ty(), callee_name)
                 .map(|f| crate::ast::fn_escaping_param_part_paths(self.program, f, arg_index))
                 .unwrap_or_default();
         }
@@ -3437,7 +3564,7 @@ impl<'a> super::Interpreter<'a> {
     fn callee_escaping_tuple_elems(
         &self,
         callee_name: &str,
-        method_owner: Option<&str>,
+        method_owner: Option<CalleeOwner<'_>>,
         arg_index: usize,
     ) -> Vec<usize> {
         let mut out: Vec<usize> = self
@@ -3464,7 +3591,7 @@ impl<'a> super::Interpreter<'a> {
     fn escaping_field_paths(
         &self,
         callee_name: &str,
-        method_owner: Option<&str>,
+        method_owner: Option<CalleeOwner<'_>>,
         i: usize,
     ) -> Vec<Vec<String>> {
         // B-2026-09-02-41 — a tuple index INSIDE the path is carried as
@@ -3515,7 +3642,7 @@ impl<'a> super::Interpreter<'a> {
     fn optres_payload_escapes_only_some_parts(
         &self,
         callee_name: &str,
-        method_owner: Option<&str>,
+        method_owner: Option<CalleeOwner<'_>>,
         arg_index: usize,
         variant: Option<&str>,
         arg_val: Option<&Value>,
@@ -3565,7 +3692,7 @@ impl<'a> super::Interpreter<'a> {
     fn mask_optres_payload_escaping_parts(
         &self,
         callee_name: &str,
-        method_owner: Option<&str>,
+        method_owner: Option<CalleeOwner<'_>>,
         arg_index: usize,
         variant: &str,
         value: &mut Value,
@@ -3655,7 +3782,7 @@ impl<'a> super::Interpreter<'a> {
     fn mask_optres_payload_consumed_parts(
         &self,
         callee_name: &str,
-        method_owner: Option<&str>,
+        method_owner: Option<CalleeOwner<'_>>,
         arg_index: usize,
         variant: &str,
         value: &mut Value,
@@ -3719,7 +3846,7 @@ impl<'a> super::Interpreter<'a> {
     fn deep_escaping_paths(
         &self,
         callee_name: &str,
-        method_owner: Option<&str>,
+        method_owner: Option<CalleeOwner<'_>>,
         i: usize,
         tuple_root: bool,
     ) -> Vec<Vec<String>> {
@@ -3837,7 +3964,7 @@ impl<'a> super::Interpreter<'a> {
     fn escaping_field_payload_paths(
         &self,
         callee_name: &str,
-        method_owner: Option<&str>,
+        method_owner: Option<CalleeOwner<'_>>,
         i: usize,
     ) -> Vec<Vec<String>> {
         self.callee_escaping_field_payload_parts(callee_name, method_owner, i)
@@ -3953,6 +4080,37 @@ impl<'a> super::Interpreter<'a> {
         self.callee_fn_by_bare_name(name, /* assoc_only = */ true)
     }
 
+    /// B-2026-09-19-55 — the same resolution for a callee spelled
+    /// `Type.method(...)`, whose impl target the caller already knows.
+    ///
+    /// The bare-name scan above FAILS CLOSED when two inherent impls define an
+    /// associated function of one name, and every consumer of this resolver
+    /// then behaves as if the callee had no owned parameters at all. The one
+    /// that bites is the frame-entry seeding (`owned_param_names_of_fn`): with
+    /// an empty set the callee's arm-bound payload is never marked a view of
+    /// the entry copy, so the callee runs the surviving part's `Drop` body on
+    /// top of the caller's own walk — `A.dup(Option.Some(Q { .. }))` printed
+    /// the untaken field's body twice on `--interp` against once on every
+    /// compiled backend, and renaming either function made it correct.
+    ///
+    /// `assoc_only` is preserved as a POST-FILTER rather than dropped: the
+    /// exclusion of instance methods is load-bearing here (see
+    /// `owned_param_names_of_fn`'s comment — admitting one moves a method cell
+    /// from one body to zero), and an owner type says nothing about whether the
+    /// method it names takes a receiver.
+    pub(crate) fn callee_fn_for_param_ownership_of(
+        &self,
+        name: &str,
+        assoc_owner: Option<&str>,
+    ) -> Option<&crate::ast::Function> {
+        match assoc_owner {
+            Some(ty) => self
+                .impl_method_ast(ty, name)
+                .filter(|f| f.self_param.is_none()),
+            None => self.callee_fn_for_param_ownership(name),
+        }
+    }
+
     /// B-2026-08-30-22 — the same resolution with instance methods ADMITTED,
     /// for `run_fresh_temp_arg_drops`' passthrough and escape guards.
     ///
@@ -3976,10 +4134,10 @@ impl<'a> super::Interpreter<'a> {
     fn callee_fn_for_ownership_guard_of(
         &self,
         name: &str,
-        method_owner: Option<&str>,
+        method_owner: Option<CalleeOwner<'_>>,
     ) -> Option<&crate::ast::Function> {
         match method_owner {
-            Some(ty) => self.impl_method_ast(ty, name),
+            Some(owner) => self.impl_method_ast(owner.ty(), name),
             None => self.callee_fn_for_ownership_guard(name),
         }
     }
@@ -4033,7 +4191,7 @@ impl<'a> super::Interpreter<'a> {
     pub(crate) fn run_fresh_temp_arg_drops(
         &mut self,
         callee_name: &str,
-        method_owner: Option<&str>,
+        method_owner: Option<CalleeOwner<'_>>,
         args: &[CallArg],
         arg_vals: &[Value],
     ) {
@@ -4653,7 +4811,7 @@ impl<'a> super::Interpreter<'a> {
     fn caller_fires_fresh_temp_arg(
         &self,
         callee_name: &str,
-        method_owner: Option<&str>,
+        method_owner: Option<CalleeOwner<'_>>,
         i: usize,
         e: &Expr,
     ) -> bool {
@@ -4687,7 +4845,7 @@ impl<'a> super::Interpreter<'a> {
     fn callee_owns_arg_beyond_call(
         &self,
         callee_name: &str,
-        method_owner: Option<&str>,
+        method_owner: Option<CalleeOwner<'_>>,
         i: usize,
         variant: Option<&str>,
     ) -> bool {
@@ -4706,7 +4864,7 @@ impl<'a> super::Interpreter<'a> {
     fn callee_owns_arg_beyond_call_ignoring_payload(
         &self,
         callee_name: &str,
-        method_owner: Option<&str>,
+        method_owner: Option<CalleeOwner<'_>>,
         i: usize,
         variant: Option<&str>,
     ) -> bool {
@@ -4745,7 +4903,7 @@ impl<'a> super::Interpreter<'a> {
     fn callee_owns_arg_beyond_call_impl(
         &self,
         callee_name: &str,
-        method_owner: Option<&str>,
+        method_owner: Option<CalleeOwner<'_>>,
         i: usize,
         variant: Option<&str>,
         include_payload_escape: bool,
@@ -4761,10 +4919,17 @@ impl<'a> super::Interpreter<'a> {
         // type) is the licence this walk needs; anything that could carry it
         // — a generic path, `Self`, a tuple — stands the walk down.
         //
-        // METHOD path only. The free path reaches its escapes through the
-        // per-element `escaping` filters below, and widening it to a
-        // type-level test would move cells this row never measured.
-        if method_owner.is_some()
+        // INSTANCE-METHOD path only. The free path reaches its escapes
+        // through the per-element `escaping` filters below, and widening it to
+        // a type-level test would move cells this row never measured.
+        // B-2026-09-19-55 — and the ASSOCIATED-function path is the free path
+        // for this purpose, which is why the gate reads `is_instance()` rather
+        // than `is_some()`. That row gave `A.dup(o)` a known owner so the
+        // guards below can resolve it EXACTLY (two inherent impls sharing a
+        // method name used to defeat the bare-name scan); the receiver-shaped
+        // question here has no meaning for a callee with no receiver, so it
+        // stays off for that spelling.
+        if method_owner.is_some_and(CalleeOwner::is_instance)
             && self
                 .callee_fn_for_ownership_guard_of(callee_name, method_owner)
                 .is_some_and(|f| {

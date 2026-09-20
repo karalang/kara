@@ -39216,6 +39216,287 @@ fn main() {
         }
     }
 
+    /// B-2026-09-19-55 — TWO INHERENT IMPLS DEFINING AN ASSOCIATED FUNCTION OF
+    /// ONE NAME MADE THE INTERPRETER RUN A HANDED-OUT PAYLOAD PART'S `Drop`
+    /// BODY TWICE.
+    ///
+    /// `A.dup(Some(Q { r: R { id: 5 }, s: R { id: 6 } }))` over
+    /// `fn dup(o: Option[Q]) -> R { match o { Some(t) => { return t.r; } .. } }`
+    /// printed `dR6 dR6 got:5 dR5` on `--interp` against `dR6 got:5 dR5` on
+    /// jit / `karac build` / `KARAC_AUTO_PAR=0`. Renaming EITHER function made
+    /// it correct, and `h.dup(..)` — the instance-method spelling of the
+    /// identical body — was correct throughout.
+    ///
+    /// MECHANISM, and it is a resolution failure rather than a walk defect:
+    /// `register_impl_methods` binds an impl method under the qualified env key
+    /// `A.dup` but stores the BARE name in the `Value::Function` it binds, so
+    /// the dispatch arm has only `dup` to resolve with. Both bare-name callee
+    /// resolvers fail CLOSED on two candidates (`callee_fn_by_bare_name`
+    /// returns `None` the moment it finds a second), and a `None` there does
+    /// not read to its consumers as "unknown" — it reads as "this callee owns
+    /// nothing". The one that bites is frame-entry seeding
+    /// (`owned_param_names_of_fn`): with an empty owned-param set the callee's
+    /// arm-bound payload is never marked a view of the entry copy, so the
+    /// CALLEE ran the surviving field's body on top of the caller's own walk.
+    /// B-2026-09-12-15 recorded the same mechanism for the empty set an
+    /// associated callee used to get unconditionally.
+    ///
+    /// The fix carries the impl target through the dispatch arm
+    /// (`CalleeOwner::Assoc`), so both resolvers reach `impl_method_ast` and
+    /// answer exactly. `CalleeOwner` distinguishes the assoc and instance
+    /// spellings because B-2026-09-03-7's type-level return stand-down is a
+    /// question about the RECEIVER, which an associated function has none of.
+    ///
+    /// THE CELLS VARY THE USE SITE, not only the payload: `discard`, `field`,
+    /// `sink` and `loop` are the shapes a caller-side walk is most easily
+    /// wrong at, and all four moved. `peer` proves the resolution is EXACT
+    /// rather than merely unblocked — `B.dup` hands out the OTHER field, and
+    /// its own sibling is the one that must survive.
+    ///
+    /// THE CONTROLS ARE BYTE-IDENTICAL BEFORE AND AFTER: a unique assoc name,
+    /// the free function, a free function that SHADOWS the duplicated name
+    /// (the resolvers try free functions first, so it must still win), the
+    /// callee returning the whole argument, and the tuple-payload `nomove`.
+    ///
+    /// BODY-ONLY, so no sanitizer leg sees it.
+    ///
+    /// The INTERPRETER twin is `tests/interpreter.rs`'s
+    /// `test_duplicate_assoc_fn_name_keeps_one_payload_part_drop_body`, the
+    /// half that actually moved.
+    #[test]
+    fn e2e_duplicate_assoc_fn_name_keeps_one_payload_part_drop_body() {
+        const R: &str = "struct R { id: i64 }\n\
+             impl Drop for R { fn drop(mut ref self) { println(f\"dR{self.id}\") } }\n";
+        const Q: &str = "struct Q { r: R, s: R }\n";
+        const ARG: &str = "Some(Q { r: R { id: 5 }, s: R { id: 6 } })";
+        // Two inherent impls, one method name -- the collision itself.
+        const DUP2: &str = "struct A {}\nstruct B {}\n\
+             impl A { fn dup(o: Option[Q]) -> R { match o { Some(t) => { return t.r; } None => { return R { id: 0 }; } } } }\n\
+             impl B { fn dup(o: Option[Q]) -> R { match o { Some(t) => { return t.r; } None => { return R { id: 0 }; } } } }\n";
+        // (label, source, interpreter expectation, compiled expectation)
+        for (label, prog, want_interp, want_aot) in [
+            (
+                "the row's cell: two impls define `dup`, struct payload",
+                format!("{R}{Q}{DUP2}fn main() {{ let g = A.dup({ARG}); println(f\"got:{{g.id}}\"); println(\"end\") }}\n"),
+                "dR6\ngot:5\ndR5\nend\n",
+                "dR6\ngot:5\ndR5\nend\n",
+            ),
+            (
+                "THREE impls share the name",
+                format!(
+                    "{R}{Q}struct A {{}}\nstruct B {{}}\nstruct C {{}}\n\
+                     impl A {{ fn dup(o: Option[Q]) -> R {{ match o {{ Some(t) => {{ return t.r; }} None => {{ return R {{ id: 0 }}; }} }} }} }}\n\
+                     impl B {{ fn dup(o: Option[Q]) -> R {{ match o {{ Some(t) => {{ return t.r; }} None => {{ return R {{ id: 0 }}; }} }} }} }}\n\
+                     impl C {{ fn dup(o: Option[Q]) -> R {{ match o {{ Some(t) => {{ return t.r; }} None => {{ return R {{ id: 0 }}; }} }} }} }}\n\
+                     fn main() {{ let g = C.dup({ARG}); println(f\"got:{{g.id}}\"); println(\"end\") }}\n"
+                ),
+                "dR6\ngot:5\ndR5\nend\n",
+                "dR6\ngot:5\ndR5\nend\n",
+            ),
+            (
+                // Resolution is EXACT, not merely unblocked: the two bodies
+                // hand out DIFFERENT fields, so picking the wrong one would
+                // keep the wrong sibling alive and be visible here.
+                "the PEER impl hands out the other field",
+                format!(
+                    "{R}{Q}struct A {{}}\nstruct B {{}}\n\
+                     impl A {{ fn dup(o: Option[Q]) -> R {{ match o {{ Some(t) => {{ return t.r; }} None => {{ return R {{ id: 0 }}; }} }} }} }}\n\
+                     impl B {{ fn dup(o: Option[Q]) -> R {{ match o {{ Some(t) => {{ return t.s; }} None => {{ return R {{ id: 0 }}; }} }} }} }}\n\
+                     fn main() {{ let g = B.dup({ARG}); println(f\"got:{{g.id}}\"); println(\"end\") }}\n"
+                ),
+                "dR5\ngot:6\ndR6\nend\n",
+                "dR5\ngot:6\ndR6\nend\n",
+            ),
+            (
+                "TUPLE payload, the other part-classified shape",
+                format!(
+                    "{R}struct A {{}}\nstruct B {{}}\n\
+                     impl A {{ fn dup(o: Option[(R, R)]) -> R {{ match o {{ Some(t) => {{ return t.0; }} None => {{ return R {{ id: 0 }}; }} }} }} }}\n\
+                     impl B {{ fn dup(o: Option[(R, R)]) -> R {{ match o {{ Some(t) => {{ return t.0; }} None => {{ return R {{ id: 0 }}; }} }} }} }}\n\
+                     fn main() {{ let g = A.dup(Some((R {{ id: 5 }}, R {{ id: 6 }}))); println(f\"got:{{g.id}}\"); println(\"end\") }}\n"
+                ),
+                "dR6\ngot:5\ndR5\nend\n",
+                "dR6\ngot:5\ndR5\nend\n",
+            ),
+            (
+                "`Result` head",
+                format!(
+                    "{R}{Q}struct A {{}}\nstruct B {{}}\n\
+                     impl A {{ fn dup(o: Result[Q, i64]) -> R {{ match o {{ Ok(t) => {{ return t.r; }} Err(e) => {{ return R {{ id: 0 }}; }} }} }} }}\n\
+                     impl B {{ fn dup(o: Result[Q, i64]) -> R {{ match o {{ Ok(t) => {{ return t.r; }} Err(e) => {{ return R {{ id: 0 }}; }} }} }} }}\n\
+                     fn main() {{ let g = A.dup(Result.Ok(Q {{ r: R {{ id: 5 }}, s: R {{ id: 6 }} }})); println(f\"got:{{g.id}}\"); println(\"end\") }}\n"
+                ),
+                "dR6\ngot:5\ndR5\nend\n",
+                "dR6\ngot:5\ndR5\nend\n",
+            ),
+            (
+                "the DESTRUCTURING arm spelling",
+                format!(
+                    "{R}struct A {{}}\nstruct B {{}}\n\
+                     impl A {{ fn dup(o: Option[(R, R)]) -> R {{ match o {{ Some((a, b)) => {{ return a; }} None => {{ return R {{ id: 0 }}; }} }} }} }}\n\
+                     impl B {{ fn dup(o: Option[(R, R)]) -> R {{ match o {{ Some((a, b)) => {{ return a; }} None => {{ return R {{ id: 0 }}; }} }} }} }}\n\
+                     fn main() {{ let g = A.dup(Some((R {{ id: 5 }}, R {{ id: 6 }}))); println(f\"got:{{g.id}}\"); println(\"end\") }}\n"
+                ),
+                "dR6\ngot:5\ndR5\nend\n",
+                "dR6\ngot:5\ndR5\nend\n",
+            ),
+            (
+                "use site: the result is DISCARDED",
+                format!("{R}{Q}{DUP2}fn main() {{ A.dup({ARG}); println(\"after\"); println(\"end\") }}\n"),
+                "dR6\ndR5\nafter\nend\n",
+                "dR6\ndR5\nafter\nend\n",
+            ),
+            (
+                "use site: the result is stored in a STRUCT FIELD",
+                format!(
+                    "{R}{Q}struct Bx {{ v: R }}\n{DUP2}\
+                     fn main() {{ let b = Bx {{ v: A.dup({ARG}) }}; println(f\"in:{{b.v.id}}\"); println(\"end\") }}\n"
+                ),
+                "dR6\nin:5\ndR5\nend\n",
+                "dR6\nin:5\ndR5\nend\n",
+            ),
+            (
+                "use site: the result is handed to a BY-VALUE callee",
+                format!(
+                    "{R}{Q}{DUP2}fn sink(r: R) {{ println(f\"sank:{{r.id}}\") }}\n\
+                     fn main() {{ sink(A.dup({ARG})); println(\"end\") }}\n"
+                ),
+                "dR6\nsank:5\ndR5\nend\n",
+                "dR6\nsank:5\ndR5\nend\n",
+            ),
+            (
+                "use site: the call is in a LOOP, so one sibling body per iteration",
+                format!(
+                    "{R}{Q}{DUP2}\
+                     fn main() {{ let mut i = 0; while i < 2 {{ let g = A.dup({ARG}); println(f\"it:{{g.id}}\"); i = i + 1; }} println(\"end\") }}\n"
+                ),
+                "dR6\nit:5\ndR5\ndR6\nit:5\ndR5\nend\n",
+                "dR6\nit:5\ndR5\ndR6\nit:5\ndR5\nend\n",
+            ),
+            (
+                // The reduction's original shape: the collision is between an
+                // associated function and an INSTANCE method. The bare-name
+                // guard scan admits methods, so this defeated it too -- but
+                // the ownership scan drops them, which is why this spelling
+                // needed BOTH resolvers carrying the owner, not just one.
+                "the name is shared with an INSTANCE method",
+                format!(
+                    "{R}{Q}struct A {{}}\nstruct H {{ n: i64 }}\n\
+                     impl H {{ fn dup(ref self, o: Option[Q]) -> R {{ match o {{ Some(t) => {{ return t.r; }} None => {{ return R {{ id: 0 }}; }} }} }} }}\n\
+                     impl A {{ fn dup(o: Option[Q]) -> R {{ match o {{ Some(t) => {{ return t.r; }} None => {{ return R {{ id: 0 }}; }} }} }} }}\n\
+                     fn main() {{ let g = A.dup({ARG}); println(f\"got:{{g.id}}\"); println(\"end\") }}\n"
+                ),
+                "dR6\ngot:5\ndR5\nend\n",
+                "dR6\ngot:5\ndR5\nend\n",
+            ),
+            (
+                "the METHOD spelling of that same pair, correct throughout",
+                format!(
+                    "{R}{Q}struct A {{}}\nstruct H {{ n: i64 }}\n\
+                     impl H {{ fn dup(ref self, o: Option[Q]) -> R {{ match o {{ Some(t) => {{ return t.r; }} None => {{ return R {{ id: 0 }}; }} }} }} }}\n\
+                     impl A {{ fn dup(o: Option[Q]) -> R {{ match o {{ Some(t) => {{ return t.r; }} None => {{ return R {{ id: 0 }}; }} }} }} }}\n\
+                     fn main() {{ let h = H {{ n: 1 }}; let g = h.dup({ARG}); println(f\"got:{{g.id}}\"); println(\"end\") }}\n"
+                ),
+                "dR6\ngot:5\ndR5\nend\n",
+                "dR6\ngot:5\ndR5\nend\n",
+            ),
+            (
+                "control: a UNIQUE associated name was already correct",
+                format!(
+                    "{R}{Q}struct Z {{}}\n\
+                     impl Z {{ fn zdup(o: Option[Q]) -> R {{ match o {{ Some(t) => {{ return t.r; }} None => {{ return R {{ id: 0 }}; }} }} }} }}\n\
+                     fn main() {{ let g = Z.zdup({ARG}); println(f\"got:{{g.id}}\"); println(\"end\") }}\n"
+                ),
+                "dR6\ngot:5\ndR5\nend\n",
+                "dR6\ngot:5\ndR5\nend\n",
+            ),
+            (
+                "control: the FREE function, correct throughout",
+                format!(
+                    "{R}{Q}fn dup(o: Option[Q]) -> R {{ match o {{ Some(t) => {{ return t.r; }} None => {{ return R {{ id: 0 }}; }} }} }}\n\
+                     fn main() {{ let g = dup({ARG}); println(f\"got:{{g.id}}\"); println(\"end\") }}\n"
+                ),
+                "dR6\ngot:5\ndR5\nend\n",
+                "dR6\ngot:5\ndR5\nend\n",
+            ),
+            (
+                // Both resolvers try free functions FIRST. A free `dup`
+                // alongside the two impls must still be the one a bare call
+                // resolves to, which the owner channel must not disturb.
+                "control: a FREE function shadowing the duplicated name still wins",
+                format!(
+                    "{R}{Q}fn dup(o: Option[Q]) -> R {{ match o {{ Some(t) => {{ return t.r; }} None => {{ return R {{ id: 0 }}; }} }} }}\n\
+                     {DUP2}fn main() {{ let g = dup({ARG}); println(f\"got:{{g.id}}\"); println(\"end\") }}\n"
+                ),
+                "dR6\ngot:5\ndR5\nend\n",
+                "dR6\ngot:5\ndR5\nend\n",
+            ),
+            (
+                "control: the callee returns the WHOLE argument",
+                format!(
+                    "{R}{Q}struct A {{}}\nstruct B {{}}\n\
+                     impl A {{ fn dup(o: Option[Q]) -> Option[Q] {{ return o; }} }}\n\
+                     impl B {{ fn dup(o: Option[Q]) -> Option[Q] {{ return o; }} }}\n\
+                     fn main() {{ let g = A.dup({ARG}); println(\"kept\"); println(\"end\") }}\n"
+                ),
+                "dR6\ndR5\nkept\nend\n",
+                "dR6\ndR5\nkept\nend\n",
+            ),
+            (
+                "control: the arm moves NOTHING (tuple payload)",
+                format!(
+                    "{R}struct A {{}}\nstruct B {{}}\n\
+                     impl A {{ fn dup(o: Option[(R, R)]) {{ match o {{ Some(t) => {{ println(\"mid\"); }} None => {{ println(\"n\"); }} }} }} }}\n\
+                     impl B {{ fn dup(o: Option[(R, R)]) {{ match o {{ Some(t) => {{ println(\"mid\"); }} None => {{ println(\"n\"); }} }} }} }}\n\
+                     fn main() {{ A.dup(Some((R {{ id: 5 }}, R {{ id: 6 }}))); println(\"end\") }}\n"
+                ),
+                "mid\ndR5\ndR6\nend\n",
+                "mid\ndR5\ndR6\nend\n",
+            ),
+            (
+                // PINNED DIVERGENCE, and it is not this row's. B-2026-09-19-48:
+                // an `Option[<named struct>]` argument whose arm moves NOTHING
+                // runs BOTH fields' bodies twice on every compiled backend. The
+                // cell below it is the same program with a UNIQUE name, which
+                // diverges identically -- so the name collision is not what
+                // makes it happen. What this row's fix changed is that the
+                // interpreter used to be wrong here in the SAME direction, so
+                // the duplicate-name spelling agreed by both halves being
+                // wrong; it is now correct and the compiled half's own defect
+                // is exposed. Both cells fail together the day -48 lands.
+                "pinned (B-2026-09-19-48): struct payload, arm moves nothing",
+                format!(
+                    "{R}{Q}struct A {{}}\nstruct B {{}}\n\
+                     impl A {{ fn dup(o: Option[Q]) {{ match o {{ Some(t) => {{ println(\"mid\"); }} None => {{ println(\"n\"); }} }} }} }}\n\
+                     impl B {{ fn dup(o: Option[Q]) {{ match o {{ Some(t) => {{ println(\"mid\"); }} None => {{ println(\"n\"); }} }} }} }}\n\
+                     fn main() {{ A.dup({ARG}); println(\"end\") }}\n"
+                ),
+                "mid\ndR6\ndR5\nend\n",
+                "mid\ndR6\ndR5\ndR6\ndR5\nend\n",
+            ),
+            (
+                "pinned (B-2026-09-19-48): the UNIQUE-name twin diverges identically",
+                format!(
+                    "{R}{Q}struct Z {{}}\n\
+                     impl Z {{ fn zdup(o: Option[Q]) {{ match o {{ Some(t) => {{ println(\"mid\"); }} None => {{ println(\"n\"); }} }} }} }}\n\
+                     fn main() {{ Z.zdup({ARG}); println(\"end\") }}\n"
+                ),
+                "mid\ndR6\ndR5\nend\n",
+                "mid\ndR6\ndR5\ndR6\ndR5\nend\n",
+            ),
+        ] {
+            let (interp_out, interp_errs, _, _) = karac::run_program_full_checked(&prog);
+            assert!(
+                interp_errs.is_empty(),
+                "[{label}] interp errored: {interp_errs:?}"
+            );
+            assert_eq!(interp_out.join(""), want_interp, "[{label}] interpreter");
+            if let Some(aot) = run_program(&prog) {
+                assert_eq!(aot, want_aot, "[{label}] AOT");
+            }
+        }
+    }
+
     /// B-2026-09-17-38 — A `Drop`-BEARING SIBLING PART KEEPS ITS BODY WHEN ITS
     /// PEER IS CONSUMED BY AN IN-FRAME LOCAL.
     ///
