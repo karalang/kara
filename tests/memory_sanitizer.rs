@@ -100187,4 +100187,220 @@ fn main() {
             "b2026-09-16-3-bare-string-array-control",
         );
     }
+
+    /// B-2026-09-20-29: a SINGLE-LEVEL index store whose RHS mentions its own
+    /// container leaked the displaced element's heap -- 18 B in 1 block at
+    /// `-O0` on every test cell below but one, and 34 B in 2 blocks on that one
+    /// -- whenever the mention was spelled in a way
+    /// `expr_cannot_carry_container_heap` had no arm for.
+    ///
+    /// That predicate decides whether the RHS could carry a pointer into the
+    /// element about to be released; a `false` answer stands the release down.
+    /// It ended in `_ => false`, so an unrecognised spelling read as "might
+    /// carry heap" and the displaced element was simply never freed. The
+    /// conservative direction is a silent leak, which is why the gap outlived
+    /// three rows' worth of cells over the same predicate.
+    ///
+    /// TWO faults, not one. The tail is the first. The second is that the arms
+    /// which did exist were keyed on SYNTAX: the element-read arm destructured
+    /// `ExprKind::FieldAccess` and resolved the field inline, so it handled one
+    /// spelling and no composition -- `a[0].k` cleared, `a[0].t.1` declined,
+    /// both copying one `i64` out of the same element. The fix resolves the
+    /// CHAIN (`a[i]`, `.f`, `.N` in any composition) down to a declared type
+    /// and asks that type, so a new spelling is an arm in a resolver rather
+    /// than another arm here.
+    ///
+    /// Every printed line reads the STORED payload back -- its contents, or a
+    /// scalar and a string length together -- so a value destroyed at the store
+    /// cannot pass as a value merely leaked.
+    #[test]
+    fn asan_index_store_rhs_spelling_releases_the_displaced_element() {
+        // A TUPLE literal holding a tuple-index read of the element it
+        // replaces. Needs BOTH halves of the fix: an arm for the literal, and
+        // a resolver that can answer for `a[0].1`. 14 allocs / 13 frees before.
+        assert_clean_asan_run(
+            "fn main() {
+                 let n = 7;
+                 let mut a: Vec[(String, i64)] = [(f\"one-aaaaaaaaaaaa-{n}\", 1)];
+                 a[0] = (f\"replaced-bbbbbbbbbbbb-{n}\", a[0].1 + 1);
+                 println(f\"r:{a[0].1}:{a[0].0.len()}\");
+             }
+",
+            &["r:2:23"],
+            "b2026-09-20-29-tuple-literal",
+        );
+
+        // A STRUCT literal holding a named-field read. The field arm already
+        // cleared this expression as a whole RHS; one level down inside the
+        // literal it reached the tail. 13 / 12 before.
+        assert_clean_asan_run(
+            "struct S { s: String, k: i64 }
+             fn main() {
+                 let n = 7;
+                 let mut a: Vec[S] = [S { s: f\"one-aaaaaaaaaaaa-{n}\", k: 1 }];
+                 a[0] = S { s: f\"replaced-bbbbbbbbbbbb-{n}\", k: a[0].k + 1 };
+                 println(f\"r:{a[0].k}:{a[0].s.len()}\");
+             }
+",
+            &["r:2:23"],
+            "b2026-09-20-29-struct-literal",
+        );
+
+        // The COMPOSITION the old inline resolution could not do: an index, a
+        // named field, and a tuple index in one chain, nested two literals
+        // deep. 13 / 12 before.
+        assert_clean_asan_run(
+            "struct S { s: String, t: (i64, i64) }
+             fn main() {
+                 let n = 7;
+                 let mut a: Vec[S] = [S { s: f\"one-aaaaaaaaaaaa-{n}\", t: (1, 1) }];
+                 a[0] = S { s: f\"replaced-bbbbbbbbbbbb-{n}\", t: (a[0].t.1 + 1, 9) };
+                 println(f\"r:{a[0].t.0}:{a[0].s.len()}\");
+             }
+",
+            &["r:2:23"],
+            "b2026-09-20-29-tupleindex-composition",
+        );
+
+        // The tuple-index spelling with NO literal in the picture at all -- the
+        // RHS is a call, so the `Call` arm's per-argument recursion is what
+        // reaches the read. This is the cell that isolates the second fault
+        // from the first: `mk(a[0].k)` was clean and `mk(a[0].t.1)` leaked,
+        // same function, same element, same `i64` word. 13 / 12 before.
+        assert_clean_asan_run(
+            "struct S { s: String, k: i64, t: (i64, i64) }
+             fn mk(n: i64) -> S { return S { s: f\"replaced-bbbbbbbbbbbb-{n}\", k: n, t: (n, n) }; }
+             fn main() {
+                 let n = 7;
+                 let mut a: Vec[S] = [S { s: f\"one-aaaaaaaaaaaa-{n}\", k: 1, t: (1, 1) }];
+                 a[0] = mk(a[0].t.1);
+                 println(f\"r:{a[0].k}:{a[0].s.len()}\");
+             }
+",
+            &["r:1:23"],
+            "b2026-09-20-29-tupleindex-call-arg",
+        );
+
+        // AN INTERPOLATED STRING, and the adversarial form of it: a BARE
+        // interpolation of the very buffer being released, with no surrounding
+        // literal text for a single-part fast path to hide behind. An f-string
+        // allocates its own buffer, so it cannot carry the container's heap --
+        // but allowing it also asserts the release is ordered AFTER the RHS,
+        // and getting that wrong turns a leak into a use-after-free. This cell
+        // is what proves the ordering: 14 / 13 with 18 B lost before, 14 / 14
+        // and valgrind ERROR SUMMARY 0 after. A cell with surrounding text
+        // passes either way.
+        assert_clean_asan_run(
+            "struct S { s: String, k: i64 }
+             fn main() {
+                 let n = 7;
+                 let mut a: Vec[S] = [S { s: f\"one-aaaaaaaaaaaa-{n}\", k: 1 }];
+                 a[0] = S { s: f\"{a[0].s}\", k: 2 };
+                 println(f\"r:{a[0].k}:{a[0].s.len()}\");
+             }
+",
+            &["r:2:18"],
+            "b2026-09-20-29-fstring-bare-interpolation",
+        );
+
+        // An ARRAY literal whose one component is heap-bearing, mentioning the
+        // container through `a.len()` inside an f-string. 13 / 12 before.
+        assert_clean_asan_run(
+            "fn main() {
+                 let n = 7;
+                 let mut a: Vec[Array[String, 1]] = [[f\"one-aaaaaaaaaaaa-{n}\"]];
+                 a[0] = [f\"replaced-bbbbbbbbbbbb-{a.len()}\"];
+                 println(f\"r:{a[0][0]}\");
+             }
+",
+            &["r:replaced-bbbbbbbbbbbb-1"],
+            "b2026-09-20-29-array-literal",
+        );
+
+        // The cell that named the site when the row was filed: the SAME
+        // `.clone()` the arm below clears as a whole RHS, one level down inside
+        // a struct literal. Nothing about the clone changed -- only whether the
+        // walk got there. 13 / 12 before.
+        assert_clean_asan_run(
+            "struct S { s: String, k: i64 }
+             fn main() {
+                 let n = 7;
+                 let mut a: Vec[S] = [S { s: f\"one-aaaaaaaaaaaa-{n}\", k: 1 }];
+                 a[0] = S { s: a[0].s.clone(), k: 2 };
+                 println(f\"r:{a[0].k}:{a[0].s.len()}\");
+             }
+",
+            &["r:2:18"],
+            "b2026-09-20-29-clone-one-level-down",
+        );
+
+        // A `Vec`-typed heap field rather than a `String` one, so the leaked
+        // block is not the one shape every other cell here shares: 15 allocs /
+        // 13 frees with 34 B in 2 blocks before, 15 / 15 after. Two blocks
+        // because the displaced element carried two separate buffers.
+        assert_clean_asan_run(
+            "struct S { s: String, v: Vec[i64] }
+             fn main() {
+                 let n = 7;
+                 let mut a: Vec[S] = [S { s: f\"one-aaaaaaaaaaaa-{n}\", v: [1, 2] }];
+                 a[0] = S { s: f\"replaced-bbbbbbbbbbbb-{n}\", v: a[0].v.clone() };
+                 println(f\"r:{a[0].v.len()}:{a[0].s.len()}\");
+             }
+",
+            &["r:2:23"],
+            "b2026-09-20-29-vec-field-clone",
+        );
+
+        // CONTROLS, all three clean BEFORE the fix -- so a run in which they
+        // are the only cells asserts nothing about it. They are here because
+        // every widening of a leak guard is a double-free candidate, and
+        // nothing above would notice one.
+        //
+        // A top-level `.clone()`, already cleared by its own arm: the release
+        // must not now happen twice.
+        assert_clean_asan_run(
+            "fn main() {
+                 let n = 7;
+                 let mut a: Vec[(String, i64)] = [(f\"one-aaaaaaaaaaaa-{n}\", 1)];
+                 a[0] = a[0].clone();
+                 println(f\"r:{a[0].1}:{a[0].0.len()}\");
+             }
+",
+            &["r:1:18"],
+            "b2026-09-20-29-ctl-toplevel-clone",
+        );
+
+        // An RHS that never mentions the container, which the predicate clears
+        // before it reaches any arm.
+        assert_clean_asan_run(
+            "struct S { s: String, k: i64 }
+             fn main() {
+                 let n = 7;
+                 let mut a: Vec[S] = [S { s: f\"one-aaaaaaaaaaaa-{n}\", k: 1 }];
+                 a[0] = S { s: f\"x-{n}\", k: 2 };
+                 println(f\"r:{a[0].k}:{a[0].s.len()}\");
+             }
+",
+            &["r:2:3"],
+            "b2026-09-20-29-ctl-no-mention",
+        );
+
+        // A `Vec`-typed array literal, which lowers to `PrefixCollectionLiteral`
+        // rather than `ArrayLiteral` and has an owner by another route: it is
+        // clean with the same mention that leaks through the `Array` spelling
+        // above. Deliberately NOT given an arm -- one would change nothing
+        // observable while widening the free's reach -- and this cell is what
+        // would notice if a later widening reached it.
+        assert_clean_asan_run(
+            "fn main() {
+                 let n = 7;
+                 let mut a: Vec[Vec[String]] = [[f\"one-aaaaaaaaaaaa-{n}\"]];
+                 a[0] = [f\"replaced-bbbbbbbbbbbb-{a.len()}\"];
+                 println(f\"r:{a[0][0]}\");
+             }
+",
+            &["r:replaced-bbbbbbbbbbbb-1"],
+            "b2026-09-20-29-ctl-prefix-collection",
+        );
+    }
 }

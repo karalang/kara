@@ -21915,6 +21915,53 @@ impl<'ctx> super::Codegen<'ctx> {
     /// code) and `call_param_entry_copies_element` (the callee copies at
     /// entry, read off the same predicate the callee's own entry-copy is
     /// gated on).
+    /// B-2026-09-20-29 — the declared type of a COMPONENT read out of a
+    /// container element: `a[i].f`, `a[i].N`, and any composition of the two.
+    ///
+    /// `expr_cannot_carry_container_heap`'s element-read arms all ask one
+    /// question — does the thing being read out carry heap — and each used to
+    /// answer it with its own inline resolution, which is why each handled
+    /// exactly one spelling and no composition. `a[0].k` was cleared and
+    /// `a[0].t.1` was not, although both copy a single `i64` word out of the
+    /// same element (measured 13/13 against 13/12, 18 B lost).
+    ///
+    /// Resolving the chain instead of enumerating its spellings is the whole
+    /// point: a predicate keyed on syntax is short by however many spellings
+    /// nobody wrote a cell for, and this family has now been one spelling
+    /// short three times.
+    ///
+    /// Returns `None` for anything not rooted at an index of a container whose
+    /// element type is known, which keeps the callers' conservative default.
+    fn element_component_type_expr(&self, e: &Expr) -> Option<TypeExpr> {
+        match &e.kind {
+            // The root: `a[i]` — the container's element type.
+            ExprKind::Index { object, index } if !matches!(&index.kind, ExprKind::Range { .. }) => {
+                self.vec_index_elem_type_expr(object)
+            }
+            ExprKind::FieldAccess { object, field } => {
+                let base = self.element_component_type_expr(object)?;
+                let TypeKind::Path(p) = &base.kind else {
+                    return None;
+                };
+                let sname = p.segments.last()?;
+                let names = self.type_decls.struct_field_names.get(sname.as_str())?;
+                let tes = self
+                    .type_decls
+                    .struct_field_type_exprs
+                    .get(sname.as_str())?;
+                tes.get(names.iter().position(|n| n == field)?).cloned()
+            }
+            ExprKind::TupleIndex { object, index } => {
+                let base = self.element_component_type_expr(object)?;
+                let TypeKind::Tuple(parts) = &base.kind else {
+                    return None;
+                };
+                parts.get(*index as usize).cloned()
+            }
+            _ => None,
+        }
+    }
+
     fn expr_cannot_carry_container_heap(
         &self,
         e: &Expr,
@@ -21959,34 +22006,88 @@ impl<'ctx> super::Codegen<'ctx> {
                     || self.arg_deep_cloned_since(&a.value, clone_log_mark)
                     || self.call_param_entry_copies_element(callee, i, &a.value, container)
             }),
-            // `ps[i].f` — safe exactly when `f`'s own type carries no heap.
-            // A scalar field read copies a word out of the element and leaves
-            // every buffer behind; a `String`/`Vec` field read does not.
-            ExprKind::FieldAccess { object, field } => {
-                let ExprKind::Index { object: base, .. } = &object.kind else {
-                    return false;
-                };
-                let Some(elem_te) = self.vec_index_elem_type_expr(base) else {
-                    return false;
-                };
-                let TypeKind::Path(p) = &elem_te.kind else {
-                    return false;
-                };
-                let Some(sname) = p.segments.last() else {
-                    return false;
-                };
-                let (Some(names), Some(tes)) = (
-                    self.type_decls.struct_field_names.get(sname.as_str()),
-                    self.type_decls.struct_field_type_exprs.get(sname.as_str()),
-                ) else {
-                    return false;
-                };
-                names
-                    .iter()
-                    .position(|n| n == field)
-                    .and_then(|i| tes.get(i))
-                    .is_some_and(super::vec_method::is_trivially_copyable_te)
+            // `ps[i].f` and `ps[i].N` — safe exactly when the component's own
+            // type carries no heap. A scalar read copies a word out of the
+            // element and leaves every buffer behind; a `String`/`Vec` read
+            // does not, which is what keeps `v[0] = (v[1].0, 3)` from freeing
+            // a buffer the new element still points into.
+            //
+            // B-2026-09-20-29 routed both through `element_component_type_expr`
+            // rather than resolving inline here. The tuple spelling had no arm
+            // at all — a tuple field read is `ExprKind::TupleIndex`, not
+            // `ExprKind::FieldAccess` — and the inline resolution handled no
+            // composition either, so `a[0].t.1` declined while `a[0].k` was
+            // cleared, both copying one `i64` out of the same element
+            // (13 allocs / 13 frees against 13 / 12, 18 B lost at `-O0`).
+            ExprKind::FieldAccess { .. } | ExprKind::TupleIndex { .. } => self
+                .element_component_type_expr(e)
+                .as_ref()
+                .is_some_and(super::vec_method::is_trivially_copyable_te),
+            // B-2026-09-20-29 — AGGREGATE LITERALS. An aggregate literal
+            // carries the container's heap exactly when one of its components
+            // does, which is the same recursion the `Binary` arm above already
+            // performs on its two operands — but there was no arm for any of
+            // them, so a literal RHS reached `_ => false` and stood the whole
+            // displaced release down. Three spellings measured leaking 18 B in
+            // 1 block each at `-O0` on a SINGLE-level `Vec` store, against the
+            // identical store with a constant RHS at 12/12 clean:
+            //
+            //     a[0] = (f"new", a[0].1 + 1)              Tuple
+            //     a[0] = S { s: f"new", k: a[0].k + 1 }    StructLiteral
+            //     a[0] = [f"new-{a.len()}"]                ArrayLiteral
+            //
+            // The `.clone()` cell is what named the site: the SAME
+            // `.clone()` is cleared by the arm above as a whole RHS and
+            // reached the tail one level down inside a struct literal.
+            //
+            // Deliberately NOT extended to the other container literals here.
+            // `PrefixCollectionLiteral` — what `lowering.rs` turns a
+            // `Vec`-typed array literal into — is MEASURED CLEAN at 15/15 with
+            // the same mention, so it has an owner by another route and an arm
+            // for it would change nothing observable while widening the
+            // free's reach. `RepeatLiteral` and `MapLiteral` are unmeasured.
+            // The conservative tail is a leak and widening it is a double
+            // free, so each arm is added against a measured cell rather than
+            // by symmetry.
+            ExprKind::Tuple(items) | ExprKind::ArrayLiteral(items) => items
+                .iter()
+                .all(|it| self.expr_cannot_carry_container_heap(it, container, clone_log_mark)),
+            ExprKind::StructLiteral { fields, spread, .. } => {
+                fields.iter().all(|f| {
+                    self.expr_cannot_carry_container_heap(&f.value, container, clone_log_mark)
+                }) && spread.as_ref().is_none_or(|sp| {
+                    self.expr_cannot_carry_container_heap(sp, container, clone_log_mark)
+                })
             }
+            // B-2026-09-20-29 -- AN INTERPOLATED STRING. An f-string's value
+            // is a buffer it allocates itself and fills by FORMATTING its
+            // parts, so it cannot carry a pointer into the displaced
+            // element's heap however deeply its interpolations reach into
+            // the container -- the same property that clears a top-level
+            // `.clone()` above, and the reason this arm needs no recursion
+            // into the parts.
+            //
+            // The mention guard does see into an f-string (measured: the
+            // `f"replaced-{a[0].k}-b"` cell leaks, the `f"x-{n}"` cell with
+            // no mention is clean at 13/13), so before this arm every
+            // f-string that named the container reached the tail and stood
+            // the release down.
+            //
+            // The claim that has to hold is not just "fresh buffer" but
+            // "fresh buffer, and the read happens before the free" -- if the
+            // release were emitted first, an interpolation reading the old
+            // element would be a use-after-free, which is worse than the leak
+            // it replaces. The adversarial cell is a BARE interpolation of
+            // the very buffer being released, with no surrounding literal
+            // text for a single-part fast path to hide behind:
+            //
+            //     a[0] = S { s: f"{a[0].s}", k: 2 }
+            //
+            // 14 allocs / 14 frees, valgrind ERROR SUMMARY 0 at `-O0` -- no
+            // invalid read, so the ordering holds too. It leaks 18 B in 1
+            // block without this arm. `f"x-{a[0].s}"` and `f"x-{a[0].k}"`
+            // measure the same way.
+            ExprKind::InterpolatedStringLit(..) => true,
             _ => false,
         }
     }
