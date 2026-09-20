@@ -230,6 +230,17 @@ path to the change under test) and reading `df` **after** the failing leg rather
 than before it, since the leg is what consumes the space. `classify` checks free
 space for exactly this reason and SUSPECTS rather than asserts when it fires.
 
+**On a freshly REBASED tree that fifth shape becomes an accusation.** The
+tests that fail are unrelated to your change, the tree just gained someone
+else's commits, and the obvious reading is that one of them regressed you --
+so the thread pays for a bisect against a commit that did nothing wrong. This
+is likeliest exactly when it is most expensive: several sessions pushing
+means frequent rebases, and a rebase is usually followed by a re-verification
+leg, which is what spends the allowance. Before attributing a post-rebase red
+to the commits you rebased onto, read `df` (or `scripts/disk-guard.sh
+allowance`) AFTER the failing leg, and re-run the named failures in isolation
+-- they pass, which is the tell rather than the exoneration.
+
 ## Branch management
 
 **Two environments, two workflows — pick by where the session runs.** The worktree rules in the rest of this section govern the **local multi-worktree checkout** (the primary machine, where sibling worktrees run parallel slices and the primary's clean `git status` is load-bearing). They do **not** apply to an **ephemeral cloud container** (Claude Code on the web / a fresh clone discarded when the session ends): there are no sibling worktrees, no parallel slices, and nothing to isolate from, so `EnterWorktree` + a feature branch buys nothing but ceremony. In a cloud container, **work directly on `main`** — commit straight to `main`, no feature branch, no PR unless explicitly asked (owner-authorized 2026-07-07, overriding the mandatory-worktree default below for this environment only).
