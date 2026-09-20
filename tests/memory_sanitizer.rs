@@ -99349,6 +99349,82 @@ fn main() {
         );
     }
 
+    /// B-2026-09-19-35 — the MEMORY twin of `tests/codegen.rs`'s
+    /// `e2e_boxed_erased_payload_survives_every_handoff_spelling`, which
+    /// asserts stdout only.
+    ///
+    /// Both halves of this row are invisible to a stdout assertion in one
+    /// direction each. A missing free is a LEAK, which prints nothing and is
+    /// seen only under LSan. A missing NEUTRALIZER is a double free, which
+    /// aborts — that one an E2E cell does catch, but by truncation, so it
+    /// reports the same way as any other crash. Only this leg says which.
+    ///
+    /// The three spellings are three EMISSION SITES, not three phrasings of
+    /// one: `shw(h.g);` drains at `compile_stmt`, the same call as a block's
+    /// final expression at `compile_block`, and as a function body's final
+    /// expression at `compile_function_body`. The tail forms were the ones
+    /// with no drain at all.
+    #[test]
+    fn asan_boxed_erased_payload_survives_every_handoff_spelling() {
+        const DECLS: &str = "enum G1[T] { Y(T), N }\n\
+             struct H[T] { g: G1[T] }\n\
+             struct H2[T] { h: H[T] }\n\
+             struct In1[T] { g: G1[T] }\n\
+             struct Out1[T] { g: In1[T] }\n\
+             fn wrap[T](g: G1[T], c: bool) -> H[T] { if c { return H { g: g } } return H { g: G1.N } }\n\
+             fn wrapNest[T](g: G1[T], c: bool) -> H2[T] { if c { return H2 { h: H { g: g } } } return H2 { h: H { g: G1.N } } }\n\
+             fn wrapSame[T](g: G1[T], c: bool) -> Out1[T] { if c { return Out1 { g: In1 { g: g } } } return Out1 { g: In1 { g: G1.N } } }\n\
+             fn shw(g: G1[String]) { match g { G1.Y(v) => { println(f\"mx {v.len()}\") } G1.N => { println(\"mx 0\") } } }\n\
+             fn fnTail() { let g: G1[String] = G1.Y(\"ffffffff-6\"); let h = wrap(g, true); shw(h.g) }\n";
+
+        // The three emission sites, on the payload-CARRYING variant.
+        assert_clean_asan_run(
+            &format!(
+                "{DECLS}\
+                 fn main() {{\n\
+                 \x20   {{ let g: G1[String] = G1.Y(\"aaaaaaaa-1\"); let h = wrap(g, true); shw(h.g) }}\n\
+                 \x20   {{ let g: G1[String] = G1.Y(\"bbbbbbbb-2\"); let h = wrap(g, true); shw(h.g); }}\n\
+                 \x20   fnTail();\n\
+                 \x20   println(\"end\");\n\
+                 }}\n"
+            ),
+            &["mx 10", "mx 10", "mx 10", "end"],
+            "b1935-tail-stmt-fntail",
+        );
+
+        // A CHAINED place, one hop deeper than the neutralizer used to reach,
+        // and the same chain with the hop and the field sharing a name.
+        assert_clean_asan_run(
+            &format!(
+                "{DECLS}\
+                 fn main() {{\n\
+                 \x20   {{ let g: G1[String] = G1.Y(\"cccccccc-3\"); let h = wrapNest(g, true); shw(h.h.g) }}\n\
+                 \x20   {{ let g: G1[String] = G1.Y(\"dddddddd-4\"); let o = wrapSame(g, true); shw(o.g.g) }}\n\
+                 \x20   println(\"end\");\n\
+                 }}\n"
+            ),
+            &["mx 10", "mx 10", "end"],
+            "b1935-chain",
+        );
+
+        // The payload-FREE variant through the same spellings: a neutralizer
+        // that fired unconditionally on a variant holding no box would show
+        // here, where the caller is still the only owner of nothing.
+        assert_clean_asan_run(
+            &format!(
+                "{DECLS}\
+                 fn main() {{\n\
+                 \x20   {{ let g: G1[String] = G1.Y(\"eeeeeeee-5\"); let h = wrap(g, false); shw(h.g) }}\n\
+                 \x20   {{ let g: G1[String] = G1.Y(\"gggggggg-7\"); let h = wrapNest(g, false); shw(h.h.g) }}\n\
+                 \x20   {{ let g: G1[String] = G1.Y(\"hhhhhhhh-8\"); let o = wrapSame(g, false); shw(o.g.g) }}\n\
+                 \x20   println(\"end\");\n\
+                 }}\n"
+            ),
+            &["mx 0", "mx 0", "mx 0", "end"],
+            "b1935-empty-variant",
+        );
+    }
+
     /// B-2026-09-17-8 — the memory half of the two paired output fixtures.
     ///
     /// Compiling a monomorph mid-caller wiped the caller's payload-ownership

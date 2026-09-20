@@ -20136,6 +20136,98 @@ fn main() {
         assert_eq!(out, "struct\n  mx 10\nstructF\n  mx 0\nallpaths\n  mx 10\ntuple\n  mx 10\ntupleF\n  mx 0\nnested\n  mx 10\nbare\n  mx 10\nbareF\n  mx 0\ndiscard\n  x\nend\n");
     }
 
+    /// B-2026-09-19-35 — A BLOCK'S TAIL EXPRESSION IS NOT A STATEMENT, so the
+    /// move-out neutralizer for a boxed erased enum payload was queued and
+    /// never drained, and a CHAINED place could not be queued at all.
+    ///
+    /// Three spellings of one handoff, and each covers a different emission
+    /// site. `stmt` is `shw(h.g);`, which `compile_stmt` drains. `tail` is the
+    /// same call written as a braced block's final expression, which
+    /// `compile_block` emits and the statement drain structurally cannot
+    /// reach. `fnTail` is the same call as a FUNCTION BODY's final expression,
+    /// `compile_function_body`'s own site — a third place, not a restatement
+    /// of the second.
+    ///
+    /// THE DISCRIMINATOR IS ONE CHARACTER, which is what makes the pair worth
+    /// keeping rather than collapsing. Measured on the minimal cell before the
+    /// fix: `shw(h.g)` gives zero `b35.eboxzero` stores and
+    /// `free(): double free detected in tcache 2`, `shw(h.g);` gives two
+    /// stores and `ERROR SUMMARY: 0 errors`. Nothing else about the two
+    /// programs differs. A family whose cells are all spelled one way cannot
+    /// see the other one at all, and every cell of
+    /// `e2e_generic_callee_hands_its_boxed_payload_back_inside_an_aggregate`
+    /// is spelled as a tail, deliberately, for its own row's reason.
+    ///
+    /// `chain` / `chainF` are `shw(h.h.g)` — a place one hop deeper than the
+    /// neutralizer used to resolve. That exclusion was harmless while nothing
+    /// freed the box; once the holder's drop learned to, the chain became the
+    /// one path with two owners and no neutralizer, and the nine-cell fixture
+    /// above aborted at its `nested` cell having printed the six before it.
+    ///
+    /// The `F` cells take the variant with no payload on the same call, so a
+    /// neutralizer that fired unconditionally on a non-boxing variant would
+    /// show here rather than in a shape nobody wrote.
+    ///
+    /// The MEMORY twin is `tests/memory_sanitizer.rs`'s
+    /// `asan_boxed_erased_payload_survives_every_handoff_spelling`.
+    #[test]
+    fn e2e_boxed_erased_payload_survives_every_handoff_spelling() {
+        let Some(out) = run_program(
+            r#"enum G1[T] { Y(T), N }
+struct H[T] { g: G1[T] }
+struct H2[T] { h: H[T] }
+fn wrap[T](g: G1[T], c: bool) -> H[T] { if c { return H { g: g } } return H { g: G1.N } }
+fn wrapNest[T](g: G1[T], c: bool) -> H2[T] { if c { return H2 { h: H { g: g } } } return H2 { h: H { g: G1.N } } }
+fn shw(g: G1[String]) { match g { G1.Y(v) => { println(f"  mx {v.len()}") } G1.N => { println("  mx 0") } } }
+fn fnTail() { let g: G1[String] = G1.Y(f"aaaaaaaa-6"); let h = wrap(g, true); shw(h.g) }
+
+fn main() {
+    println("tail");   { let g: G1[String] = G1.Y(f"aaaaaaaa-1"); let h = wrap(g, true); shw(h.g) }
+    println("stmt");   { let g: G1[String] = G1.Y(f"aaaaaaaa-2"); let h = wrap(g, true); shw(h.g); }
+    println("tailF");  { let g: G1[String] = G1.Y(f"aaaaaaaa-3"); let h = wrap(g, false); shw(h.g) }
+    println("chain");  { let g: G1[String] = G1.Y(f"aaaaaaaa-4"); let h = wrapNest(g, true); shw(h.h.g) }
+    println("chainF"); { let g: G1[String] = G1.Y(f"aaaaaaaa-5"); let h = wrapNest(g, false); shw(h.h.g) }
+    println("fnTail"); fnTail()
+    println("end")
+}
+"#,
+        ) else {
+            return;
+        };
+        assert_eq!(out, "tail\n  mx 10\nstmt\n  mx 10\ntailF\n  mx 0\nchain\n  mx 10\nchainF\n  mx 0\nfnTail\n  mx 10\nend\n");
+    }
+
+    /// B-2026-09-19-35 — the chain walk steps its HOPS and its FIELD
+    /// separately, and this is the cell that says so.
+    ///
+    /// `struct Out1[T] { g: In1[T] }` over `struct In1[T] { g: G1[T] }` spells
+    /// the hop and the field with the SAME NAME, so `o.g.g` breaks any walk
+    /// that folds the field onto the end of the hop list and stops at the
+    /// first name that matches: it would answer with `In1`, a struct, where
+    /// the field's own type `G1[String]` was wanted, and the neutralizer would
+    /// then GEP one level short. Caught by reading the walker rather than by a
+    /// failing cell, which is why the cell exists — a bug found by reading is
+    /// one nothing re-checks.
+    #[test]
+    fn e2e_boxed_erased_payload_chain_hop_and_field_may_share_a_name() {
+        let Some(out) = run_program(
+            r#"enum G1[T] { Y(T), N }
+struct In1[T] { g: G1[T] }
+struct Out1[T] { g: In1[T] }
+fn wrapSame[T](g: G1[T], c: bool) -> Out1[T] { if c { return Out1 { g: In1 { g: g } } } return Out1 { g: In1 { g: G1.N } } }
+fn shw(g: G1[String]) { match g { G1.Y(v) => { println(f"  mx {v.len()}") } G1.N => { println("  mx 0") } } }
+fn main() {
+    println("same");  { let g: G1[String] = G1.Y(f"aaaaaaaa-1"); let o = wrapSame(g, true); shw(o.g.g) }
+    println("sameF"); { let g: G1[String] = G1.Y(f"aaaaaaaa-2"); let o = wrapSame(g, false); shw(o.g.g) }
+    println("end")
+}
+"#,
+        ) else {
+            return;
+        };
+        assert_eq!(out, "same\n  mx 10\nsameF\n  mx 0\nend\n");
+    }
+
     /// B-2026-09-17-7 — a generic callee that MAY hand its boxed payload back
     /// freed the box twice, and the check that stops it was blind inside braces.
     ///

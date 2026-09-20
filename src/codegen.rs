@@ -2186,7 +2186,17 @@ pub(super) struct Codegen<'ctx> {
     /// there would hand the callee the zeroed words. Draining at the end of
     /// `compile_stmt` is after every load in the statement and long before the
     /// owner's scope-exit drop, which is the window the zero has to land in.
-    pub(crate) pending_enum_field_zeros: Vec<(inkwell::values::PointerValue<'ctx>, String)>,
+    /// B-2026-09-19-35 widened the entry with the field's CONCRETE enum
+    /// `TypeExpr` when that monomorph heap-BOXES its payload: the box word is
+    /// invisible to `zero_enum_payload_caps` (it skips `EnumDropKind::None`,
+    /// which is what an erased `T` payload always classifies as), so the
+    /// move-out has to zero it separately or the holder's new drop frees a box
+    /// the callee already took.
+    pub(crate) pending_enum_field_zeros: Vec<(
+        inkwell::values::PointerValue<'ctx>,
+        String,
+        Option<TypeExpr>,
+    )>,
     /// B-2026-09-20-13 — caller enum values to STORE BACK at the end of the
     /// statement, queued by [`Codegen::uam_copy_boxed_enum_arg`].
     ///

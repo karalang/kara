@@ -536,7 +536,29 @@ impl<'ctx> super::Codegen<'ctx> {
             }
         }
         if let Some(ref expr) = block.final_expr {
+            // B-2026-09-19-35 — a block's TAIL EXPRESSION is not a `Stmt`, so
+            // `compile_stmt`'s drain structurally cannot see it: a move-out
+            // neutralizer queued by `shw(h.g)` written WITHOUT a trailing
+            // semicolon was pushed and never flushed. Measured on one cell in
+            // two spellings, differing only by the `;`: two `b35.eboxzero`
+            // stores and a clean valgrind WITH it, zero stores and
+            // `free(): double free detected in tcache 2` without. The queue
+            // site had already fired in both (`b51.enumfld` = 1), which is
+            // what ruled out the predicate and pointed here.
+            //
+            // A tail's stores land after the value is produced and before the
+            // scope-exit drops, which is the same window `compile_stmt` gives
+            // a statement. The flush self-guards on a live insert block, so a
+            // diverging tail is a no-op.
+            //
+            // THE MARK IS NOT BOOKKEEPING. This is EVERY block, including a
+            // value-position one inside a statement that has already queued
+            // entries of its own (`let x = if c { eat(h.g) } else { .. };`),
+            // and those belong at that statement's end rather than at this
+            // tail. Draining from the mark leaves them where they were.
+            let mark = self.pending_enum_field_zeros.len();
             let val = self.compile_tail_final_expr(expr, tail_inner)?;
+            self.flush_pending_enum_field_zeros_from(mark);
             Ok(Some(val))
         } else {
             Ok(None)
@@ -2179,7 +2201,15 @@ impl<'ctx> super::Codegen<'ctx> {
         }
 
         if let Some(ref expr) = body.final_expr {
+            // B-2026-09-19-35 — a FUNCTION BODY's tail, which is a different
+            // emission site from `compile_block`'s and not a restatement of
+            // it: `fn t() { let h = wrap(g, true); shw(h.g) }` reaches this
+            // one and never that one. Fixing either alone leaves the other
+            // spelling of the same program still double-freeing. Same mark
+            // discipline, for the same reason.
+            let mark = self.pending_enum_field_zeros.len();
             let val = self.compile_tail_final_expr(expr, auto_par_tail)?;
+            self.flush_pending_enum_field_zeros_from(mark);
             Ok(Some(val))
         } else {
             Ok(None)

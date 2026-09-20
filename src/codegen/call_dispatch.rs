@@ -13334,25 +13334,73 @@ impl<'ctx> super::Codegen<'ctx> {
         // already terminated and skips. Recovering it needs the placement
         // question settled, not just the `SelfValue` arm added back.
         //
-        // A CHAINED place (`k.h.g`) is excluded because this resolves one hop
-        // only; the walker that would reach it is
-        // `zero_nested_struct_field_move_cap`. Measured unchanged, 7 errors
-        // before and after, rather than silently assumed.
-        let ExprKind::Identifier(s) = &object.kind else {
-            return;
-        };
-        let s = s.as_str();
-        let Some(slot) = self.variables.get(s).copied() else {
-            return;
-        };
-        // The slot holding the struct INLINE is what proves an OWNED binding
-        // rather than a `ref Struct` borrow, whose slot is an 8-byte pointer —
-        // zeroing through that would corrupt the caller.
-        let BasicTypeEnum::StructType(held) = slot.ty else {
-            return;
-        };
-        let Some(sname) = self.var_types.var_type_names.get(s).cloned() else {
-            return;
+        // A CHAINED place (`k.h.g`) WAS excluded here because this resolved
+        // one hop only, and that exclusion was measured unchanged for
+        // B-2026-09-20-13 — 7 errors before and after. It stops being harmless
+        // the moment the holder's drop learns to free the box, which is this
+        // row's other half: `__karac_drop_struct_H2` reaches `H`'s walker,
+        // which frees, and a chain the neutralizer cannot reach leaves the
+        // callee's copy to free it again. MEASURED, on the nine-cell fixture
+        // `e2e_generic_callee_hands_its_boxed_payload_back_inside_an_aggregate`
+        // whose `nested` cell is exactly `shw(h.h.g)`: with the free half and
+        // without this arm the program aborts at that cell with
+        // `free(): double free detected in tcache 2`, one Invalid free, having
+        // printed the six cells before it.
+        //
+        // The chain arm is ENTERED ONLY WHEN THE FINAL FIELD'S ENUM BOXES IN
+        // THIS INSTANTIATION, answered by a pure walk that emits no IR. That
+        // is deliberate and not tidiness: every chained place that does not
+        // box takes the same early return it took before, so -20-13's
+        // "measured unchanged" holds for exactly the shapes it was measured
+        // on.
+        //
+        // AND THE ANSWER HAS TO BE ASKED OF THE INSTANTIATED TYPE, which cost
+        // a build to learn. A first version asked
+        // `user_enum_boxed_payload_variants` of the DECLARED field type, on
+        // the reasoning that the boxing answer is a property of the enum's
+        // name. It is not: that function substitutes the path's generic
+        // arguments and compares the payload's word count against the area,
+        // so the declared `G1[T]` measures `T` at one word, does not exceed a
+        // one-word area, and answers FALSE. Only `G1[String]` answers true.
+        // The reasoning came from a trace rendering `G1[String]` as `G1` —
+        // a display function that omits generic arguments — so the evidence
+        // for it was an artefact of how it was printed.
+        // Carries the chain arm's already-resolved instantiated field type
+        // past the shared body, whose own `struct_field_te_subst_inst` route
+        // reads the OBJECT's instantiation and has no arm for a chained one.
+        let mut chain_boxed: Option<TypeExpr> = None;
+        let (held, base_ptr, sname) = match &object.kind {
+            ExprKind::Identifier(s) => {
+                let s = s.as_str();
+                let Some(slot) = self.variables.get(s).copied() else {
+                    return;
+                };
+                // The slot holding the struct INLINE is what proves an OWNED
+                // binding rather than a `ref Struct` borrow, whose slot is an
+                // 8-byte pointer — zeroing through that would corrupt the
+                // caller.
+                let BasicTypeEnum::StructType(held) = slot.ty else {
+                    return;
+                };
+                let Some(sname) = self.var_types.var_type_names.get(s).cloned() else {
+                    return;
+                };
+                (held, slot.ptr, sname)
+            }
+            ExprKind::FieldAccess { .. } => {
+                let Some((final_name, inst_fte)) = self.chained_field_inst_te(object, field) else {
+                    return;
+                };
+                if self.user_enum_boxed_payload_variants(&inst_fte).is_empty() {
+                    return;
+                }
+                let Some((ptr, ty)) = self.gep_owned_struct_field_chain(object) else {
+                    return;
+                };
+                chain_boxed = Some(inst_fte);
+                (ty, ptr, final_name)
+            }
+            _ => return,
         };
         if self.type_decls.shared_types.contains_key(sname.as_str()) {
             return;
@@ -13383,23 +13431,257 @@ impl<'ctx> super::Codegen<'ctx> {
         if ename == "Option" || ename == "Result" {
             return;
         }
-        if !self.enum_param_owned_by_transfer(&ename) {
-            return;
-        }
         let Some(layout) = self.type_decls.enum_layouts.get(ename.as_str()).cloned() else {
             return;
         };
         if layout.is_shared {
             return;
         }
+        // B-2026-09-19-35 — the field's CONCRETE type, when this monomorph
+        // heap-BOXES its payload. `fte` above is the DECLARED type, erased to
+        // `G1[T]` for a generic holder, which answers no boxing question at all;
+        // `struct_field_te_subst_inst` recovers the instantiation from the
+        // object expression, which is the same route B-2026-09-20-13's copy
+        // takes at this position.
+        let subst_inst = self.struct_field_te_subst_inst(sname.as_str(), object, &fte);
+        let boxed_te = subst_inst
+            .filter(|te| !self.user_enum_boxed_payload_variants(te).is_empty())
+            .or(chain_boxed);
+        // The transfer gate is NOT the question for a boxed erased payload, and
+        // that is this row's whole finding restated at the move-out site:
+        // `enum_param_owned_by_transfer` keys on whether the callee's ENTRY COPY
+        // declines the payload struct, which is a statement about copying and
+        // not about who owns a heap box. An erased payload makes it answer
+        // false, so this queue was never reached for exactly the shapes whose
+        // box needs zeroing. The boxing is its own discriminator; the old gate
+        // still governs every non-boxing field, unchanged.
+        if boxed_te.is_none() && !self.enum_param_owned_by_transfer(&ename) {
+            return;
+        }
         let Ok(field_ptr) =
             self.builder
-                .build_struct_gep(held, slot.ptr, idx as u32, "b51.enumfld.p")
+                .build_struct_gep(held, base_ptr, idx as u32, "b51.enumfld.p")
         else {
             return;
         };
         let _ = &layout;
-        self.pending_enum_field_zeros.push((field_ptr, ename));
+        self.pending_enum_field_zeros
+            .push((field_ptr, ename, boxed_te));
+    }
+
+    /// B-2026-09-19-35 — the struct a chained owned place lands in, and that
+    /// place's field type AS INSTANTIATED, or `None`. For `h.h` over
+    /// `struct H2[T] { h: H[T] }` with `h: H2[String]` and field `g`, that is
+    /// `("H", G1[String])`.
+    ///
+    /// PURE: it reads declaration tables and emits no IR, which is what lets
+    /// `zero_transfer_owned_enum_field_arg` decide whether a chain is worth
+    /// walking BEFORE it commits any GEP. Without that split, asking the
+    /// question would itself change the IR of every chained place that turns
+    /// out not to need the answer.
+    ///
+    /// IT CARRIES THE INSTANTIATION DOWN HOP BY HOP, and that is the whole
+    /// reason it exists rather than a name-only walk.
+    /// `struct_field_type_exprs` is keyed by the DECLARATION, so every hop
+    /// reads back the erased `H[T]` / `G1[T]` whatever the binding holds, and
+    /// the boxing test this feeds measures the payload's WIDTH — which an
+    /// erased `T` fails. So each hop substitutes the owner's arguments into
+    /// the field's declared type before becoming the next owner, exactly as
+    /// `struct_field_te_subst_inst` does for the single-hop case, which this
+    /// generalizes. A non-generic hop contributes an empty substitution and
+    /// passes its declared type through unchanged, which is already concrete.
+    ///
+    /// Every hop must be a non-shared user struct, the same condition
+    /// `zero_nested_struct_field_move_cap` walks under and for the same
+    /// reason: a `shared` hop is an RC handle rather than an inline struct, so
+    /// a GEP through it would walk a pointer as a struct.
+    fn chained_field_inst_te(&self, object: &Expr, field: &str) -> Option<(String, TypeExpr)> {
+        let mut hops: Vec<&str> = Vec::new();
+        let mut cur = object;
+        let root = loop {
+            match &cur.kind {
+                ExprKind::FieldAccess { object, field } => {
+                    hops.push(field.as_str());
+                    cur = object;
+                }
+                ExprKind::Identifier(_) => break cur,
+                _ => return None,
+            }
+        };
+        hops.reverse();
+        // The root's own instantiation (`H2[String]`), when it has one. A
+        // non-generic root has none and needs none.
+        let mut cur_te = self.enum_inst_type_of_expr(root);
+        let mut cur_name = match &root.kind {
+            ExprKind::Identifier(n) => self.var_types.var_type_names.get(n.as_str()).cloned()?,
+            _ => return None,
+        };
+        // The STRUCT hops, then the field, stepped separately rather than by
+        // chaining `field` onto `hops` and testing `hop == field`. That test
+        // is wrong whenever a hop is SPELLED like the field (`h.g.g`): it
+        // stops at the first hop and hands back a struct type as though it
+        // were the field's.
+        for hop in &hops {
+            let next_te = self.chain_hop_te(cur_name.as_str(), cur_te.as_ref(), hop)?;
+            let TypeKind::Path(p) = &next_te.kind else {
+                return None;
+            };
+            let next_name = p.segments.last().cloned()?;
+            if !self
+                .type_decls
+                .struct_types
+                .contains_key(next_name.as_str())
+                || self
+                    .type_decls
+                    .shared_types
+                    .contains_key(next_name.as_str())
+            {
+                return None;
+            }
+            cur_name = next_name;
+            cur_te = Some(next_te);
+        }
+        // The field itself, whose type is the enum this whole walk is for.
+        let fte = self.chain_hop_te(cur_name.as_str(), cur_te.as_ref(), field)?;
+        Some((cur_name, fte))
+    }
+
+    /// B-2026-09-19-35 — one hop of [`Self::chained_field_inst_te`]: the
+    /// declared type of `<owner>.<field>` with the owner's generic arguments
+    /// substituted in, or `None`. A non-generic owner contributes no
+    /// substitution and its declared field type is already concrete.
+    fn chain_hop_te(
+        &self,
+        owner: &str,
+        owner_inst: Option<&TypeExpr>,
+        field: &str,
+    ) -> Option<TypeExpr> {
+        if self.type_decls.shared_types.contains_key(owner) {
+            return None;
+        }
+        let idx = self
+            .type_decls
+            .struct_field_names
+            .get(owner)
+            .and_then(|names| names.iter().position(|n| n == field))?;
+        let declared = self
+            .type_decls
+            .struct_field_type_exprs
+            .get(owner)
+            .and_then(|tes| tes.get(idx))?
+            .clone();
+        Some(match self.struct_generic_arg_subst(owner, owner_inst) {
+            Some(subst) => {
+                crate::codegen::helpers::subst_type_params_in_type_expr(&declared, &subst)
+            }
+            None => declared,
+        })
+    }
+
+    /// B-2026-09-19-35 — the `{param -> arg}` map of a struct instantiation,
+    /// or `None` when the struct is not generic or the instantiation is not
+    /// known. Shared by [`Self::chained_field_inst_te`]'s hops.
+    fn struct_generic_arg_subst(
+        &self,
+        struct_name: &str,
+        inst: Option<&TypeExpr>,
+    ) -> Option<HashMap<String, TypeExpr>> {
+        let params = self.type_decls.struct_generic_params.get(struct_name)?;
+        if params.is_empty() {
+            return None;
+        }
+        let TypeKind::Path(ip) = &inst?.kind else {
+            return None;
+        };
+        let args = ip.generic_args.as_ref()?;
+        if args.len() != params.len() {
+            return None;
+        }
+        let mut subst: HashMap<String, TypeExpr> = HashMap::new();
+        for (p, a) in params.iter().zip(args.iter()) {
+            if let GenericArg::Type(te) = a {
+                subst.insert(p.clone(), te.clone());
+            }
+        }
+        if subst.is_empty() {
+            None
+        } else {
+            Some(subst)
+        }
+    }
+
+    /// B-2026-09-19-35 — GEP down a chained owned place to the struct it lands
+    /// in, returning that pointer and its type.
+    ///
+    /// The IR-emitting half of the pair; call it only once
+    /// [`Self::chained_field_inst_te`] has said the chain is one
+    /// worth walking. Its checks are repeated here rather than trusted,
+    /// because this half additionally has to agree with the LLVM layout: a
+    /// declared type naming a struct is not proof the slot holds that struct
+    /// inline, and `get_field_type_at_index` is what settles it.
+    fn gep_owned_struct_field_chain(
+        &self,
+        object: &Expr,
+    ) -> Option<(PointerValue<'ctx>, inkwell::types::StructType<'ctx>)> {
+        let mut hops: Vec<&str> = Vec::new();
+        let mut cur = object;
+        let root = loop {
+            match &cur.kind {
+                ExprKind::FieldAccess { object, field } => {
+                    hops.push(field.as_str());
+                    cur = object;
+                }
+                ExprKind::Identifier(n) => break n.as_str(),
+                _ => return None,
+            }
+        };
+        hops.reverse();
+        let slot = self.variables.get(root).copied()?;
+        let BasicTypeEnum::StructType(mut cur_ty) = slot.ty else {
+            return None;
+        };
+        let mut cur_name = self.var_types.var_type_names.get(root).cloned()?;
+        let mut cur_ptr = slot.ptr;
+        for hop in hops {
+            if self.type_decls.shared_types.contains_key(cur_name.as_str()) {
+                return None;
+            }
+            let idx = self
+                .type_decls
+                .struct_field_names
+                .get(cur_name.as_str())
+                .and_then(|names| names.iter().position(|n| n == hop))?;
+            let next_name = self
+                .type_decls
+                .struct_field_type_exprs
+                .get(cur_name.as_str())
+                .and_then(|tes| tes.get(idx))
+                .and_then(|te| match &te.kind {
+                    TypeKind::Path(p) => p.segments.last().cloned(),
+                    _ => None,
+                })?;
+            if self
+                .type_decls
+                .shared_types
+                .contains_key(next_name.as_str())
+            {
+                return None;
+            }
+            let BasicTypeEnum::StructType(next_ty) = cur_ty.get_field_type_at_index(idx as u32)?
+            else {
+                return None;
+            };
+            if self.type_decls.struct_types.get(next_name.as_str()) != Some(&next_ty) {
+                return None;
+            }
+            cur_ptr = self
+                .builder
+                .build_struct_gep(cur_ty, cur_ptr, idx as u32, "b35.chain.p")
+                .ok()?;
+            cur_ty = next_ty;
+            cur_name = next_name;
+        }
+        Some((cur_ptr, cur_ty))
     }
 
     /// Emit the stores queued by [`Self::zero_transfer_owned_enum_field_arg`]
@@ -13412,10 +13694,31 @@ impl<'ctx> super::Codegen<'ctx> {
     /// field whose value is still live. Skipping only leaves that spelling
     /// exactly as it was before this fix.
     pub(super) fn flush_pending_enum_field_zeros(&mut self) {
-        if self.pending_enum_field_zeros.is_empty() {
+        self.flush_pending_enum_field_zeros_from(0);
+    }
+
+    /// B-2026-09-19-35 — drain only the entries queued AT OR AFTER `mark`,
+    /// leaving earlier ones for whoever queued them.
+    ///
+    /// The tail-expression drain needs this and the statement drain does not.
+    /// A statement owns every entry queued while it was compiling, so it
+    /// drains the whole queue. A TAIL does not: a value-position block
+    /// (`let x = if c { eat(h.g) } else { .. };`) is compiled inside a
+    /// statement that may already have queued entries of its own, and those
+    /// belong at the END of that statement — the window
+    /// `zero_transfer_owned_enum_field_arg` documents, after every load in the
+    /// statement. Draining them at an inner block's tail would zero a field
+    /// the rest of the statement can still read.
+    ///
+    /// Taking a mark rather than trusting the tail to be outermost is what
+    /// makes the tail drain safe to place on EVERY block rather than only on
+    /// the ones known to be statement-position, which `compile_block` cannot
+    /// tell apart.
+    pub(super) fn flush_pending_enum_field_zeros_from(&mut self, mark: usize) {
+        if self.pending_enum_field_zeros.len() <= mark {
             return;
         }
-        let pending = std::mem::take(&mut self.pending_enum_field_zeros);
+        let pending: Vec<_> = self.pending_enum_field_zeros.drain(mark..).collect();
         let live = self
             .builder
             .get_insert_block()
@@ -13423,9 +13726,15 @@ impl<'ctx> super::Codegen<'ctx> {
         if !live {
             return;
         }
-        for (field_ptr, ename) in pending {
+        for (field_ptr, ename, boxed_te) in pending {
             if let Some(layout) = self.type_decls.enum_layouts.get(ename.as_str()).cloned() {
                 self.zero_enum_payload_caps(field_ptr, &layout);
+            }
+            // B-2026-09-19-35 — and the box word `zero_enum_payload_caps`
+            // structurally cannot reach, for the reason on
+            // `zero_erased_boxed_enum_payload_words_at`.
+            if let Some(te) = boxed_te {
+                self.zero_erased_boxed_enum_payload_words_at(&te, field_ptr);
             }
         }
     }

@@ -3085,8 +3085,59 @@ impl<'ctx> super::Codegen<'ctx> {
                 *k = FieldDrop::None;
             }
         }
+        // B-2026-09-19-35 — the fields whose CONCRETE type heap-boxes an erased
+        // enum payload. Computed HERE, above the all-`None` bail, because that
+        // bail is the reason the whole walker did not exist for this shape: a
+        // `struct H[T] { g: G1[T] }` leaves every field `FieldDrop::None` (see
+        // the `#15` note below), so the synthesis returned `None` and no
+        // `__karac_drop_struct_H` was ever emitted. Marking the field a
+        // `FieldDrop` kind instead would have worked for this cell and lied for
+        // `enum Fz[T] { E(Zs), Y(T), N }`, where the field needs the switch AND
+        // the box free and a field carries one kind.
+        //
+        // AND ONLY WHERE THE FIELD'S DECLARED TYPE IS GENERIC-DEPENDENT, which
+        // is not a narrowing for tidiness. A CONCRETE holder
+        // (`struct Holder { g: Gen[String] }`) has no erasure to repair:
+        // `enum_drop_kind_for_type_expr` resolves `Gen[String]`'s payload, the
+        // `#15` walk marks the field, and the existing switch frees the box.
+        // Adding this free there is a SECOND owner, and it measured as one —
+        // `free(): double free detected in tcache 2` at scope exit, with
+        // correct output right up to it, which is the shape that gets read as
+        // a crash somewhere else entirely because stdout is lost on abort.
+        // `type_expr_mentions_param` is the same question B-2026-09-20-41's
+        // fix asked of an enum PAYLOAD hours earlier, one level out.
+        let struct_params = self
+            .type_decls
+            .struct_generic_params
+            .get(struct_name)
+            .cloned()
+            .unwrap_or_default();
+        let boxed_enum_field_tes: Vec<(usize, TypeExpr)> = self
+            .type_decls
+            .struct_field_type_exprs
+            .get(struct_name)
+            .map(|tes| {
+                tes.iter()
+                    .enumerate()
+                    .filter(|(_, te)| Self::type_expr_mentions_param(te, &struct_params))
+                    .map(|(idx, te)| {
+                        let concrete = match subst {
+                            Some(sub) => {
+                                crate::codegen::helpers::subst_type_params_in_type_expr(te, sub)
+                            }
+                            None => te.clone(),
+                        };
+                        (idx, concrete)
+                    })
+                    .collect::<Vec<_>>()
+            })
+            .unwrap_or_default()
+            .into_iter()
+            .filter(|(_, te)| !self.user_enum_boxed_payload_variants(te).is_empty())
+            .collect();
+
         let fn_name = format!("__karac_drop_struct_{cache_key}");
-        if kinds.iter().all(|k| *k == FieldDrop::None) {
+        if kinds.iter().all(|k| *k == FieldDrop::None) && boxed_enum_field_tes.is_empty() {
             self.drop_rc.struct_drop_in_progress.remove(&cache_key);
             // B-2026-09-06-64 — a recursive re-entry may already have taken a
             // FORWARD DECLARATION of this symbol and emitted a call to it. This
@@ -3990,6 +4041,61 @@ impl<'ctx> super::Codegen<'ctx> {
                     }
                 }
             }
+        }
+
+        // B-2026-09-19-35 — free a generic enum FIELD's heap-BOXED payload
+        // envelope, which the `#15` walk above cannot see.
+        //
+        // Same erasure as B-2026-09-20-14's tuple element, one channel over.
+        // `enum_layouts` is built once per enum NAME from the DECLARATION, so
+        // `enum G1[T] { Y(T), N }` has every variant classified
+        // `EnumDropKind::None` by `enum_drop_kind_for_type_expr`'s `_ => None`
+        // tail. The `#15` detection gates on a variant whose kind is NOT `None`,
+        // so a field of that type is never even marked `EnumField` and takes the
+        // `FieldDrop::None` arm, which emits nothing. Meanwhile the PACK side
+        // sizes the payload area from the same erased declaration — one word via
+        // `payload_word_count_for_type_expr`'s conservative `_ => 1` tail — and
+        // `coerce_to_payload_words` heap-BOXES any monomorph that outgrows it.
+        // The box is real and no arm of any switch frees it.
+        //
+        // This walk is per-MONOMORPH (`mono_suffix` above keys both the memo and
+        // the LLVM symbol), so unlike the name-keyed enum switch it can resolve
+        // the field's CONCRETE type and ask `user_enum_boxed_payload_variants`
+        // the question the declaration cannot answer. The subst application is
+        // the same one the `NestedTuple` arm performs for the same reason.
+        //
+        // ENVELOPE ONLY, for the reason spelled out at
+        // `emit_erased_boxed_enum_payload_free_at`: the payload's own heap and
+        // its `Drop` body already have an owner at the use site, and walking the
+        // interior here would free a buffer a consuming arm already freed. The
+        // measured signature says so — 24 B direct and ZERO indirect.
+        //
+        // The pass is separate from the emit loop rather than an arm of it
+        // because a field can need BOTH: `enum Fz[T] { E(Zs), Y(T), N }` is
+        // heap-bearing through `E`, so it IS marked `EnumField` and its switch
+        // frees `E`'s payload, while `Y`'s box still leaks. One `FieldDrop` kind
+        // per field cannot express that; a side pass can.
+        if !boxed_enum_field_tes.is_empty() {
+            // `emit_erased_boxed_enum_payload_free_at` appends basic blocks to
+            // `self.current_fn`, which at this point is the function that
+            // TRIGGERED the synthesis, not the drop fn being built. Emitting the
+            // branch into the wrong function is an immediate verifier failure,
+            // so set it and restore — the same discipline the `SpecialCase` and
+            // nested-struct arms above use for their recursions.
+            let saved_fn = self.current_fn;
+            self.current_fn = Some(drop_fn);
+            for (field_idx, concrete_te) in boxed_enum_field_tes {
+                let Ok(field_ptr) = self.builder.build_struct_gep(
+                    st,
+                    p_arg,
+                    field_idx as u32,
+                    &format!("drop.field{field_idx}.eboxfree.p"),
+                ) else {
+                    continue;
+                };
+                self.emit_erased_boxed_enum_payload_free_at(&concrete_te, field_ptr);
+            }
+            self.current_fn = saved_fn;
         }
 
         self.builder.build_return(None).unwrap();
@@ -5757,6 +5863,60 @@ impl<'ctx> super::Codegen<'ctx> {
     /// sizes its area to the widest variant, so nothing is ever boxed and
     /// `user_enum_boxed_payload_variants` returns empty. Same for a monomorph that
     /// FITS (`G1[i64]`). Both are controls in the cell set above.
+    /// B-2026-09-19-35 — the MOVE-OUT dual of
+    /// [`Self::emit_erased_boxed_enum_payload_free_at`]: zero the box POINTER
+    /// word of every boxing variant, so the source's drop of this value finds a
+    /// null slot and no-ops while the consumer becomes the sole owner.
+    ///
+    /// It exists because `zero_enum_payload_caps` cannot do it. That function
+    /// skips any field whose `EnumDropKind` is `None`, and an erased `T` payload
+    /// is classified `None` by `enum_drop_kind_for_type_expr`'s `_ => None`
+    /// tail — the same erasure that keeps the drop switch from freeing the box
+    /// in the first place. Both halves have to move together: supplying the free
+    /// without this turns the by-value-handoff spelling (`shw(h.g)`) from a
+    /// 24-byte leak into `free(): double free detected in tcache 2`, measured.
+    ///
+    /// Unconditional across variants, exactly as `zero_enum_payload_caps` is:
+    /// the whole value has been handed away, so every variant's payload word is
+    /// dead for the source whichever one is live, and a non-live variant's word
+    /// was never a pointer this frame owned.
+    ///
+    /// The free side null-guards, so a zeroed slot is a no-op rather than a
+    /// fault. `&self` — pure IR emission.
+    pub(super) fn zero_erased_boxed_enum_payload_words_at(
+        &self,
+        te: &TypeExpr,
+        base_ptr: PointerValue<'ctx>,
+    ) {
+        let boxed = self.user_enum_boxed_payload_variants(te);
+        if boxed.is_empty() {
+            return;
+        }
+        let TypeKind::Path(p) = &te.kind else {
+            return;
+        };
+        let Some(ename) = p.segments.last().cloned() else {
+            return;
+        };
+        let Some(layout) = self.type_decls.enum_layouts.get(ename.as_str()).cloned() else {
+            return;
+        };
+        if layout.is_shared {
+            return;
+        }
+        let zero = self.context.i64_type().const_int(0, false);
+        for (_en, _vname, _payload_te, box_field, _box_only) in boxed {
+            if let Ok(word_ptr) = self.builder.build_struct_gep(
+                layout.llvm_type,
+                base_ptr,
+                box_field,
+                "b35.eboxzero.wp",
+            ) {
+                let _ = self.builder.build_store(word_ptr, zero);
+            }
+        }
+    }
+
     pub(super) fn emit_erased_boxed_enum_payload_free_at(
         &mut self,
         te: &TypeExpr,
