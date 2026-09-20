@@ -49696,10 +49696,16 @@ end
     /// declares its payload as `T`, one word, from which no container head is
     /// readable.
     ///
-    /// The two PINNED GAPS are the remainder, both still compiled-lags-
-    /// interpreter: a `Vec` payload's walker is discarded before emission
-    /// (`define 0 / call 0`, where `Array` is `define 1 / call 0`), and a
-    /// fresh ctor temp never reaches this site at all.
+    /// The two PINNED GAPS are the remainder, and they are DIFFERENT faults
+    /// rather than two spellings of one. A `Vec` payload is silent on ALL FOUR
+    /// surfaces — `--interp` included, and silent with no `match` in the
+    /// program at all — because its walker is discarded before emission
+    /// (`define 0 / call 0`; the `Array` twin, which this fixture's first cell
+    /// covers, measured `define 1 / call 0` BEFORE this fix); that half is
+    /// B-2026-09-20-62. A fresh ctor temp never reaches this site at all and loses the
+    /// bodies only on the three COMPILED surfaces, where `--interp` is
+    /// correct; that half is B-2026-09-20-63, which additionally leaks the container
+    /// buffer.
     #[test]
     fn e2e_generic_enum_container_payload_runs_element_bodies_at_a_read_only_arm() {
         let hdr = "struct R { id: i64 }\n\
@@ -170679,8 +170685,10 @@ fn main() {
     /// merely INSTANTIATES to a container is silent on BOTH backends, and this
     /// change deliberately leaves it silent: the interpreter does not walk it,
     /// so arming the compiled side alone would trade a both-backends-silent gap
-    /// for a run-vs-build divergence. That gap is B-2026-09-20-41, which owns both
-    /// halves. When it is fixed these two cells MUST FLIP to printing their
+    /// for a run-vs-build divergence. Both cells are `Slot[Vec[R]]`, and the
+    /// `Vec` half is now B-2026-09-20-62: B-2026-09-20-41, which the wording here named,
+    /// closed on the `Array`-at-a-named-local half only and does NOT flip
+    /// these. When B-2026-09-20-62 is fixed these two cells MUST FLIP to printing their
     /// bodies, and this fixture is expected to fail until they are updated — a
     /// silent pass after that row lands means the per-arm `Vec` flag stopped
     /// distinguishing the two spellings.
