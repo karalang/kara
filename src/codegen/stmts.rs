@@ -8414,6 +8414,17 @@ impl<'ctx> super::Codegen<'ctx> {
                                         self.variables.get(var_name.as_str()).copied()
                                     {
                                         self.track_rc_result_var(var_name, slot.ptr, &te);
+                                        // B-2026-09-17-15 — the
+                                        // user-generic-enum sibling, admitted
+                                        // on exactly the same non-escaping /
+                                        // fresh-RHS terms this block already
+                                        // computed. The two registrars are
+                                        // mutually exclusive by enum name
+                                        // (`generic_enum_shared_payload_arms`
+                                        // declines the seeded pair outright),
+                                        // so this can never double a dec
+                                        // `track_rc_result_var` makes.
+                                        self.track_rc_generic_enum_var(var_name, slot.ptr, &te);
                                     }
                                 }
                             }

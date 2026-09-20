@@ -2389,6 +2389,77 @@ impl<'ctx> super::Codegen<'ctx> {
         }
     }
 
+    /// B-2026-09-17-15 — the USER-generic-enum sibling of
+    /// [`Self::track_rc_result_var`], and it exists for that one's reason: an
+    /// enum layout whose `field_drop_kinds` are all `None` gets no scope-exit
+    /// owner, so a value whose payload word holds an RC handle strands it.
+    /// `Result`'s layout is all-`None` because it is SEEDED; a user generic
+    /// enum's is all-`None` because it is ERASED, and the repair is the same
+    /// tag-guarded `RcDecOption` per shared arm — the action is already
+    /// tag-parameterized, which is why `Result`'s wider `{tag, w0..w4}` struct
+    /// needed no new machinery either.
+    ///
+    /// Self-gating on [`Self::generic_enum_shared_payload_arms`], so callers
+    /// invoke it unconditionally beside the Result registrar: a concrete enum,
+    /// a non-shared monomorph, a unit variant and the seeded pair are all
+    /// no-ops.
+    pub(super) fn track_rc_generic_enum_var(
+        &mut self,
+        var_name: &str,
+        enum_slot: PointerValue<'ctx>,
+        enum_te: &TypeExpr,
+    ) {
+        let arms = self.generic_enum_shared_payload_arms(enum_te);
+        if arms.is_empty() {
+            return;
+        }
+        let enum_name = match &enum_te.kind {
+            TypeKind::Path(p) => match p.segments.last() {
+                Some(n) => n.clone(),
+                None => return,
+            },
+            _ => return,
+        };
+        let Some(enum_ty) = self
+            .type_decls
+            .enum_layouts
+            .get(enum_name.as_str())
+            .map(|l| l.llvm_type)
+        else {
+            return;
+        };
+        // Nested-block `let`: zero the slot in the entry block so a not-taken
+        // path's `undef` tag cannot match an admitted arm at a function-level
+        // drain and dec a garbage pointer. Mirrors the Option / Result paths.
+        let is_nested = self
+            .current_fn
+            .and_then(|f| f.get_first_basic_block())
+            .zip(self.builder.get_insert_block())
+            .map(|(entry, cur)| entry != cur)
+            .unwrap_or(false);
+        if is_nested {
+            self.zero_init_option_slot_in_entry_block(enum_slot, enum_ty);
+        }
+        for (tag, payload_name, heap_type) in arms {
+            // Lazy-synth the payload's recursive RC drop fn BEFORE the dec, for
+            // the reason `emit_enum_drop_switch`'s `SharedRc` arm gives at
+            // length: a dec emitted before `__karac_rc_drop_<T>` is registered
+            // falls back to a plain inline free of the box and strands its heap
+            // children. The same call routes a shared ENUM payload to
+            // `emit_shared_enum_rc_drop_fn` through `info.is_enum`.
+            let _ = self.emit_shared_struct_rc_drop_fn(&payload_name);
+            if let Some(frame) = self.drop_rc.scope_cleanup_actions.last_mut() {
+                frame.push(CleanupAction::RcDecOption {
+                    name: var_name.to_string(),
+                    option_slot: enum_slot,
+                    option_ty: enum_ty,
+                    heap_type,
+                    some_tag: tag,
+                });
+            }
+        }
+    }
+
     /// Queue a scope-exit free of the heap box backing an enum binding
     /// whose payload `T` was too wide to inline (`Option[Wide]` /
     /// `Result[Wide, _]` — see `coerce_to_payload_words`'s boxing path).

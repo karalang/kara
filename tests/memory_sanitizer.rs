@@ -89735,12 +89735,27 @@ fn main() {
     ///     bargain — cell 15 leaked with the caller standing down and the
     ///     callee registering nothing, and cell 16 had no owner at all.
     ///
-    /// ONE REMAINDER, on its own row because it is a different mechanism: a
-    /// GENERIC enum (`enum Box2[T] { V(T) }` over a shared `T`) classifies the
-    /// ERASED `T`, which no name set can contain, so it needs
+    /// THAT REMAINDER IS NOW CLOSED, and cells 18-27 are it (B-2026-09-17-15).
+    /// It read: a GENERIC enum (`enum Box2[T] { V(T) }` over a shared `T`)
+    /// classifies the ERASED `T`, which no name set can contain, so it needs
     /// per-instantiation drop synthesis — `field_drop_kinds` is written once
-    /// per enum NAME in `declare_enums`. `Box2[String]` is clean, so something
-    /// already resolves the instantiation for a buffer payload.
+    /// per enum NAME in `declare_enums`; and `Box2[String]` is clean, so
+    /// something already resolves the instantiation for a buffer payload.
+    ///
+    /// The something was `user_enum_boxed_payload_variants`, and the reason it
+    /// did not reach a shared payload is the whole answer: its population is
+    /// payloads WIDER than the erased area, because it asks whether
+    /// `coerce_to_payload_words` heap-boxed one. An RC handle is exactly ONE
+    /// word, so it never boxes and never entered that path. The repair is
+    /// `generic_enum_shared_payload_arms` + `track_rc_generic_enum_var`, which
+    /// queue the same tag-guarded `RcDecOption` per shared arm that
+    /// `track_rc_result_var` queues for a SEEDED all-`None` layout — cells 25-27
+    /// are the boxed / fits / no-payload controls that place it.
+    ///
+    /// One remainder of its own, pinned in `e2e_generic_enum_shared_payload_is_rc_released`
+    /// rather than here because it still leaks: `let b = a` over an
+    /// already-bound generic value registers at neither binding, and closing it
+    /// needs the source-defusing channel that is `Option`-only today.
     ///
     /// Measured on this tree: all seventeen cells clean at `-O0` under
     /// `valgrind --leak-check=full` — and the verdict asserts on
@@ -89992,6 +90007,129 @@ fn main() {
 "#,
             &["s:b1011-buffer-aaaaaaaa"],
             "b1011-buffer-payload-owned-self-control",
+        );
+        // 18 — B-2026-09-17-15, THE GENERIC LEG, which cell 17's paragraph
+        //      above recorded as this fixture's one remainder. `Box2[T]` at
+        //      `T = Sh` classifies the ERASED `T`, so all four gates agreed
+        //      there was nothing to own: 16 B per value, the same block cell 1
+        //      strands without the parent fix.
+        assert_clean_asan_run(
+            r#"shared struct Sh { n: i64 }
+enum Box2[T] { V(T), N }
+fn main() { let z: Box2[Sh] = Box2.V(Sh { n: 3 }); println("ok"); }
+"#,
+            &["ok"],
+            "b1715-generic-bare-let",
+        );
+        // 19 — the row's own repro: the value makes a by-value round trip
+        //      through a generic-enum param and back into a binding.
+        assert_clean_asan_run(
+            r#"shared struct Sh { n: i64 }
+enum Box2[T] { V(T), N }
+fn passb(b: Box2[Sh]) -> Box2[Sh] { return b }
+fn main() { let z = passb(Box2.V(Sh { n: 3 })); println("ok"); }
+"#,
+            &["ok"],
+            "b1715-generic-roundtrip",
+        );
+        // 20 — an arm that BINDS the payload out. The binding takes and
+        //      releases its own `+1`, so the envelope's dec must still happen
+        //      exactly once; a fix that stood down here would leak and one that
+        //      double-counted would free the node under the arm.
+        assert_clean_asan_run(
+            r#"shared struct Sh { n: i64 }
+enum Box2[T] { V(T), N }
+fn main() {
+    let z: Box2[Sh] = Box2.V(Sh { n: 3 });
+    match z { Box2.V(s) => { println(f"got{s.n}") } Box2.N => { println("no") } }
+}
+"#,
+            &["got3"],
+            "b1715-generic-arm-binds-payload",
+        );
+        // 21 — a FRESH TEMP handed straight to a by-value param. No binding
+        //      exists for the let-site registration to hang on, which is why
+        //      the param site is a second leg rather than a redundant one.
+        assert_clean_asan_run(
+            r#"shared struct Sh { n: i64 }
+enum Box2[T] { V(T), N }
+fn eat(b: Box2[Sh]) { println("eaten") }
+fn main() { eat(Box2.V(Sh { n: 3 })); println("ok"); }
+"#,
+            &["eaten", "ok"],
+            "b1715-generic-freshtemp-arg",
+        );
+        // 22 — THE DOUBLE-DEC CELL. A named binding handed to a by-value param
+        //      has an owner site at BOTH ends. It runs once because both gate on
+        //      `crate::result_escape`: a binding that escapes into a param is
+        //      absent from the let-site set, so the terminal consumer's dec is
+        //      the only one — the arbitration `Result[shared]` has used since
+        //      B-2026-07-12-24. Without that, an invalid free, not a leak.
+        assert_clean_asan_run(
+            r#"shared struct Sh { n: i64 }
+enum Box2[T] { V(T), N }
+fn eat(b: Box2[Sh]) { println("eaten") }
+fn main() { let z: Box2[Sh] = Box2.V(Sh { n: 3 }); eat(z); println("ok"); }
+"#,
+            &["eaten", "ok"],
+            "b1715-generic-named-arg",
+        );
+        // 23 — a TWO-PARAMETER generic, carrying the shared payload in one arm
+        //      and a scalar in the other, in one program. The registration is
+        //      per-ARM and tag-guarded; a per-ENUM answer would dec on the `R`
+        //      tag too and free an integer as a pointer.
+        assert_clean_asan_run(
+            r#"shared struct Sh { n: i64 }
+enum Pair[A, B] { L(A), R(B) }
+fn main() {
+    { let p: Pair[Sh, i64] = Pair.L(Sh { n: 3 }); println("l"); }
+    { let q: Pair[Sh, i64] = Pair.R(7); println("r"); }
+}
+"#,
+            &["l", "r"],
+            "b1715-generic-two-params-one-shared-arm",
+        );
+        // 24 — a `par` payload through the generic envelope, the erased peer of
+        //      cell 3. `shared_types` records `is_par` and the RC machinery is
+        //      the same; a fix keyed on the `shared` spelling alone leaves this
+        //      one leaking.
+        assert_clean_asan_run(
+            r#"par struct Pa { n: i64 }
+enum Box2[T] { V(T), N }
+fn main() { let z: Box2[Pa] = Box2.V(Pa { n: 3 }); println("ok"); }
+"#,
+            &["ok"],
+            "b1715-generic-par-payload",
+        );
+        // 25-27 — the three CONTROLS that place the fault between the two
+        //      generic machineries rather than in either. A `String` payload is
+        //      3 words against the 1-word erased area, so `coerce_to_payload_words`
+        //      heap-BOXES it and `user_enum_boxed_payload_variants` already owned
+        //      it; a scalar FITS and owns nothing; the unit variant has no
+        //      payload word at all. Only a ONE-WORD RC handle falls between the
+        //      two — too narrow to box, too erased to classify — and all three
+        //      of these were clean before this fix and must stay so.
+        assert_clean_asan_run(
+            r#"enum Box2[T] { V(T), N }
+fn main() { let z: Box2[String] = Box2.V("aaaaaaaaaaaaaaaa"); println("ok"); }
+"#,
+            &["ok"],
+            "b1715-generic-string-payload-control",
+        );
+        assert_clean_asan_run(
+            r#"enum Box2[T] { V(T), N }
+fn main() { let z: Box2[i64] = Box2.V(7); println("ok"); }
+"#,
+            &["ok"],
+            "b1715-generic-scalar-payload-control",
+        );
+        assert_clean_asan_run(
+            r#"shared struct Sh { n: i64 }
+enum Box2[T] { V(T), N }
+fn main() { let z: Box2[Sh] = Box2.N; println("ok"); }
+"#,
+            &["ok"],
+            "b1715-generic-unit-variant-control",
         );
     }
 

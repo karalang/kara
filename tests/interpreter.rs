@@ -70268,6 +70268,106 @@ fn main() {
     assert_eq!(out, "vecenum\n  d2:9\n  x\nvecstruct\n  dS7\n  dS8\n  x\nvecmixed\n  dS9\n  x\nvecempty\n  x\nunitvar\n  x\narray\n  dS1\n  dS2\n  x\nstruct\n  d2:9\n  x\nsharedec\n  d2:9\n  x\ngenvec\n  x\ngensh\n  x\nend\n", "got:\n{out}");
 }
 
+/// B-2026-09-17-15 — A GENERIC ENUM'S `shared` PAYLOAD IS NOW RC-RELEASED,
+/// AND EVERY CELL IS PINNED BESIDE ITS CONCRETE TWIN, which is the whole
+/// design of this fixture rather than decoration.
+///
+/// `enum Box2[T] { V(T), N }` at `T = shared struct Sh` stranded one 16 B
+/// RC control block per value at `-O0` and LOST the payload's `Drop` body
+/// on all three compiled surfaces, where `--interp` ran it — a run-vs-build
+/// split, not the leak the row was filed as. The cause: `field_drop_kinds`
+/// is written once per enum NAME in `declare_enums`, so the payload
+/// classified is the bare `T` and takes `enum_drop_kind_for_type_expr`'s
+/// `_ => None` tail, which all four of B-2026-09-10-11's gates then read.
+///
+/// WHY EVERY `G-` CELL HAS A `C-` TWIN. The row's own control is the
+/// CONCRETE enum `Et { A(Sh), B }`, correct since that parent fix. Pinning
+/// the two spellings in ONE program makes the test assert the property that
+/// actually matters — the generic spelling behaves as the concrete one —
+/// rather than a transcript somebody re-measured after the fact. Five of the
+/// six pairs are byte-identical here and on `--interp`.
+///
+/// THE TWO PLACES `--interp` DIFFERS ARE PRE-EXISTING AND SHARED BY BOTH
+/// SPELLINGS, which is why they are pinned rather than fixed: `G-temp` /
+/// `C-temp` both lose the body under `--interp` (a fresh-temp argument to a
+/// by-value param), and `G-named` / `C-named` both place it at the end of
+/// `main` there instead of at the callee's exit. Measured on the CONCRETE
+/// cells alone before this fix, so neither was opened by it. This is the
+/// `--interp` half of that pin; `e2e_generic_enum_shared_payload_is_rc_released`
+/// in `tests/codegen.rs` runs the same program on the other three surfaces.
+///
+/// `G-alias` IS THE ONE CELL WHERE THE TWO SPELLINGS STILL DISAGREE, and it
+/// is the fix's measured remainder. `let gf = ge` registers nothing: the
+/// let-site gate wants a FRESH-owned RHS (`rhs_is_fresh_inline_enum`) and a
+/// bound identifier is a move, while `ge` itself is excluded for escaping
+/// into `gf`. Registering either without defusing the other is a double
+/// free, and the suppression channel that would do it
+/// (`var_option_shared_heap`-keyed) is `Option`-only — which is why the
+/// `Result[shared]` sibling carries the identical residual. `C-alias` prints
+/// `dSh6` because the concrete path is a TYPE-keyed drop fn rather than a
+/// per-binding cleanup, so it fires wherever the value lives.
+///
+/// `sharedenum` IS A DELIBERATELY-HELD AGREED GAP, NOT AN OVERSIGHT.
+/// B-2026-09-19-17 withheld the interpreter's own-generic-param exception
+/// from an ENUM payload precisely so this cell stays silent on both sides;
+/// admitting it in codegen would close a 24 B leak by opening a divergence,
+/// and the dec cannot be taken without the body, since releasing the last
+/// ref is what reaches `emit_shared_enum_rc_drop_fn`. The
+/// `generic_enum_shared_payload_arms` query excludes it for that reason and
+/// says so at the site.
+///
+/// The remaining cells are controls that place the fault: `string` (3 words,
+/// so the BOXED path already owned it), `scalar` (fits the area, owns
+/// nothing), `unit`, `otherarm` (the non-shared arm of the same two-param
+/// enum, which the per-arm tag guard must leave untouched), `plain` (a
+/// non-shared struct payload, which rides the bodies walker) and `par`
+/// (`shared_types` records `is_par` too, and a fix keyed on `shared` alone
+/// would leave it leaking).
+#[test]
+fn test_generic_enum_shared_payload_is_rc_released() {
+    let out = run(r#"shared struct Sh { n: i64 }
+impl Drop for Sh { fn drop(mut ref self) { println(f"  dSh{self.n}") } }
+par struct Pa { n: i64 }
+impl Drop for Pa { fn drop(mut ref self) { println(f"  dPa{self.n}") } }
+struct Pl { n: i64 }
+impl Drop for Pl { fn drop(mut ref self) { println(f"  dPl{self.n}") } }
+shared enum Sen { P(Pl), Q }
+enum Box2[T] { V(T), N }
+enum Pair[A, B] { L(A), R(B) }
+enum Et { A(Sh), B }
+
+fn pg(b: Box2[Sh]) -> Box2[Sh] { return b }
+fn pc(b: Et) -> Et { return b }
+fn eg(b: Box2[Sh]) { println("  eaten") }
+fn ec(b: Et) { println("  eaten") }
+
+fn main() {
+    println("G-bare"); { let ga: Box2[Sh] = Box2.V(Sh { n: 1 }); println("  x") }
+    println("C-bare"); { let ca: Et = Et.A(Sh { n: 1 }); println("  x") }
+    println("G-round"); { let gb = pg(Box2.V(Sh { n: 2 })); println("  x") }
+    println("C-round"); { let cb = pc(Et.A(Sh { n: 2 })); println("  x") }
+    println("G-arm"); { let gc: Box2[Sh] = Box2.V(Sh { n: 3 }); match gc { Box2.V(s) => { println(f"  got{s.n}") } Box2.N => { println("  no") } } }
+    println("C-arm"); { let cc: Et = Et.A(Sh { n: 3 }); match cc { Et.A(s) => { println(f"  got{s.n}") } Et.B => { println("  no") } } }
+    println("G-temp"); { eg(Box2.V(Sh { n: 4 })); println("  x") }
+    println("C-temp"); { ec(Et.A(Sh { n: 4 })); println("  x") }
+    println("G-named"); { let gd: Box2[Sh] = Box2.V(Sh { n: 5 }); eg(gd); println("  x") }
+    println("C-named"); { let cd: Et = Et.A(Sh { n: 5 }); ec(cd); println("  x") }
+    println("G-alias"); { let ge: Box2[Sh] = Box2.V(Sh { n: 6 }); let gf = ge; println("  x") }
+    println("C-alias"); { let ci: Et = Et.A(Sh { n: 6 }); let cj = ci; println("  x") }
+    println("par"); { let pz: Box2[Pa] = Box2.V(Pa { n: 7 }); println("  x") }
+    println("twoparam"); { let tp: Pair[Sh, i64] = Pair.L(Sh { n: 8 }); println("  x") }
+    println("otherarm"); { let oa: Pair[Sh, i64] = Pair.R(9); println("  x") }
+    println("unit"); { let uz: Box2[Sh] = Box2.N; println("  x") }
+    println("string"); { let sz: Box2[String] = Box2.V("aaaaaaaaa"); println("  x") }
+    println("scalar"); { let iz: Box2[i64] = Box2.V(11); println("  x") }
+    println("plain"); { let lz: Box2[Pl] = Box2.V(Pl { n: 13 }); println("  x") }
+    println("sharedenum"); { let ez: Box2[Sen] = Box2.V(Sen.P(Pl { n: 14 })); println("  x") }
+    println("end")
+}
+"#);
+    assert_eq!(out, "G-bare\n  x\n  dSh1\nC-bare\n  x\n  dSh1\nG-round\n  x\n  dSh2\nC-round\n  x\n  dSh2\nG-arm\n  got3\n  dSh3\nC-arm\n  got3\n  dSh3\nG-temp\n  eaten\n  x\nC-temp\n  eaten\n  x\nG-named\n  eaten\n  x\n  dSh5\nC-named\n  eaten\n  x\n  dSh5\nG-alias\n  x\n  dSh6\nC-alias\n  x\n  dSh6\npar\n  x\n  dPa7\ntwoparam\n  x\n  dSh8\notherarm\n  x\nunit\n  x\nstring\n  x\nscalar\n  x\nplain\n  dPl13\n  x\nsharedenum\n  x\nend\n", "got:\n{out}");
+}
+
 /// B-2026-09-06-39 — A READ-ONLY ARM OVER AN OWNED ENUM RECEIVER NOW RUNS THE
 /// PAYLOAD'S `Drop` BODY **AFTER** THE SHELL'S, the design.md § Part 8 order
 /// ("the user's `fn drop` body runs first, then the compiler drops each field").

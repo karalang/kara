@@ -2613,6 +2613,23 @@ impl<'ctx> super::Codegen<'ctx> {
                 {
                     self.track_rc_result_var(&param_name, alloca, &param.ty);
                 }
+                // B-2026-09-17-15 — the user-generic-enum sibling of the
+                // Result arm above, on the same non-escaping terms and for the
+                // same reason: the callee's slot holds the caller's transferred
+                // RC handle and nothing dec'd it. This leg is not redundant
+                // with the let-site sibling in `stmts.rs` — the commonest
+                // spelling builds the enum as a TEMP at the call site
+                // (`eat(Box2.V(Sh { .. }))`), where no binding exists for a
+                // drop to hang on. A FORWARDED or RETURNED param is absent from
+                // the escape set, so the terminal consumer's dec stays the only
+                // one, exactly as it does for `Result[shared]`.
+                if self
+                    .result_shared_nonescaping_param_names
+                    .contains(&param_name)
+                    && !self.borrowed_param_dec_skip(&param_name)
+                {
+                    self.track_rc_generic_enum_var(&param_name, alloca, &param.ty);
+                }
                 // B-2026-08-05-7 — an OWNED param of a generic user enum whose
                 // monomorph heap-boxes its payload. The let-site sibling in
                 // stmts.rs covers `let o: Opt[String] = …`; this covers the far

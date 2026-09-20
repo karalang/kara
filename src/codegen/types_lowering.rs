@@ -5029,6 +5029,155 @@ impl<'ctx> super::Codegen<'ctx> {
         out
     }
 
+    /// B-2026-09-17-15 — the INSTANTIATION-keyed sibling of the `SharedRc`
+    /// classification that [`Self::enum_drop_kind_for_type_expr`] cannot reach.
+    ///
+    /// That classifier runs once per enum NAME inside `declare_enums`, so a
+    /// generic enum's payload is the bare parameter `T` and takes its
+    /// `_ => None` tail. All four of B-2026-09-10-11's gates then read that
+    /// erased `field_drop_kinds` and agree there is nothing to own, so
+    /// `enum Box2[T] { V(T), N }` at `T = shared struct Sh` strands the RC
+    /// control block its payload word points at: 16 B per value at `-O0`, with
+    /// the payload's `Drop` body lost on all three compiled surfaces while the
+    /// interpreter runs it exactly once — a run-vs-build divergence, not only
+    /// the leak the row was filed as.
+    ///
+    /// WHY THE SIBLING GENERIC MACHINERY DOES NOT ALREADY COVER IT, which is
+    /// what places this rather than a guess.
+    /// [`Self::user_enum_boxed_payload_variants`] below is instantiation-keyed
+    /// and does resolve a monomorph — but its entire population is payloads
+    /// WIDER than the erased area, because the question it answers is whether
+    /// `coerce_to_payload_words` heap-boxed one. An RC handle is exactly ONE
+    /// word, so it never boxes. Measured: `Box2[String]` (3 words) rides that
+    /// path and is clean, `Box2[i64]` fits the area and owns nothing, and only
+    /// the shared payload falls between the two — too narrow to box, too
+    /// erased to classify. Both are controls on the row.
+    ///
+    /// Returns `(variant tag, the payload type's name, its shared heap type)`
+    /// per admitted arm. Four gates, each load-bearing (the fourth, the
+    /// shared-ENUM exclusion, is documented at the site where it applies):
+    ///
+    /// * SINGLE-FIELD variants only, for the reason
+    ///   `user_enum_boxed_payload_variants` gives: a multi-field variant packs
+    ///   its fields ACROSS the area, so one tag does not name one handle.
+    /// * The declared payload must be one of the enum's OWN generic params —
+    ///   the exact complement of the name-keyed classifier's population, the
+    ///   same partition `emit_generic_enum_payload_user_drop_bodies_fn` draws
+    ///   against its own name-keyed twin. A CONCRETELY-declared shared payload
+    ///   is already `SharedRc` there and already dec'd by
+    ///   `emit_enum_drop_switch`; admitting it here would be a second dec of
+    ///   one handle.
+    /// * The field must start at payload word 0, because `RcDecOption` reads
+    ///   LLVM field 1. A single-field variant cannot start anywhere else today;
+    ///   the guard is what keeps that true rather than assumed.
+    pub(super) fn generic_enum_shared_payload_arms(
+        &self,
+        te: &TypeExpr,
+    ) -> Vec<(u64, String, StructType<'ctx>)> {
+        let TypeKind::Path(p) = &te.kind else {
+            return vec![];
+        };
+        let Some(enum_name) = p.segments.last().map(|s| s.as_str()) else {
+            return vec![];
+        };
+        // The seeded pair has its own registrars (`track_rc_option_var` /
+        // `track_rc_result_var`), measured correct on this very shape; both
+        // firing would be one dec too many.
+        if matches!(enum_name, "Option" | "Result") {
+            return vec![];
+        }
+        // A shared enum's own box owns its payload through the RC walker.
+        if self.type_decls.shared_types.contains_key(enum_name) {
+            return vec![];
+        }
+        let Some(layout) = self.type_decls.enum_layouts.get(enum_name) else {
+            return vec![];
+        };
+        if layout.is_shared {
+            return vec![];
+        }
+        let params = self.enum_generic_param_names(enum_name);
+        if params.is_empty() {
+            return vec![];
+        }
+        let Some(arg_list) = p.generic_args.as_ref() else {
+            return vec![];
+        };
+        let args: Vec<TypeExpr> = arg_list
+            .iter()
+            .filter_map(|g| match g {
+                GenericArg::Type(t) => Some(t.clone()),
+                _ => None,
+            })
+            .collect();
+        // A partial or const-carrying argument list cannot be substituted
+        // soundly, and resolving half the params would answer about a type
+        // this instantiation is not.
+        if args.len() != params.len() {
+            return vec![];
+        }
+        let subst: HashMap<String, TypeExpr> = params.iter().cloned().zip(args).collect();
+        let mut out = Vec::new();
+        for (tag, vname, tys) in self.enum_variant_field_type_exprs(enum_name) {
+            if tys.len() != 1 {
+                continue;
+            }
+            let TypeKind::Path(dp) = &tys[0].kind else {
+                continue;
+            };
+            let Some(declared) = dp.segments.first() else {
+                continue;
+            };
+            if !params.contains(declared) {
+                continue;
+            }
+            if layout
+                .field_word_offsets
+                .get(&vname)
+                .and_then(|o| o.first())
+                .map(|(start, _)| *start)
+                != Some(0)
+            {
+                continue;
+            }
+            let resolved = Self::subst_type_params(&tys[0], &subst);
+            let TypeKind::Path(rp) = &resolved.kind else {
+                continue;
+            };
+            let Some(rname) = rp.segments.last() else {
+                continue;
+            };
+            if let Some(info) = self.type_decls.shared_types.get(rname.as_str()) {
+                // A shared STRUCT payload only. A shared ENUM payload is a
+                // DELIBERATELY-held agreed gap, not an oversight, and admitting
+                // it here would close a leak by opening a divergence.
+                //
+                // B-2026-09-19-17 restricted the INTERPRETER's own-param
+                // exception (`own_param_ok`, `eval_stmt.rs`) to a struct
+                // payload for exactly this reason, in its own words: a shared
+                // enum payload "is SILENT on every compiled surface ... so
+                // admitting it here would fire a body this side alone and
+                // convert an AGREED gap into a second divergence while closing
+                // the first". The `gensh` cell of
+                // `test_declared_vec_enum_payload_runs_element_drop_bodies` and
+                // its codegen twin pin that silence.
+                //
+                // The dec cannot be taken without the body: releasing the last
+                // ref is what reaches `emit_shared_enum_rc_drop_fn`, which runs
+                // it. So the 24 B that `enum Box2[T] { V(T), N }` over a
+                // `shared enum` strands stays stranded until BOTH backends move
+                // together — measured, not estimated: `x` alone on interp, jit
+                // and `-O0`, and `definitely lost: 24 bytes in 1 blocks` under
+                // valgrind at `KARAC_OPT_LEVEL=0`. Recorded on the row as its
+                // remainder.
+                if !info.is_enum {
+                    out.push((tag, rname.clone(), info.heap_type));
+                }
+            }
+        }
+        out
+    }
+
     /// USER-enum sibling of [`Self::boxed_enum_payload_variants`], which matches
     /// on the enum NAME and therefore only ever knew the seeded `Option`
     /// (area 3) and `Result` (area 5) — every user enum fell to its
