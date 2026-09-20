@@ -71708,3 +71708,80 @@ fn main() {
 "#);
     assert_eq!(out, "dup-a\n  dR6\n  got5\n  dR5\n  out\ndup-c\n  dR6\n  got5\n  dR5\n  out\npeer\n  dR5\n  got6\n  dR6\n  out\ndup-tuple\n  dR6\n  got5\n  dR5\n  out\ndup-result\n  dR6\n  got5\n  dR5\n  out\ndiscard\n  dR6\n  dR5\n  after\n  out\nfield\n  dR6\n  in5\n  dR5\n  out\nto-callee\n  dR6\n  sank5\n  dR5\n  out\nloop\n  dR6\n  it5\n  dR5\n  dR6\n  it5\n  dR5\n  out\nmethod\n  dR6\n  got5\n  dR5\n  out\nctl-uniq\n  dR6\n  got5\n  dR5\n  out\nctl-free\n  dR6\n  got5\n  dR5\n  out\nctl-whole\n  dR6\n  dR5\n  kept\n  out\nend\n", "got:\n{out}");
 }
+
+/// B-2026-09-20-45 — a generic enum whose payload instantiates to
+/// `Array[R, N]` must run each element's user `Drop` body when the binding
+/// dies. It ran NONE, because the payload walk discriminates on the DECLARED
+/// head — the interpreter gives `Array[T, N]` and `Vec[T]` one `Value::Array`,
+/// so only the declaration tells them apart — and a generic enum's declared
+/// head is the bare parameter `T`.
+///
+/// THE CELL WITH NO CALLEE IS THE POINT. The filing row's program passed the
+/// enum to a by-value callee, which made the fault look like an ownership or
+/// parameter-passing question and made it AGREED across all four surfaces, so
+/// no A/B against `--interp` could see it. Drop the call and the gate is still
+/// there while the three compiled surfaces are correct and valgrind is clean
+/// at 13 allocs / 13 frees — a plain run-vs-build divergence, and the smallest
+/// program that exhibits this defect at all.
+///
+/// The three controls are what keep the fix from being the one an earlier
+/// draft of the `Array` payload arm was thrown away for. A MONOMORPHIC `Vec`
+/// payload runs its bodies on all four surfaces today, but the generic
+/// `G[Vec[R]]` is silent on BOTH, so a substitution that let the walk's arms
+/// dispatch on any instantiation would make this backend fire where every
+/// compiled surface is silent — trading an agreed gap for a new divergence.
+/// `k_vec` pins that silence. `k_struct` pins the plain-struct payload, which
+/// was already correct and must not double. `k_ng` pins the NON-generic
+/// `Array` payload, which reaches the same arm by the declared head and must
+/// be untouched by any of this.
+#[test]
+fn test_generic_enum_array_payload_runs_element_drop_bodies() {
+    let hdr = "struct R { id: i64, s: String }\n\
+               impl Drop for R { fn drop(mut ref self) { println(f\"dR{self.id}\") } }\n\
+               enum G[T] { X(T), Y }\n";
+    let target = run(&format!(
+        "{hdr}fn main() {{ {{ let a: Array[R, 2] = [R {{ id: 21, s: f\"aaa\" }}, \
+         R {{ id: 22, s: f\"bbb\" }}]; let w: G[Array[R, 2]] = G.X(a); println(\"mid\") }} \
+         println(\"done\") }}"
+    ));
+    assert_eq!(
+        target, "dR21\ndR22\nmid\ndone\n",
+        "a generic enum's Array payload must run every element's body exactly once, \
+         in the order the three compiled surfaces already use"
+    );
+
+    let k_vec = run(&format!(
+        "{hdr}fn main() {{ {{ let v: Vec[R] = [R {{ id: 31, s: f\"aaa\" }}, \
+         R {{ id: 32, s: f\"bbb\" }}]; let w: G[Vec[R]] = G.X(v); println(\"mid\") }} \
+         println(\"done\") }}"
+    ));
+    assert_eq!(
+        k_vec, "mid\ndone\n",
+        "a GENERIC Vec payload is silent on every compiled surface, so this backend \
+         must stay silent too — firing here is the new divergence this fix exists to avoid"
+    );
+
+    let k_struct = run(&format!(
+        "{hdr}fn main() {{ {{ let r: R = R {{ id: 41, s: f\"aaa\" }}; \
+         let w: G[R] = G.X(r); println(\"mid\") }} println(\"done\") }}"
+    ));
+    assert_eq!(
+        k_struct, "dR41\nmid\ndone\n",
+        "a generic plain-struct payload was already correct and must not double"
+    );
+
+    // Its own literal rather than a `format!`: this cell interpolates nothing,
+    // and `clippy::useless_format` is denied by the gate. Braces are single
+    // here for the same reason.
+    let k_ng = run("struct R { id: i64, s: String }\n\
+         impl Drop for R { fn drop(mut ref self) { println(f\"dR{self.id}\") } }\n\
+         enum Ng { X(Array[R, 2]), Y }\n\
+         fn main() { { let a: Array[R, 2] = [R { id: 71, s: f\"aaa\" }, \
+         R { id: 72, s: f\"bbb\" }]; let w: Ng = Ng.X(a); println(\"mid\") } \
+         println(\"done\") }");
+    assert_eq!(
+        k_ng, "dR71\ndR72\nmid\ndone\n",
+        "the NON-generic Array payload reaches the same arm by its declared head \
+         and must be untouched"
+    );
+}

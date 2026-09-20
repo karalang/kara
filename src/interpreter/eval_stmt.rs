@@ -2282,11 +2282,106 @@ impl<'a> super::Interpreter<'a> {
                     variant: variant.clone(),
                     data: EnumData::Tuple(items),
                 };
-                self.run_enum_payload_user_drops_value(&masked_value);
+                self.run_enum_payload_user_drops_value_for(&masked_value, Some(name));
                 return;
             }
         }
-        self.run_enum_payload_user_drops_value(value);
+        self.run_enum_payload_user_drops_value_for(value, Some(name));
+    }
+
+    /// B-2026-09-20-45 — the DECLARED head of a payload position, with the
+    /// binding's instantiation substituted in when the declaration is a bare
+    /// type parameter of the enum. Falls back to the unsubstituted head, so a
+    /// binding with no record behaves exactly as before.
+    fn effective_payload_head(
+        &self,
+        enum_name: &str,
+        variant: &str,
+        declared: &TypeExpr,
+        binding: Option<&str>,
+    ) -> Option<String> {
+        self.substituted_array_head(enum_name, variant, declared, binding)
+            .or_else(|| Self::declared_field_type_head(declared))
+    }
+
+    /// NARROWED TO `Array` ON PURPOSE, and by a measurement rather than by
+    /// caution. A MONOMORPHIC `Vec` payload runs its elements' bodies on all
+    /// four surfaces today, but the generic `G[Vec[R]]` is silent on BOTH — so
+    /// substituting unconditionally and letting the walk's arms dispatch on
+    /// the result would make the interpreter fire where every compiled surface
+    /// is silent. That is a NEW run-vs-build divergence, and it is exactly what
+    /// an earlier draft of the `Array` payload arm was thrown away for (see its
+    /// own doc). `Array` is safe for the opposite reason and only that reason:
+    /// `G[Array[R, N]]` is ALREADY correct on the three compiled surfaces, so
+    /// substituting brings the interpreter into agreement instead of out of it.
+    ///
+    /// Every other instantiation keeps its unsubstituted head and stays where
+    /// it is — `Vec` in B-2026-09-10-20's row, the rest in this one. Widening
+    /// this to another kind is legitimate only once the compiled side is
+    /// measured correct for that kind under a generic enum; it is not a
+    /// spelling to be added to.
+    fn substituted_array_head(
+        &self,
+        enum_name: &str,
+        variant: &str,
+        declared: &TypeExpr,
+        binding: Option<&str>,
+    ) -> Option<String> {
+        let bname = binding?;
+        let TypeKind::Path(dp) = &declared.kind else {
+            return None;
+        };
+        // SINGLE-FIELD VARIANTS ONLY, and that is the same criterion as the
+        // `Array`-only narrowing below rather than a second, arity-shaped one:
+        // substitute exactly where the compiled side is ALREADY correct.
+        // Measured on `enum G2[T] { X(T, i64), Y }` at `T = Array[R, 2]` with
+        // no callee — silent on ALL FOUR surfaces and leaking 64 B direct plus
+        // 6 B indirect at `-O0`, where the single-field `G[Array[R, 2]]` is
+        // compiled-correct and clean. So substituting for the two-field form
+        // makes the interpreter fire where every compiled surface is silent:
+        // a NEW run-vs-build divergence, traded for an agreed gap. The
+        // compiled side's two-field generic loss is the remainder, and it is
+        // recorded in B-2026-09-20-45's own row; when it is repaired this
+        // condition comes out, not before.
+        if self
+            .variant_payload_decls(enum_name, variant)
+            .is_none_or(|d| d.len() != 1)
+        {
+            return None;
+        }
+        // Only a BARE parameter reference is substitutable: `T`, never
+        // `Vec[T]`, whose own head is already concrete and already asked.
+        if dp.segments.len() != 1 || dp.generic_args.as_ref().is_some_and(|a| !a.is_empty()) {
+            return None;
+        }
+        let pname = dp.segments.last()?;
+        let idx = self
+            .enum_generic_param_names(enum_name)
+            .iter()
+            .position(|pn| pn == pname)?;
+        let inst = self.user_enum_inst_tes.get(bname)?;
+        let TypeKind::Path(ip) = &inst.kind else {
+            return None;
+        };
+        // The record is name-keyed and never cleared per function, so a stale
+        // entry from another frame can name a DIFFERENT enum. Check before
+        // trusting its arguments.
+        if ip.segments.last().map(String::as_str) != Some(enum_name) {
+            return None;
+        }
+        let arg = ip
+            .generic_args
+            .as_ref()?
+            .iter()
+            .filter_map(|a| match a {
+                crate::ast::GenericArg::Type(t) => Some(t),
+                _ => None,
+            })
+            .nth(idx)?;
+        match Self::declared_field_type_head(arg).as_deref() {
+            Some("Array") => Some("Array".to_string()),
+            _ => None,
+        }
     }
 
     /// Value-level core of [`Self::run_enum_payload_user_drops`] — the
@@ -2300,6 +2395,21 @@ impl<'a> super::Interpreter<'a> {
     /// `run_discarded_value_user_drops`, twin to codegen's
     /// instantiation-driven optres registrar.
     pub(super) fn run_enum_payload_user_drops_value(&mut self, value: &Value) {
+        self.run_enum_payload_user_drops_value_for(value, None)
+    }
+
+    /// B-2026-09-20-45 — the binding-aware core. `binding` is the name the
+    /// value is dying under, when it has one, so
+    /// [`Self::effective_payload_head`] can resolve a bare-type-parameter
+    /// payload against that binding's recorded instantiation. `None` keeps the
+    /// pre-existing behaviour exactly: a value that never had a binding has no
+    /// instantiation to resolve against, which is the discarded-temp case this
+    /// function was written for.
+    pub(super) fn run_enum_payload_user_drops_value_for(
+        &mut self,
+        value: &Value,
+        binding: Option<&str>,
+    ) {
         let Value::EnumVariant {
             enum_name,
             variant,
@@ -2311,24 +2421,33 @@ impl<'a> super::Interpreter<'a> {
         let Some(decls) = self.variant_payload_decls(enum_name, variant) else {
             return;
         };
+        // B-2026-09-20-45 — the effective head PER DECLARED POSITION, computed
+        // before the collection below so the substitution reads `&self` once
+        // rather than inside the closures. Positional and index-aligned with
+        // `decls`, which is what lets the struct arm index it too.
+        let heads: Vec<Option<String>> = decls
+            .iter()
+            .map(|(_, te)| self.effective_payload_head(enum_name, variant, te, binding))
+            .collect();
         // (declared head type, payload value) for each declared position.
         let payloads: Vec<(Option<String>, Value)> = match data {
             EnumData::Unit => return,
             EnumData::Tuple(items) => decls
                 .iter()
                 .enumerate()
-                .filter_map(|(i, (_, te))| {
+                .filter_map(|(i, (_, _te))| {
                     items
                         .get(i)
-                        .map(|v| (Self::declared_field_type_head(te), v.clone()))
+                        .map(|v| (heads.get(i).cloned().flatten(), v.clone()))
                 })
                 .collect(),
             EnumData::Struct(fields) => decls
                 .iter()
-                .filter_map(|(fname, te)| {
+                .enumerate()
+                .filter_map(|(i, (fname, _te))| {
                     fields
                         .get(fname.as_deref()?)
-                        .map(|v| (Self::declared_field_type_head(te), v.clone()))
+                        .map(|v| (heads.get(i).cloned().flatten(), v.clone()))
                 })
                 .collect(),
         };
@@ -8101,6 +8220,75 @@ impl<'a> super::Interpreter<'a> {
         }
     }
 
+    /// B-2026-09-20-45 — the USER generic enum sibling of
+    /// [`Self::record_optres_payload_te`], and it uses that chain verbatim
+    /// because the chain was never Option/Result-specific: annotation, then
+    /// the span-keyed `enum_inst_type_exprs`, then a bare callee's declared
+    /// return, then an identifier alias. Only the final gate there names
+    /// `Option` and `Result`.
+    ///
+    /// What it buys: `enum G[T] { X(T), Y }` declares its payload as the bare
+    /// parameter, so `declared_field_type_head` answers `T` and the payload
+    /// walk's arms — which discriminate on the DECLARED head, because the
+    /// interpreter gives `Array[T, N]` and `Vec[T]` one `Value::Array` — can
+    /// never fire. Recording the binding's instantiation lets the walk ask
+    /// about `Array[R, 2]` instead. The dispatch in
+    /// `run_enum_payload_user_drops` justifies routing `Option`/`Result` to an
+    /// instantiation-driven path with "their declared payload is the bare
+    /// generic param, so the declared-type walk below can never fire for
+    /// them", which is this case word for word.
+    ///
+    /// The seeded pair is EXCLUDED here and keeps its own path — it has no
+    /// source `EnumDef`, so the qualifying scan below would decline it anyway,
+    /// but saying so is cheaper than rediscovering it.
+    fn record_user_enum_inst_te(&mut self, name: &str, ty: &Option<TypeExpr>, value: &Expr) {
+        let te = ty
+            .clone()
+            .or_else(|| {
+                self.program
+                    .enum_inst_type_exprs
+                    .get(&(value.span.offset, value.span.length))
+                    .cloned()
+            })
+            .or_else(|| match &value.kind {
+                ExprKind::Call { callee, .. } => match &callee.kind {
+                    ExprKind::Identifier(f) => {
+                        self.program.items.iter().find_map(|item| match item {
+                            Item::Function(func) if func.name == *f => func.return_type.clone(),
+                            _ => None,
+                        })
+                    }
+                    _ => None,
+                },
+                _ => None,
+            })
+            .or_else(|| match &value.kind {
+                ExprKind::Identifier(n) => self.user_enum_inst_tes.get(n).cloned(),
+                _ => None,
+            });
+        let qualifies = te.as_ref().is_some_and(|te| {
+            let TypeKind::Path(p) = &te.kind else {
+                return false;
+            };
+            let Some(head) = p.segments.last() else {
+                return false;
+            };
+            if head == "Option" || head == "Result" {
+                return false;
+            }
+            if p.generic_args.as_ref().is_none_or(|a| a.is_empty()) {
+                return false;
+            }
+            !self.enum_generic_param_names(head).is_empty()
+        });
+        if qualifies {
+            self.user_enum_inst_tes
+                .insert(name.to_string(), te.expect("qualifies implies Some"));
+        } else {
+            self.user_enum_inst_tes.remove(name);
+        }
+    }
+
     /// B-2026-07-30-11 (Map-values leg) — record the binding's resolved
     /// `Map[K, V]` instantiation for the value-bodies walk. Chain mirrors
     /// codegen's registration verbatim: annotation → bare-identifier
@@ -9242,6 +9430,8 @@ impl<'a> super::Interpreter<'a> {
                 if let crate::ast::PatternKind::Binding(bname) = &pattern.kind {
                     let bname = bname.clone();
                     self.record_optres_payload_te(&bname, ty, value);
+                    // B-2026-09-20-45 — user generic enum leg: same moment, same chain.
+                    self.record_user_enum_inst_te(&bname, ty, value);
                     // Map-values leg: same registration moment, same chain.
                     self.record_map_val_bodies_te(&bname, ty, value);
                     // B-2026-09-03-15 — tuple leg. Recording the ELEMENT types

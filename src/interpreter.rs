@@ -651,6 +651,23 @@ pub struct Interpreter<'a> {
     /// binding codegen registered no walker for — the mirrored chain is what
     /// keeps the two backends firing on the same set of bindings.
     pub(crate) optres_payload_bodies_tes: HashMap<String, TypeExpr>,
+    /// B-2026-09-20-45 — the binding's RESOLVED enum instantiation, for a
+    /// USER generic enum whose declared payload at some position is a bare
+    /// type parameter. Recorded at the `let` off the same chain
+    /// [`Self::record_optres_payload_te`] uses, and read by
+    /// `run_enum_payload_user_drops_value` so the payload walk can ask its
+    /// arms about `Array[R, 2]` rather than about `T`.
+    ///
+    /// The seeded `Option`/`Result` pair has had this since B-2026-07-30-11;
+    /// the dispatch above it justifies itself with "their declared payload is
+    /// the bare generic param, so the declared-type walk below can never fire
+    /// for them", which is verbatim the situation of `enum G[T] { X(T), Y }`.
+    /// Only the two literal name tests separated the two, not the machinery.
+    ///
+    /// NOT cleared per function, matching every other name-keyed table here;
+    /// a stale entry can only offer an instantiation the walk then re-checks
+    /// against the live value's shape, so a mismatch no-ops.
+    pub(crate) user_enum_inst_tes: HashMap<String, TypeExpr>,
     /// B-2026-09-03-15 — the element `TypeExpr`s of a tuple-bound variable,
     /// recorded at its `let` so a LATER destructure of that name can resolve
     /// each leaf's type. The interpreter's twin of codegen's
@@ -1225,6 +1242,7 @@ impl<'a> Interpreter<'a> {
             moved_out_enum_payload_slots: HashSet::new(),
             moved_out_enum_payload_body_slots: HashSet::new(),
             optres_payload_bodies_tes: HashMap::new(),
+            user_enum_inst_tes: HashMap::new(),
             tuple_var_elem_tes: HashMap::new(),
             self_arms_bind_views_stack: Vec::new(),
             self_param_stack: Vec::new(),
