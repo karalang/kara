@@ -104,6 +104,43 @@ Practical rule: **check out the UNFIXED tree by NAME, run, then restore** (keepi
     …run…
     git checkout HEAD  -- src/  # restore; then `git reset` — checkout STAGES
 
+**AND THAT LAST LINE IS A THIRD ARM WHENEVER THE FIX IS STILL UNCOMMITTED.** The
+naming rule below covers the CONTROL arm and leaves the RESTORE uncovered, and
+the restore is the one step that runs AFTER the verdicts are in, when nobody is
+reading any more. `HEAD` is the last COMMIT; while the fix under test is
+uncommitted — which is the whole window an A/B check runs in — the working tree
+is `HEAD + the fix`, so restoring to `HEAD` throws the fix away. `git status`
+goes clean, the script prints its verdicts, and nothing anywhere says the change
+is gone.
+
+Measured 2026-09-20 on B-2026-09-16-15's `mono.rs` fix: the check itself was
+conclusive (fixed arm `1 passed`, control arm `0 passed; 1 failed`, both arms
+proven to have executed), and its own restore step then deleted the fix it had
+just proved. It was caught only because the script echoed a marker count after
+the restore and it read 0 where 1 was expected. Without that line the next step
+would have been a commit of the fixture alone.
+
+What makes this one hard to audit for is that the wrong spelling is CORRECT
+whenever the fix happens to be committed already — which is most of the times
+anyone looks at it. Correct by coincidence, with nothing in the output that
+distinguishes it from correct by construction: the same shape as the depth-form
+control below.
+
+Three forms that cannot be wrong, in preference order:
+
+* **commit the fix FIRST** — then `BASE` and `HEAD` are both named trees and the
+  spelling above is correct as written;
+* run the control in a **scratch worktree** (`git worktree add --detach <dir>
+  origin/main`) and never touch the working tree at all, which makes it
+  impossible rather than detectable;
+* `git stash push src/` / `git stash pop`, **refusing if the stash took
+  nothing**.
+
+Failing all three, echo a marker count after the restore and make the script
+EXIT on it. A PRINT is the weaker form even when the number is right, for the
+same reason the whole family is hard: nobody reads the tail of a log whose
+verdicts already landed.
+
 **NAME THE TREE; DO NOT SPECIFY IT BY DEPTH.** `git checkout HEAD~1 -- src/` is the spelling this rule carried until 2026-09-20, and it is correct for exactly as long as HEAD *is* the fix commit — which is the first few minutes of its life. Close the row and HEAD becomes the ledger commit, so `HEAD~1` is the fix and the "control" arm carries it. Rebase and the same thing happens with other people's commits underneath. A control specified as "one back from wherever I am" drifts on every commit and every rebase, silently, and the script that contains it keeps running.
 
 The failure it produces is the worst shape available: BOTH arms carry the fix, both measure clean, and the run reports a fixture that passes with the fix and without it — which reads as a VACUOUS FIXTURE and invites deleting the test that had just proved itself. Measured 2026-09-20: a session's marker column caught it and exited 3, but only by luck of ordering — that column exists to prove the apparatus is SET, and here it happened to also catch it being MIS-SPECIFIED. Nothing else in the run could have.
@@ -132,7 +169,22 @@ Make the canary its OWN one-statement program rather than one of the cells under
 
 **THE SAME SHAPE ONE STEP OVER: A TEST FILTER THAT MATCHES NOTHING.** `cargo test <filter>` with a filter that names no test prints `test result: ok. 0 passed; 0 failed; 0 ignored; 0 measured; 1709 filtered out` and **exits 0**. Beside a real fixture's `1 passed`, a reader scanning for green sees two `ok` lines; the tells are `0 passed` and the filtered-out count, neither of which is where the eye goes. The mechanism here is that a fixture's LABEL — the string inside its `assert` call — and its test FUNCTION NAME are different strings, so filtering by the one you were just reading matches nothing. Measured 2026-09-20, on the check that exists to prove a keep-both-sides fixture merge did not damage another session's test: exactly where a silent zero-match is worst, because the green light certifies having checked nothing on the resolve most likely to be wrong.
 
-Practical rule: **assert the pass COUNT, not the exit status** — `cargo test <filter> 2>&1 | grep -q '1 passed'`, or run unfiltered. And note the family: a stale binary is the apparatus set to the CONTROL, an empty filter is the apparatus pointed at NOTHING, and a vacuous fixture is the apparatus measuring a value nothing observes. All three are one failure — an instrument silently reporting nothing, read as reporting a negative — and all three exit 0.
+Practical rule: **assert the pass COUNT, not the exit status** — `cargo test <filter> 2>&1 | grep -q '1 passed'`, or run unfiltered.
+
+**AND ASSERT IT PER ARM, because on a CONTROL ARM a zero-match is indistinguishable from success.** The rest of this family dies to "is this a real negative?"; this one does not, because on the control the negative is what you came for. A filter that matches nothing prints `0 passed; 0 failed` and exits 0, so "did the fixture pass?" answers NO — which is exactly what a working control answers. The tell is in the verdict line and nowhere else: a real control prints `0 passed; 1 failed`, a void one prints `0 passed; 0 failed`, and a script asking only "did the fixture pass?" cannot tell them apart. B-2026-09-16-15's control arm printed the first of those, which is the only reason its `0 passed` could be read as evidence at all. A marker column does not close this: it proves the apparatus is SET and says nothing about whether it RAN.
+
+So the check has three outcomes rather than two, and the third one EXITS:
+
+```bash
+res=$(… 2>&1 | grep -E '^test result:' | tail -1)
+[ -n "$res" ] || exit 5                                     # no verdict line at all
+echo "$res" | grep -qE '0 passed; 0 failed' && exit 5        # VOID — the filter matched nothing
+echo "$res" | grep -q '1 passed' && got=pass
+echo "$res" | grep -q '1 failed' && got=fail
+[ -n "${got:-}" ] || exit 5                                  # unreadable verdict
+```
+
+The canary has the same two-sidedness, and it is the easier half to get backwards: a canary that exercises the fix **cannot** be correct on a compiler without it, so one written to demand correct output on both arms can only pass when the apparatus is set to the test arm — the opposite of a control. Each arm asserts what that arm owes: marker non-zero and canary correct on the fixed arm, marker zero and canary NOT correct on the control arm. Both directions refuse. And note the family: a stale binary is the apparatus set to the CONTROL, an empty filter is the apparatus pointed at NOTHING, and a vacuous fixture is the apparatus measuring a value nothing observes. All three are one failure — an instrument silently reporting nothing, read as reporting a negative — and all three exit 0.
 
 **Practical rule: rebuild the archives whenever `runtime/src` changes AT ALL, not only when the symbol set does.** Symbol presence is necessary, not sufficient. The check before trusting any AOT measurement is a diff, not an `nm`:
 
