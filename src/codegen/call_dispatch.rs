@@ -1480,6 +1480,11 @@ impl<'ctx> super::Codegen<'ctx> {
         let saved_pending_elem = self.var_types.pending_let_elem_type.take();
         let saved_pending_elem_te = self.var_types.pending_let_elem_type_expr.take();
         let mut compiled_args: Vec<BasicMetadataValueEnum<'ctx>> = Vec::new();
+        // B-2026-09-20-52 — argument bindings whose box this call MAY hand
+        // back, the NON-GENERIC twin of `mono.rs`'s `maybe_handed_back_args`.
+        // Resolved in the loop below and consumed after the call, where the
+        // returned value exists to compare against.
+        let mut maybe_handed_back_args: Vec<String> = Vec::new();
         for (i, a) in args.iter().enumerate() {
             // B-2026-06-20-1: a bare named `fn` passed to a `Fn(...)`-typed
             // parameter is reified into the closure fat-pointer ABI
@@ -2738,6 +2743,64 @@ impl<'ctx> super::Codegen<'ctx> {
                     }
                 }
             }
+            // B-2026-09-20-52 — COLLECT AN ARGUMENT BINDING WHOSE BOX THIS
+            // CALL MAY HAND BACK, so the disarm below can ask the returned
+            // VALUE rather than the callee's signature.
+            //
+            // `mono.rs` has carried exactly this since B-2026-09-17-7, and a
+            // NON-GENERIC callee with a concrete parameter type never reaches
+            // it: `compile_generic_call` is the only site that ever built a
+            // `maybe_handed_back_args`. So `fn ident(g: G1[String]) ->
+            // G1[String] { return g }` — the same hand-back one erasure down —
+            // had no disarm at all, and the caller's binding and the result
+            // binding both freed one box. Measured on whole programs with
+            // nothing else in them: `let g = G1.Y("…"); let k = ident(g);` is
+            // 9 allocs / 10 frees with an Invalid read and an Invalid free,
+            // both in `main`, and DISCARDING the result is the same 9/10.
+            //
+            // THE COMPARE, NOT A SIGNATURE TEST, IS WHAT MAKES THIS SAFE, and
+            // it is why an earlier static spelling of this fix is not what
+            // landed. Standing the caller down whenever the callee's signature
+            // says the argument MAY come back is wrong on a mixed-path callee's
+            // dies-inside leg, where nothing else owns the box: measured, a
+            // static disarm gated on `call_arg_flows_into_return` took
+            // `let h = wrapC(g, false)` from clean to a 24-byte definite loss
+            // while fixing every hand-back cell, and swapping the gate to the
+            // ALL-paths predicate changed neither number.
+            // `zero_boxed_binding_if_call_returned_its_box` asks instead
+            // whether the pointer coming back IS the pointer that went in, so
+            // the two legs of one callee get opposite answers from one emit.
+            //
+            // THE DISCARDED-STATEMENT GUARD IS DELIBERATELY NOT PORTED, and the
+            // divergence from the mono twin is measured rather than assumed.
+            // There the guard exists because a discarded generic call hands the
+            // box to nobody, so the caller's binding is its only owner. On this
+            // path the discarded result DOES acquire one — `ident(g);` as a
+            // statement is 9 allocs / 10 frees, the same double free as the
+            // bound spelling — so porting the guard would leave exactly that
+            // cell broken. If the two paths are ever unified, this is the line
+            // that has to be settled rather than merged.
+            //
+            // Membership in `boxed_enum_payload_vars` is asked HERE rather than
+            // at the post-call hook, for the reason the mono twin records: it
+            // is what says the binding's cleanup IS the null-guarded
+            // `BoxedEnumDrop` the zeroing neutralizes.
+            if !borrow_skip
+                && self.erased_boxed_user_enum_ident_arg(&a.value)
+                && self.callee_by_value_binding_param_may_return(&name, i)
+            {
+                if let ExprKind::Identifier(n) = &a.value.kind {
+                    let owner = self.moved_arg_owner_name(n);
+                    if self
+                        .payload_vars
+                        .boxed_enum_payload_vars
+                        .contains(owner.as_str())
+                        && !maybe_handed_back_args.contains(&owner)
+                    {
+                        maybe_handed_back_args.push(owner);
+                    }
+                }
+            }
             if !borrow_skip && !self.call_arg_flows_into_return(&name, i) {
                 // B-2026-08-06-31 — a binding whose box carries a user STRUCT
                 // interior keeps its cleanup across a by-value call. The
@@ -3015,6 +3078,12 @@ impl<'ctx> super::Codegen<'ctx> {
         } else {
             let v = self.unpack_niche_abi_ret(&name, basic_val.unwrap_basic());
             let v = self.unpack_wasm_bf16_ret(&name, v);
+            // B-2026-09-20-52 — the non-generic twin of `mono.rs`'s post-call
+            // hook. See the collection site in the argument loop above for why
+            // the question is asked of the returned VALUE.
+            for src in &maybe_handed_back_args {
+                self.zero_boxed_binding_if_call_returned_its_box(src, v);
+            }
             // LazyFrame codegen twin — rule 3 of the ownership model
             // (`src/codegen/lazyframe.rs`): a user fn DECLARED to return
             // LazyExpr/LazyFrame hands back an escaping +1 (retained in the
@@ -13504,7 +13573,35 @@ impl<'ctx> super::Codegen<'ctx> {
         // object expression, which is the same route B-2026-09-20-13's copy
         // takes at this position.
         let subst_inst = self.struct_field_te_subst_inst(sname.as_str(), object, &fte);
+        // B-2026-09-20-52 — and for a CONCRETE owner the declared type IS the
+        // instantiation, so it is the fallback rather than a dead end.
+        // `struct_field_te_subst_inst` recovers an instantiation by mapping a
+        // struct's declared PARAMETERS onto the object's arguments; a concrete
+        // owner has no parameters, so it answers `None` — stated outright in
+        // the note on the sibling route below. The old spelling read that
+        // `None` as "no boxing question here" and fell through to
+        // `enum_param_owned_by_transfer`, which answers false for an erased
+        // payload, so a concrete holder's field was never queued for zeroing.
+        //
+        // That left the two halves of this mechanism disagreeing about exactly
+        // one shape. Measured before this pair landed, on whole programs with
+        // nothing else in them: `let h: Conc = Conc { g: G1.Y("…") };` lost the
+        // 24-byte ENVELOPE (9 allocs / 8 frees, zero indirect, fixed at 24
+        // bytes across 8-, 40- and 100-character payloads), while the
+        // hand-onward spelling `shw(h.g)` was balanced ONLY because the
+        // consumer supplied the free. Supplying the free at the holder without
+        // this fallback turns that second cell into a double free — which is
+        // precisely what the earlier experiment recorded at
+        // `synth_drop.rs`'s pre-filter, and why the comment there concluded a
+        // concrete holder already had an owner. It has one only when something
+        // takes the field away.
+        //
+        // Passing the ERASED `G1[T]` here would change nothing by construction:
+        // `user_enum_boxed_payload_variants` compares the payload's word count
+        // against the area and answers empty for it, so the generic case still
+        // reaches this only through `subst_inst`, exactly as before.
         let boxed_te = subst_inst
+            .or_else(|| Some(fte.clone()))
             .filter(|te| !self.user_enum_boxed_payload_variants(te).is_empty())
             .or(chain_boxed);
         // The transfer gate is NOT the question for a boxed erased payload, and
@@ -13946,6 +14043,79 @@ impl<'ctx> super::Codegen<'ctx> {
             self.source_outlives_move(arg),
             super::runtime::SourceOutlivesMove::UseAfterMove
         ) {
+            return false;
+        }
+        let Some(te) = self.uam_boxed_enum_arg_te(arg) else {
+            return false;
+        };
+        let TypeKind::Path(p) = &te.kind else {
+            return false;
+        };
+        let Some(ename) = p.segments.last().cloned() else {
+            return false;
+        };
+        if ename == "Option" || ename == "Result" {
+            return false;
+        }
+        match self.type_decls.enum_layouts.get(ename.as_str()) {
+            Some(l) if !l.is_shared => {}
+            _ => return false,
+        }
+        !self.user_enum_boxed_payload_variants(&te).is_empty()
+    }
+
+    /// B-2026-09-20-52 — a NAMED BINDING argument whose type is a non-shared
+    /// USER enum that boxes its payload in this instantiation.
+    ///
+    /// [`Self::uam_boxed_enum_arg_will_be_copied`] asks the same four questions
+    /// and one more, `source_outlives_move`, which is the whole difference: it
+    /// is about an argument the caller USES AGAIN, and this is about one it
+    /// does not. Sharing the four rather than restating them keeps the two
+    /// gates answering the same boxing question, which is the property that
+    /// makes them safe to sit a few lines apart.
+    ///
+    /// IDENTIFIER-ONLY, unlike that one, because the disarm it gates stores
+    /// through a BINDING's slot. A `FieldAccess` argument is the sibling shape
+    /// `zero_transfer_owned_enum_field_arg` covers, and it must be zeroed
+    /// through the field pointer rather than the root — zeroing a struct
+    /// binding's whole slot would clear every other field's guard with it.
+    /// B-2026-09-20-52 — is parameter `i` of NON-GENERIC free function `name`
+    /// a by-value binding the callee may return?
+    ///
+    /// The three signature questions `mono.rs`'s `param_box_maybe_handed_back`
+    /// asks, minus the boxing one, which the caller asks of the ARGUMENT
+    /// through [`Self::erased_boxed_user_enum_ident_arg`] — on this path the
+    /// parameter's declared type is already the instantiation, so there is no
+    /// `callee_param_te_for_call` step to take.
+    ///
+    /// `fn_returns_param` is the GENEROUS union rather than the all-paths
+    /// predicate, deliberately and for the mono twin's stated reason: it is
+    /// true of an aggregate-literal return that merely moves the parameter into
+    /// a NEW value, and such a return carries a different box word, so the
+    /// runtime compare this gates declines and the argument keeps the drop it
+    /// has today. Widening here cannot be wrong in the suppressing direction,
+    /// which is exactly what a static disarm in this position could not claim.
+    pub(super) fn callee_by_value_binding_param_may_return(&self, name: &str, i: usize) -> bool {
+        let Some(program) = self.program_snapshot.as_deref() else {
+            return false;
+        };
+        let Some(f) = super::declarations::find_function_ast(program, name) else {
+            return false;
+        };
+        let Some(p) = f.params.get(i) else {
+            return false;
+        };
+        if matches!(p.ty.kind, TypeKind::Ref { .. } | TypeKind::MutRef { .. }) {
+            return false;
+        }
+        if !matches!(p.pattern.kind, PatternKind::Binding(_)) {
+            return false;
+        }
+        crate::ast::fn_returns_param(f, i)
+    }
+
+    pub(super) fn erased_boxed_user_enum_ident_arg(&mut self, arg: &Expr) -> bool {
+        if !matches!(&arg.kind, ExprKind::Identifier(_)) {
             return false;
         }
         let Some(te) = self.uam_boxed_enum_arg_te(arg) else {

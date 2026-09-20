@@ -99890,6 +99890,110 @@ fn main() {
         );
     }
 
+    /// B-2026-09-20-52 — the MEMORY twin of `tests/codegen.rs`'s
+    /// `e2e_concrete_holder_and_non_generic_handback_leave_one_owner_per_box`,
+    /// which asserts stdout only. Read that fixture's note for the two faults
+    /// and why each is invisible in the shape that contains both.
+    ///
+    /// SPLIT INTO FOUR PROGRAMS RATHER THAN ONE, because the faults cancel. A
+    /// single program carrying every cell was BALANCED overall while two of its
+    /// cells were a leak and a double free, so a whole-program alloc/free delta
+    /// is the one instrument that cannot see this row. Each block below is its
+    /// own binary and its own verdict.
+    ///
+    /// The `wrap` block is the pair that pulls in opposite directions:
+    /// `wrapbind` double-frees if the holder is fixed alone, and `wrapnone`
+    /// strands its box if the caller is disarmed on the callee's signature
+    /// instead of on the value that came back. Both spellings of the obvious
+    /// fix were measured and rejected by exactly these two cells.
+    #[test]
+    fn asan_concrete_holder_and_non_generic_handback_leave_one_owner_per_box() {
+        const DECLS: &str = "enum G1[T] { Y(T), N }\n\
+             enum N1 { Y(String), N }\n\
+             struct Conc { g: G1[String] }\n\
+             fn wrapC(g: G1[String], c: bool) -> Conc { if c { return Conc { g: g } } return Conc { g: G1.N } }\n\
+             fn ident(g: G1[String]) -> G1[String] { return g }\n\
+             fn other(g: G1[String]) -> G1[String] { return G1.Y(\"zzzzzzzzzzzzzzzzzzzzzzzz\") }\n\
+             fn pick(a: G1[String], b: G1[String]) -> G1[String] { return a }\n\
+             fn usz(g: G1[String]) -> i64 { match g { G1.Y(v) => { return v.len() } G1.N => { return 0 } } }\n\
+             fn sink(g: G1[String]) { match g { G1.Y(v) => { println(f\"  s{v.len()}\") } G1.N => { println(\"  s0\") } } }\n\
+             fn shw(g: G1[String]) { match g { G1.Y(v) => { println(f\"  mx {v.len()}\") } G1.N => { println(\"  mx 0\") } } }\n\
+             fn identn(g: N1) -> N1 { return g }\n\
+             fn shwn(g: N1) { match g { N1.Y(v) => { println(f\"  nx {v.len()}\") } N1.N => { println(\"  nx 0\") } } }\n";
+
+        // FAULT L on its own: a concrete holder whose field is never
+        // handed onward. 9 allocs / 8 frees, 24 B definitely lost.
+        assert_clean_asan_run(
+            &format!(
+                "{DECLS}\
+                 fn main() {{\n\
+                 \x20   {{ let h: Conc = Conc {{ g: G1.Y(\"abcdefghijklmnopqrstuvwx\") }}; println(\"  x\") }}\n\
+                 \x20   println(\"end\");\n\
+                 }}\n"
+            ),
+            &["x", "end"],
+            "b92052-holder",
+        );
+
+        // FAULT D on its own, with no struct anywhere: a non-generic callee
+        // that returns its own by-value parameter. Both spellings were
+        // 9 allocs / 10 frees with an Invalid read and an Invalid free.
+        assert_clean_asan_run(
+            &format!(
+                "{DECLS}\
+                 fn main() {{\n\
+                 \x20   {{ let g: G1[String] = G1.Y(\"abcdefghijklmnopqrstuvwx\"); let k: G1[String] = ident(g); shw(k) }}\n\
+                 \x20   {{ let g: G1[String] = G1.Y(\"abcdefghijklmnopqrstuvwx\"); ident(g); println(\"  x\") }}\n\
+                 \x20   println(\"end\");\n\
+                 }}\n"
+            ),
+            &["mx 24", "  x", "end"],
+            "b92052-handback",
+        );
+
+        // THE SHAPE THAT CONTAINS BOTH, and the dies-inside leg beside it.
+        // `wrapbind` was BALANCED before either fix and double-frees if the
+        // holder is fixed alone; `wrapnone` strands its box if the caller is
+        // disarmed on the callee's signature rather than on the returned
+        // value. The two cells pull in opposite directions on purpose.
+        assert_clean_asan_run(
+            &format!(
+                "{DECLS}\
+                 fn main() {{\n\
+                 \x20   {{ let g: G1[String] = G1.Y(\"abcdefghijklmnopqrstuvwx\"); let h = wrapC(g, true); shw(h.g) }}\n\
+                 \x20   {{ let g: G1[String] = G1.Y(\"abcdefghijklmnopqrstuvwx\"); let h = wrapC(g, false); shw(h.g) }}\n\
+                 \x20   {{ let g: G1[String] = G1.Y(\"abcdefghijklmnopqrstuvwx\"); wrapC(g, true); println(\"  x\") }}\n\
+                 \x20   println(\"end\");\n\
+                 }}\n"
+            ),
+            &["mx 24", "  mx 0", "  x", "end"],
+            "b92052-wrap",
+        );
+
+        // THE STRANDING-DIRECTION GUARDS, every one of them clean before this
+        // row and required to stay so: a field handed onward, a TEMPORARY
+        // argument, a callee returning a fresh value, a scalar return, a unit
+        // return, a two-argument callee where only the returned one may be
+        // disarmed, and the non-generic enum twin.
+        assert_clean_asan_run(
+            &format!(
+                "{DECLS}\
+                 fn main() {{\n\
+                 \x20   {{ let h: Conc = Conc {{ g: G1.Y(\"abcdefghijklmnopqrstuvwx\") }}; shw(h.g) }}\n\
+                 \x20   {{ let k: G1[String] = ident(G1.Y(\"abcdefghijklmnopqrstuvwx\")); shw(k) }}\n\
+                 \x20   {{ let g: G1[String] = G1.Y(\"abcdefghijklmnopqrstuvwx\"); let k: G1[String] = other(g); shw(k) }}\n\
+                 \x20   {{ let g: G1[String] = G1.Y(\"abcdefghijklmnopqrstuvwx\"); let n: i64 = usz(g); println(f\"  n{{n}}\") }}\n\
+                 \x20   {{ let g: G1[String] = G1.Y(\"abcdefghijklmnopqrstuvwx\"); sink(g) }}\n\
+                 \x20   {{ let x: G1[String] = G1.Y(\"aaaaaaaaaaaaaaaaaaaaaaaa\"); let y: G1[String] = G1.Y(\"bbbbbbbbbbbbbbbbbbbbbbbbbbbb\"); let k: G1[String] = pick(x, y); shw(k) }}\n\
+                 \x20   {{ let g: N1 = N1.Y(\"abcdefghijklmnopqrstuvwx\"); let k: N1 = identn(g); shwn(k) }}\n\
+                 \x20   println(\"end\");\n\
+                 }}\n"
+            ),
+            &["mx 24", "  mx 24", "  mx 24", "  n24", "  s24", "  mx 24", "  nx 24", "end"],
+            "b92052-guards",
+        );
+    }
+
     /// B-2026-09-19-35 — the MEMORY twin of `tests/codegen.rs`'s
     /// `e2e_boxed_erased_payload_survives_every_handoff_spelling`, which
     /// asserts stdout only.

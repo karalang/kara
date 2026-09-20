@@ -3095,23 +3095,47 @@ impl<'ctx> super::Codegen<'ctx> {
         // `enum Fz[T] { E(Zs), Y(T), N }`, where the field needs the switch AND
         // the box free and a field carries one kind.
         //
-        // AND ONLY WHERE THE FIELD'S DECLARED TYPE IS GENERIC-DEPENDENT, which
-        // is not a narrowing for tidiness. A CONCRETE holder
-        // (`struct Holder { g: Gen[String] }`) has no erasure to repair:
-        // `enum_drop_kind_for_type_expr` resolves `Gen[String]`'s payload, the
-        // `#15` walk marks the field, and the existing switch frees the box.
-        // Adding this free there is a SECOND owner, and it measured as one —
-        // `free(): double free detected in tcache 2` at scope exit, with
-        // correct output right up to it, which is the shape that gets read as
-        // a crash somewhere else entirely because stdout is lost on abort.
-        // `type_expr_mentions_param` is the same question B-2026-09-20-41's
-        // fix asked of an enum PAYLOAD hours earlier, one level out.
-        let struct_params = self
-            .type_decls
-            .struct_generic_params
-            .get(struct_name)
-            .cloned()
-            .unwrap_or_default();
+        // B-2026-09-20-52 — THIS SET IS NO LONGER PRE-FILTERED BY
+        // `type_expr_mentions_param`, AND THE COMMENT THAT PUT IT THERE WAS
+        // WRONG IN ITS STATED REASON. It read: a CONCRETE holder
+        // (`struct Holder { g: Gen[String] }`) "has no erasure to repair ...
+        // the existing switch frees the box", so adding the free there would
+        // be a SECOND owner — and it cited a measured
+        // `free(): double free detected in tcache 2`.
+        //
+        // The measurement was real and the owner it named was not. The switch
+        // does NOT free a concrete holder's box: `emit_enum_drop_switch` is
+        // keyed by enum NAME and its arms come from the DECLARATION, where
+        // `G1[T]`'s payload takes `enum_drop_kind_for_type_expr`'s `_ => None`
+        // tail — the same erasure as the generic case, because it is the same
+        // one drop function. Measured on a whole program containing nothing
+        // else: `let h: Conc = Conc { g: G1.Y("…") };` is 9 allocs / 8 frees,
+        // a 24-byte definite loss with ZERO indirect, fixed at 24 bytes across
+        // 8-, 40- and 100-character payloads — so the block lost is the
+        // ENVELOPE, which is exactly what this free exists to release. The
+        // non-generic twin (`enum N1 { Y(String), N }` in the same struct) is
+        // 8/8 clean, which is what makes it the erasure and not the struct.
+        //
+        // What the earlier experiment hit was the SECOND-OWNER case arriving
+        // from the other direction: its cell handed the field onward
+        // (`shw(h.g)`), the CONSUMER supplied the free, and adding this one
+        // made two. Remove the consumer from that same cell and it leaks. The
+        // discipline is the one `zero_erased_boxed_enum_payload_words_at`
+        // already states — both halves move together — and the move-out half
+        // needs no change here: `queue_enum_field_zero_for_handoff` at
+        // `call_dispatch.rs` already asks the RESOLVED question, recovering the
+        // instantiation and testing `user_enum_boxed_payload_variants`. It was
+        // only this side that asked a SYNTACTIC one, so the halves disagreed
+        // about the concrete holder and the free was the half missing.
+        //
+        // The removal is not a widening of the question, it is the deletion of
+        // a pre-filter that SHADOWED it: `user_enum_boxed_payload_variants`
+        // below is the real test and is unchanged, and it already answers
+        // false for every field this pre-filter used to exclude for a good
+        // reason (a concrete declaration sizes its area to the widest variant,
+        // so nothing boxes and the set comes back empty). `d7`-shaped cells —
+        // a holder whose field IS handed onward — are the guards, and they
+        // stay balanced because the move-out zeroes the word this free reads.
         let boxed_enum_field_tes: Vec<(usize, TypeExpr)> = self
             .type_decls
             .struct_field_type_exprs
@@ -3119,7 +3143,6 @@ impl<'ctx> super::Codegen<'ctx> {
             .map(|tes| {
                 tes.iter()
                     .enumerate()
-                    .filter(|(_, te)| Self::type_expr_mentions_param(te, &struct_params))
                     .map(|(idx, te)| {
                         let concrete = match subst {
                             Some(sub) => {

@@ -20136,6 +20136,107 @@ fn main() {
         assert_eq!(out, "struct\n  mx 10\nstructF\n  mx 0\nallpaths\n  mx 10\ntuple\n  mx 10\ntupleF\n  mx 0\nnested\n  mx 10\nbare\n  mx 10\nbareF\n  mx 0\ndiscard\n  x\nend\n");
     }
 
+    /// B-2026-09-20-52 — A CONCRETE HOLDER'S ERASED ENUM BOX HAD NO OWNER, AND
+    /// A NON-GENERIC CALLEE'S HAND-BACK HAD TWO. Two independent faults, one
+    /// row, and each is visible in a program the other does not appear in.
+    ///
+    /// `holder` is the first: `struct Conc { g: G1[String] }` never freed its
+    /// field's box. `synth_drop.rs` pre-filtered the boxed-field set with
+    /// `type_expr_mentions_param`, on a comment asserting that a concrete
+    /// holder "has no erasure to repair ... the existing switch frees the box".
+    /// It does not: `emit_enum_drop_switch` is keyed by enum NAME and its arms
+    /// come from the DECLARATION, where `G1[T]`'s payload takes
+    /// `enum_drop_kind_for_type_expr`'s `_ => None` tail — the same erasure as
+    /// the generic case, because it is the same one drop function. Measured on
+    /// a program containing nothing else: 9 allocs / 8 frees, 24 bytes
+    /// definitely lost with ZERO indirect, fixed at 24 across 8-, 40- and
+    /// 100-character payloads, so what is lost is the ENVELOPE. `nongen` is the
+    /// same struct over a non-generic enum and was 8/8 clean throughout, which
+    /// is what says the fault is the erasure and not the struct.
+    ///
+    /// `identbind` is the second, and it needs no struct at all:
+    /// `fn ident(g: G1[String]) -> G1[String] { return g }` over
+    /// `let g = G1.Y("…"); let k = ident(g);` was 9 allocs / 10 frees with an
+    /// `Invalid read of size 8` and an `Invalid free()`, BOTH in `main` — the
+    /// caller's binding and the result binding freeing one box. The emitted IR
+    /// says it plainly: the caller's disarm store is present before
+    /// `call @consume`, `call @other` and `call @usz`, and simply absent before
+    /// `call @ident`. `mono.rs` has carried a runtime-compare disarm for this
+    /// since B-2026-09-17-7 and `compile_generic_call` was the only site that
+    /// ever built its `maybe_handed_back_args`, so a NON-GENERIC callee with a
+    /// concrete parameter type reached no disarm at all.
+    ///
+    /// THE TWO CANCEL, WHICH IS WHY NEITHER WAS VISIBLE IN THE SHAPE THAT
+    /// CONTAINS BOTH. `wrapbind` — a named local wrapped into a concrete holder
+    /// — was BALANCED before either fix: the caller over-freed and the holder
+    /// under-freed, over one box. Fixing the holder alone turns that cell and
+    /// four more into double frees, and fixing the caller alone leaves them
+    /// leaking; a grid of only such cells reports both faults as clean.
+    ///
+    /// `wrapnone` IS THE DIES-INSIDE LEG AND IT IS THE GUARD THAT REJECTED THE
+    /// OBVIOUS FIX. `wrapC(g, false)` returns a payload-free variant, so
+    /// nothing else owns the argument's box. A static disarm gated on the
+    /// callee's signature took this cell from clean to a 24-byte definite loss
+    /// while fixing every hand-back cell, and swapping that gate to the
+    /// ALL-paths predicate changed neither number. Asking the returned VALUE
+    /// instead gives the two legs of one callee opposite answers from one emit.
+    ///
+    /// `identdisc` is why the mono twin's discarded-statement guard is NOT
+    /// ported: there a discarded generic call hands the box to nobody, while
+    /// here `ident(g);` as a statement is the same 9/10 double free as the
+    /// bound spelling. The divergence is measured, not assumed.
+    ///
+    /// `handon`, `identtmp`, `fresh`, `scalar`, `unit` and `twoargs` are the
+    /// guards in the stranding direction — a field handed onward, a TEMPORARY
+    /// argument (clean throughout, because it has no binding to be the second
+    /// owner, which is also why it cannot stand in for `identbind`), a callee
+    /// returning a FRESH value, a scalar return, a unit return, and a two-
+    /// argument callee where only the returned one may be disarmed.
+    ///
+    /// Valgrind on this program, `-O0` / `KARAC_AUTO_PAR=0`: 39 allocs / 39
+    /// frees, `ERROR SUMMARY: 0 errors`. All four surfaces agree on the output.
+    ///
+    /// The MEMORY twin is `tests/memory_sanitizer.rs`'s
+    /// `asan_concrete_holder_and_non_generic_handback_leave_one_owner_per_box`.
+    #[test]
+    fn e2e_concrete_holder_and_non_generic_handback_leave_one_owner_per_box() {
+        let Some(out) = run_program(
+            r#"enum G1[T] { Y(T), N }
+enum N1 { Y(String), N }
+struct Conc { g: G1[String] }
+fn wrapC(g: G1[String], c: bool) -> Conc { if c { return Conc { g: g } } return Conc { g: G1.N } }
+fn ident(g: G1[String]) -> G1[String] { return g }
+fn other(g: G1[String]) -> G1[String] { return G1.Y("zzzzzzzzzzzzzzzzzzzzzzzz") }
+fn pick(a: G1[String], b: G1[String]) -> G1[String] { return a }
+fn usz(g: G1[String]) -> i64 { match g { G1.Y(v) => { return v.len() } G1.N => { return 0 } } }
+fn sink(g: G1[String]) { match g { G1.Y(v) => { println(f"  s{v.len()}") } G1.N => { println("  s0") } } }
+fn shw(g: G1[String]) { match g { G1.Y(v) => { println(f"  mx {v.len()}") } G1.N => { println("  mx 0") } } }
+fn identn(g: N1) -> N1 { return g }
+fn shwn(g: N1) { match g { N1.Y(v) => { println(f"  nx {v.len()}") } N1.N => { println("  nx 0") } } }
+
+fn main() {
+    println("holder");    { let h: Conc = Conc { g: G1.Y("abcdefghijklmnopqrstuvwx") }; println("  x") }
+    println("handon");    { let h: Conc = Conc { g: G1.Y("abcdefghijklmnopqrstuvwx") }; shw(h.g) }
+    println("wrapbind");  { let g: G1[String] = G1.Y("abcdefghijklmnopqrstuvwx"); let h = wrapC(g, true); shw(h.g) }
+    println("wrapnone");  { let g: G1[String] = G1.Y("abcdefghijklmnopqrstuvwx"); let h = wrapC(g, false); shw(h.g) }
+    println("wrapdisc");  { let g: G1[String] = G1.Y("abcdefghijklmnopqrstuvwx"); wrapC(g, true); println("  x") }
+    println("identbind"); { let g: G1[String] = G1.Y("abcdefghijklmnopqrstuvwx"); let k: G1[String] = ident(g); shw(k) }
+    println("identdisc"); { let g: G1[String] = G1.Y("abcdefghijklmnopqrstuvwx"); ident(g); println("  x") }
+    println("identtmp");  { let k: G1[String] = ident(G1.Y("abcdefghijklmnopqrstuvwx")); shw(k) }
+    println("fresh");     { let g: G1[String] = G1.Y("abcdefghijklmnopqrstuvwx"); let k: G1[String] = other(g); shw(k) }
+    println("scalar");    { let g: G1[String] = G1.Y("abcdefghijklmnopqrstuvwx"); let n: i64 = usz(g); println(f"  n{n}") }
+    println("unit");      { let g: G1[String] = G1.Y("abcdefghijklmnopqrstuvwx"); sink(g) }
+    println("twoargs");   { let x: G1[String] = G1.Y("aaaaaaaaaaaaaaaaaaaaaaaa"); let y: G1[String] = G1.Y("bbbbbbbbbbbbbbbbbbbbbbbbbbbb"); let k: G1[String] = pick(x, y); shw(k) }
+    println("nongen");    { let g: N1 = N1.Y("abcdefghijklmnopqrstuvwx"); let k: N1 = identn(g); shwn(k) }
+    println("end")
+}
+"#,
+        ) else {
+            return;
+        };
+        assert_eq!(out, "holder\n  x\nhandon\n  mx 24\nwrapbind\n  mx 24\nwrapnone\n  mx 0\nwrapdisc\n  x\nidentbind\n  mx 24\nidentdisc\n  x\nidenttmp\n  mx 24\nfresh\n  mx 24\nscalar\n  n24\nunit\n  s24\ntwoargs\n  mx 24\nnongen\n  nx 24\nend\n");
+    }
+
     /// B-2026-09-19-35 — A BLOCK'S TAIL EXPRESSION IS NOT A STATEMENT, so the
     /// move-out neutralizer for a boxed erased enum payload was queued and
     /// never drained, and a CHAINED place could not be queued at all.
