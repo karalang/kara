@@ -92,7 +92,7 @@ distinguish "bugs flattening" from "we stopped writing them down."
 
 | class | total |
 |---|---|
-| run-vs-build | 468 |
+| run-vs-build | 469 |
 | miscompile | 431 |
 | leak | 394 |
 | double-free | 260 |
@@ -110,8 +110,8 @@ distinguish "bugs flattening" from "we stopped writing them down."
 
 | surface | total |
 |---|---|
-| codegen | 1934 |
-| interp | 501 |
+| codegen | 1935 |
+| interp | 502 |
 | typecheck | 302 |
 | other | 103 |
 | ownership | 75 |
@@ -239,6 +239,7 @@ _Generated from `bug-ledger.jsonl` by `scripts/bug-curve.py` (2026-05-20 → 202
 | B-2026-09-20-46 | 2026-09-20 | codegen | high | A GENERIC CALLEE NEVER REACHES B-2026-09-20-13'S ARGUMENT-SITE COPY AT ALL, so a reused by-value generic enum argument is still a use-after-free there -- a twin pair differing in ONE line, `fn shg[T](g: G1[T])` against `fn shg(g: G1[String])`, gives 0 versus 3 `b13.ebox.new` markers and Invalid read of size 8 at address 0x0 on the SECOND call versus 14 allocs / 14 frees and 0 errors; the generic IR carries ZERO `b13.*` labels of any kind, so the hook is never REACHED rather than reached and declining, and `definitely lost` is 0 -- this is the same channel as -20-13, not the leak 99064aa's commit message calls it | — |
 | B-2026-09-20-47 | 2026-09-20 | codegen | medium | A BOXED GENERIC-ENUM PAYLOAD WHOSE `Drop`-BEARING TYPE IS A FIELD RATHER THAN THE PAYLOAD ITSELF RUNS THAT `Drop` BODY TWICE PER BY-VALUE CALL -- one value, ONE call, two `dR41`, memory-clean on every channel (14 allocs / 14 frees, ERROR SUMMARY 0), where a no-call control over the same binding runs it once; B-2026-09-20-13's copy is NOT the cause, proven without a control tree because the single-call cell emits ZERO `b13.ebox.new` markers, and B-2026-09-20-44's `Gen[Rw]` with the same width but the `Drop` type AS the payload is correct on all four surfaces, so NESTING is the axis and boxing is not | — |
 | B-2026-09-20-49 | 2026-09-20 | codegen | medium | A `shared enum`'s BOXED TUPLE PAYLOAD STRANDS ITS INTERIOR FROM EVERY SOURCE ALIKE, so unlike the `Array` channel it has no provenance axis at all -- `shared enum Sh { S((String, i64)), N }` loses 28 B (exactly the tuple's String element) whether the payload is a fresh temp `Sh.S(mkt("x"))` or a named local `let a = mkt("n"); Sh.S(a)`, both measured at 28/0 before AND after B-2026-09-17-21's fix, which deliberately leaves this channel untouched -- `emit_shared_enum_payload_box_free` is `BoxedArray` ONLY and its own note calls `BoxedTuple` "the opposite channel and a different row", the box there being freed already while the interior is what leaks | — |
+| B-2026-09-20-41 | 2026-09-20 | codegen+interp | medium | A BARE `T` ENUM PAYLOAD INSTANTIATED TO A CONTAINER RUNS NO ELEMENT `Drop` BODY ON EITHER BACKEND, AND THE TWO HALVES MUST BE FIXED TOGETHER -- `enum Slot[T] { S(T), N }` at `Slot[Vec[R]]` or `Slot[Array[R, 2]]` prints no `dR` body on `--interp`, on the JIT, or on either AOT level, in both the consuming-match and the no-match position, while the SAME element types under a payload WRITTEN as a container (`enum EVecG[T] { V(Vec[T]) }`) now run them everywhere as of B-2026-09-13-7's fix; the two spellings are the same program after instantiation, so this is a gap rather than a divergence, which is why no A/B harness in the tree can see it and why arming the compiled side alone would trade an agreed gap for a run-vs-build divergence -- the interpreter does not walk it either | — |
 
 ### Relocated
 
