@@ -9683,7 +9683,39 @@ impl<'ctx> super::Codegen<'ctx> {
                     .iter()
                     .all(|v| super::consume_class::binding_only_borrowed(v, b))
         });
-        let bodies_mask_is_sole_channel = arm_reads_only
+        // B-2026-09-20-44 — the BODIES gate asks the same question LEAF-AWARE,
+        // and only the bodies gate. `arm_reads_only` above is the syntactic
+        // verdict, which calls every projection off the binding a partial move;
+        // the MEMORY retraction at the end of this block keeps it, because
+        // there over-reporting a take leaves the existing owner alone. Here it
+        // is backwards, exactly as `binding_only_borrowed_with`'s doc says:
+        // over-reporting a take ENABLES the stand-down test to fail, the mask
+        // runs, and the payload's body runs nowhere at all. `G.X(r) => { return
+        // r.id }` over `struct R { id: i64, s: String }` lost `dR11` on all
+        // three compiled surfaces while `--interp` printed it, with valgrind
+        // reporting 0 errors — a pure body loss no memory gate can see.
+        //
+        // The correction is narrow by construction: a read is admitted only
+        // when it resolves to a PRIMITIVE scalar — a bare primitive binding or
+        // one tuple-index hop (`arm_binding_scalar_copy_read`), or a field
+        // whose DECLARED type is a primitive (`arm_binding_primitive_field_reads`).
+        // Reading `r.s` still reads as a take and the mask still runs.
+        let mut scalar_tes = self.arm_binding_scalar_tes(pattern);
+        for (k, v) in self.arm_binding_inst_tes(scrutinee, &enum_name, pattern) {
+            scalar_tes.entry(k).or_insert(v);
+        }
+        let prim_fields = self.arm_binding_primitive_field_reads(&scalar_tes);
+        let copy_read = |e: &Expr| {
+            Self::arm_binding_scalar_copy_read(&scalar_tes, e)
+                || Self::arm_binding_primitive_field_read(&prim_fields, e)
+        };
+        let arm_reads_only_bodies = body.is_some_and(|b| {
+            !arm_binds.is_empty()
+                && arm_binds
+                    .iter()
+                    .all(|v| super::consume_class::binding_only_borrowed_with(v, b, &copy_read))
+        });
+        let bodies_mask_is_sole_channel = arm_reads_only_bodies
             && self.scrutinee_is_owned_param_binding(scrutinee)
             && self.var_has_boxed_enum_drop(scrut_name)
             && self.arm_consumes_only_generic_payload(&enum_name, pattern);
@@ -13734,6 +13766,149 @@ impl<'ctx> super::Codegen<'ctx> {
                 .is_some_and(|n| crate::codegen::param_own::is_primitive_type_name(n)),
             _ => false,
         }
+    }
+
+    /// B-2026-09-20-44 — the arm's payload binding types, resolved from the
+    /// scrutinee's INSTANTIATION rather than from the typechecker's per-pattern
+    /// record.
+    ///
+    /// `arm_binding_scalar_tes` reads `pattern_binding_inner_types`, which
+    /// carries no entry for a payload declared as the enum's own parameter —
+    /// measured: for `G.X(r)` over `enum G[T] { X(T), Y }` at `G[R]` the map
+    /// comes back EMPTY, so every leaf-aware question asked through it answers
+    /// the conservative default. Substituting the scrutinee's generic ARGUMENTS
+    /// into the variant's declared field types recovers `R`. `None`-equivalent
+    /// (an absent key) for a non-generic enum, an unrecoverable instantiation,
+    /// or an arity mismatch, so a caller that cannot substitute keeps the
+    /// syntactic verdict.
+    fn arm_binding_inst_tes(
+        &self,
+        scrutinee: &Expr,
+        enum_name: &str,
+        pattern: &Pattern,
+    ) -> std::collections::HashMap<String, TypeExpr> {
+        let mut out = std::collections::HashMap::new();
+        let PatternKind::TupleVariant { path, patterns } = &pattern.kind else {
+            return out;
+        };
+        let Some(variant) = path.last() else {
+            return out;
+        };
+        let params = self.enum_generic_param_names(enum_name);
+        if params.is_empty() {
+            return out;
+        }
+        let Some(inst) = self.enum_inst_type_of_expr(scrutinee) else {
+            return out;
+        };
+        let TypeKind::Path(ip) = &inst.kind else {
+            return out;
+        };
+        if ip.segments.last().map(String::as_str) != Some(enum_name) {
+            return out;
+        }
+        let args: Vec<TypeExpr> = match ip.generic_args.as_ref() {
+            Some(a) => a
+                .iter()
+                .filter_map(|g| match g {
+                    GenericArg::Type(t) => Some(t.clone()),
+                    _ => None,
+                })
+                .collect(),
+            None => return out,
+        };
+        if args.len() != params.len() {
+            return out;
+        }
+        let subst: std::collections::HashMap<String, TypeExpr> =
+            params.iter().cloned().zip(args).collect();
+        let Some((_, _, decls)) = self
+            .enum_variant_field_type_exprs(enum_name)
+            .into_iter()
+            .find(|(_, n, _)| n == variant)
+        else {
+            return out;
+        };
+        for (i, sub) in patterns.iter().enumerate() {
+            let PatternKind::Binding(n) = &sub.kind else {
+                continue;
+            };
+            let Some(d) = decls.get(i) else { continue };
+            out.insert(
+                n.clone(),
+                crate::codegen::helpers::subst_type_params_in_type_expr(d, &subst),
+            );
+        }
+        out
+    }
+
+    /// B-2026-09-20-44 — the PRIMITIVE-FIELD half of the same leaf-aware
+    /// question, for the BODIES gate rather than the memory retraction.
+    ///
+    /// `arm_binding_scalar_copy_read` above admits a bare primitive binding and
+    /// one tuple-index hop. It does NOT admit a FIELD read off a struct
+    /// binding, so `G.X(r) => { return r.id }` over `struct R { id: i64, s:
+    /// String }` reads as a partial move of `r` — and at the bodies gate
+    /// over-reporting a take is backwards in exactly the way
+    /// `binding_only_borrowed_with`'s own doc names: it "makes the caller stand
+    /// down for a taker that does not exist and the body runs nowhere at all".
+    ///
+    /// Returns the `(binding, field)` pairs whose DECLARED field type is a
+    /// primitive scalar, so reading one provably carries nothing away. Every
+    /// other field — `String`, `Vec`, a nested struct, an unresolved generic
+    /// parameter — is absent from the set and keeps the syntactic verdict
+    /// byte-for-byte. That asymmetry is the same one `arm_binding_scalar_tes`
+    /// documents: a missed copy read costs today's behaviour, a wrongly
+    /// admitted one would leave a channel unowned.
+    fn arm_binding_primitive_field_reads(
+        &self,
+        tes: &std::collections::HashMap<String, TypeExpr>,
+    ) -> std::collections::HashSet<(String, String)> {
+        let mut out = std::collections::HashSet::new();
+        for (bind, te) in tes {
+            let TypeKind::Path(p) = &te.kind else {
+                continue;
+            };
+            let Some(sname) = p.segments.last() else {
+                continue;
+            };
+            let (Some(names), Some(ftes)) = (
+                self.type_decls.struct_field_names.get(sname.as_str()),
+                self.type_decls.struct_field_type_exprs.get(sname.as_str()),
+            ) else {
+                continue;
+            };
+            for (i, fname) in names.iter().enumerate() {
+                let Some(fte) = ftes.get(i) else { continue };
+                let fte = self.subst_monomorph_type_params(fte);
+                let TypeKind::Path(fp) = &fte.kind else {
+                    continue;
+                };
+                if fp
+                    .segments
+                    .last()
+                    .is_some_and(|n| crate::codegen::param_own::is_primitive_type_name(n))
+                    && fp.generic_args.as_ref().is_none_or(|a| a.is_empty())
+                {
+                    out.insert((bind.clone(), fname.clone()));
+                }
+            }
+        }
+        out
+    }
+
+    /// Is `e` a read of one of the primitive fields collected above?
+    fn arm_binding_primitive_field_read(
+        prims: &std::collections::HashSet<(String, String)>,
+        e: &Expr,
+    ) -> bool {
+        let ExprKind::FieldAccess { object, field } = &e.kind else {
+            return false;
+        };
+        let ExprKind::Identifier(n) = &object.kind else {
+            return false;
+        };
+        prims.contains(&(n.clone(), field.clone()))
     }
 
     /// `match`-arm entry point for the retraction above.

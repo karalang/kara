@@ -87496,6 +87496,67 @@ fn main() {
         );
     }
 
+    /// B-2026-09-20-44's memory twin — the heap half of the body-loss row, and
+    /// it is here as a HARM GUARD rather than as the row's own instrument.
+    ///
+    /// The defect this fixture's E2E sibling pins is a PURE body loss: valgrind
+    /// read `0 errors, all heap blocks freed` on every losing cell before the
+    /// fix, so no memory gate and neither ASAN ratchet could see it. What they
+    /// CAN see is the failure mode a repair here risks — the bodies mask
+    /// standing down where it is not the sole channel, which doubles a body and
+    /// can hand the same buffer two owners. Nine of this program's twelve rows
+    /// are guards that read identically on both arms for exactly that reason.
+    /// The stdout assertion carries the body COUNT, so a doubled body fails
+    /// here as a line mismatch even when the heap stays balanced.
+    #[test]
+    fn asan_generic_enum_arm_primitive_field_read_runs_payload_drop_body() {
+        assert_clean_asan_run(
+            r#"
+struct R { id: i64, s: String }
+impl Drop for R { fn drop(mut ref self) { println(f"dR{self.id}") } }
+struct Rn { id: i64 }
+impl Drop for Rn { fn drop(mut ref self) { println(f"dRn{self.id}") } }
+struct Rw { id: i64, a: String, b: String }
+impl Drop for Rw { fn drop(mut ref self) { println(f"dRw{self.id}") } }
+struct Wd { a: R, b: String, c: String }
+enum G[T] { X(T), Y }
+enum Ng { X(R), Y }
+
+fn ret(g: G[R]) -> i64 { match g { G.X(v) => { return v.id }, G.Y => { return 0 } } }
+fn letret(g: G[R]) -> i64 { match g { G.X(v) => { let x: i64 = v.id; return x }, G.Y => { return 0 } } }
+fn prnt(g: G[R]) -> i64 { match g { G.X(v) => { println(f"use{v.id}"); return 0 }, G.Y => { return 0 } } }
+fn none(g: G[R]) -> i64 { match g { G.X(v) => { return 0 }, G.Y => { return 0 } } }
+fn whole(g: G[R]) -> R { match g { G.X(v) => { return v }, G.Y => { return R { id: 0, s: f"b2044-zzzzzzzzzzzzzzzzzzzzzzzz" } } } }
+fn narrow(g: G[Rn]) -> i64 { match g { G.X(v) => { return v.id }, G.Y => { return 0 } } }
+fn wide(g: G[Rw]) -> i64 { match g { G.X(v) => { return v.id }, G.Y => { return 0 } } }
+fn ngret(g: Ng) -> i64 { match g { Ng.X(v) => { return v.id }, Ng.Y => { return 0 } } }
+fn ngprnt(g: Ng) -> i64 { match g { Ng.X(v) => { println(f"nguse{v.id}"); return 0 }, Ng.Y => { return 0 } } }
+fn nest(g: G[Wd]) -> i64 { match g { G.X(v) => { return v.a.id }, G.Y => { return 0 } } }
+
+fn main() {
+    { let a1: R = R { id: 1, s: f"b2044-aaaaaaaaaaaaaaaaaaaaaaaa" }; let w1: G[R] = G.X(a1); println(f"ret={ret(w1)}") }
+    { let a2: R = R { id: 2, s: f"b2044-aaaaaaaaaaaaaaaaaaaaaaaa" }; let w2: G[R] = G.X(a2); println(f"letret={letret(w2)}") }
+    { let a3: R = R { id: 3, s: f"b2044-aaaaaaaaaaaaaaaaaaaaaaaa" }; let w3: G[R] = G.X(a3); println(f"prnt={prnt(w3)}") }
+    { let a4: R = R { id: 4, s: f"b2044-aaaaaaaaaaaaaaaaaaaaaaaa" }; let w4: G[R] = G.X(a4); println(f"none={none(w4)}") }
+    { let a5: R = R { id: 5, s: f"b2044-aaaaaaaaaaaaaaaaaaaaaaaa" }; let w5: G[R] = G.X(a5); let q: R = whole(w5); println(f"whole={q.id}") }
+    { let a6: Rn = Rn { id: 6 }; let w6: G[Rn] = G.X(a6); println(f"narrow={narrow(w6)}") }
+    { let a7: Rw = Rw { id: 7, a: f"b2044-aaaaaaaaaaaaaaaaaaaaaaaa", b: f"b2044-bbbbbbbbbbbbbbbbbbbbbbbb" }; let w7: G[Rw] = G.X(a7); println(f"wide={wide(w7)}") }
+    { let a8: R = R { id: 8, s: f"b2044-aaaaaaaaaaaaaaaaaaaaaaaa" }; let w8: Ng = Ng.X(a8); println(f"ngret={ngret(w8)}") }
+    { let a9: R = R { id: 9, s: f"b2044-aaaaaaaaaaaaaaaaaaaaaaaa" }; let w9: Ng = Ng.X(a9); println(f"ngprnt={ngprnt(w9)}") }
+    { let aa: Wd = Wd { a: R { id: 10, s: f"b2044-aaaaaaaaaaaaaaaaaaaaaaaa" }, b: f"b2044-bbbbbbbbbbbbbbbbbbbbbbbb", c: f"b2044-cccccccccccccccccccccccc" }; let wa: G[Wd] = G.X(aa); println(f"nest={nest(wa)}") }
+    { let ab: R = R { id: 11, s: f"b2044-aaaaaaaaaaaaaaaaaaaaaaaa" }; let wb: G[R] = G.X(ab); let n: i64 = match wb { G.X(v) => { v.id }, G.Y => { 0 } }; println(f"local={n}") }
+    println("end");
+}
+"#,
+            &[
+                "dR1", "ret=1", "dR2", "letret=2", "use3", "dR3", "prnt=0", "dR4", "none=0",
+                "whole=5", "dR5", "narrow=6", "dRn6", "dRw7", "wide=7", "ngret=8", "dR8", "nguse9",
+                "ngprnt=0", "dR9", "dR10", "nest=10", "dR11", "local=11", "end",
+            ],
+            "asan_generic_enum_arm_primitive_field_read_runs_payload_drop_body",
+        );
+    }
+
     /// B-2026-09-10-2 — a USER GENERIC enum's `Drop`-bearing payload, in every
     /// position, on both the body channel and the memory one.
     ///

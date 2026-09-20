@@ -170283,6 +170283,93 @@ fn main() {
         );
     }
 
+    /// B-2026-09-20-44 — a GENERIC enum's payload runs its user `Drop` body
+    /// when the arm reads a PRIMITIVE FIELD off its binding.
+    ///
+    /// `G.X(v) => { return v.id }` over `enum G[T] { X(T), Y }` at `T = R`
+    /// printed NEITHER body on `karac run`, -O0 and -O2 while `--interp`
+    /// printed it, and valgrind read `0 errors, all heap blocks freed` — a PURE
+    /// body loss with the heap correctly released, which is why no memory gate
+    /// and neither ASAN ratchet could see the class.
+    ///
+    /// The gate is `arm_reads_only`, computed from the syntactic consumption
+    /// classifier, which calls EVERY projection off the binding a partial move.
+    /// So `v.id` read as a take, the bodies mask ran, and the body ran nowhere.
+    /// `binding_only_borrowed_with`'s own doc predicts exactly that — "over-
+    /// reporting a take makes the caller stand down for a taker that does not
+    /// exist and the body runs nowhere at all" — and the `copy_read` knob it
+    /// exists to offer is the repair. Only the BODIES gate takes it; the MEMORY
+    /// retraction keeps the uncorrected syntactic verdict, where over-reporting
+    /// a take leaves the existing owner alone and is the safe direction.
+    ///
+    /// The rows in order, and which arm each one is. `ret` and `letret` are the
+    /// defect: both LOST their body before the fix, and `letret` is what says
+    /// the term is the RETURN rather than the shape of the expression. `wide`
+    /// is the same defect at the boxing threshold and is the third cell that
+    /// moved. Everything else is a guard that read identically on both arms:
+    /// `prnt` and `none` were already correct (merely USING the binding, or not
+    /// touching it, is not the term), `whole` returns the binding itself and
+    /// must still read as a take, `narrow` fits the erased slot so it never
+    /// boxed, the two `ng*` rows are the non-generic twins, `nest` reads
+    /// `v.a.id` through a non-primitive field and must still read as a take,
+    /// and `local` is a named-local scrutinee rather than a by-value param.
+    /// Nine guards against three moving cells is the ratio this area needs: an
+    /// over-broad repair shows up here as a DOUBLED body, which is the failure
+    /// mode the mask's own source comment records for widening it.
+    ///
+    /// ORDERING NOTE, so a future ordering fix knows this pin has to move: a
+    /// BOXED payload's body prints BEFORE the caller's `println` of the call
+    /// result and an INLINE one's prints AFTER (`dRw7` / `wide=7` against
+    /// `narrow=6` / `dRn6`), and `--interp` defers both to the source binding's
+    /// death point. That divergence is the B-2026-09-15-17 family and is NOT
+    /// what this fixture is about; it is pinned here only because a whole-stdout
+    /// assertion gets the body COUNT for free, which is the property that
+    /// catches a doubling. The memory twin is in `tests/memory_sanitizer.rs`.
+    #[test]
+    fn e2e_generic_enum_arm_primitive_field_read_runs_payload_drop_body() {
+        let src = r#"
+struct R { id: i64, s: String }
+impl Drop for R { fn drop(mut ref self) { println(f"dR{self.id}") } }
+struct Rn { id: i64 }
+impl Drop for Rn { fn drop(mut ref self) { println(f"dRn{self.id}") } }
+struct Rw { id: i64, a: String, b: String }
+impl Drop for Rw { fn drop(mut ref self) { println(f"dRw{self.id}") } }
+struct Wd { a: R, b: String, c: String }
+enum G[T] { X(T), Y }
+enum Ng { X(R), Y }
+
+fn ret(g: G[R]) -> i64 { match g { G.X(v) => { return v.id }, G.Y => { return 0 } } }
+fn letret(g: G[R]) -> i64 { match g { G.X(v) => { let x: i64 = v.id; return x }, G.Y => { return 0 } } }
+fn prnt(g: G[R]) -> i64 { match g { G.X(v) => { println(f"use{v.id}"); return 0 }, G.Y => { return 0 } } }
+fn none(g: G[R]) -> i64 { match g { G.X(v) => { return 0 }, G.Y => { return 0 } } }
+fn whole(g: G[R]) -> R { match g { G.X(v) => { return v }, G.Y => { return R { id: 0, s: f"b2044-zzzzzzzzzzzzzzzzzzzzzzzz" } } } }
+fn narrow(g: G[Rn]) -> i64 { match g { G.X(v) => { return v.id }, G.Y => { return 0 } } }
+fn wide(g: G[Rw]) -> i64 { match g { G.X(v) => { return v.id }, G.Y => { return 0 } } }
+fn ngret(g: Ng) -> i64 { match g { Ng.X(v) => { return v.id }, Ng.Y => { return 0 } } }
+fn ngprnt(g: Ng) -> i64 { match g { Ng.X(v) => { println(f"nguse{v.id}"); return 0 }, Ng.Y => { return 0 } } }
+fn nest(g: G[Wd]) -> i64 { match g { G.X(v) => { return v.a.id }, G.Y => { return 0 } } }
+
+fn main() {
+    { let a1: R = R { id: 1, s: f"b2044-aaaaaaaaaaaaaaaaaaaaaaaa" }; let w1: G[R] = G.X(a1); println(f"ret={ret(w1)}") }
+    { let a2: R = R { id: 2, s: f"b2044-aaaaaaaaaaaaaaaaaaaaaaaa" }; let w2: G[R] = G.X(a2); println(f"letret={letret(w2)}") }
+    { let a3: R = R { id: 3, s: f"b2044-aaaaaaaaaaaaaaaaaaaaaaaa" }; let w3: G[R] = G.X(a3); println(f"prnt={prnt(w3)}") }
+    { let a4: R = R { id: 4, s: f"b2044-aaaaaaaaaaaaaaaaaaaaaaaa" }; let w4: G[R] = G.X(a4); println(f"none={none(w4)}") }
+    { let a5: R = R { id: 5, s: f"b2044-aaaaaaaaaaaaaaaaaaaaaaaa" }; let w5: G[R] = G.X(a5); let q: R = whole(w5); println(f"whole={q.id}") }
+    { let a6: Rn = Rn { id: 6 }; let w6: G[Rn] = G.X(a6); println(f"narrow={narrow(w6)}") }
+    { let a7: Rw = Rw { id: 7, a: f"b2044-aaaaaaaaaaaaaaaaaaaaaaaa", b: f"b2044-bbbbbbbbbbbbbbbbbbbbbbbb" }; let w7: G[Rw] = G.X(a7); println(f"wide={wide(w7)}") }
+    { let a8: R = R { id: 8, s: f"b2044-aaaaaaaaaaaaaaaaaaaaaaaa" }; let w8: Ng = Ng.X(a8); println(f"ngret={ngret(w8)}") }
+    { let a9: R = R { id: 9, s: f"b2044-aaaaaaaaaaaaaaaaaaaaaaaa" }; let w9: Ng = Ng.X(a9); println(f"ngprnt={ngprnt(w9)}") }
+    { let aa: Wd = Wd { a: R { id: 10, s: f"b2044-aaaaaaaaaaaaaaaaaaaaaaaa" }, b: f"b2044-bbbbbbbbbbbbbbbbbbbbbbbb", c: f"b2044-cccccccccccccccccccccccc" }; let wa: G[Wd] = G.X(aa); println(f"nest={nest(wa)}") }
+    { let ab: R = R { id: 11, s: f"b2044-aaaaaaaaaaaaaaaaaaaaaaaa" }; let wb: G[R] = G.X(ab); let n: i64 = match wb { G.X(v) => { v.id }, G.Y => { 0 } }; println(f"local={n}") }
+    println("end");
+}
+"#;
+        assert_eq!(
+            run_program(src).as_deref(),
+            Some("dR1\nret=1\ndR2\nletret=2\nuse3\ndR3\nprnt=0\ndR4\nnone=0\nwhole=5\ndR5\nnarrow=6\ndRn6\ndRw7\nwide=7\nngret=8\ndR8\nnguse9\nngprnt=0\ndR9\ndR10\nnest=10\ndR11\nlocal=11\nend\n"),
+        );
+    }
+
     /// B-2026-09-20-1 — an `Array[T, N]` enum payload narrow enough to ride
     /// INLINE keeps its TYPE when bound in a match arm.
     ///
