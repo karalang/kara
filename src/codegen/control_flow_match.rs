@@ -8991,6 +8991,42 @@ impl<'ctx> super::Codegen<'ctx> {
         // binding consumes — trailing words are undef.
         let want_words = self.pattern_payload_word_count(sub_pat);
         if (want_words <= 1 || field_words.len() <= 1) && !binding_is_struct {
+            // B-2026-09-20-1 — an `Array[T, N]` / `Vector[T, N]` binding whose
+            // elements total ONE word (`Array[Sp, 1]` over a single-i64-field
+            // struct, `Array[i64, 1]`) reaches this single-word tail and used
+            // to be returned as the raw payload word, losing its array-ness
+            // entirely: `match g { E.M(x) => x[0].v }` then failed codegen with
+            // "Index operator applied to non-array type", and the hand-on
+            // spelling `eat(x)` failed module verification with "Call parameter
+            // type does not match function signature" (a bare `i64` where the
+            // callee wants `[1 x { i64 }]`). Both on programs `--interp` runs
+            // correctly, and with NO `Drop` impl anywhere — this is the binding's
+            // SHAPE, not its ownership.
+            //
+            // Only the one-word case was exposed. A two-element array is two
+            // words, so the guard above is already false for it and it takes
+            // the width-general path below, which is why `Array[T, 2]` always
+            // compiled. `pattern_payload_llvm_type` has had the `Array` /
+            // `Vector` arm since B-2026-08-31-18, but only the DEBOX load
+            // consulted it; the inline tail never did.
+            //
+            // Guarded on the resolved type not being an `IntType`, so a binding
+            // whose inner `TypeExpr` the typechecker did not record still falls
+            // through to the raw word exactly as before. Like the wildcard arms
+            // of B-2026-09-19-30, this can only ever widen.
+            let arr_key = (sub_pat.span.offset, sub_pat.span.length);
+            if matches!(
+                self.pattern_state
+                    .pattern_binding_types
+                    .get(&arr_key)
+                    .map(|s| s.as_str()),
+                Some("Array") | Some("Vector")
+            ) {
+                let want_ty = self.pattern_payload_llvm_type(sub_pat);
+                if !matches!(want_ty, BasicTypeEnum::IntType(_)) {
+                    return self.rebuild_value_from_payload_word_slice(want_ty, field_words);
+                }
+            }
             let w = field_words
                 .first()
                 .copied()

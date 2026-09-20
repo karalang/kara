@@ -168679,6 +168679,79 @@ fn main() {
         );
     }
 
+    /// B-2026-09-20-1 — an `Array[T, N]` enum payload narrow enough to ride
+    /// INLINE keeps its TYPE when bound in a match arm.
+    ///
+    /// `reconstruct_payload_value`'s single-word tail returned the raw payload
+    /// word as the binding, so the array-ness was gone: `x[0].v` failed codegen
+    /// with "Index operator applied to non-array type", and `eat(x)` failed
+    /// module verification with a bare `i64` where `[1 x { i64 }]` was wanted —
+    /// both on programs `--interp` ran correctly. `pattern_payload_llvm_type`
+    /// has carried the right `Array` / `Vector` arm since B-2026-08-31-18, but
+    /// only the DEBOX load ever consulted it; the inline tail never did. A
+    /// two-element array is two words, so the guard was already false for it
+    /// and only the one-word case was ever exposed.
+    ///
+    /// The `Plain` element is what establishes this is the binding's SHAPE and
+    /// not its ownership: it has no `Drop` impl anywhere and failed the same
+    /// way.
+    ///
+    /// Sibling of `e2e_inline_array_enum_payload_keeps_its_value`, and the two
+    /// faults are independent — with only this half repaired the programs
+    /// COMPILED and printed `r:0`, the value having been destroyed at the pack.
+    #[test]
+    fn e2e_inline_array_enum_payload_keeps_its_type_in_a_match_arm() {
+        let src = r#"
+struct Cell { v: i64 }
+impl Drop for Cell { fn drop(mut ref self) { println(f"dc{self.v}") } }
+struct Plain { v: i64 }
+
+enum One { P(Array[Cell, 1]), Q }
+enum Flat { P(Array[Plain, 1]), Q }
+
+fn eat_cell(a: Array[Cell, 1]) -> i64 { return a[0].v; }
+fn eat_plain(a: Array[Plain, 1]) -> i64 { return a[0].v; }
+
+fn hand(g: One) -> i64 { match g { One.P(x) => { return eat_cell(x); } One.Q => { return 0; } } }
+fn read(g: One) -> i64 { match g { One.P(x) => { return x[0].v; } One.Q => { return 0; } } }
+fn hand_flat(g: Flat) -> i64 { match g { Flat.P(x) => { return eat_plain(x); } Flat.Q => { return 0; } } }
+fn read_opt(o: Option[Array[Cell, 1]]) -> i64 { match o { Some(x) => { return x[0].v; } None => { return 0; } } }
+
+fn main() {
+    let mut n = 0;
+    while n < 3 {
+        let a: Array[Cell, 1] = [Cell { v: 10 + n }];
+        let g: One = One.P(a);
+        println(f"h:{hand(g)}");
+        let b: Array[Cell, 1] = [Cell { v: 20 + n }];
+        let r: One = One.P(b);
+        println(f"r:{read(r)}");
+        let c: Array[Plain, 1] = [Plain { v: 30 + n }];
+        let fl: Flat = Flat.P(c);
+        println(f"f:{hand_flat(fl)}");
+        let d: Array[Cell, 1] = [Cell { v: 40 + n }];
+        let o: Option[Array[Cell, 1]] = Some(d);
+        println(f"o:{read_opt(o)}");
+        let e: Array[Cell, 1] = [Cell { v: 50 + n }];
+        One.P(e);
+        println("kept");
+        n = n + 1;
+    }
+    println("end");
+}
+"#;
+        let mut want = String::new();
+        for n in 0..3 {
+            want.push_str(&format!("h:{}\ndc{}\n", 10 + n, 10 + n));
+            want.push_str(&format!("r:{}\ndc{}\n", 20 + n, 20 + n));
+            want.push_str(&format!("f:{}\n", 30 + n));
+            want.push_str(&format!("o:{}\ndc{}\n", 40 + n, 40 + n));
+            want.push_str(&format!("dc{}\nkept\n", 50 + n));
+        }
+        want.push_str("end\n");
+        assert_eq!(run_program(src).as_deref(), Some(want.as_str()));
+    }
+
     /// B-2026-09-19-49 — an `Array[T, N]` enum payload narrow enough to ride
     /// INLINE keeps its VALUE.
     ///
