@@ -1182,7 +1182,12 @@ impl<'ctx> super::Codegen<'ctx> {
                 // Runs regardless of the identifier/fresh-temp split above —
                 // both neutralize only the scrutinee copy, never the enum field
                 // in the SOURCE struct, which the owning struct's drop now frees.
-                self.suppress_destructured_struct_field_enum_cleanup(scrutinee, &arm.pattern);
+                let field_reads_only = self.arm_payload_reads_only(&arm.pattern, &arm.body);
+                self.suppress_destructured_struct_field_enum_cleanup(
+                    scrutinee,
+                    &arm.pattern,
+                    field_reads_only,
+                );
                 // B-2026-07-21-16: the seeded Option/Result sibling of #15 —
                 // `match a.opt { Some(s) => … }` over an OWNED place. The #15
                 // route hands these to the generic enum suppressor, which
@@ -9801,10 +9806,26 @@ impl<'ctx> super::Codegen<'ctx> {
     /// (#15) and `w.sp.tok` (#18's nested `Wrap { sp: Span { tok } }`) alike. A
     /// non-struct hop (mid-chain tuple index, call-rooted base, unresolved type)
     /// no-ops to the status quo.
+    /// `arm_reads_only` is B-2026-09-20-49's parameter and it exists because
+    /// this site passed a literal `None` for it, which is not a neutral
+    /// default. A `shared` enum's INLINE tuple payload now stands down by
+    /// having the box RE-OWN a deep copy, and `None` (unknown) re-owns: the
+    /// safe side of the choice, because not re-owning under a MOVING arm
+    /// double-frees while re-owning under a READ-ONLY arm only leaks the
+    /// original. `match w.h { Sh.S(x) => println(x.1) }` is read-only and
+    /// reached here with `None`, so it leaked 34 B on the fixed tree — the
+    /// SAME byte count it leaked before the fix, for a different reason, which
+    /// is why a per-cell total read as "unchanged, not reached". The alloc
+    /// count is what separates them: 12 allocs / 11 frees against a
+    /// binding-scrutinee twin's 11 / 11, so the lost block is the COPY.
+    /// Every caller that has the arm's body now computes it; the `let … else`
+    /// leg still cannot (its binding lives past the construct, so there is no
+    /// body here to read) and keeps the safe `None`.
     pub(super) fn suppress_destructured_struct_field_enum_cleanup(
         &mut self,
         scrutinee: &Expr,
         pattern: &Pattern,
+        arm_reads_only: Option<bool>,
     ) {
         // #15/#18 reach a named struct field (`s.tok`, `w.sp.tok`); #21 adds the
         // tuple-index scrutinee (`match h.pe.0`) — both resolve through the
@@ -9828,7 +9849,12 @@ impl<'ctx> super::Codegen<'ctx> {
         let Some(field_ptr) = self.field_chain_place_ptr(scrutinee) else {
             return;
         };
-        self.suppress_destructured_enum_payload_cleanup_at(field_ptr, &enum_name, pattern, None);
+        self.suppress_destructured_enum_payload_cleanup_at(
+            field_ptr,
+            &enum_name,
+            pattern,
+            arm_reads_only,
+        );
         // B-2026-08-29-33 — the BODIES half, beside the MEMORY half above.
         // Gated on the arm actually taking a body-running payload, exactly as
         // the identifier path gates its `suppress_container_elem_bodies_for_var`

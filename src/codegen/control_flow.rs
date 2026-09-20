@@ -385,7 +385,7 @@ impl<'ctx> super::Codegen<'ctx> {
             // program output at all), against a clean `match` on the same
             // place. It also carries the BODIES half now, so the two move
             // together — the B-2026-08-28-67 lockstep rule.
-            self.suppress_destructured_struct_field_enum_cleanup(value, pattern);
+            self.suppress_destructured_struct_field_enum_cleanup(value, pattern, reads_only);
             // B-2026-08-31-30 — #16, the plain struct-pattern destructure,
             // which the `match` arm loop has run since it was added and these
             // three legs never did. `if let H { r, .. } = h { … }` therefore
@@ -1219,7 +1219,7 @@ impl<'ctx> super::Codegen<'ctx> {
             let reads_only = self.arm_payload_reads_only_block(pattern, body);
             self.suppress_destructured_enum_payload_cleanup(value, pattern, None, reads_only);
             // B-2026-08-29-33, `while let` leg — see the `if let` note above.
-            self.suppress_destructured_struct_field_enum_cleanup(value, pattern);
+            self.suppress_destructured_struct_field_enum_cleanup(value, pattern, reads_only);
             // B-2026-08-31-30 — #16, the plain struct-pattern destructure,
             // which the `match` arm loop has run since it was added and these
             // three legs never did. `if let H { r, .. } = h { … }` therefore
@@ -2309,7 +2309,7 @@ impl<'ctx> super::Codegen<'ctx> {
             // suppression and drops `w` whole.
             self.suppress_destructured_enum_payload_cleanup(value, pattern, None, None);
             // B-2026-08-29-33, `let … else` leg — see the `if let` note above.
-            self.suppress_destructured_struct_field_enum_cleanup(value, pattern);
+            self.suppress_destructured_struct_field_enum_cleanup(value, pattern, None);
             // B-2026-08-31-30 — #16, the plain struct-pattern destructure,
             // which the `match` arm loop has run since it was added and these
             // three legs never did. `if let H { r, .. } = h { … }` therefore

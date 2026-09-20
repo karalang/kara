@@ -101761,10 +101761,34 @@ fn main() {
     /// EVERY CELL'S STRING HAS A DISTINCT LENGTH, so a future regression's byte
     /// count names which cell moved instead of leaving a total to apportion.
     ///
-    /// NOT COVERED, and unchanged on both arms rather than broken here: an
-    /// `Array`-in-a-tuple payload (56 B), an `Option`-in-a-tuple payload
-    /// (40 B), the `let else` spelling (31 B) and a scrutinee that is a struct
-    /// FIELD (34 B). Those are B-2026-09-20-49's remainder.
+    /// CELL R IS THE THIRD REGRESSION, AND IT IS THE ONE THAT NEARLY GOT
+    /// WRITTEN DOWN AS A NON-EVENT. A scrutinee that is a struct FIELD
+    /// (`match w.h { Sh.S(x) => println(x.1) }`, read-only) measured 34 B lost
+    /// both before this fix and after it, so the first pass recorded it as
+    /// "unchanged, the walk never fired". The emitted IR says the walk DID
+    /// fire and the 34 B is a DIFFERENT OBJECT: that path reached
+    /// `suppress_destructured_struct_field_enum_cleanup`, which passed a
+    /// literal `None` for `arm_reads_only`, and `None` re-owns — so the box
+    /// allocated a deep copy and the ORIGINAL was left owned by nobody. The
+    /// alloc count is what separates the two readings and a byte total never
+    /// can: 12 allocs / 11 frees against a binding-scrutinee twin's 11 / 11.
+    /// Every caller holding the arm's body now computes the flag, and the cell
+    /// goes to 0 with the re-own no longer emitted at all.
+    ///
+    /// `None` re-owning is the SAFE side of that choice rather than an
+    /// oversight: not re-owning under a MOVING arm double-frees, while
+    /// re-owning under a READ-ONLY arm only leaks. The `let … else` leg still
+    /// passes `None` because its binding outlives the construct and there is
+    /// no body to read there — which is exactly why `e06` below is still 31 B.
+    ///
+    /// NOT COVERED, all three re-measured on the FIXED tree rather than
+    /// inferred: an `Array`-in-a-tuple payload (56 B) and an
+    /// `Option`-in-a-tuple payload (40 B), where `__karac_rc_drop_Sh` IS NOT
+    /// DEFINED AT ALL — the predicate above declines a tuple whose ELEMENT is
+    /// the non-`Path` shape, so those are this fix's own next spelling out;
+    /// and the `let else` spelling (31 B), where the walk fires, the re-own
+    /// fires on `None`, and 12 allocs / 11 frees say the lost block is the
+    /// copy. Those are B-2026-09-20-49's remainder and are filed separately.
     #[test]
     fn asan_shared_enum_inline_tuple_payload_has_an_owner() {
         assert_clean_asan_run_min_allocs(
@@ -101789,6 +101813,8 @@ fn mkM(t: String) -> (String, i64) { return (f"M-{t}-aaaaaaaaaaaa", 7); }
 fn mkN(t: String) -> (String, i64) { return (f"N-{t}-aaaaaaaaaaaaa", 7); }
 fn mkQ(t: String) -> (String, i64) { return (f"Q-{t}-aaaaaaaaaaaaaaa", 7); }
 fn mkP(t: String) -> (String, i64) { return (f"P-{t}-aaaaaaaaaaaaaa", 7); }
+fn mkR(t: String) -> (String, i64) { return (f"R-{t}-aaaaaaaaaaaaaaaa", 7); }
+struct HolderR { h: Sh }
 
 fn mkD2() -> Sh { let a = mkD("n"); return Sh.S(a); }
 fn takeout(s: Sh) -> (String, i64) { match s { Sh.S(x) => { return x; } Sh.N => { return mkI("z"); } } }
@@ -101819,6 +101845,7 @@ fn main() {
     { let s = St.S { a: mkM("t") }; match s { St.S { a } => { println(f"M:{a.0}"); } St.N => { println("e"); } } }
     { let s = Sh.S(mkN("t")); match s { Sh.S(x) if x.1 > 3 => { println(f"N:{x.0}"); } Sh.S(y) => { println(f"N2:{y.0}"); } Sh.N => { println("e"); } } }
     { let s = Pr.S(mkP("t")); match s { Pr.S(x) => { println(f"P:{x.0}"); } Pr.N => { println("e"); } } }
+    { let w = HolderR { h: Sh.S(mkR("t")) }; match w.h { Sh.S(x) => { println(f"R:{x.0}"); } Sh.N => { println("e"); } } }
     println("done");
 }
 "#,
@@ -101841,6 +101868,7 @@ fn main() {
                 "M:M-t-aaaaaaaaaaaa",
                 "N:N-t-aaaaaaaaaaaaa",
                 "P:P-t-aaaaaaaaaaaaaa",
+                "R:R-t-aaaaaaaaaaaaaaaa",
                 "done",
             ],
             "asan_shared_enum_inline_tuple_payload_has_an_owner",
