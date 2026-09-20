@@ -8837,6 +8837,64 @@ impl<'ctx> super::Codegen<'ctx> {
                     {
                         return;
                     }
+                    // B-2026-09-16-13 — the ENUM sibling of the struct arm
+                    // below, and the gap the comment above names as "an enum
+                    // payload is SHAPE 1 (out of scope, still leaks)". An enum
+                    // with NO `impl Drop` of its own but a heap-bearing payload,
+                    // returned FROM A CALL and passed by value, reached no arm
+                    // at all: the `has_user_drop` arm above declines it and this
+                    // one is struct-keyed, so nothing owned the temp and
+                    // `eat(mk(i))` over `enum T { A(String), B }` lost one block
+                    // per call (58 B in 2 blocks at -O0, 13 allocs / 11 frees).
+                    //
+                    // The three neighbouring spellings were already correct and
+                    // are what localize it: a NAMED LOCAL (`let e = mk(i);
+                    // eat(e)`) is owned by the `let` path, an INLINE CONSTRUCTOR
+                    // (`eat(T.A(..))`) by the fresh-temp ctor arm further down,
+                    // and the seeded `Option`/`Result` pair by their own
+                    // machinery. Only the temp returned from a CALL had no owner
+                    // — the same "a call vs an inline literal is not a reason to
+                    // own it differently" argument B-2026-08-02-28 made for the
+                    // struct arm below.
+                    //
+                    // GATED ON `enum_param_owned_by_transfer` FIRST, which is
+                    // what keeps this from being a double free rather than a
+                    // fix: where that predicate answers true the CALLEE takes
+                    // the buffer over and the caller must stand down, exactly as
+                    // the struct arm defers to `struct_param_owned_by_transfer`
+                    // immediately above. Registering both is the "register
+                    // without retracting" half of this family's invariant.
+                    //
+                    // MEMORY IS PUSHED BEFORE THE BODIES, the B-2026-08-01-2
+                    // rule the ctor arm follows: the frame drains LIFO, so the
+                    // free pushed first runs last, after the payload bodies that
+                    // read it.
+                    if !has_user_drop
+                        && !arg_escapes_frame
+                        && self.type_decls.enum_layouts.contains_key(&ret_ty_name)
+                        && !self.enum_param_owned_by_transfer(&ret_ty_name)
+                    {
+                        let walker = self.emit_enum_payload_user_drop_bodies_fn(&ret_ty_name);
+                        let needs_memory_drop = self.enum_drop_switch_does_work(&ret_ty_name);
+                        if needs_memory_drop || walker.is_some() {
+                            let slot =
+                                self.create_entry_alloca(cur_fn, "__owned_agg_tmp", agg_ty.into());
+                            self.builder.build_store(slot, val).unwrap();
+                            if needs_memory_drop {
+                                self.track_enum_var(&ret_ty_name, slot);
+                            }
+                            if let Some(w) = walker {
+                                self.track_user_drop_var_with_fn(
+                                    "",
+                                    "__owned_agg_tmp",
+                                    slot,
+                                    w,
+                                    UserDropKind::ContainerElemBodies,
+                                );
+                            }
+                            return;
+                        }
+                    }
                     if !has_user_drop
                         && !arg_escapes_frame
                         && self.type_decls.struct_types.contains_key(&ret_ty_name)

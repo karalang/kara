@@ -170097,6 +170097,81 @@ fn main() {
         );
     }
 
+    /// B-2026-09-16-13 — a fresh enum returned BY A CALL, straight into
+    /// argument position, had no caller-side owner at all.
+    ///
+    /// `eat(mk(i))` where `mk` returns an enum left the returned value owned by
+    /// nobody: the callee's param is by-value but declines the entry copy, and
+    /// the caller never wrote a `__owned_agg_tmp` for a CALL-produced enum the
+    /// way it already did for a call-produced STRUCT (B-2026-08-02-28) and for
+    /// an INLINE enum constructor. Measured at `-O0` on this program: 41 allocs
+    /// against 36 frees, 192 bytes definitely lost in 4 blocks, 4 valgrind
+    /// errors — and `dR2` ABSENT, so the payload's own `Drop` body never ran
+    /// either. After: 42 allocs / 42 frees, 0 errors, `dR2` present. (The alloc
+    /// counts differ by one BECAUSE the fix restores `dR2`, whose format string
+    /// allocates — a fixed arm with 41 allocs would mean the body was still
+    /// lost.)
+    ///
+    /// The row was filed on the `String` payload alone and the scope is wider:
+    /// the struct-with-`Drop` payload (`dR2`), the destructuring callee (`m`)
+    /// and the `Vec` payload (`v`) are the same defect, not neighbours — every
+    /// one of them leaked on the pre-fix tree. What separates the one enum that
+    /// was always correct, `Td`, is that it carries its OWN `impl Drop`, which
+    /// routes through `has_user_drop` to a different owner entirely; `dTd` is
+    /// therefore a HARM GUARD here and no evidence the fix does any work.
+    ///
+    /// The other four rows — a named local, an inline constructor, a struct
+    /// return and a seeded-enum (`Option`) return — read identically on both
+    /// arms by design. They pin the three spellings that were already correct,
+    /// so an over-broad repair shows up as a doubled body or an invalid free
+    /// rather than as a leak. The memory twin is in `tests/memory_sanitizer.rs`.
+    #[test]
+    fn e2e_enum_call_return_in_argument_position_has_an_owner() {
+        let src = r#"
+struct R { id: i64, s: String }
+impl Drop for R { fn drop(mut ref self) { println(f"dR{self.id}") } }
+enum Ts { A(String), B }
+enum Tr { A(R), B }
+enum Tv { A(Vec[String]), B }
+enum Td { A(String), B }
+impl Drop for Td { fn drop(mut ref self) { println("dTd") } }
+struct W { a: String }
+
+fn mks(n: i64) -> Ts { return Ts.A(f"b1613-payload-aaaaaaaaaaaaaaaa-{n}"); }
+fn mkr(n: i64) -> Tr { return Tr.A(R { id: n, s: f"b1613-payload-aaaaaaaaaaaaaaaa-{n}" }); }
+fn mkv(n: i64) -> Tv { let mut v: Vec[String] = Vec.new(); v.push(f"b1613-payload-aaaaaaaaaaaaaaaa-{n}"); return Tv.A(v); }
+fn mkd(n: i64) -> Td { return Td.A(f"b1613-payload-aaaaaaaaaaaaaaaa-{n}"); }
+fn mkw(n: i64) -> W { return W { a: f"b1613-payload-aaaaaaaaaaaaaaaa-{n}" }; }
+fn mko(n: i64) -> Option[String] { return Option.Some(f"b1613-payload-aaaaaaaaaaaaaaaa-{n}"); }
+
+fn eats(e: Ts) -> i64 { return 7; }
+fn eatr(e: Tr) -> i64 { return 7; }
+fn eatv(e: Tv) -> i64 { return 7; }
+fn eatd(e: Td) -> i64 { return 7; }
+fn eatw(e: W) -> i64 { return 7; }
+fn eato(e: Option[String]) -> i64 { return 7; }
+fn takes(e: Ts) -> i64 { match e { Ts.A(s) => { return 1 }, Ts.B => { return 0 } } }
+
+fn main() {
+    println(f"s={eats(mks(1))}");
+    println(f"r={eatr(mkr(2))}");
+    println(f"v={eatv(mkv(3))}");
+    println(f"m={takes(mks(4))}");
+    println(f"d={eatd(mkd(5))}");
+    let e6: Ts = mks(6);
+    println(f"local={eats(e6)}");
+    println(f"inline={eats(Ts.A(f"b1613-payload-aaaaaaaaaaaaaaaa-7"))}");
+    println(f"struct={eatw(mkw(8))}");
+    println(f"option={eato(mko(9))}");
+    println("end");
+}
+"#;
+        assert_eq!(
+            run_program(src).as_deref(),
+            Some("s=7\ndR2\nr=7\nv=7\nm=1\ndTd\nd=7\nlocal=7\ninline=7\nstruct=7\noption=7\nend\n"),
+        );
+    }
+
     /// B-2026-09-20-1 — an `Array[T, N]` enum payload narrow enough to ride
     /// INLINE keeps its TYPE when bound in a match arm.
     ///

@@ -87404,6 +87404,79 @@ fn main() {
         );
     }
 
+    /// B-2026-09-16-13's memory twin — a fresh enum returned BY A CALL, in
+    /// argument position, had no caller-side owner, so its payload's heap was
+    /// never freed.
+    ///
+    /// `eat(mk(i))` where `mk` returns an enum: the callee's by-value param
+    /// declines the entry copy, and the caller wrote no `__owned_agg_tmp` for a
+    /// CALL-produced enum, though it already did for a call-produced STRUCT
+    /// (B-2026-08-02-28) and for an INLINE enum constructor. Measured at `-O0`
+    /// on this program before the fix: 41 allocs against 36 frees, 192 bytes
+    /// definitely lost in 4 blocks, 4 valgrind errors. After: 42 / 42, zero.
+    ///
+    /// Four of the rows here are the same defect rather than neighbours — the
+    /// `String` payload the row was filed on, a struct-with-`Drop` payload, a
+    /// `Vec` payload, and a callee that destructures — and every one leaked on
+    /// the pre-fix tree. `Td` is the one enum that was always correct, because
+    /// its own `impl Drop` routes it through `has_user_drop` to a different
+    /// owner; it is a HARM GUARD, not evidence of work. So are the last four
+    /// rows (named local, inline constructor, struct return, `Option` return),
+    /// which read identically on both arms by design and catch an over-broad
+    /// repair as a double free rather than as a leak.
+    ///
+    /// The output twin, which pins the `dR2` body the pre-fix tree also lost,
+    /// is in `tests/codegen.rs`.
+    #[test]
+    fn asan_enum_call_return_in_argument_position_has_an_owner() {
+        assert_clean_asan_run(
+            r#"
+struct R { id: i64, s: String }
+impl Drop for R { fn drop(mut ref self) { println(f"dR{self.id}") } }
+enum Ts { A(String), B }
+enum Tr { A(R), B }
+enum Tv { A(Vec[String]), B }
+enum Td { A(String), B }
+impl Drop for Td { fn drop(mut ref self) { println("dTd") } }
+struct W { a: String }
+
+fn mks(n: i64) -> Ts { return Ts.A(f"b1613-payload-aaaaaaaaaaaaaaaa-{n}"); }
+fn mkr(n: i64) -> Tr { return Tr.A(R { id: n, s: f"b1613-payload-aaaaaaaaaaaaaaaa-{n}" }); }
+fn mkv(n: i64) -> Tv { let mut v: Vec[String] = Vec.new(); v.push(f"b1613-payload-aaaaaaaaaaaaaaaa-{n}"); return Tv.A(v); }
+fn mkd(n: i64) -> Td { return Td.A(f"b1613-payload-aaaaaaaaaaaaaaaa-{n}"); }
+fn mkw(n: i64) -> W { return W { a: f"b1613-payload-aaaaaaaaaaaaaaaa-{n}" }; }
+fn mko(n: i64) -> Option[String] { return Option.Some(f"b1613-payload-aaaaaaaaaaaaaaaa-{n}"); }
+
+fn eats(e: Ts) -> i64 { return 7; }
+fn eatr(e: Tr) -> i64 { return 7; }
+fn eatv(e: Tv) -> i64 { return 7; }
+fn eatd(e: Td) -> i64 { return 7; }
+fn eatw(e: W) -> i64 { return 7; }
+fn eato(e: Option[String]) -> i64 { return 7; }
+fn takes(e: Ts) -> i64 { match e { Ts.A(s) => { return 1 }, Ts.B => { return 0 } } }
+
+fn main() {
+    println(f"s={eats(mks(1))}");
+    println(f"r={eatr(mkr(2))}");
+    println(f"v={eatv(mkv(3))}");
+    println(f"m={takes(mks(4))}");
+    println(f"d={eatd(mkd(5))}");
+    let e6: Ts = mks(6);
+    println(f"local={eats(e6)}");
+    println(f"inline={eats(Ts.A(f"b1613-payload-aaaaaaaaaaaaaaaa-7"))}");
+    println(f"struct={eatw(mkw(8))}");
+    println(f"option={eato(mko(9))}");
+    println("end");
+}
+"#,
+            &[
+                "s=7", "dR2", "r=7", "v=7", "m=1", "dTd", "d=7", "local=7", "inline=7", "struct=7",
+                "option=7", "end",
+            ],
+            "asan_enum_call_return_in_argument_position_has_an_owner",
+        );
+    }
+
     /// B-2026-09-10-2 — a USER GENERIC enum's `Drop`-bearing payload, in every
     /// position, on both the body channel and the memory one.
     ///
