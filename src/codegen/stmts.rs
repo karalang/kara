@@ -22329,6 +22329,149 @@ impl<'ctx> super::Codegen<'ctx> {
             self.mapset.set_elem_type_exprs.remove(&synth);
             return;
         }
+        // B-2026-09-16-3 — NESTED container (`d[i][j] = <new>`): the object is
+        // itself an Index, so neither the FieldAccess arm above nor the
+        // Identifier gate below matched and the displaced element's heap was
+        // orphaned (5 B in 1 block at `-O0` over `Vec[Vec[(String, i64)]]`).
+        //
+        // THE FIX IS ROUTING, NOT A NEW RELEASE, and that is the whole point of
+        // the row. The tempting one-liner is a tuple arm in
+        // `emit_elem_store_releasing_displaced`, which the nested store DOES
+        // reach — and it is a DOUBLE FREE, because that helper also runs for
+        // the SINGLE-level store, which this emitter's tuple arm already
+        // releases (measured single-freed: 12 allocs / 12 frees, 0 errors).
+        // Bringing the nested position HERE instead keeps the invariant the
+        // existing split relies on: exactly one owner per position.
+        //
+        // Mirrors the FieldAccess arm above verbatim — resolve the inner
+        // element's storage pointer, mint a synth identifier registered from
+        // its TypeExpr, and recurse so every element shape the Identifier path
+        // already handles (tuple, nested array, struct, enum) is reached
+        // without being re-implemented here.
+        if let ExprKind::Index {
+            object: inner,
+            index: inner_index,
+        } = &object.kind
+        {
+            let ExprKind::Identifier(root) = &inner.kind else {
+                return;
+            };
+            if !Self::index_expr_is_pure_scalar(inner_index)
+                || !Self::index_expr_is_pure_scalar(index)
+            {
+                return;
+            }
+            // The alias guard runs against the ROOT, exactly as the
+            // FieldAccess arm requires. `d[i][j] = d[a][b]` must decline here
+            // for B-2026-08-12-26's reason — freeing the displaced buffer
+            // before the RHS is read — and declining is a leak, which is the
+            // direction this family accepts; the opposite is a double free.
+            if !rhs_index_deep_cloned
+                && !self.expr_cannot_carry_container_heap(rhs, root, clone_log_mark)
+            {
+                return;
+            }
+            if self.var_types.slice_elem_types.contains_key(root.as_str())
+                || self.mapset.map_key_types.contains_key(root.as_str())
+                || self.active_soa_layout(root).is_some()
+            {
+                return;
+            }
+            // B-2026-09-14-29's rule, one level out: the element TYPE and the
+            // element POINTER are chosen TOGETHER and never mixed. A Vec takes
+            // the vec table and `lower_indexed_elem_ptr_vec`; an Array takes
+            // `array_elem_type_exprs` and `lower_indexed_elem_ptr_array`, whose
+            // elements are inline. Crossing them GEPs an array's own first
+            // words as a data pointer.
+            let (inner_te, root_is_array) = match self
+                .var_types
+                .var_elem_type_exprs
+                .get(root.as_str())
+                .cloned()
+            {
+                Some(te) => (te, false),
+                None => match self
+                    .var_types
+                    .array_elem_type_exprs
+                    .get(root.as_str())
+                    .cloned()
+                {
+                    Some(te) => (te, true),
+                    None => return,
+                },
+            };
+            let lowered = if root_is_array {
+                let Some(slot) = self.variables.get(root.as_str()).copied() else {
+                    return;
+                };
+                self.lower_indexed_elem_ptr_array(slot, inner_index)
+            } else {
+                self.lower_indexed_elem_ptr_vec(root, inner_index)
+            };
+            let Ok((inner_ptr, inner_ll_ty)) = lowered else {
+                return;
+            };
+            let synth = format!("__nested_elem_{}", self.indexed_elem_counter);
+            self.indexed_elem_counter += 1;
+            self.variables.insert(
+                synth.clone(),
+                super::state::VarSlot {
+                    ptr: inner_ptr,
+                    ty: inner_ll_ty,
+                },
+            );
+            self.register_var_from_type_expr(&synth, &inner_te);
+            let synth_expr = Expr {
+                kind: ExprKind::Identifier(synth.clone()),
+                span: object.span,
+            };
+            // MEMORY ONLY, DELIBERATELY -- `run_bodies: false` rather than the
+            // caller's flag. `run_bodies` gates only the bodies call here; the
+            // memory synthesizer is emitted unconditionally, so the two are
+            // separable at this site and the leak closes either way.
+            //
+            // Passing the caller's flag through instead was MEASURED and is the
+            // trade this family forbids. B-2026-09-16-2 moved codegen's gate
+            // and the interpreter's together on purpose, and its closing prose
+            // names the twins it wrote: "the interpreter's TWO index-assign
+            // displacement blocks (field-rooted and identifier-rooted)" -- in
+            // `eval_stmt.rs`, beside `value_runs_user_drop`. A NESTED index is
+            // neither, so the interpreter has no twin arm for this position and
+            // running bodies here agrees with nothing. Measured on
+            // `Vec[Vec[S]]` with `impl Drop for S`, four surfaces: the parent
+            // tree prints `dS2:10 end` on BOTH backends, and with bodies on the
+            // compiled side printed `dS1:5 dS2:10 end` while `--interp` was
+            // unchanged -- a 5-byte leak traded for a run-vs-build divergence,
+            // which is what `0eba4d1` did and was reverted for 28 minutes
+            // later. The same cell over `Vec[Vec[Array[D, 1]]]` behaved
+            // identically.
+            //
+            // So the displaced element's BODIES at a nested index stay silent,
+            // agreed, and are B-2026-09-16-2's to widen when the interpreter
+            // grows the matching arm. This row is the MEMORY half.
+            self.emit_displaced_index_elem_drop(
+                &synth_expr,
+                index,
+                rhs,
+                rhs_index_deep_cloned,
+                clone_log_mark,
+                false,
+            );
+            self.variables.remove(&synth);
+            self.var_types.vec_elem_types.remove(&synth);
+            self.var_types.slice_elem_types.remove(&synth);
+            self.var_types.var_elem_type_exprs.remove(&synth);
+            self.var_types.var_type_names.remove(&synth);
+            self.var_types.array_elem_type_exprs.remove(&synth);
+            self.mapset.map_key_types.remove(&synth);
+            self.mapset.map_val_types.remove(&synth);
+            self.mapset.map_key_type_names.remove(&synth);
+            self.mapset.map_key_type_exprs.remove(&synth);
+            self.mapset.set_elem_types.remove(&synth);
+            self.mapset.set_elem_type_names.remove(&synth);
+            self.mapset.set_elem_type_exprs.remove(&synth);
+            return;
+        }
         let ExprKind::Identifier(container) = &object.kind else {
             return;
         };

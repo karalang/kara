@@ -99905,4 +99905,148 @@ fn main() {
             "b92015-discarded-boxed-payload",
         );
     }
+
+    /// B-2026-09-16-3: `d[i][j] = x` over a NESTED container leaked the
+    /// displaced element's heap -- 5 B in 1 block at `-O0` on the filed cell.
+    /// `emit_displaced_index_elem_drop` destructured its object as an
+    /// `Identifier` and returned on anything else, so the inner store had no
+    /// container to release from; the single-level `a[i] = x` spelling was
+    /// always correct, which is what the two controls below pin.
+    ///
+    /// The fix releases the displaced HEAP only. The displaced element's user
+    /// `Drop` BODY still does not run at a nested store -- an AGREED FAULT on
+    /// all four surfaces, so no A/B sees it -- and that half is a separate row:
+    /// running it here on the compiled surfaces alone turned a silent leak into
+    /// a run-vs-build divergence, which is strictly worse. The struct cells
+    /// below therefore expect the ONE body they get today; when the bodies half
+    /// lands, they gain the displaced element's body and these expectations
+    /// move with it.
+    #[test]
+    fn asan_nested_index_store_releases_the_displaced_element() {
+        // The filed cell: a tuple element under `Vec[Vec[_]]`. Every printed
+        // line reads through the stored payload, so a value destroyed at the
+        // store cannot pass as a value merely leaked.
+        assert_clean_asan_run(
+            "fn main() {
+                 let n = 7;
+                 let mut d: Vec[Vec[(String, i64)]] = [[(f\"one-aaaaaaaaaaaa-{n}\", 1)]];
+                 d[0][0] = (f\"replaced-bbbbbbbbbbbb-{n}\", 2);
+                 println(f\"r:{d[0][0].1}:{d[0][0].0.len()}\");
+             }
+",
+            &["r:2:23"],
+            "b2026-09-16-3-nested-vec-tuple",
+        );
+
+        // The outer container is an `Array`, which reaches the element pointer
+        // through a different lowering than the `Vec` above.
+        assert_clean_asan_run(
+            "fn main() {
+                 let n = 7;
+                 let mut d: Array[Vec[(String, i64)], 1] = [[(f\"one-aaaaaaaaaaaa-{n}\", 1)]];
+                 d[0][0] = (f\"replaced-bbbbbbbbbbbb-{n}\", 2);
+                 println(f\"r:{d[0][0].1}:{d[0][0].0.len()}\");
+             }
+",
+            &["r:2:23"],
+            "b2026-09-16-3-nested-array-outer",
+        );
+
+        // A named struct element, and an `Array` INNER container -- the two
+        // element shapes whose displaced buffers the `Identifier`-only
+        // destructure also stranded. The single body each prints is the
+        // survivor's at scope exit; see the note above.
+        assert_clean_asan_run(
+            "struct S { s: String, k: i64 }
+             impl Drop for S { fn drop(mut ref self) { println(f\"dS{self.k}:{self.s.len()}\") } }
+             fn main() {
+                 let n = 7;
+                 let mut d: Vec[Vec[S]] = [[S { s: f\"one-aaaaaaaaaaaa-{n}\", k: 1 }]];
+                 d[0][0] = S { s: f\"replaced-bbbbbbbbbbbb-{n}\", k: 2 };
+                 println(\"end\");
+             }
+",
+            &["dS2:23", "end"],
+            "b2026-09-16-3-nested-struct-elem",
+        );
+
+        assert_clean_asan_run(
+            "struct D { s: String }
+             impl Drop for D { fn drop(mut ref self) { println(f\"dD{self.s.len()}\") } }
+             fn main() {
+                 let n = 7;
+                 let mut d: Vec[Vec[Array[D, 1]]] = [[[D { s: f\"one-aaaaaaaaaaaa-{n}\" }]]];
+                 d[0][0] = [D { s: f\"replaced-bbbbbbbbbbbb-{n}\" }];
+                 println(\"end\");
+             }
+",
+            &["dD23", "end"],
+            "b2026-09-16-3-nested-array-inner",
+        );
+
+        // CONTROLS, both clean BEFORE the fix -- so a run in which they are the
+        // only cells asserts nothing about it. The first is the single-level
+        // store the new arm must not reach twice (a second release here is a
+        // double free, not a leak); the second is a nested store whose element
+        // carries no heap at all, pinning that the arm stands down rather than
+        // releasing a scalar.
+        assert_clean_asan_run(
+            "struct S { s: String, k: i64 }
+             fn main() {
+                 let n = 7;
+                 let mut a: Vec[S] = [S { s: f\"one-aaaaaaaaaaaa-{n}\", k: 1 }];
+                 a[0] = S { s: f\"replaced-bbbbbbbbbbbb-{n}\", k: 2 };
+                 println(f\"r:{a[0].k}:{a[0].s.len()}\");
+             }
+",
+            &["r:2:23"],
+            "b2026-09-16-3-single-level-control",
+        );
+
+        assert_clean_asan_run(
+            "fn main() {
+                 let n = 7;
+                 let mut d: Vec[Vec[Vec[i64]]] = [[[1, n]]];
+                 d[0][0] = [2, 3, 4];
+                 println(f\"r:{d[0].len()}:{d[0][0][2]}\");
+             }
+",
+            &["r:1:4"],
+            "b2026-09-16-3-scalar-nested-control",
+        );
+
+        // The THIRD control, and the one a too-wide arm turns into a double
+        // free rather than leaving a leak: a BARE `String` element at the same
+        // nested store. Measured clean at `-O0` BOTH before and after this fix
+        // -- 13/13 and 12/12 allocs/frees, zero errors -- so something already
+        // owns that buffer and this pins that the new arm did not become a
+        // second owner. B-2026-08-10-1 fixed this exact spelling; WHICH site
+        // owns it is deliberately not claimed here, because the obvious guess
+        // is refuted -- `emit_displaced_vec_elem_release` is gated to
+        // `Vec`/`VecDeque` element heads precisely so a `String` element, also
+        // a {ptr,len,cap} slot, does NOT reach the dispatcher behind it.
+        assert_clean_asan_run(
+            "fn main() {
+                 let n = 7;
+                 let mut d: Vec[Vec[String]] = [[f\"one-aaaaaaaaaaaa-{n}\"]];
+                 d[0][0] = f\"replaced-bbbbbbbbbbbb-{n}\";
+                 println(f\"r:{d[0][0]}\");
+             }
+",
+            &["r:replaced-bbbbbbbbbbbb-7"],
+            "b2026-09-16-3-bare-string-control",
+        );
+
+        assert_clean_asan_run(
+            "fn main() {
+                 let n = 7;
+                 let mut d: Array[Vec[String], 1] = [[f\"one-aaaaaaaaaaaa-{n}\"]];
+                 d[0][0] = f\"replaced-bbbbbbbbbbbb-{n}\";
+                 println(f\"r:{d[0][0]}\");
+             }
+",
+            &["r:replaced-bbbbbbbbbbbb-7"],
+            "b2026-09-16-3-bare-string-array-control",
+        );
+    }
 }
