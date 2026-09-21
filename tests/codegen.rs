@@ -19839,14 +19839,28 @@ fn main() {
     /// enum layout, so admitting both element kinds is what keeps the two walks
     /// equal rather than widening past them (`vecenum` vs `vecstruct`).
     ///
-    /// THREE CELLS ARE PINNED AS-IS, all three still silent on every surface
-    /// and none of them this half's: `sharedec` (`enum H3 { P(SMono) }`) is a
-    /// `shared` enum payload, which the `targets` filter excludes for a
-    /// DIFFERENT reason — it admits "a user ENUM running a user drop" and a
-    /// shared enum's drop is refcount-driven — so it needs its own answer.
-    /// `genvec` and `gensh` are the GENERIC spellings, whose declared payload
-    /// head is the type parameter; telling `G[Vec[R]]` from `G[Array[R, N]]`
-    /// needs the binding's instantiation, which is B-2026-09-17-15's subject.
+    /// THREE CELLS WERE PINNED AS-IS, all three silent on every surface when
+    /// this fixture was written and none of them this half's: `sharedec`
+    /// (`enum H3 { P(SMono) }`) is a `shared` enum payload, which the `targets`
+    /// filter excludes for a DIFFERENT reason — it admits "a user ENUM running
+    /// a user drop" and a shared enum's drop is refcount-driven — so it needs
+    /// its own answer. `genvec` and `gensh` are the GENERIC spellings, whose
+    /// declared payload head is the type parameter; telling `G[Vec[R]]` from
+    /// `G[Array[R, N]]` needs the binding's instantiation, which is
+    /// B-2026-09-17-15's subject.
+    ///
+    /// `genvec` HAS SINCE BEEN FLIPPED BY B-2026-09-20-62, which is the row
+    /// that made the DECLARED head the wrong question on both backends at
+    /// once. `emit_generic_enum_payload_user_drop_bodies_fn` stopped refusing
+    /// the `Vec` arm by the spelling of the declaration, and the interpreter
+    /// resolves a bare-parameter payload against the binding's recorded
+    /// instantiation for `Vec` as well as `Array`, so `G[Vec[Mono]]` now
+    /// prints `d2:9` — the element's own `R2` payload body, one level in — on
+    /// `--interp`, the JIT and AOT at both opt levels (measured, four
+    /// surfaces, 2026-09-21). `gensh` and `sharedec` are UNCHANGED and still
+    /// pinned: `gensh` staying silent on all four is what says that row
+    /// widened the container arm and not B-2026-09-10-2's own-generic-param
+    /// exception.
     ///
     /// Twin of `tests/interpreter.rs`'s
     /// `test_declared_vec_enum_payload_runs_element_drop_bodies`, byte-identical
@@ -21181,7 +21195,7 @@ fn main() {
         // at `T = SMono` is silent here, so the twin withholds the
         // own-generic-param exception from an enum payload rather than firing
         // a body this side does not.
-        assert_eq!(out, "vecenum\n  d2:9\n  x\nvecstruct\n  dS7\n  dS8\n  x\nvecmixed\n  dS9\n  x\nvecempty\n  x\nunitvar\n  x\narray\n  dS1\n  dS2\n  x\nstruct\n  d2:9\n  x\nsharedec\n  x\n  d2:9\ngenvec\n  x\ngensh\n  x\nend\n");
+        assert_eq!(out, "vecenum\n  d2:9\n  x\nvecstruct\n  dS7\n  dS8\n  x\nvecmixed\n  dS9\n  x\nvecempty\n  x\nunitvar\n  x\narray\n  dS1\n  dS2\n  x\nstruct\n  d2:9\n  x\nsharedec\n  x\n  d2:9\ngenvec\n  d2:9\n  x\ngensh\n  x\nend\n");
     }
 
     /// B-2026-09-17-15 — A GENERIC ENUM'S `shared` PAYLOAD IS NOW RC-RELEASED,

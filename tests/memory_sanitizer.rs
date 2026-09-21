@@ -4588,6 +4588,13 @@ fn main() {
                 // stays clean; only the line is new.
                 "  d2:9",
                 "genvec",
+                // B-2026-09-20-62 — the generic enum's `Vec` payload now runs
+                // its element's body on every surface, so this cell is an
+                // agreement at the correct answer rather than the agreed gap
+                // it pinned. ASAN was clean here before the flip and stays
+                // clean: the failure this line fixes was an OUTPUT mismatch
+                // ("ASAN passed, but output mismatched"), not a memory error.
+                "  d2:9",
                 "  x",
                 "end",
             ],
