@@ -94,7 +94,7 @@ distinguish "bugs flattening" from "we stopped writing them down."
 |---|---|
 | run-vs-build | 477 |
 | miscompile | 435 |
-| leak | 401 |
+| leak | 402 |
 | double-free | 261 |
 | missing-feature | 203 |
 | codegen-gap | 181 |
@@ -110,7 +110,7 @@ distinguish "bugs flattening" from "we stopped writing them down."
 
 | surface | total |
 |---|---|
-| codegen | 1956 |
+| codegen | 1957 |
 | interp | 512 |
 | typecheck | 303 |
 | other | 104 |
@@ -248,7 +248,7 @@ _Generated from `bug-ledger.jsonl` by `scripts/bug-curve.py` (2026-05-20 → 202
 | B-2026-09-21-5 | 2026-09-21 | codegen | high | A GENERIC FREE FUNCTION'S `ref` PARAM OVER A GENERIC ENUM READS A BOXED PAYLOAD AS ITS POINTER ON EVERY COMPILED SURFACE -- `fn shr[T](g: ref G1[T])` over `enum G1[T] { Y(T), N }` prints an ASLR-varying address where `--interp` prints the string, rc=0 and silently, with memory balanced so no sanitizer and no leak column sees it; the BY-VALUE spelling of the same function over the same enum is CORRECT, which is what separates this from B-2026-09-17-13's concrete-impl erasure one spelling over | — |
 | B-2026-09-21-6 | 2026-09-21 | interp+codegen | medium | A FRESH-TEMP STRUCT SCRUTINEE WHOSE TYPE HAS ITS OWN `impl Drop` RUNS NOTHING AT ALL UNDER `--interp` WHILE THE THREE COMPILED SURFACES RUN THE DROP BODY AND THE FIELD WALK -- `match OwnDrop { a: mk(50), b: mk(51) } { OwnDrop { .. } => { return 9; } }` gives `dOWN dR51 dR50` compiled and nothing interpreted, and the `if let` spelling of the same program does likewise; a NAMED scrutinee of the same type agrees on all four, so this is fresh-temp-only. MEASURED PRE-EXISTING: it reads identically on both arms of B-2026-09-21-1's A/B, so it is not that fix's doing -- found by that row's grid, which carried an own-`Drop` cell only because `run_unbound_struct_field_drops` skips such types and the cell was there to pin the skip | — |
 | B-2026-09-21-7 | 2026-09-21 | codegen+interp | medium | A GUARDED MULTI-ARM MATCH OVER A **NAMED** STRUCT BINDING LOSES THE NON-TAKEN ARM'S FIELD `Drop` BODY ON THE THREE COMPILED SURFACES WHILE `--interp` RUNS IT -- `let s = S3 { a: mk(5), b: mk(6) }; match s { S3 { a, .. } if a.id > 900 => .. S3 { b, .. } => .. }` gives `dR6 dR5` interpreted and `dR6` compiled, at 12 allocs / 12 frees with NOTHING lost, so it is BODY-ONLY and invisible to valgrind, ASAN and every leak column; split out of B-2026-09-21-2 when that row's FRESH-TEMP half was fixed and this one proved to need different machinery -- the mask here is not an explicit union but an ACCUMULATION, `mask_moved_field_in_bodies_walk` inserting each moved-out field index into `struct_moved_field_bodies[var_name]` and rebuilding the walker from the running total, which is correct for sequential move-outs in straight-line code and wrong across MUTUALLY EXCLUSIVE arms | — |
-| B-2026-09-21-8 | 2026-09-21 | codegen | high | A ONE-ELEMENT `Array` ENUM PAYLOAD WHOSE ELEMENT IS A ONE-FIELD STRUCT HOLDING A `shared` HANDLE SEGFAULTS ON EVERY COMPILED SURFACE, WITH NO CALL, NO MATCH AND NO `impl Drop` ANYWHERE -- `let g = E.A([Sd { h: Inner { tag: "q" } }]);` as the whole program exits 139 on `karac run`, -O0 and -O2 against a correct `--interp`, reading address 0x1 (`Invalid read of size 8`, 9 allocs / 7 frees, ERROR SUMMARY 1); the SAME shape over a `shared` struct that owns NO heap does not crash and LEAKS its 16-byte RC box instead, so one fault has two faces and the heap-owning one is the loud half | — |
+| B-2026-09-21-9 | 2026-09-21 | codegen | medium | A ONE-ELEMENT INLINE `Array` ENUM PAYLOAD LEAKS ITS ELEMENT'S RC BOX -- `enum E { A(Array[Sk, 1]) }` over a `Sk` holding a `shared` handle is classified as neither `BoxedArray` nor a nested struct, so `__karac_drop_E` walks past the word and frees nothing. MEASURED on `8bafa942b` AT -O0: 9 allocs / 8 frees, `32 bytes in 1 blocks are definitely lost`, 0 indirectly, 0 invalid accesses; 96 B in 3 blocks over a three-round loop, so it is per-construction. `--interp` is clean and ALL FOUR SURFACES PRINT THE SAME OUTPUT, so the divergence is memory-only. AT -O2 IT DISAPPEARS (8 allocs / 8 frees) because LLVM elides an allocation nothing observes -- a clean default-opt valgrind is NOT evidence this row is stale, ask -O0. The `Array[Sk, 2]` control is 11/11 clean, which localises it to the inline `n == 1` case. A FIX MUST MOVE THREE SITES TOGETHER -- classification (`declarations.rs` BoxedArray pass), emit (`synth_drop.rs` `variant_field_tes`, whose type expr still has an `Array` path head), and `enum_param_owned_by_transfer`; moving the first two ALONE was measured to turn the by-value spelling from a 32 B leak into `Invalid read of size 8` + `Invalid write of size 8`, which is why B-2026-09-21-8 shipped the width fix only. | — |
 
 ### Relocated
 
@@ -2819,6 +2819,7 @@ _Generated from `bug-ledger.jsonl` by `scripts/bug-curve.py` (2026-05-20 → 202
 | B-2026-09-21-1 | interp+codegen | medium | THE `if let` AND `let .. | ce1403ef4 |
 | B-2026-09-21-2 | codegen+interp | medium | A GUARDED MULTI-ARM `match` OVER A FRESH-TEMP STRUCT LOSES THE NON-TAKEN ARM'S FIELD `Drop` BODY AND LEAKS ITS BUFFER, ON ALL FOUR SURFACES -- `match… | f8fcd92ae |
 | B-2026-09-21-3 | interp | medium | `while let` OVER A FRESH-TEMP STRUCT SCRUTINEE RUNS NO `Drop` BODY AT ALL UNDER `--interp` WHILE THE THREE COMPILED SURFACES RUN THE BOUND FIELD'S --… | 143f41d75 |
+| B-2026-09-21-8 | codegen | high | A ONE-ELEMENT `Array` ENUM PAYLOAD WHOSE ELEMENT IS A ONE-FIELD STRUCT HOLDING A `shared` HANDLE SEGFAULTS ON EVERY COMPILED SURFACE, WITH NO CALL, N… | 8bafa942b |
 
 </details>
 
