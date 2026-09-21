@@ -92,9 +92,9 @@ distinguish "bugs flattening" from "we stopped writing them down."
 
 | class | total |
 |---|---|
-| run-vs-build | 472 |
+| run-vs-build | 474 |
 | miscompile | 433 |
-| leak | 401 |
+| leak | 402 |
 | double-free | 260 |
 | missing-feature | 203 |
 | codegen-gap | 181 |
@@ -110,8 +110,8 @@ distinguish "bugs flattening" from "we stopped writing them down."
 
 | surface | total |
 |---|---|
-| codegen | 1949 |
-| interp | 507 |
+| codegen | 1951 |
+| interp | 510 |
 | typecheck | 303 |
 | other | 104 |
 | ownership | 75 |
@@ -124,7 +124,7 @@ distinguish "bugs flattening" from "we stopped writing them down."
 | lexer | 11 |
 ## Current state
 
-_Generated from `bug-ledger.jsonl` by `scripts/bug-curve.py` (2026-05-20 → 2026-09-20). Do not edit this block by hand; edit the ledger and regenerate._
+_Generated from `bug-ledger.jsonl` by `scripts/bug-curve.py` (2026-05-20 → 2026-09-21). Do not edit this block by hand; edit the ledger and regenerate._
 
 ### Open
 
@@ -138,7 +138,6 @@ _Generated from `bug-ledger.jsonl` by `scripts/bug-curve.py` (2026-05-20 → 202
 | B-2026-09-16-6 | 2026-09-16 | codegen+interp | medium | TWO BODIES-CHANNEL GAPS FOR AN `Array[T, N]` HELD IN A TUPLE, both found while pinning the output twin of B-2026-09-13-23's memory fix and both memory-clean under it: a tuple in a STRUCT FIELD runs no element `Drop` body on ANY backend, and a DESTRUCTURED tuple runs them under `--interp` and on NEITHER compiled backend -- an agreed silence and a run-vs-build divergence in the same family | — |
 | B-2026-09-16-11 | 2026-09-16 | codegen | low | THE ENUM TWIN OF B-2026-09-05-32'S IDENTITY ARM STILL LEAKS -- `e = if c { pass(e) } else { e }` over `enum E { A(String), B }` loses 36 bytes in 1 block (12 allocs / 11 frees at -O0) while the all-owned-calls spelling `else { mk() }` is 12 / 12 clean on the same tree; the enum overwrite path consumes the STRICT `roundtrip_frees_old` because it has no distinctness guard, so widening the shared predicate would have traded the leak for a use-after-free there | — |
 | B-2026-09-16-14 | 2026-09-16 | interp | low | THE INTERPRETER RUNS A TRANSFERRED STRUCT-FIELD LEAF'S `Drop` BODY TWICE WHERE EVERY COMPILED BACKEND RUNS IT ONCE -- `let c = H2 { r: mk(1) }; match c { H2 { r } => { let m: R = r; return m.id } }` prints `dR1 dR1` under `--interp` and `dR1` on jit / aot / `KARAC_AUTO_PAR=0`; the enum-leaf spellings double the whole `dE dR` pair, and `return e` out of the arm runs a full pair AT THE ARM before the value reaches the caller, who then runs it again | — |
-| B-2026-09-16-18 | 2026-09-16 | codegen+interp | medium | A FRESH-TEMP STRUCT SCRUTINEE'S UNBOUND FIELDS LOSE THEIR `Drop` BODIES AND LEAK THEIR HEAP ON EVERY SURFACE -- `match S3 { a: mk(44), b: mk(45) } { S3 { a, .. } => .. }` runs `dR44` alone and `S3 { .. }` runs NOTHING, on --interp / jit / aot / `KARAC_AUTO_PAR=0` alike; valgrind at `-O0` reports 24 allocs / 20 frees, 12 bytes definitely lost in 4 blocks, one `name` buffer per unbound field. The NAMED-scrutinee spelling is correct on all four, so the husk of a temp with no binding is owned by nobody | — |
 | B-2026-09-16-19 | 2026-09-16 | codegen+interp | medium | A `Vec`-NESTING INSIDE AN `Option` OR `Map` FIELD RUNS ITS ELEMENT'S `Drop` BODY ON `--interp` AND ON NO COMPILED SURFACE -- `H { xs: Option[Vec[D]] }` and `H { xs: Map[i64, Vec[D]] }` both print `dD1` under the tree-walk backend and nothing under the JIT or either `build`, which REFUTES the premise `type_runs_user_drop`'s own comment rests on | — |
 | B-2026-09-16-22 | 2026-09-16 | codegen+interp | low | AN OWNED ENUM RECEIVER THAT ESCAPES THROUGH THE RETURN RUNS ITS SHELL `Drop` BODY TWICE, AND A CHAINED CALL OVER THE SAME SHAPE RUNS NO BODY AT ALL -- `let b = a.ret_self()` prints `dE dR6 dE` and `E.A(mk(14)).ret_self().none()` prints nothing, both agreed on all four surfaces with memory balanced | — |
 | B-2026-09-16-23 | 2026-09-16 | interp | low | TWO SHADOW-REBIND SPELLINGS STILL DOUBLE THE `Drop` BODY IN THE INTERPRETER -- a NESTED BLOCK (`{ let q = idr(q); .. }`) and an `if`-WRAPPED RHS both print `dR15 dR15` against one body on `karac build`; the first is out of the retraction's SCOPE and the second is a genuine per-path question the all-paths predicate correctly declines, so they need different repairs | — |
@@ -247,6 +246,9 @@ _Generated from `bug-ledger.jsonl` by `scripts/bug-curve.py` (2026-05-20 → 202
 | B-2026-09-20-65 | 2026-09-20 | codegen | medium | A DESTRUCTURING `let ... else` LOSES THE `Drop` BODY OF THE PAYLOAD ELEMENT IT DOES NOT TAKE, on every compiled backend, where the `if let` and `match` spellings of the same program now keep it -- `let Some((_, b)) = o else { return 0 }` over `Option[(H, i64)]` with `struct H { id: i64, s: String }` prints `n9` on the JIT, AOT-O0 and AOT-O2 where `--interp` prints `dH1 n9`; `compile_let_else` calls the unconditional `takes_payload: true` suppressor, which stands the source's whole payload-bodies walk down although the source is the untaken element's only holder. NOT B-2026-09-17-16, whose `let ... else` cell binds the payload WHOLE and loses both bodies because the DESTINATION registers nothing -- opposite halves of one form, and a fix for either leaves the other standing. Values are correct and memory is balanced (11 allocs / 10 frees, the one valgrind error being a 2-byte leak the correct `match` spelling shares), so no gate in the tree can see it and only an A/B against the interpreter can | — |
 | B-2026-09-20-66 | 2026-09-20 | interp | medium | THE INTERPRETER LOSES A TUPLE PAYLOAD ELEMENT'S `Drop` BODY WHEN THE PATTERN COVERS IT WITH `_` AND THE SCRUTINEE IS A NAMED LOCAL LATER OVERWRITTEN -- `let mut o = Option.Some((mkh(1), 9)); if let Some((_, b)) = o { … }; o = Option.None` prints `n9` under `--interp` where the JIT, AOT-O0 and AOT-O2 all print `dH1 n9`, so `--interp` is the MINORITY and a three-against-one grid here indicts the INTERPRETER, not codegen. The `match` and `while let` spellings lose it identically, so it is not a lowering path; binding the same leaf to an unused name (`Some((a, b))`) is correct on every surface, and so is a bare overwrite with no pattern at all, so the trigger is the WILDCARD LEAF and assignment-overwrite drop is CORRECT. Bodies only: memory stays balanced, so no gate in the tree can see it | — |
 | B-2026-09-20-67 | 2026-09-20 | codegen | medium | THE TWO ARGUMENT-LOWERING PATHS EACH CARRY THEIR OWN OWNERSHIP MACHINERY AND DIVERGE IN BOTH DIRECTIONS, so a fix lands on one and the other keeps the bug: `compile_call` (`call_dispatch.rs`) and `compile_generic_call` (`mono.rs`) between them name 32 DISTINCT ownership hooks and share only 11 -- 17 appear on the non-generic path alone and 4 on the generic path alone -- and THIRTEEN earlier rows already name both functions (B-2026-07-08-6, -07-14-12, -07-30-3, -08-07-18, -08-11-3, -09-02-46, -09-04-24, -09-05-6, -09-05-18, -09-10-22, -09-12-15, -09-16-10, -09-17-8), with B-2026-09-20-52 the fourteenth and the FIRST in which the GENERIC path was the one that already had the fix, which is what rules out "port everything to the generic side" as the pattern; the census is reproducible rather than hand-drawn (`/mnt/project-files/b52/hook_census.py`, each function's WHOLE body) and one of the 11 shared names crossed over ON THE CITED COMMIT -- `zero_boxed_binding_if_call_returned_its_box` greps 0 in `call_dispatch.rs` at its parent and 1 in `mono.rs` -- so the class is visible arriving inside its own count; the number is of NAMES and not of semantic gaps, since at least one unshared pair is the same hook under two spellings (`move_declined_copy_struct_arg` forwards to `move_declined_copy_struct_arg_for` at `call_dispatch.rs:13203`), so what this row asks for is the audit that turns 21 one-sided names into a list of real one-sided hooks, not a fix | — |
+| B-2026-09-21-1 | 2026-09-21 | interp+codegen | medium | THE `if let` AND `let ... else` SPELLINGS OF B-2026-09-16-18 STILL LOSE A FRESH-TEMP STRUCT SCRUTINEE'S UNBOUND FIELD BODIES AND LEAK THEIR HEAP, ON ALL FOUR SURFACES -- `if let S3 { a, .. } = S3 { a: mk(68), b: mk(69) } { .. }` runs `dR68` alone where the `match` spelling of the same program now runs `dR68 dR69`, and valgrind at `-O0` reports 3 bytes definitely lost per construct; DELIBERATELY left agreed rather than half-fixed, because the interpreter carries the husk ownership in `eval_match` ONLY and arming the compiled side alone converts an agreed gap into a run-vs-build divergence. `while let` is NOT in this row -- measured, it is already divergent and is filed separately | — |
+| B-2026-09-21-2 | 2026-09-21 | codegen+interp | low | A GUARDED MULTI-ARM `match` OVER A FRESH-TEMP STRUCT LOSES THE NON-TAKEN ARM'S FIELD `Drop` BODY AND LEAKS ITS BUFFER, ON ALL FOUR SURFACES -- `match S3 { a: mk(80), b: mk(81) } { S3 { a, .. } if a.id > 100 => .. S3 { b, .. } => .. }` runs `dR81` alone where the single-arm spelling now runs both, at 16 allocs / 14 frees and 3 bytes lost per call; the mask codegen can express is the UNION of what the arms bind, because the husk's walker is registered once and fired at the merge block after the phi | — |
+| B-2026-09-21-3 | 2026-09-21 | interp | medium | `while let` OVER A FRESH-TEMP STRUCT SCRUTINEE RUNS NO `Drop` BODY AT ALL UNDER `--interp` WHILE THE THREE COMPILED SURFACES RUN THE BOUND FIELD'S -- `while let S3 { a, .. } = S3 { a: mk(76), b: mk(77) } { .. break; }` prints `dR76` on aot / jit / `KARAC_AUTO_PAR=0` and prints NOTHING under `--interp`, so this spelling is a run-vs-build DIVERGENCE rather than the agreed gap its `if let` / `let ... else` siblings have; the unbound field `b` loses its body on all four as well, at 12 allocs / 11 frees and 3 bytes definitely lost | — |
 
 ### Relocated
 
@@ -2733,6 +2735,7 @@ _Generated from `bug-ledger.jsonl` by `scripts/bug-curve.py` (2026-05-20 → 202
 | B-2026-09-16-15 | codegen | medium | A BOXED GENERIC-ENUM `Array[String, N]` PAYLOAD STRANDS ITS ELEMENT BUFFERS WITH OR WITHOUT A MATCH IN THE CALLEE -- the remaining half of this row,… | cedace6 |
 | B-2026-09-16-16 | codegen | medium | A PASSTHROUGH GENERIC PARAM OVER A BOXED ENUM PAYLOAD DOUBLE FREES -- `fn idG[T](g: G1[T]) -> G1[T] { return g }` over `enum G1[T] { Y(T), N }` at `T… | 8b00e96 |
 | B-2026-09-16-17 | codegen+interp | medium | AN ENUM VARIANT'S PAYLOAD FIELDS RUN THEIR `Drop` BODIES IN DECLARATION ORDER ON ALL FOUR SURFACES, while a struct's run in REVERSE declaration order… | ef5ce6f |
+| B-2026-09-16-18 | codegen+interp | medium | A FRESH-TEMP STRUCT SCRUTINEE'S UNBOUND FIELDS LOSE THEIR `Drop` BODIES AND LEAK THEIR HEAP ON EVERY SURFACE -- `match S3 { a: mk(44), b: mk(45) } {… | 4113717f4 |
 | B-2026-09-16-20 | codegen | low | `karac_string_try_inline_into` IS DEAD ABI SURFACE -- no caller anywhere in the compiler since `9d3ceb9` removed its declaration from `runtime_fns.rs… | 34211d4 |
 | B-2026-09-16-21 | codegen+interp | medium | AN OWNED ENUM RECEIVER'S PAYLOAD `Drop` BODY IS LOST WHENEVER THE CALLEE NEVER DESTRUCTURES `self` -- `let a = E.A(mk(1)); a.none()` over `fn none(se… | 0b97e71 |
 | B-2026-09-16-24 | typecheck | medium | `partial_move_of_drop_enum` REJECTS A BORROW-PROJECTION SCRUTINEE, and it is a false positive by the rule's OWN stated terms -- the rule documents it… | 84030e8 |
