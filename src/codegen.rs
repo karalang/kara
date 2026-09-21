@@ -6456,6 +6456,7 @@ impl<'ctx> Codegen<'ctx> {
                 param_view_tuple_elems: HashMap::new(),
             },
             drop_rc: DropRc {
+                arm_selected_bodies_walker: HashMap::new(),
                 optres_payload_bodies_flags: HashMap::new(),
                 assign_ident_target: None,
                 zero_inited_vec_slots: rustc_hash::FxHashSet::default(),

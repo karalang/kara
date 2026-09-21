@@ -102101,6 +102101,68 @@ fn main() {
         );
     }
 
+    /// B-2026-09-21-2 — the MEMORY half of a GUARDED MULTI-ARM match over a
+    /// fresh-temp struct, which the body-count fixtures cannot see.
+    ///
+    /// The arms are mutually exclusive, so no single compile-time mask suits
+    /// them all and the materializer took the UNION of what they bind. That
+    /// was not merely an over-mask: when the union covered every body-bearing
+    /// field — which two arms naming DIFFERENT fields do between them — the
+    /// materializer concluded the husk owed nothing and declined outright, so
+    /// the temp got no bodies walker AND no memory walk. valgrind at
+    /// `KARAC_OPT_LEVEL=0` measured `g_two` at 12 allocs / 11 frees with
+    /// `definitely lost: 3 bytes in 1 blocks`, and the three-field shape at
+    /// 13 / 11 and 6 bytes; every surface alike, so no A/B could see it either.
+    ///
+    /// Each arm now stores its own walker in a slot the single fire site loads.
+    /// This program is 34 allocs / 34 frees, `ERROR SUMMARY: 0`, and identical
+    /// on all four surfaces.
+    ///
+    /// WHY IT IS AN ASAN FIXTURE AND NOT ONLY A BODY-COUNT ONE: the two faults
+    /// are on separate channels and only one is visible to each instrument. A
+    /// lost `Drop` BODY frees nothing, so no sanitizer leg can see it; a leaked
+    /// BUFFER prints nothing, so no output comparison can. This construct had
+    /// both, which is why it needs a cell in each file.
+    ///
+    /// `g_all`'s second arm binds every body-bearing field, so it owes nothing
+    /// and gets the no-op walker. It is here because the first shape of the fix
+    /// DECLINED that construct instead, which would have restored the lost body
+    /// and the leak for `g_all`'s other arm — an under-mask is a double body
+    /// and for a `drop()` that closes a handle a double close, so the direction
+    /// had to be proved rather than argued.
+    #[test]
+    fn asan_guarded_multi_arm_freshtemp_husk_fields_are_freed() {
+        assert_clean_asan_run_min_allocs(
+            r#"
+struct R { id: i64, name: String }
+impl Drop for R { fn drop(mut ref self) { println(f"dR{self.id}") } }
+fn mk(i: i64) -> R { return R { id: i, name: f"name-{i}-padding" }; }
+struct S3 { a: R, b: R }
+
+fn g_two() -> i64 { match S3 { a: mk(80), b: mk(81) } { S3 { a, .. } if a.id > 900 => { return a.id; } S3 { b, .. } => { return b.id; } } }
+fn g_first() -> i64 { match S3 { a: mk(82), b: mk(83) } { S3 { a, .. } if a.id > 0 => { return a.id; } S3 { b, .. } => { return b.id; } } }
+fn g_thru() -> i64 { let v = match S3 { a: mk(89), b: mk(90) } { S3 { a, .. } if a.id > 900 => { a.id } S3 { b, .. } => { b.id } }; return v; }
+fn g_three() -> i64 { match S3 { a: mk(86), b: mk(87) } { S3 { a, .. } if a.id > 900 => { return a.id; } S3 { b, .. } if b.id > 900 => { return b.id; } S3 { .. } => { return 3; } } }
+fn g_all() -> i64 { match S3 { a: mk(99), b: mk(100) } { S3 { a, .. } if a.id > 900 => { return a.id; } S3 { a, b } => { return a.id + b.id; } } }
+
+fn main() {
+    println(f"T:{g_two()}");
+    println(f"F:{g_first()}");
+    println(f"H:{g_thru()}");
+    println(f"R:{g_three()}");
+    println(f"A:{g_all()}");
+    println("done");
+}
+"#,
+            &[
+                "dR81", "dR80", "T:81", "dR82", "dR83", "F:82", "dR90", "dR89", "H:90", "dR87",
+                "dR86", "R:3", "dR100", "dR99", "A:199", "done",
+            ],
+            "asan_guarded_multi_arm_freshtemp_husk_fields_are_freed",
+            20,
+        );
+    }
+
     /// B-2026-09-16-18 — the MEMORY half of a fresh-temp struct scrutinee's
     /// unbound fields, which the body-count fixtures cannot see.
     ///

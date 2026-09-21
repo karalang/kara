@@ -12050,7 +12050,36 @@ impl<'ctx> super::Codegen<'ctx> {
             return;
         }
         if let Some((ptr, drop_fn)) = self.take_freshtemp_scrutinee_drop(alloca, binding_name) {
-            self.builder.build_call(drop_fn, &[ptr.into()], "").unwrap();
+            // B-2026-09-21-2 — SEVERAL ARMS CAN REACH THIS ONE POINT, so which
+            // walker is due is a runtime question here even though it is a
+            // static one on a diverging arm's own edge. When the arms installed
+            // a selection slot, call what the taken arm stored; the slot is
+            // seeded with the union walker at materialization, so a path that
+            // reaches here without an arm having stored keeps the old answer
+            // rather than jumping through an uninitialized pointer.
+            //
+            // The drop POINT is untouched — design.md § Temporary Lifetime
+            // Rules pins a match scrutinee to "drops at match exit", which is
+            // this block, and B-2026-08-29-28 put it here deliberately. Only
+            // WHICH bodies run changes.
+            if let Some(slot) = self
+                .drop_rc
+                .arm_selected_bodies_walker
+                .get(&alloca)
+                .copied()
+            {
+                let ptr_ty = self.context.ptr_type(AddressSpace::default());
+                let w = self
+                    .builder
+                    .build_load(ptr_ty, slot, "husk.walker")
+                    .unwrap()
+                    .into_pointer_value();
+                self.builder
+                    .build_indirect_call(drop_fn.get_type(), w, &[ptr.into()], "")
+                    .unwrap();
+            } else {
+                self.builder.build_call(drop_fn, &[ptr.into()], "").unwrap();
+            }
         }
     }
 

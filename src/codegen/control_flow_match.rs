@@ -956,6 +956,14 @@ impl<'ctx> super::Codegen<'ctx> {
                         struct_name,
                         &arm.pattern,
                     );
+                    // B-2026-09-21-2 — and the BODY half the comment above
+                    // declines: point the husk walker at this arm's own mask
+                    // rather than leaving it on the union of every arm's.
+                    self.select_freshtemp_struct_arm_bodies_walker(
+                        *alloca,
+                        struct_name,
+                        &arm.pattern,
+                    );
                 } else {
                     self.suppress_destructured_enum_payload_cleanup(
                         scrutinee,
@@ -18182,11 +18190,25 @@ impl<'ctx> super::Codegen<'ctx> {
             .clone();
         // Every arm must be a struct pattern; anything else binds the whole
         // value (or is a shape this cannot reason about) and is left alone.
-        let mut bound: std::collections::BTreeSet<usize> = Default::default();
+        // B-2026-09-21-2 — PER-ARM bound sets, where this took the UNION.
+        //
+        // The union is not merely an over-mask. When it covered EVERY
+        // body-bearing field, the `has_unbound_body` test that stood here
+        // concluded the husk owed nothing and declined OUTRIGHT — so the temp
+        // got no bodies walker AND no memory walk, losing the taken arm's
+        // unbound body and leaking its buffer. `match S3 { … } { S3 { a, .. }
+        // if g => … S3 { b, .. } => … }` is exactly that shape: between them
+        // the arms name both fields, and only one arm ever runs.
+        //
+        // The arms are MUTUALLY EXCLUSIVE, so the question each one needs
+        // answered is its own, and the union answers a question no execution
+        // ever asks.
+        let mut arm_bounds: Vec<std::collections::BTreeSet<usize>> = Vec::new();
         for pat in patterns {
             let PatternKind::Struct { fields, .. } = &pat.kind else {
                 return None;
             };
+            let mut bound: std::collections::BTreeSet<usize> = Default::default();
             for f in fields {
                 let binds = match &f.pattern {
                     Some(sub) => Self::pattern_binds_anything(sub),
@@ -18199,32 +18221,57 @@ impl<'ctx> super::Codegen<'ctx> {
                     bound.insert(i);
                 }
             }
+            arm_bounds.push(bound);
         }
-        // The union across arms, so a field bound by ANY arm is masked for all
-        // of them. Over-masking loses a body; under-masking runs one twice, and
-        // for a `drop()` that closes a handle the second is a double close. The
-        // registration is per-match and cannot be per-arm, so it takes the safe
-        // direction — the codebase's own bar, stated the other way round.
-        let has_unbound_body = field_names.iter().enumerate().any(|(i, _)| {
-            !bound.contains(&i)
-                && field_tys
-                    .get(i)
+        let body_bearing: Vec<usize> = (0..field_names.len())
+            .filter(|i| {
+                field_tys
+                    .get(*i)
                     .and_then(|o| o.as_deref())
                     .is_some_and(|t| self.type_runs_user_drop(t, &mut Vec::new()))
-        });
-        if !has_unbound_body {
+            })
+            .collect();
+        if body_bearing.is_empty() {
             return None;
         }
+        // AN ARM THAT BINDS EVERY BODY-BEARING FIELD OWES NOTHING, and it says
+        // so with a NO-OP walker rather than by declining the construct.
+        //
+        // Declining was the first shape of this fix and it is the wrong one:
+        // it would keep today's lost body and leaked buffer for every OTHER
+        // arm of such a match, and it would force the interpreter to mirror the
+        // decline — re-deriving "which field owes a body" on a backend that has
+        // no such predicate, to reproduce an answer neither backend wants. A
+        // walker that returns immediately expresses "nothing" exactly, through
+        // the same channel every other arm uses, so both the merge-block slot
+        // and a diverging arm's own edge get a correct answer with no site
+        // branching on a null.
         let st = *self.type_decls.struct_types.get(struct_name)?;
         let fn_val = self.current_fn?;
         let alloca = self.create_entry_alloca(fn_val, "__freshtemp_struct_scrut", st.into());
         let _ = self.builder.build_store(alloca, sv);
-        let skip = super::synth_drop::FieldSkipTree {
-            here: bound,
+        // The FIRST arm's walker is what gets registered. With ONE arm that is
+        // the same walker this function has always minted — a single-arm match,
+        // and every `if let` / `while let` / `let ... else`, keeps byte-identical
+        // codegen, which is what keeps B-2026-09-16-18's and B-2026-09-21-1's
+        // shapes out of this change. With several, each arm replaces it on its
+        // own edge and the slot below carries the merge-block answer.
+        let reg_skip = super::synth_drop::FieldSkipTree {
+            here: arm_bounds[0].clone(),
             ..Default::default()
         };
-        let bodies =
-            self.emit_user_drop_field_bodies_fn_skipping(struct_name, &Default::default(), &skip)?;
+        let bodies = match self.emit_user_drop_field_bodies_fn_skipping(
+            struct_name,
+            &Default::default(),
+            &reg_skip,
+        ) {
+            Some(b) => b,
+            // Only reachable with SEVERAL arms: with one, its mask is the whole
+            // story and nothing surviving means nothing to own, which is the
+            // `body_bearing.is_empty()` decline above in a different spelling.
+            None if patterns.len() > 1 => self.noop_dropbodies_fn(),
+            None => return None,
+        };
         self.track_user_drop_var_with_fn(
             struct_name,
             "__freshtemp_struct_scrut",
@@ -18233,7 +18280,139 @@ impl<'ctx> super::Codegen<'ctx> {
             super::state::UserDropKind::StructFieldBodies,
         );
         self.track_struct_var(struct_name, alloca);
+        // B-2026-09-21-2 — MORE THAN ONE ARM means the union above is wrong for
+        // at least one of them, so install the slot the arms select through.
+        // ONE arm (which is every `if let` / `while let` / `let ... else`, and
+        // the single-arm `match`) has union == per-arm by construction, so it
+        // keeps exactly the codegen it had and nothing this row does can reach
+        // it — the containment that keeps B-2026-09-16-18 and B-2026-09-21-1's
+        // shapes out of this change entirely.
+        if patterns.len() > 1 {
+            let ptr_ty = self.context.ptr_type(AddressSpace::default());
+            let slot =
+                self.create_entry_alloca(fn_val, "__freshtemp_struct_scrut_walker", ptr_ty.into());
+            // The union walker is the DEFAULT, so a path that somehow reaches
+            // the fire without an arm having stored keeps today's answer rather
+            // than an uninitialized pointer. Over-masking loses a body; reading
+            // a garbage pointer is an indirect call to nowhere.
+            let _ = self
+                .builder
+                .build_store(slot, bodies.as_global_value().as_pointer_value());
+            self.drop_rc.arm_selected_bodies_walker.insert(alloca, slot);
+        }
         Some((alloca, struct_name.to_string()))
+    }
+
+    /// B-2026-09-21-2 — a `StructFieldBodies` walker that runs nothing.
+    ///
+    /// The one way an arm can say "I owe no body" through a channel its
+    /// neighbours also use. Module-level and memoized, so every such arm in
+    /// every function shares it. Its signature is the walker signature — one
+    /// pointer, no return — so it is interchangeable with a real walker at both
+    /// the direct call on a diverging arm's edge and the indirect call at the
+    /// merge block.
+    fn noop_dropbodies_fn(&mut self) -> FunctionValue<'ctx> {
+        const NAME: &str = "__karac_dropbodies_noop";
+        if let Some(f) = self.module.get_function(NAME) {
+            return f;
+        }
+        let ptr_ty = self.context.ptr_type(AddressSpace::default());
+        let f = self.module.add_function(
+            NAME,
+            self.context.void_type().fn_type(&[ptr_ty.into()], false),
+            None,
+        );
+        let bb = self.context.append_basic_block(f, "entry");
+        let saved = self.builder.get_insert_block();
+        self.builder.position_at_end(bb);
+        let _ = self.builder.build_return(None);
+        if let Some(b) = saved {
+            self.builder.position_at_end(b);
+        }
+        f
+    }
+
+    /// B-2026-09-21-2 — point the fresh-temp husk walker at THIS arm's answer.
+    ///
+    /// `materialize_freshtemp_struct_scrutinee_field_bodies` can only mint a
+    /// mask that is right for every arm at once, and the arms are mutually
+    /// exclusive, so it takes their UNION and the taken arm's unbound fields
+    /// lose their bodies. This mints the walker masked by this arm ALONE and
+    /// selects it two ways, because the walk has two exits:
+    ///
+    ///  * the SLOT, for an arm that falls through to the merge block, where
+    ///    `fire_freshtemp_scrutinee_body_at_exit` loads it — a runtime
+    ///    selection, because several arms can reach that one point;
+    ///  * `replace_user_drop_fn_for_var`, for an arm that DIVERGES, whose
+    ///    scope drain emits the registered action on the arm's own edge, where
+    ///    the arm is known statically and the last writer is the right one.
+    ///
+    /// AN ARM'S WALKER IS NEVER `None` HERE. Its mask is a SUBSET of the union
+    /// (one arm's bindings against every arm's), so its surviving set is a
+    /// SUPERSET of the union walker's — and the union walker exists, or the
+    /// materializer would have declined and there would be no slot to find.
+    /// That is what lets the fire site load and call unconditionally instead of
+    /// branching on a null.
+    fn select_freshtemp_struct_arm_bodies_walker(
+        &mut self,
+        alloca: PointerValue<'ctx>,
+        struct_name: &str,
+        pattern: &Pattern,
+    ) {
+        let Some(slot) = self
+            .drop_rc
+            .arm_selected_bodies_walker
+            .get(&alloca)
+            .copied()
+        else {
+            return; // single-arm: union == per-arm, nothing to select
+        };
+        let Some(field_names) = self.type_decls.struct_field_names.get(struct_name).cloned() else {
+            return;
+        };
+        let PatternKind::Struct { fields, .. } = &pattern.kind else {
+            return;
+        };
+        // Keyed on FIELD names, not binding names: a rebinding pattern
+        // (`S3 { a: q, .. }`) takes field `a` under the name `q`, and masking
+        // by the binding would walk `a` a second time.
+        let mut bound: std::collections::BTreeSet<usize> = Default::default();
+        for f in fields {
+            let binds = match &f.pattern {
+                Some(sub) => Self::pattern_binds_anything(sub),
+                None => true,
+            };
+            if !binds {
+                continue;
+            }
+            if let Some(i) = field_names.iter().position(|n| n == &f.name) {
+                bound.insert(i);
+            }
+        }
+        let skip = super::synth_drop::FieldSkipTree {
+            here: bound,
+            ..Default::default()
+        };
+        // `None` means this arm binds every body-bearing field, so it owes
+        // nothing — said with a walker that returns, not by leaving the
+        // previous arm's walker in the slot, which would run a body this arm's
+        // own binding already ran.
+        let w = match self.emit_user_drop_field_bodies_fn_skipping(
+            struct_name,
+            &Default::default(),
+            &skip,
+        ) {
+            Some(w) => w,
+            None => self.noop_dropbodies_fn(),
+        };
+        let _ = self
+            .builder
+            .build_store(slot, w.as_global_value().as_pointer_value());
+        self.replace_user_drop_fn_for_var(
+            "__freshtemp_struct_scrut",
+            super::state::UserDropKind::StructFieldBodies,
+            w,
+        );
     }
 
     /// The user-struct type name a fresh-temp scrutinee denotes, for

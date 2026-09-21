@@ -336,23 +336,35 @@ impl<'a> super::Interpreter<'a> {
                         // under the name `q` and masking by binding name would
                         // walk `a` a second time.
                         //
-                        // THE MASK IS WHOLE-MATCH, NOT TAKEN-ARM, and that is
-                        // the same split this function's opening comment
-                        // records for the user-enum retraction: codegen's is a
-                        // compile-time removal that CANNOT be path-sensitive.
-                        // The husk's walker is registered once, at
-                        // materialization, and fired at the merge block after
-                        // the phi — one function for every arm — so codegen
-                        // masks the UNION of what the arms bind and has no
-                        // place to put a per-arm answer. A taken-arm mask here
-                        // would be more precise and would diverge from it on
-                        // `match S3 { .. } { S3 { a, .. } if g => .. S3 { b, .. } => .. }`,
-                        // where the arms bind different fields. Over-masking
-                        // loses a body, which is the same safe direction
-                        // codegen takes; under-masking would run one twice.
+                        // THE MASK IS THE TAKEN ARM'S (B-2026-09-21-2), where
+                        // it was the whole match's until that row.
+                        //
+                        // The paragraph that stood here explained the union as
+                        // parity: codegen registers the husk's walker once and
+                        // fires it at the merge block after the phi, one
+                        // function for every arm, so it could only mask the
+                        // UNION of what the arms bind — and a taken-arm mask on
+                        // this backend alone would have been MORE precise and
+                        // DIVERGED, which is worse than agreeing on a wrong
+                        // answer. That was true and is no longer: the arms now
+                        // each store their own walker in a slot the single fire
+                        // site loads, so codegen has a per-arm answer and this
+                        // is the mask that agrees with it.
+                        //
+                        // The union was not merely imprecise, which is why that
+                        // shape had to go rather than being tightened. When it
+                        // covered every body-bearing field, codegen's
+                        // materializer concluded the husk owed nothing and
+                        // declined OUTRIGHT — no bodies walker and no memory
+                        // walk — so `match S3 { … } { S3 { a, .. } if g => …
+                        // S3 { b, .. } => … }` lost the taken arm's unbound
+                        // body AND leaked its buffer, on all four surfaces.
+                        //
+                        // `arm` is the arm that MATCHED: this runs inside the
+                        // per-arm loop, after its pattern and guard succeeded.
                         self.pending_arm_unbound_struct = Some((
                             scrutinee.clone(),
-                            Self::struct_patterns_bound_field_names(arms),
+                            Self::struct_pattern_bound_field_names(&arm.pattern),
                         ));
                     } else if matches!(scrutinee, Value::Struct { .. }) {
                         // B-2026-09-06-35 — the NAMED struct scrutinee the
@@ -1790,16 +1802,6 @@ impl<'a> super::Interpreter<'a> {
     /// A nested field pattern (`S3 { a: R { .. }, .. }`) still counts the
     /// OUTER field as taken: whatever the inner pattern does with it, the
     /// outer field left the temp.
-    /// The UNION of [`Self::struct_pattern_bound_field_names`] over every arm
-    /// of a match — the mask codegen can express (see the call site).
-    fn struct_patterns_bound_field_names(arms: &[MatchArm]) -> HashSet<String> {
-        let mut out = HashSet::new();
-        for arm in arms {
-            out.extend(Self::struct_pattern_bound_field_names(&arm.pattern));
-        }
-        out
-    }
-
     pub(super) fn struct_pattern_bound_field_names(pattern: &Pattern) -> HashSet<String> {
         let mut out = HashSet::new();
         if let PatternKind::Struct { fields, .. } = &pattern.kind {

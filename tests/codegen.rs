@@ -127374,18 +127374,31 @@ fn main() {
     /// Twin: `tests/interpreter.rs`'s
     /// `fresh_temp_struct_scrutinee_unbound_fields_run_their_drop_bodies`.
     ///
-    /// `guarded-two-arm-agreed-gap` PINS A SECOND ONE, and it is the reason the
-    /// interpreter masks WHOLE-MATCH rather than taken-arm. The husk's walker is
-    /// registered once and fired at the merge block after the phi — one function
-    /// for every arm — so codegen can only mask the UNION of what the arms bind,
-    /// exactly as its user-enum retraction is whole-match (`eval_match`'s own
-    /// opening comment records that split). A taken-arm mask in the interpreter
-    /// is more precise AND diverges: measured `dR81 dR80 … dR82 dR83` under
-    /// `--interp` against the compiled `dR81 … dR82`. Pinned at the compiled
-    /// answer, which is byte-identical to what the PRE-FIX compiler gave this
-    /// program on all four surfaces (16 allocs / 14 frees, 6 bytes lost in 2
-    /// blocks, before and after alike) — so this corner is untouched by the fix
-    /// rather than newly conceded.
+    /// `guarded-two-arm-per-arm-mask` WAS THAT SECOND GAP AND IS NOW CLOSED
+    /// (B-2026-09-21-2). This cell pinned `dR81` alone, and the paragraph here
+    /// explained it as forced: the husk's walker is registered once and fired
+    /// at the merge block after the phi, one function for every arm, so codegen
+    /// could only mask the UNION of what the arms bind, and a taken-arm mask in
+    /// the interpreter alone was measured MORE precise AND divergent.
+    ///
+    /// The union was not merely imprecise. When it covered every body-bearing
+    /// field — which two arms naming different fields do between them — the
+    /// materializer concluded the husk owed nothing and declined outright, so
+    /// the temp got no bodies walker AND no memory walk: the taken arm's
+    /// unbound body was lost and its buffer leaked, 3 bytes per call.
+    ///
+    /// Each arm now stores its own walker in a slot the single fire site loads,
+    /// so codegen has a per-arm answer and the interpreter masks by the TAKEN
+    /// arm to agree with it. The drop POINT is untouched — design.md
+    /// § Temporary Lifetime Rules puts a match scrutinee at "drops at match
+    /// exit" and B-2026-08-29-28 placed it there deliberately — so only WHICH
+    /// bodies run changed. Measured after: `dR81 dR80` on all four surfaces,
+    /// 13 allocs / 13 frees, nothing lost, no invalid access.
+    ///
+    /// AN ARM THAT BINDS EVERY BODY-BEARING FIELD owes nothing and says so with
+    /// a no-op walker, not by declining — `guarded-arm2-binds-all` pins that,
+    /// because declining would have put the lost body and the leak back for
+    /// every other arm of such a match.
     #[test]
     fn test_e2e_fresh_temp_struct_scrutinee_unbound_fields_run_their_drop_bodies() {
         const H: &str = "struct R { id: i64, name: String }\n\
@@ -127433,15 +127446,49 @@ fn main() {
                 "z=7\n",
             ),
             (
-                "guarded-two-arm-agreed-gap",
+                "guarded-two-arm-per-arm-mask",
                 "fn c() -> i64 { match S3 { a: mk(80), b: mk(81) } { S3 { a, .. } if a.id > 100 => { return a.id; } S3 { b, .. } => { return b.id; } } }",
-                "dR81\nz=81\n",
+                "dR81\ndR80\nz=81\n",
             ),
-            // The pinned agreed gap — see the doc above.
+            // Was the pinned agreed gap; closed by B-2026-09-21-2 — see the doc above.
             (
                 "iflet-husk-both-bodies",
                 "fn c() -> i64 { if let S3 { a, .. } = S3 { a: mk(68), b: mk(69) } { return a.id; } return 0; }",
                 "dR68\ndR69\nz=68\n",
+            ),
+            // B-2026-09-21-2 — the per-arm mask. Measured on all four surfaces
+            // through this fixture's own prelude and wrapper and refused unless
+            // they agreed, so the tuple and the program its numbers came from
+            // are one string rather than two transcriptions.
+            (
+                "guarded-two-arm-fallthrough",
+                "fn c() -> i64 { let v = match S3 { a: mk(89), b: mk(90) } { S3 { a, .. } if a.id > 900 => { a.id } S3 { b, .. } => { b.id } }; return v; }",
+                "dR90\ndR89\nz=90\n",
+            ),
+            (
+                "guarded-two-arm-first-taken",
+                "fn c() -> i64 { match S3 { a: mk(82), b: mk(83) } { S3 { a, .. } if a.id > 0 => { return a.id; } S3 { b, .. } => { return b.id; } } }",
+                "dR82\ndR83\nz=82\n",
+            ),
+            (
+                "guarded-two-arm-wildcard",
+                "fn c() -> i64 { match S3 { a: mk(95), b: mk(96) } { S3 { a: _, b } if b.id > 900 => { return b.id; } S3 { a, b: _ } => { return a.id; } } }",
+                "dR95\ndR96\nz=95\n",
+            ),
+            (
+                "guarded-three-arm-s3",
+                "fn c() -> i64 { match S3 { a: mk(86), b: mk(87) } { S3 { a, .. } if a.id > 900 => { return a.id; } S3 { b, .. } if b.id > 900 => { return b.id; } S3 { .. } => { return 3; } } }",
+                "dR87\ndR86\nz=3\n",
+            ),
+            (
+                "guarded-arm2-binds-all",
+                "fn c() -> i64 { match S3 { a: mk(99), b: mk(100) } { S3 { a, .. } if a.id > 900 => { return a.id; } S3 { a, b } => { return a.id + b.id; } } }",
+                "dR100\ndR99\nz=199\n",
+            ),
+            (
+                "guarded-two-arm-same-field-control",
+                "fn c() -> i64 { match S3 { a: mk(84), b: mk(85) } { S3 { a, .. } if a.id > 100 => { return a.id; } S3 { a, .. } => { return a.id + 1; } } }",
+                "dR84\ndR85\nz=85\n",
             ),
         ] {
             let src =

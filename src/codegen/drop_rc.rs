@@ -53,6 +53,27 @@ pub(crate) struct DropRc<'ctx> {
     /// Per-scope cleanup stack.  Each inner `Vec` is one scope frame; entries
     /// are emitted in reverse-push order at scope exit (innermost first).
     pub(crate) scope_cleanup_actions: Vec<Vec<CleanupAction<'ctx>>>,
+    /// B-2026-09-21-2 — for a fresh-temp struct scrutinee whose
+    /// `StructFieldBodies` husk walker is masked by MATCH ARMS: the alloca
+    /// holding the walker to actually call, keyed by the scrutinee slot.
+    ///
+    /// The arms are MUTUALLY EXCLUSIVE, so no single compile-time mask is
+    /// right for all of them — the registration is per-match and fires at one
+    /// point common to every arm, which is why it took the UNION of what the
+    /// arms bind and lost the body of any field the TAKEN arm left unbound.
+    /// A union is the safe direction (over-masking loses a body; under-masking
+    /// runs one twice, and for a `drop()` that closes a handle the second is a
+    /// double close) but it is still wrong.
+    ///
+    /// Each arm stores its own walker's address here, and the single fire site
+    /// loads it. That keeps the DROP POINT exactly where design.md
+    /// § Temporary Lifetime Rules puts it — "Match-expression scrutinee |
+    /// Through every arm body … drops at match exit" — and changes only WHICH
+    /// bodies run, which is the row's own smaller option. Firing per-arm
+    /// instead would move the drop, and B-2026-08-29-28 put it at match exit
+    /// on purpose.
+    pub(crate) arm_selected_bodies_walker:
+        std::collections::HashMap<PointerValue<'ctx>, PointerValue<'ctx>>,
     /// B-2026-08-28-51 — spans (`(offset, length)`, the shape every other span
     /// table uses) of expressions known to sit in an ESCAPING position: one
     /// whose value is handed to an owner rather than discarded. Seeded at the
