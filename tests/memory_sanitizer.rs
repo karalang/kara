@@ -87601,6 +87601,71 @@ fn main() {
     /// a cell built from one sits at the baseline alloc count and proves
     /// nothing about a leak — the row records losing a wrong answer to exactly
     /// that for a while, reporting 0 bytes lost and reading as already-fixed.
+    /// B-2026-09-20-63 (memory twin) — the LEAK this row is filed about.
+    ///
+    /// A constructor used directly as a `match` scrutinee is a temporary bound
+    /// under no name, and `materialize_freshtemp_enum_scrutinee` declined it
+    /// outright for a GENERIC enum: both of the answers it gates on are read
+    /// off the DECLARATION, where a payload spelled `T` classifies as carrying
+    /// nothing. So the heap box holding the instantiated payload had no owner
+    /// at all — valgrind read 11 allocs / 10 frees with 24 B lost for the `Vec`
+    /// spelling and 10 / 9 with 16 B lost for the `Array` one, one block each,
+    /// the container's own envelope rather than its elements.
+    ///
+    /// THE BODY COUNT IS THE OTHER HALF OF THIS CELL AND IT IS WHY THIS IS NOT
+    /// A LEAK-ONLY FIXTURE. The obvious repair — register the box's interior
+    /// drop alongside — is a DOUBLE FREE for a payload an arm's binding takes
+    /// over (`free(): double free detected in tcache 2`, plus an invalid read
+    /// from walking the moved-out payload, measured on the `Vec` cell), and
+    /// ASAN sees that where an output oracle would not. The expected lines
+    /// below carry both channels: `av` fires twice and `vv` not at all, which
+    /// is the split between a payload the husk owns and one the arm does.
+    #[test]
+    fn asan_freshtemp_generic_enum_scrutinee_payload_has_exactly_one_owner() {
+        assert_clean_asan_run(
+            r#"
+struct R { id: i64, s: String }
+impl Drop for R { fn drop(mut ref self) { println(f"dR{self.id}") } }
+fn mkr(i: i64) -> R { return R { id: i, s: f"payload-{i}" }; }
+enum Slot[T] { S(T), N }
+enum Ev { V(Vec[R]), N }
+
+fn main() {
+    let a: Array[R, 2] = [mkr(1), mkr(2)];
+    match Slot.S(a) { Slot.S(v) => { println(f"av{v[0].id}") } Slot.N => { println("no") } }
+
+    let b: Array[R, 2] = [mkr(3), mkr(4)];
+    match Slot.S(b) { Slot.S(_) => { println("ad") } Slot.N => { println("no") } }
+
+    let c: Vec[R] = [mkr(5), mkr(6)];
+    match Slot.S(c) { Slot.S(v) => { println(f"vv{v[0].id}") } Slot.N => { println("no") } }
+
+    let d: Vec[R] = [mkr(7), mkr(8)];
+    match Ev.V(d) { Ev.V(v) => { println(f"ev{v[0].id}") } Ev.N => { println("no") } }
+
+    let e: Array[R, 2] = [mkr(9), mkr(10)];
+    let _ = Slot.S(e);
+    println("end");
+}
+"#,
+            &[
+                // The fix: the husk is the payload's only owner, so both bodies
+                // run once, after the arm.
+                "av1", "dR1", "dR2",
+                // AGREED GAP, pinned: a discarding arm runs no body on any
+                // surface. Only its leak is closed, which is what this fixture
+                // is here to hold.
+                "ad",
+                // The Vec spelling: the arm's binding owns the buffer, so the
+                // husk neither frees nor walks it. Silent, and NOT a double free.
+                "vv5", // The declared-container spelling, its own agreed gap.
+                "ev7", // A whole-value discard, correct through B-2026-09-20-15.
+                "dR9", "dR10", "end",
+            ],
+            "asan_freshtemp_generic_enum_scrutinee_payload_has_exactly_one_owner",
+        );
+    }
+
     #[test]
     fn asan_generic_enum_payload_runs_its_drop_and_frees_its_interior() {
         assert_clean_asan_run(

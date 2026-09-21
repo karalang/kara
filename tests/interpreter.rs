@@ -72113,6 +72113,76 @@ fn main() {
 /// fix would still produce; what retired the pin is that no such fix was
 /// made. The `Array` target above is unchanged by that work and still passes
 /// on B-2026-09-20-45's own fix.
+/// B-2026-09-20-63 (interpreter twin) — the reference answers for a
+/// constructor used DIRECTLY as a `match` scrutinee, pinned so the codegen fix
+/// beside it cannot drift onto one backend alone.
+///
+/// Two of these cells are AGREED GAPS rather than correct answers, and they are
+/// pinned as such on purpose. An arm that DISCARDS its payload runs no element
+/// body on any surface, and the declared-container spelling
+/// `enum Ev { V(Vec[R]), N }` runs none either; arming the compiled side of
+/// either would trade an agreement for a run-vs-build divergence, which is
+/// strictly worse. The `Vec`-at-a-binding-arm cell is the reverse: the
+/// interpreter is CORRECT there and the compiled surfaces are not, which is the
+/// half of B-2026-09-20-63 its fix does not close.
+#[test]
+fn test_freshtemp_generic_enum_scrutinee_payload_drop_bodies() {
+    let hdr = "struct R { id: i64 }\n\
+               impl Drop for R { fn drop(mut ref self) { println(f\"dR{self.id}\") } }\n\
+               fn mkr(i: i64) -> R { return R { id: i }; }\n\
+               enum Slot[T] { S(T), N }\n\
+               enum Ev { V(Vec[R]), N }\n";
+    for (label, stmts, want) in [
+        (
+            "Array payload, fresh ctor temp, binding arm — the cell the codegen \
+             half of B-2026-09-20-63 brings the compiled surfaces up to",
+            "let a: Array[R, 2] = [mkr(1), mkr(2)];\n\
+             match Slot.S(a) { Slot.S(v) => { println(f\"x{v[0].id}\") } Slot.N => { println(\"no\") } }",
+            "x1\ndR1\ndR2\nend\n",
+        ),
+        (
+            "the same, with a GUARD and two binding arms",
+            "let a: Array[R, 2] = [mkr(1), mkr(2)];\n\
+             match Slot.S(a) {\n\
+               Slot.S(v) if v[0].id > 99 => { println(f\"big{v[0].id}\") }\n\
+               Slot.S(w) => { println(f\"x{w[1].id}\") }\n\
+               Slot.N => { println(\"no\") }\n\
+             }",
+            "x2\ndR1\ndR2\nend\n",
+        ),
+        (
+            "AGREED GAP: an arm that DISCARDS its payload runs no element body on \
+             any surface. Pinned at the agreed answer, not at the due one",
+            "let a: Array[R, 2] = [mkr(1), mkr(2)];\n\
+             match Slot.S(a) { Slot.S(_) => { println(\"x\") } Slot.N => { println(\"no\") } }",
+            "x\nend\n",
+        ),
+        (
+            "PINNED DIVERGENCE: the Vec spelling, where this backend is CORRECT \
+             and the three compiled ones are silent — the half B-2026-09-20-63 \
+             leaves open after closing that cell's leak",
+            "let a: Vec[R] = [mkr(1), mkr(2)];\n\
+             match Slot.S(a) { Slot.S(v) => { println(f\"x{v[0].id}\") } Slot.N => { println(\"no\") } }",
+            "x1\ndR1\ndR2\nend\n",
+        ),
+        (
+            "AGREED GAP: the DECLARED-container spelling at the same position",
+            "let a: Vec[R] = [mkr(1), mkr(2)];\n\
+             match Ev.V(a) { Ev.V(v) => { println(f\"x{v[0].id}\") } Ev.N => { println(\"no\") } }",
+            "x1\nend\n",
+        ),
+        (
+            "control: a whole-value discard of the same ctor, correct everywhere",
+            "let a: Array[R, 2] = [mkr(1), mkr(2)];\n\
+             let _ = Slot.S(a);",
+            "dR1\ndR2\nend\n",
+        ),
+    ] {
+        let src = format!("{hdr}fn main() {{\n{stmts}\nprintln(\"end\");\n}}\n");
+        assert_eq!(run(&src), want, "[{label}]");
+    }
+}
+
 #[test]
 fn test_generic_enum_array_payload_runs_element_drop_bodies() {
     let hdr = "struct R { id: i64, s: String }\n\

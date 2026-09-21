@@ -50157,9 +50157,115 @@ end
                 "x1\ndR1\ndR2\nend\n",
             ),
             (
-                "PINNED GAP: a FRESH CTOR TEMP scrutinee never reaches this site",
+                "PINNED GAP (B-2026-09-20-63, PARTIAL): a FRESH CTOR TEMP scrutinee. \
+                 Its LEAK is closed and its Vec spelling's bodies are not — the \
+                 payload here infers to Vec[R], which the arm's binding owns, so \
+                 the husk must neither free nor walk it and nothing else runs the \
+                 element bodies. The Array spelling of the same position IS fixed \
+                 and is pinned in \
+                 `e2e_freshtemp_generic_enum_scrutinee_owns_its_instantiated_payload`",
                 "match Slot.S([mkr(1), mkr(2)]) { Slot.S(v) => { println(f\"x{v[0].id}\") } Slot.N => { println(\"no\") } }",
                 "x1\nend\n",
+            ),
+        ] {
+            let src = format!("{hdr}fn main() {{\n{stmts}\nprintln(\"end\");\n}}\n");
+            assert_eq!(run_program(&src).as_deref(), Some(want), "[{label}]");
+        }
+    }
+
+    /// B-2026-09-20-63 — a constructor used DIRECTLY as a `match` scrutinee is
+    /// a temporary bound under no name, and the two registrations that would
+    /// give its instantiated payload an owner were both read off the
+    /// DECLARATION: `field_drop_kinds`, built by classifying each variant's
+    /// declared payload `TypeExpr`, is all-`None` for a payload spelled `T`,
+    /// and `drop_method_keys` is keyed by enum name and never looks at the
+    /// payload at all. So `materialize_freshtemp_enum_scrutinee` declined
+    /// outright: no memory owner for the heap-boxed payload and no bodies
+    /// walker for its elements. The instantiation was available the whole time
+    /// — `enum_inst_type_exprs` is keyed on the constructor's own SPAN, not on
+    /// a binding name, which is the table the `let` site already reads.
+    ///
+    /// THE LEAK HALF CLOSES FOR BOTH CONTAINERS; the BODIES half closes for
+    /// `Array` only, and the split is not arbitrary. A `Vec` payload handed to
+    /// an arm's binding becomes that binding's value (it is what
+    /// `boxed_payload_interior_taken_by_arm` names), so the husk must neither
+    /// free its buffer — doing so is a double free, measured — nor walk it:
+    /// walking a moved-out payload printed two garbage ids with an invalid read
+    /// under valgrind. The bodies such a binding owes are its own to run, and an
+    /// erased payload does not run them today. An `Array` payload has no such
+    /// second owner, so the husk is the sole channel and arming it is correct.
+    ///
+    /// AN ARM THAT DISCARDS ITS PAYLOAD IS LEFT EXACTLY AS IT WAS, deliberately.
+    /// `match Slot.S(a) { Slot.S(_) => .. }` runs no element body on ANY surface
+    /// — `--interp` included — and the DECLARED spelling `enum Ev { V(Vec[R]), N }`
+    /// behaves the same way, so it is an agreed gap across four surfaces and two
+    /// spellings rather than a divergence. Arming the walker there would make
+    /// this one backend right and leave the other three wrong, which is strictly
+    /// worse than the agreed answer. The memory half still runs for such an arm,
+    /// so it stops leaking without changing what it prints.
+    #[test]
+    fn e2e_freshtemp_generic_enum_scrutinee_owns_its_instantiated_payload() {
+        let hdr = "struct R { id: i64 }\n\
+                   impl Drop for R { fn drop(mut ref self) { println(f\"dR{self.id}\") } }\n\
+                   fn mkr(i: i64) -> R { return R { id: i }; }\n\
+                   enum Slot[T] { S(T), N }\n\
+                   enum Ev { V(Vec[R]), N }\n";
+        for (label, stmts, want) in [
+            (
+                "THE FIX: Array payload, FRESH CTOR TEMP scrutinee, binding arm",
+                "let a: Array[R, 2] = [mkr(1), mkr(2)];\n\
+                 match Slot.S(a) { Slot.S(v) => { println(f\"x{v[0].id}\") } Slot.N => { println(\"no\") } }",
+                "x1\ndR1\ndR2\nend\n",
+            ),
+            (
+                "THE FIX, several arms with a GUARD: the walker fires once at the \
+                 merge block, so every arm of a match whose arms all bind must \
+                 agree — this is the two-arm cell that a single-arm grid cannot see",
+                "let a: Array[R, 2] = [mkr(1), mkr(2)];\n\
+                 match Slot.S(a) {\n\
+                   Slot.S(v) if v[0].id > 99 => { println(f\"big{v[0].id}\") }\n\
+                   Slot.S(w) => { println(f\"x{w[1].id}\") }\n\
+                   Slot.N => { println(\"no\") }\n\
+                 }",
+                "x2\ndR1\ndR2\nend\n",
+            ),
+            (
+                "AGREED GAP, PINNED: the same temp with an arm that DISCARDS its \
+                 payload. Silent on all four surfaces and on the declared spelling \
+                 too, so it stays silent here; only its leak is closed",
+                "let a: Array[R, 2] = [mkr(1), mkr(2)];\n\
+                 match Slot.S(a) { Slot.S(_) => { println(\"x\") } Slot.N => { println(\"no\") } }",
+                "x\nend\n",
+            ),
+            (
+                "PINNED GAP: the Vec spelling of the fix's own cell. The arm's \
+                 binding owns the buffer, so the husk stands down and nothing runs \
+                 the element bodies — this row closes its LEAK only",
+                "let a: Vec[R] = [mkr(1), mkr(2)];\n\
+                 match Slot.S(a) { Slot.S(v) => { println(f\"x{v[0].id}\") } Slot.N => { println(\"no\") } }",
+                "x1\nend\n",
+            ),
+            (
+                "control: the ctor BOUND FIRST — B-2026-09-20-62's cell, unchanged",
+                "let a: Vec[R] = [mkr(1), mkr(2)];\n\
+                 let s = Slot.S(a);\n\
+                 match s { Slot.S(v) => { println(f\"x{v[0].id}\") } Slot.N => { println(\"no\") } }",
+                "x1\ndR1\ndR2\nend\n",
+            ),
+            (
+                "control: the DECLARED-container spelling at the same position. Its \
+                 own agreed gap on all four surfaces, and this fix must not move it \
+                 — arming one backend of an agreed gap is strictly worse than the gap",
+                "let a: Vec[R] = [mkr(1), mkr(2)];\n\
+                 match Ev.V(a) { Ev.V(v) => { println(f\"x{v[0].id}\") } Ev.N => { println(\"no\") } }",
+                "x1\nend\n",
+            ),
+            (
+                "control: a whole-value DISCARD of the same ctor — already correct \
+                 through B-2026-09-20-15's discard registrar, must not double",
+                "let a: Array[R, 2] = [mkr(1), mkr(2)];\n\
+                 let _ = Slot.S(a);",
+                "dR1\ndR2\nend\n",
             ),
         ] {
             let src = format!("{hdr}fn main() {{\n{stmts}\nprintln(\"end\");\n}}\n");

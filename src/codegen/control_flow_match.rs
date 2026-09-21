@@ -257,6 +257,14 @@ impl<'ctx> super::Codegen<'ctx> {
                         p,
                         scrut,
                         did_clone_borrowed_index_field,
+                        (
+                            arms.iter().any(|a| {
+                                Self::variant_pattern_takes_payload(&a.pattern)
+                                    && !a.pattern.binding_names().is_empty()
+                            }),
+                            arms.iter()
+                                .all(|a| Self::variant_pattern_takes_payload(&a.pattern)),
+                        ),
                     )
                 })
         } else {
@@ -8014,6 +8022,34 @@ impl<'ctx> super::Codegen<'ctx> {
     /// the *name* to drive `track_enum_var` / `emit_enum_drop_switch` /
     /// `suppress_destructured_enum_payload_cleanup_at`, all keyed on the
     /// `enum_layouts` map by name. `None` for non-variant patterns.
+    /// B-2026-09-20-63 — does this arm pattern hand a variant's PAYLOAD to a
+    /// binding?
+    ///
+    /// `true` also for a pattern with no payload to hand over (`Slot.N`), so a
+    /// payload-less arm never vetoes the decision its siblings are making.
+    /// `false` for a pattern that matches the value and binds nothing of it: a
+    /// bare `_`, a `Slot.S(_)`, a catch-all identifier that takes the whole
+    /// enum rather than its payload.
+    pub(super) fn variant_pattern_takes_payload(pat: &Pattern) -> bool {
+        match &pat.kind {
+            PatternKind::TupleVariant { patterns, .. } => {
+                patterns.is_empty() || !pat.binding_names().is_empty()
+            }
+            PatternKind::Struct { fields, .. } => {
+                fields.is_empty() || !pat.binding_names().is_empty()
+            }
+            // The unqualified-variant spelling `variant_pattern_enum_name`
+            // recognizes — `Slot.N` arrives as one `Binding` holding the dotted
+            // path. A DOTTED name is a payload-less variant; a bare one is a
+            // catch-all that takes the whole enum, so the husk owes nothing.
+            PatternKind::Binding(n) => n.contains('.'),
+            PatternKind::Wildcard => false,
+            PatternKind::Or(ps) => ps.iter().all(Self::variant_pattern_takes_payload),
+            PatternKind::AtBinding { .. } => false,
+            _ => true,
+        }
+    }
+
     pub(super) fn variant_pattern_enum_name(&self, pat: &Pattern) -> Option<String> {
         let segments: Vec<&str> = match &pat.kind {
             PatternKind::TupleVariant { path, .. } | PatternKind::Struct { path, .. } => {
@@ -18028,6 +18064,7 @@ impl<'ctx> super::Codegen<'ctx> {
         pattern: &Pattern,
         val: BasicValueEnum<'ctx>,
         force: bool,
+        arm_payload_binds: (bool, bool),
     ) -> Option<(PointerValue<'ctx>, String)> {
         // A heap `Vec`-index enum scrutinee (`match toks[i] { Word(s) => … }`,
         // the lexer's token-consume shape) is NOT a fresh-owned temp, but the
@@ -18078,10 +18115,56 @@ impl<'ctx> super::Codegen<'ctx> {
             .as_deref()
             .map(|p| p.drop_method_keys.contains_key(&enum_name))
             .unwrap_or(false);
-        if !has_droppable && !has_user_drop {
+        let llvm_ty = layout.llvm_type;
+        // B-2026-09-20-63 — ASK WHAT THE PAYLOAD *IS*, NOT HOW IT WAS SPELLED.
+        //
+        // Both answers above are read off the DECLARATION. `field_drop_kinds`
+        // is built once per enum in `declare_enums`, by classifying each
+        // variant's declared payload `TypeExpr` through
+        // `enum_drop_kind_for_type_expr`; a bare type parameter `T` matches no
+        // arm of that classifier, so `enum Slot[T] { S(T), N }` has every kind
+        // `None` and `has_droppable` is false for EVERY instantiation of it,
+        // `Slot[Vec[R]]` included. `drop_method_keys` is keyed by enum name and
+        // knows nothing of the payload at all. So a generic enum constructed
+        // straight into a `match` fell out here, materializing nothing: no
+        // memory owner for a boxed payload and no bodies walker for its
+        // elements, which is both halves of the loss at once — the reason the
+        // row's cells lost `dR1`/`dR2` AND leaked the box.
+        //
+        // The instantiation is right here and nothing asked it.
+        // `enum_inst_type_exprs` is keyed on the constructor expression's own
+        // SPAN rather than on a binding name, so it holds `Slot[Vec[R]]` for a
+        // temporary exactly as it does for the RHS of a `let` — which is
+        // precisely how `stmts.rs`'s `let_generic_enum_payload_bodies_walker`
+        // resolves the same question one construct over. The row's own
+        // structural account says both machines end in a table keyed by the
+        // name a value was bound under, so a temporary is outside both; that is
+        // true of `variables` / `var_enum_inst_te` / `var_type_names` and false
+        // of this table, which is the one that matters here.
+        //
+        // THE POSITION IS THE DISCARD'S, NOT AN ARGUMENT'S. B-2026-09-20-15
+        // fixed this same pair of omissions for `let _ = Gen.Y(..)` and scoped
+        // the fix to the discard, because at an ARGUMENT the callee's by-value
+        // param site already owns the box and registering here too would give
+        // it two owners. A `match` scrutinee temporary has no callee either, so
+        // it takes the discard's shape: both halves, no stand-down on a boxed
+        // payload.
+        let gen_te = self
+            .type_decls
+            .enum_inst_type_exprs
+            .get(&(scrutinee.span.offset, scrutinee.span.length))
+            .cloned()
+            .map(|te| self.subst_monomorph_type_params(&te));
+        let gen_boxed = gen_te
+            .as_ref()
+            .map(|te| self.user_enum_boxed_payload_variants(te))
+            .unwrap_or_default();
+        let gen_walker = gen_te
+            .as_ref()
+            .and_then(|te| self.emit_generic_enum_payload_user_drop_bodies_fn(te));
+        if !has_droppable && !has_user_drop && gen_boxed.is_empty() && gen_walker.is_none() {
             return None;
         }
-        let llvm_ty = layout.llvm_type;
         let fn_val = self.current_fn?;
         let alloca = self.create_entry_alloca(fn_val, "__freshtemp_enum_scrut", llvm_ty.into());
         let _ = self.builder.build_store(alloca, sv);
@@ -18094,8 +18177,92 @@ impl<'ctx> super::Codegen<'ctx> {
         // don't overlap. The caller's `suppress_destructured_enum_payload_cleanup`
         // (then-arm only) still zeroes moved-in field caps for the `track_enum_var`
         // path; the user body reads fields shallowly and frees nothing.
+        // B-2026-09-20-63 (memory half) — the box holding an instantiated
+        // payload too wide for the erased payload area. Registered BEFORE the
+        // name-keyed walk below for the same LIFO reason the comment above
+        // gives: what frees is pushed first so it drains last, after the bodies
+        // that read it. `BoxedEnumDrop` is a different `CleanupAction` variant
+        // from `UserDrop`, so it is not what `take_freshtemp_scrutinee_drop`
+        // lifts out to fire at the merge block — it drains at the enclosing
+        // scope's exit, which is where the pre-existing `track_enum_var` leg
+        // below drains too.
+        let (any_arm_binds_payload, all_arms_bind_payload) = arm_payload_binds;
+        // AND WHEN THE INTERIOR IS THE ARM'S, THE BODIES ARE THE ARM'S TOO.
+        // Same split as the box-only decision below and for the same reason: a
+        // `Vec` / `String` / `Option` payload handed to a binding is that
+        // binding's value from there on, so the husk must neither free its
+        // interior nor walk it. Walking it read the moved-out payload and
+        // printed two garbage ids (`dR94035835305263`) with an invalid read
+        // under valgrind. The bodies such a binding owes are its own to run —
+        // an erased payload does not run them today, which is the remainder
+        // this row leaves behind rather than the part it closes.
+        let interior_is_the_arm_s = any_arm_binds_payload
+            && gen_boxed
+                .iter()
+                .any(|(_, _, pt, _, _)| self.boxed_payload_interior_taken_by_arm(pt));
+        for (en, variant, payload_te, box_field, box_only) in gen_boxed {
+            // BOX-ONLY WHEN AN ARM CAN TAKE THE INTERIOR OVER. For a payload
+            // shape with a binding-side registration of its own — a `Vec`, a
+            // `String`, an `Option`/`Result`, which is exactly what
+            // `boxed_payload_interior_taken_by_arm` names — a binding arm
+            // already owns the buffer and frees it at its own death, so an
+            // interior drop here is the second owner: measured
+            // `free(): double free detected in tcache 2` plus an invalid read
+            // on `match Slot.S(a) { Slot.S(v) => .. }` over `Slot[Vec[R]]`.
+            // The named-scrutinee path reaches the same answer by installing
+            // the interior optimistically and retracting it per arm
+            // (`clear_boxed_enum_inner_drop`); a fresh temp has no binding name
+            // for that retraction to find, so it is decided here instead.
+            // An arm that BINDS NOTHING keeps the interior drop and is what
+            // reclaims the payload's own heap.
+            let inner = if box_only
+                || (any_arm_binds_payload && self.boxed_payload_interior_taken_by_arm(&payload_te))
+            {
+                None
+            } else {
+                self.enum_boxed_payload_interior_drop(&payload_te, true)
+            };
+            self.track_boxed_enum_var_with_inner_drop_for_payload(
+                "__freshtemp_enum_scrut",
+                alloca,
+                &en,
+                &variant,
+                inner,
+                &payload_te,
+                box_field,
+            );
+        }
         if has_droppable {
             self.track_enum_var(&enum_name, alloca);
+        }
+        // B-2026-09-20-63 (bodies half) — the instantiated payload's ELEMENT
+        // `Drop` bodies. `UserDrop` under the fresh-temp slot name, so
+        // `fire_freshtemp_scrutinee_body_at_exit` lifts it at the merge block
+        // and the bodies run at match exit, where design.md § Temporary
+        // Lifetime Rules puts the scrutinee temporary's death.
+        // ONLY WHERE EVERY ARM HANDS ITS PAYLOAD TO A BINDING, which is where
+        // the two backends already disagree and this closes it. An arm that
+        // DISCARDS its payload (`Slot.S(_)`, a bare `_`) runs no element body
+        // on ANY surface today — the interpreter included, and the declared
+        // spelling `enum Ev { V(Vec[R]), N }` behaves the same way, so it is an
+        // agreed gap across four surfaces and two spellings rather than a
+        // divergence. Arming the walker for it here would make this one backend
+        // right and leave the other three wrong, which is strictly worse than
+        // the agreed answer; the memory half above still runs, so such an arm
+        // stops leaking without changing what it prints. Filed separately.
+        //
+        // The union over ALL arms rather than the taken one, because the walker
+        // is registered once and fired at the merge block (design.md
+        // § Temporary Lifetime Rules; B-2026-08-29-28), so one arm that
+        // discards stands the whole construct down.
+        if let Some(w) = gen_walker.filter(|_| all_arms_bind_payload && !interior_is_the_arm_s) {
+            self.track_user_drop_var_with_fn(
+                "",
+                "__freshtemp_enum_scrut",
+                alloca,
+                w,
+                super::state::UserDropKind::ContainerElemBodies,
+            );
         }
         // B-2026-08-29-37 — the enum's OWN `impl Drop` body belongs to the value
         // the SOURCE PROGRAM named, and a defensive copy is not one of those.

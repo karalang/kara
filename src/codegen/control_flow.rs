@@ -158,8 +158,19 @@ impl<'ctx> super::Codegen<'ctx> {
         // exit; the suppression after `bind_pattern_values` (then-arm only)
         // zeroes the caps of fields the pattern moved into bindings. No-op for
         // non-fresh / non-enum scrutinees.
-        let freshtemp_enum =
-            self.materialize_freshtemp_enum_scrutinee(value, pattern, val, did_clone_ref_enum);
+        let freshtemp_enum = self.materialize_freshtemp_enum_scrutinee(
+            value,
+            pattern,
+            val,
+            did_clone_ref_enum,
+            // B-2026-09-20-63 — ONE pattern here, so the `any` and
+            // `all` answers the match site computes over its arms are
+            // the same answer.
+            (
+                Self::variant_pattern_takes_payload(pattern) && !pattern.binding_names().is_empty(),
+                Self::variant_pattern_takes_payload(pattern),
+            ),
+        );
         // B-2026-08-30-15 — the STRUCT flavour of the same gap, which reaches
         // this construct too: `if let S { r: _ } = mkS() { … }` measured
         // `v s1` compiled against the interpreter's `v dS dR7`. The registration
@@ -1074,8 +1085,19 @@ impl<'ctx> super::Codegen<'ctx> {
         // in `body_bb` (dominated by `cond_bb` where `val` is defined). The
         // heap-bearing *miss* variant at loop exit (the final non-matching
         // scrutinee) is freed wholesale on the `miss_bb` edge below.
-        let freshtemp_enum =
-            self.materialize_freshtemp_enum_scrutinee(value, pattern, val, did_clone_ref_enum);
+        let freshtemp_enum = self.materialize_freshtemp_enum_scrutinee(
+            value,
+            pattern,
+            val,
+            did_clone_ref_enum,
+            // B-2026-09-20-63 — ONE pattern here, so the `any` and
+            // `all` answers the match site computes over its arms are
+            // the same answer.
+            (
+                Self::variant_pattern_takes_payload(pattern) && !pattern.binding_names().is_empty(),
+                Self::variant_pattern_takes_payload(pattern),
+            ),
+        );
         // B-2026-08-30-15 — the STRUCT flavour of the same gap, which reaches
         // this construct too: `if let S { r: _ } = mkS() { … }` measured
         // `v s1` compiled against the interpreter's `v dS dR7`. The registration
@@ -2170,8 +2192,19 @@ impl<'ctx> super::Codegen<'ctx> {
         // escaped bindings), and at the divergent else edge's
         // `emit_scope_cleanup` walk on the miss edge (wholesale). Suppression
         // on the match edge zeroes the caps of moved-in fields.
-        let freshtemp_enum =
-            self.materialize_freshtemp_enum_scrutinee(value, pattern, val, did_clone_ref_enum);
+        let freshtemp_enum = self.materialize_freshtemp_enum_scrutinee(
+            value,
+            pattern,
+            val,
+            did_clone_ref_enum,
+            // B-2026-09-20-63 — ONE pattern here, so the `any` and
+            // `all` answers the match site computes over its arms are
+            // the same answer.
+            (
+                Self::variant_pattern_takes_payload(pattern) && !pattern.binding_names().is_empty(),
+                Self::variant_pattern_takes_payload(pattern),
+            ),
+        );
         // B-2026-08-30-15 — the STRUCT flavour of the same gap, which reaches
         // this construct too: `if let S { r: _ } = mkS() { … }` measured
         // `v s1` compiled against the interpreter's `v dS dR7`. The registration
