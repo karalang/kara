@@ -1652,11 +1652,94 @@ impl<'a> super::Interpreter<'a> {
                         }
                         _ => false,
                     };
+                    // B-2026-09-21-3 — the STRUCT arms, transplanted from the
+                    // `if let` leg above. This gate admitted `Value::EnumVariant`
+                    // ONLY, so a struct scrutinee produced an empty stash and the
+                    // pattern's binding ran no `Drop` body at all:
+                    // `while let S3 { a, .. } = S3 { a: mk(76), b: mk(77) } { .. }`
+                    // printed NOTHING under `--interp` while aot / jit /
+                    // `KARAC_AUTO_PAR=0` printed `dR76`. That is a run-vs-build
+                    // DIVERGENCE rather than this family's usual agreed gap, which
+                    // is why it was split out of B-2026-09-21-1 instead of listed
+                    // in it.
+                    //
+                    // The two spellings beside this one were already correct —
+                    // `match` (`pattern_match.rs`, the `Value::Struct` arm of its
+                    // own `consuming_scrutinee`) and `if let` (B-2026-09-06-35,
+                    // ~400 lines up). This leg is the fourth copy of a test that
+                    // has now been widened three times for the same reason, and
+                    // each time the copy that was left behind produced exactly
+                    // this: one spelling printing differently from the others on
+                    // an identical program.
+                    //
+                    // WHAT THIS DELIBERATELY DOES NOT DO: stash the HUSK. A fresh
+                    // temp's UNBOUND fields are owned by nobody here too — `b`
+                    // above still runs no body and still leaks its buffer — but
+                    // that gap is AGREED across all four surfaces and is
+                    // B-2026-09-21-1's to close on both backends at once. Adding
+                    // `pending_arm_unbound_struct` here would fix the interpreter
+                    // alone and turn that agreed gap into a second divergence,
+                    // which is strictly worse. This fix moves `while let` onto
+                    // the same footing as its siblings and no further.
+                    let struct_named_scrut = matches!(val, Value::Struct { .. })
+                        && !Self::struct_scrutinee_has_no_other_owner(value);
                     let consuming_scrutinee = !reads_through
-                        && matches!(val, Value::EnumVariant { .. })
-                        && self.scrutinee_expr_is_consuming(value);
+                        && matches!(val, Value::EnumVariant { .. } | Value::Struct { .. })
+                        && self.scrutinee_expr_is_consuming(value)
+                        && (matches!(val, Value::EnumVariant { .. })
+                            || Self::struct_scrutinee_has_no_other_owner(value)
+                            || struct_named_scrut);
                     let stash_names: Vec<String> = if consuming_scrutinee {
-                        if let Value::EnumVariant { ref enum_name, .. } = val {
+                        if struct_named_scrut {
+                            // The named-scrutinee leg: WHOLE-field and nested
+                            // bindings only, each masked out of the scrutinee's
+                            // own walk as it is stashed so the two stay in
+                            // lockstep. Masked VIEW fields are excluded — the
+                            // caller owns those bodies, and stashing one doubles
+                            // it. A root that is not a plain name or `self` has
+                            // no walk to retract and keeps today's behaviour.
+                            let root = match &value.kind {
+                                ExprKind::Identifier(n) => Some(n.clone()),
+                                ExprKind::SelfValue => Some("self".to_string()),
+                                _ => None,
+                            };
+                            match root {
+                                Some(root) => {
+                                    let views = self.masked_payload_view_names(pattern, value);
+                                    let mut out = Vec::new();
+                                    for (field, bound) in
+                                        Self::struct_pattern_whole_field_bindings(pattern)
+                                    {
+                                        if views.contains(&bound) {
+                                            continue;
+                                        }
+                                        self.moved_out_struct_field_bodies
+                                            .insert((root.clone(), field));
+                                        out.push(bound);
+                                    }
+                                    for (path, bound) in
+                                        Self::struct_pattern_nested_field_bindings(pattern)
+                                    {
+                                        if views.contains(&bound) {
+                                            continue;
+                                        }
+                                        self.moved_out_nested_field_bodies
+                                            .insert((root.clone(), path));
+                                        out.push(bound);
+                                    }
+                                    out
+                                }
+                                None => Vec::new(),
+                            }
+                        } else if matches!(val, Value::Struct { .. }) {
+                            // Unfiltered, for the reason the `if let` leg states:
+                            // the loop below decides which of these actually owe a
+                            // body, and it runs AFTER `bind_pattern`. Filtering
+                            // here consults `env` before the names exist, so every
+                            // candidate answers `None` and the stash comes out
+                            // empty.
+                            pattern.binding_names()
+                        } else if let Value::EnumVariant { ref enum_name, .. } = val {
                             self.arm_moved_user_drop_payload_bindings(enum_name, pattern)
                         } else {
                             Vec::new()

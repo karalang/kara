@@ -63881,6 +63881,108 @@ fn fresh_temp_struct_scrutinee_unbound_fields_run_their_drop_bodies() {
     }
 }
 
+/// B-2026-09-21-3 — `while let` over a STRUCT scrutinee ran no `Drop` body at
+/// all on this backend, while every compiled surface ran the bound field's.
+///
+/// A run-vs-build DIVERGENCE rather than this family's usual agreed gap, which
+/// is why it was split out of B-2026-09-21-1 instead of listed in it. The gate
+/// in `eval_expr.rs`'s `ExprKind::WhileLet` admitted `Value::EnumVariant` only,
+/// so a struct scrutinee produced an empty stash; the `match` leg
+/// (`pattern_match.rs`) and the `if let` leg (B-2026-09-06-35, in the same
+/// file) had both already been widened. Fourth copy of one test, third
+/// widening, same symptom each time: one spelling printing differently from
+/// its siblings on an identical program.
+///
+/// FOUR CELLS CHANGE AND SIX DO NOT, measured against `origin/main`:
+/// `whilelet-one-bound`, `-all-bound`, `-nested-pattern` and `-two-iterations`
+/// each ran NO body there (`z=76` against the compiled `dR76 z=76`, and so on),
+/// and the other six were already correct. The six are the point of the
+/// fixture as much as the four — `whilelet-named-scrutinee` in particular was
+/// ALREADY `dR86` before this fix, from the scrutinee's own walk, so it is the
+/// double-fire guard for the stash-plus-mask path this change newly admits.
+/// `whilelet-enum-control` and `-user-enum-control` pin the arm that was
+/// already there; `iflet-sibling-control` and `match-sibling-control` pin the
+/// two spellings this one now matches.
+///
+/// `whilelet-none-bound-agreed-gap` PINS A DELIBERATELY WRONG ANSWER. A fresh
+/// temp's UNBOUND fields are owned by nobody here either, so `S3 { .. }` runs
+/// nothing and leaks both buffers — but that gap is AGREED on all four
+/// surfaces and is B-2026-09-21-1's to close on both backends at once. Fixing
+/// it here alone would turn an agreed gap into a second divergence, which is
+/// strictly worse. `whilelet-one-bound` carries the same deliberate omission:
+/// `dR77` is absent and owed.
+///
+/// No ASAN twin is owed: this fix is interpreter-only and moves no compiled
+/// allocation. The leak belongs to B-2026-09-21-1.
+///
+/// Twin: `tests/codegen.rs`'s
+/// `test_e2e_while_let_struct_scrutinee_binding_runs_its_drop_body`.
+#[test]
+fn while_let_struct_scrutinee_binding_runs_its_drop_body() {
+    const H: &str = "struct R { id: i64, name: String }\n\
+         impl Drop for R { fn drop(mut ref self) { println(f\"dR{self.id}\") } }\n\
+         fn mk(i: i64) -> R { return R { id: i, name: f\"n{i}\" }; }\n\
+         struct S3 { a: R, b: R }\n\
+         struct One { r: R }\n\
+         struct Nest { o: One, z: i64 }\n\
+         enum E { Full(R), Empty }\n";
+    for (label, cell, want) in [
+        (
+            "whilelet-one-bound",
+            "fn c() -> i64 { let mut s: i64 = 0; while let S3 { a, .. } = S3 { a: mk(76), b: mk(77) } { s = a.id; break; } return s; }",
+            "dR76\nz=76\n",
+        ),
+        (
+            "whilelet-all-bound",
+            "fn c() -> i64 { let mut s: i64 = 0; while let S3 { a, b } = S3 { a: mk(78), b: mk(79) } { s = a.id + b.id; break; } return s; }",
+            "dR79\ndR78\nz=157\n",
+        ),
+        (
+            "whilelet-none-bound-agreed-gap",
+            "fn c() -> i64 { let mut s: i64 = 0; while let S3 { .. } = S3 { a: mk(82), b: mk(83) } { s = 3; break; } return s; }",
+            "z=3\n",
+        ),
+        (
+            "whilelet-named-scrutinee",
+            "fn c() -> i64 { let n: One = One { r: mk(86) }; let mut s: i64 = 0; while let One { r } = n { s = r.id; break; } return s; }",
+            "dR86\nz=86\n",
+        ),
+        (
+            "whilelet-nested-pattern",
+            "fn c() -> i64 { let mut s: i64 = 0; while let Nest { o: One { r }, .. } = Nest { o: One { r: mk(88) }, z: 5 } { s = r.id; break; } return s; }",
+            "dR88\nz=88\n",
+        ),
+        (
+            "whilelet-two-iterations",
+            "fn c() -> i64 { let mut n: i64 = 0; let mut s: i64 = 0; while let One { r } = One { r: mk(90 + n) } { s = s + r.id; n = n + 1; if n > 1 { break; } } return s; }",
+            "dR90\ndR91\nz=181\n",
+        ),
+        (
+            "whilelet-enum-control",
+            "fn c() -> i64 { let mut v: Vec[R] = Vec.new(); v.push(mk(94)); v.push(mk(95)); let mut s: i64 = 0; while let Some(r) = v.pop() { s = s + r.id; } return s; }",
+            "dR95\ndR94\nz=189\n",
+        ),
+        (
+            "whilelet-user-enum-control",
+            "fn c() -> i64 { let mut s: i64 = 0; while let E.Full(r) = E.Full(mk(96)) { s = r.id; break; } return s; }",
+            "dR96\nz=96\n",
+        ),
+        (
+            "iflet-sibling-control",
+            "fn c() -> i64 { if let One { r } = One { r: mk(97) } { return r.id; } return 0; }",
+            "dR97\nz=97\n",
+        ),
+        (
+            "match-sibling-control",
+            "fn c() -> i64 { match One { r: mk(99) } { One { r } => { return r.id; } } }",
+            "dR99\nz=99\n",
+        ),
+    ] {
+        let src = format!("{H}{cell}\nfn main() {{ let z: i64 = c(); println(f\"z={{z}}\"); }}\n");
+        assert_eq!(run(&src), want, "{label}");
+    }
+}
+
 /// B-2026-08-31-32 — the `if let` spelling moves with `match`.
 ///
 /// Both reach one shared place test rather than a second copy, because this
