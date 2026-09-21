@@ -853,6 +853,23 @@ pub struct Interpreter<'a> {
     /// executor, so `eval_match` fires any leftovers itself (conservatively)
     /// and clears the list.
     pub(crate) pending_arm_drop_bindings: Vec<String>,
+    /// B-2026-09-16-18 — the UNBOUND half of the same stash, which the
+    /// binding list above cannot express because an unbound field has no name.
+    ///
+    /// A FRESH-TEMP struct scrutinee has no binding of its own, so nothing owns
+    /// the fields the arm does not bind: `match S3 { a: mk(44), b: mk(45) }
+    /// { S3 { a, .. } => … }` ran `dR44` alone and `S3 { .. }` ran nothing at
+    /// all, leaking one `name` buffer per unbound field. The bound fields are
+    /// owned by their bindings and drain through the list above; this carries
+    /// the temp itself plus the field names those bindings already took, and
+    /// `eval_match` walks the remainder AFTER the bindings have fired — which
+    /// is the order design.md gives (a moved field dies with its destination,
+    /// the fields the struct still owns die with it, in reverse declaration
+    /// order).
+    ///
+    /// Only ever set for a scrutinee `struct_scrutinee_has_no_other_owner`
+    /// admits, so a named local — whose own walk owns the husk — is untouched.
+    pub(crate) pending_arm_unbound_struct: Option<(Value, HashSet<String>)>,
     /// B-2026-08-28-22 — owned params whose `Drop` BODY this frame has taken
     /// ownership of, because the callee returns them on some tail paths and not
     /// others. Seeded immediately before [`Self::eval_body_growing`] and
@@ -1257,6 +1274,7 @@ impl<'a> Interpreter<'a> {
             cond_move_escaping_sites: HashSet::new(),
             taken_branch_tail: None,
             pending_arm_drop_bindings: Vec::new(),
+            pending_arm_unbound_struct: None,
             pending_param_drop_bindings: Vec::new(),
             own_body_only_view_bindings: std::collections::HashMap::new(),
             cond_store_param_names: std::collections::HashSet::new(),

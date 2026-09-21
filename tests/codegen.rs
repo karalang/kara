@@ -127196,6 +127196,13 @@ fn main() {
     /// the two fresh-temp ones. The twin exists because the property is that
     /// the two AGREE — and because `bound-local` and `no-binding` are the rows a
     /// later widening on either side would break silently.
+    ///
+    /// B-2026-09-16-18 — AND `no-binding` WAS ITSELF WRONG ON BOTH BACKENDS,
+    /// which is what that last sentence could not see: it watches for a
+    /// DIVERGENCE, and the defect was an AGREEMENT. `P`'s husk was owned by
+    /// nobody once the arm bound nothing out of it, so `R`'s body never ran and
+    /// its buffer leaked on every surface. Flipped from `"nb\n"` to
+    /// `"nb\ndR[d]\n"` in lockstep with the interpreter twin.
     #[test]
     fn test_e2e_fresh_temp_struct_scrutinee_arm_binding_runs_its_body() {
         const H: &str = "struct R { s: String }\n\
@@ -127222,9 +127229,13 @@ fn main() {
                 "b\ndR[b]\n",
             ),
             (
+                // B-2026-09-16-18 — the husk of a fresh temp whose arm binds
+                // nothing is still owned by the match: its fields' `Drop`
+                // bodies run, in reverse declaration order, after the arm.
+                // Flipped from `"nb\n"`.
                 "no-binding",
                 "match P { r: R { s: \"d\" }, n: 4 } { P { .. } => println(\"nb\") }",
-                "nb\n",
+                "nb\ndR[d]\n",
             ),
             (
                 "own-drop-struct",
@@ -127246,6 +127257,120 @@ fn main() {
                 Some(want.to_string()),
                 "{label}"
             );
+        }
+    }
+
+    /// B-2026-09-16-18 — a fresh-temp STRUCT scrutinee's UNBOUND fields run
+    /// their `Drop` bodies and free their heap.
+    ///
+    /// The husk of such a temp was owned by nobody, on all four surfaces alike:
+    /// `match S3 { a: mk(44), b: mk(45) } { S3 { a, .. } => .. }` ran `dR44`
+    /// alone and `S3 { .. }` ran NOTHING, with valgrind at `-O0` reporting one
+    /// `name` buffer leaked per unbound field (24 allocs / 20 frees, 12 bytes
+    /// definitely lost in 4 blocks over the first four cells; 28/28 and zero
+    /// after). No A/B gate could see it because all four surfaces AGREED — the
+    /// reason this fixture pins values and not merely parity.
+    ///
+    /// Two gaps, and both had to move for any cell to change:
+    ///
+    /// * GAP A — `expr_yields_fresh_owned_temp` matches only `Call` /
+    ///   `MethodCall`, so a struct LITERAL scrutinee never reached the
+    ///   materializer. `temp-call` is the same defect through the arm that DID
+    ///   reach it, which is what shows Gap A was not the whole story.
+    /// * GAP B — the materializer then declined any type without its OWN
+    ///   `impl Drop`, which is every "merely contains a `Drop` field" struct.
+    ///
+    /// `temp-all`, `named-control` and `no-drop-fields` are the controls that a
+    /// naive widening breaks: the first binds BOTH fields (the husk owes
+    /// nothing, and a second body there would be a double close for a `drop()`
+    /// that closes a handle), the second has a binding whose own walk already
+    /// owns the husk, and the third has no `Drop`-bearing field at all.
+    ///
+    /// `iflet-agreed-gap` PINS A DELIBERATE DIVERGENCE-AVOIDANCE, not a
+    /// success. The interpreter carries this ownership in `eval_match` only;
+    /// `if let` / `while let` / `let ... else` are separate implementations
+    /// there and still lose the unbound field. Arming the compiled side alone
+    /// measured `dR72` under `--interp` against `dR72 dR73` on the other three
+    /// — an AGREED gap converted into a run-vs-build DIVERGENCE, which is
+    /// strictly worse than the gap. So the new channel is gated to the `match`
+    /// spelling and this cell pins the agreed-wrong answer until the
+    /// interpreter's three spellings catch up. Twin:
+    /// `tests/interpreter.rs`'s
+    /// `fresh_temp_struct_scrutinee_unbound_fields_run_their_drop_bodies`.
+    ///
+    /// `guarded-two-arm-agreed-gap` PINS A SECOND ONE, and it is the reason the
+    /// interpreter masks WHOLE-MATCH rather than taken-arm. The husk's walker is
+    /// registered once and fired at the merge block after the phi — one function
+    /// for every arm — so codegen can only mask the UNION of what the arms bind,
+    /// exactly as its user-enum retraction is whole-match (`eval_match`'s own
+    /// opening comment records that split). A taken-arm mask in the interpreter
+    /// is more precise AND diverges: measured `dR81 dR80 … dR82 dR83` under
+    /// `--interp` against the compiled `dR81 … dR82`. Pinned at the compiled
+    /// answer, which is byte-identical to what the PRE-FIX compiler gave this
+    /// program on all four surfaces (16 allocs / 14 frees, 6 bytes lost in 2
+    /// blocks, before and after alike) — so this corner is untouched by the fix
+    /// rather than newly conceded.
+    #[test]
+    fn test_e2e_fresh_temp_struct_scrutinee_unbound_fields_run_their_drop_bodies() {
+        const H: &str = "struct R { id: i64, name: String }\n\
+             impl Drop for R { fn drop(mut ref self) { println(f\"dR{self.id}\") } }\n\
+             fn mk(i: i64) -> R { return R { id: i, name: f\"n{i}\" }; }\n\
+             struct S3 { a: R, b: R }\n\
+             struct Plain { x: i64, y: i64 }\n\
+             fn mks() -> S3 { return S3 { a: mk(51), b: mk(52) }; }\n";
+        for (label, cell, want) in [
+            // The row's own four cells, verbatim.
+            (
+                "temp-literal",
+                "fn c() -> i64 { match S3 { a: mk(44), b: mk(45) } { S3 { a, .. } => { return a.id; } } }",
+                "dR44\ndR45\nz=44\n",
+            ),
+            (
+                "temp-call",
+                "fn c() -> i64 { match mks() { S3 { a, .. } => { return a.id; } } }",
+                "dR51\ndR52\nz=51\n",
+            ),
+            (
+                "temp-all",
+                "fn c() -> i64 { match S3 { a: mk(47), b: mk(48) } { S3 { a, b } => { return a.id + b.id; } } }",
+                "dR48\ndR47\nz=95\n",
+            ),
+            (
+                "temp-none",
+                "fn c() -> i64 { match S3 { a: mk(49), b: mk(50) } { S3 { .. } => { return 1; } } }",
+                "dR50\ndR49\nz=1\n",
+            ),
+            // Controls.
+            (
+                "named-control",
+                "fn c() -> i64 { let s: S3 = S3 { a: mk(62), b: mk(63) }; match s { S3 { a, .. } => { return a.id; } } }",
+                "dR62\ndR63\nz=62\n",
+            ),
+            (
+                "wildcard-field",
+                "fn c() -> i64 { match S3 { a: mk(60), b: mk(61) } { S3 { a: _, b } => { return b.id; } } }",
+                "dR61\ndR60\nz=61\n",
+            ),
+            (
+                "no-drop-fields",
+                "fn c() -> i64 { match Plain { x: 1, y: 2 } { Plain { .. } => { return 7; } } }",
+                "z=7\n",
+            ),
+            (
+                "guarded-two-arm-agreed-gap",
+                "fn c() -> i64 { match S3 { a: mk(80), b: mk(81) } { S3 { a, .. } if a.id > 100 => { return a.id; } S3 { b, .. } => { return b.id; } } }",
+                "dR81\nz=81\n",
+            ),
+            // The pinned agreed gap — see the doc above.
+            (
+                "iflet-agreed-gap",
+                "fn c() -> i64 { if let S3 { a, .. } = S3 { a: mk(68), b: mk(69) } { return a.id; } return 0; }",
+                "dR68\nz=68\n",
+            ),
+        ] {
+            let src =
+                format!("{H}{cell}\nfn main() {{ let z: i64 = c(); println(f\"z={{z}}\"); }}\n");
+            assert_eq!(run_program(&src), Some(want.to_string()), "{label}");
         }
     }
 

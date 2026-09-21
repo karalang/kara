@@ -168,11 +168,10 @@ impl<'ctx> super::Codegen<'ctx> {
         // what `fire_due_user_drops`' type-keyed clause admits to NLL /
         // statement-end placement, which is where the interpreter puts it.
         let freshtemp_struct = if freshtemp_enum.is_none() {
-            self.materialize_freshtemp_struct_scrutinee(value, &[pattern], val)
+            self.materialize_freshtemp_struct_scrutinee(value, &[pattern], val, false)
         } else {
             None
         };
-        let _ = &freshtemp_struct;
         // Oversized-enum-payload §1/§2: free the heap box for a fresh-temp
         // Option[Wide]/Result[Wide,_] scrutinee (box-only — the bound payload
         // owns its inner heap). Registers in the enclosing frame, so the box
@@ -337,6 +336,20 @@ impl<'ctx> super::Codegen<'ctx> {
             self.clone_escaping_borrow_payload_binding(value, pattern, Some(&[]), &[then_block])?;
         }
         let optres_bindings_owned = !self.pattern_state.pattern_binding_is_borrow;
+        // B-2026-09-16-18 — the struct twin of the enum suppressor below, which
+        // this construct family never had. It was not needed while
+        // `materialize_freshtemp_struct_scrutinee` declined every pattern that
+        // BINDS a `Drop`-bearing field; the no-own-`Drop` channel admits them,
+        // and its `__karac_drop_struct_<S>` then freed a buffer the arm's
+        // binding already owned. Measured on
+        // `if let S3 { a, .. } = S3 { a: mk(68), b: mk(69) } { … }`: correct
+        // OUTPUT and 13 allocs / 14 frees with one invalid free, which is the
+        // shape a body-count grid cannot see. After `bind_pattern_values` and
+        // inside the match edge, exactly where the `match` path puts it.
+        if let Some((alloca, struct_name)) = &freshtemp_struct {
+            let (alloca, struct_name) = (*alloca, struct_name.clone());
+            self.suppress_destructured_struct_pattern_cleanup_at(alloca, &struct_name, pattern);
+        }
         self.pattern_state.pattern_binding_is_borrow = saved_borrow_flag;
         // B-track: zero the caps of moved-in fields so the source EnumDrop
         // (registered above) frees only the *unbound* heap fields, not the ones
@@ -1071,11 +1084,10 @@ impl<'ctx> super::Codegen<'ctx> {
         // what `fire_due_user_drops`' type-keyed clause admits to NLL /
         // statement-end placement, which is where the interpreter puts it.
         let freshtemp_struct = if freshtemp_enum.is_none() {
-            self.materialize_freshtemp_struct_scrutinee(value, &[pattern], val)
+            self.materialize_freshtemp_struct_scrutinee(value, &[pattern], val, false)
         } else {
             None
         };
-        let _ = &freshtemp_struct;
         // Oversized-enum-payload §1/§2: free the heap box for a fresh-temp
         // boxed-payload scrutinee, registered in the per-iteration body frame
         // (drains each iteration). An `Option` loop terminates on `None` (no
@@ -1188,6 +1200,20 @@ impl<'ctx> super::Codegen<'ctx> {
             self.clone_escaping_borrow_payload_binding(value, pattern, Some(&[]), &[body])?;
         }
         let optres_bindings_owned = !self.pattern_state.pattern_binding_is_borrow;
+        // B-2026-09-16-18 — the struct twin of the enum suppressor below, which
+        // this construct family never had. It was not needed while
+        // `materialize_freshtemp_struct_scrutinee` declined every pattern that
+        // BINDS a `Drop`-bearing field; the no-own-`Drop` channel admits them,
+        // and its `__karac_drop_struct_<S>` then freed a buffer the arm's
+        // binding already owned. Measured on
+        // `if let S3 { a, .. } = S3 { a: mk(68), b: mk(69) } { … }`: correct
+        // OUTPUT and 13 allocs / 14 frees with one invalid free, which is the
+        // shape a body-count grid cannot see. After `bind_pattern_values` and
+        // inside the match edge, exactly where the `match` path puts it.
+        if let Some((alloca, struct_name)) = &freshtemp_struct {
+            let (alloca, struct_name) = (*alloca, struct_name.clone());
+            self.suppress_destructured_struct_pattern_cleanup_at(alloca, &struct_name, pattern);
+        }
         self.pattern_state.pattern_binding_is_borrow = saved_borrow_flag;
         if let Some((alloca, enum_name)) = &freshtemp_enum {
             // B-2026-09-14-17 — the FRESH-TEMP spelling of the boxed `Array`
@@ -2154,11 +2180,10 @@ impl<'ctx> super::Codegen<'ctx> {
         // what `fire_due_user_drops`' type-keyed clause admits to NLL /
         // statement-end placement, which is where the interpreter puts it.
         let freshtemp_struct = if freshtemp_enum.is_none() {
-            self.materialize_freshtemp_struct_scrutinee(value, &[pattern], val)
+            self.materialize_freshtemp_struct_scrutinee(value, &[pattern], val, false)
         } else {
             None
         };
-        let _ = &freshtemp_struct;
         // Oversized-enum-payload §1/§2: free the heap box for a fresh-temp
         // boxed-payload scrutinee (box-only). Registers in the enclosing frame,
         // so it frees after the escaped bindings on the match edge and via the
@@ -2296,6 +2321,20 @@ impl<'ctx> super::Codegen<'ctx> {
             self.clone_escaping_borrow_payload_binding(value, pattern, None, &[])?;
         }
         let optres_bindings_owned = !self.pattern_state.pattern_binding_is_borrow;
+        // B-2026-09-16-18 — the struct twin of the enum suppressor below, which
+        // this construct family never had. It was not needed while
+        // `materialize_freshtemp_struct_scrutinee` declined every pattern that
+        // BINDS a `Drop`-bearing field; the no-own-`Drop` channel admits them,
+        // and its `__karac_drop_struct_<S>` then freed a buffer the arm's
+        // binding already owned. Measured on
+        // `if let S3 { a, .. } = S3 { a: mk(68), b: mk(69) } { … }`: correct
+        // OUTPUT and 13 allocs / 14 frees with one invalid free, which is the
+        // shape a body-count grid cannot see. After `bind_pattern_values` and
+        // inside the match edge, exactly where the `match` path puts it.
+        if let Some((alloca, struct_name)) = &freshtemp_struct {
+            let (alloca, struct_name) = (*alloca, struct_name.clone());
+            self.suppress_destructured_struct_pattern_cleanup_at(alloca, &struct_name, pattern);
+        }
         self.pattern_state.pattern_binding_is_borrow = saved_borrow_flag;
         if let Some((alloca, enum_name)) = &freshtemp_enum {
             // B-2026-09-14-17 — the FRESH-TEMP spelling of the boxed `Array`

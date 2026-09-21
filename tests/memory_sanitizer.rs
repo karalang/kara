@@ -102040,4 +102040,63 @@ fn main() {
             30,
         );
     }
+
+    /// B-2026-09-16-18 — the MEMORY half of a fresh-temp struct scrutinee's
+    /// unbound fields, which the body-count fixtures cannot see.
+    ///
+    /// The husk of `match S3 { a: mk(44), b: mk(45) } { S3 { a, .. } => .. }`
+    /// was owned by nobody: every field the arm did not bind lost its `Drop`
+    /// body AND leaked its buffer, on `--interp` / jit / aot / `AUTO_PAR=0`
+    /// alike. valgrind on the row's own four cells at `KARAC_OPT_LEVEL=0`
+    /// measured 24 allocs / 20 frees, `definitely lost: 12 bytes in 4 blocks`,
+    /// ERROR SUMMARY 4 — one 3-byte `name` buffer per unbound field, two of
+    /// them from the `S3 { .. }` cell that bound nothing at all. After the fix:
+    /// 28 allocs / 28 frees, ERROR SUMMARY 0.
+    ///
+    /// Both halves have to be pinned separately, because each is invisible to
+    /// the other's instrument. A lost body is memory-balanced when the field
+    /// owns no heap, and a leaked buffer is body-silent when the arm's own
+    /// output does not change — here they happened to coincide, and the
+    /// coincidence is not something a later change preserves.
+    ///
+    /// The loop is what makes the leak UNBOUNDED rather than a one-off, which
+    /// is the difference between a curiosity and a defect: pre-fix it stranded
+    /// one buffer per iteration.
+    #[test]
+    fn asan_freshtemp_struct_scrutinee_unbound_fields_are_freed() {
+        assert_clean_asan_run_min_allocs(
+            r#"
+struct R { id: i64, name: String }
+impl Drop for R { fn drop(mut ref self) { println(f"dR{self.id}") } }
+fn mk(i: i64) -> R { return R { id: i, name: f"name-{i}-padding" }; }
+struct S3 { a: R, b: R }
+fn mks() -> S3 { return S3 { a: mk(51), b: mk(52) }; }
+
+fn temp_literal() -> i64 { match S3 { a: mk(44), b: mk(45) } { S3 { a, .. } => { return a.id; } } }
+fn temp_call() -> i64 { match mks() { S3 { a, .. } => { return a.id; } } }
+fn temp_all() -> i64 { match S3 { a: mk(47), b: mk(48) } { S3 { a, b } => { return a.id + b.id; } } }
+fn temp_none() -> i64 { match S3 { a: mk(49), b: mk(50) } { S3 { .. } => { return 1; } } }
+
+fn main() {
+    println(f"L:{temp_literal()}");
+    println(f"C:{temp_call()}");
+    println(f"A:{temp_all()}");
+    println(f"N:{temp_none()}");
+    let mut i = 0;
+    while i < 3 {
+        println(f"W:{temp_none()}");
+        i = i + 1;
+    }
+    println("done");
+}
+"#,
+            &[
+                "dR44", "dR45", "L:44", "dR51", "dR52", "C:51", "dR48", "dR47", "A:95", "dR50",
+                "dR49", "N:1", "dR50", "dR49", "W:1", "dR50", "dR49", "W:1", "dR50", "dR49", "W:1",
+                "done",
+            ],
+            "asan_freshtemp_struct_scrutinee_unbound_fields_are_freed",
+            12,
+        );
+    }
 }

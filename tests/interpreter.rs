@@ -63733,9 +63733,14 @@ fn method_fresh_temp_enum_arg_arm_binds_payload() {
 ///   a struct has no `moved_out_enum_payload_bindings` equivalent to retract
 ///   that walk with, which is why the enum path can admit a named place here
 ///   and this one cannot.
-/// * `no-binding` — a `..`-only arm binds nothing, so there is nothing to stash
-///   and nothing changes. Both backends agree at zero bodies today; pinned so a
-///   later widening cannot quietly make this backend the odd one out.
+/// * `no-binding` — a `..`-only arm binds nothing. THIS CELL WAS PINNED AT THE
+///   WRONG ANSWER (`"nb\n"`, zero bodies) from 2026-08-31 until B-2026-09-16-18:
+///   the two backends did agree, and they agreed on losing the husk's field
+///   bodies outright and leaking the heap under them. The doc here read "nothing
+///   changes … pinned so a later widening cannot quietly make this backend the
+///   odd one out", which is exactly how a shared gap survives a fixture — the
+///   pin was watching for a DIVERGENCE and the defect was an AGREEMENT.
+///   B-2026-09-16-18 flips it to `"nb\ndR[d]\n"` on both backends together.
 /// * `own-drop-struct` — the scrutinee declares its own `Drop`. Included
 ///   because it is the shape where a partial move out of a `Drop`-bearing
 ///   struct meets this gate, and both backends agree on the field body.
@@ -63768,9 +63773,12 @@ fn fresh_temp_struct_scrutinee_arm_binding_runs_its_body() {
             "b\ndR[b]\n",
         ),
         (
+            // B-2026-09-16-18 — the husk of a fresh temp whose arm binds nothing
+            // is still owned by the match: its fields' `Drop` bodies run, in
+            // reverse declaration order, after the arm. Flipped from `"nb\n"`.
             "no-binding",
             "match P { r: R { s: \"d\" }, n: 4 } { P { .. } => println(\"nb\") }",
-            "nb\n",
+            "nb\ndR[d]\n",
         ),
         (
             "own-drop-struct",
@@ -63783,6 +63791,93 @@ fn fresh_temp_struct_scrutinee_arm_binding_runs_its_body() {
             want,
             "{label}"
         );
+    }
+}
+
+/// B-2026-09-16-18 — a fresh-temp STRUCT scrutinee's UNBOUND fields run their
+/// `Drop` bodies. Interpreter twin of `tests/codegen.rs`'s
+/// `test_e2e_fresh_temp_struct_scrutinee_unbound_fields_run_their_drop_bodies`,
+/// same cells and same expectations; that file's doc carries the measurements.
+///
+/// The property is that the two AGREE — and this row is the case where the
+/// older way of writing that down was not enough. Its sibling fixture above
+/// pinned `no-binding` at zero bodies with a note saying the backends agreed
+/// and a later widening must not make one the odd one out. They did agree, and
+/// they agreed on LOSING the husk's bodies and leaking the buffers under them:
+/// the pin was watching for a divergence while the defect was an agreement. So
+/// these cells pin VALUES, and `iflet-agreed-gap` pins an agreement that is
+/// still wrong on purpose (see the twin's doc for why arming it here alone
+/// would be worse).
+///
+/// `guarded-two-arm-agreed-gap` PINS A SECOND ONE, and it is the reason the
+/// interpreter masks WHOLE-MATCH rather than taken-arm. The husk's walker is
+/// registered once and fired at the merge block after the phi — one function
+/// for every arm — so codegen can only mask the UNION of what the arms bind,
+/// exactly as its user-enum retraction is whole-match (`eval_match`'s own
+/// opening comment records that split). A taken-arm mask in the interpreter
+/// is more precise AND diverges: measured `dR81 dR80 … dR82 dR83` under
+/// `--interp` against the compiled `dR81 … dR82`. Pinned at the compiled
+/// answer, which is byte-identical to what the PRE-FIX compiler gave this
+/// program on all four surfaces (16 allocs / 14 frees, 6 bytes lost in 2
+/// blocks, before and after alike) — so this corner is untouched by the fix
+/// rather than newly conceded.
+#[test]
+fn fresh_temp_struct_scrutinee_unbound_fields_run_their_drop_bodies() {
+    const H: &str = "struct R { id: i64, name: String }\n\
+         impl Drop for R { fn drop(mut ref self) { println(f\"dR{self.id}\") } }\n\
+         fn mk(i: i64) -> R { return R { id: i, name: f\"n{i}\" }; }\n\
+         struct S3 { a: R, b: R }\n\
+         struct Plain { x: i64, y: i64 }\n\
+         fn mks() -> S3 { return S3 { a: mk(51), b: mk(52) }; }\n";
+    for (label, cell, want) in [
+        (
+            "temp-literal",
+            "fn c() -> i64 { match S3 { a: mk(44), b: mk(45) } { S3 { a, .. } => { return a.id; } } }",
+            "dR44\ndR45\nz=44\n",
+        ),
+        (
+            "temp-call",
+            "fn c() -> i64 { match mks() { S3 { a, .. } => { return a.id; } } }",
+            "dR51\ndR52\nz=51\n",
+        ),
+        (
+            "temp-all",
+            "fn c() -> i64 { match S3 { a: mk(47), b: mk(48) } { S3 { a, b } => { return a.id + b.id; } } }",
+            "dR48\ndR47\nz=95\n",
+        ),
+        (
+            "temp-none",
+            "fn c() -> i64 { match S3 { a: mk(49), b: mk(50) } { S3 { .. } => { return 1; } } }",
+            "dR50\ndR49\nz=1\n",
+        ),
+        (
+            "named-control",
+            "fn c() -> i64 { let s: S3 = S3 { a: mk(62), b: mk(63) }; match s { S3 { a, .. } => { return a.id; } } }",
+            "dR62\ndR63\nz=62\n",
+        ),
+        (
+            "wildcard-field",
+            "fn c() -> i64 { match S3 { a: mk(60), b: mk(61) } { S3 { a: _, b } => { return b.id; } } }",
+            "dR61\ndR60\nz=61\n",
+        ),
+        (
+            "no-drop-fields",
+            "fn c() -> i64 { match Plain { x: 1, y: 2 } { Plain { .. } => { return 7; } } }",
+            "z=7\n",
+        ),
+            (
+            "guarded-two-arm-agreed-gap",
+            "fn c() -> i64 { match S3 { a: mk(80), b: mk(81) } { S3 { a, .. } if a.id > 100 => { return a.id; } S3 { b, .. } => { return b.id; } } }",
+            "dR81\nz=81\n",
+        ),
+        (
+            "iflet-agreed-gap",
+            "fn c() -> i64 { if let S3 { a, .. } = S3 { a: mk(68), b: mk(69) } { return a.id; } return 0; }",
+            "dR68\nz=68\n",
+        ),
+    ] {
+        let src = format!("{H}{cell}\nfn main() {{ let z: i64 = c(); println(f\"z={{z}}\"); }}\n");
+        assert_eq!(run(&src), want, "{label}");
     }
 }
 

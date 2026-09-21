@@ -11,6 +11,7 @@
 
 use crate::ast::*;
 use crate::token::Span;
+use std::collections::HashSet;
 
 use super::exec::slice_pattern_view;
 use super::value::{EnumData, Value};
@@ -319,6 +320,40 @@ impl<'a> super::Interpreter<'a> {
                                 self.pending_arm_drop_bindings.push(n);
                             }
                         }
+                        // B-2026-09-16-18 — the loop above stashes what the arm
+                        // BINDS, which is the whole of this branch's ownership
+                        // story only when the pattern binds every field. A
+                        // fresh temp has no binding of its own, so every field
+                        // the arm leaves behind is owned by NOBODY: `S3 { a, .. }`
+                        // ran `dR44` alone and `S3 { .. }` ran nothing, leaking
+                        // one buffer per unbound field on every surface.
+                        //
+                        // Stash the temp plus the field names the bindings have
+                        // already taken; `eval_match` walks the remainder after
+                        // those bindings fire. The field names come from the
+                        // PATTERN rather than from the binding list, because a
+                        // rebinding pattern (`S3 { a: q, .. }`) takes field `a`
+                        // under the name `q` and masking by binding name would
+                        // walk `a` a second time.
+                        //
+                        // THE MASK IS WHOLE-MATCH, NOT TAKEN-ARM, and that is
+                        // the same split this function's opening comment
+                        // records for the user-enum retraction: codegen's is a
+                        // compile-time removal that CANNOT be path-sensitive.
+                        // The husk's walker is registered once, at
+                        // materialization, and fired at the merge block after
+                        // the phi — one function for every arm — so codegen
+                        // masks the UNION of what the arms bind and has no
+                        // place to put a per-arm answer. A taken-arm mask here
+                        // would be more precise and would diverge from it on
+                        // `match S3 { .. } { S3 { a, .. } if g => .. S3 { b, .. } => .. }`,
+                        // where the arms bind different fields. Over-masking
+                        // loses a body, which is the same safe direction
+                        // codegen takes; under-masking would run one twice.
+                        self.pending_arm_unbound_struct = Some((
+                            scrutinee.clone(),
+                            Self::struct_patterns_bound_field_names(arms),
+                        ));
                     } else if matches!(scrutinee, Value::Struct { .. }) {
                         // B-2026-09-06-35 — the NAMED struct scrutinee the
                         // paragraph above declines, now that there IS a
@@ -540,6 +575,15 @@ impl<'a> super::Interpreter<'a> {
                             self.run_enum_payload_user_drops_value(&v);
                         }
                     }
+                }
+                // B-2026-09-16-18 — the fields a FRESH-TEMP struct scrutinee
+                // still owns, walked here because nothing else does. This runs
+                // AFTER the loop above and after a block body's own cleanup
+                // has popped, so a bound field's body has already fired from
+                // its binding and these are the remainder, in reverse
+                // declaration order. Empty for every scrutinee with an owner.
+                if let Some((val, taken)) = self.pending_arm_unbound_struct.take() {
+                    self.run_unbound_struct_field_drops(&val, &taken);
                 }
                 self.env.pop_scope();
                 return result;
@@ -1690,6 +1734,90 @@ impl<'a> super::Interpreter<'a> {
                 .unwrap_or(false),
             _ => false,
         }
+    }
+
+    /// B-2026-09-16-18 — run the `Drop` bodies of the fields a fresh-temp
+    /// struct scrutinee still owns, in reverse declaration order.
+    ///
+    /// NOT `drop_user_drop_fields_of_value` with a mask: that walker's
+    /// `pending_payload_masked_fields` channel is consulted on its ENUM-payload
+    /// arm only (`eval_stmt.rs`, the `[field]` path test), so a masked STRUCT
+    /// field is walked anyway. Measured on the way in — `S3 { a, .. }` printed
+    /// `dR44 dR45 dR44` and `S3 { a, b }` printed both bodies twice, the bound
+    /// field's binding and this walk each running it once. Widening that
+    /// channel to the struct arm would change every other caller of it, so this
+    /// walks the remainder directly instead.
+    ///
+    /// A struct with its OWN `impl Drop` is skipped entirely: its body runs the
+    /// whole field walk after itself, and that path is already correct for a
+    /// fresh temp (`materialize_freshtemp_struct_scrutinee`'s
+    /// `has_user_drop` leg on the compiled side). Walking here as well printed
+    /// `dR52 dR51 dS dR52 dR51` against a due `dS dR52 dR51`.
+    ///
+    /// Reverse declaration order is design.md § Part 8's rule for the fields a
+    /// value still owns; the fields the arm took have already died with their
+    /// bindings, which is why this runs after that drain rather than before it.
+    fn run_unbound_struct_field_drops(&mut self, val: &Value, taken: &HashSet<String>) {
+        let Value::Struct { name, fields } = val else {
+            return;
+        };
+        if self.program.drop_method_keys.contains_key(name) {
+            return;
+        }
+        let Some(def) = self.find_struct_def(name) else {
+            return;
+        };
+        let order: Vec<String> = def.fields.iter().map(|f| f.name.clone()).collect();
+        for fname in order.into_iter().rev() {
+            if taken.contains(&fname) {
+                continue;
+            }
+            if let Some(v) = fields.get(&fname).cloned() {
+                self.run_discarded_value_user_drops(v);
+            }
+        }
+    }
+
+    /// B-2026-09-16-18 — the FIELD names a struct pattern takes out of the
+    /// matched value, for [`Self::pending_arm_unbound_struct`]'s mask.
+    ///
+    /// Keyed on the field name the pattern names, NOT on the binding it
+    /// introduces: `S3 { a: q, .. }` takes field `a` under the name `q`, and a
+    /// mask built from binding names would leave `a` in the unbound set and
+    /// walk it a second time beside `q`'s own drop. A field written `..` or
+    /// omitted is not in the set, which is the point.
+    ///
+    /// A nested field pattern (`S3 { a: R { .. }, .. }`) still counts the
+    /// OUTER field as taken: whatever the inner pattern does with it, the
+    /// outer field left the temp.
+    /// The UNION of [`Self::struct_pattern_bound_field_names`] over every arm
+    /// of a match — the mask codegen can express (see the call site).
+    fn struct_patterns_bound_field_names(arms: &[MatchArm]) -> HashSet<String> {
+        let mut out = HashSet::new();
+        for arm in arms {
+            out.extend(Self::struct_pattern_bound_field_names(&arm.pattern));
+        }
+        out
+    }
+
+    fn struct_pattern_bound_field_names(pattern: &Pattern) -> HashSet<String> {
+        let mut out = HashSet::new();
+        if let PatternKind::Struct { fields, .. } = &pattern.kind {
+            for f in fields {
+                // A field matched against a bare wildcard (`S3 { a: _, .. }`)
+                // binds nothing and leaves the value with the temp, so it is
+                // NOT taken — the same distinction the tuple-element narrowing
+                // draws one construct over (B-2026-09-19-44).
+                if matches!(
+                    f.pattern.as_ref().map(|p| &p.kind),
+                    Some(PatternKind::Wildcard)
+                ) {
+                    continue;
+                }
+                out.insert(f.name.clone());
+            }
+        }
+        out
     }
 
     pub(super) fn struct_scrutinee_has_no_other_owner(place: &Expr) -> bool {

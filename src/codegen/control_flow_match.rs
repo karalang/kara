@@ -269,7 +269,7 @@ impl<'ctx> super::Codegen<'ctx> {
         // widening of either resolver.
         let freshtemp_struct = if scrut_ref_ptr.is_none() && freshtemp_enum.is_none() {
             let pats: Vec<&Pattern> = arms.iter().map(|a| &a.pattern).collect();
-            self.materialize_freshtemp_struct_scrutinee(scrutinee, &pats, scrut)
+            self.materialize_freshtemp_struct_scrutinee(scrutinee, &pats, scrut, true)
         } else {
             None
         };
@@ -18034,8 +18034,31 @@ impl<'ctx> super::Codegen<'ctx> {
         scrutinee: &Expr,
         patterns: &[&Pattern],
         val: BasicValueEnum<'ctx>,
+        // B-2026-09-16-18 — is the caller the `match` spelling? An
+        // INTERPRETER-PARITY gate, not a codegen limitation. The husk-ownership
+        // this row adds lives in the interpreter's `eval_match` only; `if let`,
+        // `while let` and `let ... else` are separate implementations there
+        // (`eval_expr`'s `ExprKind::IfLet`, `eval_stmt`'s `StmtKind::LetElse`)
+        // and still lose the unbound fields' bodies. Arming the compiled side
+        // alone would convert an AGREED gap — all four surfaces wrong the same
+        // way, which is what this row reports — into a run-vs-build
+        // DIVERGENCE. Measured with it armed everywhere:
+        // `if let S3 { a, .. } = S3 { a: mk(72), b: mk(73) } { … }` printed
+        // `dR72` under `--interp` against `dR72 dR73` on the other three, and
+        // the `let ... else` twin `dR74` against `dR75 dR74`. Filed as its own
+        // row; when the interpreter's three spellings gain the same ownership,
+        // this parameter comes out.
+        match_spelling: bool,
     ) -> Option<(PointerValue<'ctx>, String)> {
-        if !self.expr_yields_fresh_owned_temp(scrutinee) {
+        // B-2026-09-16-18 GAP A — a struct LITERAL scrutinee is a fresh owned
+        // temp too, and `expr_yields_fresh_owned_temp` matches only `Call` /
+        // `MethodCall`, so `match S3 { a: mk(44), b: mk(45) } { … }` never
+        // reached this materializer at all. Widened HERE rather than in the
+        // shared predicate: that one is read by a dozen callers with their own
+        // reasons for a narrow answer, and a literal scrutinee is a question
+        // about THIS position.
+        let is_fresh_struct_literal = matches!(&scrutinee.kind, ExprKind::StructLiteral { .. });
+        if !is_fresh_struct_literal && !self.expr_yields_fresh_owned_temp(scrutinee) {
             return None;
         }
         if self.scrutinee_is_borrow_call(scrutinee) {
@@ -18059,7 +18082,21 @@ impl<'ctx> super::Codegen<'ctx> {
             .map(|p| p.drop_method_keys.contains_key(&struct_name))
             .unwrap_or(false);
         if !has_user_drop {
-            return None;
+            if !match_spelling {
+                return None;
+            }
+            // B-2026-09-16-18 GAP B — a struct that merely CONTAINS
+            // `Drop`-bearing fields used to leave here, and the husk of a fresh
+            // temp then had no owner at all: every field the arm did not bind
+            // lost its body AND leaked its buffer, on all four surfaces alike.
+            // Handled on its own channel below, because the wrapper this
+            // function registers for an own-`impl Drop` type does not exist for
+            // one of these, and the masking question is the opposite way round.
+            return self.materialize_freshtemp_struct_scrutinee_field_bodies(
+                &struct_name,
+                patterns,
+                sv,
+            );
         }
         // AN ARM THAT MOVES A FIELD OUT IS DECLINED, and this is the whole
         // reason the fix stops short of the row's own headline repro.
@@ -18099,6 +18136,111 @@ impl<'ctx> super::Codegen<'ctx> {
         let _ = self.builder.build_store(alloca, sv);
         self.track_user_drop_var(&struct_name, "__freshtemp_struct_scrut", alloca);
         Some((alloca, struct_name))
+    }
+
+    /// B-2026-09-16-18 — the `!has_user_drop` half of
+    /// [`Self::materialize_freshtemp_struct_scrutinee`]: a fresh-temp struct
+    /// scrutinee whose type declares no `impl Drop` of its own but whose FIELDS
+    /// carry bodies.
+    ///
+    /// The husk of such a temp was owned by nobody. `match S3 { a: mk(44), b:
+    /// mk(45) } { S3 { a, .. } => .. }` ran `dR44` alone and `S3 { .. }` ran
+    /// NOTHING, on `--interp` / jit / aot / `KARAC_AUTO_PAR=0` alike, and
+    /// valgrind at `-O0` reported one `name` buffer leaked per unbound field.
+    /// The NAMED spelling (`let s = S3 { .. }; match s { .. }`) is correct on
+    /// all four, which is the contrast that localizes it: a named local has a
+    /// binding whose own walk owns the husk, and a fresh temp has no binding.
+    ///
+    /// THE MASK RUNS THE OPPOSITE WAY FROM THE OWN-`Drop` PATH above, which is
+    /// why this is a separate channel rather than a widened gate. There, the
+    /// wrapper is `karac_drop_<S>` — body, fields and memory as ONE action — so
+    /// an arm that binds a field would have that field's body run a second time
+    /// and the whole shape is declined (B-2026-08-31-31). Here there is no
+    /// wrapper at all, so the walk is minted from the pattern: the BOUND fields
+    /// are masked OUT (their bodies belong to the arm's bindings) and the
+    /// unbound ones are exactly what is left over.
+    ///
+    /// Two registrations, because bodies and memory are separate channels for a
+    /// type with no own wrapper:
+    ///
+    /// * the masked `StructFieldBodies` walk, which `fire_freshtemp_scrutinee_
+    ///   body_at_exit` takes and fires at the MATCH's exit — the placement the
+    ///   interpreter uses;
+    /// * `track_struct_var`'s `__karac_drop_struct_<S>`, for the heap under the
+    ///   unbound fields. The caller's per-arm
+    ///   `suppress_destructured_struct_pattern_cleanup_at` has already zeroed
+    ///   every BOUND field's cap in this slot, so that walk cannot reach a
+    ///   buffer an arm binding owns.
+    ///
+    /// Declines a non-struct pattern (a bare `s =>` catch-all binds the WHOLE
+    /// value, so the binding owns the husk and there is no orphan), and a
+    /// struct none of whose UNBOUND fields runs a body — nothing to own.
+    fn materialize_freshtemp_struct_scrutinee_field_bodies(
+        &mut self,
+        struct_name: &str,
+        patterns: &[&Pattern],
+        sv: inkwell::values::StructValue<'ctx>,
+    ) -> Option<(PointerValue<'ctx>, String)> {
+        let field_names = self.type_decls.struct_field_names.get(struct_name)?.clone();
+        let field_tys = self
+            .type_decls
+            .struct_field_type_names
+            .get(struct_name)?
+            .clone();
+        // Every arm must be a struct pattern; anything else binds the whole
+        // value (or is a shape this cannot reason about) and is left alone.
+        let mut bound: std::collections::BTreeSet<usize> = Default::default();
+        for pat in patterns {
+            let PatternKind::Struct { fields, .. } = &pat.kind else {
+                return None;
+            };
+            for f in fields {
+                let binds = match &f.pattern {
+                    Some(sub) => Self::pattern_binds_anything(sub),
+                    None => true,
+                };
+                if !binds {
+                    continue;
+                }
+                if let Some(i) = field_names.iter().position(|n| n == &f.name) {
+                    bound.insert(i);
+                }
+            }
+        }
+        // The union across arms, so a field bound by ANY arm is masked for all
+        // of them. Over-masking loses a body; under-masking runs one twice, and
+        // for a `drop()` that closes a handle the second is a double close. The
+        // registration is per-match and cannot be per-arm, so it takes the safe
+        // direction — the codebase's own bar, stated the other way round.
+        let has_unbound_body = field_names.iter().enumerate().any(|(i, _)| {
+            !bound.contains(&i)
+                && field_tys
+                    .get(i)
+                    .and_then(|o| o.as_deref())
+                    .is_some_and(|t| self.type_runs_user_drop(t, &mut Vec::new()))
+        });
+        if !has_unbound_body {
+            return None;
+        }
+        let st = *self.type_decls.struct_types.get(struct_name)?;
+        let fn_val = self.current_fn?;
+        let alloca = self.create_entry_alloca(fn_val, "__freshtemp_struct_scrut", st.into());
+        let _ = self.builder.build_store(alloca, sv);
+        let skip = super::synth_drop::FieldSkipTree {
+            here: bound,
+            ..Default::default()
+        };
+        let bodies =
+            self.emit_user_drop_field_bodies_fn_skipping(struct_name, &Default::default(), &skip)?;
+        self.track_user_drop_var_with_fn(
+            struct_name,
+            "__freshtemp_struct_scrut",
+            alloca,
+            bodies,
+            super::state::UserDropKind::StructFieldBodies,
+        );
+        self.track_struct_var(struct_name, alloca);
+        Some((alloca, struct_name.to_string()))
     }
 
     /// The user-struct type name a fresh-temp scrutinee denotes, for
