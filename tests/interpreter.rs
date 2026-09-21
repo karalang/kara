@@ -63805,9 +63805,13 @@ fn fresh_temp_struct_scrutinee_arm_binding_runs_its_body() {
 /// and a later widening must not make one the odd one out. They did agree, and
 /// they agreed on LOSING the husk's bodies and leaking the buffers under them:
 /// the pin was watching for a divergence while the defect was an agreement. So
-/// these cells pin VALUES, and `iflet-agreed-gap` pins an agreement that is
-/// still wrong on purpose (see the twin's doc for why arming it here alone
-/// would be worse).
+/// these cells pin VALUES.
+///
+/// `iflet-husk-both-bodies` WAS `iflet-agreed-gap`, PINNED AT `dR68\nz=68\n`,
+/// an agreement that was still wrong on purpose because arming the compiled
+/// side alone would have made it a divergence. B-2026-09-21-1 gave the
+/// interpreter's other three spellings the same husk ownership and removed the
+/// gate, so both sides moved together and the cell now pins both bodies.
 ///
 /// `guarded-two-arm-agreed-gap` PINS A SECOND ONE, and it is the reason the
 /// interpreter masks WHOLE-MATCH rather than taken-arm. The husk's walker is
@@ -63871,12 +63875,119 @@ fn fresh_temp_struct_scrutinee_unbound_fields_run_their_drop_bodies() {
             "dR81\nz=81\n",
         ),
         (
-            "iflet-agreed-gap",
+            "iflet-husk-both-bodies",
             "fn c() -> i64 { if let S3 { a, .. } = S3 { a: mk(68), b: mk(69) } { return a.id; } return 0; }",
-            "dR68\nz=68\n",
+            "dR68\ndR69\nz=68\n",
         ),
     ] {
         let src = format!("{H}{cell}\nfn main() {{ let z: i64 = c(); println(f\"z={{z}}\"); }}\n");
+        assert_eq!(run(&src), want, "{label}");
+    }
+}
+
+/// B-2026-09-21-1 — a fresh-temp struct scrutinee's UNBOUND fields run their
+/// `Drop` bodies under `if let` and `let ... else` too, not only under `match`.
+///
+/// B-2026-09-16-18 gave the husk an owner in `eval_match` alone and gated the
+/// compiled side to the `match` spelling, deliberately: arming codegen by itself
+/// would have turned a gap all four surfaces shared into a run-vs-build
+/// DIVERGENCE, which is strictly worse than the gap. The interpreter's other
+/// three spellings now carry the same ownership, the gate is gone, and every
+/// surface agrees.
+///
+/// THE TWO CONSTRUCTS DISAGREE ABOUT SEQUENCE AND BOTH ARE CORRECT, which is
+/// the part worth reading before filing an ordering bug against this fixture.
+/// `iflet-one-bound` runs `dR72 dR73` (binding, then husk) and
+/// `letelse-one-bound` runs `dR75 dR74` (husk, then binding). One rule produces
+/// both: design.md ties a destructor to its binding's LIVE-RANGE END, and scopes
+/// a STATEMENT-POSITION temporary to its `;`. A `let ... else` binding escapes
+/// into the enclosing block while the scrutinee temporary dies at the `;`, so
+/// the husk goes first; an `if let` binding dies at the end of the block, inside
+/// the construct, so it goes first and the husk follows. `match-control` pins
+/// the third case and must not move at all.
+///
+/// `iflet-rebind` is the cell that catches a mask built from BINDING names
+/// rather than FIELD names: `S3 { a: q, .. }` takes field `a` under the name
+/// `q`, so a binding-keyed mask leaves `a` in the unbound set and walks it a
+/// second time beside `q`'s own drop — `dR5 dR5 dR6` instead of `dR5 dR6`.
+///
+/// The two `*-named-scrutinee-control` cells pin the other direction: a NAMED
+/// scrutinee has an owner already, so the husk channel must stay out of it or
+/// each remaining field's body runs twice.
+#[test]
+fn iflet_letelse_fresh_temp_husk_fields_run_their_drop_bodies() {
+    const H: &str = "struct R { id: i64, name: String }\n\
+         impl Drop for R { fn drop(mut ref self) { println(f\"dR{self.id}\") } }\n\
+         fn mk(i: i64) -> R { return R { id: i, name: f\"n{i}\" }; }\n\
+         struct S3 { a: R, b: R }\n\
+         struct S4 { a: R, b: R, c: R }\n\
+         struct Inner { r: R }\n\
+         struct Outer { i: Inner, b: R }\n";
+    for (label, cell, want) in [
+        (
+            "iflet-one-bound",
+            "fn c() -> i64 { if let S3 { a, .. } = S3 { a: mk(72), b: mk(73) } { return a.id; } return 0; }",
+            "dR72\ndR73\nz=72\n",
+        ),
+        (
+            "iflet-none-bound",
+            "fn c() -> i64 { if let S3 { .. } = S3 { a: mk(1), b: mk(2) } { return 9; } return 0; }",
+            "dR2\ndR1\nz=9\n",
+        ),
+        (
+            "iflet-all-bound",
+            "fn c() -> i64 { if let S3 { a, b } = S3 { a: mk(3), b: mk(4) } { return a.id + b.id; } return 0; }",
+            "dR4\ndR3\nz=7\n",
+        ),
+        (
+            "iflet-rebind",
+            "fn c() -> i64 { if let S3 { a: q, .. } = S3 { a: mk(5), b: mk(6) } { return q.id; } return 0; }",
+            "dR5\ndR6\nz=5\n",
+        ),
+        (
+            "iflet-three-field-one-bound",
+            "fn c() -> i64 { if let S4 { b, .. } = S4 { a: mk(7), b: mk(8), c: mk(9) } { return b.id; } return 0; }",
+            "dR8\ndR9\ndR7\nz=8\n",
+        ),
+        (
+            "iflet-nested",
+            "fn c() -> i64 { if let Outer { i: Inner { r }, .. } = Outer { i: Inner { r: mk(10) }, b: mk(11) } { return r.id; } return 0; }",
+            "dR10\ndR11\nz=10\n",
+        ),
+        (
+            "letelse-one-bound",
+            "fn c() -> i64 { let S3 { a, .. } = S3 { a: mk(74), b: mk(75) } else { return 0; }; return a.id; }",
+            "dR75\ndR74\nz=74\n",
+        ),
+        (
+            "letelse-all-bound",
+            "fn c() -> i64 { let S3 { a, b } = S3 { a: mk(14), b: mk(15) } else { return 0; }; return a.id + b.id; }",
+            "dR15\ndR14\nz=29\n",
+        ),
+        (
+            "letelse-three-field-one-bound",
+            "fn c() -> i64 { let S4 { b, .. } = S4 { a: mk(16), b: mk(17), c: mk(18) } else { return 0; }; return b.id; }",
+            "dR18\ndR16\ndR17\nz=17\n",
+        ),
+        (
+            "match-control",
+            "fn c() -> i64 { match S3 { a: mk(70), b: mk(71) } { S3 { a, .. } => { return a.id; } } }",
+            "dR70\ndR71\nz=70\n",
+        ),
+        (
+            "iflet-named-scrutinee-control",
+            "fn c() -> i64 { let s: S3 = S3 { a: mk(40), b: mk(41) }; if let S3 { a, .. } = s { return a.id; } return 0; }",
+            "dR40\ndR41\nz=40\n",
+        ),
+        (
+            "letelse-named-scrutinee-control",
+            "fn c() -> i64 { let s: S3 = S3 { a: mk(42), b: mk(43) }; let S3 { a, .. } = s else { return 0; }; return a.id; }",
+            "dR43\ndR42\nz=42\n",
+        ),
+    ] {
+        let src = format!(
+            "{H}{cell}\nfn main() {{ let z: i64 = c(); println(f\"z={{z}}\"); }}\n"
+        );
         assert_eq!(run(&src), want, "{label}");
     }
 }
@@ -63930,7 +64041,7 @@ fn while_let_struct_scrutinee_binding_runs_its_drop_body() {
         (
             "whilelet-one-bound",
             "fn c() -> i64 { let mut s: i64 = 0; while let S3 { a, .. } = S3 { a: mk(76), b: mk(77) } { s = a.id; break; } return s; }",
-            "dR76\nz=76\n",
+            "dR76\ndR77\nz=76\n",
         ),
         (
             "whilelet-all-bound",
@@ -63938,9 +64049,9 @@ fn while_let_struct_scrutinee_binding_runs_its_drop_body() {
             "dR79\ndR78\nz=157\n",
         ),
         (
-            "whilelet-none-bound-agreed-gap",
+            "whilelet-none-bound-husk",
             "fn c() -> i64 { let mut s: i64 = 0; while let S3 { .. } = S3 { a: mk(82), b: mk(83) } { s = 3; break; } return s; }",
-            "z=3\n",
+            "dR83\ndR82\nz=3\n",
         ),
         (
             "whilelet-named-scrutinee",

@@ -9532,7 +9532,43 @@ impl<'a> super::Interpreter<'a> {
                             }
                         }
                     }
+                    // B-2026-09-21-1 — the fields a FRESH-TEMP struct
+                    // scrutinee still owns. The registration above masks the
+                    // fields a NAMED source gave away; a fresh temp has no
+                    // source to mask, so every field the pattern leaves behind
+                    // was owned by nobody and its body ran on no surface
+                    // (`let S3 { a, .. } = S3 { a: mk(74), b: mk(75) } else
+                    // { … };` ran `dR74` alone, leaking `b`'s buffer, where the
+                    // `match` spelling of the same program runs both).
+                    //
+                    // PLACEMENT IS THE WHOLE DIFFERENCE FROM THE `match` AND
+                    // `if let` LEGS, and it is what design.md's ordering rule
+                    // asks for rather than a concession. Those two drain after
+                    // the block body because their bindings die at its end;
+                    // here the binding ESCAPES into the enclosing block, while
+                    // the scrutinee is a STATEMENT-POSITION temporary whose
+                    // live range ends at the `;` (design.md § "Drop ordering
+                    // within a branch", the tail-expression-temporary rule:
+                    // only a TAIL expression's temporary is scoped to the
+                    // block). So the husk fires HERE, before the binding, and
+                    // the construct's sequence is husk-then-binding where
+                    // `match`'s is binding-then-husk. Both fall out of the one
+                    // live-range rule; neither is a divergence to repair.
+                    //
+                    // Match edge only: the `else` edge binds nothing and keeps
+                    // every body it owes.
+                    let husk = if matches!(val, Value::Struct { .. })
+                        && Self::struct_scrutinee_has_no_other_owner(value)
+                        && self.scrutinee_expr_is_consuming(value)
+                    {
+                        Some((val.clone(), Self::struct_pattern_bound_field_names(pattern)))
+                    } else {
+                        None
+                    };
                     self.bind_pattern(pattern, val);
+                    if let Some((sv, taken)) = husk {
+                        self.run_unbound_struct_field_drops(&sv, &taken);
+                    }
                     if let (Some(tn), Some(dv)) = (scrut_drop, drop_val) {
                         self.run_user_drop_body_on_value(&tn, dv);
                     }

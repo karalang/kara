@@ -168,7 +168,7 @@ impl<'ctx> super::Codegen<'ctx> {
         // what `fire_due_user_drops`' type-keyed clause admits to NLL /
         // statement-end placement, which is where the interpreter puts it.
         let freshtemp_struct = if freshtemp_enum.is_none() {
-            self.materialize_freshtemp_struct_scrutinee(value, &[pattern], val, false)
+            self.materialize_freshtemp_struct_scrutinee(value, &[pattern], val)
         } else {
             None
         };
@@ -1084,7 +1084,7 @@ impl<'ctx> super::Codegen<'ctx> {
         // what `fire_due_user_drops`' type-keyed clause admits to NLL /
         // statement-end placement, which is where the interpreter puts it.
         let freshtemp_struct = if freshtemp_enum.is_none() {
-            self.materialize_freshtemp_struct_scrutinee(value, &[pattern], val, false)
+            self.materialize_freshtemp_struct_scrutinee(value, &[pattern], val)
         } else {
             None
         };
@@ -2180,7 +2180,7 @@ impl<'ctx> super::Codegen<'ctx> {
         // what `fire_due_user_drops`' type-keyed clause admits to NLL /
         // statement-end placement, which is where the interpreter puts it.
         let freshtemp_struct = if freshtemp_enum.is_none() {
-            self.materialize_freshtemp_struct_scrutinee(value, &[pattern], val, false)
+            self.materialize_freshtemp_struct_scrutinee(value, &[pattern], val)
         } else {
             None
         };

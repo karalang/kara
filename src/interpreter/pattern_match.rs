@@ -1757,7 +1757,7 @@ impl<'a> super::Interpreter<'a> {
     /// Reverse declaration order is design.md § Part 8's rule for the fields a
     /// value still owns; the fields the arm took have already died with their
     /// bindings, which is why this runs after that drain rather than before it.
-    fn run_unbound_struct_field_drops(&mut self, val: &Value, taken: &HashSet<String>) {
+    pub(super) fn run_unbound_struct_field_drops(&mut self, val: &Value, taken: &HashSet<String>) {
         let Value::Struct { name, fields } = val else {
             return;
         };
@@ -1800,7 +1800,7 @@ impl<'a> super::Interpreter<'a> {
         out
     }
 
-    fn struct_pattern_bound_field_names(pattern: &Pattern) -> HashSet<String> {
+    pub(super) fn struct_pattern_bound_field_names(pattern: &Pattern) -> HashSet<String> {
         let mut out = HashSet::new();
         if let PatternKind::Struct { fields, .. } = &pattern.kind {
             for f in fields {

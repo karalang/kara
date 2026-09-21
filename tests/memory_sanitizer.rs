@@ -102041,6 +102041,66 @@ fn main() {
         );
     }
 
+    /// B-2026-09-21-1 — the `if let` / `let ... else` / `while let` twin of
+    /// `asan_freshtemp_struct_scrutinee_unbound_fields_are_freed` below.
+    ///
+    /// That fixture covers the `match` spelling, which B-2026-09-16-18 fixed.
+    /// The other three kept losing the husk's field bodies AND leaking the
+    /// buffers under them — valgrind at `-O0` reported one 3-byte `name`
+    /// buffer definitely lost per construct — because the compiled channel was
+    /// gated to `match` on purpose: arming it alone would have converted a gap
+    /// all four surfaces shared into a run-vs-build divergence. Both backends
+    /// moved together in this row, so the buffers are freed here too.
+    ///
+    /// `le_one` is the cell that looks wrong and is not: `let ... else` prints
+    /// `dR49 dR48` (husk, then binding) where `if let` prints `dR44 dR45`
+    /// (binding, then husk). One rule gives both — design.md ties a destructor
+    /// to its binding's live-range end and scopes a statement-position
+    /// temporary to its `;`, and the `let ... else` binding escapes the
+    /// statement while the `if let` binding does not.
+    ///
+    /// `wl_none` runs three times so a husk leaked ONCE PER ITERATION shows as
+    /// three blocks rather than one; the stash is `take()`n at each drain,
+    /// which is what keeps one iteration's husk from reaching the next.
+    #[test]
+    fn asan_iflet_letelse_whilelet_freshtemp_husk_fields_are_freed() {
+        assert_clean_asan_run_min_allocs(
+            r#"
+struct R { id: i64, name: String }
+impl Drop for R { fn drop(mut ref self) { println(f"dR{self.id}") } }
+fn mk(i: i64) -> R { return R { id: i, name: f"name-{i}-padding" }; }
+struct S3 { a: R, b: R }
+fn mks() -> S3 { return S3 { a: mk(61), b: mk(62) }; }
+
+fn il_one() -> i64 { if let S3 { a, .. } = S3 { a: mk(44), b: mk(45) } { return a.id; } return 0; }
+fn il_call() -> i64 { if let S3 { a, .. } = mks() { return a.id; } return 0; }
+fn il_none() -> i64 { if let S3 { .. } = S3 { a: mk(46), b: mk(47) } { return 1; } return 0; }
+fn le_one() -> i64 { let S3 { a, .. } = S3 { a: mk(48), b: mk(49) } else { return 0; }; return a.id; }
+fn wl_none() -> i64 { let mut s: i64 = 0; while let S3 { .. } = S3 { a: mk(50), b: mk(51) } { s = 1; break; } return s; }
+
+fn main() {
+    println(f"I:{il_one()}");
+    println(f"C:{il_call()}");
+    println(f"N:{il_none()}");
+    println(f"L:{le_one()}");
+    let mut i = 0;
+    while i < 3 {
+        println(f"W:{wl_none()}");
+        i = i + 1;
+    }
+    println("done");
+}
+"#,
+            &[
+                "dR44", "dR45", "I:44", "dR61", "dR62", "C:61", "dR47", "dR46", "N:1", "dR49",
+                "dR48", "L:48", "dR51", "dR50", "W:1", "dR51", "dR50", "W:1", "dR51", "dR50",
+                "W:1", "done",
+            ],
+            "asan_iflet_letelse_whilelet_freshtemp_husk_fields_are_freed",
+            12,
+        );
+    }
+
     /// B-2026-09-16-18 — the MEMORY half of a fresh-temp struct scrutinee's
     /// unbound fields, which the body-count fixtures cannot see.
     ///

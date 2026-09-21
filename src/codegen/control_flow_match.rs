@@ -269,7 +269,7 @@ impl<'ctx> super::Codegen<'ctx> {
         // widening of either resolver.
         let freshtemp_struct = if scrut_ref_ptr.is_none() && freshtemp_enum.is_none() {
             let pats: Vec<&Pattern> = arms.iter().map(|a| &a.pattern).collect();
-            self.materialize_freshtemp_struct_scrutinee(scrutinee, &pats, scrut, true)
+            self.materialize_freshtemp_struct_scrutinee(scrutinee, &pats, scrut)
         } else {
             None
         };
@@ -18034,21 +18034,6 @@ impl<'ctx> super::Codegen<'ctx> {
         scrutinee: &Expr,
         patterns: &[&Pattern],
         val: BasicValueEnum<'ctx>,
-        // B-2026-09-16-18 — is the caller the `match` spelling? An
-        // INTERPRETER-PARITY gate, not a codegen limitation. The husk-ownership
-        // this row adds lives in the interpreter's `eval_match` only; `if let`,
-        // `while let` and `let ... else` are separate implementations there
-        // (`eval_expr`'s `ExprKind::IfLet`, `eval_stmt`'s `StmtKind::LetElse`)
-        // and still lose the unbound fields' bodies. Arming the compiled side
-        // alone would convert an AGREED gap — all four surfaces wrong the same
-        // way, which is what this row reports — into a run-vs-build
-        // DIVERGENCE. Measured with it armed everywhere:
-        // `if let S3 { a, .. } = S3 { a: mk(72), b: mk(73) } { … }` printed
-        // `dR72` under `--interp` against `dR72 dR73` on the other three, and
-        // the `let ... else` twin `dR74` against `dR75 dR74`. Filed as its own
-        // row; when the interpreter's three spellings gain the same ownership,
-        // this parameter comes out.
-        match_spelling: bool,
     ) -> Option<(PointerValue<'ctx>, String)> {
         // B-2026-09-16-18 GAP A — a struct LITERAL scrutinee is a fresh owned
         // temp too, and `expr_yields_fresh_owned_temp` matches only `Call` /
@@ -18082,9 +18067,17 @@ impl<'ctx> super::Codegen<'ctx> {
             .map(|p| p.drop_method_keys.contains_key(&struct_name))
             .unwrap_or(false);
         if !has_user_drop {
-            if !match_spelling {
-                return None;
-            }
+            // B-2026-09-21-1 — the `match_spelling` gate that stood here came
+            // out with this row. It was an INTERPRETER-PARITY gate, never a
+            // codegen limitation: B-2026-09-16-18 gave the husk an owner in
+            // `eval_match` alone, so arming the compiled side for `if let`,
+            // `while let` and `let ... else` would have converted an AGREED
+            // gap into a run-vs-build DIVERGENCE. The interpreter's other
+            // spellings now carry the same ownership (`eval_expr`'s
+            // `ExprKind::IfLet`, `eval_stmt`'s `StmtKind::LetElse`), so all
+            // four surfaces move together and the gate has nothing left to
+            // hold back.
+            //
             // B-2026-09-16-18 GAP B — a struct that merely CONTAINS
             // `Drop`-bearing fields used to leave here, and the husk of a fresh
             // temp then had no owner at all: every field the arm did not bind

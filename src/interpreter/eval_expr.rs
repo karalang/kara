@@ -1294,6 +1294,32 @@ impl<'a> super::Interpreter<'a> {
                                 None => Vec::new(),
                             }
                         } else if matches!(val, Value::Struct { .. }) {
+                            // B-2026-09-21-1 — the fields this FRESH TEMP still
+                            // owns, stashed for the walk after the then-block.
+                            // The loop above stashes what the pattern BINDS,
+                            // which is the whole ownership story only when the
+                            // pattern binds every field; a fresh temp has no
+                            // binding of its own, so every field the pattern
+                            // leaves behind was owned by NOBODY and its body
+                            // ran on no surface (`if let S3 { a, .. } = S3 {
+                            // a: mk(72), b: mk(73) }` ran `dR72` alone, leaking
+                            // `b`'s buffer, while the `match` spelling of the
+                            // same program runs `dR72 dR73`).
+                            //
+                            // Keyed on the FIELD names the pattern takes, not
+                            // on the bindings it introduces: `S3 { a: q, .. }`
+                            // takes field `a` under the name `q`, and a mask
+                            // built from binding names would leave `a` in the
+                            // unbound set and walk it a second time beside
+                            // `q`'s own drop.
+                            //
+                            // Set here rather than after `bind_pattern` because
+                            // `val` is moved into it; the drain is after the
+                            // then-block, where `eval_match` puts its own.
+                            self.pending_arm_unbound_struct = Some((
+                                val.clone(),
+                                Self::struct_pattern_bound_field_names(pattern),
+                            ));
                             // Unfiltered: the loop below decides which of these
                             // actually owe a body, and it runs AFTER
                             // `bind_pattern`. Filtering here consults `env`
@@ -1387,6 +1413,16 @@ impl<'a> super::Interpreter<'a> {
                         }
                     }
                     let result = self.eval_block_inner(then_block);
+                    // B-2026-09-21-1 — the fields a FRESH-TEMP struct scrutinee
+                    // still owns, walked here because nothing else does. Same
+                    // placement as `eval_match`'s: AFTER the block body, so a
+                    // bound field's body has already fired from its binding and
+                    // these are the remainder, in reverse declaration order.
+                    // Empty for every scrutinee with an owner, and empty on the
+                    // miss edge, which binds nothing and keeps the whole walk.
+                    if let Some((sv, taken)) = self.pending_arm_unbound_struct.take() {
+                        self.run_unbound_struct_field_drops(&sv, &taken);
+                    }
                     self.env.pop_scope();
                     match result {
                         Ok(v) => v,
@@ -1672,15 +1708,13 @@ impl<'a> super::Interpreter<'a> {
                     // this: one spelling printing differently from the others on
                     // an identical program.
                     //
-                    // WHAT THIS DELIBERATELY DOES NOT DO: stash the HUSK. A fresh
-                    // temp's UNBOUND fields are owned by nobody here too — `b`
-                    // above still runs no body and still leaks its buffer — but
-                    // that gap is AGREED across all four surfaces and is
-                    // B-2026-09-21-1's to close on both backends at once. Adding
-                    // `pending_arm_unbound_struct` here would fix the interpreter
-                    // alone and turn that agreed gap into a second divergence,
-                    // which is strictly worse. This fix moves `while let` onto
-                    // the same footing as its siblings and no further.
+                    // WHAT THIS DELIBERATELY DID NOT DO, AND NOW DOES:
+                    // B-2026-09-21-3 stood down from stashing the HUSK here,
+                    // because a fresh temp's UNBOUND fields were owned by
+                    // nobody on all four surfaces alike and fixing the
+                    // interpreter alone would have turned that AGREED gap into
+                    // a second divergence. B-2026-09-21-1 closes it on both
+                    // backends at once, so the stash is below.
                     let struct_named_scrut = matches!(val, Value::Struct { .. })
                         && !Self::struct_scrutinee_has_no_other_owner(value);
                     let consuming_scrutinee = !reads_through
@@ -1732,6 +1766,22 @@ impl<'a> super::Interpreter<'a> {
                                 None => Vec::new(),
                             }
                         } else if matches!(val, Value::Struct { .. }) {
+                            // B-2026-09-21-1 — the fields this FRESH TEMP still
+                            // owns, stashed for the walk after the loop body.
+                            // PER ITERATION: the scrutinee is re-evaluated each
+                            // time round, so each iteration builds its own temp
+                            // and owes its own husk. The drain below `.take()`s,
+                            // which is what keeps one iteration's husk from
+                            // reaching the next.
+                            //
+                            // Keyed on the FIELD names the pattern takes, not
+                            // the bindings it introduces, so a rebinding
+                            // pattern (`S3 { a: q, .. }`) does not leave field
+                            // `a` in the unbound set to be walked beside `q`.
+                            self.pending_arm_unbound_struct = Some((
+                                val.clone(),
+                                Self::struct_pattern_bound_field_names(pattern),
+                            ));
                             // Unfiltered, for the reason the `if let` leg states:
                             // the loop below decides which of these actually owe a
                             // body, and it runs AFTER `bind_pattern`. Filtering
@@ -1824,6 +1874,14 @@ impl<'a> super::Interpreter<'a> {
                         }
                     }
                     let body_result = self.eval_block_inner(body);
+                    // B-2026-09-21-1 — this iteration's husk, walked here for
+                    // the same reason and at the same point as `eval_match`'s
+                    // and `if let`'s: after the body, so a bound field's body
+                    // has already fired from its binding and these are the
+                    // remainder, in reverse declaration order.
+                    if let Some((sv, taken)) = self.pending_arm_unbound_struct.take() {
+                        self.run_unbound_struct_field_drops(&sv, &taken);
+                    }
                     self.env.pop_scope();
                     if let Some((tn, dv)) = drop_snapshot {
                         self.run_user_drop_body_on_value(&tn, dv);
