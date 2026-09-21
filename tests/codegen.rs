@@ -171612,6 +171612,96 @@ fn main() {
         );
     }
 
+    /// B-2026-09-21-8 — a ONE-ELEMENT `Array` enum payload whose element holds a
+    /// `shared` handle is laid out the same way by the layout pass and by the pack.
+    ///
+    /// `enum One { A(Array[Sd, 1]), N }` over `struct Sd { h: Inner }` and
+    /// `shared struct Inner { tag: String }` SEGFAULTED on jit, `-O0` and `-O2`
+    /// against a correct `--interp`, as a four-line whole program with no call, no
+    /// match and no `impl Drop` needed anywhere.
+    ///
+    /// `payload_word_count_for_type_expr` answered a DIFFERENT WIDTH in its two
+    /// windows. It recognises a `shared` type as one pointer word through
+    /// `shared_types`, which the STRUCT LLVM build fills — after `declare_enums` has
+    /// run. So at layout time a shared type reached through a plain struct's FIELD
+    /// missed that arm, fell through to the struct recursion, and was sized by its own
+    /// fields: `Sd` measured 3 words at declare time and 1 word at compile time. The
+    /// `BoxedArray` pass compares `elem_words * n > field_words`, so 3 > 1 classified
+    /// the payload BOXED while the pack side — reading real LLVM widths — rode it
+    /// INLINE. `__karac_drop_E` then `inttoptr`'d the RC handle, walked it as an
+    /// `Array[Sd, 1]` and `free`d it, reading the refcount word as a pointer:
+    /// `Invalid read of size 8` at address 0x1.
+    ///
+    /// The fix reads `shared_type_decl_names` beside `shared_types` — the name-only
+    /// set `register_struct_metadata` fills for exactly this window, which
+    /// `enum_drop_kind_for_type_expr`'s `SharedRc` arm already consults for the DIRECT
+    /// payload position (B-2026-09-10-11). The nested position was never wired to it.
+    ///
+    /// THE CELLS THAT ARE NOT THE FAULT ARE MOST OF THIS FIXTURE. `g` is
+    /// `Array[Sd, 2]`, two words, which takes the boxed path and was always correct;
+    /// `h` is a direct `Sd` payload (`NestedStruct`); `i` is a heap-free element;
+    /// `d` is a `shared` struct that owns no heap, where the same width error sized
+    /// the payload at 1 and simply left it unclassified. `e` passes the value to a
+    /// by-value callee and `f` matches on it, the two spellings that carry the most
+    /// ownership machinery. All nine agree byte-for-byte across `--interp`,
+    /// `karac run`, `-O0` and `-O2`.
+    ///
+    /// WHAT THIS FIXTURE DOES NOT PIN, deliberately: the RC box is still STRANDED on
+    /// the inline shapes (32 B for a heap-owning `Inner`, 16 B for a heap-free one).
+    /// An inline one-element array payload has no drop kind at all, which is this
+    /// row's second face and is split out as B-2026-09-21-9 with its three sites
+    /// named. No memory-sanitizer cell accompanies this fixture for that reason; what
+    /// it guards is the crash, and the crash is what the output can see.
+    #[test]
+    fn test_e2e_one_element_array_enum_payload_with_a_shared_handle_does_not_crash() {
+        let src = r#"
+shared struct Inner { tag: String }
+shared struct Ik { k: i64 }
+struct Sd { h: Inner }
+impl Drop for Sd { fn drop(mut ref self) { println("dSd") } }
+struct Sq { h: Inner }
+struct Sk { h: Ik }
+struct Sn { k: i64 }
+
+enum One { A(Array[Sd, 1]), N }
+enum Bare { A(Array[Sq, 1]), N }
+enum Direct { A(Array[Inner, 1]), N }
+enum Flat { A(Array[Ik, 1]), N }
+enum Wide { A(Array[Sd, 2]), N }
+enum Plain { A(Sd), N }
+enum Scalar { A(Array[Sn, 1]), N }
+
+fn eat(g: One) -> i64 { match g { One.A(x) => { return 7; } One.N => { return 0; } } }
+
+fn a_bind() { let g: One = One.A([Sd { h: Inner { tag: "q" } }]); println("a"); }
+fn b_nobody() { let g: Bare = Bare.A([Sq { h: Inner { tag: "q" } }]); println("b"); }
+fn c_shared_elem() { let g: Direct = Direct.A([Inner { tag: "q" }]); println("c"); }
+fn d_heapfree() { let g: Flat = Flat.A([Ik { k: 5 }]); println("d"); }
+fn e_byvalue() { let g: One = One.A([Sd { h: Inner { tag: "q" } }]); println(f"e:{eat(g)}"); }
+fn f_match() { let g: One = One.A([Sd { h: Inner { tag: "q" } }]); match g { One.A(x) => { println("f"); } One.N => { println("fn"); } } }
+fn g_wide() { let g: Wide = Wide.A([Sd { h: Inner { tag: "q" } }, Sd { h: Inner { tag: "r" } }]); println("g"); }
+fn h_direct() { let g: Plain = Plain.A(Sd { h: Inner { tag: "q" } }); println("h"); }
+fn i_scalar() { let g: Scalar = Scalar.A([Sn { k: 5 }]); println("i"); }
+
+fn main() {
+    a_bind();
+    b_nobody();
+    c_shared_elem();
+    d_heapfree();
+    e_byvalue();
+    f_match();
+    g_wide();
+    h_direct();
+    i_scalar();
+    println("end");
+}
+"#;
+        assert_eq!(
+            run_program(src).as_deref(),
+            Some("dSd\na\nb\nc\nd\ne:7\ndSd\nf\ndSd\ndSd\ndSd\ng\ndSd\nh\ni\nend\n")
+        );
+    }
+
     /// B-2026-09-20-12 — a by-value enum argument spelled as a FIELD
     /// PROJECTION runs its payload's `Drop` body ONCE.
     ///

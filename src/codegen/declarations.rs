@@ -4035,7 +4035,52 @@ impl<'ctx> super::Codegen<'ctx> {
                     // the v1 carve-out and emits an error.
                     _ => {
                         let _ = (outer_enum, outer_variant); // diagnostic context — emitted by typechecker
-                        if self.type_decls.shared_types.contains_key(name) {
+                                                             // B-2026-09-21-8 — `shared_type_decl_names` BESIDE
+                                                             // `shared_types`, and the point is that this function
+                                                             // must answer the SAME width in both windows it is
+                                                             // asked in.
+                                                             //
+                                                             // `shared_types` is filled by the STRUCT LLVM build,
+                                                             // which runs AFTER `declare_enums`. So a `shared`
+                                                             // struct reached through a plain struct's FIELD missed
+                                                             // this arm during layout, fell through to the struct
+                                                             // recursion below, and was sized by its own fields
+                                                             // instead of by the one pointer word an RC handle
+                                                             // actually occupies: `struct Sd { h: Inner }` over
+                                                             // `shared struct Inner { tag: String }` measured 3
+                                                             // words at declare time and 1 word at compile time.
+                                                             //
+                                                             // Both faces of that disagreement were measured on one
+                                                             // shape, `enum E { A(Array[Sd, 1]), N }`. The BoxedArray
+                                                             // pass compares `elem_words * n > field_words`: 3 > 1
+                                                             // classified the payload boxed, while the pack side —
+                                                             // reading real LLVM widths — rode it INLINE, so
+                                                             // `__karac_drop_E` `inttoptr`'d the RC handle, walked it
+                                                             // as an `Array[Sd, 1]` and `free`d it. That read the
+                                                             // refcount word as a pointer: `Invalid read of size 8`
+                                                             // at address 0x1, SEGV on jit, -O0 and -O2 against a
+                                                             // correct `--interp`. With a heap-free `shared struct
+                                                             // Inner { k: i64 }` the same sum gives 1, `1 > 1` is
+                                                             // false, the payload is classified `None`, no drop is
+                                                             // emitted at all and the 16-byte RC box is stranded.
+                                                             // One missing arm, a crash and a leak.
+                                                             //
+                                                             // This is the identical timing hazard
+                                                             // `enum_drop_kind_for_type_expr`'s `SharedRc` arm
+                                                             // documents (B-2026-09-10-11) and fixes the same way —
+                                                             // that arm reads `shared_type_decl_names`, the name-only
+                                                             // set `register_struct_metadata` fills for precisely
+                                                             // this window. The DIRECT payload position was wired to
+                                                             // it there; the width counter was not, and it is the
+                                                             // NESTED position (a shared type inside a struct field)
+                                                             // that needed it.
+                                                             //
+                                                             // Keeping `shared_types` first costs nothing and keeps
+                                                             // the compile-time answer coming from the table that is
+                                                             // authoritative then.
+                        if self.type_decls.shared_types.contains_key(name)
+                            || self.type_decls.shared_type_decl_names.contains(name)
+                        {
                             // RC pointer — single word.
                             1
                         } else if self.type_decls.enum_layouts.contains_key(name) {
