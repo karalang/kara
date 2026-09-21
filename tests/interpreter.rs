@@ -70586,10 +70586,23 @@ fn main() {
 /// so the B-2026-09-10-2 own-generic-param exception — which exists because
 /// codegen's instantiation-keyed walker DOES run a struct payload's body there
 /// — is withheld from an enum payload. Admitting it fired a body on this side
-/// alone, measured while writing the arm. Both container arms are keyed on the
-/// same DECLARED payload head, which is what makes them answer alike:
-/// `Array[T, N]` and `Vec[T]` share one `Value::Array` here, so nothing about
-/// the value could have told them apart.
+/// alone, measured while writing the arm. It is STILL silent on all four
+/// surfaces after B-2026-09-20-62 (measured 2026-09-21), which is what says
+/// that row widened the container arm and not the exception.
+///
+/// `genvec` WAS THE OTHER HALF OF THAT NARROWNESS AND HAS BEEN FLIPPED.
+/// `G[T]` at `T = Vec[Mono]` was silent on every surface when this fixture
+/// was written, and the note here read that both container arms are keyed on
+/// the same DECLARED payload head — `Array[T, N]` and `Vec[T]` share one
+/// `Value::Array` on this backend, so nothing about the VALUE could tell them
+/// apart. B-2026-09-20-62 is the row that made the declared head the wrong
+/// question on BOTH backends at once: codegen's instantiation-keyed walker
+/// head stopped refusing the `Vec` arm by the spelling of the declaration,
+/// and this side resolves a bare-parameter payload against the binding's
+/// recorded instantiation for `Vec` as well as `Array`. So `genvec` now
+/// prints `d2:9` — the `Mono` element's own `R2` payload body, one level in —
+/// on `--interp`, the JIT and AOT at both opt levels. The agreed gap this
+/// cell pinned is gone; the AGREEMENT is not.
 #[test]
 fn test_declared_vec_enum_payload_runs_element_drop_bodies() {
     let out = run(r#"struct R2 { s: String, t: String, u: String }
@@ -70620,7 +70633,7 @@ fn main() {
     println("end")
 }
 "#);
-    assert_eq!(out, "vecenum\n  d2:9\n  x\nvecstruct\n  dS7\n  dS8\n  x\nvecmixed\n  dS9\n  x\nvecempty\n  x\nunitvar\n  x\narray\n  dS1\n  dS2\n  x\nstruct\n  d2:9\n  x\nsharedec\n  d2:9\n  x\ngenvec\n  x\ngensh\n  x\nend\n", "got:\n{out}");
+    assert_eq!(out, "vecenum\n  d2:9\n  x\nvecstruct\n  dS7\n  dS8\n  x\nvecmixed\n  dS9\n  x\nvecempty\n  x\nunitvar\n  x\narray\n  dS1\n  dS2\n  x\nstruct\n  d2:9\n  x\nsharedec\n  d2:9\n  x\ngenvec\n  d2:9\n  x\ngensh\n  x\nend\n", "got:\n{out}");
 }
 
 /// B-2026-09-17-15 — A GENERIC ENUM'S `shared` PAYLOAD IS NOW RC-RELEASED,
@@ -72081,14 +72094,25 @@ fn main() {
 ///
 /// The three controls are what keep the fix from being the one an earlier
 /// draft of the `Array` payload arm was thrown away for. A MONOMORPHIC `Vec`
-/// payload runs its bodies on all four surfaces today, but the generic
-/// `G[Vec[R]]` is silent on BOTH, so a substitution that let the walk's arms
-/// dispatch on any instantiation would make this backend fire where every
-/// compiled surface is silent — trading an agreed gap for a new divergence.
-/// `k_vec` pins that silence. `k_struct` pins the plain-struct payload, which
-/// was already correct and must not double. `k_ng` pins the NON-generic
-/// `Array` payload, which reaches the same arm by the declared head and must
-/// be untouched by any of this.
+/// payload runs its bodies on all four surfaces today; when this fixture was
+/// written the generic `G[Vec[R]]` was silent on BOTH, so a substitution that
+/// let the walk's arms dispatch on any instantiation would have made this
+/// backend fire where every compiled surface was silent — trading an agreed
+/// gap for a new divergence. `k_vec` pinned that silence. `k_struct` pins the
+/// plain-struct payload, which was already correct and must not double. `k_ng`
+/// pins the NON-generic `Array` payload, which reaches the same arm by the
+/// declared head and must be untouched by any of this.
+///
+/// `k_vec` HAS SINCE BEEN FLIPPED, and it is the flip this cell was designed
+/// to make safe. B-2026-09-20-62 moved BOTH halves in one commit — codegen's
+/// instantiation-keyed walker head stopped refusing the `Vec` arm by the
+/// spelling of the declaration, and this backend gained the matching `Vec`
+/// head — so `G[Vec[R]]` now prints `dR31 dR32` on `--interp`, the JIT and
+/// AOT at both opt levels (measured, four surfaces, 2026-09-21). The
+/// divergence this control existed to forbid is exactly what a ONE-backend
+/// fix would still produce; what retired the pin is that no such fix was
+/// made. The `Array` target above is unchanged by that work and still passes
+/// on B-2026-09-20-45's own fix.
 #[test]
 fn test_generic_enum_array_payload_runs_element_drop_bodies() {
     let hdr = "struct R { id: i64, s: String }\n\
@@ -72111,9 +72135,10 @@ fn test_generic_enum_array_payload_runs_element_drop_bodies() {
          println(\"done\") }}"
     ));
     assert_eq!(
-        k_vec, "mid\ndone\n",
-        "a GENERIC Vec payload is silent on every compiled surface, so this backend \
-         must stay silent too — firing here is the new divergence this fix exists to avoid"
+        k_vec, "dR31\ndR32\nmid\ndone\n",
+        "B-2026-09-20-62 RETIRED THIS CELL'S SILENCE: the generic Vec payload now runs \
+         its elements' bodies on all four surfaces, so the agreement this pin was \
+         protecting has moved to the correct answer rather than being broken"
     );
 
     let k_struct = run(&format!(
