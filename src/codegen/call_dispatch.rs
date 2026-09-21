@@ -13498,6 +13498,12 @@ impl<'ctx> super::Codegen<'ctx> {
         // past the shared body, whose own `struct_field_te_subst_inst` route
         // reads the OBJECT's instantiation and has no arm for a chained one.
         let mut chain_boxed: Option<TypeExpr> = None;
+        // B-2026-09-20-12 — the ROOT BINDING, when there is one, so the
+        // bodies half of this neutralizer can name it. Only the one-hop
+        // `Identifier` arm sets it; a chained place has no binding at the
+        // holder, which is why that arm leaves it `None` and the mask below
+        // declines exactly the shapes this row did not measure.
+        let mut root_var: Option<String> = None;
         let (held, base_ptr, sname) = match &object.kind {
             ExprKind::Identifier(s) => {
                 let s = s.as_str();
@@ -13514,6 +13520,7 @@ impl<'ctx> super::Codegen<'ctx> {
                 let Some(sname) = self.var_types.var_type_names.get(s).cloned() else {
                     return;
                 };
+                root_var = Some(s.to_string());
                 (held, slot.ptr, sname)
             }
             ExprKind::FieldAccess { .. } => {
@@ -13624,6 +13631,31 @@ impl<'ctx> super::Codegen<'ctx> {
         let _ = &layout;
         self.pending_enum_field_zeros
             .push((field_ptr, ename, boxed_te));
+        // B-2026-09-20-12 — AND THE BODIES, which are a SEPARATE CHANNEL from
+        // the words zeroed above and were never stood down with them.
+        //
+        // The zero neutralizes `__karac_drop_struct_<S>`'s free of this field.
+        // It cannot reach the holder's `__karac_dropbodies_<S>` walker, which
+        // is a different function fired from a different `CleanupAction`, so a
+        // by-value enum argument spelled `eat(b.w)` ran its payload's `Drop`
+        // body TWICE: once in the callee, which owns the value by transfer,
+        // and once again in the caller when the holder died. The second body
+        // was not merely extra — with the zero in place it read ZEROED words
+        // (`dSp42 r:7 dSp0`), and on an element one word wide that OWNS heap
+        // it read the live pointer the zero had not yet reached.
+        //
+        // WHAT THE ZERO AND THE MASK EACH OWN, since they look redundant:
+        // the mask stands the caller's BODY down, the zero stands the caller's
+        // FREE down, and both are needed because a struct's field free lives
+        // inside a per-type function shared by every value of that type while
+        // its field bodies live in a PER-BINDING walker that can be replaced.
+        //
+        // NAMED-ROOT ONLY, and gated on the same transfer question the zero is
+        // — a chained place (`k.h.g`) has no binding at the holder to mask, so
+        // it takes the same early return it always did.
+        if let Some(var) = root_var {
+            self.disarm_struct_field_bodies_at(&var, idx);
+        }
     }
 
     /// B-2026-09-19-35 — the struct a chained owned place lands in, and that

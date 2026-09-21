@@ -72140,3 +72140,93 @@ fn test_generic_enum_array_payload_runs_element_drop_bodies() {
          and must be untouched"
     );
 }
+
+/// B-2026-09-20-12 — a by-value enum argument spelled as a FIELD
+/// PROJECTION runs its payload's `Drop` body ONCE.
+///
+/// `eat(b.w)` over an enum the callee owns BY TRANSFER fired the payload's
+/// body twice: once in the callee, which owns it, and once again in the
+/// caller when the holder died. The discriminator was a SIBLING VARIANT
+/// that is never constructed, never matched and never passed — `Wpr`'s
+/// `S(Inner)` classifies `SharedRc`, which makes
+/// `enum_param_owned_by_transfer` answer TRUE for the whole TYPE, so a
+/// value whose live variant is the inline `A(Array[Sp, 1])` is declared
+/// callee-owned. `Wps`, identical but for that variant, is correct and
+/// stays correct here (`b:7 dSp41`).
+///
+/// TWO CHANNELS, AND ONLY ONE WAS STOOD DOWN. B-2026-09-19-51 already
+/// zeroes the handed-over field's payload words, which neutralizes
+/// `__karac_drop_struct_<S>`'s FREE of it. The holder's field BODIES live
+/// in a separate per-binding `__karac_dropbodies_<S>` walker fired from its
+/// own `CleanupAction`, which the zero cannot reach — so the second body
+/// still ran, over the zeroed words, printing `dSp0`. On an element one
+/// word wide that OWNS heap it would read a live pointer instead, which is
+/// why the row is filed as a use-after-free rather than as noise.
+/// `zero_transfer_owned_enum_field_arg` now masks the field out of that
+/// walker as well, through the same `disarm_struct_field_bodies_at` the
+/// `let x = h.o` move-out sites use.
+///
+/// THE MASK IS PER FIELD, and four cells here exist to pin that rather
+/// than to restate the fault: a SIBLING enum field (`e`), a plain
+/// `Drop`-bearing field (`h`), a NON-transfer enum field beside a transfer
+/// one (`i`), and both fields handed over in turn (`f`/`g`). Each
+/// survivor's body still runs exactly once. Before the fix every one of
+/// these carried a trailing `dSp0`; `j`, where nothing is transfer-owned,
+/// is byte-identical on both arms and is the control.
+///
+/// ORDER IS NOT THIS ROW. The three compiled surfaces agree exactly, and
+/// `--interp` prints the same 25 lines in a different order: a
+/// transfer-owned argument is dropped by the CALLEE on the compiled
+/// backends and at the caller's statement end under `--interp`. That split
+/// predates this fix — it is `named-local` (`c`) and `temporary` (`d`)
+/// here, both of which this row calls correct — and it is B-2026-09-15-17,
+/// whose own prose names the same lever. The multiset of lines is equal on
+/// all four surfaces; only the sequence differs, so the twin in
+/// `tests/interpreter.rs` pins the interpreter's order deliberately.
+#[test]
+fn transfer_owned_enum_field_arg_runs_its_payload_body_once() {
+    let src = r#"
+struct Sp { v: i64 }
+impl Drop for Sp { fn drop(mut ref self) { println(f"dSp{self.v}") } }
+shared struct Inner { tag: String }
+
+enum Wpr { A(Array[Sp, 1]), S(Inner), N }
+enum Wps { A(Array[Sp, 1]), N }
+
+struct Br { w: Wpr, n: i64 }
+struct Bs { w: Wps, n: i64 }
+struct Two { w: Wpr, u: Wpr, n: i64 }
+struct Mix { w: Wpr, s: Sp, n: i64 }
+struct MixNT { w: Wpr, v: Wps, n: i64 }
+
+fn eat_r(g: Wpr) -> i64 { match g { Wpr.A(x) => { return 7; } Wpr.S(i) => { return 1; } Wpr.N => { return 0; } } }
+fn eat_s(g: Wps) -> i64 { match g { Wps.A(x) => { return 7; } Wps.N => { return 0; } } }
+
+fn proj_sib() { let b: Br = Br { w: Wpr.A([Sp { v: 42 }]), n: 1 }; println(f"a:{eat_r(b.w)}"); }
+fn proj_nosib() { let b: Bs = Bs { w: Wps.A([Sp { v: 41 }]), n: 1 }; println(f"b:{eat_s(b.w)}"); }
+fn named_local() { let b: Br = Br { w: Wpr.A([Sp { v: 43 }]), n: 1 }; let w2: Wpr = b.w; println(f"c:{eat_r(w2)}"); }
+fn temporary() { println(f"d:{eat_r(Wpr.A([Sp { v: 44 }]))}"); }
+fn sibling_field() { let t: Two = Two { w: Wpr.A([Sp { v: 51 }]), u: Wpr.A([Sp { v: 52 }]), n: 1 }; println(f"e:{eat_r(t.w)}"); }
+fn both_handed() { let t: Two = Two { w: Wpr.A([Sp { v: 53 }]), u: Wpr.A([Sp { v: 54 }]), n: 1 }; println(f"f:{eat_r(t.w)}"); println(f"g:{eat_r(t.u)}"); }
+fn plain_field() { let m: Mix = Mix { w: Wpr.A([Sp { v: 55 }]), s: Sp { v: 56 }, n: 1 }; println(f"h:{eat_r(m.w)}"); }
+fn nt_sibling() { let m: MixNT = MixNT { w: Wpr.A([Sp { v: 57 }]), v: Wps.A([Sp { v: 58 }]), n: 1 }; println(f"i:{eat_r(m.w)}"); }
+fn nt_only() { let m: MixNT = MixNT { w: Wpr.A([Sp { v: 60 }]), v: Wps.A([Sp { v: 61 }]), n: 1 }; println(f"j:{eat_s(m.v)}"); }
+
+fn main() {
+    proj_sib();
+    proj_nosib();
+    named_local();
+    temporary();
+    sibling_field();
+    both_handed();
+    plain_field();
+    nt_sibling();
+    nt_only();
+    println("end");
+}
+"#;
+    assert_eq!(
+        run(src),
+        "a:7\ndSp42\nb:7\ndSp41\nc:7\ndSp43\ndSp44\nd:7\ne:7\ndSp52\ndSp51\nf:7\ng:7\ndSp54\ndSp53\nh:7\ndSp56\ndSp55\ni:7\ndSp58\ndSp57\nj:7\ndSp61\ndSp60\nend\n"
+    );
+}
