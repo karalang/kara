@@ -72427,3 +72427,328 @@ fn main() {
 "#;
     assert_eq!(run(src), "a\n  rx pa\n  rx pa\nb\n  mx pb\nc\n  vx pc\nd\n  rx 77\n  rx 77\ne\n  sx pe\n  r=1\nf\n  wx 5\n  wx 5\ng\n  rx NONE\nend\n");
 }
+
+/// B-2026-09-20-62 — the interpreter twin of
+/// `e2e_generic_enum_container_payload_positions` in `tests/codegen.rs`.
+///
+/// GENERATED FROM THAT FIXTURE'S OWN TEXT rather than typed beside it, so the
+/// two files are one transcription and cannot drift on a program or an
+/// expectation. Every cell below ran on all four surfaces and they agreed
+/// byte for byte; this file is what holds `--interp` to that agreement, since
+/// the codegen fixture's own `run_program` never reaches the interpreter.
+///
+/// The two SILENT cells matter here most: three-deep nesting and a two-field
+/// variant are silent on every surface by design, and the interpreter is the
+/// side that would most easily start printing — it holds the concrete value
+/// and needs no instantiation to walk it. If either fires here, this side has
+/// been widened past the compiled one.
+#[test]
+fn generic_enum_container_payload_positions() {
+    for (label, src, want) in [
+        (
+            "a DISCARDED value — no binding at all, so no instantiation is recorded for one (before: mid|end|)",
+            r#"
+struct R { id: i64 }
+impl Drop for R { fn drop(mut ref self) { println(f"dR{self.id}") } }
+fn mkr(i: i64) -> R { return R { id: i }; }
+struct P { id: i64 }
+enum Ew { Z(R), N }
+impl Drop for Ew { fn drop(mut ref self) { println("dER") } }
+enum Slot[T] { S(T), N }
+enum EVecG[T] { V(Vec[T]), N }
+enum Mix[T] { A(T), B(Vec[T]), N }
+enum G2[T] { X(T, i64), Y }
+fn seenv(x: Slot[Vec[R]]) { match x { Slot.S(v) => { println(f"x{v[0].id}") } Slot.N => { println("no") } } }
+
+fn main() {
+let a: Vec[R] = [mkr(1), mkr(2)];
+let _ = Slot.S(a);
+println("mid");
+println("end");
+}
+"#,
+            "dR1\ndR2\nmid\nend\n",
+        ),
+        (
+            "a BARE STATEMENT of the same constructor (before: mid|end|)",
+            r#"
+struct R { id: i64 }
+impl Drop for R { fn drop(mut ref self) { println(f"dR{self.id}") } }
+fn mkr(i: i64) -> R { return R { id: i }; }
+struct P { id: i64 }
+enum Ew { Z(R), N }
+impl Drop for Ew { fn drop(mut ref self) { println("dER") } }
+enum Slot[T] { S(T), N }
+enum EVecG[T] { V(Vec[T]), N }
+enum Mix[T] { A(T), B(Vec[T]), N }
+enum G2[T] { X(T, i64), Y }
+fn seenv(x: Slot[Vec[R]]) { match x { Slot.S(v) => { println(f"x{v[0].id}") } Slot.N => { println("no") } } }
+
+fn main() {
+let a: Vec[R] = [mkr(1), mkr(2)];
+Slot.S(a);
+println("mid");
+println("end");
+}
+"#,
+            "dR1\ndR2\nmid\nend\n",
+        ),
+        (
+            "a BLOCK-scoped binding: the bodies land at the live-range end, before the block's own output (before: in|mid|end|)",
+            r#"
+struct R { id: i64 }
+impl Drop for R { fn drop(mut ref self) { println(f"dR{self.id}") } }
+fn mkr(i: i64) -> R { return R { id: i }; }
+struct P { id: i64 }
+enum Ew { Z(R), N }
+impl Drop for Ew { fn drop(mut ref self) { println("dER") } }
+enum Slot[T] { S(T), N }
+enum EVecG[T] { V(Vec[T]), N }
+enum Mix[T] { A(T), B(Vec[T]), N }
+enum G2[T] { X(T, i64), Y }
+fn seenv(x: Slot[Vec[R]]) { match x { Slot.S(v) => { println(f"x{v[0].id}") } Slot.N => { println("no") } } }
+
+fn main() {
+let a: Vec[R] = [mkr(1), mkr(2)];
+{ let s: Slot[Vec[R]] = Slot.S(a); println("in"); }
+println("mid");
+println("end");
+}
+"#,
+            "dR1\ndR2\nin\nmid\nend\n",
+        ),
+        (
+            "a BY-VALUE PARAM scrutinee at a read-only arm — the binding holds the buffer here too (before: x1|end|)",
+            r#"
+struct R { id: i64 }
+impl Drop for R { fn drop(mut ref self) { println(f"dR{self.id}") } }
+fn mkr(i: i64) -> R { return R { id: i }; }
+struct P { id: i64 }
+enum Ew { Z(R), N }
+impl Drop for Ew { fn drop(mut ref self) { println("dER") } }
+enum Slot[T] { S(T), N }
+enum EVecG[T] { V(Vec[T]), N }
+enum Mix[T] { A(T), B(Vec[T]), N }
+enum G2[T] { X(T, i64), Y }
+fn seenv(x: Slot[Vec[R]]) { match x { Slot.S(v) => { println(f"x{v[0].id}") } Slot.N => { println("no") } } }
+
+fn main() {
+let a: Vec[R] = [mkr(1), mkr(2)];
+seenv(Slot.S(a));
+println("end");
+}
+"#,
+            "x1\ndR1\ndR2\nend\n",
+        ),
+        (
+            "ENUM elements: own body first, then the element's payload (before: mid|end|)",
+            r#"
+struct R { id: i64 }
+impl Drop for R { fn drop(mut ref self) { println(f"dR{self.id}") } }
+fn mkr(i: i64) -> R { return R { id: i }; }
+struct P { id: i64 }
+enum Ew { Z(R), N }
+impl Drop for Ew { fn drop(mut ref self) { println("dER") } }
+enum Slot[T] { S(T), N }
+enum EVecG[T] { V(Vec[T]), N }
+enum Mix[T] { A(T), B(Vec[T]), N }
+enum G2[T] { X(T, i64), Y }
+fn seenv(x: Slot[Vec[R]]) { match x { Slot.S(v) => { println(f"x{v[0].id}") } Slot.N => { println("no") } } }
+
+fn main() {
+let a: Vec[Ew] = [Ew.Z(mkr(1)), Ew.Z(mkr(2))];
+let s: Slot[Vec[Ew]] = Slot.S(a);
+println("mid");
+println("end");
+}
+"#,
+            "dER\ndR1\ndER\ndR2\nmid\nend\n",
+        ),
+        (
+            "one container NESTED inside another (before: mid|end|)",
+            r#"
+struct R { id: i64 }
+impl Drop for R { fn drop(mut ref self) { println(f"dR{self.id}") } }
+fn mkr(i: i64) -> R { return R { id: i }; }
+struct P { id: i64 }
+enum Ew { Z(R), N }
+impl Drop for Ew { fn drop(mut ref self) { println("dER") } }
+enum Slot[T] { S(T), N }
+enum EVecG[T] { V(Vec[T]), N }
+enum Mix[T] { A(T), B(Vec[T]), N }
+enum G2[T] { X(T, i64), Y }
+fn seenv(x: Slot[Vec[R]]) { match x { Slot.S(v) => { println(f"x{v[0].id}") } Slot.N => { println("no") } } }
+
+fn main() {
+let i1: Vec[R] = [mkr(1)];
+let i2: Vec[R] = [mkr(2)];
+let a: Vec[Vec[R]] = [i1, i2];
+let s: Slot[Vec[Vec[R]]] = Slot.S(a);
+println("mid");
+println("end");
+}
+"#,
+            "dR1\ndR2\nmid\nend\n",
+        ),
+        (
+            "MIXED-WIDTH enum, Vec instantiation: the variant's own width decides boxing, not the enum's area (before: mid|end|)",
+            r#"
+struct R { id: i64 }
+impl Drop for R { fn drop(mut ref self) { println(f"dR{self.id}") } }
+fn mkr(i: i64) -> R { return R { id: i }; }
+enum Mix[T] { A(T), B(Vec[T]), N }
+
+fn main() {
+let a: Vec[R] = [mkr(1), mkr(2)];
+let s: Mix[Vec[R]] = Mix.A(a);
+println("mid");
+println("end");
+}
+"#,
+            "dR1\ndR2\nmid\nend\n",
+        ),
+        (
+            "MIXED-WIDTH enum, Array instantiation — printed an ASLR-varying id before this fix (before: interp dR1|dR2|mid|end| vs compiled dR<addr>|dR0|mid|end|)",
+            r#"
+struct R { id: i64 }
+impl Drop for R { fn drop(mut ref self) { println(f"dR{self.id}") } }
+fn mkr(i: i64) -> R { return R { id: i }; }
+enum Slot[T] { S(T), N }
+enum Mix[T] { A(T), B(Vec[T]), N }
+
+fn main() {
+let a: Array[R, 2] = [mkr(1), mkr(2)];
+let s: Mix[Array[R, 2]] = Mix.A(a);
+println("mid");
+println("end");
+}
+"#,
+            "dR1\ndR2\nmid\nend\n",
+        ),
+        (
+            "CONTROL, the Array twin of the discard cell: compiled-correct before, interpreted-silent (before: interp mid|end| vs compiled dR1|dR2|mid|end|)",
+            r#"
+struct R { id: i64 }
+impl Drop for R { fn drop(mut ref self) { println(f"dR{self.id}") } }
+fn mkr(i: i64) -> R { return R { id: i }; }
+enum Slot[T] { S(T), N }
+enum Mix[T] { A(T), B(Vec[T]), N }
+
+fn main() {
+let a: Array[R, 2] = [mkr(1), mkr(2)];
+let _ = Slot.S(a);
+println("mid");
+println("end");
+}
+"#,
+            "dR1\ndR2\nmid\nend\n",
+        ),
+        (
+            "CONTROL, the Array twin of the bare statement (before: interp mid|end| vs compiled dR1|dR2|mid|end|)",
+            r#"
+struct R { id: i64 }
+impl Drop for R { fn drop(mut ref self) { println(f"dR{self.id}") } }
+fn mkr(i: i64) -> R { return R { id: i }; }
+enum Slot[T] { S(T), N }
+enum Mix[T] { A(T), B(Vec[T]), N }
+
+fn main() {
+let a: Array[R, 2] = [mkr(1), mkr(2)];
+Slot.S(a);
+println("mid");
+println("end");
+}
+"#,
+            "dR1\ndR2\nmid\nend\n",
+        ),
+        (
+            "CONTROL, the Array twin of the nesting cell (before: interp mid|end| vs compiled dR1|dR2|mid|end|)",
+            r#"
+struct R { id: i64 }
+impl Drop for R { fn drop(mut ref self) { println(f"dR{self.id}") } }
+fn mkr(i: i64) -> R { return R { id: i }; }
+enum Slot[T] { S(T), N }
+enum Mix[T] { A(T), B(Vec[T]), N }
+
+fn main() {
+let i1: Array[R, 1] = [mkr(1)];
+let i2: Array[R, 1] = [mkr(2)];
+let a: Array[Array[R, 1], 2] = [i1, i2];
+let s: Slot[Array[Array[R, 1], 2]] = Slot.S(a);
+println("mid");
+println("end");
+}
+"#,
+            "dR1\ndR2\nmid\nend\n",
+        ),
+        (
+            "AGREED SILENCE, three deep: `elem_te_runs_user_drop` stops at one level and so does the walk (before: mid|end|)",
+            r#"
+struct R { id: i64 }
+impl Drop for R { fn drop(mut ref self) { println(f"dR{self.id}") } }
+fn mkr(i: i64) -> R { return R { id: i }; }
+enum Slot[T] { S(T), N }
+
+fn main() {
+let a1: Vec[R] = [mkr(1)];
+let b1: Vec[Vec[R]] = [a1];
+let c1: Vec[Vec[Vec[R]]] = [b1];
+let s: Slot[Vec[Vec[Vec[R]]]] = Slot.S(c1);
+println("mid");
+println("end");
+}
+"#,
+            "mid\nend\n",
+        ),
+        (
+            "AGREED SILENCE, a TWO-FIELD variant: the walker head skips it, so neither side may fire (before: mid|end|)",
+            r#"
+struct R { id: i64 }
+impl Drop for R { fn drop(mut ref self) { println(f"dR{self.id}") } }
+fn mkr(i: i64) -> R { return R { id: i }; }
+struct P { id: i64 }
+enum Ew { Z(R), N }
+impl Drop for Ew { fn drop(mut ref self) { println("dER") } }
+enum Slot[T] { S(T), N }
+enum EVecG[T] { V(Vec[T]), N }
+enum Mix[T] { A(T), B(Vec[T]), N }
+enum G2[T] { X(T, i64), Y }
+fn seenv(x: Slot[Vec[R]]) { match x { Slot.S(v) => { println(f"x{v[0].id}") } Slot.N => { println("no") } } }
+
+fn main() {
+let a: Vec[R] = [mkr(1), mkr(2)];
+let s: G2[Vec[R]] = G2.X(a, 7);
+println("mid");
+println("end");
+}
+"#,
+            "mid\nend\n",
+        ),
+        (
+            "CONTROL, elements with no body: nothing is due and nothing runs (before: mid|end|)",
+            r#"
+struct R { id: i64 }
+impl Drop for R { fn drop(mut ref self) { println(f"dR{self.id}") } }
+fn mkr(i: i64) -> R { return R { id: i }; }
+struct P { id: i64 }
+enum Ew { Z(R), N }
+impl Drop for Ew { fn drop(mut ref self) { println("dER") } }
+enum Slot[T] { S(T), N }
+enum EVecG[T] { V(Vec[T]), N }
+enum Mix[T] { A(T), B(Vec[T]), N }
+enum G2[T] { X(T, i64), Y }
+fn seenv(x: Slot[Vec[R]]) { match x { Slot.S(v) => { println(f"x{v[0].id}") } Slot.N => { println("no") } } }
+
+fn main() {
+let a: Vec[P] = [P { id: 1 }, P { id: 2 }];
+let s: Slot[Vec[P]] = Slot.S(a);
+println("mid");
+println("end");
+}
+"#,
+            "mid\nend\n",
+        ),
+    ] {
+        assert_eq!(run(src), want, "[{label}]");
+    }
+}

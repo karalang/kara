@@ -50080,16 +50080,17 @@ end
     /// declares its payload as `T`, one word, from which no container head is
     /// readable.
     ///
-    /// The two PINNED GAPS are the remainder, and they are DIFFERENT faults
-    /// rather than two spellings of one. A `Vec` payload is silent on ALL FOUR
-    /// surfaces — `--interp` included, and silent with no `match` in the
-    /// program at all — because its walker is discarded before emission
-    /// (`define 0 / call 0`; the `Array` twin, which this fixture's first cell
-    /// covers, measured `define 1 / call 0` BEFORE this fix); that half is
-    /// B-2026-09-20-62. A fresh ctor temp never reaches this site at all and loses the
-    /// bodies only on the three COMPILED surfaces, where `--interp` is
-    /// correct; that half is B-2026-09-20-63, which additionally leaks the container
-    /// buffer.
+    /// The two PINNED GAPS were the remainder, and they were DIFFERENT faults
+    /// rather than two spellings of one. ONE IS NOW FIXED: a `Vec` payload was
+    /// silent on ALL FOUR surfaces — `--interp` included, and silent with no
+    /// `match` in the program at all — because its walker was discarded before
+    /// emission (`define 0 / call 0`; the `Array` twin, which this fixture's
+    /// first cell covers, measured `define 1 / call 0` BEFORE this fix); that
+    /// half was B-2026-09-20-62 and its cell below now asserts the bodies. The
+    /// OTHER STANDS: a fresh ctor temp never reaches this site at all and loses
+    /// the bodies only on the three COMPILED surfaces, where `--interp` is
+    /// correct; that half is B-2026-09-20-63, which additionally leaks the
+    /// container buffer, and B-2026-09-20-62 left it exactly as it found it.
     #[test]
     fn e2e_generic_enum_container_payload_runs_element_bodies_at_a_read_only_arm() {
         let hdr = "struct R { id: i64 }\n\
@@ -50134,11 +50135,12 @@ end
                 "w:4\ndW4\nend\n",
             ),
             (
-                "PINNED GAP: a Vec payload — its walker is discarded before emission",
+                "B-2026-09-20-62: a Vec payload — its walker is emitted now, and \
+                 runs on the ARM'S BINDING because the binding holds the buffer",
                 "let a: Vec[R] = [mkr(1), mkr(2)];\n\
                  let s: Slot[Vec[R]] = Slot.S(a);\n\
                  match s { Slot.S(v) => { println(f\"x{v[0].id}\") } Slot.N => { println(\"no\") } }",
-                "x1\nend\n",
+                "x1\ndR1\ndR2\nend\n",
             ),
             (
                 "PINNED GAP: a FRESH CTOR TEMP scrutinee never reaches this site",
@@ -171428,18 +171430,20 @@ fn main() {
     /// ends there. Reading that as premature is the mistake this fixture's
     /// author made first.
     ///
-    /// THE LAST TWO CELLS PIN A GAP RATHER THAN A FIX, and they are the point
-    /// of the fixture as much as the first three. A bare `T` payload that
-    /// merely INSTANTIATES to a container is silent on BOTH backends, and this
-    /// change deliberately leaves it silent: the interpreter does not walk it,
-    /// so arming the compiled side alone would trade a both-backends-silent gap
-    /// for a run-vs-build divergence. Both cells are `Slot[Vec[R]]`, and the
-    /// `Vec` half is now B-2026-09-20-62: B-2026-09-20-41, which the wording here named,
-    /// closed on the `Array`-at-a-named-local half only and does NOT flip
-    /// these. When B-2026-09-20-62 is fixed these two cells MUST FLIP to printing their
-    /// bodies, and this fixture is expected to fail until they are updated — a
-    /// silent pass after that row lands means the per-arm `Vec` flag stopped
-    /// distinguishing the two spellings.
+    /// THE LAST TWO CELLS PINNED A GAP AND NOW PIN THE FIX — B-2026-09-20-62,
+    /// which is the row this fixture's own note predicted and asked to flip
+    /// them. A bare `T` payload that merely INSTANTIATES to a container was
+    /// silent on BOTH backends, deliberately: the interpreter did not walk it,
+    /// so arming the compiled side alone would have traded a both-backends-
+    /// silent gap for a run-vs-build divergence. That row moved both halves in
+    /// one commit — the walker head stopped asking how the payload was SPELLED
+    /// and the interpreter's `substituted_array_head` admitted `Vec` — so the
+    /// two cells below print their elements' bodies on all four surfaces now.
+    ///
+    /// They still earn their place: they are the pair that says the fix reaches
+    /// the INSTANTIATED spelling and not only the declared one, which is the
+    /// whole of that row. If either goes silent again, the head has gone back
+    /// to reading the declaration.
     ///
     /// The memory channel is unchanged by construction: this walker runs bodies
     /// and frees nothing. Measured anyway on every program below at
@@ -171523,9 +171527,11 @@ fn main() {
             assert_eq!(out, "x1\ndR1\nend\n");
         }
 
-        // MUST STAY SILENT, and see the note above: a bare `T` INSTANTIATED to
-        // a container. Both backends are silent today; arming only this one
-        // would open a divergence. B-2026-09-20-41 owns both halves and will flip these.
+        // FLIPPED BY B-2026-09-20-62, and see the note above: a bare `T`
+        // INSTANTIATED to a container, at a read-only arm. The element walk now
+        // rides the ARM'S BINDING here rather than the husk, because the
+        // binding has taken the buffer by the time the husk's walker would run;
+        // the output is what says the two are in the right order.
         if let Some(out) = run_program(&format!(
             "{PRE}enum Slot[T] {{ S(T), N }}\n\
              fn main() {{\n\
@@ -171535,10 +171541,12 @@ fn main() {
              \x20 println(\"end\")\n\
              }}\n"
         )) {
-            assert_eq!(out, "x1\nend\n");
+            assert_eq!(out, "x1\ndR1\ndR2\nend\n");
         }
 
-        // MUST STAY SILENT, no-match position of the same spelling.
+        // FLIPPED BY B-2026-09-20-62, no-match position of the same spelling —
+        // the cell that row calls load-bearing, because it removes the whole
+        // match-lowering surface from the question.
         if let Some(out) = run_program(&format!(
             "{PRE}enum Slot[T] {{ S(T), N }}\n\
              fn main() {{\n\
@@ -171548,7 +171556,366 @@ fn main() {
              \x20 println(\"end\")\n\
              }}\n"
         )) {
-            assert_eq!(out, "mid\nend\n");
+            assert_eq!(out, "dR1\ndR2\nmid\nend\n");
+        }
+    }
+
+    /// B-2026-09-20-62 — the POSITIONS a generic container payload reaches, and
+    /// the two it must not.
+    ///
+    /// The row this pins says a payload that only becomes a `Vec` through the
+    /// INSTANTIATION (`enum Slot[T] { S(T), N }` at `T = Vec[R]`) runs none of
+    /// its elements' `Drop` bodies, on any of the four surfaces. Its two own
+    /// cells — a read-only arm and no match at all — live in
+    /// `e2e_generic_enum_container_payload_runs_element_bodies_at_a_read_only_arm`
+    /// and `e2e_generic_enum_container_payload_runs_element_drop_bodies`, which
+    /// that row FLIPPED. This fixture is everything else the fix touches, and
+    /// it exists because nothing else pins these positions at all.
+    ///
+    /// EVERY EXPECTATION BELOW WAS READ OFF THE RUN, not typed: each cell is a
+    /// program that was executed on `--interp`, the JIT, AOT `-O0` and AOT
+    /// `-O2`, all four agreed byte for byte, and the agreed output is what the
+    /// assertion carries. The `before:` note on each cell is the same
+    /// measurement on the tree without the fix.
+    ///
+    /// THREE CELLS WERE ALREADY BROKEN BEFORE THE ROW AND ARE FIXED BY IT:
+    ///
+    ///  * the MIXED-WIDTH enum (`enum Mix[T] { A(T), B(Vec[T]), N }`). Its
+    ///    payload area is the WIDEST variant's, 3 words from `B`, while `A`'s
+    ///    own declared width is 1 — so `coerce_to_payload_words` heap-boxed the
+    ///    payload and the walker read it inline. At `T = Array[R, 2]` that
+    ///    printed an ASLR-varying id and a `dR0` on all three compiled
+    ///    surfaces, with valgrind reporting ZERO errors and zero invalid reads:
+    ///    the words it read are perfectly live, they are just the box pointer
+    ///    and its neighbour. Only an expected-output oracle sees that class.
+    ///  * the three `Array` CONTROLS (discard, bare statement, nesting), which
+    ///    ran their bodies on every compiled surface and on none under
+    ///    `--interp`. They are controls for the `Vec` cells above them and were
+    ///    divergent in their own right.
+    ///
+    /// THE TWO SILENT CELLS ARE ASSERTIONS, not omissions. Three-deep nesting
+    /// and a two-field variant are silent on ALL FOUR surfaces, and the fix
+    /// deliberately keeps them there: `elem_te_runs_user_drop` stops at one
+    /// level and the walker head skips a multi-field variant, so firing on
+    /// either side alone would trade a gap both backends share for a
+    /// run-vs-build divergence. If either starts printing, one side has been
+    /// widened past the other.
+    ///
+    /// The memory channel is unchanged by construction — this walk runs bodies
+    /// and frees nothing — and measured anyway at `KARAC_OPT_LEVEL=0` under
+    /// valgrind on every program below: no invalid read, write or free on any
+    /// cell, and every alloc/free count identical to the same cell before the
+    /// fix. The mixed-width enum's own 2-block leak is unchanged by this row
+    /// and is the memory half of the miscompile above, left for its own row.
+
+    #[test]
+    fn e2e_generic_enum_container_payload_positions() {
+        for (label, src, want) in [
+            (
+                "a DISCARDED value — no binding at all, so no instantiation is recorded for one (before: mid|end|)",
+                r#"
+struct R { id: i64 }
+impl Drop for R { fn drop(mut ref self) { println(f"dR{self.id}") } }
+fn mkr(i: i64) -> R { return R { id: i }; }
+struct P { id: i64 }
+enum Ew { Z(R), N }
+impl Drop for Ew { fn drop(mut ref self) { println("dER") } }
+enum Slot[T] { S(T), N }
+enum EVecG[T] { V(Vec[T]), N }
+enum Mix[T] { A(T), B(Vec[T]), N }
+enum G2[T] { X(T, i64), Y }
+fn seenv(x: Slot[Vec[R]]) { match x { Slot.S(v) => { println(f"x{v[0].id}") } Slot.N => { println("no") } } }
+
+fn main() {
+let a: Vec[R] = [mkr(1), mkr(2)];
+let _ = Slot.S(a);
+println("mid");
+println("end");
+}
+"#,
+                "dR1\ndR2\nmid\nend\n",
+            ),
+            (
+                "a BARE STATEMENT of the same constructor (before: mid|end|)",
+                r#"
+struct R { id: i64 }
+impl Drop for R { fn drop(mut ref self) { println(f"dR{self.id}") } }
+fn mkr(i: i64) -> R { return R { id: i }; }
+struct P { id: i64 }
+enum Ew { Z(R), N }
+impl Drop for Ew { fn drop(mut ref self) { println("dER") } }
+enum Slot[T] { S(T), N }
+enum EVecG[T] { V(Vec[T]), N }
+enum Mix[T] { A(T), B(Vec[T]), N }
+enum G2[T] { X(T, i64), Y }
+fn seenv(x: Slot[Vec[R]]) { match x { Slot.S(v) => { println(f"x{v[0].id}") } Slot.N => { println("no") } } }
+
+fn main() {
+let a: Vec[R] = [mkr(1), mkr(2)];
+Slot.S(a);
+println("mid");
+println("end");
+}
+"#,
+                "dR1\ndR2\nmid\nend\n",
+            ),
+            (
+                "a BLOCK-scoped binding: the bodies land at the live-range end, before the block's own output (before: in|mid|end|)",
+                r#"
+struct R { id: i64 }
+impl Drop for R { fn drop(mut ref self) { println(f"dR{self.id}") } }
+fn mkr(i: i64) -> R { return R { id: i }; }
+struct P { id: i64 }
+enum Ew { Z(R), N }
+impl Drop for Ew { fn drop(mut ref self) { println("dER") } }
+enum Slot[T] { S(T), N }
+enum EVecG[T] { V(Vec[T]), N }
+enum Mix[T] { A(T), B(Vec[T]), N }
+enum G2[T] { X(T, i64), Y }
+fn seenv(x: Slot[Vec[R]]) { match x { Slot.S(v) => { println(f"x{v[0].id}") } Slot.N => { println("no") } } }
+
+fn main() {
+let a: Vec[R] = [mkr(1), mkr(2)];
+{ let s: Slot[Vec[R]] = Slot.S(a); println("in"); }
+println("mid");
+println("end");
+}
+"#,
+                "dR1\ndR2\nin\nmid\nend\n",
+            ),
+            (
+                "a BY-VALUE PARAM scrutinee at a read-only arm — the binding holds the buffer here too (before: x1|end|)",
+                r#"
+struct R { id: i64 }
+impl Drop for R { fn drop(mut ref self) { println(f"dR{self.id}") } }
+fn mkr(i: i64) -> R { return R { id: i }; }
+struct P { id: i64 }
+enum Ew { Z(R), N }
+impl Drop for Ew { fn drop(mut ref self) { println("dER") } }
+enum Slot[T] { S(T), N }
+enum EVecG[T] { V(Vec[T]), N }
+enum Mix[T] { A(T), B(Vec[T]), N }
+enum G2[T] { X(T, i64), Y }
+fn seenv(x: Slot[Vec[R]]) { match x { Slot.S(v) => { println(f"x{v[0].id}") } Slot.N => { println("no") } } }
+
+fn main() {
+let a: Vec[R] = [mkr(1), mkr(2)];
+seenv(Slot.S(a));
+println("end");
+}
+"#,
+                "x1\ndR1\ndR2\nend\n",
+            ),
+            (
+                "ENUM elements: own body first, then the element's payload (before: mid|end|)",
+                r#"
+struct R { id: i64 }
+impl Drop for R { fn drop(mut ref self) { println(f"dR{self.id}") } }
+fn mkr(i: i64) -> R { return R { id: i }; }
+struct P { id: i64 }
+enum Ew { Z(R), N }
+impl Drop for Ew { fn drop(mut ref self) { println("dER") } }
+enum Slot[T] { S(T), N }
+enum EVecG[T] { V(Vec[T]), N }
+enum Mix[T] { A(T), B(Vec[T]), N }
+enum G2[T] { X(T, i64), Y }
+fn seenv(x: Slot[Vec[R]]) { match x { Slot.S(v) => { println(f"x{v[0].id}") } Slot.N => { println("no") } } }
+
+fn main() {
+let a: Vec[Ew] = [Ew.Z(mkr(1)), Ew.Z(mkr(2))];
+let s: Slot[Vec[Ew]] = Slot.S(a);
+println("mid");
+println("end");
+}
+"#,
+                "dER\ndR1\ndER\ndR2\nmid\nend\n",
+            ),
+            (
+                "one container NESTED inside another (before: mid|end|)",
+                r#"
+struct R { id: i64 }
+impl Drop for R { fn drop(mut ref self) { println(f"dR{self.id}") } }
+fn mkr(i: i64) -> R { return R { id: i }; }
+struct P { id: i64 }
+enum Ew { Z(R), N }
+impl Drop for Ew { fn drop(mut ref self) { println("dER") } }
+enum Slot[T] { S(T), N }
+enum EVecG[T] { V(Vec[T]), N }
+enum Mix[T] { A(T), B(Vec[T]), N }
+enum G2[T] { X(T, i64), Y }
+fn seenv(x: Slot[Vec[R]]) { match x { Slot.S(v) => { println(f"x{v[0].id}") } Slot.N => { println("no") } } }
+
+fn main() {
+let i1: Vec[R] = [mkr(1)];
+let i2: Vec[R] = [mkr(2)];
+let a: Vec[Vec[R]] = [i1, i2];
+let s: Slot[Vec[Vec[R]]] = Slot.S(a);
+println("mid");
+println("end");
+}
+"#,
+                "dR1\ndR2\nmid\nend\n",
+            ),
+            (
+                "MIXED-WIDTH enum, Vec instantiation: the variant's own width decides boxing, not the enum's area (before: mid|end|)",
+                r#"
+struct R { id: i64 }
+impl Drop for R { fn drop(mut ref self) { println(f"dR{self.id}") } }
+fn mkr(i: i64) -> R { return R { id: i }; }
+enum Mix[T] { A(T), B(Vec[T]), N }
+
+fn main() {
+let a: Vec[R] = [mkr(1), mkr(2)];
+let s: Mix[Vec[R]] = Mix.A(a);
+println("mid");
+println("end");
+}
+"#,
+                "dR1\ndR2\nmid\nend\n",
+            ),
+            (
+                "MIXED-WIDTH enum, Array instantiation — printed an ASLR-varying id before this fix (before: interp dR1|dR2|mid|end| vs compiled dR<addr>|dR0|mid|end|)",
+                r#"
+struct R { id: i64 }
+impl Drop for R { fn drop(mut ref self) { println(f"dR{self.id}") } }
+fn mkr(i: i64) -> R { return R { id: i }; }
+enum Slot[T] { S(T), N }
+enum Mix[T] { A(T), B(Vec[T]), N }
+
+fn main() {
+let a: Array[R, 2] = [mkr(1), mkr(2)];
+let s: Mix[Array[R, 2]] = Mix.A(a);
+println("mid");
+println("end");
+}
+"#,
+                "dR1\ndR2\nmid\nend\n",
+            ),
+            (
+                "CONTROL, the Array twin of the discard cell: compiled-correct before, interpreted-silent (before: interp mid|end| vs compiled dR1|dR2|mid|end|)",
+                r#"
+struct R { id: i64 }
+impl Drop for R { fn drop(mut ref self) { println(f"dR{self.id}") } }
+fn mkr(i: i64) -> R { return R { id: i }; }
+enum Slot[T] { S(T), N }
+enum Mix[T] { A(T), B(Vec[T]), N }
+
+fn main() {
+let a: Array[R, 2] = [mkr(1), mkr(2)];
+let _ = Slot.S(a);
+println("mid");
+println("end");
+}
+"#,
+                "dR1\ndR2\nmid\nend\n",
+            ),
+            (
+                "CONTROL, the Array twin of the bare statement (before: interp mid|end| vs compiled dR1|dR2|mid|end|)",
+                r#"
+struct R { id: i64 }
+impl Drop for R { fn drop(mut ref self) { println(f"dR{self.id}") } }
+fn mkr(i: i64) -> R { return R { id: i }; }
+enum Slot[T] { S(T), N }
+enum Mix[T] { A(T), B(Vec[T]), N }
+
+fn main() {
+let a: Array[R, 2] = [mkr(1), mkr(2)];
+Slot.S(a);
+println("mid");
+println("end");
+}
+"#,
+                "dR1\ndR2\nmid\nend\n",
+            ),
+            (
+                "CONTROL, the Array twin of the nesting cell (before: interp mid|end| vs compiled dR1|dR2|mid|end|)",
+                r#"
+struct R { id: i64 }
+impl Drop for R { fn drop(mut ref self) { println(f"dR{self.id}") } }
+fn mkr(i: i64) -> R { return R { id: i }; }
+enum Slot[T] { S(T), N }
+enum Mix[T] { A(T), B(Vec[T]), N }
+
+fn main() {
+let i1: Array[R, 1] = [mkr(1)];
+let i2: Array[R, 1] = [mkr(2)];
+let a: Array[Array[R, 1], 2] = [i1, i2];
+let s: Slot[Array[Array[R, 1], 2]] = Slot.S(a);
+println("mid");
+println("end");
+}
+"#,
+                "dR1\ndR2\nmid\nend\n",
+            ),
+            (
+                "AGREED SILENCE, three deep: `elem_te_runs_user_drop` stops at one level and so does the walk (before: mid|end|)",
+                r#"
+struct R { id: i64 }
+impl Drop for R { fn drop(mut ref self) { println(f"dR{self.id}") } }
+fn mkr(i: i64) -> R { return R { id: i }; }
+enum Slot[T] { S(T), N }
+
+fn main() {
+let a1: Vec[R] = [mkr(1)];
+let b1: Vec[Vec[R]] = [a1];
+let c1: Vec[Vec[Vec[R]]] = [b1];
+let s: Slot[Vec[Vec[Vec[R]]]] = Slot.S(c1);
+println("mid");
+println("end");
+}
+"#,
+                "mid\nend\n",
+            ),
+            (
+                "AGREED SILENCE, a TWO-FIELD variant: the walker head skips it, so neither side may fire (before: mid|end|)",
+                r#"
+struct R { id: i64 }
+impl Drop for R { fn drop(mut ref self) { println(f"dR{self.id}") } }
+fn mkr(i: i64) -> R { return R { id: i }; }
+struct P { id: i64 }
+enum Ew { Z(R), N }
+impl Drop for Ew { fn drop(mut ref self) { println("dER") } }
+enum Slot[T] { S(T), N }
+enum EVecG[T] { V(Vec[T]), N }
+enum Mix[T] { A(T), B(Vec[T]), N }
+enum G2[T] { X(T, i64), Y }
+fn seenv(x: Slot[Vec[R]]) { match x { Slot.S(v) => { println(f"x{v[0].id}") } Slot.N => { println("no") } } }
+
+fn main() {
+let a: Vec[R] = [mkr(1), mkr(2)];
+let s: G2[Vec[R]] = G2.X(a, 7);
+println("mid");
+println("end");
+}
+"#,
+                "mid\nend\n",
+            ),
+            (
+                "CONTROL, elements with no body: nothing is due and nothing runs (before: mid|end|)",
+                r#"
+struct R { id: i64 }
+impl Drop for R { fn drop(mut ref self) { println(f"dR{self.id}") } }
+fn mkr(i: i64) -> R { return R { id: i }; }
+struct P { id: i64 }
+enum Ew { Z(R), N }
+impl Drop for Ew { fn drop(mut ref self) { println("dER") } }
+enum Slot[T] { S(T), N }
+enum EVecG[T] { V(Vec[T]), N }
+enum Mix[T] { A(T), B(Vec[T]), N }
+enum G2[T] { X(T, i64), Y }
+fn seenv(x: Slot[Vec[R]]) { match x { Slot.S(v) => { println(f"x{v[0].id}") } Slot.N => { println("no") } } }
+
+fn main() {
+let a: Vec[P] = [P { id: 1 }, P { id: 2 }];
+let s: Slot[Vec[P]] = Slot.S(a);
+println("mid");
+println("end");
+}
+"#,
+                "mid\nend\n",
+            ),
+        ] {
+            assert_eq!(run_program(src).as_deref(), Some(want), "[{label}]");
         }
     }
 

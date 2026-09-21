@@ -14582,6 +14582,34 @@ impl<'ctx> super::Codegen<'ctx> {
     /// type comparison (a `String` binding's slot type is not always the
     /// canonical vec-struct type even though its layout is). No-op when
     /// `name` has no live slot or no buffer cleanup queued.
+    /// B-2026-09-20-62 — does `name`'s binding currently own a `Vec`/`String`
+    /// BUFFER free?
+    ///
+    /// The read-only peer of [`Self::suppress_vec_buffer_drop_for_var`] below,
+    /// and keyed the same way, on the binding's ALLOCA rather than its name,
+    /// for the reason that one gives.
+    ///
+    /// Asked at a match arm, after `bind_pattern_values` has run, to learn
+    /// whether the arm's payload binding took the interior's memory. That is a
+    /// FACT about what is registered, not a derivation from the payload's
+    /// declared or instantiated type, which is why it answers for a by-value
+    /// PARAMETER scrutinee — whose instantiation nothing records — exactly as
+    /// it does for a named local.
+    pub(super) fn var_owns_vec_buffer(&self, name: &str) -> bool {
+        let Some(slot) = self.variables.get(name) else {
+            return false;
+        };
+        let target = slot.ptr;
+        self.drop_rc.scope_cleanup_actions.iter().any(|frame| {
+            frame.iter().any(|action| {
+                matches!(
+                    action,
+                    CleanupAction::FreeVecBuffer { vec_alloca, .. } if *vec_alloca == target
+                )
+            })
+        })
+    }
+
     pub(super) fn suppress_vec_buffer_drop_for_var(&mut self, name: &str) {
         let Some(slot) = self.variables.get(name) else {
             return;

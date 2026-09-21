@@ -12007,7 +12007,10 @@ impl<'ctx> super::Codegen<'ctx> {
     /// and with the retraction disabled outright the first three go clean
     /// while the last three abort with 8 invalid frees each — which is what
     /// establishes that the split is per shape and not a blanket answer.
-    pub(super) fn boxed_payload_interior_taken_by_arm(&mut self, payload_te: &TypeExpr) -> bool {
+    /// B-2026-09-20-62 — `&self`. The body only reads, and the caller added by
+    /// that row asks it about each instantiated payload of an arm while holding
+    /// the list, which a `&mut` receiver would forbid. No behaviour changes.
+    pub(super) fn boxed_payload_interior_taken_by_arm(&self, payload_te: &TypeExpr) -> bool {
         if self.array_elem_and_len(payload_te).is_some() {
             return false;
         }
@@ -12291,10 +12294,11 @@ impl<'ctx> super::Codegen<'ctx> {
         if layout.is_shared {
             return None;
         }
-        // The erased payload area, in words: anything wider is heap-boxed by
-        // `coerce_to_payload_words`, which is exactly the threshold the core's
-        // walk needs to know whether word 0 is a box pointer or the value.
-        let area = (layout.llvm_type.count_fields() as usize).saturating_sub(1);
+        // B-2026-09-20-62 — the enum-wide payload area is NOT the boxing
+        // threshold and is no longer read here; each arm carries its own
+        // variant's declared width, computed at the `arms.push` below. The
+        // layout is still needed for the `is_shared` test above and for the
+        // tag switch the core emits.
         let args: Vec<TypeExpr> = p
             .generic_args
             .as_ref()?
@@ -12345,25 +12349,59 @@ impl<'ctx> super::Codegen<'ctx> {
             if !Self::type_expr_mentions_param(&tys[0], &params) {
                 continue;
             }
-            let _ = &vname;
-            // Walk a `Vec` payload only when the DECLARATION is the container —
-            // `V(Vec[T])`, whose elements are generic-dependent by spelling and
-            // whose interpreter half runs them (measured, B-2026-09-13-7). A bare
-            // `T` that merely INSTANTIATES to a `Vec` is not this arm: the
-            // interpreter is silent there on both positions, so arming it would
-            // open a divergence where today both backends agree, and that gap is
-            // its own row with its own interpreter half to write.
-            let declared_is_container = !matches!(
-                &tys[0].kind,
-                TypeKind::Path(pp) if pp.generic_args.is_none()
-                    && pp.segments.len() == 1
-                    && params.contains(&pp.segments[0])
-            );
+            // B-2026-09-20-62 — EVERY arm of this head may walk a `Vec`
+            // payload, and the question is asked of the SUBSTITUTED type
+            // alone.
+            //
+            // What stood here was a `declared_is_container` test: walk a `Vec`
+            // only where the DECLARATION spells the container (`V(Vec[T])`),
+            // never where a bare `T` merely INSTANTIATES to one. That test was
+            // never about the payload — a `Slot[Vec[R]]` and an `EVecG[R]`
+            // carry the SAME `Vec[R]` — and its own comment said what it was
+            // really for: the interpreter walked the first spelling and not
+            // the second, so arming this side alone would have traded a gap
+            // both backends shared for a run-vs-build divergence. It named the
+            // remainder "its own row with its own interpreter half to write",
+            // and this is that row.
+            //
+            // The interpreter half is `substituted_array_head`'s widening to
+            // `Vec` (`src/interpreter/eval_stmt.rs`), whose own doc states the
+            // same contract from the other side: widen only once the compiled
+            // side is measured correct for that kind under a generic enum.
+            // The two move in one commit or neither moves.
+            //
+            // With both halves in, the spelling of the declaration decides
+            // nothing and the predicate comes out rather than being widened:
+            // `payload_vec_bodies_parts` in the core already asks the only
+            // question that matters — is the payload a `Vec` whose element
+            // runs a user body — of the type AFTER substitution. Arms whose
+            // payload is not a `Vec` are unaffected, since that predicate
+            // answers `None` for them whatever this flag says.
+            // B-2026-09-20-62 — the boxing threshold is the VARIANT'S OWN
+            // declared payload width, not the enum-wide area.
+            //
+            // `coerce_to_payload_words` boxes when the value is wider than the
+            // variant's `num_words`, which comes from that variant's
+            // `field_word_offsets` — `T` is one word whatever the enum's area
+            // is. The area is the WIDEST variant's width, so for an enum whose
+            // variants disagree the two numbers differ and the walker read a
+            // boxed payload as an inline one. MEASURED on
+            // `enum Mix[T] { A(T), B(Vec[T]), N }`, whose area is 3 from the
+            // `Vec[T]` arm while `A`'s own width is 1: at `T = Array[R, 2]`
+            // every compiled surface printed an ASLR-varying id and a `dR0`
+            // (valgrind CLEAN — the words read are live, they are just the box
+            // pointer and its neighbour), and at `T = Vec[R]` the same read
+            // took a zero length and printed nothing at all.
+            //
+            // `Slot[T]`, `EVecG[T]` and every other enum whose variants agree
+            // on their width are byte-for-byte unchanged, which is why this is
+            // a correction and not a widening.
+            let arm_words = self.payload_word_count_for_type_expr(&tys[0], enum_name, &vname);
             arms.push((
                 tag,
                 Self::subst_type_params(&tys[0], &subst),
-                area,
-                declared_is_container,
+                arm_words,
+                true,
             ));
         }
         if arms.is_empty() {
@@ -12374,10 +12412,12 @@ impl<'ctx> super::Codegen<'ctx> {
         // descends into an `Array` payload too (B-2026-09-12-6), so both
         // backends move together.
         //
-        // It does NOT take the `Vec` arm (B-2026-09-13-29): that arm's
-        // interpreter half exists only for the seeded pair's DISCARD position,
-        // so admitting it here would give this head bodies the interpreter does
-        // not run.
+        // It NOW takes the `Vec` arm as well (B-2026-09-20-62). That arm used
+        // to be refused here because its interpreter half existed only for the
+        // seeded pair's DISCARD position; the generic-enum half is written in
+        // the same commit that lifts this, so the two heads reach the same
+        // shape. The call-wide flag below stays `false`: each arm carries its
+        // own, set above.
         self.emit_payload_user_drop_bodies_core(fn_name, enum_name, arms, false, None)
     }
 

@@ -2304,22 +2304,30 @@ impl<'a> super::Interpreter<'a> {
             .or_else(|| Self::declared_field_type_head(declared))
     }
 
-    /// NARROWED TO `Array` ON PURPOSE, and by a measurement rather than by
-    /// caution. A MONOMORPHIC `Vec` payload runs its elements' bodies on all
-    /// four surfaces today, but the generic `G[Vec[R]]` is silent on BOTH — so
-    /// substituting unconditionally and letting the walk's arms dispatch on
-    /// the result would make the interpreter fire where every compiled surface
-    /// is silent. That is a NEW run-vs-build divergence, and it is exactly what
-    /// an earlier draft of the `Array` payload arm was thrown away for (see its
-    /// own doc). `Array` is safe for the opposite reason and only that reason:
-    /// `G[Array[R, N]]` is ALREADY correct on the three compiled surfaces, so
-    /// substituting brings the interpreter into agreement instead of out of it.
+    /// `Array` AND `Vec`, each admitted by a measurement rather than by
+    /// caution, and each on the same test: is the compiled side already
+    /// correct for that kind under a generic enum.
+    ///
+    /// `Array` was the first, for that reason alone — `G[Array[R, N]]` was
+    /// correct on the three compiled surfaces, so substituting brought this
+    /// side into agreement instead of out of it. `Vec` was refused on the
+    /// same test in the other direction: `G[Vec[R]]` was silent on ALL FOUR
+    /// surfaces, so substituting here alone would have made the interpreter
+    /// fire where nothing compiled did — a NEW run-vs-build divergence, which
+    /// is what an earlier draft of the `Array` payload arm was thrown away for
+    /// (see its own doc).
+    ///
+    /// B-2026-09-20-62 — `Vec` now passes that same test. Its compiled half
+    /// lands in the same commit as this line: the generic-enum walker head
+    /// (`emit_generic_enum_payload_user_drop_bodies_fn`) no longer withholds
+    /// the `Vec` arm from a payload declared as a bare parameter, so the two
+    /// sides reach the same shape and this must accept it or the divergence
+    /// runs the other way. The condition the doc stated is met, not relaxed.
     ///
     /// Every other instantiation keeps its unsubstituted head and stays where
-    /// it is — `Vec` in B-2026-09-10-20's row, the rest in this one. Widening
-    /// this to another kind is legitimate only once the compiled side is
-    /// measured correct for that kind under a generic enum; it is not a
-    /// spelling to be added to.
+    /// it is. The test is unchanged and this remains not a spelling to be
+    /// added to: a further kind is legitimate only once the compiled side is
+    /// measured correct for it under a generic enum.
     fn substituted_array_head(
         &self,
         enum_name: &str,
@@ -2380,6 +2388,13 @@ impl<'a> super::Interpreter<'a> {
             .nth(idx)?;
         match Self::declared_field_type_head(arg).as_deref() {
             Some("Array") => Some("Array".to_string()),
+            // B-2026-09-20-62. The walk already has the arm this head selects:
+            // `Vec` reaches B-2026-09-10-20's `Vec` PAYLOAD arm, which runs a
+            // struct element's body and an enum element's body-then-payload,
+            // matching what the compiled element walker emits for the same
+            // handle. Nothing below this line needed writing — the arm simply
+            // never got a head for a generic instantiation.
+            Some("Vec") => Some("Vec".to_string()),
             _ => None,
         }
     }
@@ -2457,6 +2472,56 @@ impl<'a> super::Interpreter<'a> {
         // pins reverse declaration order for a struct "or enum variant" alike.
         // Codegen twin: the `.rev()` on `fields` in
         // `emit_enum_payload_user_drop_bodies_fn_skipping`.
+        // B-2026-09-20-62 — a CONTAINER payload with no instantiation to read.
+        //
+        // `substituted_array_head` resolves a bare-parameter payload against
+        // the BINDING's recorded instantiation, and three positions have no
+        // binding to record one: a discarded `let _ = G.A(v)`, a bare
+        // statement `G.A(v);`, and a container nested one level deeper. At all
+        // three the compiled surfaces run the elements' bodies — for `Array`
+        // they always have, for `Vec` since this row's codegen half — so
+        // declining here is not a shared gap but a run-vs-build divergence.
+        //
+        // The value is enough to decide, and only because BOTH container kinds
+        // are now compiled-correct at these positions. That is precisely the
+        // condition an earlier draft of the `Array` payload arm failed: it
+        // dispatched on the value's shape while `G[Vec[R]]` was silent on every
+        // compiled surface, so it fired where nothing compiled did. With the
+        // codegen half of this row in, the two kinds agree and the shape
+        // carries the answer. `Vec` is the head chosen because its arm is the
+        // wider of the two — a struct element's body, an enum element's body
+        // then its payload — matching what the compiled element walker runs.
+        //
+        // Narrow: a payload DECLARED as one of the enum's own parameters, whose
+        // value is a container, and only where nothing better was resolved. A
+        // concretely-declared payload keeps its own head, and a binding that
+        // does record an instantiation keeps the head resolved from it.
+        // SINGLE-PAYLOAD VARIANTS ONLY, the same criterion
+        // `substituted_array_head` states above and for the same reason:
+        // substitute exactly where the compiled side is already correct. A
+        // two-field variant (`enum G2[T] { X(T, i64), Y }`) is silent on ALL
+        // FOUR surfaces — the generic-enum walker head skips it outright — so
+        // firing here would make the interpreter the only surface that runs
+        // the body. Measured on `G2[Vec[R]]`, which moved when this arm was
+        // first written without the restriction.
+        let own_params = self.enum_generic_param_names(enum_name);
+        let single_payload = decls.len() == 1;
+        let payloads: Vec<(Option<String>, Value)> = payloads
+            .into_iter()
+            .map(|(head, payload)| {
+                let head = match (&head, &payload) {
+                    (Some(h), Value::Array(_))
+                        if single_payload
+                            && own_params.iter().any(|p| p == h)
+                            && !matches!(enum_name.as_str(), "Option" | "Result") =>
+                    {
+                        Some("Vec".to_string())
+                    }
+                    _ => head,
+                };
+                (head, payload)
+            })
+            .collect();
         for (declared_head, payload) in payloads.into_iter().rev() {
             // B-2026-09-12-24 — the `Array` PAYLOAD arm. The `Value::Struct`
             // destructure below drops an array payload on the floor, so an
@@ -2493,6 +2558,17 @@ impl<'a> super::Interpreter<'a> {
                     // (`emit_array_elem_user_drop_bodies_fn`) emits for the
                     // same cell.
                     for e in elems {
+                        // B-2026-09-20-62 — a NESTED container element, through
+                        // the same one-level walk the `Vec` arm below uses.
+                        // `Slot[Array[Array[R, 1], 2]]` ran its inner elements'
+                        // bodies on every compiled surface and on none here,
+                        // because this loop admitted a struct element and
+                        // dropped a container one. Pre-existing, and the
+                        // `Array` twin of the cell this row is named for.
+                        if matches!(&e, Value::Array(_)) {
+                            self.run_container_elem_user_drop_bodies(&e);
+                            continue;
+                        }
                         let Value::Struct { name: en, .. } = &e else {
                             continue;
                         };
@@ -2534,6 +2610,17 @@ impl<'a> super::Interpreter<'a> {
                     // element walker emits for the same handle.
                     for e in elems {
                         match &e {
+                            // B-2026-09-20-62 — a NESTED container element.
+                            // `Vec[Vec[R]]` / `Array[Array[R, 1], 2]` as a
+                            // generic payload runs the inner elements' bodies
+                            // on every compiled surface and ran them on none
+                            // here, because this dispatch admitted a struct or
+                            // an enum element and dropped a container one. The
+                            // recursion terminates on the value's nesting,
+                            // which is finite.
+                            Value::Array(_) => {
+                                self.run_container_elem_user_drop_bodies(&e);
+                            }
                             Value::Struct { name: en, .. } => {
                                 if self.program.drop_method_keys.contains_key(en) {
                                     let en = en.clone();
@@ -2674,6 +2761,53 @@ impl<'a> super::Interpreter<'a> {
                 self.run_enum_payload_user_drops_value(&payload);
             } else {
                 self.drop_user_drop_fields_of_value(&payload);
+            }
+        }
+    }
+
+    /// B-2026-09-20-62 — run the user `Drop` bodies reachable from ONE
+    /// container VALUE's elements: a struct element's own body, an enum
+    /// element's body then its payload's, and a nested container element by
+    /// recursion.
+    ///
+    /// The element dispatch of the `Vec` PAYLOAD arm, lifted out so the nested
+    /// case and the top level are one walk rather than two that can disagree
+    /// about which element kinds they reach. BODY ONLY — the interpreter's
+    /// value model owns the memory — and no refcount is consulted, exactly as
+    /// the arm it came from.
+    ///
+    /// FLAT, deliberately: it does NOT descend into a container element of its
+    /// own, so a payload nests exactly one level here. That is the compiled
+    /// side's reach, measured rather than assumed —
+    /// `Slot[Vec[Vec[R]]]` runs its inner elements' bodies on every compiled
+    /// surface and `Slot[Vec[Vec[Vec[R]]]]` runs none, because
+    /// `elem_te_runs_user_drop` answers on the element's head name and stops.
+    /// Recursing here would print at three deep where nothing compiled does.
+    /// The three-deep cell stays a gap both sides share.
+    fn run_container_elem_user_drop_bodies(&mut self, container: &Value) {
+        let Value::Array(cell) = container else {
+            return;
+        };
+        let elems: Vec<Value> = match cell.read() {
+            Ok(g) => g.clone(),
+            Err(_) => return,
+        };
+        for e in elems {
+            match &e {
+                Value::Struct { name: en, .. } => {
+                    if self.program.drop_method_keys.contains_key(en) {
+                        let en = en.clone();
+                        self.run_user_drop_body_only(&en, e.clone());
+                    }
+                }
+                Value::EnumVariant { enum_name: en, .. } => {
+                    if self.program.drop_method_keys.contains_key(en) {
+                        let en = en.clone();
+                        self.run_user_drop_body_only(&en, e.clone());
+                    }
+                    self.run_enum_payload_user_drops_value(&e);
+                }
+                _ => {}
             }
         }
     }

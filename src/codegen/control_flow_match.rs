@@ -9736,13 +9736,54 @@ impl<'ctx> super::Codegen<'ctx> {
         //    the question of the INSTANTIATION — `arm_consumes_only_generic_
         //    payload` and the declared variant type both spell the payload
         //    `T`, one word, from which no container head is readable.
+        // 4c. B-2026-09-20-62 — and it is NOT the sole channel when the arm's
+        //    BINDING takes the interior's memory, because then the husk walker
+        //    fires too late to read it.
+        //
+        //    The husk's `__karac_dropelems_genum_<te>` runs at the SCRUTINEE's
+        //    live-range end, after the match; the binding's own free runs at
+        //    the ARM's end, before it. For an `Array` payload that is harmless:
+        //    `boxed_payload_interior_taken_by_arm` answers FALSE there, the box
+        //    keeps the interior, and the walker reads a live box. For a `Vec` it
+        //    answers TRUE — the buffer channel hands the interior to the binding
+        //    — so the walker read a buffer the arm had already freed. MEASURED
+        //    on `Slot[Vec[R]]` at a read-only named-local arm: valgrind reports
+        //    `Invalid read of size 8 ... 0 bytes inside a block of size 16
+        //    free'd`, and without valgrind the bodies print ASLR-varying ids.
+        //    Memory is BALANCED throughout (13 allocs / 13 frees, 0 lost), so
+        //    only the invalid-read column sees it.
+        //
+        //    So where the interior moves, the bodies move with it: the mask
+        //    runs as usual and the element-bodies walk is registered on the
+        //    BINDING below, in the frame whose drain owns that buffer. One
+        //    walk either way, never two, and never over freed memory.
+        //    The question is asked of the REGISTRATION, not of the type. What
+        //    matters is whether a buffer free is queued against this binding,
+        //    and `var_owns_vec_buffer` reads exactly that — so it answers for a
+        //    by-value PARAMETER scrutinee, whose instantiation nothing records,
+        //    as readily as for a named local. Deriving it from the payload type
+        //    instead left the param cell printing garbage, because the
+        //    derivation had nothing to read.
+        let arm_binding_takes_container_interior = arm_reads_only_bodies
+            && self.var_has_boxed_enum_drop(scrut_name)
+            && matches!(
+                Self::variant_arm_binds(pattern).as_slice(),
+                [b] if self.var_owns_vec_buffer(b)
+            );
         let bodies_mask_is_sole_channel = arm_reads_only_bodies
             && (self.scrutinee_is_owned_param_binding(scrutinee)
                 || self
                     .arm_generic_payload_bodies_are_element_only(scrut_name, &enum_name, pattern))
             && self.var_has_boxed_enum_drop(scrut_name)
-            && self.arm_consumes_only_generic_payload(&enum_name, pattern);
+            && self.arm_consumes_only_generic_payload(&enum_name, pattern)
+            && !arm_binding_takes_container_interior;
         if self.enum_pattern_consumes_user_drop_payload(&enum_name, pattern) {
+            // B-2026-09-20-62 — inside the same gate the mask is, and for the
+            // same reason: this registration is the other half of that
+            // decision, so an arm the gate declines must get neither.
+            if arm_binding_takes_container_interior {
+                self.register_arm_binding_container_elem_bodies(pattern);
+            }
             // Only the BODIES mask is gated: the MEMORY retraction at the end
             // of this block is what stops the box drop and the binding from
             // both freeing a boxed payload, and skipping it for a read-only
@@ -12785,6 +12826,82 @@ impl<'ctx> super::Codegen<'ctx> {
     /// drop must still fire (suppressing it would leak). A struct-variant
     /// shorthand field (`{ value }`, `pattern: None`) is a direct binding and
     /// always consumes.
+    /// B-2026-09-20-62 — register the payload's ELEMENT-bodies walk on the
+    /// ARM'S BINDING, for a read-only arm whose binding has taken the
+    /// interior's memory.
+    ///
+    /// The walk itself is the one a `let` of the same `Vec` gets — the same
+    /// `emit_vec_elem_user_drop_bodies_fn_mono` walker on the same
+    /// `ContainerElemBodies` channel — and that is the point: the binding owns
+    /// the buffer for the length of the arm, so it owns running the bodies
+    /// before freeing it, exactly as `let u = v` already does one line later in
+    /// the consuming spelling of this same match. Nothing new is emitted; the
+    /// walk is simply put where the memory is.
+    ///
+    /// Registered AFTER `bind_pattern_values` has run (the arm binds first,
+    /// this site suppresses second), so the binding's own buffer free is
+    /// already in the frame and the frame's drain runs this ahead of it.
+    ///
+    /// NARROW BY CONSTRUCTION: a single direct binding whose own element type
+    /// is recorded, which is the only shape the generic-enum walker head admits
+    /// at all (`tys.len() != 1` skips the rest). Anything else returns without
+    /// registering, and its caller has already decided the husk's mask runs —
+    /// the pre-existing behaviour, not a new silence.
+    fn register_arm_binding_container_elem_bodies(&mut self, pattern: &Pattern) {
+        let binds = Self::variant_arm_binds(pattern);
+        let [bind_name] = binds.as_slice() else {
+            return;
+        };
+        // The ELEMENT type comes from the binding's own record, which
+        // `bind_pattern_values` wrote when it registered the buffer free this
+        // walk has to run ahead of — the same source the buffer-vs-element
+        // drain choice beside it reads. Deriving it from the scrutinee's
+        // instantiation instead cannot answer for a by-value parameter.
+        let Some(elem_te) = self
+            .var_types
+            .var_elem_type_exprs
+            .get(bind_name.as_str())
+            .cloned()
+        else {
+            return;
+        };
+        // The same element admission the `let`-bound and discarded-literal
+        // registrations use, so all three resolve the identical walker.
+        let TypeKind::Path(ep) = &elem_te.kind else {
+            return;
+        };
+        let Some(elem_name) = ep.segments.first().filter(|n| {
+            let n = n.as_str();
+            self.type_decls.struct_types.contains_key(n)
+                || (n != "Option"
+                    && n != "Result"
+                    && self
+                        .type_decls
+                        .enum_layouts
+                        .get(n)
+                        .is_some_and(|l| !l.is_shared))
+        }) else {
+            return;
+        };
+        let elem_name = elem_name.clone();
+        let Some(slot) = self.variables.get(bind_name.as_str()).map(|s| s.ptr) else {
+            return;
+        };
+        let elem_ty = self.llvm_type_for_type_expr(&elem_te);
+        let subst = self.generic_struct_subst_from_inst(&elem_name, &elem_te);
+        let Some(bodies) = self.emit_vec_elem_user_drop_bodies_fn_mono(&elem_name, elem_ty, &subst)
+        else {
+            return;
+        };
+        self.track_user_drop_var_with_fn(
+            &elem_name,
+            bind_name,
+            slot,
+            bodies,
+            crate::codegen::state::UserDropKind::ContainerElemBodies,
+        );
+    }
+
     /// B-2026-09-20-41 — do the positions this arm takes instantiate to a
     /// CONTAINER whose Drop bodies live only in its ELEMENTS?
     ///
@@ -12808,11 +12925,36 @@ impl<'ctx> super::Codegen<'ctx> {
         enum_name: &str,
         pattern: &Pattern,
     ) -> bool {
+        let tes = self.arm_consumed_payload_inst_tes(scrut_name, enum_name, pattern);
+        !tes.is_empty() && tes.iter().all(|te| self.type_bodies_are_element_only(te))
+    }
+
+    /// B-2026-09-20-62 — the INSTANTIATED type of every payload position this
+    /// arm takes, which is the one derivation
+    /// [`Self::arm_generic_payload_bodies_are_element_only`] and the
+    /// interior-ownership question beside it both run on.
+    ///
+    /// Split out rather than copied: the two ask different things of the SAME
+    /// list — "do this payload's bodies live only in its elements" and "does
+    /// the arm's binding take the interior's memory" — and a second copy of
+    /// the substitution would be free to drift on which positions it covers,
+    /// which is exactly how a bodies walk and a free end up on opposite sides
+    /// of the same buffer.
+    ///
+    /// Empty when the scrutinee has no recorded instantiation, when the arm
+    /// takes nothing, or when the declaration and the instantiation disagree
+    /// on arity — every one of which is "no answer", never "yes".
+    fn arm_consumed_payload_inst_tes(
+        &self,
+        scrut_name: &str,
+        enum_name: &str,
+        pattern: &Pattern,
+    ) -> Vec<TypeExpr> {
         let Some(inst) = self.var_types.var_enum_inst_te.get(scrut_name).cloned() else {
-            return false;
+            return Vec::new();
         };
         let TypeKind::Path(p) = &inst.kind else {
-            return false;
+            return Vec::new();
         };
         let args: Vec<TypeExpr> = p
             .generic_args
@@ -12827,35 +12969,37 @@ impl<'ctx> super::Codegen<'ctx> {
             })
             .unwrap_or_default();
         if args.is_empty() {
-            return false;
+            return Vec::new();
         }
         let params = self.enum_generic_param_names(enum_name);
         if params.is_empty() || params.len() != args.len() {
-            return false;
+            return Vec::new();
         }
         let subst: std::collections::HashMap<String, TypeExpr> =
             params.into_iter().zip(args).collect();
         let Some((variant_name, consumed)) =
             self.enum_pattern_consumed_positions(enum_name, pattern)
         else {
-            return false;
+            return Vec::new();
         };
         if consumed.is_empty() {
-            return false;
+            return Vec::new();
         }
         let Some((_, _, tes)) = self
             .enum_variant_field_type_exprs(enum_name)
             .into_iter()
             .find(|(_, n, _)| *n == variant_name)
         else {
-            return false;
+            return Vec::new();
         };
-        consumed.into_iter().all(|pos| {
-            tes.get(pos).is_some_and(|te| {
-                let inst_te = Self::subst_type_params(te, &subst);
-                self.type_bodies_are_element_only(&inst_te)
-            })
-        })
+        // A position the declaration does not have is a disagreement, and the
+        // list must not silently shrink past it: an empty answer is what every
+        // caller reads as "no".
+        consumed
+            .into_iter()
+            .map(|pos| tes.get(pos).map(|te| Self::subst_type_params(te, &subst)))
+            .collect::<Option<Vec<TypeExpr>>>()
+            .unwrap_or_default()
     }
 
     /// A `Vec[E]` / `Array[E, N]` whose ELEMENT declares (or reaches) a user
