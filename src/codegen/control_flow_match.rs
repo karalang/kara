@@ -247,6 +247,11 @@ impl<'ctx> super::Codegen<'ctx> {
         // the per-arm suppression below then zeroes the CLONE's moved-out caps
         // (line 304 path), and the container's [#35] element drain frees the
         // untouched source element. Without this the clone leaked.
+        // B-2026-09-21-11 — saved and cleared BEFORE the materializer runs,
+        // because the materializer is what sets it. Restored with the other
+        // scrutinee-shaped flags at the merge block.
+        let saved_freshtemp_arm_bodies = self.pattern_state.freshtemp_payload_bodies_owed_to_arm;
+        self.pattern_state.freshtemp_payload_bodies_owed_to_arm = false;
         let freshtemp_enum = if scrut_ref_ptr.is_none() {
             arms.iter()
                 .map(|a| &a.pattern)
@@ -258,10 +263,8 @@ impl<'ctx> super::Codegen<'ctx> {
                         scrut,
                         did_clone_borrowed_index_field,
                         (
-                            arms.iter().any(|a| {
-                                Self::variant_pattern_takes_payload(&a.pattern)
-                                    && !a.pattern.binding_names().is_empty()
-                            }),
+                            arms.iter()
+                                .any(|a| Self::variant_pattern_binds_payload(&a.pattern)),
                             arms.iter()
                                 .all(|a| Self::variant_pattern_takes_payload(&a.pattern)),
                         ),
@@ -1762,6 +1765,7 @@ impl<'ctx> super::Codegen<'ctx> {
             .pattern_binding_scrutinee_is_elidable_param = saved_elidable_param_flag;
         self.pattern_state
             .pattern_binding_scrutinee_is_option_result = saved_opt_res_flag;
+        self.pattern_state.freshtemp_payload_bodies_owed_to_arm = saved_freshtemp_arm_bodies;
         self.pattern_state.pattern_binding_scrutinee_optres_area = saved_optres_area;
         self.pattern_state.pattern_binding_scrutinee_is_shared_enum = saved_shared_enum_flag;
         self.pattern_state
@@ -8030,6 +8034,27 @@ impl<'ctx> super::Codegen<'ctx> {
     /// `false` for a pattern that matches the value and binds nothing of it: a
     /// bare `_`, a `Slot.S(_)`, a catch-all identifier that takes the whole
     /// enum rather than its payload.
+    /// B-2026-09-21-11 — does this arm pattern BIND a variant's payload?
+    ///
+    /// Strictly narrower than [`Self::variant_pattern_takes_payload`], which
+    /// also answers `true` for a pattern with no payload to hand over. The two
+    /// are not interchangeable and reading one for the other is how the
+    /// payload-less arm `Slot.N` came to count as a binding: it arrives as a
+    /// single `Binding` holding the dotted path `"Slot.N"`, so
+    /// `binding_names()` returns that path and reads as non-empty.
+    pub(super) fn variant_pattern_binds_payload(pat: &Pattern) -> bool {
+        match &pat.kind {
+            PatternKind::TupleVariant { patterns, .. } => {
+                !patterns.is_empty() && !pat.binding_names().is_empty()
+            }
+            PatternKind::Struct { fields, .. } => {
+                !fields.is_empty() && !pat.binding_names().is_empty()
+            }
+            PatternKind::Or(ps) => ps.iter().any(Self::variant_pattern_binds_payload),
+            _ => false,
+        }
+    }
+
     pub(super) fn variant_pattern_takes_payload(pat: &Pattern) -> bool {
         match &pat.kind {
             PatternKind::TupleVariant { patterns, .. } => {
@@ -18255,6 +18280,12 @@ impl<'ctx> super::Codegen<'ctx> {
         // is registered once and fired at the merge block (design.md
         // § Temporary Lifetime Rules; B-2026-08-29-28), so one arm that
         // discards stands the whole construct down.
+        // B-2026-09-21-11 — say WHY this declines, so the bodies land on the
+        // binding instead of on nobody. See the field's doc for the two ends of
+        // the one decision.
+        if interior_is_the_arm_s {
+            self.pattern_state.freshtemp_payload_bodies_owed_to_arm = true;
+        }
         if let Some(w) = gen_walker.filter(|_| all_arms_bind_payload && !interior_is_the_arm_s) {
             self.track_user_drop_var_with_fn(
                 "",

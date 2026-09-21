@@ -72113,6 +72113,67 @@ fn main() {
 /// fix would still produce; what retired the pin is that no such fix was
 /// made. The `Array` target above is unchanged by that work and still passes
 /// on B-2026-09-20-45's own fix.
+/// B-2026-09-21-11 (interpreter twin) — the reference answers for a `Vec`
+/// payload bound out of a fresh ctor temp `match` scrutinee.
+///
+/// The first three cells are what the compiled surfaces were brought up to.
+/// The last two are AGREED GAPS pinned as such: an arm that discards its
+/// payload stands the whole construct down (the husk's gate is a union over
+/// every arm), and an `Option` payload is silent everywhere. Arming either on
+/// the compiled side alone would trade an agreement for a divergence.
+#[test]
+fn test_arm_binding_vec_payload_elem_drop_bodies() {
+    let hdr = "struct R { id: i64 }\n\
+               impl Drop for R { fn drop(mut ref self) { println(f\"dR{self.id}\") } }\n\
+               fn mkr(i: i64) -> R { return R { id: i }; }\n\
+               struct W { v: R }\n\
+               impl Drop for W { fn drop(mut ref self) { println(\"dW\") } }\n\
+               enum Slot[T] { S(T), N }\n";
+    for (label, stmts, want) in [
+        (
+            "Vec payload, fresh ctor temp, read-only arm",
+            "let a: Vec[R] = [mkr(1), mkr(2)];\n\
+             match Slot.S(a) { Slot.S(v) => { println(f\"x{v[0].id}\") } Slot.N => { println(\"no\") } }",
+            "x1\ndR1\ndR2\nend\n",
+        ),
+        (
+            "the same with a GUARD and two binding arms",
+            "let a: Vec[R] = [mkr(1), mkr(2)];\n\
+             match Slot.S(a) {\n\
+               Slot.S(v) if v[0].id > 99 => { println(f\"big{v[0].id}\") }\n\
+               Slot.S(w) => { println(f\"x{w[1].id}\") }\n\
+               Slot.N => { println(\"no\") }\n\
+             }",
+            "x2\ndR1\ndR2\nend\n",
+        ),
+        (
+            "an element carrying its own body over a Drop-bearing field",
+            "let a: Vec[W] = [W { v: mkr(1) }, W { v: mkr(2) }];\n\
+             match Slot.S(a) { Slot.S(v) => { println(\"x\") } Slot.N => { println(\"no\") } }",
+            "x\ndW\ndR1\ndW\ndR2\nend\n",
+        ),
+        (
+            "AGREED GAP (B-2026-09-21-12): one binding arm beside one that discards",
+            "let a: Vec[R] = [mkr(1), mkr(2)];\n\
+             match Slot.S(a) {\n\
+               Slot.S(v) if v[0].id > 99 => { println(\"big\") }\n\
+               Slot.S(_) => { println(\"x\") }\n\
+               Slot.N => { println(\"no\") }\n\
+             }",
+            "x\nend\n",
+        ),
+        (
+            "AGREED GAP: an `Option[R]` payload, silent on all four surfaces",
+            "let a: Option[R] = Option.Some(mkr(3));\n\
+             match Slot.S(a) { Slot.S(v) => { println(\"x\") } Slot.N => { println(\"no\") } }",
+            "x\nend\n",
+        ),
+    ] {
+        let src = format!("{hdr}fn main() {{\n{stmts}\nprintln(\"end\");\n}}\n");
+        assert_eq!(run(&src), want, "[{label}]");
+    }
+}
+
 /// B-2026-09-20-63 (interpreter twin) — the reference answers for a
 /// constructor used DIRECTLY as a `match` scrutinee, pinned so the codegen fix
 /// beside it cannot drift onto one backend alone.
@@ -72158,9 +72219,10 @@ fn test_freshtemp_generic_enum_scrutinee_payload_drop_bodies() {
             "x\nend\n",
         ),
         (
-            "PINNED DIVERGENCE: the Vec spelling, where this backend is CORRECT \
-             and the three compiled ones are silent — the half B-2026-09-20-63 \
-             leaves open after closing that cell's leak",
+            "the Vec spelling. This was a PINNED DIVERGENCE when the fixture was \
+             written — correct here, silent on the three compiled surfaces — and \
+             B-2026-09-21-11 closed it by giving the bodies to the arm's binding, \
+             so the four now agree at this value",
             "let a: Vec[R] = [mkr(1), mkr(2)];\n\
              match Slot.S(a) { Slot.S(v) => { println(f\"x{v[0].id}\") } Slot.N => { println(\"no\") } }",
             "x1\ndR1\ndR2\nend\n",

@@ -167,7 +167,7 @@ impl<'ctx> super::Codegen<'ctx> {
             // `all` answers the match site computes over its arms are
             // the same answer.
             (
-                Self::variant_pattern_takes_payload(pattern) && !pattern.binding_names().is_empty(),
+                Self::variant_pattern_binds_payload(pattern),
                 Self::variant_pattern_takes_payload(pattern),
             ),
         );
@@ -1094,7 +1094,7 @@ impl<'ctx> super::Codegen<'ctx> {
             // `all` answers the match site computes over its arms are
             // the same answer.
             (
-                Self::variant_pattern_takes_payload(pattern) && !pattern.binding_names().is_empty(),
+                Self::variant_pattern_binds_payload(pattern),
                 Self::variant_pattern_takes_payload(pattern),
             ),
         );
@@ -2201,7 +2201,7 @@ impl<'ctx> super::Codegen<'ctx> {
             // `all` answers the match site computes over its arms are
             // the same answer.
             (
-                Self::variant_pattern_takes_payload(pattern) && !pattern.binding_names().is_empty(),
+                Self::variant_pattern_binds_payload(pattern),
                 Self::variant_pattern_takes_payload(pattern),
             ),
         );

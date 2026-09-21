@@ -50157,15 +50157,15 @@ end
                 "x1\ndR1\ndR2\nend\n",
             ),
             (
-                "PINNED GAP (B-2026-09-20-63, PARTIAL): a FRESH CTOR TEMP scrutinee. \
-                 Its LEAK is closed and its Vec spelling's bodies are not — the \
-                 payload here infers to Vec[R], which the arm's binding owns, so \
-                 the husk must neither free nor walk it and nothing else runs the \
-                 element bodies. The Array spelling of the same position IS fixed \
-                 and is pinned in \
-                 `e2e_freshtemp_generic_enum_scrutinee_owns_its_instantiated_payload`",
+                "RETIRED PIN: a FRESH CTOR TEMP scrutinee. This cell asserted the \
+                 wrong-but-current `\"x1\\nend\\n\"` while B-2026-09-20-63 was open \
+                 and B-2026-09-21-11 after it closed the leak; both have landed, \
+                 so the two elements' bodies now run. The payload here infers to \
+                 Vec[R], and the bodies come from the ARM'S BINDING rather than \
+                 from the scrutinee husk, which stands down because that binding \
+                 owns the buffer",
                 "match Slot.S([mkr(1), mkr(2)]) { Slot.S(v) => { println(f\"x{v[0].id}\") } Slot.N => { println(\"no\") } }",
-                "x1\nend\n",
+                "x1\ndR1\ndR2\nend\n",
             ),
         ] {
             let src = format!("{hdr}fn main() {{\n{stmts}\nprintln(\"end\");\n}}\n");
@@ -50203,6 +50203,112 @@ end
     /// this one backend right and leave the other three wrong, which is strictly
     /// worse than the agreed answer. The memory half still runs for such an arm,
     /// so it stops leaking without changing what it prints.
+    /// B-2026-09-21-11 — the half B-2026-09-20-63 left open, and it closes at a
+    /// different site than that one.
+    ///
+    /// When a generic enum's payload instantiates to a `Vec`, an arm's binding
+    /// takes the buffer over — that is exactly the population
+    /// `boxed_payload_interior_taken_by_arm` names — so the scrutinee husk
+    /// cannot be the channel for the elements' `Drop` bodies: it fires at the
+    /// merge block, after that binding has already freed the buffer, and
+    /// walking it there read freed memory. B-2026-09-20-63 therefore stood the
+    /// husk down and left the bodies owned by nobody.
+    ///
+    /// They belong to the BINDING, where they fire at the arm's end, ahead of
+    /// its own buffer free. `register_arm_container_payload_elem_bodies` is the
+    /// registrar for exactly that, and its `Option`/`Result`-only gate exists to
+    /// stop a SECOND walker reaching one buffer. In this position there is no
+    /// first one, which is what the husk recorded when it declined.
+    ///
+    /// THE REGISTRATION HAD TO MOVE, not just widen. The cleanup frame drains
+    /// LIFO and the buffer free is queued after the bind, so a bodies walk
+    /// registered where it is decided fires LAST and reads the released buffer
+    /// — measured as two garbage ids and an invalid read of size 8. Deferring
+    /// it past that queueing is what puts the two in the order both other
+    /// backends already use. The call could only ever return early before this
+    /// row, so moving it changes nothing that was reaching it.
+    #[test]
+    fn e2e_arm_binding_owns_its_instantiated_vec_payload_elem_bodies() {
+        let hdr = "struct R { id: i64 }\n\
+                   impl Drop for R { fn drop(mut ref self) { println(f\"dR{self.id}\") } }\n\
+                   fn mkr(i: i64) -> R { return R { id: i }; }\n\
+                   struct W { v: R }\n\
+                   impl Drop for W { fn drop(mut ref self) { println(\"dW\") } }\n\
+                   enum Slot[T] { S(T), N }\n";
+        for (label, stmts, want) in [
+            (
+                "THE FIX: Vec payload, FRESH CTOR TEMP scrutinee, read-only arm",
+                "let a: Vec[R] = [mkr(1), mkr(2)];\n\
+                 match Slot.S(a) { Slot.S(v) => { println(f\"x{v[0].id}\") } Slot.N => { println(\"no\") } }",
+                "x1\ndR1\ndR2\nend\n",
+            ),
+            (
+                "THE FIX with a GUARD and two binding arms — the husk fires once at \
+                 the merge block, so an arm-sensitivity fault is invisible to a \
+                 single-arm grid",
+                "let a: Vec[R] = [mkr(1), mkr(2)];\n\
+                 match Slot.S(a) {\n\
+                   Slot.S(v) if v[0].id > 99 => { println(f\"big{v[0].id}\") }\n\
+                   Slot.S(w) => { println(f\"x{w[1].id}\") }\n\
+                   Slot.N => { println(\"no\") }\n\
+                 }",
+                "x2\ndR1\ndR2\nend\n",
+            ),
+            (
+                "THE FIX with an element carrying its OWN body over a Drop-bearing \
+                 field — both run, in the order the element walk uses",
+                "let a: Vec[W] = [W { v: mkr(1) }, W { v: mkr(2) }];\n\
+                 match Slot.S(a) { Slot.S(v) => { println(\"x\") } Slot.N => { println(\"no\") } }",
+                "x\ndW\ndR1\ndW\ndR2\nend\n",
+            ),
+            (
+                "control: a SCALAR element owes no body at all, and the registrar \
+                 must still leave the buffer free alone",
+                "let a: Vec[i64] = [1, 2];\n\
+                 match Slot.S(a) { Slot.S(v) => { println(f\"x{v[0]}\") } Slot.N => { println(\"no\") } }",
+                "x1\nend\n",
+            ),
+            (
+                "control: a CONSUMING arm was already correct — the binding's new \
+                 home owns the elements and this must not add a second walker",
+                "let a: Vec[R] = [mkr(1), mkr(2)];\n\
+                 match Slot.S(a) { Slot.S(v) => { let z = v; println(f\"x{z[0].id}\") } Slot.N => { println(\"no\") } }",
+                "x1\ndR1\ndR2\nend\n",
+            ),
+            (
+                "control: the ctor BOUND FIRST — B-2026-09-20-62's cell, where the \
+                 husk never stands down and this registrar must stay asleep",
+                "let a: Vec[R] = [mkr(1), mkr(2)];\n\
+                 let s = Slot.S(a);\n\
+                 match s { Slot.S(v) => { println(f\"x{v[0].id}\") } Slot.N => { println(\"no\") } }",
+                "x1\ndR1\ndR2\nend\n",
+            ),
+            (
+                "AGREED GAP, PINNED (B-2026-09-21-12): one binding arm beside one \
+                 that DISCARDS. The husk's gate is a union over every arm, so it \
+                 stands down for the whole construct and nothing here re-arms it",
+                "let a: Vec[R] = [mkr(1), mkr(2)];\n\
+                 match Slot.S(a) {\n\
+                   Slot.S(v) if v[0].id > 99 => { println(\"big\") }\n\
+                   Slot.S(_) => { println(\"x\") }\n\
+                   Slot.N => { println(\"no\") }\n\
+                 }",
+                "x\nend\n",
+            ),
+            (
+                "AGREED GAP, PINNED: an `Option[R]` payload is in the same \
+                 arm-owned population and silent on all four surfaces, so it is an \
+                 agreement rather than a divergence and stays as it is",
+                "let a: Option[R] = Option.Some(mkr(3));\n\
+                 match Slot.S(a) { Slot.S(v) => { println(\"x\") } Slot.N => { println(\"no\") } }",
+                "x\nend\n",
+            ),
+        ] {
+            let src = format!("{hdr}fn main() {{\n{stmts}\nprintln(\"end\");\n}}\n");
+            assert_eq!(run_program(&src).as_deref(), Some(want), "[{label}]");
+        }
+    }
+
     #[test]
     fn e2e_freshtemp_generic_enum_scrutinee_owns_its_instantiated_payload() {
         let hdr = "struct R { id: i64 }\n\
@@ -50238,12 +50344,14 @@ end
                 "x\nend\n",
             ),
             (
-                "PINNED GAP: the Vec spelling of the fix's own cell. The arm's \
-                 binding owns the buffer, so the husk stands down and nothing runs \
-                 the element bodies — this row closes its LEAK only",
+                "RETIRED PIN: the Vec spelling of the fix's own cell. B-2026-09-20-63 \
+                 closed its LEAK and pinned the silence at `\"x1\\nend\\n\"`; \
+                 B-2026-09-21-11 then gave the bodies to the ARM'S BINDING, where \
+                 they fire ahead of its own buffer free. The husk still stands \
+                 down here, which is why that row's fix is at a different site",
                 "let a: Vec[R] = [mkr(1), mkr(2)];\n\
                  match Slot.S(a) { Slot.S(v) => { println(f\"x{v[0].id}\") } Slot.N => { println(\"no\") } }",
-                "x1\nend\n",
+                "x1\ndR1\ndR2\nend\n",
             ),
             (
                 "control: the ctor BOUND FIRST — B-2026-09-20-62's cell, unchanged",

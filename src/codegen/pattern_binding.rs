@@ -517,6 +517,9 @@ impl<'ctx> super::Codegen<'ctx> {
                 // table; user struct types use it for `.field` access.
                 let key = (pattern.span.offset, pattern.span.length);
                 let mut bound_vec_elem: Option<BasicTypeEnum<'ctx>> = None;
+                // B-2026-09-21-11 — see the Vec arm below for why this is
+                // deferred rather than registered where it is decided.
+                let mut deferred_vec_elem_bodies: Option<(String, crate::ast::TypeExpr)> = None;
                 // B-2026-07-13-3: a generic enum's bare-`T` payload binding has
                 // no typechecker-recorded surface type, so fold in the monomorph-
                 // resolved concrete type (String/Vec) here — the SAME metadata
@@ -584,13 +587,22 @@ impl<'ctx> super::Codegen<'ctx> {
                                 bound_vec_elem = Some(elem_llvm);
                                 // B-2026-09-14-2 — the binding owns these
                                 // elements now; see the registrar's doc.
-                                let elem_for_bodies = inner_te.clone();
-                                let name_for_bodies = name.clone();
-                                self.register_arm_container_payload_elem_bodies(
-                                    &name_for_bodies,
-                                    &elem_for_bodies,
-                                    None,
-                                );
+                                //
+                                // B-2026-09-21-11 — DEFERRED to after the
+                                // `bound_vec_elem` block below rather than made
+                                // here, because the cleanup frame drains LIFO
+                                // and that block is what queues this binding's
+                                // BUFFER FREE. Registered here, the bodies walk
+                                // is pushed first and therefore fires LAST,
+                                // reading a buffer the free has already
+                                // released -- measured as two garbage ids and
+                                // an invalid read of size 8. Nothing else moves:
+                                // the call made here could only ever return
+                                // early (a `Vec` payload has `len: None`, which
+                                // the registrar turned away outright until this
+                                // row), so relocating it is byte-identical for
+                                // every case that was reaching it.
+                                deferred_vec_elem_bodies = Some((name.clone(), inner_te.clone()));
                             }
                             "Slice" => {
                                 self.var_types
@@ -989,6 +1001,11 @@ impl<'ctx> super::Codegen<'ctx> {
                             None => self.track_vec_var(alloca, Some(elem_ty)),
                         }
                     }
+                }
+                // B-2026-09-21-11 — AFTER the buffer free above, so the drain's
+                // LIFO order runs the bodies first and they read a live buffer.
+                if let Some((n, elem_te)) = deferred_vec_elem_bodies.take() {
+                    self.register_arm_container_payload_elem_bodies(&n, &elem_te, None);
                 }
                 // Register scope-exit Drop for a pattern-bound owned user
                 // STRUCT — `match e { Wrap(inner) => … }` binding a nested-struct
@@ -3069,9 +3086,24 @@ impl<'ctx> super::Codegen<'ctx> {
         // `mono-enum-array-payload-matched-out` case (`enum Bin { Packed(Array[Ra, 2]) }`).
         // `Option`/`Result` are the pair with no such walker at this position,
         // which is what leaves their arm binding owning the elements alone.
+        // B-2026-09-21-11 — OR the one user-enum position with the same
+        // property: a FRESH-TEMP scrutinee whose husk stood its own payload
+        // walker down because this binding takes the interior over. There the
+        // user enum's walker is not a second owner, it is NO owner — the husk
+        // fires at the merge block, after this binding has already freed the
+        // buffer, so it declined rather than walk freed memory. The doubling
+        // this gate protects against needs two walkers reaching one buffer, and
+        // in that position there is only this one.
+        //
+        // Read as a DISJUNCT rather than folded into the flag above, because
+        // the two say different things: `is_option_result` is about which enum
+        // the scrutinee is, and this is about a decision another site already
+        // took for this particular scrutinee. See the field's doc.
+        let husk_stood_down = self.pattern_state.freshtemp_payload_bodies_owed_to_arm;
         if !self
             .pattern_state
             .pattern_binding_scrutinee_is_option_result
+            && !husk_stood_down
         {
             return;
         }
@@ -3085,7 +3117,7 @@ impl<'ctx> super::Codegen<'ctx> {
         // it stays this registration's either way. That asymmetry is the whole
         // reason this predicate is the container kind here and the scrutinee's
         // position everywhere else in this function.
-        if len.is_none() {
+        if len.is_none() && !husk_stood_down {
             return;
         }
         if !self.elem_te_runs_user_drop(elem_te) {
@@ -3097,8 +3129,33 @@ impl<'ctx> super::Codegen<'ctx> {
         let elem_ty = self.llvm_type_for_type_expr(elem_te);
         let bodies = match len {
             Some(n) if n > 0 => self.emit_array_elem_user_drop_bodies_fn(elem_ty, elem_te, n),
-            // A zero-length array has no element to run, and `None` is the
-            // `Vec` case the guard above already turned away.
+            // B-2026-09-21-11 — the `Vec` walker, reachable only through the
+            // husk-stood-down disjunct above. A zero-length array still has no
+            // element to run.
+            None if husk_stood_down => {
+                // The same element admission the `let`-bound, discarded-literal
+                // and named-scrutinee registrations use, so all four resolve
+                // the identical walker for one element type.
+                let elem_name = match &elem_te.kind {
+                    crate::ast::TypeKind::Path(ep) => ep.segments.first().filter(|n| {
+                        let n = n.as_str();
+                        self.type_decls.struct_types.contains_key(n)
+                            || (n != "Option"
+                                && n != "Result"
+                                && self
+                                    .type_decls
+                                    .enum_layouts
+                                    .get(n)
+                                    .is_some_and(|l| !l.is_shared))
+                    }),
+                    _ => None,
+                }
+                .cloned();
+                elem_name.and_then(|n| {
+                    let subst = self.generic_struct_subst_from_inst(&n, elem_te);
+                    self.emit_vec_elem_user_drop_bodies_fn_mono(&n, elem_ty, &subst)
+                })
+            }
             _ => None,
         };
         let Some(bodies) = bodies else {

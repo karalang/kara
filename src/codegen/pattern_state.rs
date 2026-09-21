@@ -121,6 +121,26 @@ pub(crate) struct PatternState<'ctx> {
     /// channel, and a second registration double-ran a mutating body
     /// (`self.buf.clear()` freed the buffer twice).
     pub(crate) pattern_binding_scrutinee_is_fresh_owning_temp: bool,
+    /// B-2026-09-21-11 — true while binding the arms of a `match` whose
+    /// FRESH-TEMP enum scrutinee stood its own payload-bodies walker down
+    /// because the arm's binding takes the payload's interior over.
+    ///
+    /// The two are one decision seen from its two ends.
+    /// `materialize_freshtemp_enum_scrutinee` cannot walk such a payload: the
+    /// husk fires at the merge block, by which point the arm's binding has
+    /// already dropped the buffer, so walking it reads freed memory (measured:
+    /// two garbage ids and an invalid read of size 8). It therefore declines,
+    /// and this flag is how it says WHY it declined rather than leaving the
+    /// bodies owned by nobody. `register_arm_container_payload_elem_bodies`
+    /// then registers them against the BINDING, where they fire at the arm's
+    /// end — before that binding's own buffer free, which is the order both
+    /// other backends already use.
+    ///
+    /// Set only at the stand-down, so there is exactly one owner by
+    /// construction: where the husk walks, this is false. Saved and restored
+    /// around the whole `match`, like every other scrutinee-shaped flag here,
+    /// so a nested `match` inside an arm cannot inherit it.
+    pub(crate) freshtemp_payload_bodies_owed_to_arm: bool,
     /// B-2026-09-09-19 — true while binding an arm whose
     /// `suppress_struct_field_boxed_payload_match_out` disarm is about to fire
     /// (same predicate, `struct_field_boxed_payload_match_out_applies`).

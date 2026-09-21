@@ -6874,6 +6874,7 @@ impl<'ctx> Codegen<'ctx> {
                 pattern_binding_scrutinee_is_elidable_param: false,
                 pattern_binding_scrutinee_is_option_result: false,
                 pattern_binding_scrutinee_is_fresh_owning_temp: false,
+                freshtemp_payload_bodies_owed_to_arm: false,
                 pattern_binding_field_boxed_payload_disarmed: false,
                 pattern_binding_arm_only_borrows: false,
                 pattern_binding_arm_borrowed_only_names: std::collections::HashSet::new(),

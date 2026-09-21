@@ -87601,6 +87601,70 @@ fn main() {
     /// a cell built from one sits at the baseline alloc count and proves
     /// nothing about a leak — the row records losing a wrong answer to exactly
     /// that for a while, reporting 0 bytes lost and reading as already-fixed.
+    /// B-2026-09-21-11 (memory twin) — the ORDERING, which is the half an
+    /// output oracle alone cannot certify.
+    ///
+    /// The elements' `Drop` bodies now run from the arm's BINDING rather than
+    /// from the scrutinee husk, and the binding also owns the buffer those
+    /// bodies read. The cleanup frame drains LIFO, so the registration has to
+    /// be queued AFTER the buffer free to fire BEFORE it; queued where the
+    /// decision is taken, it fired last and read released memory — two garbage
+    /// ids and an invalid read of size 8. Correct output and a clean ASAN run
+    /// together are what separate the working order from the broken one, since
+    /// the broken one printed the right NUMBER of lines.
+    ///
+    /// `vs` and `vw` fire their bodies; `vd` (a discarding arm beside a binding
+    /// one) and `vo` (an `Option` payload) are agreed gaps and fire none. All
+    /// four must be memory-clean either way.
+    #[test]
+    fn asan_arm_binding_vec_payload_elem_bodies_run_before_its_buffer_free() {
+        assert_clean_asan_run(
+            r#"
+struct R { id: i64, s: String }
+impl Drop for R { fn drop(mut ref self) { println(f"dR{self.id}") } }
+fn mkr(i: i64) -> R { return R { id: i, s: f"payload-{i}" }; }
+struct W { v: R }
+impl Drop for W { fn drop(mut ref self) { println("dW") } }
+enum Slot[T] { S(T), N }
+
+fn main() {
+    let a: Vec[R] = [mkr(1), mkr(2)];
+    match Slot.S(a) { Slot.S(v) => { println(f"vs{v[0].id}") } Slot.N => { println("no") } }
+
+    let b: Vec[W] = [W { v: mkr(3) }, W { v: mkr(4) }];
+    match Slot.S(b) { Slot.S(v) => { println("vw") } Slot.N => { println("no") } }
+
+    let c: Vec[R] = [mkr(5), mkr(6)];
+    match Slot.S(c) {
+        Slot.S(v) if v[0].id > 99 => { println("big") }
+        Slot.S(_) => { println("vd") }
+        Slot.N => { println("no") }
+    }
+
+    let d: Option[R] = Option.Some(mkr(7));
+    match Slot.S(d) { Slot.S(v) => { println("vo") } Slot.N => { println("no") } }
+
+    let e: Vec[i64] = [1, 2];
+    match Slot.S(e) { Slot.S(v) => { println(f"vi{v[0]}") } Slot.N => { println("no") } }
+    println("end");
+}
+"#,
+            &[
+                // The fix, and the ORDER is the point: the bodies precede the
+                // buffer free that would have released what they read.
+                "vs1", "dR1", "dR2",
+                // An element with a body of its own over a Drop-bearing field.
+                "vw", "dW", "dR3", "dW", "dR4",
+                // AGREED GAPS, pinned: a discarding arm stands the whole
+                // construct down, and an `Option` payload is silent everywhere.
+                "vd", "vo",
+                // A scalar element owes no body and must not disturb the free.
+                "vi1", "end",
+            ],
+            "asan_arm_binding_vec_payload_elem_bodies_run_before_its_buffer_free",
+        );
+    }
+
     /// B-2026-09-20-63 (memory twin) — the LEAK this row is filed about.
     ///
     /// A constructor used directly as a `match` scrutinee is a temporary bound
@@ -87657,8 +87721,11 @@ fn main() {
                 // is here to hold.
                 "ad",
                 // The Vec spelling: the arm's binding owns the buffer, so the
-                // husk neither frees nor walks it. Silent, and NOT a double free.
-                "vv5", // The declared-container spelling, its own agreed gap.
+                // husk neither frees nor walks it. SILENT WHEN THIS FIXTURE WAS
+                // WRITTEN and no longer — B-2026-09-21-11 registered the bodies
+                // against that binding, where they fire ahead of its own buffer
+                // free. Pinned at the correct answer now rather than at the gap.
+                "vv5", "dR5", "dR6", // The declared-container spelling, its own agreed gap.
                 "ev7", // A whole-value discard, correct through B-2026-09-20-15.
                 "dR9", "dR10", "end",
             ],
