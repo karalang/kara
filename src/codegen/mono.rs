@@ -2067,6 +2067,39 @@ impl<'ctx> super::Codegen<'ctx> {
         self.var_types.pending_let_elem_type_expr = saved_pending_elem_te;
         let mut arg_vals: Vec<BasicValueEnum<'ctx>> = arg_vals?;
 
+        // B-2026-09-21-4 — ONE BINDING PASSED TWICE BY VALUE. The copy loop
+        // above serves at most one argument per root binding, by construction:
+        // it rewrites the caller's SLOT and a binding has exactly one. Its
+        // dedupe makes that limit explicit rather than letting the second copy
+        // overwrite the first. So the second argument arrives here holding
+        // whatever the first argument's move-out left in the slot, which is a
+        // ZERO aggregate — a `Y` variant with a null box, which the callee
+        // dereferences.
+        //
+        // Give it an independent value cloned from the FIRST argument's value,
+        // which is already an independent box with the right contents. Keyed on
+        // the root identifier and applied only to a later occurrence, so a call
+        // whose arguments name distinct bindings emits nothing new and every
+        // cell on that path is byte-identical.
+        {
+            let mut first_seen: std::collections::HashSet<String> =
+                std::collections::HashSet::new();
+            for (i, a) in args.iter().enumerate() {
+                let ExprKind::Identifier(n) = &a.value.kind else {
+                    continue;
+                };
+                if first_seen.contains(n.as_str()) {
+                    if i < arg_vals.len() {
+                        if let Some(v) = self.uam_alias_independent_enum_value(&a.value) {
+                            arg_vals[i] = v;
+                        }
+                    }
+                } else {
+                    first_seen.insert(n.clone());
+                }
+            }
+        }
+
         // Body walk for B-2026-08-15-9's gate, computed at most once per call
         // and only when a bare-`T` param the return-type test rejected actually
         // turns up — most generic calls never touch it.

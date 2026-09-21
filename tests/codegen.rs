@@ -171702,6 +171702,83 @@ fn main() {
         );
     }
 
+    /// B-2026-09-21-4 — ONE BINDING PASSED TWICE BY VALUE IN A SINGLE CALL.
+    ///
+    /// `two(g, g)` over `enum G1[T] { Y(T), N }` built and then printed its
+    /// first arm, a garbled second, and `free(): double free detected in
+    /// tcache 2`; the concrete twin `twoc(g, g)` built and SIGSEGV'd having
+    /// printed only its first arm. `--interp` was correct on both and is the
+    /// oracle here.
+    ///
+    /// THE COPY FIRED FOR ONE ARGUMENT AND NEVER THE OTHER. Its gate is
+    /// `source_outlives_move`, which a trace showed answering `UseAfterMove`
+    /// for the first `g` and `No` for the second — so only the first was
+    /// copied, and that argument's own move-out ZEROED the caller's slot the
+    /// second then loaded. The emitted IR is explicit: `load`, `store
+    /// zeroinitializer`, `load`, `store zeroinitializer`, `call`. The callee's
+    /// second parameter therefore arrived as a `Y` variant holding a null box.
+    /// That is not the aliasing the row proposed — it guessed both arguments
+    /// loaded the same copied box — and the difference matters, because a
+    /// per-argument copy through the caller's SLOT cannot fix either shape: a
+    /// binding has exactly one slot.
+    ///
+    /// The fix gives a later occurrence its own value cloned from the SAVED
+    /// original, and gives the FINAL use the original itself — the same thing
+    /// `one(g); one(g)` already hands its second call, which is why that shape
+    /// was balanced all along while this one was not. Cloning the final use
+    /// instead leaves the original owned by nobody: measured at 16 allocs / 14
+    /// frees with 24 direct plus 2 indirect bytes lost, because both move-outs
+    /// zero the slot before the call, the scope-exit drop reads that zeroed
+    /// slot and frees nothing, and the restore lands after it.
+    ///
+    /// Cells: generic dup, concrete dup, triple, and — as controls that must
+    /// not move — distinct bindings, a single argument, two sequential calls,
+    /// and an alias with a gap (`three(g, h, g)`). Measured 53 allocs / 53
+    /// frees, 0 valgrind errors, all four surfaces byte-identical.
+    #[test]
+    fn test_e2e_one_binding_passed_twice_by_value_in_one_call() {
+        let src = r#"
+enum G1[T] { Y(T), N }
+
+fn one[T](a: G1[T]) {
+    match a { G1.Y(v) => { println(f"  1x {v}") } G1.N => { println("  1x NONE") } }
+}
+fn two[T](a: G1[T], b: G1[T]) {
+    match a { G1.Y(v) => { println(f"  ax {v}") } G1.N => { println("  ax NONE") } }
+    match b { G1.Y(v) => { println(f"  bx {v}") } G1.N => { println("  bx NONE") } }
+}
+fn three[T](a: G1[T], b: G1[T], c: G1[T]) {
+    match a { G1.Y(v) => { println(f"  ax {v}") } G1.N => { println("  ax NONE") } }
+    match b { G1.Y(v) => { println(f"  bx {v}") } G1.N => { println("  bx NONE") } }
+    match c { G1.Y(v) => { println(f"  cx {v}") } G1.N => { println("  cx NONE") } }
+}
+fn twoc(a: G1[String], b: G1[String]) {
+    match a { G1.Y(v) => { println(f"  ax {v}") } G1.N => { println("  ax NONE") } }
+    match b { G1.Y(v) => { println(f"  bx {v}") } G1.N => { println("  bx NONE") } }
+}
+
+fn a_gen_dup() { println("a"); let g: G1[String] = G1.Y(f"pa"); two(g, g) }
+fn b_con_dup() { println("b"); let g: G1[String] = G1.Y(f"pb"); twoc(g, g) }
+fn c_triple() { println("c"); let g: G1[String] = G1.Y(f"pc"); three(g, g, g) }
+fn d_distinct() { println("d"); let g: G1[String] = G1.Y(f"pd"); let h: G1[String] = G1.Y(f"qd"); two(g, h) }
+fn e_single() { println("e"); let g: G1[String] = G1.Y(f"pe"); one(g) }
+fn f_twocalls() { println("f"); let g: G1[String] = G1.Y(f"pf"); one(g); one(g) }
+fn g_middle() { println("g"); let g: G1[String] = G1.Y(f"pg"); let h: G1[String] = G1.Y(f"qg"); three(g, h, g) }
+
+fn main() {
+    a_gen_dup();
+    b_con_dup();
+    c_triple();
+    d_distinct();
+    e_single();
+    f_twocalls();
+    g_middle();
+    println("end");
+}
+"#;
+        assert_eq!(run_program(src).as_deref(), Some("a\n  ax pa\n  bx pa\nb\n  ax pb\n  bx pb\nc\n  ax pc\n  bx pc\n  cx pc\nd\n  ax pd\n  bx qd\ne\n  1x pe\nf\n  1x pf\n  1x pf\ng\n  ax pg\n  bx qg\n  cx pg\nend\n"));
+    }
+
     /// B-2026-09-20-12 — a by-value enum argument spelled as a FIELD
     /// PROJECTION runs its payload's `Drop` body ONCE.
     ///

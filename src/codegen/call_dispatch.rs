@@ -1480,6 +1480,9 @@ impl<'ctx> super::Codegen<'ctx> {
         let saved_pending_elem = self.var_types.pending_let_elem_type.take();
         let saved_pending_elem_te = self.var_types.pending_let_elem_type_expr.take();
         let mut compiled_args: Vec<BasicMetadataValueEnum<'ctx>> = Vec::new();
+        // B-2026-09-21-4 — root bindings already seen at an argument position
+        // in THIS call, so a later occurrence can be given its own value.
+        let mut b214_seen: std::collections::HashSet<String> = std::collections::HashSet::new();
         // B-2026-09-20-52 — argument bindings whose box this call MAY hand
         // back, the NON-GENERIC twin of `mono.rs`'s `maybe_handed_back_args`.
         // Resolved in the loop below and consumed after the call, where the
@@ -1514,6 +1517,29 @@ impl<'ctx> super::Codegen<'ctx> {
             } else {
                 None
             };
+            // B-2026-09-21-4 — a LATER occurrence of a binding already passed
+            // by value earlier in THIS call. Positioned beside the array
+            // sibling above and for the same reason: it must produce this
+            // argument's value itself and push it, because the copy that serves
+            // the FIRST occurrence rewrites the caller's slot and a binding has
+            // only one, so by the time this argument is compiled the slot holds
+            // whatever the first argument's move-out left there — a zero
+            // aggregate, which reaches the callee as a variant with a null box.
+            let uam_alias_arg = if !is_ref
+                && slice_elems.get(i).copied().flatten().is_none()
+                && matches!(&a.value.kind, ExprKind::Identifier(n) if b214_seen.contains(n.as_str()))
+            {
+                self.uam_alias_independent_enum_value(&a.value)
+            } else {
+                None
+            };
+            if let ExprKind::Identifier(n) = &a.value.kind {
+                b214_seen.insert(n.clone());
+            }
+            if let Some(v) = uam_alias_arg {
+                compiled_args.push(v.into());
+                continue;
+            }
             if !is_ref {
                 // B-2026-07-28-4: by-value struct arg whose param declined the
                 // entry copy — move it, don't leave both sides owning it.
@@ -14348,6 +14374,97 @@ impl<'ctx> super::Codegen<'ctx> {
             self.builder.build_unconditional_branch(join_bb).unwrap();
             self.builder.position_at_end(join_bb);
         }
+    }
+
+    /// B-2026-09-21-4 — an INDEPENDENT value for an argument that aliases an
+    /// EARLIER by-value argument in the SAME call, cloned from that earlier
+    /// argument's already-computed value rather than from the caller's slot.
+    ///
+    /// WHY NOT THE SLOT, which is where every other caller-side edit on this
+    /// path works. `uam_copy_boxed_enum_arg` fixes a use-after-move by
+    /// rewriting the caller's SLOT in place and restoring at the end of the
+    /// statement, and a binding has exactly one slot. Two arguments naming one
+    /// binding therefore cannot both be served that way — which is not a guess:
+    /// the gate is `source_outlives_move`, and a trace of `twoc(g, g)` shows it
+    /// answering `UseAfterMove` for the argument at column 45 and `No` for the
+    /// one at column 48. So the copy fires for the FIRST argument only, and the
+    /// first argument's own move-out then ZEROES the slot the second reads. The
+    /// emitted IR is explicit about it — `load`, `store zeroinitializer`,
+    /// `load`, `store zeroinitializer`, `call` — so the callee's second
+    /// parameter arrives as a `Y` variant holding a NULL box, which is the
+    /// SIGSEGV the concrete spelling takes after printing only its first arm.
+    ///
+    /// SO CLONE FROM THE SAVED ORIGINAL INSTEAD. The first occurrence's copy
+    /// already stashed the caller's untouched value in an alloca so it can be
+    /// put back at the end of the statement; a deep copy of THAT is exactly
+    /// what the callee's second parameter owes. Nothing is restored here,
+    /// nothing is queued, the slot is never written, and the first argument is
+    /// untouched — which is what keeps this from disturbing the
+    /// single-argument path the existing mechanism serves correctly.
+    ///
+    /// FAILS CLOSED, and the queue lookup is what makes it do so. No entry for
+    /// this binding's slot means the first occurrence was NOT copied, so there
+    /// is no saved original to clone and this returns `None`, leaving the
+    /// argument exactly as it compiles today. That also covers a `ref`
+    /// parameter, which never reaches the copy hook and so never queues a
+    /// restore — worth stating because the monomorph leg has no `ref` flags at
+    /// this point (they are keyed on the mangled name, which substitution has
+    /// not produced yet) and so could not gate on them directly.
+    pub(super) fn uam_alias_independent_enum_value(
+        &mut self,
+        arg: &Expr,
+    ) -> Option<BasicValueEnum<'ctx>> {
+        let ExprKind::Identifier(name) = &arg.kind else {
+            return None;
+        };
+        if !self.erased_boxed_user_enum_ident_arg(arg) {
+            return None;
+        }
+        let slot = self.get_data_ptr(name)?;
+        // THE SAVED ORIGINAL IS THE SOURCE, and it is the reason one helper
+        // serves both legs. The concrete leg interleaves copy and compile per
+        // argument; the monomorph leg does every copy first and then compiles
+        // every argument. A clone taken from the FIRST ARGUMENT'S VALUE would
+        // therefore have to be spelled differently on each. `saved` is written
+        // once, by the first occurrence's copy, before anything has been loaded
+        // or zeroed, so reading it is correct at any point in the statement.
+        let (_, saved, held_ty, _) = self
+            .pending_uam_enum_restores
+            .iter()
+            .find(|(s, _, _, _)| *s == slot)
+            .copied()?;
+        let te = self.uam_boxed_enum_arg_te(arg)?;
+        let fn_val = self.current_fn?;
+        let orig = self
+            .builder
+            .build_load(held_ty, saved, "b214.alias.src")
+            .ok()?;
+        // A FINAL USE TAKES THE ORIGINAL; ONLY A NON-FINAL ONE IS CLONED, and
+        // this is the same rule the rest of the tree already follows rather
+        // than a special case for aliasing. `source_outlives_move` answers
+        // `No` for the LAST use of a binding, which is why `one(g); one(g)`
+        // hands the second call the caller's own box and comes out balanced at
+        // 14 allocs / 14 frees. The second `g` of `two(g, g)` gets that same
+        // `No`, so it owes the same thing.
+        //
+        // Cloning it instead leaves the original owned by NOBODY, and the IR
+        // shows why the caller cannot pick it up: both arguments' move-outs
+        // zero the slot BEFORE the call, the scope-exit box drop then reads
+        // that zeroed slot and frees nothing, and the statement-end restore
+        // writes the original back AFTER the drop has already gone past.
+        // Measured in that state: 16 allocs / 14 frees with 24 direct plus 2
+        // indirect bytes lost, against 14/14 for the same call over two
+        // distinct bindings.
+        if !matches!(
+            self.source_outlives_move(arg),
+            super::runtime::SourceOutlivesMove::UseAfterMove
+        ) {
+            return Some(orig);
+        }
+        let tmp = self.create_entry_alloca(fn_val, "b214.alias", held_ty);
+        self.builder.build_store(tmp, orig).ok()?;
+        self.deep_copy_erased_boxed_enum_payload_in_place(&te, tmp);
+        self.builder.build_load(held_ty, tmp, "b214.aliasv").ok()
     }
 
     /// Store back every caller value queued by

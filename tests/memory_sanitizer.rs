@@ -102322,4 +102322,72 @@ fn main() {
             "b92046-no-copy",
         );
     }
+
+    /// B-2026-09-21-4 — one binding passed twice by value in a single call,
+    /// under ASAN.
+    ///
+    /// This is the memory half of
+    /// `test_e2e_one_binding_passed_twice_by_value_in_one_call`. The defect
+    /// was a `free(): double free detected in tcache 2` on the generic
+    /// spelling and a SIGSEGV on the concrete one, so a sanitiser cell is the
+    /// instrument that speaks to its class directly rather than through
+    /// stdout: an output comparison alone cannot tell a correct program from
+    /// one that happens to print correctly before corrupting the heap.
+    ///
+    /// The cells include the two broken shapes, three aliased arguments, an
+    /// alias with a GAP between its occurrences (`three(g, h, g)`), and three
+    /// controls that were already correct — distinct bindings, a single
+    /// argument, and two sequential calls. Measured outside the harness at 53
+    /// allocs / 53 frees with 0 valgrind errors, which is why no minimum-alloc
+    /// floor had to be relaxed for it.
+    #[test]
+    fn asan_one_binding_passed_twice_by_value_in_one_call() {
+        assert_clean_asan_run(
+            r#"
+enum G1[T] { Y(T), N }
+
+fn one[T](a: G1[T]) {
+    match a { G1.Y(v) => { println(f"  1x {v}") } G1.N => { println("  1x NONE") } }
+}
+fn two[T](a: G1[T], b: G1[T]) {
+    match a { G1.Y(v) => { println(f"  ax {v}") } G1.N => { println("  ax NONE") } }
+    match b { G1.Y(v) => { println(f"  bx {v}") } G1.N => { println("  bx NONE") } }
+}
+fn three[T](a: G1[T], b: G1[T], c: G1[T]) {
+    match a { G1.Y(v) => { println(f"  ax {v}") } G1.N => { println("  ax NONE") } }
+    match b { G1.Y(v) => { println(f"  bx {v}") } G1.N => { println("  bx NONE") } }
+    match c { G1.Y(v) => { println(f"  cx {v}") } G1.N => { println("  cx NONE") } }
+}
+fn twoc(a: G1[String], b: G1[String]) {
+    match a { G1.Y(v) => { println(f"  ax {v}") } G1.N => { println("  ax NONE") } }
+    match b { G1.Y(v) => { println(f"  bx {v}") } G1.N => { println("  bx NONE") } }
+}
+
+fn a_gen_dup() { println("a"); let g: G1[String] = G1.Y(f"pa"); two(g, g) }
+fn b_con_dup() { println("b"); let g: G1[String] = G1.Y(f"pb"); twoc(g, g) }
+fn c_triple() { println("c"); let g: G1[String] = G1.Y(f"pc"); three(g, g, g) }
+fn d_distinct() { println("d"); let g: G1[String] = G1.Y(f"pd"); let h: G1[String] = G1.Y(f"qd"); two(g, h) }
+fn e_single() { println("e"); let g: G1[String] = G1.Y(f"pe"); one(g) }
+fn f_twocalls() { println("f"); let g: G1[String] = G1.Y(f"pf"); one(g); one(g) }
+fn g_middle() { println("g"); let g: G1[String] = G1.Y(f"pg"); let h: G1[String] = G1.Y(f"qg"); three(g, h, g) }
+
+fn main() {
+    a_gen_dup();
+    b_con_dup();
+    c_triple();
+    d_distinct();
+    e_single();
+    f_twocalls();
+    g_middle();
+    println("end");
+}
+"#,
+            &[
+                "a", "  ax pa", "  bx pa", "b", "  ax pb", "  bx pb", "c", "  ax pc", "  bx pc",
+                "  cx pc", "d", "  ax pd", "  bx qd", "e", "  1x pe", "f", "  1x pf", "  1x pf",
+                "g", "  ax pg", "  bx qg", "  cx pg", "end",
+            ],
+            "b2021-4-alias-args",
+        );
+    }
 }

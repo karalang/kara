@@ -72320,3 +72320,56 @@ fn main() {
         "dSd\na\nb\nc\nd\ne:7\ndSd\nf\ndSd\ndSd\ndSd\ng\ndSd\nh\ni\nend\n"
     );
 }
+
+/// B-2026-09-21-4 — the interpreter TWIN of
+/// `test_e2e_one_binding_passed_twice_by_value_in_one_call`.
+///
+/// The interpreter was already correct here and is the oracle the compiled
+/// fix was measured against, so this cell asserts no change in behaviour. It
+/// is not vacuous for that reason: it is what makes the compiled fixture's
+/// expected string a claim about BOTH backends rather than about codegen
+/// alone, and it is what would catch a future interpreter change that made
+/// one binding passed twice diverge in the other direction.
+#[test]
+fn one_binding_passed_twice_by_value_in_one_call() {
+    let src = r#"
+enum G1[T] { Y(T), N }
+
+fn one[T](a: G1[T]) {
+    match a { G1.Y(v) => { println(f"  1x {v}") } G1.N => { println("  1x NONE") } }
+}
+fn two[T](a: G1[T], b: G1[T]) {
+    match a { G1.Y(v) => { println(f"  ax {v}") } G1.N => { println("  ax NONE") } }
+    match b { G1.Y(v) => { println(f"  bx {v}") } G1.N => { println("  bx NONE") } }
+}
+fn three[T](a: G1[T], b: G1[T], c: G1[T]) {
+    match a { G1.Y(v) => { println(f"  ax {v}") } G1.N => { println("  ax NONE") } }
+    match b { G1.Y(v) => { println(f"  bx {v}") } G1.N => { println("  bx NONE") } }
+    match c { G1.Y(v) => { println(f"  cx {v}") } G1.N => { println("  cx NONE") } }
+}
+fn twoc(a: G1[String], b: G1[String]) {
+    match a { G1.Y(v) => { println(f"  ax {v}") } G1.N => { println("  ax NONE") } }
+    match b { G1.Y(v) => { println(f"  bx {v}") } G1.N => { println("  bx NONE") } }
+}
+
+fn a_gen_dup() { println("a"); let g: G1[String] = G1.Y(f"pa"); two(g, g) }
+fn b_con_dup() { println("b"); let g: G1[String] = G1.Y(f"pb"); twoc(g, g) }
+fn c_triple() { println("c"); let g: G1[String] = G1.Y(f"pc"); three(g, g, g) }
+fn d_distinct() { println("d"); let g: G1[String] = G1.Y(f"pd"); let h: G1[String] = G1.Y(f"qd"); two(g, h) }
+fn e_single() { println("e"); let g: G1[String] = G1.Y(f"pe"); one(g) }
+fn f_twocalls() { println("f"); let g: G1[String] = G1.Y(f"pf"); one(g); one(g) }
+fn g_middle() { println("g"); let g: G1[String] = G1.Y(f"pg"); let h: G1[String] = G1.Y(f"qg"); three(g, h, g) }
+
+fn main() {
+    a_gen_dup();
+    b_con_dup();
+    c_triple();
+    d_distinct();
+    e_single();
+    f_twocalls();
+    g_middle();
+    println("end");
+}
+"#;
+    assert_eq!(run(src), "a\n  ax pa\n  bx pa\nb\n  ax pb\n  bx pb\nc\n  ax pc\n  bx pc\n  cx pc\nd\n  ax pd\n  bx qd\ne\n  1x pe\nf\n  1x pf\n  1x pf\ng\n  ax pg\n  bx qg\n  cx pg\nend\n");
+}
