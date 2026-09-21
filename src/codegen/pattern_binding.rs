@@ -20,6 +20,39 @@ use inkwell::AddressSpace;
 use super::state::{UserDropKind, VarSlot};
 
 impl<'ctx> super::Codegen<'ctx> {
+    /// B-2026-09-21-5 — THE surface type NAME of a leaf pattern binding, asked
+    /// once, from every channel that can answer it.
+    ///
+    /// Four separate call sites in this file were each spelling this question
+    /// out for themselves, and all four spelled it as "what did the TYPECHECKER
+    /// record at this span" — `pattern_binding_types` and nothing else. That is
+    /// one channel of two. For a MONOMORPHISED GENERIC the typechecker records
+    /// nothing (it never sees the concrete argument, so the binding's type is a
+    /// bare `Type::TypeParam`), and the concrete answer lives in
+    /// `mono_payload_binding_type_exprs` instead — the span-keyed table
+    /// B-2026-07-13-3 added for exactly this gap. Every one of the four
+    /// therefore read `None` for a generic payload binding and, because each
+    /// defaults its own way, silently answered "not a struct", "not a tuple",
+    /// "not a Map", "declared type matches the word".
+    ///
+    /// Precedence is already built into the fallback and is not re-stated here:
+    /// [`Self::mono_payload_binding_type_expr_for`] returns `None` whenever the
+    /// typechecker DID record the span, so a recorded surface type always wins.
+    ///
+    /// Callers ask this and then apply their own predicate to the name. Adding
+    /// a fifth question by copying one of the four is how this rotted the first
+    /// time.
+    pub(super) fn leaf_binding_surface_type_name(&self, pat: &Pattern) -> Option<String> {
+        let PatternKind::Binding(_) = &pat.kind else {
+            return None;
+        };
+        let key = (pat.span.offset, pat.span.length);
+        if let Some(n) = self.pattern_state.pattern_binding_types.get(&key) {
+            return Some(n.clone());
+        }
+        self.mono_payload_binding_surface(&key).map(|(h, _)| h)
+    }
+
     /// B-2026-07-13-3: populate `mono_payload_binding_type_exprs` for a
     /// GENERIC enum's bare-type-param variant payload bindings before the
     /// destructure loop reconstructs them. `enum Opt[T] { Yes(T) }` sizes its
@@ -2631,7 +2664,7 @@ impl<'ctx> super::Codegen<'ctx> {
                 // pointee (variant-name collisions across enums are
                 // disambiguated by struct identity, mirroring the
                 // value-source `TupleVariant` arm).
-                let Some((_enum_name, layout)) = self
+                let Some((enum_name, layout)) = self
                     .type_decls
                     .enum_layouts
                     .iter()
@@ -2653,6 +2686,47 @@ impl<'ctx> super::Codegen<'ctx> {
                 // mirror that by falling back here.
                 if layout.is_shared {
                     return Ok(None);
+                }
+                // B-2026-09-21-5 — THE ROOT. Record this monomorph's concrete
+                // payload types before any guard below reads them.
+                //
+                // `record_mono_generic_enum_payload_types` (B-2026-07-13-3)
+                // resolves a generic enum's bare-type-param payload through the
+                // active substitution and stashes it span-keyed, because the
+                // typechecker records nothing for a `Type::TypeParam` binding.
+                // Until now it was called from ONE place — the value-source
+                // `bind_pattern_values` — so a `ref`-matched scrutinee, which
+                // comes through HERE instead, ran every guard below against an
+                // empty table.
+                //
+                // The consequence was not a deferral but a silent miscompile,
+                // because all four guards default to "fine" on an absent type.
+                // `pattern_payload_word_count` returned the ERASED width (1)
+                // rather than `String`'s 3, so `payload_is_boxed` — the guard
+                // written for exactly this class — read `1 > 1` and said no;
+                // `declared_mismatches_word` had no name to compare; and the
+                // leaf was aliased AT the payload word, which in the erased
+                // layout holds the BOX POINTER. `fn shr[T](g: ref G1[T])` over
+                // `enum G1[T] { Y(T), N }` with `T = String` therefore printed
+                // an ASLR-varying integer on every compiled surface — rc=0,
+                // memory balanced, nothing on stderr. Only an A/B against
+                // `--interp` sees it.
+                //
+                // Traced, not read: `num_words=1 pat_words=1 boxed=false
+                // recorded=None declared_mismatch=false`. Note that the
+                // boxed-ness guard could not have caught it even in principle —
+                // it compares a payload's width against its area, and both are
+                // one word here, since the value is boxed for being of UNKNOWN
+                // size rather than of oversize.
+                //
+                // With the table populated the existing guards do the whole
+                // job: `T = String` trips `payload_is_boxed`, `T = <a struct>`
+                // trips B-2026-07-09-6's `pattern_binds_struct_payload` below,
+                // and both defer to the value-source path, which reconstructs
+                // the payload at its true type.
+                {
+                    let en = enum_name.clone();
+                    self.record_mono_generic_enum_payload_types(&en, variant_name, patterns);
                 }
                 // B-2026-07-09-6: a struct-typed payload binding (`Some(n)` where
                 // `n: SomeStruct`) must NOT take the primitive-word fast path below.
@@ -2830,16 +2904,10 @@ impl<'ctx> super::Codegen<'ctx> {
                     // `match v { Num(n) => .., Bool(b) => .., Arr(items) => .. }` over
                     // a `ref`-matched recursive enum; mirrors the B-2026-07-09-6
                     // struct-payload guard, generalized to every non-word payload.
-                    let declared_mismatches_word = if let PatternKind::Binding(_) = &sub_pat.kind {
-                        let key = (sub_pat.span.offset, sub_pat.span.length);
-                        self.pattern_state
-                            .pattern_binding_types
-                            .get(&key)
-                            .map(|n| self.llvm_type_for_name(n.as_str()))
-                            .is_some_and(|t| t != field_ty)
-                    } else {
-                        false
-                    };
+                    let declared_mismatches_word = self
+                        .leaf_binding_surface_type_name(sub_pat)
+                        .map(|n| self.llvm_type_for_name(n.as_str()))
+                        .is_some_and(|t| t != field_ty);
                     if (!ok_single_word && !ok_padded_primitive) || declared_mismatches_word {
                         return Ok(None);
                     }
@@ -2912,45 +2980,35 @@ impl<'ctx> super::Codegen<'ctx> {
 
     /// Does this payload sub-pattern bind a name whose surface type is a user
     /// struct or shared struct? Mirrors the `binding_is_struct` gate in
-    /// `reconstruct_payload_value`: a `Binding` whose typechecker-recorded
-    /// `pattern_binding_types` entry names a known struct. Used by
+    /// `reconstruct_payload_value`: a `Binding` whose surface type names a
+    /// known struct. The name comes from
+    /// [`Self::leaf_binding_surface_type_name`], which asks BOTH channels —
+    /// this read `pattern_binding_types` alone until B-2026-09-21-5, so a
+    /// monomorphised generic's struct payload answered `false` here. Used by
     /// `bind_pattern_values_via_ptr`'s `TupleVariant` arm to defer struct-typed
     /// payloads to the value-source path — the primitive-word fast path there
     /// can't type such a binding correctly (B-2026-07-09-6).
     fn pattern_binds_struct_payload(&self, pat: &Pattern) -> bool {
-        if let PatternKind::Binding(_) = &pat.kind {
-            let key = (pat.span.offset, pat.span.length);
-            return self
-                .pattern_state
-                .pattern_binding_types
-                .get(&key)
-                .is_some_and(|n| {
-                    self.type_decls.struct_types.contains_key(n.as_str())
-                        || self.type_decls.shared_types.contains_key(n.as_str())
-                });
-        }
-        false
+        self.leaf_binding_surface_type_name(pat).is_some_and(|n| {
+            self.type_decls.struct_types.contains_key(n.as_str())
+                || self.type_decls.shared_types.contains_key(n.as_str())
+        })
     }
 
-    /// Whether a leaf binding's typechecker-recorded surface type is a
-    /// `Map`/`Set`-family collection — the payload shapes whose single-pointer
+    /// Whether a leaf binding's surface type (from
+    /// [`Self::leaf_binding_surface_type_name`], both channels — B-2026-09-21-5)
+    /// is a `Map`/`Set`-family collection — the payload shapes whose single-pointer
     /// word masquerades as a plain i64 in the via-ptr fast path, so it must
     /// defer to the value-source path for its dispatch side-table registration
     /// (B-2026-07-23-3). Companion to [`Self::pattern_binds_struct_payload`].
     fn pattern_binds_map_set_payload(&self, pat: &Pattern) -> bool {
-        if let PatternKind::Binding(_) = &pat.kind {
-            let key = (pat.span.offset, pat.span.length);
-            return self
-                .pattern_state
-                .pattern_binding_types
-                .get(&key)
-                .is_some_and(|n| matches!(n.as_str(), "Map" | "Set" | "SortedMap" | "SortedSet"));
-        }
-        false
+        self.leaf_binding_surface_type_name(pat)
+            .is_some_and(|n| matches!(n.as_str(), "Map" | "Set" | "SortedMap" | "SortedSet"))
     }
 
-    /// Whether a leaf binding's typechecker-recorded surface type is a TUPLE —
-    /// the payload shape whose multi-word (or boxed single-pointer) body
+    /// Whether a leaf binding's surface type (from
+    /// [`Self::leaf_binding_surface_type_name`], both channels — B-2026-09-21-5)
+    /// is a TUPLE — the payload shape whose multi-word (or boxed single-pointer) body
     /// masquerades as a plain i64 payload word in the via-ptr fast path, so it
     /// must defer to the value-source path to be reconstructed at its real type
     /// (B-2026-09-12-4). Third companion to
@@ -2962,15 +3020,8 @@ impl<'ctx> super::Codegen<'ctx> {
     /// not spell out the element types here — which is all this needs: any
     /// tuple payload is a deferral, whatever its arity or elements.
     fn pattern_binds_tuple_payload(&self, pat: &Pattern) -> bool {
-        if let PatternKind::Binding(_) = &pat.kind {
-            let key = (pat.span.offset, pat.span.length);
-            return self
-                .pattern_state
-                .pattern_binding_types
-                .get(&key)
-                .is_some_and(|n| n == "Tuple");
-        }
-        false
+        self.leaf_binding_surface_type_name(pat)
+            .is_some_and(|n| n == "Tuple")
     }
 
     /// B-2026-09-14-2 — register an arm-bound CONTAINER payload's element

@@ -171779,6 +171779,95 @@ fn main() {
         assert_eq!(run_program(src).as_deref(), Some("a\n  ax pa\n  bx pa\nb\n  ax pb\n  bx pb\nc\n  ax pc\n  bx pc\n  cx pc\nd\n  ax pd\n  bx qd\ne\n  1x pe\nf\n  1x pf\n  1x pf\ng\n  ax pg\n  bx qg\n  cx pg\nend\n"));
     }
 
+    /// B-2026-09-21-5 — a generic `ref` parameter over a generic enum READS
+    /// THE BOXED PAYLOAD AS ITS POINTER.
+    ///
+    /// `fn shr[T](g: ref G1[T])` over `enum G1[T] { Y(T), N }` with
+    /// `T = String` printed an ASLR-varying integer where `--interp` printed
+    /// the string — rc=0, nothing on stderr, and memory BALANCED, so no
+    /// sanitizer, no leak column and no output-comparison fixture could see
+    /// it. Only an A/B against the interpreter does, and only if the fixture
+    /// prints the payload, which is why this cell prints every payload it
+    /// binds. The by-value spelling (`c`) was correct throughout and is a
+    /// control that must not move.
+    ///
+    /// THE ROOT IS A TABLE THAT ONE OF TWO BINDING PATHS NEVER FILLED IN.
+    /// `record_mono_generic_enum_payload_types` (B-2026-07-13-3) resolves a
+    /// generic enum's bare-type-param payload through the active monomorph
+    /// substitution and stashes it span-keyed, because the typechecker records
+    /// nothing for a `Type::TypeParam` binding. It was called from
+    /// `bind_pattern_values` only — the VALUE-source path — while a
+    /// `ref`-matched scrutinee is bound by `bind_pattern_values_via_ptr`,
+    /// which never called it. Every guard on that path therefore ran against
+    /// an empty table, and all four of them default to "fine" on an absent
+    /// type: `pattern_payload_word_count` returned the ERASED width (1)
+    /// rather than `String`'s 3, so `payload_is_boxed` read `1 > 1` and said
+    /// no, and `declared_mismatches_word` had no name to compare. The leaf was
+    /// aliased AT the payload word, which in the erased layout holds the box
+    /// pointer.
+    ///
+    /// The boxed-ness guard could not have caught it even in principle, which
+    /// is worth stating because it was written for this class: it compares a
+    /// payload's width against its area, and both are one word here, the value
+    /// being boxed for UNKNOWN size rather than for oversize.
+    ///
+    /// Cells: the row's own program (`a`), the `mut ref` spelling (`b`) and a
+    /// generic `impl[T]` `ref self` receiver (`e`), both of which the row
+    /// listed as NOT MEASURED and the first of which was also broken; the
+    /// by-value control (`c`); a non-boxing `G1[i64]` payload through the same
+    /// `ref` parameter (`d`); a struct payload reached through a trait bound
+    /// (`f`), the shape B-2026-07-09-6's struct guard now sees through the
+    /// same table; and the payload-less variant (`g`). All four surfaces
+    /// byte-identical, 28 allocs / 28 frees, 0 valgrind errors.
+    #[test]
+    fn test_e2e_generic_ref_param_over_generic_enum_reads_its_payload() {
+        let src = r#"
+trait Num {
+    fn get(ref self) -> i64;
+}
+struct W { n: i64 }
+impl Num for W {
+    fn get(ref self) -> i64 { self.n }
+}
+
+enum G1[T] { Y(T), N }
+
+fn shr[T](g: ref G1[T]) { match g { G1.Y(v) => { println(f"  rx {v}") } G1.N => { println("  rx NONE") } } }
+fn shm[T](g: mut ref G1[T]) { match g { G1.Y(v) => { println(f"  mx {v}") } G1.N => { println("  mx NONE") } } }
+fn shg[T](g: G1[T]) { match g { G1.Y(v) => { println(f"  vx {v}") } G1.N => { println("  vx NONE") } } }
+fn shw[T: Num](g: ref G1[T]) { match g { G1.Y(v) => { println(f"  wx {v.get()}") } G1.N => { println("  wx NONE") } } }
+
+impl[T] G1[T] {
+    fn shs(ref self) -> i64 { match self { G1.Y(v) => { println(f"  sx {v}"); 1 } G1.N => { println("  sx NONE"); 0 } } }
+}
+
+fn a_ref_string() { println("a"); let g: G1[String] = G1.Y(f"pa"); shr(g); shr(g) }
+fn b_mutref_string() { println("b"); let mut g: G1[String] = G1.Y(f"pb"); shm(mut g) }
+fn c_value_string() { println("c"); let g: G1[String] = G1.Y(f"pc"); shg(g) }
+fn d_ref_i64() { println("d"); let g: G1[i64] = G1.Y(77); shr(g); shr(g) }
+fn e_refself_string() { println("e"); let g: G1[String] = G1.Y(f"pe"); let r = g.shs(); println(f"  r={r}") }
+fn f_ref_struct() { println("f"); let g: G1[W] = G1.Y(W { n: 5 }); shw(g); shw(g) }
+fn g_ref_none() { println("g"); let g: G1[String] = G1.N; shr(g) }
+
+fn main() {
+    a_ref_string();
+    b_mutref_string();
+    c_value_string();
+    d_ref_i64();
+    e_refself_string();
+    f_ref_struct();
+    g_ref_none();
+    println("end");
+}
+"#;
+        assert_eq!(
+            run_program(src).as_deref(),
+            Some(
+                "a\n  rx pa\n  rx pa\nb\n  mx pb\nc\n  vx pc\nd\n  rx 77\n  rx 77\ne\n  sx pe\n  r=1\nf\n  wx 5\n  wx 5\ng\n  rx NONE\nend\n"
+            )
+        );
+    }
+
     /// B-2026-09-20-12 — a by-value enum argument spelled as a FIELD
     /// PROJECTION runs its payload's `Drop` body ONCE.
     ///

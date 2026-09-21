@@ -72373,3 +72373,57 @@ fn main() {
 "#;
     assert_eq!(run(src), "a\n  ax pa\n  bx pa\nb\n  ax pb\n  bx pb\nc\n  ax pc\n  bx pc\n  cx pc\nd\n  ax pd\n  bx qd\ne\n  1x pe\nf\n  1x pf\n  1x pf\ng\n  ax pg\n  bx qg\n  cx pg\nend\n");
 }
+
+/// B-2026-09-21-5 — interpreter twin of
+/// `test_e2e_generic_ref_param_over_generic_enum_reads_its_payload`.
+///
+/// The interpreter is the ORACLE for that row rather than a second suspect:
+/// the fault is memory-balanced and exits 0 on every compiled surface, so an
+/// A/B against this backend is the only instrument that can see it. This twin
+/// is not therefore vacuous — it pins the oracle, so a later change that moves
+/// the interpreter would be caught here instead of silently redefining what
+/// "correct" means for the codegen cell. Same program, same expectation,
+/// byte-for-byte.
+#[test]
+fn generic_ref_param_over_generic_enum_reads_its_payload() {
+    let src = r#"
+trait Num {
+    fn get(ref self) -> i64;
+}
+struct W { n: i64 }
+impl Num for W {
+    fn get(ref self) -> i64 { self.n }
+}
+
+enum G1[T] { Y(T), N }
+
+fn shr[T](g: ref G1[T]) { match g { G1.Y(v) => { println(f"  rx {v}") } G1.N => { println("  rx NONE") } } }
+fn shm[T](g: mut ref G1[T]) { match g { G1.Y(v) => { println(f"  mx {v}") } G1.N => { println("  mx NONE") } } }
+fn shg[T](g: G1[T]) { match g { G1.Y(v) => { println(f"  vx {v}") } G1.N => { println("  vx NONE") } } }
+fn shw[T: Num](g: ref G1[T]) { match g { G1.Y(v) => { println(f"  wx {v.get()}") } G1.N => { println("  wx NONE") } } }
+
+impl[T] G1[T] {
+    fn shs(ref self) -> i64 { match self { G1.Y(v) => { println(f"  sx {v}"); 1 } G1.N => { println("  sx NONE"); 0 } } }
+}
+
+fn a_ref_string() { println("a"); let g: G1[String] = G1.Y(f"pa"); shr(g); shr(g) }
+fn b_mutref_string() { println("b"); let mut g: G1[String] = G1.Y(f"pb"); shm(mut g) }
+fn c_value_string() { println("c"); let g: G1[String] = G1.Y(f"pc"); shg(g) }
+fn d_ref_i64() { println("d"); let g: G1[i64] = G1.Y(77); shr(g); shr(g) }
+fn e_refself_string() { println("e"); let g: G1[String] = G1.Y(f"pe"); let r = g.shs(); println(f"  r={r}") }
+fn f_ref_struct() { println("f"); let g: G1[W] = G1.Y(W { n: 5 }); shw(g); shw(g) }
+fn g_ref_none() { println("g"); let g: G1[String] = G1.N; shr(g) }
+
+fn main() {
+    a_ref_string();
+    b_mutref_string();
+    c_value_string();
+    d_ref_i64();
+    e_refself_string();
+    f_ref_struct();
+    g_ref_none();
+    println("end");
+}
+"#;
+    assert_eq!(run(src), "a\n  rx pa\n  rx pa\nb\n  mx pb\nc\n  vx pc\nd\n  rx 77\n  rx 77\ne\n  sx pe\n  r=1\nf\n  wx 5\n  wx 5\ng\n  rx NONE\nend\n");
+}
