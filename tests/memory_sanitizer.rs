@@ -102099,4 +102099,105 @@ fn main() {
             12,
         );
     }
+
+    /// B-2026-09-20-46 — the memory twin of
+    /// `e2e_generic_callee_reaches_the_argument_site_copy_like_its_concrete_twin`,
+    /// which asserts stdout only. Read that fixture's note for the gap and why
+    /// the generic and concrete spellings disagreed.
+    ///
+    /// SPLIT INTO THREE PROGRAMS rather than one, following
+    /// `asan_concrete_holder_and_non_generic_handback_leave_one_owner_per_box`:
+    /// a whole-program alloc/free delta is exactly the instrument that cannot
+    /// see a pair of faults pulling in opposite directions, so each block is
+    /// its own binary and its own verdict.
+    ///
+    /// The first block is the row itself — before the fix it was an `Invalid
+    /// read of size 8` at `Address 0x0` with `definitely lost` at ZERO, which
+    /// is why a leak column alone reads it clean and the invalid-access column
+    /// is what catches it.
+    ///
+    /// The second is the multi-argument cell. It is here because the first
+    /// attempt at this fix emitted an invalid module for it, and because a
+    /// per-argument copy that over-fires would strand a box that no
+    /// single-argument cell can expose.
+    ///
+    /// The third is the two guards for the copy NOT firing: no reuse, and a
+    /// non-boxing payload. Both were clean before the fix as well as after, so
+    /// they guard against over-firing rather than pinning a repair.
+    ///
+    /// The generic METHOD receiver is deliberately absent: this fix moves it
+    /// from a double free to a 24 B leak, which is an improvement and not a
+    /// clean cell, and it has its own row.
+    #[test]
+    fn asan_generic_callee_reaches_the_argument_site_copy_like_its_concrete_twin() {
+        const DECLS: &str = "enum G1[T] { Y(T), N }\n\
+             fn shg[T](g: G1[T]) { match g { G1.Y(v) => { println(f\"  mx {v}\") } G1.N => { println(\"  mx NONE\") } } }\n\
+             fn shc(g: G1[String]) { match g { G1.Y(v) => { println(f\"  cx {v}\") } G1.N => { println(\"  cx NONE\") } } }\n\
+             fn two[T](a: G1[T], b: G1[T]) { match a { G1.Y(v) => { println(f\"  ax {v}\") } G1.N => { println(\"  ax NONE\") } } match b { G1.Y(v) => { println(f\"  bx {v}\") } G1.N => { println(\"  bx NONE\") } } }\n";
+
+        // THE ROW: a reused by-value generic enum argument, beside the
+        // concrete twin it must now agree with. Pre-fix the generic half was
+        // an Invalid read of a null box with `definitely lost` at 0 B.
+        assert_clean_asan_run(
+            &format!(
+                "{DECLS}\
+                 fn main() {{\n\
+                 \x20   {{ let g: G1[String] = G1.Y(\"abcdefghijklmnopqrstuvwx\"); shg(g); shg(g) }}\n\
+                 \x20   {{ let g: G1[String] = G1.Y(\"abcdefghijklmnopqrstuvwx\"); shc(g); shc(g) }}\n\
+                 \x20   println(\"end\");\n\
+                 }}\n"
+            ),
+            &[
+                "mx abcdefghijklmnopqrstuvwx",
+                "  mx abcdefghijklmnopqrstuvwx",
+                "  cx abcdefghijklmnopqrstuvwx",
+                "  cx abcdefghijklmnopqrstuvwx",
+                "end",
+            ],
+            "b92046-gen-vs-con",
+        );
+
+        // MULTI-ARGUMENT, two DISTINCT reused bindings. The callee's body is
+        // two `match` STATEMENTS, which is what reaches the restore drain that
+        // a single-`match`-expression body never does.
+        assert_clean_asan_run(
+            &format!(
+                "{DECLS}\
+                 fn main() {{\n\
+                 \x20   {{ let x: G1[String] = G1.Y(\"aaaaaaaaaaaaaaaaaaaaaaaa\"); let y: G1[String] = G1.Y(\"bbbbbbbbbbbbbbbbbbbbbbbb\"); two(x, y); shg(x); shg(y) }}\n\
+                 \x20   println(\"end\");\n\
+                 }}\n"
+            ),
+            &[
+                "ax aaaaaaaaaaaaaaaaaaaaaaaa",
+                "  bx bbbbbbbbbbbbbbbbbbbbbbbb",
+                "  mx aaaaaaaaaaaaaaaaaaaaaaaa",
+                "  mx bbbbbbbbbbbbbbbbbbbbbbbb",
+                "end",
+            ],
+            "b92046-twodist",
+        );
+
+        // THE COPY MUST NOT FIRE: no reuse, and a non-boxing payload.
+        assert_clean_asan_run(
+            &format!(
+                "{DECLS}\
+                 fn main() {{\n\
+                 \x20   {{ let g: G1[String] = G1.Y(\"abcdefghijklmnopqrstuvwx\"); shg(g) }}\n\
+                 \x20   {{ let g: G1[i32] = G1.Y(24); shg(g); shg(g) }}\n\
+                 \x20   {{ let g: G1[String] = G1.N; shg(g); shg(g) }}\n\
+                 \x20   println(\"end\");\n\
+                 }}\n"
+            ),
+            &[
+                "mx abcdefghijklmnopqrstuvwx",
+                "  mx 24",
+                "  mx 24",
+                "  mx NONE",
+                "  mx NONE",
+                "end",
+            ],
+            "b92046-no-copy",
+        );
+    }
 }

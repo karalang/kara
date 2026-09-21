@@ -1991,6 +1991,74 @@ impl<'ctx> super::Codegen<'ctx> {
         // argument literals pack at their own span-recorded (callee-declared)
         // width, not the let binding's. Mirrors the `compile_call` user-fn
         // arg loop; see `literal_span_elem_hint` for the precedence story.
+        // B-2026-09-20-46 — THE ARGUMENT-SITE COPY, on the monomorph path.
+        //
+        // `compile_call` reaches this through `move_declined_copy_struct_arg_-
+        // for`, unconditionally for every by-value argument. This path reaches
+        // that helper only at the retraction far below, and only when
+        // `transfer_ident[i]` holds — which is keyed on `var_type_names[var]`,
+        // a STRUCT name, so an ENUM argument never qualified and the copy was
+        // never emitted at all. This is the same hole B-2026-09-10-34 recorded
+        // one line down from that retraction for `Array` arguments and closed
+        // with its own vector; the enum spelling had none.
+        //
+        // Measured on 84e8587e, a twin pair differing only in the callee's
+        // signature: `fn shg[T](g: G1[T])` over `enum G1[T] { Y(T), N }` with
+        // `shg(g); shg(g)` emitted ZERO `b13.*` labels of any kind, against
+        // fourteen distinct ones for `fn shg(g: G1[String])`, and read a null
+        // box on the second call — Invalid read of size 8 at address 0x0 and
+        // SIGSEGV at -O0 and under the JIT, a wrong `mx NONE` and a runtime
+        // stack overflow at -O2 — where the concrete twin printed correctly
+        // with 13 allocs / 13 frees and 0 errors. `--interp` is correct on
+        // both, so it is the oracle here.
+        //
+        // IT MUST RUN BEFORE THE ARGUMENTS ARE COMPILED, which is why it sits
+        // here and not beside the retraction where every other caller-side
+        // edit on this path lives. The copy rewrites the caller's SLOT in
+        // place, and the slot is the only channel to the callee; placed after
+        // the `compile_expr` below it would hand the callee the original box
+        // and then restore over the caller's own. `uam_copy_boxed_enum_arg`'s
+        // doc calls that direction the whole fix.
+        //
+        // No `ref`/`mut ref` gate, unlike the concrete path's `!is_ref`. The
+        // copy's own gate is `source_outlives_move == UseAfterMove`, i.e. the
+        // ownership pass's flagged CONSUME set, and a `ref` argument is not a
+        // consume — so the flags this path does not have yet (`fn_param_ref`
+        // is keyed on the MANGLED name, which substitution has not produced at
+        // this point) are not needed to be safe.
+        //
+        // ONE COPY PER ROOT BINDING. The copy rewrites the caller's SLOT, and a
+        // binding has exactly one, so `two(g, g)` cannot be served twice: the
+        // second copy would read the first's fresh box, overwrite the slot, and
+        // both arguments — compiled below, after this whole loop — would load
+        // the SAME second box, leaving the first with no owner.
+        //
+        // THAT IS AN ARGUMENT FROM THE MECHANISM, NOT A MEASUREMENT, and it is
+        // marked as such deliberately: the un-deduped variant was never run
+        // against a tree carrying the function-keyed drain fix below, because
+        // the invalid module it produced turned out to be that drain bug and
+        // not this aliasing at all. What IS measured is that with this guard
+        // `two(g, g)` builds and behaves exactly as it does on `origin/main`
+        // (`ax pa`, a garbled `bx`, `free(): double free detected in tcache 2`)
+        // and `two(x, y)` over two distinct bindings is correct on all four
+        // surfaces.
+        //
+        // Passing one binding twice by value is ALREADY broken on the concrete
+        // path — `fn twoc(a: G1[String], b: G1[String])` with `twoc(g, g)`
+        // builds and then SIGSEGVs having printed only its first arm — so this
+        // guard makes the generic path agree with the concrete one rather than
+        // fixing that shape, which is a separate defect in the copy mechanism
+        // itself and is filed as its own row. What this loop must not do is
+        // make a program that used to build stop building.
+        let mut copied_roots: std::collections::HashSet<String> = std::collections::HashSet::new();
+        for a in args.iter() {
+            if let ExprKind::Identifier(n) = &a.value.kind {
+                if !copied_roots.insert(n.clone()) {
+                    continue;
+                }
+            }
+            self.uam_copy_boxed_enum_arg(&a.value);
+        }
         let saved_pending_elem = self.var_types.pending_let_elem_type.take();
         let saved_pending_elem_te = self.var_types.pending_let_elem_type_expr.take();
         let arg_vals: Result<Vec<BasicValueEnum<'ctx>>, String> =

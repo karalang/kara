@@ -20237,6 +20237,81 @@ fn main() {
         assert_eq!(out, "holder\n  x\nhandon\n  mx 24\nwrapbind\n  mx 24\nwrapnone\n  mx 0\nwrapdisc\n  x\nidentbind\n  mx 24\nidentdisc\n  x\nidenttmp\n  mx 24\nfresh\n  mx 24\nscalar\n  n24\nunit\n  s24\ntwoargs\n  mx 24\nnongen\n  nx 24\nend\n");
     }
 
+    /// B-2026-09-20-46 — A GENERIC CALLEE NEVER REACHED B-2026-09-20-13'S
+    /// ARGUMENT-SITE COPY, so a reused by-value generic enum argument was a
+    /// use-after-free where its concrete twin was correct.
+    ///
+    /// `compile_call` reaches that copy through
+    /// `move_declined_copy_struct_arg_for`, unconditionally for every by-value
+    /// argument. `compile_generic_call` reached it only at its retraction loop
+    /// and only when `transfer_ident[i]` held — keyed on
+    /// `var_types.var_type_names[var]`, a STRUCT name — so an ENUM argument
+    /// never qualified. Measured on the pre-fix tree: the generic module
+    /// carried ZERO `b13.*` labels of any kind against fourteen distinct ones
+    /// in a twin differing only in the callee's signature, and the second call
+    /// read a null box — `Invalid read of size 8`, `Address 0x0`, SIGSEGV at
+    /// -O0 and under the JIT, `mx NONE` plus a runtime stack overflow at -O2.
+    ///
+    /// THE `gen` / `con` PAIR IS THE WHOLE ROW and differs in ONE line, the
+    /// callee's signature. Keeping the concrete cell beside the generic one is
+    /// what makes a future regression legible as "the two paths disagree"
+    /// rather than as a bare wrong answer.
+    ///
+    /// `one` is the same generic callee with NO reuse, and it guards the other
+    /// direction: the copy's gate is `source_outlives_move == UseAfterMove`, so
+    /// a single call must emit no copy at all. `i32` guards it again on a
+    /// NON-boxing payload, which has nothing to copy — measured clean before
+    /// the fix as well as after, which is why it is a guard and not a
+    /// regression cell. `none` takes the payload-less variant on the same call.
+    ///
+    /// `twodist` — `two(x, y)` over two DISTINCT reused bindings — is the cell
+    /// that earned its place the hard way. The first version of this fix
+    /// emitted the copy per argument and produced an INVALID MODULE
+    /// (`Instruction does not dominate all uses!`), and the cause was not the
+    /// two copies: `compile_generic_call` emits the monomorph's BODY INLINE, so
+    /// the callee's own statements reach `compile_stmt`'s restore drain while
+    /// the CALLER's restore is still queued, and the caller's store was emitted
+    /// inside the callee. Every one-parameter cell was clean because a
+    /// single-`match`-expression body never reaches that drain. The queued
+    /// restores are now keyed to their owning function. A fixture of only
+    /// one-argument calls cannot see any of this.
+    ///
+    /// NOT COVERED HERE, deliberately: a generic METHOD receiver
+    /// (`impl[T] G1[T] { fn shm(self) }` with `g.shm(); g.shm()`), which this
+    /// fix moves from a double free to a 24 B leak — better, not clean — and a
+    /// leaking cell would redden the ASAN ratchet. It has its own row. Also not
+    /// here: one binding passed twice in a single call (`two(g, g)`), which is
+    /// broken on the concrete path too and is filed separately.
+    #[test]
+    fn e2e_generic_callee_reaches_the_argument_site_copy_like_its_concrete_twin() {
+        let Some(out) = run_program(
+            r#"enum G1[T] { Y(T), N }
+enum N1 { Y(String), N }
+fn shg[T](g: G1[T]) { match g { G1.Y(v) => { println(f"  mx {v}") } G1.N => { println("  mx NONE") } } }
+fn shc(g: G1[String]) { match g { G1.Y(v) => { println(f"  cx {v}") } G1.N => { println("  cx NONE") } } }
+fn shn[T](g: G1[T]) -> i64 { match g { G1.Y(v) => { return 1 } G1.N => { return 0 } } }
+fn shnn(g: N1) { match g { N1.Y(v) => { println(f"  nx {v}") } N1.N => { println("  nx NONE") } } }
+fn two[T](a: G1[T], b: G1[T]) { match a { G1.Y(v) => { println(f"  ax {v}") } G1.N => { println("  ax NONE") } } match b { G1.Y(v) => { println(f"  bx {v}") } G1.N => { println("  bx NONE") } } }
+fn main() {
+    println("gen");    { let g: G1[String] = G1.Y(f"pa"); shg(g); shg(g) }
+    println("con");    { let g: G1[String] = G1.Y(f"pa"); shc(g); shc(g) }
+    println("one");    { let g: G1[String] = G1.Y(f"pa"); shg(g) }
+    println("thrice"); { let g: G1[String] = G1.Y(f"pa"); shg(g); shg(g); shg(g) }
+    println("i32");    { let g: G1[i32] = G1.Y(24); shg(g); shg(g) }
+    println("none");   { let g: G1[String] = G1.N; shg(g); shg(g) }
+    println("nongen"); { let g: N1 = N1.Y(f"pa"); shnn(g) }
+    println("twodist");{ let x: G1[String] = G1.Y(f"xa"); let y: G1[String] = G1.Y(f"yb"); two(x, y); shg(x); shg(y) }
+    println("scalar"); { let g: G1[String] = G1.Y(f"pa"); let n: i64 = shn(g); shg(g); println(f"  n{n}") }
+    println("long");   { let g: G1[String] = G1.Y(f"abcdefghijklmnopqrstuvwx"); shg(g); shg(g) }
+    println("end")
+}
+"#,
+        ) else {
+            return;
+        };
+        assert_eq!(out, "gen\n  mx pa\n  mx pa\ncon\n  cx pa\n  cx pa\none\n  mx pa\nthrice\n  mx pa\n  mx pa\n  mx pa\ni32\n  mx 24\n  mx 24\nnone\n  mx NONE\n  mx NONE\nnongen\n  nx pa\ntwodist\n  ax xa\n  bx yb\n  mx xa\n  mx yb\nscalar\n  mx pa\n  n1\nlong\n  mx abcdefghijklmnopqrstuvwx\n  mx abcdefghijklmnopqrstuvwx\nend\n");
+    }
+
     /// B-2026-09-19-35 — A BLOCK'S TAIL EXPRESSION IS NOT A STATEMENT, so the
     /// move-out neutralizer for a boxed erased enum payload was queued and
     /// never drained, and a CHAINED place could not be queued at all.

@@ -2209,10 +2209,24 @@ pub(super) struct Codegen<'ctx> {
     /// statement-end point as `pending_enum_field_zeros`, for the same reason:
     /// after every load in the statement, and long before the owner's
     /// scope-exit drop.
+    ///
+    /// B-2026-09-20-46 — the OWNING FUNCTION rides along, and it is load-bearing
+    /// rather than bookkeeping. `compile_generic_call` emits the monomorph's
+    /// BODY inline, so the callee's own statements run through
+    /// `compile_stmt`'s drain while the caller's restore is still queued: the
+    /// caller's store then lands inside the CALLEE's function, referring to the
+    /// caller's allocas, and the module fails verification with `Instruction
+    /// does not dominate all uses!`. Measured on `two(g, g)` over
+    /// `fn two[T](a: G1[T], b: G1[T])`, whose body is two `match` STATEMENTS —
+    /// a single-statement body such as `shg`'s never reaches the drain, which
+    /// is why the one-param cells were clean and this was not. Keyed here so
+    /// the drain can leave another function's entries alone instead of every
+    /// nested-emission site having to save and clear the list.
     pub(crate) pending_uam_enum_restores: Vec<(
         inkwell::values::PointerValue<'ctx>,
         inkwell::values::PointerValue<'ctx>,
         inkwell::types::BasicTypeEnum<'ctx>,
+        inkwell::values::FunctionValue<'ctx>,
     )>,
 
     /// B-2026-08-30-2 — did the most recent

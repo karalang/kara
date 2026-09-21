@@ -14169,7 +14169,8 @@ impl<'ctx> super::Codegen<'ctx> {
             return;
         }
         self.deep_copy_erased_boxed_enum_payload_in_place(&te, slot);
-        self.pending_uam_enum_restores.push((slot, saved, held_ty));
+        self.pending_uam_enum_restores
+            .push((slot, saved, held_ty, fn_val));
     }
 
     /// Replace each BOXING variant's box, in place, with a fresh box holding an
@@ -14328,18 +14329,34 @@ impl<'ctx> super::Codegen<'ctx> {
         if self.pending_uam_enum_restores.is_empty() {
             return;
         }
-        let pending = std::mem::take(&mut self.pending_uam_enum_restores);
+        // B-2026-09-20-46 — drain only the entries belonging to the function
+        // being emitted RIGHT NOW. A monomorph's body is compiled inline by
+        // `compile_generic_call`, so this runs for the CALLEE's statements
+        // while the CALLER's restore is still queued; draining it there emits
+        // the caller's store into the callee and fails module verification.
+        // Another function's entries are left queued for its own drain rather
+        // than dropped.
+        let Some(here) = self.current_fn else {
+            return;
+        };
         let Some(bb) = self.builder.get_insert_block() else {
             return;
         };
         if bb.get_terminator().is_some() {
             return;
         }
-        for (slot, saved, ty) in pending {
+        let mut keep = Vec::new();
+        let pending = std::mem::take(&mut self.pending_uam_enum_restores);
+        for (slot, saved, ty, owner) in pending {
+            if owner != here {
+                keep.push((slot, saved, ty, owner));
+                continue;
+            }
             if let Ok(v) = self.builder.build_load(ty, saved, "b13.uam.back") {
                 let _ = self.builder.build_store(slot, v);
             }
         }
+        self.pending_uam_enum_restores = keep;
     }
 
     /// Zero the handle word of a `GpuBuffer` binding that has just been MOVED,
