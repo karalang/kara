@@ -266,8 +266,9 @@ if [[ -n "$new_failures" ]]; then
   # double free -- is deleted moments after the name is printed, and on CI
   # there is no log file to go back to at all. A red on this leg was therefore
   # a fixture NAME and nothing else, which is only enough to reproduce with if
-  # the failure reproduces for you: a leg red on the CI runner and green on a
-  # developer's box (B-2026-09-22-3) could not be diagnosed at all.
+  # the failure reproduces for you: a leg red on the CI runner in four of seven
+  # consecutive runs, intermittently, and green here (B-2026-09-22-3) could not
+  # be diagnosed at all.
   #
   # This is the same shape as B-2026-09-19-5 and B-2026-09-22-1 one level up --
   # a lane that reports that something failed and discards what it said. Naming
