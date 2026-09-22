@@ -1677,15 +1677,11 @@ fn main() {
         // A CLEAN ZERO WITH NO OUTPUT DECIDES NOTHING ON ITS OWN: branch 1
         // prints nothing at all, so "branch 0 never entered its scope" and
         // "branch 0 ran and its output never reached this pipe" both produce
-        // exactly an empty stdout at exit 0. Measured three times that way, and
-        // the two candidates are still not separated. What separates them is a
-        // marker printed at TOP LEVEL before the `par` block, which bypasses the
-        // per-branch capture (`OUTPUT_REDIRECT` is installed only inside a
-        // branch, so a top-level `println` goes straight to the fd): present on
-        // a failing run means the program ran and the branch's output was lost,
-        // absent means nothing ran. That probe is parked, not landed -- it
-        // changes the cell's program and belongs in an experiment rather than
-        // in the shipped fixture.
+        // exactly an empty stdout at exit 0. SEPARATED since: a runtime probe
+        // caught two more such runs and both showed branch 0 dispatched, run,
+        // and capturing ZERO bytes, which is branch 0 returning from its own
+        // prologue cancel check before its scope opened. See
+        // `run_program_until_branch_entered`, which retries exactly that case.
         //
         // WHY EMPTY RATHER THAN ALWAYS: every passing test on this lane returns
         // output, so this fires only on a shape that is already going to fail
@@ -1699,8 +1695,8 @@ fn main() {
         if output.stdout.is_empty() {
             eprintln!(
                 "[par-jit-lane] karac_jit_runner returned EMPTY stdout, status {:?}, exit code {:?}. \
-                 The assertion below compares an empty string. This does NOT by itself say \
-                 whether the branch ran: see B-2026-09-22-2. Runner stderr:\n{}",
+                 The assertion below compares an empty string. On a cooperative-cancel cell this is \
+                 a branch cancelled before its prologue (B-2026-09-22-2). Runner stderr:\n{}",
                 output.status,
                 output.status.code(),
                 String::from_utf8_lossy(&output.stderr),
@@ -1708,6 +1704,48 @@ fn main() {
         }
 
         Some(String::from_utf8_lossy(&output.stdout).to_string())
+    }
+
+    /// B-2026-09-22-2 — run a cooperative-cancel cell until branch 0 has
+    /// entered its scope, which a single run does not guarantee.
+    ///
+    /// MEASURED, not reasoned: every par branch fn opens with its OWN cancel
+    /// check (`__par_branch_N_M`'s `entry` block loads the flag and returns
+    /// before the body), after `execute_task` has already checked the same
+    /// flag. Branch 1 (`fast_err`) is one call long, so under load it can run
+    /// to completion and set the flag in the window between those two checks,
+    /// and branch 0 then returns from its prologue having registered no
+    /// `defer`/`errdefer` and printed nothing. That is correct cooperative
+    /// cancellation of a branch that never started, not a lost write: a
+    /// runtime probe (raw `write(2)` beside `OutputCapture::replay` and the
+    /// skip in `execute_task`) caught 2 occurrences in 600 whole-binary JIT
+    /// runs, and both read `branch_idx=0 bytes=0 segs=0` with NO skip line —
+    /// branch 0 was dispatched, ran, and captured zero bytes. In the branch's
+    /// IR the prologue return is the only path that exits with zero bytes
+    /// written: every other exit prints the drain body, a number, or panics.
+    ///
+    /// So an EMPTY stdout, and only an empty one, means "branch 0 never
+    /// entered", and is retried. Any non-empty output is returned for the
+    /// caller to assert on. That keeps the cell discriminating: the regression
+    /// it guards (a cancel-exit that skips the drain) prints numbers without
+    /// the marker, which is non-empty and fails on the first attempt. The one
+    /// shape the retry can mask is a regression whose cancel lands at the very
+    /// first `println` check, which is the same rare window, so it would still
+    /// fail on most attempts; a deterministic one fails all of them and panics
+    /// below.
+    fn run_program_until_branch_entered(src: &str) -> Option<String> {
+        const ATTEMPTS: usize = 5;
+        for _ in 0..ATTEMPTS {
+            let out = run_program(src)?;
+            if !out.is_empty() {
+                return Some(out);
+            }
+        }
+        panic!(
+            "branch 0 printed nothing on all {ATTEMPTS} attempts. One empty run is branch 1 \
+             cancelling before branch 0's prologue (B-2026-09-22-2, measured at 2 in 600 \
+             whole-binary runs); {ATTEMPTS} in a row is not that race, it is a regression."
+        );
     }
 
     fn run_program(src: &str) -> Option<String> {
@@ -10572,7 +10610,7 @@ fn main() {
         // REACHED if cancel is broken — the regression this test guards — so
         // the normal (passing) run stays fast; only a genuine failure pays the
         // full-loop cost.
-        let out = run_program(
+        let out = run_program_until_branch_entered(
             r#"
 fn fast_err() -> Result[i64, i64] { Err(99_i64) }
 
@@ -10636,7 +10674,7 @@ fn main() {
         // (error-path only) fires IFF the cancel-exit path ran — no sentinel
         // check needed. A short loop let branch 0 sometimes complete NORMALLY,
         // where the errdefer correctly does NOT fire, flaking this assertion.
-        let out = run_program(
+        let out = run_program_until_branch_entered(
             r#"
 fn fast_err() -> Result[i64, i64] { Err(99_i64) }
 
