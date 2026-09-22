@@ -119,4 +119,37 @@ $out"
 grep -q "B-2026-01-01-1: fix cites $orphan" <<<"$out" || fail "wrong message for the recorded path:
 $out"
 
-echo "bug-lint selftest: 4/4 rule-6b cells pass (orphan detected, live sha silent, untouched row unjudged, recorded close caught)"
+# ---- 5. an ALL-DIGIT short sha is a sha (B-2026-09-22-12) -----------------
+# The headline token rule demanded both a digit and a letter, so a short sha
+# that happens to be all digits was not recognised as a sha at all -- 3.8% of
+# them, and 47 of the 1380 closed rows on the real ledger, for which rules 6
+# and 6b were not lenient but BLIND. Cell 1 draws a fresh sha every run, so it
+# met this about once in 26 runs and reported it as a CI flake rather than as
+# the standing hole it is. This cell grinds a commit until its short sha has no
+# a-f in it, so the case is pinned instead of sampled.
+rm -f "$record"
+set_fix B-2026-01-01-1 ""
+digits=""
+for hh in $(seq 0 23); do
+    for mm in $(seq 0 59); do
+        "${G[@]}" -C "$w" reset -q --soft "$base"
+        d="$(printf '2026-02-01T%02d:%02d:00+0000' "$hh" "$mm")"
+        GIT_AUTHOR_DATE="$d" GIT_COMMITTER_DATE="$d" \
+            "${G[@]}" -C "$w" commit -q -m "fix(selftest): the all-digit twin"
+        s="$("${G[@]}" -C "$w" rev-parse --short HEAD)"
+        case "$s" in *[a-f]*) ;; *) digits="$s"; break 2 ;; esac
+    done
+done
+[ -n "$digits" ] || fail "could not grind an all-digit short sha in 1440 tries"
+# orphan it, the way cell 1 does: it was HEAD, it is not reachable now.
+"${G[@]}" -C "$w" reset -q --soft "$base"
+GIT_AUTHOR_DATE="2026-03-01T00:00:00+0000" GIT_COMMITTER_DATE="2026-03-01T00:00:00+0000" \
+    "${G[@]}" -C "$w" commit -q -m "fix(selftest): the all-digit twin"
+set_fix B-2026-01-01-1 "FIXED by $digits. selftest."
+out="$(lint)" && fail "rule 6b ignored an ALL-DIGIT orphaned fix sha $digits:
+$out"
+grep -q "reachable from neither HEAD nor origin/main" <<<"$out" \
+    || fail "wrong failure for the all-digit sha $digits — got:
+$out"
+
+echo "bug-lint selftest: 5/5 rule-6b cells pass (orphan detected, live sha silent, untouched row unjudged, recorded close caught, all-digit sha not skipped)"

@@ -161,9 +161,22 @@ else:
 # Token rule: 7-40 hex containing BOTH a digit and a letter. The digit
 # requirement drops ordinary words that happen to be all-hex ("defaced",
 # "effaced"); the letter requirement drops line numbers, counts and dates
-# ("1809 allocations"). It costs a real SHA only when all 8 chars land in a-f,
-# which is ~0.04% of commits — and the cost there is a skipped check, never a
-# false accusation.
+# ("1809 allocations"). Both are needed for a scan over free PROSE, where a
+# number and a SHA are otherwise indistinguishable.
+#
+# THE COST IS NOT NEGLIGIBLE, and this comment claimed it was until
+# B-2026-09-22-12. It read "only when all 8 chars land in a-f, ~0.04% of
+# commits" — wrong in both factors. A `git log --format=%h` short SHA here is
+# SEVEN characters, not eight, and the dominant loss is the case the sentence
+# never named: a SHA that is ALL DIGITS, which the letter lookahead drops.
+# (10/16)^7 + (6/16)^7 = 3.83%, measured 3.84% over 200k random 7-hex and
+# 47 of the 1380 closed rows on this tree — a hundredfold under-estimate, and
+# for those rows rules 6 and 6b are not lenient but BLIND.
+#
+# So the HEADLINE sha is captured by position instead. `bug-close.py` writes
+# `FIXED by <sha>. `, and a hex token in that one slot is a SHA by
+# construction, whatever its character mix — no prose ambiguity to resolve, so
+# no lookahead needed. The prose-wide scan keeps SHA unchanged.
 def _git(*a, inp=None):
     import subprocess
     return subprocess.run(["git", *a], input=inp, capture_output=True, text=True)
@@ -225,6 +238,9 @@ def _repo_shas(fix):
 # is treated as headline-class — the pre-2026-08-30 behaviour, which is
 # what DANGLING_GRANDFATHERED is calibrated against.
 OPENER = re.compile(r"(?i)^\s*(?:fixed|fix|closed|resolved)\s+(?:by|in|at|via|with)\b")
+# The same opener, capturing what follows it: the headline SHA, by position.
+OPENER_SHA = re.compile(
+    r"(?i)^\s*(?:fixed|fix|closed|resolved)\s+(?:by|in|at|via|with)\s+`?([0-9a-f]{7,40})\b")
 def _split_shas(fix):
     masked = KATAS_SHA.sub("kara-katas", fix or "")
     allshas = set(SHA.findall(masked))
@@ -234,6 +250,9 @@ def _split_shas(fix):
     # whitespace or end-of-string, which leaves `docs/foo.md` intact.
     head = re.split(r"\.(?=\s|$)", masked, maxsplit=1)[0]
     headline = set(SHA.findall(head))
+    m = OPENER_SHA.match(masked)
+    if m:
+        headline.add(m.group(1))
     return headline, allshas - headline
 
 # A SHALLOW clone has almost no history, so every SHA would look dangling and
