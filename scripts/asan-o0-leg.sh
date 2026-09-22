@@ -270,7 +270,7 @@ if [[ -n "$new_failures" ]]; then
   # consecutive runs, intermittently, and green here (B-2026-09-22-3) could not
   # be diagnosed at all.
   #
-  # This is the same shape as B-2026-09-19-5 and B-2026-09-22-1 one level up --
+  # This is the same shape as B-2026-09-19-5 and B-2026-09-22-5 one level up --
   # a lane that reports that something failed and discards what it said. Naming
   # a failure without its evidence is the weaker half of an instrument.
   #
