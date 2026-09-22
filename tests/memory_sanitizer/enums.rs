@@ -10674,3 +10674,58 @@ fn main() {
         "b2026-09-20-13-reused-by-value-generic-enum-arg",
     );
 }
+
+/// B-2026-09-21-10 — a generic enum's NARROW variant (`A(T)`, one payload
+/// word) leaks its heap-boxed payload when a WIDER sibling variant
+/// (`B(Vec[T])`, three words) inflates the enum's payload area past it.
+///
+/// `coerce_to_payload_words` boxes when the instantiated value outgrows the
+/// words THIS variant's field was declared with — one word for a bare `T` —
+/// but `user_enum_boxed_payload_variants` sized the box-free test against the
+/// enum's AREA, the widest variant's width. For `Mix[Vec[R]]` those are 1 and
+/// 3, so `A`'s 3-word `Vec[R]` payload was boxed by the constructor and then
+/// `3 > 3` classified it inline: the box (24 B) and its buffer (16 B) leaked,
+/// with no `match` in the program. The single-payload twin
+/// `Slot[T] { S(T), N }` at the same `T` is clean only because its area equals
+/// its one variant's width — it is the DISAGREEMENT between the two widths, not
+/// boxing itself, and this is the box-free twin of the bodies channel
+/// B-2026-09-20-62 fixed.
+///
+/// The `Array[R, 2]` instantiation is the same fault via the array-spelling
+/// path (a variant declaration can only write `Array[T, N]`, which
+/// `payload_word_count_for_type_expr` sizes at one word); it leaked 16 B. The
+/// consuming-`match` cell is here because widening the box-free test could in
+/// principle double-free where an arm takes the payload — it does not: the arm
+/// owns the interior and the box drop stands down, so ASAN stays clean.
+///
+/// A pure output oracle (`e2e_generic_enum_container_payload_positions`)
+/// already carries the drop-body lines and passed throughout — a body
+/// assertion cannot see a leak, which is the blind spot this ASAN twin closes.
+#[test]
+fn asan_generic_enum_narrow_variant_boxed_payload_freed() {
+    assert_clean_asan_run(
+        r#"
+struct R { id: i64 }
+impl Drop for R { fn drop(mut ref self) { println(f"dR{self.id}") } }
+enum Mix[T] { A(T), B(Vec[T]), N }
+fn main() {
+    let a: Vec[R] = [R { id: 1 }, R { id: 2 }];
+    let m: Mix[Vec[R]] = Mix.A(a);
+    println("mA");
+
+    let b: Array[R, 2] = [R { id: 3 }, R { id: 4 }];
+    let n: Mix[Array[R, 2]] = Mix.A(b);
+    println("mArr");
+
+    let c: Vec[R] = [R { id: 5 }, R { id: 6 }];
+    let o: Mix[Vec[R]] = Mix.A(c);
+    match o { Mix.A(v) => { println(f"got{v.len()}") } Mix.B(_) => { println("b") } Mix.N => { println("n") } }
+    println("end");
+}
+"#,
+        &[
+            "dR1", "dR2", "mA", "dR3", "dR4", "mArr", "got2", "dR5", "dR6", "end",
+        ],
+        "b2026-09-21-10-generic-enum-narrow-variant-box",
+    );
+}

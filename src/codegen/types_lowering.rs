@@ -5423,7 +5423,28 @@ impl<'ctx> super::Codegen<'ctx> {
             // already correct there and the self-host suite is green on it.
             if !subst.is_empty() || self.array_elem_and_len(&concrete).is_some() {
                 let ll = self.llvm_type_for_type_expr(&concrete);
-                if Self::llvm_type_word_count(ll) > area {
+                // B-2026-09-21-10 — test against the VARIANT'S OWN declared slot
+                // width, not the enum-wide `area`. `coerce_to_payload_words`
+                // boxes when the value outgrows the words THIS variant's field
+                // was given, so the free must use the same threshold; the
+                // multi-field arm above already does, via `field_words`. When a
+                // WIDER sibling inflates the area past this variant's own width,
+                // `> area` missed a box the constructor really allocated:
+                // `Mix[T] { A(T), B(Vec[T]), N }` at `T = Vec[R]` boxes A's
+                // 3-word payload (own slot 1 word) and then `3 > 3` (the area,
+                // from B) read it inline, leaking the box and its buffer — 40 B
+                // at `-O0`. The single-payload twin `Slot[T] { S(T), N }` is
+                // clean only because its area equals its one variant's width.
+                // This is the box-free twin of B-2026-09-20-62 (the bodies
+                // channel). `own_words <= area` always, so this only ever
+                // ADMITS more boxes, never fewer, and the `kinds != None` gate
+                // above still excludes every box the drop switch owns, so no
+                // admitted box can double-free. Falls back to `area` only when
+                // the offset table has no entry for this variant (it always
+                // does for a single-field variant), keeping the old behaviour
+                // where the width is unknown.
+                let own_words = offsets.and_then(|o| o.first()).map_or(area, |(_, fw)| *fw);
+                if Self::llvm_type_word_count(ll) > own_words {
                     // A single field starts at word 0, so its box has always
                     // been at enum field 1 — which is what the emit hard-coded
                     // before B-2026-09-15-18 and why it was right every time.
