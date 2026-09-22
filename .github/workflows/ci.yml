@@ -127,6 +127,15 @@ jobs:
       - name: Bug-ledger rule-6b selftest
         run: ./scripts/bug-lint-selftest.sh
 
+      # The ASAN legs classify a new red by grepping the suite log for messages
+      # that tests/memory_sanitizer/mod.rs emits — a coupling across two files
+      # with nothing joining them, whose failure mode is silence: reword the
+      # message and the leg misroutes every red of that class with no symptom.
+      # It has already misrouted one (B-2026-09-22-3, four CI reds routed as a
+      # memory fault on a failure where ASAN had passed). Pure grep, no build.
+      - name: ASAN-leg failure-classification selftest
+        run: ./scripts/asan-leg-selftest.sh
+
       # Pure-python and milliseconds — it parses this file and greps tests/,
       # it does not build. Answers "which `#[cfg(feature = "llvm")]` tests does
       # no CI job run?", which was previously answerable only by redoing a

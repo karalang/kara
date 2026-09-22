@@ -253,6 +253,27 @@ if [[ -n "$new_failures" ]]; then
     echo "   rather than a skip, which is why these surface here rather than passing"
     echo "   vacuously. Re-run the plain full build afterward so the canonical"
     echo "   archive name is the non-feature one again."
+  elif grep -qE '\] (unexpected stdout \(ASAN passed, but output mismatched\)|stdout mismatch)' "$LOG"; then
+    # THE SAME DEFECT AS THE LINK BRANCH ABOVE, ONE CLASS OVER, and it has
+    # already misrouted a red once (B-2026-09-22-3). Every assert_clean_asan_*
+    # helper in tests/memory_sanitizer/mod.rs checks `status.success()` FIRST
+    # and only then compares stdout, so a failure carrying one of these
+    # messages is one where the sanitizer reported NOTHING and the program
+    # printed a wrong value. Said "ASAN is reporting on memory the program
+    # actually touched", this message sends you looking for a leak that is not
+    # there -- and its other remedy is worse than useless here: a quarantine
+    # entry would file a wrong-value fault under a memory-lane name and
+    # silence the only instrument that currently sees it.
+    echo "   NOT MEMORY FAULTS — at least one is an OUTPUT MISMATCH with ASAN CLEAN:"
+    grep -oE '\[[A-Za-z0-9_]+\] (unexpected stdout \(ASAN passed, but output mismatched\)|stdout mismatch)' "$LOG" \
+      | sort -u | sed 's/^/     /'
+    echo "   The harness asserts the process exited cleanly BEFORE it compares"
+    echo "   stdout, so the sanitizer found nothing and the program simply printed"
+    echo "   a wrong value. No sanitizer column and no leak column can see that"
+    echo "   class — the oracle is expected output. Read the CAPTURED OUTPUT below"
+    echo "   for which field differs, and do NOT add the fixture to"
+    echo "   $(basename "$EXPECTED"): that list is a memory-lane ratchet, and an"
+    echo "   entry there would both mis-file the fault and silence it."
   else
     echo "   These are real: at -O$OPT_LEVEL the fixture's allocations are not optimized away,"
     echo "   so ASAN is reporting on memory the program actually touched. Fix the"
