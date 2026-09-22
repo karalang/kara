@@ -9699,9 +9699,17 @@ impl<'a> super::Interpreter<'a> {
                     } else {
                         None
                     };
+                    // B-2026-09-21-6 — the own-`Drop` body belongs to
+                    // whichever of the two channels is live; `scrut_drop` is
+                    // the other one, and it is right here in scope, so this leg
+                    // needs no lookup of its own. It fires just below, AFTER
+                    // the husk rather than before it as the `match` / `if let`
+                    // legs do — which changes nothing here, since the flag
+                    // means exactly one of the two runs.
+                    let owes_own_body = scrut_drop.is_none();
                     self.bind_pattern(pattern, val);
                     if let Some((sv, taken)) = husk {
-                        self.run_unbound_struct_field_drops(&sv, &taken);
+                        self.run_unbound_struct_field_drops(&sv, &taken, owes_own_body);
                     }
                     if let (Some(tn), Some(dv)) = (scrut_drop, drop_val) {
                         self.run_user_drop_body_on_value(&tn, dv);

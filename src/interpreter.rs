@@ -869,7 +869,15 @@ pub struct Interpreter<'a> {
     ///
     /// Only ever set for a scrutinee `struct_scrutinee_has_no_other_owner`
     /// admits, so a named local — whose own walk owns the husk — is untouched.
-    pub(crate) pending_arm_unbound_struct: Option<(Value, HashSet<String>)>,
+    /// Third element (B-2026-09-21-6): does THIS walker owe the struct's own
+    /// `Drop` BODY, or has `freshtemp_scrutinee_user_drop_type`'s channel
+    /// already run it? The two channels overlap on exactly the fresh temps
+    /// that helper accepts — a call / method-call result — so the set site,
+    /// which is the only place that holds both the scrutinee EXPRESSION and
+    /// the decision to stash, answers it once and the walker obeys. Deciding
+    /// inside the walker is not possible: it sees a `Value`, and by then the
+    /// expression that produced it is gone.
+    pub(crate) pending_arm_unbound_struct: Option<(Value, HashSet<String>, bool)>,
     /// B-2026-08-28-22 — owned params whose `Drop` BODY this frame has taken
     /// ownership of, because the callee returns them on some tail paths and not
     /// others. Seeded immediately before [`Self::eval_body_growing`] and

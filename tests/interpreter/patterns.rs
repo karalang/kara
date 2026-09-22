@@ -6171,6 +6171,126 @@ fn iflet_letelse_fresh_temp_husk_fields_run_their_drop_bodies() {
     }
 }
 
+/// B-2026-09-21-6 — a fresh-temp struct scrutinee whose type has its OWN
+/// `impl Drop` ran NOTHING on this backend, where all three compiled surfaces
+/// ran the drop body and the field walk after it.
+///
+/// The husk walker B-2026-09-21-1 gave these constructs returned outright on an
+/// own-`Drop` struct, on the reasoning that codegen's
+/// `materialize_freshtemp_struct_scrutinee` `has_user_drop` leg "is already
+/// correct for a fresh temp". It is — on codegen. The interpreter's other
+/// channel for that body (`freshtemp_scrutinee_user_drop_type`) accepts a call
+/// or method-call scrutinee and NOTHING else, so a struct LITERAL temp fell
+/// between the two and `match Od { a: mk(50), b: mk(51) } { Od { .. } => … }`
+/// printed nothing at all against `dOd dR51 dR50` compiled. Correctness on one
+/// backend was read as correctness.
+///
+/// The two channels OVERLAP on exactly the temps the helper does accept, which
+/// is why the fix is a flag on the stash rather than a second unconditional
+/// body: arming the walker alone made `match mkod(80)` run `dOd dR81 dR80`
+/// TWICE (measured). The set site answers "do I owe the body?" from the
+/// scrutinee EXPRESSION, because the walker only ever sees a `Value` and by
+/// then the expression that produced it is gone.
+///
+/// Ten cells: every construct that can take a fresh-temp struct scrutinee
+/// (`match`, `if let`, `while let`, `let ... else`) at BOTH spellings, plus the
+/// row's guarded shape and a named control. Four move and six do not, and the
+/// six that do not are as much the point as the four that do:
+///
+/// * `match-literal` / `iflet-literal` / `letelse-literal` /
+///   `match-guarded-literal` — the reported hole. Each printed NOTHING before
+///   the fix (measured on a control arm), and each now matches the compiled
+///   oracle.
+/// * the four `*-call` / `whilelet-*` cells — a CALL scrutinee is the shape the
+///   other channel already owned, and `while let` was correct at BOTH
+///   spellings. These were right before the fix and must stay right: they are
+///   what a double-fire regression trips over, and arming the walker without
+///   the flag made `match-call` print its whole transcript TWICE.
+/// * `named-control` — a bound local owns its own body and walk; the husk
+///   channel must stay out of it.
+///
+/// Both spellings of each construct are listed because they reach the flag by
+/// OPPOSITE routes (literal: the walker owes the body; call: the helper does),
+/// and a spelling-dependent split is this family's recurring defect.
+///
+/// Twin: `tests/codegen.rs`'s
+/// `test_e2e_freshtemp_own_drop_struct_scrutinee_runs_its_body`.
+#[test]
+fn freshtemp_own_drop_struct_scrutinee_runs_its_body() {
+    const H: &str = "struct R { id: i64, name: String }\n\
+         impl Drop for R { fn drop(mut ref self) { println(f\"dR{self.id}\") } }\n\
+         fn mk(i: i64) -> R { return R { id: i, name: f\"n{i}\" }; }\n\
+         struct Od { a: R, b: R }\n\
+         impl Drop for Od { fn drop(mut ref self) { println(\"dOd\") } }\n\
+         fn mkod(i: i64) -> Od { return Od { a: mk(i), b: mk(i + 1) }; }\n";
+    for (label, cell, want) in [
+        (
+            "match-literal",
+            "fn c() -> i64 { match Od { a: mk(50), b: mk(51) } { Od { .. } => { return 9; } } }",
+            "dOd\ndR51\ndR50\nz=9\n",
+        ),
+        (
+            "iflet-literal",
+            "fn c() -> i64 { if let Od { .. } = Od { a: mk(12), b: mk(13) } { return 9; } return 0; }",
+            "dOd\ndR13\ndR12\nz=9\n",
+        ),
+        (
+            "letelse-literal",
+            "fn c() -> i64 { let Od { .. } = Od { a: mk(20), b: mk(21) } else { return 0; }; return 9; }",
+            "dOd\ndR21\ndR20\nz=9\n",
+        ),
+        (
+            "whilelet-literal",
+            "fn c() -> i64 { let mut n: i64 = 0;\n\
+             while let Od { .. } = Od { a: mk(35), b: mk(36) } { n = n + 1; if n > 0 { break; } }\n\
+             return n; }",
+            "dOd\ndR36\ndR35\nz=1\n",
+        ),
+        (
+            // The row's FOURTH spelling. It is the only GUARDED shape this type
+            // can legally take: `partial_move_of_drop_struct` rejects an arm
+            // that binds a field out of an own-`Drop` struct, so a guarded
+            // match over one can only bind nothing.
+            "match-guarded-literal",
+            "fn c() -> i64 { match Od { a: mk(56), b: mk(57) } {\n\
+             Od { .. } if 1 > 900 => { return 1; }\n\
+             Od { .. } => { return 6; } } }",
+            "dOd\ndR57\ndR56\nz=6\n",
+        ),
+        (
+            "whilelet-call",
+            "fn c() -> i64 { let mut n: i64 = 0;\n\
+             while let Od { .. } = mkod(30) { n = n + 1; if n > 0 { break; } }\n\
+             return n; }",
+            "dOd\ndR31\ndR30\nz=1\n",
+        ),
+        (
+            "match-call",
+            "fn c() -> i64 { match mkod(80) { Od { .. } => { return 9; } } }",
+            "dOd\ndR81\ndR80\nz=9\n",
+        ),
+        (
+            "iflet-call",
+            "fn c() -> i64 { if let Od { .. } = mkod(40) { return 9; } return 0; }",
+            "dOd\ndR41\ndR40\nz=9\n",
+        ),
+        (
+            "letelse-call",
+            "fn c() -> i64 { let Od { .. } = mkod(45) else { return 0; }; return 9; }",
+            "dOd\ndR46\ndR45\nz=9\n",
+        ),
+        (
+            "named-control",
+            "fn c() -> i64 { let s: Od = Od { a: mk(60), b: mk(61) };\n\
+             match s { Od { .. } => { return 9; } } }",
+            "dOd\ndR61\ndR60\nz=9\n",
+        ),
+    ] {
+        let src = format!("{H}{cell}\nfn main() {{ let z: i64 = c(); println(f\"z={{z}}\"); }}\n");
+        assert_eq!(run(&src), want, "{label}");
+    }
+}
+
 /// B-2026-09-21-3 — `while let` over a STRUCT scrutinee ran no `Drop` body at
 /// all on this backend, while every compiled surface ran the bound field's.
 ///

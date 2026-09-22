@@ -11620,6 +11620,92 @@ fn test_e2e_iflet_letelse_fresh_temp_husk_fields_run_their_drop_bodies() {
         }
 }
 
+/// B-2026-09-21-6 — compiled twin of `tests/interpreter.rs`'s
+/// `freshtemp_own_drop_struct_scrutinee_runs_its_body`, same programs and
+/// same expectations.
+///
+/// This backend was correct on every cell; the INTERPRETER ran nothing at all
+/// for a fresh-temp struct scrutinee whose type declares its own `impl Drop`,
+/// under `match`, `if let` and `let ... else` alike. The twin exists because
+/// the property being pinned is that the two AGREE — the interpreter's fix
+/// routes the body between two channels that overlap on a CALL scrutinee, so
+/// `whilelet-call` and `match-call` are the cells a double-fire on that side
+/// would trip, and they are only meaningful against an oracle here.
+#[test]
+fn test_e2e_freshtemp_own_drop_struct_scrutinee_runs_its_body() {
+    const H: &str = "struct R { id: i64, name: String }\n\
+             impl Drop for R { fn drop(mut ref self) { println(f\"dR{self.id}\") } }\n\
+             fn mk(i: i64) -> R { return R { id: i, name: f\"n{i}\" }; }\n\
+             struct Od { a: R, b: R }\n\
+             impl Drop for Od { fn drop(mut ref self) { println(\"dOd\") } }\n\
+             fn mkod(i: i64) -> Od { return Od { a: mk(i), b: mk(i + 1) }; }\n";
+    for (label, cell, want) in [
+        (
+            "match-literal",
+            "fn c() -> i64 { match Od { a: mk(50), b: mk(51) } { Od { .. } => { return 9; } } }",
+            "dOd\ndR51\ndR50\nz=9\n",
+        ),
+        (
+            "iflet-literal",
+            "fn c() -> i64 { if let Od { .. } = Od { a: mk(12), b: mk(13) } { return 9; } return 0; }",
+            "dOd\ndR13\ndR12\nz=9\n",
+        ),
+        (
+            "letelse-literal",
+            "fn c() -> i64 { let Od { .. } = Od { a: mk(20), b: mk(21) } else { return 0; }; return 9; }",
+            "dOd\ndR21\ndR20\nz=9\n",
+        ),
+        (
+            "whilelet-literal",
+            "fn c() -> i64 { let mut n: i64 = 0;\n\
+                 while let Od { .. } = Od { a: mk(35), b: mk(36) } { n = n + 1; if n > 0 { break; } }\n\
+                 return n; }",
+            "dOd\ndR36\ndR35\nz=1\n",
+        ),
+        (
+            // The row's FOURTH spelling, and the only GUARDED shape this type
+            // can legally take -- `partial_move_of_drop_struct` rejects an arm
+            // binding a field out of an own-`Drop` struct.
+            "match-guarded-literal",
+            "fn c() -> i64 { match Od { a: mk(56), b: mk(57) } {\n\
+                 Od { .. } if 1 > 900 => { return 1; }\n\
+                 Od { .. } => { return 6; } } }",
+            "dOd\ndR57\ndR56\nz=6\n",
+        ),
+        (
+            "whilelet-call",
+            "fn c() -> i64 { let mut n: i64 = 0;\n\
+                 while let Od { .. } = mkod(30) { n = n + 1; if n > 0 { break; } }\n\
+                 return n; }",
+            "dOd\ndR31\ndR30\nz=1\n",
+        ),
+        (
+            "match-call",
+            "fn c() -> i64 { match mkod(80) { Od { .. } => { return 9; } } }",
+            "dOd\ndR81\ndR80\nz=9\n",
+        ),
+        (
+            "iflet-call",
+            "fn c() -> i64 { if let Od { .. } = mkod(40) { return 9; } return 0; }",
+            "dOd\ndR41\ndR40\nz=9\n",
+        ),
+        (
+            "letelse-call",
+            "fn c() -> i64 { let Od { .. } = mkod(45) else { return 0; }; return 9; }",
+            "dOd\ndR46\ndR45\nz=9\n",
+        ),
+        (
+            "named-control",
+            "fn c() -> i64 { let s: Od = Od { a: mk(60), b: mk(61) };\n\
+                 match s { Od { .. } => { return 9; } } }",
+            "dOd\ndR61\ndR60\nz=9\n",
+        ),
+    ] {
+        let src = format!("{H}{cell}\nfn main() {{ let z: i64 = c(); println(f\"z={{z}}\"); }}\n");
+        assert_eq!(run_program(&src), Some(want.to_string()), "{label}");
+    }
+}
+
 /// B-2026-09-21-3 — compiled twin of `tests/interpreter.rs`'s
 /// `while_let_struct_scrutinee_binding_runs_its_drop_body`, same programs
 /// and same expectations.

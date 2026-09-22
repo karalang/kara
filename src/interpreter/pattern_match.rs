@@ -362,9 +362,19 @@ impl<'a> super::Interpreter<'a> {
                         //
                         // `arm` is the arm that MATCHED: this runs inside the
                         // per-arm loop, after its pattern and guard succeeded.
+                        // B-2026-09-21-6 — see the field's own doc: the
+                        // own-`Drop` body belongs to whichever channel is
+                        // live, and the expression is the only thing that can
+                        // say which. `None` place (a synthesized match with no
+                        // source expression) cannot be a fresh temp of that
+                        // helper's kind, so the walker owes the body.
+                        let owes_own_body = scrutinee_place
+                            .and_then(|e| self.freshtemp_scrutinee_user_drop_type(e))
+                            .is_none();
                         self.pending_arm_unbound_struct = Some((
                             scrutinee.clone(),
                             Self::struct_pattern_bound_field_names(&arm.pattern),
+                            owes_own_body,
                         ));
                     } else if matches!(scrutinee, Value::Struct { .. }) {
                         // B-2026-09-06-35 — the NAMED struct scrutinee the
@@ -594,8 +604,8 @@ impl<'a> super::Interpreter<'a> {
                 // has popped, so a bound field's body has already fired from
                 // its binding and these are the remainder, in reverse
                 // declaration order. Empty for every scrutinee with an owner.
-                if let Some((val, taken)) = self.pending_arm_unbound_struct.take() {
-                    self.run_unbound_struct_field_drops(&val, &taken);
+                if let Some((val, taken, owes_own_body)) = self.pending_arm_unbound_struct.take() {
+                    self.run_unbound_struct_field_drops(&val, &taken, owes_own_body);
                 }
                 self.env.pop_scope();
                 return result;
@@ -1760,20 +1770,56 @@ impl<'a> super::Interpreter<'a> {
     /// channel to the struct arm would change every other caller of it, so this
     /// walks the remainder directly instead.
     ///
-    /// A struct with its OWN `impl Drop` is skipped entirely: its body runs the
-    /// whole field walk after itself, and that path is already correct for a
-    /// fresh temp (`materialize_freshtemp_struct_scrutinee`'s
-    /// `has_user_drop` leg on the compiled side). Walking here as well printed
-    /// `dR52 dR51 dS dR52 dR51` against a due `dS dR52 dR51`.
+    /// A struct with its OWN `impl Drop` gets its BODY plus the walk that body
+    /// implies, and it gets them only when the arm took NOTHING out of it.
+    /// Walking the fields here as well as running the body printed
+    /// `dR52 dR51 dS dR52 dR51` against a due `dS dR52 dR51`, which is why this
+    /// is not a plain field walk; and running the body when the arm DID take a
+    /// field printed the taken field's body twice, once with its binding and
+    /// once inside this walk, which is why it is gated on an empty mask.
+    ///
+    /// B-2026-09-21-6 — this arm used to return outright, on the reasoning that
+    /// the own-`Drop` path was "already correct for a fresh temp" because
+    /// `materialize_freshtemp_struct_scrutinee`'s `has_user_drop` leg handles it
+    /// on the compiled side. It does, and that is exactly the half the sentence
+    /// got wrong: the three compiled surfaces ran `dOWN dR51 dR50` for
+    /// `match OwnDrop { a: mk(50), b: mk(51) } { OwnDrop { .. } => … }` and the
+    /// interpreter ran NOTHING, under `match` and `if let` alike. A named
+    /// scrutinee of the same type agrees on all four, which is what localises it
+    /// to the fresh temp. Correctness on one backend was read as correctness.
     ///
     /// Reverse declaration order is design.md § Part 8's rule for the fields a
     /// value still owns; the fields the arm took have already died with their
     /// bindings, which is why this runs after that drain rather than before it.
-    pub(super) fn run_unbound_struct_field_drops(&mut self, val: &Value, taken: &HashSet<String>) {
+    pub(super) fn run_unbound_struct_field_drops(
+        &mut self,
+        val: &Value,
+        taken: &HashSet<String>,
+        owes_own_body: bool,
+    ) {
         let Value::Struct { name, fields } = val else {
             return;
         };
         if self.program.drop_method_keys.contains_key(name) {
+            // `run_user_drop_body_on_value` is body-THEN-field-walk, so this
+            // arm never falls through to the loop below: doing both printed
+            // `dR52 dR51 dS dR52 dR51` against a due `dS dR52 dR51`.
+            //
+            // The arm took a field, so that field died with its binding and the
+            // body's own walk must not reach it again. Standing down entirely
+            // is what the `own-drop-struct` cell of
+            // `fresh_temp_struct_scrutinee_arm_binding_runs_its_body` pins, on
+            // both backends together.
+            if !taken.is_empty() {
+                return;
+            }
+            // Already run by the other channel — see the field's doc comment.
+            if !owes_own_body {
+                return;
+            }
+            let nm = name.clone();
+            let v = val.clone();
+            self.run_user_drop_body_on_value(&nm, v);
             return;
         }
         let Some(def) = self.find_struct_def(name) else {

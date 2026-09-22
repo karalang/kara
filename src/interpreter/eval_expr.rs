@@ -1316,9 +1316,20 @@ impl<'a> super::Interpreter<'a> {
                             // Set here rather than after `bind_pattern` because
                             // `val` is moved into it; the drain is after the
                             // then-block, where `eval_match` puts its own.
+                            // B-2026-09-21-6 — the own-`Drop` BODY is this
+                            // walker's to run only when the other channel is
+                            // not already running it. That channel accepts a
+                            // call / method-call scrutinee and nothing else, so
+                            // a struct LITERAL temp reaches here with nobody
+                            // having run the body and a call temp reaches here
+                            // with it already run. Asked of the EXPRESSION,
+                            // here, because the walker only ever sees a value.
+                            let owes_own_body =
+                                self.freshtemp_scrutinee_user_drop_type(value).is_none();
                             self.pending_arm_unbound_struct = Some((
                                 val.clone(),
                                 Self::struct_pattern_bound_field_names(pattern),
+                                owes_own_body,
                             ));
                             // Unfiltered: the loop below decides which of these
                             // actually owe a body, and it runs AFTER
@@ -1420,8 +1431,9 @@ impl<'a> super::Interpreter<'a> {
                     // these are the remainder, in reverse declaration order.
                     // Empty for every scrutinee with an owner, and empty on the
                     // miss edge, which binds nothing and keeps the whole walk.
-                    if let Some((sv, taken)) = self.pending_arm_unbound_struct.take() {
-                        self.run_unbound_struct_field_drops(&sv, &taken);
+                    if let Some((sv, taken, owes_own_body)) = self.pending_arm_unbound_struct.take()
+                    {
+                        self.run_unbound_struct_field_drops(&sv, &taken, owes_own_body);
                     }
                     self.env.pop_scope();
                     match result {
@@ -1778,9 +1790,20 @@ impl<'a> super::Interpreter<'a> {
                             // the bindings it introduces, so a rebinding
                             // pattern (`S3 { a: q, .. }`) does not leave field
                             // `a` in the unbound set to be walked beside `q`.
+                            // B-2026-09-21-6 — the own-`Drop` BODY is this
+                            // walker's to run only when the other channel is
+                            // not already running it. That channel accepts a
+                            // call / method-call scrutinee and nothing else, so
+                            // a struct LITERAL temp reaches here with nobody
+                            // having run the body and a call temp reaches here
+                            // with it already run. Asked of the EXPRESSION,
+                            // here, because the walker only ever sees a value.
+                            let owes_own_body =
+                                self.freshtemp_scrutinee_user_drop_type(value).is_none();
                             self.pending_arm_unbound_struct = Some((
                                 val.clone(),
                                 Self::struct_pattern_bound_field_names(pattern),
+                                owes_own_body,
                             ));
                             // Unfiltered, for the reason the `if let` leg states:
                             // the loop below decides which of these actually owe a
@@ -1879,8 +1902,9 @@ impl<'a> super::Interpreter<'a> {
                     // and `if let`'s: after the body, so a bound field's body
                     // has already fired from its binding and these are the
                     // remainder, in reverse declaration order.
-                    if let Some((sv, taken)) = self.pending_arm_unbound_struct.take() {
-                        self.run_unbound_struct_field_drops(&sv, &taken);
+                    if let Some((sv, taken, owes_own_body)) = self.pending_arm_unbound_struct.take()
+                    {
+                        self.run_unbound_struct_field_drops(&sv, &taken, owes_own_body);
                     }
                     self.env.pop_scope();
                     if let Some((tn, dv)) = drop_snapshot {
