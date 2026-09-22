@@ -95,7 +95,7 @@ distinguish "bugs flattening" from "we stopped writing them down."
 | run-vs-build | 480 |
 | miscompile | 436 |
 | leak | 403 |
-| double-free | 263 |
+| double-free | 265 |
 | missing-feature | 203 |
 | codegen-gap | 182 |
 | other | 147 |
@@ -110,8 +110,8 @@ distinguish "bugs flattening" from "we stopped writing them down."
 
 | surface | total |
 |---|---|
-| codegen | 1967 |
-| interp | 516 |
+| codegen | 1969 |
+| interp | 517 |
 | typecheck | 303 |
 | other | 107 |
 | ownership | 75 |
@@ -352,9 +352,10 @@ narrow -- it is the `ContainerElemBodies` walker for an ARRAY field being
 registered in the callee's prologue, not by-value struct params in general. | — |
 | B-2026-09-22-2 | 2026-09-22 | other | medium | MEASURED: `test_e2e_par_branch_errdefer_fires_on_cooperative_cancel` FAILS AT ROUGHLY 1% — once on CI and once in 170 local runs — AND ITS IN-SOURCE GUARD COVERS ONLY ONE DIRECTION OF THE RACE: the million-iteration ceiling stops branch 0 FINISHING before the cancel, and nothing stops branch 0 never STARTING, which is what an empty output looks like. OPEN QUESTION, not a patch: what the cell should assert when branch 0 never enters its scope | — |
 | B-2026-09-22-3 | 2026-09-22 | codegen | medium | MEASURED: `asan_slice_mutators_and_views_on_heap_elements` FAILS THE `KARAC_SSO=1` SANITIZER LANE INTERMITTENTLY ON CI — 4 reds in 7 consecutive `main` runs, INCLUDING A FAIL AND A PASS ON A BYTE-IDENTICAL TEST BINARY — and no ASAN report exists for ANY of them because the leg deleted it (B-2026-09-22-4). NOT a regression of cfe7a5f1c, to which it was attributed, and not a host difference either | — |
-| B-2026-09-22-6 | 2026-09-22 | codegen | high | A BY-VALUE `Array` PARAM MOVED INTO A **USER-ENUM** SEEDED `match` SCRUTINEE IS STILL FREED BY BOTH SIDES -- B-2026-09-19-61's fix declines the box-interior arming for `Option`/`Result` only, and a user enum reaches its payload through its OWN walker (`emit_enum_drop_switch`), which never consults that gate; `match W.P(a)` over `fn p_mono(a: Array[S, 2])` aborts 134 at `-O0` where `--interp` is CORRECT, so the interpreter is the oracle here | — |
 | B-2026-09-22-7 | 2026-09-22 | codegen+interp | high | A BY-VALUE `Array` PARAM MOVED INTO A **STRUCT-LITERAL FIELD** IS FREED BY BOTH THE CALLER AND THE AGGREGATE -- `suppress_array_binding_move_into_aggregate`'s retraction no-ops for a param the caller retained, because the param-level gate queued no `StructDrop` in this frame to retract, so the struct's field drop is armed and the caller's free stands; `Box2 { v: a }` aborts 134 at `-O0`, and `--interp` independently runs each element body twice, so neither backend is the oracle | — |
 | B-2026-09-22-8 | 2026-09-22 | interp | medium | THE INTERPRETER RUNS AN `Array` PARAM'S ELEMENT `Drop` BODIES TWICE WHEN THE PARAM IS MOVED INTO A SEEDED `match` SCRUTINEE -- the remainder B-2026-09-19-61 split out, now a run-vs-build divergence because that row's fix made both compiled backends match the by-value-callee control at one pair; WIDER THAN `Array` (a `Vec[R]` param has it too) and a bare STRUCT param runs its body twice on BOTH backends, which no differential instrument can see | — |
+| B-2026-09-22-9 | 2026-09-22 | codegen | high | A USER-ENUM VARIANT CARRYING AN `Array` PARAM **BESIDE A SECOND FIELD** IS STILL FREED BY BOTH SIDES -- B-2026-09-22-6's box-only drop twin is gated on the variant having EXACTLY ONE payload field, because `__karac_drop_<E>` releases a variant's whole payload in ONE switch arm; `match W.P(a, f"zz")` over `fn p_mono(a: Array[S, 2])` aborts 134 at `-O0` where `--interp` is CORRECT, and standing that arm's walk down would trade the double free for a leak of the sibling `String` | — |
+| B-2026-09-22-10 | 2026-09-22 | codegen+interp | high | A USER-ENUM CONSTRUCTOR BOUND TO A **NAMED LOCAL** BEFORE THE `match` IS STILL FREED BY BOTH SIDES -- B-2026-09-22-6 fixes the MATERIALIZED scrutinee temp, and a named scrutinee never reaches `materialize_freshtemp_enum_scrutinee`, so `let o = W.P(a); match o` over `fn p_mono(a: Array[S, 2])` still carries `__karac_drop_W` rather than the box-only twin and aborts 134 at `-O0`; `--interp` runs the element bodies TWICE here, so neither backend is the oracle for the other and a by-value-callee control is what answers it | — |
 
 ### Relocated
 
@@ -2938,6 +2939,7 @@ registered in the callee's prologue, not by-value struct params in general. | �
 | B-2026-09-21-15 | codegen+interp | high | A `match` ARM'S PAYLOAD BINDING IS GARBAGE WHEN THE PAYLOAD IS A `Vec` OF A GENERIC STRUCT, AND THE ELEMENT DROP WALK THEN RUNS USER `Drop` BODIES OV… | cfe7a5f1c |
 | B-2026-09-22-5 | other | medium | THE AUTO-PAR JIT LANE DISCARDED A CRASHED `karac_jit_runner`'S SIGNAL AND STDERR — B-2026-09-19-5 is the same bug and f4dc90f fixed it on the SEQUENT… | e17df4296 |
 | B-2026-09-22-4 | other | medium | THE ASAN RATCHET LEGS NAMED THEIR NEW FAILURES AND DELETED THE REPORT THAT SAID WHY — the suite log is a `mktemp` under `trap 'rm -f' EXIT`, so a red… | f7e60e4d3 |
+| B-2026-09-22-6 | codegen | high | A BY-VALUE `Array` PARAM MOVED INTO A **USER-ENUM** SEEDED `match` SCRUTINEE IS STILL FREED BY BOTH SIDES -- B-2026-09-19-61's fix declines the box-i… | 99524b557 |
 
 </details>
 
