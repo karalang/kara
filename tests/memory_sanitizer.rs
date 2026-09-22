@@ -102536,4 +102536,83 @@ fn main() {
             "b2021-4-alias-args",
         );
     }
+
+    /// B-2026-09-21-15 — the memory twin: a `Vec` enum payload whose ELEMENT is a generic
+    /// struct keeps its vec shape when bound in a match arm.
+    ///
+    /// `pattern_binding_inner_types` holds the binding's own type for some
+    /// binding kinds and the ELEMENT type for a container (that is what the
+    /// `Array` / `Vector` arms read it for), and three separate sites asked
+    /// "is this a concretely-instantiated generic struct?" of it without
+    /// checking which. A `Vec[G[i64]]` binding records `bt = "Vec"` beside
+    /// `inner = G[i64]`, so all three answered with `G[i64]` and all three
+    /// outranked the explicit `"Vec" => 3 words / vec_struct_type()` arms
+    /// below them: the payload was sized at 1 word, which made the BOXED
+    /// payload look inline, and the deboxed `{ ptr, i64, i64 }` was rebuilt as
+    /// G's 1-field `{ i64 }` keeping only word 0. The binding held the buffer
+    /// POINTER where its length belonged, so `v.len()` returned an address —
+    /// an unbounded drop walk, then a SIGSEGV or `free(): double free detected
+    /// in tcache 2`, on a program `--interp` ran correctly.
+    ///
+    /// The `b:` cell is the one-character control: `P` is the same struct with
+    /// its type parameter removed, and it always compiled correctly. It is
+    /// here so a regression that reaches only the generic side is still
+    /// distinguishable from one that breaks both.
+    ///
+    /// No `Drop` impl is needed to trigger this — `a:` through `e:` carry
+    /// none. The `f:` cell adds one only to show the element bodies still fire
+    /// once each once the binding has the right shape.
+    ///
+    /// The three sites are now one predicate
+    /// (`generic_struct_binding_type_expr`), which tests that the recorded
+    /// surface name agrees with the `TypeExpr`'s head — the thing the tier
+    /// always meant, and true of B-2026-07-12-2's `bt = "Wrap"` beside
+    /// `inner = Wrap[String]` that it exists for.
+    ///
+    /// The ASAN channel is what the output oracle cannot see on its own. The
+    /// binding held a buffer POINTER in its length slot, so the drop walk read
+    /// element after element past the end of a two-element buffer — ten
+    /// million `Invalid read of size 8` in ninety seconds under valgrind
+    /// before the process died.
+    #[test]
+    fn asan_vec_payload_of_generic_struct_elements_keeps_its_vec_shape() {
+        assert_clean_asan_run(
+            r#"
+struct G[T] { v: T }
+struct P { v: i64 }
+enum Slot[T] { S(T), N }
+
+struct D { id: i64 }
+impl Drop for D { fn drop(mut ref self) { println(f"dD{self.id}") } }
+struct Gd[T] { d: T }
+
+fn main() {
+    let a: Vec[G[i64]] = [G { v: 1 }, G { v: 2 }];
+    match Slot.S(a) { Slot.S(v) => { println(f"a:{v.len()}:{v[1].v}") } Slot.N => { println("no") } }
+
+    let b: Vec[P] = [P { v: 3 }, P { v: 4 }];
+    match Slot.S(b) { Slot.S(v) => { println(f"b:{v.len()}:{v[1].v}") } Slot.N => { println("no") } }
+
+    let c: Vec[G[i64]] = [G { v: 5 }, G { v: 6 }];
+    let s: Slot[Vec[G[i64]]] = Slot.S(c);
+    match s { Slot.S(v) => { println(f"c:{v.len()}:{v[0].v}") } Slot.N => { println("no") } }
+
+    let d: Vec[G[String]] = [G { v: "ab" }, G { v: "cd" }];
+    match Option.Some(d) { Option.Some(v) => { println(f"d:{v.len()}:{v[1].v}") } Option.None => { println("no") } }
+
+    let e: Vec[G[i64]] = [G { v: 7 }, G { v: 8 }];
+    if let Slot.S(v) = Slot.S(e) { println(f"e:{v.len()}:{v[0].v}") }
+
+    let f: Vec[Gd[D]] = [Gd { d: D { id: 1 } }, Gd { d: D { id: 2 } }];
+    match Slot.S(f) { Slot.S(v) => { println(f"f:{v.len()}") } Slot.N => { println("no") } }
+
+    println("end");
+}
+"#,
+            &[
+                "a:2:2", "b:2:4", "c:2:5", "d:2:cd", "e:2:7", "f:2", "dD1", "dD2", "end",
+            ],
+            "asan_vec_payload_of_generic_struct_elements_keeps_its_vec_shape",
+        );
+    }
 }

@@ -8498,6 +8498,50 @@ impl<'ctx> super::Codegen<'ctx> {
         Ok(phi.as_basic_value().into_int_value())
     }
 
+    /// Does `pattern_binding_inner_types[key]` hold the binding's OWN type,
+    /// and is that type a concretely-instantiated generic user struct? Both
+    /// `pattern_payload_word_count` and `pattern_payload_llvm_type` ask this,
+    /// and they have to agree: a widened word count against an unwidened load
+    /// type trades a wrong value for a misaligned one.
+    ///
+    /// The agreement test on the recorded surface NAME is the whole point.
+    /// `pattern_binding_inner_types` is not always the binding's own type —
+    /// for a CONTAINER binding it holds the ELEMENT type, which is exactly
+    /// what the `Array` / `Vector` arms read it for. B-2026-07-12-2's shape,
+    /// which this tier exists for, records `bt = "Wrap"` beside
+    /// `inner = Wrap[String]`, so the `TypeExpr`'s head segment IS the
+    /// recorded name; a `Vec[G2[i64]]` binding records `bt = "Vec"` beside
+    /// `inner = G2[i64]`, and the head segment is not.
+    ///
+    /// B-2026-09-21-15 — without the test, that `Vec` binding took this tier
+    /// (which sits AHEAD of the explicit `Vec => 3` arm) and was sized as
+    /// `G2[i64]`: 1 word. One under-counted `want` makes a BOXED payload look
+    /// inline, so the arm took the box POINTER as the vec value
+    /// (`%v = alloca i64` / `store i64 %payload`, where the working twin emits
+    /// `inttoptr` + `load { ptr, i64, i64 }`) — a garbage length, an unbounded
+    /// drop walk, and a SIGSEGV or a double free on a program `--interp` runs
+    /// correctly. Making `G2` non-generic, one character of the program, flipped
+    /// the same match to correct. The comment this replaced asserted the tier
+    /// "never fires for a String/Vec/scalar binding"; a trace printed
+    /// `bt=Some("Vec") gen_struct=true`, refuting it.
+    ///
+    /// A binding with no recorded surface name keeps the old behaviour: the
+    /// tail's `None => 1` is the only alternative there, so firing can only
+    /// widen.
+    pub(super) fn generic_struct_binding_type_expr(
+        &self,
+        key: (usize, usize),
+    ) -> Option<&TypeExpr> {
+        let te = self.pattern_state.pattern_binding_inner_types.get(&key)?;
+        let names_this_binding =
+            match (self.pattern_state.pattern_binding_types.get(&key), &te.kind) {
+                (None, _) => true,
+                (Some(bt), TypeKind::Path(p)) => p.segments.last().is_some_and(|s| s == bt),
+                (Some(_), _) => false,
+            };
+        (names_this_binding && self.is_generic_named_struct_type_expr(te)).then_some(te)
+    }
+
     /// Compound-payload enum codegen (tuple-destructure helper) —
     /// per-element word count for a destructure sub-pattern. Mirrors
     /// the construction-side `payload_word_count_for_type_expr` shape
@@ -8633,14 +8677,11 @@ impl<'ctx> super::Codegen<'ctx> {
                 // instantiation width, not the all-`i64` generic base — the
                 // `Some(name)` arm below would look up `struct_types["Wrap"]`
                 // (the `{i64}` base = 1 word) and truncate a 3-word `String`
-                // field (B-2026-07-12-2 recovery). The inner `TypeExpr` is
-                // recorded by the typechecker only for owned/borrow generic
-                // struct payload bindings, so this branch never fires for a
-                // String/Vec/scalar binding (handled by the explicit arms).
-                if let Some(te) = self.pattern_state.pattern_binding_inner_types.get(&key) {
-                    if self.is_generic_named_struct_type_expr(te) {
-                        return Self::llvm_type_word_count(self.llvm_type_for_type_expr(te)).max(1);
-                    }
+                // field (B-2026-07-12-2 recovery). The agreement test lives in
+                // `generic_struct_binding_type_expr`; its twin in
+                // `pattern_payload_llvm_type` asks the same question there.
+                if let Some(te) = self.generic_struct_binding_type_expr(key) {
+                    return Self::llvm_type_word_count(self.llvm_type_for_type_expr(te)).max(1);
                 }
                 match self
                     .pattern_state
@@ -8840,11 +8881,12 @@ impl<'ctx> super::Codegen<'ctx> {
                     }
                 }
                 // Generic user-struct payload binding — the mono aggregate type
-                // (sibling of the word-count arm in `pattern_payload_word_count`).
-                if let Some(te) = self.pattern_state.pattern_binding_inner_types.get(&key) {
-                    if self.is_generic_named_struct_type_expr(te) {
-                        return self.llvm_type_for_type_expr(te);
-                    }
+                // (sibling of the word-count arm in `pattern_payload_word_count`,
+                // asking the one shared question so the two cannot drift: a
+                // widened count against an unwidened load type would trade a
+                // wrong value for a misaligned one).
+                if let Some(te) = self.generic_struct_binding_type_expr(key) {
+                    return self.llvm_type_for_type_expr(te);
                 }
                 match self
                     .pattern_state
@@ -9364,11 +9406,14 @@ impl<'ctx> super::Codegen<'ctx> {
         // aggregate (the concrete-arg field layout), NOT the all-`i64` generic
         // base `struct_types[name]` the fallthrough would pick — else the
         // 3-word `String` field collapses into the 1-field base (B-2026-07-12-2).
+        // B-2026-09-21-15 — the THIRD spelling of the question
+        // `generic_struct_binding_type_expr` now owns, and the one that
+        // outranks the `"Vec" => vec_struct_type()` arm below: a
+        // `Vec[G2[i64]]` binding records `inner = G2[i64]`, so the unguarded
+        // filter rebuilt the deboxed 3-word vec as G2's 1-field `{ i64 }` and
+        // kept only word 0 — the buffer pointer read back as a length.
         let mono_struct_target: Option<BasicTypeEnum<'ctx>> = self
-            .pattern_state
-            .pattern_binding_inner_types
-            .get(&key)
-            .filter(|te| self.is_generic_named_struct_type_expr(te))
+            .generic_struct_binding_type_expr(key)
             .map(|te| self.llvm_type_for_type_expr(te));
         // B-2026-07-13-3: a generic enum's bare-`T` payload resolved to a
         // concrete heap type by the monomorph substitution (String/Vec, OR a

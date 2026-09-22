@@ -901,13 +901,16 @@ impl<'ctx> super::Codegen<'ctx> {
                     // is registered here (the owned struct's scope-exit drop is
                     // handled by the user-struct arm further down, gated
                     // `!pattern_binding_is_borrow`).
-                    if let Some(full_te) = self
-                        .pattern_state
-                        .pattern_binding_inner_types
-                        .get(&key)
-                        .cloned()
-                    {
-                        if self.is_generic_named_struct_type_expr(&full_te) {
+                    // B-2026-09-21-15 — through
+                    // `generic_struct_binding_type_expr`, so a CONTAINER
+                    // binding whose ELEMENT is a generic struct
+                    // (`Vec[G2[i64]]` records `inner = G2[i64]`) is not
+                    // recorded as being that struct. `enum_inst_var_types` is
+                    // the first and authoritative arm of
+                    // `enum_inst_type_of_expr`, so a wrong entry here stops
+                    // the search at the wrong answer.
+                    if let Some(full_te) = self.generic_struct_binding_type_expr(key).cloned() {
+                        {
                             // `pattern_binding_inner_types` is a
                             // PRE-monomorphization record, so for a payload
                             // bound inside a generic impl it holds the GENERIC
