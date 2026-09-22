@@ -2495,9 +2495,12 @@ fn main() {
 /// cache key, so the array field's walk is declined while the sibling
 /// `String`'s is kept -- `in:zz` reads that sibling back before the walk, which
 /// is what makes the cell load-bearing rather than decorative. The enum
-/// spelling (B-2026-09-22-9) has no such per-field form: its switch frees a
-/// variant's whole payload in ONE arm, so standing that arm down would leak the
-/// sibling outright, which is why that row is still open.
+/// spelling (B-2026-09-22-9) was believed to have no such per-field form, on
+/// the reading that its switch frees a variant's whole payload in ONE arm. That
+/// reading was wrong and the row is now CLOSED: the box-only twin's flag is
+/// consumed at one FIELD's interior walk inside the per-field loop, not at the
+/// arm, so the sibling keeps its drop. See
+/// `e2e_array_param_into_multi_field_enum_variant_stays_with_caller`.
 ///
 /// `n/str` pins the widening this must not take: an `Array[String, 2]` param IS
 /// callee-owned, its disarm works, and it is clean either side of the fix.
@@ -2604,6 +2607,131 @@ fn main() {
             "end",
         ],
         "asan_array_param_into_struct_literal_field_stays_with_caller",
+    );
+}
+
+/// B-2026-09-22-9 — an `Array` param moved into a MULTI-FIELD user-enum
+/// variant is freed by both the callee's enum drop and the caller.
+///
+/// B-2026-09-22-6 fixed the ONE-FIELD spelling with a box-only drop twin
+/// (`__karac_drop_<E>__boxonly`) and gated it on the variant having exactly
+/// one payload field. This lifts that gate to exactly one ARRAY field, which
+/// is the question the twin can actually answer.
+///
+/// THE ROW'S STATED BLOCKER IS REFUTED, and that is the whole of the fix.
+/// It reads "`__karac_drop_<E>` releases a variant's whole payload in ONE
+/// switch arm", so standing that arm down "would trade the double free for a
+/// leak of the sibling `String`". The flag is not consumed at the arm. It is
+/// consumed at ONE FIELD's interior walk, inside the per-field loop
+/// (`src/codegen/synth_drop.rs`, `inner_drop.filter(|_| !skip_boxed_array_interior)`),
+/// and the `free` of the box below it is untouched. So a sibling field keeps
+/// its own drop and the array field alone stands down. `m/first` and
+/// `m/second` are the cells that prove it: both carry a `String` beside the
+/// array, and `m/read` reads that sibling back through `{t}` before the walk,
+/// so none of the three can pass while the sibling is being lost.
+///
+/// EXACTLY ONE array field, not "at least one", because the twin is a
+/// per-ENUM function: it stands down every `BoxedArray` interior walk it
+/// meets, so a variant holding a caller-retained array BESIDE a callee-owned
+/// one would lose the second's elements. That shape still aborts and is
+/// deliberately absent — it has its own row.
+///
+/// `m/second` puts the array SECOND and `m/three` puts it in the middle of
+/// three fields, because the fix indexes the ctor argument by the array's
+/// position rather than assuming it is first.
+///
+/// `m/noheap` (`Array[N, 2]`, elements owning no heap) and `b/str`
+/// (`Array[String, 2]`, a callee-OWNED element type whose ordinary retraction
+/// already worked) pin the two directions the relaxed gate must not disturb;
+/// both were clean before the fix. `b/single` is B-2026-09-22-6's original
+/// one-field cell, kept here as the non-regression on the gate being lifted.
+///
+/// `b/local` sources its array from a LOCAL rather than a param, so the fix's
+/// predicate cannot fire; it prints `r` and NO element bodies, which is an
+/// agreed pre-existing gap measured identically on both arms and on every
+/// surface including `--interp`. It is pinned as-is rather than corrected,
+/// and it is memory-CLEAN — the bodies are skipped, the buffers are not
+/// stranded — which is why it can sit in a sanitizer fixture at all.
+///
+/// EVERY VARIANT NAME IN THIS PROGRAM IS DISTINCT, AND THAT IS LOAD-BEARING
+/// RATHER THAN STYLE. The first draft gave every enum the variants `P`/`Q`,
+/// which put `W2 { P(Array[S, 2], String) }` beside
+/// `W2s { P(String, Array[S, 2]) }` — two enums sharing a variant name and
+/// carrying the same heap-bearing types in swapped positions. That is
+/// B-2026-09-22-16, a cross-enum field-offset miscompile, and it made this
+/// program SIGSEGV before reaching its first line. Renaming the variants
+/// apart makes it 6/6 clean and 1 distinct binary over 6 builds. Do not
+/// re-collide them.
+///
+/// `--interp` AGREES WITH ALL THREE COMPILED SURFACES HERE, which is worth
+/// stating because the struct sibling B-2026-09-22-7 has no interpreter twin
+/// for the opposite reason: there the interpreter runs every caller-retained
+/// cell's element bodies twice (B-2026-09-22-8). The enum spelling does not,
+/// so this program's expected output is the same on all four.
+#[test]
+fn asan_array_param_into_multi_field_enum_variant_stays_with_caller() {
+    assert_clean_asan_run(
+        r#"struct S { tag: String }
+impl Drop for S { fn drop(mut ref self) { println(f"  dS{self.tag}") } }
+struct N { id: i64 }
+impl Drop for N { fn drop(mut ref self) { println(f"  dN{self.id}") } }
+enum W2 { Af(Array[S, 2], String), Aq }
+enum W2s { Bs(String, Array[S, 2]), Bq }
+enum W3 { Ct(String, Array[S, 2], i64), Cq }
+enum Wn { Dn(Array[N, 2], String), Dq }
+enum Wv { Ev(Array[String, 2], String), Eq }
+enum W1 { Fo(Array[S, 2]), Fq }
+fn m_first(a: Array[S, 2]) -> i64 { match W2.Af(a, f"zz") { W2.Af(v, t) => { println("  r"); return 1 }, W2.Aq => { println("  n"); return 0 } } }
+fn m_second(a: Array[S, 2]) -> i64 { match W2s.Bs(f"zz", a) { W2s.Bs(t, v) => { println("  r"); return 1 }, W2s.Bq => { println("  n"); return 0 } } }
+fn m_read(a: Array[S, 2]) -> i64 { match W2.Af(a, f"kk") { W2.Af(v, t) => { println(f"  r:{t}:{v[0].tag}"); return 1 }, W2.Aq => { println("  n"); return 0 } } }
+fn m_three(a: Array[S, 2]) -> i64 { match W3.Ct(f"zz", a, 9) { W3.Ct(t, v, k) => { println("  r"); return 1 }, W3.Cq => { println("  n"); return 0 } } }
+fn m_noheap(a: Array[N, 2]) -> i64 { match Wn.Dn(a, f"zz") { Wn.Dn(v, t) => { println("  r"); return 1 }, Wn.Dq => { println("  n"); return 0 } } }
+fn b_str(a: Array[String, 2]) -> i64 { match Wv.Ev(a, f"zz") { Wv.Ev(v, t) => { println(f"  r:{v[0]}"); return 1 }, Wv.Eq => { println("  n"); return 0 } } }
+fn b_single(a: Array[S, 2]) -> i64 { match W1.Fo(a) { W1.Fo(v) => { println("  r"); return 1 }, W1.Fq => { println("  n"); return 0 } } }
+fn b_local() -> i64 { let a: Array[S, 2] = [S { tag: f"llllllll0" }, S { tag: f"llllllll1" }]; match W2.Af(a, f"zz") { W2.Af(v, t) => { println("  r"); return 1 }, W2.Aq => { println("  n"); return 0 } } }
+fn main() {
+    println("m/first");  { let a: Array[S, 2] = [S { tag: f"aaaaaaaa0" }, S { tag: f"aaaaaaaa1" }]; let z = m_first(a); }
+    println("m/second"); { let a: Array[S, 2] = [S { tag: f"bbbbbbbb0" }, S { tag: f"bbbbbbbb1" }]; let z = m_second(a); }
+    println("m/read");   { let a: Array[S, 2] = [S { tag: f"cccccccc0" }, S { tag: f"cccccccc1" }]; let z = m_read(a); }
+    println("m/three");  { let a: Array[S, 2] = [S { tag: f"dddddddd0" }, S { tag: f"dddddddd1" }]; let z = m_three(a); }
+    println("m/noheap"); { let a: Array[N, 2] = [N { id: 2 }, N { id: 3 }]; let z = m_noheap(a); }
+    println("b/str");    { let a: Array[String, 2] = [f"gggggggg0", f"gggggggg1"]; let z = b_str(a); }
+    println("b/single"); { let a: Array[S, 2] = [S { tag: f"hhhhhhhh0" }, S { tag: f"hhhhhhhh1" }]; let z = b_single(a); }
+    println("b/local");  { let z = b_local(); }
+    println("end")
+}"#,
+        &[
+            "m/first",
+            "  r",
+            "  dSaaaaaaaa0",
+            "  dSaaaaaaaa1",
+            "m/second",
+            "  r",
+            "  dSbbbbbbbb0",
+            "  dSbbbbbbbb1",
+            "m/read",
+            "  r:kk:cccccccc0",
+            "  dScccccccc0",
+            "  dScccccccc1",
+            "m/three",
+            "  r",
+            "  dSdddddddd0",
+            "  dSdddddddd1",
+            "m/noheap",
+            "  r",
+            "  dN2",
+            "  dN3",
+            "b/str",
+            "  r:gggggggg0",
+            "b/single",
+            "  r",
+            "  dShhhhhhhh0",
+            "  dShhhhhhhh1",
+            "b/local",
+            "  r",
+            "end",
+        ],
+        "asan_array_param_into_multi_field_enum_variant_stays_with_caller",
     );
 }
 

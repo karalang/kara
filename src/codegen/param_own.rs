@@ -6546,15 +6546,6 @@ impl<'ctx> super::Codegen<'ctx> {
         let ExprKind::Call { args, .. } = &ctor.kind else {
             return false;
         };
-        let [only] = args.as_slice() else {
-            return false;
-        };
-        let ExprKind::Identifier(root) = &only.value.kind else {
-            return false;
-        };
-        if !self.fn_ctx.current_fn_param_names.contains(root.as_str()) {
-            return false;
-        }
         let Some(variant) = Self::ctor_variant_name(ctor) else {
             return false;
         };
@@ -6565,13 +6556,31 @@ impl<'ctx> super::Codegen<'ctx> {
         else {
             return false;
         };
-        let [payload_te] = tys.as_slice() else {
+        if args.len() != tys.len() {
+            return false;
+        }
+        // EXACTLY ONE array field, because the box-only twin is a per-ENUM
+        // function: it stands down every `BoxedArray` interior walk it meets,
+        // so a variant holding a caller-retained array BESIDE a callee-owned
+        // one would lose the second's elements. One array field, and the
+        // question has a single answer.
+        let mut arrays = tys
+            .iter()
+            .enumerate()
+            .filter_map(|(i, te)| self.array_elem_and_len(te).map(|(e, n)| (i, e, n)));
+        let Some((ai, elem_te, n)) = arrays.next() else {
             return false;
         };
-        let Some((elem_te, n)) = self.array_elem_and_len(payload_te) else {
+        if arrays.next().is_some() {
+            return false;
+        }
+        if n == 0 || self.array_param_elem_is_callee_owned(&elem_te) {
+            return false;
+        }
+        let ExprKind::Identifier(root) = &args[ai].value.kind else {
             return false;
         };
-        n > 0 && !self.array_param_elem_is_callee_owned(&elem_te)
+        self.fn_ctx.current_fn_param_names.contains(root.as_str())
     }
 
     /// B-2026-09-22-7 — which fields of a STRUCT LITERAL were initialised from
