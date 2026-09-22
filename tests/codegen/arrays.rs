@@ -5163,3 +5163,125 @@ fn main() {
         Some("dSd\na\nb\nc\nd\ne:7\ndSd\nf\ndSd\ndSd\ndSd\ng\ndSd\nh\ni\nend\n")
     );
 }
+
+/// B-2026-09-22-11 — the BUILTIN-ENVELOPE spelling of B-2026-09-22-10.
+/// A by-value `Array` param moved into a NAMED SEEDED `Option`/`Result` local
+/// was freed by both the caller and this frame.
+///
+/// `let o = Option.Some(a); match o` over `fn f(a: Array[S, 2])` aborted with
+/// `free(): double free detected in tcache 2`, exit 134 at `-O0`, on EIGHT of
+/// this fixture's fourteen cells against the unfixed compiler, and under
+/// valgrind on 17 invalid frees where the fixed arm has none. All three
+/// compiled surfaces agreed on the fault and agree on the fix.
+///
+/// THE PREDICATE ALREADY EXISTED AND THIS SITE NEVER ASKED IT, which is the
+/// whole of the change. B-2026-09-19-61 wired
+/// `seeded_array_payload_stays_with_caller` into the match-arm gate
+/// `array_arm_owns_interior`, whose handle on the constructor is
+/// `seeded_variant_arg_payload(scrutinee)` — and a NAMED scrutinee is an
+/// `Identifier`, not a call, so that lookup answers `None` and the gate never
+/// fires. The constructor is visible at the `let`, which is where the box's
+/// interior walk is armed for this spelling, and that is where the question is
+/// now asked.
+///
+/// DECLINE TO ARM, not retract — the third branch that predicate's own doc
+/// names. The caller's free is deliberately not retractable: the element `Drop`
+/// BODIES ride a caller-side channel and fire while the caller still holds the
+/// value, so retracting it would make those bodies read freed memory.
+/// Declining leaves the box's own `free` standing, which is this frame's to do,
+/// and is byte-for-byte the IR the FRESH TEMP spelling already emits — `b/fresh`
+/// is that cell, kept so a change to the shared predicate cannot quietly move
+/// the site B-2026-09-19-61 fixed.
+///
+/// FOUR SPELLINGS WERE ON THE ROW'S OWN NOT-MEASURED LIST AND THREE OF THEM
+/// ABORT. `s/iflet`, `s/letelse` and `s/whilelet` each reach the same `let`
+/// registration and each went 134 → 0; they are here because a row's
+/// not-measured list is where the next spelling hides. `b/chain` is the fourth
+/// and is the one that did NOT reproduce: `let o2 = o;` is clean on BOTH arms,
+/// so the propagation the user-enum sibling needed for its `l/chain` is not
+/// owed here. It stays as the pin for that difference.
+///
+/// `s/read` reads `v[0].tag` back before the walk, so it cannot pass while the
+/// payload is being lost; `s/three` widens to three elements (three invalid
+/// frees on the control, against two for each two-element cell, which is what
+/// makes 17 add up); `s/res` is the `Result.Ok` sibling, reached through a
+/// different variant on the same registration.
+///
+/// `b/str` DID NOT PIN THE WIDENING, IT CAUGHT IT, which is the one thing in
+/// this fixture worth reading before the next row in this family. The first
+/// spelling of the fix gated on `seeded_array_payload_stays_with_caller` alone,
+/// which answers by MEMBERSHIP of `owned_array_params` -- a map filled at a
+/// point this `let` does not see -- so an `Array[String, 2]` param read as
+/// caller-retained, the walk was declined, and both element buffers leaked
+/// 18 B in 2 blocks. That is the same figure, and the same mistake, that
+/// B-2026-09-22-6's own doc records for its spelling of it, written before this
+/// one was attempted. The fix is that row's conclusion: ask the QUESTION, not
+/// the map -- `array_param_elem_is_callee_owned` over the variant's declared
+/// payload element -- so the gate's two conjuncts now name "a param of this
+/// function" and "whose element heap the caller keeps" separately.
+///
+/// AND NOTE WHICH LEG SAW IT. This cell was GREEN under a plain
+/// `cargo test --features llvm`, at the default opt level, with the leak
+/// present; only the `-O0` ASAN ratchet leg was red, because at `-O2` the
+/// allocation nothing observes is deleted. A `valgrind -q` column in the same
+/// grid had also called it clean, `-q` having suppressed the leak summary. An
+/// invalid-access column and a leak column are different instruments.
+///
+/// THE OTHER THREE CONTROLS PIN WHAT MUST NOT MOVE, and were clean before the
+/// fix as well as after. `b/noheap` owns no element heap
+/// and so has nothing to double-free. `b/local` is the local-source
+/// non-regression — the predicate is param-rooted precisely so this keeps
+/// arming. `b/ctl` is a by-value callee that does nothing with the array, and is
+/// the oracle for what ONE owner looks like: every fixed cell prints its
+/// elements exactly once, as this one does.
+///
+/// `--interp` runs every caller-retained cell's element bodies TWICE and so
+/// diverges from all three compiled surfaces, which agree with each other. It is
+/// unchanged by this fix, which touches codegen only, and is the same remainder
+/// B-2026-09-22-8 records — measured here on `b/fresh`, which had that
+/// divergence before this change and still has it. That is why this fixture has
+/// no interpreter twin.
+#[test]
+fn e2e_array_param_into_named_seeded_envelope_local_stays_with_caller() {
+    let Some(out) = run_program(
+        r#"struct S { tag: String }
+impl Drop for S { fn drop(mut ref self) { println(f"  dS{self.tag}") } }
+struct N { id: i64 }
+impl Drop for N { fn drop(mut ref self) { println(f"  dN{self.id}") } }
+fn s_bind(a: Array[S, 2]) -> i64 { let o = Option.Some(a); match o { Option.Some(v) => { println("  r"); return 1 }, Option.None => { println("  n"); return 0 } } }
+fn s_wild(a: Array[S, 2]) -> i64 { let o = Option.Some(a); match o { Option.Some(_) => { println("  w"); return 1 }, Option.None => { println("  n"); return 0 } } }
+fn s_read(a: Array[S, 2]) -> i64 { let o = Option.Some(a); match o { Option.Some(v) => { println(f"  r:{v[0].tag}"); return 1 }, Option.None => { println("  n"); return 0 } } }
+fn s_iflet(a: Array[S, 2]) -> i64 { let o = Option.Some(a); if let Option.Some(v) = o { println("  r"); return 1 } else { return 0 } }
+fn s_letelse(a: Array[S, 2]) -> i64 { let o = Option.Some(a); let Option.Some(v) = o else { return 0 }; println("  r"); return 1 }
+fn s_whilelet(a: Array[S, 2]) -> i64 { let mut o = Option.Some(a); while let Option.Some(v) = o { println("  r"); o = Option.None; } return 1 }
+fn s_res(a: Array[S, 2]) -> i64 { let o: Result[Array[S, 2], i64] = Result.Ok(a); match o { Result.Ok(v) => { println("  r"); return 1 }, Result.Err(e) => { println("  n"); return 0 } } }
+fn s_three(a: Array[S, 3]) -> i64 { let o = Option.Some(a); match o { Option.Some(v) => { println("  r"); return 1 }, Option.None => { println("  n"); return 0 } } }
+fn b_chain(a: Array[S, 2]) -> i64 { let o = Option.Some(a); let o2 = o; match o2 { Option.Some(v) => { println("  r"); return 1 }, Option.None => { println("  n"); return 0 } } }
+fn b_noheap(a: Array[N, 2]) -> i64 { let o = Option.Some(a); match o { Option.Some(v) => { println("  r"); return 1 }, Option.None => { println("  n"); return 0 } } }
+fn b_str(a: Array[String, 2]) -> i64 { let o = Option.Some(a); match o { Option.Some(v) => { println(f"  r:{v[0]}"); return 1 }, Option.None => { println("  n"); return 0 } } }
+fn b_local() -> i64 { let a: Array[S, 2] = [S { tag: f"llllllll0" }, S { tag: f"llllllll1" }]; let o = Option.Some(a); match o { Option.Some(v) => { println("  r"); return 1 }, Option.None => { println("  n"); return 0 } } }
+fn b_freshtemp(a: Array[S, 2]) -> i64 { match Option.Some(a) { Option.Some(v) => { println("  r"); return 1 }, Option.None => { println("  n"); return 0 } } }
+fn b_ctl(a: Array[S, 2]) -> i64 { println("  r"); return 1 }
+fn main() {
+    println("s/bind");     { let a: Array[S, 2] = [S { tag: f"aaaaaaaa0" }, S { tag: f"aaaaaaaa1" }]; let z = s_bind(a); }
+    println("s/wild");     { let a: Array[S, 2] = [S { tag: f"bbbbbbbb0" }, S { tag: f"bbbbbbbb1" }]; let z = s_wild(a); }
+    println("s/read");     { let a: Array[S, 2] = [S { tag: f"cccccccc0" }, S { tag: f"cccccccc1" }]; let z = s_read(a); }
+    println("s/iflet");    { let a: Array[S, 2] = [S { tag: f"dddddddd0" }, S { tag: f"dddddddd1" }]; let z = s_iflet(a); }
+    println("s/letelse");  { let a: Array[S, 2] = [S { tag: f"eeeeeeee0" }, S { tag: f"eeeeeeee1" }]; let z = s_letelse(a); }
+    println("s/whilelet"); { let a: Array[S, 2] = [S { tag: f"mmmmmmmm0" }, S { tag: f"mmmmmmmm1" }]; let z = s_whilelet(a); }
+    println("s/res");      { let a: Array[S, 2] = [S { tag: f"pppppppp0" }, S { tag: f"pppppppp1" }]; let z = s_res(a); }
+    println("s/three");    { let a: Array[S, 3] = [S { tag: f"ffffffff0" }, S { tag: f"ffffffff1" }, S { tag: f"ffffffff2" }]; let z = s_three(a); }
+    println("b/chain");    { let a: Array[S, 2] = [S { tag: f"hhhhhhhh0" }, S { tag: f"hhhhhhhh1" }]; let z = b_chain(a); }
+    println("b/noheap");   { let a: Array[N, 2] = [N { id: 2 }, N { id: 3 }]; let z = b_noheap(a); }
+    println("b/str");      { let a: Array[String, 2] = [f"gggggggg0", f"gggggggg1"]; let z = b_str(a); }
+    println("b/local");    { let z = b_local(); }
+    println("b/fresh");    { let a: Array[S, 2] = [S { tag: f"kkkkkkkk0" }, S { tag: f"kkkkkkkk1" }]; let z = b_freshtemp(a); }
+    println("b/ctl");      { let a: Array[S, 2] = [S { tag: f"jjjjjjjj0" }, S { tag: f"jjjjjjjj1" }]; let z = b_ctl(a); }
+    println("end")
+}
+"#,
+    ) else {
+        return;
+    };
+    assert_eq!(out, "s/bind\n  r\n  dSaaaaaaaa0\n  dSaaaaaaaa1\ns/wild\n  w\n  dSbbbbbbbb0\n  dSbbbbbbbb1\ns/read\n  r:cccccccc0\n  dScccccccc0\n  dScccccccc1\ns/iflet\n  r\n  dSdddddddd0\n  dSdddddddd1\ns/letelse\n  r\n  dSeeeeeeee0\n  dSeeeeeeee1\ns/whilelet\n  r\n  dSmmmmmmmm0\n  dSmmmmmmmm1\ns/res\n  r\n  dSpppppppp0\n  dSpppppppp1\ns/three\n  r\n  dSffffffff0\n  dSffffffff1\n  dSffffffff2\nb/chain\n  r\n  dShhhhhhhh0\n  dShhhhhhhh1\nb/noheap\n  r\n  dN2\n  dN3\nb/str\n  r:gggggggg0\nb/local\n  r\n  dSllllllll0\n  dSllllllll1\nb/fresh\n  r\n  dSkkkkkkkk0\n  dSkkkkkkkk1\nb/ctl\n  r\n  dSjjjjjjjj0\n  dSjjjjjjjj1\nend\n", "got:\n{out}");
+}

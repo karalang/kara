@@ -8037,8 +8037,104 @@ impl<'ctx> super::Codegen<'ctx> {
                                     // `call_passthrough_armed_boxed_source`
                                     // above uses to detect the hazard. The
                                     // `passthru(Some(e))` cell stays declined.
+                                    // B-2026-09-22-11 — AND NOT WHEN THE
+                                    // PAYLOAD IS STILL THE CALLER'S. A
+                                    // by-value `Array` param moved into a
+                                    // NAMED seeded local (`let o =
+                                    // Option.Some(a); match o`) leaves its
+                                    // element buffers with the caller, which
+                                    // keeps its own
+                                    // `__karac_drop_array_te_<T>_<N>` over
+                                    // them on purpose
+                                    // (`array_param_elem_is_callee_owned`
+                                    // excludes an element that runs a user
+                                    // `Drop`). Arming the box's interior walk
+                                    // here makes this frame a second owner:
+                                    // `free(): double free detected in tcache
+                                    // 2`, exit 134 at `-O0`.
+                                    //
+                                    // DECLINE TO ARM, not retract — the third
+                                    // branch `seeded_array_payload_stays_with_caller`'s
+                                    // own doc names. The caller's action is
+                                    // deliberately not retractable: the
+                                    // element `Drop` BODIES ride a caller-side
+                                    // channel and fire while the caller still
+                                    // holds the value, so retracting its free
+                                    // would make those bodies read freed
+                                    // memory. Declining leaves the box's own
+                                    // `free` standing, which is this frame's
+                                    // to do, and is exactly the IR the FRESH
+                                    // TEMP spelling already emits.
+                                    //
+                                    // WHY THE PREDICATE WAS ALREADY THERE AND
+                                    // THIS SITE DID NOT ASK IT. B-2026-09-19-61
+                                    // wired it into the match-arm gate
+                                    // (`array_arm_owns_interior`), whose
+                                    // handle on the constructor is
+                                    // `seeded_variant_arg_payload(scrutinee)`
+                                    // — and a NAMED scrutinee is an
+                                    // `Identifier`, not a call, so that lookup
+                                    // answers `None` and the gate never fires.
+                                    // The constructor is visible HERE, at the
+                                    // `let`, which is where the arming happens
+                                    // for this spelling. Same question, same
+                                    // predicate, the one site that can see the
+                                    // ctor.
+                                    //
+                                    // A LOCAL source must keep arming and does:
+                                    // the predicate is param-rooted, and the
+                                    // identical cell over `let a = [..]` is
+                                    // clean on every surface both before and
+                                    // after, so it must not be disturbed.
+                                    //
+                                    // AND THE SECOND CONJUNCT IS NOT
+                                    // DECORATION -- it is the widening this
+                                    // fix reproduced before it had it, at a
+                                    // THIRD site, after B-2026-09-22-6's own
+                                    // doc had already measured and named it.
+                                    // `seeded_array_payload_stays_with_caller`
+                                    // answers the question by MEMBERSHIP of
+                                    // `owned_array_params`, and that map is
+                                    // filled by `make_array_param_callee_owned`
+                                    // at a point this `let` does not see, so
+                                    // here an `Array[String, 2]` param -- whose
+                                    // element IS callee-owned and whose disarm
+                                    // works -- reads as caller-retained and
+                                    // the declined walk leaks both its element
+                                    // buffers. Measured exactly as the -6 row
+                                    // measured its own: 18 B in 2 blocks, on
+                                    // the FIXED arm only, caught by the ASAN
+                                    // `-O0` leg after a plain `valgrind -q`
+                                    // column had reported the same cell clean
+                                    // (`-q` suppresses the leak summary).
+                                    //
+                                    // So ask the QUESTION rather than the map,
+                                    // as that row concluded:
+                                    // `array_param_elem_is_callee_owned` over
+                                    // the variant's own declared payload
+                                    // element, which is false exactly when the
+                                    // caller keeps the element heap.
+                                    let payload_stays_with_caller =
+                                        Self::seeded_variant_arg_payload(value).is_some_and(
+                                            |(cv, parg)| {
+                                                cv == *variant
+                                                    && self.seeded_array_payload_stays_with_caller(
+                                                        parg,
+                                                    )
+                                                    && Self::seeded_variant_payload_te(te, variant)
+                                                        .and_then(|p| self.array_elem_and_len(&p))
+                                                        .is_some_and(|(e, n)| {
+                                                            n > 0
+                                                                && !self
+                                                                    .array_param_elem_is_callee_owned(
+                                                                        &e,
+                                                                    )
+                                                        })
+                                            },
+                                        );
                                     let array_inner_drop = Self::seeded_variant_ctor_name(value)
                                         .filter(|c| c == variant)
+                                        .filter(|_| !payload_stays_with_caller)
                                         .map(|_| ())
                                         .or_else(|| {
                                             // B-2026-09-13-17 adds the third
