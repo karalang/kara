@@ -1956,6 +1956,24 @@ impl<'ctx> super::Codegen<'ctx> {
     /// and (b) resolves each `Vec[T]` field element to the concrete `String`
     /// before picking its per-element drop. Non-generic structs pass `None` and
     /// are byte-for-byte unchanged (empty subst → bare name, no resolution).
+    /// B-2026-09-22-7 — [`Self::emit_struct_drop_synthesis_mono`] and
+    /// [`Self::emit_struct_drop_synthesis_skipping`] at once, for a binding
+    /// that is both a (possibly generic) instantiation and missing some
+    /// fields' memory walk. The two existed separately and no caller could
+    /// have both; a generic struct with a caller-retained `Array` field needs
+    /// exactly that pair.
+    pub(super) fn emit_struct_drop_synthesis_mono_skipping(
+        &mut self,
+        struct_name: &str,
+        subst: &std::collections::HashMap<String, TypeExpr>,
+        skip: &std::collections::BTreeSet<usize>,
+    ) -> Option<FunctionValue<'ctx>> {
+        if subst.is_empty() {
+            return self.emit_struct_drop_synthesis_impl(struct_name, None, skip);
+        }
+        self.emit_struct_drop_synthesis_impl(struct_name, Some(subst), skip)
+    }
+
     pub(super) fn emit_struct_drop_synthesis_mono(
         &mut self,
         struct_name: &str,

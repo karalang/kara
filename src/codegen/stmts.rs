@@ -11765,7 +11765,22 @@ impl<'ctx> super::Codegen<'ctx> {
                                 // is why the order is fixed here at the
                                 // registration site rather than special-cased in
                                 // the auto-par lowering.
-                                self.track_struct_var_inst(&struct_name, alloca, inst);
+                                // B-2026-09-22-7 — decline the memory walk
+                                // for any field initialised from a by-value
+                                // `Array` param whose element heap the CALLER
+                                // kept. Empty for every other shape, so this
+                                // is the unmasked registration verbatim
+                                // wherever the question does not arise.
+                                let caller_kept = self.struct_lit_array_fields_staying_with_caller(
+                                    value,
+                                    &struct_name,
+                                );
+                                self.track_struct_var_inst_skipping(
+                                    &struct_name,
+                                    alloca,
+                                    inst,
+                                    &caller_kept,
+                                );
                                 if let Some(bodies_fn) = bodies_fn {
                                     self.track_user_drop_var_with_fn(
                                         &struct_name,
@@ -11783,7 +11798,22 @@ impl<'ctx> super::Codegen<'ctx> {
                                 // name-shared drop that leaks every element.
                                 let inst =
                                     self.type_decls.enum_inst_var_types.get(var_name).cloned();
-                                self.track_struct_var_inst(&struct_name, alloca, inst);
+                                // B-2026-09-22-7 — decline the memory walk
+                                // for any field initialised from a by-value
+                                // `Array` param whose element heap the CALLER
+                                // kept. Empty for every other shape, so this
+                                // is the unmasked registration verbatim
+                                // wherever the question does not arise.
+                                let caller_kept = self.struct_lit_array_fields_staying_with_caller(
+                                    value,
+                                    &struct_name,
+                                );
+                                self.track_struct_var_inst_skipping(
+                                    &struct_name,
+                                    alloca,
+                                    inst,
+                                    &caller_kept,
+                                );
                             }
                             // B-2026-07-04-17: `x`'s heap aliases a heap-owning
                             // for-loop struct ELEMENT the container's per-element

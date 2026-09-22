@@ -11503,6 +11503,57 @@ impl<'ctx> super::Codegen<'ctx> {
     /// that resolves the element from bare `T` and leaks every element
     /// (B-2026-07-11-35 push leg). A `None` instantiation (or a non-generic
     /// struct) reproduces the original name-keyed behavior exactly.
+    /// B-2026-09-22-7 — [`Self::track_struct_var_inst`] with a set of field
+    /// indices MASKED OUT of the scope-exit memory walk, for fields whose heap
+    /// this frame does not own.
+    ///
+    /// The DECLINE-TO-ARM branch of the family's standing rule, per field. A
+    /// by-value `Array` param whose element runs a user `Drop` stays the
+    /// CALLER's: `array_param_elem_is_callee_owned` excludes it deliberately
+    /// (B-2026-09-14-25 / -27 measured what retracting there costs), and moving
+    /// it into a struct literal's field armed this struct's walk over the same
+    /// buffers on top of it. The retraction that would normally answer a
+    /// hand-off no-ops for such a param, because there is no queued
+    /// `StructDrop` in this frame to retract.
+    ///
+    /// Two shapes keep the unmasked drop, and both are deliberate rather than
+    /// missing: an EMPTY mask, which is every existing caller, and a struct
+    /// that transitively owns a `shared` field, whose combined drop
+    /// (`emit_vec_elem_struct_with_shared_drop_fn_mono`) has no masked form --
+    /// masking there would have to choose between losing an rc-dec and losing
+    /// a field free, and the double free is the narrower wrong answer.
+    pub(super) fn track_struct_var_inst_skipping(
+        &mut self,
+        struct_name: &str,
+        struct_alloca: PointerValue<'ctx>,
+        inst: Option<TypeExpr>,
+        skip: &std::collections::BTreeSet<usize>,
+    ) {
+        if skip.is_empty() {
+            self.track_struct_var_inst(struct_name, struct_alloca, inst);
+            return;
+        }
+        let subst = inst
+            .as_ref()
+            .map(|i| self.generic_struct_subst_from_inst(struct_name, i))
+            .unwrap_or_default();
+        if self.struct_owns_shared_field_subst(struct_name, &mut Vec::new(), Some(&subst)) {
+            self.track_struct_var_inst(struct_name, struct_alloca, inst);
+            return;
+        }
+        let Some(drop_fn) =
+            self.emit_struct_drop_synthesis_mono_skipping(struct_name, &subst, skip)
+        else {
+            return;
+        };
+        if let Some(frame) = self.drop_rc.scope_cleanup_actions.last_mut() {
+            frame.push(CleanupAction::StructDrop {
+                struct_alloca,
+                drop_fn,
+            });
+        }
+    }
+
     pub(super) fn track_struct_var_inst(
         &mut self,
         struct_name: &str,

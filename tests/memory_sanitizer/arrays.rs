@@ -2471,6 +2471,142 @@ fn main() {
     );
 }
 
+/// B-2026-09-22-7 (sanitizer twin) — a by-value `Array` param moved into a STRUCT-LITERAL FIELD
+/// was freed by both the caller and the aggregate.
+///
+/// `let b = B1 { v: a }` over `fn f(a: Array[R, 2])` aborted with
+/// `free(): double free detected in tcache 2`, exit 134 at `-O0`, on four of
+/// this fixture's ten cells. The caller keeps its own
+/// `__karac_drop_array_te_R_2` on purpose -- an element that runs a user
+/// `Drop` fails `array_param_elem_is_callee_owned`'s second conjunct
+/// (B-2026-09-14-25 / -27 measured what retracting there costs) -- and
+/// `__karac_drop_struct_B1` walked the same buffers on top of it.
+///
+/// `suppress_array_binding_move_into_aggregate` is the retraction the family's
+/// standing rule reaches for at a hand-off, and it is a NO-OP here: it retracts
+/// a queued `StructDrop` for the source, and a by-value param the caller
+/// retained has no such action in this frame, because the param-level gate
+/// declined to register one. So the arming stands alone. The third branch is to
+/// DECLINE TO ARM, per field.
+///
+/// `s/two` IS THE CELL THAT MATTERS, and it is why this row closed where its
+/// enum sibling could not. `emit_struct_drop_synthesis_skipping` already masks
+/// individual field indices out of the memory walk and folds the mask into its
+/// cache key, so the array field's walk is declined while the sibling
+/// `String`'s is kept -- `in:zz` reads that sibling back before the walk, which
+/// is what makes the cell load-bearing rather than decorative. The enum
+/// spelling (B-2026-09-22-9) has no such per-field form: its switch frees a
+/// variant's whole payload in ONE arm, so standing that arm down would leak the
+/// sibling outright, which is why that row is still open.
+///
+/// `n/str` pins the widening this must not take: an `Array[String, 2]` param IS
+/// callee-owned, its disarm works, and it is clean either side of the fix.
+/// `b/local` is the local-source non-regression -- note its element bodies run
+/// BEFORE `in`, unlike every param-sourced cell, which is a pre-existing
+/// ordering difference measured identically on both arms and not this fix's.
+/// `b/discard` is the discarded-literal shape `in_discarded_aggregate_tail`
+/// carves out, clean both arms. `b/ctl` is a by-value callee that does nothing
+/// with the array, and is the oracle for what one owner looks like: every fixed
+/// cell prints its elements exactly once, as this one does.
+///
+/// `s/noheap` and `n/tuple` were clean on the unfixed compiler too and pin the
+/// two directions the mask must not disturb -- an element owning no heap has
+/// nothing to double-free, and a TUPLE destination reaches a different
+/// registration that was already correct.
+///
+/// TWO NEIGHBOURS ARE DELIBERATELY ABSENT because they still abort here and
+/// aborted on the unfixed compiler too, so neither is this fix's doing: the
+/// struct binding RETURNED from the function, and a `Vec.push` destination.
+/// Both were on the row's own NOT MEASURED list and both have their own rows.
+///
+/// `--interp` runs every caller-retained cell's element bodies TWICE and so
+/// diverges from all three compiled surfaces, which agree with each other. It
+/// is unchanged by this fix, which touches codegen only, and is the same
+/// remainder B-2026-09-22-8 records. That is why this fixture has no
+/// interpreter twin.
+#[test]
+fn asan_array_param_into_struct_literal_field_stays_with_caller() {
+    assert_clean_asan_run(
+        r#"struct R { id: i64, s: String }
+impl Drop for R { fn drop(mut ref self) { println(f"  d{self.id}") } }
+struct N { id: i64 }
+impl Drop for N { fn drop(mut ref self) { println(f"  dN{self.id}") } }
+fn mkr(i: i64) -> R { return R { id: i, s: f"aaa" } }
+struct B1 { v: Array[R, 2] }
+struct B2 { v: Array[R, 2], t: String }
+struct B3 { v: Array[R, 3] }
+struct B4 { v: Array[N, 2] }
+struct B6 { v: Array[String, 2] }
+fn s_bind(a: Array[R, 2]) -> i64 { let b = B1 { v: a }; println("  in"); return 7 }
+fn s_two(a: Array[R, 2]) -> i64 { let b = B2 { v: a, t: f"zz" }; println(f"  in:{b.t}"); return 7 }
+fn s_three(a: Array[R, 3]) -> i64 { let b = B3 { v: a }; println("  in"); return 7 }
+fn s_noheap(a: Array[N, 2]) -> i64 { let b = B4 { v: a }; println("  in"); return 7 }
+fn s_read(a: Array[R, 2]) -> i64 { let b = B1 { v: a }; println(f"  in:{b.v[0].id}"); return 7 }
+fn n_str(a: Array[String, 2]) -> i64 { let b = B6 { v: a }; println(f"  in:{b.v[0]}"); return 7 }
+fn n_tuple(a: Array[R, 2]) -> i64 { let b = (a, 1); println("  in"); return 7 }
+fn b_local() -> i64 { let a: Array[R, 2] = [mkr(91), mkr(92)]; let b = B1 { v: a }; println("  in"); return 7 }
+fn b_discard(a: Array[R, 2]) -> i64 { B1 { v: a }; println("  in"); return 7 }
+fn b_ctl(a: Array[R, 2]) -> i64 { println("  in"); return 7 }
+fn main() {
+    println("s/bind");    { let a: Array[R, 2] = [mkr(1), mkr(2)]; let z = s_bind(a); }
+    println("s/two");     { let a: Array[R, 2] = [mkr(11), mkr(12)]; let z = s_two(a); }
+    println("s/three");   { let a: Array[R, 3] = [mkr(21), mkr(22), mkr(23)]; let z = s_three(a); }
+    println("s/noheap");  { let a: Array[N, 2] = [N { id: 31 }, N { id: 32 }]; let z = s_noheap(a); }
+    println("s/read");    { let a: Array[R, 2] = [mkr(41), mkr(42)]; let z = s_read(a); }
+    println("n/str");     { let a: Array[String, 2] = [f"s51", f"s52"]; let z = n_str(a); }
+    println("n/tuple");   { let a: Array[R, 2] = [mkr(71), mkr(72)]; let z = n_tuple(a); }
+    println("b/local");   { let z = b_local(); }
+    println("b/discard"); { let a: Array[R, 2] = [mkr(101), mkr(102)]; let z = b_discard(a); }
+    println("b/ctl");     { let a: Array[R, 2] = [mkr(111), mkr(112)]; let z = b_ctl(a); }
+    println("end")
+}
+"#,
+        &[
+            "s/bind",
+            "  in",
+            "  d1",
+            "  d2",
+            "s/two",
+            "  in:zz",
+            "  d11",
+            "  d12",
+            "s/three",
+            "  in",
+            "  d21",
+            "  d22",
+            "  d23",
+            "s/noheap",
+            "  in",
+            "  dN31",
+            "  dN32",
+            "s/read",
+            "  in:41",
+            "  d41",
+            "  d42",
+            "n/str",
+            "  in:s51",
+            "n/tuple",
+            "  in",
+            "  d71",
+            "  d72",
+            "b/local",
+            "  d91",
+            "  d92",
+            "  in",
+            "b/discard",
+            "  in",
+            "  d101",
+            "  d102",
+            "b/ctl",
+            "  in",
+            "  d111",
+            "  d112",
+            "end",
+        ],
+        "asan_array_param_into_struct_literal_field_stays_with_caller",
+    );
+}
+
 /// B-2026-09-17-9 — the LEAK MIRROR its own row's fix walked into, and the
 /// shape that fix's controls could not reach.
 ///

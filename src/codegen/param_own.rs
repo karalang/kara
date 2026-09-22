@@ -6574,6 +6574,77 @@ impl<'ctx> super::Codegen<'ctx> {
         n > 0 && !self.array_param_elem_is_callee_owned(&elem_te)
     }
 
+    /// B-2026-09-22-7 — which fields of a STRUCT LITERAL were initialised from
+    /// a by-value `Array` param whose ELEMENT HEAP the caller kept, and whose
+    /// memory walk this frame must therefore not repeat.
+    ///
+    /// The struct-literal spelling of the question
+    /// [`Self::user_enum_ctor_array_payload_stays_with_caller`] asks for an
+    /// enum constructor. `suppress_array_binding_move_into_aggregate` is the
+    /// retraction the family's standing rule reaches for at a hand-off, and it
+    /// is a NO-OP here: it retracts a queued `StructDrop` for the source, and a
+    /// by-value param the caller retained has no such action in this frame,
+    /// because the param-level gate declined to register one. So the arming
+    /// stands alone and `__karac_drop_struct_<S>` frees buffers the caller's
+    /// own `__karac_drop_array_te_<T>_<N>` frees too. The third branch is to
+    /// DECLINE TO ARM, per field.
+    ///
+    /// PER FIELD, and that is what makes this tractable where the enum sibling
+    /// (B-2026-09-22-9) is not: `emit_struct_drop_synthesis_skipping` already
+    /// masks individual field indices out of the memory walk and folds the mask
+    /// into its cache key, so a multi-field struct keeps every other field's
+    /// walk. The enum switch frees a variant's whole payload in ONE arm and has
+    /// no such per-field form.
+    ///
+    /// The test is `array_param_elem_is_callee_owned` over the FIELD'S DECLARED
+    /// element type, false exactly when the caller keeps the element heap — the
+    /// same question the enum spelling asks of a variant's declared payload,
+    /// and deliberately not membership of `owned_array_params`, which is also
+    /// the `let`-local registrar and so admits sources this must not touch.
+    pub(super) fn struct_lit_array_fields_staying_with_caller(
+        &self,
+        lit: &Expr,
+        struct_name: &str,
+    ) -> std::collections::BTreeSet<usize> {
+        let mut out = std::collections::BTreeSet::new();
+        let ExprKind::StructLiteral { fields, spread, .. } = &lit.kind else {
+            return out;
+        };
+        // A spread carries fields this literal never names, so the index space
+        // below is not the whole story; leave such a literal alone entirely
+        // rather than mask a field the spread may also have supplied.
+        if spread.is_some() {
+            return out;
+        }
+        let (Some(names), Some(tes)) = (
+            self.type_decls.struct_field_names.get(struct_name),
+            self.type_decls.struct_field_type_exprs.get(struct_name),
+        ) else {
+            return out;
+        };
+        for fi in fields {
+            let ExprKind::Identifier(root) = &fi.value.kind else {
+                continue;
+            };
+            if !self.fn_ctx.current_fn_param_names.contains(root.as_str()) {
+                continue;
+            }
+            let Some(idx) = names.iter().position(|n| n == &fi.name) else {
+                continue;
+            };
+            let Some(te) = tes.get(idx) else {
+                continue;
+            };
+            let Some((elem_te, n)) = self.array_elem_and_len(te) else {
+                continue;
+            };
+            if n > 0 && !self.array_param_elem_is_callee_owned(&elem_te) {
+                out.insert(idx);
+            }
+        }
+        out
+    }
+
     /// The variant a constructor CALL names, whatever enum it belongs to.
     ///
     /// Split out of [`Self::user_enum_ctor_array_payload_stays_with_caller`]
