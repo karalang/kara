@@ -410,6 +410,13 @@ pub(crate) struct DropRc<'ctx> {
     /// reused across all registration sites for that type. Mirrors the
     /// existing `display_fn_cache` / `clone_fn_cache` lazy-synth pattern.
     pub(crate) enum_drop_fns: HashMap<String, FunctionValue<'ctx>>,
+    /// B-2026-09-22-6 — the same map for the BOX-ONLY twin of an enum's drop
+    /// switch, emitted as `__karac_drop_<E>__boxonly`. Separate rather than a
+    /// composite key so the map above keeps its exact meaning — one walking
+    /// drop fn per enum, shared by every instantiation — and no existing
+    /// lookup has to learn about the flag. See
+    /// [`Codegen::emit_enum_drop_switch_box_only`].
+    pub(crate) enum_drop_fns_box_only: HashMap<String, FunctionValue<'ctx>>,
     /// Per-struct lazy drop-fn cache (struct name → `__karac_drop_struct_<Name>`
     /// `FunctionValue`). Lazily populated by `emit_struct_drop_synthesis` on
     /// first registration of a non-shared struct binding via `track_struct_var`.

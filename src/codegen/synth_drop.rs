@@ -234,8 +234,58 @@ impl<'ctx> super::Codegen<'ctx> {
     /// `emit_hash_fn_for_type` lazy-synth pattern: the saved insert
     /// block is restored on exit so callers don't have to.
     pub(super) fn emit_enum_drop_switch(&mut self, enum_name: &str) -> Option<FunctionValue<'ctx>> {
-        if let Some(f) = self.drop_rc.enum_drop_fns.get(enum_name) {
+        self.emit_enum_drop_switch_variant(enum_name, false)
+    }
+
+    /// B-2026-09-22-6 — the same switch with the `BoxedArray` arm's INTERIOR
+    /// walk omitted, for a box whose array the CALLER still owns.
+    ///
+    /// That arm does two things in one basic block: `karac_drop_Array_<T>_<N>`
+    /// over the payload, then `free` of the box. The second is always this
+    /// frame's to do — the constructor malloc'd that box here and nothing
+    /// outside can see it. The first is wrong when the array arrived as a
+    /// by-value param the caller kept, because
+    /// `array_param_elem_is_callee_owned` declines an element that runs a user
+    /// `Drop` and the caller's own `__karac_drop_array_te_<T>_<N>` frees those
+    /// same element buffers.
+    ///
+    /// A SECOND FUNCTION RATHER THAN A SENTINEL, which is the opposite of what
+    /// this family's standing rule says for a field. The sentinel the arm
+    /// already carries is the box WORD, re-zeroed after the free so a
+    /// re-entrant drain no-ops — and zeroing it up front skips the free as well
+    /// as the walk, which was measured as exactly the box leaked and nothing
+    /// else (48 B for `Array[S, 2]`, 72 B for `Array[S, 3]`, 16 B for an
+    /// `Array[N, 2]` whose element owns no heap at all). One word cannot carry
+    /// two decisions, so the decision moves into the function.
+    ///
+    /// Cached under its own key and emitted under its own name, so the
+    /// name-keyed `enum_drop_fns` cache — one drop fn per enum, shared by every
+    /// instantiation — is untouched and every existing caller keeps the walking
+    /// version verbatim.
+    pub(super) fn emit_enum_drop_switch_box_only(
+        &mut self,
+        enum_name: &str,
+    ) -> Option<FunctionValue<'ctx>> {
+        self.emit_enum_drop_switch_variant(enum_name, true)
+    }
+
+    fn emit_enum_drop_switch_variant(
+        &mut self,
+        enum_name: &str,
+        skip_boxed_array_interior: bool,
+    ) -> Option<FunctionValue<'ctx>> {
+        let cached = if skip_boxed_array_interior {
+            self.drop_rc.enum_drop_fns_box_only.get(enum_name)
+        } else {
+            self.drop_rc.enum_drop_fns.get(enum_name)
+        };
+        if let Some(f) = cached {
             return Some(*f);
+        }
+        // `Json`'s dedicated recursive walker below has no box-only twin and
+        // needs none: its payload is `Json` nodes, never a caller's array.
+        if skip_boxed_array_interior && enum_name == "Json" {
+            return None;
         }
         // B-2026-07-31-12 — `Json` is SELF-RECURSIVE (an Array payload holds
         // more Json nodes), which this generic per-variant synthesis cannot
@@ -266,9 +316,20 @@ impl<'ctx> super::Codegen<'ctx> {
             return None;
         }
 
-        let fn_name = format!("__karac_drop_{enum_name}");
+        let suffix = if skip_boxed_array_interior {
+            "__boxonly"
+        } else {
+            ""
+        };
+        let fn_name = format!("__karac_drop_{enum_name}{suffix}");
         if let Some(f) = self.module.get_function(&fn_name) {
-            self.drop_rc.enum_drop_fns.insert(enum_name.to_string(), f);
+            if skip_boxed_array_interior {
+                self.drop_rc
+                    .enum_drop_fns_box_only
+                    .insert(enum_name.to_string(), f);
+            } else {
+                self.drop_rc.enum_drop_fns.insert(enum_name.to_string(), f);
+            }
             return Some(f);
         }
 
@@ -661,7 +722,10 @@ impl<'ctx> super::Codegen<'ctx> {
                                     .build_conditional_branch(is_null, skip_bb, free_bb)
                                     .unwrap();
                                 self.builder.position_at_end(free_bb);
-                                if let Some(f) = inner_drop {
+                                // B-2026-09-22-6 — the interior belongs to the
+                                // caller in the box-only twin; the `free` below
+                                // still does not.
+                                if let Some(f) = inner_drop.filter(|_| !skip_boxed_array_interior) {
                                     self.builder.build_call(f, &[box_ptr.into()], "").unwrap();
                                 }
                                 self.builder
@@ -1038,9 +1102,15 @@ impl<'ctx> super::Codegen<'ctx> {
         if let Some(bb) = saved_bb {
             self.builder.position_at_end(bb);
         }
-        self.drop_rc
-            .enum_drop_fns
-            .insert(enum_name.to_string(), drop_fn);
+        if skip_boxed_array_interior {
+            self.drop_rc
+                .enum_drop_fns_box_only
+                .insert(enum_name.to_string(), drop_fn);
+        } else {
+            self.drop_rc
+                .enum_drop_fns
+                .insert(enum_name.to_string(), drop_fn);
+        }
         Some(drop_fn)
     }
 

@@ -138,6 +138,105 @@ fn main() {
     assert_eq!(out, "p/arr\n  r:aaaaaaaa0\n  dSaaaaaaaa0\n  dSaaaaaaaa1\np/wild\n  w\n  dSbbbbbbbb0\n  dSbbbbbbbb1\np/str\n  r:cccccccc0\np/res\n  r\n  dSdddddddd0\n  dSdddddddd1\np/gen\n  r\n  dSeeeeeeee0\n  dSeeeeeeee1\np/three\n  r\n  dSffffffff0\n  dSffffffff1\n  dSffffffff2\np/noheap\n  r\n  dN2\n  dN3\np/nonefirst\n  r\n  dShhhhhhhh0\n  dShhhhhhhh1\nb/local\n  r\n  dSllllllll0\n  dSllllllll1\nend\n", "got:\n{out}");
 }
 
+/// B-2026-09-22-6 — the USER-ENUM spelling of B-2026-09-19-61, and a
+/// different arming path reached by the same disagreement.
+///
+/// `fn f(a: Array[S, 2]) { match W.P(a) { .. } }` over
+/// `enum W { P(Array[S, 2]), Q }`. The caller keeps its
+/// `__karac_drop_array_te_S_2` on purpose — a user-`Drop` element fails
+/// `array_param_elem_is_callee_owned`'s second conjunct, because its bodies
+/// ride a caller-side channel — and the callee's materialized scrutinee temp
+/// freed the same element buffers through `__karac_drop_W`. `free(): double
+/// free detected in tcache 2`, exit 134 at `-O0`, on six of the nine cells
+/// below, against a CORRECT `--interp`.
+///
+/// B-2026-09-19-61's fix does not reach it: `Option`/`Result` carry their
+/// payload in a box whose interior walk is armed by `array_arm_owns_interior`,
+/// and a user enum reaches its payload through its own drop switch, which
+/// never consults that gate.
+///
+/// THE BOX IS OURS AND THE INTERIOR IS THE CALLER'S, and
+/// `__karac_drop_<E>`'s `BoxedArray` arm does both in one basic block:
+/// `karac_drop_Array_S_2(box)` then `free(box)`. Only this frame can do the
+/// second — the constructor malloc'd that box here. Declining the whole
+/// registration was measured and is the mirror defect: every cell then leaked
+/// exactly its box and nothing else (48 B for `Array[S, 2]`, 72 B for
+/// `Array[S, 3]`, 16 B for an `Array[N, 2]` whose element owns no heap at
+/// all). The arm's own sentinel cannot express the split either — it is the
+/// box WORD, and zeroing it skips the free along with the walk. So the split
+/// lives in a second function, `__karac_drop_<E>__boxonly`.
+///
+/// `b/str` IS THE CELL THAT FIXED THE PREDICATE, and it earned its place. The
+/// gate was first written as B-2026-09-19-61's — membership of
+/// `owned_array_params` — and that admitted this `Array[String, 2]` param,
+/// whose element IS callee-owned and whose disarm works, leaking both its
+/// element buffers (18 B in 2 blocks). The map is filled by
+/// `make_array_param_callee_owned`, and a param it never reaches is absent for
+/// reasons unrelated to this question. Asking
+/// `array_param_elem_is_callee_owned` over the variant's declared payload
+/// element instead is the question itself, and `b/str` is clean either side of
+/// the fix.
+///
+/// `b/local` is B-2026-09-19-58's own shape and pins the non-regression: a
+/// LOCAL source keeps the walking drop fn. Its `r` with no element body is a
+/// pre-existing agreed gap on all four surfaces (the `b/mono` cell of
+/// `..._named_array_local_into_seeded_match_scrutinee_has_one_owner` above
+/// pins the same thing) — not this row's, and unchanged by it. `u/noheap` was
+/// already clean on the unfixed compiler and pins the other direction: an
+/// element owning no heap has nothing to double-free, and giving it the
+/// box-only twin must keep it that way.
+///
+/// TWO NEIGHBOURS ARE DELIBERATELY ABSENT because they still abort here and
+/// aborted on the unfixed compiler too, so neither is this fix's doing: a
+/// TWO-FIELD variant (`W.P(Array[S, 2], String)`, B-2026-09-22-9) — the switch
+/// frees a variant's whole payload in one arm, so standing the walk down there
+/// would leak the sibling `String` — and a NAMED local holding the constructor
+/// (`let o = W.P(a); match o`, B-2026-09-22-10), which is a different
+/// registration altogether.
+///
+/// `--interp` diverges on `u/letelse` alone, where it runs that cell's element
+/// bodies twice — unchanged by this fix, which touches codegen only, and the
+/// same remainder B-2026-09-22-8 records for the seeded spelling.
+/// That is why this fixture has no interpreter twin.
+#[test]
+fn e2e_array_param_into_user_enum_match_scrutinee_stays_with_caller() {
+    let Some(out) = run_program(
+        r#"struct S { tag: String }
+impl Drop for S { fn drop(mut ref self) { println(f"  dS{self.tag}") } }
+struct N { id: i64 }
+impl Drop for N { fn drop(mut ref self) { println(f"  dN{self.id}") } }
+enum W { P(Array[S, 2]), Q }
+enum V { P(Array[String, 2]), Q }
+enum U { P(Array[N, 2]), Q }
+enum T3 { P(Array[S, 3]), Q }
+fn u_bind(a: Array[S, 2]) -> i64 { match W.P(a) { W.P(v) => { println("  r"); return 1 }, W.Q => { println("  n"); return 0 } } }
+fn u_wild(a: Array[S, 2]) -> i64 { match W.P(a) { W.P(_) => { println("  w"); return 1 }, W.Q => { println("  n"); return 0 } } }
+fn u_read(a: Array[S, 2]) -> i64 { match W.P(a) { W.P(v) => { println(f"  r:{v[0].tag}"); return 1 }, W.Q => { println("  n"); return 0 } } }
+fn u_iflet(a: Array[S, 2]) -> i64 { if let W.P(v) = W.P(a) { println("  r"); return 1 } else { return 0 } }
+fn u_letelse(a: Array[S, 2]) -> i64 { let W.P(v) = W.P(a) else { return 0 }; println("  r"); return 1 }
+fn u_three(a: Array[S, 3]) -> i64 { match T3.P(a) { T3.P(v) => { println("  r"); return 1 }, T3.Q => { println("  n"); return 0 } } }
+fn u_noheap(a: Array[N, 2]) -> i64 { match U.P(a) { U.P(v) => { println("  r"); return 1 }, U.Q => { println("  n"); return 0 } } }
+fn b_str(a: Array[String, 2]) -> i64 { match V.P(a) { V.P(v) => { println(f"  r:{v[0]}"); return 1 }, V.Q => { println("  n"); return 0 } } }
+fn b_local() -> i64 { let a: Array[S, 2] = [S { tag: f"llllllll0" }, S { tag: f"llllllll1" }]; match W.P(a) { W.P(v) => { println("  r"); return 1 }, W.Q => { println("  n"); return 0 } } }
+fn main() {
+    println("u/bind");    { let a: Array[S, 2] = [S { tag: f"aaaaaaaa0" }, S { tag: f"aaaaaaaa1" }]; let z = u_bind(a); }
+    println("u/wild");    { let a: Array[S, 2] = [S { tag: f"bbbbbbbb0" }, S { tag: f"bbbbbbbb1" }]; let z = u_wild(a); }
+    println("u/read");    { let a: Array[S, 2] = [S { tag: f"cccccccc0" }, S { tag: f"cccccccc1" }]; let z = u_read(a); }
+    println("u/iflet");   { let a: Array[S, 2] = [S { tag: f"dddddddd0" }, S { tag: f"dddddddd1" }]; let z = u_iflet(a); }
+    println("u/letelse"); { let a: Array[S, 2] = [S { tag: f"eeeeeeee0" }, S { tag: f"eeeeeeee1" }]; let z = u_letelse(a); }
+    println("u/three");   { let a: Array[S, 3] = [S { tag: f"ffffffff0" }, S { tag: f"ffffffff1" }, S { tag: f"ffffffff2" }]; let z = u_three(a); }
+    println("u/noheap");  { let a: Array[N, 2] = [N { id: 2 }, N { id: 3 }]; let z = u_noheap(a); }
+    println("b/str");     { let a: Array[String, 2] = [f"gggggggg0", f"gggggggg1"]; let z = b_str(a); }
+    println("b/local");   { let z = b_local(); }
+    println("end")
+}
+"#,
+    ) else {
+        return;
+    };
+    assert_eq!(out, "u/bind\n  r\n  dSaaaaaaaa0\n  dSaaaaaaaa1\nu/wild\n  w\n  dSbbbbbbbb0\n  dSbbbbbbbb1\nu/read\n  r:cccccccc0\n  dScccccccc0\n  dScccccccc1\nu/iflet\n  r\n  dSdddddddd0\n  dSdddddddd1\nu/letelse\n  r\n  dSeeeeeeee0\n  dSeeeeeeee1\nu/three\n  r\n  dSffffffff0\n  dSffffffff1\n  dSffffffff2\nu/noheap\n  r\n  dN2\n  dN3\nb/str\n  r:gggggggg0\nb/local\n  r\nend\n", "got:\n{out}");
+}
+
 /// B-2026-08-31-39 — DESTRUCTURING a generic enum's bare-`T` payload
 /// renders it at the INSTANTIATION, for every nameless aggregate shape.
 ///

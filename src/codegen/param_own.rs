@@ -6500,6 +6500,98 @@ impl<'ctx> super::Codegen<'ctx> {
                 .contains_key(root.as_str())
     }
 
+    /// B-2026-09-22-6 — the USER-ENUM spelling of the question above: does
+    /// `match W.P(a) { .. }` over a by-value `Array` param still leave `a`'s
+    /// element heap with the caller?
+    ///
+    /// The SITE differs, which is why this exists rather than a widened call.
+    /// `Option`/`Result` carry their payload in a box whose interior walk is
+    /// armed by `array_arm_owns_interior`; a user enum reaches its payload
+    /// through its own `__karac_drop_<E>`, registered once for the materialized
+    /// scrutinee temp. That registration never consults the seeded-pair gate,
+    /// so B-2026-09-19-61's fix left this spelling aborting: `free(): double
+    /// free detected in tcache 2` at `-O0`, against a CORRECT `--interp` (`r`,
+    /// then one `dS` pair), so the interpreter is the oracle here.
+    ///
+    /// AND THE TEST DIFFERS TOO, WHICH WAS MEASURED RATHER THAN REASONED. The
+    /// seeded spelling asks membership of `owned_array_params`; written that
+    /// way here it admitted an `Array[String, 2]` param — whose element IS
+    /// callee-owned and whose disarm works — and leaked both its element
+    /// buffers, 18 B in 2 blocks, on the cell that exists to pin exactly that
+    /// widening. The map is filled by `make_array_param_callee_owned`, and a
+    /// param it never reaches is absent for reasons that have nothing to do
+    /// with this question. So ask the question itself:
+    /// `array_param_elem_is_callee_owned` over the VARIANT'S DECLARED payload
+    /// element, which is `array_elem_owns_callee_drop(e) &&
+    /// !elem_te_runs_user_drop(e)` — false exactly when the caller keeps the
+    /// element heap, which is the condition this needs and the one the row is
+    /// about.
+    ///
+    /// EXACTLY ONE PAYLOAD FIELD, deliberately. `__karac_drop_<E>` frees the
+    /// whole variant's payload in one switch arm, so standing its interior walk
+    /// down is only safe when the array IS that payload; a
+    /// `W.P(Array[S, 2], String)` would leak its `String`. A two-field variant
+    /// keeps the walking drop fn and keeps the double free, which is the
+    /// narrower wrong answer rather than a new leak, and is filed as its own
+    /// row.
+    ///
+    /// The variant is checked against the enum's own declaration rather than
+    /// taken on the callee's word, so a same-named free function cannot answer
+    /// this.
+    pub(super) fn user_enum_seeded_array_payload_stays_with_caller(
+        &self,
+        scrutinee: &Expr,
+        enum_name: &str,
+    ) -> bool {
+        let ExprKind::Call { args, .. } = &scrutinee.kind else {
+            return false;
+        };
+        let [only] = args.as_slice() else {
+            return false;
+        };
+        let ExprKind::Identifier(root) = &only.value.kind else {
+            return false;
+        };
+        if !self.fn_ctx.current_fn_param_names.contains(root.as_str()) {
+            return false;
+        }
+        let Some(variant) = Self::ctor_variant_name(scrutinee) else {
+            return false;
+        };
+        let Some((_, _, tys)) = self
+            .enum_variant_field_type_exprs(enum_name)
+            .into_iter()
+            .find(|(_, v, _)| v == variant)
+        else {
+            return false;
+        };
+        let [payload_te] = tys.as_slice() else {
+            return false;
+        };
+        let Some((elem_te, n)) = self.array_elem_and_len(payload_te) else {
+            return false;
+        };
+        n > 0 && !self.array_param_elem_is_callee_owned(&elem_te)
+    }
+
+    /// The variant a constructor CALL names, whatever enum it belongs to.
+    ///
+    /// Split out of [`Self::user_enum_seeded_array_payload_stays_with_caller`]
+    /// so the registration site can ask the same question about the same
+    /// expression without re-spelling the match — two spellings of "which
+    /// variant is this" that could drift apart is the shape this file keeps
+    /// paying for.
+    pub(super) fn ctor_variant_name(e: &Expr) -> Option<&str> {
+        let ExprKind::Call { callee, .. } = &e.kind else {
+            return None;
+        };
+        match &callee.kind {
+            ExprKind::Path { segments, .. } => segments.last().map(|s| s.as_str()),
+            ExprKind::FieldAccess { field, .. } => Some(field.as_str()),
+            _ => None,
+        }
+    }
+
     fn suppress_array_binding_move(&mut self, arg: &Expr, dest: ArrayMoveDest) {
         // B-2026-09-14-27 — the SOURCE of a `UseAfterMove` keeps its drop when
         // the consumer has been handed an independent copy

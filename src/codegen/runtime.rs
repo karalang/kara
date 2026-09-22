@@ -10089,6 +10089,29 @@ impl<'ctx> super::Codegen<'ctx> {
         }
     }
 
+    /// Register an `EnumDrop` with a drop function the CALLER chose, rather
+    /// than the one [`Self::emit_enum_drop_switch`] resolves by name.
+    /// B-2026-09-22-6.
+    ///
+    /// The only caller today passes `emit_enum_drop_switch_box_only`'s twin,
+    /// for a materialized scrutinee temp whose boxed `Array` payload belongs to
+    /// the function's caller. Split from `track_enum_var` rather than given a
+    /// parameter, because that function's other job is deciding whether a drop
+    /// fn is owed at all (shared enums, all-scalar enums), and the answer here
+    /// is already known.
+    pub(super) fn track_enum_var_with_fn(
+        &mut self,
+        enum_alloca: PointerValue<'ctx>,
+        drop_fn: FunctionValue<'ctx>,
+    ) {
+        if let Some(frame) = self.drop_rc.scope_cleanup_actions.last_mut() {
+            frame.push(CleanupAction::EnumDrop {
+                enum_alloca,
+                drop_fn,
+            });
+        }
+    }
+
     /// Register a scope-exit free of an `Option[T]` binding's inline heap
     /// `Some` payload (`Option[String]` / `Option[Vec[U]]`), keyed on the
     /// CONCRETE payload type — the type-erased `Option` layout's drop

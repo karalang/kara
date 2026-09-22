@@ -18315,7 +18315,34 @@ impl<'ctx> super::Codegen<'ctx> {
                 box_field,
             );
         }
-        if has_droppable {
+        // B-2026-09-22-6 — THE BOX IS OURS, THE INTERIOR IS THE CALLER'S, and
+        // `__karac_drop_<E>`'s `BoxedArray` arm does both in one basic block.
+        //
+        // It calls `karac_drop_Array_<T>_<N>(box)` and then `free(box)`. The
+        // second is right and only this frame can do it: the constructor
+        // malloc'd that box here. The first is wrong when the array came from a
+        // by-value param the CALLER kept —
+        // `array_param_elem_is_callee_owned` declines an element that runs a
+        // user `Drop`, so its bodies fire caller-side while the caller still
+        // holds the value, and the caller's own `__karac_drop_array_te_<T>_<N>`
+        // frees the same element buffers. Two owners across a function
+        // boundary, which is the one place B-2026-09-19-58's retraction cannot
+        // reach: there is no queued action in THIS frame to retract.
+        //
+        // DECLINING THE REGISTRATION OUTRIGHT WAS MEASURED AND IS THE MIRROR
+        // DEFECT. The crash goes and the BOX leaks: 48 B for `Array[S, 2]`,
+        // 72 B for `Array[S, 3]`, 16 B for an `Array[N, 2]` whose element owns
+        // no heap at all — exactly the box and nothing else, on every cell.
+        // Nor can the arm's own sentinel express it: that is the box WORD, and
+        // zeroing it skips the free along with the walk. So the split lives in
+        // a second function, `emit_enum_drop_switch_box_only`.
+        let boxonly_drop_fn = self
+            .user_enum_seeded_array_payload_stays_with_caller(scrutinee, &enum_name)
+            .then(|| self.emit_enum_drop_switch_box_only(&enum_name))
+            .flatten();
+        if let Some(f) = boxonly_drop_fn {
+            self.track_enum_var_with_fn(alloca, f);
+        } else if has_droppable {
             self.track_enum_var(&enum_name, alloca);
         }
         // B-2026-09-20-63 (bodies half) — the instantiated payload's ELEMENT
