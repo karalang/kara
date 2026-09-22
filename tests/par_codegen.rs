@@ -1663,6 +1663,50 @@ fn main() {
             }
         }
 
+        // B-2026-09-22-2 — the OTHER half of the same report. The signal arm
+        // above answers "did the runner CRASH"; SIX occurrences have now been
+        // read with it live and silent, so it did not -- two on CI (one per
+        // arch, different twins, same run) and four locally across two sweeps. What no instrument on
+        // this lane reports is the ordinary case: the runner exited normally
+        // and handed back NOTHING. The caller then asserts on an empty string
+        // and prints `got first 500 chars:` followed by a blank line, which is
+        // the whole of the evidence.
+        //
+        // WHAT THIS DOES AND DOES NOT DECIDE, stated because the first draft of
+        // this comment got it wrong. A non-zero exit would point at the branch.
+        // A CLEAN ZERO WITH NO OUTPUT DECIDES NOTHING ON ITS OWN: branch 1
+        // prints nothing at all, so "branch 0 never entered its scope" and
+        // "branch 0 ran and its output never reached this pipe" both produce
+        // exactly an empty stdout at exit 0. Measured three times that way, and
+        // the two candidates are still not separated. What separates them is a
+        // marker printed at TOP LEVEL before the `par` block, which bypasses the
+        // per-branch capture (`OUTPUT_REDIRECT` is installed only inside a
+        // branch, so a top-level `println` goes straight to the fd): present on
+        // a failing run means the program ran and the branch's output was lost,
+        // absent means nothing ran. That probe is parked, not landed -- it
+        // changes the cell's program and belongs in an experiment rather than
+        // in the shipped fixture.
+        //
+        // WHY EMPTY RATHER THAN ALWAYS: every passing test on this lane returns
+        // output, so this fires only on a shape that is already going to fail
+        // an assertion, and it adds nothing to the ~297 runs that pass.
+        //
+        // MEASURED RATE, so the next occurrence is catchable rather than waited
+        // for: 1 in 150 whole-binary runs on this lane and 0 in 150 on the AOT
+        // lane, against 0 in 800 isolated single-cell runs, plus 3 in 400 on a
+        // later whole-binary sweep. Load is required; an isolated re-run is not
+        // evidence either way.
+        if output.stdout.is_empty() {
+            eprintln!(
+                "[par-jit-lane] karac_jit_runner returned EMPTY stdout, status {:?}, exit code {:?}. \
+                 The assertion below compares an empty string. This does NOT by itself say \
+                 whether the branch ran: see B-2026-09-22-2. Runner stderr:\n{}",
+                output.status,
+                output.status.code(),
+                String::from_utf8_lossy(&output.stderr),
+            );
+        }
+
         Some(String::from_utf8_lossy(&output.stdout).to_string())
     }
 
