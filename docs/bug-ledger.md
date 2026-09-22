@@ -99,7 +99,7 @@ distinguish "bugs flattening" from "we stopped writing them down."
 | missing-feature | 203 |
 | codegen-gap | 182 |
 | other | 148 |
-| diagnostics | 132 |
+| diagnostics | 133 |
 | perf | 117 |
 | false-positive | 108 |
 | soundness | 96 |
@@ -113,7 +113,7 @@ distinguish "bugs flattening" from "we stopped writing them down."
 | codegen | 1972 |
 | interp | 519 |
 | typecheck | 303 |
-| other | 108 |
+| other | 109 |
 | ownership | 75 |
 | cli | 73 |
 | autopar | 56 |
@@ -351,7 +351,7 @@ measured and all AGREE on both surfaces and are correct. So the class is
 narrow -- it is the `ContainerElemBodies` walker for an ARRAY field being
 registered in the callee's prologue, not by-value struct params in general. | — |
 | B-2026-09-22-2 | 2026-09-22 | other | medium | MEASURED: `test_e2e_par_branch_errdefer_fires_on_cooperative_cancel` FAILS AT ROUGHLY 1% — once on CI and once in 170 local runs — AND ITS IN-SOURCE GUARD COVERS ONLY ONE DIRECTION OF THE RACE: the million-iteration ceiling stops branch 0 FINISHING before the cancel, and nothing stops branch 0 never STARTING, which is what an empty output looks like. OPEN QUESTION, not a patch: what the cell should assert when branch 0 never enters its scope | — |
-| B-2026-09-22-3 | 2026-09-22 | codegen | medium | MEASURED: `asan_slice_mutators_and_views_on_heap_elements` FAILS THE `KARAC_SSO=1` SANITIZER LANE INTERMITTENTLY ON CI — 4 reds in 7 consecutive `main` runs, INCLUDING A FAIL AND A PASS ON A BYTE-IDENTICAL TEST BINARY — and no ASAN report exists for ANY of them because the leg deleted it (B-2026-09-22-4). NOT a regression of cfe7a5f1c, to which it was attributed, and not a host difference either | — |
+| B-2026-09-22-3 | 2026-09-22 | codegen | medium | MEASURED: `asan_slice_mutators_and_views_on_heap_elements` FAILS THE `KARAC_SSO=1` SANITIZER LANE INTERMITTENTLY ON CI — 4 reds in 7 consecutive `main` runs, INCLUDING A FAIL AND A PASS ON A BYTE-IDENTICAL TEST BINARY — and no ASAN report exists for ANY of them because the leg deleted it (B-2026-09-22-4). NOT a regression of cfe7a5f1c, to which it was attributed, and not a host difference either — NOW MEASURED (2026-09-22): ASAN PASSES AND THE FAILURE IS AN OUTPUT MISMATCH, one field of expected stdout reading `126` where `2` was due, so no sanitizer or leak column can see it and the oracle is expected output; the same run RE-RUN on the same tree goes green, which needs no commit pair to establish the intermittency. The leg was prescribing a memory-fault remedy for it the whole time (B-2026-09-22-15) | — |
 | B-2026-09-22-8 | 2026-09-22 | interp | medium | THE INTERPRETER RUNS AN `Array` PARAM'S ELEMENT `Drop` BODIES TWICE WHEN THE PARAM IS MOVED INTO A SEEDED `match` SCRUTINEE -- the remainder B-2026-09-19-61 split out, now a run-vs-build divergence because that row's fix made both compiled backends match the by-value-callee control at one pair; WIDER THAN `Array` (a `Vec[R]` param has it too) and a bare STRUCT param runs its body twice on BOTH backends, which no differential instrument can see | — |
 | B-2026-09-22-9 | 2026-09-22 | codegen | high | A USER-ENUM VARIANT CARRYING AN `Array` PARAM **BESIDE A SECOND FIELD** IS STILL FREED BY BOTH SIDES -- B-2026-09-22-6's box-only drop twin is gated on the variant having EXACTLY ONE payload field, because `__karac_drop_<E>` releases a variant's whole payload in ONE switch arm; `match W.P(a, f"zz")` over `fn p_mono(a: Array[S, 2])` aborts 134 at `-O0` where `--interp` is CORRECT, and standing that arm's walk down would trade the double free for a leak of the sibling `String` | — |
 | B-2026-09-22-11 | 2026-09-22 | codegen | high | A BY-VALUE `Array` PARAM MOVED INTO A **NAMED SEEDED `Option`/`Result` LOCAL** IS FREED BY BOTH SIDES -- the builtin-envelope twin of B-2026-09-22-10, which that row's fix cannot reach because its `let`-site predicate reads the enum's own VARIANT DECLARATIONS and a builtin envelope has none (zero `__boxonly` symbols in the IR); `let o = Option.Some(a); match o` and its `Result.Ok` sibling both abort 134 at `-O0` with 12 valgrind errors, on a NAMED BASE tree as well as at HEAD, while the same cell over a LOCAL array source is clean on both arms -- so the variable is the SOURCE, not the envelope and not the width, which is what separates it from B-2026-09-19-59 | — |
@@ -2944,6 +2944,7 @@ registered in the callee's prologue, not by-value struct params in general. | �
 | B-2026-09-22-7 | codegen+interp | high | A BY-VALUE `Array` PARAM MOVED INTO A **STRUCT-LITERAL FIELD** IS FREED BY BOTH THE CALLER AND THE AGGREGATE -- `suppress_array_binding_move_into_agg… | 7ce872071 |
 | B-2026-09-22-10 | codegen+interp | high | A USER-ENUM CONSTRUCTOR BOUND TO A **NAMED LOCAL** BEFORE THE `match` IS STILL FREED BY BOTH SIDES -- B-2026-09-22-6 fixes the MATERIALIZED scrutinee… | dbc0b67c7 |
 | B-2026-09-22-12 | other | medium | `bug-lint.sh` CANNOT SEE A FIX SHA THAT IS ALL DIGITS, SO RULES 6 AND 6b ARE SILENTLY BLIND TO ~3.4% OF THE ROWS THAT USE THE `FIXED by <sha>.` CONVE… | 99ad28af7 |
+| B-2026-09-22-15 | other | medium | THE ASAN RATCHET LEGS PRESCRIBED A MEMORY-FAULT REMEDY FOR EVERY NEW RED, INCLUDING ONES WHERE ASAN PASSED — every `assert_clean_asan_*` helper asser… | ba4514e40 |
 
 </details>
 
