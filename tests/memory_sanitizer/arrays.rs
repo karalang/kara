@@ -2634,7 +2634,9 @@ fn main() {
 /// per-ENUM function: it stands down every `BoxedArray` interior walk it
 /// meets, so a variant holding a caller-retained array BESIDE a callee-owned
 /// one would lose the second's elements. That shape still aborts and is
-/// deliberately absent — it has its own row.
+/// deliberately absent — it has its own row. (B-2026-09-22-17 has since
+/// widened the gate to "EVERY array field caller-retained and param-rooted";
+/// the two-array cells are in the fixture after this one.)
 ///
 /// `m/second` puts the array SECOND and `m/three` puts it in the middle of
 /// three fields, because the fix indexes the ctor argument by the array's
@@ -2732,6 +2734,91 @@ fn main() {
             "end",
         ],
         "asan_array_param_into_multi_field_enum_variant_stays_with_caller",
+    );
+}
+
+/// B-2026-09-22-17 — a user-enum variant carrying TWO `Array` params, each
+/// caller-retained, was freed by both sides (`free(): double free detected in
+/// tcache 2`, exit 134) with B-2026-09-22-9's fix present and without it.
+///
+/// That fix's gate COUNTED array fields and declined at two. The question it
+/// needed was whether EVERY array field is rooted at a by-value param whose
+/// element heap the caller keeps; when all are, the box-only twin's answer
+/// (stand every `BoxedArray` interior walk down, keep every box `free` and
+/// every sibling's drop) is right for all of them. `t/two` is the row's own
+/// reproducer, `t/twos` the same element type twice, `t/str` puts a `String`
+/// BETWEEN the two arrays and reads it and both arrays back, and `t/let` is
+/// the named-`let` spelling, which reaches the gate through `stmts.rs` rather
+/// than the match arm. All four aborted 134 with 6 or 12 valgrind errors on
+/// the control arm and run clean on the fix.
+///
+/// `t/callee` is the other side of "every": two `Array[String, 2]` params,
+/// whose element heap IS callee-owned, so the gate must decline and the
+/// ordinary walk must free them. It was clean before the fix and must stay so.
+///
+/// DELIBERATELY ABSENT: a caller-retained array BESIDE a callee-owned one or a
+/// local. The twin is chosen per ENUM, so it cannot give the two fields two
+/// answers; the gate declines, and that shape still aborts 134 identically on
+/// both arms. It cannot sit in a clean-run fixture.
+///
+/// `--interp` is NOT the oracle for `t/let`: the interpreter runs that cell's
+/// element bodies TWICE (B-2026-09-22-8). The other four cells agree with it.
+/// Variant names are distinct from every other enum here on purpose
+/// (B-2026-09-22-16).
+#[test]
+fn asan_two_array_params_into_one_enum_variant_stay_with_caller() {
+    assert_clean_asan_run(
+        r#"struct S { tag: String }
+impl Drop for S { fn drop(mut ref self) { println(f"  dS{self.tag}") } }
+struct N { id: i64 }
+impl Drop for N { fn drop(mut ref self) { println(f"  dN{self.id}") } }
+enum X2 { Gp(Array[S, 2], Array[N, 2]), Gq }
+enum X2s { Hp(Array[S, 2], Array[S, 2]), Hq }
+enum X3 { Ip(Array[S, 2], String, Array[N, 2]), Iq }
+enum X4 { Jp(Array[String, 2], Array[String, 2]), Jq }
+fn t_two(a: Array[S, 2], b: Array[N, 2]) -> i64 { match X2.Gp(a, b) { X2.Gp(v, w) => { println("  r"); return 1 }, X2.Gq => { println("  n"); return 0 } } }
+fn t_twos(a: Array[S, 2], b: Array[S, 2]) -> i64 { match X2s.Hp(a, b) { X2s.Hp(v, w) => { println("  r"); return 1 }, X2s.Hq => { println("  n"); return 0 } } }
+fn t_str(a: Array[S, 2], b: Array[N, 2]) -> i64 { match X3.Ip(a, f"kk", b) { X3.Ip(v, t, w) => { println(f"  r:{t}:{v[1].tag}:{w[0].id}"); return 1 }, X3.Iq => { println("  n"); return 0 } } }
+fn t_let(a: Array[S, 2], b: Array[N, 2]) -> i64 { let o = X2.Gp(a, b); match o { X2.Gp(v, w) => { println("  r"); return 1 }, X2.Gq => { println("  n"); return 0 } } }
+fn t_callee(a: Array[String, 2], b: Array[String, 2]) -> i64 { match X4.Jp(a, b) { X4.Jp(v, w) => { println(f"  r:{v[0]}:{w[1]}"); return 1 }, X4.Jq => { println("  n"); return 0 } } }
+fn main() {
+    println("t/two");    { let a: Array[S, 2] = [S { tag: f"aaaaaaaa0" }, S { tag: f"aaaaaaaa1" }]; let b: Array[N, 2] = [N { id: 1 }, N { id: 2 }]; let z = t_two(a, b); }
+    println("t/twos");   { let a: Array[S, 2] = [S { tag: f"bbbbbbbb0" }, S { tag: f"bbbbbbbb1" }]; let b: Array[S, 2] = [S { tag: f"cccccccc0" }, S { tag: f"cccccccc1" }]; let z = t_twos(a, b); }
+    println("t/str");    { let a: Array[S, 2] = [S { tag: f"dddddddd0" }, S { tag: f"dddddddd1" }]; let b: Array[N, 2] = [N { id: 3 }, N { id: 4 }]; let z = t_str(a, b); }
+    println("t/let");    { let a: Array[S, 2] = [S { tag: f"eeeeeeee0" }, S { tag: f"eeeeeeee1" }]; let b: Array[N, 2] = [N { id: 5 }, N { id: 6 }]; let z = t_let(a, b); }
+    println("t/callee"); { let a: Array[String, 2] = [f"ffffffff0", f"ffffffff1"]; let b: Array[String, 2] = [f"gggggggg0", f"gggggggg1"]; let z = t_callee(a, b); }
+    println("end")
+}"#,
+        &[
+            "t/two",
+            "  r",
+            "  dN1",
+            "  dN2",
+            "  dSaaaaaaaa0",
+            "  dSaaaaaaaa1",
+            "t/twos",
+            "  r",
+            "  dScccccccc0",
+            "  dScccccccc1",
+            "  dSbbbbbbbb0",
+            "  dSbbbbbbbb1",
+            "t/str",
+            "  r:kk:dddddddd1:3",
+            "  dN3",
+            "  dN4",
+            "  dSdddddddd0",
+            "  dSdddddddd1",
+            "t/let",
+            "  r",
+            "  dN5",
+            "  dN6",
+            "  dSeeeeeeee0",
+            "  dSeeeeeeee1",
+            "t/callee",
+            "  r:ffffffff0:gggggggg1",
+            "end",
+        ],
+        "asan_two_array_params_into_one_enum_variant_stay_with_caller",
     );
 }
 

@@ -6527,13 +6527,13 @@ impl<'ctx> super::Codegen<'ctx> {
     /// element heap, which is the condition this needs and the one the row is
     /// about.
     ///
-    /// EXACTLY ONE PAYLOAD FIELD, deliberately. `__karac_drop_<E>` frees the
-    /// whole variant's payload in one switch arm, so standing its interior walk
-    /// down is only safe when the array IS that payload; a
-    /// `W.P(Array[S, 2], String)` would leak its `String`. A two-field variant
-    /// keeps the walking drop fn and keeps the double free, which is the
-    /// narrower wrong answer rather than a new leak, and is filed as its own
-    /// row.
+    /// This paragraph once read EXACTLY ONE PAYLOAD FIELD, on the belief that
+    /// standing the walk down would take a sibling `String` with it. B-2026-09-22-9
+    /// refuted that: the twin's skip is consumed per field, inside the
+    /// field loop of `emit_enum_drop_switch_variant`, so a sibling keeps its own
+    /// drop. What stays per-ENUM is the choice of twin, so EVERY array field of
+    /// the variant must be caller-retained and param-rooted; one callee-owned
+    /// array beside them and the answer is declined (B-2026-09-22-17).
     ///
     /// The variant is checked against the enum's own declaration rather than
     /// taken on the callee's word, so a same-named free function cannot answer
@@ -6559,28 +6559,32 @@ impl<'ctx> super::Codegen<'ctx> {
         if args.len() != tys.len() {
             return false;
         }
-        // EXACTLY ONE array field, because the box-only twin is a per-ENUM
-        // function: it stands down every `BoxedArray` interior walk it meets,
-        // so a variant holding a caller-retained array BESIDE a callee-owned
-        // one would lose the second's elements. One array field, and the
-        // question has a single answer.
-        let mut arrays = tys
-            .iter()
-            .enumerate()
-            .filter_map(|(i, te)| self.array_elem_and_len(te).map(|(e, n)| (i, e, n)));
-        let Some((ai, elem_te, n)) = arrays.next() else {
-            return false;
-        };
-        if arrays.next().is_some() {
-            return false;
+        // EVERY array field caller-retained, because the box-only twin is a
+        // per-ENUM function: it stands down every `BoxedArray` interior walk it
+        // meets, so a variant holding a caller-retained array BESIDE a
+        // callee-owned one (a local, a literal, a call result) would lose the
+        // second's elements. When every array field is rooted at a by-value
+        // param whose element heap the caller keeps, the question has a single
+        // answer again, and it is the twin's. B-2026-09-22-17: the first
+        // spelling of this gate COUNTED array fields and declined at two, which
+        // left `W.P(a, b)` over two such params freed by both sides.
+        let mut any = false;
+        for (i, te) in tys.iter().enumerate() {
+            let Some((elem_te, n)) = self.array_elem_and_len(te) else {
+                continue;
+            };
+            if n == 0 || self.array_param_elem_is_callee_owned(&elem_te) {
+                return false;
+            }
+            let ExprKind::Identifier(root) = &args[i].value.kind else {
+                return false;
+            };
+            if !self.fn_ctx.current_fn_param_names.contains(root.as_str()) {
+                return false;
+            }
+            any = true;
         }
-        if n == 0 || self.array_param_elem_is_callee_owned(&elem_te) {
-            return false;
-        }
-        let ExprKind::Identifier(root) = &args[ai].value.kind else {
-            return false;
-        };
-        self.fn_ctx.current_fn_param_names.contains(root.as_str())
+        any
     }
 
     /// B-2026-09-22-7 — which fields of a STRUCT LITERAL were initialised from
