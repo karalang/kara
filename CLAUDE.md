@@ -214,7 +214,20 @@ bash scripts/asan-instrumented-leg.sh
 **CHECK THE LEG'S ARITHMETIC, BECAUSE "matches the quarantine list exactly" ALSO PRINTS WHEN NOTHING RAN.** Both quarantine lists are drained, so an empty `got` matches an empty `expected` and the ratchet's other arm reports success over a run of zero fixtures — the same decay described above, seen from the leg's output rather than from the list. The identity that distinguishes a real pass accounts for every fixture in the file:
 
     passed + failed + ignored
-      == `grep -c '^    #\[test\]' tests/memory_sanitizer.rs`, ON THE TREE THE LEG RAN AGAINST
+      == `cat tests/memory_sanitizer.rs tests/memory_sanitizer/*.rs \
+            | grep -c '^[[:space:]]*#\[test\]'`, ON THE TREE THE LEG RAN AGAINST
+
+**That spelling changed when the file was split (2026-09-21) and the OLD one now
+returns ZERO.** The fixtures moved into per-area modules under
+`tests/memory_sanitizer/`, and they sit at the top level of those files, so both
+halves of `grep -c '^    #\[test\]' tests/memory_sanitizer.rs` broke at once —
+the path holds almost no fixtures and the four-space indent is gone. A zero on
+the right-hand side does not look like a broken command: it makes the identity
+fail against a perfectly green leg, which reads as *fixtures were silently
+absent from the run* — the exact conclusion this check exists to produce, now
+produced by the instrument rather than the tree. Count the shim and the area
+files together, and anchor on `^[[:space:]]*` so a fixture inside one of the
+nested `mod` blocks is still counted.
 
 **THREE TERMS, NOT FOUR — the opt-in-archive skips are a SUBSET of `failed`, not a fourth addend.** This display line read `passed + failed + skipped-for-a-missing-opt-in-archive + ignored` until 2026-09-20, and the display line is what a script-writer copies, while both worked examples below it are three-term (`1696 + 5 + 9 == 1710`) and the prose two paragraphs down says "the leg's THREE numbers". The leg discovers a skip by reading an archive filename out of a link FAILURE, so libtest has already counted it; adding it again over-counts by exactly the number of skips, and a check written from the four-term line REFUSES A GREEN RUN. Measured 2026-09-20 while gating B-2026-09-13-7: `1700 passed; 5 failed; 9 ignored` against 1714 `#[test]`, with those 5 failures being the 5 names printed under the SKIPPED heading — three terms close it, four give 1719.
 
