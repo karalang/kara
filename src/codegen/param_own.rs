@@ -6538,12 +6538,12 @@ impl<'ctx> super::Codegen<'ctx> {
     /// The variant is checked against the enum's own declaration rather than
     /// taken on the callee's word, so a same-named free function cannot answer
     /// this.
-    pub(super) fn user_enum_seeded_array_payload_stays_with_caller(
+    pub(super) fn user_enum_ctor_array_payload_stays_with_caller(
         &self,
-        scrutinee: &Expr,
+        ctor: &Expr,
         enum_name: &str,
     ) -> bool {
-        let ExprKind::Call { args, .. } = &scrutinee.kind else {
+        let ExprKind::Call { args, .. } = &ctor.kind else {
             return false;
         };
         let [only] = args.as_slice() else {
@@ -6555,7 +6555,7 @@ impl<'ctx> super::Codegen<'ctx> {
         if !self.fn_ctx.current_fn_param_names.contains(root.as_str()) {
             return false;
         }
-        let Some(variant) = Self::ctor_variant_name(scrutinee) else {
+        let Some(variant) = Self::ctor_variant_name(ctor) else {
             return false;
         };
         let Some((_, _, tys)) = self
@@ -6576,7 +6576,7 @@ impl<'ctx> super::Codegen<'ctx> {
 
     /// The variant a constructor CALL names, whatever enum it belongs to.
     ///
-    /// Split out of [`Self::user_enum_seeded_array_payload_stays_with_caller`]
+    /// Split out of [`Self::user_enum_ctor_array_payload_stays_with_caller`]
     /// so the registration site can ask the same question about the same
     /// expression without re-spelling the match — two spellings of "which
     /// variant is this" that could drift apart is the shape this file keeps

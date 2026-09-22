@@ -237,6 +237,115 @@ fn main() {
     assert_eq!(out, "u/bind\n  r\n  dSaaaaaaaa0\n  dSaaaaaaaa1\nu/wild\n  w\n  dSbbbbbbbb0\n  dSbbbbbbbb1\nu/read\n  r:cccccccc0\n  dScccccccc0\n  dScccccccc1\nu/iflet\n  r\n  dSdddddddd0\n  dSdddddddd1\nu/letelse\n  r\n  dSeeeeeeee0\n  dSeeeeeeee1\nu/three\n  r\n  dSffffffff0\n  dSffffffff1\n  dSffffffff2\nu/noheap\n  r\n  dN2\n  dN3\nb/str\n  r:gggggggg0\nb/local\n  r\nend\n", "got:\n{out}");
 }
 
+/// B-2026-09-22-10 — the NAMED-LOCAL spelling of B-2026-09-22-6, which is a
+/// different registration and was still aborting after that fix.
+///
+/// `let o = W.P(a); match o` over `fn f(a: Array[S, 2])` freed the caller's
+/// element buffers a second time: `free(): double free detected in tcache 2`,
+/// exit 134 at `-O0`, on eight of this fixture's thirteen cells against the
+/// unfixed compiler. B-2026-09-22-6 fixes the MATERIALIZED scrutinee temp, and
+/// a named scrutinee never reaches `materialize_freshtemp_enum_scrutinee` at
+/// all — the constructor's drop is registered by the ordinary `let` path
+/// instead, which armed the walking `__karac_drop_<E>` and, beside it, the
+/// bodies-only `__karac_dropelems_enum_<E>` over the same buffers.
+///
+/// TWO WALKS, WHERE THE FIXED SITE HAD ONE, so this needed both halves. The
+/// MEMORY half registers the same box-only twin that row emitted, through the
+/// same predicate. The BODIES half is the sibling skip: the caller runs those
+/// element bodies through its own retained `__karac_drop_array_te_<T>_<N>`, so
+/// arming the walker here doubles them. `l/noheap` is the only cell that can
+/// observe that half alone — its element owns no heap, so it never aborted,
+/// and it printed `dN2 dN3 dN2 dN3` against the control's one pair.
+///
+/// `l/chain` PINS THE PROPAGATION. `let o2 = o;` retracts `o`'s action and
+/// registers `o2`'s, so without inheriting the decision `o2` gets the walking
+/// drop fn back and the double free returns; it stayed red when the two halves
+/// above were first landed alone. The identical chain over a LOCAL array
+/// source is correct on all four surfaces, which is what localises this to the
+/// decision's propagation rather than to the move-out retraction.
+///
+/// `b/stale` IS THE COMPLEMENT, and it is load-bearing rather than decorative:
+/// it rebinds the name to a LOCAL-sourced constructor and then chains off it,
+/// so a mark left over from the first binding would hand the second value the
+/// box-only twin and orphan its element heap. Verified non-vacuous by
+/// injection — with the per-binding clear removed it loses `dSrrrrrrrr0/1`
+/// entirely and leaks 18 B in 2 blocks. Two earlier spellings of this probe
+/// (a plain shadow, and a shadow after a chain) were measured VACUOUS for it
+/// and are deliberately not here: the mark is only ever read for a SOURCE
+/// name, so a shadow whose RHS is a constructor call never consults it.
+///
+/// `b/str` pins the widening this must not take: an `Array[String, 2]` param
+/// IS callee-owned, its disarm works, and it is clean either side of the fix.
+/// `b/local` is the local-source non-regression, and note it keeps its element
+/// bodies here where the fresh-temp sibling's `b/local` has none — a
+/// pre-existing agreed gap at that other spelling, not this one. `b/ctl` is a
+/// by-value callee that does nothing with the array, and is the oracle for
+/// what one owner looks like. `b/fresh` is B-2026-09-22-6's own cell, so a
+/// change to the shared predicate cannot quietly move that site.
+///
+/// ONE NEIGHBOUR IS DELIBERATELY ABSENT: a TWO-FIELD variant
+/// (`W.P(Array[S, 2], String)`, B-2026-09-22-9), which still aborts here and
+/// aborted on the unfixed compiler too. The switch frees a variant's whole
+/// payload in one arm, so standing its walk down there would leak the sibling.
+///
+/// `--interp` runs every caller-retained cell's element bodies TWICE and so
+/// diverges from all three compiled surfaces, which agree with each other. It
+/// is unchanged by this fix, which touches codegen only, and is the same
+/// remainder B-2026-09-22-8 records. That is why this fixture has no
+/// interpreter twin.
+#[test]
+fn e2e_array_param_into_named_enum_local_match_scrutinee_stays_with_caller() {
+    let Some(out) = run_program(
+        r#"struct S { tag: String }
+impl Drop for S { fn drop(mut ref self) { println(f"  dS{self.tag}") } }
+struct N { id: i64 }
+impl Drop for N { fn drop(mut ref self) { println(f"  dN{self.id}") } }
+enum W { P(Array[S, 2]), Q }
+enum V { P(Array[String, 2]), Q }
+enum U { P(Array[N, 2]), Q }
+enum T3 { P(Array[S, 3]), Q }
+fn l_bind(a: Array[S, 2]) -> i64 { let o = W.P(a); match o { W.P(v) => { println("  r"); return 1 }, W.Q => { println("  n"); return 0 } } }
+fn l_wild(a: Array[S, 2]) -> i64 { let o = W.P(a); match o { W.P(_) => { println("  w"); return 1 }, W.Q => { println("  n"); return 0 } } }
+fn l_read(a: Array[S, 2]) -> i64 { let o = W.P(a); match o { W.P(v) => { println(f"  r:{v[0].tag}"); return 1 }, W.Q => { println("  n"); return 0 } } }
+fn l_iflet(a: Array[S, 2]) -> i64 { let o = W.P(a); if let W.P(v) = o { println("  r"); return 1 } else { return 0 } }
+fn l_letelse(a: Array[S, 2]) -> i64 { let o = W.P(a); let W.P(v) = o else { return 0 }; println("  r"); return 1 }
+fn l_three(a: Array[S, 3]) -> i64 { let o = T3.P(a); match o { T3.P(v) => { println("  r"); return 1 }, T3.Q => { println("  n"); return 0 } } }
+fn l_noheap(a: Array[N, 2]) -> i64 { let o = U.P(a); match o { U.P(v) => { println("  r"); return 1 }, U.Q => { println("  n"); return 0 } } }
+fn l_chain(a: Array[S, 2]) -> i64 { let o = W.P(a); let o2 = o; match o2 { W.P(v) => { println("  r"); return 1 }, W.Q => { println("  n"); return 0 } } }
+fn b_stale(a: Array[S, 2]) -> i64 {
+    let o = W.P(a);
+    let b: Array[S, 2] = [S { tag: f"rrrrrrrr0" }, S { tag: f"rrrrrrrr1" }];
+    let o = W.P(b);
+    let o2 = o;
+    match o2 { W.P(v) => { println("  r"); return 1 }, W.Q => { println("  n"); return 0 } }
+}
+fn b_str(a: Array[String, 2]) -> i64 { let o = V.P(a); match o { V.P(v) => { println(f"  r:{v[0]}"); return 1 }, V.Q => { println("  n"); return 0 } } }
+fn b_local() -> i64 { let a: Array[S, 2] = [S { tag: f"llllllll0" }, S { tag: f"llllllll1" }]; let o = W.P(a); match o { W.P(v) => { println("  r"); return 1 }, W.Q => { println("  n"); return 0 } } }
+fn b_ctl(a: Array[S, 2]) -> i64 { println("  r"); return 1 }
+fn b_freshtemp(a: Array[S, 2]) -> i64 { match W.P(a) { W.P(v) => { println("  r"); return 1 }, W.Q => { println("  n"); return 0 } } }
+fn main() {
+    println("l/bind");    { let a: Array[S, 2] = [S { tag: f"aaaaaaaa0" }, S { tag: f"aaaaaaaa1" }]; let z = l_bind(a); }
+    println("l/wild");    { let a: Array[S, 2] = [S { tag: f"bbbbbbbb0" }, S { tag: f"bbbbbbbb1" }]; let z = l_wild(a); }
+    println("l/read");    { let a: Array[S, 2] = [S { tag: f"cccccccc0" }, S { tag: f"cccccccc1" }]; let z = l_read(a); }
+    println("l/iflet");   { let a: Array[S, 2] = [S { tag: f"dddddddd0" }, S { tag: f"dddddddd1" }]; let z = l_iflet(a); }
+    println("l/letelse"); { let a: Array[S, 2] = [S { tag: f"eeeeeeee0" }, S { tag: f"eeeeeeee1" }]; let z = l_letelse(a); }
+    println("l/three");   { let a: Array[S, 3] = [S { tag: f"ffffffff0" }, S { tag: f"ffffffff1" }, S { tag: f"ffffffff2" }]; let z = l_three(a); }
+    println("l/noheap");  { let a: Array[N, 2] = [N { id: 2 }, N { id: 3 }]; let z = l_noheap(a); }
+    println("l/chain");   { let a: Array[S, 2] = [S { tag: f"hhhhhhhh0" }, S { tag: f"hhhhhhhh1" }]; let z = l_chain(a); }
+    println("b/stale");   { let a: Array[S, 2] = [S { tag: f"ssssssss0" }, S { tag: f"ssssssss1" }]; let z = b_stale(a); }
+    println("b/str");     { let a: Array[String, 2] = [f"gggggggg0", f"gggggggg1"]; let z = b_str(a); }
+    println("b/local");   { let z = b_local(); }
+    println("b/ctl");     { let a: Array[S, 2] = [S { tag: f"jjjjjjjj0" }, S { tag: f"jjjjjjjj1" }]; let z = b_ctl(a); }
+    println("b/fresh");   { let a: Array[S, 2] = [S { tag: f"kkkkkkkk0" }, S { tag: f"kkkkkkkk1" }]; let z = b_freshtemp(a); }
+    println("end")
+}
+"#,
+    ) else {
+        return;
+    };
+    assert_eq!(out, "l/bind\n  r\n  dSaaaaaaaa0\n  dSaaaaaaaa1\nl/wild\n  w\n  dSbbbbbbbb0\n  dSbbbbbbbb1\nl/read\n  r:cccccccc0\n  dScccccccc0\n  dScccccccc1\nl/iflet\n  r\n  dSdddddddd0\n  dSdddddddd1\nl/letelse\n  r\n  dSeeeeeeee0\n  dSeeeeeeee1\nl/three\n  r\n  dSffffffff0\n  dSffffffff1\n  dSffffffff2\nl/noheap\n  r\n  dN2\n  dN3\nl/chain\n  r\n  dShhhhhhhh0\n  dShhhhhhhh1\nb/stale\n  r\n  dSrrrrrrrr0\n  dSrrrrrrrr1\n  dSssssssss0\n  dSssssssss1\nb/str\n  r:gggggggg0\nb/local\n  r\n  dSllllllll0\n  dSllllllll1\nb/ctl\n  r\n  dSjjjjjjjj0\n  dSjjjjjjjj1\nb/fresh\n  r\n  dSkkkkkkkk0\n  dSkkkkkkkk1\nend\n", "got:\n{out}");
+}
+
 /// B-2026-08-31-39 — DESTRUCTURING a generic enum's bare-`T` payload
 /// renders it at the INSTANTIATION, for every nameless aggregate shape.
 ///

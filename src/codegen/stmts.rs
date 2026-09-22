@@ -8989,7 +8989,58 @@ impl<'ctx> super::Codegen<'ctx> {
                     if let Some(name) = enum_name.filter(|_| !rc_boxed) {
                         if let Some(slot) = self.variables.get(var_name.as_str()) {
                             let alloca = slot.ptr;
-                            self.track_enum_var(&name, alloca);
+                            // B-2026-09-22-10 — the NAMED-LOCAL spelling of
+                            // B-2026-09-22-6. That row fixes the MATERIALIZED
+                            // scrutinee temp, which `let o = W.P(a); match o`
+                            // never reaches: the materializer's gate is over
+                            // the scrutinee EXPRESSION and a named scrutinee is
+                            // not a fresh temp, so the constructor's drop is
+                            // registered here instead. Same two owners, same
+                            // answer: the box is this frame's to free, its
+                            // ELEMENT buffers are the caller's, so register the
+                            // BOX-ONLY twin rather than the walking drop fn.
+                            // The bodies half is the sibling skip below.
+                            //
+                            // TRANSITIVE ACROSS A BARE REBIND (`let o2 = o;`),
+                            // which is the same inheritance the view mask below
+                            // does and needs to be here for the same reason: the
+                            // rebind retracts `o`'s action and registers `o2`'s,
+                            // so without the mark `o2` gets the WALKING drop fn
+                            // back. Measured: the identical chain over a LOCAL
+                            // array source is correct on all four surfaces, so
+                            // the move-out retraction is not what is missing --
+                            // only this decision's propagation.
+                            let stays_with_caller = self
+                                .user_enum_ctor_array_payload_stays_with_caller(value, &name)
+                                || matches!(&value.kind, ExprKind::Identifier(src)
+                                    if src != var_name
+                                        && self
+                                            .payload_vars
+                                            .enum_box_only_array_locals
+                                            .contains(src.as_str()));
+                            let box_only = (!self
+                                .type_decls
+                                .enum_layouts
+                                .get(name.as_str())
+                                .is_some_and(|l| l.is_shared)
+                                && stays_with_caller)
+                                .then(|| self.emit_enum_drop_switch_box_only(&name))
+                                .flatten();
+                            // A fresh binding under this name starts clean
+                            // (B-2026-08-31-50's rule for the mask beside it):
+                            // a stale mark would silently skip a LATER value's
+                            // interior walk and leak it.
+                            self.payload_vars
+                                .enum_box_only_array_locals
+                                .remove(var_name.as_str());
+                            if let Some(f) = box_only {
+                                self.payload_vars
+                                    .enum_box_only_array_locals
+                                    .insert(var_name.clone());
+                                self.track_enum_var_with_fn(alloca, f);
+                            } else {
+                                self.track_enum_var(&name, alloca);
+                            }
                             // B-2026-07-30-11 (enum leg) — the live variant's
                             // Drop-bearing PAYLOAD bodies, on the `UserDrop`
                             // (NLL) channel. Registered OUTSIDE `track_enum_var`
@@ -9061,7 +9112,27 @@ impl<'ctx> super::Codegen<'ctx> {
                             // the instantiation whichever ownership arm this
                             // binding takes.
                             self.record_var_enum_inst_te(var_name, ty.as_ref(), value);
-                            if self.enum_ctor_payload_bodies_are_caller_owned(&name, value)
+                            if box_only.is_some() {
+                                // B-2026-09-22-10, bodies half. The walker
+                                // above reaches an `Array` payload
+                                // (`__karac_dropelems_enum_<E>` calls
+                                // `__karac_dropelems_array_<T>_<N>` on the
+                                // box), and the caller runs those same bodies
+                                // through its own retained
+                                // `__karac_drop_array_te_<T>_<N>`, so arming it
+                                // here doubles them. NOT `param_view_locals`,
+                                // which is the all-or-nothing mark: this
+                                // binding is not a view — it owns the box and
+                                // must still free it, which is what the
+                                // box-only twin above is for. Only the
+                                // ELEMENTS are the caller's.
+                                //
+                                // `enum_ctor_param_view_payload_slots`, the
+                                // per-slot mask this would otherwise ride, only
+                                // considers a payload whose type names a
+                                // NAMED STRUCT, so an `Array[S, N]` slot is
+                                // never even visited by it.
+                            } else if self.enum_ctor_payload_bodies_are_caller_owned(&name, value)
                                 || self.expr_is_param_view(value)
                                 // B-2026-09-06-9 — the rebind through an
                                 // always-returning callee, as at the struct

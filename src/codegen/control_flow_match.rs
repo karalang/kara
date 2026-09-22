@@ -18337,7 +18337,7 @@ impl<'ctx> super::Codegen<'ctx> {
         // zeroing it skips the free along with the walk. So the split lives in
         // a second function, `emit_enum_drop_switch_box_only`.
         let boxonly_drop_fn = self
-            .user_enum_seeded_array_payload_stays_with_caller(scrutinee, &enum_name)
+            .user_enum_ctor_array_payload_stays_with_caller(scrutinee, &enum_name)
             .then(|| self.emit_enum_drop_switch_box_only(&enum_name))
             .flatten();
         if let Some(f) = boxonly_drop_fn {

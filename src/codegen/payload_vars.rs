@@ -455,6 +455,20 @@ pub(crate) struct PayloadVars<'ctx> {
     /// (`scrutinee_is_owned_param_binding` consults this), and its own
     /// let-site registration is memory-only. Cleared per-function.
     pub(crate) param_view_locals: HashSet<String>,
+    /// B-2026-09-22-10 — locals whose enum value took the BOX-ONLY drop twin
+    /// (`__karac_drop_<E>__boxonly`) because its `Array` payload came from a
+    /// by-value param the caller kept. Transitive across a bare-identifier
+    /// rebind (`let o2 = o;`), which is what a chain needs: the rebind
+    /// retracts `o`'s action and registers `o2`'s, and without the mark `o2`
+    /// registers the WALKING drop fn and the double free comes back. Measured:
+    /// the same chain over a LOCAL array source is correct on all backends, so
+    /// the move-out retraction is not what is missing here -- only the
+    /// decision's propagation.
+    ///
+    /// Cleared per binding at each fresh `let` of that name, per
+    /// B-2026-08-31-50, so a stale mark cannot silently skip a later value's
+    /// interior walk. Cleared per function.
+    pub(crate) enum_box_only_array_locals: HashSet<String>,
     /// B-2026-09-19-48 — arm bindings over the WHOLE `Option`/`Result` payload
     /// of a scrutinee the CALLER retains (a by-value param, or a param view),
     /// for which `bind_pattern_values` deliberately registered NO field-bodies
