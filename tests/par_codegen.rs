@@ -1630,6 +1630,39 @@ fn main() {
             )
         });
 
+        // A SIGNAL death of the runner is a crash, and this lane keeps only
+        // `.stdout` -- so without this it surfaces as an empty `got` string in
+        // whatever assertion the caller makes, with the cause discarded.
+        // B-2026-09-19-5 is that bug on the SEQUENTIAL lane, and f4dc90f fixed
+        // it there only: the sequential helper in `tests/codegen/mod.rs`
+        // reports the signal and stderr,
+        // this lane did not, so the same misreport stayed live here -- on the
+        // one lane whose programs are concurrent and therefore likeliest to
+        // abort. Found while triaging the 2026-09-22 `Codegen E2E` red, where
+        // `test_e2e_par_branch_errdefer_fires_on_cooperative_cancel` failed on
+        // CI with an empty output that could equally have been a crashed
+        // runner or the cell's own cancel race (B-2026-09-22-2) -- and nothing
+        // in the report could separate them.
+        //
+        // Placed after the watchdog's `None` arm above, so a spawn failure or a
+        // 60s hang still reports as itself. Reported unconditionally, for the
+        // reason the sequential lane gives: a signal is never the program's own
+        // choice, unlike an exit code, and no test on this lane asserts on a
+        // deliberate non-zero exit.
+        #[cfg(unix)]
+        {
+            use std::os::unix::process::ExitStatusExt;
+            if let Some(sig) = output.status.signal() {
+                eprintln!(
+                    "[par-jit-lane] karac_jit_runner died on SIGNAL {sig} with {} byte(s) \
+                     of stdout -- the assertion below compares that truncated output, not \
+                     a backend result. Runner stderr:\n{}",
+                    output.stdout.len(),
+                    String::from_utf8_lossy(&output.stderr),
+                );
+            }
+        }
+
         Some(String::from_utf8_lossy(&output.stdout).to_string())
     }
 
