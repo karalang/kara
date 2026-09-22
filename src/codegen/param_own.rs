@@ -492,6 +492,42 @@ impl<'ctx> super::Codegen<'ctx> {
             if !self.enum_needs_scope_exit_owner(type_name) {
                 return false;
             }
+            // B-2026-09-15-17 — CALLER-SEQUENCED, the third answer, and it has
+            // to be its own clause because the two below are the wrong pair of
+            // questions for this class.
+            //
+            // `array_param_elem_is_callee_owned` already settled the same
+            // question one level down and its doc states the rule: an element
+            // that runs a user `Drop` BODY rides a CALLER-side channel,
+            // because "a by-value aggregate's body prints AFTER the call
+            // statement on all four surfaces", so the caller is still holding
+            // the value when the body runs. A bare `Array[R, N]` param obeys
+            // that today and is correct on every surface; the same array
+            // BOXED inside an enum variant did not, and that difference is
+            // the whole of this row.
+            //
+            // Registering here is what moved it: the callee's frame exit runs
+            // the bodies before the caller's statement finishes, so the
+            // compiled backends print them BEFORE the call's own result and
+            // `--interp` prints them after. Returning false leaves both
+            // channels with the caller, which is where the interpreter and
+            // the bare-array spelling both already put them.
+            //
+            // It cannot be spelled as `enum_param_owned_by_transfer` answering
+            // false on its own: that lands on the clone-on-extract path below,
+            // which registers `track_enum_var` while the entry copy has no arm
+            // for the kind and duplicates nothing — both frames owning one box.
+            // Measured as 9 valgrind errors (4 `Invalid read`, 3 `Invalid
+            // free`) on `fn eat(w: C1)` over `enum C1 { X(Array[R, 2]) }`,
+            // which is B-2026-09-14-12's own measurement arriving again.
+            // The predicate answers false as well, so the caller does not
+            // retract; the two are held in lockstep exactly as
+            // `owned_array_param_te`'s doc requires — retract without
+            // registering and the buffers have no owner, register without
+            // retracting and they have two.
+            if self.enum_boxed_array_payload_runs_user_drop(type_name) {
+                return false;
+            }
             // B-2026-09-07-16 — OWN BY TRANSFER when the entry copy cannot
             // duplicate what the param carries.
             //
@@ -2691,6 +2727,36 @@ impl<'ctx> super::Codegen<'ctx> {
     /// never took — a leak. So `shared` enums and the type-erased
     /// `Option`/`Result` (whose payloads have their own machinery) are refused
     /// outright rather than reasoned about.
+    /// B-2026-09-15-17 — does `enum_name` carry an `Array` payload the layout
+    /// BOXED whose element runs a user `Drop` body?
+    ///
+    /// The population the by-value param path hands back to the caller, and
+    /// the one [`Self::enum_param_owned_by_transfer`] declines for the same
+    /// reason. Kept as one named question rather than repeated at both sites,
+    /// because the two answers are only sound together: retract without
+    /// registering and the buffers have no owner, register without retracting
+    /// and they have two.
+    pub(super) fn enum_boxed_array_payload_runs_user_drop(&self, enum_name: &str) -> bool {
+        let Some(layout) = self.type_decls.enum_layouts.get(enum_name) else {
+            return false;
+        };
+        let variant_tes: HashMap<String, Vec<TypeExpr>> = self
+            .enum_variant_field_type_exprs(enum_name)
+            .into_iter()
+            .map(|(_tag, name, tes)| (name, tes))
+            .collect();
+        layout.field_drop_kinds.iter().any(|(vname, ks)| {
+            ks.iter().enumerate().any(|(fi, k)| {
+                *k == EnumDropKind::BoxedArray
+                    && variant_tes
+                        .get(vname)
+                        .and_then(|tes| tes.get(fi))
+                        .and_then(|te| self.array_elem_and_len(te))
+                        .is_some_and(|(elem_te, _)| self.elem_te_runs_user_drop(&elem_te))
+            })
+        })
+    }
+
     pub(super) fn enum_param_owned_by_transfer(&self, enum_name: &str) -> bool {
         if enum_name == "Option"
             || enum_name == "Result"
@@ -2734,10 +2800,22 @@ impl<'ctx> super::Codegen<'ctx> {
         // And it must NOT be widened to a `VecOrString` payload, which is the
         // mirror: there the entry copy really does duplicate, so the caller's
         // original still needs its own free and standing it down is a leak.
-        if layout.field_drop_kinds.values().any(|ks| {
-            ks.iter()
-                .any(|k| matches!(k, EnumDropKind::BoxedArray | EnumDropKind::SharedRc))
-        }) {
+        // B-2026-09-15-17 — the `BoxedArray` disjunct now excludes an element
+        // that runs a user `Drop` BODY. That class is CALLER-SEQUENCED, and
+        // the reason is written where the callee-side half of the same
+        // decision is made (`enum_boxed_array_payload_runs_user_drop`'s
+        // caller in the by-value param prologue). The two must agree: this is
+        // the caller's retraction and that is the callee's registration.
+        if layout
+            .field_drop_kinds
+            .values()
+            .any(|ks| ks.contains(&EnumDropKind::SharedRc))
+            || (layout
+                .field_drop_kinds
+                .values()
+                .any(|ks| ks.contains(&EnumDropKind::BoxedArray))
+                && !self.enum_boxed_array_payload_runs_user_drop(enum_name))
+        {
             return true;
         }
         layout.field_drop_kinds.iter().any(|(vname, kinds)| {

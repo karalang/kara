@@ -3731,7 +3731,6 @@ impl<'ctx> super::Codegen<'ctx> {
                         VariantKind::Tuple(tys) => tys.iter().collect(),
                         VariantKind::Struct(fields) => fields.iter().map(|f| &f.ty).collect(),
                     };
-                    let single_field = field_tys.len() == 1;
                     for (fi, field_ty) in field_tys.into_iter().enumerate() {
                         if kinds.get(fi) != Some(&EnumDropKind::None) {
                             continue;
@@ -3739,45 +3738,31 @@ impl<'ctx> super::Codegen<'ctx> {
                         let Some((elem_te, n)) = self.array_elem_and_len(field_ty) else {
                             continue;
                         };
-                        // An element that runs a user `Drop` BODY is admitted
-                        // at single-field width and declined by the widening,
-                        // and that asymmetry is deliberate rather than an
-                        // oversight. B-2026-09-14-12 admitted it, and
-                        // B-2026-09-15-17 is the ordering divergence that
-                        // admission rides on -- the bodies run BEFORE the
-                        // consuming call on the compiled backends and after it
-                        // under `--interp`. A multi-field variant carrying such
-                        // an element AGREES across backends today and merely
-                        // leaks, so widening to it would trade an agreed gap
-                        // for a new run-vs-build divergence: measured on
-                        // `M(Array[R, 2], i64)` going from `in 28 / dD23 / dD2`
-                        // on every surface to `dD23 / dD2 / in 28` on the
-                        // compiled ones. That is the trade B-2026-09-13-29
-                        // declined for the same reason, so this declines it
-                        // too; close -15-17 and this clause comes out.
+                        // B-2026-09-20-55 — THE ARITY CLAUSE IS GONE, and what
+                        // paid for it is B-2026-09-15-17 closing.
                         //
-                        // READ `program.drop_method_keys` DIRECTLY, not
-                        // `type_runs_user_drop`, and that is the same
-                        // declare-time cycle this pass already works around for
-                        // the width. `program_snapshot` -- the table that
-                        // predicate consults -- is assigned in `compile_program`
-                        // AFTER `declare_enums` returns, so asking it here
-                        // answers `false` for every type in the program. Costly
-                        // to discover from the outside: the clause simply did
-                        // not fire, and the divergence it was written to prevent
-                        // showed up in the cell matrix as though the clause were
-                        // absent. The `Program` this pass is handed carries the
-                        // table already (lowering fills it from
-                        // `TypeCheckResult`), so the answer is available -- just
-                        // not through that accessor.
-                        let elem_runs_body = match &elem_te.kind {
-                            TypeKind::Path(p) => p.segments.first().cloned(),
-                            _ => None,
-                        }
-                        .is_some_and(|n| program.drop_method_keys.contains_key(n.as_str()));
-                        if !single_field && elem_runs_body {
-                            continue;
-                        }
+                        // It read `if !single_field && elem_runs_body
+                        // { continue; }`, and it was a trade rather than
+                        // caution: classifying the field flips
+                        // `enum_param_owned_by_transfer`, which used to hand
+                        // the payload's bodies to the CALLEE, and the callee
+                        // ran them at its own frame exit -- before the caller's
+                        // statement finished. So a multi-field variant admitted
+                        // here went from `in 28 / dD23 / dD2` on every surface
+                        // to `dD23 / dD2 / in 28` on the compiled ones, and
+                        // declining left it agreeing across backends and merely
+                        // leaking. Both settings were wrong; the clause chose
+                        // the quieter one.
+                        //
+                        // That class is CALLER-SEQUENCED now
+                        // (`enum_boxed_array_payload_runs_user_drop`), which is
+                        // where a bare `Array[R, N]` param has always put it
+                        // and where `--interp` puts it, so admitting the field
+                        // no longer moves anything. Measured on
+                        // `enum C2 { X(Array[R, 2], i64) }` passed to
+                        // `fn eat(w: C2)`: the order is unchanged on all four
+                        // surfaces and the 136 bytes (64 direct, 72 indirect)
+                        // this clause was leaking are recovered.
                         let field_words = field_word_offsets
                             .get(vname)
                             .and_then(|offs| offs.get(fi))

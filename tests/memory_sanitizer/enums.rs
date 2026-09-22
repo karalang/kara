@@ -10729,3 +10729,77 @@ fn main() {
         "b2026-09-21-10-generic-enum-narrow-variant-box",
     );
 }
+
+/// B-2026-09-20-55 — a MULTI-FIELD enum variant's boxed `Array` payload whose
+/// element runs a user `Drop` body had no free on any backend.
+///
+/// 136 bytes per value at `-O0` — 64 direct (the box) and 72 indirect (the
+/// elements' `String`s) — and the row's own shape is the generic one, but the
+/// CONCRETE spelling leaks identically and runs its bodies correctly, which is
+/// what says the leak is keyed on the variant's ARITY and not on erasure. The
+/// no-call cell is the decisive one: there is no callee in it, so the missing
+/// free was never about the by-value param path.
+///
+/// `declarations.rs` declined to classify the field `EnumDropKind::BoxedArray`
+/// at multi-field width, because classifying it flipped
+/// `enum_param_owned_by_transfer` and moved the element bodies into the callee
+/// — B-2026-09-15-17's ordering divergence. That class is caller-sequenced now,
+/// so the clause came out and the box is freed. The order half is pinned by
+/// `codegen`'s and `interpreter`'s
+/// `drop_order::*_boxed_array_enum_payload_bodies_are_caller_sequenced`.
+///
+/// OBSERVABLE ONLY AT `-O0`: at the default opt level LLVM deletes an
+/// allocation nothing observes, so an ordinary `--features llvm` run of this
+/// fixture is VACUOUS and `scripts/asan-o0-leg.sh` is where an unfixed tree
+/// reports it. Measured on the unfixed tree as 136 B per round.
+#[test]
+fn asan_multi_field_boxed_array_enum_payload_is_freed() {
+    // The row's own shape: the value is handed to a by-value callee.
+    assert_clean_asan_run(
+        "struct R { id: i64, s: String }\n\
+         impl Drop for R { fn drop(mut ref self) { println(f\"dR{self.id}\") } }\n\
+         enum C2 { X(Array[R, 2], i64) }\n\
+         fn mkarr(b: i64) -> Array[R, 2] {\n\
+         \x20   return [R { id: b, s: f\"pay-aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa-{b}\" },\n\
+         \x20           R { id: b + 1, s: f\"pay-bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb-{b}\" }];\n\
+         }\n\
+         fn eat2(w: C2) -> i64 { match w { C2.X(a, n) => { return a[0].id + n } } }\n\
+         fn main() {\n\
+         \x20   let mut i: i64 = 0i64;\n\
+         \x20   while i < 3i64 {\n\
+         \x20       { let v: C2 = C2.X(mkarr(i), 20); println(f\"s{eat2(v)}\") }\n\
+         \x20       i = i + 1i64;\n\
+         \x20   }\n\
+         \x20   println(\"end\");\n\
+         }\n",
+        &[
+            "s20", "dR0", "dR1", "s21", "dR1", "dR2", "s22", "dR2", "dR3", "end",
+        ],
+        "b2055-multi-field-boxed-array-call",
+    );
+
+    // NO CALLEE AT ALL — the cell that says the missing free was never about
+    // the by-value param path. Leaked the same 136 B per round before the fix.
+    assert_clean_asan_run(
+        "struct R { id: i64, s: String }\n\
+         impl Drop for R { fn drop(mut ref self) { println(f\"dR{self.id}\") } }\n\
+         enum C2 { X(Array[R, 2], i64) }\n\
+         fn mkarr(b: i64) -> Array[R, 2] {\n\
+         \x20   return [R { id: b, s: f\"pay-aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa-{b}\" },\n\
+         \x20           R { id: b + 1, s: f\"pay-bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb-{b}\" }];\n\
+         }\n\
+         fn eat2(w: C2) -> i64 { match w { C2.X(a, n) => { return a[0].id + n } } }\n\
+         fn main() {\n\
+         \x20   let mut i: i64 = 0i64;\n\
+         \x20   while i < 3i64 {\n\
+         \x20       { let v: C2 = C2.X(mkarr(i), 20); println(\"s\") }\n\
+         \x20       i = i + 1i64;\n\
+         \x20   }\n\
+         \x20   println(\"end\");\n\
+         }\n",
+        &[
+            "dR0", "dR1", "s", "dR1", "dR2", "s", "dR2", "dR3", "s", "end",
+        ],
+        "b2055-multi-field-boxed-array-no-call",
+    );
+}

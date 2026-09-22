@@ -8632,3 +8632,65 @@ fn e2e_a_lookup_key_temporarys_user_drop_body_runs_at_the_lookup() {
             assert_eq!(run_program(&src).as_deref(), Some(want), "[{label}]");
         }
 }
+
+/// B-2026-09-15-17 / B-2026-09-20-55 — an `Array[R, N]` boxed inside an enum
+/// variant runs its element `Drop` bodies where the CALLER sequences them, at
+/// both variant arities.
+///
+/// Two faults, one clause. `declarations.rs` classified such a field
+/// `EnumDropKind::BoxedArray` only in a SINGLE-field variant, and that
+/// classification flips `enum_param_owned_by_transfer`, which used to hand the
+/// bodies to the callee — so the single-field spelling ran them at the callee's
+/// frame exit, BEFORE the caller's own statement finished, while `--interp` ran
+/// them after (`dR1 dR2 r1` compiled against `r1 dR1 dR2` interpreted). The
+/// multi-field spelling was declined by the clause for exactly that reason, and
+/// so had no free at all: 136 bytes (64 direct, 72 indirect) per value at
+/// `-O0`, with or without a call in the program.
+///
+/// Both settings of that clause were wrong, which is why neither row could be
+/// fixed alone. The class is caller-sequenced now
+/// (`enum_boxed_array_payload_runs_user_drop`), which is where a bare
+/// `Array[R, N]` param has always put it — `array_param_elem_is_callee_owned`
+/// answers FALSE for a `Drop`-running element and its doc states the rule: a
+/// by-value aggregate's body prints AFTER the call statement on all four
+/// surfaces. Admitting the multi-field field then moves nothing, so the arity
+/// clause came out and the leak closed with it.
+///
+/// THE THIRD CELL HAS NO CALL, and it is the one that says the leak was never
+/// about the param path: `c2_concrete_two` leaked the same 136 bytes with no
+/// callee in the program.
+///
+/// The interpreter twin is `interpreter`'s `drop_order::
+/// interp_boxed_array_enum_payload_bodies_are_caller_sequenced`, asserting this
+/// same string — both rows are run-vs-build divergences, so a fixture on one
+/// backend alone cannot see them. The memory half is
+/// `memory_sanitizer`'s `enums::asan_multi_field_boxed_array_enum_payload_is_freed`,
+/// which must run at `-O0`: at the default opt level LLVM deletes an allocation
+/// nothing observes and the leak is invisible.
+#[test]
+fn codegen_boxed_array_enum_payload_bodies_are_caller_sequenced() {
+    assert_eq!(
+        run_program(
+            "struct R { id: i64, s: String }\n\
+     impl Drop for R { fn drop(mut ref self) { println(f\"dR{self.id}\") } }\n\
+     enum C1 { X(Array[R, 2]) }\n\
+     enum C2 { X(Array[R, 2], i64) }\n\
+     fn mkarr(b: i64) -> Array[R, 2] {\n\
+     \x20   return [R { id: b, s: f\"pay-aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa-{b}\" },\n\
+     \x20           R { id: b + 1, s: f\"pay-bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb-{b}\" }];\n\
+     }\n\
+     fn eat1(w: C1) -> i64 { match w { C1.X(a) => { return a[0].id } } }\n\
+     fn eat2(w: C2) -> i64 { match w { C2.X(a, n) => { return a[0].id + n } } }\n\
+     fn main() {\n\
+     \x20   { let w: C1 = C1.X(mkarr(1)); println(f\"r{eat1(w)}\") }\n\
+     \x20   println(\"mid\");\n\
+     \x20   { let v: C2 = C2.X(mkarr(3), 20); println(f\"s{eat2(v)}\") }\n\
+     \x20   println(\"mid2\");\n\
+     \x20   { let u: C2 = C2.X(mkarr(5), 1); println(\"held\") }\n\
+     \x20   println(\"end\");\n\
+     }\n"
+        )
+        .as_deref(),
+        Some("r1\ndR1\ndR2\nmid\ns23\ndR3\ndR4\nmid2\ndR5\ndR6\nheld\nend\n")
+    );
+}

@@ -5482,14 +5482,14 @@ impl<'ctx> super::Codegen<'ctx> {
     ///     those shapes changes for a multi-field variant, and a generic
     ///     multi-field variant carrying a non-array oversize payload is a
     ///     separate population that this row did not measure.
-    ///  3. AN ELEMENT THAT RUNS A USER `Drop` BODY IS DECLINED, mirroring the
-    ///     declaration pass's `!single_field && elem_runs_body` clause exactly.
-    ///     That clause is not caution: admitting such an element trades an
-    ///     agreed both-backends leak for a NEW run-vs-build divergence, since
-    ///     B-2026-09-15-17 has the bodies running before the consuming call on
-    ///     the compiled backends and after it under `--interp`. Both clauses
-    ///     come out together when that row closes, and they are worded the
-    ///     same so a grep finds the pair.
+    ///  3. AN ELEMENT THAT RUNS A USER `Drop` BODY WAS DECLINED, and is not
+    ///     any more (B-2026-09-20-55). It mirrored the declaration pass's
+    ///     `!single_field && elem_runs_body` clause, which existed to avoid
+    ///     the ordering divergence B-2026-09-15-17 recorded — the bodies
+    ///     running before the consuming call on the compiled backends and
+    ///     after it under `--interp`. That class is caller-sequenced now, so
+    ///     the two clauses came out together, as this paragraph said they
+    ///     would.
     fn multi_field_boxed_field(
         &self,
         concrete: &TypeExpr,
@@ -5497,16 +5497,12 @@ impl<'ctx> super::Codegen<'ctx> {
         enum_name: &str,
         variant: &str,
     ) -> Option<TypeExpr> {
-        let (elem_te, _n) = self.array_elem_and_len(concrete)?;
-        let elem_name = match &elem_te.kind {
-            TypeKind::Path(p) => p.segments.first().cloned(),
-            _ => None,
-        };
-        if let Some(n) = elem_name {
-            if self.type_runs_user_drop(&n, &mut Vec::new()) {
-                return None;
-            }
-        }
+        let (_elem_te, _n) = self.array_elem_and_len(concrete)?;
+        // B-2026-09-20-55 — restriction 3 is gone; see the twin note in
+        // `declarations.rs`'s `BoxedArray` pass. It declined an element that
+        // runs a user `Drop` body, to avoid the ordering divergence that
+        // admitting the field used to cause; that class is caller-sequenced
+        // now, so admitting it moves nothing and recovers the box.
         let _ = (enum_name, variant);
         let ll = self.llvm_type_for_type_expr(concrete);
         if Self::llvm_type_word_count(ll) > field_words {
