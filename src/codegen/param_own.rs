@@ -6451,6 +6451,55 @@ impl<'ctx> super::Codegen<'ctx> {
         self.suppress_array_binding_move(arg, ArrayMoveDest::AggregateField);
     }
 
+    /// B-2026-09-19-61 — does a seeded scrutinee's `Array` payload argument
+    /// still belong to the CALLER, so the arm binding must not take its
+    /// interior over?
+    ///
+    /// The two owners here are on opposite sides of a function boundary, which
+    /// is what B-2026-09-19-58's disarm cannot reach. That row paired the
+    /// arming with [`Self::suppress_array_binding_move_into_aggregate`], which
+    /// retracts the SOURCE's queued `StructDrop` — and a by-value param whose
+    /// caller retained ownership has no such action in this frame to retract,
+    /// so the disarm no-ops and the arming stands alone. `@main` keeps its
+    /// `__karac_drop_array_te_R_2` on purpose ([`Self::
+    /// array_param_elem_is_callee_owned`] declines a user-`Drop` element,
+    /// B-2026-09-14-25 / -27 measured the 44 B that retracting there costs),
+    /// `@inner` frees the same buffers on its way out, and the program aborts
+    /// 134 with two invalid frees at `-O0`.
+    ///
+    /// NEITHER RETRACT NOR SENTINEL, but DECLINE TO ARM. This family's standing
+    /// rule is "retract when the source is a BINDING, write a sentinel when it
+    /// is a FIELD", and a by-value param is a binding, so the rule points at
+    /// retraction — and retraction is the WRONG answer here, which is why the
+    /// third branch is worth naming. The caller's action is deliberately not
+    /// retractable: the element's `Drop` BODIES ride a caller-side channel and
+    /// fire while the caller still holds the value, so retracting the free
+    /// would make those bodies read freed memory.
+    ///
+    /// The predicate is "a param of this function that `owned_array_params`
+    /// does not hold", and both halves are load-bearing. Membership alone is
+    /// not the question — `make_array_param_callee_owned` is also the
+    /// `let`-local registrar, so a plain local sits in that map too and a
+    /// local source must keep arming (that is exactly what B-2026-09-19-58
+    /// fixed). Being a param alone is not the question either: an
+    /// `Array[String, N]` param IS callee-owned, is in the map, and its disarm
+    /// works, so declining there would retract-without-arming and leak. Only
+    /// the intersection — a param the param-level gate DECLINED — names the
+    /// case where nothing in this frame owns the buffers.
+    ///
+    /// A `ref` / `mut ref` array param answers true for the same reason and is
+    /// equally correct: a borrowed array is owned by its lender.
+    pub(super) fn seeded_array_payload_stays_with_caller(&self, arg: &Expr) -> bool {
+        let ExprKind::Identifier(root) = &arg.kind else {
+            return false;
+        };
+        self.fn_ctx.current_fn_param_names.contains(root.as_str())
+            && !self
+                .borrow_vars
+                .owned_array_params
+                .contains_key(root.as_str())
+    }
+
     fn suppress_array_binding_move(&mut self, arg: &Expr, dest: ArrayMoveDest) {
         // B-2026-09-14-27 — the SOURCE of a `UseAfterMove` keeps its drop when
         // the consumer has been handed an independent copy

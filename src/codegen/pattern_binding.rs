@@ -3082,6 +3082,20 @@ impl<'ctx> super::Codegen<'ctx> {
         if self.pattern_state.pattern_binding_scrutinee_is_owned_param {
             return;
         }
+        // B-2026-09-19-61 — and not when the payload the seeded envelope was
+        // built from is still the CALLER's. The gate above is the same
+        // question for a scrutinee that IS a param; this is it for a ctor temp
+        // seeded out of one, which that gate reads as a local and admits. The
+        // caller's channel runs those element bodies while it still holds the
+        // array, so registering here fires each of them a second time —
+        // measured `d1 d2 y7 d1 d2` against the by-value-callee control's
+        // `y7 d1 d2`, on all four surfaces once this row's memory half landed.
+        if self
+            .pattern_state
+            .pattern_binding_seeded_array_payload_stays_with_caller
+        {
+            return;
+        }
         // And the SEEDED PAIR only. A USER enum's own payload walker already
         // runs an arm-bound array payload's bodies for a local scrutinee —
         // measured `dRa1 dRa2 dRa1 dRa2` against its `dRa1 dRa2` on

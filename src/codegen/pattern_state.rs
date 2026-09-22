@@ -192,6 +192,28 @@ pub(crate) struct PatternState<'ctx> {
     /// arm one of its own. Saved and restored around each `match`, beside its
     /// neighbour.
     pub(crate) pattern_binding_scrutinee_optres_bodies_are_caller_retained: bool,
+    /// B-2026-09-19-61 — the same question one step further out: the
+    /// scrutinee is not a param at all, it is a SEEDED `Option`/`Result`
+    /// ctor temp built here out of a by-value `Array` param whose elements
+    /// the caller kept.
+    ///
+    /// Its sibling above reads
+    /// `caller_retained_optres_params`, which is keyed by the scrutinee's own
+    /// NAME, so a temp is not in it and the flag answers false — correctly, for
+    /// the question it asks. What makes this position caller-retained is one
+    /// level down: `array_param_elem_is_callee_owned` declines a user-`Drop`
+    /// element, so the array the ctor was seeded from is still the caller's
+    /// and the arm binding owns neither its buffers nor its bodies.
+    ///
+    /// Read by [`Codegen::register_arm_container_payload_elem_bodies`], whose
+    /// other two gates cannot see this: the scrutinee is a temp rather than a
+    /// param (so the owned-param gate is false) and it IS the seeded pair (so
+    /// the `is_option_result` gate admits it). Derived from
+    /// [`Codegen::seeded_array_payload_stays_with_caller`], the same predicate
+    /// that withholds the MEMORY at the arming site, so the two halves of this
+    /// row's fix cannot drift apart. Saved and restored around each `match`,
+    /// beside its neighbours.
+    pub(crate) pattern_binding_seeded_array_payload_stays_with_caller: bool,
     /// B-2026-09-15-21 — true while binding a pattern whose scrutinee's own
     /// heap this FRAME owns, i.e. the MEMORY half of the flag above.
     ///

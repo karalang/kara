@@ -6880,6 +6880,7 @@ impl<'ctx> Codegen<'ctx> {
                 pattern_binding_arm_borrowed_only_names: std::collections::HashSet::new(),
                 pattern_binding_scrutinee_is_owned_param: false,
                 pattern_binding_scrutinee_optres_bodies_are_caller_retained: false,
+                pattern_binding_seeded_array_payload_stays_with_caller: false,
                 pattern_binding_scrutinee_param_memory_is_callee_owned: false,
                 pattern_binding_scrutinee_is_transfer_owned_enum: false,
                 pattern_binding_masked_view_names: HashSet::new(),

@@ -513,6 +513,16 @@ impl<'ctx> super::Codegen<'ctx> {
         self.pattern_state
             .pattern_binding_scrutinee_optres_bodies_are_caller_retained =
             self.scrutinee_optres_param_bodies_are_caller_retained(scrutinee);
+        // B-2026-09-19-61 — the same question for a SEEDED ctor temp, which
+        // the flag above cannot see because it is keyed by the scrutinee's own
+        // name. See the field's doc.
+        let saved_seeded_array_caller_flag = self
+            .pattern_state
+            .pattern_binding_seeded_array_payload_stays_with_caller;
+        self.pattern_state
+            .pattern_binding_seeded_array_payload_stays_with_caller =
+            Self::seeded_variant_arg_payload(scrutinee)
+                .is_some_and(|(_, parg)| self.seeded_array_payload_stays_with_caller(parg));
         // B-2026-09-15-21 — the MEMORY half of the same question, which the
         // flag above was being read for and does not answer.
         self.pattern_state
@@ -1773,6 +1783,9 @@ impl<'ctx> super::Codegen<'ctx> {
         self.pattern_state.pattern_binding_scrutinee_is_owned_param = saved_owned_param_flag;
         self.pattern_state
             .pattern_binding_scrutinee_optres_bodies_are_caller_retained = saved_optres_bodies_flag;
+        self.pattern_state
+            .pattern_binding_seeded_array_payload_stays_with_caller =
+            saved_seeded_array_caller_flag;
         // B-2026-09-15-21 — cleared rather than restored; see the field's doc.
         self.pattern_state
             .pattern_binding_scrutinee_param_memory_is_callee_owned = false;
@@ -19477,13 +19490,26 @@ impl<'ctx> super::Codegen<'ctx> {
             // With no bodies supplied (the if-let / while-let / let-else
             // callers) a binding is declined rather than guessed at; those three
             // spellings are this row's own NOT-MEASURED list.
-            let array_arm_owns_interior = match &payload.kind {
+            //
+            // B-2026-09-19-61 — AND the payload must not still belong to the
+            // CALLER. Every reason above is about owners inside this function;
+            // a by-value `Array` param whose element runs a user `Drop` is
+            // owned across the function boundary, where neither the arming
+            // gate nor B-2026-09-19-58's paired disarm can see it. Folded into
+            // the same flag rather than added as a late return so the
+            // `arm_array_payload_unowned_interior` marking below stays in step:
+            // the interior IS withheld in that case, and the one destination
+            // that stands itself down needs to hear so.
+            let array_arm_owns_interior = (match &payload.kind {
                 PatternKind::Wildcard => true,
                 PatternKind::Binding(_) => arm_bodies
                     .get(arm_idx)
                     .is_some_and(|body| self.arm_payload_binding_only_borrowed(pat, body)),
                 _ => false,
-            };
+            }) && !Self::seeded_variant_arg_payload(scrutinee)
+                .is_some_and(|(cv, parg)| {
+                    cv == variant && self.seeded_array_payload_stays_with_caller(parg)
+                });
             // B-2026-09-13-2 — when the interior is WITHHELD for a consuming
             // arm, say so, so the one destination that also stands itself down
             // can stop doing that. See

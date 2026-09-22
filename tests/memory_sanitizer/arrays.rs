@@ -2054,6 +2054,125 @@ fn main() {
     );
 }
 
+/// B-2026-09-19-61 — the BY-VALUE PARAM sibling of
+/// `asan_named_array_local_into_seeded_match_scrutinee_has_one_owner` above,
+/// where the two owners sit on opposite sides of a FUNCTION BOUNDARY.
+///
+/// `fn f(a: Array[S, 2]) { match Option.Some(a) { .. } }` armed the box's
+/// interior walk over buffers the CALLER still owned. `@main` keeps its
+/// `__karac_drop_array_te_S_2` deliberately —
+/// `array_param_elem_is_callee_owned` is `array_elem_owns_callee_drop(elem) &&
+/// !elem_te_runs_user_drop(elem)`, so a user-`Drop` element fails the second
+/// conjunct and the caller retains on purpose (B-2026-09-14-25 / -27 measured
+/// the 44 B that retracting there costs) — and the callee freed the same
+/// buffers on its way out: `free(): double free detected in tcache 2`, exit
+/// 134 at `-O0`.
+///
+/// NEITHER RETRACT NOR SENTINEL, but DECLINE TO ARM. The family's standing
+/// rule is "retract when the source is a BINDING, write a sentinel when it is
+/// a FIELD", and a by-value param is a binding — but the caller's action here
+/// is deliberately not retractable, because the element's `Drop` BODIES ride a
+/// caller-side channel and fire while the caller still holds the value.
+/// `seeded_array_payload_stays_with_caller` names the third branch: a param of
+/// this function that `owned_array_params` does NOT hold.
+///
+/// `p/noheap` is the cell that carries the BODIES half, and it is the one an
+/// ASAN run can see at all: `N` owns no heap, so it never aborted — it printed
+/// `dN2 dN3 dN2 dN3`, each element's body run once by this frame's arm binding
+/// and once by the caller's channel. Its single pair here is what the
+/// `pattern_binding_seeded_array_payload_stays_with_caller` gate buys; without
+/// that gate the memory half alone leaves it doubled.
+///
+/// `p/str` and `p/gen` must stay: both were ALREADY CLEAN on the unfixed
+/// compiler (measured, exit 0), so they pin the two directions this predicate
+/// must not widen into — an `Array[String, N]` param IS callee-owned and its
+/// disarm works, and a generic callee never armed the walk. `b/local` is
+/// B-2026-09-19-58's own shape and pins the non-regression: a LOCAL source
+/// must keep arming.
+///
+/// TWO NEIGHBOURS ARE DELIBERATELY ABSENT because they still abort on this
+/// tree and would redden the leg for something this commit does not fix: a
+/// USER-enum seeded scrutinee over the same param (`match W.P(a)`, B-2026-09-22-6),
+/// and the same param moved into a STRUCT-LITERAL field (`Box2 { v: a }`,
+/// B-2026-09-22-7). Both were measured aborting on the UNFIXED compiler too, so
+/// neither is this fix's doing.
+///
+/// Measured on this tree: 0 bytes in 0 blocks and 0 errors at `-O0` under
+/// `valgrind --leak-check=full`, and the stdout below is byte-identical across
+/// jit / `karac build` / `KARAC_OPT_LEVEL=0 karac build`. `--interp` DIVERGES
+/// — it still runs each element body twice, unchanged by this fix and filed as
+/// B-2026-09-22-8 — which is why there is no interpreter twin of this fixture.
+#[test]
+fn asan_array_param_into_seeded_match_scrutinee_stays_with_caller() {
+    assert_clean_asan_run(
+        r#"struct S { tag: String }
+impl Drop for S { fn drop(mut ref self) { println(f"  dS{self.tag}") } }
+struct N { id: i64 }
+impl Drop for N { fn drop(mut ref self) { println(f"  dN{self.id}") } }
+fn p_arr(a: Array[S, 2]) -> i64 { match Option.Some(a) { Option.Some(v) => { println(f"  r:{v[0].tag}"); return 1 }, Option.None => { println("  n"); return 0 } } }
+fn p_wild(a: Array[S, 2]) -> i64 { match Option.Some(a) { Option.Some(_) => { println("  w"); return 1 }, Option.None => { println("  n"); return 0 } } }
+fn p_str(a: Array[String, 2]) -> i64 { match Option.Some(a) { Option.Some(v) => { println(f"  r:{v[0]}"); return 1 }, Option.None => { println("  n"); return 0 } } }
+fn p_res(a: Array[S, 2]) -> i64 { match Result.Ok(a) { Result.Ok(v) => { println("  r"); return 1 }, Result.Err(e) => { println("  n"); return 0 } } }
+fn p_gen[T](a: Array[T, 2]) -> i64 { match Option.Some(a) { Option.Some(v) => { println("  r"); return 1 }, Option.None => { println("  n"); return 0 } } }
+fn p_three(a: Array[S, 3]) -> i64 { match Option.Some(a) { Option.Some(v) => { println("  r"); return 1 }, Option.None => { println("  n"); return 0 } } }
+fn p_noheap(a: Array[N, 2]) -> i64 { match Option.Some(a) { Option.Some(v) => { println("  r"); return 1 }, Option.None => { println("  n"); return 0 } } }
+fn p_nonefirst(a: Array[S, 2]) -> i64 { match Option.Some(a) { Option.None => { println("  n"); return 0 }, Option.Some(v) => { println("  r"); return 1 } } }
+fn b_local() -> i64 { let a: Array[S, 2] = [S { tag: f"llllllll0" }, S { tag: f"llllllll1" }]; match Option.Some(a) { Option.Some(v) => { println("  r"); return 1 }, Option.None => { println("  n"); return 0 } } }
+fn main() {
+    println("p/arr");       { let a: Array[S, 2] = [S { tag: f"aaaaaaaa0" }, S { tag: f"aaaaaaaa1" }]; let z = p_arr(a); }
+    println("p/wild");      { let a: Array[S, 2] = [S { tag: f"bbbbbbbb0" }, S { tag: f"bbbbbbbb1" }]; let z = p_wild(a); }
+    println("p/str");       { let a: Array[String, 2] = [f"cccccccc0", f"cccccccc1"]; let z = p_str(a); }
+    println("p/res");       { let a: Array[S, 2] = [S { tag: f"dddddddd0" }, S { tag: f"dddddddd1" }]; let z = p_res(a); }
+    println("p/gen");       { let a: Array[S, 2] = [S { tag: f"eeeeeeee0" }, S { tag: f"eeeeeeee1" }]; let z = p_gen(a); }
+    println("p/three");     { let a: Array[S, 3] = [S { tag: f"ffffffff0" }, S { tag: f"ffffffff1" }, S { tag: f"ffffffff2" }]; let z = p_three(a); }
+    println("p/noheap");    { let a: Array[N, 2] = [N { id: 2 }, N { id: 3 }]; let z = p_noheap(a); }
+    println("p/nonefirst"); { let a: Array[S, 2] = [S { tag: f"hhhhhhhh0" }, S { tag: f"hhhhhhhh1" }]; let z = p_nonefirst(a); }
+    println("b/local");     { let z = b_local(); }
+    println("end")
+}
+"#,
+        &[
+            "p/arr",
+            "  r:aaaaaaaa0",
+            "  dSaaaaaaaa0",
+            "  dSaaaaaaaa1",
+            "p/wild",
+            "  w",
+            "  dSbbbbbbbb0",
+            "  dSbbbbbbbb1",
+            "p/str",
+            "  r:cccccccc0",
+            "p/res",
+            "  r",
+            "  dSdddddddd0",
+            "  dSdddddddd1",
+            "p/gen",
+            "  r",
+            "  dSeeeeeeee0",
+            "  dSeeeeeeee1",
+            "p/three",
+            "  r",
+            "  dSffffffff0",
+            "  dSffffffff1",
+            "  dSffffffff2",
+            "p/noheap",
+            "  r",
+            "  dN2",
+            "  dN3",
+            "p/nonefirst",
+            "  r",
+            "  dShhhhhhhh0",
+            "  dShhhhhhhh1",
+            "b/local",
+            "  r",
+            "  dSllllllll0",
+            "  dSllllllll1",
+            "end",
+        ],
+        "asan_array_param_into_seeded_match_scrutinee_stays_with_caller",
+    );
+}
+
 /// B-2026-09-17-9 — the LEAK MIRROR its own row's fix walked into, and the
 /// shape that fix's controls could not reach.
 ///
