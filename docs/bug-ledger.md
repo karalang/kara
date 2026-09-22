@@ -92,10 +92,10 @@ distinguish "bugs flattening" from "we stopped writing them down."
 
 | class | total |
 |---|---|
-| run-vs-build | 479 |
+| run-vs-build | 480 |
 | miscompile | 436 |
 | leak | 403 |
-| double-free | 261 |
+| double-free | 263 |
 | missing-feature | 203 |
 | codegen-gap | 182 |
 | other | 147 |
@@ -110,8 +110,8 @@ distinguish "bugs flattening" from "we stopped writing them down."
 
 | surface | total |
 |---|---|
-| codegen | 1965 |
-| interp | 514 |
+| codegen | 1967 |
+| interp | 516 |
 | typecheck | 303 |
 | other | 107 |
 | ownership | 75 |
@@ -189,7 +189,6 @@ _Generated from `bug-ledger.jsonl` by `scripts/bug-curve.py` (2026-05-20 → 202
 | B-2026-09-19-54 | 2026-09-19 | codegen | medium | A GENERIC BOXED `Array[String, N]` PAYLOAD REBOUND TO A LOCAL IN THE ARM INVALID-FREES -- `match g { G.Y(x) => { let y = x; return y[0].len(); } }` reports 2 valgrind errors at `-O0` with output correct on every backend, while its mono twin and all three other arm shapes of the same payload are clean, so the move-binding path has a second owner the hand-on path does not | — |
 | B-2026-09-19-59 | 2026-09-19 | codegen | high | AN `Array` ENUM PAYLOAD THAT FITS THE SEEDED ENVELOPE'S INLINE AREA IS FREED TWICE ON BOTH THE `let` AND THE `match` SPELLING -- `Array[S, 1]` over `S { tag: String }` is three words, fits `Option`'s three-word payload area, never boxes, and aborts with `free(): double free detected in tcache 2` where the four-word `Array[R, 1]` and the six-word `Array[S, 2]` are both correct. So the boundary is the INLINE/BOXED width gate rather than the element count, and it is the same gate B-2026-09-19-49's boundary measured out to -- two independent defects on one gate in two days, which is why this is worth a sweep of the gate rather than a row at a time | — |
 | B-2026-09-19-60 | 2026-09-19 | codegen | medium | A CONSUMING ARM THAT REBINDS A SEEDED `Array` PAYLOAD INTO A LOCAL LEAVES TWO OWNERS -- `match Option.Some(a) { Some(v) => { let u = v; .. } }` over a NAMED `Array[R, 2]` local aborts with two invalid frees at `-O0` against a correct `--interp`, and `@main` carries TWO `__karac_drop_array_te_R_2` calls over one element storage. No interior walk is armed for a consuming arm, so B-2026-09-19-58's paired retraction has nothing to pair with; B-2026-09-19-54 is the generic-envelope cousin (output correct, no abort) and B-2026-09-17-5 the bodies-channel twin | — |
-| B-2026-09-19-61 | 2026-09-19 | codegen+interp | high | A BY-VALUE `Array` PARAM MOVED INTO A SEEDED `match` SCRUTINEE IS FREED BY BOTH THE CALLER AND THE CALLEE -- the caller keeps its `__karac_drop_array_te_R_2` on purpose, because `array_param_elem_is_callee_owned` excludes an element that runs a user `Drop`, while the callee arms the box's interior walk over the same buffers and frees them on the way out; aborts at `-O0` with two invalid frees. The INTERPRETER independently runs the element bodies TWICE on this cell, so neither backend is the oracle for the other and a fix needs the `let`-local control instead | — |
 | B-2026-09-20-2 | 2026-09-20 | codegen+interp | high | A BOXED `Array[T, N]` ENUM PAYLOAD RUNS ITS ELEMENTS' `Drop` BODIES AT THE WRONG TIME OR NOT AT ALL -- 19 of 20 cells fail, the compiled backends running the bodies BEFORE the statement that produced them where `--interp` runs them after, and every GENERIC read-only arm losing them on both sides; independent of the element's heap and of the arity, so it is the boxed payload itself rather than any property of the element | — |
 | B-2026-09-20-3 | 2026-09-20 | codegen | medium | A CHAINED PLACE'S ENUM FIELD HANDED TO A BY-VALUE CALLEE IS STILL FREED TWICE after B-2026-09-19-51 -- `eatb(k.h.g)` over `struct Kb { h: Hb }` / `struct Hb { g: Eb }` reports 11 allocs / 14 frees and 7 errors, unchanged before and after -51's fix, because its neutraliser takes a NAMED BINDING ROOT ONLY and a two-hop place needs the GEP chain walked | — |
 | B-2026-09-20-4 | 2026-09-20 | codegen | medium | AN ENUM FIELD REACHED THROUGH AN OWNED `self` AND HANDED TO A BY-VALUE CALLEE IS FREED TWICE, and WORSE than the free-function spelling -- `eatb(self.g)` inside `impl Hb` reports 11 allocs / 17 frees and 14 errors where the free-function cell reports 14 frees / 7, so the owned receiver contributes its own over-free on top of the field hand-off; unchanged by B-2026-09-19-51 | — |
@@ -353,6 +352,9 @@ narrow -- it is the `ContainerElemBodies` walker for an ARRAY field being
 registered in the callee's prologue, not by-value struct params in general. | — |
 | B-2026-09-22-2 | 2026-09-22 | other | medium | MEASURED: `test_e2e_par_branch_errdefer_fires_on_cooperative_cancel` FAILS AT ROUGHLY 1% — once on CI and once in 170 local runs — AND ITS IN-SOURCE GUARD COVERS ONLY ONE DIRECTION OF THE RACE: the million-iteration ceiling stops branch 0 FINISHING before the cancel, and nothing stops branch 0 never STARTING, which is what an empty output looks like. OPEN QUESTION, not a patch: what the cell should assert when branch 0 never enters its scope | — |
 | B-2026-09-22-3 | 2026-09-22 | codegen | medium | MEASURED: `asan_slice_mutators_and_views_on_heap_elements` FAILS THE `KARAC_SSO=1` SANITIZER LANE INTERMITTENTLY ON CI — 4 reds in 7 consecutive `main` runs, INCLUDING A FAIL AND A PASS ON A BYTE-IDENTICAL TEST BINARY — and no ASAN report exists for ANY of them because the leg deleted it (B-2026-09-22-4). NOT a regression of cfe7a5f1c, to which it was attributed, and not a host difference either | — |
+| B-2026-09-22-6 | 2026-09-22 | codegen | high | A BY-VALUE `Array` PARAM MOVED INTO A **USER-ENUM** SEEDED `match` SCRUTINEE IS STILL FREED BY BOTH SIDES -- B-2026-09-19-61's fix declines the box-interior arming for `Option`/`Result` only, and a user enum reaches its payload through its OWN walker (`emit_enum_drop_switch`), which never consults that gate; `match W.P(a)` over `fn p_mono(a: Array[S, 2])` aborts 134 at `-O0` where `--interp` is CORRECT, so the interpreter is the oracle here | — |
+| B-2026-09-22-7 | 2026-09-22 | codegen+interp | high | A BY-VALUE `Array` PARAM MOVED INTO A **STRUCT-LITERAL FIELD** IS FREED BY BOTH THE CALLER AND THE AGGREGATE -- `suppress_array_binding_move_into_aggregate`'s retraction no-ops for a param the caller retained, because the param-level gate queued no `StructDrop` in this frame to retract, so the struct's field drop is armed and the caller's free stands; `Box2 { v: a }` aborts 134 at `-O0`, and `--interp` independently runs each element body twice, so neither backend is the oracle | — |
+| B-2026-09-22-8 | 2026-09-22 | interp | medium | THE INTERPRETER RUNS AN `Array` PARAM'S ELEMENT `Drop` BODIES TWICE WHEN THE PARAM IS MOVED INTO A SEEDED `match` SCRUTINEE -- the remainder B-2026-09-19-61 split out, now a run-vs-build divergence because that row's fix made both compiled backends match the by-value-callee control at one pair; WIDER THAN `Array` (a `Vec[R]` param has it too) and a bare STRUCT param runs its body twice on BOTH backends, which no differential instrument can see | — |
 
 ### Relocated
 
@@ -2907,6 +2909,7 @@ registered in the callee's prologue, not by-value struct params in general. | �
 | B-2026-09-19-56 | codegen+interp | medium | A METHOD-CALL RESULT CONSUMED BY A BY-VALUE FREE FUNCTION LOSES THAT FUNCTION'S OWN PARAM `Drop` BODY ON ALL FOUR SURFACES -- `sink(h.es(Some((S { id… | 8ec2876 |
 | B-2026-09-19-57 | codegen | medium | A HEAP-CARRYING `Option` PAYLOAD PART HANDED OUT OF AN ARM RUNS ITS `Drop` BODY AN EXTRA TIME BEFORE THE CONSUMING CALL ON EVERY COMPILED BACKEND --… | 52602ba |
 | B-2026-09-19-58 | codegen | high | A NAMED `Array` LOCAL MOVED INTO A SEEDED-PAIR CONSTRUCTOR USED DIRECTLY AS A `match` SCRUTINEE IS FREED TWICE -- `let a: Array[R, 2] = [..]; match O… | adff1bf |
+| B-2026-09-19-61 | codegen+interp | high | A BY-VALUE `Array` PARAM MOVED INTO A SEEDED `match` SCRUTINEE IS FREED BY BOTH THE CALLER AND THE CALLEE -- the caller keeps its `__karac_drop_array… | cc6b901e6 |
 | B-2026-09-20-1 | codegen | high | AN INLINE-FITTING `Array[T, 1]` ENUM PAYLOAD BOUND IN A MATCH ARM DOES NOT COMPILE -- `match g { S1.M(x) => x[0].v }` is rejected with `Index operato… | 08d27cc |
 | B-2026-09-20-9 | codegen | high | A SEEDED `Option` / `Result` ENVELOPE LOSES ITS PAYLOAD'S `Drop` BODY ON A MATCH ARM -- `match o { Some(x) => x[0].tag.len() }` over `Option[Array[S,… | 678ebf8 |
 | B-2026-09-20-10 | interp | medium | THE INTERPRETER, NOT THE COMPILED BACKENDS, LOSES A DISCARDED SEEDED-ENVELOPE VALUE'S `Drop` BODY -- `Some(a);` as a statement prints nothing under `… | 678ebf8 |
