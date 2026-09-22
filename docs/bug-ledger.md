@@ -93,7 +93,7 @@ distinguish "bugs flattening" from "we stopped writing them down."
 | class | total |
 |---|---|
 | run-vs-build | 480 |
-| miscompile | 436 |
+| miscompile | 437 |
 | leak | 403 |
 | double-free | 268 |
 | missing-feature | 203 |
@@ -110,7 +110,7 @@ distinguish "bugs flattening" from "we stopped writing them down."
 
 | surface | total |
 |---|---|
-| codegen | 1972 |
+| codegen | 1973 |
 | interp | 519 |
 | typecheck | 303 |
 | other | 109 |
@@ -357,6 +357,7 @@ registered in the callee's prologue, not by-value struct params in general. | �
 | B-2026-09-22-11 | 2026-09-22 | codegen | high | A BY-VALUE `Array` PARAM MOVED INTO A **NAMED SEEDED `Option`/`Result` LOCAL** IS FREED BY BOTH SIDES -- the builtin-envelope twin of B-2026-09-22-10, which that row's fix cannot reach because its `let`-site predicate reads the enum's own VARIANT DECLARATIONS and a builtin envelope has none (zero `__boxonly` symbols in the IR); `let o = Option.Some(a); match o` and its `Result.Ok` sibling both abort 134 at `-O0` with 12 valgrind errors, on a NAMED BASE tree as well as at HEAD, while the same cell over a LOCAL array source is clean on both arms -- so the variable is the SOURCE, not the envelope and not the width, which is what separates it from B-2026-09-19-59 | — |
 | B-2026-09-22-13 | 2026-09-22 | codegen+interp | high | A BY-VALUE `Array` PARAM MOVED INTO A STRUCT LITERAL THE CALLEE **RETURNS** IS STILL FREED BY BOTH SIDES, AND BOTH OWNERS ARE NOW IN THE CALLER -- the escaping half of B-2026-09-22-7, which that row listed as NOT MEASURED and whose fix does not reach it. `fn inner(a: Array[R, 2]) -> B7 { let b = B7 { v: a }; return b }` over `struct B7 { v: Array[R, 2] }` and an `R` with a user `Drop`: `free(): double free detected in tcache 2`, exit 134 at `-O0` AOT and under the JIT, 2 `Invalid free()` under valgrind. THE IR LOCATES IT PRECISELY AND IT IS NOT WHERE THE ROW'S TITLE WOULD SUGGEST: `inner` emits NO drop of `b` at all, so B-2026-09-22-7's mask did its job at the literal; every one of the three surviving calls is in `main` -- `__karac_dropbodies_B7(w)`, `__karac_drop_struct_B7(w)` and the caller's own retained `__karac_drop_array_te_R_2(a)`. The caller keeps `a`'s drop because the family's premise is that a by-value `Array` param whose element runs a user `Drop` stays with the CALLER, which is right while the callee only borrows it -- and wrong here, because the callee handed the elements back inside `w`, so the retraction of `a` at the call site is what is missing. `-O2` IS CLEAN (0 valgrind errors, rc=0), so this is invisible to any measurement taken above `-O0`, and `--interp` is rc=0 with byte-identical output to `-O2`. BOTH SURVIVING OUTPUTS LOOK WRONG IN ORDER AND THAT IS A SEPARATE QUESTION: they print `in d61 d62 held end`, running the element bodies at the callee's scope exit while the returned `w` is still alive and never running them when `w` dies, where a single-owner reading would put them after `end`. | — |
 | B-2026-09-22-14 | 2026-09-22 | codegen+interp | high | A BY-VALUE `Array` PARAM PUSHED INTO A LOCAL `Vec` IS FREED BY BOTH THE `Vec` AND THE CALLER, AT EVERY OPT LEVEL -- the `Vec.push` half of B-2026-09-22-7, which that row listed as NOT MEASURED and which its fix cannot reach because no struct literal is built at all, so the per-field mask channel never sees the move. `fn inner(a: Array[R, 2]) -> i64 { let mut v: Vec[Array[R, 2]] = []; v.push(a); return 7 }` over an `R` with a user `Drop`: `free(): double free detected in tcache 2`, exit 134 with 2 `Invalid free()` under valgrind at BOTH `-O0` and `-O2` AOT and under the JIT -- unlike its escaping-struct sibling B-2026-09-22-13, the optimiser does not hide this one, so any opt level reproduces it. The IR shows the two owners in different frames: `inner` calls `__karac_dropelems_vecofarr_Array_R_2` when the `Vec` dies, walking the pushed array's elements, while `main` still holds both `__karac_dropelems_array_R_2` and `__karac_drop_array_te_R_2` over the same buffers, because the family's premise is that a by-value `Array` param whose element runs a user `Drop` stays with the CALLER. `--interp` does not abort and instead runs every element body TWICE (`d81 d82 in d81 d82 end`), so it is not the oracle either -- the same split B-2026-09-22-8 records. | — |
+| B-2026-09-22-16 | 2026-09-22 | codegen | high | TWO ENUMS THAT SHARE A VARIANT NAME AND CARRY THE SAME HEAP-BEARING FIELD TYPES IN DIFFERENT ORDERS READ EACH OTHER'S FIELD OFFSETS AND SEGFAULT -- `enum A { P(Array[S, 2], String), Q }` beside `enum B { P(String, Array[S, 2]), Q }` dies with an 8-byte read SIX BYTES PAST the 2-byte `String` buffer and then a dereference of `0x2`, on an 11-line program with no params, no generics and no `unsafe`; `--interp` is correct. Rename either variant, or make the partner field an `i64`, and it is clean. IT ALSO MAKES THE COMPILER'S OUTPUT NON-REPRODUCIBLE: 8 builds of the one unchanged source give 2 distinct binaries, where every clean neighbour gives 1 | — |
 
 ### Relocated
 
