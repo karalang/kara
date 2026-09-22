@@ -42,6 +42,12 @@ LEG="${ASAN_LEG_NAME:--O0}"
 OPT_LEVEL="${ASAN_LEG_OPT_LEVEL:-0}"
 EXPECTED="${ASAN_LEG_EXPECTED:-$REPO/tests/asan-o0-known-failures.txt}"
 THREADS="${ASAN_O0_TEST_THREADS:-4}"
+# How much of each new failure's captured output to echo, and how many of
+# them to echo it for. See the CAPTURED OUTPUT block below for why this
+# exists at all; the caps are here so a leg that goes broadly red reports a
+# readable summary rather than a wall of text nobody scrolls through.
+CAPTURE_LINES="${ASAN_LEG_CAPTURE_LINES:-80}"
+CAPTURE_MAX="${ASAN_LEG_CAPTURE_MAX:-5}"
 LOG="$(mktemp -t asan-leg-XXXXXX.log)"
 trap 'rm -f "$LOG"' EXIT
 
@@ -253,6 +259,42 @@ if [[ -n "$new_failures" ]]; then
     echo "   codegen defect, or add the fixture to $(basename "$EXPECTED") WITH the"
     echo "   bug row that owns it."
   fi
+
+  # ECHO THE CAPTURED OUTPUT, because otherwise it does not survive this
+  # function returning. `$LOG` is a `mktemp` under `trap 'rm -f "$LOG"' EXIT`,
+  # so the ASAN report -- the stack, the bytes, whether it was a leak or a
+  # double free -- is deleted moments after the name is printed, and on CI
+  # there is no log file to go back to at all. A red on this leg was therefore
+  # a fixture NAME and nothing else, which is only enough to reproduce with if
+  # the failure reproduces for you: a leg red on the CI runner and green on a
+  # developer's box (B-2026-09-22-3) could not be diagnosed at all.
+  #
+  # This is the same shape as B-2026-09-19-5 and B-2026-09-22-1 one level up --
+  # a lane that reports that something failed and discards what it said. Naming
+  # a failure without its evidence is the weaker half of an instrument.
+  #
+  # Capped rather than unbounded, on both axes: a leg that goes broadly red
+  # would otherwise bury its own summary. When the cap bites it says so, and
+  # ASAN_LEG_CAPTURE_LINES / ASAN_LEG_CAPTURE_MAX raise it.
+  n_new="$(echo "$new_failures" | sed '/^$/d' | wc -l | tr -d ' ')"
+  echo
+  echo "   CAPTURED OUTPUT (this log is deleted when the leg exits -- this is the"
+  echo "   only place it survives, so read it here rather than re-running):"
+  shown=0
+  while IFS= read -r t; do
+    [[ -z "$t" ]] && continue
+    if [[ "$shown" -ge "$CAPTURE_MAX" ]]; then
+      echo "   ... $((n_new - shown)) more not shown (ASAN_LEG_CAPTURE_MAX=$CAPTURE_MAX)"
+      break
+    fi
+    shown=$((shown + 1))
+    echo "   ---- $t ----"
+    awk -v want="$t" -v max="$CAPTURE_LINES" '
+      /^---- .* stdout ----$/ { on = ($2 == want); next }
+      on && /^failures:$/     { on = 0 }
+      on { if (++n > max) { print "[truncated -- raise ASAN_LEG_CAPTURE_LINES]"; exit } print }
+    ' "$LOG" | sed 's/^/     /'
+  done <<<"$new_failures"
 fi
 if [[ -n "$now_passing" ]]; then
   status=1
