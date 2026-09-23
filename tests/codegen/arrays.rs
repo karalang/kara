@@ -5773,3 +5773,47 @@ fn main() {
     };
     assert_eq!(out, "one\n  y1:29\n  d1\ntwo\n  y320\n  d20\n  d21\n  d2\n  d3\ntail\n  y6\n  d5\n  d6\nboth-t\n  y7\n  d7\n  d8\nboth-f\n  y8\n  d7\n  d8\ndiscard\nstr\n  y30\nend\n", "got:\n{out}");
 }
+
+/// B-2026-09-23-17 — an owning local `Array` returned on SOME exits (bare,
+/// through a rebind, from an `if` tail, from inside a loop) runs its element
+/// bodies and frees its buffers exactly once on each exit, and an array passed
+/// to a callee that keeps nothing of it on the dies-inside exit stays with the
+/// caller (local and parameter spellings). Before the fix the local kept a
+/// static drop that the handing-back `return` never retracted: a double free at
+/// every opt level, `String` elements included, and a return inside a loop was
+/// not seen as an exit at all.
+#[test]
+fn e2e_local_array_returned_on_some_exits_is_dropped_once() {
+    let Some(out) = run_program(
+        r#"struct R { id: i64, s: String }
+impl Drop for R { fn drop(mut ref self) { println(f"  d{self.id}") } }
+fn mkr(i: i64) -> R { return R { id: i, s: f"heap-string-longer-than-sso-{i}" } }
+fn mka(k: i64) -> Array[R, 2] { return [mkr(k), mkr(k + 1)] }
+fn consume(a: Array[R, 2]) { println(f"  c{a[0].id}") }
+fn loc(c: bool) -> Array[R, 2] { let x: Array[R, 2] = [mkr(1), mkr(2)]; let m = x; if c { return m }; println("  dies"); return mka(8) }
+fn tailif(c: bool) -> Array[R, 2] { let x: Array[R, 2] = mka(3); if c { x } else { mka(8) } }
+fn inloop(c: bool) -> Array[R, 2] { let x: Array[R, 2] = mka(5); for i in 0..3 { if c and i == 1 { return x } }; println("  dies"); return mka(8) }
+fn passed(c: bool) -> Array[R, 2] { let x: Array[R, 2] = mka(11); if c { return x }; consume(x); println("  dies"); return mka(8) }
+fn ppass(a: Array[R, 2], c: bool) -> Array[R, 2] { if c { return a }; consume(a); println("  dies"); return mka(8) }
+fn strs(c: bool) -> Array[String, 2] { let x: Array[String, 2] = [f"heap-string-longer-than-sso-p", f"heap-string-longer-than-sso-qq"]; for i in 0..2 { if c and i == 1 { return x } }; [f"heap-string-longer-than-sso-rrr", f"heap-string-longer-than-sso-ssss"] }
+fn main() {
+    println("loc-t");    { let b = loc(true); println(f"  y{b[0].id}"); }
+    println("loc-f");    { let b = loc(false); println(f"  y{b[0].id}"); }
+    println("tailif-t"); { let b = tailif(true); println(f"  y{b[1].id}"); }
+    println("tailif-f"); { let b = tailif(false); println(f"  y{b[1].id}"); }
+    println("inloop-t"); { let b = inloop(true); println(f"  y{b[0].id}"); }
+    println("inloop-f"); { let b = inloop(false); println(f"  y{b[0].id}"); }
+    println("passed-t"); { let b = passed(true); println(f"  y{b[0].id}"); }
+    println("passed-f"); { let b = passed(false); println(f"  y{b[0].id}"); }
+    println("ppass-t");  { let b = ppass(mka(20), true); println(f"  y{b[0].id}"); }
+    println("ppass-f");  { let b = ppass(mka(20), false); println(f"  y{b[0].id}"); }
+    println("str-t");    { let b = strs(true); println(f"  y{b[1].len()}"); }
+    println("str-f");    { let b = strs(false); println(f"  y{b[1].len()}"); }
+    println("end")
+}
+"#,
+    ) else {
+        return;
+    };
+    assert_eq!(out, "loc-t\n  y1\n  d1\n  d2\nloc-f\n  d1\n  d2\n  dies\n  y8\n  d8\n  d9\ntailif-t\n  y4\n  d3\n  d4\ntailif-f\n  d3\n  d4\n  y9\n  d8\n  d9\ninloop-t\n  y5\n  d5\n  d6\ninloop-f\n  d5\n  d6\n  dies\n  y8\n  d8\n  d9\npassed-t\n  y11\n  d11\n  d12\npassed-f\n  c11\n  d11\n  d12\n  dies\n  y8\n  d8\n  d9\nppass-t\n  y20\n  d20\n  d21\nppass-f\n  c20\n  dies\n  d20\n  d21\n  y8\n  d8\n  d9\nstr-t\n  y30\nstr-f\n  y32\nend\n", "got:\n{out}");
+}

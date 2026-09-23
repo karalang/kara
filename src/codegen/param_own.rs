@@ -2896,6 +2896,64 @@ impl<'ctx> super::Codegen<'ctx> {
     /// declines (a callee-owned element already has a memory owner in the
     /// callee), and the shared conditional-return predicate without an
     /// outliving store.
+    /// B-2026-09-23-17 — is `handed`, a statement's handed-over expression, a
+    /// direct call that passes the flag-owned array `name` to a by-value
+    /// parameter the callee keeps NOTHING of?
+    ///
+    /// A caller-retained element (one that runs a user `Drop`, which
+    /// [`Self::array_param_elem_is_callee_owned`] declines) is still the
+    /// caller's after such a call: the callee neither frees it nor hands it
+    /// back. The statement disarm in `arm_conditional_store_flag` read every
+    /// by-value argument as a hand-over, so `consume(x);` cleared `x`'s single
+    /// flag-guarded slot and nothing ran the element bodies or freed the
+    /// buffers — 58 B in 2 blocks at `-O0` on the dies path. Kept armed, the
+    /// live-range end right after the call fires the slot, which is where the
+    /// interpreter runs those bodies.
+    ///
+    /// Every callee that DOES take something over keeps the disarm: one that
+    /// returns the param (bare, through a call, or as part of its result) or
+    /// moves it into a place that outlives the call.
+    pub(super) fn flagged_array_arg_stays_with_caller(&self, handed: &Expr, name: &str) -> bool {
+        if !self.payload_vars.cond_handback_array_params.contains(name) {
+            return false;
+        }
+        let ExprKind::Call { callee, args } = &handed.kind else {
+            return false;
+        };
+        let ExprKind::Identifier(fname) = &callee.kind else {
+            return false;
+        };
+        let mut hits = args
+            .iter()
+            .enumerate()
+            .filter(|(_, a)| matches!(&a.value.kind, ExprKind::Identifier(n) if n == name));
+        let (Some((i, _)), None) = (hits.next(), hits.next()) else {
+            return false;
+        };
+        let Some(program) = self.program_snapshot.as_deref() else {
+            return false;
+        };
+        let Some(f) = crate::codegen::declarations::find_function_ast(program, fname) else {
+            return false;
+        };
+        if f.generic_params.is_some() || self.is_coroutine_compiled(&f.name) {
+            return false;
+        }
+        let Some(param) = f.params.get(i) else {
+            return false;
+        };
+        let Some((elem_te, n)) = self.array_elem_and_len(&param.ty) else {
+            return false;
+        };
+        n > 0
+            && !self.array_param_elem_is_callee_owned(&elem_te)
+            && !crate::ast::fn_returns_param(f, i)
+            && !crate::ast::fn_returns_param_via_call(program, f, i)
+            && crate::ast::fn_returns_param_part_paths(f, i).is_empty()
+            && !crate::ast::fn_moves_param_into_outliving_place(f, i)
+            && !crate::ast::fn_moves_param_into_outliving_place_via_call(program, f, i)
+    }
+
     pub(super) fn conditional_array_handback_moves_to_callee(
         &self,
         callee_name: &str,
@@ -2965,6 +3023,84 @@ impl<'ctx> super::Codegen<'ctx> {
             sites.total == 1
         });
         acc
+    }
+
+    /// B-2026-09-23-17 — the locals of `func` that SOME exits hand back and
+    /// others do not (the union of every exit's roots, minus
+    /// [`Self::locals_returned_on_every_exit`]), each bound once and none a
+    /// parameter, closed under the bare rebinds they come from: `let m = x;`
+    /// with `m` in the set puts `x` in it too, so the owner the value starts
+    /// in carries the per-path slot the rebind inherits.
+    pub(super) fn locals_returned_on_some_exits(
+        &self,
+        func: &crate::ast::Function,
+    ) -> std::collections::HashSet<String> {
+        fn roots(e: &Expr, out: &mut std::collections::HashSet<String>) {
+            if let ExprKind::Identifier(n) = &e.kind {
+                out.insert(n.clone());
+            }
+            for inner in super::Codegen::payload_ctor_operands(e) {
+                roots(inner, out);
+            }
+        }
+        let mut rets: Vec<&Expr> = Vec::new();
+        Self::collect_return_exprs(&func.body, &mut rets);
+        let mut union = std::collections::HashSet::new();
+        for r in &rets {
+            roots(r, &mut union);
+        }
+        let always = self.locals_returned_on_every_exit(func);
+        let bound_once = |n: &str| {
+            if func
+                .params
+                .iter()
+                .any(|p| p.pattern.binding_names().iter().any(|b| b == n))
+            {
+                return false;
+            }
+            let mut sites = super::stmts::BindingSites::default();
+            self.count_block_bindings(&func.body, n, &mut sites);
+            sites.total == 1
+        };
+        let mut set: std::collections::HashSet<String> = union
+            .into_iter()
+            .filter(|n| !always.contains(n) && bound_once(n))
+            .collect();
+        loop {
+            let mut grew = false;
+            for stmt in &func.body.stmts {
+                if let crate::ast::StmtKind::Let { pattern, value, .. } = &stmt.kind {
+                    if let (crate::ast::PatternKind::Binding(dst), ExprKind::Identifier(src)) =
+                        (&pattern.kind, &value.kind)
+                    {
+                        if set.contains(dst) && !set.contains(src) && bound_once(src) {
+                            set.insert(src.clone());
+                            grew = true;
+                        }
+                    }
+                }
+            }
+            if !grew {
+                break;
+            }
+        }
+        set
+    }
+
+    /// B-2026-09-23-17 — the one drop a flag-managed `Array` slot runs: its
+    /// element bodies then its element memory when the element runs a user
+    /// `Drop`, else the memory walk alone.
+    pub(super) fn emit_array_flagged_drop_fn(
+        &mut self,
+        elem_ty: inkwell::types::BasicTypeEnum<'ctx>,
+        elem_te: &TypeExpr,
+        n: u32,
+    ) -> Option<inkwell::values::FunctionValue<'ctx>> {
+        if self.elem_te_runs_user_drop(elem_te) {
+            self.emit_array_bodies_then_memory_fn(elem_ty, elem_te, n)
+        } else {
+            self.synthesize_array_drop_fn_te(elem_ty, elem_te, n)
+        }
     }
 
     /// B-2026-09-23-15 — `__karac_dropall_<array drop>`: the element BODIES,

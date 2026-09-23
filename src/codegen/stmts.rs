@@ -9908,6 +9908,25 @@ impl<'ctx> super::Codegen<'ctx> {
                                         .contains(src.as_str()),
                                     _ => false,
                                 };
+                                // B-2026-09-23-17 — an owning `Array` local
+                                // that SOME exits hand back: the same single
+                                // flag-guarded slot, in place of the static
+                                // memory drop below. That drop was retracted
+                                // by nothing on those exits (a local was only
+                                // ever retracted on the parameter question), so
+                                // the caller's binding freed the buffers again:
+                                // a double free at every opt level, `String`
+                                // elements included.
+                                let flag_owned_local = !inherits_handback
+                                    && !rebind_of_live_array_owner
+                                    && self
+                                        .payload_vars
+                                        .cond_returned_locals
+                                        .contains(var_name.as_str())
+                                    && arr_parts.as_ref().is_some_and(|(e, n)| {
+                                        *n > 0 && self.array_elem_owns_callee_drop(e)
+                                    });
+                                let inherits_handback = inherits_handback || flag_owned_local;
                                 if inherits_handback {
                                     if let Some((elem_te, n)) =
                                         arr_parts.clone().or_else(|| match &value.kind {
@@ -9920,8 +9939,8 @@ impl<'ctx> super::Codegen<'ctx> {
                                         })
                                     {
                                         let elem_ty = self.llvm_type_for_type_expr(&elem_te);
-                                        if let Some(all) = self
-                                            .emit_array_bodies_then_memory_fn(elem_ty, &elem_te, n)
+                                        if let Some(all) =
+                                            self.emit_array_flagged_drop_fn(elem_ty, &elem_te, n)
                                         {
                                             self.var_types
                                                 .array_var_elem_te
@@ -24839,6 +24858,15 @@ impl<'ctx> super::Codegen<'ctx> {
                     Self::collect_returns_in_expr(&arm.body, out);
                 }
             }
+            // B-2026-09-23-17 — a `return` inside a loop body is an exit like
+            // any other. Missing it made a local returned only from a loop read
+            // as returned on NO exit, so it kept a static drop the `return`
+            // then retracted on every path: a leak where the loop fell through
+            // and a double free of the user `Drop` elements where it returned.
+            ExprKind::While { body, .. }
+            | ExprKind::WhileLet { body, .. }
+            | ExprKind::For { body, .. }
+            | ExprKind::Loop { body, .. } => Self::collect_returns_in_block(body, out, false),
             _ => {}
         }
     }

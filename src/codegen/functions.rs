@@ -1548,6 +1548,7 @@ impl<'ctx> super::Codegen<'ctx> {
         self.payload_vars.caller_retained_array_views.clear();
         self.payload_vars.cond_handback_array_params.clear();
         self.payload_vars.always_returned_locals = self.locals_returned_on_every_exit(func);
+        self.payload_vars.cond_returned_locals = self.locals_returned_on_some_exits(func);
         self.payload_vars.deboxed_payload_box_ptrs.clear();
         self.payload_vars.deferred_payload_box_ptrs.clear();
         self.payload_vars.pending_box_field_zeroes.clear();

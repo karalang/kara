@@ -13652,6 +13652,7 @@ impl<'ctx> super::Codegen<'ctx> {
             .cond_move_drop_flags
             .keys()
             .filter(|n| hands_over(handed, n))
+            .filter(|n| !self.flagged_array_arg_stays_with_caller(handed, n))
             .cloned()
             .collect();
         let bool_t = self.context.bool_type();

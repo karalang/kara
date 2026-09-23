@@ -434,6 +434,14 @@ pub(crate) struct PayloadVars<'ctx> {
     /// it on the others. Filled by `compile_function`; empty (the old answer)
     /// everywhere else, the mono leg included.
     pub(crate) always_returned_locals: std::collections::HashSet<String>,
+    /// B-2026-09-23-17 — locals of the function being compiled that SOME exits
+    /// hand back and others do not, each bound once, plus the locals they are
+    /// rebound from (`let m = x; if c { return m }` puts `x` here too). An
+    /// owning `Array` let of one of these takes a single flag-guarded drop slot
+    /// instead of a static memory drop, so the exits that hand it back clear
+    /// the flag and the others free it. Filled by `compile_function`; empty
+    /// everywhere else, the mono leg included.
+    pub(crate) cond_returned_locals: std::collections::HashSet<String>,
     /// B-2026-08-06-10 — match-arm payload bindings that were DEBOXED out of an
     /// enum payload box: `binding slot -> box pointer`.
     ///

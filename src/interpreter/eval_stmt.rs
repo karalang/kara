@@ -5870,11 +5870,63 @@ impl<'a> super::Interpreter<'a> {
             .cond_store_param_names
             .iter()
             .filter(|n| hands_over(handed, n))
+            .filter(|n| !self.user_drop_array_arg_stays_with_caller(handed, n))
             .cloned()
             .collect();
         for n in hits {
             self.moved_out_user_drop_bindings.insert(n);
         }
+    }
+
+    /// B-2026-09-23-17 — does `handed` pass the `Array` binding `name`, whose
+    /// elements run a user `Drop` body, straight to a free function that keeps
+    /// nothing of it?
+    ///
+    /// Such an array stays with the caller across the call — a by-value
+    /// `Array` param of user-`Drop` elements is caller-retained, which is why
+    /// the unconditional `consume(a); …` runs the element bodies at `a`'s own
+    /// scope exit. The disarm above read the call as a hand-over, so on the
+    /// exit where a conditionally-returned param was only passed along the
+    /// bodies never ran (`c1 dies y8` against `c1 dies d1 d2 y8`). Codegen's
+    /// twin is `flagged_array_arg_stays_with_caller`, on the same predicates.
+    fn user_drop_array_arg_stays_with_caller(&self, handed: &Expr, name: &str) -> bool {
+        let ExprKind::Call { callee, args } = &handed.kind else {
+            return false;
+        };
+        let ExprKind::Identifier(fname) = &callee.kind else {
+            return false;
+        };
+        match self.env.get(name) {
+            Some(v @ Value::Array(_)) if self.field_value_carries_user_drop(&v) => {}
+            _ => return false,
+        }
+        let mut hits = args
+            .iter()
+            .enumerate()
+            .filter(|(_, a)| matches!(&a.value.kind, ExprKind::Identifier(n) if n == name));
+        let (Some((i, _)), None) = (hits.next(), hits.next()) else {
+            return false;
+        };
+        let Some(f) = self.callee_fn_for_param_ownership(fname) else {
+            return false;
+        };
+        if f.generic_params.is_some() {
+            return false;
+        }
+        let Some(param) = f.params.get(i) else {
+            return false;
+        };
+        let is_array_param = match &param.ty.kind {
+            crate::ast::TypeKind::Array { .. } => true,
+            crate::ast::TypeKind::Path(p) => p.segments.len() == 1 && p.segments[0] == "Array",
+            _ => false,
+        };
+        is_array_param
+            && !crate::ast::fn_returns_param(f, i)
+            && !crate::ast::fn_returns_param_via_call(self.program, f, i)
+            && crate::ast::fn_returns_param_part_paths(f, i).is_empty()
+            && !crate::ast::fn_moves_param_into_outliving_place(f, i)
+            && !crate::ast::fn_moves_param_into_outliving_place_via_call(self.program, f, i)
     }
 
     pub(crate) fn record_conditional_move_tail(&mut self, expr: &Expr, cleanup: &[CleanupAction]) {

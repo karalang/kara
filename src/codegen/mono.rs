@@ -185,6 +185,7 @@ pub(super) struct SavedVarSideTables<'ctx> {
     caller_retained_array_views: std::collections::HashSet<String>,
     cond_handback_array_params: std::collections::HashSet<String>,
     always_returned_locals: std::collections::HashSet<String>,
+    cond_returned_locals: std::collections::HashSet<String>,
     deboxed_payload_box_ptrs:
         HashMap<inkwell::values::PointerValue<'ctx>, inkwell::values::PointerValue<'ctx>>,
 }
@@ -1692,6 +1693,7 @@ impl<'ctx> super::Codegen<'ctx> {
                 &mut self.payload_vars.cond_handback_array_params,
             ),
             always_returned_locals: std::mem::take(&mut self.payload_vars.always_returned_locals),
+            cond_returned_locals: std::mem::take(&mut self.payload_vars.cond_returned_locals),
             deboxed_payload_box_ptrs: std::mem::take(
                 &mut self.payload_vars.deboxed_payload_box_ptrs,
             ),
@@ -1733,6 +1735,7 @@ impl<'ctx> super::Codegen<'ctx> {
         self.payload_vars.caller_retained_array_views = saved.caller_retained_array_views;
         self.payload_vars.cond_handback_array_params = saved.cond_handback_array_params;
         self.payload_vars.always_returned_locals = saved.always_returned_locals;
+        self.payload_vars.cond_returned_locals = saved.cond_returned_locals;
         self.payload_vars.deboxed_payload_box_ptrs = saved.deboxed_payload_box_ptrs;
     }
 
@@ -4699,6 +4702,7 @@ impl<'ctx> super::Codegen<'ctx> {
         self.payload_vars.caller_retained_array_views.clear();
         self.payload_vars.cond_handback_array_params.clear();
         self.payload_vars.always_returned_locals.clear();
+        self.payload_vars.cond_returned_locals.clear();
         self.payload_vars.deboxed_payload_box_ptrs.clear();
         self.payload_vars.inline_result_payload_vars.clear();
         self.payload_vars.inline_option_map_payload_vars.clear();
