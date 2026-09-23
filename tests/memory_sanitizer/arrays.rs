@@ -7762,3 +7762,49 @@ fn main() {
         "asan_local_array_returned_on_some_exits_is_dropped_once",
     );
 }
+
+/// B-2026-09-23-18 — a by-value parameter moved into a local through an `if`
+/// or `match` arm (`let r = if c { a } else { mk() }`) and that local handed
+/// back is owned once on each path: callee-side on the path where the arm does
+/// not take it, by the result on the path where it does. Before the fix the
+/// single leaf `r` read as "never returns the param", so the caller kept its
+/// argument while `r` handed the same value back — both element bodies twice
+/// under `--interp` and a double free on every compiled surface for an
+/// `Array`, and an agreed double body for a struct.
+#[test]
+fn asan_param_moved_into_local_through_branch_is_dropped_once() {
+    assert_clean_asan_run(
+        r#"struct R { id: i64, s: String }
+impl Drop for R { fn drop(mut ref self) { println(f"  d{self.id}") } }
+struct H { v: i64 }
+fn mkr(i: i64) -> R { return R { id: i, s: f"heap-string-longer-than-sso-{i}" } }
+fn mka(k: i64) -> Array[R, 2] { return [mkr(k), mkr(k + 1)] }
+fn letif(a: Array[R, 2], c: bool) -> Array[R, 2] { let r: Array[R, 2] = if c { a } else { mka(8) }; println("  mid"); r }
+fn letmatch(a: Array[R, 2], c: bool) -> Array[R, 2] { let r: Array[R, 2] = match c { true => a, false => mka(8) }; println("  mid"); return r }
+fn someret(a: Array[R, 2], c: bool, d: bool) -> Array[R, 2] { let r: Array[R, 2] = if c { a } else { mka(8) }; if d { return r }; println("  mid"); mka(5) }
+fn sletif(a: R, c: bool) -> R { let r: R = if c { a } else { mkr(8) }; println("  mid"); r }
+impl H { fn m(self, a: R, c: bool) -> R { let r: R = match c { true => a, false => mkr(8) }; println("  mid"); r } }
+fn main() {
+    println("letif-t");   { let b = letif(mka(1), true); println(f"  y{b[0].id}"); }
+    println("letif-f");   { let b = letif(mka(1), false); println(f"  y{b[0].id}"); }
+    println("match-t");   { let a: Array[R, 2] = mka(1); let b = letmatch(a, true); println(f"  y{b[1].id}"); }
+    println("match-f");   { let a: Array[R, 2] = mka(1); let b = letmatch(a, false); println(f"  y{b[1].id}"); }
+    println("some-tt");   { let b = someret(mka(1), true, true); println(f"  y{b[0].id}"); }
+    println("some-tf");   { let b = someret(mka(1), true, false); println(f"  y{b[0].id}"); }
+    println("struct-t");  { let a = mkr(1); let b = sletif(a, true); println(f"  y{b.id}"); }
+    println("struct-f");  { let a = mkr(1); let b = sletif(a, false); println(f"  y{b.id}"); }
+    println("method-t");  { let h = H { v: 0 }; let b = h.m(mkr(1), true); println(f"  y{b.id}"); }
+    println("end")
+}
+"#,
+        &[
+            "letif-t", "  mid", "  y1", "  d1", "  d2", "letif-f", "  mid", "  d1", "  d2", "  y8",
+            "  d8", "  d9", "match-t", "  mid", "  y2", "  d1", "  d2", "match-f", "  mid", "  d1",
+            "  d2", "  y9", "  d8", "  d9", "some-tt", "  y1", "  d1", "  d2", "some-tf", "  d1",
+            "  d2", "  mid", "  y5", "  d5", "  d6", "struct-t", "  mid", "  y1", "  d1",
+            "struct-f", "  mid", "  d1", "  y8", "  d8", "method-t", "  mid", "  y1", "  d1",
+            "end",
+        ],
+        "asan_param_moved_into_local_through_branch_is_dropped_once",
+    );
+}

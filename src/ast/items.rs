@@ -3986,6 +3986,75 @@ pub fn fn_conditionally_returns_param_bare(
         leaf_tails(tail, &mut leaves);
     }
     collect_return_leaves_block(&f.body, &mut leaves);
+    // B-2026-09-23-18 — a leaf naming a local that the body binds exactly once,
+    // at its top level, by an immutable `let x = <if / if let / match>` stands
+    // for that branch expression's own leaves. `let r = if c { a } else { mk() };
+    // …; r` hands `a` back on one path exactly as the tail `if c { a } else
+    // { mk() }` does, and the `let` initializer is already an escaping site on
+    // both backends, so the arm tail that moves `a` into `r` clears `a`'s flag
+    // the same way. Unexpanded, the single leaf `r` read as "never returns the
+    // param": the caller kept its argument AND `r` handed the same value back,
+    // two owners on the path that took the arm — both element bodies twice
+    // under `--interp`, a double free on every compiled surface.
+    //
+    // ONLY for a parameter whose conditional return both backends can own
+    // callee-side: a plain (non-generic, non-`shared`) user struct, or a fixed
+    // `Array`. For any other type the flip stands the caller down with nothing
+    // registered in the callee, so the dies-inside path LOSES its body — the
+    // gap the tail spelling already has for an `Option[R]` parameter (`if c { a }
+    // else { None }` runs no body at `c = false` on every surface) — and a
+    // generic parameter flipped only the interpreter, splitting the backends.
+    let expandable_param = match &param.ty.kind {
+        crate::ast::TypeKind::Array { .. } => true,
+        crate::ast::TypeKind::Path(path) if path.segments.len() == 1 => {
+            path.segments[0] == "Array"
+                || (path.generic_args.is_none()
+                    && program.is_some_and(|p| {
+                        p.items.iter().any(|it| {
+                            matches!(it, Item::StructDef(s)
+                                if s.name == path.segments[0] && !s.is_shared && !s.is_par)
+                        })
+                    }))
+        }
+        _ => false,
+    };
+    let bound = rebind_walk(f).bound;
+    let branch_let_init = |x: &str| -> Option<&Expr> {
+        if !expandable_param {
+            return None;
+        }
+        f.body.stmts.iter().find_map(|st| match &st.kind {
+            StmtKind::Let {
+                is_mut: false,
+                pattern,
+                value,
+                ..
+            } if matches!(&pattern.kind, PatternKind::Binding(n) if n == x)
+                && matches!(
+                    value.kind,
+                    ExprKind::If { .. } | ExprKind::IfLet { .. } | ExprKind::Match { .. }
+                ) =>
+            {
+                Some(value)
+            }
+            _ => None,
+        })
+    };
+    let leaves: Vec<&Expr> = leaves
+        .into_iter()
+        .flat_map(|leaf| {
+            if let ExprKind::Identifier(x) = &leaf.kind {
+                if !name.iter().any(|a| a == x) && bound.get(x.as_str()) == Some(&1) {
+                    if let Some(init) = branch_let_init(x) {
+                        let mut sub = Vec::new();
+                        leaf_tails(init, &mut sub);
+                        return sub;
+                    }
+                }
+            }
+            vec![leaf]
+        })
+        .collect();
     // A single leaf is the unconditional shape — no branch, nothing to guard.
     if leaves.len() < 2 {
         return false;
