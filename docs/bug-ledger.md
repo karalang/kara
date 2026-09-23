@@ -95,10 +95,10 @@ distinguish "bugs flattening" from "we stopped writing them down."
 | run-vs-build | 486 |
 | miscompile | 438 |
 | leak | 403 |
-| double-free | 279 |
-| missing-feature | 205 |
-| codegen-gap | 186 |
-| other | 148 |
+| double-free | 281 |
+| missing-feature | 206 |
+| codegen-gap | 188 |
+| other | 149 |
 | diagnostics | 134 |
 | perf | 117 |
 | false-positive | 108 |
@@ -110,10 +110,10 @@ distinguish "bugs flattening" from "we stopped writing them down."
 
 | surface | total |
 |---|---|
-| codegen | 1995 |
-| interp | 529 |
-| typecheck | 306 |
-| other | 109 |
+| codegen | 2000 |
+| interp | 530 |
+| typecheck | 307 |
+| other | 110 |
 | ownership | 75 |
 | cli | 73 |
 | autopar | 56 |
@@ -367,6 +367,9 @@ registered in the callee's prologue, not by-value struct params in general. | �
 | B-2026-09-23-25 | 2026-09-23 | codegen | high | A BY-VALUE `Array[String, N]` PARAM RETURNED ON SOME EXITS IS FREED TWICE ON THE EXIT THAT HANDS IT BACK, ON EVERY COMPILED SURFACE -- `fn f(a: Array[String, 2], c: bool) -> Array[String, 2] { if c { a } else { [..] } }` at `c = true` aborts `free(): double free detected in tcache 2` on the JIT, `-O0` and `-O2` (8 valgrind errors) while `--interp` is right; the `let r = if c { a } else { [..] }; r` spelling is identical | — |
 | B-2026-09-23-26 | 2026-09-23 | codegen+interp | high | AN `Option[R]` PARAM HANDED BACK THROUGH A `let`-BOUND BRANCH SEGFAULTS ON EVERY COMPILED SURFACE AND RUNS ITS BODY TWICE UNDER `--interp` -- `let r: Option[R] = if c { a } else { None }; println("mid"); r` at `c = true` dies with SIGSEGV at `-O0` (4 invalid reads, and the buffered `mid` is lost with it), `double free` at `-O2`, and prints `mid d1 d1 got` under `--interp`; the TAIL spelling `if c { a } else { None }` LOSES the body at `c = false` on all four surfaces | — |
 | B-2026-09-23-27 | 2026-09-23 | codegen+interp | low | TWO SPELLINGS OF B-2026-09-23-18'S HAND-BACK THAT ITS FIX DOES NOT REACH RUN A `Drop` BODY TWICE ON ALL FOUR SURFACES, memory-clean -- a REBIND of the `let`-bound local (`let r: R = if c { a } else { mkr(8) }; let q = r; q` prints `mid d1 y1 d1`) and a GENERIC param (`fn f[T](a: T, c: bool, d: T) -> T { let r: T = if c { a } else { d }; .. r }` prints `mid d8 d1 y1 d1` at `c = true` and `mid d8 d1 y8 d8` at `c = false`) | — |
+| B-2026-09-23-31 | 2026-09-23 | codegen | high | MEASURED: a heap field copied out of a borrowed TUPLE, or out of a `ref v[i]` binding, is freed twice on every compiled surface -- `let p = ref ps[1]; let name = p.0;` over `Vec[(String, i64)]`, `for p in ps.iter() { let n = p.0; }`, and `let q = ref qs[0]; let m = q.name;` over a struct abort with `free(): double free` under JIT and both AOT modes, with no `borrow_projection_copy` warning; `--interp` is right | — |
+| B-2026-09-23-32 | 2026-09-23 | codegen | medium | MEASURED: `names.iter().enumerate().map(|q| q.0 + q.1.1).collect()` over `Vec[(String, i64)]` frees a String twice on every compiled surface although the closure reads only the index and an integer; `--interp` is right | — |
+| B-2026-09-23-33 | 2026-09-23 | other | low | MEASURED: an ASAN fixture whose program has a PARSE error still passes -- `run_under_asan_opts_inner` returns `None` on parse errors and `assert_clean_asan_run` prints `setup failed -- skipping` and reports ok, although typecheck (B-2026-08-08-5) and codegen (B-2026-08-05-35) failures already fail the harness | — |
 
 ### Relocated
 
@@ -2974,6 +2977,9 @@ registered in the callee's prologue, not by-value struct params in general. | �
 | B-2026-09-23-17 | codegen | high | A LOCAL `Array` RETURNED ON SOME EXITS AND NOT OTHERS IS FREED TWICE ON THE EXIT THAT HANDS IT BACK, AT EVERY OPT LEVEL AND FOR `String` ELEMENTS TOO… | 5233bbad4 |
 | B-2026-09-23-18 | codegen+interp | medium | A CALLER-RETAINED `Array` PARAM MOVED INTO A LOCAL THROUGH AN `if` ARM AND THEN RETURNED IS WRONG ON EVERY SURFACE -- `let r: Array[R, 2] = if c { a… | 48c2bd0e0 |
 | B-2026-09-23-19 | interp | medium | `--interp` RUNS NO ELEMENT `Drop` BODY FOR A CALLER-RETAINED `Array` PARAM THAT AN INSTANCE METHOD LETS DIE ON ONE EXIT AND HANDS BACK ON ANOTHER, WH… | 5d5eadfff |
+| B-2026-09-23-28 | typecheck+interp+codegen | high | MEASURED: a tuple pattern over a BORROWED tuple is refused at typecheck (`tuple pattern used but type is `ref (i64, i64)``), so `for (a, b) in edges`… | a4ce83d04 |
+| B-2026-09-23-29 | codegen | medium | MEASURED: every fused iterator terminal behind a DESTRUCTURING closure param or an `enumerate()` source fails to compile (`no handler for method 'fil… | a4ce83d04 |
+| B-2026-09-23-30 | codegen | medium | MEASURED: a `for` over a call that returns `Slice[T]` reaches the unlowered-source error under JIT and both AOT modes while `--interp` runs it -- `fo… | a4ce83d04 |
 
 </details>
 
