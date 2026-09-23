@@ -41268,6 +41268,98 @@ fn test_mut_ref_heap_does_not_read_as_value() {
     );
 }
 
+#[test]
+fn test_ref_scalar_reads_as_value_under_operators_and_conditions() {
+    // B-2026-09-23-2: the value positions B-2026-07-15-3 (42a9f2c) did not
+    // reach. A `ref` / `mut ref` bool reads as its value as an `if` / `while`
+    // condition, a match guard, and under `not` / `and` / `or`; a borrowed
+    // integer reads as its value under unary `-`, `~` and the five bitwise
+    // operators; a borrowed float under unary `-`. Before the fix every one
+    // of these was refused while `flag == true` and `x + 1` were accepted.
+    typecheck_ok(
+        "fn ops(flag: mut ref bool, x: mut ref i64, b: mut ref u8, r: ref f64, seen: ref bool) -> i64 {\n\
+             let mut out = 0;\n\
+             if flag { out = out + 1; }\n\
+             if not flag { out = out + 1000; }\n\
+             if flag and seen { out = out + 2; }\n\
+             if seen or flag { out = out + 4; }\n\
+             let neg = -x;\n\
+             let inv = ~x;\n\
+             let bits = (x & 6) + (x | 1) + (x ^ 3) + (x << 2) + (x >> 1);\n\
+             let nb1 = b & 15;\n\
+             let nb2 = b | 16;\n\
+             let nb3 = b >> 1;\n\
+             let nb4 = ~b;\n\
+             let nb5 = b ^ 255;\n\
+             let nb6 = b << 1;\n\
+             let nr = -r;\n\
+             let pick = if flag { 10 } else { 20 };\n\
+             let mut spins = 0;\n\
+             while flag {\n\
+                 spins = spins + 1;\n\
+                 if spins == 3 { flag = false; }\n\
+             }\n\
+             let g = match 7 {\n\
+                 v if seen => v * 100,\n\
+                 v => v,\n\
+             };\n\
+             println(f\"neg {neg} inv {inv} bits {bits} nb {nb1} {nb2} {nb3} {nb4} {nb5} {nb6} nr {nr} pick {pick} spins {spins} g {g}\");\n\
+             x = x + 1;\n\
+             b = b + 1;\n\
+             return out;\n\
+         }\n\
+         \n\
+         fn main() {\n\
+             let mut flag = true;\n\
+             let mut x = 5;\n\
+             let mut b: u8 = 100;\n\
+             let r = 1.5;\n\
+             let seen = false;\n\
+             let o1 = ops(mut flag, mut x, mut b, r, seen);\n\
+             println(f\"o1 {o1} flag {flag} x {x} b {b}\");\n\
+             let o2 = ops(mut flag, mut x, mut b, r, true);\n\
+             println(f\"o2 {o2} flag {flag} x {x} b {b}\");\n\
+         }",
+    );
+}
+
+#[test]
+fn test_ref_scalar_operator_peel_keeps_its_diagnostics() {
+    // Negative guard for B-2026-09-23-2: the peel happens only when the
+    // pointee is the kind the operator takes, so a WRONG borrowed type is
+    // still refused and still reported as the type the user wrote.
+    let cases = [
+        (
+            "fn f(x: mut ref i64) -> bool { not x }\nfn main() { let mut n = 1; println(f(mut n)); }",
+            "unary 'not' requires 'bool', found 'mut ref i64'",
+        ),
+        (
+            "fn f(b: mut ref bool) -> bool { -b }\nfn main() { let mut t = true; println(f(mut t)); }",
+            "unary '-' requires numeric type, found 'mut ref bool'",
+        ),
+        (
+            "fn f(r: ref f64) -> f64 { r & 1.0 }\nfn main() { println(f(1.5)); }",
+            "bitwise operator requires integer type, found 'ref f64'",
+        ),
+        (
+            "fn f(s: ref String) -> i64 { if s { 1 } else { 2 } }\nfn main() { println(f(\"a\")); }",
+            "condition must be 'bool', found 'ref String'",
+        ),
+        (
+            "fn f(x: ref i64) -> bool { x and true }\nfn main() { println(f(1)); }",
+            "logical operator requires 'bool', found 'ref i64'",
+        ),
+    ];
+    for (src, want) in cases {
+        let errors = typecheck_errors(src);
+        assert!(
+            errors.iter().any(|e| e.to_string().contains(want)),
+            "expected `{want}` for {src:?}, got: {:?}",
+            errors.iter().map(|e| e.to_string()).collect::<Vec<_>>()
+        );
+    }
+}
+
 // ── GPU-SLIP-4h: default interleaved layout for un-layouted gpu.upload ──
 //
 // `gpu.upload(vec)` on a plain `Vec[S]` (all-f32 struct, NO `layout` block

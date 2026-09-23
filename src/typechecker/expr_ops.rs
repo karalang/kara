@@ -145,10 +145,35 @@ fn appended_cast_end_offset(expr: &Expr) -> Option<usize> {
 /// of a non-numeric type still reaches the "requires numeric type" diagnostic.
 /// Scalar borrows don't nest, so one level suffices.
 fn deref_numeric_scalar(ty: Type) -> Type {
+    deref_scalar_where(ty, is_numeric)
+}
+
+/// Peel a single `ref` / `mut ref` off a scalar whose pointee satisfies
+/// `keep`, leaving every other type untouched — the one read-through rule
+/// behind `deref_numeric_scalar`, `deref_integer_scalar` and
+/// `deref_bool_scalar`. B-2026-09-23-2: 42a9f2c made a borrowed scalar read
+/// as its value in let / argument / index / cast positions and 6f00795b did
+/// it for arithmetic, but conditions, `not`, unary `-`, `~`, `and` / `or`
+/// and the bitwise operators still compared the UNPEELED type, so
+/// `if flag == true` compiled and `if flag` did not. A pointee that fails
+/// `keep` is left borrowed, so the operator's own diagnostic still reports
+/// the type the user wrote.
+fn deref_scalar_where(ty: Type, keep: impl Fn(&Type) -> bool) -> Type {
     match &ty {
-        Type::Ref(inner) | Type::MutRef(inner) if is_numeric(inner) => (**inner).clone(),
+        Type::Ref(inner) | Type::MutRef(inner) if keep(inner) => (**inner).clone(),
         _ => ty,
     }
+}
+
+/// `deref_scalar_where` for the bitwise operators and `~`.
+fn deref_integer_scalar(ty: Type) -> Type {
+    deref_scalar_where(ty, is_integer)
+}
+
+/// `deref_scalar_where` for `not`, `and` / `or` and `if` / `while` / guard
+/// conditions.
+pub(super) fn deref_bool_scalar(ty: Type) -> Type {
+    deref_scalar_where(ty, |t| *t == Type::Bool)
 }
 
 /// The `[elem, shape]` generic-arg list of a `Tensor[T, Shape]` type,
@@ -2527,16 +2552,22 @@ impl<'a> super::TypeChecker<'a> {
         // any borrow surviving here wraps a scalar; stripping only when the
         // pointee is numeric preserves the "requires numeric type" diagnostic
         // for a non-numeric borrow.
-        let (left_ty, right_ty) = if matches!(
-            op,
-            BinOp::Add | BinOp::Sub | BinOp::Mul | BinOp::Div | BinOp::Mod
-        ) {
-            (
+        //
+        // The same read-through applies to the bitwise and logical operators
+        // (B-2026-09-23-2): an integer borrow under `& | ^ << >>` and a bool
+        // borrow under `and` / `or`, each peeled only when the pointee is the
+        // kind the operator takes.
+        let (left_ty, right_ty) = match op {
+            BinOp::Add | BinOp::Sub | BinOp::Mul | BinOp::Div | BinOp::Mod => (
                 deref_numeric_scalar(left_ty),
                 deref_numeric_scalar(right_ty),
-            )
-        } else {
-            (left_ty, right_ty)
+            ),
+            BinOp::BitAnd | BinOp::BitOr | BinOp::BitXor | BinOp::Shl | BinOp::Shr => (
+                deref_integer_scalar(left_ty),
+                deref_integer_scalar(right_ty),
+            ),
+            BinOp::And | BinOp::Or => (deref_bool_scalar(left_ty), deref_bool_scalar(right_ty)),
+            _ => (left_ty, right_ty),
         };
 
         // Q4 literal promotion: for arithmetic, comparison, and equality ops,
@@ -3129,6 +3160,16 @@ impl<'a> super::TypeChecker<'a> {
         if ty == Type::Error {
             return Type::Error;
         }
+        // A borrowed scalar reads as its value under the value operators
+        // (B-2026-09-23-2), so `not flag` / `-x` / `~x` on a `ref` or
+        // `mut ref` param type as they would on the bare scalar. `ref` and
+        // `*` keep the borrow: they are ABOUT it.
+        let ty = match op {
+            UnaryOp::Neg => deref_numeric_scalar(ty),
+            UnaryOp::Not => deref_bool_scalar(ty),
+            UnaryOp::BitNot => deref_integer_scalar(ty),
+            _ => ty,
+        };
 
         match op {
             // `ref expr` — a shared borrow in expression position. The result

@@ -1114,6 +1114,64 @@ fn test_e2e_mut_ref_scalar_value_reads() {
     }
 }
 
+/// B-2026-09-23-2 — a borrowed scalar reads as its value as an `if` /
+/// `while` condition, a match guard, and under `not`, `and` / `or`, unary
+/// `-`, `~` and the five bitwise operators (a `u8` borrow included, so the
+/// narrow-width path is covered), and the writes through the borrow reach the
+/// caller. Strict: the interpreter twin `test_ref_scalar_operators_and_
+/// conditions` asserts the same bytes.
+#[test]
+fn test_e2e_ref_scalar_operators_and_conditions() {
+    assert_eq!(
+        run_program(
+            "fn ops(flag: mut ref bool, x: mut ref i64, b: mut ref u8, r: ref f64, seen: ref bool) -> i64 {\n\
+                 let mut out = 0;\n\
+                 if flag { out = out + 1; }\n\
+                 if not flag { out = out + 1000; }\n\
+                 if flag and seen { out = out + 2; }\n\
+                 if seen or flag { out = out + 4; }\n\
+                 let neg = -x;\n\
+                 let inv = ~x;\n\
+                 let bits = (x & 6) + (x | 1) + (x ^ 3) + (x << 2) + (x >> 1);\n\
+                 let nb1 = b & 15;\n\
+                 let nb2 = b | 16;\n\
+                 let nb3 = b >> 1;\n\
+                 let nb4 = ~b;\n\
+                 let nb5 = b ^ 255;\n\
+                 let nb6 = b << 1;\n\
+                 let nr = -r;\n\
+                 let pick = if flag { 10 } else { 20 };\n\
+                 let mut spins = 0;\n\
+                 while flag {\n\
+                     spins = spins + 1;\n\
+                     if spins == 3 { flag = false; }\n\
+                 }\n\
+                 let g = match 7 {\n\
+                     v if seen => v * 100,\n\
+                     v => v,\n\
+                 };\n\
+                 println(f\"neg {neg} inv {inv} bits {bits} nb {nb1} {nb2} {nb3} {nb4} {nb5} {nb6} nr {nr} pick {pick} spins {spins} g {g}\");\n\
+                 x = x + 1;\n\
+                 b = b + 1;\n\
+                 return out;\n\
+             }\n\
+             \n\
+             fn main() {\n\
+                 let mut flag = true;\n\
+                 let mut x = 5;\n\
+                 let mut b: u8 = 100;\n\
+                 let r = 1.5;\n\
+                 let seen = false;\n\
+                 let o1 = ops(mut flag, mut x, mut b, r, seen);\n\
+                 println(f\"o1 {o1} flag {flag} x {x} b {b}\");\n\
+                 let o2 = ops(mut flag, mut x, mut b, r, true);\n\
+                 println(f\"o2 {o2} flag {flag} x {x} b {b}\");\n\
+             }"
+        ),
+        Some("neg -5 inv -6 bits 37 nb 4 116 50 155 155 200 nr -1.5 pick 10 spins 3 g 7\no1 5 flag false x 6 b 101\nneg -6 inv -7 bits 45 nb 5 117 50 154 154 202 nr -1.5 pick 20 spins 0 g 700\no2 1004 flag false x 7 b 102\n".to_string())
+    );
+}
+
 /// B-2026-08-13-16 — the MUTATION half of `test_e2e_field_bound_out_of_
 /// local_is_a_copy`, asserted as a three-surface differential.
 ///

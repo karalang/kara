@@ -5571,7 +5571,8 @@ impl<'a> super::TypeChecker<'a> {
                 then_block,
                 else_branch,
             } => {
-                let cond_ty = self.infer_expr(condition);
+                // B-2026-09-23-2: a borrowed bool reads as its value here.
+                let cond_ty = super::expr_ops::deref_bool_scalar(self.infer_expr(condition));
                 if cond_ty != Type::Bool && cond_ty != Type::Error {
                     self.type_error(
                         format!(
@@ -5685,7 +5686,8 @@ impl<'a> super::TypeChecker<'a> {
                 label,
                 ..
             } => {
-                let cond_ty = self.infer_expr(condition);
+                // B-2026-09-23-2: a borrowed bool reads as its value here.
+                let cond_ty = super::expr_ops::deref_bool_scalar(self.infer_expr(condition));
                 if cond_ty != Type::Bool && cond_ty != Type::Error {
                     self.type_error(
                         format!(
