@@ -96,7 +96,7 @@ distinguish "bugs flattening" from "we stopped writing them down."
 | miscompile | 437 |
 | leak | 403 |
 | double-free | 270 |
-| missing-feature | 203 |
+| missing-feature | 204 |
 | codegen-gap | 182 |
 | other | 148 |
 | diagnostics | 133 |
@@ -112,7 +112,7 @@ distinguish "bugs flattening" from "we stopped writing them down."
 |---|---|
 | codegen | 1975 |
 | interp | 519 |
-| typecheck | 303 |
+| typecheck | 304 |
 | other | 109 |
 | ownership | 75 |
 | cli | 73 |
@@ -356,6 +356,7 @@ registered in the callee's prologue, not by-value struct params in general. | �
 | B-2026-09-22-14 | 2026-09-22 | codegen+interp | high | A BY-VALUE `Array` PARAM PUSHED INTO A LOCAL `Vec` IS FREED BY BOTH THE `Vec` AND THE CALLER, AT EVERY OPT LEVEL -- the `Vec.push` half of B-2026-09-22-7, which that row listed as NOT MEASURED and which its fix cannot reach because no struct literal is built at all, so the per-field mask channel never sees the move. `fn inner(a: Array[R, 2]) -> i64 { let mut v: Vec[Array[R, 2]] = []; v.push(a); return 7 }` over an `R` with a user `Drop`: `free(): double free detected in tcache 2`, exit 134 with 2 `Invalid free()` under valgrind at BOTH `-O0` and `-O2` AOT and under the JIT -- unlike its escaping-struct sibling B-2026-09-22-13, the optimiser does not hide this one, so any opt level reproduces it. The IR shows the two owners in different frames: `inner` calls `__karac_dropelems_vecofarr_Array_R_2` when the `Vec` dies, walking the pushed array's elements, while `main` still holds both `__karac_dropelems_array_R_2` and `__karac_drop_array_te_R_2` over the same buffers, because the family's premise is that a by-value `Array` param whose element runs a user `Drop` stays with the CALLER. `--interp` does not abort and instead runs every element body TWICE (`d81 d82 in d81 d82 end`), so it is not the oracle either -- the same split B-2026-09-22-8 records. | — |
 | B-2026-09-22-16 | 2026-09-22 | codegen | high | TWO ENUMS THAT SHARE A VARIANT NAME AND CARRY THE SAME HEAP-BEARING FIELD TYPES IN DIFFERENT ORDERS READ EACH OTHER'S FIELD OFFSETS AND SEGFAULT -- `enum A { P(Array[S, 2], String), Q }` beside `enum B { P(String, Array[S, 2]), Q }` dies with an 8-byte read SIX BYTES PAST the 2-byte `String` buffer and then a dereference of `0x2`, on an 11-line program with no params, no generics and no `unsafe`; `--interp` is correct. Rename either variant, or make the partner field an `i64`, and it is clean. IT ALSO MAKES THE COMPILER'S OUTPUT NON-REPRODUCIBLE: 8 builds of the one unchanged source give 2 distinct binaries, where every clean neighbour gives 1 | — |
 | B-2026-09-23-1 | 2026-09-23 | codegen | high | MEASURED: a user-enum variant holding a caller-retained by-value `Array` param BESIDE a callee-owned array (`Array[String, 2]` param) or BESIDE a local array still aborts 134 with `free(): double free detected in tcache 2` and 6 valgrind errors, IDENTICALLY with B-2026-09-22-17's fix and without it. That fix widens the box-only drop twin's gate to "every array field caller-retained and param-rooted" and DECLINES this shape by design, because the twin is chosen per ENUM and stands down every `BoxedArray` interior walk, so it cannot give the two fields two answers. A fix needs a per-FIELD skip mask on the enum drop, which the struct spelling already has (`emit_struct_drop_synthesis_skipping`). | — |
+| B-2026-09-23-2 | 2026-09-23 | typecheck | low | MEASURED: a `ref`/`mut ref` bool or numeric scalar is still REFUSED in five operand positions that 42a9f2c's "reads as its value type in every value position" did not reach: an `if` condition, a `while` condition, unary `not`, unary `-`, and either operand of `and`/`or` (`if not have or ...` with `have: mut ref bool` -> E0209). Every surface refuses alike (typecheck), so nothing diverges; the same scalar is ACCEPTED in `==`, arithmetic, casts, annotated lets and arguments. | — |
 
 ### Relocated
 
