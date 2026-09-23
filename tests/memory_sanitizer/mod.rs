@@ -75,9 +75,11 @@ fn asan_available() -> bool {
 }
 
 /// Compile `src`, link with ASAN, run the binary, and return both stdout
-/// and the process exit status. `None` if the setup failed (parse error,
-/// runtime library missing, etc.) — tests should skip rather than fail in
-/// those cases to keep the harness robust on varied hosts.
+/// and the process exit status. `None` if the setup failed (runtime library
+/// missing, no ASAN-capable `cc`, etc.) — tests should skip rather than fail
+/// in those cases to keep the harness robust on varied hosts. A program that
+/// does not parse, type-check or compile is not missing setup and panics
+/// (B-2026-09-23-33, B-2026-08-08-5, B-2026-08-05-35).
 ///
 /// B-2026-08-08-16 — AUTO-PAR IS ON, matching `karac build`'s default. The
 /// harness used to pass `None` for the concurrency analysis, so ~1000
@@ -296,6 +298,20 @@ fn run_under_asan_lane(
     })
 }
 
+/// B-2026-09-23-33 — a PARSE error in the program under test fails the
+/// fixture instead of skipping it. It used to return `None`, which every
+/// `assert_clean_asan_run*` helper reads as missing setup (`setup failed —
+/// skipping`), so a fixture with a typo — `&&` where Kāra spells `and` — reported
+/// `ok` while asserting nothing. Typecheck (B-2026-08-08-5) and codegen
+/// (B-2026-08-05-35) failures already panic for the same reason: the toolchain
+/// is present and the program is broken, which is never missing setup.
+fn parse_failed(label: &str, errors: &[karac::parser::ParseError]) -> ! {
+    panic!(
+        "[{label}] PARSE FAILED — the program under test does not parse, so this \
+         fixture asserts nothing.\n{errors:?}"
+    );
+}
+
 fn run_under_asan_opts_inner(
     src: &str,
     label: &str,
@@ -309,8 +325,7 @@ fn run_under_asan_opts_inner(
 
     let mut parsed = karac::parse(src);
     if !parsed.errors.is_empty() {
-        eprintln!("[{label}] parse errors: {:?}", parsed.errors);
-        return None;
+        parse_failed(label, &parsed.errors);
     }
     // The `karac build` front end between parse and resolve — see
     // `lib.rs` `prepare_for_resolve`. Load-bearing here: it synthesizes
@@ -550,8 +565,7 @@ fn run_under_asan_with_full_pipeline(
 
     let mut parsed = karac::parse(src);
     if !parsed.errors.is_empty() {
-        eprintln!("[{label}] parse errors: {:?}", parsed.errors);
-        return None;
+        parse_failed(label, &parsed.errors);
     }
     // The `karac build` front end between parse and resolve — see
     // `lib.rs` `prepare_for_resolve`. Load-bearing here: it synthesizes
@@ -956,8 +970,7 @@ fn run_under_asan_with_ownership(
 
     let mut parsed = karac::parse(src);
     if !parsed.errors.is_empty() {
-        eprintln!("[{label}] parse errors: {:?}", parsed.errors);
-        return None;
+        parse_failed(label, &parsed.errors);
     }
     // The `karac build` front end between parse and resolve — see
     // `lib.rs` `prepare_for_resolve`. Load-bearing here: it synthesizes
@@ -1085,8 +1098,7 @@ fn run_under_asan_with_concurrency(
 
     let mut parsed = karac::parse(src);
     if !parsed.errors.is_empty() {
-        eprintln!("[{label}] parse errors: {:?}", parsed.errors);
-        return None;
+        parse_failed(label, &parsed.errors);
     }
     // The `karac build` front end between parse and resolve — see
     // `lib.rs` `prepare_for_resolve`. Load-bearing here: it synthesizes

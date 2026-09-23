@@ -7037,6 +7037,58 @@ impl<'ctx> super::Codegen<'ctx> {
                     }
                 }
             }
+            // B-2026-09-23-40 — ENUM-VARIANT destructure of the borrowed payload
+            // (`Some(B.S(w)) => { held = w }` over `m.get(k)`). The same alias
+            // as the struct and tuple arms, one pattern kind over: `w` points
+            // into the map's live variant, so a move of it made a second owner
+            // and both freed the String. Clone each ESCAPING heap field
+            // binding; read-only ones stay aliases. (`Vec.get` reaches a
+            // different path and reads the moved value back empty instead:
+            // B-2026-09-23-39, still open.)
+            PatternKind::TupleVariant {
+                path: vpath,
+                patterns: vsubs,
+            } => {
+                let TypeKind::Path(pp) = &payload_te.kind else {
+                    return Ok(());
+                };
+                let Some(enum_name) = pp.segments.last().cloned() else {
+                    return Ok(());
+                };
+                let Some(layout) = self.type_decls.enum_layouts.get(enum_name.as_str()) else {
+                    return Ok(());
+                };
+                if layout.is_shared {
+                    return Ok(());
+                }
+                let Some(variant) = vpath.last() else {
+                    return Ok(());
+                };
+                let Some(field_tes) = self
+                    .enum_variant_field_type_exprs(&enum_name)
+                    .into_iter()
+                    .find(|(_, v, _)| v == variant)
+                    .map(|(_, _, tes)| tes)
+                else {
+                    return Ok(());
+                };
+                let pairs: Vec<(String, TypeExpr)> = vsubs
+                    .iter()
+                    .zip(field_tes.iter())
+                    .filter_map(|(sp, fte)| match &sp.kind {
+                        PatternKind::Binding(n) => Some((n.clone(), fte.clone())),
+                        _ => None,
+                    })
+                    .collect();
+                for (bind_name, field_te) in pairs {
+                    if !self.borrow_payload_clone_supported(&field_te) {
+                        continue;
+                    }
+                    if self.borrow_binding_escape_check(&bind_name, escape_exprs, escape_blocks) {
+                        self.clone_and_track_borrow_binding(&bind_name, &field_te);
+                    }
+                }
+            }
             // Slice 3u: TUPLE destructure of the borrowed payload
             // (`Some((a, b)) => a` over `m.get(k)`) — clone each ESCAPING
             // heap element; read-only elements stay zero-cost aliases.

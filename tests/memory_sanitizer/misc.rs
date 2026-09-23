@@ -1999,3 +1999,17 @@ fn main() {
         "b2021-4-alias-args",
     );
 }
+
+/// B-2026-09-23-33 — a program under test that does not PARSE fails the
+/// fixture. It used to return `None` from the harness, which every
+/// `assert_clean_asan_run*` helper reports as missing setup and skips, so a
+/// fixture with a typo passed while asserting nothing. The parse runs before
+/// any toolchain check, so this pin holds on a host without ASAN too.
+#[test]
+#[should_panic(expected = "PARSE FAILED")]
+fn asan_harness_parse_error_fails_the_fixture() {
+    let _ = run_under_asan(
+        "fn main() { let x = 1 && 2; println(f\"{x}\"); }",
+        "asan_harness_parse_error_fails_the_fixture",
+    );
+}

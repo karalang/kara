@@ -1139,7 +1139,7 @@ fn asan_map_get_stack_boxed_payload_has_one_owner() {
              enum W { V(Wide), E }\n\
              fn seed() -> i64 { env.args().len() }\n\
              fn mk() -> String { f\"payload-{seed()}-aaaaaaaaaaaaaaaaaaaaaaaaaaaaaa\" }\n\
-             fn fill(m: mut ref Map[String, B]) { let _ = m.insert(\"k\", B.S(mk())) }\n";
+             fn fill(m: mut ref Map[String, B]) { let _ = m.insert(\"k\", B.S(mk())); }\n";
     for (label, body, want) in [
             // Read-only arm in a LOOP — the kata:288 shape. A leaked box grows
             // without bound; a double-freed one aborts on the second pass.
@@ -1149,10 +1149,10 @@ fn asan_map_get_stack_boxed_payload_has_one_owner() {
                  \x20  let mut m: Map[String, B] = Map.new(); fill(mut m);\n\
                  \x20  let mut i = 0; let mut n = 0;\n\
                  \x20  while i < 4 {\n\
-                 \x20    match m.get(\"k\") { None => {} Some(B.S(w)) => { n = n + w.len() } Some(B.C) => {} }\n\
-                 \x20    i = i + 1 }\n\
+                 \x20    match m.get(\"k\") { None => {} Some(B.S(w)) => { n = n + w.len(); } Some(B.C) => {} }\n\
+                 \x20    i = i + 1; }\n\
                  \x20  println(f\"n:{n}\"); println(\"end\") }\n",
-                vec!["end"],
+                vec!["n:160", "end"],
             ),
             // The payload MOVES into a local that outlives the construct.
             (
@@ -1160,9 +1160,9 @@ fn asan_map_get_stack_boxed_payload_has_one_owner() {
                 "fn main() {\n\
                  \x20  let mut m: Map[String, B] = Map.new(); fill(mut m);\n\
                  \x20  let mut held = String.new();\n\
-                 \x20  match m.get(\"k\") { None => {} Some(B.S(w)) => { held = w } Some(B.C) => {} }\n\
+                 \x20  match m.get(\"k\") { None => {} Some(B.S(w)) => { held = w; } Some(B.C) => {} }\n\
                  \x20  println(f\"h:{held.len()}\"); println(\"end\") }\n",
-                vec!["end"],
+                vec!["h:40", "end"],
             ),
             // ...and into a `mut ref` accumulator, the escape shape.
             (
@@ -1172,7 +1172,7 @@ fn asan_map_get_stack_boxed_payload_has_one_owner() {
                  fn main() {\n\
                  \x20  let mut m: Map[String, B] = Map.new(); fill(mut m);\n\
                  \x20  let mut acc: Vec[String] = [];\n\
-                 \x20  take(ref m, mut acc);\n\
+                 \x20  take(m, mut acc);\n\
                  \x20  println(f\"len:{acc.len()}\"); println(\"end\") }\n",
                 vec!["len:1", "end"],
             ),
@@ -1204,9 +1204,9 @@ fn asan_map_get_stack_boxed_payload_has_one_owner() {
                  \x20  let mut i = 0;\n\
                  \x20  while i < 3 {\n\
                  \x20    match wm.get(\"w\") { None => {} Some(W.V(x)) => { println(f\"n:{x.n}\") } Some(W.E) => {} }\n\
-                 \x20    i = i + 1 }\n\
+                 \x20    i = i + 1; }\n\
                  \x20  println(\"end\") }\n",
-                vec!["n:7", "end"],
+                vec!["n:7", "n:7", "n:7", "end"],
             ),
         ] {
             let src = format!("{H}{body}");
@@ -7488,5 +7488,112 @@ fn main() {
 "#,
         &["g:0", "len:1"],
         "map-get-method-call-nested-tuple-key",
+    );
+}
+
+#[test]
+/// B-2026-09-23-40 — a heap field bound inside an enum-variant sub-pattern of a
+/// `Map.get` / `SortedMap.get` payload (`Some(B.S(w)) => { held = w; }`) and
+/// then MOVED was an alias into the map's live value, so the new owner and the
+/// map both freed it: `free(): double free detected` on the JIT, `-O0` and
+/// `-O2`. The struct and tuple destructures of the same payload already got
+/// their own copy; the variant destructure now does too, for each ESCAPING
+/// binding. Legs: a two-field variant, a struct payload pushed whole, `if let`,
+/// `SortedMap`, the binding returned from a match arm, a move in a loop, a
+/// `Vec[String]` payload, and a read-only control. This fixture program also
+/// NEVER PARSED before B-2026-09-23-33, which is how the fault stayed hidden.
+fn asan_map_get_variant_payload_move_has_one_owner() {
+    assert_clean_asan_run_min_allocs(
+        r#"
+enum B { S(String), C }
+enum B2 { S(String, i64), C }
+enum Bv { S(Vec[String]), C }
+struct Wide { a: String, n: i64 }
+enum W { V(Wide), E }
+fn mk(i: i64) -> String { f"payload-{i}-long-enough-to-heap" }
+fn leg_two_field() {
+    let mut m: Map[String, B2] = Map.new();
+    let _ = m.insert("k", B2.S(mk(1), 3));
+    let mut held = String.new(); let mut k = 0;
+    match m.get("k") { None => {} Some(B2.S(w, n)) => { held = w; k = n; } Some(B2.C) => {} }
+    println(f"tf {held} {k} {m.len()}");
+}
+fn leg_struct() {
+    let mut m: Map[String, W] = Map.new();
+    let _ = m.insert("k", W.V(Wide { a: mk(2), n: 7 }));
+    let mut out: Vec[Wide] = [];
+    match m.get("k") { None => {} Some(W.V(x)) => { out.push(x); } Some(W.E) => {} }
+    println(f"st {out.len()} {out[0].a} {out[0].n}");
+}
+fn leg_if_let() {
+    let mut m: Map[String, B] = Map.new();
+    let _ = m.insert("k", B.S(mk(3)));
+    let mut held = String.new();
+    if let Some(B.S(w)) = m.get("k") { held = w; }
+    println(f"il {held}");
+}
+fn leg_sorted() {
+    let mut m: SortedMap[String, B] = SortedMap.new();
+    let _ = m.insert("k", B.S(mk(4)));
+    let mut out: Vec[String] = [];
+    match m.get("k") { None => {} Some(B.S(w)) => { out.push(w); } Some(B.C) => {} }
+    println(f"so {out[0]}");
+}
+fn pick(m: ref Map[String, B]) -> String {
+    match m.get("k") { None => String.new(), Some(B.S(w)) => w, Some(B.C) => String.new() }
+}
+fn leg_return() {
+    let mut m: Map[String, B] = Map.new();
+    let _ = m.insert("k", B.S(mk(5)));
+    let s = pick(m);
+    println(f"rt {s}");
+}
+fn leg_loop_move() {
+    let mut m: Map[String, B] = Map.new();
+    let _ = m.insert("k", B.S(mk(6)));
+    let mut out: Vec[String] = [];
+    let mut i = 0;
+    while i < 3 { match m.get("k") { None => {} Some(B.S(w)) => { out.push(w); } Some(B.C) => {} } i = i + 1; }
+    println(f"lm {out.len()} {out[2]}");
+}
+fn leg_vec_payload() {
+    let mut m: Map[String, Bv] = Map.new();
+    let _ = m.insert("k", Bv.S([mk(7), mk(8)]));
+    let mut held: Vec[String] = [];
+    match m.get("k") { None => {} Some(Bv.S(w)) => { held = w; } Some(Bv.C) => {} }
+    println(f"vp {held.len()} {held[1]}");
+}
+fn leg_read_only() {
+    let mut m: Map[String, B] = Map.new();
+    let _ = m.insert("k", B.S(mk(9)));
+    let mut n = 0; let mut i = 0;
+    while i < 4 { match m.get("k") { None => {} Some(B.S(w)) => { n = n + w.len(); } Some(B.C) => {} } i = i + 1; }
+    println(f"ro {n}");
+}
+fn main() {
+    leg_two_field();
+    leg_struct();
+    leg_if_let();
+    leg_sorted();
+    leg_return();
+    leg_loop_move();
+    leg_vec_payload();
+    leg_read_only();
+    println("done");
+}
+"#,
+        &[
+            "tf payload-1-long-enough-to-heap 3 1",
+            "st 1 payload-2-long-enough-to-heap 7",
+            "il payload-3-long-enough-to-heap",
+            "so payload-4-long-enough-to-heap",
+            "rt payload-5-long-enough-to-heap",
+            "lm 3 payload-6-long-enough-to-heap",
+            "vp 2 payload-8-long-enough-to-heap",
+            "ro 116",
+            "done",
+        ],
+        "asan_map_get_variant_payload_move_has_one_owner",
+        12,
     );
 }
