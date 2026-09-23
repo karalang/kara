@@ -399,6 +399,24 @@ pub(crate) struct PayloadVars<'ctx> {
     /// leave every other consuming destination on the settled answer it
     /// already had. Cleared per function with its sibling above.
     pub(crate) arm_array_payload_unowned_interior: std::collections::HashSet<String>,
+    /// B-2026-09-23-5 — names that hold an `Array` whose ELEMENTS still belong
+    /// to this function's CALLER: a seeded arm binding over a caller-retained
+    /// by-value param (`match Some(a) { Some(v) => .. }`), and any `let`
+    /// rebind of one of those or of the param itself (`let m = a;`).
+    ///
+    /// A by-value `Array` param whose element runs a user `Drop` is
+    /// caller-retained (`array_param_elem_is_callee_owned` declines it), so the
+    /// caller runs the element bodies and frees the buffers after the call.
+    /// Both rebind registrations at the `let` site assumed the source was an
+    /// owner in THIS frame: the bodies walker followed the move onto the
+    /// destination (`d1 d2 in-eat d1 d2`), and an arm-bound source sat in
+    /// `arm_array_payload_unowned_interior`, which hands the destination the
+    /// MEMORY drop as well (`free(): double free detected in tcache 2`). A
+    /// member is a view of the caller's array: it gets neither.
+    ///
+    /// Cleared per function with its siblings; a later `let` of the same name
+    /// that is not such a rebind removes it.
+    pub(crate) caller_retained_array_views: std::collections::HashSet<String>,
     /// B-2026-08-06-10 — match-arm payload bindings that were DEBOXED out of an
     /// enum payload box: `binding slot -> box pointer`.
     ///

@@ -5991,6 +5991,19 @@ impl<'ctx> super::Codegen<'ctx> {
         let ExprKind::Identifier(src) = &value.kind else {
             return false;
         };
+        // B-2026-09-23-5 — checked BEFORE the stand-down below, which it
+        // overrides. A seeded arm binding over a caller-retained param sits in
+        // `arm_array_payload_unowned_interior` too (the interior IS withheld
+        // there), but nobody in this frame is owed the buffers: the CALLER
+        // frees them after the call. Handing them to the destination made two
+        // owners across the function boundary and aborted with a double free.
+        if self
+            .payload_vars
+            .caller_retained_array_views
+            .contains(src.as_str())
+        {
+            return true;
+        }
         // B-2026-09-13-2 — the one source this must NOT keep: an arm-bound
         // array payload whose box was registered without its interior walker
         // because the arm consumes the binding. This guard's premise is that
@@ -6494,11 +6507,17 @@ impl<'ctx> super::Codegen<'ctx> {
         let ExprKind::Identifier(root) = &arg.kind else {
             return false;
         };
-        self.fn_ctx.current_fn_param_names.contains(root.as_str())
+        (self.fn_ctx.current_fn_param_names.contains(root.as_str())
             && !self
                 .borrow_vars
                 .owned_array_params
-                .contains_key(root.as_str())
+                .contains_key(root.as_str()))
+            // B-2026-09-23-5 — or a local that is only another name for such a
+            // param's array (`let m = a;`, or an arm binding seeded from it).
+            || self
+                .payload_vars
+                .caller_retained_array_views
+                .contains(root.as_str())
     }
 
     /// B-2026-09-22-6 — the USER-ENUM spelling of the question above: does

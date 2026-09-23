@@ -5826,3 +5826,79 @@ fn main() {
         "opt\n  r1\n  d1\n  d2\nbare\n  arm\n  d3\n  d4\nres\n  arm\n  d5\n  d6\nuser\n  r8\n  d7\n  d8\nvec\n  arm\n  d9\n  d10\niflet\n  r12\n  d11\n  d12\nletelse\n  r13\n  d13\n  d14\nnamed\n  arm\n  d15\n  d16\nnamed_user\n  mid\n  d17\n  d18\nnamed_mixed\n  d90\n  d91\n  mid\n  d19\n  d20\nnamed_rebind\n  mid\n  d21\n  d22\nstruct\n  r23\n  d23\n  d24\ntuple\n  r5\n  d25\n  d26\nm_seeded\n  arm\n  d27\n  d28\nm_named\n  mid\n  d29\n  d30\nend\n"
     );
 }
+
+/// B-2026-09-23-5 -- a by-value `Array` param whose element runs a user `Drop`
+/// is CALLER-RETAINED: the caller runs the element bodies and frees the
+/// buffers after the call. A REBIND of it inside the callee is therefore only
+/// another name for the caller's array, and so is a seeded arm binding over it
+/// (`match Some(a) { Some(v) => .. }`) and any rebind of that binding.
+///
+/// Codegen treated the rebind's destination as a new owner. `let m = a;` gave
+/// `m` the element-bodies walker, so every body ran twice (`d1 d2 in d1 d2`
+/// on the JIT, `-O0` and `-O2`). `Some(v) => { let u = v; .. }` also handed
+/// `u` the MEMORY drop, because the arm binding sat in the "interior withheld"
+/// set that makes a rebind take the buffers over, and it aborted with
+/// `free(): double free detected in tcache 2` on every compiled surface. The
+/// interpreter was right in every cell. The fix records such names in
+/// `caller_retained_array_views`, and a rebind of a member takes neither the
+/// bodies nor the memory.
+///
+/// `shadow` checks that a later `let` of the same name owning a FRESH array
+/// leaves the view set. `str` is the callee-owned control: an
+/// `Array[String, 2]` param is not caller-retained and must be unchanged.
+/// `ctl` is the by-value control with no rebind. Measured on this tree: the
+/// stdout below is byte-identical across `--interp`, jit, `karac build` and
+/// `KARAC_OPT_LEVEL=0 karac build`, and `valgrind --leak-check=full` at
+/// `-O0` with `KARAC_AUTO_PAR=0` reports 0 errors and 0 bytes in use at exit.
+///
+/// Deliberately ABSENT, each measured split and filed on its own: a `Vec[R]`
+/// param rebound the same way (bodies twice on build), the seeded arm rebind
+/// over an `Array[String, 2]` param (a double free whose owner is in this
+/// frame, B-2026-09-19-60's mechanism), a user-enum seeded arm rebind (bodies
+/// twice on build), and `return` of the param, which double-frees without
+/// any rebind.
+#[test]
+fn interp_array_param_rebound_in_the_callee_is_a_view_of_the_callers_array() {
+    assert_eq!(
+        run(r#"struct R { id: i64, s: String }
+impl Drop for R { fn drop(mut ref self) { println(f"  d{self.id}") } }
+fn mkr(i: i64) -> R { return R { id: i, s: f"heap-string-longer-than-sso-{i}" } }
+fn take(x: Array[R, 2]) -> i64 { println("  take"); return 1 }
+fn let_rb(a: Array[R, 2]) -> i64 { let m = a; println("  in"); return 1 }
+fn let_annot(a: Array[R, 2]) -> i64 { let m: Array[R, 2] = a; println("  in"); return 1 }
+fn let_chain(a: Array[R, 2]) -> i64 { let m = a; let m2 = m; println("  in"); return 1 }
+fn let_read(a: Array[R, 2]) -> i64 { let m = a; println(f"  r{m[0].id}:{m[1].s.len()}"); return 1 }
+fn let_onward(a: Array[R, 2]) -> i64 { let m = a; let t = take(m); println("  in"); return t }
+fn let_shadow(a: Array[R, 2]) -> i64 { let m = a; let m = [mkr(90), mkr(91)]; println(f"  in{m[0].id}"); return 1 }
+fn alias_seed(a: Array[R, 2]) -> i64 { let m = a; match Option.Some(m) { Option.Some(v) => { println("  arm"); return 1 }, Option.None => { return 0 } } }
+fn alias_seed_rb(a: Array[R, 2]) -> i64 { let m = a; match Option.Some(m) { Option.Some(v) => { let u = v; println("  arm"); return 1 }, Option.None => { return 0 } } }
+fn arm_rb(a: Array[R, 2]) -> i64 { match Option.Some(a) { Option.Some(v) => { let u = v; println("  arm"); return 1 }, Option.None => { return 0 } } }
+fn arm_read(a: Array[R, 2]) -> i64 { match Option.Some(a) { Option.Some(v) => { let u = v; println(f"  arm{u[1].id}"); return 1 }, Option.None => { return 0 } } }
+fn arm_chain(a: Array[R, 2]) -> i64 { match Option.Some(a) { Option.Some(v) => { let u = v; let w = u; println("  arm"); return 1 }, Option.None => { return 0 } } }
+fn arm_onward(a: Array[R, 2]) -> i64 { match Option.Some(a) { Option.Some(v) => { let u = v; let t = take(u); println("  arm"); return t }, Option.None => { return 0 } } }
+fn iflet_rb(a: Array[R, 2]) -> i64 { if let Option.Some(v) = Option.Some(a) { let u = v; println("  arm") }; return 1 }
+fn letelse_rb(a: Array[R, 2]) -> i64 { let Option.Some(v) = Option.Some(a) else { return 0 }; let u = v; println("  arm"); return 1 }
+fn str_rb(a: Array[String, 2]) -> i64 { let m = a; println(f"  in{m[1].len()}"); return 1 }
+fn ctl(a: Array[R, 2]) -> i64 { println("  in"); return 1 }
+fn main() {
+    println("let");       { let a: Array[R, 2] = [mkr(1), mkr(2)]; let z = let_rb(a); }
+    println("annot");     { let a: Array[R, 2] = [mkr(3), mkr(4)]; let z = let_annot(a); }
+    println("chain");     { let a: Array[R, 2] = [mkr(5), mkr(6)]; let z = let_chain(a); }
+    println("read");      { let a: Array[R, 2] = [mkr(7), mkr(8)]; let z = let_read(a); }
+    println("onward");    { let a: Array[R, 2] = [mkr(9), mkr(10)]; let z = let_onward(a); }
+    println("shadow");    { let a: Array[R, 2] = [mkr(11), mkr(12)]; let z = let_shadow(a); }
+    println("aliasseed"); { let a: Array[R, 2] = [mkr(13), mkr(14)]; let z = alias_seed(a); }
+    println("aliasrb");   { let a: Array[R, 2] = [mkr(15), mkr(16)]; let z = alias_seed_rb(a); }
+    println("arm");       { let a: Array[R, 2] = [mkr(17), mkr(18)]; let z = arm_rb(a); }
+    println("armread");   { let a: Array[R, 2] = [mkr(19), mkr(20)]; let z = arm_read(a); }
+    println("armchain");  { let a: Array[R, 2] = [mkr(21), mkr(22)]; let z = arm_chain(a); }
+    println("armonward"); { let a: Array[R, 2] = [mkr(23), mkr(24)]; let z = arm_onward(a); }
+    println("iflet");     { let a: Array[R, 2] = [mkr(25), mkr(26)]; let z = iflet_rb(a); }
+    println("letelse");   { let a: Array[R, 2] = [mkr(27), mkr(28)]; let z = letelse_rb(a); }
+    println("str");       { let a: Array[String, 2] = [f"heap-string-longer-than-sso-p", f"heap-string-longer-than-sso-qq"]; let z = str_rb(a); }
+    println("ctl");       { let a: Array[R, 2] = [mkr(29), mkr(30)]; let z = ctl(a); }
+    println("end")
+}"#),
+        "let\n  in\n  d1\n  d2\nannot\n  in\n  d3\n  d4\nchain\n  in\n  d5\n  d6\nread\n  r7:29\n  d7\n  d8\nonward\n  take\n  in\n  d9\n  d10\nshadow\n  in90\n  d90\n  d91\n  d11\n  d12\naliasseed\n  arm\n  d13\n  d14\naliasrb\n  arm\n  d15\n  d16\narm\n  arm\n  d17\n  d18\narmread\n  arm20\n  d19\n  d20\narmchain\n  arm\n  d21\n  d22\narmonward\n  take\n  arm\n  d23\n  d24\niflet\n  arm\n  d25\n  d26\nletelse\n  arm\n  d27\n  d28\nstr\n  in30\nctl\n  in\n  d29\n  d30\nend\n"
+    );
+}

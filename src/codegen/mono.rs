@@ -182,6 +182,7 @@ pub(super) struct SavedVarSideTables<'ctx> {
     boxed_enum_payload_vars: std::collections::HashSet<String>,
     boxed_optres_payload_view_vars: HashMap<String, inkwell::values::PointerValue<'ctx>>,
     arm_array_payload_unowned_interior: std::collections::HashSet<String>,
+    caller_retained_array_views: std::collections::HashSet<String>,
     deboxed_payload_box_ptrs:
         HashMap<inkwell::values::PointerValue<'ctx>, inkwell::values::PointerValue<'ctx>>,
 }
@@ -1682,6 +1683,9 @@ impl<'ctx> super::Codegen<'ctx> {
             arm_array_payload_unowned_interior: std::mem::take(
                 &mut self.payload_vars.arm_array_payload_unowned_interior,
             ),
+            caller_retained_array_views: std::mem::take(
+                &mut self.payload_vars.caller_retained_array_views,
+            ),
             deboxed_payload_box_ptrs: std::mem::take(
                 &mut self.payload_vars.deboxed_payload_box_ptrs,
             ),
@@ -1720,6 +1724,7 @@ impl<'ctx> super::Codegen<'ctx> {
         self.payload_vars.boxed_optres_payload_view_vars = saved.boxed_optres_payload_view_vars;
         self.payload_vars.arm_array_payload_unowned_interior =
             saved.arm_array_payload_unowned_interior;
+        self.payload_vars.caller_retained_array_views = saved.caller_retained_array_views;
         self.payload_vars.deboxed_payload_box_ptrs = saved.deboxed_payload_box_ptrs;
     }
 
@@ -4683,6 +4688,7 @@ impl<'ctx> super::Codegen<'ctx> {
         self.payload_vars.boxed_enum_payload_vars.clear();
         self.payload_vars.boxed_optres_payload_view_vars.clear();
         self.payload_vars.arm_array_payload_unowned_interior.clear();
+        self.payload_vars.caller_retained_array_views.clear();
         self.payload_vars.deboxed_payload_box_ptrs.clear();
         self.payload_vars.inline_result_payload_vars.clear();
         self.payload_vars.inline_option_map_payload_vars.clear();

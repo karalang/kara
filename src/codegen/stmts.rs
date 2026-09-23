@@ -9940,6 +9940,27 @@ impl<'ctx> super::Codegen<'ctx> {
                                             .cloned(),
                                         _ => None,
                                     });
+                                    // B-2026-09-23-5 — unless the source is
+                                    // only a VIEW of the caller's array: a
+                                    // caller-retained by-value param, or a
+                                    // name already standing for one. The
+                                    // caller runs these bodies after the call,
+                                    // so arming them here ran each twice
+                                    // (`d1 d2 in-eat d1 d2`). The destination
+                                    // becomes a view too, so a chain keeps it.
+                                    let caller_keeps_elems =
+                                        bodies_parts.as_ref().is_some_and(|(elem_te, _)| {
+                                            self.elem_te_runs_user_drop(elem_te)
+                                        }) && self.seeded_array_payload_stays_with_caller(value);
+                                    if caller_keeps_elems {
+                                        self.payload_vars
+                                            .caller_retained_array_views
+                                            .insert(var_name.clone());
+                                    } else {
+                                        self.payload_vars
+                                            .caller_retained_array_views
+                                            .remove(var_name.as_str());
+                                    }
                                     if let Some((elem_te, n)) = bodies_parts {
                                         self.var_types
                                             .array_var_elem_te
@@ -9949,6 +9970,7 @@ impl<'ctx> super::Codegen<'ctx> {
                                             .emit_array_elem_user_drop_bodies_fn(
                                                 elem_ty, &elem_te, n,
                                             )
+                                            .filter(|_| !caller_keeps_elems)
                                         {
                                             self.track_user_drop_var_with_fn(
                                                 "",

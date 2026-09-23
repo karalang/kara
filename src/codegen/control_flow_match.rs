@@ -19526,16 +19526,38 @@ impl<'ctx> super::Codegen<'ctx> {
             // `arm_array_payload_unowned_interior` marking below stays in step:
             // the interior IS withheld in that case, and the one destination
             // that stands itself down needs to hear so.
+            let payload_stays_with_caller = Self::seeded_variant_arg_payload(scrutinee)
+                .is_some_and(|(cv, parg)| {
+                    cv == variant && self.seeded_array_payload_stays_with_caller(parg)
+                });
             let array_arm_owns_interior = (match &payload.kind {
                 PatternKind::Wildcard => true,
                 PatternKind::Binding(_) => arm_bodies
                     .get(arm_idx)
                     .is_some_and(|body| self.arm_payload_binding_only_borrowed(pat, body)),
                 _ => false,
-            }) && !Self::seeded_variant_arg_payload(scrutinee)
-                .is_some_and(|(cv, parg)| {
-                    cv == variant && self.seeded_array_payload_stays_with_caller(parg)
-                });
+            }) && !payload_stays_with_caller;
+            // B-2026-09-23-5 — the arm binding is a VIEW of the caller's
+            // array, so a rebind of it (`Some(v) => { let u = v; .. }`) must
+            // take neither the bodies nor the memory. Without this the
+            // unowned-interior mark below handed `u` the memory drop and the
+            // caller freed the same buffers again.
+            if !scrutinee_is_borrow && payload_stays_with_caller {
+                if let Some(pte) = self.optres_scrutinee_payload_te_for(scrutinee, &variant) {
+                    if self
+                        .array_elem_and_len(&pte)
+                        .is_some_and(|(ete, _)| self.elem_te_runs_user_drop(&ete))
+                    {
+                        for b in Self::variant_arm_binds(pat) {
+                            self.payload_vars.caller_retained_array_views.insert(b);
+                        }
+                    }
+                }
+            } else {
+                for b in Self::variant_arm_binds(pat) {
+                    self.payload_vars.caller_retained_array_views.remove(&b);
+                }
+            }
             // B-2026-09-13-2 — when the interior is WITHHELD for a consuming
             // arm, say so, so the one destination that also stands itself down
             // can stop doing that. See
