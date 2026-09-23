@@ -94,24 +94,24 @@ distinguish "bugs flattening" from "we stopped writing them down."
 |---|---|
 | run-vs-build | 486 |
 | miscompile | 439 |
-| leak | 406 |
-| double-free | 284 |
+| leak | 407 |
+| double-free | 285 |
 | missing-feature | 206 |
-| codegen-gap | 188 |
+| codegen-gap | 189 |
 | other | 149 |
 | diagnostics | 134 |
 | perf | 117 |
 | false-positive | 108 |
 | soundness | 97 |
-| crash | 89 |
+| crash | 91 |
 | use-after-free | 50 |
 
 ### By surface
 
 | surface | total |
 |---|---|
-| codegen | 2007 |
-| interp | 531 |
+| codegen | 2012 |
+| interp | 532 |
 | typecheck | 307 |
 | other | 110 |
 | ownership | 75 |
@@ -362,7 +362,6 @@ registered in the callee's prologue, not by-value struct params in general. | �
 | B-2026-09-23-21 | 2026-09-23 | codegen | low | AN ASSOCIATED FUNCTION'S `Array` RESULT CANNOT BE INDEXED FOR A FIELD ON THE COMPILED BACKENDS -- `let b = H.mk(); println(f"y{b[0].id}")` over `impl H { fn mk() -> Array[P, 2] }` passes `karac check`, runs under `--interp`, and fails the JIT and `karac build` with `cannot resolve field 'id' on this receiver (its type was not recorded for codegen)`, even for a POD element; annotating the binding (`let b: Array[P, 2] = H.mk()`) makes it build and run correctly | — |
 | B-2026-09-23-22 | 2026-09-23 | codegen | low | A `Drop`-BEARING STRUCT PARAM REBOUND AND RETURNED ON ONE EXIT RUNS ITS BODY AT DIFFERENT POINTS ON THE TWO BACKENDS WHEN IT DIES INSIDE -- `fn mix(a: R, c: bool) -> R { let m = a; if c { return m }; println("dies"); return mkr(8) }` at `c = false` prints `d1 dies y8 d8` under `--interp` and `dies d1 y8 d8` on the JIT, `-O0` and `-O2`; memory is clean on both | — |
 | B-2026-09-23-24 | 2026-09-23 | codegen+interp | medium | A BY-VALUE PARAM MOVED INTO A LOCAL THROUGH AN `if` ARM, WHERE THAT LOCAL DIES INSIDE THE CALLEE, IS OWNED TWICE ON THE PATH THAT TOOK THE ARM -- `let r: Array[R, 2] = if c { a } else { mka() }; println(f"r{r[0].id}"); mka()` at `c = true` prints both element bodies twice under `--interp` (`r1 d1 d2 d1 d2 y8`) and aborts `free(): double free detected in tcache 2` on the JIT, `-O0` and `-O2`; the STRUCT spelling (`a: R`) runs its body twice on ALL FOUR surfaces (`r1 d1 d1 y5`), memory-clean | — |
-| B-2026-09-23-26 | 2026-09-23 | codegen+interp | high | AN `Option[R]` PARAM HANDED BACK THROUGH A `let`-BOUND BRANCH SEGFAULTS ON EVERY COMPILED SURFACE AND RUNS ITS BODY TWICE UNDER `--interp` -- `let r: Option[R] = if c { a } else { None }; println("mid"); r` at `c = true` dies with SIGSEGV at `-O0` (4 invalid reads, and the buffered `mid` is lost with it), `double free` at `-O2`, and prints `mid d1 d1 got` under `--interp`; the TAIL spelling `if c { a } else { None }` LOSES the body at `c = false` on all four surfaces | — |
 | B-2026-09-23-27 | 2026-09-23 | codegen+interp | low | TWO SPELLINGS OF B-2026-09-23-18'S HAND-BACK THAT ITS FIX DOES NOT REACH RUN A `Drop` BODY TWICE ON ALL FOUR SURFACES, memory-clean -- a REBIND of the `let`-bound local (`let r: R = if c { a } else { mkr(8) }; let q = r; q` prints `mid d1 y1 d1`) and a GENERIC param (`fn f[T](a: T, c: bool, d: T) -> T { let r: T = if c { a } else { d }; .. r }` prints `mid d8 d1 y1 d1` at `c = true` and `mid d8 d1 y8 d8` at `c = false`) | — |
 | B-2026-09-23-34 | 2026-09-23 | codegen | medium | A `match` ARM THAT MOVES AN `Array` PAYLOAD INTO A BY-VALUE CALLEE LEAKS EVERY ELEMENT'S HEAP WHEN THE ELEMENT RUNS A USER `Drop`, while the bodies run correctly -- `let b: Option[Array[R, 2]] = Some(mka(11)); match b { Some(a) => consume(a), None => .. }` prints `c11 d11 d12` on all four surfaces and loses 60 B in 2 blocks at `-O0` | — |
 | B-2026-09-23-35 | 2026-09-23 | codegen | medium | DECLARING AN UNUSED `enum E { A(Array[R, 2]), B }` MAKES A `Result[Array[R, 2], i64]` LOCAL LEAK BOTH ELEMENTS' HEAP WHEN A `match` ONLY READS IT -- the same program without the declaration is clean, and the `Option` spelling is clean with it; 60 B in 2 blocks at `-O0`, output correct everywhere | — |
@@ -370,6 +369,11 @@ registered in the callee's prologue, not by-value struct params in general. | �
 | B-2026-09-23-37 | 2026-09-23 | codegen+interp | medium | `let x = x;` REBINDING A LOCAL `Array` UNDER ITS OWN NAME AND RETURNING IT RUNS THE ELEMENTS' `Drop` BODIES TWICE UNDER `--interp` AND DOUBLE-FREES ON THE JIT AND AT `-O0` -- `-O2` is the only surface that prints the one body pair owed, `dies y1 d1 d2` | — |
 | B-2026-09-23-38 | 2026-09-23 | codegen | medium | MEASURED: a nested tuple member READ by index in place leaks one String clone per read on every compiled surface -- `println(v[0].1.0)`, `f"{v[0].1.0}"` and `v[0].1.0.len()` over `Vec[(i64, (String, i64))]` each lose 26 B per evaluation (78 B in 3 blocks over a 3-iteration loop), output correct everywhere; `let s = v[0].1.0` and the flat `println(v[0].0)` over `Vec[(String, i64)]` are clean | — |
 | B-2026-09-23-39 | 2026-09-23 | codegen | medium | MEASURED: a String bound from an enum payload nested in `Vec.get`'s `Option` reads EMPTY when moved out on every compiled surface, and `.len()` on it does not compile -- `match v.get(0) { Some(B.S(w)) => { held = w; } ... }` over `Vec[B]` with `enum B { S(String), N }` prints `h:40` under --interp and `h:0` on the JIT, -O0 and default build; `out.push(w)` likewise; `println(w.len())` in the arm fails with `codegen: no handler for method 'len'`; memory clean | — |
+| B-2026-09-23-41 | 2026-09-23 | codegen | medium | A TEMPORARY `Option[R]` ARGUMENT THAT A CALLEE HANDS BACK ON SOME EXITS LEAKS ITS BOX ON THE EXIT WHERE IT DIES INSIDE -- `f(Some(mkr(1)), false)` over `fn f(a: Option[R], c: bool) -> Option[R] { if c { a } else { None } }` loses 61 B (32 direct, 29 indirect) at `-O0` in the tail, early-`return` and `let`-bound spellings, while the body now runs once on all four surfaces | — |
+| B-2026-09-23-42 | 2026-09-23 | codegen | high | AN `Option[R]` PARAM HANDED BACK ON SOME EXITS BY AN ASSOCIATED FUNCTION OR A METHOD CRASHES ON THE EXIT THAT HANDS IT BACK, ON EVERY COMPILED SURFACE -- `H.f(a, true)` and `h.f(a, true)` over `if c { a } else { None }` print nothing and valgrind reports 4 errors at `-O0`, while `--interp` prints `y1 d1` and the FREE-function spelling is right everywhere | — |
+| B-2026-09-23-43 | 2026-09-23 | codegen | high | THE RESULT OF A CALL THAT HANDS AN `Option` / `Result` PARAM BACK ON SOME EXITS CRASHES OR LOSES ITS BODY WHEN IT IS CONSUMED DIRECTLY RATHER THAN BOUND -- `show(tl(a, true))` and `match tl(a, true) { .. }` crash on every compiled surface (4 valgrind errors), and `match rs(a, true) { .. }` over a `let`-bound `Result` hand-back prints `y5` without its `d5`, while `let b = tl(a, true); show(b)` is right everywhere | — |
+| B-2026-09-23-44 | 2026-09-23 | codegen | high | AN `Option` PARAM WITH A HEAP PAYLOAD BUT NO USER `Drop`, HANDED BACK THROUGH A `let`-BOUND BRANCH, IS FREED TWICE ON EVERY COMPILED SURFACE -- `let r: Option[String] = if c { a } else { None }; println("mid"); r` at `c = true` aborts `free(): double free detected in tcache 2` on the JIT, `-O0` and `-O2`, and `Option[N]` over a plain struct with a `String` field crashes the same way | — |
+| B-2026-09-23-45 | 2026-09-23 | codegen+interp | medium | AN `Option[(R, i64)]` PARAM RETURNED ON SOME EXITS RUNS NO BODY FOR THE TUPLE'S `Drop` ELEMENT ON THE EXIT WHERE IT DIES INSIDE, ON ALL FOUR SURFACES -- `if c { a } else { None }` at `c = false` prints `none` where `d1 none` is due; the `Option[R]` spelling is fixed | — |
 
 ### Relocated
 
@@ -2980,6 +2984,7 @@ registered in the callee's prologue, not by-value struct params in general. | �
 | B-2026-09-23-20 | interp | medium | `--interp` RUNS NO ELEMENT `Drop` BODY FOR AN `Array` BOUND OUT OF AN `Option` BY A `match` ARM THAT ONLY READS IT, WHILE ALL THREE COMPILED SURFACES… | 610b279af |
 | B-2026-09-23-23 | codegen | high | A SHADOWED OWNING `Array` LOCAL IS FREED TWICE WHEN ITS ELEMENTS RUN A USER `Drop`, WITH NO CONDITIONAL ANYWHERE -- `let x: Array[R, 2] = [..]; let x… | 8862907f2 |
 | B-2026-09-23-25 | codegen | high | A BY-VALUE `Array[String, N]` PARAM RETURNED ON SOME EXITS IS FREED TWICE ON THE EXIT THAT HANDS IT BACK, ON EVERY COMPILED SURFACE -- `fn f(a: Array… | e6022542d |
+| B-2026-09-23-26 | codegen+interp | high | AN `Option[R]` PARAM HANDED BACK THROUGH A `let`-BOUND BRANCH SEGFAULTS ON EVERY COMPILED SURFACE AND RUNS ITS BODY TWICE UNDER `--interp` -- `let r:… | 1388397cb |
 | B-2026-09-23-28 | typecheck+interp+codegen | high | MEASURED: a tuple pattern over a BORROWED tuple is refused at typecheck (`tuple pattern used but type is `ref (i64, i64)``), so `for (a, b) in edges`… | a4ce83d04 |
 | B-2026-09-23-29 | codegen | medium | MEASURED: every fused iterator terminal behind a DESTRUCTURING closure param or an `enumerate()` source fails to compile (`no handler for method 'fil… | a4ce83d04 |
 | B-2026-09-23-30 | codegen | medium | MEASURED: a `for` over a call that returns `Slice[T]` reaches the unlowered-source error under JIT and both AOT modes while `--interp` runs it -- `fo… | a4ce83d04 |
