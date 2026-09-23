@@ -4185,6 +4185,19 @@ impl<'a> super::TypeChecker<'a> {
         true
     }
 
+    /// Type a bare integer literal range bound as the other bound's integer
+    /// type `ty`: range-check it against `ty` (the check `check_expr` makes at
+    /// every other typed position), then record its span at `ty` so the
+    /// backends lower a homogeneous range, as Q4 literal promotion does for a
+    /// binary operator's operands.
+    fn promote_range_literal(&mut self, lit: &Expr, ty: &Type) -> Type {
+        if self.check_expr(lit, ty) == Type::Error {
+            return Type::Error;
+        }
+        self.record_expr_type(&lit.span, ty);
+        ty.clone()
+    }
+
     /// The compile-time integer value of a bare `200` / negated `-200`
     /// UNSUFFIXED literal expression, in i128 (so `-(i64::MIN)` shapes can't
     /// wrap). Suffixed literals return `None` — their range is validated
@@ -6192,8 +6205,45 @@ impl<'a> super::TypeChecker<'a> {
                 end,
                 inclusive,
             } => {
-                let start_ty = start.as_deref().map(|e| self.infer_expr(e));
-                let end_ty = end.as_deref().map(|e| self.infer_expr(e));
+                // B-2026-09-23-7 — a bare integer literal bound takes the other
+                // bound's integer type, the rule Q4 literal promotion applies to a binary
+                // operator's operands. Without it the literal defaulted to
+                // `i64` and, being the start, decided the element type, so
+                // `for i in 0..n` over `n: usize` bound `i` as `i64` and the
+                // first `i - k` with `k: usize` was rejected as mixed-width
+                // arithmetic. Checking the literal against the other bound's
+                // type also range-checks it (`0..m` over `m: u8` with a start
+                // of 300 is refused, not wrapped).
+                let is_lit = |e: &Option<Box<Expr>>| {
+                    e.as_deref()
+                        .is_some_and(|e| Self::unsuffixed_int_literal_value(e).is_some())
+                };
+                let (start_ty, end_ty) = match (start.as_deref(), end.as_deref()) {
+                    (Some(s), Some(e)) if is_lit(start) && !is_lit(end) => {
+                        let et = self.infer_expr(e);
+                        let bound = super::expr_ops::deref_integer_scalar(et.clone());
+                        let st = if is_integer(&bound) {
+                            self.promote_range_literal(s, &bound)
+                        } else {
+                            self.infer_expr(s)
+                        };
+                        (Some(st), Some(et))
+                    }
+                    (Some(s), Some(e)) if is_lit(end) && !is_lit(start) => {
+                        let st = self.infer_expr(s);
+                        let bound = super::expr_ops::deref_integer_scalar(st.clone());
+                        let et = if is_integer(&bound) {
+                            self.promote_range_literal(e, &bound)
+                        } else {
+                            self.infer_expr(e)
+                        };
+                        (Some(st), Some(et))
+                    }
+                    _ => (
+                        start.as_deref().map(|e| self.infer_expr(e)),
+                        end.as_deref().map(|e| self.infer_expr(e)),
+                    ),
+                };
                 // When both bounds are present, verify they share a type.
                 if let (Some(ref s), Some(ref e)) = (&start_ty, &end_ty) {
                     if !self.types_compatible_with_projections(s, e)

@@ -3912,3 +3912,72 @@ fn main() {
     // of that lands on v[2].
     assert_eq!(run_program(src).as_deref(), Some("1 2 77 4 5\n"));
 }
+
+/// B-2026-09-23-8 — a `for` over a range of any integer narrower than 64
+/// bits failed LLVM module verification (`icmp slt i64 %i, i8 %m`) while the
+/// interpreter ran it: the loop counter is an `i64` and the bounds arrived at
+/// their own width. Covers `..`/`..=`, `.rev()`, `.step_by`, a `let`-bound
+/// range, signed widths, the top of `u8`/`u16` (whose final `+1` must not
+/// wrap the counter), and — B-2026-09-23-7 — an unsuffixed literal bound beside
+/// a narrow one (`1..m`, `(0..hi).rev()`, `65530..=w`), which the typechecker
+/// used to reject as an `i64`/`u8` mismatch.
+#[test]
+fn e2e_for_over_narrow_integer_ranges() {
+    let src = r#"
+fn main() {
+    let lo: u8 = 1;
+    let m: u8 = 4;
+    let mut t: u8 = 0;
+    for b in lo..m { t = t + b; }
+    for c in lo..=m { t = t + c; }
+    for b in 1..m { t = t + b; }
+    let big: u8 = 250;
+    let top: u8 = 255;
+    let mut cnt: u32 = 0;
+    for x in big..=top { cnt = cnt + (x as u32); }
+    let hi: u32 = 10;
+    let mut u: u32 = 0;
+    for d in (0..hi).rev() { u = u * 2 + d; }
+    let mut a: u32 = 0;
+    for i in (0..hi).step_by(3) { a = a + i; }
+    let r = lo..m;
+    let mut rb: u8 = 0;
+    for i in r { rb = rb + i; }
+    let neg: i8 = -100;
+    let pos: i8 = 100;
+    let mut n: i32 = 0;
+    for q in neg..pos { n = n + (q as i32); }
+    let s16: i16 = -5;
+    let mut c16: i16 = 0;
+    for i in (s16..=0).rev() { c16 = c16 * 2 + i; }
+    let w: u16 = 65535;
+    let mut d16: u16 = 0;
+    for i in 65530..=w { d16 = d16 + (i - 65530); }
+    println(f"{t} {cnt} {u} {a} {rb} {n} {c16} {d16}");
+}
+"#;
+    assert_eq!(
+        run_program(src).as_deref(),
+        Some("22 1515 8194 18 6 -100 -57 15\n")
+    );
+}
+
+/// B-2026-09-23-9 — `for x in v[a..b]` and `for x in v[a..b].iter()` over a
+/// range-slice TEMPORARY had no lowering (only a slice bound to a name did),
+/// so both failed to compile while the interpreter iterated the view.
+#[test]
+fn e2e_for_over_range_slice_temporary() {
+    let src = r#"
+fn main() {
+    let v: Vec[i64] = [10, 20, 30, 40];
+    let n: i64 = 3;
+    let mut w = 0;
+    for x in v[1..] { w = w + x; }
+    for x in v[1..].iter() { w = w + x * 10; }
+    for x in v[..n] { w = w + x * 100; }
+    for x in v[1..=2].into_iter() { w = w + x * 1000; }
+    println(w);
+}
+"#;
+    assert_eq!(run_program(src).as_deref(), Some("56990\n"));
+}

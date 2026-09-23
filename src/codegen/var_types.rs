@@ -332,6 +332,9 @@ pub(crate) struct RangeLetBinding<'ctx> {
     /// range whose bounds disagree ("range bounds must have same type"), so
     /// one type covers the pair.
     pub(crate) int_ty: IntType<'ctx>,
+    /// Whether that integer type is unsigned, so a loop over the binding
+    /// widens its bounds by zero- rather than sign-extension.
+    pub(crate) unsigned: bool,
     /// `..=` (true) versus `..` (false).
     pub(crate) inclusive: bool,
 }

@@ -152,7 +152,7 @@ fn deref_numeric_scalar(ty: Type) -> Type {
 /// `keep`, leaving every other type untouched — the one read-through rule
 /// behind `deref_numeric_scalar`, `deref_integer_scalar` and
 /// `deref_bool_scalar`. B-2026-09-23-2: 42a9f2c made a borrowed scalar read
-/// as its value in let / argument / index / cast positions and 6f00795b did
+/// as its value in let / argument / index / cast positions and a678da68b did
 /// it for arithmetic, but conditions, `not`, unary `-`, `~`, `and` / `or`
 /// and the bitwise operators still compared the UNPEELED type, so
 /// `if flag == true` compiled and `if flag` did not. A pointee that fails
@@ -165,8 +165,8 @@ fn deref_scalar_where(ty: Type, keep: impl Fn(&Type) -> bool) -> Type {
     }
 }
 
-/// `deref_scalar_where` for the bitwise operators and `~`.
-fn deref_integer_scalar(ty: Type) -> Type {
+/// `deref_scalar_where` for the bitwise operators, `~` and range bounds.
+pub(super) fn deref_integer_scalar(ty: Type) -> Type {
     deref_scalar_where(ty, is_integer)
 }
 

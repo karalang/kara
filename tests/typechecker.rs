@@ -51537,3 +51537,42 @@ fn sortedmap_literal_is_not_a_map() {
     // The bare form stays a `Map` — it has no prefix to say otherwise.
     typecheck_ok("fn main() { let m: Map[String, i64] = [\"a\": 1]; }");
 }
+
+/// B-2026-09-23-7 — an unsuffixed integer literal bound takes the other bound's
+/// integer type, as it would in any binary operator. `1..m` with `m: u8` was
+/// rejected ("range bounds must have same type") because the literal was
+/// inferred at its `i64` default before the bounds were compared.
+#[test]
+fn test_range_literal_bound_takes_the_other_bounds_integer_type() {
+    typecheck_ok(
+        "fn main() {\n\
+             let m: u8 = 4;\n\
+             let hi: u32 = 10;\n\
+             let w: u16 = 65535;\n\
+             let lo: i16 = -3;\n\
+             for b in 1..m { println(b); }\n\
+             for c in 0..=m { println(c); }\n\
+             for d in (0..hi).rev() { println(d); }\n\
+             for e in 65530..=w { println(e); }\n\
+             for f in lo..3 { println(f); }\n\
+         }\n",
+    );
+    // The literal still has to FIT: promotion is a check, not a cast.
+    let errs = typecheck_errors("fn main() { let m: u8 = 4; for b in m..300 { println(b); } }\n");
+    assert!(!errs.is_empty(), "300 does not fit u8");
+}
+
+/// B-2026-09-23-11 — an assignment walks its right-hand side twice (the
+/// value-position checks, then against the target's type), so a fault inside
+/// it was reported twice, word for word.
+#[test]
+fn test_assignment_rhs_fault_is_reported_once() {
+    let errs = typecheck_errors(
+        "fn main() {\n    let y: i64 = 2;\n    let mut s: u8 = 0;\n    s = s + y;\n    println(s);\n}\n",
+    );
+    let mix: Vec<_> = errs
+        .iter()
+        .filter(|e| e.message.contains("cannot mix integer types"))
+        .collect();
+    assert_eq!(mix.len(), 1, "{errs:#?}");
+}

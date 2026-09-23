@@ -1726,3 +1726,40 @@ fn test_index_store_runs_the_displaced_aggregate_elements_drop_body() {
         );
     }
 }
+
+/// Interpreter twin of `e2e_range_slice_of_a_borrowed_parameter`
+/// (B-2026-09-23-10).
+#[test]
+fn test_range_slice_of_a_borrowed_parameter() {
+    let out = run(r#"
+fn vec_view(v: ref Vec[i64]) -> i64 {
+    let s = v[1..3];
+    let mut w = 0;
+    for x in s { w = w + x; }
+    return w + s[0] * 100;
+}
+fn arr_view(a: ref Array[i64, 5]) -> i64 {
+    let s = a[1..4];
+    let mut w = 0;
+    for x in s { w = w + x; }
+    return w;
+}
+fn mut_view(v: mut ref Vec[i64]) -> i64 {
+    v.push(7);
+    let t = v[2..=4];
+    return t[0] + t[1] + t[2];
+}
+fn pass_on(v: ref Vec[i64]) -> i64 {
+    return count(v[1..]);
+}
+fn count(s: Slice[i64]) -> i64 {
+    return s.len() as i64 * 100 + s[0];
+}
+fn main() {
+    let a: Array[i64, 5] = [1, 2, 3, 4, 5];
+    let mut v: Vec[i64] = [10, 20, 30, 40];
+    println(f"{vec_view(v)} {arr_view(a)} {mut_view(mut v)} {pass_on(v)}");
+}
+"#);
+    assert_eq!(out, "2050 9 77 420\n");
+}

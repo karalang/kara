@@ -3583,6 +3583,25 @@ impl<'a> TypeChecker<'a> {
         }
     }
 
+    /// Drop every diagnostic from index `second` on that exactly repeats one
+    /// in `first..second` (same span, same message). For a statement that
+    /// walks one subexpression twice, so a fault inside it is not reported
+    /// once per walk.
+    pub(super) fn drop_repeated_errors(&mut self, first: usize, second: usize) {
+        if second >= self.errors.len() || first >= second {
+            return;
+        }
+        let tail = self.errors.split_off(second);
+        for e in tail {
+            let repeat = self.errors[first..second]
+                .iter()
+                .any(|p| p.span == e.span && p.message == e.message);
+            if !repeat {
+                self.errors.push(e);
+            }
+        }
+    }
+
     pub(super) fn type_error(&mut self, message: String, span: Span, kind: TypeErrorKind) {
         let class = class_for_type_error_kind(&kind);
         self.errors.push(TypeError {

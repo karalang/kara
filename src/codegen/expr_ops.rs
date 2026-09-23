@@ -12049,7 +12049,24 @@ impl<'ctx> super::Codegen<'ctx> {
 
         // Resolve the object to (base_ptr, length).
         let (base_ptr, src_len) = if let ExprKind::Identifier(name) = &object.kind {
-            if let Some(slot) = self.variables.get(name.as_str()).copied() {
+            if let Some(mut slot) = self.variables.get(name.as_str()).copied() {
+                // A `ref`/`mut ref` binding's slot holds a POINTER to the
+                // caller's Vec / Slice / Array, so the header is one load
+                // further in. GEPing the slot itself read the pointer's own
+                // bytes as `{data, len}` — the JIT panicked "slice range out
+                // of bounds" and AOT segfaulted on `v[1..3]` for a
+                // `v: ref Vec[i64]` parameter (B-2026-09-23-10).
+                if let Some(&inner) = self.borrow_vars.ref_params.get(name.as_str()) {
+                    let hdr = self
+                        .builder
+                        .build_load(ptr_ty, slot.ptr, "rs.ref.hdr")
+                        .unwrap()
+                        .into_pointer_value();
+                    slot = super::state::VarSlot {
+                        ptr: hdr,
+                        ty: inner,
+                    };
+                }
                 if let BasicTypeEnum::ArrayType(at) = slot.ty {
                     (slot.ptr, i64_t.const_int(at.len() as u64, false))
                 } else if self.var_types.slice_elem_types.contains_key(name.as_str()) {
@@ -12161,10 +12178,10 @@ impl<'ctx> super::Codegen<'ctx> {
         // one-index GEP. We distinguish by asking whether the source var is
         // an array alloca (known type) or a loaded data pointer.
         let source_is_array = if let ExprKind::Identifier(name) = &object.kind {
-            if let Some(slot) = self.variables.get(name.as_str()) {
-                matches!(slot.ty, BasicTypeEnum::ArrayType(_))
-            } else if let Some(&inner) = self.borrow_vars.ref_params.get(name.as_str()) {
+            if let Some(&inner) = self.borrow_vars.ref_params.get(name.as_str()) {
                 matches!(inner, BasicTypeEnum::ArrayType(_))
+            } else if let Some(slot) = self.variables.get(name.as_str()) {
+                matches!(slot.ty, BasicTypeEnum::ArrayType(_))
             } else {
                 false
             }
@@ -12175,10 +12192,10 @@ impl<'ctx> super::Codegen<'ctx> {
         let elem_ptr = if source_is_array {
             // GEP into `[N x T]*` using [0, start].
             let arr_ty = if let ExprKind::Identifier(name) = &object.kind {
-                if let Some(slot) = self.variables.get(name.as_str()).copied() {
-                    slot.ty
-                } else if let Some(&inner) = self.borrow_vars.ref_params.get(name.as_str()) {
+                if let Some(&inner) = self.borrow_vars.ref_params.get(name.as_str()) {
                     inner
+                } else if let Some(slot) = self.variables.get(name.as_str()).copied() {
+                    slot.ty
                 } else {
                     return Err("range-slice: lost array type".into());
                 }

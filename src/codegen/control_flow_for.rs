@@ -148,6 +148,20 @@ impl<'ctx> super::Codegen<'ctx> {
             }
         }
 
+        // `for x in v[a..b]` / `for x in v[a..b].iter()` — a RANGE SLICE as the
+        // source. `let s = v[a..b]; for x in s` always lowered; written inline,
+        // the bare form fell through to the unlowered-source error and the
+        // `.iter()` form reached the scalar-index peel, which compiled the
+        // range as a VALUE and died in `compile_expr` ("no handler for
+        // expression kind Range"). Bind the view to a synthetic slice local
+        // and drive the loop the named binding drives. A slice is a borrowed
+        // view, so the synthetic owns nothing and is never dropped.
+        if let Some(src) = Self::range_slice_for_source(iterable) {
+            if let Some(result) = self.try_compile_for_range_slice(label, pattern, src, body)? {
+                return Ok(result);
+            }
+        }
+
         // `for x in <iter-chain>.rev()` — reverse-iterate (B-2026-07-18-41): if
         // the chain is reverse-SAFE (order-independent steps over a bound-Vec
         // base), strip `.rev()`, set the one-shot reverse signal, and recurse on
@@ -795,6 +809,7 @@ impl<'ctx> super::Codegen<'ctx> {
                         rl.inclusive,
                         step_val,
                         true,
+                        rl.unsigned,
                         &None,
                         &None,
                         body,
@@ -1666,6 +1681,10 @@ impl<'ctx> super::Codegen<'ctx> {
         } else {
             i64_t.const_int(1, false)
         };
+        let unsigned = start
+            .as_deref()
+            .is_some_and(|e| self.expr_is_unsigned_int(e))
+            || end.as_deref().is_some_and(|e| self.expr_is_unsigned_int(e));
         self.compile_for_range_values(
             label,
             pattern,
@@ -1674,6 +1693,7 @@ impl<'ctx> super::Codegen<'ctx> {
             inclusive,
             step_val,
             step.is_none(),
+            unsigned,
             start,
             end,
             body,
@@ -1700,12 +1720,58 @@ impl<'ctx> super::Codegen<'ctx> {
         inclusive: bool,
         step_val: IntValue<'ctx>,
         step_is_default: bool,
+        unsigned: bool,
         bce_start: &Option<Box<Expr>>,
         bce_end: &Option<Box<Expr>>,
         body: &Block,
     ) -> Result<BasicValueEnum<'ctx>, String> {
         let fn_val = self.current_fn.unwrap();
         let i64_t = self.context.i64_type();
+
+        // B-2026-09-23-8 — the counter below is always an `i64`, but a range
+        // over a narrower integer (`for b in lo..m` with `m: u8`, `(0..hi)
+        // .rev()` with `hi: u32`) hands in bounds at their own width, and
+        // comparing an `i64` counter against an `i8` bound failed module
+        // verification on EVERY such loop while the interpreter ran it.
+        // Widen the bounds (and step) to `i64` by the element's signedness,
+        // run the loop there — where `250u8..=255u8`'s final `+1` has room
+        // and the signed compare is exact for any width under 64 — and
+        // narrow the counter back to the element type only where the
+        // pattern binds it. The element width is the NARROWER bound's: the
+        // typechecker makes both bounds one type, and the only way they
+        // differ here is an unsuffixed literal compiled at the `i64` default.
+        let elem_int_ty = {
+            let (sw, ew) = (
+                start_val.get_type().get_bit_width(),
+                end_val.get_type().get_bit_width(),
+            );
+            let narrow = if sw <= ew {
+                start_val.get_type()
+            } else {
+                end_val.get_type()
+            };
+            (narrow.get_bit_width() < 64).then_some(narrow)
+        };
+        let widen = |this: &Self, v: IntValue<'ctx>, name: &str| -> IntValue<'ctx> {
+            if v.get_type().get_bit_width() >= 64 {
+                return v;
+            }
+            if unsigned {
+                this.builder.build_int_z_extend(v, i64_t, name).unwrap()
+            } else {
+                this.builder.build_int_s_extend(v, i64_t, name).unwrap()
+            }
+        };
+        let start_val = widen(self, start_val, "range.start.wide");
+        let end_val = widen(self, end_val, "range.end.wide");
+        let step_val = if step_val.get_type().get_bit_width() < 64 {
+            // A step is a count, never negative (`step_by` takes `usize`).
+            self.builder
+                .build_int_z_extend(step_val, i64_t, "range.step.wide")
+                .unwrap()
+        } else {
+            step_val
+        };
 
         // `for i in (a..b).rev()` / `(a..=b).rev()` — reverse iteration over the
         // SAME value set, just descending (B-2026-07-18-41 residual). The rev
@@ -1788,6 +1854,14 @@ impl<'ctx> super::Codegen<'ctx> {
             .builder
             .build_load::<BasicTypeEnum<'ctx>>(i64_t.into(), counter, "i")
             .unwrap();
+        let cur: BasicValueEnum<'ctx> = match elem_int_ty {
+            Some(t) => self
+                .builder
+                .build_int_truncate(cur.into_int_value(), t, "i.elem")
+                .unwrap()
+                .into(),
+            None => cur,
+        };
         self.bind_pattern(pattern, cur)?;
         // Bounds-check elision: a for-range loop establishes `start <= i < end`
         // (or `<= end` for inclusive). Push the facts compile_vec_index /
@@ -4544,6 +4618,73 @@ impl<'ctx> super::Codegen<'ctx> {
             .unwrap();
 
         Ok(i64_t.const_int(0, false).into())
+    }
+
+    /// The `v[a..b]` under a `for` source, with one trailing `.iter()` /
+    /// `.into_iter()` peeled: both name the same elements of a view.
+    fn range_slice_for_source(iterable: &Expr) -> Option<&Expr> {
+        let src = match &iterable.kind {
+            ExprKind::MethodCall {
+                object,
+                method,
+                args,
+                ..
+            } if args.is_empty() && (method == "iter" || method == "into_iter") => object.as_ref(),
+            _ => iterable,
+        };
+        match &src.kind {
+            ExprKind::Index { index, .. } if matches!(index.kind, ExprKind::Range { .. }) => {
+                Some(src)
+            }
+            _ => None,
+        }
+    }
+
+    /// Lower `for pattern in <range slice>` through a synthetic `Slice[T]`
+    /// binding, registered exactly as `let s = v[a..b]` registers `s`.
+    /// Declines (`Ok(None)`) when the element type cannot be resolved, which
+    /// leaves the loud unlowered-source diagnostic in charge.
+    fn try_compile_for_range_slice(
+        &mut self,
+        label: Option<&str>,
+        pattern: &Pattern,
+        src: &Expr,
+        body: &Block,
+    ) -> Result<Option<BasicValueEnum<'ctx>>, String> {
+        let (Some(elem), Some(elem_te)) = (
+            self.infer_slice_elem_from_rhs(src),
+            self.slice_elem_type_expr_from_rhs(src),
+        ) else {
+            return Ok(None);
+        };
+        let fn_val = self
+            .current_fn
+            .ok_or_else(|| "for-loop over a slice outside a fn".to_string())?;
+        let view = self.compile_expr(src)?;
+        let slot = self.create_entry_alloca(fn_val, "for.slice.tmp", view.get_type());
+        self.builder.build_store(slot, view).unwrap();
+        let synth = format!("__for_slice_{}", self.indexed_elem_counter);
+        self.indexed_elem_counter += 1;
+        self.variables.insert(
+            synth.clone(),
+            super::state::VarSlot {
+                ptr: slot,
+                ty: view.get_type(),
+            },
+        );
+        self.var_types.slice_elem_types.insert(synth.clone(), elem);
+        self.var_types
+            .var_elem_type_exprs
+            .insert(synth.clone(), elem_te);
+        let synth_expr = Expr {
+            kind: ExprKind::Identifier(synth.clone()),
+            span: src.span,
+        };
+        let result = self.compile_for(label, pattern, &synth_expr, body);
+        self.variables.remove(&synth);
+        self.var_types.slice_elem_types.remove(&synth);
+        self.var_types.var_elem_type_exprs.remove(&synth);
+        result.map(Some)
     }
 
     /// B-2026-08-21-41 — the diagnostic for a `for` source no arm lowered.

@@ -5680,6 +5680,7 @@ impl<'a> super::TypeChecker<'a> {
                 // is, so `v[i] = v[j]` falls to the same rule
                 // (B-2026-08-26-21). `Index.index_set` takes `val: T` by value,
                 // which a `ref T` cannot supply.
+                let errors_before_rhs = self.errors.len();
                 {
                     let rhs_ty = self.infer_expr(value);
                     self.reject_index_move_non_copy(value, &rhs_ty);
@@ -5721,7 +5722,16 @@ impl<'a> super::TypeChecker<'a> {
                 self.assigning_lhs = true;
                 let target_ty = self.infer_expr(target);
                 self.assigning_lhs = saved;
+                // B-2026-09-23-11 — the RHS is walked twice, once by the
+                // value-position checks above and once here against the
+                // target's type, so a fault INSIDE it (`s = s + y` with
+                // `s: u8`, `y: i64`) was reported twice, identically. Keep
+                // what the second walk adds and drop only exact repeats of
+                // the first: the mismatch against the target is new
+                // information, a second copy of the operand error is not.
+                let errors_before_check = self.errors.len();
                 self.check_expr(value, &target_ty);
+                self.drop_repeated_errors(errors_before_rhs, errors_before_check);
             }
             StmtKind::CompoundAssign { target, value, op } => {
                 // B-2026-08-14-29 — check the implied binary operation, not

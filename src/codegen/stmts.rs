@@ -4726,6 +4726,8 @@ impl<'ctx> super::Codegen<'ctx> {
                                 start: start_slot,
                                 end: end_slot,
                                 int_ty,
+                                unsigned: self.expr_is_unsigned_int(start)
+                                    || self.expr_is_unsigned_int(end),
                                 inclusive: *inclusive,
                             },
                         );
