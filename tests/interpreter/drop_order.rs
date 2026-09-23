@@ -5747,3 +5747,82 @@ fn interp_boxed_array_enum_payload_bodies_are_caller_sequenced() {
         "r1\ndR1\ndR2\nmid\ns23\ndR3\ndR4\nmid2\ndR5\ndR6\nheld\nend\n"
     );
 }
+
+/// B-2026-09-22-8 -- a by-value `Array` (or `Vec`) parameter that the callee
+/// wraps into a constructor, a struct literal or a tuple has its element
+/// `Drop` bodies run by the CALLER on every backend (the caller-retains
+/// convention for such a param). The interpreter also gave the wrapped value
+/// an owner of its own inside the callee, so it ran every element body twice
+/// (`d1 d2 d1 d2` where one pair is due) in 13 of these 15 cells. `user` and
+/// `vec` were already right there.
+///
+/// Four interpreter gates were at fault. The seeded-constructor scrutinee
+/// (`match Some(a)`, `if let`, `let .. else`) never counted a payload slot
+/// holding the param as a view. The named-local wrap (`let o = Some(a)`, the
+/// struct literal, the tuple) asked `value_runs_user_drop`, which answers
+/// `false` for any bare container, so an `Array` payload never qualified as a
+/// view at all.
+///
+/// Two compiled halves moved with it, because fixing the interpreter alone
+/// would have left the build divergent. `if let` and `let .. else` never set
+/// the seeded-array flag `match` sets (B-2026-09-19-61), so `iflet` and
+/// `letelse` ran the bodies twice on every compiled surface. `named_mixed` is
+/// the named-`let` spelling of B-2026-09-23-1: the box-only twin already
+/// skipped only the caller's field, but the payload-bodies walker was
+/// withheld WHOLE, so the fresh field's `d90 d91` ran nowhere compiled. Memory
+/// was balanced throughout.
+///
+/// Measured on this tree: the stdout below is byte-identical across
+/// `--interp`, jit, `karac build` and `KARAC_OPT_LEVEL=0 karac build`, with 0
+/// bytes in 0 blocks and 0 errors under `valgrind --leak-check=full` at `-O0`.
+/// A bare STRUCT param wrapped the same way is deliberately absent: it runs
+/// its body twice on EVERY surface, and that agreed defect is filed on its own.
+#[test]
+fn interp_array_param_wrapped_by_the_callee_runs_its_element_bodies_once() {
+    assert_eq!(
+        run(r#"struct R { id: i64, s: String }
+impl Drop for R { fn drop(mut ref self) { println(f"  d{self.id}") } }
+fn mkr(i: i64) -> R { return R { id: i, s: f"aaaaaaaa{i}" } }
+enum Pw { P(Array[R, 2]), Q }
+enum Pw2 { P2(Array[R, 2], Array[R, 2]), Q2 }
+enum Pv { Pv1(Vec[R]), Qv }
+struct Bx { v: Array[R, 2] }
+struct Hm { k: i64 }
+impl Hm {
+    fn seeded(ref self, a: Array[R, 2]) -> i64 { match Option.Some(a) { Option.Some(v) => { println("  arm"); return 1 }, Option.None => { return 0 } } }
+    fn named(ref self, a: Array[R, 2]) -> i64 { let o = Option.Some(a); println("  mid"); return 1 }
+}
+fn c_opt(a: Array[R, 2]) -> i64 { match Option.Some(a) { Option.Some(v) => { println(f"  r{v[0].id}"); return 1 }, Option.None => { return 0 } } }
+fn c_bare(a: Array[R, 2]) -> i64 { match Some(a) { Some(v) => { println("  arm"); return 1 }, None => { return 0 } } }
+fn c_res(a: Array[R, 2]) -> i64 { match Result.Ok(a) { Result.Ok(v) => { println("  arm"); return 1 }, Result.Err(e) => { return 0 } } }
+fn c_user(a: Array[R, 2]) -> i64 { match Pw.P(a) { Pw.P(v) => { println(f"  r{v[1].id}"); return 1 }, Pw.Q => { return 0 } } }
+fn c_vec(a: Vec[R]) -> i64 { match Pv.Pv1(a) { Pv.Pv1(v) => { println("  arm"); return 1 }, Pv.Qv => { return 0 } } }
+fn c_iflet(a: Array[R, 2]) -> i64 { if let Option.Some(v) = Option.Some(a) { println(f"  r{v[1].id}"); return 1 } return 0 }
+fn c_letelse(a: Array[R, 2]) -> i64 { let Option.Some(v) = Option.Some(a) else { return 0 }; println(f"  r{v[0].id}"); return 1 }
+fn c_named(a: Array[R, 2]) -> i64 { let o = Option.Some(a); match o { Option.Some(v) => { println("  arm"); return 1 }, Option.None => { return 0 } } }
+fn c_named_user(a: Array[R, 2]) -> i64 { let o = Pw.P(a); println("  mid"); return 1 }
+fn c_named_mixed(a: Array[R, 2]) -> i64 { let o = Pw2.P2(a, [mkr(90), mkr(91)]); println("  mid"); return 1 }
+fn c_named_rebind(a: Array[R, 2]) -> i64 { let o = Option.Some(a); let o2 = o; println("  mid"); return 1 }
+fn c_struct(a: Array[R, 2]) -> i64 { let b = Bx { v: a }; println(f"  r{b.v[0].id}"); return 1 }
+fn c_tuple(a: Array[R, 2]) -> i64 { let t = (a, 5); println(f"  r{t.1}"); return 1 }
+fn main() {
+    println("opt");         { let a: Array[R, 2] = [mkr(1), mkr(2)]; let z = c_opt(a); }
+    println("bare");        { let a: Array[R, 2] = [mkr(3), mkr(4)]; let z = c_bare(a); }
+    println("res");         { let a: Array[R, 2] = [mkr(5), mkr(6)]; let z = c_res(a); }
+    println("user");        { let a: Array[R, 2] = [mkr(7), mkr(8)]; let z = c_user(a); }
+    println("vec");         { let a: Vec[R] = [mkr(9), mkr(10)]; let z = c_vec(a); }
+    println("iflet");       { let a: Array[R, 2] = [mkr(11), mkr(12)]; let z = c_iflet(a); }
+    println("letelse");     { let a: Array[R, 2] = [mkr(13), mkr(14)]; let z = c_letelse(a); }
+    println("named");       { let a: Array[R, 2] = [mkr(15), mkr(16)]; let z = c_named(a); }
+    println("named_user");  { let a: Array[R, 2] = [mkr(17), mkr(18)]; let z = c_named_user(a); }
+    println("named_mixed"); { let a: Array[R, 2] = [mkr(19), mkr(20)]; let z = c_named_mixed(a); }
+    println("named_rebind");{ let a: Array[R, 2] = [mkr(21), mkr(22)]; let z = c_named_rebind(a); }
+    println("struct");      { let a: Array[R, 2] = [mkr(23), mkr(24)]; let z = c_struct(a); }
+    println("tuple");       { let a: Array[R, 2] = [mkr(25), mkr(26)]; let z = c_tuple(a); }
+    println("m_seeded");    { let h = Hm { k: 1 }; let a: Array[R, 2] = [mkr(27), mkr(28)]; let z = h.seeded(a); }
+    println("m_named");     { let h = Hm { k: 1 }; let a: Array[R, 2] = [mkr(29), mkr(30)]; let z = h.named(a); }
+    println("end")
+}"#),
+        "opt\n  r1\n  d1\n  d2\nbare\n  arm\n  d3\n  d4\nres\n  arm\n  d5\n  d6\nuser\n  r8\n  d7\n  d8\nvec\n  arm\n  d9\n  d10\niflet\n  r12\n  d11\n  d12\nletelse\n  r13\n  d13\n  d14\nnamed\n  arm\n  d15\n  d16\nnamed_user\n  mid\n  d17\n  d18\nnamed_mixed\n  d90\n  d91\n  mid\n  d19\n  d20\nnamed_rebind\n  mid\n  d21\n  d22\nstruct\n  r23\n  d23\n  d24\ntuple\n  r5\n  d25\n  d26\nm_seeded\n  arm\n  d27\n  d28\nm_named\n  mid\n  d29\n  d30\nend\n"
+    );
+}

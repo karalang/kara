@@ -1637,6 +1637,9 @@ impl<'a> super::Interpreter<'a> {
     /// any other pattern or scrutinee shape. Shared by the `match`, `if let`
     /// and `while let` legs so the three spellings agree.
     pub(super) fn masked_payload_view_names(&self, pattern: &Pattern, place: &Expr) -> Vec<String> {
+        if let ExprKind::Call { callee, args } = &place.kind {
+            return self.seeded_ctor_param_view_names(pattern, callee, args);
+        }
         let ExprKind::Identifier(root) = &place.kind else {
             return Vec::new();
         };
@@ -1670,6 +1673,88 @@ impl<'a> super::Interpreter<'a> {
                 .collect(),
             _ => Vec::new(),
         }
+    }
+
+    /// B-2026-09-22-8 -- the SEEDED-constructor spelling of the masked slot
+    /// above: `match Some(a) { Some(v) => .. }` inside `fn f(a: Array[R, 2])`.
+    ///
+    /// A by-value param's element bodies are the CALLER's to run on this
+    /// backend (the caller-drops convention `run_fresh_temp_arg_drops` and
+    /// `record_ctor_arg_moves` describe), so a payload bound straight out of a
+    /// constructor wrapped around that param is a VIEW of it, exactly as a
+    /// payload bound out of a named local whose slot `mask_param_view_enum_ctor_slots`
+    /// masked is. Without this the arm gave `v` a Drop slot of its own and ran
+    /// every element body the caller was about to run: `d1 d2 d1 d2` against
+    /// the `d1 d2` all three compiled surfaces print since B-2026-09-19-61,
+    /// whose BODIES half (`pattern_binding_seeded_array_payload_stays_with_caller`
+    /// in codegen) is the twin of this.
+    ///
+    /// Per slot, so a FRESH argument beside the param keeps its slot. Limited to
+    /// an `Array`/`Vec` param, the shape codegen already answers this way: a
+    /// bare STRUCT param runs its body twice on EVERY surface, so standing the
+    /// arm down here alone would manufacture a run-vs-build divergence out of an
+    /// agreed defect. A method frame is admitted only where its caller retains
+    /// the arguments, and a `shared` enum is not resolved by
+    /// `fresh_bare_variant_ctor_enum`, so it is never admitted.
+    pub(super) fn seeded_ctor_param_view_names(
+        &self,
+        pattern: &Pattern,
+        callee: &Expr,
+        args: &[crate::ast::CallArg],
+    ) -> Vec<String> {
+        let PatternKind::TupleVariant { path, patterns } = &pattern.kind else {
+            return Vec::new();
+        };
+        // A method frame retracts only when its caller still owns the
+        // arguments (B-2026-08-30-55's licence, the one
+        // `let_destructures_owned_param` checks); otherwise the frame's own
+        // slot is the only one.
+        if self.owned_param_frame_is_method.last().copied() == Some(true)
+            && self.method_frame_caller_retains_args.last().copied() != Some(true)
+        {
+            return Vec::new();
+        }
+        let (enum_seg, variant) = match &callee.kind {
+            ExprKind::Identifier(n) => (None, n),
+            ExprKind::Path { segments, .. } if segments.len() >= 2 => (
+                segments.get(segments.len() - 2),
+                &segments[segments.len() - 1],
+            ),
+            _ => return Vec::new(),
+        };
+        if path.last() != Some(variant) {
+            return Vec::new();
+        }
+        // A constructor, not a function that happens to share the name.
+        let Some(enum_name) = self.fresh_bare_variant_ctor_enum(variant) else {
+            return Vec::new();
+        };
+        let is_ctor = match enum_seg {
+            Some(e) => *e == enum_name,
+            None => !self
+                .program
+                .items
+                .iter()
+                .any(|item| matches!(item, Item::Function(f) if f.name == *variant)),
+        };
+        if !is_ctor {
+            return Vec::new();
+        }
+        let Some(params) = self.owned_param_names_stack.last() else {
+            return Vec::new();
+        };
+        patterns
+            .iter()
+            .enumerate()
+            .filter(|(i, _)| {
+                args.get(*i).is_some_and(|a| {
+                    matches!(&a.value.kind, ExprKind::Identifier(src)
+                        if params.contains(src.as_str())
+                            && matches!(self.env.get(src), Some(Value::Array(_))))
+                })
+            })
+            .flat_map(|(_, p)| p.binding_names())
+            .collect()
     }
 
     fn match_disarms_payload_walk(&self, enum_name: &str, arms: &[MatchArm]) -> bool {

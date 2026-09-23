@@ -9133,6 +9133,10 @@ impl<'ctx> super::Codegen<'ctx> {
                             self.payload_vars
                                 .enum_box_only_array_locals
                                 .remove(var_name.as_str());
+                            // B-2026-09-22-8 — the mask is kept for the
+                            // BODIES half below, which has to skip exactly the
+                            // same fields the box-only twin skips.
+                            let box_only_mask = box_only.and(caller_keeps.clone());
                             if let (Some(f), Some(m)) = (box_only, caller_keeps) {
                                 self.payload_vars
                                     .enum_box_only_array_locals
@@ -9212,7 +9216,32 @@ impl<'ctx> super::Codegen<'ctx> {
                             // the instantiation whichever ownership arm this
                             // binding takes.
                             self.record_var_enum_inst_te(var_name, ty.as_ref(), value);
-                            if box_only.is_some() {
+                            if let Some(m) = &box_only_mask {
+                                // B-2026-09-22-8 — PER FIELD, like the memory
+                                // half. Arming nothing here was right only while
+                                // the box-only twin needed EVERY array field to
+                                // be the caller's; since B-2026-09-23-1 a mixed
+                                // `let o = W2.P2(a, [mk(3), mk(4)])` gets a twin
+                                // too, and withholding the whole walker lost the
+                                // FRESH field's element bodies on every compiled
+                                // surface (memory balanced, since the twin's
+                                // walk still frees it). Skip the caller's fields
+                                // and the view slots; walk the rest. With every
+                                // Drop-bearing field skipped the emitter returns
+                                // `None` and this arms nothing, as before.
+                                let mut skip = view_slots.clone();
+                                skip.extend(m.fields.iter().map(|&fi| (m.variant.clone(), fi)));
+                                if let Some(bodies) = self
+                                    .emit_enum_payload_user_drop_bodies_fn_skipping(&name, &skip)
+                                {
+                                    self.track_user_drop_var_with_fn(
+                                        "",
+                                        var_name,
+                                        alloca,
+                                        bodies,
+                                        UserDropKind::ContainerElemBodies,
+                                    );
+                                }
                                 // B-2026-09-22-10, bodies half. The walker
                                 // above reaches an `Array` payload
                                 // (`__karac_dropelems_enum_<E>` calls

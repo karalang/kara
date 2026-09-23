@@ -36,6 +36,7 @@ pub(super) type ScrutineeShapeFlags<'ctx> = (
     Option<(PointerValue<'ctx>, inkwell::values::FunctionValue<'ctx>)>,
     Option<PointerValue<'ctx>>,
     bool,
+    bool,
 );
 
 impl<'ctx> super::Codegen<'ctx> {
@@ -1439,6 +1440,8 @@ impl<'ctx> super::Codegen<'ctx> {
             self.pattern_state.pattern_binding_scrutinee_optres_slot,
             self.pattern_state
                 .pattern_binding_scrutinee_is_owned_elem_clone,
+            self.pattern_state
+                .pattern_binding_seeded_array_payload_stays_with_caller,
         );
         self.pattern_state
             .pattern_binding_scrutinee_is_fresh_owning_temp =
@@ -1446,6 +1449,14 @@ impl<'ctx> super::Codegen<'ctx> {
         // B-2026-08-01-13 — see `compile_match`'s twin derivation.
         self.pattern_state.pattern_binding_scrutinee_is_owned_param =
             self.scrutinee_is_owned_param_binding(scrutinee);
+        // B-2026-09-19-61 / B-2026-09-22-8 — see `compile_match`'s twin
+        // derivation. `compile_match` set this and the three `let`-pattern
+        // forms did not, so `if let Some(v) = Some(a)` over a by-value `Array`
+        // param still ran the element bodies in the arm AND in the caller.
+        self.pattern_state
+            .pattern_binding_seeded_array_payload_stays_with_caller =
+            Self::seeded_variant_arg_payload(scrutinee)
+                .is_some_and(|(_, parg)| self.seeded_array_payload_stays_with_caller(parg));
         // B-2026-09-15-21 — see `compile_match`'s twin derivation.
         self.pattern_state
             .pattern_binding_scrutinee_param_memory_is_callee_owned =
@@ -1511,6 +1522,8 @@ impl<'ctx> super::Codegen<'ctx> {
         self.pattern_state.pattern_binding_scrutinee_optres_slot = saved.6;
         self.pattern_state
             .pattern_binding_scrutinee_is_owned_elem_clone = saved.7;
+        self.pattern_state
+            .pattern_binding_seeded_array_payload_stays_with_caller = saved.8;
     }
 
     /// B-2026-08-04-2 — the scrutinee's `Option`/`Result` slot: a named

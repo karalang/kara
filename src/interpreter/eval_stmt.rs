@@ -3145,7 +3145,9 @@ impl<'a> super::Interpreter<'a> {
             let Some(fv) = bound.get(&init.name) else {
                 return;
             };
-            if !self.value_runs_user_drop(fv) {
+            // B-2026-09-22-8 — an `Array` field too; see
+            // `ctor_payload_owes_user_drop`.
+            if !self.ctor_payload_owes_user_drop(fv) {
                 continue;
             }
             visited += 1;
@@ -3251,7 +3253,7 @@ impl<'a> super::Interpreter<'a> {
         }
         let mut views: Vec<usize> = Vec::new();
         for (i, payload) in payloads.iter().enumerate() {
-            if !self.value_runs_user_drop(payload) {
+            if !self.ctor_payload_owes_user_drop(payload) {
                 continue;
             }
             let Some(arg) = args.get(i) else {
@@ -3449,7 +3451,9 @@ impl<'a> super::Interpreter<'a> {
             let Some(ev) = bound.get(i) else {
                 return;
             };
-            if !self.value_runs_user_drop(ev) {
+            // B-2026-09-22-8 — an `Array` element too; see
+            // `ctor_payload_owes_user_drop`.
+            if !self.ctor_payload_owes_user_drop(ev) {
                 continue;
             }
             let is_view = matches!(&e.kind, ExprKind::Identifier(src)
@@ -3611,6 +3615,21 @@ impl<'a> super::Interpreter<'a> {
             })
     }
 
+    /// Does a constructor PAYLOAD owe user-`Drop` bodies, for the two
+    /// param-view gates below? `value_runs_user_drop` answers only for a
+    /// struct (a bare container classifies `false` there on purpose, see its
+    /// field half), so an `Array[R, N]` param wrapped into `W.P(a)` or
+    /// `Some(a)` was never recognised as a view: the local got a Drop slot,
+    /// its walk ran every element body, and the caller ran them again
+    /// (B-2026-09-22-8, `d1 d2 d1 d2` against one pair on every compiled
+    /// surface). An `Array` whose elements carry a body is admitted too; the
+    /// by-value `Array`/`Vec` param is exactly the caller-retains shape both
+    /// compiled backends already withhold.
+    fn ctor_payload_owes_user_drop(&self, payload: &Value) -> bool {
+        self.value_runs_user_drop(payload)
+            || (matches!(payload, Value::Array(_)) && self.field_value_carries_user_drop(payload))
+    }
+
     fn let_ctor_payloads_are_param_views(&self, bname: &str, value: &Expr) -> bool {
         let ExprKind::Call { callee, args } = &value.kind else {
             return false;
@@ -3650,7 +3669,7 @@ impl<'a> super::Interpreter<'a> {
         }
         let mut visited_any = false;
         for (i, payload) in payloads.iter().enumerate() {
-            if !self.value_runs_user_drop(payload) {
+            if !self.ctor_payload_owes_user_drop(payload) {
                 continue;
             }
             let Some(arg) = args.get(i) else {
@@ -4016,6 +4035,13 @@ impl<'a> super::Interpreter<'a> {
             }
             _ => return Vec::new(),
         };
+        // B-2026-09-22-8 — a destructure of a SEEDED constructor around a
+        // by-value param (`let Some(v) = Some(a) else { .. }`) binds a view of
+        // that param in the slot it filled, exactly as the `match` / `if let`
+        // spellings do through `masked_payload_view_names`.
+        if let ExprKind::Call { callee, args } = &value.kind {
+            return self.seeded_ctor_param_view_names(pattern, callee, args);
+        }
         let ExprKind::Identifier(src) = &value.kind else {
             return Vec::new();
         };
@@ -7142,7 +7168,7 @@ impl<'a> super::Interpreter<'a> {
     /// Codegen folds `par` into its layout's `is_shared` flag
     /// (`declarations.rs`, `is_shared: e.is_shared || e.is_par`), which is why
     /// this tests BOTH flags to mean the same thing.
-    fn fresh_bare_variant_ctor_enum(&self, variant: &str) -> Option<String> {
+    pub(super) fn fresh_bare_variant_ctor_enum(&self, variant: &str) -> Option<String> {
         fn scan(items: &[Item], variant: &str) -> Option<String> {
             items.iter().find_map(|item| match item {
                 Item::EnumDef(e)
