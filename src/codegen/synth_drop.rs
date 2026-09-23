@@ -21,6 +21,7 @@ use inkwell::IntPredicate;
 
 use crate::ast::{GenericArg, Item, TypeExpr, TypeKind, VariantKind};
 
+use super::drop_rc::BoxOnlyMask;
 use super::state::EnumDropKind;
 
 /// B-2026-08-28-23 — a NESTED mask for the field-bodies walk: which fields to
@@ -234,7 +235,7 @@ impl<'ctx> super::Codegen<'ctx> {
     /// `emit_hash_fn_for_type` lazy-synth pattern: the saved insert
     /// block is restored on exit so callers don't have to.
     pub(super) fn emit_enum_drop_switch(&mut self, enum_name: &str) -> Option<FunctionValue<'ctx>> {
-        self.emit_enum_drop_switch_variant(enum_name, false)
+        self.emit_enum_drop_switch_variant(enum_name, None)
     }
 
     /// B-2026-09-22-6 — the same switch with the `BoxedArray` arm's INTERIOR
@@ -265,17 +266,22 @@ impl<'ctx> super::Codegen<'ctx> {
     pub(super) fn emit_enum_drop_switch_box_only(
         &mut self,
         enum_name: &str,
+        mask: &BoxOnlyMask,
     ) -> Option<FunctionValue<'ctx>> {
-        self.emit_enum_drop_switch_variant(enum_name, true)
+        self.emit_enum_drop_switch_variant(enum_name, Some(mask))
     }
 
     fn emit_enum_drop_switch_variant(
         &mut self,
         enum_name: &str,
-        skip_boxed_array_interior: bool,
+        skip: Option<&BoxOnlyMask>,
     ) -> Option<FunctionValue<'ctx>> {
-        let cached = if skip_boxed_array_interior {
-            self.drop_rc.enum_drop_fns_box_only.get(enum_name)
+        // B-2026-09-23-1 — the twin is keyed by its MASK, not only by enum: two
+        // constructors of one enum can hand different fields to the caller.
+        let skip_boxed_array_interior = skip.is_some();
+        let box_only_key = skip.map(|m| format!("{enum_name}{}", m.suffix()));
+        let cached = if let Some(k) = &box_only_key {
+            self.drop_rc.enum_drop_fns_box_only.get(k)
         } else {
             self.drop_rc.enum_drop_fns.get(enum_name)
         };
@@ -316,17 +322,11 @@ impl<'ctx> super::Codegen<'ctx> {
             return None;
         }
 
-        let suffix = if skip_boxed_array_interior {
-            "__boxonly"
-        } else {
-            ""
-        };
+        let suffix = skip.map(|m| m.suffix()).unwrap_or_default();
         let fn_name = format!("__karac_drop_{enum_name}{suffix}");
         if let Some(f) = self.module.get_function(&fn_name) {
-            if skip_boxed_array_interior {
-                self.drop_rc
-                    .enum_drop_fns_box_only
-                    .insert(enum_name.to_string(), f);
+            if let Some(k) = &box_only_key {
+                self.drop_rc.enum_drop_fns_box_only.insert(k.clone(), f);
             } else {
                 self.drop_rc.enum_drop_fns.insert(enum_name.to_string(), f);
             }
@@ -724,8 +724,11 @@ impl<'ctx> super::Codegen<'ctx> {
                                 self.builder.position_at_end(free_bb);
                                 // B-2026-09-22-6 — the interior belongs to the
                                 // caller in the box-only twin; the `free` below
-                                // still does not.
-                                if let Some(f) = inner_drop.filter(|_| !skip_boxed_array_interior) {
+                                // still does not. B-2026-09-23-1: only for the
+                                // FIELDS the mask names, so a callee-owned or
+                                // local array beside them keeps its walk.
+                                let caller_keeps = skip.is_some_and(|m| m.skips(variant_name, fi));
+                                if let Some(f) = inner_drop.filter(|_| !caller_keeps) {
                                     self.builder.build_call(f, &[box_ptr.into()], "").unwrap();
                                 }
                                 self.builder
@@ -1102,10 +1105,8 @@ impl<'ctx> super::Codegen<'ctx> {
         if let Some(bb) = saved_bb {
             self.builder.position_at_end(bb);
         }
-        if skip_boxed_array_interior {
-            self.drop_rc
-                .enum_drop_fns_box_only
-                .insert(enum_name.to_string(), drop_fn);
+        if let Some(k) = box_only_key {
+            self.drop_rc.enum_drop_fns_box_only.insert(k, drop_fn);
         } else {
             self.drop_rc
                 .enum_drop_fns

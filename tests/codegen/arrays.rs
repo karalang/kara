@@ -562,10 +562,10 @@ fn main() {
 /// whose element heap IS callee-owned, so the gate must decline and the
 /// ordinary walk must free them. It was clean before the fix and must stay so.
 ///
-/// DELIBERATELY ABSENT: a caller-retained array BESIDE a callee-owned one or a
-/// local. The twin is chosen per ENUM, so it cannot give the two fields two
-/// answers; the gate declines, and that shape still aborts 134 identically on
-/// both arms. It cannot sit in a clean-run fixture.
+/// The MIXED shape -- a caller-retained array beside a callee-owned one or a
+/// local -- was absent here because this row's twin was chosen per ENUM and
+/// could not give two fields two answers. B-2026-09-23-1 made the twin
+/// per-field; its cells are the fixture below.
 ///
 /// `--interp` is NOT the oracle for `t/let`: the interpreter runs that cell's
 /// element bodies TWICE (B-2026-09-22-8). The other four cells agree with it.
@@ -599,6 +599,81 @@ fn main() {
         return;
     };
     assert_eq!(out, "t/two\n  r\n  dN1\n  dN2\n  dSaaaaaaaa0\n  dSaaaaaaaa1\nt/twos\n  r\n  dScccccccc0\n  dScccccccc1\n  dSbbbbbbbb0\n  dSbbbbbbbb1\nt/str\n  r:kk:dddddddd1:3\n  dN3\n  dN4\n  dSdddddddd0\n  dSdddddddd1\nt/let\n  r\n  dN5\n  dN6\n  dSeeeeeeee0\n  dSeeeeeeee1\nt/callee\n  r:ffffffff0:gggggggg1\nend\n", "got:\n{out}");
+}
+
+/// B-2026-09-23-1 -- a user-enum variant carrying a caller-retained `Array`
+/// param BESIDE an array the variant itself owns (a callee-owned
+/// `Array[String, 2]` param, a local, a literal, a call result) was freed by
+/// both sides (`free(): double free detected in tcache 2`, exit 134) with
+/// B-2026-09-22-17's fix present. That fix's gate asked whether EVERY array
+/// field was caller-retained, because the box-only drop twin was chosen per
+/// ENUM and so could only stand every `BoxedArray` interior walk down or none.
+/// On the mixed shape it declined, the ordinary walk ran, and it freed the
+/// caller's elements too.
+///
+/// The twin now carries a per-field mask: the gate returns the set of fields
+/// rooted at a caller-retained by-value param, and the twin skips the walk on
+/// exactly those, keyed `<E>__boxonly_<Variant>_<fields>` so two masks on one
+/// enum get two twins. `m/callee`, `m/local`, `m/literal` and `m/callres` are
+/// the four non-param spellings of the second field; `m/rebind` goes through
+/// `let o = ..; let o2 = o` (the mask travels with the rebind), and
+/// `m/letlocal` is the named-`let` path through `stmts.rs`. `n/both` and
+/// `n/first` put mask `{0, 1}` and mask `{0}` on ONE enum; a twin shared
+/// between them would double-free the first or leak the second.
+///
+/// Measured on the control arm (the fixture's program on the unfixed
+/// compiler, `-O0`): it aborts 134 at `m/callee` with `free(): double free
+/// detected in tcache 2`, so the later cells never run there. Standalone
+/// programs of the callee-param, local, literal, call-result and rebind
+/// spellings each aborted 134 with 6 valgrind errors on the same arm; `n/first`
+/// was not measured standalone, and `n/both` is the -17 shape. On the fix all
+/// eight run clean under `valgrind --leak-check=full` at `-O0`, and the stdout
+/// below is byte-identical across jit / `karac build` / `KARAC_OPT_LEVEL=0
+/// karac build`.
+///
+/// `n/first`'s LOCAL array prints no element `Drop` body (`dShlocal00`,
+/// `dShlocal01` are owed) and neither does any other surface, `--interp`
+/// included; memory is balanced. That gap predates this row (a one-field
+/// variant over a literal `Array[S, 2]` loses its bodies the same way on the
+/// unfixed compiler) and is filed separately. When it is fixed this pin must
+/// gain those two lines. The other `m/` cells hold `Array[String, 2]` in the
+/// second field precisely so they pin no wrong answer.
+///
+/// `--interp` is NOT the oracle for `m/rebind` and `m/letlocal`: it runs
+/// their element bodies TWICE (B-2026-09-22-8). The other six agree with it.
+/// Enum and variant names are distinct from every other enum here on purpose
+/// (B-2026-09-22-16).
+#[test]
+fn e2e_mixed_array_fields_in_one_enum_variant_get_a_per_field_mask() {
+    let Some(out) = run_program(
+        r#"struct S { tag: String }
+impl Drop for S { fn drop(mut ref self) { println(f"  dS{self.tag}") } }
+enum K1 { Kp(Array[S, 2], Array[String, 2]), Kq }
+enum K2 { Np(Array[S, 2], Array[S, 2]), Nq }
+fn n_both(a: Array[S, 2], b: Array[S, 2]) -> i64 { match K2.Np(a, b) { K2.Np(v, w) => { println(f"  r:{v[1].tag}:{w[0].tag}"); return 1 }, K2.Nq => { println("  n"); return 0 } } }
+fn n_first(a: Array[S, 2]) -> i64 { let b: Array[S, 2] = [S { tag: f"hlocal00" }, S { tag: f"hlocal01" }]; match K2.Np(a, b) { K2.Np(v, w) => { println(f"  r:{w[1].tag}"); return 1 }, K2.Nq => { println("  n"); return 0 } } }
+fn mk() -> Array[String, 2] { [f"callres0", f"callres1"] }
+fn m_callee(a: Array[S, 2], b: Array[String, 2]) -> i64 { match K1.Kp(a, b) { K1.Kp(v, w) => { println(f"  r:{v[0].tag}:{w[1]}"); return 1 }, K1.Kq => { println("  n"); return 0 } } }
+fn m_local(a: Array[S, 2]) -> i64 { let b: Array[String, 2] = [f"local000", f"local001"]; match K1.Kp(a, b) { K1.Kp(v, w) => { println(f"  r:{w[0]}"); return 1 }, K1.Kq => { println("  n"); return 0 } } }
+fn m_literal(a: Array[S, 2]) -> i64 { match K1.Kp(a, [f"literal0", f"literal1"]) { K1.Kp(v, w) => { println(f"  r:{w[1]}"); return 1 }, K1.Kq => { println("  n"); return 0 } } }
+fn m_callres(a: Array[S, 2]) -> i64 { match K1.Kp(a, mk()) { K1.Kp(v, w) => { println(f"  r:{w[0]}"); return 1 }, K1.Kq => { println("  n"); return 0 } } }
+fn m_rebind(a: Array[S, 2], b: Array[String, 2]) -> i64 { let o = K1.Kp(a, b); let o2 = o; match o2 { K1.Kp(v, w) => { println(f"  r:{w[1]}"); return 1 }, K1.Kq => { println("  n"); return 0 } } }
+fn m_letlocal(a: Array[S, 2]) -> i64 { let b: Array[String, 2] = [f"letloc00", f"letloc01"]; let o = K1.Kp(a, b); match o { K1.Kp(v, w) => { println(f"  r:{w[0]}"); return 1 }, K1.Kq => { println("  n"); return 0 } } }
+fn main() {
+    println("m/callee");   { let a: Array[S, 2] = [S { tag: f"aaaaaaaa0" }, S { tag: f"aaaaaaaa1" }]; let b: Array[String, 2] = [f"strstr00", f"strstr01"]; let z = m_callee(a, b); }
+    println("m/local");    { let a: Array[S, 2] = [S { tag: f"bbbbbbbb0" }, S { tag: f"bbbbbbbb1" }]; let z = m_local(a); }
+    println("m/literal");  { let a: Array[S, 2] = [S { tag: f"cccccccc0" }, S { tag: f"cccccccc1" }]; let z = m_literal(a); }
+    println("m/callres");  { let a: Array[S, 2] = [S { tag: f"dddddddd0" }, S { tag: f"dddddddd1" }]; let z = m_callres(a); }
+    println("m/rebind");   { let a: Array[S, 2] = [S { tag: f"eeeeeeee0" }, S { tag: f"eeeeeeee1" }]; let b: Array[String, 2] = [f"strstr10", f"strstr11"]; let z = m_rebind(a, b); }
+    println("m/letlocal"); { let a: Array[S, 2] = [S { tag: f"ffffffff0" }, S { tag: f"ffffffff1" }]; let z = m_letlocal(a); }
+    println("n/both");     { let a: Array[S, 2] = [S { tag: f"gggggggg0" }, S { tag: f"gggggggg1" }]; let b: Array[S, 2] = [S { tag: f"gggggggg2" }, S { tag: f"gggggggg3" }]; let z = n_both(a, b); }
+    println("n/first");    { let a: Array[S, 2] = [S { tag: f"hhhhhhhh0" }, S { tag: f"hhhhhhhh1" }]; let z = n_first(a); }
+    println("end")
+}"#,
+    ) else {
+        return;
+    };
+    assert_eq!(out, "m/callee\n  r:aaaaaaaa0:strstr01\n  dSaaaaaaaa0\n  dSaaaaaaaa1\nm/local\n  r:local000\n  dSbbbbbbbb0\n  dSbbbbbbbb1\nm/literal\n  r:literal1\n  dScccccccc0\n  dScccccccc1\nm/callres\n  r:callres0\n  dSdddddddd0\n  dSdddddddd1\nm/rebind\n  r:strstr11\n  dSeeeeeeee0\n  dSeeeeeeee1\nm/letlocal\n  r:letloc00\n  dSffffffff0\n  dSffffffff1\nn/both\n  r:gggggggg1:gggggggg2\n  dSgggggggg2\n  dSgggggggg3\n  dSgggggggg0\n  dSgggggggg1\nn/first\n  r:hlocal01\n  dShhhhhhhh0\n  dShhhhhhhh1\nend\n", "got:\n{out}");
 }
 
 /// B-2026-08-31-39 — DESTRUCTURING a generic enum's bare-`T` payload

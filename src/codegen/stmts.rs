@@ -9106,22 +9106,26 @@ impl<'ctx> super::Codegen<'ctx> {
                             // array source is correct on all four surfaces, so
                             // the move-out retraction is not what is missing --
                             // only this decision's propagation.
-                            let stays_with_caller = self
+                            let caller_keeps = self
                                 .user_enum_ctor_array_payload_stays_with_caller(value, &name)
-                                || matches!(&value.kind, ExprKind::Identifier(src)
-                                    if src != var_name
-                                        && self
-                                            .payload_vars
-                                            .enum_box_only_array_locals
-                                            .contains(src.as_str()));
-                            let box_only = (!self
-                                .type_decls
-                                .enum_layouts
-                                .get(name.as_str())
-                                .is_some_and(|l| l.is_shared)
-                                && stays_with_caller)
-                                .then(|| self.emit_enum_drop_switch_box_only(&name))
-                                .flatten();
+                                .or_else(|| match &value.kind {
+                                    ExprKind::Identifier(src) if src != var_name => self
+                                        .payload_vars
+                                        .enum_box_only_array_locals
+                                        .get(src.as_str())
+                                        .cloned(),
+                                    _ => None,
+                                })
+                                .filter(|_| {
+                                    !self
+                                        .type_decls
+                                        .enum_layouts
+                                        .get(name.as_str())
+                                        .is_some_and(|l| l.is_shared)
+                                });
+                            let box_only = caller_keeps
+                                .as_ref()
+                                .and_then(|m| self.emit_enum_drop_switch_box_only(&name, m));
                             // A fresh binding under this name starts clean
                             // (B-2026-08-31-50's rule for the mask beside it):
                             // a stale mark would silently skip a LATER value's
@@ -9129,10 +9133,10 @@ impl<'ctx> super::Codegen<'ctx> {
                             self.payload_vars
                                 .enum_box_only_array_locals
                                 .remove(var_name.as_str());
-                            if let Some(f) = box_only {
+                            if let (Some(f), Some(m)) = (box_only, caller_keeps) {
                                 self.payload_vars
                                     .enum_box_only_array_locals
-                                    .insert(var_name.clone());
+                                    .insert(var_name.clone(), m);
                                 self.track_enum_var_with_fn(alloca, f);
                             } else {
                                 self.track_enum_var(&name, alloca);

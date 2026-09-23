@@ -90,6 +90,7 @@ fn body_may_take_field(body: &Block, binding: &str, field: &str) -> bool {
     found
 }
 
+use super::drop_rc::BoxOnlyMask;
 use super::state::{EnumDropKind, EnumLayout};
 
 /// Where a moved-out `Array` binding's ownership is going, for
@@ -6531,9 +6532,10 @@ impl<'ctx> super::Codegen<'ctx> {
     /// standing the walk down would take a sibling `String` with it. B-2026-09-22-9
     /// refuted that: the twin's skip is consumed per field, inside the
     /// field loop of `emit_enum_drop_switch_variant`, so a sibling keeps its own
-    /// drop. What stays per-ENUM is the choice of twin, so EVERY array field of
-    /// the variant must be caller-retained and param-rooted; one callee-owned
-    /// array beside them and the answer is declined (B-2026-09-22-17).
+    /// drop. B-2026-09-22-17 then required EVERY array field to be
+    /// caller-retained, because the twin was chosen per ENUM; B-2026-09-23-1
+    /// keys the twin by a [`BoxOnlyMask`] instead, so this returns the fields
+    /// the caller keeps and every other array field keeps its walk.
     ///
     /// The variant is checked against the enum's own declaration rather than
     /// taken on the callee's word, so a same-named free function cannot answer
@@ -6542,49 +6544,42 @@ impl<'ctx> super::Codegen<'ctx> {
         &self,
         ctor: &Expr,
         enum_name: &str,
-    ) -> bool {
+    ) -> Option<BoxOnlyMask> {
         let ExprKind::Call { args, .. } = &ctor.kind else {
-            return false;
+            return None;
         };
-        let Some(variant) = Self::ctor_variant_name(ctor) else {
-            return false;
-        };
-        let Some((_, _, tys)) = self
+        let variant = Self::ctor_variant_name(ctor)?;
+        let (_, _, tys) = self
             .enum_variant_field_type_exprs(enum_name)
             .into_iter()
-            .find(|(_, v, _)| v == variant)
-        else {
-            return false;
-        };
+            .find(|(_, v, _)| v == variant)?;
         if args.len() != tys.len() {
-            return false;
+            return None;
         }
-        // EVERY array field caller-retained, because the box-only twin is a
-        // per-ENUM function: it stands down every `BoxedArray` interior walk it
-        // meets, so a variant holding a caller-retained array BESIDE a
-        // callee-owned one (a local, a literal, a call result) would lose the
-        // second's elements. When every array field is rooted at a by-value
-        // param whose element heap the caller keeps, the question has a single
-        // answer again, and it is the twin's. B-2026-09-22-17: the first
-        // spelling of this gate COUNTED array fields and declined at two, which
-        // left `W.P(a, b)` over two such params freed by both sides.
-        let mut any = false;
-        for (i, te) in tys.iter().enumerate() {
-            let Some((elem_te, n)) = self.array_elem_and_len(te) else {
-                continue;
-            };
-            if n == 0 || self.array_param_elem_is_callee_owned(&elem_te) {
-                return false;
-            }
-            let ExprKind::Identifier(root) = &args[i].value.kind else {
-                return false;
-            };
-            if !self.fn_ctx.current_fn_param_names.contains(root.as_str()) {
-                return false;
-            }
-            any = true;
-        }
-        any
+        // PER FIELD (B-2026-09-23-1). The twin skips the interior walk of
+        // exactly the fields named here and walks every other one, so an array
+        // rooted at a by-value param whose element heap the caller keeps is
+        // named, and a callee-owned array, a local, a literal or a call result
+        // beside it is not, and keeps its own walk. B-2026-09-22-17's gate
+        // demanded that EVERY array field qualify, because the twin it drove
+        // was one function per ENUM and could not give two fields two answers.
+        let fields: std::collections::BTreeSet<usize> = tys
+            .iter()
+            .enumerate()
+            .filter(|(i, te)| {
+                self.array_elem_and_len(te).is_some_and(|(elem_te, n)| {
+                    n != 0
+                        && !self.array_param_elem_is_callee_owned(&elem_te)
+                        && matches!(&args[*i].value.kind, ExprKind::Identifier(root)
+                            if self.fn_ctx.current_fn_param_names.contains(root.as_str()))
+                })
+            })
+            .map(|(i, _)| i)
+            .collect();
+        (!fields.is_empty()).then(|| BoxOnlyMask {
+            variant: variant.to_string(),
+            fields,
+        })
     }
 
     /// B-2026-09-22-7 — which fields of a STRUCT LITERAL were initialised from

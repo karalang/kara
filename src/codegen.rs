@@ -6449,7 +6449,7 @@ impl<'ctx> Codegen<'ctx> {
                 deferred_payload_box_ptrs: HashMap::new(),
                 pending_box_field_zeroes: HashMap::new(),
                 param_view_locals: HashSet::new(),
-                enum_box_only_array_locals: HashSet::new(),
+                enum_box_only_array_locals: HashMap::new(),
                 caller_retained_payload_arm_bindings: HashSet::new(),
                 caller_retained_optres_params: HashSet::new(),
                 bare_tuple_elem_slots: HashMap::new(),

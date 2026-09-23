@@ -18338,8 +18338,7 @@ impl<'ctx> super::Codegen<'ctx> {
         // a second function, `emit_enum_drop_switch_box_only`.
         let boxonly_drop_fn = self
             .user_enum_ctor_array_payload_stays_with_caller(scrutinee, &enum_name)
-            .then(|| self.emit_enum_drop_switch_box_only(&enum_name))
-            .flatten();
+            .and_then(|m| self.emit_enum_drop_switch_box_only(&enum_name, &m));
         if let Some(f) = boxonly_drop_fn {
             self.track_enum_var_with_fn(alloca, f);
         } else if has_droppable {

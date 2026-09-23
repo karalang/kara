@@ -410,8 +410,9 @@ pub(crate) struct DropRc<'ctx> {
     /// reused across all registration sites for that type. Mirrors the
     /// existing `display_fn_cache` / `clone_fn_cache` lazy-synth pattern.
     pub(crate) enum_drop_fns: HashMap<String, FunctionValue<'ctx>>,
-    /// B-2026-09-22-6 — the same map for the BOX-ONLY twin of an enum's drop
-    /// switch, emitted as `__karac_drop_<E>__boxonly`. Separate rather than a
+    /// B-2026-09-22-6 — the same map for the BOX-ONLY twins of an enum's drop
+    /// switch, keyed `<E>__boxonly_<Variant>_<fields>` (B-2026-09-23-1: one
+    /// twin per [`BoxOnlyMask`], not per enum). Separate rather than a
     /// composite key so the map above keeps its exact meaning — one walking
     /// drop fn per enum, shared by every instantiation — and no existing
     /// lookup has to learn about the flag. See
@@ -618,4 +619,34 @@ pub(crate) struct DropRc<'ctx> {
     /// it has no production caller until the consumer lands.
     #[allow(dead_code)]
     pub(crate) drop_fn_cache: HashMap<String, FunctionValue<'ctx>>,
+}
+
+/// B-2026-09-23-1 — which boxed `Array` fields of ONE variant keep their
+/// interior walk out of an enum's box-only drop twin, because a by-value param
+/// the caller retained put them there.
+///
+/// B-2026-09-22-6 introduced the twin as one function per ENUM that stood down
+/// every `BoxedArray` interior walk, so a variant holding a caller-retained
+/// array beside a callee-owned or local one could not be given two answers,
+/// and B-2026-09-22-17's gate declined it. Naming the fields makes the answer
+/// per field: the twin skips exactly these and walks the rest. The variant is
+/// part of the mask so a twin can never skip a field of a variant it was not
+/// built for.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub(crate) struct BoxOnlyMask {
+    pub(crate) variant: String,
+    pub(crate) fields: std::collections::BTreeSet<usize>,
+}
+
+impl BoxOnlyMask {
+    /// The drop fn's name suffix, and the twin cache's key after the enum name.
+    pub(crate) fn suffix(&self) -> String {
+        let fields: Vec<String> = self.fields.iter().map(|f| f.to_string()).collect();
+        format!("__boxonly_{}_{}", self.variant, fields.join("_"))
+    }
+
+    /// Whether field `fi` of `variant` is one whose interior the caller keeps.
+    pub(crate) fn skips(&self, variant: &str, fi: usize) -> bool {
+        self.variant == variant && self.fields.contains(&fi)
+    }
 }

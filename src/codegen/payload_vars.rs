@@ -468,7 +468,7 @@ pub(crate) struct PayloadVars<'ctx> {
     /// Cleared per binding at each fresh `let` of that name, per
     /// B-2026-08-31-50, so a stale mark cannot silently skip a later value's
     /// interior walk. Cleared per function.
-    pub(crate) enum_box_only_array_locals: HashSet<String>,
+    pub(crate) enum_box_only_array_locals: HashMap<String, super::drop_rc::BoxOnlyMask>,
     /// B-2026-09-19-48 — arm bindings over the WHOLE `Option`/`Result` payload
     /// of a scrutinee the CALLER retains (a by-value param, or a param view),
     /// for which `bind_pattern_values` deliberately registered NO field-bodies
