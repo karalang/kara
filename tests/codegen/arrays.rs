@@ -5595,3 +5595,67 @@ fn main() {
     };
     assert_eq!(out, "let\n  in\n  d1\n  d2\nannot\n  in\n  d3\n  d4\nchain\n  in\n  d5\n  d6\nread\n  r7:29\n  d7\n  d8\nonward\n  take\n  in\n  d9\n  d10\nshadow\n  in90\n  d90\n  d91\n  d11\n  d12\naliasseed\n  arm\n  d13\n  d14\naliasrb\n  arm\n  d15\n  d16\narm\n  arm\n  d17\n  d18\narmread\n  arm20\n  d19\n  d20\narmchain\n  arm\n  d21\n  d22\narmonward\n  take\n  arm\n  d23\n  d24\niflet\n  arm\n  d25\n  d26\nletelse\n  arm\n  d27\n  d28\nstr\n  in30\nctl\n  in\n  d29\n  d30\nend\n", "got:\n{out}");
 }
+
+/// B-2026-09-23-12 -- a by-value `Array` param whose element runs a user `Drop`
+/// is CALLER-RETAINED, so the caller keeps its memory drop for the argument
+/// after the call. When the callee hands the array straight back
+/// (`fn eat(a: Array[R, 2]) -> Array[R, 2] { return a }`), the caller's
+/// result binding registers its own drop over the same buffers. The element
+/// bodies already followed the value to the result, but the memory did not,
+/// so `let b = eat(a)` freed every element twice: `free(): double free
+/// detected in tcache 2` on the JIT and at `-O0`. The interpreter was right.
+///
+/// The fix retracts the argument's memory drop at the call when the callee
+/// returns that parameter BARE on every exit: directly, through a rebind
+/// (`rebind`), or through one further call (`via`, `twice`). BARE means
+/// the declared return type is the parameter's own type. `wrap` returns
+/// `Some(a)` and is deliberately declined, because an `Option` result frees
+/// its box but not the elements' heap, and retracting there leaked 58 B in 2
+/// blocks. `str` is the callee-owned control, which was already retracted as
+/// a plain argument move. `method` goes through the method registrar and was
+/// already right. `loop` re-runs the handover per iteration.
+///
+/// Measured on this tree: the stdout below is byte-identical across
+/// `--interp`, jit, `karac build` and `KARAC_OPT_LEVEL=0 karac build`, and
+/// `valgrind --leak-check=full` at `-O0` with `KARAC_AUTO_PAR=0` reports 0
+/// errors and 0 bytes in use at exit.
+///
+/// Deliberately ABSENT: a TEMPORARY result handed on (`take(eat(a))`) loses its
+/// bodies and leaks on every surface, which is B-2026-09-20-24; a MIXED-path
+/// callee (`if c { return a }; return [..]`), which this fix does not reach
+/// and which is filed on its own.
+#[test]
+fn e2e_array_param_handed_back_by_the_callee_is_freed_once() {
+    let Some(out) = run_program(
+        r#"struct R { id: i64, s: String }
+impl Drop for R { fn drop(mut ref self) { println(f"  d{self.id}") } }
+fn mkr(i: i64) -> R { return R { id: i, s: f"heap-string-longer-than-sso-{i}" } }
+fn take(x: Array[R, 2]) -> i64 { println("  take"); return 1 }
+fn eat(a: Array[R, 2]) -> Array[R, 2] { println("  in"); return a }
+fn eat_rb(a: Array[R, 2]) -> Array[R, 2] { let m = a; println("  in"); return m }
+fn via(a: Array[R, 2]) -> Array[R, 2] { return eat(a) }
+fn pick(a: Array[R, 2], k: i64) -> Array[R, 2] { println(f"  in{k}"); return a }
+fn wrap(a: Array[R, 2]) -> Option[Array[R, 2]] { return Option.Some(a) }
+fn eat_s(a: Array[String, 2]) -> Array[String, 2] { println("  in"); return a }
+struct H { k: i64 }
+impl H { fn eat(ref self, a: Array[R, 2]) -> Array[R, 2] { println("  in"); return a } }
+fn main() {
+    println("bound");   { let a: Array[R, 2] = [mkr(1), mkr(2)]; let b = eat(a); println(f"  y{b[0].id}:{b[1].s.len()}"); }
+    println("annot");   { let a: Array[R, 2] = [mkr(3), mkr(4)]; let b: Array[R, 2] = eat(a); println(f"  y{b[1].id}"); }
+    println("rebind");  { let a: Array[R, 2] = [mkr(5), mkr(6)]; let b = eat_rb(a); println(f"  y{b[0].id}"); }
+    println("via");     { let a: Array[R, 2] = [mkr(7), mkr(8)]; let b = via(a); println(f"  y{b[0].id}"); }
+    println("twoarg");  { let a: Array[R, 2] = [mkr(9), mkr(10)]; let b = pick(a, 4); println(f"  y{b[0].id}"); }
+    println("chain");   { let a: Array[R, 2] = [mkr(11), mkr(12)]; let b = eat(a); let c = b; println(f"  y{c[0].id}"); }
+    println("twice");   { let a: Array[R, 2] = [mkr(15), mkr(16)]; let b = eat(eat(a)); println(f"  y{b[1].id}"); }
+    println("method");  { let h = H { k: 1 }; let a: Array[R, 2] = [mkr(17), mkr(18)]; let b = h.eat(a); println(f"  y{b[0].id}"); }
+    println("wrap");    { let a: Array[R, 2] = [mkr(19), mkr(20)]; let o = wrap(a); println("  y"); }
+    println("str");     { let a: Array[String, 2] = [f"heap-string-longer-than-sso-p", f"heap-string-longer-than-sso-qq"]; let b = eat_s(a); println(f"  y{b[1].len()}"); }
+    println("loop");    { let mut i = 0; while i < 3 { let a: Array[R, 2] = [mkr(30 + i), mkr(40 + i)]; let b = eat(a); println(f"  y{b[0].id}"); i = i + 1; } }
+    println("end")
+}
+"#,
+    ) else {
+        return;
+    };
+    assert_eq!(out, "bound\n  in\n  y1:29\n  d1\n  d2\nannot\n  in\n  y4\n  d3\n  d4\nrebind\n  in\n  y5\n  d5\n  d6\nvia\n  in\n  y7\n  d7\n  d8\ntwoarg\n  in4\n  y9\n  d9\n  d10\nchain\n  in\n  y11\n  d11\n  d12\ntwice\n  in\n  in\n  y16\n  d15\n  d16\nmethod\n  in\n  y17\n  d17\n  d18\nwrap\n  d19\n  d20\n  y\nstr\n  in\n  y30\nloop\n  in\n  y30\n  d30\n  d40\n  in\n  y31\n  d31\n  d41\n  in\n  y32\n  d32\n  d42\nend\n", "got:\n{out}");
+}

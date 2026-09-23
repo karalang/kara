@@ -6266,6 +6266,42 @@ impl<'ctx> super::Codegen<'ctx> {
     /// frame through a hand-back that goes through ONE further call, on every
     /// exit? See [`crate::ast::fn_always_returns_param_via_call`] for why the
     /// all-paths form is the only safe one at a suppressing site.
+    /// B-2026-09-23-12 — does `callee_name` return its `arg_index` parameter
+    /// BARE on EVERY exit, directly, through a rebind, or through one further
+    /// call? The all-paths pair [`Self::callee_takes_over_arg_drop_body`]
+    /// already consults, without its escape-into-a-place terms: an array
+    /// stored into a container the caller holds is that container's to free,
+    /// not a result binding's.
+    ///
+    /// BARE is the declared return type being the parameter's own type. The
+    /// AST predicates also admit a WRAPPED hand-back (`return Some(a)`), and
+    /// there the result frees less than the array's own drop does: an
+    /// `Option[Array[R, 2]]` result runs the element bodies and frees its box,
+    /// but not the elements' heap, so retracting the argument's drop leaked
+    /// 58 B in 2 blocks at `-O0` on that spelling. Declined, it keeps the
+    /// behaviour it had.
+    pub(super) fn callee_always_hands_array_arg_back(
+        &self,
+        callee_name: &str,
+        arg_index: usize,
+    ) -> bool {
+        let Some(program) = self.program_snapshot.as_deref() else {
+            return false;
+        };
+        super::declarations::find_function_ast(program, callee_name).is_some_and(|f| {
+            let returns_param_type = match (f.params.get(arg_index), f.return_type.as_ref()) {
+                (Some(p), Some(rt)) => {
+                    crate::formatter::render_type_expr(&p.ty)
+                        == crate::formatter::render_type_expr(rt)
+                }
+                _ => false,
+            };
+            returns_param_type
+                && (crate::ast::fn_always_returns_param(Some(program), f, arg_index)
+                    || crate::ast::fn_always_returns_param_via_call(program, f, arg_index))
+        })
+    }
+
     pub(super) fn callee_always_hands_arg_back_via_call(
         &self,
         callee_name: &str,
@@ -13265,6 +13301,17 @@ impl<'ctx> super::Codegen<'ctx> {
         // field would strand the original box instead of handing it on.
         self.uam_copy_boxed_enum_arg(arg);
         self.suppress_array_binding_move_arg(arg);
+        // B-2026-09-23-12 — a caller-retained array the callee hands back
+        // WHOLE on every exit. `CalleeParam` above declines to retract it,
+        // because the callee takes nothing over; but the result binding does.
+        // ALL-paths only, for the reason `call_arg_flows_into_return` records:
+        // this is the suppressing direction, and a mixed-path callee's
+        // dies-inside exit leaves the value with the caller.
+        if let Some(c) = callee {
+            if self.callee_always_hands_array_arg_back(c, arg_index) {
+                self.suppress_array_binding_move(arg, super::param_own::ArrayMoveDest::HandedBack);
+            }
+        }
         // B-2026-09-07-16 — the ENUM leg of the same rule, hooked at the same
         // choke point so every call-arg site is covered by one call.
         self.move_declined_copy_enum_arg(arg);

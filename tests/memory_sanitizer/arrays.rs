@@ -7513,3 +7513,74 @@ fn main() {
         "asan_array_param_rebound_in_the_callee_is_a_view_of_the_callers_array",
     );
 }
+
+/// B-2026-09-23-12 -- a by-value `Array` param whose element runs a user `Drop`
+/// is CALLER-RETAINED, so the caller keeps its memory drop for the argument
+/// after the call. When the callee hands the array straight back
+/// (`fn eat(a: Array[R, 2]) -> Array[R, 2] { return a }`), the caller's
+/// result binding registers its own drop over the same buffers. The element
+/// bodies already followed the value to the result, but the memory did not,
+/// so `let b = eat(a)` freed every element twice: `free(): double free
+/// detected in tcache 2` on the JIT and at `-O0`. The interpreter was right.
+///
+/// The fix retracts the argument's memory drop at the call when the callee
+/// returns that parameter BARE on every exit: directly, through a rebind
+/// (`rebind`), or through one further call (`via`, `twice`). BARE means
+/// the declared return type is the parameter's own type. `wrap` returns
+/// `Some(a)` and is deliberately declined, because an `Option` result frees
+/// its box but not the elements' heap, and retracting there leaked 58 B in 2
+/// blocks. `str` is the callee-owned control, which was already retracted as
+/// a plain argument move. `method` goes through the method registrar and was
+/// already right. `loop` re-runs the handover per iteration.
+///
+/// Measured on this tree: the stdout below is byte-identical across
+/// `--interp`, jit, `karac build` and `KARAC_OPT_LEVEL=0 karac build`, and
+/// `valgrind --leak-check=full` at `-O0` with `KARAC_AUTO_PAR=0` reports 0
+/// errors and 0 bytes in use at exit.
+///
+/// Deliberately ABSENT: a TEMPORARY result handed on (`take(eat(a))`) loses its
+/// bodies and leaks on every surface, which is B-2026-09-20-24; a MIXED-path
+/// callee (`if c { return a }; return [..]`), which this fix does not reach
+/// and which is filed on its own.
+#[test]
+fn asan_array_param_handed_back_by_the_callee_is_freed_once() {
+    assert_clean_asan_run(
+        r#"struct R { id: i64, s: String }
+impl Drop for R { fn drop(mut ref self) { println(f"  d{self.id}") } }
+fn mkr(i: i64) -> R { return R { id: i, s: f"heap-string-longer-than-sso-{i}" } }
+fn take(x: Array[R, 2]) -> i64 { println("  take"); return 1 }
+fn eat(a: Array[R, 2]) -> Array[R, 2] { println("  in"); return a }
+fn eat_rb(a: Array[R, 2]) -> Array[R, 2] { let m = a; println("  in"); return m }
+fn via(a: Array[R, 2]) -> Array[R, 2] { return eat(a) }
+fn pick(a: Array[R, 2], k: i64) -> Array[R, 2] { println(f"  in{k}"); return a }
+fn wrap(a: Array[R, 2]) -> Option[Array[R, 2]] { return Option.Some(a) }
+fn eat_s(a: Array[String, 2]) -> Array[String, 2] { println("  in"); return a }
+struct H { k: i64 }
+impl H { fn eat(ref self, a: Array[R, 2]) -> Array[R, 2] { println("  in"); return a } }
+fn main() {
+    println("bound");   { let a: Array[R, 2] = [mkr(1), mkr(2)]; let b = eat(a); println(f"  y{b[0].id}:{b[1].s.len()}"); }
+    println("annot");   { let a: Array[R, 2] = [mkr(3), mkr(4)]; let b: Array[R, 2] = eat(a); println(f"  y{b[1].id}"); }
+    println("rebind");  { let a: Array[R, 2] = [mkr(5), mkr(6)]; let b = eat_rb(a); println(f"  y{b[0].id}"); }
+    println("via");     { let a: Array[R, 2] = [mkr(7), mkr(8)]; let b = via(a); println(f"  y{b[0].id}"); }
+    println("twoarg");  { let a: Array[R, 2] = [mkr(9), mkr(10)]; let b = pick(a, 4); println(f"  y{b[0].id}"); }
+    println("chain");   { let a: Array[R, 2] = [mkr(11), mkr(12)]; let b = eat(a); let c = b; println(f"  y{c[0].id}"); }
+    println("twice");   { let a: Array[R, 2] = [mkr(15), mkr(16)]; let b = eat(eat(a)); println(f"  y{b[1].id}"); }
+    println("method");  { let h = H { k: 1 }; let a: Array[R, 2] = [mkr(17), mkr(18)]; let b = h.eat(a); println(f"  y{b[0].id}"); }
+    println("wrap");    { let a: Array[R, 2] = [mkr(19), mkr(20)]; let o = wrap(a); println("  y"); }
+    println("str");     { let a: Array[String, 2] = [f"heap-string-longer-than-sso-p", f"heap-string-longer-than-sso-qq"]; let b = eat_s(a); println(f"  y{b[1].len()}"); }
+    println("loop");    { let mut i = 0; while i < 3 { let a: Array[R, 2] = [mkr(30 + i), mkr(40 + i)]; let b = eat(a); println(f"  y{b[0].id}"); i = i + 1; } }
+    println("end")
+}
+"#,
+        &[
+            "bound", "  in", "  y1:29", "  d1", "  d2", "annot", "  in", "  y4", "  d3", "  d4",
+            "rebind", "  in", "  y5", "  d5", "  d6", "via", "  in", "  y7", "  d7", "  d8",
+            "twoarg", "  in4", "  y9", "  d9", "  d10", "chain", "  in", "  y11", "  d11", "  d12",
+            "twice", "  in", "  in", "  y16", "  d15", "  d16", "method", "  in", "  y17", "  d17",
+            "  d18", "wrap", "  d19", "  d20", "  y", "str", "  in", "  y30", "loop", "  in",
+            "  y30", "  d30", "  d40", "  in", "  y31", "  d31", "  d41", "  in", "  y32", "  d32",
+            "  d42", "end",
+        ],
+        "asan_array_param_handed_back_by_the_callee_is_freed_once",
+    );
+}

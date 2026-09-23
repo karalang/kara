@@ -103,6 +103,9 @@ pub(super) enum ArrayMoveDest {
     CalleeParam,
     /// A field of a struct literal this scope is building.
     AggregateField,
+    /// B-2026-09-23-12 — a by-value `Array` parameter that the callee hands
+    /// back on EVERY exit, so the caller's RESULT BINDING is the new owner.
+    HandedBack,
 }
 
 impl<'ctx> super::Codegen<'ctx> {
@@ -6690,7 +6693,7 @@ impl<'ctx> super::Codegen<'ctx> {
         }
     }
 
-    fn suppress_array_binding_move(&mut self, arg: &Expr, dest: ArrayMoveDest) {
+    pub(super) fn suppress_array_binding_move(&mut self, arg: &Expr, dest: ArrayMoveDest) {
         // B-2026-09-14-27 — the SOURCE of a `UseAfterMove` keeps its drop when
         // the consumer has been handed an independent copy
         // (`uam_array_defensive_copy`). Retracting here would leave the
@@ -6735,6 +6738,16 @@ impl<'ctx> super::Codegen<'ctx> {
             // No callee, so the user-`Drop`-body exclusion does not apply — see
             // `suppress_array_binding_move_into_aggregate`'s doc.
             ArrayMoveDest::AggregateField => self.array_elem_owns_callee_drop(&elem_te),
+            // B-2026-09-23-12 — the callee returns this very array on every
+            // exit, so the value comes back and the caller's result binding
+            // registers its own memory and bodies over it. Only a
+            // CALLER-RETAINED element reaches here with the source still
+            // armed (a callee-owned one was retracted as `CalleeParam`), and
+            // for it the element bodies already follow the value to the result
+            // binding; the memory did not, so `let b = eat(a)` freed the same
+            // buffers through `a` and `b`. Same predicate as the aggregate
+            // spelling: whatever `a` registered, the result now owns.
+            ArrayMoveDest::HandedBack => self.array_elem_owns_callee_drop(&elem_te),
         };
         if !transfers {
             return;
