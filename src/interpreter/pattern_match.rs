@@ -562,7 +562,23 @@ impl<'a> super::Interpreter<'a> {
                     if self.moved_out_user_drop_bindings.contains(&n) {
                         continue;
                     }
-                    if crate::deque_head::expr_mentions_name_outside_field_projection(&arm.body, &n)
+                    // B-2026-09-23-20 — an `Array` / `Vec` binding is read by
+                    // INDEXING it, and `a[0].id` is a mention outside a field
+                    // projection, so the gate above skipped every read-only
+                    // container arm and its element bodies ran nowhere:
+                    // `Some(a) => println(f"y{a[0].id}")` over
+                    // `Option[Array[R, 2]]` printed `y1 end-main` against
+                    // `y1 d1 d2 end-main` on the JIT, `-O0` and `-O2`. For a
+                    // container the question is `binding_use`'s read-through
+                    // one, which counts `b[i]` as a read and a bare `b` as a
+                    // use; a struct or enum binding keeps the stricter
+                    // projection test it has always had.
+                    let container_read_through = matches!(self.env.get(&n), Some(Value::Array(_)))
+                        && crate::binding_use::binding_only_read_through(&n, &arm.body);
+                    if !container_read_through
+                        && crate::deque_head::expr_mentions_name_outside_field_projection(
+                            &arm.body, &n,
+                        )
                     {
                         continue;
                     }
@@ -596,6 +612,11 @@ impl<'a> super::Interpreter<'a> {
                             }
                             self.run_enum_payload_user_drops_value(&v);
                         }
+                    // B-2026-09-23-20 — the container itself: each element's
+                    // body, through the walker every discard spelling of an
+                    // `Array` already uses (B-2026-09-13-26).
+                    } else if let Some(v @ Value::Array(_)) = self.env.get(&n) {
+                        self.run_discarded_value_user_drops(v);
                     }
                 }
                 // B-2026-09-16-18 — the fields a FRESH-TEMP struct scrutinee

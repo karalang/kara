@@ -6186,3 +6186,36 @@ fn main() {
         "ret-t\n  y1\n  d1\n  d2\nret-f\n  dies\n  d1\n  d2\n  y8\n  d8\n  d9\ntemp-f\n  dies\n  d1\n  d2\n  y8\n  d8\n  d9\ntail-f\n  d1\n  d2\n  y9\n  d8\n  d9\nbyval-f\n  dies\n  d1\n  d2\n  y8\n  d8\n  d9\npass-f\n  c1\n  dies\n  d1\n  d2\n  y8\n  d8\n  d9\ntwice\n  dies\n  d3\n  d4\n  y18\n  d8\n  d9\n  d1\n  d2\nend\n"
     );
 }
+
+/// B-2026-09-23-20 — an `Array` / `Vec` bound out of an `Option` / `Result` by
+/// a NON-block arm that only indexes it (`Some(a) => println(f"y{a[0].id}")`)
+/// ran no element `Drop` body under `--interp`: the arm-end leftover gate
+/// counted `a[0]` as a mention outside a field projection, and the leftover
+/// walker had no `Array` arm. The JIT, `-O0` and `-O2` all print this output.
+#[test]
+fn interp_read_only_arm_over_array_payload_runs_its_bodies() {
+    assert_eq!(
+        run(r#"struct R { id: i64, s: String }
+impl Drop for R { fn drop(mut ref self) { println(f"  d{self.id}") } }
+fn mkr(i: i64) -> R { return R { id: i, s: f"heap-string-longer-than-sso-{i}" } }
+fn mka(k: i64) -> Array[R, 2] { return [mkr(k), mkr(k + 1)] }
+fn some_arr(k: i64) -> Option[Array[R, 2]] { let x = mka(k); return Some(x) }
+fn consume(a: Array[R, 2]) { println(f"  c{a[0].id}") }
+enum E { A(Array[R, 2]), B }
+fn main() {
+    println("lit");   { let b: Option[Array[R, 2]] = Some([mkr(1), mkr(2)]); match b { Some(a) => println(f"  y{a[0].id}"), None => println("  n") }; println("  after") }
+    println("local"); { let x = mka(3); let b: Option[Array[R, 2]] = Some(x); match b { Some(a) => println(f"  y{a[1].id}"), None => println("  n") }; println("  after") }
+    println("call");  { let b = some_arr(5); match b { Some(a) => println(f"  y{a[0].id}"), None => println("  n") }; println("  after") }
+    println("temp");  { match some_arr(7) { Some(a) => println(f"  y{a[0].id}"), None => println("  n") }; println("  after") }
+    println("vec");   { let b: Option[Vec[R]] = Some(vec![mkr(9), mkr(10)]); match b { Some(a) => println(f"  y{a[0].id}"), None => println("  n") }; println("  after") }
+    println("move");  { let b = some_arr(11); match b { Some(a) => consume(a), None => println("  n") }; println("  after") }
+    println("guard"); { let b = some_arr(13); match b { Some(a) if a[0].id > 100 => println("  big"), Some(a) => println(f"  y{a[1].id}"), None => println("  n") }; println("  after") }
+    println("value"); { let b = some_arr(15); let v = match b { Some(a) => a[1].id, None => 0 }; println(f"  v{v}") }
+    println("res");   { let r: Result[Array[R, 2], i64] = Ok(mka(17)); match r { Ok(a) => println(f"  y{a[0].id}"), Err(e) => println(f"  e{e}") }; println("  after") }
+    println("enum");  { let e = E.A(mka(19)); match e { E.A(a) => println(f"  y{a[0].id}"), E.B => println("  b") }; println("  after") }
+    println("none");  { let b: Option[Array[R, 2]] = None; match b { Some(a) => println(f"  y{a[0].id}"), None => println("  n") }; println("  after") }
+    println("end")
+}"#),
+        "lit\n  y1\n  d1\n  d2\n  after\nlocal\n  y4\n  d3\n  d4\n  after\ncall\n  y5\n  d5\n  d6\n  after\ntemp\n  y7\n  d7\n  d8\n  after\nvec\n  y9\n  d9\n  d10\n  after\nmove\n  c11\n  d11\n  d12\n  after\nguard\n  y14\n  d13\n  d14\n  after\nvalue\n  d15\n  d16\n  v16\nres\n  y17\n  d17\n  d18\n  after\nenum\n  y19\n  d19\n  d20\n  after\nnone\n  n\n  after\nend\n"
+    );
+}
