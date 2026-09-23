@@ -92,12 +92,12 @@ distinguish "bugs flattening" from "we stopped writing them down."
 
 | class | total |
 |---|---|
-| run-vs-build | 483 |
+| run-vs-build | 486 |
 | miscompile | 438 |
 | leak | 403 |
-| double-free | 273 |
+| double-free | 276 |
 | missing-feature | 205 |
-| codegen-gap | 185 |
+| codegen-gap | 186 |
 | other | 148 |
 | diagnostics | 134 |
 | perf | 117 |
@@ -110,8 +110,8 @@ distinguish "bugs flattening" from "we stopped writing them down."
 
 | surface | total |
 |---|---|
-| codegen | 1985 |
-| interp | 523 |
+| codegen | 1990 |
+| interp | 526 |
 | typecheck | 306 |
 | other | 109 |
 | ownership | 75 |
@@ -359,7 +359,12 @@ registered in the callee's prologue, not by-value struct params in general. | �
 | B-2026-09-23-6 | 2026-09-23 | interp | low | THE INTERPRETER RUNS A BY-VALUE `Array` PARAM'S ELEMENT `Drop` BODIES TWICE WHEN THE CALLEE WRAPS IT IN A DISCARDED STRUCT LITERAL -- `fn b_discard(a: Array[R, 2]) -> i64 { B1 { v: a }; println("  in"); return 7 }` prints `d101 d102 in d101 d102` under `--interp` against `in d101 d102` on every compiled surface; the one cell of `asan_array_param_into_struct_literal_field_stays_with_caller` that B-2026-09-22-8's fix did not reach | — |
 | B-2026-09-23-13 | 2026-09-23 | codegen | medium | A BY-VALUE `Vec[R]` PARAM REBOUND INSIDE THE CALLEE RUNS ITS ELEMENTS' `Drop` BODIES TWICE ON EVERY COMPILED SURFACE WHILE `--interp` IS RIGHT -- `fn eat(a: Vec[R]) -> i64 { let m = a; println("in-eat"); return 7 }` prints `d1 d2 in-eat d1 d2` on the JIT, `-O0` and `-O2` against `in-eat d1 d2`; the seeded arm spelling `match Option.Some(a) { Some(v) => { let u = v; .. } }` doubles the same way; memory is clean. It is the `Vec` twin of B-2026-09-23-5, which fixed the `Array` spelling only | — |
 | B-2026-09-23-14 | 2026-09-23 | codegen | medium | A USER-ENUM SEEDED ARM THAT REBINDS A CALLER-RETAINED `Array` PARAM RUNS ITS ELEMENTS' `Drop` BODIES TWICE ON EVERY COMPILED SURFACE WHILE `--interp` IS RIGHT -- `match W.P(a) { W.P(v) => { let u = v; .. } }` over `enum W { P(Array[R, 2]), Q }` inside `fn eat(a: Array[R, 2])` prints `d1 d2 r1 d1 d2` on the JIT, `-O0` and `-O2` against `r1 d1 d2`; memory is clean. The user-enum spelling of B-2026-09-23-5, which fixed `Option` / `Result` only | — |
-| B-2026-09-23-15 | 2026-09-23 | codegen+interp | high | A MIXED-PATH CALLEE THAT RETURNS ITS CALLER-RETAINED `Array` PARAM ON ONE EXIT AND A FRESH ARRAY ON ANOTHER IS WRONG ON BOTH PATHS -- `fn mix(a: Array[R, 2], c: bool) -> Array[R, 2] { if c { return a }; return [mkr(8), mkr(9)] }` DOUBLE-FREES at `c = true` on the JIT and `-O0` against `--interp`'s `y1 d1 d2`, and at `c = false` LOSES the param's two `Drop` bodies on ALL FOUR SURFACES (`y8 d8 d9`, memory clean), an agreed fault no A/B can see | — |
+| B-2026-09-23-17 | 2026-09-23 | codegen | high | A LOCAL `Array` RETURNED ON SOME EXITS AND NOT OTHERS IS FREED TWICE ON THE EXIT THAT HANDS IT BACK, AT EVERY OPT LEVEL AND FOR `String` ELEMENTS TOO -- `let x: Array[String, 2] = [..]; if c { x } else { [..] }` aborts `free(): double free detected in tcache 2` at `c = true` on the JIT, `-O0` AND `-O2` while `--interp` is right; the same holds for `if c { return x }; return [..]`, for an `if`/`else` of two `return`s, and through a rebind (`let m = x; if c { return m }`) | — |
+| B-2026-09-23-18 | 2026-09-23 | codegen+interp | medium | A CALLER-RETAINED `Array` PARAM MOVED INTO A LOCAL THROUGH AN `if` ARM AND THEN RETURNED IS WRONG ON EVERY SURFACE -- `let r: Array[R, 2] = if c { a } else { [..] }; println("mid"); r` at `c = true` prints `mid d1 d2 y1 d1 d2` under `--interp` (both element bodies twice) and aborts `free(): double free detected in tcache 2` on the JIT, `-O0` and `-O2` | — |
+| B-2026-09-23-19 | 2026-09-23 | interp | medium | `--interp` RUNS NO ELEMENT `Drop` BODY FOR A CALLER-RETAINED `Array` PARAM THAT AN INSTANCE METHOD LETS DIE ON ONE EXIT AND HANDS BACK ON ANOTHER, WHILE ALL THREE COMPILED SURFACES DO -- `impl H { fn mix(ref self, a: Array[R, 2], c: bool) -> Array[R, 2] { if c { return a }; return [..] } }` at `c = false` prints `y8 d8 d9` under `--interp` against `d1 d2 y8 d8 d9` from the JIT, `-O0` and `-O2` | — |
+| B-2026-09-23-20 | 2026-09-23 | interp | medium | `--interp` RUNS NO ELEMENT `Drop` BODY FOR AN `Array` BOUND OUT OF AN `Option` BY A `match` ARM THAT ONLY READS IT, WHILE ALL THREE COMPILED SURFACES DO -- `let b: Option[Array[R, 2]] = Some([mkr(1), mkr(2)]); match b { Some(a) => println(f"y{a[0].id}"), None => .. }` prints `y1` under `--interp` against `y1 d1 d2` from the JIT, `-O0` and `-O2` | — |
+| B-2026-09-23-21 | 2026-09-23 | codegen | low | AN ASSOCIATED FUNCTION'S `Array` RESULT CANNOT BE INDEXED FOR A FIELD ON THE COMPILED BACKENDS -- `let b = H.mk(); println(f"y{b[0].id}")` over `impl H { fn mk() -> Array[P, 2] }` passes `karac check`, runs under `--interp`, and fails the JIT and `karac build` with `cannot resolve field 'id' on this receiver (its type was not recorded for codegen)`, even for a POD element; annotating the binding (`let b: Array[P, 2] = H.mk()`) makes it build and run correctly | — |
+| B-2026-09-23-22 | 2026-09-23 | codegen | low | A `Drop`-BEARING STRUCT PARAM REBOUND AND RETURNED ON ONE EXIT RUNS ITS BODY AT DIFFERENT POINTS ON THE TWO BACKENDS WHEN IT DIES INSIDE -- `fn mix(a: R, c: bool) -> R { let m = a; if c { return m }; println("dies"); return mkr(8) }` at `c = false` prints `d1 dies y8 d8` under `--interp` and `dies d1 y8 d8` on the JIT, `-O0` and `-O2`; memory is clean on both | — |
 
 ### Relocated
 
@@ -2962,6 +2967,8 @@ registered in the callee's prologue, not by-value struct params in general. | �
 | B-2026-09-23-10 | codegen | high | MEASURED: range-slicing a `ref`/`mut ref` PARAMETER reads the parameter's slot as the Vec header -- `v[1..3]` for `v: ref Vec[i64]` panics the JIT wi… | 16b434fc5 |
 | B-2026-09-23-11 | typecheck | low | MEASURED: a type fault INSIDE an assignment's right-hand side is reported TWICE, word for word -- `s = s + y` with `s: u8`, `y: i64` prints the same… | 16b434fc5 |
 | B-2026-09-23-12 | codegen | high | A BY-VALUE `Array` PARAM WHOSE ELEMENT RUNS A USER `Drop`, RETURNED TO A BINDING, IS FREED TWICE ON THE JIT AND AT `-O0` -- `fn eat(a: Array[R, 2]) -… | fda0892fb |
+| B-2026-09-23-15 | codegen+interp | high | A MIXED-PATH CALLEE THAT RETURNS ITS CALLER-RETAINED `Array` PARAM ON ONE EXIT AND A FRESH ARRAY ON ANOTHER IS WRONG ON BOTH PATHS -- `fn mix(a: Arra… | 37c0dad2b |
+| B-2026-09-23-16 | codegen | high | A LOCAL `Array` WHOSE ELEMENT RUNS A USER `Drop`, HANDED BACK ON EVERY EXIT, IS FREED TWICE -- `fn one() -> Array[R, 1] { let x: Array[R, 1] = [mkr(1… | 37c0dad2b |
 
 </details>
 
