@@ -2558,6 +2558,43 @@ impl<'a> super::TypeChecker<'a> {
                 self.record_pattern_inner_type(pattern, ty);
             }
             PatternKind::Tuple(patterns) => {
+                // B-2026-09-23-28: a tuple pattern over a BORROWED tuple
+                // (`for (a, b) in edges` with `edges: ref Vec[(i64, i64)]`,
+                // whose element is `ref (i64, i64)`) destructures through the
+                // borrow. Each field binds the way a bare `for` binds an
+                // element of a borrowed collection (`element_type_of`): a Copy
+                // scalar by value, anything else as a borrow of the same form,
+                // so `name.len()` works and `out.push(name)` is still rejected
+                // as a move out of a borrow. Without the peel the pattern was
+                // refused outright, while the same loop over an OWNED local
+                // Vec, or `let (a, b) = edges[i]`, type-checked.
+                if let Type::Ref(inner) | Type::MutRef(inner) = ty {
+                    if let Type::Tuple(types) = strip_refinement(inner) {
+                        if patterns.len() == types.len() {
+                            let is_mut = matches!(ty, Type::MutRef(_));
+                            for (pat, t) in patterns.iter().zip(types.iter()) {
+                                let field_ty = borrowed_field_binding_ty(t, is_mut);
+                                self.bind_pattern_types(pat, &field_ty);
+                                // The `let`-route recorder leaves a borrow
+                                // unrecorded, so a `ref String` field would
+                                // reach codegen with no surface name and
+                                // `name.len()` would find no dispatcher. The
+                                // match-arm recorder peels the borrow and
+                                // records the inner type, which is the layout
+                                // the bit-copied field actually has.
+                                if matches!(field_ty, Type::Ref(_) | Type::MutRef(_))
+                                    && matches!(pat.kind, PatternKind::Binding(_))
+                                {
+                                    self.record_pattern_binding_surface_types(pat, &field_ty);
+                                }
+                            }
+                            return;
+                        }
+                        let inner = inner.as_ref().clone();
+                        self.bind_pattern_types(pattern, &inner);
+                        return;
+                    }
+                }
                 if let Type::Tuple(types) = ty {
                     if patterns.len() != types.len() {
                         self.type_error(
@@ -2933,5 +2970,19 @@ fn non_exhaustive_match_fix_it(
             length: 0,
         },
         replacement,
+    }
+}
+
+/// B-2026-09-23-28: the type a field of a borrowed tuple binds at when a tuple
+/// pattern destructures through the borrow. Mirrors `element_type_of`'s rule
+/// for a bare `for` over a borrowed collection: a Copy scalar is copied out by
+/// value, an aggregate stays borrowed (same borrow form as the tuple), and a
+/// field that is already a borrow is left as it is.
+fn borrowed_field_binding_ty(field: &Type, is_mut: bool) -> Type {
+    match field {
+        Type::Int(_) | Type::UInt(_) | Type::Float(_) | Type::Bool | Type::Char => field.clone(),
+        Type::Ref(_) | Type::MutRef(_) | Type::Slice { .. } | Type::Error => field.clone(),
+        _ if is_mut => Type::MutRef(Box::new(field.clone())),
+        _ => Type::Ref(Box::new(field.clone())),
     }
 }

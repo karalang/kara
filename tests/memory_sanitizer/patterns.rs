@@ -10504,3 +10504,97 @@ fn main() {
         20,
     );
 }
+
+/// B-2026-09-23-28 — a tuple pattern over a borrowed element binds its heap
+/// fields as BIT-COPIES the container still owns. Both spellings the fix
+/// wired (`for (name, tag) in ps` over a `ref Vec`, and `let (name, tag) = ref
+/// ps[i]`) must push no cleanup for `name` / `tag`: one that did would free
+/// each String again when `ps` drops.
+#[test]
+fn asan_tuple_pattern_through_a_borrow_frees_nothing() {
+    assert_clean_asan_run(
+        r#"
+fn s_of(i: i64) -> String {
+    let mut s: String = String.new();
+    s.push_str(f"payload-padded-out-well-past-thirty-six-bytes-{i}");
+    return s;
+}
+fn walk(ps: ref Vec[(String, String)]) -> i64 {
+    let mut n = 0;
+    for (name, tag) in ps { n += name.len() + tag.len(); }
+    return n;
+}
+fn index(ps: ref Vec[(String, String)]) -> i64 {
+    let mut n = 0;
+    for i in 0..ps.len() {
+        let (name, tag) = ref ps[i];
+        n += name.len() - tag.len();
+    }
+    return n;
+}
+fn main() {
+    let base: i64 = env.args().len();
+    let mut ps: Vec[(String, String)] = Vec.new();
+    let mut i = base;
+    while i < base + 40 {
+        ps.push((s_of(i), s_of(i * 7)));
+        i = i + 1;
+    }
+    let a = walk(ps);
+    let b = index(ps);
+    if a > 0 and b <= 0 { println("done"); }
+}
+"#,
+        &["done"],
+        "tuple pattern through a borrow frees nothing",
+    );
+}
+
+/// B-2026-09-23-29 — iterator terminals over a BORROWED source whose elements
+/// carry heap fields. Two desugarings made a second owner of each String:
+/// the per-field projection a destructuring closure param became (`let n =
+/// __dp.0`, under `fold` and `collect`), and the element binding `count`'s
+/// sink wrote although its body never names the element (`filter(|p| p.1 >
+/// 1).count()`). Both freed every String again when the source dropped.
+#[test]
+fn asan_iterator_terminals_over_heap_tuple_elements_free_once() {
+    assert_clean_asan_run(
+        r#"
+struct Q { n: String, k: i64 }
+fn s_of(i: i64) -> String {
+    let mut s: String = String.new();
+    s.push_str(f"payload-padded-out-well-past-thirty-six-bytes-{i}");
+    return s;
+}
+fn main() {
+    let base: i64 = env.args().len();
+    let mut names: Vec[(String, i64)] = Vec.new();
+    let mut qs: Vec[Q] = Vec.new();
+    let mut i = base;
+    while i < base + 30 {
+        names.push((s_of(i), i));
+        qs.push(Q { n: s_of(i * 3), k: i });
+        i = i + 1;
+    }
+    let a = names.iter().filter(|p| p.1 > 10).count();
+    let b = names.iter().filter(|(n, _)| n.len() > 40).count();
+    let c = names.iter().fold(0, |acc, (n, k)| acc + n.len() + k);
+    let d: Vec[i64] = names.iter().map(|(n, k)| n.len() + k).collect();
+    let e: Vec[String] = names.iter().map(|(n, _)| n.clone()).collect();
+    let f = names.iter().map(|(n, k)| n.len() * k).sum();
+    let g = qs.iter().filter(|Q { n, k }| n.len() > 40 + k * 0).count();
+    let h: Vec[i64] = qs.iter().map(|Q { n, k }| n.len() + k).collect();
+    let j = names.iter().any(|(n, _)| n.len() == 0);
+    let mut l = 0;
+    for y in names.iter().map(|(n, k)| n.len() + k) {
+        l = l + y;
+    }
+    if a > 0 and b > 0 and c > 0 and d.len() == 30 and e.len() == 30 and f > 0 and g > 0 and h.len() == 30 and not j and l > 0 {
+        println("done");
+    }
+}
+"#,
+        &["done"],
+        "iterator terminals over heap tuple elements free once",
+    );
+}

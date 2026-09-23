@@ -51576,3 +51576,60 @@ fn test_assignment_rhs_fault_is_reported_once() {
         .collect();
     assert_eq!(mix.len(), 1, "{errs:#?}");
 }
+
+/// B-2026-09-23-28 — a tuple pattern destructures a BORROWED tuple. Each field
+/// binds the way a bare `for` binds an element of a borrowed collection: a
+/// Copy scalar by value (so `a * 10 + b` type-checks), anything else as a
+/// borrow of the same form. It was refused with "tuple pattern used but type
+/// is `ref (i64, i64)`" for every one of these spellings, including design.md's
+/// own `for (key, value) in map` over a `ref Map` parameter.
+#[test]
+fn test_tuple_pattern_destructures_through_a_borrow() {
+    typecheck_ok(
+        "fn total(edges: ref Vec[(i64, i64)]) -> i64 {\n\
+             let mut s = 0;\n\
+             for (a, b) in edges { s += a * 10 + b; }\n\
+             for e in edges { let (a, b) = e; s += a - b; }\n\
+             return s;\n\
+         }\n\
+         fn names(m: ref Map[String, i64], v: mut ref Vec[(String, (i64, bool))]) -> i64 {\n\
+             let mut n = 0;\n\
+             for (k, x) in m { n += k.len() + x; }\n\
+             for (s, (x, flag)) in v { if flag { n += s.len() + x; } }\n\
+             return n;\n\
+         }\n\
+         fn pair(p: ref (String, i64)) -> String {\n\
+             let (name, k) = p;\n\
+             return f\"{name.clone()}{k}\";\n\
+         }\n\
+         fn main() {}",
+    );
+}
+
+/// B-2026-09-23-28 — destructuring through the borrow does not hand out an owned
+/// aggregate: the `String` field binds as `ref String`, so moving it into an
+/// owned `Vec[String]` is still refused, exactly as `for w in words` over a
+/// `ref Vec[String]` refuses `out.push(w)`.
+#[test]
+fn test_tuple_pattern_through_a_borrow_keeps_aggregate_fields_borrowed() {
+    let errors = typecheck_errors(
+        "fn steal(v: ref Vec[(String, i64)]) -> Vec[String] {\n\
+             let mut out: Vec[String] = Vec.new();\n\
+             for (name, _) in v { out.push(name); }\n\
+             return out;\n\
+         }\n\
+         fn main() {}",
+    );
+    assert!(
+        errors
+            .iter()
+            .any(|e| e.message.contains("expected 'String', found 'ref String'")),
+        "{errors:?}"
+    );
+    assert!(
+        !errors
+            .iter()
+            .any(|e| e.message.contains("tuple pattern used")),
+        "{errors:?}"
+    );
+}

@@ -1079,7 +1079,7 @@ impl<'ctx> super::Codegen<'ctx> {
     /// it did before. That is why a possible mis-resolution under colliding
     /// generic impls costs nothing here — a wrong lookup cannot produce a
     /// wrong element type, only no element type.
-    fn call_slice_return_elem_te(&self, expr: &Expr) -> Option<TypeExpr> {
+    pub(super) fn call_slice_return_elem_te(&self, expr: &Expr) -> Option<TypeExpr> {
         let key = match &expr.kind {
             ExprKind::Call { callee, .. } => match &callee.kind {
                 ExprKind::Identifier(fname) => fname.clone(),

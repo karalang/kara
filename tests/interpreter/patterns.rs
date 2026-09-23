@@ -8211,3 +8211,85 @@ fn main() {
 "#);
     assert_eq!(out, "scalar\n  dH1\n  got:9\nreadscalar\n  in2\n  dH2\n  got:8\nfirst\n  dH4\n  got:3\n  dH3\nsecond\n  dH5\n  got:6\n  dH6\nmiddle\n  dH7\n  dH9\n  got:8\n  dH8\nbothtouched\n  keep11\n  dH11\n  got:10\n  dH10\nnoneout\n  dH12\n  dH13\n  got:25\nresultout\n  dH14\n  got:7\nend\n", "got:\n{out}");
 }
+
+/// Interpreter twin of `e2e_tuple_pattern_destructures_through_a_borrow`
+/// (B-2026-09-23-28). The `let (name, k) = ref ps[i]` line is the half this
+/// backend got wrong on its own: the borrow evaluates to an element reference
+/// rather than a tuple, and the tuple arm of `bind_pattern` bound nothing, so
+/// the first read of `name` died with "resolved but has no binding at run
+/// time".
+#[test]
+fn test_tuple_pattern_destructures_through_a_borrow() {
+    let out = run(r#"
+fn total(edges: ref Vec[(i64, i64)]) -> i64 {
+    let mut s = 0;
+    for (a, b) in edges { s += a * 10 + b; }
+    return s;
+}
+fn nested(v: ref Vec[(i64, (i64, i64))]) -> i64 {
+    let mut s = 0;
+    for (a, (b, c)) in v { s += a + b * c; }
+    return s;
+}
+fn muts(v: mut ref Vec[(String, i64)]) -> i64 {
+    let mut s = 0;
+    for (name, k) in v { s += name.len() + k; }
+    v.push(("q".to_string(), 1));
+    return s;
+}
+fn map_total(m: ref Map[String, i64]) -> i64 {
+    let mut s = 0;
+    for (k, v) in m { s += k.len() + v; }
+    return s;
+}
+fn pair(p: ref (String, i64)) -> i64 {
+    let (name, k) = p;
+    return name.len() + k;
+}
+fn by_index(ps: ref Vec[(String, i64)]) -> i64 {
+    let mut n = 0;
+    for i in 0..ps.len() {
+        let (name, k) = ref ps[i];
+        n += name.len() * 100 + k;
+    }
+    return n;
+}
+fn main() {
+    println(f"{total(vec![(1, 2), (3, 4)])} {nested(vec![(1, (2, 3)), (4, (5, 6))])}");
+    let mut ps = vec![("ab".to_string(), 5)];
+    println(f"{muts(mut ps)} {ps.len()}");
+    let mut m: Map[String, i64] = Map.new();
+    m.insert("ab".to_string(), 3);
+    m.insert("c".to_string(), 4);
+    let u = ("abc".to_string(), 2);
+    println(f"{map_total(m)} {pair(u)} {by_index(ps)}");
+}
+"#);
+    assert_eq!(out, "46 41\n7 2\n10 5 306\n");
+}
+
+/// Interpreter twin of `e2e_iterator_terminals_take_destructuring_params_and_enumerate`
+/// and `e2e_for_over_a_call_that_returns_a_slice` (B-2026-09-23-29,
+/// B-2026-09-23-30). The interpreter always ran these; the twin pins the values
+/// the compiled fixtures are compared against.
+#[test]
+fn test_iterator_terminals_destructure_and_slice_calls_iterate() {
+    let out = run(r#"
+struct G { nbr: Vec[i64] }
+impl G {
+    fn part(ref self, a: i64, b: i64) -> Slice[i64] { return self.nbr[a..b]; }
+}
+fn main() {
+    let label = vec![0, 0, 2, 1, 4];
+    let v = vec![(1, 2), (5, 3), (4, 6)];
+    println(f"{label.iter().enumerate().filter(|(i, l)| i == l).count()} {label.iter().enumerate().map(|(i, l)| i * l).sum()}");
+    println(f"{v.iter().map(|(a, b)| a * b).sum()} {v.iter().filter(|(a, b)| a < b).count()} {v.iter().position(|(a, b)| a > b)}");
+    let g = G { nbr: vec![5, 6, 7, 8] };
+    let mut s = 0;
+    for w in g.part(1, 3) { s += w; }
+    for (i, w) in g.part(0, 4).iter().enumerate() { s += i * w * 100; }
+    println(f"{s}");
+}
+"#);
+    assert_eq!(out, "3 23\n41 2 Some(1)\n4413\n");
+}

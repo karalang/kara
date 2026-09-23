@@ -20338,8 +20338,16 @@ impl<'ctx> super::Codegen<'ctx> {
         else {
             return Ok(false);
         };
-        let PatternKind::Binding(name) = &pattern.kind else {
-            return Ok(false);
+        // B-2026-09-23-28: a tuple pattern over the borrowed element
+        // (`let (a, b) = ref v[i]`) destructures through the borrow, the way
+        // the typechecker binds it. It takes the same element-pointer lowering
+        // as the `Binding` shape below and then binds the loaded element's
+        // fields exactly as a `for (a, b) in v` loop body does: bit-copies
+        // with no cleanup pushed, since the container still owns the element.
+        let name = match &pattern.kind {
+            PatternKind::Binding(name) => Some(name),
+            PatternKind::Tuple(_) => None,
+            _ => return Ok(false),
         };
         let ExprKind::Index { object, index } = &operand.kind else {
             return Ok(false);
@@ -20470,6 +20478,15 @@ impl<'ctx> super::Codegen<'ctx> {
                 None => return Err(self.ref_binding_gap_msg(None)),
             },
             _ => return Err(self.ref_binding_gap_msg(None)),
+        };
+
+        let Some(name) = name else {
+            let elem_val = self
+                .builder
+                .build_load(elem_ty, elem_ptr, "ref.tuple.elem")
+                .map_err(|e| e.to_string())?;
+            self.bind_pattern(pattern, elem_val)?;
+            return Ok(true);
         };
 
         let ptr_ty = self.context.ptr_type(inkwell::AddressSpace::default());

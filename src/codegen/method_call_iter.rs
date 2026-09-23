@@ -777,6 +777,20 @@ impl<'ctx> super::Codegen<'ctx> {
             return Ok(Some(v));
         }
 
+        // B-2026-09-23-29: whether an `enumerate()` step sits anywhere in this
+        // chain, which decides how a destructuring param is desugared below.
+        let chain_has_enumerate = {
+            let mut e = collect_recv;
+            let mut found = false;
+            while let ExprKind::MethodCall { object, method, .. } = &e.kind {
+                if method == "enumerate" {
+                    found = true;
+                    break;
+                }
+                e = object;
+            }
+            found
+        };
         let mut steps: Vec<IterAdaptor> = Vec::new();
         let mut cur = collect_recv;
         while let ExprKind::MethodCall {
@@ -805,126 +819,49 @@ impl<'ctx> super::Codegen<'ctx> {
                             }
                             match &params[0].pattern.kind {
                                 PatternKind::Binding(param) => (param.clone(), (**body).clone()),
-                                // Tuple-destructuring param — e.g.
+                                // Tuple- or struct-destructuring param — e.g.
                                 // `enumerate().map(|(i, x)| …)` (B-2026-07-04-2
-                                // sub-part 2). Bind a fresh single param to the
-                                // element and desugar the destructuring into
-                                // leading `let`s in a block body:
-                                // `|__dp| { let i = __dp.0; let x = __dp.1; <body> }`.
-                                // This reuses the proven single-`Binding`
-                                // pipeline verbatim (the element is a tuple, so
-                                // `__dp.k` is an ordinary `TupleIndex`), and
-                                // normal block scoping handles any shadowing in
-                                // the body. Only all-`Binding`/`_` sub-patterns
-                                // are lowered; a nested/complex sub-pattern
-                                // (`|((a, b), c)|`, a literal, …) bails to the
-                                // loud dispatch-fail rather than miscompiling.
-                                PatternKind::Tuple(subs) => {
+                                // sub-part 2), `v.iter().map(|P { x, y }| x + y)`
+                                // (B-2026-08-17-24). Bind a fresh single param
+                                // to the element and re-create the pattern's
+                                // bindings in a leading `let` of a block body,
+                                // through the one shared desugaring
+                                // (`destructuring_closure_param`) so this engine
+                                // and the fused terminals cannot drift. Only
+                                // all-`Binding`/`_` sub-patterns are lowered; a
+                                // nested/complex sub-pattern bails to the loud
+                                // dispatch-fail rather than miscompiling.
+                                //
+                                // B-2026-09-23-29: this arm used to project each
+                                // field (`let n = __dp.0`), and over a borrowed
+                                // source that projection made a second owner of
+                                // a heap field: `names.iter().map(|(n, k)|
+                                // n.len() + k).collect()` over `Vec[(String,
+                                // i64)]` aborted with a double free. A chain
+                                // with an `enumerate()` step keeps the
+                                // projections: its element is the `(index,
+                                // element)` tuple this engine materialises, and
+                                // `|(i, s)| s` MOVES the element out of it, which
+                                // the projection form tracks and a pattern `let`
+                                // over the materialised tuple does not (the
+                                // tuple's drop then frees the moved String).
+                                PatternKind::Tuple(_) | PatternKind::Struct { .. } => {
                                     let dp = format!(
                                         "__dp_{}_{}",
                                         self.indexed_elem_counter,
                                         steps.len()
                                     );
-                                    let mut stmts = Vec::new();
-                                    for (k, sub) in subs.iter().enumerate() {
-                                        match &sub.kind {
-                                            PatternKind::Wildcard => {}
-                                            PatternKind::Binding(name) => {
-                                                stmts.push(Stmt {
-                                                    kind: StmtKind::Let {
-                                                        is_mut: false,
-                                                        pattern: Pattern {
-                                                            kind: PatternKind::Binding(
-                                                                name.clone(),
-                                                            ),
-                                                            span: sub.span,
-                                                        },
-                                                        ty: None,
-                                                        value: Expr {
-                                                            kind: ExprKind::TupleIndex {
-                                                                object: Box::new(Expr {
-                                                                    kind: ExprKind::Identifier(
-                                                                        dp.clone(),
-                                                                    ),
-                                                                    span: sub.span,
-                                                                }),
-                                                                index: k as u64,
-                                                            },
-                                                            span: sub.span,
-                                                        },
-                                                    },
-                                                    span: sub.span,
-                                                });
-                                            }
-                                            _ => return Ok(None),
-                                        }
-                                    }
-                                    let block = Block {
-                                        stmts,
-                                        final_expr: Some(Box::new((**body).clone())),
-                                        span: body.span,
+                                    let desugared = if chain_has_enumerate {
+                                        Self::destructuring_closure_projections(
+                                            &params[0].pattern,
+                                            &dp,
+                                        )
+                                    } else {
+                                        Self::destructuring_closure_param(&params[0].pattern, &dp)
                                     };
-                                    (
-                                        dp,
-                                        Expr {
-                                            kind: ExprKind::Block(block),
-                                            span: body.span,
-                                        },
-                                    )
-                                }
-                                // Struct-destructuring param — e.g.
-                                // `v.iter().map(|P { x, y }| x + y)`
-                                // (B-2026-08-17-24, the struct sibling of the
-                                // tuple arm above). Same desugaring, with a
-                                // FIELD access where the tuple form uses a
-                                // `TupleIndex`: `|__dp| { let x = __dp.x; let y
-                                // = __dp.y; <body> }`. Shorthand (`{ x }`) and
-                                // renaming (`{ x: x1 }`) differ only in the
-                                // bound NAME — the field read is keyed off
-                                // `f.name` either way. As in the tuple arm,
-                                // only all-`Binding`/`_` sub-patterns lower; a
-                                // nested sub-pattern bails to the loud
-                                // dispatch-fail rather than miscompiling. A
-                                // `..` rest is irrelevant here: unlisted fields
-                                // simply bind nothing.
-                                PatternKind::Struct { fields, .. } => {
-                                    let dp = format!(
-                                        "__dp_{}_{}",
-                                        self.indexed_elem_counter,
-                                        steps.len()
-                                    );
-                                    let mut stmts = Vec::new();
-                                    for f in fields {
-                                        // `{ x }` shorthand binds `x`; `{ x: y }`
-                                        // binds `y`; `{ x: _ }` binds nothing.
-                                        let bind_name = match f.pattern.as_ref().map(|p| &p.kind) {
-                                            None => f.name.clone(),
-                                            Some(PatternKind::Binding(n)) => n.clone(),
-                                            Some(PatternKind::Wildcard) => continue,
-                                            _ => return Ok(None),
-                                        };
-                                        stmts.push(Stmt {
-                                            kind: StmtKind::Let {
-                                                is_mut: false,
-                                                pattern: Pattern {
-                                                    kind: PatternKind::Binding(bind_name),
-                                                    span: f.span,
-                                                },
-                                                ty: None,
-                                                value: Expr {
-                                                    kind: ExprKind::FieldAccess {
-                                                        object: Box::new(Expr {
-                                                            kind: ExprKind::Identifier(dp.clone()),
-                                                            span: f.span,
-                                                        }),
-                                                        field: f.name.clone(),
-                                                    },
-                                                    span: f.span,
-                                                },
-                                            },
-                                            span: f.span,
-                                        });
-                                    }
+                                    let Some((dp, stmts)) = desugared else {
+                                        return Ok(None);
+                                    };
                                     let block = Block {
                                         stmts,
                                         final_expr: Some(Box::new((**body).clone())),
@@ -3320,14 +3257,34 @@ impl<'ctx> super::Codegen<'ctx> {
                 return None;
             }
             // A wildcard adaptor param (`map(|_| ..)`) binds to a fresh throwaway
-            // name (the interpreter already accepts it, B-2026-07-11-19); a
-            // destructuring/complex param bails (fail closed).
-            let param = match &params[0].pattern.kind {
-                PatternKind::Binding(param) => param.clone(),
+            // name (the interpreter already accepts it, B-2026-07-11-19).
+            //
+            // B-2026-09-23-29: a DESTRUCTURING param (`filter(|(i, l)| i == l)`,
+            // `map(|P { x, y }| x + y)`) binds the element to a fresh name and
+            // re-creates its bindings at the top of the body, through the same
+            // `destructuring_closure_param` desugaring `fold` already uses. It
+            // used to bail here, so every fused terminal (`count`, `sum`,
+            // `any`, `position`, ...) over such a chain failed with a
+            // dispatch error naming the terminal. A nested sub-pattern still
+            // bails (fail closed).
+            let fresh = match &params[0].pattern.kind {
                 PatternKind::Wildcard => format!("__pw_{}", steps.len()),
-                _ => return None,
+                _ => format!("__pd_{}", steps.len()),
             };
-            steps.push((kind, param, (**body).clone()));
+            let (param, rebinds) = Self::destructuring_closure_param(&params[0].pattern, &fresh)?;
+            let body = if rebinds.is_empty() {
+                (**body).clone()
+            } else {
+                Expr {
+                    kind: ExprKind::Block(Block {
+                        stmts: rebinds,
+                        final_expr: Some(body.clone()),
+                        span: body.span,
+                    }),
+                    span: body.span,
+                }
+            };
+            steps.push((kind, param, body));
             base = object;
         }
         steps.reverse(); // outermost-peeled → source order
@@ -3340,6 +3297,7 @@ impl<'ctx> super::Codegen<'ctx> {
                         "iter" | "iter_mut" | "into_iter" | "chars" | "bytes" | "keys" | "values"
                     ))
                     || Self::peel_base_is_structural_adaptor(base)
+                    || Self::peel_base_is_named_enumerate(base)
             }
             ExprKind::Range { .. } => true,
             _ => false,
@@ -3348,6 +3306,36 @@ impl<'ctx> super::Codegen<'ctx> {
             return None;
         }
         Some((base, steps))
+    }
+
+    /// B-2026-09-23-29: `<named>.iter().enumerate()` (or `.into_iter()`) as a
+    /// fused-chain BASE. The desugar emits `for <elem> in <base>`, and the
+    /// for-loop lowers exactly this receiver: a single binding over a
+    /// scalar-element Vec materialises the `(index, element)` tuple, and any
+    /// other element type fails LOUD there rather than miscompiling. Without
+    /// it, every terminal after `enumerate()` (`count`, `sum`, `any`, ...)
+    /// failed with a dispatch error, while `.collect()` — which has its own
+    /// enumerate engine — lowered.
+    fn peel_base_is_named_enumerate(base: &Expr) -> bool {
+        let ExprKind::MethodCall {
+            object,
+            method,
+            args,
+            ..
+        } = &base.kind
+        else {
+            return false;
+        };
+        if method != "enumerate" || !args.is_empty() {
+            return false;
+        }
+        matches!(
+            &object.kind,
+            ExprKind::MethodCall { object: src, method: m, args: a, .. }
+                if a.is_empty()
+                    && matches!(m.as_str(), "iter" | "into_iter")
+                    && matches!(&src.kind, ExprKind::Identifier(_))
+        )
     }
 
     /// True iff `base` is a STRUCTURAL-adaptor chain the for-loop lowers via
@@ -3498,19 +3486,74 @@ impl<'ctx> super::Codegen<'ctx> {
 
     /// Widened twin of [`closure_param_name`] for terminals that can wrap
     /// their closure body: returns the name to bind the element to, plus the
-    /// `let` statements that re-create a DESTRUCTURING param's bindings from
+    /// `let` statement that re-creates a DESTRUCTURING param's bindings from
     /// it (B-2026-08-17-24).
     ///
-    /// `|P { x, y }| <body>` becomes `|<fresh>| { let x = <fresh>.x; let y =
-    /// <fresh>.y; <body> }` and `|(a, b)| <body>` the `TupleIndex` equivalent
-    /// — the same desugaring the `map`/`filter` peel does inline, so both
-    /// paths lower destructuring params identically instead of drifting.
-    /// Callers that cannot wrap the body must keep using `closure_param_name`.
+    /// `|P { x, y }| <body>` becomes `|<fresh>| { let P { x, y } = <fresh>;
+    /// <body> }` and `|(a, b)| <body>` the tuple-pattern equivalent — the
+    /// same desugaring the `map`/`filter` peel uses, so both paths lower
+    /// destructuring params identically instead of drifting. Callers that
+    /// cannot wrap the body must keep using `closure_param_name`.
+    ///
+    /// B-2026-09-23-29: this used to emit one PROJECTION per field (`let a =
+    /// <fresh>.0`). When the chain's source is borrowed, `<fresh>` is the loop's
+    /// bit-copy of a container element, and a projected heap field became a
+    /// second owner of the element's buffer: `names.iter().fold(0, |acc, (n,
+    /// k)| acc + n.len() + k)` over `Vec[(String, i64)]` aborted with a double
+    /// free on every compiled surface. A pattern `let` over the element binds
+    /// exactly as `for (n, k) in names.iter()` does, which the container keeps
+    /// owning, and it keeps the ORIGINAL sub-pattern spans, so the bindings'
+    /// recorded surface types still apply.
     ///
     /// `None` for anything not lowerable (a nested sub-pattern, a literal),
     /// preserving the fail-closed contract: the caller falls through to its
     /// loud dispatch-fail rather than miscompiling.
     pub(super) fn destructuring_closure_param(
+        pat: &Pattern,
+        fresh: &str,
+    ) -> Option<(String, Vec<Stmt>)> {
+        let flat = match &pat.kind {
+            PatternKind::Binding(n) => return Some((n.clone(), Vec::new())),
+            PatternKind::Wildcard => return Some((fresh.to_string(), Vec::new())),
+            PatternKind::Tuple(subs) => subs
+                .iter()
+                .all(|sub| matches!(sub.kind, PatternKind::Wildcard | PatternKind::Binding(_))),
+            PatternKind::Struct { fields, .. } => fields.iter().all(|f| {
+                matches!(
+                    f.pattern.as_ref().map(|p| &p.kind),
+                    None | Some(PatternKind::Binding(_)) | Some(PatternKind::Wildcard)
+                )
+            }),
+            _ => false,
+        };
+        if !flat {
+            return None;
+        }
+        let rebind = Stmt {
+            kind: StmtKind::Let {
+                is_mut: false,
+                pattern: pat.clone(),
+                ty: None,
+                value: Expr {
+                    kind: ExprKind::Identifier(fresh.to_string()),
+                    span: pat.span,
+                },
+            },
+            span: pat.span,
+        };
+        Some((fresh.to_string(), vec![rebind]))
+    }
+
+    /// The per-field PROJECTION form of [`destructuring_closure_param`]:
+    /// `|(a, b)| <body>` becomes `|<fresh>| { let a = <fresh>.0; let b =
+    /// <fresh>.1; <body> }`, and a struct pattern the `FieldAccess`
+    /// equivalent. Kept only for the collect engine's `enumerate()` chains,
+    /// whose element is a tuple the engine itself materialises: a projection
+    /// that moves a heap element out of it is tracked as a move, so the
+    /// tuple's drop skips that field. Over a BORROWED source the same
+    /// projection is a second owner (B-2026-09-23-29), which is why every other
+    /// caller uses the pattern-`let` form.
+    fn destructuring_closure_projections(
         pat: &Pattern,
         fresh: &str,
     ) -> Option<(String, Vec<Stmt>)> {
@@ -3529,21 +3572,24 @@ impl<'ctx> super::Codegen<'ctx> {
             },
             span,
         };
+        let object = |span| {
+            Box::new(Expr {
+                kind: ExprKind::Identifier(fresh.to_string()),
+                span,
+            })
+        };
+        let mut stmts = Vec::new();
         match &pat.kind {
-            PatternKind::Binding(n) => Some((n.clone(), Vec::new())),
-            PatternKind::Wildcard => Some((fresh.to_string(), Vec::new())),
+            PatternKind::Binding(n) => return Some((n.clone(), Vec::new())),
+            PatternKind::Wildcard => return Some((fresh.to_string(), Vec::new())),
             PatternKind::Tuple(subs) => {
-                let mut stmts = Vec::new();
                 for (k, sub) in subs.iter().enumerate() {
                     match &sub.kind {
                         PatternKind::Wildcard => {}
                         PatternKind::Binding(name) => stmts.push(bind_from(
                             name.clone(),
                             ExprKind::TupleIndex {
-                                object: Box::new(Expr {
-                                    kind: ExprKind::Identifier(fresh.to_string()),
-                                    span: sub.span,
-                                }),
+                                object: object(sub.span),
                                 index: k as u64,
                             },
                             sub.span,
@@ -3551,10 +3597,8 @@ impl<'ctx> super::Codegen<'ctx> {
                         _ => return None,
                     }
                 }
-                Some((fresh.to_string(), stmts))
             }
             PatternKind::Struct { fields, .. } => {
-                let mut stmts = Vec::new();
                 for f in fields {
                     let bind_name = match f.pattern.as_ref().map(|p| &p.kind) {
                         None => f.name.clone(),
@@ -3565,19 +3609,45 @@ impl<'ctx> super::Codegen<'ctx> {
                     stmts.push(bind_from(
                         bind_name,
                         ExprKind::FieldAccess {
-                            object: Box::new(Expr {
-                                kind: ExprKind::Identifier(fresh.to_string()),
-                                span: f.span,
-                            }),
+                            object: object(f.span),
                             field: f.name.clone(),
                         },
                         f.span,
                     ));
                 }
-                Some((fresh.to_string(), stmts))
             }
-            _ => None,
+            _ => return None,
         }
+        Some((fresh.to_string(), stmts))
+    }
+
+    /// B-2026-09-23-29: [`destructuring_closure_param`] applied to a
+    /// one-element-param terminal (`any`, `all`, `position`, `find`,
+    /// `find_map`, `partition`, `for_each`): the name to bind the element to,
+    /// and the closure body with the pattern's `let`s prepended. These
+    /// terminals took the narrow `closure_param_name`, so `any(|(i, l)| i ==
+    /// l)` failed closed to a dispatch error naming the terminal while `fold`
+    /// over the same closure lowered.
+    pub(super) fn destructuring_param_and_body(
+        pat: &Pattern,
+        fresh: &str,
+        body: &Expr,
+    ) -> Option<(String, Expr)> {
+        let (param, stmts) = Self::destructuring_closure_param(pat, fresh)?;
+        if stmts.is_empty() {
+            return Some((param, body.clone()));
+        }
+        Some((
+            param,
+            Expr {
+                kind: ExprKind::Block(Block {
+                    stmts,
+                    final_expr: Some(Box::new(body.clone())),
+                    span: body.span,
+                }),
+                span: body.span,
+            },
+        ))
     }
 
     /// Deterministic, collision-safe synthetic span for a `filter_map` step's
@@ -4274,6 +4344,19 @@ impl<'ctx> super::Codegen<'ctx> {
             span: sp,
         };
 
+        // B-2026-09-23-29: a fold body that never names its element (`count`'s
+        // synthesized `acc + 1`) does not rebind a bare loop variable. That
+        // binding was a `let` of the
+        // loop's bit-copy of a BORROWED container element, which made it a
+        // second owner of a heap element's buffer: `names.iter().filter(|p|
+        // p.1 > 1).count()` over `Vec[(String, i64)]` freed each String twice.
+        let x_used = {
+            let mut r = std::collections::HashSet::new();
+            let mut d = std::collections::HashSet::new();
+            self.refs_in_expr(fold_body, &mut r, &mut d);
+            r.contains(x_p) || d.contains(x_p)
+        };
+
         // Accumulate sink: bind the fold element param to the fully-adapted
         // element (elide a redundant self-bind), bind the acc param to the
         // running accumulator (unless the accumulator IS that param already —
@@ -4293,7 +4376,10 @@ impl<'ctx> super::Codegen<'ctx> {
             };
             let current_is_x = matches!(&current.kind, ExprKind::Identifier(n) if n == x_p);
             let mut out = Vec::new();
-            if !current_is_x {
+            // Only a bare name is skipped: a mapped value is still bound, so
+            // the `map` body keeps running once per element.
+            let current_is_name = matches!(&current.kind, ExprKind::Identifier(_));
+            if !current_is_x && (x_used || !current_is_name) {
                 out.push(let_bind(x_p, current));
             }
             if accname != acc_p {

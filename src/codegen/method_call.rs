@@ -9263,7 +9263,10 @@ impl<'ctx> super::Codegen<'ctx> {
         {
             if let ExprKind::Closure { params, body, .. } = &args[0].value.kind {
                 if params.len() == 1 {
-                    if let Some(param) = Self::closure_param_name(&params[0].pattern, "__aap") {
+                    if let Some((param, body)) =
+                        Self::destructuring_param_and_body(&params[0].pattern, "__aap", body)
+                    {
+                        let body = &body;
                         self.register_iter_body_retarget(body);
                         {
                             if let Some(v) = self.try_compile_iter_chain_any_all(
@@ -9292,7 +9295,10 @@ impl<'ctx> super::Codegen<'ctx> {
         {
             if let ExprKind::Closure { params, body, .. } = &args[0].value.kind {
                 if params.len() == 1 {
-                    if let Some(param) = Self::closure_param_name(&params[0].pattern, "__pop") {
+                    if let Some((param, body)) =
+                        Self::destructuring_param_and_body(&params[0].pattern, "__pop", body)
+                    {
+                        let body = &body;
                         if let Some(v) =
                             self.try_compile_iter_chain_position(object, &param, body, call_span)?
                         {
@@ -9316,7 +9322,10 @@ impl<'ctx> super::Codegen<'ctx> {
         {
             if let ExprKind::Closure { params, body, .. } = &args[0].value.kind {
                 if params.len() == 1 {
-                    if let Some(param) = Self::closure_param_name(&params[0].pattern, "__fip") {
+                    if let Some((param, body)) =
+                        Self::destructuring_param_and_body(&params[0].pattern, "__fip", body)
+                    {
+                        let body = &body;
                         if let Some(v) =
                             self.try_compile_iter_chain_find(object, &param, body, call_span)?
                         {
@@ -9385,7 +9394,10 @@ impl<'ctx> super::Codegen<'ctx> {
         {
             if let ExprKind::Closure { params, body, .. } = &args[0].value.kind {
                 if params.len() == 1 {
-                    if let Some(param) = Self::closure_param_name(&params[0].pattern, "__fmp") {
+                    if let Some((param, body)) =
+                        Self::destructuring_param_and_body(&params[0].pattern, "__fmp", body)
+                    {
+                        let body = &body;
                         if let Some(v) =
                             self.try_compile_iter_chain_find_map(object, &param, body, call_span)?
                         {
@@ -9417,7 +9429,10 @@ impl<'ctx> super::Codegen<'ctx> {
         {
             if let ExprKind::Closure { params, body, .. } = &args[0].value.kind {
                 if params.len() == 1 {
-                    if let Some(param) = Self::closure_param_name(&params[0].pattern, "__ptp") {
+                    if let Some((param, body)) =
+                        Self::destructuring_param_and_body(&params[0].pattern, "__ptp", body)
+                    {
+                        let body = &body;
                         if let Some(v) =
                             self.try_compile_iter_chain_partition(object, &param, body, call_span)?
                         {
@@ -9638,7 +9653,10 @@ impl<'ctx> super::Codegen<'ctx> {
         {
             if let ExprKind::Closure { params, body, .. } = &args[0].value.kind {
                 if params.len() == 1 {
-                    if let Some(param) = Self::closure_param_name(&params[0].pattern, "__fep") {
+                    if let Some((param, body)) =
+                        Self::destructuring_param_and_body(&params[0].pattern, "__fep", body)
+                    {
+                        let body = &body;
                         if let Some(v) =
                             self.try_compile_iter_chain_for_each(object, &param, body, call_span)?
                         {

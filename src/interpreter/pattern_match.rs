@@ -3135,7 +3135,12 @@ impl<'a> super::Interpreter<'a> {
                 }
             }
             PatternKind::Tuple(patterns) => {
-                if let Value::Tuple(vals) = value {
+                // B-2026-09-23-28: `let (a, b) = ref v[i]` hands this arm the
+                // `ElemRef` the borrow evaluates to, not a `Tuple`, and the
+                // arm bound NOTHING, so the first use of `a` died with "name
+                // resolved but has no binding at run time". Read through the
+                // borrow the way an identifier read does.
+                if let Value::Tuple(vals) = Self::deref_elem_ref(value) {
                     for (p, v) in patterns.iter().zip(vals) {
                         self.bind_pattern(p, v);
                     }

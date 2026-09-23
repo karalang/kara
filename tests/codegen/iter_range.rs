@@ -1427,14 +1427,16 @@ fn e2e_for_unlowered_iter_adaptors_bail_loud() {
         ),
         (
             // B-2026-07-14-21: `map`/`filter` ARE lowered, but a chain the
-            // fused peel REJECTS (here: a destructuring closure param over
-            // tuple elements) used to fall through to the silent
+            // fused peel REJECTS used to fall through to the silent
             // zero-iteration skip — interp 10, JIT 0. Must bail loud like
-            // every other adaptor shape.
+            // every other adaptor shape. A flat destructuring param
+            // (`|(a, b)|`) is now LOWERED (B-2026-09-23-29,
+            // e2e_for_over_a_destructuring_map_chain), so the contract
+            // covers the shape the peel still declines: a NESTED sub-pattern.
             "map (peel-rejected shape)",
-            "let ps: Vec[(i64, i64)] = Vec[(1i64, 2i64), (3i64, 4i64)];\n\
+            "let ps: Vec[(i64, (i64, i64))] = Vec[(1i64, (2i64, 5i64)), (3i64, (4i64, 6i64))];\n\
                  let mut s = 0i64;\n\
-                 for x in ps.iter().map(|(a, b)| a + b) { s = s + x; }\n\
+                 for x in ps.iter().map(|(a, (b, c))| a + b + c) { s = s + x; }\n\
                  println(f\"{s}\");",
         ),
         (
@@ -1456,6 +1458,32 @@ fn e2e_for_unlowered_iter_adaptors_bail_loud() {
             ir_result(&src).is_err(),
             "for-loop over `.{method}()` must bail loud (Err), not compile+silently-skip"
         );
+    }
+}
+
+/// B-2026-09-23-29: a `for` over a `map`/`filter` chain whose closure
+/// DESTRUCTURES its element now lowers through the fused peel (it was the
+/// bail contract's `map (peel-rejected shape)` case above). Tuple elements
+/// of `i64` and of `(String, i64)`, a wildcard sub-pattern, and a
+/// `filter(..).map(..)` pair; the `String` source is read after the loops.
+#[test]
+fn e2e_for_over_a_destructuring_map_chain() {
+    let out = run_program(
+        r#"
+fn main() {
+    let ps: Vec[(i64, i64)] = [(1, 2), (3, 4)];
+    let mut s = 0;
+    for x in ps.iter().map(|(a, b)| a + b) { s = s + x; }
+    let names: Vec[(String, i64)] = [("alpha".to_string() + "-long-enough-to-heap", 1), ("beta".to_string() + "-long-enough-to-heap", 2)];
+    let mut t = 0;
+    for y in names.iter().map(|(n, k)| n.len() + k) { t = t + y; }
+    for z in names.iter().filter(|(n, _)| n.len() > 25).map(|(n, k)| k) { t = t + z * 100; }
+    println(f"{s} {t} {names.len()} {names[1].0}");
+}
+"#,
+    );
+    if let Some(out) = out {
+        assert_eq!(out, "10 52 2 beta-long-enough-to-heap\n");
     }
 }
 

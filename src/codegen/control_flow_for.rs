@@ -83,6 +83,20 @@ impl<'ctx> super::Codegen<'ctx> {
         if self.array_elem_type_expr_from_rhs(inner).is_some() {
             return true;
         }
+        // B-2026-09-23-30: a call declared `-> Slice[T]` (`g.part(0, 4).iter()
+        // .enumerate()`), and a range slice (`v[1..3].iter().enumerate()`),
+        // lower through the synthetic slice binding, whose loop binds the
+        // enumerate index like any named slice.
+        if Self::range_slice_for_source(inner).is_some() {
+            return true;
+        }
+        if matches!(
+            &inner.kind,
+            ExprKind::Call { .. } | ExprKind::MethodCall { .. }
+        ) && self.call_slice_return_elem_te(inner).is_some()
+        {
+            return true;
+        }
         // B-2026-08-21-46 — a bracketed LITERAL source
         // (`for (i, x) in [1, 2, 3].iter().enumerate()`).
         //
@@ -158,6 +172,31 @@ impl<'ctx> super::Codegen<'ctx> {
         // view, so the synthetic owns nothing and is never dropped.
         if let Some(src) = Self::range_slice_for_source(iterable) {
             if let Some(result) = self.try_compile_for_range_slice(label, pattern, src, body)? {
+                return Ok(result);
+            }
+        }
+        // B-2026-09-23-30: a call DECLARED `-> Slice[T]` as the source (`for w in
+        // g.neighbours(v)`). The view is a borrow like the range slice above,
+        // so it takes the same synthetic-slice binding. It used to reach the
+        // unlowered-source error, whose advice (bind it to a local first) was
+        // the only spelling that built.
+        let slice_call = match &iterable.kind {
+            ExprKind::MethodCall {
+                object,
+                method,
+                args,
+                ..
+            } if args.is_empty() && (method == "iter" || method == "into_iter") => object.as_ref(),
+            _ => iterable,
+        };
+        if matches!(
+            &slice_call.kind,
+            ExprKind::Call { .. } | ExprKind::MethodCall { .. }
+        ) && self.call_slice_return_elem_te(slice_call).is_some()
+        {
+            if let Some(result) =
+                self.try_compile_for_range_slice(label, pattern, slice_call, body)?
+            {
                 return Ok(result);
             }
         }

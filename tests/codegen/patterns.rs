@@ -15586,3 +15586,171 @@ fn main() {
             Some("dR1\nret=1\ndR2\nletret=2\nuse3\ndR3\nprnt=0\ndR4\nnone=0\nwhole=5\ndR5\nnarrow=6\ndRn6\ndRw7\nwide=7\nngret=8\ndR8\nnguse9\nngprnt=0\ndR9\ndR10\nnest=10\ndR11\nlocal=11\nend\n"),
         );
 }
+
+/// B-2026-09-23-28 — a tuple pattern over a BORROWED tuple. `for (a, b) in edges`
+/// with `edges: ref Vec[(i64, i64)]` binds each element as `ref (i64, i64)`,
+/// and the typechecker refused the pattern outright ("tuple pattern used but
+/// type is `ref (i64, i64)`"), though the same loop over an OWNED local Vec
+/// was accepted. design.md's own `for (key, value) in map` was refused the same
+/// way whenever the map arrived as a `ref Map` parameter. Once accepted, a
+/// `ref String` field reached codegen with no surface name and `name.len()`
+/// found no dispatcher, and `let (a, b) = ref v[i]` had no codegen lowering.
+/// Scalar fields bind by value, aggregates as borrows; the container keeps
+/// ownership, so nothing is freed through the pattern.
+#[test]
+fn e2e_tuple_pattern_destructures_through_a_borrow() {
+    let src = r#"
+struct Graph {
+    edges: Vec[(i64, i64)],
+    tags: Vec[(String, String)],
+}
+impl Graph {
+    fn weight(ref self) -> i64 {
+        let mut s = 0;
+        for (a, b) in self.edges { s += a * b; }
+        return s;
+    }
+    fn tag_len(ref self) -> i64 {
+        let mut s = 0;
+        for (k, v) in self.tags { s += k.len() * 10 + v.len(); }
+        return s;
+    }
+}
+fn total(edges: ref Vec[(i64, i64)]) -> i64 {
+    let mut s = 0;
+    for (a, b) in edges { s += a * 10 + b; }
+    return s;
+}
+fn nested(v: ref Vec[(i64, (i64, i64))]) -> i64 {
+    let mut s = 0;
+    for (a, (b, c)) in v { s += a + b * c; }
+    return s;
+}
+fn muts(v: mut ref Vec[(String, i64)]) -> i64 {
+    let mut s = 0;
+    for (name, k) in v { s += name.len() + k; }
+    v.push(("q".to_string(), 1));
+    return s;
+}
+fn copies(v: ref Vec[(String, i64)]) -> Vec[String] {
+    let mut out: Vec[String] = Vec.new();
+    for (name, _) in v { out.push(name.clone()); }
+    return out;
+}
+fn enumerated(v: ref Vec[(i64, i64)]) -> i64 {
+    let mut s = 0;
+    for (i, (a, b)) in v.iter().enumerate() { s += i * (a + b); }
+    return s;
+}
+fn map_total(m: ref Map[String, i64]) -> i64 {
+    let mut s = 0;
+    for (k, v) in m { s += k.len() + v; }
+    return s;
+}
+fn pair(p: ref (String, i64)) -> i64 {
+    let (name, k) = p;
+    return name.len() + k;
+}
+fn by_index(ps: ref Vec[(String, i64)]) -> i64 {
+    let mut n = 0;
+    for i in 0..ps.len() {
+        let (name, k) = ref ps[i];
+        n += name.len() * 100 + k;
+    }
+    return n;
+}
+fn main() {
+    let g = Graph { edges: vec![(1, 2), (3, 4)], tags: vec![("ab".to_string(), "c".to_string())] };
+    println(f"{g.weight()} {g.tag_len()} {total(g.edges)}");
+    println(f"{nested(vec![(1, (2, 3)), (4, (5, 6))])}");
+    let mut ps = vec![("ab".to_string(), 5)];
+    println(f"{muts(mut ps)} {ps.len()}");
+    let c = copies(ps);
+    println(f"{c.len()} {c[0]} {c[1]}");
+    println(f"{enumerated(vec![(1, 2), (3, 4), (5, 6)])}");
+    let mut m: Map[String, i64] = Map.new();
+    m.insert("ab".to_string(), 3);
+    m.insert("c".to_string(), 4);
+    println(f"{map_total(m)} {m.len()}");
+    let u = ("abc".to_string(), 2);
+    println(f"{pair(u)} {u.0}");
+    println(f"{by_index(ps)} {ps[1].0}");
+}
+"#;
+    assert_eq!(
+        run_program(src).as_deref(),
+        Some("14 21 46\n41\n7 2\n2 ab q\n29\n10 2\n5 abc\n306 q\n"),
+    );
+}
+
+/// B-2026-09-23-29 — a DESTRUCTURING closure param on a fused iterator
+/// terminal, and `enumerate()` as the chain's source. The fused-chain peel
+/// accepted only a plain `|x|`, so `label.iter().enumerate().filter(|(i, l)| i
+/// == l).count()` — and every other terminal (`sum`, `any`, `all`, `position`,
+/// `for_each`, `partition`) behind a `|(a, b)|` or an `enumerate()` — failed
+/// with "no handler for method '<terminal>'", while `fold` and `collect` over
+/// the same closure lowered.
+#[test]
+fn e2e_iterator_terminals_take_destructuring_params_and_enumerate() {
+    let src = r#"
+struct P { x: i64, y: i64 }
+fn fixed(label: ref Vec[i64]) -> i64 {
+    return label.iter().enumerate().filter(|(i, l)| i == l).count();
+}
+fn main() {
+    let label = vec![0, 0, 2, 1, 4];
+    let v = vec![(1, 2), (5, 3), (4, 6)];
+    let ps = vec![P { x: 1, y: 2 }, P { x: 3, y: 4 }];
+    println(f"{fixed(label)} {label.iter().enumerate().count()}");
+    println(f"{label.iter().enumerate().map(|(i, l)| i * l).sum()}");
+    println(f"{label.iter().enumerate().filter(|(i, l)| i == l).map(|(i, l)| i + l).sum()}");
+    println(f"{label.iter().enumerate().any(|(i, l)| i > 3 and i == l)} {label.iter().enumerate().all(|(_, l)| l >= 0)}");
+    println(f"{v.iter().map(|(a, b)| a * b).sum()} {v.iter().filter(|(a, b)| a < b).count()}");
+    println(f"{ps.iter().map(|P { x, y }| x * y).sum()} {v.iter().position(|(a, b)| a > b)}");
+    println(f"{v.iter().any(|(a, b)| a > b)} {v.iter().find_map(|(a, b)| if a > b { Some(a - b) } else { None })}");
+    v.iter().for_each(|(a, b)| println(f"{a}-{b}"));
+    let (x, y) = v.iter().partition(|(a, b)| a < b);
+    println(f"{x.len()} {y.len()}");
+    for (i, l) in label.iter().enumerate().filter(|(i, l)| i != l) {
+        println(f"{i}:{l}");
+    }
+}
+"#;
+    assert_eq!(
+        run_program(src).as_deref(),
+        Some("3 5\n23\n12\ntrue true\n41 2\n14 Some(1)\ntrue Some(2)\n1-2\n5-3\n4-6\n2 1\n1:0\n3:1\n"),
+    );
+}
+
+/// B-2026-09-23-30 — a call DECLARED `-> Slice[T]` as a `for` source (`for w in
+/// g.part(1, 3)`), its `.iter()` form, and its `.iter().enumerate()` form, plus
+/// the same enumerate over an inline range slice. All four reached the
+/// "for-loop over this iterable is not lowered" error, whose advice — bind the
+/// view to a local first — was the only spelling that built.
+#[test]
+fn e2e_for_over_a_call_that_returns_a_slice() {
+    let src = r#"
+struct G { nbr: Vec[i64], names: Vec[String] }
+impl G {
+    fn part(ref self, a: i64, b: i64) -> Slice[i64] { return self.nbr[a..b]; }
+    fn some_names(ref self) -> Slice[String] { return self.names[1..]; }
+}
+fn head(v: ref Vec[i64], k: i64) -> Slice[i64] { return v[0..k]; }
+fn main() {
+    let g = G { nbr: vec![5, 6, 7, 8], names: vec!["a".to_string(), "bb".to_string(), "ccc".to_string()] };
+    let v = vec![3, 4, 5, 6];
+    let mut s = 0;
+    for w in g.part(1, 3) { s += w; }
+    for w in head(g.nbr, 2) { s += w * 100; }
+    for n in g.some_names() { s += n.len() * 1000; }
+    for (i, w) in g.part(0, 4).iter().enumerate() { s += i * w * 10000; }
+    println(f"{s}");
+    let mut t = 0;
+    for (i, x) in v[1..3].iter().enumerate() { t += i * x; }
+    for w in g.part(1, 3).iter() { t += w * 10; }
+    for (i, n) in g.some_names().iter().enumerate() { t += i * n.len() * 1000; }
+    println(f"{t} {g.names[2]}");
+}
+"#;
+    assert_eq!(run_program(src).as_deref(), Some("446113\n3135 ccc\n"));
+}
