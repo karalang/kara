@@ -3455,7 +3455,7 @@ fn main() {
         // move-out then drop WHOLE (no consume)
         let u1 = Neg(Unary { operand: Num(5) });
         let u2 = u1;
-        match u2 { Num(n) => total = total + n, Add(b) => total = total + 0, Neg(x) => total = total + 0 }
+        match u2 { Num(n) => { total = total + n; } Add(b) => { total = total + 0; } Neg(x) => { total = total + 0; } }
         // subtree moved into a parent literal, then consumed
         let sub = Add(BinOp { left: Num(2), right: Num(3) });
         let p1 = Add(BinOp { left: sub, right: Num(10) });

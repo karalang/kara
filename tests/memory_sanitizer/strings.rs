@@ -1622,14 +1622,14 @@ fn asan_fused_string_concat_chain_frees_each_leaf_once() {
             (
                 "borrowed-ref-leaf",
                 "fn cat(p: ref String) -> String { return p + \"-\" + mk(9) + \"!\" }\n\
-                 fn main() { let a = mk(1); let s = cat(ref a);\n\
+                 fn main() { let a = mk(1); let s = cat(a);\n\
                  \x20  println(f\"n:{s.len() > 0}/{a.len() > 0}\"); println(\"end\") }\n",
-                vec!["end"],
+                vec!["n:true/true", "end"],
             ),
             (
                 "chain-in-a-loop",
                 "fn main() { let mut i = 0; let mut n = 0;\n\
-                 \x20  while i < 50 { let s = mk(i) + \":\" + mk(i + 1) + \";\"; n = n + s.len(); i = i + 1 }\n\
+                 \x20  while i < 50 { let s = mk(i) + \":\" + mk(i + 1) + \";\"; n = n + s.len(); i = i + 1; }\n\
                  \x20  println(f\"n:{n > 0}\"); println(\"end\") }\n",
                 vec!["n:true", "end"],
             ),
@@ -1847,7 +1847,7 @@ fn main() {
         // ... then destructure externally — owned-scrutinee match.
         match e {
             NoAt { value } => { if value.len() > 0 { count = count + 1; } },
-            Empty          => count = count + 0,
+            Empty          => { count = count + 0; }
         }
         i = i + 1;
     }
@@ -2074,8 +2074,8 @@ fn main() {
         ];
         let key: String = "bravo_bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb";
         match v.binary_search(key.to_string()) {
-            Some(idx) => total = total + idx,
-            None => total = total + 100,
+            Some(idx) => { total = total + idx; }
+            None => { total = total + 100; }
         }
         i = i + 1;
     }

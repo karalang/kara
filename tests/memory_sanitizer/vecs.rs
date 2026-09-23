@@ -1286,8 +1286,8 @@ fn main() {
         v.push(f"a-{i}");
         v.push(f"b-{i}");
         match NonEmptyV.try_from(v) {
-            Ok(rows) => total = total + rows.len(),
-            Err(_)   => total = total + 0,
+            Ok(rows) => { total = total + rows.len(); }
+            Err(_)   => { total = total + 0; }
         }
         i = i + 1;
     }
