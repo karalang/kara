@@ -5971,3 +5971,40 @@ fn main() {
     };
     assert_eq!(out, "last\n  dies\n  d1\n  d2\n  y8\n  d8\n  d9\ntail\n  a1\n  d1\n  d2\n  y9\n  d8\n  d9\nthree\n  dies\n  d4\n  d5\n  d1\n  d2\n  y8\n  d8\n  d9\nwrap\n  dies\n  d1\n  d2\n  y8\n  d8\n  d9\nearly-t\n  d1\n  d2\n  y8\n  d8\n  d9\nearly-f\n  dies\n  d1\n  d2\n  y8\n  d8\n  d9\nstrs\n  dies\n  y29\nend\n", "got:\n{out}");
 }
+
+/// B-2026-09-23-25 — a by-value `Array` param returned on SOME exits only,
+/// for an element this frame owns outright (`String`, `Vec[i64]`) and for one
+/// that runs a user `Drop`, with the other exit built from `vec![..]` /
+/// `Vec[v; n]`. Before the fix the owned-element param kept its static
+/// scope-exit memory drop, which the hand-back exit never retracted, so the
+/// caller freed the same buffers again: `free(): double free detected in
+/// tcache 2` on the JIT, `-O0` and `-O2`. And a `vec![..]` in the other exit
+/// declined the per-path flag outright, so the `Drop` element lost its bodies
+/// on the path where it dies inside the callee, on every surface.
+#[test]
+fn e2e_conditional_array_param_handback_owns_once() {
+    let Some(out) = run_program(
+        r#"struct R { id: i64, v: Vec[i64] }
+impl Drop for R { fn drop(mut ref self) { println(f"  d{self.id}") } }
+fn mks(i: i64) -> String { return f"heap-string-longer-than-sso-{i}" }
+fn strs(a: Array[String, 2], c: bool) -> Array[String, 2] { if c { a } else { [mks(8), mks(9)] } }
+fn early(a: Array[String, 2], c: bool) -> Array[String, 2] { if c { return a } [mks(8), mks(9)] }
+fn vecs(a: Array[Vec[i64], 2], c: bool) -> Array[Vec[i64], 2] { if c { a } else { [vec![8, 8], Vec[9; 4]] } }
+fn rs(a: Array[R, 2], c: bool) -> Array[R, 2] { if c { a } else { [R { id: 8, v: vec![8] }, R { id: 9, v: vec![9, 9] }] } }
+fn main() {
+    for c in [true, false] {
+        println(f"c={c}");
+        { let y = strs([mks(1), mks(2)], c); println(f"  s{y[1].len()}"); }
+        { let y = early([mks(1), mks(2)], c); println(f"  e{y[0].len()}"); }
+        { let a: Array[String, 2] = [mks(1), mks(2)]; strs(a, c); println("  discarded"); }
+        { let y = vecs([vec![1, 2, 3], vec![4]], c); println(f"  v{y[0].len()} {y[1].len()}"); }
+        { let y = rs([R { id: 1, v: vec![1] }, R { id: 2, v: vec![2] }], c); println(f"  r{y[0].id}"); }
+    }
+    println("end")
+}
+"#,
+    ) else {
+        return;
+    };
+    assert_eq!(out, "c=true\n  s29\n  e29\n  discarded\n  v3 1\n  r1\n  d1\n  d2\nc=false\n  s29\n  e29\n  discarded\n  v2 4\n  d1\n  d2\n  r8\n  d8\n  d9\nend\n", "got:\n{out}");
+}

@@ -2954,6 +2954,46 @@ impl<'ctx> super::Codegen<'ctx> {
             && !crate::ast::fn_moves_param_into_outliving_place_via_call(program, f, i)
     }
 
+    /// B-2026-09-23-25 — the CALLEE-OWNED sibling of
+    /// [`Self::conditional_array_handback_moves_to_callee`]: a by-value
+    /// `Array` param whose elements this frame owns outright (no user `Drop`,
+    /// e.g. `Array[String, N]`) and which some exits hand back and others do
+    /// not.
+    ///
+    /// Such a param took the static scope-exit memory drop
+    /// (`make_array_param_callee_owned`), which nothing retracts on the exit
+    /// that hands it back, so the caller's result binding freed the same
+    /// buffers: `if c { a } else { [..] }` aborted `free(): double free
+    /// detected in tcache 2` at `c = true` on the JIT, `-O0` and `-O2`. It
+    /// takes the same single flag-guarded slot as the caller-retained case,
+    /// which a hand-back exit clears. The caller needs no change: for a
+    /// callee-owned element it already hands the memory over at the call.
+    pub(super) fn conditional_callee_owned_array_handback(
+        &self,
+        fn_name: &str,
+        arg_index: usize,
+    ) -> bool {
+        let Some(program) = self.program_snapshot.as_deref() else {
+            return false;
+        };
+        let Some(f) = crate::codegen::declarations::find_function_ast(program, fn_name) else {
+            return false;
+        };
+        if f.generic_params.is_some() || self.is_coroutine_compiled(&f.name) {
+            return false;
+        }
+        let Some(param) = f.params.get(arg_index) else {
+            return false;
+        };
+        let Some((elem_te, n)) = self.array_elem_and_len(&param.ty) else {
+            return false;
+        };
+        n > 0
+            && self.array_param_elem_is_callee_owned(&elem_te)
+            && crate::ast::fn_conditionally_returns_param_bare(Some(program), f, arg_index)
+            && !crate::ast::fn_moves_param_into_outliving_place(f, arg_index)
+    }
+
     pub(super) fn conditional_array_handback_moves_to_callee(
         &self,
         callee_name: &str,

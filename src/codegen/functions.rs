@@ -2550,7 +2550,47 @@ impl<'ctx> super::Codegen<'ctx> {
                                     // sibling by-value aggregate; the emitter
                                     // below is shared with the `let`-local
                                     // registrar, which must keep its drop.
-                                    if *n > 0 && self.array_param_elem_is_callee_owned(elem_te) {
+                                    // B-2026-09-23-25 — unless some exits
+                                    // hand it back and others do not: then
+                                    // one flag-guarded slot, which a
+                                    // hand-back exit clears, in place of the
+                                    // static drop no exit retracts. See
+                                    // `conditional_callee_owned_array_handback`.
+                                    let recv_offset = self
+                                        .program_snapshot
+                                        .as_deref()
+                                        .and_then(|p| {
+                                            crate::codegen::declarations::find_function_ast(
+                                                p, &func.name,
+                                            )
+                                        })
+                                        .is_some_and(|ast| ast.self_param.is_some())
+                                        as usize;
+                                    let flagged = *n > 0
+                                        && i >= recv_offset
+                                        && self.conditional_callee_owned_array_handback(
+                                            &func.name,
+                                            i - recv_offset,
+                                        );
+                                    if flagged {
+                                        let elem_ty = self.llvm_type_for_type_expr(elem_te);
+                                        if let Some(all) = self
+                                            .emit_array_flagged_drop_fn(elem_ty, elem_te, *n as u32)
+                                        {
+                                            self.track_user_drop_var_with_fn(
+                                                "",
+                                                &param_name,
+                                                alloca,
+                                                all,
+                                                crate::codegen::state::UserDropKind::ContainerElemBodies,
+                                            );
+                                            self.payload_vars
+                                                .cond_handback_array_params
+                                                .insert(param_name.clone());
+                                        }
+                                    } else if *n > 0
+                                        && self.array_param_elem_is_callee_owned(elem_te)
+                                    {
                                         let elem_ty = self.llvm_type_for_type_expr(elem_te);
                                         self.make_array_param_callee_owned(
                                             &param_name,

@@ -3620,6 +3620,17 @@ pub fn fn_conditionally_returns_param_bare(
             // array param was ever admitted and its element bodies were lost on
             // every surface on the path where it died inside the callee.
             ExprKind::ArrayLiteral(elems) => elems.iter().any(|el| may_mention(el, name)),
+            // B-2026-09-23-25 — and a PREFIX collection literal, which is also
+            // what `vec![..]` desugars to, likewise. Without these two arms an
+            // `Array[Vec[i64], 2]` hand-back whose other exit builds
+            // `[vec![8, 8], vec![9]]` was declined, kept the static scope-exit
+            // drop, and double-freed on the exit that hands the param back.
+            ExprKind::PrefixCollectionLiteral { items, .. } => {
+                items.iter().any(|el| may_mention(el, name))
+            }
+            ExprKind::RepeatLiteral { value, count, .. } => {
+                may_mention(value, name) || may_mention(count, name)
+            }
             ExprKind::Binary { left, right, .. } => {
                 may_mention(left, name) || may_mention(right, name)
             }

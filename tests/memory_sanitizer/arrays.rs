@@ -7851,3 +7851,59 @@ fn main() {
         "asan_shadowed_array_local_returned_is_dropped_once",
     );
 }
+
+/// B-2026-09-23-25 — a by-value `Array` param returned on SOME exits only,
+/// for an element this frame owns outright (`String`, `Vec[i64]`) and for one
+/// that runs a user `Drop`, with the other exit built from `vec![..]` /
+/// `Vec[v; n]`. Before the fix the owned-element param kept its static
+/// scope-exit memory drop, which the hand-back exit never retracted, so the
+/// caller freed the same buffers again: `free(): double free detected in
+/// tcache 2` on the JIT, `-O0` and `-O2`. And a `vec![..]` in the other exit
+/// declined the per-path flag outright, so the `Drop` element lost its bodies
+/// on the path where it dies inside the callee, on every surface.
+#[test]
+fn asan_conditional_array_param_handback_owns_once() {
+    assert_clean_asan_run(
+        r#"struct R { id: i64, v: Vec[i64] }
+impl Drop for R { fn drop(mut ref self) { println(f"  d{self.id}") } }
+fn mks(i: i64) -> String { return f"heap-string-longer-than-sso-{i}" }
+fn strs(a: Array[String, 2], c: bool) -> Array[String, 2] { if c { a } else { [mks(8), mks(9)] } }
+fn early(a: Array[String, 2], c: bool) -> Array[String, 2] { if c { return a } [mks(8), mks(9)] }
+fn vecs(a: Array[Vec[i64], 2], c: bool) -> Array[Vec[i64], 2] { if c { a } else { [vec![8, 8], Vec[9; 4]] } }
+fn rs(a: Array[R, 2], c: bool) -> Array[R, 2] { if c { a } else { [R { id: 8, v: vec![8] }, R { id: 9, v: vec![9, 9] }] } }
+fn main() {
+    for c in [true, false] {
+        println(f"c={c}");
+        { let y = strs([mks(1), mks(2)], c); println(f"  s{y[1].len()}"); }
+        { let y = early([mks(1), mks(2)], c); println(f"  e{y[0].len()}"); }
+        { let a: Array[String, 2] = [mks(1), mks(2)]; strs(a, c); println("  discarded"); }
+        { let y = vecs([vec![1, 2, 3], vec![4]], c); println(f"  v{y[0].len()} {y[1].len()}"); }
+        { let y = rs([R { id: 1, v: vec![1] }, R { id: 2, v: vec![2] }], c); println(f"  r{y[0].id}"); }
+    }
+    println("end")
+}
+"#,
+        &[
+            "c=true",
+            "  s29",
+            "  e29",
+            "  discarded",
+            "  v3 1",
+            "  r1",
+            "  d1",
+            "  d2",
+            "c=false",
+            "  s29",
+            "  e29",
+            "  discarded",
+            "  v2 4",
+            "  d1",
+            "  d2",
+            "  r8",
+            "  d8",
+            "  d9",
+            "end",
+        ],
+        "asan_conditional_array_param_handback_owns_once",
+    );
+}
