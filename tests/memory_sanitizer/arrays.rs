@@ -7808,3 +7808,46 @@ fn main() {
         "asan_param_moved_into_local_through_branch_is_dropped_once",
     );
 }
+
+/// B-2026-09-23-23 — a SHADOWED owning `Array` local whose elements run a
+/// user `Drop`, where every exit hands back the LAST generation: bare, as a
+/// tail, three generations deep, wrapped in `Some`, and with an early
+/// `return` of the same generation. Before the fix the returned generation's
+/// memory drop stayed armed (a shadowed name was never "returned on every
+/// exit"), so the caller freed its buffers a second time: `free(): double free
+/// detected in tcache 2` on the JIT, `-O0` and `-O2`. The shadowed generation
+/// must still run its bodies once, on every path.
+#[test]
+fn asan_shadowed_array_local_returned_is_dropped_once() {
+    assert_clean_asan_run(
+        r#"struct R { id: i64, s: String }
+impl Drop for R { fn drop(mut ref self) { println(f"  d{self.id}") } }
+fn mkr(i: i64) -> R { return R { id: i, s: f"heap-string-longer-than-sso-{i}" } }
+fn mks(i: i64) -> String { return f"heap-string-longer-than-sso-{i}" }
+fn last() -> Array[R, 2] { let x: Array[R, 2] = [mkr(1), mkr(2)]; let x: Array[R, 2] = [mkr(8), mkr(9)]; println("  dies"); return x }
+fn tail() -> Array[R, 2] { let x: Array[R, 2] = [mkr(1), mkr(2)]; println(f"  a{x[0].id}"); let x: Array[R, 2] = [mkr(8), mkr(9)]; x }
+fn three() -> Array[R, 2] { let x: Array[R, 2] = [mkr(1), mkr(2)]; let x: Array[R, 2] = [mkr(4), mkr(5)]; let x: Array[R, 2] = [mkr(8), mkr(9)]; println("  dies"); x }
+fn wrap() -> Option[Array[R, 2]] { let x: Array[R, 2] = [mkr(1), mkr(2)]; let x: Array[R, 2] = [mkr(8), mkr(9)]; println("  dies"); return Some(x) }
+fn early(c: bool) -> Array[R, 2] { let x: Array[R, 2] = [mkr(1), mkr(2)]; let x: Array[R, 2] = [mkr(8), mkr(9)]; if c { return x }; println("  dies"); x }
+fn strs() -> Array[String, 2] { let x: Array[String, 2] = [mks(1), mks(2)]; let x: Array[String, 2] = [mks(8), mks(9)]; println("  dies"); x }
+fn main() {
+    println("last");    { let y = last(); println(f"  y{y[0].id}"); }
+    println("tail");    { let y = tail(); println(f"  y{y[1].id}"); }
+    println("three");   { let y = three(); println(f"  y{y[0].id}"); }
+    println("wrap");    { let y = wrap(); match y { Some(a) => { println(f"  y{a[0].id}") }, None => println("  n") } }
+    println("early-t"); { let y = early(true); println(f"  y{y[0].id}"); }
+    println("early-f"); { let y = early(false); println(f"  y{y[0].id}"); }
+    println("strs");    { let y = strs(); println(f"  y{y[0].len()}"); }
+    println("end")
+}
+"#,
+        &[
+            "last", "  dies", "  d1", "  d2", "  y8", "  d8", "  d9", "tail", "  a1", "  d1",
+            "  d2", "  y9", "  d8", "  d9", "three", "  dies", "  d4", "  d5", "  d1", "  d2",
+            "  y8", "  d8", "  d9", "wrap", "  dies", "  d1", "  d2", "  y8", "  d8", "  d9",
+            "early-t", "  d1", "  d2", "  y8", "  d8", "  d9", "early-f", "  dies", "  d1", "  d2",
+            "  y8", "  d8", "  d9", "strs", "  dies", "  y29", "end",
+        ],
+        "asan_shadowed_array_local_returned_is_dropped_once",
+    );
+}

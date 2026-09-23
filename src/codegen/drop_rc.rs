@@ -114,6 +114,24 @@ pub(crate) struct DropRc<'ctx> {
     /// exactly as they did before. That is what keeps this slice off the
     /// predicate question the row warns about.
     pub(crate) cond_move_drop_flags: HashMap<String, PointerValue<'ctx>>,
+    /// B-2026-09-23-23 — the GENERATION each `cond_move_drop_flags` bit was
+    /// created for: the binding's slot at the move site that made it, or
+    /// `None` once two generations of one name have asked for it.
+    ///
+    /// The bit is keyed by NAME, so under shadowing it guarded every
+    /// generation of the name at once: `let x = ..; let x = ..; if c { return
+    /// x }; ..` cleared the bit on the returning path and took the SHADOWED
+    /// generation's `Drop` bodies with it, although only the newer one left.
+    /// `emit_user_drop_call_guarded` applies the bit only to the slot recorded
+    /// here. `None` keeps the old name-wide guard, which is the conservative
+    /// answer when more than one generation is conditionally moved.
+    pub(crate) cond_move_drop_flag_slots: HashMap<String, Option<PointerValue<'ctx>>>,
+    /// B-2026-09-23-23 — `(name, slot)` pairs whose LIVE generation a
+    /// retraction by name has already removed. A second retraction of the same
+    /// hand-off then stands down instead of taking a SHADOWED generation that
+    /// never moved. Keyed by slot, so a reassignment that re-registers on the
+    /// same slot is retracted normally again.
+    pub(crate) retracted_live_generations: std::collections::HashSet<(String, PointerValue<'ctx>)>,
     /// B-2026-09-05-37 — the MEMORY half of that same bit, keyed by the SLOT a
     /// `CleanupAction::StructDrop` frees rather than by a binding name.
     ///

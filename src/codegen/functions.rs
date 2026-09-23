@@ -1508,6 +1508,8 @@ impl<'ctx> super::Codegen<'ctx> {
         // site's escaping-ness is a static property of the source location, so
         // it stays true across monomorphizations of the same body.)
         self.drop_rc.cond_move_drop_flags.clear();
+        self.drop_rc.cond_move_drop_flag_slots.clear();
+        self.drop_rc.retracted_live_generations.clear();
         self.drop_rc.cond_move_mem_drop_flags.clear();
         // B-2026-09-02-5 — keyed by the same function-scoped allocas.
         self.drop_rc.param_view_mem_drops.clear();
@@ -1549,6 +1551,7 @@ impl<'ctx> super::Codegen<'ctx> {
         self.payload_vars.cond_handback_array_params.clear();
         self.payload_vars.always_returned_locals = self.locals_returned_on_every_exit(func);
         self.payload_vars.cond_returned_locals = self.locals_returned_on_some_exits(func);
+        self.payload_vars.shadowed_top_level_locals = Self::shadowed_top_level_locals(func);
         self.payload_vars.deboxed_payload_box_ptrs.clear();
         self.payload_vars.deferred_payload_box_ptrs.clear();
         self.payload_vars.pending_box_field_zeroes.clear();

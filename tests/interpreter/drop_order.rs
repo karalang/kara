@@ -6219,3 +6219,38 @@ fn main() {
         "lit\n  y1\n  d1\n  d2\n  after\nlocal\n  y4\n  d3\n  d4\n  after\ncall\n  y5\n  d5\n  d6\n  after\ntemp\n  y7\n  d7\n  d8\n  after\nvec\n  y9\n  d9\n  d10\n  after\nmove\n  c11\n  d11\n  d12\n  after\nguard\n  y14\n  d13\n  d14\n  after\nvalue\n  d15\n  d16\n  v16\nres\n  y17\n  d17\n  d18\n  after\nenum\n  y19\n  d19\n  d20\n  after\nnone\n  n\n  after\nend\n"
     );
 }
+
+/// B-2026-09-23-23 — a SHADOWED owning `Array` local whose elements run a
+/// user `Drop`, where every exit hands back the LAST generation: bare, as a
+/// tail, three generations deep, wrapped in `Some`, and with an early
+/// `return` of the same generation. Before the fix the returned generation's
+/// memory drop stayed armed (a shadowed name was never "returned on every
+/// exit"), so the caller freed its buffers a second time: `free(): double free
+/// detected in tcache 2` on the JIT, `-O0` and `-O2`. The shadowed generation
+/// must still run its bodies once, on every path.
+#[test]
+fn interp_shadowed_array_local_returned_is_dropped_once() {
+    assert_eq!(
+        run(r#"struct R { id: i64, s: String }
+impl Drop for R { fn drop(mut ref self) { println(f"  d{self.id}") } }
+fn mkr(i: i64) -> R { return R { id: i, s: f"heap-string-longer-than-sso-{i}" } }
+fn mks(i: i64) -> String { return f"heap-string-longer-than-sso-{i}" }
+fn last() -> Array[R, 2] { let x: Array[R, 2] = [mkr(1), mkr(2)]; let x: Array[R, 2] = [mkr(8), mkr(9)]; println("  dies"); return x }
+fn tail() -> Array[R, 2] { let x: Array[R, 2] = [mkr(1), mkr(2)]; println(f"  a{x[0].id}"); let x: Array[R, 2] = [mkr(8), mkr(9)]; x }
+fn three() -> Array[R, 2] { let x: Array[R, 2] = [mkr(1), mkr(2)]; let x: Array[R, 2] = [mkr(4), mkr(5)]; let x: Array[R, 2] = [mkr(8), mkr(9)]; println("  dies"); x }
+fn wrap() -> Option[Array[R, 2]] { let x: Array[R, 2] = [mkr(1), mkr(2)]; let x: Array[R, 2] = [mkr(8), mkr(9)]; println("  dies"); return Some(x) }
+fn early(c: bool) -> Array[R, 2] { let x: Array[R, 2] = [mkr(1), mkr(2)]; let x: Array[R, 2] = [mkr(8), mkr(9)]; if c { return x }; println("  dies"); x }
+fn strs() -> Array[String, 2] { let x: Array[String, 2] = [mks(1), mks(2)]; let x: Array[String, 2] = [mks(8), mks(9)]; println("  dies"); x }
+fn main() {
+    println("last");    { let y = last(); println(f"  y{y[0].id}"); }
+    println("tail");    { let y = tail(); println(f"  y{y[1].id}"); }
+    println("three");   { let y = three(); println(f"  y{y[0].id}"); }
+    println("wrap");    { let y = wrap(); match y { Some(a) => { println(f"  y{a[0].id}") }, None => println("  n") } }
+    println("early-t"); { let y = early(true); println(f"  y{y[0].id}"); }
+    println("early-f"); { let y = early(false); println(f"  y{y[0].id}"); }
+    println("strs");    { let y = strs(); println(f"  y{y[0].len()}"); }
+    println("end")
+}"#),
+        "last\n  dies\n  d1\n  d2\n  y8\n  d8\n  d9\ntail\n  a1\n  d1\n  d2\n  y9\n  d8\n  d9\nthree\n  dies\n  d4\n  d5\n  d1\n  d2\n  y8\n  d8\n  d9\nwrap\n  dies\n  d1\n  d2\n  y8\n  d8\n  d9\nearly-t\n  d1\n  d2\n  y8\n  d8\n  d9\nearly-f\n  dies\n  d1\n  d2\n  y8\n  d8\n  d9\nstrs\n  dies\n  y29\nend\n"
+    );
+}

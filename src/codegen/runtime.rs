@@ -12923,8 +12923,25 @@ impl<'ctx> super::Codegen<'ctx> {
     /// reveals the binding is conditionally moved, and an entry-block init is
     /// correct no matter how late it is emitted.
     pub(super) fn cond_move_drop_flag_for(&mut self, name: &str) -> Option<PointerValue<'ctx>> {
-        if let Some(p) = self.drop_rc.cond_move_drop_flags.get(name) {
-            return Some(*p);
+        // B-2026-09-23-23 — which generation of `name` this move site sees;
+        // see `DropRc::cond_move_drop_flag_slots`. Only for a name the body
+        // really SHADOWS: a binding's drop action is not always registered
+        // against its `variables` slot (a match-arm binding's is not), so for
+        // an unshadowed name a slot test would unguard the one generation
+        // there is. Measured: `let k = match o { Some(r) => { r } .. }` ran
+        // `dRz9` twice.
+        let generation = self
+            .variables
+            .get(name)
+            .map(|v| v.ptr)
+            .filter(|_| self.payload_vars.shadowed_top_level_locals.contains(name));
+        if let Some(p) = self.drop_rc.cond_move_drop_flags.get(name).copied() {
+            if let Some(slot) = self.drop_rc.cond_move_drop_flag_slots.get_mut(name) {
+                if *slot != generation {
+                    *slot = None;
+                }
+            }
+            return Some(p);
         }
         let fn_val = self.current_fn?;
         let entry = fn_val.get_first_basic_block()?;
@@ -12972,6 +12989,9 @@ impl<'ctx> super::Codegen<'ctx> {
         self.drop_rc
             .cond_move_drop_flags
             .insert(name.to_string(), slot);
+        self.drop_rc
+            .cond_move_drop_flag_slots
+            .insert(name.to_string(), generation);
         Some(slot)
     }
 
@@ -13460,6 +13480,15 @@ impl<'ctx> super::Codegen<'ctx> {
             .cond_move_drop_flags
             .get(binding_name)
             .copied()
+            // B-2026-09-23-23 — only for the generation the bit was made for.
+            // A shadowed generation of the same name was never moved and owes
+            // its body on every path.
+            .filter(|_| {
+                !matches!(
+                    self.drop_rc.cond_move_drop_flag_slots.get(binding_name),
+                    Some(Some(slot)) if *slot != ptr
+                )
+            })
             .zip(self.current_fn);
         let Some((flag, fn_val)) = flagged else {
             self.builder
@@ -13853,6 +13882,15 @@ impl<'ctx> super::Codegen<'ctx> {
         if self.drop_rc.cond_store_flag_params.contains(name) {
             return;
         }
+        // B-2026-09-23-23 — a hand-off can reach this twice (`return Some(x)`
+        // retracts through the constructor operand AND the return). Under
+        // shadowing the second call found the live generation already gone,
+        // took the OLDER generation as "newest", and retracted a value that
+        // never moved: its `Drop` bodies ran nowhere.
+        if self.live_generation_already_retracted(name) {
+            return;
+        }
+        let current = self.variables.get(name).map(|v| v.ptr);
         // B-2026-08-30-57 — retract only the NEWEST generation of `name`, in the
         // innermost frame that holds one.
         //
@@ -13899,8 +13937,37 @@ impl<'ctx> super::Codegen<'ctx> {
                 } => !(binding_name == name && *binding_ptr == newest),
                 _ => true,
             });
+            if current == Some(newest) {
+                self.drop_rc
+                    .retracted_live_generations
+                    .insert((name.to_string(), newest));
+            }
             return;
         }
+    }
+
+    /// B-2026-09-23-23 — was the LIVE generation of `name` (its current
+    /// `variables` slot) already retracted, with no action of its own left?
+    /// Then a further retraction by name can only find an OLDER, shadowed
+    /// generation, which did not move. Asked only of a name the body
+    /// shadows at the top level (`PayloadVars::shadowed_top_level_locals`);
+    /// every other name keeps the plain newest-generation rule.
+    fn live_generation_already_retracted(&self, name: &str) -> bool {
+        if !self.payload_vars.shadowed_top_level_locals.contains(name) {
+            return false;
+        }
+        let Some(p) = self.variables.get(name).map(|v| v.ptr) else {
+            return false;
+        };
+        self.drop_rc
+            .retracted_live_generations
+            .contains(&(name.to_string(), p))
+            && !self.drop_rc.scope_cleanup_actions.iter().any(|frame| {
+                frame.iter().any(|a| {
+                    matches!(a, CleanupAction::UserDrop { binding_name, binding_ptr, .. }
+                        if binding_name == name && *binding_ptr == p)
+                })
+            })
     }
 
     /// B-2026-08-29-15 — retract a binding's user `Drop` BODY while leaving its
@@ -14303,11 +14370,49 @@ impl<'ctx> super::Codegen<'ctx> {
     }
 
     pub(super) fn suppress_container_elem_bodies_for_var(&mut self, name: &str) {
+        // B-2026-09-23-23 — the LIVE generation only, when it can be told
+        // apart. Matching by name alone also retracted a SHADOWED generation's
+        // walk, so `let x = [..]; let x = [..]; return Some(x)` ran the older
+        // array's element bodies nowhere (memory freed, bodies lost). Where no
+        // action carries the live slot the old name-wide retraction stands,
+        // unless the live generation's walk was already retracted at this
+        // hand-off (see `DropRc::retracted_live_generations`). Only for a
+        // name the body shadows; every other name keeps the name-wide form.
+        let current = self
+            .variables
+            .get(name)
+            .map(|v| v.ptr)
+            .filter(|_| self.payload_vars.shadowed_top_level_locals.contains(name));
+        let live = current.filter(|p| {
+            self.drop_rc.scope_cleanup_actions.iter().any(|frame| {
+                frame.iter().any(|a| {
+                    matches!(a, CleanupAction::UserDrop { binding_name, binding_ptr, kind, .. }
+                        if binding_name == name
+                            && binding_ptr == p
+                            && *kind == UserDropKind::ContainerElemBodies)
+                })
+            })
+        });
+        if live.is_none() && self.live_generation_already_retracted(name) {
+            return;
+        }
+        if let Some(p) = live {
+            self.drop_rc
+                .retracted_live_generations
+                .insert((name.to_string(), p));
+        }
         for frame in self.drop_rc.scope_cleanup_actions.iter_mut().rev() {
             frame.retain(|action| match action {
                 CleanupAction::UserDrop {
-                    binding_name, kind, ..
-                } => binding_name != name || *kind != UserDropKind::ContainerElemBodies,
+                    binding_name,
+                    binding_ptr,
+                    kind,
+                    ..
+                } => {
+                    binding_name != name
+                        || *kind != UserDropKind::ContainerElemBodies
+                        || live.is_some_and(|p| *binding_ptr != p)
+                }
                 _ => true,
             });
         }

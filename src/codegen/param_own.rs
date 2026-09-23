@@ -3001,7 +3001,7 @@ impl<'ctx> super::Codegen<'ctx> {
         let mut rets: Vec<&Expr> = Vec::new();
         Self::collect_return_exprs(&func.body, &mut rets);
         let mut acc: Option<std::collections::HashSet<String>> = None;
-        for r in rets {
+        for r in rets.iter().copied() {
             let mut s = std::collections::HashSet::new();
             roots(r, &mut s);
             acc = Some(match acc {
@@ -3021,8 +3021,73 @@ impl<'ctx> super::Codegen<'ctx> {
             let mut sites = super::stmts::BindingSites::default();
             self.count_block_bindings(&func.body, n, &mut sites);
             sites.total == 1
+                || Self::shadowed_local_returns_last_generation(func, n, &rets, sites.total)
         });
         acc
+    }
+
+    /// B-2026-09-23-23 — is `n`, bound more than once, a SHADOWED top-level
+    /// local whose every hand-back returns its LAST generation?
+    ///
+    /// [`Self::locals_returned_on_every_exit`] admitted a name bound exactly
+    /// once, because a second binding would make "the local" ambiguous. That
+    /// left `let x: Array[R, 2] = [..]; let x: Array[R, 2] = [..]; return x`
+    /// out of the set: the return then asked the PARAMETER question, which
+    /// declines an element that runs a user `Drop`, so the returned
+    /// generation's memory drop stayed armed in this frame while the caller's
+    /// binding freed the same buffers -- `free(): double free detected in
+    /// tcache 2` on the JIT, `-O0` and `-O2`, with `String` elements clean
+    /// because the parameter question already transfers those.
+    ///
+    /// The ambiguity is absent when every binding of `n` is a plain `let` at
+    /// the TOP of the body and every exit lies after the last of them: then
+    /// each exit hands back the same generation, the one the static
+    /// retraction at the `return` finds through `variables`. The earlier
+    /// generations are shadowed, never returned, and keep their drops. A
+    /// binding in a nested block, a pattern, or an exit before the last `let`
+    /// (including one inside that `let`'s own initializer) keeps the old
+    /// answer.
+    /// B-2026-09-23-23 — the names `func` binds with two or more plain
+    /// top-level `let`s. See `PayloadVars::shadowed_top_level_locals`.
+    pub(super) fn shadowed_top_level_locals(
+        func: &crate::ast::Function,
+    ) -> std::collections::HashSet<String> {
+        let mut seen = std::collections::HashSet::new();
+        let mut shadowed = std::collections::HashSet::new();
+        for s in &func.body.stmts {
+            if let crate::ast::StmtKind::Let { pattern, .. } = &s.kind {
+                if let crate::ast::PatternKind::Binding(b) = &pattern.kind {
+                    if !seen.insert(b.clone()) {
+                        shadowed.insert(b.clone());
+                    }
+                }
+            }
+        }
+        shadowed
+    }
+
+    fn shadowed_local_returns_last_generation(
+        func: &crate::ast::Function,
+        n: &str,
+        rets: &[&Expr],
+        total_sites: usize,
+    ) -> bool {
+        let top_lets: Vec<&crate::ast::Stmt> = func
+            .body
+            .stmts
+            .iter()
+            .filter(|s| {
+                matches!(&s.kind, crate::ast::StmtKind::Let { pattern, .. }
+                    if matches!(&pattern.kind, crate::ast::PatternKind::Binding(b) if b == n))
+            })
+            .collect();
+        let Some(last) = top_lets.last() else {
+            return false;
+        };
+        let last_end = last.span.offset + last.span.length;
+        top_lets.len() == total_sites
+            && !rets.is_empty()
+            && rets.iter().all(|r| r.span.offset >= last_end)
     }
 
     /// B-2026-09-23-17 — the locals of `func` that SOME exits hand back and

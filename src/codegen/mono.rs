@@ -186,6 +186,7 @@ pub(super) struct SavedVarSideTables<'ctx> {
     cond_handback_array_params: std::collections::HashSet<String>,
     always_returned_locals: std::collections::HashSet<String>,
     cond_returned_locals: std::collections::HashSet<String>,
+    shadowed_top_level_locals: std::collections::HashSet<String>,
     deboxed_payload_box_ptrs:
         HashMap<inkwell::values::PointerValue<'ctx>, inkwell::values::PointerValue<'ctx>>,
 }
@@ -1694,6 +1695,9 @@ impl<'ctx> super::Codegen<'ctx> {
             ),
             always_returned_locals: std::mem::take(&mut self.payload_vars.always_returned_locals),
             cond_returned_locals: std::mem::take(&mut self.payload_vars.cond_returned_locals),
+            shadowed_top_level_locals: std::mem::take(
+                &mut self.payload_vars.shadowed_top_level_locals,
+            ),
             deboxed_payload_box_ptrs: std::mem::take(
                 &mut self.payload_vars.deboxed_payload_box_ptrs,
             ),
@@ -1736,6 +1740,7 @@ impl<'ctx> super::Codegen<'ctx> {
         self.payload_vars.cond_handback_array_params = saved.cond_handback_array_params;
         self.payload_vars.always_returned_locals = saved.always_returned_locals;
         self.payload_vars.cond_returned_locals = saved.cond_returned_locals;
+        self.payload_vars.shadowed_top_level_locals = saved.shadowed_top_level_locals;
         self.payload_vars.deboxed_payload_box_ptrs = saved.deboxed_payload_box_ptrs;
     }
 
@@ -3619,6 +3624,8 @@ impl<'ctx> super::Codegen<'ctx> {
             // the mono's own function, so they must not be visible to (or
             // survive into) the enclosing body. Mirrors `saved_cleanup`.
             let saved_cond_move_flags = std::mem::take(&mut self.drop_rc.cond_move_drop_flags);
+            let saved_cond_move_flag_slots =
+                std::mem::take(&mut self.drop_rc.cond_move_drop_flag_slots);
             let saved_cond_move_mem_flags =
                 std::mem::take(&mut self.drop_rc.cond_move_mem_drop_flags);
             let saved_optres_bodies_flags =
@@ -3651,6 +3658,7 @@ impl<'ctx> super::Codegen<'ctx> {
 
             // Restore state.
             self.drop_rc.cond_move_drop_flags = saved_cond_move_flags;
+            self.drop_rc.cond_move_drop_flag_slots = saved_cond_move_flag_slots;
             self.drop_rc.cond_move_mem_drop_flags = saved_cond_move_mem_flags;
             self.drop_rc.optres_payload_bodies_flags = saved_optres_bodies_flags;
             self.drop_rc.cond_store_flag_params = saved_cond_store_params;
@@ -4441,6 +4449,8 @@ impl<'ctx> super::Codegen<'ctx> {
         let saved_soa_return_locals = std::mem::take(&mut self.accel.soa_return_locals);
         // B-2026-08-28-71 — see the twin in `compile_generic_call`.
         let saved_cond_move_flags = std::mem::take(&mut self.drop_rc.cond_move_drop_flags);
+        let saved_cond_move_flag_slots =
+            std::mem::take(&mut self.drop_rc.cond_move_drop_flag_slots);
         let saved_cond_move_mem_flags = std::mem::take(&mut self.drop_rc.cond_move_mem_drop_flags);
         let saved_optres_bodies_flags =
             std::mem::take(&mut self.drop_rc.optres_payload_bodies_flags);
@@ -4457,6 +4467,7 @@ impl<'ctx> super::Codegen<'ctx> {
             .and_then(|_| self.compile_mono_function(func, mangled));
 
         self.drop_rc.cond_move_drop_flags = saved_cond_move_flags;
+        self.drop_rc.cond_move_drop_flag_slots = saved_cond_move_flag_slots;
         self.drop_rc.cond_move_mem_drop_flags = saved_cond_move_mem_flags;
         self.drop_rc.optres_payload_bodies_flags = saved_optres_bodies_flags;
         self.drop_rc.cond_store_flag_params = saved_cond_store_params;
@@ -4702,6 +4713,7 @@ impl<'ctx> super::Codegen<'ctx> {
         self.payload_vars.caller_retained_array_views.clear();
         self.payload_vars.cond_handback_array_params.clear();
         self.payload_vars.always_returned_locals.clear();
+        self.payload_vars.shadowed_top_level_locals.clear();
         self.payload_vars.cond_returned_locals.clear();
         self.payload_vars.deboxed_payload_box_ptrs.clear();
         self.payload_vars.inline_result_payload_vars.clear();
@@ -4745,6 +4757,8 @@ impl<'ctx> super::Codegen<'ctx> {
         //    `cond_move_escaping_sites` is span-keyed and shared across
         //    monomorphizations, so re-seeding per mono is idempotent.
         self.drop_rc.cond_move_drop_flags.clear();
+        self.drop_rc.cond_move_drop_flag_slots.clear();
+        self.drop_rc.retracted_live_generations.clear();
         self.drop_rc.cond_move_mem_drop_flags.clear();
         self.drop_rc.optres_payload_bodies_flags.clear();
         self.drop_rc.cond_store_flag_params.clear();

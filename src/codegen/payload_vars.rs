@@ -442,6 +442,12 @@ pub(crate) struct PayloadVars<'ctx> {
     /// the flag and the others free it. Filled by `compile_function`; empty
     /// everywhere else, the mono leg included.
     pub(crate) cond_returned_locals: std::collections::HashSet<String>,
+    /// B-2026-09-23-23 — names the function being compiled binds with two or
+    /// more plain top-level `let`s, i.e. the names whose drop actions can
+    /// belong to more than one GENERATION at once. The generation-aware
+    /// retraction and conditional-move guards apply only to these. Filled by
+    /// `compile_function`; empty everywhere else.
+    pub(crate) shadowed_top_level_locals: std::collections::HashSet<String>,
     /// B-2026-08-06-10 — match-arm payload bindings that were DEBOXED out of an
     /// enum payload box: `binding slot -> box pointer`.
     ///
