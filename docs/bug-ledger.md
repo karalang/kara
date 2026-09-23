@@ -95,7 +95,7 @@ distinguish "bugs flattening" from "we stopped writing them down."
 | run-vs-build | 480 |
 | miscompile | 437 |
 | leak | 403 |
-| double-free | 269 |
+| double-free | 270 |
 | missing-feature | 203 |
 | codegen-gap | 182 |
 | other | 148 |
@@ -110,7 +110,7 @@ distinguish "bugs flattening" from "we stopped writing them down."
 
 | surface | total |
 |---|---|
-| codegen | 1974 |
+| codegen | 1975 |
 | interp | 519 |
 | typecheck | 303 |
 | other | 109 |
@@ -124,7 +124,7 @@ distinguish "bugs flattening" from "we stopped writing them down."
 | lexer | 11 |
 ## Current state
 
-_Generated from `bug-ledger.jsonl` by `scripts/bug-curve.py` (2026-05-20 → 2026-09-22). Do not edit this block by hand; edit the ledger and regenerate._
+_Generated from `bug-ledger.jsonl` by `scripts/bug-curve.py` (2026-05-20 → 2026-09-23). Do not edit this block by hand; edit the ledger and regenerate._
 
 ### Open
 
@@ -350,13 +350,12 @@ NOT THIS ROW: a struct whose field is a `Drop`-bearing STRUCT
 measured and all AGREE on both surfaces and are correct. So the class is
 narrow -- it is the `ContainerElemBodies` walker for an ARRAY field being
 registered in the callee's prologue, not by-value struct params in general. | — |
-| B-2026-09-22-2 | 2026-09-22 | other | medium | MEASURED: `test_e2e_par_branch_errdefer_fires_on_cooperative_cancel` AND ITS `defer` TWIN EACH FAIL AT ROUGHLY 1%, BOTH ON THE `KARAC_TEST_JIT=1` LLJIT PARITY LANE, WITH AN EMPTY `got` — and the CRASHED-RUNNER candidate is now RULED OUT, because B-2026-09-22-5's signal diagnostic was live in both failing builds and printed nothing. The in-source guard still covers only one direction of the race: the million-iteration ceiling stops branch 0 FINISHING before the cancel, and nothing stops branch 0 never STARTING. OPEN QUESTION, not a patch: what the cell should assert when branch 0 never enters its scope | — |
 | B-2026-09-22-3 | 2026-09-22 | codegen | medium | MEASURED: `asan_slice_mutators_and_views_on_heap_elements` FAILS THE `KARAC_SSO=1` SANITIZER LANE INTERMITTENTLY ON CI — 4 reds in 7 consecutive `main` runs, INCLUDING A FAIL AND A PASS ON A BYTE-IDENTICAL TEST BINARY — and no ASAN report exists for ANY of them because the leg deleted it (B-2026-09-22-4). NOT a regression of cfe7a5f1c, to which it was attributed, and not a host difference either — NOW MEASURED (2026-09-22): ASAN PASSES AND THE FAILURE IS AN OUTPUT MISMATCH, one field of expected stdout reading `126` where `2` was due, so no sanitizer or leak column can see it and the oracle is expected output; the same run RE-RUN on the same tree goes green, which needs no commit pair to establish the intermittency. The leg was prescribing a memory-fault remedy for it the whole time (B-2026-09-22-15) | — |
 | B-2026-09-22-8 | 2026-09-22 | interp | medium | THE INTERPRETER RUNS AN `Array` PARAM'S ELEMENT `Drop` BODIES TWICE WHEN THE PARAM IS MOVED INTO A SEEDED `match` SCRUTINEE -- the remainder B-2026-09-19-61 split out, now a run-vs-build divergence because that row's fix made both compiled backends match the by-value-callee control at one pair; WIDER THAN `Array` (a `Vec[R]` param has it too) and a bare STRUCT param runs its body twice on BOTH backends, which no differential instrument can see | — |
 | B-2026-09-22-13 | 2026-09-22 | codegen+interp | high | A BY-VALUE `Array` PARAM MOVED INTO A STRUCT LITERAL THE CALLEE **RETURNS** IS STILL FREED BY BOTH SIDES, AND BOTH OWNERS ARE NOW IN THE CALLER -- the escaping half of B-2026-09-22-7, which that row listed as NOT MEASURED and whose fix does not reach it. `fn inner(a: Array[R, 2]) -> B7 { let b = B7 { v: a }; return b }` over `struct B7 { v: Array[R, 2] }` and an `R` with a user `Drop`: `free(): double free detected in tcache 2`, exit 134 at `-O0` AOT and under the JIT, 2 `Invalid free()` under valgrind. THE IR LOCATES IT PRECISELY AND IT IS NOT WHERE THE ROW'S TITLE WOULD SUGGEST: `inner` emits NO drop of `b` at all, so B-2026-09-22-7's mask did its job at the literal; every one of the three surviving calls is in `main` -- `__karac_dropbodies_B7(w)`, `__karac_drop_struct_B7(w)` and the caller's own retained `__karac_drop_array_te_R_2(a)`. The caller keeps `a`'s drop because the family's premise is that a by-value `Array` param whose element runs a user `Drop` stays with the CALLER, which is right while the callee only borrows it -- and wrong here, because the callee handed the elements back inside `w`, so the retraction of `a` at the call site is what is missing. `-O2` IS CLEAN (0 valgrind errors, rc=0), so this is invisible to any measurement taken above `-O0`, and `--interp` is rc=0 with byte-identical output to `-O2`. BOTH SURVIVING OUTPUTS LOOK WRONG IN ORDER AND THAT IS A SEPARATE QUESTION: they print `in d61 d62 held end`, running the element bodies at the callee's scope exit while the returned `w` is still alive and never running them when `w` dies, where a single-owner reading would put them after `end`. | — |
 | B-2026-09-22-14 | 2026-09-22 | codegen+interp | high | A BY-VALUE `Array` PARAM PUSHED INTO A LOCAL `Vec` IS FREED BY BOTH THE `Vec` AND THE CALLER, AT EVERY OPT LEVEL -- the `Vec.push` half of B-2026-09-22-7, which that row listed as NOT MEASURED and which its fix cannot reach because no struct literal is built at all, so the per-field mask channel never sees the move. `fn inner(a: Array[R, 2]) -> i64 { let mut v: Vec[Array[R, 2]] = []; v.push(a); return 7 }` over an `R` with a user `Drop`: `free(): double free detected in tcache 2`, exit 134 with 2 `Invalid free()` under valgrind at BOTH `-O0` and `-O2` AOT and under the JIT -- unlike its escaping-struct sibling B-2026-09-22-13, the optimiser does not hide this one, so any opt level reproduces it. The IR shows the two owners in different frames: `inner` calls `__karac_dropelems_vecofarr_Array_R_2` when the `Vec` dies, walking the pushed array's elements, while `main` still holds both `__karac_dropelems_array_R_2` and `__karac_drop_array_te_R_2` over the same buffers, because the family's premise is that a by-value `Array` param whose element runs a user `Drop` stays with the CALLER. `--interp` does not abort and instead runs every element body TWICE (`d81 d82 in d81 d82 end`), so it is not the oracle either -- the same split B-2026-09-22-8 records. | — |
 | B-2026-09-22-16 | 2026-09-22 | codegen | high | TWO ENUMS THAT SHARE A VARIANT NAME AND CARRY THE SAME HEAP-BEARING FIELD TYPES IN DIFFERENT ORDERS READ EACH OTHER'S FIELD OFFSETS AND SEGFAULT -- `enum A { P(Array[S, 2], String), Q }` beside `enum B { P(String, Array[S, 2]), Q }` dies with an 8-byte read SIX BYTES PAST the 2-byte `String` buffer and then a dereference of `0x2`, on an 11-line program with no params, no generics and no `unsafe`; `--interp` is correct. Rename either variant, or make the partner field an `i64`, and it is clean. IT ALSO MAKES THE COMPILER'S OUTPUT NON-REPRODUCIBLE: 8 builds of the one unchanged source give 2 distinct binaries, where every clean neighbour gives 1 | — |
-| B-2026-09-22-17 | 2026-09-22 | codegen | high | A USER-ENUM VARIANT CARRYING **TWO `Array` PARAMS** IS STILL FREED BY BOTH SIDES -- B-2026-09-22-9's fix relaxes the box-only drop twin's gate from "exactly one payload FIELD" to "exactly one ARRAY field" and declines at two, so `fn p(a: Array[S, 2], b: Array[N, 2])` feeding `match W.P(a, b)` aborts 134 with `free(): double free detected in tcache 2` and 6 valgrind errors, IDENTICALLY with that fix and without it; both arrays there are caller-retained, which is the one shape the per-enum all-or-nothing twin would get RIGHT, so the gate is COUNTING array fields where the question is whether EVERY one of them is param-rooted -- the stricter test is the obvious next move, and a variant mixing a caller-retained array WITH a callee-owned one is a genuinely different question that the same per-enum function cannot answer and is NOT MEASURED here. | — |
+| B-2026-09-23-1 | 2026-09-23 | codegen | high | MEASURED: a user-enum variant holding a caller-retained by-value `Array` param BESIDE a callee-owned array (`Array[String, 2]` param) or BESIDE a local array still aborts 134 with `free(): double free detected in tcache 2` and 6 valgrind errors, IDENTICALLY with B-2026-09-22-17's fix and without it. That fix widens the box-only drop twin's gate to "every array field caller-retained and param-rooted" and DECLINES this shape by design, because the twin is chosen per ENUM and stands down every `BoxedArray` interior walk, so it cannot give the two fields two answers. A fix needs a per-FIELD skip mask on the enum drop, which the struct spelling already has (`emit_struct_drop_synthesis_skipping`). | — |
 
 ### Relocated
 
@@ -2939,6 +2938,7 @@ registered in the callee's prologue, not by-value struct params in general. | �
 | B-2026-09-21-11 | codegen | medium | A FRESH CTOR TEMP `match` SCRUTINEE OVER A GENERIC ENUM WHOSE PAYLOAD INSTANTIATES TO `Vec` LOSES THE ELEMENTS' `Drop` BODIES ON ALL THREE COMPILED S… | be249a1bb |
 | B-2026-09-21-15 | codegen+interp | high | A `match` ARM'S PAYLOAD BINDING IS GARBAGE WHEN THE PAYLOAD IS A `Vec` OF A GENERIC STRUCT, AND THE ELEMENT DROP WALK THEN RUNS USER `Drop` BODIES OV… | cfe7a5f1c |
 | B-2026-09-22-5 | other | medium | THE AUTO-PAR JIT LANE DISCARDED A CRASHED `karac_jit_runner`'S SIGNAL AND STDERR — B-2026-09-19-5 is the same bug and f4dc90f fixed it on the SEQUENT… | e17df4296 |
+| B-2026-09-22-2 | other | medium | MEASURED AND SEPARATED: `test_e2e_par_branch_{errdefer,defer}_fires_on_cooperative_cancel` failed at roughly 1 in 300 loaded whole-binary runs, every… | 49142dafa |
 | B-2026-09-22-4 | other | medium | THE ASAN RATCHET LEGS NAMED THEIR NEW FAILURES AND DELETED THE REPORT THAT SAID WHY — the suite log is a `mktemp` under `trap 'rm -f' EXIT`, so a red… | f7e60e4d3 |
 | B-2026-09-22-6 | codegen | high | A BY-VALUE `Array` PARAM MOVED INTO A **USER-ENUM** SEEDED `match` SCRUTINEE IS STILL FREED BY BOTH SIDES -- B-2026-09-19-61's fix declines the box-i… | 99524b557 |
 | B-2026-09-22-7 | codegen+interp | high | A BY-VALUE `Array` PARAM MOVED INTO A **STRUCT-LITERAL FIELD** IS FREED BY BOTH THE CALLER AND THE AGGREGATE -- `suppress_array_binding_move_into_agg… | 7ce872071 |
@@ -2947,6 +2947,7 @@ registered in the callee's prologue, not by-value struct params in general. | �
 | B-2026-09-22-11 | codegen | high | A BY-VALUE `Array` PARAM MOVED INTO A **NAMED SEEDED `Option`/`Result` LOCAL** IS FREED BY BOTH SIDES -- the builtin-envelope twin of B-2026-09-22-10… | 53e9edb60 |
 | B-2026-09-22-12 | other | medium | `bug-lint.sh` CANNOT SEE A FIX SHA THAT IS ALL DIGITS, SO RULES 6 AND 6b ARE SILENTLY BLIND TO ~3.4% OF THE ROWS THAT USE THE `FIXED by <sha>.` CONVE… | 99ad28af7 |
 | B-2026-09-22-15 | other | medium | THE ASAN RATCHET LEGS PRESCRIBED A MEMORY-FAULT REMEDY FOR EVERY NEW RED, INCLUDING ONES WHERE ASAN PASSED — every `assert_clean_asan_*` helper asser… | ba4514e40 |
+| B-2026-09-22-17 | codegen | high | A USER-ENUM VARIANT CARRYING **TWO `Array` PARAMS** IS STILL FREED BY BOTH SIDES -- B-2026-09-22-9's fix relaxes the box-only drop twin's gate from "… | e94a50713 |
 
 </details>
 
