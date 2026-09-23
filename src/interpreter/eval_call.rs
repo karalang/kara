@@ -2982,6 +2982,20 @@ impl<'a> super::Interpreter<'a> {
                     self.program.drop_method_keys.contains_key(tn.as_str())
                 }
                 Value::EnumVariant { .. } => self.enum_value_runs_user_drop(&value),
+                // B-2026-09-23-19 — a by-value `Array` of user-`Drop` elements
+                // returned on SOME exits, the method twin of B-2026-09-23-15's
+                // free-function arm in `cond_returned_param_drop_names` and on
+                // the same predicates. The caller stood down for it above, so
+                // on the exit where it died inside nobody ran its element
+                // bodies (`y8 d8 d9` against every compiled surface's
+                // `d1 d2 y8 d8 d9`). Conditionally returned only: any other
+                // array param is the caller's (it fires a named argument and
+                // the fresh-temp walk fires a temporary one).
+                Value::Array(_) => {
+                    self.field_value_carries_user_drop(&value)
+                        && crate::ast::fn_conditionally_returns_param_bare(Some(self.program), f, i)
+                        && !crate::ast::fn_moves_param_into_outliving_place(f, i)
+                }
                 _ => false,
             };
             if claims {

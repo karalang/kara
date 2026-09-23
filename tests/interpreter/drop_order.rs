@@ -6149,3 +6149,40 @@ fn main() {
         "letif-t\n  mid\n  y1\n  d1\n  d2\nletif-f\n  mid\n  d1\n  d2\n  y8\n  d8\n  d9\nmatch-t\n  mid\n  y2\n  d1\n  d2\nmatch-f\n  mid\n  d1\n  d2\n  y9\n  d8\n  d9\nsome-tt\n  y1\n  d1\n  d2\nsome-tf\n  d1\n  d2\n  mid\n  y5\n  d5\n  d6\nstruct-t\n  mid\n  y1\n  d1\nstruct-f\n  mid\n  d1\n  y8\n  d8\nmethod-t\n  mid\n  y1\n  d1\nend\n"
     );
 }
+
+/// B-2026-09-23-19 — an INSTANCE METHOD's by-value `Array` param of user-`Drop`
+/// elements, handed back on some exits, runs its element bodies exactly once
+/// on the exit where it dies inside (`return` and tail spellings, owned and
+/// `ref` receivers, a fresh-temp argument, a loop return, a pass to a callee
+/// that keeps nothing, and a dying call after a handing-back one). The
+/// interpreter's method frame adopted only struct and enum params, so it ran
+/// none of them (`dies y8 d8 d9`) while every compiled surface ran both.
+#[test]
+fn interp_method_array_param_dying_on_some_exits_runs_its_bodies() {
+    assert_eq!(
+        run(r#"struct R { id: i64, s: String }
+impl Drop for R { fn drop(mut ref self) { println(f"  d{self.id}") } }
+fn mkr(i: i64) -> R { return R { id: i, s: f"heap-string-longer-than-sso-{i}" } }
+fn mka(k: i64) -> Array[R, 2] { return [mkr(k), mkr(k + 1)] }
+fn consume(a: Array[R, 2]) { println(f"  c{a[0].id}") }
+struct H { k: i64 }
+impl H {
+    fn ret(ref self, a: Array[R, 2], c: bool) -> Array[R, 2] { if c { return a }; println("  dies"); mka(8) }
+    fn tail(ref self, a: Array[R, 2], c: bool) -> Array[R, 2] { match c { true => a, false => mka(8) } }
+    fn byval(self, a: Array[R, 2], c: bool) -> Array[R, 2] { for i in 0..2 { if c and i == 1 { return a } }; println("  dies"); mka(8) }
+    fn pass(ref self, a: Array[R, 2], c: bool) -> Array[R, 2] { if c { return a }; consume(a); println("  dies"); mka(8) }
+}
+fn main() {
+    let h = H { k: 1 };
+    println("ret-t");  { let a: Array[R, 2] = mka(1); let b = h.ret(a, true); println(f"  y{b[0].id}"); }
+    println("ret-f");  { let a: Array[R, 2] = mka(1); let b = h.ret(a, false); println(f"  y{b[0].id}"); }
+    println("temp-f"); { let b = h.ret(mka(1), false); println(f"  y{b[0].id}"); }
+    println("tail-f"); { let b = h.tail(mka(1), false); println(f"  y{b[1].id}"); }
+    println("byval-f");  { let g = H { k: 2 }; let b = g.byval(mka(1), false); println(f"  y{b[0].id}"); }
+    println("pass-f"); { let b = h.pass(mka(1), false); println(f"  y{b[0].id}"); }
+    println("twice");  { let b1 = h.ret(mka(1), true); let b2 = h.ret(mka(3), false); println(f"  y{b1[0].id}{b2[0].id}"); }
+    println("end")
+}"#),
+        "ret-t\n  y1\n  d1\n  d2\nret-f\n  dies\n  d1\n  d2\n  y8\n  d8\n  d9\ntemp-f\n  dies\n  d1\n  d2\n  y8\n  d8\n  d9\ntail-f\n  d1\n  d2\n  y9\n  d8\n  d9\nbyval-f\n  dies\n  d1\n  d2\n  y8\n  d8\n  d9\npass-f\n  c1\n  dies\n  d1\n  d2\n  y8\n  d8\n  d9\ntwice\n  dies\n  d3\n  d4\n  y18\n  d8\n  d9\n  d1\n  d2\nend\n"
+    );
+}
