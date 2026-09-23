@@ -5963,3 +5963,111 @@ fn main() {
         "bound\n  in\n  y1:29\n  d1\n  d2\nannot\n  in\n  y4\n  d3\n  d4\nrebind\n  in\n  y5\n  d5\n  d6\nvia\n  in\n  y7\n  d7\n  d8\ntwoarg\n  in4\n  y9\n  d9\n  d10\nchain\n  in\n  y11\n  d11\n  d12\ntwice\n  in\n  in\n  y16\n  d15\n  d16\nmethod\n  in\n  y17\n  d17\n  d18\nwrap\n  d19\n  d20\n  y\nstr\n  in\n  y30\nloop\n  in\n  y30\n  d30\n  d40\n  in\n  y31\n  d31\n  d41\n  in\n  y32\n  d32\n  d42\nend\n"
     );
 }
+
+/// B-2026-09-23-15 -- a by-value `Array` param whose element runs a user `Drop`
+/// is CALLER-RETAINED, and a callee that returns it on SOME exits and a fresh
+/// array on others (`fn ret(a: Array[R, 2], c: bool) -> Array[R, 2] { if c
+/// { return a }; .. return [mkr(8), mkr(9)] }`) was wrong on both paths: the
+/// hand-back exit double-freed every element on the JIT and at `-O0`, and the
+/// exit where `a` died inside ran none of its element bodies, on every
+/// surface. The interpreter agreed on the lost bodies.
+///
+/// The fix makes the callee the owner, as the struct spelling already was
+/// (B-2026-08-28-22): the callee registers one flag-guarded bodies-then-memory
+/// slot for the param, a hand-back exit clears the flag, and the caller stands
+/// the argument down on the same predicate. The cells cover each shape a
+/// hand-back can take: an early `return` (`ret`), an `if` tail (`itail`), a
+/// `match` tail bare and in a block (`mtch`, `mblk`), a rebind that is then
+/// handed back (`rebind`), a `let` of an `if` (`letif`, the dies-inside path
+/// only; its hand-back path double-frees on every surface and is filed on its
+/// own), a read before the exit (`read`), an instance method (`method`, its
+/// hand-back path only: the dies-inside path is an interpreter gap filed on
+/// its own), a discarded result and a loop alternating both paths.
+///
+/// Measured on this tree: the stdout below is byte-identical across
+/// `--interp`, jit, `karac build` and `KARAC_OPT_LEVEL=0 karac build`, and
+/// `valgrind --leak-check=full` at `-O0` with `KARAC_AUTO_PAR=0` reports 0
+/// errors and 0 bytes in use at exit.
+#[test]
+fn interp_array_param_handed_back_on_some_exits_is_dropped_once() {
+    assert_eq!(
+        run(r#"struct R { id: i64, s: String }
+impl Drop for R { fn drop(mut ref self) { println(f"  d{self.id}") } }
+fn mkr(i: i64) -> R { return R { id: i, s: f"heap-string-longer-than-sso-{i}" } }
+fn ret(a: Array[R, 2], c: bool) -> Array[R, 2] { if c { return a }; println("  dies"); return [mkr(8), mkr(9)] }
+fn itail(a: Array[R, 2], c: bool) -> Array[R, 2] { if c { a } else { [mkr(8), mkr(9)] } }
+fn mtch(a: Array[R, 2], k: i64) -> Array[R, 2] { match k { 1 => a, _ => [mkr(8), mkr(9)] } }
+fn mblk(a: Array[R, 2], k: i64) -> Array[R, 2] { match k { 1 => { println("  one"); a }, _ => { println("  other"); [mkr(8), mkr(9)] } } }
+fn rebind(a: Array[R, 2], c: bool) -> Array[R, 2] { let m = a; if c { return m }; println("  dies"); return [mkr(8), mkr(9)] }
+fn letif(a: Array[R, 2], c: bool) -> Array[R, 2] { let r: Array[R, 2] = if c { a } else { [mkr(8), mkr(9)] }; println("  mid"); r }
+fn read(a: Array[R, 2], c: bool) -> Array[R, 2] { println(f"  r{a[1].id}"); if c { return a }; return [mkr(8), mkr(9)] }
+struct H { k: i64 }
+impl H { fn mix(ref self, a: Array[R, 2], c: bool) -> Array[R, 2] { if c { return a }; return [mkr(8), mkr(9)] } }
+fn main() {
+    println("ret-t");   { let a: Array[R, 2] = [mkr(1), mkr(2)]; let b = ret(a, true); println(f"  y{b[0].id}:{b[1].s.len()}"); }
+    println("ret-f");   { let a: Array[R, 2] = [mkr(1), mkr(2)]; let b = ret(a, false); println(f"  y{b[0].id}"); }
+    println("itail-t"); { let a: Array[R, 2] = [mkr(1), mkr(2)]; let b = itail(a, true); println(f"  y{b[0].id}"); }
+    println("itail-f"); { let a: Array[R, 2] = [mkr(1), mkr(2)]; let b = itail(a, false); println(f"  y{b[0].id}"); }
+    println("mtch-t");  { let a: Array[R, 2] = [mkr(1), mkr(2)]; let b = mtch(a, 1); println(f"  y{b[0].id}"); }
+    println("mtch-f");  { let a: Array[R, 2] = [mkr(1), mkr(2)]; let b = mtch(a, 0); println(f"  y{b[0].id}"); }
+    println("mblk-t");  { let a: Array[R, 2] = [mkr(1), mkr(2)]; let b = mblk(a, 1); println(f"  y{b[0].id}"); }
+    println("mblk-f");  { let a: Array[R, 2] = [mkr(1), mkr(2)]; let b = mblk(a, 0); println(f"  y{b[0].id}"); }
+    println("rebind-t"); { let a: Array[R, 2] = [mkr(1), mkr(2)]; let b = rebind(a, true); println(f"  y{b[0].id}"); }
+    println("rebind-f"); { let a: Array[R, 2] = [mkr(1), mkr(2)]; let b = rebind(a, false); println(f"  y{b[0].id}"); }
+    println("letif-f"); { let a: Array[R, 2] = [mkr(1), mkr(2)]; let b = letif(a, false); println(f"  y{b[0].id}"); }
+    println("read-t");  { let a: Array[R, 2] = [mkr(1), mkr(2)]; let b = read(a, true); println(f"  y{b[0].id}"); }
+    println("read-f");  { let a: Array[R, 2] = [mkr(1), mkr(2)]; let b = read(a, false); println(f"  y{b[0].id}"); }
+    println("method-t"); { let h = H { k: 1 }; let a: Array[R, 2] = [mkr(1), mkr(2)]; let b = h.mix(a, true); println(f"  y{b[0].id}"); }
+    println("discard"); { let a: Array[R, 2] = [mkr(1), mkr(2)]; let b = ret(a, false); println("  y"); }
+    println("loop");    { let mut i = 0; while i < 2 { let a: Array[R, 2] = [mkr(30 + i), mkr(40 + i)]; let b = ret(a, i == 0); println(f"  y{b[0].id}"); i = i + 1; } }
+    println("end")
+}"#),
+        "ret-t\n  y1:29\n  d1\n  d2\nret-f\n  dies\n  d1\n  d2\n  y8\n  d8\n  d9\nitail-t\n  y1\n  d1\n  d2\nitail-f\n  d1\n  d2\n  y8\n  d8\n  d9\nmtch-t\n  y1\n  d1\n  d2\nmtch-f\n  d1\n  d2\n  y8\n  d8\n  d9\nmblk-t\n  one\n  y1\n  d1\n  d2\nmblk-f\n  other\n  d1\n  d2\n  y8\n  d8\n  d9\nrebind-t\n  y1\n  d1\n  d2\nrebind-f\n  d1\n  d2\n  dies\n  y8\n  d8\n  d9\nletif-f\n  mid\n  d1\n  d2\n  y8\n  d8\n  d9\nread-t\n  r2\n  y1\n  d1\n  d2\nread-f\n  r2\n  d1\n  d2\n  y8\n  d8\n  d9\nmethod-t\n  y1\n  d1\n  d2\ndiscard\n  dies\n  d1\n  d2\n  d8\n  d9\n  y\nloop\n  y30\n  d30\n  d40\n  dies\n  d31\n  d41\n  y8\n  d8\n  d9\nend\n"
+    );
+}
+
+/// B-2026-09-23-16 -- a LOCAL `Array` whose element runs a user `Drop`, handed
+/// back on every exit (`let x: Array[R, 1] = [..]; return x`), was freed twice:
+/// `free(): double free detected in tcache 2` on the JIT and at `-O0` while
+/// the interpreter was right. The `return` retracted the local's memory drop
+/// only when a CALLEE PARAMETER of that element type would own it, and a
+/// by-value param of an element with a user `Drop` is caller-retained, so the
+/// callee freed the buffers and the caller's binding freed them again.
+///
+/// The fix asks the hand-back question at the `return` instead, but only for a
+/// local that EVERY exit hands back (`both` returns it on two exits): the
+/// retraction is static, so for a local returned on one exit it would strand
+/// the value on the others. That shape still double-frees, with `String`
+/// elements too, and is filed on its own. The caller's discard walk admits the
+/// same shape (`discard`), since the callee no longer frees it: without that
+/// the discarded result leaked, and the `String` spelling had always leaked
+/// there (`strs();` leaked its element buffers before this).
+///
+/// Measured on this tree: the stdout below is byte-identical across
+/// `--interp`, jit, `karac build` and `KARAC_OPT_LEVEL=0 karac build`, and
+/// `valgrind --leak-check=full` at `-O0` with `KARAC_AUTO_PAR=0` reports 0
+/// errors and 0 bytes in use at exit.
+#[test]
+fn interp_local_array_returned_on_every_exit_is_freed_once() {
+    assert_eq!(
+        run(r#"struct R { id: i64, s: String }
+impl Drop for R { fn drop(mut ref self) { println(f"  d{self.id}") } }
+fn mkr(i: i64) -> R { return R { id: i, s: f"heap-string-longer-than-sso-{i}" } }
+fn one() -> Array[R, 1] { let x: Array[R, 1] = [mkr(1)]; return x }
+fn two(k: i64) -> Array[R, 2] { let x: Array[R, 2] = [mkr(k), mkr(k + 1)]; return x }
+fn tail() -> Array[R, 2] { let x: Array[R, 2] = [mkr(5), mkr(6)]; x }
+fn both(c: bool) -> Array[R, 2] { let x: Array[R, 2] = [mkr(7), mkr(8)]; if c { return x }; return x }
+fn strs() -> Array[String, 2] { let x: Array[String, 2] = [f"heap-string-longer-than-sso-p", f"heap-string-longer-than-sso-qq"]; return x }
+fn main() {
+    println("one");    { let b = one(); println(f"  y{b[0].id}:{b[0].s.len()}"); }
+    println("two");    { let b = two(2); let c = two(20); println(f"  y{b[1].id}{c[0].id}"); }
+    println("tail");   { let b = tail(); println(f"  y{b[1].id}"); }
+    println("both-t"); { let b = both(true); println(f"  y{b[0].id}"); }
+    println("both-f"); { let b = both(false); println(f"  y{b[1].id}"); }
+    println("discard"); { two(40); let _ = strs(); strs(); }
+    println("str");    { let b = strs(); println(f"  y{b[1].len()}"); }
+    println("end")
+}"#),
+        "one\n  y1:29\n  d1\ntwo\n  y320\n  d20\n  d21\n  d2\n  d3\ntail\n  y6\n  d5\n  d6\nboth-t\n  y7\n  d7\n  d8\nboth-f\n  y8\n  d7\n  d8\ndiscard\nstr\n  y30\nend\n"
+    );
+}

@@ -2876,6 +2876,135 @@ impl<'ctx> super::Codegen<'ctx> {
             && !self.struct_param_owned_by_transfer(struct_name, false)
     }
 
+    /// B-2026-09-23-15 — the ARRAY twin of
+    /// [`Self::conditional_handback_memory_moves_to_callee`]: is the callee's
+    /// `arg_index` a CALLER-RETAINED by-value `Array` that the function returns
+    /// on some exits and lets die on others?
+    ///
+    /// Asked on both sides, for the struct row's reason. A caller-retained
+    /// array has no frame that can own it statically: the caller's memory drop
+    /// is wrong on the exit that hands it back (the result binding frees the
+    /// same buffers, a double free), and nobody ran its element bodies on the
+    /// exit where it died (both backends dropped `d1 d2`). So the callee
+    /// registers the whole drop, bodies and memory, under the per-path flag
+    /// that a hand-back exit clears, and the caller stands its memory down. The
+    /// bodies it had already stood down, on the `fn_returns_param` union.
+    ///
+    /// Every gate is one the callee registration asks too: a non-generic,
+    /// non-coroutine callee (the mono leg has its own param loop), an element
+    /// that runs a user `Drop` and that `array_param_elem_is_callee_owned`
+    /// declines (a callee-owned element already has a memory owner in the
+    /// callee), and the shared conditional-return predicate without an
+    /// outliving store.
+    pub(super) fn conditional_array_handback_moves_to_callee(
+        &self,
+        callee_name: &str,
+        arg_index: usize,
+    ) -> bool {
+        let Some(program) = self.program_snapshot.as_deref() else {
+            return false;
+        };
+        let Some(f) = crate::codegen::declarations::find_function_ast(program, callee_name) else {
+            return false;
+        };
+        if f.generic_params.is_some() || self.is_coroutine_compiled(&f.name) {
+            return false;
+        }
+        let Some(param) = f.params.get(arg_index) else {
+            return false;
+        };
+        let Some((elem_te, n)) = self.array_elem_and_len(&param.ty) else {
+            return false;
+        };
+        n > 0
+            && self.elem_te_runs_user_drop(&elem_te)
+            && !self.array_param_elem_is_callee_owned(&elem_te)
+            && crate::ast::fn_conditionally_returns_param_bare(Some(program), f, arg_index)
+            && !crate::ast::fn_moves_param_into_outliving_place(f, arg_index)
+    }
+
+    /// B-2026-09-23-16 — the locals of `func` that every exit hands back, bare
+    /// or as an operand of the constructor it returns, each bound exactly once
+    /// in the body and none of them a parameter. Empty when any exit hides from
+    /// the walk (see `collect_return_exprs`) or the function never returns a
+    /// value.
+    pub(super) fn locals_returned_on_every_exit(
+        &self,
+        func: &crate::ast::Function,
+    ) -> std::collections::HashSet<String> {
+        fn roots(e: &Expr, out: &mut std::collections::HashSet<String>) {
+            if let ExprKind::Identifier(n) = &e.kind {
+                out.insert(n.clone());
+            }
+            for inner in super::Codegen::payload_ctor_operands(e) {
+                roots(inner, out);
+            }
+        }
+        let mut rets: Vec<&Expr> = Vec::new();
+        Self::collect_return_exprs(&func.body, &mut rets);
+        let mut acc: Option<std::collections::HashSet<String>> = None;
+        for r in rets {
+            let mut s = std::collections::HashSet::new();
+            roots(r, &mut s);
+            acc = Some(match acc {
+                None => s,
+                Some(a) => a.intersection(&s).cloned().collect(),
+            });
+        }
+        let mut acc = acc.unwrap_or_default();
+        acc.retain(|n| {
+            if func
+                .params
+                .iter()
+                .any(|p| p.pattern.binding_names().iter().any(|b| b == n))
+            {
+                return false;
+            }
+            let mut sites = super::stmts::BindingSites::default();
+            self.count_block_bindings(&func.body, n, &mut sites);
+            sites.total == 1
+        });
+        acc
+    }
+
+    /// B-2026-09-23-15 — `__karac_dropall_<array drop>`: the element BODIES,
+    /// then the element MEMORY, of an `Array[T, N]` at `p`. One function
+    /// because the per-path flag gates one `UserDrop` action per binding, and
+    /// a conditionally-returned array param needs both halves to follow it.
+    pub(super) fn emit_array_bodies_then_memory_fn(
+        &mut self,
+        elem_ty: inkwell::types::BasicTypeEnum<'ctx>,
+        elem_te: &TypeExpr,
+        n: u32,
+    ) -> Option<inkwell::values::FunctionValue<'ctx>> {
+        let bodies = self.emit_array_elem_user_drop_bodies_fn(elem_ty, elem_te, n)?;
+        let mem = self.synthesize_array_drop_fn_te(elem_ty, elem_te, n)?;
+        let fn_name = format!("__karac_dropall_{}", mem.get_name().to_str().ok()?);
+        if let Some(f) = self.module.get_function(&fn_name) {
+            return Some(f);
+        }
+        let ptr_ty = self.context.ptr_type(inkwell::AddressSpace::default());
+        let saved = self.builder.get_insert_block();
+        let saved_fn = self.current_fn;
+        let wrapper = self.module.add_function(
+            &fn_name,
+            self.context.void_type().fn_type(&[ptr_ty.into()], false),
+            Some(inkwell::module::Linkage::Internal),
+        );
+        self.current_fn = Some(wrapper);
+        let entry = self.context.append_basic_block(wrapper, "entry");
+        self.builder.position_at_end(entry);
+        let p = wrapper.get_nth_param(0).unwrap();
+        self.builder.build_call(bodies, &[p.into()], "").unwrap();
+        self.builder.build_call(mem, &[p.into()], "").unwrap();
+        self.builder.build_return(None).unwrap();
+        self.current_fn = saved_fn;
+        if let Some(bb) = saved {
+            self.builder.position_at_end(bb);
+        }
+        Some(wrapper)
+    }
+
     /// B-2026-09-06-69 — does the MEMORY of a CONDITIONALLY handed-back
     /// by-value param move to the callee, per path?
     ///
@@ -6067,8 +6196,29 @@ impl<'ctx> super::Codegen<'ctx> {
     /// helper because that helper also serves call-argument, map-insert and
     /// struct-field sites, each of which has its own settled answer about who
     /// owns an argument.
+    ///
+    /// B-2026-09-23-16 — and the destination is the CALLER, so the transfer
+    /// question is [`ArrayMoveDest::HandedBack`]'s rather than a callee
+    /// parameter's. The parameter question declines an element that runs a
+    /// user `Drop` (such an array is caller-retained when PASSED), and asking
+    /// it here left `let x: Array[R, 1] = [..]; return x;` with its element
+    /// memory drop armed in this frame while the caller's binding freed the
+    /// same buffers: `free(): double free detected in tcache 2` at `-O0` and
+    /// under the JIT, on a program `--interp` runs correctly.
+    ///
+    /// Only for a local EVERY exit hands back
+    /// ([`PayloadVars::always_returned_locals`]): the retraction is static, so
+    /// asked for a local returned on one exit it strands the value on the
+    /// others. Those keep the parameter question, and with it the older
+    /// behaviour.
     pub(super) fn suppress_array_binding_move_through_ctor(&mut self, arg: &Expr) {
-        self.suppress_array_binding_move_arg(arg);
+        let dest = match &arg.kind {
+            ExprKind::Identifier(n) if self.payload_vars.always_returned_locals.contains(n) => {
+                ArrayMoveDest::HandedBack
+            }
+            _ => ArrayMoveDest::CalleeParam,
+        };
+        self.suppress_array_binding_move(arg, dest);
         for inner in Self::payload_ctor_operands(arg) {
             self.suppress_array_binding_move_through_ctor(inner);
         }
@@ -6077,7 +6227,7 @@ impl<'ctx> super::Codegen<'ctx> {
     /// The operands of `arg` that a returned value KEEPS — i.e. whose interior
     /// travels to the caller inside the result. Empty for anything else, which
     /// is what keeps an ordinary call out.
-    fn payload_ctor_operands(arg: &Expr) -> Vec<&Expr> {
+    pub(super) fn payload_ctor_operands(arg: &Expr) -> Vec<&Expr> {
         match &arg.kind {
             // `Some(a)` / `Ok(a)` / `Err(a)`, bare and path-spelled, plus a user
             // enum's variant constructor: all of them store the operand into the
@@ -6514,7 +6664,13 @@ impl<'ctx> super::Codegen<'ctx> {
             && !self
                 .borrow_vars
                 .owned_array_params
-                .contains_key(root.as_str()))
+                .contains_key(root.as_str())
+            // B-2026-09-23-15 — nor one this frame conditionally hands back:
+            // the caller stood down for it, so this frame owns it outright.
+            && !self
+                .payload_vars
+                .cond_handback_array_params
+                .contains(root.as_str()))
             // B-2026-09-23-5 — or a local that is only another name for such a
             // param's array (`let m = a;`, or an arm binding seeded from it).
             || self

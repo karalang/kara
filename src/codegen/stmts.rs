@@ -9889,7 +9889,56 @@ impl<'ctx> super::Codegen<'ctx> {
                                         }
                                     }
                                 }
-                                if let Some((elem_te, n)) = arr_parts.clone() {
+                                // B-2026-09-23-15 — a rebind of an array param
+                                // this frame conditionally hands back takes the
+                                // param's place in that scheme rather than
+                                // becoming a static owner: one flag-guarded
+                                // bodies-then-memory slot, which a hand-back of
+                                // the NEW name clears. As a static owner its
+                                // memory drop was retracted on every path by
+                                // `return m` inside an `if`, so the exit where
+                                // `m` died leaked 58 B in 2 blocks at `-O0`, and
+                                // without the retraction the exit that handed it
+                                // back double-freed. The source's own slot went
+                                // with the move.
+                                let inherits_handback = match &value.kind {
+                                    ExprKind::Identifier(src) => self
+                                        .payload_vars
+                                        .cond_handback_array_params
+                                        .contains(src.as_str()),
+                                    _ => false,
+                                };
+                                if inherits_handback {
+                                    if let Some((elem_te, n)) =
+                                        arr_parts.clone().or_else(|| match &value.kind {
+                                            ExprKind::Identifier(src) => self
+                                                .var_types
+                                                .array_var_elem_te
+                                                .get(src.as_str())
+                                                .cloned(),
+                                            _ => None,
+                                        })
+                                    {
+                                        let elem_ty = self.llvm_type_for_type_expr(&elem_te);
+                                        if let Some(all) = self
+                                            .emit_array_bodies_then_memory_fn(elem_ty, &elem_te, n)
+                                        {
+                                            self.var_types
+                                                .array_var_elem_te
+                                                .insert(var_name.clone(), (elem_te.clone(), n));
+                                            self.track_user_drop_var_with_fn(
+                                                "",
+                                                var_name,
+                                                slot.ptr,
+                                                all,
+                                                UserDropKind::ContainerElemBodies,
+                                            );
+                                            self.payload_vars
+                                                .cond_handback_array_params
+                                                .insert(var_name.clone());
+                                        }
+                                    }
+                                } else if let Some((elem_te, n)) = arr_parts.clone() {
                                     if !rebind_of_live_array_owner {
                                         let elem_ty = self.llvm_type_for_type_expr(&elem_te);
                                         self.make_array_param_callee_owned(
@@ -9931,7 +9980,7 @@ impl<'ctx> super::Codegen<'ctx> {
                                 // owns — measured as an ASAN double free on
                                 // `let a: Array[S, 2] = [..]; let b = a;`.
                                 // Bodies follow the move; memory does not.
-                                {
+                                if !inherits_handback {
                                     let bodies_parts = arr_parts.or_else(|| match &value.kind {
                                         ExprKind::Identifier(src) => self
                                             .var_types
@@ -24504,11 +24553,16 @@ impl<'ctx> super::Codegen<'ctx> {
     /// Without this gate the arm would have spread an existing unsound copy to
     /// a second spelling, trading a leak for a double free.
     ///
-    /// A local move-out (`let a = [..]; return a;`) is declined for want of a
-    /// proof rather than for a measurement: it leaks today and keeps leaking.
-    /// Widening to it means establishing that the local's own scope-exit drop
-    /// is retracted at the `return`, which is a separate question from this
-    /// row's.
+    /// A local move-out (`let a: Array[T, N] = [..]; return a;`) was declined
+    /// here for want of a proof. B-2026-09-23-16 supplied it for the one
+    /// spelling admitted below: a top-level `let` of an array LITERAL
+    /// registers its memory drop at the let site (`make_array_param_callee_owned`)
+    /// and the `return` retracts it on the hand-back question
+    /// (`suppress_array_binding_move_through_ctor`). Before that, an element
+    /// that runs a user `Drop` was NOT retracted, so the discard was clean
+    /// only because the callee freed the result, and the BOUND spelling of the
+    /// same call aborted with a double free; plain element types were
+    /// retracted and leaked here. See [`Self::fn_local_is_only_array_literal_lets`].
     fn callee_hands_back_an_owned_array(&self, tail: &Expr) -> bool {
         let Some(f) = self.discarded_callee_fn(tail) else {
             return false;
@@ -24520,8 +24574,9 @@ impl<'ctx> super::Codegen<'ctx> {
         }
         rets.iter().all(|r| match &r.kind {
             ExprKind::ArrayLiteral(_) => true,
-            ExprKind::Identifier(name) => f.params.iter().any(|p| {
-                matches!(&p.pattern.kind, crate::ast::PatternKind::Binding(pn) if pn == name)
+            ExprKind::Identifier(name) => {
+                f.params.iter().any(|p| {
+                    matches!(&p.pattern.kind, crate::ast::PatternKind::Binding(pn) if pn == name)
                     // INSTANTIATED, not declared. A generic callee's param is
                     // spelled `T`, which is not an array in any spelling, so
                     // asking `p.ty` directly refuses every monomorph — the
@@ -24531,9 +24586,157 @@ impl<'ctx> super::Codegen<'ctx> {
                     && self
                         .array_elem_and_len(&self.callee_param_te_for_call(&p.ty, &tail.span))
                         .is_some()
-            }),
+                }) || (f.generic_params.is_none()
+                // EVERY exit, the same local: only then does the callee
+                // retract at the `return` (`always_returned_locals`), so a
+                // local returned on one exit beside a literal on another is
+                // still freed in the callee and must not be freed here too.
+                && rets
+                    .iter()
+                    .all(|o| matches!(&o.kind, ExprKind::Identifier(m) if m == name))
+                && self.fn_local_is_only_array_literal_lets(f, name))
+            }
             _ => false,
         })
+    }
+
+    /// B-2026-09-23-16 — is `name` bound exactly once in `f`, by a `let` with
+    /// a declared `Array` type whose initializer is an array literal?
+    ///
+    /// Deliberately narrow. The literal is what makes the let site register
+    /// this frame's memory drop (a rebind of another owner does not; see
+    /// `rebind_source_keeps_array_memory`), which the `return` then retracts.
+    /// This runs on the AST with no resolver scopes to ask which binding a
+    /// returned identifier names, so the name must have ONE binding site in
+    /// the body: a shadow, a pattern, a parameter or another initializer
+    /// binding the same name refuses the call. (The callee-side retraction is
+    /// name-keyed too, so a shadowed pair is not something this could admit
+    /// soundly even if every site were a literal.) Every construct
+    /// that can introduce a binding in a nested block is walked; a closure is
+    /// not, because a `return` inside one leaves the closure.
+    fn fn_local_is_only_array_literal_lets(&self, f: &crate::ast::Function, name: &str) -> bool {
+        if f.params
+            .iter()
+            .any(|p| p.pattern.binding_names().iter().any(|b| b == name))
+        {
+            return false;
+        }
+        let mut sites = BindingSites::default();
+        self.count_block_bindings(&f.body, name, &mut sites);
+        sites.total == 1 && sites.literal_array_lets == 1
+    }
+
+    pub(super) fn count_block_bindings(
+        &self,
+        block: &crate::ast::Block,
+        name: &str,
+        s: &mut BindingSites,
+    ) {
+        for stmt in &block.stmts {
+            match &stmt.kind {
+                StmtKind::Let {
+                    pattern, ty, value, ..
+                } => {
+                    let hits = pattern
+                        .binding_names()
+                        .iter()
+                        .filter(|b| *b == name)
+                        .count();
+                    s.total += hits;
+                    if hits == 1
+                        && matches!(&pattern.kind, crate::ast::PatternKind::Binding(_))
+                        && ty
+                            .as_ref()
+                            .is_some_and(|t| self.array_elem_and_len(t).is_some())
+                        && matches!(value.kind, ExprKind::ArrayLiteral(_))
+                    {
+                        s.literal_array_lets += 1;
+                    }
+                    self.count_expr_bindings(value, name, s);
+                }
+                StmtKind::LetElse { pattern, value, .. } => {
+                    s.total += pattern
+                        .binding_names()
+                        .iter()
+                        .filter(|b| *b == name)
+                        .count();
+                    self.count_expr_bindings(value, name, s);
+                }
+                StmtKind::LetUninit { name: bound, .. } if bound == name => s.total += 1,
+                StmtKind::Expr(e) => self.count_expr_bindings(e, name, s),
+                StmtKind::Assign { value, .. } | StmtKind::CompoundAssign { value, .. } => {
+                    self.count_expr_bindings(value, name, s)
+                }
+                _ => {}
+            }
+        }
+        if let Some(fe) = &block.final_expr {
+            self.count_expr_bindings(fe, name, s);
+        }
+    }
+
+    fn count_expr_bindings(&self, e: &Expr, name: &str, s: &mut BindingSites) {
+        let pat = |p: &crate::ast::Pattern| p.binding_names().iter().filter(|b| *b == name).count();
+        match &e.kind {
+            ExprKind::Block(b) | ExprKind::Comptime(b) => self.count_block_bindings(b, name, s),
+            ExprKind::LabeledBlock { body, .. } | ExprKind::Loop { body, .. } => {
+                self.count_block_bindings(body, name, s)
+            }
+            ExprKind::If {
+                condition,
+                then_block,
+                else_branch,
+            } => {
+                self.count_expr_bindings(condition, name, s);
+                self.count_block_bindings(then_block, name, s);
+                if let Some(eb) = else_branch {
+                    self.count_expr_bindings(eb, name, s);
+                }
+            }
+            ExprKind::IfLet {
+                pattern,
+                value,
+                then_block,
+                else_branch,
+            } => {
+                s.total += pat(pattern);
+                self.count_expr_bindings(value, name, s);
+                self.count_block_bindings(then_block, name, s);
+                if let Some(eb) = else_branch {
+                    self.count_expr_bindings(eb, name, s);
+                }
+            }
+            ExprKind::Match { scrutinee, arms } => {
+                self.count_expr_bindings(scrutinee, name, s);
+                for a in arms {
+                    s.total += pat(&a.pattern);
+                    self.count_expr_bindings(&a.body, name, s);
+                }
+            }
+            ExprKind::While {
+                condition, body, ..
+            } => {
+                self.count_expr_bindings(condition, name, s);
+                self.count_block_bindings(body, name, s);
+            }
+            ExprKind::WhileLet {
+                pattern,
+                value,
+                body,
+                ..
+            }
+            | ExprKind::For {
+                pattern,
+                iterable: value,
+                body,
+                ..
+            } => {
+                s.total += pat(pattern);
+                self.count_expr_bindings(value, name, s);
+                self.count_block_bindings(body, name, s);
+            }
+            _ => {}
+        }
     }
 
     /// Every expression this block can hand back to the enclosing function's
@@ -24555,7 +24758,7 @@ impl<'ctx> super::Codegen<'ctx> {
     /// [`Self::callee_hands_back_an_owned_array`] requires every collected
     /// entry to qualify AND the set to be non-empty. So a shape that hides a
     /// `return` from the walk refuses the call rather than admitting it unseen.
-    fn collect_return_exprs<'a>(block: &'a crate::ast::Block, out: &mut Vec<&'a Expr>) {
+    pub(super) fn collect_return_exprs<'a>(block: &'a crate::ast::Block, out: &mut Vec<&'a Expr>) {
         Self::collect_returns_in_block(block, out, true);
     }
 
@@ -26615,4 +26818,12 @@ impl<'ctx> super::Codegen<'ctx> {
                 .as_deref()
                 .is_none_or(|p| p.drop_method_keys.is_empty())
     }
+}
+
+/// B-2026-09-23-16 — tally for [`Codegen::fn_local_is_only_array_literal_lets`]:
+/// every binding site of one name, and how many of them are array-literal lets.
+#[derive(Default)]
+pub(super) struct BindingSites {
+    pub(super) total: usize,
+    pub(super) literal_array_lets: usize,
 }

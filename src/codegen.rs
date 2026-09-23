@@ -6446,6 +6446,8 @@ impl<'ctx> Codegen<'ctx> {
                 boxed_optres_payload_view_vars: HashMap::new(),
                 arm_array_payload_unowned_interior: std::collections::HashSet::new(),
                 caller_retained_array_views: std::collections::HashSet::new(),
+                cond_handback_array_params: std::collections::HashSet::new(),
+                always_returned_locals: std::collections::HashSet::new(),
                 deboxed_payload_box_ptrs: HashMap::new(),
                 deferred_payload_box_ptrs: HashMap::new(),
                 pending_box_field_zeroes: HashMap::new(),

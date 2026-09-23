@@ -5909,6 +5909,16 @@ impl<'a> super::Interpreter<'a> {
                 Some(Value::Struct { name, .. }) => name.clone(),
                 // Enum-Drop parity — see `suppress_tail_expr_user_drop`.
                 Some(Value::EnumVariant { enum_name, .. }) => enum_name.clone(),
+                // B-2026-09-23-15 — an `Array` whose elements run a user
+                // `Drop` body. The conditionally-returned array param is now
+                // adopted into the callee's cleanup like the struct is, so the
+                // arm tail that hands it back (`match k { 1 => a, _ => … }`)
+                // has to disarm it the same way, or the handed-back elements
+                // run their bodies here AND at the caller's new owner.
+                Some(v @ Value::Array(_)) if self.field_value_carries_user_drop(&v) => {
+                    self.moved_out_user_drop_bindings.insert(name);
+                    continue;
+                }
                 _ => continue,
             };
             if !self.program.drop_method_keys.contains_key(&type_name) {

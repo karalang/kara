@@ -1526,7 +1526,17 @@ impl<'ctx> super::Codegen<'ctx> {
                 if owns_result {
                     if let ExprKind::Identifier(nm) = &arm.body.kind {
                         let nm = nm.clone();
-                        self.suppress_container_elem_bodies_for_var(&nm);
+                        // B-2026-09-23-15 — not for an array param this frame
+                        // conditionally hands back: its one drop slot is the
+                        // flag-guarded bodies-then-memory action, and the flag
+                        // this arm just cleared is what stands it down on THIS
+                        // path. Retracting the slot statically took it off the
+                        // other arms too, so `match k { 1 => a, _ => [..] }`
+                        // ran no body and freed nothing on the exit where `a`
+                        // died (58 B in 2 blocks at `-O0`).
+                        if !self.payload_vars.cond_handback_array_params.contains(&nm) {
+                            self.suppress_container_elem_bodies_for_var(&nm);
+                        }
                         self.suppress_user_drop_for_arm_tail_binding(&arm.pattern, &nm);
                     }
                 }

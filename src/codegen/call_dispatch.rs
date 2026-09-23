@@ -13308,7 +13308,12 @@ impl<'ctx> super::Codegen<'ctx> {
         // this is the suppressing direction, and a mixed-path callee's
         // dies-inside exit leaves the value with the caller.
         if let Some(c) = callee {
-            if self.callee_always_hands_array_arg_back(c, arg_index) {
+            // B-2026-09-23-15 — or on SOME exits, where the callee now owns
+            // the array per path (see the predicate) and the memory goes with
+            // it.
+            if self.callee_always_hands_array_arg_back(c, arg_index)
+                || self.conditional_array_handback_moves_to_callee(c, arg_index)
+            {
                 self.suppress_array_binding_move(arg, super::param_own::ArrayMoveDest::HandedBack);
             }
         }

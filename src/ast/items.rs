@@ -3613,6 +3613,13 @@ pub fn fn_conditionally_returns_param_bare(
                 fields.iter().any(|f| may_mention(&f.value, name))
             }
             ExprKind::Tuple(elems) => elems.iter().any(|el| may_mention(el, name)),
+            // B-2026-09-23-15 — an ARRAY literal mentions the parameter exactly
+            // when one of its elements does, like the tuple above. Without this
+            // arm the catch-all answered `true` for the canonical non-escaping
+            // exit of an `Array` hand-back (`return [mk(8), mk(9)]`), so no
+            // array param was ever admitted and its element bodies were lost on
+            // every surface on the path where it died inside the callee.
+            ExprKind::ArrayLiteral(elems) => elems.iter().any(|el| may_mention(el, name)),
             ExprKind::Binary { left, right, .. } => {
                 may_mention(left, name) || may_mention(right, name)
             }

@@ -2740,11 +2740,25 @@ impl<'a> super::Interpreter<'a> {
             if !cond_returned && !cond_stored {
                 continue;
             }
-            let Some(Value::Struct { name: tn, .. }) = self.env.get(name) else {
-                continue;
-            };
-            if self.program.drop_method_keys.contains_key(tn.as_str()) {
-                out.push(name.to_string());
+            match self.env.get(name) {
+                Some(Value::Struct { name: tn, .. })
+                    if self.program.drop_method_keys.contains_key(tn.as_str()) =>
+                {
+                    out.push(name.to_string());
+                }
+                // B-2026-09-23-15 — a by-value `Array` whose elements run a
+                // user `Drop` body, returned on some exits only. The caller
+                // stands down for it on every path (the same union as the
+                // struct's), so on the exit where it dies inside nobody ran
+                // its element bodies: `dies y8 d8 d9` against the struct
+                // spelling's `dies d1 y8 d8`. Codegen's twin is the array arm
+                // of `compile_function`'s conditional-return registration.
+                Some(v @ Value::Array(_))
+                    if cond_returned && self.field_value_carries_user_drop(&v) =>
+                {
+                    out.push(name.to_string());
+                }
+                _ => {}
             }
         }
         out

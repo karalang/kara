@@ -1546,6 +1546,8 @@ impl<'ctx> super::Codegen<'ctx> {
         self.payload_vars.boxed_optres_payload_view_vars.clear();
         self.payload_vars.arm_array_payload_unowned_interior.clear();
         self.payload_vars.caller_retained_array_views.clear();
+        self.payload_vars.cond_handback_array_params.clear();
+        self.payload_vars.always_returned_locals = self.locals_returned_on_every_exit(func);
         self.payload_vars.deboxed_payload_box_ptrs.clear();
         self.payload_vars.deferred_payload_box_ptrs.clear();
         self.payload_vars.pending_box_field_zeroes.clear();
@@ -3588,6 +3590,45 @@ impl<'ctx> super::Codegen<'ctx> {
                                         .cond_returned_body_params
                                         .insert(param_name.clone());
                                 }
+                            }
+                        }
+                    }
+                    // B-2026-09-23-15 — the ARRAY arm. A caller-retained
+                    // by-value `Array` returned on some exits only: this frame
+                    // takes the whole drop (element bodies, then element
+                    // memory) under the per-path flag, which a hand-back exit
+                    // clears, and the caller stands its memory down on the
+                    // same predicate. Before, the dies-inside exit ran no body
+                    // on any surface and the hand-back exit double-freed.
+                    if let Some((elem_te, n)) = self.array_elem_and_len(&param.ty) {
+                        let recv_offset = self
+                            .program_snapshot
+                            .as_deref()
+                            .and_then(|p| {
+                                crate::codegen::declarations::find_function_ast(p, &func.name)
+                            })
+                            .is_some_and(|ast| ast.self_param.is_some())
+                            as usize;
+                        if i >= recv_offset
+                            && self.conditional_array_handback_moves_to_callee(
+                                &func.name,
+                                i - recv_offset,
+                            )
+                        {
+                            let elem_ty = self.llvm_type_for_type_expr(&elem_te);
+                            if let Some(all) =
+                                self.emit_array_bodies_then_memory_fn(elem_ty, &elem_te, n)
+                            {
+                                self.track_user_drop_var_with_fn(
+                                    "",
+                                    &param_name,
+                                    alloca,
+                                    all,
+                                    crate::codegen::state::UserDropKind::ContainerElemBodies,
+                                );
+                                self.payload_vars
+                                    .cond_handback_array_params
+                                    .insert(param_name.clone());
                             }
                         }
                     }

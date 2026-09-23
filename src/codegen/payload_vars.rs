@@ -417,6 +417,23 @@ pub(crate) struct PayloadVars<'ctx> {
     /// Cleared per function with its siblings; a later `let` of the same name
     /// that is not such a rebind removes it.
     pub(crate) caller_retained_array_views: std::collections::HashSet<String>,
+    /// B-2026-09-23-15 — caller-retained by-value `Array` params that THIS
+    /// frame conditionally hands back and so owns outright (bodies and memory,
+    /// under the per-path flag `compile_function` registers). The caller
+    /// stands down for them, so they are not views of the caller's array: a
+    /// `let m = a;` over one must make `m` a full owner rather than the
+    /// view [`Self::caller_retained_array_views`] would make it.
+    ///
+    /// Cleared per function with its siblings.
+    pub(crate) cond_handback_array_params: std::collections::HashSet<String>,
+    /// B-2026-09-23-16 — locals of the function being compiled that EVERY
+    /// exit hands back (bare, or as an operand of the value it returns), each
+    /// bound exactly once. For these the `return` may retract the local's
+    /// array memory drop statically, because no path keeps the value in this
+    /// frame; for a local returned on SOME exits the retraction would strand
+    /// it on the others. Filled by `compile_function`; empty (the old answer)
+    /// everywhere else, the mono leg included.
+    pub(crate) always_returned_locals: std::collections::HashSet<String>,
     /// B-2026-08-06-10 — match-arm payload bindings that were DEBOXED out of an
     /// enum payload box: `binding slot -> box pointer`.
     ///
