@@ -92,10 +92,10 @@ distinguish "bugs flattening" from "we stopped writing them down."
 
 | class | total |
 |---|---|
-| run-vs-build | 481 |
+| run-vs-build | 483 |
 | miscompile | 438 |
 | leak | 403 |
-| double-free | 271 |
+| double-free | 272 |
 | missing-feature | 205 |
 | codegen-gap | 185 |
 | other | 148 |
@@ -110,7 +110,7 @@ distinguish "bugs flattening" from "we stopped writing them down."
 
 | surface | total |
 |---|---|
-| codegen | 1981 |
+| codegen | 1984 |
 | interp | 522 |
 | typecheck | 306 |
 | other | 109 |
@@ -356,8 +356,10 @@ registered in the callee's prologue, not by-value struct params in general. | �
 | B-2026-09-22-16 | 2026-09-22 | codegen | high | TWO ENUMS THAT SHARE A VARIANT NAME AND CARRY THE SAME HEAP-BEARING FIELD TYPES IN DIFFERENT ORDERS READ EACH OTHER'S FIELD OFFSETS AND SEGFAULT -- `enum A { P(Array[S, 2], String), Q }` beside `enum B { P(String, Array[S, 2]), Q }` dies with an 8-byte read SIX BYTES PAST the 2-byte `String` buffer and then a dereference of `0x2`, on an 11-line program with no params, no generics and no `unsafe`; `--interp` is correct. Rename either variant, or make the partner field an `i64`, and it is clean. IT ALSO MAKES THE COMPILER'S OUTPUT NON-REPRODUCIBLE: 8 builds of the one unchanged source give 2 distinct binaries, where every clean neighbour gives 1 | — |
 | B-2026-09-23-3 | 2026-09-23 | codegen+interp | medium | A DECLARED ENUM'S `Array[T, N]` PAYLOAD BUILT AS A FRESH-TEMP `match` SCRUTINEE RUNS NO ELEMENT `Drop` BODY WHEN THE ARM ONLY READS ITS BINDING, ON ALL FOUR SURFACES -- `match V.P1([S{a0}, S{a1}]) { V.P1(v) => { println(v[0].tag) } .. }` over `enum V { P1(Array[S, 2]), Q1 }` prints `r:a0 end` on `--interp`, the JIT, `-O0` and `-O2`, where `dSa0 dSa1` are due; memory is balanced. The same program with the ctor bound to a name first, with a GENERIC `enum Sl[T]` at `T = Array[S, 2]`, or with a consuming arm (`let u = v`) runs both bodies everywhere | — |
 | B-2026-09-23-4 | 2026-09-23 | codegen+interp | medium | A BY-VALUE STRUCT PARAM MOVED INTO A SEEDED `match` SCRUTINEE RUNS ITS `Drop` BODY TWICE ON EVERY SURFACE -- `fn inner(a: R) -> i64 { match Option.Some(a) { Option.Some(v) => { .. } .. } }` called as `inner(a)` prints `d1 d1` on `--interp`, the JIT, `-O0` and `-O2`, against the by-value control `fn eat(a: R)`'s single `d1`; an AGREED fault, so no differential instrument can see it. It is the struct half B-2026-09-22-8 split out and deliberately left alone | — |
-| B-2026-09-23-5 | 2026-09-23 | codegen | high | A BY-VALUE `Array` PARAM REBOUND INSIDE THE CALLEE HAS TWO OWNERS ON THE COMPILED BACKENDS WHILE `--interp` IS RIGHT -- `fn eat(a: Array[R, 2]) -> i64 { let m = a; println("in-eat"); return 7 }` prints `d1 d2 in-eat d1 d2` on the JIT, `-O0` and `-O2` against `--interp`'s `in-eat d1 d2`, and the seeded-arm spelling `match Option.Some(a) { Option.Some(v) => { let u = v; .. } }` ABORTS with `free(): double free detected in tcache 2` on every compiled surface | — |
 | B-2026-09-23-6 | 2026-09-23 | interp | low | THE INTERPRETER RUNS A BY-VALUE `Array` PARAM'S ELEMENT `Drop` BODIES TWICE WHEN THE CALLEE WRAPS IT IN A DISCARDED STRUCT LITERAL -- `fn b_discard(a: Array[R, 2]) -> i64 { B1 { v: a }; println("  in"); return 7 }` prints `d101 d102 in d101 d102` under `--interp` against `in d101 d102` on every compiled surface; the one cell of `asan_array_param_into_struct_literal_field_stays_with_caller` that B-2026-09-22-8's fix did not reach | — |
+| B-2026-09-23-12 | 2026-09-23 | codegen | high | A BY-VALUE `Array` PARAM WHOSE ELEMENT RUNS A USER `Drop`, RETURNED TO A BINDING, IS FREED TWICE ON THE JIT AND AT `-O0` -- `fn eat(a: Array[R, 2]) -> Array[R, 2] { println("in-eat"); return a }` called as `let b = eat(a)` aborts with `free(): double free detected in tcache 2` against `--interp`'s `in-eat y1 d1 d2`, with no rebind involved; `-O2` prints the right output and valgrind at `-O0` reports 2 errors | — |
+| B-2026-09-23-13 | 2026-09-23 | codegen | medium | A BY-VALUE `Vec[R]` PARAM REBOUND INSIDE THE CALLEE RUNS ITS ELEMENTS' `Drop` BODIES TWICE ON EVERY COMPILED SURFACE WHILE `--interp` IS RIGHT -- `fn eat(a: Vec[R]) -> i64 { let m = a; println("in-eat"); return 7 }` prints `d1 d2 in-eat d1 d2` on the JIT, `-O0` and `-O2` against `in-eat d1 d2`; the seeded arm spelling `match Option.Some(a) { Some(v) => { let u = v; .. } }` doubles the same way; memory is clean. It is the `Vec` twin of B-2026-09-23-5, which fixed the `Array` spelling only | — |
+| B-2026-09-23-14 | 2026-09-23 | codegen | medium | A USER-ENUM SEEDED ARM THAT REBINDS A CALLER-RETAINED `Array` PARAM RUNS ITS ELEMENTS' `Drop` BODIES TWICE ON EVERY COMPILED SURFACE WHILE `--interp` IS RIGHT -- `match W.P(a) { W.P(v) => { let u = v; .. } }` over `enum W { P(Array[R, 2]), Q }` inside `fn eat(a: Array[R, 2])` prints `d1 d2 r1 d1 d2` on the JIT, `-O0` and `-O2` against `r1 d1 d2`; memory is clean. The user-enum spelling of B-2026-09-23-5, which fixed `Option` / `Result` only | — |
 
 ### Relocated
 
@@ -2953,6 +2955,7 @@ registered in the callee's prologue, not by-value struct params in general. | �
 | B-2026-09-22-17 | codegen | high | A USER-ENUM VARIANT CARRYING **TWO `Array` PARAMS** IS STILL FREED BY BOTH SIDES -- B-2026-09-22-9's fix relaxes the box-only drop twin's gate from "… | e94a50713 |
 | B-2026-09-23-1 | codegen | high | MEASURED: a user-enum variant holding a caller-retained by-value `Array` param BESIDE a callee-owned array (`Array[String, 2]` param) or BESIDE a loc… | 3f3b71c1c |
 | B-2026-09-23-2 | typecheck | low | MEASURED: a `ref`/`mut ref` bool or numeric scalar is still REFUSED in five operand positions that 42a9f2c's "reads as its value type in every value… | 6a9665a18 |
+| B-2026-09-23-5 | codegen | high | A BY-VALUE `Array` PARAM REBOUND INSIDE THE CALLEE HAS TWO OWNERS ON THE COMPILED BACKENDS WHILE `--interp` IS RIGHT -- `fn eat(a: Array[R, 2]) -> i6… | fa0e1af32 |
 | B-2026-09-23-7 | typecheck | low | MEASURED: an unsuffixed integer literal range bound does not take the other bound's integer type -- `for b in 1..m` with `m: u8` and `(0..hi).rev()`… | 16b434fc5 |
 | B-2026-09-23-8 | codegen | medium | MEASURED: a `for` over a range of any integer narrower than 64 bits FAILS LLVM module verification (`icmp slt i64 %i, i8 %m`, `sub i32 %hi, i64 1`) u… | 16b434fc5 |
 | B-2026-09-23-9 | codegen | medium | MEASURED: `for x in v[a..b]` and `for x in v[a..b].iter()` over a range-slice TEMPORARY have no codegen lowering -- JIT and both AOT modes fail to co… | 16b434fc5 |
