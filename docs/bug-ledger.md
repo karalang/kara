@@ -95,7 +95,7 @@ distinguish "bugs flattening" from "we stopped writing them down."
 | run-vs-build | 483 |
 | miscompile | 438 |
 | leak | 403 |
-| double-free | 272 |
+| double-free | 273 |
 | missing-feature | 205 |
 | codegen-gap | 185 |
 | other | 148 |
@@ -110,8 +110,8 @@ distinguish "bugs flattening" from "we stopped writing them down."
 
 | surface | total |
 |---|---|
-| codegen | 1984 |
-| interp | 522 |
+| codegen | 1985 |
+| interp | 523 |
 | typecheck | 306 |
 | other | 109 |
 | ownership | 75 |
@@ -357,9 +357,9 @@ registered in the callee's prologue, not by-value struct params in general. | �
 | B-2026-09-23-3 | 2026-09-23 | codegen+interp | medium | A DECLARED ENUM'S `Array[T, N]` PAYLOAD BUILT AS A FRESH-TEMP `match` SCRUTINEE RUNS NO ELEMENT `Drop` BODY WHEN THE ARM ONLY READS ITS BINDING, ON ALL FOUR SURFACES -- `match V.P1([S{a0}, S{a1}]) { V.P1(v) => { println(v[0].tag) } .. }` over `enum V { P1(Array[S, 2]), Q1 }` prints `r:a0 end` on `--interp`, the JIT, `-O0` and `-O2`, where `dSa0 dSa1` are due; memory is balanced. The same program with the ctor bound to a name first, with a GENERIC `enum Sl[T]` at `T = Array[S, 2]`, or with a consuming arm (`let u = v`) runs both bodies everywhere | — |
 | B-2026-09-23-4 | 2026-09-23 | codegen+interp | medium | A BY-VALUE STRUCT PARAM MOVED INTO A SEEDED `match` SCRUTINEE RUNS ITS `Drop` BODY TWICE ON EVERY SURFACE -- `fn inner(a: R) -> i64 { match Option.Some(a) { Option.Some(v) => { .. } .. } }` called as `inner(a)` prints `d1 d1` on `--interp`, the JIT, `-O0` and `-O2`, against the by-value control `fn eat(a: R)`'s single `d1`; an AGREED fault, so no differential instrument can see it. It is the struct half B-2026-09-22-8 split out and deliberately left alone | — |
 | B-2026-09-23-6 | 2026-09-23 | interp | low | THE INTERPRETER RUNS A BY-VALUE `Array` PARAM'S ELEMENT `Drop` BODIES TWICE WHEN THE CALLEE WRAPS IT IN A DISCARDED STRUCT LITERAL -- `fn b_discard(a: Array[R, 2]) -> i64 { B1 { v: a }; println("  in"); return 7 }` prints `d101 d102 in d101 d102` under `--interp` against `in d101 d102` on every compiled surface; the one cell of `asan_array_param_into_struct_literal_field_stays_with_caller` that B-2026-09-22-8's fix did not reach | — |
-| B-2026-09-23-12 | 2026-09-23 | codegen | high | A BY-VALUE `Array` PARAM WHOSE ELEMENT RUNS A USER `Drop`, RETURNED TO A BINDING, IS FREED TWICE ON THE JIT AND AT `-O0` -- `fn eat(a: Array[R, 2]) -> Array[R, 2] { println("in-eat"); return a }` called as `let b = eat(a)` aborts with `free(): double free detected in tcache 2` against `--interp`'s `in-eat y1 d1 d2`, with no rebind involved; `-O2` prints the right output and valgrind at `-O0` reports 2 errors | — |
 | B-2026-09-23-13 | 2026-09-23 | codegen | medium | A BY-VALUE `Vec[R]` PARAM REBOUND INSIDE THE CALLEE RUNS ITS ELEMENTS' `Drop` BODIES TWICE ON EVERY COMPILED SURFACE WHILE `--interp` IS RIGHT -- `fn eat(a: Vec[R]) -> i64 { let m = a; println("in-eat"); return 7 }` prints `d1 d2 in-eat d1 d2` on the JIT, `-O0` and `-O2` against `in-eat d1 d2`; the seeded arm spelling `match Option.Some(a) { Some(v) => { let u = v; .. } }` doubles the same way; memory is clean. It is the `Vec` twin of B-2026-09-23-5, which fixed the `Array` spelling only | — |
 | B-2026-09-23-14 | 2026-09-23 | codegen | medium | A USER-ENUM SEEDED ARM THAT REBINDS A CALLER-RETAINED `Array` PARAM RUNS ITS ELEMENTS' `Drop` BODIES TWICE ON EVERY COMPILED SURFACE WHILE `--interp` IS RIGHT -- `match W.P(a) { W.P(v) => { let u = v; .. } }` over `enum W { P(Array[R, 2]), Q }` inside `fn eat(a: Array[R, 2])` prints `d1 d2 r1 d1 d2` on the JIT, `-O0` and `-O2` against `r1 d1 d2`; memory is clean. The user-enum spelling of B-2026-09-23-5, which fixed `Option` / `Result` only | — |
+| B-2026-09-23-15 | 2026-09-23 | codegen+interp | high | A MIXED-PATH CALLEE THAT RETURNS ITS CALLER-RETAINED `Array` PARAM ON ONE EXIT AND A FRESH ARRAY ON ANOTHER IS WRONG ON BOTH PATHS -- `fn mix(a: Array[R, 2], c: bool) -> Array[R, 2] { if c { return a }; return [mkr(8), mkr(9)] }` DOUBLE-FREES at `c = true` on the JIT and `-O0` against `--interp`'s `y1 d1 d2`, and at `c = false` LOSES the param's two `Drop` bodies on ALL FOUR SURFACES (`y8 d8 d9`, memory clean), an agreed fault no A/B can see | — |
 
 ### Relocated
 
@@ -2961,6 +2961,7 @@ registered in the callee's prologue, not by-value struct params in general. | �
 | B-2026-09-23-9 | codegen | medium | MEASURED: `for x in v[a..b]` and `for x in v[a..b].iter()` over a range-slice TEMPORARY have no codegen lowering -- JIT and both AOT modes fail to co… | 16b434fc5 |
 | B-2026-09-23-10 | codegen | high | MEASURED: range-slicing a `ref`/`mut ref` PARAMETER reads the parameter's slot as the Vec header -- `v[1..3]` for `v: ref Vec[i64]` panics the JIT wi… | 16b434fc5 |
 | B-2026-09-23-11 | typecheck | low | MEASURED: a type fault INSIDE an assignment's right-hand side is reported TWICE, word for word -- `s = s + y` with `s: u8`, `y: i64` prints the same… | 16b434fc5 |
+| B-2026-09-23-12 | codegen | high | A BY-VALUE `Array` PARAM WHOSE ELEMENT RUNS A USER `Drop`, RETURNED TO A BINDING, IS FREED TWICE ON THE JIT AND AT `-O0` -- `fn eat(a: Array[R, 2]) -… | fda0892fb |
 
 </details>
 
