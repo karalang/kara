@@ -96,23 +96,23 @@ distinguish "bugs flattening" from "we stopped writing them down."
 | miscompile | 438 |
 | leak | 403 |
 | double-free | 271 |
-| missing-feature | 204 |
-| codegen-gap | 183 |
+| missing-feature | 205 |
+| codegen-gap | 185 |
 | other | 148 |
-| diagnostics | 133 |
+| diagnostics | 134 |
 | perf | 117 |
 | false-positive | 108 |
 | soundness | 96 |
-| crash | 87 |
+| crash | 88 |
 | use-after-free | 50 |
 
 ### By surface
 
 | surface | total |
 |---|---|
-| codegen | 1978 |
+| codegen | 1981 |
 | interp | 522 |
-| typecheck | 304 |
+| typecheck | 306 |
 | other | 109 |
 | ownership | 75 |
 | cli | 73 |
@@ -2953,6 +2953,11 @@ registered in the callee's prologue, not by-value struct params in general. | �
 | B-2026-09-22-17 | codegen | high | A USER-ENUM VARIANT CARRYING **TWO `Array` PARAMS** IS STILL FREED BY BOTH SIDES -- B-2026-09-22-9's fix relaxes the box-only drop twin's gate from "… | e94a50713 |
 | B-2026-09-23-1 | codegen | high | MEASURED: a user-enum variant holding a caller-retained by-value `Array` param BESIDE a callee-owned array (`Array[String, 2]` param) or BESIDE a loc… | 3f3b71c1c |
 | B-2026-09-23-2 | typecheck | low | MEASURED: a `ref`/`mut ref` bool or numeric scalar is still REFUSED in five operand positions that 42a9f2c's "reads as its value type in every value… | 6a9665a18 |
+| B-2026-09-23-7 | typecheck | low | MEASURED: an unsuffixed integer literal range bound does not take the other bound's integer type -- `for b in 1..m` with `m: u8` and `(0..hi).rev()`… | 16b434fc5 |
+| B-2026-09-23-8 | codegen | medium | MEASURED: a `for` over a range of any integer narrower than 64 bits FAILS LLVM module verification (`icmp slt i64 %i, i8 %m`, `sub i32 %hi, i64 1`) u… | 16b434fc5 |
+| B-2026-09-23-9 | codegen | medium | MEASURED: `for x in v[a..b]` and `for x in v[a..b].iter()` over a range-slice TEMPORARY have no codegen lowering -- JIT and both AOT modes fail to co… | 16b434fc5 |
+| B-2026-09-23-10 | codegen | high | MEASURED: range-slicing a `ref`/`mut ref` PARAMETER reads the parameter's slot as the Vec header -- `v[1..3]` for `v: ref Vec[i64]` panics the JIT wi… | 16b434fc5 |
+| B-2026-09-23-11 | typecheck | low | MEASURED: a type fault INSIDE an assignment's right-hand side is reported TWICE, word for word -- `s = s + y` with `s: u8`, `y: i64` prints the same… | 16b434fc5 |
 
 </details>
 
