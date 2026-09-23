@@ -1549,6 +1549,7 @@ impl<'ctx> super::Codegen<'ctx> {
         self.payload_vars.arm_array_payload_unowned_interior.clear();
         self.payload_vars.caller_retained_array_views.clear();
         self.payload_vars.cond_handback_array_params.clear();
+        self.payload_vars.cond_handback_optres_params.clear();
         self.payload_vars.always_returned_locals = self.locals_returned_on_every_exit(func);
         self.payload_vars.cond_returned_locals = self.locals_returned_on_some_exits(func);
         self.payload_vars.shadowed_top_level_locals = Self::shadowed_top_level_locals(func);
@@ -3673,6 +3674,52 @@ impl<'ctx> super::Codegen<'ctx> {
                                 );
                                 self.payload_vars
                                     .cond_handback_array_params
+                                    .insert(param_name.clone());
+                            }
+                        }
+                    }
+                    // B-2026-09-23-26 — the `Option` / `Result` arm. A by-value
+                    // `Option[R]` returned on some exits only: the caller
+                    // stands down for its payload's `Drop` body on every path
+                    // (the same union as the struct's), keeps the payload's
+                    // memory, and this frame registered nothing, so on the
+                    // exit where it died inside no body ran on any surface —
+                    // `if c { a } else { None }` printed `none` at `c = false`.
+                    // BODIES ONLY, under the per-path flag the hand-back exit
+                    // clears: `emit_optres_payload_user_drop_bodies_fn` frees
+                    // nothing, which is the caller-keeps-memory split the
+                    // struct arm above makes for the same reason.
+                    if matches!(&param.ty.kind, TypeKind::Path(p)
+                        if p.segments.len() == 1
+                            && matches!(p.segments[0].as_str(), "Option" | "Result"))
+                        && self.optres_payload_runs_user_drop(&param.ty)
+                    {
+                        let recv_offset = self
+                            .program_snapshot
+                            .as_deref()
+                            .and_then(|p| {
+                                crate::codegen::declarations::find_function_ast(p, &func.name)
+                            })
+                            .is_some_and(|ast| ast.self_param.is_some())
+                            as usize;
+                        if i >= recv_offset
+                            && self.conditional_optres_handback_bodies_to_callee(
+                                &func.name,
+                                i - recv_offset,
+                            )
+                        {
+                            if let Some(bodies) =
+                                self.emit_optres_payload_user_drop_bodies_fn(&param.ty)
+                            {
+                                self.track_user_drop_var_with_fn(
+                                    "",
+                                    &param_name,
+                                    alloca,
+                                    bodies,
+                                    crate::codegen::state::UserDropKind::ContainerElemBodies,
+                                );
+                                self.payload_vars
+                                    .cond_handback_optres_params
                                     .insert(param_name.clone());
                             }
                         }

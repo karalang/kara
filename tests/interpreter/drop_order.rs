@@ -6288,3 +6288,38 @@ fn main() {
         "c=true\n  s29\n  e29\n  discarded\n  v3 1\n  r1\n  d1\n  d2\nc=false\n  s29\n  e29\n  discarded\n  v2 4\n  d1\n  d2\n  r8\n  d8\n  d9\nend\n"
     );
 }
+
+/// B-2026-09-23-26 — a by-value `Option[R]` / `Result[R, i64]` param whose
+/// payload runs a user `Drop`, returned on some exits only: a tail `if`, a
+/// `let`-bound `if`, a tail `match` with bare arms, and a `let`-bound `match`.
+/// Before the fix the `let`-bound spellings kept the caller's argument armed
+/// while the local handed it back (a segfault on every compiled surface, the
+/// body twice under `--interp`), and the tail spellings ran no body at all on
+/// the exit where the value died inside the callee, on every surface.
+#[test]
+fn interp_conditional_optres_param_handback_runs_one_body() {
+    assert_eq!(
+        run(r#"struct R { id: i64, s: String }
+impl Drop for R { fn drop(mut ref self) { println(f"  d{self.id}") } }
+fn mkr(i: i64) -> R { return R { id: i, s: f"heap-string-longer-than-sso-{i}" } }
+fn tl(a: Option[R], c: bool) -> Option[R] { if c { a } else { None } }
+fn lt(a: Option[R], c: bool) -> Option[R] { let r: Option[R] = if c { a } else { None }; println("  mid"); r }
+fn mt(a: Option[R], c: bool) -> Option[R] { match c { true => a, false => None } }
+fn ml(a: Option[R], c: bool) -> Option[R] { let r: Option[R] = match c { true => a, false => None }; println("  mid"); r }
+fn rs(a: Result[R, i64], c: bool) -> Result[R, i64] { let r: Result[R, i64] = if c { a } else { Err(5) }; r }
+fn show(o: Option[R]) { match o { Some(x) => println(f"  y{x.id}"), None => println("  none") } }
+fn main() {
+    for c in [true, false] {
+        println(f"c={c}");
+        { let a = Some(mkr(1)); let b = tl(a, c); show(b); }
+        { let a = Some(mkr(2)); let b = lt(a, c); show(b); }
+        { let a = Some(mkr(3)); let b = mt(a, c); show(b); }
+        { let a = Some(mkr(4)); let b = ml(a, c); show(b); }
+        { let a: Result[R, i64] = Ok(mkr(5)); let b = rs(a, c); match b { Ok(x) => println(f"  y{x.id}"), Err(e) => println(f"  e{e}") } }
+    }
+    { let b = lt(Some(mkr(9)), true); show(b); }
+    println("end")
+}"#),
+        "c=true\n  y1\n  d1\n  mid\n  y2\n  d2\n  y3\n  d3\n  mid\n  y4\n  d4\n  y5\n  d5\nc=false\n  d1\n  none\n  mid\n  d2\n  none\n  d3\n  none\n  mid\n  d4\n  none\n  d5\n  e5\n  mid\n  y9\n  d9\nend\n"
+    );
+}

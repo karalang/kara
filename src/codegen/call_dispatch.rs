@@ -6203,6 +6203,12 @@ impl<'ctx> super::Codegen<'ctx> {
                     // same `Function` the callee's registration is asked of, so
                     // the two answers cannot disagree about which frame frees.
                     || self.conditional_handback_memory_moves_to_callee(callee_name, arg_index)
+                    // B-2026-09-23-26 — an `Option` / `Result` handed back
+                    // through a `let`-bound branch (`let r = if c { a } else
+                    // { None }; r`), which the syntactic union above cannot
+                    // see: the result binding then took the argument's box as
+                    // its own and freed it beside the argument's binding.
+                    || self.conditional_optres_handback_bodies_to_callee(callee_name, arg_index)
                     ))
         })
     }

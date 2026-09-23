@@ -4015,8 +4015,36 @@ pub fn fn_conditionally_returns_param_bare(
     // gap the tail spelling already has for an `Option[R]` parameter (`if c { a }
     // else { None }` runs no body at `c = false` on every surface) — and a
     // generic parameter flipped only the interpreter, splitting the backends.
+    // B-2026-09-23-26 — and an `Option` / `Result` whose payload is such a
+    // struct WITH a user `Drop`: both backends now register that payload's body
+    // callee-side under the per-path flag (the `Option` / `Result` arm of the
+    // conditional-return registration and `cond_returned_param_drop_names`).
+    // Unexpanded, `let r: Option[R] = if c { a } else { None }; …; r` kept the
+    // caller's argument armed while `r` handed it back: a segfault on every
+    // compiled surface and the body twice under `--interp`.
+    let droppable_struct = |te: &crate::ast::TypeExpr| {
+        matches!(&te.kind, crate::ast::TypeKind::Path(q)
+        if q.segments.len() == 1
+            && q.generic_args.is_none()
+            && program.is_some_and(|p| {
+                p.drop_method_keys.contains_key(&q.segments[0])
+                    && p.items.iter().any(|it| {
+                        matches!(it, Item::StructDef(s)
+                            if s.name == q.segments[0] && !s.is_shared && !s.is_par)
+                    })
+            }))
+    };
     let expandable_param = match &param.ty.kind {
         crate::ast::TypeKind::Array { .. } => true,
+        crate::ast::TypeKind::Path(path)
+            if path.segments.len() == 1
+                && matches!(path.segments[0].as_str(), "Option" | "Result") =>
+        {
+            path.generic_args.as_ref().is_some_and(|args| {
+                args.iter()
+                    .any(|a| matches!(a, crate::ast::GenericArg::Type(t) if droppable_struct(t)))
+            })
+        }
         crate::ast::TypeKind::Path(path) if path.segments.len() == 1 => {
             path.segments[0] == "Array"
                 || (path.generic_args.is_none()

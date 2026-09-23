@@ -2994,6 +2994,36 @@ impl<'ctx> super::Codegen<'ctx> {
             && !crate::ast::fn_moves_param_into_outliving_place(f, arg_index)
     }
 
+    /// B-2026-09-23-26 — the `Option` / `Result` sibling of
+    /// [`Self::conditional_callee_owned_array_handback`]: a by-value
+    /// `Option[R]` / `Result[O, E]` param whose payload runs a user `Drop`
+    /// body, returned on some exits only. The callee runs that BODY on the
+    /// exit where the value dies inside, under the per-path flag; the caller
+    /// keeps the payload's memory, as it does for every other exit.
+    pub(super) fn conditional_optres_handback_bodies_to_callee(
+        &self,
+        fn_name: &str,
+        arg_index: usize,
+    ) -> bool {
+        let Some(program) = self.program_snapshot.as_deref() else {
+            return false;
+        };
+        let Some(f) = crate::codegen::declarations::find_function_ast(program, fn_name) else {
+            return false;
+        };
+        if f.generic_params.is_some() || self.is_coroutine_compiled(&f.name) {
+            return false;
+        }
+        let Some(param) = f.params.get(arg_index) else {
+            return false;
+        };
+        matches!(&param.ty.kind, TypeKind::Path(p)
+            if p.segments.len() == 1 && matches!(p.segments[0].as_str(), "Option" | "Result"))
+            && self.optres_payload_runs_user_drop(&param.ty)
+            && crate::ast::fn_conditionally_returns_param_bare(Some(program), f, arg_index)
+            && !crate::ast::fn_moves_param_into_outliving_place(f, arg_index)
+    }
+
     pub(super) fn conditional_array_handback_moves_to_callee(
         &self,
         callee_name: &str,

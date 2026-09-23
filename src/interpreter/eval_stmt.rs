@@ -5959,6 +5959,20 @@ impl<'a> super::Interpreter<'a> {
             }
             let type_name = match self.env.get(&name) {
                 Some(Value::Struct { name, .. }) => name.clone(),
+                // B-2026-09-23-26 — an `Option` / `Result` whose payload runs a
+                // user `Drop` body: the conditionally-returned param of that
+                // type is adopted into the callee's cleanup now, so the bare
+                // arm that hands it back (`match c { true => a, .. }`) disarms
+                // it like the array below, or the payload's body ran here AND
+                // at the caller's result owner (`d1 y1 d1`).
+                Some(v @ Value::EnumVariant { .. })
+                    if matches!(&v, Value::EnumVariant { enum_name, .. }
+                        if enum_name == "Option" || enum_name == "Result")
+                        && self.field_value_carries_user_drop(&v) =>
+                {
+                    self.moved_out_user_drop_bindings.insert(name);
+                    continue;
+                }
                 // Enum-Drop parity — see `suppress_tail_expr_user_drop`.
                 Some(Value::EnumVariant { enum_name, .. }) => enum_name.clone(),
                 // B-2026-09-23-15 — an `Array` whose elements run a user

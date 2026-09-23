@@ -184,6 +184,7 @@ pub(super) struct SavedVarSideTables<'ctx> {
     arm_array_payload_unowned_interior: std::collections::HashSet<String>,
     caller_retained_array_views: std::collections::HashSet<String>,
     cond_handback_array_params: std::collections::HashSet<String>,
+    cond_handback_optres_params: std::collections::HashSet<String>,
     always_returned_locals: std::collections::HashSet<String>,
     cond_returned_locals: std::collections::HashSet<String>,
     shadowed_top_level_locals: std::collections::HashSet<String>,
@@ -1693,6 +1694,9 @@ impl<'ctx> super::Codegen<'ctx> {
             cond_handback_array_params: std::mem::take(
                 &mut self.payload_vars.cond_handback_array_params,
             ),
+            cond_handback_optres_params: std::mem::take(
+                &mut self.payload_vars.cond_handback_optres_params,
+            ),
             always_returned_locals: std::mem::take(&mut self.payload_vars.always_returned_locals),
             cond_returned_locals: std::mem::take(&mut self.payload_vars.cond_returned_locals),
             shadowed_top_level_locals: std::mem::take(
@@ -1738,6 +1742,7 @@ impl<'ctx> super::Codegen<'ctx> {
             saved.arm_array_payload_unowned_interior;
         self.payload_vars.caller_retained_array_views = saved.caller_retained_array_views;
         self.payload_vars.cond_handback_array_params = saved.cond_handback_array_params;
+        self.payload_vars.cond_handback_optres_params = saved.cond_handback_optres_params;
         self.payload_vars.always_returned_locals = saved.always_returned_locals;
         self.payload_vars.cond_returned_locals = saved.cond_returned_locals;
         self.payload_vars.shadowed_top_level_locals = saved.shadowed_top_level_locals;
@@ -4712,6 +4717,7 @@ impl<'ctx> super::Codegen<'ctx> {
         self.payload_vars.arm_array_payload_unowned_interior.clear();
         self.payload_vars.caller_retained_array_views.clear();
         self.payload_vars.cond_handback_array_params.clear();
+        self.payload_vars.cond_handback_optres_params.clear();
         self.payload_vars.always_returned_locals.clear();
         self.payload_vars.shadowed_top_level_locals.clear();
         self.payload_vars.cond_returned_locals.clear();

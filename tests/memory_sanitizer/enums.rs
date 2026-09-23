@@ -10803,3 +10803,44 @@ fn asan_multi_field_boxed_array_enum_payload_is_freed() {
         "b2055-multi-field-boxed-array-no-call",
     );
 }
+
+/// B-2026-09-23-26 — a by-value `Option[R]` / `Result[R, i64]` param whose
+/// payload runs a user `Drop`, returned on some exits only: a tail `if`, a
+/// `let`-bound `if`, a tail `match` with bare arms, and a `let`-bound `match`.
+/// Before the fix the `let`-bound spellings kept the caller's argument armed
+/// while the local handed it back (a segfault on every compiled surface, the
+/// body twice under `--interp`), and the tail spellings ran no body at all on
+/// the exit where the value died inside the callee, on every surface.
+#[test]
+fn asan_conditional_optres_param_handback_runs_one_body() {
+    assert_clean_asan_run(
+        r#"struct R { id: i64, s: String }
+impl Drop for R { fn drop(mut ref self) { println(f"  d{self.id}") } }
+fn mkr(i: i64) -> R { return R { id: i, s: f"heap-string-longer-than-sso-{i}" } }
+fn tl(a: Option[R], c: bool) -> Option[R] { if c { a } else { None } }
+fn lt(a: Option[R], c: bool) -> Option[R] { let r: Option[R] = if c { a } else { None }; println("  mid"); r }
+fn mt(a: Option[R], c: bool) -> Option[R] { match c { true => a, false => None } }
+fn ml(a: Option[R], c: bool) -> Option[R] { let r: Option[R] = match c { true => a, false => None }; println("  mid"); r }
+fn rs(a: Result[R, i64], c: bool) -> Result[R, i64] { let r: Result[R, i64] = if c { a } else { Err(5) }; r }
+fn show(o: Option[R]) { match o { Some(x) => println(f"  y{x.id}"), None => println("  none") } }
+fn main() {
+    for c in [true, false] {
+        println(f"c={c}");
+        { let a = Some(mkr(1)); let b = tl(a, c); show(b); }
+        { let a = Some(mkr(2)); let b = lt(a, c); show(b); }
+        { let a = Some(mkr(3)); let b = mt(a, c); show(b); }
+        { let a = Some(mkr(4)); let b = ml(a, c); show(b); }
+        { let a: Result[R, i64] = Ok(mkr(5)); let b = rs(a, c); match b { Ok(x) => println(f"  y{x.id}"), Err(e) => println(f"  e{e}") } }
+    }
+    { let b = lt(Some(mkr(9)), true); show(b); }
+    println("end")
+}
+"#,
+        &[
+            "c=true", "  y1", "  d1", "  mid", "  y2", "  d2", "  y3", "  d3", "  mid", "  y4",
+            "  d4", "  y5", "  d5", "c=false", "  d1", "  none", "  mid", "  d2", "  none", "  d3",
+            "  none", "  mid", "  d4", "  none", "  d5", "  e5", "  mid", "  y9", "  d9", "end",
+        ],
+        "asan_conditional_optres_param_handback_runs_one_body",
+    );
+}

@@ -2306,6 +2306,15 @@ impl<'a> super::Interpreter<'a> {
                 // B-2026-08-30-33 — keep the names for the whole frame; the
                 // list above is taken by the body block before any statement
                 // runs, and the per-path disarm needs to ask later.
+                // B-2026-09-23-26 — an adopted `Option` / `Result` param's
+                // payload walk is keyed on its declared type by NAME
+                // (`optres_payload_bodies_tes`), which a `let` records and a
+                // parameter never did. It only worked when the CALLER happened
+                // to hold a binding of the same name; a temporary argument ran
+                // no body. Seeded for this frame and restored after it, since
+                // the map is not frame-isolated.
+                let saved_optres_tes =
+                    self.seed_cond_returned_optres_param_tes(&fn_name, assoc_owner);
                 let saved_cond_store_params = std::mem::replace(
                     &mut self.cond_store_param_names,
                     self.pending_param_drop_bindings.iter().cloned().collect(),
@@ -2340,6 +2349,16 @@ impl<'a> super::Interpreter<'a> {
                 // set that outlives its frame is a hazard whether or not one
                 // program has found it yet.
                 self.cond_store_param_names = saved_cond_store_params;
+                for (n, prev) in saved_optres_tes {
+                    match prev {
+                        Some(te) => {
+                            self.optres_payload_bodies_tes.insert(n, te);
+                        }
+                        None => {
+                            self.optres_payload_bodies_tes.remove(&n);
+                        }
+                    }
+                }
                 self.owned_param_names_stack.pop();
                 self.whole_param_alias_stack.pop();
                 self.consumed_payload_local_names_stack.pop();
@@ -2695,6 +2714,38 @@ impl<'a> super::Interpreter<'a> {
     /// currently be a plain struct with a user `Drop`: a shared struct drops
     /// through the RC path and never this drain, and the enum-payload channel
     /// is a different registration this row does not touch.
+    /// B-2026-09-23-26 — record the declared type of every adopted
+    /// `Option` / `Result` parameter in `optres_payload_bodies_tes`, returning
+    /// what each name held before so the caller can restore it.
+    fn seed_cond_returned_optres_param_tes(
+        &mut self,
+        fn_name: &str,
+        assoc_owner: Option<&str>,
+    ) -> Vec<(String, Option<crate::ast::TypeExpr>)> {
+        let pending: Vec<String> = self.pending_param_drop_bindings.clone();
+        let Some(f) = self.callee_fn_for_param_ownership_of(fn_name, assoc_owner) else {
+            return Vec::new();
+        };
+        let tes: Vec<(String, crate::ast::TypeExpr)> = f
+            .params
+            .iter()
+            .filter_map(|p| {
+                let name = p.name()?;
+                let optres = matches!(&p.ty.kind, crate::ast::TypeKind::Path(tp)
+                    if tp.segments.len() == 1
+                        && matches!(tp.segments[0].as_str(), "Option" | "Result"));
+                (optres && pending.iter().any(|n| n == name))
+                    .then(|| (name.to_string(), p.ty.clone()))
+            })
+            .collect();
+        tes.into_iter()
+            .map(|(name, te)| {
+                let prev = self.optres_payload_bodies_tes.insert(name.clone(), te);
+                (name, prev)
+            })
+            .collect()
+    }
+
     fn cond_returned_param_drop_names(
         &self,
         fn_name: &str,
@@ -2755,6 +2806,21 @@ impl<'a> super::Interpreter<'a> {
                 // of `compile_function`'s conditional-return registration.
                 Some(v @ Value::Array(_))
                     if cond_returned && self.field_value_carries_user_drop(&v) =>
+                {
+                    out.push(name.to_string());
+                }
+                // B-2026-09-23-26 — a by-value `Option` / `Result` whose
+                // payload runs a user `Drop` body, returned on some exits only.
+                // Same gap one type over: the caller stands down on every path
+                // and the exit where it died inside ran no body. Codegen's twin
+                // is the `Option` / `Result` arm of `compile_function`'s
+                // conditional-return registration.
+                Some(v @ Value::EnumVariant { .. })
+                    if cond_returned
+                        && matches!(&p.ty.kind, crate::ast::TypeKind::Path(tp)
+                            if tp.segments.len() == 1
+                                && matches!(tp.segments[0].as_str(), "Option" | "Result"))
+                        && self.field_value_carries_user_drop(&v) =>
                 {
                     out.push(name.to_string());
                 }

@@ -1534,7 +1534,11 @@ impl<'ctx> super::Codegen<'ctx> {
                         // other arms too, so `match k { 1 => a, _ => [..] }`
                         // ran no body and freed nothing on the exit where `a`
                         // died (58 B in 2 blocks at `-O0`).
-                        if !self.payload_vars.cond_handback_array_params.contains(&nm) {
+                        // B-2026-09-23-26 — nor for an `Option` / `Result`
+                        // param in the same position, for the same reason.
+                        if !self.payload_vars.cond_handback_array_params.contains(&nm)
+                            && !self.payload_vars.cond_handback_optres_params.contains(&nm)
+                        {
                             self.suppress_container_elem_bodies_for_var(&nm);
                         }
                         self.suppress_user_drop_for_arm_tail_binding(&arm.pattern, &nm);

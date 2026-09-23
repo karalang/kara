@@ -426,6 +426,12 @@ pub(crate) struct PayloadVars<'ctx> {
     ///
     /// Cleared per function with its siblings.
     pub(crate) cond_handback_array_params: std::collections::HashSet<String>,
+    /// B-2026-09-23-26 — by-value `Option` / `Result` params THIS frame
+    /// conditionally hands back and whose payload `Drop` body it runs on the
+    /// exit where the value dies inside, under the per-path flag. A bare match
+    /// arm naming one must not retract that slot statically, for the reason
+    /// the array set above records. Cleared per function with its siblings.
+    pub(crate) cond_handback_optres_params: std::collections::HashSet<String>,
     /// B-2026-09-23-16 — locals of the function being compiled that EVERY
     /// exit hands back (bare, or as an operand of the value it returns), each
     /// bound exactly once. For these the `return` may retract the local's
