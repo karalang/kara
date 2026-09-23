@@ -6117,10 +6117,13 @@ impl<'ctx> super::Codegen<'ctx> {
         let Some(program) = self.program_snapshot.as_deref() else {
             return false;
         };
-        program.items.iter().any(|item| {
-            matches!(item, crate::ast::Item::Function(f)
-            if f.name == callee_name
-                && (crate::ast::fn_returns_param(f, arg_index)
+        // B-2026-09-23-42 — resolved through `find_function_ast` so a
+        // `Type.method` key answers by the same route as a free function (the
+        // let-site passthrough skip now asks for the associated and method
+        // spellings). A bare name matches only a free `Function` there, so
+        // every caller passing one is answered exactly as before.
+        super::declarations::find_function_ast(program, callee_name).is_some_and(|f| {
+            crate::ast::fn_returns_param(f, arg_index)
                     // B-2026-08-28-62 — the FORWARDING route: the callee
                     // hands the argument to another call whose result it
                     // returns. Asked here rather than inside
@@ -6209,7 +6212,6 @@ impl<'ctx> super::Codegen<'ctx> {
                     // see: the result binding then took the argument's box as
                     // its own and freed it beside the argument's binding.
                     || self.conditional_optres_handback_bodies_to_callee(callee_name, arg_index)
-                    ))
         })
     }
 

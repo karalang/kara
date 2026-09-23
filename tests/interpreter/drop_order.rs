@@ -6323,3 +6323,46 @@ fn main() {
         "c=true\n  y1\n  d1\n  mid\n  y2\n  d2\n  y3\n  d3\n  mid\n  y4\n  d4\n  y5\n  d5\nc=false\n  d1\n  none\n  mid\n  d2\n  none\n  d3\n  none\n  mid\n  d4\n  none\n  d5\n  e5\n  mid\n  y9\n  d9\nend\n"
     );
 }
+
+/// B-2026-09-23-42 — the ASSOCIATED (`H.sf(a, c)`) and METHOD (`h.mf(a, c)`)
+/// spellings of B-2026-09-23-26's conditional `Option` / `Result` hand-back.
+/// The let site's passthrough skip matched a bare-identifier callee only, so
+/// the result binding registered its own drop of the box the argument's
+/// binding still owned: `double free` on every compiled surface at `c = true`,
+/// and at `c = false` the method spelling lost the body the free spelling ran.
+/// A no-`Drop` payload (`h.nf`) double freed the same way.
+#[test]
+fn interp_conditional_optres_param_handback_assoc_and_method() {
+    assert_eq!(
+        run(r#"struct R { id: i64, s: String }
+impl Drop for R { fn drop(mut ref self) { println(f"d{self.id}") } }
+struct N { id: i64, s: String }
+fn mkr(i: i64) -> R { return R { id: i, s: f"heap-string-longer-than-sso-{i}" } }
+fn mkn(i: i64) -> N { return N { id: i, s: f"heap-string-longer-than-sso-{i}" } }
+struct H { k: i64 }
+impl H {
+    fn sf(a: Option[R], c: bool) -> Option[R] { if c { a } else { None } }
+    fn mf(ref self, a: Option[R], c: bool) -> Option[R] { if c { a } else { None } }
+    fn rf(a: Result[R, String], c: bool) -> Result[R, String] { if c { a } else { Err("no") } }
+    fn nf(ref self, a: Option[N], c: bool) -> Option[N] { if c { a } else { None } }
+}
+fn show(o: Option[R]) { match o { Some(x) => println(f"y{x.id}"), None => println("none") } }
+fn run(c: bool, base: i64) {
+    let h = H { k: 1 };
+    let a = Some(mkr(base + 1));
+    let b = H.sf(a, c);
+    show(b);
+    let a2 = Some(mkr(base + 2));
+    let b2 = h.mf(a2, c);
+    show(b2);
+    let a3: Result[R, String] = Ok(mkr(base + 3));
+    let b3 = H.rf(a3, c);
+    match b3 { Ok(x) => println(f"y{x.id}"), Err(e) => println(e) }
+    let a4 = Some(mkn(base + 4));
+    let b4 = h.nf(a4, c);
+    match b4 { Some(x) => println(f"n{x.id} {x.s}"), None => println("none") }
+}
+fn main() { run(true, 0); run(false, 10); println("end") }"#),
+        "y1\nd1\ny2\nd2\ny3\nd3\nn4 heap-string-longer-than-sso-4\nd11\nnone\nd12\nnone\nd13\nno\nnone\nend\n"
+    );
+}

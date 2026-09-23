@@ -14913,18 +14913,21 @@ impl<'ctx> super::Codegen<'ctx> {
     /// `moved_arg_owner_name` stays the single-hop lookup -29 built and no walk
     /// over a possibly-cyclic map is needed: a self-alias is impossible because
     /// a name that is its own owner is armed and takes the direct branch.
+    ///
+    /// B-2026-09-23-42 — the ASSOCIATED (`H.f(a, c)`) and METHOD (`h.f(a, c)`)
+    /// spellings answer the same question under their `Type.method` key.
+    /// Matching only a bare-identifier callee left both registering the result
+    /// binding's `BoxedEnumDrop` over the box the source still owned, and every
+    /// compiled surface aborted `free(): double free` where the free-function
+    /// spelling beside them was clean. The index is the source argument's
+    /// position on all three: the AST method's `params` exclude the receiver.
     pub(super) fn call_passthrough_armed_boxed_source(&self, value: &Expr) -> Option<String> {
-        let ExprKind::Call { callee, args, .. } = &value.kind else {
-            return None;
-        };
-        let ExprKind::Identifier(callee_name) = &callee.kind else {
-            return None;
-        };
+        let (callee_name, args) = self.passthrough_callee_key(value)?;
         args.iter().enumerate().find_map(|(i, a)| {
             let ExprKind::Identifier(n) = &a.value.kind else {
                 return None;
             };
-            if !self.call_arg_flows_into_return(callee_name, i) {
+            if !self.call_arg_flows_into_return(&callee_name, i) {
                 return None;
             }
             if self
@@ -14943,6 +14946,57 @@ impl<'ctx> super::Codegen<'ctx> {
                 .contains(owner.as_str())
                 .then(|| owner.clone())
         })
+    }
+
+    /// The key [`Self::call_arg_flows_into_return`] answers for the call
+    /// `value` makes, and its source arguments: the bare name of a free call,
+    /// `Type.method` for an associated call (`H.f(..)`, which parses either as
+    /// a two-segment path callee or as a method call on a type name that is
+    /// not a local) and for a method call on a local whose struct type is
+    /// known. `None` for anything else, which keeps the caller's answer.
+    /// B-2026-09-23-42.
+    fn passthrough_callee_key<'e>(&self, value: &'e Expr) -> Option<(String, &'e [CallArg])> {
+        match &value.kind {
+            ExprKind::Call { callee, args, .. } => match &callee.kind {
+                ExprKind::Identifier(n) => Some((n.clone(), args.as_slice())),
+                ExprKind::Path { segments, .. } if segments.len() == 2 => {
+                    Some((format!("{}.{}", segments[0], segments[1]), args.as_slice()))
+                }
+                _ => None,
+            },
+            ExprKind::MethodCall {
+                object,
+                method,
+                args,
+                ..
+            } => {
+                let program = self.program_snapshot.as_deref()?;
+                // The typechecker's resolution for THIS call site first: it
+                // carries the qualified impl segment where two impls target two
+                // instantiations of one type. Guarded on the method segment,
+                // because chained calls share one span key.
+                let key = (value.span.offset, value.span.length);
+                if let Some(q) = self.span_tables.method_callee_types.get(&key) {
+                    if q.rsplit_once('.').map(|(_, m)| m) == Some(method.as_str())
+                        && super::declarations::find_function_ast(program, q).is_some()
+                    {
+                        return Some((q.clone(), args.as_slice()));
+                    }
+                }
+                if let ExprKind::Identifier(n) = &object.kind {
+                    if !self.variables.contains_key(n.as_str()) {
+                        let key = format!("{n}.{method}");
+                        return super::declarations::find_function_ast(program, &key)
+                            .map(|_| (key, args.as_slice()));
+                    }
+                }
+                let recv = self.inferred_receiver_type(object)?;
+                let key = format!("{recv}.{method}");
+                super::declarations::find_function_ast(program, &key)
+                    .map(|_| (key, args.as_slice()))
+            }
+            _ => None,
+        }
     }
 
     /// NESTED-box sibling of [`Self::call_passthrough_armed_boxed_source`] —
@@ -15217,46 +15271,29 @@ impl<'ctx> super::Codegen<'ctx> {
     /// `find_function_ast` hands back the raw AST method whose `params` exclude
     /// the receiver — verified by instrumentation, not assumed.
     ///
-    /// Asked DIRECTLY rather than through `call_arg_flows_into_return`, whose
-    /// `Item::Function`-only scan answers false for a method key. Widening that
-    /// shared predicate would move seven other consumers at once; this reads the
-    /// same predicate it does, on the one shape this site needs.
+    /// B-2026-09-23-42 — the method arm asked `fn_returns_param` directly,
+    /// because `call_arg_flows_into_return` scanned `Item::Function` alone and
+    /// answered false for a method key; and the ASSOCIATED spelling (`H.f(a,
+    /// c)`) matched neither arm. That predicate now resolves a `Type.method`
+    /// key through `find_function_ast`, so all three spellings share
+    /// [`Self::passthrough_callee_key`] and ask the free function's full
+    /// question — the union alone missed the `let`-bound hand-back that
+    /// B-2026-09-23-26 added, and `H.f(a, true)` over a `Result[R, String]`
+    /// double freed where the free spelling was clean. Its other consumers pass
+    /// bare names and are answered exactly as before.
     fn call_passthrough_armed_source(
         &self,
         value: &Expr,
         armed: &std::collections::HashSet<String>,
     ) -> Option<String> {
-        match &value.kind {
-            ExprKind::Call { callee, args, .. } => {
-                let ExprKind::Identifier(callee_name) = &callee.kind else {
-                    return None;
-                };
-                args.iter().enumerate().find_map(|(i, a)| {
-                    let ExprKind::Identifier(n) = &a.value.kind else {
-                        return None;
-                    };
-                    (armed.contains(n.as_str()) && self.call_arg_flows_into_return(callee_name, i))
-                        .then(|| n.clone())
-                })
-            }
-            ExprKind::MethodCall { method, args, .. } => {
-                let key = (value.span.offset, value.span.length);
-                let qualified = self.span_tables.method_callee_types.get(&key)?;
-                if qualified.rsplit_once('.').map(|(_, m)| m) != Some(method.as_str()) {
-                    return None;
-                }
-                let program = self.program_snapshot.as_deref()?;
-                let f = super::declarations::find_function_ast(program, qualified)?;
-                args.iter().enumerate().find_map(|(i, a)| {
-                    let ExprKind::Identifier(n) = &a.value.kind else {
-                        return None;
-                    };
-                    (armed.contains(n.as_str()) && crate::ast::fn_returns_param(f, i))
-                        .then(|| n.clone())
-                })
-            }
-            _ => None,
-        }
+        let (callee_name, args) = self.passthrough_callee_key(value)?;
+        args.iter().enumerate().find_map(|(i, a)| {
+            let ExprKind::Identifier(n) = &a.value.kind else {
+                return None;
+            };
+            (armed.contains(n.as_str()) && self.call_arg_flows_into_return(&callee_name, i))
+                .then(|| n.clone())
+        })
     }
 
     pub(super) fn suppress_inline_option_result_binding_move(&self, value: &Expr) {
