@@ -927,6 +927,10 @@ impl<'ctx> super::Codegen<'ctx> {
         // is the whole defect.
         let saved_ref_params = self.borrow_vars.ref_params.clone();
         let saved_signature_ref_params = self.borrow_vars.signature_ref_params.clone();
+        // B-2026-09-23-31's element-borrow roots describe the ENCLOSING
+        // frame's slots; a closure body reaches a captured name through its
+        // own capture machinery, so the set does not carry in.
+        let saved_elem_borrow_roots = std::mem::take(&mut self.borrow_vars.elem_borrow_roots);
 
         // 7. Build the closure body.
         self.current_fn = Some(closure_fn);
@@ -1394,6 +1398,7 @@ impl<'ctx> super::Codegen<'ctx> {
         // binding rather than merely panicking.
         self.borrow_vars.ref_params = saved_ref_params;
         self.borrow_vars.signature_ref_params = saved_signature_ref_params;
+        self.borrow_vars.elem_borrow_roots = saved_elem_borrow_roots;
         if let Some(bb) = saved_bb {
             self.builder.position_at_end(bb);
         }

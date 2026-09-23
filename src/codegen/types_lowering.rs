@@ -2873,6 +2873,23 @@ impl<'ctx> super::Codegen<'ctx> {
     /// and stays unmarked (an unarmed container keeps the old consume+free
     /// balance).
     pub(super) fn mark_for_loop_borrow_if_heap(&mut self, name: &str, elem_te: &TypeExpr) {
+        // B-2026-09-23-31 — a TUPLE element is a bit-copy of the container's
+        // slot, so a heap member moved out of it (`let s = p.0`) aliases the
+        // element's buffer. Route it through the ref-chain let-move clone,
+        // which gates on the leaf type itself (a scalar member is untouched).
+        if let TypeKind::Tuple(elems) = &elem_te.kind {
+            self.borrow_vars.elem_borrow_roots.insert(name.to_string());
+            // The element types in full, as a tuple param records them: the
+            // names-only registration above erases `Vec[i64]` to `Vec` and a
+            // nested tuple to nothing, so the clone declined exactly those
+            // leaves (`let v = p.0` over `Vec[(Vec[i64], i64)]`, `let s =
+            // p.1.0` over `Vec[(i64, (String, i64))]`). The source's declared
+            // element type is full-fidelity, like an annotation.
+            self.var_types
+                .tuple_var_elem_type_exprs
+                .insert(name.to_string(), elems.clone());
+            return;
+        }
         if self.var_types.vec_elem_types.contains_key(name) {
             self.borrow_vars
                 .for_loop_borrow_vars

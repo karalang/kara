@@ -1613,6 +1613,7 @@ impl<'ctx> super::Codegen<'ctx> {
         self.borrow_vars.for_loop_borrow_vars.clear();
         self.borrow_vars.borrow_accessor_let_payload.clear();
         self.borrow_vars.for_loop_owned_agg_vars.clear();
+        self.borrow_vars.elem_borrow_roots.clear();
         self.borrow_vars.borrowed_agg_payload_struct_vars.clear();
         self.accel.gpu_buffer_vars.clear();
         self.borrow_vars.owned_struct_params.clear();

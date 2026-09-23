@@ -5185,6 +5185,7 @@ impl<'ctx> super::Codegen<'ctx> {
                     // source-suppress that pairs with the copy).
                     self.borrow_vars.for_loop_borrow_vars.remove(var_name);
                     self.borrow_vars.for_loop_owned_agg_vars.remove(var_name);
+                    self.borrow_vars.elem_borrow_roots.remove(var_name);
                     // `let it = s.chars()` — codegen materializes the
                     // char-iterator as an eager `Vec[char]` snapshot (see the
                     // `chars()` intercept in `compile_method_call`), so register
@@ -6342,7 +6343,21 @@ impl<'ctx> super::Codegen<'ctx> {
                 // on the borrowed root). Deep-copy the value in place so the
                 // binding owns an independent copy — the let-move sibling of
                 // the ref-chain scrutinee clones. No-op for every other RHS.
-                let val = self.clone_ref_chain_field_move_rhs(value, val);
+                // B-2026-09-23-31 — the element-borrow roots are admitted for
+                // a plain BINDING only. A destructuring `let (n, k) = p` binds
+                // its leaves as borrows with no cleanup of their own, so a
+                // copy there has no owner and leaks (measured: 210 Strings
+                // in `asan_iterator_terminals_over_heap_tuple_elements_free_once`,
+                // whose closure params desugar to exactly that `let`).
+                let binds_whole = matches!(pattern.kind, PatternKind::Binding(_));
+                let val = self.clone_ref_chain_field_move_rhs(value, val, binds_whole);
+                // `let q = p` over a `for` loop's TUPLE element. Struct/enum
+                // elements are copied further down.
+                let val = if binds_whole {
+                    self.clone_loop_elem_whole_move(value, val, false)
+                } else {
+                    val
+                };
                 // `let w = v[i]` over a heap-element `Vec` — deep-clone the shallow
                 // element so the binding owns a distinct buffer; without it both
                 // the binding's drop and `v`'s element-drop free the same buffer
@@ -19437,6 +19452,25 @@ impl<'ctx> super::Codegen<'ctx> {
                         return Some(te.clone());
                     }
                 }
+                // B-2026-09-23-32 — a `for` loop's TUPLE element (the
+                // `enumerate()` lowering's `(__i, __ice)`). `compile_tuple`
+                // hands the literal a fresh CLONE of it
+                // (`clone_loop_elem_whole_move`), so the literal is the clone's
+                // only owner and there is no source to disarm — the condition
+                // the two arms above wait on. Without the name the nested
+                // element read as unknown, so a String projected back out of it
+                // (`map(|q| q.1.0)`) was never disarmed in the literal and both
+                // freed it.
+                if self.borrow_vars.elem_borrow_roots.contains(n.as_str())
+                    && !self.borrow_vars.ref_params.contains_key(n.as_str())
+                {
+                    if let Some(tes) = self.var_types.tuple_var_elem_type_exprs.get(n.as_str()) {
+                        return Some(TypeExpr {
+                            kind: TypeKind::Tuple(tes.clone()),
+                            span: e.span,
+                        });
+                    }
+                }
                 let head = self.var_types.var_type_names.get(n.as_str())?;
                 if head != "Vec" && head != "VecDeque" {
                     return None;
@@ -20549,6 +20583,9 @@ impl<'ctx> super::Codegen<'ctx> {
             },
         );
         self.borrow_vars.ref_params.insert(name.clone(), elem_ty);
+        // B-2026-09-23-31 — a heap field moved out through this shim
+        // (`let s = r.name`) must be deep-copied; the container owns it.
+        self.borrow_vars.elem_borrow_roots.insert(name.clone());
         // Record the BORROWED ELEMENT's type, or `r.field` cannot resolve —
         // the shim only carries a pointer, and field lowering reads the
         // receiver's type name from `var_type_names`.
@@ -20559,6 +20596,26 @@ impl<'ctx> super::Codegen<'ctx> {
                         .var_type_names
                         .insert(name.clone(), head.clone());
                 }
+            }
+            // B-2026-09-23-31 — a borrowed TUPLE element records its element
+            // types, as a tuple param does (`functions.rs`), so a projection
+            // through the shim (`let s = r.0`) resolves its leaf and reaches
+            // the let-move clone. Without it the leaf read back as unknown,
+            // the clone declined, and `s` aliased the element's String.
+            if let TypeKind::Tuple(elems) = &te.kind {
+                let names: Vec<Option<String>> = elems
+                    .iter()
+                    .map(|e| match &e.kind {
+                        TypeKind::Path(p) => p.segments.first().cloned(),
+                        _ => None,
+                    })
+                    .collect();
+                self.var_types
+                    .tuple_var_elem_type_names
+                    .insert(name.clone(), names);
+                self.var_types
+                    .tuple_var_elem_type_exprs
+                    .insert(name.clone(), elems.clone());
             }
             // When the BORROWED ELEMENT is itself a Vec (`let r = ref vv[i]`
             // over a `Vec[Vec[T]]`), register its inner element type too.

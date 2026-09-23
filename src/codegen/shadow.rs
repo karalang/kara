@@ -62,6 +62,7 @@ pub(super) struct VarMetadataSnapshot<'ctx> {
     slice_elem_types: Option<BasicTypeEnum<'ctx>>,
     ref_params: Option<BasicTypeEnum<'ctx>>,
     signature_ref_params: bool,
+    elem_borrow_roots: bool,
     var_option_shared_heap: Option<StructType<'ctx>>,
     tensor_var_infos: Option<TensorVarInfo<'ctx>>,
     column_var_infos: Option<ColumnVarInfo<'ctx>>,
@@ -107,6 +108,7 @@ impl<'ctx> super::Codegen<'ctx> {
             slice_elem_types: self.var_types.slice_elem_types.remove(name),
             ref_params: self.borrow_vars.ref_params.remove(name),
             signature_ref_params: self.borrow_vars.signature_ref_params.remove(name),
+            elem_borrow_roots: self.borrow_vars.elem_borrow_roots.remove(name),
             var_option_shared_heap: self.borrow_vars.var_option_shared_heap.remove(name),
             tensor_var_infos: self.accel.tensor_var_infos.remove(name),
             column_var_infos: self.accel.column_var_infos.remove(name),
@@ -189,6 +191,9 @@ impl<'ctx> super::Codegen<'ctx> {
         }
         if snap.signature_ref_params {
             self.borrow_vars.signature_ref_params.insert(key.clone());
+        }
+        if snap.elem_borrow_roots {
+            self.borrow_vars.elem_borrow_roots.insert(key.clone());
         }
         if let Some(v) = snap.var_option_shared_heap {
             self.borrow_vars
@@ -329,6 +334,7 @@ pub(super) struct VarEnvSnapshot<'ctx> {
     slice_elem_types: HashMap<String, BasicTypeEnum<'ctx>>,
     ref_params: HashMap<String, BasicTypeEnum<'ctx>>,
     signature_ref_params: HashSet<String>,
+    elem_borrow_roots: HashSet<String>,
     var_option_shared_heap: HashMap<String, StructType<'ctx>>,
     tensor_var_infos: HashMap<String, TensorVarInfo<'ctx>>,
     column_var_infos: HashMap<String, ColumnVarInfo<'ctx>>,
@@ -374,6 +380,7 @@ impl<'ctx> super::Codegen<'ctx> {
             slice_elem_types: self.var_types.slice_elem_types.clone(),
             ref_params: self.borrow_vars.ref_params.clone(),
             signature_ref_params: self.borrow_vars.signature_ref_params.clone(),
+            elem_borrow_roots: self.borrow_vars.elem_borrow_roots.clone(),
             var_option_shared_heap: self.borrow_vars.var_option_shared_heap.clone(),
             tensor_var_infos: self.accel.tensor_var_infos.clone(),
             column_var_infos: self.accel.column_var_infos.clone(),
@@ -453,6 +460,7 @@ impl<'ctx> super::Codegen<'ctx> {
         self.var_types.slice_elem_types = snap.slice_elem_types;
         self.borrow_vars.ref_params = snap.ref_params;
         self.borrow_vars.signature_ref_params = snap.signature_ref_params;
+        self.borrow_vars.elem_borrow_roots = snap.elem_borrow_roots;
         self.borrow_vars.var_option_shared_heap = snap.var_option_shared_heap;
         self.accel.tensor_var_infos = snap.tensor_var_infos;
         self.accel.column_var_infos = snap.column_var_infos;

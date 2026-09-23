@@ -5320,6 +5320,7 @@ impl<'ctx> super::Codegen<'ctx> {
         &mut self,
         value: &Expr,
         val: BasicValueEnum<'ctx>,
+        admit_elem_roots: bool,
     ) -> BasicValueEnum<'ctx> {
         if !matches!(
             value.kind,
@@ -5338,7 +5339,22 @@ impl<'ctx> super::Codegen<'ctx> {
                 _ => return val,
             }
         };
-        if !self.borrow_vars.signature_ref_params.contains(root) {
+        // B-2026-09-23-31: an element-borrow root (`let r = ref v[i]`, a
+        // `for` loop's tuple element) aliases container-owned heap exactly
+        // as a signature `ref` param does — see `elem_borrow_roots`.
+        let elem_root = admit_elem_roots && self.borrow_vars.elem_borrow_roots.contains(root);
+        if !elem_root && !self.borrow_vars.signature_ref_params.contains(root) {
+            return val;
+        }
+        // The use-after-move copy (`uam_defensive_copy`) runs on the same RHS
+        // first and already handed back an independent value when the source
+        // is read again later (`let mut n = p.0; …; p.0`). A second copy here
+        // would orphan the first (measured: 25 B definitely lost).
+        if self
+            .span_tables
+            .uam_copied_sites
+            .contains(&(value.span.offset, value.span.length))
+        {
             return val;
         }
         let Some(leaf) = self.place_chain_type_name(value) else {
@@ -5462,6 +5478,98 @@ impl<'ctx> super::Codegen<'ctx> {
             .unwrap();
         self.builder
             .build_load(ll, dst, "refchain.letmove.copy")
+            .unwrap()
+    }
+
+    /// B-2026-09-23-31/-32 — the WHOLE-element sibling of
+    /// [`Self::clone_ref_chain_field_move_rhs`]: a `for` loop's element bound
+    /// by bit-copy of the container's slot, moved WHOLE into a new owner —
+    /// `let q = p` or the tuple literal `(i, p)`. The loop variable owns
+    /// nothing (the container's element drop frees its heap), so the new
+    /// owner needs an independent copy or both free the same buffers.
+    ///
+    /// A TUPLE element (`elem_borrow_roots` minus the `ref v[i]` shims, which
+    /// sit in `ref_params`) is cloned through the dispatcher's tuple clone.
+    /// With `aggregates` set, a STRUCT or ENUM element (`for_loop_owned_agg_
+    /// vars`) is deep-copied too, with the same routines the `let x = a`
+    /// whole-move uses (`deep_copy_for_loop_agg_element_move` and its enum
+    /// twin). The `let` site passes `false`, because those routines already
+    /// ran there and a second copy would leak the first; the tuple-literal
+    /// site passes `true`, because nothing else copies a loop element placed
+    /// in a tuple. It is what `enumerate()`'s collect lowering produces
+    /// (`let q = (__i, __ice)`), which is how -32 double-freed.
+    pub(super) fn clone_loop_elem_whole_move(
+        &mut self,
+        value: &Expr,
+        val: BasicValueEnum<'ctx>,
+        aggregates: bool,
+    ) -> BasicValueEnum<'ctx> {
+        let ExprKind::Identifier(name) = &value.kind else {
+            return val;
+        };
+        let name = name.as_str();
+        if !val.is_struct_value() {
+            return val;
+        }
+        if self
+            .span_tables
+            .uam_copied_sites
+            .contains(&(value.span.offset, value.span.length))
+        {
+            return val;
+        }
+        let Some(fn_val) = self.current_fn else {
+            return val;
+        };
+        let ll = val.get_type();
+        if self.borrow_vars.elem_borrow_roots.contains(name)
+            && !self.borrow_vars.ref_params.contains_key(name)
+        {
+            let Some(elems) = self.var_types.tuple_var_elem_type_exprs.get(name).cloned() else {
+                return val;
+            };
+            let te = TypeExpr {
+                kind: TypeKind::Tuple(elems),
+                span: value.span,
+            };
+            if !self.te_owns_heap_below_buffer(&te) || !self.borrow_payload_clone_supported(&te) {
+                return val;
+            }
+            let clone_fn = self.emit_clone_fn_for_type_expr(&te);
+            let src = self.create_entry_alloca(fn_val, "loopelem.move.src", ll);
+            self.builder.build_store(src, val).unwrap();
+            let dst = self.create_entry_alloca(fn_val, "loopelem.move.clone", ll);
+            self.builder
+                .build_call(clone_fn, &[src.into(), dst.into()], "")
+                .unwrap();
+            return self
+                .builder
+                .build_load(ll, dst, "loopelem.move.copy")
+                .unwrap();
+        }
+        if !aggregates || !self.borrow_vars.for_loop_owned_agg_vars.contains(name) {
+            return val;
+        }
+        let Some(head) = self.var_types.var_type_names.get(name).cloned() else {
+            return val;
+        };
+        let slot = self.create_entry_alloca(fn_val, "loopelem.move.agg", ll);
+        self.builder.build_store(slot, val).unwrap();
+        if self.type_decls.struct_types.contains_key(head.as_str()) {
+            let saved = self.drop_rc.deep_copy_rc_inc_bare_shared;
+            self.drop_rc.deep_copy_rc_inc_bare_shared = true;
+            self.deep_copy_struct_heap_fields_in_place(slot, &head);
+            self.drop_rc.deep_copy_rc_inc_bare_shared = saved;
+        } else if let Some(layout) = self.type_decls.enum_layouts.get(head.as_str()).cloned() {
+            if layout.is_shared {
+                return val;
+            }
+            self.deep_copy_enum_heap_payload_in_place(&head, slot, &layout);
+        } else {
+            return val;
+        }
+        self.builder
+            .build_load(ll, slot, "loopelem.move.agg.copy")
             .unwrap()
     }
 

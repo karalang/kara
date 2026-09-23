@@ -16189,23 +16189,67 @@ impl<'ctx> super::Codegen<'ctx> {
         // Only a non-boxed tuple (a struct VALUE slot) with a heap field at
         // `index` is touched; an RC-fallback-boxed tuple has a pointer slot
         // (the `StructType` guard fails) and is handled by the rc machinery.
-        if let ExprKind::TupleIndex { object, index } = &arg_expr.kind {
-            if let ExprKind::Identifier(t) = &object.kind {
+        //
+        // B-2026-09-23-32 — the NESTED spelling, `v.push(t.1.0)` over a
+        // `(i64, (String, i64))`: this arm required the object to be the
+        // tuple variable itself, so a member one tuple down was moved into the
+        // sink with the tuple's drop still armed for it, and both freed it
+        // (`enumerate().map(|q| q.1.0).collect()` lowers to exactly this).
+        // Walk the whole tuple-index chain to its root, GEP down it through
+        // inline tuple levels only, and zero the leaf's cap. The `let s =
+        // t.1.0` spelling was already clean (its own suppression resolves the
+        // chain), which is what put this on the arg-position arm.
+        if let ExprKind::TupleIndex { .. } = &arg_expr.kind {
+            let mut path: Vec<u32> = Vec::new();
+            let mut cur = arg_expr;
+            while let ExprKind::TupleIndex { object, index } = &cur.kind {
+                path.push(*index as u32);
+                cur = object;
+            }
+            path.reverse();
+            if let ExprKind::Identifier(t) = &cur.kind {
                 if let Some(slot) = self.variables.get(t.as_str()).copied() {
-                    if let inkwell::types::BasicTypeEnum::StructType(agg_ty) = slot.ty {
+                    if let inkwell::types::BasicTypeEnum::StructType(root_ty) = slot.ty {
                         let vec_ty = self.vec_struct_type();
-                        if agg_ty != vec_ty
+                        let (last, inner) = path.split_last().expect("chain has one index");
+                        let mut agg_ty = root_ty;
+                        let mut ptr = slot.ptr;
+                        let mut inline = agg_ty != vec_ty;
+                        for &ix in inner {
+                            if !inline {
+                                break;
+                            }
+                            match agg_ty.get_field_type_at_index(ix) {
+                                Some(inkwell::types::BasicTypeEnum::StructType(fst))
+                                    if fst != vec_ty =>
+                                {
+                                    match self.builder.build_struct_gep(
+                                        agg_ty,
+                                        ptr,
+                                        ix,
+                                        "tupfld.move.hop",
+                                    ) {
+                                        Ok(p) => {
+                                            ptr = p;
+                                            agg_ty = fst;
+                                        }
+                                        Err(_) => inline = false,
+                                    }
+                                }
+                                _ => inline = false,
+                            }
+                        }
+                        if inline
+                            && agg_ty != vec_ty
                             && matches!(
-                                agg_ty.get_field_type_at_index(*index as u32),
+                                agg_ty.get_field_type_at_index(*last),
                                 Some(inkwell::types::BasicTypeEnum::StructType(fst)) if fst == vec_ty
                             )
                         {
-                            if let Ok(field_ptr) = self.builder.build_struct_gep(
-                                agg_ty,
-                                slot.ptr,
-                                *index as u32,
-                                "tupfld.move.p",
-                            ) {
+                            if let Ok(field_ptr) =
+                                self.builder
+                                    .build_struct_gep(agg_ty, ptr, *last, "tupfld.move.p")
+                            {
                                 if let Ok(cap_ptr) = self.builder.build_struct_gep(
                                     vec_ty,
                                     field_ptr,

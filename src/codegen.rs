@@ -6840,6 +6840,7 @@ impl<'ctx> Codegen<'ctx> {
             borrow_vars: BorrowVars {
                 ref_params: HashMap::new(),
                 signature_ref_params: std::collections::HashSet::new(),
+                elem_borrow_roots: std::collections::HashSet::new(),
                 entry_slot_ref_vars: HashMap::new(),
                 owned_vecstr_params: HashSet::new(),
                 for_loop_borrow_vars: HashSet::new(),

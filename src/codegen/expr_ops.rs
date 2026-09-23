@@ -127,6 +127,19 @@ impl<'ctx> super::Codegen<'ctx> {
             // array element and the source stays its sole owner; handing the
             // tuple an independent copy here leaks it. See
             // `uam_array_copy_declined`.
+            // B-2026-09-23-32 — a `for` loop's aggregate element placed
+            // WHOLE in the tuple (`(i, p)`, which is also what `enumerate()`'s
+            // collect lowering builds) owns nothing; the container does. A
+            // TUPLE element is copied by `maybe_defensive_copy_param_arg`
+            // just below, as at every other consuming position, so only the
+            // struct/enum element is copied here (copying both leaks one).
+            let tuple_loop_elem = matches!(&elem_expr.kind, ExprKind::Identifier(n)
+                if self.borrow_vars.elem_borrow_roots.contains(n.as_str()));
+            let v = if tuple_loop_elem {
+                v
+            } else {
+                self.clone_loop_elem_whole_move(elem_expr, v, true)
+            };
             let saved_decline = self.uam_array_copy_declined;
             self.uam_array_copy_declined = true;
             let v = self.maybe_defensive_copy_param_arg(elem_expr, v);

@@ -1568,3 +1568,149 @@ fn main() {
         "borrow-mode binding name does not leak into a later match",
     );
 }
+
+/// B-2026-09-23-31 — a heap field COPIED OUT of a container element that the
+/// binding only borrows was freed twice on every compiled surface: `let name
+/// = p.0` through `let p = ref ps[1]`, `let m = q.name` through `let q = ref
+/// qs[0]`, and `let n = p.0` over a `for` loop's tuple element (`ps.iter()`
+/// and bare `ps` alike). The binding's cleanup and the container's element
+/// drop both owned the buffer. Only a signature `ref` param reached the
+/// let-move clone. The fix routes an element-borrow root (`elem_borrow_roots`)
+/// through the same clone, records a loop tuple element's types in full, and
+/// copies a whole tuple element moved into a new owner or a sink. Legs beyond
+/// the row's four: a `mut` copy that the use-after-move copy already covers
+/// (a second copy leaked 25 B), a `Vec` leaf, a nested tuple leaf, a whole
+/// element move, an `Option` leaf, and the two push spellings. Measured before
+/// the fix: 39 valgrind errors at `-O0` on this program.
+#[test]
+fn asan_borrowed_element_field_copy_is_independent() {
+    assert_clean_asan_run_min_allocs(
+        r#"
+struct P { name: String, n: i64 }
+fn mkps() -> Vec[(String, i64)] {
+    return [(f"alpha-{1}-long-enough-to-heap", 1), (f"beta-{2}-long-enough-to-heap", 2), (f"gamma-{3}-long-enough-to-heap", 3)];
+}
+fn leg_ref_tuple() {
+    let ps = mkps();
+    let p = ref ps[1];
+    let name = p.0;
+    println(f"rt {name} {p.1} {ps[1].0}");
+}
+fn leg_ref_struct() {
+    let qs: Vec[P] = [P { name: f"delta-{4}-long-enough", n: 4 }];
+    let q = ref qs[0];
+    let m = q.name;
+    println(f"rs {m} {q.n} {qs[0].name}");
+}
+fn leg_iter_tuple() {
+    let ps = mkps();
+    for p in ps.iter() {
+        let n = p.0;
+        println(f"it {n} {p.1}");
+    }
+    println(f"it {ps[2].0}");
+}
+fn leg_owned_loop_tuple() {
+    let ps = mkps();
+    for p in ps {
+        let n = p.0;
+        println(f"ol {n} {p.1}");
+    }
+}
+fn leg_mut_copy() {
+    let ps = mkps();
+    for p in ps.iter() {
+        let mut n = p.0;
+        n.push_str("-X");
+        println(f"mu {n} {p.0}");
+    }
+}
+fn leg_vec_leaf() {
+    let ps: Vec[(Vec[String], i64)] = [([f"a-{1}-long-enough-to-heap", f"b{2}"], 1)];
+    for p in ps {
+        let v = p.0;
+        println(f"vl {v.len()} {v[0]} {p.1}");
+    }
+    let r = ref ps[0];
+    let w = r.0;
+    println(f"vl {w[1]} {ps[0].0.len()}");
+}
+fn leg_nested() {
+    let ps: Vec[(i64, (String, i64))] = [(1, (f"nest-{7}-long-enough-to-heap", 7))];
+    for p in ps.iter() {
+        let n = p.1.0;
+        println(f"ne {n} {p.0}");
+    }
+    let r = ref ps[0];
+    let m = r.1.0;
+    println(f"ne {m}");
+}
+fn leg_whole() {
+    let ps = mkps();
+    for p in ps.iter() {
+        let q = p;
+        println(f"wh {q.0} {q.1}");
+    }
+    println(f"wh {ps[0].0}");
+}
+fn leg_option_leaf() {
+    let ps: Vec[(Option[String], i64)] = [(Some(f"opt-{5}-long-enough-to-heap"), 1), (None, 2)];
+    for p in ps {
+        let o = p.0;
+        match o { Some(s) => println(f"op {s}"), None => println("op none") }
+    }
+}
+fn leg_push() {
+    let ps = mkps();
+    let mut names: Vec[String] = [];
+    let mut whole: Vec[(String, i64)] = [];
+    for p in ps.iter() {
+        names.push(p.0);
+        whole.push(p);
+    }
+    println(f"pu {names[2]} {whole[1].0} {ps[0].0}");
+}
+fn main() {
+    leg_ref_tuple();
+    leg_ref_struct();
+    leg_iter_tuple();
+    leg_owned_loop_tuple();
+    leg_mut_copy();
+    leg_vec_leaf();
+    leg_nested();
+    leg_whole();
+    leg_option_leaf();
+    leg_push();
+    println("done");
+}
+"#,
+        &[
+            "rt beta-2-long-enough-to-heap 2 beta-2-long-enough-to-heap",
+            "rs delta-4-long-enough 4 delta-4-long-enough",
+            "it alpha-1-long-enough-to-heap 1",
+            "it beta-2-long-enough-to-heap 2",
+            "it gamma-3-long-enough-to-heap 3",
+            "it gamma-3-long-enough-to-heap",
+            "ol alpha-1-long-enough-to-heap 1",
+            "ol beta-2-long-enough-to-heap 2",
+            "ol gamma-3-long-enough-to-heap 3",
+            "mu alpha-1-long-enough-to-heap-X alpha-1-long-enough-to-heap",
+            "mu beta-2-long-enough-to-heap-X beta-2-long-enough-to-heap",
+            "mu gamma-3-long-enough-to-heap-X gamma-3-long-enough-to-heap",
+            "vl 2 a-1-long-enough-to-heap 1",
+            "vl b2 2",
+            "ne nest-7-long-enough-to-heap 1",
+            "ne nest-7-long-enough-to-heap",
+            "wh alpha-1-long-enough-to-heap 1",
+            "wh beta-2-long-enough-to-heap 2",
+            "wh gamma-3-long-enough-to-heap 3",
+            "wh alpha-1-long-enough-to-heap",
+            "op opt-5-long-enough-to-heap",
+            "op none",
+            "pu gamma-3-long-enough-to-heap beta-2-long-enough-to-heap alpha-1-long-enough-to-heap",
+            "done",
+        ],
+        "asan_borrowed_element_field_copy_is_independent",
+        20,
+    );
+}

@@ -33,6 +33,20 @@ pub(crate) struct BorrowVars<'ctx> {
     /// B-2026-07-17-20 LSan test). Mirrors `ref_params`' lifecycle: cleared
     /// at function entry, swapped around mono bodies, shadow-danced per name.
     pub(crate) signature_ref_params: std::collections::HashSet<String>,
+    /// B-2026-09-23-31 — bindings that alias a CONTAINER ELEMENT the
+    /// container still owns, and that no other copy machinery covers for a
+    /// projected field: the `let r = ref v[i]` element shim, and a `for`
+    /// loop's TUPLE element (`for p in ps` / `ps.iter()` over a
+    /// `Vec[(String, i64)]`, a bit-copy of the slot). A heap field moved out
+    /// of either (`let s = r.name`, `let s = p.0`) aliased the element's
+    /// buffer, and the binding's cleanup and the container's element drop
+    /// freed it twice. `clone_ref_chain_field_move_rhs` treats a chain rooted
+    /// here exactly as one rooted at a signature `ref` param. Deliberately a
+    /// SEPARATE set from `signature_ref_params`: that set also gates the
+    /// scrutinee-clone legs and the disjoint-par storage predicate, whose
+    /// questions are not this one. Struct/enum loop elements are NOT here —
+    /// `for_loop_owned_agg_vars` already copies their fields.
+    pub(crate) elem_borrow_roots: std::collections::HashSet<String>,
     /// Locals bound to a `mut ref V` slot pointer returned by
     /// `m.entry(k).or_insert(d)` / `or_insert_with(f)` — the two-step
     /// `let r = m.entry(k).or_insert(0); *r += 1`. The binding's alloca holds

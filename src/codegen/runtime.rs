@@ -8650,7 +8650,10 @@ impl<'ctx> super::Codegen<'ctx> {
             let recv_name = direct_recv.or_else(|| {
                 Self::ref_chain_place_root(object)
                     .map(str::to_string)
-                    .filter(|r| self.borrow_vars.ref_params.contains_key(r))
+                    .filter(|r| {
+                        self.borrow_vars.ref_params.contains_key(r)
+                            || self.borrow_vars.elem_borrow_roots.contains(r.as_str())
+                    })
             });
             if let Some(recv_name) = recv_name {
                 // B-2026-08-01-28 — a for-loop struct ELEMENT binding is a
@@ -8686,7 +8689,14 @@ impl<'ctx> super::Codegen<'ctx> {
                 // removed when B-2026-08-01-28 admitted that root here, and
                 // `deep_copy_owned_struct_param_field_move` only matches a
                 // FieldAccess RHS, never a literal.
+                // B-2026-09-23-31 — a `for` loop's TUPLE element is the same
+                // bit-copy, so `out.push(p.0)` (and `map(|q| q.0)`, which
+                // lowers to it) needs the copy too.
                 if self.borrow_vars.ref_params.contains_key(&recv_name)
+                    || self
+                        .borrow_vars
+                        .elem_borrow_roots
+                        .contains(recv_name.as_str())
                     || self
                         .borrow_vars
                         .for_loop_owned_agg_vars
@@ -8856,6 +8866,13 @@ impl<'ctx> super::Codegen<'ctx> {
             ExprKind::Identifier(n) => n.clone(),
             _ => return val,
         };
+        // B-2026-09-23-31 — a `for` loop's TUPLE element consumed whole
+        // (`out.push(p)`): the same bit-copy as the `String` element below,
+        // one aggregate up. Struct/enum elements keep the callee-entry-copy
+        // model (see `for_loop_owned_agg_vars`), so only tuples come here.
+        if self.borrow_vars.elem_borrow_roots.contains(name.as_str()) {
+            return self.clone_loop_elem_whole_move(arg_expr, val, false);
+        }
         if !self.borrow_vars.owned_vecstr_params.contains(&name)
             && !self.borrow_vars.for_loop_borrow_vars.contains(&name)
         {

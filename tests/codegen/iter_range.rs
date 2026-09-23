@@ -4009,3 +4009,90 @@ fn main() {
 "#;
     assert_eq!(run_program(src).as_deref(), Some("56990\n"));
 }
+
+/// B-2026-09-23-32 — `names.iter().enumerate().map(|q| q.0 + q.1.1).collect()`
+/// over `Vec[(String, i64)]` double-freed although the closure reads only
+/// integers. The collect engine lowers `enumerate()` to `let q = (__i,
+/// __ice)`, placing the loop's element WHOLE in a tuple that then owns and
+/// frees it, while the container frees it too. The tuple literal now takes
+/// a copy of a `for` loop's aggregate element, and the nested projection
+/// push the `q.1.0` spelling lowers to (`v.push(t.1.0)`) now disarms the
+/// tuple's copy of the member. Measured before the fix: 23 valgrind errors
+/// at `-O0` on this program.
+#[test]
+fn test_e2e_enumerate_collect_over_heap_tuples_matches_interp() {
+    let out = run_program(
+        r#"
+struct P { name: String, n: i64 }
+enum E { A(String), B(i64) }
+fn mkps() -> Vec[(String, i64)] {
+    return [(f"alpha-{1}-long-enough-to-heap", 1), (f"beta-{2}-long-enough-to-heap", 2), (f"gamma-{3}-long-enough-to-heap", 3)];
+}
+fn leg_row() {
+    let names = mkps();
+    let v: Vec[i64] = names.iter().enumerate().map(|q| q.0 + q.1.1).collect();
+    println(f"row {v[0]} {v[1]} {v[2]} {names.len()}");
+}
+fn leg_struct() {
+    let qs: Vec[P] = [P { name: f"delta-{4}-long-enough", n: 4 }, P { name: f"eps-{5}-long-enough", n: 5 }];
+    let v: Vec[i64] = qs.iter().enumerate().map(|q| q.0 + q.1.n).collect();
+    println(f"st {v[0]} {v[1]} {qs[1].name}");
+}
+fn leg_destructure() {
+    let ps = mkps();
+    let v: Vec[i64] = ps.iter().enumerate().map(|(i, p)| i + p.0.len()).collect();
+    println(f"de {v[0]} {v[2]}");
+}
+fn leg_filter() {
+    let ps = mkps();
+    let v: Vec[i64] = ps.iter().enumerate().filter(|q| q.1.1 > 1).map(|q| q.0).collect();
+    println(f"fi {v.len()} {v[0]} {v[1]}");
+}
+fn leg_project_string() {
+    let ps = mkps();
+    let v: Vec[String] = ps.iter().enumerate().map(|q| q.1.0).collect();
+    let w: Vec[String] = ps.iter().map(|q| q.0).collect();
+    println(f"ps {v[1]} {w[2]} {ps[0].0}");
+}
+fn leg_tuple_literal() {
+    let ps = mkps();
+    for p in ps.iter() {
+        let q = (7, p);
+        println(f"tl {q.0} {q.1.0}");
+    }
+    let qs: Vec[P] = [P { name: f"zeta-{6}-long-enough", n: 6 }];
+    for p in qs {
+        let q = (8, p);
+        println(f"tl {q.0} {q.1.name}");
+    }
+    let es: Vec[E] = [E.A(f"eta-{7}-long-enough-to-heap"), E.B(3)];
+    for e in es.iter() {
+        let q = (9, e);
+        match q.1 { E.A(s) => println(f"tl {s}"), E.B(k) => println(f"tl {k}") }
+    }
+}
+fn leg_nested_push() {
+    let t: (i64, (String, i64)) = (7, (f"theta-{8}-long-enough-to-heap", 1));
+    let mut v: Vec[String] = [];
+    v.push(t.1.0);
+    println(f"np {v.len()} {v[0]}");
+}
+fn main() {
+    leg_row();
+    leg_struct();
+    leg_destructure();
+    leg_filter();
+    leg_project_string();
+    leg_tuple_literal();
+    leg_nested_push();
+    println("done");
+}
+"#,
+    );
+    if let Some(out) = out {
+        assert_eq!(
+            out, "row 1 3 5 3\nst 4 6 eps-5-long-enough\nde 27 29\nfi 2 1 2\nps beta-2-long-enough-to-heap gamma-3-long-enough-to-heap alpha-1-long-enough-to-heap\ntl 7 alpha-1-long-enough-to-heap\ntl 7 beta-2-long-enough-to-heap\ntl 7 gamma-3-long-enough-to-heap\ntl 8 zeta-6-long-enough\ntl eta-7-long-enough-to-heap\ntl 3\nnp 1 theta-8-long-enough-to-heap\ndone\n",
+            "every leg must match --interp; got {out:?}"
+        );
+    }
+}
