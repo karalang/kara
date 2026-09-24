@@ -138,6 +138,9 @@ pub(crate) struct SpanTables {
     /// Vec[T]`) binds `ps` as an alias with no scope-exit free instead of a
     /// second owner that double-frees the container's buffer (B-2026-07-18-4).
     pub(crate) borrow_vec_typed_exprs: HashSet<(usize, usize)>,
+    /// Spans of every `mut ref T`-typed expression (from
+    /// `Program.mut_ref_typed_exprs`, B-2026-09-24-7).
+    pub(crate) mut_ref_typed_exprs: HashSet<(usize, usize)>,
     /// Spans of every `Iterator[..]`-typed expression (from
     /// `Program.iterator_typed_exprs`) — the sound gate for materializing an
     /// iterator-let binding (B-2026-07-11-19).

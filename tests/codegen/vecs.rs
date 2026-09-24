@@ -9279,3 +9279,49 @@ fn main() {
         );
     }
 }
+
+// B-2026-09-24-6 — reading an `Option`/`Result` field out of a container
+// element (`match g[0].o`, `let x = g[0].o`, `z = g[0].o`, and through a
+// tuple hop) copies the payload and leaves the element intact, as the
+// interpreter does; and a tuple holding a struct whose heap hangs off an
+// `Option` field frees it.
+#[test]
+fn test_e2e_elem_optres_field_reads_copy_and_match_interp() {
+    let out = run_program(
+        r#"
+struct G { o: Option[String], r: Result[String, i64], n: i64 }
+fn mk(i: i64) -> String { f"alpha-{i}-long-enough-to-heap" }
+fn mg(i: i64) -> G { G { o: Some(mk(i)), r: Ok(mk(i + 10)), n: i } }
+fn cons(o: Option[String]) -> i64 { match o { Some(s) => s.len(), None => 0 } }
+fn main() {
+    let g: Vec[G] = [mg(1), mg(2)];
+    let mut out: Vec[String] = [];
+    match g[0].o { Some(s) => println(s), None => {} }
+    match g[0].o { Some(s) => out.push(s), None => {} }
+    if let Some(s) = g[0].o { out.push(s); }
+    match g[1].r { Ok(s) => out.push(s), Err(_) => {} }
+    let x = g[1].o;
+    let y = g[1].o;
+    let mut z: Option[String] = None;
+    z = g[0].o;
+    println(f"{out.len()} {cons(x)} {cons(y)} {cons(z)} {g[0].o.is_some()}");
+    let h: Vec[(i64, G)] = [(1, mg(3))];
+    match h[0].1.o { Some(s) => out.push(s), None => {} }
+    match h[0].1.o { Some(s) => out.push(s), None => {} }
+    let mut q: Option[String] = None;
+    q = h[0].1.o;
+    q = h[0].1.o;
+    println(f"{out.len()} {cons(q)} {out[4]}");
+    let t = (7, mg(4));
+    println(f"{t.0} {t.1.n}");
+}
+"#,
+    );
+    assert_eq!(
+        out.as_deref(),
+        Some(
+            "alpha-1-long-enough-to-heap\n3 27 27 27 true\n5 27 alpha-3-long-enough-to-heap\n7 4\n"
+        ),
+        "must match --interp"
+    );
+}

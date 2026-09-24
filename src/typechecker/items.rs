@@ -5551,13 +5551,17 @@ impl<'a> super::TypeChecker<'a> {
                 // behind its header, so that spelling keeps its loud build
                 // failure rather than becoming a double free.
                 //
-                // A bare-identifier initializer only: that is the shape the
-                // Let arm borrow-elides. A field initializer (`let x =
-                // p.source` over a `ref String` field) takes a different path
-                // whose binding registers no String cleanup today, and giving
-                // it one double-frees (`asan_borrowed_field_let_bound`).
+                // A bare-identifier initializer, or a field read (`let x =
+                // p.source` over a field DECLARED `ref String`,
+                // B-2026-09-24-8): those are the shapes the Let arm
+                // borrow-elides. Codegen re-checks the field's declared type
+                // before eliding, so a borrowed aggregate's OWNED field (the
+                // B-2026-07-17-20 deep copy) keeps its own cleanup.
                 if matches!(pattern.kind, PatternKind::Binding(_))
-                    && matches!(value.kind, ExprKind::Identifier(_))
+                    && matches!(
+                        value.kind,
+                        ExprKind::Identifier(_) | ExprKind::FieldAccess { .. }
+                    )
                     && matches!(&expected_ty, Type::Ref(inner) if matches!(**inner, Type::Str))
                 {
                     self.record_pattern_binding_surface_types(pattern, &expected_ty);

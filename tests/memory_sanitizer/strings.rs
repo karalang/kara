@@ -8922,3 +8922,44 @@ fn main() {
         4,
     );
 }
+
+// B-2026-09-24-8 — `let x = p.source` over a field declared `ref String`
+// registers `x` as a String (so `x.len()` dispatches) and takes no cleanup of
+// its own: the String's owner frees it.
+#[test]
+fn asan_ref_string_field_let_is_an_alias() {
+    assert_clean_asan_run_min_allocs(
+        r#"
+struct Src { source: ref String, position: i64 }
+struct Outer { inner: Src, k: i64 }
+fn mk(s: ref String) -> ref Src { Src { source: s, position: 0 } }
+fn count(p: ref Src) -> i64 { let x = p.source; let mut t = 0; for c in x.chars() { if c == 'a' { t = t + 1; } } t + x.len() }
+fn main() {
+    let s = String.from("banana bread");
+    let p = mk(s);
+    println(f"{count(p)}");
+    let mut i = 0;
+    while i < 3 { let x = p.source; println(f"{x.len() + i}"); i = i + 1; }
+    let x = p.source;
+    let y = x;
+    println(f"{x.contains("bread")} {y.len()}");
+    let s2 = String.from("second");
+    let o = Outer { inner: Src { source: s2, position: 1 }, k: 2 };
+    let z = o.inner.source;
+    println(f"{z.to_uppercase()} {z.len()}");
+    println(s);
+}
+"#,
+        &[
+            "16",
+            "12",
+            "13",
+            "14",
+            "true 12",
+            "SECOND 6",
+            "banana bread",
+        ],
+        "asan_ref_string_field_let_is_an_alias",
+        2,
+    );
+}

@@ -6181,6 +6181,33 @@ impl<'ctx> super::Codegen<'ctx> {
         if !patterns.iter().any(pattern_consumes_field) {
             return;
         }
+        // B-2026-09-24-6 — a place reached through a container ELEMENT
+        // (`match g[0].o { Some(s) => … }`, `g[0].1.o`) is read, not moved:
+        // the binding takes a COPY of the payload and the element keeps its
+        // own, the way `let w = v[i]` deep-clones (B-2026-06-14-11) and the
+        // interpreter copies. Zeroing the element instead emptied it, so a
+        // second match on the same field found `None`, and even a print-only
+        // arm (which owns its binding too) emptied it; through a tuple hop,
+        // where the resolver below finds no place, nothing was zeroed and the
+        // two bindings freed one buffer twice. Only an inline String/Vec
+        // payload is copied; any other shape keeps the handling below.
+        if Self::place_chain_reaches_index(scrutinee) {
+            if let ExprKind::FieldAccess { object, field } = &scrutinee.kind {
+                let field_te = self.plain_field_type_expr(object, field);
+                let is_optres = field_te.as_ref().is_some_and(|te| {
+                    matches!(&te.kind, TypeKind::Path(p)
+                        if p.segments.last().map(|s| s.as_str())
+                            == Some(if want_result { "Result" } else { "Option" }))
+                });
+                if is_optres
+                    && field_te.is_some_and(|te| {
+                        self.clone_index_rooted_optres_binding(&te, path, patterns)
+                    })
+                {
+                    return;
+                }
+            }
+        }
         let Some((is_result, _field_te, src_ptr)) = self.place_optres_field_move_info(scrutinee)
         else {
             return;
@@ -6208,6 +6235,77 @@ impl<'ctx> super::Codegen<'ctx> {
         } else {
             self.zero_option_field_tag_at(src_ptr);
         }
+    }
+
+    /// Does this place chain pass through an `Index` (`g[0].o`, `g[0].1.o`)?
+    fn place_chain_reaches_index(e: &Expr) -> bool {
+        match &e.kind {
+            ExprKind::Index { .. } => true,
+            ExprKind::FieldAccess { object, .. } | ExprKind::TupleIndex { object, .. } => {
+                Self::place_chain_reaches_index(object)
+            }
+            _ => false,
+        }
+    }
+
+    /// B-2026-09-24-6 — give a consuming arm's payload binding its own copy
+    /// of a container element's `Option`/`Result` field payload, so the
+    /// element stays intact. The binding already holds a bit-copy of the
+    /// element's `{ptr,len,cap}` and a free of its own; this replaces that
+    /// alias with a deep clone. Returns `false`, having emitted nothing, for
+    /// any shape it does not handle (a non-`String`/`Vec` payload, a nested
+    /// sub-pattern, a binding that is not a plain header slot), which leaves
+    /// the caller's source-zeroing in charge as before.
+    fn clone_index_rooted_optres_binding(
+        &mut self,
+        field_te: &TypeExpr,
+        path: &[String],
+        patterns: &[Pattern],
+    ) -> bool {
+        let [only] = patterns else {
+            return false;
+        };
+        let PatternKind::Binding(name) = &only.kind else {
+            return false;
+        };
+        let payload_te = match path.last().map(|s| s.as_str()) {
+            Some("Some") => Self::option_payload_te(field_te),
+            Some("Ok") => Self::result_payload_tes(field_te).map(|(ok, _)| ok),
+            Some("Err") => Self::result_payload_tes(field_te).map(|(_, err)| err),
+            _ => None,
+        };
+        let Some(payload_te) = payload_te else {
+            return false;
+        };
+        if !self.result_half_is_direct_vecstr(&payload_te) {
+            return false;
+        }
+        if self.borrow_vars.ref_params.contains_key(name.as_str()) {
+            return false;
+        }
+        let Some(slot) = self.variables.get(name.as_str()).map(|s| (s.ptr, s.ty)) else {
+            return false;
+        };
+        let (slot_ptr, slot_ty) = slot;
+        let is_header = matches!(slot_ty, inkwell::types::BasicTypeEnum::StructType(st)
+            if st.count_fields() == 3);
+        if !is_header {
+            return false;
+        }
+        let Some(fn_val) = self.current_fn else {
+            return false;
+        };
+        let clone_fn = self.emit_clone_fn_for_type_expr(&payload_te);
+        let src = self.create_entry_alloca(fn_val, "elem.optres.src", slot_ty);
+        let alias = self
+            .builder
+            .build_load(slot_ty, slot_ptr, "elem.optres.alias")
+            .unwrap();
+        self.builder.build_store(src, alias).unwrap();
+        self.builder
+            .build_call(clone_fn, &[src.into(), slot_ptr.into()], "")
+            .unwrap();
+        true
     }
 
     /// Store a tag no `Ok`/`Err` guard can match into a moved-from `Result`
@@ -6293,8 +6391,14 @@ impl<'ctx> super::Codegen<'ctx> {
         let Some(slot_ptr) = self.variables.get(var_name).map(|s| s.ptr) else {
             return;
         };
+        // B-2026-09-24-6 (let leg) — `let x = g[0].o` copies out of the
+        // element instead of emptying it; see the pattern leg.
+        let copied = self.clone_index_rooted_optres_field_into(value, &field_te, slot_ptr);
         if is_result {
             self.track_inline_result_payload_var(var_name, slot_ptr, &field_te);
+            if copied {
+                return;
+            }
             let Some(layout) = self.type_decls.enum_layouts.get("Result") else {
                 return;
             };
@@ -6302,8 +6406,57 @@ impl<'ctx> super::Codegen<'ctx> {
             self.zero_result_payload_area(result_ty, src_ptr, "respl.letmove");
         } else {
             self.track_inline_option_payload_var(var_name, slot_ptr, &field_te);
+            if copied {
+                return;
+            }
             self.zero_option_field_tag_at(src_ptr);
         }
+    }
+
+    /// B-2026-09-24-6 — replace the bit-copy of a container element's
+    /// `Option`/`Result` field sitting in `slot_ptr` with a deep clone, so
+    /// the new owner and the element each hold their own payload. Returns
+    /// `false`, emitting nothing, unless `value` is an element-rooted place
+    /// (`g[0].o`) whose field is an `Option` over a direct String/Vec or a
+    /// `Result` whose halves are each a direct String/Vec or a primitive.
+    fn clone_index_rooted_optres_field_into(
+        &mut self,
+        value: &Expr,
+        field_te: &TypeExpr,
+        slot_ptr: PointerValue<'ctx>,
+    ) -> bool {
+        if !Self::place_chain_reaches_index(value) {
+            return false;
+        }
+        let half_ok = |this: &Self, h: &TypeExpr| {
+            this.result_half_is_direct_vecstr(h)
+                || crate::codegen::vec_method::is_trivially_copyable_te(h)
+        };
+        let admitted = if let Some(pt) = Self::option_payload_te(field_te) {
+            self.result_half_is_direct_vecstr(&pt)
+        } else if let Some((ok, err)) = Self::result_payload_tes(field_te) {
+            half_ok(self, &ok) && half_ok(self, &err)
+        } else {
+            false
+        };
+        if !admitted {
+            return false;
+        }
+        let Some(fn_val) = self.current_fn else {
+            return false;
+        };
+        let slot_ty = self.llvm_type_for_type_expr(field_te);
+        let clone_fn = self.emit_clone_fn_for_type_expr(field_te);
+        let src = self.create_entry_alloca(fn_val, "elem.optres.field.src", slot_ty);
+        let alias = self
+            .builder
+            .build_load(slot_ty, slot_ptr, "elem.optres.field.alias")
+            .unwrap();
+        self.builder.build_store(src, alias).unwrap();
+        self.builder
+            .build_call(clone_fn, &[src.into(), slot_ptr.into()], "")
+            .unwrap();
+        true
     }
 
     /// B-2026-07-21-16 (assign leg) — `x = <ownedplace>.optresfield;`: zero
@@ -6311,7 +6464,26 @@ impl<'ctx> super::Codegen<'ctx> {
     /// its let-site) owns the moved-in payload; if the target is untracked
     /// the move can at worst leak (strictly better than the double-free),
     /// and registering here would double up on a tracked target.
-    pub(super) fn suppress_place_optres_field_move_source(&mut self, value: &Expr) {
+    ///
+    /// B-2026-09-24-6 — with the TARGET's slot in hand, a container
+    /// element's field (`x = g[0].o`) is copied instead: the target takes a
+    /// deep clone and the element keeps its payload.
+    pub(super) fn suppress_place_optres_field_move_source_into(
+        &mut self,
+        value: &Expr,
+        target_slot: Option<PointerValue<'ctx>>,
+    ) {
+        // Resolved from the declared field type rather than through
+        // `place_optres_field_move_info`, whose place walk does not follow a
+        // tuple hop: `x = g[0].1.o` found no place, zeroed nothing, and the
+        // element and `x` freed one buffer twice.
+        if let (Some(slot), ExprKind::FieldAccess { object, field }) = (target_slot, &value.kind) {
+            if let Some(field_te) = self.plain_field_type_expr(object, field) {
+                if self.clone_index_rooted_optres_field_into(value, &field_te, slot) {
+                    return;
+                }
+            }
+        }
         let Some((is_result, _field_te, src_ptr)) = self.place_optres_field_move_info(value) else {
             return;
         };

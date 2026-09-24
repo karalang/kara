@@ -4952,6 +4952,43 @@ impl<'ctx> super::Codegen<'ctx> {
                             .insert(var_name.clone(), val_ty);
                         return Ok(());
                     }
+                    // B-2026-09-24-7 — `let t = r;` over a `mut ref` parameter.
+                    // `t` is the same `mut ref` as `r`, so it binds as a second
+                    // POINTER to the caller's place, not as a bit-copy of the
+                    // header: a `push` through a copy reallocated the buffer
+                    // behind the caller's header, which then read the stale
+                    // length and freed the old buffer a second time. `t`
+                    // inherits `r`'s whole dispatch record and owns nothing,
+                    // exactly like the parameter it aliases.
+                    if let ExprKind::Identifier(src) = &value.kind {
+                        if src != var_name
+                            && !self.variables.contains_key(var_name)
+                            && self.borrow_vars.signature_ref_params.contains(src.as_str())
+                            && self
+                                .span_tables
+                                .mut_ref_typed_exprs
+                                .contains(&(value.span.offset, value.span.length))
+                        {
+                            if let Some(place) = self.get_data_ptr(src) {
+                                let fn_val = self.current_fn.expect("let inside a function");
+                                let ptr_ty = self.context.ptr_type(AddressSpace::default());
+                                let alloca =
+                                    self.create_entry_alloca(fn_val, var_name, ptr_ty.into());
+                                self.builder.build_store(alloca, place).unwrap();
+                                self.variables.insert(
+                                    var_name.clone(),
+                                    VarSlot {
+                                        ptr: alloca,
+                                        ty: ptr_ty.into(),
+                                    },
+                                );
+                                let snap = self.take_var_metadata(src);
+                                self.restore_var_metadata(src, snap.clone());
+                                self.restore_var_metadata(var_name, snap);
+                                return Ok(());
+                            }
+                        }
+                    }
                     if let Some(inner_te) = self.ref_return_inner_for_call(value) {
                         let fn_val = self.current_fn.expect("let inside a function");
                         // Mark this as the one sanctioned borrow-return call
@@ -6434,6 +6471,28 @@ impl<'ctx> super::Codegen<'ctx> {
                         .span_tables
                         .borrow_vec_typed_exprs
                         .contains(&(value.span.offset, value.span.length));
+                // B-2026-09-24-8 — `let x = p.source` over a field DECLARED
+                // `ref String`. The field read already derefs to a bit-copy of
+                // the borrowed header; the typechecker now registers `x` as a
+                // String so `x.len()` dispatches, and the binding must take no
+                // cleanup of its own (the String's owner frees it). Keyed on
+                // the DECLARED field type, so an owned field reached through a
+                // borrowed aggregate keeps the B-2026-07-17-20 deep copy.
+                let rhs_is_declared_ref_string_field = match &value.kind {
+                    ExprKind::FieldAccess { object, field } => {
+                        self.span_tables
+                            .borrow_vec_typed_exprs
+                            .contains(&(value.span.offset, value.span.length))
+                            && self.plain_field_type_expr(object, field).is_some_and(|te| {
+                                matches!(&te.kind, TypeKind::Ref(inner)
+                                    if matches!(&inner.kind, TypeKind::Path(p)
+                                        if p.segments.len() == 1 && p.segments[0] == "String"))
+                            })
+                    }
+                    _ => false,
+                };
+                let rhs_is_borrowed_payload_vec =
+                    rhs_is_borrowed_payload_vec || rhs_is_declared_ref_string_field;
                 let borrow_elided = borrow_elided || rhs_is_borrowed_payload_vec;
                 let val = if borrow_elided {
                     val
@@ -14557,7 +14616,15 @@ impl<'ctx> super::Codegen<'ctx> {
                     // — a field MOVE into an existing binding. Zero the source
                     // so the owning struct's drop skips the payload now in x's
                     // slot (x's own let-site cleanup owns it).
-                    self.suppress_place_optres_field_move_source(value);
+                    let assign_slot = match &target.kind {
+                        ExprKind::Identifier(n)
+                            if !self.borrow_vars.ref_params.contains_key(n.as_str()) =>
+                        {
+                            self.variables.get(n.as_str()).map(|s| s.ptr)
+                        }
+                        _ => None,
+                    };
+                    self.suppress_place_optres_field_move_source_into(value, assign_slot);
                     // B-2026-07-22-2 (assign leg): `x = mk().s;` — same move
                     // semantics against the staged fresh-temp slot.
                     self.consume_freshtemp_field_move(value);

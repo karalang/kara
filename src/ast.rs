@@ -1087,6 +1087,11 @@ pub struct Program {
     /// double-frees the container's buffer (B-2026-07-18-4). Reuses the
     /// span-keyed `StringTypedExprsTable` shape.
     pub borrow_vec_typed_exprs: StringTypedExprsTable,
+    /// Spans of every expression typed `mut ref T` (B-2026-09-24-7). Codegen
+    /// binds `let t = r` over a `mut ref` parameter `r` as a second pointer to
+    /// the caller's place, so a reallocating write through `t` updates the
+    /// header the caller will read and free.
+    pub mut_ref_typed_exprs: StringTypedExprsTable,
     /// Spans of every `Iterator[..]`-typed expression — the sound gate for
     /// materialized iterator-let inlining (B-2026-07-11-19).
     pub iterator_typed_exprs: IteratorTypedExprsTable,

@@ -49,7 +49,7 @@ use super::state::{ColumnVarInfo, TensorVarInfo, VarSlot};
 /// phase-5-diagnostics "codegen type-changing-shadow" entry. Adding a new
 /// per-variable map to `Codegen` REQUIRES adding it here too, or a shadow
 /// will leak its stale tag.
-#[derive(Default)]
+#[derive(Default, Clone)]
 pub(super) struct VarMetadataSnapshot<'ctx> {
     var_type_names: Option<String>,
     tuple_var_elem_type_names: Option<Vec<Option<String>>>,

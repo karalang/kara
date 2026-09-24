@@ -11016,6 +11016,17 @@ impl<'ctx> super::Codegen<'ctx> {
                     // 16-byte refcount block leaked, once per tuple, with
                     // the `Drop` body correct on every surface.
                     || self.struct_elem_owns_shared_field(te)
+                    // B-2026-09-24-6 — a plain STRUCT element whose heap hangs
+                    // off an `Option`/`Result` FIELD (`struct G { o:
+                    // Option[String], n: i64 }`). The `tuple_elem_optres_drop_ok`
+                    // disjunct above asks that of the element itself, and
+                    // `type_expr_has_drop_heap` answers `false` for every
+                    // `Option`/`Result`, so `(i64, G)` took the LLVM-type drop,
+                    // which cannot see into the tag-guarded payload: the
+                    // `String` leaked once per tuple, as a local and as a `Vec`
+                    // element alike, while `H { g: G }` (a struct holding the
+                    // same `G`) was clean through its own synthesized drop.
+                    || self.struct_elem_owns_optres_heap_field(te, &mut Vec::new())
                     // B-2026-09-20-14 — a GENERIC enum element whose monomorph
                     // heap-BOXES its payload. The same relation to
                     // `type_expr_has_drop_heap` every disjunct above bears:
@@ -11079,6 +11090,42 @@ impl<'ctx> super::Codegen<'ctx> {
         // the enum-payload position only, by this guard.
         !self.type_decls.shared_types.contains_key(name.as_str())
             && self.struct_owns_shared_field(name, &mut Vec::new())
+    }
+
+    /// B-2026-09-24-6 — is `te` a plain (non-`shared`) user struct with an
+    /// `Option`/`Result` field that owns heap, directly or through a nested
+    /// plain struct field? The struct-level question behind the
+    /// `tuple_elem_optres_drop_ok` disjunct of
+    /// [`Self::tuple_elem_needs_deep_drop`], in the same relation
+    /// [`Self::struct_elem_owns_shared_field`] bears to the shared one.
+    pub(super) fn struct_elem_owns_optres_heap_field(
+        &self,
+        te: &TypeExpr,
+        visiting: &mut Vec<String>,
+    ) -> bool {
+        let TypeKind::Path(p) = &te.kind else {
+            return false;
+        };
+        let Some(name) = p.segments.last() else {
+            return false;
+        };
+        if self.type_decls.shared_types.contains_key(name.as_str())
+            || self.type_decls.shared_type_names.contains(name.as_str())
+            || visiting.iter().any(|v| v == name)
+        {
+            return false;
+        }
+        let Some(fields) = self.type_decls.struct_field_type_exprs.get(name.as_str()) else {
+            return false;
+        };
+        let fields = fields.clone();
+        visiting.push(name.clone());
+        let owns = fields.iter().any(|f| {
+            self.tuple_elem_optres_drop_ok(f)
+                || self.struct_elem_owns_optres_heap_field(f, visiting)
+        });
+        visiting.pop();
+        owns
     }
 
     /// True when a tuple ELEMENT of type `Option[P]` / `Result[O, E]` owns heap

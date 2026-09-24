@@ -6963,6 +6963,7 @@ impl<'ctx> Codegen<'ctx> {
                 string_typed_exprs: HashSet::new(),
                 char_typed_exprs: HashSet::new(),
                 borrow_vec_typed_exprs: HashSet::new(),
+                mut_ref_typed_exprs: HashSet::new(),
                 iterator_typed_exprs: HashSet::new(),
                 fn_value_typed_exprs: HashMap::new(),
                 dbg_arg_type_exprs: HashMap::new(),
@@ -8316,6 +8317,7 @@ impl<'ctx> Codegen<'ctx> {
         self.span_tables.string_typed_exprs = program.string_typed_exprs.clone();
         self.span_tables.char_typed_exprs = program.char_typed_exprs.clone();
         self.span_tables.borrow_vec_typed_exprs = program.borrow_vec_typed_exprs.clone();
+        self.span_tables.mut_ref_typed_exprs = program.mut_ref_typed_exprs.clone();
         self.span_tables.iterator_typed_exprs = program.iterator_typed_exprs.clone();
         self.span_tables.fn_value_typed_exprs = program.fn_value_typed_exprs.clone();
         self.span_tables.dbg_arg_type_exprs = program.dbg_arg_type_exprs.clone();
@@ -9971,6 +9973,7 @@ impl<'ctx> Codegen<'ctx> {
         let mut t_method_callee_types = tp.method_callee_types.clone();
         let mut t_string_typed_exprs = tp.string_typed_exprs.clone();
         let mut t_borrow_vec_typed_exprs = tp.borrow_vec_typed_exprs.clone();
+        let mut t_mut_ref_typed_exprs = tp.mut_ref_typed_exprs.clone();
         let mut t_unsigned_vector_exprs = tp.unsigned_vector_exprs.clone();
         let mut t_vector_typed_exprs = tp.vector_typed_exprs.clone();
         let mut t_unsigned_int_exprs = tp.unsigned_int_exprs.clone();
@@ -10105,6 +10108,10 @@ impl<'ctx> Codegen<'ctx> {
                 std::mem::swap(
                     &mut self.span_tables.borrow_vec_typed_exprs,
                     &mut t_borrow_vec_typed_exprs,
+                );
+                std::mem::swap(
+                    &mut self.span_tables.mut_ref_typed_exprs,
+                    &mut t_mut_ref_typed_exprs,
                 );
                 std::mem::swap(
                     &mut self.span_tables.unsigned_vector_exprs,

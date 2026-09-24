@@ -9188,6 +9188,28 @@ impl<'a> super::Interpreter<'a> {
             StmtKind::Let {
                 pattern, ty, value, ..
             } => {
+                // B-2026-09-24-7 — `let t = r;` over a `mut ref` binding makes
+                // `t` the same reference, so a write through `t` must reach
+                // what `r` names. Binding `t` to a copy lost every such write
+                // at `r`'s caller (`push` through `t`, then the caller read the
+                // pre-call length). Alias both names to one cell, the way a
+                // `mut ref` closure capture does; codegen binds `t` as a second
+                // pointer to the caller's place.
+                if let (crate::ast::PatternKind::Binding(name), ExprKind::Identifier(src)) =
+                    (&pattern.kind, &value.kind)
+                {
+                    let is_mut_ref = self
+                        .typecheck_result
+                        .expr_types
+                        .get(&crate::resolver::SpanKey::from_span(&value.span))
+                        .is_some_and(|t| matches!(t, crate::typechecker::types::Type::MutRef(_)));
+                    if is_mut_ref && name != src {
+                        if let Some(cell) = self.env.wrap_capture(src) {
+                            self.env.define(name.clone(), cell);
+                            return Ok(Value::Unit);
+                        }
+                    }
+                }
                 // Thread the binding's `Tensor[Elem, …]` annotation (when
                 // present) into a fill-type hint for any `Tensor.zeros` /
                 // `Tensor.ones` in the RHS — the only place the concrete

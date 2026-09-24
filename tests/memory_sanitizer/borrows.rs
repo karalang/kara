@@ -1714,3 +1714,46 @@ fn main() {
         20,
     );
 }
+
+// B-2026-09-24-7 — `let t = r;` over a `mut ref` parameter is the same
+// reference, so a reallocating write through `t` must reach the caller: the
+// alias binds as a second pointer to the caller's place, not a header copy.
+#[test]
+fn asan_mut_ref_param_alias_realloc_frees_once() {
+    assert_clean_asan_run_min_allocs(
+        r#"
+struct P { name: String, xs: Vec[i64] }
+fn grow(r: mut ref Vec[i64]) -> i64 { let t = r; let mut i = 0; while i < 40 { t.push(i); i = i + 1; } t.len() }
+fn app(r: mut ref String) -> i64 { let t = r; t.push_str("-x-long-enough-to-force-a-realloc-of-the-buffer"); t.len() }
+fn fill(r: mut ref P) { let t = r; t.name.push_str("-grown-past-its-original-capacity-for-sure"); let mut i = 0; while i < 20 { t.xs.push(i); i = i + 1; } }
+fn chain(r: mut ref Vec[String]) -> i64 { let t = r; let u = t; let mut i = 0; while i < 10 { u.push(f"s{i}"); i = i + 1; } u.len() }
+fn bump(r: mut ref i64) { let t = r; *t = *t + 5; }
+fn main() {
+    let mut v: Vec[i64] = [1, 2, 3];
+    let n = grow(mut v);
+    println(f"{n} {v.len()}");
+    let mut s = f"payload-{1}-aaaaaaaaaaaaaaaaaaaaaaaaaaaaaa";
+    let m = app(mut s);
+    println(f"{m} {s.len()}");
+    let mut p = P { name: f"n{1}", xs: [1] };
+    fill(mut p);
+    println(f"{p.name} {p.xs.len()}");
+    let mut w: Vec[String] = [f"a{0}"];
+    let k = chain(mut w);
+    println(f"{k} {w.len()} {w[10]}");
+    let mut c = 1;
+    bump(mut c);
+    println(f"{c}");
+}
+"#,
+        &[
+            "43 43",
+            "87 87",
+            "n1-grown-past-its-original-capacity-for-sure 21",
+            "11 11 s9",
+            "6",
+        ],
+        "asan_mut_ref_param_alias_realloc_frees_once",
+        4,
+    );
+}

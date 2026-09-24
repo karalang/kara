@@ -744,6 +744,13 @@ pub fn lower_program(program: &mut Program, tc: &TypeCheckResult) {
             is_vec_like.then_some((k.0, k.1))
         })
         .collect();
+    // Spans of every `mut ref T`-typed expression (B-2026-09-24-7): codegen's
+    // Let arm binds `let t = r` over a `mut ref` parameter as a pointer alias.
+    program.mut_ref_typed_exprs = tc
+        .expr_types
+        .iter()
+        .filter_map(|(k, ty)| matches!(ty, Type::MutRef(_)).then_some((k.0, k.1)))
+        .collect();
     // Spans of every `Iterator[..]`-typed expression — the sound gate for
     // materialized iterator-let inlining (B-2026-07-11-19): codegen only
     // inlines a `let it = <chain>` when the RHS is genuinely `Iterator`-typed,
