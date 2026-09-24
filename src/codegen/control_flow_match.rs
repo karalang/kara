@@ -16145,6 +16145,13 @@ impl<'ctx> super::Codegen<'ctx> {
             },
         };
         let name = &name;
+        // B-2026-09-24-28 — an RC-promoted binding's slot is the box handle,
+        // not the `Option`: the box still owns the payload (the callee was
+        // handed a clone), so there is nothing here to disarm, and a
+        // whole-`Option` zero store would overrun the eight-byte slot.
+        if self.is_rc_fallback_optres_binding(name) {
+            return;
+        }
         // B-2026-08-08-25 leg 1: a source a read-only match left OWNING its
         // payload has no other owner to hand off to, so disarming it here
         // leaks. The premise of this disarm — "the map's arm already took the

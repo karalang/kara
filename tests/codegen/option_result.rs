@@ -10942,3 +10942,56 @@ fn main() {
     };
     assert_eq!(out, "58 34\n58 34\n29 heap-string-longer-than-sso-0 / 5 heap-string-longer-than-sso-1\n58 34\n58 34\n58 34\n6 8\n29 6\n58 34\n29 heap-string-longer-than-sso-0 / 5 heap-string-longer-than-sso-1\n58 34\nend\n", "got:\n{out}");
 }
+
+/// B-2026-09-24-28 — the payload shapes B-2026-09-24-23 did not reach: an
+/// RC-promoted local (consumed in one arm, read after the `match`) whose
+/// payload is a tuple, a three-tuple or a nested `Option`. The box now takes
+/// its value drop for these types, the boxed-enum chain registrar stands down
+/// for the handle slot as the inline ones already did, an arm binding of the
+/// box is not treated as a move out of it, and the argument handed to a
+/// callee (a free function or a method) is a deep copy, since the callee
+/// frees what it is given and the box still owns its own. On `main` the
+/// tuple and nested-`Option` spellings segfaulted on every compiled surface
+/// (invalid read, 40 B lost).
+/// This harness builds at the default opt level; the ASAN twin
+/// (`asan_rc_fallback_boxed_optres_payload_handed_a_copy`) is the cell that
+/// sees the memory fault.
+#[test]
+fn e2e_rc_fallback_boxed_optres_payload_handed_a_copy() {
+    let Some(out) = run_program(
+        r#"struct P { pos: i64 }
+impl P {
+    fn take(mut ref self, doc: Option[(String, i64)]) -> i64 { self.pos = self.pos + 1; match doc { Some((s, k)) => s.len() + k, None => 0 } }
+    fn item(mut ref self, t: i64) -> i64 { let doc = Some((f"heap-string-longer-than-sso-{t}", t)); let a = match t { 0 => self.take(doc), _ => 5 }; let b = match doc { Some((s, k)) => s.len() + k, None => 0 }; a + b }
+}
+fn take(doc: Option[(String, i64)]) -> i64 { match doc { Some((s, k)) => s.len() + k, None => 0 } }
+fn take3(doc: Option[(String, String, i64)]) -> i64 { match doc { Some((s, u, k)) => s.len() + u.len() + k, None => 0 } }
+fn takeo(doc: Option[Option[String]]) -> i64 { match doc { Some(Some(s)) => s.len(), _ => 0 } }
+fn back(doc: Option[(String, i64)]) -> Option[(String, i64)] { doc }
+fn tuple(t: i64) -> i64 { let doc = Some((f"heap-string-longer-than-sso-{t}", t)); let a = match t { 0 => take(doc), _ => 5 }; let b = match doc { Some((s, k)) => s.len() + k, None => 0 }; a + b }
+fn tuple3(t: i64) -> i64 { let doc = Some((f"heap-string-longer-than-sso-{t}", f"second-heap-string-longer-than-sso", t)); let a = match t { 0 => take3(doc), _ => 5 }; let b = match doc { Some((s, u, k)) => s.len() + u.len() + k, None => 0 }; a + b }
+fn nested(t: i64) -> i64 { let doc = Some(Some(f"heap-string-longer-than-sso-{t}")); let a = match t { 0 => takeo(doc), _ => 5 }; let b = match doc { Some(Some(s)) => s.len(), _ => 0 }; a + b }
+fn handback(t: i64) -> i64 { let doc = Some((f"heap-string-longer-than-sso-{t}", t)); let a = match t { 0 => match back(doc) { Some((s, k)) => s.len() + k, None => 0 }, _ => 5 }; let b = match doc { Some((s, k)) => s.len() + k, None => 0 }; a + b }
+fn armmove(t: i64) -> String { let doc = Some((f"heap-string-longer-than-sso-{t}", t)); let a = match t { 0 => take(doc), _ => 5 }; let b = match doc { Some((s, k)) => s, None => f"none" }; f"{a} {b}" }
+fn iflet(t: i64) -> i64 { let doc = Some((f"heap-string-longer-than-sso-{t}", t)); let a = match t { 0 => take(doc), _ => 5 }; let b = if let Some((s, k)) = doc { s.len() + k } else { 0 }; a + b }
+fn main() {
+    let mut p = P { pos: 0 };
+    println(f"{p.item(0)} {p.item(1)}");
+    println(f"{tuple(0)} {tuple(1)}");
+    println(f"{tuple3(0)} {tuple3(1)}");
+    println(f"{nested(0)} {nested(1)}");
+    println(f"{handback(0)} {handback(1)}");
+    println(f"{armmove(0)} / {armmove(1)}");
+    println(f"{iflet(0)} {iflet(1)}");
+    let doc = Some((f"heap-string-longer-than-sso-1", 1));
+    let mut n = 0;
+    for i in 0..3 { if i == 2 { n = n + take(doc); } else { n = n + match doc { Some((s, k)) => s.len(), None => 0 }; } }
+    println(n);
+    println("end")
+}
+"#,
+    ) else {
+        return;
+    };
+    assert_eq!(out, "58 35\n58 35\n126 69\n58 34\n58 35\n29 heap-string-longer-than-sso-0 / 5 heap-string-longer-than-sso-1\n58 35\n88\nend\n", "got:\n{out}");
+}

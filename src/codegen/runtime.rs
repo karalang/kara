@@ -1817,12 +1817,15 @@ impl<'ctx> super::Codegen<'ctx> {
         let ExprKind::Identifier(n) = &arg_expr.kind else {
             return val;
         };
-        if !self.is_rc_fallback_optres_binding(n)
-            || !self.call_arg_flows_into_return(callee, idx)
-            || self.optres_escaping_param_entry_copied(callee, idx)
-        {
+        if !self.is_rc_fallback_optres_binding(n) {
             return val;
         }
+        // Two ways the callee ends up owning what it was handed, and in both
+        // the box still owns the original: it hands the value back
+        // (B-2026-09-24-23), or its param is a transfer rather than an
+        // entry copy, which is how a boxed payload such as `(String, i64)`
+        // crosses (B-2026-09-24-28) -- the caller's move-out zero that pairs
+        // with it has no slot to zero here.
         let Some(te) = self
             .borrow_vars
             .borrow_accessor_let_payload
@@ -1831,6 +1834,36 @@ impl<'ctx> super::Codegen<'ctx> {
         else {
             return val;
         };
+        // A boxed user struct/enum interior is the exception to the transfer:
+        // the callee leaves it to the caller (B-2026-08-06-31), so a clone
+        // handed over would be freed by nobody.
+        let user_agg = |t: &TypeExpr| {
+            matches!(&t.kind, crate::ast::TypeKind::Path(p)
+            if p.segments.last().is_some_and(|s| {
+                s != "Option"
+                    && s != "Result"
+                    && (self.type_decls.struct_types.contains_key(s.as_str())
+                        || self.type_decls.enum_layouts.contains_key(s.as_str()))
+            }))
+        };
+        let payload_is_user_agg = match Self::option_payload_te(&te) {
+            Some(t) => user_agg(&t),
+            None => {
+                Self::result_payload_tes(&te).is_some_and(|(o, e)| user_agg(&o) || user_agg(&e))
+            }
+        };
+        let hands_back = self.call_arg_flows_into_return(callee, idx)
+            && !self.optres_escaping_param_entry_copied(callee, idx);
+        // Only when the box frees its own original: a payload with no value
+        // drop (`Option[Map[..]]`) still leaks it, and a clone would be a
+        // second leaked copy rather than a balanced one.
+        let transfers = !self.call_arg_flows_into_return(callee, idx)
+            && self.callee_optres_param_entry_copied(callee, idx).is_none()
+            && !payload_is_user_agg
+            && self.vec_elem_agg_drop_for_type_expr(&te).is_some();
+        if !hands_back && !transfers {
+            return val;
+        }
         let Some(fn_val) = self.current_fn else {
             return val;
         };
@@ -3174,6 +3207,14 @@ impl<'ctx> super::Codegen<'ctx> {
         // at the BOTTOM of the chain — the only level holding a real payload —
         // so the two compose, and the emit arm hands it to the leaf. With an
         // empty chain the leaf is this box and the behaviour is byte-identical.
+        // B-2026-09-24-28 — the boxed-payload sibling of the inline
+        // registrars' stand-down (`slot_is_rc_fallback_handle`): an
+        // RC-promoted binding's slot is the box handle, and the box's own
+        // value drop frees the payload, so reading the handle as an enum tag
+        // here would free nothing and a later move-out would zero the slot.
+        if self.slot_is_rc_fallback_handle(name, enum_slot) {
+            return;
+        }
         let (enum_ty, some_tag) = match self.type_decls.enum_layouts.get(enum_name) {
             Some(l) => (
                 l.llvm_type,

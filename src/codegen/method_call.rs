@@ -8660,6 +8660,11 @@ impl<'ctx> super::Codegen<'ctx> {
                     // helper learned int→float — after which it would have
                     // printed -56.0 instead, which is why this landed with it
                     // rather than after it.
+                    // B-2026-09-24-28 — the method twin of the free-fn call's
+                    // RC-box hand-over (`call_dispatch.rs`): the box keeps the
+                    // original, so a callee that takes the value gets a copy.
+                    let val =
+                        self.clone_rc_fallback_optres_handback_arg(&qualified, pidx, &a.value, val);
                     let val =
                         self.coerce_call_arg_scalar(fn_val, compiled_args.len(), val, &a.value);
                     compiled_args.push(val.into());
