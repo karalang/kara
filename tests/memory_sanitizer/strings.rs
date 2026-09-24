@@ -8874,3 +8874,51 @@ fn asan_boxed_array_payload_consumed_in_fstring_hole_no_double_free() {
             "b1729-fstring-hole-readonly-control",
         );
 }
+
+/// B-2026-09-24-1 — the memory half of the `ref String` re-bind fix: the new
+/// binding is an ALIAS of a buffer its owner frees, so it must register no
+/// cleanup of its own (a double free) and take no copy (a leak), across the
+/// parameter, `ref v[i]`, `Vec.get` payload and block-tail `clone` spellings.
+#[test]
+fn asan_ref_string_rebind_is_an_alias() {
+    assert_clean_asan_run_min_allocs(
+        r#"
+enum B { S(String), N }
+fn mk(i: i64) -> String { f"payload-{i}-long-enough-to-heap" }
+fn h(q: ref String) -> i64 { q.len() }
+fn by_param(r: ref String) -> String {
+    let t = r;
+    let u = t;
+    let c = t.contains("long");
+    let up = t.to_uppercase();
+    f"p {t.len()} {h(u)} {c} {up}"
+}
+fn main() {
+    let s = mk(1);
+    let mut i = 0;
+    while i < 2 { println(by_param(s)); i = i + 1; }
+    let v: Vec[String] = [mk(2), mk(33)];
+    let x = ref v[1];
+    let y = x;
+    println(f"x {y.len()} {y}");
+    let mut total = 0;
+    for j in 0..2 { match v.get(j) { None => {} Some(w) => { let t = w; total = total + t.len(); } } }
+    println(f"g {total}");
+    let bs: Vec[B] = [B.S(mk(4)), B.N];
+    match bs.get(0) { None => {} Some(B.S(w)) => { let t = w; println(f"e {t.len()} {t}"); } Some(B.N) => {} }
+    let c = { let t = x; t.clone() };
+    println(f"c {c} {s}");
+}
+"#,
+        &[
+            "p 29 29 true PAYLOAD-1-LONG-ENOUGH-TO-HEAP",
+            "p 29 29 true PAYLOAD-1-LONG-ENOUGH-TO-HEAP",
+            "x 30 payload-33-long-enough-to-heap",
+            "g 59",
+            "e 29 payload-4-long-enough-to-heap",
+            "c payload-33-long-enough-to-heap payload-1-long-enough-to-heap",
+        ],
+        "asan_ref_string_rebind_is_an_alias",
+        4,
+    );
+}

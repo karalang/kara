@@ -1741,7 +1741,28 @@ impl<'ctx> super::Codegen<'ctx> {
                 // checker and the interpreter both say it is, and what the
                 // WHOLE-element read has always done. No-op for every other
                 // receiver / field shape.
-                let v = self.compile_field_access(object, field)?;
+                //
+                // B-2026-09-24-2 — a field read whose receiver is a tuple-index
+                // read (`v[0].1.k`, `v[0].1.0.s`) is a PROJECTION of that
+                // receiver, exactly as a further tuple hop is (B-2026-09-23-38):
+                // the receiver must hand back the element's bits without its own
+                // whole-struct clone, and the leaf is cloned once, below, by
+                // `clone_vec_elem_heap_field_read`, which already walks tuple
+                // hops. Cloning the receiver as well left a tracked struct copy
+                // whose drop freed an enum field's payload that a `match` arm
+                // had already moved out and freed. The entry is removed again
+                // afterwards in case the receiver took a path that never
+                // consulted it.
+                let skip_key = matches!(object.kind, ExprKind::TupleIndex { .. })
+                    .then_some((object.span.offset, object.span.length));
+                if let Some(k) = skip_key {
+                    self.tidx_read_clone_skip.insert(k);
+                }
+                let v = self.compile_field_access(object, field);
+                if let Some(k) = skip_key {
+                    self.tidx_read_clone_skip.remove(&k);
+                }
+                let v = v?;
                 // B-2026-08-13-6 — the same alias one owner over: a heap field
                 // read off a `shared struct` hands back a pointer into the RC
                 // BOX. Tried after the container arm; each is a no-op for the

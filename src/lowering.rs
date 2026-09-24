@@ -722,6 +722,16 @@ pub fn lower_program(program: &mut Program, tc: &TypeCheckResult) {
         .expr_types
         .iter()
         .filter_map(|(k, ty)| {
+            // B-2026-09-24-1 — a SHARED `ref String` re-bind (`let t = r`)
+            // is the same whole-buffer alias as a `ref Vec[T]` one: the owner
+            // frees the buffer, so the alias must not. `mut ref String` stays
+            // out: a `push_str` through such an alias reallocates the owner's
+            // buffer behind its header, which a bit-copy alias cannot express.
+            if let Type::Ref(inner) = ty {
+                if matches!(inner.as_ref(), Type::Str) {
+                    return Some((k.0, k.1));
+                }
+            }
             let inner = match ty {
                 Type::Ref(inner) | Type::MutRef(inner) => inner.as_ref(),
                 _ => return None,

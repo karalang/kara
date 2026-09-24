@@ -5537,6 +5537,31 @@ impl<'a> super::TypeChecker<'a> {
                     );
                 }
                 self.bind_pattern_types(pattern, &expected_ty);
+                // B-2026-09-24-1 — a plain re-bind of a borrowed String
+                // (`let t = r;` with `r: ref String`, a `Some(w)` payload, or
+                // `let x = ref v[0]`) is `ref String`, which the `let`-route
+                // recorder leaves unrecorded, so codegen registered no String
+                // surface for `t` and `t.len()` found no dispatcher. Record
+                // the peeled `String`, as the borrowed-tuple destructure above
+                // does for its fields (B-2026-09-23-28); the alias's cleanup
+                // is suppressed at codegen's Let arm via
+                // `borrow_vec_typed_exprs`, which now admits `ref String`.
+                // `mut ref String` is left out on purpose: a mutating method
+                // through a bit-copied alias reallocates the owner's buffer
+                // behind its header, so that spelling keeps its loud build
+                // failure rather than becoming a double free.
+                //
+                // A bare-identifier initializer only: that is the shape the
+                // Let arm borrow-elides. A field initializer (`let x =
+                // p.source` over a `ref String` field) takes a different path
+                // whose binding registers no String cleanup today, and giving
+                // it one double-frees (`asan_borrowed_field_let_bound`).
+                if matches!(pattern.kind, PatternKind::Binding(_))
+                    && matches!(value.kind, ExprKind::Identifier(_))
+                    && matches!(&expected_ty, Type::Ref(inner) if matches!(**inner, Type::Str))
+                {
+                    self.record_pattern_binding_surface_types(pattern, &expected_ty);
+                }
                 // `@`-bearing let patterns additionally route through
                 // `check_pattern_against` (the `if let` / `let-else`
                 // path): it owns the cannot-double-consume rule

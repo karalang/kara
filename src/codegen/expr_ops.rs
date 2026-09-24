@@ -4566,30 +4566,47 @@ impl<'ctx> super::Codegen<'ctx> {
                 // both of them exactly the shape they are required to decline.
                 // This arm is pure resolution: it names a type, it neutralizes
                 // nothing.
+                //
+                // B-2026-09-24-2 — at ANY depth of tuple hops below the element
+                // (`v[0].1.0.s` over `Vec[(i64, (H, i64))]`), not only one: walk
+                // the `TupleIndex` chain down to its `Index` and follow the
+                // element `TypeExpr` along the collected path. The one-hop read
+                // is the same walk with a single hop.
+                let mut hops: Vec<u64> = vec![*index];
+                let mut chain_root: &Expr = object;
+                while let ExprKind::TupleIndex {
+                    object: inner,
+                    index: hop,
+                } = &chain_root.kind
+                {
+                    hops.push(*hop);
+                    chain_root = inner;
+                }
                 if let ExprKind::Index {
                     object: container,
                     index: cidx,
-                } = &object.kind
+                } = &chain_root.kind
                 {
                     if !matches!(&cidx.kind, ExprKind::Range { .. }) {
-                        if let Some(TypeKind::Tuple(elems)) =
-                            self.vec_index_elem_type_expr(container).map(|te| te.kind)
-                        {
-                            if let Some(TypeKind::Path(p)) =
-                                elems.get(*index as usize).map(|t| &t.kind)
-                            {
-                                if let Some(n) = p.segments.last() {
-                                    // Same fail-closed gate as the call source
-                                    // above: an element that names no type
-                                    // codegen has a layout for keeps refusing
-                                    // loudly rather than resolving to whatever
-                                    // unrelated struct shares the field name.
-                                    if self.type_decls.struct_field_names.contains_key(n.as_str())
-                                        || self.type_decls.enum_layouts.contains_key(n.as_str())
-                                        || self.type_decls.shared_types.contains_key(n.as_str())
-                                    {
-                                        return Some(n.clone());
-                                    }
+                        let mut leaf = self.vec_index_elem_type_expr(container);
+                        for hop in hops.iter().rev() {
+                            leaf = match leaf.map(|te| te.kind) {
+                                Some(TypeKind::Tuple(elems)) => elems.get(*hop as usize).cloned(),
+                                _ => None,
+                            };
+                        }
+                        if let Some(TypeKind::Path(p)) = leaf.as_ref().map(|t| &t.kind) {
+                            if let Some(n) = p.segments.last() {
+                                // Same fail-closed gate as the call source
+                                // above: an element that names no type
+                                // codegen has a layout for keeps refusing
+                                // loudly rather than resolving to whatever
+                                // unrelated struct shares the field name.
+                                if self.type_decls.struct_field_names.contains_key(n.as_str())
+                                    || self.type_decls.enum_layouts.contains_key(n.as_str())
+                                    || self.type_decls.shared_types.contains_key(n.as_str())
+                                {
+                                    return Some(n.clone());
                                 }
                             }
                         }

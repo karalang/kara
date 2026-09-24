@@ -10804,3 +10804,50 @@ fn normalize_leaves_empty_and_ascii_untouched() {
         Some("0\nplain ascii\nplain ascii\n".to_string())
     );
 }
+
+/// B-2026-09-24-1 — a plain re-bind of a borrowed `String` (`let t = r;` over
+/// a `ref String` parameter, `let y = x;` over `let x = ref v[1]`, and
+/// `let t = w;` over a `Vec.get` payload or a destructured `Vec.get` enum
+/// payload) failed to build with "no handler for method 'len'": the `let`
+/// recorded no String surface for `t`. Every spelling must now build, dispatch
+/// String methods and print what `--interp` prints.
+#[test]
+fn test_e2e_ref_string_rebind_dispatches_and_matches_interp() {
+    let out = run_program(
+        r#"
+enum B { S(String), N }
+fn mk(i: i64) -> String { f"payload-{i}-long-enough-to-heap" }
+fn h(q: ref String) -> i64 { q.len() }
+fn by_param(r: ref String) -> String {
+    let t = r;
+    let u = t;
+    let c = t.contains("long");
+    let up = t.to_uppercase();
+    f"p {t.len()} {h(u)} {c} {up}"
+}
+fn main() {
+    let s = mk(1);
+    let mut i = 0;
+    while i < 2 { println(by_param(s)); i = i + 1; }
+    let v: Vec[String] = [mk(2), mk(33)];
+    let x = ref v[1];
+    let y = x;
+    println(f"x {y.len()} {y}");
+    let mut total = 0;
+    for j in 0..2 { match v.get(j) { None => {} Some(w) => { let t = w; total = total + t.len(); } } }
+    println(f"g {total}");
+    let bs: Vec[B] = [B.S(mk(4)), B.N];
+    match bs.get(0) { None => {} Some(B.S(w)) => { let t = w; println(f"e {t.len()} {t}"); } Some(B.N) => {} }
+    let c = { let t = x; t.clone() };
+    println(f"c {c} {s}");
+}
+"#,
+    );
+    if let Some(out) = out {
+        assert_eq!(
+            out,
+            "p 29 29 true PAYLOAD-1-LONG-ENOUGH-TO-HEAP\np 29 29 true PAYLOAD-1-LONG-ENOUGH-TO-HEAP\nx 30 payload-33-long-enough-to-heap\ng 59\ne 29 payload-4-long-enough-to-heap\nc payload-33-long-enough-to-heap payload-1-long-enough-to-heap\n",
+            "every re-bind must match --interp; got {out:?}"
+        );
+    }
+}

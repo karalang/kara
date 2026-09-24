@@ -4828,17 +4828,46 @@ impl<'ctx> super::Codegen<'ctx> {
         // Only a FieldAccess-rooted Vec index (`self.toks[i].field`); a plain-var
         // `v[i].field` is handled by the #18 suppression — cloning it too would
         // leave the cap-zeroed source unfreed (a leak).
-        let ExprKind::Index {
+        //
+        // B-2026-09-24-2 — or a struct reached through TUPLE hops below a
+        // container element (`match v[0].1.k { K.A(s) => … }`, at any tuple
+        // depth and any root). The #18 suppression resolves only a field read
+        // straight off the element, so this shape had no owner-side handling
+        // at all: the arm freed the payload it moved out and the container's
+        // element drain freed it again. It takes the same clone, for the same
+        // reason, and its receiver type comes from `type_name_of_expr`, which
+        // walks the tuple hops.
+        let obj_ty = if let ExprKind::Index {
             object: idx_obj, ..
         } = &object.kind
-        else {
-            return Ok((val, false));
-        };
-        if matches!(idx_obj.kind, ExprKind::Identifier(_)) {
-            return Ok((val, false));
-        }
-        let Some(obj_ty) = self.place_chain_type_name(object) else {
-            return Ok((val, false));
+        {
+            if matches!(idx_obj.kind, ExprKind::Identifier(_)) {
+                return Ok((val, false));
+            }
+            let Some(obj_ty) = self.place_chain_type_name(object) else {
+                return Ok((val, false));
+            };
+            obj_ty
+        } else {
+            let mut chain_root: &Expr = object;
+            while let ExprKind::TupleIndex { object: inner, .. } = &chain_root.kind {
+                chain_root = inner;
+            }
+            let (ExprKind::TupleIndex { .. }, ExprKind::Index { index: cidx, .. }) =
+                (&object.kind, &chain_root.kind)
+            else {
+                return Ok((val, false));
+            };
+            if matches!(cidx.kind, ExprKind::Range { .. }) {
+                return Ok((val, false));
+            }
+            let Some(obj_ty) = self
+                .type_name_of_expr(object)
+                .filter(|n| self.type_decls.struct_field_names.contains_key(n.as_str()))
+            else {
+                return Ok((val, false));
+            };
+            obj_ty
         };
         let Some(fidx) = self
             .type_decls

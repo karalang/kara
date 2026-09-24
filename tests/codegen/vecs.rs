@@ -9222,3 +9222,60 @@ fn main() {
         );
     }
 }
+
+/// B-2026-09-24-2 — a field read on a struct reached through TUPLE hops below a
+/// container element (`v[0].1.0.s`, `w[0].1.1.0.n`, `self.xs[0].1.0.s`, through
+/// a `ref Vec` parameter) failed to build with "cannot resolve field": the
+/// receiver's type was resolved for one tuple hop only. And a `match` / `if let`
+/// that moves an enum field's payload out of the same place (`g2[0].1.0.k`, and
+/// one hop up, `g1[0].1.k`) double-freed. Every spelling must build and print
+/// what `--interp` prints.
+#[test]
+fn test_e2e_tuple_hop_struct_field_read_matches_interp() {
+    let out = run_program(
+        r#"
+enum K { A(String), B }
+struct H { s: String, n: i64 }
+struct G { k: K, n: i64 }
+struct C { xs: Vec[(i64, (H, i64))] }
+impl C { fn show(ref self) -> String { f"c {self.xs[0].1.0.s} {self.xs[0].1.0.n}" } }
+fn mk(i: i64) -> String { f"alpha-{i}-long-enough-to-heap" }
+fn by_ref(v: ref Vec[(i64, (H, i64))]) -> i64 { v[0].1.0.s.len() + v[0].1.0.n }
+fn field_reads() {
+    let v: Vec[(i64, (H, i64))] = [(1, (H { s: mk(1), n: 9 }, 2))];
+    let mut i = 0;
+    while i < 2 { println(f"{v[0].1.0.n} {v[0].1.0.s} {v[0].1.0.s.len()}"); i = i + 1; }
+    let a = v[0].1.0.s;
+    println(f"a {a} {by_ref(v)}");
+    let w: Vec[(i64, (i64, (H, i64)))] = [(1, (2, (H { s: mk(2), n: 8 }, 3)))];
+    println(f"w {w[0].1.1.0.s} {w[0].1.1.0.n}");
+    let c = C { xs: [(1, (H { s: mk(3), n: 7 }, 2))] };
+    println(c.show());
+}
+fn enum_fields() {
+    let g1: Vec[(i64, G)] = [(1, G { k: K.A(mk(4)), n: 6 })];
+    let g2: Vec[(i64, (G, i64))] = [(1, (G { k: K.A(mk(5)), n: 5 }, 2))];
+    match g1[0].1.k { K.A(s) => println(f"k1 {s.len()} {s}"), K.B => println("k1 b") }
+    match g2[0].1.0.k { K.A(_) => println("k2 a"), K.B => println("k2 b") }
+    let mut out: Vec[String] = [];
+    match g1[0].1.k { K.A(s) => out.push(s), K.B => {} }
+    match g2[0].1.0.k { K.A(s) => out.push(s), K.B => {} }
+    if let K.A(s) = g2[0].1.0.k { out.push(s); }
+    println(f"m {out.len()} {out[0]} {out[1]} {out[2]}");
+    println(f"n {g1[0].1.n} {g2[0].1.0.n}");
+}
+fn main() {
+    field_reads();
+    enum_fields();
+    println("done");
+}
+"#,
+    );
+    if let Some(out) = out {
+        assert_eq!(
+            out,
+            "9 alpha-1-long-enough-to-heap 27\n9 alpha-1-long-enough-to-heap 27\na alpha-1-long-enough-to-heap 36\nw alpha-2-long-enough-to-heap 8\nc alpha-3-long-enough-to-heap 7\nk1 27 alpha-4-long-enough-to-heap\nk2 a\nm 3 alpha-4-long-enough-to-heap alpha-5-long-enough-to-heap alpha-5-long-enough-to-heap\nn 6 5\ndone\n",
+            "every tuple-hop field read must match --interp; got {out:?}"
+        );
+    }
+}

@@ -131,7 +131,27 @@ impl<'ctx> super::Codegen<'ctx> {
             then_block,
             else_end,
         );
-        let did_clone_ref_enum = did_clone_ref_enum || did_clone_live_local_enum;
+        // B-2026-09-24-2 — the if-let route of `match v[0].1.k { … }`: an
+        // enum field of a struct reached through TUPLE hops below a container
+        // element. `compile_match` clones it through
+        // `clone_borrowed_index_field_enum_scrutinee`; this site never called
+        // that helper, so a payload moved out in the then-block was freed
+        // there and again by the container. Scoped to the tuple-hop receiver
+        // (the helper's other shape, `self.toks[i].tok`, is left exactly as
+        // this route has always compiled it) and to the same non-shared
+        // user-enum variant pattern as the element clone above, whose
+        // materializer is what owns the clone.
+        let tuple_hop_field = matches!(
+            &value.kind,
+            ExprKind::FieldAccess { object, .. } if matches!(object.kind, ExprKind::TupleIndex { .. })
+        );
+        let (val, did_clone_tuple_hop_field) = if needs_elem_clone && tuple_hop_field {
+            self.clone_borrowed_index_field_enum_scrutinee(value, val)?
+        } else {
+            (val, false)
+        };
+        let did_clone_ref_enum =
+            did_clone_ref_enum || did_clone_live_local_enum || did_clone_tuple_hop_field;
         let (val, refchain_struct_clone) = self.clone_escaping_borrowed_ref_chain_struct(
             value,
             val,
