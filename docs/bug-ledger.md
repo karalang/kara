@@ -92,12 +92,12 @@ distinguish "bugs flattening" from "we stopped writing them down."
 
 | class | total |
 |---|---|
-| run-vs-build | 488 |
-| miscompile | 444 |
-| leak | 409 |
-| double-free | 300 |
+| run-vs-build | 489 |
+| miscompile | 445 |
+| leak | 411 |
+| double-free | 301 |
 | missing-feature | 206 |
-| codegen-gap | 192 |
+| codegen-gap | 193 |
 | other | 149 |
 | diagnostics | 134 |
 | perf | 117 |
@@ -110,8 +110,8 @@ distinguish "bugs flattening" from "we stopped writing them down."
 
 | surface | total |
 |---|---|
-| codegen | 2041 |
-| interp | 538 |
+| codegen | 2047 |
+| interp | 540 |
 | typecheck | 307 |
 | other | 110 |
 | ownership | 76 |
@@ -373,12 +373,15 @@ registered in the callee's prologue, not by-value struct params in general. | �
 | B-2026-09-24-10 | 2026-09-24 | codegen | low | AN UNBOUND HAND-BACK `match` SCRUTINEE RUNS ITS PAYLOAD'S `Drop` BODY AT THE ENCLOSING SCOPE'S END ON THE COMPILED SURFACES AND AT THE MATCH'S END UNDER `--interp` -- `match id(a) { Some(x) => x, None => mkr(9) }; println("after")` prints `d1 after end` interpreted and `after end d1` compiled; the bound spelling prints `d1 after end` everywhere | — |
 | B-2026-09-24-11 | 2026-09-24 | codegen+interp | high | A `let`-BOUND HAND-BACK OF AN `Option` WHOSE PAYLOAD HAS A `Drop` BODY NESTED INSIDE IT IS STILL WRONG, the remainder B-2026-09-23-44 leaves out -- `fn f(a: Option[M], c: bool) -> Option[M] { let r: Option[M] = if c { a } else { None }; println("mid"); r }` over `struct M { r: R, s: String }` (R has a `Drop`) prints `mid d1 y1 d1 end` under `--interp` and nothing on jit / -O0 / -O2 (valgrind err=4), where the TAIL spelling prints `mid y1 d1 end` everywhere | — |
 | B-2026-09-24-13 | 2026-09-24 | codegen+interp | medium | FOUR MORE HAND-BACK SPELLINGS OVER A BY-VALUE `Option[R]` PARAM STILL RUN THE `Drop` BODY TWICE OR NOT AT ALL, the remainder of B-2026-09-24-9 -- a CONDITIONAL hand-back `match idc(a, true) { Some(x) => x.id, .. }` prints `d1 d1 k1 end` on all four surfaces for a named argument; a temp argument's `let b = id(a); match b { Some(x) => x, .. }` prints `d1 k1 d1 end` under `--interp`; its `let b = id(a); 7` and `match id(a) { Some(_) => 1, .. }` run NO body on jit / -O0 / -O2 | — |
-| B-2026-09-24-16 | 2026-09-24 | interp+codegen | medium | A BY-VALUE `Option[R]` PARAM PUSHED INTO A `Vec` THE CALLEE RETURNS RUNS `R`'s `Drop` BODY TWICE ON ALL FOUR SURFACES -- `fn st(a: Option[R]) -> Vec[Option[R]] { let mut v = Vec.new(); v.push(a); v }` prints `d1 k1 d1 end` on interp, jit, -O0 and -O2 alike (valgrind clean), where one body is due | — |
-| B-2026-09-24-19 | 2026-09-24 | codegen | high | A GENERIC FUNCTION'S BY-VALUE `Option[T]` PARAM HAS NO OWNER PROTOCOL AT `T = String`: A NAMED ARGUMENT IS FREED TWICE WHEN THE CALLEE TAKES THE PAYLOAD, A TEMPORARY LEAKS WHEN IT DOES NOT -- `fn pick[T](a: Option[T], d: T) -> T { match a { Some(s) => s, None => d } }` over `let a = Some(..); pick(a, ..)` and `fn st[T](a: Option[T]) -> Vec[Option[T]] { .. v.push(a); v }` abort `double free detected in tcache 2` on jit, -O0 and -O2, while `fn peek[T](a: Option[T]) -> i64 { match a { Some(_) => 1, None => 0 } }` over a TEMPORARY argument leaks its 29-byte String; `--interp` is right throughout | — |
 | B-2026-09-24-20 | 2026-09-24 | codegen | high | AN ESCAPING BY-VALUE `Result`/`Option` PARAM WHOSE INLINE PAYLOAD RUNS A USER `Drop` IS STILL FREED TWICE -- `fn peek(a: Result[S, i64]) -> i64 { match id(a) { Ok(x) => x.r.id + x.s.len(), Err(e) => e } }` over `struct S { r: R, s: String }` (R has a `Drop`, S fits `Result`'s five-word area) prints `d1 k30 end` under `--interp` and at -O2 and aborts `double free detected in tcache 2` on jit and -O0 | — |
-| B-2026-09-24-27 | 2026-09-24 | codegen | low | A DISCARDED TUPLE LITERAL THAT MOVES A `String` OR `Vec` LOCAL LEAKS THE BUFFER -- `let s = f".."; (s, 1);` and `let _ = (s, 1);` lose 29 bytes in 1 block at -O0 (`Vec[i64]`: 24 bytes), output correct on all four surfaces; the fresh spelling `let _ = (f"..", 1);` is clean | — |
 | B-2026-09-24-30 | 2026-09-24 | codegen | high | THREE RC-PROMOTED `Option`/`Result` PAYLOAD SHAPES B-2026-09-24-28 DID NOT REACH ARE STILL WRONG ON THE COMPILED SURFACES -- `Result[(String, i64), i64]` double-frees at jit/-O0, a nested `Some(Some(s))` arm moving `s` out double-frees on jit/-O0/-O2, and `Option[Map[i64, String]]` reads invalid memory and loses 72 B (629 with indirect) at -O0 | — |
 | B-2026-09-24-31 | 2026-09-24 | codegen | high | AN `Option[Map[K, V]]` / `Option[Set[T]]` / `Option[SortedMap[K, V]]` LOCAL MOVED ON (INTO A CALL, A `let`, A FIELD, A `return`, OR HANDED BACK) IS FREED TWICE ON EVERY COMPILED SURFACE -- `let d = Some(m); println(take(d))` prints nothing on jit, -O0 and -O2 (interp `1 end`), valgrind -O0 err=48 | — |
+| B-2026-09-24-32 | 2026-09-24 | codegen | low | A GENERIC FUNCTION'S BY-VALUE `Option[T]` PARAM LEAKS A FRESH `Some(P { .. })` TEMPORARY WHEN `T` IS A HEAP-BEARING STRUCT -- `fn peek[T](a: Option[T]) -> i64 { match a { Some(_) => 1, None => 0 } }` called as `peek(Some(P { s: f"..", n: 1 }))` prints the right answer on all four surfaces and loses 61 bytes at -O0, while the non-generic `peek(a: Option[P])` twin is clean | — |
+| B-2026-09-24-33 | 2026-09-24 | codegen | high | A GENERIC `pick[T]` OVER A NAMED `Option[Array[String, 2]]` ARGUMENT DOUBLE-FREES ON EVERY COMPILED SURFACE -- `fn pick[T](a: Option[T], d: T) -> T { match a { Some(s) => s, None => d } }` with `let a = Some([f"..", f"x"]); pick(a, [f"d", f"e"]).len()` prints `2 end` under `--interp`, nothing on the JIT and `double free detected in tcache 2` at -O2 | — |
+| B-2026-09-24-34 | 2026-09-24 | codegen | low | A GENERIC STRUCT'S `Option` FIELD PASSED BY VALUE LEAKS ITS PAYLOAD -- `struct W[T] { o: Option[T] }` with `let y = W { o: Some(f"..") }; peek(y.o)` prints `1 end` on all four surfaces and loses 30 bytes at -O0, for a generic and a non-generic `peek`, whether `y` comes from a literal or from `fn wrap[T](a: Option[T]) -> W[T]` | — |
+| B-2026-09-24-35 | 2026-09-24 | interp+codegen | medium | A BY-VALUE PARAM PUSHED INTO A CALLEE-LOCAL `Vec` UNDER AN `if` STILL RUNS ITS `Drop` BODY TWICE ON ALL FOUR SURFACES -- `fn st(a: R, c: bool) -> i64 { let mut v: Vec[R] = Vec.new(); if c { v.push(a); } 3 }` prints `d1 k3 d1 k3 d2 end` for `st(a, true)` then `st(b, false)`, where `d1 k3 d2 k3 end` is due | — |
+| B-2026-09-24-36 | 2026-09-24 | codegen | low | A BY-VALUE `Result[S, i64]` PARAM MATCHED FOR A FIELD RUNS ITS PAYLOAD'S `Drop` BODY BEFORE THE CALLER'S PRINT ON THE COMPILED SURFACES AND AFTER IT UNDER `--interp` -- `fn rb(a: Result[S, i64]) -> i64 { match a { Ok(x) => x.r.id, Err(e) => e } }` prints `d4 k4 end` compiled and `k4 d4 end` interpreted | — |
+| B-2026-09-24-37 | 2026-09-24 | interp+codegen | medium | A DISCARDED TUPLE THAT MOVES A `Drop`-BEARING STRUCT LOCAL BESIDE A NON-FRESH `String` LOCAL RUNS THE STRUCT'S `Drop` BODY ON NO SURFACE FOR `let _ = (g, s);` AND ONLY ON THE COMPILED ONES FOR THE STATEMENT `(g, s);` -- `struct G { r: R, s: String }` prints `end` alone where `d8 end` is due | — |
 
 ### Relocated
 
@@ -3013,14 +3016,17 @@ registered in the callee's prologue, not by-value struct params in general. | �
 | B-2026-09-24-12 | codegen | high | A HEAP-BOXED `Option` PARAM MATCHED THROUGH A HAND-BACK CALL CRASHES EVERY COMPILED SURFACE -- `fn peek(a: Option[S]) -> i64 { match id(a) { Some(x)… | a63a5dbae |
 | B-2026-09-24-14 | codegen | high | AN INLINE HEAP PAYLOAD MATCHED THROUGH A HAND-BACK CALL IS FREED TWICE ON EVERY COMPILED SURFACE -- `fn peek(a: Option[String]) -> i64 { match id(a)… | 3f164bbdb |
 | B-2026-09-24-15 | codegen | high | AN ESCAPING BY-VALUE `Option` PARAM STILL DOUBLE FREES IN A METHOD, A GENERIC FUNCTION, OR WITH A `Drop`-BEARING PAYLOAD -- the three spellings B-202… | 741a4de0e |
+| B-2026-09-24-16 | interp+codegen | medium | A BY-VALUE `Option[R]` PARAM PUSHED INTO A `Vec` THE CALLEE RETURNS RUNS `R`'s `Drop` BODY TWICE ON ALL FOUR SURFACES -- `fn st(a: Option[R]) -> Vec[… | e99cf5ea5 |
 | B-2026-09-24-17 | codegen | medium | MEASURED: a consuming match over a Vec element's `Option` field still EMPTIES the element on every compiled surface when the payload is a user enum m… | 18e105f6d |
 | B-2026-09-24-18 | ownership | low | MEASURED: `borrow_projection_copy` warns on `let x = p.source` over a field DECLARED `ref String` read through a `ref` param, saying the binding is a… | 18e105f6d |
+| B-2026-09-24-19 | codegen | high | A GENERIC FUNCTION'S BY-VALUE `Option[T]` PARAM HAS NO OWNER PROTOCOL AT `T = String`: A NAMED ARGUMENT IS FREED TWICE WHEN THE CALLEE TAKES THE PAYL… | e99cf5ea5 |
 | B-2026-09-24-21 | codegen | high | A TUPLE LITERAL THAT MOVES AN INLINE `Option[String]` LOCAL DOES NOT DISARM IT, SO A RETURNED `(label, k)` IS FREED BY THE CALLEE'S EXIT AND BY THE R… | b4dae884d |
 | B-2026-09-24-22 | codegen | high | A NESTED `match` THAT MOVES AN `Option[String]` FIELD OUT OF A BY-VALUE ENUM PARAM'S STRUCT PAYLOAD DOUBLE FREES -- `fn show(it: It) -> String { matc… | 42f7e85c0 |
 | B-2026-09-24-23 | codegen | medium | AN RC-FALLBACK `Option[String]` LOCAL NEVER FREES ITS PAYLOAD: THE SCOPE-EXIT `Option` CLEANUP READS THE BOX-POINTER SLOT AS THE `Option` ITSELF, THE… | e662f965b |
 | B-2026-09-24-24 | codegen | medium | MEASURED: reading a Vec element's `Option` field still EMPTIES the element when compiled in two spellings the -17 fix leaves alone: a `let`/assign co… | 42f7e85c0 |
 | B-2026-09-24-25 | codegen | high | MEASURED: `.clone()` on an `Option[Map[i64, String]]` or an `Option[(String, i64)]` SEGFAULTS when compiled (exit 139, no output); `--interp` prints… | 42f7e85c0 |
 | B-2026-09-24-26 | codegen | high | MEASURED: a consuming match over a FOR-LOOP variable's `Option` field double-frees when compiled: `for x in g { match x.o { Some(s) => n = n + s.len(… | 42f7e85c0 |
+| B-2026-09-24-27 | codegen | low | A DISCARDED TUPLE LITERAL THAT MOVES A `String` OR `Vec` LOCAL LEAKS THE BUFFER -- `let s = f".."; (s, 1);` and `let _ = (s, 1);` lose 29 bytes in 1… | 08ad1e6fa |
 | B-2026-09-24-28 | codegen | high | AN RC-PROMOTED `Option[(String, i64)]` OR `Option[Option[String]]` LOCAL SEGFAULTED ON EVERY COMPILED SURFACE -- fixed for tuple, three-tuple and nes… | d7ac55568 |
 | B-2026-09-24-29 | codegen | high | AN `if let` EXPRESSION WHOSE BRANCHES ARE f-STRINGS DOUBLE FREES ON EVERY COMPILED SURFACE, WHATEVER THE SCRUTINEE -- `let r = if let Some(s) = doc {… | 5d364837b |
 
