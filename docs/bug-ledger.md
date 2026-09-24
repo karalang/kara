@@ -93,9 +93,9 @@ distinguish "bugs flattening" from "we stopped writing them down."
 | class | total |
 |---|---|
 | run-vs-build | 488 |
-| miscompile | 440 |
+| miscompile | 441 |
 | leak | 407 |
-| double-free | 289 |
+| double-free | 291 |
 | missing-feature | 206 |
 | codegen-gap | 192 |
 | other | 149 |
@@ -110,8 +110,8 @@ distinguish "bugs flattening" from "we stopped writing them down."
 
 | surface | total |
 |---|---|
-| codegen | 2022 |
-| interp | 536 |
+| codegen | 2025 |
+| interp | 537 |
 | typecheck | 307 |
 | other | 110 |
 | ownership | 75 |
@@ -373,9 +373,11 @@ registered in the callee's prologue, not by-value struct params in general. | �
 | B-2026-09-24-6 | 2026-09-24 | codegen | high | MEASURED: matching an `Option` field of a Vec element TWICE goes wrong on every compiled surface -- `match g[0].o { Some(s) => out.push(s), None => {} }` run twice pushes 1 where --interp pushes 2 (zero hops, memory clean), and the same through a tuple (`g[0].1.o`, `g[0].1.0.o`) DOUBLE-FREES; even a read-only `Some(s) => println(s)` match empties `g[0].o` for the next one; a single match is correct at every depth | — |
 | B-2026-09-24-7 | 2026-09-24 | codegen+interp | high | MEASURED: re-binding a `mut ref` parameter (`let t = r;`) and mutating through `t` loses the mutation under --interp and double-frees compiled -- `r: mut ref Vec[i64]`, `t.push(i)` x40: interp prints `43 3` (the caller's Vec unchanged), JIT `double free`, both builds `43 3` with 2 valgrind errors; `r: mut ref String`, `t.push_str(..)`: interp `87 40`, compiled build failure `no handler for method 'push_str'`; mutating `r` directly is correct everywhere (`87 87`) | — |
 | B-2026-09-24-8 | 2026-09-24 | codegen | medium | MEASURED: binding a `ref String` FIELD to a local (`let x = p.source;`) gives `x` no String type in codegen, so `x.len()` fails to build with `no handler for method 'len'` on every compiled surface while --interp prints `10`; `println(x)` and `p.source.len()` work | — |
-| B-2026-09-24-9 | 2026-09-24 | codegen+interp | high | A HAND-BACK OF A BY-VALUE `Option` PARAMETER WHOSE PAYLOAD A `match` ARM MOVES OUT IS WRONG ON EVERY SURFACE -- `fn pick(a: Option[R]) -> R { match id(a) { Some(x) => x, None => mkr(9) } }` runs `d1` TWICE under `--interp` (`d1 k1 d1 end`) and double frees on jit / -O0 / -O2 (valgrind err=5), while `match a { Some(x) => x, .. }` directly is right everywhere | — |
 | B-2026-09-24-10 | 2026-09-24 | codegen | low | AN UNBOUND HAND-BACK `match` SCRUTINEE RUNS ITS PAYLOAD'S `Drop` BODY AT THE ENCLOSING SCOPE'S END ON THE COMPILED SURFACES AND AT THE MATCH'S END UNDER `--interp` -- `match id(a) { Some(x) => x, None => mkr(9) }; println("after")` prints `d1 after end` interpreted and `after end d1` compiled; the bound spelling prints `d1 after end` everywhere | — |
 | B-2026-09-24-11 | 2026-09-24 | codegen+interp | high | A `let`-BOUND HAND-BACK OF AN `Option` WHOSE PAYLOAD HAS A `Drop` BODY NESTED INSIDE IT IS STILL WRONG, the remainder B-2026-09-23-44 leaves out -- `fn f(a: Option[M], c: bool) -> Option[M] { let r: Option[M] = if c { a } else { None }; println("mid"); r }` over `struct M { r: R, s: String }` (R has a `Drop`) prints `mid d1 y1 d1 end` under `--interp` and nothing on jit / -O0 / -O2 (valgrind err=4), where the TAIL spelling prints `mid y1 d1 end` everywhere | — |
+| B-2026-09-24-12 | 2026-09-24 | codegen | high | A HEAP-BOXED `Option` PARAM MATCHED THROUGH A HAND-BACK CALL CRASHES EVERY COMPILED SURFACE -- `fn peek(a: Option[S]) -> i64 { match id(a) { Some(x) => x.r.id + x.s.len(), None => 0 } }` over `struct S { r: R, s: String }` prints nothing on jit and -O0 (valgrind err=4: invalid reads and an invalid free) and aborts `double free detected in tcache 2` at -O2, while `--interp` prints `d1 k30 end`; named and temp arguments, reading and moving arms alike | — |
+| B-2026-09-24-13 | 2026-09-24 | codegen+interp | medium | FOUR MORE HAND-BACK SPELLINGS OVER A BY-VALUE `Option[R]` PARAM STILL RUN THE `Drop` BODY TWICE OR NOT AT ALL, the remainder of B-2026-09-24-9 -- a CONDITIONAL hand-back `match idc(a, true) { Some(x) => x.id, .. }` prints `d1 d1 k1 end` on all four surfaces for a named argument; a temp argument's `let b = id(a); match b { Some(x) => x, .. }` prints `d1 k1 d1 end` under `--interp`; its `let b = id(a); 7` and `match id(a) { Some(_) => 1, .. }` run NO body on jit / -O0 / -O2 | — |
+| B-2026-09-24-14 | 2026-09-24 | codegen | high | AN INLINE HEAP PAYLOAD MATCHED THROUGH A HAND-BACK CALL IS FREED TWICE ON EVERY COMPILED SURFACE -- `fn peek(a: Option[String]) -> i64 { match id(a) { Some(s) => s.len(), None => 0 } }` aborts `double free detected in tcache 2` on jit and -O0 (valgrind err=1) where `--interp` prints `k29`, and an arm MOVING the payload out (`Some(s) => s`) double frees on jit / -O0 / -O2 for a param AND for a `let`-bound local source; `Result[S, i64]` with `S` inline in its 5-word area double frees on jit and -O0 the same way | — |
 
 ### Relocated
 
@@ -3003,6 +3005,7 @@ registered in the callee's prologue, not by-value struct params in general. | �
 | B-2026-09-24-2 | codegen | medium | MEASURED: a FIELD read on a struct nested in a tuple inside a Vec element does not compile -- `v[0].1.0.s` over `Vec[(i64, (H, i64))]` with `struct H… | c894b2eb9 |
 | B-2026-09-24-3 | codegen | high | AN `Option` / `Result` HANDED THROUGH A PASSTHROUGH CALLEE TWICE CRASHES ON EVERY COMPILED SURFACE -- `let b = f(a); let e = f(b)` over `fn f(a: Opti… | 3beb82ad2 |
 | B-2026-09-24-4 | codegen | high | A `match` ARM THAT RETURNS A HAND-BACK RESULT'S PAYLOAD BY VALUE DOUBLE FREES ON EVERY COMPILED SURFACE, bound or unbound -- `let k = match id(a) { S… | 795ec32b6 |
+| B-2026-09-24-9 | codegen+interp | high | A HAND-BACK OF A BY-VALUE `Option` PARAMETER WHOSE PAYLOAD A `match` ARM MOVES OUT IS WRONG ON EVERY SURFACE -- `fn pick(a: Option[R]) -> R { match i… | 729383c1c |
 
 </details>
 
