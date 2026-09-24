@@ -7938,7 +7938,7 @@ impl<'ctx> super::Codegen<'ctx> {
                                         .iter()
                                         .all(|(e, _, inner)| *e == "Option" && inner.is_none());
                                     boxed.clear();
-                                    // B-2026-09-24-1 — every skipped result,
+                                    // B-2026-09-24-3 — every skipped result,
                                     // whoever owns the box, so a SECOND hop
                                     // (`let e = f(b)`) finds `b`'s owner.
                                     self.payload_vars

@@ -14927,7 +14927,7 @@ impl<'ctx> super::Codegen<'ctx> {
             if !self.call_arg_flows_into_return(&callee_name, i) {
                 return None;
             }
-            // B-2026-09-24-1 — a NESTED passthrough (`f(f(a))`): the inner
+            // B-2026-09-24-3 — a NESTED passthrough (`f(f(a))`): the inner
             // call's result is a temporary nothing registered, so the owner
             // is whatever the inner call hands back.
             let n = match &a.value.kind {
@@ -15303,7 +15303,7 @@ impl<'ctx> super::Codegen<'ctx> {
             if !self.call_arg_flows_into_return(&callee_name, i) {
                 return None;
             }
-            // B-2026-09-24-1 — the CHAINED spellings, as the boxed sibling
+            // B-2026-09-24-3 — the CHAINED spellings, as the boxed sibling
             // resolves them: a nested passthrough's owner is whatever the inner
             // call hands back, and a passthrough RESULT (`let b = f(a); let e =
             // f(b)`) is followed one hop to the binding that owns the payload.

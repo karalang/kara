@@ -65,7 +65,7 @@ pub(crate) struct PayloadVars<'ctx> {
     /// population whose box the callee now owns (`functions.rs`), so a disarm
     /// keyed here always has a taker.
     pub(crate) boxed_passthrough_owner_alias: std::collections::HashMap<String, String>,
-    /// B-2026-09-24-1 — the CHAIN half of the map above, recorded for EVERY
+    /// B-2026-09-24-3 — the CHAIN half of the map above, recorded for EVERY
     /// boxed passthrough result the let site skips, not only the population
     /// whose box a callee takes over. Read by
     /// `call_passthrough_armed_boxed_source` alone, to follow `let e = f(b)`

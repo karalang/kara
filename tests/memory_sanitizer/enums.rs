@@ -10906,7 +10906,7 @@ fn main() { run(true, 0); run(false, 10); println("end") }
     );
 }
 
-/// B-2026-09-24-1 — an `Option` / `Result` handed through a passthrough
+/// B-2026-09-24-3 — an `Option` / `Result` handed through a passthrough
 /// callee TWICE (`let b = f(a); let e = f(b)`, `f(f(a))`, a method or
 /// associated hop in the chain, or a discarded second hop). The let site
 /// skips a one-hop result's registration and leaves the source sole owner,
