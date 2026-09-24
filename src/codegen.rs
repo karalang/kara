@@ -6434,6 +6434,7 @@ impl<'ctx> Codegen<'ctx> {
                 boxed_passthrough_chain_alias: std::collections::HashMap::new(),
                 inline_option_payload_vars: std::collections::HashSet::new(),
                 inline_result_payload_vars: std::collections::HashSet::new(),
+                inline_optres_var_tes: std::collections::HashMap::new(),
                 inline_option_map_payload_vars: std::collections::HashSet::new(),
                 inline_option_agg_payload_vars: std::collections::HashSet::new(),
                 inline_result_agg_payload_vars: std::collections::HashSet::new(),

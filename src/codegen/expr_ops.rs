@@ -222,8 +222,32 @@ impl<'ctx> super::Codegen<'ctx> {
             //     half of B-2026-08-23-4's "the two halves are only correct
             //     together", reached from the opposite side. An inline
             //     payload keeps its source-side owner and is already
-            //     balanced; only the box changes hands here.
+            //     balanced; only the box changes hands here. (Superseded for
+            //     the inline pair by (e') just below: that leak was the
+            //     unnamed element, not the disarm.)
             self.suppress_boxed_enum_payload_cleanup_for_moved_arg(elem_expr);
+            // (e') B-2026-09-24-21 — and the INLINE pair after all, which the
+            //     narrowing above measured as a leak on the one spelling it
+            //     tried. That spelling (`let p = (o, 7);`, unannotated) armed no
+            //     tuple drop because the element typed as a bare `Option`; every
+            //     OTHER owner of a tuple literal DOES free an inline payload --
+            //     a returned tuple's caller, an annotated `let`, a `Vec` push, a
+            //     struct field, a `Some(..)` wrap, a `match` scrutinee -- so the
+            //     source stayed armed beside it and both freed: 21 of 24
+            //     measured spellings double freed on `main`, `match (a, b)`
+            //     over two `Option[String]` locals among them. The leak side
+            //     is closed where it lived, by naming the element
+            //     (`refined_tuple_literal_elem_te`'s `inline_optres_var_tes`
+            //     arm) so the unannotated binding and a temp argument own it
+            //     too.
+            //
+            //     A DISCARDED literal owns nothing, so there the source keeps
+            //     its payload, as it does for every place-shaped disarm
+            //     (`in_discarded_aggregate_tail`).
+            if !self.in_discarded_aggregate_tail(elem_expr) {
+                self.suppress_inline_option_payload_cleanup_for_moved_arg(elem_expr);
+                self.suppress_inline_result_payload_cleanup_for_moved_arg(elem_expr);
+            }
             // (c) #23 — a Map/Set element folded into the tuple transfers
             //     ownership of its handle to the tuple. Maps are caller-retains
             //     with no in-slot cap sentinel (the Vec arm above can't reach

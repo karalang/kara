@@ -80,6 +80,7 @@ pub(super) struct VarMetadataSnapshot<'ctx> {
     cstr_vars: bool,
     inline_option_payload_vars: bool,
     inline_result_payload_vars: bool,
+    inline_optres_var_tes: Option<TypeExpr>,
     inline_option_map_payload_vars: bool,
     inline_option_agg_payload_vars: bool,
     inline_result_agg_payload_vars: bool,
@@ -126,6 +127,7 @@ impl<'ctx> super::Codegen<'ctx> {
             cstr_vars: self.var_types.cstr_vars.remove(name),
             inline_option_payload_vars: self.payload_vars.inline_option_payload_vars.remove(name),
             inline_result_payload_vars: self.payload_vars.inline_result_payload_vars.remove(name),
+            inline_optres_var_tes: self.payload_vars.inline_optres_var_tes.remove(name),
             inline_option_map_payload_vars: self
                 .payload_vars
                 .inline_option_map_payload_vars
@@ -252,6 +254,11 @@ impl<'ctx> super::Codegen<'ctx> {
                 .inline_result_payload_vars
                 .insert(key.clone());
         }
+        if let Some(v) = snap.inline_optres_var_tes {
+            self.payload_vars
+                .inline_optres_var_tes
+                .insert(key.clone(), v);
+        }
         if snap.inline_option_map_payload_vars {
             self.payload_vars
                 .inline_option_map_payload_vars
@@ -352,6 +359,7 @@ pub(super) struct VarEnvSnapshot<'ctx> {
     cstr_vars: HashSet<String>,
     inline_option_payload_vars: HashSet<String>,
     inline_result_payload_vars: HashSet<String>,
+    inline_optres_var_tes: HashMap<String, TypeExpr>,
     inline_option_map_payload_vars: HashSet<String>,
     inline_option_agg_payload_vars: HashSet<String>,
     inline_result_agg_payload_vars: HashSet<String>,
@@ -398,6 +406,7 @@ impl<'ctx> super::Codegen<'ctx> {
             cstr_vars: self.var_types.cstr_vars.clone(),
             inline_option_payload_vars: self.payload_vars.inline_option_payload_vars.clone(),
             inline_result_payload_vars: self.payload_vars.inline_result_payload_vars.clone(),
+            inline_optres_var_tes: self.payload_vars.inline_optres_var_tes.clone(),
             inline_option_map_payload_vars: self
                 .payload_vars
                 .inline_option_map_payload_vars
@@ -478,6 +487,7 @@ impl<'ctx> super::Codegen<'ctx> {
         self.var_types.cstr_vars = snap.cstr_vars;
         self.payload_vars.inline_option_payload_vars = snap.inline_option_payload_vars;
         self.payload_vars.inline_result_payload_vars = snap.inline_result_payload_vars;
+        self.payload_vars.inline_optres_var_tes = snap.inline_optres_var_tes;
         self.payload_vars.inline_option_map_payload_vars = snap.inline_option_map_payload_vars;
         self.payload_vars.inline_option_agg_payload_vars = snap.inline_option_agg_payload_vars;
         self.payload_vars.inline_result_agg_payload_vars = snap.inline_result_agg_payload_vars;

@@ -1669,8 +1669,8 @@ impl<'ctx> super::Codegen<'ctx> {
     ///   ([`Self::call_arg_flows_into_return`], with the function returning the
     ///   parameter's own type) -- the caller already takes the hand-back route
     ///   for it and keeps no second owner. One returned inside a struct or a
-    ///   constructor is copied like any other escape (B-2026-09-24-15); one
-    ///   returned inside a TUPLE is still excluded, see the body;
+    ///   constructor is copied like any other escape (B-2026-09-24-15), and one
+    ///   returned inside a TUPLE likewise since B-2026-09-24-21;
     /// * a payload that is not [`crate::ast::concrete_plain_type`] -- a user
     ///   `Drop` body anywhere inside is run by the CALLER's retained channel
     ///   for a by-value `Option`/`Result`, so an escaping copy would run it a
@@ -1720,17 +1720,14 @@ impl<'ctx> super::Codegen<'ctx> {
         // in the self-hosted parser, which forwards `doc` to a method that
         // returns it inside `FnDefNode`.
         //
-        // A TUPLE return is left where it was. A tuple literal does not disarm
-        // an inline `Option` element's source (`compile_tuple`'s note (e)), and
-        // the returned tuple's drop frees that payload anyway, so a copied
-        // param moved into `(label, k)` is freed by the callee's exit AND the
-        // result: that is a separate defect, measured on a plain local too, and
-        // copying here would only route a clean fresh-temp call into it.
+        // A TUPLE return takes the copy too since B-2026-09-24-21, which made a
+        // tuple literal disarm an inline `Option`/`Result` element's source
+        // (`compile_tuple`'s note (e)). Before that the copied param moved into
+        // `(label, k)` stayed armed in the callee while the returned tuple's
+        // drop freed the same payload, so a tuple return was left out here.
         let keeps_hand_back_route = self.call_arg_flows_into_return(fn_key, ast_i)
             && f.return_type.as_ref().is_some_and(|rt| {
-                matches!(rt.kind, crate::ast::TypeKind::Tuple(_))
-                    || crate::formatter::render_type_expr(rt)
-                        == crate::formatter::render_type_expr(&p.ty)
+                crate::formatter::render_type_expr(rt) == crate::formatter::render_type_expr(&p.ty)
             });
         self.optres_param_entry_copied_te(&p.ty)
             && crate::ast::concrete_plain_type(Some(program), &p.ty, &mut Vec::new())

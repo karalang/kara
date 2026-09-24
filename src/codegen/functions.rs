@@ -1572,6 +1572,7 @@ impl<'ctx> super::Codegen<'ctx> {
         self.mono_state.mono_payload_binding_type_exprs.clear();
         self.mono_state.mono_payload_binding_display_types.clear();
         self.payload_vars.inline_result_payload_vars.clear();
+        self.payload_vars.inline_optres_var_tes.clear();
         self.payload_vars.inline_option_map_payload_vars.clear();
         self.payload_vars.inline_option_agg_payload_vars.clear();
         self.payload_vars.inline_result_agg_payload_vars.clear();

@@ -176,6 +176,7 @@ pub(super) struct SavedVarSideTables<'ctx> {
     /// likely to be noticed here than in two lists 800 lines apart.
     inline_option_payload_vars: std::collections::HashSet<String>,
     inline_result_payload_vars: std::collections::HashSet<String>,
+    inline_optres_var_tes: HashMap<String, crate::ast::TypeExpr>,
     inline_option_map_payload_vars: std::collections::HashSet<String>,
     inline_option_agg_payload_vars: std::collections::HashSet<String>,
     inline_result_agg_payload_vars: std::collections::HashSet<String>,
@@ -1672,6 +1673,7 @@ impl<'ctx> super::Codegen<'ctx> {
             inline_result_payload_vars: std::mem::take(
                 &mut self.payload_vars.inline_result_payload_vars,
             ),
+            inline_optres_var_tes: std::mem::take(&mut self.payload_vars.inline_optres_var_tes),
             inline_option_map_payload_vars: std::mem::take(
                 &mut self.payload_vars.inline_option_map_payload_vars,
             ),
@@ -1733,6 +1735,7 @@ impl<'ctx> super::Codegen<'ctx> {
         // B-2026-09-17-8 — see the field comments.
         self.payload_vars.inline_option_payload_vars = saved.inline_option_payload_vars;
         self.payload_vars.inline_result_payload_vars = saved.inline_result_payload_vars;
+        self.payload_vars.inline_optres_var_tes = saved.inline_optres_var_tes;
         self.payload_vars.inline_option_map_payload_vars = saved.inline_option_map_payload_vars;
         self.payload_vars.inline_option_agg_payload_vars = saved.inline_option_agg_payload_vars;
         self.payload_vars.inline_result_agg_payload_vars = saved.inline_result_agg_payload_vars;
@@ -4723,6 +4726,7 @@ impl<'ctx> super::Codegen<'ctx> {
         self.payload_vars.cond_returned_locals.clear();
         self.payload_vars.deboxed_payload_box_ptrs.clear();
         self.payload_vars.inline_result_payload_vars.clear();
+        self.payload_vars.inline_optres_var_tes.clear();
         self.payload_vars.inline_option_map_payload_vars.clear();
         self.payload_vars.inline_option_agg_payload_vars.clear();
         self.payload_vars.inline_result_agg_payload_vars.clear();

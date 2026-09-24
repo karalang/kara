@@ -85,6 +85,13 @@ pub(crate) struct PayloadVars<'ctx> {
     /// word so the scope-exit free skips (the bound payload frees it once).
     /// See B-2026-06-10-6's Result follow-on.
     pub(crate) inline_result_payload_vars: std::collections::HashSet<String>,
+    /// B-2026-09-24-21 — the RESOLVED `Option[..]` / `Result[.., ..]` type of
+    /// each binding in the two sets above, recorded by the same trackers that
+    /// add the name. A tuple literal that moves such a binding
+    /// (`let t = (label, 1)`) names its element from here, so the tuple's own
+    /// drop owns the payload the literal disarmed in the source. Without it the
+    /// element came back as a bare `Option` and the tuple armed nothing.
+    pub(crate) inline_optres_var_tes: std::collections::HashMap<String, crate::ast::TypeExpr>,
     /// `Option[Map]`/`Option[Set]` sibling — names of `Option` bindings that
     /// registered a `FreeInlineOptionMapPayload`. A `match`/`if let` arm
     /// binding the `Some` payload out sets the source tag to `None` (no `cap`

@@ -10181,6 +10181,9 @@ impl<'ctx> super::Codegen<'ctx> {
         self.payload_vars
             .inline_option_payload_vars
             .insert(var_name.to_string());
+        self.payload_vars
+            .inline_optres_var_tes
+            .insert(var_name.to_string(), option_te.clone());
     }
 
     /// B-2026-08-14-15 leg B — the per-element aggregate drop fn for an
@@ -11011,6 +11014,9 @@ impl<'ctx> super::Codegen<'ctx> {
         self.payload_vars
             .inline_result_payload_vars
             .insert(var_name.to_string());
+        self.payload_vars
+            .inline_optres_var_tes
+            .insert(var_name.to_string(), result_te.clone());
     }
 
     /// `Result[T, E]` sibling of `try_track_discarded_inline_option` — frees a

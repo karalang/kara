@@ -10835,3 +10835,50 @@ fn e2e_wrapped_argument_result_runs_the_wrappers_own_body() {
             assert_eq!(out, want, "[{label}]");
         }
 }
+
+/// B-2026-09-24-21 — a tuple literal that moves an inline `Option`/`Result`
+/// local now disarms it, and every owner of the tuple frees the payload: a
+/// returned tuple (the row's own cell, a `let t = (..); t` return, a by-value
+/// param handed back inside it, a conditional `return`), an annotated or
+/// unannotated `let`, a destructure, a `Vec` push, a struct field, a `Some(..)`
+/// wrap, a `match (a, b)` scrutinee, a temp argument, and a discarded
+/// `let _ = (..)`, which leaves the local its owner. On `main` 21 of these
+/// spellings double freed and the temp argument leaked.
+#[test]
+fn e2e_tuple_literal_moves_inline_optres_local() {
+    let Some(out) = run_program(
+        r#"struct S { t: (Option[String], i64) }
+fn mk(k: i64) -> (Option[String], i64) { let label = Some(f"heap-string-longer-than-sso-{k}"); (label, k) }
+fn mkt(k: i64) -> (Option[String], i64) { let label = Some(f"heap-string-longer-than-sso-{k}"); let t = (label, k); t }
+fn mkp(label: Option[String], k: i64) -> (Option[String], i64) { (label, k) }
+fn mkv(k: i64) -> (Option[Vec[i64]], i64) { let v: Vec[i64] = [k, 2, 3]; let o = Some(v); (o, k) }
+fn mkr(k: i64) -> (Result[String, i64], i64) { let r: Result[String, i64] = Ok(f"heap-string-longer-than-sso-{k}"); (r, k) }
+fn mkc(k: i64) -> (Option[String], i64) { let label = Some(f"heap-string-longer-than-sso-{k}"); if k > 5 { return (label, k); } (None, 0) }
+fn eat(t: (Option[String], i64)) -> i64 { t.1 }
+fn txt(o: ref Option[String]) -> String { match o { Some(s) => s.clone(), None => "none" } }
+fn main() {
+    let a = mk(1); println(f"{txt(a.0)} {a.1}");
+    let b = mkt(2); println(f"{txt(b.0)} {b.1}");
+    let l = Some(f"heap-string-longer-than-sso-3"); let c = mkp(l, 3); println(f"{txt(c.0)} {c.1}");
+    let v = mkv(4); println(v.1);
+    let r = mkr(5); println(r.1);
+    let (d0, d1) = mk(6); println(f"{txt(d0)} {d1}");
+    let e = mkc(7); let f = mkc(1); println(f"{txt(e.0)} {e.1} {f.1}");
+    let mut n = 0; for i in 0..3 { let q = mk(i); n = n + q.1; } println(n);
+    let x = Some(f"heap-string-longer-than-sso-8"); let tx: (Option[String], i64) = (x, 8); println(f"{txt(tx.0)} {tx.1}");
+    let y = Some(f"heap-string-longer-than-sso-9"); let ty = (y, 9); let (y0, y1) = ty; println(f"{txt(y0)} {y1}");
+    let z = Some(f"heap-string-longer-than-sso-10"); let mut vs: Vec[(Option[String], i64)] = []; vs.push((z, 10)); println(vs.len());
+    let w = Some(f"heap-string-longer-than-sso-11"); let s = S { t: (w, 11) }; println(s.t.1);
+    let u = Some(f"heap-string-longer-than-sso-12"); let o = Some((u, 12)); match o { Some(p) => println(p.1), None => println("n") }
+    let g = Some(f"heap-string-longer-than-sso-13"); let h = Some(f"heap-string-longer-than-sso-14"); match (g, h) { (Some(p), Some(q)) => println(f"{p} {q}"), _ => println("n") }
+    let m = Some(f"heap-string-longer-than-sso-15"); println(eat((m, 15)));
+    let dd = Some(f"heap-string-longer-than-sso-16"); let _ = (dd, 16);
+    let lt = Some(f"heap-string-longer-than-sso-17"); let tt = (lt, 17); println(eat(tt));
+    println("end")
+}
+"#,
+    ) else {
+        return;
+    };
+    assert_eq!(out, "heap-string-longer-than-sso-1 1\nheap-string-longer-than-sso-2 2\nheap-string-longer-than-sso-3 3\n4\n5\nheap-string-longer-than-sso-6 6\nheap-string-longer-than-sso-7 7 0\n3\nheap-string-longer-than-sso-8 8\nheap-string-longer-than-sso-9 9\n1\n11\n12\nheap-string-longer-than-sso-13 heap-string-longer-than-sso-14\n15\n17\nend\n", "got:\n{out}");
+}

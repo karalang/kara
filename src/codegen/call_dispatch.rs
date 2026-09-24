@@ -9527,6 +9527,34 @@ impl<'ctx> super::Codegen<'ctx> {
             // unresolved `E`, so the payload's body runs and its 56-byte
             // envelope leaks.
             let elem_tes = Self::fill_unresolved_elem_tes(&elem_tes, declared_elem_tes);
+            // B-2026-09-24-21 — a LOCAL `Option`/`Result` moved into the literal
+            // (`let _ = (label, 1);`, which reaches this registrar with no
+            // declared param type to fill from) infers as a bare `Option`, so
+            // the temp armed no drop — while `compile_tuple` had disarmed the
+            // local, leaving the payload with no owner. Name it from the
+            // binding's own record, which is what the `let`-bound spelling
+            // reads. Local to this registrar on purpose:
+            // `tuple_arg_elem_type_exprs` also feeds the entry-copy lockstep.
+            let elem_tes = match &arg.kind {
+                ExprKind::Tuple(es) if es.len() == elem_tes.len() => es
+                    .iter()
+                    .zip(elem_tes)
+                    .map(|(e, t)| {
+                        let bare_optres = matches!(&t.kind, TypeKind::Path(p)
+                        if p.generic_args.is_none()
+                            && matches!(
+                                p.segments.last().map(String::as_str),
+                                Some("Option" | "Result")
+                            ));
+                        if bare_optres && matches!(e.kind, ExprKind::Identifier(_)) {
+                            self.refined_tuple_literal_elem_te(e).unwrap_or(t)
+                        } else {
+                            t
+                        }
+                    })
+                    .collect(),
+                _ => elem_tes,
+            };
             // #21 — a tuple-shaped arg. The callee entry-copies a heap-bearing
             // tuple param (`make_tuple_param_callee_owned`), so this caller temp
             // is an INDEPENDENT buffer that must free its own heap. The
@@ -9570,7 +9598,16 @@ impl<'ctx> super::Codegen<'ctx> {
                 self.array_elem_and_len(e)
                     .is_some_and(|(inner, n)| n > 0 && self.type_expr_has_drop_heap(&inner))
             });
-            if array_heap_elem || elem_tes.iter().any(|e| self.type_expr_has_drop_heap(e)) {
+            // B-2026-09-24-21 — `tuple_elem_needs_deep_drop` as well, the
+            // disjunct `synthesize_tuple_drop_fn_te` itself admits on: an inline
+            // `Option[String]` element owns heap that `type_expr_has_drop_heap`
+            // reads as heapless by design, so `eat((Some(f".."), 1))` registered
+            // nothing and the payload leaked once per call.
+            if array_heap_elem
+                || elem_tes
+                    .iter()
+                    .any(|e| self.type_expr_has_drop_heap(e) || self.tuple_elem_needs_deep_drop(e))
+            {
                 let slot = self.create_entry_alloca(cur_fn, "__owned_agg_tmp", agg_ty.into());
                 self.builder.build_store(slot, val).unwrap();
                 if let Some(drop_fn) = self.synthesize_tuple_drop_fn_te(agg_ty, &elem_tes) {
@@ -17077,10 +17114,19 @@ impl<'ctx> super::Codegen<'ctx> {
             return false;
         }
         p.segments.last().is_some_and(|n| {
-            self.type_decls
-                .struct_generic_params
-                .get(n.as_str())
-                .is_some_and(|ps| !ps.is_empty())
+            // B-2026-09-24-21 — the built-in `Option`/`Result` lose their
+            // payload the same way a generic struct loses `T`. An element moved
+            // in from a local (`let t = (label, 1)`) is NAMED `Option` from the
+            // binding's type name, which read as informative and hid the
+            // record's `Option[String]`; the place-source destructure
+            // (`let (a, b) = t`) then saw no payload to disarm in `t` while
+            // `t`'s own drop freed it, and `a` freed it again.
+            matches!(n.as_str(), "Option" | "Result")
+                || self
+                    .type_decls
+                    .struct_generic_params
+                    .get(n.as_str())
+                    .is_some_and(|ps| !ps.is_empty())
         })
     }
 

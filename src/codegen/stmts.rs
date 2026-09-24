@@ -6335,7 +6335,22 @@ impl<'ctx> super::Codegen<'ctx> {
                 // `asan_heap_env_vec_owner_arg_pass_borrow_freed_no_leak`). A
                 // `let` destination always registers its own cleanup, so here
                 // the copy provably has an owner.
-                let val = self.compile_expr(value)?;
+                // B-2026-09-24-21 — `let _ = (label, 1);` reaching this general
+                // arm (a place element, so the owning discard arms above
+                // declined it) throws the literal away exactly as the
+                // expression statement `(label, 1);` does, so it arms the same
+                // window: `compile_tuple`'s inline-`Option` disarm reads it and
+                // leaves the source its owner. Without it the local was
+                // disarmed for a tuple nothing frees, and the payload leaked.
+                let saved_discarded_stmt = self.discarded_stmt_literal_span;
+                if matches!(&pattern.kind, PatternKind::Wildcard) {
+                    if let Some(lit) = Self::discarded_stmt_aggregate_literal(value) {
+                        self.discarded_stmt_literal_span = Some((lit.span.offset, lit.span.length));
+                    }
+                }
+                let val = self.compile_expr(value);
+                self.discarded_stmt_literal_span = saved_discarded_stmt;
+                let val = val?;
                 let val = self.uam_defensive_copy(value, val);
                 // Type-changing shadow dance (step 3 of 3 — pure-new tags).
                 // The RHS is compiled; drop the OLD metadata and reinstate the
@@ -19458,7 +19473,39 @@ impl<'ctx> super::Codegen<'ctx> {
     /// facet of declared-name erasure, at the tuple-literal inference step.
     /// `None` for any element whose type isn't recoverable here; the caller
     /// falls back to the head-name inference, which is what it always used.
-    fn refined_tuple_literal_elem_te(&self, e: &Expr) -> Option<TypeExpr> {
+    /// B-2026-09-24-21 — `str` is the typechecker-internal spelling of
+    /// `String`, and it is what the span-keyed instantiation table records for
+    /// `Some(f"..")`. The tuple consumers downstream (the destructure disarm
+    /// among them) match on `String`, so an element named `Option[str]` got a
+    /// drop and no disarm: measured as a double free on `let (a, b) = t`. The
+    /// annotated spelling was always `String`; this makes the recorded one
+    /// agree with it.
+    fn str_spelled_as_string(te: &TypeExpr) -> TypeExpr {
+        let mut out = te.clone();
+        match &mut out.kind {
+            TypeKind::Path(p) => {
+                if p.segments.len() == 1 && p.segments[0] == "str" && p.generic_args.is_none() {
+                    p.segments[0] = "String".to_string();
+                }
+                if let Some(args) = p.generic_args.as_mut() {
+                    for a in args.iter_mut() {
+                        if let GenericArg::Type(t) = a {
+                            *t = Self::str_spelled_as_string(t);
+                        }
+                    }
+                }
+            }
+            TypeKind::Tuple(es) => {
+                for t in es.iter_mut() {
+                    *t = Self::str_spelled_as_string(t);
+                }
+            }
+            _ => {}
+        }
+        out
+    }
+
+    pub(super) fn refined_tuple_literal_elem_te(&self, e: &Expr) -> Option<TypeExpr> {
         match &e.kind {
             // A collection BINDING: rebuild `<head>[<elem>]` from the two
             // side-tables that together carry what the single TE lost.
@@ -19539,6 +19586,32 @@ impl<'ctx> super::Codegen<'ctx> {
                 if let Some(te) = self.type_decls.enum_inst_var_types.get(n.as_str()) {
                     if !self.user_enum_boxed_payload_variants(te).is_empty() {
                         return Some(te.clone());
+                    }
+                }
+                // B-2026-09-24-21 — an INLINE `Option`/`Result` binding whose
+                // payload owns heap (`let label = Some(f"..")`), with no user
+                // `Drop` body and so no entry in the table two arms up.
+                // `compile_tuple` now disarms the source of every such element
+                // (its case (e)), so the tuple must own the payload, and it can
+                // only do that if it knows the element's type. Resolved through
+                // the same passthrough alias the disarm follows, so the two
+                // always name one binding.
+                {
+                    let owner = self.moved_arg_owner_name(n);
+                    if self
+                        .payload_vars
+                        .inline_option_payload_vars
+                        .contains(owner.as_str())
+                        || self
+                            .payload_vars
+                            .inline_result_payload_vars
+                            .contains(owner.as_str())
+                    {
+                        if let Some(te) =
+                            self.payload_vars.inline_optres_var_tes.get(owner.as_str())
+                        {
+                            return Some(Self::str_spelled_as_string(te));
+                        }
                     }
                 }
                 // B-2026-09-23-32 — a `for` loop's TUPLE element (the
