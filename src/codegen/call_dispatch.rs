@@ -9598,15 +9598,20 @@ impl<'ctx> super::Codegen<'ctx> {
                 self.array_elem_and_len(e)
                     .is_some_and(|(inner, n)| n > 0 && self.type_expr_has_drop_heap(&inner))
             });
-            // B-2026-09-24-21 — `tuple_elem_needs_deep_drop` as well, the
-            // disjunct `synthesize_tuple_drop_fn_te` itself admits on: an inline
+            // B-2026-09-24-21 — an `Option`/`Result` element too, the one
+            // disjunct of `tuple_elem_needs_deep_drop` this needs: an inline
             // `Option[String]` element owns heap that `type_expr_has_drop_heap`
             // reads as heapless by design, so `eat((Some(f".."), 1))` registered
-            // nothing and the payload leaked once per call.
+            // nothing and the payload leaked once per call. NOT the whole of
+            // `tuple_elem_needs_deep_drop`: its `shared` disjunct would arm a
+            // walk over a bare `shared enum` element (`(S(mk(1)), 7)`), whose
+            // body both backends agree to leave silent
+            // (`e2e_bare_shared_enum_tuple_elem_stays_silent`), and make the
+            // compiled side alone run it.
             if array_heap_elem
                 || elem_tes
                     .iter()
-                    .any(|e| self.type_expr_has_drop_heap(e) || self.tuple_elem_needs_deep_drop(e))
+                    .any(|e| self.type_expr_has_drop_heap(e) || self.tuple_elem_optres_drop_ok(e))
             {
                 let slot = self.create_entry_alloca(cur_fn, "__owned_agg_tmp", agg_ty.into());
                 self.builder.build_store(slot, val).unwrap();
