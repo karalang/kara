@@ -2925,6 +2925,13 @@ impl<'ctx> super::Codegen<'ctx> {
                 };
             if self.type_decls.struct_types.contains_key(head)
                 && !self.type_decls.shared_types.contains_key(head)
+            {
+                self.borrow_vars
+                    .for_loop_elem_struct_views
+                    .insert(name.to_string());
+            }
+            if self.type_decls.struct_types.contains_key(head)
+                && !self.type_decls.shared_types.contains_key(head)
                 && for_loop_copy_supported
             {
                 self.borrow_vars

@@ -4741,6 +4741,21 @@ impl<'ctx> super::Codegen<'ctx> {
                 // exactly what `None` emitted.
                 let inner = crate::codegen::helpers::vec_inner_type_expr(&payload_te);
                 (et, inner)
+            } else if self.option_payload_map_or_set_drop_ok(&payload_te)
+                || matches!(&payload_te.kind, TypeKind::Tuple(elems) if !elems.is_empty())
+                || self.array_elem_and_len(&payload_te).is_some()
+            {
+                // B-2026-09-24-25 — a `Map`/`Set` handle, tuple or fixed-array
+                // payload. None of these is the `{ptr,len,cap}` overlay below,
+                // and the struct/enum helper in the next arm binds a
+                // `TypeKind::Path` naming a declared struct or enum, so it
+                // returned having copied NOTHING: the copy aliased the
+                // payload, and `o.clone()` over `Option[Map[i64, String]]` or
+                // `Option[(String, i64)]` segfaulted when the two owners freed
+                // it. Copy through the type's own clone fn instead, which is
+                // what `emit_drop_fn_for_type_expr` pairs with for each.
+                self.deep_copy_option_payload_via_clone_fn(field_ptr, &payload_te);
+                return;
             } else {
                 // B-2026-07-04-7 — a non-shared struct/enum payload (BOXED when
                 // wider than the 3-word inline area, else inline in words 1..3),
@@ -5006,6 +5021,115 @@ impl<'ctx> super::Codegen<'ctx> {
     /// exactly the buffers the payload's own `__karac_drop_*` frees (copy ==
     /// drop), so the callee copy and caller original own independent heap. `None`
     /// runs nothing.
+    /// B-2026-09-24-25 — deep-copy a `Some` payload in place through the
+    /// payload type's own clone fn (`void clone(*const T, *mut T)`). A BOXED
+    /// payload (wider than `Option`'s payload area) gets a fresh box holding
+    /// the clone; an inline one is cloned from a stack copy of itself back
+    /// into the payload words. `None` copies nothing.
+    fn deep_copy_option_payload_via_clone_fn(
+        &mut self,
+        field_ptr: PointerValue<'ctx>,
+        payload_te: &TypeExpr,
+    ) {
+        let i64_t = self.context.i64_type();
+        let ptr_ty = self.context.ptr_type(AddressSpace::default());
+        let Some(fn_val) = self.current_fn else {
+            return;
+        };
+        let Some(layout) = self.type_decls.enum_layouts.get("Option").cloned() else {
+            return;
+        };
+        let option_ty = layout.llvm_type;
+        let some_tag = layout.tags.get("Some").copied().unwrap_or(1);
+        let payload_llty = self.llvm_type_for_type_expr(payload_te);
+        let boxed = self.option_payload_is_boxed(payload_te);
+        let clone_fn = self.emit_owning_clone_fn_for_type_expr(payload_te);
+
+        let tag_ptr = self
+            .builder
+            .build_struct_gep(option_ty, field_ptr, 0, "p14oc.tag.p")
+            .unwrap();
+        let tag = self
+            .builder
+            .build_load(i64_t, tag_ptr, "p14oc.tag")
+            .unwrap()
+            .into_int_value();
+        let is_some = self
+            .builder
+            .build_int_compare(
+                IntPredicate::EQ,
+                tag,
+                i64_t.const_int(some_tag, false),
+                "p14oc.some",
+            )
+            .unwrap();
+        let some_bb = self.context.append_basic_block(fn_val, "p14oc.some");
+        let merge_bb = self.context.append_basic_block(fn_val, "p14oc.merge");
+        self.builder
+            .build_conditional_branch(is_some, some_bb, merge_bb)
+            .unwrap();
+        self.builder.position_at_end(some_bb);
+        let payload_base = self
+            .builder
+            .build_struct_gep(option_ty, field_ptr, 1, "p14oc.pl")
+            .unwrap();
+        if boxed {
+            let old_w = self
+                .builder
+                .build_load(i64_t, payload_base, "p14oc.box.w0")
+                .unwrap()
+                .into_int_value();
+            let old_box = self
+                .builder
+                .build_int_to_ptr(old_w, ptr_ty, "p14oc.oldbox")
+                .unwrap();
+            let old_null = self
+                .builder
+                .build_is_null(old_box, "p14oc.oldbox.null")
+                .unwrap();
+            let copy_bb = self.context.append_basic_block(fn_val, "p14oc.box.copy");
+            self.builder
+                .build_conditional_branch(old_null, merge_bb, copy_bb)
+                .unwrap();
+            self.builder.position_at_end(copy_bb);
+            let raw_size = payload_llty.size_of().unwrap();
+            let size = if raw_size.get_type().get_bit_width() == 64 {
+                raw_size
+            } else {
+                self.builder
+                    .build_int_z_extend(raw_size, i64_t, "p14oc.sz64")
+                    .unwrap()
+            };
+            let new_box = self
+                .builder
+                .build_call(self.runtime_fns.malloc_fn, &[size.into()], "p14oc.newbox")
+                .unwrap()
+                .try_as_basic_value()
+                .unwrap_basic()
+                .into_pointer_value();
+            self.builder
+                .build_call(clone_fn, &[old_box.into(), new_box.into()], "")
+                .unwrap();
+            let new_w = self
+                .builder
+                .build_ptr_to_int(new_box, i64_t, "p14oc.newbox.w")
+                .unwrap();
+            self.builder.build_store(payload_base, new_w).unwrap();
+        } else {
+            let tmp = self.create_entry_alloca(fn_val, "p14oc.src", payload_llty);
+            let v = self
+                .builder
+                .build_load(payload_llty, payload_base, "p14oc.v")
+                .unwrap();
+            self.builder.build_store(tmp, v).unwrap();
+            self.builder
+                .build_call(clone_fn, &[tmp.into(), payload_base.into()], "")
+                .unwrap();
+        }
+        self.builder.build_unconditional_branch(merge_bb).unwrap();
+        self.builder.position_at_end(merge_bb);
+    }
+
     fn deep_copy_option_struct_enum_payload_in_place(
         &mut self,
         field_ptr: PointerValue<'ctx>,

@@ -5932,7 +5932,7 @@ impl<'ctx> super::Codegen<'ctx> {
     /// [`Self::result_field_direct_vecstr_halves_ok`] excludes them: the
     /// defensive copy emits no per-element rc-inc, so the duplicate would alias
     /// the source's boxes.
-    fn result_half_is_direct_vecstr(&self, half: &TypeExpr) -> bool {
+    pub(super) fn result_half_is_direct_vecstr(&self, half: &TypeExpr) -> bool {
         let is_vecstr = self.is_string_type_expr(half)
             || (matches!(&half.kind, TypeKind::Path(hp)
                     if matches!(hp.segments.last().map(|s| s.as_str()), Some("Vec") | Some("VecDeque")))
@@ -6214,7 +6214,7 @@ impl<'ctx> super::Codegen<'ctx> {
         // where the resolver below finds no place, nothing was zeroed and the
         // two bindings freed one buffer twice. Only an inline String/Vec
         // payload is copied; any other shape keeps the handling below.
-        if Self::place_chain_reaches_index(scrutinee) {
+        if self.place_chain_reaches_index(scrutinee) {
             if let ExprKind::FieldAccess { object, field } = &scrutinee.kind {
                 let field_te = self.plain_field_type_expr(object, field);
                 let is_optres = field_te.as_ref().is_some_and(|te| {
@@ -6260,12 +6260,46 @@ impl<'ctx> super::Codegen<'ctx> {
         }
     }
 
-    /// Does this place chain pass through an `Index` (`g[0].o`, `g[0].1.o`)?
-    fn place_chain_reaches_index(e: &Expr) -> bool {
+    /// Is this place a VIEW of a container element — does its chain pass
+    /// through an `Index` (`g[0].o`, `g[0].1.o`), or is it rooted at a `for`
+    /// loop variable (`for x in g { … x.o … }`)?
+    ///
+    /// B-2026-09-24-26 — the loop variable is the second spelling. It is a
+    /// bit-copy of the element, bound with no drop of its own, and the
+    /// container frees every element after the loop
+    /// (`mark_for_loop_borrow_if_heap` records it). So the owned-place
+    /// handling below, which zeroes the SOURCE field, zeroed the loop
+    /// variable's private copy and left the element armed: the arm's binding
+    /// and the container's element drop freed one payload twice. Copying out,
+    /// as for an indexed element, is what leaves each with its own.
+    ///
+    /// B-2026-09-24-22 — a match PAYLOAD binding is the third
+    /// (`It.S(n) => match n.doc { Some(s) => .. }` over a by-value enum
+    /// param): `n` is a bit-copy of the payload and the enum's own drop
+    /// frees it, the same retaining-root shape as the loop variable.
+    fn place_chain_reaches_index(&self, e: &Expr) -> bool {
         match &e.kind {
             ExprKind::Index { .. } => true,
             ExprKind::FieldAccess { object, .. } | ExprKind::TupleIndex { object, .. } => {
-                Self::place_chain_reaches_index(object)
+                if let ExprKind::Identifier(n) = &object.kind {
+                    if self
+                        .borrow_vars
+                        .for_loop_owned_agg_vars
+                        .contains(n.as_str())
+                        || self
+                            .borrow_vars
+                            .for_loop_elem_struct_views
+                            .contains(n.as_str())
+                        || self.borrow_vars.elem_borrow_roots.contains(n.as_str())
+                        || self
+                            .borrow_vars
+                            .borrowed_agg_payload_struct_vars
+                            .contains(n.as_str())
+                    {
+                        return true;
+                    }
+                }
+                self.place_chain_reaches_index(object)
             }
             _ => false,
         }
@@ -6315,8 +6349,60 @@ impl<'ctx> super::Codegen<'ctx> {
             self.builder
                 .build_call(clone_fn, &[src.into(), slot_ptr.into()], "")
                 .unwrap();
+            self.own_cloned_aggregate_binding(slot_ptr, &te);
+            // The binding is no longer a deboxed view of the element's box, so
+            // a later move out of it must not mirror its zero through that box
+            // (B-2026-08-06-10's channel): `let q = pp` zeroed the element's
+            // `name` cap there and leaked the element's own buffer.
+            self.payload_vars.deboxed_payload_box_ptrs.remove(&slot_ptr);
         }
         true
+    }
+
+    /// B-2026-09-24-24 — a binding of a user struct, enum or tuple bound out
+    /// of a BOXED payload (`Some(pp)` over `Option[P]`) registers no drop of
+    /// its own: it is a deboxed view, and the box's owner frees the interior.
+    /// Once [`Self::clone_index_rooted_optres_binding`] has replaced that view
+    /// with a clone, nothing owned the clone (measured: 28 B from
+    /// `karac_string_clone` per match of `pp.name`). Register the drop here,
+    /// unless a frame already owns the slot — an arm whose field disarm hands
+    /// the binding its interior registers one already, and a second would
+    /// free the clone twice. String/Vec/Map and nested `Option` bindings are
+    /// left alone: each already carries its own free.
+    fn own_cloned_aggregate_binding(&mut self, slot_ptr: PointerValue<'ctx>, te: &TypeExpr) {
+        let is_user_aggregate = match &te.kind {
+            TypeKind::Tuple(elems) => !elems.is_empty(),
+            TypeKind::Path(p) => p.segments.last().is_some_and(|n| {
+                self.type_decls.struct_types.contains_key(n.as_str())
+                    || self.type_decls.enum_layouts.contains_key(n.as_str())
+                        && !matches!(n.as_str(), "Option" | "Result")
+            }),
+            _ => false,
+        };
+        if !is_user_aggregate {
+            return;
+        }
+        let already_owned = self.drop_rc.scope_cleanup_actions.iter().any(|frame| {
+            frame.iter().any(|a| match a {
+                crate::codegen::state::CleanupAction::StructDrop { struct_alloca, .. } => {
+                    *struct_alloca == slot_ptr
+                }
+                crate::codegen::state::CleanupAction::EnumDrop { enum_alloca, .. } => {
+                    *enum_alloca == slot_ptr
+                }
+                _ => false,
+            })
+        });
+        if already_owned {
+            return;
+        }
+        let drop_fn = self.emit_drop_fn_for_type_expr(te);
+        if let Some(frame) = self.drop_rc.scope_cleanup_actions.last_mut() {
+            frame.push(crate::codegen::state::CleanupAction::StructDrop {
+                struct_alloca: slot_ptr,
+                drop_fn,
+            });
+        }
     }
 
     /// B-2026-09-24-17 — the decision half of
@@ -6333,7 +6419,7 @@ impl<'ctx> super::Codegen<'ctx> {
         pattern: &Pattern,
     ) -> bool {
         if self.pattern_state.pattern_binding_is_borrow
-            || !Self::place_chain_reaches_index(scrutinee)
+            || !self.place_chain_reaches_index(scrutinee)
         {
             return false;
         }
@@ -6485,12 +6571,40 @@ impl<'ctx> super::Codegen<'ctx> {
                         .zip(pats)
                         .all(|(e, p)| self.collect_pattern_bindings(e, p, out))
             }
-            // A struct pattern is NOT walked, though the fields are easy to
-            // resolve: bound out of a BOXED `Option` payload
-            // (`Some(P { name, k })`), a leaf there registers no free of its
-            // own, so its copy leaked (measured: 28 B from
-            // `karac_string_clone`). The caller's zeroing keeps that shape
-            // memory-clean, and emptying the element is the known remainder.
+            PatternKind::Struct { path, fields, .. } => {
+                let TypeKind::Path(p) = &te.kind else {
+                    return false;
+                };
+                let Some(sname) = p.segments.last() else {
+                    return false;
+                };
+                if path.last() != Some(sname)
+                    || p.generic_args.as_ref().is_some_and(|a| !a.is_empty())
+                {
+                    return false;
+                }
+                let (Some(names), Some(tys)) = (
+                    self.type_decls.struct_field_names.get(sname.as_str()),
+                    self.type_decls.struct_field_type_exprs.get(sname.as_str()),
+                ) else {
+                    return false;
+                };
+                fields.iter().all(|f| {
+                    let Some(i) = names.iter().position(|n| *n == f.name) else {
+                        return false;
+                    };
+                    let Some(fte) = tys.get(i) else {
+                        return false;
+                    };
+                    match &f.pattern {
+                        Some(sp) => self.collect_pattern_bindings(fte, sp, out),
+                        None => {
+                            out.push((f.name.clone(), fte.clone()));
+                            true
+                        }
+                    }
+                })
+            }
             _ => false,
         }
     }
@@ -6612,7 +6726,7 @@ impl<'ctx> super::Codegen<'ctx> {
         field_te: &TypeExpr,
         slot_ptr: PointerValue<'ctx>,
     ) -> bool {
-        if !Self::place_chain_reaches_index(value) {
+        if !self.place_chain_reaches_index(value) {
             return false;
         }
         let half_ok = |this: &Self, h: &TypeExpr| {
@@ -6620,7 +6734,19 @@ impl<'ctx> super::Codegen<'ctx> {
                 || crate::codegen::vec_method::is_trivially_copyable_te(h)
         };
         let admitted = if let Some(pt) = Self::option_payload_te(field_te) {
+            // B-2026-09-24-24 — any payload `emit_option_value_clone_fn`
+            // deep-copies, not only a direct String/Vec: a user enum or struct
+            // (`let a = g[0].q` over `Option[K]`), a `Map`/`Set` handle, a
+            // tuple. Each was zeroed instead, emptying the element. A payload
+            // whose copy would run a user `Drop` body, or a `shared` one, keeps
+            // the zeroing.
             self.result_half_is_direct_vecstr(&pt)
+                || (self
+                    .option_inner_shared_type_for_type_expr(field_te)
+                    .is_none()
+                    && !self.elem_te_runs_user_drop(&pt)
+                    && (self.option_payload_struct_or_enum_drop_ok(&pt)
+                        || self.option_payload_map_or_set_drop_ok(&pt)))
         } else if let Some((ok, err)) = Self::result_payload_tes(field_te) {
             half_ok(self, &ok) && half_ok(self, &err)
         } else {
@@ -6638,6 +6764,61 @@ impl<'ctx> super::Codegen<'ctx> {
         let alias = self
             .builder
             .build_load(slot_ty, slot_ptr, "elem.optres.field.alias")
+            .unwrap();
+        self.builder.build_store(src, alias).unwrap();
+        self.builder
+            .build_call(clone_fn, &[src.into(), slot_ptr.into()], "")
+            .unwrap();
+        true
+    }
+
+    /// B-2026-09-24-24 — the BOXED twin of
+    /// [`Self::clone_index_rooted_optres_field_into`], for the let site's box
+    /// registration. `let a = g[0].q` over `Option[K]` (a payload wide enough
+    /// to be boxed) left `a` holding the element's box pointer: the let
+    /// registered nothing (B-2026-08-18-15, to stop two owners freeing it),
+    /// and a consuming `match a` then zeroed the payload THROUGH that shared
+    /// box, emptying the element. The loop spelling (`for x in g { let q =
+    /// x.q; .. }`) registered a drop on the alias instead, and the Vec's own
+    /// element drop freed the box a second time.
+    ///
+    /// Deep-clones the whole field into `slot_ptr` so the binding owns a box
+    /// of its own; the caller then keeps its box registration. Returns
+    /// `false`, emitting nothing, for any other shape — a payload whose copy
+    /// would run a user `Drop` body or a `shared` one keeps the old
+    /// register-nothing behaviour.
+    pub(super) fn clone_element_field_boxed_option_into(
+        &mut self,
+        value: &Expr,
+        field_te: &TypeExpr,
+        slot_ptr: PointerValue<'ctx>,
+    ) -> bool {
+        if !matches!(value.kind, ExprKind::FieldAccess { .. })
+            || !self.place_chain_reaches_index(value)
+            || self
+                .option_inner_shared_type_for_type_expr(field_te)
+                .is_some()
+        {
+            return false;
+        }
+        let Some(pt) = Self::option_payload_te(field_te) else {
+            return false;
+        };
+        if !self.option_payload_is_boxed(&pt)
+            || self.elem_te_runs_user_drop(&pt)
+            || !self.option_payload_struct_or_enum_drop_ok(&pt)
+        {
+            return false;
+        }
+        let Some(fn_val) = self.current_fn else {
+            return false;
+        };
+        let slot_ty = self.llvm_type_for_type_expr(field_te);
+        let clone_fn = self.emit_clone_fn_for_type_expr(field_te);
+        let src = self.create_entry_alloca(fn_val, "elem.boxopt.field.src", slot_ty);
+        let alias = self
+            .builder
+            .build_load(slot_ty, slot_ptr, "elem.boxopt.field.alias")
             .unwrap();
         self.builder.build_store(src, alias).unwrap();
         self.builder

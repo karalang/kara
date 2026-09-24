@@ -395,7 +395,9 @@ impl<'ctx> super::Codegen<'ctx> {
             .option_inner_shared_type_for_type_expr(opt_te)
             .is_some()
             || self.option_payload_inline_recursive_drop_ok(&payload_te)
-            || self.option_payload_struct_or_enum_drop_ok(&payload_te);
+            || self.option_payload_struct_or_enum_drop_ok(&payload_te)
+            // B-2026-09-24-25 — a `Map`/`Set` handle payload owns heap too.
+            || self.option_payload_map_or_set_drop_ok(&payload_te);
         if !payload_owns_heap {
             return None;
         }

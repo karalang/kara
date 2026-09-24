@@ -366,6 +366,53 @@ impl<'ctx> super::Codegen<'ctx> {
     /// with no args would read as "no heap" and take the shallow copy, so when
     /// the instantiation is missing, rebuild it from the per-variable payload
     /// record (`var_option_payload_te`) instead of accepting the erased head.
+    /// B-2026-09-24-25 — the `Option`/`Result` type of `<binding>.clone()`
+    /// when that clone is a DEEP copy with heap of its own, i.e. exactly when
+    /// `try_compile_clone` routes it through `emit_option_value_clone_fn` /
+    /// `emit_result_value_clone_fn`. `None` for any other RHS, and for a
+    /// heap-free payload, whose clone is a plain bit-copy owning nothing.
+    pub(super) fn optres_value_clone_te(&self, value: &Expr) -> Option<TypeExpr> {
+        let ExprKind::MethodCall {
+            object,
+            method,
+            args,
+            ..
+        } = &value.kind
+        else {
+            return None;
+        };
+        if method != "clone" || !args.is_empty() {
+            return None;
+        }
+        let ExprKind::Identifier(name) = &object.kind else {
+            return None;
+        };
+        let te = self.aggregate_clone_receiver_type_expr(name.as_str())?;
+        let TypeKind::Path(p) = &te.kind else {
+            return None;
+        };
+        match p.segments.first().map(String::as_str) {
+            Some("Option") => {
+                let pt = Self::option_payload_te(&te)?;
+                let owns_heap = self.option_inner_shared_type_for_type_expr(&te).is_some()
+                    || self.option_payload_inline_recursive_drop_ok(&pt)
+                    || self.option_payload_struct_or_enum_drop_ok(&pt)
+                    || self.option_payload_map_or_set_drop_ok(&pt);
+                owns_heap.then_some(te)
+            }
+            Some("Result") => {
+                let (ok, err) = Self::result_payload_tes(&te)?;
+                let direct = |h: &TypeExpr| self.result_half_is_direct_vecstr(h);
+                let trivial = |h: &TypeExpr| super::vec_method::is_trivially_copyable_te(h);
+                ((direct(&ok) || direct(&err))
+                    && (direct(&ok) || trivial(&ok))
+                    && (direct(&err) || trivial(&err)))
+                .then_some(te)
+            }
+            _ => None,
+        }
+    }
+
     fn aggregate_clone_receiver_type_expr(&self, name: &str) -> Option<TypeExpr> {
         let span_zero = crate::token::Span {
             line: 0,

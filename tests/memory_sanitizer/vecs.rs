@@ -7591,3 +7591,166 @@ fn main() {
         8,
     );
 }
+
+// B-2026-09-24-24 / B-2026-09-24-26 — reading a container element's `Option`
+// field copies it and leaves the element intact, as the interpreter does, in
+// the spellings the first fix missed: a `let` copy of a boxed enum or a `Map`
+// payload, a struct sub-pattern `Some(P { name, k })`, a whole-struct binding
+// `Some(pp)` moved on (`let q = pp`), and a `for` loop variable's fields
+// (match, `if let`, `let`, and a struct holding a tuple `Option`). Before the
+// fix these emptied the element, leaked the copy, or double-freed.
+#[test]
+fn asan_elem_optres_field_let_struct_pattern_and_loop_free_once() {
+    assert_clean_asan_run_min_allocs(
+        r#"
+struct P { name: String, k: i64 }
+enum K { A(String), B }
+struct G { o: Option[String], p: Option[P], q: Option[K], m: Option[Map[i64, String]], t: Option[(String, i64)], n: i64 }
+fn mk(i: i64) -> String { f"alpha-{i}-long-enough-to-heap" }
+fn mg(i: i64) -> G {
+    let mut mm: Map[i64, String] = Map.new();
+    mm.insert(i, mk(i));
+    G { o: Some(mk(i)), p: Some(P { name: mk(i), k: i }), q: Some(K.A(mk(i))), m: Some(mm), t: Some((mk(i), 3)), n: i }
+}
+fn main() {
+    let g: Vec[G] = [mg(1), mg(22)];
+    let mut n = 0;
+    let a = g[0].q;
+    match a { Some(K.A(s)) => { n = n + s.len(); } _ => {} }
+    match g[0].q { Some(K.A(s)) => { n = n + s.len(); } _ => {} }
+    let b = g[0].m;
+    match b { Some(m) => { n = n + m.len(); } None => {} }
+    match g[0].m { Some(m) => { n = n + m.len(); } None => {} }
+    println(f"let {n}");
+    n = 0;
+    match g[0].p { Some(P { name, k }) => { n = n + name.len() + k; } _ => {} }
+    match g[0].p { Some(pp) => { n = n + pp.name.len(); } _ => {} }
+    match g[0].p { Some(pp) => { let q = pp; n = n + q.name.len(); } _ => {} }
+    if let Some(P { name, k }) = g[0].p { n = n + name.len() + k; }
+    println(f"pat {n}");
+    n = 0;
+    for x in g {
+        match x.o { Some(s) => { n = n + s.len(); } None => {} }
+        if let Some(K.A(s)) = x.q { n = n + s.len(); }
+        let q = x.q;
+        match q { Some(K.A(s)) => { n = n + s.len(); } _ => {} }
+        match x.p { Some(P { name, k }) => { n = n + name.len() + k; } _ => {} }
+        match x.t { Some((s, k)) => { n = n + s.len() + k; } _ => {} }
+    }
+    println(f"loop {n}");
+}
+"#,
+        &["let 56", "pat 110", "loop 304"],
+        "asan_elem_optres_field_let_struct_pattern_and_loop_free_once",
+        8,
+    );
+}
+
+// B-2026-09-24-25 — `.clone()` on an `Option` whose payload is a `Map`, a
+// `Set`, a tuple (with a `Vec` or a `Map` in it) or an `Array` makes an
+// independent copy, as the interpreter does; before the fix it segfaulted. An
+// unconsumed clone (`let cs2 = os2.clone()`) is freed.
+#[test]
+fn asan_option_clone_map_tuple_array_payload_free_once() {
+    assert_clean_asan_run_min_allocs(
+        r#"
+fn mk(i: i64) -> String { f"alpha-{i}-long-enough-to-heap" }
+fn main() {
+    let mut mm: Map[i64, String] = Map.new();
+    mm.insert(1, mk(1));
+    let o: Option[Map[i64, String]] = Some(mm);
+    let mut c = o.clone();
+    match c { Some(ref_m) => { let mut m2 = ref_m; m2.insert(2, mk(2)); println(f"c {m2.len()}"); } None => {} }
+    match o { Some(m) => println(f"o {m.len()}"), None => println("none") }
+    let mut st: Set[String] = Set.new();
+    st.insert(mk(3));
+    let os: Option[Set[String]] = Some(st);
+    let cs = os.clone();
+    match cs { Some(s) => println(f"cs {s.len()}"), None => {} }
+    match os { Some(s) => println(f"os {s.len()}"), None => {} }
+    let ot: Option[(Vec[String], i64)] = Some(([mk(4), mk(5)], 9));
+    let ct = ot.clone();
+    match ct { Some((v, k)) => println(f"ct {v.len()} {k} {v[1]}"), None => {} }
+    match ot { Some((v, k)) => println(f"ot {v.len()} {k}"), None => {} }
+    let oa: Option[Array[String, 2]] = Some([mk(6), mk(7)]);
+    let ca = oa.clone();
+    match ca { Some(a) => println(f"ca {a[0]}"), None => {} }
+    match oa { Some(a) => println(f"oa {a[1]}"), None => {} }
+    let on: Option[Map[i64, String]] = None;
+    let cn = on.clone();
+    println(f"none {cn.is_none()}");
+    let mut m9: Map[i64, String] = Map.new(); m9.insert(9, mk(9)); let ow: Option[(String, Map[i64, String])] = Some((mk(8), m9));
+    let cw = ow.clone();
+    match cw { Some((s, m)) => println(f"cw {s} {m.len()}"), None => {} }
+    match ow { Some((s, m)) => println(f"ow {s.len()} {m.len()}"), None => {} }
+    let os2: Option[String] = Some(mk(10));
+    let cs2 = os2.clone();
+    println(f"str {cs2.is_some()} {os2.is_some()}");
+}
+"#,
+        &[
+            "c 2",
+            "o 1",
+            "cs 1",
+            "os 1",
+            "ct 2 9 alpha-5-long-enough-to-heap",
+            "ot 2 9",
+            "ca alpha-6-long-enough-to-heap",
+            "oa alpha-7-long-enough-to-heap",
+            "none true",
+            "cw alpha-8-long-enough-to-heap 1",
+            "ow 27 1",
+            "str true true",
+        ],
+        "asan_option_clone_map_tuple_array_payload_free_once",
+        8,
+    );
+}
+
+// B-2026-09-24-22 — a consuming match (or a `let`) over an `Option`/`Result`
+// field of a match PAYLOAD binding (`It.S(n) => match n.doc { Some(s) => .. }`
+// in a by-value enum param) copies the payload out, since the enum still owns
+// and frees it. Before the fix it zeroed only the binding's bit-copy and the
+// payload was freed twice.
+#[test]
+fn asan_payload_binding_optres_field_match_free_once() {
+    assert_clean_asan_run_min_allocs(
+        r#"
+struct N { doc: Option[String], k: i64 }
+struct R { doc: Result[String, i64], k: i64 }
+enum It { S(N), T(R), E(i64) }
+fn show(it: It) -> String {
+    match it {
+        It.S(n) => match n.doc { Some(s) => f"s{n.k} {s}", None => f"s{n.k} none" },
+        It.T(r) => match r.doc { Ok(s) => f"t{r.k} {s}", Err(e) => f"t{r.k} {e}" },
+        It.E(x) => f"e{x}",
+    }
+}
+fn show_let(it: It) -> String {
+    match it {
+        It.S(n) => { let d = n.doc; match d { Some(s) => f"l{n.k} {s}", None => f"l{n.k} none" } }
+        _ => "other",
+    }
+}
+fn main() {
+    println(show(It.S(N { doc: Some(f"heap-string-longer-than-sso-1"), k: 1 })));
+    println(show(It.T(R { doc: Ok(f"heap-string-longer-than-sso-2"), k: 2 })));
+    println(show(It.E(3)));
+    println(show_let(It.S(N { doc: Some(f"heap-string-longer-than-sso-4"), k: 4 })));
+    let v: Vec[N] = [N { doc: Some(f"heap-string-longer-than-sso-5"), k: 5 }];
+    let mut t = 0;
+    for n in v { let d = n.doc; match d { Some(s) => { t = t + s.len(); } None => {} } }
+    println(f"loop {t}");
+}
+"#,
+        &[
+            "s1 heap-string-longer-than-sso-1",
+            "t2 heap-string-longer-than-sso-2",
+            "e3",
+            "l4 heap-string-longer-than-sso-4",
+            "loop 29",
+        ],
+        "asan_payload_binding_optres_field_match_free_once",
+        8,
+    );
+}

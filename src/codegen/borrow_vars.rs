@@ -112,6 +112,18 @@ pub(crate) struct BorrowVars<'ctx> {
     /// copy-support); removed on shadow-rebind; cleared per-function alongside
     /// `for_loop_borrow_vars`.
     pub(crate) for_loop_owned_agg_vars: HashSet<String>,
+    /// Every non-shared STRUCT `for`-loop element binding, copy-supported or
+    /// not (B-2026-09-24-26). A superset of the struct half of
+    /// `for_loop_owned_agg_vars`, which is gated on recursive copy-support
+    /// because it drives whole-value deep copies. This set drives only the
+    /// question "is `x.f` a view of a container element?"
+    /// (`place_chain_reaches_index`), and the answer does not depend on
+    /// copy-support: `struct G { p: Option[P], t: Option[(String, i64)] }` is
+    /// not copy-supported, the loop still bit-copies each element, and the
+    /// container still frees it after the loop, so `match x.p { Some(P {
+    /// name, k }) => .. }` zeroing `x`'s private copy double-freed the box.
+    /// Populated, removed and cleared alongside `for_loop_owned_agg_vars`.
+    pub(crate) for_loop_elem_struct_views: HashSet<String>,
     /// Struct payload bindings from a match arm on a BORROWED / owned-elsewhere
     /// scrutinee (`pattern_binding_is_borrow` — e.g. `for it in items { match it
     /// { Fu(f) => … } }` over `items: ref Vec[It]`, classed read-only by

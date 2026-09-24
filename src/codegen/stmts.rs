@@ -5222,6 +5222,7 @@ impl<'ctx> super::Codegen<'ctx> {
                     // source-suppress that pairs with the copy).
                     self.borrow_vars.for_loop_borrow_vars.remove(var_name);
                     self.borrow_vars.for_loop_owned_agg_vars.remove(var_name);
+                    self.borrow_vars.for_loop_elem_struct_views.remove(var_name);
                     self.borrow_vars.elem_borrow_roots.remove(var_name);
                     // `let it = s.chars()` — codegen materializes the
                     // char-iterator as an eager `Vec[char]` snapshot (see the
@@ -7957,7 +7958,17 @@ impl<'ctx> super::Codegen<'ctx> {
                             // element read (`let c = v[i];` over
                             // `Vec[Option[Wide]]`) is already correct and is
                             // deliberately left alone.
-                            if Self::init_projects_out_of_container_element(value) {
+                            // B-2026-09-24-24 — unless the binding takes a
+                            // deep clone of the field, which it then owns.
+                            let elem_clone = !boxed.is_empty()
+                                && self
+                                    .variables
+                                    .get(var_name.as_str())
+                                    .map(|s| s.ptr)
+                                    .is_some_and(|slot| {
+                                        self.clone_element_field_boxed_option_into(value, te, slot)
+                                    });
+                            if !elem_clone && Self::init_projects_out_of_container_element(value) {
                                 boxed.clear();
                             }
                             if let Some(slot) = (!boxed.is_empty())
@@ -8303,9 +8314,15 @@ impl<'ctx> super::Codegen<'ctx> {
                                             // B-2026-07-12-4, and
                                             // `vec_handback_moves_value_out`
                                             // keys on it.
+                                            // B-2026-09-24-25 — `o.clone()`
+                                            // builds its own box too: the
+                                            // payload is deep-copied through
+                                            // the array's clone fn, so the
+                                            // interior is this binding's alone.
                                             (self.call_builds_its_own_optres_box(value)
                                                 || self.map_handback_moves_value_out(value)
-                                                || self.vec_handback_moves_value_out(value))
+                                                || self.vec_handback_moves_value_out(value)
+                                                || self.optres_value_clone_te(value).is_some())
                                             .then_some(())
                                         })
                                         .and_then(|()| Self::seeded_variant_payload_te(te, variant))
@@ -10431,6 +10448,15 @@ impl<'ctx> super::Codegen<'ctx> {
                     // non-heap / borrow payloads.
                     if matches!(value.kind, ExprKind::Call { .. })
                         || self.rhs_is_fresh_inline_enum(value)
+                        // B-2026-09-24-25 — `let c = o.clone();` over an
+                        // `Option`/`Result` binding. The clone is a fresh,
+                        // DEEP owner (`emit_option_value_clone_fn` /
+                        // `emit_result_value_clone_fn`), but a builtin method
+                        // call never reached this block, so the copy had no
+                        // scope-exit free: `let c = o.clone();` leaked its
+                        // payload for every heap payload, `String` included,
+                        // whenever `c` was not consumed.
+                        || self.optres_value_clone_te(value).is_some()
                         // B-2026-09-24-15 — a USER method's owned return
                         // (`let doc = self.collect_doc();`), admitted on the
                         // same footing as a user function's. The exclusion in
@@ -10485,7 +10511,8 @@ impl<'ctx> super::Codegen<'ctx> {
                             .get(&(value.span.offset, value.span.length))
                             .cloned()
                             .or_else(|| ty.clone())
-                            .or_else(|| self.untyped_let_boxed_enum_te(value));
+                            .or_else(|| self.untyped_let_boxed_enum_te(value))
+                            .or_else(|| self.optres_value_clone_te(value));
                         if let Some(te) = opt_te {
                             if let Some(slot) = self.variables.get(var_name.as_str()).copied() {
                                 // `te` is an `Option[Vec/String]`,
