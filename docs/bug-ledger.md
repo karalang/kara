@@ -95,7 +95,7 @@ distinguish "bugs flattening" from "we stopped writing them down."
 | run-vs-build | 488 |
 | miscompile | 444 |
 | leak | 409 |
-| double-free | 298 |
+| double-free | 300 |
 | missing-feature | 206 |
 | codegen-gap | 192 |
 | other | 149 |
@@ -110,7 +110,7 @@ distinguish "bugs flattening" from "we stopped writing them down."
 
 | surface | total |
 |---|---|
-| codegen | 2039 |
+| codegen | 2041 |
 | interp | 538 |
 | typecheck | 307 |
 | other | 110 |
@@ -377,7 +377,8 @@ registered in the callee's prologue, not by-value struct params in general. | �
 | B-2026-09-24-19 | 2026-09-24 | codegen | high | A GENERIC FUNCTION'S BY-VALUE `Option[T]` PARAM HAS NO OWNER PROTOCOL AT `T = String`: A NAMED ARGUMENT IS FREED TWICE WHEN THE CALLEE TAKES THE PAYLOAD, A TEMPORARY LEAKS WHEN IT DOES NOT -- `fn pick[T](a: Option[T], d: T) -> T { match a { Some(s) => s, None => d } }` over `let a = Some(..); pick(a, ..)` and `fn st[T](a: Option[T]) -> Vec[Option[T]] { .. v.push(a); v }` abort `double free detected in tcache 2` on jit, -O0 and -O2, while `fn peek[T](a: Option[T]) -> i64 { match a { Some(_) => 1, None => 0 } }` over a TEMPORARY argument leaks its 29-byte String; `--interp` is right throughout | — |
 | B-2026-09-24-20 | 2026-09-24 | codegen | high | AN ESCAPING BY-VALUE `Result`/`Option` PARAM WHOSE INLINE PAYLOAD RUNS A USER `Drop` IS STILL FREED TWICE -- `fn peek(a: Result[S, i64]) -> i64 { match id(a) { Ok(x) => x.r.id + x.s.len(), Err(e) => e } }` over `struct S { r: R, s: String }` (R has a `Drop`, S fits `Result`'s five-word area) prints `d1 k30 end` under `--interp` and at -O2 and aborts `double free detected in tcache 2` on jit and -O0 | — |
 | B-2026-09-24-27 | 2026-09-24 | codegen | low | A DISCARDED TUPLE LITERAL THAT MOVES A `String` OR `Vec` LOCAL LEAKS THE BUFFER -- `let s = f".."; (s, 1);` and `let _ = (s, 1);` lose 29 bytes in 1 block at -O0 (`Vec[i64]`: 24 bytes), output correct on all four surfaces; the fresh spelling `let _ = (f"..", 1);` is clean | — |
-| B-2026-09-24-28 | 2026-09-24 | codegen | high | AN RC-PROMOTED `Option[(String, i64)]` OR `Option[Option[String]]` LOCAL SEGFAULTS ON EVERY COMPILED SURFACE, AND AN `Option[Map[i64, String]]` ONE READS INVALID MEMORY AND LEAKS 72 B -- the payload shapes B-2026-09-24-23's fix did not reach, measured unchanged by it | — |
+| B-2026-09-24-30 | 2026-09-24 | codegen | high | THREE RC-PROMOTED `Option`/`Result` PAYLOAD SHAPES B-2026-09-24-28 DID NOT REACH ARE STILL WRONG ON THE COMPILED SURFACES -- `Result[(String, i64), i64]` double-frees at jit/-O0, a nested `Some(Some(s))` arm moving `s` out double-frees on jit/-O0/-O2, and `Option[Map[i64, String]]` reads invalid memory and loses 72 B (629 with indirect) at -O0 | — |
+| B-2026-09-24-31 | 2026-09-24 | codegen | high | AN `Option[Map[K, V]]` / `Option[Set[T]]` / `Option[SortedMap[K, V]]` LOCAL MOVED ON (INTO A CALL, A `let`, A FIELD, A `return`, OR HANDED BACK) IS FREED TWICE ON EVERY COMPILED SURFACE -- `let d = Some(m); println(take(d))` prints nothing on jit, -O0 and -O2 (interp `1 end`), valgrind -O0 err=48 | — |
 
 ### Relocated
 
@@ -3020,6 +3021,7 @@ registered in the callee's prologue, not by-value struct params in general. | �
 | B-2026-09-24-24 | codegen | medium | MEASURED: reading a Vec element's `Option` field still EMPTIES the element when compiled in two spellings the -17 fix leaves alone: a `let`/assign co… | 42f7e85c0 |
 | B-2026-09-24-25 | codegen | high | MEASURED: `.clone()` on an `Option[Map[i64, String]]` or an `Option[(String, i64)]` SEGFAULTS when compiled (exit 139, no output); `--interp` prints… | 42f7e85c0 |
 | B-2026-09-24-26 | codegen | high | MEASURED: a consuming match over a FOR-LOOP variable's `Option` field double-frees when compiled: `for x in g { match x.o { Some(s) => n = n + s.len(… | 42f7e85c0 |
+| B-2026-09-24-28 | codegen | high | AN RC-PROMOTED `Option[(String, i64)]` OR `Option[Option[String]]` LOCAL SEGFAULTED ON EVERY COMPILED SURFACE -- fixed for tuple, three-tuple and nes… | d7ac55568 |
 | B-2026-09-24-29 | codegen | high | AN `if let` EXPRESSION WHOSE BRANCHES ARE f-STRINGS DOUBLE FREES ON EVERY COMPILED SURFACE, WHATEVER THE SCRUTINEE -- `let r = if let Some(s) = doc {… | 5d364837b |
 
 </details>
