@@ -11029,3 +11029,73 @@ fn main() {
         "asan_optres_handback_result_consumed_unbound",
     );
 }
+
+/// B-2026-09-24-4 — a `match` arm that hands a hand-back result's payload out
+/// as the match's value (`let k = match id(a) { Some(x) => x, .. }`, bound or
+/// unbound). The scrutinee only aliases `a`'s box, so its arms bind as borrows
+/// and record no view to retract, and `a`'s scope-exit drop freed the payload
+/// interior that `k` also owns: a double free on every compiled surface. The
+/// arm now zeroes the payload in the shared box on its own path, so a
+/// conditional hand-back that returns `None` keeps `a`'s interior (and its
+/// body) on the other path.
+#[test]
+fn asan_handback_match_arm_moves_payload_out() {
+    assert_clean_asan_run(
+        r#"struct R { id: i64, s: String }
+impl Drop for R { fn drop(mut ref self) { println(f"d{self.id}") } }
+struct N { id: i64, s: String }
+fn mkr(i: i64) -> R { return R { id: i, s: f"heap-string-longer-than-sso-{i}" } }
+fn mkn(i: i64) -> N { return N { id: i, s: f"heap-string-longer-than-sso-{i}" } }
+fn id(a: Option[R]) -> Option[R] { a }
+fn tl(a: Option[R], c: bool) -> Option[R] { if c { a } else { None } }
+fn idn(a: Option[N]) -> Option[N] { a }
+fn ids(a: Option[String]) -> Option[String] { a }
+fn eat(r: R) { println(f"eat{r.id}") }
+fn show(o: Option[R]) { match o { Some(x) => println(f"y{x.id}"), None => println("none") } }
+struct H { k: i64 }
+impl H { fn g(ref self, a: Option[R]) -> Option[R] { a } }
+fn main() {
+    { let a = Some(mkr(1)); let k = match id(a) { Some(x) => x, None => mkr(9) }; println(f"k{k.id}"); }
+    { let a = Some(mkr(2)); let b = id(a); let k = match b { Some(x) => x, None => mkr(9) }; println(f"k{k.id}"); }
+    { let a = Some(mkr(3)); let k = match tl(a, true) { Some(x) => x, None => mkr(9) }; println(f"k{k.id}"); }
+    { let a = Some(mkr(4)); let k = match tl(a, false) { Some(x) => x, None => mkr(94) }; println(f"k{k.id}"); }
+    { let a = Some(mkr(5)); let b = tl(a, false); let k = match b { Some(x) => x, None => mkr(95) }; println(f"k{k.id}"); }
+    { let a = Some(mkr(6)); let k = match id(a) { Some(x) => { println("in"); x } None => mkr(9) }; println(f"k{k.id}"); }
+    { let a = Some(mkr(7)); let k = match id(a) { Some(x) if x.id > 5 => x, Some(y) => mkr(y.id + 100), None => mkr(9) }; println(f"k{k.id}"); }
+    { let a = Some(mkn(8)); let k = match idn(a) { Some(x) => x, None => mkn(9) }; println(f"n{k.id} {k.s}"); }
+    let mut i = 10;
+    while i < 13 { let a = Some(mkr(i)); let k = match tl(a, i != 11) { Some(x) => x, None => mkr(90 + i) }; println(f"k{k.id}"); i = i + 1; }
+    println("end")
+}
+"#,
+        &[
+            "k1",
+            "d1",
+            "k2",
+            "d2",
+            "k3",
+            "d3",
+            "d4",
+            "k94",
+            "d94",
+            "d5",
+            "k95",
+            "d95",
+            "in",
+            "k6",
+            "d6",
+            "k7",
+            "d7",
+            "n8 heap-string-longer-than-sso-8",
+            "k10",
+            "d10",
+            "d11",
+            "k101",
+            "d101",
+            "k12",
+            "d12",
+            "end",
+        ],
+        "asan_handback_match_arm_moves_payload_out",
+    );
+}

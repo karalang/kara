@@ -1515,6 +1515,12 @@ impl<'ctx> super::Codegen<'ctx> {
                 // exactly when something downstream owns the result.
                 if self.branch_value_is_owned(scrutinee) {
                     self.suppress_boxed_payload_view_move(Self::block_tail_expr(&arm.body));
+                    self.neutralize_aliased_box_payload_move(
+                        scrutinee,
+                        &arm.pattern,
+                        Self::block_tail_expr(&arm.body),
+                        freshtemp_boxed_slot,
+                    );
                 }
                 // …and the payload's BODIES walk with it. Every other move
                 // position reaches `disarm_container_bodies_move_sources` (let
@@ -16400,6 +16406,92 @@ impl<'ctx> super::Codegen<'ctx> {
             }
             _ => false,
         }
+    }
+
+    /// B-2026-09-24-4 — the arm-tail move of a payload the scrutinee only
+    /// ALIASES. `match id(a) { Some(x) => x, .. }` (or `let b = id(a); match b`)
+    /// hands `x` out as the match's value while `a` still owns the box, and
+    /// `a`'s scope-exit drop freed the payload's interior that the result
+    /// binding also frees: `free(): double free` on every compiled surface.
+    ///
+    /// [`Self::suppress_boxed_payload_view_move`] cannot serve it: the arms of an
+    /// aliased scrutinee bind as BORROWS (the passthrough-retains classification),
+    /// so no view is recorded, and its retraction is STATIC, which is right only
+    /// where the box exists on no other path. Here it can: a conditional
+    /// hand-back (`tl(a, false)`) leaves `a`'s box live on the path this arm did
+    /// not take. So the neutralization is emitted IN THE ARM, at runtime: the
+    /// payload in the shared box is zeroed after the move, and `a`'s drop then
+    /// finds empty fields there and frees only the box.
+    fn neutralize_aliased_box_payload_move(
+        &mut self,
+        scrutinee: &Expr,
+        pattern: &Pattern,
+        tail: &Expr,
+        staged_slot: Option<PointerValue<'ctx>>,
+    ) {
+        let ExprKind::Identifier(moved) = &tail.kind else {
+            return;
+        };
+        let PatternKind::TupleVariant { path, patterns } = &pattern.kind else {
+            return;
+        };
+        // `Option` only: its box pointer is the first payload word on the
+        // one boxing variant. `Result`'s two variants box at their own
+        // offsets, and nothing here has measured them.
+        if path.last().map(String::as_str) != Some("Some") || patterns.len() != 1 {
+            return;
+        }
+        if !matches!(&patterns[0].kind, PatternKind::Binding(name) if name == moved) {
+            return;
+        }
+        let slot = match &scrutinee.kind {
+            ExprKind::Identifier(n)
+                if self
+                    .payload_vars
+                    .boxed_passthrough_chain_alias
+                    .contains_key(n.as_str()) =>
+            {
+                match self.variables.get(n.as_str()) {
+                    Some(v) => v.ptr,
+                    None => return,
+                }
+            }
+            _ if self.call_result_aliases_armed_binding(scrutinee) => match staged_slot {
+                Some(s) => s,
+                None => return,
+            },
+            _ => return,
+        };
+        let Some(payload_ty) = self.variables.get(moved.as_str()).map(|v| v.ty) else {
+            return;
+        };
+        let BasicTypeEnum::StructType(payload_st) = payload_ty else {
+            return;
+        };
+        let i64t = self.context.i64_type();
+        let ptr_t = self.context.ptr_type(AddressSpace::default());
+        let Ok(word_p) = (unsafe {
+            self.builder
+                .build_gep(i64t, slot, &[i64t.const_int(1, false)], "aliasbox.w1")
+        }) else {
+            return;
+        };
+        let Ok(word) = self.builder.build_load(i64t, word_p, "aliasbox.word") else {
+            return;
+        };
+        let Ok(box_ptr) =
+            self.builder
+                .build_int_to_ptr(word.into_int_value(), ptr_t, "aliasbox.ptr")
+        else {
+            return;
+        };
+        let _ = self.builder.build_store(box_ptr, payload_st.const_zero());
+        // The staged scrutinee (and a bound alias's slot) also carries the
+        // payload-bodies walk that `compile_match` arms at scope exit, which
+        // would now run the body over the zeroed payload. Retag the SLOT --
+        // not the box, which `a` still reads -- as `None` on this path, so that
+        // walk finds nothing; the other paths keep their `Some` and their body.
+        let _ = self.builder.build_store(slot, i64t.const_zero());
     }
 
     pub(super) fn suppress_boxed_payload_view_move(&mut self, value: &Expr) {

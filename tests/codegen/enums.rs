@@ -12923,3 +12923,47 @@ fn main() {
     };
     assert_eq!(out, "c=true\ny1\nd1\ny2\nd2\ny3\nd3\nc=false\nd1\nnone\nd2\nnone\nd3\ne5\ny4\nd4\ny5\nd5\ny6\nd6\neat7\nd7\ny8\nd8\ny9\nd9\nn10\ny20\nd20\ny21\nd21\nend\n", "got:\n{out}");
 }
+
+/// B-2026-09-24-4 — a `match` arm that hands a hand-back result's payload out
+/// as the match's value (`let k = match id(a) { Some(x) => x, .. }`, bound or
+/// unbound). The scrutinee only aliases `a`'s box, so its arms bind as borrows
+/// and record no view to retract, and `a`'s scope-exit drop freed the payload
+/// interior that `k` also owns: a double free on every compiled surface. The
+/// arm now zeroes the payload in the shared box on its own path, so a
+/// conditional hand-back that returns `None` keeps `a`'s interior (and its
+/// body) on the other path.
+#[test]
+fn e2e_handback_match_arm_moves_payload_out() {
+    let Some(out) = run_program(
+        r#"struct R { id: i64, s: String }
+impl Drop for R { fn drop(mut ref self) { println(f"d{self.id}") } }
+struct N { id: i64, s: String }
+fn mkr(i: i64) -> R { return R { id: i, s: f"heap-string-longer-than-sso-{i}" } }
+fn mkn(i: i64) -> N { return N { id: i, s: f"heap-string-longer-than-sso-{i}" } }
+fn id(a: Option[R]) -> Option[R] { a }
+fn tl(a: Option[R], c: bool) -> Option[R] { if c { a } else { None } }
+fn idn(a: Option[N]) -> Option[N] { a }
+fn ids(a: Option[String]) -> Option[String] { a }
+fn eat(r: R) { println(f"eat{r.id}") }
+fn show(o: Option[R]) { match o { Some(x) => println(f"y{x.id}"), None => println("none") } }
+struct H { k: i64 }
+impl H { fn g(ref self, a: Option[R]) -> Option[R] { a } }
+fn main() {
+    { let a = Some(mkr(1)); let k = match id(a) { Some(x) => x, None => mkr(9) }; println(f"k{k.id}"); }
+    { let a = Some(mkr(2)); let b = id(a); let k = match b { Some(x) => x, None => mkr(9) }; println(f"k{k.id}"); }
+    { let a = Some(mkr(3)); let k = match tl(a, true) { Some(x) => x, None => mkr(9) }; println(f"k{k.id}"); }
+    { let a = Some(mkr(4)); let k = match tl(a, false) { Some(x) => x, None => mkr(94) }; println(f"k{k.id}"); }
+    { let a = Some(mkr(5)); let b = tl(a, false); let k = match b { Some(x) => x, None => mkr(95) }; println(f"k{k.id}"); }
+    { let a = Some(mkr(6)); let k = match id(a) { Some(x) => { println("in"); x } None => mkr(9) }; println(f"k{k.id}"); }
+    { let a = Some(mkr(7)); let k = match id(a) { Some(x) if x.id > 5 => x, Some(y) => mkr(y.id + 100), None => mkr(9) }; println(f"k{k.id}"); }
+    { let a = Some(mkn(8)); let k = match idn(a) { Some(x) => x, None => mkn(9) }; println(f"n{k.id} {k.s}"); }
+    let mut i = 10;
+    while i < 13 { let a = Some(mkr(i)); let k = match tl(a, i != 11) { Some(x) => x, None => mkr(90 + i) }; println(f"k{k.id}"); i = i + 1; }
+    println("end")
+}
+"#,
+    ) else {
+        return;
+    };
+    assert_eq!(out, "k1\nd1\nk2\nd2\nk3\nd3\nd4\nk94\nd94\nd5\nk95\nd95\nin\nk6\nd6\nk7\nd7\nn8 heap-string-longer-than-sso-8\nk10\nd10\nd11\nk101\nd101\nk12\nd12\nend\n", "got:\n{out}");
+}
