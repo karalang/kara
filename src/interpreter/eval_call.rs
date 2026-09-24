@@ -3212,6 +3212,9 @@ impl<'a> super::Interpreter<'a> {
                     || crate::ast::fn_returns_param_payload(f, i)
                     || crate::ast::fn_moves_param_into_outliving_place(f, i)
                     || crate::ast::fn_moves_param_into_outliving_place_via_call(self.program, f, i)
+                    // B-2026-09-24-16 — or pushed into a container a callee
+                    // local holds, whose drain runs the body.
+                    || crate::ast::fn_moves_param_into_local_container(f, i)
                 {
                     return None;
                 }
@@ -3369,6 +3372,9 @@ impl<'a> super::Interpreter<'a> {
                     )
                     || crate::ast::fn_moves_param_into_outliving_place(f, i)
                     || crate::ast::fn_moves_param_into_outliving_place_via_call(self.program, f, i)
+                    // B-2026-09-24-16 — or pushed into a container a callee
+                    // local holds, whose drain runs the body.
+                    || crate::ast::fn_moves_param_into_local_container(f, i)
                     || crate::ast::fn_conditionally_returns_param_bare(Some(self.program), f, i)
                     // B-2026-09-07-4 — and the ONE-HOP hand-back
                     // (`fn thruv(ref self, r: R) -> R { return fwd(r); }`), the
@@ -3416,6 +3422,9 @@ impl<'a> super::Interpreter<'a> {
                             i,
                         )
                         || crate::ast::fn_always_moves_param_into_outliving_place(f, i)
+                        // B-2026-09-24-16 — a MUST predicate too: the push into
+                        // the callee's local container is on every path.
+                        || crate::ast::fn_moves_param_into_local_container(f, i)
                         // B-2026-09-07-4 — the one-hop hand-back gives the same
                         // every-path guarantee the bare one does: the inner
                         // callee returns it, this one returns that, so the
@@ -5141,6 +5150,9 @@ impl<'a> super::Interpreter<'a> {
                         && crate::ast::fn_returns_param_payload_of(self.program, f, i, variant))
                     || crate::ast::fn_moves_param_into_outliving_place(f, i)
                     || crate::ast::fn_moves_param_into_outliving_place_via_call(self.program, f, i)
+                    // B-2026-09-24-16 — or pushed into a container a callee
+                    // local holds, whose drain runs the body.
+                    || crate::ast::fn_moves_param_into_local_container(f, i)
                     // B-2026-08-31-46 — a conditional hand-back the callee
                     // frame owns per path; `fn_returns_param`'s union used to
                     // cover the bare form, but not a constructor wrap.

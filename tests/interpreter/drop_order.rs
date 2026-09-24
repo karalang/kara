@@ -6820,3 +6820,38 @@ fn main() {
         "s1 heap-string-longer-than-sso-0\ne1\ns2 heap-string-longer-than-sso-2\n58\nf5 heap-string-longer-than-sso-5\nf6 heap-string-longer-than-sso-6\nf7 heap-string-longer-than-sso-7\ns7 heap-string-longer-than-sso-6\nend\n"
     );
 }
+
+/// B-2026-09-24-16 — the interpreter half of
+/// `test_e2e_param_pushed_into_callee_local_container_runs_one_body`.
+#[test]
+fn test_param_pushed_into_callee_local_container_runs_one_body() {
+    let out = run(r#"struct R { id: i64 }
+impl Drop for R { fn drop(mut ref self) { println(f"d{self.id}") } }
+struct R2 { id: i64, s: String }
+impl Drop for R2 { fn drop(mut ref self) { println(f"e{self.id}") } }
+struct B { n: i64 }
+impl B { fn st(ref self, a: R) -> Vec[R] { let mut v: Vec[R] = Vec.new(); v.push(a); v } }
+fn st(a: R) -> Vec[R] { let mut v: Vec[R] = Vec.new(); v.push(a); v }
+fn stl(a: R) -> i64 { let mut v: Vec[R] = Vec.new(); v.push(a); 9 }
+fn sto(a: Option[R]) -> Vec[Option[R]] { let mut v: Vec[Option[R]] = Vec.new(); v.push(a); v }
+fn stg[T](a: T) -> Vec[T] { let mut v: Vec[T] = Vec.new(); v.push(a); v }
+fn stm(a: R) -> Map[i64, R] { let mut m: Map[i64, R] = Map.new(); m.insert(1, a); m }
+fn st2(a: R2) -> Vec[R2] { let mut v: Vec[R2] = Vec.new(); v.push(a); v }
+fn main() {
+    { let a = R { id: 1 }; let v = st(a); println(f"k{v.len()}"); }
+    { let v = st(R { id: 2 }); println(f"k{v.len()}"); }
+    { let a = R { id: 3 }; println(f"k{stl(a)}"); }
+    { let a = Some(R { id: 4 }); let v = sto(a); println(f"k{v.len()}"); }
+    { let v = sto(Some(R { id: 5 })); println(f"k{v.len()}"); }
+    { let b = B { n: 0 }; let a = R { id: 6 }; let v = b.st(a); println(f"k{v.len()}"); }
+    { let a = R { id: 7 }; let v = stg(a); println(f"k{v.len()}"); }
+    { let a = R { id: 8 }; let m = stm(a); println(f"k{m.len()}"); }
+    { let a = R2 { id: 9, s: f"heap-string-longer-than-sso-9" }; let v = st2(a); println(f"k{v.len()}"); }
+    println("end")
+}
+"#);
+    assert_eq!(
+        out, "k1\nd1\nk1\nd2\nd3\nk9\nk1\nd4\nk1\nd5\nk1\nd6\nk1\nd7\nk1\nd8\nk1\ne9\nend\n",
+        "got:\n{out}"
+    );
+}

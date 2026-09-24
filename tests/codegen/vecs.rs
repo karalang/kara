@@ -9523,3 +9523,76 @@ fn main() {
     );
     assert_eq!(out.as_deref(), Some("s1 heap-string-longer-than-sso-1\nt2 heap-string-longer-than-sso-2\ne3\nl4 heap-string-longer-than-sso-4\nloop 29\n"), "must match --interp");
 }
+
+/// B-2026-09-24-16 — a by-value parameter the callee pushes into a container
+/// held by one of ITS OWN locals (returned, or dying in the callee) runs its
+/// `Drop` body once: the container's drain runs it, so the caller's walk over
+/// the argument stands down. Free fn, method, generic, `Option` param, `Map`
+/// insert, and a heap-bearing `R2`, named and temporary. Every cell ran two
+/// bodies on all four surfaces before (the temporary `Option` cell on the
+/// interpreter only).
+#[test]
+fn test_e2e_param_pushed_into_callee_local_container_runs_one_body() {
+    let out = run_program(
+        r#"struct R { id: i64 }
+impl Drop for R { fn drop(mut ref self) { println(f"d{self.id}") } }
+struct R2 { id: i64, s: String }
+impl Drop for R2 { fn drop(mut ref self) { println(f"e{self.id}") } }
+struct B { n: i64 }
+impl B { fn st(ref self, a: R) -> Vec[R] { let mut v: Vec[R] = Vec.new(); v.push(a); v } }
+fn st(a: R) -> Vec[R] { let mut v: Vec[R] = Vec.new(); v.push(a); v }
+fn stl(a: R) -> i64 { let mut v: Vec[R] = Vec.new(); v.push(a); 9 }
+fn sto(a: Option[R]) -> Vec[Option[R]] { let mut v: Vec[Option[R]] = Vec.new(); v.push(a); v }
+fn stg[T](a: T) -> Vec[T] { let mut v: Vec[T] = Vec.new(); v.push(a); v }
+fn stm(a: R) -> Map[i64, R] { let mut m: Map[i64, R] = Map.new(); m.insert(1, a); m }
+fn st2(a: R2) -> Vec[R2] { let mut v: Vec[R2] = Vec.new(); v.push(a); v }
+fn main() {
+    { let a = R { id: 1 }; let v = st(a); println(f"k{v.len()}"); }
+    { let v = st(R { id: 2 }); println(f"k{v.len()}"); }
+    { let a = R { id: 3 }; println(f"k{stl(a)}"); }
+    { let a = Some(R { id: 4 }); let v = sto(a); println(f"k{v.len()}"); }
+    { let v = sto(Some(R { id: 5 })); println(f"k{v.len()}"); }
+    { let b = B { n: 0 }; let a = R { id: 6 }; let v = b.st(a); println(f"k{v.len()}"); }
+    { let a = R { id: 7 }; let v = stg(a); println(f"k{v.len()}"); }
+    { let a = R { id: 8 }; let m = stm(a); println(f"k{m.len()}"); }
+    { let a = R2 { id: 9, s: f"heap-string-longer-than-sso-9" }; let v = st2(a); println(f"k{v.len()}"); }
+    println("end")
+}
+"#,
+    );
+    assert_eq!(
+        out.as_deref(),
+        Some("k1\nd1\nk1\nd2\nd3\nk9\nk1\nd4\nk1\nd5\nk1\nd6\nk1\nd7\nk1\nd8\nk1\ne9\nend\n"),
+        "must match --interp"
+    );
+}
+
+/// B-2026-09-24-19 — a generic function's by-value `Option[T]` / `Result[T, E]`
+/// param at `T = String` has one owner: the monomorph entry-copies it and the
+/// caller keeps a named argument and owns a temporary, as for a concrete
+/// callee. A payload moved out, pushed into a returned `Vec`, or rebound
+/// double-freed a named argument; a temporary the callee only read leaked.
+#[test]
+fn test_e2e_generic_fn_by_value_optres_param_has_one_owner() {
+    let out = run_program(
+        r#"fn pick[T](a: Option[T], d: T) -> T { match a { Some(s) => s, None => d } }
+fn peek[T](a: Option[T]) -> i64 { match a { Some(_) => 1, None => 0 } }
+fn st[T](a: Option[T]) -> Vec[Option[T]] { let mut v = Vec.new(); v.push(a); v }
+fn rb[T](a: Option[T]) -> i64 { let c = a; match c { Some(_) => 1, None => 0 } }
+fn rpick[T](a: Result[T, String], d: T) -> T { match a { Ok(s) => s, Err(_) => d } }
+fn main() {
+    let a = Some(f"heap-string-longer-than-sso-1"); println(pick(a, f"d"));
+    println(pick(Some(f"heap-string-longer-than-sso-2"), f"d"));
+    println(f"p{peek(Some(f"heap-string-longer-than-sso-3"))}");
+    let b = Some(f"heap-string-longer-than-sso-4"); let v = st(b); println(f"s{v.len()}");
+    let w = st(Some(f"heap-string-longer-than-sso-5")); println(f"s{w.len()}");
+    println(f"r{rb(Some(f"heap-string-longer-than-sso-6"))}");
+    let c = Some(f"heap-string-longer-than-sso-7"); println(f"r{rb(c)}");
+    let e: Result[String, String] = Err(f"heap-string-longer-than-sso-e8"); println(rpick(e, f"heap-string-longer-than-sso-d8"));
+    let o: Result[String, String] = Ok(f"heap-string-longer-than-sso-o9"); println(rpick(o, f"d"));
+    println("end")
+}
+"#,
+    );
+    assert_eq!(out.as_deref(), Some("heap-string-longer-than-sso-1\nheap-string-longer-than-sso-2\np1\ns1\ns1\nr1\nr1\nheap-string-longer-than-sso-d8\nheap-string-longer-than-sso-o9\nend\n"), "must match --interp");
+}

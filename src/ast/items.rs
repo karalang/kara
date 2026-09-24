@@ -7868,6 +7868,112 @@ pub fn fn_moves_param_into_outliving_place(f: &Function, arg_index: usize) -> bo
     outliving_store::walk_block(&f.body, param_name, &roots)
 }
 
+/// B-2026-09-24-16 — does `f` move by-value parameter `arg_index` into a
+/// container held by one of its own LOCALS, on every path?
+///
+/// `fn st(a: R) -> Vec[R] { let mut v: Vec[R] = Vec.new(); v.push(a); v }`
+/// hands the parameter to `v`, whose drain runs its `Drop` body -- where `v`
+/// dies in this frame, or wherever the returned `Vec` ends up. The caller's
+/// own walk over the argument is then a second body for one value (`d1 k1 d1`
+/// on all four surfaces). [`fn_moves_param_into_outliving_place`] answers the
+/// same question for a container the CALLER already holds (`self`, a `ref`
+/// parameter), and this is its sibling for one the callee creates: the caller
+/// stands down in both, for the same reason.
+///
+/// A MUST-analysis, deliberately narrow, because this feeds only the
+/// suppressing direction: a false `true` would lose a body on a path that did
+/// not push. So the push has to be a TOP-LEVEL statement of the body, into a
+/// binding a top-level `let` declared before it, and every statement ahead of
+/// it has to be straight-line -- nothing that can `return`, `break` out or
+/// `?`-propagate before the push is reached. Anything else answers `false`,
+/// which keeps the pre-existing behaviour for that shape.
+pub fn fn_moves_param_into_local_container(f: &Function, arg_index: usize) -> bool {
+    let Some(param) = f.params.get(arg_index) else {
+        return false;
+    };
+    if matches!(
+        param.ty.kind,
+        crate::ast::TypeKind::Ref(_) | crate::ast::TypeKind::MutRef(_)
+    ) {
+        return false;
+    }
+    let PatternKind::Binding(name) = &param.pattern.kind else {
+        return false;
+    };
+    /// Can evaluating `e` leave the function, or skip what follows it?
+    fn straight(e: &Expr) -> bool {
+        match &e.kind {
+            ExprKind::Integer(..)
+            | ExprKind::Float(..)
+            | ExprKind::CharLit(..)
+            | ExprKind::ByteLit(..)
+            | ExprKind::StringLit(..)
+            | ExprKind::MultiStringLit(..)
+            | ExprKind::InterpolatedStringLit(..)
+            | ExprKind::ByteStringLit(..)
+            | ExprKind::Bool(..)
+            | ExprKind::Identifier(..)
+            | ExprKind::Path { .. }
+            | ExprKind::SelfValue => true,
+            ExprKind::Binary { left, right, .. } => straight(left) && straight(right),
+            ExprKind::Unary { operand, .. } => straight(operand),
+            ExprKind::FieldAccess { object, .. } | ExprKind::TupleIndex { object, .. } => {
+                straight(object)
+            }
+            ExprKind::Call { callee, args } => {
+                straight(callee) && args.iter().all(|a| straight(&a.value))
+            }
+            ExprKind::MethodCall { object, args, .. } => {
+                straight(object) && args.iter().all(|a| straight(&a.value))
+            }
+            ExprKind::Tuple(elems) | ExprKind::ArrayLiteral(elems) => elems.iter().all(straight),
+            ExprKind::StructLiteral { fields, .. } => fields.iter().all(|fi| straight(&fi.value)),
+            _ => false,
+        }
+    }
+    let mut locals: Vec<&str> = Vec::new();
+    for st in &f.body.stmts {
+        match &st.kind {
+            StmtKind::Expr(e) => {
+                if let ExprKind::MethodCall {
+                    object,
+                    method,
+                    args,
+                    ..
+                } = &e.kind
+                {
+                    if matches!(
+                        method.as_str(),
+                        "push" | "push_back" | "push_front" | "insert"
+                    ) && matches!(&object.kind, ExprKind::Identifier(v) if locals.contains(&v.as_str()))
+                        && args
+                            .iter()
+                            .any(|a| outliving_store::is_bare(&a.value, name))
+                    {
+                        return args.iter().all(|a| straight(&a.value));
+                    }
+                }
+                if !straight(e) {
+                    return false;
+                }
+            }
+            StmtKind::Let { pattern, value, .. } => {
+                if !straight(value) {
+                    return false;
+                }
+                if let PatternKind::Binding(n) = &pattern.kind {
+                    if n == name {
+                        return false;
+                    }
+                    locals.push(n.as_str());
+                }
+            }
+            _ => return false,
+        }
+    }
+    false
+}
+
 /// B-2026-08-30-28 — the MUST half of [`fn_moves_param_into_outliving_place`]:
 /// does EVERY path through `f` store the parameter into a place that outlives
 /// the call?

@@ -2313,6 +2313,22 @@ impl<'ctx> super::Codegen<'ctx> {
             if param_box_taken_by_callee {
                 self.suppress_inline_option_result_binding_move(&a.value);
             }
+            // B-2026-09-24-19 — the caller's half of the monomorph's
+            // `Option`/`Result` entry copy (`mono_optres_param_entry_copied`,
+            // asked of the same function and instantiated type). A named
+            // argument keeps its binding and its free; a fresh temp has no
+            // binding, and the callee frees only its own copy, so this frame
+            // owns the original -- `compile_call`'s arm for a copying callee.
+            if let Some(p) = generic_fn.params.get(i) {
+                let inst = Self::str_as_string_te(&self.callee_param_te_for_call(&p.ty, call_span));
+                if self.mono_optres_param_entry_copied(&generic_fn, i, &inst) {
+                    let own_payload = self.optres_arg_is_unowned_temp(&a.value);
+                    let own_envelope = self.optres_arg_mints_field_envelope(&a.value);
+                    if own_payload || own_envelope {
+                        self.track_optres_arg_temp(val, &inst, own_payload, own_envelope);
+                    }
+                }
+            }
             // B-2026-09-16-16 — the OTHER half of the same ownership question,
             // for the param the arm above correctly declines.
             //
@@ -3465,6 +3481,26 @@ impl<'ctx> super::Codegen<'ctx> {
                 {
                     let var_name = var_name.clone();
                     self.suppress_user_drop_body_keeping_memory(&var_name);
+                } else if ast_i.is_some_and(|ast_i| {
+                    self.program_snapshot.as_deref().is_some_and(|p| {
+                        super::declarations::find_function_ast(p, name).is_some_and(|f| {
+                            crate::ast::fn_moves_param_into_local_container(f, ast_i)
+                        })
+                    })
+                }) {
+                    // B-2026-09-24-16 — the monomorph leg of `compile_call`'s
+                    // retraction for a callee that pushes the param into a
+                    // container its own local holds: that container runs the
+                    // body, so the binding must not. `st[T](a: T) -> Vec[T]`
+                    // over `let a = R { id: 1 }` ran `d1 k1 d1` on every
+                    // compiled surface once the concrete twin ran one body.
+                    // Same memory split as the concrete site.
+                    let var_name = var_name.clone();
+                    if self.arg_var_is_forwarded_not_copied(&var_name) {
+                        self.suppress_user_drop_for_var(&var_name);
+                    } else {
+                        self.suppress_user_drop_body_keeping_memory(&var_name);
+                    }
                 }
             }
             // B-2026-09-05-6 — the monomorph leg of the place-STRUCT escaping
@@ -5133,6 +5169,23 @@ impl<'ctx> super::Codegen<'ctx> {
                     ) {
                         self.borrow_vars.owned_struct_params.remove(&param_name);
                     }
+                }
+            }
+            // B-2026-09-24-19 — a by-value `Option`/`Result` param: copy at
+            // entry and register it like a local, so the payload has one owner
+            // whichever frame it ends up in. `compile_generic_call` asks the
+            // same predicate for its half (the caller keeps a named argument
+            // and owns a temp). Registered BEFORE the copy, as in
+            // `compile_function` (B-2026-08-12-1's ordering note).
+            if matches!(&param.ty.kind, TypeKind::Path(pp)
+                if matches!(pp.segments.first().map(String::as_str), Some("Option") | Some("Result")))
+            {
+                let inst = Self::str_as_string_te(&self.subst_monomorph_type_params(&param.ty));
+                if self.mono_optres_param_entry_copied(func, i, &inst) {
+                    self.track_inline_option_payload_var(&param_name, alloca, &inst);
+                    self.track_inline_result_payload_var(&param_name, alloca, &inst);
+                    self.track_inline_option_map_payload_var(&param_name, alloca, &inst);
+                    self.deep_copy_optres_param_in_place(alloca, &inst);
                 }
             }
             // B-2026-08-27-37 — the TUPLE leg of the pairing rule above. That

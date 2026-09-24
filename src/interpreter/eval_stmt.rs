@@ -7791,6 +7791,9 @@ impl<'a> super::Interpreter<'a> {
                             f,
                             i,
                         )
+                        // B-2026-09-24-16 — or into a container a callee local
+                        // holds; codegen's gate asks the same predicate.
+                        || crate::ast::fn_moves_param_into_local_container(f, i)
                 });
                 // B-2026-08-09-15 — `fn_returns_param_payload` is the same
                 // rule one level down: the callee hands back not the param but

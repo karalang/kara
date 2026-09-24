@@ -10519,6 +10519,25 @@ impl<'ctx> super::Codegen<'ctx> {
                             .or_else(|| ty.clone())
                             .or_else(|| self.untyped_let_boxed_enum_te(value))
                             .or_else(|| self.optres_value_clone_te(value));
+                        // B-2026-09-24-19 — inside a monomorph the recorded
+                        // type of a rebound param is the GENERIC one
+                        // (`Option[T]`), which no registrar recognises, so
+                        // `let c = a` over an entry-copied `a: Option[T]`
+                        // disarmed `a` and registered nothing for `c`: the copy
+                        // leaked. Resolve it the way the prologue did. Only
+                        // where substitution changes the type, so every
+                        // non-generic let reads exactly what it read before.
+                        let opt_te = opt_te.map(|te| {
+                            let inst = self.subst_monomorph_type_params(&te);
+                            if self.inline_optres_rebind_move_source(value).is_some()
+                                && crate::formatter::render_type_expr(&inst)
+                                    != crate::formatter::render_type_expr(&te)
+                            {
+                                Self::str_as_string_te(&inst)
+                            } else {
+                                te
+                            }
+                        });
                         if let Some(te) = opt_te {
                             if let Some(slot) = self.variables.get(var_name.as_str()).copied() {
                                 // `te` is an `Option[Vec/String]`,

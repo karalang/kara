@@ -1734,6 +1734,86 @@ impl<'ctx> super::Codegen<'ctx> {
             && !keeps_hand_back_route
     }
 
+    /// B-2026-09-24-19 — `te` with every bare `str` spelled `String`.
+    ///
+    /// A monomorph's substituted type spells a string payload either way --
+    /// the typechecker's `str` or the canonical `String` -- depending on how
+    /// the type argument was inferred (`pick(Some(f".."), f"d")` came back
+    /// `String`, `st(Some(f".."))` `str`), and
+    /// [`Self::optres_param_entry_copied_te`] admits only `String`. Both halves
+    /// of [`Self::mono_optres_param_entry_copied`] ask through this, so a
+    /// spelling difference cannot make one frame copy while the other does
+    /// not.
+    pub(super) fn str_as_string_te(te: &TypeExpr) -> TypeExpr {
+        let string = TypeExpr {
+            kind: TypeKind::Path(crate::ast::PathExpr {
+                segments: vec!["String".to_string()],
+                generic_args: None,
+                span: te.span,
+            }),
+            span: te.span,
+        };
+        super::helpers::subst_type_params_in_type_expr(
+            te,
+            &std::collections::HashMap::from([("str".to_string(), string)]),
+        )
+    }
+
+    /// B-2026-09-24-19 — the monomorph twin of
+    /// [`Self::optres_escaping_param_entry_copied`] (and of the non-escaping
+    /// copy beside it in `compile_function`'s prologue): does the monomorph of
+    /// the generic FREE function `f` entry-copy its by-value `Option`/`Result`
+    /// parameter `ast_i`, instantiated as `inst`?
+    ///
+    /// `compile_mono_function` copied nothing and registered nothing for such
+    /// a param, while `compile_generic_call` kept a NAMED argument's binding
+    /// and owned a TEMP argument never. So whichever frame the payload ended
+    /// in, one spelling was wrong: `pick(a, ..)` (the arm moves the payload
+    /// out) and `st(a)` (pushed into a returned `Vec`) double-freed, and
+    /// `peek(Some(..))` (the arm only reads) leaked the temp. Copying at entry
+    /// gives the callee its own payload, and the caller then owns a temp the
+    /// same way `compile_call` does for a copying callee.
+    ///
+    /// Asked by BOTH halves -- the mono prologue and `compile_generic_call` --
+    /// of the same `Function` and the same instantiated type, so they cannot
+    /// disagree. The exclusions are the non-generic predicate's: a payload
+    /// that is not [`crate::ast::concrete_plain_type`] (its `Drop` bodies stay
+    /// with the caller), and a param the function hands back WHOLE (the caller
+    /// takes the hand-back route for it). Methods of generic impls are left
+    /// out: they reach a monomorph through `ensure_generic_impl_method_mono`,
+    /// whose callers do not run the caller half.
+    pub(super) fn mono_optres_param_entry_copied(
+        &self,
+        f: &crate::ast::Function,
+        ast_i: usize,
+        inst: &TypeExpr,
+    ) -> bool {
+        let Some(program) = self.program_snapshot.as_deref() else {
+            return false;
+        };
+        if f.generic_params.is_none()
+            || f.self_param.is_some()
+            || !self.mono_state.generic_fns.contains_key(f.name.as_str())
+        {
+            return false;
+        }
+        let Some(p) = f.params.get(ast_i) else {
+            return false;
+        };
+        if !matches!(&p.pattern.kind, crate::ast::PatternKind::Binding(_))
+            || !matches!(&p.ty.kind, TypeKind::Path(_))
+        {
+            return false;
+        }
+        let keeps_hand_back_route = self.call_arg_flows_into_return(&f.name, ast_i)
+            && f.return_type.as_ref().is_some_and(|rt| {
+                crate::formatter::render_type_expr(rt) == crate::formatter::render_type_expr(&p.ty)
+            });
+        self.optres_param_entry_copied_te(inst)
+            && crate::ast::concrete_plain_type(Some(program), inst, &mut Vec::new())
+            && !keeps_hand_back_route
+    }
+
     /// B-2026-08-12-1 — emit the entry copy for a by-value `Option`/`Result`
     /// param slot admitted by [`Self::optres_param_entry_copied_te`]. Dispatch
     /// mirrors `deep_copy_one_aggregate_field`'s arms exactly (the two admitted

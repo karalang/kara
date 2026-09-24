@@ -7754,3 +7754,45 @@ fn main() {
         8,
     );
 }
+
+/// B-2026-09-24-19 — the ASAN twin of
+/// `test_e2e_generic_fn_by_value_optres_param_has_one_owner`: a generic
+/// function's by-value `Option[T]` / `Result[T, E]` param frees its payload
+/// once, named or temporary.
+#[test]
+fn asan_generic_fn_by_value_optres_param_frees_once() {
+    assert_clean_asan_run_min_allocs(
+        r#"fn pick[T](a: Option[T], d: T) -> T { match a { Some(s) => s, None => d } }
+fn peek[T](a: Option[T]) -> i64 { match a { Some(_) => 1, None => 0 } }
+fn st[T](a: Option[T]) -> Vec[Option[T]] { let mut v = Vec.new(); v.push(a); v }
+fn rb[T](a: Option[T]) -> i64 { let c = a; match c { Some(_) => 1, None => 0 } }
+fn rpick[T](a: Result[T, String], d: T) -> T { match a { Ok(s) => s, Err(_) => d } }
+fn main() {
+    let a = Some(f"heap-string-longer-than-sso-1"); println(pick(a, f"d"));
+    println(pick(Some(f"heap-string-longer-than-sso-2"), f"d"));
+    println(f"p{peek(Some(f"heap-string-longer-than-sso-3"))}");
+    let b = Some(f"heap-string-longer-than-sso-4"); let v = st(b); println(f"s{v.len()}");
+    let w = st(Some(f"heap-string-longer-than-sso-5")); println(f"s{w.len()}");
+    println(f"r{rb(Some(f"heap-string-longer-than-sso-6"))}");
+    let c = Some(f"heap-string-longer-than-sso-7"); println(f"r{rb(c)}");
+    let e: Result[String, String] = Err(f"heap-string-longer-than-sso-e8"); println(rpick(e, f"heap-string-longer-than-sso-d8"));
+    let o: Result[String, String] = Ok(f"heap-string-longer-than-sso-o9"); println(rpick(o, f"d"));
+    println("end")
+}
+"#,
+        &[
+            "heap-string-longer-than-sso-1",
+            "heap-string-longer-than-sso-2",
+            "p1",
+            "s1",
+            "s1",
+            "r1",
+            "r1",
+            "heap-string-longer-than-sso-d8",
+            "heap-string-longer-than-sso-o9",
+            "end",
+        ],
+        "asan_generic_fn_by_value_optres_param_frees_once",
+        8,
+    );
+}

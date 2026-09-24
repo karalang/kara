@@ -6422,6 +6422,9 @@ impl<'ctx> super::Codegen<'ctx> {
                     || self.program_snapshot.as_deref().is_some_and(|p| {
                         crate::ast::fn_moves_param_into_outliving_place_via_call(p, f, arg_index)
                     })
+                    // B-2026-09-24-16 — or pushed into a container one of
+                    // its own locals holds, whose drain runs the body.
+                    || crate::ast::fn_moves_param_into_local_container(f, arg_index)
                     // B-2026-09-07-10 — or handed back THROUGH a callee that
                     // always returns it (`fn via(r: R) -> R { return f(r); }`).
                     // The caller's admission gate `call_arg_flows_into_return`
@@ -6514,6 +6517,10 @@ impl<'ctx> super::Codegen<'ctx> {
             || self.program_snapshot.as_deref().is_some_and(|p| {
                 crate::ast::fn_moves_param_into_outliving_place_via_call(p, f, declared)
             })
+            // B-2026-09-24-16 — a container the callee's own local holds takes
+            // the value over just as one the caller holds does: its drain runs
+            // the body, in the callee or wherever the container is returned to.
+            || crate::ast::fn_moves_param_into_local_container(f, declared)
     }
 
     /// B-2026-07-01-7 (discard position): register the caller-side
