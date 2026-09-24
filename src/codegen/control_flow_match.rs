@@ -15865,6 +15865,15 @@ impl<'ctx> super::Codegen<'ctx> {
                     &self.payload_vars.inline_result_payload_vars,
                 )
             })
+            // B-2026-09-24-31 — the `Map`/`Set` handle channel, on the same terms:
+            // `let e = keep(d)` over an `Option[Map]` registered `e` as a
+            // second owner of `d`'s map.
+            .or_else(|| {
+                self.call_passthrough_armed_source(
+                    value,
+                    &self.payload_vars.inline_option_map_payload_vars,
+                )
+            })
     }
 
     /// Superset of [`Self::call_passthrough_armed_inline_source`] that also
@@ -16226,7 +16235,17 @@ impl<'ctx> super::Codegen<'ctx> {
                     .payload_vars
                     .inline_result_agg_payload_vars
                     .contains(name.as_str()));
-        if !in_option && !in_result && !in_boxed && !in_agg {
+        // B-2026-09-24-31 — the `Map`/`Set` handle channel
+        // (`inline_option_map_payload_vars`) was missing from this list, so
+        // an `Option[Map]` local moved on (into a call, a `let`, a field, a
+        // `return`) stayed armed, and its `FreeInlineOptionMapPayload` freed
+        // the map the destination also freed. The zero below turns the tag to
+        // `None`, which that action's guard skips.
+        let in_map = self
+            .payload_vars
+            .inline_option_map_payload_vars
+            .contains(name.as_str());
+        if !in_option && !in_result && !in_boxed && !in_agg && !in_map {
             return;
         }
         let Some(slot) = self.variables.get(name.as_str()).copied() else {
@@ -18126,10 +18145,18 @@ impl<'ctx> super::Codegen<'ctx> {
         let ExprKind::Identifier(name) = &scrutinee.kind else {
             return;
         };
+        // B-2026-09-24-31 — a hand-back result (`let e = keep(d)`) owns
+        // nothing, so the disarm lands on its source, as the inline
+        // suppressor has done since B-2026-08-06-27.
+        let name: &str = self
+            .payload_vars
+            .passthrough_owner_alias
+            .get(name.as_str())
+            .map_or(name.as_str(), |s| s.as_str());
         if !self
             .payload_vars
             .inline_option_map_payload_vars
-            .contains(name.as_str())
+            .contains(name)
         {
             return;
         }
@@ -18142,7 +18169,7 @@ impl<'ctx> super::Codegen<'ctx> {
         if !patterns.iter().any(pattern_consumes_field) {
             return;
         }
-        let Some(slot) = self.variables.get(name.as_str()) else {
+        let Some(slot) = self.variables.get(name) else {
             return;
         };
         let Some(layout) = self.type_decls.enum_layouts.get("Option") else {

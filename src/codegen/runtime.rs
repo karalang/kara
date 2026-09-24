@@ -11369,6 +11369,11 @@ impl<'ctx> super::Codegen<'ctx> {
         tail: &Expr,
         val: BasicValueEnum<'ctx>,
     ) -> bool {
+        // B-2026-09-24-31 — `keep(d);` hands `d`'s map back and discards it;
+        // `d` is still its owner, as in the inline sibling.
+        if self.discarded_temp_aliases_armed_source(tail) {
+            return false;
+        }
         let key = (tail.span.offset, tail.span.length);
         let Some(te) = self.type_decls.enum_inst_type_exprs.get(&key).cloned() else {
             return false;

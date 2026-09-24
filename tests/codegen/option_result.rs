@@ -10995,3 +10995,43 @@ fn main() {
     };
     assert_eq!(out, "58 35\n58 35\n126 69\n58 34\n58 35\n29 heap-string-longer-than-sso-0 / 5 heap-string-longer-than-sso-1\n58 35\n88\nend\n", "got:\n{out}");
 }
+
+/// B-2026-09-24-31 — an `Option[Map]` / `Option[Set]` local moved on by
+/// value is freed once. The `Map`/`Set` handle channel
+/// (`inline_option_map_payload_vars`) was missing from the move disarm, the
+/// hand-back alias, the discarded hand-back temp and the arm suppressor's
+/// alias lookup. So every spelling here, including a call, a `let`, a `return`,
+/// a method, a field, a conditional, a loop and a hand-back kept both source and
+/// destination armed. On `main` the compiled program printed nothing and
+/// valgrind counted 668 errors.
+#[test]
+fn e2e_option_map_local_moved_on_is_freed_once() {
+    let Some(out) = run_program(
+        r#"struct H { d: Option[Map[i64, String]] }
+impl H { fn eat(self, doc: Option[Map[i64, String]]) -> i64 { match doc { Some(m) => m.len(), None => 0 } } }
+fn mk(t: i64) -> Map[i64, String] { let mut m: Map[i64, String] = Map.new(); m.insert(t, f"heap-string-longer-than-sso-{t}"); m }
+fn take(doc: Option[Map[i64, String]]) -> i64 { match doc { Some(m) => m.len(), None => 0 } }
+fn takes(doc: Option[Set[i64]]) -> i64 { match doc { Some(s) => s.len(), None => 0 } }
+fn keep(doc: Option[Map[i64, String]]) -> Option[Map[i64, String]] { doc }
+fn ret(t: i64) -> Option[Map[i64, String]] { let d = Some(mk(t)); d }
+fn cond(t: i64) -> i64 { let d = Some(mk(t)); if t == 0 { take(d) } else { 7 } }
+fn main() {
+    let m = mk(1); let d = Some(m); println(take(d));
+    let d = Some(mk(2)); let q = d; println(take(q));
+    let d = ret(3); println(take(d));
+    let h = H { d: None }; let d = Some(mk(4)); println(h.eat(d));
+    let d = Some(mk(5)); let g = H { d: d }; println(take(g.d));
+    let mut s: Set[i64] = Set.new(); s.insert(6); let d = Some(s); println(takes(d));
+    println(f"{cond(0)} {cond(1)}");
+    let mut n = 0; for i in 0..3 { let d = Some(mk(i)); n = n + take(d); } println(n);
+    let d = Some(mk(7)); let e = keep(d); println(take(e));
+    let d = Some(mk(8)); keep(d);
+    let d = Some(mk(9)); let e = keep(d); let k = match e { Some(x) => { let mut v: Vec[Map[i64, String]] = Vec.new(); v.push(x); v.len() }, None => 0 }; println(k);
+    println("end")
+}
+"#,
+    ) else {
+        return;
+    };
+    assert_eq!(out, "1\n1\n1\n1\n1\n1\n1 7\n3\n1\n1\nend\n", "got:\n{out}");
+}
