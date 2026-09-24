@@ -93,7 +93,7 @@ distinguish "bugs flattening" from "we stopped writing them down."
 | class | total |
 |---|---|
 | run-vs-build | 488 |
-| miscompile | 439 |
+| miscompile | 440 |
 | leak | 407 |
 | double-free | 289 |
 | missing-feature | 206 |
@@ -110,8 +110,8 @@ distinguish "bugs flattening" from "we stopped writing them down."
 
 | surface | total |
 |---|---|
-| codegen | 2021 |
-| interp | 535 |
+| codegen | 2022 |
+| interp | 536 |
 | typecheck | 307 |
 | other | 110 |
 | ownership | 75 |
@@ -368,7 +368,6 @@ registered in the callee's prologue, not by-value struct params in general. | �
 | B-2026-09-23-36 | 2026-09-23 | codegen | high | A SHADOWED `Array` LOCAL IS STILL FREED TWICE, OR LEAKS, WHEN THE GENERATIONS ARE NOT ALL HANDED BACK TOGETHER -- the remainder of B-2026-09-23-23: an OLDER generation returned on one exit (`let x = [..]; if c { return x }; let x = [..]; return x`), the LAST generation returned on only some exits, and an inner-block shadow over a returned outer local all abort `free(): double free detected in tcache 2` on the JIT, `-O0` and `-O2`; with `String` elements the first spelling loses 58 B in 2 blocks at `-O0` instead | — |
 | B-2026-09-23-37 | 2026-09-23 | codegen+interp | medium | `let x = x;` REBINDING A LOCAL `Array` UNDER ITS OWN NAME AND RETURNING IT RUNS THE ELEMENTS' `Drop` BODIES TWICE UNDER `--interp` AND DOUBLE-FREES ON THE JIT AND AT `-O0` -- `-O2` is the only surface that prints the one body pair owed, `dies y1 d1 d2` | — |
 | B-2026-09-23-41 | 2026-09-23 | codegen | medium | A TEMPORARY `Option[R]` ARGUMENT THAT A CALLEE HANDS BACK ON SOME EXITS LEAKS ITS BOX ON THE EXIT WHERE IT DIES INSIDE -- `f(Some(mkr(1)), false)` over `fn f(a: Option[R], c: bool) -> Option[R] { if c { a } else { None } }` loses 61 B (32 direct, 29 indirect) at `-O0` in the tail, early-`return` and `let`-bound spellings, while the body now runs once on all four surfaces | — |
-| B-2026-09-23-44 | 2026-09-23 | codegen | high | AN `Option` PARAM WITH A HEAP PAYLOAD BUT NO USER `Drop`, HANDED BACK THROUGH A `let`-BOUND BRANCH, IS FREED TWICE ON EVERY COMPILED SURFACE -- `let r: Option[String] = if c { a } else { None }; println("mid"); r` at `c = true` aborts `free(): double free detected in tcache 2` on the JIT, `-O0` and `-O2`, and `Option[N]` over a plain struct with a `String` field crashes the same way | — |
 | B-2026-09-23-45 | 2026-09-23 | codegen+interp | medium | AN `Option[(R, i64)]` PARAM RETURNED ON SOME EXITS RUNS NO BODY FOR THE TUPLE'S `Drop` ELEMENT ON THE EXIT WHERE IT DIES INSIDE, ON ALL FOUR SURFACES -- `if c { a } else { None }` at `c = false` prints `none` where `d1 none` is due; the `Option[R]` spelling is fixed | — |
 | B-2026-09-24-5 | 2026-09-24 | interp | low | `--interp` RUNS NO `Drop` BODY FOR A HAND-BACK RESULT MATCHED WITH A WILDCARD ARM, where the compiled surfaces now run it -- `match id(a) { Some(_) => println("s"), None => .. }` prints `s end` interpreted and `s d1 end` on jit / -O0 / -O2, and the BOUND spelling `let b = id(a); match b { Some(_) => .. }` prints `s d1 end` on all four | — |
 | B-2026-09-24-6 | 2026-09-24 | codegen | high | MEASURED: matching an `Option` field of a Vec element TWICE goes wrong on every compiled surface -- `match g[0].o { Some(s) => out.push(s), None => {} }` run twice pushes 1 where --interp pushes 2 (zero hops, memory clean), and the same through a tuple (`g[0].1.o`, `g[0].1.0.o`) DOUBLE-FREES; even a read-only `Some(s) => println(s)` match empties `g[0].o` for the next one; a single match is correct at every depth | — |
@@ -376,6 +375,7 @@ registered in the callee's prologue, not by-value struct params in general. | �
 | B-2026-09-24-8 | 2026-09-24 | codegen | medium | MEASURED: binding a `ref String` FIELD to a local (`let x = p.source;`) gives `x` no String type in codegen, so `x.len()` fails to build with `no handler for method 'len'` on every compiled surface while --interp prints `10`; `println(x)` and `p.source.len()` work | — |
 | B-2026-09-24-9 | 2026-09-24 | codegen+interp | high | A HAND-BACK OF A BY-VALUE `Option` PARAMETER WHOSE PAYLOAD A `match` ARM MOVES OUT IS WRONG ON EVERY SURFACE -- `fn pick(a: Option[R]) -> R { match id(a) { Some(x) => x, None => mkr(9) } }` runs `d1` TWICE under `--interp` (`d1 k1 d1 end`) and double frees on jit / -O0 / -O2 (valgrind err=5), while `match a { Some(x) => x, .. }` directly is right everywhere | — |
 | B-2026-09-24-10 | 2026-09-24 | codegen | low | AN UNBOUND HAND-BACK `match` SCRUTINEE RUNS ITS PAYLOAD'S `Drop` BODY AT THE ENCLOSING SCOPE'S END ON THE COMPILED SURFACES AND AT THE MATCH'S END UNDER `--interp` -- `match id(a) { Some(x) => x, None => mkr(9) }; println("after")` prints `d1 after end` interpreted and `after end d1` compiled; the bound spelling prints `d1 after end` everywhere | — |
+| B-2026-09-24-11 | 2026-09-24 | codegen+interp | high | A `let`-BOUND HAND-BACK OF AN `Option` WHOSE PAYLOAD HAS A `Drop` BODY NESTED INSIDE IT IS STILL WRONG, the remainder B-2026-09-23-44 leaves out -- `fn f(a: Option[M], c: bool) -> Option[M] { let r: Option[M] = if c { a } else { None }; println("mid"); r }` over `struct M { r: R, s: String }` (R has a `Drop`) prints `mid d1 y1 d1 end` under `--interp` and nothing on jit / -O0 / -O2 (valgrind err=4), where the TAIL spelling prints `mid y1 d1 end` everywhere | — |
 
 ### Relocated
 
@@ -2998,6 +2998,7 @@ registered in the callee's prologue, not by-value struct params in general. | �
 | B-2026-09-23-40 | codegen | high | MEASURED: a heap field bound inside an enum-variant sub-pattern of a `Map.get` payload and then MOVED is freed twice on every compiled surface -- `ma… | c7b9cbdbf |
 | B-2026-09-23-42 | codegen | high | AN `Option[R]` PARAM HANDED BACK ON SOME EXITS BY AN ASSOCIATED FUNCTION OR A METHOD CRASHES ON THE EXIT THAT HANDS IT BACK, ON EVERY COMPILED SURFAC… | f6edd2261 |
 | B-2026-09-23-43 | codegen | high | THE RESULT OF A CALL THAT HANDS AN `Option` / `Result` PARAM BACK ON SOME EXITS CRASHES OR LOSES ITS BODY WHEN IT IS CONSUMED DIRECTLY RATHER THAN BO… | 9411a4456 |
+| B-2026-09-23-44 | codegen | high | AN `Option` PARAM WITH A HEAP PAYLOAD BUT NO USER `Drop`, HANDED BACK THROUGH A `let`-BOUND BRANCH, IS FREED TWICE ON EVERY COMPILED SURFACE -- `let… | 6f647e8f1 |
 | B-2026-09-24-1 | codegen | medium | MEASURED: re-binding a borrowed String with `let t = r;` loses its type in codegen, so `t.len()` fails to build with `no handler for method 'len'` on… | c894b2eb9 |
 | B-2026-09-24-2 | codegen | medium | MEASURED: a FIELD read on a struct nested in a tuple inside a Vec element does not compile -- `v[0].1.0.s` over `Vec[(i64, (H, i64))]` with `struct H… | c894b2eb9 |
 | B-2026-09-24-3 | codegen | high | AN `Option` / `Result` HANDED THROUGH A PASSTHROUGH CALLEE TWICE CRASHES ON EVERY COMPILED SURFACE -- `let b = f(a); let e = f(b)` over `fn f(a: Opti… | 3beb82ad2 |
