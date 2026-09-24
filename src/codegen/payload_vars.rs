@@ -65,6 +65,18 @@ pub(crate) struct PayloadVars<'ctx> {
     /// population whose box the callee now owns (`functions.rs`), so a disarm
     /// keyed here always has a taker.
     pub(crate) boxed_passthrough_owner_alias: std::collections::HashMap<String, String>,
+    /// B-2026-09-24-1 — the CHAIN half of the map above, recorded for EVERY
+    /// boxed passthrough result the let site skips, not only the population
+    /// whose box a callee takes over. Read by
+    /// `call_passthrough_armed_boxed_source` alone, to follow `let e = f(b)`
+    /// one hop from the unregistered `b` to the binding that owns the box.
+    /// Kept out of the map above because its other consumer DISARMS the
+    /// source at a by-value argument, which is right only where the callee
+    /// frees the box. Without it the second hop found `b` neither armed nor
+    /// aliased, `e` registered its own drop of `a`'s box, and an
+    /// `Option[R]` handed through `fn f(a: Option[R]) -> Option[R] { a }`
+    /// twice segfaulted on every compiled surface.
+    pub(crate) boxed_passthrough_chain_alias: std::collections::HashMap<String, String>,
     pub(crate) inline_option_payload_vars: std::collections::HashSet<String>,
     /// `Result[T, E]` sibling of `inline_option_payload_vars` — names of
     /// `Result` bindings that registered a `FreeInlineResultPayload` (the Ok

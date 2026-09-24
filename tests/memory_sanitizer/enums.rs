@@ -10905,3 +10905,73 @@ fn main() { run(true, 0); run(false, 10); println("end") }
         "asan_conditional_optres_param_handback_assoc_and_method",
     );
 }
+
+/// B-2026-09-24-1 — an `Option` / `Result` handed through a passthrough
+/// callee TWICE (`let b = f(a); let e = f(b)`, `f(f(a))`, a method or
+/// associated hop in the chain, or a discarded second hop). The let site
+/// skips a one-hop result's registration and leaves the source sole owner,
+/// but recorded the alias only for the population a callee takes over, so the
+/// second hop found `b` neither armed nor aliased and `e` registered its own
+/// drop of `a`'s box: a segfault on every compiled surface for a struct
+/// payload with or without `Drop`, and a double free for `Option[String]` and
+/// `Result[String, _]`, while `--interp` was right.
+#[test]
+fn asan_chained_optres_passthrough_owns_once() {
+    assert_clean_asan_run(
+        r#"struct R { id: i64, s: String }
+impl Drop for R { fn drop(mut ref self) { println(f"d{self.id}") } }
+struct N { id: i64, s: String }
+fn mkr(i: i64) -> R { return R { id: i, s: f"heap-string-longer-than-sso-{i}" } }
+fn mkn(i: i64) -> N { return N { id: i, s: f"heap-string-longer-than-sso-{i}" } }
+fn f(a: Option[R]) -> Option[R] { a }
+fn fc(a: Option[R], c: bool) -> Option[R] { if c { a } else { None } }
+fn fn_(a: Option[N]) -> Option[N] { a }
+fn fs(a: Option[String]) -> Option[String] { a }
+fn fr(a: Result[String, i64]) -> Result[String, i64] { a }
+struct H { k: i64 }
+impl H { fn g(ref self, a: Option[R]) -> Option[R] { a } fn s(a: Option[R]) -> Option[R] { a } }
+fn eat(o: Option[R]) { match o { Some(x) => println(f"eat{x.id}"), None => println("none") } }
+fn show(o: Option[R]) { match o { Some(x) => println(f"y{x.id}"), None => println("none") } }
+fn main() {
+    let h = H { k: 1 };
+    { let a = Some(mkr(1)); let b = f(a); let e = f(b); show(e); }
+    { let a = Some(mkr(2)); let e = f(f(a)); show(e); }
+    { let a = Some(mkr(3)); let b = f(a); let c = h.g(b); let e = H.s(c); show(e); }
+    { let a = Some(mkr(4)); let b = f(a); let c = f(b); eat(c); }
+    { let a = Some(mkr(5)); let b = f(a); let _ = f(b); }
+    { let a = Some(mkr(6)); let e = h.g(f(a)); eat(e); }
+    { let a = Some(mkr(7)); let b = fc(a, true); let e = fc(b, true); show(e); }
+    { let a = Some(mkr(8)); let b = fc(a, true); let e = fc(b, false); show(e); }
+    { let a = Some(mkr(9)); let b = f(a); let e = f(b); println("kept"); }
+    { let a = Some(mkn(10)); let b = fn_(a); let e = fn_(b); match e { Some(x) => println(f"n{x.id} {x.s}"), None => println("none") } }
+    { let a = Some(f"heap-string-longer-than-sso-{11}"); let b = fs(a); let c = fs(b); let e = fs(fs(c)); match e { Some(x) => println(x), None => println("none") } }
+    { let a: Result[String, i64] = Ok(f"heap-string-longer-than-sso-{12}"); let b = fr(a); let e = fr(b); match e { Ok(x) => println(x), Err(q) => println(f"e{q}") } }
+    println("end")
+}
+"#,
+        &[
+            "y1",
+            "d1",
+            "y2",
+            "d2",
+            "y3",
+            "d3",
+            "eat4",
+            "d4",
+            "d5",
+            "eat6",
+            "d6",
+            "y7",
+            "d7",
+            "d8",
+            "none",
+            "d9",
+            "kept",
+            "n10 heap-string-longer-than-sso-10",
+            "heap-string-longer-than-sso-11",
+            "heap-string-longer-than-sso-12",
+            "end",
+        ],
+        "asan_chained_optres_passthrough_owns_once",
+    );
+}

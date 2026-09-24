@@ -14924,12 +14924,19 @@ impl<'ctx> super::Codegen<'ctx> {
     pub(super) fn call_passthrough_armed_boxed_source(&self, value: &Expr) -> Option<String> {
         let (callee_name, args) = self.passthrough_callee_key(value)?;
         args.iter().enumerate().find_map(|(i, a)| {
-            let ExprKind::Identifier(n) = &a.value.kind else {
-                return None;
-            };
             if !self.call_arg_flows_into_return(&callee_name, i) {
                 return None;
             }
+            // B-2026-09-24-1 — a NESTED passthrough (`f(f(a))`): the inner
+            // call's result is a temporary nothing registered, so the owner
+            // is whatever the inner call hands back.
+            let n = match &a.value.kind {
+                ExprKind::Identifier(n) => n,
+                ExprKind::Call { .. } | ExprKind::MethodCall { .. } => {
+                    return self.call_passthrough_armed_boxed_source(&a.value);
+                }
+                _ => return None,
+            };
             if self
                 .payload_vars
                 .boxed_enum_payload_vars
@@ -14940,7 +14947,12 @@ impl<'ctx> super::Codegen<'ctx> {
             let owner = self
                 .payload_vars
                 .boxed_passthrough_owner_alias
-                .get(n.as_str())?;
+                .get(n.as_str())
+                .or_else(|| {
+                    self.payload_vars
+                        .boxed_passthrough_chain_alias
+                        .get(n.as_str())
+                })?;
             self.payload_vars
                 .boxed_enum_payload_vars
                 .contains(owner.as_str())
@@ -15288,11 +15300,39 @@ impl<'ctx> super::Codegen<'ctx> {
     ) -> Option<String> {
         let (callee_name, args) = self.passthrough_callee_key(value)?;
         args.iter().enumerate().find_map(|(i, a)| {
-            let ExprKind::Identifier(n) = &a.value.kind else {
+            if !self.call_arg_flows_into_return(&callee_name, i) {
                 return None;
+            }
+            // B-2026-09-24-1 — the CHAINED spellings, as the boxed sibling
+            // resolves them: a nested passthrough's owner is whatever the inner
+            // call hands back, and a passthrough RESULT (`let b = f(a); let e =
+            // f(b)`) is followed one hop to the binding that owns the payload.
+            // Without this `e` registered its own owner of `a`'s buffer and an
+            // `Option[String]` handed through an identity fn twice double freed.
+            let n = match &a.value.kind {
+                ExprKind::Identifier(n) => n,
+                ExprKind::Call { .. } | ExprKind::MethodCall { .. } => {
+                    return self.call_passthrough_armed_source(&a.value, armed);
+                }
+                _ => return None,
             };
-            (armed.contains(n.as_str()) && self.call_arg_flows_into_return(&callee_name, i))
-                .then(|| n.clone())
+            if armed.contains(n.as_str()) {
+                return Some(n.clone());
+            }
+            // Either alias map: the boxed chain is recorded apart from the
+            // inline one, and `armed` decides which population answers.
+            let owner = self
+                .payload_vars
+                .passthrough_owner_alias
+                .get(n.as_str())
+                .filter(|o| armed.contains(o.as_str()))
+                .or_else(|| {
+                    self.payload_vars
+                        .boxed_passthrough_chain_alias
+                        .get(n.as_str())
+                        .filter(|o| armed.contains(o.as_str()))
+                })?;
+            Some(owner.clone())
         })
     }
 

@@ -7938,11 +7938,21 @@ impl<'ctx> super::Codegen<'ctx> {
                                         .iter()
                                         .all(|(e, _, inner)| *e == "Option" && inner.is_none());
                                     boxed.clear();
+                                    // B-2026-09-24-1 — every skipped result,
+                                    // whoever owns the box, so a SECOND hop
+                                    // (`let e = f(b)`) finds `b`'s owner.
+                                    self.payload_vars
+                                        .boxed_passthrough_chain_alias
+                                        .insert(var_name.to_string(), src.clone());
                                     if callee_owns_box {
                                         self.payload_vars
                                             .boxed_passthrough_owner_alias
                                             .insert(var_name.to_string(), src);
                                     }
+                                } else {
+                                    self.payload_vars
+                                        .boxed_passthrough_chain_alias
+                                        .remove(var_name);
                                 }
                                 // B-2026-09-06-49 / B-2026-09-10-6 — a NAMED
                                 // array local moved whole into the variant
