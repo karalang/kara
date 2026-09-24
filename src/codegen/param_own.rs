@@ -1632,6 +1632,60 @@ impl<'ctx> super::Codegen<'ctx> {
         self.field_copy_supported(te, &mut Vec::new())
     }
 
+    /// B-2026-09-24-14 — does the free function `fn_name` ENTRY-COPY its
+    /// by-value `Option`/`Result` parameter `idx` even though the parameter
+    /// ESCAPES its frame?
+    ///
+    /// The caller's half of the entry-copy protocol is TYPE-only
+    /// ([`Self::callee_optres_param_entry_copied`]): for an admitted type a
+    /// named argument keeps its binding, and so its free, across the call. The
+    /// callee's half copied only a parameter that never escapes
+    /// (`by_value_nonescaping_param_names`), so a parameter that does escape --
+    /// rebound (`let c = a`), pushed (`v.push(a)`), or handed to a call
+    /// (`match id(a) { .. }`) -- was used in place: the caller's buffer, owned
+    /// a second time by wherever it went. Measured as a double free on every
+    /// compiled surface for all three spellings, and a 29-byte leak when the
+    /// argument was a fresh temp (the caller owns a temp only when the callee
+    /// copies, so neither frame freed it).
+    ///
+    /// Copying such a parameter too closes both: the caller keeps its original
+    /// and the callee's copy is registered like a local's, so every escape route
+    /// is the ordinary move out of a local.
+    ///
+    /// Excluded, each for a reason of its own:
+    /// * a parameter the callee RETURNS on any path
+    ///   ([`Self::call_arg_flows_into_return`]) -- the caller already takes the
+    ///   hand-back route for it and keeps no second owner;
+    /// * a payload that is not [`crate::ast::concrete_plain_type`] -- a user
+    ///   `Drop` body anywhere inside is run by the CALLER's retained channel
+    ///   for a by-value `Option`/`Result`, so an escaping copy would run it a
+    ///   second time wherever the copy ends up;
+    /// * generic and coroutine functions, and methods, whose prologues are
+    ///   separate paths (the mono prologue, the coro ramp, `lower_method`).
+    pub(super) fn optres_escaping_param_entry_copied(&self, fn_name: &str, idx: usize) -> bool {
+        let Some(program) = self.program_snapshot.as_deref() else {
+            return false;
+        };
+        let Some(f) = program.items.iter().find_map(|item| match item {
+            crate::ast::Item::Function(f) if f.name == fn_name => Some(f),
+            _ => None,
+        }) else {
+            return false;
+        };
+        if f.generic_params.is_some() || self.is_coroutine_compiled(fn_name) {
+            return false;
+        }
+        let Some(p) = f.params.get(idx) else {
+            return false;
+        };
+        if !matches!(&p.pattern.kind, crate::ast::PatternKind::Binding(_)) {
+            return false;
+        }
+        self.optres_param_entry_copied_te(&p.ty)
+            && crate::ast::concrete_plain_type(Some(program), &p.ty, &mut Vec::new())
+            && !self.call_arg_flows_into_return(fn_name, idx)
+    }
+
     /// B-2026-08-12-1 — emit the entry copy for a by-value `Option`/`Result`
     /// param slot admitted by [`Self::optres_param_entry_copied_te`]. Dispatch
     /// mirrors `deep_copy_one_aggregate_field`'s arms exactly (the two admitted

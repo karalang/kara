@@ -458,6 +458,21 @@ impl<'ctx> super::Codegen<'ctx> {
         // this arm binds the payload out, else x's scope-exit free doubles
         // the binding's. No-op for temp / non-inline scrutinees.
         self.suppress_inline_option_payload_cleanup(value, pattern);
+        // B-2026-09-24-14 — and the same disarm for a HAND-BACK of such a
+        // binding (`if let Some(s) = id(b) { .. }`). The `match` spelling
+        // borrows a read-only payload through the passthrough-retains
+        // classification; `if let` binds it as an owner, so `b` must stand
+        // down or both free it.
+        if optres_bindings_owned {
+            if let Some(src) = self.call_passthrough_armed_inline_source(value) {
+                let src_expr = Expr {
+                    kind: ExprKind::Identifier(src),
+                    span: value.span,
+                };
+                self.suppress_inline_option_payload_cleanup(&src_expr, pattern);
+                self.suppress_inline_result_payload_cleanup(&src_expr, pattern);
+            }
+        }
         // B-2026-08-05-3: whole-TUPLE payload borrow-only gate — see
         // `arm_only_borrows_result_tuple_payload`. No-op for every other
         // payload shape.

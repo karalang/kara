@@ -1540,6 +1540,19 @@ impl<'ctx> super::Codegen<'ctx> {
             self.note_escaping_site(tail);
         }
         self.payload_vars.inline_option_payload_vars.clear();
+        // B-2026-09-24-14 — the passthrough alias maps are keyed by a LOCAL's
+        // name like every set cleared here, and were never cleared: a
+        // `let c = id(a)` in one function left `c -> a` behind, so a later
+        // function's own `c` resolved its disarms to a stale `a` that this
+        // frame does not have, and nothing stood `c` down (a double free in
+        // `let u = if let Some(s) = id(c) { s } ..`, clean under any other
+        // name).
+        self.payload_vars.passthrough_owner_alias.clear();
+        self.payload_vars.boxed_passthrough_owner_alias.clear();
+        self.payload_vars.boxed_passthrough_chain_alias.clear();
+        self.payload_vars
+            .nested_boxed_passthrough_owner_alias
+            .clear();
         self.payload_vars.boxed_enum_payload_vars.clear();
         self.payload_vars.boxed_struct_payload_param_vars.clear();
         self.payload_vars.callee_owned_payload_bodies_params.clear();
@@ -2435,11 +2448,15 @@ impl<'ctx> super::Codegen<'ctx> {
                         // separate one — B-2026-08-12-1, whose fix is on the
                         // caller side and does not change the ownership decided
                         // here.
+                        // B-2026-09-24-14 — or an ESCAPING param of a type the
+                        // caller keeps its binding for; see
+                        // `optres_escaping_param_entry_copied`.
                         if matches!(&param.ty.kind, TypeKind::Path(_))
                             && (type_name == "Option" || type_name == "Result")
-                            && self
+                            && (self
                                 .optres_by_value_nonescaping_param_names
                                 .contains(&param_name)
+                                || self.optres_escaping_param_entry_copied(&func.name, i))
                         {
                             let te = param.ty.clone();
                             // REGISTER FIRST, COPY SECOND — the order is

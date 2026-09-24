@@ -411,9 +411,34 @@ impl<'ctx> super::Codegen<'ctx> {
         // B-2026-09-24-12 — and a BOXED hand-back of a caller-retained param,
         // whose staged slot now carries the body walk (see above), so an arm
         // binding that also owned it would run the body twice.
-        let passthrough_retains = self.call_passthrough_armed_any_source(scrutinee).is_some()
+        // B-2026-09-24-14 — but only while no arm MOVES the payload out. An
+        // arm that does (`let t = match id(b) { Some(s) => s, .. }`) hands it
+        // to something that frees it, so a borrowing binding left `b` armed
+        // over the same buffer: a double free on every compiled surface. For
+        // an INLINE source that arm instead takes the payload the way the same
+        // arm over `b` itself does -- an owning binding, `b`'s `cap` zeroed
+        // (`passthrough_consuming_inline_src`, used in the arm loop). The boxed
+        // source is B-2026-09-24-4's, which neutralizes through the box.
+        let passthrough_consuming_inline_src = self
+            .call_passthrough_armed_inline_source(scrutinee)
+            .filter(|_| {
+                let saved = self.pattern_state.escape_walk_relaxes_primitive_operators;
+                self.pattern_state.escape_walk_relaxes_primitive_operators = true;
+                let escapes = !self.no_arm_payload_escapes(arms);
+                self.pattern_state.escape_walk_relaxes_primitive_operators = saved;
+                escapes
+            });
+        let passthrough_retains = (self.call_passthrough_armed_any_source(scrutinee).is_some()
+            && passthrough_consuming_inline_src.is_none())
             || (freshtemp_boxed_slot.is_some()
-                && self.handback_call_owned_param_arg(scrutinee).is_some());
+                && self.handback_call_owned_param_arg(scrutinee).is_some()
+                // B-2026-09-24-14 — a param the callee now entry-copies is an
+                // armed binding, so its INLINE hand-back is staged by the
+                // armed-alias route too; this disjunct is for the box alone.
+                && {
+                    let pats: Vec<&Pattern> = arms.iter().map(|a| &a.pattern).collect();
+                    self.optres_scrutinee_payload_is_boxed(scrutinee, &pats)
+                });
         let readonly_inline_optres = {
             // B-2026-08-30-52 — the operator relaxation is scoped to this
             // classifier; see the flag's doc for the fresh-temp leak a
@@ -1063,6 +1088,16 @@ impl<'ctx> super::Codegen<'ctx> {
                     // payload out — its `FreeInlineOptionPayload` scope-exit
                     // free would otherwise double-free against the binding.
                     self.suppress_inline_option_payload_cleanup(scrutinee, &arm.pattern);
+                    // B-2026-09-24-14 — the same disarm, aimed at the named
+                    // source a consuming arm over its hand-back takes from.
+                    if let Some(src) = &passthrough_consuming_inline_src {
+                        let src_expr = Expr {
+                            kind: ExprKind::Identifier(src.clone()),
+                            span: scrutinee.span,
+                        };
+                        self.suppress_inline_option_payload_cleanup(&src_expr, &arm.pattern);
+                        self.suppress_inline_result_payload_cleanup(&src_expr, &arm.pattern);
+                    }
                     // B-2026-08-05-3: skip disarming the source when the arm
                     // only BORROWS a whole-TUPLE payload — that binding has no
                     // owner of its own, so the source must free it. Mirrors the
@@ -16523,10 +16558,22 @@ impl<'ctx> super::Codegen<'ctx> {
                     None => return,
                 }
             }
-            _ if self.scrutinee_aliases_caller_box(scrutinee) => match staged_slot {
-                Some(s) => s,
-                None => return,
-            },
+            // B-2026-09-24-14 — and only over a BOXED payload. The staged
+            // slot of an armed-binding alias holds an INLINE payload too
+            // (B-2026-09-23-43 stages both), and there word 1 is the payload's
+            // own data pointer: the zeroing store below wrote 24 bytes of zeros
+            // into the moved String's buffer. That was hidden behind the double
+            // free this row closes; with the free fixed, the moved value read
+            // back with its first 24 bytes gone. An inline move is disarmed on
+            // the source instead (`passthrough_consuming_inline_src`).
+            _ if self.scrutinee_aliases_caller_box(scrutinee)
+                && self.optres_scrutinee_payload_is_boxed(scrutinee, &[pattern]) =>
+            {
+                match staged_slot {
+                    Some(s) => s,
+                    None => return,
+                }
+            }
             _ => return,
         };
         let Some(payload_ty) = self.variables.get(moved.as_str()).map(|v| v.ty) else {

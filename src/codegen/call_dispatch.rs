@@ -6116,6 +6116,12 @@ impl<'ctx> super::Codegen<'ctx> {
             };
             crate::result_escape::by_value_nonescaping_param_names(f).contains(pname.as_str())
         };
+        // B-2026-09-24-14 — an escaping param the callee now copies too
+        // (`optres_escaping_param_entry_copied`): the temp's original has no
+        // other owner, exactly as for a non-escaping one.
+        if self.optres_escaping_param_entry_copied(callee_name, arg_index) {
+            return Some(te);
+        }
         let ok = program.items.iter().any(|item| match item {
             crate::ast::Item::Function(f) if f.name == callee_name => nonescaping(f, arg_index),
             crate::ast::Item::ImplBlock(b) => b.items.iter().any(|ii| match ii {

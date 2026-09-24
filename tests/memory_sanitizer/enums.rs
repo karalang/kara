@@ -11288,3 +11288,94 @@ fn main() {
         "asan_boxed_handback_call_scrutinee_over_param",
     );
 }
+
+/// B-2026-09-24-14 — a by-value `Option[String]` / `Result[String, _]` /
+/// `Option[Vec[String]]` param that ESCAPES its callee -- handed to a
+/// hand-back call (`match id(a)`, `if let Some(s) = id(a)`, `let c = id(a)`),
+/// rebound, pushed, or forwarded -- while the caller keeps its argument. The
+/// callee used the caller's buffer in place and its escape freed it a second
+/// time: a double free on every compiled surface. Also the move-out arm over a
+/// hand-back of a LOCAL (`let t = match id(b) { Some(s) => s, .. }`, and its
+/// `if let` spelling), and a name reused across functions (`c`).
+#[test]
+fn asan_escaping_optres_param_handback_and_moves() {
+    assert_clean_asan_run(
+        r#"fn id(a: Option[String]) -> Option[String] { a }
+fn idr(a: Result[String, i64]) -> Result[String, i64] { a }
+fn idv(a: Option[Vec[String]]) -> Option[Vec[String]] { a }
+fn peek(a: Option[String]) -> i64 { match id(a) { Some(s) => s.len(), None => 0 } }
+fn pick(a: Option[String]) -> String { match id(a) { Some(s) => s, None => f"none" } }
+fn pickr(a: Result[String, i64]) -> String { match idr(a) { Ok(s) => s, Err(e) => f"e{e}" } }
+fn pickl(a: Option[String]) -> String { if let Some(s) = id(a) { s } else { f"none" } }
+fn pickc(a: Option[String], c: bool) -> String { match id(a) { Some(s) if c => s, Some(s) => f"n{s.len()}", None => f"none" } }
+fn pickv(a: Option[Vec[String]]) -> Vec[String] { match idv(a) { Some(v) => v, None => Vec.new() } }
+fn letb(a: Option[String]) -> String { let c = id(a); match c { Some(s) => s, None => f"none" } }
+fn rebind(a: Option[String]) -> i64 { let c = a; match c { Some(s) => s.len(), None => 0 } }
+fn store(a: Option[String]) -> Vec[Option[String]] { let mut v: Vec[Option[String]] = Vec.new(); v.push(a); v }
+fn eat(a: Option[String]) -> i64 { match a { Some(s) => s.len(), None => 0 } }
+fn fwd(a: Option[String]) -> i64 { eat(a) }
+fn main() {
+    let a1 = Some(f"heap-string-longer-than-sso-01");
+    println(f"k{peek(a1)}");
+    println(f"k{peek(Some(f"heap-string-longer-than-sso-002"))}");
+    let a2 = Some(f"heap-string-longer-than-sso-03");
+    println(pick(a2));
+    println(pick(Some(f"heap-string-longer-than-sso-04")));
+    println(pick(None));
+    let r1: Result[String, i64] = Ok(f"heap-string-longer-than-sso-05");
+    println(pickr(r1));
+    println(pickr(Err(6)));
+    let a3 = Some(f"heap-string-longer-than-sso-07");
+    println(pickl(a3));
+    println(pickl(Some(f"heap-string-longer-than-sso-08")));
+    let a4 = Some(f"heap-string-longer-than-sso-09");
+    println(pickc(a4, true));
+    println(pickc(Some(f"heap-string-longer-than-sso-10"), false));
+    let mut w: Vec[String] = Vec.new();
+    w.push(f"heap-string-longer-than-sso-11");
+    let v = pickv(Some(w));
+    println(f"v{v.len()} {v[0]}");
+    let a5 = Some(f"heap-string-longer-than-sso-12");
+    println(letb(a5));
+    let a6 = Some(f"heap-string-longer-than-sso-013");
+    println(f"k{rebind(a6)}");
+    let a7 = Some(f"heap-string-longer-than-sso-14");
+    let st = store(a7);
+    println(f"s{st.len()}");
+    let a8 = Some(f"heap-string-longer-than-sso-0015");
+    println(f"k{fwd(a8)}");
+    println(f"k{fwd(Some(f"heap-string-longer-than-sso-16"))}");
+    let b = Some(f"heap-string-longer-than-sso-17");
+    let t = match id(b) { Some(s) => s, None => f"none" };
+    println(t);
+    let c = Some(f"heap-string-longer-than-sso-18");
+    let u = if let Some(s) = id(c) { s } else { f"none" };
+    println(u);
+    println("end")
+}
+"#,
+        &[
+            "k30",
+            "k31",
+            "heap-string-longer-than-sso-03",
+            "heap-string-longer-than-sso-04",
+            "none",
+            "heap-string-longer-than-sso-05",
+            "e6",
+            "heap-string-longer-than-sso-07",
+            "heap-string-longer-than-sso-08",
+            "heap-string-longer-than-sso-09",
+            "n30",
+            "v1 heap-string-longer-than-sso-11",
+            "heap-string-longer-than-sso-12",
+            "k31",
+            "s1",
+            "k32",
+            "k30",
+            "heap-string-longer-than-sso-17",
+            "heap-string-longer-than-sso-18",
+            "end",
+        ],
+        "asan_escaping_optres_param_handback_and_moves",
+    );
+}
