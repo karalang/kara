@@ -11224,3 +11224,67 @@ fn main() {
         "asan_handback_call_scrutinee_over_param",
     );
 }
+
+/// B-2026-09-24-12 — a by-value `Option` param with a heap-BOXED payload
+/// (`Option[S]` for a four-word `S`), matched through a hand-back call
+/// (`match id(a) { .. }`, `if let Some(x) = id(a)`). The call's result
+/// aliases the box the caller still frees, but the fresh-temp scrutinee
+/// tracker freed it too: nothing printed on jit and -O0 and a double free at
+/// -O2. Read, moved out, `if let`, a `None` argument, and a Drop-less
+/// payload with a moved field; named and temp arguments.
+#[test]
+fn asan_boxed_handback_call_scrutinee_over_param() {
+    assert_clean_asan_run(
+        r#"struct R { id: i64 }
+impl Drop for R { fn drop(mut ref self) { println(f"d{self.id}") } }
+struct S { r: R, s: String }
+struct P { a: String, b: String }
+fn mks(i: i64) -> S { S { r: R { id: i }, s: f"heap-string-longer-than-sso-{i}" } }
+fn id(a: Option[S]) -> Option[S] { a }
+fn idp(a: Option[P]) -> Option[P] { a }
+fn peek(a: Option[S]) -> i64 { match id(a) { Some(x) => x.r.id + x.s.len(), None => 0 } }
+fn pick(a: Option[S]) -> S { match id(a) { Some(x) => x, None => mks(99) } }
+fn peekl(a: Option[S]) -> i64 { if let Some(x) = id(a) { x.r.id } else { 0 } }
+fn lenp(a: Option[P]) -> i64 { match idp(a) { Some(x) => x.a.len(), None => 0 } }
+fn takeb(a: Option[P]) -> String { match idp(a) { Some(x) => x.b, None => f"none" } }
+fn main() {
+    let a1 = Some(mks(1));
+    println(f"k{peek(a1)}");
+    println(f"k{peek(Some(mks(2)))}");
+    let a3 = Some(mks(3));
+    let k3 = pick(a3);
+    println(f"k{k3.r.id}");
+    let k4 = pick(Some(mks(4)));
+    println(f"k{k4.r.id}");
+    let a5 = Some(mks(5));
+    println(f"k{peekl(a5)}");
+    println(f"k{peekl(Some(mks(6)))}");
+    let n7: Option[S] = None;
+    println(f"k{peek(n7)}");
+    let p8 = Some(P { a: f"heap-string-longer-than-sso-8", b: f"q" });
+    println(f"k{lenp(p8)}");
+    println(takeb(Some(P { a: f"z", b: f"heap-string-longer-than-sso-9" })));
+    println("end")
+}
+"#,
+        &[
+            "d1",
+            "k30",
+            "d2",
+            "k31",
+            "k3",
+            "d3",
+            "k4",
+            "d4",
+            "d5",
+            "k5",
+            "d6",
+            "k6",
+            "k0",
+            "k29",
+            "heap-string-longer-than-sso-9",
+            "end",
+        ],
+        "asan_boxed_handback_call_scrutinee_over_param",
+    );
+}

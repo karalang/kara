@@ -306,7 +306,7 @@ impl<'ctx> super::Codegen<'ctx> {
         // `match` only: `if let` / `let ... else` bind the payload as an owner
         // and run the body through that binding.
         if let Some(slot) = freshtemp_boxed_slot {
-            if self.call_result_aliases_armed_binding(scrutinee) {
+            if self.scrutinee_aliases_caller_box(scrutinee) {
                 if let Some(walker) = self
                     .optres_scrutinee_type_expr(scrutinee)
                     .and_then(|te| self.emit_optres_payload_user_drop_bodies_fn(&te))
@@ -408,7 +408,12 @@ impl<'ctx> super::Codegen<'ctx> {
         // different route (B-2026-08-29-4 records a `passthrough_owner_alias` at
         // the `let` site); a scrutinee temporary never passes through that site,
         // which is why it needed its own classification here.
-        let passthrough_retains = self.call_passthrough_armed_any_source(scrutinee).is_some();
+        // B-2026-09-24-12 — and a BOXED hand-back of a caller-retained param,
+        // whose staged slot now carries the body walk (see above), so an arm
+        // binding that also owned it would run the body twice.
+        let passthrough_retains = self.call_passthrough_armed_any_source(scrutinee).is_some()
+            || (freshtemp_boxed_slot.is_some()
+                && self.handback_call_owned_param_arg(scrutinee).is_some());
         let readonly_inline_optres = {
             // B-2026-08-30-52 — the operator relaxation is scoped to this
             // classifier; see the flag's doc for the fresh-temp leak a
@@ -14996,6 +15001,68 @@ impl<'ctx> super::Codegen<'ctx> {
     /// not a local) and for a method call on a local whose struct type is
     /// known. `None` for anything else, which keeps the caller's answer.
     /// B-2026-09-23-42.
+    /// B-2026-09-24-12 — the owned by-value PARAM a scrutinee call hands back
+    /// on every exit (`match id(a) { .. }` over `fn id(a: Option[S]) ->
+    /// Option[S] { a }`), or `None`. The call's result is that param's value,
+    /// whose box the CALLER still frees, so a boxed payload is staged without
+    /// a box drop exactly as for a live binding
+    /// ([`Self::call_result_aliases_armed_binding`]). Free functions only: the
+    /// spelling the caller-side payload-escape scan recognises
+    /// (`escaping_param_payload_variants_impl`, B-2026-09-24-9), which is what
+    /// stands the caller's body walk down so this frame's staged walk is the
+    /// only one.
+    pub(super) fn handback_call_owned_param_arg<'e>(&self, value: &'e Expr) -> Option<&'e Expr> {
+        let ExprKind::Call { callee, args } = &value.kind else {
+            return None;
+        };
+        let ExprKind::Identifier(g) = &callee.kind else {
+            return None;
+        };
+        let program = self.program_snapshot.as_deref()?;
+        let gf = program.items.iter().find_map(|item| match item {
+            crate::ast::Item::Function(gf) if &gf.name == g => Some(gf),
+            _ => None,
+        })?;
+        args.iter().enumerate().find_map(|(j, a)| {
+            (matches!(&a.value.kind, ExprKind::Identifier(_))
+                && crate::ast::fn_always_returns_param(Some(program), gf, j)
+                && self.scrutinee_is_owned_param_binding(&a.value))
+            .then_some(&a.value)
+        })
+    }
+
+    /// B-2026-09-24-12 — is the payload an `Option` / `Result` scrutinee's
+    /// variant arms bind wider than the enum's inline area (3 words for
+    /// `Option`, 5 for `Result`), i.e. heap-BOXED? Sized from the scrutinee's
+    /// instantiation, the source `track_freshtemp_boxed_enum_scrutinee`'s own
+    /// width gate falls back to; `false` when it cannot be sized.
+    fn optres_scrutinee_payload_is_boxed(&self, scrutinee: &Expr, patterns: &[&Pattern]) -> bool {
+        patterns.iter().any(|pat| {
+            let PatternKind::TupleVariant { path, .. } = &pat.kind else {
+                return false;
+            };
+            let area = match self.variant_pattern_enum_name(pat).as_deref() {
+                Some("Option") => 3usize,
+                Some("Result") => 5usize,
+                _ => return false,
+            };
+            let Some(variant) = path.last() else {
+                return false;
+            };
+            self.optres_scrutinee_payload_te_for(scrutinee, variant)
+                .is_some_and(|te| {
+                    Self::llvm_type_word_count(self.llvm_type_for_type_expr(&te)) > area
+                })
+        })
+    }
+
+    /// B-2026-09-24-12 — does this scrutinee's result alias a box some other
+    /// owner frees: a live binding's, or a caller-retained param's?
+    fn scrutinee_aliases_caller_box(&self, scrutinee: &Expr) -> bool {
+        self.call_result_aliases_armed_binding(scrutinee)
+            || self.handback_call_owned_param_arg(scrutinee).is_some()
+    }
+
     fn passthrough_callee_key<'e>(&self, value: &'e Expr) -> Option<(String, &'e [CallArg])> {
         match &value.kind {
             ExprKind::Call { callee, args, .. } => match &callee.kind {
@@ -16456,7 +16523,7 @@ impl<'ctx> super::Codegen<'ctx> {
                     None => return,
                 }
             }
-            _ if self.call_result_aliases_armed_binding(scrutinee) => match staged_slot {
+            _ if self.scrutinee_aliases_caller_box(scrutinee) => match staged_slot {
                 Some(s) => s,
                 None => return,
             },
@@ -19678,7 +19745,13 @@ impl<'ctx> super::Codegen<'ctx> {
         // its subject, exactly as the bound spelling (`let b = id(a); match b`)
         // walks `b`, but register no box drop: the source frees the box, and
         // a second free here crashed every compiled surface.
-        if self.call_result_aliases_armed_binding(scrutinee)
+        // B-2026-09-24-12 — for a caller-retained PARAM only when the payload
+        // is actually BOXED: an inline payload has no box to double-free, and
+        // its arm bindings already own their bodies against a caller that
+        // stood its walk down (B-2026-09-24-9).
+        let param_box_alias = self.handback_call_owned_param_arg(scrutinee).is_some()
+            && self.optres_scrutinee_payload_is_boxed(scrutinee, patterns);
+        if (self.call_result_aliases_armed_binding(scrutinee) || param_box_alias)
             && patterns.iter().any(|pat| {
                 matches!(
                     self.variant_pattern_enum_name(pat).as_deref(),
