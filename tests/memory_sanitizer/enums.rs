@@ -11099,3 +11099,70 @@ fn main() {
         "asan_handback_match_arm_moves_payload_out",
     );
 }
+
+/// B-2026-09-23-44 — a by-value `Option` / `Result` param whose payload
+/// runs no user `Drop` (`Option[String]`, a plain struct, `Vec[i64]`),
+/// handed back through a `let`-bound branch (`let r = if c { a } else
+/// { None }; r`). The caller kept its argument's buffer while `r` handed the
+/// same buffer back to the result binding: a double free on every compiled
+/// surface. Free, associated and method callees, a `match` initializer, an
+/// early `return None`, and a discarded result.
+#[test]
+fn asan_optres_handback_let_bound_branch_no_drop() {
+    assert_clean_asan_run(
+        r#"struct N { id: i64, s: String }
+struct H { k: i64 }
+impl H {
+    fn f(a: Option[String], c: bool) -> Option[String] { let r: Option[String] = if c { a } else { None }; r }
+    fn g(self, a: Option[String], c: bool) -> Option[String] { let r: Option[String] = if c { a } else { None }; r }
+}
+fn fs(a: Option[String], c: bool) -> Option[String] { let r: Option[String] = if c { a } else { None }; println("mid"); r }
+fn fr(a: Result[String, i64], c: bool) -> Result[String, i64] { let r: Result[String, i64] = if c { a } else { Err(3) }; r }
+fn fn_(a: Option[N], c: bool) -> Option[N] { let r: Option[N] = if c { a } else { None }; r }
+fn fm(a: Option[String], c: i64) -> Option[String] { let r: Option[String] = match c { 1 => a, _ => None }; r }
+fn fv(a: Option[Vec[i64]], c: bool) -> Option[Vec[i64]] { let r: Option[Vec[i64]] = if c { a } else { None }; r }
+fn fe(a: Option[String], c: bool, d: bool) -> Option[String] { let r: Option[String] = if c { a } else { None }; if d { return None; } r }
+fn show(o: Option[String]) { match o { Some(x) => println(x), None => println("none") } }
+fn main() {
+    let a1 = Some(f"heap-string-longer-than-sso-1");
+    show(fs(a1, true));
+    let a2 = Some(f"heap-string-longer-than-sso-2");
+    show(fs(a2, false));
+    let r3: Result[String, i64] = Ok(f"heap-string-longer-than-sso-3");
+    match fr(r3, true) { Ok(x) => println(x), Err(e) => println(f"e{e}") }
+    let n4 = Some(N { id: 4, s: f"heap-string-longer-than-sso-4" });
+    match fn_(n4, true) { Some(x) => println(f"y{x.id}"), None => println("none") }
+    show(fm(Some(f"heap-string-longer-than-sso-5"), 1));
+    let mut v: Vec[i64] = Vec.new();
+    v.push(6);
+    match fv(Some(v), true) { Some(x) => println(f"n{x.len()}"), None => println("none") }
+    let a7 = Some(f"heap-string-longer-than-sso-7");
+    show(H.f(a7, true));
+    let h = H { k: 8 };
+    let a8 = Some(f"heap-string-longer-than-sso-8");
+    show(h.g(a8, true));
+    let a9 = Some(f"heap-string-longer-than-sso-9");
+    show(fe(a9, true, true));
+    let a10 = Some(f"heap-string-longer-than-sso-10");
+    let _ = fs(a10, true);
+    println("end")
+}
+"#,
+        &[
+            "mid",
+            "heap-string-longer-than-sso-1",
+            "mid",
+            "none",
+            "heap-string-longer-than-sso-3",
+            "y4",
+            "heap-string-longer-than-sso-5",
+            "n1",
+            "heap-string-longer-than-sso-7",
+            "heap-string-longer-than-sso-8",
+            "none",
+            "mid",
+            "end",
+        ],
+        "asan_optres_handback_let_bound_branch_no_drop",
+    );
+}

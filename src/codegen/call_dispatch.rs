@@ -6236,6 +6236,11 @@ impl<'ctx> super::Codegen<'ctx> {
                     // see: the result binding then took the argument's box as
                     // its own and freed it beside the argument's binding.
                     || self.conditional_optres_handback_bodies_to_callee(callee_name, arg_index)
+                    // B-2026-09-23-44 — and the same spelling over a payload
+                    // with no `Drop` body (`Option[String]`), where the callee
+                    // has nothing to register and only this caller-side
+                    // stand-down was missing.
+                    || self.conditional_optres_handback_memory_with_caller(callee_name, arg_index)
         })
     }
 

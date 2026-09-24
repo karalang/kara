@@ -4022,6 +4022,72 @@ pub fn fn_conditionally_returns_param_bare(
     // Unexpanded, `let r: Option[R] = if c { a } else { None }; …; r` kept the
     // caller's argument armed while `r` handed it back: a segfault on every
     // compiled surface and the body twice under `--interp`.
+    /// B-2026-09-23-44 — a type every part of which is named concretely and
+    /// runs no user `Drop`: a scalar, `String`, a `Vec` / `Option` / `Result` /
+    /// tuple / fixed `Array` of such, or a non-generic, non-`shared`,
+    /// non-`par` struct with no `Drop` impl whose fields all are. Anything
+    /// else — a type parameter, a user enum, an RC type, a body anywhere
+    /// inside — is `false`, which keeps the `let`-bound expansion off it: a
+    /// body under a `Vec` is lost on the dies-inside exit by the tail spelling
+    /// too, and expanding would carry `--interp` into that gap with it.
+    fn concrete_plain_type(
+        program: Option<&crate::Program>,
+        te: &crate::ast::TypeExpr,
+        seen: &mut Vec<String>,
+    ) -> bool {
+        match &te.kind {
+            crate::ast::TypeKind::Tuple(ts) => {
+                ts.iter().all(|t| concrete_plain_type(program, t, seen))
+            }
+            crate::ast::TypeKind::Array { element, .. } => {
+                concrete_plain_type(program, element, seen)
+            }
+            crate::ast::TypeKind::Path(q) if q.segments.len() == 1 => {
+                let n = q.segments[0].as_str();
+                let args_ok = |seen: &mut Vec<String>| {
+                    q.generic_args.as_ref().is_some_and(|args| {
+                        args.iter().all(|a| {
+                            matches!(a, crate::ast::GenericArg::Type(t)
+                                if concrete_plain_type(program, t, seen))
+                        })
+                    })
+                };
+                match n {
+                    "i8" | "i16" | "i32" | "i64" | "u8" | "u16" | "u32" | "u64" | "f32" | "f64"
+                    | "bool" | "char" | "String" | "isize" | "usize" => q.generic_args.is_none(),
+                    "Vec" | "Option" | "Result" => args_ok(seen),
+                    _ => {
+                        if q.generic_args.is_some() {
+                            return false;
+                        }
+                        if seen.iter().any(|x| x == n) {
+                            return true;
+                        }
+                        let Some(sd) = program.and_then(|p| {
+                            p.items.iter().find_map(|it| match it {
+                                Item::StructDef(s) if s.name == n => Some(s),
+                                _ => None,
+                            })
+                        }) else {
+                            return false;
+                        };
+                        if sd.is_shared
+                            || sd.is_par
+                            || sd.generic_params.is_some()
+                            || program.is_some_and(|p| p.drop_method_keys.contains_key(n))
+                        {
+                            return false;
+                        }
+                        seen.push(n.to_string());
+                        sd.fields
+                            .iter()
+                            .all(|fd| concrete_plain_type(program, &fd.ty, seen))
+                    }
+                }
+            }
+            _ => false,
+        }
+    }
     let droppable_struct = |te: &crate::ast::TypeExpr| {
         matches!(&te.kind, crate::ast::TypeKind::Path(q)
         if q.segments.len() == 1
@@ -4043,6 +4109,20 @@ pub fn fn_conditionally_returns_param_bare(
             path.generic_args.as_ref().is_some_and(|args| {
                 args.iter()
                     .any(|a| matches!(a, crate::ast::GenericArg::Type(t) if droppable_struct(t)))
+                    // B-2026-09-23-44 — or whose payloads are all CONCRETE
+                    // plain types (`String`, `Vec[i64]`, a non-generic
+                    // non-`shared` struct, …). Both backends leave such a
+                    // param's MEMORY with the caller on every exit, and the
+                    // caller already stands its result binding down for it
+                    // on the syntactic union; what this `let`-bound spelling
+                    // lacked was only the leaf, so `r` handed the argument's
+                    // buffer back while the argument kept it — a double free
+                    // on every compiled surface. A generic payload, or one
+                    // with a `Drop` body anywhere inside, stays out.
+                    || (f.generic_params.is_none()
+                        && args.iter().all(|a| matches!(a,
+                            crate::ast::GenericArg::Type(t)
+                                if concrete_plain_type(program, t, &mut Vec::new()))))
             })
         }
         crate::ast::TypeKind::Path(path) if path.segments.len() == 1 => {
