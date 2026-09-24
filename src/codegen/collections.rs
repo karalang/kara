@@ -4837,6 +4837,7 @@ impl<'ctx> super::Codegen<'ctx> {
         // element drain freed it again. It takes the same clone, for the same
         // reason, and its receiver type comes from `type_name_of_expr`, which
         // walks the tuple hops.
+        let tuple_hop = !matches!(object.kind, ExprKind::Index { .. });
         let obj_ty = if let ExprKind::Index {
             object: idx_obj, ..
         } = &object.kind
@@ -4887,6 +4888,27 @@ impl<'ctx> super::Codegen<'ctx> {
             return Ok((val, false));
         };
         // Only a heap-bearing field needs the clone (a Copy field can't dangle).
+        // The tuple-hop shape takes only a non-shared USER enum field. An
+        // `Option` / `Result` field's clone has no owner (the materializer
+        // declines the type-erased layout), so cloning one leaked the copy
+        // (measured: 27 B definitely lost on `match g[0].1.o { Some(s) => … }`).
+        if tuple_hop {
+            let user_enum = match &field_te.kind {
+                TypeKind::Path(p) => p.segments.last().is_some_and(|n| {
+                    n != "Option"
+                        && n != "Result"
+                        && self
+                            .type_decls
+                            .enum_layouts
+                            .get(n.as_str())
+                            .is_some_and(|l| !l.is_shared)
+                }),
+                _ => false,
+            };
+            if !user_enum {
+                return Ok((val, false));
+            }
+        }
         if super::vec_method::is_trivially_copyable_te(&field_te) {
             return Ok((val, false));
         }

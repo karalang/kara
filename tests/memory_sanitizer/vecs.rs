@@ -7459,3 +7459,34 @@ fn main() {
         8,
     );
 }
+
+/// B-2026-09-24-2 (follow-up) — the enum-field scrutinee clone for a struct
+/// reached through tuple hops below a container element must take a USER enum
+/// only. An `Option` field's clone has no owner, so extending the clone to it
+/// leaked the copy: 27 B definitely lost on `match g[0].1.o { Some(s) => … }`,
+/// read-only or consuming, at one and two hops.
+#[test]
+fn asan_tuple_hop_option_field_match_takes_no_orphan_copy() {
+    assert_clean_asan_run_min_allocs(
+        r#"
+struct G { o: Option[String], n: i64 }
+fn mk(i: i64) -> String { f"alpha-{i}-long-enough-to-heap" }
+fn main() {
+    let g1: Vec[(i64, G)] = [(1, G { o: Some(mk(6)), n: 5 })];
+    match g1[0].1.o { Some(s) => println(s), None => {} }
+    let g2: Vec[(i64, G)] = [(1, G { o: Some(mk(7)), n: 4 })];
+    let mut out: Vec[String] = [];
+    match g2[0].1.o { Some(s) => out.push(s), None => {} }
+    let g3: Vec[(i64, (G, i64))] = [(1, (G { o: Some(mk(8)), n: 3 }, 2))];
+    match g3[0].1.0.o { Some(s) => out.push(s), None => {} }
+    println(f"{out.len()} {out[0]} {out[1]} {g1[0].1.n}");
+}
+"#,
+        &[
+            "alpha-6-long-enough-to-heap",
+            "2 alpha-7-long-enough-to-heap alpha-8-long-enough-to-heap 5",
+        ],
+        "asan_tuple_hop_option_field_match_takes_no_orphan_copy",
+        6,
+    );
+}
