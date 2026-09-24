@@ -4661,10 +4661,34 @@ impl<'ctx> super::Codegen<'ctx> {
         let ExprKind::TupleIndex { object, index } = &expr.kind else {
             return Ok(val);
         };
+        // B-2026-09-23-38 — an intermediate hop of a longer chain: the outer
+        // hop owns the clone (see `tidx_read_clone_skip`).
+        if self
+            .tidx_read_clone_skip
+            .remove(&(expr.span.offset, expr.span.length))
+        {
+            return Ok(val);
+        }
+        // B-2026-09-23-38 — walk a CHAIN of tuple-index hops down to the
+        // container read (`v[0].1.0` → `v[0]`, path `[1, 0]`). Only the one-hop
+        // shape was recognised, so `v[0].1.0` cloned the whole `(String, i64)`
+        // at the inner hop, registered no cleanup for that shape, and handed
+        // the leaf out of the clone: one leaked String per `println(v[0].1.0)`.
+        let mut path: Vec<usize> = vec![*index as usize];
+        let mut base: &Expr = object;
+        while let ExprKind::TupleIndex {
+            object: inner,
+            index: i,
+        } = &base.kind
+        {
+            path.push(*i as usize);
+            base = inner;
+        }
+        path.reverse();
         let ExprKind::Index {
             object: container,
             index: cidx,
-        } = &object.kind
+        } = &base.kind
         else {
             return Ok(val);
         };
@@ -4690,14 +4714,18 @@ impl<'ctx> super::Codegen<'ctx> {
                 return Ok(val);
             }
         }
-        let Some(TypeKind::Tuple(elems)) =
-            self.vec_index_elem_type_expr(container).map(|te| te.kind)
-        else {
+        let Some(mut mte) = self.vec_index_elem_type_expr(container) else {
             return Ok(val);
         };
-        let Some(mte) = elems.get(*index as usize).cloned() else {
-            return Ok(val);
-        };
+        for &hop in &path {
+            let TypeKind::Tuple(elems) = &mte.kind else {
+                return Ok(val);
+            };
+            let Some(next) = elems.get(hop).cloned() else {
+                return Ok(val);
+            };
+            mte = next;
+        }
         if super::vec_method::is_trivially_copyable_te(&mte) {
             return Ok(val);
         }

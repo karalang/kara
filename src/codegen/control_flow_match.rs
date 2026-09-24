@@ -7042,9 +7042,9 @@ impl<'ctx> super::Codegen<'ctx> {
             // as the struct and tuple arms, one pattern kind over: `w` points
             // into the map's live variant, so a move of it made a second owner
             // and both freed the String. Clone each ESCAPING heap field
-            // binding; read-only ones stay aliases. (`Vec.get` reaches a
-            // different path and reads the moved value back empty instead:
-            // B-2026-09-23-39, still open.)
+            // binding; read-only ones stay aliases. (`Vec.get`'s payload is
+            // `Option[ref T]`, so the same binding there is a borrow and a
+            // move out of it is refused at typecheck: B-2026-09-23-39.)
             PatternKind::TupleVariant {
                 path: vpath,
                 patterns: vsubs,

@@ -9151,3 +9151,74 @@ fn main() {
         Some("a:2:2\nb:2:4\nc:2:5\nd:2:cd\ne:2:7\nf:2\ndD1\ndD2\nend\n")
     );
 }
+
+#[test]
+/// B-2026-09-23-38 — a tuple member read TWO or more hops below a container
+/// element (`v[0].1.0` over `Vec[(i64, (String, i64))]`) cloned the whole
+/// intermediate tuple at the inner hop, registered no cleanup for a tuple
+/// clone, and handed the leaf out of it: one leaked String per
+/// `println(v[0].1.0)`. The chain is now walked to its container read and only
+/// the LEAF is cloned, with the same cleanup and consuming-destination takeover
+/// the one-hop `v[0].0` read has. Legs: non-consuming reads in a loop, eight
+/// consuming destinations, three hops, a `Vec` leaf, and the whole inner tuple.
+fn test_e2e_nested_container_tuple_index_read_matches_interp() {
+    let out = run_program(
+        r#"
+struct H { s: String }
+fn take(s: String) -> i64 { s.len() }
+fn pick(v: ref Vec[(i64, (String, i64))]) -> String { v[0].1.0 }
+fn mkv() -> Vec[(i64, (String, i64))] { [(1, (f"alpha-{1}-long-enough-to-heap", 7)), (2, (f"beta-{2}-long-enough-to-heap", 8))] }
+fn leg_reads() {
+    let v = mkv();
+    let mut i = 0;
+    while i < 3 { println(v[1].1.0); i = i + 1; }
+    println(f"rd {v[0].1.0} {v[0].1.0.len()} {v[0].1.0 == "x"} {v[0].1.1}");
+}
+fn leg_consumers() {
+    let v = mkv();
+    let s = v[0].1.0;
+    let mut o: Vec[String] = [];
+    o.push(v[1].1.0);
+    o.push(v[0].1.0);
+    let h = H { s: v[1].1.0 };
+    let t = (v[0].1.0, 3);
+    let mut a = String.new();
+    a = v[1].1.0;
+    println(f"co {s} {o.len()} {o[1]} {h.s} {t.0} {a} {take(v[0].1.0)} {pick(v)}");
+    println(f"co {v[0].1.0} {v[1].1.0}");
+}
+fn leg_three_levels() {
+    let v: Vec[(i64, (i64, (String, i64)))] = [(1, (2, (f"gamma-{3}-long-enough-to-heap", 7)))];
+    println(v[0].1.1.0);
+    let s = v[0].1.1.0;
+    println(f"tl {s} {v[0].1.1.1}");
+}
+fn leg_vec_leaf() {
+    let v: Vec[(i64, (Vec[String], i64))] = [(1, ([f"delta-{4}-long-enough-to-heap"], 7))];
+    println(f"vl {v[0].1.0.len()}");
+    let w = v[0].1.0;
+    println(f"vl {w[0]} {v[0].1.0[0]}");
+}
+fn leg_whole_inner() {
+    let v = mkv();
+    let t = v[0].1;
+    println(f"wi {t.0} {t.1} {v[0].1.0}");
+}
+fn main() {
+    leg_reads();
+    leg_consumers();
+    leg_three_levels();
+    leg_vec_leaf();
+    leg_whole_inner();
+    println("done");
+}
+"#,
+    );
+    if let Some(out) = out {
+        assert_eq!(
+            out,
+            "beta-2-long-enough-to-heap\nbeta-2-long-enough-to-heap\nbeta-2-long-enough-to-heap\nrd alpha-1-long-enough-to-heap 27 false 7\nco alpha-1-long-enough-to-heap 2 alpha-1-long-enough-to-heap beta-2-long-enough-to-heap alpha-1-long-enough-to-heap beta-2-long-enough-to-heap 27 alpha-1-long-enough-to-heap\nco alpha-1-long-enough-to-heap beta-2-long-enough-to-heap\ngamma-3-long-enough-to-heap\ntl gamma-3-long-enough-to-heap 7\nvl 1\nvl delta-4-long-enough-to-heap delta-4-long-enough-to-heap\nwi alpha-1-long-enough-to-heap 7 alpha-1-long-enough-to-heap\ndone\n",
+            "every leg must match --interp; got {out:?}"
+        );
+    }
+}

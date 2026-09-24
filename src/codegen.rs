@@ -1941,6 +1941,13 @@ pub(super) struct Codegen<'ctx> {
     /// Append-only for the life of the module; entries are never removed, and
     /// the log is read by index, so it costs one `usize` at each read site.
     pub(crate) vec_elem_field_clone_log: Vec<(usize, usize)>,
+    /// B-2026-09-23-38 — spans of container tuple-index reads that are the
+    /// OBJECT of a further tuple-index hop (`v[0].1` inside `v[0].1.0`). Such a
+    /// read must not take its own per-read clone: the outer hop clones only the
+    /// leaf it hands out, and an intermediate clone had no owner at all, so it
+    /// leaked on every non-consuming read and would double-free a consuming one
+    /// once given a cleanup. Inserted by the outer hop, consumed by the inner.
+    pub(crate) tidx_read_clone_skip: std::collections::HashSet<(usize, usize)>,
     /// B-2026-08-13-11 — set only while `maybe_defensive_copy_return_value` is
     /// running, so the shared helper can tell an ARGUMENT position from a RETURN
     /// one.
@@ -6515,6 +6522,7 @@ impl<'ctx> Codegen<'ctx> {
             freshtemp_tuple_elem_slots: std::collections::HashMap::new(),
             deferred_shared_temp_release: None,
             vec_elem_field_clone_log: Vec::new(),
+            tidx_read_clone_skip: std::collections::HashSet::new(),
             in_return_defensive_copy: false,
             uam_array_copy_declined: false,
             tracing: Tracing {

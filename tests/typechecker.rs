@@ -51633,3 +51633,80 @@ fn test_tuple_pattern_through_a_borrow_keeps_aggregate_fields_borrowed() {
         "{errors:?}"
     );
 }
+
+/// B-2026-09-23-39 — a destructuring pattern inside a BORROWED payload
+/// (`Vec.get` / `first` / `last` return `Option[ref T]`) binds its fields as
+/// borrows of the element, the way a bare `Some(w)` binds `w: ref T`. The
+/// variant arm only matched a bare `Type::Named`, so `Some(B.S(w))` fell to its
+/// recovery path and bound `w` to `Type::Error`: moving it out type-checked,
+/// and codegen, with no type for `w`, handed out one word of the String.
+#[test]
+fn destructured_borrowed_payload_fields_bind_as_borrows() {
+    let head = "enum B { S(String), N }\nstruct P { a: String, n: i64 }\n";
+    for (label, body) in [
+        (
+            "variant over get",
+            "let v: Vec[B] = []; let mut h = String.new(); \
+             match v.get(0) { None => {} Some(B.S(w)) => { h = w; } Some(B.N) => {} }",
+        ),
+        (
+            "variant over first, if let",
+            "let v: Vec[B] = []; let mut h = String.new(); \
+             if let Some(B.S(w)) = v.first() { h = w; }",
+        ),
+        (
+            "struct over get",
+            "let v: Vec[P] = []; let mut h = String.new(); \
+             match v.get(0) { None => {} Some(P { a, n }) => { h = a; } }",
+        ),
+        (
+            "tuple over get",
+            "let v: Vec[(String, i64)] = []; let mut h = String.new(); \
+             match v.get(0) { None => {} Some((w, n)) => { h = w; } }",
+        ),
+    ] {
+        let src = format!("{head}fn main() {{ {body} }}\n");
+        let errors = typecheck_errors(&src);
+        assert!(
+            errors
+                .iter()
+                .any(|e| e.message.contains("expected 'String', found 'ref String'")),
+            "{label}: moving a borrowed payload's field out must be refused, got {errors:?}"
+        );
+    }
+    // Reading through the same bindings is fine, and a struct or tuple
+    // pattern counts toward exhaustiveness like a variant pattern does.
+    for (label, body) in [
+        (
+            "variant read",
+            "let v: Vec[B] = []; \
+             match v.get(0) { None => {} Some(B.S(w)) => { println(f\"{w.len()}\"); } Some(B.N) => {} }",
+        ),
+        (
+            "struct read",
+            "let v: Vec[P] = []; \
+             match v.get(0) { None => {} Some(P { a, n }) => { println(f\"{a.len()} {n}\"); } }",
+        ),
+        (
+            "tuple read",
+            "let v: Vec[(String, i64)] = []; \
+             match v.get(0) { None => {} Some((w, n)) => { println(f\"{w.len()} {n}\"); } }",
+        ),
+        // `Map.get` hands back its value by copy in the checker, and
+        // B-2026-09-23-40 gives the moved field its own buffer; it must stay
+        // accepted.
+        (
+            "variant over Map.get",
+            "let m: Map[String, B] = Map.new(); let mut h = String.new(); \
+             match m.get(\"k\") { None => {} Some(B.S(w)) => { h = w; } Some(B.N) => {} }",
+        ),
+    ] {
+        let src = format!("{head}fn main() {{ {body} }}\n");
+        let result = typecheck_ok(&src);
+        assert!(
+            result.errors.is_empty(),
+            "{label}: expected a clean typecheck, got {:?}",
+            result.errors
+        );
+    }
+}

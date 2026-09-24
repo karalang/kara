@@ -10598,3 +10598,64 @@ fn main() {
         "iterator terminals over heap tuple elements free once",
     );
 }
+
+#[test]
+/// B-2026-09-23-39 — a destructuring pattern inside `Vec.get` / `first` /
+/// `last`'s `Option[ref T]` payload (`Some(B.S(w))`, `Some(P { a, n })`,
+/// `Some((w, n))`) bound its fields as untyped: codegen then printed the
+/// String's data pointer as an integer and had no `len` for it, and a struct or
+/// tuple pattern did not count toward exhaustiveness. The fields now bind as
+/// borrows of the element, as a bare `Some(w)` does.
+fn asan_borrowed_get_payload_destructure_reads_its_fields() {
+    assert_clean_asan_run_min_allocs(
+        r#"
+enum B { S(String), N }
+enum B2 { S(String, i64), N }
+struct P { a: String, n: i64 }
+fn mk(i: i64) -> String { f"payload-{i}-long-enough-to-heap" }
+fn leg_match_get() {
+    let v: Vec[B] = [B.S(mk(1)), B.N];
+    match v.get(0) { None => {} Some(B.S(w)) => { println(w); println(f"mg {w.len()}"); } Some(B.N) => {} }
+    match v.get(1) { None => {} Some(B.S(w)) => { println(w); } Some(B.N) => { println("mg n"); } }
+}
+fn leg_if_let_first() {
+    let v: Vec[B2] = [B2.S(mk(2), 5)];
+    if let Some(B2.S(w, n)) = v.first() { println(f"il {w} {w.len()} {n}"); }
+    if let Some(B2.S(w, _)) = v.last() { let c = w.clone(); println(f"il {c}"); }
+}
+fn leg_struct_and_tuple() {
+    let ps: Vec[P] = [P { a: mk(3), n: 9 }];
+    match ps.get(0) { None => {} Some(P { a, n }) => { println(f"st {a} {a.len()} {n}"); } }
+    let ts: Vec[(String, i64)] = [(mk(4), 6)];
+    match ts.get(0) { None => {} Some((w, n)) => { println(f"tu {w} {w.len()} {n}"); } }
+}
+fn leg_loop() {
+    let v: Vec[B] = [B.S(mk(5)), B.S(mk(6))];
+    let mut total = 0;
+    let mut i = 0;
+    while i < 2 { match v.get(i) { None => {} Some(B.S(w)) => { total = total + w.len(); } Some(B.N) => {} } i = i + 1; }
+    println(f"lp {total}");
+}
+fn main() {
+    leg_match_get();
+    leg_if_let_first();
+    leg_struct_and_tuple();
+    leg_loop();
+    println("done");
+}
+"#,
+        &[
+            "payload-1-long-enough-to-heap",
+            "mg 29",
+            "mg n",
+            "il payload-2-long-enough-to-heap 29 5",
+            "il payload-2-long-enough-to-heap",
+            "st payload-3-long-enough-to-heap 29 9",
+            "tu payload-4-long-enough-to-heap 29 6",
+            "lp 58",
+            "done",
+        ],
+        "asan_borrowed_get_payload_destructure_reads_its_fields",
+        8,
+    );
+}

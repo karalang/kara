@@ -1894,6 +1894,13 @@ impl<'ctx> super::Codegen<'ctx> {
             }
             ExprKind::Tuple(elems) => self.compile_tuple(elems),
             ExprKind::TupleIndex { object, index } => {
+                // B-2026-09-23-38 — a hop whose object is itself a tuple-index
+                // read (`v[0].1.0`) clones its own LEAF below; the inner
+                // `v[0].1` must hand back the element's bits without a clone.
+                if matches!(object.kind, ExprKind::TupleIndex { .. }) {
+                    self.tidx_read_clone_skip
+                        .insert((object.span.offset, object.span.length));
+                }
                 let v = self.compile_tuple_index(
                     (expr.span.offset, expr.span.length),
                     object,

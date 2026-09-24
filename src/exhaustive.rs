@@ -559,6 +559,18 @@ fn slice_patterns_cover_all_lengths(matrix: &Matrix) -> bool {
     }
 }
 
+/// B-2026-09-23-39 — the pointee of a borrowed column. A pattern below the
+/// scrutinee's top level destructures THROUGH a `ref T` / `mut ref T`
+/// exactly as it would a `T` (the typechecker binds it that way), so the
+/// usefulness recursion asks about T's constructors. The top-level scrutinee
+/// keeps its own gate in `is_handled_scrutinee`.
+fn peel_borrow(ty: &Type) -> &Type {
+    match ty {
+        Type::Ref(inner) | Type::MutRef(inner) => peel_borrow(inner),
+        other => other,
+    }
+}
+
 fn is_handled_scrutinee(ty: &Type) -> bool {
     !matches!(
         ty,
@@ -589,6 +601,12 @@ fn build_matrix(arms: &[MatchArm], scrut_type: &Type, env: &TypeEnv) -> Matrix {
 }
 
 fn lower_pattern(p: &Pattern, scrut_type: &Type, env: &TypeEnv) -> Pat {
+    // B-2026-09-23-39 — a column typed `ref T` (the payload of `Vec.get`'s
+    // `Option[ref T]`) is matched against T's constructors: a destructuring
+    // pattern reads through the borrow. Unpeeled, a struct or tuple pattern
+    // there lowered with no field types and a `Some(P { a, n })` arm never
+    // counted as covering `Some(_)`.
+    let scrut_type = peel_borrow(scrut_type);
     match &p.kind {
         PatternKind::Wildcard => Pat::Wildcard,
         PatternKind::Binding(name) => {
@@ -1318,7 +1336,7 @@ fn default_matrix(matrix: &Matrix) -> Matrix {
 }
 
 fn enumerate_ctors(ty: &Type, env: &TypeEnv) -> Option<Vec<PatCtor>> {
-    match ty {
+    match peel_borrow(ty) {
         Type::Bool => Some(vec![PatCtor::Bool(true), PatCtor::Bool(false)]),
         Type::Tuple(_) => Some(vec![PatCtor::Tuple]),
         // Unit `()` is a single-inhabitant type — its sole constructor is
@@ -1369,6 +1387,7 @@ fn ctor_arity(ctor: &PatCtor, parent_ty: &Type, env: &TypeEnv) -> usize {
 }
 
 fn ctor_field_types(ctor: &PatCtor, parent_ty: &Type, env: &TypeEnv) -> Vec<Type> {
+    let parent_ty = peel_borrow(parent_ty);
     match ctor {
         PatCtor::Bool(_) | PatCtor::Lit(_) | PatCtor::IntRange { .. } => vec![],
         // Route through `variant_payload_types` so the enum's generic

@@ -914,6 +914,32 @@ impl<'a> super::TypeChecker<'a> {
         expected: &Type,
         mode: ScrutineeMode,
     ) {
+        // B-2026-09-23-39 — a DESTRUCTURING pattern against a borrow
+        // (`Some(B.S(w))` over `v.get(i)`'s `Option[ref B]`) destructures the
+        // pointee, and its leaves borrow from it: the same rule
+        // `ScrutineeMode::classify` applies to a top-level `ref` scrutinee,
+        // one level down. The arms below only matched a bare `Type::Named` /
+        // `Type::Tuple`, so a `ref B` fell to the variant arm's recovery path,
+        // which binds every leaf to `Type::Error`: `w` then unified with
+        // anything, `held = w` type-checked, and codegen, with no type for
+        // `w`, bound one word of the String — printing its data pointer as
+        // an integer, moving out an empty String, and finding no `len`.
+        // A `Binding` keeps the borrow whole, so it is not peeled here.
+        if let Type::Ref(inner) | Type::MutRef(inner) = expected {
+            if matches!(
+                pattern.kind,
+                PatternKind::TupleVariant { .. }
+                    | PatternKind::Struct { .. }
+                    | PatternKind::Tuple(_)
+            ) {
+                let inner_mode = match (mode, expected) {
+                    (ScrutineeMode::Ref, _) | (_, Type::Ref(_)) => ScrutineeMode::Ref,
+                    _ => ScrutineeMode::MutRef,
+                };
+                self.check_pattern_against(pattern, inner, inner_mode);
+                return;
+            }
+        }
         match &pattern.kind {
             // B-2026-09-19-30 — a WILDCARD leaf's type, recorded SOLELY so
             // codegen can SIZE it. `_` binds nothing, so this arm walked past
