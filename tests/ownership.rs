@@ -5030,6 +5030,56 @@ fn mutually_exclusive_arms_consuming_once_each_no_rc_fallback() {
 }
 
 #[test]
+fn mutually_exclusive_container_store_arms_no_rc_fallback() {
+    // B-2026-09-24-15 — the same mutual exclusion for a CONTAINER-STORE consume:
+    // an owned argument of a `mut ref self` method. That consume is lowered
+    // into a dead-end sink block, so the B-2026-07-31-28 reachability test is
+    // asked from the call site the sink hangs off. Two arms that each hand
+    // `doc` to such a method consume it once per execution and must not be
+    // RC-boxed -- the box's scope-exit `Option` cleanup does not reach the
+    // payload, so every call whose callee copied its argument leaked it.
+    // The loop and use-after spellings below must still fire.
+    let head = "struct P { pos: i64 }\n\
+                impl P {\n\
+                \x20   fn look(mut ref self, doc: Option[String]) -> i64 { self.pos = self.pos + 1; 0 }\n";
+    let arms = format!(
+        "{head}\x20   fn item(mut ref self, t: i64) -> i64 {{\n\
+         \x20       let doc = Some(\"d\".to_string());\n\
+         \x20       match t {{ 0 => self.look(doc), _ => self.look(doc) }}\n\
+         \x20   }}\n}}"
+    );
+    let result = ownership_ok(&arms);
+    assert!(
+        result
+            .rc_values
+            .get("P.item")
+            .and_then(|m| m.get("doc"))
+            .is_none(),
+        "`doc` is stored once per path and must NOT be RC-promoted; got: {:?}",
+        result.rc_values.get("P.item")
+    );
+    let looped = format!(
+        "{head}\x20   fn item(mut ref self, n: i64) -> i64 {{\n\
+         \x20       let doc = Some(\"d\".to_string());\n\
+         \x20       let mut i = 0;\n\
+         \x20       while i < n {{ match i {{ 0 => self.look(doc), _ => self.look(doc) }}; i = i + 1; }}\n\
+         \x20       i\n\
+         \x20   }}\n}}"
+    );
+    let result = ownership_ok(&looped);
+    assert!(
+        result
+            .rc_values
+            .get("P.item")
+            .and_then(|m| m.get("doc"))
+            .is_some(),
+        "two store arms inside a loop CAN both run -- `doc` must still be \
+         RC-promoted; got: {:?}",
+        result.rc_values.get("P.item")
+    );
+}
+
+#[test]
 fn use_before_consume_with_a_later_loop_no_rc_fallback() {
     // B-2026-07-31-28's SECOND instance, which that entry recorded as observed
     // in context but undiagnosed — the flagged "other use" PRECEDES the consume

@@ -1632,7 +1632,19 @@ impl<'ctx> super::Codegen<'ctx> {
         self.field_copy_supported(te, &mut Vec::new())
     }
 
-    /// B-2026-09-24-14 — does the free function `fn_name` ENTRY-COPY its
+    /// [`Self::optres_escaping_param_entry_copied`] keyed by CALL-ARGUMENT
+    /// position (a method's receiver not counted), for the callers that walk a
+    /// call's `args` rather than the lowered parameter list.
+    pub(super) fn optres_escaping_arg_entry_copied(&self, fn_key: &str, arg_i: usize) -> bool {
+        let has_self = self
+            .program_snapshot
+            .as_deref()
+            .and_then(|p| super::declarations::find_function_ast(p, fn_key))
+            .is_some_and(|f| f.self_param.is_some());
+        self.optres_escaping_param_entry_copied(fn_key, arg_i + usize::from(has_self))
+    }
+
+    /// B-2026-09-24-14 — does the function `fn_key` ENTRY-COPY its
     /// by-value `Option`/`Result` parameter `idx` even though the parameter
     /// ESCAPES its frame?
     ///
@@ -1653,37 +1665,76 @@ impl<'ctx> super::Codegen<'ctx> {
     /// is the ordinary move out of a local.
     ///
     /// Excluded, each for a reason of its own:
-    /// * a parameter the callee RETURNS on any path
-    ///   ([`Self::call_arg_flows_into_return`]) -- the caller already takes the
-    ///   hand-back route for it and keeps no second owner;
+    /// * a parameter the callee RETURNS WHOLE on any path
+    ///   ([`Self::call_arg_flows_into_return`], with the function returning the
+    ///   parameter's own type) -- the caller already takes the hand-back route
+    ///   for it and keeps no second owner. One returned inside a struct or a
+    ///   constructor is copied like any other escape (B-2026-09-24-15); one
+    ///   returned inside a TUPLE is still excluded, see the body;
     /// * a payload that is not [`crate::ast::concrete_plain_type`] -- a user
     ///   `Drop` body anywhere inside is run by the CALLER's retained channel
     ///   for a by-value `Option`/`Result`, so an escaping copy would run it a
     ///   second time wherever the copy ends up;
-    /// * generic and coroutine functions, and methods, whose prologues are
-    ///   separate paths (the mono prologue, the coro ramp, `lower_method`).
-    pub(super) fn optres_escaping_param_entry_copied(&self, fn_name: &str, idx: usize) -> bool {
+    /// * generic and coroutine functions, whose prologues are separate paths
+    ///   (the mono prologue, the coro ramp). A non-generic METHOD is compiled
+    ///   through the same prologue and is admitted (B-2026-09-24-15).
+    pub(super) fn optres_escaping_param_entry_copied(&self, fn_key: &str, idx: usize) -> bool {
         let Some(program) = self.program_snapshot.as_deref() else {
             return false;
         };
-        let Some(f) = program.items.iter().find_map(|item| match item {
-            crate::ast::Item::Function(f) if f.name == fn_name => Some(f),
-            _ => None,
-        }) else {
+        // B-2026-09-24-15 — resolved through `find_function_ast`, so a
+        // `Type.method` key answers too. `idx` counts a method's `self` as
+        // param 0 on both sides (the caller's `pidx`, and the synthesized
+        // function `compile_function` walks), while the AST method's `params`
+        // do not hold `self`: every index into it below is `ast_i`.
+        let Some(f) = super::declarations::find_function_ast(program, fn_key) else {
             return false;
         };
-        if f.generic_params.is_some() || self.is_coroutine_compiled(fn_name) {
+        let ast_i = if f.self_param.is_some() {
+            match idx.checked_sub(1) {
+                Some(i) => i,
+                None => return false,
+            }
+        } else {
+            idx
+        };
+        if f.generic_params.is_some() || self.is_coroutine_compiled(fn_key) {
             return false;
         }
-        let Some(p) = f.params.get(idx) else {
+        let Some(p) = f.params.get(ast_i) else {
             return false;
         };
         if !matches!(&p.pattern.kind, crate::ast::PatternKind::Binding(_)) {
             return false;
         }
+        // B-2026-09-24-15 — the hand-back exclusion covers the WHOLE-value
+        // route only. `call_arg_flows_into_return` also answers true for a
+        // param returned inside a struct literal or tuple (`F { label: label }`),
+        // and nothing on the caller's side takes that route over: the argument
+        // keeps its binding and the result frees the same buffer, a double free
+        // on main before this row. A param can come back WHOLE only when the
+        // function returns its own type -- for a `concrete_plain_type` payload
+        // no aggregate of that type can hold a value of it -- so a different
+        // return type means every hand-back is wrapped, and the copy is what
+        // gives the result its own buffer. Measured through `Parser.parse_fn_def`
+        // in the self-hosted parser, which forwards `doc` to a method that
+        // returns it inside `FnDefNode`.
+        //
+        // A TUPLE return is left where it was. A tuple literal does not disarm
+        // an inline `Option` element's source (`compile_tuple`'s note (e)), and
+        // the returned tuple's drop frees that payload anyway, so a copied
+        // param moved into `(label, k)` is freed by the callee's exit AND the
+        // result: that is a separate defect, measured on a plain local too, and
+        // copying here would only route a clean fresh-temp call into it.
+        let keeps_hand_back_route = self.call_arg_flows_into_return(fn_key, ast_i)
+            && f.return_type.as_ref().is_some_and(|rt| {
+                matches!(rt.kind, crate::ast::TypeKind::Tuple(_))
+                    || crate::formatter::render_type_expr(rt)
+                        == crate::formatter::render_type_expr(&p.ty)
+            });
         self.optres_param_entry_copied_te(&p.ty)
             && crate::ast::concrete_plain_type(Some(program), &p.ty, &mut Vec::new())
-            && !self.call_arg_flows_into_return(fn_name, idx)
+            && !keeps_hand_back_route
     }
 
     /// B-2026-08-12-1 — emit the entry copy for a by-value `Option`/`Result`

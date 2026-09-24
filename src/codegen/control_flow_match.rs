@@ -15270,7 +15270,10 @@ impl<'ctx> super::Codegen<'ctx> {
             || self.handback_call_owned_param_arg(scrutinee).is_some()
     }
 
-    fn passthrough_callee_key<'e>(&self, value: &'e Expr) -> Option<(String, &'e [CallArg])> {
+    pub(super) fn passthrough_callee_key<'e>(
+        &self,
+        value: &'e Expr,
+    ) -> Option<(String, &'e [CallArg])> {
         match &value.kind {
             ExprKind::Call { callee, args, .. } => match &callee.kind {
                 ExprKind::Identifier(n) => Some((n.clone(), args.as_slice())),
@@ -15604,6 +15607,14 @@ impl<'ctx> super::Codegen<'ctx> {
         let (callee_name, args) = self.passthrough_callee_key(value)?;
         args.iter().enumerate().find_map(|(i, a)| {
             if !self.call_arg_flows_into_return(&callee_name, i) {
+                return None;
+            }
+            // B-2026-09-24-15 — a param the callee entry-copies and hands back
+            // WRAPPED (`F { label: label }`) comes back in a buffer of its own,
+            // so the result is not an alias of the argument. Recording it as one
+            // disarmed the argument the moment the result moved on
+            // (`let a = mk(l, 5); lab(a)` leaked `l`'s 29 B).
+            if self.optres_escaping_arg_entry_copied(&callee_name, i) {
                 return None;
             }
             // B-2026-09-24-3 — the CHAINED spellings, as the boxed sibling

@@ -10364,6 +10364,18 @@ impl<'ctx> super::Codegen<'ctx> {
                     // non-heap / borrow payloads.
                     if matches!(value.kind, ExprKind::Call { .. })
                         || self.rhs_is_fresh_inline_enum(value)
+                        // B-2026-09-24-15 — a USER method's owned return
+                        // (`let doc = self.collect_doc();`), admitted on the
+                        // same footing as a user function's. The exclusion in
+                        // the note above is about the BUILTIN accessors
+                        // (`pop`, `get`, `first`, `last`), which never resolve
+                        // to a function AST; a Kāra-defined method does. Left
+                        // out, the binding had no scope-exit free at all: an
+                        // arm that never passed it on leaked it on main, and
+                        // once a by-value `Option` param is entry-copied every
+                        // arm that does pass it on leaked it too.
+                        || (matches!(value.kind, ExprKind::MethodCall { .. })
+                            && self.passthrough_callee_key(value).is_some())
                         // B-2026-08-29-4 — `let out = b.take(src);` where the
                         // METHOD hands its argument back. Admitted to this
                         // Call-gated block for exactly the reason `.map` is

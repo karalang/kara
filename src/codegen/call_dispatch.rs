@@ -2828,7 +2828,16 @@ impl<'ctx> super::Codegen<'ctx> {
                     }
                 }
             }
-            if !borrow_skip && !self.call_arg_flows_into_return(&name, i) {
+            // B-2026-09-24-15 — a param the callee hands back only WRAPPED
+            // (`F { label: label }`) is entry-copied
+            // (`optres_escaping_param_entry_copied`), so it reaches this block
+            // like any other copied param: the caller keeps its binding, and a
+            // fresh temp needs this frame as its owner. `call_arg_flows_into_return`
+            // alone answers true for the wrap and skipped both, leaking the temp.
+            if !borrow_skip
+                && (!self.call_arg_flows_into_return(&name, i)
+                    || self.optres_escaping_param_entry_copied(&name, i))
+            {
                 // B-2026-08-06-31 — a binding whose box carries a user STRUCT
                 // interior keeps its cleanup across a by-value call. The
                 // whole-slot zero below is a MOVE, and it only balances when

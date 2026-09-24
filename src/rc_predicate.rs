@@ -411,6 +411,32 @@ fn first_witness(
             {
                 continue;
             }
+            // B-2026-09-24-15 — the same MUTUAL EXCLUSION for a CONTAINER-STORE
+            // consume, asked from the block the sink hangs off. The sink block
+            // is a dead end by construction (`cfg.rs`, round 12.12), so the
+            // question "can U run after C" is whether U is reachable from the
+            // call site, i.e. from the sink's predecessor. A later use in the
+            // same arm, a second store after the first, and the same call in a
+            // loop are all reachable from there and keep firing. Two arms that
+            // each hand the binding to a `mut ref self` method
+            // (`match t { 0 => self.a(doc), _ => self.b(doc) }`) are not, and
+            // were RC-boxed anyway -- and the box's scope-exit `Option` cleanup
+            // reads the box-pointer slot as the `Option` itself, so the
+            // payload of any callee that COPIES its argument leaked, 29 B per
+            // call on main (`fn look(mut ref self, doc: Option[String])`).
+            if c.consume_origin == ConsumeOrigin::ContainerStore
+                && !cfg.closure_body_blocks.contains(cb)
+                && !cfg.closure_body_blocks.contains(ub)
+            {
+                let preds = cfg.predecessors(*cb);
+                if !preds.is_empty()
+                    && preds
+                        .iter()
+                        .all(|p| *p != *ub && !cfg_reaches(cfg, *p, *ub))
+                {
+                    continue;
+                }
+            }
             return Some(RcWitness {
                 binding: binding.to_string(),
                 consume_span: c.span,

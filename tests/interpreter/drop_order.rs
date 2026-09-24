@@ -6718,3 +6718,105 @@ fn main() {
         "k30\nk31\nheap-string-longer-than-sso-03\nheap-string-longer-than-sso-04\nnone\nheap-string-longer-than-sso-05\ne6\nheap-string-longer-than-sso-07\nheap-string-longer-than-sso-08\nheap-string-longer-than-sso-09\nn30\nv1 heap-string-longer-than-sso-11\nheap-string-longer-than-sso-12\nk31\ns1\nk32\nk30\nheap-string-longer-than-sso-17\nheap-string-longer-than-sso-18\nend\n"
     );
 }
+
+/// B-2026-09-24-15 — the METHOD and associated-function spellings of
+/// B-2026-09-24-14: a by-value `Option[String]` param that escapes a `ref self`,
+/// owned `self` or `Self`-less method (a hand-back `match id(a)`, a rebind, a
+/// push into a returned `Vec`) while the caller keeps its argument. The entry
+/// copy that closed the free-function spelling looked the callee up as a FREE
+/// function only, so every method double freed on every compiled surface.
+#[test]
+fn interp_escaping_optres_method_param() {
+    assert_eq!(
+        run(r#"fn id(a: Option[String]) -> Option[String] { a }
+struct H { k: i64 }
+impl H {
+    fn peek(ref self, a: Option[String]) -> i64 { match id(a) { Some(s) => s.len() + self.k, None => 0 } }
+    fn pick(ref self, a: Option[String]) -> String { match id(a) { Some(s) => s, None => f"none" } }
+    fn reb(ref self, a: Option[String]) -> i64 { let c = a; match c { Some(s) => s.len(), None => 0 } }
+    fn st(ref self, a: Option[String]) -> Vec[Option[String]] { let mut v: Vec[Option[String]] = Vec.new(); v.push(a); v }
+    fn sto(self, a: Option[String]) -> Vec[Option[String]] { let mut v: Vec[Option[String]] = Vec.new(); v.push(a); v }
+    fn mk(a: Option[String]) -> Vec[Option[String]] { let mut v: Vec[Option[String]] = Vec.new(); v.push(a); v }
+}
+fn main() {
+    let h = H { k: 1 };
+    let a = Some(f"heap-string-longer-than-sso-1");
+    println(f"k{h.peek(a)}");
+    println(f"k{h.peek(Some(f"heap-string-longer-than-sso-2"))}");
+    let b = Some(f"heap-string-longer-than-sso-3");
+    println(h.pick(b));
+    println(h.pick(Some(f"heap-string-longer-than-sso-4")));
+    println(h.pick(None));
+    let c = Some(f"heap-string-longer-than-sso-005");
+    println(f"k{h.reb(c)}");
+    let d = Some(f"heap-string-longer-than-sso-6");
+    let v1 = h.st(d);
+    let v2 = h.st(Some(f"heap-string-longer-than-sso-7"));
+    let e = Some(f"heap-string-longer-than-sso-8");
+    let v3 = H.mk(e);
+    let v4 = H.mk(Some(f"heap-string-longer-than-sso-9"));
+    println(f"v{v1.len() + v2.len() + v3.len() + v4.len()}");
+    let g = H { k: 2 };
+    let f = Some(f"heap-string-longer-than-sso-10");
+    let v5 = g.sto(f);
+    println(f"v{v5.len()}");
+    println("end")
+}"#),
+        "k30\nk30\nheap-string-longer-than-sso-3\nheap-string-longer-than-sso-4\nnone\nk31\nv4\nv1\nend\n"
+    );
+}
+
+/// B-2026-09-24-15 — what admitting METHODS to the escaping entry copy
+/// exposed, measured first as a double free in the self-hosted item parser
+/// (`Parser.parse_fn_def` forwarding `doc` into a method that returns it
+/// inside `FnDefNode`): a param handed back WRAPPED in a struct is copied
+/// like any other escape; a `mut ref self` method fed in mutually exclusive
+/// match arms is not RC-boxed; the wrapped call's result is not an alias of
+/// its argument; and a `let` bound to a user method's `Option` return frees
+/// it at scope exit.
+#[test]
+fn interp_escaping_optres_method_param_wrapped() {
+    assert_eq!(
+        run(r#"struct N { doc: Option[String], k: i64 }
+enum It { S(N), E(i64) }
+struct F { label: Option[String], k: i64 }
+struct P { pos: i64 }
+impl P {
+    fn node(mut ref self, doc: Option[String]) -> N { self.pos = self.pos + 1; N { doc: doc, k: self.pos } }
+    fn fdef(mut ref self, doc: Option[String]) -> It { It.S(self.node(doc)) }
+    fn sdef(mut ref self, doc: Option[String]) -> It { self.pos = self.pos + 1; It.S(N { doc: doc, k: self.pos }) }
+    fn look(mut ref self, doc: Option[String]) -> i64 { self.pos = self.pos + 1; match doc { Some(s) => s.len(), None => 0 } }
+    fn item(mut ref self, t: i64) -> It {
+        let doc = Some(f"heap-string-longer-than-sso-{t}");
+        match t { 0 => self.fdef(doc), 1 => It.E(1), _ => self.sdef(doc) }
+    }
+    fn count(mut ref self, t: i64) -> i64 {
+        let doc = Some(f"heap-string-longer-than-sso-{t}");
+        match t { 0 => self.look(doc), _ => self.look(doc) }
+    }
+    fn mkdoc(mut ref self) -> Option[String] { self.pos = self.pos + 1; Some(f"heap-string-longer-than-sso-{self.pos}") }
+    fn wrap(ref self, label: Option[String], k: i64) -> F { F { label: label, k: k } }
+}
+fn mk(label: Option[String], k: i64) -> F { F { label: label, k: k } }
+fn show(it: ref It) -> String { match it { It.S(n) => match n.doc { Some(s) => f"s{n.k} {s}", None => f"s{n.k} none" }, It.E(x) => f"e{x}" } }
+fn lab(f: ref F) -> String { match f.label { Some(s) => f"f{f.k} {s}", None => f"f{f.k} none" } }
+fn main() {
+    let mut p = P { pos: 0 };
+    let i0 = p.item(0); println(show(i0));
+    let i1 = p.item(1); println(show(i1));
+    let i2 = p.item(2); println(show(i2));
+    println(p.count(0) + p.count(1));
+    let l = Some(f"heap-string-longer-than-sso-5");
+    let a = mk(l, 5);
+    println(lab(a));
+    let b = mk(Some(f"heap-string-longer-than-sso-6"), 6); println(lab(b));
+    let c = p.wrap(Some(f"heap-string-longer-than-sso-7"), 7); println(lab(c));
+    let unused = p.mkdoc();
+    let kept = p.mkdoc();
+    let n = p.sdef(kept);
+    println(show(n));
+    println("end")
+}"#),
+        "s1 heap-string-longer-than-sso-0\ne1\ns2 heap-string-longer-than-sso-2\n58\nf5 heap-string-longer-than-sso-5\nf6 heap-string-longer-than-sso-6\nf7 heap-string-longer-than-sso-7\ns7 heap-string-longer-than-sso-6\nend\n"
+    );
+}
