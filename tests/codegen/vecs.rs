@@ -9596,3 +9596,46 @@ fn main() {
     );
     assert_eq!(out.as_deref(), Some("heap-string-longer-than-sso-1\nheap-string-longer-than-sso-2\np1\ns1\ns1\nr1\nr1\nheap-string-longer-than-sso-d8\nheap-string-longer-than-sso-o9\nend\n"), "must match --interp");
 }
+
+/// B-2026-09-24-20 — a by-value `Option`/`Result` param REBOUND in the callee
+/// (`let c = a;`) is a view of the param, as its destructured leaves are: the
+/// caller keeps a named argument's `Drop` bodies and registers a temporary's,
+/// and the escape analysis reads the rebind as an alias of `a` so the two frames
+/// agree. Before, a named argument's body ran in both frames and a `Result[S, _]`
+/// temporary leaked.
+#[test]
+fn test_e2e_optres_param_rebound_in_callee_runs_one_body() {
+    let out = run_program(
+        r#"struct R { id: i64 }
+impl Drop for R { fn drop(mut ref self) { println(f"d{self.id}") } }
+struct S { r: R, s: String }
+fn mk(i: i64) -> S { S { r: R { id: i }, s: f"heap-string-longer-than-sso-{i}" } }
+fn eat(o: Option[R]) -> i64 { match o { Some(r) => r.id, None => 0 } }
+fn keep(a: Option[R]) -> i64 { let c = a; 5 }
+fn look(a: Option[R]) -> i64 { let c = a; match c { Some(r) => r.id, None => 0 } }
+fn fwd(a: Option[R]) -> i64 { let c = a; eat(c) }
+fn tag(a: Option[R]) -> i64 { let c = a; match c { Some(_) => 1, None => 0 } }
+fn rkeep(a: Result[S, i64]) -> i64 { let c = a; 5 }
+fn rtag(a: Result[S, i64]) -> i64 { let c = a; match c { Ok(_) => 1, Err(e) => e } }
+fn main() {
+    { let a = Some(R { id: 1 }); println(f"k{keep(a)}"); }
+    println(f"k{keep(Some(R { id: 2 }))}");
+    { let a = Some(R { id: 3 }); println(f"k{look(a)}"); }
+    println(f"k{look(Some(R { id: 4 }))}");
+    { let a = Some(R { id: 5 }); println(f"k{fwd(a)}"); }
+    { let a = Some(R { id: 6 }); println(f"k{tag(a)}"); }
+    println(f"k{tag(Some(R { id: 7 }))}");
+    { let a: Result[S, i64] = Ok(mk(8)); println(f"k{rkeep(a)}"); }
+    println(f"k{rkeep(Ok(mk(9)))}");
+    { let a: Result[S, i64] = Ok(mk(10)); println(f"k{rtag(a)}"); }
+    println(f"k{rtag(Ok(mk(11)))}");
+    println("end")
+}
+"#,
+    );
+    assert_eq!(
+        out.as_deref(),
+        Some("k5\nd1\nd2\nk5\nk3\nd3\nd4\nk4\nk5\nd5\nk1\nd6\nd7\nk1\nk5\nd8\nd9\nk5\nk1\nd10\nd11\nk1\nend\n"),
+        "must match --interp"
+    );
+}

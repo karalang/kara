@@ -7844,3 +7844,45 @@ fn main() {
         8,
     );
 }
+
+/// B-2026-09-24-20 — a by-value `Result[S, i64]` param rebound in the callee
+/// (`let c = a;`) frees its payload once: the callee's rebind is a view and the
+/// caller owns the temporary. It leaked before, and the arm-binding spelling
+/// double-freed.
+#[test]
+fn asan_optres_param_rebound_in_callee_frees_once() {
+    assert_clean_asan_run_min_allocs(
+        r#"struct R { id: i64 }
+impl Drop for R { fn drop(mut ref self) { println(f"d{self.id}") } }
+struct S { r: R, s: String }
+fn mk(i: i64) -> S { S { r: R { id: i }, s: f"heap-string-longer-than-sso-{i}" } }
+fn eat(o: Option[R]) -> i64 { match o { Some(r) => r.id, None => 0 } }
+fn keep(a: Option[R]) -> i64 { let c = a; 5 }
+fn look(a: Option[R]) -> i64 { let c = a; match c { Some(r) => r.id, None => 0 } }
+fn fwd(a: Option[R]) -> i64 { let c = a; eat(c) }
+fn tag(a: Option[R]) -> i64 { let c = a; match c { Some(_) => 1, None => 0 } }
+fn rkeep(a: Result[S, i64]) -> i64 { let c = a; 5 }
+fn rtag(a: Result[S, i64]) -> i64 { let c = a; match c { Ok(_) => 1, Err(e) => e } }
+fn main() {
+    { let a = Some(R { id: 1 }); println(f"k{keep(a)}"); }
+    println(f"k{keep(Some(R { id: 2 }))}");
+    { let a = Some(R { id: 3 }); println(f"k{look(a)}"); }
+    println(f"k{look(Some(R { id: 4 }))}");
+    { let a = Some(R { id: 5 }); println(f"k{fwd(a)}"); }
+    { let a = Some(R { id: 6 }); println(f"k{tag(a)}"); }
+    println(f"k{tag(Some(R { id: 7 }))}");
+    { let a: Result[S, i64] = Ok(mk(8)); println(f"k{rkeep(a)}"); }
+    println(f"k{rkeep(Ok(mk(9)))}");
+    { let a: Result[S, i64] = Ok(mk(10)); println(f"k{rtag(a)}"); }
+    println(f"k{rtag(Ok(mk(11)))}");
+    println("end")
+}
+"#,
+        &[
+            "k5", "d1", "d2", "k5", "k3", "d3", "d4", "k4", "k5", "d5", "k1", "d6", "d7", "k1",
+            "k5", "d8", "d9", "k5", "k1", "d10", "d11", "k1", "end",
+        ],
+        "asan_optres_param_rebound_in_callee_frees_once",
+        4,
+    );
+}

@@ -117,6 +117,52 @@ struct Acc<'a> {
     /// would get a producer-side dec that use-after-frees the escaping closure's
     /// env. Closure-local bindings are only ever made MORE conservative by this.
     in_closure: bool,
+    /// B-2026-09-24-20 — by-value `Option`/`Result` PARAMS whose immutable
+    /// whole rebinds (`let c = a;`) are read as ALIASES of the param: every
+    /// later use of `c` is recorded against `a`, and the rebind itself records
+    /// nothing. Empty (the default) leaves the walk exactly as it was, so only
+    /// the entry points that seed it see the aliasing. See [`seeded_acc`].
+    alias_roots: HashSet<&'a str>,
+    /// Rebound name -> the param it aliases. Filled while walking; never
+    /// cleared, so a later shadowing `let c = ..` keeps counting against the
+    /// param, which only ever makes the param look MORE escaping.
+    aliases: HashMap<&'a str, &'a str>,
+}
+
+/// B-2026-09-24-20 — the param a use of `name` counts against.
+fn root<'a>(acc: &Acc<'a>, name: &'a str) -> &'a str {
+    acc.aliases.get(name).copied().unwrap_or(name)
+}
+
+/// B-2026-09-24-20 — an accumulator that reads `let c = a;` over a by-value
+/// `Option`/`Result` param as an alias of `a`.
+///
+/// Why only these params, and only for the entry points that answer the
+/// by-value `Option`/`Result` protocol: the caller of such a function retains
+/// the payload's `Drop` bodies unless the callee lets the payload outlive the
+/// call (B-2026-09-04-29), and codegen gives the callee's rebind a param VIEW
+/// for exactly that reason. Counted as an escape, the rebind told the caller
+/// the opposite -- so a named argument's body ran in both frames (`d1 k5 d1`)
+/// and a temporary's only walker was the callee's. The struct/`shared` protocols
+/// that read the other entry points treat a rebind as a real transfer
+/// (`callee_rebinds_param_whole`), so they keep the unseeded walk.
+fn seeded_acc<'a>(func: &'a Function) -> Acc<'a> {
+    let mut acc = Acc::default();
+    for p in &func.params {
+        let crate::ast::PatternKind::Binding(name) = &p.pattern.kind else {
+            continue;
+        };
+        let crate::ast::TypeKind::Path(path) = &p.ty.kind else {
+            continue;
+        };
+        if matches!(
+            path.segments.first().map(String::as_str),
+            Some("Option") | Some("Result")
+        ) {
+            acc.alias_roots.insert(name.as_str());
+        }
+    }
+    acc
 }
 
 /// Value-spans of every `let <Binding> = <value>` in `func` whose binding name
@@ -184,7 +230,7 @@ pub fn nonescaping_param_names(func: &Function) -> HashSet<String> {
 /// unrecognised position counts as an escape, which costs a leak and never
 /// memory unsafety.
 pub fn by_value_nonescaping_param_names(func: &Function) -> HashSet<String> {
-    let mut acc = Acc::default();
+    let mut acc = seeded_acc(func);
     walk_block(&func.body, &mut acc);
     func.params
         .iter()
@@ -249,7 +295,7 @@ pub fn unused_param_names(func: &Function) -> HashSet<String> {
 /// [`optres_payload_escaping_param_variants_ignoring_projections`] answers the
 /// same question for a payload that cannot be partially moved.
 pub fn optres_payload_escaping_param_variants(func: &Function) -> HashMap<String, HashSet<String>> {
-    let mut acc = Acc::default();
+    let mut acc = seeded_acc(func);
     walk_block(&func.body, &mut acc);
     func.params
         .iter()
@@ -301,7 +347,7 @@ pub fn optres_payload_escaping_param_variants_with(
 ) -> HashMap<String, HashSet<String>> {
     let mut acc = Acc {
         copy_read: Some(copy_read),
-        ..Default::default()
+        ..seeded_acc(func)
     };
     walk_block(&func.body, &mut acc);
     func.params
@@ -350,7 +396,7 @@ pub fn optres_payload_escaping_param_variant_parts_with(
 ) -> HashMap<String, HashMap<String, BTreeSet<usize>>> {
     let mut acc = Acc {
         copy_read: Some(copy_read),
-        ..Default::default()
+        ..seeded_acc(func)
     };
     walk_block(&func.body, &mut acc);
     func.params
@@ -389,7 +435,7 @@ pub fn optres_payload_escaping_param_variant_parts_with(
 pub fn optres_payload_escaping_param_variants_ignoring_projections(
     func: &Function,
 ) -> HashMap<String, HashSet<String>> {
-    let mut acc = Acc::default();
+    let mut acc = seeded_acc(func);
     walk_block(&func.body, &mut acc);
     func.params
         .iter()
@@ -439,7 +485,7 @@ pub fn optres_payload_escaping_param_variants_ignoring_projections(
 pub fn optres_payload_consuming_param_variants(
     func: &Function,
 ) -> HashMap<String, HashSet<String>> {
-    let mut acc = Acc::default();
+    let mut acc = seeded_acc(func);
     walk_block(&func.body, &mut acc);
     func.params
         .iter()
@@ -771,6 +817,7 @@ fn variant_payload_binds(pattern: &crate::ast::Pattern) -> Option<(&str, Option<
 }
 
 fn record_use<'a>(acc: &mut Acc<'a>, name: &'a str, scrutinee: bool) {
+    let name = root(acc, name);
     let e = acc.counts.entry(name).or_insert((0, 0, 0));
     e.0 += 1;
     if scrutinee {
@@ -785,6 +832,7 @@ fn record_use<'a>(acc: &mut Acc<'a>, name: &'a str, scrutinee: bool) {
 /// [`nonescaping_param_names`] (which never looks at that slot) keeps its
 /// stricter answer unchanged.
 fn record_read_only_use<'a>(acc: &mut Acc<'a>, name: &'a str) {
+    let name = root(acc, name);
     let e = acc.counts.entry(name).or_insert((0, 0, 0));
     e.0 += 1;
     e.2 += 1;
@@ -816,8 +864,23 @@ fn walk_block<'a>(b: &'a Block, acc: &mut Acc<'a>) {
 
 fn walk_stmt<'a>(s: &'a Stmt, acc: &mut Acc<'a>) {
     match &s.kind {
-        StmtKind::Let { pattern, value, .. } => {
+        StmtKind::Let {
+            pattern,
+            value,
+            is_mut,
+            ..
+        } => {
             if let crate::ast::PatternKind::Binding(name) = &pattern.kind {
+                // B-2026-09-24-20 — `let c = a;` over a seeded param is an
+                // alias, not a use: see `Acc::alias_roots`. Immutable only, so
+                // `c` cannot be reassigned to something `a` never held.
+                if let ExprKind::Identifier(src) = &value.kind {
+                    let r = root(acc, src.as_str());
+                    if !*is_mut && !acc.in_closure && acc.alias_roots.contains(r) {
+                        acc.aliases.insert(name.as_str(), r);
+                        return;
+                    }
+                }
                 acc.lets
                     .push((name.as_str(), (value.span.offset, value.span.length)));
             }
@@ -844,22 +907,17 @@ fn walk_stmt<'a>(s: &'a Stmt, acc: &mut Acc<'a>) {
                 // `retract_boxed_tuple_inner_drop_for_block` states by passing
                 // `None` for its block.
                 if let ExprKind::Identifier(n) = &value.kind {
+                    let root_n = root(acc, n.as_str());
                     if let Some(v) = variant_arm_takes_payload_block(pattern, None) {
-                        acc.payload_consumers
-                            .entry(n.as_str())
-                            .or_default()
-                            .insert(v);
+                        acc.payload_consumers.entry(root_n).or_default().insert(v);
                     }
                     if let Some(v) = variant_arm_payload_escapes_block(pattern, None) {
-                        acc.payload_escapers
-                            .entry(n.as_str())
-                            .or_default()
-                            .insert(v);
+                        acc.payload_escapers.entry(root_n).or_default().insert(v);
                     }
                     let cr: &dyn Fn(&Expr) -> bool = acc.copy_read.unwrap_or(&projection_is_read);
                     if let Some(v) = variant_arm_payload_escapes_proj_block(pattern, None, cr) {
                         acc.payload_escapers_proj
-                            .entry(n.as_str())
+                            .entry(root_n)
                             .or_default()
                             .insert(v);
                         // B-2026-09-14-18 — see the `Match` site.
@@ -867,7 +925,7 @@ fn walk_stmt<'a>(s: &'a Stmt, acc: &mut Acc<'a>) {
                             variant_arm_payload_escaping_parts_block(pattern, None, cr)
                         {
                             acc.payload_escaper_parts
-                                .entry(n.as_str())
+                                .entry(root_n)
                                 .or_default()
                                 .entry(pv)
                                 .or_default()
@@ -918,29 +976,24 @@ fn walk_expr<'a>(e: &'a Expr, acc: &mut Acc<'a>) {
         ExprKind::Match { scrutinee, arms } => {
             walk_scrutinee(acc, scrutinee);
             if let ExprKind::Identifier(n) = &scrutinee.kind {
+                let root_n = root(acc, n.as_str());
                 let cr: &dyn Fn(&Expr) -> bool = acc.copy_read.unwrap_or(&projection_is_read);
                 for a in arms {
                     if let Some(v) =
                         variant_arm_takes_payload(&a.pattern, a.guard.as_ref(), &a.body)
                     {
-                        acc.payload_consumers
-                            .entry(n.as_str())
-                            .or_default()
-                            .insert(v);
+                        acc.payload_consumers.entry(root_n).or_default().insert(v);
                     }
                     if let Some(v) =
                         variant_arm_payload_escapes(&a.pattern, a.guard.as_ref(), &a.body)
                     {
-                        acc.payload_escapers
-                            .entry(n.as_str())
-                            .or_default()
-                            .insert(v);
+                        acc.payload_escapers.entry(root_n).or_default().insert(v);
                     }
                     if let Some(v) =
                         variant_arm_payload_escapes_proj(&a.pattern, a.guard.as_ref(), &a.body, cr)
                     {
                         acc.payload_escapers_proj
-                            .entry(n.as_str())
+                            .entry(root_n)
                             .or_default()
                             .insert(v);
                         // B-2026-09-14-18 — recorded only alongside the map it
@@ -952,7 +1005,7 @@ fn walk_expr<'a>(e: &'a Expr, acc: &mut Acc<'a>) {
                             cr,
                         ) {
                             acc.payload_escaper_parts
-                                .entry(n.as_str())
+                                .entry(root_n)
                                 .or_default()
                                 .entry(pv)
                                 .or_default()
@@ -1060,24 +1113,19 @@ fn walk_expr<'a>(e: &'a Expr, acc: &mut Acc<'a>) {
             // `if let Pat = <scrutinee>` is match-sugar — consume-in-place.
             walk_scrutinee(acc, value);
             if let ExprKind::Identifier(n) = &value.kind {
+                let root_n = root(acc, n.as_str());
                 if let Some(v) = variant_arm_takes_payload_block(pattern, Some(then_block)) {
-                    acc.payload_consumers
-                        .entry(n.as_str())
-                        .or_default()
-                        .insert(v);
+                    acc.payload_consumers.entry(root_n).or_default().insert(v);
                 }
                 if let Some(v) = variant_arm_payload_escapes_block(pattern, Some(then_block)) {
-                    acc.payload_escapers
-                        .entry(n.as_str())
-                        .or_default()
-                        .insert(v);
+                    acc.payload_escapers.entry(root_n).or_default().insert(v);
                 }
                 let cr: &dyn Fn(&Expr) -> bool = acc.copy_read.unwrap_or(&projection_is_read);
                 if let Some(v) =
                     variant_arm_payload_escapes_proj_block(pattern, Some(then_block), cr)
                 {
                     acc.payload_escapers_proj
-                        .entry(n.as_str())
+                        .entry(root_n)
                         .or_default()
                         .insert(v);
                     // B-2026-09-14-18 — see the `Match` site.
@@ -1085,7 +1133,7 @@ fn walk_expr<'a>(e: &'a Expr, acc: &mut Acc<'a>) {
                         variant_arm_payload_escaping_parts_block(pattern, Some(then_block), cr)
                     {
                         acc.payload_escaper_parts
-                            .entry(n.as_str())
+                            .entry(root_n)
                             .or_default()
                             .entry(pv)
                             .or_default()
@@ -1113,22 +1161,17 @@ fn walk_expr<'a>(e: &'a Expr, acc: &mut Acc<'a>) {
             // `while let Pat = <scrutinee>` is match-sugar — consume-in-place.
             walk_scrutinee(acc, value);
             if let ExprKind::Identifier(n) = &value.kind {
+                let root_n = root(acc, n.as_str());
                 if let Some(v) = variant_arm_takes_payload_block(pattern, Some(body)) {
-                    acc.payload_consumers
-                        .entry(n.as_str())
-                        .or_default()
-                        .insert(v);
+                    acc.payload_consumers.entry(root_n).or_default().insert(v);
                 }
                 if let Some(v) = variant_arm_payload_escapes_block(pattern, Some(body)) {
-                    acc.payload_escapers
-                        .entry(n.as_str())
-                        .or_default()
-                        .insert(v);
+                    acc.payload_escapers.entry(root_n).or_default().insert(v);
                 }
                 let cr: &dyn Fn(&Expr) -> bool = acc.copy_read.unwrap_or(&projection_is_read);
                 if let Some(v) = variant_arm_payload_escapes_proj_block(pattern, Some(body), cr) {
                     acc.payload_escapers_proj
-                        .entry(n.as_str())
+                        .entry(root_n)
                         .or_default()
                         .insert(v);
                     // B-2026-09-14-18 — see the `Match` site.
@@ -1136,7 +1179,7 @@ fn walk_expr<'a>(e: &'a Expr, acc: &mut Acc<'a>) {
                         variant_arm_payload_escaping_parts_block(pattern, Some(body), cr)
                     {
                         acc.payload_escaper_parts
-                            .entry(n.as_str())
+                            .entry(root_n)
                             .or_default()
                             .entry(pv)
                             .or_default()

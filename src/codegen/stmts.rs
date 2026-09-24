@@ -10700,6 +10700,16 @@ impl<'ctx> super::Codegen<'ctx> {
                             .optres_ctor_payloads_are_all_param_views(value)
                             || matches!(&value.kind, ExprKind::Identifier(n)
                                 if self.payload_vars.param_view_locals.contains(n.as_str()))
+                            // B-2026-09-24-20 — and a rebind of the by-value
+                            // PARAM itself, which the caller retains exactly as
+                            // it retains the param's leaves. The escape analysis
+                            // reads `let c = a;` as an alias of `a` on the same
+                            // terms (`result_escape::seeded_acc`), so a caller
+                            // registers a temporary's bodies whenever `c` stays
+                            // in this frame.
+                            || (opt_te.is_some()
+                                && matches!(&value.kind, ExprKind::Identifier(_)
+                                    if self.expr_is_param_view(value)))
                             // B-2026-09-06-9 — the rebind through an
                             // always-returning callee, as at the struct site.
                             || self.let_call_result_is_param_view(value);
