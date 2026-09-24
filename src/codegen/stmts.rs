@@ -7985,7 +7985,13 @@ impl<'ctx> super::Codegen<'ctx> {
                                     .zip(self.builder.get_insert_block())
                                     .map(|(entry, cur)| entry != cur)
                                     .unwrap_or(false);
-                                if is_nested {
+                                // B-2026-09-24-28 — not over an RC-fallback
+                                // handle: that slot is eight bytes, and the
+                                // enum-wide zero overran it (an instrumented
+                                // ASAN stack-buffer-overflow). The boxed
+                                // registrar below stands down for it too.
+                                if is_nested && !self.slot_is_rc_fallback_handle(var_name, slot.ptr)
+                                {
                                     if let Some(en) = boxed.first().map(|b| b.0) {
                                         let enum_ty = self.type_decls.enum_layouts[en].llvm_type;
                                         self.zero_init_option_slot_in_entry_block(
