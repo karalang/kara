@@ -378,7 +378,6 @@ registered in the callee's prologue, not by-value struct params in general. | �
 | B-2026-09-24-20 | 2026-09-24 | codegen | high | AN ESCAPING BY-VALUE `Result`/`Option` PARAM WHOSE INLINE PAYLOAD RUNS A USER `Drop` IS STILL FREED TWICE -- `fn peek(a: Result[S, i64]) -> i64 { match id(a) { Ok(x) => x.r.id + x.s.len(), Err(e) => e } }` over `struct S { r: R, s: String }` (R has a `Drop`, S fits `Result`'s five-word area) prints `d1 k30 end` under `--interp` and at -O2 and aborts `double free detected in tcache 2` on jit and -O0 | — |
 | B-2026-09-24-27 | 2026-09-24 | codegen | low | A DISCARDED TUPLE LITERAL THAT MOVES A `String` OR `Vec` LOCAL LEAKS THE BUFFER -- `let s = f".."; (s, 1);` and `let _ = (s, 1);` lose 29 bytes in 1 block at -O0 (`Vec[i64]`: 24 bytes), output correct on all four surfaces; the fresh spelling `let _ = (f"..", 1);` is clean | — |
 | B-2026-09-24-28 | 2026-09-24 | codegen | high | AN RC-PROMOTED `Option[(String, i64)]` OR `Option[Option[String]]` LOCAL SEGFAULTS ON EVERY COMPILED SURFACE, AND AN `Option[Map[i64, String]]` ONE READS INVALID MEMORY AND LEAKS 72 B -- the payload shapes B-2026-09-24-23's fix did not reach, measured unchanged by it | — |
-| B-2026-09-24-29 | 2026-09-24 | codegen | high | AN `if let` EXPRESSION WHOSE BRANCHES ARE f-STRINGS DOUBLE FREES ON EVERY COMPILED SURFACE, WHATEVER THE SCRUTINEE -- `let r = if let Some(s) = doc { f"x" } else { f"none" }` aborts `double free detected in tcache 2` on jit, -O0 and -O2 even over `Some(7)` | — |
 
 ### Relocated
 
@@ -3021,6 +3020,7 @@ registered in the callee's prologue, not by-value struct params in general. | �
 | B-2026-09-24-24 | codegen | medium | MEASURED: reading a Vec element's `Option` field still EMPTIES the element when compiled in two spellings the -17 fix leaves alone: a `let`/assign co… | 42f7e85c0 |
 | B-2026-09-24-25 | codegen | high | MEASURED: `.clone()` on an `Option[Map[i64, String]]` or an `Option[(String, i64)]` SEGFAULTS when compiled (exit 139, no output); `--interp` prints… | 42f7e85c0 |
 | B-2026-09-24-26 | codegen | high | MEASURED: a consuming match over a FOR-LOOP variable's `Option` field double-frees when compiled: `for x in g { match x.o { Some(s) => n = n + s.len(… | 42f7e85c0 |
+| B-2026-09-24-29 | codegen | high | AN `if let` EXPRESSION WHOSE BRANCHES ARE f-STRINGS DOUBLE FREES ON EVERY COMPILED SURFACE, WHATEVER THE SCRUTINEE -- `let r = if let Some(s) = doc {… | 5d364837b |
 
 </details>
 
