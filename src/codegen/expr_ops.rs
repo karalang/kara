@@ -84,6 +84,12 @@ impl<'ctx> super::Codegen<'ctx> {
         //     (heap-use-after-free in `karac_string_clone` / on read —
         //     B-2026-06-10-5, the inline-f-string-in-tuple case).
         let mut vals: Vec<BasicValueEnum<'ctx>> = Vec::with_capacity(elems.len());
+        // B-2026-09-24-27 — the admission test of `discarded_literal_tail_inner`'s
+        // tuple arm, asked before any element compiles. See the disarm below.
+        let discard_site_owns_literal = elems.iter().all(|e| {
+            self.discard_tuple_elem_is_fresh_expr(e)
+                || self.tuple_elem_is_movable_drop_struct_place(e)
+        });
         for (idx, elem_expr) in elems.iter().enumerate() {
             // Re-stage the hint for a NESTED annotated tuple element
             // (`let t: ((u8, u32), i64) = ((b, d), n)`), so the inner tuple lays
@@ -144,7 +150,25 @@ impl<'ctx> super::Codegen<'ctx> {
             self.uam_array_copy_declined = true;
             let v = self.maybe_defensive_copy_param_arg(elem_expr, v);
             self.uam_array_copy_declined = saved_decline;
-            self.suppress_source_vec_cleanup_for_arg(elem_expr);
+            // B-2026-09-24-27 — a DISCARDED literal (`(s, 1);`, `let _ = (s,
+            // 1);`) takes nothing over, so a `String`/`Vec` element keeps its
+            // source's cleanup, as the inline `Option`/`Result` elements below
+            // already do. Disarming it here stranded the buffer: nothing frees
+            // a tuple that is thrown away. Asked of the DIRECT element only,
+            // so a call nested inside one (`(f(s), 1);`) still moves `s`.
+            //
+            // The exception is a literal the discard site OWNS: when every
+            // element is fresh or a movable Drop-struct place, the statement
+            // registers a walk over the tuple and retracts each moved struct
+            // place (`discarded_literal_moved_place_sources`), so the element
+            // is the tuple's and its source must stand down as before —
+            // `let h = H { .. }; (h, 20);` otherwise freed `h.s` twice.
+            if !self.in_discarded_aggregate_tail(elem_expr)
+                || (discard_site_owns_literal
+                    && self.tuple_elem_is_movable_drop_struct_place(elem_expr))
+            {
+                self.suppress_source_vec_cleanup_for_arg(elem_expr);
+            }
             // B-2026-09-13-27 — the FIELD-ACCESS peer of the line above, and
             // the tuple sibling of the `disarm_struct_field_move_bodies` call
             // in `compile_struct_init`'s field loop (B-2026-09-01-17). A field

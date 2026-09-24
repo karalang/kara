@@ -7796,3 +7796,51 @@ fn main() {
         8,
     );
 }
+
+/// B-2026-09-24-27 — a DISCARDED tuple literal (`(s, 1);`, `let _ = (s, 1);`)
+/// that names a `String` or `Vec` local takes nothing over, so the local keeps
+/// its free. Each discarded cell below leaked its buffer at `-O0` before; the
+/// call nested in a literal (`(f(g), 6)`) still moves `g`.
+#[test]
+fn asan_discarded_tuple_literal_keeps_its_string_and_vec_sources() {
+    assert_clean_asan_run_min_allocs(
+        r#"fn f(s: String) -> i64 { s.len() }
+fn mk(i: i64) -> String { f"heap-string-longer-than-sso-{i}" }
+fn main() {
+    let mut n = 0;
+    while n < 2 {
+        let a = mk(n + 1); println(a); let _ = (a, 1);
+        let b = mk(n + 2); println(b); (b, 2);
+        let c: Vec[i64] = [n, 2, 3]; println(f"c{c[0]}"); let _ = (c, 3);
+        let d = mk(n + 4); println(d); let label: Option[String] = Some(mk(n + 40)); (label, d);
+        let e = mk(n + 5); println(e); let _ = ((e, 5), 5);
+        let g = mk(n + 6); println(f"n{(f(g), 6).0}");
+        let h = mk(n + 7); println(h); let x = if n > 0 { (h, 7); 3 } else { 4 }; println(f"x{x}");
+        n = n + 1;
+    }
+    println("end")
+}
+"#,
+        &[
+            "heap-string-longer-than-sso-1",
+            "heap-string-longer-than-sso-2",
+            "c0",
+            "heap-string-longer-than-sso-4",
+            "heap-string-longer-than-sso-5",
+            "n29",
+            "heap-string-longer-than-sso-7",
+            "x4",
+            "heap-string-longer-than-sso-2",
+            "heap-string-longer-than-sso-3",
+            "c1",
+            "heap-string-longer-than-sso-5",
+            "heap-string-longer-than-sso-6",
+            "n29",
+            "heap-string-longer-than-sso-8",
+            "x3",
+            "end",
+        ],
+        "asan_discarded_tuple_literal_keeps_its_string_and_vec_sources",
+        8,
+    );
+}
