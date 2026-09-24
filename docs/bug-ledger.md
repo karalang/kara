@@ -93,9 +93,9 @@ distinguish "bugs flattening" from "we stopped writing them down."
 | class | total |
 |---|---|
 | run-vs-build | 488 |
-| miscompile | 443 |
+| miscompile | 444 |
 | leak | 408 |
-| double-free | 296 |
+| double-free | 297 |
 | missing-feature | 206 |
 | codegen-gap | 192 |
 | other | 149 |
@@ -103,14 +103,14 @@ distinguish "bugs flattening" from "we stopped writing them down."
 | perf | 117 |
 | false-positive | 109 |
 | soundness | 97 |
-| crash | 92 |
+| crash | 93 |
 | use-after-free | 50 |
 
 ### By surface
 
 | surface | total |
 |---|---|
-| codegen | 2033 |
+| codegen | 2036 |
 | interp | 538 |
 | typecheck | 307 |
 | other | 110 |
@@ -374,13 +374,14 @@ registered in the callee's prologue, not by-value struct params in general. | �
 | B-2026-09-24-11 | 2026-09-24 | codegen+interp | high | A `let`-BOUND HAND-BACK OF AN `Option` WHOSE PAYLOAD HAS A `Drop` BODY NESTED INSIDE IT IS STILL WRONG, the remainder B-2026-09-23-44 leaves out -- `fn f(a: Option[M], c: bool) -> Option[M] { let r: Option[M] = if c { a } else { None }; println("mid"); r }` over `struct M { r: R, s: String }` (R has a `Drop`) prints `mid d1 y1 d1 end` under `--interp` and nothing on jit / -O0 / -O2 (valgrind err=4), where the TAIL spelling prints `mid y1 d1 end` everywhere | — |
 | B-2026-09-24-13 | 2026-09-24 | codegen+interp | medium | FOUR MORE HAND-BACK SPELLINGS OVER A BY-VALUE `Option[R]` PARAM STILL RUN THE `Drop` BODY TWICE OR NOT AT ALL, the remainder of B-2026-09-24-9 -- a CONDITIONAL hand-back `match idc(a, true) { Some(x) => x.id, .. }` prints `d1 d1 k1 end` on all four surfaces for a named argument; a temp argument's `let b = id(a); match b { Some(x) => x, .. }` prints `d1 k1 d1 end` under `--interp`; its `let b = id(a); 7` and `match id(a) { Some(_) => 1, .. }` run NO body on jit / -O0 / -O2 | — |
 | B-2026-09-24-16 | 2026-09-24 | interp+codegen | medium | A BY-VALUE `Option[R]` PARAM PUSHED INTO A `Vec` THE CALLEE RETURNS RUNS `R`'s `Drop` BODY TWICE ON ALL FOUR SURFACES -- `fn st(a: Option[R]) -> Vec[Option[R]] { let mut v = Vec.new(); v.push(a); v }` prints `d1 k1 d1 end` on interp, jit, -O0 and -O2 alike (valgrind clean), where one body is due | — |
-| B-2026-09-24-17 | 2026-09-24 | codegen | medium | MEASURED: a consuming match over a Vec element's `Option` field still EMPTIES the element on every compiled surface when the payload is a user enum matched through a NESTED pattern (`Some(K.A(s))`) or a `Map` -- matched twice, `g[0].q` gives 27 where --interp gives 54, and `g[0].m: Option[Map[i64, String]]` gives 1 where --interp gives 2. Remainder of B-2026-09-24-6, whose copy-out (889202e1c) covers a direct String/Vec payload bound by a plain `Some(s)` / `Ok(s)` only | — |
-| B-2026-09-24-18 | 2026-09-24 | ownership | low | MEASURED: `borrow_projection_copy` warns on `let x = p.source` over a field DECLARED `ref String` read through a `ref` param, saying the binding is an implicit independent copy that duplicates heap and reruns `Drop` -- for a declared `ref` field the read is a view: codegen binds it as an alias with no cleanup (889202e1c) and every surface prints the same | — |
 | B-2026-09-24-19 | 2026-09-24 | codegen | high | A GENERIC FUNCTION'S BY-VALUE `Option[T]` PARAM HAS NO OWNER PROTOCOL AT `T = String`: A NAMED ARGUMENT IS FREED TWICE WHEN THE CALLEE TAKES THE PAYLOAD, A TEMPORARY LEAKS WHEN IT DOES NOT -- `fn pick[T](a: Option[T], d: T) -> T { match a { Some(s) => s, None => d } }` over `let a = Some(..); pick(a, ..)` and `fn st[T](a: Option[T]) -> Vec[Option[T]] { .. v.push(a); v }` abort `double free detected in tcache 2` on jit, -O0 and -O2, while `fn peek[T](a: Option[T]) -> i64 { match a { Some(_) => 1, None => 0 } }` over a TEMPORARY argument leaks its 29-byte String; `--interp` is right throughout | — |
 | B-2026-09-24-20 | 2026-09-24 | codegen | high | AN ESCAPING BY-VALUE `Result`/`Option` PARAM WHOSE INLINE PAYLOAD RUNS A USER `Drop` IS STILL FREED TWICE -- `fn peek(a: Result[S, i64]) -> i64 { match id(a) { Ok(x) => x.r.id + x.s.len(), Err(e) => e } }` over `struct S { r: R, s: String }` (R has a `Drop`, S fits `Result`'s five-word area) prints `d1 k30 end` under `--interp` and at -O2 and aborts `double free detected in tcache 2` on jit and -O0 | — |
 | B-2026-09-24-21 | 2026-09-24 | codegen | high | A TUPLE LITERAL THAT MOVES AN INLINE `Option[String]` LOCAL DOES NOT DISARM IT, SO A RETURNED `(label, k)` IS FREED BY THE CALLEE'S EXIT AND BY THE RESULT -- `fn mk(k: i64) -> (Option[String], i64) { let label = Some(..); (label, k) }` prints `1 end` under `--interp` and aborts `double free detected in tcache 2` on jit and -O0 (-O2 prints `1 end`, valgrind -O0 err=1) | — |
 | B-2026-09-24-22 | 2026-09-24 | codegen | high | A NESTED `match` THAT MOVES AN `Option[String]` FIELD OUT OF A BY-VALUE ENUM PARAM'S STRUCT PAYLOAD DOUBLE FREES -- `fn show(it: It) -> String { match it { It.S(n) => match n.doc { Some(s) => f"s{n.k} {s}", None => .. }, .. } }` prints `s1 heap-string-longer-than-sso-1 end` under `--interp` and aborts `double free detected in tcache 2` on jit, -O0 and -O2 | — |
 | B-2026-09-24-23 | 2026-09-24 | codegen | medium | AN RC-FALLBACK `Option[String]` LOCAL NEVER FREES ITS PAYLOAD: THE SCOPE-EXIT `Option` CLEANUP READS THE BOX-POINTER SLOT AS THE `Option` ITSELF, THEN THE BOX IS FREED WITHOUT ITS CONTENTS -- a consume in one arm and a read after the `match` leaks 29 B per call on every compiled surface | — |
+| B-2026-09-24-24 | 2026-09-24 | codegen | medium | MEASURED: reading a Vec element's `Option` field still EMPTIES the element when compiled in two spellings the -17 fix leaves alone: a `let`/assign copy whose payload is not a direct String/Vec (`let a = g[0].q` over `Option[K]`, `let a = g[0].m` over `Option[Map[i64, String]]`) and a struct sub-pattern (`match g[0].p { Some(P { name, k }) => ... }`). `--interp` keeps the element; valgrind is clean on all three (wrong value, not a memory fault). | — |
+| B-2026-09-24-25 | 2026-09-24 | codegen | high | MEASURED: `.clone()` on an `Option[Map[i64, String]]` or an `Option[(String, i64)]` SEGFAULTS when compiled (exit 139, no output); `--interp` prints the right answer. `Option[String].clone()` is fine. Reproduces on 889202e1c^, so it predates B-2026-09-24-6. | — |
+| B-2026-09-24-26 | 2026-09-24 | codegen | high | MEASURED: a consuming match over a FOR-LOOP variable's `Option` field double-frees when compiled: `for x in g { match x.o { Some(s) => n = n + s.len(), None => {} } }` over `g: Vec[G]`, `G { o: Option[String] }` aborts `free(): double free detected in tcache 2` on every compiled surface; `--interp` prints 28. Same with `.iter()`, `if let`, `let q = x.o`, and an `Option[K]` payload. Reproduces on 889202e1c^. | — |
 
 ### Relocated
 
@@ -3015,6 +3016,8 @@ registered in the callee's prologue, not by-value struct params in general. | �
 | B-2026-09-24-12 | codegen | high | A HEAP-BOXED `Option` PARAM MATCHED THROUGH A HAND-BACK CALL CRASHES EVERY COMPILED SURFACE -- `fn peek(a: Option[S]) -> i64 { match id(a) { Some(x)… | a63a5dbae |
 | B-2026-09-24-14 | codegen | high | AN INLINE HEAP PAYLOAD MATCHED THROUGH A HAND-BACK CALL IS FREED TWICE ON EVERY COMPILED SURFACE -- `fn peek(a: Option[String]) -> i64 { match id(a)… | 3f164bbdb |
 | B-2026-09-24-15 | codegen | high | AN ESCAPING BY-VALUE `Option` PARAM STILL DOUBLE FREES IN A METHOD, A GENERIC FUNCTION, OR WITH A `Drop`-BEARING PAYLOAD -- the three spellings B-202… | 741a4de0e |
+| B-2026-09-24-17 | codegen | medium | MEASURED: a consuming match over a Vec element's `Option` field still EMPTIES the element on every compiled surface when the payload is a user enum m… | 18e105f6d |
+| B-2026-09-24-18 | ownership | low | MEASURED: `borrow_projection_copy` warns on `let x = p.source` over a field DECLARED `ref String` read through a `ref` param, saying the binding is a… | 18e105f6d |
 
 </details>
 
