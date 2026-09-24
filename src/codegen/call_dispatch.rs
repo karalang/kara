@@ -1970,6 +1970,11 @@ impl<'ctx> super::Codegen<'ctx> {
             } else {
                 self.clone_shared_view_optres_field_arg(&a.value, val)
             };
+            let val = if borrow_skip {
+                val
+            } else {
+                self.clone_rc_fallback_optres_handback_arg(&name, i, &a.value, val)
+            };
             // Widen a narrow scalar to the callee's declared param width HERE,
             // where the argument expression is still in hand to say whether the
             // extension is signed or zero (B-2026-08-13-15). The boundary sweep

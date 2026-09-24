@@ -8295,3 +8295,71 @@ fn main() {
         "asan_tuple_literal_moves_inline_optres_local",
     );
 }
+
+/// B-2026-09-24-23 — a local that ownership promotes to an RC box (it is
+/// consumed in one arm and read after the `match`) keeps its `Option` /
+/// `Result` payload in the box, and the box now frees it: the box is named by
+/// the full type and given that type's value drop, the slot registrars stand
+/// down for the handle slot, and the pattern bindings of a later `match` /
+/// `if let` / `while let` / `let … else` are views of the box, cloned when
+/// they escape. On `main` every one of these spellings leaked the payload
+/// (518 B over the program), and the `Result` ones printed wrong values at
+/// `-O0` and under the JIT.
+#[test]
+fn asan_rc_fallback_optres_local_frees_its_payload() {
+    assert_clean_asan_run(
+        r#"struct P { pos: i64 }
+struct S { s: String, k: i64 }
+impl P {
+    fn take(mut ref self, doc: Option[String]) -> i64 { self.pos = self.pos + 1; match doc { Some(s) => s.len(), None => 0 } }
+    fn item(mut ref self, t: i64) -> i64 { let doc = Some(f"heap-string-longer-than-sso-{t}"); let a = match t { 0 => self.take(doc), _ => 5 }; let b = match doc { Some(s) => s.len(), None => 0 }; a + b }
+}
+fn take(doc: Option[String]) -> i64 { match doc { Some(s) => s.len(), None => 0 } }
+fn takev(doc: Option[Vec[i64]]) -> i64 { match doc { Some(s) => s.len(), None => 0 } }
+fn takes(doc: Option[S]) -> i64 { match doc { Some(s) => s.s.len(), None => 0 } }
+fn taker(doc: Result[String, i64]) -> i64 { match doc { Ok(s) => s.len(), Err(e) => e } }
+fn takee(doc: Result[i64, String]) -> i64 { match doc { Ok(v) => v, Err(e) => e.len() } }
+fn back(doc: Option[String]) -> Option[String] { doc }
+fn read(t: i64) -> i64 { let doc = Some(f"heap-string-longer-than-sso-{t}"); let a = match t { 0 => take(doc), _ => 5 }; let b = match doc { Some(s) => s.len(), None => 0 }; a + b }
+fn armmove(t: i64) -> String { let doc = Some(f"heap-string-longer-than-sso-{t}"); let a = match t { 0 => take(doc), _ => 5 }; let b = match doc { Some(s) => s, None => f"none" }; f"{a} {b}" }
+fn handback(t: i64) -> i64 { let doc = Some(f"heap-string-longer-than-sso-{t}"); let a = match t { 0 => match back(doc) { Some(s) => s.len(), None => 0 }, _ => 5 }; let b = match doc { Some(s) => s.len(), None => 0 }; a + b }
+fn whilelet(t: i64) -> i64 { let doc = Some(f"heap-string-longer-than-sso-{t}"); let a = match t { 0 => take(doc), _ => 5 }; let mut k = 0; while let Some(s) = doc { k = k + s.len(); break }; a + k }
+fn letelse(t: i64) -> i64 { let doc = Some(f"heap-string-longer-than-sso-{t}"); let a = match t { 0 => take(doc), _ => 5 }; let Some(s) = doc else { return 0 }; a + s.len() }
+fn optvec(t: i64) -> i64 { let doc = Some([1, 2, t]); let a = match t { 0 => takev(doc), _ => 5 }; let b = match doc { Some(s) => s.len(), None => 0 }; a + b }
+fn optstruct(t: i64) -> i64 { let doc = Some(S { s: f"heap-string-longer-than-sso-{t}", k: t }); let a = match t { 0 => takes(doc), _ => 5 }; let b = match doc { Some(s) => s.k, None => 0 }; a + b }
+fn resok(t: i64) -> i64 { let doc: Result[String, i64] = Ok(f"heap-string-longer-than-sso-{t}"); let a = match t { 0 => taker(doc), _ => 5 }; let b = match doc { Ok(s) => s.len(), Err(e) => e }; a + b }
+fn resmove(t: i64) -> String { let doc: Result[String, i64] = Ok(f"heap-string-longer-than-sso-{t}"); let a = match t { 0 => taker(doc), _ => 5 }; let b = match doc { Ok(s) => s, Err(e) => f"e{e}" }; f"{a} {b}" }
+fn reserr(t: i64) -> i64 { let doc: Result[i64, String] = Err(f"heap-string-longer-than-sso-{t}"); let a = match t { 0 => takee(doc), _ => 5 }; let b = match doc { Ok(v) => v, Err(e) => e.len() }; a + b }
+fn main() {
+    let mut p = P { pos: 0 };
+    println(f"{p.item(0)} {p.item(1)}");
+    println(f"{read(0)} {read(1)}");
+    println(f"{armmove(0)} / {armmove(1)}");
+    println(f"{handback(0)} {handback(1)}");
+    println(f"{whilelet(0)} {whilelet(1)}");
+    println(f"{letelse(0)} {letelse(1)}");
+    println(f"{optvec(0)} {optvec(1)}");
+    println(f"{optstruct(0)} {optstruct(1)}");
+    println(f"{resok(0)} {resok(1)}");
+    println(f"{resmove(0)} / {resmove(1)}");
+    println(f"{reserr(0)} {reserr(1)}");
+    println("end")
+}
+"#,
+        &[
+            "58 34",
+            "58 34",
+            "29 heap-string-longer-than-sso-0 / 5 heap-string-longer-than-sso-1",
+            "58 34",
+            "58 34",
+            "58 34",
+            "6 8",
+            "29 6",
+            "58 34",
+            "29 heap-string-longer-than-sso-0 / 5 heap-string-longer-than-sso-1",
+            "58 34",
+            "end",
+        ],
+        "asan_rc_fallback_optres_local_frees_its_payload",
+    );
+}

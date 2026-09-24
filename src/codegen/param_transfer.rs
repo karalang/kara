@@ -1133,3 +1133,109 @@ pub(crate) fn compute_handback_safe_params(program: &Program) -> FxHashSet<Param
     live.retain(|(f, _)| !poisoned.contains(f));
     live
 }
+
+/// B-2026-09-24-23 — does every use of the RC-promoted `Option`/`Result`
+/// local `name` after byte `after_offset`, in the function keyed `fn_key`,
+/// leave its value in the box?
+///
+/// The box owns the payload once `register_rc_fallback_optres_box_drop` gives
+/// it a value drop, so a use that TAKES the value would make a second owner of
+/// one buffer. The uses admitted here are the ones measured not to: a
+/// `match` / `if let` / `while let` / `let … else` scrutinee (the payload
+/// bindings are views, and one that escapes its arm is cloned), a direct
+/// argument to a USER function or method (the callee entry-copies, retains, or
+/// is handed a clone when it returns the value), and the receiver of a
+/// variant test. Anything else (`v.push(doc)`, `return doc`, `let d2 = doc`,
+/// `Some(doc)`, a capture) declines, and the binding keeps the path it had.
+pub(crate) fn rc_optres_uses_stay_in_box(
+    program: &Program,
+    fn_key: &str,
+    name: &str,
+    after_offset: usize,
+) -> bool {
+    let user_fns: FxHashSet<&str> = program
+        .items
+        .iter()
+        .filter_map(|it| match it {
+            Item::Function(f) => Some(f.name.as_str()),
+            _ => None,
+        })
+        .collect();
+    let user_methods: FxHashSet<&str> = program
+        .items
+        .iter()
+        .filter_map(|it| match it {
+            Item::ImplBlock(b) => Some(b),
+            _ => None,
+        })
+        .flat_map(|b| {
+            b.items.iter().filter_map(|i| match i {
+                ImplItem::Method(m) => Some(m.name.as_str()),
+                _ => None,
+            })
+        })
+        .collect();
+    let Some(body) = all_regions(program)
+        .into_iter()
+        .find_map(|(k, r)| match (k, r) {
+            (Some(k), Region::Body(_, b)) if k == fn_key => Some(b),
+            _ => None,
+        })
+    else {
+        return false;
+    };
+    let is_name = |e: &Expr| matches!(&e.kind, ExprKind::Identifier(n) if n == name);
+    let key = |e: &Expr| (e.span.offset, e.span.length);
+    let mut allowed: FxHashSet<(usize, usize)> = FxHashSet::default();
+    let mut uses: Vec<(usize, usize)> = Vec::new();
+    visit_block(body, &mut |node| match node {
+        Node::Stmt(s) => {
+            if let StmtKind::LetElse { value, .. } = &s.kind {
+                if is_name(value) {
+                    allowed.insert(key(value));
+                }
+            }
+        }
+        Node::Expr(e) => match &e.kind {
+            ExprKind::Identifier(n) if n == name && e.span.offset > after_offset => {
+                uses.push(key(e));
+            }
+            ExprKind::Match { scrutinee: v, .. }
+            | ExprKind::IfLet { value: v, .. }
+            | ExprKind::WhileLet { value: v, .. } => {
+                if is_name(v) {
+                    allowed.insert(key(v));
+                }
+            }
+            ExprKind::Call { callee, args } => {
+                if matches!(&callee.kind, ExprKind::Identifier(c) if user_fns.contains(c.as_str()))
+                {
+                    for a in args.iter().filter(|a| is_name(&a.value)) {
+                        allowed.insert(key(&a.value));
+                    }
+                }
+            }
+            ExprKind::MethodCall {
+                object,
+                method,
+                args,
+                ..
+            } => {
+                if is_name(object)
+                    && matches!(method.as_str(), "is_some" | "is_none" | "is_ok" | "is_err")
+                {
+                    allowed.insert(key(object));
+                }
+                if user_methods.contains(method.as_str())
+                    && !crate::ast::is_mutating_collection_method(method)
+                {
+                    for a in args.iter().filter(|a| is_name(&a.value)) {
+                        allowed.insert(key(&a.value));
+                    }
+                }
+            }
+            _ => {}
+        },
+    });
+    uses.iter().all(|u| allowed.contains(u))
+}

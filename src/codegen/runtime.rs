@@ -1731,6 +1731,137 @@ impl<'ctx> super::Codegen<'ctx> {
         }
     }
 
+    /// B-2026-09-24-23 — the `Option`/`Result` peer of
+    /// [`Self::register_rc_fallback_box_drop`]: the box frees its payload.
+    ///
+    /// Those two carry no static drop kind (`emit_enum_drop_switch` has
+    /// nothing for them), so the enum arm there registered NOTHING and the
+    /// box free at `rc == 0` dropped the box alone. The payload was meant to
+    /// go through the binding's slot-level `FreeInlineOptionPayload`, but an
+    /// RC-promoted slot holds the box HANDLE: that cleanup read the pointer as
+    /// the tag, never saw `Some`, and the payload leaked (29 B per call for an
+    /// `Option[String]`). The slot-level registrars now stand down for such a
+    /// slot (`slot_is_rc_fallback_handle`), and this takes the payload on.
+    ///
+    /// The drop is the payload-type-aware one a `Vec` element of the same
+    /// type uses (`vec_elem_agg_drop_for_type_expr`), which is why the box is
+    /// named by the full type at the `let` site: that fn is only right for
+    /// the payload it was built for.
+    pub(super) fn register_rc_fallback_optres_box_drop(
+        &mut self,
+        box_heap_type: StructType<'ctx>,
+        te: &TypeExpr,
+    ) {
+        if self
+            .drop_rc
+            .rc_fallback_box_drop_fns
+            .iter()
+            .any(|(ty, _)| *ty == box_heap_type)
+        {
+            return;
+        }
+        let Some(value_drop) = self.vec_elem_agg_drop_for_type_expr(te) else {
+            return;
+        };
+        let ptr_ty = self.context.ptr_type(AddressSpace::default());
+        let saved_bb = self.builder.get_insert_block();
+        let saved_fn = self.current_fn;
+        let fn_name = format!(
+            "__karac_rc_fb_value_drop_{}",
+            self.drop_rc.rc_fallback_box_drop_fns.len()
+        );
+        let drop_fn_ty = self.context.void_type().fn_type(&[ptr_ty.into()], false);
+        let drop_fn = self.module.add_function(
+            &fn_name,
+            drop_fn_ty,
+            Some(inkwell::module::Linkage::Internal),
+        );
+        self.drop_rc
+            .rc_fallback_box_drop_fns
+            .push((box_heap_type, drop_fn));
+        self.current_fn = Some(drop_fn);
+        let entry = self.context.append_basic_block(drop_fn, "entry");
+        self.builder.position_at_end(entry);
+        let box_ptr = drop_fn.get_nth_param(0).unwrap().into_pointer_value();
+        let value_ptr = self
+            .builder
+            .build_struct_gep(box_heap_type, box_ptr, 1, "rcfb.value")
+            .unwrap();
+        self.builder
+            .build_call(value_drop, &[value_ptr.into()], "")
+            .unwrap();
+        self.builder.build_return(None).unwrap();
+        self.current_fn = saved_fn;
+        if let Some(bb) = saved_bb {
+            self.builder.position_at_end(bb);
+        }
+    }
+
+    /// B-2026-09-24-23 — a by-value argument that is an RC-promoted
+    /// `Option`/`Result` local, handed to a parameter the callee RETURNS
+    /// (`back(doc)` over `fn back(d: Option[String]) -> Option[String] { d }`).
+    ///
+    /// The box keeps the value, since the binding is read again later, which
+    /// is why it was promoted. But the returned value is an owner in its own
+    /// right, and freeing it releases the buffer the box still holds. So the
+    /// callee gets a clone, as the interpreter's value semantics say it should.
+    /// A parameter the callee entry-copies needs nothing (it clones on its own
+    /// side), and neither does one it never returns (the caller retains it).
+    pub(super) fn clone_rc_fallback_optres_handback_arg(
+        &mut self,
+        callee: &str,
+        idx: usize,
+        arg_expr: &Expr,
+        val: BasicValueEnum<'ctx>,
+    ) -> BasicValueEnum<'ctx> {
+        let ExprKind::Identifier(n) = &arg_expr.kind else {
+            return val;
+        };
+        if !self.is_rc_fallback_optres_binding(n)
+            || !self.call_arg_flows_into_return(callee, idx)
+            || self.optres_escaping_param_entry_copied(callee, idx)
+        {
+            return val;
+        }
+        let Some(te) = self
+            .borrow_vars
+            .borrow_accessor_let_payload
+            .get(n.as_str())
+            .cloned()
+        else {
+            return val;
+        };
+        let Some(fn_val) = self.current_fn else {
+            return val;
+        };
+        let clone_fn = self.emit_clone_fn_for_type_expr(&te);
+        let ty = val.get_type();
+        let src = self.create_entry_alloca(fn_val, "rcfb.handback.src", ty);
+        let dst = self.create_entry_alloca(fn_val, "rcfb.handback.dst", ty);
+        self.builder.build_store(src, val).unwrap();
+        self.builder
+            .build_call(clone_fn, &[src.into(), dst.into()], "")
+            .unwrap();
+        self.builder
+            .build_load(ty, dst, "rcfb.handback.arg")
+            .unwrap()
+    }
+
+    /// B-2026-09-24-23 — is `slot` the RC-fallback box HANDLE of `var_name`?
+    /// Such a slot is eight bytes holding a pointer, so a registrar that reads
+    /// it as an inline `Option`/`Result` reads the pointer as the tag.
+    pub(super) fn slot_is_rc_fallback_handle(
+        &self,
+        var_name: &str,
+        slot: PointerValue<'ctx>,
+    ) -> bool {
+        self.drop_rc.rc_fallback_heap_types.contains_key(var_name)
+            && self
+                .variables
+                .get(var_name)
+                .is_some_and(|s| s.ptr == slot && s.ty.is_pointer_type())
+    }
+
     /// Synthesize (once per aggregate LLVM type) a "free this aggregate's heap
     /// fields" drop fn for an ANONYMOUS aggregate — a tuple binding the
     /// named-struct `emit_struct_drop_synthesis` path can't reach (a tuple has
@@ -10145,6 +10276,11 @@ impl<'ctx> super::Codegen<'ctx> {
         option_slot: PointerValue<'ctx>,
         option_te: &TypeExpr,
     ) {
+        // B-2026-09-24-23 — an RC-promoted binding's slot is the box handle;
+        // the box's own value drop owns the payload.
+        if self.slot_is_rc_fallback_handle(var_name, option_slot) {
+            return;
+        }
         let Some(payload_elem_ty) = self.option_inline_payload_elem(option_te) else {
             return;
         };
@@ -10239,6 +10375,11 @@ impl<'ctx> super::Codegen<'ctx> {
         option_slot: PointerValue<'ctx>,
         option_te: &TypeExpr,
     ) {
+        // B-2026-09-24-23 — an RC-promoted binding's slot is the box handle;
+        // the box's own value drop owns the payload.
+        if self.slot_is_rc_fallback_handle(var_name, option_slot) {
+            return;
+        }
         let TypeKind::Path(p) = &option_te.kind else {
             return;
         };
@@ -10311,6 +10452,11 @@ impl<'ctx> super::Codegen<'ctx> {
         result_slot: PointerValue<'ctx>,
         result_te: &TypeExpr,
     ) {
+        // B-2026-09-24-23 — an RC-promoted binding's slot is the box handle;
+        // the box's own value drop owns the payload.
+        if self.slot_is_rc_fallback_handle(var_name, result_slot) {
+            return;
+        }
         let TypeKind::Path(p) = &result_te.kind else {
             return;
         };
@@ -10890,6 +11036,11 @@ impl<'ctx> super::Codegen<'ctx> {
         result_slot: PointerValue<'ctx>,
         result_te: &TypeExpr,
     ) {
+        // B-2026-09-24-23 — an RC-promoted binding's slot is the box handle;
+        // the box's own value drop owns the payload.
+        if self.slot_is_rc_fallback_handle(var_name, result_slot) {
+            return;
+        }
         // The payload is HEAP-BOXED (`coerce_to_payload_words` spilled a
         // too-wide payload behind a pointer in word 0), so `BoxedEnumDrop` —
         // registered just before this at the same binding — already owns it and
@@ -11133,6 +11284,11 @@ impl<'ctx> super::Codegen<'ctx> {
         option_slot: PointerValue<'ctx>,
         option_te: &TypeExpr,
     ) {
+        // B-2026-09-24-23 — an RC-promoted binding's slot is the box handle;
+        // the box's own value drop owns the payload.
+        if self.slot_is_rc_fallback_handle(var_name, option_slot) {
+            return;
+        }
         let Some(map_drop) = self.option_inline_map_payload(option_te) else {
             return;
         };

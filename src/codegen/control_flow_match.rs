@@ -2277,6 +2277,29 @@ impl<'ctx> super::Codegen<'ctx> {
                 .borrow_vars
                 .borrow_accessor_let_payload
                 .contains_key(name)
+            || self.is_rc_fallback_optres_binding(name)
+    }
+
+    /// B-2026-09-24-23 — an RC-promoted `Option`/`Result` local is a borrowed
+    /// binding for the pattern machinery: its box owns the payload and frees
+    /// it (`register_rc_fallback_optres_box_drop`), so a payload binding is a
+    /// VIEW, and one that escapes its arm takes a clone
+    /// (`clone_escaping_borrow_payload_binding`) rather than the box's own
+    /// buffer. Recognized by the box type the `let` site names after the full
+    /// `Option[..]`/`Result[..]` type.
+    pub(super) fn is_rc_fallback_optres_binding(&self, name: &str) -> bool {
+        self.drop_rc
+            .rc_fallback_heap_types
+            .get(name)
+            .and_then(|t| t.get_name())
+            .and_then(|n| n.to_str().ok())
+            .is_some_and(|n| {
+                n.starts_with("karac.rcfb.Option[") || n.starts_with("karac.rcfb.Result[")
+            })
+            && self
+                .variables
+                .get(name)
+                .is_some_and(|s| s.ty.is_pointer_type())
     }
 
     /// True when the scrutinee is a **bare identifier naming a param already in
@@ -7379,6 +7402,45 @@ impl<'ctx> super::Codegen<'ctx> {
         escape_exprs: Option<&[&Expr]>,
         escape_blocks: &[&Block],
     ) -> Result<(), String> {
+        // B-2026-09-24-23 — a `Result` binding recorded as a borrowed alias
+        // (only an RC-promoted local is: the accessor `let` records `Option`s).
+        // The `Option` path below reads its payload type once for the whole
+        // match; a `Result`'s depends on the arm, so it is resolved here per
+        // pattern, for the same whole-payload `Ok(x)` / `Err(x)` binding shape.
+        if let ExprKind::Identifier(n) = &scrutinee.kind {
+            if let Some((ok, err)) = self
+                .borrow_vars
+                .borrow_accessor_let_payload
+                .get(n.as_str())
+                .and_then(Self::result_payload_tes)
+            {
+                let PatternKind::TupleVariant {
+                    path,
+                    patterns: subs,
+                } = &pattern.kind
+                else {
+                    return Ok(());
+                };
+                let half = match path.last().map(String::as_str) {
+                    Some("Ok") => ok,
+                    Some("Err") => err,
+                    _ => return Ok(()),
+                };
+                let [sub] = subs.as_slice() else {
+                    return Ok(());
+                };
+                let PatternKind::Binding(name) = &sub.kind else {
+                    return Ok(());
+                };
+                let name = name.clone();
+                if let Some(pte) = self.borrow_payload_clone_te_gate(&half) {
+                    if self.borrow_binding_escape_check(&name, escape_exprs, escape_blocks) {
+                        self.clone_and_track_borrow_binding(&name, &pte);
+                    }
+                }
+                return Ok(());
+            }
+        }
         let Some(payload_te) = self.borrow_get_payload_clone_te(scrutinee) else {
             return Ok(());
         };

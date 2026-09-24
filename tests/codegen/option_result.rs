@@ -10882,3 +10882,63 @@ fn main() {
     };
     assert_eq!(out, "heap-string-longer-than-sso-1 1\nheap-string-longer-than-sso-2 2\nheap-string-longer-than-sso-3 3\n4\n5\nheap-string-longer-than-sso-6 6\nheap-string-longer-than-sso-7 7 0\n3\nheap-string-longer-than-sso-8 8\nheap-string-longer-than-sso-9 9\n1\n11\n12\nheap-string-longer-than-sso-13 heap-string-longer-than-sso-14\n15\n17\nend\n", "got:\n{out}");
 }
+
+/// B-2026-09-24-23 — a local that ownership promotes to an RC box (it is
+/// consumed in one arm and read after the `match`) keeps its `Option` /
+/// `Result` payload in the box, and the box now frees it: the box is named by
+/// the full type and given that type's value drop, the slot registrars stand
+/// down for the handle slot, and the pattern bindings of a later `match` /
+/// `if let` / `while let` / `let … else` are views of the box, cloned when
+/// they escape. On `main` every one of these spellings leaked the payload
+/// (518 B over the program), and the `Result` ones printed wrong values at
+/// `-O0` and under the JIT. This harness builds at the default opt level,
+/// where `main` already printed these values, so this cell is a value pin on
+/// the new path; the ASAN twin
+/// (`asan_rc_fallback_optres_local_frees_its_payload`) is the one that fails
+/// on `main`.
+#[test]
+fn e2e_rc_fallback_optres_local_frees_its_payload() {
+    let Some(out) = run_program(
+        r#"struct P { pos: i64 }
+struct S { s: String, k: i64 }
+impl P {
+    fn take(mut ref self, doc: Option[String]) -> i64 { self.pos = self.pos + 1; match doc { Some(s) => s.len(), None => 0 } }
+    fn item(mut ref self, t: i64) -> i64 { let doc = Some(f"heap-string-longer-than-sso-{t}"); let a = match t { 0 => self.take(doc), _ => 5 }; let b = match doc { Some(s) => s.len(), None => 0 }; a + b }
+}
+fn take(doc: Option[String]) -> i64 { match doc { Some(s) => s.len(), None => 0 } }
+fn takev(doc: Option[Vec[i64]]) -> i64 { match doc { Some(s) => s.len(), None => 0 } }
+fn takes(doc: Option[S]) -> i64 { match doc { Some(s) => s.s.len(), None => 0 } }
+fn taker(doc: Result[String, i64]) -> i64 { match doc { Ok(s) => s.len(), Err(e) => e } }
+fn takee(doc: Result[i64, String]) -> i64 { match doc { Ok(v) => v, Err(e) => e.len() } }
+fn back(doc: Option[String]) -> Option[String] { doc }
+fn read(t: i64) -> i64 { let doc = Some(f"heap-string-longer-than-sso-{t}"); let a = match t { 0 => take(doc), _ => 5 }; let b = match doc { Some(s) => s.len(), None => 0 }; a + b }
+fn armmove(t: i64) -> String { let doc = Some(f"heap-string-longer-than-sso-{t}"); let a = match t { 0 => take(doc), _ => 5 }; let b = match doc { Some(s) => s, None => f"none" }; f"{a} {b}" }
+fn handback(t: i64) -> i64 { let doc = Some(f"heap-string-longer-than-sso-{t}"); let a = match t { 0 => match back(doc) { Some(s) => s.len(), None => 0 }, _ => 5 }; let b = match doc { Some(s) => s.len(), None => 0 }; a + b }
+fn whilelet(t: i64) -> i64 { let doc = Some(f"heap-string-longer-than-sso-{t}"); let a = match t { 0 => take(doc), _ => 5 }; let mut k = 0; while let Some(s) = doc { k = k + s.len(); break }; a + k }
+fn letelse(t: i64) -> i64 { let doc = Some(f"heap-string-longer-than-sso-{t}"); let a = match t { 0 => take(doc), _ => 5 }; let Some(s) = doc else { return 0 }; a + s.len() }
+fn optvec(t: i64) -> i64 { let doc = Some([1, 2, t]); let a = match t { 0 => takev(doc), _ => 5 }; let b = match doc { Some(s) => s.len(), None => 0 }; a + b }
+fn optstruct(t: i64) -> i64 { let doc = Some(S { s: f"heap-string-longer-than-sso-{t}", k: t }); let a = match t { 0 => takes(doc), _ => 5 }; let b = match doc { Some(s) => s.k, None => 0 }; a + b }
+fn resok(t: i64) -> i64 { let doc: Result[String, i64] = Ok(f"heap-string-longer-than-sso-{t}"); let a = match t { 0 => taker(doc), _ => 5 }; let b = match doc { Ok(s) => s.len(), Err(e) => e }; a + b }
+fn resmove(t: i64) -> String { let doc: Result[String, i64] = Ok(f"heap-string-longer-than-sso-{t}"); let a = match t { 0 => taker(doc), _ => 5 }; let b = match doc { Ok(s) => s, Err(e) => f"e{e}" }; f"{a} {b}" }
+fn reserr(t: i64) -> i64 { let doc: Result[i64, String] = Err(f"heap-string-longer-than-sso-{t}"); let a = match t { 0 => takee(doc), _ => 5 }; let b = match doc { Ok(v) => v, Err(e) => e.len() }; a + b }
+fn main() {
+    let mut p = P { pos: 0 };
+    println(f"{p.item(0)} {p.item(1)}");
+    println(f"{read(0)} {read(1)}");
+    println(f"{armmove(0)} / {armmove(1)}");
+    println(f"{handback(0)} {handback(1)}");
+    println(f"{whilelet(0)} {whilelet(1)}");
+    println(f"{letelse(0)} {letelse(1)}");
+    println(f"{optvec(0)} {optvec(1)}");
+    println(f"{optstruct(0)} {optstruct(1)}");
+    println(f"{resok(0)} {resok(1)}");
+    println(f"{resmove(0)} / {resmove(1)}");
+    println(f"{reserr(0)} {reserr(1)}");
+    println("end")
+}
+"#,
+    ) else {
+        return;
+    };
+    assert_eq!(out, "58 34\n58 34\n29 heap-string-longer-than-sso-0 / 5 heap-string-longer-than-sso-1\n58 34\n58 34\n58 34\n6 8\n29 6\n58 34\n29 heap-string-longer-than-sso-0 / 5 heap-string-longer-than-sso-1\n58 34\nend\n", "got:\n{out}");
+}

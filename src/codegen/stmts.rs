@@ -7496,8 +7496,46 @@ impl<'ctx> super::Codegen<'ctx> {
                         // box is minted, because the name is the box's identity
                         // rather than an afterthought about it.
                         let boxed_type_name = self.rc_fallback_boxed_type_name(var_name, val_ty);
-                        let heap_type =
-                            self.rc_fallback_box_type(boxed_type_name.as_deref(), val_ty);
+                        // B-2026-09-24-23 — an `Option`/`Result` value is
+                        // named by its FULL type, because the bare name says
+                        // nothing about the payload: `Option[String]` and
+                        // `Option[i64]` share one LLVM layout, and a box type
+                        // shared between them would hand the scalar one the
+                        // String one's payload free.
+                        let optres_te = match boxed_type_name.as_deref() {
+                            Some("Option" | "Result") => self
+                                .type_decls
+                                .enum_inst_type_exprs
+                                .get(&(value.span.offset, value.span.length))
+                                .cloned()
+                                .or_else(|| ty.clone())
+                                .or_else(|| self.untyped_let_boxed_enum_te(value))
+                                .map(|te| Self::str_spelled_as_string(&te))
+                                // A payload that runs a user `Drop` keeps the
+                                // path it had: its bodies ride the binding's
+                                // own channel, which the box drop would skip.
+                                .filter(|te| !self.elem_te_runs_user_drop(te))
+                                // Only while every later use stays in the box:
+                                // a use that takes the value whole (`v.push(d)`,
+                                // `return d`, `let d2 = d`) would be a second
+                                // owner of the payload the box now frees.
+                                .filter(|_| {
+                                    self.program_snapshot.as_deref().is_some_and(|p| {
+                                        crate::codegen::param_transfer::rc_optres_uses_stay_in_box(
+                                            p,
+                                            &self.fn_ctx.current_fn_name,
+                                            var_name,
+                                            value.span.offset,
+                                        )
+                                    })
+                                }),
+                            _ => None,
+                        };
+                        let box_name = optres_te
+                            .as_ref()
+                            .map(crate::formatter::render_type_expr)
+                            .or_else(|| boxed_type_name.clone());
+                        let heap_type = self.rc_fallback_box_type(box_name.as_deref(), val_ty);
                         let heap_ptr = self.emit_rc_alloc(heap_type);
                         let val_field = self
                             .builder
@@ -7524,11 +7562,25 @@ impl<'ctx> super::Codegen<'ctx> {
                         } else {
                             None
                         };
-                        self.register_rc_fallback_box_drop(
-                            heap_type,
-                            boxed_type_name.as_deref(),
-                            tuple_elem_tes.as_deref(),
-                        );
+                        if let Some(te) = &optres_te {
+                            self.register_rc_fallback_optres_box_drop(heap_type, te);
+                            // The box owns the payload now, so to the pattern
+                            // machinery the binding is an alias of storage
+                            // someone else frees: exactly what a
+                            // `let g = m.get(k)` binding is. Recording it the
+                            // same way makes a payload binding a view, and one
+                            // that escapes its arm a clone
+                            // (`borrow_get_payload_clone_te`).
+                            self.borrow_vars
+                                .borrow_accessor_let_payload
+                                .insert(var_name.clone(), te.clone());
+                        } else {
+                            self.register_rc_fallback_box_drop(
+                                heap_type,
+                                boxed_type_name.as_deref(),
+                                tuple_elem_tes.as_deref(),
+                            );
+                        }
                         self.track_rc_var(var_name, heap_ptr, heap_type);
                         heap_ptr.into()
                     } else {
