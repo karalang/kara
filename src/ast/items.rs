@@ -6038,10 +6038,40 @@ fn escaping_param_payload_variants_impl(
         stored_block: &dyn Fn(&Block, &[String]) -> bool,
         out: &mut Vec<String>,
     ) {
-        let scrutinee_is_param =
-            |s: &Expr| matches!(&s.kind, ExprKind::Identifier(n) if n == param);
+        // B-2026-09-24-9 — or a call to a free function that hands the param
+        // back on EVERY exit (`match id(a) { .. }`, `fn id(a: Option[R]) ->
+        // Option[R] { a }`): its arms destructure the param itself. Unlike
+        // `match a`, whose arm bindings are views of a caller-retained value,
+        // the call's result is a fresh temp in this frame, and both backends
+        // make its arm bindings the payload's OWNERS whether they hand it out
+        // or only read it. So every arm that binds a payload reports its
+        // variant, and the caller stands its own walk down for it. Program-
+        // aware only; the `Any` rule cannot see the callee.
+        let scrutinee_is_param = |s: &Expr| match &s.kind {
+            ExprKind::Identifier(n) => n == param,
+            ExprKind::Call { callee, args } => {
+                let CallYieldRule::ReturnsIt(program) = rule else {
+                    return false;
+                };
+                let ExprKind::Identifier(g) = &callee.kind else {
+                    return false;
+                };
+                let Some(gf) = program.items.iter().find_map(|item| match item {
+                    Item::Function(gf) if &gf.name == g => Some(gf),
+                    _ => None,
+                }) else {
+                    return false;
+                };
+                args.iter().enumerate().any(|(j, a)| {
+                    matches!(&a.value.kind, ExprKind::Identifier(n) if n == param)
+                        && fn_always_returns_param(Some(program), gf, j)
+                })
+            }
+            _ => false,
+        };
         match &e.kind {
             ExprKind::Match { scrutinee, arms } if scrutinee_is_param(scrutinee) => {
+                let via_handback_call = !matches!(scrutinee.kind, ExprKind::Identifier(_));
                 for a in arms {
                     if matches!(a.pattern.kind, PatternKind::Tuple(_)) {
                         walk(&a.body, param, fn_body, rule, stored, stored_block, out);
@@ -6052,8 +6082,16 @@ fn escaping_param_payload_variants_impl(
                         a.pattern.binding_names(),
                         rule,
                     );
+                    // A whole-value pattern (`o => ..`, and a bare `None`,
+                    // which parses as one) binds no PAYLOAD, so it is not
+                    // owned the way a variant arm's binding is.
+                    let binds_payload = !matches!(
+                        a.pattern.kind,
+                        PatternKind::Binding(_) | PatternKind::Wildcard
+                    );
                     if !names.is_empty()
-                        && (names.iter().any(|n| payload_yields(&a.body, n, rule))
+                        && ((via_handback_call && binds_payload)
+                            || names.iter().any(|n| payload_yields(&a.body, n, rule))
                             || payload_returns_any(&a.body, &names, rule)
                             || payload_escapes_by_assignment(&a.body, &names, fn_body, rule)
                             || stored(&a.body, &names))
@@ -6070,8 +6108,15 @@ fn escaping_param_payload_variants_impl(
             } if scrutinee_is_param(value) && !matches!(pattern.kind, PatternKind::Tuple(_)) => {
                 let names =
                     payload_names_that_can_carry_a_body(pattern, pattern.binding_names(), rule);
+                // B-2026-09-24-9 — the `if let` twin of the `match` arm above.
+                let via_handback_call = !matches!(value.kind, ExprKind::Identifier(_))
+                    && !matches!(
+                        pattern.kind,
+                        PatternKind::Binding(_) | PatternKind::Wildcard
+                    );
                 if !names.is_empty()
-                    && (payload_returns_any_block(then_block, &names, rule)
+                    && (via_handback_call
+                        || payload_returns_any_block(then_block, &names, rule)
                         || payload_escapes_by_assignment_block(then_block, &names, fn_body, rule)
                         || stored_block(then_block, &names))
                 {

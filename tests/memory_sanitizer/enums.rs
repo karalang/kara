@@ -11166,3 +11166,61 @@ fn main() {
         "asan_optres_handback_let_bound_branch_no_drop",
     );
 }
+
+/// B-2026-09-24-9 — a by-value `Option` / `Result` / enum param handed
+/// through a hand-back call and matched there (`match id(a) { Some(x) => .. }`,
+/// `if let Some(x) = id(a)`). The call's result is a fresh temp whose arm
+/// bindings OWN the payload on both backends, but the payload-escape scan
+/// keyed only on `match a`, so the caller's retained walk over a named
+/// argument fired the body as well: twice on all four surfaces, and twice
+/// under `--interp` for a temp argument. Read-only and moving arms, named and
+/// temp arguments, a `let`-bound match, `if let`, `Result`, a user enum.
+#[test]
+fn asan_handback_call_scrutinee_over_param() {
+    assert_clean_asan_run(
+        r#"struct R { id: i64 }
+impl Drop for R { fn drop(mut ref self) { println(f"d{self.id}") } }
+enum E { A(R), B }
+fn mkr(i: i64) -> R { R { id: i } }
+fn id(a: Option[R]) -> Option[R] { a }
+fn idr(a: Result[R, i64]) -> Result[R, i64] { a }
+fn ide(a: E) -> E { a }
+fn pick(a: Option[R]) -> R { match id(a) { Some(x) => x, None => mkr(99) } }
+fn pickk(a: Option[R]) -> R { let k = match id(a) { Some(x) => x, None => mkr(99) }; k }
+fn peek(a: Option[R]) -> i64 { match id(a) { Some(x) => x.id, None => 0 } }
+fn peek2(a: Option[R]) -> i64 { let n = match id(a) { Some(x) => x.id, None => 0 }; println("mid"); n }
+fn peekl(a: Option[R]) -> i64 { if let Some(x) = id(a) { x.id } else { 0 } }
+fn peekr(a: Result[R, i64]) -> i64 { match idr(a) { Ok(x) => x.id, Err(e) => e } }
+fn peeke(a: E) -> i64 { match ide(a) { E.A(x) => x.id, E.B => 0 } }
+fn main() {
+    let k1 = pick(Some(mkr(1)));
+    println(f"k{k1.id}");
+    let a2 = Some(mkr(2));
+    let k2 = pick(a2);
+    println(f"k{k2.id}");
+    let k3 = pickk(Some(mkr(3)));
+    println(f"k{k3.id}");
+    println(f"k{peek(Some(mkr(4)))}");
+    let a5 = Some(mkr(5));
+    println(f"k{peek(a5)}");
+    let a6 = Some(mkr(6));
+    println(f"k{peek2(a6)}");
+    println(f"k{peekl(Some(mkr(7)))}");
+    let a8 = Some(mkr(8));
+    println(f"k{peekl(a8)}");
+    let r9: Result[R, i64] = Ok(mkr(9));
+    println(f"k{peekr(r9)}");
+    println(f"k{peekr(Ok(mkr(10)))}");
+    let e11 = E.A(mkr(11));
+    println(f"k{peeke(e11)}");
+    println(f"k{peeke(E.A(mkr(12)))}");
+    println("end")
+}
+"#,
+        &[
+            "k1", "d1", "k2", "d2", "k3", "d3", "d4", "k4", "d5", "k5", "d6", "mid", "k6", "d7",
+            "k7", "d8", "k8", "d9", "k9", "d10", "k10", "d11", "k11", "d12", "k12", "end",
+        ],
+        "asan_handback_call_scrutinee_over_param",
+    );
+}
