@@ -6029,3 +6029,62 @@ fn e2e_conditional_store_that_fires_runs_one_body_on_both_spellings() {
         );
     }
 }
+
+/// B-2026-09-24-29 — an `if let` whose value is an f-string. Its THEN arm
+/// hand-rolls its frame instead of going through `compile_block_with_frame`,
+/// so nothing zeroed the tail accumulator's `cap`: the arm's drain freed the
+/// buffer the construct's value had just loaded, and the consumer freed it
+/// again. On `main` that double freed on every compiled surface whatever the
+/// scrutinee (`Some(7)` included), as a `let`, a function tail, a block
+/// tail, an `else if` chain, a loop body, a `Vec.push` argument and before
+/// an early `return`. With the arm disarmed, an `if let` in argument or
+/// receiver position was left owned by nobody, so it is now admitted as a
+/// fresh owned branch wrapper beside `if` and `match`. The discarded
+/// spellings (a statement, `let _ =`) must stay clean.
+#[test]
+fn e2e_if_let_fstring_value_is_freed_once() {
+    let Some(out) = run_program(
+        r#"enum E { A(String), B(i64) }
+fn mk(n: i64) -> String { f"heap-string-longer-than-sso-{n}" }
+fn tail(doc: Option[String]) -> String { if let Some(s) = doc { f"x {s}" } else { f"none" } }
+fn kind(e: E) -> String { if let E.A(s) = e { f"a {s}" } else { f"b" } }
+fn early(o: Option[i64]) -> String { let r = if let Some(s) = o { f"x {s}" } else { return f"early" }; r }
+fn show(s: String) { println(s) }
+fn main() {
+    let doc = Some(7);
+    let r = if let Some(s) = doc { f"x" } else { f"none" };
+    println(r);
+    let h = Some(f"heap-string-longer-than-sso-1");
+    let r2 = if let Some(s) = h { f"x {s}" } else { f"none" };
+    println(r2);
+    println(tail(Some(mk(2))));
+    println(tail(None));
+    let r3 = if let Some(s) = doc { let k = s + 1; f"x {k}" } else { f"none" };
+    println(r3);
+    if let Some(s) = doc { f"x {s}" } else { f"none" };
+    let _ = if let Some(s) = doc { f"x {s}" } else { f"none" };
+    let mut n = 0;
+    for i in 0..5 { let o = if i % 2 == 0 { Some(i) } else { None }; let q = if let Some(s) = o { mk(s) } else { f"none" }; n = n + q.len(); }
+    println(n);
+    println(if let Some(s) = doc { f"x {s}" } else { f"none" });
+    let no: Option[i64] = None;
+    println(if let Some(s) = no { f"x {s}" } else { f"none" });
+    println((if let Some(s) = doc { f"x {s}" } else { f"none" }).len());
+    show(if let Some(s) = doc { f"x {s}" } else { f"none" });
+    println(if let Some(s) = no { f"x {s}" } else if let Some(t) = Some(3) { f"y {t}" } else { f"none" });
+    let mut v: Vec[String] = [];
+    for i in 0..3 { let o = Some(i); v.push(if let Some(s) = o { mk(s) } else { f"none" }); }
+    println(v[2]);
+    println(kind(E.A(mk(3))));
+    println(kind(E.B(2)));
+    println(early(Some(1)));
+    println(early(None));
+    println((if let Some(s) = doc { mk(s) } else { mk(0) }).len());
+    println("end")
+}
+"#,
+    ) else {
+        return;
+    };
+    assert_eq!(out, "x\nx heap-string-longer-than-sso-1\nx heap-string-longer-than-sso-2\nnone\nx 8\n95\nx 7\nnone\n3\nx 7\ny 3\nheap-string-longer-than-sso-2\na heap-string-longer-than-sso-3\nb\nx 1\nearly\n29\nend\n", "got:\n{out}");
+}

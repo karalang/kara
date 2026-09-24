@@ -719,6 +719,20 @@ impl<'ctx> super::Codegen<'ctx> {
                 if owns_result {
                     self.suppress_source_vec_cleanup_for_arg_ex(fe, owns_result);
                 }
+                // B-2026-09-24-29 — the f-string twin of that handover, which
+                // the identifier-only suppressor above skips. The tail's
+                // accumulator was registered in this arm's frame, so the drain
+                // below freed the buffer the `if let`'s value had just loaded,
+                // and its consumer freed it again: a double free on every
+                // compiled surface for `if let … { f"x" } else { f"y" }`,
+                // whatever the scrutinee. The ELSE branch was clean because
+                // `compile_block_with_frame` zeroes it, as `compile_match`'s arm
+                // tail does; this arm hand-rolls its frame and reached neither.
+                if owns_result && Self::expr_tail_is_fstring(fe) {
+                    if let Some(acc) = self.last_fstr_acc.take() {
+                        self.zero_vec_alloca_cap(acc);
+                    }
+                }
                 // B-2026-08-30-2 — the if-let THEN arm hand-rolls its frame, so it
                 // reaches neither `compile_block_with_frame`'s hook nor
                 // `compile_match`'s. Same record, registered after the drain below.

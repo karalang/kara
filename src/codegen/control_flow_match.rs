@@ -2215,7 +2215,7 @@ impl<'ctx> super::Codegen<'ctx> {
     /// result). Conservative — an `if`/`match` tail whose branches are
     /// f-strings is NOT unwrapped (the value flows through nested phis); not
     /// matching there leaves the prior behavior, never a double-free.
-    fn expr_tail_is_fstring(e: &Expr) -> bool {
+    pub(super) fn expr_tail_is_fstring(e: &Expr) -> bool {
         match &e.kind {
             ExprKind::InterpolatedStringLit(_) => true,
             ExprKind::Block(b) => b

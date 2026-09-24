@@ -22020,6 +22020,7 @@ impl<'ctx> super::Codegen<'ctx> {
                 | ExprKind::Unsafe(_)
                 | ExprKind::LabeledBlock { .. }
                 | ExprKind::If { .. }
+                | ExprKind::IfLet { .. }
                 | ExprKind::Match { .. }
         ) && self.branch_tail_mints_fresh_owned_temp_local(expr)
     }
@@ -22125,6 +22126,26 @@ impl<'ctx> super::Codegen<'ctx> {
                 BranchTailClass::No
             }
             ExprKind::If {
+                then_block,
+                else_branch,
+                ..
+            } => {
+                let (Some(else_branch), Some(then_tail)) =
+                    (else_branch.as_deref(), then_block.final_expr.as_deref())
+                else {
+                    return BranchTailClass::No;
+                };
+                BranchTailClass::combine(
+                    self.branch_tail_class(then_tail, block_local_tail_ok),
+                    self.branch_tail_class(else_branch, block_local_tail_ok),
+                )
+            }
+            // B-2026-09-24-29 — an `if let` is the third branching member of
+            // the population, decided on the same terms as `if`: its value is
+            // one of two tails. It was missing, so `println(if let Some(s) = o
+            // { f"x{s}" } else { f"none" })` left the taken arm's buffer owned
+            // by nobody while the `if` and `match` spellings were clean.
+            ExprKind::IfLet {
                 then_block,
                 else_branch,
                 ..
