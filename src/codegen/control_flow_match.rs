@@ -6248,64 +6248,228 @@ impl<'ctx> super::Codegen<'ctx> {
         }
     }
 
-    /// B-2026-09-24-6 — give a consuming arm's payload binding its own copy
-    /// of a container element's `Option`/`Result` field payload, so the
-    /// element stays intact. The binding already holds a bit-copy of the
-    /// element's `{ptr,len,cap}` and a free of its own; this replaces that
-    /// alias with a deep clone. Returns `false`, having emitted nothing, for
-    /// any shape it does not handle (a non-`String`/`Vec` payload, a nested
-    /// sub-pattern, a binding that is not a plain header slot), which leaves
-    /// the caller's source-zeroing in charge as before.
+    /// B-2026-09-24-6 — give a consuming arm's payload bindings their own
+    /// copies of a container element's `Option`/`Result` field payload, so
+    /// the element stays intact. Each binding already holds a bit-copy of
+    /// its part of the element and a free of its own; this replaces every
+    /// such alias with a deep clone, and leaves anything the pattern does not
+    /// bind (`_`, a literal) in the element, which still owns and frees it.
+    ///
+    /// B-2026-09-24-17 — the pattern is walked to any depth: a nested
+    /// variant (`Some(K.A(s))`) and a tuple payload (`Some((s, k))`) bind
+    /// parts of the payload rather than the payload itself, and the first cut
+    /// declined both, which left the caller's source-zeroing to empty the
+    /// element (a tuple payload was not zeroed at all and double-freed).
+    /// Any payload type the clone dispatcher covers is admitted (a `Map`
+    /// binding was the other measured miss).
+    ///
+    /// Returns `false`, having emitted nothing, for any shape it does not
+    /// handle (a generic user enum or struct, an or-pattern, a `@` binding, a
+    /// type whose copy would run a user `Drop` body, a binding whose slot is
+    /// not laid out as its type), which leaves the caller's source-zeroing in
+    /// charge as before.
     fn clone_index_rooted_optres_binding(
         &mut self,
         field_te: &TypeExpr,
         path: &[String],
         patterns: &[Pattern],
     ) -> bool {
-        let [only] = patterns else {
+        let Some(plan) = self.index_rooted_optres_binding_copy_plan(field_te, path, patterns)
+        else {
             return false;
         };
-        let PatternKind::Binding(name) = &only.kind else {
-            return false;
-        };
-        let payload_te = match path.last().map(|s| s.as_str()) {
-            Some("Some") => Self::option_payload_te(field_te),
-            Some("Ok") => Self::result_payload_tes(field_te).map(|(ok, _)| ok),
-            Some("Err") => Self::result_payload_tes(field_te).map(|(_, err)| err),
-            _ => None,
-        };
-        let Some(payload_te) = payload_te else {
-            return false;
-        };
-        if !self.result_half_is_direct_vecstr(&payload_te) {
-            return false;
-        }
-        if self.borrow_vars.ref_params.contains_key(name.as_str()) {
-            return false;
-        }
-        let Some(slot) = self.variables.get(name.as_str()).map(|s| (s.ptr, s.ty)) else {
-            return false;
-        };
-        let (slot_ptr, slot_ty) = slot;
-        let is_header = matches!(slot_ty, inkwell::types::BasicTypeEnum::StructType(st)
-            if st.count_fields() == 3);
-        if !is_header {
-            return false;
-        }
         let Some(fn_val) = self.current_fn else {
             return false;
         };
-        let clone_fn = self.emit_clone_fn_for_type_expr(&payload_te);
-        let src = self.create_entry_alloca(fn_val, "elem.optres.src", slot_ty);
-        let alias = self
-            .builder
-            .build_load(slot_ty, slot_ptr, "elem.optres.alias")
-            .unwrap();
-        self.builder.build_store(src, alias).unwrap();
-        self.builder
-            .build_call(clone_fn, &[src.into(), slot_ptr.into()], "")
-            .unwrap();
+        for (slot_ptr, slot_ty, te) in plan {
+            let clone_fn = self.emit_clone_fn_for_type_expr(&te);
+            let src = self.create_entry_alloca(fn_val, "elem.optres.src", slot_ty);
+            let alias = self
+                .builder
+                .build_load(slot_ty, slot_ptr, "elem.optres.alias")
+                .unwrap();
+            self.builder.build_store(src, alias).unwrap();
+            self.builder
+                .build_call(clone_fn, &[src.into(), slot_ptr.into()], "")
+                .unwrap();
+        }
         true
+    }
+
+    /// B-2026-09-24-17 — the decision half of
+    /// [`Self::clone_index_rooted_optres_binding`], emitting nothing: the
+    /// bindings (already bound) that need a deep copy, or `None` when the
+    /// pattern is outside the handled set. Asked separately by the BOXED
+    /// payload disarm (`suppress_struct_field_boxed_payload_match_out`), which
+    /// runs first in the arm and must stand down exactly when the copy-out
+    /// will run — otherwise it zeroes the element's tag (emptying it) and
+    /// the copy-out leaks the interior the disarm handed to the binding.
+    pub(super) fn index_rooted_optres_scrutinee_copy_plan_applies(
+        &self,
+        scrutinee: &Expr,
+        pattern: &Pattern,
+    ) -> bool {
+        if self.pattern_state.pattern_binding_is_borrow
+            || !Self::place_chain_reaches_index(scrutinee)
+        {
+            return false;
+        }
+        let PatternKind::TupleVariant { path, patterns } = &pattern.kind else {
+            return false;
+        };
+        if path.last().map(String::as_str) != Some("Some") {
+            return false;
+        }
+        let ExprKind::FieldAccess { object, field } = &scrutinee.kind else {
+            return false;
+        };
+        let Some(field_te) = self.plain_field_type_expr(object, field) else {
+            return false;
+        };
+        let is_option = matches!(&field_te.kind, TypeKind::Path(p)
+            if p.segments.last().map(|s| s.as_str()) == Some("Option"));
+        is_option
+            && self
+                .index_rooted_optres_binding_copy_plan(&field_te, path, patterns)
+                .is_some()
+    }
+
+    #[allow(clippy::type_complexity)]
+    fn index_rooted_optres_binding_copy_plan(
+        &self,
+        field_te: &TypeExpr,
+        path: &[String],
+        patterns: &[Pattern],
+    ) -> Option<
+        Vec<(
+            PointerValue<'ctx>,
+            inkwell::types::BasicTypeEnum<'ctx>,
+            TypeExpr,
+        )>,
+    > {
+        let mut binds: Vec<(String, TypeExpr)> = Vec::new();
+        if !self.collect_variant_pattern_bindings(field_te, path, patterns, &mut binds) {
+            return None;
+        }
+        if binds.is_empty() {
+            return None;
+        }
+        // Check every binding before emitting anything: a pattern is either
+        // copied out whole or left entirely to the caller's zeroing.
+        let mut plan: Vec<(
+            PointerValue<'ctx>,
+            inkwell::types::BasicTypeEnum<'ctx>,
+            TypeExpr,
+        )> = Vec::new();
+        for (name, te) in &binds {
+            if crate::codegen::vec_method::is_trivially_copyable_te(te) {
+                continue;
+            }
+            if self.borrow_vars.ref_params.contains_key(name.as_str())
+                || self.elem_te_runs_user_drop(te)
+                || self.option_inner_shared_type_for_type_expr(te).is_some()
+            {
+                return None;
+            }
+            if let TypeKind::Path(p) = &te.kind {
+                let head = p.segments.first().map(String::as_str).unwrap_or("");
+                if self.type_decls.shared_types.contains_key(head) {
+                    return None;
+                }
+            }
+            let (slot_ptr, slot_ty) = self.variables.get(name.as_str()).map(|s| (s.ptr, s.ty))?;
+            if slot_ty != self.llvm_type_for_type_expr(te) {
+                return None;
+            }
+            plan.push((slot_ptr, slot_ty, te.clone()));
+        }
+        Some(plan)
+    }
+
+    /// The payload type expressions of variant `path` of the value typed
+    /// `scrut_te` — `Option` / `Result` from their arguments, a NON-generic
+    /// user enum from its declaration. `None` for anything else.
+    fn variant_payload_tes(&self, scrut_te: &TypeExpr, path: &[String]) -> Option<Vec<TypeExpr>> {
+        let last = path.last().map(String::as_str)?;
+        match last {
+            "Some" => return Self::option_payload_te(scrut_te).map(|t| vec![t]),
+            "Ok" => return Self::result_payload_tes(scrut_te).map(|(ok, _)| vec![ok]),
+            "Err" => return Self::result_payload_tes(scrut_te).map(|(_, err)| vec![err]),
+            _ => {}
+        }
+        let TypeKind::Path(p) = &scrut_te.kind else {
+            return None;
+        };
+        let enum_name = p.segments.last()?;
+        if p.generic_args.as_ref().is_some_and(|a| !a.is_empty())
+            || !self.enum_generic_param_names(enum_name).is_empty()
+        {
+            return None;
+        }
+        if path.len() >= 2 && path[path.len() - 2] != *enum_name {
+            return None;
+        }
+        self.enum_variant_field_type_exprs(enum_name)
+            .into_iter()
+            .find(|(_, name, _)| name == last)
+            .map(|(_, _, tys)| tys)
+    }
+
+    /// Collect `(binding, type)` for every binding under a variant pattern.
+    /// `false` when any sub-pattern is outside the handled set.
+    fn collect_variant_pattern_bindings(
+        &self,
+        scrut_te: &TypeExpr,
+        path: &[String],
+        patterns: &[Pattern],
+        out: &mut Vec<(String, TypeExpr)>,
+    ) -> bool {
+        let Some(tys) = self.variant_payload_tes(scrut_te, path) else {
+            return false;
+        };
+        if tys.len() != patterns.len() {
+            return false;
+        }
+        tys.iter()
+            .zip(patterns)
+            .all(|(te, p)| self.collect_pattern_bindings(te, p, out))
+    }
+
+    fn collect_pattern_bindings(
+        &self,
+        te: &TypeExpr,
+        pattern: &Pattern,
+        out: &mut Vec<(String, TypeExpr)>,
+    ) -> bool {
+        match &pattern.kind {
+            PatternKind::Wildcard | PatternKind::Literal(_) | PatternKind::RangePattern { .. } => {
+                true
+            }
+            PatternKind::Binding(name) => {
+                out.push((name.clone(), te.clone()));
+                true
+            }
+            PatternKind::TupleVariant { path, patterns } => {
+                self.collect_variant_pattern_bindings(te, path, patterns, out)
+            }
+            PatternKind::Tuple(pats) => {
+                let TypeKind::Tuple(elems) = &te.kind else {
+                    return false;
+                };
+                elems.len() == pats.len()
+                    && elems
+                        .iter()
+                        .zip(pats)
+                        .all(|(e, p)| self.collect_pattern_bindings(e, p, out))
+            }
+            // A struct pattern is NOT walked, though the fields are easy to
+            // resolve: bound out of a BOXED `Option` payload
+            // (`Some(P { name, k })`), a leaf there registers no free of its
+            // own, so its copy leaked (measured: 28 B from
+            // `karac_string_clone`). The caller's zeroing keeps that shape
+            // memory-clean, and emptying the element is the known remainder.
+            _ => false,
+        }
     }
 
     /// Store a tag no `Ok`/`Err` guard can match into a moved-from `Result`
@@ -6574,6 +6738,16 @@ impl<'ctx> super::Codegen<'ctx> {
         else {
             return;
         };
+        // B-2026-09-24-17 — a container ELEMENT's field is read, not moved:
+        // the arm's bindings get their own copies (in
+        // `suppress_consumed_place_optres_field_source`) and the element keeps
+        // its box and interior. Zeroing the tag here emptied the element for
+        // every later read. The binding-side ownership this predicate also
+        // decides (`pattern_binding_field_boxed_payload_disarmed`) is left as
+        // it is: the bindings own a value either way, now the copy.
+        if self.index_rooted_optres_scrutinee_copy_plan_applies(scrutinee, pattern) {
+            return;
+        }
         if let Some(field_ptr) = self.field_chain_place_ptr(scrutinee) {
             // Order matters: park the box pointer BEFORE the tag zero, which is
             // what takes the field's drop — and with it the envelope free — off

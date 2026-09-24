@@ -4793,6 +4793,16 @@ impl<'a> super::TypeChecker<'a> {
         if matches!(ty, Type::Error | Type::Never) || self.is_copy_type_during_check(ty) {
             return;
         }
+        // B-2026-09-24-18 — a field DECLARED `ref T` holds a view, and reading
+        // it hands out that same view: nothing is duplicated and no `Drop`
+        // body runs, so this lint's claim ("an independent value rather than
+        // a view") is false at the site. Measured on `let x = p.source` with
+        // `source: ref String` read through `p: ref Src`: every backend
+        // aliases the referent. `mut ref` fields are left to the lint until a
+        // cell measures them.
+        if matches!(ty, Type::Ref(_)) {
+            return;
+        }
         // The same exemptions the sibling rule carries, for the same reasons.
         // A `shared` handle read RETAINS rather than copies, so no second
         // value exists and no user `Drop` body runs on the read. A function

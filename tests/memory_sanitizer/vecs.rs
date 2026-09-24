@@ -7537,3 +7537,57 @@ fn main() {
         8,
     );
 }
+
+// B-2026-09-24-17 — a consuming match over a container element's `Option`
+// field whose pattern binds PART of the payload (a nested variant
+// `Some(K.A(s))`, a tuple `Some((s, k))`, a two-field variant with a `_`) or a
+// `Map` payload copies each binding out and leaves the element intact, as the
+// interpreter does. Before the fix these emptied the element (a second match
+// found nothing), leaked a `_` field, or double-freed (`if let` and the tuple).
+#[test]
+fn asan_elem_optres_field_nested_patterns_copy_and_free_once() {
+    assert_clean_asan_run_min_allocs(
+        r#"
+enum K { A(String), B }
+enum K2 { A(String, i64), B }
+struct G { q: Option[K], w: Option[K2], t: Option[(String, i64)], m: Option[Map[i64, String]], r: Result[K, String] }
+fn mk(i: i64) -> String { f"alpha-{i}-long-enough-to-heap" }
+fn mg(i: i64) -> G {
+    let mut mm: Map[i64, String] = Map.new();
+    mm.insert(i, mk(i));
+    G { q: Some(K.A(mk(i))), w: Some(K2.A(mk(i), 5)), t: Some((mk(i), 3)), m: Some(mm), r: Ok(K.A(mk(i))) }
+}
+fn main() {
+    let g: Vec[G] = [mg(1), mg(22)];
+    let mut keep: Vec[String] = [];
+    let mut n = 0;
+    match g[0].q { Some(K.A(s)) => { n = n + s.len(); } _ => {} }
+    match g[0].q { Some(K.A(s)) => { n = n + s.len(); } _ => {} }
+    if let Some(K.A(s)) = g[0].q { n = n + s.len(); }
+    match g[0].q { Some(k) => { match k { K.A(s) => { n = n + s.len(); } K.B => {} } } None => {} }
+    match g[0].q { Some(K.A(s)) if s.len() > 100 => { n = n + 1000; } Some(K.A(s)) => { keep.push(s); } _ => {} }
+    println(f"q {n} {keep.len()}");
+    n = 0;
+    match g[0].w { Some(K2.A(_, k)) => { n = n + k; } _ => {} }
+    match g[0].w { Some(K2.A(s, k)) => { n = n + s.len() + k; } _ => {} }
+    match g[0].t { Some((s, k)) => { keep.push(s); n = n + k; } _ => {} }
+    match g[0].t { Some((s, _)) => { n = n + s.len(); } _ => {} }
+    match g[1].r { Ok(K.A(s)) => { n = n + s.len(); } _ => {} }
+    match g[1].r { Ok(K.A(s)) => { n = n + s.len(); } _ => {} }
+    println(f"w {n} {keep.len()}");
+    n = 0;
+    match g[1].m { Some(m) => { n = n + m.len(); } None => {} }
+    if let Some(m) = g[1].m { n = n + m.get(22).unwrap().len(); }
+    match g[1].m { Some(m) => { n = n + m.len(); } None => {} }
+    println(f"m {n} {keep[0]} {keep[1]}");
+}
+"#,
+        &[
+            "q 108 1",
+            "w 123 2",
+            "m 30 alpha-1-long-enough-to-heap alpha-1-long-enough-to-heap",
+        ],
+        "asan_elem_optres_field_nested_patterns_copy_and_free_once",
+        8,
+    );
+}

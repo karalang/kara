@@ -51710,3 +51710,44 @@ fn destructured_borrowed_payload_fields_bind_as_borrows() {
         );
     }
 }
+
+/// B-2026-09-24-18 — `borrow_projection_copy` must not fire on a field DECLARED
+/// `ref T`: reading it hands out the same view, so the lint's claim that the
+/// binding is "an independent value rather than a view" is false. The owned
+/// `String` field beside it is the control: that read really copies, and the
+/// warning stays.
+#[test]
+fn borrow_projection_copy_skips_declared_ref_field() {
+    fn bpc_count(src: &str) -> usize {
+        typecheck_ok(src)
+            .warnings
+            .iter()
+            .filter(|w| w.lint_name.as_deref() == Some("borrow_projection_copy"))
+            .count()
+    }
+    let prelude = "struct Src { source: ref String, owned: String, position: i64 }\n";
+    let ref_field = format!(
+        "{prelude}\
+         fn count(p: ref Src) -> i64 {{ let x = p.source; x.len() }}\n\
+         fn main() {{\n\
+         \x20\x20\x20\x20let s = String.from(\"banana\");\n\
+         \x20\x20\x20\x20let p = Src {{ source: s, owned: String.from(\"o\"), position: 0 }};\n\
+         \x20\x20\x20\x20println(f\"{{count(p)}}\");\n\
+         }}\n"
+    );
+    assert_eq!(bpc_count(&ref_field), 0, "declared `ref String` field read");
+    let owned_field = format!(
+        "{prelude}\
+         fn count(p: ref Src) -> i64 {{ let x = p.owned; x.len() }}\n\
+         fn main() {{\n\
+         \x20\x20\x20\x20let s = String.from(\"banana\");\n\
+         \x20\x20\x20\x20let p = Src {{ source: s, owned: String.from(\"o\"), position: 0 }};\n\
+         \x20\x20\x20\x20println(f\"{{count(p)}}\");\n\
+         }}\n"
+    );
+    assert_eq!(
+        bpc_count(&owned_field),
+        1,
+        "owned `String` field read still warns"
+    );
+}
