@@ -103,14 +103,14 @@ distinguish "bugs flattening" from "we stopped writing them down."
 | perf | 117 |
 | false-positive | 108 |
 | soundness | 97 |
-| crash | 91 |
+| crash | 92 |
 | use-after-free | 50 |
 
 ### By surface
 
 | surface | total |
 |---|---|
-| codegen | 2014 |
+| codegen | 2015 |
 | interp | 532 |
 | typecheck | 307 |
 | other | 110 |
@@ -2994,6 +2994,7 @@ registered in the callee's prologue, not by-value struct params in general. | �
 | B-2026-09-23-39 | codegen | medium | MEASURED: a String bound from an enum payload nested in `Vec.get`'s `Option` reads EMPTY when moved out on every compiled surface, and `.len()` on it… | f571bc390 |
 | B-2026-09-23-40 | codegen | high | MEASURED: a heap field bound inside an enum-variant sub-pattern of a `Map.get` payload and then MOVED is freed twice on every compiled surface -- `ma… | c7b9cbdbf |
 | B-2026-09-23-42 | codegen | high | AN `Option[R]` PARAM HANDED BACK ON SOME EXITS BY AN ASSOCIATED FUNCTION OR A METHOD CRASHES ON THE EXIT THAT HANDS IT BACK, ON EVERY COMPILED SURFAC… | f6edd2261 |
+| B-2026-09-24-3 | codegen | high | AN `Option` / `Result` HANDED THROUGH A PASSTHROUGH CALLEE TWICE CRASHES ON EVERY COMPILED SURFACE -- `let b = f(a); let e = f(b)` over `fn f(a: Opti… | 3beb82ad2 |
 
 </details>
 
