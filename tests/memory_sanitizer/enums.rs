@@ -10975,3 +10975,57 @@ fn main() {
         "asan_chained_optres_passthrough_owns_once",
     );
 }
+
+/// B-2026-09-23-43 — the result of a call that hands an `Option` / `Result`
+/// argument back (`id(a)`, `tl(a, c)`, `h.g(a)`) consumed directly rather than
+/// bound: as a by-value argument (`show(id(a))`) or as a `match` scrutinee. The
+/// let site treats such a result as an alias of the argument's binding, which
+/// stays the sole owner of the box; these spellings took it for a manufactured
+/// temp instead and registered a second box drop beside the source's, so every
+/// compiled surface crashed, and a `let`-bound `Result` hand-back used as a
+/// scrutinee lost its body. `if let` / `let ... else` over the same result,
+/// and a consuming arm, keep exactly one body.
+#[test]
+fn asan_optres_handback_result_consumed_unbound() {
+    assert_clean_asan_run(
+        r#"struct R { id: i64, s: String }
+impl Drop for R { fn drop(mut ref self) { println(f"d{self.id}") } }
+struct N { id: i64, s: String }
+fn mkr(i: i64) -> R { return R { id: i, s: f"heap-string-longer-than-sso-{i}" } }
+fn mkn(i: i64) -> N { return N { id: i, s: f"heap-string-longer-than-sso-{i}" } }
+fn id(a: Option[R]) -> Option[R] { a }
+fn tl(a: Option[R], c: bool) -> Option[R] { if c { a } else { None } }
+fn rs(a: Result[R, i64], c: bool) -> Result[R, i64] { let r: Result[R, i64] = if c { a } else { Err(5) }; r }
+fn idn(a: Option[N]) -> Option[N] { a }
+fn eat(r: R) { println(f"eat{r.id}") }
+fn show(o: Option[R]) { match o { Some(x) => println(f"y{x.id}"), None => println("none") } }
+struct H { k: i64 }
+impl H { fn g(ref self, a: Option[R]) -> Option[R] { a } }
+fn main() {
+    let h = H { k: 1 };
+    for c in [true, false] {
+        println(f"c={c}");
+        { let a = Some(mkr(1)); show(tl(a, c)); }
+        { let a = Some(mkr(2)); match tl(a, c) { Some(x) => println(f"y{x.id}"), None => println("none") } }
+        { let a: Result[R, i64] = Ok(mkr(3)); match rs(a, c) { Ok(x) => println(f"y{x.id}"), Err(e) => println(f"e{e}") } }
+    }
+    { let a = Some(mkr(4)); show(id(a)); }
+    { let a = Some(mkr(5)); show(id(id(a))); }
+    { let a = Some(mkr(6)); match h.g(a) { Some(x) => println(f"y{x.id}"), None => println("none") } }
+    { let a = Some(mkr(7)); match id(a) { Some(x) => eat(x), None => println("none") } }
+    { let a = Some(mkr(8)); if let Some(x) = id(a) { println(f"y{x.id}") } }
+    { let a = Some(mkr(9)); let Some(x) = id(a) else { return }; println(f"y{x.id}"); }
+    { let a = Some(mkn(10)); match idn(a) { Some(x) => println(f"n{x.id}"), None => println("none") } }
+    let mut i = 20;
+    while i < 22 { let a = Some(mkr(i)); show(id(a)); i = i + 1; }
+    println("end")
+}
+"#,
+        &[
+            "c=true", "y1", "d1", "y2", "d2", "y3", "d3", "c=false", "d1", "none", "d2", "none",
+            "d3", "e5", "y4", "d4", "y5", "d5", "y6", "d6", "eat7", "d7", "y8", "d8", "y9", "d9",
+            "n10", "y20", "d20", "y21", "d21", "end",
+        ],
+        "asan_optres_handback_result_consumed_unbound",
+    );
+}

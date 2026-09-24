@@ -298,6 +298,29 @@ impl<'ctx> super::Codegen<'ctx> {
         } else {
             None
         };
+        // B-2026-09-23-43 — a passthrough scrutinee aliasing a live binding
+        // (`match id(a) { .. }`): the arms bind its payload as a BORROW (the
+        // passthrough-retains classification below), so no arm takes the body,
+        // and the staged value owes it at scope exit exactly as `b`'s own walk
+        // does in the bound spelling (`let b = id(a); match b { .. }`).
+        // `match` only: `if let` / `let ... else` bind the payload as an owner
+        // and run the body through that binding.
+        if let Some(slot) = freshtemp_boxed_slot {
+            if self.call_result_aliases_armed_binding(scrutinee) {
+                if let Some(walker) = self
+                    .optres_scrutinee_type_expr(scrutinee)
+                    .and_then(|te| self.emit_optres_payload_user_drop_bodies_fn(&te))
+                {
+                    self.track_user_drop_var_with_fn(
+                        "",
+                        "__freshtemp_boxed_scrut",
+                        slot,
+                        walker,
+                        super::state::UserDropKind::ContainerElemBodies,
+                    );
+                }
+            }
+        }
         // Fresh-temp INLINE-heap `Result` scrutinee (`match cell.set(v) { Err(_)
         // => {} }`, B-2026-07-12-2 gap 2a): neither the enum-drop nor boxed path
         // above tracks a discarded fitting inline heap payload (a `String`/`Vec`
@@ -19557,6 +19580,27 @@ impl<'ctx> super::Codegen<'ctx> {
         let BasicValueEnum::StructValue(sv) = val else {
             return None;
         };
+        // B-2026-09-23-43 — a passthrough call handing back a binding that
+        // still owns the box (`match id(a) { .. }`) is that binding's value,
+        // not a fresh one. Stage the aggregate so the payload's BODY walk has
+        // its subject, exactly as the bound spelling (`let b = id(a); match b`)
+        // walks `b`, but register no box drop: the source frees the box, and
+        // a second free here crashed every compiled surface.
+        if self.call_result_aliases_armed_binding(scrutinee)
+            && patterns.iter().any(|pat| {
+                matches!(
+                    self.variant_pattern_enum_name(pat).as_deref(),
+                    Some("Option" | "Result")
+                )
+            })
+        {
+            let fn_val = self.current_fn?;
+            let llvm_ty = sv.get_type();
+            let alloca =
+                self.create_entry_alloca(fn_val, "__freshtemp_boxed_scrut", llvm_ty.into());
+            let _ = self.builder.build_store(alloca, sv);
+            return Some(alloca);
+        }
         for (arm_idx, pat) in patterns.iter().enumerate() {
             let PatternKind::TupleVariant {
                 path,

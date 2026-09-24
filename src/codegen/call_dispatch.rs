@@ -2187,6 +2187,7 @@ impl<'ctx> super::Codegen<'ctx> {
             if !flows_into_return
                 && val.is_struct_value()
                 && self.expr_yields_fresh_owned_temp(&a.value)
+                && !self.call_result_aliases_armed_binding(&a.value)
                 && self.owned_boxed_option_param_struct(&name, i).is_some()
             {
                 // B-2026-09-09-10 — the interior travels for an ENUM payload
@@ -2936,7 +2937,12 @@ impl<'ctx> super::Codegen<'ctx> {
                 if let Some((param_te, skip_parts)) =
                     self.callee_by_value_optres_param_bodies_te(&name, i, &a.value)
                 {
-                    if self.optres_arg_is_unowned_temp(&a.value) {
+                    // B-2026-09-23-43 — a passthrough result aliasing a live binding
+                    // owns no MEMORY (the source frees it) but does owe the BODY, as
+                    // the same value bound first (`let b = id(a); show(b)`) does.
+                    if self.optres_arg_is_unowned_temp(&a.value)
+                        || self.call_result_aliases_armed_binding(&a.value)
+                    {
                         self.track_optres_arg_temp_bodies(val, &param_te, &skip_parts);
                     }
                 }
@@ -4585,6 +4591,21 @@ impl<'ctx> super::Codegen<'ctx> {
                 .is_some_and(|l| l.tags.contains_key(method.as_str()))
     }
 
+    /// B-2026-09-23-43 — is `expr` a passthrough call whose result is the very
+    /// payload a live binding still owns (`id(a)` over `fn id(a: Option[R]) ->
+    /// Option[R] { a }`)? The let site already treats such a result as an
+    /// ALIAS and registers nothing for it (`call_passthrough_armed_boxed_source`
+    /// and its inline sibling), leaving the source the sole owner. The same
+    /// result consumed directly as an argument (`show(id(a))`) was taken for a
+    /// manufactured temp instead: the caller registered a box drop and a
+    /// payload-bodies walk over it, beside the source's own drop, and every
+    /// compiled surface crashed while the bound spelling was right.
+    pub(super) fn call_result_aliases_armed_binding(&self, expr: &Expr) -> bool {
+        self.call_passthrough_armed_boxed_source(expr).is_some()
+            || self.call_passthrough_armed_any_source(expr).is_some()
+            || self.call_passthrough_armed_nested_source(expr).is_some()
+    }
+
     pub(super) fn optres_arg_is_unowned_temp(&self, arg: &Expr) -> bool {
         // B-2026-09-12-11 — the QUALIFIED constructor spelling, which arrives
         // as a `MethodCall` and would otherwise be refused by the arm below as
@@ -4638,9 +4659,12 @@ impl<'ctx> super::Codegen<'ctx> {
                 if self.enum_name_of_expr(arg).is_some() {
                     return true;
                 }
-                // A direct call to a real function manufactures its result.
+                // A direct call to a real function manufactures its result --
+                // unless it hands back a binding that still owns it
+                // (B-2026-09-23-43, see `call_result_aliases_armed_binding`).
                 matches!(&callee.kind, ExprKind::Identifier(n)
                     if self.fn_sig.fn_return_type_names.contains_key(n))
+                    && !self.call_result_aliases_armed_binding(arg)
             }
             // A fresh aggregate is unowned exactly when every initializer is.
             ExprKind::StructLiteral { fields, .. } => fields

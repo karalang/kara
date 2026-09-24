@@ -6412,3 +6412,51 @@ fn main() {
         "y1\nd1\ny2\nd2\ny3\nd3\neat4\nd4\nd5\neat6\nd6\ny7\nd7\nd8\nnone\nd9\nkept\nn10 heap-string-longer-than-sso-10\nheap-string-longer-than-sso-11\nheap-string-longer-than-sso-12\nend\n"
     );
 }
+
+/// B-2026-09-23-43 — the result of a call that hands an `Option` / `Result`
+/// argument back (`id(a)`, `tl(a, c)`, `h.g(a)`) consumed directly rather than
+/// bound: as a by-value argument (`show(id(a))`) or as a `match` scrutinee. The
+/// let site treats such a result as an alias of the argument's binding, which
+/// stays the sole owner of the box; these spellings took it for a manufactured
+/// temp instead and registered a second box drop beside the source's, so every
+/// compiled surface crashed, and a `let`-bound `Result` hand-back used as a
+/// scrutinee lost its body. `if let` / `let ... else` over the same result,
+/// and a consuming arm, keep exactly one body.
+#[test]
+fn interp_optres_handback_result_consumed_unbound() {
+    assert_eq!(
+        run(r#"struct R { id: i64, s: String }
+impl Drop for R { fn drop(mut ref self) { println(f"d{self.id}") } }
+struct N { id: i64, s: String }
+fn mkr(i: i64) -> R { return R { id: i, s: f"heap-string-longer-than-sso-{i}" } }
+fn mkn(i: i64) -> N { return N { id: i, s: f"heap-string-longer-than-sso-{i}" } }
+fn id(a: Option[R]) -> Option[R] { a }
+fn tl(a: Option[R], c: bool) -> Option[R] { if c { a } else { None } }
+fn rs(a: Result[R, i64], c: bool) -> Result[R, i64] { let r: Result[R, i64] = if c { a } else { Err(5) }; r }
+fn idn(a: Option[N]) -> Option[N] { a }
+fn eat(r: R) { println(f"eat{r.id}") }
+fn show(o: Option[R]) { match o { Some(x) => println(f"y{x.id}"), None => println("none") } }
+struct H { k: i64 }
+impl H { fn g(ref self, a: Option[R]) -> Option[R] { a } }
+fn main() {
+    let h = H { k: 1 };
+    for c in [true, false] {
+        println(f"c={c}");
+        { let a = Some(mkr(1)); show(tl(a, c)); }
+        { let a = Some(mkr(2)); match tl(a, c) { Some(x) => println(f"y{x.id}"), None => println("none") } }
+        { let a: Result[R, i64] = Ok(mkr(3)); match rs(a, c) { Ok(x) => println(f"y{x.id}"), Err(e) => println(f"e{e}") } }
+    }
+    { let a = Some(mkr(4)); show(id(a)); }
+    { let a = Some(mkr(5)); show(id(id(a))); }
+    { let a = Some(mkr(6)); match h.g(a) { Some(x) => println(f"y{x.id}"), None => println("none") } }
+    { let a = Some(mkr(7)); match id(a) { Some(x) => eat(x), None => println("none") } }
+    { let a = Some(mkr(8)); if let Some(x) = id(a) { println(f"y{x.id}") } }
+    { let a = Some(mkr(9)); let Some(x) = id(a) else { return }; println(f"y{x.id}"); }
+    { let a = Some(mkn(10)); match idn(a) { Some(x) => println(f"n{x.id}"), None => println("none") } }
+    let mut i = 20;
+    while i < 22 { let a = Some(mkr(i)); show(id(a)); i = i + 1; }
+    println("end")
+}"#),
+        "c=true\ny1\nd1\ny2\nd2\ny3\nd3\nc=false\nd1\nnone\nd2\nnone\nd3\ne5\ny4\nd4\ny5\nd5\ny6\nd6\neat7\nd7\ny8\nd8\ny9\nd9\nn10\ny20\nd20\ny21\nd21\nend\n"
+    );
+}

@@ -8623,7 +8623,12 @@ impl<'ctx> super::Codegen<'ctx> {
                     if let Some((param_te, skip_parts)) =
                         self.callee_by_value_optres_param_bodies_te(&qualified, pidx, &a.value)
                     {
-                        if self.optres_arg_is_unowned_temp(&a.value) {
+                        // B-2026-09-23-43 — a passthrough result aliasing a live binding
+                        // owns no MEMORY (the source frees it) but does owe the BODY, as
+                        // the same value bound first (`let b = id(a); show(b)`) does.
+                        if self.optres_arg_is_unowned_temp(&a.value)
+                            || self.call_result_aliases_armed_binding(&a.value)
+                        {
                             self.track_optres_arg_temp_bodies(val, &param_te, &skip_parts);
                         }
                     }
