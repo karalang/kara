@@ -8998,3 +8998,45 @@ fn main() {
         20,
     );
 }
+
+/// B-2026-09-25-24 — `let q = o.unwrap()` over an `Option[Map[..]]` (or a
+/// `Set`, or a `Result[Map, E]`) leaked the whole map: the unwrap consumed the
+/// receiver, and the `let` tracked a Map/Set binding only for an enumerated set
+/// of fresh-handle right-hand sides. An unwrap of a local owned binding or of
+/// a free-fn call result now hands the handle to `q`. With a NAMED default,
+/// `unwrap_or(d)` on the absent path returns `d`'s own handle, so `d`'s slot
+/// is nulled exactly then. A field receiver (`h.m.unwrap()`) stays the
+/// struct's to free.
+#[test]
+fn asan_unwrap_hands_a_map_payload_to_its_binding() {
+    assert_clean_asan_run_min_allocs(
+        r#"struct H { m: Option[Map[i64, String]], n: i64 }
+fn mk(i: i64) -> Option[Map[i64, String]] { let mut mm: Map[i64, String] = Map.new(); mm.insert(i, f"vvv-string-longer-than-sso-{i}"); Some(mm) }
+fn mkr(i: i64) -> Result[Map[i64, String], i64] { let mut mm: Map[i64, String] = Map.new(); mm.insert(i, f"rrr-string-longer-than-sso-{i}"); Ok(mm) }
+fn take(o: Option[Map[i64, String]]) -> i64 { let q = o.unwrap(); q.len() }
+fn main() {
+    let o1 = mk(1); let q1 = o1.unwrap(); println(q1.len());
+    let q2 = mk(2).unwrap(); println(q2.len());
+    let o3 = mk(3); let q3 = o3.expect("x"); println(q3.len());
+    let r4 = mkr(4); let q4 = r4.unwrap(); println(q4.len());
+    let q5 = mkr(5).unwrap(); println(q5.len());
+    let n6: Option[Map[i64, String]] = None; let d6: Map[i64, String] = Map.new(); let q6 = n6.unwrap_or(d6); println(q6.len());
+    let o7 = mk(7); let d7: Map[i64, String] = Map.new(); let q7 = o7.unwrap_or(d7); println(q7.len());
+    let h8 = H { m: mk(8), n: 8 }; let o8 = h8.m; let q8 = o8.unwrap(); println(q8.len());
+    let h9 = H { m: mk(9), n: 9 }; let q9 = h9.m.unwrap(); println(q9.len()); println(h9.n);
+    println(take(mk(10)));
+    for i in 0..3 { let o = mk(i); if i > 0 { let q = o.unwrap(); println(q.len()) } else { println("skip") } };
+    let mut ss: Set[String] = Set.new(); ss.insert(f"sss-string-longer-than-sso-12"); let o12 = Some(ss); let q12 = o12.unwrap(); println(q12.len());
+    let o13 = mk(13); let q13 = o13.unwrap(); let q13b = q13; println(q13b.len());
+    let mut v: Vec[Map[i64, String]] = Vec.new(); let o14 = mk(14); let q14 = o14.unwrap(); v.push(q14); println(v.len());
+    println("end")
+}
+"#,
+        &[
+            "1", "1", "1", "1", "1", "0", "1", "1", "1", "9", "1", "skip", "1", "1", "1", "1", "1",
+            "end",
+        ],
+        "asan_unwrap_hands_a_map_payload_to_its_binding",
+        20,
+    );
+}

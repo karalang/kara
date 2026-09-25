@@ -12555,7 +12555,8 @@ impl<'ctx> super::Codegen<'ctx> {
                                 "clone" | "union" | "intersection" | "difference"
                             )
                     ) || (matches!(&value.kind, ExprKind::Call { .. })
-                        && !self.is_borrow_returning_call_expr(value));
+                        && !self.is_borrow_returning_call_expr(value))
+                        || self.optres_unwrap_hands_over_map_handle(value);
                     // B-2026-08-14-15 leg A — an index-read RHS (`let cur =
                     // vms[0]` over `Vec[Map[..]]`) is a caller-retains alias
                     // ONLY while the element clone above is elided. When the
@@ -12633,6 +12634,7 @@ impl<'ctx> super::Codegen<'ctx> {
                                 val_drop_fn,
                                 key_drop_fn,
                             );
+                            self.disarm_named_map_default_taken_by_unwrap_or(value, slot.ptr);
                         }
                     }
                     // B-2026-07-30-11 (Map-values leg) — the stored VALUES'
@@ -22099,6 +22101,107 @@ impl<'ctx> super::Codegen<'ctx> {
         if self.is_string_type_expr(inner_te) {
             self.var_types.string_vars.insert(name.to_string());
         }
+    }
+
+    /// B-2026-09-25-24 — does `value`, an unwrap of an `Option`/`Result`,
+    /// hand the payload's Map/Set handle to the binding it initializes?
+    ///
+    /// Yes when the receiver is a local OWNED binding (the unwrap consumes it,
+    /// and its own cleanup no longer frees the payload) or a fresh free-fn call
+    /// result (a temporary nobody else frees). A field or element receiver is
+    /// left alone: its aggregate still frees the map (B-2026-09-25-23 kept
+    /// `Map`/`Set` out of its field move for exactly that reason), and so is a
+    /// `ref` binding, which owns nothing.
+    fn optres_unwrap_hands_over_map_handle(&self, value: &Expr) -> bool {
+        let ExprKind::MethodCall { object, method, .. } = &value.kind else {
+            return false;
+        };
+        if !matches!(
+            method.as_str(),
+            "unwrap" | "expect" | "unwrap_or" | "unwrap_err" | "expect_err"
+        ) {
+            return false;
+        }
+        match &object.kind {
+            ExprKind::Identifier(n) => {
+                self.variables.contains_key(n.as_str())
+                    && !self.borrow_vars.ref_params.contains_key(n.as_str())
+                    && !self.borrow_vars.signature_ref_params.contains(n.as_str())
+            }
+            ExprKind::Call { .. } => !self.is_borrow_returning_call_expr(object),
+            _ => false,
+        }
+    }
+
+    /// B-2026-09-25-24 — `let s = o.unwrap_or(d)` with a NAMED Map/Set
+    /// default: on the absent path `s` holds `d`'s very handle, and both
+    /// bindings would free it. Null `d`'s slot exactly when the two handles
+    /// are equal — a runtime comparison rather than a store in the absent arm,
+    /// because only this `let` knows `s` now owns what it holds. On the present
+    /// path the handles differ and `d` keeps its own. A null slot is what the
+    /// move-out suppressor stores for a moved Map binding, and the queued
+    /// `FreeMapHandle` null-checks it.
+    fn disarm_named_map_default_taken_by_unwrap_or(
+        &mut self,
+        value: &Expr,
+        dest: inkwell::values::PointerValue<'ctx>,
+    ) {
+        let ExprKind::MethodCall { method, args, .. } = &value.kind else {
+            return;
+        };
+        if method != "unwrap_or" {
+            return;
+        }
+        let Some(arg) = args.first() else {
+            return;
+        };
+        let ExprKind::Identifier(d) = &arg.value.kind else {
+            return;
+        };
+        let Some(dslot) = self.variables.get(d.as_str()).copied() else {
+            return;
+        };
+        let is_map = self
+            .var_types
+            .var_type_names
+            .get(d.as_str())
+            .is_some_and(|t| matches!(t.as_str(), "Map" | "Set"));
+        if !is_map
+            || self.borrow_vars.ref_params.contains_key(d.as_str())
+            || !dslot.ty.is_pointer_type()
+            || dslot.ptr == dest
+        {
+            return;
+        }
+        let Some(fn_val) = self.current_fn else {
+            return;
+        };
+        let ptr_ty = self.context.ptr_type(inkwell::AddressSpace::default());
+        let held = self
+            .builder
+            .build_load(ptr_ty, dest, "uo.dflt.res")
+            .unwrap()
+            .into_pointer_value();
+        let dh = self
+            .builder
+            .build_load(ptr_ty, dslot.ptr, "uo.dflt.h")
+            .unwrap()
+            .into_pointer_value();
+        let same = self
+            .builder
+            .build_int_compare(IntPredicate::EQ, held, dh, "uo.dflt.same")
+            .unwrap();
+        let null_bb = self.context.append_basic_block(fn_val, "uo.dflt.null");
+        let cont_bb = self.context.append_basic_block(fn_val, "uo.dflt.cont");
+        self.builder
+            .build_conditional_branch(same, null_bb, cont_bb)
+            .unwrap();
+        self.builder.position_at_end(null_bb);
+        self.builder
+            .build_store(dslot.ptr, ptr_ty.const_null())
+            .unwrap();
+        self.builder.build_unconditional_branch(cont_bb).unwrap();
+        self.builder.position_at_end(cont_bb);
     }
 
     pub(super) fn expr_yields_fresh_owned_temp(&self, expr: &Expr) -> bool {
