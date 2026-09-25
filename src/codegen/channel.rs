@@ -166,10 +166,7 @@ impl<'ctx> super::Codegen<'ctx> {
         // temporary all hand their buffer to the queue here.
         self.suppress_source_vec_cleanup_for_arg(&args[0].value);
         self.suppress_inline_option_result_binding_move(&args[0].value);
-        if let ExprKind::Identifier(n) = &args[0].value.kind {
-            let n = n.clone();
-            self.suppress_map_cleanup_for_tail_identifier(&n);
-        }
+        self.suppress_map_cleanup_for_moved_expr(&args[0].value);
         self.suppress_fstr_acc_if_moved_out(&args[0].value);
         // Unit return (the i64-zero unit value).
         Ok(self.context.i64_type().const_zero().into())

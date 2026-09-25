@@ -283,9 +283,7 @@ impl<'ctx> super::Codegen<'ctx> {
             //     source binding's `FreeMapHandle` AND the struct's NestedTuple
             //     Map drop both release the same handle. No-op for non-Map
             //     identifiers (no matching queue action).
-            if let ExprKind::Identifier(name) = &elem_expr.kind {
-                self.suppress_map_cleanup_for_tail_identifier(name);
-            }
+            self.suppress_map_cleanup_for_moved_expr(elem_expr);
             vals.push(v);
         }
         // Lay the aggregate out at the ANNOTATED element widths where an

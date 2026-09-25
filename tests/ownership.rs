@@ -14265,3 +14265,41 @@ fn moved_field_refill_accepts_a_dominance_incomparable_move() {
         "dominance-incomparable is the RC-fallback shape, not this defect"
     );
 }
+
+/// B-2026-09-25-1 — an `if let` / `while let` pattern binding is a fresh name,
+/// so reusing the name of a local moved earlier is not a use after move. The
+/// CFG gave these patterns no rename frame, so the inner binding's read paired
+/// with the outer local's move and drew a false `UseAfterMove`. The last
+/// program keeps the genuine reuse AFTER the `if let`, which must still fire.
+#[test]
+fn test_if_let_and_while_let_bindings_shadow_a_moved_local() {
+    for src in [
+        "fn main() {\n\
+             let s = f\"x\";\n\
+             let o = Some(s);\n\
+             let n = if let Some(s) = o { s.len() } else { 0 };\n\
+             println(n);\n\
+         }",
+        "fn main() {\n\
+             let mut v: Vec[String] = Vec.new();\n\
+             let s = f\"x\";\n\
+             v.push(s);\n\
+             while let Some(s) = v.pop() { println(s); };\n\
+         }",
+    ] {
+        ownership_ok(src);
+    }
+    let errors = ownership_errors(
+        "fn consume(s: String) { }\n\
+         fn main() {\n\
+             let s = f\"x\";\n\
+             let o = Some(s);\n\
+             let n = if let Some(s) = o { s.len() } else { 0 };\n\
+             consume(s);\n\
+             println(n);\n\
+         }",
+    );
+    assert!(errors
+        .iter()
+        .any(|e| e.kind == OwnershipErrorKind::UseAfterMove));
+}

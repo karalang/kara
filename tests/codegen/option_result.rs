@@ -11035,3 +11035,132 @@ fn main() {
     };
     assert_eq!(out, "1\n1\n1\n1\n1\n1\n1 7\n3\n1\n1\nend\n", "got:\n{out}");
 }
+
+/// B-2026-09-24-30 — the three shapes B-2026-09-24-28 left: an RC-promoted
+/// local (moved into a call on one path, read again after) whose value is a
+/// `Result` with a tuple / array / wide-tuple half, an `Option[Map]` /
+/// `Option[Set]` / `Result[Map, E]` / `Result[E, Map]`, or an
+/// `Option[Option[String]]` moved out through a nested `Some(Some(s))` arm.
+/// The `Result` halves were handed to the callee without a deep copy, the
+/// `Map` boxes had no value drop at all, and the nested arm aliased the box's
+/// String; on `main` the compiled program printed nothing (a double free
+/// aborted it) and the `Map` cells leaked the table under valgrind.
+#[test]
+fn e2e_rc_promoted_result_and_map_boxes_are_freed_once() {
+    let Some(out) = run_program(
+        r#"fn take_c0(doc: Result[(String, i64), i64]) -> i64 { match doc { Ok((s, k)) => s.len() + k, Err(e) => e } }
+fn item_c0(t: i64) -> i64 { let doc: Result[(String, i64), i64] = Ok((f"heap-string-longer-than-sso-{t}", t)); let a = match t { 0 => take_c0(doc), _ => 5 }; let b = match doc { Ok((s, k)) => s.len() + k, Err(e) => e }; a + b }
+fn take_c1(doc: Result[i64, (String, i64)]) -> i64 { match doc { Ok(k) => k, Err((s, k)) => s.len() + k } }
+fn item_c1(t: i64) -> i64 { let doc: Result[i64, (String, i64)] = Err((f"heap-string-longer-than-sso-{t}", t)); let a = match t { 0 => take_c1(doc), _ => 5 }; let b = match doc { Ok(k) => k, Err((s, k)) => s.len() + k }; a + b }
+fn take_c2(doc: Result[Array[String, 2], i64]) -> i64 { match doc { Ok(a) => a[0].len() + a[1].len(), Err(e) => e } }
+fn item_c2(t: i64) -> i64 { let doc: Result[Array[String, 2], i64] = Ok([f"heap-string-longer-than-sso-{t}", f"x{t}"]); let a = match t { 0 => take_c2(doc), _ => 5 }; let b = match doc { Ok(a) => a[0].len(), Err(e) => e }; a + b }
+fn take_c3(doc: Result[(String, String, i64), i64]) -> i64 { match doc { Ok((s, u, k)) => s.len() + u.len() + k, Err(e) => e } }
+fn item_c3(t: i64) -> i64 { let doc: Result[(String, String, i64), i64] = Ok((f"heap-string-longer-than-sso-{t}", f"second-heap-string-longer-than-sso", t)); let a = match t { 0 => take_c3(doc), _ => 5 }; let b = match doc { Ok((s, u, k)) => s.len() + k, Err(e) => e }; a + b }
+fn take_c4(doc: Option[Map[i64, String]]) -> i64 { match doc { Some(m) => m.len(), None => 0 } }
+fn item_c4(t: i64) -> i64 { let mut m: Map[i64, String] = Map.new(); m.insert(t, f"heap-string-longer-than-sso-{t}"); let doc = Some(m); let a = match t { 0 => take_c4(doc), _ => 5 }; let b = match doc { Some(m) => m.len(), None => 0 }; a + b }
+fn take_c5(doc: Option[Set[i64]]) -> i64 { match doc { Some(m) => m.len(), None => 0 } }
+fn item_c5(t: i64) -> i64 { let mut m: Set[i64] = Set.new(); m.insert(t); m.insert(t + 1); let doc = Some(m); let a = match t { 0 => take_c5(doc), _ => 5 }; let b = match doc { Some(m) => m.len(), None => 0 }; a + b }
+fn back_c6(doc: Option[Map[i64, String]]) -> Option[Map[i64, String]] { doc }
+fn item_c6(t: i64) -> i64 { let mut m: Map[i64, String] = Map.new(); m.insert(t, f"heap-string-longer-than-sso-{t}"); let doc = Some(m); let a = match t { 0 => match back_c6(doc) { Some(x) => x.len(), None => 0 }, _ => 5 }; let b = match doc { Some(m) => m.len(), None => 0 }; a + b }
+fn take_c7(doc: Option[Map[i64, String]]) -> i64 { match doc { Some(m) => m.len(), None => 0 } }
+fn item_c7(t: i64) -> i64 { let mut m: Map[i64, String] = Map.new(); m.insert(t, f"heap-string-longer-than-sso-{t}"); let doc = Some(m); let a = match t { 0 => take_c7(doc), _ => 5 }; let b = match doc { Some(m) => { let mut v: Vec[Map[i64, String]] = Vec.new(); v.push(m); v.len() }, None => 0 }; a + b }
+fn take_c8(doc: Result[Map[i64, String], i64]) -> i64 { match doc { Ok(m) => m.len(), Err(e) => e } }
+fn item_c8(t: i64) -> i64 { let mut m: Map[i64, String] = Map.new(); m.insert(t, f"heap-string-longer-than-sso-{t}"); let doc: Result[Map[i64, String], i64] = Ok(m); let a = match t { 0 => take_c8(doc), _ => 5 }; let b = match doc { Ok(m) => m.len(), Err(e) => e }; a + b }
+fn take_c9(doc: Result[i64, Map[i64, String]]) -> i64 { match doc { Ok(e) => e, Err(m) => m.len() } }
+fn item_c9(t: i64) -> i64 { let mut m: Map[i64, String] = Map.new(); m.insert(t, f"heap-string-longer-than-sso-{t}"); let doc: Result[i64, Map[i64, String]] = Err(m); let a = match t { 0 => take_c9(doc), _ => 5 }; let b = match doc { Ok(e) => e, Err(m) => m.len() }; a + b }
+fn take_c10(doc: Result[Map[i64, String], i64]) -> i64 { match doc { Ok(m) => m.len(), Err(e) => e } }
+fn item_c10(t: i64) -> i64 { let mut m: Map[i64, String] = Map.new(); m.insert(t, f"heap-string-longer-than-sso-{t}"); let doc: Result[Map[i64, String], i64] = Ok(m); let a = match t { 0 => take_c10(doc), _ => 5 }; let b = match doc { Ok(m) => { let mut v: Vec[Map[i64, String]] = Vec.new(); v.push(m); v.len() }, Err(e) => e }; a + b }
+fn keep_c11(doc: Result[Map[i64, String], i64]) -> Result[Map[i64, String], i64] { doc }
+fn item_c11(t: i64) -> i64 { let mut m: Map[i64, String] = Map.new(); m.insert(t, f"heap-string-longer-than-sso-{t}"); let doc: Result[Map[i64, String], i64] = Ok(m); let a = match t { 0 => { let d = keep_c11(doc); match d { Ok(m) => m.len(), Err(e) => e } }, _ => 5 }; let b = match doc { Ok(m) => m.len(), Err(e) => e }; a + b }
+fn take_c12(doc: Option[Option[String]]) -> i64 { match doc { Some(Some(s)) => s.len(), _ => 0 } }
+fn item_c12(t: i64) -> String { let doc = Some(Some(f"heap-string-longer-than-sso-{t}")); let a = match t { 0 => take_c12(doc), _ => 5 }; let b = match doc { Some(Some(s)) => s, _ => f"none" }; f"{a} {b}" }
+fn main() {
+    println(f"{item_c0(0)} {item_c0(1)}");
+    println(f"{item_c1(0)} {item_c1(1)}");
+    println(f"{item_c2(0)} {item_c2(1)}");
+    println(f"{item_c3(0)} {item_c3(1)}");
+    println(f"{item_c4(0)} {item_c4(1)}");
+    println(f"{item_c5(0)} {item_c5(1)}");
+    println(f"{item_c6(0)} {item_c6(1)}");
+    println(f"{item_c7(0)} {item_c7(1)}");
+    println(f"{item_c8(0)} {item_c8(1)}");
+    println(f"{item_c9(0)} {item_c9(1)}");
+    println(f"{item_c10(0)} {item_c10(1)}");
+    println(f"{item_c11(0)} {item_c11(1)}");
+    println(f"{item_c12(0)} {item_c12(1)}");
+    println("end")
+}
+"#,
+    ) else {
+        return;
+    };
+    assert_eq!(out, "58 35\n58 35\n60 34\n92 35\n2 6\n4 7\n2 6\n2 6\n2 6\n2 6\n2 6\n2 6\n29 heap-string-longer-than-sso-0 5 heap-string-longer-than-sso-1\nend\n", "got:\n{out}");
+}
+
+/// B-2026-09-25-1 — an `if let` / `while let` pattern binding that reuses
+/// the name of a local moved earlier (`let doc = Some(m); if let Some(m) = doc
+/// { m.len() }`). The CFG gave the pattern binding no rename frame, so the
+/// inner `m`'s read paired with the outer `m`'s move: a false `UseAfterMove`
+/// warning, and codegen's defensive copy then cloned the outer `Map` into
+/// `doc` while the original, counted as moved, was never freed (629 B
+/// definitely lost per call under valgrind, every backend).
+#[test]
+fn e2e_if_let_binding_shadowing_a_moved_local_frees_it() {
+    let Some(out) = run_program(
+        r#"fn take_c0(doc: Option[Map[i64, String]]) -> i64 { match doc { Some(m) => m.len(), None => 0 } }
+fn item_c0(t: i64) -> i64 { let mut m: Map[i64, String] = Map.new(); m.insert(t, f"heap-string-longer-than-sso-{t}"); let doc = Some(m); let b = if let Some(m) = doc { m.len() } else { 0 }; b }
+fn take_c1(doc: Option[Map[i64, String]]) -> i64 { match doc { Some(m) => m.len(), None => 0 } }
+fn item_c1(t: i64) -> i64 { let mut m: Map[i64, String] = Map.new(); m.insert(t, f"heap-string-longer-than-sso-{t}"); let doc = Some(m); let a = match t { 0 => take_c1(doc), _ => 5 }; let b = if let Some(m) = doc { m.len() } else { 0 }; a + b }
+fn item_c2(t: i64) -> i64 { let mut v: Vec[String] = Vec.new(); let s = f"heap-string-longer-than-sso-{t}"; v.push(s); let mut n = 0; while let Some(s) = v.pop() { n = n + s.len(); }; n }
+fn item_c3(t: i64) -> i64 { let s = f"heap-string-longer-than-sso-{t}"; let o = Some(s); let b = if let Some(s) = o { s.len() } else { 0 }; b }
+fn main() {
+    println(f"{item_c0(0)} {item_c0(1)}");
+    println(f"{item_c1(0)} {item_c1(1)}");
+    println(f"{item_c2(0)} {item_c2(1)}");
+    println(f"{item_c3(0)} {item_c3(1)}");
+    println("end")
+}
+"#,
+    ) else {
+        return;
+    };
+    assert_eq!(out, "1 1\n2 6\n29 29\n29 29\nend\n", "got:\n{out}");
+}
+
+/// B-2026-09-25-2 — a `Map`/`Set` local moved into an owner and then read
+/// again (`let doc = Some(m); m.len()`, `v.push(m); m.len()`, a struct field,
+/// a user-enum payload, `Ok(m)`). `uam_defensive_copy` hands the owner a clone
+/// so the source keeps the original, but every one of those sinks still
+/// retracted the source's `FreeMapHandle`, so the original had no freer and
+/// leaked whole on every backend.
+#[test]
+fn e2e_map_read_after_move_into_an_owner_keeps_its_free() {
+    let Some(out) = run_program(
+        r#"fn item_c0(t: i64) -> i64 { let mut m: Map[i64, String] = Map.new(); m.insert(t, f"heap-string-longer-than-sso-{t}"); let doc = Some(m); let b = m.len(); match doc { Some(x) => x.len() + b, None => b } }
+fn item_c1(t: i64) -> i64 { let mut m: Map[i64, String] = Map.new(); m.insert(t, f"heap-string-longer-than-sso-{t}"); let mut v: Vec[Map[i64, String]] = Vec.new(); v.push(m); let b = m.len(); v.len() + b }
+struct H { m: Map[i64, String] }
+fn item_c2(t: i64) -> i64 { let mut m: Map[i64, String] = Map.new(); m.insert(t, f"heap-string-longer-than-sso-{t}"); let h = H { m: m }; let b = m.len(); h.m.len() + b }
+enum E { A(Map[i64, String]), B }
+fn item_c3(t: i64) -> i64 { let mut m: Map[i64, String] = Map.new(); m.insert(t, f"heap-string-longer-than-sso-{t}"); let e = E.A(m); let b = m.len(); match e { E.A(x) => x.len() + b, E.B => b } }
+fn item_c4(t: i64) -> i64 { let mut m: Map[i64, String] = Map.new(); m.insert(t, f"heap-string-longer-than-sso-{t}"); let r: Result[Map[i64, String], i64] = Ok(m); let b = m.len(); match r { Ok(x) => x.len() + b, Err(_) => b } }
+fn item_c5(t: i64) -> i64 { let mut m: Set[String] = Set.new(); m.insert(f"heap-string-longer-than-sso-{t}"); let doc = Some(m); let b = m.len(); match doc { Some(x) => x.len() + b, None => b } }
+fn item_c6(t: i64) -> i64 { let mut m: Set[String] = Set.new(); m.insert(f"heap-string-longer-than-sso-{t}"); let mut v: Vec[Set[String]] = Vec.new(); v.push(m); let b = m.len(); v.len() + b }
+fn main() {
+    println(f"{item_c0(0)} {item_c0(1)}");
+    println(f"{item_c1(0)} {item_c1(1)}");
+    println(f"{item_c2(0)} {item_c2(1)}");
+    println(f"{item_c3(0)} {item_c3(1)}");
+    println(f"{item_c4(0)} {item_c4(1)}");
+    println(f"{item_c5(0)} {item_c5(1)}");
+    println(f"{item_c6(0)} {item_c6(1)}");
+    println("end")
+}
+"#,
+    ) else {
+        return;
+    };
+    assert_eq!(
+        out, "2 2\n2 2\n2 2\n2 2\n2 2\n2 2\n2 2\nend\n",
+        "got:\n{out}"
+    );
+}

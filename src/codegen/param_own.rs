@@ -5111,18 +5111,70 @@ impl<'ctx> super::Codegen<'ctx> {
         field_ptr: PointerValue<'ctx>,
         payload_te: &TypeExpr,
     ) {
+        let Some(layout) = self.type_decls.enum_layouts.get("Option").cloned() else {
+            return;
+        };
+        let some_tag = layout.tags.get("Some").copied().unwrap_or(1);
+        let boxed = self.option_payload_is_boxed(payload_te);
+        self.deep_copy_enum_payload_via_clone_fn(
+            field_ptr,
+            layout.llvm_type,
+            some_tag,
+            payload_te,
+            boxed,
+        );
+    }
+
+    /// B-2026-09-24-30 — the `Result` peer of
+    /// [`Self::deep_copy_option_payload_via_clone_fn`]: each half that is a
+    /// tuple, fixed array or `Map`/`Set` handle is copied through its own
+    /// clone fn when the tag selects it, boxed or inline by `Result`'s own
+    /// payload area.
+    pub(super) fn deep_copy_result_halves_via_clone_fn(
+        &mut self,
+        field_ptr: PointerValue<'ctx>,
+        res_te: &TypeExpr,
+    ) {
+        let Some((ok_te, err_te)) = Self::result_payload_tes(res_te) else {
+            return;
+        };
+        let Some(layout) = self.type_decls.enum_layouts.get("Result").cloned() else {
+            return;
+        };
+        let ok_tag = layout.tags.get("Ok").copied().unwrap_or(0);
+        let err_tag = layout.tags.get("Err").copied().unwrap_or(1);
+        for (tag, half) in [(ok_tag, ok_te), (err_tag, err_te)] {
+            if !self.te_owns_heap_below_buffer(&half) {
+                continue;
+            }
+            let boxed = self.result_payload_is_boxed(&half);
+            self.deep_copy_enum_payload_via_clone_fn(
+                field_ptr,
+                layout.llvm_type,
+                tag,
+                &half,
+                boxed,
+            );
+        }
+    }
+
+    /// Shared body of the two helpers above: on `tag`, replace the payload at
+    /// field 1 of `enum_ty` with a clone made by the payload type's own clone
+    /// fn, into a fresh box when `boxed`.
+    fn deep_copy_enum_payload_via_clone_fn(
+        &mut self,
+        field_ptr: PointerValue<'ctx>,
+        option_ty: StructType<'ctx>,
+        some_tag: u64,
+        payload_te: &TypeExpr,
+        boxed: bool,
+    ) {
         let i64_t = self.context.i64_type();
         let ptr_ty = self.context.ptr_type(AddressSpace::default());
         let Some(fn_val) = self.current_fn else {
             return;
         };
-        let Some(layout) = self.type_decls.enum_layouts.get("Option").cloned() else {
-            return;
-        };
-        let option_ty = layout.llvm_type;
-        let some_tag = layout.tags.get("Some").copied().unwrap_or(1);
         let payload_llty = self.llvm_type_for_type_expr(payload_te);
-        let boxed = self.option_payload_is_boxed(payload_te);
         let clone_fn = self.emit_owning_clone_fn_for_type_expr(payload_te);
 
         let tag_ptr = self

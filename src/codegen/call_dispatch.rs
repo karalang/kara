@@ -11912,7 +11912,7 @@ impl<'ctx> super::Codegen<'ctx> {
                 // struct-literal fix in `exprs.rs`.
                 if let ExprKind::Identifier(n) = &arg.value.kind {
                     let n = n.clone();
-                    self.suppress_map_cleanup_for_tail_identifier(&n);
+                    self.suppress_map_cleanup_for_moved_expr(&arg.value);
                     // B-2026-07-18-29: a struct binding that owns a `shared` /
                     // `Vec[shared]` field, moved whole into this shared-enum
                     // variant, hands its inline shared children to the new box.
@@ -12089,10 +12089,7 @@ impl<'ctx> super::Codegen<'ctx> {
             // hands its handle to the enum payload, so drop the source's
             // scope-exit `FreeMapHandle` (the struct-literal UAF for enum
             // variants; Set/Map share `FreeMapHandle`).
-            if let ExprKind::Identifier(n) = &arg.value.kind {
-                let n = n.clone();
-                self.suppress_map_cleanup_for_tail_identifier(&n);
-            }
+            self.suppress_map_cleanup_for_moved_expr(&arg.value);
         }
 
         Ok(Some(agg.into()))
@@ -12289,10 +12286,7 @@ impl<'ctx> super::Codegen<'ctx> {
                 // this shared-enum struct-variant field — mirrors the
                 // struct-literal field-init paths (`compile_struct_init`).
                 self.suppress_inline_option_agg_binding_transfer(&init.value);
-                if let ExprKind::Identifier(n) = &init.value.kind {
-                    let n = n.clone();
-                    self.suppress_map_cleanup_for_tail_identifier(&n);
-                }
+                self.suppress_map_cleanup_for_moved_expr(&init.value);
             }
             return Ok(ptr.into());
         }
@@ -12348,10 +12342,7 @@ impl<'ctx> super::Codegen<'ctx> {
             // this non-shared enum struct-variant field — mirrors the
             // struct-literal field-init paths (`compile_struct_init`).
             self.suppress_inline_option_agg_binding_transfer(&init.value);
-            if let ExprKind::Identifier(n) = &init.value.kind {
-                let n = n.clone();
-                self.suppress_map_cleanup_for_tail_identifier(&n);
-            }
+            self.suppress_map_cleanup_for_moved_expr(&init.value);
         }
         Ok(agg.into())
     }
@@ -14772,6 +14763,33 @@ impl<'ctx> super::Codegen<'ctx> {
             });
         }
         self.payload_vars.nested_boxed_payload_vars.remove(name);
+    }
+
+    /// B-2026-09-25-2 — the MOVED-ARGUMENT form of
+    /// [`Self::suppress_map_cleanup_for_tail_identifier`], for the sinks that
+    /// take a `Map`/`Set` local into an owner (a variant payload, a `Vec`
+    /// element, a struct field, a tuple slot, a channel). It stands down when
+    /// `uam_defensive_copy` already cloned the handle at this very span: the
+    /// sink then owns the CLONE, and the source, read again after the move,
+    /// still owns the original. Retracting its `FreeMapHandle` anyway left
+    /// that original with no freer at all — `let doc = Some(m); m.len()`
+    /// leaked the whole table on every backend. Keyed on `uam_copied_sites`,
+    /// what was REALLY copied, so it is fail-safe by polarity like the Vec,
+    /// array and inline-payload disarms that already consult it: an unflagged
+    /// move retracts exactly as before.
+    pub(super) fn suppress_map_cleanup_for_moved_expr(&mut self, e: &Expr) {
+        let ExprKind::Identifier(name) = &e.kind else {
+            return;
+        };
+        if self
+            .span_tables
+            .uam_copied_sites
+            .contains(&(e.span.offset, e.span.length))
+        {
+            return;
+        }
+        let name = name.clone();
+        self.suppress_map_cleanup_for_tail_identifier(&name);
     }
 
     pub(super) fn suppress_map_cleanup_for_tail_identifier(&mut self, name: &str) {

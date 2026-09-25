@@ -1563,9 +1563,7 @@ impl<'ctx> super::Codegen<'ctx> {
                 // read-again spelling keeps its independent copy and only the
                 // aliasing spelling is retracted.
                 self.suppress_array_local_move_into_ctor(e);
-                if let ExprKind::Identifier(name) = &e.kind {
-                    self.suppress_map_cleanup_for_tail_identifier(name);
-                }
+                self.suppress_map_cleanup_for_moved_expr(e);
                 // B-2026-07-02-6 — see `literal_pending_elem_hint`.
                 Ok(match elem_hint {
                     Some(h) => self.coerce_literal_elem_to_type_from(v, h, e),
@@ -1721,9 +1719,7 @@ impl<'ctx> super::Codegen<'ctx> {
             self.suppress_inline_option_payload_cleanup_for_moved_arg(e);
             self.suppress_inline_result_payload_cleanup_for_moved_arg(e);
             self.suppress_boxed_enum_payload_cleanup_for_moved_arg(e);
-            if let ExprKind::Identifier(name) = &e.kind {
-                self.suppress_map_cleanup_for_tail_identifier(name);
-            }
+            self.suppress_map_cleanup_for_moved_expr(e);
             // B-2026-07-02-6 — see `literal_pending_elem_hint`.
             vals.push(match elem_hint {
                 Some(h) => self.coerce_literal_elem_to_type_from(v, h, e),

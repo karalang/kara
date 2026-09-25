@@ -438,7 +438,7 @@ impl<'ctx> super::Codegen<'ctx> {
                 self.consume_freshtemp_field_move(e);
                 if let ExprKind::Identifier(name) = &e.kind {
                     self.suppress_user_drop_for_var(name);
-                    self.suppress_map_cleanup_for_tail_identifier(name);
+                    self.suppress_map_cleanup_for_moved_expr(e);
                     self.neutralize_moved_closure_env_slot(name);
                     self.neutralize_moved_aggregate_env_slots(name);
                     self.neutralize_moved_container_env_slots(name);

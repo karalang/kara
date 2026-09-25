@@ -1076,6 +1076,15 @@ impl<'a> CfgBuilder<'a> {
                 let after_scrutinee = self.lower_expr(value, cur, exit, loops);
                 let then_entry = self.new_block();
                 self.add_edge(after_scrutinee, then_entry);
+                // B-2026-09-25-1 — scope the pattern's bindings to an `@armN`
+                // frame, exactly as a `match` arm's are: an `if let` binding
+                // is a fresh name distinct from any outer binding it shadows.
+                // Without the frame, `let doc = Some(m); if let Some(m) = doc
+                // { m.len() }` paired the outer `m`'s consume with the inner
+                // `m`'s read, drew a false `UseAfterMove`, and codegen's
+                // defensive copy then cloned the outer `Map` into `doc` while
+                // the original, counted as moved, was never freed.
+                self.push_arm_rename_frame();
                 // Record a `Define` for each `if let` pattern binding at the
                 // then-branch entry (mirrors `Let` / the match-arm fix,
                 // B-2026-07-22-13). Freshly bound each time the `if let`
@@ -1096,6 +1105,7 @@ impl<'a> CfgBuilder<'a> {
                     );
                 }
                 let then_exit = self.lower_block(then_block, then_entry, exit, loops);
+                self.pop_cleanup_rename_frame();
 
                 let merge = self.new_block();
                 self.add_edge(then_exit, merge);
@@ -1189,7 +1199,11 @@ impl<'a> CfgBuilder<'a> {
                 merge
             }
             ExprKind::WhileLet {
-                label, value, body, ..
+                label,
+                pattern,
+                value,
+                body,
+                ..
             } => {
                 let header = self.new_block();
                 self.add_edge(cur, header);
@@ -1198,6 +1212,23 @@ impl<'a> CfgBuilder<'a> {
                 self.add_edge(after_scrut, body_entry);
                 let merge = self.new_block();
                 self.add_edge(after_scrut, merge);
+                // B-2026-09-25-1 — the `if let` frame's loop twin: the pattern
+                // binds a fresh name on every iteration, so scope it and record
+                // its `Define` exactly as the `for` arm does for its loop var.
+                self.push_arm_rename_frame();
+                for name in pattern_bindings(pattern) {
+                    self.note_local_introduced(&name);
+                    self.record_use(
+                        body_entry,
+                        UseSite {
+                            binding: name.clone(),
+                            kind: UseKind::Define,
+                            span: pattern.span,
+                            consume_origin: ConsumeOrigin::Direct,
+                            place: PlacePath::new(),
+                        },
+                    );
+                }
 
                 let frame = LoopFrame {
                     label: label.clone(),
@@ -1209,6 +1240,7 @@ impl<'a> CfgBuilder<'a> {
                 new_loops.push(frame);
                 let body_exit = self.lower_block(body, body_entry, exit, &new_loops);
                 self.add_edge(body_exit, header);
+                self.pop_cleanup_rename_frame();
                 merge
             }
             ExprKind::For {

@@ -7707,6 +7707,37 @@ impl<'ctx> super::Codegen<'ctx> {
                 path: vpath,
                 patterns: vsubs,
             } => {
+                // B-2026-09-24-30 — a BUILT-IN wrapper one level down
+                // (`Some(Some(s)) => s` over an RC-promoted
+                // `Option[Option[String]]`). `Option`/`Result` are generic,
+                // so the variant-field lookup below finds only the
+                // parameter `T` and cloned nothing: `s` stayed an alias of
+                // the box's String, moved out, and the box's own drop freed
+                // it a second time on every compiled backend. The half's
+                // type comes from the payload's own type arguments instead.
+                let builtin_half = match vpath.last().map(String::as_str) {
+                    Some("Some") => Self::option_payload_te(&payload_te),
+                    Some("Ok") => Self::result_payload_tes(&payload_te).map(|(ok, _)| ok),
+                    Some("Err") => Self::result_payload_tes(&payload_te).map(|(_, err)| err),
+                    _ => None,
+                };
+                if let Some(half) = builtin_half {
+                    if let [sp] = vsubs.as_slice() {
+                        if let PatternKind::Binding(bind_name) = &sp.kind {
+                            let bind_name = bind_name.clone();
+                            if self.borrow_payload_clone_supported(&half)
+                                && self.borrow_binding_escape_check(
+                                    &bind_name,
+                                    escape_exprs,
+                                    escape_blocks,
+                                )
+                            {
+                                self.clone_and_track_borrow_binding(&bind_name, &half);
+                            }
+                        }
+                    }
+                    return Ok(());
+                }
                 let TypeKind::Path(pp) = &payload_te.kind else {
                     return Ok(());
                 };

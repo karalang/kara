@@ -3469,10 +3469,7 @@ impl<'ctx> super::Codegen<'ctx> {
                 // not a tracked map/set identifier. The Map sibling of the
                 // `suppress_source_vec_cleanup_for_arg` cap-zeroing above;
                 // mirrors the enum-variant move path in `call_dispatch.rs`.
-                if let ExprKind::Identifier(n) = &args[0].value.kind {
-                    let n = n.clone();
-                    self.suppress_map_cleanup_for_tail_identifier(&n);
-                }
+                self.suppress_map_cleanup_for_moved_expr(&args[0].value);
                 // Option-binding source moved into a `Vec[Option[String]]`
                 // (slice 3p): the per-element `karac_drop_Option_<payload>`
                 // now frees the payload inside the container, so the source
@@ -3734,10 +3731,7 @@ impl<'ctx> super::Codegen<'ctx> {
                 // container's element walk now (see
                 // `disarm_moved_value_arg_user_drops`).
                 self.disarm_moved_value_arg_user_drops(&args[1].value);
-                if let ExprKind::Identifier(n) = &args[1].value.kind {
-                    let n = n.clone();
-                    self.suppress_map_cleanup_for_tail_identifier(&n);
-                }
+                self.suppress_map_cleanup_for_moved_expr(&args[1].value);
                 self.suppress_inline_option_payload_cleanup_for_moved_arg(&args[1].value);
                 self.suppress_inline_result_payload_cleanup_for_moved_arg(&args[1].value);
                 self.suppress_boxed_enum_payload_cleanup_for_moved_arg(&args[1].value);
@@ -4559,10 +4553,7 @@ impl<'ctx> super::Codegen<'ctx> {
                 // not a tracked map/set identifier. The Map sibling of the
                 // `suppress_source_vec_cleanup_for_arg` cap-zeroing above;
                 // mirrors the enum-variant move path in `call_dispatch.rs`.
-                if let ExprKind::Identifier(n) = &args[0].value.kind {
-                    let n = n.clone();
-                    self.suppress_map_cleanup_for_tail_identifier(&n);
-                }
+                self.suppress_map_cleanup_for_moved_expr(&args[0].value);
                 // Option-binding source moved into a `Vec[Option[String]]`
                 // (slice 3p): the per-element `karac_drop_Option_<payload>`
                 // now frees the payload inside the container, so the source
@@ -4777,10 +4768,7 @@ impl<'ctx> super::Codegen<'ctx> {
                 // not a tracked map/set identifier. The Map sibling of the
                 // `suppress_source_vec_cleanup_for_arg` cap-zeroing above;
                 // mirrors the enum-variant move path in `call_dispatch.rs`.
-                if let ExprKind::Identifier(n) = &args[0].value.kind {
-                    let n = n.clone();
-                    self.suppress_map_cleanup_for_tail_identifier(&n);
-                }
+                self.suppress_map_cleanup_for_moved_expr(&args[0].value);
                 // Option-binding source moved into a `Vec[Option[String]]`
                 // (slice 3p): the per-element `karac_drop_Option_<payload>`
                 // now frees the payload inside the container, so the source
@@ -4953,10 +4941,7 @@ impl<'ctx> super::Codegen<'ctx> {
                 // not a tracked map/set identifier. The Map sibling of the
                 // `suppress_source_vec_cleanup_for_arg` cap-zeroing above;
                 // mirrors the enum-variant move path in `call_dispatch.rs`.
-                if let ExprKind::Identifier(n) = &args[0].value.kind {
-                    let n = n.clone();
-                    self.suppress_map_cleanup_for_tail_identifier(&n);
-                }
+                self.suppress_map_cleanup_for_moved_expr(&args[0].value);
                 // Option-binding source moved into a `Vec[Option[String]]`
                 // (slice 3p): the per-element `karac_drop_Option_<payload>`
                 // now frees the payload inside the container, so the source

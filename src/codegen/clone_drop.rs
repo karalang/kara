@@ -461,7 +461,15 @@ impl<'ctx> super::Codegen<'ctx> {
         // No deep-copyable heap half ⇒ the shallow whole-value copy is already
         // exact (`Result[i64, i64]` and friends); let the dispatcher fall
         // through to the primitive clone.
-        if !self.result_field_direct_vecstr_halves_ok(res_te) {
+        // B-2026-09-24-30 — a tuple / fixed-array / `Map`/`Set` half has no
+        // `{ptr,len,cap}` overlay, so it is copied through its own clone fn,
+        // the path `Option`'s clone took for the same payloads in
+        // B-2026-09-24-25. Before this the dispatcher fell to the shallow
+        // primitive copy, and a `Result[(String, i64), i64]` handed to a
+        // consuming callee out of an RC box was freed by both.
+        let via_clone_fn = !self.result_field_direct_vecstr_halves_ok(res_te)
+            && self.result_halves_clone_fn_ok(res_te);
+        if !via_clone_fn && !self.result_field_direct_vecstr_halves_ok(res_te) {
             return None;
         }
         let result_ty = self.type_decls.enum_layouts.get("Result")?.llvm_type;
@@ -492,7 +500,11 @@ impl<'ctx> super::Codegen<'ctx> {
         // THIS function, then restore (identical discipline to the Option twin).
         let saved_fn = self.current_fn;
         self.current_fn = Some(clone_fn);
-        self.deep_copy_result_inline_heap_halves_in_place(dst, res_te);
+        if via_clone_fn {
+            self.deep_copy_result_halves_via_clone_fn(dst, res_te);
+        } else {
+            self.deep_copy_result_inline_heap_halves_in_place(dst, res_te);
+        }
         self.current_fn = saved_fn;
         self.builder.build_return(None).unwrap();
 
@@ -500,6 +512,32 @@ impl<'ctx> super::Codegen<'ctx> {
             self.builder.position_at_end(bb);
         }
         Some(clone_fn)
+    }
+
+    /// B-2026-09-24-30 — can every heap-owning half of `res_te` be cloned
+    /// through its own clone fn, with at least one half a tuple, fixed array
+    /// or `Map`/`Set` (the shapes the `{ptr,len,cap}` overlay copy cannot
+    /// reach)? A direct `String`/`Vec` half rides along, since its clone fn
+    /// copies the same three words.
+    fn result_halves_clone_fn_ok(&self, res_te: &TypeExpr) -> bool {
+        let Some((ok_te, err_te)) = Self::result_payload_tes(res_te) else {
+            return false;
+        };
+        let mut any = false;
+        for half in [&ok_te, &err_te] {
+            if !self.te_owns_heap_below_buffer(half) {
+                continue;
+            }
+            let wide = self.option_payload_map_or_set_drop_ok(half)
+                || matches!(&half.kind, TypeKind::Tuple(elems) if !elems.is_empty())
+                || self.array_elem_and_len(half).is_some();
+            if wide {
+                any = true;
+            } else if !self.result_half_is_direct_vecstr(half) {
+                return false;
+            }
+        }
+        any
     }
 
     /// Emit (or fetch) the cloned-String fn — a thin wrapper that just

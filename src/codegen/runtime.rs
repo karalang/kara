@@ -1760,9 +1760,25 @@ impl<'ctx> super::Codegen<'ctx> {
         {
             return;
         }
-        let Some(value_drop) = self.vec_elem_agg_drop_for_type_expr(te) else {
-            return;
+        // B-2026-09-24-30 — an `Option[Map]`/`Option[Set]` value has no
+        // aggregate drop (its payload is a handle, freed by the
+        // `FreeInlineOptionMapPayload` action a plain local registers), so
+        // the box ran none and leaked the map. That same action, emitted
+        // over the box's value, is its drop.
+        // The `Result` twin takes the drop a struct field of that type gets
+        // (`emit_result_drop_fn`, B-2026-08-07-19), which walks either half.
+        let value_drop = self.vec_elem_agg_drop_for_type_expr(te).or_else(|| {
+            self.result_field_map_or_set_half_ok(te)
+                .and_then(|(ok, err)| self.emit_result_drop_fn(&ok, &err))
+        });
+        let map_drop = if value_drop.is_none() {
+            self.option_inline_map_payload(te)
+        } else {
+            None
         };
+        if value_drop.is_none() && map_drop.is_none() {
+            return;
+        }
         let ptr_ty = self.context.ptr_type(AddressSpace::default());
         let saved_bb = self.builder.get_insert_block();
         let saved_fn = self.current_fn;
@@ -1787,9 +1803,24 @@ impl<'ctx> super::Codegen<'ctx> {
             .builder
             .build_struct_gep(box_heap_type, box_ptr, 1, "rcfb.value")
             .unwrap();
-        self.builder
-            .build_call(value_drop, &[value_ptr.into()], "")
-            .unwrap();
+        if let Some(value_drop) = value_drop {
+            self.builder
+                .build_call(value_drop, &[value_ptr.into()], "")
+                .unwrap();
+        } else if let (Some(map_drop), Some(layout)) = (
+            map_drop,
+            self.type_decls.enum_layouts.get("Option").cloned(),
+        ) {
+            let action = CleanupAction::FreeInlineOptionMapPayload {
+                option_slot: value_ptr,
+                option_ty: layout.llvm_type,
+                some_tag: layout.tags.get("Some").copied().unwrap_or(1),
+                map_drop,
+            };
+            let vec_ty = self.vec_struct_type();
+            let i64_t = self.context.i64_type();
+            self.emit_cleanup_action(&action, drop_fn, vec_ty, ptr_ty, i64_t);
+        }
         self.builder.build_return(None).unwrap();
         self.current_fn = saved_fn;
         if let Some(bb) = saved_bb {
@@ -1855,12 +1886,15 @@ impl<'ctx> super::Codegen<'ctx> {
         let hands_back = self.call_arg_flows_into_return(callee, idx)
             && !self.optres_escaping_param_entry_copied(callee, idx);
         // Only when the box frees its own original: a payload with no value
-        // drop (`Option[Map[..]]`) still leaks it, and a clone would be a
-        // second leaked copy rather than a balanced one.
+        // drop would still leak it, and a clone would be a second leaked copy
+        // rather than a balanced one.
         let transfers = !self.call_arg_flows_into_return(callee, idx)
             && self.callee_optres_param_entry_copied(callee, idx).is_none()
             && !payload_is_user_agg
-            && self.vec_elem_agg_drop_for_type_expr(&te).is_some();
+            && (self.vec_elem_agg_drop_for_type_expr(&te).is_some()
+                // B-2026-09-24-30 — the `Map`/`Set` handle box's value drop.
+                || self.option_inline_map_payload(&te).is_some()
+            || self.result_field_map_or_set_half_ok(&te).is_some());
         if !hands_back && !transfers {
             return val;
         }
