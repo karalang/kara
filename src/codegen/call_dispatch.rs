@@ -2539,6 +2539,7 @@ impl<'ctx> super::Codegen<'ctx> {
                 // registrar).
                 let payload_skip = self.enum_arg_payload_skip(&name, i);
                 let field_payload_paths = self.callee_escaping_field_payload_paths(&name, i);
+                self.drop_rc.aggregate_arg_escape_stores = stored_in_outliving_place;
                 self.track_inline_owned_aggregate_arg_parts(
                     val,
                     &a.value,
@@ -2548,6 +2549,7 @@ impl<'ctx> super::Codegen<'ctx> {
                     declared_tes.as_deref(),
                     payload_skip,
                 );
+                self.drop_rc.aggregate_arg_escape_stores = false;
             }
             // B-2026-08-28-16 — a PLACE tuple argument (`take(q)`) whose
             // ELEMENT escapes through the callee's return. Everything above is
@@ -9224,11 +9226,29 @@ impl<'ctx> super::Codegen<'ctx> {
                             return;
                         }
                     }
+                    // B-2026-09-25-14 — and the ESCAPING temp the callee
+                    // ENTRY-COPIES. `id(mk(3))` over `fn id(d: P) -> P { d }`
+                    // (generic or not) hands back the callee's copy, so the
+                    // caller's temp is an orphaned original that nothing freed:
+                    // 29 B lost per call on every compiled surface, while a
+                    // struct literal and a named argument were clean. MEMORY
+                    // ONLY, as on the `has_user_drop` arm's escape leg above:
+                    // any field bodies belong to the result's consumer. Not on
+                    // the STORE route (`aggregate_arg_escape_stores`): a
+                    // conditionally stored param is RC-promoted, not copied, and
+                    // its box frees the value (B-2026-09-07-50's `pf` cell).
+                    let escaping_entry_copied = arg_escapes_frame
+                        && !self.drop_rc.aggregate_arg_escape_stores
+                        && self.arg_is_entry_copied_heap_struct(arg);
                     if !has_user_drop
-                        && !arg_escapes_frame
+                        && (!arg_escapes_frame || escaping_entry_copied)
                         && self.type_decls.struct_types.contains_key(&ret_ty_name)
                     {
-                        let bodies_fn = self.field_bodies_fn_for_owned_temp(&ret_ty_name);
+                        let bodies_fn = if escaping_entry_copied {
+                            None
+                        } else {
+                            self.field_bodies_fn_for_owned_temp(&ret_ty_name)
+                        };
                         // B-2026-08-02-28 — the MEMORY half, which this arm
                         // omitted: it registered the bodies walk and returned,
                         // so `use_it(mk(xs))` where `mk() -> Holder` and
@@ -9287,7 +9307,11 @@ impl<'ctx> super::Codegen<'ctx> {
                             // making the bodies run BEFORE the fields they read
                             // are freed.
                             if needs_memory_drop {
-                                self.track_struct_var(&ret_ty_name, slot);
+                                // B-2026-09-25-14 — with the instantiation of a
+                                // generic return type (`W[String]`), which the
+                                // bare name's drop cannot free (B-2026-09-25-15).
+                                let inst = self.freshtemp_call_struct_inst(arg);
+                                self.track_struct_var_inst(&ret_ty_name, slot, inst);
                             }
                             if let Some(bodies_fn) = bodies_fn {
                                 self.track_user_drop_var_with_fn(

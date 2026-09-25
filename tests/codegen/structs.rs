@@ -8538,3 +8538,49 @@ fn main() {
     };
     assert_eq!(out, "dR2\ndR1\nv=2\none\ndR4\ndR3\nv=3\ntwo\ndR6\ndR5\nv=1\nthree\ndR8\ndR7\nv=8\nfour\ndR10\ndR9\nv=9\nfive\ndR12\ndR11\nv=12\nsix\ndR15\ndR14\ndR13\nv=14\nseven\ndR19\ndR18\nv=19\neight\ndR21\ndR20\nv=20\nnine\nend\n");
 }
+
+/// B-2026-09-25-14 — a struct returned by a CALL and passed straight to a
+/// param that hands it back: `id(mk(3))` over `fn id(d: P) -> P { d }`,
+/// generic or not. The callee entry-copies and returns its copy, and the
+/// caller registered nothing for its own temp, so the original's heap fields
+/// leaked on every compiled surface; a struct literal and a named argument
+/// were clean.
+#[test]
+fn test_e2e_call_result_struct_handed_back_by_callee_frees_original() {
+    let out = run_program(
+        r#"struct R { id: i64 }
+impl Drop for R { fn drop(mut ref self) { println(f"d{self.id}") } }
+struct P { s: String, n: i64 }
+struct Q { o: Option[String], v: Vec[String] }
+struct H { s: String, r: R }
+struct W[T] { v: T, k: i64 }
+fn id2[T](d: T) -> T { d }
+fn idp(d: P) -> P { d }
+fn sel[T](c: bool, a: T, b: T) -> T { if c { a } else { b } }
+fn mk(i: i64) -> P { P { s: f"heap-string-longer-than-sso-{i}", n: i } }
+fn mkq(i: i64) -> Q { let mut v: Vec[String] = Vec.new(); v.push(f"heap-string-longer-than-sso-v{i}"); Q { o: Some(f"heap-string-longer-than-sso-o{i}"), v: v } }
+fn mkh(i: i64) -> H { H { s: f"heap-string-longer-than-sso-h{i}", r: R { id: i } } }
+fn mkw(i: i64) -> W[String] { W { v: f"heap-string-longer-than-sso-w{i}", k: i } }
+fn main() {
+    for i in 0..2 {
+        let r = id2(mk(i));
+        println(r.n);
+        println(idp(mk(i + 10)).n);
+        println(sel(i == 0, mk(20), mk(21)).n);
+        let q = id2(mkq(i));
+        println(q.v.len());
+        let h = id2(mkh(i + 30));
+        println(h.r.id);
+        println(id2(mkw(i)).k);
+        let _ = id2(mk(50));
+    }
+    println("end")
+}
+"#,
+    );
+    assert_eq!(
+        out.as_deref(),
+        Some("0\n10\n20\n1\n30\nd30\n0\n1\n11\n21\n1\n31\nd31\n1\nend\n"),
+        "must match --interp"
+    );
+}

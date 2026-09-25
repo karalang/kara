@@ -3238,3 +3238,49 @@ fn main() {
         "[{label}] unexpected stdout (ASAN passed, output mismatched)"
     );
 }
+
+/// B-2026-09-25-14 — a struct returned by a CALL and passed straight to a
+/// param that hands it back: `id(mk(3))` over `fn id(d: P) -> P { d }`,
+/// generic or not. The callee entry-copies and returns its copy, and the
+/// caller registered nothing for its own temp, so the original's heap fields
+/// leaked on every compiled surface; a struct literal and a named argument
+/// were clean.
+#[test]
+fn asan_call_result_struct_handed_back_by_callee_frees_original() {
+    assert_clean_asan_run_min_allocs(
+        r#"struct R { id: i64 }
+impl Drop for R { fn drop(mut ref self) { println(f"d{self.id}") } }
+struct P { s: String, n: i64 }
+struct Q { o: Option[String], v: Vec[String] }
+struct H { s: String, r: R }
+struct W[T] { v: T, k: i64 }
+fn id2[T](d: T) -> T { d }
+fn idp(d: P) -> P { d }
+fn sel[T](c: bool, a: T, b: T) -> T { if c { a } else { b } }
+fn mk(i: i64) -> P { P { s: f"heap-string-longer-than-sso-{i}", n: i } }
+fn mkq(i: i64) -> Q { let mut v: Vec[String] = Vec.new(); v.push(f"heap-string-longer-than-sso-v{i}"); Q { o: Some(f"heap-string-longer-than-sso-o{i}"), v: v } }
+fn mkh(i: i64) -> H { H { s: f"heap-string-longer-than-sso-h{i}", r: R { id: i } } }
+fn mkw(i: i64) -> W[String] { W { v: f"heap-string-longer-than-sso-w{i}", k: i } }
+fn main() {
+    for i in 0..2 {
+        let r = id2(mk(i));
+        println(r.n);
+        println(idp(mk(i + 10)).n);
+        println(sel(i == 0, mk(20), mk(21)).n);
+        let q = id2(mkq(i));
+        println(q.v.len());
+        let h = id2(mkh(i + 30));
+        println(h.r.id);
+        println(id2(mkw(i)).k);
+        let _ = id2(mk(50));
+    }
+    println("end")
+}
+"#,
+        &[
+            "0", "10", "20", "1", "30", "d30", "0", "1", "11", "21", "1", "31", "d31", "1", "end",
+        ],
+        "asan_call_result_struct_handed_back_by_callee_frees_original",
+        20,
+    );
+}

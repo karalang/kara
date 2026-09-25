@@ -3444,6 +3444,7 @@ impl<'ctx> super::Codegen<'ctx> {
                 // here: at a generic call site it carries the instantiation and
                 // the declared `(Bag[T], i64)` does not.
                 let declared_tes = self.callee_tuple_param_elem_type_exprs(name, i);
+                self.drop_rc.aggregate_arg_escape_stores = stored_in_outliving_place;
                 self.track_inline_owned_aggregate_arg_inst(
                     val,
                     &a.value,
@@ -3460,6 +3461,7 @@ impl<'ctx> super::Codegen<'ctx> {
                     // separately under the B-2026-09-05-18 family).
                     None,
                 );
+                self.drop_rc.aggregate_arg_escape_stores = false;
             }
         }
         // The retraction itself runs with the CALLER's substitution restored —

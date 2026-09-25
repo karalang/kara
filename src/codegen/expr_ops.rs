@@ -1613,7 +1613,7 @@ impl<'ctx> super::Codegen<'ctx> {
     /// W[T]`), with the callee's type params bound at this call site. `None`
     /// for anything else, including a non-generic struct, which keeps the
     /// name-keyed drop exactly as before.
-    fn freshtemp_call_struct_inst(&self, object: &Expr) -> Option<TypeExpr> {
+    pub(super) fn freshtemp_call_struct_inst(&self, object: &Expr) -> Option<TypeExpr> {
         let ExprKind::Call { callee, .. } = &object.kind else {
             return None;
         };

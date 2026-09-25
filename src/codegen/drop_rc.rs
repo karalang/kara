@@ -294,6 +294,14 @@ pub(crate) struct DropRc<'ctx> {
     ///
     /// Per function: cleared, saved and restored alongside them.
     pub(crate) cond_returned_owned_params: std::collections::HashSet<String>,
+    /// B-2026-09-25-14 — set by an argument site, around its call to the
+    /// aggregate-arg registrar, when the argument escapes by being STORED into
+    /// a place that outlives the call (not only handed back). The registrar's
+    /// memory-only drop for an escaping entry-copied call temp is for the
+    /// RETURN route: a conditionally stored param is RC-promoted rather than
+    /// copied, so a caller drop there frees the box's value a second time.
+    /// False everywhere else.
+    pub(crate) aggregate_arg_escape_stores: bool,
     /// B-2026-08-30-54 / B-2026-09-02-10 — for each base binding a FIELD of
     /// which received a param view, that field's OWN per-path flag: `true`
     /// while the base still owns the field's value, `false` on a path where a
