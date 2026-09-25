@@ -80,6 +80,33 @@ impl<'a> super::Interpreter<'a> {
                 self.moved_out_container_bodies_bindings
                     .insert(recv.clone());
             }
+            // B-2026-09-25-23 — a one-hop FIELD receiver (`h.o.unwrap()`)
+            // moves that field out exactly as `let x = h.o` does, so it takes
+            // the same `(src, field)` mask. Without it `h`'s field walk ran the
+            // payload's `Drop` body at `h`'s death and the result ran it again.
+            // Limited to the unwrap family, the set codegen's twin
+            // (`suppress_place_optres_field_unwrap_source`) neutralizes; an
+            // RC-promoted base retains rather than moves, as at the `let` arm.
+            if matches!(
+                method,
+                "unwrap" | "expect" | "unwrap_or" | "unwrap_err" | "expect_err"
+            ) {
+                if let ExprKind::FieldAccess {
+                    object: base,
+                    field,
+                } = &object.kind
+                {
+                    if let ExprKind::Identifier(src) = &base.kind {
+                        if !self
+                            .rc_promoted_consume_spans
+                            .contains(&(base.span.offset, base.span.length))
+                        {
+                            self.moved_out_struct_field_bodies
+                                .insert((src.clone(), field.clone()));
+                        }
+                    }
+                }
+            }
         }
         match method {
             "unwrap" => {

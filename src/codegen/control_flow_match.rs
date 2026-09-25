@@ -6898,6 +6898,176 @@ impl<'ctx> super::Codegen<'ctx> {
         }
     }
 
+    /// B-2026-09-25-23 (unwrap leg) — `<ownedplace>.optresfield.unwrap()` and
+    /// the rest of the consuming unwrap family. The extracted payload is a
+    /// shallow alias of the field's buffer and now belongs to the result, so
+    /// the owning struct's drop must skip it: zero the SOURCE exactly as the
+    /// assign leg does. `suppress_inline_option_result_binding_move`, the
+    /// identifier sibling wired at the same sites, returns at once for a
+    /// `FieldAccess`, so `h.o.unwrap()` freed the buffer once through the
+    /// result and again through `h`'s drop while `let x = h.o; x.unwrap()`
+    /// was clean.
+    ///
+    /// A container ELEMENT's field is left alone: reading `g[0].o` copies
+    /// (B-2026-09-24-6), so emptying the element here would change what a
+    /// later read sees.
+    ///
+    /// A fresh temporary's field (`mk().o.unwrap()`) goes through the
+    /// temp-projection consumer instead, since there is no place to zero.
+    pub(super) fn suppress_place_optres_field_unwrap_source(
+        &mut self,
+        object: &Expr,
+        method: &str,
+    ) {
+        let ExprKind::FieldAccess {
+            object: base,
+            field,
+        } = &object.kind
+        else {
+            return;
+        };
+        // A fresh temporary's field (`mk().o.unwrap()`): the temp was staged
+        // when the projection compiled, and the consumer takes the field the
+        // way a `let` of it does. No-op unless that staged projection is
+        // this very receiver.
+        self.consume_freshtemp_field_move(object);
+        if self.place_chain_reaches_index(object) {
+            return;
+        }
+        let Some(field_te) = self.plain_field_type_expr(base, field) else {
+            return;
+        };
+        // The admission is the struct drop's own, WITHOUT the boxed-payload
+        // exclusion the call-argument leg needs: that leg hands a box to a
+        // callee that frees nothing, whereas the unwrap lowering frees the box
+        // itself and the result owns the interior, so exactly one owner
+        // remains once the field is zeroed.
+        //
+        // The one narrowing is `Result.unwrap_or`: its `Err` branch frees the
+        // payload only for a direct String/Vec, so any other `Err` half keeps
+        // the field armed (zeroing it would leak whatever the branch left).
+        //
+        // A `Map`/`Set` payload is left out: `let q = o.unwrap()` over a plain
+        // `Option[Map[..]]` binding already leaks the map (B-2026-09-25-24),
+        // so handing the field's map to that result would turn a clean field
+        // spelling into the same leak. The struct drop keeps freeing it.
+        let is_result = if let Some(pt) = Self::option_payload_te(&field_te) {
+            let admitted = self
+                .option_inner_shared_type_for_type_expr(&field_te)
+                .is_none()
+                && (self.is_string_type_expr(&pt)
+                    || self.extract_vec_elem_type(&pt).is_some()
+                    || self.option_payload_struct_or_enum_drop_ok(&pt));
+            if !admitted {
+                return;
+            }
+            false
+        } else if let Some((_ok, err)) = Self::result_payload_tes(&field_te) {
+            let admitted = if method == "unwrap_or" {
+                self.result_field_direct_vecstr_halves_ok(&field_te)
+                    && (self.result_half_is_direct_vecstr(&err)
+                        || crate::codegen::vec_method::is_trivially_copyable_te(&err))
+            } else {
+                self.result_field_direct_vecstr_halves_ok(&field_te)
+                    || self.result_field_struct_enum_payload_ok(&field_te)
+            };
+            if !admitted {
+                return;
+            }
+            true
+        } else {
+            return;
+        };
+        let Some(src_ptr) = self.field_chain_place_ptr(object) else {
+            return;
+        };
+        // The BODIES half, as the `let` leg pairs it. The memory zero below
+        // stops the struct drop freeing the payload, but a `Result`'s tag
+        // survives the payload-area zero, so without the mask the struct's
+        // `Drop`-body walk still ran a user body on the emptied payload
+        // (measured: a bare `drop ` after the result had run it properly).
+        self.disarm_struct_field_move_bodies(object);
+        if is_result {
+            let Some(layout) = self.type_decls.enum_layouts.get("Result") else {
+                return;
+            };
+            let result_ty = layout.llvm_type;
+            self.zero_result_payload_area(result_ty, src_ptr, "respl.unwrapmove");
+        } else {
+            self.zero_option_field_tag_at(src_ptr);
+        }
+    }
+
+    /// B-2026-09-25-23 (element leg) — the receiver of a consuming unwrap is a
+    /// container element's field (`g[0].o.unwrap()`). Reading that field
+    /// copies (B-2026-09-24-6), so hand the unwrap a deep clone of it: the
+    /// result then owns its own buffer and the element keeps its payload.
+    /// Without this the extracted payload aliased the element's buffer and
+    /// both freed it.
+    ///
+    /// Admits an `Option` over a direct String/Vec or a non-shared struct/enum
+    /// whose copy runs no user `Drop` body, and a `Result` whose halves are
+    /// each a direct String/Vec or a primitive. Any other shape returns `recv`
+    /// unchanged.
+    pub(super) fn copy_index_rooted_optres_field_receiver(
+        &mut self,
+        object: &Expr,
+        recv: inkwell::values::StructValue<'ctx>,
+    ) -> inkwell::values::StructValue<'ctx> {
+        let ExprKind::FieldAccess {
+            object: base,
+            field,
+        } = &object.kind
+        else {
+            return recv;
+        };
+        if !self.place_chain_reaches_index(object) {
+            return recv;
+        }
+        let Some(field_te) = self.plain_field_type_expr(base, field) else {
+            return recv;
+        };
+        let half_ok = |this: &Self, h: &TypeExpr| {
+            this.result_half_is_direct_vecstr(h)
+                || crate::codegen::vec_method::is_trivially_copyable_te(h)
+        };
+        // The `let` leg's copy class (`clone_index_rooted_optres_field_into`)
+        // less `Map`/`Set` payloads, for the reason the place leg gives.
+        let admitted = if let Some(pt) = Self::option_payload_te(&field_te) {
+            self.result_half_is_direct_vecstr(&pt)
+                || (self
+                    .option_inner_shared_type_for_type_expr(&field_te)
+                    .is_none()
+                    && !self.elem_te_runs_user_drop(&pt)
+                    && self.option_payload_struct_or_enum_drop_ok(&pt))
+        } else if let Some((ok, err)) = Self::result_payload_tes(&field_te) {
+            half_ok(self, &ok) && half_ok(self, &err)
+        } else {
+            false
+        };
+        if !admitted {
+            return recv;
+        }
+        let Some(fn_val) = self.current_fn else {
+            return recv;
+        };
+        let slot_ty = self.llvm_type_for_type_expr(&field_te);
+        if slot_ty != recv.get_type().into() {
+            return recv;
+        }
+        let clone_fn = self.emit_clone_fn_for_type_expr(&field_te);
+        let src = self.create_entry_alloca(fn_val, "elem.optres.uw.src", slot_ty);
+        let dst = self.create_entry_alloca(fn_val, "elem.optres.uw.dst", slot_ty);
+        self.builder.build_store(src, recv).unwrap();
+        self.builder
+            .build_call(clone_fn, &[src.into(), dst.into()], "")
+            .unwrap();
+        self.builder
+            .build_load(slot_ty, dst, "elem.optres.uw.copy")
+            .unwrap()
+            .into_struct_value()
+    }
+
     /// B-2026-07-28-16 (call-argument leg) — `consume(nd.optresfield)` where
     /// the callee's parameter OWNS the value. Zero the source so the owning
     /// struct's scope-exit drop skips the payload the callee now frees.

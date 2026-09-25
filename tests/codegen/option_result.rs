@@ -11372,3 +11372,102 @@ fn main() {
         "must match --interp"
     );
 }
+
+/// B-2026-09-25-23 — a consuming unwrap (`unwrap`, `expect`, `unwrap_or`,
+/// `unwrap_err`) whose receiver is an `Option`/`Result` STRUCT FIELD. The
+/// payload moved into the result but the owning struct's drop still freed
+/// it, so `h.o.unwrap()` double freed on every compiled surface while
+/// `let x = h.o; x.unwrap()` was clean. Covers a local, a by-value param, a
+/// fresh call result (`mk(4).o`), a conditional move taken and not taken,
+/// `Result` fields, boxed struct/enum payloads, and a container element's
+/// field (`g[0].o`), which is copied so the element keeps its payload.
+#[test]
+fn test_e2e_optres_field_unwrap_moves_the_field_once() {
+    let out = run_program(
+        r#"struct P { a: String, b: String }
+enum K { A(String), B }
+struct H { o: Option[String], n: i64 }
+struct Hr { r: Result[String, i64], e: Result[String, String] }
+struct Hp { p: Option[P], k: Option[K], q: Result[P, i64] }
+fn mk(i: i64) -> H { H { o: Some(f"heap-string-longer-than-sso-{i}"), n: i } }
+fn take(h: H) -> String { h.o.unwrap() }
+fn main() {
+    let h1 = mk(1);
+    println(h1.o.unwrap());
+    let h2 = mk(2);
+    let x2 = h2.o.expect("m");
+    println(x2);
+    println(h2.n);
+    println(take(mk(3)));
+    println(mk(4).o.unwrap());
+    let h5 = mk(5);
+    println(h5.o.unwrap_or(f"dflt-string-longer-than-sso-5"));
+    let h6 = H { o: None, n: 6 };
+    println(h6.o.unwrap_or(f"dflt-string-longer-than-sso-6"));
+    let h7 = mk(7);
+    let x7 = if h7.n > 0 { h7.o.unwrap() } else { f"other" };
+    println(x7);
+    let h8 = mk(8);
+    let x8 = if h8.n > 100 { h8.o.unwrap() } else { f"other-string-longer-than-sso-8" };
+    println(x8);
+    let hr = Hr { r: Ok(f"ok-string-longer-than-sso-9"), e: Err(f"err-string-longer-than-sso-10") };
+    println(hr.r.unwrap());
+    println(hr.e.unwrap_err());
+    let hr2 = Hr { r: Err(11), e: Err(f"err-string-longer-than-sso-12") };
+    println(hr2.r.unwrap_or(f"dflt-string-longer-than-sso-11"));
+    println(hr2.e.unwrap_or(f"dflt-string-longer-than-sso-12"));
+    let hp = Hp { p: Some(P { a: f"aaa-string-longer-than-sso-13", b: f"b" }), k: Some(K.A(f"kkk-string-longer-than-sso-14")), q: Ok(P { a: f"a", b: f"qqq-string-longer-than-sso-15" }) };
+    let p = hp.p.unwrap();
+    println(p.a);
+    match hp.k.unwrap() { K.A(s) => println(s), K.B => println("b") }
+    println(hp.q.unwrap().b);
+    let g = [mk(16)];
+    println(g[0].o.unwrap());
+    println(g[0].o.unwrap());
+    println(g[0].o.is_some());
+    let v = vec![Hp { p: Some(P { a: f"aaa-string-longer-than-sso-17", b: f"b" }), k: None, q: Err(0) }];
+    println(v[0].p.unwrap().a);
+    println(v[0].p.is_some());
+    let w = vec![Hr { r: Ok(f"ok-string-longer-than-sso-18"), e: Err(f"err-string-longer-than-sso-19") }];
+    println(w[0].r.unwrap());
+    println(w[0].e.unwrap_or(f"dflt"));
+    println(w[0].e.unwrap_err());
+    println("end")
+}
+"#,
+    );
+    assert_eq!(
+        out.as_deref(),
+        Some("heap-string-longer-than-sso-1\nheap-string-longer-than-sso-2\n2\nheap-string-longer-than-sso-3\nheap-string-longer-than-sso-4\nheap-string-longer-than-sso-5\ndflt-string-longer-than-sso-6\nheap-string-longer-than-sso-7\nother-string-longer-than-sso-8\nok-string-longer-than-sso-9\nerr-string-longer-than-sso-10\ndflt-string-longer-than-sso-11\ndflt-string-longer-than-sso-12\naaa-string-longer-than-sso-13\nkkk-string-longer-than-sso-14\nqqq-string-longer-than-sso-15\nheap-string-longer-than-sso-16\nheap-string-longer-than-sso-16\ntrue\naaa-string-longer-than-sso-17\ntrue\nok-string-longer-than-sso-18\ndflt\nerr-string-longer-than-sso-19\nend\n"),
+        "must match --interp"
+    );
+}
+
+/// B-2026-09-25-23 — the `Drop`-body half: a user-`Drop` payload unwrapped out
+/// of a struct field runs its body once, at the result's last use. The
+/// interpreter ran it a second time at the holder's death, and a `Result`
+/// field's tag survived the compiled payload zero, so its walk ran the body
+/// on the emptied value. Also a conditional move taken and not taken.
+#[test]
+fn test_e2e_optres_field_unwrap_runs_payload_drop_once() {
+    let out = run_program(
+        r#"struct R { s: String }
+impl Drop for R { fn drop(mut ref self) { println(f"drop {self.s}") } }
+struct H { o: Option[R], r: Result[R, i64], p: R, n: i64 }
+fn mk(t: String, n: i64) -> H { H { o: Some(R { s: f"o{t}" }), r: Ok(R { s: f"r{t}" }), p: R { s: f"p{t}" }, n: n } }
+fn main() {
+    { let h1 = mk("1", 1); let x = h1.o.unwrap(); println(x.s); println("k1") }
+    { let h2 = mk("2", 1); let y = h2.r.unwrap(); println(y.s); println("k2") }
+    { let h3 = mk("3", 1); if h3.n > 0 { let x = h3.o.unwrap(); println(x.s) } else { println("no") }; println("k3") }
+    { let h4 = mk("4", 0); if h4.n > 0 { let x = h4.o.unwrap(); println(x.s) } else { println("no") }; println("k4") }
+    { let h5 = H { o: None, r: Err(5), p: R { s: f"p5" }, n: 5 }; let y = h5.r.unwrap_or(R { s: f"d5" }); println(y.s); println("k5") }
+    println("end")
+}
+"#,
+    );
+    assert_eq!(
+        out.as_deref(),
+        Some("drop p1\ndrop r1\no1\ndrop o1\nk1\ndrop p2\ndrop o2\nr2\ndrop r2\nk2\no3\ndrop o3\ndrop p3\ndrop r3\nk3\nno\ndrop p4\ndrop r4\ndrop o4\nk4\ndrop p5\nd5\ndrop d5\nk5\nend\n"),
+        "must match --interp"
+    );
+}

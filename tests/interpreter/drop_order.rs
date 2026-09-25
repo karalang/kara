@@ -6948,3 +6948,26 @@ fn main() {
 }"#);
     assert_eq!(out, "ret\nd1\nd2\nk1\ntl\nk2 4\nd3\nd4\nsv\nk3 3 5\nd5\nd6\none\nd7\nk4\ntl\nd8\nd9\nk5\nmixed\nd10\nd11\nk6\nmixed\nd12\nd13\nk7\nnest\nk8 1\nd14\nd15\ngnr\nk9 16\nd16\nd17\ngone\nd18\nk10\nend\n", "got:\n{out}");
 }
+
+/// B-2026-09-25-23 — the `Drop`-body half: a user-`Drop` payload unwrapped out
+/// of a struct field runs its body once, at the result's last use. The
+/// interpreter ran it a second time at the holder's death, and a `Result`
+/// field's tag survived the compiled payload zero, so its walk ran the body
+/// on the emptied value. Also a conditional move taken and not taken.
+#[test]
+fn interp_optres_field_unwrap_runs_payload_drop_once() {
+    let out = run(r#"struct R { s: String }
+impl Drop for R { fn drop(mut ref self) { println(f"drop {self.s}") } }
+struct H { o: Option[R], r: Result[R, i64], p: R, n: i64 }
+fn mk(t: String, n: i64) -> H { H { o: Some(R { s: f"o{t}" }), r: Ok(R { s: f"r{t}" }), p: R { s: f"p{t}" }, n: n } }
+fn main() {
+    { let h1 = mk("1", 1); let x = h1.o.unwrap(); println(x.s); println("k1") }
+    { let h2 = mk("2", 1); let y = h2.r.unwrap(); println(y.s); println("k2") }
+    { let h3 = mk("3", 1); if h3.n > 0 { let x = h3.o.unwrap(); println(x.s) } else { println("no") }; println("k3") }
+    { let h4 = mk("4", 0); if h4.n > 0 { let x = h4.o.unwrap(); println(x.s) } else { println("no") }; println("k4") }
+    { let h5 = H { o: None, r: Err(5), p: R { s: f"p5" }, n: 5 }; let y = h5.r.unwrap_or(R { s: f"d5" }); println(y.s); println("k5") }
+    println("end")
+}
+"#);
+    assert_eq!(out, "drop p1\ndrop r1\no1\ndrop o1\nk1\ndrop p2\ndrop o2\nr2\ndrop r2\nk2\no3\ndrop o3\ndrop p3\ndrop r3\nk3\nno\ndrop p4\ndrop r4\ndrop o4\nk4\ndrop p5\nd5\ndrop d5\nk5\nend\n", "got:\n{out}");
+}

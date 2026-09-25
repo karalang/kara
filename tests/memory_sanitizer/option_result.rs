@@ -8844,3 +8844,97 @@ fn main() {
         10,
     );
 }
+
+/// B-2026-09-25-23 — a consuming unwrap (`unwrap`, `expect`, `unwrap_or`,
+/// `unwrap_err`) whose receiver is an `Option`/`Result` STRUCT FIELD. The
+/// payload moved into the result but the owning struct's drop still freed
+/// it, so `h.o.unwrap()` double freed on every compiled surface while
+/// `let x = h.o; x.unwrap()` was clean. Covers a local, a by-value param, a
+/// fresh call result (`mk(4).o`), a conditional move taken and not taken,
+/// `Result` fields, boxed struct/enum payloads, and a container element's
+/// field (`g[0].o`), which is copied so the element keeps its payload.
+#[test]
+fn asan_optres_field_unwrap_moves_the_field_once() {
+    assert_clean_asan_run_min_allocs(
+        r#"struct P { a: String, b: String }
+enum K { A(String), B }
+struct H { o: Option[String], n: i64 }
+struct Hr { r: Result[String, i64], e: Result[String, String] }
+struct Hp { p: Option[P], k: Option[K], q: Result[P, i64] }
+fn mk(i: i64) -> H { H { o: Some(f"heap-string-longer-than-sso-{i}"), n: i } }
+fn take(h: H) -> String { h.o.unwrap() }
+fn main() {
+    let h1 = mk(1);
+    println(h1.o.unwrap());
+    let h2 = mk(2);
+    let x2 = h2.o.expect("m");
+    println(x2);
+    println(h2.n);
+    println(take(mk(3)));
+    println(mk(4).o.unwrap());
+    let h5 = mk(5);
+    println(h5.o.unwrap_or(f"dflt-string-longer-than-sso-5"));
+    let h6 = H { o: None, n: 6 };
+    println(h6.o.unwrap_or(f"dflt-string-longer-than-sso-6"));
+    let h7 = mk(7);
+    let x7 = if h7.n > 0 { h7.o.unwrap() } else { f"other" };
+    println(x7);
+    let h8 = mk(8);
+    let x8 = if h8.n > 100 { h8.o.unwrap() } else { f"other-string-longer-than-sso-8" };
+    println(x8);
+    let hr = Hr { r: Ok(f"ok-string-longer-than-sso-9"), e: Err(f"err-string-longer-than-sso-10") };
+    println(hr.r.unwrap());
+    println(hr.e.unwrap_err());
+    let hr2 = Hr { r: Err(11), e: Err(f"err-string-longer-than-sso-12") };
+    println(hr2.r.unwrap_or(f"dflt-string-longer-than-sso-11"));
+    println(hr2.e.unwrap_or(f"dflt-string-longer-than-sso-12"));
+    let hp = Hp { p: Some(P { a: f"aaa-string-longer-than-sso-13", b: f"b" }), k: Some(K.A(f"kkk-string-longer-than-sso-14")), q: Ok(P { a: f"a", b: f"qqq-string-longer-than-sso-15" }) };
+    let p = hp.p.unwrap();
+    println(p.a);
+    match hp.k.unwrap() { K.A(s) => println(s), K.B => println("b") }
+    println(hp.q.unwrap().b);
+    let g = [mk(16)];
+    println(g[0].o.unwrap());
+    println(g[0].o.unwrap());
+    println(g[0].o.is_some());
+    let v = vec![Hp { p: Some(P { a: f"aaa-string-longer-than-sso-17", b: f"b" }), k: None, q: Err(0) }];
+    println(v[0].p.unwrap().a);
+    println(v[0].p.is_some());
+    let w = vec![Hr { r: Ok(f"ok-string-longer-than-sso-18"), e: Err(f"err-string-longer-than-sso-19") }];
+    println(w[0].r.unwrap());
+    println(w[0].e.unwrap_or(f"dflt"));
+    println(w[0].e.unwrap_err());
+    println("end")
+}
+"#,
+        &[
+            "heap-string-longer-than-sso-1",
+            "heap-string-longer-than-sso-2",
+            "2",
+            "heap-string-longer-than-sso-3",
+            "heap-string-longer-than-sso-4",
+            "heap-string-longer-than-sso-5",
+            "dflt-string-longer-than-sso-6",
+            "heap-string-longer-than-sso-7",
+            "other-string-longer-than-sso-8",
+            "ok-string-longer-than-sso-9",
+            "err-string-longer-than-sso-10",
+            "dflt-string-longer-than-sso-11",
+            "dflt-string-longer-than-sso-12",
+            "aaa-string-longer-than-sso-13",
+            "kkk-string-longer-than-sso-14",
+            "qqq-string-longer-than-sso-15",
+            "heap-string-longer-than-sso-16",
+            "heap-string-longer-than-sso-16",
+            "true",
+            "aaa-string-longer-than-sso-17",
+            "true",
+            "ok-string-longer-than-sso-18",
+            "dflt",
+            "err-string-longer-than-sso-19",
+            "end",
+        ],
+        "asan_optres_field_unwrap_moves_the_field_once",
+        20,
+    );
+}

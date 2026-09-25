@@ -3219,6 +3219,16 @@ impl<'ctx> super::Codegen<'ctx> {
                 ));
             }
         };
+        // B-2026-09-25-23 — a consuming unwrap of a container element's field
+        // works on a copy, as reading that field does everywhere else.
+        let recv_struct = if matches!(
+            method,
+            "unwrap" | "expect" | "unwrap_or" | "unwrap_err" | "expect_err"
+        ) {
+            self.copy_index_rooted_optres_field_receiver(object, recv_struct)
+        } else {
+            recv_struct
+        };
 
         let tag = self
             .builder
@@ -4377,6 +4387,7 @@ impl<'ctx> super::Codegen<'ctx> {
             // no-op cases as the unwrap site: fresh-temp receiver, non-heap
             // payload.
             self.suppress_inline_option_result_binding_move(object);
+            self.suppress_place_optres_field_unwrap_source(object, method);
             return Ok(Some(phi.as_basic_value()));
         }
 
@@ -4605,6 +4616,7 @@ impl<'ctx> super::Codegen<'ctx> {
         // fresh-temp receiver (not an identifier — already single-owned) and for
         // a non-heap payload (not in the tracked sets).
         self.suppress_inline_option_result_binding_move(object);
+        self.suppress_place_optres_field_unwrap_source(object, method);
         Ok(Some(value))
     }
 
