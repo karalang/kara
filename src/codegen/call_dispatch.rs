@@ -9508,6 +9508,19 @@ impl<'ctx> super::Codegen<'ctx> {
             {
                 self.generic_user_enum_call_result(arg)
             }
+            // B-2026-09-25-19 — any other method-call RESULT or field
+            // projection of a GENERIC user enum. The callee no longer runs an
+            // inline payload's bodies (see the by-value param site in
+            // `functions.rs`), so the caller is the only owner for every
+            // argument spelling, as it already is for the seeded pair and for
+            // a concrete enum. Before, the callee's walker was what covered
+            // `hold(w.get())` and `hold(v.pop().unwrap())`; taking it away
+            // without this arm lost their bodies. Generic enums only: a
+            // concrete enum's method result is the name-keyed walker's
+            // business and is left exactly as it was.
+            ExprKind::MethodCall { .. } | ExprKind::FieldAccess { .. } => self
+                .generic_user_enum_call_result(arg)
+                .filter(|en| !self.enum_generic_param_names(en).is_empty()),
             _ => None,
         };
         if let Some(enum_name) = fresh_enum_temp {

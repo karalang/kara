@@ -11598,3 +11598,65 @@ fn main() {
         "asan_generic_args_assoc_call_frees_its_heap_argument_once",
     );
 }
+
+/// B-2026-09-25-19 — an INLINE generic-enum payload handed to a by-value
+/// param runs its `Drop` body once. The caller registers the body at every
+/// argument spelling, and the callee's param site registered it too for any
+/// callee that does not destructure, so every compiled surface printed each
+/// `dR` twice. The callee now keeps only a BOXED payload's bodies (the `hs`
+/// cell is that control). `w.get()` and `v.pop().unwrap()` were covered only
+/// by the callee's walker, so the caller's fresh-temp registrar now claims a
+/// generic method result too; `--interp` differs on those two cells for
+/// reasons of its own (it prints `dR10` twice and no `dR21`).
+#[test]
+fn asan_inline_generic_enum_arg_runs_its_payload_body_once() {
+    assert_clean_asan_run(
+        r#"struct R { id: i64 }
+impl Drop for R { fn drop(mut ref self) { println(f"dR{self.id}") } }
+struct S { id: i64, s: String }
+impl Drop for S { fn drop(mut ref self) { println(f"dS{self.id}") } }
+enum Ho[T] { Full(T), Empty }
+struct Wr { h: Ho[R] }
+impl Wr { fn get(self) -> Ho[R] { return self.h } }
+fn hold(x: Ho[R]) { println("h") }
+fn holds(x: Ho[S]) { println("hs") }
+fn holdm(x: Ho[R]) { match x { Full(_) => { println("m") } Empty => { println("e") } } }
+fn outer(x: Ho[R]) { println("o"); hold(x) }
+fn mkg(r: R) -> Ho[R] { return Ho.Full(r) }
+fn idg[T](v: T) -> T { return v }
+fn gh[T](x: Ho[T]) { println("gh") }
+fn gm[T](x: Ho[T]) { match x { Full(_) => { println("gm") } Empty => { println("e") } } }
+fn main() {
+    hold(Ho.Full(R { id: 1 }));
+    hold(mkg(R { id: 2 }));
+    let h3 = Ho.Full(R { id: 3 });
+    hold(h3);
+    hold(Ho[R].Full(R { id: 4 }));
+    let c = true;
+    hold(if c { Ho.Full(R { id: 5 }) } else { Ho.Empty });
+    hold({ let r = R { id: 6 }; Ho.Full(r) });
+    outer(Ho.Full(R { id: 8 }));
+    hold(idg(Ho.Full(R { id: 11 })));
+    holdm(Ho.Full(R { id: 12 }));
+    for i in 0..2 { hold(Ho.Full(R { id: 19 + i })); }
+    gh(Ho.Full(R { id: 17 }));
+    let h18 = Ho.Full(R { id: 18 });
+    gh(h18);
+    gm(Ho.Full(R { id: 23 }));
+    let w = Wr { h: Ho.Full(R { id: 10 }) };
+    hold(w.get());
+    let mut v: Vec[Ho[R]] = Vec.new();
+    v.push(Ho.Full(R { id: 21 }));
+    hold(v.pop().unwrap());
+    holds(Ho.Full(S { id: 15, s: f"x{1}" }));
+    println("end");
+}
+"#,
+        &[
+            "h", "dR1", "h", "dR2", "h", "dR3", "h", "dR4", "h", "dR5", "h", "dR6", "o", "h",
+            "dR8", "h", "dR11", "m", "dR12", "h", "dR19", "h", "dR20", "gh", "dR17", "gh", "dR18",
+            "gm", "dR23", "h", "dR10", "h", "dR21", "hs", "dS15", "end",
+        ],
+        "asan_inline_generic_enum_arg_runs_its_payload_body_once",
+    );
+}

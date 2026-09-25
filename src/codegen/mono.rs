@@ -5142,7 +5142,13 @@ impl<'ctx> super::Codegen<'ctx> {
                 // B-2026-09-10-2 — the bodies half, mirroring the
                 // `compile_function` sibling. Registered after the memory
                 // action so the LIFO drain runs bodies before the free.
-                if let Some(bodies) = self.emit_generic_enum_payload_user_drop_bodies_fn(&mono_ty) {
+                // B-2026-09-25-19 — and gated the same way: a BOXED
+                // instantiation only; an inline payload's bodies are the
+                // caller's.
+                if let Some(bodies) = (!self.user_enum_boxed_payload_variants(&mono_ty).is_empty())
+                    .then(|| self.emit_generic_enum_payload_user_drop_bodies_fn(&mono_ty))
+                    .flatten()
+                {
                     self.track_user_drop_var_with_fn(
                         "",
                         &param_name,

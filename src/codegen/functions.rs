@@ -2802,8 +2802,24 @@ impl<'ctx> super::Codegen<'ctx> {
                     // complement. Registered AFTER the memory action so the
                     // frame's LIFO drain runs the bodies BEFORE the free they
                     // read through (the B-2026-08-01-2 rule).
+                    //
+                    // B-2026-09-25-19 — BOXED instantiations only. An INLINE
+                    // payload's bodies belong to the caller, which registers
+                    // them at every argument spelling (the fresh-temp
+                    // registrar's instantiation-keyed fallback, B-2026-09-12-17,
+                    // and the let site's walker for a named binding) -- the
+                    // same convention the seeded pair and a concrete enum
+                    // follow. Registering here as well made two owners for
+                    // every callee that does not destructure its param:
+                    // `hold(Ho.Full(R { id: 14 }))` over
+                    // `fn hold(x: Ho[R]) { println("h") }` printed
+                    // `h dR14 dR14` on every compiled surface. A boxed payload
+                    // is still the callee's, because the box moves with it and
+                    // the caller's fallback stands down for it.
                     if let Some(bodies) =
-                        self.emit_generic_enum_payload_user_drop_bodies_fn(&mono_ty)
+                        (!self.user_enum_boxed_payload_variants(&mono_ty).is_empty())
+                            .then(|| self.emit_generic_enum_payload_user_drop_bodies_fn(&mono_ty))
+                            .flatten()
                     {
                         self.track_user_drop_var_with_fn(
                             "",
