@@ -379,7 +379,6 @@ registered in the callee's prologue, not by-value struct params in general. | �
 | B-2026-09-24-34 | 2026-09-24 | codegen | low | A GENERIC STRUCT'S `Option` FIELD PASSED BY VALUE LEAKS ITS PAYLOAD -- `struct W[T] { o: Option[T] }` with `let y = W { o: Some(f"..") }; peek(y.o)` prints `1 end` on all four surfaces and loses 30 bytes at -O0, for a generic and a non-generic `peek`, whether `y` comes from a literal or from `fn wrap[T](a: Option[T]) -> W[T]` | — |
 | B-2026-09-24-35 | 2026-09-24 | interp+codegen | medium | A BY-VALUE PARAM PUSHED INTO A CALLEE-LOCAL `Vec` UNDER AN `if` STILL RUNS ITS `Drop` BODY TWICE ON ALL FOUR SURFACES -- `fn st(a: R, c: bool) -> i64 { let mut v: Vec[R] = Vec.new(); if c { v.push(a); } 3 }` prints `d1 k3 d1 k3 d2 end` for `st(a, true)` then `st(b, false)`, where `d1 k3 d2 k3 end` is due | — |
 | B-2026-09-24-37 | 2026-09-24 | interp+codegen | medium | A DISCARDED TUPLE THAT MOVES A `Drop`-BEARING STRUCT LOCAL BESIDE A NON-FRESH `String` LOCAL RUNS THE STRUCT'S `Drop` BODY ON NO SURFACE FOR `let _ = (g, s);` AND ONLY ON THE COMPILED ONES FOR THE STATEMENT `(g, s);` -- `struct G { r: R, s: String }` prints `end` alone where `d8 end` is due | — |
-| B-2026-09-25-3 | 2026-09-25 | codegen | medium | A `Map` READ AGAIN AFTER MOVING INTO A TUPLE LITERAL OR `Vec.insert` SEGFAULTS ON EVERY COMPILED BACKEND -- `let p: (Map[i64, String], i64) = (m, 1); m.len()` and `v.insert(0, m); m.len()`; the interpreter prints `2` | — |
 | B-2026-09-25-4 | 2026-09-25 | interp | low | `--interp` RUNS A FRESH `Ok(mk(3))` ARGUMENT'S `Drop` BODY TWICE WHEN A BY-VALUE METHOD `h.f(a)` WAS CALLED BEFORE IT -- `h.g(Ok(mk(3)))` prints `d3 d3` under `--interp` and `d3` once on jit / -O2 seq / -O2 par (post-6d939bf88); the free-function spelling of the same two calls is correct everywhere | — |
 | B-2026-09-25-5 | 2026-09-25 | codegen | medium | A BY-VALUE `Result[S, R]` PARAM WHOSE `Err` PAYLOAD CARRIES ITS OWN `Drop` BODY AND IS HANDED ON (`Err(e) => { keepr(e); 0 }`) RUNS A NAMED `Ok` ARGUMENT'S BODY TWICE ON THE COMPILED SURFACES -- `f(a)` prints `d1 k1 d1` where `--interp` prints `k1 d1` | — |
 
@@ -3035,6 +3034,7 @@ registered in the callee's prologue, not by-value struct params in general. | �
 | B-2026-09-24-38 | codegen | medium | A BY-VALUE `Result[S, i64]` PARAM WHOSE `Err(e) => e` ARM LETS THE `i64` ESCAPE LOSES A NAMED ARGUMENT'S `Drop` BODY ON THE COMPILED SURFACES -- `fn… | 6d939bf88 |
 | B-2026-09-25-1 | ownership+codegen | medium | AN `if let` / `while let` BINDING THAT REUSES A MOVED LOCAL'S NAME DREW A FALSE `UseAfterMove` AND LEAKED THE LOCAL -- `let doc = Some(m); if let Som… | 795067c38 |
 | B-2026-09-25-2 | codegen | medium | A `Map`/`Set` READ AGAIN AFTER MOVING INTO AN OWNER LEAKED THE WHOLE TABLE -- `Some(m)`, `Ok(m)`, a user-enum payload, a struct field and `v.push(m)`… | 795067c38 |
+| B-2026-09-25-3 | codegen | medium | A `Map` READ AGAIN AFTER MOVING INTO A TUPLE LITERAL, AN ARRAY LITERAL OR `Vec.insert` -- OR AFTER A MOVE ON ONE BRANCH OR IN A LOOP INTO ANY SINK --… | 6dac2e49b |
 
 </details>
 
