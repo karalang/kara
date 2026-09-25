@@ -133,6 +133,7 @@ impl<'ctx> super::Codegen<'ctx> {
         let saved_scrut_enum_hint = self.pattern_state.match_scrutinee_enum_hint.take();
         self.pattern_state.match_scrutinee_enum_hint = self
             .type_name_of_expr(scrutinee)
+            .or_else(|| self.variant_ctor_enum_of_expr(scrutinee))
             .filter(|n| self.type_decls.enum_layouts.contains_key(n.as_str()));
         // B-2026-09-12-7 — and the per-variant PAYLOAD enum beside it, which is
         // what a NESTED sub-pattern must resolve against. See
@@ -8757,6 +8758,41 @@ impl<'ctx> super::Codegen<'ctx> {
     /// HashMap seed. Ordering by name does not make an ambiguous case
     /// *correct*, but it makes it REPRODUCIBLE, so a wrong pick fails the same
     /// way on every run instead of hiding behind a seed.
+    /// The enum a qualified variant constructor names (`B.P(x, y)`, bare
+    /// `B.Q`), when the qualifier is an enum that declares that variant.
+    ///
+    /// B-2026-09-22-16 — a fresh constructor scrutinee (`match B.P(s, a) { .. }`)
+    /// has no binding for `type_name_of_expr` to key on, so without this the
+    /// match ran with NO enum hint, and every variant-name resolution below it
+    /// fell to a scan. Two enums whose payloads have the same word count lower
+    /// to one LLVM struct type, so the scan could not tell `A.P` from `B.P` and
+    /// bound `B.P`'s payload at `A.P`'s field offsets.
+    pub(super) fn variant_ctor_enum_of_expr(&self, expr: &Expr) -> Option<String> {
+        let callee = match &expr.kind {
+            ExprKind::Call { callee, .. } => callee.as_ref(),
+            _ => expr,
+        };
+        let ExprKind::Path { segments, .. } = &callee.kind else {
+            return None;
+        };
+        self.qualified_variant_enum(segments)
+    }
+
+    /// `[.., Enum, Variant]` → `Enum`, when `Enum` is a known enum that declares
+    /// `Variant`. The pattern-side and expression-side spelling of the same
+    /// question: a qualified path names its enum outright, so it must win over
+    /// any scan keyed by the variant name alone (B-2026-09-22-16).
+    pub(super) fn qualified_variant_enum(&self, segments: &[String]) -> Option<String> {
+        let [.., qualifier, variant] = segments else {
+            return None;
+        };
+        self.type_decls
+            .enum_layouts
+            .get(qualifier.as_str())
+            .filter(|l| l.tags.contains_key(variant.as_str()))
+            .map(|_| qualifier.clone())
+    }
+
     pub(super) fn owning_enum_for_variant(
         &self,
         variant_name: &str,

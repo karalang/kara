@@ -2088,17 +2088,17 @@ impl<'ctx> super::Codegen<'ctx> {
                 // Kept as a pre-step rather than a new arm inside the scan
                 // because the scan's job is to disambiguate when there is NO
                 // hint; when there is one, there is nothing to disambiguate.
+                // B-2026-09-22-16 — a QUALIFIED pattern (`B.P(t, v)`) names its
+                // enum outright, so it outranks the hint and every scan below.
                 let matched_enum: Option<String> = self
-                    .pattern_state
-                    .match_scrutinee_enum_hint
-                    .as_ref()
+                    .qualified_variant_enum(path)
+                    .or_else(|| self.pattern_state.match_scrutinee_enum_hint.clone())
                     .filter(|h| {
                         self.type_decls
                             .enum_layouts
                             .get(h.as_str())
                             .is_some_and(|l| l.tags.contains_key(variant_name))
                     })
-                    .cloned()
                     .or_else(|| {
                         self.type_decls
                             .enum_layouts
@@ -2684,11 +2684,18 @@ impl<'ctx> super::Codegen<'ctx> {
                 // pointee (variant-name collisions across enums are
                 // disambiguated by struct identity, mirroring the
                 // value-source `TupleVariant` arm).
-                let Some((enum_name, layout)) = self
-                    .type_decls
-                    .enum_layouts
-                    .iter()
-                    .find(|(_, l)| l.tags.contains_key(variant_name) && l.llvm_type == pointee_ty)
+                // B-2026-09-22-16 — a qualified pattern names its enum; the
+                // struct-identity scan cannot, since two enums of equal payload
+                // width share one LLVM struct type.
+                let qualified = self.qualified_variant_enum(path);
+                let Some((enum_name, layout)) = qualified
+                    .as_ref()
+                    .and_then(|q| self.type_decls.enum_layouts.get_key_value(q.as_str()))
+                    .or_else(|| {
+                        self.type_decls.enum_layouts.iter().find(|(_, l)| {
+                            l.tags.contains_key(variant_name) && l.llvm_type == pointee_ty
+                        })
+                    })
                     .or_else(|| {
                         self.type_decls
                             .enum_layouts

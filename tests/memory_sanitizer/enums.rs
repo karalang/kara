@@ -11505,3 +11505,54 @@ fn main() {
         "asan_escaping_optres_method_param_wrapped",
     );
 }
+
+/// B-2026-09-22-16 — `enum A { P(Array[S, 2], String) }` beside
+/// `enum B { P(String, Array[S, 2]) }`. Both payloads are the same width, so
+/// both enums lower to ONE LLVM struct type, and a `B.P(t, v)` arm whose
+/// scrutinee carried no enum hint (a fresh constructor) resolved the variant
+/// name by a scan that could not tell the two apart: it bound `B.P`'s payload
+/// at `A.P`'s word offsets, read past the 2-byte `String` and dereferenced
+/// `0x2`. Which enum the scan found depended on map order, so the same source
+/// built to two different binaries. A qualified pattern now names its own
+/// enum, and a constructor scrutinee carries its enum as the hint; the cells
+/// cover a fresh constructor, a let-bound value, a call result, `if let`, a
+/// `ref` parameter, a nested `Some(B.P(..))`, and a `Vec`/`String` pair.
+///
+/// The fresh-scrutinee cells (`a`, `b`, `d`, `e`) print no `dS` lines. That is
+/// B-2026-09-23-3's agreed gap (no element `Drop` body for a fresh-temp `Array`
+/// payload whose arm only reads its binding), memory-clean on every surface;
+/// its fix should add those lines here.
+#[test]
+fn asan_variant_name_shared_by_two_enums_binds_at_its_own_offsets() {
+    assert_clean_asan_run(
+        r#"struct S { tag: String }
+impl Drop for S { fn drop(mut ref self) { println(f"dS{self.tag}") } }
+enum A { P(Array[S, 2], String), Q }
+enum B { P(String, Array[S, 2]), Q }
+enum C { P(Vec[i64], String), Q }
+enum D { P(String, Vec[i64]), Q }
+fn arr(p: String) -> Array[S, 2] { [S { tag: f"{p}0" }, S { tag: f"{p}1" }] }
+fn fresh_a() -> i64 { match A.P(arr(f"a"), f"zz") { A.P(v, t) => { println(f"a {t} {v[1].tag}"); return 1 }, A.Q => { return 0 } } }
+fn fresh_b() -> i64 { match B.P(f"yy", arr(f"b")) { B.P(t, v) => { println(f"b {t} {v[1].tag}"); return 1 }, B.Q => { return 0 } } }
+fn let_b() -> i64 { let x = B.P(f"yy", arr(f"c")); match x { B.P(t, v) => { println(f"c {t} {v[1].tag}"); return 1 }, B.Q => { return 0 } } }
+fn mk() -> B { B.P(f"yy", arr(f"d")) }
+fn call_b() -> i64 { match mk() { B.P(t, v) => { println(f"d {t} {v[1].tag}"); return 1 }, B.Q => { return 0 } } }
+fn iflet_b() -> i64 { if let B.P(t, v) = B.P(f"yy", arr(f"e")) { println(f"e {t} {v[1].tag}"); return 1 } return 0 }
+fn g(x: ref B) -> i64 { match x { B.P(t, v) => { println(f"f {t} {v[1].tag}"); return 1 }, B.Q => { return 0 } } }
+fn ref_b() -> i64 { let b = B.P(f"yy", arr(f"f")); g(b) }
+fn opt_b() -> i64 { let o: Option[B] = Some(B.P(f"yy", arr(f"g"))); match o { Some(B.P(t, v)) => { println(f"g {t} {v[1].tag}"); return 1 }, _ => { return 0 } } }
+fn vec_c() -> i64 { match C.P(vec![1, 2, 3], f"zz") { C.P(v, t) => { println(f"h {t} {v.len()}"); return 1 }, C.Q => { return 0 } } }
+fn vec_d() -> i64 { match D.P(f"yy", vec![4, 5]) { D.P(t, v) => { println(f"i {t} {v.len()}"); return 1 }, D.Q => { return 0 } } }
+fn main() {
+    let n = fresh_a() + fresh_b() + let_b() + call_b() + iflet_b() + ref_b() + opt_b() + vec_c() + vec_d();
+    println(f"n {n}");
+    println("end")
+}
+"#,
+        &[
+            "a zz a1", "b yy b1", "c yy c1", "dSc0", "dSc1", "d yy d1", "e yy e1", "f yy f1",
+            "dSf0", "dSf1", "g yy g1", "dSg0", "dSg1", "h zz 3", "i yy 2", "n 9", "end",
+        ],
+        "asan_variant_name_shared_by_two_enums_binds_at_its_own_offsets",
+    );
+}
