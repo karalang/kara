@@ -1983,7 +1983,7 @@ impl<'a> super::TypeChecker<'a> {
     /// name — or to another generic param name when the caller is itself
     /// generic and propagates the binding (the interpreter resolves these
     /// transitively against its runtime substitution stack).
-    fn record_call_type_subs(&mut self, span: &Span, solutions: &HashMap<String, Type>) {
+    pub(super) fn record_call_type_subs(&mut self, span: &Span, solutions: &HashMap<String, Type>) {
         if solutions.is_empty() {
             return;
         }

@@ -841,6 +841,26 @@ impl<'a> super::TypeChecker<'a> {
                         self.check_assignable(param, &arg_ty, arg.value.span);
                         self.warn_partial_move_of_drop_struct(&arg.value, param);
                     }
+                    // B-2026-09-25-20 — record the pinned impl params as this
+                    // call's instantiation frame, exactly as `infer_call` does
+                    // for the unqualified `Ho.mk(x)`. Codegen re-forms
+                    // `Ho[R].mk(x)` into that two-segment call at THIS span and
+                    // reads the frame to name `T`; with no frame it fell back to
+                    // a structural mangle whose monomorph skipped the entry deep
+                    // copy, so the callee and the caller's argument temp both
+                    // freed one heap field.
+                    let solutions: HashMap<String, Type> = imp
+                        .generic_params
+                        .as_ref()
+                        .map(|gp| {
+                            gp.params
+                                .iter()
+                                .zip(target_args.iter())
+                                .map(|(p, t)| (p.name.clone(), t.clone()))
+                                .collect()
+                        })
+                        .unwrap_or_default();
+                    self.record_call_type_subs(span, &solutions);
                     return Some(return_ty);
                 }
                 // No matching impl-table entry. A BUILT-IN container's

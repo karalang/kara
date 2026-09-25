@@ -11556,3 +11556,45 @@ fn main() {
         "asan_variant_name_shared_by_two_enums_binds_at_its_own_offsets",
     );
 }
+
+/// B-2026-09-25-20 — an argument to an associated fn called on a GENERIC-ARGS
+/// path (`Ho[R].mk(x)`) is owned once. The typechecker recorded no
+/// instantiation frame for the qualified spelling, so codegen mangled `T`
+/// structurally and picked a monomorph without the entry deep copy while the
+/// caller still freed its argument temp: a double free on every compiled
+/// surface. The unqualified `Ho.mk(..)` cell is the control spelling.
+#[test]
+fn asan_generic_args_assoc_call_frees_its_heap_argument_once() {
+    assert_clean_asan_run(
+        r#"struct R { id: i64, s: String }
+impl Drop for R { fn drop(mut ref self) { println(f"dR{self.id}") } }
+fn mkr(i: i64) -> R { return R { id: i, s: f"x{i}" } }
+struct W { a: String, b: String, c: String }
+impl Drop for W { fn drop(mut ref self) { println(f"dW{self.a.len()}") } }
+fn mkw() -> W { return W { a: f"aaa{1}", b: f"bbb{1}", c: f"ccc{1}" } }
+enum Ho[T] { Full(T), Empty }
+impl[T] Ho[T] { fn mk(v: T) -> Ho[T] { return Ho.Full(v); } }
+fn takeit(x: Ho[R]) { match x { Full(r) => { println(f"f:{r.id}") } Empty => { println("e") } } }
+fn takew(x: Ho[W]) { match x { Full(w) => { println(f"w:{w.a.len()}") } Empty => { println("e") } } }
+fn main() {
+    takeit(Ho[R].mk(mkr(7)));
+    println("k1");
+    takew(Ho[W].mk(mkw()));
+    println("k2");
+    let h = Ho[R].mk(mkr(8));
+    takeit(h);
+    println("k3");
+    takeit(Ho.mk(mkr(10)));
+    println("k5");
+    let g = Ho[R].mk(mkr(11));
+    match g { Full(q) => { println(f"m:{q.s}") } Empty => { println("e") } }
+    println("end");
+}
+"#,
+        &[
+            "f:7", "dR7", "k1", "w:4", "dW4", "k2", "f:8", "dR8", "k3", "f:10", "dR10", "k5",
+            "m:x11", "dR11", "end",
+        ],
+        "asan_generic_args_assoc_call_frees_its_heap_argument_once",
+    );
+}
