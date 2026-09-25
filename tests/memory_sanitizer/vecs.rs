@@ -8119,3 +8119,63 @@ fn main() {
         20,
     );
 }
+
+/// B-2026-09-25-9 — a field read on a generic call's struct result in place:
+/// `pick(a, P { .. }).n` over `fn pick[T](a: Option[T], d: T) -> T`. A generic
+/// free function is never declared, so `type_name_of_expr` found no
+/// `fn_return_type_names` entry for the call and `karac build` stopped with
+/// "cannot resolve field 'n' on this receiver"; `--interp` printed `1`.
+/// The field read also registers the fresh result temp's drop, so every
+/// read below has to free the struct it read from exactly once.
+#[test]
+fn asan_field_read_on_generic_call_result_frees_once() {
+    assert_clean_asan_run_min_allocs(
+        r#"struct Q { a: i64 }
+struct P { s: String, n: i64 }
+struct R { q: Q, s: String }
+struct W[T] { v: T, k: i64 }
+fn pick[T](a: Option[T], d: T) -> T { match a { Some(s) => s, None => d } }
+fn id2[T](d: T) -> T { d }
+fn get[U](u: U) -> U { id2(u) }
+fn inner(p: P) -> i64 { id2(p).n }
+fn sel[T](c: bool, a: T, b: T) -> T { if c { a } else { b } }
+fn wrap[T](x: T) -> W[T] { W { v: x, k: 3 } }
+fn main() {
+    for i in 0..2 {
+        let a = Some(P { s: f"heap-string-longer-than-sso-1-{i}", n: 1 });
+        println(f"{pick(a, P { s: f"d", n: 2 }).n}");
+        println(id2(R { q: Q { a: 7 }, s: f"heap-string-longer-than-sso-2-{i}" }).q.a);
+        let p = P { s: f"heap-string-longer-than-sso-3-{i}", n: 4 };
+        println(inner(p));
+        println(get(P { s: f"heap-string-longer-than-sso-4-{i}", n: 5 }).n);
+        let x = P { s: f"heap-string-longer-than-sso-5-{i}", n: 6 };
+        let y = P { s: f"heap-string-longer-than-sso-6-{i}", n: 8 };
+        println(sel(false, x, y).n);
+        let z = P { s: f"heap-string-longer-than-sso-7-{i}", n: 9 };
+        println(id2(z).s);
+        println(wrap(5).k + wrap(9).v);
+    }
+    println("end")
+}
+"#,
+        &[
+            "1",
+            "7",
+            "4",
+            "5",
+            "8",
+            "heap-string-longer-than-sso-7-0",
+            "12",
+            "1",
+            "7",
+            "4",
+            "5",
+            "8",
+            "heap-string-longer-than-sso-7-1",
+            "12",
+            "end",
+        ],
+        "asan_field_read_on_generic_call_result_frees_once",
+        8,
+    );
+}

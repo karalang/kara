@@ -4978,9 +4978,26 @@ impl<'ctx> super::Codegen<'ctx> {
                 }
             }
             ExprKind::Call { callee, .. } => match &callee.kind {
-                ExprKind::Identifier(n) => {
-                    self.fn_sig.fn_return_type_names.get(n.as_str()).cloned()
-                }
+                // B-2026-09-25-9: a generic free function is never declared,
+                // so it has no `fn_return_type_names` entry. Read its return
+                // off the generic definition and bind a bare type param at
+                // this call site, through the same fail-closed resolver the
+                // tuple-element arm above uses (`pick(a, P { .. }).n` over
+                // `-> T`).
+                ExprKind::Identifier(n) => self
+                    .fn_sig
+                    .fn_return_type_names
+                    .get(n.as_str())
+                    .cloned()
+                    .or_else(|| {
+                        let ret = self
+                            .mono_state
+                            .generic_fns
+                            .get(n.as_str())?
+                            .return_type
+                            .as_ref()?;
+                        self.call_tuple_elem_type_name(expr, ret)
+                    }),
                 ExprKind::Path { segments, .. } if segments.len() == 2 => self
                     .fn_sig
                     .fn_return_type_names

@@ -9817,3 +9817,45 @@ fn main() {
         "must match --interp"
     );
 }
+
+/// B-2026-09-25-9 — a field read on a generic call's struct result in place:
+/// `pick(a, P { .. }).n` over `fn pick[T](a: Option[T], d: T) -> T`. A generic
+/// free function is never declared, so `type_name_of_expr` found no
+/// `fn_return_type_names` entry for the call and `karac build` stopped with
+/// "cannot resolve field 'n' on this receiver"; `--interp` printed `1`.
+#[test]
+fn test_e2e_field_read_on_generic_call_result() {
+    let out = run_program(
+        r#"struct Q { a: i64 }
+struct P { s: String, n: i64 }
+struct R { q: Q, s: String }
+struct W[T] { v: T, k: i64 }
+fn pick[T](a: Option[T], d: T) -> T { match a { Some(s) => s, None => d } }
+fn id2[T](d: T) -> T { d }
+fn get[U](u: U) -> U { id2(u) }
+fn inner(p: P) -> i64 { id2(p).n }
+fn sel[T](c: bool, a: T, b: T) -> T { if c { a } else { b } }
+fn wrap[T](x: T) -> W[T] { W { v: x, k: 3 } }
+fn main() {
+    let a = Some(P { s: f"heap-string-longer-than-sso-1", n: 1 });
+    println(f"{pick(a, P { s: f"d", n: 2 }).n}");
+    println(id2(R { q: Q { a: 7 }, s: f"heap-string-longer-than-sso-2" }).q.a);
+    let p = P { s: f"heap-string-longer-than-sso-3", n: 4 };
+    println(inner(p));
+    println(get(P { s: f"heap-string-longer-than-sso-4", n: 5 }).n);
+    let x = P { s: f"heap-string-longer-than-sso-5", n: 6 };
+    let y = P { s: f"heap-string-longer-than-sso-6", n: 8 };
+    println(sel(false, x, y).n);
+    let z = P { s: f"heap-string-longer-than-sso-7", n: 9 };
+    println(id2(z).s);
+    println(wrap(5).k + wrap(9).v);
+    println("end")
+}
+"#,
+    );
+    assert_eq!(
+        out.as_deref(),
+        Some("1\n7\n4\n5\n8\nheap-string-longer-than-sso-7\n12\nend\n"),
+        "must match --interp"
+    );
+}
