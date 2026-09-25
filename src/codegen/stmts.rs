@@ -557,6 +557,7 @@ impl<'ctx> super::Codegen<'ctx> {
             // and those belong at that statement's end rather than at this
             // tail. Draining from the mark leaves them where they were.
             let mark = self.pending_enum_field_zeros.len();
+            self.arm_conditional_store_flag_for_tail(expr);
             let val = self.compile_tail_final_expr(expr, tail_inner)?;
             self.flush_pending_enum_field_zeros_from(mark);
             Ok(Some(val))

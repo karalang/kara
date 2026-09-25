@@ -13944,30 +13944,6 @@ impl<'ctx> super::Codegen<'ctx> {
     /// today's behaviour byte-for-byte, and the new runtime bit cannot reach
     /// any shape the new predicate did not opt in.
     pub(super) fn arm_conditional_store_flag(&mut self, stmt: &Stmt) {
-        /// Does `e` hand `name` over BY VALUE — bare, or nested inside an
-        /// aggregate or call being built around it? The same move shapes
-        /// `outliving_store::moves` recognizes, restated here because that
-        /// module is private to `ast::items` and this needs only the leaf test.
-        fn hands_over(e: &Expr, name: &str) -> bool {
-            match &e.kind {
-                ExprKind::Identifier(n) => n == name,
-                // B-2026-09-06-45 — a bare `self` hands the RECEIVER over
-                // (`let e = self;`), and the receiver's flag is keyed under the
-                // name its slot carries. Without this arm the flag stayed armed
-                // on the rebinding path and the callee ran a body the local was
-                // already running.
-                ExprKind::SelfValue => name == "self",
-                ExprKind::Call { args, .. } | ExprKind::MethodCall { args, .. } => {
-                    args.iter().any(|a| hands_over(&a.value, name))
-                }
-                ExprKind::StructLiteral { fields, .. } => {
-                    fields.iter().any(|f| hands_over(&f.value, name))
-                }
-                ExprKind::Tuple(elems) => elems.iter().any(|el| hands_over(el, name)),
-                _ => false,
-            }
-        }
-
         // Two disarming sites, not one. The STORE is what this row is about;
         // the RETURN is the other way a flagged parameter can leave on a path,
         // and leaving it armed there is a DOUBLE body — the unrecoverable
@@ -13997,6 +13973,49 @@ impl<'ctx> super::Codegen<'ctx> {
             _ => None,
         };
         let Some(handed) = handed else { return };
+        self.disarm_conditional_store_flags_handed_by(handed);
+    }
+
+    /// B-2026-09-25-10 — a block's TAIL EXPRESSION hands a value over exactly
+    /// as the statement spelling does, but it is not a `Stmt`, so the arming
+    /// call in `compile_stmt` never saw it: `if c { v.push(a) }` without the
+    /// `;` left the flag armed on the storing path and the callee ran the
+    /// bodies the container was about to run too. Same shapes as the
+    /// `StmtKind::Expr` arm of [`Self::arm_conditional_store_flag`].
+    pub(super) fn arm_conditional_store_flag_for_tail(&mut self, expr: &Expr) {
+        let handed = match &expr.kind {
+            ExprKind::Return(Some(inner)) => inner.as_ref(),
+            ExprKind::MethodCall { .. } | ExprKind::Call { .. } => expr,
+            _ => return,
+        };
+        self.disarm_conditional_store_flags_handed_by(handed);
+    }
+
+    fn disarm_conditional_store_flags_handed_by(&mut self, handed: &Expr) {
+        /// Does `e` hand `name` over BY VALUE — bare, or nested inside an
+        /// aggregate or call being built around it? The same move shapes
+        /// `outliving_store::moves` recognizes, restated here because that
+        /// module is private to `ast::items` and this needs only the leaf test.
+        fn hands_over(e: &Expr, name: &str) -> bool {
+            match &e.kind {
+                ExprKind::Identifier(n) => n == name,
+                // B-2026-09-06-45 — a bare `self` hands the RECEIVER over
+                // (`let e = self;`), and the receiver's flag is keyed under the
+                // name its slot carries. Without this arm the flag stayed armed
+                // on the rebinding path and the callee ran a body the local was
+                // already running.
+                ExprKind::SelfValue => name == "self",
+                ExprKind::Call { args, .. } | ExprKind::MethodCall { args, .. } => {
+                    args.iter().any(|a| hands_over(&a.value, name))
+                }
+                ExprKind::StructLiteral { fields, .. } => {
+                    fields.iter().any(|f| hands_over(&f.value, name))
+                }
+                ExprKind::Tuple(elems) => elems.iter().any(|el| hands_over(el, name)),
+                _ => false,
+            }
+        }
+
         let names: Vec<String> = self
             .drop_rc
             .cond_move_drop_flags
@@ -14691,6 +14710,14 @@ impl<'ctx> super::Codegen<'ctx> {
     }
 
     pub(super) fn suppress_container_elem_bodies_for_var(&mut self, name: &str) {
+        // B-2026-09-25-10 — the same decline `suppress_user_drop_for_var` makes
+        // for a parameter whose drop a per-path flag owns: a caller-retained
+        // `Array` param stored on some paths registers its bodies-then-memory
+        // walk as this kind, and an all-paths retraction at the store would
+        // leave the non-storing path with no owner.
+        if self.drop_rc.cond_store_flag_params.contains(name) {
+            return;
+        }
         // B-2026-09-23-23 — the LIVE generation only, when it can be told
         // apart. Matching by name alone also retracted a SHADOWED generation's
         // walk, so `let x = [..]; let x = [..]; return Some(x)` ran the older

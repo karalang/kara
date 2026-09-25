@@ -7977,6 +7977,122 @@ pub fn fn_moves_param_into_local_container(f: &Function, arg_index: usize) -> bo
     false
 }
 
+/// B-2026-09-25-10 — either conditional store: into a place the caller holds,
+/// or into a container one of `f`'s own locals holds. Every site that registers
+/// or honours the conditional-store flag asks this, so the two routes cannot be
+/// admitted on one side of the handover and not the other.
+pub fn fn_conditionally_stores_param(f: &Function, arg_index: usize) -> bool {
+    fn_conditionally_moves_param_into_outliving_place(f, arg_index)
+        || fn_conditionally_moves_param_into_local_container(f, arg_index)
+}
+
+/// B-2026-09-25-10 — the caller's side of the local-container handover: the
+/// callee takes the value over on every path (the MUST predicate) or per path
+/// under the conditional-store flag.
+pub fn fn_moves_param_into_local_container_any(f: &Function, arg_index: usize) -> bool {
+    fn_moves_param_into_local_container(f, arg_index)
+        || fn_conditionally_moves_param_into_local_container(f, arg_index)
+}
+
+/// B-2026-09-25-10 — the CONDITIONAL sibling of
+/// [`fn_moves_param_into_local_container`]: does `f` move by-value parameter
+/// `arg_index` into a container one of its own locals holds on SOME path, but
+/// not provably on every one?
+///
+/// `if c { v.push(a) }` hands the parameter to `v` on the path that pushes and
+/// lets it die in this frame on the other. The MUST predicate answers `false`
+/// for it, so the caller kept its walk while the container drained the same
+/// value on the pushing path: the body ran twice for a struct and the element
+/// memory was freed twice for a caller-retained `Array`. This is what the
+/// conditional-STORE registration ([`fn_conditionally_moves_param_into_outliving_place`])
+/// answers for a container the caller holds, restated for one the callee
+/// creates, and it is consulted in the same places: the callee takes the value
+/// under a per-path flag the storing statement clears, and the caller stands
+/// down on exactly the same answer.
+///
+/// The roots are every name a `let` binds anywhere in the body, other than the
+/// parameter itself. The store must be a direct statement of some block (the
+/// flag is cleared in the storing statement's own basic block), and the value
+/// must have no other way out, the same `escapes_by_unclearable_route` gate the
+/// outliving sibling applies.
+pub fn fn_conditionally_moves_param_into_local_container(f: &Function, arg_index: usize) -> bool {
+    let Some(param) = f.params.get(arg_index) else {
+        return false;
+    };
+    if matches!(
+        param.ty.kind,
+        crate::ast::TypeKind::Ref(_) | crate::ast::TypeKind::MutRef(_)
+    ) {
+        return false;
+    }
+    let PatternKind::Binding(name) = &param.pattern.kind else {
+        return false;
+    };
+    if fn_moves_param_into_local_container(f, arg_index) {
+        return false;
+    }
+    fn locals_in_block<'a>(b: &'a Block, out: &mut Vec<&'a str>) {
+        for st in &b.stmts {
+            match &st.kind {
+                StmtKind::Let { pattern, value, .. } => {
+                    if let PatternKind::Binding(n) = &pattern.kind {
+                        out.push(n.as_str());
+                    }
+                    locals_in_expr(value, out);
+                }
+                StmtKind::Expr(e) => locals_in_expr(e, out),
+                _ => {}
+            }
+        }
+        if let Some(fe) = b.final_expr.as_deref() {
+            locals_in_expr(fe, out);
+        }
+    }
+    fn locals_in_expr<'a>(e: &'a Expr, out: &mut Vec<&'a str>) {
+        match &e.kind {
+            ExprKind::Block(b)
+            | ExprKind::Unsafe(b)
+            | ExprKind::Try(b)
+            | ExprKind::Seq(b)
+            | ExprKind::Par(b) => locals_in_block(b, out),
+            ExprKind::If {
+                then_block,
+                else_branch,
+                ..
+            }
+            | ExprKind::IfLet {
+                then_block,
+                else_branch,
+                ..
+            } => {
+                locals_in_block(then_block, out);
+                if let Some(x) = else_branch.as_deref() {
+                    locals_in_expr(x, out);
+                }
+            }
+            ExprKind::Match { arms, .. } => {
+                for a in arms {
+                    locals_in_expr(&a.body, out);
+                }
+            }
+            ExprKind::While { body, .. }
+            | ExprKind::WhileLet { body, .. }
+            | ExprKind::For { body, .. }
+            | ExprKind::Loop { body, .. }
+            | ExprKind::LabeledBlock { body, .. } => locals_in_block(body, out),
+            _ => {}
+        }
+    }
+    let mut roots: Vec<&str> = Vec::new();
+    locals_in_block(&f.body, &mut roots);
+    roots.retain(|n| *n != name.as_str());
+    if roots.is_empty() {
+        return false;
+    }
+    outliving_store::walk_block(&f.body, name, &roots)
+        && !outliving_store::escapes_by_unclearable_route(&f.body, name, &roots)
+}
+
 /// B-2026-08-30-28 — the MUST half of [`fn_moves_param_into_outliving_place`]:
 /// does EVERY path through `f` store the parameter into a place that outlives
 /// the call?

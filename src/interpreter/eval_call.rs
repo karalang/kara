@@ -2786,7 +2786,7 @@ impl<'a> super::Interpreter<'a> {
                     && !crate::ast::fn_moves_param_into_outliving_place(f, i);
             // B-2026-09-06-13 — and the hand-over to a callee that returns it
             // on some exits, the conditional store's twin; see the predicate.
-            let cond_stored = crate::ast::fn_conditionally_moves_param_into_outliving_place(f, i)
+            let cond_stored = crate::ast::fn_conditionally_stores_param(f, i)
                 || crate::ast::fn_conditionally_hands_param_to_flip_callee(self.program, f, i);
             if !cond_returned && !cond_stored {
                 continue;
@@ -2804,8 +2804,11 @@ impl<'a> super::Interpreter<'a> {
                 // its element bodies: `dies y8 d8 d9` against the struct
                 // spelling's `dies d1 y8 d8`. Codegen's twin is the array arm
                 // of `compile_function`'s conditional-return registration.
+                // B-2026-09-25-10 — or STORED on some paths only, into a
+                // container the caller holds or one this frame creates:
+                // codegen's twin is the conditional-store array arm.
                 Some(v @ Value::Array(_))
-                    if cond_returned && self.field_value_carries_user_drop(&v) =>
+                    if (cond_returned || cond_stored) && self.field_value_carries_user_drop(&v) =>
                 {
                     out.push(name.to_string());
                 }
@@ -3033,10 +3036,17 @@ impl<'a> super::Interpreter<'a> {
             // reaches that binding's field walk, so it belongs on this side of
             // the question exactly as a bare identifier does. See
             // `arg_place_reaches_caller_drop_fire`.
+            // B-2026-09-25-10 — and a param STORED on some paths only, into a
+            // container the caller holds or one this frame creates. The caller
+            // stands its binding down for it (`record_method_arg_moves`), so
+            // this frame owns the body on the paths that did not store, and the
+            // storing statement disarms it — the free-fn sibling's split.
+            let cond_stored = crate::ast::fn_conditionally_stores_param(f, i);
             let caller_still_owns = args
                 .get(i)
                 .is_some_and(|a| Self::arg_place_reaches_caller_drop_fire(&a.value))
-                && !crate::ast::fn_conditionally_returns_param_bare(Some(self.program), f, i);
+                && !crate::ast::fn_conditionally_returns_param_bare(Some(self.program), f, i)
+                && !cond_stored;
             if caller_still_owns {
                 continue;
             }
@@ -3059,8 +3069,12 @@ impl<'a> super::Interpreter<'a> {
                 // the fresh-temp walk fires a temporary one).
                 Value::Array(_) => {
                     self.field_value_carries_user_drop(&value)
-                        && crate::ast::fn_conditionally_returns_param_bare(Some(self.program), f, i)
-                        && !crate::ast::fn_moves_param_into_outliving_place(f, i)
+                        && ((crate::ast::fn_conditionally_returns_param_bare(
+                            Some(self.program),
+                            f,
+                            i,
+                        ) && !crate::ast::fn_moves_param_into_outliving_place(f, i))
+                            || cond_stored)
                 }
                 _ => false,
             };
@@ -3214,7 +3228,7 @@ impl<'a> super::Interpreter<'a> {
                     || crate::ast::fn_moves_param_into_outliving_place_via_call(self.program, f, i)
                     // B-2026-09-24-16 — or pushed into a container a callee
                     // local holds, whose drain runs the body.
-                    || crate::ast::fn_moves_param_into_local_container(f, i)
+                    || crate::ast::fn_moves_param_into_local_container_any(f, i)
                 {
                     return None;
                 }
@@ -3374,7 +3388,7 @@ impl<'a> super::Interpreter<'a> {
                     || crate::ast::fn_moves_param_into_outliving_place_via_call(self.program, f, i)
                     // B-2026-09-24-16 — or pushed into a container a callee
                     // local holds, whose drain runs the body.
-                    || crate::ast::fn_moves_param_into_local_container(f, i)
+                    || crate::ast::fn_moves_param_into_local_container_any(f, i)
                     || crate::ast::fn_conditionally_returns_param_bare(Some(self.program), f, i)
                     // B-2026-09-07-4 — and the ONE-HOP hand-back
                     // (`fn thruv(ref self, r: R) -> R { return fwd(r); }`), the
@@ -3425,6 +3439,10 @@ impl<'a> super::Interpreter<'a> {
                         // B-2026-09-24-16 — a MUST predicate too: the push into
                         // the callee's local container is on every path.
                         || crate::ast::fn_moves_param_into_local_container(f, i)
+                        // B-2026-09-25-10 — or a store on SOME paths, which
+                        // `method_param_drop_names` claims for the callee frame
+                        // and the storing statement disarms per path.
+                        || crate::ast::fn_conditionally_stores_param(f, i)
                         // B-2026-09-07-4 — the one-hop hand-back gives the same
                         // every-path guarantee the bare one does: the inner
                         // callee returns it, this one returns that, so the
@@ -5152,7 +5170,7 @@ impl<'a> super::Interpreter<'a> {
                     || crate::ast::fn_moves_param_into_outliving_place_via_call(self.program, f, i)
                     // B-2026-09-24-16 — or pushed into a container a callee
                     // local holds, whose drain runs the body.
-                    || crate::ast::fn_moves_param_into_local_container(f, i)
+                    || crate::ast::fn_moves_param_into_local_container_any(f, i)
                     // B-2026-08-31-46 — a conditional hand-back the callee
                     // frame owns per path; `fn_returns_param`'s union used to
                     // cover the bare form, but not a constructor wrap.

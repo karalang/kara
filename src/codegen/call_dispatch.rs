@@ -6517,7 +6517,7 @@ impl<'ctx> super::Codegen<'ctx> {
                     })
                     // B-2026-09-24-16 — or pushed into a container one of
                     // its own locals holds, whose drain runs the body.
-                    || crate::ast::fn_moves_param_into_local_container(f, arg_index)
+                    || crate::ast::fn_moves_param_into_local_container_any(f, arg_index)
                     // B-2026-09-07-10 — or handed back THROUGH a callee that
                     // always returns it (`fn via(r: R) -> R { return f(r); }`).
                     // The caller's admission gate `call_arg_flows_into_return`
@@ -6613,7 +6613,7 @@ impl<'ctx> super::Codegen<'ctx> {
             // B-2026-09-24-16 — a container the callee's own local holds takes
             // the value over just as one the caller holds does: its drain runs
             // the body, in the callee or wherever the container is returned to.
-            || crate::ast::fn_moves_param_into_local_container(f, declared)
+            || crate::ast::fn_moves_param_into_local_container_any(f, declared)
     }
 
     /// B-2026-07-01-7 (discard position): register the caller-side
@@ -13504,6 +13504,7 @@ impl<'ctx> super::Codegen<'ctx> {
             if self.callee_always_hands_array_arg_back(c, arg_index)
                 || self.conditional_array_handback_moves_to_callee(c, arg_index)
                 || self.callee_stores_caller_retained_array_arg(c, arg_index)
+                || self.conditional_array_store_moves_to_callee(c, arg_index)
             {
                 self.suppress_array_binding_move(arg, super::param_own::ArrayMoveDest::HandedBack);
             }

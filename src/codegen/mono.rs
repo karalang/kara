@@ -3500,7 +3500,7 @@ impl<'ctx> super::Codegen<'ctx> {
                 } else if ast_i.is_some_and(|ast_i| {
                     self.program_snapshot.as_deref().is_some_and(|p| {
                         super::declarations::find_function_ast(p, name).is_some_and(|f| {
-                            crate::ast::fn_moves_param_into_local_container(f, ast_i)
+                            crate::ast::fn_moves_param_into_local_container_any(f, ast_i)
                         })
                     })
                 }) {
@@ -5482,7 +5482,7 @@ impl<'ctx> super::Codegen<'ctx> {
             // no, and the registration silently does not happen. The return
             // sibling was shipped once without this and had exactly that hole.
             if !self.is_coroutine_compiled(&func.name)
-                && (crate::ast::fn_conditionally_moves_param_into_outliving_place(func, i)
+                && (crate::ast::fn_conditionally_stores_param(func, i)
                     || self.program_snapshot.as_deref().is_some_and(|p| {
                         crate::ast::fn_conditionally_hands_param_to_flip_callee(p, func, i)
                     }))

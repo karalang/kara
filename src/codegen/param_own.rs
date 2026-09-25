@@ -2595,7 +2595,7 @@ impl<'ctx> super::Codegen<'ctx> {
             f.params.iter().enumerate().any(|(idx, p)| {
                 is_bare(&p.ty)
                     && (crate::ast::fn_moves_param_into_outliving_place(f, idx)
-                        || crate::ast::fn_conditionally_moves_param_into_outliving_place(f, idx))
+                        || crate::ast::fn_conditionally_stores_param(f, idx))
             })
         };
         for item in &program.items {
@@ -3282,6 +3282,43 @@ impl<'ctx> super::Codegen<'ctx> {
                 || crate::ast::fn_always_moves_param_into_outliving_place(f, arg_index))
     }
 
+    /// B-2026-09-25-10 — the conditional-STORE sibling of
+    /// [`Self::conditional_array_handback_moves_to_callee`]: a caller-retained
+    /// by-value `Array` the callee moves into a container on SOME paths only
+    /// (`if c { v.push(a) }`, a local `Vec` or one the caller supplied).
+    ///
+    /// Same arrangement as the conditional hand-back: the callee takes the
+    /// whole drop (element bodies, then element memory) under the per-path
+    /// flag, which the storing statement clears, and the caller stands both of
+    /// its walks down. Before, the caller kept them, so the pushing path freed
+    /// the element buffers in the container's drain and again in the caller.
+    pub(super) fn conditional_array_store_moves_to_callee(
+        &self,
+        callee_name: &str,
+        arg_index: usize,
+    ) -> bool {
+        let Some(program) = self.program_snapshot.as_deref() else {
+            return false;
+        };
+        let Some(f) = crate::codegen::declarations::find_function_ast(program, callee_name) else {
+            return false;
+        };
+        if f.generic_params.is_some() || self.is_coroutine_compiled(&f.name) {
+            return false;
+        }
+        let Some(param) = f.params.get(arg_index) else {
+            return false;
+        };
+        let Some((elem_te, n)) = self.array_elem_and_len(&param.ty) else {
+            return false;
+        };
+        n > 0
+            && self.elem_te_runs_user_drop(&elem_te)
+            && !self.array_param_elem_is_callee_owned(&elem_te)
+            && crate::ast::fn_conditionally_stores_param(f, arg_index)
+            && !crate::ast::fn_conditionally_returns_param_bare(Some(program), f, arg_index)
+    }
+
     pub(super) fn conditional_array_handback_moves_to_callee(
         &self,
         callee_name: &str,
@@ -3730,7 +3767,7 @@ impl<'ctx> super::Codegen<'ctx> {
             return false;
         }
         !self.callee_takes_over_arg_drop_body(callee_name, arg_index)
-            && !crate::ast::fn_conditionally_moves_param_into_outliving_place(f, arg_index)
+            && !crate::ast::fn_conditionally_stores_param(f, arg_index)
     }
 
     fn aggregate_param_copy_supported_struct_mono(&self, struct_name: &str) -> bool {

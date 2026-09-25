@@ -3393,7 +3393,7 @@ impl<'ctx> super::Codegen<'ctx> {
                     // rather than merely being argued safe. Found by re-reading
                     // this diff, not by a test.
                     let cond_stored = !self.is_coroutine_compiled(&func.name)
-                        && (crate::ast::fn_conditionally_moves_param_into_outliving_place(func, i)
+                        && (crate::ast::fn_conditionally_stores_param(func, i)
                             || self.program_snapshot.as_deref().is_some_and(|p| {
                                 crate::ast::fn_conditionally_hands_param_to_flip_callee(p, func, i)
                             }));
@@ -3744,6 +3744,46 @@ impl<'ctx> super::Codegen<'ctx> {
                         }
                     }
                 }
+                // B-2026-09-25-10 — the conditional-STORE twin of the array
+                // arm of the conditional-return registration above, outside
+                // that block because it is gated on a return. A caller-retained
+                // by-value `Array` stored on SOME paths only takes the same
+                // whole drop (element bodies, then memory) under the same
+                // per-path flag, which the storing statement clears
+                // (`arm_conditional_store_flag`); the caller stands both of its
+                // walks down on the same predicate.
+                if let Some((elem_te, n)) = self.array_elem_and_len(&param.ty) {
+                    let recv_offset = self
+                        .program_snapshot
+                        .as_deref()
+                        .and_then(|p| {
+                            crate::codegen::declarations::find_function_ast(p, &func.name)
+                        })
+                        .is_some_and(|ast| ast.self_param.is_some())
+                        as usize;
+                    if i >= recv_offset
+                        && self.conditional_array_store_moves_to_callee(&func.name, i - recv_offset)
+                    {
+                        let elem_ty = self.llvm_type_for_type_expr(&elem_te);
+                        let all = self.emit_array_bodies_then_memory_fn(elem_ty, &elem_te, n);
+                        if let Some(all) = all {
+                            self.track_user_drop_var_with_fn(
+                                "",
+                                &param_name,
+                                alloca,
+                                all,
+                                crate::codegen::state::UserDropKind::ContainerElemBodies,
+                            );
+                            let _ = self.cond_move_drop_flag_for(&param_name);
+                            self.drop_rc
+                                .cond_store_flag_params
+                                .insert(param_name.clone());
+                            self.payload_vars
+                                .cond_handback_array_params
+                                .insert(param_name.clone());
+                        }
+                    }
+                }
                 // B-2026-08-30-28 — the STORE sibling of the conditional
                 // -return registration directly above, and the same defect one
                 // escape route over.
@@ -3785,7 +3825,7 @@ impl<'ctx> super::Codegen<'ctx> {
                 // clearing statement.
                 if func.generic_params.is_none()
                     && !self.is_coroutine_compiled(&func.name)
-                    && (crate::ast::fn_conditionally_moves_param_into_outliving_place(func, i)
+                    && (crate::ast::fn_conditionally_stores_param(func, i)
                         || self.program_snapshot.as_deref().is_some_and(|p| {
                             crate::ast::fn_conditionally_hands_param_to_flip_callee(p, func, i)
                         }))

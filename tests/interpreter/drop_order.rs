@@ -6855,3 +6855,50 @@ fn main() {
         "got:\n{out}"
     );
 }
+
+/// B-2026-09-25-10 — a by-value param whose element runs a user `Drop`, pushed
+/// into a container on SOME paths only. For an `Array` the caller kept both
+/// walks, so on the storing path the `Vec` and the caller each ran the bodies
+/// and freed the memory (`free(): double free detected in tcache 2` on the JIT,
+/// `-O0` and `-O2`). The callee now takes the whole drop under a per-path flag
+/// that the storing path clears. That flag was cleared only by a push written as
+/// a STATEMENT, so `if c { v.push(a) }` (a block tail) and `true => v.push(a),`
+/// (a bare match arm) still ran the bodies twice, for a struct param as well as
+/// an array. `--interp` lost the unstored bodies of a method's param. Cells:
+/// `;` and tail spellings, a match arm, an `else` branch, a nested `if`, a
+/// caller's `mut ref Vec`, two struct spellings, and three methods.
+#[test]
+fn interp_param_pushed_into_a_container_on_some_paths_runs_its_bodies_once() {
+    let out = run(r#"struct R { id: i64, s: String }
+impl Drop for R { fn drop(mut ref self) { println(f"d{self.id}") } }
+fn mkr(i: i64) -> R { return R { id: i, s: f"aaa" } }
+fn semi(a: Array[R, 2], c: bool) -> i64 { let mut v: Vec[Array[R, 2]] = []; if c { v.push(a); } println(f"semi{v.len()}"); return 1 }
+fn tail(a: Array[R, 2], c: bool) -> i64 { let mut v: Vec[Array[R, 2]] = []; if c { v.push(a) } println(f"tail{v.len()}"); return 1 }
+fn arm(a: Array[R, 2], c: bool) -> i64 { let mut v: Vec[Array[R, 2]] = []; match c { true => v.push(a), false => {} } println(f"arm{v.len()}"); return 1 }
+fn els(a: Array[R, 2], c: bool) -> i64 { let mut v: Vec[Array[R, 2]] = []; if not c { println("no") } else { v.push(a) } println(f"els{v.len()}"); return 1 }
+fn nest(a: Array[R, 2], c: bool) -> i64 { let mut v: Vec[Array[R, 2]] = []; if c { if v.len() == 0 { v.push(a) } } println(f"nest{v.len()}"); return 1 }
+fn outv(a: Array[R, 2], c: bool, out: mut ref Vec[Array[R, 2]]) -> i64 { if c { out.push(a) } println(f"out{out.len()}"); return 1 }
+fn st(a: R, c: bool) -> i64 { let mut v: Vec[R] = []; if c { v.push(a) } println(f"st{v.len()}"); return 1 }
+fn starm(a: R, c: bool) -> i64 { let mut v: Vec[R] = []; match c { true => v.push(a), false => {} } println(f"starm{v.len()}"); return 1 }
+struct H { k: i64 }
+impl H {
+    fn marr(ref self, a: Array[R, 2], c: bool) -> i64 { let mut v: Vec[Array[R, 2]] = []; if c { v.push(a) } println(f"marr{v.len()}"); return self.k }
+    fn mst(ref self, a: R, c: bool) -> i64 { let mut v: Vec[R] = []; if c { v.push(a) } println(f"mst{v.len()}"); return self.k }
+    fn mout(ref self, a: R, c: bool, out: mut ref Vec[R]) -> i64 { if c { out.push(a) } println(f"mout{out.len()}"); return self.k }
+}
+fn main() {
+    { let a: Array[R, 2] = [mkr(1), mkr(2)]; let z = semi(a, true); let b: Array[R, 2] = [mkr(3), mkr(4)]; let y = semi(b, false); println("k1") }
+    { let a: Array[R, 2] = [mkr(5), mkr(6)]; let z = tail(a, true); let b: Array[R, 2] = [mkr(7), mkr(8)]; let y = tail(b, false); println("k2") }
+    { let a: Array[R, 2] = [mkr(9), mkr(10)]; let z = arm(a, true); let b: Array[R, 2] = [mkr(11), mkr(12)]; let y = arm(b, false); println("k3") }
+    { let a: Array[R, 2] = [mkr(13), mkr(14)]; let z = els(a, true); let b: Array[R, 2] = [mkr(15), mkr(16)]; let y = els(b, false); println("k4") }
+    { let a: Array[R, 2] = [mkr(17), mkr(18)]; let z = nest(a, true); let b: Array[R, 2] = [mkr(19), mkr(20)]; let y = nest(b, false); println("k5") }
+    { let mut o: Vec[Array[R, 2]] = []; { let a: Array[R, 2] = [mkr(21), mkr(22)]; let z = outv(a, true, mut o); let b: Array[R, 2] = [mkr(23), mkr(24)]; let y = outv(b, false, mut o); println("k6") } println(f"n{o.len()}") }
+    { let a = mkr(25); let z = st(a, true); let b = mkr(26); let y = st(b, false); println("k7") }
+    { let a = mkr(27); let z = starm(a, true); let b = mkr(28); let y = starm(b, false); println("k8") }
+    { let h = H { k: 1 }; let a: Array[R, 2] = [mkr(29), mkr(30)]; let z = h.marr(a, true); let y = h.marr([mkr(31), mkr(32)], false); println("k9") }
+    { let h = H { k: 1 }; let a = mkr(33); let z = h.mst(a, true); let b = mkr(34); let y = h.mst(b, false); println("k10") }
+    { let h = H { k: 1 }; let mut o: Vec[R] = []; { let a = mkr(35); let z = h.mout(a, true, mut o); let b = mkr(36); let y = h.mout(b, false, mut o); println("k11") } println(f"m{o.len()}") }
+    println("end")
+}"#);
+    assert_eq!(out, "semi1\nd1\nd2\nsemi0\nd3\nd4\nk1\ntail1\nd5\nd6\ntail0\nd7\nd8\nk2\narm1\nd9\nd10\narm0\nd11\nd12\nk3\nels1\nd13\nd14\nno\nels0\nd15\nd16\nk4\nnest1\nd17\nd18\nnest0\nd19\nd20\nk5\nout1\nout1\nd23\nd24\nk6\nn1\nd21\nd22\nst1\nd25\nst0\nd26\nk7\nstarm1\nd27\nstarm0\nd28\nk8\nmarr1\nd29\nd30\nmarr0\nd31\nd32\nk9\nmst1\nd33\nmst0\nd34\nk10\nmout1\nmout1\nd36\nk11\nm1\nd35\nend\n", "got:\n{out}");
+}

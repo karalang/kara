@@ -1412,6 +1412,11 @@ impl<'ctx> super::Codegen<'ctx> {
             // drain, so setting it for them would double the answer.
             self.branch_arm_value_discarded =
                 body_is_block && !own_value && !discard_stmt_owns_value;
+            // B-2026-09-25-10 — a BARE arm body (`true => v.push(a),`) is a
+            // tail no block compiles, so it gets the store disarm here, in the
+            // arm's own basic block. A block body is a no-op for this call and
+            // is disarmed by its own tail instead.
+            self.arm_conditional_store_flag_for_tail(&arm.body);
             let mut arm_val = self.compile_tail_final_expr(&arm.body, tail)?;
             self.arm_tail_owner_ctx = None;
             // B-2026-09-01-10 — one-shot, like the context above: the block
