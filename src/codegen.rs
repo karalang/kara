@@ -2313,6 +2313,11 @@ pub(super) struct Codegen<'ctx> {
     /// so a stale entry can never disarm an unrelated statement's temp).
     pub(crate) freshtemp_field_access_slot:
         Option<(PointerValue<'ctx>, String, String, (usize, usize))>,
+    /// B-2026-09-25-42 — the INSTANTIATION of the temp staged in
+    /// `freshtemp_field_access_slot`, written alongside it, so the consumer's
+    /// masked bodies walk can resolve a generic struct's `T`-typed fields. Read
+    /// only when the slot itself matches, so a stale value is never consulted.
+    pub(crate) freshtemp_field_access_inst: Option<TypeExpr>,
     /// B-2026-09-17-36 — one level per statement being compiled, holding the
     /// fresh temps read through a projection inside it; their `Drop` bodies run
     /// when that statement ends. The interpreter's twin is
@@ -6843,6 +6848,7 @@ impl<'ctx> Codegen<'ctx> {
             arm_tail_owner_ctx: None,
             arm_pending_tail_owner: None,
             freshtemp_field_access_slot: None,
+            freshtemp_field_access_inst: None,
             freshtemp_read_levels: Vec::new(),
             freshtemp_read_through: None,
             enum_box_stack_args: None,

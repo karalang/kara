@@ -1693,6 +1693,7 @@ impl<'ctx> super::Codegen<'ctx> {
         // the `String` on every compiled surface while `let w = wrap(..)`,
         // which registers the per-monomorph drop, was clean.
         let inst = self.freshtemp_call_struct_inst(object);
+        self.freshtemp_field_access_inst = inst.clone();
         self.track_struct_var_inst(&name, slot, inst);
         // B-2026-09-17-36 — and its `Drop` bodies, at the end of the statement
         // that read it. Registered AFTER the memory drop, so on an early exit
@@ -1952,10 +1953,22 @@ impl<'ctx> super::Codegen<'ctx> {
             .struct_field_names
             .get(name.as_str())
             .and_then(|fs| fs.iter().position(|f| f == field));
+        // B-2026-09-25-42 — with the temp's INSTANTIATION, so a generic
+        // struct's `T`-typed field is resolved to the type it holds: the
+        // name-only walk saw no `Drop` field in `G[T] { v: T, k: i64 }` and
+        // declined, so `let x = mkg(mkd(3)).k;` ran `dD3` under `--interp` and
+        // nowhere compiled. An empty subst is the old behaviour byte-for-byte.
+        let subst = self
+            .freshtemp_field_access_inst
+            .take()
+            .map(|inst| self.generic_struct_subst_from_inst(&name, &inst))
+            .unwrap_or_default();
         if let Some(idx) = skip_idx {
             let mut skip = super::synth_drop::FieldSkipTree::default();
             skip.here.insert(idx);
-            if let Some(bodies) = self.field_bodies_fn_for_owned_temp_skipping(&name, &skip) {
+            if let Some(bodies) =
+                self.field_bodies_fn_for_owned_temp_mono_skipping(&name, &subst, &skip)
+            {
                 self.builder.build_call(bodies, &[slot.into()], "").unwrap();
             }
         }

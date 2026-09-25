@@ -517,6 +517,38 @@ impl<'a> super::Interpreter<'a> {
                 self.env.pop_scope();
                 return Err(cf);
             }
+            // B-2026-09-25-42 — a function body's tail CONSUMES its value (it
+            // goes to the caller), so a tail projection off a fresh temp
+            // (`fn tail() -> i64 { mkw(9).b }`) ends that temp here and its
+            // remaining fields' bodies are owed. Codegen has always done this
+            // at the same position (`suppress_cleanup_for_tail_return` calls
+            // `consume_freshtemp_field_move` on the body's tail), so the
+            // compiled surfaces printed `dD109 dD9 t9` where this backend
+            // printed `t9`. Only the body's OWN tail, exactly as there: a tail
+            // nested in an `if` or `match` arm is not consumed on either side.
+            //
+            // A closure's body arrives wrapped in a synthetic block whose tail
+            // is the closure's body expression and whose span IS that
+            // expression's span (`eval_expr`'s `ExprKind::Closure` arm). Codegen
+            // consumes the tail of a BLOCK-bodied closure (`|n| { mkw(n).b }`,
+            // `closures.rs`) and not a bare-expression one (`|n| mkw(n).b`), so
+            // the wrapper is looked through to the inner block's tail, and a
+            // bare body is left alone.
+            if is_fn_body {
+                let closure_wrapper = block.stmts.is_empty()
+                    && block.span.offset == expr.span.offset
+                    && block.span.length == expr.span.length;
+                let consumed = match &expr.kind {
+                    ExprKind::Block(inner) | ExprKind::Seq(inner) if closure_wrapper => {
+                        Self::tail_consumed_expr(inner)
+                    }
+                    _ if closure_wrapper => None,
+                    _ => Some(&**expr),
+                };
+                if let Some(consumed) = consumed {
+                    self.consume_freshtemp_field_move(consumed);
+                }
+            }
             // A function body whose TAIL is a syntactic `Err(...)` / `None`
             // leaves via the failure path even though no `ControlFlow` was
             // raised — nothing propagated, the value simply IS the error. The
@@ -544,6 +576,16 @@ impl<'a> super::Interpreter<'a> {
             }
             v
         } else {
+            // B-2026-09-25-42 — codegen reads a body with no tail through its
+            // LAST STATEMENT (`suppress_cleanup_for_tail_return`'s
+            // `from_last_stmt`), so `fn f() { mkw(9).b; }` ran `dD109 dD9`
+            // compiled and nothing here. The same statement anywhere but last
+            // runs nothing on either backend.
+            if is_fn_body {
+                if let Some(consumed) = Self::tail_consumed_expr(block) {
+                    self.consume_freshtemp_field_move(consumed);
+                }
+            }
             Value::Unit
         };
         // Normal exit — drop+defer phase only.
@@ -3276,6 +3318,21 @@ impl<'a> super::Interpreter<'a> {
         let bname = bname.clone();
         for i in views {
             self.moved_out_enum_payload_slots.insert((bname.clone(), i));
+        }
+    }
+
+    /// B-2026-09-25-42 — the expression a function body hands back, in the
+    /// sense codegen's `suppress_cleanup_for_tail_return` uses: the block's
+    /// tail, or else its last statement when that is a bare expression. A
+    /// last-statement `return` is left out because it leaves through its own
+    /// control flow and never reaches the block's end here.
+    fn tail_consumed_expr(block: &Block) -> Option<&Expr> {
+        if let Some(e) = block.final_expr.as_deref() {
+            return Some(e);
+        }
+        match &block.stmts.last()?.kind {
+            StmtKind::Expr(e) if !matches!(e.kind, ExprKind::Return(_)) => Some(e),
+            _ => None,
         }
     }
 

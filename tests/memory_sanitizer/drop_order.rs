@@ -2872,3 +2872,56 @@ fn main() {
         20,
     );
 }
+
+/// B-2026-09-25-42 — a function or block-closure TAIL now consumes a fresh
+/// temp's projection on both backends, and codegen's masked walk resolves a
+/// generic temp's fields from its instantiation. Neither may free, read or
+/// double-run what the temp's memory drop owns: every body reads a heap
+/// `String` longer than the inline capacity, and the moved-out field (`taild`)
+/// is read by its new owner after the tail's walk ran.
+#[test]
+fn asan_fresh_temp_projected_in_a_function_tail_runs_its_bodies_once() {
+    assert_clean_asan_run_min_allocs(
+        r#"struct D { id: i64, name: String }
+impl Drop for D { fn drop(mut ref self) { println(f"dD{self.id} {self.name}") } }
+fn mkd(n: i64) -> D { return D { id: n, name: f"name-string-longer-than-sso-{n}" }; }
+struct W { r: D, s: D, b: i64 }
+fn mkw(n: i64) -> W { return W { r: mkd(n), s: mkd(n + 100), b: n }; }
+struct G[T] { v: T, k: i64 }
+fn mkg(d: D) -> G[D] { return G { v: d, k: 5 }; }
+fn tail() -> i64 { mkw(1).b }
+fn tailg() -> i64 { mkg(mkd(2)).k }
+fn taild() -> D { mkw(3).r }
+fn lastst() { let a = 1; mkw(4).b; }
+fn main() {
+    println(f"t{tail()}");
+    println(f"g{tailg()}");
+    let d = taild(); println(d.name);
+    lastst();
+    let f = |n: i64| { mkw(n).b }; println(f"f{f(5)}");
+    let x = mkg(mkd(6)).k; println(f"x{x}");
+    println("end")
+}
+"#,
+        &[
+            "dD101 name-string-longer-than-sso-101",
+            "dD1 name-string-longer-than-sso-1",
+            "t1",
+            "dD2 name-string-longer-than-sso-2",
+            "g5",
+            "dD103 name-string-longer-than-sso-103",
+            "name-string-longer-than-sso-3",
+            "dD3 name-string-longer-than-sso-3",
+            "dD104 name-string-longer-than-sso-104",
+            "dD4 name-string-longer-than-sso-4",
+            "dD105 name-string-longer-than-sso-105",
+            "dD5 name-string-longer-than-sso-5",
+            "f5",
+            "dD6 name-string-longer-than-sso-6",
+            "x5",
+            "end",
+        ],
+        "asan_fresh_temp_projected_in_a_function_tail_runs_its_bodies_once",
+        12,
+    );
+}

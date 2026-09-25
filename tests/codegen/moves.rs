@@ -2021,6 +2021,115 @@ fn e2e_fresh_temp_read_through_a_projection_runs_its_bodies() {
     }
 }
 
+/// B-2026-09-25-42 — a FUNCTION's tail hands its value to the caller, so a
+/// projection off a fresh temp there (`fn tail() -> i64 { mkw(9).b }`) ends
+/// the temp and its remaining fields' `Drop` bodies are owed at the return.
+///
+/// Codegen always did this (`suppress_cleanup_for_tail_return` consumes the
+/// body's tail, or its last statement when there is no tail) and printed
+/// `dD109 dD9 t9`; the interpreter printed `t9`, a run-vs-build divergence in
+/// every cell below but the pinned ones. It now consumes the same expression
+/// at the same point, including a block-bodied closure's tail. Codegen's walk
+/// additionally resolves a GENERIC temp's fields from its instantiation, which
+/// the interpreter already did (`let x = mkg(mkd(3)).k;` diverged the other
+/// way).
+///
+/// The PINNED cells are tails both backends still leave alone, together: a
+/// tail nested in an `if` arm or an inner block, a projection read through
+/// (`mkw(9).r.id`), and one inside arithmetic.
+#[test]
+fn e2e_fresh_temp_projected_in_a_function_tail_runs_its_bodies() {
+    const H: &str = "struct D { id: i64, name: String }\n\
+             impl Drop for D { fn drop(mut ref self) { println(f\"dD{self.id}{self.name}\") } }\n\
+             fn mkd(n: i64) -> D { return D { id: n, name: f\"n{n}\" }; }\n\
+             struct W { r: D, s: D, b: i64 }\n\
+             fn mkw(n: i64) -> W { return W { r: mkd(n), s: mkd(n + 100), b: n }; }\n\
+             struct G[T] { v: T, k: i64 }\n\
+             fn mkg(d: D) -> G[D] { return G { v: d, k: 5 }; }\n\
+             fn tail() -> i64 { mkw(9).b }\n\
+             fn tailg() -> i64 { mkg(mkd(3)).k }\n\
+             fn lastst() { let a = 1; mkw(9).b; }\n\
+             fn taild() -> D { mkw(9).r }\n\
+             impl W { fn m(ref self) -> i64 { mkw(9).b } }\n\
+             fn tailif(c: bool) -> i64 { if c { mkw(9).b } else { 0 } }\n\
+             fn tailr() -> i64 { mkw(9).r.id }\n\
+             fn tailadd() -> i64 { mkw(9).b + 1 }\n\
+             fn tailnest() -> i64 { let a = 1; { mkw(9).b } }\n";
+    for (label, body, want) in [
+        (
+            "function tail",
+            "println(f\"t{tail()}\");",
+            "dD109n109\ndD9n9\nt9\nend\n",
+        ),
+        (
+            "method tail",
+            "let w = mkw(1); println(f\"t{w.m()}\");",
+            "dD109n109\ndD9n9\nt9\ndD101n101\ndD1n1\nend\n",
+        ),
+        (
+            "Drop-bearing field moved out of the tail",
+            "let d = taild(); println(f\"t{d.id}\");",
+            "dD109n109\nt9\ndD9n9\nend\n",
+        ),
+        (
+            "last statement of a unit function",
+            "lastst(); println(\"x\");",
+            "dD109n109\ndD9n9\nx\nend\n",
+        ),
+        (
+            "block-bodied closure tail",
+            "let f = |n: i64| { mkw(n).b }; println(f\"f{f(9)}\");",
+            "dD109n109\ndD9n9\nf9\nend\n",
+        ),
+        (
+            "block-bodied closure, last statement",
+            "let f = |n: i64| { mkw(n).b; }; f(9); println(\"x\");",
+            "dD109n109\ndD9n9\nx\nend\n",
+        ),
+        (
+            "generic struct in a function tail",
+            "println(f\"t{tailg()}\");",
+            "dD3n3\nt5\nend\n",
+        ),
+        (
+            "generic struct taken by a let",
+            "let x = mkg(mkd(3)).k; println(f\"x{x}\");",
+            "dD3n3\nx5\nend\n",
+        ),
+        (
+            "pinned: tail nested in an if arm",
+            "println(f\"t{tailif(true)}\");",
+            "t9\nend\n",
+        ),
+        (
+            "pinned: tail read through a projection",
+            "println(f\"t{tailr()}\");",
+            "t9\nend\n",
+        ),
+        (
+            "pinned: tail inside arithmetic",
+            "println(f\"t{tailadd()}\");",
+            "t10\nend\n",
+        ),
+        (
+            "pinned: tail of an inner block",
+            "println(f\"t{tailnest()}\");",
+            "t9\nend\n",
+        ),
+    ] {
+        let prog = format!("{H}fn main() {{\n    {body}\n    println(\"end\")\n}}\n");
+        let (interp_out, interp_errs, _, _) = karac::run_program_full_checked(&prog);
+        assert!(
+            interp_errs.is_empty(),
+            "[{label}] interp errored: {interp_errs:?}"
+        );
+        assert_eq!(interp_out.join(""), want, "[{label}] interpreter");
+        if let Some(aot) = run_program(&prog) {
+            assert_eq!(aot, want, "[{label}] AOT");
+        }
+    }
+}
+
 /// B-2026-09-05-13 — a by-value param REBOUND whole (`let m = r;`) and then
 /// handed back through an `Option`/`Result` constructor runs the `Drop` body
 /// ONCE, on every surface, unconditionally (`u-rebind`) and conditionally
