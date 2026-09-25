@@ -4649,6 +4649,21 @@ impl<'ctx> super::Codegen<'ctx> {
             return true;
         }
         match &arg.kind {
+            // B-2026-09-25-12 — a call to a Kāra-defined METHOD or associated
+            // function manufactures its result exactly as a free call does
+            // (the `Call` arm below), with the same exception for a result
+            // that hands back a binding that still owns it. Refused wholesale
+            // before, so `show(H.mk(1))` into an entry-copying `show` leaked
+            // the result, and once -12 made a conditionally handed-back
+            // param a copy, `show(H.f(a, true))` did too. A builtin method
+            // (`m.get(k)`, `.clone()`) resolves to no function here and keeps
+            // the old answer.
+            ExprKind::MethodCall { .. }
+                if self.passthrough_callee_key(arg).is_some()
+                    && !self.call_result_aliases_armed_binding(arg) =>
+            {
+                true
+            }
             // A live binding or a place rooted at one: something else owns it.
             ExprKind::Identifier(_)
             | ExprKind::FieldAccess { .. }
@@ -4693,8 +4708,16 @@ impl<'ctx> super::Codegen<'ctx> {
                 // A direct call to a real function manufactures its result --
                 // unless it hands back a binding that still owns it
                 // (B-2026-09-23-43, see `call_result_aliases_armed_binding`).
-                matches!(&callee.kind, ExprKind::Identifier(n)
+                // B-2026-09-25-12 — and the associated-function spelling
+                // (`H.mk(1)`), which is a `Call` whose callee is a PATH.
+                (matches!(&callee.kind, ExprKind::Identifier(n)
                     if self.fn_sig.fn_return_type_names.contains_key(n))
+                    || (matches!(&callee.kind, ExprKind::Path { .. })
+                        && self.passthrough_callee_key(arg).is_some_and(|(k, _)| {
+                            self.program_snapshot.as_deref().is_some_and(|p| {
+                                super::declarations::find_function_ast(p, &k).is_some()
+                            })
+                        })))
                     && !self.call_result_aliases_armed_binding(arg)
             }
             // A fresh aggregate is unowned exactly when every initializer is.

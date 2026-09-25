@@ -1644,6 +1644,38 @@ impl<'ctx> super::Codegen<'ctx> {
         self.optres_escaping_param_entry_copied(fn_key, arg_i + usize::from(has_self))
     }
 
+    /// B-2026-09-25-12 — [`Self::optres_escaping_arg_entry_copied`] asked AT
+    /// A CALL, so a generic free callee answers too: its monomorph's entry copy
+    /// ([`Self::mono_optres_param_entry_copied`]) is decided by the argument's
+    /// instantiated type, which only the call's substitution frame knows. A
+    /// result that comes back in the callee's own copy is not an alias of the
+    /// argument, generic or not.
+    pub(super) fn optres_arg_entry_copied_at_call(
+        &self,
+        callee_name: &str,
+        arg_i: usize,
+        call_span: &crate::token::Span,
+    ) -> bool {
+        if self.optres_escaping_arg_entry_copied(callee_name, arg_i) {
+            return true;
+        }
+        let Some(f) = self
+            .program_snapshot
+            .as_deref()
+            .and_then(|p| super::declarations::find_function_ast(p, callee_name))
+        else {
+            return false;
+        };
+        if f.generic_params.is_none() || f.self_param.is_some() {
+            return false;
+        }
+        let Some(p) = f.params.get(arg_i) else {
+            return false;
+        };
+        let inst = Self::str_as_string_te(&self.callee_param_te_for_call(&p.ty, call_span));
+        self.mono_optres_param_entry_copied(f, arg_i, &inst)
+    }
+
     /// B-2026-09-24-14 — does the function `fn_key` ENTRY-COPY its
     /// by-value `Option`/`Result` parameter `idx` even though the parameter
     /// ESCAPES its frame?
@@ -1728,7 +1760,13 @@ impl<'ctx> super::Codegen<'ctx> {
         let keeps_hand_back_route = self.call_arg_flows_into_return(fn_key, ast_i)
             && f.return_type.as_ref().is_some_and(|rt| {
                 crate::formatter::render_type_expr(rt) == crate::formatter::render_type_expr(&p.ty)
-            });
+            })
+            // B-2026-09-25-12 — and hands it back on EVERY path. One returned
+            // on SOME paths (`if c { s } else { d }`) is copied: the hand-back
+            // route ties the result to ONE argument, so with two candidates
+            // `c = false` freed the second argument twice and stranded the
+            // first, and a temporary had no owner on the path that dropped it.
+            && crate::ast::fn_always_returns_param(Some(program), f, ast_i);
         self.optres_param_entry_copied_te(&p.ty)
             && crate::ast::concrete_plain_type(Some(program), &p.ty, &mut Vec::new())
             && !keeps_hand_back_route
@@ -1808,7 +1846,10 @@ impl<'ctx> super::Codegen<'ctx> {
         let keeps_hand_back_route = self.call_arg_flows_into_return(&f.name, ast_i)
             && f.return_type.as_ref().is_some_and(|rt| {
                 crate::formatter::render_type_expr(rt) == crate::formatter::render_type_expr(&p.ty)
-            });
+            })
+            // B-2026-09-25-12 — the same ALL-paths condition as the
+            // non-generic predicate, for the same reason.
+            && crate::ast::fn_always_returns_param(Some(program), f, ast_i);
         self.optres_param_entry_copied_te(inst)
             && crate::ast::concrete_plain_type(Some(program), inst, &mut Vec::new())
             && !keeps_hand_back_route

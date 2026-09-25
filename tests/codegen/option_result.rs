@@ -11276,3 +11276,57 @@ fn main() {
         "must match --interp"
     );
 }
+
+/// B-2026-09-25-12 — an `Option[String]` param handed back on SOME paths
+/// (`if c { s } else { d }`, `if c { return s } return d`, `if c { s } else
+/// { None }`), generic or not. The caller kept its named arguments and tied
+/// the result to the FIRST one, so `c = false` double freed the second and
+/// leaked the first; a temporary argument had no owner on the untaken path.
+/// The callee now copies such a param at entry, as it already did for one it
+/// hands back wrapped, and a monomorph does the same for a bare `T` param
+/// instantiated at `Option`, which is also what a generic push relies on.
+/// A METHOD or associated function's result handed on to an entry-copying
+/// param (`show(K.mk(23))`) is now owned by the caller like a free call's,
+/// which it was not before (a leak), and which the copying `K.f` needs.
+#[test]
+fn test_e2e_option_param_handed_back_on_one_branch_frees_once() {
+    let out = run_program(
+        r#"fn pick2(c: bool, s: Option[String], d: Option[String]) -> Option[String] { if c { s } else { d } }
+fn pickr(c: bool, s: Option[String], d: Option[String]) -> Option[String] { if c { return s } return d }
+fn pick1(c: bool, s: Option[String]) -> Option[String] { if c { s } else { None } }
+fn pickg[T](c: bool, s: T, d: T) -> T { if c { s } else { d } }
+fn st[T](v: mut ref Vec[T], s: T) { v.push(s) }
+fn h(i: i64) -> Option[String] { Some(f"heap-string-longer-than-sso-{i}") }
+struct K { k: i64 }
+impl K {
+    fn f(a: Option[String], c: bool) -> Option[String] { let r: Option[String] = if c { a } else { None }; r }
+    fn mk(i: i64) -> Option[String] { h(i) }
+    fn mm(self, i: i64) -> Option[String] { h(i) }
+}
+fn show(o: Option[String]) { match o { Some(x) => println(x), None => println("none") } }
+fn main() {
+    { let s = h(1); let t = h(2); let r = pick2(false, s, t); println(r.unwrap()) }
+    { let s = h(3); let t = h(4); let r = pick2(true, s, t); println(r.unwrap()) }
+    { let r = pick2(false, h(5), h(6)); println(r.unwrap()) }
+    { let s = h(7); let r = pick2(true, s, h(8)); println(r.unwrap()) }
+    { let s = h(9); let t = h(10); let r = pickr(false, s, t); println(r.unwrap()) }
+    { let r = pickr(true, h(11), h(12)); println(r.unwrap()) }
+    { let r = pick1(false, h(13)); println(r.is_some()) }
+    { let s = h(14); let r = pick1(true, s); println(r.unwrap()) }
+    { let s = h(15); let t = h(16); let r = pickg(false, s, t); println(r.unwrap()) }
+    { let r = pickg(true, h(17), h(18)); println(r.unwrap()) }
+    { let mut v: Vec[Option[String]] = Vec.new(); st(mut v, h(19)); let s = h(20); st(mut v, s); println(v.len()) }
+    { let s = h(21); show(K.f(s, true)) }
+    { let s = h(22); show(K.f(s, false)) }
+    show(K.mk(23));
+    { let k = K { k: 1 }; show(k.mm(24)) }
+    println("end")
+}
+"#,
+    );
+    assert_eq!(
+        out.as_deref(),
+        Some("heap-string-longer-than-sso-2\nheap-string-longer-than-sso-3\nheap-string-longer-than-sso-6\nheap-string-longer-than-sso-7\nheap-string-longer-than-sso-10\nheap-string-longer-than-sso-11\nfalse\nheap-string-longer-than-sso-14\nheap-string-longer-than-sso-16\nheap-string-longer-than-sso-17\n2\nheap-string-longer-than-sso-21\nnone\nheap-string-longer-than-sso-23\nheap-string-longer-than-sso-24\nend\n"),
+        "must match --interp"
+    );
+}

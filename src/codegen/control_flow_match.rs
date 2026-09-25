@@ -16149,7 +16149,9 @@ impl<'ctx> super::Codegen<'ctx> {
             // so the result is not an alias of the argument. Recording it as one
             // disarmed the argument the moment the result moved on
             // (`let a = mk(l, 5); lab(a)` leaked `l`'s 29 B).
-            if self.optres_escaping_arg_entry_copied(&callee_name, i) {
+            // B-2026-09-25-12 — asked at the call, so a generic callee's
+            // monomorph copy counts as well.
+            if self.optres_arg_entry_copied_at_call(&callee_name, i, &value.span) {
                 return None;
             }
             // B-2026-09-24-3 — the CHAINED spellings, as the boxed sibling

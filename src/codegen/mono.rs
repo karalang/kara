@@ -5281,9 +5281,22 @@ impl<'ctx> super::Codegen<'ctx> {
             // same predicate for its half (the caller keeps a named argument
             // and owns a temp). Registered BEFORE the copy, as in
             // `compile_function` (B-2026-08-12-1's ordering note).
-            if matches!(&param.ty.kind, TypeKind::Path(pp)
-                if matches!(pp.segments.first().map(String::as_str), Some("Option") | Some("Result")))
-            {
+            // B-2026-09-25-12 — asked of the INSTANTIATED head, not the
+            // declared one: a bare `s: T` at `T = Option[String]` is the same
+            // param to `compile_generic_call`'s half, which reads only the
+            // instantiated type, so gating on the declared `Option` head left
+            // that half keeping the argument while this one copied nothing.
+            let declared_optres = |te: &TypeExpr| {
+                matches!(&te.kind, TypeKind::Path(pp)
+                    if matches!(pp.segments.first().map(String::as_str), Some("Option") | Some("Result")))
+            };
+            let bare_type_param = matches!(&param.ty.kind, TypeKind::Path(pp)
+            if pp.segments.len() == 1
+                && pp.generic_args.is_none()
+                && func.generic_params.as_ref().is_some_and(|gps| {
+                    gps.params.iter().any(|g| g.name == pp.segments[0])
+                }));
+            if declared_optres(&param.ty) || bare_type_param {
                 // B-2026-09-24-33 — resolved through the same per-call frame
                 // `compile_generic_call`'s half reads, not the body resolver:
                 // for `pick(a, [f"d", f"e"])` the latter binds `T` to a
