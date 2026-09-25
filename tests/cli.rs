@@ -26439,6 +26439,120 @@ process.exit(0);
     let _ = std::fs::remove_dir_all(&tmp);
 }
 
+/// B-2026-09-25-36: a host event stream whose receiver has been DROPPED must
+/// stop itself, not trap the whole program. The guest takes one `keydown`,
+/// drops the receiver at the end of its block, then keeps running (a spin long
+/// enough that the harness dispatches many more events meanwhile). Before the
+/// fix, the glue's listener called the panicking `karac_runtime_channel_send`,
+/// so the first event after the drop aborted the module with "send on a
+/// channel with no live receiver" and `after` never printed. Now the listener
+/// sends through `karac_runtime_channel_try_send` and removes itself on the
+/// closed-channel result, so the guest runs to completion.
+#[test]
+fn wasm_threads_keydown_after_receiver_dropped_e2e() {
+    let tmp = wasm_test_dir("wtkeydrop");
+    let path = tmp.join("kd.kara");
+    std::fs::write(
+        &path,
+        "import std.web.events.{keydown, KeyEvent};\n\n\
+         fn spin(n: i64) -> i64 {\n    \
+             let mut acc = 0;\n    \
+             let mut i = 0;\n    \
+             while i < n {\n        \
+                 acc = (acc + i * 7) % 1000003;\n        \
+                 i = i + 1;\n    \
+             }\n    \
+             acc\n}\n\n\
+         fn main() {\n    \
+             println(\"before\");\n    \
+             {\n        \
+                 let keys = keydown();\n        \
+                 let k = keys.recv();\n        \
+                 println(f\"code {k.key_code()}\");\n    \
+             }\n    \
+             println(\"dropped\");\n    \
+             println(f\"spin {spin(30000000)}\");\n    \
+             println(\"after\");\n}\n",
+    )
+    .unwrap();
+
+    let out = karac_bin()
+        .args([
+            "build",
+            path.to_str().unwrap(),
+            "--target=wasm_browser",
+            "--features=wasm-threads",
+        ])
+        .current_dir(&tmp)
+        .env_remove("KARAC_RUNTIME")
+        .output()
+        .unwrap();
+    let stderr = String::from_utf8_lossy(&out.stderr);
+    if let Some(reason) = wasm_build_skip_reason(&out) {
+        eprintln!("skip: wasm_threads_keydown_after_receiver_dropped_e2e — {reason}");
+        let _ = std::fs::remove_dir_all(&tmp);
+        return;
+    }
+    assert!(
+        out.status.success(),
+        "keydown-drop wasm-threads build failed: {stderr}"
+    );
+
+    let harness = tmp.join("harness.mjs");
+    std::fs::write(
+        &harness,
+        r#"import { run } from "./kd.js";
+class KE extends Event {
+  constructor(code) { super("keydown"); this.keyCode = code; }
+}
+const target = new EventTarget();
+let dispatched = 0;
+const iv = setInterval(() => { dispatched++; target.dispatchEvent(new KE(39)); }, 5);
+const bail = setTimeout(() => { console.error("FAIL: guest never finished, dispatched=" + dispatched); process.exit(2); }, 20000);
+await run({}, { keyTarget: target });
+const atExit = dispatched;
+clearInterval(iv);
+clearTimeout(bail);
+console.log("DROP_HARNESS_OK dispatched=" + atExit);
+process.exit(0);
+"#,
+    )
+    .unwrap();
+    let node = std::process::Command::new("node")
+        .arg(&harness)
+        .current_dir(&tmp)
+        .output();
+    let Ok(node_out) = node else {
+        eprintln!("skip: wasm_threads_keydown_after_receiver_dropped_e2e — node not on PATH");
+        let _ = std::fs::remove_dir_all(&tmp);
+        return;
+    };
+    let node_stdout = String::from_utf8_lossy(&node_out.stdout);
+    let node_stderr = String::from_utf8_lossy(&node_out.stderr);
+    assert!(
+        node_out.status.success(),
+        "a dropped keydown receiver must not trap the program: stdout={node_stdout} stderr={node_stderr}",
+    );
+    assert!(
+        !node_stderr.contains("no live receiver"),
+        "the host listener still panicked on a closed channel: stderr={node_stderr}",
+    );
+    let lines: Vec<&str> = node_stdout.lines().collect();
+    let pos = |s: &str| lines.iter().position(|l| *l == s);
+    assert!(
+        matches!(
+            (pos("before"), pos("code 39"), pos("dropped"), pos("after")),
+            (Some(a), Some(b), Some(c), Some(d)) if a < b && b < c && c < d
+        ),
+        "guest must print before, code 39, dropped, after in order: stdout={node_stdout}",
+    );
+    assert!(
+        node_stdout.contains("DROP_HARNESS_OK"),
+        "harness did not complete: stdout={node_stdout} stderr={node_stderr}",
+    );
+    let _ = std::fs::remove_dir_all(&tmp);
+}
+
 /// The sequential-target gate for `keydown`: built WITHOUT `--features
 /// wasm-threads` it is a hard compile error (codegen, pre-link) naming the
 /// flag — never a silent never-filling channel. Sibling of

@@ -219,6 +219,10 @@ pub fn link_wasm_executable_threaded(
         // exports), so surface them explicitly. Harmless for programs that
         // never use timers — the symbols are already linked from the archive.
         "--export=karac_runtime_channel_send",
+        // B-2026-09-25-36 — the glue's producers send through the
+        // non-panicking `try_send`, so a host stream that outlives the
+        // guest's receiver stops instead of aborting the instance.
+        "--export=karac_runtime_channel_try_send",
         "--export=karac_runtime_channel_drop_sender",
         // `animation_frames` backpressure: the rAF service callback probes the
         // channel depth so it feeds at most one un-drained `()` tick per loop

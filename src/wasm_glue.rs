@@ -1767,6 +1767,15 @@ async function runThreaded(hostImpls = {}, opts = {}) {
     // worker stays ref'd, so frames keep arriving while the guest is alive, and
     // node leaves on its own once the guest is done. Browsers return a number
     // from `setInterval`/`setTimeout` with no `unref`, hence the guard.
+    // B-2026-09-25-36 — every host producer sends through `try_send`, never
+    // `send`. A host stream outlives the guest's receiver: the program can
+    // drop it, or return from `main`, while the page (or a node harness's
+    // interval) keeps firing, and `send` PANICS on a channel with no live
+    // receiver, aborting the instance. `try_send` reports that as status 2
+    // instead, and the producer then stops itself: a listener removes itself,
+    // an interval clears, a frame loop stops re-arming.
+    const hostSend = (ptr, valPtr, size) =>
+      Number(serviceInstance.exports.karac_runtime_channel_try_send(ptr, valPtr, size)) !== 2;
     const unrefHostTimer = (h) => {
       if (h && typeof h.unref === "function") h.unref();
       return h;
@@ -1774,7 +1783,7 @@ async function runThreaded(hostImpls = {}, opts = {}) {
     builtinHostImpls["__kara_timer_after"] = (chPtr, ms) => {
       const ptr = Number(chPtr);
       setTimeout(() => {
-        serviceInstance.exports.karac_runtime_channel_send(ptr, 0, 0n);
+        hostSend(ptr, 0, 0n);
         serviceInstance.exports.karac_runtime_channel_drop_sender(ptr);
       }, Number(ms));
     };
@@ -1788,9 +1797,9 @@ async function runThreaded(hostImpls = {}, opts = {}) {
     // lifetime (never dropped, unlike __kara_timer_after's single fire).
     builtinHostImpls["__kara_timer_every"] = (chPtr, ms) => {
       const ptr = Number(chPtr);
-      unrefHostTimer(setInterval(() => {
+      const iv = unrefHostTimer(setInterval(() => {
         if (Number(serviceInstance.exports.karac_runtime_channel_pending(ptr)) === 0) {
-          serviceInstance.exports.karac_runtime_channel_send(ptr, 0, 0n);
+          if (!hostSend(ptr, 0, 0n)) clearInterval(iv);
         }
       }, Number(ms)));
     };
@@ -1810,7 +1819,7 @@ async function runThreaded(hostImpls = {}, opts = {}) {
         : (cb) => unrefHostTimer(setTimeout(cb, 16));
       const tick = () => {
         if (Number(serviceInstance.exports.karac_runtime_channel_pending(ptr)) === 0) {
-          serviceInstance.exports.karac_runtime_channel_send(ptr, 0, 0n);
+          if (!hostSend(ptr, 0, 0n)) return;
         }
         raf(tick);
       };
@@ -1853,7 +1862,7 @@ async function runThreaded(hostImpls = {}, opts = {}) {
         // `MouseEvent.buttons` bitmask held during the move (lets the guest gate
         // on a held button for click-drag); 0 when a synthetic event omits it.
         dv.setBigInt64(16, BigInt(e.buttons ?? 0), true);
-        serviceInstance.exports.karac_runtime_channel_send(ptr, scratch, 24n);
+        if (!hostSend(ptr, scratch, 24n)) target.removeEventListener("pointermove", onMove);
       };
       target.addEventListener("pointermove", onMove, { passive: true });
     };
@@ -1889,7 +1898,7 @@ async function runThreaded(hostImpls = {}, opts = {}) {
         dv.setFloat64(8, e.offsetY ?? e.clientY ?? 0, true);
         dv.setFloat64(16, e.deltaX ?? 0, true);
         dv.setFloat64(24, e.deltaY ?? 0, true);
-        serviceInstance.exports.karac_runtime_channel_send(ptr, scratch, 32n);
+        if (!hostSend(ptr, scratch, 32n)) target.removeEventListener("wheel", onWheel);
       };
       target.addEventListener("wheel", onWheel, { passive: true });
     };
@@ -1920,7 +1929,7 @@ async function runThreaded(hostImpls = {}, opts = {}) {
         // replaced on grow, so a cached DataView could go stale.
         const dv = new DataView(memory.buffer, scratch, 8);
         dv.setBigInt64(0, BigInt(e.keyCode ?? e.which ?? 0), true);
-        serviceInstance.exports.karac_runtime_channel_send(ptr, scratch, 8n);
+        if (!hostSend(ptr, scratch, 8n)) target.removeEventListener("keydown", onKey);
       };
       target.addEventListener("keydown", onKey);
     };
@@ -1946,7 +1955,7 @@ async function runThreaded(hostImpls = {}, opts = {}) {
         // replaced on grow, so a cached DataView could go stale.
         const dv = new DataView(memory.buffer, scratch, 8);
         dv.setBigInt64(0, BigInt(e.keyCode ?? e.which ?? 0), true);
-        serviceInstance.exports.karac_runtime_channel_send(ptr, scratch, 8n);
+        if (!hostSend(ptr, scratch, 8n)) target.removeEventListener("keyup", onKey);
       };
       target.addEventListener("keyup", onKey);
     };
@@ -1984,7 +1993,7 @@ async function runThreaded(hostImpls = {}, opts = {}) {
         // replaced on grow, so a cached DataView could go stale.
         const dv = new DataView(memory.buffer, scratch, 8);
         dv.setFloat64(0, v, true);
-        serviceInstance.exports.karac_runtime_channel_send(ptr, scratch, 8n);
+        if (!hostSend(ptr, scratch, 8n)) target.removeEventListener("input", onInput);
       };
       target.addEventListener("input", onInput);
     };
@@ -2018,7 +2027,7 @@ async function runThreaded(hostImpls = {}, opts = {}) {
         const dv = new DataView(memory.buffer, scratch, 16);
         dv.setFloat64(0, e.offsetX ?? e.clientX ?? 0, true);
         dv.setFloat64(8, e.offsetY ?? e.clientY ?? 0, true);
-        serviceInstance.exports.karac_runtime_channel_send(ptr, scratch, 16n);
+        if (!hostSend(ptr, scratch, 16n)) target.removeEventListener("click", onClick);
       };
       target.addEventListener("click", onClick);
     };
@@ -2047,7 +2056,7 @@ async function runThreaded(hostImpls = {}, opts = {}) {
         const dv = new DataView(memory.buffer, scratch, 16);
         dv.setFloat64(0, e.offsetX ?? e.clientX ?? 0, true);
         dv.setFloat64(8, e.offsetY ?? e.clientY ?? 0, true);
-        serviceInstance.exports.karac_runtime_channel_send(ptr, scratch, 16n);
+        if (!hostSend(ptr, scratch, 16n)) target.removeEventListener("dblclick", onDblClick);
       };
       target.addEventListener("dblclick", onDblClick);
     };
@@ -2084,7 +2093,7 @@ async function runThreaded(hostImpls = {}, opts = {}) {
         const h = target.innerHeight ?? globalThis.innerHeight ?? 0;
         dv.setBigInt64(0, BigInt(Math.trunc(w)), true);
         dv.setBigInt64(8, BigInt(Math.trunc(h)), true);
-        serviceInstance.exports.karac_runtime_channel_send(ptr, scratch, 16n);
+        if (!hostSend(ptr, scratch, 16n)) target.removeEventListener("resize", onResize);
       };
       target.addEventListener("resize", onResize);
     };
@@ -2118,7 +2127,7 @@ async function runThreaded(hostImpls = {}, opts = {}) {
         const dv = new DataView(memory.buffer, scratch, 16);
         dv.setFloat64(0, e.offsetX ?? e.clientX ?? 0, true);
         dv.setFloat64(8, e.offsetY ?? e.clientY ?? 0, true);
-        serviceInstance.exports.karac_runtime_channel_send(ptr, scratch, 16n);
+        if (!hostSend(ptr, scratch, 16n)) target.removeEventListener("contextmenu", onContextMenu);
       };
       target.addEventListener("contextmenu", onContextMenu);
     };
@@ -2138,7 +2147,7 @@ async function runThreaded(hostImpls = {}, opts = {}) {
       if (target === null) return;
       const onFocus = () => {
         if (Number(serviceInstance.exports.karac_runtime_channel_pending(ptr)) !== 0) return;
-        serviceInstance.exports.karac_runtime_channel_send(ptr, 0, 0n);
+        if (!hostSend(ptr, 0, 0n)) target.removeEventListener("focus", onFocus);
       };
       target.addEventListener("focus", onFocus);
     };
@@ -2155,7 +2164,7 @@ async function runThreaded(hostImpls = {}, opts = {}) {
       if (target === null) return;
       const onBlur = () => {
         if (Number(serviceInstance.exports.karac_runtime_channel_pending(ptr)) !== 0) return;
-        serviceInstance.exports.karac_runtime_channel_send(ptr, 0, 0n);
+        if (!hostSend(ptr, 0, 0n)) target.removeEventListener("blur", onBlur);
       };
       target.addEventListener("blur", onBlur);
     };
@@ -2195,7 +2204,7 @@ async function runThreaded(hostImpls = {}, opts = {}) {
         const dv = new DataView(memory.buffer, scratch, 16);
         dv.setFloat64(0, (t.clientX ?? 0) - (rect ? rect.left : 0), true);
         dv.setFloat64(8, (t.clientY ?? 0) - (rect ? rect.top : 0), true);
-        serviceInstance.exports.karac_runtime_channel_send(ptr, scratch, 16n);
+        if (!hostSend(ptr, scratch, 16n)) target.removeEventListener("touchstart", onTouch);
       };
       target.addEventListener("touchstart", onTouch);
     };
@@ -2230,7 +2239,7 @@ async function runThreaded(hostImpls = {}, opts = {}) {
         const dv = new DataView(memory.buffer, scratch, 16);
         dv.setFloat64(0, (t.clientX ?? 0) - (rect ? rect.left : 0), true);
         dv.setFloat64(8, (t.clientY ?? 0) - (rect ? rect.top : 0), true);
-        serviceInstance.exports.karac_runtime_channel_send(ptr, scratch, 16n);
+        if (!hostSend(ptr, scratch, 16n)) target.removeEventListener("touchmove", onTouch);
       };
       target.addEventListener("touchmove", onTouch, { passive: false });
     };
@@ -2261,7 +2270,7 @@ async function runThreaded(hostImpls = {}, opts = {}) {
         const dv = new DataView(memory.buffer, scratch, 16);
         dv.setFloat64(0, (t.clientX ?? 0) - (rect ? rect.left : 0), true);
         dv.setFloat64(8, (t.clientY ?? 0) - (rect ? rect.top : 0), true);
-        serviceInstance.exports.karac_runtime_channel_send(ptr, scratch, 16n);
+        if (!hostSend(ptr, scratch, 16n)) target.removeEventListener("touchend", onTouch);
       };
       target.addEventListener("touchend", onTouch);
     };
@@ -2927,8 +2936,10 @@ mod tests {
             // Host-async service instance + builtin timer impl.
             "serviceInstance = await WebAssembly.instantiate(module, serviceImports);",
             "serviceInstance.exports.karac_runtime_service_stack_top()",
+            // B-2026-09-25-36: host producers never call the panicking send.
+            "serviceInstance.exports.karac_runtime_channel_try_send(ptr, valPtr, size)",
             "builtinHostImpls[\"__kara_timer_after\"] = (chPtr, ms) =>",
-            "serviceInstance.exports.karac_runtime_channel_send(ptr, 0, 0n);",
+            "hostSend(ptr, 0, 0n)",
             // Multi-shot setInterval producer (sibling of after; coalesced).
             "builtinHostImpls[\"__kara_timer_every\"] = (chPtr, ms) =>",
             // Multi-shot rAF producer + its coalescing pending-probe.
@@ -2938,14 +2949,14 @@ mod tests {
             // (x, y, buttons) into the event-scratch buffer and sends 24 bytes.
             "builtinHostImpls[\"__kara_pointer_moves\"] = (chPtr) =>",
             "serviceInstance.exports.karac_runtime_event_scratch()",
-            "serviceInstance.exports.karac_runtime_channel_send(ptr, scratch, 24n);",
+            "hostSend(ptr, scratch, 24n)",
             // Sibling non-unit producer: wheel/scroll, 32-byte WheelEvent.
             "builtinHostImpls[\"__kara_wheel\"] = (chPtr) =>",
-            "serviceInstance.exports.karac_runtime_channel_send(ptr, scratch, 32n);",
+            "hostSend(ptr, scratch, 32n)",
             "target.addEventListener(\"wheel\", onWheel, { passive: true });",
             // Sibling non-unit producer: keydown, 8-byte KeyEvent.
             "builtinHostImpls[\"__kara_keydown\"] = (chPtr) =>",
-            "serviceInstance.exports.karac_runtime_channel_send(ptr, scratch, 8n);",
+            "hostSend(ptr, scratch, 8n)",
             "target.addEventListener(\"keydown\", onKey);",
             // Key-release sibling: keyup, same 8-byte KeyEvent payload.
             "builtinHostImpls[\"__kara_keyup\"] = (chPtr) =>",
@@ -2953,7 +2964,7 @@ mod tests {
             // Discrete click-position sibling of pointer_moves: 16-byte
             // ClickEvent (x, y).
             "builtinHostImpls[\"__kara_clicks\"] = (chPtr) =>",
-            "serviceInstance.exports.karac_runtime_channel_send(ptr, scratch, 16n);",
+            "hostSend(ptr, scratch, 16n)",
             "target.addEventListener(\"click\", onClick);",
             // Double-press sibling: dblclick, same 16-byte ClickEvent payload.
             "builtinHostImpls[\"__kara_dblclick\"] = (chPtr) =>",
