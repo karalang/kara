@@ -6314,3 +6314,42 @@ fn test_assoc_fn_on_primitive_type_compiles() {
         "`i64.MAX` must keep lowering as an associated constant, not a path call"
     );
 }
+
+/// B-2026-09-25-15 — a field read IN PLACE on a call returning a generic
+/// struct: `wrap(f"..").k` over `fn wrap[T](x: T) -> W[T]`. The fresh temp's
+/// drop was registered by the bare name `W`, which frees no `T`-typed field,
+/// so the payload leaked on every compiled surface; `let w = wrap(..)` was
+/// clean.
+#[test]
+fn test_e2e_field_read_on_generic_struct_call_result_frees_payload() {
+    let out = run_program(
+        r#"struct P { s: String, n: i64 }
+struct W[T] { v: T, k: i64 }
+struct Two[A, B] { a: A, b: B, k: i64 }
+fn wrap[T](x: T) -> W[T] { W { v: x, k: 3 } }
+fn two[A, B](a: A, b: B) -> Two[A, B] { Two { a: a, b: b, k: 4 } }
+fn mkw(i: i64) -> W[String] { W { v: f"heap-string-longer-than-sso-w{i}", k: i } }
+fn main() {
+    for i in 0..2 {
+        println(wrap(f"heap-string-longer-than-sso-{i}").k);
+        println(wrap(f"heap-string-longer-than-sso-v{i}").v);
+        let s = f"heap-string-longer-than-sso-n{i}";
+        println(wrap(s).v.len());
+        println(wrap(P { s: f"heap-string-longer-than-sso-p{i}", n: 5 }).v.n);
+        let mut xs: Vec[String] = Vec.new();
+        xs.push(f"heap-string-longer-than-sso-x{i}");
+        println(wrap(xs).v.len());
+        println(two(f"heap-string-longer-than-sso-a{i}", f"heap-string-longer-than-sso-b{i}").k);
+        println(mkw(i).k);
+        println(wrap(7).v);
+    }
+    println("end")
+}
+"#,
+    );
+    assert_eq!(
+        out.as_deref(),
+        Some("3\nheap-string-longer-than-sso-v0\n30\n5\n1\n4\n0\n7\n3\nheap-string-longer-than-sso-v1\n30\n5\n1\n4\n1\n7\nend\n"),
+        "must match --interp"
+    );
+}

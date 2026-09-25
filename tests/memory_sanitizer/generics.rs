@@ -1383,3 +1383,58 @@ fn asan_generic_callee_reaches_the_argument_site_copy_like_its_concrete_twin() {
         "b92046-no-copy",
     );
 }
+
+/// B-2026-09-25-15 — a field read IN PLACE on a call returning a generic
+/// struct: `wrap(f"..").k` over `fn wrap[T](x: T) -> W[T]`. The fresh temp's
+/// drop was registered by the bare name `W`, which frees no `T`-typed field,
+/// so the payload leaked on every compiled surface; `let w = wrap(..)` was
+/// clean.
+#[test]
+fn asan_field_read_on_generic_struct_call_result_frees_payload() {
+    assert_clean_asan_run_min_allocs(
+        r#"struct P { s: String, n: i64 }
+struct W[T] { v: T, k: i64 }
+struct Two[A, B] { a: A, b: B, k: i64 }
+fn wrap[T](x: T) -> W[T] { W { v: x, k: 3 } }
+fn two[A, B](a: A, b: B) -> Two[A, B] { Two { a: a, b: b, k: 4 } }
+fn mkw(i: i64) -> W[String] { W { v: f"heap-string-longer-than-sso-w{i}", k: i } }
+fn main() {
+    for i in 0..2 {
+        println(wrap(f"heap-string-longer-than-sso-{i}").k);
+        println(wrap(f"heap-string-longer-than-sso-v{i}").v);
+        let s = f"heap-string-longer-than-sso-n{i}";
+        println(wrap(s).v.len());
+        println(wrap(P { s: f"heap-string-longer-than-sso-p{i}", n: 5 }).v.n);
+        let mut xs: Vec[String] = Vec.new();
+        xs.push(f"heap-string-longer-than-sso-x{i}");
+        println(wrap(xs).v.len());
+        println(two(f"heap-string-longer-than-sso-a{i}", f"heap-string-longer-than-sso-b{i}").k);
+        println(mkw(i).k);
+        println(wrap(7).v);
+    }
+    println("end")
+}
+"#,
+        &[
+            "3",
+            "heap-string-longer-than-sso-v0",
+            "30",
+            "5",
+            "1",
+            "4",
+            "0",
+            "7",
+            "3",
+            "heap-string-longer-than-sso-v1",
+            "30",
+            "5",
+            "1",
+            "4",
+            "1",
+            "7",
+            "end",
+        ],
+        "asan_field_read_on_generic_struct_call_result_frees_payload",
+        20,
+    );
+}

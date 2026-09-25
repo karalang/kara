@@ -1608,6 +1608,34 @@ impl<'ctx> super::Codegen<'ctx> {
         }
     }
 
+    /// B-2026-09-25-15 — the generic instantiation of the struct a direct
+    /// call returns (`W[String]` for `wrap(f"..")` over `fn wrap[T](x: T) ->
+    /// W[T]`), with the callee's type params bound at this call site. `None`
+    /// for anything else, including a non-generic struct, which keeps the
+    /// name-keyed drop exactly as before.
+    fn freshtemp_call_struct_inst(&self, object: &Expr) -> Option<TypeExpr> {
+        let ExprKind::Call { callee, .. } = &object.kind else {
+            return None;
+        };
+        let ExprKind::Identifier(name) = &callee.kind else {
+            return None;
+        };
+        let te = match self.fn_sig.fn_return_type_exprs.get(name.as_str()) {
+            Some(te) => te,
+            None => self
+                .mono_state
+                .generic_fns
+                .get(name.as_str())?
+                .return_type
+                .as_ref()?,
+        };
+        let te = self.callee_param_te_for_call(te, &object.span);
+        match &te.kind {
+            TypeKind::Path(p) if p.generic_args.as_ref().is_some_and(|a| !a.is_empty()) => Some(te),
+            _ => None,
+        }
+    }
+
     fn track_freshtemp_field_access_object(
         &mut self,
         object: &Expr,
@@ -1636,7 +1664,14 @@ impl<'ctx> super::Codegen<'ctx> {
         };
         let slot = self.create_entry_alloca(fn_val, "__freshtemp_fldobj", sv.get_type().into());
         let _ = self.builder.build_store(slot, sv);
-        self.track_struct_var(&name, slot);
+        // B-2026-09-25-15 — with the INSTANTIATION when the receiver is a call
+        // returning a generic struct. The name alone selects the name-shared
+        // drop, which resolves a `T`-typed field from bare `T` and frees
+        // nothing there: `wrap(f"..").k` over `fn wrap[T](x: T) -> W[T]` lost
+        // the `String` on every compiled surface while `let w = wrap(..)`,
+        // which registers the per-monomorph drop, was clean.
+        let inst = self.freshtemp_call_struct_inst(object);
+        self.track_struct_var_inst(&name, slot, inst);
         // B-2026-08-28-27 — when the receiver is a projection out of a FRESH
         // TUPLE TEMP (`structpair(1).0.name`), that temp now carries a drop
         // over the whole tuple. Registering the projected element here makes
