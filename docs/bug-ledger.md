@@ -93,7 +93,7 @@ distinguish "bugs flattening" from "we stopped writing them down."
 | class | total |
 |---|---|
 | run-vs-build | 492 |
-| miscompile | 452 |
+| miscompile | 455 |
 | leak | 419 |
 | double-free | 309 |
 | missing-feature | 207 |
@@ -104,14 +104,14 @@ distinguish "bugs flattening" from "we stopped writing them down."
 | false-positive | 109 |
 | soundness | 97 |
 | crash | 95 |
-| use-after-free | 50 |
+| use-after-free | 51 |
 
 ### By surface
 
 | surface | total |
 |---|---|
-| codegen | 2076 |
-| interp | 548 |
+| codegen | 2080 |
+| interp | 549 |
 | typecheck | 308 |
 | other | 110 |
 | ownership | 77 |
@@ -386,6 +386,10 @@ registered in the callee's prologue, not by-value struct params in general. | �
 | B-2026-09-25-28 | 2026-09-25 | codegen+interp | medium | A BY-VALUE `self` METHOD CALLED ON A NAMED RECEIVER THAT MOVES A `Drop`-BEARING FIELD OUT RUNS THAT FIELD'S BODY TWICE ON ALL FOUR SURFACES, memory-clean -- `let x = w.getr(); println(f"x{x.id}")` over `fn getr(self) -> R { return self.r }` prints `dR1 x1 dR1 end` where one `dR1` is due, after `x1`; the tail (`self.r`) and `let q = self.r; q` spellings print the same, while the free-function twin `getf(w)` over `fn getf(w: Ws) -> R { return w.r }` and a TEMP receiver (`Ws { .. }.getr()`) are correct | — |
 | B-2026-09-25-29 | 2026-09-25 | codegen+interp | medium | A `v.pop().unwrap()` ARGUMENT TO A BY-VALUE ENUM PARAM LOSES ITS PAYLOAD'S `Drop` BODY, ON A DIFFERENT SET OF SURFACES FOR EACH ENUM KIND -- over `Vec[Hc]` (concrete `enum Hc { Full(R), Empty }`) `hold(v.pop().unwrap())` prints `h end` on all four; over `Vec[Option[R]]` the compiled surfaces print `ho end` and `--interp` `ho dR5 end`; over `Vec[Ho[R]]` (generic) the compiled surfaces print `hg dR6 end` and `--interp` `hg end`. `let x = v.pop().unwrap()` over `Vec[Hc]` is correct everywhere | — |
 | B-2026-09-25-30 | 2026-09-25 | codegen | medium | A HEAP-FREE `Drop` STRUCT HANDED BACK BY A GENERIC FN RUNS ITS BODY TWICE ON EVERY COMPILED SURFACE, the first time AT THE CALL -- `let p = P { id: 2 }; let q = idg(p); println(f"q{q.id}")` over `fn idg[T](v: T) -> T { return v }` and `struct P { id: i64 }` with a user `Drop` prints `dP2 q2 dP2 end` where `--interp` prints `q2 dP2 end`; the struct wrap `wrap(p)` and the enum wrap `mkh(p)` do the same, while the SAME three calls over a heap-bearing `R { id: i64, s: String }` are correct | — |
+| B-2026-09-25-31 | 2026-09-25 | codegen | high | A STRUCT WITH A `shared` FIELD HANDED BACK BY A GENERIC FN IS USED AFTER FREE ON EVERY COMPILED SURFACE, with or without a `Drop` of its own -- `let s = S3 { h: Sh { k: 1 }, id: 5 }; let t = idg(s)` over `fn idg[T](v: T) -> T { return v }` and `struct S3 { h: Sh, id: i64 }` (`shared struct Sh`) reports an Invalid read and an Invalid write of 8 bytes inside a freed 16-byte block at -O0 and aborts `malloc(): unaligned tcache chunk detected` under `karac run`; the concrete twin `fn idS(v: S2) -> S2` and the fresh-temp spelling are clean | — |
+| B-2026-09-25-32 | 2026-09-25 | codegen | medium | A GENERIC FN'S RETURNED ENUM TEMP USED AS A `match` SCRUTINEE RUNS A HEAP-FREE PAYLOAD'S `Drop` BODY TWICE ON EVERY COMPILED SURFACE -- `match mkh(P { id: 6 }) { Ho.Full(r) => println(f"m{r.id}"), Ho.Empty => .. }` over `fn mkh[T](v: T) -> Ho[T] { return Ho.Full(v); }` and `struct P { id: i64 }` with a user `Drop` prints `m6 dP6 dP6 x` where `--interp` prints `m6 dP6 x`; the concrete twin `mkhC` and a heap-bearing payload are correct | — |
+| B-2026-09-25-33 | 2026-09-25 | codegen+interp | medium | A BY-VALUE PARAM HANDED TO A WRAPPER WHOSE RESULT IS DISCARDED RUNS ITS `Drop` BODY TWICE ON ALL FOUR SURFACES -- `fn outerC(x: P) { wrapC(x); println("o") }` over `fn wrapC(v: P) -> BxP { return BxP { v: v } }` called as `outerC(p)` prints `dP10 o dP10 x` everywhere against a due `dP10 o x`; the GENERIC spelling `fn outerG[T](x: T) { wrap(x); .. }` runs it once but LATE on the compiled surfaces (`o dP11 x`) and twice under `--interp` | — |
+| B-2026-09-25-34 | 2026-09-25 | codegen | medium | A DISCARDED GENERIC STRUCT LITERAL RUNS NONE OF ITS `Drop` BODIES ON ANY COMPILED SURFACE -- `Dx { v: P { id: 13 }, k: 13 };` over `struct Dx[T] { v: T, k: i64 }` with `impl[T] Drop for Dx[T]` prints `x` where `--interp` prints `dDx13 dP13 x`, and `let _ =` and a `Drop`-less `Bx[T]` (`Bx { v: P { id: 15 } };`, due `dP15`) do the same; the CALL spelling `wrapd(p);` is fixed by B-2026-09-25-30 | — |
 
 ### Relocated
 
