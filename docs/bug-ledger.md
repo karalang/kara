@@ -94,8 +94,8 @@ distinguish "bugs flattening" from "we stopped writing them down."
 |---|---|
 | run-vs-build | 491 |
 | miscompile | 446 |
-| leak | 414 |
-| double-free | 304 |
+| leak | 416 |
+| double-free | 305 |
 | missing-feature | 207 |
 | codegen-gap | 195 |
 | other | 149 |
@@ -110,7 +110,7 @@ distinguish "bugs flattening" from "we stopped writing them down."
 
 | surface | total |
 |---|---|
-| codegen | 2058 |
+| codegen | 2061 |
 | interp | 542 |
 | typecheck | 308 |
 | other | 110 |
@@ -374,13 +374,13 @@ registered in the callee's prologue, not by-value struct params in general. | �
 | B-2026-09-24-20 | 2026-09-24 | codegen | high | AN ESCAPING BY-VALUE `Result`/`Option` PARAM WHOSE INLINE PAYLOAD RUNS A USER `Drop` IS STILL FREED TWICE -- `fn peek(a: Result[S, i64]) -> i64 { match id(a) { Ok(x) => x.r.id + x.s.len(), Err(e) => e } }` over `struct S { r: R, s: String }` (R has a `Drop`, S fits `Result`'s five-word area) prints `d1 k30 end` under `--interp` and at -O2 and aborts `double free detected in tcache 2` on jit and -O0 | — |
 | B-2026-09-24-32 | 2026-09-24 | codegen | low | A GENERIC FUNCTION'S BY-VALUE `Option[T]` PARAM LEAKS A FRESH `Some(P { .. })` TEMPORARY WHEN `T` IS A HEAP-BEARING STRUCT -- `fn peek[T](a: Option[T]) -> i64 { match a { Some(_) => 1, None => 0 } }` called as `peek(Some(P { s: f"..", n: 1 }))` prints the right answer on all four surfaces and loses 61 bytes at -O0, while the non-generic `peek(a: Option[P])` twin is clean | — |
 | B-2026-09-24-34 | 2026-09-24 | codegen | low | A GENERIC STRUCT'S `Option` FIELD PASSED BY VALUE LEAKS ITS PAYLOAD -- `struct W[T] { o: Option[T] }` with `let y = W { o: Some(f"..") }; peek(y.o)` prints `1 end` on all four surfaces and loses 30 bytes at -O0, for a generic and a non-generic `peek`, whether `y` comes from a literal or from `fn wrap[T](a: Option[T]) -> W[T]` | — |
-| B-2026-09-24-35 | 2026-09-24 | interp+codegen | medium | A BY-VALUE PARAM PUSHED INTO A CALLEE-LOCAL `Vec` UNDER AN `if` STILL RUNS ITS `Drop` BODY TWICE ON ALL FOUR SURFACES -- `fn st(a: R, c: bool) -> i64 { let mut v: Vec[R] = Vec.new(); if c { v.push(a); } 3 }` prints `d1 k3 d1 k3 d2 end` for `st(a, true)` then `st(b, false)`, where `d1 k3 d2 k3 end` is due | — |
 | B-2026-09-24-37 | 2026-09-24 | interp+codegen | medium | A DISCARDED TUPLE THAT MOVES A `Drop`-BEARING STRUCT LOCAL BESIDE A NON-FRESH `String` LOCAL RUNS THE STRUCT'S `Drop` BODY ON NO SURFACE FOR `let _ = (g, s);` AND ONLY ON THE COMPILED ONES FOR THE STATEMENT `(g, s);` -- `struct G { r: R, s: String }` prints `end` alone where `d8 end` is due | — |
 | B-2026-09-25-4 | 2026-09-25 | interp | low | `--interp` RUNS A FRESH `Ok(mk(3))` ARGUMENT'S `Drop` BODY TWICE WHEN A BY-VALUE METHOD `h.f(a)` WAS CALLED BEFORE IT -- `h.g(Ok(mk(3)))` prints `d3 d3` under `--interp` and `d3` once on jit / -O2 seq / -O2 par (post-6d939bf88); the free-function spelling of the same two calls is correct everywhere | — |
 | B-2026-09-25-5 | 2026-09-25 | codegen | medium | A BY-VALUE `Result[S, R]` PARAM WHOSE `Err` PAYLOAD CARRIES ITS OWN `Drop` BODY AND IS HANDED ON (`Err(e) => { keepr(e); 0 }`) RUNS A NAMED `Ok` ARGUMENT'S BODY TWICE ON THE COMPILED SURFACES -- `f(a)` prints `d1 k1 d1` where `--interp` prints `k1 d1` | — |
 | B-2026-09-25-8 | 2026-09-25 | typecheck | low | AN ARRAY LITERAL IN A MATCH ARM, AN IF/ELSE BRANCH OR A GENERIC ARGUMENT IS TYPED `Vec` EVEN WHERE THE OTHER BRANCH OR THE PARAMETER FIXES `Array` -- `match a { Some(s) => s, None => [f"e"] }` over `Option[Array[String, 1]]` fails `match arms have incompatible types: 'Array[String, 1]' and 'Vec[String]'`, while `let x: Array[String, 1] = [f"e"]` is accepted | — |
-| B-2026-09-25-9 | 2026-09-25 | codegen | medium | A FIELD READ ON A GENERIC CALL'S STRUCT RESULT FAILS `karac build` -- `pick(a, P { s: f"d", n: 2 }).n` over `fn pick[T](a: Option[T], d: T) -> T` stops with `cannot resolve field 'n' on this receiver (its type was not recorded for codegen)`; `--interp` prints `1` | — |
-| B-2026-09-25-12 | 2026-09-25 | codegen | high | AN `Option[String]` PARAM RETURNED ON ONE BRANCH OF `if c { s } else { d }` IS WRONG ON EVERY COMPILED SURFACE -- generic `pick2[T]` with two NAMED `Some(f"..")` arguments at `c = false` aborts with `free(): double free` on jit, -O2 seq and -O2 par (1 invalid free plus 29 B lost at -O0); the untaken argument's 29 B string leaks with either spelling; the non-generic twin leaks it per call; `--interp` is right throughout | — |
+| B-2026-09-25-12 | 2026-09-25 | codegen | high | AN `Option[String]` PARAM RETURNED ON ONE BRANCH OF `if c { s } else { d }` IS WRONG ON EVERY COMPILED SURFACE -- two NAMED `Some(f"..")` arguments at `c = false` abort with `free(): double free` on jit, -O2 seq and -O2 par, generic `pick2[T]` and the non-generic twin alike; with temporary arguments the untaken argument's 29 B string leaks per call; `--interp` is right throughout | — |
+| B-2026-09-25-14 | 2026-09-25 | codegen | medium | A STRUCT RETURNED BY A CALL AND PASSED STRAIGHT TO A GENERIC BARE-`T` PARAM THAT HANDS IT BACK LEAKS ITS HEAP FIELD -- `let r = id2(mk(3))` over `fn id2[T](d: T) -> T { d }` and `fn mk(i: i64) -> P` with `struct P { s: String, n: i64 }` loses the 29 B string at -O0 on every compiled surface; output is right | — |
+| B-2026-09-25-15 | 2026-09-25 | codegen | medium | A FIELD READ IN PLACE ON A GENERIC CALL THAT RETURNS A GENERIC STRUCT LEAKS THE STRUCT'S HEAP FIELD -- `println(wrap(f"..").k)` over `fn wrap[T](x: T) -> W[T] { W { v: x, k: 3 } }` with `struct W[T] { v: T, k: i64 }` loses the `String` at -O0 on every compiled surface; binding the result first, and the non-generic twin, are clean | — |
 
 ### Relocated
 
@@ -3033,6 +3033,7 @@ registered in the callee's prologue, not by-value struct params in general. | �
 | B-2026-09-24-30 | codegen | high | THREE RC-PROMOTED `Option`/`Result` PAYLOAD SHAPES B-2026-09-24-28 DID NOT REACH ARE STILL WRONG ON THE COMPILED SURFACES -- `Result[(String, i64), i… | 795067c38 |
 | B-2026-09-24-31 | codegen | high | AN `Option[Map[K, V]]` / `Option[Set[T]]` / `Option[SortedMap[K, V]]` LOCAL MOVED ON (INTO A CALL, A `let`, A FIELD, A `return`, OR HANDED BACK) IS F… | c85f21366 |
 | B-2026-09-24-33 | codegen | high | A GENERIC `pick[T]` OVER A NAMED `Option` ARGUMENT DOUBLE-FREES ON EVERY COMPILED SURFACE, AND SO DOES THE NON-GENERIC `Option[Array[String, N]]` SHA… | 8bba5e79d |
+| B-2026-09-24-35 | interp+codegen | medium | A BY-VALUE PARAM PUSHED INTO A CALLEE-LOCAL `Vec` UNDER AN `if` STILL RUNS ITS `Drop` BODY TWICE ON ALL FOUR SURFACES -- `fn st(a: R, c: bool) -> i64… | ebec57e0f |
 | B-2026-09-24-36 | codegen | low | A BY-VALUE `Result[S, i64]` PARAM MATCHED FOR A FIELD RUNS ITS PAYLOAD'S `Drop` BODY BEFORE THE CALLER'S PRINT ON THE COMPILED SURFACES AND AFTER IT… | 6d939bf88 |
 | B-2026-09-24-38 | codegen | medium | A BY-VALUE `Result[S, i64]` PARAM WHOSE `Err(e) => e` ARM LETS THE `i64` ESCAPE LOSES A NAMED ARGUMENT'S `Drop` BODY ON THE COMPILED SURFACES -- `fn… | 6d939bf88 |
 | B-2026-09-25-1 | ownership+codegen | medium | AN `if let` / `while let` BINDING THAT REUSES A MOVED LOCAL'S NAME DREW A FALSE `UseAfterMove` AND LEAKED THE LOCAL -- `let doc = Some(m); if let Som… | 795067c38 |
@@ -3040,8 +3041,10 @@ registered in the callee's prologue, not by-value struct params in general. | �
 | B-2026-09-25-3 | codegen | medium | A `Map` READ AGAIN AFTER MOVING INTO A TUPLE LITERAL, AN ARRAY LITERAL OR `Vec.insert` -- OR AFTER A MOVE ON ONE BRANCH OR IN A LOOP INTO ANY SINK --… | 6dac2e49b |
 | B-2026-09-25-6 | codegen | medium | A `Vec` TEMP PASSED TO A BARE-`T` PARAM THAT THE CALL DOES NOT RETURN LEAKS WHEN THE RETURN TYPE MENTIONS `T` -- `fn pick2[T](c: bool, s: T, d: T) ->… | c41c2c1cc |
 | B-2026-09-25-7 | codegen | high | A GENERIC FUNCTION'S MONOMORPH IS COMPILED FOR ITS FIRST CALLER'S ARGUMENT SPELLING AND REUSED FOR EVERY OTHER -- `fn id2[T](d: T) -> T { d }` called… | c41c2c1cc |
+| B-2026-09-25-9 | codegen | medium | A FIELD READ ON A GENERIC CALL'S STRUCT RESULT FAILS `karac build` -- `pick(a, P { s: f"d", n: 2 }).n` over `fn pick[T](a: Option[T], d: T) -> T` sto… | 87a26c5c8 |
 | B-2026-09-25-10 | codegen+interp | high | A BY-VALUE `Array` PARAM THAT A CALLEE PUSHES INTO A `Vec` ON SOME PATHS ONLY IS STILL FREED TWICE ON EVERY COMPILED SURFACE AND RUNS ITS ELEMENT BOD… | 6a1b30deb |
 | B-2026-09-25-11 | codegen | medium | INDEXING A GENERIC CALL'S `Vec` RESULT DIRECTLY FAILS `karac build` -- `println(id2(x)[1])` over `fn id2[T](d: T) -> T { d }` stops with `Index opera… | 7cd3d9f94 |
+| B-2026-09-25-13 | codegen | high | A LOCAL `Option[String]` HANDED OUT AS A BRANCH LEAF IS FREED TWICE ON EVERY COMPILED SURFACE -- `fn p(c: bool) -> Option[String] { let s = Some(f"..… | 113787978 |
 
 </details>
 
