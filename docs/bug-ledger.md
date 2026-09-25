@@ -381,7 +381,6 @@ registered in the callee's prologue, not by-value struct params in general. | �
 | B-2026-09-25-8 | 2026-09-25 | typecheck | low | AN ARRAY LITERAL IN A MATCH ARM, AN IF/ELSE BRANCH OR A GENERIC ARGUMENT IS TYPED `Vec` EVEN WHERE THE OTHER BRANCH OR THE PARAMETER FIXES `Array` -- `match a { Some(s) => s, None => [f"e"] }` over `Option[Array[String, 1]]` fails `match arms have incompatible types: 'Array[String, 1]' and 'Vec[String]'`, while `let x: Array[String, 1] = [f"e"]` is accepted | — |
 | B-2026-09-25-9 | 2026-09-25 | codegen | medium | A FIELD READ ON A GENERIC CALL'S STRUCT RESULT FAILS `karac build` -- `pick(a, P { s: f"d", n: 2 }).n` over `fn pick[T](a: Option[T], d: T) -> T` stops with `cannot resolve field 'n' on this receiver (its type was not recorded for codegen)`; `--interp` prints `1` | — |
 | B-2026-09-25-10 | 2026-09-25 | codegen+interp | high | A BY-VALUE `Array` PARAM THAT A CALLEE PUSHES INTO A `Vec` ON SOME PATHS ONLY IS STILL FREED TWICE ON EVERY COMPILED SURFACE AND RUNS ITS ELEMENT BODIES TWICE UNDER `--interp` -- `fn inner(a: Array[R, 2], c: bool) -> i64 { let mut v: Vec[Array[R, 2]] = []; if c { v.push(a) } .. }` over an `R` with a user `Drop` aborts `double free detected in tcache 2` at `c = true` on the JIT, `-O0` and `-O2`; the unconditional push is fixed (B-2026-09-22-14) | — |
-| B-2026-09-25-11 | 2026-09-25 | codegen | medium | INDEXING A GENERIC CALL'S `Vec` RESULT DIRECTLY FAILS `karac build` -- `println(id2(x)[1])` over `fn id2[T](d: T) -> T { d }` stops with `Index operator applied to non-array type`, and so does `first(x)[1]` over `fn first[T](d: Vec[T]) -> Vec[T]`; `--interp` prints `2`, and `id2(x).len()` or binding the result first both build | — |
 | B-2026-09-25-12 | 2026-09-25 | codegen | high | AN `Option[String]` PARAM RETURNED ON ONE BRANCH OF `if c { s } else { d }` IS WRONG ON EVERY COMPILED SURFACE -- generic `pick2[T]` with two NAMED `Some(f"..")` arguments at `c = false` aborts with `free(): double free` on jit, -O2 seq and -O2 par (1 invalid free plus 29 B lost at -O0); the untaken argument's 29 B string leaks with either spelling; the non-generic twin leaks it per call; `--interp` is right throughout | — |
 
 ### Relocated
@@ -3042,6 +3041,7 @@ registered in the callee's prologue, not by-value struct params in general. | �
 | B-2026-09-25-3 | codegen | medium | A `Map` READ AGAIN AFTER MOVING INTO A TUPLE LITERAL, AN ARRAY LITERAL OR `Vec.insert` -- OR AFTER A MOVE ON ONE BRANCH OR IN A LOOP INTO ANY SINK --… | 6dac2e49b |
 | B-2026-09-25-6 | codegen | medium | A `Vec` TEMP PASSED TO A BARE-`T` PARAM THAT THE CALL DOES NOT RETURN LEAKS WHEN THE RETURN TYPE MENTIONS `T` -- `fn pick2[T](c: bool, s: T, d: T) ->… | c41c2c1cc |
 | B-2026-09-25-7 | codegen | high | A GENERIC FUNCTION'S MONOMORPH IS COMPILED FOR ITS FIRST CALLER'S ARGUMENT SPELLING AND REUSED FOR EVERY OTHER -- `fn id2[T](d: T) -> T { d }` called… | c41c2c1cc |
+| B-2026-09-25-11 | codegen | medium | INDEXING A GENERIC CALL'S `Vec` RESULT DIRECTLY FAILS `karac build` -- `println(id2(x)[1])` over `fn id2[T](d: T) -> T { d }` stops with `Index opera… | 7cd3d9f94 |
 
 </details>
 
