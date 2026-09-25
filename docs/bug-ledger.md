@@ -93,7 +93,7 @@ distinguish "bugs flattening" from "we stopped writing them down."
 | class | total |
 |---|---|
 | run-vs-build | 489 |
-| miscompile | 445 |
+| miscompile | 446 |
 | leak | 411 |
 | double-free | 301 |
 | missing-feature | 206 |
@@ -110,7 +110,7 @@ distinguish "bugs flattening" from "we stopped writing them down."
 
 | surface | total |
 |---|---|
-| codegen | 2047 |
+| codegen | 2048 |
 | interp | 540 |
 | typecheck | 307 |
 | other | 110 |
@@ -124,7 +124,7 @@ distinguish "bugs flattening" from "we stopped writing them down."
 | lexer | 11 |
 ## Current state
 
-_Generated from `bug-ledger.jsonl` by `scripts/bug-curve.py` (2026-05-20 → 2026-09-24). Do not edit this block by hand; edit the ledger and regenerate._
+_Generated from `bug-ledger.jsonl` by `scripts/bug-curve.py` (2026-05-20 → 2026-09-25). Do not edit this block by hand; edit the ledger and regenerate._
 
 ### Open
 
@@ -381,6 +381,7 @@ registered in the callee's prologue, not by-value struct params in general. | �
 | B-2026-09-24-35 | 2026-09-24 | interp+codegen | medium | A BY-VALUE PARAM PUSHED INTO A CALLEE-LOCAL `Vec` UNDER AN `if` STILL RUNS ITS `Drop` BODY TWICE ON ALL FOUR SURFACES -- `fn st(a: R, c: bool) -> i64 { let mut v: Vec[R] = Vec.new(); if c { v.push(a); } 3 }` prints `d1 k3 d1 k3 d2 end` for `st(a, true)` then `st(b, false)`, where `d1 k3 d2 k3 end` is due | — |
 | B-2026-09-24-36 | 2026-09-24 | codegen | low | A BY-VALUE `Result[S, i64]` PARAM MATCHED FOR A FIELD RUNS ITS PAYLOAD'S `Drop` BODY BEFORE THE CALLER'S PRINT ON THE COMPILED SURFACES AND AFTER IT UNDER `--interp` -- `fn rb(a: Result[S, i64]) -> i64 { match a { Ok(x) => x.r.id, Err(e) => e } }` prints `d4 k4 end` compiled and `k4 d4 end` interpreted | — |
 | B-2026-09-24-37 | 2026-09-24 | interp+codegen | medium | A DISCARDED TUPLE THAT MOVES A `Drop`-BEARING STRUCT LOCAL BESIDE A NON-FRESH `String` LOCAL RUNS THE STRUCT'S `Drop` BODY ON NO SURFACE FOR `let _ = (g, s);` AND ONLY ON THE COMPILED ONES FOR THE STATEMENT `(g, s);` -- `struct G { r: R, s: String }` prints `end` alone where `d8 end` is due | — |
+| B-2026-09-24-38 | 2026-09-25 | codegen | medium | A BY-VALUE `Result[S, i64]` PARAM WHOSE `Err(e) => e` ARM LETS THE `i64` ESCAPE LOSES A NAMED ARGUMENT'S `Drop` BODY ON THE COMPILED SURFACES -- `fn f(a: Result[S, i64]) -> i64 { match a { Ok(_) => 1, Err(e) => e } }` called as `f(a)` prints `k1` with no `d1`; `--interp` prints `d1`. Memory is balanced (valgrind clean); only the body is lost. The temp-argument call `f(Ok(mk(2)))` is correct everywhere. | — |
 
 ### Relocated
 
