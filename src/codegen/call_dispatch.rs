@@ -2725,6 +2725,10 @@ impl<'ctx> super::Codegen<'ctx> {
                     // instead, which is the same predicate this asks.
                     if self.conditional_handback_memory_moves_to_callee(&name, i) {
                         self.suppress_user_drop_for_var(&var_name);
+                        // B-2026-09-25-37 — and a Drop-less struct's
+                        // memory-only action, which the line above does not
+                        // match; the callee owns the memory per path.
+                        self.suppress_struct_cleanup_for_tail_identifier(&var_name);
                     } else if self.callee_takes_over_arg_drop_body(&name, i) {
                         // B-2026-09-06-71 — and the MEMORY goes with the body in
                         // the ALL-paths case too, whenever nothing was
@@ -2778,9 +2782,7 @@ impl<'ctx> super::Codegen<'ctx> {
                             // freed the `shared` field through both `s` and
                             // `t`. Every-path hand-backs only; see
                             // `callee_hands_arg_back_whole_on_every_path`.
-                            if self.callee_hands_arg_back_whole_on_every_path(&name, i)
-                                || self.callee_moves_arg_into_local_container(&name, i)
-                            {
+                            if self.forwarded_arg_memory_leaves_caller(&name, i) {
                                 self.suppress_struct_cleanup_for_tail_identifier(&var_name);
                             }
                         } else {
@@ -7098,7 +7100,7 @@ impl<'ctx> super::Codegen<'ctx> {
     }
 
     /// The head segment of a `Path` type, or `None` for any other shape.
-    fn te_head_name(te: &TypeExpr) -> Option<String> {
+    pub(super) fn te_head_name(te: &TypeExpr) -> Option<String> {
         match &te.kind {
             TypeKind::Path(p) => p.segments.last().cloned(),
             _ => None,
@@ -10918,6 +10920,23 @@ impl<'ctx> super::Codegen<'ctx> {
         (ret_is_generic_param || ret_is_struct)
             && (crate::ast::fn_always_returns_param(Some(program), f, arg_index)
                 || crate::ast::fn_always_returns_param_via_call(program, f, arg_index))
+    }
+
+    /// B-2026-09-25-31 / -37 — may a caller retract a FORWARDED argument's
+    /// memory-only action along with its body? Where the callee hands it back
+    /// whole (or in a struct) or pushes it into a container of its own on
+    /// every path, the result or the container is the owner; where it stores
+    /// it on only some paths, the callee's per-path owner is
+    /// (`cond_store_dropless_memory_moves_to_callee`). One predicate for the
+    /// free, method and assoc legs, so the three cannot drift.
+    pub(super) fn forwarded_arg_memory_leaves_caller(
+        &self,
+        callee_name: &str,
+        arg_index: usize,
+    ) -> bool {
+        self.callee_hands_arg_back_whole_on_every_path(callee_name, arg_index)
+            || self.callee_moves_arg_into_local_container(callee_name, arg_index)
+            || self.cond_store_dropless_memory_moves_to_callee(callee_name, arg_index)
     }
 
     /// B-2026-09-25-31 — does the callee push argument `arg_index` into a

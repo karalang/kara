@@ -3955,3 +3955,62 @@ fn main() {
     };
     assert_eq!(out, "t1\ndS1\nt2\nt3\nb4\ndS4\nb5\nt6\ndS6\nt7 7\ndS7\nh\ni\ndS11\nj\nk12 13\ndS13\nl1 1\nm0\nm1\nm2\nend\n", "got:\n{out}");
 }
+
+/// B-2026-09-25-37 — a struct with a `shared` field and NO `Drop` of its
+/// own is forwarded by a by-value callee, which never frees it, so its only
+/// owner is the caller's memory-only `StructDrop`. B-2026-09-25-31 moved that
+/// to the result on the free-fn every-path shapes; the METHOD and ASSOC legs
+/// (`a_`, `b_`) and the MIXED-PATH shapes (`c_`..`g_`: a conditional
+/// hand-back or store, where the callee now owns the memory per path under the
+/// conditional-move flag exactly as it already did for a `Drop`-bearing struct)
+/// read and wrote a freed block. `h_` pins an `Option` result, which stays with
+/// the caller because its payload cannot release the `shared` field.
+#[test]
+fn e2e_dropless_shared_field_struct_on_method_and_mixed_paths_has_one_owner() {
+    let Some(out) = run_program(
+        r#"shared struct Sh { k: i64 }
+struct S3 { h: Sh, id: i64 }
+struct K { n: i64 }
+impl K {
+    fn keep3(ref self, v: S3) -> S3 { return v }
+    fn akeep3(v: S3) -> S3 { return v }
+    fn pk(ref self, v: S3, c: bool, w: S3) -> S3 { if c { return v } return w }
+}
+struct Hold { xs: Vec[S3] }
+impl Hold { fn maybe(mut ref self, r: S3, k: bool) { if k { self.xs.push(r); } } }
+fn mk(i: i64) -> S3 { return S3 { h: Sh { k: i }, id: i } }
+fn pickS3(v: S3, c: bool, w: S3) -> S3 { if c { return v } return w }
+fn keep1(v: S3, c: bool) -> S3 { if c { return v } return mk(99) }
+fn stcS3(a: S3, c: bool) -> Vec[S3] { let mut v: Vec[S3] = Vec.new(); if c { v.push(a) } return v }
+fn midS3(v: S3, c: bool) -> Option[S3] { if c { return Some(v) } return None }
+fn a_method() { let k = K { n: 0 }; let s = mk(1); let t = k.keep3(s); let u = mk(2); let w = K.akeep3(u); println(f"a{t.id} {w.id}") }
+fn b_method_disc() { let k = K { n: 0 }; let s = mk(3); k.keep3(s); let u = mk(4); let _ = K.akeep3(u); println("b") }
+fn c_pick() { let s = mk(5); let w = mk(6); let t = pickS3(s, true, w); let s2 = mk(7); let w2 = mk(8); let t2 = pickS3(s2, false, w2); println(f"c{t.id} {t2.id}") }
+fn d_keep1() { let s = mk(9); let t = keep1(s, true); let s2 = mk(10); let t2 = keep1(s2, false); let t3 = keep1(mk(11), false); println(f"d{t.id} {t2.id} {t3.id}") }
+fn e_method_pick() { let k = K { n: 0 }; let s = mk(12); let w = mk(13); let t = k.pk(s, false, w); println(f"e{t.id}") }
+fn f_store() { let s = mk(14); let v = stcS3(s, true); let s2 = mk(15); let v2 = stcS3(s2, false); println(f"f{v.len()} {v2.len()}") }
+fn g_self_store() { let mut h = Hold { xs: Vec.new() }; let s = mk(16); h.maybe(s, true); let s2 = mk(17); h.maybe(s2, false); println(f"g{h.xs.len()}") }
+fn h_option() { let s = mk(18); let o = midS3(s, true); let s2 = mk(19); let o2 = midS3(s2, false); println("h") }
+fn i_loop() { for i in 0..3 { let s = mk(i); let t = keep1(s, i == 1); println(f"i{t.id}") } }
+
+fn main() {
+    a_method()
+    b_method_disc()
+    c_pick()
+    d_keep1()
+    e_method_pick()
+    f_store()
+    g_self_store()
+    h_option()
+    i_loop()
+    println("end")
+}
+"#,
+    ) else {
+        return;
+    };
+    assert_eq!(
+        out, "a1 2\nb\nc5 8\nd9 99 99\ne13\nf1 0\ng1\nh\ni99\ni1\ni99\nend\n",
+        "got:\n{out}"
+    );
+}

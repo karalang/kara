@@ -7948,6 +7948,8 @@ impl<'ctx> super::Codegen<'ctx> {
                             if let ExprKind::Identifier(var_name) = &a.value.kind {
                                 let var_name = var_name.clone();
                                 self.suppress_user_drop_for_var(&var_name);
+                                // B-2026-09-25-37 — see the free leg.
+                                self.suppress_struct_cleanup_for_tail_identifier(&var_name);
                             }
                         } else if self.callee_takes_over_arg_drop_body(&qualified, i) {
                             if let ExprKind::Identifier(var_name) = &a.value.kind {
@@ -7986,6 +7988,12 @@ impl<'ctx> super::Codegen<'ctx> {
                                 // three registrars as across two sites.
                                 if self.arg_var_is_forwarded_not_copied(&var_name) {
                                     self.suppress_user_drop_for_var(&var_name);
+                                    // B-2026-09-25-37 — and a Drop-less
+                                    // struct's memory-only action; see the
+                                    // free leg.
+                                    if self.forwarded_arg_memory_leaves_caller(&qualified, i) {
+                                        self.suppress_struct_cleanup_for_tail_identifier(&var_name);
+                                    }
                                 } else {
                                     self.suppress_user_drop_body_keeping_memory(&var_name);
                                 }

@@ -3671,6 +3671,52 @@ impl<'ctx> super::Codegen<'ctx> {
                                         .cond_returned_body_params
                                         .insert(param_name.clone());
                                 }
+                            } else if !has_user_drop {
+                                // B-2026-09-25-37 — the same per-path MEMORY
+                                // owner for a struct with NO `Drop` of its own.
+                                // A `shared` field makes it decline copy
+                                // support, so it is FORWARDED and this frame
+                                // never freed it: on the exit that does not
+                                // hand it back only the caller could, and the
+                                // caller cannot tell the exits apart --
+                                // `pickS3(s, true, w)` used `s` after free.
+                                // With no body to run, the flagged action is
+                                // the full value drop the caller's own
+                                // `StructDrop` would have emitted.
+                                let recv_offset = self
+                                    .program_snapshot
+                                    .as_deref()
+                                    .and_then(|p| {
+                                        crate::codegen::declarations::find_function_ast(
+                                            p, &func.name,
+                                        )
+                                    })
+                                    .is_some_and(|ast| ast.self_param.is_some())
+                                    as usize;
+                                let owns_memory = i >= recv_offset
+                                    && self.conditional_handback_memory_moves_to_callee(
+                                        &func.name,
+                                        i - recv_offset,
+                                    );
+                                if owns_memory {
+                                    if let Some(full) =
+                                        self.emit_vec_elem_struct_with_shared_drop_fn(struct_name)
+                                    {
+                                        self.track_user_drop_var_with_fn(
+                                            struct_name,
+                                            &param_name,
+                                            alloca,
+                                            full,
+                                            crate::codegen::state::UserDropKind::OwnWrapper,
+                                        );
+                                        self.drop_rc
+                                            .cond_returned_body_params
+                                            .insert(param_name.clone());
+                                        self.drop_rc
+                                            .cond_returned_owned_params
+                                            .insert(param_name.clone());
+                                    }
+                                }
                             }
                         }
                     }
@@ -3947,6 +3993,46 @@ impl<'ctx> super::Codegen<'ctx> {
                                     self.drop_rc
                                         .cond_store_flag_params
                                         .insert(param_name.clone());
+                                }
+                            } else if !has_user_drop {
+                                // B-2026-09-25-37 — the per-path MEMORY owner
+                                // for a forwarded struct with NO `Drop`: the
+                                // caller retracted its memory-only action
+                                // (`cond_store_dropless_memory_moves_to_callee`),
+                                // so on the path that does not store only this
+                                // frame frees it. `h.maybe(s, true)` over a
+                                // `shared`-field struct used `s` after free.
+                                let recv_offset = self
+                                    .program_snapshot
+                                    .as_deref()
+                                    .and_then(|p| {
+                                        crate::codegen::declarations::find_function_ast(
+                                            p, &func.name,
+                                        )
+                                    })
+                                    .is_some_and(|ast| ast.self_param.is_some())
+                                    as usize;
+                                if i >= recv_offset
+                                    && self.cond_store_dropless_memory_moves_to_callee(
+                                        &func.name,
+                                        i - recv_offset,
+                                    )
+                                {
+                                    if let Some(full) =
+                                        self.emit_vec_elem_struct_with_shared_drop_fn(struct_name)
+                                    {
+                                        self.track_user_drop_var_with_fn(
+                                            struct_name,
+                                            &param_name,
+                                            alloca,
+                                            full,
+                                            crate::codegen::state::UserDropKind::OwnWrapper,
+                                        );
+                                        let _ = self.cond_move_drop_flag_for(&param_name);
+                                        self.drop_rc
+                                            .cond_store_flag_params
+                                            .insert(param_name.clone());
+                                    }
                                 }
                             }
                         }

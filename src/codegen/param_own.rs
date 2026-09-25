@@ -3612,6 +3612,60 @@ impl<'ctx> super::Codegen<'ctx> {
         Some(wrapper)
     }
 
+    /// B-2026-09-25-37 — does the callee own, PER PATH, the memory of a
+    /// forwarded Drop-LESS struct argument it stores on only some paths?
+    ///
+    /// The conditional-STORE sibling of
+    /// [`Self::conditional_handback_memory_moves_to_callee`]'s Drop-less arm,
+    /// and the caller's half of `compile_function`'s registration: a struct
+    /// with a `shared` field declines copy support and is forwarded, so on the
+    /// path that does not store it only this frame's per-path owner frees it.
+    /// Receiver-EXCLUDING index, as `find_function_ast` returns.
+    pub(super) fn cond_store_dropless_memory_moves_to_callee(
+        &self,
+        callee_name: &str,
+        arg_index: usize,
+    ) -> bool {
+        let Some(program) = self.program_snapshot.as_deref() else {
+            return false;
+        };
+        let Some(f) = crate::codegen::declarations::find_function_ast(program, callee_name) else {
+            return false;
+        };
+        if f.generic_params.is_some() || self.is_coroutine_compiled(&f.name) {
+            return false;
+        }
+        let Some(param) = f.params.get(arg_index) else {
+            return false;
+        };
+        let crate::ast::TypeKind::Path(path) = &param.ty.kind else {
+            return false;
+        };
+        let Some(struct_name) = path.segments.first() else {
+            return false;
+        };
+        self.dropless_forwarded_struct(struct_name)
+            && (crate::ast::fn_conditionally_stores_param(f, arg_index)
+                || crate::ast::fn_conditionally_hands_param_to_flip_callee(program, f, arg_index))
+    }
+
+    /// B-2026-09-25-37 — a non-generic struct with no `Drop` of its own that
+    /// the callee FORWARDS (copy declined, no transfer) and whose value drop is
+    /// the combined one because it owns a `shared` field.
+    pub(super) fn dropless_forwarded_struct(&self, struct_name: &str) -> bool {
+        !self
+            .program_snapshot
+            .as_deref()
+            .is_some_and(|p| p.drop_method_keys.contains_key(struct_name))
+            && self
+                .type_decls
+                .struct_generic_params
+                .get(struct_name)
+                .is_none_or(|g| g.is_empty())
+            && self.struct_param_memory_stays_with_caller(struct_name)
+            && self.struct_owns_shared_field(struct_name, &mut Vec::new())
+    }
+
     /// B-2026-09-06-69 — does the MEMORY of a CONDITIONALLY handed-back
     /// by-value param move to the callee, per path?
     ///
@@ -3710,8 +3764,31 @@ impl<'ctx> super::Codegen<'ctx> {
         {
             return false;
         }
+        // B-2026-09-25-37 — a struct with NO `Drop` qualifies too when it
+        // owns a `shared` field (the combined-drop gate): the callee then
+        // registers the full value drop per path instead of the wrapper
+        // (`compile_function`), and the caller retracts its memory-only
+        // action beside the wrapper.
         if !program.drop_method_keys.contains_key(struct_name.as_str()) {
-            return false;
+            if !self.struct_owns_shared_field(struct_name, &mut Vec::new()) {
+                return false;
+            }
+            // An ENUM result (`return Some(v)`) cannot own the value: an
+            // `Option` / generic-enum payload never releases a `shared` field
+            // (B-2026-09-25-39), so moving the memory there leaked it where the
+            // caller's own drop had been freeing it. The `Drop`-bearing arm
+            // keeps its old admission.
+            let ret_is_struct = f
+                .return_type
+                .as_ref()
+                .and_then(Self::te_head_name)
+                .is_some_and(|r| {
+                    self.type_decls.struct_types.contains_key(r.as_str())
+                        && !self.type_decls.shared_types.contains_key(r.as_str())
+                });
+            if !ret_is_struct {
+                return false;
+            }
         }
         if !self
             .handback_safe_params

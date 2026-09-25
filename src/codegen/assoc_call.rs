@@ -3126,6 +3126,8 @@ impl<'ctx> super::Codegen<'ctx> {
                         if self.conditional_handback_memory_moves_to_callee(&qualified, i) {
                             self.suppress_container_elem_bodies_for_var(&var_name);
                             self.suppress_user_drop_for_var(&var_name);
+                            // B-2026-09-25-37 — see the free leg.
+                            self.suppress_struct_cleanup_for_tail_identifier(&var_name);
                         } else if self.callee_takes_over_arg_drop_body(&qualified, i) {
                             self.suppress_container_elem_bodies_for_var(&var_name);
                             // B-2026-09-07-4 — the ASSOC leg of
@@ -3146,6 +3148,10 @@ impl<'ctx> super::Codegen<'ctx> {
                             // fourth inline copy; see the method leg's note.
                             if self.arg_var_is_forwarded_not_copied(&var_name) {
                                 self.suppress_user_drop_for_var(&var_name);
+                                // B-2026-09-25-37 — see the free leg.
+                                if self.forwarded_arg_memory_leaves_caller(&qualified, i) {
+                                    self.suppress_struct_cleanup_for_tail_identifier(&var_name);
+                                }
                             } else {
                                 self.suppress_user_drop_body_keeping_memory(&var_name);
                             }
