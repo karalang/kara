@@ -103,7 +103,7 @@ distinguish "bugs flattening" from "we stopped writing them down."
 | perf | 117 |
 | false-positive | 109 |
 | soundness | 97 |
-| crash | 95 |
+| crash | 96 |
 | use-after-free | 51 |
 
 ### By surface
@@ -118,7 +118,7 @@ distinguish "bugs flattening" from "we stopped writing them down."
 | cli | 73 |
 | autopar | 56 |
 | parser | 49 |
-| runtime | 45 |
+| runtime | 46 |
 | effect | 30 |
 | resolver | 29 |
 | lexer | 11 |
@@ -381,7 +381,6 @@ registered in the callee's prologue, not by-value struct params in general. | �
 | B-2026-09-25-21 | 2026-09-25 | codegen+interp | medium | A GENERIC ENUM'S STRUCT-VARIANT PAYLOAD RUNS NO ELEMENT `Drop` BODY ON ANY SURFACE WHEN A CALLEE BUILDS IT FROM AN `Array` PARAM -- `fn inner(a: Array[R, 2]) -> G2[Array[R, 2]] { G2.A { v: a, k: 2 } }` over `enum G2[T] { A { v: T, k: i64 }, B }` and an `R { id: i64, s: String }` with a user `Drop` prints `in held end` on `--interp`, the JIT, -O0 and -O2 where `in d22 d23 held end` is due. Memory-clean under valgrind (err=0), so it is a lost BODY, agreed on all four surfaces, and only an expected-output oracle sees it. The TUPLE-variant twin `G.A(a)` is correct since B-2026-09-25-16. | — |
 | B-2026-09-25-24 | 2026-09-25 | codegen | medium | `let q = o.unwrap()` OVER AN `Option[Map[K, V]]` LEAKS THE MAP on jit, -O2 seq and -O2 par (628 B at -O0 for one entry); `--interp` is correct | — |
 | B-2026-09-25-26 | 2026-09-25 | interp+codegen | medium | `o.unwrap().s` (A FIELD PROJECTED OFF AN UNWRAP RESULT) NEVER RUNS THE PAYLOAD'S USER `Drop` BODY, on all four surfaces alike; `let r = o.unwrap(); r.s` runs it | — |
-| B-2026-09-25-27 | 2026-09-25 | codegen | medium | A CONDITIONAL FIELD MOVE (`if c { let x = h.p }`) ON ONE BINDING DROPS `p`'s USER `Drop` BODY FROM A LATER, DIFFERENT BINDING THAT HAPPENS TO BE NAMED `h` (a sibling block or a shadowing `let`) when its own move is not taken; jit, -O2 seq and -O2 par agree, `--interp` is correct | — |
 | B-2026-09-25-28 | 2026-09-25 | codegen+interp | medium | A BY-VALUE `self` METHOD CALLED ON A NAMED RECEIVER THAT MOVES A `Drop`-BEARING FIELD OUT RUNS THAT FIELD'S BODY TWICE ON ALL FOUR SURFACES, memory-clean -- `let x = w.getr(); println(f"x{x.id}")` over `fn getr(self) -> R { return self.r }` prints `dR1 x1 dR1 end` where one `dR1` is due, after `x1`; the tail (`self.r`) and `let q = self.r; q` spellings print the same, while the free-function twin `getf(w)` over `fn getf(w: Ws) -> R { return w.r }` and a TEMP receiver (`Ws { .. }.getr()`) are correct | — |
 | B-2026-09-25-29 | 2026-09-25 | codegen+interp | medium | A `v.pop().unwrap()` ARGUMENT TO A BY-VALUE ENUM PARAM LOSES ITS PAYLOAD'S `Drop` BODY, ON A DIFFERENT SET OF SURFACES FOR EACH ENUM KIND -- over `Vec[Hc]` (concrete `enum Hc { Full(R), Empty }`) `hold(v.pop().unwrap())` prints `h end` on all four; over `Vec[Option[R]]` the compiled surfaces print `ho end` and `--interp` `ho dR5 end`; over `Vec[Ho[R]]` (generic) the compiled surfaces print `hg dR6 end` and `--interp` `hg end`. `let x = v.pop().unwrap()` over `Vec[Hc]` is correct everywhere | — |
 | B-2026-09-25-30 | 2026-09-25 | codegen | medium | A HEAP-FREE `Drop` STRUCT HANDED BACK BY A GENERIC FN RUNS ITS BODY TWICE ON EVERY COMPILED SURFACE, the first time AT THE CALL -- `let p = P { id: 2 }; let q = idg(p); println(f"q{q.id}")` over `fn idg[T](v: T) -> T { return v }` and `struct P { id: i64 }` with a user `Drop` prints `dP2 q2 dP2 end` where `--interp` prints `q2 dP2 end`; the struct wrap `wrap(p)` and the enum wrap `mkh(p)` do the same, while the SAME three calls over a heap-bearing `R { id: i64, s: String }` are correct | — |
@@ -389,7 +388,7 @@ registered in the callee's prologue, not by-value struct params in general. | �
 | B-2026-09-25-32 | 2026-09-25 | codegen | medium | A GENERIC FN'S RETURNED ENUM TEMP USED AS A `match` SCRUTINEE RUNS A HEAP-FREE PAYLOAD'S `Drop` BODY TWICE ON EVERY COMPILED SURFACE -- `match mkh(P { id: 6 }) { Ho.Full(r) => println(f"m{r.id}"), Ho.Empty => .. }` over `fn mkh[T](v: T) -> Ho[T] { return Ho.Full(v); }` and `struct P { id: i64 }` with a user `Drop` prints `m6 dP6 dP6 x` where `--interp` prints `m6 dP6 x`; the concrete twin `mkhC` and a heap-bearing payload are correct | — |
 | B-2026-09-25-33 | 2026-09-25 | codegen+interp | medium | A BY-VALUE PARAM HANDED TO A WRAPPER WHOSE RESULT IS DISCARDED RUNS ITS `Drop` BODY TWICE ON ALL FOUR SURFACES -- `fn outerC(x: P) { wrapC(x); println("o") }` over `fn wrapC(v: P) -> BxP { return BxP { v: v } }` called as `outerC(p)` prints `dP10 o dP10 x` everywhere against a due `dP10 o x`; the GENERIC spelling `fn outerG[T](x: T) { wrap(x); .. }` runs it once but LATE on the compiled surfaces (`o dP11 x`) and twice under `--interp` | — |
 | B-2026-09-25-34 | 2026-09-25 | codegen | medium | A DISCARDED GENERIC STRUCT LITERAL RUNS NONE OF ITS `Drop` BODIES ON ANY COMPILED SURFACE -- `Dx { v: P { id: 13 }, k: 13 };` over `struct Dx[T] { v: T, k: i64 }` with `impl[T] Drop for Dx[T]` prints `x` where `--interp` prints `dDx13 dP13 x`, and `let _ =` and a `Drop`-less `Bx[T]` (`Bx { v: P { id: 15 } };`, due `dP15`) do the same; the CALL spelling `wrapd(p);` is fixed by B-2026-09-25-30 | — |
-| B-2026-09-25-35 | 2026-09-25 | codegen | medium | TWO FIELDS OF ONE BINDING EACH MOVED OUT CONDITIONALLY (`if c { let x = h.p } else { let y = h.q }`, or two separate `if`s) LOSE THE UNMOVED FIELD'S USER `Drop` BODY on jit, -O2 seq and -O2 par; `--interp` runs it; memory-clean; one conditionally moved field is correct | — |
+| B-2026-09-25-36 | 2026-09-25 | runtime | medium | A HOST EVENT STREAM (`std.web.events.keydown` and its siblings) KEEPS SENDING AFTER THE GUEST DROPS ITS RECEIVER, AND `channel_send` PANICS -- `send on a channel with no live receiver` aborts the wasm-threads instance when a keydown lands between the program's end and the host clearing its interval; seen once as a red `wasm_threads_keydown_payload_recv_e2e` on CI | — |
 
 ### Relocated
 
@@ -3065,6 +3064,8 @@ registered in the callee's prologue, not by-value struct params in general. | �
 | B-2026-09-25-22 | codegen | medium | A NAMED BINDING PASSED TO A GENERIC FN THAT WRAPS ITS `T` PARAM IN A GENERIC ENUM RUNS THE BINDING'S `Drop` BODY TWICE ON EVERY COMPILED SURFACE, mem… | c8d504ea7 |
 | B-2026-09-25-23 | codegen+interp | high | `h.o.unwrap()` ON AN `Option`/`Result` STRUCT FIELD DOUBLE-FREES on jit, -O2 seq and -O2 par (a local `h`, a by-value param, a fresh call result `mk(… | 555e57264 |
 | B-2026-09-25-25 | codegen | medium | `o.unwrap_or(d)` OVER A PRESENT `Option[P]` WITH A BOXED STRUCT PAYLOAD LEAKS 50 B at -O0: the 48-byte payload box and both of the unused default's 1… | 898e80128 |
+| B-2026-09-25-27 | codegen | medium | A CONDITIONAL FIELD MOVE (`if c { let x = h.p }`) ON ONE BINDING DROPS `p`'s USER `Drop` BODY FROM A LATER, DIFFERENT BINDING THAT HAPPENS TO BE NAME… | 635761c6a |
+| B-2026-09-25-35 | codegen | medium | TWO FIELDS OF ONE BINDING EACH MOVED OUT CONDITIONALLY (`if c { let x = h.p } else { let y = h.q }`, or two separate `if`s) LOSE THE UNMOVED FIELD'S… | b67469bbc |
 
 </details>
 
