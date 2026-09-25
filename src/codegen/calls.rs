@@ -95,12 +95,28 @@ impl<'ctx> super::Codegen<'ctx> {
             }
             _ => return None,
         };
-        let te = self.fn_sig.fn_return_type_exprs.get(&key)?;
+        // B-2026-09-25-11: a generic free function has no declared-signature
+        // entry; read its return off the generic definition and resolve the
+        // type params through this call's typechecker frame — the same
+        // resolution `inline_temp_vec_te` makes for the plain index.
+        let te = match self.fn_sig.fn_return_type_exprs.get(&key) {
+            Some(te) => te.clone(),
+            None if matches!(inner.kind, ExprKind::Call { .. }) => {
+                let te = self
+                    .mono_state
+                    .generic_fns
+                    .get(&key)?
+                    .return_type
+                    .as_ref()?;
+                self.callee_param_te_for_call(te, &inner.span)
+            }
+            None => return None,
+        };
         if matches!(te.kind, TypeKind::Ref(_) | TypeKind::MutRef(_)) {
             return None;
         }
-        super::helpers::vec_inner_type_expr(te)
-            .or_else(|| super::helpers::array_inner_type_expr(te))
+        super::helpers::vec_inner_type_expr(&te)
+            .or_else(|| super::helpers::array_inner_type_expr(&te))
     }
 
     /// Slice MR helper: lower an indexed-receiver method call

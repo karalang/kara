@@ -8066,3 +8066,56 @@ fn main() {
         20,
     );
 }
+
+/// B-2026-09-25-11 — indexing a generic call's result in place. A generic
+/// free function is never declared, so it had no `fn_return_type_exprs` entry
+/// and its return was spelled in its own type params anyway; both the plain
+/// index (`id2(x)[1]`) and an indexed-receiver method (`id2(mkv(i))[0].len()`)
+/// found no container type and failed `karac build` with "Index operator
+/// applied to non-array type" / "requires the indexed container to be a named
+/// variable". It now lowers through the nameless-`Vec` index path, which
+/// frees the temporary after the read, once, whatever the argument spelling.
+#[test]
+fn asan_index_generic_call_result_in_place_frees_once() {
+    assert_clean_asan_run_min_allocs(
+        r#"fn id2[T](d: T) -> T { d }
+fn first[T](d: Vec[T]) -> Vec[T] { d }
+fn pick[T](a: Option[T], d: T) -> T { match a { Some(s) => s, None => d } }
+fn mkd[T](d: T) -> VecDeque[T] { let mut q = VecDeque[T].new(); q.push_back(d); q }
+fn two[T](a: T, b: T) -> Array[T, 2] { [a, b] }
+fn head[U: Copy](y: Vec[U]) -> U { id2(y)[0] }
+fn mkv(i: i64) -> Vec[String] { let mut v = Vec[String].new(); v.push(f"heap-string-longer-than-sso-{i}"); v.push(f"b{i}"); v }
+fn main() {
+    let x = [1, 2, 3];
+    println(id2(x)[1] + id2(x)[2]);
+    println(id2(mkv(1))[0]);
+    let n = mkv(2);
+    println(id2(n)[1]);
+    println(first(mkv(3))[0]);
+    let a = Some(mkv(4));
+    println(pick(a, mkv(5))[0]);
+    println(mkd(f"heap-string-longer-than-sso-6")[0]);
+    println(two(f"heap-string-longer-than-sso-7", f"x")[0]);
+    println(head([8, 9]));
+    let mut t = 0;
+    for i in 0..10 { t = t + id2(mkv(i))[0].len(); }
+    println(t);
+    println("end")
+}
+"#,
+        &[
+            "5",
+            "heap-string-longer-than-sso-1",
+            "b2",
+            "heap-string-longer-than-sso-3",
+            "heap-string-longer-than-sso-4",
+            "heap-string-longer-than-sso-6",
+            "heap-string-longer-than-sso-7",
+            "8",
+            "290",
+            "end",
+        ],
+        "asan_index_generic_call_result_in_place_frees_once",
+        20,
+    );
+}

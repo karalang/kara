@@ -3376,11 +3376,28 @@ impl<'ctx> super::Codegen<'ctx> {
                 if let Some(te) = self.var_types.closure_ret_vec_te.get(name) {
                     return Some(te.clone());
                 }
-                let te = self.fn_sig.fn_return_type_exprs.get(name)?;
+                // B-2026-09-25-11: a GENERIC callee is never declared, so it
+                // has no `fn_return_type_exprs` entry, and its return is
+                // spelled in its own type params (`-> T`, `-> Vec[T]`), which
+                // name nothing at the call site. Read it off the generic
+                // definition and resolve it through this call's typechecker
+                // frame (keyed by the call's span, which the wrapping `Index`
+                // shares); a non-generic callee has no frame and comes back
+                // unchanged.
+                let te = match self.fn_sig.fn_return_type_exprs.get(name) {
+                    Some(te) => te,
+                    None => self
+                        .mono_state
+                        .generic_fns
+                        .get(name)?
+                        .return_type
+                        .as_ref()?,
+                };
                 if matches!(te.kind, TypeKind::Ref(_) | TypeKind::MutRef(_)) {
                     return None;
                 }
-                self.extract_vec_elem_type(te).is_some().then(|| te.clone())
+                let te = self.callee_param_te_for_call(te, &object.span);
+                self.extract_vec_elem_type(&te).is_some().then_some(te)
             }
             // `tensor.shape()` is the one built-in producing a fresh owned
             // `Vec[i64]` (`compile_tensor_shape_method`). Gated on a tensor

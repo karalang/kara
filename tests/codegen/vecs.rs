@@ -9774,3 +9774,46 @@ fn main() { let a = id2([f"heap-string-longer-than-sso-1", f"x"]); let n = [f"he
         "must match --interp"
     );
 }
+
+/// B-2026-09-25-11 — indexing a generic call's result in place. A generic
+/// free function is never declared, so it had no `fn_return_type_exprs` entry
+/// and its return was spelled in its own type params anyway; both the plain
+/// index (`id2(x)[1]`) and an indexed-receiver method (`id2(mkv(i))[0].len()`)
+/// found no container type and failed `karac build` with "Index operator
+/// applied to non-array type" / "requires the indexed container to be a named
+/// variable". `--interp` ran all of it.
+#[test]
+fn test_e2e_index_generic_call_result_in_place() {
+    let out = run_program(
+        r#"fn id2[T](d: T) -> T { d }
+fn first[T](d: Vec[T]) -> Vec[T] { d }
+fn pick[T](a: Option[T], d: T) -> T { match a { Some(s) => s, None => d } }
+fn mkd[T](d: T) -> VecDeque[T] { let mut q = VecDeque[T].new(); q.push_back(d); q }
+fn two[T](a: T, b: T) -> Array[T, 2] { [a, b] }
+fn head[U: Copy](y: Vec[U]) -> U { id2(y)[0] }
+fn mkv(i: i64) -> Vec[String] { let mut v = Vec[String].new(); v.push(f"heap-string-longer-than-sso-{i}"); v.push(f"b{i}"); v }
+fn main() {
+    let x = [1, 2, 3];
+    println(id2(x)[1] + id2(x)[2]);
+    println(id2(mkv(1))[0]);
+    let n = mkv(2);
+    println(id2(n)[1]);
+    println(first(mkv(3))[0]);
+    let a = Some(mkv(4));
+    println(pick(a, mkv(5))[0]);
+    println(mkd(f"heap-string-longer-than-sso-6")[0]);
+    println(two(f"heap-string-longer-than-sso-7", f"x")[0]);
+    println(head([8, 9]));
+    let mut t = 0;
+    for i in 0..10 { t = t + id2(mkv(i))[0].len(); }
+    println(t);
+    println("end")
+}
+"#,
+    );
+    assert_eq!(
+        out.as_deref(),
+        Some("5\nheap-string-longer-than-sso-1\nb2\nheap-string-longer-than-sso-3\nheap-string-longer-than-sso-4\nheap-string-longer-than-sso-6\nheap-string-longer-than-sso-7\n8\n290\nend\n"),
+        "must match --interp"
+    );
+}
