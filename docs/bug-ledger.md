@@ -92,7 +92,7 @@ distinguish "bugs flattening" from "we stopped writing them down."
 
 | class | total |
 |---|---|
-| run-vs-build | 492 |
+| run-vs-build | 493 |
 | miscompile | 455 |
 | leak | 419 |
 | double-free | 309 |
@@ -110,7 +110,7 @@ distinguish "bugs flattening" from "we stopped writing them down."
 
 | surface | total |
 |---|---|
-| codegen | 2080 |
+| codegen | 2081 |
 | interp | 549 |
 | typecheck | 308 |
 | other | 110 |
@@ -390,6 +390,7 @@ registered in the callee's prologue, not by-value struct params in general. | �
 | B-2026-09-25-32 | 2026-09-25 | codegen | medium | A GENERIC FN'S RETURNED ENUM TEMP USED AS A `match` SCRUTINEE RUNS A HEAP-FREE PAYLOAD'S `Drop` BODY TWICE ON EVERY COMPILED SURFACE -- `match mkh(P { id: 6 }) { Ho.Full(r) => println(f"m{r.id}"), Ho.Empty => .. }` over `fn mkh[T](v: T) -> Ho[T] { return Ho.Full(v); }` and `struct P { id: i64 }` with a user `Drop` prints `m6 dP6 dP6 x` where `--interp` prints `m6 dP6 x`; the concrete twin `mkhC` and a heap-bearing payload are correct | — |
 | B-2026-09-25-33 | 2026-09-25 | codegen+interp | medium | A BY-VALUE PARAM HANDED TO A WRAPPER WHOSE RESULT IS DISCARDED RUNS ITS `Drop` BODY TWICE ON ALL FOUR SURFACES -- `fn outerC(x: P) { wrapC(x); println("o") }` over `fn wrapC(v: P) -> BxP { return BxP { v: v } }` called as `outerC(p)` prints `dP10 o dP10 x` everywhere against a due `dP10 o x`; the GENERIC spelling `fn outerG[T](x: T) { wrap(x); .. }` runs it once but LATE on the compiled surfaces (`o dP11 x`) and twice under `--interp` | — |
 | B-2026-09-25-34 | 2026-09-25 | codegen | medium | A DISCARDED GENERIC STRUCT LITERAL RUNS NONE OF ITS `Drop` BODIES ON ANY COMPILED SURFACE -- `Dx { v: P { id: 13 }, k: 13 };` over `struct Dx[T] { v: T, k: i64 }` with `impl[T] Drop for Dx[T]` prints `x` where `--interp` prints `dDx13 dP13 x`, and `let _ =` and a `Drop`-less `Bx[T]` (`Bx { v: P { id: 15 } };`, due `dP15`) do the same; the CALL spelling `wrapd(p);` is fixed by B-2026-09-25-30 | — |
+| B-2026-09-25-35 | 2026-09-25 | codegen | medium | TWO FIELDS OF ONE BINDING EACH MOVED OUT CONDITIONALLY (`if c { let x = h.p } else { let y = h.q }`, or two separate `if`s) LOSE THE UNMOVED FIELD'S USER `Drop` BODY on jit, -O2 seq and -O2 par; `--interp` runs it; memory-clean; one conditionally moved field is correct | — |
 
 ### Relocated
 
