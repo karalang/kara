@@ -16230,6 +16230,9 @@ impl<'ctx> super::Codegen<'ctx> {
         if self.uam_reclone_source_field(arg_expr) {
             return;
         }
+        if self.uam_reclone_source_map(arg_expr) {
+            return;
+        }
         // B-2026-08-12-27 — a heap FIELD read off a Vec element
         // (`ps[0].word`) was deep-cloned at the read, and the clone carries
         // its own scope cleanup so a NON-consuming read does not leak. This is

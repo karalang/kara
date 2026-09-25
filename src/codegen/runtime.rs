@@ -8421,6 +8421,68 @@ impl<'ctx> super::Codegen<'ctx> {
             .cloned()
     }
 
+    /// B-2026-09-25-3 — the WHOLE-`Map`/`Set` peer of
+    /// [`Self::uam_reclone_source_field`], at the same "copy the source"
+    /// position.
+    ///
+    /// `uam_defensive_copy` copies a flagged `Map` handle for the consumer, but
+    /// only at the sinks that call it (a `let`, the struct-literal fields, the
+    /// variant constructors, `push`). A tuple or array literal element and
+    /// `Vec.insert` never do, so at a flagged move the consumer took the only
+    /// handle and the disarm nulled the source slot: `(m, 1); m.len()` read a
+    /// null handle and SEGFAULTED on every compiled backend. By the time the
+    /// disarm runs the consumer already holds the handle, so the source is the
+    /// side still reachable: clone the table over its own slot and record the
+    /// site, after which every disarm keys on the copy and leaves the source's
+    /// `FreeMapHandle` armed. Two owners, two tables, one free each. A MOVE
+    /// ON ONE PATH (or in a loop) that is read after takes the same copy: the
+    /// ownership pass RC-promotes such a source instead of flagging it, and a
+    /// `Map` is not boxed for that, so the same null store read back null.
+    pub(super) fn uam_reclone_source_map(&mut self, arg_expr: &Expr) -> bool {
+        let ExprKind::Identifier(name) = &arg_expr.kind else {
+            return false;
+        };
+        let key = (arg_expr.span.offset, arg_expr.span.length);
+        if self.span_tables.uam_copied_sites.contains(&key) {
+            return false;
+        }
+        // The two answers the ownership pass gives for "the source outlives
+        // this move" (`source_outlives_move`'s doc): a flagged consume site, or
+        // an RC-fallback promotion -- a move on one branch or in a loop, read
+        // after. Codegen boxes a promoted `String`/`Vec`, but not a `Map`
+        // handle, so a promoted `Map` reaches here as a plain slot and was
+        // nulled exactly like the flagged case (`if c { v.push(m) }; m.len()`
+        // read null on every compiled backend).
+        let promoted_unboxed = self.is_rc_fallback_binding(name)
+            && !self
+                .drop_rc
+                .rc_fallback_heap_types
+                .contains_key(name.as_str());
+        if !self.span_tables.uam_consume_sites.contains(&key) && !promoted_unboxed {
+            return false;
+        }
+        // A `ref Map` param's slot points into the caller's frame and owns
+        // nothing; the disarm declines it for the same reason.
+        if self.borrow_vars.ref_params.contains_key(name.as_str()) {
+            return false;
+        }
+        let Some(slot) = self.variables.get(name.as_str()).copied() else {
+            return false;
+        };
+        if !slot.ty.is_pointer_type() {
+            return false;
+        }
+        let name = name.clone();
+        let Some(clone_fn) = self.uam_map_or_set_clone_fn(&name) else {
+            return false;
+        };
+        self.builder
+            .build_call(clone_fn, &[slot.ptr.into(), slot.ptr.into()], "")
+            .unwrap();
+        self.span_tables.uam_copied_sites.insert(key);
+        true
+    }
+
     /// B-2026-08-15-10 — the CALL-ARGUMENT half of the same defensive copy,
     /// taken from the SOURCE side because that is the only side an argument
     /// position still has.

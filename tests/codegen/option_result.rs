@@ -11164,3 +11164,50 @@ fn main() {
         "got:\n{out}"
     );
 }
+
+/// B-2026-09-25-3 — a `Map`/`Set` local moved into a sink that takes no
+/// defensive copy (a tuple or array literal element, `Vec.insert`), or moved on
+/// ONE PATH / in a loop and read after (`if c { v.push(m) }; m.len()`), which
+/// the ownership pass RC-promotes rather than flags and codegen does not box
+/// for a `Map`. The disarm then nulled the source slot, so the later
+/// `m.len()` read a null handle: SIGSEGV at -O0/-O2, a `null pointer
+/// dereference` panic under the JIT, on every one of these spellings. The
+/// disarm now clones the table over the source's own slot first.
+#[test]
+fn e2e_map_moved_then_read_again_keeps_its_own_table() {
+    let Some(out) = run_program(
+        r#"fn item_c0(t: i64) -> i64 { let mut m: Map[i64, String] = Map.new(); m.insert(t, f"heap-string-longer-than-sso-{t}"); let p: (Map[i64, String], i64) = (m, 1); let b = m.len(); p.0.len() + b }
+fn item_c1(t: i64) -> i64 { let mut m: Map[i64, String] = Map.new(); m.insert(t, f"heap-string-longer-than-sso-{t}"); let mut v: Vec[Map[i64, String]] = Vec.new(); v.insert(0, m); let b = m.len(); v.len() + b }
+fn item_c2(t: i64) -> i64 { let mut m: Set[String] = Set.new(); m.insert(f"heap-string-longer-than-sso-{t}"); let p: (Set[String], i64) = (m, 1); let b = m.len(); p.0.len() + b }
+fn item_c3(t: i64) -> i64 { let mut m: Map[i64, String] = Map.new(); m.insert(t, f"heap-string-longer-than-sso-{t}"); let p = [m]; let b = m.len(); p[0].len() + b }
+fn item_c4(t: i64) -> i64 { let mut m: Map[i64, String] = Map.new(); m.insert(t, f"heap-string-longer-than-sso-{t}"); let mut n = 0; if t == 0 { let p: (Map[i64, String], i64) = (m, 1); n = p.0.len(); } n + m.len() }
+fn item_c5(t: i64) -> i64 { let mut m: Map[i64, String] = Map.new(); m.insert(t, f"heap-string-longer-than-sso-{t}"); let mut n = 0; if t == 0 { let mut v: Vec[Map[i64, String]] = Vec.new(); v.insert(0, m); n = v.len(); } n + m.len() }
+fn item_c6(t: i64) -> i64 { let mut m: Map[i64, String] = Map.new(); m.insert(t, f"heap-string-longer-than-sso-{t}"); let mut n = 0; if t == 0 { let mut v: Vec[Map[i64, String]] = Vec.new(); v.push(m); n = v.len(); } n + m.len() }
+fn item_c7(t: i64) -> i64 { let mut m: Map[i64, String] = Map.new(); m.insert(t, f"heap-string-longer-than-sso-{t}"); let mut n = 0; if t == 0 { let d = Some(m); n = match d { Some(x) => x.len(), None => 0 }; } n + m.len() }
+fn item_c8(t: i64) -> i64 { let mut m: Map[i64, String] = Map.new(); m.insert(t, f"heap-string-longer-than-sso-{t}"); let mut v: Vec[Map[i64, String]] = Vec.new(); for i in 0..3 { v.push(m); } v.len() + m.len() }
+struct H { m: Map[i64, String] }
+fn item_c9(t: i64) -> i64 { let mut m: Map[i64, String] = Map.new(); m.insert(t, f"heap-string-longer-than-sso-{t}"); let mut n = 0; if t == 0 { let h = H { m: m }; n = h.m.len(); } n + m.len() }
+fn item_c10(t: i64) -> i64 { let mut m: Map[i64, String] = Map.new(); m.insert(t, f"heap-string-longer-than-sso-{t}"); let mut n = 0; if t == 0 { let q = m; n = q.len(); } n + m.len() }
+fn main() {
+    println(f"{item_c0(0)} {item_c0(1)}");
+    println(f"{item_c1(0)} {item_c1(1)}");
+    println(f"{item_c2(0)} {item_c2(1)}");
+    println(f"{item_c3(0)} {item_c3(1)}");
+    println(f"{item_c4(0)} {item_c4(1)}");
+    println(f"{item_c5(0)} {item_c5(1)}");
+    println(f"{item_c6(0)} {item_c6(1)}");
+    println(f"{item_c7(0)} {item_c7(1)}");
+    println(f"{item_c8(0)} {item_c8(1)}");
+    println(f"{item_c9(0)} {item_c9(1)}");
+    println(f"{item_c10(0)} {item_c10(1)}");
+    println("end")
+}
+"#,
+    ) else {
+        return;
+    };
+    assert_eq!(
+        out, "2 2\n2 2\n2 2\n2 2\n2 1\n2 1\n2 1\n2 1\n4 4\n2 1\n2 1\nend\n",
+        "got:\n{out}"
+    );
+}
