@@ -94,7 +94,7 @@ distinguish "bugs flattening" from "we stopped writing them down."
 |---|---|
 | run-vs-build | 489 |
 | miscompile | 446 |
-| leak | 411 |
+| leak | 413 |
 | double-free | 301 |
 | missing-feature | 206 |
 | codegen-gap | 193 |
@@ -103,18 +103,18 @@ distinguish "bugs flattening" from "we stopped writing them down."
 | perf | 117 |
 | false-positive | 109 |
 | soundness | 97 |
-| crash | 94 |
+| crash | 95 |
 | use-after-free | 50 |
 
 ### By surface
 
 | surface | total |
 |---|---|
-| codegen | 2048 |
+| codegen | 2051 |
 | interp | 540 |
 | typecheck | 307 |
 | other | 110 |
-| ownership | 76 |
+| ownership | 77 |
 | cli | 73 |
 | autopar | 56 |
 | parser | 49 |
@@ -374,7 +374,6 @@ registered in the callee's prologue, not by-value struct params in general. | �
 | B-2026-09-24-11 | 2026-09-24 | codegen+interp | high | A `let`-BOUND HAND-BACK OF AN `Option` WHOSE PAYLOAD HAS A `Drop` BODY NESTED INSIDE IT IS STILL WRONG, the remainder B-2026-09-23-44 leaves out -- `fn f(a: Option[M], c: bool) -> Option[M] { let r: Option[M] = if c { a } else { None }; println("mid"); r }` over `struct M { r: R, s: String }` (R has a `Drop`) prints `mid d1 y1 d1 end` under `--interp` and nothing on jit / -O0 / -O2 (valgrind err=4), where the TAIL spelling prints `mid y1 d1 end` everywhere | — |
 | B-2026-09-24-13 | 2026-09-24 | codegen+interp | medium | FOUR MORE HAND-BACK SPELLINGS OVER A BY-VALUE `Option[R]` PARAM STILL RUN THE `Drop` BODY TWICE OR NOT AT ALL, the remainder of B-2026-09-24-9 -- a CONDITIONAL hand-back `match idc(a, true) { Some(x) => x.id, .. }` prints `d1 d1 k1 end` on all four surfaces for a named argument; a temp argument's `let b = id(a); match b { Some(x) => x, .. }` prints `d1 k1 d1 end` under `--interp`; its `let b = id(a); 7` and `match id(a) { Some(_) => 1, .. }` run NO body on jit / -O0 / -O2 | — |
 | B-2026-09-24-20 | 2026-09-24 | codegen | high | AN ESCAPING BY-VALUE `Result`/`Option` PARAM WHOSE INLINE PAYLOAD RUNS A USER `Drop` IS STILL FREED TWICE -- `fn peek(a: Result[S, i64]) -> i64 { match id(a) { Ok(x) => x.r.id + x.s.len(), Err(e) => e } }` over `struct S { r: R, s: String }` (R has a `Drop`, S fits `Result`'s five-word area) prints `d1 k30 end` under `--interp` and at -O2 and aborts `double free detected in tcache 2` on jit and -O0 | — |
-| B-2026-09-24-30 | 2026-09-24 | codegen | high | THREE RC-PROMOTED `Option`/`Result` PAYLOAD SHAPES B-2026-09-24-28 DID NOT REACH ARE STILL WRONG ON THE COMPILED SURFACES -- `Result[(String, i64), i64]` double-frees at jit/-O0, a nested `Some(Some(s))` arm moving `s` out double-frees on jit/-O0/-O2, and `Option[Map[i64, String]]` reads invalid memory and loses 72 B (629 with indirect) at -O0 | — |
 | B-2026-09-24-32 | 2026-09-24 | codegen | low | A GENERIC FUNCTION'S BY-VALUE `Option[T]` PARAM LEAKS A FRESH `Some(P { .. })` TEMPORARY WHEN `T` IS A HEAP-BEARING STRUCT -- `fn peek[T](a: Option[T]) -> i64 { match a { Some(_) => 1, None => 0 } }` called as `peek(Some(P { s: f"..", n: 1 }))` prints the right answer on all four surfaces and loses 61 bytes at -O0, while the non-generic `peek(a: Option[P])` twin is clean | — |
 | B-2026-09-24-33 | 2026-09-24 | codegen | high | A GENERIC `pick[T]` OVER A NAMED `Option[Array[String, 2]]` ARGUMENT DOUBLE-FREES ON EVERY COMPILED SURFACE -- `fn pick[T](a: Option[T], d: T) -> T { match a { Some(s) => s, None => d } }` with `let a = Some([f"..", f"x"]); pick(a, [f"d", f"e"]).len()` prints `2 end` under `--interp`, nothing on the JIT and `double free detected in tcache 2` at -O2 | — |
 | B-2026-09-24-34 | 2026-09-24 | codegen | low | A GENERIC STRUCT'S `Option` FIELD PASSED BY VALUE LEAKS ITS PAYLOAD -- `struct W[T] { o: Option[T] }` with `let y = W { o: Some(f"..") }; peek(y.o)` prints `1 end` on all four surfaces and loses 30 bytes at -O0, for a generic and a non-generic `peek`, whether `y` comes from a literal or from `fn wrap[T](a: Option[T]) -> W[T]` | — |
@@ -382,6 +381,7 @@ registered in the callee's prologue, not by-value struct params in general. | �
 | B-2026-09-24-36 | 2026-09-24 | codegen | low | A BY-VALUE `Result[S, i64]` PARAM MATCHED FOR A FIELD RUNS ITS PAYLOAD'S `Drop` BODY BEFORE THE CALLER'S PRINT ON THE COMPILED SURFACES AND AFTER IT UNDER `--interp` -- `fn rb(a: Result[S, i64]) -> i64 { match a { Ok(x) => x.r.id, Err(e) => e } }` prints `d4 k4 end` compiled and `k4 d4 end` interpreted | — |
 | B-2026-09-24-37 | 2026-09-24 | interp+codegen | medium | A DISCARDED TUPLE THAT MOVES A `Drop`-BEARING STRUCT LOCAL BESIDE A NON-FRESH `String` LOCAL RUNS THE STRUCT'S `Drop` BODY ON NO SURFACE FOR `let _ = (g, s);` AND ONLY ON THE COMPILED ONES FOR THE STATEMENT `(g, s);` -- `struct G { r: R, s: String }` prints `end` alone where `d8 end` is due | — |
 | B-2026-09-24-38 | 2026-09-25 | codegen | medium | A BY-VALUE `Result[S, i64]` PARAM WHOSE `Err(e) => e` ARM LETS THE `i64` ESCAPE LOSES A NAMED ARGUMENT'S `Drop` BODY ON THE COMPILED SURFACES -- `fn f(a: Result[S, i64]) -> i64 { match a { Ok(_) => 1, Err(e) => e } }` called as `f(a)` prints `k1` with no `d1`; `--interp` prints `d1`. Memory is balanced (valgrind clean); only the body is lost. The temp-argument call `f(Ok(mk(2)))` is correct everywhere. | — |
+| B-2026-09-25-3 | 2026-09-25 | codegen | medium | A `Map` READ AGAIN AFTER MOVING INTO A TUPLE LITERAL OR `Vec.insert` SEGFAULTS ON EVERY COMPILED BACKEND -- `let p: (Map[i64, String], i64) = (m, 1); m.len()` and `v.insert(0, m); m.len()`; the interpreter prints `2` | — |
 
 ### Relocated
 
@@ -3029,7 +3029,10 @@ registered in the callee's prologue, not by-value struct params in general. | �
 | B-2026-09-24-27 | codegen | low | A DISCARDED TUPLE LITERAL THAT MOVES A `String` OR `Vec` LOCAL LEAKS THE BUFFER -- `let s = f".."; (s, 1);` and `let _ = (s, 1);` lose 29 bytes in 1… | 08ad1e6fa |
 | B-2026-09-24-28 | codegen | high | AN RC-PROMOTED `Option[(String, i64)]` OR `Option[Option[String]]` LOCAL SEGFAULTED ON EVERY COMPILED SURFACE -- fixed for tuple, three-tuple and nes… | d7ac55568 |
 | B-2026-09-24-29 | codegen | high | AN `if let` EXPRESSION WHOSE BRANCHES ARE f-STRINGS DOUBLE FREES ON EVERY COMPILED SURFACE, WHATEVER THE SCRUTINEE -- `let r = if let Some(s) = doc {… | 5d364837b |
+| B-2026-09-24-30 | codegen | high | THREE RC-PROMOTED `Option`/`Result` PAYLOAD SHAPES B-2026-09-24-28 DID NOT REACH ARE STILL WRONG ON THE COMPILED SURFACES -- `Result[(String, i64), i… | 795067c38 |
 | B-2026-09-24-31 | codegen | high | AN `Option[Map[K, V]]` / `Option[Set[T]]` / `Option[SortedMap[K, V]]` LOCAL MOVED ON (INTO A CALL, A `let`, A FIELD, A `return`, OR HANDED BACK) IS F… | c85f21366 |
+| B-2026-09-25-1 | ownership+codegen | medium | AN `if let` / `while let` BINDING THAT REUSES A MOVED LOCAL'S NAME DREW A FALSE `UseAfterMove` AND LEAKED THE LOCAL -- `let doc = Some(m); if let Som… | 795067c38 |
+| B-2026-09-25-2 | codegen | medium | A `Map`/`Set` READ AGAIN AFTER MOVING INTO AN OWNER LEAKED THE WHOLE TABLE -- `Some(m)`, `Ok(m)`, a user-enum payload, a struct field and `v.push(m)`… | 795067c38 |
 
 </details>
 
