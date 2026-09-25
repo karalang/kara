@@ -43,6 +43,17 @@ PY
 # ---- a SHALLOW clone of it, which is the environment under test ------------
 "${G[@]}" clone -q --depth 1 "file://$tmp/origin" "$tmp/work"
 w="$tmp/work"
+# Cell 5 backdates its commits to 2026-02-01, and rule 6b tells a rebase orphan
+# from a truncation artifact by HEAD's REFLOG. A reflog entry that old is past
+# both expiry windows (90 days reachable, 30 unreachable), so any auto gc or
+# maintenance a commit triggers can expire it, and the lint then WARNs instead
+# of erroring: CI run 36147089592 (git 2.55) failed cell 5 that way while every
+# local run passed. Measured: a `reflog expire --all` before cell 5's lint
+# reproduces the failure exactly, and this config makes it pass.
+"${G[@]}" -C "$w" config gc.auto 0
+"${G[@]}" -C "$w" config maintenance.auto false
+"${G[@]}" -C "$w" config gc.reflogExpire never
+"${G[@]}" -C "$w" config gc.reflogExpireUnreachable never
 [ "$("${G[@]}" -C "$w" rev-parse --is-shallow-repository)" = true ] || fail "clone is not shallow"
 
 lint() { ( cd "$w" && KARA_KATAS_DIR=/nonexistent ./scripts/bug-lint.sh 2>&1 ); }
