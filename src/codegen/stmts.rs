@@ -9985,6 +9985,23 @@ impl<'ctx> super::Codegen<'ctx> {
                                             .get(var_name.as_str())
                                             .cloned()?;
                                         Some((te, arr_ty.len()))
+                                    })
+                                    // B-2026-09-24-33 — a `match` / `if let`
+                                    // RHS whose arm handed a boxed `Array`
+                                    // payload view out: the arm retracted the
+                                    // box's interior walk, so this binding is
+                                    // the owner and needs the memory drop.
+                                    .or_else(|| {
+                                        let scrut = match &Self::block_tail_expr(value).kind {
+                                            ExprKind::Match { scrutinee, .. } => scrutinee,
+                                            ExprKind::IfLet { value, .. } => value,
+                                            _ => return None,
+                                        };
+                                        self.payload_vars
+                                            .boxed_array_view_moved_by_scrutinee
+                                            .get(&(scrut.span.offset, scrut.span.length))
+                                            .cloned()
+                                            .filter(|(_, n)| *n == arr_ty.len())
                                     });
                                 // B-2026-09-09-23 — "Bodies follow the move;
                                 // memory does not" is keyed on the RHS SHAPE,

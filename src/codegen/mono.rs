@@ -2981,6 +2981,22 @@ impl<'ctx> super::Codegen<'ctx> {
             }
         }
         let subst_call_te = subst_call_te;
+        // B-2026-09-24-33 — the per-call frame exactly as
+        // `callee_param_te_for_call` reads it (unfiltered, flattened through
+        // the caller's live substitution), for the mono prologue's half of the
+        // `Option`/`Result` entry-copy decision. See
+        // `MonoState::optres_entry_copy_frame`.
+        let optres_entry_copy_frame: HashMap<String, TypeExpr> = self
+            .span_tables
+            .call_type_subs_te
+            .get(&(call_span.offset, call_span.length))
+            .map(|frame| {
+                frame
+                    .iter()
+                    .map(|(k, te)| (k.clone(), self.subst_monomorph_type_params(te)))
+                    .collect()
+            })
+            .unwrap_or_default();
 
         // Per-layout-monomorphization axis — forward layout-flow inference
         // (`docs/spikes/per-layout-monomorphization.md`). The layout half of
@@ -3683,8 +3699,13 @@ impl<'ctx> super::Codegen<'ctx> {
             let saved_decl_anchors = std::mem::take(&mut self.drop_rc.loop_decl_rearm_anchors);
 
             // Declare then compile the specialization.
+            let saved_optres_entry_copy_frame = self
+                .mono_state
+                .optres_entry_copy_frame
+                .replace(optres_entry_copy_frame);
             self.declare_mono_function(&generic_fn, &mangled)?;
             self.compile_mono_function(&generic_fn, &mangled)?;
+            self.mono_state.optres_entry_copy_frame = saved_optres_entry_copy_frame;
 
             // Slice 8v Phase 2: when the polymorphic source is a
             // network-yielding fn (entry in `program.state_struct_layouts`
@@ -5180,7 +5201,23 @@ impl<'ctx> super::Codegen<'ctx> {
             if matches!(&param.ty.kind, TypeKind::Path(pp)
                 if matches!(pp.segments.first().map(String::as_str), Some("Option") | Some("Result")))
             {
-                let inst = Self::str_as_string_te(&self.subst_monomorph_type_params(&param.ty));
+                // B-2026-09-24-33 — resolved through the same per-call frame
+                // `compile_generic_call`'s half reads, not the body resolver:
+                // for `pick(a, [f"d", f"e"])` the latter binds `T` to a
+                // head-only `Vec` (the collection resolvers read a NAMED
+                // argument's side-tables), so this half answered for
+                // `Option[Vec]` while the caller answered for
+                // `Option[Vec[String]]`. The caller then kept the named
+                // argument's free and the uncopied payload left through the
+                // return value: two frees of one buffer.
+                let inst = Self::str_as_string_te(&match self
+                    .mono_state
+                    .optres_entry_copy_frame
+                    .as_ref()
+                {
+                    Some(frame) => super::helpers::subst_type_params_in_type_expr(&param.ty, frame),
+                    None => self.subst_monomorph_type_params(&param.ty),
+                });
                 if self.mono_optres_param_entry_copied(func, i, &inst) {
                     self.track_inline_option_payload_var(&param_name, alloca, &inst);
                     self.track_inline_result_payload_var(&param_name, alloca, &inst);

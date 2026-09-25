@@ -7922,3 +7922,73 @@ fn main() {
         4,
     );
 }
+
+/// B-2026-09-24-33 — see `test_e2e_optres_array_payload_handed_out_frees_once`.
+#[test]
+fn asan_optres_array_payload_handed_out_frees_once() {
+    assert_clean_asan_run_min_allocs(
+        r#"struct W { a: Array[String, 2] }
+fn pick[T](a: Option[T], d: T) -> T { match a { Some(s) => s, None => d } }
+fn orelse[T](a: Option[T], d: T) -> T { match a { Some(s) => s, None => d } }
+fn one(a: Option[Array[String, 1]]) -> Array[String, 1] { match a { Some(s) => s, None => panic("n") } }
+fn two(a: Option[Array[String, 2]]) -> Array[String, 2] { match a { Some(s) => { s }, None => [f"d", f"e"] } }
+fn three(a: Option[Array[String, 3]]) -> Array[String, 3] { match a { Some(s) => s, None => panic("n") } }
+fn early(a: Option[Array[String, 2]], c: bool) -> Array[String, 2] { if let Some(s) = a { if c { return s; } println(f"kept {s[1]}") } [f"d", f"e"] }
+fn held(a: Option[Array[String, 1]]) -> i64 { let r: Array[String, 1] = match a { Some(s) => s, None => panic("n") }; r[0].len() }
+fn rebind(a: Option[Array[String, 2]]) -> Array[String, 2] { match a { Some(s) => { let t = s; t }, None => panic("n") } }
+fn rewrap(a: Option[Array[String, 2]]) -> Option[Array[String, 2]] { match a { Some(s) => Some(s), None => None } }
+fn mk(i: i64) -> Option[Array[String, 2]] { Some([f"heap-string-longer-than-sso-{i}", f"r{i}"]) }
+fn main() {
+    let a = Some([f"heap-string-longer-than-sso-1", f"x"]);
+    let dd = [f"d", f"e"];
+    let r = pick(a, dd);
+    println(f"{r[0]} {r.len()}");
+    let n: Option[Vec[String]] = None;
+    let q = orelse(n, [f"heap-string-longer-than-sso-2", f"y"]);
+    println(q[0]);
+    let b: Option[Array[String, 1]] = Some([f"heap-string-longer-than-sso-3"]);
+    println(one(b)[0]);
+    let t = two(mk(4));
+    println(t[0]);
+    println(two(Some([f"heap-string-longer-than-sso-5", f"w"]))[0]);
+    let e: Option[Array[String, 3]] = Some([f"heap-string-longer-than-sso-6", f"u", f"v"]);
+    println(three(e)[2]);
+    println(early(mk(7), false)[0]);
+    println(early(mk(8), true)[0]);
+    let k: Option[Array[String, 1]] = Some([f"heap-string-longer-than-sso-9"]);
+    println(f"{held(k)}");
+    println(rebind(mk(10))[1]);
+    match rewrap(mk(11)) { Some(s) => println(s[0]), None => {} }
+    let m = mk(12);
+    let local = match m { Some(s) => s, None => panic("n") };
+    println(local[0]);
+    let mut v: Vec[Array[String, 2]] = Vec.new();
+    match mk(13) { Some(s) => v.push(s), None => {} }
+    println(v[0][1]);
+    let w = match mk(14) { Some(s) => W { a: s }, None => panic("n") };
+    println(w.a[0]);
+    println("end")
+}
+"#,
+        &[
+            "heap-string-longer-than-sso-1 2",
+            "heap-string-longer-than-sso-2",
+            "heap-string-longer-than-sso-3",
+            "heap-string-longer-than-sso-4",
+            "heap-string-longer-than-sso-5",
+            "v",
+            "kept r7",
+            "d",
+            "heap-string-longer-than-sso-8",
+            "29",
+            "r10",
+            "heap-string-longer-than-sso-11",
+            "heap-string-longer-than-sso-12",
+            "r13",
+            "heap-string-longer-than-sso-14",
+            "end",
+        ],
+        "asan_optres_array_payload_handed_out_frees_once",
+        20,
+    );
+}

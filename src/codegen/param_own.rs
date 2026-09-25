@@ -6799,6 +6799,17 @@ impl<'ctx> super::Codegen<'ctx> {
         {
             return true;
         }
+        // B-2026-09-24-33 — nor a boxed `Option`/`Result` payload VIEW. The
+        // `let` site retracts the box's interior walk for it
+        // (`suppress_boxed_payload_view_move`), so the destination is the only
+        // owner left and must take the memory drop.
+        if self
+            .payload_vars
+            .boxed_optres_payload_view_vars
+            .contains_key(src.as_str())
+        {
+            return false;
+        }
         // B-2026-09-13-2 — the one source this must NOT keep: an arm-bound
         // array payload whose box was registered without its interior walker
         // because the arm consumes the binding. This guard's premise is that

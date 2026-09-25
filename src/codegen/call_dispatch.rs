@@ -16326,6 +16326,10 @@ impl<'ctx> super::Codegen<'ctx> {
         if self.uam_reclone_source_map(arg_expr) {
             return;
         }
+        // B-2026-09-24-33 — a boxed `Option`/`Result` `Array` payload view
+        // moved out: zero the box's copy so the box's own drop frees only
+        // the box.
+        self.zero_boxed_array_payload_view_on_move(arg_expr);
         // B-2026-08-12-27 — a heap FIELD read off a Vec element
         // (`ps[0].word`) was deep-cloned at the read, and the clone carries
         // its own scope cleanup so a NON-consuming read does not leak. This is

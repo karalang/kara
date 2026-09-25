@@ -1555,6 +1555,22 @@ impl<'ctx> super::Codegen<'ctx> {
                 // running no body on ANY backend. Both spellings now neutralize
                 // exactly when something downstream owns the result.
                 if self.branch_value_is_owned(scrutinee) {
+                    // B-2026-09-24-33 — an `Array` arm binding handed out as
+                    // the match's value moves to whatever owns the result, so
+                    // its own queued drop goes with it. Only a binding the
+                    // registrar recorded (`own_disarmed_inline_array_payload`),
+                    // so no other array channel is touched.
+                    if let ExprKind::Identifier(n) = &Self::block_tail_expr(&arm.body).kind {
+                        if self.borrow_vars.owned_array_params.contains_key(n.as_str())
+                            && arm.pattern.binding_names().iter().any(|b| b == n)
+                        {
+                            self.suppress_array_binding_move(
+                                Self::block_tail_expr(&arm.body),
+                                super::param_own::ArrayMoveDest::HandedBack,
+                            );
+                        }
+                    }
+                    self.note_boxed_array_view_move(scrutinee, Self::block_tail_expr(&arm.body));
                     self.suppress_boxed_payload_view_move(Self::block_tail_expr(&arm.body));
                     self.neutralize_aliased_box_payload_move(
                         scrutinee,
@@ -14619,6 +14635,17 @@ impl<'ctx> super::Codegen<'ctx> {
             let arr_ty = slot.ty.into_array_type();
             let n = arr_ty.len();
             let elem_ty = arr_ty.get_element_type();
+            // B-2026-09-24-33 — through the `let`-local registrar, so the
+            // binding lands in `owned_array_params` beside its drop. That map
+            // is what every hand-off site (`return s`, a by-value call, a ctor
+            // operand, the arm tail below) asks before retracting an array's
+            // queued drop; a binding outside it kept its drop when it moved
+            // out, and `Some(s) => s` freed the elements the caller's result
+            // now held. The direct push stays for an element the registrar
+            // declines, which is exactly the set it declined before.
+            if self.make_array_param_callee_owned(bound, &elem_te, n, elem_ty, slot.ptr) {
+                continue;
+            }
             if let Some(drop_fn) = self.synthesize_array_drop_fn_te(elem_ty, &elem_te, n) {
                 if let Some(frame) = self.drop_rc.scope_cleanup_actions.last_mut() {
                     frame.push(super::state::CleanupAction::StructDrop {
@@ -17299,6 +17326,92 @@ impl<'ctx> super::Codegen<'ctx> {
         // not the box, which `a` still reads -- as `None` on this path, so that
         // walk finds nothing; the other paths keep their `Some` and their body.
         let _ = self.builder.build_store(slot, i64t.const_zero());
+    }
+
+    /// B-2026-09-24-33 — a move of a boxed `Array` payload view out of its
+    /// binding, reached through the move-out suppressor
+    /// (`suppress_source_vec_cleanup_for_arg_ex`): an explicit `return s`, a
+    /// by-value argument, a constructor payload (`Some(s) => Some(s)`). The
+    /// arm-tail and `let` positions retract the box's interior walk statically
+    /// ([`Self::suppress_boxed_payload_view_move`]); these positions can be
+    /// conditional, so they neutralize at runtime instead, the way the struct
+    /// payload's `zero_struct_move_caps` mirror does: the box's copy of the
+    /// array is zeroed on this path, and the box's drop then frees only the
+    /// box. Declined for an element that runs a user `Drop` body, which would
+    /// then run over the zeroed element.
+    pub(super) fn zero_boxed_array_payload_view_on_move(&mut self, value: &Expr) {
+        let ExprKind::Identifier(name) = &value.kind else {
+            return;
+        };
+        if !self
+            .payload_vars
+            .boxed_optres_payload_view_vars
+            .contains_key(name.as_str())
+        {
+            return;
+        }
+        let Some(slot) = self.variables.get(name.as_str()).copied() else {
+            return;
+        };
+        let BasicTypeEnum::ArrayType(at) = slot.ty else {
+            return;
+        };
+        let elem_is_bodiless = match self.var_types.array_elem_type_exprs.get(name.as_str()) {
+            Some(te) => !self.elem_te_runs_user_drop(&te.clone()),
+            None => {
+                let et = at.get_element_type();
+                et.is_int_type()
+                    || et.is_float_type()
+                    || et == BasicTypeEnum::StructType(self.vec_struct_type())
+            }
+        };
+        if !elem_is_bodiless {
+            return;
+        }
+        let Some(box_ptr) = self
+            .payload_vars
+            .deboxed_payload_box_ptrs
+            .get(&slot.ptr)
+            .copied()
+        else {
+            return;
+        };
+        let _ = self.builder.build_store(box_ptr, at.const_zero());
+    }
+
+    /// B-2026-09-24-33 — record that the arm-tail move of a boxed `Array`
+    /// payload view (`value`) hands the array to the destination of the
+    /// construct whose scrutinee is `scrutinee`. See
+    /// `PayloadVars::boxed_array_view_moved_by_scrutinee`.
+    pub(super) fn note_boxed_array_view_move(&mut self, scrutinee: &Expr, value: &Expr) {
+        let ExprKind::Identifier(name) = &value.kind else {
+            return;
+        };
+        if !self
+            .payload_vars
+            .boxed_optres_payload_view_vars
+            .contains_key(name.as_str())
+        {
+            return;
+        }
+        let Some(BasicTypeEnum::ArrayType(at)) = self.variables.get(name.as_str()).map(|v| v.ty)
+        else {
+            return;
+        };
+        let Some(elem_te) = self
+            .var_types
+            .array_elem_type_exprs
+            .get(name.as_str())
+            .cloned()
+        else {
+            return;
+        };
+        self.payload_vars
+            .boxed_array_view_moved_by_scrutinee
+            .insert(
+                (scrutinee.span.offset, scrutinee.span.length),
+                (elem_te, at.len()),
+            );
     }
 
     pub(super) fn suppress_boxed_payload_view_move(&mut self, value: &Expr) {

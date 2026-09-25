@@ -1993,6 +1993,45 @@ impl<'ctx> super::Codegen<'ctx> {
                         }
                     }
                 }
+                // B-2026-09-24-33 — a boxed `Array` payload binding is a VIEW
+                // of the box exactly as a wide struct is (the registration
+                // above, B-2026-08-04-2), and that gate admits named types
+                // only. `Option[Array[String, 2]]` is 6 words against the
+                // area's 3, so the payload boxes and `Some(s) => s` copies the
+                // box's words out while the box's interior walk stays armed:
+                // an owned param's exit drop then freed the element buffers
+                // the function returns. Recording the view lets every move
+                // site retract that walk (`suppress_boxed_payload_view_move`),
+                // leaving the box itself to be freed.
+                if self.pattern_state.pattern_binding_scrutinee_is_option_result
+                    && !self.pattern_state.pattern_binding_scrutinee_is_shared_enum
+                    && !self.pattern_state.pattern_binding_is_borrow
+                    && self.pattern_state.pattern_binding_scrutinee_optres_area > 0
+                    && self
+                        .pattern_state
+                        .current_variant_payload_bindings
+                        .contains(name.as_str())
+                    && self.variables.get(name.as_str()).is_some_and(|v| {
+                        matches!(v.ty, BasicTypeEnum::ArrayType(_))
+                            && Self::llvm_type_word_count(v.ty)
+                                > self.pattern_state.pattern_binding_scrutinee_optres_area
+                    })
+                    // An element that runs a user `Drop` body is left alone:
+                    // its bodies ride a separate walk whose timing is its own
+                    // open question (B-2026-09-20-2), and this record's
+                    // retraction and zeroing both assume memory only.
+                    && self
+                        .var_types
+                        .array_elem_type_exprs
+                        .get(name.as_str())
+                        .is_some_and(|te| !self.elem_te_runs_user_drop(&te.clone()))
+                {
+                    if let Some(slot) = self.pattern_state.pattern_binding_scrutinee_optres_slot {
+                        self.payload_vars
+                            .boxed_optres_payload_view_vars
+                            .insert(name.clone(), slot);
+                    }
+                }
                 // Slice 3a (ref-scrutinee leaf binding ABI parity):
                 // when the typechecker tagged this binding with a borrow
                 // mode (i.e., the enclosing match scrutinee is `ref T` /

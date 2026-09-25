@@ -397,6 +397,15 @@ pub(crate) struct PayloadVars<'ctx> {
     /// Keyed by binding name and snapshotted with the rest of the per-arm var
     /// environment, so an arm's view cannot leak into a sibling arm.
     pub(crate) boxed_optres_payload_view_vars: HashMap<String, inkwell::values::PointerValue<'ctx>>,
+    /// B-2026-09-24-33 — a `match` / `if let` whose arm handed out a boxed
+    /// `Array` payload view as its value, keyed by the SCRUTINEE's span (the
+    /// key `branch_value_is_owned` uses): the element type and length. The arm
+    /// retracted the box's interior walk on the premise that the destination
+    /// frees it, and an UN-annotated `let` destination has no other way to
+    /// learn it holds an owning array (`arr_parts` reads the annotation or
+    /// `array_elem_type_exprs`, which a `match` RHS fills for neither).
+    pub(crate) boxed_array_view_moved_by_scrutinee:
+        HashMap<(usize, usize), (crate::ast::TypeExpr, u32)>,
     /// B-2026-09-13-2 — arm-bound `Array[T, N]` payload bindings whose box was
     /// registered WITHOUT its interior walker, because the arm CONSUMES the
     /// binding.

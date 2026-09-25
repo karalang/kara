@@ -638,6 +638,7 @@ impl<'ctx> super::Codegen<'ctx> {
         // guard the double free is traded for a leak.
         if own_value {
             if let Some(fe) = then_block.final_expr.as_deref() {
+                self.note_boxed_array_view_move(value, Self::block_tail_expr(fe));
                 self.suppress_boxed_payload_view_move(Self::block_tail_expr(fe));
             }
         }
