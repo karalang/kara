@@ -92,10 +92,10 @@ distinguish "bugs flattening" from "we stopped writing them down."
 
 | class | total |
 |---|---|
-| run-vs-build | 491 |
-| miscompile | 448 |
-| leak | 417 |
-| double-free | 308 |
+| run-vs-build | 492 |
+| miscompile | 449 |
+| leak | 419 |
+| double-free | 309 |
 | missing-feature | 207 |
 | codegen-gap | 196 |
 | other | 149 |
@@ -110,8 +110,8 @@ distinguish "bugs flattening" from "we stopped writing them down."
 
 | surface | total |
 |---|---|
-| codegen | 2068 |
-| interp | 544 |
+| codegen | 2073 |
+| interp | 546 |
 | typecheck | 308 |
 | other | 110 |
 | ownership | 77 |
@@ -377,12 +377,14 @@ registered in the callee's prologue, not by-value struct params in general. | �
 | B-2026-09-25-4 | 2026-09-25 | interp | low | `--interp` RUNS A FRESH `Ok(mk(3))` ARGUMENT'S `Drop` BODY TWICE WHEN A BY-VALUE METHOD `h.f(a)` WAS CALLED BEFORE IT -- `h.g(Ok(mk(3)))` prints `d3 d3` under `--interp` and `d3` once on jit / -O2 seq / -O2 par (post-6d939bf88); the free-function spelling of the same two calls is correct everywhere | — |
 | B-2026-09-25-5 | 2026-09-25 | codegen | medium | A BY-VALUE `Result[S, R]` PARAM WHOSE `Err` PAYLOAD CARRIES ITS OWN `Drop` BODY AND IS HANDED ON (`Err(e) => { keepr(e); 0 }`) RUNS A NAMED `Ok` ARGUMENT'S BODY TWICE ON THE COMPILED SURFACES -- `f(a)` prints `d1 k1 d1` where `--interp` prints `k1 d1` | — |
 | B-2026-09-25-8 | 2026-09-25 | typecheck | low | AN ARRAY LITERAL IN A MATCH ARM, AN IF/ELSE BRANCH OR A GENERIC ARGUMENT IS TYPED `Vec` EVEN WHERE THE OTHER BRANCH OR THE PARAMETER FIXES `Array` -- `match a { Some(s) => s, None => [f"e"] }` over `Option[Array[String, 1]]` fails `match arms have incompatible types: 'Array[String, 1]' and 'Vec[String]'`, while `let x: Array[String, 1] = [f"e"]` is accepted | — |
-| B-2026-09-25-12 | 2026-09-25 | codegen | high | AN `Option[String]` PARAM RETURNED ON ONE BRANCH OF `if c { s } else { d }` IS WRONG ON EVERY COMPILED SURFACE -- two NAMED `Some(f"..")` arguments at `c = false` abort with `free(): double free` on jit, -O2 seq and -O2 par, generic `pick2[T]` and the non-generic twin alike; with temporary arguments the untaken argument's 29 B string leaks per call; `--interp` is right throughout | — |
 | B-2026-09-25-17 | 2026-09-25 | codegen | medium | A STRUCT RETURNED BY A CALL AND PASSED TO AN OWNED PARAM THE CALLEE STORES (`v.push(p)` into a `mut ref Vec`, `h.p = Some(p)` into a `mut ref` struct) LEAKS ITS HEAP FIELD, one block per call on every compiled surface, generic or not; a named argument or a struct literal is clean. The store-route twin of B-2026-09-25-14 | — |
-| B-2026-09-25-18 | 2026-09-25 | codegen | high | `v[0].unwrap()` ON A `Vec[Option[String]]` (or `Vec[Result[String, E]]`) DOUBLE-FREES on jit, -O2 seq and -O2 par; `--interp` prints the payload and keeps the element (`v.len()` is still 1 afterwards) | — |
 | B-2026-09-25-19 | 2026-09-25 | codegen | medium | A GENERIC ENUM CONSTRUCTOR TEMP WITH AN INLINE PAYLOAD, PASSED TO A BY-VALUE PARAM THE CALLEE NEVER DESTRUCTURES, RUNS THE PAYLOAD'S `Drop` BODY TWICE ON EVERY COMPILED SURFACE -- `hold(Ho.Full(R { id: 14 }))` over `fn hold(x: Ho[R]) { println("h") }` prints `h dR14 dR14 end` on the JIT, -O0 and -O2 where `--interp` prints `h dR14 end`. Memory-clean (valgrind err=0: `R` has no heap), so only an output oracle sees it. The BOXED twin (`holdw(Ho.Full(mkw()))` over a three-`String` payload) is correct, and so is a DESTRUCTURING callee (`takeit`), which points at the caller's instantiation-keyed payload walker and the callee's by-value param drop both firing for an inline payload. | — |
 | B-2026-09-25-21 | 2026-09-25 | codegen+interp | medium | A GENERIC ENUM'S STRUCT-VARIANT PAYLOAD RUNS NO ELEMENT `Drop` BODY ON ANY SURFACE WHEN A CALLEE BUILDS IT FROM AN `Array` PARAM -- `fn inner(a: Array[R, 2]) -> G2[Array[R, 2]] { G2.A { v: a, k: 2 } }` over `enum G2[T] { A { v: T, k: i64 }, B }` and an `R { id: i64, s: String }` with a user `Drop` prints `in held end` on `--interp`, the JIT, -O0 and -O2 where `in d22 d23 held end` is due. Memory-clean under valgrind (err=0), so it is a lost BODY, agreed on all four surfaces, and only an expected-output oracle sees it. The TUPLE-variant twin `G.A(a)` is correct since B-2026-09-25-16. | — |
 | B-2026-09-25-22 | 2026-09-25 | codegen | medium | A NAMED BINDING PASSED TO A GENERIC FN THAT WRAPS ITS `T` PARAM IN A GENERIC ENUM RUNS THE BINDING'S `Drop` BODY TWICE ON EVERY COMPILED SURFACE, memory-clean -- `let r = mkr(9); takeit(Ho.mk(r))` over `impl[T] Ho[T] { fn mk(v: T) -> Ho[T] { return Ho.Full(v); } }` prints `f:9 dR9 dR9 end` on the JIT, -O0 and -O2 where `--interp` prints `f:9 dR9 end`; the free generic `fn mkh[T](v: T) -> Ho[T]` does the same, and a temp argument (`Ho.mk(mkr(10))`) and a bare hand-back `fn idg[T](v: T) -> T` are correct | — |
+| B-2026-09-25-24 | 2026-09-25 | codegen | medium | `let q = o.unwrap()` OVER AN `Option[Map[K, V]]` LEAKS THE MAP on jit, -O2 seq and -O2 par (628 B at -O0 for one entry); `--interp` is correct | — |
+| B-2026-09-25-25 | 2026-09-25 | codegen | medium | `o.unwrap_or(d)` OVER A PRESENT `Option[P]` WITH A BOXED STRUCT PAYLOAD LEAKS 50 B at -O0: the 48-byte payload box and both of the unused default's 1-byte Strings; all four surfaces print correctly | — |
+| B-2026-09-25-26 | 2026-09-25 | interp+codegen | medium | `o.unwrap().s` (A FIELD PROJECTED OFF AN UNWRAP RESULT) NEVER RUNS THE PAYLOAD'S USER `Drop` BODY, on all four surfaces alike; `let r = o.unwrap(); r.s` runs it | — |
+| B-2026-09-25-27 | 2026-09-25 | codegen | medium | A CONDITIONAL FIELD MOVE (`if c { let x = h.p }`) ON ONE BINDING DROPS `p`'s USER `Drop` BODY FROM A LATER, DIFFERENT BINDING THAT HAPPENS TO BE NAMED `h` (a sibling block or a shadowing `let`) when its own move is not taken; jit, -O2 seq and -O2 par agree, `--interp` is correct | — |
 
 ### Relocated
 
@@ -3047,11 +3049,14 @@ registered in the callee's prologue, not by-value struct params in general. | �
 | B-2026-09-25-9 | codegen | medium | A FIELD READ ON A GENERIC CALL'S STRUCT RESULT FAILS `karac build` -- `pick(a, P { s: f"d", n: 2 }).n` over `fn pick[T](a: Option[T], d: T) -> T` sto… | 87a26c5c8 |
 | B-2026-09-25-10 | codegen+interp | high | A BY-VALUE `Array` PARAM THAT A CALLEE PUSHES INTO A `Vec` ON SOME PATHS ONLY IS STILL FREED TWICE ON EVERY COMPILED SURFACE AND RUNS ITS ELEMENT BOD… | 6a1b30deb |
 | B-2026-09-25-11 | codegen | medium | INDEXING A GENERIC CALL'S `Vec` RESULT DIRECTLY FAILS `karac build` -- `println(id2(x)[1])` over `fn id2[T](d: T) -> T { d }` stops with `Index opera… | 7cd3d9f94 |
+| B-2026-09-25-12 | codegen | high | AN `Option[String]` PARAM RETURNED ON ONE BRANCH OF `if c { s } else { d }` IS WRONG ON EVERY COMPILED SURFACE -- two NAMED `Some(f"..")` arguments a… | 21593fdf3 |
 | B-2026-09-25-13 | codegen | high | A LOCAL `Option[String]` HANDED OUT AS A BRANCH LEAF IS FREED TWICE ON EVERY COMPILED SURFACE -- `fn p(c: bool) -> Option[String] { let s = Some(f"..… | 113787978 |
 | B-2026-09-25-14 | codegen | medium | A STRUCT RETURNED BY A CALL AND PASSED STRAIGHT TO A PARAM THAT HANDS IT BACK LEAKS ITS HEAP FIELD, generic bare-`T` (`id2(mk(3))` over `fn id2[T](d:… | 7101d1db7 |
 | B-2026-09-25-15 | codegen | medium | A FIELD READ IN PLACE ON A GENERIC CALL THAT RETURNS A GENERIC STRUCT LEAKS THE STRUCT'S HEAP FIELD -- `println(wrap(f"..").k)` over `fn wrap[T](x: T… | 220054bc0 |
 | B-2026-09-25-16 | codegen+interp | high | A BY-VALUE `Array` PARAM HANDED BACK INSIDE AN ENUM VARIANT THE CALLEE RETURNS IS FREED BY BOTH SIDES, AND THE INTERPRETER RUNS ITS ELEMENT BODIES TW… | 4fb62c2e7 |
+| B-2026-09-25-18 | codegen | high | `v[0].unwrap()` ON A `Vec[Option[String]]` (or `Vec[Result[String, E]]`) DOUBLE-FREES on jit, -O2 seq and -O2 par; `--interp` prints the payload and… | 1b1a5693e |
 | B-2026-09-25-20 | codegen | high | A HEAP-BEARING ARGUMENT TO AN ASSOCIATED FN CALLED ON A GENERIC-ARGS PATH IS FREED TWICE ON THE JIT AND AT -O0 -- `takeit(Ho[R].mk(mkr(7)))` over `im… | 883db9ca0 |
+| B-2026-09-25-23 | codegen+interp | high | `h.o.unwrap()` ON AN `Option`/`Result` STRUCT FIELD DOUBLE-FREES on jit, -O2 seq and -O2 par (a local `h`, a by-value param, a fresh call result `mk(… | 555e57264 |
 
 </details>
 
