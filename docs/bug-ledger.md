@@ -93,7 +93,7 @@ distinguish "bugs flattening" from "we stopped writing them down."
 | class | total |
 |---|---|
 | run-vs-build | 491 |
-| miscompile | 447 |
+| miscompile | 448 |
 | leak | 417 |
 | double-free | 308 |
 | missing-feature | 207 |
@@ -110,7 +110,7 @@ distinguish "bugs flattening" from "we stopped writing them down."
 
 | surface | total |
 |---|---|
-| codegen | 2067 |
+| codegen | 2068 |
 | interp | 544 |
 | typecheck | 308 |
 | other | 110 |
@@ -381,8 +381,8 @@ registered in the callee's prologue, not by-value struct params in general. | �
 | B-2026-09-25-17 | 2026-09-25 | codegen | medium | A STRUCT RETURNED BY A CALL AND PASSED TO AN OWNED PARAM THE CALLEE STORES (`v.push(p)` into a `mut ref Vec`, `h.p = Some(p)` into a `mut ref` struct) LEAKS ITS HEAP FIELD, one block per call on every compiled surface, generic or not; a named argument or a struct literal is clean. The store-route twin of B-2026-09-25-14 | — |
 | B-2026-09-25-18 | 2026-09-25 | codegen | high | `v[0].unwrap()` ON A `Vec[Option[String]]` (or `Vec[Result[String, E]]`) DOUBLE-FREES on jit, -O2 seq and -O2 par; `--interp` prints the payload and keeps the element (`v.len()` is still 1 afterwards) | — |
 | B-2026-09-25-19 | 2026-09-25 | codegen | medium | A GENERIC ENUM CONSTRUCTOR TEMP WITH AN INLINE PAYLOAD, PASSED TO A BY-VALUE PARAM THE CALLEE NEVER DESTRUCTURES, RUNS THE PAYLOAD'S `Drop` BODY TWICE ON EVERY COMPILED SURFACE -- `hold(Ho.Full(R { id: 14 }))` over `fn hold(x: Ho[R]) { println("h") }` prints `h dR14 dR14 end` on the JIT, -O0 and -O2 where `--interp` prints `h dR14 end`. Memory-clean (valgrind err=0: `R` has no heap), so only an output oracle sees it. The BOXED twin (`holdw(Ho.Full(mkw()))` over a three-`String` payload) is correct, and so is a DESTRUCTURING callee (`takeit`), which points at the caller's instantiation-keyed payload walker and the callee's by-value param drop both firing for an inline payload. | — |
-| B-2026-09-25-20 | 2026-09-25 | codegen | high | A HEAP-BEARING ARGUMENT TO AN ASSOCIATED FN CALLED ON A GENERIC-ARGS PATH IS FREED TWICE ON THE JIT AND AT -O0 -- `takeit(Ho[R].mk(mkr(7)))` over `impl[T] Ho[T] { fn mk(v: T) -> Ho[T] { return Ho.Full(v); } }` and `struct R { id: i64, s: String }` with a user `Drop` aborts with `free(): double free detected in tcache 2` (valgrind err=1), `takew(Ho[W].mk(mkw()))` likewise (err=3); `-O2` and `--interp` print the due `f:7 dR7 end` / `w:4 dW4 end`. The same program with a heap-FREE `R { id: i64 }` is clean, and the unqualified `Ho.mk(mkr(31))` spelling is clean with the heap-bearing `R`. | — |
 | B-2026-09-25-21 | 2026-09-25 | codegen+interp | medium | A GENERIC ENUM'S STRUCT-VARIANT PAYLOAD RUNS NO ELEMENT `Drop` BODY ON ANY SURFACE WHEN A CALLEE BUILDS IT FROM AN `Array` PARAM -- `fn inner(a: Array[R, 2]) -> G2[Array[R, 2]] { G2.A { v: a, k: 2 } }` over `enum G2[T] { A { v: T, k: i64 }, B }` and an `R { id: i64, s: String }` with a user `Drop` prints `in held end` on `--interp`, the JIT, -O0 and -O2 where `in d22 d23 held end` is due. Memory-clean under valgrind (err=0), so it is a lost BODY, agreed on all four surfaces, and only an expected-output oracle sees it. The TUPLE-variant twin `G.A(a)` is correct since B-2026-09-25-16. | — |
+| B-2026-09-25-22 | 2026-09-25 | codegen | medium | A NAMED BINDING PASSED TO A GENERIC FN THAT WRAPS ITS `T` PARAM IN A GENERIC ENUM RUNS THE BINDING'S `Drop` BODY TWICE ON EVERY COMPILED SURFACE, memory-clean -- `let r = mkr(9); takeit(Ho.mk(r))` over `impl[T] Ho[T] { fn mk(v: T) -> Ho[T] { return Ho.Full(v); } }` prints `f:9 dR9 dR9 end` on the JIT, -O0 and -O2 where `--interp` prints `f:9 dR9 end`; the free generic `fn mkh[T](v: T) -> Ho[T]` does the same, and a temp argument (`Ho.mk(mkr(10))`) and a bare hand-back `fn idg[T](v: T) -> T` are correct | — |
 
 ### Relocated
 
@@ -3051,6 +3051,7 @@ registered in the callee's prologue, not by-value struct params in general. | �
 | B-2026-09-25-14 | codegen | medium | A STRUCT RETURNED BY A CALL AND PASSED STRAIGHT TO A PARAM THAT HANDS IT BACK LEAKS ITS HEAP FIELD, generic bare-`T` (`id2(mk(3))` over `fn id2[T](d:… | 7101d1db7 |
 | B-2026-09-25-15 | codegen | medium | A FIELD READ IN PLACE ON A GENERIC CALL THAT RETURNS A GENERIC STRUCT LEAKS THE STRUCT'S HEAP FIELD -- `println(wrap(f"..").k)` over `fn wrap[T](x: T… | 220054bc0 |
 | B-2026-09-25-16 | codegen+interp | high | A BY-VALUE `Array` PARAM HANDED BACK INSIDE AN ENUM VARIANT THE CALLEE RETURNS IS FREED BY BOTH SIDES, AND THE INTERPRETER RUNS ITS ELEMENT BODIES TW… | 4fb62c2e7 |
+| B-2026-09-25-20 | codegen | high | A HEAP-BEARING ARGUMENT TO AN ASSOCIATED FN CALLED ON A GENERIC-ARGS PATH IS FREED TWICE ON THE JIT AND AT -O0 -- `takeit(Ho[R].mk(mkr(7)))` over `im… | 883db9ca0 |
 
 </details>
 
