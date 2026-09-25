@@ -7927,6 +7927,9 @@ pub fn fn_moves_param_into_local_container(f: &Function, arg_index: usize) -> bo
                 straight(object) && args.iter().all(|a| straight(&a.value))
             }
             ExprKind::Tuple(elems) | ExprKind::ArrayLiteral(elems) => elems.iter().all(straight),
+            // B-2026-09-22-14 — `let mut v: Vec[T] = []` reaches here as this
+            // prefix form, rewritten from the bare literal by its annotation.
+            ExprKind::PrefixCollectionLiteral { items, .. } => items.iter().all(straight),
             ExprKind::StructLiteral { fields, .. } => fields.iter().all(|fi| straight(&fi.value)),
             _ => false,
         }

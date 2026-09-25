@@ -3240,6 +3240,48 @@ impl<'ctx> super::Codegen<'ctx> {
             && !crate::ast::fn_moves_param_into_outliving_place(f, arg_index)
     }
 
+    /// B-2026-09-22-14 — does the callee MOVE a caller-retained by-value
+    /// `Array` param (one whose element runs a user `Drop`) into a container,
+    /// on every path?
+    ///
+    /// `v.push(a)` into a local `Vec` (or one the caller supplied) makes the
+    /// container the array's owner: its drain runs the element bodies and frees
+    /// the element memory, in the callee or wherever the container ends up.
+    /// The caller already stands its BODIES down on that outcome
+    /// (`callee_takes_over_arg_drop_body` asks both predicates below), but its
+    /// memory walk stayed armed, so the same buffers were freed by the
+    /// container and by the caller: `free(): double free detected in tcache 2`
+    /// on the JIT, `-O0` and `-O2`.
+    ///
+    /// MUST-analyses only, because this is the suppressing direction: a push
+    /// on some paths would leave the array with no owner on the others.
+    pub(super) fn callee_stores_caller_retained_array_arg(
+        &self,
+        callee_name: &str,
+        arg_index: usize,
+    ) -> bool {
+        let Some(program) = self.program_snapshot.as_deref() else {
+            return false;
+        };
+        let Some(f) = crate::codegen::declarations::find_function_ast(program, callee_name) else {
+            return false;
+        };
+        if f.generic_params.is_some() || self.is_coroutine_compiled(&f.name) {
+            return false;
+        }
+        let Some(param) = f.params.get(arg_index) else {
+            return false;
+        };
+        let Some((elem_te, n)) = self.array_elem_and_len(&param.ty) else {
+            return false;
+        };
+        n > 0
+            && self.elem_te_runs_user_drop(&elem_te)
+            && !self.array_param_elem_is_callee_owned(&elem_te)
+            && (crate::ast::fn_moves_param_into_local_container(f, arg_index)
+                || crate::ast::fn_always_moves_param_into_outliving_place(f, arg_index))
+    }
+
     pub(super) fn conditional_array_handback_moves_to_callee(
         &self,
         callee_name: &str,

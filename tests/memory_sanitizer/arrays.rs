@@ -7907,3 +7907,52 @@ fn main() {
         "asan_conditional_array_param_handback_owns_once",
     );
 }
+
+/// B-2026-09-22-14 — a by-value `Array[R, 2]` param whose element runs a user
+/// `Drop` stays with the CALLER, and a callee that pushed it into a `Vec` made
+/// the `Vec` a second owner: its drain ran the bodies and freed the element
+/// memory, then the caller did both again (`free(): double free detected in
+/// tcache 2` on the JIT, `-O0` and `-O2`; `--interp` ran every body twice).
+/// The caller now stands both walks down when the callee moves the param into
+/// a container on every path. Cells: a local `Vec` from `[]` (which reaches the
+/// predicate as a `PrefixCollectionLiteral`, the shape it did not recognise),
+/// a caller-supplied `mut ref Vec`, a `Vec` returned to the caller, a struct
+/// param, `insert`, `Vec.new()`, a temporary argument, two params, and a method.
+/// A push on SOME paths only is not covered and stays out of this program.
+#[test]
+fn asan_array_param_pushed_into_a_container_is_freed_once() {
+    assert_clean_asan_run(
+        r#"struct R { id: i64, s: String }
+impl Drop for R { fn drop(mut ref self) { println(f"d{self.id}") } }
+fn mkr(i: i64) -> R { return R { id: i, s: f"aaa" } }
+fn loc(a: Array[R, 2]) -> i64 { let mut v: Vec[Array[R, 2]] = []; v.push(a); println(f"loc{v.len()}"); return 1 }
+fn outv(a: Array[R, 2], out: mut ref Vec[Array[R, 2]]) -> i64 { out.push(a); println("out"); return 1 }
+fn retv(a: Array[R, 2]) -> Vec[Array[R, 2]] { let mut v: Vec[Array[R, 2]] = []; v.push(a); println("ret"); return v }
+fn st(a: R) -> i64 { let mut v: Vec[R] = []; v.push(a); println(f"st{v.len()}"); return 1 }
+fn ins(a: Array[R, 2]) -> i64 { let mut v: Vec[Array[R, 2]] = []; v.insert(0, a); println(f"ins{v.len()}"); return 1 }
+fn vnew(a: Array[R, 2]) -> i64 { let mut v: Vec[Array[R, 2]] = Vec.new(); v.push(a); println(f"new{v.len()}"); return 1 }
+fn two(a: Array[R, 2], b: Array[R, 2]) -> i64 { let mut v: Vec[Array[R, 2]] = []; v.push(a); v.push(b); println(f"two{v.len()}"); return 1 }
+struct H { k: i64 }
+impl H { fn meth(self, a: Array[R, 2]) -> i64 { let mut v: Vec[Array[R, 2]] = []; v.push(a); println(f"meth{v.len()}"); return 1 } }
+fn main() {
+    { let a: Array[R, 2] = [mkr(1), mkr(2)]; let z = loc(a); println("k1") }
+    { let mut o: Vec[Array[R, 2]] = []; { let a: Array[R, 2] = [mkr(3), mkr(4)]; let z = outv(a, mut o); println("k2") } println(f"n{o.len()}") }
+    { let a: Array[R, 2] = [mkr(5), mkr(6)]; let v = retv(a); println(f"k3 {v.len()}") }
+    { let a = mkr(7); let z = st(a); println("k4") }
+    { let a: Array[R, 2] = [mkr(8), mkr(9)]; let z = ins(a); println("k5") }
+    { let a: Array[R, 2] = [mkr(10), mkr(11)]; let z = vnew(a); println("k6") }
+    { let z = loc([mkr(12), mkr(13)]); println("k7") }
+    { let a: Array[R, 2] = [mkr(14), mkr(15)]; let b: Array[R, 2] = [mkr(16), mkr(17)]; let z = two(a, b); println("k8") }
+    { let h = H { k: 1 }; let a: Array[R, 2] = [mkr(18), mkr(19)]; let z = h.meth(a); println("k9") }
+    println("end")
+}
+"#,
+        &[
+            "loc1", "d1", "d2", "k1", "out", "k2", "n1", "d3", "d4", "ret", "k3 1", "d5", "d6",
+            "st1", "d7", "k4", "ins1", "d8", "d9", "k5", "new1", "d10", "d11", "k6", "loc1", "d12",
+            "d13", "k7", "two2", "d14", "d15", "d16", "d17", "k8", "meth1", "d18", "d19", "k9",
+            "end",
+        ],
+        "asan_array_param_pushed_into_a_container_is_freed_once",
+    );
+}

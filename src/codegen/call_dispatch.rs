@@ -13503,6 +13503,7 @@ impl<'ctx> super::Codegen<'ctx> {
             // it.
             if self.callee_always_hands_array_arg_back(c, arg_index)
                 || self.conditional_array_handback_moves_to_callee(c, arg_index)
+                || self.callee_stores_caller_retained_array_arg(c, arg_index)
             {
                 self.suppress_array_binding_move(arg, super::param_own::ArrayMoveDest::HandedBack);
             }
