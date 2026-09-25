@@ -326,6 +326,15 @@ pub(crate) struct DropRc<'ctx> {
     /// `disarm_flags_for_handed_over_bindings`, both of which read the mere
     /// PRESENCE of a binding flag as "this binding is conditionally moved".
     pub(crate) field_view_flags: HashMap<String, HashMap<String, PointerValue<'ctx>>>,
+    /// B-2026-09-25-35 — the [`Self::field_view_flags`] slots minted by a
+    /// CONDITIONAL field move-out (`conditional_field_move_takes_runtime_flag`)
+    /// rather than by a view. That route still records the field in
+    /// `struct_moved_field_bodies` so its other readers answer "did this field
+    /// move" as before, but at the binding's death the FLAG, not the map,
+    /// decides whether the field's body runs; the leaf of the selection tree
+    /// takes these fields back out of the map-derived mask. Keyed by the slot,
+    /// which is unique per alloca, so no per-function reset is needed.
+    pub(crate) cond_move_field_flag_slots: HashSet<PointerValue<'ctx>>,
     /// B-2026-09-02-14 — per-path flag for a named `Option`/`Result` place
     /// whose payload-BODIES walk a `match` / `if let` / `while let` /
     /// `let … else` arm hands to its binding: `true` while the place still owes

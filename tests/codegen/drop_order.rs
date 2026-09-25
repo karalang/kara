@@ -8790,3 +8790,87 @@ fn main() {
         "f4r: must match --interp"
     );
 }
+
+/// B-2026-09-25-35 — with TWO fields of one binding each moved out under a
+/// condition, the unmoved field's `Drop` body was lost. Each conditional move
+/// records its field in `struct_moved_field_bodies` beside its runtime flag,
+/// and the death-site leaf masked that map plus the fields whose flag read
+/// `false` — so with two flagged fields every masked leaf skipped both. The
+/// flag now decides a conditionally moved field. Every cell's expected text
+/// is `--interp`'s.
+#[test]
+fn test_e2e_two_conditionally_moved_fields_keep_the_unmoved_body() {
+    // if/else arms moving different fields
+    assert_eq!(
+        run_program(
+            r#"struct R { s: String }
+impl Drop for R { fn drop(mut ref self) { println(f"drop {self.s}") } }
+struct H { p: R, q: R, n: i64 }
+fn mk(t: String, n: i64) -> H { H { p: R { s: f"p{t}" }, q: R { s: f"q{t}" }, n: n } }
+fn main() {
+    { let h = mk("0", 0); if h.n == 0 { let x = h.p; println(x.s) } else { let y = h.q; println(y.s) }; println("k") }
+    println("end")
+}
+"#,
+        )
+        .as_deref(),
+        Some("p0\ndrop p0\ndrop q0\nk\nend\n"),
+        "c1: must match --interp"
+    );
+    // two separate `if`s moving different fields
+    assert_eq!(
+        run_program(
+            r#"struct R { s: String }
+impl Drop for R { fn drop(mut ref self) { println(f"drop {self.s}") } }
+struct H { p: R, q: R, n: i64 }
+fn mk(t: String, n: i64) -> H { H { p: R { s: f"p{t}" }, q: R { s: f"q{t}" }, n: n } }
+fn main() {
+    { let h = mk("0", 0); if h.n == 0 { let x = h.p; println(x.s) }; if h.n == 1 { let y = h.q; println(y.s) }; println("k") }
+    println("end")
+}
+"#,
+        )
+        .as_deref(),
+        Some("p0\ndrop p0\ndrop q0\nk\nend\n"),
+        "c4: must match --interp"
+    );
+    // `match` arms moving different fields
+    assert_eq!(
+        run_program(
+            r#"struct R { s: String }
+impl Drop for R { fn drop(mut ref self) { println(f"drop {self.s}") } }
+struct H { p: R, q: R, n: i64 }
+fn mk(t: String, n: i64) -> H { H { p: R { s: f"p{t}" }, q: R { s: f"q{t}" }, n: n } }
+fn main() {
+    { let h = mk("0", 0); match h.n { 0 => { let x = h.p; println(x.s) }, _ => { let y = h.q; println(y.s) } }; println("k") }
+    println("end")
+}
+"#,
+        )
+        .as_deref(),
+        Some("p0\ndrop p0\ndrop q0\nk\nend\n"),
+        "c5: must match --interp"
+    );
+    // three flagged fields in a loop, then a static move beside two flagged ones
+    assert_eq!(
+        run_program(
+            r#"struct R { s: String }
+impl Drop for R { fn drop(mut ref self) { println(f"drop {self.s}") } }
+struct T { a: R, b: R, c: R, d: R, n: i64 }
+fn mk(t: String, n: i64) -> T { T { a: R { s: f"a{t}" }, b: R { s: f"b{t}" }, c: R { s: f"c{t}" }, d: R { s: f"d{t}" }, n: n } }
+fn main() {
+    for i in 0..4 {
+        let h = mk(f"{i}", i);
+        if h.n == 0 { let x = h.a; println(x.s) } else if h.n == 1 { let y = h.b; println(y.s) } else if h.n == 2 { let z = h.c; println(z.s) };
+        println("k")
+    }
+    { let g = mk("u", 0); let w = g.d; println(w.s); if g.n == 0 { let x = g.a; println(x.s) } else { let y = g.b; println(y.s) }; println("k2") }
+    println("end")
+}
+"#,
+        )
+        .as_deref(),
+        Some("a0\ndrop a0\ndrop d0\ndrop c0\ndrop b0\nk\nb1\ndrop b1\ndrop d1\ndrop c1\ndrop a1\nk\nc2\ndrop c2\ndrop d2\ndrop b2\ndrop a2\nk\ndrop d3\ndrop c3\ndrop b3\ndrop a3\nk\ndu\ndrop du\nau\ndrop au\ndrop cu\ndrop bu\nk2\nend\n"),
+        "c7: must match --interp"
+    );
+}

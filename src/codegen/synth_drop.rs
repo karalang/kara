@@ -9785,6 +9785,7 @@ impl<'ctx> super::Codegen<'ctx> {
         {
             return false;
         }
+        self.drop_rc.cond_move_field_flag_slots.insert(flag);
         self.type_decls
             .struct_moved_field_bodies
             .entry(var_name.to_string())

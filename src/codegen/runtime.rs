@@ -13666,6 +13666,7 @@ impl<'ctx> super::Codegen<'ctx> {
                 drop_fn,
                 ptr,
                 call_name,
+                viewed,
                 disarmed,
             );
             return;
@@ -13677,6 +13678,7 @@ impl<'ctx> super::Codegen<'ctx> {
                 drop_fn,
                 ptr,
                 call_name,
+                viewed,
                 disarmed,
             );
             return;
@@ -13742,6 +13744,7 @@ impl<'ctx> super::Codegen<'ctx> {
     /// drift from what the registration decided. A mask that leaves nothing to
     /// walk yields `None` from the emitter and emits no call, which is the
     /// correct reading of "every Drop-bearing field is the caller's".
+    #[allow(clippy::too_many_arguments)]
     fn emit_field_view_leaf_call(
         &mut self,
         binding_name: &str,
@@ -13749,6 +13752,7 @@ impl<'ctx> super::Codegen<'ctx> {
         drop_fn: FunctionValue<'ctx>,
         ptr: PointerValue<'ctx>,
         call_name: &str,
+        viewed: &[(String, usize, PointerValue<'ctx>)],
         disarmed: &[usize],
     ) {
         if disarmed.is_empty() {
@@ -13770,6 +13774,15 @@ impl<'ctx> super::Codegen<'ctx> {
             .get(binding_name)
             .map(|s| s.iter().copied().collect())
             .unwrap_or_default();
+        // B-2026-09-25-35 — a field a CONDITIONAL move-out put in the map is
+        // decided by its flag, which this path has already read: it is in
+        // `disarmed` exactly when the move ran. Left in, a second such field
+        // masked the first one's body on the path where only the second moved.
+        for (_, idx, flag) in viewed {
+            if self.drop_rc.cond_move_field_flag_slots.contains(flag) {
+                here.remove(idx);
+            }
+        }
         here.extend(disarmed.iter().copied());
         let skip = self.field_skip_tree_for_var(binding_name, here);
         if let Some(masked) = self.emit_user_drop_field_bodies_fn_skipping(type_name, &subst, &skip)
