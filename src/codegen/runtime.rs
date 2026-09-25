@@ -13287,26 +13287,7 @@ impl<'ctx> super::Codegen<'ctx> {
         // how many disarm sites the binding has — and it is emitted into IR
         // that is already built, which is the whole reason the anchor is
         // recorded rather than the store being emitted eagerly at the `let`.
-        if let Some((blk, after)) = self.drop_rc.loop_decl_rearm_anchors.get(name).copied() {
-            let rb = self.context.create_builder();
-            // Insert immediately AFTER the recorded instruction. The builder
-            // can only be positioned BEFORE a given instruction, so the target
-            // is the anchor's SUCCESSOR; when the anchor was the block's last
-            // instruction there is no successor, and appending at the end is
-            // right unless the block has since gained a terminator.
-            let next = match after {
-                Some(i) => i.get_next_instruction(),
-                None => blk.get_first_instruction(),
-            };
-            match next {
-                Some(n) => rb.position_before(&n),
-                None => match blk.get_terminator() {
-                    Some(t) => rb.position_before(&t),
-                    None => rb.position_at_end(blk),
-                },
-            }
-            let _ = rb.build_store(slot, bool_t.const_int(1, false));
-        }
+        self.store_at_loop_decl_anchor(name, slot, true);
         self.drop_rc
             .cond_move_drop_flags
             .insert(name.to_string(), slot);
@@ -13364,6 +13345,45 @@ impl<'ctx> super::Codegen<'ctx> {
         Some(slot)
     }
 
+    /// Store `value` into `slot` at the declaration point of the loop-body
+    /// binding `name`, recorded by `record_loop_decl_rearm_anchor`, so a flag
+    /// minted lazily for a binding declared in a loop is re-initialized on
+    /// every iteration rather than once per call (B-2026-09-02-6). No anchor —
+    /// the binding is not declared inside a loop — is a no-op: the entry-block
+    /// initializer is then the whole story.
+    ///
+    /// The builder can only be positioned BEFORE an instruction, so the store
+    /// goes before the anchor's SUCCESSOR; when the anchor was the block's last
+    /// instruction there is none, and appending at the end is right unless the
+    /// block has since gained a terminator.
+    pub(super) fn store_at_loop_decl_anchor(
+        &mut self,
+        name: &str,
+        slot: PointerValue<'ctx>,
+        value: bool,
+    ) {
+        let Some((blk, after)) = self.drop_rc.loop_decl_rearm_anchors.get(name).copied() else {
+            return;
+        };
+        if blk.get_parent() != self.current_fn {
+            return;
+        }
+        let rb = self.context.create_builder();
+        let next = match after {
+            Some(i) => i.get_next_instruction(),
+            None => blk.get_first_instruction(),
+        };
+        match next {
+            Some(n) => rb.position_before(&n),
+            None => match blk.get_terminator() {
+                Some(t) => rb.position_before(&t),
+                None => rb.position_at_end(blk),
+            },
+        }
+        let bool_t = self.context.bool_type();
+        let _ = rb.build_store(slot, bool_t.const_int(u64::from(value), false));
+    }
+
     /// B-2026-09-02-10 — get (or lazily create) the per-FIELD view flag for
     /// `binding.field`.
     ///
@@ -13403,6 +13423,11 @@ impl<'ctx> super::Codegen<'ctx> {
             .build_alloca(bool_t, &format!("fvflag.{binding}.{field}"))
             .ok()?;
         b.build_store(slot, bool_t.const_int(1, false)).ok()?;
+        // B-2026-09-25-27 — re-arm per iteration for a loop-body binding: a
+        // conditional move-out that stored `false` on one iteration must not
+        // still be standing on the next, whose freshly-declared value owns
+        // the field again.
+        self.store_at_loop_decl_anchor(binding, slot, true);
         self.drop_rc
             .field_view_flags
             .entry(binding.to_string())

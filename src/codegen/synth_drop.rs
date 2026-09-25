@@ -9842,6 +9842,10 @@ impl<'ctx> super::Codegen<'ctx> {
         if b.build_store(slot, bool_t.const_int(0, false)).is_err() {
             return;
         }
+        // B-2026-09-25-27 — and back to `false` at a loop-body binding's
+        // declaration, so a re-arm stored on one iteration does not survive
+        // into the next, whose unconditional move-out has taken the field.
+        self.store_at_loop_decl_anchor(base, slot, false);
         if self
             .builder
             .build_store(slot, bool_t.const_int(1, false))

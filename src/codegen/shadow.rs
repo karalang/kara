@@ -455,6 +455,11 @@ impl<'ctx> super::Codegen<'ctx> {
             self.tuple_moved_elem_payload_bodies.remove(n);
             self.tuple_moved_nested_elem_bodies.remove(n);
             self.enum_ctor_moved_payload_slots.remove(n);
+            // B-2026-09-25-27 — the per-field runtime flags too: a later
+            // sibling block's `h` otherwise re-used this block's slots, so a
+            // `false` one block's conditional move-out stored made the next
+            // block's `h` skip a field nothing had moved.
+            self.drop_rc.field_view_flags.remove(n);
         }
         self.variables = snap.variables;
         self.borrow_vars.owned_vecstr_params = snap.owned_vecstr_params;

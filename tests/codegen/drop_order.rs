@@ -8694,3 +8694,99 @@ fn codegen_boxed_array_enum_payload_bodies_are_caller_sequenced() {
         Some("r1\ndR1\ndR2\nmid\ns23\ndR3\ndR4\nmid2\ndR5\ndR6\nheld\nend\n")
     );
 }
+
+/// B-2026-09-25-27 — a CONDITIONAL field move-out (`if c { let x = h.p }`)
+/// records its runtime flag keyed by the binding's NAME and armed `true` once,
+/// in the entry block. So a later binding that re-used the name — a sibling
+/// block's or a shadowing `let h` — inherited the first one's `false` and
+/// skipped `p`'s body though nothing had moved it, and a loop-body binding
+/// carried one iteration's flag into the next (for the re-arm flag, whose
+/// polarity is the other way round, that ran `p`'s body over the moved-out
+/// husk). Every cell's expected text is `--interp`'s.
+#[test]
+fn test_e2e_field_move_flag_is_per_binding_not_per_name() {
+    // a sibling block's `h`
+    assert_eq!(
+        run_program(
+            r#"struct R { s: String }
+impl Drop for R { fn drop(mut ref self) { println(f"drop {self.s}") } }
+struct H { o: Option[R], r: Result[R, i64], p: R, n: i64 }
+fn mk(t: String, n: i64) -> H { H { o: Some(R { s: f"o{t}" }), r: Ok(R { s: f"r{t}" }), p: R { s: f"p{t}" }, n: n } }
+fn main() {
+    { let h = mk("3", 1); if h.n > 0 { let x = h.p; println(x.s) } else { println("no") }; println("k3") }
+    { let h = mk("4", 0); if h.n > 0 { let x = h.p; println(x.s) } else { println("no") }; println("k4") }
+    println("end")
+}
+"#,
+        )
+        .as_deref(),
+        Some("p3\ndrop p3\ndrop r3\ndrop o3\nk3\nno\ndrop p4\ndrop r4\ndrop o4\nk4\nend\n"),
+        "f4: must match --interp"
+    );
+    // a shadowing `let h`
+    assert_eq!(
+        run_program(
+            r#"struct R { s: String }
+impl Drop for R { fn drop(mut ref self) { println(f"drop {self.s}") } }
+struct H { o: Option[R], r: Result[R, i64], p: R, n: i64 }
+fn mk(t: String, n: i64) -> H { H { o: Some(R { s: f"o{t}" }), r: Ok(R { s: f"r{t}" }), p: R { s: f"p{t}" }, n: n } }
+fn main() {
+    let h = mk("3", 1); if h.n > 0 { let x = h.p; println(x.s) } else { println("no") }; println("k3")
+    let h = mk("4", 0); if h.n > 0 { let x = h.p; println(x.s) } else { println("no") }; println("k4")
+    println("end")
+}
+"#,
+        )
+        .as_deref(),
+        Some("p3\ndrop p3\ndrop r3\ndrop o3\nk3\nno\ndrop p4\ndrop r4\ndrop o4\nk4\nend\n"),
+        "f4s: must match --interp"
+    );
+    // a loop-body `h`, conditional move-out
+    assert_eq!(
+        run_program(
+            r#"struct R { s: String }
+impl Drop for R { fn drop(mut ref self) { println(f"drop {self.s}") } }
+struct H { o: Option[R], r: Result[R, i64], p: R, n: i64 }
+fn mk(t: String, n: i64) -> H { H { o: Some(R { s: f"o{t}" }), r: Ok(R { s: f"r{t}" }), p: R { s: f"p{t}" }, n: n } }
+fn main() {
+    let mut i = 0;
+    while i < 2 {
+        let h = mk(f"{i}", 1 - i);
+        if h.n > 0 { let x = h.p; println(x.s) } else { println("no") };
+        println("k");
+        i = i + 1;
+    }
+    println("end")
+}
+"#,
+        )
+        .as_deref(),
+        Some("p0\ndrop p0\ndrop r0\ndrop o0\nk\nno\ndrop p1\ndrop r1\ndrop o1\nk\nend\n"),
+        "f4l: must match --interp"
+    );
+    // a loop-body `h`, conditional re-arm after an unconditional move-out
+    assert_eq!(
+        run_program(
+            r#"struct R { s: String }
+impl Drop for R { fn drop(mut ref self) { println(f"drop {self.s}") } }
+struct H { o: Option[R], p: R, n: i64 }
+fn mk(t: String, n: i64) -> H { H { o: Some(R { s: f"o{t}" }), p: R { s: f"p{t}" }, n: n } }
+fn main() {
+    let mut i = 0;
+    while i < 2 {
+        let mut h = mk(f"{i}", 1 - i);
+        let x = h.p;
+        println(x.s);
+        if h.n > 0 { h.p = R { s: f"q{i}" }; };
+        println("k");
+        i = i + 1;
+    }
+    println("end")
+}
+"#,
+        )
+        .as_deref(),
+        Some("p0\ndrop p0\ndrop q0\ndrop o0\nk\np1\ndrop p1\ndrop o1\nk\nend\n"),
+        "f4r: must match --interp"
+    );
+}

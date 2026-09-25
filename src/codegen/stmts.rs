@@ -4204,6 +4204,7 @@ impl<'ctx> super::Codegen<'ctx> {
     pub(super) fn compile_stmt(&mut self, stmt: &Stmt) -> Result<(), String> {
         let saved = self.tracing.diag_span;
         self.tracing.diag_span = Some(stmt.span);
+        self.forget_dead_binding_field_flags(stmt);
         let out = self.compile_stmt_tracking_assign_target(stmt);
         if out.is_ok() {
             // B-2026-09-19-51 — drain the enum-field move-out neutralizers this
@@ -4248,6 +4249,31 @@ impl<'ctx> super::Codegen<'ctx> {
         self.drop_rc
             .loop_decl_rearm_anchors
             .insert(name.clone(), (blk, blk.get_last_instruction()));
+    }
+
+    /// B-2026-09-25-27 — a `let` that re-declares a name in the SAME scope
+    /// (`let h = ..; ..; let h = ..`) starts the new binding's per-field
+    /// runtime flags from nothing. They are keyed by NAME, so the new `h`
+    /// otherwise inherited the old one's slots, and a `false` the old `h`'s
+    /// conditional move-out stored made the new `h` skip a field nothing had
+    /// moved. (A sibling BLOCK's re-declaration is `restore_var_env`'s.)
+    ///
+    /// Only when the old binding no longer owns a field-bodies walk: its death
+    /// has then already been emitted and nothing reads its flags again. A
+    /// binding still live across the re-declaration keeps them, because its
+    /// own death tree has yet to read them.
+    fn forget_dead_binding_field_flags(&mut self, stmt: &Stmt) {
+        let StmtKind::Let { pattern, .. } = &stmt.kind else {
+            return;
+        };
+        let PatternKind::Binding(name) = &pattern.kind else {
+            return;
+        };
+        if self.drop_rc.field_view_flags.contains_key(name)
+            && !self.var_owns_struct_field_bodies(name)
+        {
+            self.drop_rc.field_view_flags.remove(name);
+        }
     }
 
     fn compile_stmt_tracking_assign_target(&mut self, stmt: &Stmt) -> Result<(), String> {
