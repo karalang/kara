@@ -11471,3 +11471,80 @@ fn main() {
         "must match --interp"
     );
 }
+
+/// B-2026-09-25-25 — `o.unwrap_or(d)` on a PRESENT receiver. A payload too
+/// wide for the inline area is boxed, and this path loaded it without freeing
+/// the box (plain `unwrap` frees it). The unused default was freed only when
+/// it was a String/Vec buffer, so a fresh struct or enum default (`P { .. }`,
+/// `mkp(7)`) leaked. A NAMED default is its binding's to drop, as before.
+#[test]
+fn test_e2e_unwrap_or_frees_the_box_and_an_unused_default() {
+    let out = run_program(
+        r#"struct P { a: String, b: String }
+struct Q { a: String }
+enum K { A(String), B }
+fn mkp(i: i64) -> P { P { a: f"mk-string-longer-than-sso-{i}", b: f"b" } }
+fn main() {
+    let o = Some(P { a: f"aaa-string-longer-than-sso-1", b: f"bbb-string-longer-than-sso-2" });
+    let q = o.unwrap_or(P { a: f"x", b: f"y" });
+    println(q.a);
+    let n: Option[P] = None;
+    let q0 = n.unwrap_or(P { a: f"none-string-longer-than-sso-3", b: f"y" });
+    println(q0.a);
+    let o1 = Some(Q { a: f"qqq-string-longer-than-sso-4" });
+    println(o1.unwrap_or(Q { a: f"dflt-string-longer-than-sso-5" }).a);
+    let o2 = Some(mkp(6));
+    let q2 = o2.unwrap_or(mkp(7));
+    println(q2.a);
+    let d = mkp(8);
+    let o3 = Some(mkp(9));
+    let q3 = o3.unwrap_or(d);
+    println(q3.a);
+    let k = Some(K.A(f"kkk-string-longer-than-sso-10"));
+    match k.unwrap_or(K.A(f"dflt-string-longer-than-sso-11")) { K.A(s) => println(s), K.B => println("b") }
+    let r: Result[P, i64] = Ok(P { a: f"ok-string-longer-than-sso-12", b: f"b" });
+    println(r.unwrap_or(P { a: f"x-string-longer-than-sso-13", b: f"y" }).a);
+    let mut i = 0;
+    while i < 3 { let lq = Some(P { a: f"loop-string-longer-than-sso-{i}", b: f"b" }); println(lq.unwrap_or(P { a: f"d", b: f"e" }).a); i = i + 1; }
+    let mut m: Map[i64, P] = Map.new();
+    m.insert(1, P { a: f"map-string-longer-than-sso-14", b: f"b" });
+    let g1 = m.get(1).unwrap_or(P { a: f"md", b: f"e" });
+    println(g1.a);
+    println("end")
+}
+"#,
+    );
+    assert_eq!(
+        out.as_deref(),
+        Some("aaa-string-longer-than-sso-1\nnone-string-longer-than-sso-3\nqqq-string-longer-than-sso-4\nmk-string-longer-than-sso-6\nmk-string-longer-than-sso-9\nkkk-string-longer-than-sso-10\nok-string-longer-than-sso-12\nloop-string-longer-than-sso-0\nloop-string-longer-than-sso-1\nloop-string-longer-than-sso-2\nmap-string-longer-than-sso-14\nend\n"),
+        "must match --interp"
+    );
+}
+
+/// B-2026-09-25-25 — the `Drop`-body half: an unused FRESH default (a struct
+/// literal, a call, a struct holding a `Drop` field) runs its body once, right
+/// after the call, on every surface. It ran on none, the interpreter included.
+/// A named default and the absent (default-taken) path are unchanged.
+#[test]
+fn test_e2e_unwrap_or_unused_fresh_default_runs_its_drop_once() {
+    let out = run_program(
+        r#"struct R { s: String }
+impl Drop for R { fn drop(mut ref self) { println(f"drop {self.s}") } }
+struct W { r: R, n: i64 }
+fn mk(s: String) -> R { R { s: s } }
+fn main() {
+    { let o = Some(R { s: f"r1" }); let q = o.unwrap_or(R { s: f"d1" }); println(q.s); println("k1") }
+    { let o: Option[R] = None; let q = o.unwrap_or(R { s: f"d2" }); println(q.s); println("k2") }
+    { let o = Some(R { s: f"r3" }); let q = o.unwrap_or(mk(f"d3")); println(q.s); println("k3") }
+    { let d = R { s: f"d4" }; let o = Some(R { s: f"r4" }); let q = o.unwrap_or(d); println(q.s); println("k4") }
+    { let o = Some(W { r: R { s: f"r5" }, n: 5 }); let q = o.unwrap_or(W { r: R { s: f"d5" }, n: 0 }); println(q.n); println("k5") }
+    println("end")
+}
+"#,
+    );
+    assert_eq!(
+        out.as_deref(),
+        Some("drop d1\nr1\ndrop r1\nk1\nd2\ndrop d2\nk2\ndrop d3\nr3\ndrop r3\nk3\ndrop d4\nr4\ndrop r4\nk4\ndrop d5\n5\ndrop r5\nk5\nend\n"),
+        "must match --interp"
+    );
+}

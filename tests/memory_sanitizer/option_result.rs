@@ -8938,3 +8938,63 @@ fn main() {
         20,
     );
 }
+
+/// B-2026-09-25-25 — `o.unwrap_or(d)` on a PRESENT receiver. A payload too
+/// wide for the inline area is boxed, and this path loaded it without freeing
+/// the box (plain `unwrap` frees it). The unused default was freed only when
+/// it was a String/Vec buffer, so a fresh struct or enum default (`P { .. }`,
+/// `mkp(7)`) leaked. A NAMED default is its binding's to drop, as before.
+#[test]
+fn asan_unwrap_or_frees_the_box_and_an_unused_default() {
+    assert_clean_asan_run_min_allocs(
+        r#"struct P { a: String, b: String }
+struct Q { a: String }
+enum K { A(String), B }
+fn mkp(i: i64) -> P { P { a: f"mk-string-longer-than-sso-{i}", b: f"b" } }
+fn main() {
+    let o = Some(P { a: f"aaa-string-longer-than-sso-1", b: f"bbb-string-longer-than-sso-2" });
+    let q = o.unwrap_or(P { a: f"x", b: f"y" });
+    println(q.a);
+    let n: Option[P] = None;
+    let q0 = n.unwrap_or(P { a: f"none-string-longer-than-sso-3", b: f"y" });
+    println(q0.a);
+    let o1 = Some(Q { a: f"qqq-string-longer-than-sso-4" });
+    println(o1.unwrap_or(Q { a: f"dflt-string-longer-than-sso-5" }).a);
+    let o2 = Some(mkp(6));
+    let q2 = o2.unwrap_or(mkp(7));
+    println(q2.a);
+    let d = mkp(8);
+    let o3 = Some(mkp(9));
+    let q3 = o3.unwrap_or(d);
+    println(q3.a);
+    let k = Some(K.A(f"kkk-string-longer-than-sso-10"));
+    match k.unwrap_or(K.A(f"dflt-string-longer-than-sso-11")) { K.A(s) => println(s), K.B => println("b") }
+    let r: Result[P, i64] = Ok(P { a: f"ok-string-longer-than-sso-12", b: f"b" });
+    println(r.unwrap_or(P { a: f"x-string-longer-than-sso-13", b: f"y" }).a);
+    let mut i = 0;
+    while i < 3 { let lq = Some(P { a: f"loop-string-longer-than-sso-{i}", b: f"b" }); println(lq.unwrap_or(P { a: f"d", b: f"e" }).a); i = i + 1; }
+    let mut m: Map[i64, P] = Map.new();
+    m.insert(1, P { a: f"map-string-longer-than-sso-14", b: f"b" });
+    let g1 = m.get(1).unwrap_or(P { a: f"md", b: f"e" });
+    println(g1.a);
+    println("end")
+}
+"#,
+        &[
+            "aaa-string-longer-than-sso-1",
+            "none-string-longer-than-sso-3",
+            "qqq-string-longer-than-sso-4",
+            "mk-string-longer-than-sso-6",
+            "mk-string-longer-than-sso-9",
+            "kkk-string-longer-than-sso-10",
+            "ok-string-longer-than-sso-12",
+            "loop-string-longer-than-sso-0",
+            "loop-string-longer-than-sso-1",
+            "loop-string-longer-than-sso-2",
+            "map-string-longer-than-sso-14",
+            "end",
+        ],
+        "asan_unwrap_or_frees_the_box_and_an_unused_default",
+        20,
+    );
+}

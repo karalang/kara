@@ -216,7 +216,20 @@ impl<'a> super::Interpreter<'a> {
                         data: EnumData::Tuple(vals),
                         ..
                     } if variant == "Ok" || variant == "Some" => {
-                        vals.first().cloned().unwrap_or(default)
+                        // B-2026-09-25-25 — the unused default dies here. A
+                        // FRESH one (a struct literal or a call) has no other
+                        // owner, so its `Drop` bodies ran nowhere; a named
+                        // default's own binding already runs them. Codegen's
+                        // twin is `drop_unused_fresh_aggregate_default`.
+                        if args.first().is_some_and(|a| {
+                            matches!(
+                                a.value.kind,
+                                ExprKind::StructLiteral { .. } | ExprKind::Call { .. }
+                            )
+                        }) {
+                            self.run_discarded_value_user_drops(default);
+                        }
+                        vals.first().cloned().unwrap_or(Value::Unit)
                     }
                     _ => default,
                 });

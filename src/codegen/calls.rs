@@ -4225,9 +4225,36 @@ impl<'ctx> super::Codegen<'ctx> {
                     .builder
                     .build_int_to_ptr(w0, ptr_ty, "uo.box.p")
                     .unwrap();
-                self.builder
+                let loaded = self
+                    .builder
                     .build_load(inner_ll, box_ptr, "uo.box.ld")
-                    .unwrap()
+                    .unwrap();
+                if let Some(inst) = loaded.as_instruction_value() {
+                    let _ = inst.set_alignment(8);
+                }
+                // B-2026-09-25-25 — free the payload's BOX here, as the
+                // `unwrap` lowering does (B-2026-08-05-7): the loaded value is
+                // the result's now, and every owner of the envelope has been
+                // disarmed by the consume (a named receiver's slot is zeroed
+                // below, a fresh temp has no drop). It leaked 48 B per present
+                // `o.unwrap_or(..)` over a two-String struct payload.
+                // Null-guarded like the unwrap site.
+                let is_null = self
+                    .builder
+                    .build_is_null(box_ptr, "uo.box.isnull")
+                    .unwrap();
+                let free_bb = self.context.append_basic_block(fn_val, "uo.box.free");
+                let cont_bb = self.context.append_basic_block(fn_val, "uo.box.cont");
+                self.builder
+                    .build_conditional_branch(is_null, cont_bb, free_bb)
+                    .unwrap();
+                self.builder.position_at_end(free_bb);
+                self.builder
+                    .build_call(self.runtime_fns.free_fn, &[box_ptr.into()], "")
+                    .unwrap();
+                self.builder.build_unconditional_branch(cont_bb).unwrap();
+                self.builder.position_at_end(cont_bb);
+                loaded
             } else {
                 self.rebuild_value_from_payload_words(inner_ll, w0, w1, w2)?
             };
@@ -4260,12 +4287,15 @@ impl<'ctx> super::Codegen<'ctx> {
             };
             let present_val = match borrow_clone_te {
                 Some(te) => {
+                    // The current block, not `present_bb`: a boxed payload's
+                    // free above splits the present path.
+                    let cur_bb = self.builder.get_insert_block().unwrap();
                     let clone_fn = self.emit_clone_fn_for_type_expr(&te);
                     let src = self.create_entry_alloca(fn_val, "uo.borrow.src", inner_ll);
-                    self.builder.position_at_end(present_bb);
+                    self.builder.position_at_end(cur_bb);
                     self.builder.build_store(src, present_val).unwrap();
                     let dst = self.create_entry_alloca(fn_val, "uo.borrow.clone", inner_ll);
-                    self.builder.position_at_end(present_bb);
+                    self.builder.position_at_end(cur_bb);
                     self.builder
                         .build_call(clone_fn, &[src.into(), dst.into()], "")
                         .unwrap();
@@ -4306,6 +4336,13 @@ impl<'ctx> super::Codegen<'ctx> {
             {
                 self.free_str_vec_buffer_if_heap(default_val);
             }
+            // B-2026-09-25-25 — a fresh user struct/enum default (`unwrap_or(P
+            // { .. })`, `unwrap_or(mk(3))`) is discarded here too, and nothing
+            // else owns it: its memory leaked and a user `Drop` body ran on no
+            // surface. Drop it whole, bodies then memory, the order a bound
+            // local's scope exit uses. A NAMED default is excluded: its own
+            // binding's drop already runs (measured correct).
+            self.drop_unused_fresh_aggregate_default(&default_arg.value, default_val, &inner_te);
             let present_end = self.builder.get_insert_block().unwrap();
             self.builder.build_unconditional_branch(merge_bb).unwrap();
 
@@ -4618,6 +4655,63 @@ impl<'ctx> super::Codegen<'ctx> {
         self.suppress_inline_option_result_binding_move(object);
         self.suppress_place_optres_field_unwrap_source(object, method);
         Ok(Some(value))
+    }
+
+    /// B-2026-09-25-25 — run a discarded `unwrap_or` default's `Drop` bodies
+    /// and free its memory, at the current insert point. Admits a struct
+    /// literal or a call yielding a fresh owned value, of a non-generic,
+    /// non-shared user struct or enum. Anything else emits nothing.
+    fn drop_unused_fresh_aggregate_default(
+        &mut self,
+        default: &Expr,
+        default_val: BasicValueEnum<'ctx>,
+        inner_te: &TypeExpr,
+    ) {
+        let fresh = match &default.kind {
+            ExprKind::StructLiteral { .. } => true,
+            ExprKind::Call { .. } => self.expr_yields_fresh_owned_temp(default),
+            _ => false,
+        };
+        if !fresh {
+            return;
+        }
+        let TypeKind::Path(p) = &inner_te.kind else {
+            return;
+        };
+        let [name] = p.segments.as_slice() else {
+            return;
+        };
+        if p.generic_args.is_some()
+            || name == "Option"
+            || name == "Result"
+            || self.type_decls.shared_types.contains_key(name.as_str())
+        {
+            return;
+        }
+        let is_struct = self.type_decls.struct_types.contains_key(name.as_str());
+        let is_enum = self
+            .type_decls
+            .enum_layouts
+            .get(name.as_str())
+            .is_some_and(|l| !l.is_shared);
+        if !is_struct && !is_enum {
+            return;
+        }
+        let Some(fn_val) = self.current_fn else {
+            return;
+        };
+        let cur_bb = self.builder.get_insert_block().unwrap();
+        let slot = self.create_entry_alloca(fn_val, "uo.def.drop", default_val.get_type());
+        self.builder.position_at_end(cur_bb);
+        self.builder.build_store(slot, default_val).unwrap();
+        let name = name.clone();
+        let bodies = self.emit_struct_user_drop_bodies_only_fn(&name);
+        let mem = self.emit_drop_fn_for_type_expr(inner_te);
+        self.builder.position_at_end(cur_bb);
+        if let Some(f) = bodies {
+            self.builder.build_call(f, &[slot.into()], "").unwrap();
+        }
+        self.builder.build_call(mem, &[slot.into()], "").unwrap();
     }
 
     /// Bind `payload` to a synthetic local and compile `closure(x)` at the

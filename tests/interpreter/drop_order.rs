@@ -6971,3 +6971,25 @@ fn main() {
 "#);
     assert_eq!(out, "drop p1\ndrop r1\no1\ndrop o1\nk1\ndrop p2\ndrop o2\nr2\ndrop r2\nk2\no3\ndrop o3\ndrop p3\ndrop r3\nk3\nno\ndrop p4\ndrop r4\ndrop o4\nk4\ndrop p5\nd5\ndrop d5\nk5\nend\n", "got:\n{out}");
 }
+
+/// B-2026-09-25-25 — the `Drop`-body half: an unused FRESH default (a struct
+/// literal, a call, a struct holding a `Drop` field) runs its body once, right
+/// after the call, on every surface. It ran on none, the interpreter included.
+/// A named default and the absent (default-taken) path are unchanged.
+#[test]
+fn interp_unwrap_or_unused_fresh_default_runs_its_drop_once() {
+    let out = run(r#"struct R { s: String }
+impl Drop for R { fn drop(mut ref self) { println(f"drop {self.s}") } }
+struct W { r: R, n: i64 }
+fn mk(s: String) -> R { R { s: s } }
+fn main() {
+    { let o = Some(R { s: f"r1" }); let q = o.unwrap_or(R { s: f"d1" }); println(q.s); println("k1") }
+    { let o: Option[R] = None; let q = o.unwrap_or(R { s: f"d2" }); println(q.s); println("k2") }
+    { let o = Some(R { s: f"r3" }); let q = o.unwrap_or(mk(f"d3")); println(q.s); println("k3") }
+    { let d = R { s: f"d4" }; let o = Some(R { s: f"r4" }); let q = o.unwrap_or(d); println(q.s); println("k4") }
+    { let o = Some(W { r: R { s: f"r5" }, n: 5 }); let q = o.unwrap_or(W { r: R { s: f"d5" }, n: 0 }); println(q.n); println("k5") }
+    println("end")
+}
+"#);
+    assert_eq!(out, "drop d1\nr1\ndrop r1\nk1\nd2\ndrop d2\nk2\ndrop d3\nr3\ndrop r3\nk3\ndrop d4\nr4\ndrop r4\nk4\ndrop d5\n5\ndrop r5\nk5\nend\n", "got:\n{out}");
+}
