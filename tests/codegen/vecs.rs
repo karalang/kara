@@ -9639,3 +9639,42 @@ fn main() {
         "must match --interp"
     );
 }
+
+/// B-2026-09-24-38 / B-2026-09-24-36 — a by-value `Result` param whose other
+/// variant hands back a bodiless `i64` (`Err(e) => e`), or whose arm only
+/// copy-reads the payload (`x.r.id`, `let n = x.r.id`), leaves the payload's
+/// `Drop` body with the CALLER, after the call statement. Before, the escaping
+/// `i64` stood the caller's whole walk down: `tag(a)` lost `d1`, and `read`
+/// ran the body inside the callee (`d3 k3`) or in both frames.
+#[test]
+fn test_e2e_optres_param_bodiless_escape_keeps_caller_body() {
+    let out = run_program(
+        r#"struct R { id: i64 }
+impl Drop for R { fn drop(mut ref self) { println(f"d{self.id}") } }
+struct S { r: R, s: String }
+fn mk(i: i64) -> S { S { r: R { id: i }, s: f"heap-string-longer-than-sso-{i}" } }
+fn tag(a: Result[S, i64]) -> i64 { match a { Ok(_) => 1, Err(e) => e } }
+fn read(a: Result[S, i64]) -> i64 { match a { Ok(x) => x.r.id, Err(e) => e } }
+fn held(a: Result[S, i64]) -> i64 { match a { Ok(x) => { let n = x.r.id; println("mid"); n }, Err(e) => e } }
+fn fwd(a: Result[S, i64]) -> i64 { let c = a; read(c) }
+fn peek(a: Option[S]) -> i64 { match a { Some(x) => x.r.id, None => 0 } }
+fn main() {
+    { let a: Result[S, i64] = Ok(mk(1)); println(f"k{tag(a)}"); }
+    println(f"k{tag(Ok(mk(2)))}");
+    { let a: Result[S, i64] = Ok(mk(3)); println(f"k{read(a)}"); }
+    println(f"k{read(Ok(mk(4)))}");
+    { let e: Result[S, i64] = Err(9); println(f"k{read(e)}"); }
+    { let a: Result[S, i64] = Ok(mk(5)); println(f"k{fwd(a)}"); }
+    { let a: Result[S, i64] = Ok(mk(6)); println(f"k{held(a)}"); }
+    println(f"k{held(Ok(mk(7)))}");
+    println(f"k{peek(Some(mk(8)))}");
+    println("end")
+}
+"#,
+    );
+    assert_eq!(
+        out.as_deref(),
+        Some("k1\nd1\nd2\nk1\nk3\nd3\nd4\nk4\nk9\nk5\nd5\nmid\nk6\nd6\nmid\nd7\nk7\nd8\nk8\nend\n"),
+        "must match --interp"
+    );
+}

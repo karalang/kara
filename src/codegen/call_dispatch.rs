@@ -3279,7 +3279,22 @@ impl<'ctx> super::Codegen<'ctx> {
             if !is_payload_carrying_enum {
                 return None;
             }
-            let variants = crate::ast::fn_escaping_param_payload_variants(program, f, ast_i);
+            let mut variants = crate::ast::fn_escaping_param_payload_variants(program, f, ast_i);
+            // B-2026-09-24-38 — a built-in variant whose payload has no `Drop`
+            // body anywhere in it has nothing for this walk to stand down, and
+            // `enum_payload_skip_for_variants` is all-or-nothing for
+            // `Option`/`Result`: `Err(e) => e` handing back an `i64` stood the
+            // caller's whole walk down, `Ok`'s `S` included, while the callee
+            // ran that body nowhere either. The callee drops the same variants
+            // in `optres_param_payload_bodies_stay_with_caller`, so the two
+            // ends still answer from one list.
+            if path
+                .segments
+                .first()
+                .is_some_and(|en| en == "Option" || en == "Result")
+            {
+                variants.retain(|v| v == "*" || !optres_variant_payload_is_bodiless(&param.ty, v));
+            }
             if variants.is_empty() {
                 return None;
             }
@@ -5096,7 +5111,13 @@ impl<'ctx> super::Codegen<'ctx> {
                         // two have to move together.
                         if let Some(arity) = self.struct_payload_arity(&p.ty, v) {
                             match self.optres_payload_taken_fields(f, &p.ty, ast_i, v) {
-                                Some(fields) if !fields.is_empty() && fields.len() < arity => {
+                                Some(fields)
+                                    if (!fields.is_empty()
+                                        || self.optres_payload_variant_only_copy_read(
+                                            f, &p.ty, ast_i, v,
+                                        ))
+                                        && fields.len() < arity =>
+                                {
                                     return Some((
                                         p.ty.clone(),
                                         super::synth_drop::FieldSkipTree {
@@ -5217,15 +5238,23 @@ impl<'ctx> super::Codegen<'ctx> {
         if vs.is_empty() {
             return true;
         }
-        vs.iter().all(|v| {
-            match (
-                self.struct_payload_arity(&p.ty, v),
-                self.optres_payload_taken_fields(f, &p.ty, ast_i, v),
-            ) {
-                (Some(arity), Some(fields)) => !fields.is_empty() && fields.len() < arity,
-                _ => false,
-            }
-        })
+        // B-2026-09-24-38 — the caller's half drops these same variants in
+        // `callee_enum_arg_payload_escape`; see there.
+        vs.iter()
+            .filter(|v| !optres_variant_payload_is_bodiless(&p.ty, v))
+            .all(|v| {
+                match (
+                    self.struct_payload_arity(&p.ty, v),
+                    self.optres_payload_taken_fields(f, &p.ty, ast_i, v),
+                ) {
+                    (Some(arity), Some(fields)) => {
+                        (!fields.is_empty()
+                            || self.optres_payload_variant_only_copy_read(f, &p.ty, ast_i, v))
+                            && fields.len() < arity
+                    }
+                    _ => false,
+                }
+            })
     }
 
     /// B-2026-09-14-18 — [`Self::optres_payload_escape_map`] answered PER PART.
@@ -5460,10 +5489,74 @@ impl<'ctx> super::Codegen<'ctx> {
                 [crate::ast::ParamPart::Field(fname)] => {
                     out.insert(names.iter().position(|n| n == fname)?);
                 }
+                // B-2026-09-24-36 — a deeper path whose LEAF carries no `Drop`
+                // body is a copy read (`Ok(x) => x.r.id`), which takes nothing
+                // from any field. Answering `None` for it stood the caller's
+                // walk down and armed the arm binding's instead, so the body
+                // ran inside the callee: `d4 k4` where the caller-retains order
+                // is `k4 d4`. Only a leaf that provably runs no body is
+                // skipped; any other deep path still cannot be answered.
+                [_, _, ..]
+                    if optres_payload_te(param_te, Some(variant))
+                        .and_then(|root| self.te_at_accessor_chain(&root, &path))
+                        .is_some_and(|leaf| !self.elem_te_runs_user_drop(&leaf)) => {}
                 _ => return None,
             }
         }
         Some(out)
+    }
+
+    /// B-2026-09-24-36 — does the callee only READ `variant`'s named-struct
+    /// payload, every projection off it ending in a leaf that runs no `Drop`
+    /// body (`Ok(x) => x.r.id`, `let n = x.r.id`)?
+    ///
+    /// The one case in which [`Self::optres_payload_taken_fields`]'s empty set
+    /// means "the callee takes nothing" rather than "the channels could not
+    /// name what it takes". Both of its callers decline on an empty set,
+    /// because an empty set also arises when the escape map flags a variant the
+    /// part channels cannot see into (a conditional hand-back). Declining there
+    /// armed the arm binding's own walk, so the body ran INSIDE the callee,
+    /// before the caller's next statement rather than after it.
+    ///
+    /// Asked of the same escape walk as [`Self::optres_payload_escape_map`],
+    /// with that map's per-leaf policy applied to the STRUCT payload it leaves
+    /// intolerant. That map stays intolerant for a named payload because
+    /// applying the policy on one end alone doubled the body; here both ends
+    /// read this answer, so the arm stops owning exactly where the caller
+    /// starts. The program-aware whole-payload analysis must not flag the
+    /// variant either, so a hand-back the walk misses still declines.
+    fn optres_payload_variant_only_copy_read(
+        &self,
+        f: &crate::ast::Function,
+        param_te: &TypeExpr,
+        arg_index: usize,
+        variant: &str,
+    ) -> bool {
+        let Some(program) = self.program_snapshot.as_deref() else {
+            return false;
+        };
+        if crate::ast::fn_escaping_param_payload_variants(program, f, arg_index)
+            .iter()
+            .any(|v| v == "*" || v == variant)
+        {
+            return false;
+        }
+        let Some(pname) = f.params.get(arg_index).and_then(|p| match &p.pattern.kind {
+            crate::ast::PatternKind::Binding(n) => Some(n.as_str()),
+            _ => None,
+        }) else {
+            return false;
+        };
+        let Some(root) = optres_payload_te(param_te, Some(variant)) else {
+            return false;
+        };
+        let leaf_is_copy_read = |e: &Expr| -> bool {
+            self.projection_leaf_te_through_index(&root, e)
+                .is_some_and(|leaf| !self.elem_te_runs_user_drop(&leaf))
+        };
+        !crate::result_escape::optres_payload_escaping_param_variants_with(f, &leaf_is_copy_read)
+            .get(pname)
+            .is_some_and(|vs| vs.contains(variant))
     }
 
     /// B-2026-09-19-48 — the STRUCT sibling of [`Self::tuple_payload_arity`]:
@@ -18641,6 +18734,43 @@ impl<'ctx> super::Codegen<'ctx> {
 /// Every `None` falls back to the pre-existing escape map, so an unreadable
 /// shape keeps today's behaviour rather than gaining the projection-tolerant
 /// reading on a guess.
+/// B-2026-09-24-38 — does `variant`'s payload in the `Option`/`Result`
+/// `param_te` provably carry no `Drop` body, so that handing it out of the
+/// callee changes nothing about who runs the other variant's bodies?
+///
+/// A CLOSED spelling only: scalars, `String`, and tuples / `Vec` / `Option` /
+/// `Result` of those. A user type or a generic parameter answers `false`, which
+/// keeps the old all-or-nothing stand-down, so an answer this cannot give is
+/// never a lost body.
+fn optres_variant_payload_is_bodiless(param_te: &TypeExpr, variant: &str) -> bool {
+    fn closed(te: &TypeExpr) -> bool {
+        match &te.kind {
+            TypeKind::Tuple(elems) => elems.iter().all(closed),
+            TypeKind::Path(p) if p.segments.len() == 1 => {
+                let args: Vec<&TypeExpr> = p
+                    .generic_args
+                    .iter()
+                    .flatten()
+                    .filter_map(|a| match a {
+                        crate::ast::GenericArg::Type(t) => Some(t),
+                        _ => None,
+                    })
+                    .collect();
+                match p.segments[0].as_str() {
+                    "i8" | "i16" | "i32" | "i64" | "i128" | "isize" | "u8" | "u16" | "u32"
+                    | "u64" | "u128" | "usize" | "f32" | "f64" | "bool" | "char" | "String" => {
+                        args.is_empty()
+                    }
+                    "Vec" | "Option" | "Result" => !args.is_empty() && args.into_iter().all(closed),
+                    _ => false,
+                }
+            }
+            _ => false,
+        }
+    }
+    optres_payload_te(param_te, Some(variant)).is_some_and(|te| closed(&te))
+}
+
 fn optres_payload_te(param_te: &TypeExpr, want_variant: Option<&str>) -> Option<TypeExpr> {
     let TypeKind::Path(p) = &param_te.kind else {
         return None;
