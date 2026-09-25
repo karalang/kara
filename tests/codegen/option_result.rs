@@ -11211,3 +11211,68 @@ fn main() {
         "got:\n{out}"
     );
 }
+
+/// B-2026-09-25-13 — a local `Option` / `Result` with a heap payload handed
+/// out as a BRANCH LEAF: `let s = Some(f".."); if c { s } else { None }`, the
+/// `match`-arm spelling, and `let r = if c { s } else { None }`. The branch
+/// value left with the buffer while the local kept its scope-exit free, so
+/// every compiled surface aborted `free(): double free detected in tcache 2`;
+/// `--interp` was right.
+#[test]
+fn test_e2e_option_local_handed_out_as_branch_leaf() {
+    let out = run_program(
+        r#"fn tail_if(c: bool, n: i64) -> Option[String] {
+    let s = Some(f"heap-string-longer-than-sso-{n}");
+    if c { s } else { None }
+}
+
+fn tail_two(c: bool, n: i64) -> Option[String] {
+    let s = Some(f"heap-string-longer-than-sso-s{n}");
+    let d = Some(f"heap-string-longer-than-sso-d{n}");
+    if c { s } else { d }
+}
+
+fn let_bound(c: bool, n: i64) -> Option[String] {
+    let s = Some(f"heap-string-longer-than-sso-l{n}");
+    let r = if c { s } else { None };
+    r
+}
+
+fn arm_tail(c: bool, n: i64) -> Option[String] {
+    let s = Some(f"heap-string-longer-than-sso-m{n}");
+    match c {
+        true => s,
+        false => None,
+    }
+}
+
+fn res_tail(c: bool, n: i64) -> Result[String, i64] {
+    let s: Result[String, i64] = Ok(f"heap-string-longer-than-sso-r{n}");
+    if c { s } else { Err(n) }
+}
+
+fn main() {
+    for i in 0..2 {
+        let c = i == 0;
+        println(tail_if(c, i).unwrap_or(f"none"));
+        println(tail_two(c, i).unwrap());
+        println(let_bound(c, i).unwrap_or(f"none"));
+        println(arm_tail(c, i).unwrap_or(f"none"));
+        match res_tail(c, i) {
+            Ok(s) => println(s),
+            Err(e) => println(f"err {e}"),
+        }
+        let s = Some(f"heap-string-longer-than-sso-main{i}");
+        let r = if c { s } else { None };
+        println(r.is_some());
+    }
+    println("end")
+}
+"#,
+    );
+    assert_eq!(
+        out.as_deref(),
+        Some("heap-string-longer-than-sso-0\nheap-string-longer-than-sso-s0\nheap-string-longer-than-sso-l0\nheap-string-longer-than-sso-m0\nheap-string-longer-than-sso-r0\ntrue\nnone\nheap-string-longer-than-sso-d1\nnone\nnone\nerr 1\nfalse\nend\n"),
+        "must match --interp"
+    );
+}

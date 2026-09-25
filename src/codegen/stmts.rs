@@ -1355,6 +1355,17 @@ impl<'ctx> super::Codegen<'ctx> {
                 // compile-time edit and could not tell the two branches apart.
                 let n = n.clone();
                 self.suppress_boxed_enum_payload_cleanup_for_owner(&n);
+                // B-2026-09-25-13 — and the INLINE `Option` / `Result`
+                // payload channel beside it. A branch leaf naming a local
+                // `Option[String]` (`let s = Some(..); if c { s } else { None }`)
+                // handed its buffer to the consumer and kept its own scope-exit
+                // free, so the function's result and the local both freed it:
+                // `free(): double free detected in tcache 2` on every compiled
+                // surface. The same runtime cap-zero every other move-out of
+                // such a binding uses (a call argument, `v.push(o)`), so a
+                // sibling branch that does not name it still frees it.
+                self.suppress_inline_option_payload_cleanup_for_moved_arg(tail);
+                self.suppress_inline_result_payload_cleanup_for_moved_arg(tail);
                 // B-2026-08-29-8 — the USER-DROP channel, which this site was
                 // missing while its function-body sibling has had it since
                 // B-2026-07-22-2. `suppress_cleanup_for_tail_return`

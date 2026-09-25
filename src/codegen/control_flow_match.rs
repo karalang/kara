@@ -1518,6 +1518,16 @@ impl<'ctx> super::Codegen<'ctx> {
                 if let ExprKind::Identifier(n) = &arm.body.kind {
                     let n = n.clone();
                     self.suppress_boxed_enum_payload_cleanup_for_owner(&n);
+                    // B-2026-09-25-13 — the INLINE `Option` / `Result` payload
+                    // channel beside it, as the `if`-branch block tail does in
+                    // `suppress_block_tail_cleanup`: `match c { true => s, false
+                    // => None }` over a local `Option[String]` freed the buffer
+                    // twice. Gated on an owner for the match's value, for the
+                    // handover reason B-2026-08-29-5 records above.
+                    if owns_result {
+                        self.suppress_inline_option_payload_cleanup_for_moved_arg(&arm.body);
+                        self.suppress_inline_result_payload_cleanup_for_moved_arg(&arm.body);
+                    }
                 }
                 // B-2026-08-04-2 — the arm binding itself escaping as the
                 // match's VALUE (`let r2 = match o { Some(r) => r, .. }`) is a
@@ -19373,6 +19383,18 @@ impl<'ctx> super::Codegen<'ctx> {
     /// are borrows). The detectors themselves still reject borrow (`ref T`)
     /// and non-heap payloads, so this only adds the move/alias guard.
     pub(super) fn rhs_is_fresh_inline_enum(&self, e: &Expr) -> bool {
+        self.fresh_inline_enum_value(e, false)
+    }
+
+    /// The body of [`Self::rhs_is_fresh_inline_enum`]. `in_branch` is true
+    /// below an `if` / `match`, where a leaf naming a tracked inline
+    /// `Option` / `Result` local IS a move: B-2026-09-25-13's branch-tail
+    /// suppressor zeroes that local's cap on the path that names it, so the
+    /// value leaves with no other owner and the binding it lands in must take
+    /// one. Before that suppressor the leaf freed at the local's scope exit and
+    /// this answered "not fresh" to avoid a second free; with it, answering the
+    /// same leaked the buffer on every path whose consumer only read it.
+    fn fresh_inline_enum_value(&self, e: &Expr, in_branch: bool) -> bool {
         match &e.kind {
             ExprKind::Call { .. } => true,
             ExprKind::If {
@@ -19388,27 +19410,42 @@ impl<'ctx> super::Codegen<'ctx> {
                 then_block
                     .final_expr
                     .as_deref()
-                    .is_some_and(|t| self.rhs_is_fresh_inline_enum(t))
+                    .is_some_and(|t| self.fresh_inline_enum_value(t, true))
                     && else_branch
                         .as_deref()
-                        .is_some_and(|t| self.rhs_is_fresh_inline_enum(t))
+                        .is_some_and(|t| self.fresh_inline_enum_value(t, true))
             }
             ExprKind::Match { arms, .. } => {
-                !arms.is_empty() && arms.iter().all(|a| self.rhs_is_fresh_inline_enum(&a.body))
+                !arms.is_empty()
+                    && arms
+                        .iter()
+                        .all(|a| self.fresh_inline_enum_value(&a.body, true))
             }
             ExprKind::Block(b) | ExprKind::Seq(b) => b
                 .final_expr
                 .as_deref()
-                .is_some_and(|t| self.rhs_is_fresh_inline_enum(t)),
+                .is_some_and(|t| self.fresh_inline_enum_value(t, in_branch)),
             ExprKind::LabeledBlock { body, .. } => body
                 .final_expr
                 .as_deref()
-                .is_some_and(|t| self.rhs_is_fresh_inline_enum(t)),
+                .is_some_and(|t| self.fresh_inline_enum_value(t, in_branch)),
             // `None` / nullary variant constructor: not a tracked binding,
             // empty payload → fresh-safe (a taken `None` leaf frees nothing).
             // A bound identifier is a move/alias of an existing enum → NOT
             // fresh (would double-free).
-            ExprKind::Identifier(n) => !self.variables.contains_key(n.as_str()),
+            ExprKind::Identifier(n) => {
+                !self.variables.contains_key(n.as_str())
+                    || (in_branch && {
+                        let owner = self.moved_arg_owner_name(n);
+                        self.payload_vars
+                            .inline_option_payload_vars
+                            .contains(owner.as_str())
+                            || self
+                                .payload_vars
+                                .inline_result_payload_vars
+                                .contains(owner.as_str())
+                    })
+            }
             ExprKind::Path { segments, .. } => segments
                 .last()
                 .map(|s| !self.variables.contains_key(s.as_str()))
