@@ -3549,7 +3549,10 @@ impl<'ctx> super::Codegen<'ctx> {
                 let returns_param = ast_i.is_some_and(|ast_i| {
                     self.program_snapshot.as_deref().is_some_and(|p| {
                         super::declarations::find_function_ast(p, name).is_some_and(|f| {
-                            crate::ast::fn_returns_param(f, ast_i)
+                            // B-2026-09-25-22 — the program-aware form, so a
+                            // param handed back inside a user enum's variant
+                            // (`return Ho.Full(v)`) or a bare `Some(v)` counts.
+                            crate::ast::fn_returns_param_with(Some(p), f, ast_i)
                                 || crate::ast::fn_returns_param_via_call(p, f, ast_i)
                         })
                     })

@@ -11660,3 +11660,50 @@ fn main() {
         "asan_inline_generic_enum_arg_runs_its_payload_body_once",
     );
 }
+
+/// B-2026-09-25-22 — a named binding handed to a generic fn that wraps its
+/// `T` param in an enum variant runs its `Drop` body once. The monomorph call
+/// site's hand-back test did not see a USER variant constructor
+/// (`return Ho.Full(v)`) or a bare `Some(v)`, so the caller's `r` kept its body
+/// beside the one the returned wrapper carries: every compiled surface printed
+/// each `dR` twice. `mkcg` is the concrete control.
+#[test]
+fn asan_param_wrapped_in_generic_enum_variant_runs_its_body_once() {
+    assert_clean_asan_run(
+        r#"struct R { id: i64, s: String }
+impl Drop for R { fn drop(mut ref self) { println(f"dR{self.id}") } }
+fn mkr(i: i64) -> R { return R { id: i, s: f"x{i}" } }
+enum Ho[T] { Full(T), Empty }
+impl[T] Ho[T] { fn mk(v: T) -> Ho[T] { return Ho.Full(v); } }
+fn mkh[T](v: T) -> Ho[T] { return Ho.Full(v); }
+fn mkt[T](v: T) -> Ho[T] { Ho.Full(v) }
+fn mkcg(v: R) -> Ho[R] { return Ho.Full(v); }
+fn mko[T](v: T) -> Option[T] { return Some(v); }
+fn takeit(x: Ho[R]) { match x { Full(r) => { println(f"f:{r.id}{r.s}") } Empty => { println("e") } } }
+fn main() {
+    let r1 = mkr(1);
+    takeit(Ho.mk(r1));
+    let r2 = mkr(2);
+    takeit(mkh(r2));
+    let r3 = mkr(3);
+    takeit(mkt(r3));
+    let r4 = mkr(4);
+    takeit(Ho[R].mk(r4));
+    let r5 = mkr(5);
+    let h5 = mkh(r5);
+    println("mid");
+    takeit(h5);
+    let r6 = mkr(6);
+    match mko(r6) { Some(q) => { println(f"o:{q.id}") } None => { println("n") } }
+    let r7 = mkr(7);
+    takeit(mkcg(r7));
+    println("end");
+}
+"#,
+        &[
+            "f:1x1", "dR1", "f:2x2", "dR2", "f:3x3", "dR3", "f:4x4", "dR4", "mid", "f:5x5", "dR5",
+            "o:6", "dR6", "f:7x7", "dR7", "end",
+        ],
+        "asan_param_wrapped_in_generic_enum_variant_runs_its_body_once",
+    );
+}

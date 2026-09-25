@@ -1362,6 +1362,23 @@ pub struct DistinctTypeDef {
 /// gate and the interpreter's `run_fresh_temp_arg_drops` gate so both
 /// surfaces agree.
 pub fn fn_returns_param(f: &Function, arg_index: usize) -> bool {
+    fn_returns_param_with(None, f, arg_index)
+}
+
+/// [`fn_returns_param`] with the declarations in hand, so a USER enum's
+/// variant constructor (`return Ho.Full(v)`) and the bare seeded spellings
+/// (`Some(v)`, `Ok(v)`, `Err(v)`) count as carrying the param out, as the
+/// `Option.Some(v)` spelling already does. B-2026-09-25-22: codegen's
+/// monomorph call site asks this, and without it `takeit(mkh(r))` over
+/// `fn mkh[T](v: T) -> Ho[T] { return Ho.Full(v) }` left the caller's `r`
+/// running its `Drop` body beside the one the result carries. The
+/// interpreter keeps the program-less form, which is why this is a sibling
+/// rather than a change of meaning.
+pub fn fn_returns_param_with(
+    program: Option<&crate::Program>,
+    f: &Function,
+    arg_index: usize,
+) -> bool {
     let Some(param) = f.params.get(arg_index) else {
         return false;
     };
@@ -1384,17 +1401,24 @@ pub fn fn_returns_param(f: &Function, arg_index: usize) -> bool {
     /// consumer of the RESULT is the owner either way; recognizing only the
     /// bare form left the caller dropping an arg it had just been handed back
     /// inside a struct, firing the Drop body twice.
-    fn expr_is_ident(e: &Expr, name: &str, wraps: &[(String, ParamPath)]) -> bool {
+    fn expr_is_ident(
+        e: &Expr,
+        name: &str,
+        wraps: &[(String, ParamPath)],
+        program: Option<&crate::Program>,
+    ) -> bool {
         match &e.kind {
             ExprKind::Identifier(n) => n == name || place_yields_wrapped_param(e, wraps),
             // B-2026-09-06-19 — a projection back out of a wrapping local.
             ExprKind::FieldAccess { .. } | ExprKind::TupleIndex { .. } => {
                 place_yields_wrapped_param(e, wraps)
             }
-            ExprKind::StructLiteral { fields, .. } => {
-                fields.iter().any(|f| expr_is_ident(&f.value, name, wraps))
-            }
-            ExprKind::Tuple(elems) => elems.iter().any(|el| expr_is_ident(el, name, wraps)),
+            ExprKind::StructLiteral { fields, .. } => fields
+                .iter()
+                .any(|f| expr_is_ident(&f.value, name, wraps, program)),
+            ExprKind::Tuple(elems) => elems
+                .iter()
+                .any(|el| expr_is_ident(el, name, wraps, program)),
             // B-2026-09-19-36 — an `Option`/`Result` CONSTRUCTOR carries the
             // param out exactly as the struct literal and tuple arms above do.
             // `return Ho { g: Option.Some(g) }` hands `g`'s box to the caller's
@@ -1418,6 +1442,20 @@ pub fn fn_returns_param(f: &Function, arg_index: usize) -> bool {
             // can reach. A `shared`/`par` inner enum is an RC pointer on a
             // different channel, and a `Vec` layer owns its elements itself.
             ExprKind::Call { callee, args } => {
+                // B-2026-09-25-22 — only with the declarations in hand; see
+                // `fn_returns_param_with`.
+                if let Some(p) = program {
+                    let bare_seeded = matches!(
+                        &callee.kind,
+                        ExprKind::Identifier(n) if matches!(n.as_str(), "Some" | "Ok" | "Err")
+                            && !p.items.iter().any(|it| matches!(it, Item::Function(g) if &g.name == n))
+                    );
+                    if bare_seeded || is_user_variant_ctor(p, callee) {
+                        return args
+                            .iter()
+                            .any(|a| expr_is_ident(&a.value, name, wraps, program));
+                    }
+                }
                 let ExprKind::Path { segments, .. } = &callee.kind else {
                     return false;
                 };
@@ -1427,31 +1465,37 @@ pub fn fn_returns_param(f: &Function, arg_index: usize) -> bool {
                 if head != "Option" && head != "Result" {
                     return false;
                 }
-                args.iter().any(|a| expr_is_ident(&a.value, name, wraps))
+                args.iter()
+                    .any(|a| expr_is_ident(&a.value, name, wraps, program))
             }
             _ => false,
         }
     }
-    fn walk_expr(e: &Expr, name: &str, wraps: &[(String, ParamPath)]) -> bool {
+    fn walk_expr(
+        e: &Expr,
+        name: &str,
+        wraps: &[(String, ParamPath)],
+        program: Option<&crate::Program>,
+    ) -> bool {
         match &e.kind {
             ExprKind::Return(Some(inner)) => {
-                expr_is_ident(inner, name, wraps) || walk_expr(inner, name, wraps)
+                expr_is_ident(inner, name, wraps, program) || walk_expr(inner, name, wraps, program)
             }
             ExprKind::Block(b)
             | ExprKind::Unsafe(b)
             | ExprKind::Try(b)
             | ExprKind::Seq(b)
-            | ExprKind::Par(b) => walk_block(b, name, wraps),
+            | ExprKind::Par(b) => walk_block(b, name, wraps, program),
             ExprKind::If {
                 condition,
                 then_block,
                 else_branch,
             } => {
-                walk_expr(condition, name, wraps)
-                    || walk_block(then_block, name, wraps)
+                walk_expr(condition, name, wraps, program)
+                    || walk_block(then_block, name, wraps, program)
                     || else_branch
                         .as_deref()
-                        .is_some_and(|x| walk_expr(x, name, wraps))
+                        .is_some_and(|x| walk_expr(x, name, wraps, program))
             }
             ExprKind::IfLet {
                 value,
@@ -1459,39 +1503,44 @@ pub fn fn_returns_param(f: &Function, arg_index: usize) -> bool {
                 else_branch,
                 ..
             } => {
-                walk_expr(value, name, wraps)
-                    || walk_block(then_block, name, wraps)
+                walk_expr(value, name, wraps, program)
+                    || walk_block(then_block, name, wraps, program)
                     || else_branch
                         .as_deref()
-                        .is_some_and(|x| walk_expr(x, name, wraps))
+                        .is_some_and(|x| walk_expr(x, name, wraps, program))
             }
             ExprKind::Match { scrutinee, arms } => {
-                walk_expr(scrutinee, name, wraps)
+                walk_expr(scrutinee, name, wraps, program)
                     || arms.iter().any(|a| {
                         // An arm TAIL that is the bare param is a return site
                         // when the match is itself a tail — conservative: any
                         // bare-param arm tail counts.
-                        expr_is_ident(&a.body, name, wraps) || walk_expr(&a.body, name, wraps)
+                        expr_is_ident(&a.body, name, wraps, program)
+                            || walk_expr(&a.body, name, wraps, program)
                     })
             }
             ExprKind::While { body, .. }
             | ExprKind::WhileLet { body, .. }
             | ExprKind::For { body, .. }
             | ExprKind::Loop { body, .. }
-            | ExprKind::LabeledBlock { body, .. } => walk_block(body, name, wraps),
+            | ExprKind::LabeledBlock { body, .. } => walk_block(body, name, wraps, program),
             _ => false,
         }
     }
-    fn walk_block(b: &Block, name: &str, wraps: &[(String, ParamPath)]) -> bool {
+    fn walk_block(
+        b: &Block,
+        name: &str,
+        wraps: &[(String, ParamPath)],
+        program: Option<&crate::Program>,
+    ) -> bool {
         b.stmts.iter().any(|st| match &st.kind {
-            StmtKind::Expr(e) => walk_expr(e, name, wraps),
+            StmtKind::Expr(e) => walk_expr(e, name, wraps, program),
             _ => false,
-        }) || b
-            .final_expr
-            .as_deref()
-            .is_some_and(|fe| expr_is_ident(fe, name, wraps) || walk_expr(fe, name, wraps))
+        }) || b.final_expr.as_deref().is_some_and(|fe| {
+            expr_is_ident(fe, name, wraps, program) || walk_expr(fe, name, wraps, program)
+        })
     }
-    walk_block(&f.body, param_name, wraps)
+    walk_block(&f.body, param_name, wraps, program)
 }
 
 /// B-2026-09-04-30 — for an OWNED-`self` method: can its RETURN VALUE carry any
