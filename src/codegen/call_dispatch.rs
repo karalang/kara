@@ -2771,6 +2771,18 @@ impl<'ctx> super::Codegen<'ctx> {
                             }
                         } else if self.arg_var_is_forwarded_not_copied(&var_name) {
                             self.suppress_user_drop_for_var(&var_name);
+                            // B-2026-09-25-31 — and the memory-only action a
+                            // struct WITHOUT a `Drop` of its own registers,
+                            // which the line above does not match: `let t =
+                            // idS3(s)` over `struct S3 { h: Sh, id: i64 }`
+                            // freed the `shared` field through both `s` and
+                            // `t`. Every-path hand-backs only; see
+                            // `callee_hands_arg_back_whole_on_every_path`.
+                            if self.callee_hands_arg_back_whole_on_every_path(&name, i)
+                                || self.callee_moves_arg_into_local_container(&name, i)
+                            {
+                                self.suppress_struct_cleanup_for_tail_identifier(&var_name);
+                            }
                         } else {
                             self.suppress_user_drop_body_keeping_memory(&var_name);
                         }
@@ -7363,7 +7375,10 @@ impl<'ctx> super::Codegen<'ctx> {
                 // `struct_type_owns_nothing_to_free`. Held identical to the
                 // monomorph retraction's gate, which is this arm's other half.
                 (self.struct_type_is_entry_copied_heap(&tn)
-                    || self.handback_owns_nothing_from_local(var, &tn))
+                    || self.handback_owns_nothing_from_local(var, &tn)
+                    // B-2026-09-25-31 — or a forwarded value whose binding the
+                    // call site retracted: the result is its only owner.
+                    || self.forwarded_handback_retracted(var))
                 .then_some(tn)
             }
             _ => None,
@@ -10856,6 +10871,81 @@ impl<'ctx> super::Codegen<'ctx> {
             && self.struct_type_owns_nothing_to_free(type_name)
     }
 
+    /// B-2026-09-25-31 — is `var` a local (not a parameter of the function
+    /// being compiled) whose struct type the callee FORWARDS rather than
+    /// entry-copies? Such a hand-back returns the binding's own object, so the
+    /// monomorph retraction moves body and memory to the result together.
+    pub(super) fn handback_forwards_local(&self, var: &str) -> bool {
+        !self.fn_ctx.current_fn_param_names.contains(var)
+            && self.arg_var_is_forwarded_not_copied(var)
+    }
+
+    /// B-2026-09-25-31 — does the callee hand argument `arg_index` back on
+    /// EVERY path, as the whole result or inside a STRUCT result? The shapes
+    /// where a caller may move a forwarded value's memory to the result.
+    ///
+    /// Narrower than [`Self::callee_takes_over_arg_drop_body`] on purpose. A
+    /// CONDITIONAL hand-back (`if c { return v } return w`) leaves the value
+    /// with the callee on the other exit, and a forwarded param's callee never
+    /// frees it (the caller-retains convention, B-2026-08-05-32), so moving the
+    /// memory there traded a use after free for a leak. An ENUM result (`Some(v)`,
+    /// `Ho.Full(v)`) does not release a `shared` field inside its payload at
+    /// all, so the result could not be the owner either.
+    pub(super) fn callee_hands_arg_back_whole_on_every_path(
+        &self,
+        callee_name: &str,
+        arg_index: usize,
+    ) -> bool {
+        let Some(program) = self.program_snapshot.as_deref() else {
+            return false;
+        };
+        let Some(f) = super::declarations::find_function_ast(program, callee_name) else {
+            return false;
+        };
+        let Some(ret) = f.return_type.as_ref().and_then(Self::te_head_name) else {
+            return false;
+        };
+        let ret_is_generic_param = f
+            .generic_params
+            .as_ref()
+            .is_some_and(|g| g.params.iter().any(|p| !p.is_const && p.name == ret));
+        let ret_is_struct = !self.type_decls.shared_types.contains_key(ret.as_str())
+            && (self.type_decls.struct_types.contains_key(ret.as_str())
+                || self
+                    .type_decls
+                    .struct_generic_params
+                    .contains_key(ret.as_str()));
+        (ret_is_generic_param || ret_is_struct)
+            && (crate::ast::fn_always_returns_param(Some(program), f, arg_index)
+                || crate::ast::fn_always_returns_param_via_call(program, f, arg_index))
+    }
+
+    /// B-2026-09-25-31 — does the callee push argument `arg_index` into a
+    /// container one of its own locals holds, ON EVERY PATH (B-2026-09-24-16's
+    /// MUST form)? That container's drain releases the value, so a forwarded
+    /// argument's memory goes with its body. The per-path (`_any`) form is not
+    /// enough: on the path that does not push, a forwarded param's callee
+    /// frees nothing, and moving the memory there leaked the `shared` field.
+    pub(super) fn callee_moves_arg_into_local_container(
+        &self,
+        callee_name: &str,
+        arg_index: usize,
+    ) -> bool {
+        self.program_snapshot
+            .as_deref()
+            .and_then(|p| super::declarations::find_function_ast(p, callee_name))
+            .is_some_and(|f| crate::ast::fn_moves_param_into_local_container(f, arg_index))
+    }
+
+    /// Did the monomorph call site just retract `var`'s whole cleanup as a
+    /// forwarded hand-back ([`Self::handback_forwards_local`])? Then the result
+    /// is the value's only owner.
+    fn forwarded_handback_retracted(&self, var: &str) -> bool {
+        self.variables
+            .get(var)
+            .is_some_and(|v| self.drop_rc.forwarded_handback_slots.contains(&v.ptr))
+    }
+
     /// B-2026-09-25-30 — does a discarded call hand a by-value argument that is
     /// a PARAMETER of the function being compiled? The generic-wrapper
     /// registrations below stand down for it, for the reason
@@ -10930,7 +11020,8 @@ impl<'ctx> super::Codegen<'ctx> {
             }
             self.type_decls.struct_types.contains_key(tn.as_str())
                 && !(self.struct_type_is_entry_copied_heap(tn)
-                    || self.handback_owns_nothing_from_local(n, tn))
+                    || self.handback_owns_nothing_from_local(n, tn)
+                    || self.forwarded_handback_retracted(n))
         })
     }
 

@@ -3590,6 +3590,30 @@ impl<'ctx> super::Codegen<'ctx> {
                 {
                     let var_name = var_name.clone();
                     self.suppress_user_drop_body_keeping_memory(&var_name);
+                } else if self.handback_forwards_local(var_name)
+                    && ast_i.is_some_and(|ast_i| {
+                        self.callee_hands_arg_back_whole_on_every_path(name, ast_i)
+                    })
+                {
+                    // B-2026-09-25-31 — a struct that DECLINES copy support (a
+                    // `shared` field) is FORWARDED, so the object the callee
+                    // hands back IS this binding's, and keeping either half of
+                    // the binding's cleanup gave it two owners: `let t =
+                    // idg(s)` over `struct S3 { h: Sh, id: i64 }` read and
+                    // wrote a freed block at -O0 and aborted in `malloc` under
+                    // `karac run`. The concrete site has retracted body and
+                    // memory together here since B-2026-09-06-71; the monomorph
+                    // leg only ever knew the entry-copied shape. The discard
+                    // registrar reads the recorded slot to take the result over
+                    // when nothing binds it. Not gated on `returns_param`: the
+                    // every-path predicate is stronger, and it follows a rebind
+                    // (`let t = v; return t`) that union does not.
+                    let var_name = var_name.clone();
+                    self.suppress_user_drop_for_var(&var_name);
+                    self.suppress_struct_cleanup_for_tail_identifier(&var_name);
+                    if let Some(v) = self.variables.get(var_name.as_str()) {
+                        self.drop_rc.forwarded_handback_slots.insert(v.ptr);
+                    }
                 } else if ast_i.is_some_and(|ast_i| {
                     self.program_snapshot.as_deref().is_some_and(|p| {
                         super::declarations::find_function_ast(p, name).is_some_and(|f| {
@@ -3607,6 +3631,15 @@ impl<'ctx> super::Codegen<'ctx> {
                     let var_name = var_name.clone();
                     if self.arg_var_is_forwarded_not_copied(&var_name) {
                         self.suppress_user_drop_for_var(&var_name);
+                        // B-2026-09-25-31 — and the memory-only action of a
+                        // struct with no `Drop` of its own, which the line
+                        // above does not match, where the push happens on
+                        // every path; see the concrete site.
+                        if ast_i
+                            .is_some_and(|ai| self.callee_moves_arg_into_local_container(name, ai))
+                        {
+                            self.suppress_struct_cleanup_for_tail_identifier(&var_name);
+                        }
                     } else {
                         self.suppress_user_drop_body_keeping_memory(&var_name);
                     }

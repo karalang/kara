@@ -335,6 +335,13 @@ pub(crate) struct DropRc<'ctx> {
     /// takes these fields back out of the map-derived mask. Keyed by the slot,
     /// which is unique per alloca, so no per-function reset is needed.
     pub(crate) cond_move_field_flag_slots: HashSet<PointerValue<'ctx>>,
+    /// B-2026-09-25-31 — argument slots whose WHOLE cleanup (body and memory)
+    /// a generic call site retracted because the callee FORWARDS the value (a
+    /// struct with a `shared` field declines copy support) and hands it back.
+    /// The returned object IS the binding's, so its new owner is the result;
+    /// the discard registrar reads this to know it may be that owner. Keyed by
+    /// the slot, unique per alloca, so no per-function reset is needed.
+    pub(crate) forwarded_handback_slots: HashSet<PointerValue<'ctx>>,
     /// B-2026-09-02-14 — per-path flag for a named `Option`/`Result` place
     /// whose payload-BODIES walk a `match` / `if let` / `while let` /
     /// `let … else` arm hands to its binding: `true` while the place still owes

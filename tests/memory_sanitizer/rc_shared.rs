@@ -5669,3 +5669,68 @@ fn asan_aggregate_returned_struct_releases_its_shared_field() {
         "b72-no-user-drop",
     );
 }
+
+/// B-2026-09-25-31 — a struct with a `shared` field declines copy support, so
+/// a by-value callee FORWARDS it, and a hand-back returns the caller's own
+/// object. The caller kept its cleanup beside the result's: `let t = idg(s)`
+/// read and wrote a freed block at -O0 and aborted in `malloc` under `karac
+/// run`, generic or concrete, with or without a `Drop` of its own. Body and
+/// memory now move to the result together wherever the callee hands the value
+/// back whole (or inside a struct) on every path, or pushes it into a
+/// container of its own on every path; the discarded spellings (`h_`, `i_`,
+/// `j_`) are the result's only owner.
+#[test]
+fn asan_struct_with_shared_field_handed_back_has_one_owner() {
+    assert_clean_asan_run(
+        r#"shared struct Sh { k: i64 }
+struct S2 { h: Sh, id: i64 }
+impl Drop for S2 { fn drop(mut ref self) { println(f"dS{self.id}") } }
+struct S3 { h: Sh, id: i64 }
+struct Bx[T] { v: T }
+struct K { n: i64 }
+impl K { fn keep[T](ref self, x: T) -> T { return x } }
+fn idg[T](v: T) -> T { return v }
+fn idS3(v: S3) -> S3 { return v }
+fn wrap[T](v: T) -> Bx[T] { return Bx { v: v } }
+fn in2[T](v: T) -> T { let t = v; return t }
+fn in5[T](v: T) -> T { let t = idg(v); t }
+fn st[T](a: T) -> Vec[T] { let mut v: Vec[T] = Vec.new(); v.push(a); return v }
+fn stS3(a: S3) -> Vec[S3] { let mut v: Vec[S3] = Vec.new(); v.push(a); return v }
+fn a_gen_drop() { let s = S2 { h: Sh { k: 1 }, id: 1 }; let t = idg(s); println(f"t{t.id}") }
+fn b_gen_plain() { let s = S3 { h: Sh { k: 1 }, id: 2 }; let t = idg(s); println(f"t{t.id}") }
+fn c_conc_plain() { let s = S3 { h: Sh { k: 1 }, id: 3 }; let t = idS3(s); println(f"t{t.id}") }
+fn d_wrap_drop() { let s = S2 { h: Sh { k: 1 }, id: 4 }; let b = wrap(s); println(f"b{b.v.id}") }
+fn e_wrap_plain() { let s = S3 { h: Sh { k: 1 }, id: 5 }; let b = wrap(s); println(f"b{b.v.id}") }
+fn f_method() { let k = K { n: 0 }; let s = S2 { h: Sh { k: 1 }, id: 6 }; let t = k.keep(s); println(f"t{t.id}") }
+fn g_shared_alive() { let sh = Sh { k: 7 }; let s = S2 { h: sh, id: 7 }; let t = idg(s); println(f"t{t.id} {sh.k}") }
+fn h_conc_disc() { let s = S3 { h: Sh { k: 1 }, id: 8 }; idS3(s); println("h") }
+fn i_conc_letdisc() { let s = S3 { h: Sh { k: 1 }, id: 9 }; let _ = idS3(s); println("i") }
+fn j_gen_disc() { let s = S3 { h: Sh { k: 1 }, id: 10 }; idg(s); let r = S2 { h: Sh { k: 1 }, id: 11 }; let _ = idg(r); println("j") }
+fn k_rebind() { let s = S3 { h: Sh { k: 1 }, id: 12 }; let t = in2(s); let u = S2 { h: Sh { k: 1 }, id: 13 }; let w = in5(u); println(f"k{t.id} {w.id}") }
+fn l_push() { let s = S3 { h: Sh { k: 1 }, id: 14 }; let v = st(s); let c = S3 { h: Sh { k: 1 }, id: 15 }; let w = stS3(c); println(f"l{v.len()} {w.len()}") }
+fn m_loop() { for i in 0..3 { let s = S3 { h: Sh { k: i }, id: 16 }; let t = idg(s); println(f"m{t.h.k}") } }
+
+fn main() {
+    a_gen_drop()
+    b_gen_plain()
+    c_conc_plain()
+    d_wrap_drop()
+    e_wrap_plain()
+    f_method()
+    g_shared_alive()
+    h_conc_disc()
+    i_conc_letdisc()
+    j_gen_disc()
+    k_rebind()
+    l_push()
+    m_loop()
+    println("end")
+}
+"#,
+        &[
+            "t1", "dS1", "t2", "t3", "b4", "dS4", "b5", "t6", "dS6", "t7 7", "dS7", "h", "i",
+            "dS11", "j", "k12 13", "dS13", "l1 1", "m0", "m1", "m2", "end",
+        ],
+        "asan_struct_with_shared_field_handed_back_has_one_owner",
+    );
+}
