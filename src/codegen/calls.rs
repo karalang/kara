@@ -684,9 +684,18 @@ impl<'ctx> super::Codegen<'ctx> {
         // RECONSTRUCT FOR DISPLAY — a `shared struct` payload fails that gate,
         // so `Vec[Option[TreeNode]]`'s element had no resolvable type at all and
         // `pool[i].clone()` died at "no handler for method 'clone'".
+        //
+        // B-2026-09-25-18 — a `Result[T, E]` element too. Without its
+        // arguments the bare `var_type_names` route resolved to `Result`, whose
+        // clone fn is the SHALLOW whole-value copy, so `v[i].clone()` over a
+        // `Vec[Result[String, E]]` aliased the element's buffer and consuming
+        // the copy double-freed. That is the `.clone()` the index-move rule's
+        // fix-it writes.
         if let TypeKind::Path(path) = &elem_te.kind {
-            if path.segments.first().map(String::as_str) == Some("Option")
-                && path.generic_args.is_some()
+            if matches!(
+                path.segments.first().map(String::as_str),
+                Some("Option") | Some("Result")
+            ) && path.generic_args.is_some()
             {
                 self.type_decls
                     .enum_inst_var_types

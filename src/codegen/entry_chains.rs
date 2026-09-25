@@ -384,13 +384,38 @@ impl<'ctx> super::Codegen<'ctx> {
         if method != "clone" || !args.is_empty() {
             return None;
         }
-        let ExprKind::Identifier(name) = &object.kind else {
-            return None;
+        let te = match &object.kind {
+            ExprKind::Identifier(name) => self.aggregate_clone_receiver_type_expr(name.as_str())?,
+            // B-2026-09-25-18 — the ELEMENT of a named `Vec` / `Array`
+            // (`let r = v[i].clone()`), which the index-move rule's `.clone()`
+            // fix-it writes. The indexed receiver lowers through a synthetic
+            // binding and clones into an owned copy exactly as the identifier
+            // form does, but the `let` never registered that copy: a leak of
+            // the whole payload per clone.
+            ExprKind::Index { object: base, .. } => {
+                let ExprKind::Identifier(b) = &base.kind else {
+                    return None;
+                };
+                if !self.var_types.vec_elem_types.contains_key(b.as_str())
+                    && !self
+                        .var_types
+                        .array_elem_type_exprs
+                        .contains_key(b.as_str())
+                {
+                    return None;
+                }
+                self.var_types
+                    .var_elem_type_exprs
+                    .get(b.as_str())
+                    .or_else(|| self.var_types.array_elem_type_exprs.get(b.as_str()))?
+                    .clone()
+            }
+            _ => return None,
         };
-        let te = self.aggregate_clone_receiver_type_expr(name.as_str())?;
         let TypeKind::Path(p) = &te.kind else {
             return None;
         };
+        p.generic_args.as_ref()?;
         match p.segments.first().map(String::as_str) {
             Some("Option") => {
                 let pt = Self::option_payload_te(&te)?;

@@ -1541,6 +1541,22 @@ impl<'a> super::TypeChecker<'a> {
                     | "unwrap_err"
                     | "expect_err"
             ) && matches!(callee_type_name.as_deref(), Some("Option") | Some("Result"));
+        // B-2026-09-25-18 — the CONSUMING members of that family take the
+        // receiver by value, so on `v[i]` they move the payload out of an
+        // element the container still owns. That is the move
+        // `E_INDEX_MOVE_NON_COPY` already refuses at `let t = v[i]`: the
+        // interpreter improvised a copy and codegen a move, so the compiled
+        // program freed the payload at its use and again in the container's
+        // drain. The rule's own `.clone()` fix-it keeps today's interpreter
+        // meaning. The `is_*` queries borrow and stay legal.
+        if is_builtin_unwrap_family
+            && matches!(
+                method,
+                "unwrap" | "expect" | "unwrap_or" | "unwrap_err" | "expect_err"
+            )
+        {
+            self.reject_index_move_non_copy(object, &obj_ty);
+        }
         if !is_builtin_unwrap_family {
             if let Some(type_name) = callee_type_name {
                 // Phase-8 line 96 — instance-method use-site stability lint.

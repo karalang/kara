@@ -51751,3 +51751,62 @@ fn borrow_projection_copy_skips_declared_ref_field() {
         "owned `String` field read still warns"
     );
 }
+
+/// B-2026-09-25-18 — the CONSUMING members of the builtin `Option` / `Result`
+/// unwrap family take the receiver by value, so on `v[i]` they move the payload
+/// out of an element the container still owns: the move `let t = v[i]` is
+/// already refused for. It compiled as a move and interpreted as a copy, so
+/// the compiled program freed the payload at its use and again in the
+/// container's drain. The borrowing `is_*` queries, a `Copy` payload, and the
+/// fix-it's own `.clone()` spelling stay legal.
+#[test]
+fn index_move_rejects_a_consuming_unwrap_on_an_indexed_element() {
+    fn hits(src: &str) -> usize {
+        let parsed = parse(src);
+        assert!(
+            parsed.errors.is_empty(),
+            "parse errors: {:?}",
+            parsed.errors
+        );
+        let resolved = resolve(&parsed.program);
+        assert!(
+            resolved.errors.is_empty(),
+            "resolve errors: {:?}",
+            resolved.errors
+        );
+        typecheck(&parsed.program, &resolved)
+            .errors
+            .iter()
+            .filter(|e| e.message.contains("E_INDEX_MOVE_NON_COPY"))
+            .count()
+    }
+    let wrap = |body: &str| {
+        format!(
+            "fn main() {{ let v: Vec[Option[String]] = [Some(f\"a\")]; \
+             let w: Vec[Result[String, i64]] = [Ok(f\"b\")]; \
+             let n: Vec[Option[i64]] = [Some(3)]; {body} }}\n"
+        )
+    };
+    for (label, body) in [
+        ("unwrap", "println(v[0].unwrap());"),
+        ("expect", "let x = v[0].expect(\"e\"); println(x);"),
+        ("unwrap_or", "println(v[0].unwrap_or(f\"d\"));"),
+        ("Result unwrap", "println(w[0].unwrap());"),
+        ("unwrap_err", "println(w[0].unwrap_err());"),
+        ("expect_err", "println(w[0].expect_err(\"e\"));"),
+    ] {
+        assert_eq!(hits(&wrap(body)), 1, "{label}: must be refused");
+    }
+    for (label, body) in [
+        ("is_some", "println(v[0].is_some());"),
+        ("is_ok", "println(w[0].is_ok());"),
+        ("Copy payload", "println(n[0].unwrap());"),
+        ("clone then unwrap", "println(v[0].clone().unwrap());"),
+        (
+            "Result clone then unwrap",
+            "println(w[0].clone().unwrap());",
+        ),
+    ] {
+        assert_eq!(hits(&wrap(body)), 0, "{label}: must stay legal");
+    }
+}

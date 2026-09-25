@@ -11330,3 +11330,45 @@ fn main() {
         "must match --interp"
     );
 }
+
+/// B-2026-09-25-18 — `v[i].unwrap()` on a heap `Option` / `Result` element
+/// is now refused (`E_INDEX_MOVE_NON_COPY`); this runs the spelling its fix-it
+/// writes, `v[i].clone().unwrap()`, and its neighbours. Before, the `Result`
+/// element's clone was a shallow alias (the synth receiver resolved to bare
+/// `Result`), so consuming it double-freed, and `let r = v[i].clone()` never
+/// registered the copy, so it leaked.
+#[test]
+fn test_e2e_indexed_optres_element_clone_then_unwrap_frees_once() {
+    let out = run_program(
+        r#"fn h(i: i64) -> String { f"heap-string-longer-than-sso-{i}" }
+fn main() {
+    let mut v: Vec[Option[String]] = Vec.new();
+    v.push(Some(h(1)));
+    v.push(None);
+    let mut w: Vec[Result[String, i64]] = Vec.new();
+    w.push(Ok(h(2)));
+    w.push(Err(7));
+    println(v[0].clone().unwrap());
+    let x = v[0].clone().expect("e");
+    println(x);
+    println(v[1].clone().unwrap_or(h(3)));
+    println(w[0].clone().unwrap());
+    println(w[1].clone().unwrap_err());
+    let r = w[0].clone();
+    println(r.is_ok());
+    let o = v[0].clone();
+    println(o.is_some());
+    match w[0].clone() { Ok(s) => println(s), Err(e) => println(e) }
+    for i in 0..2 { match v[i].clone() { Some(s) => println(s), None => println("none") } }
+    println(v.len());
+    println(w.len());
+    println("end")
+}
+"#,
+    );
+    assert_eq!(
+        out.as_deref(),
+        Some("heap-string-longer-than-sso-1\nheap-string-longer-than-sso-1\nheap-string-longer-than-sso-3\nheap-string-longer-than-sso-2\n7\ntrue\ntrue\nheap-string-longer-than-sso-2\nheap-string-longer-than-sso-1\nnone\n2\n2\nend\n"),
+        "must match --interp"
+    );
+}
