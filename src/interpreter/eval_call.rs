@@ -4903,9 +4903,16 @@ impl<'a> super::Interpreter<'a> {
                     if self.env.get(en).is_some() && !self.env.is_outermost_only(en) {
                         return None;
                     }
+                    // B-2026-09-25-16 — or an ASSOCIATED FN on the same
+                    // generic-args path (`takeit(Ho[R].mk(R { .. }))`), the
+                    // twin of the `Ho.mk(..)` arm above. It carried no owner
+                    // here while the callee dropped its own param before
+                    // handing it back; with that premature drop gone the
+                    // result is a fresh temp like any other call's.
                     return self
                         .qualified_enum_variant_is_unit(en, method)
-                        .map(|_| en.clone());
+                        .map(|_| en.clone())
+                        .or_else(|| self.assoc_fn_return_type_name(en, method));
                 }
                 // B-2026-09-19-56 — the INSTANCE-METHOD producer,
                 // `sink(h.mk(2))`. The arm above claims the qualified

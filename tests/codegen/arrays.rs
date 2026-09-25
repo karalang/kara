@@ -6160,3 +6160,54 @@ fn main() {
     };
     assert_eq!(out, "bind\nk1 b\nd1\nd2\ntail\nk2 4\nd3\nd4\ntup\nk3 3\nd5\nd6\nnest\nk4 n\nd7\nd8\ntwo\nk5 11\nd11\nd12\nd9\nd10\ntail\nd13\nd14\nk6\ntail\nk7 t\nd15\nd16\ntail\nk8 17\nd17\nd18\nmeth\nk9 m\nd19\nd20\nfwd\nd21\nd22\nk10 6\nmk\nd40\nd41\nk11 5\nmk\neat40\nd40\nd41\nk12 5\nmk\nd40\nd41\nk13\nmk\nd40\nd41\nk14 5\nend\n", "got:\n{out}");
 }
+
+/// B-2026-09-25-16 — a by-value `Array[R, 2]` param (element runs a user
+/// `Drop`) that the callee hands back INSIDE A USER ENUM VARIANT
+/// (`return E7.A(a)`) was freed by both the result and the caller (`free():
+/// double free detected in tcache 2` on the JIT, `-O0` and `-O2`), and
+/// `--interp` ran its bodies twice. The all-paths hand-back walker did not
+/// read a user variant constructor as carrying the param, and the caller's
+/// result-ownership test did not look inside enum payloads. The walker fix
+/// also stops a plain struct param handed back that way (`return E9.A(r)`,
+/// `G.A(r)`) running its `Drop` body twice on every surface. Cells: `return`
+/// and tail spellings, a matched result, a struct variant, a struct param, a
+/// temporary argument, both paths of a conditional hand-back, an enum nested
+/// in a struct, and a generic enum over the array and over the struct.
+#[test]
+fn e2e_array_param_returned_inside_an_enum_variant_is_dropped_once() {
+    let Some(out) = run_program(
+        r#"struct R { id: i64, s: String }
+impl Drop for R { fn drop(mut ref self) { println(f"d{self.id}") } }
+fn mkr(i: i64) -> R { return R { id: i, s: f"aaa" } }
+enum E7 { A(Array[R, 2]), B }
+enum E8 { A { v: Array[R, 2], k: i64 }, B }
+enum E9 { A(R), B }
+enum G[T] { A(T), B }
+struct Wr { e: E7, n: i64 }
+fn ret(a: Array[R, 2]) -> E7 { println("ret"); return E7.A(a) }
+fn tl(a: Array[R, 2]) -> E7 { println("tl"); E7.A(a) }
+fn sv(a: Array[R, 2]) -> E8 { println("sv"); E8.A { v: a, k: 3 } }
+fn one(r: R) -> E9 { println("one"); return E9.A(r) }
+fn mixed(a: Array[R, 2], c: bool) -> E7 { println("mixed"); if c { return E7.A(a) } E7.B }
+fn nest(a: Array[R, 2]) -> Wr { println("nest"); Wr { e: E7.A(a), n: 1 } }
+fn gnr(a: Array[R, 2]) -> G[Array[R, 2]] { println("gnr"); G.A(a) }
+fn gone(r: R) -> G[R] { println("gone"); G.A(r) }
+fn main() {
+    { let a: Array[R, 2] = [mkr(1), mkr(2)]; let w = ret(a); println("k1") }
+    { let a: Array[R, 2] = [mkr(3), mkr(4)]; let w = tl(a); match w { E7.A(v) => println(f"k2 {v[1].id}"), E7.B => println("k2 b") } }
+    { let a: Array[R, 2] = [mkr(5), mkr(6)]; let w = sv(a); match w { E8.A { v, k } => println(f"k3 {k} {v[0].id}"), E8.B => println("k3 b") } }
+    { let r = mkr(7); let w = one(r); println("k4") }
+    { let w = tl([mkr(8), mkr(9)]); println("k5") }
+    { let a: Array[R, 2] = [mkr(10), mkr(11)]; let w = mixed(a, true); println("k6") }
+    { let a: Array[R, 2] = [mkr(12), mkr(13)]; let w = mixed(a, false); println("k7") }
+    { let a: Array[R, 2] = [mkr(14), mkr(15)]; let w = nest(a); println(f"k8 {w.n}") }
+    { let a: Array[R, 2] = [mkr(16), mkr(17)]; let w = gnr(a); match w { G.A(v) => println(f"k9 {v[0].id}"), G.B => println("k9 b") } }
+    { let r = mkr(18); let w = gone(r); println("k10") }
+    println("end")
+}
+"#,
+    ) else {
+        return;
+    };
+    assert_eq!(out, "ret\nd1\nd2\nk1\ntl\nk2 4\nd3\nd4\nsv\nk3 3 5\nd5\nd6\none\nd7\nk4\ntl\nd8\nd9\nk5\nmixed\nd10\nd11\nk6\nmixed\nd12\nd13\nk7\nnest\nk8 1\nd14\nd15\ngnr\nk9 16\nd16\nd17\ngone\nd18\nk10\nend\n", "got:\n{out}");
+}

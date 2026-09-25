@@ -3128,6 +3128,7 @@ fn fn_always_returns_param_ex(
         e: &Expr,
         name: &[String],
         wraps: &[(String, ParamPath)],
+        program: Option<&crate::Program>,
         via: Option<ViaCtx>,
     ) -> bool {
         match &e.kind {
@@ -3138,15 +3139,23 @@ fn fn_always_returns_param_ex(
             ExprKind::FieldAccess { .. } | ExprKind::TupleIndex { .. } => {
                 place_yields_wrapped_param(e, wraps)
             }
-            ExprKind::StructLiteral { fields, .. } => {
-                fields.iter().any(|f| yields(&f.value, name, wraps, via))
+            ExprKind::StructLiteral { fields, .. } => fields
+                .iter()
+                .any(|f| yields(&f.value, name, wraps, program, via)),
+            ExprKind::Tuple(elems) => elems.iter().any(|el| yields(el, name, wraps, program, via)),
+            // B-2026-09-25-16 — a user enum's variant constructor carries the
+            // param out exactly as a struct literal does (`return E.A(a)`).
+            ExprKind::Call { callee, args }
+                if program.is_some_and(|p| is_user_variant_ctor(p, callee)) =>
+            {
+                args.iter()
+                    .any(|a| yields(&a.value, name, wraps, program, via))
             }
-            ExprKind::Tuple(elems) => elems.iter().any(|el| yields(el, name, wraps, via)),
             // B-2026-09-07-10 — the ONE-HOP route, when the caller asked for it:
             // `return f(r)` where `f` itself always returns that argument.
             ExprKind::Call { callee, args } if via.is_some() => {
                 if let Some(p) = crate::ast::option_result_ctor_payload(e) {
-                    if yields(p, name, wraps, via) {
+                    if yields(p, name, wraps, program, via) {
                         return true;
                     }
                 }
@@ -3170,7 +3179,7 @@ fn fn_always_returns_param_ex(
                 })
             }
             _ => crate::ast::option_result_ctor_payload(e)
-                .is_some_and(|p| yields(p, name, wraps, via)),
+                .is_some_and(|p| yields(p, name, wraps, program, via)),
         }
     }
     fn leaf_tails<'a>(e: &'a Expr, out: &mut Vec<&'a Expr>) {
@@ -3324,7 +3333,7 @@ fn fn_always_returns_param_ex(
     // counts: it exits without yielding, so the param dies on that path.
     let any_bad_return = returns
         .iter()
-        .any(|o| !o.is_some_and(|x| yields(x, name, wraps, via)));
+        .any(|o| !o.is_some_and(|x| yields(x, name, wraps, program, via)));
 
     let Some(tail) = f.body.final_expr.as_deref() else {
         // NO TAIL EXPRESSION AT ALL — every exit is a `return` (B-2026-08-29-14).
@@ -3351,12 +3360,12 @@ fn fn_always_returns_param_ex(
         // the caller must keep firing.
         let any_good_return = returns
             .iter()
-            .any(|o| o.is_some_and(|x| yields(x, name, wraps, via)));
+            .any(|o| o.is_some_and(|x| yields(x, name, wraps, program, via)));
         return f.return_type.is_some() && any_good_return && !any_bad_return;
     };
     let mut tails = Vec::new();
     leaf_tails(tail, &mut tails);
-    if tails.is_empty() || !tails.iter().all(|t| yields(t, name, wraps, via)) {
+    if tails.is_empty() || !tails.iter().all(|t| yields(t, name, wraps, program, via)) {
         return false;
     }
     !any_bad_return

@@ -4622,6 +4622,36 @@ impl<'ctx> super::Codegen<'ctx> {
                 .is_some_and(|l| l.tags.contains_key(method.as_str()))
     }
 
+    /// B-2026-09-25-16 — the enum name of a call whose result is a GENERIC
+    /// user enum (`Ho[R]`), read off the call's own recorded instantiation, or
+    /// `None`. Such a result reaching a by-value param is a fresh temp the
+    /// caller owns: the name-keyed payload walker skips a generic payload and
+    /// the instantiation-keyed fallback reads the same span-keyed record, so
+    /// this is the constructor arm's answer for a value one call away. It had
+    /// no owner at all; the callee used to drop its own param before handing
+    /// it back, which ran the body once, in the wrong place, and hid that.
+    ///
+    /// Monomorphic enums are left to the existing arms (they record no
+    /// instantiation), the seeded `Option` / `Result` to their own machinery,
+    /// and a result that aliases a still-armed binding to that binding.
+    pub(super) fn generic_user_enum_call_result(&self, arg: &Expr) -> Option<String> {
+        let te = self
+            .type_decls
+            .enum_inst_type_exprs
+            .get(&(arg.span.offset, arg.span.length))?;
+        let crate::ast::TypeKind::Path(tp) = &te.kind else {
+            return None;
+        };
+        let [head] = tp.segments.as_slice() else {
+            return None;
+        };
+        (self.type_decls.enum_layouts.contains_key(head.as_str())
+            && !self.type_decls.seeded_enum_names.contains(head)
+            && !self.type_decls.shared_types.contains_key(head.as_str())
+            && !self.call_result_aliases_armed_binding(arg))
+        .then(|| head.clone())
+    }
+
     /// B-2026-09-23-43 — is `expr` a passthrough call whose result is the very
     /// payload a live binding still owns (`id(a)` over `fn id(a: Option[R]) ->
     /// Option[R] { a }`)? The let site already treats such a result as an
@@ -6485,6 +6515,15 @@ impl<'ctx> super::Codegen<'ctx> {
     /// element heap the caller's array drop would, unlike an `Option`, whose
     /// result runs the element bodies and frees its box but not the elements'
     /// heap (the 58 B leak `callee_always_hands_array_arg_back` records).
+    ///
+    /// B-2026-09-25-16 — and a payload of a user enum's variant: any payload
+    /// of a plain (non-generic, non-`shared`) enum, and for a generic user
+    /// enum a TUPLE-variant payload spelled as a bare type param bound here to
+    /// exactly `pr` (`G[Array[R, 2]]` over `enum G[T] { A(T), B }`). A generic
+    /// STRUCT variant is left out: its drop runs no element bodies at all today
+    /// (an agreed gap on every surface), so retracting the caller there turned
+    /// a missing body into a 6 B leak. `Option` / `Result` stay out by
+    /// `stdlib_origin`, for the leak above.
     fn type_owns_field_of_rendered_type(
         program: &crate::Program,
         rt: &crate::ast::TypeExpr,
@@ -6503,13 +6542,68 @@ impl<'ctx> super::Codegen<'ctx> {
                     let [name] = path.segments.as_slice() else {
                         return false;
                     };
-                    program.items.iter().any(|it| {
-                        matches!(it, crate::ast::Item::StructDef(sd)
-                            if sd.name == *name
+                    program.items.iter().any(|it| match it {
+                        crate::ast::Item::StructDef(sd) => {
+                            sd.name == *name
                                 && !sd.is_shared
                                 && !sd.is_par
                                 && sd.generic_params.is_none()
-                                && sd.fields.iter().any(|fd| part(&fd.ty)))
+                                && sd.fields.iter().any(|fd| part(&fd.ty))
+                        }
+                        crate::ast::Item::EnumDef(ed) => {
+                            ed.name == *name
+                                && !ed.is_shared
+                                && !ed.is_par
+                                && ed.generic_params.is_none()
+                                && ed.variants.iter().any(|v| match &v.kind {
+                                    crate::ast::VariantKind::Tuple(tys) => tys.iter().any(part),
+                                    crate::ast::VariantKind::Struct(fs) => {
+                                        fs.iter().any(|fd| part(&fd.ty))
+                                    }
+                                    crate::ast::VariantKind::Unit => false,
+                                })
+                        }
+                        _ => false,
+                    })
+                }
+                crate::ast::TypeKind::Path(path) => {
+                    let ([name], Some(args)) =
+                        (path.segments.as_slice(), path.generic_args.as_ref())
+                    else {
+                        return false;
+                    };
+                    program.items.iter().any(|it| {
+                        let crate::ast::Item::EnumDef(ed) = it else {
+                            return false;
+                        };
+                        let Some(gp) = ed.generic_params.as_ref() else {
+                            return false;
+                        };
+                        if ed.name != *name
+                            || ed.is_shared
+                            || ed.is_par
+                            || ed.stdlib_origin
+                            || gp.params.len() != args.len()
+                        {
+                            return false;
+                        }
+                        let bound = |ty: &crate::ast::TypeExpr| {
+                            let crate::ast::TypeKind::Path(tp) = &ty.kind else {
+                                return false;
+                            };
+                            let ([tn], None) = (tp.segments.as_slice(), tp.generic_args.as_ref())
+                            else {
+                                return false;
+                            };
+                            gp.params.iter().zip(args).any(|(g, a)| {
+                                g.name == *tn
+                                    && matches!(a, crate::ast::GenericArg::Type(at)
+                                        if crate::formatter::render_type_expr(at) == pr)
+                            })
+                        };
+                        ed.variants.iter().any(|v| {
+                            matches!(&v.kind, crate::ast::VariantKind::Tuple(tys) if tys.iter().any(bound))
+                        })
                     })
                 }
                 _ => false,
@@ -9352,6 +9446,13 @@ impl<'ctx> super::Codegen<'ctx> {
             }
         }
         let fresh_enum_temp = match &arg.kind {
+            // B-2026-09-25-16 — a free function's GENERIC user-enum result
+            // (`takeit(mkg(r))` over `fn mkg(v: R) -> Ho[R]`) is a fresh temp
+            // exactly as the constructor it returns is; see
+            // `generic_user_enum_call_result`.
+            ExprKind::Call { callee, .. } if matches!(callee.kind, ExprKind::Identifier(_)) => self
+                .enum_name_of_expr(arg)
+                .or_else(|| self.generic_user_enum_call_result(arg)),
             ExprKind::Call { .. } | ExprKind::Path { .. } | ExprKind::StructLiteral { .. } => {
                 self.enum_name_of_expr(arg)
             }
@@ -9394,6 +9495,18 @@ impl<'ctx> super::Codegen<'ctx> {
                     ExprKind::Path { segments, .. } => segments.first().cloned(),
                     _ => None,
                 }
+            }
+            // B-2026-09-25-16 — an ASSOCIATED FN on the same generic-args path
+            // (`takeit(Ho[R].mk(r))`), the interpreter's twin arm.
+            ExprKind::MethodCall { object, .. }
+                if matches!(
+                    &object.kind,
+                    ExprKind::Path { segments, generic_args: Some(_) }
+                        if segments.len() == 1
+                            && !self.variables.contains_key(segments[0].as_str())
+                ) =>
+            {
+                self.generic_user_enum_call_result(arg)
             }
             _ => None,
         };

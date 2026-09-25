@@ -5062,6 +5062,12 @@ fn e2e_deep_projection_scrutinee_runs_one_payload_body() {
 /// answers `None` for a name that is not a variant, and this cell is what holds
 /// that distinction in place.
 ///
+/// B-2026-09-25-16 FLIPPED ITS PIN. It read `dR7 f:7 end`: the body ran INSIDE
+/// `mk`, before the payload was used, because `mk` dropped its own param instead
+/// of handing it back through `Ho.Full(v)`. Once `mk` hands it back the result is
+/// a fresh temp with no owner, so both registrars now claim it as a CALL RESULT
+/// (the `Ho.mk(..)` twin's route) -- still not as a constructor.
+///
 /// Twin in the other backend's suite under the same name, same table.
 #[test]
 fn e2e_generic_enum_ctor_temp_arg_runs_its_payload_drop_body() {
@@ -5150,7 +5156,7 @@ fn e2e_generic_enum_ctor_temp_arg_runs_its_payload_drop_body() {
         (
             "control: an ASSOC FN with the same node shape is not a ctor",
             "takeit(Ho[R].mk(R { id: 7 }));",
-            "dR7\nf:7\nend\n",
+            "f:7\ndR7\nend\n",
         ),
     ] {
         let src = format!("{hdr}fn main() {{\n{stmts}\nprintln(\"end\");\n}}\n");
@@ -13352,4 +13358,53 @@ fn main() {
         return;
     };
     assert_eq!(out, "a zz a1\nb yy b1\nc yy c1\ndSc0\ndSc1\nd yy d1\ne yy e1\nf yy f1\ndSf0\ndSf1\ng yy g1\ndSg0\ndSg1\nh zz 3\ni yy 2\nn 9\nend\n", "got:\n{out}");
+}
+
+/// B-2026-09-25-16 — a GENERIC user enum returned by a call and passed straight
+/// on (`takeit(mkg(mkr(9)))` over `fn mkg(v: R) -> Ho[R] { return Ho.Full(v) }`)
+/// ran its payload's `Drop` body TWICE on every surface: once inside `mkg`, which
+/// dropped its own param instead of handing it back through `Ho.Full(v)`, and
+/// once from the result's owner. With the hand-back recognised, a call result fed
+/// straight into a by-value param had no owner at all, so both backends now
+/// claim it as a fresh temp, as they already did for the constructor. Cells: a
+/// destructuring and a holding callee, an inline and a boxed payload, a free,
+/// an associated and a fresh-producing callee, a passthrough of a binding and of
+/// a temp, a discarded result, and a bound result.
+#[test]
+fn e2e_generic_enum_call_result_arg_runs_its_payload_body_once() {
+    let Some(out) = run_program(
+        r#"struct R { id: i64, s: String }
+impl Drop for R { fn drop(mut ref self) { println(f"dR{self.id}") } }
+fn mkr(i: i64) -> R { return R { id: i, s: f"x{i}" } }
+struct W { a: String, b: String, c: String }
+impl Drop for W { fn drop(mut ref self) { println(f"dW{self.a.len()}") } }
+fn mkw() -> W { return W { a: f"aaa{1}", b: f"bbb{1}", c: f"ccc{1}" } }
+enum Ho[T] { Full(T), Empty }
+impl[T] Ho[T] { fn mk(v: T) -> Ho[T] { return Ho.Full(v); } }
+fn mkg(v: R) -> Ho[R] { return Ho.Full(v) }
+fn mkf() -> Ho[R] { return Ho.Full(mkr(30)) }
+fn mkgw(v: W) -> Ho[W] { return Ho.Full(v) }
+fn idh(h: Ho[R]) -> Ho[R] { h }
+fn takeit(x: Ho[R]) { match x { Full(r) => { println(f"f:{r.id}") } Empty => { println("e") } } }
+fn takew(x: Ho[W]) { match x { Full(w) => { println(f"w:{w.a.len()}") } Empty => { println("e") } } }
+fn hold(x: Ho[R]) { println("h") }
+fn holdw(x: Ho[W]) { println("hw") }
+fn main() {
+    { takeit(mkg(mkr(9))); println("k1") }
+    { takeit(mkf()); println("k2") }
+    { takeit(Ho.mk(mkr(31))); println("k3") }
+    { hold(mkg(mkr(32))); println("k4") }
+    { takew(mkgw(mkw())); println("k5") }
+    { holdw(mkgw(mkw())); println("k6") }
+    { let h = mkg(mkr(33)); takeit(idh(h)); println("k7") }
+    { takeit(idh(mkg(mkr(34)))); println("k8") }
+    { mkg(mkr(35)); println("k9") }
+    { let a = mkg(mkr(36)); takeit(a); println("k10") }
+    println("end")
+}
+"#,
+    ) else {
+        return;
+    };
+    assert_eq!(out, "f:9\ndR9\nk1\nf:30\ndR30\nk2\nf:31\ndR31\nk3\nh\ndR32\nk4\nw:4\ndW4\nk5\nhw\ndW4\nk6\nf:33\ndR33\nk7\nf:34\ndR34\nk8\ndR35\nk9\nf:36\ndR36\nk10\nend\n", "got:\n{out}");
 }
