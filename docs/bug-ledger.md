@@ -95,7 +95,7 @@ distinguish "bugs flattening" from "we stopped writing them down."
 | run-vs-build | 491 |
 | miscompile | 446 |
 | leak | 416 |
-| double-free | 305 |
+| double-free | 306 |
 | missing-feature | 207 |
 | codegen-gap | 195 |
 | other | 149 |
@@ -110,8 +110,8 @@ distinguish "bugs flattening" from "we stopped writing them down."
 
 | surface | total |
 |---|---|
-| codegen | 2061 |
-| interp | 542 |
+| codegen | 2062 |
+| interp | 543 |
 | typecheck | 308 |
 | other | 110 |
 | ownership | 77 |
@@ -351,7 +351,6 @@ measured and all AGREE on both surfaces and are correct. So the class is
 narrow -- it is the `ContainerElemBodies` walker for an ARRAY field being
 registered in the callee's prologue, not by-value struct params in general. | — |
 | B-2026-09-22-3 | 2026-09-22 | codegen | medium | MEASURED: `asan_slice_mutators_and_views_on_heap_elements` FAILS THE `KARAC_SSO=1` SANITIZER LANE INTERMITTENTLY ON CI — 4 reds in 7 consecutive `main` runs, INCLUDING A FAIL AND A PASS ON A BYTE-IDENTICAL TEST BINARY — and no ASAN report exists for ANY of them because the leg deleted it (B-2026-09-22-4). NOT a regression of cfe7a5f1c, to which it was attributed, and not a host difference either — NOW MEASURED (2026-09-22): ASAN PASSES AND THE FAILURE IS AN OUTPUT MISMATCH, one field of expected stdout reading `126` where `2` was due, so no sanitizer or leak column can see it and the oracle is expected output; the same run RE-RUN on the same tree goes green, which needs no commit pair to establish the intermittency. The leg was prescribing a memory-fault remedy for it the whole time (B-2026-09-22-15) | — |
-| B-2026-09-22-13 | 2026-09-22 | codegen+interp | high | A BY-VALUE `Array` PARAM MOVED INTO A STRUCT LITERAL THE CALLEE **RETURNS** IS STILL FREED BY BOTH SIDES, AND BOTH OWNERS ARE NOW IN THE CALLER -- the escaping half of B-2026-09-22-7, which that row listed as NOT MEASURED and whose fix does not reach it. `fn inner(a: Array[R, 2]) -> B7 { let b = B7 { v: a }; return b }` over `struct B7 { v: Array[R, 2] }` and an `R` with a user `Drop`: `free(): double free detected in tcache 2`, exit 134 at `-O0` AOT and under the JIT, 2 `Invalid free()` under valgrind. THE IR LOCATES IT PRECISELY AND IT IS NOT WHERE THE ROW'S TITLE WOULD SUGGEST: `inner` emits NO drop of `b` at all, so B-2026-09-22-7's mask did its job at the literal; every one of the three surviving calls is in `main` -- `__karac_dropbodies_B7(w)`, `__karac_drop_struct_B7(w)` and the caller's own retained `__karac_drop_array_te_R_2(a)`. The caller keeps `a`'s drop because the family's premise is that a by-value `Array` param whose element runs a user `Drop` stays with the CALLER, which is right while the callee only borrows it -- and wrong here, because the callee handed the elements back inside `w`, so the retraction of `a` at the call site is what is missing. `-O2` IS CLEAN (0 valgrind errors, rc=0), so this is invisible to any measurement taken above `-O0`, and `--interp` is rc=0 with byte-identical output to `-O2`. BOTH SURVIVING OUTPUTS LOOK WRONG IN ORDER AND THAT IS A SEPARATE QUESTION: they print `in d61 d62 held end`, running the element bodies at the callee's scope exit while the returned `w` is still alive and never running them when `w` dies, where a single-owner reading would put them after `end`. | — |
 | B-2026-09-23-3 | 2026-09-23 | codegen+interp | medium | A DECLARED ENUM'S `Array[T, N]` PAYLOAD BUILT AS A FRESH-TEMP `match` SCRUTINEE RUNS NO ELEMENT `Drop` BODY WHEN THE ARM ONLY READS ITS BINDING, ON ALL FOUR SURFACES -- `match V.P1([S{a0}, S{a1}]) { V.P1(v) => { println(v[0].tag) } .. }` over `enum V { P1(Array[S, 2]), Q1 }` prints `r:a0 end` on `--interp`, the JIT, `-O0` and `-O2`, where `dSa0 dSa1` are due; memory is balanced. The same program with the ctor bound to a name first, with a GENERIC `enum Sl[T]` at `T = Array[S, 2]`, or with a consuming arm (`let u = v`) runs both bodies everywhere | — |
 | B-2026-09-23-4 | 2026-09-23 | codegen+interp | medium | A BY-VALUE STRUCT PARAM MOVED INTO A SEEDED `match` SCRUTINEE RUNS ITS `Drop` BODY TWICE ON EVERY SURFACE -- `fn inner(a: R) -> i64 { match Option.Some(a) { Option.Some(v) => { .. } .. } }` called as `inner(a)` prints `d1 d1` on `--interp`, the JIT, `-O0` and `-O2`, against the by-value control `fn eat(a: R)`'s single `d1`; an AGREED fault, so no differential instrument can see it. It is the struct half B-2026-09-22-8 split out and deliberately left alone | — |
 | B-2026-09-23-6 | 2026-09-23 | interp | low | THE INTERPRETER RUNS A BY-VALUE `Array` PARAM'S ELEMENT `Drop` BODIES TWICE WHEN THE CALLEE WRAPS IT IN A DISCARDED STRUCT LITERAL -- `fn b_discard(a: Array[R, 2]) -> i64 { B1 { v: a }; println("  in"); return 7 }` prints `d101 d102 in d101 d102` under `--interp` against `in d101 d102` on every compiled surface; the one cell of `asan_array_param_into_struct_literal_field_stays_with_caller` that B-2026-09-22-8's fix did not reach | — |
@@ -381,6 +380,7 @@ registered in the callee's prologue, not by-value struct params in general. | �
 | B-2026-09-25-12 | 2026-09-25 | codegen | high | AN `Option[String]` PARAM RETURNED ON ONE BRANCH OF `if c { s } else { d }` IS WRONG ON EVERY COMPILED SURFACE -- two NAMED `Some(f"..")` arguments at `c = false` abort with `free(): double free` on jit, -O2 seq and -O2 par, generic `pick2[T]` and the non-generic twin alike; with temporary arguments the untaken argument's 29 B string leaks per call; `--interp` is right throughout | — |
 | B-2026-09-25-14 | 2026-09-25 | codegen | medium | A STRUCT RETURNED BY A CALL AND PASSED STRAIGHT TO A GENERIC BARE-`T` PARAM THAT HANDS IT BACK LEAKS ITS HEAP FIELD -- `let r = id2(mk(3))` over `fn id2[T](d: T) -> T { d }` and `fn mk(i: i64) -> P` with `struct P { s: String, n: i64 }` loses the 29 B string at -O0 on every compiled surface; output is right | — |
 | B-2026-09-25-15 | 2026-09-25 | codegen | medium | A FIELD READ IN PLACE ON A GENERIC CALL THAT RETURNS A GENERIC STRUCT LEAKS THE STRUCT'S HEAP FIELD -- `println(wrap(f"..").k)` over `fn wrap[T](x: T) -> W[T] { W { v: x, k: 3 } }` with `struct W[T] { v: T, k: i64 }` loses the `String` at -O0 on every compiled surface; binding the result first, and the non-generic twin, are clean | — |
+| B-2026-09-25-16 | 2026-09-25 | codegen+interp | high | A BY-VALUE `Array` PARAM HANDED BACK INSIDE AN ENUM VARIANT THE CALLEE RETURNS IS FREED BY BOTH SIDES, AND THE INTERPRETER RUNS ITS ELEMENT BODIES TWICE -- the enum spelling of B-2026-09-22-13, whose struct/tuple fix does not reach it. `enum E7 { A(Array[R, 2]), B }`, `fn inner(a: Array[R, 2]) -> E7 { return E7.A(a) }`, `let w = inner(a)` with an `R` that has a user `Drop`: JIT, -O0 and -O2 AOT all abort with `free(): double free detected in tcache 2` (valgrind err=2); `--interp` exits 0 but prints `in d61 d62 d61 d62 held end`. Due output: `in d61 d62 held end` (every surface wrong, differently). | — |
 
 ### Relocated
 
@@ -2972,6 +2972,7 @@ registered in the callee's prologue, not by-value struct params in general. | �
 | B-2026-09-22-10 | codegen+interp | high | A USER-ENUM CONSTRUCTOR BOUND TO A **NAMED LOCAL** BEFORE THE `match` IS STILL FREED BY BOTH SIDES -- B-2026-09-22-6 fixes the MATERIALIZED scrutinee… | dbc0b67c7 |
 | B-2026-09-22-11 | codegen | high | A BY-VALUE `Array` PARAM MOVED INTO A **NAMED SEEDED `Option`/`Result` LOCAL** IS FREED BY BOTH SIDES -- the builtin-envelope twin of B-2026-09-22-10… | 53e9edb60 |
 | B-2026-09-22-12 | other | medium | `bug-lint.sh` CANNOT SEE A FIX SHA THAT IS ALL DIGITS, SO RULES 6 AND 6b ARE SILENTLY BLIND TO ~3.4% OF THE ROWS THAT USE THE `FIXED by <sha>.` CONVE… | 99ad28af7 |
+| B-2026-09-22-13 | codegen+interp | high | A BY-VALUE `Array` PARAM MOVED INTO A STRUCT LITERAL THE CALLEE **RETURNS** IS STILL FREED BY BOTH SIDES, AND BOTH OWNERS ARE NOW IN THE CALLER -- th… | 4fc92766b |
 | B-2026-09-22-14 | codegen+interp | high | A BY-VALUE `Array` PARAM PUSHED INTO A LOCAL `Vec` IS FREED BY BOTH THE `Vec` AND THE CALLER, AT EVERY OPT LEVEL -- the `Vec.push` half of B-2026-09-… | 14465d395 |
 | B-2026-09-22-15 | other | medium | THE ASAN RATCHET LEGS PRESCRIBED A MEMORY-FAULT REMEDY FOR EVERY NEW RED, INCLUDING ONES WHERE ASAN PASSED — every `assert_clean_asan_*` helper asser… | ba4514e40 |
 | B-2026-09-22-16 | codegen | high | TWO ENUMS THAT SHARE A VARIANT NAME AND CARRY THE SAME HEAP-BEARING FIELD TYPES IN DIFFERENT ORDERS READ EACH OTHER'S FIELD OFFSETS AND SEGFAULT -- `… | ddf497b2d |
