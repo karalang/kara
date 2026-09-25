@@ -6441,8 +6441,9 @@ impl<'ctx> super::Codegen<'ctx> {
         super::declarations::find_function_ast(program, callee_name).is_some_and(|f| {
             let returns_param_type = match (f.params.get(arg_index), f.return_type.as_ref()) {
                 (Some(p), Some(rt)) => {
-                    crate::formatter::render_type_expr(&p.ty)
-                        == crate::formatter::render_type_expr(rt)
+                    let pr = crate::formatter::render_type_expr(&p.ty);
+                    pr == crate::formatter::render_type_expr(rt)
+                        || Self::type_owns_field_of_rendered_type(program, rt, &pr)
                 }
                 _ => false,
             };
@@ -6450,6 +6451,46 @@ impl<'ctx> super::Codegen<'ctx> {
                 && (crate::ast::fn_always_returns_param(Some(program), f, arg_index)
                     || crate::ast::fn_always_returns_param_via_call(program, f, arg_index))
         })
+    }
+
+    /// B-2026-09-22-13 — does a value of type `rt` hold a part of the rendered
+    /// type `pr` that its own drop frees whole: a tuple element, or a field of
+    /// a plain (non-generic, non-`shared`) struct, at any depth through those
+    /// two? Those free the
+    /// element heap the caller's array drop would, unlike an `Option`, whose
+    /// result runs the element bodies and frees its box but not the elements'
+    /// heap (the 58 B leak `callee_always_hands_array_arg_back` records).
+    fn type_owns_field_of_rendered_type(
+        program: &crate::Program,
+        rt: &crate::ast::TypeExpr,
+        pr: &str,
+    ) -> bool {
+        fn owns(program: &crate::Program, t: &crate::ast::TypeExpr, pr: &str, depth: u32) -> bool {
+            if depth > 8 {
+                return false;
+            }
+            let part = |e: &crate::ast::TypeExpr| {
+                crate::formatter::render_type_expr(e) == pr || owns(program, e, pr, depth + 1)
+            };
+            match &t.kind {
+                crate::ast::TypeKind::Tuple(elems) => elems.iter().any(part),
+                crate::ast::TypeKind::Path(path) if path.generic_args.is_none() => {
+                    let [name] = path.segments.as_slice() else {
+                        return false;
+                    };
+                    program.items.iter().any(|it| {
+                        matches!(it, crate::ast::Item::StructDef(sd)
+                            if sd.name == *name
+                                && !sd.is_shared
+                                && !sd.is_par
+                                && sd.generic_params.is_none()
+                                && sd.fields.iter().any(|fd| part(&fd.ty)))
+                    })
+                }
+                _ => false,
+            }
+        }
+        owns(program, rt, pr, 0)
     }
 
     pub(super) fn callee_always_hands_arg_back_via_call(

@@ -6105,3 +6105,58 @@ fn main() {
     };
     assert_eq!(out, "semi1\nd1\nd2\nsemi0\nd3\nd4\nk1\ntail1\nd5\nd6\ntail0\nd7\nd8\nk2\narm1\nd9\nd10\narm0\nd11\nd12\nk3\nels1\nd13\nd14\nno\nels0\nd15\nd16\nk4\nnest1\nd17\nd18\nnest0\nd19\nd20\nk5\nout1\nout1\nd23\nd24\nk6\nn1\nd21\nd22\nst1\nd25\nst0\nd26\nk7\nstarm1\nd27\nstarm0\nd28\nk8\nmarr1\nd29\nd30\nmarr0\nd31\nd32\nk9\nmst1\nd33\nmst0\nd34\nk10\nmout1\nmout1\nd36\nk11\nm1\nd35\nend\n", "got:\n{out}");
 }
+
+/// B-2026-09-22-13 — a by-value `Array[R, 2]` param (element runs a user
+/// `Drop`) that the callee hands back INSIDE a returned struct or tuple was
+/// freed by both the result and the caller, which kept its own array drop
+/// (`free(): double free detected in tcache 2` on the JIT and at `-O0`). The
+/// caller now stands down when the declared result owns the param's type
+/// through struct fields and tuple elements, at any depth. Destructuring such
+/// a tuple (`let (n, v) = mk()`, `let (m, _) = mk()`) registered no owner for
+/// the `Array` leaf at all, so its bodies never ran and its heap leaked, even
+/// for a fresh array; both leaves now own it. Cells: a rebound and a tail
+/// struct, a tuple, a nested struct, two params, a discarded result, a
+/// temporary argument, a field moved out of the result, a method, and four
+/// destructure spellings (use, consume, rebind, wildcard).
+#[test]
+fn e2e_array_param_returned_inside_an_aggregate_is_dropped_once() {
+    let Some(out) = run_program(
+        r#"struct R { id: i64, s: String }
+impl Drop for R { fn drop(mut ref self) { println(f"d{self.id}") } }
+fn mkr(i: i64) -> R { return R { id: i, s: f"aaa" } }
+struct B7 { v: Array[R, 2], t: String }
+struct Ou { b: B7, k: i64 }
+struct Two { p: Array[R, 2], q: Array[R, 2] }
+fn bind(a: Array[R, 2]) -> B7 { let b = B7 { v: a, t: f"b" }; println("bind"); return b }
+fn tail(a: Array[R, 2]) -> B7 { println("tail"); B7 { v: a, t: f"t" } }
+fn tup(a: Array[R, 2]) -> (Array[R, 2], i64) { println("tup"); return (a, 3) }
+fn nest(a: Array[R, 2]) -> Ou { println("nest"); Ou { b: B7 { v: a, t: f"n" }, k: 1 } }
+fn two(a: Array[R, 2], b: Array[R, 2]) -> Two { println("two"); Two { p: a, q: b } }
+fn mk() -> (i64, Array[R, 2]) { println("mk"); (5, [mkr(40), mkr(41)]) }
+fn fwd(a: Array[R, 2]) -> (i64, Array[R, 2]) { println("fwd"); (6, a) }
+fn eat(a: Array[R, 2]) { println(f"eat{a[0].id}") }
+struct Hd { k: i64 }
+impl Hd { fn meth(ref self, a: Array[R, 2]) -> B7 { println("meth"); B7 { v: a, t: f"m" } } }
+fn main() {
+    { let a: Array[R, 2] = [mkr(1), mkr(2)]; let w = bind(a); println(f"k1 {w.t}") }
+    { let a: Array[R, 2] = [mkr(3), mkr(4)]; let w = tail(a); println(f"k2 {w.v[1].id}") }
+    { let a: Array[R, 2] = [mkr(5), mkr(6)]; let w = tup(a); println(f"k3 {w.1}") }
+    { let a: Array[R, 2] = [mkr(7), mkr(8)]; let w = nest(a); println(f"k4 {w.b.t}") }
+    { let a: Array[R, 2] = [mkr(9), mkr(10)]; let b: Array[R, 2] = [mkr(11), mkr(12)]; let w = two(a, b); println(f"k5 {w.q[0].id}") }
+    { let a: Array[R, 2] = [mkr(13), mkr(14)]; tail(a); println("k6") }
+    { let w = tail([mkr(15), mkr(16)]); println(f"k7 {w.t}") }
+    { let a: Array[R, 2] = [mkr(17), mkr(18)]; let w = tail(a); let z = w.v; println(f"k8 {z[0].id}") }
+    { let h = Hd { k: 1 }; let a: Array[R, 2] = [mkr(19), mkr(20)]; let w = h.meth(a); println(f"k9 {w.t}") }
+    { let a: Array[R, 2] = [mkr(21), mkr(22)]; let (n, v) = fwd(a); println(f"k10 {n}") }
+    { let (n, v) = mk(); println(f"k11 {n}") }
+    { let (n, v) = mk(); eat(v); println(f"k12 {n}") }
+    { let (_, v) = mk(); let z = v; println("k13") }
+    { let (m, _) = mk(); println(f"k14 {m}") }
+    println("end")
+}
+"#,
+    ) else {
+        return;
+    };
+    assert_eq!(out, "bind\nk1 b\nd1\nd2\ntail\nk2 4\nd3\nd4\ntup\nk3 3\nd5\nd6\nnest\nk4 n\nd7\nd8\ntwo\nk5 11\nd11\nd12\nd9\nd10\ntail\nd13\nd14\nk6\ntail\nk7 t\nd15\nd16\ntail\nk8 17\nd17\nd18\nmeth\nk9 m\nd19\nd20\nfwd\nd21\nd22\nk10 6\nmk\nd40\nd41\nk11 5\nmk\neat40\nd40\nd41\nk12 5\nmk\nd40\nd41\nk13\nmk\nd40\nd41\nk14 5\nend\n", "got:\n{out}");
+}

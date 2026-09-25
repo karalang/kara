@@ -8015,3 +8015,64 @@ fn main() {
         "asan_param_pushed_into_a_container_on_some_paths_is_freed_once",
     );
 }
+
+/// B-2026-09-22-13 — a by-value `Array[R, 2]` param (element runs a user
+/// `Drop`) that the callee hands back INSIDE a returned struct or tuple was
+/// freed by both the result and the caller, which kept its own array drop
+/// (`free(): double free detected in tcache 2` on the JIT and at `-O0`). The
+/// caller now stands down when the declared result owns the param's type
+/// through struct fields and tuple elements, at any depth. Destructuring such
+/// a tuple (`let (n, v) = mk()`, `let (m, _) = mk()`) registered no owner for
+/// the `Array` leaf at all, so its bodies never ran and its heap leaked, even
+/// for a fresh array; both leaves now own it. Cells: a rebound and a tail
+/// struct, a tuple, a nested struct, two params, a discarded result, a
+/// temporary argument, a field moved out of the result, a method, and four
+/// destructure spellings (use, consume, rebind, wildcard).
+#[test]
+fn asan_array_param_returned_inside_an_aggregate_is_freed_once() {
+    assert_clean_asan_run(
+        r#"struct R { id: i64, s: String }
+impl Drop for R { fn drop(mut ref self) { println(f"d{self.id}") } }
+fn mkr(i: i64) -> R { return R { id: i, s: f"aaa" } }
+struct B7 { v: Array[R, 2], t: String }
+struct Ou { b: B7, k: i64 }
+struct Two { p: Array[R, 2], q: Array[R, 2] }
+fn bind(a: Array[R, 2]) -> B7 { let b = B7 { v: a, t: f"b" }; println("bind"); return b }
+fn tail(a: Array[R, 2]) -> B7 { println("tail"); B7 { v: a, t: f"t" } }
+fn tup(a: Array[R, 2]) -> (Array[R, 2], i64) { println("tup"); return (a, 3) }
+fn nest(a: Array[R, 2]) -> Ou { println("nest"); Ou { b: B7 { v: a, t: f"n" }, k: 1 } }
+fn two(a: Array[R, 2], b: Array[R, 2]) -> Two { println("two"); Two { p: a, q: b } }
+fn mk() -> (i64, Array[R, 2]) { println("mk"); (5, [mkr(40), mkr(41)]) }
+fn fwd(a: Array[R, 2]) -> (i64, Array[R, 2]) { println("fwd"); (6, a) }
+fn eat(a: Array[R, 2]) { println(f"eat{a[0].id}") }
+struct Hd { k: i64 }
+impl Hd { fn meth(ref self, a: Array[R, 2]) -> B7 { println("meth"); B7 { v: a, t: f"m" } } }
+fn main() {
+    { let a: Array[R, 2] = [mkr(1), mkr(2)]; let w = bind(a); println(f"k1 {w.t}") }
+    { let a: Array[R, 2] = [mkr(3), mkr(4)]; let w = tail(a); println(f"k2 {w.v[1].id}") }
+    { let a: Array[R, 2] = [mkr(5), mkr(6)]; let w = tup(a); println(f"k3 {w.1}") }
+    { let a: Array[R, 2] = [mkr(7), mkr(8)]; let w = nest(a); println(f"k4 {w.b.t}") }
+    { let a: Array[R, 2] = [mkr(9), mkr(10)]; let b: Array[R, 2] = [mkr(11), mkr(12)]; let w = two(a, b); println(f"k5 {w.q[0].id}") }
+    { let a: Array[R, 2] = [mkr(13), mkr(14)]; tail(a); println("k6") }
+    { let w = tail([mkr(15), mkr(16)]); println(f"k7 {w.t}") }
+    { let a: Array[R, 2] = [mkr(17), mkr(18)]; let w = tail(a); let z = w.v; println(f"k8 {z[0].id}") }
+    { let h = Hd { k: 1 }; let a: Array[R, 2] = [mkr(19), mkr(20)]; let w = h.meth(a); println(f"k9 {w.t}") }
+    { let a: Array[R, 2] = [mkr(21), mkr(22)]; let (n, v) = fwd(a); println(f"k10 {n}") }
+    { let (n, v) = mk(); println(f"k11 {n}") }
+    { let (n, v) = mk(); eat(v); println(f"k12 {n}") }
+    { let (_, v) = mk(); let z = v; println("k13") }
+    { let (m, _) = mk(); println(f"k14 {m}") }
+    println("end")
+}
+"#,
+        &[
+            "bind", "k1 b", "d1", "d2", "tail", "k2 4", "d3", "d4", "tup", "k3 3", "d5", "d6",
+            "nest", "k4 n", "d7", "d8", "two", "k5 11", "d11", "d12", "d9", "d10", "tail", "d13",
+            "d14", "k6", "tail", "k7 t", "d15", "d16", "tail", "k8 17", "d17", "d18", "meth",
+            "k9 m", "d19", "d20", "fwd", "d21", "d22", "k10 6", "mk", "d40", "d41", "k11 5", "mk",
+            "eat40", "d40", "d41", "k12 5", "mk", "d40", "d41", "k13", "mk", "d40", "d41", "k14 5",
+            "end",
+        ],
+        "asan_array_param_returned_inside_an_aggregate_is_freed_once",
+    );
+}

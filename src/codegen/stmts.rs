@@ -18648,6 +18648,50 @@ impl<'ctx> super::Codegen<'ctx> {
                             }
                         }
                     }
+                    // B-2026-09-22-13 — an `Array[T, N]` leaf off a fresh
+                    // tuple (`let (n, v) = mk()`). No side-table dispatch in
+                    // `track_destructure_leaf_cleanup` names a fixed array, so
+                    // the leaf registered nothing: its elements' bodies never
+                    // ran and their heap leaked. Registered through the
+                    // `let`-local array registrar, the same one an arm-bound
+                    // array payload uses, so a later hand-off of the leaf finds
+                    // it in `owned_array_params` and retracts it.
+                    if let Some((arr_elem_te, n)) = elem_tes
+                        .and_then(|tes| tes.get(idx))
+                        .and_then(|te| self.array_elem_and_len(te))
+                    {
+                        if let Some(slot) = self.variables.get(name.as_str()).copied() {
+                            if slot.ty.is_array_type() && n > 0 {
+                                let elem_ty = slot.ty.into_array_type().get_element_type();
+                                self.var_types
+                                    .array_elem_type_exprs
+                                    .insert(name.clone(), arr_elem_te.clone());
+                                let mem = self.make_array_param_callee_owned(
+                                    name,
+                                    &arr_elem_te,
+                                    n,
+                                    elem_ty,
+                                    slot.ptr,
+                                );
+                                if mem {
+                                    if let Some(bodies) = self.emit_array_elem_user_drop_bodies_fn(
+                                        elem_ty,
+                                        &arr_elem_te,
+                                        n,
+                                    ) {
+                                        self.track_user_drop_var_with_fn(
+                                            "",
+                                            name,
+                                            slot.ptr,
+                                            bodies,
+                                            UserDropKind::ContainerElemBodies,
+                                        );
+                                    }
+                                    continue;
+                                }
+                            }
+                        }
+                    }
                     // B-2026-09-04-9 — an `Option[P]` leaf, the FRESH-source
                     // twin of the arm B-2026-09-03-15 added to
                     // `place_source_tuple_leaf_cleanups`. The call below is
@@ -18794,6 +18838,35 @@ impl<'ctx> super::Codegen<'ctx> {
                         .builder
                         .build_extract_value(sv, idx as u32, "tuple.discard")
                         .unwrap();
+                    // B-2026-09-22-13 — a discarded `Array[T, N]` element of a
+                    // fresh tuple, the wildcard twin of the binding leaf's
+                    // array arm: dead at once, so its element bodies run and
+                    // its element heap is freed here, bodies first. Nothing
+                    // else owns it, and without this both were lost.
+                    if let Some((arr_elem_te, n)) = elem_tes
+                        .and_then(|tes| tes.get(idx))
+                        .and_then(|te| self.array_elem_and_len(te))
+                    {
+                        if n > 0 && elem.get_type().is_array_type() {
+                            let elem_ty = elem.get_type().into_array_type().get_element_type();
+                            let bodies =
+                                self.emit_array_elem_user_drop_bodies_fn(elem_ty, &arr_elem_te, n);
+                            let mem = self.synthesize_array_drop_fn_te(elem_ty, &arr_elem_te, n);
+                            if bodies.is_some() || mem.is_some() {
+                                let fn_val = self.current_fn.unwrap();
+                                let synth =
+                                    format!("__tuple_discard_{}", self.indexed_elem_counter);
+                                self.indexed_elem_counter += 1;
+                                let alloca =
+                                    self.create_entry_alloca(fn_val, &synth, elem.get_type());
+                                self.builder.build_store(alloca, elem).unwrap();
+                                for f in [bodies, mem].into_iter().flatten() {
+                                    self.builder.build_call(f, &[alloca.into()], "").unwrap();
+                                }
+                                continue;
+                            }
+                        }
+                    }
                     let vec_shaped_took_memory = if elem.get_type() == self.vec_struct_type().into()
                     {
                         let fn_val = self.current_fn.unwrap();
