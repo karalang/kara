@@ -609,6 +609,23 @@ pub struct Interpreter<'a> {
     /// re-evaluating the producer at the consuming statement would run `mkw`
     /// again.
     pub(crate) freshtemp_field_obj: Option<(Value, String, (usize, usize))>,
+    /// B-2026-09-17-36 — one level per statement being evaluated: the FRESH
+    /// TEMPS read through a projection inside it, whose `Drop` bodies run when
+    /// that statement ends.
+    ///
+    /// `println(f"v{mkw(7).b}")` built a `W` whose fields' bodies were owed and
+    /// ran nowhere, on every backend, while `let t = mkw(7); println(f"v{t.b}")`
+    /// ran them at the end of the statement that last used `t`. A temp's last
+    /// use is the projection, so its bodies are owed at the end of that same
+    /// statement. `simple` says whether the statement qualifies
+    /// ([`crate::ast::stmt_ends_freshtemp_reads`]); a function body starts from
+    /// an empty stack, so a callee's reads never land on its caller's
+    /// statement. Codegen's twin is `freshtemp_read_levels` in `codegen.rs`.
+    pub(crate) freshtemp_read_levels: Vec<FreshTempReadLevel>,
+    /// B-2026-09-17-36 — the span of a fresh-temp PRODUCER whose projection is
+    /// being evaluated as the object of another projection, i.e. read through
+    /// rather than consumed. Codegen's twin is `freshtemp_read_through`.
+    pub(crate) freshtemp_read_through: Option<(usize, usize)>,
     /// B-2026-08-29-24 — the enum-PAYLOAD peer of the two sets above: `(enum
     /// binding, declared payload index)` slots whose body belongs to somebody
     /// else, today because a variant constructor moved a param VIEW into that
@@ -1048,6 +1065,16 @@ pub(crate) struct ConsoleSeg {
     pub(crate) text: String,
 }
 
+/// B-2026-09-17-36 — one statement's worth of
+/// [`Interpreter::freshtemp_read_levels`]: whether the statement qualifies, and
+/// the temps read through a projection inside it, keyed by the projected
+/// object's span so a consuming statement can take one back.
+#[derive(Debug, Default)]
+pub(crate) struct FreshTempReadLevel {
+    pub(crate) simple: bool,
+    pub(crate) temps: Vec<(Value, (usize, usize))>,
+}
+
 /// JSON-string escape with surrounding quotes. Used by the `dbg()`
 /// structured output mode. Kept private to interpreter.rs; the cli /
 /// doc modules each carry their own copies for the same reason
@@ -1264,6 +1291,8 @@ impl<'a> Interpreter<'a> {
             moved_out_tuple_elem_payload_bodies: HashSet::new(),
             pending_payload_masked_fields: None,
             freshtemp_field_obj: None,
+            freshtemp_read_levels: Vec::new(),
+            freshtemp_read_through: None,
             moved_out_enum_payload_slots: HashSet::new(),
             moved_out_enum_payload_body_slots: HashSet::new(),
             optres_payload_bodies_tes: HashMap::new(),
@@ -2452,6 +2481,18 @@ impl<'a> Interpreter<'a> {
     /// support there.
     #[allow(clippy::result_large_err)]
     pub(crate) fn eval_body_growing(&mut self, body: &Block) -> Result<Value, ControlFlow> {
+        // B-2026-09-17-36 — a body starts from no enclosing statement, so a
+        // projection read in its tail expression cannot land on the CALLER's
+        // statement; codegen compiles the body as its own function and sees
+        // none either.
+        let saved_levels = std::mem::take(&mut self.freshtemp_read_levels);
+        let result = self.eval_body_growing_inner(body);
+        self.freshtemp_read_levels = saved_levels;
+        result
+    }
+
+    #[allow(clippy::result_large_err)]
+    fn eval_body_growing_inner(&mut self, body: &Block) -> Result<Value, ControlFlow> {
         #[cfg(not(target_arch = "wasm32"))]
         {
             // Red zone must exceed ONE Kāra call's worst-case Rust-stack

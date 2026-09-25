@@ -4205,7 +4205,14 @@ impl<'ctx> super::Codegen<'ctx> {
         let saved = self.tracing.diag_span;
         self.tracing.diag_span = Some(stmt.span);
         self.forget_dead_binding_field_flags(stmt);
+        self.freshtemp_read_levels
+            .push(super::state::FreshTempReadLevel {
+                fn_val: self.current_fn,
+                simple: crate::ast::stmt_ends_freshtemp_reads(stmt),
+                temps: Vec::new(),
+            });
         let out = self.compile_stmt_tracking_assign_target(stmt);
+        self.end_freshtemp_reads();
         if out.is_ok() {
             // B-2026-09-19-51 — drain the enum-field move-out neutralizers this
             // statement queued. Here rather than at the call-argument choke
@@ -4217,6 +4224,30 @@ impl<'ctx> super::Codegen<'ctx> {
             self.tracing.diag_span = saved;
         }
         out
+    }
+
+    /// B-2026-09-17-36 — close the statement level `compile_stmt` opened,
+    /// running each fresh temp read through a projection inside it, the
+    /// last-read first. Behind the temp's flag, because the read may sit on a
+    /// path this statement did not take (`let x = if c { mkw(7).b } else { 0 };`)
+    /// and an early exit out of the statement may already have run it.
+    fn end_freshtemp_reads(&mut self) {
+        let Some(level) = self.freshtemp_read_levels.pop() else {
+            return;
+        };
+        let Some(fn_val) = self.current_fn else {
+            return;
+        };
+        let live = self
+            .builder
+            .get_insert_block()
+            .is_some_and(|b| b.get_terminator().is_none());
+        if !live || level.fn_val != Some(fn_val) {
+            return;
+        }
+        for (slot, flag, bodies_fn) in level.temps.into_iter().rev() {
+            self.emit_flagged_freshtemp_bodies(slot, flag, bodies_fn, fn_val);
+        }
     }
 
     /// B-2026-09-02-6 — remember where an in-loop `let <name> = ...` finished

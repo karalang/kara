@@ -1761,6 +1761,68 @@ pub fn collect_mut_method_receiver_roots_expr(
     }
 }
 
+/// B-2026-09-17-36 — whether `stmt` is a statement whose END is where a fresh
+/// temp read through a projection inside it dies, so that both backends run the
+/// temp's `Drop` bodies there (`println(mkw(7).b);`, `let x = mk().s.len();`).
+///
+/// Straight-line statements only. A loop or branch statement evaluates its
+/// condition or scrutinee any number of times before it ends, and a temp read
+/// there would reach its end once per evaluation on one backend and once in
+/// total on the other; declining those keeps both at today's behaviour for
+/// them. Statements nested inside a branch or loop body are statements of
+/// their own and answer for themselves.
+///
+/// One predicate for both backends, for the reason [`is_error_exit_value`]
+/// gives: two copies of this rule disagreeing would be a run-vs-build
+/// divergence manufactured out of an agreed loss.
+pub fn stmt_ends_freshtemp_reads(stmt: &Stmt) -> bool {
+    match &stmt.kind {
+        StmtKind::Let { .. } | StmtKind::Assign { .. } | StmtKind::CompoundAssign { .. } => true,
+        StmtKind::Expr(e) => matches!(
+            &e.kind,
+            ExprKind::Call { .. }
+                | ExprKind::MethodCall { .. }
+                | ExprKind::Return(_)
+                | ExprKind::Binary { .. }
+                | ExprKind::Unary { .. }
+        ),
+        _ => false,
+    }
+}
+
+/// B-2026-09-17-36 — whether `object`, the receiver of a field projection,
+/// produces a value nothing else owns, so its `Drop` bodies are owed when the
+/// enclosing statement ends. A free-function or method CALL, minus the accessor
+/// shapes whose result aliases a container's element: `get` / `first` / `last`
+/// themselves, and an `unwrap`-family call over one of them (a `Map.get(k)`
+/// result is value-typed but still the map's stored value).
+///
+/// Shared by both backends, for the reason [`stmt_ends_freshtemp_reads`] is.
+pub fn projection_reads_fresh_temp(object: &Expr) -> bool {
+    fn is_accessor(m: &str) -> bool {
+        matches!(m, "get" | "first" | "last")
+    }
+    match &object.kind {
+        ExprKind::Call { .. } => true,
+        ExprKind::MethodCall {
+            object: recv,
+            method,
+            ..
+        } => {
+            if is_accessor(method) {
+                return false;
+            }
+            let unwraps = matches!(
+                method.as_str(),
+                "unwrap" | "expect" | "unwrap_or" | "unwrap_or_else" | "unwrap_or_default"
+            );
+            !(unwraps
+                && matches!(&recv.kind, ExprKind::MethodCall { method: m, .. } if is_accessor(m)))
+        }
+        _ => false,
+    }
+}
+
 /// Whether `expr` is the SYNTACTIC shape of an error-exit value: `Err(...)`,
 /// `Result.Err(...)`, `None`, or `Option.None`. These are the four shapes a
 /// `Result`- or `Option`-returning function can produce at a `return` site or

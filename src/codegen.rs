@@ -2313,6 +2313,15 @@ pub(super) struct Codegen<'ctx> {
     /// so a stale entry can never disarm an unrelated statement's temp).
     pub(crate) freshtemp_field_access_slot:
         Option<(PointerValue<'ctx>, String, String, (usize, usize))>,
+    /// B-2026-09-17-36 — one level per statement being compiled, holding the
+    /// fresh temps read through a projection inside it; their `Drop` bodies run
+    /// when that statement ends. The interpreter's twin is
+    /// `Interpreter::freshtemp_read_levels`, and its doc has the measurement.
+    pub(crate) freshtemp_read_levels: Vec<state::FreshTempReadLevel<'ctx>>,
+    /// B-2026-09-17-36 — the span of a fresh-temp PRODUCER whose projection is
+    /// being compiled as the object of another projection (read through, not
+    /// consumed). Set and taken by `compile_field_access`.
+    pub(crate) freshtemp_read_through: Option<(usize, usize)>,
     /// B-2026-09-12-28 — stack-boxing for an oversized enum payload whose
     /// consumer is the construct that immediately follows.
     ///
@@ -6834,6 +6843,8 @@ impl<'ctx> Codegen<'ctx> {
             arm_tail_owner_ctx: None,
             arm_pending_tail_owner: None,
             freshtemp_field_access_slot: None,
+            freshtemp_read_levels: Vec::new(),
+            freshtemp_read_through: None,
             enum_box_stack_args: None,
             enum_box_use_alloca: false,
             enum_box_was_stack: false,

@@ -255,7 +255,13 @@ impl<'a> super::Interpreter<'a> {
             // answer into a fresh divergence, the trade this file's match-arm
             // comment already warns against.
             self.clear_stale_param_view_marks(stmt);
+            self.freshtemp_read_levels
+                .push(crate::interpreter::FreshTempReadLevel {
+                    simple: crate::ast::stmt_ends_freshtemp_reads(stmt),
+                    temps: Vec::new(),
+                });
             let stmt_result = self.eval_stmt_cf(stmt);
+            self.end_freshtemp_reads();
             let cf_opt = match stmt_result {
                 Ok(_) => self.pending_cf.take(),
                 Err(cf) => Some(cf),
@@ -3299,6 +3305,12 @@ impl<'a> super::Interpreter<'a> {
             return;
         }
         self.freshtemp_field_obj = None;
+        // B-2026-09-17-36 — the statement-end walk must not run this temp a
+        // second time: the consumer owns the projected field and the masked
+        // walk below owns the rest.
+        for level in self.freshtemp_read_levels.iter_mut() {
+            level.temps.retain(|(_, k)| *k != span_key);
+        }
         // REMOVE the projected field from the value this walk sees, rather than
         // masking it through `pending_payload_masked_fields`: that channel masks
         // a field's PAYLOAD bodies (the `payload_here` cut), not the field
@@ -3311,6 +3323,84 @@ impl<'a> super::Interpreter<'a> {
         let mut tempv = tempv;
         Self::remove_field_at_path(&mut tempv, std::slice::from_ref(field));
         self.drop_user_drop_fields_of_value(&tempv);
+    }
+
+    /// B-2026-09-17-36 — record a FRESH TEMP read through a projection, so the
+    /// statement it sits in runs its `Drop` bodies when it ends. See
+    /// [`Interpreter::freshtemp_read_levels`].
+    ///
+    /// Declines everything codegen's twin (`track_freshtemp_read_bodies`)
+    /// declines, on the same terms: a producer the shared
+    /// [`crate::ast::projection_reads_fresh_temp`] rejects, a statement
+    /// [`crate::ast::stmt_ends_freshtemp_reads`] rejects, a value that is a
+    /// BORROW (`ref T`, which is how a `Vec.get(i).unwrap()` result is typed), a
+    /// generic struct (codegen has no instantiation for a method-call temp and
+    /// would walk the erased layout), and a struct with no body to run.
+    pub(super) fn track_freshtemp_read(&mut self, object: &Expr, field: &str, obj: &Value) {
+        let Value::Struct { name, .. } = obj else {
+            return;
+        };
+        // A projected field with a body of its own may be MOVED by whatever
+        // consumes the projection (`eat(mkw(7).r)`, `v.push(mkw(7).r)`), and
+        // then the temp no longer owes it. Only a projection that is itself
+        // read through (`mkw(7).r.id`) is known not to move it; any other
+        // position is left as it was. A field with no body cannot change what
+        // the temp owes, wherever it goes.
+        if self.freshtemp_read_through != Some((object.span.offset, object.span.length)) {
+            let fty = self.program.items.iter().find_map(|item| match item {
+                Item::StructDef(s) if s.name == *name => s
+                    .fields
+                    .iter()
+                    .find(|f| f.name == field)
+                    .map(|f| f.ty.clone()),
+                _ => None,
+            });
+            match fty {
+                Some(t) if !self.field_te_runs_user_drop(&t, &mut Vec::new()) => {}
+                _ => return,
+            }
+        }
+        if !self.freshtemp_read_levels.last().is_some_and(|l| l.simple)
+            || !crate::ast::projection_reads_fresh_temp(object)
+        {
+            return;
+        }
+        // The object's STATIC type must be the struct itself: a `ref T` (how a
+        // `Vec.get(i).unwrap()` result is typed) is somebody else's value.
+        let key = crate::resolver::SpanKey(object.span.offset, object.span.length);
+        if !matches!(
+            self.typecheck_result.expr_types.get(&key),
+            Some(crate::typechecker::Type::Named { name: n, .. }) if n == name
+        ) {
+            return;
+        }
+        if self
+            .typecheck_result
+            .struct_info
+            .get(name.as_str())
+            .is_none_or(|i| !i.generic_params.is_empty() || i.is_shared)
+        {
+            return;
+        }
+        if !self.program.drop_method_keys.contains_key(name) && !self.value_runs_user_drop(obj) {
+            return;
+        }
+        let span = (object.span.offset, object.span.length);
+        if let Some(level) = self.freshtemp_read_levels.last_mut() {
+            level.temps.push((obj.clone(), span));
+        }
+    }
+
+    /// B-2026-09-17-36 — close the statement level
+    /// [`Self::track_freshtemp_read`] recorded into, running each temp's
+    /// bodies, the last-read first.
+    fn end_freshtemp_reads(&mut self) {
+        let Some(level) = self.freshtemp_read_levels.pop() else {
+            return;
+        };
+        for (v, _) in level.temps.into_iter().rev() {
+            self.run_discarded_value_user_drops(v);
+        }
     }
 
     /// The CONSUMING positions of a `let` initializer, for

@@ -9381,6 +9381,49 @@ impl<'ctx> super::Codegen<'ctx> {
         Some(wrapper)
     }
 
+    /// B-2026-09-17-36 — `karac_dropbo_<T>`: an own-`Drop` struct's BODIES and
+    /// nothing else, i.e. the user body and then each Drop-bearing field's body,
+    /// with the heap-field cleanup `karac_drop_<T>` ends in left out.
+    ///
+    /// For a fresh temp read through a projection, whose memory already has an
+    /// owner (the `StructDrop` `track_freshtemp_field_access_object` registers)
+    /// and whose bodies had none. Using the full wrapper there would free the
+    /// fields twice. Non-generic only, which is all that caller admits.
+    pub(super) fn emit_user_drop_bodies_only_fn(
+        &mut self,
+        type_name: &str,
+    ) -> Option<FunctionValue<'ctx>> {
+        let fn_name = format!("karac_dropbo_{type_name}");
+        if let Some(f) = self.module.get_function(&fn_name) {
+            return Some(f);
+        }
+        let empty = std::collections::HashMap::new();
+        let user_drop_fn = self.user_drop_body_fn_mono(type_name, &empty)?;
+        let bodies_fn = self.emit_user_drop_field_bodies_fn(type_name, &empty);
+        let ptr_ty = self.context.ptr_type(AddressSpace::default());
+        let saved_bb = self.builder.get_insert_block();
+        let wrapper_ty = self.context.void_type().fn_type(&[ptr_ty.into()], false);
+        let wrapper = self
+            .module
+            .add_function(&fn_name, wrapper_ty, Some(Linkage::Internal));
+        let entry_bb = self.context.append_basic_block(wrapper, "entry");
+        self.builder.position_at_end(entry_bb);
+        let self_ptr = wrapper.get_nth_param(0).unwrap().into_pointer_value();
+        self.builder
+            .build_call(user_drop_fn, &[self_ptr.into()], "")
+            .unwrap();
+        if let Some(bodies_fn) = bodies_fn {
+            self.builder
+                .build_call(bodies_fn, &[self_ptr.into()], "")
+                .unwrap();
+        }
+        self.builder.build_return(None).unwrap();
+        if let Some(bb) = saved_bb {
+            self.builder.position_at_end(bb);
+        }
+        Some(wrapper)
+    }
+
     /// B-2026-08-28-21 — the PARTIAL-mask sibling of
     /// [`Self::emit_user_drop_wrapper_without_field_bodies`]: an own-`Drop`
     /// parent whose caller-side temp must skip the bodies of the fields the

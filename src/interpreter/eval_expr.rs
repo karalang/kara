@@ -662,7 +662,15 @@ impl<'a> super::Interpreter<'a> {
                         return Value::Int((code as i64).into());
                     }
                 }
+                // B-2026-09-17-36 — a projection that is itself the object of
+                // this one (`mkw(7).r` in `mkw(7).r.id`) is READ THROUGH, never
+                // moved; say so to the inner projection's fresh-temp tracking.
+                let saved_read_through = self.freshtemp_read_through.take();
+                if let ExprKind::FieldAccess { object: inner, .. } = &object.kind {
+                    self.freshtemp_read_through = Some((inner.span.offset, inner.span.length));
+                }
                 let obj = self.eval_expr_inner(object);
+                self.freshtemp_read_through = saved_read_through;
                 // B-2026-09-14-16 — stage a FRESH TEMP whose field is being
                 // projected out, so the statement that CONSUMES the projected
                 // field can run the temp's remaining fields' bodies. The value
@@ -681,6 +689,7 @@ impl<'a> super::Interpreter<'a> {
                         (object.span.offset, object.span.length),
                     ));
                 }
+                self.track_freshtemp_read(object, field, &obj);
                 self.read_field(obj, field, &expr.span)
             }
 

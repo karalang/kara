@@ -666,6 +666,16 @@ pub(crate) enum UserDropKind {
     StructFieldBodies,
 }
 
+/// B-2026-09-17-36 — one statement's worth of `Codegen::freshtemp_read_levels`:
+/// the function it was compiled in, whether the statement qualifies
+/// ([`crate::ast::stmt_ends_freshtemp_reads`]), and each fresh temp read through
+/// a projection inside it as `(slot, armed flag, bodies fn)`.
+pub(crate) struct FreshTempReadLevel<'ctx> {
+    pub(crate) fn_val: Option<FunctionValue<'ctx>>,
+    pub(crate) simple: bool,
+    pub(crate) temps: Vec<(PointerValue<'ctx>, PointerValue<'ctx>, FunctionValue<'ctx>)>,
+}
+
 // B-2026-09-02-10 — `Clone` so the three callers that hold a borrow of
 // `scope_cleanup_actions` can hand an OWNED action to `emit_cleanup_action`,
 // which now needs `&mut self`: a `UserDrop` field-bodies walk over a base with
@@ -1429,6 +1439,18 @@ pub(crate) enum CleanupAction<'ctx> {
         /// Pointer to the mutex's lock-flag word (`{ i64 lockflag, T value }`
         /// field 0).
         flag_ptr: PointerValue<'ctx>,
+    },
+    /// B-2026-09-17-36 — run the `Drop` bodies of a FRESH TEMP read through a
+    /// projection (`println(mkw(7).b)`), unless the statement that read it has
+    /// already run them. `flag` is armed where the temp is stored and cleared by
+    /// whichever runs the bodies first: the end of that statement
+    /// (`end_freshtemp_reads`), a consumer taking the projected field, or this
+    /// action on an early exit out of the statement. Pushed right after the
+    /// temp's memory drop, so it drains BEFORE it.
+    FreshTempReadBodies {
+        slot: PointerValue<'ctx>,
+        flag: PointerValue<'ctx>,
+        bodies_fn: FunctionValue<'ctx>,
     },
     /// Free the inline (non-boxed, non-RC) heap payload of an `Option[T]`
     /// binding/temp at scope exit, where `T` is itself a heap-owning

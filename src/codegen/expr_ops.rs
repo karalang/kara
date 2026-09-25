@@ -753,6 +753,27 @@ impl<'ctx> super::Codegen<'ctx> {
         object: &Expr,
         field: &str,
     ) -> Result<BasicValueEnum<'ctx>, String> {
+        // B-2026-09-17-36 — whether THIS projection is read through by the one
+        // that contains it (`mkw(7).r` inside `mkw(7).r.id`), and the same
+        // question handed down to a projection that is this one's object. See
+        // `track_freshtemp_read_bodies`; the interpreter's twin is
+        // `freshtemp_read_through` in its `FieldAccess` arm.
+        let parent = self.freshtemp_read_through.take();
+        let read_through = parent == Some((object.span.offset, object.span.length));
+        if let ExprKind::FieldAccess { object: inner, .. } = &object.kind {
+            self.freshtemp_read_through = Some((inner.span.offset, inner.span.length));
+        }
+        let out = self.compile_field_access_inner(object, field, read_through);
+        self.freshtemp_read_through = None;
+        out
+    }
+
+    fn compile_field_access_inner(
+        &mut self,
+        object: &Expr,
+        field: &str,
+        read_through: bool,
+    ) -> Result<BasicValueEnum<'ctx>, String> {
         // `h.peek().a` where `peek(ref self) -> ref Pair` and `Pair` is a user
         // struct. B-2026-09-15-12 — the twin of the `Array` inner handled at
         // the top of `compile_index`, and the same routing for the same
@@ -1266,7 +1287,7 @@ impl<'ctx> super::Codegen<'ctx> {
                 // MOVE consumers (let / assign / return / fn tail) zero the
                 // accessed field's heap in the slot via the staged
                 // side-channel so their binding becomes its sole owner.
-                self.track_freshtemp_field_access_object(object, field, sv);
+                self.track_freshtemp_field_access_object(object, field, sv, read_through);
                 let extracted = self.builder.build_extract_value(sv, idx, field).unwrap();
                 // Borrowed (`ref`) field: the extract yields the stored borrow
                 // POINTER. In this generic value-read position (`println(p.f)`,
@@ -1641,6 +1662,7 @@ impl<'ctx> super::Codegen<'ctx> {
         object: &Expr,
         field: &str,
         sv: inkwell::values::StructValue<'ctx>,
+        read_through: bool,
     ) {
         if !self.expr_yields_fresh_owned_temp(object)
             && !self.value_block_hands_out_its_tail(object)
@@ -1672,6 +1694,10 @@ impl<'ctx> super::Codegen<'ctx> {
         // which registers the per-monomorph drop, was clean.
         let inst = self.freshtemp_call_struct_inst(object);
         self.track_struct_var_inst(&name, slot, inst);
+        // B-2026-09-17-36 — and its `Drop` bodies, at the end of the statement
+        // that read it. Registered AFTER the memory drop, so on an early exit
+        // the frame runs them first.
+        self.track_freshtemp_read_bodies(object, &name, field, slot, read_through);
         // B-2026-08-28-27 — when the receiver is a projection out of a FRESH
         // TUPLE TEMP (`structpair(1).0.name`), that temp now carries a drop
         // over the whole tuple. Registering the projected element here makes
@@ -1686,6 +1712,161 @@ impl<'ctx> super::Codegen<'ctx> {
             field.to_string(),
             (object.span.offset, object.span.length),
         ));
+    }
+
+    /// B-2026-09-17-36 — a FRESH TEMP read through a projection runs its `Drop`
+    /// bodies when the statement that read it ends.
+    ///
+    /// `println(f"v{mkw(7).b}")` over `struct W { r: D, s: D, b: i64 }` with
+    /// `impl Drop for D` built a `W`, registered its MEMORY drop above and ran
+    /// neither `D` body, on every backend; `o.unwrap().s` lost `R`'s own body
+    /// the same way (B-2026-09-25-26). The named spelling (`let t = mkw(7);
+    /// println(f"v{t.b}")`) runs them at the end of the statement that last used
+    /// `t`, and a temp's last use is the projection, so they are owed at the end
+    /// of this statement: `end_freshtemp_reads` runs them there.
+    ///
+    /// Behind a runtime flag rather than unconditionally, for three reasons: the
+    /// read may be on a branch the statement did not take; a consumer that takes
+    /// the projected field runs a masked walk of its own
+    /// (`consume_freshtemp_field_move`) and clears it; and an early exit out of
+    /// the statement (`?`, `return`) reaches the frame action pushed here, not
+    /// the statement end, and that action clears it too.
+    ///
+    /// Declines exactly what the interpreter's `track_freshtemp_read` declines:
+    /// a projected field with a `Drop` body of its own unless the projection is
+    /// read through, a producer [`crate::ast::projection_reads_fresh_temp`] rejects, a
+    /// statement [`crate::ast::stmt_ends_freshtemp_reads`] rejects, a GENERIC
+    /// struct (a method-call temp has no instantiation here and the erased walk
+    /// would see no `Drop` field), and a struct with no body to run.
+    fn track_freshtemp_read_bodies(
+        &mut self,
+        object: &Expr,
+        name: &str,
+        field: &str,
+        slot: PointerValue<'ctx>,
+        read_through: bool,
+    ) {
+        let Some(fn_val) = self.current_fn else {
+            return;
+        };
+        // A projected field with a body of its own may be MOVED by whatever
+        // consumes the projection (`eat(mkw(7).r)`), and then the temp no
+        // longer owes it; only a projection that is itself read through
+        // (`mkw(7).r.id`) is known not to move it. A field with no body cannot
+        // change what the temp owes, wherever it goes.
+        if !read_through {
+            let fte = self
+                .type_decls
+                .struct_field_names
+                .get(name)
+                .and_then(|fs| fs.iter().position(|f| f == field))
+                .and_then(|i| {
+                    self.type_decls
+                        .struct_field_type_exprs
+                        .get(name)
+                        .and_then(|tes| tes.get(i))
+                        .cloned()
+                });
+            match fte {
+                Some(te) if !self.elem_te_runs_user_drop(&te) => {}
+                _ => return,
+            }
+        }
+        if !self
+            .freshtemp_read_levels
+            .last()
+            .is_some_and(|l| l.simple && l.fn_val == Some(fn_val))
+            || !crate::ast::projection_reads_fresh_temp(object)
+            || self
+                .type_decls
+                .struct_generic_params
+                .get(name)
+                .is_some_and(|p| !p.is_empty())
+        {
+            return;
+        }
+        let own_drop = self
+            .program_snapshot
+            .as_deref()
+            .is_some_and(|p| p.drop_method_keys.contains_key(name));
+        let bodies_fn = if own_drop {
+            self.emit_user_drop_bodies_only_fn(name)
+        } else {
+            self.field_bodies_fn_for_owned_temp(name)
+        };
+        let Some(bodies_fn) = bodies_fn else {
+            return;
+        };
+        let Some(entry) = fn_val.get_first_basic_block() else {
+            return;
+        };
+        let bool_t = self.context.bool_type();
+        let b = self.context.create_builder();
+        match entry.get_terminator() {
+            Some(term) => b.position_before(&term),
+            None => b.position_at_end(entry),
+        }
+        let Ok(flag) = b.build_alloca(bool_t, "ftrd.flag") else {
+            return;
+        };
+        let _ = b.build_store(flag, bool_t.const_zero());
+        self.builder
+            .build_store(flag, bool_t.const_int(1, false))
+            .unwrap();
+        if let Some(frame) = self.drop_rc.scope_cleanup_actions.last_mut() {
+            frame.push(super::state::CleanupAction::FreshTempReadBodies {
+                slot,
+                flag,
+                bodies_fn,
+            });
+        }
+        if let Some(level) = self.freshtemp_read_levels.last_mut() {
+            level.temps.push((slot, flag, bodies_fn));
+        }
+    }
+
+    /// B-2026-09-17-36 — stand down the statement-end walk
+    /// [`Self::track_freshtemp_read_bodies`] armed over `slot`, for a consumer
+    /// that runs the temp's bodies itself.
+    fn disarm_freshtemp_read_bodies(&mut self, slot: PointerValue<'ctx>) {
+        for level in self.freshtemp_read_levels.iter_mut() {
+            if let Some(pos) = level.temps.iter().position(|(s, _, _)| *s == slot) {
+                let (_, flag, _) = level.temps.remove(pos);
+                self.builder
+                    .build_store(flag, self.context.bool_type().const_zero())
+                    .unwrap();
+                return;
+            }
+        }
+    }
+
+    /// B-2026-09-17-36 — `if flag { bodies(slot); flag = false }`, the one
+    /// shape both the statement end and the early-exit frame action emit.
+    pub(super) fn emit_flagged_freshtemp_bodies(
+        &mut self,
+        slot: PointerValue<'ctx>,
+        flag: PointerValue<'ctx>,
+        bodies_fn: inkwell::values::FunctionValue<'ctx>,
+        fn_val: inkwell::values::FunctionValue<'ctx>,
+    ) {
+        let bool_t = self.context.bool_type();
+        let armed = self
+            .builder
+            .build_load(bool_t, flag, "ftrd.armed")
+            .unwrap()
+            .into_int_value();
+        let run_bb = self.context.append_basic_block(fn_val, "ftrd.run");
+        let cont_bb = self.context.append_basic_block(fn_val, "ftrd.cont");
+        self.builder
+            .build_conditional_branch(armed, run_bb, cont_bb)
+            .unwrap();
+        self.builder.position_at_end(run_bb);
+        self.builder.build_store(flag, bool_t.const_zero()).unwrap();
+        self.builder
+            .build_call(bodies_fn, &[slot.into()], "")
+            .unwrap();
+        self.builder.build_unconditional_branch(cont_bb).unwrap();
+        self.builder.position_at_end(cont_bb);
     }
 
     /// A struct element PROJECTED out of a FRESH TUPLE temp — `make().0.name`
@@ -1739,6 +1920,10 @@ impl<'ctx> super::Codegen<'ctx> {
         }
         self.freshtemp_field_access_slot = None;
         self.zero_struct_field_move_cap(slot, &name, field);
+        // B-2026-09-17-36 — the consumer owns the projected field and the
+        // masked walk below owns the rest, so the statement-end walk
+        // `track_freshtemp_read_bodies` armed must not run this temp again.
+        self.disarm_freshtemp_read_bodies(slot);
         // B-2026-09-14-16 — and run the REMAINDER's user `Drop` BODIES here.
         //
         // The cap zero above hands the projected field's MEMORY to the

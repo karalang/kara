@@ -2811,3 +2811,64 @@ fn main() {{
         }
     }
 }
+
+/// B-2026-09-17-36 / B-2026-09-25-26 — the statement-end walk that now runs a
+/// fresh temp's `Drop` bodies after a projection read must not free, read or
+/// double-run anything the temp's memory drop already owns. Every body reads a
+/// heap `String` longer than the inline capacity, so a body that ran after the
+/// memory drop, or twice, would read freed storage; the taken and untaken
+/// branch, a loop, a `?` that does not exit and a `return` cover the flag's
+/// three routes (statement end, untaken path, frame on exit).
+#[test]
+fn asan_fresh_temp_read_through_a_projection_runs_its_bodies_once() {
+    assert_clean_asan_run_min_allocs(
+        r#"struct D { id: i64, name: String }
+impl Drop for D { fn drop(mut ref self) { println(f"dD{self.id} {self.name}") } }
+fn mkd(n: i64) -> D { return D { id: n, name: f"name-string-longer-than-sso-{n}" }; }
+struct W { r: D, s: D, b: i64 }
+fn mkw(n: i64) -> W { return W { r: mkd(n), s: mkd(n + 100), b: n }; }
+struct R { s: String }
+impl Drop for R { fn drop(mut ref self) { println(f"drop {self.s}") } }
+fn mkr(n: i64) -> R { return R { s: f"r-string-longer-than-sso-{n}" }; }
+fn g(fail: bool) -> Result[i64, String] { if fail { return Err(f"e"); } return Ok(1); }
+fn ex() -> Result[i64, String] { let x = mkw(5).b + g(false)?; return Ok(x); }
+fn ret() -> i64 { return mkw(6).b; }
+fn main() {
+    println(f"v{mkw(1).r.id}");
+    let o = Some(mkr(2)); println(o.unwrap().s.len());
+    let c = true; let x = if c { mkw(3).b } else { 0 }; println(f"x{x}");
+    let c2 = false; let y = if c2 { mkw(4).b } else { 0 }; println(f"y{y}");
+    match ex() { Ok(v) => println(f"ok{v}"), Err(e) => println(e) }
+    println(f"r{ret()}");
+    for i in 0..2 { println(mkw(10 + i).s.name); }
+    println("end")
+}
+"#,
+        &[
+            "v1",
+            "dD101 name-string-longer-than-sso-101",
+            "dD1 name-string-longer-than-sso-1",
+            "26",
+            "drop r-string-longer-than-sso-2",
+            "dD103 name-string-longer-than-sso-103",
+            "dD3 name-string-longer-than-sso-3",
+            "x3",
+            "y0",
+            "dD105 name-string-longer-than-sso-105",
+            "dD5 name-string-longer-than-sso-5",
+            "ok6",
+            "dD106 name-string-longer-than-sso-106",
+            "dD6 name-string-longer-than-sso-6",
+            "r6",
+            "name-string-longer-than-sso-110",
+            "dD110 name-string-longer-than-sso-110",
+            "dD10 name-string-longer-than-sso-10",
+            "name-string-longer-than-sso-111",
+            "dD111 name-string-longer-than-sso-111",
+            "dD11 name-string-longer-than-sso-11",
+            "end",
+        ],
+        "asan_fresh_temp_read_through_a_projection_runs_its_bodies_once",
+        20,
+    );
+}

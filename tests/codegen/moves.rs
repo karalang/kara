@@ -1733,14 +1733,14 @@ fn e2e_discarded_literal_statement_and_no_else_if() {
 /// consumer's — measured `dD107 dD7 idx1 dD7` against the due
 /// `dD107 idx1 dD7`.
 ///
-/// CELLS 6-8 ARE THE READ-THROUGH POSITIONS AND ARE PINNED AS MEASURED,
-/// NOT FIXED: a scalar read through the projection
-/// (`println(f"v{mkw(7).r.id}")`), a scalar FIELD read (`mkw(7).b`) and the
-/// projection passed straight to a discarding callee (`eat(mkw(7).r)`) run
-/// NO bodies at all, on both surfaces. That is a wider, pre-existing and
-/// agreed loss — the temp is never consumed by a statement in this fix's
-/// set, so its stash is left alone by design — and it is filed separately.
-/// Keeping them here is what shows the fix did not disturb them.
+/// CELLS 6-8 ARE THE READ-THROUGH POSITIONS, which this fix left alone and
+/// B-2026-09-17-36 later took up. A scalar read through the projection
+/// (`println(f"v{mkw(7).r.id}")`) and a scalar FIELD read (`mkw(7).b`) now run
+/// both bodies at the end of the statement, as the named spelling does. The
+/// projection passed straight to a discarding callee (`eat(mkw(7).r)`) is
+/// still PINNED AS MEASURED, running no body at all on both surfaces: the
+/// callee takes a field that has a body of its own, and neither backend yet
+/// knows whether it moved.
 ///
 /// MEMORY IS CLEAN AND THE STRINGS ARE INTACT with a heap-carrying `D`:
 /// `-O0` valgrind reports 12-13 allocs with equal frees, `0 bytes in 0
@@ -1798,17 +1798,18 @@ fn e2e_projecting_a_field_off_a_fresh_temp_runs_the_siblings_bodies() {
                 "dD107\nidx7\ndD7\nend\n",
             ),
             (
-                // 6-8 — PINNED AS MEASURED, not fixed. See the note above.
-                "pinned: scalar read through the projection",
+                // 6-7 — B-2026-09-17-36: both bodies at the statement's end.
+                "scalar read through the projection",
                 format!("{H}fn main() {{ println(f\"v{{mkw(7).r.id}}\"); println(\"end\") }}\n"),
-                "v7\nend\n",
+                "v7\ndD107\ndD7\nend\n",
             ),
             (
-                "pinned: scalar field read off the temp",
+                "scalar field read off the temp",
                 format!("{H}fn main() {{ println(f\"v{{mkw(7).b}}\"); println(\"end\") }}\n"),
-                "v7\nend\n",
+                "v7\ndD107\ndD7\nend\n",
             ),
             (
+                // 8 — PINNED AS MEASURED, not fixed. See the note above.
                 "pinned: projection into a discarding callee",
                 format!(
                     "{H}fn eat(d: D) -> i64 {{ return d.id; }}\n\
@@ -1827,6 +1828,197 @@ fn e2e_projecting_a_field_off_a_fresh_temp_runs_the_siblings_bodies() {
                 assert_eq!(aot, want, "[{label}] AOT");
             }
         }
+}
+
+/// B-2026-09-17-36 / B-2026-09-25-26 — a FRESH TEMP read through a projection
+/// runs its `Drop` bodies at the end of the statement that read it.
+///
+/// `println(f"v{mkw(7).b}")` built a `W { r: D, s: D, b: i64 }` and ran neither
+/// `D` body, and `println(o.unwrap().s)` never ran `R`'s own, on all four
+/// surfaces alike; the named spelling (`let t = mkw(7); println(f"v{t.b}")`)
+/// runs them at the end of the statement that last uses `t`. A temp's last use
+/// is its projection, so both backends now keep a per-statement list of temps
+/// read that way (`freshtemp_read_levels`) and run the bodies when the
+/// statement ends; codegen guards each behind a runtime flag, so an untaken
+/// branch runs nothing and an early exit runs it from the frame instead.
+///
+/// Several cells were run-vs-build DIVERGENCES before, not agreed losses:
+/// codegen already ran the bodies for an assignment, a `return` and a block
+/// tail, and the interpreter did for a taken `if` arm inside a `let`. Each now
+/// prints one sequence on every surface.
+///
+/// The PINNED cells are the positions both backends still decline, together:
+/// a projected field that has a body of its own handed to a callee (which may
+/// have moved it), a generic struct (a method-call temp has no instantiation
+/// on the compiled side), and a temp read in a loop condition, a `match`
+/// scrutinee or a closure body, where the enclosing statement runs the read
+/// more than once or not at all.
+#[test]
+fn e2e_fresh_temp_read_through_a_projection_runs_its_bodies() {
+    const H: &str = "struct D { id: i64, name: String }\n\
+             impl Drop for D { fn drop(mut ref self) { println(f\"dD{self.id}{self.name}\") } }\n\
+             fn mkd(n: i64) -> D { return D { id: n, name: f\"n{n}\" }; }\n\
+             struct W { r: D, s: D, b: i64 }\n\
+             fn mkw(n: i64) -> W { return W { r: mkd(n), s: mkd(n + 100), b: n }; }\n\
+             fn eat(d: D) -> i64 { return d.id; }\n\
+             struct R { s: String }\n\
+             impl Drop for R { fn drop(mut ref self) { println(f\"drop {self.s}\") } }\n\
+             fn mkr(t: String) -> R { return R { s: t }; }\n\
+             struct Ho { o: Option[R], p: R }\n\
+             fn take(n: i64) -> i64 { return n + 1; }\n\
+             fn g(fail: bool) -> Result[i64, String] { if fail { return Err(f\"e\"); } return Ok(1); }\n\
+             fn ex(fail: bool) -> Result[i64, String] { let x = mkw(7).b + g(fail)?; println(f\"x{x}\"); return Ok(x); }\n\
+             fn ret() -> i64 { return mkw(8).b; }\n\
+             struct G[T] { v: T, k: i64 }\n\
+             fn mkg(d: D) -> G[D] { return G { v: d, k: 5 }; }\n\
+             struct Q { d: D, k: i64 }\n\
+             impl Drop for Q { fn drop(mut ref self) { println(f\"dQ{self.k}\") } }\n\
+             fn mkq() -> Q { return Q { d: mkd(3), k: 4 }; }\n\
+             struct Ow { o: Option[D], k: i64 }\n\
+             fn mkow(b: bool) -> Ow { if b { return Ow { o: Some(mkd(1)), k: 2 }; } return Ow { o: None, k: 3 }; }\n";
+    for (label, body, want) in [
+        (
+            "scalar read through a projection",
+            "println(f\"v{mkw(7).r.id}\");",
+            "v7\ndD107n107\ndD7n7\nend\n",
+        ),
+        (
+            "scalar field of the temp",
+            "println(f\"v{mkw(7).b}\");",
+            "v7\ndD107n107\ndD7n7\nend\n",
+        ),
+        (
+            "B-2026-09-25-26: field of an unwrap result",
+            "let o = Some(mkr(f\"rrr\")); println(o.unwrap().s);",
+            "rrr\ndrop rrr\nend\n",
+        ),
+        (
+            "field of a call result with its own Drop",
+            "println(mkr(f\"rrr\").s);",
+            "rrr\ndrop rrr\nend\n",
+        ),
+        (
+            "field of an unwrapped struct field",
+            "let h = Ho { o: Some(mkr(f\"rrr\")), p: mkr(f\"ppp\") }; println(h.o.unwrap().s);",
+            "rrr\ndrop rrr\ndrop ppp\nend\n",
+        ),
+        (
+            "taken branch of a let",
+            "let c = true; let x = if c { mkw(7).b } else { 0 }; println(f\"x{x}\");",
+            "dD107n107\ndD7n7\nx7\nend\n",
+        ),
+        (
+            "branch not taken",
+            "let c = false; let x = if c { mkw(7).b } else { 0 }; println(f\"x{x}\");",
+            "x0\nend\n",
+        ),
+        (
+            "once per loop iteration",
+            "for i in 0..3 { println(f\"i{mkw(i).b}\"); }",
+            "i0\ndD100n100\ndD0n0\ni1\ndD101n101\ndD1n1\ni2\ndD102n102\ndD2n2\nend\n",
+        ),
+        (
+            "beside a ? that does not exit",
+            "match ex(false) { Ok(v) => println(f\"ok{v}\"), Err(e) => println(f\"err{e}\") }",
+            "dD107n107\ndD7n7\nx8\nok8\nend\n",
+        ),
+        (
+            "return statement",
+            "println(f\"r{ret()}\");",
+            "dD108n108\ndD8n8\nr8\nend\n",
+        ),
+        (
+            "method on the projected field",
+            "println(f\"l{mkr(f\"abc\").s.len()}\");",
+            "l3\ndrop abc\nend\n",
+        ),
+        (
+            "projection as a call argument",
+            "println(f\"t{take(mkw(7).b)}\");",
+            "t8\ndD107n107\ndD7n7\nend\n",
+        ),
+        (
+            "two temps, last read first",
+            "println(f\"{mkw(1).b} {mkw(2).b}\");",
+            "1 2\ndD102n102\ndD2n2\ndD101n101\ndD1n1\nend\n",
+        ),
+        (
+            "assignment",
+            "let mut y = 0; y = mkw(7).b; println(f\"y{y}\");",
+            "dD107n107\ndD7n7\ny7\nend\n",
+        ),
+        (
+            "compound assignment",
+            "let mut y = 0; y += mkw(7).b; println(f\"y{y}\");",
+            "dD107n107\ndD7n7\ny7\nend\n",
+        ),
+        (
+            "block tail inside a let",
+            "let x = { let y = 2; mkw(y).b }; println(f\"x{x}\");",
+            "dD102n102\ndD2n2\nx2\nend\n",
+        ),
+        (
+            "own-Drop parent, scalar field",
+            "println(f\"q{mkq().k}\");",
+            "q4\ndQ4\ndD3n3\nend\n",
+        ),
+        (
+            "own-Drop parent, read through its Drop field",
+            "println(f\"q{mkq().d.id}\");",
+            "q3\ndQ4\ndD3n3\nend\n",
+        ),
+        (
+            "if condition inside a let",
+            "let x = if mkw(3).b > 1 { 1 } else { 2 }; println(f\"x{x}\");",
+            "dD103n103\ndD3n3\nx1\nend\n",
+        ),
+        (
+            "String read through a Drop field",
+            "println(mkw(7).r.name);",
+            "n7\ndD107n107\ndD7n7\nend\n",
+        ),
+        (
+            "Option field, Some then None",
+            "println(f\"o{mkow(true).k}\"); println(f\"o{mkow(false).k}\");",
+            "o2\ndD1n1\no3\nend\n",
+        ),
+        (
+            "pinned: Drop field handed to a callee",
+            "println(f\"v{eat(mkw(7).r)}\");",
+            "v7\nend\n",
+        ),
+        (
+            "pinned: generic struct",
+            "println(f\"g{mkg(mkd(3)).k}\");",
+            "g5\nend\n",
+        ),
+        (
+            "pinned: match scrutinee",
+            "match mkw(3).b { 3 => println(\"three\"), _ => println(\"other\") }",
+            "three\nend\n",
+        ),
+        (
+            "pinned: while condition",
+            "let mut i = 0; while mkw(i).b < 2 { i = i + 1; } println(f\"i{i}\");",
+            "i2\nend\n",
+        ),
+        (
+            "pinned: closure body",
+            "let f = |n: i64| mkw(n).b; println(f\"f{f(3)}\");",
+            "f3\nend\n",
+        ),
+    ] {
+        let prog = format!("{H}fn main() {{\n    {body}\n    println(\"end\")\n}}\n");
+        let (interp_out, interp_errs, _, _) = karac::run_program_full_checked(&prog);
+        assert!(
+            interp_errs.is_empty(),
+            "[{label}] interp errored: {interp_errs:?}"
+        );
+        assert_eq!(interp_out.join(""), want, "[{label}] interpreter");
+        if let Some(aot) = run_program(&prog) {
+            assert_eq!(aot, want, "[{label}] AOT");
+        }
+    }
 }
 
 /// B-2026-09-05-13 — a by-value param REBOUND whole (`let m = r;`) and then

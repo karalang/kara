@@ -15708,6 +15708,7 @@ impl<'ctx> super::Codegen<'ctx> {
             | CleanupAction::ProviderPop
             | CleanupAction::UserErrDefer { .. }
             | CleanupAction::ReleaseMutex { .. } => None,
+            CleanupAction::FreshTempReadBodies { slot, .. } => Some(*slot),
         }
     }
 
@@ -18013,6 +18014,13 @@ impl<'ctx> super::Codegen<'ctx> {
                 unreachable!(
                     "CleanupAction::UserErrDefer must be dispatched via emit_cleanup_action_at on an error-exit path"
                 );
+            }
+            CleanupAction::FreshTempReadBodies {
+                slot,
+                flag,
+                bodies_fn,
+            } => {
+                self.emit_flagged_freshtemp_bodies(*slot, *flag, *bodies_fn, fn_val);
             }
             CleanupAction::ReleaseMutex { flag_ptr } => {
                 // Futex 3-state release (mirrors `compile_lock_block`'s acquire):
