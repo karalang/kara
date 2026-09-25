@@ -1752,6 +1752,55 @@ impl<'ctx> super::Codegen<'ctx> {
         self.payload_vars.deboxed_payload_box_ptrs = saved.deboxed_payload_box_ptrs;
     }
 
+    /// B-2026-09-25-7 — the typechecker's concrete `Vec`/`VecDeque` binding
+    /// for the bare by-value type param at arg `idx`, when it has one.
+    ///
+    /// This is the ONE answer both halves of a whole-param collection call ask,
+    /// so they cannot disagree. The mono prologue enters a bare `x: T` param
+    /// into `owned_vecstr_params` (every retaining consume site, the return
+    /// included, deep-copies it: caller-retains) exactly when it can see `T`'s
+    /// element. That element used to come only from the caller's side tables,
+    /// which a NAMED argument has and a temporary does not, so one monomorph —
+    /// shared by every caller of the same instantiation — copied or moved
+    /// depending on how its FIRST caller spelled the argument. A later caller
+    /// using the other spelling then double-freed (temp first, named second)
+    /// or leaked (named first, temp second).
+    ///
+    /// Reading the typechecker's per-call frame instead gives every spelling
+    /// the element, so the body always deep-copies; the caller then owns a
+    /// fresh temporary and frees it, the convention `String` has had since
+    /// B-2026-07-14-12. Restricted to a head that carries its element
+    /// (`Vec`/`VecDeque` with generic args); anything else keeps the
+    /// side-table resolution it had.
+    fn whole_param_frame_container_te(
+        &self,
+        generic_fn: &Function,
+        idx: usize,
+        call_span: &crate::token::Span,
+    ) -> Option<(String, TypeExpr)> {
+        if !Self::generic_param_is_bare_type_param_spelling(generic_fn, idx) {
+            return None;
+        }
+        let TypeKind::Path(path) = &generic_fn.params.get(idx)?.ty.kind else {
+            return None;
+        };
+        let tp = path.segments[0].clone();
+        let te = self
+            .span_tables
+            .call_type_subs_te
+            .get(&(call_span.offset, call_span.length))?
+            .get(&tp)?;
+        let te = self.subst_monomorph_type_params(te);
+        let TypeKind::Path(cp) = &te.kind else {
+            return None;
+        };
+        let head_ok = matches!(
+            cp.segments.last().map(|s| s.as_str()),
+            Some("Vec") | Some("VecDeque")
+        ) && cp.generic_args.as_ref().is_some_and(|a| !a.is_empty());
+        head_ok.then_some((tp, te))
+    }
+
     /// B-2026-08-15-7 — the CONTAINER sibling of
     /// [`Self::generic_param_is_bare_type_param`]: a by-value param whose type
     /// is written out (`v: Vec[T]`, `v: Vec[i64]`) rather than as a bare type
@@ -1868,6 +1917,13 @@ impl<'ctx> super::Codegen<'ctx> {
     /// case keeps the resolution it has, and the underlying inconsistency (an
     /// ownership convention that depends on the element being UNKNOWN) is filed
     /// rather than fixed here.
+    ///
+    /// B-2026-09-25-7 then closed that inconsistency for `Vec`/`VecDeque` from
+    /// the other end: `whole_param_frame_container_te` gives every argument
+    /// spelling the element, and the caller frees the temporary. Both measured
+    /// objections above are now clean (`echo` over a literal, and `takeout`'s
+    /// match-arm return, temp and named, in either order), so this gate stays
+    /// only for the channel's other consumers.
     /// For arg `idx` of a generic call: does this monomorph's parameter take
     /// OWNERSHIP of a fixed array, and of what element type (B-2026-09-10-34)?
     ///
@@ -2258,7 +2314,14 @@ impl<'ctx> super::Codegen<'ctx> {
                 && !self.rhs_stages_fstr_acc(&a.value)
                 && (Self::generic_param_is_bare_type_param(&generic_fn, i)
                     || Self::generic_param_is_owned_container(&generic_fn, i)
-                    || param_cannot_reach_return);
+                    || param_cannot_reach_return
+                    // B-2026-09-25-7: the body deep-copies this param even
+                    // when it is returned, because the prologue now sees its
+                    // element whatever the argument's spelling — see
+                    // `whole_param_frame_container_te`.
+                    || self
+                        .whole_param_frame_container_te(&generic_fn, i, call_span)
+                        .is_some());
             if is_fresh_string_temp || is_fresh_vec_temp_for_owned_param {
                 self.materialize_owned_temp(val, arg_key);
             }
@@ -2886,6 +2949,24 @@ impl<'ctx> super::Codegen<'ctx> {
         // any of them recorded still wins (`or_insert`), which keeps every
         // existing instantiation on exactly the entry it had.
         Self::merge_structural_type_arg_substs(structural_type_args, &mut subst_type_exprs);
+
+        // B-2026-09-25-7: a bare `x: T` bound to a `Vec`/`VecDeque` gets its
+        // element from the typechecker's frame when the argument is not a
+        // binding the side-table resolver above can read, so the monomorph's
+        // ownership convention no longer depends on its first caller's
+        // argument spelling. `or_insert`, so a resolver's entry still wins.
+        for i in 0..generic_fn.params.len() {
+            if let Some((tp, te)) = self.whole_param_frame_container_te(&generic_fn, i, call_span) {
+                if let TypeKind::Path(cp) = &te.kind {
+                    if let Some(head) = cp.segments.last() {
+                        subst_names
+                            .entry(tp.clone())
+                            .or_insert_with(|| head.clone());
+                    }
+                }
+                subst_type_exprs.entry(tp).or_insert(te);
+            }
+        }
 
         // B-2026-08-31-39: the typechecker's EXACT per-type-arg `TypeExpr` for
         // this call span. The three resolvers above each cover one param SHAPE

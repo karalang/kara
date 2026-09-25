@@ -9752,3 +9752,25 @@ fn main() { let a = Some([f"heap-string-longer-than-sso-1", f"x"]); println(f"{p
     );
     assert_eq!(out.as_deref(), Some("2\nend\n"), "must match --interp");
 }
+
+/// B-2026-09-25-7 — one monomorph serves every caller of an instantiation,
+/// and its body used to copy or move a bare `x: T` param depending on whether
+/// its FIRST caller passed a named binding (element visible, deep copy) or a
+/// temporary (element invisible, move). Temp first then named: the named
+/// caller's buffer came back as the result and was freed twice. Every pair
+/// below uses one spelling first and the other second.
+#[test]
+fn test_e2e_generic_mono_shared_by_temp_and_named_args_frees_once() {
+    let out = run_program(
+        r#"fn id2[T](d: T) -> T { d }
+fn inner[T](d: T) -> T { d }
+fn outer[U](y: U) -> U { inner(y) }
+fn main() { let a = id2([f"heap-string-longer-than-sso-1", f"x"]); let n = [f"heap-string-longer-than-sso-2", f"y"]; let b = id2(n); println(f"{a[0]} {b[0]}"); let c = outer([f"heap-string-longer-than-sso-3"]); let m = [f"heap-string-longer-than-sso-4"]; let d = outer(m); println(f"{c[0]} {d[0]}"); println("end") }
+"#,
+    );
+    assert_eq!(
+        out.as_deref(),
+        Some("heap-string-longer-than-sso-1 heap-string-longer-than-sso-2\nheap-string-longer-than-sso-3 heap-string-longer-than-sso-4\nend\n"),
+        "must match --interp"
+    );
+}

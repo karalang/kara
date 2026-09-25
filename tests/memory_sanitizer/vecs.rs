@@ -7992,3 +7992,77 @@ fn main() {
         20,
     );
 }
+
+/// B-2026-09-25-7 — a generic fn's monomorph is shared by every caller of the
+/// instantiation, and whether its body deep-copied a bare `x: T` param
+/// depended on the FIRST caller's argument spelling: a named binding exposed
+/// the element and got a copy, a temporary did not and got a move. So a
+/// temp-first pair double-freed the named caller's buffer, and a named-first
+/// pair leaked the temporary. Each generic below is called both ways, in one
+/// order or the other, across return, `Option` payload, `if` branch,
+/// forwarding, `Vec[i64]` and `VecDeque[String]`.
+#[test]
+fn asan_generic_mono_shared_by_temp_and_named_args_frees_once() {
+    assert_clean_asan_run_min_allocs(
+        r#"fn id2[T](d: T) -> T { d }
+fn id3[T](d: T) -> T { d }
+fn wrap[T](x: T) -> Option[T] { Some(x) }
+fn sel[T](c: bool, x: T, y: T) -> T { if c { x } else { y } }
+fn inner[T](d: T) -> T { d }
+fn outer[U](y: U) -> U { inner(y) }
+fn ints[T](x: T) -> T { x }
+fn dq[T](x: T) -> T { x }
+fn mkq(s: String) -> VecDeque[String] { let mut d = VecDeque[String].new(); d.push_back(s); d }
+fn main() {
+    let a = id2([f"heap-string-longer-than-sso-1", f"x"]);
+    let n1 = [f"heap-string-longer-than-sso-2", f"y"];
+    let b = id2(n1);
+    println(f"{a[0]} {b[0]}");
+    let n2 = [f"heap-string-longer-than-sso-3", f"z"];
+    let c = id3(n2);
+    let d = id3([f"heap-string-longer-than-sso-4", f"w"]);
+    println(f"{c[0]} {d[0]}");
+    match wrap([f"heap-string-longer-than-sso-5"]) { Some(v) => println(v[0]), None => {} }
+    let n3 = [f"heap-string-longer-than-sso-6"];
+    match wrap(n3) { Some(v) => println(v[0]), None => {} }
+    let n4 = [f"heap-string-longer-than-sso-7"];
+    let n5 = [f"heap-string-longer-than-sso-8"];
+    let g = sel(true, n4, n5);
+    println(g[0]);
+    let h = sel(false, [f"heap-string-longer-than-sso-9"], [f"heap-string-longer-than-sso-10"]);
+    println(h[0]);
+    let i = outer([f"heap-string-longer-than-sso-11"]);
+    println(i[0]);
+    let n6 = [f"heap-string-longer-than-sso-12"];
+    let j = outer(n6);
+    println(j[0]);
+    let n7 = [1, 2, 3];
+    let e = ints(n7);
+    let f = ints([4, 5, 6]);
+    println(f"{e[2] + f[2]}");
+    let k = dq(mkq(f"heap-string-longer-than-sso-13"));
+    println(k[0]);
+    let n8 = mkq(f"heap-string-longer-than-sso-14");
+    let l = dq(n8);
+    println(l[0]);
+    println("end")
+}
+"#,
+        &[
+            "heap-string-longer-than-sso-1 heap-string-longer-than-sso-2",
+            "heap-string-longer-than-sso-3 heap-string-longer-than-sso-4",
+            "heap-string-longer-than-sso-5",
+            "heap-string-longer-than-sso-6",
+            "heap-string-longer-than-sso-7",
+            "heap-string-longer-than-sso-10",
+            "heap-string-longer-than-sso-11",
+            "heap-string-longer-than-sso-12",
+            "9",
+            "heap-string-longer-than-sso-13",
+            "heap-string-longer-than-sso-14",
+            "end",
+        ],
+        "asan_generic_mono_shared_by_temp_and_named_args_frees_once",
+        20,
+    );
+}
