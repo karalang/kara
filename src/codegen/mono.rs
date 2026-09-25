@@ -3576,7 +3576,14 @@ impl<'ctx> super::Codegen<'ctx> {
                     .var_type_names
                     .get(var_name.as_str())
                     .cloned()
-                    .is_some_and(|tn| self.struct_type_is_entry_copied_heap(&tn));
+                    .is_some_and(|tn| {
+                        // B-2026-09-25-30 — or owns nothing to free, where
+                        // forward and copy are indistinguishable and only the
+                        // body has to be placed. Same widening, same reason, as
+                        // `discarded_whole_param_arg_type_name`'s named arm.
+                        self.struct_type_is_entry_copied_heap(&tn)
+                            || self.handback_owns_nothing_from_local(var_name, &tn)
+                    });
                 if returns_param
                     && entry_copied
                     && ast_i.is_some_and(|ast_i| self.callee_takes_over_arg_drop_body(name, ast_i))

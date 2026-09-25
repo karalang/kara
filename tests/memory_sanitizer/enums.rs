@@ -11707,3 +11707,68 @@ fn main() {
         "asan_param_wrapped_in_generic_enum_variant_runs_its_body_once",
     );
 }
+
+/// B-2026-09-25-30 — a `Drop` struct with NO heap handed back by a generic
+/// fn runs its body once. The monomorph call site's hand-back retraction was
+/// gated on the callee ENTRY-COPYING the param, which a heap-free struct never
+/// is, so `let q = idg(p)` kept the caller's body at `p`'s last use beside the
+/// result's: every compiled surface printed `dP1 q1 dP1`. Owning nothing, the
+/// type has no memory for two owners to double-free, so it is admitted beside
+/// the entry-copied one; `g_stmt`..`k_owndrop` pin the discarded results that
+/// retraction hands to the discard registrar (a generic wrapper `Bx[T]` /
+/// `Ho[T]` / `Dx[T]` is registered at the call's instantiation, which also
+/// stops `j_discwrapR` leaking its copy).
+#[test]
+fn asan_heap_free_drop_struct_handed_back_by_generic_fn_runs_its_body_once() {
+    assert_clean_asan_run(
+        r#"struct P { id: i64 }
+impl Drop for P { fn drop(mut ref self) { println(f"dP{self.id}") } }
+struct Q { p: P, n: i64 }
+impl Drop for Q { fn drop(mut ref self) { println(f"dQ{self.n}") } }
+struct R { id: i64, s: String }
+impl Drop for R { fn drop(mut ref self) { println(f"dR{self.id}") } }
+struct Bx[T] { v: T }
+struct Dx[T] { v: T, k: i64 }
+impl[T] Drop for Dx[T] { fn drop(mut ref self) { println(f"dDx{self.k}") } }
+enum Ho[T] { Full(T), Empty }
+struct K { n: i64 }
+impl K { fn keep[T](ref self, x: T) -> T { return x } }
+fn idg[T](v: T) -> T { return v }
+fn wrap[T](v: T) -> Bx[T] { return Bx { v: v } }
+fn wrapd[T](v: T) -> Dx[T] { return Dx { v: v, k: 9 } }
+fn mkh[T](v: T) -> Ho[T] { return Ho.Full(v); }
+fn takep(h: Ho[P]) { match h { Ho.Full(r) => println(f"p{r.id}"), Ho.Empty => println("e") } }
+fn a_let() { let p = P { id: 1 }; let q = idg(p); println(f"q{q.id}") }
+fn b_wrap() { let p = P { id: 2 }; let b = wrap(p); println(f"b{b.v.id}") }
+fn c_arg() { let p = P { id: 3 }; takep(mkh(p)) }
+fn d_meth() { let k = K { n: 0 }; let p = P { id: 4 }; let q = k.keep(p); println(f"k{q.id}") }
+fn e_nested() { let q = Q { p: P { id: 5 }, n: 6 }; let r = idg(q); println(f"n{r.n}") }
+fn f_loop() { for i in 0..2 { let p = P { id: 7 + i }; let q = idg(p); println(f"l{q.id}") } }
+fn g_stmt() { let p = P { id: 10 }; idg(p); println("g") }
+fn h_discwrap() { let p = P { id: 11 }; wrap(p); println("h") }
+fn i_discmkh() { let p = P { id: 12 }; let _ = mkh(p); println("i") }
+fn j_discwrapR() { let r = R { id: 13, s: f"s{13}" }; wrap(r); println("j") }
+fn k_owndrop() { let p = P { id: 14 }; wrapd(p); println("k") }
+fn main() {
+    a_let()
+    b_wrap()
+    c_arg()
+    d_meth()
+    e_nested()
+    f_loop()
+    g_stmt()
+    h_discwrap()
+    i_discmkh()
+    j_discwrapR()
+    k_owndrop()
+    println("end")
+}
+"#,
+        &[
+            "q1", "dP1", "b2", "dP2", "p3", "dP3", "k4", "dP4", "n6", "dQ6", "dP5", "l7", "dP7",
+            "l8", "dP8", "dP10", "g", "dP11", "h", "dP12", "i", "dR13", "j", "dDx9", "dP14", "k",
+            "end",
+        ],
+        "asan_heap_free_drop_struct_handed_back_by_generic_fn_runs_its_body_once",
+    );
+}

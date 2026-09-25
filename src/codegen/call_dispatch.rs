@@ -7358,7 +7358,13 @@ impl<'ctx> super::Codegen<'ctx> {
             }
             ExprKind::Identifier(var) => {
                 let tn = self.var_types.var_type_names.get(var.as_str()).cloned()?;
-                self.struct_type_is_entry_copied_heap(&tn).then_some(tn)
+                // B-2026-09-25-30 — a type with nothing to free is admitted
+                // beside the entry-copied one: see
+                // `struct_type_owns_nothing_to_free`. Held identical to the
+                // monomorph retraction's gate, which is this arm's other half.
+                (self.struct_type_is_entry_copied_heap(&tn)
+                    || self.handback_owns_nothing_from_local(var, &tn))
+                .then_some(tn)
             }
             _ => None,
         }
@@ -7743,10 +7749,53 @@ impl<'ctx> super::Codegen<'ctx> {
         // is a direct call to a known free function. Resolved once, before the
         // bodies decision that may need it and the memory registration that
         // does, so the two cannot disagree about which monomorph this temp is.
+        // B-2026-09-25-30 — and a GENERIC callee's result, whose declared
+        // return (`-> Ho[T]`, `-> Bx[T]`) `fn_return_type_exprs` does not hold
+        // and would be the erased template if it did. The typechecker records
+        // the call's own instantiation at its span (`Ho[P]`), which is what
+        // both the enum walker below and the generic-struct walk need. Only an
+        // instantiation OF the resolved return type is taken, so a tail whose
+        // span happens to carry some other recorded type cannot steer either.
+        let discard_inst: Option<TypeExpr> = if self.discarded_call_passes_a_param(tail)
+            || self.discarded_call_may_return_an_arg_whole(tail)
+        {
+            None
+        } else {
+            self.enum_inst_type_from_span(tail)
+        }
+        .filter(|te| {
+            matches!(&te.kind, TypeKind::Path(p)
+                    if p.generic_args.as_ref().is_some_and(|a| !a.is_empty())
+                        && p.segments.last().is_some_and(|s| s == &ret_ty_name))
+        });
         let discarded_generic_enum_te: Option<TypeExpr> = is_enum
-            .then(|| self.untyped_let_boxed_enum_te(tail))
+            .then(|| {
+                self.untyped_let_boxed_enum_te(tail)
+                    .or_else(|| discard_inst.clone())
+            })
             .flatten()
             .map(|te| self.subst_monomorph_type_params(&te));
+        // The STRUCT half: a generic struct's fields sit at bare type params,
+        // so the name-keyed `type_runs_user_drop` below sees no `Drop` field in
+        // `Bx[T] { v: T }` and the temp was registered for nothing — `wrap(p);`
+        // ran P's body on no compiled surface once the caller's binding stood
+        // down for the result (and, for a heap-bearing `R`, leaked the copy
+        // besides: that half predates this row). Resolved against the call's
+        // instantiation, the same subst-aware walk B-2026-09-04-30 gave a
+        // method-receiver temp.
+        let discarded_generic_struct_inst: Option<TypeExpr> = (!is_enum
+            && self
+                .type_decls
+                .struct_generic_params
+                .get(ret_ty_name.as_str())
+                .is_some_and(|ps| !ps.is_empty()))
+        .then(|| discard_inst.clone())
+        .flatten()
+        .map(|te| self.subst_monomorph_type_params(&te));
+        let discarded_generic_struct_subst = discarded_generic_struct_inst
+            .as_ref()
+            .map(|te| self.generic_struct_subst_from_inst(&ret_ty_name, te))
+            .filter(|s| !s.is_empty());
         let mut memory_only = false;
         let bodies_fn = if !field_bodies_only {
             None
@@ -7808,6 +7857,11 @@ impl<'ctx> super::Codegen<'ctx> {
                     }
                 },
             }
+        } else if let Some(f) = discarded_generic_struct_subst
+            .as_ref()
+            .and_then(|subst| self.field_bodies_fn_for_owned_temp_mono(&ret_ty_name, subst))
+        {
+            Some((f, UserDropKind::StructFieldBodies))
         } else if !self.type_runs_user_drop(&ret_ty_name, &mut Vec::new()) {
             // B-2026-08-29-32 — `struct P { a: String, b: i64 }` with no
             // `Drop` on it OR any field, reached through a discarded BRANCH
@@ -7909,6 +7963,11 @@ impl<'ctx> super::Codegen<'ctx> {
                 .is_none_or(|ps| ps.is_empty())
         {
             self.track_struct_var(&ret_ty_name, slot);
+        } else if field_bodies_only && discarded_generic_struct_subst.is_some() {
+            // B-2026-09-25-30 — the generic struct's MEMORY, at its
+            // instantiation: the arm above skips a generic struct because the
+            // name-keyed drop resolves its fields from bare `T`.
+            self.track_struct_var_inst(&ret_ty_name, slot, discarded_generic_struct_inst.clone());
         }
         // B-2026-08-29-32 — memory is registered above and there is no body.
         // Falling into the match below would reach `track_user_drop_var`,
@@ -7955,6 +8014,22 @@ impl<'ctx> super::Codegen<'ctx> {
         match bodies_fn {
             Some((f, kind)) => {
                 self.track_user_drop_var_with_fn(&ret_ty_name, "__owned_agg_tmp", slot, f, kind)
+            }
+            // B-2026-09-25-30 — a GENERIC struct with its own `impl[T] Drop`
+            // has no bare wrapper in `user_drop_wrapper_fns`, so the plain
+            // lookup below registered nothing and a discarded `wrapd(p)` ran
+            // neither `Dx`'s body nor its field's. The per-monomorph wrapper at
+            // the call's instantiation is the one a `let` binding of the same
+            // call already gets.
+            None if discarded_generic_struct_inst.is_some() && !field_bodies_only => {
+                if !self.track_user_drop_var_inst(
+                    &ret_ty_name,
+                    "__owned_agg_tmp",
+                    slot,
+                    discarded_generic_struct_inst.as_ref(),
+                ) {
+                    self.track_user_drop_var(&ret_ty_name, "__owned_agg_tmp", slot)
+                }
             }
             None => self.track_user_drop_var(&ret_ty_name, "__owned_agg_tmp", slot),
         }
@@ -10715,6 +10790,148 @@ impl<'ctx> super::Codegen<'ctx> {
                         self.type_expr_has_drop_heap(f) || self.option_field_te_has_drop_heap(f)
                     })
                 })
+    }
+
+    /// B-2026-09-25-30 — the OTHER half of the "two owners for two objects"
+    /// argument [`Self::struct_type_is_entry_copied_heap`] makes: a struct that
+    /// owns NOTHING to free. Every field is a bit-copyable scalar, or a plain
+    /// struct that recursively is too — no heap, no `shared` handle, no enum.
+    ///
+    /// For such a type the forward-versus-copy distinction the entry-copy gate
+    /// guards is vacuous. Whether the monomorph hands back the caller's object
+    /// or a copy of it, there is no memory for two owners to double-free, so
+    /// the only thing left to place is the `Drop` BODY, and it belongs to the
+    /// value that comes back exactly as it does for an entry-copied type. Gating
+    /// on the entry copy alone left a heap-free `Drop` struct with TWO bodies:
+    /// `let q = idg(p)` over `fn idg[T](v: T) -> T { return v }` ran the
+    /// caller binding's body at its last use (right after the call) and the
+    /// result's at scope end, `dP2 q2 dP2` on every compiled surface against
+    /// the interpreter's `q2 dP2` — while the concrete twin `fn idP(v: P) -> P`,
+    /// whose retraction was never gated on the copy, ran one.
+    pub(super) fn struct_type_owns_nothing_to_free(&self, name: &str) -> bool {
+        fn go(cg: &super::Codegen<'_>, name: &str, seen: &mut Vec<String>) -> bool {
+            if seen.iter().any(|s| s == name) {
+                return false;
+            }
+            if !cg.type_decls.struct_types.contains_key(name)
+                || cg.type_decls.shared_types.contains_key(name)
+            {
+                return false;
+            }
+            let Some(ftes) = cg.type_decls.struct_field_type_exprs.get(name) else {
+                return false;
+            };
+            seen.push(name.to_string());
+            let ok = ftes.iter().all(|f| {
+                if super::vec_method::is_trivially_copyable_te(f) {
+                    return true;
+                }
+                match &f.kind {
+                    TypeKind::Path(p) if p.segments.len() == 1 && p.generic_args.is_none() => {
+                        go(cg, &p.segments[0], seen)
+                    }
+                    _ => false,
+                }
+            });
+            seen.pop();
+            ok
+        }
+        go(self, name, &mut Vec::new())
+    }
+
+    /// [`Self::struct_type_owns_nothing_to_free`] for a NAMED argument handed
+    /// back by a generic callee, excluding a PARAMETER of the function being
+    /// compiled. A by-value parameter's body is the CALLER's (the
+    /// caller-retains convention for a type with no heap), so the enclosing
+    /// function holds no action to retract for it and registering the result
+    /// would be a second owner beside that caller: measured, `fn outer[T](x: T)
+    /// { idg(x); }` then ran the body twice. That shape is the open
+    /// caller-retained-param family, where the concrete twin `fn outerC(x: P)
+    /// { wrapC(x); }` is already doubled on every surface; declining here keeps
+    /// the generic spelling where it was rather than moving it onto that
+    /// answer. The monomorph retraction asks this same question, so the two
+    /// halves stay identical.
+    pub(super) fn handback_owns_nothing_from_local(&self, var: &str, type_name: &str) -> bool {
+        !self.fn_ctx.current_fn_param_names.contains(var)
+            && self.struct_type_owns_nothing_to_free(type_name)
+    }
+
+    /// B-2026-09-25-30 — does a discarded call hand a by-value argument that is
+    /// a PARAMETER of the function being compiled? The generic-wrapper
+    /// registrations below stand down for it, for the reason
+    /// [`Self::handback_owns_nothing_from_local`] states.
+    /// B-2026-09-25-30 — may the discarded call's callee hand one of its
+    /// arguments back WHOLE, i.e. does it declare a parameter of its own return
+    /// type (`fn mid[T](g: G[T], c: bool) -> G[T]`)? The caller already owns
+    /// such a result: the maybe-handed-back compare (B-2026-09-17-7) frees the
+    /// box through the argument's binding when the two are one object, so a
+    /// registration here was a double free (`mid(a, true);`, measured). The
+    /// generic-wrapper registrations below are for a callee that BUILDS its
+    /// result (`fn mkh[T](v: T) -> Ho[T]`), which nothing else owns. An
+    /// unresolvable callee answers yes, keeping the old behaviour.
+    fn discarded_call_may_return_an_arg_whole(&self, tail: &Expr) -> bool {
+        let Some(program) = self.program_snapshot.as_deref() else {
+            return true;
+        };
+        let key = match &tail.kind {
+            ExprKind::Call { callee, .. } => match &callee.kind {
+                ExprKind::Identifier(n) => Some(n.clone()),
+                ExprKind::Path { segments, .. } if segments.len() == 2 => {
+                    Some(format!("{}.{}", segments[0], segments[1]))
+                }
+                _ => None,
+            },
+            ExprKind::MethodCall { object, method, .. } => self
+                .type_name_of_expr(object)
+                .map(|t| format!("{t}.{method}")),
+            _ => None,
+        };
+        let Some(f) = key.and_then(|k| super::declarations::find_function_ast(program, &k)) else {
+            return true;
+        };
+        let Some(ret) = f.return_type.as_ref().and_then(Self::te_head_name) else {
+            return true;
+        };
+        f.params
+            .iter()
+            .any(|p| Self::te_head_name(&p.ty).as_deref() == Some(ret.as_str()))
+    }
+
+    ///
+    /// And a NAMED argument whose binding keeps its own drop across the call:
+    /// an enum binding (the discarded-statement window leaves the caller's
+    /// binding the box's only owner, B-2026-09-17-7 — `wrap(g, true);` over
+    /// `fn wrap[T](g: G1[T], c: bool) -> H[T]` double-freed once this
+    /// registered the `H`), or a struct the monomorph hand-back retraction does
+    /// not stand down. The binding still frees what it would hand into the
+    /// result, so the result must not be given a second owner.
+    fn discarded_call_passes_a_param(&self, tail: &Expr) -> bool {
+        let args = match &tail.kind {
+            ExprKind::Call { args, .. } | ExprKind::MethodCall { args, .. } => args,
+            _ => return false,
+        };
+        args.iter().any(|a| {
+            let ExprKind::Identifier(n) = &a.value.kind else {
+                return false;
+            };
+            if self.fn_ctx.current_fn_param_names.contains(n.as_str())
+                || self
+                    .payload_vars
+                    .boxed_enum_payload_vars
+                    .contains(n.as_str())
+            {
+                return true;
+            }
+            let Some(tn) = self.var_types.var_type_names.get(n.as_str()) else {
+                return false;
+            };
+            if self.type_decls.enum_layouts.contains_key(tn.as_str()) {
+                return true;
+            }
+            self.type_decls.struct_types.contains_key(tn.as_str())
+                && !(self.struct_type_is_entry_copied_heap(tn)
+                    || self.handback_owns_nothing_from_local(n, tn))
+        })
     }
 
     /// B-2026-08-01-14 — the ENUM sibling of
