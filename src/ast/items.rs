@@ -8089,8 +8089,51 @@ pub fn fn_conditionally_moves_param_into_local_container(f: &Function, arg_index
     if roots.is_empty() {
         return false;
     }
-    outliving_store::walk_block(&f.body, name, &roots)
-        && !outliving_store::escapes_by_unclearable_route(&f.body, name, &roots)
+    // The SAME store shape the MUST twin recognises: a `push` / `insert` of the
+    // bare param onto a container a let-bound local names. Not
+    // `outliving_store::walk_block`, whose roots-relative answer also counts a
+    // FIELD assignment into a local (`o.h = h`) — a struct field, not a
+    // container, and one the caller keeps firing for, so claiming it here
+    // stood the caller down and left the body with no owner.
+    fn pushes(e: &Expr, name: &str, roots: &[&str]) -> bool {
+        if let ExprKind::MethodCall {
+            object,
+            method,
+            args,
+            ..
+        } = &e.kind
+        {
+            if matches!(
+                method.as_str(),
+                "push" | "push_back" | "push_front" | "insert"
+            ) && matches!(&object.kind, ExprKind::Identifier(v) if roots.contains(&v.as_str()))
+                && args
+                    .iter()
+                    .any(|a| outliving_store::is_bare(&a.value, name))
+            {
+                return true;
+            }
+        }
+        let mut hit = false;
+        crate::rc_elide::walk_children_pub(&e.kind, &mut |c| {
+            if !hit && pushes(c, name, roots) {
+                hit = true;
+            }
+        });
+        hit
+    }
+    let mut stores = false;
+    for st in &f.body.stmts {
+        crate::rc_elide::walk_stmt_children_pub(st, &mut |c| {
+            if !stores && pushes(c, name, &roots) {
+                stores = true;
+            }
+        });
+    }
+    if let Some(fe) = f.body.final_expr.as_deref() {
+        stores = stores || pushes(fe, name, &roots);
+    }
+    stores && !outliving_store::escapes_by_unclearable_route(&f.body, name, &roots)
 }
 
 /// B-2026-08-30-28 — the MUST half of [`fn_moves_param_into_outliving_place`]:
