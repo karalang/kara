@@ -104,14 +104,14 @@ distinguish "bugs flattening" from "we stopped writing them down."
 | false-positive | 109 |
 | soundness | 97 |
 | crash | 96 |
-| use-after-free | 54 |
+| use-after-free | 55 |
 
 ### By surface
 
 | surface | total |
 |---|---|
-| codegen | 2089 |
-| interp | 554 |
+| codegen | 2090 |
+| interp | 555 |
 | typecheck | 308 |
 | other | 110 |
 | ownership | 77 |
@@ -386,13 +386,13 @@ registered in the callee's prologue, not by-value struct params in general. | �
 | B-2026-09-25-38 | 2026-09-25 | codegen | medium | A `Drop` STRUCT WITH A `shared` FIELD HANDED TO A GENERIC FN THAT WRAPS IT IN AN ENUM RUNS ITS BODY TWICE ON EVERY COMPILED SURFACE -- `let h = mkh(s)` over `fn mkh[T](v: T) -> Ho[T] { return Ho.Full(v); }` prints `dS8 dS8 h end` where `--interp` prints `dS8 h end`, and `mid(s, true)` / `mid(s, false)` over `fn mid[T](v: T, c: bool) -> Option[T]` do the same; valgrind clean | — |
 | B-2026-09-25-39 | 2026-09-25 | codegen | medium | AN `Option` OR GENERIC ENUM WHOSE PAYLOAD IS A STRUCT WITH A `shared` FIELD NEVER RELEASES THAT FIELD -- `let o = Some(S3 { h: Sh { k: 1 }, id: 6 })` with no call anywhere loses the 16-byte `Sh` box at -O0 on every compiled surface, `Ho.Full(s)` over `enum Ho[T]` too, with or without a `Drop` on the struct; a NON-generic user enum `E3.A(s)` and a generic STRUCT `Bx { v: s }` are clean | — |
 | B-2026-09-25-40 | 2026-09-25 | codegen | high | A GENERIC FN THAT HANDS A `shared`-FIELD STRUCT BACK, OR STORES IT, ON ONLY SOME PATHS USES IT AFTER FREE ON EVERY COMPILED SURFACE, with or without a `Drop` -- `pick(s, true, w)` over `fn pick[T](v: T, c: bool, w: T) -> T { if c { return v } return w }` aborts under `karac run` with 2 valgrind errors at -O0 at `T = S3` and `T = S2`, the S2 cells also running a body twice (`dS2 dS2 dS1 t1 dS1` against `dS2 t1 dS1`), and `stc(s, true)` over a conditional `v.push(a)` does the same at `T = S3` | — |
-| B-2026-09-25-41 | 2026-09-25 | codegen | high | A BY-VALUE PARAM HANDED ON TO A CALLEE THAT RETURNS IT ON ONLY SOME PATHS IS USED AFTER FREE, `Drop` OR NOT -- `fn passp2(a: S2, c: bool) -> S2 { let w = mk2(98); return pickS2(a, c, w) }` called as `passp2(s, true)` over `struct S2 { h: Sh, id: i64 }` (`shared struct Sh`, user `Drop`) aborts under `karac run` with 2 valgrind errors at -O0 and prints `dS98 dS7 t7 dS7` against `dS98 t7 dS7`; at `false` it runs `dS8` twice | — |
 | B-2026-09-25-42 | 2026-09-25 | interp | medium | A FRESH TEMP PROJECTED IN A FUNCTION'S TAIL EXPRESSION RUNS ITS `Drop` BODIES ON THE THREE COMPILED SURFACES AND NONE UNDER `--interp` -- `fn tail() -> i64 { mkw(9).b }` then `println(f"t{tail()}")` prints `dD109n109 dD9n9 t9 end` on jit / -O2 seq / -O2 par and `t9 end` under `--interp`; the `return mkw(8).b;` spelling agrees on all four | — |
 | B-2026-09-25-43 | 2026-09-25 | interp | medium | A FIELD READ OFF A FRESH `shared struct` TEMPORARY RUNS ITS `Drop` BODY ON THE THREE COMPILED SURFACES AND NEVER UNDER `--interp` -- `println(f"s{mksh().k}")` over `shared struct Sh { k: i64 }` with `impl Drop for Sh` prints `dSh6 s6 end` on jit / -O2 seq / -O2 par and `s6 end` under `--interp` | — |
 | B-2026-09-25-44 | 2026-09-25 | interp+codegen | medium | A FRESH TEMP READ THROUGH A PROJECTION STILL RUNS NO `Drop` BODIES, ON ALL FOUR SURFACES ALIKE, IN FIVE POSITIONS B-2026-09-17-36's FIX DECLINES -- the projection handed by value to a callee (`eat(mkw(7).r)` prints `v7 end`), a GENERIC struct temp (`mkg(mkd(3)).k` over `struct G[T] { v: T, k: i64 }`), a `while` condition (`while mkw(i).b < 2`), a closure body (`|n: i64| mkw(n).b`) and a `match` scrutinee (`match mkw(3).b { .. }`) | — |
 | B-2026-09-26-1 | 2026-09-26 | codegen | high | A HEAP FIELD MOVED OUT THROUGH A TWO-HOP PROJECTION OF A FRESH TEMP IS FREED TWICE ON EVERY COMPILED SURFACE -- `let s = mkw2().p.name;` over `struct P { name: String }` / `struct W2 { p: P, b: i64 }` (no `Drop` anywhere) aborts with `free(): double free detected in tcache 2` on jit / -O2 seq / -O2 par and prints `pp end` under `--interp`; the fn-tail spelling `fn f5() -> String { mkw2().p.name }` does the same, and the one-hop `mkd(5).name` is clean | — |
 | B-2026-09-26-2 | 2026-09-26 | interp | medium | A FRESH TEMP'S PROJECTION WRAPPED IN A CONSTRUCTOR IN A FUNCTION TAIL RUNS ITS SIBLINGS' `Drop` BODIES COMPILED AND NOT UNDER `--interp` -- `fn f24(c: bool) -> Result[i64, String] { if c { return Err(f"e"); } Ok(mkw(9).b) }` then `println(f"t{f24(false).unwrap()}")` prints `dD109n109 dD9n9 t9 end` on jit / -O2 seq / -O2 par and `t9 end` under `--interp` | — |
 | B-2026-09-26-3 | 2026-09-26 | interp+codegen | medium | A FIELD TAKEN OFF A FRESH TEMP WHOSE TYPE HAS ITS OWN `Drop` LOSES THAT TYPE'S BODY ON ALL FOUR SURFACES -- `let y = mkq().k;` over `struct Q { d: D, k: i64 }` with `impl Drop for Q` prints `dD3n3 y4` where the named `let q = mkq(); let x = q.k;` and the read-only `println(f"z{mkq().k}")` both print `dQ4 dD3n3` | — |
+| B-2026-09-26-4 | 2026-09-26 | interp+codegen | high | A BY-VALUE PARAM HANDED ON TWO LEVELS TO A CALLEE THAT RETURNS IT ON ONLY SOME PATHS IS STILL USED AFTER FREE, `Drop` OR NOT -- `fn outer(a: S3, c: bool) -> S3 { return passp(a, c) }` over B-2026-09-25-41's `passp` aborts under `karac run` with 2 valgrind errors at -O0 at both exits, and over the `Drop`-bearing `passp2` EVERY surface including `--interp` prints `dS98 dS3 t3 dS3` where one `dS3` is due | — |
 
 ### Relocated
 
@@ -3077,6 +3077,7 @@ registered in the callee's prologue, not by-value struct params in general. | �
 | B-2026-09-25-35 | codegen | medium | TWO FIELDS OF ONE BINDING EACH MOVED OUT CONDITIONALLY (`if c { let x = h.p } else { let y = h.q }`, or two separate `if`s) LOSE THE UNMOVED FIELD'S… | b67469bbc |
 | B-2026-09-25-36 | runtime | medium | A HOST EVENT STREAM (`std.web.events.keydown` and its siblings) KEEPS SENDING AFTER THE GUEST DROPS ITS RECEIVER, AND `channel_send` PANICS -- `send… | ce7206cb2 |
 | B-2026-09-25-37 | codegen | high | A STRUCT WITH A `shared` FIELD AND NO `Drop` OF ITS OWN IS STILL USED AFTER FREE ON THE CONCRETE PATHS B-2026-09-25-31 DID NOT REACH -- a METHOD or A… | fa4928288 |
+| B-2026-09-25-41 | codegen | high | A BY-VALUE PARAM HANDED ON TO A CALLEE THAT RETURNS IT ON ONLY SOME PATHS IS USED AFTER FREE, `Drop` OR NOT -- `fn passp2(a: S2, c: bool) -> S2 { let… | 663ced4b9 |
 
 </details>
 
