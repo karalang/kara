@@ -1337,7 +1337,7 @@ pub(super) fn cmd_run(
                 process::exit(1);
             }
         }
-        match crate::codegen::compile_to_ir_with_options(
+        match crate::codegen::compile_to_ir_for_jit(
             &pipeline.parsed.program,
             pipeline.ownership.as_ref(),
             pipeline.concurrency.as_ref(),

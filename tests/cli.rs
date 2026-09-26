@@ -19627,6 +19627,92 @@ fn run_via_jit_opt_in_executes_and_matches_output() {
     let _ = std::fs::remove_dir_all(&tmp);
 }
 
+/// B-2026-09-26-45 — `karac run` must compile a network-boundary fn the way
+/// `karac build` does. The JIT IR used to be built with the coroutine path OFF,
+/// so a direct call to such a fn ran its ramp, the caller dropped the owned
+/// args, and the body never ran: `7 2` for the first cell (AOT `1 7 2`), and
+/// through `tg.spawn` the `Drop` body was lost as well (`end`, AOT
+/// `h4 dR4 end`). `go = false` keeps the park unreached, so each cell finishes
+/// without a peer; `WebSocket.from_fd` is the raw-fd test constructor.
+#[cfg(feature = "llvm")]
+#[test]
+fn run_via_jit_executes_network_boundary_fn_body() {
+    let tmp = std::env::temp_dir().join(format!(
+        "karac-cli-run-jit-coro-{}-{}",
+        std::process::id(),
+        std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .map(|d| d.as_nanos())
+            .unwrap_or(0),
+    ));
+    std::fs::create_dir_all(&tmp).unwrap();
+    let cells: [(&str, &str, &[&str]); 2] = [
+        (
+            "direct",
+            "struct Conn { id: i64 }\n\
+             impl Drop for Conn { fn drop(mut ref self) { println(7); } }\n\
+             fn serve_one(ws: WebSocket, c: Conn, go: bool) {\n\
+             \x20   let mut buf: Array[u8, 16] = [0u8; 16];\n\
+             \x20   if go { let _x = ws.recv_text(mut buf); }\n\
+             \x20   println(1);\n\
+             }\n\
+             #[allow(unstable_api)]\n\
+             fn main() {\n\
+             \x20   let c = Conn { id: 0 };\n\
+             \x20   let ws = WebSocket.from_fd(-1);\n\
+             \x20   serve_one(ws, c, false);\n\
+             \x20   println(2);\n\
+             }\n",
+            &["1", "7", "2"],
+        ),
+        (
+            "spawned",
+            "struct R { id: i64 }\n\
+             impl Drop for R { fn drop(mut ref self) { println(f\"dR{self.id}\") } }\n\
+             fn handle(r: R, ws: WebSocket, go: bool) {\n\
+             \x20   let mut buf: Array[u8, 16] = [0u8; 16];\n\
+             \x20   if go { let _x = ws.recv_text(mut buf); }\n\
+             \x20   println(f\"h{r.id}\");\n\
+             }\n\
+             #[allow(unstable_api)]\n\
+             fn main() {\n\
+             \x20   {\n\
+             \x20       let mut tg: TaskGroup = TaskGroup.new();\n\
+             \x20       let r = R { id: 4 };\n\
+             \x20       let ws = WebSocket.from_fd(-1);\n\
+             \x20       tg.spawn(|| handle(r, ws, false));\n\
+             \x20   }\n\
+             \x20   println(\"end\");\n\
+             }\n",
+            &["h4", "dR4", "end"],
+        ),
+    ];
+    let runner = env!("CARGO_BIN_EXE_karac_jit_runner");
+    for (name, src, want) in cells {
+        let path = tmp.join(format!("{name}.kara"));
+        std::fs::write(&path, src).unwrap();
+        let out = karac_bin()
+            .args(["run", path.to_str().unwrap()])
+            .env("KARAC_RUN_JIT", "1")
+            .env("KARAC_JIT_RUNNER", runner)
+            .output()
+            .unwrap();
+        let stdout = String::from_utf8_lossy(&out.stdout);
+        let stderr = String::from_utf8_lossy(&out.stderr);
+        assert!(
+            out.status.success(),
+            "{name}: JIT-run should exit 0; stdout={stdout} stderr={stderr}",
+        );
+        let got: Vec<&str> = stdout.lines().collect();
+        assert_eq!(
+            got, want,
+            "{name}: `karac run` must execute the network-boundary fn's body \
+             exactly as `karac build` does; stderr={stderr}",
+        );
+    }
+    let _ = std::fs::remove_dir_all(&tmp);
+}
+
 /// The abort tier of the same decision: RAII-across-yield violations
 /// break execution-soundness/teardown guarantees (like provider escape),
 /// so they abort `karac run` rather than warn. This gate existed in

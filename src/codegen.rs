@@ -343,6 +343,37 @@ pub fn compile_to_ir_with_options(
     )
 }
 
+/// [`compile_to_ir_with_options`] with the A2 coroutine network-async path
+/// **on** — the IR `karac run` hands to `karac_jit_runner`.
+///
+/// B-2026-09-26-45 — the JIT must compile the program the way `karac build`
+/// does, and `karac build` passes `coro_enabled: true`
+/// ([`compile_to_object_with_hot_swap`]). `karac run` used to take the
+/// test-facing [`compile_to_ir_with_options`], which leaves it `false`, so a
+/// network-boundary fn went through the legacy degenerate state-machine
+/// poll-fn: a direct call ran the ramp, the caller dropped the owned args, and
+/// the BODY NEVER RAN — `karac run` printed `7 2` where `karac build` printed
+/// `1 7 2`. The runner already lowers coroutines (`run_coro_passes`, run on
+/// every module it adds), so turning the path on is all the JIT needs.
+pub fn compile_to_ir_for_jit(
+    program: &Program,
+    ownership: Option<&OwnershipCheckResult>,
+    concurrency: Option<&ConcurrencyAnalysis>,
+    source_filename: Option<&str>,
+    source_text: Option<&str>,
+) -> Result<String, CodegenError> {
+    let context = Context::create();
+    let mut cg = Codegen::new(&context, "karac_module");
+    cg.load_rc_fallback(ownership);
+    cg.load_deque_head_locals(program);
+    cg.load_concurrency_analysis(concurrency);
+    cg.set_source_filename(source_filename);
+    cg.set_source_text(source_text);
+    cg.set_coro_enabled(true);
+    compile_program_spanned(&mut cg, program)?;
+    Ok(cg.module.print_to_string().to_string())
+}
+
 /// Slice c-repl.B.5.1: types eligible for REPL value-snapshotting.
 /// A top-level immutable `let name = expr` binding whose Kāra type
 /// lowers to one of these forms can have its bound value stashed in
