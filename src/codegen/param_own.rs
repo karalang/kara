@@ -3649,6 +3649,73 @@ impl<'ctx> super::Codegen<'ctx> {
                 || crate::ast::fn_conditionally_hands_param_to_flip_callee(program, f, arg_index))
     }
 
+    /// B-2026-09-25-41 — the parameters a frame owns PER PATH itself, as
+    /// `(fn key, param name)`: the input `param_transfer::compute_handback_safe_params`
+    /// admits at a call site where it otherwise declines every enclosing-frame
+    /// parameter.
+    ///
+    /// Mirrors the conditional-store registration in `compile_function` for a
+    /// param handed bare to a flip callee, restricted to the arms that register
+    /// the FULL value drop (and so own the memory, not only the bodies): a
+    /// forwarded struct with a real `Drop` that is not `shared`, or a Drop-less
+    /// forwarded one owning a `shared` field. Free functions only, non-generic
+    /// and not coroutine-compiled, exactly the registration's own gates. Its
+    /// caller stands down for such a param through the via-call channel, and
+    /// the frame's flag is cleared at the handing statement, so the frame is a
+    /// real owner the call site can retract. Computed after the struct tables
+    /// and the coroutine keys exist; `program_snapshot` is not set yet, so the
+    /// program is passed in.
+    pub(crate) fn per_path_self_owned_params(
+        &self,
+        program: &crate::ast::Program,
+    ) -> rustc_hash::FxHashSet<(String, String)> {
+        let mut out = rustc_hash::FxHashSet::default();
+        for item in &program.items {
+            let crate::ast::Item::Function(f) = item else {
+                continue;
+            };
+            if f.generic_params.is_some() || self.is_coroutine_compiled(&f.name) {
+                continue;
+            }
+            for (i, p) in f.params.iter().enumerate() {
+                let Some(name) = p.name() else { continue };
+                let TypeKind::Path(path) = &p.ty.kind else {
+                    continue;
+                };
+                let Some(struct_name) = path.segments.first() else {
+                    continue;
+                };
+                if !self
+                    .type_decls
+                    .struct_types
+                    .contains_key(struct_name.as_str())
+                    || self
+                        .type_decls
+                        .struct_generic_params
+                        .get(struct_name.as_str())
+                        .is_some_and(|g| !g.is_empty())
+                    || !self.struct_param_memory_stays_with_caller(struct_name)
+                {
+                    continue;
+                }
+                let full_owner = if program.drop_method_keys.contains_key(struct_name.as_str()) {
+                    !self
+                        .type_decls
+                        .shared_types
+                        .contains_key(struct_name.as_str())
+                } else {
+                    self.struct_owns_shared_field(struct_name, &mut Vec::new())
+                };
+                if full_owner
+                    && crate::ast::fn_conditionally_hands_param_to_flip_callee(program, f, i)
+                {
+                    out.insert((f.name.clone(), name.to_string()));
+                }
+            }
+        }
+        out
+    }
+
     /// B-2026-09-25-37 — a non-generic struct with no `Drop` of its own that
     /// the callee FORWARDS (copy declined, no transfer) and whose value drop is
     /// the combined one because it owns a `shared` field.

@@ -860,7 +860,28 @@ fn classify_call(f: &str, args: &[crate::ast::CallArg], fr: &FrameOwned, cx: &mu
 ///
 /// Soundness rests on the same exhaustive walk, so a missed call site is a
 /// build error rather than a silent double free.
-pub(crate) fn compute_handback_safe_params(program: &Program) -> FxHashSet<ParamKey> {
+///
+/// B-2026-09-25-41 — ONE kind of enclosing-frame parameter is admitted after
+/// all: one that frame owns PER PATH itself. `self_owned` names them, as
+/// `(fn key, param name)`, and the codegen side computes it from the very
+/// registration `compile_function` makes — a param the frame hands BARE to a
+/// flip callee (`fn_conditionally_hands_param_to_flip_callee`) whose memory it
+/// takes over from its own caller, so its caller stands down and the frame's
+/// per-path flag is cleared at the handing statement. That clear IS a
+/// caller-side owner this fix can retract, which is the whole admission rule
+/// above; the measured hazard was a frame with NO registration. Declining them
+/// cost more than the flip: `fn passp(a: S3, c: bool) -> S3 { let w = ..;
+/// return pickS3(a, c, w) }` withdrew `pickS3`'s flip from EVERY caller, so a
+/// direct `pickS3(s, true, w)` in `main` became a use after free the moment
+/// `passp` existed anywhere in the program, and `passp`'s own false path
+/// leaked the value nobody freed. Deliberately NOT propagated through
+/// `let q = a;` — the flag is keyed by the parameter's own name, so a rebind
+/// hands over something the clear never sees — and not granted to a name the
+/// walk also forbids (reassigned, or shadowed by a pattern).
+pub(crate) fn compute_handback_safe_params(
+    program: &Program,
+    self_owned: &FxHashSet<(String, String)>,
+) -> FxHashSet<ParamKey> {
     let mut live: FxHashSet<ParamKey> = FxHashSet::default();
     let mut fns: FxHashMap<String, (usize, bool)> = FxHashMap::default();
     // B-2026-09-07-4 — impl-block methods and assoc fns are candidates too, and
@@ -935,7 +956,7 @@ pub(crate) fn compute_handback_safe_params(program: &Program) -> FxHashSet<Param
     }
     let mut poisoned: FxHashSet<String> = FxHashSet::default();
 
-    for (_, region) in all_regions(program) {
+    for (region_key, region) in all_regions(program) {
         let params: &[Param] = match region {
             Region::Body(p, _) => p,
             Region::Loose(_) => &[],
@@ -943,11 +964,22 @@ pub(crate) fn compute_handback_safe_params(program: &Program) -> FxHashSet<Param
         // Every parameter name, in EVERY mode. The transfer gate splits owned
         // from borrowed here; this one does not, because an own-mode parameter
         // is exactly the shape whose memory may belong to a frame further up.
+        // B-2026-09-25-41 — except one this frame owns per path itself (see the
+        // doc above); it is left out of `forbidden` so that only the WALK can
+        // put it there, and admitted by name in `judge`.
         let mut forbidden: FxHashSet<String> = FxHashSet::default();
+        let mut owned_here: FxHashSet<String> = FxHashSet::default();
         forbidden.insert("self".to_string());
         for p in params {
             if let Some(n) = p.name() {
-                forbidden.insert(n.to_string());
+                if region_key
+                    .as_ref()
+                    .is_some_and(|k| self_owned.contains(&(k.clone(), n.to_string())))
+                {
+                    owned_here.insert(n.to_string());
+                } else {
+                    forbidden.insert(n.to_string());
+                }
             }
         }
         // Locals seeded by a fresh temp, plus the `let a = b;` edges that carry
@@ -959,10 +991,12 @@ pub(crate) fn compute_handback_safe_params(program: &Program) -> FxHashSet<Param
         let mut mcalls: Vec<(String, &[crate::ast::CallArg])> = Vec::new();
         let mut callees: FxHashSet<*const Expr> = FxHashSet::default();
         let mut mentions: Vec<(String, *const Expr)> = Vec::new();
+        let mut let_bound: FxHashSet<String> = FxHashSet::default();
         let mut collect = |n| match n {
             Node::Stmt(st) => match &st.kind {
                 StmtKind::Let { pattern, value, .. } => {
                     if let PatternKind::Binding(b) = &pattern.kind {
+                        let_bound.insert(b.clone());
                         match &value.kind {
                             ExprKind::Call { .. }
                             | ExprKind::MethodCall { .. }
@@ -1059,6 +1093,10 @@ pub(crate) fn compute_handback_safe_params(program: &Program) -> FxHashSet<Param
                 poisoned.insert(n);
             }
         }
+        // B-2026-09-25-41 — a `let` of the same name SHADOWS the parameter, and
+        // the admission belongs to the parameter alone: the shadow is judged
+        // as the local it is (fresh, or not).
+        owned_here.retain(|n| !let_bound.contains(n));
         // Close the `let a = b;` edges to a fixpoint: `a` is retractable only
         // if `b` was, whatever order the two statements appear in.
         loop {
@@ -1092,7 +1130,8 @@ pub(crate) fn compute_handback_safe_params(program: &Program) -> FxHashSet<Param
                     | ExprKind::MethodCall { .. }
                     | ExprKind::StructLiteral { .. } => true,
                     ExprKind::Identifier(n) => {
-                        fresh.contains(n.as_str()) && !forbidden.contains(n.as_str())
+                        (fresh.contains(n.as_str()) || owned_here.contains(n.as_str()))
+                            && !forbidden.contains(n.as_str())
                     }
                     _ => false,
                 };

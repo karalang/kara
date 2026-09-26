@@ -4014,3 +4014,75 @@ fn main() {
         "got:\n{out}"
     );
 }
+
+/// B-2026-09-25-41 — a by-value param handed on to a callee that returns it
+/// on only some paths (`fn passp(a: S3, c: bool) -> S3 { .. return pickS3(a,
+/// c, w) }`). Two faults: the auto-par body path compiles a function's LAST
+/// expression without the conditional-store disarm `compile_block`'s tail has,
+/// so `passp`'s per-path flag stayed armed across the hand-over (`a_` and `b_`
+/// true: a use after free once the result freed the memory, and a second `dS3`
+/// body; `b_` false: `dS4` twice); and the hand-back gate declined every
+/// enclosing-frame param, so `passp` switched `pickS3`'s per-path owner off for
+/// EVERY caller -- `h_`'s direct call read a freed block in a program merely
+/// containing `passp`, and the false paths of `c_`, `d_` and `f_` leaked the
+/// value nobody freed. `e_` is a `Drop` struct with a `String` field, clean
+/// before and after; `g_` a fresh temp and a loop.
+///
+/// THIS e2e PIN PASSES WITHOUT THE FIX, and says so rather than pretending
+/// otherwise: `run_program` compiles without the concurrency analysis, so the
+/// first fault's auto-par body path is never taken, and the second fault's use
+/// after free and leaks do not reach stdout at -O2. It pins the output of the
+/// fixed build against the interpreter; the ASAN twin, which runs the analysis,
+/// is the fixture that fails without the fix (measured on fa4928288: output
+/// `dS3` and `dS4` twice, and `heap-use-after-free` in
+/// `__karac_vec_elem_full_drop_S3` under the instrumented leg).
+#[test]
+fn e2e_param_handed_on_to_mixed_path_callee_has_one_owner() {
+    let Some(out) = run_program(
+        r#"shared struct Sh { k: i64 }
+struct S2 { h: Sh, id: i64 }
+impl Drop for S2 { fn drop(mut ref self) { println(f"dS{self.id}") } }
+struct S3 { h: Sh, id: i64 }
+struct R { id: i64, tag: String }
+impl Drop for R { fn drop(mut ref self) { println(f"dR{self.id}") } }
+fn pickS3(v: S3, c: bool, w: S3) -> S3 { if c { return v } return w }
+fn pickS2(v: S2, c: bool, w: S2) -> S2 { if c { return v } return w }
+fn keepR(r: R, c: bool) -> R { if c { return r } return R { id: 99, tag: "z" } }
+fn keep3(v: S3, c: bool) -> S3 { if c { return v } return S3 { h: Sh { k: 9 }, id: 99 } }
+fn keep2(v: S2, c: bool) -> S2 { if c { return v } return S2 { h: Sh { k: 9 }, id: 99 } }
+fn mk(i: i64) -> S3 { return S3 { h: Sh { k: i }, id: i } }
+fn mk2(i: i64) -> S2 { return S2 { h: Sh { k: i }, id: i } }
+fn passp(a: S3, c: bool) -> S3 { let w = mk(98); return pickS3(a, c, w) }
+fn passp2(a: S2, c: bool) -> S2 { let w = mk2(98); return pickS2(a, c, w) }
+fn letret(a: S3, c: bool) -> S3 { let w = mk(98); let t = pickS3(a, c, w); return t }
+fn stmt3(a: S3, c: bool) { keep3(a, c); println("s3") }
+fn stmt2(a: S2, c: bool) { keep2(a, c); println("s2") }
+fn stmtR(a: R, c: bool) { keepR(a, c); println("sR") }
+fn letR(a: R, c: bool) -> i64 { let t = keepR(a, c); return t.id }
+fn nest3(a: S3, c: bool, j: bool) { if j { let t = keep3(a, c); println(f"n{t.id}") } println("nx") }
+fn nest2(a: S2, c: bool, j: bool) { if j { let t = keep2(a, c); println(f"n{t.id}") } println("nx") }
+fn a_pass() { let s = mk(1); let t = passp(s, true); let s2 = mk(2); let t2 = passp(s2, false); println(f"a{t.id} {t2.id}") }
+fn b_pass2() { let s = mk2(3); let t = passp2(s, true); println(f"b{t.id}"); let s2 = mk2(4); let t2 = passp2(s2, false); println(f"b{t2.id}") }
+fn c_letret() { let s = mk(5); let t = letret(s, true); let s2 = mk(6); let t2 = letret(s2, false); println(f"c{t.id} {t2.id}") }
+fn d_stmt() { let s = mk(7); stmt3(s, true); let s2 = mk(8); stmt3(s2, false); let s3 = mk2(9); stmt2(s3, true); let s4 = mk2(10); stmt2(s4, false) }
+fn e_stmtR() { let s = R { id: 11, tag: "a" }; stmtR(s, true); let s2 = R { id: 12, tag: "b" }; stmtR(s2, false); let s3 = R { id: 13, tag: "c" }; println(f"e{letR(s3, true)}") }
+fn f_nest() { let s = mk(14); nest3(s, true, true); let s2 = mk(15); nest3(s2, false, true); let s3 = mk(16); nest3(s3, true, false); let s4 = mk2(17); nest2(s4, true, true); let s5 = mk2(18); nest2(s5, true, false) }
+fn g_temp_loop() { let t = passp(mk(21), true); println(f"g{t.id}"); for i in 0..3 { let s = mk(i); let u = passp(s, i == 1); println(f"g{u.id}") } }
+fn h_direct() { let s = mk(22); let w = mk(23); let t = pickS3(s, true, w); let s2 = mk2(24); let w2 = mk2(25); let t2 = pickS2(s2, false, w2); println(f"h{t.id} {t2.id}") }
+fn main() {
+    a_pass()
+    b_pass2()
+    c_letret()
+    d_stmt()
+    e_stmtR()
+    f_nest()
+    g_temp_loop()
+    h_direct()
+    println("end")
+}
+"#,
+    ) else {
+        return;
+    };
+    assert_eq!(out, "a1 98\ndS98\nb3\ndS3\ndS4\nb98\ndS98\nc5 98\ns3\ns3\ndS9\ns2\ndS10\ndS99\ns2\ndR11\nsR\ndR12\ndR99\nsR\ndR13\ne13\nn14\nnx\nn99\nnx\nnx\nn17\ndS17\nnx\nnx\ndS18\ng21\ng98\ng1\ng98\ndS24\nh22 25\ndS25\nend\n", "got:\n{out}");
+}

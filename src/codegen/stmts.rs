@@ -2220,6 +2220,15 @@ impl<'ctx> super::Codegen<'ctx> {
             // spelling of the same program still double-freeing. Same mark
             // discipline, for the same reason.
             let mark = self.pending_enum_field_zeros.len();
+            // B-2026-09-25-41 — and the same two-sites lesson for the
+            // conditional-store disarm: `compile_block`'s tail arms it, this
+            // one did not, so `fn passp2(a: S2, c: bool) -> S2 { let w =
+            // mk2(98); return pickS2(a, c, w) }` left `a`'s per-path flag
+            // armed across the hand-over and ran `a`'s drop after the callee
+            // had handed it back -- a second body, and a use after free once
+            // the caller's result freed the same memory. The `;` spelling
+            // compiles as a statement and was already disarmed.
+            self.arm_conditional_store_flag_for_tail(expr);
             let val = self.compile_tail_final_expr(expr, auto_par_tail)?;
             self.flush_pending_enum_field_zeros_from(mark);
             Ok(Some(val))

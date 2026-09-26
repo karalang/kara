@@ -8043,12 +8043,9 @@ impl<'ctx> Codegen<'ctx> {
             &self.drop_rc.rc_fallback_fns,
         );
         self.transfer_struct_params = transferable;
-        // B-2026-09-06-69 — the CONDITIONAL hand-back's call-site gate, computed
-        // beside the transfer gate and for the identical structural reason: one
-        // callee body serves every call site, so the callee may only take the
-        // memory where every caller can give it up.
-        self.handback_safe_params =
-            crate::codegen::param_transfer::compute_handback_safe_params(program);
+        // B-2026-09-06-69 — the CONDITIONAL hand-back's call-site gate is
+        // computed below, once the struct tables and the coroutine keys exist
+        // (B-2026-09-25-41 needs both); nothing between here and there reads it.
         // Level 2 crash diagnostics — Part 2: stand up DWARF debug-info state
         // before any function compiles (no-op unless KARAC_DEBUG_INFO is set and
         // a source filename was threaded in via set_source_filename, which runs
@@ -8242,6 +8239,14 @@ impl<'ctx> Codegen<'ctx> {
         // `compile_expr` → `compile_call` → `compile_generic_call`.
         // Cheap `Rc` clones flow to per-mono callers as they fire.
         self.program_snapshot = Some(Rc::new(program.clone()));
+        // B-2026-09-06-69 — the CONDITIONAL hand-back's call-site gate, for the
+        // same structural reason as the transfer gate above: one callee body
+        // serves every call site, so the callee may only take the memory where
+        // every caller can give it up. B-2026-09-25-41 — a caller that owns the
+        // param it hands on per path itself can give it up too.
+        let self_owned = self.per_path_self_owned_params(program);
+        self.handback_safe_params =
+            crate::codegen::param_transfer::compute_handback_safe_params(program, &self_owned);
         // Collect SoA `layout` blocks BEFORE the state-machine emission below:
         // a persisted local that is SoA (a `layout`-named `Vec[E]` carried
         // across a suspend, e.g. the browser render loop's `grid`) must size its
