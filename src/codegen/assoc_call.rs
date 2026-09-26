@@ -3026,6 +3026,8 @@ impl<'ctx> super::Codegen<'ctx> {
                     } else if let Some(elem_ptr) = self.ref_arg_index_borrow_ptr(&a.value)? {
                         elem_ptr.into()
                     } else {
+                        // B-2026-09-26-33 — see `compile_call`.
+                        self.mark_borrowed_projection_read_through(&a.value);
                         let val = self.compile_expr(&a.value)?;
                         let slot = self.materialize_rvalue_for_ref_arg(val, i);
                         if track_tensor_temp {

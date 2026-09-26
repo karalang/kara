@@ -8135,6 +8135,7 @@ impl<'ctx> super::Codegen<'ctx> {
                         // the `ptr` ABI its signature declares; queue the
                         // temp's cleanup (the callee only borrows). Mirrors the
                         // free-fn rvalue-ref arm in `compile_call`.
+                        self.mark_borrowed_projection_read_through(&a.value);
                         let val = self.compile_expr(&a.value)?;
                         // B-2026-09-26-19 — a projection off a FRESH TEMP
                         // borrows in place, as in `compile_call`.

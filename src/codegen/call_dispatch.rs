@@ -1853,6 +1853,7 @@ impl<'ctx> super::Codegen<'ctx> {
                     self.accel.pending_let_tensor_info = Some(info.clone());
                     prev
                 });
+                self.mark_borrowed_projection_read_through(&a.value);
                 let val = self.compile_expr(&a.value)?;
                 if let Some(prev) = saved_pending_tensor {
                     self.accel.pending_let_tensor_info = prev;

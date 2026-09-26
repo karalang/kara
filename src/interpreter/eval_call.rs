@@ -2001,7 +2001,16 @@ impl<'a> super::Interpreter<'a> {
             .iter()
             .enumerate()
             .map(|(i, a)| {
+                if let Some((name, owner)) = &proj_target {
+                    self.mark_borrowed_projection_read_through(
+                        name,
+                        owner.as_deref().map(CalleeOwner::Assoc),
+                        i,
+                        &a.value,
+                    );
+                }
                 let v = self.eval_expr_inner(&a.value);
+                self.freshtemp_read_through = None;
                 if callee_is_variant_ctor {
                     self.consume_freshtemp_field_move(&a.value);
                 } else {
@@ -5347,6 +5356,29 @@ impl<'a> super::Interpreter<'a> {
         }
         self.type_name_runs_user_drop(&name, &mut Vec::new())
             .then_some(name)
+    }
+
+    /// B-2026-09-26-33 — a projection handed to a `ref` parameter of a
+    /// non-generic callee is READ THROUGH: the callee borrows it, so the fresh
+    /// temp it came off still owes every field's body, at the statement's end.
+    /// Codegen's twin is `mark_borrowed_projection_read_through`, set on the
+    /// same (non-monomorph) call paths.
+    pub(super) fn mark_borrowed_projection_read_through(
+        &mut self,
+        callee_name: &str,
+        method_owner: Option<CalleeOwner<'_>>,
+        i: usize,
+        value: &Expr,
+    ) {
+        let ExprKind::FieldAccess { object, .. } = &value.kind else {
+            return;
+        };
+        let non_generic = self
+            .callee_fn_for_ownership_guard_of(callee_name, method_owner)
+            .is_some_and(|f| f.generic_params.is_none());
+        if non_generic && self.callee_param_is_borrow(callee_name, method_owner, i) {
+            self.freshtemp_read_through = Some((object.span.offset, object.span.length));
+        }
     }
 
     /// B-2026-09-26-23 — consume a by-value Drop-bearing fresh-temp

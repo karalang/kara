@@ -3483,3 +3483,71 @@ fn main() {
         64,
     );
 }
+
+/// B-2026-09-26-33 — a `Drop`-bearing field projected off a fresh temp and
+/// handed to a `ref` parameter is read through: the temp keeps the field and
+/// runs every field's body once, at the end of the statement. The names are
+/// longer than the inline string capacity so each body frees a heap buffer.
+#[test]
+fn asan_fresh_temp_drop_projection_passed_by_ref_is_dropped_once() {
+    assert_clean_asan_run_min_allocs(
+        r#"struct D { id: i64, name: String }
+impl Drop for D { fn drop(mut ref self) { println(f"dD{self.id} {self.name}") } }
+fn mkd(n: i64) -> D { return D { id: n, name: f"name-string-longer-than-sso-{n}" }; }
+struct W { r: D, s: D, name: String, b: i64 }
+fn mkw(n: i64) -> W { return W { r: mkd(n), s: mkd(n + 100), name: f"w-string-longer-than-sso-{n}", b: n }; }
+struct X { w: W, t: D }
+fn mkx(n: i64) -> X { return X { w: mkw(n), t: mkd(n + 300) }; }
+enum E { A(D), B }
+struct Wx { e: E, s: D }
+fn mkwx(n: i64) -> Wx { return Wx { e: E.A(mkd(n)), s: mkd(n + 200) }; }
+fn peekd(d: ref D) -> i64 { d.id }
+fn pe(e: ref E) -> i64 { match e { E.A(d) => d.id, E.B => 0 } }
+fn pw(w: ref W) -> i64 { w.b }
+struct H { k: i64 }
+impl H { fn peek(self, d: ref D) -> i64 { d.id } fn pk(d: ref D) -> i64 { d.id } }
+fn main() {
+    println(f"a{peekd(mkw(1).r)}");
+    let h = H { k: 1 };
+    println(f"b{h.peek(mkw(2).s)}");
+    println(f"c{H.pk(mkw(3).r)}");
+    println(f"d{pe(mkwx(4).e)}");
+    println(f"e{peekd(mkx(5).w.r)}");
+    println(f"f{pw(mkx(6).w)}");
+    let g = peekd(mkw(7).r) + peekd(mkw(8).s);
+    println(f"g{g}");
+    println("end")
+}
+"#,
+        &[
+            "a1",
+            "dD101 name-string-longer-than-sso-101",
+            "dD1 name-string-longer-than-sso-1",
+            "b102",
+            "dD102 name-string-longer-than-sso-102",
+            "dD2 name-string-longer-than-sso-2",
+            "c3",
+            "dD103 name-string-longer-than-sso-103",
+            "dD3 name-string-longer-than-sso-3",
+            "d4",
+            "dD204 name-string-longer-than-sso-204",
+            "dD4 name-string-longer-than-sso-4",
+            "e5",
+            "dD305 name-string-longer-than-sso-305",
+            "dD105 name-string-longer-than-sso-105",
+            "dD5 name-string-longer-than-sso-5",
+            "f6",
+            "dD306 name-string-longer-than-sso-306",
+            "dD106 name-string-longer-than-sso-106",
+            "dD6 name-string-longer-than-sso-6",
+            "dD108 name-string-longer-than-sso-108",
+            "dD8 name-string-longer-than-sso-8",
+            "dD107 name-string-longer-than-sso-107",
+            "dD7 name-string-longer-than-sso-7",
+            "g115",
+            "end",
+        ],
+        "asan_fresh_temp_drop_projection_passed_by_ref_is_dropped_once",
+        48,
+    );
+}

@@ -7092,3 +7092,109 @@ impl H { fn mk(self, n: i64) -> W { mkw(n) } }
         }
     }
 }
+
+/// B-2026-09-26-33 — a `Drop`-bearing field projected off a FRESH temp and
+/// handed to a `ref` parameter is READ THROUGH, not moved: the callee only
+/// borrows it, so the temp keeps every field and runs all their bodies at the
+/// end of the statement, as `mkw(7).r.id` already did. Before the fix no body
+/// ran on any surface, because the temp's read tracking stood down for a
+/// projected field with a body of its own. Every cell was checked `--interp` /
+/// JIT / `-O2` seq / `-O2` par byte-identical and valgrind-clean at `-O0`.
+#[test]
+fn e2e_fresh_temp_drop_projection_passed_by_ref_runs_its_bodies_after_the_statement() {
+    const H: &str = r#"struct D { id: i64, name: String }
+impl Drop for D { fn drop(mut ref self) { println(f"dD{self.id}{self.name}") } }
+fn mkd(n: i64) -> D { return D { id: n, name: f"n{n}" }; }
+struct W { r: D, s: D, b: i64 }
+fn mkw(n: i64) -> W { return W { r: mkd(n), s: mkd(n + 100), b: n }; }
+fn eat(d: D) -> i64 { return d.id; }
+fn ownd(d: D) -> i64 { d.id }
+struct G[T] { v: T, k: i64 }
+fn wrap[T](x: T) -> G[T] { return G { v: x, k: 7 }; }
+fn eatd(d: D) -> i64 { d.id }
+fn keep(d: D) -> D { d }
+struct H { k: i64 }
+impl H { fn take(self, d: D) -> i64 { d.id } fn tk(d: D) -> i64 { d.id } fn peek(self, d: ref D) -> i64 { d.id } }
+enum E { A(D), B }
+struct Wx { e: E, s: D }
+fn mkwe(n: i64) -> Wx { return Wx { e: E.A(mkd(n)), s: mkd(n + 200) }; }
+fn eate(e: E) -> i64 { match e { E.A(d) => d.id, E.B => 0 } }
+struct X { w: W, t: D }
+fn mkx(n: i64) -> X { return X { w: mkw(n), t: mkd(n + 300) }; }
+fn peekd(d: ref D) -> i64 { d.id }
+fn two(a: D, b: D) -> i64 { a.id + b.id }
+fn side(n: i64) -> i64 { println(f"side{n}"); n }
+fn mix(d: D, n: i64) -> i64 { d.id + n }
+fn eatw(w: W) -> i64 { w.b }
+fn gn[T](x: T) -> i64 { 1 }
+struct Dd { id: i64, inr: D }
+impl Drop for Dd { fn drop(mut ref self) { println(f"dDd{self.id}") } }
+struct Wd { d: Dd, s: D }
+fn mkwd(n: i64) -> Wd { return Wd { d: Dd { id: n, inr: mkd(n + 1) }, s: mkd(n + 400) }; }
+fn eatdd(d: Dd) -> i64 { d.id }
+struct Q { name: String, k: i64 }
+fn mkq(n: i64) -> Q { return Q { name: f"q{n}", k: n } }
+impl H { fn mk(self, n: i64) -> W { mkw(n) } }
+impl H { fn pk(d: ref D) -> i64 { d.id } }
+fn pe(e: ref E) -> i64 { match e { E.A(d) => d.id, E.B => 0 } }
+fn pw(w: ref W) -> i64 { w.b }
+"#;
+    for (label, body, want) in [
+        (
+            "free fn ref param",
+            "println(f\"p{peekd(mkw(7).r)}\");",
+            "p7\ndD107n107\ndD7n7\nend\n",
+        ),
+        (
+            "method ref param",
+            "let h = H { k: 1 }; println(f\"q{h.peek(mkw(7).r)}\");",
+            "q7\ndD107n107\ndD7n7\nend\n",
+        ),
+        (
+            "associated fn ref param",
+            "println(f\"a{H.pk(mkw(7).r)}\");",
+            "a7\ndD107n107\ndD7n7\nend\n",
+        ),
+        (
+            "enum field by ref",
+            "println(f\"e{pe(mkwe(3).e)}\");",
+            "e3\ndD203n203\ndD3n3\nend\n",
+        ),
+        (
+            "two hops by ref",
+            "println(f\"n{peekd(mkx(4).w.r)}\");",
+            "n4\ndD304n304\ndD104n104\ndD4n4\nend\n",
+        ),
+        (
+            "Drop-free parent field by ref",
+            "println(f\"w{pw(mkx(6).w)}\");",
+            "w6\ndD306n306\ndD106n106\ndD6n6\nend\n",
+        ),
+        (
+            "let-bound result",
+            "let a = peekd(mkw(7).r); println(f\"a{a}\");",
+            "dD107n107\ndD7n7\na7\nend\n",
+        ),
+        (
+            "two ref args in one expression",
+            "let h = H { k: 1 }; let a = h.peek(mkw(8).r) + peekd(mkw(9).s); println(f\"a{a}\");",
+            "dD109n109\ndD9n9\ndD108n108\ndD8n8\na117\nend\n",
+        ),
+        (
+            "in a loop",
+            "for i in 0..2 { println(f\"p{peekd(mkw(i).r)}\"); }",
+            "p0\ndD100n100\ndD0n0\np1\ndD101n101\ndD1n1\nend\n",
+        ),
+    ] {
+        let prog = format!("{H}fn main() {{\n    {body}\n    println(\"end\")\n}}\n");
+        let (interp_out, interp_errs, _, _) = karac::run_program_full_checked(&prog);
+        assert!(
+            interp_errs.is_empty(),
+            "[{label}] interp errored: {interp_errs:?}"
+        );
+        assert_eq!(interp_out.join(""), want, "[{label}] interpreter");
+        if let Some(aot) = run_program(&prog) {
+            assert_eq!(aot, want, "[{label}] AOT");
+        }
+    }
+}

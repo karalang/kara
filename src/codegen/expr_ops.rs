@@ -748,6 +748,19 @@ impl<'ctx> super::Codegen<'ctx> {
             self.emit_refcount_dec_by_type(heap_type, ptr);
         }
     }
+    /// B-2026-09-26-33 — a projection handed to a `ref` parameter is READ
+    /// THROUGH, never moved: the callee only borrows it, so the fresh temp it
+    /// was projected off still owes every field's body and runs them at the
+    /// end of the statement, as `mkw(7).r.id` does. Without this a field with
+    /// a body of its own made the read tracking stand down ("it may be
+    /// moved"), and no body ran on any surface. The interpreter's twin sets
+    /// its own `freshtemp_read_through` the same way.
+    pub(super) fn mark_borrowed_projection_read_through(&mut self, value: &Expr) {
+        if let ExprKind::FieldAccess { object, .. } = &value.kind {
+            self.freshtemp_read_through = Some((object.span.offset, object.span.length));
+        }
+    }
+
     pub(super) fn compile_field_access(
         &mut self,
         object: &Expr,
