@@ -3108,8 +3108,11 @@ done
 ///
 /// What this pins is that the correct half stays put while the compiled half
 /// moves to meet it. `mixed` is the cell to read first: it consumes one tuple
-/// element and RETURNS the other, and its `dR5 got5 dR5` is an agreed double on
-/// both backends that the compiled fix deliberately does not touch.
+/// element and RETURNS the other. It pinned `dR5 got5 dR5` here -- an agreed
+/// double on both backends that this row's fix deliberately left alone -- and
+/// B-2026-09-14-6 FLIPPED it to the due `got5 dR5`: the returned element's
+/// body now runs once, at `r`'s death, on both backends in one commit. The
+/// flip is the pin doing its job; the consumed element's `dR6` is unmoved.
 ///
 /// The CODEGEN twin is `tests/codegen.rs`'s
 /// `e2e_named_optres_arg_does_not_double_a_consumed_part_body`, byte-identical
@@ -3141,7 +3144,7 @@ fn main() {
     println("end")
 }
 "#);
-    assert_eq!(out, "named\n  dR5\n  mid\n  out\ntemp\n  dR5\n  mid\n  out\nresult\n  dR5\n  mid\n  out\nmethod\n  dR5\n  mid\n  out\nassoc\n  dR5\n  mid\n  out\nsecond\n  dR5\n  mid\n  out\nsibling\n  dR5\n  mid\n  dR6\n  out\nnomove\n  mid9\n  dR5\n  out\nmixed\n  dR6\n  mid\n  dR5\n  got5\n  dR5\n  out\nend\n", "got:\n{out}");
+    assert_eq!(out, "named\n  dR5\n  mid\n  out\ntemp\n  dR5\n  mid\n  out\nresult\n  dR5\n  mid\n  out\nmethod\n  dR5\n  mid\n  out\nassoc\n  dR5\n  mid\n  out\nsecond\n  dR5\n  mid\n  out\nsibling\n  dR5\n  mid\n  dR6\n  out\nnomove\n  mid9\n  dR5\n  out\nmixed\n  dR6\n  mid\n  got5\n  dR5\n  out\nend\n", "got:\n{out}");
 }
 
 /// B-2026-09-13-5 — the interpreter ran a payload part's `Drop` body TWICE
@@ -3184,10 +3187,14 @@ fn main() {
 /// so the whole family is body-only (the row records `0 errors`, `0 bytes` at
 /// `-O0` on every cell).
 ///
-/// A NAMED-LOCAL argument is deliberately NOT here: it is not a fresh temp, so
-/// it never reaches this walk, and it doubles on all four surfaces alike
-/// (B-2026-09-14-6, open) — fixing it here would create a divergence out of an
-/// agreed answer.
+/// A NAMED-LOCAL argument is NOT here: it is not a fresh temp, so it never
+/// reaches this walk. Its payload walk is minted at the binding's `let` and
+/// amended at the call by a separate registration, which used to ask only the
+/// CONSUMED channel and so doubled on all four surfaces alike. B-2026-09-14-6
+/// fixed both backends' named-local registration together; its cells, with
+/// the same guards as 10-12 here, are in `tests/codegen/option_result.rs`'s
+/// `e2e_named_local_optres_payload_part_handed_back_runs_its_body_once`, which
+/// asserts one string for both surfaces.
 #[test]
 fn test_optres_arg_payload_projection_runs_each_part_body_once() {
     const R: &str = "struct R { id: i64 }\n\

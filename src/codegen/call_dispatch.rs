@@ -3643,15 +3643,30 @@ impl<'ctx> super::Codegen<'ctx> {
     /// this part" separately, or they drift into a lost body (both stand down)
     /// or a doubled one (neither does).
     ///
-    /// CONSUMED, NOT ESCAPING, and the two are deliberately not unioned here.
-    /// A part the callee RETURNS is doubled for a named local too, but
-    /// identically on both backends (`dR5 got:5 dR5` under `--interp` and at
-    /// `-O0` alike), so it is an agreed answer rather than a divergence and
-    /// masking it here would close one gap by opening another. The escaping
-    /// channel's caller-side mask is `callee_by_value_optres_param_bodies_te`,
-    /// which is gated on a NON-escaping param and so cannot serve this shape at
-    /// all: a callee that returns one element and consumes another declines
-    /// there while still owing this mask for the element it consumed.
+    /// CONSUMED **AND** ESCAPING since B-2026-09-14-6, and the paragraph this
+    /// replaces is worth keeping in view because it was right about the
+    /// hazard and wrong about the remedy. It read: "CONSUMED, NOT ESCAPING,
+    /// and the two are deliberately not unioned here. A part the callee
+    /// RETURNS is doubled for a named local too, but identically on both
+    /// backends (`dR5 got:5 dR5` under `--interp` and at `-O0` alike), so it
+    /// is an agreed answer rather than a divergence and masking it here would
+    /// close one gap by opening another."
+    ///
+    /// Every sentence of that is accurate. What it does not say is that the
+    /// agreed answer is WRONG on both backends, which is the one thing no gate
+    /// in this tree can see: the A/B parity rule is SATISFIED by a double that
+    /// both surfaces run. Deferring on the ground that a unilateral fix would
+    /// create a divergence is correct and leaves the defect standing forever,
+    /// because the condition it waits for -- someone moving both halves -- is
+    /// not something a later reader of this comment can tell has become
+    /// possible. So the deferral is discharged the only way it can be: the
+    /// interpreter's named-local mask lands in the SAME commit, and neither
+    /// end of the call is ever the only one masking.
+    ///
+    /// `callee_by_value_optres_param_bodies_te` remains the FRESH-TEMP
+    /// spelling's mask and still cannot serve this one: it is gated on a
+    /// non-escaping param, so a callee that returns one element and consumes
+    /// another declines there while still owing this mask for both.
     ///
     /// ONE-HOP ONLY. `PayloadBodiesMask::TupleElems` is a flat index set, so a
     /// deeper path (`t.0.1`) cannot be expressed and the whole remask declines
@@ -3712,7 +3727,41 @@ impl<'ctx> super::Codegen<'ctx> {
         // other variant has no tuple payload to reach in the first place.
         let mut elems = std::collections::BTreeSet::new();
         let mut fields: Vec<String> = Vec::new();
-        for (_, path) in crate::ast::fn_consumed_param_payload_part_paths(func, ast_i, None) {
+        // B-2026-09-14-6 — the ESCAPING channel, unioned in. The paragraph on
+        // this helper used to say the two were "deliberately not unioned here"
+        // because a returned part doubles IDENTICALLY on both backends, so
+        // masking it here alone would trade an agreed-wrong answer for a
+        // run-vs-build divergence. That is still true and is why the
+        // interpreter's named-local registration moves in the SAME commit:
+        // `eval_call`'s `moved_out_optres_payload_bodies` now records these
+        // same paths for a bare-identifier argument, so neither backend is
+        // left as the only one masking.
+        //
+        // ONE PREDICATE, BOTH ENDS, exactly as the consumed channel below:
+        // `fn_escaping_param_payload_part_paths` is what
+        // `mask_optres_payload_escaping_parts` feeds on the interpreter side,
+        // so the two cannot compute "did this part leave" separately and drift
+        // into a lost body (both mask) or a doubled one (neither does).
+        //
+        // WHY THE HEAP-CARRYING PAYLOAD WAS ALREADY CORRECT, which is worth
+        // recording because it is what made this look like a narrower defect
+        // than it is: a payload wide enough to BOX reaches its caller-side
+        // walk through `remask_named_boxed_payload_arg`'s channel instead, and
+        // that one has masked the escape since B-2026-09-17-34. So the split
+        // was never scalar-vs-heap in the ANALYSIS — it was which registration
+        // the payload's WIDTH routed it to, and only the inline route was
+        // missing the escape. `Option[(R, R)]` with a `String` field in `R` is
+        // the control (`e2e_...survives_every_payload_width`): it was correct
+        // before this fix and must stay correct after, because the two
+        // channels now name the same element and a mask applied twice has to
+        // be idempotent rather than additive.
+        let escaping =
+            crate::ast::fn_escaping_param_payload_part_paths(func, ast_i, None).into_iter();
+        for path in escaping.chain(
+            crate::ast::fn_consumed_param_payload_part_paths(func, ast_i, None)
+                .into_iter()
+                .map(|(_, path)| path),
+        ) {
             match path.as_slice() {
                 [crate::ast::ParamPart::TupleIndex(n)] => {
                     elems.insert(*n);

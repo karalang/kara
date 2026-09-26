@@ -2859,6 +2859,194 @@ fn e2e_copy_projection_off_an_optres_payload_keeps_the_owed_body() {
         }
 }
 
+/// B-2026-09-14-6 — a NAMED LOCAL handed to a callee that returns a PART of its
+/// `Option`/`Result` payload ran that part's `Drop` body twice, and on every
+/// surface alike: `let a = Some((R { id: 5 }, 9)); let got = eat(a);` over
+/// `Some(t) => return t.0` printed `dR5 got:5 dR5 end` under `--interp`, the
+/// JIT and both AOT levels, where `got:5 dR5 end` is due.
+///
+/// AGREED, SO NOTHING SAW IT. The A/B parity rule is satisfied by a double both
+/// backends run, and no sanitizer can see one (a `Drop` body frees nothing: the
+/// row records `0 errors` and `0 bytes` at `-O0`). This fixture asserts ONE
+/// string for both surfaces because the expected sequence comes from the
+/// ownership rule, not from either backend — the only kind of assertion that
+/// can see an agreed wrong answer at all.
+///
+/// THE FRESH-TEMP SPELLING WAS ALREADY RIGHT, which is what localised it. A
+/// temp has no binding, so its payload walk is minted AT the call and built
+/// masked (`mask_optres_payload_escaping_parts`,
+/// `callee_by_value_optres_param_bodies_te`). A named local's walk was minted
+/// at its `let`, long before the call, and the two sites that amend it —
+/// `remask_named_tuple_payload_arg` compiled, the `moved_out_optres_payload_bodies`
+/// registration interpreted — asked only the CONSUMED channel. The source said
+/// so in as many words and deferred on purpose: masking on one backend alone
+/// would have turned an invisible wrong answer into a visible divergence. Both
+/// move together here, reading the same shared predicate.
+///
+/// CELL 8 IS THE WIDTH CONTROL and it was half right before this fix: the
+/// compiled backends printed the due sequence and only the interpreter
+/// doubled. A payload wide enough to BOX reaches its caller-side walk through
+/// another registration, which has masked the escape since B-2026-09-17-34, so
+/// what separated the right cells from the wrong ones was never the analysis —
+/// it was which registration the payload's width routed to. It must stay
+/// right now that both routes mask the same element.
+///
+/// CELLS 9-12 ARE GUARDS, correct on all four surfaces before the change, and
+/// each pins a reason the new registration must decline:
+///
+/// * 9 — a SCALAR leaf read THROUGH the `Drop`-bearing element (`t.0.id`). The
+///   first cut of this fix recorded that path too, stripped `id` off the value
+///   the binding's walk later hands to `R`'s own body, and the interpreter
+///   PANICKED (`field 'id' not found on struct 'R'`). The fresh-temp site has
+///   always gated on `value_leaf_can_own`; the named-local site now does too.
+/// * 10 — a Copy SIBLING read (`t.1`): nothing owns-worthy leaves at all.
+/// * 11 — the WHOLE binding returned: the whole-payload gate owns that answer,
+///   and this channel must not answer it a second time.
+/// * 12 — the nested-destructure spelling, which binds the part directly and
+///   was correct through the tuple-arm channel throughout.
+///
+/// NOT COVERED, and measured identical before and after: a two-hop projection
+/// (`t.0.1`, B-2026-09-20-5's remainder) and a CONDITIONAL escape
+/// (`if k { return t.r }`), which a statement-level mask cannot get right on
+/// both paths and which fails on three of its four corners in a different
+/// backend each time.
+#[test]
+fn e2e_named_local_optres_payload_part_handed_back_runs_its_body_once() {
+    const R: &str = "struct R { id: i64 }\n\
+         impl Drop for R { fn drop(mut ref self) { println(f\"dR{self.id}\") } }\n";
+    const RS: &str = "struct R { name: String }\n\
+         impl Drop for R { fn drop(mut ref self) { println(f\"dR[{self.name}]\") } }\n";
+    for (label, src, want) in [
+        // 1 — the row's cell 1: a tuple payload, element 0 returned, a scalar
+        //     sibling.
+        (
+            "tuple-elem-returned",
+            format!(
+                "{R}fn eat(o: Option[(R, i64)]) -> R {{ match o {{ Some(t) => {{ return t.0; }} None => {{ return R {{ id: 0 }}; }} }} }}\n\
+                 fn main() {{ let a = Option.Some((R {{ id: 5 }}, 9)); let got: R = eat(a); println(f\"got:{{got.id}}\"); println(\"end\"); }}\n"
+            ),
+            "got:5\ndR5\nend\n",
+        ),
+        // 2 — the row's cell 2's named-local corner: a heap-carrying payload.
+        //     The compiled backends were already right; the interpreter doubled.
+        (
+            "tuple-elem-returned-heap-field",
+            format!(
+                "{RS}fn eat(o: Option[(R, i64)]) -> R {{ match o {{ Some(t) => {{ return t.0; }} None => {{ return R {{ name: \"z\" }}; }} }} }}\n\
+                 fn main() {{ let a = Option.Some((R {{ name: \"alpha\" }}, 9)); let got: R = eat(a); println(f\"got:{{got.name}}\"); println(\"end\"); }}\n"
+            ),
+            "got:alpha\ndR[alpha]\nend\n",
+        ),
+        // 3 — `Result`, the other seeded head, which the row left unmeasured.
+        (
+            "result-head",
+            format!(
+                "{R}fn eat(o: Result[(R, i64), i64]) -> R {{ match o {{ Ok(t) => {{ return t.0; }} Err(e) => {{ return R {{ id: 0 }}; }} }} }}\n\
+                 fn main() {{ let a: Result[(R, i64), i64] = Result.Ok((R {{ id: 5 }}, 9)); let got: R = eat(a); println(f\"got:{{got.id}}\"); println(\"end\"); }}\n"
+            ),
+            "got:5\ndR5\nend\n",
+        ),
+        // 4 — a `Drop`-bearing SIBLING that stays behind. Its body is owed at
+        //     the payload's death, so the mask must be per-PART, not a stand-down.
+        (
+            "two-droppers-first-returned",
+            format!(
+                "{R}fn eat(o: Option[(R, R)]) -> R {{ match o {{ Some(t) => {{ return t.0; }} None => {{ return R {{ id: 0 }}; }} }} }}\n\
+                 fn main() {{ let a = Option.Some((R {{ id: 5 }}, R {{ id: 6 }})); let got: R = eat(a); println(f\"got:{{got.id}}\"); println(\"end\"); }}\n"
+            ),
+            "dR6\ngot:5\ndR5\nend\n",
+        ),
+        // 5 — the other element, which pins that the mask names the element the
+        //     callee took and not "the first one".
+        (
+            "two-droppers-second-returned",
+            format!(
+                "{R}fn eat(o: Option[(R, R)]) -> R {{ match o {{ Some(t) => {{ return t.1; }} None => {{ return R {{ id: 0 }}; }} }} }}\n\
+                 fn main() {{ let a = Option.Some((R {{ id: 5 }}, R {{ id: 6 }})); let got: R = eat(a); println(f\"got:{{got.id}}\"); println(\"end\"); }}\n"
+            ),
+            "dR5\ngot:6\ndR6\nend\n",
+        ),
+        // 6 — a named-STRUCT payload's field, through the helper's `Field` arm.
+        (
+            "struct-field-returned",
+            format!(
+                "{R}struct Hd {{ r: R, n: i64 }}\n\
+                 fn eat(o: Option[Hd]) -> R {{ match o {{ Some(t) => {{ return t.r; }} None => {{ return R {{ id: 0 }}; }} }} }}\n\
+                 fn main() {{ let a = Option.Some(Hd {{ r: R {{ id: 5 }}, n: 9 }}); let got: R = eat(a); println(f\"got:{{got.id}}\"); println(\"end\"); }}\n"
+            ),
+            "got:5\ndR5\nend\n",
+        ),
+        // 7 — the struct sibling of cell 4.
+        (
+            "struct-field-returned-dropping-sibling",
+            format!(
+                "{R}struct Hd2 {{ r: R, q: R }}\n\
+                 fn eat(o: Option[Hd2]) -> R {{ match o {{ Some(t) => {{ return t.r; }} None => {{ return R {{ id: 0 }}; }} }} }}\n\
+                 fn main() {{ let a = Option.Some(Hd2 {{ r: R {{ id: 5 }}, q: R {{ id: 6 }} }}); let got: R = eat(a); println(f\"got:{{got.id}}\"); println(\"end\"); }}\n"
+            ),
+            "dR6\ngot:5\ndR5\nend\n",
+        ),
+        // 8 — WIDTH CONTROL: two heap-carrying droppers, so the payload boxes and
+        //     takes the other registration. Compiled was right before; the
+        //     interpreter doubled `dR[alpha]`.
+        (
+            "width-control-two-heap-droppers",
+            format!(
+                "{RS}fn eat(o: Option[(R, R)]) -> R {{ match o {{ Some(t) => {{ return t.0; }} None => {{ return R {{ name: \"z\" }}; }} }} }}\n\
+                 fn main() {{ let a = Option.Some((R {{ name: \"alpha\" }}, R {{ name: \"beta\" }})); let got: R = eat(a); println(f\"got:{{got.name}}\"); println(\"end\"); }}\n"
+            ),
+            "dR[beta]\ngot:alpha\ndR[alpha]\nend\n",
+        ),
+        // 9 — GUARD: a SCALAR leaf through the dropper. Recording this path is
+        //     the interpreter panic the leaf gate exists to prevent.
+        (
+            "guard-scalar-leaf-through-dropper",
+            format!(
+                "{R}fn eat(o: Option[(R, i64)]) -> i64 {{ match o {{ Some(t) => {{ return t.0.id; }} None => {{ return 0; }} }} }}\n\
+                 fn main() {{ let a = Option.Some((R {{ id: 5 }}, 9)); let got: i64 = eat(a); println(f\"got:{{got}}\"); println(\"end\"); }}\n"
+            ),
+            "dR5\ngot:5\nend\n",
+        ),
+        // 10 — GUARD: a Copy sibling read.
+        (
+            "guard-copy-sibling-read",
+            format!(
+                "{R}fn eat(o: Option[(R, i64)]) -> i64 {{ match o {{ Some(t) => {{ return t.1; }} None => {{ return 0; }} }} }}\n\
+                 fn main() {{ let a = Option.Some((R {{ id: 5 }}, 9)); let got: i64 = eat(a); println(f\"got:{{got}}\"); println(\"end\"); }}\n"
+            ),
+            "dR5\ngot:9\nend\n",
+        ),
+        // 11 — GUARD: the whole binding returned.
+        (
+            "guard-whole-binding-returned",
+            format!(
+                "{R}fn eat(o: Option[(R, R)]) -> (R, R) {{ match o {{ Some(t) => {{ return t; }} None => {{ return (R {{ id: 0 }}, R {{ id: 1 }}); }} }} }}\n\
+                 fn main() {{ let a = Option.Some((R {{ id: 5 }}, R {{ id: 6 }})); let got = eat(a); println(f\"got:{{got.0.id}}\"); println(\"end\"); }}\n"
+            ),
+            "got:5\ndR5\ndR6\nend\n",
+        ),
+        // 12 — GUARD: the nested-destructure spelling.
+        (
+            "guard-nested-destructure",
+            format!(
+                "{R}fn eat(o: Option[(R, i64)]) -> R {{ match o {{ Some((x, y)) => {{ return x; }} None => {{ return R {{ id: 0 }}; }} }} }}\n\
+                 fn main() {{ let a = Option.Some((R {{ id: 5 }}, 9)); let got: R = eat(a); println(f\"got:{{got.id}}\"); println(\"end\"); }}\n"
+            ),
+            "got:5\ndR5\nend\n",
+        ),
+    ] {
+        let (interp_out, interp_errs, _, _) = karac::run_program_full_checked(&src);
+        assert!(
+            interp_errs.is_empty(),
+            "[{label}] interp errored: {interp_errs:?}"
+        );
+        assert_eq!(interp_out.join(""), want, "[{label}] interpreter");
+        if let Some(aot) = run_program(&src) {
+            assert_eq!(aot, want, "[{label}] AOT");
+        }
+    }
+}
+
 /// B-2026-09-13-5 — the cross-backend twin of
 /// `tests/interpreter.rs`'s
 /// `test_optres_arg_payload_projection_runs_each_part_body_once`, and the
@@ -4011,9 +4199,14 @@ fn e2e_optres_payload_sibling_part_keeps_its_body_when_its_peer_is_consumed() {
 /// consumes one element and RETURNS the other, which is the shape that
 /// rules out reusing `callee_by_value_optres_param_bodies_te` — that gate
 /// declines an escaping param outright and would have left the consumed
-/// element unmasked. Its `dR5 got5 dR5` is an agreed double on BOTH
-/// backends (B-2026-09-13-5's alias spelling) and must stay exactly as it
-/// is: masking it here would close one divergence by opening another.
+/// element unmasked. It pinned `dR5 got5 dR5` -- an agreed double on BOTH
+/// backends (B-2026-09-13-5's alias spelling) -- with the instruction that it
+/// "must stay exactly as it is: masking it here would close one divergence by
+/// opening another". B-2026-09-14-6 FLIPPED it to the due `got5 dR5` on both
+/// backends in one commit, which is the only move that instruction permits:
+/// the escaping element is now masked from the named local's walk on both
+/// sides at once, so no divergence opens. The consumed element's `dR6` is
+/// unmoved, which is the part of this cell that pins THIS row.
 ///
 /// NO NAMED-STRUCT CELL, deliberately. `Option[P]` for
 /// `struct P { r: R, n: i64 }` does not double — it runs the body LATE
@@ -4066,7 +4259,7 @@ fn main() {
     ) else {
         return;
     };
-    assert_eq!(out, "named\n  dR5\n  mid\n  out\ntemp\n  dR5\n  mid\n  out\nresult\n  dR5\n  mid\n  out\nmethod\n  dR5\n  mid\n  out\nassoc\n  dR5\n  mid\n  out\nsecond\n  dR5\n  mid\n  out\nsibling\n  dR5\n  mid\n  dR6\n  out\nnomove\n  mid9\n  dR5\n  out\nmixed\n  dR6\n  mid\n  dR5\n  got5\n  dR5\n  out\nend\n");
+    assert_eq!(out, "named\n  dR5\n  mid\n  out\ntemp\n  dR5\n  mid\n  out\nresult\n  dR5\n  mid\n  out\nmethod\n  dR5\n  mid\n  out\nassoc\n  dR5\n  mid\n  out\nsecond\n  dR5\n  mid\n  out\nsibling\n  dR5\n  mid\n  dR6\n  out\nnomove\n  mid9\n  dR5\n  out\nmixed\n  dR6\n  mid\n  got5\n  dR5\n  out\nend\n");
 }
 
 #[test]

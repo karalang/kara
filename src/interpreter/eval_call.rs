@@ -4443,12 +4443,20 @@ impl<'a> super::Interpreter<'a> {
                 // (`run_optres_payload_user_drops`, fired at the local's
                 // live-range end) has to skip exactly those paths.
                 if let Some(Value::EnumVariant {
-                    enum_name, variant, ..
+                    enum_name,
+                    variant,
+                    data: arg_payload_data,
                 }) = arg_vals.get(i)
                 {
                     if enum_name == "Option" || enum_name == "Result" {
                         let variant = variant.clone();
                         if !self.callee_param_is_borrow(callee_name, method_owner, i) {
+                            // Gathered under the immutable borrow of `f` and
+                            // inserted after it ends: the escaping channel
+                            // below consults `self.program`, which extends that
+                            // borrow across what used to be a bare mutable
+                            // insert.
+                            let mut changed_hands: Vec<Vec<String>> = Vec::new();
                             if let Some(f) =
                                 self.callee_fn_for_ownership_guard_of(callee_name, method_owner)
                             {
@@ -4457,9 +4465,102 @@ impl<'a> super::Interpreter<'a> {
                                     i,
                                     Some(&variant),
                                 ) {
-                                    self.moved_out_optres_payload_bodies
-                                        .insert((src.clone(), Self::param_path_names(&path)));
+                                    changed_hands.push(Self::param_path_names(&path));
                                 }
+                                // B-2026-09-14-6 — and the ESCAPING half,
+                                // which this block did not record. A part the
+                                // callee RETURNS changes hands as completely
+                                // as one it consumes; the only difference is
+                                // that its new owner is the RESULT BINDING
+                                // rather than a local of the callee's frame,
+                                // and neither leaves anything for the
+                                // argument's own binding to run.
+                                //
+                                // THE FRESH-TEMP SPELLING HAS MASKED THIS
+                                // SINCE B-2026-09-13-5 and is why the defect
+                                // reads as an argument-form split rather than
+                                // a missing mechanism: a temp has no binding,
+                                // so its walk is minted AT the call by
+                                // `mask_optres_payload_escaping_parts` and
+                                // built masked. A named local's walk was
+                                // minted at its `let`, long before the call,
+                                // and fires later through
+                                // `optres_payload_bodies_tes` -- so the mask
+                                // has to be recorded here, keyed on the
+                                // binding, for `run_optres_payload_user_drops`
+                                // to apply at the binding's live-range end.
+                                //
+                                // BOTH CHANNELS READ ONE PREDICATE PER
+                                // QUESTION, and the compiled twin of this
+                                // registration (`remask_named_tuple_payload_arg`)
+                                // reads the same two in the same commit. That
+                                // pairing is not tidiness: this cell is an
+                                // AGREED double (`dR5 got:5 dR5` on all four
+                                // surfaces), so the A/B parity rule sees
+                                // nothing, and masking on one backend alone
+                                // would convert an invisible wrong answer into
+                                // a visible divergence -- the trade
+                                // B-2026-09-12-6 refuses and this tree's
+                                // fixtures repeatedly pin against.
+                                //
+                                // The DESTRUCTURE channel is unioned in for
+                                // the reason `mask_optres_payload_escaping_parts`
+                                // gives: `fn_escaping_param_payload_part_paths`
+                                // answers only an arm binding the payload
+                                // WHOLE and projecting off it, and the two
+                                // channels partition the arm shapes, so
+                                // appending cannot mask one element twice.
+                                let mut escaping = crate::ast::fn_escaping_param_payload_part_paths(
+                                    f,
+                                    i,
+                                    Some(&variant),
+                                );
+                                escaping.extend(
+                                    crate::ast::fn_escaping_param_payload_destructured_elems(
+                                        self.program,
+                                        f,
+                                        i,
+                                        Some(&variant),
+                                    )
+                                    .into_iter()
+                                    .map(|e| vec![crate::ast::ParamPart::TupleIndex(e)]),
+                                );
+                                // THE LEAF GATE, the one
+                                // `mask_optres_payload_escaping_parts` applies
+                                // at the fresh-temp site for the same reason:
+                                // a projection that reaches a SCALAR leaf
+                                // (`return t.0.id`) moves nothing out of the
+                                // payload, it copies. Recording the path
+                                // anyway strips the field off the value the
+                                // binding's walk later hands to `R`'s own
+                                // `Drop` body, which then reads a struct with
+                                // a hole in it -- measured as an interpreter
+                                // panic (`field 'id' not found on struct 'R'`)
+                                // on the named-local twin of that fixture's
+                                // guard cell 10, a cell that is correct on all
+                                // four surfaces without this block.
+                                //
+                                // Asked of the LIVE payload rather than the
+                                // declared type because that is what the
+                                // fresh-temp gate asks, and the two sites have
+                                // to answer one question one way.
+                                let live_payload = match arg_payload_data {
+                                    EnumData::Tuple(vs) if vs.len() == 1 => Some(&vs[0]),
+                                    _ => None,
+                                };
+                                for path in escaping {
+                                    let names = Self::param_path_names(&path);
+                                    let leaf_owns = live_payload
+                                        .and_then(|p| Self::value_at_name_path(p, &names))
+                                        .is_some_and(Self::value_leaf_can_own);
+                                    if leaf_owns {
+                                        changed_hands.push(names);
+                                    }
+                                }
+                            }
+                            for names in changed_hands {
+                                self.moved_out_optres_payload_bodies
+                                    .insert((src.clone(), names));
                             }
                         }
                     }
