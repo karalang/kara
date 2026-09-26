@@ -7350,3 +7350,197 @@ enum Bx { P(D), N }
         }
     }
 }
+
+/// B-2026-09-26-40 — a `Drop`-bearing field projected off a fresh temp and handed to a
+/// callee that KEEPS it (hands the parameter back, wraps it, or stores it),
+/// or to a GENERIC callee through `ref T` or a by-value param the body only
+/// reads, no longer loses the temp's bodies. A keeping callee takes the field
+/// and the temp's other fields run their bodies at the call; a generic `ref`
+/// or read-only param reads the field through, so every field's body runs at
+/// the statement end, as the named-local spelling does. Before the fix each
+/// cell lost the siblings' bodies (and the generic ones the field's too) on
+/// all four surfaces. Every cell was checked `--interp` / JIT / `-O2` seq /
+/// `-O2` par byte-identical and valgrind-clean at `-O0`.
+#[test]
+fn e2e_fresh_temp_drop_projection_into_a_keeping_or_generic_callee_runs_its_bodies() {
+    const H: &str = r#"struct D { id: i64, name: String }
+impl Drop for D { fn drop(mut ref self) { println(f"dD{self.id}{self.name}") } }
+fn mkd(n: i64) -> D { return D { id: n, name: f"n{n}" }; }
+struct W { r: D, s: D, b: i64 }
+fn mkw(n: i64) -> W { return W { r: mkd(n), s: mkd(n + 100), b: n }; }
+fn eat(d: D) -> i64 { return d.id; }
+fn ownd(d: D) -> i64 { d.id }
+struct G[T] { v: T, k: i64 }
+fn wrap[T](x: T) -> G[T] { return G { v: x, k: 7 }; }
+fn eatd(d: D) -> i64 { d.id }
+fn keep(d: D) -> D { d }
+struct H { k: i64 }
+impl H { fn take(self, d: D) -> i64 { d.id } fn tk(d: D) -> i64 { d.id } fn peek(self, d: ref D) -> i64 { d.id } }
+enum E { A(D), B }
+struct Wx { e: E, s: D }
+fn mkwe(n: i64) -> Wx { return Wx { e: E.A(mkd(n)), s: mkd(n + 200) }; }
+fn eate(e: E) -> i64 { match e { E.A(d) => d.id, E.B => 0 } }
+struct X { w: W, t: D }
+fn mkx(n: i64) -> X { return X { w: mkw(n), t: mkd(n + 300) }; }
+fn peekd(d: ref D) -> i64 { d.id }
+fn two(a: D, b: D) -> i64 { a.id + b.id }
+fn side(n: i64) -> i64 { println(f"side{n}"); n }
+fn mix(d: D, n: i64) -> i64 { d.id + n }
+fn eatw(w: W) -> i64 { w.b }
+fn gn[T](x: T) -> i64 { 1 }
+struct Dd { id: i64, inr: D }
+impl Drop for Dd { fn drop(mut ref self) { println(f"dDd{self.id}") } }
+struct Wd { d: Dd, s: D }
+fn mkwd(n: i64) -> Wd { return Wd { d: Dd { id: n, inr: mkd(n + 1) }, s: mkd(n + 400) }; }
+fn eatdd(d: Dd) -> i64 { d.id }
+struct Q { name: String, k: i64 }
+fn mkq(n: i64) -> Q { return Q { name: f"q{n}", k: n } }
+impl H { fn mk(self, n: i64) -> W { mkw(n) } }
+impl H { fn kp(self, d: D) -> D { d } fn akp(d: D) -> D { d } }
+fn stash(v: mut ref Vec[D], d: D) { v.push(d); }
+fn maybe(d: D, c: bool) -> Option[D] { if c { return Some(d); } None }
+struct Bag { d: D }
+fn bag(d: D) -> Bag { Bag { d: d } }
+fn gp[T](x: ref T) -> i64 { 2 }
+fn gp2[T](x: ref T, n: i64) -> i64 { n }
+struct Hg { k: i64 }
+impl Hg { fn gpk[T](self, x: ref T) -> i64 { 3 } }
+fn gid[T](x: T) -> T { x }
+fn gst[T](v: mut ref Vec[T], x: T) { v.push(x); }
+fn gw[T](x: T) -> i64 { gn(x) }
+fn gtwo[T](x: T, y: T) -> i64 { 4 }
+"#;
+    for (label, body, want) in [
+        (
+            "kept, let-bound result (B-2026-09-26-40)",
+            "let k = keep(mkw(9).r); println(f\"k{k.id}\");",
+            "dD109n109\nk9\ndD9n9\nend\n",
+        ),
+        (
+            "kept, result read in place (B-2026-09-26-40)",
+            "println(f\"k{keep(mkw(9).r).id}\");",
+            "dD109n109\nk9\ndD9n9\nend\n",
+        ),
+        (
+            "kept, result discarded (B-2026-09-26-40)",
+            "keep(mkw(9).r);",
+            "dD109n109\ndD9n9\nend\n",
+        ),
+        (
+            "method that hands the param back (B-2026-09-26-40)",
+            "let h = H { k: 1 }; let k = h.kp(mkw(9).s); println(f\"k{k.id}\");",
+            "dD9n9\nk109\ndD109n109\nend\n",
+        ),
+        (
+            "associated fn that hands it back (B-2026-09-26-40)",
+            "let k = H.akp(mkw(9).r); println(f\"k{k.id}\");",
+            "dD109n109\nk9\ndD9n9\nend\n",
+        ),
+        (
+            "callee stores it into a mut ref Vec (B-2026-09-26-40)",
+            "let mut v: Vec[D] = Vec.new(); stash(mut v, mkw(9).r); println(f\"l{v.len()}\");",
+            "dD109n109\nl1\ndD9n9\nend\n",
+        ),
+        (
+            "conditional hand-back, taken (B-2026-09-26-40)",
+            "let o = maybe(mkw(9).r, true); println(f\"o{o.is_some()}\");",
+            "dD109n109\notrue\ndD9n9\nend\n",
+        ),
+        (
+            "conditional hand-back, not taken (B-2026-09-26-40)",
+            "let o = maybe(mkw(9).r, false); println(f\"o{o.is_some()}\");",
+            "dD109n109\ndD9n9\nofalse\nend\n",
+        ),
+        (
+            "callee wraps it in a struct it returns (B-2026-09-26-40)",
+            "let b = bag(mkw(9).r); println(f\"b{b.d.id}\");",
+            "dD109n109\nb9\ndD9n9\nend\n",
+        ),
+        (
+            "kept, off an enum-field temp (B-2026-09-26-40)",
+            "let k = keep(mkwe(4).s); println(f\"k{k.id}\");",
+            "dD4n4\nk204\ndD204n204\nend\n",
+        ),
+        (
+            "kept, in a loop (B-2026-09-26-40)",
+            "let mut t = 0; for i in 0..2 { let k = keep(mkw(i).r); t = t + k.id; } println(f\"t{t}\");",
+            "dD100n100\ndD0n0\ndD101n101\ndD1n1\nt1\nend\n",
+        ),
+        (
+            "generic ref T (B-2026-09-26-40)",
+            "println(f\"g{gp(mkw(7).r)}\");",
+            "g2\ndD107n107\ndD7n7\nend\n",
+        ),
+        (
+            "generic ref T, let-bound (B-2026-09-26-40)",
+            "let a = gp(mkw(7).s); println(f\"a{a}\");",
+            "dD107n107\ndD7n7\na2\nend\n",
+        ),
+        (
+            "generic ref T with a second arg (B-2026-09-26-40)",
+            "println(f\"g{gp2(mkw(7).r, 5)}\");",
+            "g5\ndD107n107\ndD7n7\nend\n",
+        ),
+        (
+            "generic method ref T (B-2026-09-26-40)",
+            "let h = Hg { k: 1 }; println(f\"g{h.gpk(mkw(7).r)}\");",
+            "g3\ndD107n107\ndD7n7\nend\n",
+        ),
+        (
+            "generic ref T in a loop (B-2026-09-26-40)",
+            "let mut t = 0; for i in 0..2 { t = t + gp(mkw(i).r); } println(f\"t{t}\");",
+            "dD100n100\ndD0n0\ndD101n101\ndD1n1\nt4\nend\n",
+        ),
+        (
+            "generic ref T, two hops (B-2026-09-26-40)",
+            "println(f\"g{gp(mkx(5).w.r)}\");",
+            "g2\ndD305n305\ndD105n105\ndD5n5\nend\n",
+        ),
+        (
+            "generic ref T of an enum field (B-2026-09-26-40)",
+            "println(f\"g{gp(mkwe(4).e)}\");",
+            "g2\ndD204n204\ndD4n4\nend\n",
+        ),
+        (
+            "generic by-value, read-only (B-2026-09-26-40)",
+            "println(f\"g{gn(mkw(7).r)}\");",
+            "g1\ndD107n107\ndD7n7\nend\n",
+        ),
+        (
+            "generic by-value, let-bound (B-2026-09-26-40)",
+            "let a = gn(mkw(7).s); println(f\"a{a}\");",
+            "dD107n107\ndD7n7\na1\nend\n",
+        ),
+        (
+            "generic by-value, two temps (B-2026-09-26-40)",
+            "println(f\"g{gtwo(mkw(7).r, mkw(8).s)}\");",
+            "g4\ndD108n108\ndD8n8\ndD107n107\ndD7n7\nend\n",
+        ),
+        (
+            "generic by-value, two hops (B-2026-09-26-40)",
+            "println(f\"g{gn(mkx(5).w.r)}\");",
+            "g1\ndD305n305\ndD105n105\ndD5n5\nend\n",
+        ),
+        (
+            "generic by-value in a loop (B-2026-09-26-40)",
+            "let mut t = 0; for i in 0..2 { t = t + gn(mkw(i).r); } println(f\"t{t}\");",
+            "dD100n100\ndD0n0\ndD101n101\ndD1n1\nt2\nend\n",
+        ),
+        (
+            "control: named local into a generic (B-2026-09-26-40)",
+            "let d = mkd(7); println(f\"g{gn(d)}\");",
+            "g1\ndD7n7\nend\n",
+        ),
+    ] {
+        let prog = format!("{H}fn main() {{\n    {body}\n    println(\"end\")\n}}\n");
+        let (interp_out, interp_errs, _, _) = karac::run_program_full_checked(&prog);
+        assert!(
+            interp_errs.is_empty(),
+            "[{label}] interp errored: {interp_errs:?}"
+        );
+        assert_eq!(interp_out.join(""), want, "[{label}] interpreter");
+        if let Some(aot) = run_program(&prog) {
+            assert_eq!(aot, want, "[{label}] AOT");
+        }
+    }
+}

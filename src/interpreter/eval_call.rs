@@ -5474,10 +5474,27 @@ impl<'a> super::Interpreter<'a> {
         let ExprKind::FieldAccess { object, .. } = &value.kind else {
             return;
         };
-        let non_generic = self
-            .callee_fn_for_ownership_guard_of(callee_name, method_owner)
-            .is_some_and(|f| f.generic_params.is_none());
-        if non_generic && self.callee_param_is_borrow(callee_name, method_owner, i) {
+        // B-2026-09-26-40 — a GENERIC callee is admitted too, for a `ref`
+        // param or a by-value param the body only reads: codegen's monomorph
+        // leg marks each argument before it compiles (`compile_generic_call`),
+        // where it has no per-argument by-value consume, with the same two
+        // tests. A generic `mut ref` stays out, as it is out there.
+        let Some(f) = self.callee_fn_for_ownership_guard_of(callee_name, method_owner) else {
+            return;
+        };
+        let admitted = if f.generic_params.is_none() {
+            self.callee_param_is_borrow(callee_name, method_owner, i)
+        } else {
+            f.params.get(i).is_some_and(|p| {
+                matches!(p.ty.kind, crate::ast::TypeKind::Ref(_))
+                    || (!matches!(p.ty.kind, crate::ast::TypeKind::MutRef(_))
+                        && matches!(&p.pattern.kind,
+                            crate::ast::PatternKind::Binding(n)
+                                if crate::result_escape::by_value_nonescaping_param_names(f)
+                                    .contains(n)))
+            })
+        };
+        if admitted {
             self.freshtemp_read_through = Some((object.span.offset, object.span.length));
         }
     }
@@ -5486,8 +5503,8 @@ impl<'a> super::Interpreter<'a> {
     /// projection argument whose callee does not keep it past the call, and
     /// record it so `run_fresh_temp_arg_drops` runs the moved field's body
     /// after the call. A callee that returns or stores the argument
-    /// (`keep(mkw(9).r)`) is left alone: codegen does not consume that
-    /// registration either.
+    /// (`keep(mkw(9).r)`) is consumed but not recorded (B-2026-09-26-40): it
+    /// owns the field beyond the call, and the siblings' bodies still run.
     pub(super) fn drop_projection_arg_consume(
         &mut self,
         callee_name: &str,
@@ -5506,13 +5523,24 @@ impl<'a> super::Interpreter<'a> {
                 .freshtemp_drop_projection_arg_type_name(value)
                 .is_none()
             || self.callee_param_is_borrow(callee_name, method_owner, i)
-            || self.callee_owns_arg_beyond_call(callee_name, method_owner, i, None)
+        {
+            return;
+        }
+        // B-2026-09-26-40 — a callee that hands the argument back or keeps it
+        // owns the moved field beyond the call, so the argument is not
+        // claimed here; but the temp still gives the field up, so its
+        // siblings' bodies run now rather than nowhere. One hop only, as
+        // codegen's `consume_escaping_freshtemp_projection_arg`.
+        let kept = self.callee_owns_arg_beyond_call(callee_name, method_owner, i, None);
+        if kept
+            && matches!(&value.kind, ExprKind::FieldAccess { object, .. }
+                if matches!(object.kind, ExprKind::FieldAccess { .. }))
         {
             return;
         }
         let staged = self.freshtemp_field_obj.is_some();
         self.consume_freshtemp_field_move(value);
-        if staged && self.freshtemp_field_obj.is_none() {
+        if !kept && staged && self.freshtemp_field_obj.is_none() {
             self.freshtemp_projection_args_owned
                 .push((value.span.offset, value.span.length));
         }

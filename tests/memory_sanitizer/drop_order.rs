@@ -3613,3 +3613,66 @@ fn main() {
         47,
     );
 }
+
+/// B-2026-09-26-40 — a `Drop`-bearing field projected off a fresh temp and handed to a
+/// keeping callee (hands it back, stores it, conditionally hands it back), or
+/// to a generic `ref T` / read-only by-value param, is freed once and runs
+/// each body once. The names are longer than the inline string capacity so
+/// each body frees a heap buffer; the keeping cells are the ones where the
+/// callee's entry copy escapes and the temp must keep the original's memory.
+#[test]
+fn asan_fresh_temp_drop_projection_into_a_keeping_or_generic_callee_is_freed_once() {
+    assert_clean_asan_run_min_allocs(
+        r#"struct D { id: i64, name: String }
+impl Drop for D { fn drop(mut ref self) { println(f"dD{self.id} {self.name}") } }
+fn mkd(n: i64) -> D { return D { id: n, name: f"name-string-longer-than-sso-{n}" }; }
+struct W { r: D, s: D, name: String, b: i64 }
+fn mkw(n: i64) -> W { return W { r: mkd(n), s: mkd(n + 100), name: f"w-string-longer-than-sso-{n}", b: n }; }
+fn keep(d: D) -> D { d }
+fn stash(v: mut ref Vec[D], d: D) { v.push(d); }
+fn maybe(d: D, c: bool) -> Option[D] { if c { return Some(d); } None }
+struct H { k: i64 }
+impl H { fn kp(self, d: D) -> D { d } }
+fn gp[T](x: ref T) -> i64 { 2 }
+fn gn[T](x: T) -> i64 { 1 }
+fn main() {
+    let k = keep(mkw(1).r);
+    println(f"a{k.id}");
+    let h = H { k: 1 };
+    let j = h.kp(mkw(2).s);
+    println(f"b{j.id}");
+    let mut v: Vec[D] = Vec.new();
+    stash(mut v, mkw(3).r);
+    println(f"c{v.len()}");
+    let o = maybe(mkw(4).r, false);
+    println(f"d{o.is_some()}");
+    println(f"e{gp(mkw(5).r)}");
+    println(f"f{gn(mkw(6).s)}");
+    println("end")
+}
+"#,
+        &[
+            "dD101 name-string-longer-than-sso-101",
+            "a1",
+            "dD1 name-string-longer-than-sso-1",
+            "dD2 name-string-longer-than-sso-2",
+            "b102",
+            "dD102 name-string-longer-than-sso-102",
+            "dD103 name-string-longer-than-sso-103",
+            "c1",
+            "dD3 name-string-longer-than-sso-3",
+            "dD104 name-string-longer-than-sso-104",
+            "dD4 name-string-longer-than-sso-4",
+            "dfalse",
+            "e2",
+            "dD105 name-string-longer-than-sso-105",
+            "dD5 name-string-longer-than-sso-5",
+            "f1",
+            "dD106 name-string-longer-than-sso-106",
+            "dD6 name-string-longer-than-sso-6",
+            "end",
+        ],
+        "asan_fresh_temp_drop_projection_into_a_keeping_or_generic_callee_is_freed_once",
+        35,
+    );
+}

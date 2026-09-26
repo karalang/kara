@@ -2282,6 +2282,50 @@ impl<'ctx> super::Codegen<'ctx> {
     /// consumer's binding is now its sole owner, and the temp's struct drop
     /// frees only the UNREAD remainder.
     pub(super) fn consume_freshtemp_field_move(&mut self, value: &Expr) {
+        self.consume_freshtemp_field_move_inner(value, true);
+    }
+
+    /// B-2026-09-26-40 — [`Self::consume_freshtemp_field_move`] for a
+    /// consumer that takes a DEEP COPY of the projected field rather than the
+    /// field itself: a by-value argument of an entry-copied struct type whose
+    /// callee hands the parameter back or keeps it (`keep(mkw(9).r)` over
+    /// `fn keep(d: D) -> D { d }`). The callee's copy is what escapes, so the
+    /// ORIGINAL field's heap stays the temp's to free -- zeroing it, as the
+    /// move-consume does, leaked it (2 B at `-O0`, measured). Its BODY is not
+    /// the temp's any more (the copy runs it wherever it ends up), so the
+    /// siblings' bodies still run here with the field masked, exactly as a
+    /// move. One hop only: the nested stash has no memory-keeping form, so a
+    /// deeper projection keeps today's route.
+    pub(super) fn consume_freshtemp_field_bodies_keeping_memory(&mut self, value: &Expr) {
+        self.consume_freshtemp_field_move_inner(value, false);
+    }
+
+    /// B-2026-09-26-40 — a by-value argument projected ONE hop off a fresh
+    /// temp, whose callee hands the parameter back or keeps it: the argument
+    /// registrar is declined for it, but the temp still dies at this
+    /// projection, so its siblings' bodies run here rather than nowhere. An
+    /// entry-copied type escapes as the callee's COPY and the temp keeps the
+    /// original's memory; anything else is a plain move. Shared by the free,
+    /// method and associated-fn argument legs. Interp twin: the `kept` leg of
+    /// `drop_projection_arg_consume`.
+    pub(super) fn consume_escaping_freshtemp_projection_arg(&mut self, value: &Expr) {
+        let ExprKind::FieldAccess { object, .. } = &value.kind else {
+            return;
+        };
+        if matches!(object.kind, ExprKind::FieldAccess { .. }) {
+            return;
+        }
+        let Some(ty) = self.freshtemp_drop_projection_arg_type(value) else {
+            return;
+        };
+        if self.struct_type_is_entry_copied_heap(&ty) {
+            self.consume_freshtemp_field_bodies_keeping_memory(value);
+        } else {
+            self.consume_freshtemp_field_move(value);
+        }
+    }
+
+    fn consume_freshtemp_field_move_inner(&mut self, value: &Expr, zero: bool) {
         let ExprKind::FieldAccess { object, field } = &value.kind else {
             return;
         };
@@ -2290,7 +2334,9 @@ impl<'ctx> super::Codegen<'ctx> {
             return;
         };
         if ch_field != *field || span_key != (object.span.offset, object.span.length) {
-            self.consume_freshtemp_nested_field_move(value);
+            if zero {
+                self.consume_freshtemp_nested_field_move(value);
+            }
             return;
         }
         self.freshtemp_field_access_slot = None;
@@ -2303,7 +2349,9 @@ impl<'ctx> super::Codegen<'ctx> {
             let subst = self.generic_struct_subst_from_inst(&name, i);
             self.mono_struct_type_from_subst(&name, &subst)
         });
-        self.zero_struct_field_move_cap_inst(slot, &name, field, mono_st, inst.as_ref());
+        if zero {
+            self.zero_struct_field_move_cap_inst(slot, &name, field, mono_st, inst.as_ref());
+        }
         // B-2026-09-17-36 — the consumer owns the projected field and the
         // masked walk below owns the rest, so the statement-end walk
         // `track_freshtemp_read_bodies` armed must not run this temp again.

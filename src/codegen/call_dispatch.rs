@@ -2547,6 +2547,14 @@ impl<'ctx> super::Codegen<'ctx> {
             // the value leaves the frame with no entry copy behind it.
             let escapes_without_entry_copy =
                 (flows_into_return || stored_in_outliving_place) && !entry_copied_any;
+            // B-2026-09-26-40 — and where the callee hands the argument back
+            // or keeps it, the temp still gives the field up here, so its
+            // siblings' bodies run at the call rather than nowhere: the
+            // registrar below is declined, but the temp dies at this
+            // projection all the same.
+            if escapes_frame || escapes_without_entry_copy {
+                self.consume_escaping_freshtemp_projection_arg(&a.value);
+            }
             if !arg_transfers && !escapes_without_entry_copy {
                 if drop_projection.is_some() && !escapes_frame {
                     self.consume_freshtemp_field_move(&a.value);

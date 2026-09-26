@@ -2146,8 +2146,33 @@ impl<'ctx> super::Codegen<'ctx> {
         }
         let saved_pending_elem = self.var_types.pending_let_elem_type.take();
         let saved_pending_elem_te = self.var_types.pending_let_elem_type_expr.take();
-        let arg_vals: Result<Vec<BasicValueEnum<'ctx>>, String> =
-            args.iter().map(|a| self.compile_expr(&a.value)).collect();
+        // B-2026-09-26-40 — a `ref T` param reads a projection off a fresh
+        // temp THROUGH, so the temp keeps the field and runs every field's
+        // body at the statement end, as the non-generic `ref` legs do
+        // (B-2026-09-26-33). So does a by-value param the body only READS: a
+        // monomorph's by-value param is caller-retained (a retaining site in
+        // the body deep-copies it), so the temp is still the field's only
+        // owner, and the named spelling (`let d = mkd(7); gn(d)`) runs the body
+        // at the statement end too. A by-value param that may escape keeps
+        // today's route. Per argument, before it compiles: the flag is read by
+        // the projection's own `FieldAccess` arm.
+        let read_only_params = crate::result_escape::by_value_nonescaping_param_names(&generic_fn);
+        let arg_vals: Result<Vec<BasicValueEnum<'ctx>>, String> = args
+            .iter()
+            .enumerate()
+            .map(|(i, a)| {
+                let reads_through = generic_fn.params.get(i).is_some_and(|p| {
+                    matches!(p.ty.kind, TypeKind::Ref(_))
+                        || (!matches!(p.ty.kind, TypeKind::MutRef(_))
+                            && matches!(&p.pattern.kind,
+                                crate::ast::PatternKind::Binding(n) if read_only_params.contains(n)))
+                });
+                if reads_through {
+                    self.mark_borrowed_projection_read_through(&a.value);
+                }
+                self.compile_expr(&a.value)
+            })
+            .collect();
         self.var_types.pending_let_elem_type = saved_pending_elem;
         self.var_types.pending_let_elem_type_expr = saved_pending_elem_te;
         let mut arg_vals: Vec<BasicValueEnum<'ctx>> = arg_vals?;

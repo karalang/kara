@@ -8465,6 +8465,9 @@ impl<'ctx> super::Codegen<'ctx> {
                         .filter(|_| !escapes_frame && !escapes_without_entry_copy);
                     if drop_projection.is_some() {
                         self.consume_freshtemp_field_move(&a.value);
+                    } else if escapes_frame || escapes_without_entry_copy {
+                        // B-2026-09-26-40 — see `compile_call`.
+                        self.consume_escaping_freshtemp_projection_arg(&a.value);
                     }
                     if !escapes_without_entry_copy {
                         // B-2026-09-07-6 — the DECLARED element types, which
