@@ -3649,6 +3649,38 @@ impl<'ctx> super::Codegen<'ctx> {
                 || crate::ast::fn_conditionally_hands_param_to_flip_callee(program, f, arg_index))
     }
 
+    /// B-2026-09-25-40 — the MONOMORPH form of
+    /// [`Self::cond_store_dropless_memory_moves_to_callee`], asked with the
+    /// param's SUBSTITUTED type for a GENERIC callee (`fn stc[T](a: T, c:
+    /// bool) -> Vec[T] { .. if c { v.push(a) } .. }` at `T = S3`). Same two
+    /// consumers as the concrete form: the mono prologue registers the
+    /// combined value drop per path and the mono call site retracts the
+    /// caller's memory-only action. Without it `stc(s, true)` over a
+    /// `shared`-field struct with no `Drop` freed the pushed element through
+    /// the container and through the caller's binding.
+    pub(super) fn cond_store_dropless_memory_moves_to_mono_callee(
+        &self,
+        callee_name: &str,
+        arg_index: usize,
+        struct_name: &str,
+    ) -> bool {
+        let Some(program) = self.program_snapshot.as_deref() else {
+            return false;
+        };
+        let Some(f) = crate::codegen::declarations::find_function_ast(program, callee_name) else {
+            return false;
+        };
+        if f.generic_params.is_none() || self.is_coroutine_compiled(&f.name) {
+            return false;
+        }
+        if f.params.get(arg_index).is_none() {
+            return false;
+        }
+        self.dropless_forwarded_struct(struct_name)
+            && (crate::ast::fn_conditionally_stores_param(f, arg_index)
+                || crate::ast::fn_conditionally_hands_param_to_flip_callee(program, f, arg_index))
+    }
+
     /// B-2026-09-25-41 — the parameters a frame owns PER PATH itself, as
     /// `(fn key, param name)`: the input `param_transfer::compute_handback_safe_params`
     /// admits at a call site where it otherwise declines every enclosing-frame
@@ -3856,6 +3888,108 @@ impl<'ctx> super::Codegen<'ctx> {
             if !ret_is_struct {
                 return false;
             }
+        }
+        if !self
+            .handback_safe_params
+            .contains(&(callee_name.to_string(), arg_index))
+        {
+            return false;
+        }
+        crate::ast::fn_conditionally_returns_param_bare(Some(program), f, arg_index)
+            && !crate::ast::fn_moves_param_into_outliving_place(f, arg_index)
+    }
+
+    /// B-2026-09-25-40 — the MONOMORPH form of
+    /// [`Self::conditional_handback_memory_moves_to_callee`]: does the memory
+    /// of a conditionally handed-back by-value param of a GENERIC callee move
+    /// to the callee, per path, at the instantiation where that param's type
+    /// resolves to `struct_name`?
+    ///
+    /// The concrete predicate declines every generic callee because it reads
+    /// the param's DECLARED type, which for `fn pick[T](v: T, c: bool, w: T)
+    /// -> T` is the bare `T` and names no struct. The mono prologue
+    /// (`compile_mono_function`) and the mono call site
+    /// (`compile_generic_call`) both know the SUBSTITUTED type, so they ask
+    /// this form with it — the prologue through `subst_monomorph_type_params`,
+    /// the call site through the argument binding's recorded type — and both
+    /// answer off the same `Function`, so the callee registers a per-path
+    /// memory owner exactly where the caller has stood down. Without this
+    /// pairing the generic path kept the caller's cleanup beside the result's:
+    /// `pick(s, true, w)` over a `shared`-field struct used the value after
+    /// free on every compiled surface, with or without a `Drop`.
+    ///
+    /// The result gate is the substituted one: a result declared as the
+    /// param's own type parameter (`-> T`) resolves to the same struct, which
+    /// is the "result is the value itself" shape the concrete predicate admits
+    /// by name; a concrete struct result is admitted as there. Everything else
+    /// (`-> Option[T]`, `-> Ho[T]`) declines, for the concrete predicate's
+    /// reason. Every other gate is the concrete predicate's, including
+    /// `handback_safe_params`, which considers generic FREE functions and
+    /// declines generic impl methods, so a generic METHOD keeps today's path.
+    pub(super) fn conditional_handback_memory_moves_to_mono_callee(
+        &self,
+        callee_name: &str,
+        arg_index: usize,
+        struct_name: &str,
+    ) -> bool {
+        let Some(program) = self.program_snapshot.as_deref() else {
+            return false;
+        };
+        let Some(f) = crate::codegen::declarations::find_function_ast(program, callee_name) else {
+            return false;
+        };
+        if f.generic_params.is_none() || self.is_coroutine_compiled(&f.name) {
+            return false;
+        }
+        let Some(param) = f.params.get(arg_index) else {
+            return false;
+        };
+        let crate::ast::TypeKind::Path(param_path) = &param.ty.kind else {
+            return false;
+        };
+        let Some(param_head) = param_path.segments.first() else {
+            return false;
+        };
+        if !self.struct_param_memory_stays_with_caller(struct_name) {
+            return false;
+        }
+        if self
+            .type_decls
+            .struct_generic_params
+            .get(struct_name)
+            .is_some_and(|g| !g.is_empty())
+        {
+            return false;
+        }
+        if !program.drop_method_keys.contains_key(struct_name)
+            && !self.struct_owns_shared_field(struct_name, &mut Vec::new())
+        {
+            return false;
+        }
+        // The result gate holds for BOTH arms here, where the concrete
+        // predicate applies it to the Drop-less one only. A `Drop` struct
+        // handed back inside `Option[T]` / `Ho[T]` is B-2026-09-25-38's
+        // arrangement: the callee's per-path flag runs the BODY on the
+        // dies-inside exit and the binding keeps the MEMORY, because the
+        // result aliases the value and declines to free a caller-retained
+        // payload (`let_payload_may_be_caller_retained`). Taking the memory
+        // over here as well left the hand-back exit with no owner: measured
+        // on that row's own fixture at -O0, `mid(s, true)` over `struct S2`
+        // leaked its 16 B `Sh` box on every `Some` exit (48 B in 3 objects),
+        // where the `mid(s, false)` exit was clean. The mono call site orders
+        // this branch before the enum-result one, so the gate has to say no
+        // here for that branch to be reached.
+        let ret_is_struct = f
+            .return_type
+            .as_ref()
+            .and_then(Self::te_head_name)
+            .is_some_and(|r| {
+                r == *param_head
+                    || (self.type_decls.struct_types.contains_key(r.as_str())
+                        && !self.type_decls.shared_types.contains_key(r.as_str()))
+            });
+        if !ret_is_struct {
+            return false;
         }
         if !self
             .handback_safe_params

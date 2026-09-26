@@ -4979,3 +4979,72 @@ fn main() {
     };
     assert_eq!(out, "t1\ndP1\nt2\ndP2\nt3\ndP3\nt4\nt5\ndS5\nt6\ndR6x\nt7\ndP7\nt8\ndP8\nr2\nr1\nr0\nt15\ndS15\nt16\ndP16\nt17\ndP17\nt20\ndS20\nt21\ndS21\nt22\ndS22\ndP19\ndisc\nend\n", "got:\n{out}");
 }
+
+/// B-2026-09-25-40 — a GENERIC callee that hands a `shared`-field struct
+/// back on only SOME paths (`fn pick[T](v: T, c: bool, w: T) -> T`), or
+/// stores it on only some paths (`fn stc[T](a: T, c: bool) -> Vec[T]`,
+/// `fn gcond[T](v: mut ref Vec[T], x: T, k: bool)`). The concrete twins have a
+/// per-path memory owner in the callee paired with a caller retraction
+/// (B-2026-09-06-69 / B-2026-09-25-37); the generic path had neither, so the
+/// caller's binding and the result (or the container) each freed the value:
+/// 2 valgrind errors and `malloc(): unaligned tcache chunk detected` under
+/// `karac run`, with or without a `Drop`, and a `Drop` body run twice. `a_`
+/// / `b_` both exits of `pick` over the `Drop` and Drop-less struct, `c_` the
+/// discarded spellings, `d_` fresh temps (which LEAKED 16 B on the base), `e_`
+/// loops, `f_` the conditional store into a local container (`stc`), `g_` into
+/// a `ref` param's container, `h_` an enclosing-frame param handed on to the
+/// generic callee (B-2026-09-25-41's shape, one genericity over), `i_` the
+/// copy-supported `R`, the heap-less `P` and `stc` over `R` (clean before and
+/// after), `j_` an `Option` result (B-2026-09-25-38's arrangement, unchanged).
+/// Output pinned against `--interp`, identical on the JIT, `-O0` and `-O2`.
+#[test]
+fn e2e_generic_mixed_path_handback_of_shared_field_struct_has_one_owner() {
+    let Some(out) = run_program(
+        r#"shared struct Sh { k: i64 }
+struct S2 { h: Sh, id: i64 }
+impl Drop for S2 { fn drop(mut ref self) { println(f"dS{self.id}") } }
+struct S3 { h: Sh, id: i64 }
+struct R { id: i64, tag: String }
+impl Drop for R { fn drop(mut ref self) { println(f"dR{self.id}") } }
+struct P { id: i64 }
+fn mk(i: i64) -> S3 { return S3 { h: Sh { k: i }, id: i } }
+fn mk2(i: i64) -> S2 { return S2 { h: Sh { k: i }, id: i } }
+fn pick[T](v: T, c: bool, w: T) -> T { if c { return v } return w }
+fn stc[T](a: T, c: bool) -> Vec[T] { let mut v: Vec[T] = Vec.new(); if c { v.push(a) } return v }
+fn gcond[T](v: mut ref Vec[T], x: T, k: bool) { if k { v.push(x) } }
+fn mid[T](v: T, c: bool) -> Option[T] { if c { return Some(v) } return None }
+fn passp(a: S3, c: bool) -> S3 { let w = mk(98); return pick(a, c, w) }
+fn passp2(a: S2, c: bool) -> S2 { let w = mk2(98); return pick(a, c, w) }
+fn a_pick2() { let s = mk2(1); let w = mk2(2); let t = pick(s, true, w); println(f"a{t.id}"); let s2 = mk2(3); let w2 = mk2(4); let t2 = pick(s2, false, w2); println(f"a{t2.id}") }
+fn b_pick3() { let s = mk(5); let w = mk(6); let t = pick(s, true, w); let s2 = mk(7); let w2 = mk(8); let t2 = pick(s2, false, w2); println(f"b{t.id} {t2.id}") }
+fn c_disc() { let s = mk2(9); let w = mk2(10); pick(s, true, w); let s2 = mk2(11); let w2 = mk2(12); let _ = pick(s2, false, w2); let s3 = mk(13); let w3 = mk(14); pick(s3, true, w3); let s4 = mk(15); let w4 = mk(16); let _ = pick(s4, false, w4); println("c") }
+fn d_temp() { let t = pick(mk2(17), false, mk2(18)); let u = pick(mk(19), true, mk(20)); println(f"d{t.id} {u.id}") }
+fn e_loop() { for i in 0..3 { let s = mk2(30 + i); let w = mk2(40 + i); let t = pick(s, i == 1, w); println(f"e{t.id}") } for i in 0..3 { let s = mk(50 + i); let w = mk(60 + i); let t = pick(s, i == 1, w); println(f"e{t.id}") } }
+fn f_stc() { let s = mk(21); let v = stc(s, true); let s2 = mk(22); let v2 = stc(s2, false); let s3 = mk(23); stc(s3, true); let v3 = stc(mk(24), true); let v4 = stc(mk(25), false); let s5 = mk2(26); let v5 = stc(s5, true); let s6 = mk2(27); let v6 = stc(s6, false); println(f"f{v.len()} {v2.len()} {v3.len()} {v4.len()} {v5.len()} {v6.len()}") }
+fn g_gcond() { let mut v: Vec[S3] = Vec.new(); let s = mk(28); gcond(mut v, s, true); let s2 = mk(29); gcond(mut v, s2, false); println(f"g{v.len()}") }
+fn h_passp() { let s = mk(70); let t = passp(s, true); let s2 = mk(71); let t2 = passp(s2, false); println(f"h{t.id} {t2.id}"); let s3 = mk2(72); let t3 = passp2(s3, true); println(f"h{t3.id}"); let s4 = mk2(73); let t4 = passp2(s4, false); println(f"h{t4.id}") }
+fn i_control() { let s = R { id: 80, tag: "a" }; let w = R { id: 81, tag: "b" }; let t = pick(s, true, w); let s2 = R { id: 82, tag: "c" }; let w2 = R { id: 83, tag: "d" }; let t2 = pick(s2, false, w2); let p = P { id: 84 }; let q = P { id: 85 }; let t3 = pick(p, true, q); let r = R { id: 86, tag: "e" }; let v = stc(r, true); println(f"i{t.id} {t2.id} {t3.id} {v.len()}") }
+fn j_mid() { let s = mk(90); let o = mid(s, true); let s2 = mk2(91); let o2 = mid(s2, false); println("j") }
+fn main() {
+    a_pick2()
+    b_pick3()
+    c_disc()
+    d_temp()
+    e_loop()
+    f_stc()
+    g_gcond()
+    h_passp()
+    i_control()
+    j_mid()
+    println("end")
+}
+"#,
+    ) else {
+        return;
+    };
+    assert_eq!(
+        out,
+        "dS2\na1\ndS1\ndS3\na4\ndS4\nb5 8\ndS10\ndS9\ndS11\ndS12\nc\ndS17\nd18 19\ndS18\ndS30\ne40\ndS40\ndS41\ne31\ndS31\ndS32\ne42\ndS42\ne60\ne51\ne62\ndS27\nf1 0 1 0 1 0\ndS26\ng1\nh70 98\ndS98\nh72\ndS72\ndS73\nh98\ndS98\ndR81\ndR82\ni80 83 84 1\ndR86\ndR83\ndR80\ndS91\nj\nend\n",
+        "got:\n{out}"
+    );
+}

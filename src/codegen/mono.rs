@@ -3696,6 +3696,60 @@ impl<'ctx> super::Codegen<'ctx> {
                     if let Some(v) = self.variables.get(var_name.as_str()) {
                         self.drop_rc.forwarded_handback_slots.insert(v.ptr);
                     }
+                } else if self.handback_forwards_local(var_name)
+                    && ast_i.is_some_and(|ast_i| {
+                        self.var_types
+                            .var_type_names
+                            .get(var_name.as_str())
+                            .is_some_and(|tn| {
+                                self.conditional_handback_memory_moves_to_mono_callee(
+                                    name, ast_i, tn,
+                                ) || self.cond_store_dropless_memory_moves_to_mono_callee(
+                                    name, ast_i, tn,
+                                )
+                            })
+                    })
+                {
+                    // B-2026-09-25-40 — the MIXED-path spellings of the branch
+                    // above: a forwarded local handed back on only SOME exits
+                    // (`fn pick[T](v: T, c: bool, w: T) -> T`), or a Drop-less
+                    // one stored on some paths only (`fn stc[T](a: T, c: bool)
+                    // -> Vec[T]`). The every-path predicate declines both,
+                    // correctly: the result or the container owns the value
+                    // on one exit and nobody did on the other. The mono
+                    // prologue now takes the memory PER PATH for exactly
+                    // these shapes (the same predicates, asked with the
+                    // substituted type), so the caller stands all the way
+                    // down here as the concrete site has since
+                    // B-2026-09-06-69 / B-2026-09-25-37. Retracting alone
+                    // would leak the dies-inside exit; registering alone
+                    // would free the handed-back object twice; the two moves
+                    // are one fix. The hand-back shape records the slot as
+                    // the every-path branch does, so a DISCARDED result
+                    // (`pick(s, true, w);`) takes the value over through the
+                    // discard registrar; without the record it ran no body
+                    // and leaked the `shared` field (measured: `dS17 disc`
+                    // against `dS17 dS16 disc`, 16 B lost). A conditional
+                    // STORE's discarded result is the container, which owns
+                    // the value already.
+                    let var_name = var_name.clone();
+                    let handed_back = ast_i.is_some_and(|ast_i| {
+                        self.var_types
+                            .var_type_names
+                            .get(var_name.as_str())
+                            .is_some_and(|tn| {
+                                self.conditional_handback_memory_moves_to_mono_callee(
+                                    name, ast_i, tn,
+                                )
+                            })
+                    });
+                    self.suppress_user_drop_for_var(&var_name);
+                    self.suppress_struct_cleanup_for_tail_identifier(&var_name);
+                    if handed_back {
+                        if let Some(v) = self.variables.get(var_name.as_str()) {
+                            self.drop_rc.forwarded_handback_slots.insert(v.ptr);
+                        }
+                    }
                 } else if returns_param
                     && self.handback_forwards_local(var_name)
                     && self.callee_result_is_nonshared_enum(name)
@@ -5682,13 +5736,52 @@ impl<'ctx> super::Codegen<'ctx> {
                             .as_deref()
                             .map(|p| p.drop_method_keys.contains_key(struct_name))
                             .unwrap_or(false);
+                        // B-2026-09-25-40 — the MEMORY arm the mono prologue
+                        // never had. `compile_function` has registered the
+                        // WHOLE drop, per path, for a FORWARDED param since
+                        // B-2026-09-06-69 (and for a Drop-less one owning a
+                        // `shared` field since B-2026-09-25-37), because the
+                        // caller stands all the way down for it and the
+                        // dies-inside exit is otherwise unowned; this prologue
+                        // registered the bodies only, and its caller (the
+                        // mono call site) never retracted at all, so
+                        // `pick(s, true, w)` over `fn pick[T](v: T, c: bool,
+                        // w: T) -> T` freed `s` through the binding and through
+                        // the result: 2 valgrind errors and an abort in
+                        // `malloc` under `karac run`, with or without a
+                        // `Drop`. The mono form of the predicate is asked with
+                        // the SUBSTITUTED type here and with the argument's
+                        // recorded type at the call site, so the two halves
+                        // still answer off one `Function`.
+                        let recv_offset = self
+                            .program_snapshot
+                            .as_deref()
+                            .and_then(|p| {
+                                crate::codegen::declarations::find_function_ast(p, &func.name)
+                            })
+                            .is_some_and(|ast| ast.self_param.is_some())
+                            as usize;
+                        let owns_memory = i >= recv_offset
+                            && self.conditional_handback_memory_moves_to_mono_callee(
+                                &func.name,
+                                i - recv_offset,
+                                struct_name,
+                            );
                         if has_user_drop
                             && !self
                                 .type_decls
                                 .shared_types
                                 .contains_key(struct_name.as_str())
                         {
-                            if let Some(bodies) =
+                            if owns_memory {
+                                self.track_user_drop_var(struct_name, &param_name, alloca);
+                                self.drop_rc
+                                    .cond_returned_body_params
+                                    .insert(param_name.clone());
+                                self.drop_rc
+                                    .cond_returned_owned_params
+                                    .insert(param_name.clone());
+                            } else if let Some(bodies) =
                                 self.emit_struct_user_drop_bodies_only_fn(struct_name)
                             {
                                 self.track_user_drop_var_with_fn(
@@ -5702,6 +5795,28 @@ impl<'ctx> super::Codegen<'ctx> {
                                 // non-generic prologue; see the set's doc.
                                 self.drop_rc
                                     .cond_returned_body_params
+                                    .insert(param_name.clone());
+                            }
+                        } else if !has_user_drop && owns_memory {
+                            // The Drop-less arm (B-2026-09-25-37's, one
+                            // prologue over): the flagged action is the
+                            // combined value drop the caller's own
+                            // `StructDrop` would have emitted.
+                            if let Some(full) =
+                                self.emit_vec_elem_struct_with_shared_drop_fn(struct_name)
+                            {
+                                self.track_user_drop_var_with_fn(
+                                    struct_name,
+                                    &param_name,
+                                    alloca,
+                                    full,
+                                    crate::codegen::state::UserDropKind::OwnWrapper,
+                                );
+                                self.drop_rc
+                                    .cond_returned_body_params
+                                    .insert(param_name.clone());
+                                self.drop_rc
+                                    .cond_returned_owned_params
                                     .insert(param_name.clone());
                             }
                         }
@@ -5793,6 +5908,46 @@ impl<'ctx> super::Codegen<'ctx> {
                                 self.drop_rc
                                     .cond_store_flag_params
                                     .insert(param_name.clone());
+                            }
+                        } else if !has_user_drop {
+                            // B-2026-09-25-40 — the Drop-less arm the
+                            // non-generic site gained in B-2026-09-25-37: a
+                            // forwarded struct owning a `shared` field, stored
+                            // on some paths only, takes the combined value
+                            // drop per path here, and the mono call site
+                            // retracts the caller's memory-only action on the
+                            // same predicate. `stc(s, true)` over `fn stc[T](a:
+                            // T, c: bool) -> Vec[T]` freed the element twice.
+                            let recv_offset = self
+                                .program_snapshot
+                                .as_deref()
+                                .and_then(|p| {
+                                    crate::codegen::declarations::find_function_ast(p, &func.name)
+                                })
+                                .is_some_and(|ast| ast.self_param.is_some())
+                                as usize;
+                            if i >= recv_offset
+                                && self.cond_store_dropless_memory_moves_to_mono_callee(
+                                    &func.name,
+                                    i - recv_offset,
+                                    struct_name,
+                                )
+                            {
+                                if let Some(full) =
+                                    self.emit_vec_elem_struct_with_shared_drop_fn(struct_name)
+                                {
+                                    self.track_user_drop_var_with_fn(
+                                        struct_name,
+                                        &param_name,
+                                        alloca,
+                                        full,
+                                        crate::codegen::state::UserDropKind::OwnWrapper,
+                                    );
+                                    let _ = self.cond_move_drop_flag_for(&param_name);
+                                    self.drop_rc
+                                        .cond_store_flag_params
+                                        .insert(param_name.clone());
+                                }
                             }
                         }
                     }
