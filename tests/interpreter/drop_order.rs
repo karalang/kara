@@ -7478,3 +7478,41 @@ fn main() {
     );
     assert_eq!(out, "c1 true\ndD1\ndD2\nc2 1\ndD3\nc3 2\ndD4\ndD5\nc4 true\ndD6\nc5 true\ndD7\nc6 true\ndD8\ndD9\nc7 true\ndD10\nc8 true\ndHb\ndD11\ndD12\nc9 1\nc10 3\ndD13\ndD14\nc11 true\ndD15\nc12 1\ndD16\nc13 5\ndD17\nc14 2\ndD18\nc15 1\ndD19\nc16 false\nend\nc1 true\ndD1\ndD2\nc2 1\ndD3\nc3 2\ndD4\ndD5\nc4 true\ndD6\nc5 true\ndD7\nc6 true\ndD8\ndD9\nc7 true\ndD10\nc8 true\ndHb\ndD11\ndD12\nc9 1\nc10 3\ndD13\ndD14\nc11 true\ndD15\nc12 1\ndD16\nc13 5\ndD17\nc14 2\ndD18\nc15 1\ndD19\nc16 false\nend\n");
 }
+
+/// B-2026-09-16-14 — a struct-field leaf moved out of a match or `if let` arm
+/// (rebound, handed to a by-value callee, or returned) runs its `Drop` body
+/// once. The interpreter used to run it a second time when the arm's own
+/// binding slot fired after the move; edbfa5209 (B-2026-09-06-35) fixed that
+/// by masking the moved field out of the scrutinee's walk. Pinned on both
+/// backends so the count and the order stay agreed.
+#[test]
+fn interp_struct_field_leaf_moved_out_of_an_arm_runs_its_body_once() {
+    let out = run_no_errors(
+        r#"struct R { id: i64, tag: String, xs: Vec[i64] }
+impl Drop for R { fn drop(mut ref self) { println(f"dR{self.id}") } }
+enum E { A(R), B }
+impl Drop for E { fn drop(mut ref self) { println("dE") } }
+struct H1 { e: E }
+struct H2 { r: R }
+struct H3 { r: R, n: i64 }
+fn mk(n: i64) -> R { return R { id: n, tag: f"tag-aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa{n}", xs: [n, n] } }
+fn keep(r: R) -> R { return r; }
+fn s1() -> i64 { let c = H2 { r: mk(1) }; match c { H2 { r } => { let m = r; println("s1in"); return m.id; } } }
+fn s2() -> R { let c = H2 { r: mk(2) }; match c { H2 { r } => r } }
+fn s3() -> i64 { let c = H2 { r: mk(3) }; if let H2 { r } = c { let m = r; println("s3in"); return m.id; } return 0; }
+fn s4() -> i64 { let c = H3 { r: mk(4), n: 9 }; match c { H3 { r, n } => { let m = keep(r); println(f"s4in {n}"); return m.id; } } }
+fn s5() -> i64 { let c = H1 { e: E.A(mk(5)) }; match c { H1 { e } => { let m = e; println("s5in"); match m { E.A(r) => r.id, E.B => 0 } } } }
+fn s6() -> E { let c = H1 { e: E.A(mk(6)) }; match c { H1 { e } => e } }
+fn main() {
+    println(f"a {s1()}");
+    let x = s2(); println(f"b {x.id}");
+    println(f"c {s3()}");
+    println(f"d {s4()}");
+    println(f"e {s5()}");
+    let y = s6(); println("f");
+    println("end");
+}
+"#,
+    );
+    assert_eq!(out, "s1in\ndR1\na 1\nb 2\ndR2\ns3in\ndR3\nc 3\ns4in 9\ndR4\nd 4\ns5in\ndE\ndR5\ne 5\ndE\ndR6\nf\nend\n");
+}
