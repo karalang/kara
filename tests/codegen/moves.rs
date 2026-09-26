@@ -2130,6 +2130,102 @@ fn e2e_fresh_temp_projected_in_a_function_tail_runs_its_bodies() {
     }
 }
 
+/// B-2026-09-26-1 — a heap field moved out THROUGH a projection of a fresh
+/// temp (`let s = mkw2().p.name;`) has one owner.
+///
+/// The consumer matched only a ONE-hop projection of the staged temp, so for
+/// `mkw2().p.name` nothing cap-zeroed `p.name` in the temp's slot: the temp's
+/// memory drop freed it and so did `s`, `free(): double free detected in tcache
+/// 2` on every compiled surface for a program with no `Drop` anywhere. Both
+/// backends now follow the chain to the staged root, zero the leaf there, and
+/// run the temp's remaining bodies once (`--interp` also ran a moved-out
+/// `Drop`-bearing leaf's body twice before, `n06`).
+///
+/// Not covered and not pinned here because they still abort: a GENERIC root
+/// (`mkg2().v.name` over `G[P]`), and a chain through a struct with a `Drop` of
+/// its own (`mkw(9).r.name`), whose legality on a temp is the typechecker's
+/// question.
+#[test]
+fn e2e_field_moved_through_a_fresh_temp_projection_has_one_owner() {
+    const H: &str = "struct D { id: i64, name: String }\n\
+             impl Drop for D { fn drop(mut ref self) { println(f\"dD{self.id}{self.name}\") } }\n\
+             fn mkd(n: i64) -> D { return D { id: n, name: f\"n{n}\" }; }\n\
+             struct P { name: String }\n\
+             struct W2 { p: P, b: i64 }\n\
+             fn mkw2() -> W2 { return W2 { p: P { name: f\"pp\" }, b: 1 }; }\n\
+             struct P3 { name: String, d: D }\n\
+             struct W3 { p: P3, q: D, b: i64 }\n\
+             fn mkw3() -> W3 { return W3 { p: P3 { name: f\"p3\", d: mkd(1) }, q: mkd(2), b: 3 }; }\n\
+             struct A4 { w: W3, k: i64 }\n\
+             fn mk4() -> A4 { return A4 { w: mkw3(), k: 4 }; }\n\
+             fn f5() -> String { mkw2().p.name }\n\
+             fn f6() -> String { mkw3().p.name }\n\
+             fn f7() -> D { mkw3().p.d }\n";
+    for (label, body, want) in [
+        (
+            "n01 let, no Drop anywhere",
+            "let s = mkw2().p.name; println(s);",
+            "pp\nend\n",
+        ),
+        (
+            "n02 function tail, no Drop anywhere",
+            "println(f\"t{f5()}\");",
+            "tpp\nend\n",
+        ),
+        (
+            "n03 let, Drop siblings at both levels",
+            "let s = mkw3().p.name; println(s);",
+            "dD2n2\ndD1n1\np3\nend\n",
+        ),
+        (
+            "n04 function tail, Drop siblings",
+            "println(f\"t{f6()}\");",
+            "dD2n2\ndD1n1\ntp3\nend\n",
+        ),
+        (
+            "n05 three hops",
+            "let s = mk4().w.p.name; println(s);",
+            "dD2n2\ndD1n1\np3\nend\n",
+        ),
+        (
+            "n06 Drop-bearing leaf moved out",
+            "let d = mkw3().p.d; println(f\"d{d.id}\");",
+            "dD2n2\nd1\ndD1n1\nend\n",
+        ),
+        (
+            "n07 Drop-bearing leaf out of a function tail",
+            "let d = f7(); println(f\"d{d.id}\");",
+            "dD2n2\nd1\ndD1n1\nend\n",
+        ),
+        (
+            "n09 tuple element",
+            "let t = (mkw3().p.name, 1); println(t.0);",
+            "dD2n2\ndD1n1\np3\nend\n",
+        ),
+        (
+            "n10 read only, not a move",
+            "println(mkw3().p.name);",
+            "p3\ndD2n2\ndD1n1\nend\n",
+        ),
+        (
+            "n11 assignment",
+            "let mut s = f\"x\"; s = mkw3().p.name; println(s);",
+            "dD2n2\ndD1n1\np3\nend\n",
+        ),
+    ] {
+        let prog = format!("{H}fn main() {{\n    {body}\n    println(\"end\")\n}}\n");
+        let (interp_out, interp_errs, _, _) = karac::run_program_full_checked(&prog);
+        assert!(
+            interp_errs.is_empty(),
+            "[{label}] interp errored: {interp_errs:?}"
+        );
+        assert_eq!(interp_out.join(""), want, "[{label}] interpreter");
+        if let Some(aot) = run_program(&prog) {
+            assert_eq!(aot, want, "[{label}] AOT");
+        }
+    }
+}
+
 /// B-2026-09-05-13 — a by-value param REBOUND whole (`let m = r;`) and then
 /// handed back through an `Option`/`Result` constructor runs the `Drop` body
 /// ONCE, on every surface, unconditionally (`u-rebind`) and conditionally

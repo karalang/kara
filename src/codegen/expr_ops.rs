@@ -1715,6 +1715,121 @@ impl<'ctx> super::Codegen<'ctx> {
         ));
     }
 
+    /// B-2026-09-26-1 — the MULTI-HOP form of
+    /// [`Self::consume_freshtemp_field_move`]: a consumer that takes a field
+    /// reached THROUGH the staged projection (`let s = mkw2().p.name;`).
+    ///
+    /// The staged temp is `mkw2()` with field `p`, but the consumed expression's
+    /// object is `mkw2().p`, so the one-hop match above never fired: nothing
+    /// cap-zeroed `p.name` in the temp's slot, the temp's memory drop freed it
+    /// and so did the new owner — `free(): double free detected in tcache 2` on
+    /// every compiled surface for a program with no `Drop` anywhere.
+    ///
+    /// Walks the chain down to the staged root, zeroes the LAST hop's field in
+    /// its parent inside the slot, and runs the temp's remaining bodies with
+    /// the taken leaf masked by a nested skip. Declines, leaving today's
+    /// behaviour, when any intermediate struct is generic (its slot layout is
+    /// a monomorph this walk does not resolve) or has a `Drop` of its own
+    /// (whether that move is legal on a temp is the typechecker's question).
+    fn consume_freshtemp_nested_field_move(&mut self, value: &Expr) {
+        let mut path: Vec<&str> = Vec::new();
+        let mut cur = value;
+        while let ExprKind::FieldAccess { object, field } = &cur.kind {
+            path.push(field.as_str());
+            cur = object;
+        }
+        path.reverse();
+        if path.len() < 2 {
+            return;
+        }
+        let Some((slot, name, ch_field, span_key)) = self.freshtemp_field_access_slot.clone()
+        else {
+            return;
+        };
+        if ch_field != path[0] || span_key != (cur.span.offset, cur.span.length) {
+            return;
+        }
+        let own_drop = |me: &Self, n: &str| {
+            me.program_snapshot
+                .as_deref()
+                .is_some_and(|p| p.drop_method_keys.contains_key(n))
+        };
+        let generic = |me: &Self, n: &str| {
+            me.type_decls
+                .struct_generic_params
+                .get(n)
+                .is_some_and(|p| !p.is_empty())
+        };
+        if generic(self, &name) {
+            return;
+        }
+        // Resolve each hop: (parent struct, field index), and the parent of
+        // the last hop.
+        let mut hops: Vec<(String, usize)> = Vec::new();
+        let mut parent = name.clone();
+        for (i, f) in path.iter().enumerate() {
+            let Some(idx) = self
+                .type_decls
+                .struct_field_names
+                .get(parent.as_str())
+                .and_then(|fs| fs.iter().position(|x| x == f))
+            else {
+                return;
+            };
+            hops.push((parent.clone(), idx));
+            if i + 1 == path.len() {
+                break;
+            }
+            let Some(child) = self
+                .type_decls
+                .struct_field_type_exprs
+                .get(parent.as_str())
+                .and_then(|tes| tes.get(idx))
+                .and_then(|te| match &te.kind {
+                    TypeKind::Path(p) if p.generic_args.is_none() => p.segments.last().cloned(),
+                    _ => None,
+                })
+            else {
+                return;
+            };
+            if !self.type_decls.struct_types.contains_key(child.as_str())
+                || self.type_decls.shared_types.contains_key(child.as_str())
+                || generic(self, &child)
+                || own_drop(self, &child)
+            {
+                return;
+            }
+            parent = child;
+        }
+        self.freshtemp_field_access_slot = None;
+        let _ = self.freshtemp_field_access_inst.take();
+        self.disarm_freshtemp_read_bodies(slot);
+        // GEP down to the last hop's parent inside the slot.
+        let mut ptr = slot;
+        for (pname, idx) in &hops[..hops.len() - 1] {
+            let Some(st) = self.type_decls.struct_types.get(pname.as_str()).copied() else {
+                return;
+            };
+            ptr = self
+                .builder
+                .build_struct_gep(st, ptr, *idx as u32, "freshtemp.hop")
+                .unwrap();
+        }
+        let (last_parent, _) = hops.last().cloned().unwrap();
+        self.zero_struct_field_move_cap(ptr, &last_parent, path[path.len() - 1]);
+        let mut skip = super::synth_drop::FieldSkipTree::default();
+        {
+            let mut cur = &mut skip;
+            for (_, idx) in &hops[..hops.len() - 1] {
+                cur = cur.nested.entry(*idx).or_default();
+            }
+            cur.here.insert(hops[hops.len() - 1].1);
+        }
+        if let Some(bodies) = self.field_bodies_fn_for_owned_temp_skipping(&name, &skip) {
+            self.builder.build_call(bodies, &[slot.into()], "").unwrap();
+        }
+    }
+
     /// B-2026-09-17-36 — a FRESH TEMP read through a projection runs its `Drop`
     /// bodies when the statement that read it ends.
     ///
@@ -1917,6 +2032,7 @@ impl<'ctx> super::Codegen<'ctx> {
             return;
         };
         if ch_field != *field || span_key != (object.span.offset, object.span.length) {
+            self.consume_freshtemp_nested_field_move(value);
             return;
         }
         self.freshtemp_field_access_slot = None;

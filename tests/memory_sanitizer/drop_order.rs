@@ -2925,3 +2925,62 @@ fn main() {
         12,
     );
 }
+
+/// B-2026-09-26-1 — a heap field moved out THROUGH a projection of a fresh
+/// temp has one owner: the consumer now zeroes the leaf in the temp's slot at
+/// any depth, so the temp's memory drop no longer frees what the new owner
+/// holds (the unfixed tree aborts with a double free on the first line). Every
+/// moved leaf and every body reads a heap `String` longer than the inline
+/// capacity, and the tail (`f5`, `f7`), tuple, three-hop and assignment
+/// consumers each take one.
+#[test]
+fn asan_field_moved_through_a_fresh_temp_projection_has_one_owner() {
+    assert_clean_asan_run_min_allocs(
+        r#"struct D { id: i64, name: String }
+impl Drop for D { fn drop(mut ref self) { println(f"dD{self.id} {self.name}") } }
+fn mkd(n: i64) -> D { return D { id: n, name: f"name-string-longer-than-sso-{n}" }; }
+struct P { name: String }
+struct W2 { p: P, b: i64 }
+fn mkw2(n: i64) -> W2 { return W2 { p: P { name: f"p-string-longer-than-sso-{n}" }, b: n }; }
+struct P3 { name: String, d: D }
+struct W3 { p: P3, q: D, b: i64 }
+fn mkw3(n: i64) -> W3 { return W3 { p: P3 { name: f"p3-string-longer-than-sso-{n}", d: mkd(n) }, q: mkd(n + 100), b: n }; }
+struct A4 { w: W3, k: i64 }
+fn mk4(n: i64) -> A4 { return A4 { w: mkw3(n), k: n }; }
+fn f5() -> String { mkw2(2).p.name }
+fn f7() -> D { mkw3(6).p.d }
+fn main() {
+    let s1 = mkw2(1).p.name; println(s1);
+    println(f5());
+    let s3 = mkw3(3).p.name; println(s3);
+    let s4 = mk4(4).w.p.name; println(s4);
+    let t = (mkw3(5).p.name, 1); println(t.0);
+    let d = f7(); println(d.name);
+    let mut s7 = f"x"; s7 = mkw3(7).p.name; println(s7);
+    println("end")
+}
+"#,
+        &[
+            "p-string-longer-than-sso-1",
+            "p-string-longer-than-sso-2",
+            "dD103 name-string-longer-than-sso-103",
+            "dD3 name-string-longer-than-sso-3",
+            "p3-string-longer-than-sso-3",
+            "dD104 name-string-longer-than-sso-104",
+            "dD4 name-string-longer-than-sso-4",
+            "p3-string-longer-than-sso-4",
+            "dD105 name-string-longer-than-sso-105",
+            "dD5 name-string-longer-than-sso-5",
+            "p3-string-longer-than-sso-5",
+            "dD106 name-string-longer-than-sso-106",
+            "name-string-longer-than-sso-6",
+            "dD6 name-string-longer-than-sso-6",
+            "dD107 name-string-longer-than-sso-107",
+            "dD7 name-string-longer-than-sso-7",
+            "p3-string-longer-than-sso-7",
+            "end",
+        ],
+        "asan_field_moved_through_a_fresh_temp_projection_has_one_owner",
+        14,
+    );
+}

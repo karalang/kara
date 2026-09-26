@@ -3321,6 +3321,68 @@ impl<'a> super::Interpreter<'a> {
         }
     }
 
+    /// B-2026-09-26-1 — the MULTI-HOP form of
+    /// [`Self::consume_freshtemp_field_move`] (`let s = mkw2().p.name;`),
+    /// admitting exactly what codegen's `consume_freshtemp_nested_field_move`
+    /// admits: no hop through a generic struct or one with a `Drop` of its
+    /// own. The taken leaf is removed from the staged value by PATH and the
+    /// rest of the temp's bodies run, the same device as the one-hop form.
+    fn consume_freshtemp_nested_field_move(&mut self, value: &Expr) {
+        let mut path: Vec<String> = Vec::new();
+        let mut cur = value;
+        while let ExprKind::FieldAccess { object, field } = &cur.kind {
+            path.push(field.clone());
+            cur = object;
+        }
+        path.reverse();
+        if path.len() < 2 {
+            return;
+        }
+        let Some((tempv, ch_field, span_key)) = self.freshtemp_field_obj.clone() else {
+            return;
+        };
+        if ch_field != path[0] || span_key != (cur.span.offset, cur.span.length) {
+            return;
+        }
+        // Every intermediate value must be a plain struct with no `Drop` of its
+        // own, and the root must not be generic.
+        let Value::Struct { name: root, .. } = &tempv else {
+            return;
+        };
+        let generic = |me: &Self, n: &str| {
+            me.typecheck_result
+                .struct_info
+                .get(n)
+                .is_none_or(|i| !i.generic_params.is_empty() || i.is_shared)
+        };
+        if generic(self, root) {
+            return;
+        }
+        let mut v = &tempv;
+        for f in &path[..path.len() - 1] {
+            let Value::Struct { fields, .. } = v else {
+                return;
+            };
+            let Some(inner) = fields.get(f.as_str()) else {
+                return;
+            };
+            let Value::Struct { name: iname, .. } = inner else {
+                return;
+            };
+            if generic(self, iname) || self.program.drop_method_keys.contains_key(iname.as_str()) {
+                return;
+            }
+            v = inner;
+        }
+        self.freshtemp_field_obj = None;
+        for level in self.freshtemp_read_levels.iter_mut() {
+            level.temps.retain(|(_, k)| *k != span_key);
+        }
+        let mut tempv = tempv;
+        Self::remove_field_at_path(&mut tempv, &path);
+        self.drop_user_drop_fields_of_value(&tempv);
+    }
+
     /// B-2026-09-25-42 — the expression a function body hands back, in the
     /// sense codegen's `suppress_cleanup_for_tail_return` uses: the block's
     /// tail, or else its last statement when that is a bare expression. A
@@ -3359,6 +3421,7 @@ impl<'a> super::Interpreter<'a> {
             return;
         };
         if &ch_field != field || span_key != (object.span.offset, object.span.length) {
+            self.consume_freshtemp_nested_field_move(value);
             return;
         }
         self.freshtemp_field_obj = None;
