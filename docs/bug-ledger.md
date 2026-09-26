@@ -93,8 +93,8 @@ distinguish "bugs flattening" from "we stopped writing them down."
 | class | total |
 |---|---|
 | run-vs-build | 493 |
-| miscompile | 461 |
-| leak | 420 |
+| miscompile | 462 |
+| leak | 421 |
 | double-free | 311 |
 | missing-feature | 207 |
 | codegen-gap | 196 |
@@ -110,8 +110,8 @@ distinguish "bugs flattening" from "we stopped writing them down."
 
 | surface | total |
 |---|---|
-| codegen | 2091 |
-| interp | 555 |
+| codegen | 2093 |
+| interp | 557 |
 | typecheck | 308 |
 | other | 110 |
 | ownership | 77 |
@@ -389,9 +389,10 @@ registered in the callee's prologue, not by-value struct params in general. | �
 | B-2026-09-25-43 | 2026-09-25 | interp | medium | A FIELD READ OFF A FRESH `shared struct` TEMPORARY RUNS ITS `Drop` BODY ON THE THREE COMPILED SURFACES AND NEVER UNDER `--interp` -- `println(f"s{mksh().k}")` over `shared struct Sh { k: i64 }` with `impl Drop for Sh` prints `dSh6 s6 end` on jit / -O2 seq / -O2 par and `s6 end` under `--interp` | — |
 | B-2026-09-25-44 | 2026-09-25 | interp+codegen | medium | A FRESH TEMP READ THROUGH A PROJECTION STILL RUNS NO `Drop` BODIES, ON ALL FOUR SURFACES ALIKE, IN FIVE POSITIONS B-2026-09-17-36's FIX DECLINES -- the projection handed by value to a callee (`eat(mkw(7).r)` prints `v7 end`), a GENERIC struct temp (`mkg(mkd(3)).k` over `struct G[T] { v: T, k: i64 }`), a `while` condition (`while mkw(i).b < 2`), a closure body (`|n: i64| mkw(n).b`) and a `match` scrutinee (`match mkw(3).b { .. }`) | — |
 | B-2026-09-26-2 | 2026-09-26 | interp | medium | A FRESH TEMP'S PROJECTION WRAPPED IN A CONSTRUCTOR IN A FUNCTION TAIL RUNS ITS SIBLINGS' `Drop` BODIES COMPILED AND NOT UNDER `--interp` -- `fn f24(c: bool) -> Result[i64, String] { if c { return Err(f"e"); } Ok(mkw(9).b) }` then `println(f"t{f24(false).unwrap()}")` prints `dD109n109 dD9n9 t9 end` on jit / -O2 seq / -O2 par and `t9 end` under `--interp` | — |
-| B-2026-09-26-3 | 2026-09-26 | interp+codegen | medium | A FIELD TAKEN OFF A FRESH TEMP WHOSE TYPE HAS ITS OWN `Drop` LOSES THAT TYPE'S BODY ON ALL FOUR SURFACES -- `let y = mkq().k;` over `struct Q { d: D, k: i64 }` with `impl Drop for Q` prints `dD3n3 y4` where the named `let q = mkq(); let x = q.k;` and the read-only `println(f"z{mkq().k}")` both print `dQ4 dD3n3` | — |
 | B-2026-09-26-4 | 2026-09-26 | interp+codegen | high | A BY-VALUE PARAM HANDED ON TWO LEVELS TO A CALLEE THAT RETURNS IT ON ONLY SOME PATHS IS STILL USED AFTER FREE, `Drop` OR NOT -- `fn outer(a: S3, c: bool) -> S3 { return passp(a, c) }` over B-2026-09-25-41's `passp` aborts under `karac run` with 2 valgrind errors at -O0 at both exits, and over the `Drop`-bearing `passp2` EVERY surface including `--interp` prints `dS98 dS3 t3 dS3` where one `dS3` is due | — |
 | B-2026-09-26-5 | 2026-09-26 | codegen | high | A HEAP FIELD MOVED OUT THROUGH A FRESH TEMP'S PROJECTION IS STILL FREED TWICE COMPILED WHEN THE ROOT IS GENERIC OR A HOP HAS ITS OWN `Drop` -- `let s = mkg2().v.name;` over `struct G[T] { v: T, k: i64 }` and `let s = mk4().w.q.name;` where `q: D` has `impl Drop for D` abort with `free(): double free detected in tcache 2` on jit / -O2 seq / -O2 par (valgrind 1); `--interp` prints `gg` and `dD2n2 / dD1n1 / n2`. The remainder B-2026-09-26-1's fix (243969540) declines on purpose. | — |
+| B-2026-09-26-6 | 2026-09-26 | interp+codegen | medium | A FUNCTION TAIL THAT READS THROUGH A FRESH TEMP WITHOUT CONSUMING THE PROJECTION RUNS NONE OF THE TEMP'S `Drop` BODIES, ON ALL FOUR SURFACES ALIKE -- `fn p1() -> i64 { mkw(9).b + 0 }`, `fn p2() -> i64 { id(mkw(9).b) }` and `fn p3(k: i64) -> i64 { match k { 0 => mkw(9).b, _ => 1 } }` each print `t9 end` everywhere, where the same expression as a `let` initializer prints `dD109n109 dD9n9 k9 end` everywhere | — |
+| B-2026-09-26-7 | 2026-09-26 | interp+codegen | medium | A TUPLE INDEX READ OFF A FRESH TEMP RUNS NO `Drop` BODY FOR THE OTHER ELEMENTS ON ANY SURFACE, AND LEAKS THEIR HEAP AT `-O0` WHEN THE TEMP COMES OUT OF AN `unwrap()` -- `println(f"t{mkt().1}")` over `fn mkt() -> (D, i64)` prints `t1 end` on all four surfaces where `let t = mkt(); println(f"t{t.1}")` prints `t1 dD9n9 end`; `let o = Some(mkt()); println(f"t{o.unwrap().1}")` prints `t1 end` and loses 2 bytes in 1 block | — |
 
 ### Relocated
 
@@ -3079,6 +3080,7 @@ registered in the callee's prologue, not by-value struct params in general. | �
 | B-2026-09-25-41 | codegen | high | A BY-VALUE PARAM HANDED ON TO A CALLEE THAT RETURNS IT ON ONLY SOME PATHS IS USED AFTER FREE, `Drop` OR NOT -- `fn passp2(a: S2, c: bool) -> S2 { let… | 663ced4b9 |
 | B-2026-09-25-42 | interp | medium | A FRESH TEMP PROJECTED IN A FUNCTION'S TAIL EXPRESSION RUNS ITS `Drop` BODIES ON THE THREE COMPILED SURFACES AND NONE UNDER `--interp` -- `fn tail()… | 0646664c0 |
 | B-2026-09-26-1 | codegen | high | A HEAP FIELD MOVED OUT THROUGH A TWO-HOP PROJECTION OF A FRESH TEMP IS FREED TWICE ON EVERY COMPILED SURFACE -- `let s = mkw2().p.name;` over `struct… | 243969540 |
+| B-2026-09-26-3 | interp+codegen | medium | A FIELD TAKEN OFF A FRESH TEMP WHOSE TYPE HAS ITS OWN `Drop` LOSES THAT TYPE'S BODY ON ALL FOUR SURFACES -- `let y = mkq().k;` over `struct Q { d: D,… | 3920422cb |
 
 </details>
 
