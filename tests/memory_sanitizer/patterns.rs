@@ -10659,3 +10659,79 @@ fn main() {
         8,
     );
 }
+
+/// B-2026-09-16-11 — the ENUM twin of
+/// `asan_self_assign_identity_arm_frees_only_the_distinct_value`:
+/// `e = if c { pass(e) } else { e }` over `enum E { A(String), B }`.
+///
+/// The enum overwrite cleanup consumed the STRICT roundtrip predicate, which
+/// declines a bare identifier arm, so the roundtripping arm's orphaned old
+/// payload leaked (36 B in 1 block at `-O0`; 72 B in 2 over a four-pass
+/// loop). It now admits the identity arm and guards the drop switch on the
+/// old and incoming values differing — a whole-value `memcmp`, sound because
+/// it is only taken for a padding-free enum layout.
+///
+/// Every cell prints its payload AFTER the store, so the identity arm freeing
+/// the buffer it writes back shows up as garbage or a sanitizer report, not
+/// only as a changed leak count:
+///   `c1` the roundtripping arm taken, `c2` the identity arm taken,
+///   `c3` a loop alternating them, `c4` a three-way `match` with an
+///   identity arm, `c5` a variant change to the payload-free `B` then a
+///   roundtrip, `c6` a two-field variant beside a payload-free one.
+/// Two rounds, so a stale slot or a reused freed block surfaces.
+#[test]
+fn asan_enum_self_assign_identity_arm_frees_only_the_distinct_value() {
+    let round: &[&str] = &[
+        "c1 payload-one-aaaaaaaaaaaaaaaaaaaaaaaa",
+        "c2 payload-two-aaaaaaaaaaaaaaaaaaaaaaaa",
+        "c3 payload-three-aaaaaaaaaaaaaaaaaaaaaa",
+        "c4 payload-four-aaaaaaaaaaaaaaaaaaaaaaa",
+        "c5 b",
+        "c6 payload-six-aaaaaaaaaaaaaaaaaaaaaaaa6",
+        "end",
+    ];
+    let expected: Vec<&str> = round.iter().chain(round.iter()).copied().collect();
+    assert_clean_asan_run(
+        r#"enum E { A(String), B }
+enum E2 { A(String, i64), B(i64) }
+fn pass(e: E) -> E { return e; }
+fn pass2(e: E2) -> E2 { return e; }
+fn flip(e: E) -> E { return E.B; }
+fn tag(e: ref E) -> String { match e { E.A(s) => s.clone(), E.B => f"b" } }
+fn tag2(e: ref E2) -> String { match e { E2.A(s, n) => f"{s}{n}", E2.B(n) => f"b{n}" } }
+fn round() {
+    let t: bool = true;
+    let f: bool = false;
+    let mut e1: E = E.A(f"payload-one-aaaaaaaaaaaaaaaaaaaaaaaa");
+    e1 = if t { pass(e1) } else { e1 };
+    println(f"c1 {tag(e1)}");
+    let mut e2: E = E.A(f"payload-two-aaaaaaaaaaaaaaaaaaaaaaaa");
+    e2 = if f { pass(e2) } else { e2 };
+    println(f"c2 {tag(e2)}");
+    let mut e3: E = E.A(f"payload-three-aaaaaaaaaaaaaaaaaaaaaa");
+    let mut i: i64 = 0;
+    while i < 6 { e3 = if i % 2 == 0 { pass(e3) } else { e3 }; i = i + 1; }
+    println(f"c3 {tag(e3)}");
+    let mut e4: E = E.A(f"payload-four-aaaaaaaaaaaaaaaaaaaaaaa");
+    let mut k: i64 = 0;
+    while k < 3 { e4 = match k { 0 => pass(e4), 1 => e4, _ => pass(e4) }; k = k + 1; }
+    println(f"c4 {tag(e4)}");
+    let mut e5: E = E.A(f"payload-five-aaaaaaaaaaaaaaaaaaaaaaa");
+    e5 = if t { flip(e5) } else { e5 };
+    e5 = if t { pass(e5) } else { e5 };
+    println(f"c5 {tag(e5)}");
+    let mut e6: E2 = E2.A(f"payload-six-aaaaaaaaaaaaaaaaaaaaaaaa", 6);
+    let mut j: i64 = 0;
+    while j < 4 { e6 = if j % 2 == 0 { pass2(e6) } else { e6 }; j = j + 1; }
+    println(f"c6 {tag2(e6)}");
+    println("end");
+}
+fn main() {
+    round()
+    round()
+}
+"#,
+        &expected,
+        "asan_enum_self_assign_identity_arm_frees_only_the_distinct_value",
+    );
+}

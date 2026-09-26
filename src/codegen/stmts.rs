@@ -14459,9 +14459,29 @@ impl<'ctx> super::Codegen<'ctx> {
                                     .get(tn.as_str())
                                     .is_some_and(|l| !l.is_shared)
                         });
+                    // B-2026-09-16-11 — the enum twin of B-2026-09-05-32's
+                    // identity arm. `e = if c { pass(e) } else { e }` was
+                    // declined by the strict `roundtrip_frees_old`, so the
+                    // roundtripping arm's orphaned old payload leaked (36 B at
+                    // `-O0`). It is admitted here only when the drop switch
+                    // below can be GUARDED on the old and incoming values
+                    // differing — the `else { e }` arm yields the old value
+                    // itself and must not be freed — and only for an enum whose
+                    // LLVM type has no padding, so a whole-value `memcmp`
+                    // compares defined bits on both sides. A padded layout keeps
+                    // the pre-fix answer (declined: a leak, never a free).
+                    let enum_identity_guarded = lhs_is_tracked_value_enum
+                        && roundtrip_frees_old_guarded
+                        && !roundtrip_frees_old
+                        && self
+                            .variables
+                            .get(name)
+                            .copied()
+                            .is_some_and(|slot| self.struct_type_is_padding_free(slot.ty));
+                    let roundtrip_any = roundtrip_frees_old || enum_identity_guarded;
                     if lhs_is_tracked_value_enum
                         && !rhs_is_self_alias
-                        && (!rhs_mentions_lhs || roundtrip_frees_old)
+                        && (!rhs_mentions_lhs || roundtrip_any)
                     {
                         if let (Some(tn), Some(slot)) = (
                             self.var_types.var_type_names.get(name.as_str()).cloned(),
@@ -14486,7 +14506,7 @@ impl<'ctx> super::Codegen<'ctx> {
                             // the per-action armed tests below cover it.
                             let payload_disarmed = walker.is_some()
                                 && !self.has_armed_container_elem_bodies(name.as_str());
-                            if !payload_disarmed && !roundtrip_frees_old {
+                            if !payload_disarmed && !roundtrip_any {
                                 let has_own_drop = self
                                     .program_snapshot
                                     .as_deref()
@@ -14518,9 +14538,17 @@ impl<'ctx> super::Codegen<'ctx> {
                             // binding's scope-exit EnumDrop reads the slot
                             // after the store, covering only the new value.
                             if let Some(switch_fn) = self.emit_enum_drop_switch(&tn) {
-                                self.builder
-                                    .build_call(switch_fn, &[slot.ptr.into()], "")
-                                    .unwrap();
+                                if enum_identity_guarded {
+                                    // Guarded: free only when the incoming value
+                                    // is not the old one (see the gate above).
+                                    self.emit_call_if_slot_differs(
+                                        slot.ptr, slot.ty, val, switch_fn,
+                                    );
+                                } else {
+                                    self.builder
+                                        .build_call(switch_fn, &[slot.ptr.into()], "")
+                                        .unwrap();
+                                }
                             }
                         }
                     }
@@ -24795,6 +24823,94 @@ impl<'ctx> super::Codegen<'ctx> {
                     Some(crate::ast::TypeKind::Ref(_) | crate::ast::TypeKind::MutRef(_))
                 ))
         })
+    }
+
+    /// B-2026-09-16-11 — true when `ty` is a struct whose store size is the sum
+    /// of its fields' store sizes, recursively, i.e. it has no padding bytes. A
+    /// whole-value `memcmp` of two such values compares only defined bits; with
+    /// padding, a copy made by an aggregate store may differ from its source in
+    /// bytes no field owns, and the compare would report a false difference.
+    fn struct_type_is_padding_free(&mut self, ty: BasicTypeEnum<'ctx>) -> bool {
+        let Ok(td) = self.ensure_target_data() else {
+            return false;
+        };
+        fn walk(td: &inkwell::targets::TargetData, ty: BasicTypeEnum<'_>) -> bool {
+            match ty {
+                BasicTypeEnum::StructType(st) => {
+                    let fields = st.get_field_types();
+                    let sum: u64 = fields.iter().map(|f| td.get_store_size(f)).sum();
+                    sum == td.get_store_size(&st) && fields.iter().all(|f| walk(td, *f))
+                }
+                BasicTypeEnum::ArrayType(at) => {
+                    let e = at.get_element_type();
+                    td.get_store_size(&e) == td.get_abi_size(&e) && walk(td, e)
+                }
+                BasicTypeEnum::IntType(it) => it.get_bit_width() % 8 == 0,
+                BasicTypeEnum::PointerType(_) | BasicTypeEnum::FloatType(_) => true,
+                _ => false,
+            }
+        }
+        matches!(ty, BasicTypeEnum::StructType(_)) && walk(td, ty)
+    }
+
+    /// B-2026-09-16-11 — call `f(slot)` only when the bits at `slot` differ
+    /// from `incoming`: the guarded overwrite cleanup of an identity-arm
+    /// reassign (`e = if c { pass(e) } else { e }`). Spills `incoming` to an
+    /// entry-block temp and `memcmp`s the whole value, the enum twin of the
+    /// struct arm's B-2026-09-05-32 guard. The caller has already checked the
+    /// type is padding-free.
+    fn emit_call_if_slot_differs(
+        &mut self,
+        slot: PointerValue<'ctx>,
+        ty: BasicTypeEnum<'ctx>,
+        incoming: BasicValueEnum<'ctx>,
+        f: inkwell::values::FunctionValue<'ctx>,
+    ) {
+        let Some(fn_val) = self.current_fn else {
+            return;
+        };
+        let Ok(size) = self.ensure_target_data().map(|td| td.get_store_size(&ty)) else {
+            return;
+        };
+        let tmp = self.create_entry_alloca(fn_val, "reassign.enum.new.cmp", ty);
+        self.builder.build_store(tmp, incoming).unwrap();
+        let rc = self
+            .builder
+            .build_call(
+                self.runtime_fns.memcmp_fn,
+                &[
+                    slot.into(),
+                    tmp.into(),
+                    self.context.i64_type().const_int(size, false).into(),
+                ],
+                "reassign.enum.memcmp",
+            )
+            .unwrap()
+            .try_as_basic_value()
+            .unwrap_basic()
+            .into_int_value();
+        let differs = self
+            .builder
+            .build_int_compare(
+                inkwell::IntPredicate::NE,
+                rc,
+                self.context.i32_type().const_int(0, false),
+                "reassign.enum.differs",
+            )
+            .unwrap();
+        let free_bb = self
+            .context
+            .append_basic_block(fn_val, "reassign.enum.free");
+        let skip_bb = self
+            .context
+            .append_basic_block(fn_val, "reassign.enum.skip");
+        self.builder
+            .build_conditional_branch(differs, free_bb, skip_bb)
+            .unwrap();
+        self.builder.position_at_end(free_bb);
+        self.builder.build_call(f, &[slot.into()], "").unwrap();
+        self.builder.build_unconditional_branch(skip_bb).unwrap();
+        self.builder.position_at_end(skip_bb);
     }
 
     /// B-2026-09-05-32 — [`Self::assign_rhs_is_owned_user_call`] widened to
