@@ -93,7 +93,7 @@ distinguish "bugs flattening" from "we stopped writing them down."
 | class | total |
 |---|---|
 | run-vs-build | 499 |
-| miscompile | 476 |
+| miscompile | 477 |
 | leak | 436 |
 | double-free | 320 |
 | missing-feature | 209 |
@@ -110,8 +110,8 @@ distinguish "bugs flattening" from "we stopped writing them down."
 
 | surface | total |
 |---|---|
-| codegen | 2140 |
-| interp | 576 |
+| codegen | 2141 |
+| interp | 577 |
 | typecheck | 309 |
 | other | 110 |
 | ownership | 77 |
@@ -331,7 +331,6 @@ registered in the callee's prologue, not by-value struct params in general. | �
 | B-2026-09-26-31 | 2026-09-26 | codegen | medium | THREE MORE SPELLINGS OF A NAMED `Drop`-LESS STRUCT WITH A `shared` FIELD HANDED BACK IN AN ENUM DOUBLE FREE ON EVERY COMPILED SURFACE -- a user enum conditional hand-back moved out of a `match` (`hoc3(s, true)`), a callee taking two such args (`two3(a, b)`), and the call used directly as the `unwrap` receiver (`mid3(s, true).unwrap()`) | — |
 | B-2026-09-26-32 | 2026-09-26 | codegen | low | A FRESH `Drop`-LESS STRUCT WITH A `shared` FIELD PASSED TO A CONDITIONAL HAND-BACK THAT TAKES THE `None` PATH LEAKS THE FIELD -- `let o = mid3(mk3(10), false)` prints the right output on every surface and loses 16 B at -O0 | — |
 | B-2026-09-26-36 | 2026-09-26 | interp+codegen | medium | A PARAM WRAPPED IN A USER-ENUM VARIANT, RE-WRAPPED OUT OF A `match`, WRAPPED INSIDE A GENERIC FN, OR WHOSE WRAPPER IS DESTRUCTURED IN THE CALLEE, STILL RUNS ITS `Drop` BODY TWICE WHEN HANDED BACK -- `h1(s, true)` over `fn h1(s: P, c: bool) -> Ho[P] { let o = Ho.Full(s); if c { return o } return Ho.Empty }` prints `dP5 dP5 h` on all four surfaces; `h1(P{..}, false)` SPLITS (interp `dP6 h`, compiled `dP6 dP6 h`) | — |
-| B-2026-09-26-37 | 2026-09-26 | interp+codegen | medium | A PAYLOAD PART HANDED BACK ON ONLY SOME PATHS (`Some(t) => { if k { return t.r; } .. }`) RUNS ITS `Drop` BODY TWICE ON THREE OF ITS FOUR ARGUMENT-FORM x PATH CORNERS, a different backend wrong each time -- the interpreter doubles when the path TAKES the escape, codegen doubles when the argument is a NAMED LOCAL, and the corner where both apply (`let a = ..; eat(a, true)`) is an AGREED double; a static mask cannot be right on both paths, so the repair is per-path | — |
 | B-2026-09-26-38 | 2026-09-26 | codegen | high | A MULTI-FIELD GENERIC ENUM VARIANT WHOSE GENERIC FIELD INSTANTIATES TO A NON-ARRAY HEAP TYPE LEAKS THAT FIELD AT -O0 ON EVERY COMPILED SURFACE -- `enum G2[T] { X(T, i64), Y }` at `T = String` loses 24 B direct + the string (35 B indirect at a 35-byte string), at `T = Vec[i64]` 24 + 24, at `T = Vec[R]` 24 + 134 with both element bodies RUNNING; the single-field generic `G[Vec[R]]` and the concrete two-field `enum C2 { X(Vec[R], i64) }` are both clean, so it is generic x multi-field x non-array, the memory-half twin of B-2026-09-20-55's array fix | — |
 | B-2026-09-26-39 | 2026-09-26 | codegen | medium | A MULTI-FIELD GENERIC ENUM `Gh[T] { Y(T, String) }` AT AN ARRAY INSTANTIATION, HANDED TO A BY-VALUE CALLEE, LEAKS ITS HEAP SIBLING -- 35 B in 1 block at -O0 on every compiled surface (the `String` beside the array; the array's elements are freed); was 105 B in 3 blocks before B-2026-09-20-55; no-callee, `T = i64` and the concrete twin are all clean | — |
 | B-2026-09-26-41 | 2026-09-26 | interp+codegen | medium | A `Drop`-BEARING FIELD PROJECTED TWO HOPS OFF A FRESH TEMP AND HANDED TO A CALLEE THAT KEEPS IT RUNS THE MOVED LEAF'S BODY TWICE ON ALL FOUR SURFACES -- `keep(mkx(5).w.r)` prints `dD305n305 dD105n105 dD5n5 k5 dD5n5 end`, owing `dD305n305 dD105n105 k5 dD5n5 end`, which is what the one-hop spelling prints since B-2026-09-26-40 | — |
@@ -346,6 +345,7 @@ registered in the callee's prologue, not by-value struct params in general. | �
 | B-2026-09-26-57 | 2026-09-26 | interp | medium | THE INTERPRETER RUNS AN EXTRA `Drop` BODY FOR A MATCH-ARM BINDING OFF A BORROW PROJECTION THAT IS HANDED TO A STORING CALLEE -- `match s.e { E.A(r) => keep(r, mut v), .. }` through `ref S` prints `dR2 dR2 b 1 dR2` under `--interp` and `dR2 b 1 dR2` on the JIT, `-O0` and `-O2` builds; the discarding spelling `consume(r)` agrees everywhere | — |
 | B-2026-09-26-58 | 2026-09-26 | interp+codegen | medium | THREE `Vec`-IN-A-FIELD SHAPES STILL LOSE THEIR ELEMENT `Drop` BODIES AFTER B-2026-09-16-19 -- an `Option[VecDeque[D]]` field and a `Map[i64, Option[Vec[D]]]` field print the body under `--interp` and on no compiled surface, a `match h.xs { Some(v) => .. }` arm that moves the `Vec` out of an `Option[Vec[D]]` field loses both bodies compiled (`in n2 dD1 dD2 out` vs `in n2 out`), and a `Vec[H]` whose `H` holds an `Option[VecDeque[D]]` runs the body on NEITHER backend | — |
 | B-2026-09-26-59 | 2026-09-26 | codegen+interp | medium | AN `Option[Vec[D]]` HELD BY A GENERIC STRUCT, AN ARRAY ELEMENT OR AN ENUM PAYLOAD LEAKS ONE ELEMENT'S BUFFER AT `-O0` -- `G[T] { xs: Option[Vec[T]] }` at `T = D`, `Array[H, 2]` of `H { xs: Option[Vec[D]] }`, and `enum E { A(Option[Vec[D]]), B }` each lose 32 bytes in 1 block plus 36 indirectly; the enum payload also runs its element's `Drop` body on NEITHER backend | — |
+| B-2026-09-26-62 | 2026-09-26 | interp+codegen | medium | THE SPELLINGS OF B-2026-09-26-37 ITS FIX DECLINES STILL OWN A CONDITIONALLY HANDED-BACK PAYLOAD PART WRONGLY -- a TUPLE payload (`Some(t) => { if k { return t.0; } .. }` over `Option[(R, R)]`), a TWO-HOP part (`if k { return t.h.r; }`) and a TAIL yield (`Some(t) => { if k { t.r } else { .. } }`); the fresh-temp tuple spelling LOSES every element body on the compiled backends at both `k`, the rest double, and interp and compiled disagree on most cells | — |
 
 ### Relocated
 
@@ -3062,6 +3062,7 @@ registered in the callee's prologue, not by-value struct params in general. | �
 | B-2026-09-26-33 | interp+codegen | medium | A `Drop`-BEARING FIELD PROJECTED OFF A FRESH TEMP STILL LOSES ITS BODIES ON ALL FOUR SURFACES WHEN THE CALLEE IS GENERIC, TAKES IT BY `ref`, OR KEEPS… | dcbc25039 |
 | B-2026-09-26-34 | interp+codegen | high | `Vec.push` OF A FIELD PROJECTED OFF A FRESH TEMP DOUBLE-FREES ON EVERY COMPILED SURFACE, AND THE NAMED-ROOT SPELLING RUNS THE MOVED FIELD'S `Drop` BO… | 5ab5433d2 |
 | B-2026-09-26-35 | interp+codegen | medium | A `Drop`-BEARING FIELD PROJECTED OFF A NAMED LOCAL AND MOVED INTO A BUILTIN SINK RUNS ITS BODY TWICE ON ALL FOUR SURFACES -- `let w = mkw(7); xs.push… | 4072b8931 |
+| B-2026-09-26-37 | interp+codegen | medium | A PAYLOAD PART HANDED BACK ON ONLY SOME PATHS (`Some(t) => { if k { return t.r; } . | 7d7920e |
 | B-2026-09-26-40 | interp+codegen | medium | A `Drop`-BEARING FIELD PROJECTED OFF A FRESH TEMP STILL LOSES ITS BODIES ON ALL FOUR SURFACES WHEN THE CALLEE IS GENERIC OR KEEPS IT, AND A `mut ref`… | 30c94e6c4 |
 | B-2026-09-26-42 | interp+codegen | high | A PARAM HANDED BACK THROUGH A SELF-RECURSIVE CALL, A WRAPPER AROUND ONE, OR A MUTUALLY RECURSIVE PAIR HAS TWO OWNERS -- `let s = P { id: 1 }; let t =… | 902750745 |
 | B-2026-09-26-43 | runtime+codegen | medium | FIXED -- a `WebSocket` accepted over TLS was closed through `karac_runtime_tcp_close`, which never removed its `SESSIONS` entry, so the rustls sessio… | 9f98d3310 |
