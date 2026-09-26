@@ -6130,3 +6130,167 @@ fn main() {
         "asan_payload_moved_out_of_generic_enum_handback_freed_once",
     );
 }
+
+/// B-2026-09-26-17 — the CONCRETE twin of B-2026-09-25-38 / B-2026-09-26-15:
+/// a `Drop` struct with a `shared` field (so the callee FORWARDS it) handed
+/// back inside an enum by a non-generic callee and bound by a `let`:
+/// `fn wrapS(v: S2) -> Option[S2] { return Some(v) }`, `mkhS` / `mkHoS`, the
+/// conditional `midS(v, c)`, and the method (`k_`..`m_`) and associated-fn
+/// (`n_`) spellings. The call site stands the argument down (whole, or to the
+/// callee per path for `midS`), while the let's payload owner declined the
+/// memory as possibly caller-retained, so the 16-byte `Sh` was freed by
+/// nobody on every compiled surface. The let now takes it when every
+/// payload-typed argument is a local the call has already stood down. The
+/// moving cells (`f_`, `g_`, `j_`, `m_`) pin that the result is then the
+/// only owner.
+#[test]
+fn asan_concrete_enum_handback_of_forwarded_struct_frees_its_field() {
+    assert_clean_asan_run(
+        r#"shared struct Sh { k: i64 }
+struct S2 { h: Sh, id: i64 }
+impl Drop for S2 { fn drop(mut ref self) { println(f"dS{self.id}") } }
+struct S3 { h: Sh, id: i64 }
+enum Ho[T] { Full(T), Empty }
+enum HoS { FullS(S2), EmptyS }
+fn mk2(i: i64) -> S2 { return S2 { h: Sh { k: i }, id: i } }
+fn mk3(i: i64) -> S3 { return S3 { h: Sh { k: i }, id: i } }
+fn wrapS(v: S2) -> Option[S2] { return Some(v) }
+fn mkhS(v: S2) -> Ho[S2] { return Ho.Full(v) }
+fn mkHoS(v: S2) -> HoS { return HoS.FullS(v) }
+fn midS(v: S2, c: bool) -> Option[S2] { if c { return Some(v) } return None }
+struct H { n: i64 }
+impl H {
+    fn wrapm(ref self, v: S2) -> Option[S2] { return Some(v) }
+    fn midm(ref self, v: S2, c: bool) -> Option[S2] { if c { return Some(v) } return None }
+    fn wrapa(v: S2) -> Option[S2] { return Some(v) }
+}
+fn a_wrap() { let s = mk2(1); let o = wrapS(s); println("a") }
+fn b_mkh() { let s = mk2(2); let h = mkhS(s); println("b") }
+fn c_mid_some() { let s = mk2(3); let o = midS(s, true); println("c") }
+fn d_mid_none() { let s = mk2(4); let o = midS(s, false); println("d") }
+fn f_wrap_unwrap() { let s = mk2(6); let o = wrapS(s); let v = o.unwrap(); println(f"f{v.id}") }
+fn g_mid_move() { let s = mk2(7); let o = midS(s, true); match o { Some(x) => { let y = x; println(f"g{y.id}") }, None => println("n") } }
+fn h_mkh_read() { let s = mk2(8); let h = mkhS(s); match h { Ho.Full(x) => println(f"h{x.id}"), Ho.Empty => println("e") } }
+fn i_mono_read() { let s = mk2(9); let o = mkHoS(s); match o { HoS.FullS(x) => println(f"i{x.id}"), HoS.EmptyS => println("e") } }
+fn j_mono_move() { let s = mk2(10); let o = mkHoS(s); match o { HoS.FullS(x) => { let y = x; println(f"j{y.id}") }, HoS.EmptyS => println("e") } }
+fn k_meth() { let h = H { n: 0 }; let s = mk2(11); let o = h.wrapm(s); println("k") }
+fn l_meth_mid_none() { let h = H { n: 0 }; let s = mk2(12); let o = h.midm(s, false); println("l") }
+fn m_meth_mid_unwrap() { let h = H { n: 0 }; let s = mk2(13); let o = h.midm(s, true); let v = o.unwrap(); println(f"m{v.id}") }
+fn n_assoc() { let s = mk2(14); let o = H.wrapa(s); println("n") }
+fn o_loop() { for i in 15..19 { let s = mk2(i); let o = midS(s, i % 2 == 0); match o { Some(x) => println(f"o{x.id}"), None => println(f"on{i}") } } }
+fn main() {
+    a_wrap(); println("a.")
+    b_mkh(); println("b.")
+    c_mid_some(); println("c.")
+    d_mid_none(); println("d.")
+    f_wrap_unwrap(); println("f.")
+    g_mid_move(); println("g.")
+    h_mkh_read(); println("h.")
+    i_mono_read(); println("i.")
+    j_mono_move(); println("j.")
+    k_meth(); println("k.")
+    l_meth_mid_none(); println("l.")
+    m_meth_mid_unwrap(); println("m.")
+    n_assoc(); println("n.")
+    o_loop(); println("o.")
+    println("end")
+}
+"#,
+        &[
+            "dS1", "a", "a.", "dS2", "b", "b.", "dS3", "c", "c.", "dS4", "d", "d.", "f6", "dS6",
+            "f.", "g7", "dS7", "g.", "h8", "dS8", "h.", "i9", "dS9", "i.", "j10", "dS10", "j.",
+            "dS11", "k", "k.", "dS12", "l", "l.", "m13", "dS13", "m.", "dS14", "n", "n.", "dS15",
+            "on15", "o16", "dS16", "dS17", "on17", "o18", "dS18", "o.", "end",
+        ],
+        "asan_concrete_enum_handback_of_forwarded_struct_frees_its_field",
+    );
+}
+
+/// B-2026-09-26-17 — an `Option` of a `Drop` struct with a `shared` field,
+/// handed to a fn that returns it (`fn keep(o: Option[S2]) -> Option[S2] {
+/// return o }`). The result aliases the argument, which stays the owner, so
+/// any move OUT of the result (`p.unwrap()`, `Some(x) => { let y = x }`, a
+/// rebind, `keep(o).unwrap()`, `return keep(o)`, a field initializer) handed
+/// the payload to a second owner while the argument's own drop still freed it:
+/// a double free on every compiled surface. The result now records the
+/// argument as its owner, and each move out of it disarms that owner. `j_` and
+/// `r_` are the spellings B-2026-09-26-17's own fix reached (`let o =
+/// wrapS(s)` now owns its payload), which were clean before only because `o`
+/// owned nothing; the rest failed on origin/main.
+#[test]
+fn asan_option_passed_through_a_fn_that_returns_it_is_freed_once() {
+    assert_clean_asan_run(
+        r#"shared struct Sh { k: i64 }
+struct S2 { h: Sh, id: i64 }
+impl Drop for S2 { fn drop(mut ref self) { println(f"dS{self.id}") } }
+struct S3 { h: Sh, id: i64 }
+struct W { p: Option[S2] }
+fn mk2(i: i64) -> S2 { return S2 { h: Sh { k: i }, id: i } }
+fn mk3(i: i64) -> S3 { return S3 { h: Sh { k: i }, id: i } }
+fn wrapS(v: S2) -> Option[S2] { return Some(v) }
+fn keep(o: Option[S2]) -> Option[S2] { return o }
+fn keepg[T](o: Option[T]) -> Option[T] { return o }
+fn keep3(o: Option[S3]) -> Option[S3] { return o }
+fn maybe(o: Option[S2], c: bool) -> Option[S2] { if c { return o } return None }
+fn rk(i: i64) -> Option[S2] { let o = Some(mk2(i)); return keep(o) }
+fn a_unwrap() { let o = Some(mk2(1)); let p = keep(o); let v = p.unwrap(); println(f"a{v.id}") }
+fn b_match_move() { let o = Some(mk2(2)); let p = keep(o); match p { Some(x) => { let y = x; println(f"b{y.id}") }, None => println("bn") } }
+fn c_match_read() { let o = Some(mk2(3)); let p = keep(o); match p { Some(x) => println(f"c{x.id}"), None => println("cn") } }
+fn d_iflet() { let o = Some(mk2(4)); let p = keep(o); if let Some(x) = p { let y = x; println(f"d{y.id}") } }
+fn e_plain() { let o = Some(mk2(5)); let p = keep(o); println(f"e{p.is_some()}") }
+fn f_chain() { let o = Some(mk2(6)); let p = keep(o); let q = keep(p); let v = q.unwrap(); println(f"f{v.id}") }
+fn g_generic() { let o = Some(mk2(7)); let p = keepg(o); let v = p.unwrap(); println(f"g{v.id}") }
+fn h_maybe() { let o = Some(mk2(8)); let p = maybe(o, true); let v = p.unwrap(); println(f"h{v.id}") }
+fn i_maybe_none() { let o = Some(mk2(9)); let p = maybe(o, false); println(f"i{p.is_none()}") }
+fn j_wrap_chain() { let s = mk2(10); let o = wrapS(s); let p = keep(o); let v = p.unwrap(); println(f"j{v.id}") }
+fn k_s3() { let o = Some(mk3(11)); let p = keep3(o); let v = p.unwrap(); println(f"k{v.id}") }
+fn l_rebind() { let o = Some(mk2(12)); let p = keep(o); let q = p; let v = q.unwrap(); println(f"l{v.id}") }
+fn m_unwrap_or() { let o = Some(mk2(13)); let p = keep(o); let v = p.unwrap_or(mk2(93)); println(f"m{v.id}") }
+fn n_call_unwrap() { let o = Some(mk2(14)); let v = keep(o).unwrap(); println(f"n{v.id}") }
+fn o_ret() { let p = rk(15); let v = p.unwrap(); println(f"o{v.id}") }
+fn p_ret_plain() { let p = rk(16); println(f"p{p.is_some()}") }
+fn q_field() { let o = Some(mk2(17)); let w = W { p: keep(o) }; println(f"q{w.p.is_some()}") }
+fn r_wrap_call_unwrap() { let s = mk2(18); let o = wrapS(s); let v = keep(o).unwrap(); println(f"r{v.id}") }
+fn s_loop() {
+    let mut i = 0;
+    while i < 2 {
+        let o = Some(mk2(19 + i)); let p = keep(o); let v = p.unwrap(); println(f"s{v.id}");
+        i = i + 1;
+    }
+}
+fn t_reassign() { let o = Some(mk2(21)); let p = keep(o); let mut q = p; q = Some(mk2(22)); println(f"t{q.is_some()}") }
+fn main() {
+    a_unwrap(); println("a.")
+    b_match_move(); println("b.")
+    c_match_read(); println("c.")
+    d_iflet(); println("d.")
+    e_plain(); println("e.")
+    f_chain(); println("f.")
+    g_generic(); println("g.")
+    h_maybe(); println("h.")
+    i_maybe_none(); println("i.")
+    j_wrap_chain(); println("j.")
+    k_s3(); println("k.")
+    l_rebind(); println("l.")
+    m_unwrap_or(); println("m.")
+    n_call_unwrap(); println("n.")
+    o_ret(); println("o.")
+    p_ret_plain(); println("p.")
+    q_field(); println("q.")
+    r_wrap_call_unwrap(); println("r.")
+    s_loop(); println("s.")
+    t_reassign(); println("t.")
+    println("end")
+}
+"#,
+        &[
+            "a1", "dS1", "a.", "b2", "dS2", "b.", "c3", "dS3", "c.", "d4", "dS4", "d.", "etrue",
+            "dS5", "e.", "f6", "dS6", "f.", "g7", "dS7", "g.", "h8", "dS8", "h.", "dS9", "itrue",
+            "i.", "j10", "dS10", "j.", "k11", "k.", "l12", "dS12", "l.", "dS93", "m13", "dS13",
+            "m.", "n14", "dS14", "n.", "o15", "dS15", "o.", "ptrue", "dS16", "p.", "qtrue", "dS17",
+            "q.", "r18", "dS18", "r.", "s19", "dS19", "s20", "dS20", "s.", "dS21", "ttrue", "dS22",
+            "t.", "end",
+        ],
+        "asan_option_passed_through_a_fn_that_returns_it_is_freed_once",
+    );
+}

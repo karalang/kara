@@ -16420,6 +16420,22 @@ impl<'ctx> super::Codegen<'ctx> {
             })
     }
 
+    /// B-2026-09-26-17 — the `let`-site detector for an argument armed in
+    /// `inline_option_agg_payload_vars` (an `Option` of a user struct/enum,
+    /// owned by its `EnumDrop`). Kept out of
+    /// [`Self::call_passthrough_armed_inline_source`], whose other callers are
+    /// the discarded-temp registrars, so only the `let` decision changes.
+    ///
+    /// The result already registered no owner of its own (the payload may be
+    /// the argument's), but without the alias a move OUT of it had no source
+    /// to disarm: `let p = keep(o); p.unwrap()` over `fn keep(o: Option[S2])
+    /// -> Option[S2] { return o }` handed the payload to the unwrapped value
+    /// while `o`'s `EnumDrop` still freed it, a double free on every compiled
+    /// surface.
+    pub(super) fn call_passthrough_armed_agg_source(&self, value: &Expr) -> Option<String> {
+        self.call_passthrough_armed_source(value, &self.payload_vars.inline_option_agg_payload_vars)
+    }
+
     /// Superset of [`Self::call_passthrough_armed_inline_source`] that also
     /// consults the heap-BOXED payload set. B-2026-08-06-28.
     ///
@@ -16623,7 +16639,7 @@ impl<'ctx> super::Codegen<'ctx> {
     }
 
     pub(super) fn suppress_inline_option_result_binding_move(&self, value: &Expr) {
-        self.suppress_inline_option_result_binding_move_impl(value, false, false);
+        self.suppress_inline_option_result_binding_move_impl(value, false, false, false);
     }
 
     /// B-2026-09-04-10 — the OWNERSHIP-TRANSFER entry point, which
@@ -16652,7 +16668,17 @@ impl<'ctx> super::Codegen<'ctx> {
     /// transfers too, which the rebind-only name would have made it awkward to
     /// say.
     pub(super) fn suppress_inline_option_agg_binding_transfer(&self, value: &Expr) {
-        self.suppress_inline_option_result_binding_move_impl(value, false, true);
+        self.suppress_inline_option_result_binding_move_impl(value, false, true, false);
+    }
+
+    /// B-2026-09-26-17 — the transfer entry point for a position that CONSUMES
+    /// a value whose owner is not the value itself: an `unwrap` receiver, a
+    /// field initializer. There a user-fn passthrough CALL (`keep(o).unwrap()`,
+    /// `W { p: keep(o) }`) hands on its argument's payload, so the argument is
+    /// disarmed. Not the `let` site: `let p = keep(o)` records `p` as an alias
+    /// of `o`, which stays the owner until something moves out of `p`.
+    pub(super) fn suppress_inline_option_agg_value_transfer(&self, value: &Expr) {
+        self.suppress_inline_option_result_binding_move_impl(value, false, true, true);
     }
 
     /// B-2026-08-30-8 — the ESCAPING entry point: `value` is being RETURNED, so
@@ -16673,7 +16699,7 @@ impl<'ctx> super::Codegen<'ctx> {
     pub(super) fn suppress_inline_option_result_binding_escape(&self, value: &Expr) {
         // `agg: true` — a RETURN hands the header to the caller, so the boxed
         // payload's ownership genuinely moves (B-2026-09-04-10).
-        self.suppress_inline_option_result_binding_move_impl(value, true, true);
+        self.suppress_inline_option_result_binding_move_impl(value, true, true, true);
     }
 
     fn suppress_inline_option_result_binding_move_impl(
@@ -16681,6 +16707,7 @@ impl<'ctx> super::Codegen<'ctx> {
         value: &Expr,
         escaping: bool,
         agg: bool,
+        through_call: bool,
     ) {
         // Resolve the OWNING binding whose scope-exit payload free must be
         // disarmed because the caller (`unwrap_or`) has taken and freed the
@@ -16692,9 +16719,19 @@ impl<'ctx> super::Codegen<'ctx> {
         //     freed that alias, so the SOURCE binding must be disarmed or its
         //     scope-exit `FreeInlineResultPayload`/`FreeInlineOptionPayload`
         //     double-frees the same buffer.
+        //   • B-2026-09-26-17 — from the value-transfer and escape entry points
+        //     only (`through_call`), a user-fn passthrough CALL
+        //     (`keep(o).unwrap()`, `return keep(o)`) whose argument owns a user
+        //     struct/enum payload through its `EnumDrop`: the call's result is
+        //     that argument's payload, so the source is disarmed exactly as for
+        //     `let p = keep(o); p.unwrap()`.
         let name = match &value.kind {
             ExprKind::Identifier(name) => self.moved_arg_owner_name(name),
-            _ => match self.map_passthrough_armed_source(value) {
+            _ => match self.map_passthrough_armed_source(value).or_else(|| {
+                (agg && through_call)
+                    .then(|| self.call_passthrough_armed_agg_source(value))
+                    .flatten()
+            }) {
                 Some(src) => src,
                 None => return,
             },
@@ -18847,6 +18884,8 @@ impl<'ctx> super::Codegen<'ctx> {
         let ExprKind::Identifier(name) = &scrutinee.kind else {
             return None;
         };
+        // B-2026-09-26-17 — resolved as the suppressor resolves it.
+        let name = &self.moved_arg_owner_name(name);
         // B-2026-09-04-22 — the `Result` peer (`inline_result_agg_payload_vars`,
         // B-2026-09-03-22) is admitted here too. This helper is the borrow
         // gate BOTH agg suppressors sit behind (`if !arm_only_borrows_option_
@@ -19090,6 +19129,9 @@ impl<'ctx> super::Codegen<'ctx> {
         let ExprKind::Identifier(name) = &scrutinee.kind else {
             return;
         };
+        // B-2026-09-26-17 — a passthrough result (`let p = keep(o)`) owns
+        // nothing; the disarm lands on the binding that does.
+        let name = &self.moved_arg_owner_name(name);
         if !self
             .payload_vars
             .inline_option_agg_payload_vars

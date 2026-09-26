@@ -10697,6 +10697,9 @@ impl<'ctx> super::Codegen<'ctx> {
                                     // passthrough sibling: `<binding>.map(f)`
                                     // aliases the receiver's Err/None payload.
                                     .or_else(|| self.map_passthrough_armed_source(value))
+                                    // B-2026-09-26-17 — a user struct/enum
+                                    // payload's owner, on the same terms.
+                                    .or_else(|| self.call_passthrough_armed_agg_source(value))
                                 {
                                     self.payload_vars
                                         .passthrough_owner_alias

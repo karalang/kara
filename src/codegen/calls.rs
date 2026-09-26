@@ -4427,7 +4427,7 @@ impl<'ctx> super::Codegen<'ctx> {
             // B-2026-09-25-39 — the TRANSFER entry point, so an inline user
             // struct/enum payload (`inline_option_agg_payload_vars`) is
             // disarmed too: the extracted value owns it now.
-            self.suppress_inline_option_agg_binding_transfer(object);
+            self.suppress_inline_option_agg_value_transfer(object);
             self.suppress_place_optres_field_unwrap_source(object, method);
             return Ok(Some(phi.as_basic_value()));
         }
@@ -4660,7 +4660,7 @@ impl<'ctx> super::Codegen<'ctx> {
         // B-2026-09-25-39 — the TRANSFER entry point: an inline user
         // struct/enum payload's `EnumDrop` must go as well, or the unwrapped
         // value and the receiver both free it.
-        self.suppress_inline_option_agg_binding_transfer(object);
+        self.suppress_inline_option_agg_value_transfer(object);
         self.suppress_place_optres_field_unwrap_source(object, method);
         Ok(Some(value))
     }

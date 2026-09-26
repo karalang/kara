@@ -12964,7 +12964,7 @@ impl<'ctx> super::Codegen<'ctx> {
                 // Boxed / inline-heap `Option`/`Result` binding moved whole into
                 // this shared-enum struct-variant field — mirrors the
                 // struct-literal field-init paths (`compile_struct_init`).
-                self.suppress_inline_option_agg_binding_transfer(&init.value);
+                self.suppress_inline_option_agg_value_transfer(&init.value);
                 self.suppress_map_cleanup_for_moved_expr(&init.value);
             }
             return Ok(ptr.into());
@@ -13020,7 +13020,7 @@ impl<'ctx> super::Codegen<'ctx> {
             // Boxed / inline-heap `Option`/`Result` binding moved whole into
             // this non-shared enum struct-variant field — mirrors the
             // struct-literal field-init paths (`compile_struct_init`).
-            self.suppress_inline_option_agg_binding_transfer(&init.value);
+            self.suppress_inline_option_agg_value_transfer(&init.value);
             self.suppress_map_cleanup_for_moved_expr(&init.value);
         }
         Ok(agg.into())

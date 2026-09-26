@@ -10767,7 +10767,70 @@ impl<'ctx> super::Codegen<'ctx> {
                 .split(|c: char| !(c.is_alphanumeric() || c == '_'))
                 .any(|w| w == head.as_str())
         };
-        f.generic_params.is_some() || f.params.iter().any(|p| mentions(&p.ty))
+        if f.generic_params.is_some() {
+            return true;
+        }
+        // B-2026-09-26-17 — a CONCRETE callee whose every payload-typed
+        // argument is a named local the call has already stood down (no memory
+        // action left for it) cannot be handing back the caller's memory: that
+        // memory is nobody else's, and declining it here left the `shared`
+        // field of `let o = wrapS(s)` over `fn wrapS(v: S2) -> Option[S2] {
+        // return Some(v) }` to nobody (16 B). The call site retracts a
+        // FORWARDED `Drop` struct whole (B-2026-09-06-71), and a conditional
+        // hand-back's memory moves to the callee on the other path
+        // (`conditional_handback_memory_moves_to_callee`), so on the path that
+        // reaches the result the result is the only candidate owner. A local
+        // that still owns memory (a `Drop`-less `S3`, whose memory-only action
+        // the call keeps) keeps the decline.
+        //
+        // Only a param typed as the payload struct ITSELF is asked about. One
+        // that merely mentions it (`o: Option[S2]`) hands on a value that
+        // already owns its payload, so its stand-down proves nothing: `let p =
+        // keep(o)` over `fn keep(o: Option[S2]) -> Option[S2]` freed the field
+        // twice when it was admitted.
+        if !f.params.iter().any(|p| mentions(&p.ty)) {
+            return false;
+        }
+        let is_payload = |te: &TypeExpr| {
+            matches!(&te.kind, TypeKind::Path(pp)
+                if pp.generic_args.is_none() && pp.segments.len() == 1 && pp.segments[0] == *head)
+        };
+        let mut payload_args = f
+            .params
+            .iter()
+            .zip(args.iter())
+            .filter(|(p, _)| mentions(&p.ty))
+            .map(|(p, a)| (is_payload(&p.ty), &a.value))
+            .peekable();
+        let all_stood_down = payload_args.peek().is_some() && payload_args.all(|(direct, a)| {
+            direct && matches!(&a.kind, ExprKind::Identifier(n) if !self.var_holds_memory_action(n))
+        });
+        !all_stood_down
+    }
+
+    /// B-2026-09-26-17 — does `name`'s current generation still hold an action
+    /// that frees its memory: a memory-only `StructDrop` on its slot, or its
+    /// own `impl Drop` wrapper (which frees the fields and the value)?
+    fn var_holds_memory_action(&self, name: &str) -> bool {
+        let Some(slot) = self.variables.get(name).map(|v| v.ptr) else {
+            return true;
+        };
+        self.drop_rc.scope_cleanup_actions.iter().any(|fr| {
+            fr.iter().any(|a| match a {
+                CleanupAction::StructDrop { struct_alloca, .. } => *struct_alloca == slot,
+                CleanupAction::UserDrop {
+                    binding_name,
+                    binding_ptr,
+                    kind,
+                    ..
+                } => {
+                    binding_name == name
+                        && *binding_ptr == slot
+                        && *kind == UserDropKind::OwnWrapper
+                }
+                _ => false,
+            })
+        })
     }
 
     /// B-2026-09-03-22 — the `Result[O, E]` peer of
