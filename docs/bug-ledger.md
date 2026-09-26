@@ -93,9 +93,9 @@ distinguish "bugs flattening" from "we stopped writing them down."
 | class | total |
 |---|---|
 | run-vs-build | 493 |
-| miscompile | 459 |
+| miscompile | 461 |
 | leak | 420 |
-| double-free | 309 |
+| double-free | 310 |
 | missing-feature | 207 |
 | codegen-gap | 196 |
 | other | 149 |
@@ -110,8 +110,8 @@ distinguish "bugs flattening" from "we stopped writing them down."
 
 | surface | total |
 |---|---|
-| codegen | 2087 |
-| interp | 552 |
+| codegen | 2089 |
+| interp | 554 |
 | typecheck | 308 |
 | other | 110 |
 | ownership | 77 |
@@ -124,7 +124,7 @@ distinguish "bugs flattening" from "we stopped writing them down."
 | lexer | 11 |
 ## Current state
 
-_Generated from `bug-ledger.jsonl` by `scripts/bug-curve.py` (2026-05-20 → 2026-09-25). Do not edit this block by hand; edit the ledger and regenerate._
+_Generated from `bug-ledger.jsonl` by `scripts/bug-curve.py` (2026-05-20 → 2026-09-26). Do not edit this block by hand; edit the ledger and regenerate._
 
 ### Open
 
@@ -391,6 +391,9 @@ registered in the callee's prologue, not by-value struct params in general. | �
 | B-2026-09-25-42 | 2026-09-25 | interp | medium | A FRESH TEMP PROJECTED IN A FUNCTION'S TAIL EXPRESSION RUNS ITS `Drop` BODIES ON THE THREE COMPILED SURFACES AND NONE UNDER `--interp` -- `fn tail() -> i64 { mkw(9).b }` then `println(f"t{tail()}")` prints `dD109n109 dD9n9 t9 end` on jit / -O2 seq / -O2 par and `t9 end` under `--interp`; the `return mkw(8).b;` spelling agrees on all four | — |
 | B-2026-09-25-43 | 2026-09-25 | interp | medium | A FIELD READ OFF A FRESH `shared struct` TEMPORARY RUNS ITS `Drop` BODY ON THE THREE COMPILED SURFACES AND NEVER UNDER `--interp` -- `println(f"s{mksh().k}")` over `shared struct Sh { k: i64 }` with `impl Drop for Sh` prints `dSh6 s6 end` on jit / -O2 seq / -O2 par and `s6 end` under `--interp` | — |
 | B-2026-09-25-44 | 2026-09-25 | interp+codegen | medium | A FRESH TEMP READ THROUGH A PROJECTION STILL RUNS NO `Drop` BODIES, ON ALL FOUR SURFACES ALIKE, IN FIVE POSITIONS B-2026-09-17-36's FIX DECLINES -- the projection handed by value to a callee (`eat(mkw(7).r)` prints `v7 end`), a GENERIC struct temp (`mkg(mkd(3)).k` over `struct G[T] { v: T, k: i64 }`), a `while` condition (`while mkw(i).b < 2`), a closure body (`|n: i64| mkw(n).b`) and a `match` scrutinee (`match mkw(3).b { .. }`) | — |
+| B-2026-09-26-1 | 2026-09-26 | codegen | high | A HEAP FIELD MOVED OUT THROUGH A TWO-HOP PROJECTION OF A FRESH TEMP IS FREED TWICE ON EVERY COMPILED SURFACE -- `let s = mkw2().p.name;` over `struct P { name: String }` / `struct W2 { p: P, b: i64 }` (no `Drop` anywhere) aborts with `free(): double free detected in tcache 2` on jit / -O2 seq / -O2 par and prints `pp end` under `--interp`; the fn-tail spelling `fn f5() -> String { mkw2().p.name }` does the same, and the one-hop `mkd(5).name` is clean | — |
+| B-2026-09-26-2 | 2026-09-26 | interp | medium | A FRESH TEMP'S PROJECTION WRAPPED IN A CONSTRUCTOR IN A FUNCTION TAIL RUNS ITS SIBLINGS' `Drop` BODIES COMPILED AND NOT UNDER `--interp` -- `fn f24(c: bool) -> Result[i64, String] { if c { return Err(f"e"); } Ok(mkw(9).b) }` then `println(f"t{f24(false).unwrap()}")` prints `dD109n109 dD9n9 t9 end` on jit / -O2 seq / -O2 par and `t9 end` under `--interp` | — |
+| B-2026-09-26-3 | 2026-09-26 | interp+codegen | medium | A FIELD TAKEN OFF A FRESH TEMP WHOSE TYPE HAS ITS OWN `Drop` LOSES THAT TYPE'S BODY ON ALL FOUR SURFACES -- `let y = mkq().k;` over `struct Q { d: D, k: i64 }` with `impl Drop for Q` prints `dD3n3 y4` where the named `let q = mkq(); let x = q.k;` and the read-only `println(f"z{mkq().k}")` both print `dQ4 dD3n3` | — |
 
 ### Relocated
 
