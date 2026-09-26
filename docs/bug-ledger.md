@@ -94,9 +94,9 @@ distinguish "bugs flattening" from "we stopped writing them down."
 |---|---|
 | run-vs-build | 494 |
 | miscompile | 465 |
-| leak | 425 |
+| leak | 426 |
 | double-free | 314 |
-| missing-feature | 207 |
+| missing-feature | 209 |
 | codegen-gap | 196 |
 | other | 149 |
 | diagnostics | 134 |
@@ -110,7 +110,7 @@ distinguish "bugs flattening" from "we stopped writing them down."
 
 | surface | total |
 |---|---|
-| codegen | 2105 |
+| codegen | 2108 |
 | interp | 559 |
 | typecheck | 308 |
 | other | 110 |
@@ -390,14 +390,15 @@ registered in the callee's prologue, not by-value struct params in general. | �
 | B-2026-09-26-7 | 2026-09-26 | interp+codegen | medium | A TUPLE INDEX READ OFF A FRESH TEMP RUNS NO `Drop` BODY FOR THE OTHER ELEMENTS ON ANY SURFACE, AND LEAKS THEIR HEAP AT `-O0` WHEN THE TEMP COMES OUT OF AN `unwrap()` -- `println(f"t{mkt().1}")` over `fn mkt() -> (D, i64)` prints `t1 end` on all four surfaces where `let t = mkt(); println(f"t{t.1}")` prints `t1 dD9n9 end`; `let o = Some(mkt()); println(f"t{o.unwrap().1}")` prints `t1 end` and loses 2 bytes in 1 block | — |
 | B-2026-09-26-8 | 2026-09-26 | codegen | high | A `shared struct` FIELD RETURNED FROM A `ref self` METHOD IS RELEASED WITHOUT BEING RETAINED, SO THE HOLDER'S OWN RELEASE LATER TOUCHES FREED MEMORY ON EVERY COMPILED SURFACE -- `let h = Hold { s: mksh(3) }; let x = h.get(); println(f"x{x.k}")` over `fn get(ref self) -> Sh { self.s }` prints the right text everywhere but valgrind reports an invalid read and an invalid write of size 8 at `-O0`; through a projection (`h.get().k`) the compiled surfaces also run `dSh3` BEFORE the print, while `h` still holds it | — |
 | B-2026-09-26-9 | 2026-09-26 | interp+codegen | low | A PLAIN STRUCT HOLDING A `shared struct` RELEASES IT AT LEXICAL SCOPE EXIT ON THE COMPILED BACKENDS AND AT THE HOLDER'S LIVE-RANGE END UNDER `--interp` -- `let h = Hold { s: mksh(3) }; println(f"h{h.s.k}"); println("after")` prints `h3 dSh3nm3 dD3 after end` interpreted and `h3 after end dSh3nm3 dD3` on jit / -O2 seq / -O2 par; the `shared struct` sibling of B-2026-09-19-18's `shared enum` | — |
-| B-2026-09-26-11 | 2026-09-26 | codegen | medium | A BINDING `match` ARM OVER A GENERIC USER ENUM WHOSE PAYLOAD IS A STRUCT WITH A `shared` FIELD LEAKS THE FIELD -- `let o = Ho.Full(mk(5)); match o { Ho.Full(x) => println(f"x{x.id}"), Ho.Empty => {} }` loses the 16-byte `Sh` box at -O0 on every compiled surface; the `String`-struct payload twin and the no-`match` spelling are clean | — |
 | B-2026-09-26-12 | 2026-09-26 | codegen | medium | A `Vec` OF A GENERIC USER ENUM LEAKS EVERY ELEMENT'S PAYLOAD BOX, WHATEVER THE PAYLOAD -- `let mut v: Vec[Ho[String]] = Vec.new(); v.push(Ho.Full("ab".to_string() + "cd"))` loses 24 B direct + 4 B indirect at -O0 on every compiled surface; `Vec[Ho[i64]]` (payload not boxed) and a pushed `Ho.Empty` are clean | — |
 | B-2026-09-26-13 | 2026-09-26 | interp+codegen | medium | `Option.map` WITH A CLOSURE THAT CONSUMES A `Drop` PAYLOAD RUNS THE BODY ON NO SURFACE WHEN THE PAYLOAD HAS A `shared` FIELD, AND SPLITS WHEN IT DOES NOT -- `let o = Some(mk2(2)); let n = o.map(|s| s.id)` prints `m2 end` everywhere and loses 16 B at -O0, while the same over `Some(R { id: 1 })` prints `dR1 m1 end` compiled and `m1 end` under `--interp` | — |
-| B-2026-09-26-15 | 2026-09-26 | codegen | high | A PAYLOAD MOVED OUT OF A GENERIC FN'S ENUM HAND-BACK OF A FORWARDED STRUCT IS FREED TWICE ON EVERY COMPILED SURFACE -- `let o = mid(s, true); let v = o.unwrap()` and `match mkh(s) { Ho.Full(x) => { let y = x } .. }` over a struct with a `shared` field read and write a freed 16-byte block at -O0 (valgrind: `Invalid read of size 8 ... 0 bytes inside a block of size 16 free'd`), and `karac run` aborts `malloc(): unaligned tcache chunk detected`; the concrete twin `midS(s, true).unwrap()` is clean | — |
 | B-2026-09-26-16 | 2026-09-26 | codegen | low | TWO `match`ES OVER ONE LET-BOUND `Option` WHOSE PAYLOAD IS A `Drop` STRUCT WITH A `shared` FIELD RUN ONE BODY ON EVERY COMPILED SURFACE WHERE `--interp` RUNS ONE PER ARM -- `let o = Some(mk2(26)); match o { Some(x) => print a } match o { Some(x) => print b }` prints `a26 b26 dS26 end` compiled and `a26 dS26 b26 dS26 end` under `--interp`; the `R` (no shared field) twin prints the interpreter's answer on all four | — |
 | B-2026-09-26-17 | 2026-09-26 | codegen | medium | A CONCRETE FN THAT WRAPS A FORWARDED `Drop` STRUCT WITH A `shared` FIELD IN AN ENUM LEAKS THE FIELD -- `let o = wrapS(s)` over `fn wrapS(v: S2) -> Option[S2] { return Some(v) }`, `mkhS(s)` over `-> Ho[S2]` and `midS(s, true)` lose the 16-byte `Sh` box at -O0 on every compiled surface; the generic twins `mid` / `mkh` are clean since B-2026-09-25-38 | — |
 | B-2026-09-26-18 | 2026-09-26 | codegen | medium | REASSIGNING A `String` BINDING FROM AN `if`, `match` OR BLOCK EXPRESSION LEAKS THE OLD VALUE ON EVERY COMPILED SURFACE -- `let mut s = f"a"; s = if true { f"q" } else { f"z" }; println(s)` prints `q end` everywhere and valgrind reports 1 block definitely lost at `-O0`, where `s = f"q";` and `s = pick(true);` are clean | — |
 | B-2026-09-26-19 | 2026-09-26 | codegen | high | A FIELD PROJECTION OFF A FRESH TEMP PASSED AS A CALL ARGUMENT IS FREED WRONGLY ON EVERY COMPILED SURFACE -- `bor(mkq(3).name)` with `fn bor(s: ref String)` aborts with `free(): double free detected in tcache 2` on jit / -O2 seq / -O2 par where `--interp` prints `q3 a2 end`; through an arm, `bor(if true { mkq(4).name } else { f"z" })` double-frees the same way and `take(if true { mkq(2).name } else { f"z" })` with `fn take(s: String)` prints garbage (a use after free) | — |
+| B-2026-09-26-20 | 2026-09-26 | codegen | medium | A `let ... else` OVER A GENERIC USER ENUM WHOSE PAYLOAD STRUCT DECLINES COPY SUPPORT LOSES THE PAYLOAD'S `Drop` BODY ON EVERY COMPILED SURFACE -- `let o = Ho.Full(mk2(15)); let Ho.Full(x) = o else { return }; println(f"x{x.id}")` prints `x15 end` where `--interp` prints `x15 dS15 end`; memory is clean since 133a79f1b | — |
+| B-2026-09-26-21 | 2026-09-26 | codegen | low | A `while let` OVER A GENERIC USER ENUM WHOSE BODY REASSIGNS THE SCRUTINEE LOSES THE PAYLOAD'S `Drop` BODY ON EVERY COMPILED SURFACE -- `let mut o = mkh(mk2(18)); while let Ho.Full(x) = o { println(f"w{x.id}"); o = Ho.Empty; }` prints `w18 end` where `--interp` prints `w18 dS18 end`; memory clean | — |
+| B-2026-09-26-22 | 2026-09-26 | codegen | medium | A `match` ARM THAT MOVES ITS BINDING ON ONLY ONE INNER BRANCH LOSES THE PAYLOAD'S `Drop` BODY ON THE OTHER BRANCH AND LEAKS ITS `shared` FIELD -- `match o { Ho.Full(x) => { if c { println(x.id) } else { let y = x } } .. }` at `c = true` prints `a19 end` where `--interp` prints `a19 dS19 end`, and loses 16 B at `-O0`, on every compiled surface | — |
 
 ### Relocated
 
@@ -3092,7 +3093,9 @@ registered in the callee's prologue, not by-value struct params in general. | �
 | B-2026-09-26-3 | interp+codegen | medium | A FIELD TAKEN OFF A FRESH TEMP WHOSE TYPE HAS ITS OWN `Drop` LOSES THAT TYPE'S BODY ON ALL FOUR SURFACES -- `let y = mkq().k;` over `struct Q { d: D,… | 3920422cb |
 | B-2026-09-26-6 | interp+codegen | medium | A FUNCTION TAIL THAT READS THROUGH A FRESH TEMP WITHOUT CONSUMING THE PROJECTION RUNS NONE OF THE TEMP'S `Drop` BODIES, ON ALL FOUR SURFACES ALIKE --… | 9fc3a6772 |
 | B-2026-09-26-10 | codegen | medium | A READ-ONLY ARM OVER A LET-BOUND `Option` WHOSE PAYLOAD IS A `Drop` STRUCT WITH A `shared` FIELD LOSES THE `Drop` BODY ON EVERY COMPILED SURFACE -- `… | 4c34ab868 |
+| B-2026-09-26-11 | codegen | medium | A BINDING `match` ARM OVER A GENERIC USER ENUM WHOSE PAYLOAD IS A STRUCT WITH A `shared` FIELD LEAKS THE FIELD -- `let o = Ho.Full(mk(5)); match o {… | 133a79f1b |
 | B-2026-09-26-14 | codegen | high | A HEAP FIELD MOVED OFF A FRESH TEMP THROUGH AN `if` OR `match` ARM IS FREED TWICE ON EVERY COMPILED SURFACE, ONE HOP DEEP AND WITH NO `Drop` ANYWHERE… | ce0e39b3a |
+| B-2026-09-26-15 | codegen | high | A PAYLOAD MOVED OUT OF A GENERIC FN'S ENUM HAND-BACK OF A FORWARDED STRUCT IS FREED TWICE ON EVERY COMPILED SURFACE -- `let o = mid(s, true); let v =… | 133a79f1b |
 
 </details>
 
