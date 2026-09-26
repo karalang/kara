@@ -3105,3 +3105,59 @@ fn main() {
         14,
     );
 }
+
+/// B-2026-09-26-14 — a heap field moved off a fresh temp through a branch arm
+/// or a block's tail is freed ONCE: by the new owner, never again by the
+/// temp's scope-exit drop. Covers a block tail, an `if` arm, a `match` arm two
+/// hops deep, a `Drop`-bearing field, tuple / struct-literal / array elements,
+/// and a function tail's arm and `return` operand. Every string is longer than
+/// the inline capacity, so the double free this fixes is an ASAN report.
+#[test]
+fn asan_fresh_temp_projection_moved_through_an_arm_is_freed_once() {
+    assert_clean_asan_run_min_allocs(
+        r#"struct D { id: i64, name: String }
+impl Drop for D { fn drop(mut ref self) { println(f"dD{self.id} {self.name}") } }
+fn mkd(n: i64) -> D { return D { id: n, name: f"name-string-longer-than-sso-{n}" }; }
+struct P { name: String }
+struct W3 { p: P, q: D, b: i64 }
+fn mkw3(n: i64) -> W3 { return W3 { p: P { name: f"p-string-longer-than-sso-{n}" }, q: mkd(n), b: n } }
+struct Q { name: String, k: i64 }
+fn mkq(n: i64) -> Q { return Q { name: f"q-string-longer-than-sso-{n}", k: n } }
+struct H { s: String, k: i64 }
+fn r1(c: bool) -> String { if c { mkq(1).name } else { f"x" } }
+fn r2(k: i64) -> String { match k { 0 => mkw3(2).p.name, _ => f"y" } }
+fn r3(c: bool) -> String { return if c { mkq(3).name } else { f"x" }; }
+fn main() {
+    let a = { mkq(10).name }; println(a);
+    let b = if true { mkq(11).name } else { f"z" }; println(b);
+    let c = match 0 { 0 => mkw3(12).p.name, _ => f"z" }; println(c);
+    let d = if true { mkw3(13).q } else { mkd(1) }; println(f"d{d.id}");
+    let t = (if true { mkq(15).name } else { f"z" }, 1); println(t.0);
+    let h = H { s: if true { mkq(16).name } else { f"z" }, k: 1 }; println(h.s);
+    let v = [if true { mkq(17).name } else { f"z" }, f"w"]; println(v[0]);
+    println(r1(true));
+    println(r2(0));
+    println(r3(true));
+    println("end")
+}
+"#,
+        &[
+            "q-string-longer-than-sso-10",
+            "q-string-longer-than-sso-11",
+            "dD12 name-string-longer-than-sso-12",
+            "p-string-longer-than-sso-12",
+            "d13",
+            "dD13 name-string-longer-than-sso-13",
+            "q-string-longer-than-sso-15",
+            "q-string-longer-than-sso-16",
+            "q-string-longer-than-sso-17",
+            "q-string-longer-than-sso-1",
+            "dD2 name-string-longer-than-sso-2",
+            "p-string-longer-than-sso-2",
+            "q-string-longer-than-sso-3",
+            "end",
+        ],
+        "asan_fresh_temp_projection_moved_through_an_arm_is_freed_once",
+        14,
+    );
+}

@@ -2034,10 +2034,11 @@ fn e2e_fresh_temp_read_through_a_projection_runs_its_bodies() {
 /// the interpreter already did (`let x = mkg(mkd(3)).k;` diverged the other
 /// way).
 ///
-/// The PINNED cells are tails both backends still leave alone, together: a
-/// tail of an inner block and a projection read through (`mkw(9).r.id`). A
-/// tail nested in an `if` arm and one inside arithmetic were pinned here too
-/// until B-2026-09-26-6 gave a body's tail its own read level.
+/// The PINNED cell is a tail both backends still leave alone, together: a
+/// projection read through (`mkw(9).r.id`). A tail nested in an `if` arm and
+/// one inside arithmetic were pinned here too until B-2026-09-26-6 gave a
+/// body's tail its own read level, and the tail of an inner block until
+/// B-2026-09-26-14 consumed a projection at a block's tail.
 #[test]
 fn e2e_fresh_temp_projected_in_a_function_tail_runs_its_bodies() {
     const H: &str = "struct D { id: i64, name: String }\n\
@@ -2113,9 +2114,9 @@ fn e2e_fresh_temp_projected_in_a_function_tail_runs_its_bodies() {
             "dD109n109\ndD9n9\nt10\nend\n",
         ),
         (
-            "pinned: tail of an inner block",
+            "tail of an inner block (B-2026-09-26-14)",
             "println(f\"t{tailnest()}\");",
-            "t9\nend\n",
+            "dD109n109\ndD9n9\nt9\nend\n",
         ),
     ] {
         let prog = format!("{H}fn main() {{\n    {body}\n    println(\"end\")\n}}\n");
@@ -2648,6 +2649,155 @@ fn e2e_fresh_temp_read_in_a_function_tail_runs_its_bodies() {
             "control: a bare projection tail",
             "println(f\"t{p13()}\");",
             "dD113\ndD13\nt13\nend\n",
+        ),
+    ] {
+        let prog = format!("{H}fn main() {{\n    {body}\n    println(\"end\")\n}}\n");
+        let (interp_out, interp_errs, _, _) = karac::run_program_full_checked(&prog);
+        assert!(
+            interp_errs.is_empty(),
+            "[{label}] interp errored: {interp_errs:?}"
+        );
+        assert_eq!(interp_out.join(""), want, "[{label}] interpreter");
+        if let Some(aot) = run_program(&prog) {
+            assert_eq!(aot, want, "[{label}] AOT");
+        }
+    }
+}
+
+/// B-2026-09-26-14 — a heap field moved off a fresh temp through a branch arm
+/// or a block's tail is consumed on the arm that produced it, exactly as the
+/// direct spelling `let s = mkq(1).name;` is. Before this every compiled
+/// surface freed the moved `String` twice (the binding's, and the temp's
+/// scope-exit drop) with no `Drop` anywhere, one hop deep; `--interp` was
+/// already right, so each cell pins the interpreter's output on every surface.
+/// A call argument is deliberately NOT a consuming position here, because the
+/// direct spelling is not consumed there either.
+#[test]
+fn e2e_fresh_temp_projection_moved_through_an_arm_is_freed_once() {
+    const H: &str = "struct D { id: i64, name: String }\n\
+             impl Drop for D { fn drop(mut ref self) { println(f\"dD{self.id}\") } }\n\
+             fn mkd(n: i64) -> D { return D { id: n, name: f\"n{n}\" }; }\n\
+             struct W { r: D, s: D, name: String, b: i64 }\n\
+             fn mkw(n: i64) -> W { return W { r: mkd(n), s: mkd(n + 100), name: f\"w{n}\", b: n }; }\n\
+             struct P { name: String }\n\
+             struct W3 { p: P, q: D, b: i64 }\n\
+             fn mkw3(n: i64) -> W3 { return W3 { p: P { name: f\"p{n}\" }, q: mkd(n), b: n } }\n\
+             struct Q { name: String, k: i64 }\n\
+             fn mkq(n: i64) -> Q { return Q { name: f\"q{n}\", k: n } }\n\
+             struct H { s: String, k: i64 }\n\
+             fn r1(c: bool) -> String { if c { mkw3(31).p.name } else { f\"x\" } }\n\
+             fn r4(c: bool) -> String { if c { mkq(41).name } else { f\"x\" } }\n\
+             fn r5(c: bool) -> String { return if c { mkq(51).name } else { f\"x\" }; }\n\
+             fn r6(k: i64) -> String { if k == 0 { f\"x\" } else if k == 1 { mkq(61).name } else { f\"y\" } }\n\
+             fn r7(o: Option[i64]) -> String { if let Some(n) = o { mkq(n).name } else { f\"x\" } }\n\
+             fn f1(c: bool) -> D { if c { mkw(71).r } else { mkd(0) } }\n\
+             fn f2(k: i64) -> String { match k { 0 => mkw(72).name, _ => f\"y\" } }\n\
+             fn f3(c: bool) -> String { return if c { mkw(73).name } else { f\"x\" }; }\n\
+             fn f4() -> String { { mkw(74).name } }\n";
+    for (label, body, want) in [
+        (
+            "block tail",
+            "let s = { mkq(1).name }; println(s);",
+            "q1\nend\n",
+        ),
+        (
+            "if arm",
+            "let s = if true { mkq(2).name } else { f\"z\" }; println(s);",
+            "q2\nend\n",
+        ),
+        (
+            "if arm not taken",
+            "let s = if false { mkq(3).name } else { f\"z\" }; println(s);",
+            "z\nend\n",
+        ),
+        (
+            "match arm not taken",
+            "let s = match 1 { 0 => mkq(4).name, _ => f\"z\" }; println(s);",
+            "z\nend\n",
+        ),
+        (
+            "remainder bodies run",
+            "let s = if true { mkw(5).name } else { f\"z\" }; println(s);",
+            "dD105\ndD5\nw5\nend\n",
+        ),
+        (
+            "assignment",
+            "let mut s = f\"a\"; s = if true { mkq(8).name } else { f\"z\" }; println(s);",
+            "q8\nend\n",
+        ),
+        (
+            "tuple element",
+            "let t = (if true { mkq(9).name } else { f\"z\" }, 1); println(t.0);",
+            "q9\nend\n",
+        ),
+        (
+            "arm with a statement first",
+            "let s = if true { let a = 1; mkq(10).name } else { f\"z\" }; println(s);",
+            "q10\nend\n",
+        ),
+        (
+            "match arm, two hops",
+            "let s = match 0 { 0 => mkw3(44).p.name, _ => f\"z\" }; println(s);",
+            "dD44\np44\nend\n",
+        ),
+        (
+            "Drop-bearing field",
+            "let d = if true { mkw3(43).q } else { mkd(1) }; println(f\"d{d.id}\");",
+            "d43\ndD43\nend\n",
+        ),
+        (
+            "struct-literal field",
+            "let h = H { s: if true { mkq(12).name } else { f\"z\" }, k: 1 }; println(h.s);",
+            "q12\nend\n",
+        ),
+        (
+            "array element",
+            "let v = [if true { mkq(13).name } else { f\"z\" }, f\"w\"]; println(v[0]);",
+            "q13\nend\n",
+        ),
+        (
+            "nested block around an arm",
+            "let s = { let a = 2; if a > 1 { mkw3(14).p.name } else { f\"z\" } }; println(s);",
+            "dD14\np14\nend\n",
+        ),
+        ("function tail arm", "println(r4(true));", "q41\nend\n"),
+        (
+            "function tail arm, two hops",
+            "println(r1(true));",
+            "dD31\np31\nend\n",
+        ),
+        ("return operand", "println(r5(true));", "q51\nend\n"),
+        ("else-if arm", "println(r6(1));", "q61\nend\n"),
+        ("if-let arm", "println(r7(Some(7)));", "q7\nend\n"),
+        (
+            "function tail if arm, Drop-bearing field",
+            "let d = f1(true); println(f\"d{d.id}\");",
+            "dD171\nd71\ndD71\nend\n",
+        ),
+        (
+            "function tail match arm, remainder bodies",
+            "println(f2(0));",
+            "dD172\ndD72\nw72\nend\n",
+        ),
+        (
+            "return operand, remainder bodies",
+            "println(f3(true));",
+            "dD173\ndD73\nw73\nend\n",
+        ),
+        (
+            "function tail inner block, remainder bodies",
+            "println(f4());",
+            "dD174\ndD74\nw74\nend\n",
+        ),
+        (
+            "tuple element, remainder bodies",
+            "let t = (if true { mkw(75).name } else { f\"z\" }, 1); println(t.0);",
+            "dD175\ndD75\nw75\nend\n",
+        ),
+        (
+            "control: the direct spelling",
+            "let s = mkq(90).name; println(s);",
+            "q90\nend\n",
         ),
     ] {
         let prog = format!("{H}fn main() {{\n    {body}\n    println(\"end\")\n}}\n");

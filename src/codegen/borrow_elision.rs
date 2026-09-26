@@ -1284,3 +1284,221 @@ fn walk_expr_for_returns(expr: &Expr, out: &mut FxHashSet<SpanKey>) {
         }
     }
 }
+
+/// B-2026-09-26-14 — the FIELD PROJECTIONS that are the value of a branch arm or
+/// block whose own value lands in a CONSUMING position, keyed by the
+/// projection's span.
+///
+/// `let s = if c { mkq(1).name } else { .. };` moves `name` out of the fresh
+/// temp `mkq(1)` exactly as `let s = mkq(1).name;` does, but the consumer that
+/// zeroes the moved leaf in the temp's slot (`consume_freshtemp_field_move`)
+/// runs on the `let`'s initializer, which here is the `if`, so it matched
+/// nothing and the temp's scope-exit drop freed the buffer the binding held:
+/// a double free on every compiled surface, one hop deep, with no `Drop`
+/// anywhere. The consumer cannot run after the merge, because only the arm
+/// that ran staged a temp; `compile_expr` consumes a projection in this set
+/// right after compiling it instead, on the path that produced it.
+///
+/// Consuming positions are the ones the direct spelling is consumed in: a
+/// named `let` initializer, an assignment's right-hand side, a function tail or
+/// `return` operand, and a tuple, array or struct-literal element. A call
+/// argument is not one: the direct spelling is not consumed there either.
+/// Only value-TRANSPARENT wrappers propagate (an arm, an `else if`, a block's
+/// tail), for the reason `compute_fn_escaping_branch_spans` gives. Missing a
+/// position leaves today's behaviour; the set never names a direct projection,
+/// which its consumer already handles.
+pub(crate) fn compute_consumed_arm_tail_spans(body: &Block) -> FxHashSet<SpanKey> {
+    let mut out = FxHashSet::default();
+    if let Some(fe) = body.final_expr.as_deref() {
+        record_consumed_arm_tails(fe, false, &mut out);
+    } else if let Some(StmtKind::Expr(e)) = body.stmts.last().map(|s| &s.kind) {
+        record_consumed_arm_tails(e, false, &mut out);
+    }
+    walk_block_for_consumed_arm_tails(body, &mut out);
+    out
+}
+
+fn record_consumed_arm_tails(expr: &Expr, nested: bool, out: &mut FxHashSet<SpanKey>) {
+    match &expr.kind {
+        ExprKind::FieldAccess { .. } if nested => {
+            out.insert(SpanKey::from_span(&expr.span));
+        }
+        ExprKind::If {
+            then_block,
+            else_branch,
+            ..
+        }
+        | ExprKind::IfLet {
+            then_block,
+            else_branch,
+            ..
+        } => {
+            if let Some(t) = then_block.final_expr.as_deref() {
+                record_consumed_arm_tails(t, true, out);
+            }
+            if let Some(eb) = else_branch.as_deref() {
+                record_consumed_arm_tails(eb, true, out);
+            }
+        }
+        ExprKind::Match { arms, .. } => {
+            for arm in arms {
+                record_consumed_arm_tails(&arm.body, true, out);
+            }
+        }
+        ExprKind::Block(b) | ExprKind::Seq(b) | ExprKind::Unsafe(b) => {
+            if let Some(t) = b.final_expr.as_deref() {
+                record_consumed_arm_tails(t, true, out);
+            }
+        }
+        ExprKind::Return(Some(inner)) => record_consumed_arm_tails(inner, false, out),
+        _ => {}
+    }
+}
+
+fn walk_block_for_consumed_arm_tails(block: &Block, out: &mut FxHashSet<SpanKey>) {
+    for stmt in &block.stmts {
+        match &stmt.kind {
+            StmtKind::Let { pattern, value, .. } => {
+                if !matches!(&pattern.kind, PatternKind::Wildcard) {
+                    record_consumed_arm_tails(value, false, out);
+                }
+                walk_expr_for_consumed_arm_tails(value, out);
+            }
+            StmtKind::Assign { target, value, .. } => {
+                record_consumed_arm_tails(value, false, out);
+                walk_expr_for_consumed_arm_tails(target, out);
+                walk_expr_for_consumed_arm_tails(value, out);
+            }
+            StmtKind::Expr(e) => walk_expr_for_consumed_arm_tails(e, out),
+            StmtKind::LetElse {
+                value, else_block, ..
+            } => {
+                walk_expr_for_consumed_arm_tails(value, out);
+                walk_block_for_consumed_arm_tails(else_block, out);
+            }
+            StmtKind::Defer { body } | StmtKind::ErrDefer { body, .. } => {
+                walk_block_for_consumed_arm_tails(body, out)
+            }
+            _ => {}
+        }
+    }
+    if let Some(fe) = block.final_expr.as_deref() {
+        walk_expr_for_consumed_arm_tails(fe, out);
+    }
+}
+
+fn walk_expr_for_consumed_arm_tails(expr: &Expr, out: &mut FxHashSet<SpanKey>) {
+    let walk = |e: &Expr, out: &mut FxHashSet<SpanKey>| walk_expr_for_consumed_arm_tails(e, out);
+    match &expr.kind {
+        ExprKind::Call { callee, args } => {
+            walk(callee, out);
+            // Walked but NOT recorded: the direct spelling `f(mkq(1).name)`
+            // is not consumed at a call argument either (the temp frees the
+            // leaf after the call), so recording here would hand an arm a
+            // contract its direct twin does not have.
+            for a in args {
+                walk(&a.value, out);
+            }
+        }
+        ExprKind::MethodCall { object, args, .. } => {
+            walk(object, out);
+            for a in args {
+                walk(&a.value, out);
+            }
+        }
+        ExprKind::Tuple(items)
+        | ExprKind::ArrayLiteral(items)
+        | ExprKind::PrefixCollectionLiteral { items, .. } => {
+            for it in items {
+                record_consumed_arm_tails(it, false, out);
+                walk(it, out);
+            }
+        }
+        ExprKind::StructLiteral { fields, spread, .. } => {
+            for f in fields {
+                record_consumed_arm_tails(&f.value, false, out);
+                walk(&f.value, out);
+            }
+            if let Some(s) = spread {
+                walk(s, out);
+            }
+        }
+        ExprKind::Return(Some(inner)) => {
+            record_consumed_arm_tails(inner, false, out);
+            walk(inner, out);
+        }
+        ExprKind::Binary { left, right, .. } => {
+            walk(left, out);
+            walk(right, out);
+        }
+        ExprKind::Unary { operand, .. } => walk(operand, out),
+        ExprKind::FieldAccess { object, .. } | ExprKind::TupleIndex { object, .. } => {
+            walk(object, out)
+        }
+        ExprKind::Index { object, index } => {
+            walk(object, out);
+            walk(index, out);
+        }
+        ExprKind::InterpolatedStringLit(parts) => {
+            for part in parts {
+                if let crate::ast::ParsedInterpolationPart::Expr(e, _) = part {
+                    walk(e, out);
+                }
+            }
+        }
+        ExprKind::Block(b) | ExprKind::Seq(b) | ExprKind::Unsafe(b) => {
+            walk_block_for_consumed_arm_tails(b, out)
+        }
+        ExprKind::If {
+            condition,
+            then_block,
+            else_branch,
+        } => {
+            walk(condition, out);
+            walk_block_for_consumed_arm_tails(then_block, out);
+            if let Some(eb) = else_branch.as_deref() {
+                walk(eb, out);
+            }
+        }
+        ExprKind::IfLet {
+            value,
+            then_block,
+            else_branch,
+            ..
+        } => {
+            walk(value, out);
+            walk_block_for_consumed_arm_tails(then_block, out);
+            if let Some(eb) = else_branch.as_deref() {
+                walk(eb, out);
+            }
+        }
+        ExprKind::Match { scrutinee, arms } => {
+            walk(scrutinee, out);
+            for arm in arms {
+                if let Some(g) = &arm.guard {
+                    walk(g, out);
+                }
+                walk(&arm.body, out);
+            }
+        }
+        ExprKind::While {
+            condition, body, ..
+        } => {
+            walk(condition, out);
+            walk_block_for_consumed_arm_tails(body, out);
+        }
+        ExprKind::WhileLet { value, body, .. } => {
+            walk(value, out);
+            walk_block_for_consumed_arm_tails(body, out);
+        }
+        ExprKind::Loop { body, .. } | ExprKind::LabeledBlock { body, .. } => {
+            walk_block_for_consumed_arm_tails(body, out)
+        }
+        ExprKind::For { iterable, body, .. } => {
+            walk(iterable, out);
+            walk_block_for_consumed_arm_tails(body, out);
+        }
+        ExprKind::Question(inner) | ExprKind::Cast { expr: inner, .. } => walk(inner, out),
+        _ => {}
+    }
+}

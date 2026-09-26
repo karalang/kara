@@ -525,6 +525,15 @@ impl<'a> super::Interpreter<'a> {
             }
             let v = self.eval_expr_inner(expr);
             if tail_level {
+                // B-2026-09-26-14 — a projection that is the value of an arm or
+                // an inner block's tail is consumed too, as codegen's
+                // `compute_consumed_arm_tail_spans` consumes it. BEFORE the
+                // level ends, so the consumer takes the temp out of it and the
+                // level's walk does not run the same bodies a second time; the
+                // direct tail consume below then finds the stash empty.
+                if self.pending_cf.is_none() {
+                    self.consume_freshtemp_field_moves_in(expr);
+                }
                 self.end_freshtemp_reads();
             }
             let v = self.coerce_float_assign_rhs(expr, v);
@@ -543,8 +552,9 @@ impl<'a> super::Interpreter<'a> {
             // at the same position (`suppress_cleanup_for_tail_return` calls
             // `consume_freshtemp_field_move` on the body's tail), so the
             // compiled surfaces printed `dD109 dD9 t9` where this backend
-            // printed `t9`. Only the body's OWN tail, exactly as there: a tail
-            // nested in an `if` or `match` arm is not consumed on either side.
+            // printed `t9`. A tail nested in an `if` or `match` arm or an inner
+            // block is consumed above, before the tail's read level ends
+            // (B-2026-09-26-14).
             //
             // A closure's body arrives wrapped in a synthetic block whose tail
             // is the closure's body expression and whose span IS that

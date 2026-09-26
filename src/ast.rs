@@ -1803,7 +1803,9 @@ pub fn stmt_ends_freshtemp_reads(stmt: &Stmt) -> bool {
 /// behind the temp's flag on both backends. The STATEMENT predicate above keeps
 /// its narrower set, so branch statements are unchanged. A bare projection tail
 /// (`mkw(9).b`) is not in the set because it is CONSUMED instead
-/// (B-2026-09-25-42), and neither is an inner block, which is left as it was.
+/// (B-2026-09-25-42). An inner block joined the set with B-2026-09-26-14, whose
+/// codegen consumes a projection at a block's tail and so ran the temp's bodies
+/// there; admitting the block here gives the interpreter the same level.
 pub fn tail_ends_freshtemp_reads(e: &Expr) -> bool {
     matches!(
         &e.kind,
@@ -1815,6 +1817,7 @@ pub fn tail_ends_freshtemp_reads(e: &Expr) -> bool {
             | ExprKind::If { .. }
             | ExprKind::IfLet { .. }
             | ExprKind::Match { .. }
+            | ExprKind::Block(_)
     )
 }
 

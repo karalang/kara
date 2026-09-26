@@ -4298,6 +4298,10 @@ impl<'ctx> super::Codegen<'ctx> {
         // function-scoped for the same reason: it is span-keyed over THIS body.
         self.pattern_state.fn_escaping_branch_spans =
             crate::codegen::borrow_elision::compute_fn_escaping_branch_spans(&func.body);
+        // B-2026-09-26-14 — and the arm-tail projections a consuming position
+        // takes, span-keyed over THIS body for the same reason.
+        self.pattern_state.consumed_arm_tail_spans =
+            crate::codegen::borrow_elision::compute_consumed_arm_tail_spans(&func.body);
 
         // B-2026-08-01-33 stage 3c — the frozen-element container NAMES are
         // function-scoped and the hint that fills them is span-keyed and

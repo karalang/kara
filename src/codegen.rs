@@ -6913,6 +6913,7 @@ impl<'ctx> Codegen<'ctx> {
             pattern_state: PatternState {
                 discarded_branch_spans: FxHashSet::default(),
                 fn_escaping_branch_spans: FxHashSet::default(),
+                consumed_arm_tail_spans: FxHashSet::default(),
                 pattern_binding_is_borrow: false,
                 escape_walk_relaxes_primitive_operators: false,
                 pattern_binding_source_retains_inline_payload: false,

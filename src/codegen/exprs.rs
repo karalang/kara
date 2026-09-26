@@ -47,6 +47,18 @@ impl<'ctx> super::Codegen<'ctx> {
         let out = self.compile_expr_inner(expr);
         if out.is_ok() {
             self.tracing.diag_span = saved;
+            // B-2026-09-26-14 — an arm's (or block's) tail projection whose
+            // value the enclosing position consumes: zero the moved leaf in
+            // the temp's slot HERE, on the path that produced it, because the
+            // merge block cannot know which arm staged the temp.
+            if matches!(expr.kind, ExprKind::FieldAccess { .. })
+                && self
+                    .pattern_state
+                    .consumed_arm_tail_spans
+                    .contains(&crate::resolver::SpanKey::from_span(&expr.span))
+            {
+                self.consume_freshtemp_field_move(expr);
+            }
         }
         out
     }

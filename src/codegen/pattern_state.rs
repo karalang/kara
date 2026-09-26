@@ -59,6 +59,12 @@ pub(crate) struct PatternState<'ctx> {
     /// per function by `compute_fn_escaping_branch_spans`, which documents the
     /// escaping positions and why over-inclusion is the safe direction.
     pub(crate) fn_escaping_branch_spans: rustc_hash::FxHashSet<crate::resolver::SpanKey>,
+    /// B-2026-09-26-14 — field projections that are the value of a branch arm
+    /// or block whose own value lands in a CONSUMING position, keyed by the
+    /// projection's span. `compile_expr` consumes a projection in this set
+    /// right after compiling it, on the arm that produced it. Computed per
+    /// function by `compute_consumed_arm_tail_spans`.
+    pub(crate) consumed_arm_tail_spans: rustc_hash::FxHashSet<crate::resolver::SpanKey>,
     /// Set by `compile_match` when the scrutinee is a borrow-returning
     /// call (`Map.get`, `Vec.first`, ...) — used by `bind_pattern_values`
     /// to suppress `track_vec_var` for the bound name, since the payload

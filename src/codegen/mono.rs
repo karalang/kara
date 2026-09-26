@@ -5801,6 +5801,11 @@ impl<'ctx> super::Codegen<'ctx> {
             &mut self.pattern_state.discarded_branch_spans,
             crate::codegen::borrow_elision::compute_discarded_branch_spans(&func.body),
         );
+        // B-2026-09-26-14 — saved and restored like the two sets above.
+        let saved_consumed_arm_tails = std::mem::replace(
+            &mut self.pattern_state.consumed_arm_tail_spans,
+            crate::codegen::borrow_elision::compute_consumed_arm_tail_spans(&func.body),
+        );
 
         self.begin_fn_tail_freshtemp_reads(&func.body);
         let body_result = self.compile_block(&func.body);
@@ -5941,6 +5946,7 @@ impl<'ctx> super::Codegen<'ctx> {
         self.pattern_state.fn_escaping_branch_spans = saved_escaping_spans;
         // B-2026-09-15-30 — see the install site.
         self.pattern_state.discarded_branch_spans = saved_discarded_spans;
+        self.pattern_state.consumed_arm_tail_spans = saved_consumed_arm_tails;
         // Leave the frame stack as the caller swapped it in
         // (`compile_generic_call` restores its own); clearing keeps the
         // post-body state tidy and matches `compile_function`'s exit.
