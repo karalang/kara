@@ -6614,3 +6614,145 @@ fn main() {
         "asan_param_wrapped_in_a_local_and_handed_back_on_some_paths_runs_one_body",
     );
 }
+
+/// B-2026-09-26-4 — a by-value param handed on TWO levels (or three) to a
+/// callee that returns it on only some paths: `fn outer(a: S3, c: bool) -> S3 {
+/// return passp(a, c) }` over `fn passp(a: S3, c: bool) -> S3 { .. return
+/// pickS3(a, c, w) }`. `passp` returns its param through a CALL, not bare, so
+/// it was not a flip callee: `outer` registered no per-path owner, `main` kept
+/// its own cleanup beside the result's, and both exits used the value after
+/// free (a `Drop` struct also ran its body twice, on `--interp` too). The
+/// hand-over predicate now follows a callee that is itself such a hand-over.
+/// Covers both exits for a Drop-less struct with a `shared` field, a `Drop`
+/// one, a plain `Drop` struct and a `String` one; a rebind, a `;` tail, a
+/// `let` and return, three levels, a branch per exit, a nested hand-over that
+/// dies in the frame, a use before the hand-over, a method, a fresh temp, a
+/// loop, and a direct one-level call beside a two-level one.
+#[test]
+fn asan_param_handed_on_two_levels_to_a_mixed_path_callee_has_one_owner() {
+    assert_clean_asan_run(
+        r#"shared struct Sh { k: i64 }
+struct S2 { h: Sh, id: i64 }
+impl Drop for S2 { fn drop(mut ref self) { println(f"dS{self.id}") } }
+struct S3 { h: Sh, id: i64 }
+fn mk(i: i64) -> S3 { return S3 { h: Sh { k: i }, id: i } }
+fn mk2(i: i64) -> S2 { return S2 { h: Sh { k: i }, id: i } }
+fn pickS3(v: S3, c: bool, w: S3) -> S3 { if c { return v } return w }
+fn pickS2(v: S2, c: bool, w: S2) -> S2 { if c { return v } return w }
+fn passp(a: S3, c: bool) -> S3 { let w = mk(98); return pickS3(a, c, w) }
+fn passp2(a: S2, c: bool) -> S2 { let w = mk2(98); return pickS2(a, c, w) }
+fn outer(a: S3, c: bool) -> S3 { return passp(a, c) }
+fn outer2(a: S2, c: bool) -> S2 { return passp2(a, c) }
+fn outerR(a: S3, c: bool) -> S3 { let t = passp(a, c); return t }
+fn outerR2(a: S2, c: bool) -> S2 { let t = passp2(a, c); return t }
+fn outerS(a: S3, c: bool) -> S3 { return passp(a, c); }
+fn outer3(a: S3, c: bool) -> S3 { return outer(a, c) }
+fn outer32(a: S2, c: bool) -> S2 { return outer2(a, c) }
+fn outerQ(a: S3, c: bool) -> S3 { let q = a; return passp(q, c) }
+fn outerI(a: S3, c: bool) -> S3 { if c { return passp(a, true) } return passp(a, false) }
+fn outerD(a: S2, c: bool) { let t = passp2(a, c); println(f"u{t.id}") }
+struct P { id: i64 }
+impl Drop for P { fn drop(mut ref self) { println(f"dP{self.id}") } }
+struct R { id: i64, s: String }
+fn pickP(v: P, c: bool, w: P) -> P { if c { return v } return w }
+fn passP(a: P, c: bool) -> P { return pickP(a, c, P { id: 98 }) }
+fn outP(a: P, c: bool) -> P { return passP(a, c) }
+fn pickR(v: R, c: bool, w: R) -> R { if c { return v } return w }
+fn passR(a: R, c: bool) -> R { return pickR(a, c, R { id: 98, s: f"w" }) }
+fn outRR(a: R, c: bool) -> R { return passR(a, c) }
+fn outB(a: S2, c: bool, k: bool) -> S2 { if k { let t = passp2(a, c); return t } return mk2(77) }
+fn outU(a: S2, c: bool) -> S2 { println(f"pre{a.id}"); return passp2(a, c) }
+struct K { n: i64 }
+impl K { fn mp(ref self, a: S3, c: bool) -> S3 { return passp(a, c) } }
+fn c00() { let s = mk(1); let t = outer(s, true); println(f"t{t.id}"); }
+fn c01() { let s = mk(2); let t = outer(s, false); println(f"t{t.id}"); }
+fn c02() { let s = mk2(3); let t = outer2(s, true); println(f"t{t.id}"); }
+fn c03() { let s = mk2(4); let t = outer2(s, false); println(f"t{t.id}"); }
+fn c04() { let s = mk(5); let t = outerR(s, true); println(f"t{t.id}"); }
+fn c05() { let s = mk(6); let t = outerR(s, false); println(f"t{t.id}"); }
+fn c06() { let s = mk2(7); let t = outerR2(s, true); println(f"t{t.id}"); }
+fn c07() { let s = mk2(8); let t = outerR2(s, false); println(f"t{t.id}"); }
+fn c08() { let t = outer(mk(9), true); println(f"t{t.id}"); }
+fn c09() { let t = outer2(mk2(10), true); println(f"t{t.id}"); }
+fn c10() { let t = outer2(mk2(11), false); println(f"t{t.id}"); }
+fn c11() { let s = mk(12); let t = outerS(s, true); println(f"t{t.id}"); }
+fn c12() { let s = mk(13); let t = outer3(s, true); println(f"t{t.id}"); }
+fn c13() { let s = mk2(14); let t = outer32(s, true); println(f"t{t.id}"); }
+fn c14() { let s = mk2(15); let t = outer32(s, false); println(f"t{t.id}"); }
+fn c15() { let s = mk(16); let t = outerQ(s, true); println(f"t{t.id}"); }
+fn c16() { let s = mk(17); let t = outerI(s, true); println(f"t{t.id}"); }
+fn c17() { let s = mk(18); let t = outerI(s, false); println(f"t{t.id}"); }
+fn c18() { let s = mk2(19); outerD(s, true); }
+fn c19() { let s = mk2(20); outerD(s, false); }
+fn c20() { let s = mk2(21); let t = passp2(s, true); println(f"t{t.id}"); }
+fn c21() { let s = mk2(22); let t = passp2(s, false); println(f"t{t.id}"); }
+fn c22() { let s = mk2(23); let w = mk2(24); let t = pickS2(s, true, w); println(f"t{t.id}"); }
+fn c23() { let mut i = 0; while i < 3 { let s = mk2(30 + i); let t = outer2(s, i == 1); println(f"t{t.id}"); i = i + 1; } }
+fn c24() { let s = P { id: 1 }; let t = outP(s, true); println(f"t{t.id}"); }
+fn c25() { let s = P { id: 2 }; let t = outP(s, false); println(f"t{t.id}"); }
+fn c26() { let s = R { id: 3, s: f"x" }; let t = outRR(s, true); println(f"t{t.id}{t.s}"); }
+fn c27() { let s = R { id: 4, s: f"x" }; let t = outRR(s, false); println(f"t{t.id}{t.s}"); }
+fn c28() { let s = mk2(5); let t = outB(s, true, true); println(f"t{t.id}"); }
+fn c29() { let s = mk2(6); let t = outB(s, false, true); println(f"t{t.id}"); }
+fn c30() { let s = mk2(7); let t = outB(s, true, false); println(f"t{t.id}"); }
+fn c31() { let s = mk2(8); let t = outU(s, true); println(f"t{t.id}"); }
+fn c32() { let s = mk2(9); let t = outU(s, false); println(f"t{t.id}"); }
+fn c33() { let k = K { n: 1 }; let s = mk(15); let t = k.mp(s, true); println(f"t{t.id}"); }
+fn c34() { let k = K { n: 1 }; let s = mk(16); let t = k.mp(s, false); println(f"t{t.id}"); }
+fn c35() { let s = mk(17); let w = mk(18); let t = pickS3(s, true, w); println(f"t{t.id}"); let s2 = mk(19); let t2 = outer(s2, true); println(f"t{t2.id}"); }
+fn c36() { let s = mk2(20); let t = outer2(s, true); let s2 = mk2(21); let t2 = passp2(s2, false); println(f"t{t.id} {t2.id}"); }
+fn main() {
+    c00()
+    c01()
+    c02()
+    c03()
+    c04()
+    c05()
+    c06()
+    c07()
+    c08()
+    c09()
+    c10()
+    c11()
+    c12()
+    c13()
+    c14()
+    c15()
+    c16()
+    c17()
+    c18()
+    c19()
+    c20()
+    c21()
+    c22()
+    c23()
+    c24()
+    c25()
+    c26()
+    c27()
+    c28()
+    c29()
+    c30()
+    c31()
+    c32()
+    c33()
+    c34()
+    c35()
+    c36()
+    println("end")
+}
+"#,
+        &[
+            "t1", "t98", "dS98", "t3", "dS3", "dS4", "t98", "dS98", "t5", "t98", "dS98", "t7",
+            "dS7", "dS8", "t98", "dS98", "t9", "dS98", "t10", "dS10", "dS11", "t98", "dS98", "t12",
+            "t13", "dS98", "t14", "dS14", "dS15", "t98", "dS98", "t16", "t17", "t98", "dS98",
+            "u19", "dS19", "dS20", "u98", "dS98", "dS98", "t21", "dS21", "dS22", "t98", "dS98",
+            "dS24", "t23", "dS23", "dS30", "t98", "dS98", "dS98", "t31", "dS31", "dS32", "t98",
+            "dS98", "dP98", "t1", "dP1", "dP2", "t98", "dP98", "t3x", "t98w", "dS98", "t5", "dS5",
+            "dS6", "t98", "dS98", "dS7", "t77", "dS77", "pre8", "dS98", "t8", "dS8", "pre9", "dS9",
+            "t98", "dS98", "t15", "t98", "t17", "t19", "dS98", "dS21", "t20 98", "dS98", "dS20",
+            "end",
+        ],
+        "asan_param_handed_on_two_levels_to_a_mixed_path_callee_has_one_owner",
+    );
+}

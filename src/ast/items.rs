@@ -7138,6 +7138,31 @@ pub fn fn_conditionally_hands_param_to_flip_callee(
     let PatternKind::Binding(name) = &param.pattern.kind else {
         return false;
     };
+    // B-2026-09-26-4 — the hand-over leg of `flip_call` below asks this same
+    // question of the callee, so a recursive pair (`g` hands to `h`, `h` to
+    // `g`) would never return. A question already in flight answers `false`,
+    // this predicate's recoverable direction: the frame keeps today's
+    // arrangement rather than standing its caller down beside nobody.
+    thread_local! {
+        static HANDS_IN_FLIGHT: std::cell::RefCell<Vec<(String, usize)>> =
+            const { std::cell::RefCell::new(Vec::new()) };
+    }
+    let key = (f.name.clone(), arg_index);
+    if HANDS_IN_FLIGHT.with(|v| v.borrow().contains(&key)) {
+        return false;
+    }
+    HANDS_IN_FLIGHT.with(|v| v.borrow_mut().push(key.clone()));
+    let answer = hands_param_to_flip_callee_inner(program, f, name);
+    HANDS_IN_FLIGHT.with(|v| {
+        let mut v = v.borrow_mut();
+        if let Some(pos) = v.iter().rposition(|k| k == &key) {
+            v.remove(pos);
+        }
+    });
+    answer
+}
+
+fn hands_param_to_flip_callee_inner(program: &crate::Program, f: &Function, name: &str) -> bool {
     // B-2026-09-07-8 — under every name the param is rebound to WHOLE
     // (`let q = a; f(q, c);`), which is the same act as handing `a` over: a
     // rebind of a by-value param is a view onto the same object, and this
@@ -7166,7 +7191,20 @@ pub fn fn_conditionally_hands_param_to_flip_callee(
         let gf = resolve_free_or_assoc_fn(program, &key)?;
         args.iter().enumerate().find_map(|(j, a)| {
             (matches!(&a.value.kind, ExprKind::Identifier(n) if name.iter().any(|al| al == n))
-                && fn_conditionally_returns_param_bare(Some(program), gf, j))
+                && (fn_conditionally_returns_param_bare(Some(program), gf, j)
+                    // B-2026-09-26-4 — or to a frame that is itself such a
+                    // hand-over (`fn passp(a: S3, c: bool) -> S3 { return
+                    // pickS3(a, c, w) }`): that frame owns the value per path
+                    // exactly as a flip callee does — it hands it back on some
+                    // exits and its own callee frees it on the rest — so one
+                    // level further out is the same act. Without this leg
+                    // `fn outer(a: S3, c: bool) -> S3 { return passp(a, c) }`
+                    // registered no per-path owner, `main` kept its own cleanup
+                    // beside the result's, and both exits used the value after
+                    // free. Non-generic only: the monomorph prologue has no
+                    // memory arm to take the value over (B-2026-09-25-40).
+                    || (gf.generic_params.is_none()
+                        && fn_conditionally_hands_param_to_flip_callee(program, gf, j))))
             .then_some(j)
         })
     }
