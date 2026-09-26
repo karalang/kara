@@ -2579,6 +2579,30 @@ impl<'ctx> super::Codegen<'ctx> {
     /// (`result_payload_inline_recursive_drop_ok`) guarantees every
     /// heap-owning side is an inline String/Vec overlay shape. Returns None
     /// only when the program has no Result layout registered.
+    /// B-2026-09-26-30 — the MEMORY drop (the payload bodies are a separate walk) of
+    /// an `Option[T]` / `Result[O, E]` spelled by `te`, or `None` for any other
+    /// head. What the per-path carrier of a FORWARDED param registers once the
+    /// param is wrapped (`let o = Some(s)`), so the dies-inside exit frees what
+    /// the param's own registration would have.
+    pub(super) fn optres_full_drop_fn(&mut self, te: &TypeExpr) -> Option<FunctionValue<'ctx>> {
+        let TypeKind::Path(p) = &te.kind else {
+            return None;
+        };
+        let args = p.generic_args.as_ref()?;
+        let tys: Vec<&TypeExpr> = args
+            .iter()
+            .filter_map(|a| match a {
+                crate::ast::GenericArg::Type(t) => Some(t),
+                _ => None,
+            })
+            .collect();
+        match (p.segments.last()?.as_str(), tys.as_slice()) {
+            ("Option", [t]) => self.emit_option_drop_fn(t),
+            ("Result", [o, e]) => self.emit_result_drop_fn(o, e),
+            _ => None,
+        }
+    }
+
     pub(super) fn emit_result_drop_fn(
         &mut self,
         ok_te: &TypeExpr,

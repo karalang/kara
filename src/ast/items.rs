@@ -2232,9 +2232,18 @@ struct RebindWalk {
     /// arg)])` of every `let x = g(..)` candidate; only the program-aware
     /// [`fn_whole_param_aliases`] reads these, the predicates never do.
     call_rebinds: Vec<CallRebind>,
+    /// B-2026-09-26-30 — every bare local DESTRUCTURED in place: the
+    /// scrutinee of a `match`, or the value of an `if let` / `while let`.
+    /// Only [`fn_conditionally_returns_param_bare`] reads it.
+    destructured: Vec<String>,
     bound: std::collections::HashMap<String, usize>,
 }
 impl RebindWalk {
+    fn note_destructured(&mut self, e: &Expr) {
+        if let ExprKind::Identifier(n) = &e.kind {
+            self.destructured.push(n.clone());
+        }
+    }
     fn bind(&mut self, pat: &Pattern) {
         for n in pat.binding_names() {
             *self.bound.entry(n).or_insert(0) += 1;
@@ -2386,6 +2395,7 @@ impl RebindWalk {
                 else_branch,
             } => {
                 self.bind(pattern);
+                self.note_destructured(value);
                 self.expr(value);
                 self.block(then_block);
                 if let Some(x) = else_branch.as_deref() {
@@ -2393,6 +2403,7 @@ impl RebindWalk {
                 }
             }
             ExprKind::Match { scrutinee, arms } => {
+                self.note_destructured(scrutinee);
                 self.expr(scrutinee);
                 for a in arms {
                     self.bind(&a.pattern);
@@ -2415,6 +2426,7 @@ impl RebindWalk {
                 ..
             } => {
                 self.bind(pattern);
+                self.note_destructured(value);
                 self.expr(value);
                 self.block(body);
             }
@@ -2444,6 +2456,7 @@ fn rebind_walk(f: &Function) -> RebindWalk {
         ctor_wraps: Vec::new(),
         proj_rebinds: Vec::new(),
         call_rebinds: Vec::new(),
+        destructured: Vec::new(),
         bound: std::collections::HashMap::new(),
     };
     for p in &f.params {
@@ -2696,6 +2709,22 @@ pub fn param_wrap_aliases_ex(
     param_name: &str,
     with_ctor: bool,
 ) -> Vec<(String, ParamPath)> {
+    param_wrap_aliases_impl(program, f, param_name, with_ctor, true)
+}
+
+/// [`param_wrap_aliases_ex`] with a USER variant constructor optionally left
+/// out, keeping only `Some` / `Ok` / `Err` — B-2026-09-26-30. The conditional
+/// hand-back asks this narrower form because both backends can hand the
+/// per-path body on to an `Option` / `Result` wrapper but not yet to a user
+/// enum's (a generic `Ho[T]` erases its payload); admitting one there stood the
+/// caller down with no carrier behind it.
+fn param_wrap_aliases_impl(
+    program: Option<&crate::Program>,
+    f: &Function,
+    param_name: &str,
+    with_ctor: bool,
+    user_variants: bool,
+) -> Vec<(String, ParamPath)> {
     let w = rebind_walk(f);
     let whole = param_whole_aliases(program, f, param_name);
     // B-2026-09-26-27 — an enum constructor wraps its payload as a struct
@@ -2718,7 +2747,7 @@ pub fn param_wrap_aliases_ex(
         }
         ExprKind::Path { segments, .. } => {
             matches!(segments.as_slice(), [h, _] if h == "Option" || h == "Result")
-                || program.is_some_and(|p| is_user_variant_ctor(p, callee))
+                || (user_variants && program.is_some_and(|p| is_user_variant_ctor(p, callee)))
         }
         _ => false,
     };
@@ -3832,7 +3861,28 @@ pub fn fn_conditionally_returns_param_bare(
     // B-2026-09-06-12 — and through an always-returning callee; see
     // `param_whole_aliases`.
     let aliases = param_whole_aliases(program, f, param_name);
-    let wraps = param_wrap_aliases(program, f, param_name);
+    // B-2026-09-26-30 — an `Option` / `Result` constructor wrap too (`let o =
+    // Some(r); if c { return o } return None`): both backends hand the per-path
+    // body on to `o` at its `let`. Not a user variant's yet; see
+    // `param_wrap_aliases_impl`. Nor in a GENERIC function: `let o = Some(s)`
+    // over a bare `T` gives `o` no payload type for either backend's carrier
+    // to walk, so admitting it stood the caller down and the dies-inside exit
+    // ran no body (measured on `--interp` and the JIT alike). Nor when such a
+    // wrapper is DESTRUCTURED in place (`if c { return o } match o { Some(x)
+    // => .., }`): the compiled arm treats `x` as a view of the caller's value
+    // and runs nothing, so the body was lost there.
+    let plain_wraps = param_wrap_aliases_impl(program, f, param_name, false, false);
+    let ctor_wraps = param_wrap_aliases_impl(program, f, param_name, true, false);
+    let destructured = rebind_walk(f).destructured;
+    let wraps = if f.generic_params.is_none()
+        && !ctor_wraps
+            .iter()
+            .any(|(a, _)| destructured.contains(a) && !plain_wraps.iter().any(|(p, _)| p == a))
+    {
+        ctor_wraps
+    } else {
+        plain_wraps
+    };
     // B-2026-09-06-19 — a wrapping local MENTIONS the param wherever it
     // appears (the conservative side of this predicate), and yields it where
     // `place_yields_wrapped_param` says so.

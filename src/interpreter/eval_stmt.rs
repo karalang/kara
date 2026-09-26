@@ -4543,6 +4543,26 @@ impl<'a> super::Interpreter<'a> {
             // above, so `let w2 = w;` inherits it.
             if let PatternKind::Binding(bname) = &pattern.kind {
                 if self.let_ctor_payloads_are_param_views(bname, value) {
+                    // B-2026-09-26-30 — unless every payload is a param this
+                    // frame owns PER PATH (`cond_store_param_names`): `let o =
+                    // Some(s); if c { return o } return None`. The admission
+                    // predicate now follows the wrap, so the caller has stood
+                    // down, and marking `o` a view left the value with no
+                    // owner on the exit that does not hand it back. Hand the
+                    // ownership on to `o`, as the bare rebind above does for
+                    // `let m = r`. Codegen's twin is the carrier registration
+                    // at its `let` param-view arm.
+                    if let ExprKind::Call { args, .. } = &value.kind {
+                        let carried = !args.is_empty()
+                            && args.iter().all(|a| {
+                                matches!(&a.value.kind, ExprKind::Identifier(n)
+                                    if self.cond_store_param_names.contains(n.as_str()))
+                            });
+                        if carried && crate::ast::option_result_ctor_payload(value).is_some() {
+                            self.cond_store_param_names.insert(bname.clone());
+                            return false;
+                        }
+                    }
                     let bname = bname.clone();
                     if let Some(top) = self.owned_param_names_stack.last_mut() {
                         top.insert(bname);

@@ -4865,7 +4865,21 @@ impl<'ctx> super::Codegen<'ctx> {
                 // did through its wrapper.
                 let wildcard_of_local = matches!(&pattern.kind, PatternKind::Wildcard)
                     && matches!(&value.kind, ExprKind::Identifier(_));
-                if !wildcard_of_local {
+                // B-2026-09-26-30 — PER PATH for a nested whole rebind of a
+                // per-path carrier (`let o = Some(s); if c { let q = o;
+                // return q } return None`), the same rule the struct rebind
+                // follows for the bare param: the enclosing-frame guard stores
+                // `false` into `o`'s flag in this block, and the static
+                // retraction would otherwise delete `o`'s registration on the
+                // exit that never rebound it.
+                let per_path_carrier = matches!(&value.kind, ExprKind::Identifier(n)
+                    if self.drop_rc.cond_returned_body_params.contains(n.as_str())
+                        && self.payload_vars.param_view_locals.contains(n.as_str()))
+                    && match &value.kind {
+                        ExprKind::Identifier(n) => self.guard_user_drop_for_nested_return(n),
+                        _ => false,
+                    };
+                if !wildcard_of_local && !per_path_carrier {
                     self.disarm_container_bodies_move_sources(value);
                 }
                 // B-2026-08-04-2 — a boxed `Option`/`Result` payload binding
@@ -10859,6 +10873,87 @@ impl<'ctx> super::Codegen<'ctx> {
                             || self.let_call_result_is_param_view(value);
                         if optres_is_param_view {
                             self.payload_vars.param_view_locals.insert(var_name.clone());
+                        }
+                        // B-2026-09-26-30 — a param whose body this frame owns
+                        // PER PATH (`cond_returned_body_params`: the callee hands
+                        // it back on some exits only) wrapped whole into this
+                        // binding (`let o = Some(s); if c { return o } return
+                        // None`). The constructor has retracted the param's own
+                        // flagged registration, and the view rule above leaves
+                        // `o` without one, so the exit that does not hand `o`
+                        // back ran no body at all once the caller stood down.
+                        // Hand the per-path body on to `o`, exactly as a whole
+                        // rebind (`let m = r`) hands it to `m`: a nested `return
+                        // o` then clears `o`'s flag in its own block. The SAME
+                        // KIND the param carried (B-2026-09-06-69's rule at the
+                        // struct rebind): bodies only where the caller keeps the
+                        // memory, and the `Option` / `Result` memory drop as well
+                        // where the param's registration carried the memory too
+                        // (the forwarded class, `cond_returned_owned_params`) — a
+                        // bodies-only carrier there left the dies-inside exit
+                        // leaking the value's `shared` field.
+                        // A whole rebind of such a carrier (`let q = o;`) hands
+                        // it on again, as `let n = m;` does for the bare param.
+                        let rebound_carrier = match &value.kind {
+                            ExprKind::Identifier(n)
+                                if self.payload_vars.param_view_locals.contains(n.as_str())
+                                    && self
+                                        .var_types
+                                        .optres_var_payload_tes
+                                        .contains_key(n.as_str()) =>
+                            {
+                                Some(n.clone())
+                            }
+                            _ => None,
+                        };
+                        let cond_carrier = crate::ast::option_result_ctor_payload(value)
+                            .and_then(|p| match &p.kind {
+                                ExprKind::Identifier(n) => Some(n.clone()),
+                                _ => None,
+                            })
+                            .or(rebound_carrier)
+                            .filter(|n| self.drop_rc.cond_returned_body_params.contains(n));
+                        if let (Some(src), Some(te)) = (cond_carrier.as_ref(), opt_te.as_ref()) {
+                            let owned = self.drop_rc.cond_returned_owned_params.contains(src);
+                            // The memory half first, so the LIFO drain runs the
+                            // bodies before it frees what they read.
+                            let memory_fn = if owned {
+                                self.optres_full_drop_fn(te)
+                            } else {
+                                None
+                            };
+                            let bodies_fn = self.emit_optres_payload_user_drop_bodies_fn(te);
+                            if let (Some(slot), Some(bodies)) =
+                                (self.variables.get(var_name.as_str()).copied(), bodies_fn)
+                            {
+                                self.var_types
+                                    .optres_var_payload_tes
+                                    .insert(var_name.clone(), te.clone());
+                                if let Some(mem) = memory_fn {
+                                    self.track_user_drop_var_with_fn(
+                                        "",
+                                        var_name,
+                                        slot.ptr,
+                                        mem,
+                                        UserDropKind::OwnWrapper,
+                                    );
+                                }
+                                self.track_user_drop_var_with_fn(
+                                    "",
+                                    var_name,
+                                    slot.ptr,
+                                    bodies,
+                                    UserDropKind::ContainerElemBodies,
+                                );
+                                self.drop_rc
+                                    .cond_returned_body_params
+                                    .insert(var_name.clone());
+                                if owned {
+                                    self.drop_rc
+                                        .cond_returned_owned_params
+                                        .insert(var_name.clone());
+                                }
+                            }
                         }
                         if let Some(te) = opt_te.filter(|_| !optres_is_param_view) {
                             if let Some(slot) = self.variables.get(var_name.as_str()).copied() {

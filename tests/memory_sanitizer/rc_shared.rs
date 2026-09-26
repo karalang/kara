@@ -6522,3 +6522,95 @@ fn main() {
         "asan_fresh_temp_handed_back_in_an_enum_frees_its_field_once",
     );
 }
+
+/// B-2026-09-26-30 — a by-value param WRAPPED IN A LOCAL and handed back on
+/// only SOME exits (`fn c1(s: P, c: bool) -> Option[P] { let o = Some(s); if c
+/// { return o } return None }`) ran its `Drop` body twice on the exit that
+/// hands it back, on all four surfaces, and for a struct with a `shared` field
+/// aborted `malloc(): unaligned tcache chunk detected` on every compiled one.
+/// The conditional hand-back now follows an `Option` / `Result` constructor
+/// wrap, and both backends hand the per-path body (and, for the forwarded
+/// class, the memory) on to the wrapper at its `let`. Cells: both exits, named
+/// and fresh arguments, a `shared`-field struct, a `String` field, `Err`, a
+/// rebind before and inside the branch, a tail `if`, a loop, a method, an assoc
+/// fn, and the dies-inside order (`in dP17 no`: the wrapper's live range ends
+/// at the `if`).
+#[test]
+fn asan_param_wrapped_in_a_local_and_handed_back_on_some_paths_runs_one_body() {
+    assert_clean_asan_run(
+        r#"shared struct Sh { k: i64 }
+struct P { id: i64 }
+impl Drop for P { fn drop(mut ref self) { println(f"dP{self.id}") } }
+struct S2 { h: Sh, id: i64 }
+impl Drop for S2 { fn drop(mut ref self) { println(f"dS{self.id}") } }
+struct R { id: i64, s: String }
+impl Drop for R { fn drop(mut ref self) { println(f"dR{self.id}{self.s}") } }
+struct H { n: i64 }
+fn mk2(i: i64) -> S2 { return S2 { h: Sh { k: i }, id: i } }
+fn c1(s: P, c: bool) -> Option[P] { let o = Some(s); if c { return o } return None }
+fn cs2(s: S2, c: bool) -> Option[S2] { let o = Some(s); if c { return o } return None }
+fn cr(s: R, c: bool) -> Option[R] { let o = Some(s); if c { return o } return None }
+fn ce(s: P, c: bool) -> Result[i64, P] { let o: Result[i64, P] = Err(s); if c { return o } return Ok(1) }
+fn cq(s: P, c: bool) -> Option[P] { let o = Some(s); let q = o; if c { return q } return None }
+fn nq(s: P, c: bool) -> Option[P] { let o = Some(s); if c { let q = o; return q } return None }
+fn sq(s: S2, c: bool) -> Option[S2] { let o = Some(s); let q = o; if c { return q } return None }
+fn ct(s: P, c: bool) -> Option[P] { let o = Some(s); if c { o } else { None } }
+fn cl(s: P, n: i64) -> Option[P] { let o = Some(s); let mut i = 0; while i < n { if i == 2 { return o } i = i + 1; } return None }
+fn cp(s: P, c: bool) -> Option[P] { let o = Some(s); println("in"); if c { return o } println("no"); return None }
+impl H { fn m(ref self, s: P, c: bool) -> Option[P] { let o = Some(s); if c { return o } return None } fn a(s: P, c: bool) -> Option[P] { let o = Some(s); if c { return o } return None } }
+fn a() { let p = c1(P { id: 1 }, true); println(f"a{p.is_some()}") }
+fn b() { let s = P { id: 2 }; let p = c1(s, false); println(f"b{p.is_some()}") }
+fn c() { let s = mk2(3); let p = cs2(s, true); println(f"c{p.is_some()}") }
+fn d() { let s = mk2(4); let p = cs2(s, false); println(f"d{p.is_some()}") }
+fn e() { let p = cs2(mk2(5), true); let v = p.unwrap(); println(f"e{v.id}") }
+fn f() { let p = cs2(mk2(6), true); match p { Some(x) => { let y = x; println(f"f{y.id}"); }, None => println("n"), }; }
+fn g() { let p = cr(R { id: 7, s: f"x" }, true); println(f"g{p.is_some()}") }
+fn h() { let s = R { id: 8, s: f"y" }; let p = cr(s, false); println(f"h{p.is_some()}") }
+fn i() { let p = ce(P { id: 9 }, true); println(f"i{p.is_err()}") }
+fn j() { let p = ce(P { id: 10 }, false); println(f"j{p.is_err()}") }
+fn k() { let p = cq(P { id: 11 }, true); println(f"k{p.is_some()}") }
+fn l() { let p = cq(P { id: 12 }, false); println(f"l{p.is_some()}") }
+fn m() { let p = nq(P { id: 13 }, false); println(f"m{p.is_some()}") }
+fn n() { let p = sq(mk2(14), false); println(f"n{p.is_some()}") }
+fn o() { let p = ct(P { id: 15 }, true); println(f"o{p.is_some()}") }
+fn q() { let p = cl(P { id: 16 }, 5); println(f"q{p.is_some()}") }
+fn r() { let p = cp(P { id: 17 }, false); println(f"r{p.is_some()}") }
+fn s() { let x = H { n: 1 }; let p = x.m(P { id: 18 }, true); println(f"s{p.is_some()}") }
+fn t() { let p = H.a(P { id: 19 }, true); println(f"t{p.is_some()}") }
+fn u() { let mut i = 0; while i < 3 { let s = mk2(20 + i); let p = sq(s, i == 1); println(f"u{p.is_some()}"); i = i + 1; } }
+fn main() {
+    a(); println("a.")
+    b(); println("b.")
+    c(); println("c.")
+    d(); println("d.")
+    e(); println("e.")
+    f(); println("f.")
+    g(); println("g.")
+    h(); println("h.")
+    i(); println("i.")
+    j(); println("j.")
+    k(); println("k.")
+    l(); println("l.")
+    m(); println("m.")
+    n(); println("n.")
+    o(); println("o.")
+    q(); println("q.")
+    r(); println("r.")
+    s(); println("s.")
+    t(); println("t.")
+    u(); println("u.")
+    println("end")
+}
+"#,
+        &[
+            "atrue", "dP1", "a.", "dP2", "bfalse", "b.", "ctrue", "dS3", "c.", "dS4", "dfalse",
+            "d.", "e5", "dS5", "e.", "f6", "dS6", "f.", "gtrue", "dR7x", "g.", "dR8y", "hfalse",
+            "h.", "itrue", "dP9", "i.", "dP10", "jfalse", "j.", "ktrue", "dP11", "k.", "dP12",
+            "lfalse", "l.", "dP13", "mfalse", "m.", "dS14", "nfalse", "n.", "otrue", "dP15", "o.",
+            "qtrue", "dP16", "q.", "in", "dP17", "no", "rfalse", "r.", "strue", "dP18", "s.",
+            "ttrue", "dP19", "t.", "dS20", "ufalse", "utrue", "dS21", "dS22", "ufalse", "u.",
+            "end",
+        ],
+        "asan_param_wrapped_in_a_local_and_handed_back_on_some_paths_runs_one_body",
+    );
+}
