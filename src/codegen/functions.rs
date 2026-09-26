@@ -4155,19 +4155,45 @@ impl<'ctx> super::Codegen<'ctx> {
                 // method owns the payload), so the shell body is the only thing
                 // this stand-down takes away, and running the payload walker
                 // here as well would double the payload body against that arm.
+                // B-2026-09-16-22 — the same pairing for an ENUM receiver the
+                // callee may hand back through its return (`-> E`, `-> W`,
+                // `-> Option[E]`) with no arm or rebind to own it: the caller
+                // stands down on bodies for the whole call (`method_call`) and
+                // this frame runs them on the paths that do not return `self`.
+                // Before, the caller kept the SHELL and dropped the payload
+                // walk, which doubled the shell where `self` came back
+                // (`dE dR6 dE`) and lost the payload where it did not
+                // (`sw dE dE`). Both halves register here — there is no arm
+                // channel to claim the payload — and the enum need not have a
+                // shell body of its own for its payload's to be owed.
+                let adopts_returnable_enum_self = i == 0
+                    && param_name == "self"
+                    && matches!(&param.ty.kind, TypeKind::Path(p)
+                    if p.segments.first().is_some_and(|t| {
+                        self.type_decls.enum_layouts.contains_key(t)
+                            && self.program_snapshot.as_deref().is_some_and(|prog| {
+                                crate::ast::owned_self_callee_owns_receiver_via_return(
+                                    func,
+                                    t,
+                                    &prog.items,
+                                )
+                            })
+                    }));
                 if i == 0
                     && param_name == "self"
                     && func.generic_params.is_none()
                     && !self.is_coroutine_compiled(&func.name)
-                    && crate::ast::fn_conditionally_rebinds_self(func)
+                    && (crate::ast::fn_conditionally_rebinds_self(func)
+                        || adopts_returnable_enum_self)
                 {
                     if let TypeKind::Path(path) = &param.ty.kind {
                         if let Some(type_name) = path.segments.first().cloned() {
-                            let has_user_drop = self
-                                .program_snapshot
-                                .as_deref()
-                                .map(|p| p.drop_method_keys.contains_key(&type_name))
-                                .unwrap_or(false);
+                            let has_user_drop = adopts_returnable_enum_self
+                                || self
+                                    .program_snapshot
+                                    .as_deref()
+                                    .map(|p| p.drop_method_keys.contains_key(&type_name))
+                                    .unwrap_or(false);
                             if has_user_drop
                                 && !self
                                     .type_decls
@@ -4175,7 +4201,9 @@ impl<'ctx> super::Codegen<'ctx> {
                                     .contains_key(type_name.as_str())
                             {
                                 let is_enum = self.type_decls.enum_layouts.contains_key(&type_name);
-                                let bodies = if is_enum {
+                                let bodies = if adopts_returnable_enum_self {
+                                    self.emit_enum_bodies_only_fn(&type_name)
+                                } else if is_enum {
                                     self.module.get_function(&format!("{type_name}.drop"))
                                 } else {
                                     self.emit_struct_user_drop_bodies_only_fn(&type_name)

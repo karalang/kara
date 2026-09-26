@@ -2027,12 +2027,17 @@ fn e2e_agg_leaf_boxed_payload_moving_arm_frees_envelope() {
 /// `dR`, per design.md § Part 8 "the user's `fn drop` body runs first, then the
 /// compiler drops each field").
 ///
-/// TWO PRE-EXISTING DEFECTS ARE PINNED AS-IS HERE RATHER THAN BLESSED, both
+/// TWO PRE-EXISTING DEFECTS WERE PINNED AS-IS HERE RATHER THAN BLESSED, both
 /// measured identical before and after this fix and filed separately: the
-/// `dE … dE` in `ret_self` and `wrap` is a DOUBLED SHELL body on a receiver
+/// `dE … dE` in `ret_self` and `wrap` was a DOUBLED SHELL body on a receiver
 /// that escapes via the return, and `E.A(mk(n)).ret_self().none()` (a chain)
 /// runs NO body at all. Neither is this row's, and pinning them keeps this
 /// fixture honest about what it measured.
+///
+/// B-2026-09-16-22 — REPINNED. `ret_self` and `wrap` print one shell body
+/// (`dE dR6`, `dE dR7`): the callee now owns a receiver it can hand back, and
+/// the caller no longer runs its shell as well. The chain is not in this
+/// fixture and is still silent.
 ///
 /// B-2026-09-06-39 — REPINNED. `matches` reads `x5 dE dR5` for `dR5 x5 dE`: its
 /// read-only arm binds a view now, so the caller runs the payload's body after
@@ -2078,7 +2083,7 @@ fn e2e_owned_enum_receiver_runs_its_payload_body_when_no_arm_claims_it() {
     ) else {
         return;
     };
-    assert_eq!(out, "none\n  x5\n  dE\n  dR1\ntemp\n  dE\n  dR2\n  x5\nnodrop\n  x5\n  dR3\ngeneric\n  x5\n  dR4\nmatches\n  x5\n  dE\n  dR5\nret_self\n  dE\n  dR6\n  dE\n  got\nwrap\n  dE\n  dR7\n  dE\n  got\nrefm\n  x3\n  dE\n  dR8\nplain\n  dE\n  dR9\n  x9\nend\n");
+    assert_eq!(out, "none\n  x5\n  dE\n  dR1\ntemp\n  dE\n  dR2\n  x5\nnodrop\n  x5\n  dR3\ngeneric\n  x5\n  dR4\nmatches\n  x5\n  dE\n  dR5\nret_self\n  dE\n  dR6\n  got\nwrap\n  dE\n  dR7\n  got\nrefm\n  x3\n  dE\n  dR8\nplain\n  dE\n  dR9\n  x9\nend\n");
 }
 
 /// B-2026-09-10-14 — A WHOLE-PAYLOAD ARM BINDING OVER AN
@@ -2453,8 +2458,8 @@ fn main() {
 /// (it doubled the body without the clause) and `eat(r)` is not — the walk cannot
 /// tell them apart syntactically and over-approximates, because an
 /// over-approximation costs this mis-order while an under-approximation costs a
-/// doubled body. That is B-2026-09-16-29. `ret_self` / `wrap` keep the doubled
-/// `dE` of B-2026-09-16-22.
+/// doubled body. That is B-2026-09-16-29. `ret_self` / `wrap` kept the doubled
+/// `dE` of B-2026-09-16-22 until that row's fix, and now print it once.
 ///
 /// Controls that must not move: `named/none` (no arm at all, B-2026-09-16-21),
 /// `named/letself` (a whole rebind — the callee owns it, so the arms must NOT
@@ -2550,12 +2555,10 @@ named/letself
 ret_self
   dE
   dR9
-  dE
   got
 wrap
   dE
   dR10
-  dE
   got
 refm
   x11

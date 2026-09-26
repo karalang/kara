@@ -1928,6 +1928,49 @@ pub fn fn_conditionally_rebinds_self(f: &Function) -> bool {
     }) || f.body.final_expr.as_deref().is_some_and(walk_expr)
 }
 
+/// B-2026-09-16-22 — does the CALLEE own its owned `self` for the whole call,
+/// handing it back through the return on some paths and dropping it on the
+/// others?
+///
+/// The shape: a return that CAN carry the receiver
+/// ([`owned_self_return_cannot_carry_receiver`] answers `false` — `-> E`,
+/// `-> Self`, `-> Option[E]`, `-> W { e: E }`) and no other channel for it —
+/// no arm over bare `self`, no part bound out, no whole rebind (those three
+/// have their own owners, B-2026-08-01-7 / B-2026-09-06-39 /
+/// B-2026-09-06-42/-45).
+///
+/// Before this the caller kept the receiver's SHELL body and dropped only its
+/// payload walk, on the reasoning that the caller's result binding would own
+/// the payload. That is right on a path that returns `self` and wrong on the
+/// others: `a.ret_self()` ran the shell twice (`dE dR6 dE`, the result binding
+/// plus the caller's retained shell), and `a.swap()` returning a fresh `E.B`
+/// lost the payload body outright (`sw dE dE`). Which of the two holds is a
+/// property of the PATH, so only the callee can answer it: both backends stand
+/// the caller down for the whole call and register the receiver in the callee
+/// frame, where the path that hands `self` back disarms it — the same pairing
+/// [`fn_conditionally_rebinds_self`] uses for a nested `let e = self;`.
+pub fn owned_self_callee_owns_receiver_via_return(
+    f: &Function,
+    receiver: &str,
+    items: &[Item],
+) -> bool {
+    // A non-generic, non-shared value enum and a non-generic method: the
+    // shapes both callee registrars cover. Anything else keeps the
+    // pre-existing caller-side split rather than standing a caller down that
+    // no callee then takes over from.
+    let plain_enum = items.iter().any(|it| {
+        matches!(it, Item::EnumDef(e)
+            if e.name == receiver && !e.is_shared && e.generic_params.is_none())
+    });
+    plain_enum
+        && f.generic_params.is_none()
+        && !fn_binds_self_part_out(f)
+        && !fn_matches_on_bare_self(f)
+        && !fn_rebinds_self_whole(f)
+        && !fn_conditionally_rebinds_self(f)
+        && !owned_self_return_cannot_carry_receiver(f, receiver, items)
+}
+
 /// B-2026-09-04-30 — does `f`'s body BIND A PART OF `self` OUT: a `let` (or
 /// `let…else`) initialized from `self` or a `self`-rooted place, or a
 /// `match` / `if let` / `while let` whose scrutinee is one?

@@ -602,6 +602,17 @@ impl<'a> super::Interpreter<'a> {
                                     .is_some_and(|f| {
                                         crate::ast::fn_rebinds_self_whole(f)
                                             || crate::ast::fn_conditionally_rebinds_self(f)
+                                            // B-2026-09-16-22 — ...and an enum
+                                            // receiver the callee may hand
+                                            // back through its return: the
+                                            // callee frame owns it for the
+                                            // whole call (adopted below).
+                                            || (matches!(obj, Value::EnumVariant { .. })
+                                                && crate::ast::owned_self_callee_owns_receiver_via_return(
+                                                    f,
+                                                    &type_name,
+                                                    &self.program.items,
+                                                ))
                                     })
                                 {
                                     self.moved_out_user_drop_bindings.insert(recv_name.clone());
@@ -737,7 +748,18 @@ impl<'a> super::Interpreter<'a> {
                     Some(crate::ast::SelfParam::Owned)
                 ) && self
                     .find_impl_method_ast(&type_name, method)
-                    .is_some_and(crate::ast::fn_conditionally_rebinds_self);
+                    .is_some_and(|f| {
+                        crate::ast::fn_conditionally_rebinds_self(f)
+                            // B-2026-09-16-22 — the caller stood an enum
+                            // receiver down for a return that can carry it;
+                            // this frame drops it on the paths that do not.
+                            || (matches!(obj, Value::EnumVariant { .. })
+                                && crate::ast::owned_self_callee_owns_receiver_via_return(
+                                    f,
+                                    &type_name,
+                                    &self.program.items,
+                                ))
+                    });
                 if adopts_self_body {
                     param_drop_names.push("self".to_string());
                 }
@@ -865,7 +887,18 @@ impl<'a> super::Interpreter<'a> {
                 // nothing out it ran a payload body the compiled backends do
                 // not run at all. Placed AFTER the isolation above so the mark
                 // belongs to this frame and is restored with it.
-                if adopts_self_body && matches!(obj, Value::EnumVariant { .. }) {
+                //
+                // B-2026-09-16-22 — NOT for a receiver adopted because the
+                // return can carry it: that callee has no arm channel, and the
+                // caller stood its payload walk down too, so this frame is the
+                // payload's only owner on the paths that do not hand `self`
+                // back. Marking it here lost the payload body (`mb-new dE dE`).
+                if adopts_self_body
+                    && matches!(obj, Value::EnumVariant { .. })
+                    && self
+                        .find_impl_method_ast(&type_name, method)
+                        .is_some_and(crate::ast::fn_conditionally_rebinds_self)
+                {
                     self.moved_out_container_bodies_bindings
                         .insert("self".to_string());
                 }

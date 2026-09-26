@@ -7712,6 +7712,18 @@ impl<'ctx> super::Codegen<'ctx> {
                         .find_impl_method_ast(&receiver_type, method)
                         .is_some_and(|f| {
                             crate::ast::fn_rebinds_self_whole(f)
+                                // B-2026-09-16-22 — ...and an ENUM receiver the
+                                // callee may hand back through its return: the
+                                // callee frame runs its bodies on the paths
+                                // that do not (`compile_function`).
+                                || (self.type_decls.enum_layouts.contains_key(&receiver_type)
+                                    && self.program_snapshot.as_deref().is_some_and(|p| {
+                                        crate::ast::owned_self_callee_owns_receiver_via_return(
+                                            f,
+                                            &receiver_type,
+                                            &p.items,
+                                        )
+                                    }))
                                 // B-2026-09-06-45 — the NESTED spelling stands
                                 // the caller down too, now that the callee
                                 // frame carries the body on the paths that do

@@ -3952,3 +3952,63 @@ fn main() {
         48,
     );
 }
+
+/// B-2026-09-16-22 — an owned enum receiver whose method can hand it back
+/// through the return (`-> E`, `-> W { e: E }`, `-> Option[E]`) runs each
+/// `Drop` body once, whether the method returns `self` or builds something
+/// else. Before the fix the caller kept the receiver's shell body and dropped
+/// its payload walk, so `a.ret_self()` ran the shell twice (`dE dR1 dE`) and
+/// `a.swap()` lost the payload body (`sw dE dE`). The callee now owns the
+/// receiver and runs its bodies on the paths that do not return it.
+#[test]
+fn asan_owned_enum_receiver_handed_back_through_the_return_is_freed_once() {
+    let round: &[&str] = &[
+        "dE", "dR1", "k1", "dE", "dR2", "k2", "dE", "dR3", "k3", "dE", "k4", "sw", "dE", "dR5",
+        "dE", "k5", "mb", "dE", "dR6", "dE", "k6", "dE", "dR7", "k7", "sw", "dE", "dR8", "dE",
+        "k8", "mb", "dE", "dR9", "dE", "k9", "sw", "dR10", "k10", "mb", "dR11", "k11", "dR12",
+        "k12", "done",
+    ];
+    let expected: Vec<&str> = round.iter().chain(round.iter()).copied().collect();
+    assert_clean_asan_run(
+        r#"struct R { id: i64, tag: String, xs: Vec[i64] }
+impl Drop for R { fn drop(mut ref self) { println(f"dR{self.id}") } }
+fn mk(n: i64) -> R { return R { id: n, tag: f"tag-aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa{n}", xs: [n, n] } }
+enum E { A(R), B }
+impl Drop for E { fn drop(mut ref self) { println("dE") } }
+struct W { e: E }
+impl E {
+    fn ret_self(self) -> E { return self }
+    fn wrap(self) -> W { return W { e: self } }
+    fn opt(self) -> Option[E] { return Some(self) }
+    fn swap(self) -> E { println("sw"); return E.B }
+    fn maybe(self, c: bool) -> E { if c { return self } println("mb"); return E.B }
+}
+enum P { A(R), B }
+impl P {
+    fn swap(self) -> P { println("sw"); return P.B }
+    fn maybe(self, c: bool) -> P { if c { return self } println("mb"); return P.B }
+}
+fn round() {
+    { let a: E = E.A(mk(1)); let b: E = a.ret_self(); println("k1") }
+    { let a: E = E.A(mk(2)); let w: W = a.wrap(); println("k2") }
+    { let a: E = E.A(mk(3)); let o: Option[E] = a.opt(); println("k3") }
+    { let a: E = E.B; let b: E = a.ret_self(); println("k4") }
+    { let a: E = E.A(mk(5)); let b: E = a.swap(); println("k5") }
+    { let a: E = E.A(mk(6)); let b: E = a.maybe(false); println("k6") }
+    { let a: E = E.A(mk(7)); let b: E = a.maybe(true); println("k7") }
+    { let b: E = E.A(mk(8)).swap(); println("k8") }
+    { let b: E = E.A(mk(9)).maybe(false); println("k9") }
+    { let a: P = P.A(mk(10)); let b: P = a.swap(); println("k10") }
+    { let a: P = P.A(mk(11)); let b: P = a.maybe(false); println("k11") }
+    { let b: P = P.A(mk(12)).maybe(true); println("k12") }
+    println("done")
+}
+fn main() {
+    round()
+    round()
+}
+"#,
+        &expected,
+        "asan_owned_enum_receiver_handed_back_through_the_return_is_freed_once",
+    );
+}

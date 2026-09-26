@@ -8140,6 +8140,9 @@ impl<'a> super::Interpreter<'a> {
     pub(crate) fn collect_aggregate_literal_sources(e: &Expr, out: &mut Vec<String>) {
         match &e.kind {
             ExprKind::Identifier(n) => out.push(n.clone()),
+            // B-2026-09-16-22 — a bare `self` is the receiver's binding, which
+            // a callee that owns its receiver adopts under the name `self`.
+            ExprKind::SelfValue => out.push("self".to_string()),
             ExprKind::StructLiteral { fields, .. } => {
                 for f in fields {
                     Self::collect_aggregate_literal_sources(&f.value, out);

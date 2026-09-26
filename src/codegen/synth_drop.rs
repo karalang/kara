@@ -9554,6 +9554,50 @@ impl<'ctx> super::Codegen<'ctx> {
         Some(wrapper)
     }
 
+    /// B-2026-09-16-22 — `karac_dropbo_enum_<E>`: a value enum's BODIES and
+    /// nothing else — its own `Drop` body when it has one, then the live
+    /// variant's payload bodies — with no memory freed.
+    ///
+    /// For an owned `self` receiver the CALLEE adopts because its return can
+    /// carry the receiver (`crate::ast::owned_self_callee_owns_receiver_via_return`).
+    /// The caller has stood down on bodies for the whole call and kept its
+    /// memory action, so the adopted action must free nothing. It runs both
+    /// halves, unlike the conditional-rebind adoption beside it, which takes
+    /// the shell alone because an arm channel claims the payload there; this
+    /// shape has no arm, so nothing else would run the payload's body.
+    /// `None` when neither half exists.
+    pub(super) fn emit_enum_bodies_only_fn(
+        &mut self,
+        enum_name: &str,
+    ) -> Option<FunctionValue<'ctx>> {
+        let fn_name = format!("karac_dropbo_enum_{enum_name}");
+        if let Some(f) = self.module.get_function(&fn_name) {
+            return Some(f);
+        }
+        let shell = self.module.get_function(&format!("{enum_name}.drop"));
+        let payload = self.emit_enum_payload_user_drop_bodies_fn(enum_name);
+        if shell.is_none() && payload.is_none() {
+            return None;
+        }
+        let ptr_ty = self.context.ptr_type(AddressSpace::default());
+        let saved_bb = self.builder.get_insert_block();
+        let wrapper_ty = self.context.void_type().fn_type(&[ptr_ty.into()], false);
+        let wrapper = self
+            .module
+            .add_function(&fn_name, wrapper_ty, Some(Linkage::Internal));
+        let entry_bb = self.context.append_basic_block(wrapper, "entry");
+        self.builder.position_at_end(entry_bb);
+        let self_ptr = wrapper.get_nth_param(0).unwrap().into_pointer_value();
+        for f in [shell, payload].into_iter().flatten() {
+            self.builder.build_call(f, &[self_ptr.into()], "").unwrap();
+        }
+        self.builder.build_return(None).unwrap();
+        if let Some(bb) = saved_bb {
+            self.builder.position_at_end(bb);
+        }
+        Some(wrapper)
+    }
+
     /// B-2026-08-28-21 — the PARTIAL-mask sibling of
     /// [`Self::emit_user_drop_wrapper_without_field_bodies`]: an own-`Drop`
     /// parent whose caller-side temp must skip the bodies of the fields the
