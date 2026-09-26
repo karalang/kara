@@ -7671,3 +7671,151 @@ fn gtwo[T](x: T, y: T) -> i64 { 4 }
         }
     }
 }
+
+/// B-2026-09-26-48 — a NAMED local handed by value to a GENERIC callee that
+/// keeps it (stores it into a `mut ref` container, directly or one call
+/// further, or into its receiver) runs its `Drop` body once, from the value's
+/// new home. Before the fix the compiled surfaces also ran it at the call,
+/// because `compile_generic_call` never ported `compile_call`'s retraction of
+/// the binding's own body; a generic METHOD additionally read its escape
+/// predicates one parameter off, past the receiver, and retracted the wrong
+/// argument's element bodies. The interpreter was already right. Every cell
+/// was checked `--interp` / JIT / `-O2` seq / `-O2` par byte-identical and
+/// valgrind-clean at `-O0`.
+#[test]
+fn e2e_named_local_into_a_keeping_generic_callee_runs_its_body_once() {
+    const H: &str = r#"struct D { id: i64, name: String }
+impl Drop for D { fn drop(mut ref self) { println(f"dD{self.id}{self.name}") } }
+fn mkd(n: i64) -> D { return D { id: n, name: f"n{n}" }; }
+struct W { r: D, s: D, b: i64 }
+fn mkw(n: i64) -> W { return W { r: mkd(n), s: mkd(n + 100), b: n }; }
+struct G[T] { v: T, k: i64 }
+fn gst[T](v: mut ref Vec[T], x: T) { v.push(x); }
+fn gst2[T](v: mut ref Vec[T], x: T) { gst(v, x); }
+fn gid[T](x: T) -> T { x }
+fn gn[T](x: T) -> i64 { 1 }
+fn gwrap[T](x: T) -> G[T] { return G { v: x, k: 1 }; }
+fn gcs[T](v: mut ref Vec[T], x: T, c: bool) { if c { v.push(x); } }
+fn gloc[T](x: T) -> i64 { let mut u: Vec[T] = Vec.new(); u.push(x); u.len() }
+struct Bag[T] { items: Vec[T] }
+impl[T] Bag[T] { fn add(mut ref self, x: T) { self.items.push(x); } }
+struct Sk { id: i64 }
+impl Drop for Sk { fn drop(mut ref self) { println(f"dSk{self.id}") } }
+impl Sk { fn hold[T](ref self, v: mut ref Vec[T], x: T) { v.push(x); } fn hk[T](self, x: T) -> T { x } }
+fn gr[T](x: ref T) -> i64 { 1 }
+fn gpick[T](x: T, y: T, c: bool) -> T { if c { x } else { y } }
+"#;
+    for (label, body, want) in [
+        (
+            "named local into a generic storing fn (B-2026-09-26-48)",
+            "let mut v: Vec[D] = Vec.new(); let d = mkd(7); gst(mut v, d); println(f\"l{v.len()}\");",
+            "l1\ndD7n7\nend\n",
+        ),
+        (
+            "named local into a generic fn that stores it one call further (B-2026-09-26-48)",
+            "let mut v: Vec[D] = Vec.new(); let d = mkd(7); gst2(mut v, d); println(f\"l{v.len()}\");",
+            "l1\ndD7n7\nend\n",
+        ),
+        (
+            "named local into a generic storing fn, in a loop (B-2026-09-26-48)",
+            "let mut v: Vec[D] = Vec.new(); for i in 0..2 { let d = mkd(i); gst(mut v, d); } println(f\"l{v.len()}\");",
+            "l2\ndD0n0\ndD1n1\nend\n",
+        ),
+        (
+            "named local into a generic method that stores it (B-2026-09-26-48)",
+            "let mut b: Bag[D] = Bag { items: Vec.new() }; let d = mkd(7); b.add(d); println(f\"l{b.items.len()}\");",
+            "l1\ndD7n7\nend\n",
+        ),
+        (
+            "named local into a generic conditional store, taken (B-2026-09-26-48)",
+            "let mut v: Vec[D] = Vec.new(); let d = mkd(7); gcs(mut v, d, true); println(f\"l{v.len()}\");",
+            "l1\ndD7n7\nend\n",
+        ),
+        (
+            "named local into a generic conditional store, not taken (B-2026-09-26-48)",
+            "let mut v: Vec[D] = Vec.new(); let d = mkd(7); gcs(mut v, d, false); println(f\"l{v.len()}\");",
+            "dD7n7\nl0\nend\n",
+        ),
+        (
+            "two named locals stored in turn (B-2026-09-26-48)",
+            "let mut v: Vec[D] = Vec.new(); let d = mkd(7); gst(mut v, d); println(f\"l{v.len()}\"); let e = mkd(8); gst(mut v, e); println(f\"l{v.len()}\");",
+            "l1\nl2\ndD7n7\ndD8n8\nend\n",
+        ),
+        (
+            "generic method of a Drop receiver storing into a mut ref Vec (B-2026-09-26-48)",
+            "let mut v: Vec[D] = Vec.new(); let sk = Sk { id: 1 }; let d = mkd(7); sk.hold(mut v, d); println(f\"l{v.len()}\");",
+            "dSk1\nl1\ndD7n7\nend\n",
+        ),
+        (
+            "generic method storing two named locals (B-2026-09-26-48)",
+            "let mut b: Bag[D] = Bag { items: Vec.new() }; let d = mkd(7); let e = mkd(8); b.add(d); b.add(e); println(f\"l{b.items.len()}\");",
+            "l2\ndD7n7\ndD8n8\nend\n",
+        ),
+        (
+            "generic method storing a named Vec (B-2026-09-26-48)",
+            "let mut vv: Vec[Vec[D]] = Vec.new(); let sk = Sk { id: 1 }; let xs: Vec[D] = [mkd(7)]; sk.hold(mut vv, xs); println(f\"l{vv.len()}\");",
+            "dSk1\nl1\ndD7n7\nend\n",
+        ),
+        (
+            "generic impl method storing a named Vec (B-2026-09-26-48)",
+            "let mut b: Bag[Vec[D]] = Bag { items: Vec.new() }; let xs: Vec[D] = [mkd(7)]; b.add(xs); println(f\"l{b.items.len()}\");",
+            "l1\ndD7n7\nend\n",
+        ),
+        (
+            "control: generic hand-back (B-2026-09-26-48)",
+            "let d = mkd(7); let k = gid(d); println(f\"k{k.id}\");",
+            "k7\ndD7n7\nend\n",
+        ),
+        (
+            "control: generic reader (B-2026-09-26-48)",
+            "let d = mkd(7); println(f\"g{gn(d)}\");",
+            "g1\ndD7n7\nend\n",
+        ),
+        (
+            "control: generic wrap (B-2026-09-26-48)",
+            "let d = mkd(7); let g = gwrap(d); println(f\"k{g.k}\");",
+            "k1\ndD7n7\nend\n",
+        ),
+        (
+            "control: generic fn's local container (B-2026-09-26-48)",
+            "let d = mkd(7); println(f\"g{gloc(d)}\");",
+            "dD7n7\ng1\nend\n",
+        ),
+        (
+            "control: String into a generic storing fn (B-2026-09-26-48)",
+            "let mut v: Vec[String] = Vec.new(); let s = f\"abc\"; gst(mut v, s); println(f\"l{v.len()} {v[0]}\");",
+            "l1 abc\nend\n",
+        ),
+        (
+            "control: generic ref param (B-2026-09-26-48)",
+            "let d = mkd(7); println(f\"g{gr(d)}\");",
+            "g1\ndD7n7\nend\n",
+        ),
+        (
+            "control: generic conditional pick (B-2026-09-26-48)",
+            "let a = mkd(1); let b = mkd(2); let k = gpick(a, b, true); println(f\"k{k.id}\");",
+            "dD2n2\nk1\ndD1n1\nend\n",
+        ),
+        (
+            "control: generic method hand-back (B-2026-09-26-48)",
+            "let sk = Sk { id: 1 }; let d = mkd(7); let k = sk.hk(d); println(f\"k{k.id}\");",
+            "dSk1\nk7\ndD7n7\nend\n",
+        ),
+        (
+            "control: named Vec into a generic storing fn (B-2026-09-26-48)",
+            "let mut vv: Vec[Vec[D]] = Vec.new(); let xs: Vec[D] = [mkd(7)]; gst(mut vv, xs); println(f\"l{vv.len()}\");",
+            "l1\ndD7n7\nend\n",
+        ),
+    ] {
+        let prog = format!("{H}fn main() {{\n    {body}\n    println(\"end\")\n}}\n");
+        let (interp_out, interp_errs, _, _) = karac::run_program_full_checked(&prog);
+        assert!(
+            interp_errs.is_empty(),
+            "[{label}] interp errored: {interp_errs:?}"
+        );
+        assert_eq!(interp_out.join(""), want, "[{label}] interpreter");
+        if let Some(aot) = run_program(&prog) {
+            assert_eq!(aot, want, "[{label}] AOT");
+        }
+    }
+}

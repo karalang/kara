@@ -3827,3 +3827,64 @@ fn main() {
         "asan_vec_in_option_or_map_field_is_freed_once",
     );
 }
+
+/// B-2026-09-26-48 — a NAMED local handed by value to a GENERIC callee that
+/// stores it (directly, one call further, conditionally, into a generic
+/// method's receiver, or through a generic method of a concrete type) is
+/// freed once and runs its body once. The monomorph deep-copies at the
+/// retaining site, so the caller keeps and frees the original's buffer while
+/// the stored copy runs the body. The names are longer than the inline string
+/// capacity so each body frees a heap buffer.
+#[test]
+fn asan_named_local_into_a_keeping_generic_callee_is_freed_once() {
+    assert_clean_asan_run_min_allocs(
+        r#"struct D { id: i64, name: String }
+impl Drop for D { fn drop(mut ref self) { println(f"dD{self.id} {self.name}") } }
+fn mkd(n: i64) -> D { return D { id: n, name: f"name-string-longer-than-sso-{n}" }; }
+fn gst[T](v: mut ref Vec[T], x: T) { v.push(x); }
+fn gst2[T](v: mut ref Vec[T], x: T) { gst(v, x); }
+fn gcs[T](v: mut ref Vec[T], x: T, c: bool) { if c { v.push(x); } }
+struct Bag[T] { items: Vec[T] }
+impl[T] Bag[T] { fn add(mut ref self, x: T) { self.items.push(x); } }
+struct Sk { id: i64 }
+impl Sk { fn hold[T](ref self, v: mut ref Vec[T], x: T) { v.push(x); } }
+fn main() {
+    let mut v: Vec[D] = Vec.new();
+    let a = mkd(1);
+    gst(mut v, a);
+    let b = mkd(2);
+    gst2(mut v, b);
+    let c = mkd(3);
+    gcs(mut v, c, true);
+    let d = mkd(4);
+    gcs(mut v, d, false);
+    println(f"v{v.len()}");
+    let mut g: Bag[D] = Bag { items: Vec.new() };
+    let e = mkd(5);
+    g.add(e);
+    println(f"g{g.items.len()}");
+    let sk = Sk { id: 1 };
+    let mut vv: Vec[Vec[D]] = Vec.new();
+    let xs: Vec[D] = [mkd(6), mkd(7)];
+    sk.hold(mut vv, xs);
+    println(f"w{vv.len()}");
+    println("end")
+}
+"#,
+        &[
+            "dD4 name-string-longer-than-sso-4",
+            "v3",
+            "dD1 name-string-longer-than-sso-1",
+            "dD2 name-string-longer-than-sso-2",
+            "dD3 name-string-longer-than-sso-3",
+            "g1",
+            "dD5 name-string-longer-than-sso-5",
+            "w1",
+            "dD6 name-string-longer-than-sso-6",
+            "dD7 name-string-longer-than-sso-7",
+            "end",
+        ],
+        "asan_named_local_into_a_keeping_generic_callee_is_freed_once",
+        27,
+    );
+}

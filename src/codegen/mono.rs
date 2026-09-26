@@ -2514,12 +2514,34 @@ impl<'ctx> super::Codegen<'ctx> {
             // variants masked (B-2026-09-05-35). Conservative-true on a
             // mixed-path callee, which is that gate's documented trade —
             // leak-of-side-effect on the dies-inside leg, never a double body.
-            if !self.borrowed_arg_skip(name, i) {
-                let payload_escape = self.callee_enum_arg_payload_escape(name, i);
-                let whole_escape = self.call_arg_flows_into_return(name, i)
-                    || self.callee_hands_arg_off(name, i)
-                    || self.call_arg_moves_into_outliving_place(name, i, false)
-                    || self.callee_always_hands_arg_back_via_call(name, i);
+            //
+            // B-2026-09-26-48 — at `ast_i`, not `i`. This loop's `args` carry a
+            // generic METHOD's receiver while `find_function_ast` hands the
+            // predicates below the raw AST method, whose `params` exclude it
+            // (the convention the `handed_off` test further down documents).
+            // Read at `i`, `sk.hold(mut v, d)` over `fn hold[T](ref self, v:
+            // mut ref Vec[T], x: T) { v.push(x) }` asked whether `x` escapes
+            // at `v`'s position and retracted `v`'s element bodies, so the
+            // Vec never ran the pushed value's body. A stdlib callee resolves
+            // to nothing there and keeps `i`, which lines up with its
+            // receiver-inclusive desugaring.
+            let ast_i = self
+                .program_snapshot
+                .as_deref()
+                .and_then(|p| super::declarations::find_function_ast(p, name))
+                .map_or(Some(i), |f| {
+                    if f.self_param.is_some() {
+                        i.checked_sub(1)
+                    } else {
+                        Some(i)
+                    }
+                });
+            if let Some(ai) = ast_i.filter(|_| !self.borrowed_arg_skip(name, i)) {
+                let payload_escape = self.callee_enum_arg_payload_escape(name, ai);
+                let whole_escape = self.call_arg_flows_into_return(name, ai)
+                    || self.callee_hands_arg_off(name, ai)
+                    || self.call_arg_moves_into_outliving_place(name, ai, false)
+                    || self.callee_always_hands_arg_back_via_call(name, ai);
                 if whole_escape || payload_escape.is_some() {
                     if let ExprKind::Identifier(var_name) = &a.value.kind {
                         let var_name = var_name.clone();
@@ -2530,6 +2552,35 @@ impl<'ctx> super::Codegen<'ctx> {
                             }
                             _ => self.suppress_container_elem_bodies_for_var(&var_name),
                         }
+                    }
+                }
+            }
+            // B-2026-09-26-48 — the NAMED binding's OWN body, where the callee
+            // guarantees another frame runs it: the twin of `compile_call`'s
+            // B-2026-08-29-15 retraction, which this path never ported. `let d
+            // = mkd(7); gst(mut v, d)` over `fn gst[T](v: mut ref Vec[T], x: T)
+            // { v.push(x); }` ran `d`'s body at the call and the Vec's copy ran
+            // it again at its drain, where the fresh-temp spelling ran one. The
+            // memory stays: a monomorph's by-value param is caller-retained and
+            // the retaining site deep-copied it, so this slot still owns the
+            // original's buffer. The forwarded and per-path cases keep their
+            // `compile_call` handling and are left out here.
+            //
+            // At `ast_i` like the arm above, and for a by-value param only; the
+            // receiver itself (a borrow) is never retracted.
+            if let ExprKind::Identifier(var_name) = &a.value.kind {
+                let by_value = generic_fn
+                    .params
+                    .get(i)
+                    .is_some_and(|p| !matches!(p.ty.kind, TypeKind::Ref(_) | TypeKind::MutRef(_)));
+                if let Some(ast_i) = ast_i.filter(|_| by_value) {
+                    let var_name = var_name.clone();
+                    if self.callee_takes_over_arg_drop_body(name, ast_i)
+                        && !self.drop_rc.cond_returned_body_params.contains(&var_name)
+                        && !self.arg_var_is_forwarded_not_copied(&var_name)
+                        && !self.conditional_handback_memory_moves_to_callee(name, ast_i)
+                    {
+                        self.suppress_user_drop_body_keeping_memory(&var_name);
                     }
                 }
             }
