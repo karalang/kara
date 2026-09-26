@@ -4235,12 +4235,29 @@ impl<'ctx> super::Codegen<'ctx> {
         out
     }
 
+    /// B-2026-09-26-6 — open the level a function body's TAIL expression reads
+    /// into; see [`crate::ast::tail_ends_freshtemp_reads`]. Every statement of
+    /// the body pushes its own level above this one, so only the tail (and the
+    /// blocks nested in it) lands here. Closed by [`Self::end_freshtemp_reads`]
+    /// once the body is compiled, which is before the return's scope exit.
+    pub(super) fn begin_fn_tail_freshtemp_reads(&mut self, body: &Block) {
+        self.freshtemp_read_levels
+            .push(super::state::FreshTempReadLevel {
+                fn_val: self.current_fn,
+                simple: body
+                    .final_expr
+                    .as_deref()
+                    .is_some_and(crate::ast::tail_ends_freshtemp_reads),
+                temps: Vec::new(),
+            });
+    }
+
     /// B-2026-09-17-36 — close the statement level `compile_stmt` opened,
     /// running each fresh temp read through a projection inside it, the
     /// last-read first. Behind the temp's flag, because the read may sit on a
     /// path this statement did not take (`let x = if c { mkw(7).b } else { 0 };`)
     /// and an early exit out of the statement may already have run it.
-    fn end_freshtemp_reads(&mut self) {
+    pub(super) fn end_freshtemp_reads(&mut self) {
         let Some(level) = self.freshtemp_read_levels.pop() else {
             return;
         };

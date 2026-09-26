@@ -2035,8 +2035,9 @@ fn e2e_fresh_temp_read_through_a_projection_runs_its_bodies() {
 /// way).
 ///
 /// The PINNED cells are tails both backends still leave alone, together: a
-/// tail nested in an `if` arm or an inner block, a projection read through
-/// (`mkw(9).r.id`), and one inside arithmetic.
+/// tail of an inner block and a projection read through (`mkw(9).r.id`). A
+/// tail nested in an `if` arm and one inside arithmetic were pinned here too
+/// until B-2026-09-26-6 gave a body's tail its own read level.
 #[test]
 fn e2e_fresh_temp_projected_in_a_function_tail_runs_its_bodies() {
     const H: &str = "struct D { id: i64, name: String }\n\
@@ -2097,9 +2098,9 @@ fn e2e_fresh_temp_projected_in_a_function_tail_runs_its_bodies() {
             "dD3n3\nx5\nend\n",
         ),
         (
-            "pinned: tail nested in an if arm",
+            "tail nested in an if arm (B-2026-09-26-6)",
             "println(f\"t{tailif(true)}\");",
-            "t9\nend\n",
+            "dD109n109\ndD9n9\nt9\nend\n",
         ),
         (
             "pinned: tail read through a projection",
@@ -2107,9 +2108,9 @@ fn e2e_fresh_temp_projected_in_a_function_tail_runs_its_bodies() {
             "t9\nend\n",
         ),
         (
-            "pinned: tail inside arithmetic",
+            "tail inside arithmetic (B-2026-09-26-6)",
             "println(f\"t{tailadd()}\");",
-            "t10\nend\n",
+            "dD109n109\ndD9n9\nt10\nend\n",
         ),
         (
             "pinned: tail of an inner block",
@@ -2323,8 +2324,8 @@ fn e2e_scalar_taken_off_a_fresh_temp_runs_its_types_own_drop() {
 /// its last temp, after later arguments' side effects. Codegen has consumed
 /// at the site since B-2026-08-31-34.
 ///
-/// The two PINNED cells are a tail that READS through the temp without
-/// consuming it, which runs no body on any surface (B-2026-09-26-6).
+/// The last two cells are a tail that READS through the temp without
+/// consuming it, which ran no body on any surface until B-2026-09-26-6.
 #[test]
 fn e2e_fresh_temp_projection_consumed_at_its_aggregate_site() {
     const H: &str = "struct D { id: i64, name: String }\n\
@@ -2425,14 +2426,14 @@ fn e2e_fresh_temp_projection_consumed_at_its_aggregate_site() {
             "dD101\ndD1\ndD102\ndD2\nt12\nend\n",
         ),
         (
-            "pinned: a tail that reads through the temp",
+            "a tail that reads through the temp (B-2026-09-26-6)",
             "println(f\"t{p1()}\");",
-            "t9\nend\n",
+            "dD109\ndD9\nt9\nend\n",
         ),
         (
-            "pinned: a tail that hands the read to a call",
+            "a tail that hands the read to a call (B-2026-09-26-6)",
             "println(f\"t{p2()}\");",
-            "t9\nend\n",
+            "dD109\ndD9\nt9\nend\n",
         ),
     ] {
         let prog = format!("{H}fn main() {{\n    {body}\n    println(\"end\")\n}}\n");
@@ -2512,6 +2513,141 @@ fn e2e_field_read_off_a_fresh_shared_temp_runs_its_drop() {
             "control: the named spelling",
             "let s = mksh(11); println(f\"s{s.k}\");",
             "s11\ndSh11nm11\ndD11\nend\n",
+        ),
+    ] {
+        let prog = format!("{H}fn main() {{\n    {body}\n    println(\"end\")\n}}\n");
+        let (interp_out, interp_errs, _, _) = karac::run_program_full_checked(&prog);
+        assert!(
+            interp_errs.is_empty(),
+            "[{label}] interp errored: {interp_errs:?}"
+        );
+        assert_eq!(interp_out.join(""), want, "[{label}] interpreter");
+        if let Some(aot) = run_program(&prog) {
+            assert_eq!(aot, want, "[{label}] AOT");
+        }
+    }
+}
+
+/// B-2026-09-26-6 — a function body's TAIL expression is a statement end for
+/// the fresh temps read inside it, on both backends: `fn p1() -> i64 {
+/// mkw(1).b + 0 }` ran none of the temp's bodies on any surface, where
+/// `let k = mkw(1).b + 0;` runs them at the `let`'s end. Both backends now open
+/// one read level around a body's tail (the shapes
+/// `ast::tail_ends_freshtemp_reads` admits, branch tails included) and close
+/// it once the value exists, before the body's scope exit. The control is the
+/// bare projection tail, which is consumed instead (B-2026-09-25-42).
+#[test]
+fn e2e_fresh_temp_read_in_a_function_tail_runs_its_bodies() {
+    const H: &str = "struct D { id: i64, name: String }\n\
+             impl Drop for D { fn drop(mut ref self) { println(f\"dD{self.id}\") } }\n\
+             fn mkd(n: i64) -> D { return D { id: n, name: f\"n{n}\" }; }\n\
+             struct W { r: D, s: D, b: i64 }\n\
+             fn mkw(n: i64) -> W { return W { r: mkd(n), s: mkd(n + 100), b: n }; }\n\
+             fn id(x: i64) -> i64 { x }\n\
+             fn say(n: i64) -> i64 { println(f\"say{n}\"); n }\n\
+             fn p1() -> i64 { mkw(1).b + 0 }\n\
+             fn p2() -> i64 { id(mkw(2).b) }\n\
+             fn p3(k: i64) -> i64 { match k { 0 => mkw(3).b, _ => 1 } }\n\
+             fn p4() -> i64 { let d = mkd(40); mkw(4).b + d.id }\n\
+             fn p5() -> i64 { -mkw(5).b }\n\
+             fn p6() -> i64 { mkw(6).r.id * 2 }\n\
+             fn p7() -> i64 { mkw(7).r.id + say(70) }\n\
+             fn p8(c: bool) -> Result[i64, String] { let x: Result[i64, String] = if c { Err(f\"e\") } else { Ok(1) }; Ok(x? + mkw(8).b) }\n\
+             fn p9() -> i64 { return mkw(9).b + 0 }\n\
+             fn p10(n: i64) -> i64 { if n == 0 { 0 } else { mkw(n).b + p10(n - 1) } }\n\
+             struct M { k: i64 }\n\
+             impl M { fn m1(ref self) -> i64 { mkw(11).b + self.k } }\n\
+             fn g1[T](t: T) -> i64 { mkw(12).b + 0 }\n\
+             fn p13() -> i64 { mkw(13).b }\n\
+             fn q3(c: bool) -> i64 { if c { mkw(23).b } else { 1 } }\n\
+             fn q5(c: bool) -> i64 { if c { let z = mkw(25).b; z + 1 } else { 0 } }\n\
+             fn q6(o: Option[i64]) -> i64 { if let Some(v) = o { mkw(26).b + v } else { 0 } }\n\
+             fn q7(c: bool) -> i64 { if c { return mkw(27).b; } else { mkw(28).b + 0 } }\n";
+    for (label, body, want) in [
+        (
+            "binary operator",
+            "println(f\"t{p1()}\");",
+            "dD101\ndD1\nt1\nend\n",
+        ),
+        (
+            "call argument",
+            "println(f\"t{p2()}\");",
+            "dD102\ndD2\nt2\nend\n",
+        ),
+        (
+            "match arm",
+            "println(f\"t{p3(0)}\");",
+            "dD103\ndD3\nt3\nend\n",
+        ),
+        (
+            "beside a local with its own body",
+            "println(f\"t{p4()}\");",
+            "dD104\ndD4\ndD40\nt44\nend\n",
+        ),
+        (
+            "unary operator",
+            "println(f\"t{p5()}\");",
+            "dD105\ndD5\nt-5\nend\n",
+        ),
+        (
+            "read through a Drop-bearing field",
+            "println(f\"t{p6()}\");",
+            "dD106\ndD6\nt12\nend\n",
+        ),
+        (
+            "before a later operand's side effect",
+            "println(f\"t{p7()}\");",
+            "say70\ndD107\ndD7\nt77\nend\n",
+        ),
+        (
+            "after a `?` that did not leave",
+            "println(f\"t{p8(false).unwrap()}\");",
+            "dD108\ndD8\nt9\nend\n",
+        ),
+        (
+            "a tail `return`",
+            "println(f\"t{p9()}\");",
+            "dD109\ndD9\nt9\nend\n",
+        ),
+        (
+            "recursion through an if arm",
+            "println(f\"t{p10(2)}\");",
+            "dD101\ndD1\ndD102\ndD2\nt3\nend\n",
+        ),
+        (
+            "method body",
+            "let m = M { k: 1 }; println(f\"t{m.m1()}\");",
+            "dD111\ndD11\nt12\nend\n",
+        ),
+        (
+            "generic function body",
+            "println(f\"t{g1(5)}\");",
+            "dD112\ndD12\nt12\nend\n",
+        ),
+        (
+            "if arm, bare projection",
+            "println(f\"t{q3(true)}\");",
+            "dD123\ndD23\nt23\nend\n",
+        ),
+        (
+            "if arm with a statement first",
+            "println(f\"t{q5(true)}\");",
+            "dD125\ndD25\nt26\nend\n",
+        ),
+        (
+            "if-let arm",
+            "println(f\"t{q6(Some(1))}\");",
+            "dD126\ndD26\nt27\nend\n",
+        ),
+        (
+            "both exits of one function",
+            "println(f\"t{q7(true)}{q7(false)}\");",
+            "dD127\ndD27\ndD128\ndD28\nt2728\nend\n",
+        ),
+        (
+            "control: a bare projection tail",
+            "println(f\"t{p13()}\");",
+            "dD113\ndD13\nt13\nend\n",
         ),
     ] {
         let prog = format!("{H}fn main() {{\n    {body}\n    println(\"end\")\n}}\n");

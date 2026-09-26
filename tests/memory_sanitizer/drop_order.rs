@@ -3038,3 +3038,70 @@ fn main() {
         12,
     );
 }
+
+/// B-2026-09-26-6 — a fresh temp read inside a function body's tail
+/// expression runs its `Drop` bodies once, when the tail's value exists and
+/// before the body's scope exit, in a binary operator, a call argument, a
+/// `match` arm, beside a local, through a `Drop`-bearing field, through
+/// recursion in an `if` arm and in a method body. Every body reads a heap
+/// `String` longer than the inline capacity, so a body run over freed memory
+/// or twice is an ASAN report.
+#[test]
+fn asan_fresh_temp_read_in_a_function_tail_runs_its_bodies_once() {
+    assert_clean_asan_run_min_allocs(
+        r#"struct D { id: i64, name: String }
+impl Drop for D { fn drop(mut ref self) { println(f"dD{self.id} {self.name}") } }
+fn mkd(n: i64) -> D { return D { id: n, name: f"name-string-longer-than-sso-{n}" }; }
+struct W { r: D, s: D, b: i64 }
+fn mkw(n: i64) -> W { return W { r: mkd(n), s: mkd(n + 100), b: n }; }
+fn id(x: i64) -> i64 { x }
+fn p1() -> i64 { mkw(1).b + 0 }
+fn p2() -> i64 { id(mkw(2).b) }
+fn p3(k: i64) -> i64 { match k { 0 => mkw(3).b, _ => 1 } }
+fn p4() -> i64 { let d = mkd(40); mkw(4).b + d.id }
+fn p5() -> i64 { mkw(5).r.id * 2 }
+fn p6(n: i64) -> i64 { if n == 5 { 0 } else { mkw(n).b + p6(n - 1) } }
+struct M { k: i64 }
+impl M { fn m1(ref self) -> i64 { mkw(8).b + self.k } }
+fn main() {
+    println(f"a{p1()}");
+    println(f"b{p2()}");
+    println(f"c{p3(0)}");
+    println(f"d{p4()}");
+    println(f"e{p5()}");
+    println(f"f{p6(7)}");
+    let m = M { k: 1 }; println(f"g{m.m1()}");
+    println("end")
+}
+"#,
+        &[
+            "dD101 name-string-longer-than-sso-101",
+            "dD1 name-string-longer-than-sso-1",
+            "a1",
+            "dD102 name-string-longer-than-sso-102",
+            "dD2 name-string-longer-than-sso-2",
+            "b2",
+            "dD103 name-string-longer-than-sso-103",
+            "dD3 name-string-longer-than-sso-3",
+            "c3",
+            "dD104 name-string-longer-than-sso-104",
+            "dD4 name-string-longer-than-sso-4",
+            "dD40 name-string-longer-than-sso-40",
+            "d44",
+            "dD105 name-string-longer-than-sso-105",
+            "dD5 name-string-longer-than-sso-5",
+            "e10",
+            "dD106 name-string-longer-than-sso-106",
+            "dD6 name-string-longer-than-sso-6",
+            "dD107 name-string-longer-than-sso-107",
+            "dD7 name-string-longer-than-sso-7",
+            "f13",
+            "dD108 name-string-longer-than-sso-108",
+            "dD8 name-string-longer-than-sso-8",
+            "g9",
+            "end",
+        ],
+        "asan_fresh_temp_read_in_a_function_tail_runs_its_bodies_once",
+        14,
+    );
+}

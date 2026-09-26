@@ -1790,6 +1790,34 @@ pub fn stmt_ends_freshtemp_reads(stmt: &Stmt) -> bool {
     }
 }
 
+/// B-2026-09-26-6 — the same rule for a function body's TAIL EXPRESSION, which
+/// is not a statement and so had no end at which a fresh temp read inside it
+/// could die: `fn p1() -> i64 { mkw(9).b + 0 }` ran none of the temp's bodies
+/// on any backend, where `let k = mkw(9).b + 0;` runs them at the `let`'s end.
+/// Both backends open one level around a body's tail when this holds and close
+/// it once the tail's value exists, before the body's own scope exit.
+///
+/// The shapes a bare-expression statement admits, plus an `if` / `if let` /
+/// `match` tail: a body's tail runs once per call, so a read in its condition,
+/// scrutinee or taken arm dies once, and a read on an arm that did not run is
+/// behind the temp's flag on both backends. The STATEMENT predicate above keeps
+/// its narrower set, so branch statements are unchanged. A bare projection tail
+/// (`mkw(9).b`) is not in the set because it is CONSUMED instead
+/// (B-2026-09-25-42), and neither is an inner block, which is left as it was.
+pub fn tail_ends_freshtemp_reads(e: &Expr) -> bool {
+    matches!(
+        &e.kind,
+        ExprKind::Call { .. }
+            | ExprKind::MethodCall { .. }
+            | ExprKind::Return(_)
+            | ExprKind::Binary { .. }
+            | ExprKind::Unary { .. }
+            | ExprKind::If { .. }
+            | ExprKind::IfLet { .. }
+            | ExprKind::Match { .. }
+    )
+}
+
 /// B-2026-09-17-36 — whether `object`, the receiver of a field projection,
 /// produces a value nothing else owns, so its `Drop` bodies are owed when the
 /// enclosing statement ends. A free-function or method CALL, minus the accessor

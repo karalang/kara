@@ -4378,7 +4378,10 @@ impl<'ctx> super::Codegen<'ctx> {
             func.body.final_expr.as_deref(),
             func.return_type.as_ref(),
         );
-        let mut result = self.compile_function_body(&func.body)?;
+        self.begin_fn_tail_freshtemp_reads(&func.body);
+        let body_result = self.compile_function_body(&func.body);
+        self.end_freshtemp_reads();
+        let mut result = body_result?;
         self.restore_declared_aggregate_te(saved_agg_te);
         self.fn_ctx.tail_ret_inner = None;
 

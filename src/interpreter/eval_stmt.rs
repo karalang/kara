@@ -507,7 +507,26 @@ impl<'a> super::Interpreter<'a> {
             // the value alone. Inert unless the typechecker recorded THIS span
             // as an integer landing in a float slot, so it is a no-op for every
             // block that is not one.
+            // B-2026-09-26-6 — a function body's tail is a statement end for
+            // the fresh temps read inside it, on both backends (codegen's
+            // `begin_fn_tail_freshtemp_reads`); see
+            // [`crate::ast::tail_ends_freshtemp_reads`]. A closure body is
+            // left out, as codegen's closure path opens no such level.
+            let tail_level = is_fn_body
+                && !(block.stmts.is_empty()
+                    && block.span.offset == expr.span.offset
+                    && block.span.length == expr.span.length);
+            if tail_level {
+                self.freshtemp_read_levels
+                    .push(crate::interpreter::FreshTempReadLevel {
+                        simple: crate::ast::tail_ends_freshtemp_reads(expr),
+                        temps: Vec::new(),
+                    });
+            }
             let v = self.eval_expr_inner(expr);
+            if tail_level {
+                self.end_freshtemp_reads();
+            }
             let v = self.coerce_float_assign_rhs(expr, v);
             if let Some(cf) = self.pending_cf.take() {
                 let path = ExitPath::classify(&cf);

@@ -5779,7 +5779,10 @@ impl<'ctx> super::Codegen<'ctx> {
             crate::codegen::borrow_elision::compute_discarded_branch_spans(&func.body),
         );
 
-        let mut result = self.compile_block(&func.body)?;
+        self.begin_fn_tail_freshtemp_reads(&func.body);
+        let body_result = self.compile_block(&func.body);
+        self.end_freshtemp_reads();
+        let mut result = body_result?;
 
         if self
             .builder
