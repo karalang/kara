@@ -1747,6 +1747,43 @@ impl<'ctx> super::Codegen<'ctx> {
             .is_some_and(crate::ast::type_expr_is_owned_scalar)
     }
 
+    /// B-2026-09-26-23 — the type a by-value argument projected off the staged
+    /// fresh temp is owned as, when that field carries a `Drop` body of its
+    /// own or in a field (`eat(mkw(7).r)` over `r: D` with `impl Drop for D`).
+    /// Those are the projections the statement-end read walk declines, because
+    /// the consumer may move them, and here it does: without an owner neither
+    /// the moved field's body nor its siblings' ran, on any surface. A field
+    /// with no body keeps today's route, where the temp frees it after the
+    /// call. Matched on the staged slot, so only the arg just compiled counts.
+    pub(super) fn freshtemp_drop_projection_arg_type(&mut self, value: &Expr) -> Option<String> {
+        let mut path: Vec<&str> = Vec::new();
+        let mut cur = value;
+        while let ExprKind::FieldAccess { object, field } = &cur.kind {
+            path.push(field.as_str());
+            cur = object;
+        }
+        path.reverse();
+        let (_, _, ch_field, span_key) = self.freshtemp_field_access_slot.clone()?;
+        if path.is_empty() || ch_field != path[0] || span_key != (cur.span.offset, cur.span.length)
+        {
+            return None;
+        }
+        let tn = self.type_name_of_expr(value)?;
+        if self.type_decls.shared_types.contains_key(tn.as_str()) {
+            return None;
+        }
+        let own_drop = self
+            .program_snapshot
+            .as_deref()
+            .is_some_and(|p| p.drop_method_keys.contains_key(&tn));
+        let is_struct = self.type_decls.struct_types.contains_key(tn.as_str());
+        let is_enum = self.type_decls.enum_layouts.contains_key(tn.as_str());
+        let bodies = own_drop
+            || (is_struct && self.field_bodies_fn_for_owned_temp(&tn).is_some())
+            || (is_enum && self.emit_enum_payload_user_drop_bodies_fn(&tn).is_some());
+        bodies.then_some(tn)
+    }
+
     /// B-2026-09-26-19 — the place a `ref` / `mut ref` argument projected off
     /// the staged fresh temp names INSIDE that temp's slot
     /// (`bor(mkq(3).name)`, `bor(mkw(9).a.name)`), or `None` when `value` is

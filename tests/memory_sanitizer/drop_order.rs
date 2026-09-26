@@ -3326,3 +3326,85 @@ fn main() {
         14,
     );
 }
+
+/// B-2026-09-26-23 — a `Drop`-bearing field projected off a fresh temp and
+/// passed by value moves into the argument: every `D` built here is dropped
+/// exactly once, the siblings at the argument and the moved field after the
+/// call. The names are longer than the inline string capacity so each body
+/// frees a heap buffer, and every free-fn / method / associated-fn / enum /
+/// two-hop / generic-root spelling in the codegen fixture is represented.
+#[test]
+fn asan_fresh_temp_drop_projection_passed_by_value_is_dropped_once() {
+    assert_clean_asan_run_min_allocs(
+        r#"struct D { id: i64, name: String }
+impl Drop for D { fn drop(mut ref self) { println(f"dD{self.id} {self.name}") } }
+fn mkd(n: i64) -> D { return D { id: n, name: f"name-string-longer-than-sso-{n}" }; }
+struct W { r: D, s: D, name: String, b: i64 }
+fn mkw(n: i64) -> W { return W { r: mkd(n), s: mkd(n + 100), name: f"w-string-longer-than-sso-{n}", b: n }; }
+fn eat(d: D) -> i64 { return d.id; }
+struct G[T] { v: T, k: i64 }
+fn wrap[T](x: T) -> G[T] { return G { v: x, k: 7 }; }
+struct H { k: i64 }
+impl H { fn take(self, d: D) -> i64 { d.id } fn tk(d: D) -> i64 { d.id } }
+enum E { A(D), B }
+struct Wx { e: E, s: D }
+fn mkwx(n: i64) -> Wx { return Wx { e: E.A(mkd(n)), s: mkd(n + 200) }; }
+fn eate(e: E) -> i64 { match e { E.A(d) => d.id, E.B => 0 } }
+struct X { w: W, t: D }
+fn mkx(n: i64) -> X { return X { w: mkw(n), t: mkd(n + 300) }; }
+fn two(a: D, b: D) -> i64 { a.id + b.id }
+fn eatw(w: W) -> i64 { w.b }
+fn main() {
+    println(f"a{eat(mkw(1).r)}");
+    println(f"b{eat(wrap(mkd(2)).v)}");
+    println(f"c{eat(if true { mkw(3).r } else { mkd(0) })}");
+    let h = H { k: 1 };
+    println(f"d{h.take(mkw(4).r)}");
+    println(f"e{H.tk(mkw(5).r)}");
+    println(f"f{eate(mkwx(6).e)}");
+    println(f"g{eat(mkx(7).w.r)}");
+    println(f"h{two(mkw(8).r, mkw(9).s)}");
+    println(f"i{eatw(mkx(10).w)}");
+    eat(mkw(11).s);
+    println("end")
+}
+"#,
+        &[
+            "dD101 name-string-longer-than-sso-101",
+            "dD1 name-string-longer-than-sso-1",
+            "a1",
+            "dD2 name-string-longer-than-sso-2",
+            "b2",
+            "dD103 name-string-longer-than-sso-103",
+            "dD3 name-string-longer-than-sso-3",
+            "c3",
+            "dD104 name-string-longer-than-sso-104",
+            "dD4 name-string-longer-than-sso-4",
+            "d4",
+            "dD105 name-string-longer-than-sso-105",
+            "dD5 name-string-longer-than-sso-5",
+            "e5",
+            "dD206 name-string-longer-than-sso-206",
+            "dD6 name-string-longer-than-sso-6",
+            "f6",
+            "dD307 name-string-longer-than-sso-307",
+            "dD107 name-string-longer-than-sso-107",
+            "dD7 name-string-longer-than-sso-7",
+            "g7",
+            "dD108 name-string-longer-than-sso-108",
+            "dD9 name-string-longer-than-sso-9",
+            "dD109 name-string-longer-than-sso-109",
+            "dD8 name-string-longer-than-sso-8",
+            "h117",
+            "dD310 name-string-longer-than-sso-310",
+            "dD110 name-string-longer-than-sso-110",
+            "dD10 name-string-longer-than-sso-10",
+            "i10",
+            "dD11 name-string-longer-than-sso-11",
+            "dD111 name-string-longer-than-sso-111",
+            "end",
+        ],
+        "asan_fresh_temp_drop_projection_passed_by_value_is_dropped_once",
+        60,
+    );
+}

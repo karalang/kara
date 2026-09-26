@@ -8457,6 +8457,14 @@ impl<'ctx> super::Codegen<'ctx> {
                         || callee_owns_handback_memory
                         || stored_in_outliving_place)
                         && !entry_copied_any;
+                    // B-2026-09-26-23 — a `Drop`-bearing projection off a fresh
+                    // temp is moved into the argument, as in `compile_call`.
+                    let drop_projection = self
+                        .freshtemp_drop_projection_arg_type(&a.value)
+                        .filter(|_| !escapes_frame && !escapes_without_entry_copy);
+                    if drop_projection.is_some() {
+                        self.consume_freshtemp_field_move(&a.value);
+                    }
                     if !escapes_without_entry_copy {
                         // B-2026-09-07-6 — the DECLARED element types, which
                         // this leg passed as `None` while the free leg has
@@ -8474,6 +8482,7 @@ impl<'ctx> super::Codegen<'ctx> {
                         // helper's receiver-EXCLUDING resolution wants, the same
                         // one the tuple carve-out above uses.
                         let declared_tes = self.callee_tuple_param_elem_type_exprs(&qualified, i);
+                        self.drop_rc.freshtemp_drop_projection_arg = drop_projection;
                         self.track_inline_owned_aggregate_arg_parts(
                             val,
                             &a.value,
@@ -8483,6 +8492,7 @@ impl<'ctx> super::Codegen<'ctx> {
                             declared_tes.as_deref(),
                             payload_skip,
                         );
+                        self.drop_rc.freshtemp_drop_projection_arg = None;
                     }
                     self.disarm_escaping_place_tuple_elem_bodies(&qualified, i, &a.value);
                     // B-2026-09-05-17 — and the STRUCT sibling, which the method

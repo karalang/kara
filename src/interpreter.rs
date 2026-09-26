@@ -609,6 +609,13 @@ pub struct Interpreter<'a> {
     /// re-evaluating the producer at the consuming statement would run `mkw`
     /// again.
     pub(crate) freshtemp_field_obj: Option<(Value, String, (usize, usize))>,
+    /// B-2026-09-26-23 — the spans of call ARGUMENTS that are a Drop-bearing
+    /// projection off a fresh temp and were consumed at the argument
+    /// (`eat(mkw(7).r)`): the temp's other fields ran there, so the argument
+    /// alone owns the projected value and `run_fresh_temp_arg_drops` runs its
+    /// body after the call. Recorded only when the consume actually happened,
+    /// so a projection nothing consumed is never given an owner by half.
+    pub(crate) freshtemp_projection_args_owned: Vec<(usize, usize)>,
     /// B-2026-09-17-36 — one level per statement being evaluated: the FRESH
     /// TEMPS read through a projection inside it, whose `Drop` bodies run when
     /// that statement ends.
@@ -1291,6 +1298,7 @@ impl<'a> Interpreter<'a> {
             moved_out_tuple_elem_payload_bodies: HashSet::new(),
             pending_payload_masked_fields: None,
             freshtemp_field_obj: None,
+            freshtemp_projection_args_owned: Vec::new(),
             freshtemp_read_levels: Vec::new(),
             freshtemp_read_through: None,
             moved_out_enum_payload_slots: HashSet::new(),

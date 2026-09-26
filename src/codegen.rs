@@ -6506,6 +6506,7 @@ impl<'ctx> Codegen<'ctx> {
                 cond_returned_body_params: std::collections::HashSet::new(),
                 cond_returned_owned_params: std::collections::HashSet::new(),
                 aggregate_arg_escape_stores: false,
+                freshtemp_drop_projection_arg: None,
                 field_view_flags: HashMap::new(),
                 cond_move_field_flag_slots: HashSet::new(),
                 forwarded_handback_slots: HashSet::new(),

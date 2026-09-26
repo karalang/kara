@@ -302,6 +302,11 @@ pub(crate) struct DropRc<'ctx> {
     /// copied, so a caller drop there frees the box's value a second time.
     /// False everywhere else.
     pub(crate) aggregate_arg_escape_stores: bool,
+    /// B-2026-09-26-23 — set by a by-value argument site, around its call to
+    /// the aggregate-arg registrar, when the argument is a `Drop`-bearing
+    /// projection off a fresh temp that the site has just consumed: the type
+    /// the registrar should own the argument as. `None` everywhere else.
+    pub(crate) freshtemp_drop_projection_arg: Option<String>,
     /// B-2026-08-30-54 / B-2026-09-02-10 — for each base binding a FIELD of
     /// which received a param view, that field's OWN per-path flag: `true`
     /// while the base still owns the field's value, `false` on a path where a

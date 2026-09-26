@@ -2501,6 +2501,14 @@ impl<'ctx> super::Codegen<'ctx> {
             // declined-copy type) and runs two `Drop` bodies on the
             // INTERPRETER too, so it is a different mechanism on a different
             // row.
+            // B-2026-09-26-23 — a `Drop`-bearing field projected off a fresh
+            // temp is MOVED into the argument: the temp gives it up here (its
+            // siblings' bodies run now, the field is zeroed in its slot) and
+            // the registrar below owns it as it owns a producer's value.
+            //
+            // Only where the registrar takes the argument: a callee that hands
+            // it back or keeps it owns it, and the temp keeps today's route.
+            let drop_projection = self.freshtemp_drop_projection_arg_type(&a.value);
             let stored_in_outliving_place =
                 self.call_arg_moves_into_outliving_place(&name, i, false);
             // The store clause resolves one shape the return route cannot; see
@@ -2539,6 +2547,9 @@ impl<'ctx> super::Codegen<'ctx> {
             let escapes_without_entry_copy =
                 (flows_into_return || stored_in_outliving_place) && !entry_copied_any;
             if !arg_transfers && !escapes_without_entry_copy {
+                if drop_projection.is_some() && !escapes_frame {
+                    self.consume_freshtemp_field_move(&a.value);
+                }
                 let escaping_parts = self.callee_returned_param_parts(&name, i);
                 let declared_tes = self.callee_tuple_param_elem_type_exprs(&name, i);
                 // B-2026-09-02-24 — the enum-payload sibling of `escaping_parts`,
@@ -2548,6 +2559,8 @@ impl<'ctx> super::Codegen<'ctx> {
                 let payload_skip = self.enum_arg_payload_skip(&name, i);
                 let field_payload_paths = self.callee_escaping_field_payload_paths(&name, i);
                 self.drop_rc.aggregate_arg_escape_stores = stored_in_outliving_place;
+                self.drop_rc.freshtemp_drop_projection_arg =
+                    drop_projection.filter(|_| !escapes_frame);
                 self.track_inline_owned_aggregate_arg_parts(
                     val,
                     &a.value,
@@ -2557,6 +2570,7 @@ impl<'ctx> super::Codegen<'ctx> {
                     declared_tes.as_deref(),
                     payload_skip,
                 );
+                self.drop_rc.freshtemp_drop_projection_arg = None;
                 self.drop_rc.aggregate_arg_escape_stores = false;
             }
             // B-2026-08-28-16 — a PLACE tuple argument (`take(q)`) whose
@@ -9196,9 +9210,20 @@ impl<'ctx> super::Codegen<'ctx> {
             }
             _ => None,
         };
+        // B-2026-09-26-23 — or a `Drop`-bearing projection off a fresh temp,
+        // which the argument site consumed: the argument now owns the moved
+        // field exactly as it owns a producer's value.
+        let ret_ty_opt = fn_key
+            .as_ref()
+            .and_then(|n| self.fn_sig.fn_return_type_names.get(n).cloned())
+            .or_else(|| {
+                matches!(arg.kind, ExprKind::FieldAccess { .. })
+                    .then(|| self.drop_rc.freshtemp_drop_projection_arg.clone())
+                    .flatten()
+            });
         {
-            if let Some(fn_name) = fn_key.as_ref() {
-                if let Some(ret_ty_name) = self.fn_sig.fn_return_type_names.get(fn_name).cloned() {
+            if let Some(ret_ty_name) = ret_ty_opt {
+                {
                     let has_user_drop = self
                         .program_snapshot
                         .as_deref()

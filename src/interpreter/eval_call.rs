@@ -1983,14 +1983,37 @@ impl<'a> super::Interpreter<'a> {
                 }
                 _ => false,
             };
+        // B-2026-09-26-23 — a Drop-bearing projection off a fresh temp passed
+        // BY VALUE (`eat(mkw(7).r)`) moves the field into the parameter, so
+        // the temp's other fields die at that argument, as codegen's rvalue
+        // argument path runs them. Only the callee's SPELLING is available
+        // before the arguments run, which is enough for the free-function and
+        // associated-fn forms that path resolves.
+        let proj_target: Option<(String, Option<String>)> = match &callee.kind {
+            _ if callee_is_variant_ctor => None,
+            ExprKind::Identifier(n) => Some((n.clone(), None)),
+            ExprKind::Path { segments, .. } if segments.len() == 2 => {
+                Some((segments[1].clone(), Some(segments[0].clone())))
+            }
+            _ => None,
+        };
         let arg_vals: Vec<Value> = args
             .iter()
-            .map(|a| {
+            .enumerate()
+            .map(|(i, a)| {
                 let v = self.eval_expr_inner(&a.value);
                 if callee_is_variant_ctor {
                     self.consume_freshtemp_field_move(&a.value);
                 } else {
                     self.consume_freshtemp_wrapper_arg(&a.value);
+                }
+                if let Some((name, owner)) = &proj_target {
+                    self.drop_projection_arg_consume(
+                        name,
+                        owner.as_deref().map(CalleeOwner::Assoc),
+                        i,
+                        &a.value,
+                    );
                 }
                 v
             })
@@ -4713,7 +4736,8 @@ impl<'a> super::Interpreter<'a> {
             // at the head of `track_inline_owned_aggregate_arg_inst`.
             let type_name: Option<String> = self
                 .fresh_temp_arg_type_name(&arg.value)
-                .or_else(|| self.wrapper_tail_arg_type_name(&arg.value));
+                .or_else(|| self.wrapper_tail_arg_type_name(&arg.value))
+                .or_else(|| self.owned_drop_projection_arg_type_name(&arg.value));
             let Some(tn) = type_name else { continue };
             let Some(v) = arg_vals.get(i) else { continue };
             // B-2026-08-01-13 (c1/c5) — a fresh USER-enum arg's payload
@@ -5019,7 +5043,12 @@ impl<'a> super::Interpreter<'a> {
         // twice in `mixed-wrapper-arg-method-call`.
         (matches!(&e.kind, ExprKind::Tuple(_))
             || self.fresh_temp_arg_type_name(e).is_some()
-            || self.wrapper_tail_arg_type_name(e).is_some())
+            || self.wrapper_tail_arg_type_name(e).is_some()
+            // B-2026-09-26-23 — a Drop-bearing projection off a fresh temp
+            // that the argument consumed; the walk fires it after the call.
+            || self
+                .freshtemp_projection_args_owned
+                .contains(&(e.span.offset, e.span.length)))
             && !self.callee_owns_arg_beyond_call(callee_name, method_owner, i, None)
     }
 
@@ -5282,6 +5311,114 @@ impl<'a> super::Interpreter<'a> {
         self.fresh_temp_arg_type_name(e)
             .or_else(|| self.wrapper_tail_arg_type_name(e))
             .or_else(|| self.cond_moved_place_tail_type_name(e))
+            .or_else(|| self.consumed_freshtemp_projection_tail_type_name(e))
+    }
+
+    /// B-2026-09-26-23 — the declared type of a call argument that is a
+    /// projection off a FRESH temp and carries user `Drop` work (its own body,
+    /// or a field's / variant payload's). The twin of codegen's
+    /// `freshtemp_drop_projection_arg_type`.
+    fn freshtemp_drop_projection_arg_type_name(&self, e: &Expr) -> Option<String> {
+        let ExprKind::FieldAccess { object, .. } = &e.kind else {
+            return None;
+        };
+        let mut root: &Expr = object;
+        while let ExprKind::FieldAccess { object, .. } = &root.kind {
+            root = object;
+        }
+        if !crate::ast::projection_reads_fresh_temp(root) {
+            return None;
+        }
+        let crate::typechecker::Type::Named { name, .. } = self.span_expr_type(&e.span)? else {
+            return None;
+        };
+        if self
+            .typecheck_result
+            .struct_info
+            .get(name.as_str())
+            .is_some_and(|i| i.is_shared)
+            || self
+                .typecheck_result
+                .enum_info
+                .get(name.as_str())
+                .is_some_and(|i| i.is_shared)
+        {
+            return None;
+        }
+        self.type_name_runs_user_drop(&name, &mut Vec::new())
+            .then_some(name)
+    }
+
+    /// B-2026-09-26-23 — consume a by-value Drop-bearing fresh-temp
+    /// projection argument whose callee does not keep it past the call, and
+    /// record it so `run_fresh_temp_arg_drops` runs the moved field's body
+    /// after the call. A callee that returns or stores the argument
+    /// (`keep(mkw(9).r)`) is left alone: codegen does not consume that
+    /// registration either.
+    pub(super) fn drop_projection_arg_consume(
+        &mut self,
+        callee_name: &str,
+        method_owner: Option<CalleeOwner<'_>>,
+        i: usize,
+        value: &Expr,
+    ) {
+        // A GENERIC callee is compiled from a monomorph whose arguments are
+        // all evaluated before any is registered, so codegen has no per-argument
+        // consume there; it keeps today's route on both backends.
+        let resolved_non_generic = self
+            .callee_fn_for_ownership_guard_of(callee_name, method_owner)
+            .is_some_and(|f| f.generic_params.is_none());
+        if !resolved_non_generic
+            || self
+                .freshtemp_drop_projection_arg_type_name(value)
+                .is_none()
+            || self.callee_param_is_borrow(callee_name, method_owner, i)
+            || self.callee_owns_arg_beyond_call(callee_name, method_owner, i, None)
+        {
+            return;
+        }
+        let staged = self.freshtemp_field_obj.is_some();
+        self.consume_freshtemp_field_move(value);
+        if staged && self.freshtemp_field_obj.is_none() {
+            self.freshtemp_projection_args_owned
+                .push((value.span.offset, value.span.length));
+        }
+    }
+
+    /// B-2026-09-26-23 — the type of an argument [`Self::drop_projection_arg_consume`]
+    /// consumed; claiming it here is what makes the argument its only owner.
+    fn owned_drop_projection_arg_type_name(&mut self, e: &Expr) -> Option<String> {
+        let key = (e.span.offset, e.span.length);
+        let pos = self
+            .freshtemp_projection_args_owned
+            .iter()
+            .position(|k| *k == key)?;
+        self.freshtemp_projection_args_owned.swap_remove(pos);
+        self.freshtemp_drop_projection_arg_type_name(e)
+    }
+
+    /// B-2026-09-26-23 — an arm tail projected off a FRESH temp
+    /// (`ownd(if c { mkw(5).r } else { mkd(1) })`) is consumed at the arm
+    /// (B-2026-09-26-19's `consume_freshtemp_wrapper_arg`), so the merged
+    /// value reaches the call owned by nobody but the argument, exactly as a
+    /// producer tail's does. Codegen counts the same tail as minting
+    /// (`arm_tail_consumes_freshtemp_projection`) and runs the moved field's
+    /// body after the call; without this the interpreter ran none.
+    fn consumed_freshtemp_projection_tail_type_name(&self, e: &Expr) -> Option<String> {
+        if !matches!(e.kind, ExprKind::FieldAccess { .. }) {
+            return None;
+        }
+        let mut root = e;
+        while let ExprKind::FieldAccess { object, .. } = &root.kind {
+            root = object;
+        }
+        if !crate::ast::projection_reads_fresh_temp(root) {
+            return None;
+        }
+        match self.span_expr_type(&e.span)? {
+            crate::typechecker::Type::Named { name, .. } => Some(name),
+            _ => None,
+        }
     }
 
     /// B-2026-08-30-50 — does this expression have at least one tail that

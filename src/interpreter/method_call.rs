@@ -371,9 +371,17 @@ impl<'a> super::Interpreter<'a> {
         }
         if let Some(func) = self.env.get(&method_key) {
             let mut arg_vals: Vec<Value> = vec![clone_receiver(obj)];
-            arg_vals.extend(args.iter().map(|a| {
+            // B-2026-09-26-23 — see the free-function twin in `eval_call`.
+            let owner = type_name.clone();
+            arg_vals.extend(args.iter().enumerate().map(|(i, a)| {
                 let v = self.eval_expr_inner(&a.value);
                 self.consume_freshtemp_wrapper_arg(&a.value);
+                self.drop_projection_arg_consume(
+                    method,
+                    Some(super::eval_call::CalleeOwner::Instance(&owner)),
+                    i,
+                    &a.value,
+                );
                 v
             }));
 

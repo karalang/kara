@@ -3303,6 +3303,14 @@ impl<'ctx> super::Codegen<'ctx> {
                         || callee_owns_handback_memory
                         || stored_in_outliving_place)
                         && !entry_copied_any;
+                    // B-2026-09-26-23 — a `Drop`-bearing projection off a fresh
+                    // temp is moved into the argument, as in `compile_call`.
+                    let drop_projection = self
+                        .freshtemp_drop_projection_arg_type(&a.value)
+                        .filter(|_| !escapes_frame && !escapes_without_entry_copy);
+                    if drop_projection.is_some() {
+                        self.consume_freshtemp_field_move(&a.value);
+                    }
                     if !escapes_without_entry_copy {
                         // B-2026-09-07-6 — the PARTS registrar, with the
                         // callee's declared element types, where this leg used
@@ -3318,6 +3326,7 @@ impl<'ctx> super::Codegen<'ctx> {
                         // and passing empties is exactly what the arity-3 form
                         // did.
                         let declared_tes = self.callee_tuple_param_elem_type_exprs(&qualified, i);
+                        self.drop_rc.freshtemp_drop_projection_arg = drop_projection;
                         self.track_inline_owned_aggregate_arg_parts(
                             val,
                             &a.value,
@@ -3327,6 +3336,7 @@ impl<'ctx> super::Codegen<'ctx> {
                             declared_tes.as_deref(),
                             None,
                         );
+                        self.drop_rc.freshtemp_drop_projection_arg = None;
                     }
                     // The registrar above answers for an AGGREGATE (struct /
                     // enum / tuple temp). A bare `String` / `Vec` argument is

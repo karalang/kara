@@ -1737,10 +1737,10 @@ fn e2e_discarded_literal_statement_and_no_else_if() {
 /// B-2026-09-17-36 later took up. A scalar read through the projection
 /// (`println(f"v{mkw(7).r.id}")`) and a scalar FIELD read (`mkw(7).b`) now run
 /// both bodies at the end of the statement, as the named spelling does. The
-/// projection passed straight to a discarding callee (`eat(mkw(7).r)`) is
-/// still PINNED AS MEASURED, running no body at all on both surfaces: the
-/// callee takes a field that has a body of its own, and neither backend yet
-/// knows whether it moved.
+/// projection passed straight to a discarding callee (`eat(mkw(7).r)`) ran
+/// no body at all on both surfaces until B-2026-09-26-23 made the argument
+/// the moved field's owner: the sibling's body now runs at the argument and
+/// the moved field's after the call.
 ///
 /// MEMORY IS CLEAN AND THE STRINGS ARE INTACT with a heap-carrying `D`:
 /// `-O0` valgrind reports 12-13 allocs with equal frees, `0 bytes in 0
@@ -1809,13 +1809,13 @@ fn e2e_projecting_a_field_off_a_fresh_temp_runs_the_siblings_bodies() {
                 "v7\ndD107\ndD7\nend\n",
             ),
             (
-                // 8 — PINNED AS MEASURED, not fixed. See the note above.
-                "pinned: projection into a discarding callee",
+                // 8 — B-2026-09-26-23: the argument owns the moved field.
+                "projection into a discarding callee",
                 format!(
                     "{H}fn eat(d: D) -> i64 {{ return d.id; }}\n\
                      fn main() {{ println(f\"v{{eat(mkw(7).r)}}\"); println(\"end\") }}\n"
                 ),
-                "v7\nend\n",
+                "dD107\ndD7\nv7\nend\n",
             ),
         ] {
             let (interp_out, interp_errs, _, _) = karac::run_program_full_checked(&prog);
@@ -1847,10 +1847,11 @@ fn e2e_projecting_a_field_off_a_fresh_temp_runs_the_siblings_bodies() {
 /// tail, and the interpreter did for a taken `if` arm inside a `let`. Each now
 /// prints one sequence on every surface.
 ///
-/// The PINNED cell is the position both backends still decline, together: a
-/// projected field that has a body of its own handed to a callee (which may
-/// have moved it). A generic struct, a `while` condition, a `match` scrutinee
-/// and a closure body were pinned here too until B-2026-09-25-44.
+/// A projected field that has a body of its own handed to a callee was
+/// pinned here, declined by both backends together, until B-2026-09-26-23
+/// made the argument its owner. A generic struct, a `while` condition, a
+/// `match` scrutinee and a closure body were pinned here too until
+/// B-2026-09-25-44.
 #[test]
 fn e2e_fresh_temp_read_through_a_projection_runs_its_bodies() {
     const H: &str = "struct D { id: i64, name: String }\n\
@@ -1981,9 +1982,9 @@ fn e2e_fresh_temp_read_through_a_projection_runs_its_bodies() {
             "o2\ndD1n1\no3\nend\n",
         ),
         (
-            "pinned: Drop field handed to a callee",
+            "Drop field handed to a callee (B-2026-09-26-23)",
             "println(f\"v{eat(mkw(7).r)}\");",
-            "v7\nend\n",
+            "dD107n107\ndD7n7\nv7\nend\n",
         ),
         (
             "generic struct (B-2026-09-25-44)",
@@ -6791,6 +6792,136 @@ fn mkv() -> V { let mut xs: Vec[i64] = Vec.new(); xs.push(1); xs.push(2); return
             "arm and direct in one statement",
             "let a = take(if true { mkq(13).name } else { f\"z\" }) + bor(mkq(14).name); println(f\"a{a}\");",
             "q13\nq14\na3\nend\n",
+        ),
+    ] {
+        let prog = format!("{H}fn main() {{\n    {body}\n    println(\"end\")\n}}\n");
+        let (interp_out, interp_errs, _, _) = karac::run_program_full_checked(&prog);
+        assert!(
+            interp_errs.is_empty(),
+            "[{label}] interp errored: {interp_errs:?}"
+        );
+        assert_eq!(interp_out.join(""), want, "[{label}] interpreter");
+        if let Some(aot) = run_program(&prog) {
+            assert_eq!(aot, want, "[{label}] AOT");
+        }
+    }
+}
+
+/// B-2026-09-26-23 — a `Drop`-bearing field projected off a FRESH temp and
+/// handed BY VALUE to a callee is MOVED into the argument: the temp's other
+/// `Drop`-bearing fields run their bodies at the argument, and the moved
+/// field's body runs after the call, as the parameter's owner. Before the fix
+/// all four surfaces ran neither. Every cell was checked `--interp` / JIT /
+/// `-O2` seq / `-O2` par byte-identical and valgrind-clean at `-O0`. The named
+/// root is the control: its siblings run at the binding's own death.
+#[test]
+fn e2e_fresh_temp_drop_projection_passed_by_value_moves_into_the_argument() {
+    const H: &str = r#"struct D { id: i64, name: String }
+impl Drop for D { fn drop(mut ref self) { println(f"dD{self.id}{self.name}") } }
+fn mkd(n: i64) -> D { return D { id: n, name: f"n{n}" }; }
+struct W { r: D, s: D, b: i64 }
+fn mkw(n: i64) -> W { return W { r: mkd(n), s: mkd(n + 100), b: n }; }
+fn eat(d: D) -> i64 { return d.id; }
+fn ownd(d: D) -> i64 { d.id }
+struct G[T] { v: T, k: i64 }
+fn wrap[T](x: T) -> G[T] { return G { v: x, k: 7 }; }
+fn eatd(d: D) -> i64 { d.id }
+fn keep(d: D) -> D { d }
+struct H { k: i64 }
+impl H { fn take(self, d: D) -> i64 { d.id } fn tk(d: D) -> i64 { d.id } fn peek(self, d: ref D) -> i64 { d.id } }
+enum E { A(D), B }
+struct Wx { e: E, s: D }
+fn mkwe(n: i64) -> Wx { return Wx { e: E.A(mkd(n)), s: mkd(n + 200) }; }
+fn eate(e: E) -> i64 { match e { E.A(d) => d.id, E.B => 0 } }
+struct X { w: W, t: D }
+fn mkx(n: i64) -> X { return X { w: mkw(n), t: mkd(n + 300) }; }
+fn peekd(d: ref D) -> i64 { d.id }
+fn two(a: D, b: D) -> i64 { a.id + b.id }
+fn side(n: i64) -> i64 { println(f"side{n}"); n }
+fn mix(d: D, n: i64) -> i64 { d.id + n }
+fn eatw(w: W) -> i64 { w.b }
+fn gn[T](x: T) -> i64 { 1 }
+struct Dd { id: i64, inr: D }
+impl Drop for Dd { fn drop(mut ref self) { println(f"dDd{self.id}") } }
+struct Wd { d: Dd, s: D }
+fn mkwd(n: i64) -> Wd { return Wd { d: Dd { id: n, inr: mkd(n + 1) }, s: mkd(n + 400) }; }
+fn eatdd(d: Dd) -> i64 { d.id }
+"#;
+    for (label, body, want) in [
+        (
+            "free fn, discarded result",
+            "println(f\"v{eat(mkw(7).r)}\");",
+            "dD107n107\ndD7n7\nv7\nend\n",
+        ),
+        (
+            "free fn, let-bound result",
+            "let a = ownd(mkw(8).r); println(f\"a{a}\");",
+            "dD108n108\ndD8n8\na8\nend\n",
+        ),
+        (
+            "generic root",
+            "println(f\"e{eatd(wrap(mkd(6)).v)}\");",
+            "dD6n6\ne6\nend\n",
+        ),
+        (
+            "through an if arm",
+            "let a = ownd(if true { mkw(5).r } else { mkd(1) }); println(f\"a{a}\");",
+            "dD105n105\ndD5n5\na5\nend\n",
+        ),
+        (
+            "named root control",
+            "let w = mkw(7); println(f\"v{eat(w.r)}\");",
+            "v7\ndD107n107\ndD7n7\nend\n",
+        ),
+        (
+            "method arg",
+            "let h = H { k: 1 }; println(f\"m{h.take(mkw(7).r)}\");",
+            "dD107n107\ndD7n7\nm7\nend\n",
+        ),
+        (
+            "associated fn arg",
+            "println(f\"a{H.tk(mkw(7).r)}\");",
+            "dD107n107\ndD7n7\na7\nend\n",
+        ),
+        (
+            "enum field",
+            "println(f\"e{eate(mkwe(3).e)}\");",
+            "dD203n203\ndD3n3\ne3\nend\n",
+        ),
+        (
+            "two hops",
+            "println(f\"n{eat(mkx(4).w.r)}\");",
+            "dD304n304\ndD104n104\ndD4n4\nn4\nend\n",
+        ),
+        (
+            "two projection args",
+            "println(f\"t{two(mkw(1).r, mkw(2).s)}\");",
+            "dD101n101\ndD2n2\ndD102n102\ndD1n1\nt103\nend\n",
+        ),
+        (
+            "side effect in a later arg",
+            "println(f\"x{mix(mkw(5).r, side(9))}\");",
+            "dD105n105\nside9\ndD5n5\nx14\nend\n",
+        ),
+        (
+            "Drop-free parent field",
+            "println(f\"w{eatw(mkx(6).w)}\");",
+            "dD306n306\ndD106n106\ndD6n6\nw6\nend\n",
+        ),
+        (
+            "field with its own Drop and a Drop field",
+            "println(f\"dd{eatdd(mkwd(10).d)}\");",
+            "dD410n410\ndDd10\ndD11n11\ndd10\nend\n",
+        ),
+        (
+            "statement call",
+            "eat(mkw(7).r);",
+            "dD107n107\ndD7n7\nend\n",
+        ),
+        (
+            "two calls in one expression",
+            "let v = eat(mkw(7).s) + eat(mkw(8).r); println(f\"v{v}\");",
+            "dD7n7\ndD107n107\ndD108n108\ndD8n8\nv115\nend\n",
         ),
     ] {
         let prog = format!("{H}fn main() {{\n    {body}\n    println(\"end\")\n}}\n");
