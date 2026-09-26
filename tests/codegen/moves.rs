@@ -2313,6 +2313,141 @@ fn e2e_scalar_taken_off_a_fresh_temp_runs_its_types_own_drop() {
     }
 }
 
+/// B-2026-09-26-2 — a projection off a fresh temp placed in a variant
+/// constructor, tuple, struct literal or array literal is consumed AT THAT
+/// SITE on both backends, so the temp's remaining `Drop` bodies run wherever
+/// the aggregate sits. The interpreter consumed only through a `let`
+/// initializer and a statement's end, so a function TAIL (`Ok(mkw(9).b)`)
+/// ran none, a non-scalar constructor argument (`Some(mkw(9).r)`) ran none
+/// in any position, and a multi-argument constructor or tuple consumed only
+/// its last temp, after later arguments' side effects. Codegen has consumed
+/// at the site since B-2026-08-31-34.
+///
+/// The two PINNED cells are a tail that READS through the temp without
+/// consuming it, which runs no body on any surface (B-2026-09-26-6).
+#[test]
+fn e2e_fresh_temp_projection_consumed_at_its_aggregate_site() {
+    const H: &str = "struct D { id: i64, name: String }\n\
+             impl Drop for D { fn drop(mut ref self) { println(f\"dD{self.id}\") } }\n\
+             fn mkd(n: i64) -> D { return D { id: n, name: f\"n{n}\" }; }\n\
+             struct W { r: D, s: D, b: i64 }\n\
+             fn mkw(n: i64) -> W { return W { r: mkd(n), s: mkd(n + 100), b: n }; }\n\
+             struct B { v: i64 }\n\
+             enum E { A(i64, i64), B(D) }\n\
+             fn say(n: i64) -> i64 { println(f\"say{n}\"); n }\n\
+             fn f24(c: bool) -> Result[i64, String] { if c { return Err(f\"e\"); } Ok(mkw(9).b) }\n\
+             fn g3(c: bool) -> Option[i64] { if c { Some(mkw(9).b) } else { None } }\n\
+             fn g4() -> (i64, i64) { (mkw(9).b, 1) }\n\
+             fn g9() -> B { B { v: mkw(9).b } }\n\
+             fn g11() -> Option[D] { Some(mkw(9).r) }\n\
+             fn h1() -> E { E.A(mkw(1).b, mkw(2).b) }\n\
+             fn h3() -> Option[Option[i64]] { Some(Some(mkw(9).b)) }\n\
+             fn h4() -> E { E.B(mkw(9).r) }\n\
+             fn h5() -> Array[i64, 2] { [mkw(9).b, 1] }\n\
+             fn h6() -> Vec[i64] { Vec[mkw(9).b, 1] }\n\
+             fn id(x: i64) -> i64 { x }\n\
+             fn p1() -> i64 { mkw(9).b + 0 }\n\
+             fn p2() -> i64 { id(mkw(9).b) }\n";
+    for (label, body, want) in [
+        (
+            "Ok in a function tail",
+            "println(f\"t{f24(false).unwrap()}\");",
+            "dD109\ndD9\nt9\nend\n",
+        ),
+        (
+            "Some in an if-branch tail",
+            "println(f\"t{g3(true).unwrap()}\");",
+            "dD109\ndD9\nt9\nend\n",
+        ),
+        (
+            "tuple tail",
+            "println(f\"t{g4().0}\");",
+            "dD109\ndD9\nt9\nend\n",
+        ),
+        (
+            "struct literal tail",
+            "println(f\"t{g9().v}\");",
+            "dD109\ndD9\nt9\nend\n",
+        ),
+        (
+            "non-scalar in Some, tail",
+            "let o = g11(); println(f\"t{o.unwrap().id}\");",
+            "dD109\nt9\ndD9\nend\n",
+        ),
+        (
+            "non-scalar in Some, let",
+            "let x = Some(mkw(9).r); println(f\"x{x.unwrap().id}\");",
+            "dD109\nx9\ndD9\nend\n",
+        ),
+        (
+            "user variant, two temps",
+            "match h1() { E.A(a, b) => println(f\"a{a}{b}\"), E.B(_) => println(\"b\") }",
+            "dD101\ndD1\ndD102\ndD2\na12\nend\n",
+        ),
+        (
+            "user variant, before a later argument",
+            "let e = E.A(mkw(1).b, say(5)); match e { E.A(a, _) => println(f\"a{a}\"), _ => println(\"x\") }",
+            "dD101\ndD1\nsay5\na1\nend\n",
+        ),
+        (
+            "nested Some",
+            "println(f\"t{h3().unwrap().unwrap()}\");",
+            "dD109\ndD9\nt9\nend\n",
+        ),
+        (
+            "user variant, non-scalar",
+            "match h4() { E.B(d) => println(f\"b{d.id}\"), _ => println(\"x\") }",
+            "dD109\nb9\ndD9\nend\n",
+        ),
+        (
+            "array literal tail",
+            "println(f\"t{h5()[0]}\");",
+            "dD109\ndD9\nt9\nend\n",
+        ),
+        (
+            "Vec literal tail",
+            "println(f\"t{h6()[0]}\");",
+            "dD109\ndD9\nt9\nend\n",
+        ),
+        (
+            "tuple, before a later element",
+            "let t = (mkw(1).r, say(5)); println(f\"t{t.0.id}\");",
+            "dD101\nsay5\nt1\ndD1\nend\n",
+        ),
+        (
+            "array, before a later element",
+            "let v = [mkw(9).b, say(5)]; println(f\"v{v[0]}\");",
+            "dD109\ndD9\nsay5\nv9\nend\n",
+        ),
+        (
+            "tuple, two temps in order",
+            "let t = (mkw(1).b, mkw(2).b); println(f\"t{t.0}{t.1}\");",
+            "dD101\ndD1\ndD102\ndD2\nt12\nend\n",
+        ),
+        (
+            "pinned: a tail that reads through the temp",
+            "println(f\"t{p1()}\");",
+            "t9\nend\n",
+        ),
+        (
+            "pinned: a tail that hands the read to a call",
+            "println(f\"t{p2()}\");",
+            "t9\nend\n",
+        ),
+    ] {
+        let prog = format!("{H}fn main() {{\n    {body}\n    println(\"end\")\n}}\n");
+        let (interp_out, interp_errs, _, _) = karac::run_program_full_checked(&prog);
+        assert!(
+            interp_errs.is_empty(),
+            "[{label}] interp errored: {interp_errs:?}"
+        );
+        assert_eq!(interp_out.join(""), want, "[{label}] interpreter");
+        if let Some(aot) = run_program(&prog) {
+            assert_eq!(aot, want, "[{label}] AOT");
+        }
+    }
+}
+
 /// B-2026-09-05-13 — a by-value param REBOUND whole (`let m = r;`) and then
 /// handed back through an `Option`/`Result` constructor runs the `Drop` body
 /// ONCE, on every surface, unconditionally (`u-rebind`) and conditionally

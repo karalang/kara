@@ -1808,6 +1808,7 @@ impl<'a> super::Interpreter<'a> {
                         };
                         // Ctor-arg move (B-2026-07-30-11 Option/Result leg).
                         self.record_ctor_arg_moves(args);
+                        self.consume_freshtemp_ctor_args(args);
                         return Value::EnumVariant {
                             enum_name: "Option".to_string(),
                             variant: "Some".to_string(),
@@ -1822,6 +1823,7 @@ impl<'a> super::Interpreter<'a> {
                         };
                         // Ctor-arg move (B-2026-07-30-11 Option/Result leg).
                         self.record_ctor_arg_moves(args);
+                        self.consume_freshtemp_ctor_args(args);
                         return Value::EnumVariant {
                             enum_name: "Result".to_string(),
                             variant: "Ok".to_string(),
@@ -1836,6 +1838,7 @@ impl<'a> super::Interpreter<'a> {
                         };
                         // Ctor-arg move (B-2026-07-30-11 Option/Result leg).
                         self.record_ctor_arg_moves(args);
+                        self.consume_freshtemp_ctor_args(args);
                         return Value::EnumVariant {
                             enum_name: "Result".to_string(),
                             variant: "Err".to_string(),
@@ -1962,10 +1965,33 @@ impl<'a> super::Interpreter<'a> {
             }
         }
 
-        // Evaluate arguments
+        // Evaluate arguments.
+        //
+        // B-2026-09-26-2 — a user VARIANT constructor consumes each argument's
+        // fresh-temp projection right after that argument, as codegen's
+        // variant-ctor path does. The stash holds one projection, so consuming
+        // only after the whole list (`E.A(mkw(1).b, mkw(2).b)`) lost every
+        // temp but the last, and ran a consumed temp's bodies after a later
+        // argument's side effects rather than before them.
+        let callee_is_variant_ctor = !args.is_empty()
+            && match &callee.kind {
+                ExprKind::Identifier(n) => {
+                    self.env.get(n).is_none() && self.find_enum_for_variant(n).is_some()
+                }
+                ExprKind::Path { segments, .. } if segments.len() == 2 => {
+                    self.qualified_enum_variant_is_unit(&segments[0], &segments[1]) == Some(false)
+                }
+                _ => false,
+            };
         let arg_vals: Vec<Value> = args
             .iter()
-            .map(|a| self.eval_expr_inner(&a.value))
+            .map(|a| {
+                let v = self.eval_expr_inner(&a.value);
+                if callee_is_variant_ctor {
+                    self.consume_freshtemp_field_move(&a.value);
+                }
+                v
+            })
             .collect();
 
         // Check for enum variant constructor before evaluating callee
@@ -1974,6 +2000,7 @@ impl<'a> super::Interpreter<'a> {
                 if let Some(enum_name) = self.find_enum_for_variant(name) {
                     // Ctor-arg move (B-2026-07-30-11 Option/Result leg).
                     self.record_ctor_arg_moves(args);
+                    self.consume_freshtemp_ctor_args(args);
                     return Value::EnumVariant {
                         enum_name,
                         variant: name.clone(),
@@ -2024,6 +2051,7 @@ impl<'a> super::Interpreter<'a> {
                     } else {
                         // Ctor-arg move (B-2026-07-30-11 Option/Result leg).
                         self.record_ctor_arg_moves(args);
+                        self.consume_freshtemp_ctor_args(args);
                         EnumData::Tuple(arg_vals)
                     };
                     return Value::EnumVariant {
@@ -2581,6 +2609,7 @@ impl<'a> super::Interpreter<'a> {
                 if let Some(enum_name) = self.find_enum_for_variant(&variant_name) {
                     // Ctor-arg move (B-2026-07-30-11 Option/Result leg).
                     self.record_ctor_arg_moves(args);
+                    self.consume_freshtemp_ctor_args(args);
                     return Value::EnumVariant {
                         enum_name,
                         variant: variant_name,

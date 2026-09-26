@@ -3123,6 +3123,11 @@ impl<'a> Interpreter<'a> {
             {
                 self.record_returned_projection_moves(&field.value);
             }
+            // B-2026-09-26-2 — a projection off a FRESH TEMP placed in a field
+            // is a move out of the temp, consumed here as codegen's
+            // `compile_struct_init` field loop does, so the temp's remaining
+            // bodies run wherever the literal sits (a function tail included).
+            self.consume_freshtemp_field_move(&field.value);
             let src_u = self.span_unsigned_int_width(&field.value.span);
             let val = match field_tys.get(&field.name) {
                 Some(te) => exec::coerce_int_value_to_declared_float(val, te, src_u),

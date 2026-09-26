@@ -3413,7 +3413,7 @@ impl<'a> super::Interpreter<'a> {
     /// a destructor at the live-range end, and the NAMED-source spelling
     /// (`let t = mkw(7); let w = (t.r, 1);`) already prints the sibling's body
     /// at the source's own last use for that reason, on all four surfaces.
-    fn consume_freshtemp_field_move(&mut self, value: &Expr) {
+    pub(super) fn consume_freshtemp_field_move(&mut self, value: &Expr) {
         let ExprKind::FieldAccess { object, field } = &value.kind else {
             return;
         };
@@ -8175,6 +8175,22 @@ impl<'a> super::Interpreter<'a> {
     /// ordinary fn-call args: those follow the caller-drops convention on
     /// both backends (`run_fresh_temp_arg_drops` excludes identifier args for
     /// the same reason).
+    /// B-2026-09-26-2 — a variant-constructor argument that is a projection off
+    /// a FRESH TEMP (`Some(mkw(9).b)`, `Ok(mkw(9).r)`) is a move out of the
+    /// temp, consumed at the constructor as codegen's variant-ctor path does
+    /// (`call_dispatch.rs`, B-2026-08-31-34). Without it the temp's remaining
+    /// bodies ran only where a statement ended -- so a function TAIL
+    /// (`Ok(mkw(9).b)`) ran none, and a non-scalar argument (`Some(mkw(9).r)`,
+    /// which the statement-end walk declines because it may move) ran none in
+    /// any position. Kept apart from [`Self::record_ctor_arg_moves`], which
+    /// the consuming METHOD calls (`push`, `insert`) share, because codegen
+    /// consumes a projection at the constructor and not at those.
+    pub(crate) fn consume_freshtemp_ctor_args(&mut self, args: &[crate::ast::CallArg]) {
+        for arg in args {
+            self.consume_freshtemp_field_move(&arg.value);
+        }
+    }
+
     pub(crate) fn record_ctor_arg_moves(&mut self, args: &[crate::ast::CallArg]) {
         for arg in args {
             if let ExprKind::Identifier(n) = &arg.value.kind {

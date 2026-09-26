@@ -584,6 +584,13 @@ impl<'a> super::Interpreter<'a> {
                         {
                             self.record_returned_projection_moves(e);
                         }
+                        // B-2026-09-26-2 — and a projection off a FRESH TEMP
+                        // placed here is a move out of the temp, consumed at
+                        // the element as codegen's `compile_tuple` does, so the
+                        // temp's remaining bodies run in every position the
+                        // tuple sits in -- a function tail included, which has
+                        // no statement end to run them at.
+                        self.consume_freshtemp_field_move(e);
                         v
                     })
                     .collect();
@@ -592,14 +599,32 @@ impl<'a> super::Interpreter<'a> {
 
             // Array literal — synthesis mode produces Vec[T] in the type system;
             // both Array and Vec are represented as Value::Array at runtime.
+            //
+            // B-2026-09-26-2 — each element consumes a fresh-temp projection
+            // placed in it, as codegen's `compile_array_literal` /
+            // `compile_vec_prefix_literal` do (see the tuple arm above).
             ExprKind::ArrayLiteral(elements) => {
-                let vals: Vec<Value> = elements.iter().map(|e| self.eval_expr_inner(e)).collect();
+                let vals: Vec<Value> = elements
+                    .iter()
+                    .map(|e| {
+                        let v = self.eval_expr_inner(e);
+                        self.consume_freshtemp_field_move(e);
+                        v
+                    })
+                    .collect();
                 Value::array_of(vals)
             }
 
             // Prefix collection literal: `Vec[e1, e2, ...]` / `Array[e1, ...]`
             ExprKind::PrefixCollectionLiteral { items, .. } => {
-                let vals: Vec<Value> = items.iter().map(|e| self.eval_expr_inner(e)).collect();
+                let vals: Vec<Value> = items
+                    .iter()
+                    .map(|e| {
+                        let v = self.eval_expr_inner(e);
+                        self.consume_freshtemp_field_move(e);
+                        v
+                    })
+                    .collect();
                 Value::array_of(vals)
             }
 
