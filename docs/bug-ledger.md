@@ -92,25 +92,25 @@ distinguish "bugs flattening" from "we stopped writing them down."
 
 | class | total |
 |---|---|
-| run-vs-build | 494 |
+| run-vs-build | 495 |
 | miscompile | 472 |
-| leak | 434 |
-| double-free | 317 |
+| leak | 435 |
+| double-free | 318 |
 | missing-feature | 209 |
 | codegen-gap | 196 |
-| other | 149 |
+| other | 148 |
 | diagnostics | 134 |
 | perf | 117 |
 | false-positive | 109 |
 | soundness | 97 |
-| crash | 96 |
+| crash | 97 |
 | use-after-free | 57 |
 
 ### By surface
 
 | surface | total |
 |---|---|
-| codegen | 2127 |
+| codegen | 2130 |
 | interp | 569 |
 | typecheck | 308 |
 | other | 110 |
@@ -118,7 +118,7 @@ distinguish "bugs flattening" from "we stopped writing them down."
 | cli | 73 |
 | autopar | 56 |
 | parser | 49 |
-| runtime | 46 |
+| runtime | 47 |
 | effect | 30 |
 | resolver | 29 |
 | lexer | 11 |
@@ -130,7 +130,6 @@ _Generated from `bug-ledger.jsonl` by `scripts/bug-curve.py` (2026-05-20 → 202
 
 | id | date | surface | sev | title | tracker |
 |---|---|---|---|---|---|
-| B-2026-09-12-1 | 2026-09-12 | runtime | low | `coroutine_ws_over_tls_concurrent_handlers_all_execute` GOES RED IN THE REQUIRED GATE SET BUT IS NOT REPRODUCIBLE ON DEMAND -- five reds across both KARAC_SSO legs against 22 consecutive passes under deliberately harsher standalone conditions. The three preserved reds report 15, 15 and 11 of 16 handlers echoing, so the count is VARIABLE (an earlier two-observation reading of it as a stable 15/16 is retracted in the detail). What holds is the discriminator the row was filed for: `left > 0` every time, so the server DOES come up -- a coroutine-resume / accept-path race, not a port or fixture problem. | — |
 | B-2026-09-14-10 | 2026-09-14 | codegen+interp | low | WHETHER A BORROW-PROJECTION ARGUMENT COPIES DEPENDS ON WHETHER THE CALLEE KEEPS IT, NOT ON THE CALL SPELLING -- a storing callee runs the field's `Drop` body TWICE and a discarding one ONCE, identically for free / assoc / inherent-method / builtin and on all four surfaces; what is OPEN is whether the discard-elision should exist at all, since design.md says a by-value pass copies and does not distinguish the two | — |
 | B-2026-09-14-28 | 2026-09-14 | codegen | medium | `vertical`'s +85% SSO REGRESSION IS NOT THE DE-INLINE PROBE AND NOT `prefix_string` -- both were ruled out by measurement (c1adb9c removed the probe: +84.1% -> +85.4%; an exact mirror of `prefix_string` runs 9-15% FASTER under SSO), so the worst regression in the corpus is now UNATTRIBUTED. `shortest_distance_iii` (+36%) and `shortest_distance` (+61%) are the same shape. Reachable only at KARAC_SSO=1, which is off by default. | — |
 | B-2026-09-16-6 | 2026-09-16 | codegen+interp | medium | TWO BODIES-CHANNEL GAPS FOR AN `Array[T, N]` HELD IN A TUPLE, both found while pinning the output twin of B-2026-09-13-23's memory fix and both memory-clean under it: a tuple in a STRUCT FIELD runs no element `Drop` body on ANY backend, and a DESTRUCTURED tuple runs them under `--interp` and on NEITHER compiled backend -- an agreed silence and a run-vs-build divergence in the same family | — |
@@ -342,6 +341,9 @@ registered in the callee's prologue, not by-value struct params in general. | �
 | B-2026-09-26-39 | 2026-09-26 | codegen | medium | A MULTI-FIELD GENERIC ENUM `Gh[T] { Y(T, String) }` AT AN ARRAY INSTANTIATION, HANDED TO A BY-VALUE CALLEE, LEAKS ITS HEAP SIBLING -- 35 B in 1 block at -O0 on every compiled surface (the `String` beside the array; the array's elements are freed); was 105 B in 3 blocks before B-2026-09-20-55; no-callee, `T = i64` and the concrete twin are all clean | — |
 | B-2026-09-26-40 | 2026-09-26 | interp+codegen | medium | A `Drop`-BEARING FIELD PROJECTED OFF A FRESH TEMP STILL LOSES ITS BODIES ON ALL FOUR SURFACES WHEN THE CALLEE IS GENERIC OR KEEPS IT, AND A `mut ref` PARAM'S BODIES READ THE PRE-CALL VALUE -- the remainder of B-2026-09-26-33 after dcbc25039: `gn(mkw(7).r)` over `fn gn[T](x: T) -> i64 { 1 }` prints `g1 end` (and `gp(mkw(7).r)` over `fn gp[T](x: ref T)` prints `g2 end`), `keep(mkw(9).r)` over `fn keep(d: D) -> D { d }` prints `k9 dD9n9 end` with the sibling's `dD109n109` never running, and `grow(mut mkw(7).r)` over `fn grow(d: mut ref D) { d.id = d.id + 1; }` prints `dD107n107 dD7n7 end` where the callee made it 8 | — |
 | B-2026-09-26-42 | 2026-09-26 | interp+codegen | high | A PARAM HANDED BACK THROUGH A SELF-RECURSIVE CALL, A WRAPPER AROUND ONE, OR A MUTUALLY RECURSIVE PAIR HAS TWO OWNERS -- `let s = P { id: 1 }; let t = rs(s, 2)` over `fn rs(a: P, n: i64) -> P { if n == 0 { return a } return rs(a, n - 1) }` prints `dP1 t1 dP1` on all four surfaces, and over a Drop-less struct with a `shared` field the JIT aborts with 2 valgrind errors at -O0 | — |
+| B-2026-09-26-43 | 2026-09-26 | runtime+codegen | medium | A `WebSocket` accepted over TLS is closed through `karac_runtime_tcp_close`, which never removes its `SESSIONS` entry -- the rustls session outlives the connection until the fd number is reused, and the WebSocket framing FFIs decide TLS-or-plain by that entry's PRESENCE, so a plain WebSocket later handed the same fd number would be routed through a dead TLS session (INFERRED FROM CODE, not reproduced) | — |
+| B-2026-09-26-44 | 2026-09-26 | codegen | medium | A NETWORK-BOUNDARY (coroutine-compiled) FUNCTION ABORTS THE BUILD AT `KARAC_OPT_LEVEL=0` in two shapes -- `LLVM ERROR: Do not know how to promote this operator's operand!` when the function is never called, and `LLVM ERROR: Cannot select: intrinsic %llvm.coro.size` when a `match`-bound `WebSocket` reaches a call in the same program -- while `-O1` / `-O2` build the same source, so no `-O0` measurement (the leak-class ASAN leg's level) can reach these programs | — |
+| B-2026-09-26-45 | 2026-09-26 | codegen | high | UNDER `karac run` (JIT) A COROUTINE-COMPILED FUNCTION'S BODY DOES NOT RUN while its owned param's `Drop` does -- `fn serve_one(ws: WebSocket, c: Conn, go: bool) { if go { ws.recv_text(..) } println(1); }` called with `go = false` prints `7 2` under JIT and `1 7 2` on every AOT level; the park is never reached, so this is not a hang but a silently skipped body | — |
 
 ### Relocated
 
@@ -2697,6 +2699,7 @@ registered in the callee's prologue, not by-value struct params in general. | �
 | B-2026-09-11-2 | other | low | A WILDCARD MATCH PAYLOAD (`Some(_)` / `Full(_)`) SCHEDULES NO DROP IN THE OWNERSHIP ORACLE, so the differential compares nothing for it -- `_` discar… | 6cb874e7f |
 | B-2026-09-11-3 | codegen | medium | A USER-DECLARED GENERIC ENUM LEAKS ITS HEAP-BOXED PAYLOAD AT EVERY SCOPE EXIT -- `Slot[String]` loses its whole buffer while the SAME enum monomorphi… | cec3c32 |
 | B-2026-09-11-4 | codegen | medium | A TUPLE, AN `Array`, AN `Option[String]` AND A GENERIC-STRUCT PAYLOAD LEAKED INSIDE A USER GENERIC ENUM'S HEAP BOX -- `enum_boxed_payload_interior_dr… | a6584ca |
+| B-2026-09-12-1 | runtime | high | FIXED BY 99a39be95 -- NOT AN ACCEPT-PATH OR RESUME RACE: every coroutine `WebSocket` handler closed its socket TWICE, and `coroutine_ws_over_tls_conc… | 99a39be95 |
 | B-2026-09-12-2 | codegen | medium | A DISCARDED CALL RESULT OF AN ARRAY-RETURNING FUNCTION HAS NO OWNER ON EITHER BACKEND PATH -- `passthru(a);` over `fn passthru(x: Array[String, 2]) -… | 56927b8 |
 | B-2026-09-12-3 | codegen | low | `mono_handle_param_infos` IS WRITTEN UNDER A NON-FINAL `mangled` AND READ UNDER THE FINAL ONE -- `compile_generic_call` rebinds `mangled` four times… | 3df092c |
 | B-2026-09-12-4 | codegen | high | A TUPLE PAYLOAD BOUND THROUGH A `ref` SCRUTINEE READ AS GARBAGE -- the via-ptr fast path bound the leaf at the i64 payload WORD, so every read reinte… | 7133d07 |
