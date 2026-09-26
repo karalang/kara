@@ -6756,3 +6756,76 @@ fn main() {
         "asan_param_handed_on_two_levels_to_a_mixed_path_callee_has_one_owner",
     );
 }
+
+/// B-2026-09-26-42 — a param handed back through a SELF call in its own slot
+/// (`fn rs(a: P, n: i64) -> P { if n == 0 { return a } return rs(a, n - 1) }`),
+/// through a wrapper around one, or through a mutually recursive pair. The
+/// all-paths hand-back predicate declined a self call outright and asked a
+/// hop's callee the non-hop question, so none of these read as returning the
+/// param: a named argument's cleanup ran beside the result's, `dP1 t1 dP1` on
+/// every surface and a use after free for a struct owning a `shared` field.
+/// Covers a plain `Drop` struct at depth 2 and 0, a fresh temp, a Drop-less
+/// and a `Drop` struct with a `shared` field, a `String` one, the tail
+/// spelling, a `;` wrapper, a `let` before the return, a mutual pair, a
+/// wrapper, a loop, and a discarded result.
+#[test]
+fn asan_recursive_hand_back_of_a_param_has_one_owner() {
+    assert_clean_asan_run(
+        r#"shared struct Sh { k: i64 }
+struct S2 { h: Sh, id: i64 }
+impl Drop for S2 { fn drop(mut ref self) { println(f"dS{self.id}") } }
+struct S3 { h: Sh, id: i64 }
+struct P { id: i64 }
+impl Drop for P { fn drop(mut ref self) { println(f"dP{self.id}") } }
+struct R { id: i64, s: String }
+impl Drop for R { fn drop(mut ref self) { println(f"dR{self.id}{self.s}") } }
+fn mk(i: i64) -> S3 { return S3 { h: Sh { k: i }, id: i } }
+fn mk2(i: i64) -> S2 { return S2 { h: Sh { k: i }, id: i } }
+fn rs(a: P, n: i64) -> P { if n == 0 { return a } return rs(a, n - 1) }
+fn rs3(a: S3, n: i64) -> S3 { if n == 0 { return a } return rs3(a, n - 1) }
+fn rs2(a: S2, n: i64) -> S2 { if n == 0 { return a } return rs2(a, n - 1) }
+fn rsR(a: R, n: i64) -> R { if n == 0 { return a } return rsR(a, n - 1) }
+fn rt(a: P, n: i64) -> P { if n == 0 { a } else { rt(a, n - 1) } }
+fn rsemi(a: P, n: i64) -> P { if n == 0 { return a; } return rs(a, n - 1); }
+fn rmid(a: S2, n: i64) -> S2 { println(f"r{n}"); if n == 0 { return a } let t = rmid(a, n - 1); return t }
+fn rh(a: P, n: i64) -> P { if n == 0 { return a } return rg(a, n - 1) }
+fn rg(a: P, n: i64) -> P { return rh(a, n) }
+fn wrap(a: P, n: i64) -> P { return rs(a, n) }
+fn c00() { let s = P { id: 1 }; let t = rs(s, 2); println(f"t{t.id}"); }
+fn c01() { let s = P { id: 2 }; let t = rs(s, 0); println(f"t{t.id}"); }
+fn c02() { let t = rs(P { id: 3 }, 2); println(f"t{t.id}"); }
+fn c03() { let s = mk(4); let t = rs3(s, 2); println(f"t{t.id}"); }
+fn c04() { let s = mk2(5); let t = rs2(s, 2); println(f"t{t.id}"); }
+fn c05() { let s = R { id: 6, s: f"x" }; let t = rsR(s, 3); println(f"t{t.id}"); }
+fn c06() { let s = P { id: 7 }; let t = rt(s, 2); println(f"t{t.id}"); }
+fn c07() { let s = P { id: 8 }; let t = rsemi(s, 2); println(f"t{t.id}"); }
+fn c08() { let s = mk2(15); let t = rmid(s, 2); println(f"t{t.id}"); }
+fn c09() { let s = P { id: 16 }; let t = rg(s, 2); println(f"t{t.id}"); }
+fn c10() { let s = P { id: 17 }; let t = wrap(s, 2); println(f"t{t.id}"); }
+fn c11() { let mut i = 0; while i < 3 { let s = mk2(20 + i); let t = rs2(s, i); println(f"t{t.id}"); i = i + 1; } }
+fn c12() { let s = P { id: 19 }; rs(s, 1); println("disc"); }
+fn main() {
+    c00()
+    c01()
+    c02()
+    c03()
+    c04()
+    c05()
+    c06()
+    c07()
+    c08()
+    c09()
+    c10()
+    c11()
+    c12()
+    println("end")
+}
+"#,
+        &[
+            "t1", "dP1", "t2", "dP2", "t3", "dP3", "t4", "t5", "dS5", "t6", "dR6x", "t7", "dP7",
+            "t8", "dP8", "r2", "r1", "r0", "t15", "dS15", "t16", "dP16", "t17", "dP17", "t20",
+            "dS20", "t21", "dS21", "t22", "dS22", "dP19", "disc", "end",
+        ],
+        "asan_recursive_hand_back_of_a_param_has_one_owner",
+    );
+}

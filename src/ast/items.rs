@@ -3225,6 +3225,7 @@ fn type_carries_user_drop(
 struct ViaCtx<'a> {
     program: &'a crate::Program,
     self_name: &'a str,
+    arg_index: usize,
 }
 
 pub fn fn_always_returns_param(
@@ -3277,7 +3278,29 @@ pub fn fn_always_returns_param_via_call(
     f: &Function,
     arg_index: usize,
 ) -> bool {
-    fn_always_returns_param_ex(Some(program), f, arg_index, true, false)
+    // B-2026-09-26-42 — the hop's callee is asked this same ALL-PATHS
+    // question, so a chain (`wrap` -> `rs`) or a mutually recursive pair (`rh`
+    // -> `rg` -> `rh`) re-enters it. A question already in flight answers
+    // `true`, the greatest fixpoint: the set of functions every one of whose
+    // exits hands the param back bare or through a member of the set. A
+    // recursion that ends, ends at a bare exit, so the result IS the param.
+    thread_local! {
+        static VIA_IN_FLIGHT: std::cell::RefCell<Vec<(String, usize)>> =
+            const { std::cell::RefCell::new(Vec::new()) };
+    }
+    let key = (f.name.clone(), arg_index);
+    if VIA_IN_FLIGHT.with(|v| v.borrow().contains(&key)) {
+        return true;
+    }
+    VIA_IN_FLIGHT.with(|v| v.borrow_mut().push(key.clone()));
+    let answer = fn_always_returns_param_ex(Some(program), f, arg_index, true, false);
+    VIA_IN_FLIGHT.with(|v| {
+        let mut v = v.borrow_mut();
+        if let Some(pos) = v.iter().rposition(|k| k == &key) {
+            v.remove(pos);
+        }
+    });
+    answer
 }
 
 fn fn_always_returns_param_ex(
@@ -3352,13 +3375,28 @@ fn fn_always_returns_param_ex(
                         return true;
                     }
                 }
-                let ViaCtx { program, self_name } = via.unwrap();
+                let ViaCtx {
+                    program,
+                    self_name,
+                    arg_index,
+                } = via.unwrap();
                 let ExprKind::Identifier(g) = &callee.kind else {
                     return false;
                 };
                 // Self-recursion asks the same question of the same body.
+                // B-2026-09-26-42 — so it answers it the same way, as the
+                // greatest fixpoint: a self-call handing the param back in ITS
+                // OWN slot (`return rs(a, n - 1)`) yields the param exactly
+                // when every other exit does, because a recursion that ends
+                // ends at one of those. Declining it stood no caller down, so a
+                // named argument's cleanup ran beside the result's -- `dP1 t1
+                // dP1` on every surface, and a use after free for a struct
+                // owning a `shared` field. Any other slot still declines.
                 if g == self_name {
-                    return false;
+                    return args.get(arg_index).is_some_and(|a| {
+                        matches!(&a.value.kind, ExprKind::Identifier(n)
+                            if name.iter().any(|al| al == n))
+                    });
                 }
                 let Some(gf) = program.items.iter().find_map(|item| match item {
                     Item::Function(gf) if &gf.name == g => Some(gf),
@@ -3372,7 +3410,7 @@ fn fn_always_returns_param_ex(
                         // (`let o = Some(r); return keep(o)`).
                         || matches!(&a.value.kind, ExprKind::Identifier(_))
                             && place_yields_wrapped_param(&a.value, wraps))
-                        && fn_always_returns_param(Some(program), gf, j)
+                        && fn_always_returns_param_via_call(program, gf, j)
                 })
             }
             _ => crate::ast::option_result_ctor_payload(e)
@@ -3520,6 +3558,7 @@ fn fn_always_returns_param_ex(
         program.map(|p| ViaCtx {
             program: p,
             self_name: &f.name,
+            arg_index,
         })
     } else {
         None
