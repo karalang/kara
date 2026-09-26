@@ -94,7 +94,7 @@ distinguish "bugs flattening" from "we stopped writing them down."
 |---|---|
 | run-vs-build | 494 |
 | miscompile | 471 |
-| leak | 432 |
+| leak | 434 |
 | double-free | 317 |
 | missing-feature | 209 |
 | codegen-gap | 196 |
@@ -110,7 +110,7 @@ distinguish "bugs flattening" from "we stopped writing them down."
 
 | surface | total |
 |---|---|
-| codegen | 2123 |
+| codegen | 2125 |
 | interp | 567 |
 | typecheck | 308 |
 | other | 110 |
@@ -227,70 +227,6 @@ _Generated from `bug-ledger.jsonl` by `scripts/bug-curve.py` (2026-05-20 → 202
 | B-2026-09-20-50 | 2026-09-20 | codegen | medium | A CALL-RETURNED ENUM TEMP HANDED ONWARD TO AN OWNER THAT OUTLIVES THE CALL LEAKS ITS PAYLOAD -- `gives(mks(1))`, `puts(mut v, mks(3))` and `holds(mks(5))` lose 160 B in 5 blocks (24 allocs / 19 frees) where the SAME handoffs from a named local or an inline constructor are clean at 16/16; byte-identical on both arms of B-2026-09-16-13's fix, so pre-existing and independent of it; needs a TRANSFER of ownership to the destination, not a free at the call site, because the escape term that declines these is what stops the double free | — |
 | B-2026-09-20-51 | 2026-09-20 | codegen | medium | AN `Option`-WRAPPED FIELD HIDES A BOXED ERASED ENUM PAYLOAD FROM THE HOLDER'S FREE, so `struct Ho[T] { g: Option[G1[T]] }` loses 24 B in 1 block where the identical holder without the wrapper (`struct H[T] { g: G1[T] }`) is clean after B-2026-09-19-35 -- `user_enum_boxed_payload_variants` returns empty for `Option` and `Result` BY NAME ("the seeded pair keeps its own hardcoded-area path"), so that row's holder-side free is never emitted for a field whose declared type is the WRAPPER, and the inner `G1[String]`'s box reaches the drop switch through the `_ => None` erasure; 0 indirect, 0 invalid accesses and correct stdout in both the match and the handoff spellings, so only the leak line sees it | — |
 | B-2026-09-20-54 | 2026-09-20 | codegen+interp | medium | A `Drop` BODY FIRES TWICE FOR A CONTAINER ELEMENT MOVED OUT OF A TUPLE (`return t.0[0];`) -- the tuple's element-bodies walk still runs on the element that left, so `dR1` prints once at the source and once at the destination; MEMORY IS CLEAN on all four surfaces, so no leak column and no invalid-read column can see it and only a printed body count can, and `--interp` prints the same doubled body, so this is NOT a backend divergence | — |
-| B-2026-09-20-55 | 2026-09-20 | codegen | high | CLOSED ON THE ENVELOPE IN BOTH SPELLINGS AND ON THE CONCRETE TWIN ENTIRELY;
-WHAT REMAINS IS THE GENERIC MONOMORPH PATH LOSING THE ELEMENT BODIES AND THE
-72 BYTES OF ELEMENT HEAP WITH THEM.
-
-c7a2a95 removed the `!single_field && elem_runs_body` clause in
-`src/codegen/declarations.rs` and its twin restriction in
-`types_lowering.rs`'s `multi_field_boxed_field`, which is what this row's
-own leak was: the clause declined to classify a multi-field variant's
-`Array` field `EnumDropKind::BoxedArray`, so no channel freed the box. The
-clause was a deliberate trade against B-2026-09-15-17's ordering divergence
-and said so in its own comment; that row is now fixed, so the clause came
-out and nothing moved when it did.
-
-A CELL THIS ROW DID NOT HAVE, and it is the one that says the fault was
-arity-keyed rather than erasure-keyed: the CONCRETE two-field spelling
-`enum C2 { X(Array[R, 2], i64) }` runs its element bodies correctly and in
-the right order on all four surfaces AND leaked the same 136 bytes
-(64 direct, 72 indirect at 36-byte element strings). The row only suspected
-this -- "whoever fixes the bodies half should expect the leak to survive
-it". It is now clean, 13 allocs / 13 frees, with and without a callee in the
-program.
-
-MEASURED AFTER, at `KARAC_OPT_LEVEL=0`, four surfaces (`--interp`,
-`karac run`, `karac build`, `KARAC_AUTO_PAR=0`), 9 cells, invalid-access
-column read before the leak line:
-
-  concrete two-field, no callee   64+72 -> 0+0    bodies correct throughout
-  concrete two-field + callee     64+72 -> 0+0    bodies correct throughout
-  generic  two-field, no callee   64+72 -> 72+0   bodies STILL LOST, all four
-  generic  two-field + callee     64+72 -> 72+0   bodies STILL LOST, all four
-
-No cell regressed; `Invalid read/write/free` is 0 in every cell before and
-after. At `-O2` every cell reads 0+0 both before and after, which is why the
-`-O0` column is the only one this row can be judged on.
-
-WHAT IS LEFT, AND IT IS THIS ROW'S OWN HEADLINE SHAPE. The generic
-`enum G2[T] { X(T, i64) }` at `T = Array[R, 2]` runs NO element body on any
-of the four surfaces -- `--interp` included, so it is an agreed gap rather
-than a divergence -- and the 72 bytes of element `String` go with them. The
-64-byte envelope is recovered. That remainder is a monomorph-path fault, not
-an arity one: the single-field generic `enum G[T] { X(T) }` at the same
-instantiation is clean on all four surfaces. Neighbours to read before
-picking it up: B-2026-09-20-58 (the single-field generic handed to a callee,
-where `--interp` runs the bodies and the compiled surfaces do not) and
-B-2026-09-20-33 (the generic spelling surviving a concrete fix).
-
---- THE ROW AS FILED, UNCHANGED BELOW THIS LINE ---
-
-A TWO-FIELD GENERIC ENUM VARIANT WHOSE FIRST FIELD INSTANTIATES TO `Array[R, N]` LOSES EVERY ELEMENT'S USER `Drop` BODY ON THE THREE COMPILED SURFACES WITH NO CALLEE ANYWHERE IN THE PROGRAM, AND LEAKS THE WHOLE PAYLOAD AT -O0 -- `64 (direct) + 72 (indirect) bytes in 1 block` under valgrind with 36-byte element strings, i.e. the payload allocation itself plus both elements' string buffers, which at the 3-byte strings the first measurement used reads as 64 direct + 6 indirect; the leak scales with the element, so quote it with the width, WHERE THE SINGLE-FIELD FORM OF THE SAME PROGRAM IS COMPILED-CORRECT AND CLEAN -- `enum G2[T] { X(T, i64), Y }` at `T = Array[R, 2]`, bound and dropped in a block (`let a: Array[R, 2] = [..]; let w: G2[Array[R, 2]] = G2.X(a, 5); println("  mid")`), prints `mid` alone against two due; deleting the `i64` second field and nothing else gives `enum G[T] { X(T), Y }`, which prints both bodies on ALL FOUR surfaces with valgrind reporting 0 errors from 0 contexts. So the VARIANT'S ARITY, and nothing else in the program, costs the compiled side the element bodies -- a control that differs in the thing under test and in nothing else. THIS IS THE LIVE REMAINDER OF B-2026-09-20-45, split out rather than buried in it: that row's fix repaired the INTERPRETER gate for the single-field generic `Array` payload and had to carry an explicit SINGLE-FIELD condition precisely because of this cell, since without it the interpreter began firing both bodies here while all three compiled surfaces stayed silent -- a fresh run-vs-build divergence, which is what the earlier draft of that arm was backed out for. Repairing this row is what retires that condition. UNTIL THEN THE INTERPRETER IS DELIBERATELY SILENT ON THIS CELL, keeping it an AGREED fault rather than a manufactured divergence, WHICH ALSO MEANS NO A/B HARNESS IN THE TREE SEES THIS ROW and only a hand-derived due sequence does. NOT MEASURED and worth the first hour: whether the boundary is "more than one field" or "a field AFTER the generic one" (`X(i64, T)` was not run); whether a two-field variant with a MONOMORPHIC `Array[R, 2]` first field has the same loss, which would move the trigger off genericity entirely; and whether the second field's TYPE matters or only its presence. ALL THREE OF THE "NOT MEASURED" QUESTIONS BELOW ARE NOW ANSWERED, AND THE FIRST ANSWER SPLITS THIS ROW IN TWO. (1) The boundary is ARITY, not position: `X(i64, T)` loses both bodies identically to `X(T, i64)`. (2) A MONOMORPHIC two-field variant — `enum M2 { X(Array[R, 2], i64), Y }` — RUNS both bodies on all four surfaces AND STILL LEAKS 16 B in 1 block, so genericity is the trigger for the BODIES half only and the MEMORY half is arity-alone; this row's "the single-field form is compiled-correct and clean" control is the SINGLE-FIELD generic (measured 11 allocs / 11 frees / 0 errors, and the monomorphic single-field twin likewise), but the monomorphic TWO-field arm a reader would reach for next is body-correct and leaking. (3) The second field's TYPE does not matter, only its presence: `i64`, `String` and a second `T` all lose, and `X(T, T)` loses TWICE — 32 B in 2 blocks — so the leak is one block per generic field rather than one per variant. Measured at `struct R { id: i64 }`, no strings, so 16 B is the payload box alone and this width is NOT comparable to the row's 64+72 figure. THE MECHANISM, READ OFF THE TREE AND CONFIRMED IN THE EMITTED IR: `src/codegen/synth_drop.rs`'s generic-enum bodies emitter skips multi-field variants outright (`if tys.len() != 1 { continue; }`, whose comment gives the reason — a multi-field variant packs its fields ACROSS the erased area rather than boxing one value, so the emitter's box-pointer read at word 0 would be reading a field), while the complementary name-keyed walker `__karac_dropelems_enum_<E>` iterates every field at its own `layout.field_word_offsets` but explicitly SKIPS the enum's generic params. So a multi-field GENERIC variant's payload is owned by NEITHER walker — the same partition hole B-2026-09-13-7 closed at arity one, one arity over. The IR is the confirmation rather than the reading: the single-field generic cell emits `__karac_dropelems_genum_G_Array_R_2`, the monomorphic cells emit `__karac_dropelems_enum_M2` / `_M1`, and all four multi-field GENERIC cells emit NO element walker at all. THE FIX IS THEREFORE NOT A DELETED GUARD: the emitter's shared core takes one payload TypeExpr per tag and no word offset, so admitting multi-field means giving each arm its own `start_word` the way the name-keyed walker already does. THE TWO LEAKS HAVE TWO DIFFERENT CAUSES, MEASURED RATHER THAN SUPPOSED: disabling `declarations.rs`'s `if !single_field && elem_runs_body { continue; }` ALONE — the clause whose own comment ends "close B-2026-09-15-17 and this clause comes out" — takes the monomorphic two-field cell from 11 allocs / 10 frees and 16 B lost to 11/11 and 0 errors, and leaves BOTH generic cells byte-for-byte unchanged in output and in memory, which is what a generic field spelled `T` predicts (the `array_elem_and_len` above that clause returns `None` and the loop continues before the clause is reached). Restored and rebuilt, and the control arm reproduces 11/10 with 16 B lost. THAT EXPERIMENT DOES NOT LICENSE REMOVING THE CLAUSE: the divergence its comment records was measured on a cell WITH A CONSUMING CALL (`in 28 / dD23 / dD2` on the compiled surfaces against `dD23 / dD2 / in 28`), and the cells here have no callee anywhere in the program, so they cannot see that trade at all.
-
-BEFORE REACHING FOR A FIX, COUNT THE CHANNELS. Relayed from the thread that
-closed B-2026-09-21-6 and NOT re-derived here, but it fits this remainder's
-shape exactly: an agreed gap across all four surfaces is weak evidence that one
-channel is broken and reasonable evidence that the case is claimed by NOBODY.
-There, two mechanisms could have run the body, they overlapped on one scrutinee
-spelling, and each author had checked their own and concluded the case was
-handled; arming the walker alone then made a neighbouring cell print its whole
-transcript TWICE, and what worked was a flag travelling with the stash, set at
-the one site that could still see the expression. So ask how many places COULD
-run these element bodies and whether each believes another is doing it, before
-arming any one of them. Same session also measured its row's OWN proposed
-remedy to be wrong — widening the obvious helper double-fired a pinned fixture,
-because that helper runs after the arm has already bound a field and carries no
-mask. | — |
 | B-2026-09-20-56 | 2026-09-20 | codegen | medium | A `shared enum`'s INLINE TUPLE PAYLOAD IS STILL NOT WALKED WHEN THE TUPLE'S OWN ELEMENT IS A NON-`Path` SHAPE -- `shared enum Sh { S((Array[String, 2], i64)), N }` loses 56 B and `S((Option[String], i64))` loses 40 B, both with an arm that only READS, both on the tree that fixed the plain `(String, i64)` case. THE TELL IS NOT THE BYTE COUNT BUT THE IR: `__karac_rc_drop_Sh` IS NOT DEFINED AT ALL in either module, exactly as it was not before B-2026-09-20-49, so the enum still declines its rc-drop function and `emit_rc_dec` plain-`free`s the shell. `shared_enum_inline_tuple_payload_walk` gates on a syntactic `TypeKind::Tuple` at the FIELD, then asks `type_expr_has_drop_heap` / `te_recursive_drop_fully_supported` of the whole tuple, and one of those declines when an ELEMENT is itself an aggregate -- which element, and which of the two gates, IS NOT MEASURED. This is the fifth answer to the resolved-type question arriving one level down from the fourth: the parent fix taught the FIELD level to accept a non-`Path` head and bought exactly one level | — |
 | B-2026-09-20-57 | 2026-09-20 | codegen | medium | THE `let ... else` LEG PASSES `None` FOR "DID THIS ARM ONLY READ?" AND THAT `None` IS DELIBERATE, SO READ THIS BEFORE CHANGING IT: `None` RE-OWNS, and FLIPPING IT TURNS THIS 31 B LEAK INTO A DOUBLE FREE on the let-else spelling of a MOVING arm, which is strictly worse and has no cell here to catch it -- not re-owning under a moving arm hands the box and the binding the same buffer, while re-owning under a read-only arm merely leaves the original unowned. WHAT RETIRES THE ROW is giving that call site a body to read (the statements following the construct in the enclosing block), so `arm_payload_reads_only` can be asked there as it now is at every other caller; nothing else does. THE LEAK: `let Sh.S(x) = s else { ... };` over a `shared enum` with an inline tuple payload loses 31 B, and the lost block is NOT the payload B-2026-09-20-49 was filed about but the DEEP COPY the box made -- `total heap usage: 12 allocs, 11 frees` against a `match`-spelled twin's 11/11, same program otherwise, same string length. The byte count is IDENTICAL to what this cell leaked before that fix, for an unrelated reason, which is why it was first written down as "unchanged, not reached"; the alloc count is the only column that separates them. Its sibling, a struct-FIELD scrutinee at 34 B, WAS fixed by threading the flag, because that caller holds the arm's body and this one does not | — |
 | B-2026-09-20-58 | 2026-09-20 | codegen | medium | THE ARRAY-PAYLOAD SPELLING OF B-2026-09-20-44'S THIRD TERM IS NOT FIXED BY ITS REPAIR AND STILL LOSES BOTH ELEMENT `Drop` BODIES ON THE THREE COMPILED SURFACES WHILE LEAKING 6 B IN 2 BLOCKS -- `fn ga(g: G[Array[R, 2]]) -> i64 { match g { G.X(a) => { return a[0].id }, G.Y => { return 0 } } }` prints NEITHER body on `karac run`, -O0 and -O2 against two due, where `--interp` prints both; the two controls that make it -44's third term rather than a new gate are in the same program and are CORRECT on all four surfaces with valgrind reporting 0 errors -- the arm that USES the binding without returning it (`println(f"{a[0].id}"); return 0`) and the arm that leaves the binding untouched (`return 0`). So the trigger is the same three-term conjunction -44 pins: a generic envelope, a payload over the boxing threshold, and the arm's binding feeding the value RETURNED from the callee. IT ALSO EXTENDS -44's `VALGRIND IS CLEAN on every losing cell`, which is true for a STRUCT payload and false here: with an `Array` payload the losing cell leaks one block per element, so this half of the class IS visible to a memory gate where -44's half is not. WHY -44's FIX DOES NOT REACH IT, measured rather than assumed, so the next reader does not spend the hour: that fix admits a read when it resolves to a primitive scalar, and the admitted-reads set is keyed by THE BINDING'S OWN STRUCT FIELDS -- for an `Array` payload the binding's type is `Array[R, 2]`, which is not a struct, so there is no field to admit and the set is empty. An experiment that added an INDEX hop to the read form (`a[0].id` alongside `v.id`) changed nothing for exactly that reason: the hop was never the missing part. Reaching this needs ELEMENT-TYPE resolution -- asking what `Array[R, 2]`'s element type is and then whether the projection off it is primitive -- which is a genuine widening into machinery that B-2026-09-20-14, -15 and -49 are already open against, and is why -44 was deliberately kept narrow rather than stretched to cover this. NOT MEASURED: whether a `Vec` payload behaves as the `Array` one does or as the struct one does; whether the leak scales with the element (it is 3 B per element at 3-byte strings and was not re-run wider); and whether the two-element arity matters at all. | — |
@@ -405,6 +341,8 @@ registered in the callee's prologue, not by-value struct params in general. | �
 | B-2026-09-26-35 | 2026-09-26 | interp+codegen | medium | A `Drop`-BEARING FIELD PROJECTED OFF A NAMED LOCAL AND MOVED INTO A BUILTIN SINK RUNS ITS BODY TWICE ON ALL FOUR SURFACES -- `let w = mkw(7); xs.push(w.r)` prints `dD107n107 dD7 l1 dD7n7 end` compiled (the extra `dD7` reads the moved-from field's ZEROED name) and `dD107n107 dD7n7 l1 dD7n7 end` on `--interp`, against a due `dD107n107 l1 dD7n7 end`; the same for `[w.r]`, `Some(w.r)`, `Map.insert(1, w.r)` and `VecDeque.push_back(w.r)`, while `let x = w.r`, `(w.r, 1)`, `Hh { d: w.r }` and a user fn `take(w.r)` are right | — |
 | B-2026-09-26-36 | 2026-09-26 | interp+codegen | medium | A PARAM WRAPPED IN A USER-ENUM VARIANT, RE-WRAPPED OUT OF A `match`, WRAPPED INSIDE A GENERIC FN, OR WHOSE WRAPPER IS DESTRUCTURED IN THE CALLEE, STILL RUNS ITS `Drop` BODY TWICE WHEN HANDED BACK -- `h1(s, true)` over `fn h1(s: P, c: bool) -> Ho[P] { let o = Ho.Full(s); if c { return o } return Ho.Empty }` prints `dP5 dP5 h` on all four surfaces; `h1(P{..}, false)` SPLITS (interp `dP6 h`, compiled `dP6 dP6 h`) | — |
 | B-2026-09-26-37 | 2026-09-26 | interp+codegen | medium | A PAYLOAD PART HANDED BACK ON ONLY SOME PATHS (`Some(t) => { if k { return t.r; } .. }`) RUNS ITS `Drop` BODY TWICE ON THREE OF ITS FOUR ARGUMENT-FORM x PATH CORNERS, a different backend wrong each time -- the interpreter doubles when the path TAKES the escape, codegen doubles when the argument is a NAMED LOCAL, and the corner where both apply (`let a = ..; eat(a, true)`) is an AGREED double; a static mask cannot be right on both paths, so the repair is per-path | — |
+| B-2026-09-26-38 | 2026-09-26 | codegen | high | A MULTI-FIELD GENERIC ENUM VARIANT WHOSE GENERIC FIELD INSTANTIATES TO A NON-ARRAY HEAP TYPE LEAKS THAT FIELD AT -O0 ON EVERY COMPILED SURFACE -- `enum G2[T] { X(T, i64), Y }` at `T = String` loses 24 B direct + the string (35 B indirect at a 35-byte string), at `T = Vec[i64]` 24 + 24, at `T = Vec[R]` 24 + 134 with both element bodies RUNNING; the single-field generic `G[Vec[R]]` and the concrete two-field `enum C2 { X(Vec[R], i64) }` are both clean, so it is generic x multi-field x non-array, the memory-half twin of B-2026-09-20-55's array fix | — |
+| B-2026-09-26-39 | 2026-09-26 | codegen | medium | A MULTI-FIELD GENERIC ENUM `Gh[T] { Y(T, String) }` AT AN ARRAY INSTANTIATION, HANDED TO A BY-VALUE CALLEE, LEAKS ITS HEAP SIBLING -- 35 B in 1 block at -O0 on every compiled surface (the `String` beside the array; the array's elements are freed); was 105 B in 3 blocks before B-2026-09-20-55; no-callee, `T = i64` and the concrete twin are all clean | — |
 
 ### Relocated
 
@@ -2976,6 +2914,7 @@ registered in the callee's prologue, not by-value struct params in general. | �
 | B-2026-09-20-41 | codegen+interp | medium | CLOSED ON THE `Array`-AT-A-NAMED-LOCAL HALF ONLY, AND THE OTHER THREE POSITIONS ARE NOW THEIR OWN OPEN ROWS -- fixed: `enum Slot[T] { S(T), N }` at `… | 48ca202b7 |
 | B-2026-09-20-52 | codegen | high | TWO INDEPENDENT FAULTS THAT CANCEL, and the row's own clean control `d7` is one of the cancellations rather than a comparison: (L) a CONCRETE holder… | 2ae52a99e |
 | B-2026-09-20-53 | codegen | high | AN ELEMENT MOVED OUT OF A CONTAINER INSIDE A TUPLE (`return t.0[0];`) IS FREED BY THE TUPLE'S OWN WALK -- the two existing move-out disarms partition… | 9cc8800 |
+| B-2026-09-20-55 | codegen | high | A TWO-FIELD GENERIC ENUM VARIANT OVER `Array[R, N]` RAN NO ELEMENT `Drop` BODY AND LEAKED ITS PAYLOAD ON EVERY SURFACE -- `enum G2[T] { X(T, i64), Y… | 2fbff99df |
 | B-2026-09-20-62 | codegen+interp | high | A GENERIC ENUM WHOSE PAYLOAD REACHES `Vec[R]` ONLY THROUGH THE INSTANTIATION RUNS NO ELEMENT `Drop` BODY ON ANY OF THE FOUR SURFACES, AND THE MATCH S… | 3c767cf49 |
 | B-2026-09-20-63 | codegen | medium | CLOSED ON THE LEAK IN BOTH SPELLINGS AND ON THE BODIES FOR `Array` ONLY; THE `Vec` SPELLING'S BODIES ARE B-2026-09-21-11 AND THE DISCARDING-ARM NEIGH… | c96edd0b6 |
 | B-2026-09-21-1 | interp+codegen | medium | THE `if let` AND `let .. | ce1403ef4 |
