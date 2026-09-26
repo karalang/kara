@@ -3614,6 +3614,29 @@ impl<'ctx> super::Codegen<'ctx> {
                     if let Some(v) = self.variables.get(var_name.as_str()) {
                         self.drop_rc.forwarded_handback_slots.insert(v.ptr);
                     }
+                } else if returns_param
+                    && self.handback_forwards_local(var_name)
+                    && self.callee_result_is_nonshared_enum(name)
+                    && ast_i.is_some_and(|ast_i| self.callee_takes_over_arg_drop_body(name, ast_i))
+                {
+                    // B-2026-09-25-38 — a FORWARDED value handed back inside an
+                    // ENUM result (`return Ho.Full(v)`, `if c { return Some(v) }
+                    // return None`). The result's payload walk runs the body on
+                    // the path that hands it back, and the callee's per-path
+                    // flag runs it on the path that does not, so the binding
+                    // keeping its own body made two: `let h = mkh(s)` printed
+                    // `dS8 dS8` against the interpreter's `dS8`. The MEMORY stays
+                    // here, because the result aliases this binding's object and
+                    // declines to free its payload for exactly that reason
+                    // (`let_payload_may_be_caller_retained`), and the callee
+                    // frees nothing of a forwarded param (caller-retains). Moving
+                    // the memory to the result instead is the other half of this
+                    // row's history: the result does not release it, 16 B/call.
+                    let var_name = var_name.clone();
+                    self.suppress_user_drop_body_keeping_memory(&var_name);
+                    if let Some(v) = self.variables.get(var_name.as_str()) {
+                        self.drop_rc.enum_handback_body_slots.insert(v.ptr);
+                    }
                 } else if ast_i.is_some_and(|ast_i| {
                     self.program_snapshot.as_deref().is_some_and(|p| {
                         super::declarations::find_function_ast(p, name).is_some_and(|f| {

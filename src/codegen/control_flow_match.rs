@@ -1148,14 +1148,24 @@ impl<'ctx> super::Codegen<'ctx> {
                         &arm.pattern,
                         arms,
                     ) {
+                        let takes = crate::binding_use::optres_arm_takes_whole_payload(
+                            &arm.pattern,
+                            &arm.body,
+                            arm.guard.as_ref(),
+                        ) && !self.optres_unowned_payload_binding_only_borrowed(
+                            scrutinee,
+                            &arm.pattern,
+                            &|n| {
+                                crate::consume_class::binding_only_borrowed(n, &arm.body)
+                                    && arm.guard.as_ref().is_none_or(|g| {
+                                        crate::consume_class::binding_only_borrowed(n, g)
+                                    })
+                            },
+                        );
                         self.suppress_optres_payload_bodies_for_match_scoped(
                             scrutinee,
                             &arm.pattern,
-                            crate::binding_use::optres_arm_takes_whole_payload(
-                                &arm.pattern,
-                                &arm.body,
-                                arm.guard.as_ref(),
-                            ),
+                            takes,
                         );
                     }
                     // Fresh-temp inline `Result` scrutinee (B-2026-07-12-2 gap
@@ -10992,7 +11002,10 @@ impl<'ctx> super::Codegen<'ctx> {
         let bodies_mask_is_sole_channel = arm_reads_only_bodies
             && (self.scrutinee_is_owned_param_binding(scrutinee)
                 || self
-                    .arm_generic_payload_bodies_are_element_only(scrut_name, &enum_name, pattern))
+                    .arm_generic_payload_bodies_are_element_only(scrut_name, &enum_name, pattern)
+                || self.arm_generic_payload_binding_registers_no_drop(
+                    scrut_name, &enum_name, pattern,
+                ))
             && self.var_has_boxed_enum_drop(scrut_name)
             && self.arm_consumes_only_generic_payload(&enum_name, pattern)
             && !arm_binding_takes_container_interior;
@@ -14148,6 +14161,117 @@ impl<'ctx> super::Codegen<'ctx> {
         !tes.is_empty() && tes.iter().all(|te| self.type_bodies_are_element_only(te))
     }
 
+    /// B-2026-09-25-38 — does every payload position this arm takes bind a
+    /// user struct that the arm-binding site registers NO drop for?
+    ///
+    /// Conjunct 4 above stands the bodies mask down only where the binding is a
+    /// VIEW, on the premise that a named local's binding runs the body through
+    /// its own `karac_drop_<T>`. `bind_pattern_values` gives it one only for a
+    /// copy-supported struct (`is_copy_supported_user_struct`), and a `shared`
+    /// field declines copy support, so for `Ho[S2]` over `struct S2 { h: Sh,
+    /// id: i64 }` the mask ran and the body ran nowhere: `match h { Ho.Full(x)
+    /// => println(x.id) }` printed no `dS` on any compiled surface. The walk
+    /// stays with the scrutinee instead, the same answer as the view case.
+    fn arm_generic_payload_binding_registers_no_drop(
+        &self,
+        scrut_name: &str,
+        enum_name: &str,
+        pattern: &Pattern,
+    ) -> bool {
+        let tes = self.arm_consumed_payload_inst_tes(scrut_name, enum_name, pattern);
+        !tes.is_empty()
+            && tes
+                .iter()
+                .all(|te| self.payload_struct_binding_registers_no_drop(te, false))
+    }
+
+    /// B-2026-09-25-38 — is `te` a plain user struct whose whole-value arm
+    /// binding registers no drop: not copy-supported, and (for an
+    /// `Option`/`Result` payload, `optres`) not admitted by the inline
+    /// payload arm's `struct_heap_copyable_or_handle` widening either. The two
+    /// halves of `bind_pattern_values`' user-struct gate a NAMED LOCAL
+    /// scrutinee reaches.
+    fn payload_struct_binding_registers_no_drop(&self, te: &TypeExpr, optres: bool) -> bool {
+        let TypeKind::Path(p) = &te.kind else {
+            return false;
+        };
+        if p.generic_args.is_some() {
+            return false;
+        }
+        let [n] = p.segments.as_slice() else {
+            return false;
+        };
+        if !self.type_decls.struct_types.contains_key(n.as_str())
+            || self.type_decls.shared_types.contains_key(n.as_str())
+            || self.aggregate_param_copy_supported_struct(n, &mut Vec::new())
+        {
+            return false;
+        }
+        // An `Option` payload wider than the seed enum's inline area is heap-
+        // BOXED, and the box path gives the binding its own owner, so only an
+        // INLINE payload reaches the gate this mirrors (`is_inline_optres_-
+        // struct_payload`'s width test). Without this `fn f(r: R) -> Option[R]`
+        // over a five-word `R` ran the body twice at the arm.
+        !optres
+            || (!self.struct_heap_copyable_or_handle(n)
+                && self
+                    .type_decls
+                    .struct_types
+                    .get(n.as_str())
+                    .is_some_and(|st| Self::llvm_type_word_count((*st).into()) <= 3))
+    }
+
+    /// B-2026-09-25-38 — does this `Some(..)` arm bind the whole payload of an
+    /// `Option` whose payload struct registers no drop at the bind site
+    /// ([`Self::optres_scrutinee_payload_registers_no_drop`]), and only BORROW
+    /// every binding by the codegen classifier `borrowed`? Then nothing takes
+    /// the payload and the scrutinee keeps its bodies walk. The syntactic
+    /// `optres_*_takes_whole_payload` verdict calls a call argument a take,
+    /// which is right for a binding with an owner and backwards for one with
+    /// none: `Some(x) => rd(x)` over `rd(x: ref S2)` ran the body nowhere.
+    pub(super) fn optres_unowned_payload_binding_only_borrowed(
+        &self,
+        scrutinee: &Expr,
+        pattern: &Pattern,
+        borrowed: &dyn Fn(&str) -> bool,
+    ) -> bool {
+        let ExprKind::Identifier(name) = &scrutinee.kind else {
+            return false;
+        };
+        let PatternKind::TupleVariant { path, patterns } = &pattern.kind else {
+            return false;
+        };
+        if path.last().map(String::as_str) != Some("Some") {
+            return false;
+        }
+        let [sub] = patterns.as_slice() else {
+            return false;
+        };
+        let PatternKind::Binding(b) = &sub.kind else {
+            return false;
+        };
+        self.optres_scrutinee_payload_registers_no_drop(name) && borrowed(b)
+    }
+
+    /// B-2026-09-25-38 — the `Option`/`Result` sibling: is `name`'s recorded
+    /// instantiation's payload such a struct? Read from the same record as
+    /// [`Self::optres_scrutinee_payload_is_tuple`].
+    fn optres_scrutinee_payload_registers_no_drop(&self, name: &str) -> bool {
+        let Some(inst) = self.type_decls.enum_inst_var_types.get(name) else {
+            return false;
+        };
+        let TypeKind::Path(p) = &inst.kind else {
+            return false;
+        };
+        if p.segments.last().map(String::as_str) != Some("Option") {
+            return false;
+        }
+        p.generic_args.as_ref().is_some_and(|args| {
+            matches!(args.as_slice(), [GenericArg::Type(te)]
+                if self.payload_struct_binding_registers_no_drop(te, true))
+        })
+    }
+
     /// B-2026-09-20-62 — the INSTANTIATED type of every payload position this
     /// arm takes, which is the one derivation
     /// [`Self::arm_generic_payload_bodies_are_element_only`] and the
@@ -17137,6 +17261,14 @@ impl<'ctx> super::Codegen<'ctx> {
         // bodies to whoever took them, and leaving the place armed ran them
         // twice (measured `dR1 dR2 dR1 dR2` on the `return t` cell).
         if !takes_payload && self.optres_scrutinee_payload_is_tuple(&name) {
+            return;
+        }
+        // B-2026-09-25-38 — a whole-value binding of a struct payload the bind
+        // site registers no drop for, which the arm only borrows: the same
+        // unfunded premise as the tuple case above, reached by a struct whose
+        // `shared` field declines copy support. `let o = mid(s, true); match o
+        // { Some(x) => println(x.id), .. }` ran the body on no compiled surface.
+        if !takes_payload && self.optres_scrutinee_payload_registers_no_drop(&name) {
             return;
         }
         if self

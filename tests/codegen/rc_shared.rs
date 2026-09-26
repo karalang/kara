@@ -4162,3 +4162,79 @@ fn main() {
     };
     assert_eq!(out, "atrue\nbtrue\ndS2\nctrue\nd\ne5\nf66\ndS6\ng11\ndS8\ndS7\nhtrue\ndS9\ndS10\ndS11\ndS12\ni\njtrue\njtrue\njtrue\nktruetrue\ndS14\nl1\ndS13\nntrue\nntrue\ndS22\nnho\nn\nmtrue\ndS15\nend\n", "got:\n{out}");
 }
+
+/// B-2026-09-25-38 — a `Drop` struct with a `shared` field (so the callee
+/// FORWARDS it rather than entry-copying) handed to a generic fn that returns
+/// it inside an enum. `let h = mkh(s)` over `fn mkh[T](v: T) -> Ho[T]` and
+/// `mid(s, c)` over `fn mid[T](v: T, c: bool) -> Option[T]` ran the body twice
+/// on every compiled surface (`a_`..`c_`, `i_`, `j_`): the result's payload
+/// walk (or the callee's per-path flag, on `None`) plus the caller's own
+/// wrapper. The caller now gives up the BODY and keeps the memory, which the
+/// result aliases. That exposed three places the body then ran nowhere, all
+/// covered here: a discarded result (`d_`, `e_`, which also leaked the box),
+/// and a match arm whose binding only borrows the payload (`f_`..`h_`, `k_`,
+/// B-2026-09-26-10's cells), where the arm-binding site registers no drop for
+/// a struct that declines copy support, so the scrutinee keeps its walk.
+#[test]
+fn e2e_generic_enum_handback_of_shared_field_drop_struct_runs_body_once() {
+    let Some(out) = run_program(
+        r#"shared struct Sh { k: i64 }
+struct S2 { h: Sh, id: i64 }
+impl Drop for S2 { fn drop(mut ref self) { println(f"dS{self.id}") } }
+enum Ho[T] { Full(T), Empty }
+struct H { n: i64 }
+impl H { fn wrap[T](ref self, v: T) -> Option[T] { return Some(v) } }
+fn mk2(i: i64) -> S2 { return S2 { h: Sh { k: i }, id: i } }
+fn mkh[T](v: T) -> Ho[T] { return Ho.Full(v); }
+fn mid[T](v: T, c: bool) -> Option[T] { if c { return Some(v) } return None }
+fn rd(x: ref S2) { println(f"rd{x.id}") }
+fn eat2(s: S2) { println(f"x{s.id}") }
+fn a_bound() { let s = mk2(1); let h = mkh(s); println("a") }
+fn b_mid_some() { let s = mk2(2); let o = mid(s, true); println("b") }
+fn c_mid_none() { let s = mk2(3); let o = mid(s, false); println("c") }
+fn d_discard() { let s = mk2(4); mkh(s); println("d") }
+fn e_underscore() { let s = mk2(5); let _ = mkh(s); println("e") }
+fn f_match_ho() {
+    let s = mk2(6); let h = mkh(s); println("f")
+    match h { Ho.Full(x) => println(f"got{x.id}"), Ho.Empty => println("none") }
+    println("f after")
+}
+fn g_match_opt() {
+    let s = mk2(7); let o = mid(s, true); println("g")
+    match o { Some(x) => println(f"got{x.id}"), None => println("none") }
+    println("g after")
+}
+fn h_ref_arm() {
+    let s = mk2(8); let o = mid(s, true);
+    match o { Some(x) => rd(x), None => println("none") }
+    let t = mk2(9); let k = mkh(t);
+    match k { Ho.Full(x) => rd(x), Ho.Empty => println("none") }
+    println("h after")
+}
+fn i_loop() { for i in 10..12 { let s = mk2(i); let h = mkh(s); println(f"i{i}") } }
+fn j_method() { let hh = H { n: 1 }; let s = mk2(13); let o = hh.wrap(s); println("j") }
+fn k_local() {
+    let o = Some(mk2(14)); if let Some(x) = o { println(f"k{x.id}") }
+    let p = Some(mk2(15)); match p { Some(x) => eat2(x), None => println("none") }
+    let q = Some(mk2(16)); match q { Some(x) => rd(x), None => println("none") }
+}
+fn main() {
+    a_bound()
+    b_mid_some()
+    c_mid_none()
+    d_discard()
+    e_underscore()
+    f_match_ho()
+    g_match_opt()
+    h_ref_arm()
+    i_loop()
+    j_method()
+    k_local()
+    println("end")
+}
+"#,
+    ) else {
+        return;
+    };
+    assert_eq!(out, "dS1\na\ndS2\nb\ndS3\nc\ndS4\nd\ndS5\ne\nf\ngot6\ndS6\nf after\ng\ngot7\ndS7\ng after\nrd8\ndS8\nrd9\ndS9\nh after\ndS10\ni10\ndS11\ni11\ndS13\nj\nk14\ndS14\nx15\ndS15\nrd16\ndS16\nend\n", "got:\n{out}");
+}

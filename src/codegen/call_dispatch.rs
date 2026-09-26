@@ -7943,7 +7943,7 @@ impl<'ctx> super::Codegen<'ctx> {
                 // too. With the fall-through above but this still `false`, the
                 // discarded box was freed and its 8 `String`s were not
                 // (136 B in 8 blocks at `-O0`).
-                let inner = if box_only {
+                let inner = if box_only || self.discarded_call_hands_back_retained_memory(tail) {
                     None
                 } else {
                     self.enum_boxed_payload_interior_drop(&payload_te, true)
@@ -10922,6 +10922,27 @@ impl<'ctx> super::Codegen<'ctx> {
                 || crate::ast::fn_always_returns_param_via_call(program, f, arg_index))
     }
 
+    /// B-2026-09-25-38 — is the callee's declared result `Option[..]` or a
+    /// non-`shared` user enum? The results whose payload walk runs a handed-back
+    /// value's body without freeing its memory, so a forwarded argument keeps
+    /// the memory and gives up only the body.
+    pub(super) fn callee_result_is_nonshared_enum(&self, callee_name: &str) -> bool {
+        let Some(program) = self.program_snapshot.as_deref() else {
+            return false;
+        };
+        let Some(f) = super::declarations::find_function_ast(program, callee_name) else {
+            return false;
+        };
+        let Some(ret) = f.return_type.as_ref().and_then(Self::te_head_name) else {
+            return false;
+        };
+        ret == "Option"
+            || program.items.iter().any(|it| {
+                matches!(it, crate::ast::Item::EnumDef(ed)
+                    if ed.name == ret && !ed.is_shared && !ed.is_par && !ed.stdlib_origin)
+            })
+    }
+
     /// B-2026-09-25-31 / -37 — may a caller retract a FORWARDED argument's
     /// memory-only action along with its body? Where the callee hands it back
     /// whole (or in a struct) or pushes it into a container of its own on
@@ -11040,7 +11061,31 @@ impl<'ctx> super::Codegen<'ctx> {
             self.type_decls.struct_types.contains_key(tn.as_str())
                 && !(self.struct_type_is_entry_copied_heap(tn)
                     || self.handback_owns_nothing_from_local(n, tn)
-                    || self.forwarded_handback_retracted(n))
+                    || self.forwarded_handback_retracted(n)
+                    || self.enum_handback_body_retracted(n))
+        })
+    }
+
+    /// B-2026-09-25-38 — did the monomorph call site just retract `var`'s
+    /// BODY because the callee hands it back inside an enum? Then a discarded
+    /// result runs the body, and `var` keeps the memory.
+    fn enum_handback_body_retracted(&self, var: &str) -> bool {
+        self.variables
+            .get(var)
+            .is_some_and(|v| self.drop_rc.enum_handback_body_slots.contains(&v.ptr))
+    }
+
+    /// B-2026-09-25-38 — does the discarded call hand a body-retracted
+    /// argument ([`Self::enum_handback_body_retracted`])? Its payload's
+    /// interior is that binding's memory, so the result frees its envelope
+    /// only.
+    fn discarded_call_hands_back_retained_memory(&self, tail: &Expr) -> bool {
+        let args = match &tail.kind {
+            ExprKind::Call { args, .. } | ExprKind::MethodCall { args, .. } => args,
+            _ => return false,
+        };
+        args.iter().any(|a| {
+            matches!(&a.value.kind, ExprKind::Identifier(n) if self.enum_handback_body_retracted(n))
         })
     }
 

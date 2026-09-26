@@ -513,7 +513,12 @@ impl<'ctx> super::Codegen<'ctx> {
             {
                 // B-2026-09-10-14 — the `if let` leg's scope verdict, block form.
                 let takes =
-                    crate::binding_use::optres_block_takes_whole_payload(pattern, then_block);
+                    crate::binding_use::optres_block_takes_whole_payload(pattern, then_block)
+                        && !self.optres_unowned_payload_binding_only_borrowed(
+                            value,
+                            pattern,
+                            &|n| crate::consume_class::binding_only_borrowed_block(n, then_block),
+                        );
                 self.suppress_optres_payload_bodies_for_match_scoped(value, pattern, takes);
             }
         }
@@ -1373,7 +1378,10 @@ impl<'ctx> super::Codegen<'ctx> {
         // retraction loses the body and how it was measured.
         if optres_bindings_owned {
             // B-2026-09-10-14 — the `while let` leg's scope verdict.
-            let takes = crate::binding_use::optres_block_takes_whole_payload(pattern, body);
+            let takes = crate::binding_use::optres_block_takes_whole_payload(pattern, body)
+                && !self.optres_unowned_payload_binding_only_borrowed(value, pattern, &|n| {
+                    crate::consume_class::binding_only_borrowed_block(n, body)
+                });
             self.suppress_optres_payload_bodies_for_match_scoped(value, pattern, takes);
         }
         self.suppress_inline_option_map_payload_cleanup(value, pattern);

@@ -342,6 +342,11 @@ pub(crate) struct DropRc<'ctx> {
     /// the discard registrar reads this to know it may be that owner. Keyed by
     /// the slot, unique per alloca, so no per-function reset is needed.
     pub(crate) forwarded_handback_slots: HashSet<PointerValue<'ctx>>,
+    /// B-2026-09-25-38 — argument slots whose BODY (only) a generic call site
+    /// retracted because the callee hands the FORWARDED value back inside an
+    /// enum result. The binding keeps the memory, so a discarded result owns
+    /// the bodies and its own envelope but never the payload's interior.
+    pub(crate) enum_handback_body_slots: HashSet<PointerValue<'ctx>>,
     /// B-2026-09-02-14 — per-path flag for a named `Option`/`Result` place
     /// whose payload-BODIES walk a `match` / `if let` / `while let` /
     /// `let … else` arm hands to its binding: `true` while the place still owes

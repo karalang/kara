@@ -6509,6 +6509,7 @@ impl<'ctx> Codegen<'ctx> {
                 field_view_flags: HashMap::new(),
                 cond_move_field_flag_slots: HashSet::new(),
                 forwarded_handback_slots: HashSet::new(),
+                enum_handback_body_slots: HashSet::new(),
                 deep_copy_rc_inc_bare_shared: false,
                 arm_moved_enum_payload_positions: HashMap::new(),
                 enum_drop_fns: HashMap::new(),
