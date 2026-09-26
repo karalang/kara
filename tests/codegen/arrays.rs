@@ -1318,26 +1318,18 @@ fn e2e_array_in_a_tuple_runs_each_element_drop_body_once() {
                 "n:7\ndD1\ndD2\nend\n",
             ),
             (
-                // PINNED AT AN AGREED SILENCE, measured on all four surfaces
-                // and confirmed pre-existing on the fix commit's PARENT tree
-                // (parent checkout + marker guard, not a stash — see the
-                // destructure note below for why that distinction matters).
-                // A tuple held in a STRUCT FIELD runs no element body here,
-                // while the identical tuple as a LOCAL (the first two cells)
-                // runs both — the nested-container-in-a-struct-field bodies
-                // gap, B-2026-09-15-23's family one level further in, and NOT
-                // something this row's memory fix changes: the same shape's
-                // MEMORY is clean and asserted by
-                // `b23-tuple-array-struct-field-move` in the ASAN sibling.
-                //
-                // Kept as a cell rather than dropped, because it is the
-                // position where a future bodies fix has to show up, and
-                // because it records that memory and bodies really did come
-                // apart here (B-2026-08-28-57).
-                "pinned: a struct field holding the tuple runs no body on any backend",
+                // FLIPPED BY B-2026-09-16-6. This cell pinned an AGREED
+                // SILENCE: a tuple held in a STRUCT FIELD ran no element body
+                // on any backend, while the identical tuple as a LOCAL (the
+                // first two cells) ran both. Both backends' type-level gates
+                // read the tuple's element HEAD NAMES, and the head of
+                // `Array[D, 2]` is `Array`; they now ask about the array's
+                // element, together, so the cell becomes an agreed FIRING
+                // rather than a divergence.
+                "a struct field holding the tuple runs both bodies (B-2026-09-16-6)",
                 "struct W { t: (Array[D, 2], i64) }\n",
                 "let w: W = W { t: ([mkd(1), mkd(2)], 7) };\nlet w2 = w;\nprintln(f\"n:{w2.t.1}\");",
-                "n:7\nend\n",
+                "n:7\ndD1\ndD2\nend\n",
             ),
             (
                 "a by-value param returned — the fourth ownership site",
@@ -1363,26 +1355,17 @@ fn e2e_array_in_a_tuple_runs_each_element_drop_body_once() {
                 assert_eq!(aot, want, "[{label}] AOT");
             }
         }
-    // A DESTRUCTURE is a RUN-VS-BUILD DIVERGENCE and is pinned as one,
-    // with a separate expectation per backend, because a single `want`
-    // would force a choice between two behaviours that really do differ.
+    // A DESTRUCTURE. This was pinned as a RUN-VS-BUILD DIVERGENCE, with a
+    // separate expectation per backend: the interpreter ran `dD1 dD2` and both
+    // compiled backends ran nothing, because the place-source destructure's
+    // leaf loop exited at its `TypeKind::Path` test for an array leaf and so
+    // took neither the bodies nor the memory. B-2026-09-16-6 gave it an array
+    // arm, so both backends now agree and one `want` serves.
     //
-    // PRE-EXISTING, not this row's doing. Measured on the fix commit's
-    // PARENT tree (`git checkout <fix>~1 -- src/`, with a marker count
-    // printed as the guard): interp `dD1 dD2 j:7 end`, both compiled
-    // backends `j:7 end` — identical to the post-fix reading. Its MEMORY
-    // is clean before and after (`b23-tuple-array-return-destructure`
-    // asserts that), so this is purely the bodies channel and is filed
-    // separately.
-    //
-    // The first attempt at this check used `git stash push src/` and was
-    // WORTHLESS: the fix was already committed, so the stash took nothing
-    // and both "before" and "after" measured the same fixed tree. That is
-    // CLAUDE.md's documented trap, and the marker guard is what catches it.
-    //
-    // The interpreter also fires the bodies EARLY, at the destructure
-    // rather than at scope end, which is the same shape the array-field
-    // move-out shows; that ordering is part of what the new row records.
+    // The interpreter's firing at the destructure is NOT early, which is what
+    // this note used to say: `a` has no use after the `let`, so NLL ends it
+    // there. With a later read of `a` both backends fire after that read (see
+    // `e2e_tuple_destructure_array_leaf_runs_bodies_on_every_backend`).
     {
         let src = format!(
             "{HDR}fn main() {{\n\
@@ -1397,12 +1380,12 @@ fn e2e_array_in_a_tuple_runs_each_element_drop_body_once() {
         assert_eq!(
             interp_out.join(""),
             "dD1\ndD2\nj:7\nend\n",
-            "destructure, interpreter (bodies fire, and early)"
+            "destructure, interpreter (FLIPPED BY B-2026-09-16-6: one want now)"
         );
         if let Some(aot) = run_program(&src) {
             assert_eq!(
-                aot, "j:7\nend\n",
-                "destructure, AOT (no bodies — the divergence)"
+                aot, "dD1\ndD2\nj:7\nend\n",
+                "destructure, AOT (FLIPPED BY B-2026-09-16-6: was `j:7 end`)"
             );
         }
     }

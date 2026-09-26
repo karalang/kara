@@ -18317,6 +18317,28 @@ impl<'ctx> super::Codegen<'ctx> {
                         "ptup.discard.p",
                     ) {
                         if let Some(lty) = tuple_ty.get_field_type_at_index(idx as u32) {
+                            // B-2026-09-16-6 — a discarded `Array[T, N]`
+                            // element (`let (_, j) = t;`). The helper below is
+                            // keyed by a struct/enum NAME and declines an
+                            // array, so the elements' bodies ran on no compiled
+                            // surface while `--interp` ran them here. Bodies
+                            // only, run in place against the source's slot: the
+                            // aggregate keeps the memory, as for every leaf
+                            // this arm handles.
+                            if let Some((arr_elem_te, n)) = self.array_elem_and_len(&te) {
+                                if n > 0 && lty.is_array_type() {
+                                    let elem_ty = lty.into_array_type().get_element_type();
+                                    if let Some(bodies) = self.emit_array_elem_user_drop_bodies_fn(
+                                        elem_ty,
+                                        &arr_elem_te,
+                                        n,
+                                    ) {
+                                        self.builder.build_call(bodies, &[ptr.into()], "").unwrap();
+                                        took_bodies.insert(idx as u32);
+                                    }
+                                }
+                                continue;
+                            }
                             if let Ok(elem) = self.builder.build_load(lty, ptr, "ptup.discard") {
                                 // PLACE source — the aggregate's own drop frees it.
                                 //
@@ -18571,6 +18593,59 @@ impl<'ctx> super::Codegen<'ctx> {
                                     // before any read of `inner`. A tuple LOCAL
                                     // source never showed it because its walk does
                                     // not descend into a nested tuple element.
+                                    took_bodies.insert(idx as u32);
+                                }
+                                self.zero_tuple_elem_cap_at(base_ptr, tuple_ty, idx as u32, &te);
+                            }
+                        }
+                    }
+                }
+                continue;
+            }
+            // B-2026-09-16-6 — an `Array[T, N]` leaf off a PLACE source
+            // (`let t = (arr, 7); let (a, j) = t;`), the place-source twin of
+            // B-2026-09-22-13's fresh-source arm. It exited at the `Path` test
+            // below, so the leaf recorded no element type (`a[0].id` failed to
+            // build: "cannot resolve field 'id'") and took neither the bodies
+            // nor the memory: the elements' `Drop` bodies ran on no compiled
+            // surface while `--interp` ran them at the leaf's NLL death.
+            //
+            // The element type is recorded on BOTH legs — naming the leaf's
+            // elements is a separate question from who owns them, exactly as
+            // the tuple-leaf arm above says of its own registry. Ownership is
+            // taken only when the source does not already run the bodies: the
+            // leaf takes the memory and the bodies together and the cap-zero
+            // hands both away from the source (`zero_tuple_elem_cap_at` has
+            // walked array elements since `zero_array_elem_caps`).
+            if let Some((arr_elem_te, n)) = self.array_elem_and_len(&te) {
+                if let Some(slot) = self.variables.get(name.as_str()).copied() {
+                    if slot.ty.is_array_type() {
+                        self.var_types
+                            .array_elem_type_exprs
+                            .insert(name.clone(), arr_elem_te.clone());
+                        if !owner_runs_bodies && n > 0 {
+                            let elem_ty = slot.ty.into_array_type().get_element_type();
+                            // MEMORY FIRST, then bodies — LIFO drain, so the
+                            // bodies read live elements.
+                            if self.make_array_param_callee_owned(
+                                name,
+                                &arr_elem_te,
+                                n,
+                                elem_ty,
+                                slot.ptr,
+                            ) {
+                                if let Some(bodies) = self.emit_array_elem_user_drop_bodies_fn(
+                                    elem_ty,
+                                    &arr_elem_te,
+                                    n,
+                                ) {
+                                    self.track_user_drop_var_with_fn(
+                                        "",
+                                        name,
+                                        slot.ptr,
+                                        bodies,
+                                        UserDropKind::ContainerElemBodies,
+                                    );
                                     took_bodies.insert(idx as u32);
                                 }
                                 self.zero_tuple_elem_cap_at(base_ptr, tuple_ty, idx as u32, &te);

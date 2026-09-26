@@ -8913,3 +8913,62 @@ fn main() {
         "must match --interp"
     );
 }
+
+/// B-2026-09-16-6 — an `Array[T, N]` held in a TUPLE runs each element's
+/// `Drop` body exactly once, in every position the row measured and the
+/// ones found around it. Two defects, one family:
+///
+/// * A DESTRUCTURE off a place source (`let (a, j) = t;`, `let (_, j) = t;`,
+///   `let (a, j) = w.t;`) ran no body on any compiled surface while
+///   `--interp` ran them: the leaf loop exited at its `TypeKind::Path`
+///   test for an array leaf, so the leaf took neither the bodies nor the
+///   memory, and `a[0].id` failed to BUILD (`c2`).
+/// * A tuple in a STRUCT FIELD (`W { t: (Array[R, 2], i64) }`) ran no body
+///   on any backend: both type-level gates read the tuple's element HEAD
+///   NAMES, and the head of `Array[R, 2]` is `Array`.
+///
+/// `c1`/`c5`/`c7` fire at the destructure because nothing reads the array
+/// afterwards (NLL); `c2`/`c6` read it and fire after the read. `c13` is the
+/// `Vec` spelling of the struct-field cell, which ran compiled and not
+/// interpreted. Two rounds, so a stale slot or a double free surfaces.
+#[test]
+fn e2e_tuple_destructure_array_leaf_runs_bodies_on_every_backend() {
+    assert_eq!(
+        run_program(
+            r#"struct R { id: i64, s: String }
+impl Drop for R { fn drop(mut ref self) { println(f"dR{self.id}") } }
+struct W { t: (Array[R, 2], i64) }
+struct G[T] { t: (Array[T, 2], i64) }
+struct B { t: (Array[R, 2], i64) }
+impl Drop for B { fn drop(mut ref self) { println("dB") } }
+struct V { t: (Vec[R], i64) }
+fn mk(b: i64) -> R { return R { id: b, s: f"pay-aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa-{b}" }; }
+fn take(x: Array[R, 2]) { println(f"take {x[0].id}") }
+fn take_w(w: W) { println(f"tw {w.t.1}") }
+fn round() {
+    { let t: (Array[R, 2], i64) = ([mk(1), mk(2)], 7); let (a, j) = t; println(f"c1 {j}") }
+    { let t: (Array[R, 2], i64) = ([mk(3), mk(4)], 7); let (a, j) = t; println(f"c2 {j} {a[0].id}") }
+    { let t: (Array[R, 2], i64) = ([mk(5), mk(6)], 7); let (a, j) = t; let b = a; println(f"c3 {b[1].id}") }
+    { let t: (Array[R, 2], i64) = ([mk(7), mk(8)], 7); let (a, j) = t; take(a); println("c4") }
+    { let t: (Array[R, 2], i64) = ([mk(9), mk(10)], 7); let (_, j) = t; println(f"c5 {j}") }
+    { let w = W { t: ([mk(11), mk(12)], 7) }; let (a, j) = w.t; println(f"c6 {a[0].id}") }
+    { let w = W { t: ([mk(13), mk(14)], 7) }; let (_, j) = w.t; println(f"c7 {j}") }
+    { let w = W { t: ([mk(15), mk(16)], 7) }; let w2 = w; println(f"c8 {w2.t.1}") }
+    { take_w(W { t: ([mk(17), mk(18)], 7) }); println("c9") }
+    { let g: G[R] = G { t: ([mk(19), mk(20)], 7) }; println(f"c10 {g.t.1}") }
+    { let mut v: Vec[W] = Vec.new(); v.push(W { t: ([mk(21), mk(22)], 7) }); v.push(W { t: ([mk(23), mk(24)], 8) }); println(f"c11 {v.len()}") }
+    { let b = B { t: ([mk(25), mk(26)], 7) }; println(f"c12 {b.t.1}") }
+    { let v = V { t: ([mk(27), mk(28)], 7) }; println(f"c13 {v.t.1}") }
+    println("end")
+}
+fn main() {
+    round()
+    round()
+}
+"#,
+        )
+        .as_deref(),
+        Some("dR1\ndR2\nc1 7\nc2 7 3\ndR3\ndR4\nc3 6\ndR5\ndR6\ntake 7\ndR7\ndR8\nc4\ndR9\ndR10\nc5 7\nc6 11\ndR11\ndR12\ndR13\ndR14\nc7 7\nc8 7\ndR15\ndR16\ntw 7\ndR17\ndR18\nc9\nc10 7\ndR19\ndR20\nc11 2\ndR21\ndR22\ndR23\ndR24\nc12 7\ndB\ndR25\ndR26\nc13 7\ndR27\ndR28\nend\ndR1\ndR2\nc1 7\nc2 7 3\ndR3\ndR4\nc3 6\ndR5\ndR6\ntake 7\ndR7\ndR8\nc4\ndR9\ndR10\nc5 7\nc6 11\ndR11\ndR12\ndR13\ndR14\nc7 7\nc8 7\ndR15\ndR16\ntw 7\ndR17\ndR18\nc9\nc10 7\ndR19\ndR20\nc11 2\ndR21\ndR22\ndR23\ndR24\nc12 7\ndB\ndR25\ndR26\nc13 7\ndR27\ndR28\nend\n"),
+        "must match --interp"
+    );
+}

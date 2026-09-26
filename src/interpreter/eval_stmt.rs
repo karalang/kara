@@ -5629,6 +5629,34 @@ impl<'a> super::Interpreter<'a> {
                             self.run_discarded_value_user_drops(e.clone());
                             continue;
                         }
+                        // B-2026-09-16-6 — a CONTAINER item inside a tuple
+                        // field: `W { t: (Array[D, 2], i64) }` or
+                        // `W { t: (Vec[D], i64) }`. The struct-shaped bind
+                        // below skipped a `Value::Array` outright, so the
+                        // elements' bodies were silent here. Codegen's tuple
+                        // walker reaches both: its array arm recurses through
+                        // `elem_te_runs_user_drop`, which the value recursion
+                        // mirrors, and its Vec arm reads a PLAIN-NAMED element
+                        // only (`vec_field_elem_head`), so the Vec leg here is
+                        // held to the same horizon — recursing into a
+                        // `Vec[Vec[D]]` item would print a body codegen does
+                        // not run.
+                        if matches!(&e, Value::Array(_)) {
+                            let arr = Self::array_field_declared_elem_te(&ete).is_some();
+                            let plain_vec = matches!(&ete.kind, TypeKind::Path(p)
+                            if matches!(p.segments.first().map(String::as_str),
+                                Some("Vec") | Some("VecDeque"))
+                                && matches!(
+                                    p.generic_args.as_ref().and_then(|a| a.first()),
+                                    Some(crate::ast::GenericArg::Type(inner))
+                                        if matches!(&inner.kind, TypeKind::Path(ip)
+                                            if ip.generic_args.is_none())
+                                ));
+                            if arr || plain_vec {
+                                self.run_discarded_value_user_drops(e.clone());
+                            }
+                            continue;
+                        }
                         let Value::Struct { name: tn, .. } = &e else {
                             continue;
                         };

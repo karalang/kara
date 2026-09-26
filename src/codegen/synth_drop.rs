@@ -4521,6 +4521,14 @@ impl<'ctx> super::Codegen<'ctx> {
                             break 'tes;
                         }
                     }
+                    // B-2026-09-16-6 — the same array element one TUPLE
+                    // level in (`W { t: (Array[D, 2], i64) }`); see
+                    // `tuple_te_reaches_array_user_drop`.
+                    if self.tuple_te_reaches_array_user_drop(te, &std::collections::HashMap::new())
+                    {
+                        found = true;
+                        break 'tes;
+                    }
                     // B-2026-09-15-23 — a `Vec`/`VecDeque` field whose ELEMENT
                     // is an AGGREGATE. This is the gate the envelope note above
                     // deliberately did NOT widen, and its reasoning was sound
@@ -4740,6 +4748,33 @@ impl<'ctx> super::Codegen<'ctx> {
         heads
     }
 
+    /// B-2026-09-16-6 — does a TUPLE field TypeExpr carry, at any tuple
+    /// nesting depth, a fixed `Array[T, N]` element whose `T` runs a user
+    /// `Drop`? [`Self::tuple_field_elem_heads`] reads element HEAD NAMES, and
+    /// the head of `Array[D, 2]` is `Array`, so `W { t: (Array[D, 2], i64) }`
+    /// classified drop-free and ran its elements' bodies on no compiled
+    /// surface. The array's element is resolved through `subst` exactly as
+    /// the direct array-FIELD leg resolves it (B-2026-09-12-21), and asked
+    /// through `elem_te_runs_user_drop`, the predicate the tuple walker's own
+    /// array arm (`emit_slot_drop_bodies_at`) gates on, so the gate admits
+    /// no field the walker then declines.
+    pub(super) fn tuple_te_reaches_array_user_drop(
+        &self,
+        te: &TypeExpr,
+        subst: &std::collections::HashMap<String, TypeExpr>,
+    ) -> bool {
+        let TypeKind::Tuple(elems) = &te.kind else {
+            return false;
+        };
+        elems.iter().any(|e| {
+            if let Some((inner, n)) = self.array_elem_and_len(e) {
+                let inner = crate::desugar::subst_type_expr(&inner, subst);
+                return n > 0 && self.elem_te_runs_user_drop(&inner);
+            }
+            self.tuple_te_reaches_array_user_drop(e, subst)
+        })
+    }
+
     /// Resolve a declared field type NAME through a generic-mono subst: a
     /// bare param name (`T` with `T → Res`) resolves to the argument's last
     /// path segment; anything else passes through unchanged
@@ -4807,7 +4842,7 @@ impl<'ctx> super::Codegen<'ctx> {
                     Self::tuple_field_elem_heads(te).iter().any(|h| {
                         let resolved = self.resolve_field_head_mono(h, subst);
                         self.type_runs_user_drop(&resolved, &mut Vec::new())
-                    })
+                    }) || self.tuple_te_reaches_array_user_drop(te, subst)
                 });
                 // B-2026-08-03-1 — an Option/Result PAYLOAD is droppable
                 // field content on the same footing; without this leg the
