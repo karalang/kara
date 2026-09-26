@@ -4059,11 +4059,24 @@ impl<'ctx> super::Codegen<'ctx> {
                                 .as_deref()
                                 .map(|p| p.drop_method_keys.contains_key(struct_name))
                                 .unwrap_or(false);
+                            // B-2026-09-12-1 — at most ONE owner. The
+                            // own-by-TRANSFER prologue above
+                            // (`make_aggregate_param_callee_owned_transfer`,
+                            // B-2026-08-29-63) reaches the same conclusion for
+                            // a param every caller hands over and never reads
+                            // again, and registers the same own wrapper. Both
+                            // firing put two `karac_drop_<T>` calls on every
+                            // exit: for a `WebSocket` handler, two
+                            // `close(fd)` back to back, and whatever connection
+                            // the accept loop was handed that fd number in
+                            // between lost its socket -- a reset, a TLS record
+                            // it could not decrypt, or an 8 s wedge.
                             if has_user_drop
                                 && !self
                                     .type_decls
                                     .shared_types
                                     .contains_key(struct_name.as_str())
+                                && !self.has_armed_own_user_drop(&param_name)
                             {
                                 self.track_user_drop_var(struct_name, &param_name, alloca);
                             }

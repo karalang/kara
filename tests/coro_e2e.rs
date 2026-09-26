@@ -1578,6 +1578,91 @@ mod tests {
         );
     }
 
+    /// B-2026-09-12-1 — a by-value `WebSocket` handler param drops ONCE per
+    /// exit. Two prologue registrations both made the coroutine the owner --
+    /// the own-by-TRANSFER one (`make_aggregate_param_callee_owned_transfer`)
+    /// and the coroutine owned-param one -- so every exit of `handle_ws` called
+    /// `karac_drop_WebSocket` twice back to back, i.e. `close(fd)` twice. The
+    /// second close landed on whatever connection the accept loop had just been
+    /// handed that fd number, which is what made
+    /// `coroutine_ws_over_tls_concurrent_handlers_all_execute` flaky: a reset,
+    /// a TLS record the client could not decrypt, or an 8 s wedge, at about 1 in
+    /// 80 runs under load. The close itself is deterministic, so this asserts
+    /// it in the IR rather than waiting for the race: no basic block may drop
+    /// the socket twice.
+    #[test]
+    fn coroutine_ws_handler_param_drops_once_per_exit() {
+        let handler = r#"
+            fn handle_ws(ws: WebSocket) {
+                let mut buf: Array[u8, 4096] = [0u8; 4096];
+                loop {
+                    let r = ws.recv_text(mut buf);
+                    match r {
+                        Result.Ok(n) => { if n == 0 { break; } let _s = ws.send_text(buf); }
+                        Result.Err(_) => { break; }
+                    }
+                }
+            }
+        "#;
+        let tls_main = r#"
+            fn main() {
+                let listener: TlsListener = TlsListener.bind_tls("127.0.0.1:0", "c", "k").unwrap();
+                let mut tg: TaskGroup = TaskGroup.new();
+                loop {
+                    match WebSocket.accept_tls(listener) {
+                        Result.Ok(ws) => { tg.spawn(|| handle_ws(ws)); }
+                        Result.Err(_) => {}
+                    }
+                }
+            }
+        "#;
+        let tcp_main = r#"
+            fn main() {
+                let listener = TcpListener.bind("127.0.0.1:0").unwrap();
+                let mut tg: TaskGroup = TaskGroup.new();
+                loop {
+                    match WebSocket.accept(listener) {
+                        Result.Ok(ws) => { tg.spawn(|| handle_ws(ws)); }
+                        Result.Err(_) => {}
+                    }
+                }
+            }
+        "#;
+        for (label, main_src) in [("accept_tls", tls_main), ("accept", tcp_main)] {
+            let src = format!("{handler}\n{main_src}");
+            let ir = compile_coro_split_ir(&src)
+                .unwrap_or_else(|e| panic!("[{label}] coro-split IR: {e:?}"));
+            let mut total = 0usize;
+            let mut block = String::from("<entry>");
+            let mut in_block = 0usize;
+            for line in ir.lines() {
+                let t = line.trim_start();
+                if line.starts_with("define ")
+                    || (!line.starts_with(' ') && t.ends_with(':'))
+                    || (!line.starts_with(' ') && t.contains(": ") && t.contains("; preds"))
+                {
+                    block = t.to_string();
+                    in_block = 0;
+                }
+                if t.contains("@karac_drop_WebSocket(") && t.starts_with("call ") {
+                    in_block += 1;
+                    total += 1;
+                    assert!(
+                        in_block < 2,
+                        "[{label}] block `{block}` drops the WebSocket twice -- two \
+                         owners registered for `ws` (B-2026-09-12-1):\n{}",
+                        extract_fn_ir(&ir, "@handle_ws").unwrap_or(&ir)
+                    );
+                }
+            }
+            assert!(
+                total > 0,
+                "[{label}] no `karac_drop_WebSocket` call at all -- the handler must \
+                 still close its socket; IR:\n{ir}"
+            );
+        }
+    }
+
     #[test]
     fn coroutine_spawn_drops_owned_user_drop_param_exactly_once() {
         // The end-to-end leak gate for the `ws_idle_holder` reap leak. A
