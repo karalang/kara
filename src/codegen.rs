@@ -6911,6 +6911,7 @@ impl<'ctx> Codegen<'ctx> {
                 sret_struct_returns: HashMap::new(),
             },
             pattern_state: PatternState {
+                let_else_rest: None,
                 discarded_branch_spans: FxHashSet::default(),
                 fn_escaping_branch_spans: FxHashSet::default(),
                 consumed_arm_tail_spans: FxHashSet::default(),

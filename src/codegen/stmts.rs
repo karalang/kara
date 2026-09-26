@@ -448,6 +448,20 @@ impl<'ctx> super::Codegen<'ctx> {
             self.builder.build_call(f, &[ptr.into()], "").unwrap();
         }
     }
+    /// B-2026-09-26-15 — the scope a `let … else` at `block.stmts[i]` binds
+    /// over: every later statement and the tail. `None` for any other
+    /// statement, so the clone is paid only where a let-else is.
+    fn let_else_rest_of(block: &Block, i: usize) -> Option<Block> {
+        if !matches!(block.stmts.get(i)?.kind, StmtKind::LetElse { .. }) {
+            return None;
+        }
+        Some(Block {
+            stmts: block.stmts[i + 1..].to_vec(),
+            final_expr: block.final_expr.clone(),
+            span: block.span,
+        })
+    }
+
     pub(super) fn compile_block(
         &mut self,
         block: &Block,
@@ -509,6 +523,7 @@ impl<'ctx> super::Codegen<'ctx> {
                 None => self.try_emit_disjoint_write_lowering(block, i)?,
             };
             if lowered.is_none() {
+                self.pattern_state.let_else_rest = Self::let_else_rest_of(block, i);
                 self.compile_stmt(stmt)?;
             }
             self.note_ascii_const_string_let(stmt, &ascii_const_lets);
@@ -2183,6 +2198,7 @@ impl<'ctx> super::Codegen<'ctx> {
                     None => self.try_emit_disjoint_write_lowering(body, i)?,
                 };
                 if lowered.is_none() {
+                    self.pattern_state.let_else_rest = Self::let_else_rest_of(body, i);
                     self.compile_stmt(&body.stmts[i])?;
                 }
                 // Fresh-temp bodies at statement end (B-2026-08-01-4), then
@@ -8790,6 +8806,7 @@ impl<'ctx> super::Codegen<'ctx> {
                                         box_field,
                                     );
                                 }
+                                self.emit_let_hand_over(value, slot.ptr);
                             }
                         }
                     }
@@ -10693,6 +10710,7 @@ impl<'ctx> super::Codegen<'ctx> {
                                     self.track_let_inline_option_struct_payload(
                                         var_name, slot.ptr, &te, value,
                                     );
+                                    self.emit_let_hand_over(value, slot.ptr);
                                     // B-2026-08-09-8 — `let p = o;` is a whole-
                                     // value MOVE, so having registered the
                                     // destination above, disarm the SOURCE.

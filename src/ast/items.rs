@@ -3106,7 +3106,22 @@ pub fn fn_always_returns_param(
     f: &Function,
     arg_index: usize,
 ) -> bool {
-    fn_always_returns_param_ex(program, f, arg_index, false)
+    fn_always_returns_param_ex(program, f, arg_index, false, false)
+}
+
+/// B-2026-09-26-15 — [`fn_always_returns_param`] with a payload-less `None`
+/// admitted as the other kind of exit: every exit hands the param back (inside
+/// `Some`, typically) or returns `None`, and at least one hands it back. So the
+/// RESULT'S TAG says which happened — `Some` means the payload IS the param —
+/// which is what lets a caller hand the param's memory to the result on exactly
+/// the path that took it (`fn mid[T](v: T, c: bool) -> Option[T] { if c {
+/// return Some(v) } return None }`).
+pub fn fn_returns_param_or_none(
+    program: Option<&crate::Program>,
+    f: &Function,
+    arg_index: usize,
+) -> bool {
+    fn_always_returns_param_ex(program, f, arg_index, false, true)
 }
 
 /// B-2026-09-07-10 — the ALL-PATHS form of [`fn_returns_param_via_call`]: does
@@ -3136,7 +3151,7 @@ pub fn fn_always_returns_param_via_call(
     f: &Function,
     arg_index: usize,
 ) -> bool {
-    fn_always_returns_param_ex(Some(program), f, arg_index, true)
+    fn_always_returns_param_ex(Some(program), f, arg_index, true, false)
 }
 
 fn fn_always_returns_param_ex(
@@ -3144,6 +3159,7 @@ fn fn_always_returns_param_ex(
     f: &Function,
     arg_index: usize,
     allow_via_call: bool,
+    none_ok: bool,
 ) -> bool {
     let Some(param) = f.params.get(arg_index) else {
         return false;
@@ -3380,9 +3396,21 @@ fn fn_always_returns_param_ex(
     return_operands_block(&f.body, &mut returns);
     // Is there a `return` that does NOT hand the param back? A bare `return;`
     // counts: it exits without yielding, so the param dies on that path.
+    // B-2026-09-26-15 — a payload-less `None` exit, admitted only when asked.
+    let is_none = |e: &Expr| {
+        none_ok
+            && match &e.kind {
+                ExprKind::Identifier(n) => n == "None",
+                ExprKind::Path { segments, .. } => {
+                    segments.last().is_some_and(|s| s == "None")
+                        && (segments.len() == 1 || segments[0] == "Option")
+                }
+                _ => false,
+            }
+    };
     let any_bad_return = returns
         .iter()
-        .any(|o| !o.is_some_and(|x| yields(x, name, wraps, program, via)));
+        .any(|o| !o.is_some_and(|x| yields(x, name, wraps, program, via) || is_none(x)));
 
     let Some(tail) = f.body.final_expr.as_deref() else {
         // NO TAIL EXPRESSION AT ALL — every exit is a `return` (B-2026-08-29-14).
@@ -3414,10 +3442,20 @@ fn fn_always_returns_param_ex(
     };
     let mut tails = Vec::new();
     leaf_tails(tail, &mut tails);
-    if tails.is_empty() || !tails.iter().all(|t| yields(t, name, wraps, program, via)) {
+    if tails.is_empty()
+        || !tails
+            .iter()
+            .all(|t| yields(t, name, wraps, program, via) || is_none(t))
+    {
         return false;
     }
-    !any_bad_return
+    // With `None` admitted, a body whose every exit is `None` hands nothing
+    // back; require one exit that does.
+    let any_good = tails.iter().any(|t| yields(t, name, wraps, program, via))
+        || returns
+            .iter()
+            .any(|o| o.is_some_and(|x| yields(x, name, wraps, program, via)));
+    !any_bad_return && any_good
 }
 
 /// B-2026-08-31-46 — is `e` an `Option`/`Result` CONSTRUCTOR around exactly one

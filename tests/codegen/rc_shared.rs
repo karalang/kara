@@ -4238,3 +4238,86 @@ fn main() {
     };
     assert_eq!(out, "dS1\na\ndS2\nb\ndS3\nc\ndS4\nd\ndS5\ne\nf\ngot6\ndS6\nf after\ng\ngot7\ndS7\ng after\nrd8\ndS8\nrd9\ndS9\nh after\ndS10\ni10\ndS11\ni11\ndS13\nj\nk14\ndS14\nx15\ndS15\nrd16\ndS16\nend\n", "got:\n{out}");
 }
+
+/// B-2026-09-26-15 / B-2026-09-26-11 — a `Drop` struct with a `shared`
+/// field (so a generic callee FORWARDS it, and the caller keeps the memory)
+/// handed back inside an enum by `fn mid[T](v: T, c: bool) -> Option[T]` or
+/// `fn mkh[T](v: T) -> Ho[T]`. Moving the payload out of the result (`a_`..
+/// `g_`, `n_`, `q_`) freed it twice on every compiled surface: the caller's
+/// source and the new owner both released it. The result now takes the
+/// source's memory on the path that hands it back (a per-path flag for
+/// `mid`'s `None` edge). That made the result's box the payload's owner, and
+/// a read-only arm, `if let` or `let … else` whose binding registers no drop
+/// (a struct that declines copy support) then stripped the box's interior
+/// free and leaked the `shared` field (`h_`..`m_`, `o_`, `p_`; `j_` and `k_`
+/// are B-2026-09-26-11's local-scrutinee cells, which leaked the same way
+/// before any hand-back). Such an arm now leaves the payload with the box.
+#[test]
+fn e2e_payload_moved_out_of_generic_enum_handback_freed_once() {
+    let Some(out) = run_program(
+        r#"shared struct Sh { k: i64 }
+struct S2 { h: Sh, id: i64 }
+impl Drop for S2 { fn drop(mut ref self) { println(f"dS{self.id}") } }
+struct S3 { h: Sh, id: i64 }
+enum Ho[T] { Full(T), Empty }
+fn mk2(i: i64) -> S2 { return S2 { h: Sh { k: i }, id: i } }
+fn mk3(i: i64) -> S3 { return S3 { h: Sh { k: i }, id: i } }
+fn mkh[T](v: T) -> Ho[T] { return Ho.Full(v); }
+fn mid[T](v: T, c: bool) -> Option[T] { if c { return Some(v) } return None }
+fn rd(x: ref S2) { println(f"rd{x.id}") }
+fn eat2(s: S2) { println(f"x{s.id}") }
+fn a_unwrap() { let s = mk2(1); let o = mid(s, true); let v = o.unwrap(); println(f"a{v.id}") }
+fn b_unwrap_nodrop() { let s = mk3(2); let o = mid(s, true); let v = o.unwrap(); println(f"b{v.id}") }
+fn c_ho_move() {
+    let s = mk2(3); let h = mkh(s);
+    match h { Ho.Full(x) => { let y = x; println(f"c{y.id}") }, Ho.Empty => println("e") }
+}
+fn d_mid_move() {
+    let s = mk2(4); let o = mid(s, true);
+    match o { Some(x) => { let y = x; println(f"d{y.id}") }, None => println("n") }
+}
+fn e_push() { let s = mk2(5); let o = mid(s, true); let mut v: Vec[Option[S2]] = Vec.new(); v.push(o); println(f"e{v.len()}") }
+fn f_loop() {
+    for i in 6..10 { let s = mk2(i); let o = mid(s, i % 2 == 0); match o { Some(x) => { let y = x; println(f"f{y.id}") }, None => println(f"n{i}") } }
+}
+fn g_ho_loop() {
+    for i in 10..12 { let s = mk2(i); let h = mkh(s); match h { Ho.Full(x) => { let y = x; println(f"g{y.id}") }, Ho.Empty => println("e") } }
+}
+fn h_ho_read() { let s = mk2(12); let h = mkh(s); match h { Ho.Full(x) => println(f"h{x.id}"), Ho.Empty => println("e") } }
+fn i_ho_ref() { let s = mk2(13); let h = mkh(s); match h { Ho.Full(x) => rd(x), Ho.Empty => println("e") } }
+fn j_local_read() { let o = Ho.Full(mk2(14)); match o { Ho.Full(x) => println(f"j{x.id}"), Ho.Empty => println("e") } }
+fn k_local_ifl() { let o = Ho.Full(mk2(15)); if let Ho.Full(x) = o { println(f"k{x.id}") } }
+fn l_ho_ifl() { let s = mk2(16); let o = mkh(s); if let Ho.Full(x) = o { println(f"l{x.id}") } }
+fn m_ho_shared_field() { let s = mk2(17); let o = mkh(s); if let Ho.Full(x) = o { let k = x.h; println(f"m{k.k}") } }
+fn n_ho_ifl_move() { let s = mk2(18); let o = mkh(s); if let Ho.Full(x) = o { let y = x; println(f"n{y.id}") } }
+fn o_local_shared_field() { let o = Ho.Full(mk2(19)); match o { Ho.Full(x) => { let k = x.h; println(f"o{k.k}") }, Ho.Empty => println("e") } }
+fn p_local_eat() { let o = Ho.Full(mk2(20)); match o { Ho.Full(x) => eat2(x), Ho.Empty => println("e") } }
+fn q_letelse_move() { let s = mk2(21); let o = mkh(s); let Ho.Full(x) = o else { return }; let y = x; println(f"q{y.id}") }
+fn r_local_nodrop() { let o = Ho.Full(mk3(22)); match o { Ho.Full(x) => println(f"r{x.id}"), Ho.Empty => println("e") } }
+fn main() {
+    a_unwrap(); println("a.")
+    b_unwrap_nodrop(); println("b.")
+    c_ho_move(); println("c.")
+    d_mid_move(); println("d.")
+    e_push(); println("e.")
+    f_loop(); println("f.")
+    g_ho_loop(); println("g.")
+    h_ho_read(); println("h.")
+    i_ho_ref(); println("i.")
+    j_local_read(); println("j.")
+    k_local_ifl(); println("k.")
+    l_ho_ifl(); println("l.")
+    m_ho_shared_field(); println("m.")
+    n_ho_ifl_move(); println("n.")
+    o_local_shared_field(); println("o.")
+    p_local_eat(); println("p.")
+    q_letelse_move(); println("q.")
+    r_local_nodrop(); println("r.")
+    println("end")
+}
+"#,
+    ) else {
+        return;
+    };
+    assert_eq!(out, "a1\ndS1\na.\nb2\nb.\nc3\ndS3\nc.\nd4\ndS4\nd.\ne1\ndS5\ne.\nf6\ndS6\ndS7\nn7\nf8\ndS8\ndS9\nn9\nf.\ng10\ndS10\ng11\ndS11\ng.\nh12\ndS12\nh.\nrd13\ndS13\ni.\nj14\ndS14\nj.\nk15\ndS15\nk.\nl16\ndS16\nl.\nm17\ndS17\nm.\nn18\ndS18\nn.\no19\ndS19\no.\nx20\ndS20\np.\nq21\ndS21\nq.\nr22\nr.\nend\n", "got:\n{out}");
+}

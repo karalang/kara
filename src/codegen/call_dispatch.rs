@@ -11069,7 +11069,7 @@ impl<'ctx> super::Codegen<'ctx> {
     /// B-2026-09-25-38 — did the monomorph call site just retract `var`'s
     /// BODY because the callee hands it back inside an enum? Then a discarded
     /// result runs the body, and `var` keeps the memory.
-    fn enum_handback_body_retracted(&self, var: &str) -> bool {
+    pub(super) fn enum_handback_body_retracted(&self, var: &str) -> bool {
         self.variables
             .get(var)
             .is_some_and(|v| self.drop_rc.enum_handback_body_slots.contains(&v.ptr))

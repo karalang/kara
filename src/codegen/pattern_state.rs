@@ -448,4 +448,12 @@ pub(crate) struct PatternState<'ctx> {
     /// match compiler, so `let` destructures (which are correct already) are
     /// untouched.
     pub(crate) current_bare_tuple_bindings: HashSet<String>,
+    /// B-2026-09-26-15 — the statements a `let … else` binding scopes over,
+    /// set by the block loops immediately before they compile such a statement
+    /// and taken by `compile_let_else` before it compiles anything else. The
+    /// binding's "arm body" is the REST OF THE ENCLOSING BLOCK, which nothing
+    /// else hands the let-else leg, so without it the read-only question
+    /// `suppress_destructured_enum_payload_cleanup` asks of an `if let` block
+    /// could not be asked here at all.
+    pub(crate) let_else_rest: Option<crate::ast::Block>,
 }

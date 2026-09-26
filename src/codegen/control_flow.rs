@@ -420,7 +420,13 @@ impl<'ctx> super::Codegen<'ctx> {
             // to heap-bearing bound fields, so non-heap patterns no-op too. The
             // miss/else edge runs no suppression, so the drop frees `e` whole.
             let reads_only = self.arm_payload_reads_only_block(pattern, then_block);
-            self.suppress_destructured_enum_payload_cleanup(value, pattern, None, reads_only);
+            self.suppress_destructured_enum_payload_cleanup(
+                value,
+                pattern,
+                None,
+                Some(super::control_flow_match::ArmScope::Block(then_block)),
+                reads_only,
+            );
             // B-2026-08-29-33 — the PROJECTION-PLACE sibling, which the `match`
             // path has run since #15 and these three legs never did. `if let
             // E.A(r) = s.e { let m = r; … }` therefore left the source struct's
@@ -1333,7 +1339,13 @@ impl<'ctx> super::Codegen<'ctx> {
             // skips the payload the binding now owns, then the next
             // iteration's store re-populates and this store re-fires.
             let reads_only = self.arm_payload_reads_only_block(pattern, body);
-            self.suppress_destructured_enum_payload_cleanup(value, pattern, None, reads_only);
+            self.suppress_destructured_enum_payload_cleanup(
+                value,
+                pattern,
+                None,
+                Some(super::control_flow_match::ArmScope::Block(body)),
+                reads_only,
+            );
             // B-2026-08-29-33, `while let` leg — see the `if let` note above.
             self.suppress_destructured_struct_field_enum_cleanup(value, pattern, reads_only);
             // B-2026-08-31-30 — #16, the plain struct-pattern destructure,
@@ -2174,6 +2186,10 @@ impl<'ctx> super::Codegen<'ctx> {
         value: &Expr,
         else_block: &Block,
     ) -> Result<(), String> {
+        // Taken first, so nothing compiled below can see this statement's
+        // scope as its own (a nested `let … else` in the value or the else
+        // block sets and takes its own).
+        let let_else_rest = self.pattern_state.let_else_rest.take();
         let saved_stack_box = self.begin_stack_boxed_scrutinee(value);
         let val = self.compile_expr(value)?;
         self.end_stack_boxed_scrutinee(saved_stack_box);
@@ -2462,7 +2478,15 @@ impl<'ctx> super::Codegen<'ctx> {
             // while r2 is live). Zero the consumed fields so the walk skips
             // exactly what r2 now owns; the divergent else edge runs no
             // suppression and drops `w` whole.
-            self.suppress_destructured_enum_payload_cleanup(value, pattern, None, None);
+            self.suppress_destructured_enum_payload_cleanup(
+                value,
+                pattern,
+                None,
+                let_else_rest
+                    .as_ref()
+                    .map(super::control_flow_match::ArmScope::LetElseRest),
+                None,
+            );
             // B-2026-08-29-33, `let … else` leg — see the `if let` note above.
             self.suppress_destructured_struct_field_enum_cleanup(value, pattern, None);
             // B-2026-08-31-30 — #16, the plain struct-pattern destructure,

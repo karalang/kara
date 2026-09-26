@@ -10615,6 +10615,90 @@ impl<'ctx> super::Codegen<'ctx> {
         self.track_inline_option_agg_payload_var(var_name, option_slot, option_te);
     }
 
+    /// B-2026-09-26-15 — does `let <o> = value` take over a FORWARDED
+    /// argument's memory? `value` is a call whose monomorph site just retracted
+    /// that argument's BODY (`enum_handback_body_slots`, B-2026-09-25-38), and
+    /// whose callee hands the argument back inside the result on every exit
+    /// (`false`) or inside `Some` with `None` on every other exit (`true`, the
+    /// result's tag decides). Returns the argument's binding name.
+    ///
+    /// Without the take-over the binding kept the memory and the result only
+    /// aliased it, so any MOVE of the payload out of the result (`o.unwrap()`,
+    /// `Some(x) => { let y = x }`) produced a second full owner: both freed the
+    /// `shared` field, on every compiled surface.
+    pub(super) fn let_call_hand_over(&self, value: &Expr) -> Option<(String, bool)> {
+        let (key, args) = self.passthrough_callee_key(value)?;
+        let program = self.program_snapshot.as_deref()?;
+        let f = super::declarations::find_function_ast(program, &key)?;
+        let mut found = None;
+        for (i, a) in args.iter().enumerate() {
+            let ExprKind::Identifier(n) = &a.value.kind else {
+                continue;
+            };
+            if !self.enum_handback_body_retracted(n) {
+                continue;
+            }
+            if found.is_some() {
+                return None;
+            }
+            found = Some((i, n.clone()));
+        }
+        let (i, n) = found?;
+        if crate::ast::fn_always_returns_param(Some(program), f, i) {
+            return Some((n, false));
+        }
+        let ret_is_option = f
+            .return_type
+            .as_ref()
+            .and_then(Self::te_head_name)
+            .is_some_and(|h| h == "Option");
+        (ret_is_option && crate::ast::fn_returns_param_or_none(Some(program), f, i))
+            .then_some((n, true))
+    }
+
+    /// B-2026-09-26-15 — hand the argument's memory to the result just bound at
+    /// `result_slot`: on every path for an unconditional hand-back, and on the
+    /// `Some` path of an `Option` one (the tag is read back out of the slot).
+    /// The argument's memory action stays registered, guarded by its per-path
+    /// move flag, so the `None` path still frees it where the callee did not.
+    pub(super) fn emit_let_hand_over(&mut self, value: &Expr, result_slot: PointerValue<'ctx>) {
+        let Some((src, conditional)) = self.let_call_hand_over(value) else {
+            return;
+        };
+        let Some(src_slot) = self.variables.get(src.as_str()).map(|v| v.ptr) else {
+            return;
+        };
+        let Some(flag) = self.cond_move_drop_flag_for(&src) else {
+            return;
+        };
+        let has_struct_drop = self.drop_rc.scope_cleanup_actions.iter().any(|fr| {
+            fr.iter().any(|a| {
+                matches!(a, CleanupAction::StructDrop { struct_alloca, .. } if *struct_alloca == src_slot)
+            })
+        });
+        if has_struct_drop {
+            self.drop_rc.cond_move_mem_drop_flags.insert(src_slot, flag);
+        }
+        let bool_t = self.context.bool_type();
+        if !conditional {
+            let _ = self.builder.build_store(flag, bool_t.const_int(0, false));
+            return;
+        }
+        let i64_t = self.context.i64_type();
+        let Ok(tag) = self.builder.build_load(i64_t, result_slot, "handover.tag") else {
+            return;
+        };
+        let Ok(keeps) = self.builder.build_int_compare(
+            inkwell::IntPredicate::NE,
+            tag.into_int_value(),
+            i64_t.const_int(1, false),
+            "handover.src_keeps",
+        ) else {
+            return;
+        };
+        let _ = self.builder.build_store(flag, keeps);
+    }
+
     /// B-2026-09-25-39 — may the payload a `let` initializer wraps still be
     /// memory some OTHER frame owns? Conservative: `true` declines an owner,
     /// which costs a leak, while a wrong `false` costs a double free.
@@ -10636,6 +10720,10 @@ impl<'ctx> super::Codegen<'ctx> {
         value: &Expr,
         payload_te: &TypeExpr,
     ) -> bool {
+        // B-2026-09-26-15 — the result takes the argument's memory over.
+        if self.let_call_hand_over(value).is_some() {
+            return false;
+        }
         let args: &[CallArg] = match &value.kind {
             ExprKind::Call { args, .. } | ExprKind::MethodCall { args, .. } => args,
             _ => return false,

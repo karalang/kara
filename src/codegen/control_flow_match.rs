@@ -1045,6 +1045,7 @@ impl<'ctx> super::Codegen<'ctx> {
                         &arm.pattern,
                         Some(&arm.body),
                         None,
+                        None,
                     );
                     // B-2026-08-07-7 — the BOXED-payload struct-field channel
                     // the call above cannot reach (`is_heap_bearing()` is false
@@ -10824,6 +10825,7 @@ impl<'ctx> super::Codegen<'ctx> {
         scrutinee: &Expr,
         pattern: &Pattern,
         body: Option<&Expr>,
+        arm_scope: Option<ArmScope<'_>>,
         arm_reads_only: Option<bool>,
     ) {
         // An owned `self` receiver (`impl E { fn get(self) { match self { E.V(s)
@@ -10999,13 +11001,44 @@ impl<'ctx> super::Codegen<'ctx> {
                 Self::variant_arm_binds(pattern).as_slice(),
                 [b] if self.var_owns_vec_buffer(b)
             );
-        let bodies_mask_is_sole_channel = arm_reads_only_bodies
-            && (self.scrutinee_is_owned_param_binding(scrutinee)
-                || self
-                    .arm_generic_payload_bodies_are_element_only(scrut_name, &enum_name, pattern)
-                || self.arm_generic_payload_binding_registers_no_drop(
-                    scrut_name, &enum_name, pattern,
-                ))
+        // B-2026-09-26-15 — an arm whose binding registers NO drop (a plain
+        // struct that is not copy-supported) and only reads it leaves the
+        // payload with the box, bodies and memory alike, because nothing else
+        // is there to take either. Asked of the `if let` / `while let` BLOCK
+        // too, which the expression-only verdicts above never see, and with a
+        // `shared`-typed field admitted as a read beside the primitive ones: a
+        // projection of it RETAINS, so `let k = x.h` leaves `x` whole.
+        let arm_leaves_payload_with_box = !arm_binds.is_empty()
+            && self.arm_generic_payload_binding_registers_no_drop(scrut_name, &enum_name, pattern)
+            && {
+                let shared_fields = self.arm_binding_shared_field_reads(&scalar_tes);
+                let read = |e: &Expr| {
+                    copy_read(e) || Self::arm_binding_primitive_field_read(&shared_fields, e)
+                };
+                arm_binds.iter().all(|v| match (body, &arm_scope) {
+                    (Some(b), _) => super::consume_class::binding_only_borrowed_with(v, b, &read),
+                    (None, Some(ArmScope::Block(b) | ArmScope::LetElseRest(b))) => {
+                        super::consume_class::binding_only_borrowed_block_with(v, b, &read)
+                    }
+                    (None, None) => false,
+                })
+            };
+        // The BODIES half stands down only where the box's walker fires after
+        // the binding's last use. It does for an arm, an `if let` and a `while
+        // let`, all of which end inside the scrutinee's own statement. A `let …
+        // else` binding outlives that statement, and the scrutinee's walker
+        // fires at the scrutinee's NLL end — the let-else itself — so standing
+        // the mask down printed the body BEFORE the binding's reads. There the
+        // mask keeps running (body lost, as before this row) and only the
+        // MEMORY half moves.
+        let bodies_leave_with_box =
+            arm_leaves_payload_with_box && !matches!(arm_scope, Some(ArmScope::LetElseRest(_)));
+        let bodies_mask_is_sole_channel = (bodies_leave_with_box
+            || (arm_reads_only_bodies
+                && (self.scrutinee_is_owned_param_binding(scrutinee)
+                    || self.arm_generic_payload_bodies_are_element_only(
+                        scrut_name, &enum_name, pattern,
+                    ))))
             && self.var_has_boxed_enum_drop(scrut_name)
             && self.arm_consumes_only_generic_payload(&enum_name, pattern)
             && !arm_binding_takes_container_interior;
@@ -11111,10 +11144,24 @@ impl<'ctx> super::Codegen<'ctx> {
                     })
                 })
             });
-            self.clear_boxed_enum_inner_drop(
-                scrut_name,
-                arm_reads_only && !arm_hands_to_callee_owned_array,
-            );
+            // B-2026-09-26-15 — and not at all where the arm's binding has no
+            // owner to hand the interior to. `interior_arm_owned` is set from
+            // the payload SHAPE (a plain user struct answers yes), which
+            // assumes the binding registers its own free; a struct that is
+            // not copy-supported registers none at the bind site. Before this
+            // row such a box never carried an interior drop once a generic
+            // hand-back reached it, so the retraction had nothing to strip;
+            // the hand-over now gives the box the interior, and stripping it
+            // at a read-only arm leaked the payload's `shared` field (16 B on
+            // `match mkh(s) { Ho.Full(x) => println(x.id), .. }`). Read-only
+            // is the leaf-aware verdict: a primitive projection keeps the box
+            // the owner, anything that could move a piece out still retracts.
+            if !arm_leaves_payload_with_box {
+                self.clear_boxed_enum_inner_drop(
+                    scrut_name,
+                    arm_reads_only && !arm_hands_to_callee_owned_array,
+                );
+            }
         }
     }
 
@@ -14157,7 +14204,7 @@ impl<'ctx> super::Codegen<'ctx> {
         enum_name: &str,
         pattern: &Pattern,
     ) -> bool {
-        let tes = self.arm_consumed_payload_inst_tes(scrut_name, enum_name, pattern);
+        let tes = self.arm_consumed_payload_inst_tes(scrut_name, enum_name, pattern, false);
         !tes.is_empty() && tes.iter().all(|te| self.type_bodies_are_element_only(te))
     }
 
@@ -14178,7 +14225,7 @@ impl<'ctx> super::Codegen<'ctx> {
         enum_name: &str,
         pattern: &Pattern,
     ) -> bool {
-        let tes = self.arm_consumed_payload_inst_tes(scrut_name, enum_name, pattern);
+        let tes = self.arm_consumed_payload_inst_tes(scrut_name, enum_name, pattern, true);
         !tes.is_empty()
             && tes
                 .iter()
@@ -14292,8 +14339,22 @@ impl<'ctx> super::Codegen<'ctx> {
         scrut_name: &str,
         enum_name: &str,
         pattern: &Pattern,
+        param_fallback: bool,
     ) -> Vec<TypeExpr> {
-        let Some(inst) = self.var_types.var_enum_inst_te.get(scrut_name).cloned() else {
+        let Some(inst) = self
+            .var_types
+            .var_enum_inst_te
+            .get(scrut_name)
+            .cloned()
+            .or_else(|| {
+                // B-2026-09-26-15 — a by-value PARAMETER records no let-site
+                // instantiation; the typechecker's per-name table carries its
+                // declared one. Asked only by the no-drop-binding question.
+                param_fallback
+                    .then(|| self.type_decls.enum_inst_var_types.get(scrut_name).cloned())
+                    .flatten()
+            })
+        else {
             return Vec::new();
         };
         let TypeKind::Path(p) = &inst.kind else {
@@ -15559,6 +15620,48 @@ impl<'ctx> super::Codegen<'ctx> {
                     .last()
                     .is_some_and(|n| crate::codegen::param_own::is_primitive_type_name(n))
                     && fp.generic_args.as_ref().is_none_or(|a| a.is_empty())
+                {
+                    out.insert((bind.clone(), fname.clone()));
+                }
+            }
+        }
+        out
+    }
+
+    /// B-2026-09-26-15 — the `shared`-typed fields of each binding's struct,
+    /// in the same `(binding, field)` shape as
+    /// [`Self::arm_binding_primitive_field_reads`] so the same reader answers
+    /// for both. A projection of a `shared` field retains a new reference and
+    /// leaves the struct whole, so it is a read wherever a primitive one is.
+    fn arm_binding_shared_field_reads(
+        &self,
+        tes: &std::collections::HashMap<String, TypeExpr>,
+    ) -> std::collections::HashSet<(String, String)> {
+        let mut out = std::collections::HashSet::new();
+        for (bind, te) in tes {
+            let TypeKind::Path(p) = &te.kind else {
+                continue;
+            };
+            let Some(sname) = p.segments.last() else {
+                continue;
+            };
+            let (Some(names), Some(ftes)) = (
+                self.type_decls.struct_field_names.get(sname.as_str()),
+                self.type_decls.struct_field_type_exprs.get(sname.as_str()),
+            ) else {
+                continue;
+            };
+            for (i, fname) in names.iter().enumerate() {
+                let Some(fte) = ftes.get(i) else { continue };
+                let fte = self.subst_monomorph_type_params(fte);
+                let TypeKind::Path(fp) = &fte.kind else {
+                    continue;
+                };
+                if fp.generic_args.as_ref().is_none_or(|a| a.is_empty())
+                    && fp
+                        .segments
+                        .last()
+                        .is_some_and(|n| self.type_decls.shared_types.contains_key(n.as_str()))
                 {
                     out.insert((bind.clone(), fname.clone()));
                 }
@@ -22536,4 +22639,14 @@ fn is_scalar_surface_name(name: &str) -> bool {
 enum BoxedPayloadShape {
     Struct(String),
     EnumVariant(String),
+}
+
+/// B-2026-09-26-15 — the scope a destructuring pattern's bindings live in when
+/// it is a BLOCK rather than a `match` arm's expression: an `if let` / `while
+/// let` body, or the rest of the enclosing block after a `let … else`. The
+/// second outlives the scrutinee's statement, which is what the bodies gate in
+/// `suppress_destructured_enum_payload_cleanup` needs to tell apart.
+pub(super) enum ArmScope<'a> {
+    Block(&'a crate::ast::Block),
+    LetElseRest(&'a crate::ast::Block),
 }
