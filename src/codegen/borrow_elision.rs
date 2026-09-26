@@ -1392,17 +1392,20 @@ fn walk_expr_for_consumed_arm_tails(expr: &Expr, out: &mut FxHashSet<SpanKey>) {
     match &expr.kind {
         ExprKind::Call { callee, args } => {
             walk(callee, out);
-            // Walked but NOT recorded: the direct spelling `f(mkq(1).name)`
-            // is not consumed at a call argument either (the temp frees the
-            // leaf after the call), so recording here would hand an arm a
-            // contract its direct twin does not have.
+            // B-2026-09-26-19 — an ARM tail in an argument is consumed at the
+            // arm: the temp is created inside the arm and dies at its exit, so
+            // the merged value must own the field. Only nested tails are
+            // recorded, so the direct spelling `f(mkq(1).name)` still borrows
+            // the field in place until the statement ends.
             for a in args {
+                record_consumed_arm_tails(&a.value, false, out);
                 walk(&a.value, out);
             }
         }
         ExprKind::MethodCall { object, args, .. } => {
             walk(object, out);
             for a in args {
+                record_consumed_arm_tails(&a.value, false, out);
                 walk(&a.value, out);
             }
         }
@@ -1442,6 +1445,9 @@ fn walk_expr_for_consumed_arm_tails(expr: &Expr, out: &mut FxHashSet<SpanKey>) {
         ExprKind::InterpolatedStringLit(parts) => {
             for part in parts {
                 if let crate::ast::ParsedInterpolationPart::Expr(e, _) = part {
+                    // B-2026-09-26-19 — an interpolated arm's temp dies at
+                    // the arm's exit too, before the part is rendered.
+                    record_consumed_arm_tails(e, false, out);
                     walk(e, out);
                 }
             }

@@ -371,7 +371,11 @@ impl<'a> super::Interpreter<'a> {
         }
         if let Some(func) = self.env.get(&method_key) {
             let mut arg_vals: Vec<Value> = vec![clone_receiver(obj)];
-            arg_vals.extend(args.iter().map(|a| self.eval_expr_inner(&a.value)));
+            arg_vals.extend(args.iter().map(|a| {
+                let v = self.eval_expr_inner(&a.value);
+                self.consume_freshtemp_wrapper_arg(&a.value);
+                v
+            }));
 
             if let Value::Function {
                 param_patterns,

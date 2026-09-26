@@ -1857,6 +1857,14 @@ impl<'ctx> super::Codegen<'ctx> {
                 if let Some(prev) = saved_pending_tensor {
                     self.accel.pending_let_tensor_info = prev;
                 }
+                // B-2026-09-26-19 — a projection off a FRESH TEMP borrows the
+                // field where the temp holds it; the temp drops it at the
+                // statement's end, so a spill freed here would be the second
+                // free.
+                if let Some(field_ptr) = self.freshtemp_projection_field_ptr(&a.value) {
+                    compiled_args.push(field_ptr.into());
+                    continue;
+                }
                 let cur_fn = self
                     .builder
                     .get_insert_block()

@@ -1747,6 +1747,103 @@ impl<'ctx> super::Codegen<'ctx> {
             .is_some_and(crate::ast::type_expr_is_owned_scalar)
     }
 
+    /// B-2026-09-26-19 — the place a `ref` / `mut ref` argument projected off
+    /// the staged fresh temp names INSIDE that temp's slot
+    /// (`bor(mkq(3).name)`, `bor(mkw(9).a.name)`), or `None` when `value` is
+    /// not such a projection.
+    ///
+    /// The temp keeps its field: it is dropped whole at the statement's end,
+    /// its bodies with it, which is when the interpreter drops it. The rvalue
+    /// path instead copied the field's `{ptr,len,cap}` into a spill and queued
+    /// a free of it, and that free doubled the temp's own (`free(): double free
+    /// detected in tcache 2` on every compiled surface). Borrowing in place is
+    /// also what makes a `mut ref` write land in the value the temp then drops.
+    ///
+    /// Only a `{ptr,len,cap}` leaf, the confirmed class; a generic hop resolves
+    /// through its instantiation as the consume above does.
+    pub(super) fn freshtemp_projection_field_ptr(
+        &mut self,
+        value: &Expr,
+    ) -> Option<PointerValue<'ctx>> {
+        let mut path: Vec<&str> = Vec::new();
+        let mut cur = value;
+        while let ExprKind::FieldAccess { object, field } = &cur.kind {
+            path.push(field.as_str());
+            cur = object;
+        }
+        path.reverse();
+        let (slot, name, ch_field, span_key) = self.freshtemp_field_access_slot.clone()?;
+        if path.is_empty() || ch_field != path[0] || span_key != (cur.span.offset, cur.span.length)
+        {
+            return None;
+        }
+        let generic = |me: &Self, n: &str| {
+            me.type_decls
+                .struct_generic_params
+                .get(n)
+                .is_some_and(|p| !p.is_empty())
+        };
+        let mut parent = name;
+        let mut subst = if generic(self, &parent) {
+            let inst = self.freshtemp_field_access_inst.clone()?;
+            let sub = self.generic_struct_subst_from_inst(&parent, &inst);
+            if sub.is_empty() {
+                return None;
+            }
+            sub
+        } else {
+            std::collections::HashMap::new()
+        };
+        let mut ptr = slot;
+        for (i, f) in path.iter().enumerate() {
+            let idx = self
+                .type_decls
+                .struct_field_names
+                .get(parent.as_str())?
+                .iter()
+                .position(|x| x == f)?;
+            let st = if generic(self, &parent) {
+                self.mono_struct_type_from_subst(&parent, &subst)?
+            } else {
+                *self.type_decls.struct_types.get(parent.as_str())?
+            };
+            let field_ty = st.get_field_type_at_index(idx as u32)?;
+            ptr = self
+                .builder
+                .build_struct_gep(st, ptr, idx as u32, "freshtemp.borrow")
+                .ok()?;
+            if i + 1 == path.len() {
+                return (field_ty == self.vec_struct_type().into()).then_some(ptr);
+            }
+            let child_te = self
+                .type_decls
+                .struct_field_type_exprs
+                .get(parent.as_str())?
+                .get(idx)
+                .map(|te| super::helpers::subst_type_params_in_type_expr(te, &subst))?;
+            let child = match &child_te.kind {
+                TypeKind::Path(p) => p.segments.last().cloned()?,
+                _ => return None,
+            };
+            if !self.type_decls.struct_types.contains_key(child.as_str())
+                || self.type_decls.shared_types.contains_key(child.as_str())
+            {
+                return None;
+            }
+            subst = if generic(self, &child) {
+                let sub = self.generic_struct_subst_from_inst(&child, &child_te);
+                if sub.is_empty() {
+                    return None;
+                }
+                sub
+            } else {
+                std::collections::HashMap::new()
+            };
+            parent = child;
+        }
+        None
+    }
+
     /// B-2026-09-26-1 — the MULTI-HOP form of
     /// [`Self::consume_freshtemp_field_move`]: a consumer that takes a field
     /// reached THROUGH the staged projection (`let s = mkw2().p.name;`).

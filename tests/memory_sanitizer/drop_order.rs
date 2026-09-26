@@ -3260,3 +3260,69 @@ fn main() {
         6,
     );
 }
+
+/// B-2026-09-26-19 — a field projected off a fresh temp and passed as a call
+/// argument is freed once: directly to a `ref` / `mut ref` / method param it
+/// borrows the temp's field in place (a double free before), and through an
+/// arm the arm consumes it, whether the argument is `ref`, by-value, a
+/// `println`, an interpolation or a constructor (a double free or a use after
+/// free before). Every string is longer than the inline capacity.
+#[test]
+fn asan_fresh_temp_projection_passed_as_a_call_argument_is_freed_once() {
+    assert_clean_asan_run_min_allocs(
+        r#"struct D { id: i64, name: String }
+impl Drop for D { fn drop(mut ref self) { println(f"dD{self.id} {self.name}") } }
+fn mkd(n: i64) -> D { return D { id: n, name: f"name-string-longer-than-sso-{n}" }; }
+struct Q { name: String, k: i64 }
+fn mkq(n: i64) -> Q { return Q { name: f"q-string-longer-than-sso-{n}", k: n } }
+struct W { r: D, s: D, name: String, b: i64 }
+fn mkw(n: i64) -> W { return W { r: mkd(n), s: mkd(n + 100), name: f"w-string-longer-than-sso-{n}", b: n }; }
+struct G[T] { v: T, k: i64 }
+fn mkg(n: i64) -> G[Q] { return G { v: mkq(n), k: n }; }
+struct H { k: i64 }
+impl H { fn hb(ref self, s: ref String) -> i64 { println(s); 3 } }
+fn take(s: String) -> i64 { println(s); 1 }
+fn bor(s: ref String) -> i64 { println(s); 2 }
+fn grow(s: mut ref String) -> i64 { s.push_str("-grown"); println(s); 4 }
+fn main() {
+    let a = bor(mkq(1).name); println(f"a{a}");
+    let b = bor(mkw(2).r.name); println(f"b{b}");
+    let c = bor(mkg(3).v.name); println(f"c{c}");
+    let d = grow(mut mkq(4).name); println(f"d{d}");
+    let e = H { k: 1 }.hb(mkq(5).name); println(f"e{e}");
+    let f = bor(if true { mkq(6).name } else { f"z" }); println(f"f{f}");
+    let g = take(match 0 { 0 => mkw(7).name, _ => f"z" }); println(f"g{g}");
+    println(if true { mkq(8).name } else { f"z" });
+    let s = f"<{if true { mkq(9).name } else { f"z" }}>"; println(s);
+    let o = Some(if true { mkq(10).name } else { f"z" }); println(o.unwrap());
+    println("end")
+}
+"#,
+        &[
+            "q-string-longer-than-sso-1",
+            "a2",
+            "name-string-longer-than-sso-2",
+            "dD102 name-string-longer-than-sso-102",
+            "dD2 name-string-longer-than-sso-2",
+            "b2",
+            "q-string-longer-than-sso-3",
+            "c2",
+            "q-string-longer-than-sso-4-grown",
+            "d4",
+            "q-string-longer-than-sso-5",
+            "e3",
+            "q-string-longer-than-sso-6",
+            "f2",
+            "dD107 name-string-longer-than-sso-107",
+            "dD7 name-string-longer-than-sso-7",
+            "w-string-longer-than-sso-7",
+            "g1",
+            "q-string-longer-than-sso-8",
+            "<q-string-longer-than-sso-9>",
+            "q-string-longer-than-sso-10",
+            "end",
+        ],
+        "asan_fresh_temp_projection_passed_as_a_call_argument_is_freed_once",
+        14,
+    );
+}

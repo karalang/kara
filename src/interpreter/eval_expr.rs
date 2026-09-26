@@ -214,6 +214,7 @@ impl<'a> super::Interpreter<'a> {
                                 if self.pending_cf.is_some() {
                                     return v;
                                 }
+                                self.consume_freshtemp_wrapper_arg(e);
                                 // The spec was validated at parse time; a parse
                                 // error here is unreachable for a well-formed
                                 // program, so fall back to the plain render.
@@ -343,6 +344,10 @@ impl<'a> super::Interpreter<'a> {
                                     self.span_expr_type(&e.span).as_ref(),
                                 )),
                             }
+                            // B-2026-09-26-19 — an arm tail projected off a
+                            // fresh temp is consumed at the arm, as codegen
+                            // records it (`compute_consumed_arm_tail_spans`).
+                            self.consume_freshtemp_wrapper_arg(e);
                         }
                     }
                 }

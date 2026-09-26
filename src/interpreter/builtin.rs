@@ -685,12 +685,18 @@ impl<'a> super::Interpreter<'a> {
             // that shadowed the correct fallback. That is why `println(o)` on
             // an `Option[u64]` still rendered signed after the renderer learned
             // to take a type (B-2026-08-19-27).
-            match self.eval_method_call(&arg.value, "to_string", &[], span, &arg.value.span) {
-                Value::String(s) => s,
-                other => {
-                    self.display_render_typed(&other, self.span_expr_type(&arg.value.span).as_ref())
-                }
-            }
+            let rendered =
+                match self.eval_method_call(&arg.value, "to_string", &[], span, &arg.value.span) {
+                    Value::String(s) => s,
+                    other => self.display_render_typed(
+                        &other,
+                        self.span_expr_type(&arg.value.span).as_ref(),
+                    ),
+                };
+            // B-2026-09-26-19 — an arm tail projected off a fresh temp is
+            // consumed at the arm, before the write, as codegen does.
+            self.consume_freshtemp_wrapper_arg(&arg.value);
+            rendered
         } else {
             String::new()
         };

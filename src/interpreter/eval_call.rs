@@ -1989,6 +1989,8 @@ impl<'a> super::Interpreter<'a> {
                 let v = self.eval_expr_inner(&a.value);
                 if callee_is_variant_ctor {
                     self.consume_freshtemp_field_move(&a.value);
+                } else {
+                    self.consume_freshtemp_wrapper_arg(&a.value);
                 }
                 v
             })

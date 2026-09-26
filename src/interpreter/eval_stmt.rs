@@ -3632,6 +3632,25 @@ impl<'a> super::Interpreter<'a> {
     /// trade the agreed loss forbids. Descending is SAFE without knowing which
     /// arm ran, because the stash is keyed on the projection's object SPAN and
     /// only the arm that actually evaluated it can have written one.
+    /// B-2026-09-26-19 — a call argument that is an `if` / `match` / block
+    /// whose taken arm ended in a projection off a fresh temp consumes it at
+    /// the arm, as a `let` initializer does: the temp was created inside the
+    /// arm, so the merged value owns the field and the temp's remaining bodies
+    /// run before the call. Codegen records the same arm tails
+    /// (`compute_consumed_arm_tail_spans`). A bare projection argument is NOT
+    /// a wrapper and keeps borrowing until the statement ends.
+    pub(super) fn consume_freshtemp_wrapper_arg(&mut self, value: &Expr) {
+        if matches!(
+            value.kind,
+            ExprKind::If { .. }
+                | ExprKind::IfLet { .. }
+                | ExprKind::Match { .. }
+                | ExprKind::Block(_)
+        ) {
+            self.consume_freshtemp_field_moves_in(value);
+        }
+    }
+
     pub(super) fn consume_freshtemp_field_moves_in(&mut self, value: &Expr) {
         match &value.kind {
             ExprKind::Tuple(elems) => {

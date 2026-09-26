@@ -6626,3 +6626,182 @@ fn main() {
             "mid\ndR3\ndR2\ndR1\nv=5\none\nmid\ndR6\ndR5\ndR4\nv=11\ntwo\ndR8\ndR9\nmid\ndR7\nv=1\nthree\nend\n"
         );
 }
+
+/// B-2026-09-26-19 — a field projected off a fresh temp and passed as a call
+/// argument is freed once on every surface.
+///
+/// Passed DIRECTLY to a `ref` / `mut ref` param (`bor(mkq(3).name)`), the
+/// rvalue path copied the field into a spill and queued a free of it while the
+/// temp dropped the same buffer: a double free on every compiled surface. It
+/// now borrows the field where the temp holds it, and the temp's bodies still
+/// run at the statement's end. Through an ARM (`bor(if c { mkq(4).name } else
+/// { f"z" })`, `take(..)`, `println(..)`, an interpolation) the temp dies at the
+/// arm's exit, so the arm consumes the field on both backends and the merged
+/// value owns it: a double free for a `ref` param and a use after free for a
+/// by-value one before.
+#[test]
+fn e2e_fresh_temp_projection_passed_as_a_call_argument_is_freed_once() {
+    const H: &str = r#"struct D { id: i64, name: String }
+impl Drop for D { fn drop(mut ref self) { println(f"dD{self.id}{self.name}") } }
+fn mkd(n: i64) -> D { return D { id: n, name: f"n{n}" }; }
+struct Q { name: String, k: i64 }
+fn mkq(n: i64) -> Q { return Q { name: f"q{n}", k: n } }
+struct W { r: D, s: D, name: String, b: i64 }
+fn mkw(n: i64) -> W { return W { r: mkd(n), s: mkd(n + 100), name: f"w{n}", b: n }; }
+struct G[T] { v: T, k: i64 }
+fn mkg(n: i64) -> G[Q] { return G { v: mkq(n), k: n }; }
+struct N { q: Q, d: D }
+fn mkn(n: i64) -> N { return N { q: mkq(n), d: mkd(n + 50) }; }
+struct H { k: i64 }
+impl H { fn hb(ref self, s: ref String) -> i64 { println(s); 3 } }
+fn take(s: String) -> i64 { println(s); 1 }
+fn bor(s: ref String) -> i64 { println(s); 2 }
+fn grow(s: mut ref String) -> i64 { s.push_str("-grown-past-sso-capacity-xxxxxxxxxxxx"); println(s); 4 }
+fn vb(v: ref Vec[i64]) -> i64 { v.len() }
+struct V { xs: Vec[i64] }
+fn mkv() -> V { let mut xs: Vec[i64] = Vec.new(); xs.push(1); xs.push(2); return V { xs: xs }; }
+"#;
+    for (label, body, want) in [
+        (
+            "direct ref",
+            "let a = bor(mkq(3).name); println(f\"a{a}\");",
+            "q3\na2\nend\n",
+        ),
+        (
+            "direct ref, Drop siblings run after the call",
+            "let a = bor(mkw(9).name); println(f\"a{a}\");",
+            "w9\ndD109n109\ndD9n9\na2\nend\n",
+        ),
+        (
+            "two hops through a Drop field",
+            "let a = bor(mkw(9).r.name); println(f\"a{a}\");",
+            "n9\ndD109n109\ndD9n9\na2\nend\n",
+        ),
+        (
+            "two hops through a plain field",
+            "let a = bor(mkn(5).q.name); println(f\"a{a}\");",
+            "q5\ndD55n55\na2\nend\n",
+        ),
+        (
+            "generic root",
+            "let a = bor(mkg(7).v.name); println(f\"a{a}\");",
+            "q7\na2\nend\n",
+        ),
+        (
+            "mut ref grows the field in place",
+            "let a = grow(mut mkq(8).name); println(f\"a{a}\");",
+            "q8-grown-past-sso-capacity-xxxxxxxxxxxx\na4\nend\n",
+        ),
+        (
+            "method ref arg",
+            "let a = H { k: 1 }.hb(mkq(3).name); println(f\"a{a}\");",
+            "q3\na3\nend\n",
+        ),
+        (
+            "Vec field",
+            "let a = vb(mkv().xs); println(f\"a{a}\");",
+            "a2\nend\n",
+        ),
+        (
+            "off a Drop type",
+            "let a = bor(mkd(4).name); println(f\"a{a}\");",
+            "n4\ndD4n4\na2\nend\n",
+        ),
+        (
+            "ref arg, if arm",
+            "let a = bor(if true { mkq(4).name } else { f\"z\" }); println(f\"a{a}\");",
+            "q4\na2\nend\n",
+        ),
+        (
+            "ref arg, match arm with Drop siblings",
+            "let a = bor(match 0 { 0 => mkw(6).name, _ => f\"z\" }); println(f\"a{a}\");",
+            "dD106n106\ndD6n6\nw6\na2\nend\n",
+        ),
+        (
+            "ref arg, else arm",
+            "let a = bor(if false { f\"z\" } else { mkw(5).name }); println(f\"a{a}\");",
+            "dD105n105\ndD5n5\nw5\na2\nend\n",
+        ),
+        (
+            "ref arg, generic root in an arm",
+            "let a = bor(if true { mkg(7).v.name } else { f\"z\" }); println(f\"a{a}\");",
+            "q7\na2\nend\n",
+        ),
+        (
+            "by-value arg, if arm",
+            "let a = take(if true { mkq(2).name } else { f\"z\" }); println(f\"a{a}\");",
+            "q2\na1\nend\n",
+        ),
+        (
+            "by-value arg, match arm two hops",
+            "let a = take(match 1 { 0 => f\"z\", _ => mkn(6).q.name }); println(f\"a{a}\");",
+            "dD56n56\nq6\na1\nend\n",
+        ),
+        (
+            "by-value arg, block",
+            "let a = take({ mkw(8).name }); println(f\"a{a}\");",
+            "dD108n108\ndD8n8\nw8\na1\nend\n",
+        ),
+        (
+            "by-value arg, both arms temps",
+            "let a = take(if true { mkq(10).name } else { mkq(11).name }); println(f\"a{a}\");",
+            "q10\na1\nend\n",
+        ),
+        (
+            "mut ref arg, if arm",
+            "let a = grow(mut if true { mkq(9).name } else { f\"z\" }); println(f\"a{a}\");",
+            "q9-grown-past-sso-capacity-xxxxxxxxxxxx\na4\nend\n",
+        ),
+        (
+            "method arg, if arm",
+            "let a = H { k: 1 }.hb(if true { mkq(3).name } else { f\"z\" }); println(f\"a{a}\");",
+            "q3\na3\nend\n",
+        ),
+        (
+            "println of an arm",
+            "println(if true { mkw(4).name } else { f\"z\" });",
+            "dD104n104\ndD4n4\nw4\nend\n",
+        ),
+        (
+            "eprintln of an arm",
+            "eprintln(if true { mkq(4).name } else { f\"z\" });",
+            "end\n",
+        ),
+        (
+            "constructor argument, arm",
+            "let o = Some(if true { mkw(9).name } else { f\"z\" }); println(o.unwrap());",
+            "dD109n109\ndD9n9\nw9\nend\n",
+        ),
+        (
+            "interpolated arm",
+            "let s = f\"{if true { mkw(6).name } else { f\"z\" }}\"; println(s);",
+            "dD106n106\ndD6n6\nw6\nend\n",
+        ),
+        (
+            "interpolated arm, in a loop",
+            "for i in 0..3 { println(f\"{i}:{match i { 1 => mkw(i).name, _ => f\"z\" }}\"); }",
+            "0:z\ndD101n101\ndD1n1\n1:w1\n2:z\nend\n",
+        ),
+        (
+            "arm in a loop",
+            "for i in 0..3 { let a = take(if i == 1 { mkq(i).name } else { f\"z{i}\" }); println(f\"a{a}\"); }",
+            "z0\na1\nq1\na1\nz2\na1\nend\n",
+        ),
+        (
+            "arm and direct in one statement",
+            "let a = take(if true { mkq(13).name } else { f\"z\" }) + bor(mkq(14).name); println(f\"a{a}\");",
+            "q13\nq14\na3\nend\n",
+        ),
+    ] {
+        let prog = format!("{H}fn main() {{\n    {body}\n    println(\"end\")\n}}\n");
+        let (interp_out, interp_errs, _, _) = karac::run_program_full_checked(&prog);
+        assert!(
+            interp_errs.is_empty(),
+            "[{label}] interp errored: {interp_errs:?}"
+        );
+        assert_eq!(interp_out.join(""), want, "[{label}] interpreter");
+        if let Some(aot) = run_program(&prog) {
+            assert_eq!(aot, want, "[{label}] AOT");
+        }
+    }
+}

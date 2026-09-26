@@ -8136,6 +8136,12 @@ impl<'ctx> super::Codegen<'ctx> {
                         // temp's cleanup (the callee only borrows). Mirrors the
                         // free-fn rvalue-ref arm in `compile_call`.
                         let val = self.compile_expr(&a.value)?;
+                        // B-2026-09-26-19 — a projection off a FRESH TEMP
+                        // borrows in place, as in `compile_call`.
+                        if let Some(field_ptr) = self.freshtemp_projection_field_ptr(&a.value) {
+                            compiled_args.push(field_ptr.into());
+                            continue;
+                        }
                         let cur_fn = self
                             .builder
                             .get_insert_block()

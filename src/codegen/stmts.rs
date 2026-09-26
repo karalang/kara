@@ -22568,6 +22568,7 @@ impl<'ctx> super::Codegen<'ctx> {
             _ => {
                 if self.expr_yields_fresh_owned_temp(e)
                     || (block_local_tail_ok && self.arg_producer_mints_fresh_owned_temp(e))
+                    || self.arm_tail_consumes_freshtemp_projection(e)
                 {
                     BranchTailClass::Mints
                 } else {
@@ -22575,6 +22576,34 @@ impl<'ctx> super::Codegen<'ctx> {
                 }
             }
         }
+    }
+
+    /// B-2026-09-26-19 — an arm tail that MOVES a field out of a fresh temp
+    /// (`take(if c { mkq(2).name } else { f"z" })`) mints the merged value just
+    /// as a call does: `compute_consumed_arm_tail_spans` recorded it, so the
+    /// arm zeroes the field in the temp's slot and the temp, dying at the arm's
+    /// exit, frees only the rest. Without this the argument's buffer was owned
+    /// by nobody (one block lost per call). Same root test the staging uses
+    /// (`track_freshtemp_field_access_object`): a fresh owned non-`shared`
+    /// struct temp at the bottom of the chain.
+    fn arm_tail_consumes_freshtemp_projection(&self, e: &Expr) -> bool {
+        if !matches!(e.kind, ExprKind::FieldAccess { .. })
+            || !self
+                .pattern_state
+                .consumed_arm_tail_spans
+                .contains(&crate::resolver::SpanKey::from_span(&e.span))
+        {
+            return false;
+        }
+        let mut root = e;
+        while let ExprKind::FieldAccess { object, .. } = &root.kind {
+            root = object;
+        }
+        self.expr_yields_fresh_owned_temp(root)
+            && self.type_name_of_expr(root).is_some_and(|n| {
+                self.type_decls.struct_types.contains_key(n.as_str())
+                    && !self.type_decls.shared_types.contains_key(n.as_str())
+            })
     }
 
     /// The PRODUCER shapes `track_inline_owned_aggregate_arg_inst` classifies
