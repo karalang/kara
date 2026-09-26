@@ -3676,3 +3676,62 @@ fn main() {
         35,
     );
 }
+
+/// B-2026-09-26-41 — a `Drop`-bearing field projected TWO hops off a fresh temp and
+/// handed to a keeping callee (hands it back, stores it, conditionally hands
+/// it back) is freed once and runs its body once. The callee takes an entry
+/// copy, so the temp keeps and frees the original leaf's heap while the
+/// copy runs the body. The names are longer than the inline string capacity
+/// so each body frees a heap buffer.
+#[test]
+fn asan_fresh_temp_two_hop_drop_projection_into_a_keeping_callee_is_freed_once() {
+    assert_clean_asan_run_min_allocs(
+        r#"struct D { id: i64, name: String }
+impl Drop for D { fn drop(mut ref self) { println(f"dD{self.id} {self.name}") } }
+fn mkd(n: i64) -> D { return D { id: n, name: f"name-string-longer-than-sso-{n}" }; }
+struct W { r: D, s: D, name: String, b: i64 }
+fn mkw(n: i64) -> W { return W { r: mkd(n), s: mkd(n + 100), name: f"w-string-longer-than-sso-{n}", b: n }; }
+struct X { w: W, t: D }
+fn mkx(n: i64) -> X { return X { w: mkw(n), t: mkd(n + 300) }; }
+fn keep(d: D) -> D { d }
+fn stash(v: mut ref Vec[D], d: D) { v.push(d); }
+fn maybe(d: D, c: bool) -> Option[D] { if c { return Some(d); } None }
+struct H { k: i64 }
+impl H { fn kp(self, d: D) -> D { d } }
+fn main() {
+    let k = keep(mkx(1).w.r);
+    println(f"a{k.id}");
+    let h = H { k: 1 };
+    let j = h.kp(mkx(2).w.s);
+    println(f"b{j.id}");
+    let mut v: Vec[D] = Vec.new();
+    stash(mut v, mkx(3).w.r);
+    println(f"c{v.len()}");
+    let o = maybe(mkx(4).w.r, false);
+    println(f"d{o.is_some()}");
+    println("end")
+}
+"#,
+        &[
+            "dD301 name-string-longer-than-sso-301",
+            "dD101 name-string-longer-than-sso-101",
+            "a1",
+            "dD1 name-string-longer-than-sso-1",
+            "dD302 name-string-longer-than-sso-302",
+            "dD2 name-string-longer-than-sso-2",
+            "b102",
+            "dD102 name-string-longer-than-sso-102",
+            "dD303 name-string-longer-than-sso-303",
+            "dD103 name-string-longer-than-sso-103",
+            "c1",
+            "dD3 name-string-longer-than-sso-3",
+            "dD304 name-string-longer-than-sso-304",
+            "dD104 name-string-longer-than-sso-104",
+            "dD4 name-string-longer-than-sso-4",
+            "dfalse",
+            "end",
+        ],
+        "asan_fresh_temp_two_hop_drop_projection_into_a_keeping_callee_is_freed_once",
+        35,
+    );
+}

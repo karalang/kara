@@ -1911,7 +1911,7 @@ impl<'ctx> super::Codegen<'ctx> {
     /// behaviour, when an intermediate struct has a `Drop` of its own: the
     /// typechecker rejects that move (`partial_move_of_drop_struct`) since the
     /// same fix.
-    fn consume_freshtemp_nested_field_move(&mut self, value: &Expr) {
+    fn consume_freshtemp_nested_field_move(&mut self, value: &Expr, zero: bool) {
         let mut path: Vec<&str> = Vec::new();
         let mut cur = value;
         while let ExprKind::FieldAccess { object, field } = &cur.kind {
@@ -2032,13 +2032,17 @@ impl<'ctx> super::Codegen<'ctx> {
         let last = hops.len() - 1;
         let (last_parent, _) = hops[last].clone();
         let last_st = hop_st(self, last);
-        self.zero_struct_field_move_cap_inst(
-            ptr,
-            &last_parent,
-            path[path.len() - 1],
-            last_st,
-            hop_insts[last].as_ref(),
-        );
+        // B-2026-09-26-41 — not for a consumer that takes a COPY: see
+        // `consume_freshtemp_field_bodies_keeping_memory`.
+        if zero {
+            self.zero_struct_field_move_cap_inst(
+                ptr,
+                &last_parent,
+                path[path.len() - 1],
+                last_st,
+                hop_insts[last].as_ref(),
+            );
+        }
         let mut skip = super::synth_drop::FieldSkipTree::default();
         {
             let mut cur = &mut skip;
@@ -2294,14 +2298,14 @@ impl<'ctx> super::Codegen<'ctx> {
     /// move-consume does, leaked it (2 B at `-O0`, measured). Its BODY is not
     /// the temp's any more (the copy runs it wherever it ends up), so the
     /// siblings' bodies still run here with the field masked, exactly as a
-    /// move. One hop only: the nested stash has no memory-keeping form, so a
-    /// deeper projection keeps today's route.
+    /// move. A deeper projection (`keep(mkx(5).w.r)`) takes the nested
+    /// stash's memory-keeping form (B-2026-09-26-41).
     pub(super) fn consume_freshtemp_field_bodies_keeping_memory(&mut self, value: &Expr) {
         self.consume_freshtemp_field_move_inner(value, false);
     }
 
-    /// B-2026-09-26-40 — a by-value argument projected ONE hop off a fresh
-    /// temp, whose callee hands the parameter back or keeps it: the argument
+    /// B-2026-09-26-40 — a by-value argument projected off a fresh temp (any
+    /// depth since B-2026-09-26-41), whose callee hands the parameter back or keeps it: the argument
     /// registrar is declined for it, but the temp still dies at this
     /// projection, so its siblings' bodies run here rather than nowhere. An
     /// entry-copied type escapes as the callee's COPY and the temp keeps the
@@ -2309,10 +2313,7 @@ impl<'ctx> super::Codegen<'ctx> {
     /// method and associated-fn argument legs. Interp twin: the `kept` leg of
     /// `drop_projection_arg_consume`.
     pub(super) fn consume_escaping_freshtemp_projection_arg(&mut self, value: &Expr) {
-        let ExprKind::FieldAccess { object, .. } = &value.kind else {
-            return;
-        };
-        if matches!(object.kind, ExprKind::FieldAccess { .. }) {
+        if !matches!(value.kind, ExprKind::FieldAccess { .. }) {
             return;
         }
         let Some(ty) = self.freshtemp_drop_projection_arg_type(value) else {
@@ -2334,9 +2335,7 @@ impl<'ctx> super::Codegen<'ctx> {
             return;
         };
         if ch_field != *field || span_key != (object.span.offset, object.span.length) {
-            if zero {
-                self.consume_freshtemp_nested_field_move(value);
-            }
+            self.consume_freshtemp_nested_field_move(value, zero);
             return;
         }
         self.freshtemp_field_access_slot = None;

@@ -7544,3 +7544,130 @@ fn gtwo[T](x: T, y: T) -> i64 { 4 }
         }
     }
 }
+
+/// B-2026-09-26-41 — a `Drop`-bearing field projected TWO hops off a fresh temp
+/// (`keep(mkx(5).w.r)`) and handed to a callee that keeps it runs the moved
+/// leaf's body once, from the callee's result, as the one-hop spelling
+/// already did (B-2026-09-26-40): the temp gives the leaf up at the call and
+/// runs its other fields' bodies there. Before the fix the temp kept the leaf
+/// and ran its body too, so it printed twice on all four surfaces. Every cell
+/// was checked `--interp` / JIT / `-O2` seq / `-O2` par byte-identical and
+/// valgrind-clean at `-O0`.
+#[test]
+fn e2e_fresh_temp_two_hop_drop_projection_into_a_keeping_callee_runs_once() {
+    const H: &str = r#"struct D { id: i64, name: String }
+impl Drop for D { fn drop(mut ref self) { println(f"dD{self.id}{self.name}") } }
+fn mkd(n: i64) -> D { return D { id: n, name: f"n{n}" }; }
+struct W { r: D, s: D, b: i64 }
+fn mkw(n: i64) -> W { return W { r: mkd(n), s: mkd(n + 100), b: n }; }
+fn eat(d: D) -> i64 { return d.id; }
+fn ownd(d: D) -> i64 { d.id }
+struct G[T] { v: T, k: i64 }
+fn wrap[T](x: T) -> G[T] { return G { v: x, k: 7 }; }
+fn eatd(d: D) -> i64 { d.id }
+fn keep(d: D) -> D { d }
+struct H { k: i64 }
+impl H { fn take(self, d: D) -> i64 { d.id } fn tk(d: D) -> i64 { d.id } fn peek(self, d: ref D) -> i64 { d.id } }
+enum E { A(D), B }
+struct Wx { e: E, s: D }
+fn mkwe(n: i64) -> Wx { return Wx { e: E.A(mkd(n)), s: mkd(n + 200) }; }
+fn eate(e: E) -> i64 { match e { E.A(d) => d.id, E.B => 0 } }
+struct X { w: W, t: D }
+fn mkx(n: i64) -> X { return X { w: mkw(n), t: mkd(n + 300) }; }
+fn peekd(d: ref D) -> i64 { d.id }
+fn two(a: D, b: D) -> i64 { a.id + b.id }
+fn side(n: i64) -> i64 { println(f"side{n}"); n }
+fn mix(d: D, n: i64) -> i64 { d.id + n }
+fn eatw(w: W) -> i64 { w.b }
+fn gn[T](x: T) -> i64 { 1 }
+struct Dd { id: i64, inr: D }
+impl Drop for Dd { fn drop(mut ref self) { println(f"dDd{self.id}") } }
+struct Wd { d: Dd, s: D }
+fn mkwd(n: i64) -> Wd { return Wd { d: Dd { id: n, inr: mkd(n + 1) }, s: mkd(n + 400) }; }
+fn eatdd(d: Dd) -> i64 { d.id }
+struct Q { name: String, k: i64 }
+fn mkq(n: i64) -> Q { return Q { name: f"q{n}", k: n } }
+impl H { fn mk(self, n: i64) -> W { mkw(n) } }
+impl H { fn kp(self, d: D) -> D { d } fn akp(d: D) -> D { d } }
+fn stash(v: mut ref Vec[D], d: D) { v.push(d); }
+fn maybe(d: D, c: bool) -> Option[D] { if c { return Some(d); } None }
+struct Bag { d: D }
+fn bag(d: D) -> Bag { Bag { d: d } }
+fn gp[T](x: ref T) -> i64 { 2 }
+fn gp2[T](x: ref T, n: i64) -> i64 { n }
+struct Hg { k: i64 }
+impl Hg { fn gpk[T](self, x: ref T) -> i64 { 3 } }
+fn gid[T](x: T) -> T { x }
+fn gst[T](v: mut ref Vec[T], x: T) { v.push(x); }
+fn gw[T](x: T) -> i64 { gn(x) }
+fn gtwo[T](x: T, y: T) -> i64 { 4 }
+"#;
+    for (label, body, want) in [
+        (
+            "kept, two hops (B-2026-09-26-41)",
+            "let k = keep(mkx(5).w.r); println(f\"k{k.id}\");",
+            "dD305n305\ndD105n105\nk5\ndD5n5\nend\n",
+        ),
+        (
+            "kept, two hops, read in place (B-2026-09-26-41)",
+            "println(f\"k{keep(mkx(5).w.s).id}\");",
+            "dD305n305\ndD5n5\nk105\ndD105n105\nend\n",
+        ),
+        (
+            "kept, two hops, discarded (B-2026-09-26-41)",
+            "keep(mkx(5).w.r);",
+            "dD305n305\ndD105n105\ndD5n5\nend\n",
+        ),
+        (
+            "method hands two hops back (B-2026-09-26-41)",
+            "let h = H { k: 1 }; let k = h.kp(mkx(6).w.r); println(f\"k{k.id}\");",
+            "dD306n306\ndD106n106\nk6\ndD6n6\nend\n",
+        ),
+        (
+            "associated fn hands two hops back (B-2026-09-26-41)",
+            "let k = H.akp(mkx(6).w.s); println(f\"k{k.id}\");",
+            "dD306n306\ndD6n6\nk106\ndD106n106\nend\n",
+        ),
+        (
+            "callee stores two hops (B-2026-09-26-41)",
+            "let mut v: Vec[D] = Vec.new(); stash(mut v, mkx(7).w.r); println(f\"l{v.len()}\");",
+            "dD307n307\ndD107n107\nl1\ndD7n7\nend\n",
+        ),
+        (
+            "conditional hand-back of two hops, taken (B-2026-09-26-41)",
+            "let o = maybe(mkx(8).w.r, true); println(f\"o{o.is_some()}\");",
+            "dD308n308\ndD108n108\notrue\ndD8n8\nend\n",
+        ),
+        (
+            "conditional hand-back of two hops, not taken (B-2026-09-26-41)",
+            "let o = maybe(mkx(8).w.r, false); println(f\"o{o.is_some()}\");",
+            "dD308n308\ndD108n108\ndD8n8\nofalse\nend\n",
+        ),
+        (
+            "kept two hops in a loop (B-2026-09-26-41)",
+            "let mut t = 0; for i in 0..2 { let k = keep(mkx(i).w.r); t = t + k.id; } println(f\"t{t}\");",
+            "dD300n300\ndD100n100\ndD0n0\ndD301n301\ndD101n101\ndD1n1\nt1\nend\n",
+        ),
+        (
+            "control: by-value two hops, not kept (B-2026-09-26-41)",
+            "let a = eatd(mkx(5).w.r); println(f\"a{a}\");",
+            "dD305n305\ndD105n105\ndD5n5\na5\nend\n",
+        ),
+        (
+            "control: kept, one hop (B-2026-09-26-41)",
+            "let k = keep(mkw(9).r); println(f\"k{k.id}\");",
+            "dD109n109\nk9\ndD9n9\nend\n",
+        ),
+    ] {
+        let prog = format!("{H}fn main() {{\n    {body}\n    println(\"end\")\n}}\n");
+        let (interp_out, interp_errs, _, _) = karac::run_program_full_checked(&prog);
+        assert!(
+            interp_errs.is_empty(),
+            "[{label}] interp errored: {interp_errs:?}"
+        );
+        assert_eq!(interp_out.join(""), want, "[{label}] interpreter");
+        if let Some(aot) = run_program(&prog) {
+            assert_eq!(aot, want, "[{label}] AOT");
+        }
+    }
+}

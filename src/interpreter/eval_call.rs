@@ -5529,15 +5529,11 @@ impl<'a> super::Interpreter<'a> {
         // B-2026-09-26-40 — a callee that hands the argument back or keeps it
         // owns the moved field beyond the call, so the argument is not
         // claimed here; but the temp still gives the field up, so its
-        // siblings' bodies run now rather than nowhere. One hop only, as
-        // codegen's `consume_escaping_freshtemp_projection_arg`.
+        // siblings' bodies run now rather than nowhere, as codegen's
+        // `consume_escaping_freshtemp_projection_arg`. At any depth since
+        // B-2026-09-26-41: a two-hop projection kept the leaf in the temp and
+        // ran its body there as well as from the callee's result.
         let kept = self.callee_owns_arg_beyond_call(callee_name, method_owner, i, None);
-        if kept
-            && matches!(&value.kind, ExprKind::FieldAccess { object, .. }
-                if matches!(object.kind, ExprKind::FieldAccess { .. }))
-        {
-            return;
-        }
         let staged = self.freshtemp_field_obj.is_some();
         self.consume_freshtemp_field_move(value);
         if !kept && staged && self.freshtemp_field_obj.is_none() {
