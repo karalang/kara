@@ -93,9 +93,9 @@ distinguish "bugs flattening" from "we stopped writing them down."
 | class | total |
 |---|---|
 | run-vs-build | 494 |
-| miscompile | 466 |
-| leak | 431 |
-| double-free | 315 |
+| miscompile | 467 |
+| leak | 432 |
+| double-free | 316 |
 | missing-feature | 209 |
 | codegen-gap | 196 |
 | other | 149 |
@@ -110,8 +110,8 @@ distinguish "bugs flattening" from "we stopped writing them down."
 
 | surface | total |
 |---|---|
-| codegen | 2115 |
-| interp | 561 |
+| codegen | 2118 |
+| interp | 562 |
 | typecheck | 308 |
 | other | 110 |
 | ownership | 77 |
@@ -398,10 +398,12 @@ registered in the callee's prologue, not by-value struct params in general. | �
 | B-2026-09-26-23 | 2026-09-26 | interp+codegen | medium | A `Drop`-BEARING FIELD PROJECTED OFF A FRESH TEMP AND HANDED BY VALUE TO A CALLEE RUNS NEITHER ITS OWN BODY NOR ITS SIBLINGS', ON ALL FOUR SURFACES ALIKE -- `println(f"v{eat(mkw(7).r)}")` with `fn eat(d: D) -> i64 { return d.id; }` prints `v7 end` where the named spelling `let w = mkw(7); println(f"v{eat(w.r)}")` prints `v7 dD107n107 dD7n7 end`; the generic twin `eatd(wrap(mkd(6)).v)` prints `e6 end` | — |
 | B-2026-09-26-24 | 2026-09-26 | codegen | medium | A READ-ONLY `match` OR `if let` ARM OVER A MONOMORPHIC USER ENUM THAT PASSES ITS BINDING TO A `ref` PARAM LOSES THE PAYLOAD'S `Drop` BODY AND LEAKS ITS `shared` FIELD ON EVERY COMPILED SURFACE -- `let o = HoS.FullS(mk2(9)); match o { HoS.FullS(x) => rd(x), .. }` over `fn rd(x: ref S2)` prints `rd9 end` where `--interp` prints `rd9 dS9 end`, 16 B lost at -O0 | — |
 | B-2026-09-26-25 | 2026-09-26 | codegen | medium | A HAND-BACK CALL OF A FORWARDED `Drop` STRUCT WITH A `shared` FIELD USED DIRECTLY AS A `match` / `if let` SCRUTINEE OR `unwrap` RECEIVER IS STILL WRONG, the direct-use remainder of B-2026-09-26-17 -- concrete `match midS(s, true) { Some(v) => println(f"v{v.id}"), .. }` prints `v4 end` where `--interp` prints `v4 dS4 end` and loses 16 B at -O0; the generic `match mkh(s)` and `mid(s, true).unwrap()` double free | — |
-| B-2026-09-26-26 | 2026-09-26 | codegen | low | A DISCARDED CONDITIONAL HAND-BACK, OR A HAND-BACK OF A FRESH TEMP, OF A FORWARDED `Drop` STRUCT WITH A `shared` FIELD LEAKS THE FIELD -- `let s = mk2(13); midS(s, true);` and `let o = wrapS(mk2(34))` print the right output on every surface and lose 16 B at -O0 | — |
-| B-2026-09-26-27 | 2026-09-26 | codegen+interp | high | TWO MORE HAND-BACK SPELLINGS OF A STRUCT WITH A `shared` FIELD DOUBLE FREE ON EVERY COMPILED SURFACE -- a concrete conditional hand-back of a `Drop`-less struct unwrapped (`let o = mid3(s, true); let v = o.unwrap()`), and a param wrapped, passed through `keep` and returned (`fn outp(s: S2) -> Option[S2] { let o = Some(s); let p = keep(o); return p }`), which also runs the `Drop` body twice under `--interp` | — |
+| B-2026-09-26-26 | 2026-09-26 | codegen | low | A DISCARDED CONDITIONAL HAND-BACK OF A FORWARDED `Drop` STRUCT WITH A `shared` FIELD LEAKS THE FIELD -- `let s = mk2(13); midS(s, true);` prints the right output on every surface and loses 16 B at -O0 (the let-bound fresh-temp half, `let o = wrapS(mk2(34))`, is clean since B-2026-09-26-27's fix 0fb958d50) | — |
 | B-2026-09-26-28 | 2026-09-26 | codegen | low | `assert_eq` LEAKS A BRANCH-WRAPPER ARGUMENT'S FRESH VALUE ON EVERY COMPILED SURFACE -- `assert_eq(if true { f"w5" } else { f"z" }, f"w5")` passes and prints nothing on all four surfaces but valgrind reports 1 block definitely lost; the direct `assert_eq(f"w5", f"w5")` and `let x = f"w5"; assert_eq(x, f"w5")` are clean | — |
 | B-2026-09-26-29 | 2026-09-26 | codegen | low | A NAMED STRUCT'S `String` FIELD MOVED THROUGH A BRANCH ARM INTO A BY-VALUE PARAM LEAKS ON EVERY COMPILED SURFACE -- `let q = mkq(3); let a = take(if true { q.name } else { f"z" });` prints `q3 a1 end` on all four surfaces with valgrind 1 block lost; the `ref` twin `bor(if true { q.name } else { f"z" })` and the direct `take(q.name)` are clean | — |
+| B-2026-09-26-30 | 2026-09-26 | interp+codegen | medium | A PARAM WRAPPED IN A LOCAL AND HANDED BACK ON ONLY SOME PATHS, OR RE-WRAPPED OUT OF A `match`, RUNS ITS `Drop` BODY TWICE -- `c1(P { id: 1 }, true)` over `fn c1(s: P, c: bool) -> Option[P] { let o = Some(s); if c { return o } return None }` prints `dP1 strue dP1` on all four surfaces; `h1(P { id: 14 }, false)` over the `Ho` twin runs the body twice compiled and once under `--interp` | — |
+| B-2026-09-26-31 | 2026-09-26 | codegen | medium | THREE MORE SPELLINGS OF A NAMED `Drop`-LESS STRUCT WITH A `shared` FIELD HANDED BACK IN AN ENUM DOUBLE FREE ON EVERY COMPILED SURFACE -- a user enum conditional hand-back moved out of a `match` (`hoc3(s, true)`), a callee taking two such args (`two3(a, b)`), and the call used directly as the `unwrap` receiver (`mid3(s, true).unwrap()`) | — |
+| B-2026-09-26-32 | 2026-09-26 | codegen | low | A FRESH `Drop`-LESS STRUCT WITH A `shared` FIELD PASSED TO A CONDITIONAL HAND-BACK THAT TAKES THE `None` PATH LEAKS THE FIELD -- `let o = mid3(mk3(10), false)` prints the right output on every surface and loses 16 B at -O0 | — |
 
 ### Relocated
 
@@ -3103,6 +3105,7 @@ registered in the callee's prologue, not by-value struct params in general. | �
 | B-2026-09-26-15 | codegen | high | A PAYLOAD MOVED OUT OF A GENERIC FN'S ENUM HAND-BACK OF A FORWARDED STRUCT IS FREED TWICE ON EVERY COMPILED SURFACE -- `let o = mid(s, true); let v =… | 133a79f1b |
 | B-2026-09-26-17 | codegen | medium | A CONCRETE FN THAT WRAPS A FORWARDED `Drop` STRUCT WITH A `shared` FIELD IN AN ENUM LEAKS THE FIELD -- `let o = wrapS(s)` over `fn wrapS(v: S2) -> Op… | 82b5a42c0 |
 | B-2026-09-26-19 | codegen | high | A FIELD PROJECTION OFF A FRESH TEMP PASSED AS A CALL ARGUMENT IS FREED WRONGLY ON EVERY COMPILED SURFACE -- `bor(mkq(3).name)` with `fn bor(s: ref St… | 188d0ea8b |
+| B-2026-09-26-27 | codegen+interp | high | TWO MORE HAND-BACK SPELLINGS OF A STRUCT WITH A `shared` FIELD DOUBLE FREE ON EVERY COMPILED SURFACE -- a concrete conditional hand-back of a `Drop`-… | 0fb958d50 |
 
 </details>
 
