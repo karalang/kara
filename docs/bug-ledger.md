@@ -92,14 +92,14 @@ distinguish "bugs flattening" from "we stopped writing them down."
 
 | class | total |
 |---|---|
-| run-vs-build | 496 |
+| run-vs-build | 499 |
 | miscompile | 476 |
-| leak | 435 |
-| double-free | 318 |
+| leak | 436 |
+| double-free | 320 |
 | missing-feature | 209 |
 | codegen-gap | 196 |
 | other | 148 |
-| diagnostics | 134 |
+| diagnostics | 135 |
 | perf | 117 |
 | false-positive | 109 |
 | soundness | 97 |
@@ -110,9 +110,9 @@ distinguish "bugs flattening" from "we stopped writing them down."
 
 | surface | total |
 |---|---|
-| codegen | 2135 |
-| interp | 573 |
-| typecheck | 308 |
+| codegen | 2140 |
+| interp | 576 |
+| typecheck | 309 |
 | other | 110 |
 | ownership | 77 |
 | cli | 73 |
@@ -130,12 +130,7 @@ _Generated from `bug-ledger.jsonl` by `scripts/bug-curve.py` (2026-05-20 → 202
 
 | id | date | surface | sev | title | tracker |
 |---|---|---|---|---|---|
-| B-2026-09-14-10 | 2026-09-14 | codegen+interp | low | WHETHER A BORROW-PROJECTION ARGUMENT COPIES DEPENDS ON WHETHER THE CALLEE KEEPS IT, NOT ON THE CALL SPELLING -- a storing callee runs the field's `Drop` body TWICE and a discarding one ONCE, identically for free / assoc / inherent-method / builtin and on all four surfaces; what is OPEN is whether the discard-elision should exist at all, since design.md says a by-value pass copies and does not distinguish the two | — |
 | B-2026-09-14-28 | 2026-09-14 | codegen | medium | `vertical`'s +85% SSO REGRESSION IS NOT THE DE-INLINE PROBE AND NOT `prefix_string` -- both were ruled out by measurement (c1adb9c removed the probe: +84.1% -> +85.4%; an exact mirror of `prefix_string` runs 9-15% FASTER under SSO), so the worst regression in the corpus is now UNATTRIBUTED. `shortest_distance_iii` (+36%) and `shortest_distance` (+61%) are the same shape. Reachable only at KARAC_SSO=1, which is off by default. | — |
-| B-2026-09-16-6 | 2026-09-16 | codegen+interp | medium | TWO BODIES-CHANNEL GAPS FOR AN `Array[T, N]` HELD IN A TUPLE, both found while pinning the output twin of B-2026-09-13-23's memory fix and both memory-clean under it: a tuple in a STRUCT FIELD runs no element `Drop` body on ANY backend, and a DESTRUCTURED tuple runs them under `--interp` and on NEITHER compiled backend -- an agreed silence and a run-vs-build divergence in the same family | — |
-| B-2026-09-16-11 | 2026-09-16 | codegen | low | THE ENUM TWIN OF B-2026-09-05-32'S IDENTITY ARM STILL LEAKS -- `e = if c { pass(e) } else { e }` over `enum E { A(String), B }` loses 36 bytes in 1 block (12 allocs / 11 frees at -O0) while the all-owned-calls spelling `else { mk() }` is 12 / 12 clean on the same tree; the enum overwrite path consumes the STRICT `roundtrip_frees_old` because it has no distinctness guard, so widening the shared predicate would have traded the leak for a use-after-free there | — |
-| B-2026-09-16-14 | 2026-09-16 | interp | low | THE INTERPRETER RUNS A TRANSFERRED STRUCT-FIELD LEAF'S `Drop` BODY TWICE WHERE EVERY COMPILED BACKEND RUNS IT ONCE -- `let c = H2 { r: mk(1) }; match c { H2 { r } => { let m: R = r; return m.id } }` prints `dR1 dR1` under `--interp` and `dR1` on jit / aot / `KARAC_AUTO_PAR=0`; the enum-leaf spellings double the whole `dE dR` pair, and `return e` out of the arm runs a full pair AT THE ARM before the value reaches the caller, who then runs it again | — |
-| B-2026-09-16-19 | 2026-09-16 | codegen+interp | medium | A `Vec`-NESTING INSIDE AN `Option` OR `Map` FIELD RUNS ITS ELEMENT'S `Drop` BODY ON `--interp` AND ON NO COMPILED SURFACE -- `H { xs: Option[Vec[D]] }` and `H { xs: Map[i64, Vec[D]] }` both print `dD1` under the tree-walk backend and nothing under the JIT or either `build`, which REFUTES the premise `type_runs_user_drop`'s own comment rests on | — |
 | B-2026-09-16-22 | 2026-09-16 | codegen+interp | low | AN OWNED ENUM RECEIVER THAT ESCAPES THROUGH THE RETURN RUNS ITS SHELL `Drop` BODY TWICE, AND A CHAINED CALL OVER THE SAME SHAPE RUNS NO BODY AT ALL -- `let b = a.ret_self()` prints `dE dR6 dE` and `E.A(mk(14)).ret_self().none()` prints nothing, both agreed on all four surfaces with memory balanced | — |
 | B-2026-09-16-23 | 2026-09-16 | interp | low | TWO SHADOW-REBIND SPELLINGS STILL DOUBLE THE `Drop` BODY IN THE INTERPRETER -- a NESTED BLOCK (`{ let q = idr(q); .. }`) and an `if`-WRAPPED RHS both print `dR15 dR15` against one body on `karac build`; the first is out of the retraction's SCOPE and the second is a genuine per-path question the all-paths predicate correctly declines, so they need different repairs | — |
 | B-2026-09-16-25 | 2026-09-16 | interp+codegen | low | THE OWNED-`self` ENUM RECEIVER PAYLOAD-BODY SUPPRESSION IS ALL-PATHS, NOT PATH-SENSITIVE -- a callee that takes the payload on SOME path still suppresses the caller's walk on the paths it does NOT take, so `if c { match self { E.A(r) => .. } } return 0;` called with `c == false` prints a bare `dE` and loses `dR`; same for a zero-trip `while` and an unselected match arm; B-2026-09-16-21's fix answered the ALL-PATHS-NO case only | — |
@@ -345,6 +340,13 @@ registered in the callee's prologue, not by-value struct params in general. | �
 | B-2026-09-26-47 | 2026-09-26 | interp+codegen | medium | A `Drop`-BEARING FIELD OF A NAMED LOCAL HANDED TO A USER CALLEE THAT KEEPS IT RUNS ITS BODY TWICE ON ALL FOUR SURFACES, where a builtin sink runs it once since B-2026-09-26-35 -- `let w = mkw(7); let k = keep(w.r)` prints `dD107n107 dD7n7 k7 dD7n7 end`, and `st(mut v, w.r)`, `gid(w.r)` and `gst(mut v, w.r)` do the same, against `xs.push(w.r)`'s `dD107n107 l1 dD7n7 end` | — |
 | B-2026-09-26-48 | 2026-09-26 | codegen | medium | A NAMED `Drop` LOCAL MOVED WHOLE INTO A GENERIC CALLEE THAT STORES IT RUNS ITS BODY AT THE CALL ON EVERY COMPILED SURFACE, AND AGAIN AT THE CONTAINER'S DEATH -- `let d = mkd(7); gst(mut v, d)` over `fn gst[T](v: mut ref Vec[T], x: T) { v.push(x); }` prints `dD7n7 l1 dD7n7 end` on JIT / `-O2` seq / `-O2` par against `--interp`'s correct `l1 dD7n7 end` | — |
 | B-2026-09-26-49 | 2026-09-26 | interp+codegen | medium | A RECURSIVE HAND-BACK THAT SWAPS THE PARAM INTO ANOTHER SLOT, RECURSES THROUGH A METHOD, OR HAS A FRESH EXIT STILL RUNS A `Drop` BODY TWICE ON ALL FOUR SURFACES -- `rsw(s, w, 1)` over `fn rsw(a: P, b: P, n: i64) -> P { if n == 0 { return a } return rsw(b, a, n - 1) }` prints `dP12 dP11 t12 dP12`; `k.mr(s, 2)` over a self-recursive `fn mr(ref self, a: P, n: i64) -> P` prints `dP18 t18 dP18` | — |
+| B-2026-09-26-53 | 2026-09-26 | codegen | high | A TUPLE LOCAL DESTRUCTURED BY `let (a, j) = t;` WHOSE `String` OR `Vec` LEAF IS THEN REBOUND DOUBLE-FREES ON THE JIT, `-O0` AND `KARAC_AUTO_PAR=0` BUILDS -- `let t: (String, i64) = (f"..", 7); let (a, j) = t; let b = a;` aborts `free(): double free detected in tcache 2` (11 allocs, 12 frees), `Vec[i64]` the same, `Vec[D]` segfaults with 4 invalid accesses; `-O2` and `--interp` print correctly. Separately, a `Vec[D]` leaf runs no element `Drop` body on any compiled surface, destructured from a local OR a fresh call | — |
+| B-2026-09-26-54 | 2026-09-26 | codegen | high | A NAMED `Array[T, N]` MOVED INTO A TUPLE LITERAL IS NOT HANDED OVER -- inside a struct field (`let a: Array[D, 2] = ..; let w = W { t: (a, 7) };`) it double-frees on the JIT, `-O0` and `KARAC_AUTO_PAR=0` builds (13 allocs, 15 frees, 2 invalid frees) while `-O2` and `--interp` print correctly; as a local tuple (`let t = (a, 7);`) its elements' `Drop` bodies run on no compiled surface; one tuple deeper (`let t = ((a, 7), 8);`) no surface runs them | — |
+| B-2026-09-26-55 | 2026-09-26 | codegen | medium | AN ENUM ROUNDTRIPPED THROUGH A BY-VALUE CALLEE INSIDE A LOOP RUNS ITS PAYLOAD'S `Drop` BODY ONCE PER ITERATION ON EVERY COMPILED SURFACE -- `while i < 3 { e = pass(e); .. }` over `enum E { A(R), B }` prints `dR1 dR1 dR1 end` on the JIT, `-O0`, `-O2` and `KARAC_AUTO_PAR=0` builds and `dR1 end` under `--interp`; memory balances, so it is the body count alone. The same roundtrip outside a loop, a struct roundtripped in the same loop, and `let f = pass(e)` all agree at one body | — |
+| B-2026-09-26-56 | 2026-09-26 | typecheck | low | W0299 `borrow_projection_copy` IS SILENT WHEN A BORROW PROJECTION IS PASSED TO A USER CALLEE THAT KEEPS IT -- `keep(w.r, mut v)`, a storing associated function and `k.put(w.r)` each copy the field and run its `Drop` body twice on every surface, and none of them warns; the lint fires only for the `Vec.push` builtin argument and a TRAIT associated-function argument. design.md now says which call copies (d618ccbcf), so the rule to implement is settled | — |
+| B-2026-09-26-57 | 2026-09-26 | interp | medium | THE INTERPRETER RUNS AN EXTRA `Drop` BODY FOR A MATCH-ARM BINDING OFF A BORROW PROJECTION THAT IS HANDED TO A STORING CALLEE -- `match s.e { E.A(r) => keep(r, mut v), .. }` through `ref S` prints `dR2 dR2 b 1 dR2` under `--interp` and `dR2 b 1 dR2` on the JIT, `-O0` and `-O2` builds; the discarding spelling `consume(r)` agrees everywhere | — |
+| B-2026-09-26-58 | 2026-09-26 | interp+codegen | medium | THREE `Vec`-IN-A-FIELD SHAPES STILL LOSE THEIR ELEMENT `Drop` BODIES AFTER B-2026-09-16-19 -- an `Option[VecDeque[D]]` field and a `Map[i64, Option[Vec[D]]]` field print the body under `--interp` and on no compiled surface, a `match h.xs { Some(v) => .. }` arm that moves the `Vec` out of an `Option[Vec[D]]` field loses both bodies compiled (`in n2 dD1 dD2 out` vs `in n2 out`), and a `Vec[H]` whose `H` holds an `Option[VecDeque[D]]` runs the body on NEITHER backend | — |
+| B-2026-09-26-59 | 2026-09-26 | codegen+interp | medium | AN `Option[Vec[D]]` HELD BY A GENERIC STRUCT, AN ARRAY ELEMENT OR AN ENUM PAYLOAD LEAKS ONE ELEMENT'S BUFFER AT `-O0` -- `G[T] { xs: Option[Vec[T]] }` at `T = D`, `Array[H, 2]` of `H { xs: Option[Vec[D]] }`, and `enum E { A(Option[Vec[D]]), B }` each lose 32 bytes in 1 block plus 36 indirectly; the enum payload also runs its element's `Drop` body on NEITHER backend | — |
 
 ### Relocated
 
@@ -2767,6 +2769,7 @@ registered in the callee's prologue, not by-value struct params in general. | �
 | B-2026-09-14-7 | codegen+interp | low | AN `Option`-PAYLOAD ELEMENT MOVED OUT AND NOT RETURNED DIES AT OPPOSITE ENDS OF THE ARM -- `Some(t) => { let x = t.0; println("mid"); }` prints `mid… | b412134 |
 | B-2026-09-14-8 | interp | low | THE INTERPRETER LOSES THE DIES-INSIDE `Drop` BODY FOR AN ASSOCIATED FN BUT NOT FOR THE METHOD SPELLING OF THE SAME CALLEE -- `Sk.pick(R { id: 1 }, fa… | 35eef75 |
 | B-2026-09-14-9 | codegen | medium | A BARE DISCARDED CALL RETURNING A CONCRETE USER ENUM WITH A BOXED `Array` PAYLOAD LOSES ITS BOX AND INTERIOR -- `mk(i);` over `fn mk(..) -> E` with `… | 3e2365b |
+| B-2026-09-14-10 | codegen+interp | low | WHETHER A BORROW-PROJECTION ARGUMENT COPIES DEPENDS ON WHETHER THE CALLEE KEEPS IT, NOT ON THE CALL SPELLING -- a storing callee runs the field's `Dr… | d618ccbcf |
 | B-2026-09-14-11 | codegen | medium | A DISCARDED USER-ENUM TEMP WITH A BOXED PAYLOAD STILL LEAKS IN EVERY SPELLING WHOSE TYPE CANNOT BE RESOLVED -- `h.makeb(i);`, `H.assoc(i);` and `let… | c6b0922 |
 | B-2026-09-14-12 | codegen | medium | AN ENUM WITH A BOXED `Array` PAYLOAD IS FREED ONLY BY THE FIVE EXPLICIT REGISTRATION SITES -- held in a struct FIELD, a `Vec` or a `Map` it loses its… | d421d2b |
 | B-2026-09-14-13 | codegen | medium | A FRESH-TEMP `Option` SCRUTINEE WITH A BOXED PAYLOAD LOSES IT IN TWO DIFFERENT WAYS -- `match mk2(j) { Some(a) => . | 7c3cb26 |
@@ -2825,16 +2828,20 @@ registered in the callee's prologue, not by-value struct params in general. | �
 | B-2026-09-16-3 | codegen | low | THE NESTED STORE `d[i][j] = x` LEAKS THE DISPLACED TUPLE'S HEAP -- 5 B in 1 block at `-O0` over `Vec[Vec[(String, i64)]]`, and the one-line fix the s… | a1dc4dd |
 | B-2026-09-16-4 | other | medium | THE ASAN RATCHET LEGS RUN THE OPT-IN-ARCHIVE FIXTURES AGAINST A RUNTIME THAT CAN BE ARBITRARILY OLD, AND NOTHING DETECTS IT -- every archive check in… | d7a2486 |
 | B-2026-09-16-5 | codegen | low | A BY-VALUE TUPLE PARAM HOLDING AN `Array[T, N]` LEAKS ITS ELEMENTS IN TWO SHAPES, AND THE TWO ARE INDEPENDENT ADDITIVE FAULTS RATHER THAN THE ONE COP… | 2205e25 |
+| B-2026-09-16-6 | codegen+interp | medium | TWO BODIES-CHANNEL GAPS FOR AN `Array[T, N]` HELD IN A TUPLE, both found while pinning the output twin of B-2026-09-13-23's memory fix and both memor… | 7c29e06ce |
 | B-2026-09-16-7 | other | medium | THE ARCHIVE FRESHNESS CHECK COVERS ONLY THE TWO ASAN LEGS -- `link_or_skip` is still PRESENCE-ONLY, so the ordinary `cargo test --features llvm` run… | 3b2a932 |
 | B-2026-09-16-8 | other | medium | `bug-lint.sh` SKIPS ITS FIX-SHA RESOLVABILITY CHECK ON EVERY CLOUD CONTAINER, WHICH IS WHERE THE ORPHANS ARE CREATED -- the check is disabled outrigh… | 3b2a932 |
 | B-2026-09-16-9 | codegen | high | REGRESSION ON `main`: `506a91d` TURNED THE `(Array[String, 2], i64)` ENUM-PAYLOAD CELL FROM A LEAK INTO AN INVALID FREE -- valgrind reports `Invalid… | 49e75a8 |
 | B-2026-09-16-10 | codegen | high | A GENERIC SINGLE-FIELD VARIANT AT `T = Array[String, N]` SEGFAULTS ON EVERY COMPILED BACKEND -- `G1.Y(a)` over `enum G1[T] { Y(T), N }` passed to a g… | 55a8db2 |
+| B-2026-09-16-11 | codegen | low | THE ENUM TWIN OF B-2026-09-05-32'S IDENTITY ARM STILL LEAKS -- `e = if c { pass(e) } else { e }` over `enum E { A(String), B }` loses 36 bytes in 1 b… | 9c6d00ba4 |
 | B-2026-09-16-12 | interp+codegen | medium | A MIXED BIND-AND-WILDCARD MATCH ARM LOSES THE WILDCARDED PAYLOAD FIELD'S `Drop` BODY -- `let w = W2.Two(mk(41), mk(42)); match w { W2.Two(a, _) => {… | c9432558c |
 | B-2026-09-16-13 | codegen | medium | A USER ENUM RETURNED BY A CALL AND PASSED BY VALUE LEAKS ITS PAYLOAD -- `eat(mk(i))` over `enum T { A(String), B }` loses 58 B in 2 blocks (13 allocs… | 388a4fb |
+| B-2026-09-16-14 | interp | low | THE INTERPRETER RUNS A TRANSFERRED STRUCT-FIELD LEAF'S `Drop` BODY TWICE WHERE EVERY COMPILED BACKEND RUNS IT ONCE -- `let c = H2 { r: mk(1) }; match… | edbfa5209 |
 | B-2026-09-16-15 | codegen | medium | A BOXED GENERIC-ENUM `Array[String, N]` PAYLOAD STRANDS ITS ELEMENT BUFFERS WITH OR WITHOUT A MATCH IN THE CALLEE -- the remaining half of this row,… | cedace6 |
 | B-2026-09-16-16 | codegen | medium | A PASSTHROUGH GENERIC PARAM OVER A BOXED ENUM PAYLOAD DOUBLE FREES -- `fn idG[T](g: G1[T]) -> G1[T] { return g }` over `enum G1[T] { Y(T), N }` at `T… | 8b00e96 |
 | B-2026-09-16-17 | codegen+interp | medium | AN ENUM VARIANT'S PAYLOAD FIELDS RUN THEIR `Drop` BODIES IN DECLARATION ORDER ON ALL FOUR SURFACES, while a struct's run in REVERSE declaration order… | ef5ce6f |
 | B-2026-09-16-18 | codegen+interp | medium | A FRESH-TEMP STRUCT SCRUTINEE'S UNBOUND FIELDS LOSE THEIR `Drop` BODIES AND LEAK THEIR HEAP ON EVERY SURFACE -- `match S3 { a: mk(44), b: mk(45) } {… | 4113717f4 |
+| B-2026-09-16-19 | codegen+interp | medium | A `Vec`-NESTING INSIDE AN `Option` OR `Map` FIELD RUNS ITS ELEMENT'S `Drop` BODY ON `--interp` AND ON NO COMPILED SURFACE -- `H { xs: Option[Vec[D]]… | 567c213fd |
 | B-2026-09-16-20 | codegen | low | `karac_string_try_inline_into` IS DEAD ABI SURFACE -- no caller anywhere in the compiler since `9d3ceb9` removed its declaration from `runtime_fns.rs… | 34211d4 |
 | B-2026-09-16-21 | codegen+interp | medium | AN OWNED ENUM RECEIVER'S PAYLOAD `Drop` BODY IS LOST WHENEVER THE CALLEE NEVER DESTRUCTURES `self` -- `let a = E.A(mk(1)); a.none()` over `fn none(se… | 0b97e71 |
 | B-2026-09-16-24 | typecheck | medium | `partial_move_of_drop_enum` REJECTS A BORROW-PROJECTION SCRUTINEE, and it is a false positive by the rule's OWN stated terms -- the rule documents it… | 84030e8 |
