@@ -2630,6 +2630,11 @@ pub extern "C" fn karac_runtime_tcp_close(fd: i64) -> i32 {
     }
     // i64 fd ABI → narrow to `RawFd` (i32) for the Unix close-on-drop path.
     let fd = fd as RawFd;
+    // B-2026-09-26-43 — a `WebSocket` accepted over TLS closes through here,
+    // not through `karac_runtime_tls_close`, so drop its session entry too;
+    // see `crate::tls::forget_session_for_fd` for why before the close.
+    #[cfg(feature = "tls")]
+    crate::tls::forget_session_for_fd(fd);
     // SAFETY: reconstructing the `TcpStream` from the raw fd and
     // letting it drop (no `into_raw_fd()` here, unlike the bind /
     // accept / read / write FFIs which release ownership back to
@@ -2884,6 +2889,10 @@ pub extern "C" fn karac_runtime_tcp_close(fd: i64) -> i32 {
         return 0;
     }
     let fd = fd as RawSocket;
+    // B-2026-09-26-43 — as on unix: drop a TLS `WebSocket`'s session entry
+    // before the socket is closed and its number can be reused.
+    #[cfg(feature = "tls")]
+    crate::tls::forget_session_for_fd(fd);
     // Tear down the persistent registration source for this socket first, if any
     // (`register_fd` parks one mio `TcpStream` per socket in the bridge's
     // `sources` map and keeps it alive across re-parks). `release` recovers the

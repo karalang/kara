@@ -223,6 +223,17 @@ pub(crate) fn register_session_for_fd(fd: SessionKey, conn: rustls::Connection) 
     reg.insert(fd, Arc::new(Mutex::new(TlsSession { conn })));
 }
 
+/// B-2026-09-26-43 — drop `fd`'s session entry, if it has one. Called by
+/// `karac_runtime_tcp_close` BEFORE it closes the fd, because a `WebSocket`
+/// accepted over TLS is dropped through that close rather than through
+/// [`karac_runtime_tls_close`]. Before the close, not after: once the fd is
+/// closed a concurrent accept can draw the same number and register a fresh
+/// session under it, which a removal made afterwards would take away.
+pub(crate) fn forget_session_for_fd(fd: SessionKey) {
+    let mut reg = sessions().write().unwrap_or_else(|p| p.into_inner());
+    reg.remove(&fd);
+}
+
 /// Slice 3 — borrow the `Arc<ServerConfig>` out of a `*mut KaracTlsConfig`
 /// pointer. Exposed for [`karac_runtime_ws_accept_tls`] which needs to
 /// build a fresh `ServerConnection` per accepted connection.
@@ -1049,6 +1060,17 @@ mod tests {
     /// reading the 101 response).
     #[test]
     fn ws_accept_tls_succeeds_with_nonblocking_listener() {
+        let (server_fd, cfg, _client) = accept_one_tls_websocket();
+        // Cleanup: close the upgraded connection fd.
+        karac_runtime_tls_close(server_fd);
+        unsafe { karac_runtime_tls_config_free(cfg) };
+    }
+
+    /// Drive one full client TLS handshake + RFC 6455 upgrade against
+    /// `karac_runtime_ws_accept_tls` and return the server-side fd, the
+    /// config (caller frees it) and the client socket (held so the peer
+    /// stays open while the caller inspects the server side).
+    fn accept_one_tls_websocket() -> (i64, *mut KaracTlsConfig, TcpStream) {
         use std::io::{Read, Write};
 
         let (cert_pem, key_pem) = gen_test_cert();
@@ -1153,8 +1175,32 @@ mod tests {
             "karac_runtime_ws_accept_tls returned {server_fd} (expected non-negative fd)"
         );
 
-        // Cleanup: close the upgraded connection fd.
-        karac_runtime_tls_close(server_fd);
+        (server_fd, cfg, sock)
+    }
+
+    /// B-2026-09-26-43 — a `WebSocket` accepted over TLS is dropped through
+    /// `karac_runtime_tcp_close` (its hand-rolled `@WebSocket.drop`, shared
+    /// with `TcpStream`), not `karac_runtime_tls_close`. That close must
+    /// still drop the fd's `SESSIONS` entry: the WebSocket framing FFIs pick
+    /// TLS-or-plain by the entry's PRESENCE, so a stale one would route a
+    /// later plain connection that draws the same fd number through a dead
+    /// rustls session, and it holds that session until the number is reused.
+    ///
+    /// Compared by `Arc` identity rather than by absence: the fd number is
+    /// free again the moment it is closed, so a concurrently running test
+    /// may legitimately register a FRESH session under it.
+    #[test]
+    fn tcp_close_drops_the_websocket_tls_session() {
+        let (server_fd, cfg, _client) = accept_one_tls_websocket();
+        let key = server_fd as SessionKey;
+        let before =
+            lookup_session(key).expect("ws_accept_tls must register a session for the upgraded fd");
+        crate::event_loop::karac_runtime_tcp_close(server_fd);
+        let stale = lookup_session(key).is_some_and(|after| Arc::ptr_eq(&before, &after));
+        assert!(
+            !stale,
+            "karac_runtime_tcp_close left the TLS session registered for fd {server_fd}"
+        );
         unsafe { karac_runtime_tls_config_free(cfg) };
     }
 
