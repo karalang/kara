@@ -104,14 +104,14 @@ distinguish "bugs flattening" from "we stopped writing them down."
 | false-positive | 109 |
 | soundness | 97 |
 | crash | 96 |
-| use-after-free | 56 |
+| use-after-free | 57 |
 
 ### By surface
 
 | surface | total |
 |---|---|
-| codegen | 2126 |
-| interp | 568 |
+| codegen | 2127 |
+| interp | 569 |
 | typecheck | 308 |
 | other | 110 |
 | ownership | 77 |
@@ -319,7 +319,6 @@ registered in the callee's prologue, not by-value struct params in general. | �
 | B-2026-09-25-33 | 2026-09-25 | codegen+interp | medium | A BY-VALUE PARAM HANDED TO A WRAPPER WHOSE RESULT IS DISCARDED RUNS ITS `Drop` BODY TWICE ON ALL FOUR SURFACES -- `fn outerC(x: P) { wrapC(x); println("o") }` over `fn wrapC(v: P) -> BxP { return BxP { v: v } }` called as `outerC(p)` prints `dP10 o dP10 x` everywhere against a due `dP10 o x`; the GENERIC spelling `fn outerG[T](x: T) { wrap(x); .. }` runs it once but LATE on the compiled surfaces (`o dP11 x`) and twice under `--interp` | — |
 | B-2026-09-25-34 | 2026-09-25 | codegen | medium | A DISCARDED GENERIC STRUCT LITERAL RUNS NONE OF ITS `Drop` BODIES ON ANY COMPILED SURFACE -- `Dx { v: P { id: 13 }, k: 13 };` over `struct Dx[T] { v: T, k: i64 }` with `impl[T] Drop for Dx[T]` prints `x` where `--interp` prints `dDx13 dP13 x`, and `let _ =` and a `Drop`-less `Bx[T]` (`Bx { v: P { id: 15 } };`, due `dP15`) do the same; the CALL spelling `wrapd(p);` is fixed by B-2026-09-25-30 | — |
 | B-2026-09-25-40 | 2026-09-25 | codegen | high | A GENERIC FN THAT HANDS A `shared`-FIELD STRUCT BACK, OR STORES IT, ON ONLY SOME PATHS USES IT AFTER FREE ON EVERY COMPILED SURFACE, with or without a `Drop` -- `pick(s, true, w)` over `fn pick[T](v: T, c: bool, w: T) -> T { if c { return v } return w }` aborts under `karac run` with 2 valgrind errors at -O0 at `T = S3` and `T = S2`, the S2 cells also running a body twice (`dS2 dS2 dS1 t1 dS1` against `dS2 t1 dS1`), and `stc(s, true)` over a conditional `v.push(a)` does the same at `T = S3` | — |
-| B-2026-09-26-4 | 2026-09-26 | interp+codegen | high | A BY-VALUE PARAM HANDED ON TWO LEVELS TO A CALLEE THAT RETURNS IT ON ONLY SOME PATHS IS STILL USED AFTER FREE, `Drop` OR NOT -- `fn outer(a: S3, c: bool) -> S3 { return passp(a, c) }` over B-2026-09-25-41's `passp` aborts under `karac run` with 2 valgrind errors at -O0 at both exits, and over the `Drop`-bearing `passp2` EVERY surface including `--interp` prints `dS98 dS3 t3 dS3` where one `dS3` is due | — |
 | B-2026-09-26-7 | 2026-09-26 | interp+codegen | medium | A TUPLE INDEX READ OFF A FRESH TEMP RUNS NO `Drop` BODY FOR THE OTHER ELEMENTS ON ANY SURFACE, AND LEAKS THEIR HEAP AT `-O0` WHEN THE TEMP COMES OUT OF AN `unwrap()` -- `println(f"t{mkt().1}")` over `fn mkt() -> (D, i64)` prints `t1 end` on all four surfaces where `let t = mkt(); println(f"t{t.1}")` prints `t1 dD9n9 end`; `let o = Some(mkt()); println(f"t{o.unwrap().1}")` prints `t1 end` and loses 2 bytes in 1 block | — |
 | B-2026-09-26-8 | 2026-09-26 | codegen | high | A `shared struct` FIELD RETURNED FROM A `ref self` METHOD IS RELEASED WITHOUT BEING RETAINED, SO THE HOLDER'S OWN RELEASE LATER TOUCHES FREED MEMORY ON EVERY COMPILED SURFACE -- `let h = Hold { s: mksh(3) }; let x = h.get(); println(f"x{x.k}")` over `fn get(ref self) -> Sh { self.s }` prints the right text everywhere but valgrind reports an invalid read and an invalid write of size 8 at `-O0`; through a projection (`h.get().k`) the compiled surfaces also run `dSh3` BEFORE the print, while `h` still holds it | — |
 | B-2026-09-26-9 | 2026-09-26 | interp+codegen | low | A PLAIN STRUCT HOLDING A `shared struct` RELEASES IT AT LEXICAL SCOPE EXIT ON THE COMPILED BACKENDS AND AT THE HOLDER'S LIVE-RANGE END UNDER `--interp` -- `let h = Hold { s: mksh(3) }; println(f"h{h.s.k}"); println("after")` prints `h3 dSh3nm3 dD3 after end` interpreted and `h3 after end dSh3nm3 dD3` on jit / -O2 seq / -O2 par; the `shared struct` sibling of B-2026-09-19-18's `shared enum` | — |
@@ -342,6 +341,7 @@ registered in the callee's prologue, not by-value struct params in general. | �
 | B-2026-09-26-38 | 2026-09-26 | codegen | high | A MULTI-FIELD GENERIC ENUM VARIANT WHOSE GENERIC FIELD INSTANTIATES TO A NON-ARRAY HEAP TYPE LEAKS THAT FIELD AT -O0 ON EVERY COMPILED SURFACE -- `enum G2[T] { X(T, i64), Y }` at `T = String` loses 24 B direct + the string (35 B indirect at a 35-byte string), at `T = Vec[i64]` 24 + 24, at `T = Vec[R]` 24 + 134 with both element bodies RUNNING; the single-field generic `G[Vec[R]]` and the concrete two-field `enum C2 { X(Vec[R], i64) }` are both clean, so it is generic x multi-field x non-array, the memory-half twin of B-2026-09-20-55's array fix | — |
 | B-2026-09-26-39 | 2026-09-26 | codegen | medium | A MULTI-FIELD GENERIC ENUM `Gh[T] { Y(T, String) }` AT AN ARRAY INSTANTIATION, HANDED TO A BY-VALUE CALLEE, LEAKS ITS HEAP SIBLING -- 35 B in 1 block at -O0 on every compiled surface (the `String` beside the array; the array's elements are freed); was 105 B in 3 blocks before B-2026-09-20-55; no-callee, `T = i64` and the concrete twin are all clean | — |
 | B-2026-09-26-40 | 2026-09-26 | interp+codegen | medium | A `Drop`-BEARING FIELD PROJECTED OFF A FRESH TEMP STILL LOSES ITS BODIES ON ALL FOUR SURFACES WHEN THE CALLEE IS GENERIC OR KEEPS IT, AND A `mut ref` PARAM'S BODIES READ THE PRE-CALL VALUE -- the remainder of B-2026-09-26-33 after dcbc25039: `gn(mkw(7).r)` over `fn gn[T](x: T) -> i64 { 1 }` prints `g1 end` (and `gp(mkw(7).r)` over `fn gp[T](x: ref T)` prints `g2 end`), `keep(mkw(9).r)` over `fn keep(d: D) -> D { d }` prints `k9 dD9n9 end` with the sibling's `dD109n109` never running, and `grow(mut mkw(7).r)` over `fn grow(d: mut ref D) { d.id = d.id + 1; }` prints `dD107n107 dD7n7 end` where the callee made it 8 | — |
+| B-2026-09-26-42 | 2026-09-26 | interp+codegen | high | A PARAM HANDED BACK THROUGH A SELF-RECURSIVE CALL, A WRAPPER AROUND ONE, OR A MUTUALLY RECURSIVE PAIR HAS TWO OWNERS -- `let s = P { id: 1 }; let t = rs(s, 2)` over `fn rs(a: P, n: i64) -> P { if n == 0 { return a } return rs(a, n - 1) }` prints `dP1 t1 dP1` on all four surfaces, and over a Drop-less struct with a `shared` field the JIT aborts with 2 valgrind errors at -O0 | — |
 
 ### Relocated
 
@@ -3037,6 +3037,7 @@ registered in the callee's prologue, not by-value struct params in general. | �
 | B-2026-09-26-1 | codegen | high | A HEAP FIELD MOVED OUT THROUGH A TWO-HOP PROJECTION OF A FRESH TEMP IS FREED TWICE ON EVERY COMPILED SURFACE -- `let s = mkw2().p.name;` over `struct… | 243969540 |
 | B-2026-09-26-2 | interp | medium | A FRESH TEMP'S PROJECTION WRAPPED IN A CONSTRUCTOR IN A FUNCTION TAIL RUNS ITS SIBLINGS' `Drop` BODIES COMPILED AND NOT UNDER `--interp` -- `fn f24(c… | 1b18c0136 |
 | B-2026-09-26-3 | interp+codegen | medium | A FIELD TAKEN OFF A FRESH TEMP WHOSE TYPE HAS ITS OWN `Drop` LOSES THAT TYPE'S BODY ON ALL FOUR SURFACES -- `let y = mkq().k;` over `struct Q { d: D,… | 3920422cb |
+| B-2026-09-26-4 | interp+codegen | high | A BY-VALUE PARAM HANDED ON TWO LEVELS TO A CALLEE THAT RETURNS IT ON ONLY SOME PATHS IS STILL USED AFTER FREE, `Drop` OR NOT -- `fn outer(a: S3, c: b… | dada0cf35 |
 | B-2026-09-26-5 | codegen | high | A HEAP FIELD MOVED OUT THROUGH A FRESH TEMP'S PROJECTION IS STILL FREED TWICE COMPILED WHEN THE ROOT IS GENERIC OR A HOP HAS ITS OWN `Drop` -- `let s… | 515fdebb0 |
 | B-2026-09-26-6 | interp+codegen | medium | A FUNCTION TAIL THAT READS THROUGH A FRESH TEMP WITHOUT CONSUMING THE PROJECTION RUNS NONE OF THE TEMP'S `Drop` BODIES, ON ALL FOUR SURFACES ALIKE --… | 9fc3a6772 |
 | B-2026-09-26-10 | codegen | medium | A READ-ONLY ARM OVER A LET-BOUND `Option` WHOSE PAYLOAD IS A `Drop` STRUCT WITH A `shared` FIELD LOSES THE `Drop` BODY ON EVERY COMPILED SURFACE -- `… | 4c34ab868 |
