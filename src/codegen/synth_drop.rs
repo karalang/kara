@@ -4484,7 +4484,9 @@ impl<'ctx> super::Codegen<'ctx> {
                     //
                     // So this closes the divergent half and leaves the
                     // `Vec`-level half exactly as it was -- still the recorded
-                    // residual, now measured rather than assumed.
+                    // residual, now measured rather than assumed. (The
+                    // interpreter later learned to descend a `Vec`, and
+                    // B-2026-09-16-19 closed the `Option`/`Map` half below.)
                     if self.optres_envelope_reaches_user_drop(
                         te,
                         &std::collections::HashMap::new(),
@@ -4526,6 +4528,16 @@ impl<'ctx> super::Codegen<'ctx> {
                     // `tuple_te_reaches_array_user_drop`.
                     if self.tuple_te_reaches_array_user_drop(te, &std::collections::HashMap::new())
                     {
+                        found = true;
+                        break 'tes;
+                    }
+                    // B-2026-09-16-19 — a `Vec` inside an `Option`/`Result`
+                    // payload or a `Map` value; see
+                    // `optres_or_map_payload_reaches_vec_user_drop`.
+                    if self.optres_or_map_payload_reaches_vec_user_drop(
+                        te,
+                        &std::collections::HashMap::new(),
+                    ) {
                         found = true;
                         break 'tes;
                     }
@@ -4593,9 +4605,11 @@ impl<'ctx> super::Codegen<'ctx> {
     /// level widening, added by B-2026-09-10-17. It recurses through
     /// `Option`/`Result` payloads and NOWHERE else: at the first payload whose
     /// head is not an envelope it asks `type_runs_user_drop` for that head and
-    /// stops. That is what keeps `Option[Option[Vec[R]]]` answering `false`,
-    /// which it must — that shape is silent on the interpreter too, and
-    /// admitting it here would print a body `--interp` does not.
+    /// stops, so `Option[Option[Vec[R]]]` answers `false` HERE. That shape
+    /// was once silent on the interpreter too; it no longer is, and its gate
+    /// is [`Self::optres_or_map_payload_reaches_vec_user_drop`]
+    /// (B-2026-09-16-19), which this predicate deliberately does not absorb
+    /// because the tuple-element selector also calls it.
     ///
     /// Terminates on the type's nesting depth: each step strips one envelope
     /// from a finite `TypeExpr`. `seen` is threaded into the `type_runs_user_
@@ -4632,6 +4646,75 @@ impl<'ctx> super::Codegen<'ctx> {
             }
             let resolved = self.resolve_field_head_mono(head, subst);
             self.type_runs_user_drop(&resolved, seen)
+        })
+    }
+
+    /// B-2026-09-16-19 — does an `Option` / `Result` payload or a `Map` /
+    /// `SortedMap` VALUE reach a user `Drop` through a `Vec` / `VecDeque`
+    /// level? `H { xs: Option[Vec[D]] }`, `Map[i64, Vec[D]]`,
+    /// `SortedMap[i64, Vec[D]]`, `Result[Vec[D], i64]` and
+    /// `Option[Option[Vec[D]]]` fields ran their elements' bodies under
+    /// `--interp` and on no compiled surface: every field leg above reads the
+    /// payload's HEAD NAME, gets `Vec`, and classifies the holder drop-free.
+    ///
+    /// The B-2026-09-10-17 note beside those legs chose not to recurse here
+    /// because the interpreter was silent on these shapes too. It stopped being
+    /// silent when B-2026-09-13-26 gave `run_discarded_value_user_drops` a
+    /// `Value::Array` arm, so the agreed silence became a divergence.
+    ///
+    /// Only the GATE was missing. The field walker's `Option`/`Result` arm
+    /// calls `emit_optres_payload_user_drop_bodies_fn`, whose `Vec` arm has
+    /// been on at every call site since B-2026-09-14-2, and its `Map` arm calls
+    /// `emit_map_val_user_drop_bodies_fn`, which already walks a `Vec` value
+    /// (a `Map[i64, Vec[D]]` LOCAL agrees on every surface). The `Vec` element
+    /// is asked through `vec_elem_te_reaches_user_drop_nested`, the predicate
+    /// that recurses in step with `emit_nested_vec_elem_bodies_fn`.
+    ///
+    /// Recurses through `Option`/`Result` envelopes only, and only into
+    /// `Option`/`Result` payloads; a `Map` value must be the `Vec` itself.
+    /// Those are the measured shapes, and a gate that reaches further than a
+    /// walker admits a field the walker then declines. `VecDeque` is left out
+    /// for exactly that reason: an `Option[VecDeque[D]]` runs no element body
+    /// compiled even as a LOCAL, so admitting it here moves nothing.
+    ///
+    /// The interpreter twin is `field_te_optres_or_map_reaches_vec`; the two
+    /// must classify identically, or the holder's own positions (`Vec[H]`,
+    /// `Option[H]`, a tuple of `H`) print on one backend only.
+    pub(super) fn optres_or_map_payload_reaches_vec_user_drop(
+        &self,
+        te: &TypeExpr,
+        subst: &std::collections::HashMap<String, TypeExpr>,
+    ) -> bool {
+        let TypeKind::Path(p) = &te.kind else {
+            return false;
+        };
+        let (idxs, envelope): (&[usize], bool) = match p.segments.first().map(|s| s.as_str()) {
+            Some("Option") => (&[0], true),
+            Some("Result") => (&[0, 1], true),
+            Some("Map") | Some("SortedMap") => (&[1], false),
+            _ => return false,
+        };
+        let Some(args) = p.generic_args.as_ref() else {
+            return false;
+        };
+        idxs.iter().any(|&i| {
+            let Some(GenericArg::Type(inner)) = args.get(i) else {
+                return false;
+            };
+            let inner = crate::desugar::subst_type_expr(inner, subst);
+            let TypeKind::Path(ip) = &inner.kind else {
+                return false;
+            };
+            if ip.segments.first().map(|s| s.as_str()) == Some("Vec") {
+                return crate::codegen::helpers::vec_inner_type_expr(&inner)
+                    .is_some_and(|elem| self.vec_elem_te_reaches_user_drop_nested(&elem));
+            }
+            envelope
+                && matches!(
+                    ip.segments.first().map(|s| s.as_str()),
+                    Some("Option") | Some("Result")
+                )
+                && self.optres_or_map_payload_reaches_vec_user_drop(&inner, subst)
         })
     }
 
@@ -4871,6 +4954,8 @@ impl<'ctx> super::Codegen<'ctx> {
                 // two were told apart.
                 let optres_envelope = field_te.is_some_and(|te| {
                     self.optres_envelope_reaches_user_drop(te, subst, &mut Vec::new())
+                        // B-2026-09-16-19 — the same position one `Vec` level in.
+                        || self.optres_or_map_payload_reaches_vec_user_drop(te, subst)
                 });
                 // B-2026-09-05-5 — a field that is itself a GENERIC STRUCT
                 // INSTANTIATION: `inner: Gd[T]` under `T -> R`, or a concrete

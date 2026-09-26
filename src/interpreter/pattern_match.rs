@@ -2734,6 +2734,17 @@ impl<'a> super::Interpreter<'a> {
                         }
                     }
                 }
+                // B-2026-09-16-19 — a `Vec` inside an `Option`/`Result`
+                // payload or a `Map` value. The `idxs` leg below reads the
+                // payload's HEAD NAME and asks about `Vec`. The field walk
+                // itself already fires for those shapes (it is value-driven),
+                // so a holder in a FIELD printed, but a holder one container
+                // out (`Vec[H]`, `Option[H]`, a tuple of `H`) is gated on this
+                // predicate and stayed silent. Codegen twin:
+                // `optres_or_map_payload_reaches_vec_user_drop`.
+                if self.field_te_optres_or_map_reaches_vec(fty, seen) {
+                    return true;
+                }
                 // B-2026-08-03-1 — Option/Result are a container level too:
                 // BOTH of Result's arms can be live and either can carry a
                 // Drop, so unlike the single-slot collections this checks a
@@ -2773,6 +2784,42 @@ impl<'a> super::Interpreter<'a> {
             }
             _ => false,
         }
+    }
+
+    /// B-2026-09-16-19 — does an `Option` / `Result` payload or a `Map` /
+    /// `SortedMap` value reach a user `Drop` through a `Vec` level? Recurses
+    /// through `Option`/`Result` envelopes only, and a `Map` value must be the
+    /// `Vec` itself: the same shapes codegen's
+    /// `optres_or_map_payload_reaches_vec_user_drop` admits, so both
+    /// backends' type-level gates classify identically (B-2026-09-10-17).
+    fn field_te_optres_or_map_reaches_vec(&self, te: &TypeExpr, seen: &mut Vec<String>) -> bool {
+        let TypeKind::Path(p) = &te.kind else {
+            return false;
+        };
+        let (idxs, envelope): (&[usize], bool) = match p.segments.first().map(|s| s.as_str()) {
+            Some("Option") => (&[0], true),
+            Some("Result") => (&[0, 1], true),
+            Some("Map") | Some("SortedMap") => (&[1], false),
+            _ => return false,
+        };
+        let Some(args) = p.generic_args.as_ref() else {
+            return false;
+        };
+        idxs.iter().any(|&i| {
+            let Some(crate::ast::GenericArg::Type(inner)) = args.get(i) else {
+                return false;
+            };
+            let TypeKind::Path(ip) = &inner.kind else {
+                return false;
+            };
+            match ip.segments.first().map(|s| s.as_str()) {
+                Some("Vec") => self.field_te_runs_user_drop(inner, seen),
+                Some("Option") | Some("Result") if envelope => {
+                    self.field_te_optres_or_map_reaches_vec(inner, seen)
+                }
+                _ => false,
+            }
+        })
     }
 
     /// B-2026-07-23-12: is `place` a bare-identifier / `self` scrutinee whose

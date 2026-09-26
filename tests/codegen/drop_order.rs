@@ -8972,3 +8972,59 @@ fn main() {
         "must match --interp"
     );
 }
+
+/// B-2026-09-16-19 — a `Vec` inside an `Option`/`Result` payload or a `Map`
+/// value, held in a struct field: `H { xs: Option[Vec[D]] }`,
+/// `Map[i64, Vec[D]]`, `SortedMap[i64, Vec[D]]`, `Result[Vec[D], i64]`,
+/// `Option[Option[Vec[D]]]`, `Option[Vec[Vec[D]]]`, a generic `G[T]`, a holder
+/// with its own `Drop`, and a holder passed by value. The field cells ran the
+/// elements' bodies under `--interp` only. The last six put the holder inside
+/// another container (`Vec[H]`, `Option[H]`, `Map[K, H]`, a tuple), where both
+/// backends were silent before the fix. Two rounds, so a stale slot surfaces.
+#[test]
+fn e2e_vec_in_option_or_map_field_runs_element_bodies_on_every_backend() {
+    assert_eq!(
+        run_program(
+            r#"struct D { id: i64, s: String }
+impl Drop for D { fn drop(mut ref self) { println(f"dD{self.id}") } }
+struct Ho { xs: Option[Vec[D]] }
+struct Hm { xs: Map[i64, Vec[D]] }
+struct Hs { xs: SortedMap[i64, Vec[D]] }
+struct Hr { r: Result[Vec[D], i64] }
+struct Hoo { o: Option[Option[Vec[D]]] }
+struct Hvv { xs: Option[Vec[Vec[D]]] }
+struct G[T] { xs: Option[Vec[T]] }
+struct Hb { xs: Option[Vec[D]] }
+impl Drop for Hb { fn drop(mut ref self) { println("dHb") } }
+fn mkd(n: i64) -> D { return D { id: n, s: f"heap-aaaaaaaaaaaaaaaaaaaaaaaaaaaaaa{n}" }; }
+fn eat(h: Ho) -> i64 { return 1; }
+fn round() {
+    { let h = Ho { xs: Some([mkd(1), mkd(2)]) }; println(f"c1 {h.xs.is_some()}") }
+    { let mut m: Map[i64, Vec[D]] = Map.new(); m.insert(1, [mkd(3)]); let h = Hm { xs: m }; println(f"c2 {h.xs.len()}") }
+    { let mut m: SortedMap[i64, Vec[D]] = SortedMap.new(); m.insert(1, [mkd(4)]); m.insert(2, [mkd(5)]); let h = Hs { xs: m }; println(f"c3 {h.xs.len()}") }
+    { let h = Hr { r: Ok([mkd(6)]) }; println(f"c4 {h.r.is_ok()}") }
+    { let h = Hoo { o: Some(Some([mkd(7)])) }; println(f"c5 {h.o.is_some()}") }
+    { let h = Hvv { xs: Some([[mkd(8)], [mkd(9)]]) }; println(f"c6 {h.xs.is_some()}") }
+    { let g = G { xs: Some([mkd(10)]) }; println(f"c7 {g.xs.is_some()}") }
+    { let h = Hb { xs: Some([mkd(11)]) }; println(f"c8 {h.xs.is_some()}") }
+    { let h = Ho { xs: Some([mkd(12)]) }; let n = eat(h); println(f"c9 {n}") }
+    { let v: Vec[Ho] = [Ho { xs: Some([mkd(13)]) }, Ho { xs: None }, Ho { xs: Some([mkd(14)]) }]; println(f"c10 {v.len()}") }
+    { let o: Option[Ho] = Some(Ho { xs: Some([mkd(15)]) }); println(f"c11 {o.is_some()}") }
+    { let mut m: Map[i64, Ho] = Map.new(); m.insert(1, Ho { xs: Some([mkd(16)]) }); println(f"c12 {m.len()}") }
+    { let t = (Ho { xs: Some([mkd(17)]) }, 5); println(f"c13 {t.1}") }
+    { let v: Vec[Hr] = [Hr { r: Ok([mkd(18)]) }, Hr { r: Err(4) }]; println(f"c14 {v.len()}") }
+    { let v: Vec[Hoo] = [Hoo { o: Some(Some([mkd(19)])) }]; println(f"c15 {v.len()}") }
+    { let h = Ho { xs: None }; println(f"c16 {h.xs.is_some()}") }
+    println("end")
+}
+fn main() {
+    round()
+    round()
+}
+"#,
+        )
+        .as_deref(),
+        Some("c1 true\ndD1\ndD2\nc2 1\ndD3\nc3 2\ndD4\ndD5\nc4 true\ndD6\nc5 true\ndD7\nc6 true\ndD8\ndD9\nc7 true\ndD10\nc8 true\ndHb\ndD11\ndD12\nc9 1\nc10 3\ndD13\ndD14\nc11 true\ndD15\nc12 1\ndD16\nc13 5\ndD17\nc14 2\ndD18\nc15 1\ndD19\nc16 false\nend\nc1 true\ndD1\ndD2\nc2 1\ndD3\nc3 2\ndD4\ndD5\nc4 true\ndD6\nc5 true\ndD7\nc6 true\ndD8\ndD9\nc7 true\ndD10\nc8 true\ndHb\ndD11\ndD12\nc9 1\nc10 3\ndD13\ndD14\nc11 true\ndD15\nc12 1\ndD16\nc13 5\ndD17\nc14 2\ndD18\nc15 1\ndD19\nc16 false\nend\n"),
+        "must match --interp"
+    );
+}

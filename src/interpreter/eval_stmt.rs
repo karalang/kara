@@ -5216,6 +5216,107 @@ impl<'a> super::Interpreter<'a> {
             || fields
                 .values()
                 .any(|v| self.field_value_carries_user_drop(v))
+            || self.struct_value_has_vec_payload_drop(name, fields)
+    }
+
+    /// B-2026-09-16-19 — a struct whose field is a `Vec` inside an
+    /// `Option`/`Result` payload or a `Map` value (`H { xs: Option[Vec[D]] }`).
+    /// [`Self::field_value_carries_user_drop`] reads such a payload one level
+    /// deep, finds a `Value::Array` rather than a struct, and answers false, so
+    /// `H` classified drop-free wherever it sat inside another container
+    /// (`Vec[H]`, `Option[H]`, `Map[K, H]`, an array or tuple of `H`) and its
+    /// elements' bodies ran on no path there, while codegen ran them.
+    ///
+    /// The DECLARED field type picks the shape and the VALUE answers for the
+    /// elements. The shape test is the same one codegen's
+    /// `optres_or_map_payload_reaches_vec_user_drop` applies (a `Vec`, not an
+    /// array, which shares `Value::Array` at runtime), and reading the value
+    /// resolves a generic element (`G[T] { xs: Option[Vec[T]] }`) the way
+    /// codegen's mono subst does.
+    fn struct_value_has_vec_payload_drop(
+        &self,
+        name: &str,
+        fields: &std::collections::HashMap<String, Value>,
+    ) -> bool {
+        let Some(sd) = self.program.items.iter().find_map(|item| match item {
+            Item::StructDef(s) if s.name == name => Some(s),
+            _ => None,
+        }) else {
+            return false;
+        };
+        sd.fields.iter().any(|f| {
+            Self::te_is_optres_or_map_of_vec(&f.ty)
+                && fields
+                    .get(&f.name)
+                    .is_some_and(|v| self.value_reaches_vec_elem_user_drop(v))
+        })
+    }
+
+    /// The shape half of [`Self::struct_value_has_vec_payload_drop`]: an
+    /// `Option`/`Result` whose payload is a `Vec` (through further
+    /// `Option`/`Result` envelopes), or a `Map`/`SortedMap` whose VALUE is one.
+    fn te_is_optres_or_map_of_vec(te: &TypeExpr) -> bool {
+        let TypeKind::Path(p) = &te.kind else {
+            return false;
+        };
+        let (idxs, envelope): (&[usize], bool) = match p.segments.first().map(|s| s.as_str()) {
+            Some("Option") => (&[0], true),
+            Some("Result") => (&[0, 1], true),
+            Some("Map") | Some("SortedMap") => (&[1], false),
+            _ => return false,
+        };
+        let Some(args) = p.generic_args.as_ref() else {
+            return false;
+        };
+        idxs.iter().any(|&i| {
+            let Some(crate::ast::GenericArg::Type(inner)) = args.get(i) else {
+                return false;
+            };
+            let TypeKind::Path(ip) = &inner.kind else {
+                return false;
+            };
+            match ip.segments.first().map(|s| s.as_str()) {
+                Some("Vec") => true,
+                Some("Option") | Some("Result") if envelope => {
+                    Self::te_is_optres_or_map_of_vec(inner)
+                }
+                _ => false,
+            }
+        })
+    }
+
+    /// The value half: descend `Option`/`Result` payloads and map values to the
+    /// `Vec`, then ask of each element what a `Vec[T]` field's walk asks,
+    /// recursing into a nested `Vec` element (`Option[Vec[Vec[D]]]`).
+    fn value_reaches_vec_elem_user_drop(&self, v: &Value) -> bool {
+        match v {
+            Value::EnumVariant {
+                enum_name,
+                data: EnumData::Tuple(vs),
+                ..
+            } if enum_name == "Option" || enum_name == "Result" => {
+                vs.iter().any(|v| self.value_reaches_vec_elem_user_drop(v))
+            }
+            Value::Map(entries) => {
+                let entries = entries.read().unwrap().clone();
+                entries
+                    .iter()
+                    .any(|(_, val)| self.value_reaches_vec_elem_user_drop(val))
+            }
+            Value::SortedMap(entries) => entries
+                .values()
+                .any(|val| self.value_reaches_vec_elem_user_drop(val)),
+            Value::Array(rc) => rc
+                .read()
+                .map(|g| {
+                    g.iter().any(|e| match e {
+                        Value::Array(_) => self.value_reaches_vec_elem_user_drop(e),
+                        _ => self.field_value_carries_user_drop(e),
+                    })
+                })
+                .unwrap_or(false),
+            _ => false,
+        }
     }
 
     /// Field-content half of [`Self::value_runs_user_drop`]: does a struct

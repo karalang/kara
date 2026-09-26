@@ -11163,13 +11163,15 @@ fn e2e_envelope_nested_payload_runs_its_drop_body_in_a_field() {
                  fn main() { let w = Wj { xs: [[Re { id: 71, name: f\"a\" }]] }; println(\"ok\"); println(\"done\") }\n",
                 "dRe71\nok\ndone\n",
             ),
-            // BOUNDARY — an envelope chain that ends in a `Vec`. The recursion
-            // must stop at the `Vec` head, not walk through it.
+            // An envelope chain that ends in a `Vec`. This pinned a silence
+            // that was a run-vs-build divergence (`--interp` printed `dRe71`,
+            // which is why an AOT-only pin could not see it); B-2026-09-16-19
+            // gave both backends the `Vec` leg.
             (
-                "boundary-envelope-of-vec-stays-silent",
+                "envelope-of-vec-now-fires-B-2026-09-16-19",
                 "struct Wk { o: Option[Option[Vec[Re]]] }\n\
                  fn main() { let w = Wk { o: Some(Some([Re { id: 71, name: f\"a\" }])) }; println(\"ok\"); println(\"done\") }\n",
-                "ok\ndone\n",
+                "dRe71\nok\ndone\n",
             ),
             // BOUNDARY — a `Vec` of envelopes, the mirror of the one above.
             (
