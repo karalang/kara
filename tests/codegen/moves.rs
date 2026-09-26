@@ -2448,6 +2448,85 @@ fn e2e_fresh_temp_projection_consumed_at_its_aggregate_site() {
     }
 }
 
+/// B-2026-09-25-43 — a field read off a FRESH `shared struct` temporary runs
+/// the temporary's `Drop` body at the read on both backends, where the
+/// interpreter ran it nowhere: once the field is out nothing holds the
+/// temporary, so on its last reference the body runs, as codegen's release
+/// of the temporary does. The two controls are spellings that already agreed.
+#[test]
+fn e2e_field_read_off_a_fresh_shared_temp_runs_its_drop() {
+    const H: &str = "struct D { id: i64 }\n\
+             impl Drop for D { fn drop(mut ref self) { println(f\"dD{self.id}\") } }\n\
+             shared struct Sh { k: i64, name: String, d: D }\n\
+             impl Drop for Sh { fn drop(mut ref self) { println(f\"dSh{self.k}{self.name}\") } }\n\
+             fn mksh(n: i64) -> Sh { return Sh { k: n, name: f\"nm{n}\", d: D { id: n } }; }\n\
+             fn tl() -> i64 { mksh(8).k }\n\
+             fn cl(n: i64) -> i64 { let f = |x: i64| mksh(x).k; f(n) }\n";
+    for (label, body, want) in [
+        (
+            "read in a call argument",
+            "println(f\"s{mksh(1).k}\");",
+            "dSh1nm1\ndD1\ns1\nend\n",
+        ),
+        (
+            "let initializer",
+            "let k = mksh(2).k; println(f\"k{k}\");",
+            "dSh2nm2\ndD2\nk2\nend\n",
+        ),
+        (
+            "two temps in one expression",
+            "let k = mksh(3).k + mksh(4).k; println(f\"k{k}\");",
+            "dSh3nm3\ndD3\ndSh4nm4\ndD4\nk7\nend\n",
+        ),
+        (
+            "heap field",
+            "println(mksh(5).name);",
+            "dSh5nm5\ndD5\nnm5\nend\n",
+        ),
+        (
+            "read through a nested field",
+            "println(f\"d{mksh(6).d.id}\");",
+            "dSh6nm6\ndD6\nd6\nend\n",
+        ),
+        (
+            "while condition",
+            "let mut i = 0; while mksh(7).k > i { i = i + 7; } println(f\"i{i}\");",
+            "dSh7nm7\ndD7\ndSh7nm7\ndD7\ni7\nend\n",
+        ),
+        (
+            "function tail",
+            "println(f\"t{tl()}\");",
+            "dSh8nm8\ndD8\nt8\nend\n",
+        ),
+        (
+            "closure body",
+            "println(f\"c{cl(9)}\");",
+            "dSh9nm9\ndD9\nc9\nend\n",
+        ),
+        (
+            "control: a discarded temp",
+            "mksh(10);",
+            "dSh10nm10\ndD10\nend\n",
+        ),
+        (
+            "control: the named spelling",
+            "let s = mksh(11); println(f\"s{s.k}\");",
+            "s11\ndSh11nm11\ndD11\nend\n",
+        ),
+    ] {
+        let prog = format!("{H}fn main() {{\n    {body}\n    println(\"end\")\n}}\n");
+        let (interp_out, interp_errs, _, _) = karac::run_program_full_checked(&prog);
+        assert!(
+            interp_errs.is_empty(),
+            "[{label}] interp errored: {interp_errs:?}"
+        );
+        assert_eq!(interp_out.join(""), want, "[{label}] interpreter");
+        if let Some(aot) = run_program(&prog) {
+            assert_eq!(aot, want, "[{label}] AOT");
+        }
+    }
+}
+
 /// B-2026-09-05-13 — a by-value param REBOUND whole (`let m = r;`) and then
 /// handed back through an `Option`/`Result` constructor runs the `Drop` body
 /// ONCE, on every surface, unconditionally (`u-rebind`) and conditionally

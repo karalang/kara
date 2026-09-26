@@ -7753,7 +7753,7 @@ impl<'a> super::Interpreter<'a> {
     /// `SharedStruct` arm performs — the same hazard `Env::drop_target`'s doc
     /// records for `get`. Callers that still hold the value ask this first, so
     /// the count they are judged on is the live one. Returns whether a body ran.
-    fn run_discarded_shared_user_drop(&mut self, val: &Value) -> bool {
+    pub(super) fn run_discarded_shared_user_drop(&mut self, val: &Value) -> bool {
         let Value::SharedStruct(inner) = val else {
             return false;
         };

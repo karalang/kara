@@ -715,7 +715,25 @@ impl<'a> super::Interpreter<'a> {
                     ));
                 }
                 self.track_freshtemp_read(object, field, &obj);
-                self.read_field(obj, field, &expr.span)
+                // B-2026-09-25-43 — a FRESH `shared struct` temp read through a
+                // projection (`mksh().k`) dies at this read: once the field is
+                // out, nothing holds the temporary, so on its last reference
+                // its `Drop` body runs HERE, as codegen's release of the
+                // temporary does (before the enclosing call prints). A
+                // returned alias of a live value holds a second reference and
+                // runs nothing, which is the same last-reference rule every
+                // other shared discard uses.
+                let fresh_shared = (matches!(obj, Value::SharedStruct(_))
+                    && matches!(
+                        object.kind,
+                        ExprKind::Call { .. } | ExprKind::MethodCall { .. } | ExprKind::Block(_)
+                    ))
+                .then(|| obj.clone());
+                let read = self.read_field(obj, field, &expr.span);
+                if let Some(temp) = fresh_shared {
+                    self.run_discarded_shared_user_drop(&temp);
+                }
+                read
             }
 
             // Tuple index
