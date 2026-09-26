@@ -6294,3 +6294,231 @@ fn main() {
         "asan_option_passed_through_a_fn_that_returns_it_is_freed_once",
     );
 }
+
+/// B-2026-09-26-27 — a by-value param WRAPPED IN A LOCAL and handed back
+/// (`fn outq(s: S2) -> Option[S2] { let o = Some(s); return o }`, and through
+/// a call: `let p = keep(o); return p`, `return keep(o)`) ran its `Drop` body
+/// twice on every surface including `--interp`, and for a struct with a
+/// `shared` field aborted `malloc(): unaligned tcache chunk detected` on every
+/// compiled one. The every-path hand-back walker did not read a local bound to
+/// a constructor over the param as carrying it. Cells: named and fresh
+/// arguments, a rebind, a method, an assoc fn, a generic fn over a named
+/// argument, `Err`, a `Vec` param, a struct field and a tuple element.
+#[test]
+fn asan_param_wrapped_in_a_local_and_handed_back_runs_one_body() {
+    assert_clean_asan_run(
+        r#"shared struct Sh { k: i64 }
+struct P { id: i64 }
+impl Drop for P { fn drop(mut ref self) { println(f"dP{self.id}") } }
+struct S2 { h: Sh, id: i64 }
+impl Drop for S2 { fn drop(mut ref self) { println(f"dS{self.id}") } }
+struct W2 { o: Option[P] }
+struct H { n: i64 }
+fn mk2(i: i64) -> S2 { return S2 { h: Sh { k: i }, id: i } }
+fn keep(o: Option[S2]) -> Option[S2] { return o }
+fn outq(s: S2) -> Option[S2] { let o = Some(s); return o }
+fn outp(s: S2) -> Option[S2] { let o = Some(s); let p = keep(o); return p }
+fn outk(s: S2) -> Option[S2] { let o = Some(s); return keep(o) }
+fn c3(s: P) -> Option[P] { let o = Some(s); let q = o; return q }
+impl H { fn m(ref self, s: P) -> Option[P] { let o = Some(s); return o } fn a(s: P) -> Option[P] { let o = Some(s); return o } }
+fn g1[T](s: T) -> Option[T] { let o = Some(s); return o }
+fn e1(s: P) -> Result[i64, P] { let o: Result[i64, P] = Err(s); return o }
+fn vv(s: Vec[P]) -> Option[Vec[P]] { let o = Some(s); return o }
+fn w1(s: P) -> W2 { let o = Some(s); let w = W2 { o: o }; return w }
+fn t1(s: P) -> (Option[P], i64) { let o = Some(s); return (o, 1) }
+fn a() { let s = mk2(1); let p = outq(s); let v = p.unwrap(); println(f"a{v.id}") }
+fn b() { let s = mk2(2); let p = outp(s); let v = p.unwrap(); println(f"b{v.id}") }
+fn c() { let s = mk2(3); let p = outk(s); let v = p.unwrap(); println(f"c{v.id}") }
+fn d() { let p = outp(mk2(4)); let v = p.unwrap(); println(f"d{v.id}") }
+fn e() { let p = outq(mk2(5)); let v = p.unwrap(); println(f"e{v.id}") }
+fn f() { let s = mk2(6); let p = outq(s); println(f"f{p.is_some()}") }
+fn g() { let p = c3(P { id: 7 }); println(f"g{p.is_some()}") }
+fn h() { let x = H { n: 1 }; let s = P { id: 8 }; let p = x.m(s); println(f"h{p.is_some()}") }
+fn i() { let p = H.a(P { id: 9 }); println(f"i{p.is_some()}") }
+fn j() { let p = g1(P { id: 10 }); println(f"j{p.is_some()}") }
+fn k() { let s = P { id: 11 }; let p = g1(s); let v = p.unwrap(); println(f"k{v.id}") }
+fn l() { let p = e1(P { id: 12 }); println(f"l{p.is_err()}") }
+fn m() { let mut v: Vec[P] = Vec.new(); v.push(P { id: 13 }); let p = vv(v); println(f"m{p.is_some()}") }
+fn n() { let w = w1(P { id: 14 }); println(f"n{w.o.is_some()}") }
+fn o() { let p = t1(P { id: 15 }); println(f"o{p.1}") }
+fn main() {
+    a(); println("a.")
+    b(); println("b.")
+    c(); println("c.")
+    d(); println("d.")
+    e(); println("e.")
+    f(); println("f.")
+    g(); println("g.")
+    h(); println("h.")
+    i(); println("i.")
+    j(); println("j.")
+    k(); println("k.")
+    l(); println("l.")
+    m(); println("m.")
+    n(); println("n.")
+    o(); println("o.")
+    println("end")
+}
+"#,
+        &[
+            "a1", "dS1", "a.", "b2", "dS2", "b.", "c3", "dS3", "c.", "d4", "dS4", "d.", "e5",
+            "dS5", "e.", "ftrue", "dS6", "f.", "gtrue", "dP7", "g.", "htrue", "dP8", "h.", "itrue",
+            "dP9", "i.", "jtrue", "dP10", "j.", "k11", "dP11", "k.", "ltrue", "dP12", "l.",
+            "mtrue", "dP13", "m.", "ntrue", "dP14", "n.", "o1", "dP15", "o.", "end",
+        ],
+        "asan_param_wrapped_in_a_local_and_handed_back_runs_one_body",
+    );
+}
+
+/// B-2026-09-26-27 — a `Drop`-less struct with a `shared` field (`struct S3 {
+/// h: Sh, id: i64 }`) passed as a NAMED local to a concrete fn that hands it
+/// back inside an `Option` (`mid3(s, true)`, `wrap3(s)`) kept its memory
+/// action at the call while the result only aliased it, so moving the payload
+/// out (`o.unwrap()`, a match arm, `if let`, a push) freed the field through
+/// both: `malloc(): unaligned tcache chunk detected` on every compiled surface.
+/// The result now takes the argument's memory over (on the `Some` path of a
+/// conditional hand-back). Cells: conditional both ways, unconditional,
+/// `unwrap_or`, a user enum, a pass-through `keep3`, `Result`, a method, an
+/// assoc fn both ways, a loop, a push, a rebind, `expect`, `if let`.
+#[test]
+fn asan_dropless_struct_handed_back_in_an_option_frees_its_field_once() {
+    assert_clean_asan_run(
+        r#"shared struct Sh { k: i64 }
+struct S3 { h: Sh, id: i64 }
+enum Ho[T] { Full(T), Empty }
+struct H { n: i64 }
+fn mk3(i: i64) -> S3 { return S3 { h: Sh { k: i }, id: i } }
+fn mid3(v: S3, c: bool) -> Option[S3] { if c { return Some(v) } return None }
+fn wrap3(v: S3) -> Option[S3] { return Some(v) }
+fn ho3(v: S3) -> Ho[S3] { return Ho.Full(v) }
+fn keep3(o: Option[S3]) -> Option[S3] { return o }
+fn r3(v: S3) -> Result[S3, i64] { return Ok(v) }
+impl H { fn m(ref self, v: S3) -> Option[S3] { return Some(v) } fn a(v: S3, c: bool) -> Option[S3] { if c { return Some(v) } return None } }
+fn a() { let s = mk3(1); let o = mid3(s, true); let v = o.unwrap(); println(f"a{v.id} {v.h.k}") }
+fn b() { let s = mk3(2); let o = mid3(s, false); println(f"b{o.is_none()}") }
+fn c() { let s = mk3(3); let o = mid3(s, true); println(f"c{o.is_some()}") }
+fn d() { let s = mk3(4); let o = wrap3(s); let v = o.unwrap(); println(f"d{v.id}") }
+fn e() { let s = mk3(5); let o = mid3(s, true); match o { Some(x) => { let y = x; println(f"e{y.id}") }, None => println("en") } }
+fn f() { let s = mk3(6); let o = mid3(s, true); let v = o.unwrap_or(mk3(96)); println(f"f{v.id}") }
+fn g() { let s = mk3(7); let h = ho3(s); match h { Ho.Full(x) => { let y = x; println(f"g{y.id}") }, Ho.Empty => println("ge") } }
+fn h() { let s = mk3(8); let o = mid3(s, true); let p = keep3(o); let v = p.unwrap(); println(f"h{v.id}") }
+fn i() { let s = mk3(9); let r = r3(s); let v = r.unwrap(); println(f"i{v.id}") }
+fn j() { let x = H { n: 1 }; let s = mk3(10); let o = x.m(s); let v = o.unwrap(); println(f"j{v.id}") }
+fn k() { let s = mk3(11); let o = H.a(s, true); let v = o.unwrap(); println(f"k{v.id}") }
+fn l() { let s = mk3(12); let o = H.a(s, false); println(f"l{o.is_none()}") }
+fn m() { let mut i = 0; while i < 3 { let s = mk3(20 + i); let o = mid3(s, i != 1); if o.is_some() { let v = o.unwrap(); println(f"m{v.id}") } i = i + 1; } }
+fn n() { let s = mk3(13); let o = mid3(s, true); let mut vs: Vec[S3] = []; vs.push(o.unwrap()); println(f"n{vs.len()}") }
+fn o() { let s = mk3(14); let o = mid3(s, true); let q = o; let v = q.unwrap(); println(f"o{v.id}") }
+fn p() { let s = mk3(15); let o = wrap3(s); let v = o.expect("x"); println(f"p{v.id}") }
+fn q() { let s = mk3(16); let o = mid3(s, true); if let Some(x) = o { println(f"q{x.id}") } }
+fn main() {
+    a(); println("a.")
+    b(); println("b.")
+    c(); println("c.")
+    d(); println("d.")
+    e(); println("e.")
+    f(); println("f.")
+    g(); println("g.")
+    h(); println("h.")
+    i(); println("i.")
+    j(); println("j.")
+    k(); println("k.")
+    l(); println("l.")
+    m(); println("m.")
+    n(); println("n.")
+    o(); println("o.")
+    p(); println("p.")
+    q(); println("q.")
+    println("end")
+}
+"#,
+        &[
+            "a1 1", "a.", "btrue", "b.", "ctrue", "c.", "d4", "d.", "e5", "e.", "f6", "f.", "g7",
+            "g.", "h8", "h.", "i9", "i.", "j10", "j.", "k11", "k.", "ltrue", "l.", "m20", "m22",
+            "m.", "n1", "n.", "o14", "o.", "p15", "p.", "q16", "q.", "end",
+        ],
+        "asan_dropless_struct_handed_back_in_an_option_frees_its_field_once",
+    );
+}
+
+/// B-2026-09-26-27 — a FRESH temporary of a struct with a `shared` field,
+/// handed to a concrete fn that hands it back inside an enum (`let o =
+/// wrapS(mk2(1))`, `midS(mk2(3), true)`, `wrap3(mk3(7))`, `ho3(mk3(12))`),
+/// left the result owning none of the payload's memory: the call stood the
+/// temp down and the let declined an owner for a payload it could not prove
+/// was not the caller's, losing the 16-byte `Sh` box at -O0 on every compiled
+/// surface (the bound half of B-2026-09-26-26). Through a wrapped local
+/// (`outq(mk2(14))`, `let o = Some(s); return o`) the body also ran twice.
+/// Cells cover `Drop` and `Drop`-less structs, both paths of a conditional
+/// hand-back, a user enum, two fresh args, a callee that drops its param, a
+/// loop and a rebind.
+#[test]
+fn asan_fresh_temp_handed_back_in_an_enum_frees_its_field_once() {
+    assert_clean_asan_run(
+        r#"shared struct Sh { k: i64 }
+struct S2 { h: Sh, id: i64 }
+impl Drop for S2 { fn drop(mut ref self) { println(f"dS{self.id}") } }
+struct S3 { h: Sh, id: i64 }
+struct P { id: i64 }
+impl Drop for P { fn drop(mut ref self) { println(f"dP{self.id}") } }
+enum Ho[T] { Full(T), Empty }
+fn mk2(i: i64) -> S2 { return S2 { h: Sh { k: i }, id: i } }
+fn mk3(i: i64) -> S3 { return S3 { h: Sh { k: i }, id: i } }
+fn wrapS(v: S2) -> Option[S2] { return Some(v) }
+fn midS(v: S2, c: bool) -> Option[S2] { if c { return Some(v) } return None }
+fn mkhS(v: S2) -> Ho[S2] { return Ho.Full(v) }
+fn wrap3(v: S3) -> Option[S3] { return Some(v) }
+fn mid3(v: S3, c: bool) -> Option[S3] { if c { return Some(v) } return None }
+fn ho3(v: S3) -> Ho[S3] { return Ho.Full(v) }
+fn wrapP(v: P) -> Option[P] { return Some(v) }
+fn outq(s: S2) -> Option[S2] { let o = Some(s); return o }
+fn dup(a: S2, b: S2) -> Option[S2] { return Some(a) }
+fn noret(v: S2) -> Option[S2] { println(f"n{v.id}"); return None }
+fn ca() { let o = wrapS(mk2(1)); println(f"s{o.is_some()}"); }
+fn cb() { let o = wrapS(S2 { h: Sh { k: 2 }, id: 2 }); println(f"s{o.is_some()}"); }
+fn cc() { let o = midS(mk2(3), true); println(f"s{o.is_some()}"); }
+fn cd() { let o = midS(mk2(4), false); println(f"s{o.is_some()}"); }
+fn ce() { let o = midS(mk2(5), true); let v = o.unwrap(); println(f"v{v.id}"); }
+fn cf() { let h = mkhS(mk2(6)); match h { Ho.Full(x) => println(f"x{x.id}"), Ho.Empty => println("e"), }; }
+fn cg() { let o = wrap3(mk3(7)); println(f"s{o.is_some()}"); }
+fn ch() { let o = wrap3(mk3(8)); let v = o.unwrap(); println(f"v{v.id}"); }
+fn ci() { let o = mid3(mk3(9), true); println(f"s{o.is_some()}"); }
+fn ck() { let o = mid3(mk3(11), true); let v = o.unwrap(); println(f"v{v.id}"); }
+fn cl() { let h = ho3(mk3(12)); println("h"); }
+fn cm() { let o = wrapP(P { id: 13 }); println(f"s{o.is_some()}"); }
+fn cn() { let o = outq(mk2(14)); match o { Some(x) => { let y = x; println(f"y{y.id}"); }, None => println("n"), }; }
+fn co() { let o = dup(mk2(15), mk2(16)); println(f"s{o.is_some()}"); }
+fn cp() { let o = noret(mk2(17)); println(f"s{o.is_some()}"); }
+fn cq() { let mut i = 0; while i < 2 { let o = midS(mk2(20 + i), i == 0); println(f"s{o.is_some()}"); i = i + 1; } }
+fn cr() { let o = wrapS(mk2(18)); let q = o; println(f"s{q.is_some()}"); }
+fn main() {
+    ca(); println("a.")
+    cb(); println("b.")
+    cc(); println("c.")
+    cd(); println("d.")
+    ce(); println("e.")
+    cf(); println("f.")
+    cg(); println("g.")
+    ch(); println("h.")
+    ci(); println("i.")
+    ck(); println("k.")
+    cl(); println("l.")
+    cm(); println("m.")
+    cn(); println("n.")
+    co(); println("o.")
+    cp(); println("p.")
+    cq(); println("q.")
+    cr(); println("r.")
+    println("end")
+}
+"#,
+        &[
+            "strue", "dS1", "a.", "strue", "dS2", "b.", "strue", "dS3", "c.", "dS4", "sfalse",
+            "d.", "v5", "dS5", "e.", "x6", "dS6", "f.", "strue", "g.", "v8", "h.", "strue", "i.",
+            "v11", "k.", "h", "l.", "strue", "dP13", "m.", "y14", "dS14", "n.", "dS16", "strue",
+            "dS15", "o.", "n17", "dS17", "sfalse", "p.", "strue", "dS20", "dS21", "sfalse", "q.",
+            "strue", "dS18", "r.", "end",
+        ],
+        "asan_fresh_temp_handed_back_in_an_enum_frees_its_field_once",
+    );
+}

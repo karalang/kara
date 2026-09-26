@@ -6993,3 +6993,70 @@ fn main() {
 "#);
     assert_eq!(out, "drop d1\nr1\ndrop r1\nk1\nd2\ndrop d2\nk2\ndrop d3\nr3\ndrop r3\nk3\ndrop d4\nr4\ndrop r4\nk4\ndrop d5\n5\ndrop r5\nk5\nend\n", "got:\n{out}");
 }
+
+/// B-2026-09-26-27 — a by-value param WRAPPED IN A LOCAL and handed back
+/// (`fn outq(s: S2) -> Option[S2] { let o = Some(s); return o }`, and through
+/// a call: `let p = keep(o); return p`, `return keep(o)`) ran its `Drop` body
+/// twice on every surface including `--interp`, and for a struct with a
+/// `shared` field aborted `malloc(): unaligned tcache chunk detected` on every
+/// compiled one. The every-path hand-back walker did not read a local bound to
+/// a constructor over the param as carrying it. Cells: named and fresh
+/// arguments, a rebind, a method, an assoc fn, a generic fn over a named
+/// argument, `Err`, a `Vec` param, a struct field and a tuple element.
+#[test]
+fn interp_param_wrapped_in_a_local_and_handed_back_runs_one_body() {
+    let out = run(r#"shared struct Sh { k: i64 }
+struct P { id: i64 }
+impl Drop for P { fn drop(mut ref self) { println(f"dP{self.id}") } }
+struct S2 { h: Sh, id: i64 }
+impl Drop for S2 { fn drop(mut ref self) { println(f"dS{self.id}") } }
+struct W2 { o: Option[P] }
+struct H { n: i64 }
+fn mk2(i: i64) -> S2 { return S2 { h: Sh { k: i }, id: i } }
+fn keep(o: Option[S2]) -> Option[S2] { return o }
+fn outq(s: S2) -> Option[S2] { let o = Some(s); return o }
+fn outp(s: S2) -> Option[S2] { let o = Some(s); let p = keep(o); return p }
+fn outk(s: S2) -> Option[S2] { let o = Some(s); return keep(o) }
+fn c3(s: P) -> Option[P] { let o = Some(s); let q = o; return q }
+impl H { fn m(ref self, s: P) -> Option[P] { let o = Some(s); return o } fn a(s: P) -> Option[P] { let o = Some(s); return o } }
+fn g1[T](s: T) -> Option[T] { let o = Some(s); return o }
+fn e1(s: P) -> Result[i64, P] { let o: Result[i64, P] = Err(s); return o }
+fn vv(s: Vec[P]) -> Option[Vec[P]] { let o = Some(s); return o }
+fn w1(s: P) -> W2 { let o = Some(s); let w = W2 { o: o }; return w }
+fn t1(s: P) -> (Option[P], i64) { let o = Some(s); return (o, 1) }
+fn a() { let s = mk2(1); let p = outq(s); let v = p.unwrap(); println(f"a{v.id}") }
+fn b() { let s = mk2(2); let p = outp(s); let v = p.unwrap(); println(f"b{v.id}") }
+fn c() { let s = mk2(3); let p = outk(s); let v = p.unwrap(); println(f"c{v.id}") }
+fn d() { let p = outp(mk2(4)); let v = p.unwrap(); println(f"d{v.id}") }
+fn e() { let p = outq(mk2(5)); let v = p.unwrap(); println(f"e{v.id}") }
+fn f() { let s = mk2(6); let p = outq(s); println(f"f{p.is_some()}") }
+fn g() { let p = c3(P { id: 7 }); println(f"g{p.is_some()}") }
+fn h() { let x = H { n: 1 }; let s = P { id: 8 }; let p = x.m(s); println(f"h{p.is_some()}") }
+fn i() { let p = H.a(P { id: 9 }); println(f"i{p.is_some()}") }
+fn j() { let p = g1(P { id: 10 }); println(f"j{p.is_some()}") }
+fn k() { let s = P { id: 11 }; let p = g1(s); let v = p.unwrap(); println(f"k{v.id}") }
+fn l() { let p = e1(P { id: 12 }); println(f"l{p.is_err()}") }
+fn m() { let mut v: Vec[P] = Vec.new(); v.push(P { id: 13 }); let p = vv(v); println(f"m{p.is_some()}") }
+fn n() { let w = w1(P { id: 14 }); println(f"n{w.o.is_some()}") }
+fn o() { let p = t1(P { id: 15 }); println(f"o{p.1}") }
+fn main() {
+    a(); println("a.")
+    b(); println("b.")
+    c(); println("c.")
+    d(); println("d.")
+    e(); println("e.")
+    f(); println("f.")
+    g(); println("g.")
+    h(); println("h.")
+    i(); println("i.")
+    j(); println("j.")
+    k(); println("k.")
+    l(); println("l.")
+    m(); println("m.")
+    n(); println("n.")
+    o(); println("o.")
+    println("end")
+}
+"#);
+    assert_eq!(out, "a1\ndS1\na.\nb2\ndS2\nb.\nc3\ndS3\nc.\nd4\ndS4\nd.\ne5\ndS5\ne.\nftrue\ndS6\nf.\ngtrue\ndP7\ng.\nhtrue\ndP8\nh.\nitrue\ndP9\ni.\njtrue\ndP10\nj.\nk11\ndP11\nk.\nltrue\ndP12\nl.\nmtrue\ndP13\nm.\nntrue\ndP14\nn.\no1\ndP15\no.\nend\n", "got:\n{out}");
+}

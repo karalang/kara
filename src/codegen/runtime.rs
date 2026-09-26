@@ -10635,7 +10635,9 @@ impl<'ctx> super::Codegen<'ctx> {
             let ExprKind::Identifier(n) = &a.value.kind else {
                 continue;
             };
-            if !self.enum_handback_body_retracted(n) {
+            if !self.enum_handback_body_retracted(n)
+                && !self.dropless_forwarded_local_handed_in(n, f, i)
+            {
                 continue;
             }
             if found.is_some() {
@@ -10654,6 +10656,60 @@ impl<'ctx> super::Codegen<'ctx> {
             .is_some_and(|h| h == "Option");
         (ret_is_option && crate::ast::fn_returns_param_or_none(Some(program), f, i))
             .then_some((n, true))
+    }
+
+    /// B-2026-09-26-27 — the `Drop`-less twin of the body-retracted argument
+    /// [`Self::let_call_hand_over`] admits: a named local of a struct whose
+    /// memory stays with the caller (`struct S3 { h: Sh, id: i64 }`, no
+    /// `Drop`), handed to a CONCRETE callee whose param `arg_index` is that
+    /// struct itself. The call keeps the local's memory-only action (there is
+    /// no body to retract), so without a hand-over the result only aliased it
+    /// and any move of the payload out (`let v = o.unwrap()`) was a second
+    /// owner: `let o = mid3(s, true); let v = o.unwrap()` and `let o =
+    /// wrap3(s); ...` freed the `shared` field through `s` and `v` on every
+    /// compiled surface. Asked only while that memory action is still
+    /// registered, so a local the call already stood down is not handed twice.
+    fn dropless_forwarded_local_handed_in(
+        &self,
+        var: &str,
+        f: &crate::ast::Function,
+        arg_index: usize,
+    ) -> bool {
+        if f.generic_params.is_some() {
+            return false;
+        }
+        if self.fn_ctx.current_fn_param_names.contains(var)
+            || self.drop_rc.caller_retained_aggregate_memory.contains(var)
+            || self.payload_vars.param_view_locals.contains(var)
+        {
+            return false;
+        }
+        let Some(tn) = self.var_types.var_type_names.get(var) else {
+            return false;
+        };
+        let param_is_struct = f.params.get(arg_index).is_some_and(|p| {
+            matches!(&p.ty.kind, TypeKind::Path(pp)
+                if pp.generic_args.is_none() && pp.segments.len() == 1 && pp.segments[0] == *tn)
+        });
+        if !param_is_struct
+            || !self.struct_param_memory_stays_with_caller(tn)
+            || self
+                .type_decls
+                .struct_generic_params
+                .get(tn.as_str())
+                .is_some_and(|g| !g.is_empty())
+            || self.type_runs_user_drop(tn, &mut Vec::new())
+        {
+            return false;
+        }
+        let Some(slot) = self.variables.get(var).map(|v| v.ptr) else {
+            return false;
+        };
+        self.drop_rc.scope_cleanup_actions.iter().any(|fr| {
+            fr.iter().any(|a| {
+                matches!(a, CleanupAction::StructDrop { struct_alloca, .. } if *struct_alloca == slot)
+            })
+        })
     }
 
     /// B-2026-09-26-15 — hand the argument's memory to the result just bound at
@@ -10802,9 +10858,23 @@ impl<'ctx> super::Codegen<'ctx> {
             .filter(|(p, _)| mentions(&p.ty))
             .map(|(p, a)| (is_payload(&p.ty), &a.value))
             .peekable();
-        let all_stood_down = payload_args.peek().is_some() && payload_args.all(|(direct, a)| {
-            direct && matches!(&a.kind, ExprKind::Identifier(n) if !self.var_holds_memory_action(n))
-        });
+        let all_stood_down = payload_args.peek().is_some()
+            && payload_args.all(|(direct, a)| {
+                direct
+                    && match &a.kind {
+                        ExprKind::Identifier(n) => !self.var_holds_memory_action(n),
+                        // B-2026-09-26-27 — a FRESH temporary is nobody else's
+                        // memory either: no binding in this or any other frame
+                        // holds it, so the result is its only candidate owner.
+                        // Declining here lost the `shared` field of `let o =
+                        // wrapS(mk2(1))`, `wrap3(mk3(7))` and `ho3(mk3(12))`
+                        // (16 B each at -O0, every compiled surface). Only the
+                        // two spellings measured; a method-call temp still
+                        // declines.
+                        ExprKind::Call { .. } | ExprKind::StructLiteral { .. } => true,
+                        _ => false,
+                    }
+            });
         !all_stood_down
     }
 

@@ -2217,6 +2217,13 @@ struct RebindWalk {
     /// `let p = P2 { r: r, n: 1 }; return Box2 { r: p.r }` hands `r` back
     /// exactly as `let p = r; return p` does.
     wraps: Vec<(String, String, ParamPath)>,
+    /// B-2026-09-26-27 — `let x = Some(y)` / `let x = Ho.Full(y)`: `x` WRAPS
+    /// `y` inside an ENUM constructor, as `(x, y, callee, path)` where `path`
+    /// is any struct / tuple nesting INSIDE the payload. Kept apart from
+    /// [`Self::wraps`] because a user variant constructor is spelled exactly
+    /// like an associated-function call, and only [`param_wrap_aliases`], which
+    /// may hold the program, can tell the two apart.
+    ctor_wraps: Vec<(String, String, Expr, ParamPath)>,
     /// `let x = y.f.g` / `let x = y.0`: `x` REBINDS the part of `y` at `path`.
     /// Read back against a wrap: `let q = p.r` after `let p = P2 { r: r, .. }`
     /// makes `q` the param itself again (an empty remaining path).
@@ -2286,6 +2293,20 @@ impl RebindWalk {
                     if let (false, PatternKind::Binding(x)) = (*is_mut, &pattern.kind) {
                         let mut path: ParamPath = Vec::new();
                         Self::collect_wrap_sources(value, &mut path, x, &mut self.wraps);
+                        if let ExprKind::Call { callee, args } = &value.kind {
+                            for a in args {
+                                let mut inner: Vec<(String, String, ParamPath)> = Vec::new();
+                                let mut path: ParamPath = Vec::new();
+                                if let ExprKind::Identifier(y) = &a.value.kind {
+                                    inner.push((x.clone(), y.clone(), Vec::new()));
+                                } else {
+                                    Self::collect_wrap_sources(&a.value, &mut path, x, &mut inner);
+                                }
+                                for (x, y, path) in inner {
+                                    self.ctor_wraps.push((x, y, (**callee).clone(), path));
+                                }
+                            }
+                        }
                     }
                     if let (false, PatternKind::Binding(x)) = (*is_mut, &pattern.kind) {
                         if let Some((root, chain)) = place_chain_root_and_path(value) {
@@ -2420,6 +2441,7 @@ fn rebind_walk(f: &Function) -> RebindWalk {
         rebinds: Vec::new(),
         mut_rebinds: Vec::new(),
         wraps: Vec::new(),
+        ctor_wraps: Vec::new(),
         proj_rebinds: Vec::new(),
         call_rebinds: Vec::new(),
         bound: std::collections::HashMap::new(),
@@ -2657,12 +2679,64 @@ pub fn param_wrap_aliases(
     f: &Function,
     param_name: &str,
 ) -> Vec<(String, ParamPath)> {
+    param_wrap_aliases_ex(program, f, param_name, false)
+}
+
+/// [`param_wrap_aliases`], optionally counting ENUM-constructor wraps
+/// (`let o = Some(r)`) as well — B-2026-09-26-27. Only the ALL-paths
+/// predicates ask for them. A may-return (union) predicate that saw
+/// `let o = Some(r); if c { return o } return None` as handing `r` back stood
+/// the caller down on the `None` path too, where the callee keeps `o` as a
+/// view of the caller's value and runs nothing, so the body was LOST (measured
+/// on all four surfaces); the conditional hand-back's per-path flag keys on
+/// the bare param and cannot see the wrapper.
+pub fn param_wrap_aliases_ex(
+    program: Option<&crate::Program>,
+    f: &Function,
+    param_name: &str,
+    with_ctor: bool,
+) -> Vec<(String, ParamPath)> {
     let w = rebind_walk(f);
     let whole = param_whole_aliases(program, f, param_name);
+    // B-2026-09-26-27 — an enum constructor wraps its payload as a struct
+    // literal wraps a field: `fn f(s: P) -> Option[P] { let o = Some(s);
+    // return o }` hands `s` back exactly as `return Some(s)` does. Without it
+    // the caller, never stood down, ran `s`'s `Drop` body beside the result's,
+    // on all four surfaces. The seeded `Option`/`Result` constructors are known
+    // by name; a user variant needs the program to be told from an associated
+    // function. The path is the nesting INSIDE the payload: an enum cannot be
+    // projected into, so only the wrapper itself (or a place reaching that
+    // nesting through a later struct wrap) yields the param.
+    let ctor_ok = |callee: &Expr| match &callee.kind {
+        ExprKind::Identifier(n) => {
+            matches!(n.as_str(), "Some" | "Ok" | "Err")
+                && !program.is_some_and(|p| {
+                    p.items
+                        .iter()
+                        .any(|it| matches!(it, Item::Function(g) if &g.name == n))
+                })
+        }
+        ExprKind::Path { segments, .. } => {
+            matches!(segments.as_slice(), [h, _] if h == "Option" || h == "Result")
+                || program.is_some_and(|p| is_user_variant_ctor(p, callee))
+        }
+        _ => false,
+    };
+    let all_wraps: Vec<(String, String, ParamPath)> = w
+        .wraps
+        .iter()
+        .cloned()
+        .chain(
+            w.ctor_wraps
+                .iter()
+                .filter(|(_, _, c, _)| with_ctor && ctor_ok(c))
+                .map(|(x, y, _, path)| (x.clone(), y.clone(), path.clone())),
+        )
+        .collect();
     let mut out: Vec<(String, ParamPath)> = Vec::new();
     loop {
         let before = out.len();
-        for (x, y, path) in &w.wraps {
+        for (x, y, path) in &all_wraps {
             if w.bound.get(x.as_str()) != Some(&1) || out.iter().any(|(a, _)| a == x) {
                 continue;
             }
@@ -2680,6 +2754,29 @@ pub fn param_wrap_aliases(
             }
             if let Some((_, inner)) = out.iter().find(|(a, _)| a == y) {
                 out.push((x.clone(), inner.clone()));
+            }
+        }
+        // B-2026-09-26-27 — a wrapper handed through a callee that returns it
+        // on every exit (`let p = keep(o)` over `fn keep(o: Option[P]) ->
+        // Option[P] { return o }`) is the same wrapper under a new name, as a
+        // whole param through such a call is (`param_whole_aliases`).
+        if let Some(program) = program {
+            for (x, key, idents) in &w.call_rebinds {
+                if w.bound.get(x.as_str()) != Some(&1) || out.iter().any(|(a, _)| a == x) {
+                    continue;
+                }
+                let Some(g) = resolve_free_or_assoc_fn(program, key) else {
+                    continue;
+                };
+                let hit = idents.iter().find_map(|(i, n)| {
+                    let (_, inner) = out.iter().find(|(a, _)| a == n)?;
+                    (!fn_return_carries_own_drop_beyond_param(program, g, *i)
+                        && fn_always_returns_param(None, g, *i))
+                    .then(|| inner.clone())
+                });
+                if let Some(inner) = hit {
+                    out.push((x.clone(), inner));
+                }
             }
         }
         // `let q = p.r`: a projection rebind that reaches the wrap path (or a
@@ -3173,7 +3270,9 @@ fn fn_always_returns_param_ex(
     // B-2026-09-06-12 — and to a rebind THROUGH an always-returning callee
     // (`let w = keeps(r); return w`), when the caller can supply the program.
     let aliases = param_whole_aliases(program, f, name);
-    let wraps = param_wrap_aliases(program, f, name);
+    // B-2026-09-26-27 — an ALL-paths question, so an enum-constructor wrap
+    // counts (`let o = Some(r); return o`).
+    let wraps = param_wrap_aliases_ex(program, f, name, true);
     let name: &[String] = &aliases;
     let wraps: &[(String, ParamPath)] = &wraps;
 
@@ -3239,7 +3338,11 @@ fn fn_always_returns_param_ex(
                     return false;
                 };
                 args.iter().enumerate().any(|(j, a)| {
-                    matches!(&a.value.kind, ExprKind::Identifier(n) if name.iter().any(|al| al == n))
+                    (matches!(&a.value.kind, ExprKind::Identifier(n) if name.iter().any(|al| al == n))
+                        // B-2026-09-26-27 — or a local that WRAPS the param
+                        // (`let o = Some(r); return keep(o)`).
+                        || matches!(&a.value.kind, ExprKind::Identifier(_))
+                            && place_yields_wrapped_param(&a.value, wraps))
                         && fn_always_returns_param(Some(program), gf, j)
                 })
             }
@@ -4340,14 +4443,20 @@ pub fn fn_returns_param_via_call(program: &crate::Program, f: &Function, arg_ind
     /// Recurses through a returned aggregate LITERAL for the same reason
     /// `fn_returns_param`'s own `expr_is_ident` does — the value crosses the
     /// frame boundary inside it exactly as it would bare.
-    fn yields_via_call(program: &crate::Program, e: &Expr, name: &str, self_name: &str) -> bool {
+    fn yields_via_call(
+        program: &crate::Program,
+        e: &Expr,
+        name: &str,
+        wr: &[String],
+        self_name: &str,
+    ) -> bool {
         match &e.kind {
             ExprKind::StructLiteral { fields, .. } => fields
                 .iter()
-                .any(|fi| yields_via_call(program, &fi.value, name, self_name)),
+                .any(|fi| yields_via_call(program, &fi.value, name, wr, self_name)),
             ExprKind::Tuple(elems) => elems
                 .iter()
-                .any(|el| yields_via_call(program, el, name, self_name)),
+                .any(|el| yields_via_call(program, el, name, wr, self_name)),
             ExprKind::Call { callee, args, .. } => {
                 let ExprKind::Identifier(g) = &callee.kind else {
                     return false;
@@ -4364,7 +4473,14 @@ pub fn fn_returns_param_via_call(program: &crate::Program, f: &Function, arg_ind
                     return false;
                 };
                 args.iter().enumerate().any(|(j, a)| {
-                    matches!(&a.value.kind, ExprKind::Identifier(n) if n == name)
+                    (matches!(&a.value.kind, ExprKind::Identifier(n) if n == name)
+                        // B-2026-09-26-27 — or a local that wraps the param
+                        // (`let o = Some(r); return keep(o)`), or the param
+                        // wrapped in place (`return keep(Some(r))`).
+                        || matches!(&a.value.kind, ExprKind::Identifier(n) if wr.iter().any(|w| w == n))
+                        || crate::ast::option_result_ctor_payload(&a.value).is_some_and(
+                            |p| matches!(&p.kind, ExprKind::Identifier(n) if wr.iter().any(|w| w == n)),
+                        ))
                         && fn_returns_param(gf, j)
                 })
             }
@@ -4372,60 +4488,89 @@ pub fn fn_returns_param_via_call(program: &crate::Program, f: &Function, arg_ind
         }
     }
 
-    fn walk_expr(program: &crate::Program, e: &Expr, name: &str, self_name: &str) -> bool {
+    fn walk_expr(
+        program: &crate::Program,
+        e: &Expr,
+        name: &str,
+        wr: &[String],
+        self_name: &str,
+    ) -> bool {
         match &e.kind {
             ExprKind::Return(Some(inner)) => {
-                yields_via_call(program, inner, name, self_name)
-                    || walk_expr(program, inner, name, self_name)
+                yields_via_call(program, inner, name, wr, self_name)
+                    || walk_expr(program, inner, name, wr, self_name)
             }
             ExprKind::Block(b)
             | ExprKind::Unsafe(b)
             | ExprKind::Try(b)
             | ExprKind::Seq(b)
-            | ExprKind::Par(b) => walk_block(program, b, name, self_name),
+            | ExprKind::Par(b) => walk_block(program, b, name, wr, self_name),
             ExprKind::If {
                 then_block,
                 else_branch,
                 ..
             } => {
-                walk_block(program, then_block, name, self_name)
+                walk_block(program, then_block, name, wr, self_name)
                     || else_branch
                         .as_deref()
-                        .is_some_and(|x| walk_expr(program, x, name, self_name))
+                        .is_some_and(|x| walk_expr(program, x, name, wr, self_name))
             }
             ExprKind::IfLet {
                 then_block,
                 else_branch,
                 ..
             } => {
-                walk_block(program, then_block, name, self_name)
+                walk_block(program, then_block, name, wr, self_name)
                     || else_branch
                         .as_deref()
-                        .is_some_and(|x| walk_expr(program, x, name, self_name))
+                        .is_some_and(|x| walk_expr(program, x, name, wr, self_name))
             }
             ExprKind::Match { arms, .. } => arms.iter().any(|a| {
-                yields_via_call(program, &a.body, name, self_name)
-                    || walk_expr(program, &a.body, name, self_name)
+                yields_via_call(program, &a.body, name, wr, self_name)
+                    || walk_expr(program, &a.body, name, wr, self_name)
             }),
             ExprKind::While { body, .. }
             | ExprKind::WhileLet { body, .. }
             | ExprKind::For { body, .. }
             | ExprKind::Loop { body, .. }
-            | ExprKind::LabeledBlock { body, .. } => walk_block(program, body, name, self_name),
+            | ExprKind::LabeledBlock { body, .. } => walk_block(program, body, name, wr, self_name),
             _ => false,
         }
     }
 
-    fn walk_block(program: &crate::Program, b: &Block, name: &str, self_name: &str) -> bool {
+    fn walk_block(
+        program: &crate::Program,
+        b: &Block,
+        name: &str,
+        wr: &[String],
+        self_name: &str,
+    ) -> bool {
         b.stmts.iter().any(|st| match &st.kind {
-            StmtKind::Expr(e) => walk_expr(program, e, name, self_name),
+            StmtKind::Expr(e) => walk_expr(program, e, name, wr, self_name),
             _ => false,
         }) || b.final_expr.as_deref().is_some_and(|fe| {
-            yields_via_call(program, fe, name, self_name) || walk_expr(program, fe, name, self_name)
+            yields_via_call(program, fe, name, wr, self_name)
+                || walk_expr(program, fe, name, wr, self_name)
         })
     }
 
-    walk_block(program, &f.body, param_name, &f.name)
+    // B-2026-09-26-27 — the locals that wrap the param, at any depth, asked
+    // only where the param leaves on EVERY exit: this predicate is a MAY
+    // answer, and a wrapper returned on some paths only would stand the
+    // caller down where the callee runs nothing (see `param_wrap_aliases_ex`).
+    // The param itself joins, for the in-place wrap `keep(Some(r))`.
+    let wr: Vec<String> = if fn_always_returns_param_via_call(program, f, arg_index) {
+        std::iter::once(param_name.to_string())
+            .chain(
+                param_wrap_aliases_ex(Some(program), f, param_name, true)
+                    .into_iter()
+                    .map(|(n, _)| n),
+            )
+            .collect()
+    } else {
+        Vec::new()
+    };
+    walk_block(program, &f.body, param_name, &wr, &f.name)
 }
 
 /// A PATH from an owned aggregate parameter to one of its parts — empty for

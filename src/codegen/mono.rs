@@ -3554,6 +3554,12 @@ impl<'ctx> super::Codegen<'ctx> {
                             // (`return Ho.Full(v)`) or a bare `Some(v)` counts.
                             crate::ast::fn_returns_param_with(Some(p), f, ast_i)
                                 || crate::ast::fn_returns_param_via_call(p, f, ast_i)
+                                // B-2026-09-26-27 — and the every-path hand-back
+                                // through a ctor-wrapped local (`let o = Some(s);
+                                // return o`), which the union deliberately does
+                                // not follow; the concrete site admits it through
+                                // `flows_into_return`'s every-path disjunct.
+                                || crate::ast::fn_always_returns_param(Some(p), f, ast_i)
                         })
                     })
                 });
