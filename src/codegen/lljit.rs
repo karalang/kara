@@ -480,7 +480,8 @@ impl LLJITEngine {
     /// Run the LLVM coroutine-lowering pipeline (`coro-early`, `coro-split`,
     /// `coro-cleanup`) on a freshly parsed module before it is added to the
     /// JIT. Kept in lockstep with the AOT pipeline in
-    /// `driver::apply_optimization_passes` — same pass string, run
+    /// `driver::apply_optimization_passes` — same pass string (both take it
+    /// from `coro::coro_lowering_pipeline`), run
     /// unconditionally because coroutine splitting is a correctness
     /// requirement, not an optimization.
     ///
@@ -537,7 +538,7 @@ impl LLJITEngine {
                     .to_string());
             }
 
-            let passes = CString::new("coro-early,coro-split,coro-cleanup").unwrap();
+            let passes = CString::new(super::coro::coro_lowering_pipeline(module)).unwrap();
             let opts = LLVMCreatePassBuilderOptions();
             let run_err = LLVMRunPasses(module, passes.as_ptr(), tm, opts);
             LLVMDisposePassBuilderOptions(opts);

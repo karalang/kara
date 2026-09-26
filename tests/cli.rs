@@ -19713,6 +19713,103 @@ fn run_via_jit_executes_network_boundary_fn_body() {
     let _ = std::fs::remove_dir_all(&tmp);
 }
 
+/// B-2026-09-26-44 — a network-boundary fn that nothing calls must still
+/// compile where no optimization pipeline runs: `KARAC_OPT_LEVEL=0 karac build`
+/// and `karac run`. CoroSplit walks the lazy call graph, which never visits an
+/// internal function nothing reaches, so the coroutine stayed unsplit and LLVM
+/// aborted in instruction selection (`Cannot select: intrinsic
+/// %llvm.coro.size`, or `Do not know how to promote this operator's
+/// operand!`). `-O2` hid it by deleting the dead function after the split.
+/// Since `karac run` took the coroutine path (B-2026-09-26-45) the JIT aborted
+/// on the same programs. `KARAC_OPT_LEVEL` is read in-process, hence the
+/// subprocess, as in the fixture above.
+#[cfg(feature = "llvm")]
+#[test]
+fn uncalled_network_boundary_fn_builds_at_o0_and_runs_on_the_jit() {
+    use std::process::Command;
+
+    let handler = "fn handle_ws(ws: WebSocket) {\n\
+                   \x20   let mut buf: Array[u8, 64] = [0u8; 64];\n\
+                   \x20   loop {\n\
+                   \x20       let r = ws.recv_text(mut buf);\n\
+                   \x20       match r {\n\
+                   \x20           Result.Ok(n) => { if n == 0 { break; } let _s = ws.send_text(buf); }\n\
+                   \x20           Result.Err(_) => { break; }\n\
+                   \x20       }\n\
+                   \x20   }\n\
+                   }\n";
+    let cells: [(&str, String, &str); 2] = [
+        (
+            "alone",
+            format!("{handler}fn main() {{ println(\"end\"); }}\n"),
+            "end\n",
+        ),
+        (
+            "beside_a_called_one",
+            format!(
+                "{handler}fn simple(ws: WebSocket) {{ println(\"h\"); }}\n\
+                 #[allow(unstable_api)]\n\
+                 fn mk(fd: i64) -> Result[WebSocket, i64] {{ return Result.Ok(WebSocket.from_fd(fd)); }}\n\
+                 fn main() {{ match mk(-1) {{ Result.Ok(ws) => {{ simple(ws); }} Result.Err(_) => {{}} }} println(\"end\"); }}\n"
+            ),
+            "h\nend\n",
+        ),
+    ];
+    let tmp = scratch_project("uncalled-coro-o0");
+    for (name, src, want) in &cells {
+        let file = format!("{name}.kara");
+        write(&tmp.join(&file), src);
+
+        let out = Command::new(env!("CARGO_BIN_EXE_karac"))
+            .current_dir(&tmp)
+            .env("KARAC_JIT_RUNNER", env!("CARGO_BIN_EXE_karac_jit_runner"))
+            .args(["run", &file])
+            .output()
+            .expect("spawn karac run");
+        assert!(
+            out.status.success(),
+            "{name}: karac run (JIT) died: status {:?}, stderr {}",
+            out.status.code(),
+            String::from_utf8_lossy(&out.stderr)
+        );
+        assert_eq!(
+            String::from_utf8_lossy(&out.stdout),
+            *want,
+            "{name}: JIT stdout"
+        );
+
+        // The abort is in LLVM codegen, before any link, so it is asserted
+        // directly; only RUNNING the binary depends on the runtime archive.
+        let built = Command::new(env!("CARGO_BIN_EXE_karac"))
+            .current_dir(&tmp)
+            .env("KARAC_OPT_LEVEL", "0")
+            .args(["build", &file])
+            .output()
+            .expect("spawn karac build");
+        let stderr = String::from_utf8_lossy(&built.stderr);
+        assert!(
+            !stderr.contains("LLVM ERROR") && built.status.code().is_some(),
+            "{name}: KARAC_OPT_LEVEL=0 karac build aborted in LLVM: status {:?}, stderr {stderr}",
+            built.status.code()
+        );
+        let exe = tmp.join(name);
+        if built.status.success() && exe.exists() {
+            let out = Command::new(&exe).output().expect("run -O0 binary");
+            assert!(
+                out.status.success(),
+                "{name}: -O0 binary died: {:?}",
+                out.status.code()
+            );
+            assert_eq!(
+                String::from_utf8_lossy(&out.stdout),
+                *want,
+                "{name}: -O0 stdout"
+            );
+        }
+    }
+    let _ = std::fs::remove_dir_all(&tmp);
+}
+
 /// The abort tier of the same decision: RAII-across-yield violations
 /// break execution-soundness/teardown guarantees (like provider escape),
 /// so they abort `karac run` rather than warn. This gate existed in

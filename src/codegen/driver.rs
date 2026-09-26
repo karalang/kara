@@ -2095,12 +2095,10 @@ pub(super) fn apply_optimization_passes(
     // a pure no-op: the coro passes only touch `presplitcoroutine` funcs.
     {
         let coro_opts = inkwell::passes::PassBuilderOptions::create();
+        // SAFETY: `module` is a live inkwell `Module` for the whole call.
+        let coro_passes = unsafe { super::coro::coro_lowering_pipeline(module.as_mut_ptr()) };
         module
-            .run_passes(
-                "coro-early,coro-split,coro-cleanup",
-                target_machine,
-                coro_opts,
-            )
+            .run_passes(coro_passes, target_machine, coro_opts)
             .map_err(|e| {
                 format!(
                     "LLVM coroutine lowering passes failed: {}. \
