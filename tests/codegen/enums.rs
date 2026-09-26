@@ -12179,13 +12179,14 @@ fn e2e_generic_enum_container_payload_runs_element_drop_bodies() {
 ///    `--interp`. They are controls for the `Vec` cells above them and were
 ///    divergent in their own right.
 ///
-/// THE TWO SILENT CELLS ARE ASSERTIONS, not omissions. Three-deep nesting
-/// and a two-field variant are silent on ALL FOUR surfaces, and the fix
-/// deliberately keeps them there: `elem_te_runs_user_drop` stops at one
-/// level and the walker head skips a multi-field variant, so firing on
-/// either side alone would trade a gap both backends share for a
-/// run-vs-build divergence. If either starts printing, one side has been
-/// widened past the other.
+/// THE SILENT CELL IS AN ASSERTION, not an omission. Three-deep nesting is
+/// silent on ALL FOUR surfaces, and the fix deliberately keeps it there:
+/// `elem_te_runs_user_drop` stops at one level, so firing on either side
+/// alone would trade a gap both backends share for a run-vs-build
+/// divergence. If it starts printing, one side has been widened past the
+/// other. The two-field variant was the second silent cell until
+/// B-2026-09-20-55 made the walker take a multi-field variant's generic
+/// field on both backends in one commit; it now fires on every surface.
 ///
 /// The memory channel is unchanged by construction — this walk runs bodies
 /// and frees nothing — and measured anyway at `KARAC_OPT_LEVEL=0` under
@@ -12453,7 +12454,7 @@ println("end");
                 "mid\nend\n",
             ),
             (
-                "AGREED SILENCE, a TWO-FIELD variant: the walker head skips it, so neither side may fire (before: mid|end|)",
+                "FLIPPED BY B-2026-09-20-55, a TWO-FIELD variant: the instantiation-keyed walker now takes a multi-field variant's generic field, so BOTH sides fire (before: mid|end|)",
                 r#"
 struct R { id: i64 }
 impl Drop for R { fn drop(mut ref self) { println(f"dR{self.id}") } }
@@ -12474,7 +12475,7 @@ println("mid");
 println("end");
 }
 "#,
-                "mid\nend\n",
+                "dR1\ndR2\nmid\nend\n",
             ),
             (
                 "CONTROL, elements with no body: nothing is due and nothing runs (before: mid|end|)",

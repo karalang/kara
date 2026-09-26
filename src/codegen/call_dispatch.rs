@@ -7953,7 +7953,7 @@ impl<'ctx> super::Codegen<'ctx> {
         // envelope plus its interior were nobody's. Registered in the same
         // memory-before-bodies position, for the same LIFO reason.
         if let Some(te) = discarded_generic_enum_te.as_ref() {
-            for (enum_name, variant, payload_te, box_field, box_only) in
+            for (enum_name, variant, payload_te, box_field, _multi_field) in
                 self.user_enum_boxed_payload_variants(&te.clone())
             {
                 // B-2026-09-14-9 — `true`, matching the `let` site
@@ -7966,7 +7966,12 @@ impl<'ctx> super::Codegen<'ctx> {
                 // too. With the fall-through above but this still `false`, the
                 // discarded box was freed and its 8 `String`s were not
                 // (136 B in 8 blocks at `-O0`).
-                let inner = if box_only || self.discarded_call_hands_back_retained_memory(tail) {
+                // B-2026-09-20-55 — the multi-field marker is no longer read as
+                // "no interior". See the `functions.rs` sibling: the interior of
+                // a generic multi-field field is owned by nobody, so withholding
+                // it here stranded it. The hand-back test beside it is a real
+                // ownership question and stays.
+                let inner = if self.discarded_call_hands_back_retained_memory(tail) {
                     None
                 } else {
                     self.enum_boxed_payload_interior_drop(&payload_te, true)
@@ -9930,12 +9935,10 @@ impl<'ctx> super::Codegen<'ctx> {
                 // Memory first — the frame drains LIFO, so the bodies
                 // pushed below fire before the switch frees what they read
                 // (the B-2026-08-01-2 rule).
-                for (en, variant, payload_te, box_field, box_only) in discarded_boxed {
-                    let inner = if box_only {
-                        None
-                    } else {
-                        self.enum_boxed_payload_interior_drop(&payload_te, true)
-                    };
+                for (en, variant, payload_te, box_field, _multi_field) in discarded_boxed {
+                    // B-2026-09-20-55 — see the `functions.rs` sibling: the
+                    // multi-field marker is not an ownership answer.
+                    let inner = self.enum_boxed_payload_interior_drop(&payload_te, true);
                     self.track_boxed_enum_var_with_inner_drop_for_payload(
                         "__owned_agg_tmp",
                         slot,
@@ -13004,6 +13007,30 @@ impl<'ctx> super::Codegen<'ctx> {
             return Ok(ptr.into());
         }
 
+        // B-2026-09-20-55 — the STRUCT-SHAPED spelling's half of
+        // B-2026-09-13-15's retraction, which that row's own comment beside
+        // `disarm_array_sources` says runs "at the one site every constructor
+        // spelling passes through". That site is the TUPLE-variant path; this
+        // one is a second constructor and never reached it, so an array local
+        // moved in by name (`G.X { a: a, n: 5 }`) kept its own element drop
+        // while `E.X(a, 5)` had it retracted.
+        //
+        // The asymmetry was invisible while the multi-field box registered
+        // NO interior drop: the source's surviving drop was the only owner,
+        // so the struct-shaped cell was memory-clean (11 allocs / 11 frees,
+        // 0 errors) where its tuple twin leaked 70 B. Giving the box its
+        // interior made the source a SECOND owner —
+        // `free(): double free detected in tcache 2` on JIT, `-O0` and
+        // auto-par, 2 invalid frees under valgrind, against a correct
+        // `--interp` and `-O2`. Measured on
+        // `enum G6[T] { X { a: T, n: i64 }, Y }` at `T = Array[R, 2]`.
+        //
+        // So the two spellings are made to agree at the constructor rather
+        // than the registration taught to ask which spelling built the value:
+        // the box is the single owner on every path, which is exactly what
+        // B-2026-09-13-15 set out to establish.
+        let disarm_array_sources = !self.type_decls.seeded_enum_names.contains(enum_name)
+            && !self.type_decls.shared_types.contains_key(enum_name);
         let mut agg = llvm_type.const_zero();
         agg = self
             .builder
@@ -13033,6 +13060,12 @@ impl<'ctx> super::Codegen<'ctx> {
             // (the caller retains the buffer free under the by-value ABI) — mirrors
             // the struct-literal / tuple-variant constructor paths.
             let val = self.maybe_defensive_copy_param_arg(&init.value, val);
+            // Immediately after the copy, for the ORDER reason B-2026-09-15-3
+            // gives at the tuple site: the retraction consults
+            // `uam_copied_sites`, which the line above is what writes.
+            if disarm_array_sources {
+                self.suppress_array_local_move_into_ctor(&init.value);
+            }
             // B-2026-08-30-56 — the non-shared twin of the coercion above.
             let val = self.coerce_enum_payload_scalar(enum_name, variant, i, val, &init.value);
             let (start_word, num_words) = offsets.get(i).copied().unwrap_or((i, 1));

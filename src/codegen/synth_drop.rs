@@ -192,14 +192,24 @@ type EnumPayloadBodyCase<'ctx> = (BasicBlock<'ctx>, Vec<EnumPayloadBodyField>);
 
 /// One `Drop`-carrying payload arm handed to the shared bodies core:
 /// `(tag, payload type with the instantiation's args substituted in, boxing
-/// threshold, walk this arm's ELEMENTS)`.
+/// threshold, walk this arm's ELEMENTS, the arm's START WORD in the payload
+/// area)`.
 ///
-/// The last field is per-ARM rather than per-call, and that is the whole
+/// The fourth field is per-ARM rather than per-call, and that is the whole
 /// reason this alias exists rather than a bare tuple: an enum's arms can
 /// disagree about it. `enum Mix[T] { A(T), B(Vec[T]) }` needs a container
 /// walk for `B` and not for `A`, so a call-wide flag cannot express it
 /// (B-2026-09-13-7).
-type PayloadDropArm = (u64, TypeExpr, usize, bool);
+///
+/// B-2026-09-20-55 — the START WORD, and it is what lets a tag appear on more
+/// than one arm. Until this row every arm was one variant's ONE payload, read
+/// at word 0 of the payload area, so a tag and an arm were the same thing. A
+/// multi-field variant packs its fields ACROSS that area, each at its own
+/// offset, so admitting one means saying WHERE to read — the same
+/// `field_word_offsets` the name-keyed walker beside this one has always read.
+/// Arms sharing a tag are the fields of one variant and the core chains them
+/// into a single switch case, in reverse declaration order (B-2026-09-16-17).
+type PayloadDropArm = (u64, TypeExpr, usize, bool, usize);
 
 impl<'ctx> super::Codegen<'ctx> {
     /// Phase 7.2 Slice DP — synthesize (or reuse) the per-enum drop
@@ -12104,7 +12114,7 @@ impl<'ctx> super::Codegen<'ctx> {
                         if include_vec { "_v" } else { "" }
                     ),
                     "Option",
-                    vec![(some_tag, pt.clone(), 3, include_vec)],
+                    vec![(some_tag, pt.clone(), 3, include_vec, 0)],
                 )
             }
             "Result" => {
@@ -12127,8 +12137,8 @@ impl<'ctx> super::Codegen<'ctx> {
                     ),
                     "Result",
                     vec![
-                        (ok_tag, ok_te.clone(), 5, include_vec),
-                        (err_tag, err_te.clone(), 5, include_vec),
+                        (ok_tag, ok_te.clone(), 5, include_vec, 0),
+                        (err_tag, err_te.clone(), 5, include_vec, 0),
                     ],
                 )
             }
@@ -12508,92 +12518,125 @@ impl<'ctx> super::Codegen<'ctx> {
         }
         let subst: std::collections::HashMap<String, TypeExpr> =
             params.iter().cloned().zip(args).collect();
-        let mut arms: Vec<(u64, TypeExpr, usize, bool)> = Vec::new();
+        let mut arms: Vec<PayloadDropArm> = Vec::new();
         for (tag, vname, tys) in self.enum_variant_field_type_exprs(enum_name) {
-            // Single-payload variants only, for the reason
-            // `user_enum_boxed_payload_variants` gives: a multi-field variant
-            // packs its fields ACROSS the area rather than boxing one value, so
-            // the box-pointer read below would be reading a field.
-            if tys.len() != 1 {
-                continue;
+            // B-2026-09-20-55 — EVERY FIELD OF THE VARIANT, where this used to
+            // take the first field of a SINGLE-field one and skip the rest
+            // outright. The guard it replaces read "single-payload variants
+            // only, for the reason `user_enum_boxed_payload_variants` gives: a
+            // multi-field variant packs its fields ACROSS the area rather than
+            // boxing one value, so the box-pointer read below would be reading
+            // a field". That reason was true and was never an argument for
+            // declining: it says the read needs an OFFSET, which the name-keyed
+            // walker beside this one has always had (`field_word_offsets`) and
+            // this one simply did not pass on. Each arm now carries its field's
+            // own `start_word`, so the core reads that field's slot rather than
+            // word 0.
+            //
+            // The partition with the name-keyed walker is unchanged and is what
+            // keeps this from double-walking: that walker takes the fields whose
+            // declared type is CONCRETE and skips the enum's own params, and the
+            // gate below takes exactly its complement, field by field rather
+            // than variant by variant. `enum G2[T] { X(T, i64), Y }` at
+            // `T = Array[R, 2]` was owned by NEITHER — the name-keyed walker
+            // skipped field 0 as a param and found nothing Drop-bearing in the
+            // `i64`, and this emitter refused the variant for its arity — so
+            // both element `Drop` bodies ran on no surface at all, `--interp`
+            // included, and the 70 bytes of element `String` went with them.
+            let offsets = layout.field_word_offsets.get(&vname).cloned();
+            for (fi, fty) in tys.iter().enumerate() {
+                // The complement gate. A concretely-declared payload belongs to the
+                // name-keyed walker and must not be walked twice.
+                //
+                // B-2026-09-13-7 — "concretely-declared" is not the same question as
+                // "its head is not a type parameter", and this gate used to ask the
+                // second. `EArrG[T] { A(Array[T, 2]) }` has the head `Array`, so the
+                // param test failed and the arm was dropped; the name-keyed walker
+                // that owns the complement takes CONCRETE payloads only, so a
+                // payload that is neither a bare parameter nor concrete was owned by
+                // NOBODY and its elements' `Drop` bodies ran on no compiled surface
+                // while `--interp` ran them correctly. Measured at the let-bound
+                // position, both with and without a consuming match.
+                //
+                // So ask the real question: is this payload's type GENERIC-DEPENDENT
+                // — a bare parameter, or anything mentioning one. That keeps the
+                // partition exact, because a type mentioning a parameter is by
+                // construction not concrete and so is not the name-keyed walker's.
+                // `type_expr_mentions_param` already existed, in `synth.rs`, for the
+                // leftover-parameter check; it answers exactly this question, so this
+                // gate reuses it rather than growing a second copy to drift from it.
+                if !Self::type_expr_mentions_param(fty, &params) {
+                    continue;
+                }
+                // B-2026-09-20-62 — EVERY arm of this head may walk a `Vec`
+                // payload, and the question is asked of the SUBSTITUTED type
+                // alone.
+                //
+                // What stood here was a `declared_is_container` test: walk a `Vec`
+                // only where the DECLARATION spells the container (`V(Vec[T])`),
+                // never where a bare `T` merely INSTANTIATES to one. That test was
+                // never about the payload — a `Slot[Vec[R]]` and an `EVecG[R]`
+                // carry the SAME `Vec[R]` — and its own comment said what it was
+                // really for: the interpreter walked the first spelling and not
+                // the second, so arming this side alone would have traded a gap
+                // both backends shared for a run-vs-build divergence. It named the
+                // remainder "its own row with its own interpreter half to write",
+                // and this is that row.
+                //
+                // The interpreter half is `substituted_array_head`'s widening to
+                // `Vec` (`src/interpreter/eval_stmt.rs`), whose own doc states the
+                // same contract from the other side: widen only once the compiled
+                // side is measured correct for that kind under a generic enum.
+                // The two move in one commit or neither moves.
+                //
+                // With both halves in, the spelling of the declaration decides
+                // nothing and the predicate comes out rather than being widened:
+                // `payload_vec_bodies_parts` in the core already asks the only
+                // question that matters — is the payload a `Vec` whose element
+                // runs a user body — of the type AFTER substitution. Arms whose
+                // payload is not a `Vec` are unaffected, since that predicate
+                // answers `None` for them whatever this flag says.
+                // B-2026-09-20-62 — the boxing threshold is the VARIANT'S OWN
+                // declared payload width, not the enum-wide area.
+                //
+                // `coerce_to_payload_words` boxes when the value is wider than the
+                // variant's `num_words`, which comes from that variant's
+                // `field_word_offsets` — `T` is one word whatever the enum's area
+                // is. The area is the WIDEST variant's width, so for an enum whose
+                // variants disagree the two numbers differ and the walker read a
+                // boxed payload as an inline one. MEASURED on
+                // `enum Mix[T] { A(T), B(Vec[T]), N }`, whose area is 3 from the
+                // `Vec[T]` arm while `A`'s own width is 1: at `T = Array[R, 2]`
+                // every compiled surface printed an ASLR-varying id and a `dR0`
+                // (valgrind CLEAN — the words read are live, they are just the box
+                // pointer and its neighbour), and at `T = Vec[R]` the same read
+                // took a zero length and printed nothing at all.
+                //
+                // `Slot[T]`, `EVecG[T]` and every other enum whose variants agree
+                // on their width are byte-for-byte unchanged, which is why this is
+                // a correction and not a widening.
+                // The boxing threshold is this FIELD's own slot width, read
+                // from the same table as its offset so the two cannot disagree
+                // about which slot they describe. Identical to the
+                // `payload_word_count_for_type_expr` call it replaces for every
+                // arm that predates this row — `declare_enums` fills
+                // `field_word_offsets` from that very function — which is kept
+                // as the fallback for a variant the table has no entry for.
+                let (start_word, arm_words) = match offsets.as_ref().and_then(|o| o.get(fi)) {
+                    Some(&(sw, fw)) => (sw, fw),
+                    None => (
+                        0,
+                        self.payload_word_count_for_type_expr(fty, enum_name, &vname),
+                    ),
+                };
+                arms.push((
+                    tag,
+                    Self::subst_type_params(fty, &subst),
+                    arm_words,
+                    true,
+                    start_word,
+                ));
             }
-            // The complement gate. A concretely-declared payload belongs to the
-            // name-keyed walker and must not be walked twice.
-            //
-            // B-2026-09-13-7 — "concretely-declared" is not the same question as
-            // "its head is not a type parameter", and this gate used to ask the
-            // second. `EArrG[T] { A(Array[T, 2]) }` has the head `Array`, so the
-            // param test failed and the arm was dropped; the name-keyed walker
-            // that owns the complement takes CONCRETE payloads only, so a
-            // payload that is neither a bare parameter nor concrete was owned by
-            // NOBODY and its elements' `Drop` bodies ran on no compiled surface
-            // while `--interp` ran them correctly. Measured at the let-bound
-            // position, both with and without a consuming match.
-            //
-            // So ask the real question: is this payload's type GENERIC-DEPENDENT
-            // — a bare parameter, or anything mentioning one. That keeps the
-            // partition exact, because a type mentioning a parameter is by
-            // construction not concrete and so is not the name-keyed walker's.
-            // `type_expr_mentions_param` already existed, in `synth.rs`, for the
-            // leftover-parameter check; it answers exactly this question, so this
-            // gate reuses it rather than growing a second copy to drift from it.
-            if !Self::type_expr_mentions_param(&tys[0], &params) {
-                continue;
-            }
-            // B-2026-09-20-62 — EVERY arm of this head may walk a `Vec`
-            // payload, and the question is asked of the SUBSTITUTED type
-            // alone.
-            //
-            // What stood here was a `declared_is_container` test: walk a `Vec`
-            // only where the DECLARATION spells the container (`V(Vec[T])`),
-            // never where a bare `T` merely INSTANTIATES to one. That test was
-            // never about the payload — a `Slot[Vec[R]]` and an `EVecG[R]`
-            // carry the SAME `Vec[R]` — and its own comment said what it was
-            // really for: the interpreter walked the first spelling and not
-            // the second, so arming this side alone would have traded a gap
-            // both backends shared for a run-vs-build divergence. It named the
-            // remainder "its own row with its own interpreter half to write",
-            // and this is that row.
-            //
-            // The interpreter half is `substituted_array_head`'s widening to
-            // `Vec` (`src/interpreter/eval_stmt.rs`), whose own doc states the
-            // same contract from the other side: widen only once the compiled
-            // side is measured correct for that kind under a generic enum.
-            // The two move in one commit or neither moves.
-            //
-            // With both halves in, the spelling of the declaration decides
-            // nothing and the predicate comes out rather than being widened:
-            // `payload_vec_bodies_parts` in the core already asks the only
-            // question that matters — is the payload a `Vec` whose element
-            // runs a user body — of the type AFTER substitution. Arms whose
-            // payload is not a `Vec` are unaffected, since that predicate
-            // answers `None` for them whatever this flag says.
-            // B-2026-09-20-62 — the boxing threshold is the VARIANT'S OWN
-            // declared payload width, not the enum-wide area.
-            //
-            // `coerce_to_payload_words` boxes when the value is wider than the
-            // variant's `num_words`, which comes from that variant's
-            // `field_word_offsets` — `T` is one word whatever the enum's area
-            // is. The area is the WIDEST variant's width, so for an enum whose
-            // variants disagree the two numbers differ and the walker read a
-            // boxed payload as an inline one. MEASURED on
-            // `enum Mix[T] { A(T), B(Vec[T]), N }`, whose area is 3 from the
-            // `Vec[T]` arm while `A`'s own width is 1: at `T = Array[R, 2]`
-            // every compiled surface printed an ASLR-varying id and a `dR0`
-            // (valgrind CLEAN — the words read are live, they are just the box
-            // pointer and its neighbour), and at `T = Vec[R]` the same read
-            // took a zero length and printed nothing at all.
-            //
-            // `Slot[T]`, `EVecG[T]` and every other enum whose variants agree
-            // on their width are byte-for-byte unchanged, which is why this is
-            // a correction and not a widening.
-            let arm_words = self.payload_word_count_for_type_expr(&tys[0], enum_name, &vname);
-            arms.push((
-                tag,
-                Self::subst_type_params(&tys[0], &subst),
-                arm_words,
-                true,
-            ));
         }
         if arms.is_empty() {
             return None;
@@ -12715,7 +12758,7 @@ impl<'ctx> super::Codegen<'ctx> {
         // does not walk a `Vec` instantiation and arming it here would trade a
         // both-backends-silent bug for a run-vs-build divergence — the trade
         // the seeded pair's array-arm comment above refuses for the same reason.
-        arms: Vec<(u64, TypeExpr, usize, bool)>,
+        arms: Vec<PayloadDropArm>,
         include_vec: bool,
         // B-2026-09-17-34 / B-2026-09-19-9 — the moved-out parts to mask out,
         // keyed by the arm they belong to; see `PayloadBodiesMask` and
@@ -12794,10 +12837,14 @@ impl<'ctx> super::Codegen<'ctx> {
             envelope: bool,
             pte: TypeExpr,
             thresh: usize,
+            /// B-2026-09-20-55 — this arm's field offset inside the payload
+            /// area. Zero for every arm that predates that row, which is what
+            /// the hard-coded payload gep below used to assume.
+            start_word: usize,
         }
         let targets: Vec<PayloadArm> = arms
             .into_iter()
-            .filter_map(|(tag, pte, thresh, arm_walk_vec)| {
+            .filter_map(|(tag, pte, thresh, arm_walk_vec, start_word)| {
                 let include_vec = include_vec || arm_walk_vec;
                 if let TypeKind::Tuple(elem_tes) = &pte.kind {
                     if elem_tes.iter().any(|t| self.elem_te_runs_user_drop(t)) {
@@ -12810,6 +12857,7 @@ impl<'ctx> super::Codegen<'ctx> {
                             envelope: false,
                             pte,
                             thresh,
+                            start_word,
                         });
                     }
                     return None;
@@ -12845,6 +12893,7 @@ impl<'ctx> super::Codegen<'ctx> {
                         envelope: false,
                         pte,
                         thresh,
+                        start_word,
                     });
                 }
                 // B-2026-09-13-29 — the `Vec` payload, beside the array arm and
@@ -12869,6 +12918,7 @@ impl<'ctx> super::Codegen<'ctx> {
                         envelope: false,
                         pte,
                         thresh,
+                        start_word,
                     });
                 }
                 let TypeKind::Path(pp) = &pte.kind else {
@@ -12906,6 +12956,7 @@ impl<'ctx> super::Codegen<'ctx> {
                         envelope: true,
                         pte,
                         thresh,
+                        start_word,
                     });
                 }
                 let user_enum = sname != "Option"
@@ -12944,6 +12995,7 @@ impl<'ctx> super::Codegen<'ctx> {
                     envelope: false,
                     pte,
                     thresh,
+                    start_word,
                 })
             })
             .collect();
@@ -12977,232 +13029,279 @@ impl<'ctx> super::Codegen<'ctx> {
             .unwrap()
             .into_int_value();
 
+        // B-2026-09-20-55 — ONE SWITCH CASE PER TAG, with the arms that share
+        // that tag chained inside it. Until this row an arm WAS a variant: a
+        // tag appeared at most once, so mapping arms to blocks one-to-one and
+        // reading the payload at a hard-coded word 0 were both right by
+        // construction. A multi-field variant contributes one arm per
+        // Drop-bearing field, all under the same tag, and `build_switch`
+        // takes each discriminant once — so the arms are grouped here and the
+        // fields of one variant run in sequence, each against its own slot.
+        //
+        // REVERSE DECLARATION ORDER within a variant, which is what
+        // B-2026-09-16-17 pinned for the name-keyed walker beside this one
+        // against design.md § `Drop` ("fields are dropped in the reverse of
+        // the order they are declared", for a struct "or ENUM VARIANT"). The
+        // arms arrive in declaration order, so the grouping reverses them; a
+        // variant with one Drop-bearing field is unaffected, which is every
+        // arm that predates this row.
+        let mut grouped: Vec<(u64, Vec<PayloadArm>)> = Vec::new();
+        for arm in targets {
+            match grouped.iter_mut().find(|(t, _)| *t == arm.tag) {
+                Some((_, v)) => v.push(arm),
+                None => grouped.push((arm.tag, vec![arm])),
+            }
+        }
         let mut switch_cases: Vec<(inkwell::values::IntValue<'ctx>, BasicBlock<'ctx>)> = Vec::new();
-        let case_bbs: Vec<(BasicBlock<'ctx>, PayloadArm)> = targets
+        let case_bbs: Vec<(BasicBlock<'ctx>, Vec<PayloadArm>)> = grouped
             .into_iter()
-            .map(|arm| {
+            .map(|(tag, mut fields)| {
+                fields.reverse();
                 let bb = self
                     .context
-                    .append_basic_block(walker, &format!("or.t{}", arm.tag));
-                switch_cases.push((i64_t.const_int(arm.tag, false), bb));
-                (bb, arm)
+                    .append_basic_block(walker, &format!("or.t{tag}"));
+                switch_cases.push((i64_t.const_int(tag, false), bb));
+                (bb, fields)
             })
             .collect();
         self.builder
             .build_switch(tag_val, exit, &switch_cases)
             .unwrap();
 
-        for (
-            bb,
-            PayloadArm {
-                sname,
-                tuple_elems,
-                array_parts,
-                vec_elem,
-                envelope,
-                pte,
-                thresh,
-                ..
-            },
-        ) in case_bbs
-        {
-            self.builder.position_at_end(bb);
-            let payload_base = self
-                .builder
-                .build_struct_gep(layout_ty, p_arg, 1, "or.payload.p")
-                .unwrap();
-            let words = Self::llvm_type_word_count(self.llvm_type_for_type_expr(&pte));
-            let target_ptr = if words > thresh {
-                // Boxed payload: w0 is the box pointer; a null box (payload
-                // already moved out / never packed) runs nothing.
-                let w0 = self
+        for (case_bb, fields) in case_bbs {
+            let n_fields = fields.len();
+            let mut cur_bb = case_bb;
+            for (
+                fi,
+                PayloadArm {
+                    sname,
+                    tuple_elems,
+                    array_parts,
+                    vec_elem,
+                    envelope,
+                    pte,
+                    thresh,
+                    start_word,
+                    ..
+                },
+            ) in fields.into_iter().enumerate()
+            {
+                // Where this field's own walk hands control next: the following
+                // field of the same variant, or the walker's exit for the last
+                // one. A single-field variant makes this `exit` on its first and
+                // only pass, which is what the code read before this row.
+                let next_bb = if fi + 1 < n_fields {
+                    self.context.append_basic_block(walker, "or.field.next")
+                } else {
+                    exit
+                };
+                self.builder.position_at_end(cur_bb);
+                // THIS FIELD'S SLOT, not word 0 of the payload area. The gep
+                // index is `start_word + 1` because the layout struct is
+                // `{ i64 tag, i64 w0, i64 w1, .. }` — the same arithmetic
+                // `emit_enum_payload_user_drop_bodies_fn_skipping` does on the
+                // same table. Every arm that predates B-2026-09-20-55 has
+                // `start_word == 0` and so still geps field 1.
+                let payload_base = self
                     .builder
-                    .build_load(i64_t, payload_base, "or.box.w0")
-                    .unwrap()
-                    .into_int_value();
-                let box_ptr = self
-                    .builder
-                    .build_int_to_ptr(w0, ptr_ty, "or.box.p")
+                    .build_struct_gep(layout_ty, p_arg, (start_word + 1) as u32, "or.payload.p")
                     .unwrap();
-                let is_null = self
-                    .builder
-                    .build_int_compare(
-                        inkwell::IntPredicate::EQ,
-                        box_ptr,
-                        ptr_ty.const_null(),
-                        "or.box.isnull",
-                    )
-                    .unwrap();
-                let body_bb = self.context.append_basic_block(walker, "or.box.body");
-                self.builder
-                    .build_conditional_branch(is_null, exit, body_bb)
-                    .unwrap();
-                self.builder.position_at_end(body_bb);
-                box_ptr
-            } else {
-                payload_base
-            };
-            let owns_body = self
-                .program_snapshot
-                .as_deref()
-                .is_some_and(|p| p.drop_method_keys.contains_key(&sname));
-            if owns_body {
-                if let Some(f) = self.module.get_function(&format!("{sname}.drop")) {
+                let words = Self::llvm_type_word_count(self.llvm_type_for_type_expr(&pte));
+                let target_ptr = if words > thresh {
+                    // Boxed payload: w0 is the box pointer; a null box (payload
+                    // already moved out / never packed) runs nothing.
+                    let w0 = self
+                        .builder
+                        .build_load(i64_t, payload_base, "or.box.w0")
+                        .unwrap()
+                        .into_int_value();
+                    let box_ptr = self
+                        .builder
+                        .build_int_to_ptr(w0, ptr_ty, "or.box.p")
+                        .unwrap();
+                    let is_null = self
+                        .builder
+                        .build_int_compare(
+                            inkwell::IntPredicate::EQ,
+                            box_ptr,
+                            ptr_ty.const_null(),
+                            "or.box.isnull",
+                        )
+                        .unwrap();
+                    let body_bb = self.context.append_basic_block(walker, "or.box.body");
+                    self.builder
+                        .build_conditional_branch(is_null, next_bb, body_bb)
+                        .unwrap();
+                    self.builder.position_at_end(body_bb);
+                    box_ptr
+                } else {
+                    payload_base
+                };
+                let owns_body = self
+                    .program_snapshot
+                    .as_deref()
+                    .is_some_and(|p| p.drop_method_keys.contains_key(&sname));
+                if owns_body {
+                    if let Some(f) = self.module.get_function(&format!("{sname}.drop")) {
+                        self.builder
+                            .build_call(f, &[target_ptr.into()], "")
+                            .unwrap();
+                    }
+                }
+                // Own body first, then the payload's — the order every sibling
+                // walk in this family uses (`emit_slot_drop_bodies_at`, the tuple
+                // and `Vec` element walkers), and the order a direct `let x =
+                // E.A(R { .. });` already prints in on all three backends.
+                let is_enum = self
+                    .type_decls
+                    .enum_layouts
+                    .get(sname.as_str())
+                    .is_some_and(|l| !l.is_shared)
+                    && sname != "Option"
+                    && sname != "Result";
+                let inner = if envelope {
+                    // B-2026-09-10-15 — the payload is itself an `Option`/
+                    // `Result`. `target_ptr` is the inner envelope's own base
+                    // (deboxed above when the outer payload area could not hold
+                    // it), which is exactly what this walker's parameter is, so
+                    // the recursion needs no reshaping. Body-only like every
+                    // sibling arm: the inner envelope's box and interior are
+                    // owned by the value's free channel, unchanged by this.
+                    self.emit_optres_payload_user_drop_bodies_fn_ex(&pte, include_vec)
+                } else if let Some(elem_tes) = &tuple_elems {
+                    // B-2026-09-05-14 — the tuple payload: run each Drop-carrying
+                    // element's body over the tuple aggregate at `target_ptr`
+                    // (inline or deboxed above). Body-only, like the struct/enum
+                    // arms; the tuple's heap is freed on the value's free channel.
+                    //
+                    // B-2026-09-19-9 — and the MASK, which this arm had no seat
+                    // for. `let x = t.0` over an `Option[(R, ..)]` gives the moved
+                    // element's body to `x` and left this walker running it a
+                    // SECOND time over the husk, reading the `String` the first
+                    // body had already freed: `dR5/a mid dR5/d end` where
+                    // `dR5/a mid end` is due, one valgrind `Invalid read`, and
+                    // memory BALANCED at 12 allocs / 12 frees — which is why a
+                    // leak-only verdict reads the cell as clean.
+                    //
+                    // The walker one level down has had a `_skipping` form since
+                    // B-2026-08-03-8, so this is a threading job rather than new
+                    // machinery. The mask carries the MANGLED payload type rather
+                    // than a bare index set, for the reason the struct variant
+                    // carries a name: a `Result` reaches here once per payload arm,
+                    // and an index set alone would mask element 0 of the `Err`
+                    // tuple as well as the `Ok` one.
+                    match self.llvm_type_for_type_expr(&pte) {
+                        inkwell::types::BasicTypeEnum::StructType(agg_ty) => match mask {
+                            Some(PayloadBodiesMask::TupleElems(key, idxs))
+                                if !idxs.is_empty() && key == Self::display_mangle_te(&pte) =>
+                            {
+                                let skip: std::collections::HashSet<u32> =
+                                    idxs.iter().map(|i| *i as u32).collect();
+                                self.emit_tuple_elem_user_drop_bodies_fn_skipping(
+                                    agg_ty, elem_tes, &skip,
+                                )
+                            }
+                            // B-2026-09-19-33 — the DEPTH-masked sibling, which
+                            // reaches the tree-driven walker B-2026-09-06-5 built
+                            // for the struct channel's tuple-typed fields. Same
+                            // identity check as the flat arm, for the same reason:
+                            // a `Result` walker arrives here once per payload arm.
+                            Some(PayloadBodiesMask::TupleTree(key, tree))
+                                if !tree.is_empty() && key == Self::display_mangle_te(&pte) =>
+                            {
+                                self.emit_tuple_elem_user_drop_bodies_fn_tree(
+                                    agg_ty, elem_tes, tree,
+                                )
+                            }
+                            _ => self.emit_tuple_elem_user_drop_bodies_fn(agg_ty, elem_tes),
+                        },
+                        _ => None,
+                    }
+                } else if let Some((elem_te, n)) = &array_parts {
+                    // B-2026-09-12-6 — the array payload: run each element's body
+                    // over the `[N x E]` aggregate at `target_ptr` (inline, or
+                    // deboxed above). Body-only, like every sibling arm.
+                    let elem_ty = self.llvm_type_for_type_expr(elem_te);
+                    self.emit_array_elem_user_drop_bodies_fn(elem_ty, elem_te, *n)
+                } else if let Some(elem_te) = &vec_elem {
+                    // B-2026-09-13-29 — the `Vec` payload: run each element's body
+                    // over the `{ptr, len, cap}` handle at `target_ptr`, walking
+                    // the handle's runtime length. Dispatched exactly as the
+                    // `let`-bound `Vec` registration dispatches, so a discarded
+                    // payload and a bound binding resolve the SAME walker: the mono
+                    // element walk for a struct / user-enum element, the te-driven
+                    // recursive one for a nested container.
+                    let elem_ty = self.llvm_type_for_type_expr(elem_te);
+                    let elem_struct_name = match &elem_te.kind {
+                        TypeKind::Path(ep) => ep
+                            .segments
+                            .first()
+                            .filter(|n| {
+                                let n = n.as_str();
+                                self.type_decls.struct_types.contains_key(n)
+                                    || (n != "Option"
+                                        && n != "Result"
+                                        && self
+                                            .type_decls
+                                            .enum_layouts
+                                            .get(n)
+                                            .is_some_and(|l| !l.is_shared))
+                            })
+                            .cloned(),
+                        _ => None,
+                    };
+                    match elem_struct_name {
+                        Some(en) => {
+                            let subst = self.generic_struct_subst_from_inst(&en, elem_te);
+                            self.emit_vec_elem_user_drop_bodies_fn_mono(&en, elem_ty, &subst)
+                        }
+                        None => {
+                            let te = elem_te.clone();
+                            self.emit_nested_vec_elem_bodies_fn(&te)
+                        }
+                    }
+                } else if is_enum {
+                    self.emit_enum_payload_user_drop_bodies_fn(&sname)
+                } else {
+                    // B-2026-09-12-6 — the payload's own instantiation, not an
+                    // empty map. The filter above admits this arm on
+                    // `type_runs_user_drop_mono(&sname, &subst)`; handing the
+                    // emitter an empty subst here would admit `Wrap[Rec]` and then
+                    // emit a walker for `Wrap`'s declared `val: T`, which resolves
+                    // to nothing. Same helper at both ends, so the gate and the
+                    // walk cannot disagree.
+                    let subst = self.payload_type_subst(&pte);
+                    // B-2026-09-17-34 — the masked struct arm. A field this arm's
+                    // payload has had MOVED OUT (`let x = t.r`) belongs to the
+                    // destination now, body and memory both, so the payload's own
+                    // walk must stop running it: the local registers a full
+                    // `karac_drop_<F>` and this walker was running `<F>.drop` a
+                    // second time over the same object.
+                    //
+                    // Keyed on the arm's payload NAME, not applied blanket: a
+                    // `Result` walker reaches here once per payload arm and only
+                    // one of them is the struct the caller masked.
+                    match mask {
+                        Some(PayloadBodiesMask::StructFields(mname, idxs))
+                            if mname == sname && !idxs.is_empty() =>
+                        {
+                            let tree = FieldSkipTree {
+                                here: idxs.clone(),
+                                ..Default::default()
+                            };
+                            self.emit_user_drop_field_bodies_fn_skipping(&sname, &subst, &tree)
+                        }
+                        _ => self.emit_user_drop_field_bodies_fn(&sname, &subst),
+                    }
+                };
+                if let Some(f) = inner {
                     self.builder
                         .build_call(f, &[target_ptr.into()], "")
                         .unwrap();
                 }
+                self.builder.build_unconditional_branch(next_bb).unwrap();
+                cur_bb = next_bb;
             }
-            // Own body first, then the payload's — the order every sibling
-            // walk in this family uses (`emit_slot_drop_bodies_at`, the tuple
-            // and `Vec` element walkers), and the order a direct `let x =
-            // E.A(R { .. });` already prints in on all three backends.
-            let is_enum = self
-                .type_decls
-                .enum_layouts
-                .get(sname.as_str())
-                .is_some_and(|l| !l.is_shared)
-                && sname != "Option"
-                && sname != "Result";
-            let inner = if envelope {
-                // B-2026-09-10-15 — the payload is itself an `Option`/
-                // `Result`. `target_ptr` is the inner envelope's own base
-                // (deboxed above when the outer payload area could not hold
-                // it), which is exactly what this walker's parameter is, so
-                // the recursion needs no reshaping. Body-only like every
-                // sibling arm: the inner envelope's box and interior are
-                // owned by the value's free channel, unchanged by this.
-                self.emit_optres_payload_user_drop_bodies_fn_ex(&pte, include_vec)
-            } else if let Some(elem_tes) = &tuple_elems {
-                // B-2026-09-05-14 — the tuple payload: run each Drop-carrying
-                // element's body over the tuple aggregate at `target_ptr`
-                // (inline or deboxed above). Body-only, like the struct/enum
-                // arms; the tuple's heap is freed on the value's free channel.
-                //
-                // B-2026-09-19-9 — and the MASK, which this arm had no seat
-                // for. `let x = t.0` over an `Option[(R, ..)]` gives the moved
-                // element's body to `x` and left this walker running it a
-                // SECOND time over the husk, reading the `String` the first
-                // body had already freed: `dR5/a mid dR5/d end` where
-                // `dR5/a mid end` is due, one valgrind `Invalid read`, and
-                // memory BALANCED at 12 allocs / 12 frees — which is why a
-                // leak-only verdict reads the cell as clean.
-                //
-                // The walker one level down has had a `_skipping` form since
-                // B-2026-08-03-8, so this is a threading job rather than new
-                // machinery. The mask carries the MANGLED payload type rather
-                // than a bare index set, for the reason the struct variant
-                // carries a name: a `Result` reaches here once per payload arm,
-                // and an index set alone would mask element 0 of the `Err`
-                // tuple as well as the `Ok` one.
-                match self.llvm_type_for_type_expr(&pte) {
-                    inkwell::types::BasicTypeEnum::StructType(agg_ty) => match mask {
-                        Some(PayloadBodiesMask::TupleElems(key, idxs))
-                            if !idxs.is_empty() && key == Self::display_mangle_te(&pte) =>
-                        {
-                            let skip: std::collections::HashSet<u32> =
-                                idxs.iter().map(|i| *i as u32).collect();
-                            self.emit_tuple_elem_user_drop_bodies_fn_skipping(
-                                agg_ty, elem_tes, &skip,
-                            )
-                        }
-                        // B-2026-09-19-33 — the DEPTH-masked sibling, which
-                        // reaches the tree-driven walker B-2026-09-06-5 built
-                        // for the struct channel's tuple-typed fields. Same
-                        // identity check as the flat arm, for the same reason:
-                        // a `Result` walker arrives here once per payload arm.
-                        Some(PayloadBodiesMask::TupleTree(key, tree))
-                            if !tree.is_empty() && key == Self::display_mangle_te(&pte) =>
-                        {
-                            self.emit_tuple_elem_user_drop_bodies_fn_tree(agg_ty, elem_tes, tree)
-                        }
-                        _ => self.emit_tuple_elem_user_drop_bodies_fn(agg_ty, elem_tes),
-                    },
-                    _ => None,
-                }
-            } else if let Some((elem_te, n)) = &array_parts {
-                // B-2026-09-12-6 — the array payload: run each element's body
-                // over the `[N x E]` aggregate at `target_ptr` (inline, or
-                // deboxed above). Body-only, like every sibling arm.
-                let elem_ty = self.llvm_type_for_type_expr(elem_te);
-                self.emit_array_elem_user_drop_bodies_fn(elem_ty, elem_te, *n)
-            } else if let Some(elem_te) = &vec_elem {
-                // B-2026-09-13-29 — the `Vec` payload: run each element's body
-                // over the `{ptr, len, cap}` handle at `target_ptr`, walking
-                // the handle's runtime length. Dispatched exactly as the
-                // `let`-bound `Vec` registration dispatches, so a discarded
-                // payload and a bound binding resolve the SAME walker: the mono
-                // element walk for a struct / user-enum element, the te-driven
-                // recursive one for a nested container.
-                let elem_ty = self.llvm_type_for_type_expr(elem_te);
-                let elem_struct_name = match &elem_te.kind {
-                    TypeKind::Path(ep) => ep
-                        .segments
-                        .first()
-                        .filter(|n| {
-                            let n = n.as_str();
-                            self.type_decls.struct_types.contains_key(n)
-                                || (n != "Option"
-                                    && n != "Result"
-                                    && self
-                                        .type_decls
-                                        .enum_layouts
-                                        .get(n)
-                                        .is_some_and(|l| !l.is_shared))
-                        })
-                        .cloned(),
-                    _ => None,
-                };
-                match elem_struct_name {
-                    Some(en) => {
-                        let subst = self.generic_struct_subst_from_inst(&en, elem_te);
-                        self.emit_vec_elem_user_drop_bodies_fn_mono(&en, elem_ty, &subst)
-                    }
-                    None => {
-                        let te = elem_te.clone();
-                        self.emit_nested_vec_elem_bodies_fn(&te)
-                    }
-                }
-            } else if is_enum {
-                self.emit_enum_payload_user_drop_bodies_fn(&sname)
-            } else {
-                // B-2026-09-12-6 — the payload's own instantiation, not an
-                // empty map. The filter above admits this arm on
-                // `type_runs_user_drop_mono(&sname, &subst)`; handing the
-                // emitter an empty subst here would admit `Wrap[Rec]` and then
-                // emit a walker for `Wrap`'s declared `val: T`, which resolves
-                // to nothing. Same helper at both ends, so the gate and the
-                // walk cannot disagree.
-                let subst = self.payload_type_subst(&pte);
-                // B-2026-09-17-34 — the masked struct arm. A field this arm's
-                // payload has had MOVED OUT (`let x = t.r`) belongs to the
-                // destination now, body and memory both, so the payload's own
-                // walk must stop running it: the local registers a full
-                // `karac_drop_<F>` and this walker was running `<F>.drop` a
-                // second time over the same object.
-                //
-                // Keyed on the arm's payload NAME, not applied blanket: a
-                // `Result` walker reaches here once per payload arm and only
-                // one of them is the struct the caller masked.
-                match mask {
-                    Some(PayloadBodiesMask::StructFields(mname, idxs))
-                        if mname == sname && !idxs.is_empty() =>
-                    {
-                        let tree = FieldSkipTree {
-                            here: idxs.clone(),
-                            ..Default::default()
-                        };
-                        self.emit_user_drop_field_bodies_fn_skipping(&sname, &subst, &tree)
-                    }
-                    _ => self.emit_user_drop_field_bodies_fn(&sname, &subst),
-                }
-            };
-            if let Some(f) = inner {
-                self.builder
-                    .build_call(f, &[target_ptr.into()], "")
-                    .unwrap();
-            }
-            self.builder.build_unconditional_branch(exit).unwrap();
         }
 
         self.builder.position_at_end(exit);

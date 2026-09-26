@@ -5153,7 +5153,7 @@ impl<'ctx> super::Codegen<'ctx> {
                 && nonescaping_params.contains(&param_name)
             {
                 let mono_ty = self.subst_monomorph_type_params(&param.ty);
-                for (enum_name, variant, payload_te, box_field, box_only) in
+                for (enum_name, variant, payload_te, box_field, _multi_field) in
                     self.user_enum_boxed_payload_variants(&mono_ty)
                 {
                     // B-2026-09-10-2 — the interior, as at the other two sites.
@@ -5196,11 +5196,19 @@ impl<'ctx> super::Codegen<'ctx> {
                     // an array local is clean on both arms: it is owned by the
                     // channel B-2026-09-13-15's retraction deliberately does
                     // not arm, and this arm does not reach it.
-                    let inner = if box_only {
-                        None
-                    } else {
-                        self.enum_boxed_payload_interior_drop(&payload_te, true)
-                    };
+                    // B-2026-09-20-55 — see the `functions.rs` sibling, whose
+                    // monomorph twin this is: the flag marks a multi-field ARM
+                    // and is not an ownership answer.
+                    //
+                    // The flag is UNREAD here, and that asymmetry predates this
+                    // row: the `functions.rs` twin also records the param in
+                    // `boxed_enum_multi_field_vars` so the argument-move
+                    // suppressor zeroes one word rather than the slot
+                    // (B-2026-09-19-39), and this site never did. Left as it
+                    // stands rather than widened blind — nothing here has been
+                    // measured against a multi-field box inside a monomorphised
+                    // generic fn.
+                    let inner = self.enum_boxed_payload_interior_drop(&payload_te, true);
                     self.track_boxed_enum_var_with_inner_drop_for_payload(
                         &param_name,
                         alloca,

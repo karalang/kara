@@ -189,7 +189,7 @@ impl<'ctx> super::Codegen<'ctx> {
             // the same answer.
             (
                 Self::variant_pattern_binds_payload(pattern),
-                Self::variant_pattern_takes_payload(pattern),
+                self.variant_pattern_takes_generic_payload(pattern),
             ),
         );
         // B-2026-08-30-15 — the STRUCT flavour of the same gap, which reaches
@@ -1157,7 +1157,7 @@ impl<'ctx> super::Codegen<'ctx> {
             // the same answer.
             (
                 Self::variant_pattern_binds_payload(pattern),
-                Self::variant_pattern_takes_payload(pattern),
+                self.variant_pattern_takes_generic_payload(pattern),
             ),
         );
         // B-2026-08-30-15 — the STRUCT flavour of the same gap, which reaches
@@ -2289,7 +2289,7 @@ impl<'ctx> super::Codegen<'ctx> {
             // the same answer.
             (
                 Self::variant_pattern_binds_payload(pattern),
-                Self::variant_pattern_takes_payload(pattern),
+                self.variant_pattern_takes_generic_payload(pattern),
             ),
         );
         // B-2026-08-30-15 — the STRUCT flavour of the same gap, which reaches

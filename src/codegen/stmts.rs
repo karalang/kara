@@ -8783,7 +8783,9 @@ impl<'ctx> super::Codegen<'ctx> {
                                 .then(|| self.variables.get(var_name.as_str()).copied())
                                 .flatten()
                             {
-                                for (enum_name, variant, payload_te, box_field, box_only) in boxed {
+                                for (enum_name, variant, payload_te, box_field, _multi_field) in
+                                    boxed
+                                {
                                     // B-2026-09-10-2 — the INTERIOR this site
                                     // passed as `None`. See the param site in
                                     // `functions.rs` for why the resolver is
@@ -8802,9 +8804,13 @@ impl<'ctx> super::Codegen<'ctx> {
                                     // (`Ho.Full(a)` over `a: S3`): the caller's
                                     // drop owns that interior, and the sole-owner
                                     // drop now releases its `shared` field.
-                                    let inner = if box_only
-                                        || self
-                                            .let_payload_may_be_caller_retained(value, &payload_te)
+                                    // B-2026-09-20-55 — the multi-field marker is
+                                    // no longer read as "no interior"; see the
+                                    // `functions.rs` sibling. The
+                                    // caller-retained test beside it is a real
+                                    // ownership question and stays.
+                                    let inner = if self
+                                        .let_payload_may_be_caller_retained(value, &payload_te)
                                     {
                                         None
                                     } else {

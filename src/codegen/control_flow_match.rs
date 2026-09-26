@@ -267,7 +267,7 @@ impl<'ctx> super::Codegen<'ctx> {
                             arms.iter()
                                 .any(|a| Self::variant_pattern_binds_payload(&a.pattern)),
                             arms.iter()
-                                .all(|a| Self::variant_pattern_takes_payload(&a.pattern)),
+                                .all(|a| self.variant_pattern_takes_generic_payload(&a.pattern)),
                         ),
                     )
                 })
@@ -9199,6 +9199,104 @@ impl<'ctx> super::Codegen<'ctx> {
         }
     }
 
+    /// B-2026-09-20-55 — [`Self::variant_pattern_takes_payload`] asked of the
+    /// positions the instantiation-keyed bodies walker actually walks.
+    ///
+    /// That predicate answers a VARIANT-level question — does the arm bind
+    /// anything of the payload — and the fresh-temp walker gate reads it as the
+    /// FIELD-level one: does the arm hand the walked payload to a binding. For
+    /// a single-field variant those are the same question, because there is
+    /// nothing else in the payload to bind. A multi-field variant has
+    /// siblings, and binding a scalar one answered "yes" for the whole
+    /// variant: `match G2.X(a, 5) { G2.X(_, n) => .. }` discards the array and
+    /// binds only the `i64`, yet armed the walker, so the three compiled
+    /// surfaces ran both element bodies while `--interp` — and the
+    /// single-field twin `match G.X(a) { G.X(_) => .. }` on every surface —
+    /// ran none. The single-field answer is the agreed gap the materializer's
+    /// own comment records for a discarding arm; this makes the two-field
+    /// spelling reach the same one.
+    ///
+    /// So: every position whose declared type MENTIONS one of the enum's
+    /// params — exactly the positions `emit_generic_enum_payload_user_drop_
+    /// bodies_fn` admits — must be bound by a sub-pattern that binds
+    /// something. A variant with no such position, and every non-variant
+    /// pattern, falls back to the variant-level answer unchanged; and for a
+    /// single-field variant the two answers coincide by construction, since
+    /// its one sub-pattern binding something is what a non-empty
+    /// `binding_names()` meant.
+    pub(super) fn variant_pattern_takes_generic_payload(&self, pat: &Pattern) -> bool {
+        let fallback = || Self::variant_pattern_takes_payload(pat);
+        let (path, subs): (&Vec<String>, Vec<(usize, bool)>) = match &pat.kind {
+            PatternKind::Or(ps) => {
+                return ps
+                    .iter()
+                    .all(|p| self.variant_pattern_takes_generic_payload(p));
+            }
+            PatternKind::TupleVariant { path, patterns } if !patterns.is_empty() => (
+                path,
+                patterns
+                    .iter()
+                    .enumerate()
+                    .map(|(i, sub)| (i, !sub.binding_names().is_empty()))
+                    .collect(),
+            ),
+            PatternKind::Struct { path, fields, .. } if !fields.is_empty() => {
+                let Some(enum_name) = self.variant_pattern_enum_name(pat) else {
+                    return fallback();
+                };
+                let Some(variant) = path.last() else {
+                    return fallback();
+                };
+                let Some(names) = self.enum_variant_struct_field_names(&enum_name, variant) else {
+                    return fallback();
+                };
+                (
+                    path,
+                    fields
+                        .iter()
+                        .filter_map(|fp| {
+                            let i = names.iter().position(|n| n == &fp.name)?;
+                            // A shorthand field (`S { a }`) binds `a`.
+                            let binds = fp
+                                .pattern
+                                .as_ref()
+                                .is_none_or(|sub| !sub.binding_names().is_empty());
+                            Some((i, binds))
+                        })
+                        .collect(),
+                )
+            }
+            _ => return fallback(),
+        };
+        let Some(enum_name) = self.variant_pattern_enum_name(pat) else {
+            return fallback();
+        };
+        let Some(variant) = path.last() else {
+            return fallback();
+        };
+        let params = self.enum_generic_param_names(&enum_name);
+        let Some(tys) = self
+            .enum_variant_field_type_exprs(&enum_name)
+            .into_iter()
+            .find(|(_, n, _)| n == variant)
+            .map(|(_, _, t)| t)
+        else {
+            return fallback();
+        };
+        let walked: Vec<usize> = tys
+            .iter()
+            .enumerate()
+            .filter(|(_, t)| Self::type_expr_mentions_param(t, &params))
+            .map(|(i, _)| i)
+            .collect();
+        if walked.is_empty() {
+            return fallback();
+        }
+        walked
+            .iter()
+            .all(|w| subs.iter().any(|(i, binds)| i == w && *binds))
+    }
+
     pub(super) fn variant_pattern_enum_name(&self, pat: &Pattern) -> Option<String> {
         let segments: Vec<&str> = match &pat.kind {
             PatternKind::TupleVariant { path, .. } | PatternKind::Struct { path, .. } => {
@@ -14205,7 +14303,20 @@ impl<'ctx> super::Codegen<'ctx> {
         pattern: &Pattern,
     ) -> bool {
         let tes = self.arm_consumed_payload_inst_tes(scrut_name, enum_name, pattern, false);
-        !tes.is_empty() && tes.iter().all(|te| self.type_bodies_are_element_only(te))
+        // B-2026-09-20-55 — the same scalar-sibling filter as
+        // `arm_consumes_only_generic_payload`, asked of the INSTANTIATED types:
+        // a consumed position that runs no user `Drop` body at all is neither
+        // element-only nor anything else this question is about. Unfiltered,
+        // the `i64` beside `G2.X(arr, n)`'s array answered "not element-only"
+        // and took the whole arm down with it.
+        let bodied: Vec<&TypeExpr> = tes
+            .iter()
+            .filter(|te| self.type_bodies_are_element_only(te) || self.elem_te_runs_user_drop(te))
+            .collect();
+        !bodied.is_empty()
+            && bodied
+                .iter()
+                .all(|te| self.type_bodies_are_element_only(te))
     }
 
     /// B-2026-09-25-38 — does every payload position this arm takes bind a
@@ -14519,14 +14630,39 @@ impl<'ctx> super::Codegen<'ctx> {
         if own_params.is_empty() {
             return false;
         }
-        consumed.into_iter().all(|pos| {
-            tes.get(pos)
-                .and_then(|te| match &te.kind {
-                    TypeKind::Path(p) => p.segments.first().cloned(),
-                    _ => None,
+        // B-2026-09-20-55 — a consumed position whose declared type is CONCRETE
+        // and runs no user `Drop` body has no stake in this question, and
+        // counting it failed the gate closed for every multi-field variant with
+        // a scalar sibling. The FAIL-CLOSED rule above exists for a concrete
+        // position that the name-keyed walker AND the drop switch both reach,
+        // where standing the mask down would double a body. An `i64` is reached
+        // by neither: there is no body to double. `match w { G2.X(arr, n) => .. }`
+        // bound `n`, the gate answered false, the whole walker was retracted,
+        // and the element bodies ran on no compiled surface while `--interp`
+        // and the single-field twin `G.X(arr)` ran both.
+        //
+        // A position declared with a parameter is never filtered, whatever it
+        // instantiates to; and a position the declaration does not have is
+        // kept, so it still fails the bare-param test below.
+        let relevant: Vec<usize> = consumed
+            .into_iter()
+            .filter(|&pos| {
+                tes.get(pos).is_none_or(|te| {
+                    Self::type_expr_mentions_param(te, &own_params)
+                        || self.elem_te_runs_user_drop(te)
+                        || self.type_bodies_are_element_only(te)
                 })
-                .is_some_and(|n| own_params.contains(&n))
-        })
+            })
+            .collect();
+        !relevant.is_empty()
+            && relevant.into_iter().all(|pos| {
+                tes.get(pos)
+                    .and_then(|te| match &te.kind {
+                        TypeKind::Path(p) => p.segments.first().cloned(),
+                        _ => None,
+                    })
+                    .is_some_and(|n| own_params.contains(&n))
+            })
     }
 
     /// B-2026-07-30-11 (enum leg) — does `pattern` move out a payload position
@@ -16902,7 +17038,9 @@ impl<'ctx> super::Codegen<'ctx> {
         // is left standing.
         //
         // The map is populated ONLY by the multi-field population
-        // (`user_enum_boxed_payload_variants`' `box_only` arm). Every other
+        // (`user_enum_boxed_payload_variants`' multi-field marker — named
+        // `box_only` until B-2026-09-20-55, which is the whole reason that row
+        // had to separate the two questions). Every other
         // binding that reaches here is absent from it and takes the whole-slot
         // store below, byte for byte — which matters, because this path is
         // shape-blind and a dozen registration shapes have their measurements
@@ -20106,7 +20244,7 @@ impl<'ctx> super::Codegen<'ctx> {
             && gen_boxed
                 .iter()
                 .any(|(_, _, pt, _, _)| self.boxed_payload_interior_taken_by_arm(pt));
-        for (en, variant, payload_te, box_field, box_only) in gen_boxed {
+        for (en, variant, payload_te, box_field, _multi_field) in gen_boxed {
             // BOX-ONLY WHEN AN ARM CAN TAKE THE INTERIOR OVER. For a payload
             // shape with a binding-side registration of its own — a `Vec`, a
             // `String`, an `Option`/`Result`, which is exactly what
@@ -20121,13 +20259,15 @@ impl<'ctx> super::Codegen<'ctx> {
             // for that retraction to find, so it is decided here instead.
             // An arm that BINDS NOTHING keeps the interior drop and is what
             // reclaims the payload's own heap.
-            let inner = if box_only
-                || (any_arm_binds_payload && self.boxed_payload_interior_taken_by_arm(&payload_te))
-            {
-                None
-            } else {
-                self.enum_boxed_payload_interior_drop(&payload_te, true)
-            };
+            // B-2026-09-20-55 — the multi-field marker is no longer read as
+            // "no interior"; see the `functions.rs` sibling. The arm-binding
+            // test beside it is a real ownership question and stays.
+            let inner =
+                if any_arm_binds_payload && self.boxed_payload_interior_taken_by_arm(&payload_te) {
+                    None
+                } else {
+                    self.enum_boxed_payload_interior_drop(&payload_te, true)
+                };
             self.track_boxed_enum_var_with_inner_drop_for_payload(
                 "__freshtemp_enum_scrut",
                 alloca,

@@ -6757,11 +6757,13 @@ fn main() {
 /// byte for byte; this file is what holds `--interp` to that agreement, since
 /// the codegen fixture's own `run_program` never reaches the interpreter.
 ///
-/// The two SILENT cells matter here most: three-deep nesting and a two-field
-/// variant are silent on every surface by design, and the interpreter is the
-/// side that would most easily start printing — it holds the concrete value
-/// and needs no instantiation to walk it. If either fires here, this side has
-/// been widened past the compiled one.
+/// The SILENT cell matters here most: three-deep nesting is silent on every
+/// surface by design, and the interpreter is the side that would most easily
+/// start printing — it holds the concrete value and needs no instantiation to
+/// walk it. If it fires here, this side has been widened past the compiled
+/// one. The two-field variant was the second silent cell until
+/// B-2026-09-20-55 taught both backends to walk a multi-field variant's
+/// generic field in the same commit; it now fires on every surface.
 #[test]
 fn generic_enum_container_payload_positions() {
     for (label, src, want) in [
@@ -7021,7 +7023,7 @@ println("end");
             "mid\nend\n",
         ),
         (
-            "AGREED SILENCE, a TWO-FIELD variant: the walker head skips it, so neither side may fire (before: mid|end|)",
+            "FLIPPED BY B-2026-09-20-55, a TWO-FIELD variant: the instantiation-keyed walker now takes a multi-field variant's generic field, so BOTH sides fire (before: mid|end|)",
             r#"
 struct R { id: i64 }
 impl Drop for R { fn drop(mut ref self) { println(f"dR{self.id}") } }
@@ -7042,7 +7044,7 @@ println("mid");
 println("end");
 }
 "#,
-            "mid\nend\n",
+            "dR1\ndR2\nmid\nend\n",
         ),
         (
             "CONTROL, elements with no body: nothing is due and nothing runs (before: mid|end|)",

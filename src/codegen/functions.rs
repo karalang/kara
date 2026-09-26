@@ -2757,7 +2757,7 @@ impl<'ctx> super::Codegen<'ctx> {
                             .contains(&param_name))
                 {
                     let mono_ty = self.subst_monomorph_type_params(&param.ty);
-                    for (enum_name, variant, payload_te, box_field, box_only) in
+                    for (enum_name, variant, payload_te, box_field, multi_field) in
                         self.user_enum_boxed_payload_variants(&mono_ty)
                     {
                         // B-2026-09-10-2 — the INTERIOR, which this passed as
@@ -2771,11 +2771,23 @@ impl<'ctx> super::Codegen<'ctx> {
                         // interior however the payload was built. This site is emitted
                         // once per monomorph and cannot ask per call, which is why the
                         // answer is made uniform at construction instead.
-                        let inner = if box_only {
-                            None
-                        } else {
-                            self.enum_boxed_payload_interior_drop(&payload_te, true)
-                        };
+                        // B-2026-09-20-55 — THE INTERIOR, which this used to
+                        // withhold for the whole multi-field population. The
+                        // flag it read is not a statement about ownership: it
+                        // is `user_enum_boxed_payload_variants`' marker for
+                        // "this arm is one FIELD of a multi-field variant",
+                        // introduced by B-2026-09-15-18 and given the answer
+                        // `None` here because that row registered the box and
+                        // did not measure the interior. Measured now: the
+                        // interior is owned by nobody at all — a generic
+                        // multi-field field's `EnumDropKind` is `None`, which
+                        // is the gate that admitted it here, so the drop
+                        // switch does not free it either, and
+                        // `enum G2[T] { X(T, i64), Y }` at `T = Array[R, 2]`
+                        // stranded both elements' `String`s (70 B in 2 blocks
+                        // at 35-byte strings, `-O0`) with the box recovered.
+                        // The flag keeps its one real job below.
+                        let inner = self.enum_boxed_payload_interior_drop(&payload_te, true);
                         self.track_boxed_enum_var_with_inner_drop_for_payload(
                             &param_name,
                             alloca,
@@ -2789,7 +2801,7 @@ impl<'ctx> super::Codegen<'ctx> {
                         // its slot with siblings that own their own drops, so
                         // the argument-move suppressor must zero this one word
                         // rather than the slot.
-                        if box_only {
+                        if multi_field {
                             self.payload_vars
                                 .boxed_enum_multi_field_vars
                                 .insert(param_name.clone());

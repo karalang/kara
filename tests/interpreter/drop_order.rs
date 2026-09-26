@@ -7141,3 +7141,38 @@ fn main() {
 "#);
     assert_eq!(out, "atrue\ndP1\na.\ndP2\nbfalse\nb.\nctrue\ndS3\nc.\ndS4\ndfalse\nd.\ne5\ndS5\ne.\nf6\ndS6\nf.\ngtrue\ndR7x\ng.\ndR8y\nhfalse\nh.\nitrue\ndP9\ni.\ndP10\njfalse\nj.\nktrue\ndP11\nk.\ndP12\nlfalse\nl.\ndP13\nmfalse\nm.\ndS14\nnfalse\nn.\notrue\ndP15\no.\nqtrue\ndP16\nq.\nin\ndP17\nno\nrfalse\nr.\nstrue\ndP18\ns.\nttrue\ndP19\nt.\ndS20\nufalse\nutrue\ndS21\ndS22\nufalse\nu.\nend\n", "got:\n{out}");
 }
+
+/// B-2026-09-20-55 — a MULTI-FIELD variant of a GENERIC enum instantiated
+/// at an array of a user-`Drop` type. Before the fix the instantiation-keyed
+/// bodies walker refused any variant with more than one field and the
+/// name-keyed walker skips generic fields, so every element body in `G2.X(a,
+/// 5)` was owned by nobody and never ran. Covers the param in either
+/// position (`G2`, `G3`), two param fields (`G5`, destroyed in REVERSE
+/// declaration order per B-2026-09-16-17), the struct-shaped variant (`G6`),
+/// a callee handing the value back (`c5`), a discarded construction (`c6`),
+/// and a named `match` binding the array beside a scalar sibling (`c7`).
+#[test]
+fn interp_generic_multi_field_enum_array_payload_runs_element_bodies() {
+    let out = run_no_errors(
+        r#"struct R { id: i64, s: String }
+impl Drop for R { fn drop(mut ref self) { println(f"dR{self.id}") } }
+enum G2[T] { X(T, i64), Y }
+enum G3[T] { X(i64, T), Y }
+enum G5[T] { X(T, T), Y }
+enum G6[T] { X { a: T, n: i64 }, Y }
+fn mk(b: i64) -> Array[R, 2] { return [R { id: b, s: f"pay-aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa-{b}" }, R { id: b + 1, s: f"pay-bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb-{b}" }]; }
+fn mkg(b: i64) -> G2[Array[R, 2]] { let a: Array[R, 2] = mk(b); G2.X(a, 5) }
+fn main() {
+    { let a: Array[R, 2] = mk(1); let w: G2[Array[R, 2]] = G2.X(a, 5); println("c1") }
+    { let a: Array[R, 2] = mk(3); let w: G3[Array[R, 2]] = G3.X(7, a); println("c2") }
+    { let a = mk(5); let b = mk(7); let w: G5[Array[R, 2]] = G5.X(a, b); println("c3") }
+    { let a = mk(9); let w: G6[Array[R, 2]] = G6.X { a: a, n: 5 }; println("c4") }
+    { let w = mkg(11); println("c5") }
+    { let a = mk(13); let _ = G2.X(a, 5); println("c6") }
+    { let a = mk(15); let w: G2[Array[R, 2]] = G2.X(a, 5); match w { G2.X(arr, n) => println(f"c7 {arr[0].id} {n}"), G2.Y => println("y") } }
+    println("end")
+}
+"#,
+    );
+    assert_eq!(out, "dR1\ndR2\nc1\ndR3\ndR4\nc2\ndR7\ndR8\ndR5\ndR6\nc3\ndR9\ndR10\nc4\ndR11\ndR12\nc5\ndR13\ndR14\nc6\nc7 15 5\ndR15\ndR16\nend\n", "got:\n{out}");
+}

@@ -11772,3 +11772,49 @@ fn main() {
         "asan_heap_free_drop_struct_handed_back_by_generic_fn_runs_its_body_once",
     );
 }
+
+/// B-2026-09-20-55 — a MULTI-FIELD variant of a GENERIC enum instantiated
+/// at an array of a user-`Drop` type. Before the fix the instantiation-keyed
+/// bodies walker refused any variant with more than one field and the
+/// name-keyed walker skips generic fields, so every element body in `G2.X(a,
+/// 5)` was owned by nobody and never ran. Covers the param in either
+/// position (`G2`, `G3`), two param fields (`G5`, destroyed in REVERSE
+/// declaration order per B-2026-09-16-17), the struct-shaped variant (`G6`),
+/// a callee handing the value back (`c5`), a discarded construction (`c6`),
+/// and a named `match` binding the array beside a scalar sibling (`c7`).
+/// Two rounds, so a stale slot or a freed-then-reused box surfaces.
+#[test]
+fn asan_generic_multi_field_enum_array_payload_is_freed_once() {
+    let round: &[&str] = &[
+        "dR1", "dR2", "c1", "dR3", "dR4", "c2", "dR7", "dR8", "dR5", "dR6", "c3", "dR9", "dR10",
+        "c4", "dR11", "dR12", "c5", "dR13", "dR14", "c6", "c7 15 5", "dR15", "dR16", "end",
+    ];
+    let expected: Vec<&str> = round.iter().chain(round.iter()).copied().collect();
+    assert_clean_asan_run(
+        r#"struct R { id: i64, s: String }
+impl Drop for R { fn drop(mut ref self) { println(f"dR{self.id}") } }
+enum G2[T] { X(T, i64), Y }
+enum G3[T] { X(i64, T), Y }
+enum G5[T] { X(T, T), Y }
+enum G6[T] { X { a: T, n: i64 }, Y }
+fn mk(b: i64) -> Array[R, 2] { return [R { id: b, s: f"pay-aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa-{b}" }, R { id: b + 1, s: f"pay-bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb-{b}" }]; }
+fn mkg(b: i64) -> G2[Array[R, 2]] { let a: Array[R, 2] = mk(b); G2.X(a, 5) }
+fn round() {
+    { let a: Array[R, 2] = mk(1); let w: G2[Array[R, 2]] = G2.X(a, 5); println("c1") }
+    { let a: Array[R, 2] = mk(3); let w: G3[Array[R, 2]] = G3.X(7, a); println("c2") }
+    { let a = mk(5); let b = mk(7); let w: G5[Array[R, 2]] = G5.X(a, b); println("c3") }
+    { let a = mk(9); let w: G6[Array[R, 2]] = G6.X { a: a, n: 5 }; println("c4") }
+    { let w = mkg(11); println("c5") }
+    { let a = mk(13); let _ = G2.X(a, 5); println("c6") }
+    { let a = mk(15); let w: G2[Array[R, 2]] = G2.X(a, 5); match w { G2.X(arr, n) => println(f"c7 {arr[0].id} {n}"), G2.Y => println("y") } }
+    println("end")
+}
+fn main() {
+    round()
+    round()
+}
+"#,
+        &expected,
+        "asan_generic_multi_field_enum_array_payload_is_freed_once",
+    );
+}

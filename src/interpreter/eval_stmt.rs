@@ -2416,7 +2416,13 @@ impl<'a> super::Interpreter<'a> {
     fn substituted_array_head(
         &self,
         enum_name: &str,
-        variant: &str,
+        // B-2026-09-20-55 — UNREAD since the single-field condition came out
+        // below; it was that condition's only consumer. Kept in the signature
+        // so this stays the same question at the same shape as
+        // `effective_payload_head` asks of the name-keyed head beside it, and
+        // so a future re-narrowing has the variant to hand rather than having
+        // to thread it back through two callers.
+        _variant: &str,
         declared: &TypeExpr,
         binding: Option<&str>,
     ) -> Option<String> {
@@ -2424,24 +2430,28 @@ impl<'a> super::Interpreter<'a> {
         let TypeKind::Path(dp) = &declared.kind else {
             return None;
         };
-        // SINGLE-FIELD VARIANTS ONLY, and that is the same criterion as the
-        // `Array`-only narrowing below rather than a second, arity-shaped one:
-        // substitute exactly where the compiled side is ALREADY correct.
-        // Measured on `enum G2[T] { X(T, i64), Y }` at `T = Array[R, 2]` with
-        // no callee — silent on ALL FOUR surfaces and leaking 64 B direct plus
-        // 6 B indirect at `-O0`, where the single-field `G[Array[R, 2]]` is
-        // compiled-correct and clean. So substituting for the two-field form
-        // makes the interpreter fire where every compiled surface is silent:
-        // a NEW run-vs-build divergence, traded for an agreed gap. The
-        // compiled side's two-field generic loss is the remainder, and it is
-        // recorded in B-2026-09-20-45's own row; when it is repaired this
-        // condition comes out, not before.
-        if self
-            .variant_payload_decls(enum_name, variant)
-            .is_none_or(|d| d.len() != 1)
-        {
-            return None;
-        }
+        // B-2026-09-20-55 — THE SINGLE-FIELD CONDITION IS GONE, on the same
+        // test that put it here. It read "SINGLE-FIELD VARIANTS ONLY, and that
+        // is the same criterion as the `Array`-only narrowing below rather than
+        // a second, arity-shaped one: substitute exactly where the compiled
+        // side is ALREADY correct", measured on `enum G2[T] { X(T, i64), Y }`
+        // at `T = Array[R, 2]` — silent on ALL FOUR surfaces and leaking at
+        // `-O0`, where the single-field `G[Array[R, 2]]` was compiled-correct
+        // and clean. Substituting then would have made this side fire where
+        // every compiled surface was silent: a NEW run-vs-build divergence
+        // traded for an agreed gap. Its own text says "when it is repaired this
+        // condition comes out, not before", and the repair is in this commit:
+        // the generic-enum bodies walker
+        // (`emit_generic_enum_payload_user_drop_bodies_fn`) now admits a
+        // multi-field variant with each field's own `start_word`, and the box
+        // registration resolves the interior for it, so the three compiled
+        // surfaces run both element bodies and are valgrind-clean. Keeping the
+        // condition is now what WOULD be the divergence — the same reversal
+        // B-2026-09-20-62 recorded for the `Vec` widening beside it.
+        //
+        // The two halves move in ONE COMMIT or neither moves, which is the rule
+        // this arm's own doc states and the reason its first draft was backed
+        // out.
         // Only a BARE parameter reference is substitutable: `T`, never
         // `Vec[T]`, whose own head is already concrete and already asked.
         if dp.segments.len() != 1 || dp.generic_args.as_ref().is_some_and(|a| !a.is_empty()) {
@@ -2471,6 +2481,25 @@ impl<'a> super::Interpreter<'a> {
                 _ => None,
             })
             .nth(idx)?;
+        // B-2026-09-20-55 — an array argument has TWO spellings here, and this
+        // read only one of them. An annotation or a constructor span records
+        // `Array[R, 2]` as `Path(["Array"], ..)`, which `declared_field_type_head`
+        // answers `Array`; a FUNCTION'S DECLARED RETURN (`fn mk() -> G2[Array[R,
+        // 2]]`, reached through `record_user_enum_inst_te`'s callee leg) records
+        // it as `TypeKind::Array { .. }`, which that helper answers `None`. Same
+        // type, same instantiation, and the walk went silent on it.
+        //
+        // A single-field variant never showed this: the value-shape fallback in
+        // `run_enum_payload_user_drops` maps a bare-param payload holding a
+        // `Value::Array` to the `Vec` arm, which walks it correctly by accident.
+        // That fallback is gated to single-payload variants, so the two-field
+        // `let w = mk();` was the first cell to depend on this read being right
+        // — silent here while all three compiled surfaces ran both bodies, once
+        // the compiled half of this row made them. Measured before the fix as
+        // that SPLIT, and as agreed-silent on the tree before the row.
+        if matches!(arg.kind, TypeKind::Array { .. }) {
+            return Some("Array".to_string());
+        }
         match Self::declared_field_type_head(arg).as_deref() {
             Some("Array") => Some("Array".to_string()),
             // B-2026-09-20-62. The walk already has the arm this head selects:
@@ -2581,23 +2610,27 @@ impl<'a> super::Interpreter<'a> {
         // value is a container, and only where nothing better was resolved. A
         // concretely-declared payload keeps its own head, and a binding that
         // does record an instantiation keeps the head resolved from it.
-        // SINGLE-PAYLOAD VARIANTS ONLY, the same criterion
-        // `substituted_array_head` states above and for the same reason:
-        // substitute exactly where the compiled side is already correct. A
-        // two-field variant (`enum G2[T] { X(T, i64), Y }`) is silent on ALL
-        // FOUR surfaces — the generic-enum walker head skips it outright — so
-        // firing here would make the interpreter the only surface that runs
-        // the body. Measured on `G2[Vec[R]]`, which moved when this arm was
-        // first written without the restriction.
+        // B-2026-09-20-55 — NO LONGER SINGLE-PAYLOAD ONLY. The restriction read
+        // "the same criterion `substituted_array_head` states above and for the
+        // same reason: substitute exactly where the compiled side is already
+        // correct. A two-field variant (`enum G2[T] { X(T, i64), Y }`) is silent
+        // on ALL FOUR surfaces — the generic-enum walker head skips it outright
+        // — so firing here would make the interpreter the only surface that
+        // runs the body." The walker head no longer skips it, so the premise is
+        // false in the other direction: with the restriction in place every
+        // TEMPORARY position — a discarded `let _ = G2.X(a, 5)`, a bare
+        // expression statement, a temp `match` scrutinee, a temp argument —
+        // ran both element bodies on all three compiled surfaces and on none
+        // here. Those have no binding, so `substituted_array_head` cannot
+        // answer for them and this fallback is the only reader. It comes out
+        // with its twin, in the same commit, as its own text asked.
         let own_params = self.enum_generic_param_names(enum_name);
-        let single_payload = decls.len() == 1;
         let payloads: Vec<(Option<String>, Value)> = payloads
             .into_iter()
             .map(|(head, payload)| {
                 let head = match (&head, &payload) {
                     (Some(h), Value::Array(_))
-                        if single_payload
-                            && own_params.iter().any(|p| p == h)
+                        if own_params.iter().any(|p| p == h)
                             && !matches!(enum_name.as_str(), "Option" | "Result") =>
                     {
                         Some("Vec".to_string())

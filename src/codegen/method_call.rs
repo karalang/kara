@@ -11372,14 +11372,13 @@ impl<'ctx> super::Codegen<'ctx> {
                     // so the box owns its interior on every spelling.
                     if let Some(inst) = recv_inst.clone() {
                         let inst = self.subst_monomorph_type_params(&inst);
-                        for (enum_name, variant, payload_te, box_field, box_only) in
+                        for (enum_name, variant, payload_te, box_field, multi_field) in
                             self.user_enum_boxed_payload_variants(&inst)
                         {
-                            let inner = if box_only {
-                                None
-                            } else {
-                                self.enum_boxed_payload_interior_drop(&payload_te, true)
-                            };
+                            // B-2026-09-20-55 — see the `functions.rs` sibling: the flag
+                            // marks a multi-field ARM, never an ownership answer, and the
+                            // interior of a generic multi-field field is owned by nobody.
+                            let inner = self.enum_boxed_payload_interior_drop(&payload_te, true);
                             self.track_boxed_enum_var_with_inner_drop_for_payload(
                                 "__urecv_drop_tmp",
                                 slot,
@@ -11392,7 +11391,7 @@ impl<'ctx> super::Codegen<'ctx> {
                             // B-2026-09-19-39 — see the sibling site in
                             // `functions.rs`: a multi-field variant's box shares
                             // its slot, so only its own word may be zeroed.
-                            if box_only {
+                            if multi_field {
                                 self.payload_vars
                                     .boxed_enum_multi_field_vars
                                     .insert("__urecv_drop_tmp".to_string());

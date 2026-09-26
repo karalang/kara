@@ -5221,6 +5221,25 @@ impl<'ctx> super::Codegen<'ctx> {
     /// done here to decide boxing at all, so handing it back costs nothing and
     /// is what lets a caller give the box drop an INTERIOR walk.
     ///
+    /// The fourth element is the box's own ENUM FIELD INDEX (B-2026-09-15-18)
+    /// and the fifth is `true` exactly when this arm is one FIELD of a
+    /// MULTI-FIELD variant.
+    ///
+    /// B-2026-09-20-55 — that fifth element is a marker, NOT an ownership
+    /// answer, and every caller read it as one. B-2026-09-15-18 introduced it
+    /// with the value `true` on the multi-field arm because that row registered
+    /// the BOX and did not measure the interior, and each of the six
+    /// registration sites spelled `let inner = if box_only { None } else { .. }`
+    /// off it. The interior of a generic multi-field field is owned by NOBODY:
+    /// the gate that admits such a field here is that its `EnumDropKind` is
+    /// `None`, which is precisely the statement that no arm of
+    /// `emit_enum_drop_switch` frees it. So the sites now resolve the interior
+    /// unconditionally and the marker keeps its one real job —
+    /// `boxed_enum_multi_field_vars`, which tells the argument-move suppressor
+    /// to zero the box's own WORD rather than the whole slot (B-2026-09-19-39).
+    /// Measured on `enum G2[T] { X(T, i64), Y }` at `T = Array[R, 2]`: 70 B in
+    /// 2 blocks at `-O0` with 35-byte element strings, with the box recovered.
+    ///
     /// B-2026-09-10-2 — this used to return the pair alone and every caller
     /// passed `None` for the box drop's inner drop, documented as BOX-ONLY on
     /// the reasoning that "a match arm that binds the payload owns the
