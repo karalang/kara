@@ -93,7 +93,7 @@ distinguish "bugs flattening" from "we stopped writing them down."
 | class | total |
 |---|---|
 | run-vs-build | 494 |
-| miscompile | 468 |
+| miscompile | 469 |
 | leak | 432 |
 | double-free | 317 |
 | missing-feature | 209 |
@@ -110,8 +110,8 @@ distinguish "bugs flattening" from "we stopped writing them down."
 
 | surface | total |
 |---|---|
-| codegen | 2120 |
-| interp | 564 |
+| codegen | 2121 |
+| interp | 565 |
 | typecheck | 308 |
 | other | 110 |
 | ownership | 77 |
@@ -404,7 +404,7 @@ registered in the callee's prologue, not by-value struct params in general. | �
 | B-2026-09-26-31 | 2026-09-26 | codegen | medium | THREE MORE SPELLINGS OF A NAMED `Drop`-LESS STRUCT WITH A `shared` FIELD HANDED BACK IN AN ENUM DOUBLE FREE ON EVERY COMPILED SURFACE -- a user enum conditional hand-back moved out of a `match` (`hoc3(s, true)`), a callee taking two such args (`two3(a, b)`), and the call used directly as the `unwrap` receiver (`mid3(s, true).unwrap()`) | — |
 | B-2026-09-26-32 | 2026-09-26 | codegen | low | A FRESH `Drop`-LESS STRUCT WITH A `shared` FIELD PASSED TO A CONDITIONAL HAND-BACK THAT TAKES THE `None` PATH LEAKS THE FIELD -- `let o = mid3(mk3(10), false)` prints the right output on every surface and loses 16 B at -O0 | — |
 | B-2026-09-26-33 | 2026-09-26 | interp+codegen | medium | A `Drop`-BEARING FIELD PROJECTED OFF A FRESH TEMP STILL LOSES ITS BODIES ON ALL FOUR SURFACES WHEN THE CALLEE IS GENERIC, TAKES IT BY `ref`, OR KEEPS IT -- the remainder of B-2026-09-26-23: `gn(mkw(7).r)` over `fn gn[T](x: T) -> i64 { 1 }` prints `g1 end`, `peekd(mkw(7).r)` over `fn peekd(d: ref D) -> i64` (and the method spelling `h.peek(mkw(7).r)`) prints `p7 end`, and `keep(mkw(9).r)` over `fn keep(d: D) -> D { d }` prints `k9 dD9n9 end` with the sibling's `dD109n109` never running; all valgrind-clean at -O0, so the loss is bodies only | — |
-| B-2026-09-26-34 | 2026-09-26 | interp+codegen | high | `Vec.push` OF A FIELD PROJECTED OFF A FRESH TEMP DOUBLE-FREES ON EVERY COMPILED SURFACE, AND THE NAMED-ROOT SPELLING RUNS THE MOVED FIELD'S `Drop` BODY TWICE -- `xs.push(mkq(7).name)` into a `Vec[String]`, `xs.push(wrap(mkd(7)).v)` and `xs.push(mkw(7).r)` into a `Vec[D]` abort `free(): double free detected in tcache 2` on JIT / -O2 seq / -O2 par while `--interp` prints `l1 end` or `l1 dD7n7 end` (losing the sibling's `dD107n107`); `let w = mkw(7); xs.push(w.r)` prints `dD107n107 dD7 l1 dD7n7 end` compiled -- the second-to-run `dD7` reads an EMPTY name -- and `dD107n107 dD7n7 l1 dD7n7 end` interpreted | — |
+| B-2026-09-26-35 | 2026-09-26 | interp+codegen | medium | A `Drop`-BEARING FIELD PROJECTED OFF A NAMED LOCAL AND MOVED INTO A BUILTIN SINK RUNS ITS BODY TWICE ON ALL FOUR SURFACES -- `let w = mkw(7); xs.push(w.r)` prints `dD107n107 dD7 l1 dD7n7 end` compiled (the extra `dD7` reads the moved-from field's ZEROED name) and `dD107n107 dD7n7 l1 dD7n7 end` on `--interp`, against a due `dD107n107 l1 dD7n7 end`; the same for `[w.r]`, `Some(w.r)`, `Map.insert(1, w.r)` and `VecDeque.push_back(w.r)`, while `let x = w.r`, `(w.r, 1)`, `Hh { d: w.r }` and a user fn `take(w.r)` are right | — |
 
 ### Relocated
 
@@ -3108,6 +3108,7 @@ registered in the callee's prologue, not by-value struct params in general. | �
 | B-2026-09-26-19 | codegen | high | A FIELD PROJECTION OFF A FRESH TEMP PASSED AS A CALL ARGUMENT IS FREED WRONGLY ON EVERY COMPILED SURFACE -- `bor(mkq(3).name)` with `fn bor(s: ref St… | 188d0ea8b |
 | B-2026-09-26-23 | interp+codegen | medium | A `Drop`-BEARING FIELD PROJECTED OFF A FRESH TEMP AND HANDED BY VALUE TO A CALLEE RUNS NEITHER ITS OWN BODY NOR ITS SIBLINGS', ON ALL FOUR SURFACES A… | 3e0068df6 |
 | B-2026-09-26-27 | codegen+interp | high | TWO MORE HAND-BACK SPELLINGS OF A STRUCT WITH A `shared` FIELD DOUBLE FREE ON EVERY COMPILED SURFACE -- a concrete conditional hand-back of a `Drop`-… | 0fb958d50 |
+| B-2026-09-26-34 | interp+codegen | high | `Vec.push` OF A FIELD PROJECTED OFF A FRESH TEMP DOUBLE-FREES ON EVERY COMPILED SURFACE, AND THE NAMED-ROOT SPELLING RUNS THE MOVED FIELD'S `Drop` BO… | 5ab5433d2 |
 
 </details>
 
