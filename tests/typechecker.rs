@@ -48648,6 +48648,61 @@ fn partial_move_diagnostics(source: &str) -> usize {
         .count()
 }
 
+/// B-2026-09-26-5 — `partial_move_of_drop_struct` for a chain rooted at a
+/// FRESH TEMP. A temp still reaches its destructor after the projection, so a
+/// field moved out of a `Drop` struct inside it leaves the half-populated value
+/// the rule exists for, exactly as the named spelling does. Before this the
+/// rule accepted every temp root: `let s = mkd(2).name;` ran no `D` body on any
+/// surface, and `let s = mkw(1).r.name;` freed `name` twice on every compiled
+/// surface. A copy, a read, a `.clone()` and a whole `Drop` field moved out of
+/// a struct with no `Drop` of its own stay legal.
+#[test]
+fn partial_move_of_drop_struct_fires_on_a_fresh_temp_root() {
+    const H: &str = "struct D { id: i64, name: String }\n\
+         impl Drop for D { fn drop(mut ref self) { println(f\"dD{self.id}\") } }\n\
+         fn mkd(n: i64) -> D { return D { id: n, name: f\"n{n}\" }; }\n\
+         struct W { r: D, s: D, b: i64 }\n\
+         fn mkw(n: i64) -> W { return W { r: mkd(n), s: mkd(n + 100), b: n }; }\n\
+         struct P3 { name: String, d: D }\n\
+         struct W3 { p: P3, q: D }\n\
+         struct A4 { w: W3, k: i64 }\n\
+         fn mk4() -> A4 { return A4 { w: W3 { p: P3 { name: f\"p\", d: mkd(1) }, q: mkd(2) }, k: 3 }; }\n\
+         fn take(s: String) -> i64 { return 1; }\n";
+    for (label, body, want) in [
+        ("one hop off a Drop temp", "let s = mkd(2).name;", 1),
+        ("two hops through a Drop hop", "let s = mkw(1).r.name;", 1),
+        ("three hops, the row's shape", "let s = mk4().w.q.name;", 1),
+        ("tuple element", "let t = (mkd(4).name, 1);", 1),
+        ("call argument", "let a = take(mkd(5).name);", 1),
+        (
+            "if arm",
+            "let s = if true { mkd(6).name } else { f\"z\" };",
+            1,
+        ),
+        ("clone is legal", "let s = mkd(2).name.clone();", 0),
+        ("a read is legal", "let n = mkd(8).name.len();", 0),
+        ("a scalar is a copy", "let i = mkd(9).id;", 0),
+        ("print reads", "println(mkd(7).name);", 0),
+        (
+            "a whole Drop field out of a non-Drop temp",
+            "let d = mkw(3).r;",
+            0,
+        ),
+        ("a non-Drop hop", "let s = mk4().w.p.name;", 0),
+    ] {
+        let prog = format!("{H}fn main() {{\n    {body}\n}}\n");
+        assert_eq!(partial_move_diagnostics(&prog), want, "[{label}]");
+    }
+    // The function-body positions: a tail, an arm tail and a `return`.
+    let prog = format!(
+        "{H}fn f1() -> String {{ mkw(1).r.name }}\n\
+         fn f2(c: bool) -> String {{ if c {{ mkw(2).r.name }} else {{ f\"x\" }} }}\n\
+         fn f3() -> String {{ return mkd(3).name; }}\n\
+         fn main() {{ println(f1()); println(f2(true)); println(f3()); }}\n"
+    );
+    assert_eq!(partial_move_diagnostics(&prog), 3, "[function tails]");
+}
+
 /// Sibling of [`partial_move_diagnostics`] for the ENUM rule.
 fn partial_move_enum_diagnostics(source: &str) -> usize {
     let parsed = parse(source);

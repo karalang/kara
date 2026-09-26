@@ -1759,10 +1759,11 @@ impl<'ctx> super::Codegen<'ctx> {
     ///
     /// Walks the chain down to the staged root, zeroes the LAST hop's field in
     /// its parent inside the slot, and runs the temp's remaining bodies with
-    /// the taken leaf masked by a nested skip. Declines, leaving today's
-    /// behaviour, when any intermediate struct is generic (its slot layout is
-    /// a monomorph this walk does not resolve) or has a `Drop` of its own
-    /// (whether that move is legal on a temp is the typechecker's question).
+    /// the taken leaf masked by a nested skip. A generic root or hop resolves
+    /// through its instantiation (B-2026-09-26-5). Declines, leaving today's
+    /// behaviour, when an intermediate struct has a `Drop` of its own: the
+    /// typechecker rejects that move (`partial_move_of_drop_struct`) since the
+    /// same fix.
     fn consume_freshtemp_nested_field_move(&mut self, value: &Expr) {
         let mut path: Vec<&str> = Vec::new();
         let mut cur = value;
@@ -1792,13 +1793,28 @@ impl<'ctx> super::Codegen<'ctx> {
                 .get(n)
                 .is_some_and(|p| !p.is_empty())
         };
-        if generic(self, &name) {
+        // B-2026-09-26-5 — a GENERIC root or hop resolves through its
+        // instantiation: the root's from the temp's recorded one
+        // (`freshtemp_field_access_inst`), each child's from its field type
+        // under the parent's subst. Every hop carries (subst, concrete type
+        // expr) so its GEP uses the monomorph layout, not the erased base.
+        let root_inst = self.freshtemp_field_access_inst.clone();
+        let root_subst = match (&root_inst, generic(self, &name)) {
+            (Some(inst), true) => self.generic_struct_subst_from_inst(&name, inst),
+            (None, true) => return,
+            (_, false) => std::collections::HashMap::new(),
+        };
+        if generic(self, &name) && root_subst.is_empty() {
             return;
         }
         // Resolve each hop: (parent struct, field index), and the parent of
         // the last hop.
         let mut hops: Vec<(String, usize)> = Vec::new();
+        let mut hop_substs: Vec<std::collections::HashMap<String, TypeExpr>> = Vec::new();
+        let mut hop_insts: Vec<Option<TypeExpr>> = Vec::new();
         let mut parent = name.clone();
+        let mut parent_subst = root_subst.clone();
+        let mut parent_inst = root_inst.clone().filter(|_| generic(self, &name));
         for (i, f) in path.iter().enumerate() {
             let Some(idx) = self
                 .type_decls
@@ -1809,37 +1825,56 @@ impl<'ctx> super::Codegen<'ctx> {
                 return;
             };
             hops.push((parent.clone(), idx));
+            hop_substs.push(parent_subst.clone());
+            hop_insts.push(parent_inst.clone());
             if i + 1 == path.len() {
                 break;
             }
-            let Some(child) = self
+            let Some(child_te) = self
                 .type_decls
                 .struct_field_type_exprs
                 .get(parent.as_str())
                 .and_then(|tes| tes.get(idx))
-                .and_then(|te| match &te.kind {
-                    TypeKind::Path(p) if p.generic_args.is_none() => p.segments.last().cloned(),
-                    _ => None,
-                })
+                .map(|te| super::helpers::subst_type_params_in_type_expr(te, &parent_subst))
             else {
+                return;
+            };
+            let Some(child) = (match &child_te.kind {
+                TypeKind::Path(p) => p.segments.last().cloned(),
+                _ => None,
+            }) else {
                 return;
             };
             if !self.type_decls.struct_types.contains_key(child.as_str())
                 || self.type_decls.shared_types.contains_key(child.as_str())
-                || generic(self, &child)
                 || own_drop(self, &child)
             {
                 return;
+            }
+            if generic(self, &child) {
+                parent_subst = self.generic_struct_subst_from_inst(&child, &child_te);
+                if parent_subst.is_empty() {
+                    return;
+                }
+                parent_inst = Some(child_te);
+            } else {
+                parent_subst = std::collections::HashMap::new();
+                parent_inst = None;
             }
             parent = child;
         }
         self.freshtemp_field_access_slot = None;
         let _ = self.freshtemp_field_access_inst.take();
         self.disarm_freshtemp_read_bodies(slot);
-        // GEP down to the last hop's parent inside the slot.
+        // GEP down to the last hop's parent inside the slot, each hop at its
+        // monomorph layout when it is generic.
+        let hop_st = |me: &Self, i: usize| {
+            me.mono_struct_type_from_subst(&hops[i].0, &hop_substs[i])
+                .or_else(|| me.type_decls.struct_types.get(hops[i].0.as_str()).copied())
+        };
         let mut ptr = slot;
-        for (pname, idx) in &hops[..hops.len() - 1] {
-            let Some(st) = self.type_decls.struct_types.get(pname.as_str()).copied() else {
+        for (i, (_, idx)) in hops[..hops.len() - 1].iter().enumerate() {
+            let Some(st) = hop_st(self, i) else {
                 return;
             };
             ptr = self
@@ -1847,8 +1882,16 @@ impl<'ctx> super::Codegen<'ctx> {
                 .build_struct_gep(st, ptr, *idx as u32, "freshtemp.hop")
                 .unwrap();
         }
-        let (last_parent, _) = hops.last().cloned().unwrap();
-        self.zero_struct_field_move_cap(ptr, &last_parent, path[path.len() - 1]);
+        let last = hops.len() - 1;
+        let (last_parent, _) = hops[last].clone();
+        let last_st = hop_st(self, last);
+        self.zero_struct_field_move_cap_inst(
+            ptr,
+            &last_parent,
+            path[path.len() - 1],
+            last_st,
+            hop_insts[last].as_ref(),
+        );
         let mut skip = super::synth_drop::FieldSkipTree::default();
         {
             let mut cur = &mut skip;
@@ -1857,7 +1900,9 @@ impl<'ctx> super::Codegen<'ctx> {
             }
             cur.here.insert(hops[hops.len() - 1].1);
         }
-        if let Some(bodies) = self.field_bodies_fn_for_owned_temp_skipping(&name, &skip) {
+        if let Some(bodies) =
+            self.field_bodies_fn_for_owned_temp_mono_skipping(&name, &root_subst, &skip)
+        {
             self.builder.build_call(bodies, &[slot.into()], "").unwrap();
         }
     }
@@ -2102,7 +2147,16 @@ impl<'ctx> super::Codegen<'ctx> {
             return;
         }
         self.freshtemp_field_access_slot = None;
-        self.zero_struct_field_move_cap(slot, &name, field);
+        // B-2026-09-26-5 — at the temp's INSTANTIATION when it is generic, so
+        // a `T` field is zeroed at its monomorph offset and type: `mk2().v`
+        // over `G2[String]` zeroed nothing (the erased base sees `v` as a word)
+        // and the temp's drop freed the `String` the binding held.
+        let inst = self.freshtemp_field_access_inst.clone();
+        let mono_st = inst.as_ref().and_then(|i| {
+            let subst = self.generic_struct_subst_from_inst(&name, i);
+            self.mono_struct_type_from_subst(&name, &subst)
+        });
+        self.zero_struct_field_move_cap_inst(slot, &name, field, mono_st, inst.as_ref());
         // B-2026-09-17-36 — the consumer owns the projected field and the
         // masked walk below owns the rest, so the statement-end walk
         // `track_freshtemp_read_bodies` armed must not run this temp again.

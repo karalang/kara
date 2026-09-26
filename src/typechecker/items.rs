@@ -4906,9 +4906,15 @@ impl<'a> super::TypeChecker<'a> {
             ExprKind::FieldAccess { object, .. } | ExprKind::TupleIndex { object, .. } => object,
             _ => return None,
         };
-        let owner = self.drop_impl_type_name_of(object)?;
-        // The root must be an owned binding. A borrow root copies instead of
-        // moving, and belongs to `warn_borrow_projection_copy`.
+        // B-2026-09-26-5 — a chain rooted at a FRESH TEMP has no named place
+        // to resolve, so its owner's type is read from the type already
+        // recorded for the projected object.
+        let owner = match self.drop_impl_type_name_of(object) {
+            Some(o) => o,
+            None => self.drop_impl_type_name_of_fresh_projection(object)?,
+        };
+        // The root must be an owned binding or a fresh temp. A borrow root
+        // copies instead of moving, and belongs to `warn_borrow_projection_copy`.
         let mut cur = value;
         loop {
             match &cur.kind {
@@ -4926,12 +4932,34 @@ impl<'a> super::TypeChecker<'a> {
                 ExprKind::SelfValue => {
                     return (!self.current_fn_ref_params.contains("self")).then_some(owner);
                 }
-                // A call, a literal, an index: the value is fresh or is
-                // somebody else's element, and neither leaves a NAMED struct
-                // half-moved for its own destructor to walk.
+                // B-2026-09-26-5 — a FRESH TEMP (a call's or method call's
+                // result, minus the accessors that alias a container's
+                // element) is owned by nobody else and still reaches its
+                // destructor after the projection, so a field moved out of a
+                // `Drop` struct inside it leaves exactly the half-populated
+                // value the rule exists for: `mkd(2).name` ran no `D` body on
+                // any surface, and `mkw(1).r.name` freed `name` twice compiled.
+                _ if crate::ast::projection_reads_fresh_temp(cur) => return Some(owner),
+                // A literal, an index: the value is somebody else's element or
+                // has no destructor of its own to walk.
                 _ => return None,
             }
         }
+    }
+
+    /// B-2026-09-26-5 — [`Self::drop_impl_type_name_of`] for a projected object
+    /// that is not a named place: the chain's root is a fresh temp, so the type
+    /// comes from the one already recorded for `expr`.
+    fn drop_impl_type_name_of_fresh_projection(&self, expr: &Expr) -> Option<String> {
+        let name = match self.expr_types.get(&SpanKey::from_span(&expr.span))? {
+            Type::Named { name, .. } => name.clone(),
+            _ => return None,
+        };
+        self.env
+            .impls
+            .iter()
+            .any(|imp| imp.trait_name.as_deref() == Some("Drop") && imp.target_type == name)
+            .then_some(name)
     }
 
     /// The named type of a place expression, resolved from the scope and the

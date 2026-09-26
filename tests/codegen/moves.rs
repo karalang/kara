@@ -2237,9 +2237,10 @@ fn e2e_field_moved_through_a_fresh_temp_projection_has_one_owner() {
 /// consuming position (`let`, assignment, tuple element, constructor argument,
 /// `return`, function tail).
 ///
-/// The PINNED cell is a non-scalar field moved off such a temp
-/// (`mkqs().s`), which runs no body on either backend; whether that move is
-/// legal on a temp at all is the typechecker's question.
+/// A non-scalar field moved off such a temp (`mkqs().s`) is no longer a cell
+/// here: it ran no body on either backend, and since B-2026-09-26-5 it is the
+/// same `partial_move_of_drop_struct` error the named spelling gets
+/// (`tests/typechecker.rs`'s `partial_move_of_drop_struct_fires_on_a_fresh_temp_root`).
 #[test]
 fn e2e_scalar_taken_off_a_fresh_temp_runs_its_types_own_drop() {
     const H: &str = "struct D { id: i64, name: String }\n\
@@ -2293,11 +2294,6 @@ fn e2e_scalar_taken_off_a_fresh_temp_runs_its_types_own_drop() {
             "control: the named spelling",
             "let q = mkq(); let x = q.k; println(f\"x{x}\");",
             "dQ4\ndD3n3\nx4\nend\n",
-        ),
-        (
-            "pinned: a non-scalar moved off the temp",
-            "let s = mkqs().s; println(s);",
-            "ss\nend\n",
         ),
     ] {
         let prog = format!("{H}fn main() {{\n    {body}\n    println(\"end\")\n}}\n");
@@ -2647,6 +2643,118 @@ fn e2e_fresh_temp_read_in_a_function_tail_runs_its_bodies() {
             "control: a bare projection tail",
             "println(f\"t{p13()}\");",
             "dD113\ndD13\nt13\nend\n",
+        ),
+    ] {
+        let prog = format!("{H}fn main() {{\n    {body}\n    println(\"end\")\n}}\n");
+        let (interp_out, interp_errs, _, _) = karac::run_program_full_checked(&prog);
+        assert!(
+            interp_errs.is_empty(),
+            "[{label}] interp errored: {interp_errs:?}"
+        );
+        assert_eq!(interp_out.join(""), want, "[{label}] interpreter");
+        if let Some(aot) = run_program(&prog) {
+            assert_eq!(aot, want, "[{label}] AOT");
+        }
+    }
+}
+
+/// B-2026-09-26-5 — a heap field moved out through a GENERIC fresh temp is
+/// freed once, on every surface. Before this the nested consumer declined any
+/// generic root or hop and the one-hop consumer zeroed the field at the erased
+/// base layout, so `let s = mkg2().v.name;` and `let s = mk2().v;` (a `T` field
+/// at `T = String`) aborted with a double free on every compiled surface. Each
+/// hop now resolves through its instantiation: the root's recorded one, and
+/// each child's from its field type under the parent's substitution.
+#[test]
+fn e2e_heap_field_moved_through_a_generic_fresh_temp_is_freed_once() {
+    const H: &str = "struct D { id: i64, name: String }\n\
+             impl Drop for D { fn drop(mut ref self) { println(f\"dD{self.id}{self.name}\") } }\n\
+             fn mkd(n: i64) -> D { return D { id: n, name: f\"n{n}\" }; }\n\
+             struct P { name: String }\n\
+             struct P2 { name: String, d: D }\n\
+             struct G[T] { v: T, k: i64 }\n\
+             fn mkg2() -> G[P] { return G { v: P { name: f\"gg\" }, k: 5 }; }\n\
+             fn mkg3() -> G[P2] { return G { v: P2 { name: f\"hh\", d: mkd(3) }, k: 6 }; }\n\
+             fn wrap[T](x: T) -> G[T] { return G { v: x, k: 7 }; }\n\
+             struct H2[T] { a: G[T], k: i64 }\n\
+             fn mkh() -> H2[P] { return H2 { a: G { v: P { name: f\"ii\" }, k: 1 }, k: 2 }; }\n\
+             fn g1() -> String { mkg2().v.name }\n\
+             struct G2[T] { v: T, w: P, k: i64 }\n\
+             fn mk2() -> G2[String] { return G2 { v: f\"vv\", w: P { name: f\"ww\" }, k: 1 }; }\n\
+             fn mk3() -> G2[P] { return G2 { v: P { name: f\"v3\" }, w: P { name: f\"w3\" }, k: 1 }; }\n\
+             struct Pair[A, B] { a: A, b: B }\n\
+             fn mkp() -> Pair[String, P] { return Pair { a: f\"aa\", b: P { name: f\"bb\" } }; }\n";
+    for (label, body, want) in [
+        (
+            "generic root, two hops",
+            "let s = mkg2().v.name; println(s);",
+            "gg\nend\n",
+        ),
+        (
+            "generic root, remainder body",
+            "let s = mkg3().v.name; println(s);",
+            "dD3n3\nhh\nend\n",
+        ),
+        (
+            "generic fn's result",
+            "let s = wrap(P { name: f\"ww\" }).v.name; println(s);",
+            "ww\nend\n",
+        ),
+        (
+            "generic hop inside a generic root",
+            "let s = mkh().a.v.name; println(s);",
+            "ii\nend\n",
+        ),
+        ("function tail", "println(g1());", "gg\nend\n"),
+        (
+            "tuple element",
+            "let t = (mkg2().v.name, 1); println(t.0);",
+            "gg\nend\n",
+        ),
+        (
+            "if arm",
+            "let s = if true { mkg2().v.name } else { f\"z\" }; println(s);",
+            "gg\nend\n",
+        ),
+        (
+            "field after a widened T",
+            "let s = mk2().w.name; println(s);",
+            "ww\nend\n",
+        ),
+        (
+            "sibling of a struct T",
+            "let s = mk3().w.name; println(s);",
+            "w3\nend\n",
+        ),
+        (
+            "through the struct T",
+            "let s = mk3().v.name; println(s);",
+            "v3\nend\n",
+        ),
+        (
+            "two type params",
+            "let s = mkp().b.name; println(s);",
+            "bb\nend\n",
+        ),
+        (
+            "one hop, a String T",
+            "let s = mk2().v; println(s);",
+            "vv\nend\n",
+        ),
+        (
+            "one hop, first param",
+            "let s = mkp().a; println(s);",
+            "aa\nend\n",
+        ),
+        (
+            "one hop, tuple element",
+            "let t = (mk2().v, 1); println(t.0);",
+            "vv\nend\n",
+        ),
+        (
+            "control: a scalar",
+            "let k = mk2().k; println(f\"k{k}\");",
+            "k1\nend\n",
         ),
     ] {
         let prog = format!("{H}fn main() {{\n    {body}\n    println(\"end\")\n}}\n");

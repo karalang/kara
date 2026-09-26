@@ -3220,3 +3220,43 @@ fn main() {
         14,
     );
 }
+
+/// B-2026-09-26-5 — a heap field moved out through a GENERIC fresh temp (two
+/// hops, a generic hop inside a generic root, a field after a widened `T`, a
+/// one-hop `T` at `String`, an arm and a function tail) is freed once. Each was
+/// a double free on every compiled surface; the strings are longer than the
+/// inline capacity, so a second free is an ASAN report.
+#[test]
+fn asan_heap_field_moved_through_a_generic_fresh_temp_is_freed_once() {
+    assert_clean_asan_run_min_allocs(
+        r#"struct P { name: String }
+struct G[T] { v: T, k: i64 }
+fn mkg2() -> G[P] { return G { v: P { name: f"g-string-longer-than-sso-1" }, k: 5 }; }
+struct H2[T] { a: G[T], k: i64 }
+fn mkh() -> H2[P] { return H2 { a: G { v: P { name: f"h-string-longer-than-sso-2" }, k: 1 }, k: 2 }; }
+struct G2[T] { v: T, w: P, k: i64 }
+fn mk2() -> G2[String] { return G2 { v: f"v-string-longer-than-sso-3", w: P { name: f"w-string-longer-than-sso-4" }, k: 1 }; }
+fn g1() -> String { mkg2().v.name }
+fn main() {
+    let a = mkg2().v.name; println(a);
+    let b = mkh().a.v.name; println(b);
+    let c = mk2().w.name; println(c);
+    let d = mk2().v; println(d);
+    let e = if true { mkg2().v.name } else { f"z" }; println(e);
+    println(g1());
+    println("end")
+}
+"#,
+        &[
+            "g-string-longer-than-sso-1",
+            "h-string-longer-than-sso-2",
+            "w-string-longer-than-sso-4",
+            "v-string-longer-than-sso-3",
+            "g-string-longer-than-sso-1",
+            "g-string-longer-than-sso-1",
+            "end",
+        ],
+        "asan_heap_field_moved_through_a_generic_fresh_temp_is_freed_once",
+        6,
+    );
+}
