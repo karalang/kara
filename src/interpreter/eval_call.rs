@@ -2273,6 +2273,22 @@ impl<'a> super::Interpreter<'a> {
                     closure_env.is_some(),
                 );
                 self.owned_param_names_stack.push(seed_params);
+                // B-2026-09-26-37 — see `PayloadEscapeFrame`.
+                self.payload_escape_frames
+                    .push(crate::interpreter::PayloadEscapeFrame {
+                        params: if closure_env.is_some() {
+                            Vec::new()
+                        } else {
+                            param_patterns
+                                .iter()
+                                .map(|p| match &p.kind {
+                                    crate::ast::PatternKind::Binding(n) => n.clone(),
+                                    _ => String::new(),
+                                })
+                                .collect()
+                        },
+                        ..Default::default()
+                    });
                 // B-2026-09-06-9 — the whole-alias sibling; see the field.
                 let whole_aliases = if closure_env.is_some() {
                     std::collections::HashSet::new()
@@ -2422,6 +2438,11 @@ impl<'a> super::Interpreter<'a> {
                     }
                 }
                 self.owned_param_names_stack.pop();
+                let call_payload_escapes = self
+                    .payload_escape_frames
+                    .pop()
+                    .map(|f| f.escapes)
+                    .unwrap_or_default();
                 self.whole_param_alias_stack.pop();
                 self.consumed_payload_local_names_stack.pop();
                 self.owned_param_frame_is_method.pop();
@@ -2608,6 +2629,7 @@ impl<'a> super::Interpreter<'a> {
                 // spelling of the identical body, was already correct because
                 // `method_call.rs` passes its receiver type. Resolution-only:
                 // `CalleeOwner::Assoc` leaves the receiver-shaped guard off.
+                self.pending_call_payload_escapes = call_payload_escapes;
                 self.run_fresh_temp_arg_drops(
                     &fn_name,
                     assoc_owner.map(CalleeOwner::Assoc),
@@ -4012,7 +4034,7 @@ impl<'a> super::Interpreter<'a> {
     /// Can a leaf VALUE own something a `Drop` body observes? A scalar, unit
     /// or `shared` leaf cannot, so declining a mask for it loses no owner
     /// while removing it could hand a parent's own body a hole to read.
-    fn value_leaf_can_own(leaf: &Value) -> bool {
+    pub(super) fn value_leaf_can_own(leaf: &Value) -> bool {
         !matches!(
             leaf,
             Value::Int(_)
@@ -4365,6 +4387,22 @@ impl<'a> super::Interpreter<'a> {
         found
     }
 
+    /// B-2026-09-26-37 — does the dynamic payload-escape record apply to
+    /// argument `i` of this call? Only in the shape codegen settles per path
+    /// too ([`crate::ast::optres_param_part_returns_are_callee_owned_shape`]);
+    /// everywhere else both backends keep their pre-existing answer.
+    fn dyn_payload_escapes_apply(
+        &self,
+        callee_name: &str,
+        method_owner: Option<CalleeOwner<'_>>,
+        i: usize,
+    ) -> bool {
+        self.callee_fn_for_ownership_guard_of(callee_name, method_owner)
+            .is_some_and(|f| {
+                crate::ast::optres_param_part_returns_are_callee_owned_shape(self.program, f, i)
+            })
+    }
+
     /// `method_owner` is `Some(type)` when the call being walked is an INSTANCE
     /// METHOD call (B-2026-09-03-7). It selects exact `(type, method)` callee
     /// resolution for the guards below, and nothing else: the walk itself is
@@ -4402,6 +4440,11 @@ impl<'a> super::Interpreter<'a> {
         // is skipped by this walk and drops through its own binding, so a mixed
         // `take(a, R { id: 2 })` is sequenced by the two owners' relative
         // program order and was already correct.
+        // B-2026-09-26-37 — the payload parts this RUN of the callee handed
+        // out through a `return`, which the static channels below cannot see
+        // when the return is conditional (`if k { return t.r; }`). Taken, so a
+        // later call cannot inherit them.
+        let dyn_escapes = std::mem::take(&mut self.pending_call_payload_escapes);
         for (i, arg) in args.iter().enumerate().rev() {
             // B-2026-07-01-7 passthrough guard + B-2026-08-26-9 escape guard,
             // both now asked through `callee_owns_arg_beyond_call` so the two
@@ -4557,6 +4600,17 @@ impl<'a> super::Interpreter<'a> {
                                         changed_hands.push(names);
                                     }
                                 }
+                            }
+                            // B-2026-09-26-37 — and what this run actually
+                            // returned, leaf-gated at the `return`, in the
+                            // shape codegen settles the same way.
+                            if self.dyn_payload_escapes_apply(callee_name, method_owner, i) {
+                                changed_hands.extend(
+                                    dyn_escapes
+                                        .iter()
+                                        .filter(|(idx, _)| *idx == i)
+                                        .map(|(_, path)| path.clone()),
+                                );
                             }
                             for names in changed_hands {
                                 self.moved_out_optres_payload_bodies
@@ -4763,6 +4817,20 @@ impl<'a> super::Interpreter<'a> {
                             &variant,
                             &mut v,
                         );
+                        // B-2026-09-26-37 — and the parts this run returned.
+                        let dyn_apply =
+                            self.dyn_payload_escapes_apply(callee_name, method_owner, i);
+                        if let Value::EnumVariant {
+                            data: EnumData::Tuple(vs),
+                            ..
+                        } = &mut v
+                        {
+                            if let (true, [payload]) = (dyn_apply, vs.as_mut_slice()) {
+                                for (_, path) in dyn_escapes.iter().filter(|(idx, _)| *idx == i) {
+                                    Self::remove_field_at_path(payload, path);
+                                }
+                            }
+                        }
                         self.run_optres_payload_user_drops_value(&v);
                         continue;
                     }

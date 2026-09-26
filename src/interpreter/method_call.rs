@@ -671,6 +671,26 @@ impl<'a> super::Interpreter<'a> {
                 // stack must too or the gates diverge per-backend.
                 let seed_params = self.method_owned_param_names(&type_name, method);
                 self.owned_param_names_stack.push(seed_params);
+                // B-2026-09-26-37 — see `PayloadEscapeFrame`. `params` is the
+                // AST list, which excludes the receiver, matching the
+                // receiver-stripped `args` the post-call walk indexes.
+                let escape_params: Vec<String> = self
+                    .impl_method_ast(&type_name, method)
+                    .map(|f| {
+                        f.params
+                            .iter()
+                            .map(|p| match &p.pattern.kind {
+                                crate::ast::PatternKind::Binding(n) => n.clone(),
+                                _ => String::new(),
+                            })
+                            .collect()
+                    })
+                    .unwrap_or_default();
+                self.payload_escape_frames
+                    .push(crate::interpreter::PayloadEscapeFrame {
+                        params: escape_params,
+                        ..Default::default()
+                    });
                 // B-2026-09-06-9 — the whole-alias sibling; see the field.
                 let whole_aliases = self
                     .impl_method_ast(&type_name, method)
@@ -875,6 +895,11 @@ impl<'a> super::Interpreter<'a> {
                 // caller's to walk. See `record_method_arg_moves`.
                 self.record_method_arg_moves(&type_name, method, args);
                 self.owned_param_names_stack.pop();
+                let call_payload_escapes = self
+                    .payload_escape_frames
+                    .pop()
+                    .map(|f| f.escapes)
+                    .unwrap_or_default();
                 self.whole_param_alias_stack.pop();
                 self.consumed_payload_local_names_stack.pop();
                 self.owned_param_frame_is_method.pop();
@@ -1060,6 +1085,7 @@ impl<'a> super::Interpreter<'a> {
                 // correction the writeback loop above makes.
                 let recv_off = arg_vals.len().saturating_sub(args.len());
                 let owner = type_name.clone();
+                self.pending_call_payload_escapes = call_payload_escapes;
                 self.run_fresh_temp_arg_drops(
                     method,
                     Some(super::eval_call::CalleeOwner::Instance(&owner)),

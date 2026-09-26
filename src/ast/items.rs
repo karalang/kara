@@ -5811,6 +5811,139 @@ pub fn fn_escaping_param_payload_part_paths(
     arg_index: usize,
     variant: Option<&str>,
 ) -> Vec<ParamPath> {
+    escaping_param_payload_part_paths_impl(f, arg_index, variant, false)
+}
+
+/// B-2026-09-26-37 — [`fn_escaping_param_payload_part_paths`] WITHOUT its
+/// `top` rule: every projection off the arm binding that is handed out on ANY
+/// path, a nested `if` / `match` / loop included. Not a mask — it cannot say
+/// which branch a run takes, which is exactly why the sibling refuses to
+/// record there — but the SHAPE question
+/// [`optres_param_part_returns_are_callee_owned_shape`] asks of the callee.
+pub fn fn_param_payload_part_paths_returned_on_any_path(
+    f: &Function,
+    arg_index: usize,
+    variant: Option<&str>,
+) -> Vec<ParamPath> {
+    escaping_param_payload_part_paths_impl(f, arg_index, variant, true)
+}
+
+/// B-2026-09-26-37 — is by-value `Option`/`Result` param `arg_index` of `f` one
+/// whose payload parts are handed out ONLY on some paths, in the one shape
+/// both backends can settle per path?
+///
+/// `fn eat(o: Option[Hd3], k: bool) -> R { match o { Some(t) => { if k {
+/// return t.r; } .. } .. } }` hands `t.r` out when `k` and not otherwise, so
+/// the answer to "who runs `t.r`'s body" differs by path. The statement-level
+/// channels above refuse to record that, correctly, and the named-local
+/// spelling was left with its let-site walk armed beside the callee's arm
+/// binding's walk: two owners on every compiled surface, and on the
+/// interpreter a doubled body at `k = true`.
+///
+/// Both ends of the call ask THIS predicate, so they settle the same calls:
+/// codegen stands the named local's walk down (the callee's arm binding's
+/// walk honours each move per path), and the interpreter masks exactly the
+/// parts this run of the callee returned. Everything this declines keeps its
+/// pre-existing answer on both backends.
+///
+/// Deliberately narrow, each clause a shape measured to need more than this:
+///
+///   * every payload is a plain, non-generic, non-`shared` struct the
+///     program declares, or a scalar / `String` — a TUPLE payload arms no
+///     callee-side walk at all, so standing the caller down there loses every
+///     element's body;
+///   * every part handed out on any path is ONE field hop — a deeper part
+///     (`return t.h.r`) moved on one path is masked on every path by the
+///     callee's walk, so standing down loses it on the others;
+///   * the statement-level channels are EMPTY, so no static mask is in play
+///     and the per-path answer is the only one; and
+///   * at least one part is handed out, so the predicate says nothing about a
+///     callee that hands nothing out.
+pub fn optres_param_part_returns_are_callee_owned_shape(
+    program: &crate::ast::Program,
+    f: &Function,
+    arg_index: usize,
+) -> bool {
+    let Some(param) = f.params.get(arg_index) else {
+        return false;
+    };
+    let PatternKind::Binding(pname) = &param.pattern.kind else {
+        return false;
+    };
+    let crate::ast::TypeKind::Path(p) = &param.ty.kind else {
+        return false;
+    };
+    if !matches!(
+        p.segments.last().map(String::as_str),
+        Some("Option") | Some("Result")
+    ) {
+        return false;
+    }
+    if !crate::result_escape::by_value_nonescaping_param_names(f).contains(pname.as_str()) {
+        return false;
+    }
+    let Some(args) = p.generic_args.as_ref() else {
+        return false;
+    };
+    let payload_ok = |te: &crate::ast::TypeExpr| -> bool {
+        let crate::ast::TypeKind::Path(tp) = &te.kind else {
+            return false;
+        };
+        if tp.generic_args.is_some() || tp.segments.len() != 1 {
+            return false;
+        }
+        let name = tp.segments[0].as_str();
+        if matches!(
+            name,
+            "i8" | "i16"
+                | "i32"
+                | "i64"
+                | "u8"
+                | "u16"
+                | "u32"
+                | "u64"
+                | "isize"
+                | "usize"
+                | "f32"
+                | "f64"
+                | "bool"
+                | "char"
+                | "String"
+        ) {
+            return true;
+        }
+        program.items.iter().any(|it| {
+            matches!(it, Item::StructDef(sd)
+                if sd.name == name
+                    && !sd.is_shared
+                    && !sd.is_par
+                    && sd.generic_params.is_none())
+        })
+    };
+    for a in args {
+        match a {
+            crate::ast::GenericArg::Type(te) if payload_ok(te) => {}
+            _ => return false,
+        }
+    }
+    if !fn_escaping_param_payload_part_paths(f, arg_index, None).is_empty()
+        || !fn_consumed_param_payload_part_paths(f, arg_index, None).is_empty()
+    {
+        return false;
+    }
+    let any = fn_param_payload_part_paths_returned_on_any_path(f, arg_index, None);
+    !any.is_empty()
+        && any
+            .iter()
+            .all(|path| matches!(path.as_slice(), [ParamPart::Field(_)]))
+}
+
+fn escaping_param_payload_part_paths_impl(
+    f: &Function,
+    arg_index: usize,
+    variant: Option<&str>,
+    any_path: bool,
+) -> Vec<ParamPath> {
     let Some(param) = f.params.get(arg_index) else {
         return Vec::new();
     };
@@ -5858,40 +5991,46 @@ pub fn fn_escaping_param_payload_part_paths(
         whole: &mut bool,
         top: bool,
         tail: bool,
+        any_path: bool,
     ) {
-        let mut record = |e: &Expr, top: bool| match optres_part_denote(e, root) {
+        // B-2026-09-26-37 — the any-path mode answers a SHAPE question for two
+        // backends, and the interpreter settles it at an explicit `return`
+        // only. A part yielded by a TAIL off the arm binding declines the
+        // whole shape instead (`is_tail`), so neither end takes it up.
+        let mut record = |e: &Expr, top: bool, is_tail: bool| match optres_part_denote(e, root) {
             Some(p) if p.is_empty() => *whole = true,
-            Some(p) if top && !out.contains(&p) => {
+            Some(_) if any_path && is_tail => *whole = true,
+            Some(p) if (top || any_path) && !out.contains(&p) => {
                 out.push(p);
             }
             _ => {}
         };
         if tail {
-            record(e, top);
+            record(e, top, true);
         }
         match &e.kind {
             ExprKind::Return(Some(inner)) => {
-                record(inner, top);
-                returns_in(inner, root, out, whole, false, false);
+                record(inner, top, false);
+                returns_in(inner, root, out, whole, false, false, any_path);
             }
             ExprKind::Block(b)
             | ExprKind::Unsafe(b)
             | ExprKind::Try(b)
             | ExprKind::Seq(b)
-            | ExprKind::Par(b) => returns_in_block(b, root, out, whole, top, tail),
+            | ExprKind::Par(b) => returns_in_block(b, root, out, whole, top, tail, any_path),
             ExprKind::If {
                 then_block,
                 else_branch,
                 ..
             } => {
-                returns_in_block(then_block, root, out, whole, false, tail);
+                returns_in_block(then_block, root, out, whole, false, tail, any_path);
                 if let Some(x) = else_branch.as_deref() {
-                    returns_in(x, root, out, whole, false, tail);
+                    returns_in(x, root, out, whole, false, tail, any_path);
                 }
             }
             ExprKind::Match { arms, .. } => {
                 for a in arms {
-                    returns_in(&a.body, root, out, whole, false, tail);
+                    returns_in(&a.body, root, out, whole, false, tail, any_path);
                 }
             }
             ExprKind::IfLet {
@@ -5899,9 +6038,9 @@ pub fn fn_escaping_param_payload_part_paths(
                 else_branch,
                 ..
             } => {
-                returns_in_block(then_block, root, out, whole, false, tail);
+                returns_in_block(then_block, root, out, whole, false, tail, any_path);
                 if let Some(x) = else_branch.as_deref() {
-                    returns_in(x, root, out, whole, false, tail);
+                    returns_in(x, root, out, whole, false, tail, any_path);
                 }
             }
             ExprKind::While { body, .. }
@@ -5909,7 +6048,7 @@ pub fn fn_escaping_param_payload_part_paths(
             | ExprKind::For { body, .. }
             | ExprKind::Loop { body, .. }
             | ExprKind::LabeledBlock { body, .. } => {
-                returns_in_block(body, root, out, whole, false, false)
+                returns_in_block(body, root, out, whole, false, false, any_path)
             }
             _ => {}
         }
@@ -5921,16 +6060,19 @@ pub fn fn_escaping_param_payload_part_paths(
         whole: &mut bool,
         top: bool,
         tail: bool,
+        any_path: bool,
     ) {
         for st in &b.stmts {
             match &st.kind {
-                StmtKind::Expr(e) => returns_in(e, root, out, whole, top, false),
-                StmtKind::Let { value, .. } => returns_in(value, root, out, whole, false, false),
+                StmtKind::Expr(e) => returns_in(e, root, out, whole, top, false, any_path),
+                StmtKind::Let { value, .. } => {
+                    returns_in(value, root, out, whole, false, false, any_path)
+                }
                 _ => {}
             }
         }
         if let Some(fe) = b.final_expr.as_deref() {
-            returns_in(fe, root, out, whole, top, tail);
+            returns_in(fe, root, out, whole, top, tail, any_path);
         }
     }
 
@@ -5945,13 +6087,14 @@ pub fn fn_escaping_param_payload_part_paths(
         out: &mut Vec<ParamPath>,
         whole: &mut bool,
         tail: bool,
+        any_path: bool,
     ) {
         let is_param = |s: &Expr| matches!(&s.kind, ExprKind::Identifier(n) if n == param);
         match &e.kind {
             ExprKind::Match { scrutinee, arms } if is_param(scrutinee) => {
                 for a in arms {
                     if let Some(bind) = optres_whole_payload_binding(&a.pattern, variant) {
-                        returns_in(&a.body, bind, out, whole, true, tail);
+                        returns_in(&a.body, bind, out, whole, true, tail, any_path);
                     }
                 }
             }
@@ -5962,7 +6105,7 @@ pub fn fn_escaping_param_payload_part_paths(
                 ..
             } if is_param(value) => {
                 if let Some(bind) = optres_whole_payload_binding(pattern, variant) {
-                    returns_in_block(then_block, bind, out, whole, true, tail);
+                    returns_in_block(then_block, bind, out, whole, true, tail, any_path);
                 }
             }
             ExprKind::WhileLet {
@@ -5973,7 +6116,7 @@ pub fn fn_escaping_param_payload_part_paths(
             } if is_param(value) => {
                 if let Some(bind) = optres_whole_payload_binding(pattern, variant) {
                     // A loop body's tail is not the function's value.
-                    returns_in_block(body, bind, out, whole, true, false);
+                    returns_in_block(body, bind, out, whole, true, false, any_path);
                 }
             }
             _ => {}
@@ -5984,16 +6127,18 @@ pub fn fn_escaping_param_payload_part_paths(
             | ExprKind::Unsafe(b)
             | ExprKind::Try(b)
             | ExprKind::Seq(b)
-            | ExprKind::Par(b) => scan_block(b, param, variant, out, whole, tail),
-            ExprKind::Return(Some(inner)) => scan(inner, param, variant, out, whole, true),
+            | ExprKind::Par(b) => scan_block(b, param, variant, out, whole, tail, any_path),
+            ExprKind::Return(Some(inner)) => {
+                scan(inner, param, variant, out, whole, true, any_path)
+            }
             ExprKind::If {
                 then_block,
                 else_branch,
                 ..
             } => {
-                scan_block(then_block, param, variant, out, whole, tail);
+                scan_block(then_block, param, variant, out, whole, tail, any_path);
                 if let Some(x) = else_branch.as_deref() {
-                    scan(x, param, variant, out, whole, tail);
+                    scan(x, param, variant, out, whole, tail, any_path);
                 }
             }
             ExprKind::IfLet {
@@ -6001,14 +6146,14 @@ pub fn fn_escaping_param_payload_part_paths(
                 else_branch,
                 ..
             } => {
-                scan_block(then_block, param, variant, out, whole, tail);
+                scan_block(then_block, param, variant, out, whole, tail, any_path);
                 if let Some(x) = else_branch.as_deref() {
-                    scan(x, param, variant, out, whole, tail);
+                    scan(x, param, variant, out, whole, tail, any_path);
                 }
             }
             ExprKind::Match { arms, .. } => {
                 for a in arms {
-                    scan(&a.body, param, variant, out, whole, tail);
+                    scan(&a.body, param, variant, out, whole, tail, any_path);
                 }
             }
             ExprKind::While { body, .. }
@@ -6016,7 +6161,7 @@ pub fn fn_escaping_param_payload_part_paths(
             | ExprKind::For { body, .. }
             | ExprKind::Loop { body, .. }
             | ExprKind::LabeledBlock { body, .. } => {
-                scan_block(body, param, variant, out, whole, false)
+                scan_block(body, param, variant, out, whole, false, any_path)
             }
             _ => {}
         }
@@ -6028,22 +6173,27 @@ pub fn fn_escaping_param_payload_part_paths(
         out: &mut Vec<ParamPath>,
         whole: &mut bool,
         tail: bool,
+        any_path: bool,
     ) {
         for st in &b.stmts {
             match &st.kind {
-                StmtKind::Expr(e) => scan(e, param, variant, out, whole, false),
-                StmtKind::Let { value, .. } => scan(value, param, variant, out, whole, false),
+                StmtKind::Expr(e) => scan(e, param, variant, out, whole, false, any_path),
+                StmtKind::Let { value, .. } => {
+                    scan(value, param, variant, out, whole, false, any_path)
+                }
                 _ => {}
             }
         }
         if let Some(fe) = b.final_expr.as_deref() {
-            scan(fe, param, variant, out, whole, tail);
+            scan(fe, param, variant, out, whole, tail, any_path);
         }
     }
 
     let mut out: Vec<ParamPath> = Vec::new();
     let mut whole = false;
-    scan_block(&f.body, param_name, variant, &mut out, &mut whole, true);
+    scan_block(
+        &f.body, param_name, variant, &mut out, &mut whole, true, any_path,
+    );
     if whole {
         return Vec::new();
     }

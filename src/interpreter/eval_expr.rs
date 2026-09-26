@@ -2308,6 +2308,12 @@ impl<'a> super::Interpreter<'a> {
                         self.coerce_float_assign_rhs(e, v)
                     })
                     .unwrap_or(Value::Unit);
+                // B-2026-09-26-37 — a projection off an arm binding of a
+                // by-value `Option`/`Result` param's payload hands that part
+                // out on THIS path; record it for the caller's post-call walk.
+                if let Some(e) = val.as_ref() {
+                    self.note_returned_payload_part(e, &v);
+                }
                 self.set_cf(ControlFlow::Return(v))
             }
 

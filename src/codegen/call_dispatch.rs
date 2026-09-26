@@ -2336,6 +2336,9 @@ impl<'ctx> super::Codegen<'ctx> {
                 // predicates over different payload shapes, and each declines
                 // where the other applies.
                 self.remask_named_tuple_payload_arg(argn, &name, i);
+                // B-2026-09-26-37 — and when the callee owns the bodies
+                // outright, the local owns none of them.
+                self.stand_down_named_optres_bodies_if_callee_owns(argn, &name, i);
             }
             // B-2026-09-06-49 / B-2026-09-10-6 — retract the caller's array
             // local when it is moved whole into a seeded variant that the
@@ -3631,6 +3634,97 @@ impl<'ctx> super::Codegen<'ctx> {
             }
         }
         out
+    }
+
+    /// B-2026-09-26-37 — stand a NAMED local's payload-bodies walk down whole
+    /// when the callee's arm bindings own the payload's bodies.
+    ///
+    /// The callee answers that at frame entry with
+    /// [`Self::optres_param_payload_bodies_stay_with_caller`]: where it says
+    /// NO for a param that does not leave whole, `bind_pattern_values` arms a
+    /// field-bodies walk on the arm binding, and that walk honours every move
+    /// out of it PER PATH. The fresh-temp spelling reaches the same answer from
+    /// the caller's end (`callee_by_value_optres_param_bodies_te` declines, so
+    /// no walk is minted at the call), which is why `eat(Some(..), k)` was
+    /// right on every compiled surface. A named local's walk was minted at its
+    /// `let`, and the remask beside this only ever NARROWS it by the parts the
+    /// callee hands out at statement level. A part handed out on SOME paths
+    /// (`if k { return t.r; }`) is neither, so the local kept its whole walk
+    /// and ran every body the callee's arm binding had also run:
+    /// `dR5 dR5 got:1` at `k = false`, and the returned part's body a second
+    /// time at `k = true`.
+    ///
+    /// ONE PREDICATE, BOTH ENDS: the same call the callee makes, on the same
+    /// function and index, so the two cannot disagree about who owns the
+    /// bodies. A param that leaves the callee WHOLE is declined here: its new
+    /// owner is whatever binds the result, and that is not this question.
+    pub(super) fn stand_down_named_optres_bodies_if_callee_owns(
+        &mut self,
+        arg_name: &str,
+        callee: &str,
+        i: usize,
+    ) {
+        let Some(program) = self.program_snapshot.clone() else {
+            return;
+        };
+        let (want_target, bare) = match callee.split_once('.') {
+            Some((t, m)) => (Some(t), m),
+            None => (None, callee),
+        };
+        let Some((func, ast_i)) = program.items.iter().find_map(|item| match item {
+            Item::Function(f) if f.name == callee => Some((f, i)),
+            Item::ImplBlock(b)
+                if want_target.is_none_or(|t| {
+                    matches!(&b.target_type.kind,
+                        TypeKind::Path(p) if p.segments.first().is_some_and(|h| h == t))
+                }) =>
+            {
+                b.items.iter().find_map(|ii| match ii {
+                    crate::ast::ImplItem::Method(f) if f.name == bare => {
+                        let ast_i = if f.self_param.is_some() {
+                            i.checked_sub(1)?
+                        } else {
+                            i
+                        };
+                        Some((&**f, ast_i))
+                    }
+                    _ => None,
+                })
+            }
+            _ => None,
+        }) else {
+            return;
+        };
+        let Some(p) = func.params.get(ast_i) else {
+            return;
+        };
+        let TypeKind::Path(path) = &p.ty.kind else {
+            return;
+        };
+        if !matches!(
+            path.segments.last().map(String::as_str),
+            Some("Option") | Some("Result")
+        ) {
+            return;
+        }
+        let crate::ast::PatternKind::Binding(pname) = &p.pattern.kind else {
+            return;
+        };
+        if !crate::result_escape::by_value_nonescaping_param_names(func).contains(pname.as_str()) {
+            return;
+        }
+        // The SHAPE both backends settle, asked from the AST so the
+        // interpreter's mask (`run_fresh_temp_arg_drops`) answers the same
+        // calls this does. Outside it the callee's arm walk is not complete
+        // per path -- a tuple payload arms none, a deeper part is masked on
+        // every path -- so standing down here would lose a body.
+        if !crate::ast::optres_param_part_returns_are_callee_owned_shape(&program, func, ast_i) {
+            return;
+        }
+        if self.optres_param_payload_bodies_stay_with_caller(func, ast_i) {
+            return;
+        }
+        self.suppress_container_elem_bodies_for_var(arg_name);
     }
 
     /// B-2026-09-17-37 — the TUPLE-payload sibling of

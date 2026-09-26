@@ -80,6 +80,31 @@ pub(crate) enum ContractOutcome {
 
 // ── Interpreter ─────────────────────────────────────────────────
 
+/// B-2026-09-26-37 — the DYNAMIC half of "which payload parts of a by-value
+/// `Option`/`Result` param did the callee hand out".
+///
+/// The static channel (`fn_escaping_param_payload_part_paths`) answers only an
+/// escape at the arm's own statement level, which is the right conservatism
+/// for a mask decided before the call: `Some(t) => { if k { return t.r; } .. }`
+/// hands `t.r` out on one path and not the other, and a mask set before the
+/// call is wrong on one of them whichever way it is set. This backend RUNS the
+/// path, so it can simply record what happened: an arm binding of the param's
+/// payload is noted at the `match` (`arm_views`, binding -> param index), a
+/// `return` of a projection rooted at one records the part (`escapes`), and
+/// the caller's post-call walk masks exactly those parts. Codegen reaches the
+/// same per-path answer from the other end: the callee's arm binding owns the
+/// bodies outright there (`optres_param_payload_bodies_stay_with_caller`), so
+/// its own walk honours the move per path and the caller stands down.
+#[derive(Debug, Default)]
+pub(crate) struct PayloadEscapeFrame {
+    /// The frame's params, in declaration order (a closure frame has none).
+    pub(crate) params: Vec<String>,
+    /// Arm binding name -> index of the param whose payload it binds.
+    pub(crate) arm_views: HashMap<String, usize>,
+    /// (param index, name path inside the payload) handed out by a `return`.
+    pub(crate) escapes: Vec<(usize, Vec<String>)>,
+}
+
 pub struct Interpreter<'a> {
     pub(crate) program: &'a Program,
     /// B-2026-08-13-8 — qualified dispatch segments for impls whose head name is
@@ -928,6 +953,15 @@ pub struct Interpreter<'a> {
     /// arm.
     pub(crate) own_body_only_view_bindings: std::collections::HashMap<String, String>,
     pub(crate) cond_store_param_names: std::collections::HashSet<String>,
+    /// B-2026-09-26-37 — per call frame, the payload parts of a by-value
+    /// `Option`/`Result` param that this run of the body actually RETURNED,
+    /// through an arm binding of that param's payload. See
+    /// [`PayloadEscapeFrame`].
+    pub(crate) payload_escape_frames: Vec<PayloadEscapeFrame>,
+    /// B-2026-09-26-37 — the popped frame's escapes, handed from the frame pop
+    /// to the caller's post-call argument walk (`run_fresh_temp_arg_drops`),
+    /// which is the only reader and takes it.
+    pub(crate) pending_call_payload_escapes: Vec<(usize, Vec<String>)>,
     /// B-2026-07-30-11 (Map-values leg) — the resolved `Map[K, V]`
     /// instantiation per let-bound variable, recorded through the SAME
     /// static chain codegen's `__karac_dropelems_map_*` registration uses
@@ -1323,6 +1357,8 @@ impl<'a> Interpreter<'a> {
             pending_param_drop_bindings: Vec::new(),
             own_body_only_view_bindings: std::collections::HashMap::new(),
             cond_store_param_names: std::collections::HashSet::new(),
+            payload_escape_frames: Vec::new(),
+            pending_call_payload_escapes: Vec::new(),
             map_val_bodies_tes: HashMap::new(),
             captured_let_values: HashMap::new(),
             test_deadline: None,

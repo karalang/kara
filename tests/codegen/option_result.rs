@@ -2908,8 +2908,9 @@ fn e2e_copy_projection_off_an_optres_payload_keeps_the_owed_body() {
 /// NOT COVERED, and measured identical before and after: a two-hop projection
 /// (`t.0.1`, B-2026-09-20-5's remainder) and a CONDITIONAL escape
 /// (`if k { return t.r }`), which a statement-level mask cannot get right on
-/// both paths and which fails on three of its four corners in a different
-/// backend each time.
+/// both paths. The conditional escape is settled per path since
+/// B-2026-09-26-37; see
+/// `e2e_optres_payload_part_handed_back_on_some_paths_runs_its_body_once`.
 #[test]
 fn e2e_named_local_optres_payload_part_handed_back_runs_its_body_once() {
     const R: &str = "struct R { id: i64 }\n\
@@ -11781,4 +11782,82 @@ fn main() {
         Some("1\n1\n1\n1\n1\n0\n1\n1\n1\n9\n1\nskip\n1\n1\n1\n1\n1\nend\n"),
         "must match --interp"
     );
+}
+
+/// B-2026-09-26-37 — a payload part handed back on only SOME paths
+/// (`Some(t) => { if k { return t.r; } .. }`) runs its `Drop` body once on
+/// each path, on both backends, for a fresh-temp and a named-local argument
+/// alike.
+///
+/// Before, three of the four corners were wrong and no backend was wrong on
+/// all of them: the interpreter doubled `t.r` when the path took the escape,
+/// and the compiled backends doubled when the argument was a NAMED LOCAL —
+/// `dR5 dR5 got:1` at `k = false` — because the local's let-site walk stayed
+/// armed while the callee's arm binding owned the same bodies. The compiled
+/// half now stands that walk down whole
+/// (`stand_down_named_optres_bodies_if_callee_owns`), which is what the
+/// fresh-temp spelling already did from the caller's end, and the callee's
+/// arm-binding walk honours the move per path.
+///
+/// The cells are the row's four corners (argument form x path), the
+/// `Result` head, the method and associated-function spellings, and two
+/// guards that were right before and must stay right: an arm that only READS
+/// a scalar sibling (`let x = t.n`) and one that returns a scalar LEAF through
+/// the `Drop`-bearing field (`t.r.id`).
+///
+/// Three spellings of the same family are deliberately NOT here, because
+/// neither backend settles them yet and both keep their old answers: a TUPLE
+/// payload (`if k { return t.0; }`), a TWO-HOP part (`if k { return t.h.r; }`)
+/// and a TAIL yield (`if k { t.r } else { .. }`). They are declined by
+/// `optres_param_part_returns_are_callee_owned_shape` on both ends, and their
+/// measurements live on their own row.
+#[test]
+fn e2e_optres_payload_part_handed_back_on_some_paths_runs_its_body_once() {
+    let src = r#"struct R { id: i64 }
+impl Drop for R { fn drop(mut ref self) { println(f"dR{self.id}") } }
+struct Hd3 { r: R, n: i64 }
+struct Q { z: i64 }
+fn eat(o: Option[Hd3], k: bool) -> R {
+    match o { Some(t) => { if k { return t.r; } return R { id: 1 }; } None => { return R { id: 0 }; } }
+}
+fn eatres(o: Result[Hd3, i64], k: bool) -> R {
+    match o { Ok(t) => { if k { return t.r; } return R { id: 1 }; } Err(e) => { return R { id: 0 }; } }
+}
+fn keep(o: Option[Hd3], k: bool) -> R {
+    match o { Some(t) => { let x = t.n; if k { println("  k"); } return R { id: x }; } None => { return R { id: 0 }; } }
+}
+fn idof(o: Option[Hd3], k: bool) -> i64 {
+    match o { Some(t) => { if k { return t.r.id; } return 1; } None => { return 0; } }
+}
+impl Q {
+    fn take(ref self, o: Option[Hd3], k: bool) -> R {
+        match o { Some(t) => { if k { return t.r; } return R { id: 1 }; } None => { return R { id: 0 }; } }
+    }
+    fn make(o: Option[Hd3], k: bool) -> R {
+        match o { Some(t) => { if k { return t.r; } return R { id: 1 }; } None => { return R { id: 0 }; } }
+    }
+}
+fn main() {
+    println("temp-false"); { let g = eat(Option.Some(Hd3 { r: R { id: 5 }, n: 2 }), false); println(f"  got:{g.id}") }
+    println("temp-true"); { let g = eat(Option.Some(Hd3 { r: R { id: 5 }, n: 2 }), true); println(f"  got:{g.id}") }
+    println("named-false"); { let a = Option.Some(Hd3 { r: R { id: 5 }, n: 2 }); let g = eat(a, false); println(f"  got:{g.id}") }
+    println("named-true"); { let a = Option.Some(Hd3 { r: R { id: 5 }, n: 2 }); let g = eat(a, true); println(f"  got:{g.id}") }
+    println("result-named-true"); { let a: Result[Hd3, i64] = Result.Ok(Hd3 { r: R { id: 5 }, n: 2 }); let g = eatres(a, true); println(f"  got:{g.id}") }
+    println("result-temp-true"); { let g = eatres(Result.Ok(Hd3 { r: R { id: 5 }, n: 2 }), true); println(f"  got:{g.id}") }
+    println("method-named-true"); { let q = Q { z: 1 }; let a = Option.Some(Hd3 { r: R { id: 5 }, n: 2 }); let g = q.take(a, true); println(f"  got:{g.id}") }
+    println("method-named-false"); { let q = Q { z: 1 }; let a = Option.Some(Hd3 { r: R { id: 5 }, n: 2 }); let g = q.take(a, false); println(f"  got:{g.id}") }
+    println("assoc-named-true"); { let a = Option.Some(Hd3 { r: R { id: 5 }, n: 2 }); let g = Q.make(a, true); println(f"  got:{g.id}") }
+    println("assoc-temp-true"); { let g = Q.make(Option.Some(Hd3 { r: R { id: 5 }, n: 2 }), true); println(f"  got:{g.id}") }
+    println("guard-no-escape"); { let a = Option.Some(Hd3 { r: R { id: 5 }, n: 2 }); let g = keep(a, true); println(f"  got:{g.id}") }
+    println("guard-scalar-leaf"); { let a = Option.Some(Hd3 { r: R { id: 5 }, n: 2 }); let g = idof(a, true); println(f"  got:{g}") }
+    println("end")
+}
+"#;
+    let want = "temp-false\ndR5\n  got:1\ndR1\ntemp-true\n  got:5\ndR5\nnamed-false\ndR5\n  got:1\ndR1\nnamed-true\n  got:5\ndR5\nresult-named-true\n  got:5\ndR5\nresult-temp-true\n  got:5\ndR5\nmethod-named-true\n  got:5\ndR5\nmethod-named-false\ndR5\n  got:1\ndR1\nassoc-named-true\n  got:5\ndR5\nassoc-temp-true\n  got:5\ndR5\nguard-no-escape\n  k\ndR5\n  got:2\ndR2\nguard-scalar-leaf\ndR5\n  got:5\nend\n";
+    let (interp_out, interp_errs, _, _) = karac::run_program_full_checked(src);
+    assert!(interp_errs.is_empty(), "interp errored: {interp_errs:?}");
+    assert_eq!(interp_out.join(""), want, "interpreter");
+    if let Some(aot) = run_program(src) {
+        assert_eq!(aot, want, "AOT");
+    }
 }

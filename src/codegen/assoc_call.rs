@@ -3438,6 +3438,8 @@ impl<'ctx> super::Codegen<'ctx> {
                     if let ExprKind::Identifier(argn) = &a.value.kind {
                         let argn = argn.clone();
                         self.remask_named_tuple_payload_arg(&argn, &qualified, i);
+                        // B-2026-09-26-37 — see the free-fn site.
+                        self.stand_down_named_optres_bodies_if_callee_owns(&argn, &qualified, i);
                     }
                     // A fresh bare-`shared` (RC-box) result passed by value:
                     // the callee inc/decs net-zero, so the caller still owns

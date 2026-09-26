@@ -19,6 +19,79 @@ use super::value::{EnumData, Value};
 impl<'a> super::Interpreter<'a> {
     // ── Match evaluation ────────────────────────────────────────
 
+    /// B-2026-09-26-37 — record `t` in the current frame's `arm_views` when
+    /// this arm binds the payload of a by-value `Option`/`Result` PARAM whole
+    /// (`match o { Some(t) => .. }` inside `fn f(o: Option[T])`). Returns the
+    /// name and the entry it displaced, for the arm's exit to restore.
+    fn note_optres_param_arm_view(
+        &mut self,
+        scrutinee_place: Option<&Expr>,
+        optres_scrutinee: bool,
+        arm: &MatchArm,
+    ) -> Option<(String, Option<usize>)> {
+        if !optres_scrutinee {
+            return None;
+        }
+        let ExprKind::Identifier(p) = &scrutinee_place?.kind else {
+            return None;
+        };
+        let PatternKind::TupleVariant { patterns, .. } = &arm.pattern.kind else {
+            return None;
+        };
+        let [single] = patterns.as_slice() else {
+            return None;
+        };
+        let PatternKind::Binding(t) = &single.kind else {
+            return None;
+        };
+        if !self
+            .owned_param_names_stack
+            .last()
+            .is_some_and(|params| params.contains(p.as_str()))
+        {
+            return None;
+        }
+        let frame = self.payload_escape_frames.last_mut()?;
+        let idx = frame.params.iter().position(|n| n == p)?;
+        let prev = frame.arm_views.insert(t.clone(), idx);
+        Some((t.clone(), prev))
+    }
+
+    /// B-2026-09-26-37 — `return t.r` (or `t.0.r`, any field / tuple-index
+    /// chain) where `t` is a current arm view: record `(param index, path)` in
+    /// the frame's `escapes`. Under the leaf gate every other escape channel
+    /// applies, so a scalar read (`return t.id`) masks nothing out of the
+    /// value a parent's own `Drop` body later reads.
+    pub(crate) fn note_returned_payload_part(&mut self, expr: &Expr, returned: &Value) {
+        let mut path: Vec<String> = Vec::new();
+        let mut cur = expr;
+        let root = loop {
+            match &cur.kind {
+                ExprKind::FieldAccess { object, field } => {
+                    path.push(field.clone());
+                    cur = object;
+                }
+                ExprKind::TupleIndex { object, index } => {
+                    path.push(format!("#{index}"));
+                    cur = object;
+                }
+                ExprKind::Identifier(n) => break n,
+                _ => return,
+            }
+        };
+        if path.is_empty() || !Self::value_leaf_can_own(returned) {
+            return;
+        }
+        path.reverse();
+        let Some(frame) = self.payload_escape_frames.last_mut() else {
+            return;
+        };
+        let Some(&idx) = frame.arm_views.get(root) else {
+            return;
+        };
+        frame.escapes.push((idx, path));
+    }
+
     pub(crate) fn eval_match(
         &mut self,
         scrutinee_place: Option<&Expr>,
@@ -103,6 +176,12 @@ impl<'a> super::Interpreter<'a> {
                 for bound in arm.pattern.binding_names() {
                     self.rearm_container_bodies_for_name(&bound);
                 }
+                // B-2026-09-26-37 — note an arm binding of a by-value
+                // `Option`/`Result` param's payload, so a `return` of a
+                // projection off it can record the part it hands out. See
+                // `PayloadEscapeFrame`.
+                let arm_view =
+                    self.note_optres_param_arm_view(scrutinee_place, optres_scrutinee, arm);
                 // B-2026-08-29-17 — a payload bound out of an OWNED-PARAM
                 // scrutinee is a VIEW of the callee's entry copy, and the
                 // view-ness has to PROPAGATE so a rebind of it inherits the
@@ -627,6 +706,14 @@ impl<'a> super::Interpreter<'a> {
                 // declaration order. Empty for every scrutinee with an owner.
                 if let Some((val, taken, owes_own_body)) = self.pending_arm_unbound_struct.take() {
                     self.run_unbound_struct_field_drops(&val, &taken, owes_own_body);
+                }
+                if let Some((name, prev)) = arm_view {
+                    if let Some(frame) = self.payload_escape_frames.last_mut() {
+                        match prev {
+                            Some(idx) => frame.arm_views.insert(name, idx),
+                            None => frame.arm_views.remove(&name),
+                        };
+                    }
                 }
                 self.env.pop_scope();
                 return result;

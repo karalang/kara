@@ -3468,3 +3468,74 @@ fn main() {
 "#);
     assert_eq!(out, "row\n  dR5\n  mid\n  dR6\n  out\nsecond\n  dR6\n  mid\n  dR5\n  out\nresult\n  dR5\n  mid\n  dR6\n  out\nmethod\n  dR5\n  mid\n  dR6\n  out\nthree\n  dR5\n  mid\n  dR6\n  dR7\n  out\niflet\n  dR5\n  mid\n  dR6\n  out\ncall-arg\n  dR5\n  mid\n  dR6\n  out\nlater\n  mid\n  v5\n  dR5\n  dR6\n  out\nctl-named-arg\n  dR5\n  mid\n  dR6\n  out\nctl-nomove\n  mid\n  dR5\n  dR6\n  out\nctl-scalar\n  dR5\n  mid\n  out\nctl-both\n  dR5\n  dR6\n  mid\n  out\nctl-escape\n  dR6\n  got5\n  dR5\n  out\nctl-struct\n  dR5\n  mid\n  dR6\n  out\nend\n", "got:\n{out}");
 }
+
+/// B-2026-09-26-37 — a payload part handed back on only SOME paths
+/// (`Some(t) => { if k { return t.r; } .. }`) runs its `Drop` body once on
+/// each path, for a fresh-temp and a named-local argument alike.
+///
+/// A static mask is wrong on one of the two paths whichever way it is set, so
+/// this backend now records what the run actually did: an arm binding of the
+/// param's payload is noted at the `match`, a `return` of a projection off it
+/// records the part, and the caller's post-call walk masks exactly that
+/// (`PayloadEscapeFrame`). Before, the interpreter ran `t.r`'s body a second
+/// time at `k = true` — `dR5 got:5 dR5` where `got:5 dR5` is due, for both
+/// argument forms.
+///
+/// The cells are the row's four corners (argument form x path), the
+/// `Result` head, the method and associated-function spellings, and two
+/// guards that were right before and must stay right: an arm that only READS
+/// a scalar sibling (`let x = t.n`) and one that returns a scalar LEAF through
+/// the `Drop`-bearing field (`t.r.id`).
+///
+/// Three spellings of the same family are deliberately NOT here, because
+/// neither backend settles them yet and both keep their old answers: a TUPLE
+/// payload (`if k { return t.0; }`), a TWO-HOP part (`if k { return t.h.r; }`)
+/// and a TAIL yield (`if k { t.r } else { .. }`). They are declined by
+/// `optres_param_part_returns_are_callee_owned_shape` on both ends, and their
+/// measurements live on their own row.
+///
+/// The codegen twin asserts the same string on both backends.
+#[test]
+fn test_optres_payload_part_handed_back_on_some_paths_runs_its_body_once() {
+    let out = run(r#"struct R { id: i64 }
+impl Drop for R { fn drop(mut ref self) { println(f"dR{self.id}") } }
+struct Hd3 { r: R, n: i64 }
+struct Q { z: i64 }
+fn eat(o: Option[Hd3], k: bool) -> R {
+    match o { Some(t) => { if k { return t.r; } return R { id: 1 }; } None => { return R { id: 0 }; } }
+}
+fn eatres(o: Result[Hd3, i64], k: bool) -> R {
+    match o { Ok(t) => { if k { return t.r; } return R { id: 1 }; } Err(e) => { return R { id: 0 }; } }
+}
+fn keep(o: Option[Hd3], k: bool) -> R {
+    match o { Some(t) => { let x = t.n; if k { println("  k"); } return R { id: x }; } None => { return R { id: 0 }; } }
+}
+fn idof(o: Option[Hd3], k: bool) -> i64 {
+    match o { Some(t) => { if k { return t.r.id; } return 1; } None => { return 0; } }
+}
+impl Q {
+    fn take(ref self, o: Option[Hd3], k: bool) -> R {
+        match o { Some(t) => { if k { return t.r; } return R { id: 1 }; } None => { return R { id: 0 }; } }
+    }
+    fn make(o: Option[Hd3], k: bool) -> R {
+        match o { Some(t) => { if k { return t.r; } return R { id: 1 }; } None => { return R { id: 0 }; } }
+    }
+}
+fn main() {
+    println("temp-false"); { let g = eat(Option.Some(Hd3 { r: R { id: 5 }, n: 2 }), false); println(f"  got:{g.id}") }
+    println("temp-true"); { let g = eat(Option.Some(Hd3 { r: R { id: 5 }, n: 2 }), true); println(f"  got:{g.id}") }
+    println("named-false"); { let a = Option.Some(Hd3 { r: R { id: 5 }, n: 2 }); let g = eat(a, false); println(f"  got:{g.id}") }
+    println("named-true"); { let a = Option.Some(Hd3 { r: R { id: 5 }, n: 2 }); let g = eat(a, true); println(f"  got:{g.id}") }
+    println("result-named-true"); { let a: Result[Hd3, i64] = Result.Ok(Hd3 { r: R { id: 5 }, n: 2 }); let g = eatres(a, true); println(f"  got:{g.id}") }
+    println("result-temp-true"); { let g = eatres(Result.Ok(Hd3 { r: R { id: 5 }, n: 2 }), true); println(f"  got:{g.id}") }
+    println("method-named-true"); { let q = Q { z: 1 }; let a = Option.Some(Hd3 { r: R { id: 5 }, n: 2 }); let g = q.take(a, true); println(f"  got:{g.id}") }
+    println("method-named-false"); { let q = Q { z: 1 }; let a = Option.Some(Hd3 { r: R { id: 5 }, n: 2 }); let g = q.take(a, false); println(f"  got:{g.id}") }
+    println("assoc-named-true"); { let a = Option.Some(Hd3 { r: R { id: 5 }, n: 2 }); let g = Q.make(a, true); println(f"  got:{g.id}") }
+    println("assoc-temp-true"); { let g = Q.make(Option.Some(Hd3 { r: R { id: 5 }, n: 2 }), true); println(f"  got:{g.id}") }
+    println("guard-no-escape"); { let a = Option.Some(Hd3 { r: R { id: 5 }, n: 2 }); let g = keep(a, true); println(f"  got:{g.id}") }
+    println("guard-scalar-leaf"); { let a = Option.Some(Hd3 { r: R { id: 5 }, n: 2 }); let g = idof(a, true); println(f"  got:{g}") }
+    println("end")
+}
+"#);
+    assert_eq!(out, "temp-false\ndR5\n  got:1\ndR1\ntemp-true\n  got:5\ndR5\nnamed-false\ndR5\n  got:1\ndR1\nnamed-true\n  got:5\ndR5\nresult-named-true\n  got:5\ndR5\nresult-temp-true\n  got:5\ndR5\nmethod-named-true\n  got:5\ndR5\nmethod-named-false\ndR5\n  got:1\ndR1\nassoc-named-true\n  got:5\ndR5\nassoc-temp-true\n  got:5\ndR5\nguard-no-escape\n  k\ndR5\n  got:2\ndR2\nguard-scalar-leaf\ndR5\n  got:5\nend\n", "got:\n{out}");
+}
