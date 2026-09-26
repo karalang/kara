@@ -92,7 +92,7 @@ distinguish "bugs flattening" from "we stopped writing them down."
 
 | class | total |
 |---|---|
-| run-vs-build | 493 |
+| run-vs-build | 494 |
 | miscompile | 462 |
 | leak | 421 |
 | double-free | 311 |
@@ -104,14 +104,14 @@ distinguish "bugs flattening" from "we stopped writing them down."
 | false-positive | 109 |
 | soundness | 97 |
 | crash | 96 |
-| use-after-free | 55 |
+| use-after-free | 56 |
 
 ### By surface
 
 | surface | total |
 |---|---|
-| codegen | 2093 |
-| interp | 557 |
+| codegen | 2095 |
+| interp | 558 |
 | typecheck | 308 |
 | other | 110 |
 | ownership | 77 |
@@ -388,11 +388,12 @@ registered in the callee's prologue, not by-value struct params in general. | �
 | B-2026-09-25-40 | 2026-09-25 | codegen | high | A GENERIC FN THAT HANDS A `shared`-FIELD STRUCT BACK, OR STORES IT, ON ONLY SOME PATHS USES IT AFTER FREE ON EVERY COMPILED SURFACE, with or without a `Drop` -- `pick(s, true, w)` over `fn pick[T](v: T, c: bool, w: T) -> T { if c { return v } return w }` aborts under `karac run` with 2 valgrind errors at -O0 at `T = S3` and `T = S2`, the S2 cells also running a body twice (`dS2 dS2 dS1 t1 dS1` against `dS2 t1 dS1`), and `stc(s, true)` over a conditional `v.push(a)` does the same at `T = S3` | — |
 | B-2026-09-25-43 | 2026-09-25 | interp | medium | A FIELD READ OFF A FRESH `shared struct` TEMPORARY RUNS ITS `Drop` BODY ON THE THREE COMPILED SURFACES AND NEVER UNDER `--interp` -- `println(f"s{mksh().k}")` over `shared struct Sh { k: i64 }` with `impl Drop for Sh` prints `dSh6 s6 end` on jit / -O2 seq / -O2 par and `s6 end` under `--interp` | — |
 | B-2026-09-25-44 | 2026-09-25 | interp+codegen | medium | A FRESH TEMP READ THROUGH A PROJECTION STILL RUNS NO `Drop` BODIES, ON ALL FOUR SURFACES ALIKE, IN FIVE POSITIONS B-2026-09-17-36's FIX DECLINES -- the projection handed by value to a callee (`eat(mkw(7).r)` prints `v7 end`), a GENERIC struct temp (`mkg(mkd(3)).k` over `struct G[T] { v: T, k: i64 }`), a `while` condition (`while mkw(i).b < 2`), a closure body (`|n: i64| mkw(n).b`) and a `match` scrutinee (`match mkw(3).b { .. }`) | — |
-| B-2026-09-26-2 | 2026-09-26 | interp | medium | A FRESH TEMP'S PROJECTION WRAPPED IN A CONSTRUCTOR IN A FUNCTION TAIL RUNS ITS SIBLINGS' `Drop` BODIES COMPILED AND NOT UNDER `--interp` -- `fn f24(c: bool) -> Result[i64, String] { if c { return Err(f"e"); } Ok(mkw(9).b) }` then `println(f"t{f24(false).unwrap()}")` prints `dD109n109 dD9n9 t9 end` on jit / -O2 seq / -O2 par and `t9 end` under `--interp` | — |
 | B-2026-09-26-4 | 2026-09-26 | interp+codegen | high | A BY-VALUE PARAM HANDED ON TWO LEVELS TO A CALLEE THAT RETURNS IT ON ONLY SOME PATHS IS STILL USED AFTER FREE, `Drop` OR NOT -- `fn outer(a: S3, c: bool) -> S3 { return passp(a, c) }` over B-2026-09-25-41's `passp` aborts under `karac run` with 2 valgrind errors at -O0 at both exits, and over the `Drop`-bearing `passp2` EVERY surface including `--interp` prints `dS98 dS3 t3 dS3` where one `dS3` is due | — |
 | B-2026-09-26-5 | 2026-09-26 | codegen | high | A HEAP FIELD MOVED OUT THROUGH A FRESH TEMP'S PROJECTION IS STILL FREED TWICE COMPILED WHEN THE ROOT IS GENERIC OR A HOP HAS ITS OWN `Drop` -- `let s = mkg2().v.name;` over `struct G[T] { v: T, k: i64 }` and `let s = mk4().w.q.name;` where `q: D` has `impl Drop for D` abort with `free(): double free detected in tcache 2` on jit / -O2 seq / -O2 par (valgrind 1); `--interp` prints `gg` and `dD2n2 / dD1n1 / n2`. The remainder B-2026-09-26-1's fix (243969540) declines on purpose. | — |
 | B-2026-09-26-6 | 2026-09-26 | interp+codegen | medium | A FUNCTION TAIL THAT READS THROUGH A FRESH TEMP WITHOUT CONSUMING THE PROJECTION RUNS NONE OF THE TEMP'S `Drop` BODIES, ON ALL FOUR SURFACES ALIKE -- `fn p1() -> i64 { mkw(9).b + 0 }`, `fn p2() -> i64 { id(mkw(9).b) }` and `fn p3(k: i64) -> i64 { match k { 0 => mkw(9).b, _ => 1 } }` each print `t9 end` everywhere, where the same expression as a `let` initializer prints `dD109n109 dD9n9 k9 end` everywhere | — |
 | B-2026-09-26-7 | 2026-09-26 | interp+codegen | medium | A TUPLE INDEX READ OFF A FRESH TEMP RUNS NO `Drop` BODY FOR THE OTHER ELEMENTS ON ANY SURFACE, AND LEAKS THEIR HEAP AT `-O0` WHEN THE TEMP COMES OUT OF AN `unwrap()` -- `println(f"t{mkt().1}")` over `fn mkt() -> (D, i64)` prints `t1 end` on all four surfaces where `let t = mkt(); println(f"t{t.1}")` prints `t1 dD9n9 end`; `let o = Some(mkt()); println(f"t{o.unwrap().1}")` prints `t1 end` and loses 2 bytes in 1 block | — |
+| B-2026-09-26-8 | 2026-09-26 | codegen | high | A `shared struct` FIELD RETURNED FROM A `ref self` METHOD IS RELEASED WITHOUT BEING RETAINED, SO THE HOLDER'S OWN RELEASE LATER TOUCHES FREED MEMORY ON EVERY COMPILED SURFACE -- `let h = Hold { s: mksh(3) }; let x = h.get(); println(f"x{x.k}")` over `fn get(ref self) -> Sh { self.s }` prints the right text everywhere but valgrind reports an invalid read and an invalid write of size 8 at `-O0`; through a projection (`h.get().k`) the compiled surfaces also run `dSh3` BEFORE the print, while `h` still holds it | — |
+| B-2026-09-26-9 | 2026-09-26 | interp+codegen | low | A PLAIN STRUCT HOLDING A `shared struct` RELEASES IT AT LEXICAL SCOPE EXIT ON THE COMPILED BACKENDS AND AT THE HOLDER'S LIVE-RANGE END UNDER `--interp` -- `let h = Hold { s: mksh(3) }; println(f"h{h.s.k}"); println("after")` prints `h3 dSh3nm3 dD3 after end` interpreted and `h3 after end dSh3nm3 dD3` on jit / -O2 seq / -O2 par; the `shared struct` sibling of B-2026-09-19-18's `shared enum` | — |
 
 ### Relocated
 
@@ -3080,6 +3081,7 @@ registered in the callee's prologue, not by-value struct params in general. | �
 | B-2026-09-25-41 | codegen | high | A BY-VALUE PARAM HANDED ON TO A CALLEE THAT RETURNS IT ON ONLY SOME PATHS IS USED AFTER FREE, `Drop` OR NOT -- `fn passp2(a: S2, c: bool) -> S2 { let… | 663ced4b9 |
 | B-2026-09-25-42 | interp | medium | A FRESH TEMP PROJECTED IN A FUNCTION'S TAIL EXPRESSION RUNS ITS `Drop` BODIES ON THE THREE COMPILED SURFACES AND NONE UNDER `--interp` -- `fn tail()… | 0646664c0 |
 | B-2026-09-26-1 | codegen | high | A HEAP FIELD MOVED OUT THROUGH A TWO-HOP PROJECTION OF A FRESH TEMP IS FREED TWICE ON EVERY COMPILED SURFACE -- `let s = mkw2().p.name;` over `struct… | 243969540 |
+| B-2026-09-26-2 | interp | medium | A FRESH TEMP'S PROJECTION WRAPPED IN A CONSTRUCTOR IN A FUNCTION TAIL RUNS ITS SIBLINGS' `Drop` BODIES COMPILED AND NOT UNDER `--interp` -- `fn f24(c… | 1b18c0136 |
 | B-2026-09-26-3 | interp+codegen | medium | A FIELD TAKEN OFF A FRESH TEMP WHOSE TYPE HAS ITS OWN `Drop` LOSES THAT TYPE'S BODY ON ALL FOUR SURFACES -- `let y = mkq().k;` over `struct Q { d: D,… | 3920422cb |
 
 </details>
