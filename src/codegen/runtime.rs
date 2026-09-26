@@ -14725,6 +14725,83 @@ impl<'ctx> super::Codegen<'ctx> {
         }
     }
 
+    /// B-2026-09-26-50 — a named argument moved WHOLE into a callee that
+    /// guarantees another frame runs its bodies (hands it back, wraps it,
+    /// stores it): retract the binding's own body and, where the move is
+    /// certain, its field-bodies walk too, keeping the memory. The own body is
+    /// `suppress_user_drop_body_keeping_memory`. A struct with no `Drop` of its
+    /// own has no such wrapper: its `Drop`-bearing FIELDS are walked by a
+    /// separate `StructFieldBodies` action that retraction never matched, so
+    /// `let w = mkw(7); stw(mut v, w)` over `struct W { r: D, s: D, b: i64 }`
+    /// ran both fields' bodies at the call and the Vec's element ran them again
+    /// at its drain, on every compiled surface and for every keeping callee
+    /// shape, where `--interp` ran them once. The field walk frees nothing, so
+    /// the memory split is unchanged.
+    ///
+    /// The field walk is disarmed only when the value leaves on EVERY path of
+    /// the callee (`arg_leaves_caller_on_every_path`): the callee registers no
+    /// field-bodies drop for a by-value param on a path that keeps nothing, so
+    /// a conditional hand-back or store (`maybew(w, false)`) still needs the
+    /// caller's walk. A call compiled in a deeper frame than the walk (inside a
+    /// branch, which may not run) clears per-field runtime flags rather than
+    /// retracting. The own-body retraction above is unchanged.
+    pub(super) fn suppress_moved_arg_bodies_keeping_memory(
+        &mut self,
+        name: &str,
+        callee: &str,
+        arg_index: Option<usize>,
+    ) {
+        if self.drop_rc.assign_ident_target.as_deref() == Some(name) {
+            return;
+        }
+        self.suppress_user_drop_body_keeping_memory(name);
+        let every_path = arg_index.is_some_and(|i| self.arg_leaves_caller_on_every_path(callee, i));
+        let innermost = self
+            .drop_rc
+            .scope_cleanup_actions
+            .last()
+            .is_some_and(|frame| {
+                frame.iter().any(|a| {
+                    matches!(a, CleanupAction::UserDrop { binding_name, kind, .. }
+                    if binding_name == name
+                        && *kind == crate::codegen::state::UserDropKind::StructFieldBodies)
+                })
+            });
+        if !every_path {
+            return;
+        }
+        if innermost {
+            self.suppress_struct_field_bodies_for_var(name);
+            return;
+        }
+        // The walk lives in an OUTER frame: the call sits in a branch, a loop
+        // body or a statement temp scope the binding encloses, so a static
+        // retraction would also disarm the path where the call never ran.
+        // Take B-2026-09-08-4's per-field runtime flag for every `Drop`-bearing
+        // field instead, cleared in this basic block. Over the flag budget the
+        // walk stays armed, which is today's behaviour.
+        let Some(tn) = self.var_types.var_type_names.get(name).cloned() else {
+            return;
+        };
+        let Some(field_names) = self.type_decls.struct_field_names.get(tn.as_str()).cloned() else {
+            return;
+        };
+        let idxs = self.user_drop_field_indices_mono(&tn, &std::collections::HashMap::new());
+        let already = self
+            .drop_rc
+            .field_view_flags
+            .get(name)
+            .map_or(0, |m| m.len());
+        if idxs.is_empty() || already + idxs.len() > Self::FIELD_VIEW_SELECT_MAX {
+            return;
+        }
+        for idx in idxs {
+            if let Some(field) = field_names.get(idx) {
+                self.conditional_field_move_takes_runtime_flag(name, field, idx);
+            }
+        }
+    }
+
     pub(super) fn suppress_user_drop_body_keeping_memory(&mut self, name: &str) {
         // SELF-ASSIGNMENT DECLINES. `e = pass(e);` stores the callee's result
         // back into this very binding, so `e` does not die at the call — it

@@ -7819,3 +7819,139 @@ fn gpick[T](x: T, y: T, c: bool) -> T { if c { x } else { y } }
         }
     }
 }
+
+/// B-2026-09-26-50 — a NAMED struct with no `Drop` of its own whose fields
+/// carry one, moved whole into a callee that keeps it on every path (stores
+/// it through a free fn, a generic fn, a method, an associated fn or into the
+/// receiver; hands it back; wraps it), runs each field's body once, from the
+/// value's new home. Before the fix the compiled surfaces also ran them at the
+/// call: the caller's retraction matched only a struct's OWN body wrapper and
+/// never its separate field-bodies walk. A call in a branch clears per-field
+/// runtime flags instead, so the untaken arm keeps its bodies. Every cell was
+/// checked `--interp` / JIT / `-O2` seq / `-O2` par byte-identical and
+/// valgrind-clean at `-O0`.
+#[test]
+fn e2e_dropless_struct_with_drop_fields_moved_into_a_keeping_callee_runs_them_once() {
+    const H: &str = r#"struct D { id: i64, name: String }
+impl Drop for D { fn drop(mut ref self) { println(f"dD{self.id}{self.name}") } }
+fn mkd(n: i64) -> D { return D { id: n, name: f"n{n}" }; }
+struct W { r: D, s: D, b: i64 }
+fn mkw(n: i64) -> W { return W { r: mkd(n), s: mkd(n + 100), b: n }; }
+fn stw(v: mut ref Vec[W], x: W) { v.push(x); }
+fn keepw(x: W) -> W { x }
+fn eatw(x: W) -> i64 { x.b }
+fn gst[T](v: mut ref Vec[T], x: T) { v.push(x); }
+fn gid[T](x: T) -> T { x }
+struct H { k: i64 }
+impl H { fn put(self, v: mut ref Vec[W], x: W) { v.push(x); } fn aput(v: mut ref Vec[W], x: W) { v.push(x); } }
+struct Bw { ws: Vec[W] }
+impl Bw { fn add(mut ref self, x: W) { self.ws.push(x); } }
+struct Hw { w: W, k: i64 }
+fn wraph(x: W) -> Hw { return Hw { w: x, k: 1 }; }
+fn maybew(x: W, c: bool) -> Option[W] { if c { return Some(x); } None }
+struct Y { r: D, id: i64 }
+impl Drop for Y { fn drop(mut ref self) { println(f"dY{self.id}") } }
+fn sty(v: mut ref Vec[Y], x: Y) { v.push(x); }
+struct X { w: W, t: D }
+fn mkx(n: i64) -> X { return X { w: mkw(n), t: mkd(n + 300) }; }
+fn stx(v: mut ref Vec[X], x: X) { v.push(x); }
+struct Q { name: String, k: i64 }
+fn stq(v: mut ref Vec[Q], x: Q) { v.push(x); }
+fn gcsw[T](v: mut ref Vec[T], x: T, c: bool) { if c { v.push(x); } }
+fn std(v: mut ref Vec[D], x: D) { v.push(x); }
+fn maybed(x: D, c: bool) -> Option[D] { if c { return Some(x); } None }
+"#;
+    for (label, body, want) in [
+        (
+            "stored by a free fn (B-2026-09-26-50)",
+            "let mut v: Vec[W] = Vec.new(); let w = mkw(7); stw(mut v, w); println(f\"l{v.len()}\");",
+            "l1\ndD107n107\ndD7n7\nend\n",
+        ),
+        (
+            "stored by a generic fn (B-2026-09-26-50)",
+            "let mut v: Vec[W] = Vec.new(); let w = mkw(7); gst(mut v, w); println(f\"l{v.len()}\");",
+            "l1\ndD107n107\ndD7n7\nend\n",
+        ),
+        (
+            "stored by a method (B-2026-09-26-50)",
+            "let mut v: Vec[W] = Vec.new(); let h = H { k: 1 }; let w = mkw(7); h.put(mut v, w); println(f\"l{v.len()}\");",
+            "l1\ndD107n107\ndD7n7\nend\n",
+        ),
+        (
+            "stored by an associated fn (B-2026-09-26-50)",
+            "let mut v: Vec[W] = Vec.new(); let w = mkw(7); H.aput(mut v, w); println(f\"l{v.len()}\");",
+            "l1\ndD107n107\ndD7n7\nend\n",
+        ),
+        (
+            "stored into the receiver (B-2026-09-26-50)",
+            "let mut b = Bw { ws: Vec.new() }; let w = mkw(7); b.add(w); println(f\"l{b.ws.len()}\");",
+            "l1\ndD107n107\ndD7n7\nend\n",
+        ),
+        (
+            "handed back (B-2026-09-26-50)",
+            "let w = mkw(7); let k = keepw(w); println(f\"k{k.b}\");",
+            "k7\ndD107n107\ndD7n7\nend\n",
+        ),
+        (
+            "handed back by a generic fn (B-2026-09-26-50)",
+            "let w = mkw(7); let k = gid(w); println(f\"k{k.b}\");",
+            "k7\ndD107n107\ndD7n7\nend\n",
+        ),
+        (
+            "wrapped in a returned struct (B-2026-09-26-50)",
+            "let w = mkw(7); let h = wraph(w); println(f\"k{h.k}\");",
+            "k1\ndD107n107\ndD7n7\nend\n",
+        ),
+        (
+            "own Drop plus a Drop field (B-2026-09-26-50)",
+            "let mut v: Vec[Y] = Vec.new(); let y = Y { r: mkd(7), id: 1 }; sty(mut v, y); println(f\"l{v.len()}\");",
+            "l1\ndY1\ndD7n7\nend\n",
+        ),
+        (
+            "nested Drop-less struct (B-2026-09-26-50)",
+            "let mut v: Vec[X] = Vec.new(); let x = mkx(7); stx(mut v, x); println(f\"l{v.len()}\");",
+            "l1\ndD307n307\ndD107n107\ndD7n7\nend\n",
+        ),
+        (
+            "in a loop (B-2026-09-26-50)",
+            "let mut v: Vec[W] = Vec.new(); for i in 0..2 { let w = mkw(i); stw(mut v, w); } println(f\"l{v.len()}\");",
+            "l2\ndD100n100\ndD0n0\ndD101n101\ndD1n1\nend\n",
+        ),
+        (
+            "stored in a taken if arm (B-2026-09-26-50)",
+            "let mut v: Vec[W] = Vec.new(); let w = mkw(7); if w.b > 3 { stw(mut v, w); } println(f\"l{v.len()}\");",
+            "l1\ndD107n107\ndD7n7\nend\n",
+        ),
+        (
+            "not stored in an untaken if arm (B-2026-09-26-50)",
+            "let mut v: Vec[W] = Vec.new(); let w = mkw(2); if w.b > 3 { stw(mut v, w); } println(f\"l{v.len()}\");",
+            "dD102n102\ndD2n2\nl0\nend\n",
+        ),
+        (
+            "control: String fields only (B-2026-09-26-50)",
+            "let mut v: Vec[Q] = Vec.new(); let q = Q { name: f\"qq\", k: 1 }; stq(mut v, q); println(f\"l{v.len()} {v[0].name}\");",
+            "l1 qq\nend\n",
+        ),
+        (
+            "control: discarding callee (B-2026-09-26-50)",
+            "let w = mkw(7); println(f\"e{eatw(w)}\");",
+            "e7\ndD107n107\ndD7n7\nend\n",
+        ),
+        (
+            "control: builtin push (B-2026-09-26-50)",
+            "let mut v: Vec[W] = Vec.new(); let w = mkw(7); v.push(w); println(f\"l{v.len()}\");",
+            "l1\ndD107n107\ndD7n7\nend\n",
+        ),
+    ] {
+        let prog = format!("{H}fn main() {{\n    {body}\n    println(\"end\")\n}}\n");
+        let (interp_out, interp_errs, _, _) = karac::run_program_full_checked(&prog);
+        assert!(
+            interp_errs.is_empty(),
+            "[{label}] interp errored: {interp_errs:?}"
+        );
+        assert_eq!(interp_out.join(""), want, "[{label}] interpreter");
+        if let Some(aot) = run_program(&prog) {
+            assert_eq!(aot, want, "[{label}] AOT");
+        }
+    }
+}

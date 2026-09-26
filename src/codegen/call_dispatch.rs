@@ -2817,7 +2817,11 @@ impl<'ctx> super::Codegen<'ctx> {
                                 self.suppress_struct_cleanup_for_tail_identifier(&var_name);
                             }
                         } else {
-                            self.suppress_user_drop_body_keeping_memory(&var_name);
+                            self.suppress_moved_arg_bodies_keeping_memory(
+                                &var_name,
+                                &name,
+                                Some(i),
+                            );
                         }
                     }
                 }
@@ -11060,6 +11064,27 @@ impl<'ctx> super::Codegen<'ctx> {
     /// argument's memory goes with its body. The per-path (`_any`) form is not
     /// enough: on the path that does not push, a forwarded param's callee
     /// frees nothing, and moving the memory there leaked the `shared` field.
+    /// B-2026-09-26-50 — does the argument leave the caller on EVERY path of
+    /// the callee: handed back whole, pushed into the callee's own container,
+    /// or stored into a place that outlives the call on every path
+    /// (`fn_always_moves_param_into_outliving_place`, the MUST half of the
+    /// store analysis)? A callee resolved nowhere answers `false`.
+    pub(super) fn arg_leaves_caller_on_every_path(
+        &self,
+        callee_name: &str,
+        arg_index: usize,
+    ) -> bool {
+        self.callee_hands_arg_back_whole_on_every_path(callee_name, arg_index)
+            || self.callee_moves_arg_into_local_container(callee_name, arg_index)
+            || self
+                .program_snapshot
+                .as_deref()
+                .and_then(|p| super::declarations::find_function_ast(p, callee_name))
+                .is_some_and(|f| {
+                    crate::ast::fn_always_moves_param_into_outliving_place(f, arg_index)
+                })
+    }
+
     pub(super) fn callee_moves_arg_into_local_container(
         &self,
         callee_name: &str,

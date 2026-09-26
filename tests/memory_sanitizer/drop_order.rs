@@ -3888,3 +3888,67 @@ fn main() {
         27,
     );
 }
+
+/// B-2026-09-26-50 — a NAMED struct with no `Drop` of its own whose fields
+/// carry one, moved whole into a keeping callee (a free, generic or method
+/// store, a hand-back, and a store in a taken and an untaken `if` arm), is
+/// freed once and runs each field's body once. The callee copies at entry or
+/// at the retaining site, so the caller keeps and frees the original's heap
+/// while the moved value's new home runs the bodies. The strings are longer
+/// than the inline capacity so each body frees a heap buffer.
+#[test]
+fn asan_dropless_struct_with_drop_fields_moved_into_a_keeping_callee_is_freed_once() {
+    assert_clean_asan_run_min_allocs(
+        r#"struct D { id: i64, name: String }
+impl Drop for D { fn drop(mut ref self) { println(f"dD{self.id} {self.name}") } }
+fn mkd(n: i64) -> D { return D { id: n, name: f"name-string-longer-than-sso-{n}" }; }
+struct W { r: D, s: D, tag: String }
+fn mkw(n: i64) -> W { return W { r: mkd(n), s: mkd(n + 100), tag: f"tag-string-longer-than-sso-{n}" }; }
+fn stw(v: mut ref Vec[W], x: W) { v.push(x); }
+fn keepw(x: W) -> W { x }
+fn gst[T](v: mut ref Vec[T], x: T) { v.push(x); }
+struct Bw { ws: Vec[W] }
+impl Bw { fn add(mut ref self, x: W) { self.ws.push(x); } }
+fn main() {
+    let mut v: Vec[W] = Vec.new();
+    let a = mkw(1);
+    stw(mut v, a);
+    let b = mkw(2);
+    gst(mut v, b);
+    println(f"v{v.len()}");
+    let c = mkw(3);
+    let k = keepw(c);
+    println(f"k{k.tag}");
+    let mut bw = Bw { ws: Vec.new() };
+    let d = mkw(4);
+    bw.add(d);
+    let e = mkw(5);
+    if e.r.id > 3 { stw(mut v, e); }
+    let f = mkw(0);
+    if f.r.id > 3 { stw(mut v, f); }
+    println(f"v{v.len()} b{bw.ws.len()}");
+    println("end")
+}
+"#,
+        &[
+            "v2",
+            "ktag-string-longer-than-sso-3",
+            "dD103 name-string-longer-than-sso-103",
+            "dD3 name-string-longer-than-sso-3",
+            "dD100 name-string-longer-than-sso-100",
+            "dD0 name-string-longer-than-sso-0",
+            "v3 b1",
+            "dD104 name-string-longer-than-sso-104",
+            "dD4 name-string-longer-than-sso-4",
+            "dD101 name-string-longer-than-sso-101",
+            "dD1 name-string-longer-than-sso-1",
+            "dD102 name-string-longer-than-sso-102",
+            "dD2 name-string-longer-than-sso-2",
+            "dD105 name-string-longer-than-sso-105",
+            "dD5 name-string-longer-than-sso-5",
+            "end",
+        ],
+        "asan_dropless_struct_with_drop_fields_moved_into_a_keeping_callee_is_freed_once",
+        48,
+    );
+}

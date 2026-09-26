@@ -2580,7 +2580,7 @@ impl<'ctx> super::Codegen<'ctx> {
                         && !self.arg_var_is_forwarded_not_copied(&var_name)
                         && !self.conditional_handback_memory_moves_to_callee(name, ast_i)
                     {
-                        self.suppress_user_drop_body_keeping_memory(&var_name);
+                        self.suppress_moved_arg_bodies_keeping_memory(&var_name, name, Some(ast_i));
                     }
                 }
             }
@@ -3671,7 +3671,7 @@ impl<'ctx> super::Codegen<'ctx> {
                     && ast_i.is_some_and(|ast_i| self.callee_takes_over_arg_drop_body(name, ast_i))
                 {
                     let var_name = var_name.clone();
-                    self.suppress_user_drop_body_keeping_memory(&var_name);
+                    self.suppress_moved_arg_bodies_keeping_memory(&var_name, name, ast_i);
                 } else if self.handback_forwards_local(var_name)
                     && ast_i.is_some_and(|ast_i| {
                         self.callee_hands_arg_back_whole_on_every_path(name, ast_i)
@@ -3746,7 +3746,7 @@ impl<'ctx> super::Codegen<'ctx> {
                             self.suppress_struct_cleanup_for_tail_identifier(&var_name);
                         }
                     } else {
-                        self.suppress_user_drop_body_keeping_memory(&var_name);
+                        self.suppress_moved_arg_bodies_keeping_memory(&var_name, name, ast_i);
                     }
                 }
             }

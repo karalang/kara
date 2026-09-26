@@ -7995,7 +7995,11 @@ impl<'ctx> super::Codegen<'ctx> {
                                         self.suppress_struct_cleanup_for_tail_identifier(&var_name);
                                     }
                                 } else {
-                                    self.suppress_user_drop_body_keeping_memory(&var_name);
+                                    self.suppress_moved_arg_bodies_keeping_memory(
+                                        &var_name,
+                                        &qualified,
+                                        Some(i),
+                                    );
                                 }
                             }
                         }
