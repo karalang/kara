@@ -3593,6 +3593,16 @@ impl<'ctx> super::Codegen<'ctx> {
         let vec_ty = self.vec_struct_type();
         let ptr_ty = self.context.ptr_type(AddressSpace::default());
         let i64_t = self.context.i64_type();
+        // B-2026-09-25-39 — an inline user struct/enum payload's owner is an
+        // `EnumDrop` running `karac_drop_Option_<payload>`, which needs the
+        // same eager free: `o = None;` over `Some(S { h: <shared>, .. })`
+        // orphaned the displaced payload's `shared` field. Gated on the agg
+        // set, because a user-enum binding's own `EnumDrop` sits on its slot
+        // too and the value-enum leg at the store site already drops that.
+        let agg = self
+            .payload_vars
+            .inline_option_agg_payload_vars
+            .contains(name);
         // All live frames, not just the top — same rationale as the boxed
         // sibling: at a mid-function store a transient RHS-evaluation frame can
         // sit above the frame that owns the binding's action.
@@ -3611,6 +3621,7 @@ impl<'ctx> super::Codegen<'ctx> {
                 CleanupAction::FreeInlineResultPayload { result_slot, .. } => {
                     *result_slot == slot.ptr
                 }
+                CleanupAction::EnumDrop { enum_alloca, .. } => agg && *enum_alloca == slot.ptr,
                 _ => false,
             })
             .cloned()
@@ -10561,6 +10572,114 @@ impl<'ctx> super::Codegen<'ctx> {
         self.payload_vars
             .inline_option_agg_payload_vars
             .insert(var_name.to_string());
+    }
+
+    /// B-2026-09-25-39 — a plain `let o = Some(s)` whose payload is a user
+    /// STRUCT or value ENUM laid INLINE in `Option`'s payload area had no
+    /// memory owner at all. The let path ran the three overlay registrars
+    /// (`String`/`Vec` words, `Result`, `Map`/`Set` handle), each of which
+    /// self-skips for a struct payload; the WIDE sibling is owned by the
+    /// `BoxedEnumDrop` the boxed arm registers; and the move into `Some` had
+    /// already neutralized the source's own drop. So a `shared` field of the
+    /// payload was never released: `Some(S3 { h: Sh { .. }, id })` lost the
+    /// `Sh` box with no call anywhere in the program.
+    ///
+    /// The owner is `track_inline_option_agg_payload_var`, the registrar the
+    /// destructure sites already use for exactly this payload class, so an
+    /// arm that binds the payload out finds the binding in
+    /// `inline_option_agg_payload_vars` and neutralizes it. Gated to the
+    /// payloads no other registrar owns: not boxed (the boxed arm's leaf
+    /// drop), not the `{ptr,len,cap}` overlay.
+    ///
+    /// Declined when the payload may still be the CALLER's memory
+    /// ([`Self::let_payload_may_be_caller_retained`]): a caller-retained param
+    /// wrapped in place (`fn f(a: S3) { let o = Some(a); }`) or handed to a
+    /// callee that wraps it (`let o = wrap(s)`) has an owner already, and a
+    /// second one here is a double free.
+    pub(super) fn track_let_inline_option_struct_payload(
+        &mut self,
+        var_name: &str,
+        option_slot: PointerValue<'ctx>,
+        option_te: &TypeExpr,
+        value: &Expr,
+    ) {
+        let Some(payload) = Self::option_payload_te(option_te) else {
+            return;
+        };
+        if self.option_payload_is_boxed(&payload)
+            || self.option_inline_payload_elem(option_te).is_some()
+            || self.let_payload_may_be_caller_retained(value, &payload)
+        {
+            return;
+        }
+        self.track_inline_option_agg_payload_var(var_name, option_slot, option_te);
+    }
+
+    /// B-2026-09-25-39 — may the payload a `let` initializer wraps still be
+    /// memory some OTHER frame owns? Conservative: `true` declines an owner,
+    /// which costs a leak, while a wrong `false` costs a double free.
+    ///
+    /// Two ways, both measured as double frees once the let registered an
+    /// owner. An argument rooted at a caller-retained param or one of its
+    /// views (`caller_retained_aggregate_memory`, the prologue's own record of
+    /// the structs it declined to own) wraps the CALLER's buffers: `Some(a)`,
+    /// `Ho.Full(a)`, or a callee handed `a`. And a user callee taking a
+    /// payload-typed param by value may hand that argument back inside the
+    /// result (`fn wrap(v: S3) -> Option[S3] { return Some(v) }`) while the
+    /// caller's own drop for it stays armed, because a struct whose memory
+    /// stays with the caller is never stood down at the call. Only asked for a
+    /// payload type the prologue declines (`struct_param_memory_stays_with_caller`);
+    /// every other payload is entry-copied or transferred, so the result is
+    /// the callee's to hand out.
+    pub(super) fn let_payload_may_be_caller_retained(
+        &self,
+        value: &Expr,
+        payload_te: &TypeExpr,
+    ) -> bool {
+        let args: &[CallArg] = match &value.kind {
+            ExprKind::Call { args, .. } | ExprKind::MethodCall { args, .. } => args,
+            _ => return false,
+        };
+        let retained = |e: &Expr| match &e.kind {
+            ExprKind::Identifier(n) => {
+                self.drop_rc
+                    .caller_retained_aggregate_memory
+                    .contains(n.as_str())
+                    || self.payload_vars.param_view_locals.contains(n.as_str())
+            }
+            ExprKind::SelfValue => self
+                .drop_rc
+                .caller_retained_aggregate_memory
+                .contains("self"),
+            _ => false,
+        };
+        if args.iter().any(|a| retained(&a.value)) {
+            return true;
+        }
+        let TypeKind::Path(p) = &payload_te.kind else {
+            return false;
+        };
+        let Some(head) = p.segments.first() else {
+            return false;
+        };
+        if !self.struct_param_memory_stays_with_caller(head) {
+            return false;
+        }
+        let Some(program) = self.program_snapshot.as_deref() else {
+            return false;
+        };
+        let Some(f) = self
+            .passthrough_callee_key(value)
+            .and_then(|(key, _)| super::declarations::find_function_ast(program, &key))
+        else {
+            return false;
+        };
+        let mentions = |te: &TypeExpr| {
+            crate::formatter::render_type_expr(te)
+                .split(|c: char| !(c.is_alphanumeric() || c == '_'))
+                .any(|w| w == head.as_str())
+        };
+        f.generic_params.is_some() || f.params.iter().any(|p| mentions(&p.ty))
     }
 
     /// B-2026-09-03-22 — the `Result[O, E]` peer of

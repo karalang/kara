@@ -4086,3 +4086,79 @@ fn main() {
     };
     assert_eq!(out, "a1 98\ndS98\nb3\ndS3\ndS4\nb98\ndS98\nc5 98\ns3\ns3\ndS9\ns2\ndS10\ndS99\ns2\ndR11\nsR\ndR12\ndR99\nsR\ndR13\ne13\nn14\nnx\nn99\nnx\nnx\nn17\ndS17\nnx\nnx\ndS18\ng21\ng98\ng1\ng98\ndS24\nh22 25\ndS25\nend\n", "got:\n{out}");
 }
+
+/// B-2026-09-25-39 — an `Option` or generic-enum payload that is a struct
+/// with a `shared` field. `let o = Some(S3 { h: Sh { .. }, id })` had no memory
+/// owner for an INLINE struct payload: the let path ran only the overlay
+/// registrars, the move into `Some` had already stood the source down, so the
+/// `Sh` box was never released (16 B per value at -O0, `a_`..`c_`, `e_`,
+/// `j_`, `k_`). The new owner is the tag-guarded `karac_drop_Option_<S>`
+/// `EnumDrop`, which every hand-over has to disarm: `unwrap`/`expect`
+/// (`f_`), a container store or tuple (`g_`, `l_`), a rebind (`h_`), a
+/// `return` (`m`), and a reassignment has to free the displaced value first
+/// (`i_`). `d_` is the generic enum box, whose interior drop was the plain
+/// value drop that skips a `shared` field by contract. `n_` is the other
+/// direction: a payload that is still a caller-retained param's memory
+/// (`Some(a)` / `Ho.Full(a)` over `a: S3`, or `wrap3(s)` handing `s` back) must
+/// NOT get the new owner, or it is freed twice.
+///
+/// The output was already right on main; this twin pins it against the
+/// hand-over disarms turning a leak into a double free, and the ASAN twin is
+/// the one main fails.
+#[test]
+fn e2e_option_or_generic_enum_payload_with_shared_field_is_released() {
+    let Some(out) = run_program(
+        r#"shared struct Sh { k: i64 }
+struct S2 { h: Sh, id: i64 }
+impl Drop for S2 { fn drop(mut ref self) { println(f"dS{self.id}") } }
+struct S3 { h: Sh, id: i64 }
+struct P6 { e: En, id: i64 }
+enum En { A(Sh), B }
+enum Ho[T] { Full(T), Empty }
+struct G2[T] { v: T, id: i64 }
+struct W { p: Option[S2] }
+fn mk(i: i64) -> S3 { return S3 { h: Sh { k: i }, id: i } }
+fn mk2(i: i64) -> S2 { return S2 { h: Sh { k: i }, id: i } }
+fn a_some() { let s = mk(1); let o = Some(s); println(f"a{o.is_some()}") }
+fn b_drop() { let o = Some(mk2(2)); println(f"b{o.is_some()}") }
+fn c_temp() { let o = Some(S3 { h: Sh { k: 3 }, id: 3 }); println(f"c{o.is_some()}") }
+fn d_generic() { let s = mk(4); let o = Ho.Full(s); let g = Ho.Full(G2 { v: Sh { k: 4 }, id: 4 }); println("d") }
+fn e_match() { let o = Some(mk(5)); match o { Some(x) => println(f"e{x.id}"), None => println("eN") } }
+fn f_unwrap() { let o = Some(mk(6)); let x = o.unwrap(); let p = Some(mk2(6)); let y = p.expect("no"); println(f"f{x.id}{y.id}") }
+fn g_push() { let mut v: Vec[Option[S2]] = Vec.new(); let o = Some(mk2(7)); v.push(o); let t = (Some(mk2(8)), 1); println(f"g{v.len()}{t.1}") }
+fn h_rebind() { let o = Some(mk2(9)); let p = o; println(f"h{p.is_some()}") }
+fn i_reassign() { let mut o = Some(mk2(10)); o = None; let mut q = Some(mk2(11)); q = Some(mk2(12)); println("i") }
+fn j_loop() { for i in 0..3 { let o = Some(mk(i)); println(f"j{o.is_some()}") } }
+fn k_enum() { let o = Some(En.A(Sh { k: 1 })); let p = Some(P6 { e: En.A(Sh { k: 2 }), id: 2 }); println(f"k{o.is_some()}{p.is_some()}") }
+fn l_moves() { let mut m: Map[i64, Option[S2]] = Map.new(); let o = Some(mk2(13)); m.insert(1, o); let p = Some(mk2(14)); let w = W { p: p }; println(f"l{m.len()}") }
+fn ret() -> Option[S2] { let o = Some(mk2(15)); return o }
+fn midS3(v: S3, c: bool) -> Option[S3] { if c { return Some(v) } return None }
+fn wrap3(v: S3) -> Option[S3] { return Some(v) }
+fn inner3(a: S3) { let o = Some(a); println(f"n{o.is_some()}") }
+fn inner2(a: S2) { let o = Some(a); println(f"n{o.is_some()}") }
+fn innerho(a: S3) { let o = Ho.Full(a); println("nho") }
+fn n_params() { let s = mk(18); let o = midS3(s, true); let s2 = mk(19); let o2 = midS3(s2, false); let s3 = mk(20); let o3 = wrap3(s3); let s4 = mk(21); inner3(s4); let s5 = mk2(22); inner2(s5); let s6 = mk(23); innerho(s6); println("n") }
+fn main() {
+    a_some()
+    b_drop()
+    c_temp()
+    d_generic()
+    e_match()
+    f_unwrap()
+    g_push()
+    h_rebind()
+    i_reassign()
+    j_loop()
+    k_enum()
+    l_moves()
+    n_params()
+    let r = ret();
+    println(f"m{r.is_some()}")
+    println("end")
+}
+"#,
+    ) else {
+        return;
+    };
+    assert_eq!(out, "atrue\nbtrue\ndS2\nctrue\nd\ne5\nf66\ndS6\ng11\ndS8\ndS7\nhtrue\ndS9\ndS10\ndS11\ndS12\ni\njtrue\njtrue\njtrue\nktruetrue\ndS14\nl1\ndS13\nntrue\nntrue\ndS22\nnho\nn\nmtrue\ndS15\nend\n", "got:\n{out}");
+}

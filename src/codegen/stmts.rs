@@ -8750,7 +8750,15 @@ impl<'ctx> super::Codegen<'ctx> {
                                     // down, so the box owns the interior on every
                                     // spelling and the in-place question no longer
                                     // decides ownership.
-                                    let inner = if box_only {
+                                    // B-2026-09-25-39 — nor when the payload may
+                                    // still be a caller-retained param's memory
+                                    // (`Ho.Full(a)` over `a: S3`): the caller's
+                                    // drop owns that interior, and the sole-owner
+                                    // drop now releases its `shared` field.
+                                    let inner = if box_only
+                                        || self
+                                            .let_payload_may_be_caller_retained(value, &payload_te)
+                                    {
                                         None
                                     } else {
                                         self.enum_boxed_payload_interior_drop(&payload_te, true)
@@ -10664,6 +10672,9 @@ impl<'ctx> super::Codegen<'ctx> {
                                     self.track_inline_result_payload_var(var_name, slot.ptr, &te);
                                     self.track_inline_option_map_payload_var(
                                         var_name, slot.ptr, &te,
+                                    );
+                                    self.track_let_inline_option_struct_payload(
+                                        var_name, slot.ptr, &te, value,
                                     );
                                     // B-2026-08-09-8 — `let p = o;` is a whole-
                                     // value MOVE, so having registered the

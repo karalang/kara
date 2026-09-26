@@ -4423,7 +4423,11 @@ impl<'ctx> super::Codegen<'ctx> {
             // unaffected — zeroing a payload-less slot is a no-op). Same
             // no-op cases as the unwrap site: fresh-temp receiver, non-heap
             // payload.
-            self.suppress_inline_option_result_binding_move(object);
+            //
+            // B-2026-09-25-39 — the TRANSFER entry point, so an inline user
+            // struct/enum payload (`inline_option_agg_payload_vars`) is
+            // disarmed too: the extracted value owns it now.
+            self.suppress_inline_option_agg_binding_transfer(object);
             self.suppress_place_optres_field_unwrap_source(object, method);
             return Ok(Some(phi.as_basic_value()));
         }
@@ -4652,7 +4656,11 @@ impl<'ctx> super::Codegen<'ctx> {
         // `Option`/`Result` identifier receiver's slot; it no-ops for a
         // fresh-temp receiver (not an identifier — already single-owned) and for
         // a non-heap payload (not in the tracked sets).
-        self.suppress_inline_option_result_binding_move(object);
+        //
+        // B-2026-09-25-39 — the TRANSFER entry point: an inline user
+        // struct/enum payload's `EnumDrop` must go as well, or the unwrapped
+        // value and the receiver both free it.
+        self.suppress_inline_option_agg_binding_transfer(object);
         self.suppress_place_optres_field_unwrap_source(object, method);
         Ok(Some(value))
     }

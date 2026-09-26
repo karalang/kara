@@ -12366,8 +12366,14 @@ impl<'ctx> super::Codegen<'ctx> {
         // lookups below are unchanged and still run first, so a program that
         // declares its own `String` or `Vec` keeps the synthesis it had.
         if p.generic_args.is_none() {
+            // B-2026-09-25-39 — the SOLE-OWNER drop, not the bare value drop:
+            // the box is the payload's only owner (the constructor stood the
+            // source down), and `__karac_drop_struct_<T>` skips a direct
+            // `shared` field by contract, so `Ho.Full(s)` over a struct with
+            // one lost the `shared` box. The fourth sole-owner channel
+            // B-2026-09-06-72's list did not reach.
             if self.type_decls.struct_types.contains_key(name.as_str()) {
-                return self.emit_struct_drop_synthesis(&name);
+                return self.sole_owner_struct_memory_drop(&name);
             }
             if self.type_decls.enum_layouts.contains_key(name.as_str()) {
                 return self.emit_enum_drop_switch(&name);
@@ -12430,7 +12436,8 @@ impl<'ctx> super::Codegen<'ctx> {
             if subst.is_empty() {
                 return None;
             }
-            return self.emit_struct_drop_synthesis_mono(&name, &subst);
+            // B-2026-09-25-39 — sole owner, as the non-generic arm above.
+            return self.sole_owner_struct_memory_drop_mono(&name, &subst);
         }
         None
     }

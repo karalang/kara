@@ -14935,6 +14935,14 @@ impl<'ctx> super::Codegen<'ctx> {
             || self
                 .payload_vars
                 .inline_result_agg_payload_vars
+                .contains(owner.as_str())
+            // B-2026-09-25-39 — the `Option` peer: a let-bound inline user
+            // struct/enum payload. The transfer disarm already zeroes the
+            // source, so without this the destination registered nothing and
+            // `let p = o;` leaked the payload's `shared` field.
+            || self
+                .payload_vars
+                .inline_option_agg_payload_vars
                 .contains(owner.as_str()))
         .then_some(owner)
     }
@@ -14980,6 +14988,36 @@ impl<'ctx> super::Codegen<'ctx> {
         // B-2026-08-06-29 — follow the passthrough ownership alias, so the
         // suppression lands on the binding that actually owns the payload.
         let name = &self.moved_arg_owner_name(name);
+        // B-2026-09-25-39 — the inline user STRUCT/ENUM payload channel. Every
+        // caller of this suppressor is a container store or a value-producing
+        // tail, i.e. a TRANSFER, so the source's `EnumDrop` has to go the same
+        // way the overlay's free does: `v.push(o)` / `(o, 1)` / `m.insert(k,
+        // o)` over a let-bound `Option[S]` freed the payload twice once that
+        // binding was given an owner. Its drop dispatches on the tag, so a
+        // `None` tag is the disarm; the payload words were already copied out.
+        if self
+            .payload_vars
+            .inline_option_agg_payload_vars
+            .contains(name.as_str())
+            && !self.is_rc_fallback_optres_binding(name)
+        {
+            if let (Some(slot), Some(layout)) = (
+                self.variables.get(name.as_str()),
+                self.type_decls.enum_layouts.get("Option"),
+            ) {
+                if let Ok(tag_ptr) = self.builder.build_struct_gep(
+                    layout.llvm_type,
+                    slot.ptr,
+                    0,
+                    "optagg.movearg.tag",
+                ) {
+                    let tag_ty = layout.llvm_type.get_field_type_at_index(0).unwrap();
+                    let _ = self
+                        .builder
+                        .build_store(tag_ptr, tag_ty.into_int_type().const_zero());
+                }
+            }
+        }
         if !self
             .payload_vars
             .inline_option_payload_vars
