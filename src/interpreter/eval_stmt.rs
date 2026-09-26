@@ -3639,6 +3639,16 @@ impl<'a> super::Interpreter<'a> {
     /// run before the call. Codegen records the same arm tails
     /// (`compute_consumed_arm_tail_spans`). A bare projection argument is NOT
     /// a wrapper and keeps borrowing until the statement ends.
+    /// B-2026-09-26-34 — a value handed to a BUILTIN container sink (`push`,
+    /// `push_back`, `push_front`, `insert`) moves in whole, so a projection off
+    /// a fresh temp is consumed there, directly or through a wrapper's arm,
+    /// exactly as a `let` initializer consumes it. Codegen's sink arms call
+    /// `consume_freshtemp_field_move` at the same point.
+    pub(crate) fn consume_freshtemp_sink_arg(&mut self, value: &Expr) {
+        self.consume_freshtemp_wrapper_arg(value);
+        self.consume_freshtemp_field_move(value);
+    }
+
     pub(super) fn consume_freshtemp_wrapper_arg(&mut self, value: &Expr) {
         if matches!(
             value.kind,

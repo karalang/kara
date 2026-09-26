@@ -1733,6 +1733,8 @@ impl<'ctx> super::Codegen<'ctx> {
                 // arm (B-2026-08-13-15).
                 let key_val = self.coerce_scalar_to_type_from(key_val, key_ty, &args[0].value);
                 let val_val = self.compile_expr(&args[1].value)?;
+                // B-2026-09-26-34 — see `Vec.push`.
+                self.consume_freshtemp_field_move(&args[1].value);
                 // B-2026-09-15-16 — the `insert` sink's half of the same pair
                 // the variant constructor and `push` take. A WHOLE non-shared
                 // struct inserted while the source is READ AFTER THE MOVE needs
@@ -1939,6 +1941,9 @@ impl<'ctx> super::Codegen<'ctx> {
                 // (the borrowed path already compiled the sliced object above).
                 let key_val = if borrowed_key.is_none() {
                     let kv = self.compile_expr(&args[0].value)?;
+                    // B-2026-09-26-34 — a key projected off a fresh temp moves
+                    // in, as `Vec.push`'s element does.
+                    self.consume_freshtemp_field_move(&args[0].value);
                     // Consume-site ownership pair, identical to `Vec.push`:
                     // an f-string key (`m.insert(f"…", v)`) moves its buffer
                     // in — disarm the staged accumulator's scope-exit free;
@@ -1954,6 +1959,8 @@ impl<'ctx> super::Codegen<'ctx> {
                     None
                 };
                 let val_val = self.compile_expr(&args[1].value)?;
+                // B-2026-09-26-34 — see `Vec.push`.
+                self.consume_freshtemp_field_move(&args[1].value);
                 // B-2026-09-15-16 — the `insert` sink's half of the same pair
                 // the variant constructor and `push` take. A WHOLE non-shared
                 // struct inserted while the source is READ AFTER THE MOVE needs

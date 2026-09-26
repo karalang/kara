@@ -614,7 +614,12 @@ impl<'a> super::Interpreter<'a> {
             "push" => {
                 if let Value::Array(rc) = &obj {
                     let val = if let Some(arg) = args.first() {
-                        self.eval_expr_inner(&arg.value)
+                        let v = self.eval_expr_inner(&arg.value);
+                        // B-2026-09-26-34 — an element projected off a FRESH
+                        // temp moves into the Vec: the temp's other fields'
+                        // bodies run here, as codegen's push arm runs them.
+                        self.consume_freshtemp_sink_arg(&arg.value);
+                        v
                     } else {
                         Value::Unit
                     };
@@ -811,7 +816,12 @@ impl<'a> super::Interpreter<'a> {
                     };
                     let val = args
                         .get(1)
-                        .map(|a| self.eval_expr_inner(&a.value))
+                        .map(|a| {
+                            let v = self.eval_expr_inner(&a.value);
+                            // B-2026-09-26-34 — see the `push` arm.
+                            self.consume_freshtemp_sink_arg(&a.value);
+                            v
+                        })
                         .unwrap_or(Value::Unit);
                     let label = match &object.kind {
                         ExprKind::Identifier(n) => n.clone(),

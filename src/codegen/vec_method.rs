@@ -3310,6 +3310,12 @@ impl<'ctx> super::Codegen<'ctx> {
                     return Err("Vec.push requires an argument".to_string());
                 }
                 let elem_val = self.compile_expr(&args[0].value)?;
+                // B-2026-09-26-34 — an element projected off a FRESH temp
+                // (`xs.push(mkw(7).r)`) is MOVED into the Vec, as a Vec
+                // literal element is (B-2026-08-31-34): the temp gives the field
+                // up here and its other fields' bodies run now. Without it the
+                // temp's own cleanup freed the field the Vec had just taken.
+                self.consume_freshtemp_field_move(&args[0].value);
                 // B-2026-09-15-16 — the `push` sink's half of the same pair the
                 // variant constructor takes. A WHOLE non-shared struct pushed
                 // while the source is READ AFTER THE MOVE needs its own buffer,
@@ -3717,6 +3723,8 @@ impl<'ctx> super::Codegen<'ctx> {
                 }
                 let idx_val = self.compile_expr(&args[0].value)?.into_int_value();
                 let elem_val = self.compile_expr(&args[1].value)?;
+                // B-2026-09-26-34 — see the `push` arm.
+                self.consume_freshtemp_field_move(&args[1].value);
                 // Move-in ownership suppressions — identical to the `push` arm
                 // (the value at arg 1 is the one that moves into the buffer).
                 self.suppress_fstr_acc_if_moved_out(&args[1].value);
@@ -4729,6 +4737,8 @@ impl<'ctx> super::Codegen<'ctx> {
                     return Err("VecDeque.push_front requires an argument".to_string());
                 }
                 let elem_val = self.compile_expr(&args[0].value)?;
+                // B-2026-09-26-34 — see the `push` arm.
+                self.consume_freshtemp_field_move(&args[0].value);
                 // Same consume-site ownership pair as the "push" arm: an
                 // f-string temp moves in (disarm its acc cleanup); an
                 // owned String/Vec param deep-copies (caller keeps the

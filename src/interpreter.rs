@@ -3968,7 +3968,12 @@ impl<'a> Interpreter<'a> {
             "push_back" => {
                 let val = args
                     .first()
-                    .map(|a| self.eval_expr_inner(&a.value))
+                    .map(|a| {
+                        let v = self.eval_expr_inner(&a.value);
+                        // B-2026-09-26-34 — see `Vec.push`.
+                        self.consume_freshtemp_sink_arg(&a.value);
+                        v
+                    })
                     .unwrap_or(Value::Unit);
                 try_write_or_panic(rc, &label).push(val);
                 Value::Unit
@@ -3976,7 +3981,12 @@ impl<'a> Interpreter<'a> {
             "push_front" => {
                 let val = args
                     .first()
-                    .map(|a| self.eval_expr_inner(&a.value))
+                    .map(|a| {
+                        let v = self.eval_expr_inner(&a.value);
+                        // B-2026-09-26-34 — see `Vec.push`.
+                        self.consume_freshtemp_sink_arg(&a.value);
+                        v
+                    })
                     .unwrap_or(Value::Unit);
                 try_write_or_panic(rc, &label).insert(0, val);
                 Value::Unit

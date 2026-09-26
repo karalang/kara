@@ -6936,3 +6936,159 @@ fn eatdd(d: Dd) -> i64 { d.id }
         }
     }
 }
+
+/// B-2026-09-26-34 — a field projected off a FRESH temp and handed to a
+/// BUILTIN container sink (`Vec.push` / `insert`, `VecDeque.push_back` /
+/// `push_front`, `Map` / `SortedMap` / `Set.insert`) MOVES into the
+/// container, as a Vec literal element already did: the temp's other
+/// `Drop`-bearing fields run their bodies at the call and the container owns
+/// the moved field. Before the fix the temp's own cleanup freed the field the
+/// container had just taken, so every heap-carrying cell aborted with a double
+/// free on the compiled surfaces, while `--interp` lost the siblings' bodies.
+/// Every cell was checked `--interp` / JIT / `-O2` seq / `-O2` par
+/// byte-identical and valgrind-clean at `-O0`.
+#[test]
+fn e2e_fresh_temp_projection_moved_into_a_container_sink() {
+    const H: &str = r#"struct D { id: i64, name: String }
+impl Drop for D { fn drop(mut ref self) { println(f"dD{self.id}{self.name}") } }
+fn mkd(n: i64) -> D { return D { id: n, name: f"n{n}" }; }
+struct W { r: D, s: D, b: i64 }
+fn mkw(n: i64) -> W { return W { r: mkd(n), s: mkd(n + 100), b: n }; }
+fn eat(d: D) -> i64 { return d.id; }
+fn ownd(d: D) -> i64 { d.id }
+struct G[T] { v: T, k: i64 }
+fn wrap[T](x: T) -> G[T] { return G { v: x, k: 7 }; }
+fn eatd(d: D) -> i64 { d.id }
+fn keep(d: D) -> D { d }
+struct H { k: i64 }
+impl H { fn take(self, d: D) -> i64 { d.id } fn tk(d: D) -> i64 { d.id } fn peek(self, d: ref D) -> i64 { d.id } }
+enum E { A(D), B }
+struct Wx { e: E, s: D }
+fn mkwe(n: i64) -> Wx { return Wx { e: E.A(mkd(n)), s: mkd(n + 200) }; }
+fn eate(e: E) -> i64 { match e { E.A(d) => d.id, E.B => 0 } }
+struct X { w: W, t: D }
+fn mkx(n: i64) -> X { return X { w: mkw(n), t: mkd(n + 300) }; }
+fn peekd(d: ref D) -> i64 { d.id }
+fn two(a: D, b: D) -> i64 { a.id + b.id }
+fn side(n: i64) -> i64 { println(f"side{n}"); n }
+fn mix(d: D, n: i64) -> i64 { d.id + n }
+fn eatw(w: W) -> i64 { w.b }
+fn gn[T](x: T) -> i64 { 1 }
+struct Dd { id: i64, inr: D }
+impl Drop for Dd { fn drop(mut ref self) { println(f"dDd{self.id}") } }
+struct Wd { d: Dd, s: D }
+fn mkwd(n: i64) -> Wd { return Wd { d: Dd { id: n, inr: mkd(n + 1) }, s: mkd(n + 400) }; }
+fn eatdd(d: Dd) -> i64 { d.id }
+struct Q { name: String, k: i64 }
+fn mkq(n: i64) -> Q { return Q { name: f"q{n}", k: n } }
+impl H { fn mk(self, n: i64) -> W { mkw(n) } }
+"#;
+    for (label, body, want) in [
+        (
+            "Vec.push",
+            "let mut xs: Vec[D] = Vec.new(); xs.push(mkw(7).r); println(f\"l{xs.len()}\");",
+            "dD107n107\nl1\ndD7n7\nend\n",
+        ),
+        (
+            "Vec.push of a String field",
+            "let mut xs: Vec[String] = Vec.new(); xs.push(mkq(7).name); println(f\"l{xs.len()}\");",
+            "l1\nend\n",
+        ),
+        (
+            "Vec.push, generic root",
+            "let mut xs: Vec[D] = Vec.new(); xs.push(wrap(mkd(7)).v); println(f\"l{xs.len()}\");",
+            "l1\ndD7n7\nend\n",
+        ),
+        (
+            "VecDeque.push_back",
+            "let mut xs: VecDeque[D] = VecDeque.new(); xs.push_back(mkw(7).r); println(f\"l{xs.len()}\");",
+            "dD107n107\nl1\ndD7n7\nend\n",
+        ),
+        (
+            "VecDeque.push_front",
+            "let mut xs: VecDeque[D] = VecDeque.new(); xs.push_front(mkw(7).r); println(f\"l{xs.len()}\");",
+            "dD107n107\nl1\ndD7n7\nend\n",
+        ),
+        (
+            "Vec.insert",
+            "let mut xs: Vec[D] = Vec.new(); xs.push(mkd(1)); xs.insert(0, mkw(7).r); println(f\"l{xs.len()}\");",
+            "dD107n107\nl2\ndD7n7\ndD1n1\nend\n",
+        ),
+        (
+            "Map.insert value",
+            "let mut m: Map[i64, D] = Map.new(); m.insert(1, mkw(7).r); println(f\"l{m.len()}\");",
+            "dD107n107\nl1\ndD7n7\nend\n",
+        ),
+        (
+            "Vec.push in a loop",
+            "let mut xs: Vec[D] = Vec.new(); for i in 0..3 { xs.push(mkw(i).s); } println(f\"l{xs.len()}\");",
+            "dD0n0\ndD1n1\ndD2n2\nl3\ndD100n100\ndD101n101\ndD102n102\nend\n",
+        ),
+        (
+            "Vec.push, two hops",
+            "let mut xs: Vec[D] = Vec.new(); xs.push(mkx(4).w.r); println(f\"l{xs.len()}\");",
+            "dD304n304\ndD104n104\nl1\ndD4n4\nend\n",
+        ),
+        (
+            "Vec.push of an enum field",
+            "let mut xs: Vec[E] = Vec.new(); xs.push(mkwe(3).e); println(f\"l{xs.len()}\");",
+            "dD203n203\nl1\ndD3n3\nend\n",
+        ),
+        (
+            "Vec.push off a method-call temp",
+            "let h = H { k: 1 }; let mut xs: Vec[D] = Vec.new(); xs.push(h.mk(7).r); println(f\"l{xs.len()}\");",
+            "dD107n107\nl1\ndD7n7\nend\n",
+        ),
+        (
+            "Vec.push of a Drop-free parent field",
+            "let mut xs: Vec[W] = Vec.new(); xs.push(mkx(6).w); println(f\"l{xs.len()} {xs[0].r.id}\");",
+            "dD306n306\nl1 6\ndD106n106\ndD6n6\nend\n",
+        ),
+        (
+            "Vec.push through an if arm",
+            "let mut xs: Vec[D] = Vec.new(); xs.push(if true { mkw(7).r } else { mkd(1) }); println(f\"l{xs.len()}\");",
+            "dD107n107\nl1\ndD7n7\nend\n",
+        ),
+        (
+            "Vec.push of a field with its own Drop",
+            "let mut xs: Vec[Dd] = Vec.new(); xs.push(mkwd(10).d); println(f\"l{xs.len()}\");",
+            "dD410n410\nl1\ndDd10\ndD11n11\nend\n",
+        ),
+        (
+            "SortedMap.insert value",
+            "let mut m: SortedMap[i64, D] = SortedMap.new(); m.insert(1, mkw(7).r); println(f\"l{m.len()}\");",
+            "dD107n107\nl1\ndD7n7\nend\n",
+        ),
+        (
+            "Set.insert of a String field",
+            "let mut s: Set[String] = Set.new(); s.insert(mkq(7).name); println(f\"l{s.len()}\");",
+            "l1\nend\n",
+        ),
+        (
+            "Map.insert key",
+            "let mut m: Map[String, i64] = Map.new(); m.insert(mkq(7).name, 1); println(f\"l{m.len()}\");",
+            "l1\nend\n",
+        ),
+        (
+            "VecDeque.push_back through an if arm",
+            "let mut xs: VecDeque[D] = VecDeque.new(); xs.push_back(if true { mkw(7).r } else { mkd(1) }); println(f\"l{xs.len()}\");",
+            "dD107n107\nl1\ndD7n7\nend\n",
+        ),
+        (
+            "Vec.push and Vec.insert of String fields",
+            "let mut xs: Vec[String] = Vec.new(); xs.push(mkq(3).name); xs.insert(0, mkq(4).name); println(f\"l{xs.len()} {xs[0]} {xs[1]}\");",
+            "l2 q4 q3\nend\n",
+        ),
+    ] {
+        let prog = format!("{H}fn main() {{\n    {body}\n    println(\"end\")\n}}\n");
+        let (interp_out, interp_errs, _, _) = karac::run_program_full_checked(&prog);
+        assert!(
+            interp_errs.is_empty(),
+            "[{label}] interp errored: {interp_errs:?}"
+        );
+        assert_eq!(interp_out.join(""), want, "[{label}] interpreter");
+        if let Some(aot) = run_program(&prog) {
+            assert_eq!(aot, want, "[{label}] AOT");
+        }
+    }
+}

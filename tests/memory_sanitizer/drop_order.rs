@@ -3408,3 +3408,78 @@ fn main() {
         60,
     );
 }
+
+/// B-2026-09-26-34 — a field projected off a fresh temp and handed to a
+/// builtin container sink moves into the container: each `D` and each string
+/// built here is freed exactly once. Every cell double-freed on the compiled
+/// surfaces before the fix. The names are longer than the inline string
+/// capacity so each free is a real heap free.
+#[test]
+fn asan_fresh_temp_projection_moved_into_a_container_sink_is_freed_once() {
+    assert_clean_asan_run_min_allocs(
+        r#"struct D { id: i64, name: String }
+impl Drop for D { fn drop(mut ref self) { println(f"dD{self.id} {self.name}") } }
+fn mkd(n: i64) -> D { return D { id: n, name: f"name-string-longer-than-sso-{n}" }; }
+struct W { r: D, s: D, name: String, b: i64 }
+fn mkw(n: i64) -> W { return W { r: mkd(n), s: mkd(n + 100), name: f"w-string-longer-than-sso-{n}", b: n }; }
+struct Q { name: String, k: i64 }
+fn mkq(n: i64) -> Q { return Q { name: f"q-string-longer-than-sso-{n}", k: n } }
+struct G[T] { v: T, k: i64 }
+fn wrap[T](x: T) -> G[T] { return G { v: x, k: 7 }; }
+fn main() {
+    let mut xs: Vec[D] = Vec.new();
+    xs.push(mkw(1).r);
+    xs.insert(0, mkw(2).s);
+    xs.push(wrap(mkd(3)).v);
+    xs.push(if true { mkw(4).r } else { mkd(0) });
+    println(f"xs{xs.len()}");
+    let mut dq: VecDeque[D] = VecDeque.new();
+    dq.push_back(mkw(5).r);
+    dq.push_front(mkw(6).r);
+    println(f"dq{dq.len()}");
+    let mut ss: Vec[String] = Vec.new();
+    ss.push(mkq(7).name);
+    ss.insert(0, mkw(8).name);
+    println(f"ss{ss.len()} {ss[0]} {ss[1]}");
+    let mut m: Map[String, D] = Map.new();
+    m.insert(mkq(9).name, mkw(10).r);
+    println(f"m{m.len()}");
+    let mut sm: SortedMap[i64, D] = SortedMap.new();
+    sm.insert(1, mkw(11).r);
+    println(f"sm{sm.len()}");
+    let mut st: Set[String] = Set.new();
+    st.insert(mkq(12).name);
+    println(f"st{st.len()}");
+    println("end")
+}
+"#,
+        &[
+            "dD101 name-string-longer-than-sso-101",
+            "dD2 name-string-longer-than-sso-2",
+            "dD104 name-string-longer-than-sso-104",
+            "xs4",
+            "dD102 name-string-longer-than-sso-102",
+            "dD1 name-string-longer-than-sso-1",
+            "dD3 name-string-longer-than-sso-3",
+            "dD4 name-string-longer-than-sso-4",
+            "dD105 name-string-longer-than-sso-105",
+            "dD106 name-string-longer-than-sso-106",
+            "dq2",
+            "dD6 name-string-longer-than-sso-6",
+            "dD5 name-string-longer-than-sso-5",
+            "dD108 name-string-longer-than-sso-108",
+            "dD8 name-string-longer-than-sso-8",
+            "ss2 w-string-longer-than-sso-8 q-string-longer-than-sso-7",
+            "dD110 name-string-longer-than-sso-110",
+            "m1",
+            "dD10 name-string-longer-than-sso-10",
+            "dD111 name-string-longer-than-sso-111",
+            "sm1",
+            "dD11 name-string-longer-than-sso-11",
+            "st1",
+            "end",
+        ],
+        "asan_fresh_temp_projection_moved_into_a_container_sink_is_freed_once",
+        64,
+    );
+}

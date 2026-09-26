@@ -103,6 +103,8 @@ impl<'ctx> super::Codegen<'ctx> {
                     return Err("Set.insert requires a value argument".to_string());
                 }
                 let elem_val = self.compile_expr(&args[0].value)?;
+                // B-2026-09-26-34 — see `Vec.push`.
+                self.consume_freshtemp_field_move(&args[0].value);
                 // Widen/narrow a scalar element to the Set's declared element
                 // width BEFORE it is staged (B-2026-08-13-15). The element
                 // slot below is `elem_ty`-sized, so storing a narrower value

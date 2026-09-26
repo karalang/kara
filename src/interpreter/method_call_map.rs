@@ -187,7 +187,12 @@ impl<'a> super::Interpreter<'a> {
             "insert" => {
                 let val = args
                     .first()
-                    .map(|a| self.eval_expr_inner(&a.value))
+                    .map(|a| {
+                        let v = self.eval_expr_inner(&a.value);
+                        // B-2026-09-26-34 — see `Vec.push`.
+                        self.consume_freshtemp_sink_arg(&a.value);
+                        v
+                    })
                     .unwrap_or(Value::Unit);
                 // Key arg: container walks only (no map walk covers keys —
                 // the key source's own body firing once is today's
@@ -224,6 +229,7 @@ impl<'a> super::Interpreter<'a> {
                         .get(1)
                         .map(|a| {
                             let v = self.eval_expr_inner(&a.value);
+                            self.consume_freshtemp_sink_arg(&a.value);
                             // B-2026-08-30-48 — the same implicit int-to-float
                             // widening the `Vec.push` path already applies. A
                             // map's value type is not in reach at the mutation
@@ -265,6 +271,7 @@ impl<'a> super::Interpreter<'a> {
                         .get(1)
                         .map(|a| {
                             let v = self.eval_expr_inner(&a.value);
+                            self.consume_freshtemp_sink_arg(&a.value);
                             let v = self.coerce_float_slot_arg(&v, Some(a));
                             self.downgrade_weak_container_store(a, v)
                         })
