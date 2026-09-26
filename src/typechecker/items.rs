@@ -4725,10 +4725,11 @@ impl<'a> super::TypeChecker<'a> {
     /// it needs the callee's AST `Function` at the general argument site
     /// (`exprs.rs`, beside `warn_partial_move_of_drop_struct`), which has the
     /// parameter type and not the callee — `fn_moves_param_into_outliving_place`
-    /// and its `_via_call` sibling are the predicates it would ask — and
-    /// because B-2026-09-14-10's open question is whether the discarding
-    /// cells' single body is the behaviour that stays. A warning widened
-    /// before that is decided may have to be withdrawn.
+    /// and its `_via_call` sibling are the predicates it would ask. The
+    /// discarding cells' single body is the behaviour that stays: design.md
+    /// § "Field projection off a borrow" now states the elision
+    /// (B-2026-09-14-10), so a widened warning would report only the storing
+    /// callees.
     ///
     /// What the exemption is NOT is a statement about call arguments as a
     /// class: every storing callee copies today, unreported.

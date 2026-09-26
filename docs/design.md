@@ -8253,6 +8253,22 @@ stating out loud is the consequence, because nothing at the use site shows it:
   4.2x for a 2x input — against **5 ms** for the same loop with the read hoisted
   out of it.
 
+**A by-value argument the callee discards does not copy.** Passing the
+projection straight to a function (`consume(s.r)`, `Sk.take(s.r)`) copies only
+when the callee *keeps* the value: stores it in a container, a field or anything
+else that outlives the call. A callee that only reads its parameter and lets it
+die at its own return receives the caller's field without a copy, so the field's
+`Drop` body runs **once**, at the owner's death, and a heap-bearing field is not
+reallocated. A storing callee copies exactly as the `let` does, and its body runs
+twice. The call spelling decides nothing: a free function, an associated
+function, a method and a builtin (`v.push(s.r)`) all follow the keep/discard
+line, on every backend. This is a deliberate elision (B-2026-09-14-10): nothing
+about `consume(s.r)` asks for the value to outlive the call, and the copy it
+removes would be observable only as an extra `Drop` body. It covers the
+projection passed directly; a pattern binding off the projection that is then
+passed to a function still copies at that call, discarding callee or not, as the
+next paragraph states.
+
 `karac check` reports it as the `borrow_projection_copy` lint, offering
 `.clone()` as a machine-applicable fix where the type has one. That fix is
 behaviour-**preserving**: the copy already happens, and `.clone()` only spells
