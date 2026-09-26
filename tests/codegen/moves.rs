@@ -2226,6 +2226,93 @@ fn e2e_field_moved_through_a_fresh_temp_projection_has_one_owner() {
     }
 }
 
+/// B-2026-09-26-3 — a SCALAR taken off a fresh temp whose type has a `Drop` of
+/// its own runs that body, as the named spelling does.
+///
+/// `let y = mkq().k;` over `struct Q { d: D, k: i64 }` with `impl Drop for Q`
+/// printed `dD3n3 y4` on every surface, where `let q = mkq(); let x = q.k;`
+/// prints `dQ4 dD3n3 x4`: the consumer's masked walk ran the remaining FIELDS'
+/// bodies and never the type's own. A scalar leaves the value whole, so both
+/// backends now run the whole value's bodies at the consumer, in every
+/// consuming position (`let`, assignment, tuple element, constructor argument,
+/// `return`, function tail).
+///
+/// The PINNED cell is a non-scalar field moved off such a temp
+/// (`mkqs().s`), which runs no body on either backend; whether that move is
+/// legal on a temp at all is the typechecker's question.
+#[test]
+fn e2e_scalar_taken_off_a_fresh_temp_runs_its_types_own_drop() {
+    const H: &str = "struct D { id: i64, name: String }\n\
+             impl Drop for D { fn drop(mut ref self) { println(f\"dD{self.id}{self.name}\") } }\n\
+             fn mkd(n: i64) -> D { return D { id: n, name: f\"n{n}\" }; }\n\
+             struct Q { d: D, k: i64 }\n\
+             impl Drop for Q { fn drop(mut ref self) { println(f\"dQ{self.k}\") } }\n\
+             fn mkq() -> Q { return Q { d: mkd(3), k: 4 }; }\n\
+             struct Qs { s: String, k: i64 }\n\
+             impl Drop for Qs { fn drop(mut ref self) { println(f\"dQs{self.k}{self.s}\") } }\n\
+             fn mkqs() -> Qs { return Qs { s: f\"ss\", k: 6 }; }\n\
+             fn tailq() -> i64 { mkq().k }\n\
+             fn retq() -> i64 { return mkq().k; }\n";
+    for (label, body, want) in [
+        (
+            "let",
+            "let y = mkq().k; println(f\"y{y}\");",
+            "dQ4\ndD3n3\ny4\nend\n",
+        ),
+        (
+            "function tail",
+            "println(f\"t{tailq()}\");",
+            "dQ4\ndD3n3\nt4\nend\n",
+        ),
+        (
+            "return",
+            "println(f\"r{retq()}\");",
+            "dQ4\ndD3n3\nr4\nend\n",
+        ),
+        (
+            "tuple element",
+            "let t = (mkq().k, 1); println(f\"t{t.0}\");",
+            "dQ4\ndD3n3\nt4\nend\n",
+        ),
+        (
+            "assignment",
+            "let mut y = 0; y = mkq().k; println(f\"y{y}\");",
+            "dQ4\ndD3n3\ny4\nend\n",
+        ),
+        (
+            "own body reads a sibling heap field",
+            "let y = mkqs().k; println(f\"y{y}\");",
+            "dQs6ss\ny6\nend\n",
+        ),
+        (
+            "constructor argument",
+            "let o = Some(mkq().k); println(f\"o{o.unwrap()}\");",
+            "dQ4\ndD3n3\no4\nend\n",
+        ),
+        (
+            "control: the named spelling",
+            "let q = mkq(); let x = q.k; println(f\"x{x}\");",
+            "dQ4\ndD3n3\nx4\nend\n",
+        ),
+        (
+            "pinned: a non-scalar moved off the temp",
+            "let s = mkqs().s; println(s);",
+            "ss\nend\n",
+        ),
+    ] {
+        let prog = format!("{H}fn main() {{\n    {body}\n    println(\"end\")\n}}\n");
+        let (interp_out, interp_errs, _, _) = karac::run_program_full_checked(&prog);
+        assert!(
+            interp_errs.is_empty(),
+            "[{label}] interp errored: {interp_errs:?}"
+        );
+        assert_eq!(interp_out.join(""), want, "[{label}] interpreter");
+        if let Some(aot) = run_program(&prog) {
+            assert_eq!(aot, want, "[{label}] AOT");
+        }
+    }
+}
+
 /// B-2026-09-05-13 — a by-value param REBOUND whole (`let m = r;`) and then
 /// handed back through an `Option`/`Result` constructor runs the `Drop` body
 /// ONCE, on every surface, unconditionally (`u-rebind`) and conditionally

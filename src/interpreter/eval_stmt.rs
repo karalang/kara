@@ -3440,6 +3440,36 @@ impl<'a> super::Interpreter<'a> {
         // by name against the value, so a removed one is simply not found and
         // not walked, which is the same device every param-view mask in this
         // file uses.
+        // B-2026-09-26-3 — a scalar taken off a temp whose type has a `Drop` of
+        // its own leaves the value whole, so the whole value's bodies run: the
+        // type's own first, then its fields'. Codegen's twin is
+        // `freshtemp_consume_owes_own_drop`, asking the same questions of the
+        // same declaration.
+        if let Value::Struct { name: sname, .. } = &tempv {
+            let owes = self.program.drop_method_keys.contains_key(sname.as_str())
+                && self
+                    .typecheck_result
+                    .struct_info
+                    .get(sname.as_str())
+                    .is_some_and(|i| i.generic_params.is_empty() && !i.is_shared)
+                && self
+                    .program
+                    .items
+                    .iter()
+                    .find_map(|item| match item {
+                        Item::StructDef(s) if s.name == *sname => s
+                            .fields
+                            .iter()
+                            .find(|f| f.name == *field)
+                            .map(|f| crate::ast::type_expr_is_owned_scalar(&f.ty)),
+                        _ => None,
+                    })
+                    .unwrap_or(false);
+            if owes {
+                self.run_discarded_value_user_drops(tempv);
+                return;
+            }
+        }
         let mut tempv = tempv;
         Self::remove_field_at_path(&mut tempv, std::slice::from_ref(field));
         self.drop_user_drop_fields_of_value(&tempv);

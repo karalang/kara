@@ -2984,3 +2984,57 @@ fn main() {
         14,
     );
 }
+
+/// B-2026-09-26-3 — a scalar taken off a fresh temp whose type has its own
+/// `Drop` runs that body exactly once, before the fields' bodies, as the named
+/// spelling does; the unfixed tree printed no `dQ` line at all. The own body
+/// and the field body each read a heap `String` longer than the inline
+/// capacity, so a body run over freed memory or twice is an ASAN report, and
+/// every consuming position the fix covers (`let`, function tail, `return`,
+/// tuple element, assignment, constructor argument) takes one.
+#[test]
+fn asan_scalar_taken_off_a_fresh_temp_runs_its_types_own_drop_once() {
+    assert_clean_asan_run_min_allocs(
+        r#"struct D { id: i64, name: String }
+impl Drop for D { fn drop(mut ref self) { println(f"dD{self.id} {self.name}") } }
+fn mkd(n: i64) -> D { return D { id: n, name: f"name-string-longer-than-sso-{n}" }; }
+struct Q { d: D, s: String, k: i64 }
+impl Drop for Q { fn drop(mut ref self) { println(f"dQ{self.k} {self.s}") } }
+fn mkq(n: i64) -> Q { return Q { d: mkd(n), s: f"q-string-longer-than-sso-{n}", k: n }; }
+fn tailq() -> i64 { mkq(2).k }
+fn retq() -> i64 { return mkq(3).k; }
+fn main() {
+    let y = mkq(1).k; println(f"y{y}");
+    println(f"t{tailq()}");
+    println(f"r{retq()}");
+    let t = (mkq(4).k, 1); println(f"t{t.0}");
+    let mut z = 0; z = mkq(5).k; println(f"z{z}");
+    let o = Some(mkq(6).k); println(f"o{o.unwrap()}");
+    println("end")
+}
+"#,
+        &[
+            "dQ1 q-string-longer-than-sso-1",
+            "dD1 name-string-longer-than-sso-1",
+            "y1",
+            "dQ2 q-string-longer-than-sso-2",
+            "dD2 name-string-longer-than-sso-2",
+            "t2",
+            "dQ3 q-string-longer-than-sso-3",
+            "dD3 name-string-longer-than-sso-3",
+            "r3",
+            "dQ4 q-string-longer-than-sso-4",
+            "dD4 name-string-longer-than-sso-4",
+            "t4",
+            "dQ5 q-string-longer-than-sso-5",
+            "dD5 name-string-longer-than-sso-5",
+            "z5",
+            "dQ6 q-string-longer-than-sso-6",
+            "dD6 name-string-longer-than-sso-6",
+            "o6",
+            "end",
+        ],
+        "asan_scalar_taken_off_a_fresh_temp_runs_its_types_own_drop_once",
+        12,
+    );
+}

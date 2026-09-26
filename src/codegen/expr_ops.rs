@@ -1715,6 +1715,38 @@ impl<'ctx> super::Codegen<'ctx> {
         ));
     }
 
+    /// B-2026-09-26-3 — whether taking `field` off a fresh `name` temp leaves
+    /// the type's own `Drop` body owed: `name` has one, is not generic, and the
+    /// field is an owned scalar, so nothing the body can see has moved. The
+    /// interpreter's twin asks the same three questions of the same
+    /// declaration, through the shared [`crate::ast::type_expr_is_owned_scalar`].
+    fn freshtemp_consume_owes_own_drop(&self, name: &str, field: &str) -> bool {
+        let own_drop = self
+            .program_snapshot
+            .as_deref()
+            .is_some_and(|p| p.drop_method_keys.contains_key(name));
+        if !own_drop
+            || self
+                .type_decls
+                .struct_generic_params
+                .get(name)
+                .is_some_and(|p| !p.is_empty())
+        {
+            return false;
+        }
+        self.type_decls
+            .struct_field_names
+            .get(name)
+            .and_then(|fs| fs.iter().position(|f| f == field))
+            .and_then(|i| {
+                self.type_decls
+                    .struct_field_type_exprs
+                    .get(name)
+                    .and_then(|tes| tes.get(i))
+            })
+            .is_some_and(crate::ast::type_expr_is_owned_scalar)
+    }
+
     /// B-2026-09-26-1 — the MULTI-HOP form of
     /// [`Self::consume_freshtemp_field_move`]: a consumer that takes a field
     /// reached THROUGH the staged projection (`let s = mkw2().p.name;`).
@@ -2041,6 +2073,20 @@ impl<'ctx> super::Codegen<'ctx> {
         // masked walk below owns the rest, so the statement-end walk
         // `track_freshtemp_read_bodies` armed must not run this temp again.
         self.disarm_freshtemp_read_bodies(slot);
+        // B-2026-09-26-3 — a SCALAR taken off a temp whose type has a `Drop` of
+        // its own leaves the value whole, so the type's own body is owed first,
+        // exactly as the named spelling runs it (`let q = mkq(); let x = q.k;`
+        // prints `dQ4 dD3`). The masked field walk below runs only the fields'
+        // bodies, so `let y = mkq().k;` printed `dD3` and never `dQ4`, on every
+        // surface. The bodies-only walk frees nothing; the temp's memory drop
+        // still owns the storage. Non-generic only, as `karac_dropbo_*` is.
+        if self.freshtemp_consume_owes_own_drop(&name, field) {
+            let _ = self.freshtemp_field_access_inst.take();
+            if let Some(bodies) = self.emit_user_drop_bodies_only_fn(&name) {
+                self.builder.build_call(bodies, &[slot.into()], "").unwrap();
+            }
+            return;
+        }
         // B-2026-09-14-16 — and run the REMAINDER's user `Drop` BODIES here.
         //
         // The cap zero above hands the projected field's MEMORY to the
