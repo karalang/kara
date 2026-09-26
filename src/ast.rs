@@ -1765,12 +1765,15 @@ pub fn collect_mut_method_receiver_roots_expr(
 /// temp read through a projection inside it dies, so that both backends run the
 /// temp's `Drop` bodies there (`println(mkw(7).b);`, `let x = mk().s.len();`).
 ///
-/// Straight-line statements only. A loop or branch statement evaluates its
-/// condition or scrutinee any number of times before it ends, and a temp read
-/// there would reach its end once per evaluation on one backend and once in
-/// total on the other; declining those keeps both at today's behaviour for
-/// them. Statements nested inside a branch or loop body are statements of
-/// their own and answer for themselves.
+/// Straight-line statements and branch statements. A LOOP statement evaluates
+/// its condition any number of times before it ends, and a temp read there
+/// would reach its end once per evaluation on one backend and once in total on
+/// the other; declining it keeps both at today's behaviour. An `if` / `if let`
+/// / `match` statement evaluates its condition or scrutinee exactly once, so a
+/// temp read there dies once, at the statement's end, where the named spelling
+/// (`let t = mkw(3); match t.b { .. }`) runs its bodies (B-2026-09-25-44).
+/// Statements nested inside a branch or loop body are statements of their own
+/// and answer for themselves.
 ///
 /// One predicate for both backends, for the reason [`is_error_exit_value`]
 /// gives: two copies of this rule disagreeing would be a run-vs-build
@@ -1785,6 +1788,9 @@ pub fn stmt_ends_freshtemp_reads(stmt: &Stmt) -> bool {
                 | ExprKind::Return(_)
                 | ExprKind::Binary { .. }
                 | ExprKind::Unary { .. }
+                | ExprKind::If { .. }
+                | ExprKind::IfLet { .. }
+                | ExprKind::Match { .. }
         ),
         _ => false,
     }

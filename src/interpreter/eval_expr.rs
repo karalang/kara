@@ -1575,7 +1575,16 @@ impl<'a> super::Interpreter<'a> {
                 ..
             } => {
                 loop {
+                    // B-2026-09-25-44 — one read level per evaluation of the
+                    // condition, closed before the body runs; codegen's
+                    // `compile_while` opens the same one.
+                    self.freshtemp_read_levels
+                        .push(crate::interpreter::FreshTempReadLevel {
+                            simple: true,
+                            temps: Vec::new(),
+                        });
                     let cond = self.eval_expr_inner(condition);
+                    self.end_freshtemp_reads();
                     if self.check_cf() || !self.is_truthy(&cond) {
                         break;
                     }

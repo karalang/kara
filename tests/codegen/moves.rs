@@ -1847,12 +1847,10 @@ fn e2e_projecting_a_field_off_a_fresh_temp_runs_the_siblings_bodies() {
 /// tail, and the interpreter did for a taken `if` arm inside a `let`. Each now
 /// prints one sequence on every surface.
 ///
-/// The PINNED cells are the positions both backends still decline, together:
-/// a projected field that has a body of its own handed to a callee (which may
-/// have moved it), a generic struct (a method-call temp has no instantiation
-/// on the compiled side), and a temp read in a loop condition, a `match`
-/// scrutinee or a closure body, where the enclosing statement runs the read
-/// more than once or not at all.
+/// The PINNED cell is the position both backends still decline, together: a
+/// projected field that has a body of its own handed to a callee (which may
+/// have moved it). A generic struct, a `while` condition, a `match` scrutinee
+/// and a closure body were pinned here too until B-2026-09-25-44.
 #[test]
 fn e2e_fresh_temp_read_through_a_projection_runs_its_bodies() {
     const H: &str = "struct D { id: i64, name: String }\n\
@@ -1988,24 +1986,24 @@ fn e2e_fresh_temp_read_through_a_projection_runs_its_bodies() {
             "v7\nend\n",
         ),
         (
-            "pinned: generic struct",
+            "generic struct (B-2026-09-25-44)",
             "println(f\"g{mkg(mkd(3)).k}\");",
-            "g5\nend\n",
+            "g5\ndD3n3\nend\n",
         ),
         (
-            "pinned: match scrutinee",
+            "match scrutinee (B-2026-09-25-44)",
             "match mkw(3).b { 3 => println(\"three\"), _ => println(\"other\") }",
-            "three\nend\n",
+            "three\ndD103n103\ndD3n3\nend\n",
         ),
         (
-            "pinned: while condition",
+            "while condition (B-2026-09-25-44)",
             "let mut i = 0; while mkw(i).b < 2 { i = i + 1; } println(f\"i{i}\");",
-            "i2\nend\n",
+            "dD100n100\ndD0n0\ndD101n101\ndD1n1\ndD102n102\ndD2n2\ni2\nend\n",
         ),
         (
-            "pinned: closure body",
+            "closure body (B-2026-09-25-44)",
             "let f = |n: i64| mkw(n).b; println(f\"f{f(3)}\");",
-            "f3\nend\n",
+            "dD103n103\ndD3n3\nf3\nend\n",
         ),
     ] {
         let prog = format!("{H}fn main() {{\n    {body}\n    println(\"end\")\n}}\n");
@@ -2649,6 +2647,162 @@ fn e2e_fresh_temp_read_in_a_function_tail_runs_its_bodies() {
             "control: a bare projection tail",
             "println(f\"t{p13()}\");",
             "dD113\ndD13\nt13\nend\n",
+        ),
+    ] {
+        let prog = format!("{H}fn main() {{\n    {body}\n    println(\"end\")\n}}\n");
+        let (interp_out, interp_errs, _, _) = karac::run_program_full_checked(&prog);
+        assert!(
+            interp_errs.is_empty(),
+            "[{label}] interp errored: {interp_errs:?}"
+        );
+        assert_eq!(interp_out.join(""), want, "[{label}] interpreter");
+        if let Some(aot) = run_program(&prog) {
+            assert_eq!(aot, want, "[{label}] AOT");
+        }
+    }
+}
+
+/// B-2026-09-25-44 — a fresh temp read through a projection runs its `Drop`
+/// bodies in the positions B-2026-09-17-36's statement levels declined, on
+/// every surface. A branch STATEMENT's condition or scrutinee is read once, so
+/// the statement's end is where the temp dies, as the named spelling
+/// (`let t = mkw(3); match t.b { .. }`) runs it. A `while` condition gets a
+/// level per evaluation, closed before the body runs. A closure body is its
+/// tail: a bare projection is consumed and any other tail read gets the level a
+/// function body's tail gets, and an arm moving a heap field out of a temp is
+/// consumed as B-2026-09-26-14 does for function bodies. A GENERIC struct walks
+/// its fields under the temp's instantiation. Every cell printed only its own
+/// text on all four surfaces before, with no body.
+#[test]
+fn e2e_fresh_temp_read_in_a_condition_loop_or_closure_runs_its_bodies() {
+    const H: &str = "struct D { id: i64, name: String }\n\
+             impl Drop for D { fn drop(mut ref self) { println(f\"dD{self.id}{self.name}\") } }\n\
+             fn mkd(n: i64) -> D { return D { id: n, name: f\"n{n}\" }; }\n\
+             struct W { r: D, s: D, b: i64 }\n\
+             fn mkw(n: i64) -> W { return W { r: mkd(n), s: mkd(n + 100), b: n }; }\n\
+             struct G[T] { v: T, k: i64 }\n\
+             fn wrap[T](x: T) -> G[T] { return G { v: x, k: 7 }; }\n\
+             struct H2[T] { a: T, b: T, k: i64 }\n\
+             fn mkh() -> H2[D] { return H2 { a: mkd(11), b: mkd(12), k: 2 }; }\n\
+             struct Q { name: String, k: i64 }\n\
+             fn mkq(n: i64) -> Q { return Q { name: f\"q{n}\", k: n } }\n\
+             struct V { r: D, name: String }\n\
+             fn mkv(n: i64) -> V { return V { r: mkd(n), name: f\"v{n}\" } }\n";
+    for (label, body, want) in [
+        (
+            "if condition",
+            "if mkw(4).b > 1 { println(\"big\") }",
+            "big\ndD104n104\ndD4n4\nend\n",
+        ),
+        (
+            "if condition and an arm's own read",
+            "if mkw(1).b > 5 { println(\"big\") } else { println(f\"small{mkw(2).b}\") }",
+            "small2\ndD102n102\ndD2n2\ndD101n101\ndD1n1\nend\n",
+        ),
+        (
+            "match scrutinee with a statement in the arm",
+            "match mkw(3).b { 3 => { let k = mkw(4).b; println(f\"k{k}\") }, _ => println(\"other\") }",
+            "dD104n104\ndD4n4\nk4\ndD103n103\ndD3n3\nend\n",
+        ),
+        (
+            "if condition in a loop body",
+            "let mut i = 0; while i < 2 { if mkw(i).b == 0 { println(\"zero\") } i = i + 1; }",
+            "zero\ndD100n100\ndD0n0\ndD101n101\ndD1n1\nend\n",
+        ),
+        (
+            "if condition beside a local",
+            "let d = mkd(9); if mkw(10).b > 1 { println(\"x\") } println(f\"d{d.id}\");",
+            "x\ndD110n110\ndD10n10\nd9\ndD9n9\nend\n",
+        ),
+        (
+            "while condition, before each body",
+            "let mut i = 0; while mkw(i).b < 2 { println(f\"body{i}\"); i = i + 1; } println(f\"i{i}\");",
+            "dD100n100\ndD0n0\nbody0\ndD101n101\ndD1n1\nbody1\ndD102n102\ndD2n2\ni2\nend\n",
+        ),
+        (
+            "while condition left by break",
+            "let mut i = 0; while mkw(i).b < 5 { if i == 1 { break; } i = i + 1; } println(f\"i{i}\");",
+            "dD100n100\ndD0n0\ndD101n101\ndD1n1\ni1\nend\n",
+        ),
+        (
+            "while condition behind a short circuit",
+            "let mut i = 0; while i < 2 and mkw(i).b >= 0 { i = i + 1; } println(f\"i{i}\");",
+            "dD100n100\ndD0n0\ndD101n101\ndD1n1\ni2\nend\n",
+        ),
+        (
+            "while condition read through a Drop-bearing field",
+            "let mut i = 0; while mkw(i).r.id < 1 { i = i + 1; } println(f\"i{i}\");",
+            "dD100n100\ndD0n0\ndD101n101\ndD1n1\ni1\nend\n",
+        ),
+        (
+            "nested while conditions",
+            "let mut i = 0; while i < 2 { let mut j = 0; while mkw(j).b < 1 { j = j + 1; } i = i + 1; } println(f\"i{i}\");",
+            "dD100n100\ndD0n0\ndD101n101\ndD1n1\ndD100n100\ndD0n0\ndD101n101\ndD1n1\ni2\nend\n",
+        ),
+        (
+            "block-bodied closure",
+            "let f = |n: i64| { mkw(n).b }; println(f\"f{f(3)}\");",
+            "dD103n103\ndD3n3\nf3\nend\n",
+        ),
+        (
+            "closure tail inside arithmetic",
+            "let f = |n: i64| mkw(n).b + 1; println(f\"f{f(3)}\");",
+            "dD103n103\ndD3n3\nf4\nend\n",
+        ),
+        (
+            "closure tail after a statement",
+            "let f = |n: i64| { let a = 1; mkw(n).b + a }; println(f\"f{f(5)}\");",
+            "dD105n105\ndD5n5\nf6\nend\n",
+        ),
+        (
+            "closure tail match arm",
+            "let f = |n: i64| match n { 0 => mkw(6).b, _ => 1 }; println(f\"f{f(0)}\");",
+            "dD106n106\ndD6n6\nf6\nend\n",
+        ),
+        (
+            "closure returning a Drop-bearing field",
+            "let f = |n: i64| mkw(n).r; let d = f(4); println(f\"d{d.id}\");",
+            "dD104n104\nd4\ndD4n4\nend\n",
+        ),
+        (
+            "closure in an iterator pipeline",
+            "let v = [1, 2]; let s: Vec[i64] = v.iter().map(|n| mkw(n).b).collect(); println(f\"s{s.len()}\");",
+            "dD101n101\ndD1n1\ndD102n102\ndD2n2\ns2\nend\n",
+        ),
+        (
+            "closure arm moving a heap field",
+            "let f = |c: bool| if c { mkq(1).name } else { f\"z\" }; println(f(true));",
+            "q1\nend\n",
+        ),
+        (
+            "closure arm moving a heap field beside a Drop sibling",
+            "let f = |c: bool| { if c { mkv(2).name } else { f\"z\" } }; println(f(true));",
+            "dD2n2\nv2\nend\n",
+        ),
+        (
+            "generic struct from a generic fn",
+            "println(f\"g{wrap(mkd(4)).k}\");",
+            "g7\ndD4n4\nend\n",
+        ),
+        (
+            "generic struct, two Drop fields",
+            "println(f\"h{mkh().k}\");",
+            "h2\ndD12n12\ndD11n11\nend\n",
+        ),
+        (
+            "generic struct read through its T field",
+            "println(f\"v{wrap(mkd(5)).v.id}\");",
+            "v5\ndD5n5\nend\n",
+        ),
+        (
+            "generic struct in an if condition",
+            "if wrap(mkd(8)).k > 1 { println(\"big\") }",
+            "big\ndD8n8\nend\n",
+        ),
+        (
+            "control: generic struct with no body to run",
+            "println(f\"w{wrap(f\"x\").k}\");",
+            "w7\nend\n",
         ),
     ] {
         let prog = format!("{H}fn main() {{\n    {body}\n    println(\"end\")\n}}\n");

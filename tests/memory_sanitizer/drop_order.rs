@@ -3161,3 +3161,62 @@ fn main() {
         14,
     );
 }
+
+/// B-2026-09-25-44 — a fresh temp read in a `match` scrutinee, an `if`
+/// condition, each evaluation of a `while` condition, a closure's tail and a
+/// generic struct runs its `Drop` bodies once, and a closure arm moving a heap
+/// field out of a temp frees it once (a double free on every compiled surface
+/// before). Every string is longer than the inline capacity, so a body run
+/// over freed memory, or twice, is an ASAN report.
+#[test]
+fn asan_fresh_temp_read_in_a_condition_loop_or_closure_runs_its_bodies_once() {
+    assert_clean_asan_run_min_allocs(
+        r#"struct D { id: i64, name: String }
+impl Drop for D { fn drop(mut ref self) { println(f"dD{self.id} {self.name}") } }
+fn mkd(n: i64) -> D { return D { id: n, name: f"name-string-longer-than-sso-{n}" }; }
+struct W { r: D, s: D, b: i64 }
+fn mkw(n: i64) -> W { return W { r: mkd(n), s: mkd(n + 100), b: n }; }
+struct G[T] { v: T, k: i64 }
+fn wrap[T](x: T) -> G[T] { return G { v: x, k: 7 }; }
+struct Q { name: String, k: i64 }
+fn mkq(n: i64) -> Q { return Q { name: f"q-string-longer-than-sso-{n}", k: n } }
+fn main() {
+    match mkw(1).b { 1 => println("one"), _ => println("other") }
+    if mkw(2).b > 1 { println("big") }
+    let mut i = 0;
+    while mkw(i + 3).b < 5 { i = i + 1; }
+    println(f"i{i}");
+    let f = |n: i64| mkw(n).b + 1;
+    println(f"f{f(6)}");
+    let g = |c: bool| if c { mkq(7).name } else { f"z" };
+    println(g(true));
+    println(f"g{wrap(mkd(8)).k}");
+    println("end")
+}
+"#,
+        &[
+            "one",
+            "dD101 name-string-longer-than-sso-101",
+            "dD1 name-string-longer-than-sso-1",
+            "big",
+            "dD102 name-string-longer-than-sso-102",
+            "dD2 name-string-longer-than-sso-2",
+            "dD103 name-string-longer-than-sso-103",
+            "dD3 name-string-longer-than-sso-3",
+            "dD104 name-string-longer-than-sso-104",
+            "dD4 name-string-longer-than-sso-4",
+            "dD105 name-string-longer-than-sso-105",
+            "dD5 name-string-longer-than-sso-5",
+            "i2",
+            "dD106 name-string-longer-than-sso-106",
+            "dD6 name-string-longer-than-sso-6",
+            "f7",
+            "q-string-longer-than-sso-7",
+            "g7",
+            "dD8 name-string-longer-than-sso-8",
+            "end",
+        ],
+        "asan_fresh_temp_read_in_a_condition_loop_or_closure_runs_its_bodies_once",
+        14,
+    );
+}

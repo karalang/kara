@@ -510,16 +510,25 @@ impl<'a> super::Interpreter<'a> {
             // B-2026-09-26-6 — a function body's tail is a statement end for
             // the fresh temps read inside it, on both backends (codegen's
             // `begin_fn_tail_freshtemp_reads`); see
-            // [`crate::ast::tail_ends_freshtemp_reads`]. A closure body is
-            // left out, as codegen's closure path opens no such level.
-            let tail_level = is_fn_body
-                && !(block.stmts.is_empty()
-                    && block.span.offset == expr.span.offset
-                    && block.span.length == expr.span.length);
+            // [`crate::ast::tail_ends_freshtemp_reads`]. A closure body gets
+            // one too since B-2026-09-25-44, as codegen's closure path opens
+            // the same level; its synthetic wrapper is looked through to a
+            // block body's own tail, the expression that level is asked about.
+            let tail_level = is_fn_body;
             if tail_level {
+                let is_closure_wrapper = block.stmts.is_empty()
+                    && block.span.offset == expr.span.offset
+                    && block.span.length == expr.span.length;
+                let simple = match &expr.kind {
+                    ExprKind::Block(inner) | ExprKind::Seq(inner) if is_closure_wrapper => inner
+                        .final_expr
+                        .as_deref()
+                        .is_some_and(crate::ast::tail_ends_freshtemp_reads),
+                    _ => crate::ast::tail_ends_freshtemp_reads(expr),
+                };
                 self.freshtemp_read_levels
                     .push(crate::interpreter::FreshTempReadLevel {
-                        simple: crate::ast::tail_ends_freshtemp_reads(expr),
+                        simple,
                         temps: Vec::new(),
                     });
             }
@@ -560,9 +569,9 @@ impl<'a> super::Interpreter<'a> {
             // is the closure's body expression and whose span IS that
             // expression's span (`eval_expr`'s `ExprKind::Closure` arm). Codegen
             // consumes the tail of a BLOCK-bodied closure (`|n| { mkw(n).b }`,
-            // `closures.rs`) and not a bare-expression one (`|n| mkw(n).b`), so
-            // the wrapper is looked through to the inner block's tail, and a
-            // bare body is left alone.
+            // `closures.rs`) and, since B-2026-09-25-44, a bare-expression one
+            // (`|n| mkw(n).b`) as well, so the wrapper is looked through to the
+            // inner block's tail and a bare body is consumed as it stands.
             if is_fn_body {
                 let closure_wrapper = block.stmts.is_empty()
                     && block.span.offset == expr.span.offset
@@ -571,7 +580,6 @@ impl<'a> super::Interpreter<'a> {
                     ExprKind::Block(inner) | ExprKind::Seq(inner) if closure_wrapper => {
                         Self::tail_consumed_expr(inner)
                     }
-                    _ if closure_wrapper => None,
                     _ => Some(&**expr),
                 };
                 if let Some(consumed) = consumed {
@@ -3553,13 +3561,36 @@ impl<'a> super::Interpreter<'a> {
         ) {
             return;
         }
-        if self
-            .typecheck_result
-            .struct_info
-            .get(name.as_str())
-            .is_none_or(|i| !i.generic_params.is_empty() || i.is_shared)
-        {
+        let Some(info) = self.typecheck_result.struct_info.get(name.as_str()) else {
             return;
+        };
+        if info.is_shared {
+            return;
+        }
+        // B-2026-09-25-44 — a GENERIC struct is walked from its runtime value,
+        // which is concrete, on the terms codegen's twin sets: no `Drop` of its
+        // own, and a projected field that is an owned scalar unless it is read
+        // through (the check above resolved a `T` field from its bare
+        // declaration, where it has no body).
+        if !info.generic_params.is_empty() {
+            let read_through =
+                self.freshtemp_read_through == Some((object.span.offset, object.span.length));
+            let scalar_field = self
+                .program
+                .items
+                .iter()
+                .find_map(|item| match item {
+                    Item::StructDef(s) if s.name == *name => s
+                        .fields
+                        .iter()
+                        .find(|f| f.name == field)
+                        .map(|f| crate::ast::type_expr_is_owned_scalar(&f.ty)),
+                    _ => None,
+                })
+                .unwrap_or(false);
+            if self.program.drop_method_keys.contains_key(name) || !(read_through || scalar_field) {
+                return;
+            }
         }
         if !self.program.drop_method_keys.contains_key(name) && !self.value_runs_user_drop(obj) {
             return;
@@ -3573,7 +3604,7 @@ impl<'a> super::Interpreter<'a> {
     /// B-2026-09-17-36 — close the statement level
     /// [`Self::track_freshtemp_read`] recorded into, running each temp's
     /// bodies, the last-read first.
-    fn end_freshtemp_reads(&mut self) {
+    pub(super) fn end_freshtemp_reads(&mut self) {
         let Some(level) = self.freshtemp_read_levels.pop() else {
             return;
         };

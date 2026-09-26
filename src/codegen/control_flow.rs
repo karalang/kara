@@ -4076,7 +4076,19 @@ impl<'ctx> super::Codegen<'ctx> {
         // taken and not-taken edges. Condition temps are never live in the
         // body (guards are `bool`), so freeing here is always safe.
         self.drop_rc.scope_cleanup_actions.push(Vec::new());
-        let cond_val = self.compile_expr(condition)?.into_int_value();
+        // B-2026-09-25-44 — a fresh temp read in the condition dies once per
+        // evaluation, when the condition's value exists and before the body
+        // runs, so the condition gets a read level of its own; the interpreter
+        // opens the same one around each evaluation.
+        self.freshtemp_read_levels
+            .push(super::state::FreshTempReadLevel {
+                fn_val: self.current_fn,
+                simple: true,
+                temps: Vec::new(),
+            });
+        let cond_val = self.compile_expr(condition);
+        self.end_freshtemp_reads();
+        let cond_val = cond_val?.into_int_value();
         self.drain_top_frame_with_emit();
         self.builder
             .build_conditional_branch(cond_val, body_bb, exit_bb)

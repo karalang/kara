@@ -1884,8 +1884,9 @@ impl<'ctx> super::Codegen<'ctx> {
     /// a projected field with a `Drop` body of its own unless the projection is
     /// read through, a producer [`crate::ast::projection_reads_fresh_temp`] rejects, a
     /// statement [`crate::ast::stmt_ends_freshtemp_reads`] rejects, a GENERIC
-    /// struct (a method-call temp has no instantiation here and the erased walk
-    /// would see no `Drop` field), and a struct with no body to run.
+    /// struct with no recorded instantiation, a `Drop` of its own, or a
+    /// projected field that is neither an owned scalar nor read through, and a
+    /// struct with no body to run.
     fn track_freshtemp_read_bodies(
         &mut self,
         object: &Expr,
@@ -1925,11 +1926,6 @@ impl<'ctx> super::Codegen<'ctx> {
             .last()
             .is_some_and(|l| l.simple && l.fn_val == Some(fn_val))
             || !crate::ast::projection_reads_fresh_temp(object)
-            || self
-                .type_decls
-                .struct_generic_params
-                .get(name)
-                .is_some_and(|p| !p.is_empty())
         {
             return;
         }
@@ -1937,7 +1933,45 @@ impl<'ctx> super::Codegen<'ctx> {
             .program_snapshot
             .as_deref()
             .is_some_and(|p| p.drop_method_keys.contains_key(name));
-        let bodies_fn = if own_drop {
+        // B-2026-09-25-44 — a GENERIC struct walks its fields under the temp's
+        // INSTANTIATION (`freshtemp_field_access_inst`, recorded just before
+        // this), so `mkg(mkd(3)).k` over `G[T] { v: T, k: i64 }` runs `v`'s
+        // body. The check above resolved the projected field's type from its
+        // bare declaration, where a `T` field has no body, so a generic temp
+        // additionally requires an owned-scalar field unless it is read
+        // through; its own `Drop` is left declined, as `karac_dropbo_*` is
+        // non-generic only.
+        let generic = self
+            .type_decls
+            .struct_generic_params
+            .get(name)
+            .is_some_and(|p| !p.is_empty());
+        let bodies_fn = if generic {
+            let scalar_field = self
+                .type_decls
+                .struct_field_names
+                .get(name)
+                .and_then(|fs| fs.iter().position(|f| f == field))
+                .and_then(|i| {
+                    self.type_decls
+                        .struct_field_type_exprs
+                        .get(name)
+                        .and_then(|tes| tes.get(i))
+                })
+                .is_some_and(crate::ast::type_expr_is_owned_scalar);
+            let Some(inst) = self.freshtemp_field_access_inst.clone() else {
+                return;
+            };
+            if own_drop || !(read_through || scalar_field) {
+                return;
+            }
+            let subst = self.generic_struct_subst_from_inst(name, &inst);
+            self.field_bodies_fn_for_owned_temp_mono_skipping(
+                name,
+                &subst,
+                &super::synth_drop::FieldSkipTree::default(),
+            )
+        } else if own_drop {
             self.emit_user_drop_bodies_only_fn(name)
         } else {
             self.field_bodies_fn_for_owned_temp(name)

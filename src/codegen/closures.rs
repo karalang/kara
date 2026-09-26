@@ -1268,12 +1268,29 @@ impl<'ctx> super::Codegen<'ctx> {
         // Compiling the block raw makes its statements register their
         // cleanups in THIS closure's already-pushed frame, drained after
         // suppression. Non-block bodies are single expressions.
-        let mut result = match &body.kind {
+        // B-2026-09-25-44 — the closure's tail gets the read level a function
+        // body's tail does (`begin_fn_tail_freshtemp_reads`), asked about the
+        // same expression: a block body's final expression, or the body.
+        self.freshtemp_read_levels
+            .push(super::state::FreshTempReadLevel {
+                fn_val: self.current_fn,
+                simple: match &body.kind {
+                    ExprKind::Block(block) | ExprKind::Seq(block) => block
+                        .final_expr
+                        .as_deref()
+                        .is_some_and(crate::ast::tail_ends_freshtemp_reads),
+                    _ => crate::ast::tail_ends_freshtemp_reads(body),
+                },
+                temps: Vec::new(),
+            });
+        let body_result = match &body.kind {
             ExprKind::Block(block) | ExprKind::Seq(block) => self
-                .compile_block(block)?
-                .unwrap_or_else(|| self.context.i64_type().const_int(0, false).into()),
-            _ => self.compile_expr(body)?,
+                .compile_block(block)
+                .map(|v| v.unwrap_or_else(|| self.context.i64_type().const_int(0, false).into())),
+            _ => self.compile_expr(body),
         };
+        self.end_freshtemp_reads();
+        let mut result = body_result?;
         if self
             .builder
             .get_insert_block()
@@ -1294,7 +1311,14 @@ impl<'ctx> super::Codegen<'ctx> {
                     self.suppress_cleanup_for_tail_return(block);
                     block.final_expr.as_deref()
                 }
-                _ => Some(body),
+                _ => {
+                    // B-2026-09-25-44 — a bare-expression body is the closure's
+                    // tail exactly as a block body's final expression is, so a
+                    // projection off a fresh temp (`|n| mkw(n).b`) consumes it
+                    // and runs the remainder's bodies, as `{ mkw(n).b }` does.
+                    self.consume_freshtemp_field_move(body);
+                    Some(body)
+                }
             };
             if let Some(t) = returned_tail {
                 self.suppress_fstr_acc_if_moved_out(t);

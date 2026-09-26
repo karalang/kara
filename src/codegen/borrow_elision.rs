@@ -1499,6 +1499,12 @@ fn walk_expr_for_consumed_arm_tails(expr: &Expr, out: &mut FxHashSet<SpanKey>) {
             walk_block_for_consumed_arm_tails(body, out);
         }
         ExprKind::Question(inner) | ExprKind::Cast { expr: inner, .. } => walk(inner, out),
+        // A closure's body is ITS tail, returned to the closure's caller, so
+        // it is a consuming position of its own (B-2026-09-25-44).
+        ExprKind::Closure { body, .. } => {
+            record_consumed_arm_tails(body, false, out);
+            walk(body, out);
+        }
         _ => {}
     }
 }
