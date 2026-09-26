@@ -613,6 +613,14 @@ impl<'a> super::Interpreter<'a> {
                     .iter()
                     .map(|e| {
                         let v = self.eval_expr_inner(e);
+                        // B-2026-09-26-35 — the named-root projection mask
+                        // the tuple arm above writes, for the same element.
+                        if matches!(e.kind, ExprKind::FieldAccess { .. })
+                            && Self::field_chain_name_path(e)
+                                .is_some_and(|(_, path)| path.len() == 1)
+                        {
+                            self.record_returned_projection_moves(e);
+                        }
                         self.consume_freshtemp_field_move(e);
                         v
                     })
@@ -626,6 +634,14 @@ impl<'a> super::Interpreter<'a> {
                     .iter()
                     .map(|e| {
                         let v = self.eval_expr_inner(e);
+                        // B-2026-09-26-35 — the named-root projection mask
+                        // the tuple arm above writes, for the same element.
+                        if matches!(e.kind, ExprKind::FieldAccess { .. })
+                            && Self::field_chain_name_path(e)
+                                .is_some_and(|(_, path)| path.len() == 1)
+                        {
+                            self.record_returned_projection_moves(e);
+                        }
                         self.consume_freshtemp_field_move(e);
                         v
                     })

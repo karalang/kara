@@ -3551,3 +3551,65 @@ fn main() {
         48,
     );
 }
+
+/// B-2026-09-26-35 — a `Drop`-bearing field projected off a NAMED local and
+/// moved into a builtin sink (`Vec.push`, an array literal, `Some`, a user
+/// variant, `Map.insert`, `VecDeque.push_back` / `push_front`, a push in a
+/// taken branch) runs its body once, from the sink; the local's own walk skips
+/// it. The names are longer than the inline string capacity so each body
+/// frees a heap buffer.
+#[test]
+fn asan_drop_field_of_a_named_local_moved_into_a_builtin_sink_runs_once() {
+    assert_clean_asan_run_min_allocs(
+        r#"struct D { id: i64, name: String }
+impl Drop for D { fn drop(mut ref self) { println(f"dD{self.id} {self.name}") } }
+fn mkd(n: i64) -> D { return D { id: n, name: f"name-string-longer-than-sso-{n}" }; }
+struct W { r: D, s: D, name: String, b: i64 }
+fn mkw(n: i64) -> W { return W { r: mkd(n), s: mkd(n + 100), name: f"w-string-longer-than-sso-{n}", b: n }; }
+enum Bx { P(D), N }
+fn a() { let w = mkw(1); let mut xs: Vec[D] = Vec.new(); xs.push(w.r); println(f"a{xs.len()}") }
+fn b() { let w = mkw(2); let xs: Vec[D] = [w.s]; println(f"b{xs.len()}") }
+fn c() { let w = mkw(3); let o = Some(w.r); println(f"c{o.is_some()}") }
+fn d() { let w = mkw(4); let x = Bx.P(w.r); match x { Bx.P(p) => println(f"d{p.id}"), Bx.N => println("dn") } }
+fn e() { let w = mkw(5); let mut m: Map[i64, D] = Map.new(); m.insert(1, w.r); println(f"e{m.len()}") }
+fn f() { let w = mkw(6); let mut q: VecDeque[D] = VecDeque.new(); q.push_back(w.r); q.push_front(w.s); println(f"f{q.len()}") }
+fn g() { let w = mkw(7); let mut xs: Vec[D] = Vec.new(); if w.b > 3 { xs.push(w.r); } println(f"g{xs.len()} {w.name}") }
+fn main() {
+    a();
+    b();
+    c();
+    d();
+    e();
+    f();
+    g();
+    println("end")
+}
+"#,
+        &[
+            "dD101 name-string-longer-than-sso-101",
+            "a1",
+            "dD1 name-string-longer-than-sso-1",
+            "dD2 name-string-longer-than-sso-2",
+            "b1",
+            "dD102 name-string-longer-than-sso-102",
+            "dD103 name-string-longer-than-sso-103",
+            "ctrue",
+            "dD3 name-string-longer-than-sso-3",
+            "dD104 name-string-longer-than-sso-104",
+            "d4",
+            "dD4 name-string-longer-than-sso-4",
+            "dD105 name-string-longer-than-sso-105",
+            "e1",
+            "dD5 name-string-longer-than-sso-5",
+            "f2",
+            "dD106 name-string-longer-than-sso-106",
+            "dD6 name-string-longer-than-sso-6",
+            "g1 w-string-longer-than-sso-7",
+            "dD7 name-string-longer-than-sso-7",
+            "dD107 name-string-longer-than-sso-107",
+            "end",
+        ],
+        "asan_drop_field_of_a_named_local_moved_into_a_builtin_sink_runs_once",
+        47,
+    );
+}

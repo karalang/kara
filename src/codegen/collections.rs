@@ -1543,6 +1543,14 @@ impl<'ctx> super::Codegen<'ctx> {
                 // runs BEFORE the cap-zero so it reads the source's real `cap`.
                 let v = self.maybe_defensive_copy_param_arg(e, v);
                 self.suppress_source_vec_cleanup_for_arg(e);
+                // B-2026-09-26-35 — a field PROJECTED off a named local
+                // (`[w.r]`) moves into the literal, whose element walk now runs
+                // its body; stand the source's field walk down, as
+                // `compile_tuple` does for the same element. Interp twin: the
+                // `ArrayLiteral` arm of `eval_expr_inner`.
+                if matches!(e.kind, ExprKind::FieldAccess { .. }) {
+                    self.disarm_struct_field_move_bodies(e);
+                }
                 // B-2026-09-15-2 — the ARRAY channel of that same move-aware
                 // set, which this loop never ran. A named `Array[T, N]` local
                 // carries a `StructDrop` of its own
@@ -1683,6 +1691,10 @@ impl<'ctx> super::Codegen<'ctx> {
             // temps, `cap == 0` sources, and POD elements.
             let v = self.maybe_defensive_copy_param_arg(e, v);
             self.suppress_source_vec_cleanup_for_arg(e);
+            // B-2026-09-26-35 — see `compile_array_literal`'s element loop.
+            if matches!(e.kind, ExprKind::FieldAccess { .. }) {
+                self.disarm_struct_field_move_bodies(e);
+            }
             // B-2026-09-15-2 — the ARRAY channel, the fixed-array sibling of
             // the line above and of the Option/Result trio below. Measured on
             // the same program one container over: `let a: Array[String, 2] =

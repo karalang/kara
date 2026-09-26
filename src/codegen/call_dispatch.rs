@@ -12614,6 +12614,11 @@ impl<'ctx> super::Codegen<'ctx> {
                 // WHOLE would orphan a heap field the zeroing did not reach
                 // (the measurement in that helper's own doc).
                 self.suppress_moved_source_user_drop_body(&arg.value);
+                // B-2026-09-26-35 — the projected-field spelling of the line
+                // above; see `disarm_moved_value_arg_user_drops`.
+                if matches!(arg.value.kind, ExprKind::FieldAccess { .. }) {
+                    self.disarm_struct_field_move_bodies(&arg.value);
+                }
                 // Boxed / inline-heap `Option`/`Result` binding moved whole into
                 // this shared tuple-variant payload — mirrors the struct-literal
                 // / struct-variant field-init paths.
@@ -12795,6 +12800,15 @@ impl<'ctx> super::Codegen<'ctx> {
                 if !self.guard_user_drop_for_nested_return(&n) {
                     self.suppress_user_drop_for_var(&n);
                 }
+            }
+            // B-2026-09-26-35 — a field PROJECTED off a named local
+            // (`Some(w.r)`) is the same move one place deeper: the payload now
+            // runs the field's body, so the source's field walk must stop.
+            // See `disarm_moved_value_arg_user_drops`; interp twin
+            // `record_ctor_arg_moves`, which `Some`/`Ok`/`Err` and user
+            // variants share with `push`.
+            if matches!(arg.value.kind, ExprKind::FieldAccess { .. }) {
+                self.disarm_struct_field_move_bodies(&arg.value);
             }
             // Boxed / inline-heap `Option`/`Result` binding moved whole into
             // this non-shared tuple-variant payload — see the shared-enum

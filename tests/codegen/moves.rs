@@ -7198,3 +7198,155 @@ fn pw(w: ref W) -> i64 { w.b }
         }
     }
 }
+
+/// B-2026-09-26-35 — a `Drop`-bearing field projected off a NAMED local and
+/// moved into a builtin sink (`Vec.push` / `insert`, `VecDeque.push_back` /
+/// `push_front`, `Map` / `SortedMap.insert`, `Some` / `Ok` / a user variant,
+/// an array or `Vec[..]` literal) is masked out of the local's own field walk,
+/// as `let x = w.r` and a tuple element already were: the sink runs the moved
+/// field's body once. Before the fix the local's walk ran it a second time --
+/// over the zeroed husk on the compiled surfaces (`dD7`, empty name) and over
+/// the full value in the interpreter (`dD7n7`). Every cell was checked
+/// `--interp` / JIT / `-O2` seq / `-O2` par byte-identical and valgrind-clean
+/// at `-O0`.
+#[test]
+fn e2e_drop_field_of_a_named_local_moved_into_a_builtin_sink_runs_once() {
+    const H: &str = r#"struct D { id: i64, name: String }
+impl Drop for D { fn drop(mut ref self) { println(f"dD{self.id}{self.name}") } }
+fn mkd(n: i64) -> D { return D { id: n, name: f"n{n}" }; }
+struct W { r: D, s: D, b: i64 }
+fn mkw(n: i64) -> W { return W { r: mkd(n), s: mkd(n + 100), b: n }; }
+fn eat(d: D) -> i64 { return d.id; }
+fn ownd(d: D) -> i64 { d.id }
+struct G[T] { v: T, k: i64 }
+fn wrap[T](x: T) -> G[T] { return G { v: x, k: 7 }; }
+fn eatd(d: D) -> i64 { d.id }
+fn keep(d: D) -> D { d }
+struct H { k: i64 }
+impl H { fn take(self, d: D) -> i64 { d.id } fn tk(d: D) -> i64 { d.id } fn peek(self, d: ref D) -> i64 { d.id } }
+enum E { A(D), B }
+struct Wx { e: E, s: D }
+fn mkwe(n: i64) -> Wx { return Wx { e: E.A(mkd(n)), s: mkd(n + 200) }; }
+fn eate(e: E) -> i64 { match e { E.A(d) => d.id, E.B => 0 } }
+struct X { w: W, t: D }
+fn mkx(n: i64) -> X { return X { w: mkw(n), t: mkd(n + 300) }; }
+fn peekd(d: ref D) -> i64 { d.id }
+fn two(a: D, b: D) -> i64 { a.id + b.id }
+fn side(n: i64) -> i64 { println(f"side{n}"); n }
+fn mix(d: D, n: i64) -> i64 { d.id + n }
+fn eatw(w: W) -> i64 { w.b }
+fn gn[T](x: T) -> i64 { 1 }
+struct Dd { id: i64, inr: D }
+impl Drop for Dd { fn drop(mut ref self) { println(f"dDd{self.id}") } }
+struct Wd { d: Dd, s: D }
+fn mkwd(n: i64) -> Wd { return Wd { d: Dd { id: n, inr: mkd(n + 1) }, s: mkd(n + 400) }; }
+fn eatdd(d: Dd) -> i64 { d.id }
+struct Q { name: String, k: i64 }
+fn mkq(n: i64) -> Q { return Q { name: f"q{n}", k: n } }
+impl H { fn mk(self, n: i64) -> W { mkw(n) } }
+enum Bx { P(D), N }
+"#;
+    for (label, body, want) in [
+        (
+            "Vec.push (B-2026-09-26-35)",
+            "let w = mkw(7); let mut xs: Vec[D] = Vec.new(); xs.push(w.r); println(f\"l{xs.len()}\");",
+            "dD107n107\nl1\ndD7n7\nend\n",
+        ),
+        (
+            "array literal (B-2026-09-26-35)",
+            "let w = mkw(7); let xs: Vec[D] = [w.r]; println(f\"l{xs.len()}\");",
+            "dD107n107\nl1\ndD7n7\nend\n",
+        ),
+        (
+            "Vec[..] literal (B-2026-09-26-35)",
+            "let w = mkw(7); let xs: Vec[D] = Vec[w.r]; println(f\"l{xs.len()}\");",
+            "dD107n107\nl1\ndD7n7\nend\n",
+        ),
+        (
+            "Some (B-2026-09-26-35)",
+            "let w = mkw(7); let o = Some(w.r); println(f\"o{o.is_some()}\");",
+            "dD107n107\notrue\ndD7n7\nend\n",
+        ),
+        (
+            "Ok (B-2026-09-26-35)",
+            "let w = mkw(7); let o: Result[D, i64] = Ok(w.r); println(f\"o{o.is_ok()}\");",
+            "dD107n107\notrue\ndD7n7\nend\n",
+        ),
+        (
+            "user enum variant (B-2026-09-26-35)",
+            "let w = mkw(7); let b = Bx.P(w.r); match b { Bx.P(d) => println(f\"p{d.id}\"), Bx.N => println(\"n\") };",
+            "dD107n107\np7\ndD7n7\nend\n",
+        ),
+        (
+            "Map.insert value (B-2026-09-26-35)",
+            "let w = mkw(7); let mut m: Map[i64, D] = Map.new(); m.insert(1, w.r); println(f\"l{m.len()}\");",
+            "dD107n107\nl1\ndD7n7\nend\n",
+        ),
+        (
+            "SortedMap.insert value (B-2026-09-26-35)",
+            "let w = mkw(7); let mut m: SortedMap[i64, D] = SortedMap.new(); m.insert(1, w.r); println(f\"l{m.len()}\");",
+            "dD107n107\nl1\ndD7n7\nend\n",
+        ),
+        (
+            "VecDeque.push_back (B-2026-09-26-35)",
+            "let w = mkw(7); let mut xs: VecDeque[D] = VecDeque.new(); xs.push_back(w.r); println(f\"l{xs.len()}\");",
+            "dD107n107\nl1\ndD7n7\nend\n",
+        ),
+        (
+            "VecDeque.push_front (B-2026-09-26-35)",
+            "let w = mkw(7); let mut xs: VecDeque[D] = VecDeque.new(); xs.push_front(w.r); println(f\"l{xs.len()}\");",
+            "dD107n107\nl1\ndD7n7\nend\n",
+        ),
+        (
+            "Vec.insert (B-2026-09-26-35)",
+            "let w = mkw(7); let mut xs: Vec[D] = Vec.new(); xs.push(mkd(1)); xs.insert(0, w.r); println(f\"l{xs.len()} f{xs[0].id}\");",
+            "dD107n107\nl2 f7\ndD7n7\ndD1n1\nend\n",
+        ),
+        (
+            "Vec.push of the other field (B-2026-09-26-35)",
+            "let w = mkw(7); let mut xs: Vec[D] = Vec.new(); xs.push(w.s); println(f\"l{xs.len()}\");",
+            "dD7n7\nl1\ndD107n107\nend\n",
+        ),
+        (
+            "root read after the push (B-2026-09-26-35)",
+            "let w = mkw(7); let mut xs: Vec[D] = Vec.new(); xs.push(w.r); println(f\"l{xs.len()} b{w.b}\");",
+            "l1 b7\ndD7n7\ndD107n107\nend\n",
+        ),
+        (
+            "push in a taken if arm (B-2026-09-26-35)",
+            "let w = mkw(7); let mut xs: Vec[D] = Vec.new(); if w.b > 3 { xs.push(w.r); } println(f\"l{xs.len()}\");",
+            "dD107n107\nl1\ndD7n7\nend\n",
+        ),
+        (
+            "push in an untaken if arm (B-2026-09-26-35)",
+            "let w = mkw(2); let mut xs: Vec[D] = Vec.new(); if w.b > 3 { xs.push(w.r); } println(f\"l{xs.len()}\");",
+            "dD102n102\ndD2n2\nl0\nend\n",
+        ),
+        (
+            "both fields pushed (B-2026-09-26-35)",
+            "let w = mkw(7); let mut xs: Vec[D] = Vec.new(); xs.push(w.r); xs.push(w.s); println(f\"l{xs.len()}\");",
+            "l2\ndD7n7\ndD107n107\nend\n",
+        ),
+        (
+            "control: let (B-2026-09-26-35)",
+            "let w = mkw(7); let x = w.r; println(f\"x{x.id}\");",
+            "dD107n107\nx7\ndD7n7\nend\n",
+        ),
+        (
+            "control: tuple element (B-2026-09-26-35)",
+            "let w = mkw(7); let t = (w.r, 1); println(f\"t{t.1}\");",
+            "dD107n107\nt1\ndD7n7\nend\n",
+        ),
+    ] {
+        let prog = format!("{H}fn main() {{\n    {body}\n    println(\"end\")\n}}\n");
+        let (interp_out, interp_errs, _, _) = karac::run_program_full_checked(&prog);
+        assert!(
+            interp_errs.is_empty(),
+            "[{label}] interp errored: {interp_errs:?}"
+        );
+        assert_eq!(interp_out.join(""), want, "[{label}] interpreter");
+        if let Some(aot) = run_program(&prog) {
+            assert_eq!(aot, want, "[{label}] AOT");
+        }
+    }
+}

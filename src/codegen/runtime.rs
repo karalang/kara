@@ -15412,6 +15412,18 @@ impl<'ctx> super::Codegen<'ctx> {
                 self.suppress_user_drop_for_var(&n);
             }
             ExprKind::SelfValue => self.suppress_user_drop_for_var("self"),
+            // B-2026-09-26-35 — a field PROJECTED off a named local
+            // (`xs.push(w.r)`, `m.insert(k, w.r)`) moves that field into the
+            // container, whose walk now runs its body. The memory half
+            // already happens (`suppress_source_vec_cleanup_for_arg` zeroes
+            // the field's caps), but the bodies half was identifier-only, so
+            // `w`'s own field walk ran the moved field's body a second time
+            // -- over the zeroed husk, printing `dD7` with an empty name.
+            // The mask `let x = w.r` and a tuple / struct-literal element
+            // already write; self-gated (identifier/`self` root, non-param,
+            // non-RC-boxed, leaf must run a body) and idempotent. Interp twin:
+            // the `FieldAccess` branch of `record_ctor_arg_moves`.
+            ExprKind::FieldAccess { .. } => self.disarm_struct_field_move_bodies(e),
             _ => {}
         }
     }
