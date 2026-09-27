@@ -94,7 +94,7 @@ distinguish "bugs flattening" from "we stopped writing them down."
 |---|---|
 | run-vs-build | 513 |
 | miscompile | 498 |
-| leak | 444 |
+| leak | 445 |
 | double-free | 329 |
 | missing-feature | 209 |
 | codegen-gap | 197 |
@@ -110,7 +110,7 @@ distinguish "bugs flattening" from "we stopped writing them down."
 
 | surface | total |
 |---|---|
-| codegen | 2198 |
+| codegen | 2199 |
 | interp | 609 |
 | typecheck | 311 |
 | other | 111 |
@@ -364,7 +364,6 @@ registered in the callee's prologue, not by-value struct params in general. | �
 | B-2026-09-27-63 | 2026-09-27 | ownership | low | REUSING A `shared enum` AFTER PASSING IT BY VALUE WARNS `value 's' moved here, used again here`, WHERE THE SAME REUSE OF A `shared struct` IS SILENT -- `rd(e); rd(e)` over `fn rd(s: Sh) -> i64`, `e.read(); e.read()` over an owned-`self` method, and `match s {..}` twice all warn for `shared enum Sh`, while `let b = a; a.id`, `c.get(); c.get()` and `sg(d); sg(d)` on a `shared struct` do not; both kinds are reference-counted handles (design.md § Guaranteed, `shared struct` / `shared enum`: reference semantics), and every backend runs these programs correctly | — |
 | B-2026-09-27-64 | 2026-09-27 | codegen+interp | medium | A FRESH `shared enum` TEMP PASSED BY VALUE RUNS ITS PAYLOAD'S `Drop` BODY BEFORE THE ENCLOSING STATEMENT USES THE RESULT UNDER `--interp`, AND AFTER IT ON EVERY COMPILED BACKEND -- `println(f"x{rd(Sh.A(mk(28)))}")` over `fn rd(s: Sh) -> i64` prints `dR28 x28` interpreted and `x28 dR28` on jit / `-O0` / `-O2` / auto-par=0; the owned-`self` receiver spellings (`Sh.A(mk(29)).read()`, and `.none()` on a callee that never matches) split the same way. A NAMED local agrees on all five surfaces, and so does a plain (non-shared) struct temp arg, which reads `dR x` everywhere | — |
 | B-2026-09-27-65 | 2026-09-27 | codegen | medium | THE METHOD AND FIELD-SOURCE SPELLINGS OF B-2026-09-27-60 STILL RUN A BOXED GENERIC ENUM LOOP VIEW'S `Drop` BODY IN THE CALLEE -- `for h in v { k.take(h) }` over `impl K { fn take(self, h: Ho[S]) { shows(h) } }` prints `s7 dS7 n1 dS7 end` compiled where `--interp` prints `s7 n1 dS7 end`; `for h in c.v { shows(h) }` prints `s7 dS7 n1 end` and loses 32 B | — |
-| B-2026-09-27-66 | 2026-09-27 | codegen | high | A `for` LOOP VIEW OF A BOXED GENERIC ENUM THAT ESCAPES A BY-VALUE CALLEE, OR IS CONSUMED TWICE, CRASHES ON EVERY COMPILED SURFACE -- `for h in v { w.push(keep(h)) }` over `fn keep(h: Ho[S]) -> Ho[S] { h }` segfaults with 5 valgrind errors, and `for h in v { shows(h); shows(h) }` aborts, where `--interp` prints `n11 dS7 dS7 end` and `s7 s7 n1 dS7 end` | — |
 | B-2026-09-27-74 | 2026-09-27 | codegen | high | A BY-VALUE `Option` / `Result` PARAM WITH A BOXED USER-ENUM PAYLOAD, MATCHED BY A NESTED ARM WHOSE VALUE READS THE PAYLOAD, SKIPS THE PAYLOAD'S DROP BODIES AND RUNS ONE ON A ZEROED VALUE -- `fn rb(a: Option[K]) -> i64 { match a { Some(K.A(w)) => w.r.id, Some(K.B) => 30, None => 40 } }` over `enum K { A(W), B }` prints `k1 d0 k2 end` at -O0 and -O2 where `--interp` prints `k1 d1 d2 k2 end`, and valgrind finds the two heap `String`s of each `W` definitely lost; no rebind is involved | — |
 | B-2026-09-27-75 | 2026-09-27 | codegen | high | A WHOLE-PAYLOAD ARM `Some(k) => match k { .. }` ON A BY-VALUE `Option[K]` PARAM WITH A BOXED USER-ENUM PAYLOAD RUNS AN EXTRA `Drop` BODY ON A ZEROED VALUE, AND DOUBLE-FREES WHEN THE PARAM IS FIRST REBOUND -- `fn rb(a: Option[K]) -> i64 { match a { Some(k) => match k { K.A(w) => println(f"m{w.r.id}"), K.B => println("b") }, None => println("n") } 5 }` prints `m1 d1 d0 k5 m2 d2 d0 end` at -O0 and -O2 where `--interp` prints `m1 d1 k5 m2 d2 end`; with `let c = a; match c { .. }` it aborts `free(): double free` on both | — |
 | B-2026-09-27-67 | 2026-09-27 | interp+codegen | medium | A PART OF A NAMED RECEIVER OR ARGUMENT HANDED BACK ON ONLY SOME PATHS LOSES ITS `Drop` BODY ON THE PATH THAT DOES NOT HAND IT BACK, ON ALL FOUR SURFACES -- `impl Ws { fn pick(self, c: bool) -> Option[R] { if c { return Option.Some(self.r) } return None } }` with `w.pick(false)` prints `got` where `dR17 got` is due; `return self.r` and a free fn `pkf(w, false)` lose it the same way | — |
@@ -376,6 +375,7 @@ registered in the callee's prologue, not by-value struct params in general. | �
 | B-2026-09-27-79 | 2026-09-27 | interp+codegen | high | A BY-VALUE BOXED `Option[S]` PARAM PUSHED INTO A LOCAL `Vec` ONLY ON SOME PATHS CRASHES WITH NO OUTPUT ON EVERY COMPILED SURFACE, AND THE INTERPRETER LOSES THE BODY ON THE PATH THAT DOES NOT PUSH -- `fn rb(a: Option[S], c: bool) -> i64 { let mut v: Vec[Option[S]] = Vec.new(); if c { v.push(a) }; println("in"); 5 }` called as `rb(a, true)`, `rb(b, false)`, `rb(Some(mk(3)), true)`, `rb(Some(mk(4)), false)` prints nothing at -O0 or -O2 (8 valgrind errors), and `d1 in k5 in k5 d3 in in end` interpreted, where `d2` and `d4` are due | — |
 | B-2026-09-27-90 | 2026-09-27 | interp+codegen | medium | THREE SPELLINGS B-2026-09-27-58'S FORWARDING ROUTE DOES NOT REACH STILL RUN A PARAM'S HANDED-BACK FIELD `Drop` BODY TWICE ON ALL FOUR SURFACES -- a `match` directly on the forwarded call (`match w.opt() { Some(x) => .. }` and the free-function `match getfo(w)` alike) prints `x7 dR7 dR7 k1`; a method that hands `self` back WHOLE (`let v = w.me(); v` over `fn me(self) -> Ws { return self }`) prints `in dR26 x26 dR26` where the free-function `me2(w)` is right; and a CONDITIONAL forward (`if c { return w.getr() }`, and `getf(w)` alike) prints `dR12 x12 dR12` | — |
 | B-2026-09-27-82 | 2026-09-27 | interp+codegen | medium | AFTER B-2026-09-27-70 A NAMED ROOT'S `Drop` FIELD HANDED ON STILL RUNS ITS BODY TWICE IN FOUR SPELLINGS, AND A TWO-HOP MOVE UNDER AN `if` SPLITS THE BACKENDS -- a projection off an owned PARAMETER (`fn ownw(w: W) -> i64 { let k = keep(w.r); k.id }`), a struct leaf with NO `Drop` kept on some paths (`maybew(x.w, true)`), a user-enum leaf STORED on some paths (`csg(mut xs, v.g, true)`), and a two-hop move inside an `if` (`if c { xs.push(x.w.r); }`), where the interpreter is now right and codegen still runs the body twice over a freed name; a two-hop `let`/`return` inside an `if` loses the body on the leg that does not move, compiled only | — |
+| B-2026-09-27-91 | 2026-09-27 | codegen | medium | TWO LEAKS OF A BOXED GENERIC ENUM'S PAYLOAD BOX, NEIGHBOURS OF B-2026-09-27-66 (AND B-2026-09-27-65'S FIELD-SOURCE HALF) -- a `Vec[Ho[P]]` held in a STRUCT FIELD never frees its elements' boxes, with no loop involved, and with a `Drop` payload a `for h in c.v` walk runs the body in the callee instead of at the field's death (`let c = C { v: v }; println(f"n{c.v.len()}")` loses 36 B), and a by-value `Ho[P]` param that its callee forwards to itself in one branch and matches in the other (`cnt`) loses the 32 B box, let-bound or from a `for` loop | — |
 
 ### Relocated
 
@@ -3130,6 +3130,7 @@ registered in the callee's prologue, not by-value struct params in general. | �
 | B-2026-09-27-58 | interp+codegen | medium | AN OWNED STRUCT PARAMETER USED AS THE NAMED RECEIVER OF AN OWNED-`self` METHOD THAT HANDS A FIELD BACK RUNS THAT FIELD'S BODY TWICE ON ALL FOUR SURFA… | a086d98bd |
 | B-2026-09-27-59 | codegen | medium | A GENERIC STRUCT'S `Drop`-BEARING FIELD HANDED BACK BY VALUE RUNS ITS BODY TWICE ON EVERY COMPILED SURFACE WHILE `--interp` IS RIGHT, for the method,… | 2fbd214e8 |
 | B-2026-09-27-60 | codegen | medium | A `for` LOOP BINDING OVER A `Vec` OF A BOXED GENERIC ENUM, PASSED BY VALUE TO A CALLEE THAT MATCHES IT, RUNS THE PAYLOAD'S `Drop` BODY TWICE ON EVERY… | b3ab2eb44 |
+| B-2026-09-27-66 | codegen | high | A `for` LOOP VIEW OF A BOXED GENERIC ENUM THAT ESCAPES A BY-VALUE CALLEE, OR IS CONSUMED TWICE, CRASHES ON EVERY COMPILED SURFACE -- `for h in v { w.… | e7b06b0a4 |
 | B-2026-09-27-69 | typecheck | low | THE `borrow_projection_copy` LINT (W0299) IS SILENT WHEN A BARE `for` LOOP'S ELEMENT IS MATERIALIZED -- `for g in v { let o = f(g); }` over a keeping… | 1d152cc9e |
 | B-2026-09-27-70 | interp+codegen | medium | FOUR SPELLINGS OF A NAMED LOCAL'S `Drop` FIELD HANDED TO A KEEPING CALLEE STILL RUN THE BODY TWICE ON ALL FOUR SURFACES AFTER B-2026-09-26-63 -- a TW… | 0a4e2754e |
 
