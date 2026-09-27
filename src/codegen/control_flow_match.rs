@@ -502,6 +502,7 @@ impl<'ctx> super::Codegen<'ctx> {
             || self.scrutinee_is_readonly_borrowed_place(scrutinee, arms)
             || self.scrutinee_is_readonly_owned_agg_loop_var(scrutinee, arms)
             || self.scrutinee_is_readonly_owned_enum_local(scrutinee, arms)
+            || self.scrutinee_is_readonly_owned_boxed_generic_enum_local(scrutinee, arms)
             || self.scrutinee_is_readonly_owned_enum_projection(scrutinee, arms)
             || readonly_inline_optres;
         // B-2026-07-15-21 Part B — scrutinee is an RC-elidable borrowed param:
@@ -3513,6 +3514,175 @@ impl<'ctx> super::Codegen<'ctx> {
             return false;
         }
         self.no_arm_payload_escapes(arms)
+    }
+
+    /// B-2026-09-17-12 — the HEAP-BOXED generic sibling of
+    /// [`Self::scrutinee_is_readonly_owned_enum_local`]: a read-only match over
+    /// a bare local of a user generic enum whose payload lives in a box
+    /// (`let g: G[R] = G.X(mk(20)); match g { G.X(t) => .. }`).
+    ///
+    /// That classifier never reaches this shape, because a boxed payload's
+    /// owner is a `BoxedEnumDrop` rather than the `EnumDrop` it asks for, so
+    /// the arm binding took the box's interior even when it only read it. Two
+    /// defects followed from the one decision. The payload's `Drop` body ran at
+    /// the ARM's end while the enum's own body ran at the scrutinee's, so the
+    /// order came out `dR dG` where design.md Part 8 (and `--interp`, and the
+    /// inline-payload spelling) gives `dG dR`. And a second read-only match
+    /// took the same interior again: two matches over one `G[R]` with
+    /// `R { id: i64, tag: String }` aborted with `free(): double free` on the
+    /// JIT and at `-O0`, no `Drop` anywhere.
+    ///
+    /// A VIEW is what the arm is. The box keeps its interior walk, its bodies
+    /// walker and the enum's own wrapper, all draining at the scrutinee's
+    /// live-range end in the order the `let` site registered them; the binding
+    /// registers nothing. The witness is the box drop's `inner_drop_fn` or a
+    /// live bodies walk on the variable, so a box that has nothing left to
+    /// release (a previous consuming arm took it) is not classified.
+    ///
+    /// Generic user enums only, which is where `enum_pattern_consumes_user_
+    /// drop_payload` answers "consumed" for every arm regardless of what the
+    /// arm does. The seeded `Option`/`Result` pair has its own channel.
+    fn scrutinee_is_readonly_owned_boxed_generic_enum_local(
+        &self,
+        scrutinee: &Expr,
+        arms: &[MatchArm],
+    ) -> bool {
+        let Some(name) = self.owned_boxed_generic_enum_local(scrutinee) else {
+            return false;
+        };
+        if !arms
+            .iter()
+            .all(|a| self.pattern_is_flat_payload_binding(&a.pattern))
+            || arms
+                .iter()
+                .all(|a| Self::variant_arm_binds(&a.pattern).is_empty())
+        {
+            return false;
+        }
+        // A view dies with the box it views, so an arm that could replace the
+        // scrutinee (`g = G.X(..)`, or hand it anywhere) keeps the owning
+        // path: measured, `match g { G.X(t) => { g = G.X(mk(3)); println(t.tag) } }`
+        // read the freed box on every compiled surface as a view, and is clean
+        // as an owner.
+        if arms.iter().any(|a| {
+            crate::deque_head::expr_mentions_name_deep(&a.body, name)
+                || a.guard
+                    .as_ref()
+                    .is_some_and(|g| crate::deque_head::expr_mentions_name_deep(g, name))
+        }) {
+            return false;
+        }
+        // And no arm moves a piece OUT of its binding. The escape walk above
+        // reads `let u = t.tag` as a plain read of `t`, which it is for the
+        // binding and is not for the field: through a view that is a move out
+        // of the box, measured as a 3 B leak on `G[R]` with
+        // `R { id: i64, tag: String, xs: Vec[i64] }` and no `Drop` anywhere,
+        // clean on the owning path. The consumption classifier calls that a
+        // move-binding sink; a projection read inside `println` or an
+        // interpolation it leaves a read.
+        if !arms.iter().all(|a| {
+            self.boxed_generic_arm_reads_only(scrutinee, &a.pattern, |v, read| {
+                super::consume_class::binding_only_borrowed_with(v, &a.body, read)
+            })
+        }) {
+            return false;
+        }
+        self.no_arm_payload_escapes(arms)
+    }
+
+    /// The `if let` / `while let` sibling of
+    /// [`Self::scrutinee_is_readonly_owned_boxed_generic_enum_local`]: same
+    /// gates, with the escape test asked of this pattern's bindings in this
+    /// block.
+    pub(super) fn scrutinee_is_readonly_owned_boxed_generic_enum_local_block(
+        &self,
+        scrutinee: &Expr,
+        pattern: &Pattern,
+        block: &crate::ast::Block,
+    ) -> bool {
+        let Some(name) = self.owned_boxed_generic_enum_local(scrutinee) else {
+            return false;
+        };
+        if !self.pattern_is_flat_payload_binding(pattern)
+            || Self::variant_arm_binds(pattern).is_empty()
+        {
+            return false;
+        }
+        let as_expr = Expr {
+            kind: ExprKind::Block(block.clone()),
+            span: block.span,
+        };
+        if crate::deque_head::expr_mentions_name_deep(&as_expr, name) {
+            return false;
+        }
+        if !self.boxed_generic_arm_reads_only(scrutinee, pattern, |v, read| {
+            super::consume_class::binding_only_borrowed_block_with(v, block, read)
+        }) {
+            return false;
+        }
+        !self.pattern_bindings_escape_in_block(pattern, block)
+    }
+
+    /// Does every binding `pattern` makes only READ the payload, in the
+    /// consumption classifier's sense (a move-binding like `let u = t.tag` is
+    /// a take), with a projection to a PRIMITIVE field admitted as a read? The
+    /// syntactic default calls `t.id` a partial move, which would leave `let n
+    /// = match g { G.X(t) => t.id, .. }` on the owning path and printing
+    /// `dR dG`; the leaf-aware policy is B-2026-09-20-44's.
+    fn boxed_generic_arm_reads_only(
+        &self,
+        scrutinee: &Expr,
+        pattern: &Pattern,
+        only_borrowed: impl Fn(&str, &dyn Fn(&Expr) -> bool) -> bool,
+    ) -> bool {
+        let Some(enum_name) = self.variant_pattern_enum_name(pattern) else {
+            return Self::variant_arm_binds(pattern).is_empty();
+        };
+        let mut scalar_tes = self.arm_binding_scalar_tes(pattern);
+        for (k, v) in self.arm_binding_inst_tes(scrutinee, &enum_name, pattern) {
+            scalar_tes.entry(k).or_insert(v);
+        }
+        let prim_fields = self.arm_binding_primitive_field_reads(&scalar_tes);
+        let copy_read = |e: &Expr| {
+            Self::arm_binding_scalar_copy_read(&scalar_tes, e)
+                || Self::arm_binding_primitive_field_read(&prim_fields, e)
+        };
+        Self::variant_arm_binds(pattern)
+            .iter()
+            .all(|v| only_borrowed(v, &copy_read))
+    }
+
+    /// Shared gate of the two boxed-generic classifiers above: is `scrutinee`
+    /// a bare local of a non-shared user GENERIC enum whose `BoxedEnumDrop`
+    /// still releases the box's interior? Returns the local's name.
+    fn owned_boxed_generic_enum_local<'e>(&self, scrutinee: &'e Expr) -> Option<&'e str> {
+        let ExprKind::Identifier(name) = &scrutinee.kind else {
+            return None;
+        };
+        let enum_name = self.var_types.var_type_names.get(name.as_str())?;
+        if matches!(enum_name.as_str(), "Option" | "Result") {
+            return None;
+        }
+        let layout = self.type_decls.enum_layouts.get(enum_name.as_str())?;
+        if layout.is_shared || self.enum_generic_param_names(enum_name).is_empty() {
+            return None;
+        }
+        self.boxed_enum_drop_owns_interior(name)
+            .then_some(name.as_str())
+    }
+
+    /// A whole-payload binding, a wildcard, or a unit-variant test. A nested
+    /// destructure reaches THROUGH the box and has its own channel
+    /// (`suppress_nested_boxed_payload_cleanup`), so it stays off the view
+    /// path.
+    fn pattern_is_flat_payload_binding(&self, pattern: &Pattern) -> bool {
+        match &pattern.kind {
+            PatternKind::TupleVariant { patterns, .. } => patterns
+                .iter()
+                .all(|p| matches!(p.kind, PatternKind::Binding(_) | PatternKind::Wildcard)),
+            PatternKind::Wildcard => true,
+            _ => self.pattern_is_unit_variant_test(pattern),
+        }
     }
 
     /// B-2026-08-29-29 — the PROJECTION-PLACE sibling of

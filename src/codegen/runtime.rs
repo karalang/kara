@@ -15526,6 +15526,17 @@ impl<'ctx> super::Codegen<'ctx> {
         })
     }
 
+    /// B-2026-09-17-12 — does `name`'s live `BoxedEnumDrop` still release the
+    /// box's interior? The ownership witness for treating a read-only arm as a
+    /// view of the box rather than as the interior's new owner.
+    pub(super) fn boxed_enum_drop_owns_interior(&self, name: &str) -> bool {
+        self.drop_rc.scope_cleanup_actions.iter().any(|frame| {
+            frame.iter().any(|a| {
+                matches!(a, CleanupAction::BoxedEnumDrop { name: n, inner_drop_fn: Some(_), .. } if n == name)
+            })
+        })
+    }
+
     pub(super) fn clear_boxed_enum_inner_drop(&mut self, name: &str, arm_only_borrows: bool) {
         for frame in self.drop_rc.scope_cleanup_actions.iter_mut().rev() {
             for action in frame.iter_mut() {
