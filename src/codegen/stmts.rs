@@ -9707,7 +9707,9 @@ impl<'ctx> super::Codegen<'ctx> {
                                 // NAMED STRUCT, so an `Array[S, N]` slot is
                                 // never even visited by it.
                             } else if self.enum_ctor_payload_bodies_are_caller_owned(&name, value)
-                                || self.expr_is_param_view(value)
+                                || (self.expr_is_param_view(value)
+                                    // B-2026-09-27-50 — see the struct arm.
+                                    && !self.let_is_reassigned_param_rebind(var_name, value))
                                 // B-2026-09-06-9 — the rebind through an
                                 // always-returning callee, as at the struct
                                 // and tuple sites.
@@ -11029,6 +11031,10 @@ impl<'ctx> super::Codegen<'ctx> {
                             // B-2026-09-06-9 — the rebind through an
                             // always-returning callee, as at the struct site.
                             || self.let_call_result_is_param_view(value);
+                        // B-2026-09-27-50 — not the `let mut c = a;` this
+                        // function reassigns: the caller stands down for it.
+                        let optres_is_param_view = optres_is_param_view
+                            && !self.let_is_reassigned_param_rebind(var_name, value);
                         if optres_is_param_view {
                             self.payload_vars.param_view_locals.insert(var_name.clone());
                         }
@@ -12056,12 +12062,19 @@ impl<'ctx> super::Codegen<'ctx> {
                             // (`dR7 got 7 dR7` / `dR8 dR8 got 99 dR99`) while
                             // the interpreter was already right.
                             let call_src = self.call_result_param_view_source(value);
-                            let rhs_is_param_view = matches!(&value.kind,
+                            // B-2026-09-27-50 — except the `let mut c = a;`
+                            // that this function then reassigns
+                            // (`fn_reassigns_param_rebind`): the caller stands
+                            // down for that param, so the displaced value dies
+                            // HERE at the reassignment and `c` is an ordinary
+                            // owner of the body and the (entry-copied) memory.
+                            let rhs_is_param_view = (matches!(&value.kind,
                                 ExprKind::Identifier(src)
                                     if (self.fn_ctx.current_fn_param_names.contains(src.as_str())
                                         && !self.borrow_vars.ref_params.contains_key(src.as_str()))
                                         || self.payload_vars.param_view_locals.contains(src.as_str()))
-                                || call_src.is_some();
+                                || call_src.is_some())
+                                && !self.let_is_reassigned_param_rebind(var_name, value);
                             if rhs_is_param_view {
                                 self.payload_vars
                                     .param_view_locals

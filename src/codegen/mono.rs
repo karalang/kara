@@ -3592,7 +3592,8 @@ impl<'ctx> super::Codegen<'ctx> {
                 // here: at a generic call site it carries the instantiation and
                 // the declared `(Bag[T], i64)` does not.
                 let declared_tes = self.callee_tuple_param_elem_type_exprs(name, i);
-                self.drop_rc.aggregate_arg_escape_stores = stored_in_outliving_place;
+                self.drop_rc.aggregate_arg_escape_stores = stored_in_outliving_place
+                    && !self.call_arg_store_is_local_container_only(name, i, true);
                 self.track_inline_owned_aggregate_arg_inst(
                     val,
                     &a.value,

@@ -9993,6 +9993,41 @@ impl<'ctx> super::Codegen<'ctx> {
     /// Resolved from the current function's AST by name; a frame whose AST is
     /// not found (a closure body) answers only for the bare parameter, the
     /// direction that keeps today's double rather than losing a body.
+    /// B-2026-09-27-50 — is `let <var_name> = <value>` the `let mut c = a;`
+    /// rebind of an owned parameter that the function being compiled then
+    /// reassigns on every path ([`crate::ast::param_reassigned_rebind_local`])?
+    /// The caller stands down for that parameter (the predicate is part of
+    /// `fn_moves_param_into_local_container`), so `c` is an OWNER here, not a
+    /// view: the reassignment runs the displaced value's body in this frame.
+    pub(super) fn let_is_reassigned_param_rebind(&self, var_name: &str, value: &Expr) -> bool {
+        let ExprKind::Identifier(src) = &value.kind else {
+            return false;
+        };
+        // A param the prologue did not copy (`caller_retained_aggregate_memory`:
+        // a struct owning a `shared` field) is a view onto the caller's
+        // buffers, which `c` must not free.
+        if !self.fn_ctx.current_fn_param_names.contains(src.as_str())
+            || self.borrow_vars.ref_params.contains_key(src.as_str())
+            || self
+                .drop_rc
+                .caller_retained_aggregate_memory
+                .contains(src.as_str())
+        {
+            return false;
+        }
+        let Some(p) = self.program_snapshot.as_deref() else {
+            return false;
+        };
+        let Some(f) = super::declarations::find_function_ast(p, &self.fn_ctx.current_fn_name)
+        else {
+            return false;
+        };
+        f.params.iter().enumerate().any(|(i, prm)| {
+            matches!(&prm.pattern.kind, crate::ast::PatternKind::Binding(n) if n == src)
+                && crate::ast::param_reassigned_rebind_local(f, i) == Some(var_name)
+        })
+    }
+
     pub(super) fn ident_is_whole_param_alias(&self, src: &str) -> bool {
         if self.borrow_vars.ref_params.contains_key(src) {
             return false;

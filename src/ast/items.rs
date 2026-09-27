@@ -9081,7 +9081,7 @@ pub fn param_whole_rebind_aliases<'a>(f: &'a Function, param_name: &str) -> Vec<
 /// `?`-propagate before the push is reached. Anything else answers `false`,
 /// which keeps the pre-existing behaviour for that shape.
 pub fn fn_moves_param_into_local_container(f: &Function, arg_index: usize) -> bool {
-    param_whole_container_store(f, arg_index, false)
+    param_whole_container_store(f, arg_index, false) || fn_reassigns_param_rebind(f, arg_index)
 }
 
 /// B-2026-09-27-53 — does `f` store by-value parameter `arg_index` WHOLE into
@@ -9117,40 +9117,7 @@ fn param_whole_container_store(f: &Function, arg_index: usize, outliving: bool) 
     let PatternKind::Binding(name) = &param.pattern.kind else {
         return false;
     };
-    /// Can evaluating `e` leave the function, or skip what follows it?
-    fn straight(e: &Expr) -> bool {
-        match &e.kind {
-            ExprKind::Integer(..)
-            | ExprKind::Float(..)
-            | ExprKind::CharLit(..)
-            | ExprKind::ByteLit(..)
-            | ExprKind::StringLit(..)
-            | ExprKind::MultiStringLit(..)
-            | ExprKind::InterpolatedStringLit(..)
-            | ExprKind::ByteStringLit(..)
-            | ExprKind::Bool(..)
-            | ExprKind::Identifier(..)
-            | ExprKind::Path { .. }
-            | ExprKind::SelfValue => true,
-            ExprKind::Binary { left, right, .. } => straight(left) && straight(right),
-            ExprKind::Unary { operand, .. } => straight(operand),
-            ExprKind::FieldAccess { object, .. } | ExprKind::TupleIndex { object, .. } => {
-                straight(object)
-            }
-            ExprKind::Call { callee, args } => {
-                straight(callee) && args.iter().all(|a| straight(&a.value))
-            }
-            ExprKind::MethodCall { object, args, .. } => {
-                straight(object) && args.iter().all(|a| straight(&a.value))
-            }
-            ExprKind::Tuple(elems) | ExprKind::ArrayLiteral(elems) => elems.iter().all(straight),
-            // B-2026-09-22-14 — `let mut v: Vec[T] = []` reaches here as this
-            // prefix form, rewritten from the bare literal by its annotation.
-            ExprKind::PrefixCollectionLiteral { items, .. } => items.iter().all(straight),
-            ExprKind::StructLiteral { fields, .. } => fields.iter().all(|fi| straight(&fi.value)),
-            _ => false,
-        }
-    }
+    let straight = straight_line_expr;
     let mut locals: Vec<&str> = Vec::new();
     // B-2026-09-24-20 — the names the value goes by after a whole rebind
     // (`let c = a;`): a push of `c` is a push of the parameter. Kept apart from
@@ -9238,6 +9205,141 @@ fn param_whole_container_store(f: &Function, arg_index: usize, outliving: bool) 
                 && matches!(&e.kind, ExprKind::MethodCall { args, .. }
                     if args.iter().all(|a| straight(&a.value)))
         })
+}
+
+/// Can evaluating `e` leave the function, or skip what follows it?
+fn straight_line_expr(e: &Expr) -> bool {
+    match &e.kind {
+        ExprKind::Integer(..)
+        | ExprKind::Float(..)
+        | ExprKind::CharLit(..)
+        | ExprKind::ByteLit(..)
+        | ExprKind::StringLit(..)
+        | ExprKind::MultiStringLit(..)
+        | ExprKind::InterpolatedStringLit(..)
+        | ExprKind::ByteStringLit(..)
+        | ExprKind::Bool(..)
+        | ExprKind::Identifier(..)
+        | ExprKind::Path { .. }
+        | ExprKind::SelfValue => true,
+        ExprKind::Binary { left, right, .. } => {
+            straight_line_expr(left) && straight_line_expr(right)
+        }
+        ExprKind::Unary { operand, .. } => straight_line_expr(operand),
+        ExprKind::FieldAccess { object, .. } | ExprKind::TupleIndex { object, .. } => {
+            straight_line_expr(object)
+        }
+        ExprKind::Call { callee, args } => {
+            straight_line_expr(callee) && args.iter().all(|a| straight_line_expr(&a.value))
+        }
+        ExprKind::MethodCall { object, args, .. } => {
+            straight_line_expr(object) && args.iter().all(|a| straight_line_expr(&a.value))
+        }
+        ExprKind::Tuple(elems) | ExprKind::ArrayLiteral(elems) => {
+            elems.iter().all(straight_line_expr)
+        }
+        // B-2026-09-22-14 — `let mut v: Vec[T] = []` reaches here as this
+        // prefix form, rewritten from the bare literal by its annotation.
+        ExprKind::PrefixCollectionLiteral { items, .. } => items.iter().all(straight_line_expr),
+        ExprKind::StructLiteral { fields, .. } => {
+            fields.iter().all(|fi| straight_line_expr(&fi.value))
+        }
+        _ => false,
+    }
+}
+
+/// B-2026-09-27-50 — does `f` rebind by-value parameter `arg_index` whole into
+/// a `let mut` local and then REASSIGN that local, on every path, before
+/// anything else touches it?
+///
+/// `fn rb(a: R) -> i64 { let mut c = a; c = R { id: 9 }; .. }`: the
+/// reassignment displaces the parameter's value, which dies in THIS frame
+/// right there, exactly as a value pushed into a container one of `f`'s own
+/// locals holds dies in its drain -- so the caller's own walk over the
+/// argument is a second body for one value (`d1 d9 in k5 d1`), and this is
+/// consulted wherever [`fn_moves_param_into_local_container`] is, as part of
+/// it.
+///
+/// A MUST-analysis, deliberately narrow, for the same reason as that one:
+/// every statement from the top of the body to the reassignment is a
+/// top-level straight-line statement, `c` is bound exactly once in `f`, and
+/// neither `c` nor the parameter is mentioned between the `let` and the
+/// reassignment or on the reassignment's right-hand side (a use there could
+/// move the value out, and then the reassignment displaces nothing).
+pub fn fn_reassigns_param_rebind(f: &Function, arg_index: usize) -> bool {
+    param_reassigned_rebind_local(f, arg_index).is_some()
+}
+
+/// The local [`fn_reassigns_param_rebind`] finds: the `c` of `let mut c = a;`.
+pub fn param_reassigned_rebind_local(f: &Function, arg_index: usize) -> Option<&str> {
+    let param = f.params.get(arg_index)?;
+    if matches!(
+        param.ty.kind,
+        crate::ast::TypeKind::Ref(_) | crate::ast::TypeKind::MutRef(_)
+    ) {
+        return None;
+    }
+    let PatternKind::Binding(name) = &param.pattern.kind else {
+        return None;
+    };
+    let mentions = |e: &Expr, n: &str| crate::deque_head::expr_mentions_name_deep(e, n);
+    let mut local: Option<&str> = None;
+    for st in &f.body.stmts {
+        match (&st.kind, local) {
+            (
+                StmtKind::Let {
+                    is_mut,
+                    pattern,
+                    value,
+                    ..
+                },
+                None,
+            ) => {
+                if !straight_line_expr(value) {
+                    return None;
+                }
+                let PatternKind::Binding(n) = &pattern.kind else {
+                    continue;
+                };
+                if n == name {
+                    return None;
+                }
+                if *is_mut && matches!(&value.kind, ExprKind::Identifier(src) if src == name) {
+                    if rebind_walk_raw(f).bound.get(n.as_str()) != Some(&1) {
+                        return None;
+                    }
+                    local = Some(n.as_str());
+                }
+            }
+            (StmtKind::Expr(e), None) => {
+                if !straight_line_expr(e) {
+                    return None;
+                }
+            }
+            (StmtKind::Assign { target, value }, Some(c)) if matches!(&target.kind, ExprKind::Identifier(t) if t == c) =>
+            {
+                return (straight_line_expr(value)
+                    && !mentions(value, c)
+                    && !mentions(value, name))
+                .then_some(c);
+            }
+            (StmtKind::Let { value, pattern, .. }, Some(c)) => {
+                if !straight_line_expr(value) || mentions(value, c) || mentions(value, name) {
+                    return None;
+                }
+                if matches!(&pattern.kind, PatternKind::Binding(n) if n == c || n == name) {
+                    return None;
+                }
+            }
+            (StmtKind::Expr(e), Some(c)) => {
+                if !straight_line_expr(e) || mentions(e, c) || mentions(e, name) {
+                    return None;
+                }
+            }
+            _ => return None,
+        }
+    }
+    None
 }
 
 /// B-2026-09-25-10 — either conditional store: into a place the caller holds,

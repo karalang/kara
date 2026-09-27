@@ -2576,7 +2576,8 @@ impl<'ctx> super::Codegen<'ctx> {
                 // registrar).
                 let payload_skip = self.enum_arg_payload_skip(&name, i);
                 let field_payload_paths = self.callee_escaping_field_payload_paths(&name, i);
-                self.drop_rc.aggregate_arg_escape_stores = stored_in_outliving_place;
+                self.drop_rc.aggregate_arg_escape_stores = stored_in_outliving_place
+                    && !self.call_arg_store_is_local_container_only(&name, i, false);
                 self.drop_rc.freshtemp_drop_projection_arg =
                     drop_projection.filter(|_| !escapes_frame);
                 self.track_inline_owned_aggregate_arg_parts(
@@ -4135,9 +4136,18 @@ impl<'ctx> super::Codegen<'ctx> {
     ///
     /// `idx` counts a method's `self` as param 0, as the method-call site's
     /// `pidx` does; the AST's `params` do not hold `self`.
+    ///
+    /// B-2026-09-27-50 — or rebinds it into a `let mut` local that it then
+    /// reassigns ([`crate::ast::fn_reassigns_param_rebind`]): a mutable rebind
+    /// registers the box on the local, which frees it as the displaced value
+    /// at the reassignment, so that local takes the box over exactly as a
+    /// container does.
     pub(super) fn callee_stores_param_whole(&self, callee_name: &str, idx: usize) -> bool {
         self.callee_param_ast(callee_name, idx)
-            .is_some_and(|(f, ast_i)| crate::ast::fn_stores_param_whole_into_container(f, ast_i))
+            .is_some_and(|(f, ast_i)| {
+                crate::ast::fn_stores_param_whole_into_container(f, ast_i)
+                    || crate::ast::fn_reassigns_param_rebind(f, ast_i)
+            })
     }
 
     /// The caller-side owner of a fresh-temp argument's heap-boxed `Option` /
@@ -7297,6 +7307,49 @@ impl<'ctx> super::Codegen<'ctx> {
             // the value over just as one the caller holds does: its drain runs
             // the body, in the callee or wherever the container is returned to.
             || crate::ast::fn_moves_param_into_local_container_any(f, declared)
+    }
+
+    /// B-2026-09-27-50 — is the only store [`Self::call_arg_moves_into_outliving_place`]
+    /// found for this argument an unconditional one into a container the
+    /// CALLEE's own local holds ([`crate::ast::fn_moves_param_into_local_container`],
+    /// which also counts a `let mut` rebind the callee reassigns)?
+    ///
+    /// The registrar's escaping-entry-copy arm declines the store route because
+    /// a CONDITIONALLY stored param is RC-promoted rather than copied, so its box
+    /// frees the caller's value. An unconditional local store is not promoted:
+    /// the callee entry-copies the param and its container frees the copy, so
+    /// the caller's fresh temp is an orphaned original that only the caller can
+    /// free. Measured on `rb(mk(2))` over `fn rb(a: S) -> i64 { let mut v:
+    /// Vec[S] = Vec.new(); v.push(a); 5 }`, which lost the temp's `String` (29 B)
+    /// on every compiled surface.
+    pub(super) fn call_arg_store_is_local_container_only(
+        &self,
+        callee_name: &str,
+        arg_index: usize,
+        receiver_counted: bool,
+    ) -> bool {
+        let Some(f) = self
+            .program_snapshot
+            .as_deref()
+            .and_then(|p| super::declarations::find_function_ast(p, callee_name))
+            .or_else(|| self.mono_state.generic_fns.get(callee_name))
+        else {
+            return false;
+        };
+        // Indexed as `call_arg_moves_into_outliving_place` indexes it.
+        let declared = if receiver_counted && f.self_param.is_some() {
+            match arg_index.checked_sub(1) {
+                Some(d) => d,
+                None => return false,
+            }
+        } else {
+            arg_index
+        };
+        crate::ast::fn_moves_param_into_local_container(f, declared)
+            && !crate::ast::fn_moves_param_into_outliving_place(f, declared)
+            && !self.program_snapshot.as_deref().is_some_and(|p| {
+                crate::ast::fn_moves_param_into_outliving_place_via_call(p, f, declared)
+            })
     }
 
     /// B-2026-07-01-7 (discard position): register the caller-side
