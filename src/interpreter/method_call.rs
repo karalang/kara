@@ -598,7 +598,12 @@ impl<'a> super::Interpreter<'a> {
                                 // payload's `Drop` body was lost outright.
                                 // Codegen twin: the `suppress_container_elem_
                                 // bodies_for_var` gate in method_call.rs.
-                                if matches!(obj, Value::EnumVariant { .. })
+                                // B-2026-09-16-30 — never for a SHARED enum:
+                                // the callee's arms bind views of it
+                                // (`bare_self_is_shared_enum_receiver`), so the
+                                // named handle stays the payload's owner.
+                                if matches!(obj, Value::EnumVariant { enum_name, .. }
+                                    if !self.enum_is_shared(enum_name))
                                     && self
                                         .find_impl_method_ast(&type_name, method)
                                         .is_some_and(|f| {
@@ -1363,6 +1368,21 @@ impl<'a> super::Interpreter<'a> {
                 if ref_self || owned_self_enum_payload {
                     self.run_enum_payload_user_drops_value(obj);
                 }
+            }
+            // B-2026-09-16-30 — a SHARED enum receiver temp taken by owned
+            // `self`. Its arms bind views (`bare_self_is_shared_enum_receiver`),
+            // so no arm channel owns the payload and, as for a fresh temp arg
+            // (`run_fresh_temp_arg_drops`), the caller is the last holder:
+            // shell body, then the payload walk. Before this arm a callee that
+            // never matched on `self` ran the payload's body nowhere.
+            Value::EnumVariant { enum_name, .. }
+                if fresh && owned_self_enum_shell && self.enum_is_shared(enum_name) =>
+            {
+                let tn = enum_name.clone();
+                if self.program.drop_method_keys.contains_key(&tn) {
+                    self.run_user_drop_body_only(&tn, obj.clone());
+                }
+                self.run_enum_payload_user_drops_value(obj);
             }
             _ => {}
         }

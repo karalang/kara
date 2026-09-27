@@ -1378,7 +1378,8 @@ impl<'a> super::Interpreter<'a> {
                         Some(crate::ast::SelfParam::Owned)
                     ) && (hops > 0
                         || self.bare_self_is_owned_struct_receiver()
-                        || self.bare_self_is_owned_drop_enum_receiver());
+                        || self.bare_self_is_owned_drop_enum_receiver()
+                        || self.bare_self_is_shared_enum_receiver());
                 }
                 _ => return false,
             }
@@ -1422,6 +1423,42 @@ impl<'a> super::Interpreter<'a> {
             .rev()
             .find_map(|s| s.get("self"))
             .is_some_and(|v| matches!(v, Value::EnumVariant { .. }))
+    }
+
+    /// B-2026-09-16-30 — is a bare `self` an owned receiver of a `shared`
+    /// (or `par`) ENUM?
+    ///
+    /// Such a receiver is a by-value param like any other, never a transfer:
+    /// the caller's handle still holds the value, and every alias holds its
+    /// own count, so an arm over it cannot take the payload over. It binds a
+    /// view and the refcount's last holder runs the payload's body, exactly as
+    /// `fn rd(s: Sh) -> i64 { match s { .. } }` already did on this backend.
+    /// Treating it as a transfer ran that body in the ARM on every call —
+    /// `s.read(); s.read()` printed it twice, and an alias (`let t = s;
+    /// t.read()`) or a `Vec[Sh]` element ran it at the call and again at the
+    /// real holder's death. Codegen never had the transfer: both its receiver
+    /// registrars exclude shared types by design.
+    pub(super) fn bare_self_is_shared_enum_receiver(&self) -> bool {
+        matches!(
+            self.self_param_stack.last(),
+            Some(crate::ast::SelfParam::Owned)
+        ) && self
+            .env
+            .scopes
+            .iter()
+            .rev()
+            .find_map(|s| s.get("self"))
+            .is_some_and(|v| match v {
+                Value::EnumVariant { enum_name, .. } => self.enum_is_shared(enum_name),
+                _ => false,
+            })
+    }
+
+    /// Is `enum_name` a user `shared` / `par` enum? B-2026-09-16-30.
+    pub(super) fn enum_is_shared(&self, enum_name: &str) -> bool {
+        self.program.items.iter().any(
+            |it| matches!(it, Item::EnumDef(e) if e.name == enum_name && (e.is_shared || e.is_par)),
+        )
     }
 
     /// B-2026-09-06-39 — the NARROWER sibling of
@@ -1527,6 +1564,8 @@ impl<'a> super::Interpreter<'a> {
                     Some(crate::ast::SelfParam::Owned)
                 ) && !self.bare_self_is_owned_struct_receiver()
                     && !self.bare_self_is_owned_drop_enum_receiver()
+                    // B-2026-09-16-30 — nor is a SHARED enum receiver.
+                    && !self.bare_self_is_shared_enum_receiver()
             }
             ExprKind::MethodCall { method, .. } => {
                 !matches!(method.as_str(), "get" | "first" | "last")

@@ -11818,3 +11818,55 @@ fn main() {
         "asan_generic_multi_field_enum_array_payload_is_freed_once",
     );
 }
+
+/// B-2026-09-16-30 — an OWNED receiver of a `shared enum` binds VIEWS of its
+/// payload, like any by-value param, and the refcount's last holder runs the
+/// payload's `Drop` body, ONCE.
+///
+/// `--interp` treated such a receiver as a TRANSFER, the value-enum rule: the
+/// call site masked the caller's payload walk and the callee's arm took the
+/// payload over, so `fn read(self) -> i64 { match self { Sh.A(r) => r.id, .. } }`
+/// ran `dR` inside the callee on EVERY call. `twice` printed it twice, and a
+/// `Vec[Sh]` element (`vec`) ran it at the call and again when the Vec died.
+/// Every compiled backend already ran it once, at the last holder -- the
+/// `param` cell's placement, which a free fn taking `Sh` by value has always
+/// had on both backends -- and design.md § Patterns says destructuring a
+/// shared value increments its refcount rather than moving out of it.
+/// `none` (a callee that never matches) and `shell` (a shared enum with its
+/// own `impl Drop`) pin the neighbouring shapes.
+///
+/// The payload owns a `String` and a `Vec`, so a doubled body would also be
+/// a doubled free on a compiled backend.
+#[test]
+fn asan_shared_enum_receiver_payload_body_runs_once_at_the_last_holder() {
+    assert_clean_asan_run(
+        r#"struct R { id: i64, tag: String, xs: Vec[i64] }
+impl Drop for R { fn drop(mut ref self) { println(f"  dR{self.id}") } }
+fn mk(i: i64) -> R { return R { id: i, tag: f"t{i}", xs: [i] } }
+shared enum Sh { A(R), B }
+impl Sh {
+    fn read(self) -> i64 { match self { Sh.A(r) => { return r.id; } Sh.B => { return 0; } } }
+    fn none(self) -> i64 { return 5; }
+}
+shared enum Sd { A(R), B }
+impl Drop for Sd { fn drop(mut ref self) { println("  dSd") } }
+impl Sd { fn read(self) -> i64 { match self { Sd.A(r) => { return r.id; } Sd.B => { return 0; } } } }
+fn rd(s: Sh) -> i64 { match s { Sh.A(r) => { return r.id; } Sh.B => { return 0; } } }
+fn main() {
+    println("recv");  { let s: Sh = Sh.A(mk(1)); println(f"  x{s.read()}") }
+    println("twice"); { let s: Sh = Sh.A(mk(2)); println(f"  x{s.read()}"); println(f"  y{s.read()}") }
+    println("vec");   { let s: Sh = Sh.A(mk(3)); let v: Vec[Sh] = [s]; println(f"  x{v[0].read()}"); println(f"  n{v.len()}") }
+    println("none");  { let s: Sh = Sh.A(mk(4)); println(f"  x{s.none()}") }
+    println("shell"); { let s: Sd = Sd.A(mk(5)); println(f"  x{s.read()}"); println(f"  y{s.read()}") }
+    println("param"); { let s: Sh = Sh.A(mk(6)); println(f"  x{rd(s)}"); println(f"  y{rd(s)}") }
+    println("end");
+}
+"#,
+        &[
+            "recv", "  x1", "  dR1", "twice", "  x2", "  y2", "  dR2", "vec", "  x3", "  n1",
+            "  dR3", "none", "  x5", "  dR4", "shell", "  x5", "  y5", "  dSd", "  dR5", "param",
+            "  x6", "  y6", "  dR6", "end",
+        ],
+        "asan_shared_enum_receiver_payload_body_runs_once_at_the_last_holder",
+    );
+}
