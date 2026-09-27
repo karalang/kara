@@ -2872,6 +2872,8 @@ for (key, value) in map.into_iter() {
 
 The same rule applies to `Vec`, `Set`, and all other collections: bare `for` borrows; `.into_iter()` consumes.
 
+**Moving a borrowed element out is a copy, and a `Drop` element cannot be copied implicitly.** Because the element of a bare `for` over a collection place is a view, a value position that stores it (`let h = g`, `w.push(g)`, `return g`, `(g, 1)`, `vec![g]`, `Some(g)`) copies it, as reading a non-`Copy` field out of a borrow does (§ "`borrow_projection_copy`"). A by-value argument copies only when the callee keeps it, by the same section's rule, and is not covered here. For a `String` or plain-struct element that copy is only a cost, and `karac check` warns (`borrow_projection_copy`). For an element whose type runs a user `Drop` body — its own, or one reachable inside it by value — the copy would run that body a second time, once for the copy and once from the collection, so it is **rejected** (`for_element_drop_copy`, deny by default): write `.clone()` where the type has one, use the element in place (read its fields, pass it to a `ref` parameter), or consume the collection with `.into_iter()`. A field projected off the element follows the same rule. A `shared` element is exempt: its copy retains a handle and runs no body.
+
 ### Iterator Adaptors
 
 Extension methods on `Iterator` enable functional-style chains. All closure-accepting adaptors are **effect-polymorphic** — the adaptor's effect set includes the closure's effects. For chained adaptors like `.filter(f1).map(f2)`, the effect set is the union of all closure effects (f1's effects ∪ f2's effects), counted once at the loop level per the static-effects rule above.

@@ -958,7 +958,7 @@ impl<'a> super::TypeChecker<'a> {
                 // stays because a trait assoc-fn argument is a value position
                 // like any other; it just does not cover what the old comment
                 // claimed it covered.
-                self.warn_borrow_projection_copy(&arg.value, param);
+                self.warn_borrow_projection_copy_at(&arg.value, param, false);
             }
         }
 

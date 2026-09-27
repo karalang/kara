@@ -4841,6 +4841,15 @@ impl<'a> super::TypeChecker<'a> {
     }
 
     pub(super) fn warn_borrow_projection_copy(&mut self, value: &Expr, ty: &Type) {
+        self.warn_borrow_projection_copy_at(value, ty, true);
+    }
+
+    /// [`Self::warn_borrow_projection_copy`] with the `for_element_drop_copy`
+    /// half switchable: a by-value CALL argument passes `false`, because a
+    /// callee that discards its parameter receives the element without a copy
+    /// (design.md § `borrow_projection_copy`, B-2026-09-14-10), and the
+    /// typechecker cannot tell a discarding callee from a keeping one.
+    pub(super) fn warn_borrow_projection_copy_at(&mut self, value: &Expr, ty: &Type, deny: bool) {
         if !self.copy_source_rooted_in_borrow(value) {
             return;
         }
@@ -4878,6 +4887,9 @@ impl<'a> super::TypeChecker<'a> {
         // costs a warning on the non-`Copy` instantiations; firing would put
         // a false one on the `Copy` ones.
         if matches!(ty, Type::TypeParam(_)) {
+            return;
+        }
+        if deny && self.deny_for_element_drop_copy(value, ty) {
             return;
         }
         let has_clone = self.type_supports_clone(ty);
@@ -4923,6 +4935,179 @@ impl<'a> super::TypeChecker<'a> {
             "borrow_projection_copy",
             fix_it,
         );
+    }
+
+    /// B-2026-09-27-69 follow-up, decided by the project owner: moving a bare
+    /// `for` element (or a field of one) out of a loop over a borrowed
+    /// collection is REJECTED when its type runs a user `Drop` body. A bare
+    /// `for` borrows, so the move is an implicit copy, and the copy is
+    /// observable exactly when a `Drop` body runs: once for the copy and once
+    /// from the collection. A `String` or plain-struct element keeps compiling
+    /// under the `borrow_projection_copy` warning, which is where the katas
+    /// that move a `String` out of a loop (B-2026-08-01-24, -28) live.
+    ///
+    /// Only a VIEW root qualifies: a projection off a `ref` parameter keeps
+    /// the warning, which the decision did not cover. Returns whether it fired,
+    /// so the caller skips the warning for the same site.
+    pub(super) fn deny_for_element_drop_copy(&mut self, value: &Expr, ty: &Type) -> bool {
+        if !self.rooted_in_borrow(value, true) || self.rooted_in_borrow(value, false) {
+            return false;
+        }
+        if matches!(
+            ty,
+            Type::Error | Type::Never | Type::Ref(_) | Type::TypeParam(_)
+        ) || self.is_copy_type_during_check(ty)
+            || self.copy_is_only_an_rc_retain(ty)
+            || !self.type_runs_user_drop(ty, &mut Vec::new())
+        {
+            return false;
+        }
+        // One site is reached by more than one value-position check (a trait
+        // method argument, a literal re-checked against its expectation).
+        if self.errors.iter().any(|e| {
+            e.span == value.span && e.lint_name.as_deref() == Some("for_element_drop_copy")
+        }) {
+            return true;
+        }
+        let has_clone = self.type_supports_clone(ty);
+        let what = if matches!(value.kind, ExprKind::Identifier(_)) {
+            "an element"
+        } else {
+            "a field of an element"
+        };
+        let mut message = format!(
+            "cannot move {what} out of a `for` loop over a borrowed collection: a bare `for` \
+             borrows the collection and leaves it whole, so this would copy a value whose \
+             type runs a user `Drop` body, and that body would run twice (once for the copy, \
+             once from the collection)"
+        );
+        if has_clone {
+            message += ". Write `.clone()` to make the copy explicit, or use the element in \
+                 place through a `ref` parameter";
+        } else {
+            message += ". Use the element in place (read its fields, or pass it to a `ref` \
+                 parameter); this type has no `.clone()`";
+        }
+        let fix_it = has_clone.then(|| crate::typechecker::FixIt {
+            span: Span {
+                offset: value.span.offset + value.span.length,
+                length: 0,
+                line: value.span.line,
+                column: value.span.column,
+            },
+            replacement: ".clone()".to_string(),
+        });
+        self.type_lint_warning_with_fix(
+            message,
+            value.span,
+            TypeErrorKind::TypeMismatch,
+            "for_element_drop_copy",
+            fix_it,
+        );
+        true
+    }
+
+    /// [`Self::deny_for_element_drop_copy`] for each element of a tuple or
+    /// collection literal: `(g, 1)` and `vec![g]` copy a `for` element into
+    /// the new aggregate exactly as `w.push(g)` does. Runs after the literal
+    /// is typed, so each element's type is already recorded.
+    pub(super) fn deny_for_element_drop_copy_in_literal(&mut self, expr: &Expr) {
+        let owned_args: Vec<&Expr>;
+        let elems: Vec<&Expr> = match &expr.kind {
+            ExprKind::Tuple(es) | ExprKind::ArrayLiteral(es) => es.iter().collect(),
+            ExprKind::PrefixCollectionLiteral { items, .. } => items.iter().collect(),
+            // An enum VARIANT constructor stores its argument in the new value
+            // (`Some(g)`, `G.A(g)`), unlike a function, which may discard it.
+            ExprKind::Call { callee, args } if self.callee_is_variant_constructor(callee) => {
+                owned_args = args.iter().map(|a| &a.value).collect();
+                owned_args
+            }
+            _ => return,
+        };
+        for e in elems {
+            if !matches!(
+                e.kind,
+                ExprKind::Identifier(_)
+                    | ExprKind::FieldAccess { .. }
+                    | ExprKind::TupleIndex { .. }
+            ) {
+                continue;
+            }
+            if let Some(ty) = self.expr_types.get(&SpanKey::from_span(&e.span)).cloned() {
+                self.deny_for_element_drop_copy(e, &ty);
+            }
+        }
+    }
+
+    /// Is `callee` an enum variant constructor: `Some` / `Ok` / `Err`, or
+    /// `E.V` / `E::V` naming a declared variant?
+    fn callee_is_variant_constructor(&self, callee: &Expr) -> bool {
+        let (owner, variant) = match &callee.kind {
+            ExprKind::Identifier(n) => {
+                return matches!(n.as_str(), "Some" | "Ok" | "Err");
+            }
+            ExprKind::FieldAccess { object, field } => match &object.kind {
+                ExprKind::Identifier(o) => (o.as_str(), field.as_str()),
+                _ => return false,
+            },
+            ExprKind::Path { segments, .. } if segments.len() >= 2 => (
+                segments[segments.len() - 2].as_str(),
+                segments[segments.len() - 1].as_str(),
+            ),
+            _ => return false,
+        };
+        self.env
+            .enums
+            .get(owner)
+            .is_some_and(|e| e.variants.iter().any(|(v, _)| v == variant))
+    }
+
+    /// Does a value of `ty` run a user `Drop` body when it dies: its own, or
+    /// one reachable inside it BY VALUE? A `shared` type is not descended
+    /// into, since copying its handle retains rather than duplicates.
+    /// `seen` breaks recursive declarations.
+    fn type_runs_user_drop(&self, ty: &Type, seen: &mut Vec<String>) -> bool {
+        match ty {
+            Type::Named { name, args } => {
+                if self.name_is_shared_decl(name) {
+                    return false;
+                }
+                if args.iter().any(|a| self.type_runs_user_drop(a, seen)) {
+                    return true;
+                }
+                if self.env.impls.iter().any(|imp| {
+                    imp.trait_name.as_deref() == Some("Drop") && &imp.target_type == name
+                }) {
+                    return true;
+                }
+                if seen.iter().any(|s| s == name) {
+                    return false;
+                }
+                seen.push(name.clone());
+                if let Some(info) = self.env.structs.get(name) {
+                    let fields: Vec<Type> = info.fields.iter().map(|(_, t, _)| t.clone()).collect();
+                    return fields.iter().any(|t| self.type_runs_user_drop(t, seen));
+                }
+                if let Some(info) = self.env.enums.get(name) {
+                    let payloads: Vec<Type> = info
+                        .variants
+                        .iter()
+                        .flat_map(|(_, v)| match v {
+                            VariantTypeInfo::Unit => Vec::new(),
+                            VariantTypeInfo::Tuple(ts) => ts.clone(),
+                            VariantTypeInfo::Struct(fs) => {
+                                fs.iter().map(|(_, t)| t.clone()).collect()
+                            }
+                        })
+                        .collect();
+                    return payloads.iter().any(|t| self.type_runs_user_drop(t, seen));
+                }
+                false
+            }
+            Type::Tuple(elems) => elems.iter().any(|e| self.type_runs_user_drop(e, seen)),
+            Type::Array { element, .. } => self.type_runs_user_drop(element, seen),
+            _ => false,
+        }
     }
 
     /// B-2026-09-01-38 — design.md § Part 8 `Drop`, "Interaction with move

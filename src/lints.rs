@@ -274,6 +274,19 @@ pub const STARTER_LINTS: &[LintInfo] = &[
              warning here until `ref <place>` gives it a zero-cost fix-it. B-2026-09-01-4.",
     },
     LintInfo {
+        name: "for_element_drop_copy",
+        default_level: LintLevel::Deny,
+        description:
+            "An element of a `for` loop over a BORROWED collection (`for g in v`), or a field \
+             of one, is stored (`let`, `push`, `return`, a tuple, `vec!`, a variant \
+             constructor) while its type runs a user `Drop` body. A bare `for` borrows, so the \
+             move is an implicit copy and the body runs twice: once for the copy and once from \
+             the collection. A by-value call argument is not covered: a discarding callee \
+             receives it without a copy. Write `.clone()` where the type has one, or \
+             use the element in place. `String` and plain-struct elements are left to \
+             `borrow_projection_copy`, which only warns. B-2026-09-27-69.",
+    },
+    LintInfo {
         name: "partial_move_of_drop_enum",
         default_level: LintLevel::Deny,
         description:

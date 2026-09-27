@@ -8311,8 +8311,9 @@ fn main() {
 /// by-value callee of a narrow element, `match v[0]`, the index-assign's
 /// displaced element, a pushed named local, a `vec!` literal, and the struct
 /// field unmatched, matched, moved, handed away and held in a `Vec`.
-/// `m15`/`w4`/`w6`/`w7` pin the language's copy semantics for a loop binding
-/// moved out (one body per copy), which the non-generic twin also prints.
+/// `m15`/`w9` pin a loop binding handed to a by-value callee (one body, at the
+/// `Vec`'s death). Moving the binding out with `let` or `push` (the former
+/// `v08`/`w4`/`w6`/`w7`) is now rejected by `for_element_drop_copy`.
 #[test]
 fn asan_generic_enum_payload_body_runs_as_vec_element_and_struct_field() {
     assert_clean_asan_run(
@@ -8339,7 +8340,6 @@ fn v03() { let mut v: Vec[Ho[S]] = Vec.new(); v.push(Ho.Full(mks(7))); v.push(Ho
 fn v04() { let mut v: Vec[Ho[R]] = Vec.new(); v.push(Ho.Full(R { id: 7 })); v.push(Ho.Empty); for h in v { match h { Ho.Full(r) => println(f"r{r.id}"), Ho.Empty => println("e") } } println("after"); }
 fn v05() { let mut v: Vec[Ho[S]] = Vec.new(); v.push(Ho.Full(mks(7))); v.push(Ho.Empty); for h in v { match h { Ho.Full(r) => println(f"s{r.id}"), Ho.Empty => println("e") } } println("after"); }
 fn v06() { let mut v: Vec[Ho[R]] = Vec.new(); v.push(Ho.Full(R { id: 7 })); for h in v { show(h) } println("after"); }
-fn v08() { let mut v: Vec[Ho[R]] = Vec.new(); v.push(Ho.Full(R { id: 7 })); for h in v { let k = h; println("k") } println("after"); }
 fn v09() { let mut v: Vec[Ho[S]] = Vec.new(); v.push(Ho.Full(mks(7))); match v[0] { Ho.Full(x) => println(f"x{x.id}"), Ho.Empty => println("e") } println("after"); }
 fn v10() { let mut v: Vec[Ho[R]] = Vec.new(); v.push(Ho.Full(R { id: 7 })); v[0] = Ho.Full(R { id: 9 }); println("set"); }
 fn v11() { let mut v: Vec[Ho[S]] = Vec.new(); v.push(Ho.Full(mks(7))); v[0] = Ho.Full(mks(9)); println("set"); }
@@ -8353,9 +8353,6 @@ fn s08() { let h = H { g: Ho.Full(R { id: 5 }) }; eat(h); println("after"); }
 fn s09() { let h = H { g: Ho.Full(R { id: 5 }) }; let k = h; println("k"); }
 fn s10() { let h = H { g: Ho.Empty }; println("h"); }
 fn s12() { let mut v: Vec[H] = Vec.new(); v.push(H { g: Ho.Full(R { id: 5 }) }); println("v"); }
-fn w4() { let mut v: Vec[Ho[S]] = Vec.new(); v.push(Ho.Full(mks(7))); for h in v { let k = h; println("k") } println(f"n{v.len()}"); }
-fn w6() { let mut v: Vec[Ho[S]] = Vec.new(); v.push(Ho.Full(mks(7))); let mut w: Vec[Ho[S]] = Vec.new(); for h in v { w.push(h) } println(f"n{v.len()}{w.len()}"); }
-fn w7() { let mut v: Vec[Ho[R]] = Vec.new(); v.push(Ho.Full(R { id: 7 })); let mut w: Vec[Ho[R]] = Vec.new(); for h in v { w.push(h) } println(f"n{v.len()}{w.len()}"); }
 fn w9() { let mut v: Vec[Ho[R]] = Vec.new(); v.push(Ho.Full(R { id: 7 })); for h in v { show(h) } println(f"n{v.len()}"); }
 fn m15() { let mut v: Vec[Ho[R]] = Vec.new(); v.push(Ho.Full(R { id: 7 })); for h in v { show(h) } println(f"n{v.len()}"); }
 fn main() {
@@ -8365,7 +8362,6 @@ fn main() {
     v04()
     v05()
     v06()
-    v08()
     v09()
     v10()
     v11()
@@ -8379,9 +8375,6 @@ fn main() {
     s09()
     s10()
     s12()
-    w4()
-    w6()
-    w7()
     w9()
     m15()
     println("end")
@@ -8389,11 +8382,10 @@ fn main() {
 "#,
         &[
             "n3", "dR7", "dR8", "n2", "dW7", "n2", "dS7", "r7", "e", "dR7", "after", "s7", "e",
-            "dS7", "after", "r7", "dR7", "after", "dR7", "k", "dR7", "after", "x7", "dS7", "after",
-            "dR7", "dR9", "set", "dS7", "dS9", "set", "dS7", "p", "dR7", "lit", "dR5", "h", "r5",
-            "dR5", "m", "r5", "dR5", "m", "dR5", "h", "eat", "dR5", "after", "dR5", "k", "h",
-            "dR5", "v", "dS7", "k", "n1", "dS7", "n11", "dS7", "dS7", "n11", "dR7", "dR7", "r7",
-            "n1", "dR7", "r7", "n1", "dR7", "end",
+            "dS7", "after", "r7", "dR7", "after", "x7", "dS7", "after", "dR7", "dR9", "set", "dS7",
+            "dS9", "set", "dS7", "p", "dR7", "lit", "dR5", "h", "r5", "dR5", "m", "r5", "dR5", "m",
+            "dR5", "h", "eat", "dR5", "after", "dR5", "k", "h", "dR5", "v", "r7", "n1", "dR7",
+            "r7", "n1", "dR7", "end",
         ],
         "asan_generic_enum_payload_body_runs_as_vec_element_and_struct_field",
     );

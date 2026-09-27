@@ -50083,19 +50083,19 @@ fn borrow_projection_copy_fires_only_when_the_root_is_a_borrow() {
 /// a view, so moving it out copies exactly as a projection of a borrow does.
 ///
 /// A bare `for g in v` borrows `v` and leaves it whole (design.md § For
-/// loops), so `let h = g` and `w.push(g)` each mint a second value and run a
-/// user `Drop` body twice, measured on `--interp`, the JIT and `karac build`.
-/// The lint reports them; it stays silent where nothing is copied: a `Copy`
-/// element, `.into_iter()`, a shadowing `let` inside the body, a pattern
-/// scrutinee (left to the partial-move rules, which treat the element as
-/// owned), and a free-function argument (the same exemption as `eat(s.r)`
+/// loops), so `let h = g` and `w.push(g)` each mint a second value. For an
+/// element whose type runs a user `Drop` body that is an error
+/// (`for_element_drop_copy`, the fixture below); for any other non-`Copy`
+/// element the lint reports it. It stays silent where nothing is copied: a
+/// `Copy` element, `.into_iter()`, a shadowing `let` inside the body, a
+/// pattern scrutinee (left to the partial-move rules, which treat the element
+/// as owned), and a free-function argument (the same exemption as `eat(s.r)`
 /// below).
 #[test]
 fn borrow_projection_copy_reaches_a_for_element_over_a_borrowed_collection() {
     let hits = |body: &str| -> Vec<String> {
         let src = format!(
-            "struct D {{ id: i64 }}\n\
-             impl Drop for D {{ fn drop(mut ref self) {{ println(f\"d{{self.id}}\") }} }}\n\
+            "struct D {{ id: i64, v: Vec[i64] }}\n\
              struct W {{ d: D }}\n\
              fn eat(x: D) -> i64 {{ x.id }}\n\
              fn main() {{ {body} }}"
@@ -50111,21 +50111,22 @@ fn borrow_projection_copy_reaches_a_for_element_over_a_borrowed_collection() {
     for (label, body) in [
         (
             "let",
-            "let v = vec![D { id: 1 }]; for g in v { let h = g; println(h.id); }",
+            "let v = vec![D { id: 1, v: Vec.new() }]; for g in v { let h = g; println(h.id); }",
         ),
         (
             "push",
-            "let v = vec![D { id: 1 }]; let mut w: Vec[D] = Vec.new(); for g in v { w.push(g); }",
+            "let v = vec![D { id: 1, v: Vec.new() }]; let mut w: Vec[D] = Vec.new(); for g in v { w.push(g); }",
         ),
         (
             "projection",
-            "let v = vec![W { d: D { id: 1 } }]; for x in v { let r = x.d; println(r.id); }",
+            "let v = vec![W { d: D { id: 1, v: Vec.new() } }]; for x in v { let r = x.d; println(r.id); }",
         ),
     ] {
         let got = hits(body);
         assert_eq!(got.len(), 1, "{label}: expected one warning; got: {got:?}");
     }
-    let got = hits("let v = vec![D { id: 1 }]; for g in v { let h = g; println(h.id); }");
+    let got =
+        hits("let v = vec![D { id: 1, v: Vec.new() }]; for g in v { let h = g; println(h.id); }");
     assert!(
         got[0].contains("`for` loop over a borrowed collection")
             && got[0].contains("no `.clone()`"),
@@ -50139,19 +50140,19 @@ fn borrow_projection_copy_reaches_a_for_element_over_a_borrowed_collection() {
         ),
         (
             "into_iter",
-            "let v = vec![D { id: 1 }]; let mut w: Vec[D] = Vec.new(); for g in v.into_iter() { w.push(g); }",
+            "let v = vec![D { id: 1, v: Vec.new() }]; let mut w: Vec[D] = Vec.new(); for g in v.into_iter() { w.push(g); }",
         ),
         (
             "shadowed",
-            "let v = vec![D { id: 1 }]; for g in v { let g = D { id: 9 }; let h = g; println(h.id); }",
+            "let v = vec![D { id: 1, v: Vec.new() }]; for g in v { let g = D { id: 9, v: Vec.new() }; let h = g; println(h.id); }",
         ),
         (
             "pattern scrutinee",
-            "let v = vec![Some(D { id: 1 })]; for g in v { if let Some(d) = g { println(d.id); } }",
+            "let v = vec![Some(D { id: 1, v: Vec.new() })]; for g in v { if let Some(d) = g { println(d.id); } }",
         ),
         (
             "free-fn argument",
-            "let v = vec![D { id: 1 }]; for g in v { println(eat(g)); }",
+            "let v = vec![D { id: 1, v: Vec.new() }]; for g in v { println(eat(g)); }",
         ),
     ] {
         let got = hits(body);
@@ -50174,6 +50175,203 @@ fn borrow_projection_copy_reaches_a_for_element_over_a_borrowed_collection() {
     assert!(
         got[0].message.contains("Write `.clone()`"),
         "a cloneable element keeps the clone steer; got: {got:?}"
+    );
+}
+
+/// B-2026-09-27-69 follow-up, the project owner's decision: moving an element
+/// of a bare `for` over a borrowed collection, or a field of one, is an ERROR
+/// when its type runs a user `Drop` body, since the move is an implicit copy
+/// and the body then runs twice. Every storing position rejects it: `let`,
+/// `push`, `return`, a tuple, `vec!` and a variant constructor. A by-value
+/// CALL argument is left alone, because a callee that discards its parameter
+/// receives the element without a copy (design.md § `borrow_projection_copy`,
+/// B-2026-09-14-10) and the typechecker cannot tell it from one that keeps it.
+/// Nothing is rejected where no body is duplicated either: a `Copy`,
+/// `String`, plain-struct or `shared` element, `.into_iter()`, an explicit
+/// `.clone()`, and a projection off a `ref` PARAMETER, which keeps the
+/// `borrow_projection_copy` warning.
+#[test]
+fn for_element_drop_copy_rejects_a_drop_element_moved_out_of_a_borrowing_loop() {
+    let h = "struct D { id: i64 }\n\
+             impl Drop for D { fn drop(mut ref self) { println(f\"d{self.id}\") } }\n\
+             #[derive(Clone)]\n\
+             struct C { id: i64 }\n\
+             impl Drop for C { fn drop(mut ref self) { println(f\"c{self.id}\") } }\n\
+             struct W { d: D }\n\
+             struct P { id: i64, s: String }\n\
+             shared struct Sh { id: i64 }\n\
+             impl Drop for Sh { fn drop(mut ref self) { println(\"sh\") } }\n\
+             fn eat(x: D) -> i64 { x.id }\n\
+             fn keep(x: D) -> D { x }\n\
+             fn gid[T](x: T) -> T { x }\n\
+             fn look(x: ref D) -> i64 { x.id }\n\
+             fn rp(w: ref W) -> i64 { let d = w.d; d.id }\n\
+             struct H { k: i64 }\n\
+             impl H { fn put(ref self, w: mut ref Vec[D], x: D) { w.push(x); } \
+             fn aput(w: mut ref Vec[D], x: D) { w.push(x); } }\n\
+             trait T { fn tput(w: mut ref Vec[D], x: D); }\n\
+             impl T for H { fn tput(w: mut ref Vec[D], x: D) { w.push(x); } }\n\
+             enum G { A(D), B }\n";
+    let denied = |body: &str| -> (usize, Vec<TypeError>) {
+        let src = if body.starts_with("fn ") {
+            format!("{h}{body}")
+        } else {
+            format!("{h}fn main() {{ {body} }}")
+        };
+        let parsed = parse(&src);
+        assert!(parsed.errors.is_empty(), "parse: {:?}", parsed.errors);
+        let resolved = resolve(&parsed.program);
+        assert!(resolved.errors.is_empty(), "resolve: {:?}", resolved.errors);
+        let result = typecheck(&parsed.program, &resolved);
+        let errs: Vec<TypeError> = result
+            .errors
+            .iter()
+            .filter(|e| e.lint_name.as_deref() == Some("for_element_drop_copy"))
+            .cloned()
+            .collect();
+        let warns = result
+            .warnings
+            .iter()
+            .filter(|e| e.lint_name.as_deref() == Some("for_element_drop_copy"))
+            .count();
+        assert_eq!(warns, 0, "the rule is deny by default, never a warning");
+        (errs.len(), errs)
+    };
+
+    for (label, body) in [
+        (
+            "let",
+            "let v = vec![D { id: 1 }]; for g in v { let x = g; println(x.id); }",
+        ),
+        (
+            "push",
+            "let v = vec![D { id: 1 }]; let mut w: Vec[D] = Vec.new(); for g in v { w.push(g); }",
+        ),
+        (
+            "a field of the element",
+            "let v = vec![W { d: D { id: 1 } }]; for x in v { let r = x.d; println(r.id); }",
+        ),
+        (
+            "an element holding a Drop field",
+            "let v = vec![W { d: D { id: 1 } }]; let mut w: Vec[W] = Vec.new(); for x in v { w.push(x); }",
+        ),
+        (
+            "into a variant constructor",
+            "let v = vec![D { id: 1 }]; for g in v { let e = G.A(g); println(1); }",
+        ),
+        (
+            "into Some",
+            "let v = vec![D { id: 1 }]; for g in v { let o = Some(g); println(o.is_some()); }",
+        ),
+        (
+            "into a tuple",
+            "let v = vec![D { id: 1 }]; for g in v { let t = (g, 1); println(t.1); }",
+        ),
+        (
+            "into vec!",
+            "let v = vec![D { id: 1 }]; for g in v { let a = vec![g]; println(a.len()); }",
+        ),
+        (
+            "an Option element",
+            "let v = vec![Some(D { id: 1 })]; for o in v { let x = o; println(x.is_some()); }",
+        ),
+    ] {
+        let (n, _) = denied(body);
+        assert_eq!(n, 1, "{label}: expected one error");
+    }
+
+    let (n, _) = denied(
+        "fn first(v: ref Vec[D]) -> D { for g in v { return g; } D { id: 0 } }\n\
+         fn main() { let v = vec![D { id: 1 }]; println(first(v).id); }",
+    );
+    assert_eq!(
+        n, 1,
+        "a `return g` inside a borrowing loop is a move out too"
+    );
+
+    let (_, errs) = denied(
+        "let v = vec![C { id: 1 }]; let mut w: Vec[C] = Vec.new(); for g in v { w.push(g); }",
+    );
+    let fix = errs
+        .iter()
+        .find_map(|e| e.fix_it.as_ref())
+        .expect("a cloneable element carries the `.clone()` fix-it");
+    assert_eq!(fix.replacement, ".clone()");
+
+    for (label, body) in [
+        (
+            "copy element",
+            "let v = vec![1, 2]; for x in v { let y = x; println(y); }",
+        ),
+        (
+            "String element",
+            "let v = vec![\"a\".to_string()]; let mut w: Vec[String] = Vec.new(); for s in v { w.push(s); }",
+        ),
+        (
+            "plain-struct element",
+            "let v = vec![P { id: 1, s: \"a\".to_string() }]; let mut w: Vec[P] = Vec.new(); for p in v { w.push(p); }",
+        ),
+        (
+            "shared element",
+            "let v = vec![Sh { id: 1 }]; let mut w: Vec[Sh] = Vec.new(); for s in v { w.push(s); }",
+        ),
+        (
+            "into_iter",
+            "let v = vec![D { id: 1 }]; let mut w: Vec[D] = Vec.new(); for g in v.into_iter() { w.push(g); }",
+        ),
+        (
+            "a consuming free fn",
+            "let v = vec![D { id: 1 }]; for g in v { println(eat(g)); }",
+        ),
+        (
+            "a keeping free fn",
+            "let v = vec![D { id: 1 }]; for g in v { let k = keep(g); println(k.id); }",
+        ),
+        (
+            "a generic free fn",
+            "let v = vec![D { id: 1 }]; for g in v { let k = gid(g); println(k.id); }",
+        ),
+        (
+            "a method argument",
+            "let v = vec![D { id: 1 }]; let mut w: Vec[D] = Vec.new(); let h = H { k: 0 }; for g in v { h.put(mut w, g); }",
+        ),
+        (
+            "an associated fn argument",
+            "let v = vec![D { id: 1 }]; let mut w: Vec[D] = Vec.new(); for g in v { H.aput(mut w, g); }",
+        ),
+        (
+            "a trait associated fn argument",
+            "let v = vec![D { id: 1 }]; let mut w: Vec[D] = Vec.new(); for g in v { H.tput(mut w, g); }",
+        ),
+        (
+            "a ref parameter",
+            "let v = vec![D { id: 1 }]; for g in v { println(look(g)); }",
+        ),
+        (
+            "an explicit clone",
+            "let v = vec![C { id: 1 }]; let mut w: Vec[C] = Vec.new(); for g in v { w.push(g.clone()); }",
+        ),
+        (
+            "a field read in place",
+            "let v = vec![W { d: D { id: 1 } }]; for x in v { println(x.d.id); }",
+        ),
+    ] {
+        let (n, errs) = denied(body);
+        assert_eq!(n, 0, "{label}: expected no error; got: {errs:?}");
+    }
+
+    // A projection off a `ref` PARAMETER (`rp` above) is outside the decision
+    // and keeps the warning.
+    let src = format!("{h}fn main() {{ println(1); }}");
+    let result = typecheck_ok(&src);
+    assert!(
+        result
+            .warnings
+            .iter()
+            .any(|w| w.lint_name.as_deref() == Some("borrow_projection_copy")
+                && w.message.contains("borrowed value")),
+        "the `ref` parameter projection keeps its warning; got: {:?}",
+        result.warnings
     );
 }
 

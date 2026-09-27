@@ -502,6 +502,12 @@ impl<'a> super::TypeChecker<'a> {
     }
 
     pub(super) fn check_expr(&mut self, expr: &Expr, expected: &Type) -> Type {
+        let ty = self.check_expr_inner(expr, expected);
+        self.deny_for_element_drop_copy_in_literal(expr);
+        ty
+    }
+
+    fn check_expr_inner(&mut self, expr: &Expr, expected: &Type) -> Type {
         // B-2026-08-19-24 — type-directed bare unit-variant resolution. When
         // the context names an enum, a bare variant name means THAT enum's
         // variant: `let x: Second = A;`, `fn f() -> Second { A }`,
@@ -4044,6 +4050,7 @@ impl<'a> super::TypeChecker<'a> {
         let ty = self.infer_expr_inner(expr);
         self.variant_ctor_in_callee = false;
         self.record_expr_type(&expr.span, &ty);
+        self.deny_for_element_drop_copy_in_literal(expr);
         ty
     }
 
