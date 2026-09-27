@@ -8886,6 +8886,30 @@ pub fn param_whole_rebind_aliases<'a>(f: &'a Function, param_name: &str) -> Vec<
 /// `?`-propagate before the push is reached. Anything else answers `false`,
 /// which keeps the pre-existing behaviour for that shape.
 pub fn fn_moves_param_into_local_container(f: &Function, arg_index: usize) -> bool {
+    param_whole_container_store(f, arg_index, false)
+}
+
+/// B-2026-09-27-53 — does `f` store by-value parameter `arg_index` WHOLE into
+/// a container on every path: one of its own locals'
+/// ([`fn_moves_param_into_local_container`]'s question), or a place the caller
+/// holds (`v.push(a)` on a `mut ref` param, `self.v.push(a)` on a borrowed
+/// receiver), as a top-level statement or the body's tail expression?
+///
+/// The box-ownership question, which is narrower than the `Drop`-body one
+/// [`fn_moves_param_into_outliving_place`] answers: that predicate also counts
+/// a payload DESTRUCTURED out of the param and stored (`match x { Some(Ke.A(r))
+/// => acc.push(r) }`), where the param's own box stays in this frame and is not
+/// the container's to free. Only the bare param (or a whole rebind of it) moves
+/// the box with it.
+pub fn fn_stores_param_whole_into_container(f: &Function, arg_index: usize) -> bool {
+    param_whole_container_store(f, arg_index, true)
+}
+
+/// The walk behind [`fn_moves_param_into_local_container`] and
+/// [`fn_stores_param_whole_into_container`]; `outliving` admits a container
+/// the caller holds and a store in the body's tail expression, which the
+/// former has never counted.
+fn param_whole_container_store(f: &Function, arg_index: usize, outliving: bool) -> bool {
     let Some(param) = f.params.get(arg_index) else {
         return false;
     };
@@ -8937,26 +8961,51 @@ pub fn fn_moves_param_into_local_container(f: &Function, arg_index: usize) -> bo
     // (`let c = a;`): a push of `c` is a push of the parameter. Kept apart from
     // `locals`, so the rebound name is never mistaken for a container.
     let mut names: Vec<&str> = vec![name.as_str()];
+    // B-2026-09-27-53 — the roots whose storage outlives the call, as
+    // `fn_moves_param_into_outliving_place` collects them.
+    let mut roots: Vec<&str> = Vec::new();
+    if outliving {
+        if matches!(f.self_param, Some(SelfParam::Ref) | Some(SelfParam::MutRef)) {
+            roots.push("self");
+        }
+        for p in &f.params {
+            if matches!(
+                p.ty.kind,
+                crate::ast::TypeKind::Ref(_) | crate::ast::TypeKind::MutRef(_)
+            ) {
+                if let PatternKind::Binding(n) = &p.pattern.kind {
+                    roots.push(n.as_str());
+                }
+            }
+        }
+    }
+    let is_whole_store = |e: &Expr, locals: &[&str], names: &[&str]| -> bool {
+        let ExprKind::MethodCall {
+            object,
+            method,
+            args,
+            ..
+        } = &e.kind
+        else {
+            return false;
+        };
+        matches!(
+            method.as_str(),
+            "push" | "push_back" | "push_front" | "insert"
+        ) && (matches!(&object.kind, ExprKind::Identifier(v) if locals.contains(&v.as_str()))
+            || (outliving && outliving_store::place_root_outlives(object, &roots)))
+            && args
+                .iter()
+                .any(|a| names.iter().any(|n| outliving_store::is_bare(&a.value, n)))
+    };
     for st in &f.body.stmts {
         match &st.kind {
             StmtKind::Expr(e) => {
-                if let ExprKind::MethodCall {
-                    object,
-                    method,
-                    args,
-                    ..
-                } = &e.kind
-                {
-                    if matches!(
-                        method.as_str(),
-                        "push" | "push_back" | "push_front" | "insert"
-                    ) && matches!(&object.kind, ExprKind::Identifier(v) if locals.contains(&v.as_str()))
-                        && args
-                            .iter()
-                            .any(|a| names.iter().any(|n| outliving_store::is_bare(&a.value, n)))
-                    {
-                        return args.iter().all(|a| straight(&a.value));
-                    }
+                if is_whole_store(e, &locals, &names) {
+                    let ExprKind::MethodCall { args, .. } = &e.kind else {
+                        unreachable!()
+                    };
+                    return args.iter().all(|a| straight(&a.value));
                 }
                 if !straight(e) {
                     return false;
@@ -8987,7 +9036,12 @@ pub fn fn_moves_param_into_local_container(f: &Function, arg_index: usize) -> bo
             _ => return false,
         }
     }
-    false
+    outliving
+        && f.body.final_expr.as_deref().is_some_and(|e| {
+            is_whole_store(e, &locals, &names)
+                && matches!(&e.kind, ExprKind::MethodCall { args, .. }
+                    if args.iter().all(|a| straight(&a.value)))
+        })
 }
 
 /// B-2026-09-25-10 — either conditional store: into a place the caller holds,

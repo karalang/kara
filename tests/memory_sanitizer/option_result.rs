@@ -9217,3 +9217,64 @@ fn main() {
         30,
     );
 }
+
+/// B-2026-09-27-53 — the ASAN twin of
+/// `e2e_boxed_optres_param_stored_in_container_has_one_owner`: each payload is
+/// a heap box holding `String`s, so a box both the caller and the container
+/// free aborts under the sanitizer.
+#[test]
+fn asan_boxed_optres_param_stored_in_container_is_freed_once() {
+    assert_clean_asan_run_min_allocs(
+        r#"
+struct R { id: i64 }
+impl Drop for R { fn drop(mut ref self) { println(f"d{self.id}") } }
+struct S { r: R, s: String }
+fn mk(i: i64) -> S { S { r: R { id: i }, s: f"heap-string-longer-than-sso-{i}" } }
+struct W { r: R, s: String, t: String }
+fn mw(i: i64) -> W { W { r: R { id: i }, s: f"heap-string-longer-than-sso-{i}", t: f"another-long-heap-string-{i}" } }
+enum K { A(W), B }
+struct H { v: Vec[Option[S]] }
+impl H { fn put(mut ref self, a: Option[S]) { self.v.push(a) } }
+fn opt(a: Option[S]) -> i64 { let mut v: Vec[Option[S]] = Vec.new(); v.push(a); println("in"); 1 }
+fn rebound(a: Option[S]) -> i64 { let c = a; let mut v: Vec[Option[S]] = Vec.new(); v.push(c); println("in"); 2 }
+fn res(a: Result[W, i64]) -> i64 { let mut v: Vec[Result[W, i64]] = Vec.new(); v.push(a); println("in"); 3 }
+fn en(a: Option[K]) -> i64 { let mut v: Vec[Option[K]] = Vec.new(); v.push(a); println("in"); 4 }
+fn outer(a: Option[S], v: mut ref Vec[Option[S]]) { v.push(a) }
+fn main() {
+    let a: Option[S] = Some(mk(1));
+    println(f"k{opt(a)}");
+    println(f"k{opt(Some(mk(2)))}");
+    let n: Option[S] = None;
+    println(f"k{opt(n)}");
+    let b: Option[S] = Some(mk(3));
+    println(f"k{rebound(b)}");
+    println(f"k{rebound(Some(mk(4)))}");
+    let c: Result[W, i64] = Ok(mw(5));
+    println(f"k{res(c)}");
+    println(f"k{res(Ok(mw(6)))}");
+    println(f"k{res(Err(7))}");
+    let e: Option[K] = Some(K.A(mw(8)));
+    println(f"k{en(e)}");
+    println(f"k{en(Some(K.A(mw(9))))}");
+    let mut h = H { v: Vec.new() };
+    let f: Option[S] = Some(mk(10));
+    h.put(f);
+    h.put(Some(mk(11)));
+    println(f"n{h.v.len()}");
+    let mut o: Vec[Option[S]] = Vec.new();
+    let g: Option[S] = Some(mk(12));
+    outer(g, mut o);
+    outer(Some(mk(13)), mut o);
+    println(f"n{o.len()}");
+    println("end")
+}
+"#,
+        &[
+            "d1", "in", "k1", "d2", "in", "k1", "in", "k1", "d3", "in", "k2", "d4", "in", "k2",
+            "d5", "in", "k3", "d6", "in", "k3", "in", "k3", "d8", "in", "k4", "d9", "in", "k4",
+            "n2", "d10", "d11", "n2", "d12", "d13", "end",
+        ],
+        "asan_boxed_optres_param_stored_in_container_is_freed_once",
+        30,
+    );
+}

@@ -3765,3 +3765,61 @@ fn main() {
 }"#);
     assert_eq!(out, "in\nk1\nd1\nin\nd2\nk1\nin\nk1\nin\nk2\nd3\nin\nd4\nk2\nin\nk2\nm5\nk3\nd5\nm6\nd6\nk3\nb\nk3\nn\nk3\nin\nk4\nd7\nin\nd8\nk4\nm9\nk5\nd9\nm10\nd10\nk5\no60\nk5\nb\nk5\nin\nk6\nd11\nin\nd12\nk6\nend\n");
 }
+
+/// B-2026-09-27-53 — a by-value `Option` / `Result` param whose payload is
+/// heap-BOXED, stored whole into a container by the callee, is owned by that
+/// container alone: a local `Vec` (`v.push(a)`, and after a rebind), a boxed
+/// `Result` side, a boxed user-enum payload, a field of `mut ref self`, and a
+/// `mut ref` param. The caller kept the box of a named argument (and
+/// registered a fresh temp's) while the container's drop freed it too, so
+/// every compiled surface died before its first line of output; `--interp`
+/// was right.
+///
+/// The codegen twin asserts the same string on both backends, and the ASAN
+/// twin carries the heap measurement.
+#[test]
+fn test_boxed_optres_param_stored_in_container_has_one_owner() {
+    let out = run(r#"struct R { id: i64 }
+impl Drop for R { fn drop(mut ref self) { println(f"d{self.id}") } }
+struct S { r: R, s: String }
+fn mk(i: i64) -> S { S { r: R { id: i }, s: f"heap-string-longer-than-sso-{i}" } }
+struct W { r: R, s: String, t: String }
+fn mw(i: i64) -> W { W { r: R { id: i }, s: f"heap-string-longer-than-sso-{i}", t: f"another-long-heap-string-{i}" } }
+enum K { A(W), B }
+struct H { v: Vec[Option[S]] }
+impl H { fn put(mut ref self, a: Option[S]) { self.v.push(a) } }
+fn opt(a: Option[S]) -> i64 { let mut v: Vec[Option[S]] = Vec.new(); v.push(a); println("in"); 1 }
+fn rebound(a: Option[S]) -> i64 { let c = a; let mut v: Vec[Option[S]] = Vec.new(); v.push(c); println("in"); 2 }
+fn res(a: Result[W, i64]) -> i64 { let mut v: Vec[Result[W, i64]] = Vec.new(); v.push(a); println("in"); 3 }
+fn en(a: Option[K]) -> i64 { let mut v: Vec[Option[K]] = Vec.new(); v.push(a); println("in"); 4 }
+fn outer(a: Option[S], v: mut ref Vec[Option[S]]) { v.push(a) }
+fn main() {
+    let a: Option[S] = Some(mk(1));
+    println(f"k{opt(a)}");
+    println(f"k{opt(Some(mk(2)))}");
+    let n: Option[S] = None;
+    println(f"k{opt(n)}");
+    let b: Option[S] = Some(mk(3));
+    println(f"k{rebound(b)}");
+    println(f"k{rebound(Some(mk(4)))}");
+    let c: Result[W, i64] = Ok(mw(5));
+    println(f"k{res(c)}");
+    println(f"k{res(Ok(mw(6)))}");
+    println(f"k{res(Err(7))}");
+    let e: Option[K] = Some(K.A(mw(8)));
+    println(f"k{en(e)}");
+    println(f"k{en(Some(K.A(mw(9))))}");
+    let mut h = H { v: Vec.new() };
+    let f: Option[S] = Some(mk(10));
+    h.put(f);
+    h.put(Some(mk(11)));
+    println(f"n{h.v.len()}");
+    let mut o: Vec[Option[S]] = Vec.new();
+    let g: Option[S] = Some(mk(12));
+    outer(g, mut o);
+    outer(Some(mk(13)), mut o);
+    println(f"n{o.len()}");
+    println("end")
+}"#);
+    assert_eq!(out, "d1\nin\nk1\nd2\nin\nk1\nin\nk1\nd3\nin\nk2\nd4\nin\nk2\nd5\nin\nk3\nd6\nin\nk3\nin\nk3\nd8\nin\nk4\nd9\nin\nk4\nn2\nd10\nd11\nn2\nd12\nd13\nend\n");
+}

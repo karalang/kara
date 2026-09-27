@@ -3049,10 +3049,16 @@ impl<'ctx> super::Codegen<'ctx> {
                 // needed a THIRD consumer for the let-destructure shape; see
                 // `finish_owned_struct_destructure` and
                 // `suppress_destructured_struct_pattern_cleanup_at`.
+                //
+                // B-2026-09-27-53 — EXCEPT when the callee does take the box
+                // over, by storing the param whole in a container (its own
+                // local's, or one the caller holds): that container's drop
+                // frees the box, so the caller keeping it too is the second
+                // free. The zero below is then the move it describes.
                 let boxed_struct_binding = matches!(
                     &a.value.kind,
                     ExprKind::Identifier(n) if self.payload_vars.boxed_struct_payload_vars.contains(n.as_str())
-                );
+                ) && !self.callee_stores_param_whole(&name, i);
                 // B-2026-08-12-1 — an ENTRY-COPIED param owns its own buffer,
                 // so the caller keeps the original and this whole-slot zero
                 // would be a move with nothing on the other side of it.
@@ -4230,6 +4236,37 @@ impl<'ctx> super::Codegen<'ctx> {
         }
     }
 
+    /// B-2026-09-27-53 — does the callee store by-value param `idx` WHOLE
+    /// into a container on every path, so the container's drop is what frees
+    /// its box: one its own local holds (`let mut v = Vec.new(); v.push(a)`),
+    /// or a place the caller holds (`v.push(a)` on a `mut ref` param).
+    /// [`crate::ast::fn_stores_param_whole_into_container`], which is
+    /// deliberately narrower than the `Drop`-body predicates: a payload
+    /// destructured out and stored leaves the param's box in the callee.
+    ///
+    /// A MUST predicate: a conditional store hands the value over on some
+    /// paths only, which a caller-side box registration cannot express.
+    ///
+    /// `idx` counts a method's `self` as param 0, as the method-call site's
+    /// `pidx` does; the AST's `params` do not hold `self`.
+    pub(super) fn callee_stores_param_whole(&self, callee_name: &str, idx: usize) -> bool {
+        let Some(program) = self.program_snapshot.as_deref() else {
+            return false;
+        };
+        let Some(f) = super::declarations::find_function_ast(program, callee_name) else {
+            return false;
+        };
+        let ast_i = if f.self_param.is_some() {
+            match idx.checked_sub(1) {
+                Some(i) => i,
+                None => return false,
+            }
+        } else {
+            idx
+        };
+        crate::ast::fn_stores_param_whole_into_container(f, ast_i)
+    }
+
     pub(super) fn owned_boxed_option_param_struct(&self, name: &str, i: usize) -> Option<String> {
         let flagged = |table: &HashMap<String, Vec<bool>>| {
             table
@@ -4285,6 +4322,11 @@ impl<'ctx> super::Codegen<'ctx> {
         if self.callee_rebinds_param_whole(name, i)
             && self.callee_rebinds_param_whole_mutably(name, i)
         {
+            return None;
+        }
+        // B-2026-09-27-53 — a callee that stores the param whole in a
+        // container hands the box to that container's drop.
+        if self.callee_stores_param_whole(name, i) {
             return None;
         }
         self.option_payload_is_boxed(payload_te)
@@ -4345,6 +4387,11 @@ impl<'ctx> super::Codegen<'ctx> {
         // control never reached a gate.
         let rebinds = self.callee_rebinds_param_whole(name, i);
         if rebinds && self.callee_rebinds_param_whole_mutably(name, i) {
+            return Vec::new();
+        }
+        // B-2026-09-27-53 — as the `Option` arm: a callee that stores the
+        // param whole in a container hands the box to that container's drop.
+        if self.callee_stores_param_whole(name, i) {
             return Vec::new();
         }
         self.boxed_enum_payload_variants(&param_te)

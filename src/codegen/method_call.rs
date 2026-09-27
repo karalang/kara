@@ -8678,11 +8678,16 @@ impl<'ctx> super::Codegen<'ctx> {
                     // `fn take(ref self, b: Option[Res]) -> i64` printed no
                     // body while every free-function spelling printed one on
                     // all four surfaces.
+                    //
+                    // B-2026-09-27-53 — except, as on the free-fn site, when the
+                    // callee stores the param whole in a container, whose drop
+                    // is then the box's other owner.
                     let boxed_struct_binding = matches!(
                         &a.value.kind,
                         ExprKind::Identifier(n)
                             if self.payload_vars.boxed_struct_payload_vars.contains(n.as_str())
-                    );
+                    ) && !self
+                        .callee_stores_param_whole(&qualified, pidx);
                     if !arg_flows_into_return && entry_copied.is_none() && !boxed_struct_binding {
                         self.suppress_inline_option_result_binding_move(&a.value);
                     }
