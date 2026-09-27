@@ -93,7 +93,7 @@ distinguish "bugs flattening" from "we stopped writing them down."
 | class | total |
 |---|---|
 | run-vs-build | 513 |
-| miscompile | 497 |
+| miscompile | 498 |
 | leak | 444 |
 | double-free | 329 |
 | missing-feature | 209 |
@@ -110,8 +110,8 @@ distinguish "bugs flattening" from "we stopped writing them down."
 
 | surface | total |
 |---|---|
-| codegen | 2197 |
-| interp | 608 |
+| codegen | 2198 |
+| interp | 609 |
 | typecheck | 311 |
 | other | 111 |
 | ownership | 79 |
@@ -369,13 +369,13 @@ registered in the callee's prologue, not by-value struct params in general. | �
 | B-2026-09-27-75 | 2026-09-27 | codegen | high | A WHOLE-PAYLOAD ARM `Some(k) => match k { .. }` ON A BY-VALUE `Option[K]` PARAM WITH A BOXED USER-ENUM PAYLOAD RUNS AN EXTRA `Drop` BODY ON A ZEROED VALUE, AND DOUBLE-FREES WHEN THE PARAM IS FIRST REBOUND -- `fn rb(a: Option[K]) -> i64 { match a { Some(k) => match k { K.A(w) => println(f"m{w.r.id}"), K.B => println("b") }, None => println("n") } 5 }` prints `m1 d1 d0 k5 m2 d2 d0 end` at -O0 and -O2 where `--interp` prints `m1 d1 k5 m2 d2 end`; with `let c = a; match c { .. }` it aborts `free(): double free` on both | — |
 | B-2026-09-27-67 | 2026-09-27 | interp+codegen | medium | A PART OF A NAMED RECEIVER OR ARGUMENT HANDED BACK ON ONLY SOME PATHS LOSES ITS `Drop` BODY ON THE PATH THAT DOES NOT HAND IT BACK, ON ALL FOUR SURFACES -- `impl Ws { fn pick(self, c: bool) -> Option[R] { if c { return Option.Some(self.r) } return None } }` with `w.pick(false)` prints `got` where `dR17 got` is due; `return self.r` and a free fn `pkf(w, false)` lose it the same way | — |
 | B-2026-09-27-68 | 2026-09-27 | codegen | medium | A NAMED STRUCT ARGUMENT WITH NO `Drop` OF ITS OWN, WRAPPED WHOLE IN AN `Option` AND HANDED BACK, RUNS ITS FIELDS' `Drop` BODIES TWICE ON EVERY COMPILED SURFACE -- `fn wrap(w: Ws) -> Option[Ws] { Some(w) }` with `let o = wrap(w)` prints `dR1 x1 dR1 end` on jit, -O0 and -O2 where `--interp` prints `x1 dR1 end` | — |
-| B-2026-09-27-70 | 2026-09-27 | interp+codegen | medium | FOUR SPELLINGS OF A NAMED LOCAL'S `Drop` FIELD HANDED TO A KEEPING CALLEE STILL RUN THE BODY TWICE ON ALL FOUR SURFACES AFTER B-2026-09-26-63 -- a TWO-hop projection (`keep(x.w.r)`), a projection off an owned PARAMETER (`fn ownw(w: W) -> i64 { let k = keep(w.r); k.id }`), a struct leaf with NO `Drop` of its own kept on only some paths (`maybew(x.w, true)`), and a user-enum leaf STORED on only some paths (`csg(mut xs, v.g, true)`) | — |
 | B-2026-09-27-76 | 2026-09-27 | ownership+interp+codegen | medium | `for g in v.into_iter()` DOES NOT CONSUME `v` OR MOVE ITS ELEMENTS, ON ALL FOUR SURFACES -- the element's `Drop` body runs after the loop instead of at the end of each iteration, TWICE when the loop moves `g` on (`let h = g`, `w.push(g)`), BEFORE the loop body reads the element when the iterator is bound first (`let it = v.into_iter(); for g in it`), and `v.len()` after the loop still compiles and prints 2, where design.md says `into_iter()` consumes the collection | — |
 | B-2026-09-27-80 | 2026-09-27 | typecheck | low | THE `borrow_projection_copy` LINT (W0299) IS STILL SILENT WHEN A BORROWED VALUE IS HANDED TO A KEEPING FREE-FUNCTION CALLEE -- `for g in v { let o = f(g); }` and `fn k(s: ref S) { let o = f(s.r); }` over `fn f(x: D) -> D { x }` copy the value and run its `Drop` body twice with no warning, where `let h = g` and `let o = s.r` now warn | — |
 | B-2026-09-27-81 | 2026-09-27 | interp+codegen | medium | THREE NEIGHBOURS OF B-2026-09-27-59 STILL RUN A GENERIC STRUCT'S FIELD `Drop` BODY TWICE -- a NAMED two-field argument whose callee hands back one field runs the OTHER field's body in both frames (`fn ga(w: G2[R]) -> R { return w.a }` prints `dR50 dR50 x5 dR5` compiled, `dR50 x5 dR5` interpreted); a method over a HEAP-bearing instantiation (`w.get()` on `G[S]`) prints `dS4abcd x4 dS4abcd` compiled; and a TEMP receiver `G { r: R { id: 11 }, n: 0 }.get()` prints `dR11 x11 dR11` on all four surfaces | — |
 | B-2026-09-27-78 | 2026-09-27 | interp+codegen | medium | `match v.pop()` OVER A `Vec[Option[S]]` WHOSE ELEMENT IS A BOXED `Option` LEAKS THE INNER BOX AND ITS STRING WHEN AN ARM DESTRUCTURES THE ELEMENT, ON EVERY COMPILED SURFACE; TWO SPELLINGS ALSO LOSE THE `Drop` BODY -- `match v.pop() { Some(Some(s)) => s.r.id, _ => 0 }` prints the right `d1 k1 d2 k2 end` on all four surfaces but leaks 61 B per call (32 B box + 29 B String) at -O0; `Some(o) => match o { Some(s) => s.r.id, None => 0 }` prints `k1 k2 end` compiled against `d1 k1 d2 k2 end` interpreted; `Some(x) => 3` (payload bound, unused) prints `k3 k3 end` on ALL FOUR surfaces where `d1 k3 d2 k3 end` is due; `let x = v.pop(); match x { .. }` is clean | — |
 | B-2026-09-27-79 | 2026-09-27 | interp+codegen | high | A BY-VALUE BOXED `Option[S]` PARAM PUSHED INTO A LOCAL `Vec` ONLY ON SOME PATHS CRASHES WITH NO OUTPUT ON EVERY COMPILED SURFACE, AND THE INTERPRETER LOSES THE BODY ON THE PATH THAT DOES NOT PUSH -- `fn rb(a: Option[S], c: bool) -> i64 { let mut v: Vec[Option[S]] = Vec.new(); if c { v.push(a) }; println("in"); 5 }` called as `rb(a, true)`, `rb(b, false)`, `rb(Some(mk(3)), true)`, `rb(Some(mk(4)), false)` prints nothing at -O0 or -O2 (8 valgrind errors), and `d1 in k5 in k5 d3 in in end` interpreted, where `d2` and `d4` are due | — |
 | B-2026-09-27-90 | 2026-09-27 | interp+codegen | medium | THREE SPELLINGS B-2026-09-27-58'S FORWARDING ROUTE DOES NOT REACH STILL RUN A PARAM'S HANDED-BACK FIELD `Drop` BODY TWICE ON ALL FOUR SURFACES -- a `match` directly on the forwarded call (`match w.opt() { Some(x) => .. }` and the free-function `match getfo(w)` alike) prints `x7 dR7 dR7 k1`; a method that hands `self` back WHOLE (`let v = w.me(); v` over `fn me(self) -> Ws { return self }`) prints `in dR26 x26 dR26` where the free-function `me2(w)` is right; and a CONDITIONAL forward (`if c { return w.getr() }`, and `getf(w)` alike) prints `dR12 x12 dR12` | — |
+| B-2026-09-27-82 | 2026-09-27 | interp+codegen | medium | AFTER B-2026-09-27-70 A NAMED ROOT'S `Drop` FIELD HANDED ON STILL RUNS ITS BODY TWICE IN FOUR SPELLINGS, AND A TWO-HOP MOVE UNDER AN `if` SPLITS THE BACKENDS -- a projection off an owned PARAMETER (`fn ownw(w: W) -> i64 { let k = keep(w.r); k.id }`), a struct leaf with NO `Drop` kept on some paths (`maybew(x.w, true)`), a user-enum leaf STORED on some paths (`csg(mut xs, v.g, true)`), and a two-hop move inside an `if` (`if c { xs.push(x.w.r); }`), where the interpreter is now right and codegen still runs the body twice over a freed name; a two-hop `let`/`return` inside an `if` loses the body on the leg that does not move, compiled only | — |
 
 ### Relocated
 
@@ -3131,6 +3131,7 @@ registered in the callee's prologue, not by-value struct params in general. | �
 | B-2026-09-27-59 | codegen | medium | A GENERIC STRUCT'S `Drop`-BEARING FIELD HANDED BACK BY VALUE RUNS ITS BODY TWICE ON EVERY COMPILED SURFACE WHILE `--interp` IS RIGHT, for the method,… | 2fbd214e8 |
 | B-2026-09-27-60 | codegen | medium | A `for` LOOP BINDING OVER A `Vec` OF A BOXED GENERIC ENUM, PASSED BY VALUE TO A CALLEE THAT MATCHES IT, RUNS THE PAYLOAD'S `Drop` BODY TWICE ON EVERY… | b3ab2eb44 |
 | B-2026-09-27-69 | typecheck | low | THE `borrow_projection_copy` LINT (W0299) IS SILENT WHEN A BARE `for` LOOP'S ELEMENT IS MATERIALIZED -- `for g in v { let o = f(g); }` over a keeping… | 1d152cc9e |
+| B-2026-09-27-70 | interp+codegen | medium | FOUR SPELLINGS OF A NAMED LOCAL'S `Drop` FIELD HANDED TO A KEEPING CALLEE STILL RUN THE BODY TWICE ON ALL FOUR SURFACES AFTER B-2026-09-26-63 -- a TW… | 0a4e2754e |
 
 </details>
 
