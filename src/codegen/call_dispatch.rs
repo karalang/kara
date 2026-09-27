@@ -10107,10 +10107,24 @@ impl<'ctx> super::Codegen<'ctx> {
                         && (!arg_escapes_frame || escaping_entry_copied)
                         && self.type_decls.struct_types.contains_key(&ret_ty_name)
                     {
+                        // B-2026-09-27-99 — masked by the parts the callee hands
+                        // on, as the struct-LITERAL sibling below and the
+                        // own-`Drop` arm above already are. Unmasked, a callee
+                        // that returned or kept a field (`retr(mkw(1))` over
+                        // `fn retr(w: W) -> D { w.r }`) had that field's body run
+                        // here and again by its new owner, on every compiled
+                        // surface against a correct `--interp`.
                         let bodies_fn = if escaping_entry_copied {
                             None
                         } else {
-                            self.field_bodies_fn_for_owned_temp(&ret_ty_name)
+                            let mut skip =
+                                self.escaping_field_skip_tree(&ret_ty_name, escaping_paths);
+                            self.insert_payload_skip_paths(
+                                &mut skip,
+                                &ret_ty_name,
+                                field_payload_paths,
+                            );
+                            self.field_bodies_fn_for_owned_temp_skipping(&ret_ty_name, &skip)
                         };
                         // B-2026-08-02-28 — the MEMORY half, which this arm
                         // omitted: it registered the bodies walk and returned,

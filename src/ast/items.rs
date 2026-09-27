@@ -5175,11 +5175,21 @@ fn part_paths_from_root(
     // or no program) leaves that route silent, the under-approximating
     // direction.
     let root_struct = program.and_then(|p| part_scan_root_struct(p, f, param_name));
+    let mut locals: Vec<&str> = Vec::new();
+    if program.is_some() {
+        part_scan_let_names(&f.body, &mut locals);
+        locals.retain(|n| {
+            !f.params
+                .iter()
+                .any(|p| matches!(&p.pattern.kind, PatternKind::Binding(q) if q == n))
+        });
+    }
     let cx = PartScanCx {
         program,
         roots: &roots,
         top_level: true,
         root_struct: root_struct.as_deref(),
+        locals: &locals,
     };
     // B-2026-09-05-17 — cycle guard for the forwarding route, which asks
     // this same question of the callee: a recursive forward answers empty,
@@ -5433,7 +5443,26 @@ fn part_paths_from_root(
                     return;
                 };
                 for (j, a) in args.iter().enumerate() {
-                    if !matches!(&a.value.kind, ExprKind::Identifier(_)) {
+                    // B-2026-09-27-99 — a PROJECTION of the param is handed over
+                    // exactly as an alias of it is: `keep(w.r)` gives `w.r` to
+                    // an owner just as `let r = w.r; keep(r)` does, and only the
+                    // alias spelling was reported, so the caller's walk ran the
+                    // part's body again after the callee's new owner had. At
+                    // the body's top level only, as the forwarding route below
+                    // is: under an `if` the path that does not hand it over
+                    // would lose the body, trading a double for a missing one.
+                    //
+                    // Not off `self`: a fresh-temp RECEIVER's registrar
+                    // (`mkw(3).take()`) walks the whole value beside this
+                    // channel, so reporting the part there added a second,
+                    // masked walk rather than masking the first.
+                    let projection = matches!(
+                        &a.value.kind,
+                        ExprKind::FieldAccess { .. } | ExprKind::TupleIndex { .. }
+                    ) && !part_scan_rooted_at_self(&a.value);
+                    let admitted = matches!(&a.value.kind, ExprKind::Identifier(_))
+                        || (projection && cx.top_level);
+                    if !admitted {
                         continue;
                     }
                     if callee_takes_param_over(program, gf, j) {
@@ -5469,6 +5498,27 @@ fn part_paths_from_root(
                 if outliving_store::place_root_outlives(object, cx.roots) {
                     for a in args {
                         if matches!(&a.value.kind, ExprKind::Identifier(_)) {
+                            note(&a.value, out);
+                        }
+                    }
+                }
+                // B-2026-09-27-99 — a part pushed into a container this function
+                // declares (`let mut xs: Vec[D] = Vec.new(); xs.push(w.r)`) is
+                // owned by that container, which runs its body where it dies,
+                // so the caller's walk of the argument must skip it. Alias and
+                // projection spellings alike; an argument that is not a part
+                // of the root denotes nothing and is not noted. Top level only,
+                // for the projection route's reason above.
+                if cx.top_level
+                    && matches!(
+                        method.as_str(),
+                        "push" | "push_back" | "push_front" | "insert"
+                    )
+                    && matches!(&object.kind, ExprKind::Identifier(v) if cx.locals.contains(&v.as_str()))
+                    && denote(object, aliases).is_none()
+                {
+                    for a in args {
+                        if !part_scan_rooted_at_self(&a.value) {
                             note(&a.value, out);
                         }
                     }
@@ -5650,6 +5700,75 @@ struct PartScanCx<'a> {
     /// B-2026-09-27-58 — the concrete struct the scanned root names, which
     /// the METHOD forwarding route needs to resolve a receiver's impl.
     root_struct: Option<&'a str>,
+    /// B-2026-09-27-99 — the bindings the scanned function declares with its
+    /// own `let`s, parameters excluded: the containers a part pushed into is
+    /// then owned, and dropped, by the callee rather than the caller.
+    locals: &'a [&'a str],
+}
+
+/// B-2026-09-27-99 — whether a place expression projects off `self`; the
+/// receiver routes of the part scan leave those alone (see `taken_over`).
+fn part_scan_rooted_at_self(e: &Expr) -> bool {
+    let mut cur = e;
+    while let ExprKind::FieldAccess { object, .. } | ExprKind::TupleIndex { object, .. } = &cur.kind
+    {
+        cur = object;
+    }
+    matches!(cur.kind, ExprKind::SelfValue)
+}
+
+/// B-2026-09-27-99 — every name a `let` in `b` binds whole, at any block depth
+/// a statement reaches. A name it misses keeps the scan's under-reporting
+/// answer, which is the direction this channel already takes.
+fn part_scan_let_names<'a>(b: &'a Block, out: &mut Vec<&'a str>) {
+    fn in_expr<'a>(e: &'a Expr, out: &mut Vec<&'a str>) {
+        match &e.kind {
+            ExprKind::Block(b)
+            | ExprKind::Unsafe(b)
+            | ExprKind::Seq(b)
+            | ExprKind::While { body: b, .. }
+            | ExprKind::WhileLet { body: b, .. }
+            | ExprKind::For { body: b, .. }
+            | ExprKind::Loop { body: b, .. }
+            | ExprKind::LabeledBlock { body: b, .. } => part_scan_let_names(b, out),
+            ExprKind::If {
+                then_block,
+                else_branch,
+                ..
+            }
+            | ExprKind::IfLet {
+                then_block,
+                else_branch,
+                ..
+            } => {
+                part_scan_let_names(then_block, out);
+                if let Some(x) = else_branch.as_deref() {
+                    in_expr(x, out);
+                }
+            }
+            ExprKind::Match { arms, .. } => {
+                for a in arms {
+                    in_expr(&a.body, out);
+                }
+            }
+            _ => {}
+        }
+    }
+    for st in &b.stmts {
+        match &st.kind {
+            StmtKind::Let { pattern, value, .. } => {
+                if let PatternKind::Binding(n) = &pattern.kind {
+                    out.push(n.as_str());
+                }
+                in_expr(value, out);
+            }
+            StmtKind::Expr(e) => in_expr(e, out),
+            _ => {}
+        }
+    }
+    if let Some(e) = b.final_expr.as_deref() {
+        in_expr(e, out);
+    }
 }
 
 /// B-2026-09-27-58 — the name of a bare, non-generic type path, the only
