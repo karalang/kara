@@ -94,7 +94,7 @@ distinguish "bugs flattening" from "we stopped writing them down."
 |---|---|
 | run-vs-build | 505 |
 | miscompile | 487 |
-| leak | 440 |
+| leak | 441 |
 | double-free | 324 |
 | missing-feature | 209 |
 | codegen-gap | 196 |
@@ -110,8 +110,8 @@ distinguish "bugs flattening" from "we stopped writing them down."
 
 | surface | total |
 |---|---|
-| codegen | 2166 |
-| interp | 590 |
+| codegen | 2167 |
+| interp | 591 |
 | typecheck | 309 |
 | other | 111 |
 | ownership | 77 |
@@ -346,7 +346,6 @@ registered in the callee's prologue, not by-value struct params in general. | �
 | B-2026-09-27-12 | 2026-09-27 | interp | medium | THE INTERPRETER MIS-OWNS A CONDITIONALLY-RETURNED BY-VALUE PARAM OF AN ENUM WITH ITS OWN `Drop`: `mb(a, false)` over `fn mb(e: E, c: bool) -> E { if c { return e } return E.B }` loses the payload body (`mb-new dE dE` against the compiled `mb-new dE dR2 dE`) and `mb(a, true)` runs the shell twice (`dE dR3 dE` against `dE dR3`); the always-returning `ide(q)` doubles the shell the same way | — |
 | B-2026-09-27-13 | 2026-09-27 | codegen | medium | A METHOD-CALL RESULT PASSED STRAIGHT INTO A BY-VALUE PARAM THAT HANDS IT BACK LEAKS 52 B IN 2 BLOCKS AT `-O0` -- `let b: E = f(a.ret_self())` and `f(E.A(mk(7)).ret_self())` over `fn f(e: E) -> E { return e }` (15 allocs, 13 frees) while the free-function nesting `f(g(E.A(mk(6))))` is clean; output correct on every surface | — |
 | B-2026-09-27-4 | 2026-09-27 | interp+codegen | medium | A BY-VALUE TUPLE PARAMETER WHOSE ELEMENT IS RETURNED ON ONLY SOME PATHS (`fn eat(o: (R, R), k: bool) -> R { if k { return o.0; } .. }`) LOSES THAT ELEMENT'S Drop BODY ON THE PATH THAT DOES NOT RETURN IT, ON EVERY BACKEND | — |
-| B-2026-09-27-14 | 2026-09-27 | interp+codegen | medium | TWO SPELLINGS OF B-2026-09-27-3 ITS FIX LEAVES AS THEY WERE: a STRUCT field at the tail of an `if` passed as a CALL ARGUMENT (`show(if k { p.a } else { mk(..) })`) runs its Drop body over the moved-out husk compiled, and a DISCARDED `if k { p.a } else { .. };` statement runs it twice in the interpreter | — |
 | B-2026-09-27-15 | 2026-09-27 | codegen | high | A BINDING MOVED INSIDE A LOOP BODY (RC FALLBACK) IS FREED TWICE ON EVERY COMPILED SURFACE -- `let q = mk(5); while i < 1 { let p = q; .. }` aborts with `free(): double free detected in tcache 2` on the JIT, -O0, -O2 and nopar, and the spellings that hand it through a call run its `Drop` body a second time after the loop (`p=15 dR15 end dR15`) | — |
 | B-2026-09-27-16 | 2026-09-27 | codegen+interp | high | A CLOSURE THAT CAPTURES A `Drop` VALUE RUNS ITS BODY BEFORE THE CLOSURE IS CALLED, AND ONE THAT MOVES THE CAPTURE DOUBLE-FREES IT ON EVERY COMPILED SURFACE -- `let g = || { let p = q; .. }; g()` aborts with `double free` compiled and prints `dR9 p=9 dR9` under `--interp`; `|| { eat(q) }` reads freed memory (5 invalid reads at -O0) | — |
 | B-2026-09-27-17 | 2026-09-27 | interp+codegen | medium | A FRESH TEMP'S `Drop` FIELD PASSED AS A `mut ref` ARGUMENT RUNS ITS BODY ON THE PRE-CALL VALUE ON ALL FOUR SURFACES -- `grow(mut mkw(7).r)` over `fn grow(d: mut ref D) { d.id = d.id + 1; }` prints `dD107n107 dD7n7 end` where the callee made it `dD8n7`; the named-root spelling `let mut w = mkw(7); grow(mut w.r)` prints `dD107n107 dD8n7 end` | — |
@@ -360,6 +359,7 @@ registered in the callee's prologue, not by-value struct params in general. | �
 | B-2026-09-27-36 | 2026-09-27 | codegen | medium | A FRESH-TEMP PASSTHROUGH `match id(b)` OVER A BOXED `Option[S]` RUNS THE ARM PAYLOAD'S `Drop` BODY AT SCOPE EXIT INSTEAD OF AT THE ARM ON EVERY COMPILED SURFACE -- `let k = match id(b) { Some(x) => x.r.id, None => 0 }` over `struct S { r: R, s: String }` (R has a `Drop`; `Option[S]` is boxed) prints `d2 j2 end` under `--interp` and `j2 end d2` on jit, -O0 and -O2, memory-clean | — |
 | B-2026-09-27-37 | 2026-09-27 | codegen | high | A BY-VALUE BOXED `Option[S]` PARAM REBOUND INTO A `let mut` LOCAL IS FREED BY BOTH FRAMES FOR A NAMED ARGUMENT -- `fn rb(a: Option[S]) -> i64 { let mut c = a; 5 }` over `struct S { r: R, s: String }` (R has a `Drop`; `Option[S]` is boxed) called as `rb(a)` on a named local prints `d1 k5 d2 end` under `--interp` and aborts `free(): double free detected in tcache 2` at -O2, with a SIGSEGV on jit and -O0 (valgrind -O0: 5 errors, 16 frees against 14 allocs) | — |
 | B-2026-09-27-19 | 2026-09-27 | interp+codegen | medium | THE TUPLE-PAYLOAD, TWO-HOP AND CALLEE-LOCAL SPELLINGS OF B-2026-09-26-62 STILL RUN A CONDITIONALLY HANDED-BACK PAYLOAD PART'S DROP BODY TWICE OR NOT AT ALL -- `Some(t) => { if k { return t.0; } .. }` over `Option[(R, R)]` loses both element bodies compiled for a fresh temp and doubles `t.0` everywhere for a named local; `return t.h.r` doubles or loses parts; and `let x = match o { Some(t) => { if k { t.r } else { .. } } .. }` doubles `t.r` on every surface (the fn-tail spelling was fixed in 7ce7f24) | — |
+| B-2026-09-27-20 | 2026-09-27 | interp+codegen | medium | TWO CALL-ARGUMENT SPELLINGS B-2026-09-27-14'S FIX LEAVES AS THEY WERE -- a NON-MINTING wrapper (`show({ p.a })`, `show(if k { p.a } else { p.b })`) runs the part's Drop body over the husk its block-tail move zeroed and leaks the buffer on every compiled surface, while `--interp` runs it on the value; and a by-value PARAM root (`fn f(p: P, k: bool) { show(if k { p.a } else { mk(..) }) }`) loses a body at both `k` on every surface | — |
 
 ### Relocated
 
@@ -3096,6 +3096,7 @@ registered in the callee's prologue, not by-value struct params in general. | �
 | B-2026-09-26-50 | codegen | medium | A NAMED STRUCT WITH NO `Drop` OF ITS OWN WHOSE FIELDS CARRY ONE, MOVED WHOLE INTO A CALLEE THAT KEEPS IT, RUNS EACH FIELD'S BODY AT THE CALL AND AGAI… | 049da6f4e |
 | B-2026-09-27-2 | interp+codegen | high | MOVING AN ELEMENT OUT OF A LOCAL TUPLE BY `return t.0` OR A TAIL `t.0` RUNS ITS Drop BODY TWICE IN THE INTERPRETER, AND A CONDITIONAL MOVE (`if k { r… | e39f58c |
 | B-2026-09-27-3 | interp+codegen | high | A PROJECTION MOVED OUT IN A VALUE POSITION OTHER THAN `let x = p.f` / `return` / a function tail RUNS ITS Drop BODY TWICE ON EVERY BACKEND -- `let x… | bd5b43d |
+| B-2026-09-27-14 | interp+codegen | medium | TWO SPELLINGS OF B-2026-09-27-3 ITS FIX LEAVES AS THEY WERE: a STRUCT field at the tail of an `if` passed as a CALL ARGUMENT (`show(if k { p.a } else… | e06d859 |
 
 </details>
 
