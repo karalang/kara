@@ -4332,6 +4332,59 @@ fn main() {
     );
 }
 
+/// B-2026-09-27-57 — a receiver or param PART handed back wrapped in the
+/// prelude's BARE constructor (`Some(self.r)`, `Ok(..)`, `Err(..)`, nested
+/// `Some(Some(..))`) runs its body once. The part scanner counted only
+/// constructor calls whose callee was not a plain identifier, so the bare
+/// spellings were not seen as hand-backs and the caller ran the body a second
+/// time (or, on the heap field, freed it twice). Methods, a free fn and a
+/// heap-bearing part, over return and tail spellings.
+#[test]
+fn asan_bare_constructor_part_handed_back_runs_its_body_once() {
+    assert_clean_asan_run(
+        r#"struct R { id: i64 }
+impl Drop for R { fn drop(mut ref self) { println(f"dR{self.id}") } }
+struct S { id: i64, s: String }
+impl Drop for S { fn drop(mut ref self) { println(f"dS{self.id}") } }
+struct Ws { r: R, n: i64 }
+struct Hs { s: S, n: i64 }
+impl Ws {
+    fn opt(self) -> Option[R] { return Some(self.r) }
+    fn tl(self) -> Option[R] { Some(self.r) }
+    fn ok(self) -> Result[R, i64] { Ok(self.r) }
+    fn er(self) -> Result[i64, R] { Err(self.r) }
+    fn nn(self) -> Option[Option[R]] { Some(Some(self.r)) }
+}
+fn optp(w: Ws) -> Option[R] { return Some(w.r) }
+fn opth(w: Hs) -> Option[S] { Some(w.s) }
+fn show(o: Option[R]) { match o { Some(x) => println(f"x{x.id}"), None => println("n") } }
+fn main() {
+    let a = Ws { r: R { id: 1 }, n: 0 };
+    show(a.opt());
+    let b = Ws { r: R { id: 2 }, n: 0 };
+    show(b.tl());
+    let c = Ws { r: R { id: 3 }, n: 0 };
+    match c.ok() { Ok(x) => println(f"x{x.id}"), Err(_) => println("n") }
+    let d = Ws { r: R { id: 4 }, n: 0 };
+    match d.er() { Ok(_) => println("n"), Err(x) => println(f"x{x.id}") }
+    let e = Ws { r: R { id: 5 }, n: 0 };
+    match e.nn() { Some(Some(x)) => println(f"x{x.id}"), _ => println("n") }
+    let f = Ws { r: R { id: 6 }, n: 0 };
+    show(optp(f));
+    let g = Hs { s: S { id: 7, s: "ab".to_string() + "cd" }, n: 0 };
+    let o = opth(g);
+    match o { Some(x) => println(f"x{x.id}"), None => println("n") }
+    println("end")
+}
+"#,
+        &[
+            "x1", "dR1", "x2", "dR2", "x3", "dR3", "x4", "dR4", "x5", "dR5", "x6", "dR6", "x7",
+            "dS7", "end",
+        ],
+        "asan_bare_constructor_part_handed_back_runs_its_body_once",
+    );
+}
+
 /// B-2026-09-27-49 — a by-value user-enum param handed back on some exits only
 /// runs its payload body once on the exit where it dies inside and is freed
 /// once on every exit: non-generic, match-arm and generic spellings.

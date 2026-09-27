@@ -7827,6 +7827,56 @@ fn main() {
     assert_eq!(out, "x1\ndR1\nx2\ndR2\nx3\ndR3\nx4\ndR4\nx5\ndR5\ndR60\nx6\ndR6\nx7h7\ndS7\nx8\ndR8\nx9\ndR9\ngot\nx12\ndR12\nn5\ndR14\ne18\ndR18\nn1\ndR20\nend\n");
 }
 
+/// B-2026-09-27-57 — a receiver or param PART handed back wrapped in the
+/// prelude's BARE constructor (`Some(self.r)`, `Ok(..)`, `Err(..)`, nested
+/// `Some(Some(..))`) runs its body once. The part scanner counted only
+/// constructor calls whose callee was not a plain identifier, so the bare
+/// spellings were not seen as hand-backs and the caller ran the body a second
+/// time (or, on the heap field, freed it twice). Methods, a free fn and a
+/// heap-bearing part, over return and tail spellings.
+#[test]
+fn interp_bare_constructor_part_handed_back_runs_its_body_once() {
+    let out = run(r#"struct R { id: i64 }
+impl Drop for R { fn drop(mut ref self) { println(f"dR{self.id}") } }
+struct S { id: i64, s: String }
+impl Drop for S { fn drop(mut ref self) { println(f"dS{self.id}") } }
+struct Ws { r: R, n: i64 }
+struct Hs { s: S, n: i64 }
+impl Ws {
+    fn opt(self) -> Option[R] { return Some(self.r) }
+    fn tl(self) -> Option[R] { Some(self.r) }
+    fn ok(self) -> Result[R, i64] { Ok(self.r) }
+    fn er(self) -> Result[i64, R] { Err(self.r) }
+    fn nn(self) -> Option[Option[R]] { Some(Some(self.r)) }
+}
+fn optp(w: Ws) -> Option[R] { return Some(w.r) }
+fn opth(w: Hs) -> Option[S] { Some(w.s) }
+fn show(o: Option[R]) { match o { Some(x) => println(f"x{x.id}"), None => println("n") } }
+fn main() {
+    let a = Ws { r: R { id: 1 }, n: 0 };
+    show(a.opt());
+    let b = Ws { r: R { id: 2 }, n: 0 };
+    show(b.tl());
+    let c = Ws { r: R { id: 3 }, n: 0 };
+    match c.ok() { Ok(x) => println(f"x{x.id}"), Err(_) => println("n") }
+    let d = Ws { r: R { id: 4 }, n: 0 };
+    match d.er() { Ok(_) => println("n"), Err(x) => println(f"x{x.id}") }
+    let e = Ws { r: R { id: 5 }, n: 0 };
+    match e.nn() { Some(Some(x)) => println(f"x{x.id}"), _ => println("n") }
+    let f = Ws { r: R { id: 6 }, n: 0 };
+    show(optp(f));
+    let g = Hs { s: S { id: 7, s: "ab".to_string() + "cd" }, n: 0 };
+    let o = opth(g);
+    match o { Some(x) => println(f"x{x.id}"), None => println("n") }
+    println("end")
+}
+"#);
+    assert_eq!(
+        out,
+        "x1\ndR1\nx2\ndR2\nx3\ndR3\nx4\ndR4\nx5\ndR5\nx6\ndR6\nx7\ndS7\nend\n"
+    );
+}
+
 /// B-2026-09-20-15 — a GENERIC enum's payload runs its user `Drop` body as a
 /// `Vec` ELEMENT and as a STRUCT FIELD, as its non-generic twin does. Both
 /// positions asked only the name-keyed payload walker, which skips a payload

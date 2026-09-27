@@ -5293,8 +5293,16 @@ fn part_paths_from_root(
             // predicate, whose `payload_yields` already counts a constructor
             // call. A call to a plain IDENTIFIER is a free function's business
             // and stays with the program-aware `taken_over`.
+            //
+            // B-2026-09-27-57 — except the prelude's BARE constructors, which
+            // are identifiers syntactically and constructors semantically:
+            // `return Some(self.r)` handed the part out exactly as
+            // `Option.Some(self.r)` does, but read as a call to a function
+            // named `Some`, so the caller kept its walk over the part and the
+            // body ran twice on all four surfaces.
             ExprKind::Call { callee, args, .. }
-                if !matches!(&callee.kind, ExprKind::Identifier(_)) =>
+                if !matches!(&callee.kind, ExprKind::Identifier(n)
+                    if !matches!(n.as_str(), "Some" | "Ok" | "Err")) =>
             {
                 for a in args {
                     yielded(&a.value, aliases, out);
