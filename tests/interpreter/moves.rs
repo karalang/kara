@@ -3250,3 +3250,27 @@ fn main() {
         "got:\n{out}"
     );
 }
+
+/// B-2026-09-27-49 — the interpreter half: a by-value user-enum param handed
+/// back on some exits runs its payload body on the exit where it dies inside,
+/// including a bare match arm that hands it back on the other.
+#[test]
+fn test_enum_param_handed_back_on_some_paths_runs_its_payload_body_on_the_others() {
+    let out = run(r#"struct D { id: i64, name: String }
+impl Drop for D { fn drop(mut ref self) { println(f"dD{self.id}{self.name}") } }
+fn mkd(n: i64) -> D { return D { id: n, name: f"n{n}" }; }
+enum G { A(D), B }
+fn f(x: G, c: bool) -> Option[G] { if c { return Some(x); } None }
+fn pick(x: G, k: i64) -> G { match k { 1 => x, _ => G.B } }
+fn main() {
+    let o = f(G.A(mkd(1)), false);
+    println("o");
+    let p = pick(G.A(mkd(2)), 0);
+    println("p");
+    let q = pick(G.A(mkd(3)), 1);
+    println("q");
+    println("end")
+}
+"#);
+    assert_eq!(out, "dD1n1\no\ndD2n2\np\ndD3n3\nq\nend\n", "got:\n{out}");
+}

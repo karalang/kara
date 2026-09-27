@@ -8779,3 +8779,115 @@ impl H { fn gkeep[T](ref self, x: T) -> T { x } }
         }
     }
 }
+
+/// B-2026-09-27-49 — a by-value USER-enum param a callee hands back on some
+/// exits only (wrapped in `Some`, bare, in a struct, from a match arm) runs its
+/// payload's `Drop` body on the exit where it dies inside. Every spelling ran
+/// no body there on all four surfaces; the struct and `Option` twins were
+/// right. The rebound control documents the spelling this fix declines.
+#[test]
+fn e2e_enum_param_handed_back_on_some_paths_runs_its_payload_body_on_the_others() {
+    const H: &str = r#"struct D { id: i64, name: String }
+impl Drop for D { fn drop(mut ref self) { println(f"dD{self.id}{self.name}") } }
+fn mkd(n: i64) -> D { return D { id: n, name: f"n{n}" }; }
+enum G { A(D), B }
+struct E { id: i64 }
+impl Drop for E { fn drop(mut ref self) { println(f"dE{self.id}") } }
+enum Ge { A(E), B }
+struct Hw { g: G }
+fn f(x: G, c: bool) -> Option[G] { if c { return Some(x); } None }
+fn fe(x: G, c: bool) -> Option[G] { if c { Some(x) } else { None } }
+fn fw(x: G, c: bool) -> Option[Hw] { if c { return Some(Hw { g: x }); } None }
+fn fb(x: G, c: bool) -> G { if c { return x; } G.B }
+fn fh(x: Ge, c: bool) -> Option[Ge] { if c { return Some(x); } None }
+fn pick(x: G, k: i64) -> G { match k { 1 => x, _ => G.B } }
+fn reb(x: G, c: bool) -> Option[G] { if c { let y = x; return Some(y); } None }
+fn gf[T](x: T, c: bool) -> Option[T] { if c { return Some(x); } None }
+fn gpick[T](x: T, k: i64, d: T) -> T { match k { 1 => x, _ => d } }
+struct K { k: i64 }
+impl K { fn m(self, x: G, c: bool) -> Option[G] { if c { return Some(x); } None } fn a(x: G, c: bool) -> Option[G] { if c { return Some(x); } None } }
+"#;
+    for (label, body, want) in [
+        (
+            "wrapped in Some on the other path (B-2026-09-27-49)",
+            "let o = f(G.A(mkd(1)), false); println(\"o\");",
+            "dD1n1\no\nend\n",
+        ),
+        (
+            "handed back on this path (B-2026-09-27-49)",
+            "let o = f(G.A(mkd(1)), true); println(f\"o{o.is_some()}\");",
+            "otrue\ndD1n1\nend\n",
+        ),
+        (
+            "a named local, dies inside (B-2026-09-27-49)",
+            "let g = G.A(mkd(1)); let o = f(g, false); println(\"o\");",
+            "dD1n1\no\nend\n",
+        ),
+        (
+            "an if-else tail (B-2026-09-27-49)",
+            "let o = fe(G.A(mkd(1)), false); println(\"o\");",
+            "dD1n1\no\nend\n",
+        ),
+        (
+            "wrapped in a struct (B-2026-09-27-49)",
+            "let o = fw(G.A(mkd(1)), false); println(\"o\");",
+            "dD1n1\no\nend\n",
+        ),
+        (
+            "returned bare (B-2026-09-27-49)",
+            "let o = fb(G.A(mkd(1)), false); println(\"o\");",
+            "dD1n1\no\nend\n",
+        ),
+        (
+            "a heapless Drop payload (B-2026-09-27-49)",
+            "let o = fh(Ge.A(E { id: 1 }), false); println(\"o\");",
+            "dE1\no\nend\n",
+        ),
+        (
+            "a match arm, both arms (B-2026-09-27-49)",
+            "let o = pick(G.A(mkd(1)), 0); println(\"o\"); let p = pick(G.A(mkd(2)), 1); println(\"p\");",
+            "dD1n1\no\ndD2n2\np\nend\n",
+        ),
+        (
+            "a generic callee (B-2026-09-27-49)",
+            "let o = gf(G.A(mkd(1)), false); println(\"o\"); let p = gf(G.A(mkd(2)), true); println(f\"p{p.is_some()}\");",
+            "dD1n1\no\nptrue\ndD2n2\nend\n",
+        ),
+        (
+            "a generic match arm (B-2026-09-27-49)",
+            "let o = gpick(G.A(mkd(1)), 0, G.B); println(\"o\"); let p = gpick(G.A(mkd(2)), 1, G.B); println(\"p\");",
+            "dD1n1\no\ndD2n2\np\nend\n",
+        ),
+        (
+            "a method and an associated fn (B-2026-09-27-49)",
+            "let k = K { k: 1 }; let o = k.m(G.A(mkd(1)), false); println(\"o\"); let p = K.a(G.A(mkd(2)), false); println(\"p\");",
+            "dD1n1\no\ndD2n2\np\nend\n",
+        ),
+        (
+            "in a loop (B-2026-09-27-49)",
+            "let mut i = 0; while i < 3 { let o = f(G.A(mkd(i)), i == 1); println(f\"o{i}\"); i = i + 1; }",
+            "dD0n0\no0\ndD1n1\no1\ndD2n2\no2\nend\n",
+        ),
+        (
+            "control: the payload-free variant (B-2026-09-27-49)",
+            "let o = f(G.B, false); println(\"o\");",
+            "o\nend\n",
+        ),
+        (
+            "control: a rebound param keeps today's route (B-2026-09-27-49)",
+            "let o = reb(G.A(mkd(1)), false); println(\"o\"); let p = reb(G.A(mkd(2)), true); println(f\"p{p.is_some()}\");",
+            "o\nptrue\ndD2n2\nend\n",
+        ),
+    ] {
+        let prog = format!("{H}fn main() {{\n    {body}\n    println(\"end\")\n}}\n");
+        let (interp_out, interp_errs, _, _) = karac::run_program_full_checked(&prog);
+        assert!(
+            interp_errs.is_empty(),
+            "[{label}] interp errored: {interp_errs:?}"
+        );
+        assert_eq!(interp_out.join(""), want, "[{label}] interpreter");
+        if let Some(aot) = run_program(&prog) {
+            assert_eq!(aot, want, "[{label}] AOT");
+        }
+    }
+}

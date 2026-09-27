@@ -4331,3 +4331,49 @@ fn main() {
         "asan_named_receiver_part_handed_back_runs_its_body_once",
     );
 }
+
+/// B-2026-09-27-49 — a by-value user-enum param handed back on some exits only
+/// runs its payload body once on the exit where it dies inside and is freed
+/// once on every exit: non-generic, match-arm and generic spellings.
+#[test]
+fn asan_enum_param_handed_back_on_some_paths_is_freed_once() {
+    assert_clean_asan_run_min_allocs(
+        r#"struct D { id: i64, name: String }
+impl Drop for D { fn drop(mut ref self) { println(f"dD{self.id} {self.name}") } }
+fn mkd(n: i64) -> D { return D { id: n, name: f"name-string-longer-than-sso-{n}" }; }
+enum G { A(D), B }
+fn f(x: G, c: bool) -> Option[G] { if c { return Some(x); } None }
+fn pick(x: G, k: i64) -> G { match k { 1 => x, _ => G.B } }
+fn gf[T](x: T, c: bool) -> Option[T] { if c { return Some(x); } None }
+fn main() {
+    let o1 = f(G.A(mkd(1)), false);
+    let g2 = G.A(mkd(2));
+    let o2 = f(g2, true);
+    println(f"o {o1.is_some()} {o2.is_some()}");
+    let p1 = pick(G.A(mkd(3)), 0);
+    let p2 = pick(G.A(mkd(4)), 1);
+    let q1 = gf(G.A(mkd(5)), false);
+    let q2 = gf(G.A(mkd(6)), true);
+    println(f"q {q1.is_some()} {q2.is_some()}");
+    match p2 { G.A(d) => println(f"p{d.id}"), G.B => println("pb") }
+    match p1 { G.A(d) => println(f"p{d.id}"), G.B => println("pb") }
+    println("end")
+}
+"#,
+        &[
+            "dD1 name-string-longer-than-sso-1",
+            "o false true",
+            "dD2 name-string-longer-than-sso-2",
+            "dD3 name-string-longer-than-sso-3",
+            "dD5 name-string-longer-than-sso-5",
+            "q false true",
+            "dD6 name-string-longer-than-sso-6",
+            "p4",
+            "dD4 name-string-longer-than-sso-4",
+            "pb",
+            "end",
+        ],
+        "asan_enum_param_handed_back_on_some_paths_is_freed_once",
+        20,
+    );
+}

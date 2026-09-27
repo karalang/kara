@@ -5901,6 +5901,38 @@ impl<'ctx> super::Codegen<'ctx> {
                                     .insert(param_name.clone());
                             }
                         }
+                        // B-2026-09-27-49 — the USER-enum arm, mono leg of
+                        // `compile_function`'s: a `T` resolved to an enum whose
+                        // live variant carries a `Drop` payload, returned on
+                        // some exits only, runs its payload BODIES under the
+                        // per-path flag on the exit where it died inside. Same
+                        // exclusions (own `Drop`, a rebound param).
+                        let user_enum = !owns_memory
+                            && !has_user_drop
+                            && struct_name != "Option"
+                            && struct_name != "Result"
+                            && self
+                                .type_decls
+                                .enum_layouts
+                                .get(struct_name.as_str())
+                                .is_some_and(|l| !l.is_shared)
+                            && crate::ast::param_rebind_aliases(func, &param_name).len() <= 1;
+                        if user_enum {
+                            if let Some(bodies) =
+                                self.emit_enum_payload_user_drop_bodies_fn(struct_name)
+                            {
+                                self.track_user_drop_var_with_fn(
+                                    "",
+                                    &param_name,
+                                    alloca,
+                                    bodies,
+                                    crate::codegen::state::UserDropKind::ContainerElemBodies,
+                                );
+                                self.payload_vars
+                                    .cond_handback_optres_params
+                                    .insert(param_name.clone());
+                            }
+                        }
                     }
                 }
             }

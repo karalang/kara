@@ -3830,6 +3830,57 @@ impl<'ctx> super::Codegen<'ctx> {
                             }
                         }
                     }
+                    // B-2026-09-27-49 — the USER-enum arm, the `Option` /
+                    // `Result` arm's sibling one type over. A by-value `G`
+                    // whose live variant carries a `Drop` payload, returned
+                    // (bare or wrapped) on some exits only: the caller stands
+                    // its payload bodies down on every path, as for the struct,
+                    // and nothing here ran them on the exit where it died
+                    // inside, so `if c { return Some(x); } None` printed no
+                    // body at `c = false` on every surface. BODIES ONLY under
+                    // the per-path flag, as above: the payload walker frees
+                    // nothing, and the memory channel is unchanged. An enum
+                    // with its own `Drop`, and a param the body rebinds (`let
+                    // y = x;`, whose hand-on this arm does not carry), are
+                    // left where they were, as the interpreter leaves them.
+                    if let TypeKind::Path(p) = &param.ty.kind {
+                        let en = p.segments.first().cloned().unwrap_or_default();
+                        let user_enum = p.segments.len() == 1
+                            && en != "Option"
+                            && en != "Result"
+                            && self
+                                .type_decls
+                                .enum_layouts
+                                .get(en.as_str())
+                                .is_some_and(|l| !l.is_shared)
+                            && !self
+                                .program_snapshot
+                                .as_deref()
+                                .is_some_and(|p| p.drop_method_keys.contains_key(en.as_str()))
+                            && self
+                                .program_snapshot
+                                .as_deref()
+                                .and_then(|p| {
+                                    crate::codegen::declarations::find_function_ast(p, &func.name)
+                                })
+                                .is_some_and(|ast| {
+                                    crate::ast::param_rebind_aliases(ast, &param_name).len() <= 1
+                                });
+                        if user_enum {
+                            if let Some(bodies) = self.emit_enum_payload_user_drop_bodies_fn(&en) {
+                                self.track_user_drop_var_with_fn(
+                                    "",
+                                    &param_name,
+                                    alloca,
+                                    bodies,
+                                    crate::codegen::state::UserDropKind::ContainerElemBodies,
+                                );
+                                self.payload_vars
+                                    .cond_handback_optres_params
+                                    .insert(param_name.clone());
+                            }
+                        }
+                    }
                 }
                 // B-2026-09-25-10 — the conditional-STORE twin of the array
                 // arm of the conditional-return registration above, outside

@@ -6726,6 +6726,19 @@ impl<'a> super::Interpreter<'a> {
                     self.moved_out_user_drop_bindings.insert(name);
                     continue;
                 }
+                // B-2026-09-27-49 — and a USER enum param adopted for the same
+                // reason (`cond_returned_param_drop_names`' user-enum arm): the
+                // bare arm that hands it back must disarm it, or `match k { 1
+                // => x, _ => G.B }` ran the payload body here AND at the
+                // caller's result owner. Adopted params only; a local keeps
+                // the enum-`Drop` route below.
+                Some(v @ Value::EnumVariant { .. })
+                    if self.cond_store_param_names.contains(&name)
+                        && self.field_value_carries_user_drop(&v) =>
+                {
+                    self.moved_out_user_drop_bindings.insert(name);
+                    continue;
+                }
                 // Enum-Drop parity — see `suppress_tail_expr_user_drop`.
                 Some(Value::EnumVariant { enum_name, .. }) => enum_name.clone(),
                 // B-2026-09-23-15 — an `Array` whose elements run a user
