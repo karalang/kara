@@ -92,8 +92,8 @@ distinguish "bugs flattening" from "we stopped writing them down."
 
 | class | total |
 |---|---|
-| run-vs-build | 512 |
-| miscompile | 493 |
+| run-vs-build | 513 |
+| miscompile | 494 |
 | leak | 443 |
 | double-free | 329 |
 | missing-feature | 209 |
@@ -110,8 +110,8 @@ distinguish "bugs flattening" from "we stopped writing them down."
 
 | surface | total |
 |---|---|
-| codegen | 2190 |
-| interp | 602 |
+| codegen | 2192 |
+| interp | 603 |
 | typecheck | 309 |
 | other | 111 |
 | ownership | 78 |
@@ -362,7 +362,6 @@ registered in the callee's prologue, not by-value struct params in general. | �
 | B-2026-09-27-54 | 2026-09-27 | interp+codegen | medium | A BOXED `Option[S]` TEMPORARY PASSED TO A BY-VALUE METHOD PARAM LEAKS ITS BOX ON EVERY COMPILED SURFACE AND RUNS ITS `Drop` BODY TWICE UNDER `--interp` -- `impl H { fn rb(self, a: Option[S]) -> i64 { println("in"); self.n } }` called as `h.rb(Some(mk(2)))` prints `in d2 d2` under `--interp`, `in d2` compiled, and leaks per call (valgrind -O0: `definitely lost: 32 bytes in 1 blocks`) | — |
 | B-2026-09-27-55 | 2026-09-27 | codegen | high | AN IMMUTABLE REBIND OF A BY-VALUE `Option` / `Result` PARAM WHOSE BOXED PAYLOAD IS A USER ENUM DOUBLE-FREES ON EVERY COMPILED SURFACE -- `fn rb(a: Option[K]) -> i64 { let c = a; println("in"); 5 }` over `enum K { A(W), B }` aborts `free(): double free detected in tcache 2` on jit, -O0 and -O2 where `--interp` prints `in d1 k5 in d2 end`; the same with `Result[K, i64]` | — |
 | B-2026-09-27-56 | 2026-09-27 | interp+codegen | medium | AN OWNED-`self` METHOD THAT HANDS A `Drop`-BEARING FIELD BACK INSIDE A TUPLE RUNS THAT FIELD'S BODY TWICE ON ALL FOUR SURFACES, memory-clean -- `let p = w.pair()` over `impl Ws { fn pair(self) -> (R, i64) { return (self.r, 5) } }` prints `dR10 x10 dR10 end` where `x10 dR10 end` is due; B-2026-09-25-28's receiver mask DELIBERATELY skips tuple returns until B-2026-09-17-2 lands | — |
-| B-2026-09-27-57 | 2026-09-27 | interp+codegen | medium | A PART OF A NAMED RECEIVER OR ARGUMENT WRAPPED IN A BARE `Some(..)` AND HANDED BACK RUNS ITS `Drop` BODY TWICE ON ALL FOUR SURFACES, while the qualified `Option.Some(..)` spelling is correct -- `fn opt(self) -> Option[R] { return Some(self.r) }` prints `dR11 x11 dR11 end`; `Option.Some(self.r)` prints `x11 dR11 end` | — |
 | B-2026-09-27-58 | 2026-09-27 | interp+codegen | medium | AN OWNED STRUCT PARAMETER USED AS THE NAMED RECEIVER OF AN OWNED-`self` METHOD THAT HANDS A FIELD BACK RUNS THAT FIELD'S BODY TWICE ON ALL FOUR SURFACES -- `fn via(w: Ws) -> R { let x = w.getr(); println("in"); x }` prints `in dR15 x15 dR15 end` where `in x15 dR15 end` is due | — |
 | B-2026-09-27-59 | 2026-09-27 | codegen | medium | A GENERIC STRUCT'S `Drop`-BEARING FIELD HANDED BACK BY VALUE RUNS ITS BODY TWICE ON EVERY COMPILED SURFACE WHILE `--interp` IS RIGHT, for the method, the concrete free function and the generic free function alike -- `struct G[T] { r: T, n: i64 }` with `fn getg(w: G[R]) -> R { return w.r }` prints `dR1 x1 dR1` compiled and `x1 dR1` interpreted | — |
 | B-2026-09-27-61 | 2026-09-27 | codegen | medium | AN ENUM RECEIVER'S ARM PASSING ITS PAYLOAD AND A BY-VALUE PARAM TO THE SAME CALL DEFERS THE PARAM'S `Drop` BODY TO THE CALLER'S STATEMENT END ON COMPILED BACKENDS -- `fn both(self, o: R) -> i64 { match self { E.A(r) => { return two(r, o); } .. } }` prints `dR6 dR60 x66 dE` under `--interp` and `dR6 x66 dR60 dE` on `karac build`; `one(o)` alone, `two(mk(7), o)`, and a struct receiver's `two(mk(6), o)` all agree, so it is the pairing of the moved-out PAYLOAD with the param in one arg list that moves `o`'s body | — |
@@ -374,6 +373,8 @@ registered in the callee's prologue, not by-value struct params in general. | �
 | B-2026-09-27-74 | 2026-09-27 | codegen | high | A BY-VALUE `Option` / `Result` PARAM WITH A BOXED USER-ENUM PAYLOAD, MATCHED BY A NESTED ARM WHOSE VALUE READS THE PAYLOAD, SKIPS THE PAYLOAD'S DROP BODIES AND RUNS ONE ON A ZEROED VALUE -- `fn rb(a: Option[K]) -> i64 { match a { Some(K.A(w)) => w.r.id, Some(K.B) => 30, None => 40 } }` over `enum K { A(W), B }` prints `k1 d0 k2 end` at -O0 and -O2 where `--interp` prints `k1 d1 d2 k2 end`, and valgrind finds the two heap `String`s of each `W` definitely lost; no rebind is involved | — |
 | B-2026-09-27-75 | 2026-09-27 | codegen | high | A WHOLE-PAYLOAD ARM `Some(k) => match k { .. }` ON A BY-VALUE `Option[K]` PARAM WITH A BOXED USER-ENUM PAYLOAD RUNS AN EXTRA `Drop` BODY ON A ZEROED VALUE, AND DOUBLE-FREES WHEN THE PARAM IS FIRST REBOUND -- `fn rb(a: Option[K]) -> i64 { match a { Some(k) => match k { K.A(w) => println(f"m{w.r.id}"), K.B => println("b") }, None => println("n") } 5 }` prints `m1 d1 d0 k5 m2 d2 d0 end` at -O0 and -O2 where `--interp` prints `m1 d1 k5 m2 d2 end`; with `let c = a; match c { .. }` it aborts `free(): double free` on both | — |
 | B-2026-09-27-69 | 2026-09-27 | interp+codegen | medium | A `for` LOOP ELEMENT HANDED BY VALUE TO A CALLEE THAT KEEPS IT RUNS ITS `Drop` BODY TWICE ON ALL FOUR SURFACES -- `for g in v { let o = f(g); }` over `fn f(x: D) -> D { x }` prints `dD1n1 o dD2n2 o dD1n1 dD2n2 end`, the result's body at each iteration AND the element's again when `v`'s buffer dies, where a consuming callee that keeps nothing prints each body once | — |
+| B-2026-09-27-67 | 2026-09-27 | interp+codegen | medium | A PART OF A NAMED RECEIVER OR ARGUMENT HANDED BACK ON ONLY SOME PATHS LOSES ITS `Drop` BODY ON THE PATH THAT DOES NOT HAND IT BACK, ON ALL FOUR SURFACES -- `impl Ws { fn pick(self, c: bool) -> Option[R] { if c { return Option.Some(self.r) } return None } }` with `w.pick(false)` prints `got` where `dR17 got` is due; `return self.r` and a free fn `pkf(w, false)` lose it the same way | — |
+| B-2026-09-27-68 | 2026-09-27 | codegen | medium | A NAMED STRUCT ARGUMENT WITH NO `Drop` OF ITS OWN, WRAPPED WHOLE IN AN `Option` AND HANDED BACK, RUNS ITS FIELDS' `Drop` BODIES TWICE ON EVERY COMPILED SURFACE -- `fn wrap(w: Ws) -> Option[Ws] { Some(w) }` with `let o = wrap(w)` prints `dR1 x1 dR1 end` on jit, -O0 and -O2 where `--interp` prints `x1 dR1 end` | — |
 
 ### Relocated
 
@@ -3121,6 +3122,7 @@ registered in the callee's prologue, not by-value struct params in general. | �
 | B-2026-09-27-37 | codegen | high | A BY-VALUE BOXED `Option[S]` PARAM REBOUND INTO A `let mut` LOCAL IS FREED BY BOTH FRAMES FOR A NAMED ARGUMENT -- `fn rb(a: Option[S]) -> i64 { let m… | e65e0f2 |
 | B-2026-09-27-49 | interp+codegen | medium | A USER-ENUM BY-VALUE PARAM A CALLEE WRAPS IN `Some` ON ONE PATH NEVER RUNS ITS PAYLOAD'S `Drop` BODY ON THE PATH WHERE IT DIES INSIDE, ON ALL FOUR SU… | 507ba3fb1 |
 | B-2026-09-27-52 | codegen | high | TWO IMMUTABLE-REBIND SPELLINGS OF A BY-VALUE BOXED STRUCT PARAM THAT B-2026-09-24-20 DID NOT REACH DOUBLE-FREE ON EVERY COMPILED SURFACE -- a CHAINED… | 5accd514c |
+| B-2026-09-27-57 | interp+codegen | medium | A PART OF A NAMED RECEIVER OR ARGUMENT WRAPPED IN A BARE `Some(..)` AND HANDED BACK RUNS ITS `Drop` BODY TWICE ON ALL FOUR SURFACES, while the qualif… | b88a2ccce |
 | B-2026-09-27-60 | codegen | medium | A `for` LOOP BINDING OVER A `Vec` OF A BOXED GENERIC ENUM, PASSED BY VALUE TO A CALLEE THAT MATCHES IT, RUNS THE PAYLOAD'S `Drop` BODY TWICE ON EVERY… | b3ab2eb44 |
 
 </details>
