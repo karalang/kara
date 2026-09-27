@@ -92,16 +92,16 @@ distinguish "bugs flattening" from "we stopped writing them down."
 
 | class | total |
 |---|---|
-| run-vs-build | 509 |
+| run-vs-build | 511 |
 | miscompile | 492 |
 | leak | 442 |
 | double-free | 328 |
 | missing-feature | 209 |
-| codegen-gap | 196 |
+| codegen-gap | 197 |
 | other | 153 |
 | diagnostics | 135 |
 | perf | 117 |
-| false-positive | 109 |
+| false-positive | 110 |
 | soundness | 97 |
 | crash | 97 |
 | use-after-free | 58 |
@@ -110,11 +110,11 @@ distinguish "bugs flattening" from "we stopped writing them down."
 
 | surface | total |
 |---|---|
-| codegen | 2182 |
-| interp | 600 |
+| codegen | 2185 |
+| interp | 601 |
 | typecheck | 309 |
 | other | 111 |
-| ownership | 77 |
+| ownership | 78 |
 | cli | 73 |
 | autopar | 56 |
 | parser | 49 |
@@ -130,7 +130,6 @@ _Generated from `bug-ledger.jsonl` by `scripts/bug-curve.py` (2026-05-20 → 202
 
 | id | date | surface | sev | title | tracker |
 |---|---|---|---|---|---|
-| B-2026-09-16-29 | 2026-09-16 | interp+codegen | low | A BARE-`self` ARM THAT PASSES ITS PAYLOAD ON BY VALUE STILL RUNS THE PAYLOAD BODY BEFORE THE SHELL'S -- `match self { E.A(r) => eat(r), .. }` prints `dR6 x6 dE` where the projection-only `r.id` spelling one line up prints `x1 dE dR1`, because B-2026-09-06-39's read-only walk counts a bare mention in ANY non-projection position as a take and so cannot tell `eat(r)` (caller-retains, safe) from `Some(r)` (a real move) | — |
 | B-2026-09-16-30 | 2026-09-16 | codegen | medium | A `shared enum` RECEIVER'S PAYLOAD `Drop` BODY RUNS UNDER `--interp` AND ON NO COMPILED BACKEND -- `Sh.A(mk(16))` over `shared enum Sh { A(R), B }` with `fn read(self) -> i64 { match self { Sh.A(r) => r.id, .. } }` prints `dR16 x16` interpreted and a bare `x16` on jit / `karac build` / `KARAC_AUTO_PAR=0 build`; a REAL A/B divergence, unlike the value-enum siblings around it | — |
 | B-2026-09-16-33 | 2026-09-16 | codegen+interp | low | A DISCARDED ARRAY RETURN'S ELEMENT `Drop` BODIES RUN ON NEITHER BACKEND -- `passthru([mk(30), mk(31)]);` over `fn passthru(x: Array[R, 2]) -> Array[R, 2]` prints `ok` and nothing else on all four surfaces, so TWO bodies are owed and zero run. It is the exact ARRAY twin of B-2026-09-09-21 (the tuple shape, fixed), and it has been tracked nowhere: B-2026-09-12-2 installed this arm's MEMORY walk and left bodies out deliberately -- because `--interp` ran none either, so adding one compiled-side alone would have created a run-vs-build divergence out of a leak fix -- and that row is CLOSED `fixed` for the leak, so the deferral had no open home | — |
 | B-2026-09-17-1 | 2026-09-17 | codegen+interp | medium | A DISCARDED `match` WHOSE ARM VALUE IS A TUPLE-RETURNING CALL RUNS ITS ELEMENT `Drop` BODY ON THE INTERPRETER AND NOWHERE ELSE -- `match n { 1 => f(mk(44)), _ => f(mk(45)) };` over `fn f(r: R) -> (R, i64)` prints `dR44` under `--interp` and nothing on `karac run` JIT, `-O0` build or default auto-par build. A REAL run-vs-build divergence rather than an agreed gap, and PRE-EXISTING: measured identically on `8377932~1`, the tree before B-2026-09-09-21's fix, with that row's own shape reading `ok` on all four there as the control proving the tree was pre-fix | — |
@@ -369,6 +368,10 @@ registered in the callee's prologue, not by-value struct params in general. | �
 | B-2026-09-27-58 | 2026-09-27 | interp+codegen | medium | AN OWNED STRUCT PARAMETER USED AS THE NAMED RECEIVER OF AN OWNED-`self` METHOD THAT HANDS A FIELD BACK RUNS THAT FIELD'S BODY TWICE ON ALL FOUR SURFACES -- `fn via(w: Ws) -> R { let x = w.getr(); println("in"); x }` prints `in dR15 x15 dR15 end` where `in x15 dR15 end` is due | — |
 | B-2026-09-27-59 | 2026-09-27 | codegen | medium | A GENERIC STRUCT'S `Drop`-BEARING FIELD HANDED BACK BY VALUE RUNS ITS BODY TWICE ON EVERY COMPILED SURFACE WHILE `--interp` IS RIGHT, for the method, the concrete free function and the generic free function alike -- `struct G[T] { r: T, n: i64 }` with `fn getg(w: G[R]) -> R { return w.r }` prints `dR1 x1 dR1` compiled and `x1 dR1` interpreted | — |
 | B-2026-09-27-60 | 2026-09-27 | codegen | medium | A `for` LOOP BINDING OVER A `Vec` OF A BOXED GENERIC ENUM, PASSED BY VALUE TO A CALLEE THAT MATCHES IT, RUNS THE PAYLOAD'S `Drop` BODY TWICE ON EVERY COMPILED SURFACE -- `for h in v { shows(h) }` over `Vec[Ho[S]]` prints `s7 dS7 n1 dS7 end` where `--interp` and the non-generic `Vec[MoS]` twin print `s7 n1 dS7 end`; a regression of B-2026-09-20-15 | — |
+| B-2026-09-27-61 | 2026-09-27 | codegen | medium | AN ENUM RECEIVER'S ARM PASSING ITS PAYLOAD AND A BY-VALUE PARAM TO THE SAME CALL DEFERS THE PARAM'S `Drop` BODY TO THE CALLER'S STATEMENT END ON COMPILED BACKENDS -- `fn both(self, o: R) -> i64 { match self { E.A(r) => { return two(r, o); } .. } }` prints `dR6 dR60 x66 dE` under `--interp` and `dR6 x66 dR60 dE` on `karac build`; `one(o)` alone, `two(mk(7), o)`, and a struct receiver's `two(mk(6), o)` all agree, so it is the pairing of the moved-out PAYLOAD with the param in one arg list that moves `o`'s body | — |
+| B-2026-09-27-62 | 2026-09-27 | codegen | low | A USER FUNCTION NAMED LIKE A C SYMBOL THE RUNTIME DECLARES (`free`, `malloc`, `exit`, `strlen`) FAILS `karac build` WHILE `--interp` RUNS IT -- `fn free(x: i64) -> i64 { return x + 1; }` reports `Binary op Add: left operand has non-comparable type PointerType` or `Global is external, but doesn't have external or weak linkage! ptr @free.1`; `memcpy` and `puts` happen to build. User fn symbols share the LLVM module's namespace with the runtime's C externs and are not mangled | — |
+| B-2026-09-27-63 | 2026-09-27 | ownership | low | REUSING A `shared enum` AFTER PASSING IT BY VALUE WARNS `value 's' moved here, used again here`, WHERE THE SAME REUSE OF A `shared struct` IS SILENT -- `rd(e); rd(e)` over `fn rd(s: Sh) -> i64`, `e.read(); e.read()` over an owned-`self` method, and `match s {..}` twice all warn for `shared enum Sh`, while `let b = a; a.id`, `c.get(); c.get()` and `sg(d); sg(d)` on a `shared struct` do not; both kinds are reference-counted handles (design.md § Guaranteed, `shared struct` / `shared enum`: reference semantics), and every backend runs these programs correctly | — |
+| B-2026-09-27-64 | 2026-09-27 | codegen+interp | medium | A FRESH `shared enum` TEMP PASSED BY VALUE RUNS ITS PAYLOAD'S `Drop` BODY BEFORE THE ENCLOSING STATEMENT USES THE RESULT UNDER `--interp`, AND AFTER IT ON EVERY COMPILED BACKEND -- `println(f"x{rd(Sh.A(mk(28)))}")` over `fn rd(s: Sh) -> i64` prints `dR28 x28` interpreted and `x28 dR28` on jit / `-O0` / `-O2` / auto-par=0; the owned-`self` receiver spellings (`Sh.A(mk(29)).read()`, and `.none()` on a callee that never matches) split the same way. A NAMED local agrees on all five surfaces, and so does a plain (non-shared) struct temp arg, which reads `dR x` everywhere | — |
 
 ### Relocated
 
@@ -2874,6 +2877,7 @@ registered in the callee's prologue, not by-value struct params in general. | �
 | B-2026-09-16-26 | interp+codegen | low | A DEPTH-1 FIELD MOVE-OUT WHOSE FIELD IS THEN BOUND BY A DESTRUCTURE RUNS THAT FIELD'S `Drop` BODY TWICE -- `let x = o.k; let Outer { h, k } = o;` pri… | 73208d58a |
 | B-2026-09-16-27 | codegen | medium | A NESTED STRUCT MOVED INTO A VARIANT CONSTRUCTOR ABORTS WITH A DOUBLE FREE -- `Wn.Full(o)` over `struct Out { i: In }` / `struct In { s: String }` di… | 602a4bd |
 | B-2026-09-16-28 | codegen | low | A GENERIC STRUCT PAYLOAD OF A BY-VALUE ENUM PARAM (`enum Wb { Full(Box2[String]) }`) LEAKED 24 B PER CALL, AND DOUBLE-FREED WHEN PUSHED OR INSERTED -… | cb364662e |
+| B-2026-09-16-29 | interp+codegen | low | A BARE-`self` ARM THAT PASSES ITS PAYLOAD ON BY VALUE STILL RUNS THE PAYLOAD BODY BEFORE THE SHELL'S -- `match self { E.A(r) => eat(r), . | c5e9dfd2b |
 | B-2026-09-16-31 | codegen | high | A GENERIC ENUM WITH A GENERIC `impl[T] Drop` SEGFAULTS AT RUNTIME ON EVERY COMPILED BACKEND WHEN AN OWNED-`self` METHOD MATCHES ON IT -- `enum G[T] {… | 3fb151a |
 | B-2026-09-16-32 | codegen | medium | `String.substring`'s heap result is NOT NUL-terminated while every other String producer's is, which is the exact shape a past printf overread was fi… | d284a009d |
 | B-2026-09-16-34 | codegen | medium | A NON-SHARED STRUCT CARRYING A BARE `shared` FIELD, AS AN INLINE ENUM PAYLOAD PASSED BY VALUE, READS AND WRITES ITS REFCOUNT BLOCK AFTER FREE -- `fn… | 4320e25 |
