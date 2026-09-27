@@ -112,6 +112,11 @@ pub(crate) struct BorrowVars<'ctx> {
     /// copy-support); removed on shadow-rebind; cleared per-function alongside
     /// `for_loop_borrow_vars`.
     pub(crate) for_loop_owned_agg_vars: HashSet<String>,
+    /// B-2026-09-27-60 — the subset of `for_loop_owned_agg_vars` that
+    /// `mark_generic_enum_vec_loop_view` admitted: `for` bindings over a `Vec`
+    /// of a generic enum whose payload bodies the `Vec`'s element walk runs.
+    /// Read at a by-value call argument to pick the callee's view variant.
+    pub(crate) generic_enum_loop_views: HashSet<String>,
     /// B-2026-09-26-12 — `for`-loop bindings whose element is a user enum
     /// with a heap-BOXED payload (`Ho[String]`), with that element type.
     /// Filled by `register_for_loop_bindings` and drained by

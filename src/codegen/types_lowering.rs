@@ -2932,6 +2932,16 @@ impl<'ctx> super::Codegen<'ctx> {
             self.borrow_vars
                 .for_loop_owned_agg_vars
                 .insert(name.to_string());
+            // B-2026-09-27-60 — a VIEW for a by-value callee only when the
+            // source's element walk is actually armed: that walk is the owner
+            // the callee's view variant defers to. A `Vec` reached through a
+            // struct field (`for h in c.v`) has none, and picking the variant
+            // there left the body with no owner at all.
+            if self.has_armed_user_drop(source_var) {
+                self.borrow_vars
+                    .generic_enum_loop_views
+                    .insert(name.to_string());
+            }
         }
     }
 

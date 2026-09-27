@@ -8398,3 +8398,47 @@ fn main() {
         "asan_generic_enum_payload_body_runs_as_vec_element_and_struct_field",
     );
 }
+
+/// B-2026-09-27-60 -- a `for` loop's view of a `Vec[Ho[S]]` element (a boxed
+/// generic-enum payload with a user `Drop`) handed BY VALUE to a callee runs
+/// the payload body once, at the `Vec`'s death, as `--interp` and the
+/// non-generic `Vec[MoS]` twin do. The callee runs a boxed param's bodies
+/// itself, so the call picks a view variant without that registration: the
+/// direct callee, a helper that forwards the view (`outer`), a view beside an
+/// owned argument (`two`), and the ordinary owned spellings, which still run
+/// the body in the callee.
+#[test]
+fn asan_generic_enum_loop_view_passed_by_value_runs_its_body_once() {
+    assert_clean_asan_run(
+        r#"struct S { id: i64, s: String }
+impl Drop for S { fn drop(mut ref self) { println(f"dS{self.id}") } }
+enum Ho[T] { Full(T), Empty }
+fn mks(i: i64) -> S { return S { id: i, s: "ab".to_string() + "cd" } }
+fn shows(h: Ho[S]) { match h { Ho.Full(r) => println(f"s{r.id}"), Ho.Empty => println("e") } }
+fn outer(h: Ho[S]) { println("o"); shows(h) }
+fn two(a: Ho[S], b: Ho[S]) { shows(a); println("m"); shows(b) }
+fn main() {
+    let mut v: Vec[Ho[S]] = Vec.new();
+    v.push(Ho.Full(mks(1)));
+    v.push(Ho.Empty);
+    v.push(Ho.Full(mks(2)));
+    for h in v { shows(h) }
+    println(f"n{v.len()}");
+    let mut w: Vec[Ho[S]] = Vec.new();
+    w.push(Ho.Full(mks(3)));
+    for h in w { outer(h) }
+    println("a");
+    let g = Ho.Full(mks(4));
+    for h in w { two(h, g) }
+    println("b");
+    shows(Ho.Full(mks(5)));
+    println("end")
+}
+"#,
+        &[
+            "s1", "e", "s2", "n3", "dS1", "dS2", "o", "s3", "a", "s3", "m", "s4", "dS4", "dS3",
+            "b", "s5", "dS5", "end",
+        ],
+        "asan_generic_enum_loop_view_passed_by_value_runs_its_body_once",
+    );
+}

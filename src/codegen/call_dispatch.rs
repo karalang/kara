@@ -33,6 +33,139 @@ use super::helpers::{expr_as_type_expr_codegen, match_with_provider_call, match_
 use super::state::{LayoutId, UserDropKind};
 
 impl<'ctx> super::Codegen<'ctx> {
+    /// B-2026-09-27-60 — the VIEW VARIANT of a direct call's callee, when an
+    /// argument is a `for` loop's view of a `Vec` element handed by value to a
+    /// param whose boxed generic-enum payload runs a user `Drop` body.
+    ///
+    /// The callee runs that param's payload bodies itself, because a boxed
+    /// payload moves into the callee with its box (B-2026-09-25-19). A loop
+    /// binding is not an owner, though: `for h in v` borrows (design.md
+    /// § `for`), the loop hands the callee a private copy of the box, and the
+    /// element's body belongs to the `Vec`, whose element walk runs it at the
+    /// `Vec`'s death. So `for h in v { shows(h) }` over `Vec[Ho[S]]` ran the
+    /// body twice on every compiled surface, where `--interp` and the
+    /// non-generic `Vec[MoS]` twin run it once. The variant is the same
+    /// function without that one registration. The memory is untouched: the
+    /// callee still frees the copy's box.
+    ///
+    /// Inside a variant, forwarding a view param by value to another such
+    /// callee picks THAT callee's variant, so the answer survives a helper
+    /// between the loop and the consumer.
+    ///
+    /// Fail-closed: a labelled argument, an arity mismatch, a generic or
+    /// unregistered callee, or a callee symbol that is not the function's own
+    /// name (a layout monomorph, a `#[link_name]` import) keeps the original.
+    /// Compile every queued view variant (see [`Self::view_variant_for_call`]),
+    /// to a fixpoint: a variant that forwards a view param mints its callee's.
+    pub(crate) fn drain_view_variants(&mut self) -> Result<(), String> {
+        while let Some((orig, vname, params)) = self.fn_sig.pending_view_variants.pop() {
+            let (Some(f), Some(vfn)) = (
+                self.fn_sig.fn_asts.get(&orig).cloned(),
+                self.module.get_function(&vname),
+            ) else {
+                continue;
+            };
+            self.fn_ctx.view_fn = Some(vfn);
+            self.fn_ctx.view_params = params.into_iter().collect();
+            let r = self.compile_function(&f);
+            self.fn_ctx.view_fn = None;
+            self.fn_ctx.view_params.clear();
+            r?;
+        }
+        Ok(())
+    }
+
+    pub(super) fn view_variant_for_call(
+        &mut self,
+        name: &str,
+        lookup_name: &str,
+        func: FunctionValue<'ctx>,
+        args: &[CallArg],
+    ) -> Option<FunctionValue<'ctx>> {
+        if name != lookup_name || args.iter().any(|a| a.label.is_some()) {
+            return None;
+        }
+        let callee = self.fn_sig.fn_asts.get(name)?;
+        if callee.generic_params.is_some() || callee.params.len() != args.len() {
+            return None;
+        }
+        let callee = callee.clone();
+        let in_variant = self.current_fn.is_some() && self.fn_ctx.view_fn == self.current_fn;
+        let refs = self
+            .fn_sig
+            .fn_param_ref
+            .get(name)
+            .cloned()
+            .unwrap_or_default();
+        let mut views: Vec<(usize, String)> = Vec::new();
+        for (i, (arg, param)) in args.iter().zip(callee.params.iter()).enumerate() {
+            let ExprKind::Identifier(src) = &arg.value.kind else {
+                continue;
+            };
+            let src_is_view = (self
+                .borrow_vars
+                .for_loop_owned_agg_vars
+                .contains(src.as_str())
+                && self
+                    .borrow_vars
+                    .generic_enum_loop_views
+                    .contains(src.as_str()))
+                || (in_variant && self.fn_ctx.view_params.contains(src.as_str()));
+            if !src_is_view || refs.get(i).copied().unwrap_or(true) {
+                continue;
+            }
+            let PatternKind::Binding(pname) = &param.pattern.kind else {
+                continue;
+            };
+            if self.user_enum_boxed_payload_variants(&param.ty).is_empty()
+                || self
+                    .emit_generic_enum_payload_user_drop_bodies_fn(&param.ty)
+                    .is_none()
+            {
+                continue;
+            }
+            views.push((i, pname.clone()));
+        }
+        if views.is_empty() {
+            return None;
+        }
+        let tag = views
+            .iter()
+            .map(|(i, _)| i.to_string())
+            .collect::<Vec<_>>()
+            .join("_");
+        let vname = format!("{name}$view${tag}");
+        if let Some(existing) = self.module.get_function(&vname) {
+            return Some(existing);
+        }
+        let variant = self.module.add_function(
+            &vname,
+            func.get_type(),
+            Some(inkwell::module::Linkage::Internal),
+        );
+        // The call is emitted against the variant, so it carries the
+        // original's ABI attributes (`sret`, `byval`, `noalias`, ...) exactly.
+        use inkwell::attributes::AttributeLoc;
+        for a in func.attributes(AttributeLoc::Function) {
+            variant.add_attribute(AttributeLoc::Function, a);
+        }
+        for a in func.attributes(AttributeLoc::Return) {
+            variant.add_attribute(AttributeLoc::Return, a);
+        }
+        for p in 0..func.count_params() {
+            for a in func.attributes(AttributeLoc::Param(p)) {
+                variant.add_attribute(AttributeLoc::Param(p), a);
+            }
+        }
+        variant.set_call_conventions(func.get_call_conventions());
+        self.fn_sig.pending_view_variants.push((
+            name.to_string(),
+            vname,
+            views.into_iter().map(|(_, n)| n).collect(),
+        ));
+        Some(variant)
+    }
+
     // ── Call ──────────────────────────────────────────────────────
 
     /// Lower a `size_of[T]()` / `align_of[T]()` call to the matching
@@ -3169,6 +3302,9 @@ impl<'ctx> super::Codegen<'ctx> {
         let call = if let Some(slot) = self.conc.hot_swap_slots.get(&name).copied() {
             self.build_hot_swap_indirect_call(func, slot, &compiled_args)
         } else {
+            let func = self
+                .view_variant_for_call(&name, &lookup_name, func, args)
+                .unwrap_or(func);
             self.builder
                 .build_call(func, &compiled_args, "call")
                 .unwrap()

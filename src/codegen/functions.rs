@@ -1460,10 +1460,17 @@ impl<'ctx> super::Codegen<'ctx> {
         } else {
             func.name.as_str()
         };
-        let fn_val = self
-            .module
-            .get_function(llvm_name)
-            .ok_or_else(|| format!("Function '{}' not declared", llvm_name))?;
+        // B-2026-09-27-60 — a VIEW VARIANT compiles the same AST into the
+        // symbol its call site minted; every name-keyed table still answers
+        // for `func.name`, which is the point: the variant differs from the
+        // original in one registration and nowhere else.
+        let fn_val = match self.fn_ctx.view_fn {
+            Some(v) => v,
+            None => self
+                .module
+                .get_function(llvm_name)
+                .ok_or_else(|| format!("Function '{}' not declared", llvm_name))?,
+        };
 
         self.current_fn = Some(fn_val);
         self.fn_ctx.current_fn_name = func.name.clone();
@@ -1631,6 +1638,7 @@ impl<'ctx> super::Codegen<'ctx> {
         self.borrow_vars.for_loop_borrow_vars.clear();
         self.borrow_vars.borrow_accessor_let_payload.clear();
         self.borrow_vars.for_loop_owned_agg_vars.clear();
+        self.borrow_vars.generic_enum_loop_views.clear();
         self.borrow_vars.pending_for_loop_box_owners.clear();
         self.borrow_vars.for_loop_elem_struct_views.clear();
         self.borrow_vars.elem_borrow_roots.clear();
@@ -2841,10 +2849,17 @@ impl<'ctx> super::Codegen<'ctx> {
                     // `h dR14 dR14` on every compiled surface. A boxed payload
                     // is still the callee's, because the box moves with it and
                     // the caller's fallback stands down for it.
-                    if let Some(bodies) =
-                        (!self.user_enum_boxed_payload_variants(&mono_ty).is_empty())
-                            .then(|| self.emit_generic_enum_payload_user_drop_bodies_fn(&mono_ty))
-                            .flatten()
+                    //
+                    // B-2026-09-27-60 — except in a VIEW VARIANT, for a param
+                    // its call site passed as a `for` loop's view of a `Vec`
+                    // element: that element's bodies are the `Vec`'s, which runs
+                    // them at its own death.
+                    let is_view_param = self.fn_ctx.view_fn == Some(fn_val)
+                        && self.fn_ctx.view_params.contains(&param_name);
+                    if let Some(bodies) = (!is_view_param
+                        && !self.user_enum_boxed_payload_variants(&mono_ty).is_empty())
+                    .then(|| self.emit_generic_enum_payload_user_drop_bodies_fn(&mono_ty))
+                    .flatten()
                     {
                         self.track_user_drop_var_with_fn(
                             "",

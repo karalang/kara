@@ -6755,6 +6755,8 @@ impl<'ctx> Codegen<'ctx> {
                 current_fn_returns_ref: false,
                 current_fn_boxes_return: false,
                 self_arms_bind_views: false,
+                view_fn: None,
+                view_params: HashSet::new(),
                 current_fn_name: String::new(),
                 current_fn_caller_loc: None,
                 current_fn_arm64_return_coercion: None,
@@ -6777,6 +6779,7 @@ impl<'ctx> Codegen<'ctx> {
             },
             fn_sig: FnSig {
                 fn_asts: HashMap::new(),
+                pending_view_variants: Vec::new(),
                 fn_param_slice_elem: HashMap::new(),
                 fn_param_ref: HashMap::new(),
                 fn_param_mut_ref: HashMap::new(),
@@ -6919,6 +6922,7 @@ impl<'ctx> Codegen<'ctx> {
                 for_loop_borrow_vars: HashSet::new(),
                 borrow_accessor_let_payload: std::collections::HashMap::new(),
                 for_loop_owned_agg_vars: HashSet::new(),
+                generic_enum_loop_views: HashSet::new(),
                 pending_for_loop_box_owners: Vec::new(),
                 for_loop_elem_struct_views: HashSet::new(),
                 borrowed_agg_payload_struct_vars: HashSet::new(),
@@ -9079,6 +9083,11 @@ impl<'ctx> Codegen<'ctx> {
             }
         }
 
+        // B-2026-09-27-60 — the VIEW VARIANTS the bodies above minted at
+        // their call sites (`view_variant_for_call`). Drained to a fixpoint,
+        // because a variant that forwards a view param mints its callee's.
+        self.drain_view_variants()?;
+
         // Compile the baked `std.tracing` impl-method bodies whose
         // signatures were declared above. Mirrors the user impl-body
         // pass; the bodies use only general lowerings.
@@ -9114,6 +9123,9 @@ impl<'ctx> Codegen<'ctx> {
         if self.main_symbol_override.is_none() {
             self.emit_jit_template_section();
         }
+        // B-2026-09-27-60 — and again for any variant a later pass minted, so
+        // no call is left against a body-less internal symbol.
+        self.drain_view_variants()?;
         self.emit_llvm_used();
         if self.main_symbol_override.is_none() {
             self.emit_spawn_sites_metadata();

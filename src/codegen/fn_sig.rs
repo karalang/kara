@@ -25,6 +25,15 @@ pub(crate) struct FnSig<'ctx> {
     /// normal module pass; this registry feeds only the layout-specialized
     /// monomorphs.
     pub(crate) fn_asts: HashMap<String, Function>,
+    /// B-2026-09-27-60 — VIEW VARIANTS of non-generic functions, minted at a
+    /// call site that passes a `for` loop's view of a `Vec` element by value to
+    /// a param whose boxed generic-enum payload runs a user `Drop` body. The
+    /// original callee runs that body on the param (the boxed payload is the
+    /// callee's, B-2026-09-25-19), but a loop view's body belongs to the `Vec`
+    /// it came out of, so the view variant is the same function without that
+    /// one registration. Entries are `(callee name, variant symbol, view param
+    /// names)`, queued at the call and compiled after the user functions.
+    pub(crate) pending_view_variants: Vec<(String, String, Vec<String>)>,
     /// Function parameter ref-ness (function name → vec of is_ref per param).
     pub(crate) fn_param_ref: HashMap<String, Vec<bool>>,
     /// The `mut ref` / `mut Slice` subset of [`Self::fn_param_ref`] — a

@@ -128,6 +128,17 @@ pub(crate) struct FnCtx<'ctx> {
     /// SITE asks the same predicate of the callee's AST, so the two halves
     /// agree about who owns the payload's `Drop` body.
     pub(crate) self_arms_bind_views: bool,
+    /// B-2026-09-27-60 — when the function being compiled is a VIEW VARIANT
+    /// (see [`super::fn_sig::FnSig::pending_view_variants`]), its own
+    /// `FunctionValue` and the names of the params it receives as views. The
+    /// variant does not register the boxed generic-enum payload's bodies walker
+    /// for those params, and a call inside it that forwards one of them by
+    /// value calls the callee's view variant in turn. Keyed on the
+    /// `FunctionValue` rather than read bare, because a monomorph compiled
+    /// INLINE inside the variant is a different function and must not see the
+    /// variant's param names as its own.
+    pub(crate) view_fn: Option<inkwell::values::FunctionValue<'ctx>>,
+    pub(crate) view_params: HashSet<String>,
     pub(crate) current_fn_name: String,
     /// `#[track_caller]` slice 4/5: when the function currently being compiled
     /// is `#[track_caller]`, its three hidden trailing params — the received

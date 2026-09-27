@@ -10076,3 +10076,48 @@ fn main() {
     };
     assert_eq!(out, "n3\ndR7\ndR8\nn2\ndW7\nn2\ndS7\nr7\ne\ndR7\nafter\ns7\ne\ndS7\nafter\nr7\ndR7\nafter\ndR7\nk\ndR7\nafter\nx7\ndS7\nafter\ndR7\ndR9\nset\ndS7\ndS9\nset\ndS7\np\ndR7\nlit\ndR5\nh\nr5\ndR5\nm\nr5\ndR5\nm\ndR5\nh\neat\ndR5\nafter\ndR5\nk\nh\ndR5\nv\ndS7\nk\nn1\ndS7\nn11\ndS7\ndS7\nn11\ndR7\ndR7\nr7\nn1\ndR7\nr7\nn1\ndR7\nend\n", "got:\n{out}");
 }
+
+/// B-2026-09-27-60 -- a `for` loop's view of a `Vec[Ho[S]]` element (a boxed
+/// generic-enum payload with a user `Drop`) handed BY VALUE to a callee runs
+/// the payload body once, at the `Vec`'s death, as `--interp` and the
+/// non-generic `Vec[MoS]` twin do. The callee runs a boxed param's bodies
+/// itself, so the call picks a view variant without that registration: the
+/// direct callee, a helper that forwards the view (`outer`), a view beside an
+/// owned argument (`two`), and the ordinary owned spellings, which still run
+/// the body in the callee.
+#[test]
+fn e2e_generic_enum_loop_view_passed_by_value_runs_its_body_once() {
+    let Some(out) = run_program(
+        r#"struct S { id: i64, s: String }
+impl Drop for S { fn drop(mut ref self) { println(f"dS{self.id}") } }
+enum Ho[T] { Full(T), Empty }
+fn mks(i: i64) -> S { return S { id: i, s: "ab".to_string() + "cd" } }
+fn shows(h: Ho[S]) { match h { Ho.Full(r) => println(f"s{r.id}"), Ho.Empty => println("e") } }
+fn outer(h: Ho[S]) { println("o"); shows(h) }
+fn two(a: Ho[S], b: Ho[S]) { shows(a); println("m"); shows(b) }
+fn main() {
+    let mut v: Vec[Ho[S]] = Vec.new();
+    v.push(Ho.Full(mks(1)));
+    v.push(Ho.Empty);
+    v.push(Ho.Full(mks(2)));
+    for h in v { shows(h) }
+    println(f"n{v.len()}");
+    let mut w: Vec[Ho[S]] = Vec.new();
+    w.push(Ho.Full(mks(3)));
+    for h in w { outer(h) }
+    println("a");
+    let g = Ho.Full(mks(4));
+    for h in w { two(h, g) }
+    println("b");
+    shows(Ho.Full(mks(5)));
+    println("end")
+}
+"#,
+    ) else {
+        return;
+    };
+    assert_eq!(
+        out, "s1\ne\ns2\nn3\ndS1\ndS2\no\ns3\na\ns3\nm\ns4\ndS4\ndS3\nb\ns5\ndS5\nend\n",
+        "got:\n{out}"
+    );
+}
