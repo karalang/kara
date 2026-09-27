@@ -1,11 +1,62 @@
 # Spike: Small-String Optimization (SSO) for the runtime `String`
 
+**Status (2026-09-27):** ⏸ **DECIDED: `KARAC_SSO` STAYS OFF** — see
+[THE DECISION — TAKEN](#the-decision--taken-2026-09-27) directly below, which
+supersedes every "should we flip" passage further down.
+
 **Status (2026-09-15):** 🟡 Slices 1–3 landed; **`KARAC_SSO` still defaults to
 OFF, and two open rows block the flip.** Slice 1 = layout + accessors + free-gate
 hardening (its follow-up claimed every String buffer-free/realloc gate was
 inline-safe; **Slice 2 measured that claim FALSE** — 16 gates were still unsigned
 `UGT`, 14 fixed in `3833ff8`). Slice 2 = inline construction. Slice 3 = the FFI
 boundary and the read path.
+
+## THE DECISION — TAKEN (2026-09-27)
+
+**`KARAC_SSO` stays OFF by default.** Decided by Gowtham on 2026-09-27 on the
+recommendation in Thread C, which re-checked the brief below against `main`
+that day. This section is now the tracker for B-2026-09-14-28, relocated here
+rather than left open, because nothing on that row is actionable until one of
+the triggers below fires.
+
+**The two facts that decide it:**
+
+1. **An unexplained WRONG-OUTPUT fault is open on the SSO lane,
+   B-2026-09-22-3.** `asan_slice_mutators_and_views_on_heap_elements` fails
+   intermittently under `KARAC_SSO=1` — 4 reds in 7 consecutive `main` CI runs,
+   one of them a fail and a pass on a byte-identical test binary — and the
+   failure is an output mismatch (`126` where `2` is due), which no sanitizer
+   column can see. Nobody has found the cause. Flipping the default would put
+   that fault in every program. **This also REFUTES the "correct on every
+   surface probed" wording further down this file** (the option list in the
+   decision brief, and the Slice 2 summary); both were true when written, and
+   are annotated in place.
+2. **The read-path cost is structural.** Every read that rebuilds a view over a
+   String it already holds pays for the inline/heap tag check — `vecread`
+   +85% at `0382953`, `vertical` +52% in the corpus sweep — while the same reads
+   through a view built ONCE measure +0.0% (`vechoist`). Four candidate
+   mechanisms were measured and refuted on B-2026-09-14-28; what remains is the
+   view construction itself, which only codegen work removes.
+
+**What leaving it off costs:** the construction wins — the self-hosted lexer's
+−19% (`lexer` rail) and every construction-shaped workload. The SSO code stays
+in the tree behind the flag, with its own non-required CI job
+(`memory-sanitizer-sso`, `scripts/asan-sso-leg.sh`).
+
+**RE-OPEN TRIGGERS — file a FRESH row citing B-2026-09-14-28 when BOTH hold;
+do not reopen it:**
+
+- **B-2026-09-22-3 is root-caused and fixed**, and the `memory-sanitizer-sso`
+  job then stays green across a long run of consecutive `main` commits (it is
+  intermittent, so one green run is not evidence).
+- **Codegen builds each String view once per immutable borrow** instead of on
+  every read — option (c) below: view CSE across the borrow, or loop
+  versioning on an all-heap guard — and `vertical`, `vecread` and the corpus
+  sweep are re-measured **on a quiet host**, not a cloud container (three
+  corpus katas did not converge there).
+
+Until both hold, do not flip on the strength of the rail table (see the
+warning under "The three options").
 
 ### WHERE THIS STANDS — read this before the narrative below
 
@@ -242,7 +293,10 @@ three did not converge on a cloud container and need a quiet host.
 
 - **(a) Leave `KARAC_SSO` OFF.** Banks nothing, risks nothing. The flag works,
   is correct on every surface probed, and is pinned by
-  `test_sso_de_inline_rides_the_string_growth_test`.
+  `test_sso_de_inline_rides_the_string_growth_test`. *[2026-09-27: "correct on
+  every surface probed" no longer holds — B-2026-09-22-3 is an open,
+  intermittent wrong-output fault under `KARAC_SSO=1`. This option was TAKEN;
+  see THE DECISION — TAKEN at the top of this file.]*
 - **(b) Flip it ON.** Wins the lexer and every construction-shaped workload;
   regresses read-bound programs by up to ~50%. Defensible only if the corpus is
   believed unrepresentative of real Kāra code.
@@ -264,10 +318,13 @@ sat in reads.
 - **B-2026-09-16-20** — `karac_string_try_inline_into` is now dead ABI surface:
   no compiler caller since `9d3ceb9`, still exported.
 - This document is the tracker for the DECISION itself. If it is ever taken,
-  record it here and close Task #5 against this section.
+  record it here and close Task #5 against this section. *[2026-09-27: taken —
+  recorded in THE DECISION — TAKEN at the top of this file, which is now
+  B-2026-09-14-28's tracker.]*
 
 **Slice 2 inline construction is LIVE behind `KARAC_SSO=1`, default OFF.** It
-works and it is correct on every surface probed. Both construction sites are
+works and it is correct on every surface probed. *[2026-09-27: no longer true —
+see B-2026-09-22-3 and THE DECISION — TAKEN at the top of this file.]* Both construction sites are
 inline — `s[a..b]` and `String.substring`.
 
 **THE MOTIVATING WORKLOAD NOW WINS 14.8%, AND THE FIX IS LANDED. 2026-09-12.**
