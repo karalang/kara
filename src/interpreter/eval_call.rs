@@ -5609,13 +5609,26 @@ impl<'a> super::Interpreter<'a> {
             return;
         }
         if generic {
-            // A struct leaf only, as codegen gates it: an enum leaf keeps
-            // today's route on both backends.
-            let struct_leaf = self
-                .freshtemp_drop_projection_arg_type_name(value)
+            // A struct leaf, or (B-2026-09-27-18) an enum leaf the callee
+            // keeps on every path, as codegen gates it; the per-path clause
+            // stays struct-only on both backends.
+            let leaf = self.freshtemp_drop_projection_arg_type_name(value);
+            let struct_leaf = leaf
+                .as_ref()
                 .is_some_and(|n| self.typecheck_result.struct_info.contains_key(n.as_str()));
-            if struct_leaf
-                && self.generic_callee_keeps_arg_on_every_path(callee_name, method_owner, i)
+            let enum_leaf = leaf
+                .as_ref()
+                .is_some_and(|n| self.typecheck_result.enum_info.contains_key(n.as_str()));
+            let every = (struct_leaf || enum_leaf)
+                && self.generic_callee_keeps_arg_on_every_path(callee_name, method_owner, i);
+            if every
+                || (struct_leaf
+                    && self.generic_callee_owns_projection_body_per_path(
+                        callee_name,
+                        method_owner,
+                        i,
+                        value,
+                    ))
             {
                 self.consume_freshtemp_field_move(value);
             }
@@ -5654,6 +5667,65 @@ impl<'a> super::Interpreter<'a> {
                     || crate::ast::fn_always_moves_param_into_outliving_place(f, i)
                     || crate::ast::fn_moves_param_into_local_container(f, i)
             })
+    }
+
+    /// B-2026-09-27-18 — codegen's `mono_callee_owns_projection_body_per_path`:
+    /// a generic callee that returns or stores the argument on only SOME paths
+    /// runs its body itself on the others, for a non-`shared` struct leaf with
+    /// a user `Drop` that carries no `shared` field (codegen forwards such a
+    /// leaf rather than copying it, and declines it).
+    fn generic_callee_owns_projection_body_per_path(
+        &self,
+        callee_name: &str,
+        method_owner: Option<CalleeOwner<'_>>,
+        i: usize,
+        value: &Expr,
+    ) -> bool {
+        let Some(tn) = self.freshtemp_drop_projection_arg_type_name(value) else {
+            return false;
+        };
+        let program = self.program;
+        if !program.drop_method_keys.contains_key(tn.as_str())
+            || self.struct_carries_shared_field(&tn, &mut Vec::new())
+        {
+            return false;
+        }
+        self.callee_fn_for_ownership_guard_of(callee_name, method_owner)
+            .is_some_and(|f| {
+                f.generic_params.is_some()
+                    && ((crate::ast::fn_conditionally_returns_param_bare(Some(program), f, i)
+                        && !crate::ast::fn_moves_param_into_outliving_place(f, i))
+                        || crate::ast::fn_conditionally_stores_param(f, i))
+            })
+    }
+
+    /// Does struct `name` hold a `shared` value anywhere in its fields?
+    fn struct_carries_shared_field(&self, name: &str, seen: &mut Vec<String>) -> bool {
+        if seen.iter().any(|s| s == name) {
+            return false;
+        }
+        let Some(info) = self.typecheck_result.struct_info.get(name) else {
+            return false;
+        };
+        seen.push(name.to_string());
+        let out = info.fields.iter().any(|(_, ty, _)| match ty {
+            crate::typechecker::Type::Shared(_) => true,
+            crate::typechecker::Type::Named { name: n, .. } => {
+                self.typecheck_result
+                    .struct_info
+                    .get(n.as_str())
+                    .is_some_and(|i| i.is_shared)
+                    || self
+                        .typecheck_result
+                        .enum_info
+                        .get(n.as_str())
+                        .is_some_and(|i| i.is_shared)
+                    || self.struct_carries_shared_field(n, seen)
+            }
+            _ => false,
+        });
+        seen.pop();
+        out
     }
 
     /// B-2026-09-26-47 — interpreter twin of codegen's

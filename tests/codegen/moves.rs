@@ -8661,3 +8661,121 @@ fn main() {
         assert_eq!(aot, want, "AOT");
     }
 }
+
+/// B-2026-09-27-18 — the two shapes B-2026-09-26-46's fix declined. A generic
+/// callee that keeps a fresh temp's `Drop` field on only SOME paths
+/// (`gmaybe(mkw(7).r, c)`, a conditional store) never ran the siblings'
+/// bodies on either path, and an ENUM leaf (`gid(mkv(1).g)`) lost them
+/// wherever it was kept; the non-generic `keepg(mkv(1).g)` ran them but leaked
+/// the payload's 3 B at `-O0`.
+#[test]
+fn e2e_freshtemp_field_kept_on_some_paths_or_as_an_enum_runs_every_body_once() {
+    const H: &str = r#"struct D { id: i64, name: String }
+impl Drop for D { fn drop(mut ref self) { println(f"dD{self.id}{self.name}") } }
+fn mkd(n: i64) -> D { return D { id: n, name: f"n{n}" }; }
+struct W { r: D, s: D, b: i64 }
+fn mkw(n: i64) -> W { return W { r: mkd(n), s: mkd(n + 100), b: n }; }
+fn keep(d: D) -> D { d }
+fn eat(d: D) -> i64 { d.id }
+fn gid[T](x: T) -> T { x }
+fn gst[T](v: mut ref Vec[T], x: T) { v.push(x); }
+fn st(v: mut ref Vec[D], x: D) { v.push(x); }
+struct H { k: i64 }
+impl H { fn put(self, v: mut ref Vec[D], x: D) { v.push(x); } fn aput(v: mut ref Vec[D], x: D) { v.push(x); } fn hold(mut ref self, x: D) -> D { x } }
+struct E { id: i64 }
+impl Drop for E { fn drop(mut ref self) { println(f"dE{self.id}") } }
+shared struct Sh { v: i64 }
+struct F { id: i64, h: Sh }
+impl Drop for F { fn drop(mut ref self) { println(f"dF{self.id}") } }
+enum G { A(D), B }
+struct V { e: E, f: F, g: G, d: D }
+fn mkv(n: i64) -> V { V { e: E { id: n }, f: F { id: n + 10, h: Sh { v: 1 } }, g: G.A(mkd(n + 20)), d: mkd(n + 30) } }
+fn keepe(x: E) -> E { x }
+fn keepf(x: F) -> F { x }
+fn keepg(x: G) -> G { x }
+fn maybe(x: D, c: bool) -> Option[D] { if c { return Some(x); } None }
+fn via(x: D) -> D { keep(x) }
+struct X { w: W, t: D }
+fn mkx(n: i64) -> X { X { w: mkw(n), t: mkd(n + 300) } }
+fn stf(v: mut ref Vec[F], x: F) { v.push(x); }
+struct Hf { k: i64 }
+impl Hf { fn put(self, v: mut ref Vec[F], x: F) { v.push(x); } fn hold(mut ref self, x: F) -> F { x } }
+fn gn[T](x: T) -> i64 { 1 }
+fn gw[T](x: T) -> i64 { gn(x) }
+fn gw2[T](x: T) -> i64 { gw(x) + 1 }
+fn gwk[T](x: T) -> T { gid(x) }
+fn gmaybe[T](x: T, c: bool) -> Option[T] { if c { return Some(x); } None }
+fn gcs[T](v: mut ref Vec[T], x: T, c: bool) { if c { v.push(x); } }
+fn gl[T](v: mut ref Vec[T], x: T) -> i64 { gcs(v, x, true); 1 }
+fn gpair[T](a: T, b: T) -> T { a }
+impl H { fn gkeep[T](ref self, x: T) -> T { x } }
+"#;
+    for (label, body, want) in [
+        (
+            "kept on the taken path of a generic fn (B-2026-09-27-18)",
+            "let o = gmaybe(mkw(7).r, true); println(\"o\");",
+            "dD107n107\ndD7n7\no\nend\n",
+        ),
+        (
+            "dropped on the untaken path of a generic fn (B-2026-09-27-18)",
+            "let o = gmaybe(mkw(7).r, false); println(\"o\");",
+            "dD107n107\ndD7n7\no\nend\n",
+        ),
+        (
+            "stored on the taken path of a generic fn (B-2026-09-27-18)",
+            "let mut v: Vec[D] = Vec.new(); gcs(mut v, mkw(7).r, true); println(f\"l{v.len()}\");",
+            "dD107n107\nl1\ndD7n7\nend\n",
+        ),
+        (
+            "not stored on the untaken path (B-2026-09-27-18)",
+            "let mut v: Vec[D] = Vec.new(); gcs(mut v, mkw(7).r, false); println(f\"l{v.len()}\");",
+            "dD107n107\ndD7n7\nl0\nend\n",
+        ),
+        (
+            "a heapless Drop leaf kept on some paths (B-2026-09-27-18)",
+            "let o = gmaybe(mkv(1).e, true); println(\"o\");",
+            "dD31n31\ndD21n21\ndF11\ndE1\no\nend\n",
+        ),
+        (
+            "a heapless Drop leaf dropped on some paths (B-2026-09-27-18)",
+            "let o = gmaybe(mkv(1).e, false); println(\"o\");",
+            "dD31n31\ndD21n21\ndF11\ndE1\no\nend\n",
+        ),
+        (
+            "kept on some paths in a loop (B-2026-09-27-18)",
+            "let mut i = 0; while i < 3 { let o = gmaybe(mkw(i).r, i == 1); println(f\"o{i}\"); i = i + 1; }",
+            "dD100n100\ndD0n0\no0\ndD101n101\ndD1n1\no1\ndD102n102\ndD2n2\no2\nend\n",
+        ),
+        (
+            "an enum leaf kept by a generic identity (B-2026-09-27-18)",
+            "let k = gid(mkv(1).g); println(\"k\");",
+            "dD31n31\ndF11\ndE1\ndD21n21\nk\nend\n",
+        ),
+        (
+            "an enum leaf stored by a generic fn (B-2026-09-27-18)",
+            "let mut v: Vec[G] = Vec.new(); gst(mut v, mkv(1).g); println(f\"l{v.len()}\");",
+            "dD31n31\ndF11\ndE1\nl1\ndD21n21\nend\n",
+        ),
+        (
+            "an enum leaf kept by a non-generic fn (B-2026-09-27-18)",
+            "let k = keepg(mkv(1).g); println(\"k\");",
+            "dD31n31\ndF11\ndE1\ndD21n21\nk\nend\n",
+        ),
+        (
+            "control: non-generic keep on some paths (B-2026-09-27-18)",
+            "let o = maybe(mkw(7).r, true); println(\"o\");",
+            "dD107n107\ndD7n7\no\nend\n",
+        ),
+    ] {
+        let prog = format!("{H}fn main() {{\n    {body}\n    println(\"end\")\n}}\n");
+        let (interp_out, interp_errs, _, _) = karac::run_program_full_checked(&prog);
+        assert!(
+            interp_errs.is_empty(),
+            "[{label}] interp errored: {interp_errs:?}"
+        );
+        assert_eq!(interp_out.join(""), want, "[{label}] interpreter");
+        if let Some(aot) = run_program(&prog) {
+            assert_eq!(aot, want, "[{label}] AOT");
+        }
+    }
+}

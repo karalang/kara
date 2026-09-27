@@ -4196,3 +4196,68 @@ fn main() {
         "asan_conditionally_rebound_enum_receiver_is_freed_once",
     );
 }
+
+/// B-2026-09-27-18 — a fresh temp's `Drop` field kept by a generic callee on
+/// only some paths, or an ENUM leaf kept by any callee, is freed once and runs
+/// each body once. The non-generic enum keep leaked its payload's 3 B at
+/// `-O0` before the fix, and the generic ones lost the siblings' bodies.
+#[test]
+fn asan_freshtemp_field_kept_on_some_paths_or_as_an_enum_is_freed_once() {
+    assert_clean_asan_run_min_allocs(
+        r#"struct D { id: i64, name: String }
+impl Drop for D { fn drop(mut ref self) { println(f"dD{self.id} {self.name}") } }
+fn mkd(n: i64) -> D { return D { id: n, name: f"name-string-longer-than-sso-{n}" }; }
+struct W { r: D, s: D, b: i64 }
+fn mkw(n: i64) -> W { return W { r: mkd(n), s: mkd(n + 100), b: n }; }
+enum G { A(D), B }
+struct V { g: G, d: D }
+fn mkv(n: i64) -> V { return V { g: G.A(mkd(n + 20)), d: mkd(n + 30) }; }
+fn gid[T](x: T) -> T { x }
+fn gst[T](v: mut ref Vec[T], x: T) { v.push(x); }
+fn gmaybe[T](x: T, c: bool) -> Option[T] { if c { return Some(x); } None }
+fn gcs[T](v: mut ref Vec[T], x: T, c: bool) { if c { v.push(x); } }
+fn keepg(x: G) -> G { x }
+fn main() {
+    let o1 = gmaybe(mkw(1).r, true);
+    let o2 = gmaybe(mkw(2).r, false);
+    println(f"o {o1.is_some()} {o2.is_some()}");
+    let mut v: Vec[D] = Vec.new();
+    gcs(mut v, mkw(3).r, true);
+    gcs(mut v, mkw(4).r, false);
+    println(f"v{v.len()}");
+    let k = gid(mkv(5).g);
+    let mut gs: Vec[G] = Vec.new();
+    gst(mut gs, mkv(6).g);
+    let kn = keepg(mkv(7).g);
+    println(f"gs{gs.len()}");
+    match k { G.A(d) => println(f"k{d.id}"), G.B => println("kb") }
+    match kn { G.A(d) => println(f"kn{d.id}"), G.B => println("knb") }
+    println("end")
+}
+"#,
+        &[
+            "dD101 name-string-longer-than-sso-101",
+            "dD102 name-string-longer-than-sso-102",
+            "dD2 name-string-longer-than-sso-2",
+            "o true false",
+            "dD1 name-string-longer-than-sso-1",
+            "dD103 name-string-longer-than-sso-103",
+            "dD104 name-string-longer-than-sso-104",
+            "dD4 name-string-longer-than-sso-4",
+            "v1",
+            "dD3 name-string-longer-than-sso-3",
+            "dD35 name-string-longer-than-sso-35",
+            "dD36 name-string-longer-than-sso-36",
+            "dD37 name-string-longer-than-sso-37",
+            "gs1",
+            "dD26 name-string-longer-than-sso-26",
+            "k25",
+            "dD25 name-string-longer-than-sso-25",
+            "kn27",
+            "dD27 name-string-longer-than-sso-27",
+            "end",
+        ],
+        "asan_freshtemp_field_kept_on_some_paths_or_as_an_enum_is_freed_once",
+        40,
+    );
+}

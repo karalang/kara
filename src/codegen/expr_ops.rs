@@ -2319,7 +2319,7 @@ impl<'ctx> super::Codegen<'ctx> {
         let Some(ty) = self.freshtemp_drop_projection_arg_type(value) else {
             return;
         };
-        if self.struct_type_is_entry_copied_heap(&ty) {
+        if self.struct_type_is_entry_copied_heap(&ty) || self.enum_type_is_entry_copied_heap(&ty) {
             self.consume_freshtemp_field_bodies_keeping_memory(value);
         } else {
             self.consume_freshtemp_field_move(value);

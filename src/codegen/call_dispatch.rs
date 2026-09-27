@@ -11049,6 +11049,19 @@ impl<'ctx> super::Codegen<'ctx> {
                 })
     }
 
+    /// B-2026-09-27-18 — the ENUM sibling of
+    /// [`Self::struct_type_is_entry_copied_heap`], asked by NAME: the four
+    /// type-level questions [`Self::arg_is_entry_copied_heap_enum`] asks of an
+    /// argument expression, for a leaf whose only handle is its type.
+    pub(super) fn enum_type_is_entry_copied_heap(&self, name: &str) -> bool {
+        self.type_decls.enum_layouts.contains_key(name)
+            && name != "Option"
+            && name != "Result"
+            && !self.type_decls.shared_types.contains_key(name)
+            && self.enum_has_heap_payload(name)
+            && !self.enum_param_owned_by_transfer(name)
+    }
+
     /// B-2026-09-25-30 — the OTHER half of the "two owners for two objects"
     /// argument [`Self::struct_type_is_entry_copied_heap`] makes: a struct that
     /// owns NOTHING to free. Every field is a bit-copyable scalar, or a plain
@@ -11238,6 +11251,51 @@ impl<'ctx> super::Codegen<'ctx> {
     ///
     /// Declined for a callee that keeps the argument on only some paths,
     /// where nothing runs the body on the path that drops it.
+    /// B-2026-09-27-18 — does a GENERIC callee's prologue run the argument's
+    /// `Drop` body itself on the path where it keeps nothing? The mono
+    /// prologue registers a per-path body for a param it returns on only SOME
+    /// paths (`fn gmaybe[T](x: T, c: bool) -> Option[T] { if c { return
+    /// Some(x); } None }`) or stores on only some paths, when the SUBSTITUTED
+    /// type has a user `Drop`; for a type whose memory stays with the caller
+    /// that registration is bodies only. So the caller's fresh temp must give
+    /// the field's body up on every path, keeping its memory, exactly as for a
+    /// callee that keeps it on every path. Asked with the same predicates as
+    /// the prologue (`compile_mono_function`), so the two halves agree; a
+    /// forwarded leaf (a struct with a `shared` field, whose memory the
+    /// prologue takes) keeps today's route.
+    pub(super) fn mono_callee_owns_projection_body_per_path(
+        &self,
+        callee_name: &str,
+        arg_index: usize,
+        value: &Expr,
+    ) -> bool {
+        let Some(tn) = self.type_name_of_expr(value) else {
+            return false;
+        };
+        if !self.type_decls.struct_types.contains_key(tn.as_str())
+            || self.type_decls.shared_types.contains_key(tn.as_str())
+            || !self.aggregate_param_copy_supported_struct(&tn, &mut Vec::new())
+        {
+            return false;
+        }
+        let Some(program) = self.program_snapshot.as_deref() else {
+            return false;
+        };
+        if !program.drop_method_keys.contains_key(tn.as_str()) {
+            return false;
+        }
+        let Some(f) = super::declarations::find_function_ast(program, callee_name) else {
+            return false;
+        };
+        if f.generic_params.is_none() {
+            return false;
+        }
+        (crate::ast::fn_conditionally_returns_param_bare(Some(program), f, arg_index)
+            && !crate::ast::fn_moves_param_into_outliving_place(f, arg_index)
+            && !self.conditional_handback_memory_moves_to_mono_callee(callee_name, arg_index, &tn))
+            || crate::ast::fn_conditionally_stores_param(f, arg_index)
+    }
+
     pub(super) fn disarm_named_projection_arg_kept_by_callee(
         &mut self,
         callee_name: &str,

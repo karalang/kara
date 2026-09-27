@@ -3219,3 +3219,34 @@ fn main() {
 }"#);
     assert_eq!(out, "disc-field-t\ndRb-heap\ndRa-heap\n  after\ndisc-field-f\ndRz-heap\ndRb-heap\ndRa-heap\n  after\ndisc-elem-t\ndRa-heap\ndRb-heap\n  after\ndisc-elem-f\ndRz-heap\ndRa-heap\ndRb-heap\n  after\ndisc-match-0\ndRb-heap\ndRa-heap\n  after\ndisc-match-1\ndRb-heap\ndRa-heap\n  after\ndisc-match-2\ndRz-heap\ndRb-heap\ndRa-heap\n  after\ndisc-deep-t\ndRc-heap\ndRb-heap\ndRa-heap\n  after\narg-field-t\n  show:a-heap\ndRa-heap\ndRb-heap\n  after\narg-field-f\n  show:z-heap\ndRz-heap\ndRb-heap\ndRa-heap\n  after\narg-elem-t\n  show:a-heap\ndRa-heap\ndRb-heap\n  after\narg-elem-f\n  show:z-heap\ndRz-heap\ndRa-heap\ndRb-heap\n  after\narg-match-0\n  show:a-heap\ndRa-heap\ndRb-heap\n  after\narg-match-1\n  show:b-heap\ndRb-heap\ndRa-heap\n  after\narg-match-2\n  show:z-heap\ndRz-heap\ndRb-heap\ndRa-heap\n  after\narg-nested-tf\n  show:b-heap\ndRb-heap\ndRa-heap\n  after\narg-nested-tt\n  show:y-heap\ndRy-heap\ndRb-heap\ndRa-heap\n  after\narg-method-t\n  take:a-heap\ndRa-heap\ndRb-heap\n  after\narg-method-f\n  take:z-heap\ndRz-heap\ndRb-heap\ndRa-heap\n  after\narg-push-t\ndRb-heap\n  n:1\ndRa-heap\narg-push-f\ndRb-heap\ndRa-heap\n  n:1\ndRz-heap\narg-some-t\ndRb-heap\n  o:a-heap\ndRa-heap\narg-some-f\ndRb-heap\ndRa-heap\n  o:z-heap\ndRz-heap\narg-direct\n  show:a-heap\ndRb-heap\ndRa-heap\n  after\nend\n");
 }
+
+/// B-2026-09-27-18 — the interpreter half: a generic callee that keeps a
+/// fresh temp's `Drop` field on only some paths, and an enum leaf kept by a
+/// generic identity, run the siblings' bodies at the call.
+#[test]
+fn test_freshtemp_field_kept_on_some_paths_or_as_an_enum_runs_every_body_once() {
+    let out = run(r#"struct D { id: i64, name: String }
+impl Drop for D { fn drop(mut ref self) { println(f"dD{self.id}{self.name}") } }
+fn mkd(n: i64) -> D { return D { id: n, name: f"n{n}" }; }
+struct W { r: D, s: D, b: i64 }
+fn mkw(n: i64) -> W { return W { r: mkd(n), s: mkd(n + 100), b: n }; }
+enum G { A(D), B }
+struct V { g: G, d: D }
+fn mkv(n: i64) -> V { return V { g: G.A(mkd(n + 20)), d: mkd(n + 30) }; }
+fn gid[T](x: T) -> T { x }
+fn gmaybe[T](x: T, c: bool) -> Option[T] { if c { return Some(x); } None }
+fn main() {
+    let o = gmaybe(mkw(7).r, true);
+    println("o");
+    let p = gmaybe(mkw(8).r, false);
+    println("p");
+    let k = gid(mkv(1).g);
+    println("k");
+    println("end")
+}
+"#);
+    assert_eq!(
+        out, "dD107n107\ndD7n7\no\ndD108n108\ndD8n8\np\ndD31n31\ndD21n21\nk\nend\n",
+        "got:\n{out}"
+    );
+}

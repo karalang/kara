@@ -2196,19 +2196,26 @@ impl<'ctx> super::Codegen<'ctx> {
                     .get(i)
                     .is_some_and(|p| !matches!(p.ty.kind, TypeKind::Ref(_) | TypeKind::MutRef(_)));
                 let ast_i = if recv_offset { i.checked_sub(1) } else { Some(i) };
-                // A struct leaf only: an enum leaf (`gid(mkv(1).g)`) has no
-                // memory-keeping form here yet, and the move-consume leaked
-                // its payload's 3 B at `-O0` (measured).
-                let struct_leaf = self.type_name_of_expr(&a.value).is_some_and(|tn| {
+                // A struct leaf, or (B-2026-09-27-18) an ENUM leaf the
+                // monomorph entry-copies, which `consume_escaping_…` now
+                // routes to the memory-keeping consume: the move-consume
+                // leaked its payload's 3 B at `-O0` (measured). The per-path
+                // clause stays struct-only; it is gated inside.
+                let leaf = self.type_name_of_expr(&a.value);
+                let struct_leaf = leaf.as_ref().is_some_and(|tn| {
                     self.type_decls.struct_types.contains_key(tn.as_str())
                         && !self.type_decls.shared_types.contains_key(tn.as_str())
                 });
+                let enum_leaf = leaf
+                    .as_ref()
+                    .is_some_and(|tn| self.enum_type_is_entry_copied_heap(tn));
                 if by_value
-                    && struct_leaf
+                    && (struct_leaf || enum_leaf)
                     && !reads_through
                     && ast_i.is_some_and(|ai| {
                         self.arg_leaves_caller_on_every_path(name, ai)
                             || self.callee_always_hands_arg_back_via_call(name, ai)
+                            || self.mono_callee_owns_projection_body_per_path(name, ai, &a.value)
                     })
                 {
                     self.consume_escaping_freshtemp_projection_arg(&a.value);
