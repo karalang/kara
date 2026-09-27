@@ -490,7 +490,17 @@ impl<'ctx> super::Codegen<'ctx> {
         if !self.block_only_borrows_result_tuple_payload(value, pattern, then_block) {
             self.suppress_inline_result_payload_cleanup(value, pattern);
         }
-        self.retract_boxed_tuple_inner_drop_for_block(value, pattern, Some(then_block));
+        // B-2026-09-27-124 — only when the bindings OWN the payload. The
+        // retraction stands the box's interior walk down on the premise that
+        // each destructured leaf now has its own owner, and a borrow-mode
+        // bind over a named local registers none, so every heap leaf leaked
+        // (`if let Some((a, b)) = o { println(a) }` over
+        // `Option[(String, String)]`: 4 B in 2 blocks, `match` clean). The
+        // `match` leg's retraction has always sat behind
+        // `!pattern_binding_is_borrow`; B-2026-09-01-10 is the struct twin.
+        if optres_bindings_owned {
+            self.retract_boxed_tuple_inner_drop_for_block(value, pattern, Some(then_block));
+        }
         // B-2026-07-30-11 (Option/Result leg): the payload-BODIES action is
         // retracted alongside the memory suppressions above — same shape
         // gate, interp twin in `pattern_consumes_user_drop_payload`.
@@ -1386,7 +1396,17 @@ impl<'ctx> super::Codegen<'ctx> {
         if !self.block_only_borrows_result_tuple_payload(value, pattern, body) {
             self.suppress_inline_result_payload_cleanup(value, pattern);
         }
-        self.retract_boxed_tuple_inner_drop_for_block(value, pattern, Some(body));
+        // B-2026-09-27-124 — only when the bindings OWN the payload. The
+        // retraction stands the box's interior walk down on the premise that
+        // each destructured leaf now has its own owner, and a borrow-mode
+        // bind over a named local registers none, so every heap leaf leaked
+        // (`if let Some((a, b)) = o { println(a) }` over
+        // `Option[(String, String)]`: 4 B in 2 blocks, `match` clean). The
+        // `match` leg's retraction has always sat behind
+        // `!pattern_binding_is_borrow`; B-2026-09-01-10 is the struct twin.
+        if optres_bindings_owned {
+            self.retract_boxed_tuple_inner_drop_for_block(value, pattern, Some(body));
+        }
         // B-2026-07-30-11 (Option/Result leg): the payload-BODIES action is
         // retracted alongside the memory suppressions above — same shape
         // gate, interp twin in `pattern_consumes_user_drop_payload`.
