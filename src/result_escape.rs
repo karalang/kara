@@ -36,6 +36,9 @@ use std::collections::{BTreeSet, HashMap, HashSet};
 
 /// Per-binding-name use tally: `(total Identifier uses, uses that are a direct
 /// `match` scrutinee, uses that are a READ-ONLY position)`.
+/// B-2026-09-26-46 — see `Acc::lent`: (callee name, argument index) -> lent read.
+type LentPolicy<'a> = dyn Fn(&str, usize) -> bool + 'a;
+
 #[derive(Default)]
 struct Acc<'a> {
     /// B-2026-09-14-5 — the PROJECTION POLICY the `payload_escapers_proj` map is
@@ -117,6 +120,12 @@ struct Acc<'a> {
     /// would get a producer-side dec that use-after-frees the escaping closure's
     /// env. Closure-local bindings are only ever made MORE conservative by this.
     in_closure: bool,
+    /// B-2026-09-26-46 — the LENT-argument policy of
+    /// [`by_value_read_or_lent_param_names`]: asked of a bare identifier
+    /// handed, unlabelled and unmarked, to a call whose callee is a bare name,
+    /// with that name and the argument's index. `true` counts the use as a
+    /// read. `None` everywhere else, so every other set is unchanged.
+    lent: Option<&'a LentPolicy<'a>>,
     /// B-2026-09-24-20 — by-value `Option`/`Result` PARAMS whose immutable
     /// whole rebinds (`let c = a;`) are read as ALIASES of the param: every
     /// later use of `c` is recorded against `a`, and the rebind itself records
@@ -231,6 +240,71 @@ pub fn nonescaping_param_names(func: &Function) -> HashSet<String> {
 /// memory unsafety.
 pub fn by_value_nonescaping_param_names(func: &Function) -> HashSet<String> {
     let mut acc = seeded_acc(func);
+    walk_block(&func.body, &mut acc);
+    func.params
+        .iter()
+        .filter_map(|p| {
+            let crate::ast::PatternKind::Binding(name) = &p.pattern.kind else {
+                return None;
+            };
+            let (total, scrut, ro) = acc.counts.get(name.as_str()).copied().unwrap_or((0, 0, 0));
+            (total == scrut + ro).then(|| name.clone())
+        })
+        .collect()
+}
+
+/// B-2026-09-26-46 — [`by_value_nonescaping_param_names`] with one more
+/// read-only position: a parameter handed on, bare and by value, to a GENERIC
+/// free function whose matching parameter is itself in this set (or is a
+/// `ref`). A monomorph's by-value parameter is caller-retained -- the callee
+/// deep-copies it only at a site that keeps it -- so a parameter that is only
+/// ever read, or lent on to a callee that only reads it, is never kept by
+/// anything past the call, and its CALLER still owes every body it carries.
+///
+/// `fn gw[T](x: T) -> i64 { gn(x) }` over `fn gn[T](x: T) -> i64 { 1 }` is the
+/// shape: the stricter set counts `gn(x)` as an escape, so a projection off a
+/// fresh temp handed to `gw` (`gw(mkw(7).r)`) was treated as possibly kept and
+/// its temp ran no body at all. Only a generic callee is followed: a
+/// non-generic one owns a by-value parameter and runs its body itself. The
+/// recursion is depth-bounded; running out answers "escapes", the
+/// conservative direction.
+pub fn by_value_read_or_lent_param_names(
+    program: &crate::ast::Program,
+    func: &Function,
+) -> HashSet<String> {
+    read_or_lent_names(program, func, 4)
+}
+
+fn read_or_lent_names(
+    program: &crate::ast::Program,
+    func: &Function,
+    depth: u32,
+) -> HashSet<String> {
+    let lent = |cn: &str, k: usize| -> bool {
+        if depth == 0 {
+            return false;
+        }
+        let Some(g) = program.items.iter().find_map(|it| match it {
+            crate::ast::Item::Function(f) if f.name == cn => Some(f),
+            _ => None,
+        }) else {
+            return false;
+        };
+        if g.generic_params.is_none() || g.self_param.is_some() {
+            return false;
+        }
+        let Some(p) = g.params.get(k) else {
+            return false;
+        };
+        match &p.ty.kind {
+            crate::ast::TypeKind::Ref(_) => true,
+            crate::ast::TypeKind::MutRef(_) => false,
+            _ => matches!(&p.pattern.kind, crate::ast::PatternKind::Binding(n)
+                if read_or_lent_names(program, g, depth - 1).contains(n)),
+        }
+    };
+    let mut acc = seeded_acc(func);
+    acc.lent = Some(&lent);
     walk_block(&func.body, &mut acc);
     func.params
         .iter()
@@ -1076,7 +1150,17 @@ fn walk_expr<'a>(e: &'a Expr, acc: &mut Acc<'a>) {
         }
         ExprKind::Call { callee, args } => {
             walk_expr(callee, acc);
-            for a in args {
+            let lent_to = match (&callee.kind, acc.lent) {
+                (ExprKind::Identifier(cn), Some(l)) if !acc.in_closure => Some((cn.as_str(), l)),
+                _ => None,
+            };
+            for (k, a) in args.iter().enumerate() {
+                if let (Some((cn, l)), ExprKind::Identifier(n)) = (lent_to, &a.value.kind) {
+                    if a.label.is_none() && !a.mut_marker && l(cn, k) {
+                        record_read_only_use(acc, n.as_str());
+                        continue;
+                    }
+                }
                 walk_call_arg(a, acc);
             }
         }

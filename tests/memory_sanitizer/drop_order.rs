@@ -4078,3 +4078,68 @@ fn main() {
         34,
     );
 }
+
+/// B-2026-09-26-46 — a `Drop`-bearing field projected off a FRESH temp and
+/// handed by value to a GENERIC callee that keeps it (identity, store, two
+/// hops) or only lends it on to a reader is freed once and runs each body
+/// once. A leaf with a `shared` field freed its handle twice under the JIT
+/// before the fix (`malloc(): unaligned tcache chunk detected`), and the
+/// base tree had 6 valgrind errors on this program at `-O0`.
+#[test]
+fn asan_freshtemp_field_into_a_generic_callee_is_freed_once() {
+    assert_clean_asan_run_min_allocs(
+        r#"struct D { id: i64, name: String }
+impl Drop for D { fn drop(mut ref self) { println(f"dD{self.id} {self.name}") } }
+fn mkd(n: i64) -> D { return D { id: n, name: f"name-string-longer-than-sso-{n}" }; }
+struct W { r: D, s: D, b: i64 }
+fn mkw(n: i64) -> W { return W { r: mkd(n), s: mkd(n + 100), b: n }; }
+struct X { w: W, t: D }
+fn mkx(n: i64) -> X { return X { w: mkw(n), t: mkd(n + 300) }; }
+shared struct Sh { tag: String }
+struct F { id: i64, h: Sh, note: String }
+impl Drop for F { fn drop(mut ref self) { println(f"dF{self.id}") } }
+struct V { f: F, d: D }
+fn mkv(n: i64) -> V { return V { f: F { id: n, h: Sh { tag: f"shared-tag-longer-than-sso-{n}" }, note: f"note-string-longer-than-sso-{n}" }, d: mkd(n + 50) }; }
+fn gid[T](x: T) -> T { x }
+fn gst[T](v: mut ref Vec[T], x: T) { v.push(x); }
+fn gn[T](x: T) -> i64 { 1 }
+fn gw[T](x: T) -> i64 { gn(x) }
+fn main() {
+    let mut v: Vec[D] = Vec.new();
+    let k = gid(mkw(1).r);
+    gst(mut v, mkw(2).s);
+    let g = gw(mkw(3).r);
+    let k2 = gid(mkx(4).w.r);
+    println(f"k{k.id} v{v.len()} g{g} k2{k2.id}");
+    let mut fs: Vec[F] = Vec.new();
+    let kf = gid(mkv(5).f);
+    gst(mut fs, mkv(6).f);
+    let gf = gw(mkv(7).f);
+    println(f"kf{kf.id} fs{fs.len()} gf{gf}");
+    println("end")
+}
+"#,
+        &[
+            "dD101 name-string-longer-than-sso-101",
+            "dD2 name-string-longer-than-sso-2",
+            "dD103 name-string-longer-than-sso-103",
+            "dD3 name-string-longer-than-sso-3",
+            "dD304 name-string-longer-than-sso-304",
+            "dD104 name-string-longer-than-sso-104",
+            "k1 v1 g1 k24",
+            "dD4 name-string-longer-than-sso-4",
+            "dD1 name-string-longer-than-sso-1",
+            "dD102 name-string-longer-than-sso-102",
+            "dD55 name-string-longer-than-sso-55",
+            "dD56 name-string-longer-than-sso-56",
+            "dD57 name-string-longer-than-sso-57",
+            "dF7",
+            "kf5 fs1 gf1",
+            "dF5",
+            "dF6",
+            "end",
+        ],
+        "asan_freshtemp_field_into_a_generic_callee_is_freed_once",
+        40,
+    );
+}

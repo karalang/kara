@@ -3027,3 +3027,36 @@ fn main() {
 "#);
     assert_eq!(out, "if-field-true\ndRb-heap\n  x:a-heap\n  got:a-heap\ndRa-heap\nif-field-false\ndRb-heap\ndRa-heap\n  x:z-heap\n  got:z-heap\ndRz-heap\nif-both-true\ndRb-heap\n  got:a-heap\ndRa-heap\nif-both-false\ndRa-heap\n  got:b-heap\ndRb-heap\nblock-elem\ndRb-heap\n  x:a-heap\n  got:a-heap\ndRa-heap\nmatch-0\ndRb-heap\n  got:a-heap\ndRa-heap\nmatch-1\ndRa-heap\n  got:b-heap\ndRb-heap\nmatch-2\ndRa-heap\ndRb-heap\n  got:z-heap\ndRz-heap\nnested-tt\ndRb-heap\n  got:a-heap\ndRa-heap\nnested-tf\ndRa-heap\n  got:b-heap\ndRb-heap\nnested-f\ndRa-heap\ndRb-heap\n  got:z-heap\ndRz-heap\npush-elem\ndRb-heap\n  n:1\ndRa-heap\nsome-elem\ndRb-heap\n  o:a-heap\ndRa-heap\nassign\ndRx0-heap\ndRb-heap\n  x:a-heap\ndRa-heap\nloop\ndRa0-heap\ndRb0-heap\n  x:z0-heap\ndRz0-heap\ndRb1-heap\n  x:a1-heap\ndRa1-heap\ndRa2-heap\ndRb2-heap\n  x:z2-heap\ndRz2-heap\nguard-call-arg\n  show:a-heap\ndRa-heap\ndRb-heap\nend\n", "got:\n{out}");
 }
+
+/// B-2026-09-26-46 — a `Drop`-bearing field projected off a FRESH temp and
+/// handed by value to a GENERIC callee runs every body once: a callee that
+/// keeps it (identity, store) owns the field's body and the temp runs the
+/// siblings' at the call; one that only lends it on to a reader leaves every
+/// body to the temp. The siblings' bodies (and the lent leaf's) ran nowhere.
+#[test]
+fn test_freshtemp_field_into_a_generic_callee_runs_every_body_once() {
+    let out = run(r#"struct D { id: i64, name: String }
+impl Drop for D { fn drop(mut ref self) { println(f"dD{self.id}{self.name}") } }
+fn mkd(n: i64) -> D { return D { id: n, name: f"n{n}" }; }
+struct W { r: D, s: D, b: i64 }
+fn mkw(n: i64) -> W { return W { r: mkd(n), s: mkd(n + 100), b: n }; }
+fn gid[T](x: T) -> T { x }
+fn gst[T](v: mut ref Vec[T], x: T) { v.push(x); }
+fn gn[T](x: T) -> i64 { 1 }
+fn gw[T](x: T) -> i64 { gn(x) }
+fn main() {
+    let k = gid(mkw(7).r);
+    println(f"k{k.id}");
+    let mut v: Vec[D] = Vec.new();
+    gst(mut v, mkw(1).r);
+    println(f"l{v.len()}");
+    let g = gw(mkw(2).r);
+    println(f"g{g}");
+    println("end")
+}
+"#);
+    assert_eq!(
+        out, "dD107n107\nk7\ndD7n7\ndD101n101\nl1\ndD1n1\ndD102n102\ndD2n2\ng1\nend\n",
+        "got:\n{out}"
+    );
+}

@@ -2156,7 +2156,27 @@ impl<'ctx> super::Codegen<'ctx> {
         // at the statement end too. A by-value param that may escape keeps
         // today's route. Per argument, before it compiles: the flag is read by
         // the projection's own `FieldAccess` arm.
-        let read_only_params = crate::result_escape::by_value_nonescaping_param_names(&generic_fn);
+        //
+        // B-2026-09-26-46 — "only reads" includes LENDING the param on to a
+        // generic callee that only reads it (`fn gw[T](x: T) -> i64 { gn(x) }`),
+        // which the stricter set counts as an escape: `gw(mkw(7).r)` ran no
+        // body at all. And a by-value param the callee KEEPS on every path
+        // (`gid(mkw(7).r)`, `gst(mut v, mkw(7).r)`) gives the field up here, as
+        // the non-generic legs do: the monomorph keeps a deep copy, whose new
+        // home runs the field's body, so the temp keeps the original's memory
+        // and runs the SIBLINGS' bodies now. A callee that keeps it on only
+        // some paths keeps today's route. Interp twins: the generic arms of
+        // `mark_borrowed_projection_read_through` and
+        // `drop_projection_arg_consume`.
+        let read_only_params = match self.program_snapshot.as_deref() {
+            Some(p) => crate::result_escape::by_value_read_or_lent_param_names(p, &generic_fn),
+            None => crate::result_escape::by_value_nonescaping_param_names(&generic_fn),
+        };
+        let recv_offset = self
+            .program_snapshot
+            .as_deref()
+            .and_then(|p| super::declarations::find_function_ast(p, name))
+            .is_some_and(|f| f.self_param.is_some());
         let arg_vals: Result<Vec<BasicValueEnum<'ctx>>, String> = args
             .iter()
             .enumerate()
@@ -2170,7 +2190,30 @@ impl<'ctx> super::Codegen<'ctx> {
                 if reads_through {
                     self.mark_borrowed_projection_read_through(&a.value);
                 }
-                self.compile_expr(&a.value)
+                let v = self.compile_expr(&a.value)?;
+                let by_value = generic_fn
+                    .params
+                    .get(i)
+                    .is_some_and(|p| !matches!(p.ty.kind, TypeKind::Ref(_) | TypeKind::MutRef(_)));
+                let ast_i = if recv_offset { i.checked_sub(1) } else { Some(i) };
+                // A struct leaf only: an enum leaf (`gid(mkv(1).g)`) has no
+                // memory-keeping form here yet, and the move-consume leaked
+                // its payload's 3 B at `-O0` (measured).
+                let struct_leaf = self.type_name_of_expr(&a.value).is_some_and(|tn| {
+                    self.type_decls.struct_types.contains_key(tn.as_str())
+                        && !self.type_decls.shared_types.contains_key(tn.as_str())
+                });
+                if by_value
+                    && struct_leaf
+                    && !reads_through
+                    && ast_i.is_some_and(|ai| {
+                        self.arg_leaves_caller_on_every_path(name, ai)
+                            || self.callee_always_hands_arg_back_via_call(name, ai)
+                    })
+                {
+                    self.consume_escaping_freshtemp_projection_arg(&a.value);
+                }
+                Ok(v)
             })
             .collect();
         self.var_types.pending_let_elem_type = saved_pending_elem;

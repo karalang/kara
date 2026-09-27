@@ -5564,8 +5564,10 @@ impl<'a> super::Interpreter<'a> {
                     || (!matches!(p.ty.kind, crate::ast::TypeKind::MutRef(_))
                         && matches!(&p.pattern.kind,
                             crate::ast::PatternKind::Binding(n)
-                                if crate::result_escape::by_value_nonescaping_param_names(f)
-                                    .contains(n)))
+                                if crate::result_escape::by_value_read_or_lent_param_names(
+                                    self.program, f,
+                                )
+                                .contains(n)))
             })
         };
         if admitted {
@@ -5586,18 +5588,37 @@ impl<'a> super::Interpreter<'a> {
         i: usize,
         value: &Expr,
     ) {
-        // A GENERIC callee is compiled from a monomorph whose arguments are
-        // all evaluated before any is registered, so codegen has no per-argument
-        // consume there; it keeps today's route on both backends.
-        let resolved_non_generic = self
+        // A GENERIC callee's by-value param is caller-retained, so the temp
+        // keeps the field unless the monomorph KEEPS a copy on every path
+        // (B-2026-09-26-46): then the copy's new home runs the field's body
+        // and the temp runs the siblings' now, as codegen's
+        // `compile_generic_call` consumes it. A generic callee that only reads
+        // it was marked read-through before the argument evaluated; one that
+        // keeps it on some paths keeps today's route on both backends.
+        let Some(generic) = self
             .callee_fn_for_ownership_guard_of(callee_name, method_owner)
-            .is_some_and(|f| f.generic_params.is_none());
-        if !resolved_non_generic
-            || self
-                .freshtemp_drop_projection_arg_type_name(value)
-                .is_none()
+            .map(|f| f.generic_params.is_some())
+        else {
+            return;
+        };
+        if self
+            .freshtemp_drop_projection_arg_type_name(value)
+            .is_none()
             || self.callee_param_is_borrow(callee_name, method_owner, i)
         {
+            return;
+        }
+        if generic {
+            // A struct leaf only, as codegen gates it: an enum leaf keeps
+            // today's route on both backends.
+            let struct_leaf = self
+                .freshtemp_drop_projection_arg_type_name(value)
+                .is_some_and(|n| self.typecheck_result.struct_info.contains_key(n.as_str()));
+            if struct_leaf
+                && self.generic_callee_keeps_arg_on_every_path(callee_name, method_owner, i)
+            {
+                self.consume_freshtemp_field_move(value);
+            }
             return;
         }
         // B-2026-09-26-40 — a callee that hands the argument back or keeps it
@@ -5614,6 +5635,25 @@ impl<'a> super::Interpreter<'a> {
             self.freshtemp_projection_args_owned
                 .push((value.span.offset, value.span.length));
         }
+    }
+
+    /// B-2026-09-26-46 — codegen's `arg_leaves_caller_on_every_path ||
+    /// callee_always_hands_arg_back_via_call`, asked of a generic callee at the
+    /// same (receiver-exclusive) index `callee_param_is_borrow` reads.
+    fn generic_callee_keeps_arg_on_every_path(
+        &self,
+        callee_name: &str,
+        method_owner: Option<CalleeOwner<'_>>,
+        i: usize,
+    ) -> bool {
+        let program = self.program;
+        self.callee_fn_for_ownership_guard_of(callee_name, method_owner)
+            .is_some_and(|f| {
+                crate::ast::fn_always_returns_param(Some(program), f, i)
+                    || crate::ast::fn_always_returns_param_via_call(program, f, i)
+                    || crate::ast::fn_always_moves_param_into_outliving_place(f, i)
+                    || crate::ast::fn_moves_param_into_local_container(f, i)
+            })
     }
 
     /// B-2026-09-26-47 — interpreter twin of codegen's

@@ -8342,3 +8342,156 @@ fn main() {
         assert_eq!(aot, want, "AOT");
     }
 }
+
+/// B-2026-09-26-46 — a `Drop`-bearing field projected off a FRESH temp and
+/// handed by value to a GENERIC callee runs every body once. A monomorph's
+/// by-value param is caller-retained, so a callee that keeps it on every path
+/// (hands it back, stores it, one call further, a generic method) keeps a copy
+/// whose new home runs the field's body while the temp runs the siblings' at
+/// the call, and a callee that only reads it or lends it on to one that only
+/// reads it leaves the temp every body at the statement end. Before the fix
+/// the keeping legs ran no sibling body, the reading legs ran none at all, a
+/// two-hop leaf ran twice, and a leaf with a `shared` field freed its handle
+/// twice when compiled. The controls (a non-generic callee and a named local)
+/// were already right.
+#[test]
+fn e2e_freshtemp_field_into_a_generic_callee_runs_every_body_once() {
+    const H: &str = r#"struct D { id: i64, name: String }
+impl Drop for D { fn drop(mut ref self) { println(f"dD{self.id}{self.name}") } }
+fn mkd(n: i64) -> D { return D { id: n, name: f"n{n}" }; }
+struct W { r: D, s: D, b: i64 }
+fn mkw(n: i64) -> W { return W { r: mkd(n), s: mkd(n + 100), b: n }; }
+fn keep(d: D) -> D { d }
+fn eat(d: D) -> i64 { d.id }
+fn gid[T](x: T) -> T { x }
+fn gst[T](v: mut ref Vec[T], x: T) { v.push(x); }
+fn st(v: mut ref Vec[D], x: D) { v.push(x); }
+struct H { k: i64 }
+impl H { fn put(self, v: mut ref Vec[D], x: D) { v.push(x); } fn aput(v: mut ref Vec[D], x: D) { v.push(x); } fn hold(mut ref self, x: D) -> D { x } }
+struct E { id: i64 }
+impl Drop for E { fn drop(mut ref self) { println(f"dE{self.id}") } }
+shared struct Sh { v: i64 }
+struct F { id: i64, h: Sh }
+impl Drop for F { fn drop(mut ref self) { println(f"dF{self.id}") } }
+enum G { A(D), B }
+struct V { e: E, f: F, g: G, d: D }
+fn mkv(n: i64) -> V { V { e: E { id: n }, f: F { id: n + 10, h: Sh { v: 1 } }, g: G.A(mkd(n + 20)), d: mkd(n + 30) } }
+fn keepe(x: E) -> E { x }
+fn keepf(x: F) -> F { x }
+fn keepg(x: G) -> G { x }
+fn maybe(x: D, c: bool) -> Option[D] { if c { return Some(x); } None }
+fn via(x: D) -> D { keep(x) }
+struct X { w: W, t: D }
+fn mkx(n: i64) -> X { X { w: mkw(n), t: mkd(n + 300) } }
+fn stf(v: mut ref Vec[F], x: F) { v.push(x); }
+struct Hf { k: i64 }
+impl Hf { fn put(self, v: mut ref Vec[F], x: F) { v.push(x); } fn hold(mut ref self, x: F) -> F { x } }
+fn gn[T](x: T) -> i64 { 1 }
+fn gw[T](x: T) -> i64 { gn(x) }
+fn gw2[T](x: T) -> i64 { gw(x) + 1 }
+fn gwk[T](x: T) -> T { gid(x) }
+fn gmaybe[T](x: T, c: bool) -> Option[T] { if c { return Some(x); } None }
+fn gcs[T](v: mut ref Vec[T], x: T, c: bool) { if c { v.push(x); } }
+fn gl[T](v: mut ref Vec[T], x: T) -> i64 { gcs(v, x, true); 1 }
+fn gpair[T](a: T, b: T) -> T { a }
+impl H { fn gkeep[T](ref self, x: T) -> T { x } }
+"#;
+    for (label, body, want) in [
+        (
+            "kept by a generic identity (B-2026-09-26-46)",
+            "let k = gid(mkw(7).r); println(f\"k{k.id}\");",
+            "dD107n107\nk7\ndD7n7\nend\n",
+        ),
+        (
+            "stored by a generic fn (B-2026-09-26-46)",
+            "let mut v: Vec[D] = Vec.new(); gst(mut v, mkw(7).r); println(f\"l{v.len()}\");",
+            "dD107n107\nl1\ndD7n7\nend\n",
+        ),
+        (
+            "lent on to a generic reader (B-2026-09-26-46)",
+            "println(f\"g{gw(mkw(7).r)}\");",
+            "g1\ndD107n107\ndD7n7\nend\n",
+        ),
+        (
+            "lent on two calls deep (B-2026-09-26-46)",
+            "println(f\"g{gw2(mkw(7).r)}\");",
+            "g2\ndD107n107\ndD7n7\nend\n",
+        ),
+        (
+            "kept one generic call further (B-2026-09-26-46)",
+            "let k = gwk(mkw(7).r); println(f\"k{k.id}\");",
+            "dD107n107\nk7\ndD7n7\nend\n",
+        ),
+        (
+            "kept by a generic method (B-2026-09-26-46)",
+            "let h = H { k: 1 }; let k = h.gkeep(mkw(7).r); println(f\"k{k.id}\");",
+            "dD107n107\nk7\ndD7n7\nend\n",
+        ),
+        (
+            "two hops, kept by a generic identity (B-2026-09-26-46)",
+            "let k = gid(mkx(5).w.r); println(f\"k{k.id}\");",
+            "dD305n305\ndD105n105\nk5\ndD5n5\nend\n",
+        ),
+        (
+            "a leaf with a shared field, kept (B-2026-09-26-46)",
+            "let k = gid(mkv(1).f); println(f\"k{k.id}\");",
+            "dD31n31\ndD21n21\ndE1\nk11\ndF11\nend\n",
+        ),
+        (
+            "a leaf with a shared field, stored (B-2026-09-26-46)",
+            "let mut v: Vec[F] = Vec.new(); gst(mut v, mkv(1).f); println(f\"l{v.len()}\");",
+            "dD31n31\ndD21n21\ndE1\nl1\ndF11\nend\n",
+        ),
+        (
+            "a leaf with a shared field, lent (B-2026-09-26-46)",
+            "println(f\"g{gw(mkv(1).f)}\");",
+            "g1\ndD31n31\ndD21n21\ndF11\ndE1\nend\n",
+        ),
+        (
+            "a heapless Drop leaf, kept (B-2026-09-26-46)",
+            "let k = gid(mkv(1).e); println(f\"k{k.id}\");",
+            "dD31n31\ndD21n21\ndF11\nk1\ndE1\nend\n",
+        ),
+        (
+            "an enum leaf, lent (B-2026-09-26-46)",
+            "println(f\"g{gw(mkv(1).g)}\");",
+            "g1\ndD31n31\ndD21n21\ndF11\ndE1\nend\n",
+        ),
+        (
+            "one arg kept, one unused (B-2026-09-26-46)",
+            "let k = gpair(mkw(1).r, mkw(2).r); println(f\"k{k.id}\");",
+            "dD101n101\ndD102n102\ndD2n2\nk1\ndD1n1\nend\n",
+        ),
+        (
+            "kept in a loop (B-2026-09-26-46)",
+            "let mut i = 0; while i < 2 { let k = gid(mkw(i).r); println(f\"k{k.id}\"); i = i + 1; }",
+            "dD100n100\nk0\ndD0n0\ndD101n101\nk1\ndD1n1\nend\n",
+        ),
+        (
+            "control: non-generic keep (B-2026-09-26-46)",
+            "let k = keep(mkw(7).r); println(f\"k{k.id}\");",
+            "dD107n107\nk7\ndD7n7\nend\n",
+        ),
+        (
+            "control: named local into a generic identity (B-2026-09-26-46)",
+            "let w = mkw(7); let k = gid(w.r); println(f\"k{k.id}\");",
+            "dD107n107\nk7\ndD7n7\nend\n",
+        ),
+        (
+            "control: named local lent on (B-2026-09-26-46)",
+            "let w = mkw(7); println(f\"g{gw(w.r)}\");",
+            "g1\ndD107n107\ndD7n7\nend\n",
+        ),
+    ] {
+        let prog = format!("{H}fn main() {{\n    {body}\n    println(\"end\")\n}}\n");
+        let (interp_out, interp_errs, _, _) = karac::run_program_full_checked(&prog);
+        assert!(
+            interp_errs.is_empty(),
+            "[{label}] interp errored: {interp_errs:?}"
+        );
+        assert_eq!(interp_out.join(""), want, "[{label}] interpreter");
+        if let Some(aot) = run_program(&prog) {
+            assert_eq!(aot, want, "[{label}] AOT");
+        }
+    }
+}
