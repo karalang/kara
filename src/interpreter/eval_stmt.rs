@@ -4255,8 +4255,13 @@ impl<'a> super::Interpreter<'a> {
     /// `moved_out_struct_field_bodies`, deeper in `moved_out_nested_field_bodies`.
     pub(crate) fn record_returned_projection_moves(&mut self, e: &Expr) {
         match &e.kind {
-            ExprKind::FieldAccess { .. } => {
-                let Some((root, path)) = Self::field_chain_name_path(e) else {
+            ExprKind::FieldAccess { .. } | ExprKind::TupleIndex { .. } => {
+                // B-2026-09-27-2 — a TUPLE hop is a move out of the local on
+                // the same terms as a field hop, spelled `#<i>` as every other
+                // name-path mask spells it. Field-only, `let t = (R, R);
+                // return t.0;` ran `t.0`'s body at `t`'s death AND at the
+                // result's, on this backend alone.
+                let Some((root, path)) = Self::projection_chain_name_path(e) else {
                     return;
                 };
                 // A LOCAL's field only: a param view's projection belongs to
@@ -4284,11 +4289,19 @@ impl<'a> super::Interpreter<'a> {
                 if !self.value_runs_user_drop(leaf) {
                     return;
                 }
-                if path.len() == 1 {
-                    self.moved_out_struct_field_bodies
-                        .insert((root, path[0].clone()));
-                } else {
-                    self.moved_out_nested_field_bodies.insert((root, path));
+                match path.as_slice() {
+                    [hop] => match hop.strip_prefix('#').and_then(|d| d.parse::<usize>().ok()) {
+                        Some(idx) => {
+                            self.moved_out_tuple_elem_bodies.insert((root, idx));
+                        }
+                        None => {
+                            self.moved_out_struct_field_bodies
+                                .insert((root, hop.clone()));
+                        }
+                    },
+                    _ => {
+                        self.moved_out_nested_field_bodies.insert((root, path));
+                    }
                 }
             }
             ExprKind::StructLiteral { fields, .. } => {
@@ -4305,6 +4318,29 @@ impl<'a> super::Interpreter<'a> {
                 if let Some(payload) = crate::ast::option_result_ctor_payload(e) {
                     self.record_returned_projection_moves(payload);
                 }
+            }
+        }
+    }
+
+    /// [`Self::field_chain_name_path`] with TUPLE hops too, spelled `#<i>`.
+    fn projection_chain_name_path(value: &Expr) -> Option<(String, Vec<String>)> {
+        let mut path: Vec<String> = Vec::new();
+        let mut cur = value;
+        loop {
+            match &cur.kind {
+                ExprKind::FieldAccess { object, field } => {
+                    path.push(field.clone());
+                    cur = object;
+                }
+                ExprKind::TupleIndex { object, index } => {
+                    path.push(format!("#{index}"));
+                    cur = object;
+                }
+                ExprKind::Identifier(root) if !path.is_empty() => {
+                    path.reverse();
+                    return Some((root.clone(), path));
+                }
+                _ => return None,
             }
         }
     }

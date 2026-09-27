@@ -2839,3 +2839,92 @@ fn main() {
 "#);
     assert_eq!(out, "dD107n107\nk7\ndD7n7\ndD101n101\ndD2n2\ndD103n103\ng102 v2\ndD102n102\ndD1n1\ndD3n3\nend\n", "got:\n{out}");
 }
+
+/// B-2026-09-27-2 — an element moved out of a LOCAL tuple (`return t.0`, a
+/// tail `t.0`) runs its `Drop` body once, on every path.
+///
+/// Before, this backend ran the element's body twice whenever the move was a
+/// `return` or a tail yield: only `let x = t.0` recorded the move, so the
+/// tuple's own death walked element 0 again after it had been handed out
+/// (`dR7 dR5 got:5 dR5` for `ret-always`). `record_returned_projection_moves`
+/// now reads a tuple-index hop as well as a field hop.
+///
+/// The compiled backends were right on those and wrong on the CONDITIONAL
+/// cells instead; the codegen twin asserts this string on both backends.
+#[test]
+fn test_local_tuple_element_moved_on_some_paths_runs_its_body_once() {
+    let out = run(r#"struct R { id: i64 }
+impl Drop for R { fn drop(mut ref self) { println(f"dR{self.id}") } }
+fn ret_some(k: bool) -> R {
+    let t = (R { id: 5 }, R { id: 7 });
+    if k { return t.0; }
+    return R { id: 1 };
+}
+fn ret_each(k: bool) -> R {
+    let t = (R { id: 5 }, R { id: 7 });
+    if k { return t.0; } else { return t.1; }
+}
+fn ret_scalar_sibling(k: bool) -> R {
+    let t = (R { id: 5 }, 3);
+    if k { return t.0; }
+    return R { id: 1 };
+}
+fn let_some(k: bool) -> R {
+    let t = (R { id: 5 }, R { id: 7 });
+    if k { let x = t.0; println(f"  x{x.id}"); }
+    return R { id: 1 };
+}
+fn ret_always() -> R {
+    let t = (R { id: 5 }, R { id: 7 });
+    return t.0;
+}
+fn tail_always() -> R {
+    let t = (R { id: 5 }, R { id: 7 });
+    t.0
+}
+fn ret_by_arm(k: i64) -> R {
+    let t = (R { id: 5 }, 3, R { id: 7 }, R { id: 9 });
+    match k {
+        0 => { return t.0; }
+        1 => { return t.2; }
+        2 => { return t.3; }
+        _ => {}
+    }
+    R { id: 1 }
+}
+fn ret_nested(k: bool, m: bool) -> R {
+    let t = (R { id: 5 }, R { id: 7 });
+    {
+        if k { if m { return t.0; } }
+    }
+    println("  after");
+    R { id: 1 }
+}
+fn main() {
+    println("ret-some-true"); { let g = ret_some(true); println(f"  got:{g.id}") }
+    println("ret-some-false"); { let g = ret_some(false); println(f"  got:{g.id}") }
+    println("ret-each-true"); { let g = ret_each(true); println(f"  got:{g.id}") }
+    println("ret-each-false"); { let g = ret_each(false); println(f"  got:{g.id}") }
+    println("scalar-sibling-true"); { let g = ret_scalar_sibling(true); println(f"  got:{g.id}") }
+    println("scalar-sibling-false"); { let g = ret_scalar_sibling(false); println(f"  got:{g.id}") }
+    println("let-some-true"); { let g = let_some(true); println(f"  got:{g.id}") }
+    println("let-some-false"); { let g = let_some(false); println(f"  got:{g.id}") }
+    println("ret-always"); { let g = ret_always(); println(f"  got:{g.id}") }
+    println("tail-always"); { let g = tail_always(); println(f"  got:{g.id}") }
+    let mut k = 0;
+    while k < 4 { println(f"arm-{k}"); { let g = ret_by_arm(k); println(f"  got:{g.id}") } k = k + 1; }
+    println("nested-tt"); { let g = ret_nested(true, true); println(f"  got:{g.id}") }
+    println("nested-tf"); { let g = ret_nested(true, false); println(f"  got:{g.id}") }
+    println("loop");
+    let mut i = 0;
+    while i < 3 {
+        let t = (R { id: 10 + i }, R { id: 20 + i });
+        if i == 1 { let x = t.0; println(f"  took:{x.id}"); }
+        println(f"  end{i}");
+        i = i + 1;
+    }
+    println("end")
+}
+"#);
+    assert_eq!(out, "ret-some-true\ndR7\n  got:5\ndR5\nret-some-false\ndR5\ndR7\n  got:1\ndR1\nret-each-true\ndR7\n  got:5\ndR5\nret-each-false\ndR5\n  got:7\ndR7\nscalar-sibling-true\n  got:5\ndR5\nscalar-sibling-false\ndR5\n  got:1\ndR1\nlet-some-true\n  x5\ndR5\ndR7\n  got:1\ndR1\nlet-some-false\ndR5\ndR7\n  got:1\ndR1\nret-always\ndR7\n  got:5\ndR5\ntail-always\ndR7\n  got:5\ndR5\narm-0\ndR7\ndR9\n  got:5\ndR5\narm-1\ndR5\ndR9\n  got:7\ndR7\narm-2\ndR5\ndR7\n  got:9\ndR9\narm-3\ndR5\ndR7\ndR9\n  got:1\ndR1\nnested-tt\ndR7\n  got:5\ndR5\nnested-tf\ndR5\ndR7\n  after\n  got:1\ndR1\nloop\ndR10\ndR20\n  end0\n  took:11\ndR11\ndR21\n  end1\ndR12\ndR22\n  end2\nend\n", "got:\n{out}");
+}

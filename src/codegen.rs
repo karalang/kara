@@ -6540,6 +6540,7 @@ impl<'ctx> Codegen<'ctx> {
                 freshtemp_drop_projection_arg: None,
                 field_view_flags: HashMap::new(),
                 cond_move_field_flag_slots: HashSet::new(),
+                tuple_elem_move_flag_types: HashMap::new(),
                 forwarded_handback_slots: HashSet::new(),
                 enum_handback_body_slots: HashSet::new(),
                 deep_copy_rc_inc_bare_shared: false,

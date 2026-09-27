@@ -10011,6 +10011,72 @@ impl<'ctx> super::Codegen<'ctx> {
         true
     }
 
+    /// B-2026-09-27-2 — the TUPLE peer of
+    /// [`Self::conditional_field_move_takes_runtime_flag`]: a move of element
+    /// `index` out of a tuple binding whose `ContainerElemBodies` walk lives in
+    /// an ENCLOSING frame (`if k { return t.0 }`, `let x = if k { t.0 } ...`).
+    ///
+    /// The unconditional route retracts that walk and re-registers a masked
+    /// one in the CURRENT frame, which is exact only when the move runs
+    /// whenever the walk does. One frame deeper, the path that never took the
+    /// branch reaches the binding's death with no walk registered at all and
+    /// every element's body is lost. Here the owning walk stays where it is,
+    /// unmasked, and the element's `#<index>` flag, stored `false` in this
+    /// block, lets the death site mask the element only on the path that moved
+    /// it. Declines, leaving the static route, in the innermost frame and past
+    /// [`Self::FIELD_VIEW_SELECT_MAX`] flags.
+    pub(super) fn conditional_tuple_elem_move_takes_runtime_flag(
+        &mut self,
+        var_name: &str,
+        index: u32,
+        tuple_ty: inkwell::types::StructType<'ctx>,
+        elem_tes: &[TypeExpr],
+    ) -> bool {
+        let n = self.drop_rc.scope_cleanup_actions.len();
+        if n < 2 {
+            return false;
+        }
+        let owns_here = |f: &Vec<super::state::CleanupAction<'ctx>>| {
+            f.iter().any(|a| {
+                matches!(a,
+                    super::state::CleanupAction::UserDrop { binding_name, kind, .. }
+                        if binding_name == var_name
+                            && *kind == super::state::UserDropKind::ContainerElemBodies)
+            })
+        };
+        if owns_here(&self.drop_rc.scope_cleanup_actions[n - 1]) {
+            return false;
+        }
+        if !self.drop_rc.scope_cleanup_actions[..n - 1]
+            .iter()
+            .any(owns_here)
+        {
+            return false;
+        }
+        let key = format!("#{index}");
+        let flags = self.drop_rc.field_view_flags.get(var_name);
+        let already = flags.map(|m| m.len()).unwrap_or(0);
+        let have = flags.is_some_and(|m| m.contains_key(&key));
+        if already + usize::from(!have) > Self::FIELD_VIEW_SELECT_MAX {
+            return false;
+        }
+        let Some(flag) = self.field_view_flag_for(var_name, &key) else {
+            return false;
+        };
+        let bool_t = self.context.bool_type();
+        if self
+            .builder
+            .build_store(flag, bool_t.const_int(0, false))
+            .is_err()
+        {
+            return false;
+        }
+        self.drop_rc
+            .tuple_elem_move_flag_types
+            .insert(flag, (tuple_ty, elem_tes.to_vec()));
+        true
+    }
+
     /// B-2026-09-08-5 — the RUNTIME half of
     /// [`Self::rearm_reassigned_moved_field`], for a store compiled one frame
     /// deeper than the binding's walk (`if f { g.one = mks(7); }`, or a bare

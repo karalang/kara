@@ -13924,6 +13924,47 @@ impl<'ctx> super::Codegen<'ctx> {
                 return;
             }
         }
+        // B-2026-09-27-2 — a tuple binding one of whose elements moved on only
+        // SOME paths: its walk stayed registered unmasked, and each moved
+        // element's `#<index>` flag selects the masked walk at runtime.
+        if kind == UserDropKind::ContainerElemBodies {
+            let mut viewed: Vec<(String, usize, PointerValue<'ctx>)> = self
+                .drop_rc
+                .field_view_flags
+                .get(binding_name)
+                .map(|m| {
+                    m.iter()
+                        .filter(|(_, flag)| {
+                            self.drop_rc.tuple_elem_move_flag_types.contains_key(*flag)
+                        })
+                        .filter_map(|(k, flag)| {
+                            k.strip_prefix('#')
+                                .and_then(|i| i.parse::<usize>().ok())
+                                .map(|i| (k.clone(), i, *flag))
+                        })
+                        .collect()
+                })
+                .unwrap_or_default();
+            viewed.sort_by_key(|(_, i, _)| *i);
+            if !viewed.is_empty() && viewed.len() <= Self::FIELD_VIEW_SELECT_MAX {
+                let (tuple_ty, elem_tes) =
+                    self.drop_rc.tuple_elem_move_flag_types[&viewed[0].2].clone();
+                let outer = self.open_cond_move_guard(binding_name);
+                let mut disarmed: Vec<usize> = Vec::new();
+                self.emit_tuple_elem_move_leaf_tree(
+                    binding_name,
+                    (tuple_ty, &elem_tes),
+                    drop_fn,
+                    ptr,
+                    call_name,
+                    &viewed,
+                    0,
+                    &mut disarmed,
+                );
+                self.close_cond_move_guard(outer);
+                return;
+            }
+        }
         // Only the per-binding FIELD-BODIES walk is decomposable this way. A
         // type's own `karac_drop_<T>` wrapper runs its field bodies from inside
         // itself and is registered as a different action, so there is no walker
@@ -14072,6 +14113,82 @@ impl<'ctx> super::Codegen<'ctx> {
             .is_some_and(|b| b.get_terminator().is_none())
         {
             self.builder.build_unconditional_branch(cont_bb).unwrap();
+        }
+        self.builder.position_at_end(cont_bb);
+    }
+
+    /// B-2026-09-27-2 — [`Self::emit_field_view_leaf_tree`] for a TUPLE
+    /// binding's element walk. A leaf with nothing disarmed calls the
+    /// registered walker verbatim; any other re-emits it over the binding's
+    /// current skip tree plus the elements whose flag read `false` on the path.
+    #[allow(clippy::too_many_arguments)]
+    fn emit_tuple_elem_move_leaf_tree(
+        &mut self,
+        binding_name: &str,
+        agg: (inkwell::types::StructType<'ctx>, &[crate::ast::TypeExpr]),
+        drop_fn: FunctionValue<'ctx>,
+        ptr: PointerValue<'ctx>,
+        call_name: &str,
+        viewed: &[(String, usize, PointerValue<'ctx>)],
+        pos: usize,
+        disarmed: &mut Vec<usize>,
+    ) {
+        let fn_val = self.current_fn;
+        if pos == viewed.len() || fn_val.is_none() {
+            if disarmed.is_empty() {
+                self.builder
+                    .build_call(drop_fn, &[ptr.into()], call_name)
+                    .unwrap();
+                return;
+            }
+            let mut tree = self.tuple_skip_tree_for_var(binding_name);
+            tree.here.extend(disarmed.iter().copied());
+            if let Some(masked) = self.emit_tuple_elem_user_drop_bodies_fn_tree(agg.0, agg.1, &tree)
+            {
+                self.builder
+                    .build_call(masked, &[ptr.into()], call_name)
+                    .unwrap();
+            }
+            return;
+        }
+        let fn_val = fn_val.unwrap();
+        let flag = viewed[pos].2;
+        let armed_bb = self.context.append_basic_block(fn_val, "tesel.armed");
+        let moved_bb = self.context.append_basic_block(fn_val, "tesel.moved");
+        let cont_bb = self.context.append_basic_block(fn_val, "tesel.cont");
+        let armed = self
+            .builder
+            .build_load(self.context.bool_type(), flag, "tesel.f")
+            .unwrap()
+            .into_int_value();
+        self.builder
+            .build_conditional_branch(armed, armed_bb, moved_bb)
+            .unwrap();
+        for (bb, moved) in [(armed_bb, false), (moved_bb, true)] {
+            self.builder.position_at_end(bb);
+            if moved {
+                disarmed.push(viewed[pos].1);
+            }
+            self.emit_tuple_elem_move_leaf_tree(
+                binding_name,
+                agg,
+                drop_fn,
+                ptr,
+                call_name,
+                viewed,
+                pos + 1,
+                disarmed,
+            );
+            if moved {
+                disarmed.pop();
+            }
+            if self
+                .builder
+                .get_insert_block()
+                .is_some_and(|b| b.get_terminator().is_none())
+            {
+                self.builder.build_unconditional_branch(cont_bb).unwrap();
+            }
         }
         self.builder.position_at_end(cont_bb);
     }

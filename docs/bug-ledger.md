@@ -93,7 +93,7 @@ distinguish "bugs flattening" from "we stopped writing them down."
 | class | total |
 |---|---|
 | run-vs-build | 500 |
-| miscompile | 477 |
+| miscompile | 480 |
 | leak | 437 |
 | double-free | 320 |
 | missing-feature | 209 |
@@ -110,8 +110,8 @@ distinguish "bugs flattening" from "we stopped writing them down."
 
 | surface | total |
 |---|---|
-| codegen | 2145 |
-| interp | 580 |
+| codegen | 2148 |
+| interp | 583 |
 | typecheck | 309 |
 | other | 110 |
 | ownership | 77 |
@@ -348,6 +348,9 @@ registered in the callee's prologue, not by-value struct params in general. | �
 | B-2026-09-27-11 | 2026-09-27 | codegen+interp | medium | A NAMED STRUCT RECEIVER HANDED BACK WHOLE BY AN OWNED-`self` METHOD RUNS EVERY `Drop` BODY TWICE, on all four surfaces, own `Drop` or not -- `let b = a.ret_self()` over `struct S { r: R }` with `impl Drop for S` prints `dS1 dR1 dS1 dR1`, and over a plain `struct P { r: R }` prints `dR6 dR6`; a temp receiver whose method returns a fresh value loses its bodies; memory balanced | — |
 | B-2026-09-27-12 | 2026-09-27 | interp | medium | THE INTERPRETER MIS-OWNS A CONDITIONALLY-RETURNED BY-VALUE PARAM OF AN ENUM WITH ITS OWN `Drop`: `mb(a, false)` over `fn mb(e: E, c: bool) -> E { if c { return e } return E.B }` loses the payload body (`mb-new dE dE` against the compiled `mb-new dE dR2 dE`) and `mb(a, true)` runs the shell twice (`dE dR3 dE` against `dE dR3`); the always-returning `ide(q)` doubles the shell the same way | — |
 | B-2026-09-27-13 | 2026-09-27 | codegen | medium | A METHOD-CALL RESULT PASSED STRAIGHT INTO A BY-VALUE PARAM THAT HANDS IT BACK LEAKS 52 B IN 2 BLOCKS AT `-O0` -- `let b: E = f(a.ret_self())` and `f(E.A(mk(7)).ret_self())` over `fn f(e: E) -> E { return e }` (15 allocs, 13 frees) while the free-function nesting `f(g(E.A(mk(6))))` is clean; output correct on every surface | — |
+| B-2026-09-27-2 | 2026-09-27 | interp+codegen | high | MOVING AN ELEMENT OUT OF A LOCAL TUPLE BY `return t.0` OR A TAIL `t.0` RUNS ITS Drop BODY TWICE IN THE INTERPRETER, AND A CONDITIONAL MOVE (`if k { return t.0; }`, `if k { let x = t.0; }`) LOSES EVERY ELEMENT BODY ON THE PATH THAT DOES NOT MOVE IN THE COMPILED BACKENDS -- each backend wrong where the other is right | — |
+| B-2026-09-27-3 | 2026-09-27 | interp+codegen | high | A PROJECTION MOVED OUT IN A VALUE POSITION OTHER THAN `let x = p.f` / `return` / a function tail RUNS ITS Drop BODY TWICE ON EVERY BACKEND -- `let x = if k { p.a } else { .. }`, `let x = { t.0 }`, `v.push(t.0)`, and `if k { v.push(t.0); }` | — |
+| B-2026-09-27-4 | 2026-09-27 | interp+codegen | medium | A BY-VALUE TUPLE PARAMETER WHOSE ELEMENT IS RETURNED ON ONLY SOME PATHS (`fn eat(o: (R, R), k: bool) -> R { if k { return o.0; } .. }`) LOSES THAT ELEMENT'S Drop BODY ON THE PATH THAT DOES NOT RETURN IT, ON EVERY BACKEND | — |
 
 ### Relocated
 

@@ -340,6 +340,19 @@ pub(crate) struct DropRc<'ctx> {
     /// takes these fields back out of the map-derived mask. Keyed by the slot,
     /// which is unique per alloca, so no per-function reset is needed.
     pub(crate) cond_move_field_flag_slots: HashSet<PointerValue<'ctx>>,
+    /// B-2026-09-27-2 — the [`Self::field_view_flags`] slots minted by a
+    /// CONDITIONAL move of a tuple ELEMENT (`if k { return t.0 }`), keyed
+    /// `#<index>` in that map, with the tuple's aggregate type and element
+    /// types captured at the move. The binding's `ContainerElemBodies` walk is
+    /// left registered, unmasked, in its owning frame; at its death
+    /// [`Codegen::emit_user_drop_bodies_call_field_view_selected`] branches on
+    /// these flags and masks exactly the elements that moved on that path.
+    /// Re-registering a masked walker in the move's own frame, which is what
+    /// the unconditional route does, lost every element body on the path that
+    /// never ran the move. Keyed by the slot, unique per alloca, so no
+    /// per-function reset is needed.
+    pub(crate) tuple_elem_move_flag_types:
+        HashMap<PointerValue<'ctx>, (StructType<'ctx>, Vec<TypeExpr>)>,
     /// B-2026-09-25-31 — argument slots whose WHOLE cleanup (body and memory)
     /// a generic call site retracted because the callee FORWARDS the value (a
     /// struct with a `shared` field declines copy support) and hands it back.

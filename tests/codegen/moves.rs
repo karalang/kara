@@ -8142,3 +8142,100 @@ impl Hf { fn put(self, v: mut ref Vec[F], x: F) { v.push(x); } fn hold(mut ref s
         }
     }
 }
+
+/// B-2026-09-27-2 — an element moved out of a LOCAL tuple on only SOME paths
+/// (`if k { return t.0; }`, `if k { let x = t.0; }`) runs every element's
+/// `Drop` body once on each path, on both backends.
+///
+/// Before, the compiled backends lost EVERY element body on the path that did
+/// not move (`got:1 dR1` at `ret-some-false`, where `dR5 dR7 got:1 dR1` is
+/// due): the move retracted the tuple's walk from its owning frame and
+/// re-registered a masked one in the branch's frame, which the other path
+/// never reaches. The walk now stays where it is and a per-element runtime
+/// flag masks the element only where it moved
+/// (`conditional_tuple_elem_move_takes_runtime_flag`), the tuple peer of the
+/// struct field route. The interpreter was right on those and doubled the
+/// unconditional `return t.0` / tail `t.0` cells instead.
+#[test]
+fn e2e_local_tuple_element_moved_on_some_paths_runs_its_body_once() {
+    let src = r#"struct R { id: i64 }
+impl Drop for R { fn drop(mut ref self) { println(f"dR{self.id}") } }
+fn ret_some(k: bool) -> R {
+    let t = (R { id: 5 }, R { id: 7 });
+    if k { return t.0; }
+    return R { id: 1 };
+}
+fn ret_each(k: bool) -> R {
+    let t = (R { id: 5 }, R { id: 7 });
+    if k { return t.0; } else { return t.1; }
+}
+fn ret_scalar_sibling(k: bool) -> R {
+    let t = (R { id: 5 }, 3);
+    if k { return t.0; }
+    return R { id: 1 };
+}
+fn let_some(k: bool) -> R {
+    let t = (R { id: 5 }, R { id: 7 });
+    if k { let x = t.0; println(f"  x{x.id}"); }
+    return R { id: 1 };
+}
+fn ret_always() -> R {
+    let t = (R { id: 5 }, R { id: 7 });
+    return t.0;
+}
+fn tail_always() -> R {
+    let t = (R { id: 5 }, R { id: 7 });
+    t.0
+}
+fn ret_by_arm(k: i64) -> R {
+    let t = (R { id: 5 }, 3, R { id: 7 }, R { id: 9 });
+    match k {
+        0 => { return t.0; }
+        1 => { return t.2; }
+        2 => { return t.3; }
+        _ => {}
+    }
+    R { id: 1 }
+}
+fn ret_nested(k: bool, m: bool) -> R {
+    let t = (R { id: 5 }, R { id: 7 });
+    {
+        if k { if m { return t.0; } }
+    }
+    println("  after");
+    R { id: 1 }
+}
+fn main() {
+    println("ret-some-true"); { let g = ret_some(true); println(f"  got:{g.id}") }
+    println("ret-some-false"); { let g = ret_some(false); println(f"  got:{g.id}") }
+    println("ret-each-true"); { let g = ret_each(true); println(f"  got:{g.id}") }
+    println("ret-each-false"); { let g = ret_each(false); println(f"  got:{g.id}") }
+    println("scalar-sibling-true"); { let g = ret_scalar_sibling(true); println(f"  got:{g.id}") }
+    println("scalar-sibling-false"); { let g = ret_scalar_sibling(false); println(f"  got:{g.id}") }
+    println("let-some-true"); { let g = let_some(true); println(f"  got:{g.id}") }
+    println("let-some-false"); { let g = let_some(false); println(f"  got:{g.id}") }
+    println("ret-always"); { let g = ret_always(); println(f"  got:{g.id}") }
+    println("tail-always"); { let g = tail_always(); println(f"  got:{g.id}") }
+    let mut k = 0;
+    while k < 4 { println(f"arm-{k}"); { let g = ret_by_arm(k); println(f"  got:{g.id}") } k = k + 1; }
+    println("nested-tt"); { let g = ret_nested(true, true); println(f"  got:{g.id}") }
+    println("nested-tf"); { let g = ret_nested(true, false); println(f"  got:{g.id}") }
+    println("loop");
+    let mut i = 0;
+    while i < 3 {
+        let t = (R { id: 10 + i }, R { id: 20 + i });
+        if i == 1 { let x = t.0; println(f"  took:{x.id}"); }
+        println(f"  end{i}");
+        i = i + 1;
+    }
+    println("end")
+}
+"#;
+    let want = "ret-some-true\ndR7\n  got:5\ndR5\nret-some-false\ndR5\ndR7\n  got:1\ndR1\nret-each-true\ndR7\n  got:5\ndR5\nret-each-false\ndR5\n  got:7\ndR7\nscalar-sibling-true\n  got:5\ndR5\nscalar-sibling-false\ndR5\n  got:1\ndR1\nlet-some-true\n  x5\ndR5\ndR7\n  got:1\ndR1\nlet-some-false\ndR5\ndR7\n  got:1\ndR1\nret-always\ndR7\n  got:5\ndR5\ntail-always\ndR7\n  got:5\ndR5\narm-0\ndR7\ndR9\n  got:5\ndR5\narm-1\ndR5\ndR9\n  got:7\ndR7\narm-2\ndR5\ndR7\n  got:9\ndR9\narm-3\ndR5\ndR7\ndR9\n  got:1\ndR1\nnested-tt\ndR7\n  got:5\ndR5\nnested-tf\ndR5\ndR7\n  after\n  got:1\ndR1\nloop\ndR10\ndR20\n  end0\n  took:11\ndR11\ndR21\n  end1\ndR12\ndR22\n  end2\nend\n";
+    let (interp_out, interp_errs, _, _) = karac::run_program_full_checked(src);
+    assert!(interp_errs.is_empty(), "interp errored: {interp_errs:?}");
+    assert_eq!(interp_out.join(""), want, "interpreter");
+    if let Some(aot) = run_program(src) {
+        assert_eq!(aot, want, "AOT");
+    }
+}

@@ -13126,6 +13126,10 @@ impl<'ctx> super::Codegen<'ctx> {
         let Some(slot) = self.variables.get(var_name).copied() else {
             return;
         };
+        if self.conditional_tuple_elem_move_takes_runtime_flag(var_name, index, tuple_ty, &elem_tes)
+        {
+            return;
+        }
         self.tuple_moved_elem_bodies
             .entry(var_name.to_string())
             .or_default()
