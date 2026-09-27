@@ -4574,16 +4574,29 @@ pub fn fn_conditionally_returns_param_bare(
     // Unexpanded, `let r: Option[R] = if c { a } else { None }; …; r` kept the
     // caller's argument armed while `r` handed it back: a segfault on every
     // compiled surface and the body twice under `--interp`.
+    //
+    // B-2026-09-24-11 — "such a struct" means one that RUNS a user `Drop`
+    // body anywhere inside it, not only one that declares its own: `struct M
+    // { r: R, s: String }` with `R: Drop` is the same shape to both backends'
+    // callee-side registration (codegen's `optres_payload_runs_user_drop`
+    // walks fields through `type_runs_user_drop`, and the interpreter's
+    // adoption asks `field_value_carries_user_drop` of the value), so the
+    // tail spelling was right for it on every surface. Only this leaf
+    // expansion asked the narrower question, which left `let r: Option[M] =
+    // if c { a } else { None }; …; r` with two owners on the taken path: no
+    // output at all on the compiled surfaces (valgrind 4 errors) and the
+    // body twice under `--interp` (`mid d1 y1 d1 end`).
     let droppable_struct = |te: &crate::ast::TypeExpr| {
         matches!(&te.kind, crate::ast::TypeKind::Path(q)
         if q.segments.len() == 1
             && q.generic_args.is_none()
             && program.is_some_and(|p| {
-                p.drop_method_keys.contains_key(&q.segments[0])
-                    && p.items.iter().any(|it| {
-                        matches!(it, Item::StructDef(s)
-                            if s.name == q.segments[0] && !s.is_shared && !s.is_par)
-                    })
+                p.items.iter().any(|it| {
+                    matches!(it, Item::StructDef(s)
+                        if s.name == q.segments[0] && !s.is_shared && !s.is_par
+                            && s.generic_params.is_none())
+                }) && (p.drop_method_keys.contains_key(&q.segments[0])
+                    || type_carries_user_drop(p, te, &mut Vec::new()))
             }))
     };
     let expandable_param = match &param.ty.kind {
