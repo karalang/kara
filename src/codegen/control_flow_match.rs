@@ -15994,7 +15994,7 @@ impl<'ctx> super::Codegen<'ctx> {
 
     /// The binding names a `Some`/`Ok`/`Err` arm introduces, for the borrow
     /// verdict in [`Self::boxed_tuple_payload_arm_takes_ownership`].
-    fn variant_arm_binds(pattern: &Pattern) -> Vec<String> {
+    pub(super) fn variant_arm_binds(pattern: &Pattern) -> Vec<String> {
         let PatternKind::TupleVariant { patterns, .. } = &pattern.kind else {
             return Vec::new();
         };
@@ -18081,6 +18081,7 @@ impl<'ctx> super::Codegen<'ctx> {
         //
         // Falls back to the removal when there is no flag to be had (no armed
         // action, or no current function), which is byte-identical to before.
+        self.record_taken_tuple_payload_binding_tes(&name, pattern);
         if let Some(flag) = self.optres_payload_bodies_flag_for(&name) {
             let _ = self
                 .builder
@@ -18088,6 +18089,97 @@ impl<'ctx> super::Codegen<'ctx> {
             return;
         }
         self.suppress_container_elem_bodies_for_var(&name);
+    }
+
+    /// B-2026-09-17-16 — the place has just handed its TUPLE payload's bodies
+    /// to a whole-value binding (`Some(t)`) that takes it. A tuple has no type
+    /// name, so nothing at the bind site funded `t`; record its element types
+    /// so whatever takes it next registers the walk, exactly as a tuple
+    /// LOCAL's `let u = t;` does (`tuple_binding_elem_tes`). The `let ... else`
+    /// leg also registers the walk on `t` itself, since there `t` is the
+    /// owner for the rest of the enclosing block
+    /// ([`Self::fund_let_else_tuple_payload_binding`]).
+    fn record_taken_tuple_payload_binding_tes(&mut self, name: &str, pattern: &Pattern) {
+        for (b, elems) in self.taken_tuple_payload_bindings(name, pattern) {
+            self.var_types.tuple_var_elem_tes.insert(b, elems);
+        }
+    }
+
+    /// The whole-value bindings of `pattern` (`Some(t)` / `Ok(t)` / `Err(t)`)
+    /// over the place `name` whose recorded payload is a tuple, with that
+    /// tuple's element types.
+    fn taken_tuple_payload_bindings(
+        &self,
+        name: &str,
+        pattern: &Pattern,
+    ) -> Vec<(String, Vec<TypeExpr>)> {
+        let PatternKind::TupleVariant { path, patterns } = &pattern.kind else {
+            return Vec::new();
+        };
+        let arg_idx = match path.last().map(String::as_str) {
+            Some("Some") | Some("Ok") => 0,
+            Some("Err") => 1,
+            _ => return Vec::new(),
+        };
+        let [sub] = patterns.as_slice() else {
+            return Vec::new();
+        };
+        let PatternKind::Binding(b) = &sub.kind else {
+            return Vec::new();
+        };
+        if self.payload_vars.param_payload_arm_views.contains(b) {
+            return Vec::new();
+        }
+        let Some(inst) = self.type_decls.enum_inst_var_types.get(name) else {
+            return Vec::new();
+        };
+        let TypeKind::Path(p) = &inst.kind else {
+            return Vec::new();
+        };
+        match p.generic_args.as_ref().and_then(|a| a.get(arg_idx)) {
+            Some(GenericArg::Type(TypeExpr {
+                kind: TypeKind::Tuple(elems),
+                ..
+            })) => vec![(b.clone(), elems.clone())],
+            _ => Vec::new(),
+        }
+    }
+
+    /// B-2026-09-17-16 — `let Some(t) = o else { .. }` over a TUPLE payload:
+    /// `t` owns the payload for the rest of the enclosing block, so it gets
+    /// the bodies walk a tuple local gets at its `let`. Without it both
+    /// bodies ran nowhere on every compiled surface, where `--interp` ran them.
+    pub(super) fn fund_let_else_tuple_payload_binding(&mut self, value: &Expr, pattern: &Pattern) {
+        let ExprKind::Identifier(name) = &value.kind else {
+            return;
+        };
+        for (b, elems) in self.taken_tuple_payload_bindings(name, pattern) {
+            let Some(slot) = self.variables.get(&b).copied() else {
+                continue;
+            };
+            let inkwell::types::BasicTypeEnum::StructType(agg_ty) = slot.ty else {
+                continue;
+            };
+            if self.has_armed_container_elem_bodies(&b) {
+                continue;
+            }
+            self.var_types
+                .tuple_var_elem_tes
+                .insert(b.clone(), elems.clone());
+            // The memory half: the `let ... else` leg retracts the boxed
+            // tuple's interior walk unconditionally (B-2026-08-05-3), so the
+            // leaves are this binding's to free as well.
+            self.track_tuple_var(slot.ptr, agg_ty);
+            if let Some(bodies) = self.emit_tuple_elem_user_drop_bodies_fn(agg_ty, &elems) {
+                self.track_user_drop_var_with_fn(
+                    "",
+                    &b,
+                    slot.ptr,
+                    bodies,
+                    UserDropKind::ContainerElemBodies,
+                );
+            }
+        }
     }
 
     /// B-2026-09-02-8 — does an `Option`/`Result` payload sub-pattern bind out

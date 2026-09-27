@@ -2616,10 +2616,20 @@ impl<'ctx> super::Codegen<'ctx> {
         // reader to re-derive. See the `compile_if_let` site.
         if optres_bindings_owned {
             self.suppress_optres_payload_bodies_for_match(value, pattern);
+            self.fund_let_else_tuple_payload_binding(value, pattern);
         }
         // B-2026-08-05-3 (Option leg): a let-else binding escapes into the
         // enclosing scope, so it always takes the boxed tuple's interior.
-        self.retract_boxed_tuple_inner_drop_for_block(value, pattern, None);
+        // B-2026-09-17-16 — except a VIEW of a callee-owned param's payload
+        // (marked by the suppression above), whose leaves the param's own
+        // walk still frees; retracting it left them with no owner (4 B in 2
+        // blocks for `let Some(t) = o else { .. }` over `o: Option[(R, R)]`).
+        let binds_param_view = Self::variant_arm_binds(pattern)
+            .iter()
+            .any(|b| self.payload_vars.param_payload_arm_views.contains(b));
+        if !binds_param_view {
+            self.retract_boxed_tuple_inner_drop_for_block(value, pattern, None);
+        }
         // B-2026-07-21-16: `let Some(s) = a.opt else { … }` over an OWNED
         // place — zero the source field on the match edge (the escaped
         // binding owns the payload); the divergent else edge leaves it for
