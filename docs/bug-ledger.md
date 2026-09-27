@@ -94,8 +94,8 @@ distinguish "bugs flattening" from "we stopped writing them down."
 |---|---|
 | run-vs-build | 512 |
 | miscompile | 492 |
-| leak | 442 |
-| double-free | 328 |
+| leak | 443 |
+| double-free | 329 |
 | missing-feature | 209 |
 | codegen-gap | 197 |
 | other | 153 |
@@ -110,7 +110,7 @@ distinguish "bugs flattening" from "we stopped writing them down."
 
 | surface | total |
 |---|---|
-| codegen | 2187 |
+| codegen | 2189 |
 | interp | 601 |
 | typecheck | 309 |
 | other | 111 |
@@ -372,6 +372,8 @@ registered in the callee's prologue, not by-value struct params in general. | �
 | B-2026-09-27-64 | 2026-09-27 | codegen+interp | medium | A FRESH `shared enum` TEMP PASSED BY VALUE RUNS ITS PAYLOAD'S `Drop` BODY BEFORE THE ENCLOSING STATEMENT USES THE RESULT UNDER `--interp`, AND AFTER IT ON EVERY COMPILED BACKEND -- `println(f"x{rd(Sh.A(mk(28)))}")` over `fn rd(s: Sh) -> i64` prints `dR28 x28` interpreted and `x28 dR28` on jit / `-O0` / `-O2` / auto-par=0; the owned-`self` receiver spellings (`Sh.A(mk(29)).read()`, and `.none()` on a callee that never matches) split the same way. A NAMED local agrees on all five surfaces, and so does a plain (non-shared) struct temp arg, which reads `dR x` everywhere | — |
 | B-2026-09-27-65 | 2026-09-27 | codegen | medium | THE METHOD AND FIELD-SOURCE SPELLINGS OF B-2026-09-27-60 STILL RUN A BOXED GENERIC ENUM LOOP VIEW'S `Drop` BODY IN THE CALLEE -- `for h in v { k.take(h) }` over `impl K { fn take(self, h: Ho[S]) { shows(h) } }` prints `s7 dS7 n1 dS7 end` compiled where `--interp` prints `s7 n1 dS7 end`; `for h in c.v { shows(h) }` prints `s7 dS7 n1 end` and loses 32 B | — |
 | B-2026-09-27-66 | 2026-09-27 | codegen | high | A `for` LOOP VIEW OF A BOXED GENERIC ENUM THAT ESCAPES A BY-VALUE CALLEE, OR IS CONSUMED TWICE, CRASHES ON EVERY COMPILED SURFACE -- `for h in v { w.push(keep(h)) }` over `fn keep(h: Ho[S]) -> Ho[S] { h }` segfaults with 5 valgrind errors, and `for h in v { shows(h); shows(h) }` aborts, where `--interp` prints `n11 dS7 dS7 end` and `s7 s7 n1 dS7 end` | — |
+| B-2026-09-27-74 | 2026-09-27 | codegen | high | A BY-VALUE `Option` / `Result` PARAM WITH A BOXED USER-ENUM PAYLOAD, MATCHED BY A NESTED ARM WHOSE VALUE READS THE PAYLOAD, SKIPS THE PAYLOAD'S DROP BODIES AND RUNS ONE ON A ZEROED VALUE -- `fn rb(a: Option[K]) -> i64 { match a { Some(K.A(w)) => w.r.id, Some(K.B) => 30, None => 40 } }` over `enum K { A(W), B }` prints `k1 d0 k2 end` at -O0 and -O2 where `--interp` prints `k1 d1 d2 k2 end`, and valgrind finds the two heap `String`s of each `W` definitely lost; no rebind is involved | — |
+| B-2026-09-27-75 | 2026-09-27 | codegen | high | A WHOLE-PAYLOAD ARM `Some(k) => match k { .. }` ON A BY-VALUE `Option[K]` PARAM WITH A BOXED USER-ENUM PAYLOAD RUNS AN EXTRA `Drop` BODY ON A ZEROED VALUE, AND DOUBLE-FREES WHEN THE PARAM IS FIRST REBOUND -- `fn rb(a: Option[K]) -> i64 { match a { Some(k) => match k { K.A(w) => println(f"m{w.r.id}"), K.B => println("b") }, None => println("n") } 5 }` prints `m1 d1 d0 k5 m2 d2 d0 end` at -O0 and -O2 where `--interp` prints `m1 d1 k5 m2 d2 end`; with `let c = a; match c { .. }` it aborts `free(): double free` on both | — |
 
 ### Relocated
 
