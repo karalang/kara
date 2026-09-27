@@ -12259,9 +12259,19 @@ impl<'ctx> super::Codegen<'ctx> {
                 let Some(root) = Self::place_root_ident(e) else {
                     return;
                 };
-                if root == "self"
-                    || self.fn_ctx.current_fn_param_names.contains(root)
-                    || self.borrow_vars.ref_params.contains_key(root)
+                // B-2026-09-27-59 — except a param that OWNS its field-bodies
+                // walk. A struct param the callee owns by TRANSFER (a generic
+                // struct whose erased field fails the entry-copy check, e.g.
+                // `G[T] { r: T }`) registers that walk in the callee
+                // (`register_transferred_param_field_bodies`) and the caller
+                // registers none, so the callee is the only place the moved
+                // field can be masked: `fn getg(w: G[R]) -> R { return w.r }`
+                // ran `r`'s body at `w`'s death and again at the result's.
+                // A caller-retains param has no walk here and is still left
+                // alone, which is what the exclusion below was written for.
+                if self.borrow_vars.ref_params.contains_key(root)
+                    || ((root == "self" || self.fn_ctx.current_fn_param_names.contains(root))
+                        && !self.var_owns_struct_field_bodies(root))
                 {
                     return;
                 }
@@ -12273,7 +12283,9 @@ impl<'ctx> super::Codegen<'ctx> {
                             segs.push(field.as_str());
                             cur = object;
                         }
-                        ExprKind::Identifier(_) => break,
+                        // B-2026-09-27-59 — `self` roots the chain too, now
+                        // that a `self` owning its walk passes the gate above.
+                        ExprKind::Identifier(_) | ExprKind::SelfValue => break,
                         _ => return,
                     }
                 }
@@ -12281,7 +12293,29 @@ impl<'ctx> super::Codegen<'ctx> {
                 let Some(root_ty) = self.var_types.var_type_names.get(root).cloned() else {
                     return;
                 };
-                if self.place_chain_leaf_runs_user_drop(&root_ty, &segs) != Some(true) {
+                // B-2026-09-27-59 — a GENERIC struct's leaf names its erased
+                // param (`r: T`), which the name-keyed check reads as running
+                // nothing; ask the root's instantiation for a one-hop move.
+                let mono_leaf_runs = || {
+                    segs.len() == 1
+                        && self
+                            .type_decls
+                            .enum_inst_var_types
+                            .get(root)
+                            .map(|inst| self.generic_struct_subst_from_inst(&root_ty, inst))
+                            .filter(|subst| !subst.is_empty())
+                            .is_some_and(|subst| {
+                                let names = self.type_decls.struct_field_names.get(&root_ty);
+                                let fidx = names.and_then(|n| n.iter().position(|f| f == segs[0]));
+                                fidx.is_some_and(|i| {
+                                    self.user_drop_field_indices_mono(&root_ty, &subst)
+                                        .contains(&i)
+                                })
+                            })
+                };
+                if self.place_chain_leaf_runs_user_drop(&root_ty, &segs) != Some(true)
+                    && !mono_leaf_runs()
+                {
                     return;
                 }
                 if segs.len() == 1 {

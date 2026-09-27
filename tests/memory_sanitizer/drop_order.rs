@@ -4385,6 +4385,72 @@ fn main() {
     );
 }
 
+/// B-2026-09-27-59 — a `Drop`-bearing field of a GENERIC struct handed back
+/// by value runs its body once. The callee owns such a param by transfer (its
+/// erased `T` field fails the entry-copy check) and so holds the only field
+/// walk, but the return-site mask skipped every param and `self`, and read the
+/// erased `T` as bodiless, so the walk ran the returned field as well. Covers
+/// a named and a temp argument, a generic fn, the method return and tail
+/// spellings, a two-field method (the sibling still runs, `dR60`), a heap
+/// field, a `Some(w.r)` wrap and the same move out of a generic LOCAL.
+#[test]
+fn asan_generic_struct_field_handed_back_runs_its_body_once() {
+    assert_clean_asan_run(
+        r#"struct R { id: i64 }
+impl Drop for R { fn drop(mut ref self) { println(f"dR{self.id}") } }
+struct S { id: i64, s: String }
+impl Drop for S { fn drop(mut ref self) { println(f"dS{self.id}{self.s}") } }
+struct G[T] { r: T, n: i64 }
+struct G2[T] { a: T, b: T }
+impl[T] G[T] {
+    fn get(self) -> T { return self.r }
+    fn tl(self) -> T { self.r }
+}
+impl[T] G2[T] { fn ta(self) -> T { return self.a } }
+fn getg(w: G[R]) -> R { return w.r }
+fn getq[T](w: G[T]) -> T { w.r }
+fn geth(w: G[S]) -> S { return w.r }
+fn gets(w: G[R]) -> Option[R] { return Some(w.r) }
+fn mkl() -> R { let p = G { r: R { id: 9 }, n: 0 }; return p.r }
+fn mk2() -> R { let p = G2 { a: R { id: 10 }, b: R { id: 100 } }; p.a }
+fn main() {
+    let a = G { r: R { id: 1 }, n: 0 };
+    let x1 = getg(a);
+    println(f"x{x1.id}");
+    let x2 = getg(G { r: R { id: 2 }, n: 0 });
+    println(f"x{x2.id}");
+    let b = G { r: R { id: 3 }, n: 0 };
+    let x3 = getq(b);
+    println(f"x{x3.id}");
+    let c = G { r: R { id: 4 }, n: 0 };
+    let x4 = c.get();
+    println(f"x{x4.id}");
+    let d = G { r: R { id: 5 }, n: 0 };
+    let x5 = d.tl();
+    println(f"x{x5.id}");
+    let e = G2 { a: R { id: 6 }, b: R { id: 60 } };
+    let x6 = e.ta();
+    println(f"x{x6.id}");
+    let f = G { r: S { id: 7, s: "ab".to_string() + "cd" }, n: 0 };
+    let x7 = geth(f);
+    println(f"x{x7.id}");
+    let g = G { r: R { id: 8 }, n: 0 };
+    match gets(g) { Some(x) => println(f"x{x.id}"), None => println("n") }
+    let x9 = mkl();
+    println(f"x{x9.id}");
+    let x10 = mk2();
+    println(f"x{x10.id}");
+    println("end")
+}
+"#,
+        &[
+            "x1", "dR1", "x2", "dR2", "x3", "dR3", "x4", "dR4", "x5", "dR5", "dR60", "x6", "dR6",
+            "x7", "dS7abcd", "x8", "dR8", "x9", "dR9", "dR100", "x10", "dR10", "end",
+        ],
+        "asan_generic_struct_field_handed_back_runs_its_body_once",
+    );
+}
+
 /// B-2026-09-27-49 — a by-value user-enum param handed back on some exits only
 /// runs its payload body once on the exit where it dies inside and is freed
 /// once on every exit: non-generic, match-arm and generic spellings.
