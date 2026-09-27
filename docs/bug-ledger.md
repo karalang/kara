@@ -92,7 +92,7 @@ distinguish "bugs flattening" from "we stopped writing them down."
 
 | class | total |
 |---|---|
-| run-vs-build | 518 |
+| run-vs-build | 519 |
 | miscompile | 511 |
 | leak | 450 |
 | double-free | 335 |
@@ -110,8 +110,8 @@ distinguish "bugs flattening" from "we stopped writing them down."
 
 | surface | total |
 |---|---|
-| codegen | 2228 |
-| interp | 627 |
+| codegen | 2229 |
+| interp | 628 |
 | typecheck | 311 |
 | other | 111 |
 | ownership | 79 |
@@ -280,7 +280,6 @@ registered in the callee's prologue, not by-value struct params in general. | �
 | B-2026-09-23-45 | 2026-09-23 | codegen+interp | medium | AN `Option[(R, i64)]` PARAM RETURNED ON SOME EXITS RUNS NO BODY FOR THE TUPLE'S `Drop` ELEMENT ON THE EXIT WHERE IT DIES INSIDE, ON ALL FOUR SURFACES -- `if c { a } else { None }` at `c = false` prints `none` where `d1 none` is due; the `Option[R]` spelling is fixed | — |
 | B-2026-09-24-5 | 2026-09-24 | interp | low | `--interp` RUNS NO `Drop` BODY FOR A HAND-BACK RESULT MATCHED WITH A WILDCARD ARM, where the compiled surfaces now run it -- `match id(a) { Some(_) => println("s"), None => .. }` prints `s end` interpreted and `s d1 end` on jit / -O0 / -O2, and the BOUND spelling `let b = id(a); match b { Some(_) => .. }` prints `s d1 end` on all four | — |
 | B-2026-09-24-10 | 2026-09-24 | codegen | low | AN UNBOUND HAND-BACK `match` SCRUTINEE RUNS ITS PAYLOAD'S `Drop` BODY AT THE ENCLOSING SCOPE'S END ON THE COMPILED SURFACES AND AT THE MATCH'S END UNDER `--interp` -- `match id(a) { Some(x) => x, None => mkr(9) }; println("after")` prints `d1 after end` interpreted and `after end d1` compiled; the bound spelling prints `d1 after end` everywhere | — |
-| B-2026-09-24-11 | 2026-09-24 | codegen+interp | high | A `let`-BOUND HAND-BACK OF AN `Option` WHOSE PAYLOAD HAS A `Drop` BODY NESTED INSIDE IT IS STILL WRONG, the remainder B-2026-09-23-44 leaves out -- `fn f(a: Option[M], c: bool) -> Option[M] { let r: Option[M] = if c { a } else { None }; println("mid"); r }` over `struct M { r: R, s: String }` (R has a `Drop`) prints `mid d1 y1 d1 end` under `--interp` and nothing on jit / -O0 / -O2 (valgrind err=4), where the TAIL spelling prints `mid y1 d1 end` everywhere | — |
 | B-2026-09-24-13 | 2026-09-24 | codegen+interp | medium | FOUR MORE HAND-BACK SPELLINGS OVER A BY-VALUE `Option[R]` PARAM STILL RUN THE `Drop` BODY TWICE OR NOT AT ALL, the remainder of B-2026-09-24-9 -- a CONDITIONAL hand-back `match idc(a, true) { Some(x) => x.id, .. }` prints `d1 d1 k1 end` on all four surfaces for a named argument; a temp argument's `let b = id(a); match b { Some(x) => x, .. }` prints `d1 k1 d1 end` under `--interp`; its `let b = id(a); 7` and `match id(a) { Some(_) => 1, .. }` run NO body on jit / -O0 / -O2 | — |
 | B-2026-09-24-32 | 2026-09-24 | codegen | low | A GENERIC FUNCTION'S BY-VALUE `Option[T]` PARAM LEAKS A FRESH `Some(P { .. })` TEMPORARY WHEN `T` IS A HEAP-BEARING STRUCT -- `fn peek[T](a: Option[T]) -> i64 { match a { Some(_) => 1, None => 0 } }` called as `peek(Some(P { s: f"..", n: 1 }))` prints the right answer on all four surfaces and loses 61 bytes at -O0, while the non-generic `peek(a: Option[P])` twin is clean | — |
 | B-2026-09-24-34 | 2026-09-24 | codegen | low | A GENERIC STRUCT'S `Option` FIELD PASSED BY VALUE LEAKS ITS PAYLOAD -- `struct W[T] { o: Option[T] }` with `let y = W { o: Some(f"..") }; peek(y.o)` prints `1 end` on all four surfaces and loses 30 bytes at -O0, for a generic and a non-generic `peek`, whether `y` comes from a literal or from `fn wrap[T](a: Option[T]) -> W[T]` | — |
@@ -388,6 +387,7 @@ registered in the callee's prologue, not by-value struct params in general. | �
 | B-2026-09-27-96 | 2026-09-27 | codegen+interp | high | THE REMAINDER OF B-2026-09-27-102: A BOXED GENERIC ENUM PARAM HANDED BACK ON ONE PATH STILL DOUBLE-FREES WHEN THE OTHER PATH PUSHES IT INTO A `mut ref Vec` OR MATCHES IT BY VALUE, AND `--interp` DROPS THE PAYLOAD'S `Drop` BODY ON THE FORWARDING PATH -- `fn pkv(h: Ho[S], k: bool, w: mut ref Vec[Ho[S]]) -> Ho[S] { if k { return h } w.push(h); return Ho.Empty }` called as `pkv(h, false, mut w)` prints nothing compiled (vg=4) against `--interp`'s right `e n1 dS8 end` | — |
 | B-2026-09-27-128 | 2026-09-27 | interp+codegen | medium | A GENERIC FN THAT RETURNS ITS `Option[T]` PARAM ON ONLY SOME PATHS LOSES A FRESH-TEMP ARGUMENT'S `Drop` BODY ON THE PATH THAT DOES NOT RETURN IT, ON EVERY SURFACE, AND LEAKS ITS BOX COMPILED -- `mg(Some(mk(2)), false)` over `fn mg[T](a: Option[T], c: bool) -> Option[T] { if c { a } else { None } }` prints no `d2` | — |
 | B-2026-09-27-129 | 2026-09-27 | interp+codegen | medium | A CALL RESULT USED AS THE RECEIVER OF `is_some()` NEVER RUNS ITS PAYLOAD'S `Drop` BODY, ON EVERY SURFACE, AND LEAKS ITS BOX COMPILED -- `let n = mk2(3).is_some()` over `fn mk2(i: i64) -> Option[S] { Some(mk(i)) }` prints `ntrue end` where `d3` is due | — |
+| B-2026-09-27-97 | 2026-09-27 | codegen+interp | medium | A `let`-BOUND CONDITIONAL HAND-BACK OF `Option[Vec[R]]` OR `Option[(R, i64)]` (R has a `Drop`) STILL SPLITS THE BACKENDS, the non-struct remainder of B-2026-09-24-11 -- `let r: Option[Vec[R]] = if c { a } else { None }; println("mid"); r` with c=true prints `mid d1 n1 d1 end` under `--interp` (body run twice) and `mid n1 d1 end` compiled; from a TEMP argument with c=false the interpreter runs the body (`mid d1 none end`) and every compiled build loses it (`mid none end`) | — |
 
 ### Relocated
 
@@ -3046,6 +3046,7 @@ registered in the callee's prologue, not by-value struct params in general. | �
 | B-2026-09-24-7 | codegen+interp | high | MEASURED: re-binding a `mut ref` parameter (`let t = r;`) and mutating through `t` loses the mutation under --interp and double-frees compiled -- `r:… | 889202e1c |
 | B-2026-09-24-8 | codegen | medium | MEASURED: binding a `ref String` FIELD to a local (`let x = p.source;`) gives `x` no String type in codegen, so `x.len()` fails to build with `no han… | 889202e1c |
 | B-2026-09-24-9 | codegen+interp | high | A HAND-BACK OF A BY-VALUE `Option` PARAMETER WHOSE PAYLOAD A `match` ARM MOVES OUT IS WRONG ON EVERY SURFACE -- `fn pick(a: Option[R]) -> R { match i… | 729383c1c |
+| B-2026-09-24-11 | codegen+interp | high | A `let`-BOUND HAND-BACK OF AN `Option` WHOSE PAYLOAD HAS A `Drop` BODY NESTED INSIDE IT IS STILL WRONG, the remainder B-2026-09-23-44 leaves out -- `… | e2733c6fd |
 | B-2026-09-24-12 | codegen | high | A HEAP-BOXED `Option` PARAM MATCHED THROUGH A HAND-BACK CALL CRASHES EVERY COMPILED SURFACE -- `fn peek(a: Option[S]) -> i64 { match id(a) { Some(x)… | a63a5dbae |
 | B-2026-09-24-14 | codegen | high | AN INLINE HEAP PAYLOAD MATCHED THROUGH A HAND-BACK CALL IS FREED TWICE ON EVERY COMPILED SURFACE -- `fn peek(a: Option[String]) -> i64 { match id(a)… | 3f164bbdb |
 | B-2026-09-24-15 | codegen | high | AN ESCAPING BY-VALUE `Option` PARAM STILL DOUBLE FREES IN A METHOD, A GENERIC FUNCTION, OR WITH A `Drop`-BEARING PAYLOAD -- the three spellings B-202… | 741a4de0e |
