@@ -6237,3 +6237,49 @@ fn main() {
     };
     assert_eq!(out, "stmt\ndR30\ndR31\nletw\ndR32\ndR33\nnamed\nin-eat\ndR1\ndR2\nend-named\nnlet\nin-eat\ndR3\ndR4\nend-nlet\nfresh\ndR50\ndR51\nstrs\nok\n");
 }
+
+/// B-2026-09-17-1 — a discarded `match` / `if` whose arms are calls
+/// returning an aggregate runs the taken arm's element `Drop` bodies once, and
+/// frees them.
+///
+/// `match n { 1 => f(mk(44)), _ => f(mk(45)) };` over `fn f(r: R) -> (R, i64)`
+/// printed `dR44` under `--interp` and nothing on any compiled backend, which
+/// also LEAKED each element's `String` (8 blocks at `-O0` over this row's
+/// probe). Codegen's tuple and array discard arms resolve element types from a
+/// call's declared return, and the branch expression is not a call, so neither
+/// claimed the phi. The `if` and `let _ =` spellings, an `Array` return,
+/// a METHOD arm (`meth`) and a nested branch (`nested`) are the same gap.
+///
+/// The INTERPRETER twin is `tests/interpreter/arrays.rs`'s `test_discarded_branch_of_aggregate_calls_runs_its_element_bodies`, byte-identical
+/// source and expectation.
+#[test]
+fn e2e_discarded_branch_of_aggregate_calls_runs_its_element_bodies() {
+    let Some(out) = run_program(
+        r#"struct R { id: i64, name: String }
+impl Drop for R { fn drop(mut ref self) { println(f"dR{self.id}") } }
+fn mk(i: i64) -> R { return R { id: i, name: f"h{i}" }; }
+fn f(r: R) -> (R, i64) { return (r, 9); }
+fn fa(x: Array[R, 2]) -> Array[R, 2] { return x; }
+struct H { n: i64 }
+impl H { fn w(self, r: R) -> (R, i64) { return (r, 7); } }
+fn main() {
+    let n = 1;
+    let c = true;
+    let m = 2;
+    println("match"); match n { 1 => f(mk(44)), _ => f(mk(45)) };
+    println("match2"); match m { 1 => f(mk(46)), _ => f(mk(47)) };
+    println("if"); if c { f(mk(48)) } else { f(mk(49)) };
+    println("lmatch"); let _ = match n { 1 => f(mk(50)), _ => f(mk(51)) };
+    println("lif"); let _ = if c { f(mk(52)) } else { f(mk(53)) };
+    println("amatch"); match n { 1 => fa([mk(54), mk(55)]), _ => fa([mk(56), mk(57)]) };
+    println("aif2"); if not c { fa([mk(58), mk(59)]) } else { fa([mk(60), mk(61)]) };
+    println("meth"); { let h = H { n: 1 }; match m { 1 => f(mk(62)), _ => h.w(mk(63)) }; println("end-meth") }
+    println("nested"); match n { 1 => if c { f(mk(64)) } else { f(mk(65)) }, _ => f(mk(66)) };
+    println("ok");
+}
+"#,
+    ) else {
+        return;
+    };
+    assert_eq!(out, "match\ndR44\nmatch2\ndR47\nif\ndR48\nlmatch\ndR50\nlif\ndR52\namatch\ndR54\ndR55\naif2\ndR60\ndR61\nmeth\ndR63\nend-meth\nnested\ndR64\nok\n");
+}

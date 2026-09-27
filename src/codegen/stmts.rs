@@ -25286,6 +25286,45 @@ impl<'ctx> super::Codegen<'ctx> {
         }
     }
 
+    /// B-2026-09-17-1 — the arm tails of a discarded branch expression, when
+    /// [`Self::discarded_match_value_tail`] admits it and EVERY arm (through
+    /// nested `match` / `if` and block tails) yields a `Call` / `MethodCall`.
+    /// `None` for anything else, including a bare call, so the caller's
+    /// non-branch path is unchanged.
+    fn discarded_branch_call_tails<'e>(&self, tail: &'e Expr) -> Option<Vec<&'e Expr>> {
+        if !matches!(&tail.kind, ExprKind::Match { .. } | ExprKind::If { .. })
+            || self.discarded_match_value_tail(tail).is_none()
+        {
+            return None;
+        }
+        fn walk<'e>(e: &'e Expr, out: &mut Vec<&'e Expr>) -> bool {
+            match &e.kind {
+                ExprKind::Match { arms, .. } => arms
+                    .iter()
+                    .all(|a| walk(super::Codegen::block_tail_expr(&a.body), out)),
+                ExprKind::If {
+                    then_block,
+                    else_branch,
+                    ..
+                } => {
+                    let (Some(t), Some(el)) = (then_block.final_expr.as_deref(), else_branch)
+                    else {
+                        return false;
+                    };
+                    walk(super::Codegen::block_tail_expr(t), out)
+                        && walk(super::Codegen::block_tail_expr(el), out)
+                }
+                ExprKind::Call { .. } | ExprKind::MethodCall { .. } => {
+                    out.push(e);
+                    true
+                }
+                _ => false,
+            }
+        }
+        let mut out = Vec::new();
+        (walk(tail, &mut out) && !out.is_empty()).then_some(out)
+    }
+
     /// [`Self::discarded_match_value_tail`]'s `If` leg, in the form
     /// `compile_if` can ask it: that function receives the `if`'s PARTS, not
     /// an `Expr` node, and it must know whether this discard site is going to
@@ -25569,6 +25608,35 @@ impl<'ctx> super::Codegen<'ctx> {
         // CREATE a run-vs-build divergence out of a leak fix. That the body
         // runs nowhere is a real defect and a separate class from this one;
         // it is filed rather than folded in.
+        // B-2026-09-17-1 — a discarded `match` / `if` whose every arm is a
+        // CALL (`match n { 1 => f(mk(44)), _ => f(mk(45)) };` over
+        // `fn f(r: R) -> (R, i64)`). The tuple and array arms below resolve
+        // the aggregate's element types from a call's declared return, and the
+        // branch expression is not a call, so neither claimed the phi: the
+        // elements leaked and their bodies ran nowhere, against one body under
+        // `--interp`. Every arm yields the same type (the typechecker made
+        // them agree), so any arm that resolves is a sound source for it.
+        let branch_tails = self.discarded_branch_call_tails(tail);
+        let tuple_src: Option<&Expr> = match &branch_tails {
+            Some(ts) => ts
+                .iter()
+                .copied()
+                .find(|t| self.tuple_binding_elem_tes(None, t).is_some()),
+            None => Some(tail),
+        };
+        // An ARRAY phi needs every arm's callee to hand back an array it owns,
+        // the per-callee test the bare call spelling makes.
+        let array_src: Option<&Expr> = match &branch_tails {
+            Some(ts) => ts
+                .iter()
+                .all(|t| {
+                    self.discarded_call_array_parts(t).is_some()
+                        && self.callee_hands_back_an_owned_array(t)
+                })
+                .then(|| ts.first().copied())
+                .flatten(),
+            None => Some(tail),
+        };
         let handled_tuple = not_borrow
             && !handled_option
             && !handled_result
@@ -25576,13 +25644,15 @@ impl<'ctx> super::Codegen<'ctx> {
             && !handled_shared_option
             && !handled_boxed_result
             && !handled_boxed_option
-            && self.try_track_discarded_tuple_temp(tail, val);
+            && tuple_src.is_some_and(|src| self.try_track_discarded_tuple_temp(src, val));
         // B-2026-09-09-21 — the BODIES half the arm above declined, now that
         // the interpreter half lands with it. After the memory registration:
         // the drain is LIFO, so this runs BEFORE those frees, which is the
         // order a body that reads its element needs.
         if handled_tuple {
-            self.track_discarded_tuple_return_bodies(tail, val);
+            if let Some(src) = tuple_src {
+                self.track_discarded_tuple_return_bodies(src, val, branch_tails.is_some());
+            }
         }
         // B-2026-09-12-2 — a discarded fixed-`Array` temp (`passthru(a);` over
         // `fn passthru(x: Array[String, 2]) -> Array[String, 2]`), the sibling
@@ -25622,11 +25692,13 @@ impl<'ctx> super::Codegen<'ctx> {
             && !handled_boxed_result
             && !handled_boxed_option
             && !handled_tuple
-            && self.try_track_discarded_array_temp(tail, val);
+            && array_src.is_some_and(|src| self.try_track_discarded_array_temp(src, val));
         // B-2026-09-16-33 — the array twin of `track_discarded_tuple_return_bodies`,
         // registered after the memory walk for the same LIFO reason.
         if handled_array {
-            self.track_discarded_array_return_bodies(tail, val);
+            if let Some(src) = array_src {
+                self.track_discarded_array_return_bodies(src, val, branch_tails.is_some());
+            }
         }
         if !handled_option
             && !handled_result
@@ -26169,20 +26241,32 @@ impl<'ctx> super::Codegen<'ctx> {
     /// here, but the interpreter's discard dispatch reaches neither -- it keys
     /// on the callee's DECLARED `Array` return, because its `Value::Array`
     /// also carries every `Vec`. Registering for them would fire compiled-only.
-    fn track_discarded_array_return_bodies(&mut self, tail: &Expr, val: BasicValueEnum<'ctx>) {
-        let ExprKind::Call { callee, .. } = &tail.kind else {
-            return;
-        };
-        let ExprKind::Identifier(name) = &callee.kind else {
-            return;
-        };
-        if self
-            .fn_sig
-            .fn_return_type_exprs
-            .get(name)
-            .is_none_or(|te| self.array_elem_and_len(te).is_none())
-        {
-            return;
+    ///
+    /// `in_branch` (B-2026-09-17-1): `tail` is one arm of a discarded `match` /
+    /// `if` rather than the discarded expression itself. The interpreter's
+    /// branch discard is keyed on the arm VALUE, not on a callee, so the
+    /// free-function gate above does not apply there.
+    fn track_discarded_array_return_bodies(
+        &mut self,
+        tail: &Expr,
+        val: BasicValueEnum<'ctx>,
+        in_branch: bool,
+    ) {
+        if !in_branch {
+            let ExprKind::Call { callee, .. } = &tail.kind else {
+                return;
+            };
+            let ExprKind::Identifier(name) = &callee.kind else {
+                return;
+            };
+            if self
+                .fn_sig
+                .fn_return_type_exprs
+                .get(name)
+                .is_none_or(|te| self.array_elem_and_len(te).is_none())
+            {
+                return;
+            }
         }
         let Some((elem_te, n)) = self.discarded_call_array_parts(tail) else {
             return;
@@ -26337,7 +26421,16 @@ impl<'ctx> super::Codegen<'ctx> {
     /// optres peer states: the drain is LIFO, so a later registration runs
     /// EARLIER, and a body must read its element before the memory walk frees
     /// it.
-    fn track_discarded_tuple_return_bodies(&mut self, tail: &Expr, val: BasicValueEnum<'ctx>) {
+    ///
+    /// `in_branch` (B-2026-09-17-1): `tail` is one arm of a discarded `match` /
+    /// `if`, which the interpreter routes by the arm VALUE, so the free-function
+    /// gate below does not apply.
+    fn track_discarded_tuple_return_bodies(
+        &mut self,
+        tail: &Expr,
+        val: BasicValueEnum<'ctx>,
+        in_branch: bool,
+    ) {
         // A FREE-FUNCTION call tail only, and the restriction is load-bearing
         // rather than tidy. The interpreter twin routes this shape from the
         // `Call` arm of its discard dispatch, which reaches an `Identifier`
@@ -26352,11 +26445,13 @@ impl<'ctx> super::Codegen<'ctx> {
         // The method spelling is a real gap and is filed separately. It needs
         // the same both-halves-in-one-commit treatment this shape got, not a
         // widened gate here.
-        let ExprKind::Call { callee, .. } = &tail.kind else {
-            return;
-        };
-        if !matches!(&callee.kind, ExprKind::Identifier(_)) {
-            return;
+        if !in_branch {
+            let ExprKind::Call { callee, .. } = &tail.kind else {
+                return;
+            };
+            if !matches!(&callee.kind, ExprKind::Identifier(_)) {
+                return;
+            }
         }
         let BasicValueEnum::StructValue(sv) = val else {
             return;

@@ -8258,3 +8258,52 @@ fn main() {
         "asan_discarded_array_return_runs_its_element_bodies",
     );
 }
+
+/// B-2026-09-17-1 — a discarded `match` / `if` whose arms are calls
+/// returning an aggregate runs the taken arm's element `Drop` bodies once, and
+/// frees them.
+///
+/// `match n { 1 => f(mk(44)), _ => f(mk(45)) };` over `fn f(r: R) -> (R, i64)`
+/// printed `dR44` under `--interp` and nothing on any compiled backend, which
+/// also LEAKED each element's `String` (8 blocks at `-O0` over this row's
+/// probe). Codegen's tuple and array discard arms resolve element types from a
+/// call's declared return, and the branch expression is not a call, so neither
+/// claimed the phi. The `if` and `let _ =` spellings, an `Array` return,
+/// a METHOD arm (`meth`) and a nested branch (`nested`) are the same gap.
+///
+/// Every `R` owns a `String`: before the fix each discarded element leaked
+/// it, and a body run after the memory walk would read freed memory.
+#[test]
+fn asan_discarded_branch_of_aggregate_calls_runs_its_element_bodies() {
+    assert_clean_asan_run(
+        r#"struct R { id: i64, name: String }
+impl Drop for R { fn drop(mut ref self) { println(f"dR{self.id}") } }
+fn mk(i: i64) -> R { return R { id: i, name: f"h{i}" }; }
+fn f(r: R) -> (R, i64) { return (r, 9); }
+fn fa(x: Array[R, 2]) -> Array[R, 2] { return x; }
+struct H { n: i64 }
+impl H { fn w(self, r: R) -> (R, i64) { return (r, 7); } }
+fn main() {
+    let n = 1;
+    let c = true;
+    let m = 2;
+    println("match"); match n { 1 => f(mk(44)), _ => f(mk(45)) };
+    println("match2"); match m { 1 => f(mk(46)), _ => f(mk(47)) };
+    println("if"); if c { f(mk(48)) } else { f(mk(49)) };
+    println("lmatch"); let _ = match n { 1 => f(mk(50)), _ => f(mk(51)) };
+    println("lif"); let _ = if c { f(mk(52)) } else { f(mk(53)) };
+    println("amatch"); match n { 1 => fa([mk(54), mk(55)]), _ => fa([mk(56), mk(57)]) };
+    println("aif2"); if not c { fa([mk(58), mk(59)]) } else { fa([mk(60), mk(61)]) };
+    println("meth"); { let h = H { n: 1 }; match m { 1 => f(mk(62)), _ => h.w(mk(63)) }; println("end-meth") }
+    println("nested"); match n { 1 => if c { f(mk(64)) } else { f(mk(65)) }, _ => f(mk(66)) };
+    println("ok");
+}
+"#,
+        &[
+            "match", "dR44", "match2", "dR47", "if", "dR48", "lmatch", "dR50", "lif", "dR52",
+            "amatch", "dR54", "dR55", "aif2", "dR60", "dR61", "meth", "dR63", "end-meth", "nested",
+            "dR64", "ok",
+        ],
+        "asan_discarded_branch_of_aggregate_calls_runs_its_element_bodies",
+    );
+}
