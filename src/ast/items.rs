@@ -4979,6 +4979,49 @@ fn returned_param_part_paths_impl(
     let Some(param) = f.params.get(arg_index) else {
         return Vec::new();
     };
+    let PatternKind::Binding(param_name) = &param.pattern.kind else {
+        return Vec::new();
+    };
+    part_paths_from_root(f, param_name, arg_index, program)
+}
+
+/// B-2026-09-25-28 — [`fn_escaping_param_part_paths`] asked of an OWNED `self`
+/// receiver: the parts of `self` the method hands out of its frame
+/// (`fn getr(self) -> R { return self.r }`, the tail and `let q = self.r; q`
+/// spellings, a destructure of `self`).
+///
+/// A named receiver's caller keeps its walk over the receiver for the whole
+/// call (the struct receiver's long-standing convention, see the
+/// `fn_rebinds_self_whole` stand-down beside it), so a field handed back ran
+/// its body in that walk AND at the result's owner -- `dR1 x1 dR1` on all four
+/// surfaces, where the free-function twin `getf(w)` masks it through this
+/// query's param form. The caller masks exactly these parts, both backends.
+pub fn fn_escaping_self_part_paths(program: &crate::Program, f: &Function) -> Vec<ParamPath> {
+    if !matches!(f.self_param, Some(SelfParam::Owned)) {
+        return Vec::new();
+    }
+    part_paths_from_root(f, "self", usize::MAX, Some(program))
+}
+
+/// B-2026-09-25-28 — does `f` declare a TUPLE return? The receiver mask built
+/// on [`fn_escaping_self_part_paths`] stands down for one, because a discarded
+/// tuple method result runs no element body yet (B-2026-09-17-2).
+pub fn fn_returns_tuple(f: &Function) -> bool {
+    f.return_type
+        .as_ref()
+        .is_some_and(|te| matches!(te.kind, crate::ast::TypeKind::Tuple(_)))
+}
+
+/// The shared body of the two part-path queries above: `root` is the param's
+/// binding name, or `"self"` for the receiver (which the inner `denote`
+/// reaches through `ExprKind::SelfValue`). For the receiver `arg_index` is
+/// `usize::MAX` and only keys the cycle guard.
+fn part_paths_from_root(
+    f: &Function,
+    param_name: &str,
+    arg_index: usize,
+    program: Option<&crate::Program>,
+) -> Vec<ParamPath> {
     // The roots whose storage outlives the call, as
     // `fn_moves_param_into_outliving_place` computes them; only consulted on
     // the program-aware path.
@@ -5018,9 +5061,6 @@ fn returned_param_part_paths_impl(
     if program.is_some() {
         PART_PATHS_IN_FLIGHT.with(|v| v.borrow_mut().push(key.clone()));
     }
-    let PatternKind::Binding(param_name) = &param.pattern.kind else {
-        return Vec::new();
-    };
 
     /// What `e` denotes relative to the param: `Some(path)` where an EMPTY
     /// path is the whole param and each element steps one level in, `None` =
@@ -5031,6 +5071,13 @@ fn returned_param_part_paths_impl(
     fn denote(e: &Expr, aliases: &[(String, ParamPath)]) -> Option<ParamPath> {
         match &e.kind {
             ExprKind::Identifier(n) => aliases.iter().find(|(a, _)| a == n).map(|(_, p)| p.clone()),
+            // B-2026-09-25-28 — the receiver root. Only `fn_escaping_self_part_paths`
+            // seeds a `"self"` alias; a param root never does, so this arm
+            // answers `None` there exactly as before.
+            ExprKind::SelfValue => aliases
+                .iter()
+                .find(|(a, _)| a == "self")
+                .map(|(_, p)| p.clone()),
             ExprKind::TupleIndex { object, index } => {
                 let mut path = denote(object, aliases)?;
                 path.push(ParamPart::TupleIndex(*index as usize));
@@ -5399,7 +5446,7 @@ fn returned_param_part_paths_impl(
         }
     }
 
-    let mut aliases: Vec<(String, ParamPath)> = vec![(param_name.clone(), Vec::new())];
+    let mut aliases: Vec<(String, ParamPath)> = vec![(param_name.to_string(), Vec::new())];
     grow_block(&f.body, &mut aliases);
     let mut out = Vec::new();
     scan_block(&f.body, &aliases, cx, &mut out);

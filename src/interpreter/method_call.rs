@@ -540,6 +540,55 @@ impl<'a> super::Interpreter<'a> {
                                     self.moved_out_struct_field_payload_bodies
                                         .insert((recv_name.clone(), names));
                                 }
+                                // B-2026-09-25-28 — and a PART of a struct
+                                // receiver the method hands out of its frame
+                                // (`fn getr(self) -> R { return self.r }`):
+                                // mask it in the named receiver's retained
+                                // walk, the mask `getf(w)` gets for a named
+                                // argument through `run_fresh_temp_arg_drops`.
+                                // Without it `let x = w.getr()` ran `dR1` in
+                                // the walk and again at `x`'s death, on all
+                                // four surfaces. A whole rebind of `self`
+                                // stands the walk down below instead, and a
+                                // TUPLE-returning method is left alone for
+                                // codegen's B-2026-09-17-2 reason. Codegen
+                                // twin: `disarm_struct_var_escaping_parts` at
+                                // the owned-`self` call site in method_call.rs.
+                                if matches!(obj, Value::Struct { .. }) {
+                                    let parts = self
+                                        .find_impl_method_ast(&type_name, method)
+                                        .filter(|f| {
+                                            !crate::ast::fn_rebinds_self_whole(f)
+                                                && !crate::ast::fn_conditionally_rebinds_self(f)
+                                                && !crate::ast::fn_returns_tuple(f)
+                                        })
+                                        .map(|f| {
+                                            crate::ast::fn_escaping_self_part_paths(self.program, f)
+                                        })
+                                        .unwrap_or_default();
+                                    for path in parts {
+                                        if let [crate::ast::ParamPart::Field(fname)] =
+                                            path.as_slice()
+                                        {
+                                            self.moved_out_struct_field_bodies
+                                                .insert((recv_name.clone(), fname.clone()));
+                                            continue;
+                                        }
+                                        if !matches!(
+                                            path.first(),
+                                            Some(crate::ast::ParamPart::Field(_))
+                                        ) {
+                                            continue;
+                                        }
+                                        let names = Self::param_path_names(&path);
+                                        if Self::value_at_name_path(obj, &names)
+                                            .is_some_and(Self::value_leaf_can_own)
+                                        {
+                                            self.moved_out_nested_field_bodies
+                                                .insert((recv_name.clone(), names));
+                                        }
+                                    }
+                                }
                                 // B-2026-09-06-39 — ...but only when there IS
                                 // an arm to hand the payload to. This disarm is
                                 // a HAND-OFF to the arm channel, and a callee

@@ -8905,6 +8905,21 @@ impl<'ctx> super::Codegen<'ctx> {
             return;
         }
         let parts = self.callee_returned_param_parts(callee_name, arg_index);
+        self.disarm_struct_var_escaping_parts(&src, &parts);
+    }
+
+    /// The body of [`Self::disarm_escaping_place_struct_field_bodies`] once the
+    /// escaping `parts` are known: mask each one that runs a body out of the
+    /// named struct binding `src`'s own walk. B-2026-09-25-28 lifted it out so
+    /// a NAMED RECEIVER of an owned-`self` method takes the same mask, from
+    /// `crate::ast::fn_escaping_self_part_paths`, as a named argument does from
+    /// the param form.
+    pub(super) fn disarm_struct_var_escaping_parts(
+        &mut self,
+        src: &str,
+        parts: &[crate::ast::ParamPath],
+    ) {
+        let src = src.to_string();
         let fields: Vec<String> = parts
             .iter()
             .filter_map(|path| match path.as_slice() {
@@ -8930,7 +8945,7 @@ impl<'ctx> super::Codegen<'ctx> {
         // Gated on the LEAF running a body, for B-2026-09-05-6's reason: a
         // scalar handed back has nothing to mask, and a mask re-registration
         // over nothing would mint a second walk.
-        for path in &parts {
+        for path in parts {
             if path.len() < 2 || !matches!(path.first(), Some(crate::ast::ParamPart::Field(_))) {
                 continue;
             }

@@ -7742,6 +7742,59 @@ impl<'ctx> super::Codegen<'ctx> {
                         self.suppress_container_elem_bodies_for_var(&recv_name);
                     }
                 }
+                // B-2026-09-25-28 — the callee hands a PART of a named STRUCT
+                // receiver out of its frame (`fn getr(self) -> R { return
+                // self.r }`, the tail and `let q = self.r; q` spellings). The
+                // caller keeps its walk over the receiver for the whole call,
+                // so the handed-back field ran its body in that walk and again
+                // at the result's owner: `dR1 x1 dR1` on all four surfaces,
+                // where the free-function twin `getf(w)` masks the field
+                // through `disarm_escaping_place_struct_field_bodies`. Mask the
+                // same parts here, from the receiver form of the same query.
+                // A whole rebind of `self` already stood every body down
+                // above, and re-registering a masked walk over that would ADD
+                // one, so it is excluded; so is an owned struct PARAM
+                // receiver, for the param sibling's reason (its bodies are the
+                // enclosing frame's to run). So is a method returning a TUPLE:
+                // a DISCARDED tuple method result runs no element body on any
+                // backend (B-2026-09-17-2), so the receiver's walk is the only
+                // thing running the part there (`s.m();` over `fn m(self) ->
+                // (R, i64) { return (self.r, 3) }`, pinned as cell 3c of
+                // `e2e_discarded_tuple_return_runs_its_element_drop_body`), and
+                // masking it lost the body. A BOUND tuple result keeps its
+                // doubled body until that row lands.
+                if let ExprKind::Identifier(recv_name) = &object.kind {
+                    let parts: Vec<crate::ast::ParamPath> =
+                        if matches!(
+                            self.impl_method_self_and_borrow_return(&receiver_type, method),
+                            Some((crate::ast::SelfParam::Owned, _))
+                        ) && self.type_decls.struct_types.contains_key(&receiver_type)
+                            && !self
+                                .borrow_vars
+                                .owned_struct_params
+                                .contains(recv_name.as_str())
+                        {
+                            match (
+                                self.find_impl_method_ast(&receiver_type, method),
+                                self.program_snapshot.as_deref(),
+                            ) {
+                                (Some(f), Some(p))
+                                    if !crate::ast::fn_rebinds_self_whole(f)
+                                        && !crate::ast::fn_conditionally_rebinds_self(f)
+                                        && !crate::ast::fn_returns_tuple(f) =>
+                                {
+                                    crate::ast::fn_escaping_self_part_paths(p, f)
+                                }
+                                _ => Vec::new(),
+                            }
+                        } else {
+                            Vec::new()
+                        };
+                    if !parts.is_empty() {
+                        let recv_name = recv_name.clone();
+                        self.disarm_struct_var_escaping_parts(&recv_name, &parts);
+                    }
+                }
                 // Inspect the resolved fn's first param to decide the receiver
                 // calling convention: pointer-typed (ref self / mut ref self)
                 // means pass the address of the receiver's storage; struct-

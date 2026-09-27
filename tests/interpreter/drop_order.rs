@@ -7760,3 +7760,66 @@ fn main() {
     );
     assert_eq!(out, "dE\ndR1\nk1 1\nk2 0\ndE\ndR2\nk3 0\ndE\ndR3\ndE\ndR4\nk4 5\ndE\ndR5\nk5 0\ndE\ndR6\nk6 0\ndR7\nk7 7\ndR8\nk8 0\ndR9\nk9 0\ndR10\nk10 9\ndone\n");
 }
+
+/// B-2026-09-25-28 — a by-value `self` method called on a NAMED struct
+/// receiver that hands a `Drop`-bearing part out of its frame runs that part's
+/// body once. The caller keeps its walk over a named receiver for the whole
+/// call, so `let x = w.getr()` over `fn getr(self) -> R { return self.r }` ran
+/// `dR1` in that walk and again at `x`'s death, on all four surfaces. The
+/// caller now masks the parts `fn_escaping_self_part_paths` reports, as a named
+/// ARGUMENT already did (`getf(w)`, cell 4). Covers the return, tail, `let`
+/// rebind and destructure spellings, a sibling field that still runs (`dR60`),
+/// a heap-bearing field, a nested field, an enum field handed back, a result
+/// pushed into a `Vec`; `getf`, a temp receiver, a method that hands nothing
+/// back and one that consumes the field are unchanged guards. A method
+/// returning a TUPLE is deliberately not masked (see the call site) and is not
+/// covered here.
+#[test]
+fn interp_named_receiver_part_handed_back_runs_its_body_once() {
+    let out = run(r#"struct R { id: i64 }
+impl Drop for R { fn drop(mut ref self) { println(f"dR{self.id}") } }
+struct S { id: i64, s: String }
+impl Drop for S { fn drop(mut ref self) { println(f"dS{self.id}") } }
+fn eat(r: R) { println(f"e{r.id}") }
+struct Ws { r: R, n: i64 }
+impl Ws {
+    fn getr(self) -> R { return self.r }
+    fn gett(self) -> R { self.r }
+    fn getl(self) -> R { let q = self.r; q }
+    fn getd(self) -> R { let Ws { r, n } = self; r }
+    fn none(self) -> i64 { return 5 }
+    fn gete(self) { eat(self.r) }
+}
+fn getf(w: Ws) -> R { return w.r }
+struct Wq { r: R, q: R }
+impl Wq {
+    fn getr(self) -> R { return self.r }
+}
+struct Wh { s: S, n: i64 }
+impl Wh { fn get(self) -> S { return self.s } }
+struct In { r: R, k: i64 }
+struct Wn { i: In, n: i64 }
+impl Wn { fn get(self) -> R { return self.i.r } }
+enum HoR { Full(R), Empty }
+struct Wr { h: HoR }
+impl Wr { fn get(self) -> HoR { return self.h } }
+fn main() {
+    let w1 = Ws { r: R { id: 1 }, n: 0 }; let x1 = w1.getr(); println(f"x{x1.id}");
+    let w2 = Ws { r: R { id: 2 }, n: 0 }; let x2 = w2.gett(); println(f"x{x2.id}");
+    let w3 = Ws { r: R { id: 3 }, n: 0 }; let x3 = w3.getl(); println(f"x{x3.id}");
+    let w4 = Ws { r: R { id: 4 }, n: 0 }; let x4 = getf(w4); println(f"x{x4.id}");
+    let x5 = Ws { r: R { id: 5 }, n: 0 }.getr(); println(f"x{x5.id}");
+    let w6 = Wq { r: R { id: 6 }, q: R { id: 60 } }; let x6 = w6.getr(); println(f"x{x6.id}");
+    let w7 = Wh { s: S { id: 7, s: f"h{7}" }, n: 0 }; let x7 = w7.get(); println(f"x{x7.id}{x7.s}");
+    let w8 = Ws { r: R { id: 8 }, n: 0 }; let x8 = w8.getd(); println(f"x{x8.id}");
+    let w9 = Wn { i: In { r: R { id: 9 }, k: 0 }, n: 0 }; let x9 = w9.get(); println(f"x{x9.id}");
+    let w12 = Wr { h: HoR.Full(R { id: 12 }) }; let g12 = w12.get(); println("got");
+    match g12 { Full(r) => { println(f"x{r.id}") } Empty => { println("e") } }
+    let w14 = Ws { r: R { id: 14 }, n: 0 }; println(f"n{w14.none()}");
+    let w18 = Ws { r: R { id: 18 }, n: 0 }; w18.gete();
+    let mut v: Vec[R] = Vec.new(); let w20 = Ws { r: R { id: 20 }, n: 0 }; v.push(w20.getr()); println(f"n{v.len()}");
+    println("end");
+}
+"#);
+    assert_eq!(out, "x1\ndR1\nx2\ndR2\nx3\ndR3\nx4\ndR4\nx5\ndR5\ndR60\nx6\ndR6\nx7h7\ndS7\nx8\ndR8\nx9\ndR9\ngot\nx12\ndR12\nn5\ndR14\ne18\ndR18\nn1\ndR20\nend\n");
+}
