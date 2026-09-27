@@ -2121,13 +2121,14 @@ fn e2e_owned_enum_receiver_runs_its_payload_body_when_no_arm_claims_it() {
 /// the READ-THROUGH classifier and not a borrow one, which is the module's
 /// own stated reason for existing.
 ///
-/// TWO CELLS ARE PINNED AS-IS RATHER THAN BLESSED. `eat` (`x eat hit7`)
-/// still loses the bodies: `eat(t)` materializes the binding by the
-/// read-through classifier, so the disarm stands, and the agreed-and-wrong
-/// answer is kept rather than traded for an A/B divergence — filed
-/// separately. `ret` is the CONTROL for that decision: `return t` hands the
-/// tuple to the caller's binding, which runs the bodies once, and leaving
-/// the place armed there was measured at `dR30 dR31 dR30 dR31`.
+/// `eat` WAS PINNED AS-IS here at `x eat hit7`, the agreed-and-wrong answer:
+/// `eat(t)` materializes the binding by the read-through classifier, so the
+/// place's walk is disarmed and nothing funded the binding in its place.
+/// B-2026-09-17-17 funds the TAKING binding on both backends, so the cell now
+/// reads `x eat hit7 dR20 dR21`. `ret` is the CONTROL for keeping the disarm:
+/// `return t` hands the tuple to the caller's binding, which runs the bodies
+/// once, and leaving the place armed there was measured at
+/// `dR30 dR31 dR30 dR31`.
 ///
 /// Twin of `tests/interpreter.rs`'s
 /// `test_whole_payload_arm_binding_over_a_tuple_payload_runs_element_bodies`,
@@ -2169,7 +2170,7 @@ fn e2e_whole_payload_arm_binding_over_a_tuple_payload_runs_element_bodies() {
     ) else {
         return;
     };
-    assert_eq!(out, "bind\n  x\n  hit\n  dR1\n  dR2\nread\n  x\n  hit3\n  dR3\n  dR4\niflet\n  x\n  hit\n  dR5\n  dR6\nwhilet\n  x\n  hit\n  dR7\n  dR8\n  end\nresult\n  x\n  hit\n  dR9\n  dR10\ntwice\n  x\n  a\n  b\n  dR11\n  dR12\nafter\n  x\n  hit\n  dR13\n  dR14\n  end\nwild\n  x\n  hit\n  dR15\n  dR16\nstruct\n  x\n  hit\n  dW18\n  dR17\nsingle\n  x\n  hit\n  dR19\nret\n  x\n  dR30\n  dR31\n  hit\neat\n  x\n  eat\n  hit7\nnomatch\n  dR22\n  dR23\n  x\nnone\n  x\n  n\ntlocal\n  dR24\n  dR25\n  x\nend\n");
+    assert_eq!(out, "bind\n  x\n  hit\n  dR1\n  dR2\nread\n  x\n  hit3\n  dR3\n  dR4\niflet\n  x\n  hit\n  dR5\n  dR6\nwhilet\n  x\n  hit\n  dR7\n  dR8\n  end\nresult\n  x\n  hit\n  dR9\n  dR10\ntwice\n  x\n  a\n  b\n  dR11\n  dR12\nafter\n  x\n  hit\n  dR13\n  dR14\n  end\nwild\n  x\n  hit\n  dR15\n  dR16\nstruct\n  x\n  hit\n  dW18\n  dR17\nsingle\n  x\n  hit\n  dR19\nret\n  x\n  dR30\n  dR31\n  hit\neat\n  x\n  eat\n  hit7\n  dR20\n  dR21\nnomatch\n  dR22\n  dR23\n  x\nnone\n  x\n  n\ntlocal\n  dR24\n  dR25\n  x\nend\n");
 }
 
 /// B-2026-09-14-18 — an UNMOVED part of an owned `Option`/`Result` payload

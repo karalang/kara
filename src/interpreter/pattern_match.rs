@@ -564,7 +564,14 @@ impl<'a> super::Interpreter<'a> {
                             // `invoke_user_drop_if_applicable` both already
                             // knew how to walk such a value once it is
                             // registered (B-2026-07-29-39).
-                            let is_drop_binding = self.pattern_binding_owes_drop_body(&n);
+                            let takes_tuple = matches!(enum_name.as_str(), "Option" | "Result")
+                                && crate::binding_use::optres_arm_takes_whole_payload(
+                                    &arm.pattern,
+                                    &arm.body,
+                                    arm.guard.as_ref(),
+                                );
+                            let is_drop_binding = self.pattern_binding_owes_drop_body(&n)
+                                || self.taken_tuple_payload_binding_owes_drop(&n, takes_tuple);
                             // B-2026-09-06-20 — not for a binding out of a
                             // masked slot; see `masked_view_names` above.
                             if is_drop_binding && !masked_view_names.contains(&n) {
@@ -1961,6 +1968,19 @@ impl<'a> super::Interpreter<'a> {
     /// `Option`/`Result` bindings are excluded here rather than at the callers:
     /// a nested built-in payload rides its own walker, so registering a slot
     /// for it would double the body.
+    /// B-2026-09-17-17 — a whole TUPLE payload that an `Option`/`Result` arm
+    /// TAKES (`takes`, from `binding_use`'s shared verdict) is the binding's
+    /// to drop, exactly as a tuple local is. `pattern_binding_owes_drop_body`
+    /// has no tuple arm on purpose: a READ-only arm leaves the place's walk
+    /// armed (B-2026-09-10-14), so answering yes there runs every body twice.
+    /// Without this, `Some(t) => eat(t)` (a by-value callee retains nothing)
+    /// ran no body on either backend.
+    pub(super) fn taken_tuple_payload_binding_owes_drop(&self, name: &str, takes: bool) -> bool {
+        takes
+            && matches!(self.env.get(name), Some(Value::Tuple(items))
+                if items.iter().any(|e| self.field_value_carries_user_drop(e)))
+    }
+
     pub(super) fn pattern_binding_owes_drop_body(&self, name: &str) -> bool {
         match self.env.get(name) {
             Some(v @ Value::Struct { .. }) => self.value_runs_user_drop(&v),

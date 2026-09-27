@@ -18099,9 +18099,36 @@ impl<'ctx> super::Codegen<'ctx> {
     /// leg also registers the walk on `t` itself, since there `t` is the
     /// owner for the rest of the enclosing block
     /// ([`Self::fund_let_else_tuple_payload_binding`]).
+    ///
+    /// B-2026-09-17-17 — and the binding is the owner of those bodies from
+    /// here on, so it registers the walk a tuple local registers at its `let`.
+    /// A later move (`let u = t`, `return t`) disarms it the way it disarms a
+    /// local; a by-value call (`eat(t)`) retains nothing, so the walk runs at
+    /// the binding's end. Before this, `Some(t) => eat(t)` ran no body on
+    /// either backend.
     fn record_taken_tuple_payload_binding_tes(&mut self, name: &str, pattern: &Pattern) {
         for (b, elems) in self.taken_tuple_payload_bindings(name, pattern) {
-            self.var_types.tuple_var_elem_tes.insert(b, elems);
+            self.var_types
+                .tuple_var_elem_tes
+                .insert(b.clone(), elems.clone());
+            let Some(slot) = self.variables.get(&b).copied() else {
+                continue;
+            };
+            let BasicTypeEnum::StructType(agg_ty) = slot.ty else {
+                continue;
+            };
+            if self.has_armed_container_elem_bodies(&b) {
+                continue;
+            }
+            if let Some(bodies) = self.emit_tuple_elem_user_drop_bodies_fn(agg_ty, &elems) {
+                self.track_user_drop_var_with_fn(
+                    "",
+                    &b,
+                    slot.ptr,
+                    bodies,
+                    UserDropKind::ContainerElemBodies,
+                );
+            }
         }
     }
 
@@ -18146,39 +18173,24 @@ impl<'ctx> super::Codegen<'ctx> {
     }
 
     /// B-2026-09-17-16 — `let Some(t) = o else { .. }` over a TUPLE payload:
-    /// `t` owns the payload for the rest of the enclosing block, so it gets
-    /// the bodies walk a tuple local gets at its `let`. Without it both
-    /// bodies ran nowhere on every compiled surface, where `--interp` ran them.
+    /// `t` owns the payload for the rest of the enclosing block, so it frees
+    /// the leaves a tuple local frees. Without it every heap leaf leaked.
     pub(super) fn fund_let_else_tuple_payload_binding(&mut self, value: &Expr, pattern: &Pattern) {
         let ExprKind::Identifier(name) = &value.kind else {
             return;
         };
-        for (b, elems) in self.taken_tuple_payload_bindings(name, pattern) {
+        for (b, _) in self.taken_tuple_payload_bindings(name, pattern) {
             let Some(slot) = self.variables.get(&b).copied() else {
                 continue;
             };
-            let inkwell::types::BasicTypeEnum::StructType(agg_ty) = slot.ty else {
+            let BasicTypeEnum::StructType(agg_ty) = slot.ty else {
                 continue;
             };
-            if self.has_armed_container_elem_bodies(&b) {
-                continue;
-            }
-            self.var_types
-                .tuple_var_elem_tes
-                .insert(b.clone(), elems.clone());
             // The memory half: the `let ... else` leg retracts the boxed
             // tuple's interior walk unconditionally (B-2026-08-05-3), so the
-            // leaves are this binding's to free as well.
+            // leaves are this binding's to free as well. The bodies half was
+            // registered by the disarm (`record_taken_tuple_payload_binding_tes`).
             self.track_tuple_var(slot.ptr, agg_ty);
-            if let Some(bodies) = self.emit_tuple_elem_user_drop_bodies_fn(agg_ty, &elems) {
-                self.track_user_drop_var_with_fn(
-                    "",
-                    &b,
-                    slot.ptr,
-                    bodies,
-                    UserDropKind::ContainerElemBodies,
-                );
-            }
         }
     }
 

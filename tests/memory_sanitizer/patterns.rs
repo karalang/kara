@@ -1142,6 +1142,8 @@ fn asan_whole_payload_arm_binding_over_a_tuple_payload_keeps_one_owner() {
                 "  x",
                 "  eat",
                 "  hit7",
+                "  dR20",
+                "  dR21",
                 "nomatch",
                 "  dR22",
                 "  dR23",

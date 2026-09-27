@@ -1421,6 +1421,8 @@ impl<'a> super::Interpreter<'a> {
                     } else {
                         Vec::new()
                     };
+                    let optres_val = matches!(&val, Value::EnumVariant { enum_name, .. }
+                        if enum_name == "Option" || enum_name == "Result");
                     self.env.push_scope();
                     self.bind_pattern(pattern, val);
                     // B-2026-08-29-17, `if let` leg — propagate the view-ness of a
@@ -1492,7 +1494,14 @@ impl<'a> super::Interpreter<'a> {
                         // struct with a Drop-bearing field but no `Drop` of its
                         // own ran no body here while the `match` spelling ran
                         // one.
-                        let is_drop_binding = self.pattern_binding_owes_drop_body(&n);
+                        let is_drop_binding = self.pattern_binding_owes_drop_body(&n)
+                            || self.taken_tuple_payload_binding_owes_drop(
+                                &n,
+                                optres_val
+                                    && crate::binding_use::optres_block_takes_whole_payload(
+                                        pattern, then_block,
+                                    ),
+                            );
                         if is_drop_binding && !masked_view_names.contains(&n) {
                             self.pending_arm_drop_bindings.push(n);
                         }
@@ -1903,6 +1912,8 @@ impl<'a> super::Interpreter<'a> {
                     } else {
                         Vec::new()
                     };
+                    let optres_val = matches!(&val, Value::EnumVariant { enum_name, .. }
+                        if enum_name == "Option" || enum_name == "Result");
                     self.env.push_scope();
                     self.bind_pattern(pattern, val);
                     // B-2026-08-29-17, `while let` leg — propagate the view-ness of a
@@ -1974,7 +1985,14 @@ impl<'a> super::Interpreter<'a> {
                         // struct with a Drop-bearing field but no `Drop` of its
                         // own ran no body here while the `match` spelling ran
                         // one.
-                        let is_drop_binding = self.pattern_binding_owes_drop_body(&n);
+                        let is_drop_binding = self.pattern_binding_owes_drop_body(&n)
+                            || self.taken_tuple_payload_binding_owes_drop(
+                                &n,
+                                optres_val
+                                    && crate::binding_use::optres_block_takes_whole_payload(
+                                        pattern, body,
+                                    ),
+                            );
                         if is_drop_binding && !masked_view_names.contains(&n) {
                             self.pending_arm_drop_bindings.push(n);
                         }

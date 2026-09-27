@@ -7829,7 +7829,7 @@ fn main() {
     println("end")
 }
 "#);
-    assert_eq!(out, "bind\n  x\n  hit\n  dR1\n  dR2\nread\n  x\n  hit3\n  dR3\n  dR4\niflet\n  x\n  hit\n  dR5\n  dR6\nwhilet\n  x\n  hit\n  dR7\n  dR8\n  end\nresult\n  x\n  hit\n  dR9\n  dR10\ntwice\n  x\n  a\n  b\n  dR11\n  dR12\nafter\n  x\n  hit\n  dR13\n  dR14\n  end\nwild\n  x\n  hit\n  dR15\n  dR16\nstruct\n  x\n  hit\n  dW18\n  dR17\nsingle\n  x\n  hit\n  dR19\nret\n  x\n  dR30\n  dR31\n  hit\neat\n  x\n  eat\n  hit7\nnomatch\n  dR22\n  dR23\n  x\nnone\n  x\n  n\ntlocal\n  dR24\n  dR25\n  x\nend\n", "got:\n{out}");
+    assert_eq!(out, "bind\n  x\n  hit\n  dR1\n  dR2\nread\n  x\n  hit3\n  dR3\n  dR4\niflet\n  x\n  hit\n  dR5\n  dR6\nwhilet\n  x\n  hit\n  dR7\n  dR8\n  end\nresult\n  x\n  hit\n  dR9\n  dR10\ntwice\n  x\n  a\n  b\n  dR11\n  dR12\nafter\n  x\n  hit\n  dR13\n  dR14\n  end\nwild\n  x\n  hit\n  dR15\n  dR16\nstruct\n  x\n  hit\n  dW18\n  dR17\nsingle\n  x\n  hit\n  dR19\nret\n  x\n  dR30\n  dR31\n  hit\neat\n  x\n  eat\n  hit7\n  dR20\n  dR21\nnomatch\n  dR22\n  dR23\n  x\nnone\n  x\n  n\ntlocal\n  dR24\n  dR25\n  x\nend\n", "got:\n{out}");
 }
 
 /// B-2026-09-06-39 — A READ-ONLY ARM OVER AN OWNED ENUM RECEIVER NOW RUNS THE
