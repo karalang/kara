@@ -8675,9 +8675,14 @@ impl<'ctx> super::Codegen<'ctx> {
                     // the caller. The callee's side of that agreement
                     // (`forwarded_param_box_stays_with_caller`) asks
                     // `call_arg_flows_into_return`, so this does too.
+                    // B-2026-09-27-96 — a SOME-paths hand-back of a boxed
+                    // user enum is the callee's own, so it takes the move.
                     let arg_flows_into_return = self
                         .callee_param_ast(&qualified, pidx)
-                        .is_some_and(|(_, ai)| self.call_arg_flows_into_return(&qualified, ai));
+                        .is_some_and(|(_, ai)| {
+                            self.call_arg_flows_into_return(&qualified, ai)
+                                && !self.mixed_path_boxed_enum_param_callee_owned(&qualified, ai)
+                        });
                     // B-2026-08-12-1 — same carve-out as the free-fn path: an
                     // ENTRY-COPIED `Option`/`Result` param owns its own buffer,
                     // so the caller keeps its original and must not zero it.

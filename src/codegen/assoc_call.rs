@@ -3486,9 +3486,13 @@ impl<'ctx> super::Codegen<'ctx> {
                     // named local crashed, and so did a `for` loop's element
                     // copy. The gates are the free path's, asked of the
                     // callee's own param index.
-                    let arg_flows_into_return = self
-                        .callee_param_ast(&qualified, i)
-                        .is_some_and(|(_, ai)| self.call_arg_flows_into_return(&qualified, ai));
+                    // B-2026-09-27-96 — a SOME-paths hand-back of a boxed
+                    // user enum is the callee's own, so it takes the move.
+                    let arg_flows_into_return =
+                        self.callee_param_ast(&qualified, i).is_some_and(|(_, ai)| {
+                            self.call_arg_flows_into_return(&qualified, ai)
+                                && !self.mixed_path_boxed_enum_param_callee_owned(&qualified, ai)
+                        });
                     if self.erased_boxed_user_enum_ident_arg(&a.value)
                         && self.callee_param_ast(&qualified, i).is_some_and(|(_, ai)| {
                             self.callee_by_value_binding_param_may_return(&qualified, ai)

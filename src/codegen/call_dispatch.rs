@@ -2965,9 +2965,12 @@ impl<'ctx> super::Codegen<'ctx> {
             // like any other copied param: the caller keeps its binding, and a
             // fresh temp needs this frame as its owner. `call_arg_flows_into_return`
             // alone answers true for the wrap and skipped both, leaking the temp.
+            // B-2026-09-27-96 — and one it hands back on SOME paths only,
+            // which the callee now owns (`mixed_path_boxed_enum_param_callee_owned`).
             if !borrow_skip
                 && (!self.call_arg_flows_into_return(&name, i)
-                    || self.optres_escaping_param_entry_copied(&name, i))
+                    || self.optres_escaping_param_entry_copied(&name, i)
+                    || self.mixed_path_boxed_enum_param_callee_owned(&name, i))
             {
                 // B-2026-08-06-31 — a binding whose box carries a user STRUCT
                 // interior keeps its cleanup across a by-value call. The
@@ -15948,6 +15951,71 @@ impl<'ctx> super::Codegen<'ctx> {
         !self.user_enum_boxed_payload_variants(&te).is_empty()
     }
 
+    /// B-2026-09-27-96 — a by-value param of a non-shared USER enum that boxes
+    /// its payload, which the callee hands back on SOME paths and not all.
+    ///
+    /// Such a param used to stay with the CALLER: the caller kept its binding
+    /// armed and disarmed it after the call only when the result was its box.
+    /// That leaves the callee holding a box it does not own on every path that
+    /// does not return it, so each way of consuming it there needed a patch of
+    /// its own — forwarding it took a copy (B-2026-09-27-102), pushing it into
+    /// a `mut ref Vec` crashed, and matching it by value double-freed.
+    ///
+    /// So the callee owns it instead, exactly as it owns a param it never
+    /// returns: registered for memory and bodies in the prologue, and every
+    /// route out of it — `return h`, a push, a forward, a consuming match — is
+    /// the ordinary move out of a local. The caller moves its binding in on
+    /// every call, which is the other half: the two sides must move together
+    /// or the dies-inside path frees twice.
+    ///
+    /// ALL-paths hand-backs keep the old route (`fn_always_returns_param`):
+    /// the caller's result is then the box on every path and nothing needs
+    /// the callee to own it. Generic and coroutine functions are excluded for
+    /// `optres_escaping_param_entry_copied`'s reason — their prologues are
+    /// separate paths this registration does not reach. `ast_i` indexes the
+    /// AST's own params, which hold no `self`.
+    pub(super) fn mixed_path_boxed_enum_param_callee_owned(
+        &self,
+        fn_key: &str,
+        ast_i: usize,
+    ) -> bool {
+        let Some(program) = self.program_snapshot.as_deref() else {
+            return false;
+        };
+        let Some(f) = super::declarations::find_function_ast(program, fn_key) else {
+            return false;
+        };
+        if f.generic_params.is_some() || self.is_coroutine_compiled(fn_key) {
+            return false;
+        }
+        let Some(p) = f.params.get(ast_i) else {
+            return false;
+        };
+        if !matches!(p.pattern.kind, PatternKind::Binding(_))
+            || matches!(p.ty.kind, TypeKind::Ref { .. } | TypeKind::MutRef { .. })
+        {
+            return false;
+        }
+        let TypeKind::Path(path) = &p.ty.kind else {
+            return false;
+        };
+        let Some(ename) = path.segments.last() else {
+            return false;
+        };
+        if ename == "Option" || ename == "Result" {
+            return false;
+        }
+        match self.type_decls.enum_layouts.get(ename.as_str()) {
+            Some(l) if !l.is_shared => {}
+            _ => return false,
+        }
+        if self.user_enum_boxed_payload_variants(&p.ty).is_empty() {
+            return false;
+        }
+        self.call_arg_flows_into_return(fn_key, ast_i)
+            && !crate::ast::fn_always_returns_param(Some(program), f, ast_i)
+    }
+
     /// B-2026-09-27-102 — is `arg` a by-value PARAM of the function being
     /// compiled whose box the CALLER still owns, handed on to another by-value
     /// callee?
@@ -16000,8 +16068,11 @@ impl<'ctx> super::Codegen<'ctx> {
         // `idx` indexes the AST's own params, which hold no `self`; both
         // predicates below take that index (the `_arg_` spelling adds the
         // receiver back for the lowered one).
+        // B-2026-09-27-96 — a SOME-paths hand-back is the callee's own now,
+        // so forwarding it is an ordinary move out of a registered local.
         self.call_arg_flows_into_return(&fname, idx)
             && !self.optres_escaping_arg_entry_copied(&fname, idx)
+            && !self.mixed_path_boxed_enum_param_callee_owned(&fname, idx)
     }
 
     /// B-2026-09-20-52 — a NAMED BINDING argument whose type is a non-shared

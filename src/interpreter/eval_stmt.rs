@@ -6650,10 +6650,30 @@ impl<'a> super::Interpreter<'a> {
         let ExprKind::Identifier(fname) = &callee.kind else {
             return false;
         };
-        match self.env.get(name) {
-            Some(v @ Value::Array(_)) if self.field_value_carries_user_drop(&v) => {}
+        // B-2026-09-27-96 — and a by-value USER enum whose payload runs a user
+        // `Drop` body, the same caller-retained shape one type over: a plain
+        // `consume(h)` of such an enum runs the body at the caller's binding,
+        // so the adopted param must stay armed across the forward or the exit
+        // that only passed it along ran nothing (`s4 e end` against the
+        // compiled `s4 dS4 e end`). Codegen's side is the callee's own
+        // registration of a SOME-paths hand-back
+        // (`mixed_path_boxed_enum_param_callee_owned`).
+        let enum_name = match self.env.get(name) {
+            Some(v @ Value::Array(_)) if self.field_value_carries_user_drop(&v) => None,
+            Some(v @ Value::EnumVariant { .. })
+                if matches!(&v, Value::EnumVariant { enum_name, .. }
+                    if enum_name != "Option"
+                        && enum_name != "Result"
+                        && !self.program.drop_method_keys.contains_key(enum_name.as_str()))
+                    && self.field_value_carries_user_drop(&v) =>
+            {
+                match v {
+                    Value::EnumVariant { enum_name, .. } => Some(enum_name),
+                    _ => None,
+                }
+            }
             _ => return false,
-        }
+        };
         let mut hits = args
             .iter()
             .enumerate()
@@ -6670,9 +6690,12 @@ impl<'a> super::Interpreter<'a> {
         let Some(param) = f.params.get(i) else {
             return false;
         };
-        let is_array_param = match &param.ty.kind {
-            crate::ast::TypeKind::Array { .. } => true,
-            crate::ast::TypeKind::Path(p) => p.segments.len() == 1 && p.segments[0] == "Array",
+        let is_array_param = match (&param.ty.kind, enum_name.as_deref()) {
+            (crate::ast::TypeKind::Array { .. }, None) => true,
+            (crate::ast::TypeKind::Path(p), None) => {
+                p.segments.len() == 1 && p.segments[0] == "Array"
+            }
+            (crate::ast::TypeKind::Path(p), Some(en)) => p.segments.last().is_some_and(|s| s == en),
             _ => false,
         };
         is_array_param

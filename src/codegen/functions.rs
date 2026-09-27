@@ -2789,13 +2789,32 @@ impl<'ctx> super::Codegen<'ctx> {
                 // The strict set is still right for the `Result[shared]` RC
                 // consumer above, which is why that arm keeps it and this one
                 // does not share the predicate.
+                // B-2026-09-27-96 — and a boxed user-enum param the callee
+                // hands back on SOME paths only: its caller now moves it in on
+                // every call, so this frame is its owner on the paths that do
+                // not return it (see `mixed_path_boxed_enum_param_callee_owned`).
+                let mixed_path_owned = self
+                    .program_snapshot
+                    .as_deref()
+                    .and_then(|pg| super::declarations::find_function_ast(pg, &func.name))
+                    .and_then(|f| {
+                        if f.self_param.is_some() {
+                            i.checked_sub(1)
+                        } else {
+                            Some(i)
+                        }
+                    })
+                    .is_some_and(|ai| {
+                        self.mixed_path_boxed_enum_param_callee_owned(&func.name, ai)
+                    });
                 if !self.borrow_vars.ref_params.contains_key(&param_name)
                     && (self
                         .result_shared_nonescaping_param_names
                         .contains(&param_name)
                         || self
                             .optres_by_value_nonescaping_param_names
-                            .contains(&param_name))
+                            .contains(&param_name)
+                        || mixed_path_owned)
                 {
                     let mono_ty = self.subst_monomorph_type_params(&param.ty);
                     for (enum_name, variant, payload_te, box_field, multi_field) in
