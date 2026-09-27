@@ -445,6 +445,19 @@ pub(crate) struct PayloadVars<'ctx> {
     /// Cleared per function with its siblings; a later `let` of the same name
     /// that is not such a rebind removes it.
     pub(crate) caller_retained_array_views: std::collections::HashSet<String>,
+    /// B-2026-09-17-5 — `match` arm bindings that name the WHOLE payload of a
+    /// by-value `Option`/`Result` param in `callee_owned_payload_bodies_params`,
+    /// and locals rebound from one. The place keeps its payload walk armed for
+    /// such a binding (B-2026-09-10-9), so the walk at the param's death is
+    /// the one owner of the payload's `Drop` bodies. A `let u = t;` over a
+    /// member must therefore register no element bodies of its own: it did,
+    /// and every body ran twice (`dS0 dS1 dS0 dS1`). The destination joins
+    /// the set, so a chain of rebinds keeps it. Bodies only -- memory is
+    /// decided elsewhere and was already balanced.
+    ///
+    /// Cleared per function with its siblings; a later `let` of the same name
+    /// that is not such a rebind removes it.
+    pub(crate) param_payload_arm_views: std::collections::HashSet<String>,
     /// B-2026-09-23-15 — caller-retained by-value `Array` params that THIS
     /// frame conditionally hands back and so owns outright (bodies and memory,
     /// under the per-path flag `compile_function` registers). The caller

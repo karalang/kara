@@ -279,6 +279,14 @@ pub(crate) struct PatternState<'ctx> {
     /// retraction is already in lockstep with the callee's prologue, so a
     /// type this flag does not cover keeps the gate's conservative answer.
     pub(crate) pattern_binding_scrutinee_is_transfer_owned_enum: bool,
+    /// B-2026-09-17-5 — the scrutinee is a by-value param of a CONCRETE user
+    /// enum whose payload bodies the caller retains, so a whole-payload arm
+    /// binding is a view of them (`PayloadVars::param_payload_arm_views`).
+    /// Neither the seeded pair nor a generic enum: an `Option[Vec[R]]` or a
+    /// `G[Vec[R]]` param's rebind is its payload's only owner, and marking
+    /// either lost the bodies on every compiled surface. Saved and restored
+    /// around each construct with its neighbours.
+    pub(crate) pattern_binding_payload_arm_binds_are_caller_views: bool,
     /// B-2026-09-06-20 — the binding names the pattern(s) being bound take
     /// out of payload slots that the scrutinee BINDING's own mask
     /// (`enum_ctor_moved_payload_slots`, a param VIEW moved in by the

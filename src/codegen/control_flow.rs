@@ -37,6 +37,7 @@ pub(super) type ScrutineeShapeFlags<'ctx> = (
     Option<PointerValue<'ctx>>,
     bool,
     bool,
+    bool,
 );
 
 impl<'ctx> super::Codegen<'ctx> {
@@ -1512,6 +1513,8 @@ impl<'ctx> super::Codegen<'ctx> {
                 .pattern_binding_scrutinee_is_owned_elem_clone,
             self.pattern_state
                 .pattern_binding_seeded_array_payload_stays_with_caller,
+            self.pattern_state
+                .pattern_binding_payload_arm_binds_are_caller_views,
         );
         self.pattern_state
             .pattern_binding_scrutinee_is_fresh_owning_temp =
@@ -1539,6 +1542,10 @@ impl<'ctx> super::Codegen<'ctx> {
         self.pattern_state
             .pattern_binding_scrutinee_is_transfer_owned_enum =
             self.scrutinee_is_transfer_owned_enum_param(scrutinee);
+        // B-2026-09-17-5 — see `compile_match`'s twin derivation.
+        self.pattern_state
+            .pattern_binding_payload_arm_binds_are_caller_views =
+            self.payload_arm_binds_are_caller_views(&[pattern]);
         // B-2026-09-06-20 — see `compile_match`'s twin derivation.
         self.pattern_state.pattern_binding_masked_view_names =
             self.masked_payload_view_names_for(scrutinee, &[pattern]);
@@ -1602,6 +1609,24 @@ impl<'ctx> super::Codegen<'ctx> {
             .pattern_binding_scrutinee_is_owned_elem_clone = saved.7;
         self.pattern_state
             .pattern_binding_seeded_array_payload_stays_with_caller = saved.8;
+        self.pattern_state
+            .pattern_binding_payload_arm_binds_are_caller_views = saved.9;
+    }
+
+    /// B-2026-09-17-5 — see
+    /// `PatternState::pattern_binding_payload_arm_binds_are_caller_views`.
+    /// Called after the owned-param and transfer-owned flags are set.
+    pub(super) fn payload_arm_binds_are_caller_views(&self, patterns: &[&Pattern]) -> bool {
+        self.pattern_state.pattern_binding_scrutinee_is_owned_param
+            && !self
+                .pattern_state
+                .pattern_binding_scrutinee_is_transfer_owned_enum
+            && patterns.iter().any(|p| {
+                self.variant_pattern_enum_name(p).is_some_and(|n| {
+                    !matches!(n.as_str(), "Option" | "Result")
+                        && self.enum_generic_param_names(&n).is_empty()
+                })
+            })
     }
 
     /// B-2026-08-04-2 — the scrutinee's `Option`/`Result` slot: a named

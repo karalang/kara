@@ -214,6 +214,36 @@ impl<'ctx> super::Codegen<'ctx> {
                     return Ok(());
                 }
                 let fn_val = self.current_fn.unwrap();
+                // B-2026-09-17-5 — a whole-payload binding out of a by-value
+                // concrete USER-enum param the caller retains is a view of
+                // bodies the caller runs, so a rebind of it (`V(v) => { let u
+                // = v; .. }`) must not register a second set. The struct
+                // payload records the same fact in `param_view_locals` below;
+                // a container payload reaches no such arm, and doubled
+                // (`vp1 dR5 dR5`). The seeded pair is marked where its own
+                // decision is taken, in
+                // `suppress_optres_payload_bodies_for_match_scoped`.
+                if !self
+                    .pattern_state
+                    .pattern_binding_scrutinee_is_option_result
+                {
+                    if self
+                        .pattern_state
+                        .pattern_binding_payload_arm_binds_are_caller_views
+                        && self
+                            .pattern_state
+                            .current_variant_payload_bindings
+                            .contains(name.as_str())
+                    {
+                        self.payload_vars
+                            .param_payload_arm_views
+                            .insert(name.clone());
+                    } else {
+                        self.payload_vars
+                            .param_payload_arm_views
+                            .remove(name.as_str());
+                    }
+                }
 
                 // Shared-struct payload reconstitution. `Option[Shared(N)]`
                 // (and every other enum carrying a shared-struct payload)

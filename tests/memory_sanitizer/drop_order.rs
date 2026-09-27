@@ -4651,3 +4651,61 @@ fn main() {
         "asan_discarded_method_aggregate_runs_its_element_bodies",
     );
 }
+
+/// B-2026-09-17-5 — the ASAN leg of `tests/codegen/drop_order.rs`'s
+/// `e2e_arm_bound_param_payload_rebind_runs_its_bodies_once`: the rebind that stopped running a second set of bodies must
+/// not have changed who frees the elements, and none of the eight shapes may
+/// read a freed element or leak one.
+#[test]
+fn asan_arm_bound_param_payload_rebind_runs_its_bodies_once() {
+    assert_clean_asan_run(
+        r#"struct S { tag: String }
+impl Drop for S { fn drop(mut ref self) { println(f"dS{self.tag}") } }
+struct R { id: i64, name: String }
+impl Drop for R { fn drop(mut ref self) { println(f"dR{self.id}") } }
+fn mk(i: i64) -> R { return R { id: i, name: f"h{i}" }; }
+enum EVec { V(Vec[R]), W }
+enum EArr { A(Array[R, 2]), B }
+enum G[T] { X(T), Y }
+fn fwd(a: Array[R, 2]) { println(f"f{a[0].id}"); }
+fn optArr(x: Option[Array[S, 2]]) {
+    match x { Some(t) => { let u: Array[S, 2] = t; println(f"s{u[0].tag}") } None => { println("n") } }
+    println("post");
+}
+fn resChain(x: Result[Array[R, 2], i64]) {
+    match x { Ok(t) => { let u = t; let w = u; println(f"r{w[1].id}") } Err(_) => { } }
+    println("post");
+}
+fn optVec(x: Option[Vec[R]]) { match x { Some(t) => { let u = t; println(f"v{u.len()}") } None => { } } }
+fn enumVec(e: EVec) { match e { EVec.V(v) => { let u = v; let w = u; println(f"ev{w.len()}") } EVec.W => { } } println("post"); }
+fn enumArr(e: EArr) { match e { EArr.A(v) => { let u = v; println(f"ea{u[0].id}") } EArr.B => { } } println("post"); }
+fn enumFwd(e: EArr) { match e { EArr.A(v) => { let u = v; fwd(u); println("back") } EArr.B => { } } println("post"); }
+fn genVec(e: G[Vec[R]]) { match e { G.X(v) => { let u = v; println(f"gv{u.len()}") } G.Y => { } } }
+fn reuse(x: Option[Array[R, 2]]) {
+    match x { Some(t) => { println(f"t{t[0].id}") } None => { } }
+    let t: Array[R, 2] = [mk(20), mk(21)];
+    let u = t;
+    println(f"u{u[0].id}");
+    println("post");
+}
+fn main() {
+    println("a"); optArr(Some([S { tag: f"0" }, S { tag: f"1" }]));
+    println("b"); resChain(Ok([mk(2), mk(3)]));
+    println("c"); let v: Vec[R] = [mk(4), mk(5)]; optVec(Some(v));
+    println("d"); let w: Vec[R] = [mk(6)]; enumVec(EVec.V(w));
+    println("e"); enumArr(EArr.A([mk(7), mk(8)]));
+    println("f"); enumFwd(EArr.A([mk(9), mk(10)]));
+    println("g"); let gv: Vec[R] = [mk(11)]; genVec(G.X(gv));
+    println("h"); reuse(Some([mk(12), mk(13)]));
+    println("end");
+}
+"#,
+        &[
+            "a", "s0", "post", "dS0", "dS1", "b", "r3", "post", "dR2", "dR3", "c", "v2", "dR4",
+            "dR5", "d", "ev1", "post", "dR6", "e", "ea7", "post", "dR7", "dR8", "f", "f9", "back",
+            "post", "dR9", "dR10", "g", "gv1", "dR11", "h", "t12", "u20", "dR20", "dR21", "post",
+            "dR12", "dR13", "end",
+        ],
+        "asan_arm_bound_param_payload_rebind_runs_its_bodies_once",
+    );
+}

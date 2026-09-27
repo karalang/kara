@@ -616,6 +616,15 @@ impl<'ctx> super::Codegen<'ctx> {
         self.pattern_state
             .pattern_binding_scrutinee_is_transfer_owned_enum =
             self.scrutinee_is_transfer_owned_enum_param(scrutinee);
+        // B-2026-09-17-5 — see the field's doc.
+        let saved_caller_views_flag = self
+            .pattern_state
+            .pattern_binding_payload_arm_binds_are_caller_views;
+        self.pattern_state
+            .pattern_binding_payload_arm_binds_are_caller_views = self
+            .payload_arm_binds_are_caller_views(
+                &arms.iter().map(|a| &a.pattern).collect::<Vec<_>>(),
+            );
         // B-2026-09-06-20 — payload bindings out of the scrutinee binding's
         // MASKED slots (a param view a mixed wrap moved in) are views too.
         self.pattern_state.pattern_binding_masked_view_names = self.masked_payload_view_names_for(
@@ -1942,6 +1951,8 @@ impl<'ctx> super::Codegen<'ctx> {
             .pattern_binding_scrutinee_param_memory_is_callee_owned = false;
         self.pattern_state
             .pattern_binding_scrutinee_is_transfer_owned_enum = saved_transfer_enum_flag;
+        self.pattern_state
+            .pattern_binding_payload_arm_binds_are_caller_views = saved_caller_views_flag;
         self.pattern_state
             .pattern_binding_scrutinee_private_box_variants = saved_private_box_variants;
         // B-2026-09-06-20 — cleared rather than restored; see `compile_if_let`.
@@ -17595,6 +17606,11 @@ impl<'ctx> super::Codegen<'ctx> {
         ) {
             return;
         }
+        // B-2026-09-17-5 — a fresh binding of a marked name is not the view an
+        // earlier arm made; only the early return below re-marks it.
+        for b in Self::variant_arm_binds(pattern) {
+            self.payload_vars.param_payload_arm_views.remove(&b);
+        }
         if !patterns
             .iter()
             .any(|sub| self.optres_sub_takes_drop_bearing(sub))
@@ -17696,6 +17712,14 @@ impl<'ctx> super::Codegen<'ctx> {
                     || Self::is_optres_variant_pattern(sub)
             })
         {
+            // B-2026-09-17-5 — the place's walk is the owner of these bodies,
+            // so a whole-payload binding is only a view of them: a rebind of
+            // it must not register a second set.
+            for sub in patterns {
+                if let PatternKind::Binding(b) = &sub.kind {
+                    self.payload_vars.param_payload_arm_views.insert(b.clone());
+                }
+            }
             return;
         }
         // B-2026-09-02-14 — EDGE-SENSITIVE since this row, and the builder is

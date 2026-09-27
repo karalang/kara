@@ -8113,3 +8113,65 @@ fn main() {
 "#);
     assert_eq!(out, "stmt\ndR1\nlet\ndR2\narr\ndR3\ndR4\nlarr\ndR5\ndR6\ntemp\ndR7\nown\ndR8\nend-own\nbound\nx9\ndR9\nboth\ndR10\ndR11\ngot\ndboth\ndR12\ndR13\nend-dboth\nok\n", "got:\n{out}");
 }
+
+/// B-2026-09-17-5 — a whole-payload arm binding out of a by-value param,
+/// rebound into a local, runs its elements' `Drop` bodies once.
+///
+/// Before: `Some(t) => { let u: Array[S, 2] = t; .. }` over a by-value
+/// `Option[Array[S, 2]]` param printed `dS0 dS1 dS0 dS1` on every compiled
+/// surface, because the param's payload walk stays armed for a binding
+/// (B-2026-09-10-9) and the `let` registered a second walk for `u`. The same
+/// doubling hit a concrete user enum's `Array` or `Vec` payload (`e`, `d`),
+/// where the caller runs the bodies instead. The rebind is now a view of those
+/// bodies, and so is every further rebind of it (`b`, `d`). `c` and `g` are
+/// the guards the other way: an `Option[Vec]` or generic-enum param's rebind is
+/// the payload's only owner and keeps its walk. `h` reuses the binding's name
+/// for a fresh local, which owns its own elements.
+///
+/// The CODEGEN twin is `tests/codegen/drop_order.rs`'s `e2e_arm_bound_param_payload_rebind_runs_its_bodies_once`, byte-identical
+/// source and expectation.
+#[test]
+fn test_arm_bound_param_payload_rebind_runs_its_bodies_once() {
+    let out = run(r#"struct S { tag: String }
+impl Drop for S { fn drop(mut ref self) { println(f"dS{self.tag}") } }
+struct R { id: i64, name: String }
+impl Drop for R { fn drop(mut ref self) { println(f"dR{self.id}") } }
+fn mk(i: i64) -> R { return R { id: i, name: f"h{i}" }; }
+enum EVec { V(Vec[R]), W }
+enum EArr { A(Array[R, 2]), B }
+enum G[T] { X(T), Y }
+fn fwd(a: Array[R, 2]) { println(f"f{a[0].id}"); }
+fn optArr(x: Option[Array[S, 2]]) {
+    match x { Some(t) => { let u: Array[S, 2] = t; println(f"s{u[0].tag}") } None => { println("n") } }
+    println("post");
+}
+fn resChain(x: Result[Array[R, 2], i64]) {
+    match x { Ok(t) => { let u = t; let w = u; println(f"r{w[1].id}") } Err(_) => { } }
+    println("post");
+}
+fn optVec(x: Option[Vec[R]]) { match x { Some(t) => { let u = t; println(f"v{u.len()}") } None => { } } }
+fn enumVec(e: EVec) { match e { EVec.V(v) => { let u = v; let w = u; println(f"ev{w.len()}") } EVec.W => { } } println("post"); }
+fn enumArr(e: EArr) { match e { EArr.A(v) => { let u = v; println(f"ea{u[0].id}") } EArr.B => { } } println("post"); }
+fn enumFwd(e: EArr) { match e { EArr.A(v) => { let u = v; fwd(u); println("back") } EArr.B => { } } println("post"); }
+fn genVec(e: G[Vec[R]]) { match e { G.X(v) => { let u = v; println(f"gv{u.len()}") } G.Y => { } } }
+fn reuse(x: Option[Array[R, 2]]) {
+    match x { Some(t) => { println(f"t{t[0].id}") } None => { } }
+    let t: Array[R, 2] = [mk(20), mk(21)];
+    let u = t;
+    println(f"u{u[0].id}");
+    println("post");
+}
+fn main() {
+    println("a"); optArr(Some([S { tag: f"0" }, S { tag: f"1" }]));
+    println("b"); resChain(Ok([mk(2), mk(3)]));
+    println("c"); let v: Vec[R] = [mk(4), mk(5)]; optVec(Some(v));
+    println("d"); let w: Vec[R] = [mk(6)]; enumVec(EVec.V(w));
+    println("e"); enumArr(EArr.A([mk(7), mk(8)]));
+    println("f"); enumFwd(EArr.A([mk(9), mk(10)]));
+    println("g"); let gv: Vec[R] = [mk(11)]; genVec(G.X(gv));
+    println("h"); reuse(Some([mk(12), mk(13)]));
+    println("end");
+}
+"#);
+    assert_eq!(out, "a\ns0\npost\ndS0\ndS1\nb\nr3\npost\ndR2\ndR3\nc\nv2\ndR4\ndR5\nd\nev1\npost\ndR6\ne\nea7\npost\ndR7\ndR8\nf\nf9\nback\npost\ndR9\ndR10\ng\ngv1\ndR11\nh\nt12\nu20\ndR20\ndR21\npost\ndR12\ndR13\nend\n", "got:\n{out}");
+}

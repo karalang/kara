@@ -9367,6 +9367,29 @@ impl<'ctx> super::Codegen<'ctx> {
                                             .cloned(),
                                         _ => None,
                                     });
+                                // B-2026-09-17-5 — not for a rebind of a view
+                                // of a by-value param's payload: that payload's
+                                // bodies already have their one owner (see
+                                // `PayloadVars::param_payload_arm_views`), and
+                                // registering here ran each twice. The
+                                // destination is a view too.
+                                let param_payload_view = matches!(
+                                    &value.kind,
+                                    ExprKind::Identifier(src)
+                                        if self.payload_vars.param_payload_arm_views.contains(src.as_str())
+                                );
+                                if param_payload_view {
+                                    self.payload_vars
+                                        .param_payload_arm_views
+                                        .insert(var_name.clone());
+                                } else {
+                                    self.payload_vars
+                                        .param_payload_arm_views
+                                        .remove(var_name.as_str());
+                                }
+                                let elem_struct_name =
+                                    elem_struct_name.filter(|_| !param_payload_view);
+                                let elem_te = elem_te.filter(|_| !param_payload_view);
                                 if let Some(en) = elem_struct_name {
                                     // Generic element (B-2026-08-02-14):
                                     // derive the subst from the element's
@@ -10445,6 +10468,27 @@ impl<'ctx> super::Codegen<'ctx> {
                                         bodies_parts.as_ref().is_some_and(|(elem_te, _)| {
                                             self.elem_te_runs_user_drop(elem_te)
                                         }) && self.seeded_array_payload_stays_with_caller(value);
+                                    // B-2026-09-17-5 — nor when the source is
+                                    // a view of a by-value param's payload
+                                    // whose walk this frame keeps armed: that
+                                    // walk runs the bodies at the param's
+                                    // death, so arming them here ran each
+                                    // twice (`dS0 dS1 dS0 dS1`). The
+                                    // destination is a view too.
+                                    let param_walk_keeps_elems = matches!(
+                                        &value.kind,
+                                        ExprKind::Identifier(src)
+                                            if self.payload_vars.param_payload_arm_views.contains(src.as_str())
+                                    );
+                                    if param_walk_keeps_elems {
+                                        self.payload_vars
+                                            .param_payload_arm_views
+                                            .insert(var_name.clone());
+                                    } else {
+                                        self.payload_vars
+                                            .param_payload_arm_views
+                                            .remove(var_name.as_str());
+                                    }
                                     if caller_keeps_elems {
                                         self.payload_vars
                                             .caller_retained_array_views
@@ -10463,7 +10507,9 @@ impl<'ctx> super::Codegen<'ctx> {
                                             .emit_array_elem_user_drop_bodies_fn(
                                                 elem_ty, &elem_te, n,
                                             )
-                                            .filter(|_| !caller_keeps_elems)
+                                            .filter(|_| {
+                                                !caller_keeps_elems && !param_walk_keeps_elems
+                                            })
                                         {
                                             self.track_user_drop_var_with_fn(
                                                 "",
