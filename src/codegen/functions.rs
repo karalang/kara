@@ -1575,6 +1575,12 @@ impl<'ctx> super::Codegen<'ctx> {
         self.payload_vars.always_returned_locals = self.locals_returned_on_every_exit(func);
         self.payload_vars.cond_returned_locals = self.locals_returned_on_some_exits(func);
         self.payload_vars.shadowed_top_level_locals = Self::shadowed_top_level_locals(func);
+        // B-2026-09-23-36 — the per-generation answer for shadowed locals.
+        let (always_lets, cond_lets, gen_names) = self.shadowed_generation_handbacks(func);
+        self.payload_vars.shadowed_always_returned_lets = always_lets;
+        self.payload_vars.shadowed_cond_returned_lets = cond_lets;
+        self.payload_vars.shadowed_gen_names = gen_names;
+        self.payload_vars.always_returned_slots.clear();
         self.payload_vars.deboxed_payload_box_ptrs.clear();
         self.payload_vars.deferred_payload_box_ptrs.clear();
         self.payload_vars.pending_box_field_zeroes.clear();

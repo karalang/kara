@@ -3516,6 +3516,203 @@ impl<'ctx> super::Codegen<'ctx> {
             && rets.iter().all(|r| r.span.offset >= last_end)
     }
 
+    /// B-2026-09-23-36 — the hand-back class of each GENERATION of a shadowed
+    /// local, keyed by the span offset of the `let` that binds it: the first
+    /// set holds generations every exit in their scope hands back, the second
+    /// those only some exits hand back.
+    ///
+    /// [`Self::locals_returned_on_every_exit`] and
+    /// [`Self::locals_returned_on_some_exits`] answer per NAME, so a name bound
+    /// twice fell out of both unless every exit handed back the LAST top-level
+    /// generation (B-2026-09-23-23). `let x = [..]; if c { return x }; let x =
+    /// [..]; return x` then asked the parameter question at both returns,
+    /// which declines an element that runs a user `Drop`: each returned
+    /// generation stayed armed in this frame while the caller freed it too,
+    /// `free(): double free detected in tcache 2` on the JIT, `-O0` and `-O2`
+    /// (with `String` elements the question transferred instead, statically,
+    /// and the generation leaked 58 B on the exit that kept it).
+    ///
+    /// A generation is resolved per exit as the innermost `let` of the name
+    /// whose block contains the exit and which ends before it, so an exit
+    /// before a later `let`, or inside a nested block that shadows the name
+    /// again, is attributed to the generation that is actually live there.
+    /// Only names every binding of which is such a `let` (no pattern, no
+    /// parameter), bound at least twice, and not already covered by the
+    /// per-name answer; those names are the third set, and their per-path
+    /// drop flags are kept per generation (`Codegen::cond_move_drop_flag_for`).
+    pub(super) fn shadowed_generation_handbacks(
+        &self,
+        func: &crate::ast::Function,
+    ) -> (
+        std::collections::HashSet<usize>,
+        std::collections::HashSet<usize>,
+        std::collections::HashSet<String>,
+    ) {
+        struct Site {
+            name: String,
+            offset: usize,
+            end: usize,
+            block: (usize, usize),
+        }
+        fn in_block(b: &crate::ast::Block, out: &mut Vec<Site>) {
+            let span = (b.span.offset, b.span.offset + b.span.length);
+            for stmt in &b.stmts {
+                match &stmt.kind {
+                    crate::ast::StmtKind::Let { pattern, value, .. } => {
+                        in_expr(value, out);
+                        if let crate::ast::PatternKind::Binding(n) = &pattern.kind {
+                            out.push(Site {
+                                name: n.clone(),
+                                offset: stmt.span.offset,
+                                end: stmt.span.offset + stmt.span.length,
+                                block: span,
+                            });
+                        }
+                    }
+                    crate::ast::StmtKind::LetElse { value, .. }
+                    | crate::ast::StmtKind::Assign { value, .. }
+                    | crate::ast::StmtKind::CompoundAssign { value, .. } => in_expr(value, out),
+                    crate::ast::StmtKind::Expr(e) => in_expr(e, out),
+                    _ => {}
+                }
+            }
+            if let Some(fe) = &b.final_expr {
+                in_expr(fe, out);
+            }
+        }
+        fn in_expr(e: &Expr, out: &mut Vec<Site>) {
+            match &e.kind {
+                ExprKind::Block(b) | ExprKind::Comptime(b) => in_block(b, out),
+                ExprKind::LabeledBlock { body, .. } | ExprKind::Loop { body, .. } => {
+                    in_block(body, out)
+                }
+                ExprKind::If {
+                    condition,
+                    then_block,
+                    else_branch,
+                } => {
+                    in_expr(condition, out);
+                    in_block(then_block, out);
+                    if let Some(eb) = else_branch {
+                        in_expr(eb, out);
+                    }
+                }
+                ExprKind::IfLet {
+                    value,
+                    then_block,
+                    else_branch,
+                    ..
+                } => {
+                    in_expr(value, out);
+                    in_block(then_block, out);
+                    if let Some(eb) = else_branch {
+                        in_expr(eb, out);
+                    }
+                }
+                ExprKind::Match { scrutinee, arms } => {
+                    in_expr(scrutinee, out);
+                    for a in arms {
+                        in_expr(&a.body, out);
+                    }
+                }
+                ExprKind::While {
+                    condition, body, ..
+                } => {
+                    in_expr(condition, out);
+                    in_block(body, out);
+                }
+                ExprKind::WhileLet { value, body, .. }
+                | ExprKind::For {
+                    iterable: value,
+                    body,
+                    ..
+                } => {
+                    in_expr(value, out);
+                    in_block(body, out);
+                }
+                _ => {}
+            }
+        }
+        fn roots(e: &Expr, out: &mut std::collections::HashSet<String>) {
+            if let ExprKind::Identifier(n) = &e.kind {
+                out.insert(n.clone());
+            }
+            for inner in super::Codegen::payload_ctor_operands(e) {
+                roots(inner, out);
+            }
+        }
+        let mut always = std::collections::HashSet::new();
+        let mut some = std::collections::HashSet::new();
+        let mut shadowed = std::collections::HashSet::new();
+        let mut sites = Vec::new();
+        in_block(&func.body, &mut sites);
+        let mut rets: Vec<&Expr> = Vec::new();
+        Self::collect_return_exprs(&func.body, &mut rets);
+        if rets.is_empty() {
+            return (always, some, shadowed);
+        }
+        let body = (
+            func.body.span.offset,
+            func.body.span.offset + func.body.span.length,
+        );
+        let named = self.locals_returned_on_every_exit(func);
+        let mut names: Vec<&str> = sites.iter().map(|s| s.name.as_str()).collect();
+        names.sort_unstable();
+        names.dedup();
+        for n in names {
+            let gens: Vec<&Site> = sites.iter().filter(|s| s.name == n).collect();
+            if gens.len() < 2
+                || named.contains(n)
+                || func
+                    .params
+                    .iter()
+                    .any(|p| p.pattern.binding_names().iter().any(|b| b == n))
+            {
+                continue;
+            }
+            let mut count = super::stmts::BindingSites::default();
+            self.count_block_bindings(&func.body, n, &mut count);
+            if count.total != gens.len() {
+                continue;
+            }
+            shadowed.insert(n.to_string());
+            let live_at = |pos: usize| {
+                gens.iter()
+                    .filter(|g| g.block.0 <= pos && pos < g.block.1 && g.end <= pos)
+                    .max_by_key(|g| g.offset)
+                    .map(|g| g.offset)
+            };
+            for g in &gens {
+                let mut in_scope = 0usize;
+                let mut handed = 0usize;
+                for r in &rets {
+                    let pos = r.span.offset;
+                    if !(g.block.0 <= pos && pos < g.block.1 && g.end <= pos) {
+                        continue;
+                    }
+                    in_scope += 1;
+                    let mut rs = std::collections::HashSet::new();
+                    roots(r, &mut rs);
+                    if rs.contains(n) && live_at(pos) == Some(g.offset) {
+                        handed += 1;
+                    }
+                }
+                if handed == 0 {
+                    continue;
+                }
+                // A generation bound in a NESTED block also dies at that
+                // block's end, a path no exit accounts for, so it is handed
+                // back on some paths only however many exits return it.
+                if handed == in_scope && g.block == body {
+                    always.insert(g.offset);
+                } else {
+                    some.insert(g.offset);
+                }
+            }
+        }
+        (always, some, shadowed)
+    }
+
     /// B-2026-09-23-17 — the locals of `func` that SOME exits hand back and
     /// others do not (the union of every exit's roots, minus
     /// [`Self::locals_returned_on_every_exit`]), each bound once and none a
@@ -7528,6 +7725,16 @@ impl<'ctx> super::Codegen<'ctx> {
     pub(super) fn suppress_array_binding_move_through_ctor(&mut self, arg: &Expr) {
         let dest = match &arg.kind {
             ExprKind::Identifier(n) if self.payload_vars.always_returned_locals.contains(n) => {
+                ArrayMoveDest::HandedBack
+            }
+            // B-2026-09-23-36 — or whose LIVE generation every exit in its
+            // scope hands back, when the name is shadowed.
+            ExprKind::Identifier(n)
+                if self
+                    .variables
+                    .get(n)
+                    .is_some_and(|v| self.payload_vars.always_returned_slots.contains(&v.ptr)) =>
+            {
                 ArrayMoveDest::HandedBack
             }
             _ => ArrayMoveDest::CalleeParam,

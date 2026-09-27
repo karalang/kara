@@ -10379,12 +10379,19 @@ impl<'ctx> super::Codegen<'ctx> {
                                 // the caller's binding freed the buffers again:
                                 // a double free at every opt level, `String`
                                 // elements included.
+                                // B-2026-09-23-36 — or a GENERATION of a
+                                // shadowed local that some exits hand back,
+                                // which the per-name set cannot name.
                                 let flag_owned_local = !inherits_handback
                                     && !rebind_of_live_array_owner
-                                    && self
+                                    && (self
                                         .payload_vars
                                         .cond_returned_locals
                                         .contains(var_name.as_str())
+                                        || self
+                                            .payload_vars
+                                            .shadowed_cond_returned_lets
+                                            .contains(&stmt.span.offset))
                                     && arr_parts.as_ref().is_some_and(|(e, n)| {
                                         *n > 0 && self.array_elem_owns_callee_drop(e)
                                     });
@@ -10430,6 +10437,33 @@ impl<'ctx> super::Codegen<'ctx> {
                                             slot.ptr,
                                         );
                                     }
+                                }
+                                // B-2026-09-23-36 — a shadowed generation: the
+                                // flag-guarded scheme names the CURRENT binding
+                                // of the name, so a later generation outside it
+                                // leaves it, and one every exit in its scope
+                                // hands back is recorded by slot for the
+                                // `return` that retracts it.
+                                if self
+                                    .payload_vars
+                                    .shadowed_always_returned_lets
+                                    .contains(&stmt.span.offset)
+                                {
+                                    self.payload_vars.always_returned_slots.insert(slot.ptr);
+                                }
+                                if !inherits_handback
+                                    && (self
+                                        .payload_vars
+                                        .shadowed_always_returned_lets
+                                        .contains(&stmt.span.offset)
+                                        || self
+                                            .payload_vars
+                                            .shadowed_top_level_locals
+                                            .contains(var_name.as_str()))
+                                {
+                                    self.payload_vars
+                                        .cond_handback_array_params
+                                        .remove(var_name.as_str());
                                 }
                                 // B-2026-08-28-57 — the elements' user `Drop`
                                 // BODIES, on the NLL channel, beside the memory

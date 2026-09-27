@@ -13828,6 +13828,43 @@ impl<'ctx> super::Codegen<'ctx> {
             .get(name)
             .map(|v| v.ptr)
             .filter(|_| self.payload_vars.shadowed_top_level_locals.contains(name));
+        // B-2026-09-23-36 — a name `shadowed_generation_handbacks` analysed
+        // keeps one bit PER GENERATION: a second generation asking gets its
+        // own, where the shared bit used to widen to the whole name and its
+        // disarm took the other generation's drop with it.
+        if let Some(g) = self
+            .variables
+            .get(name)
+            .map(|v| v.ptr)
+            .filter(|_| self.payload_vars.shadowed_gen_names.contains(name))
+        {
+            let first = self.drop_rc.cond_move_drop_flag_slots.get(name).copied();
+            if matches!(first, Some(Some(s)) if s != g) {
+                let key = Self::generation_flag_key(name, g);
+                if let Some(p) = self.drop_rc.cond_move_drop_flags.get(&key).copied() {
+                    return Some(p);
+                }
+                let fn_val = self.current_fn?;
+                let entry = fn_val.get_first_basic_block()?;
+                let b = self.context.create_builder();
+                match entry.get_terminator() {
+                    Some(term) => b.position_before(&term),
+                    None => b.position_at_end(entry),
+                }
+                let bool_t = self.context.bool_type();
+                let slot = b.build_alloca(bool_t, &format!("cmflag.{name}.gen")).ok()?;
+                b.build_store(slot, bool_t.const_int(1, false)).ok()?;
+                self.store_at_loop_decl_anchor(name, slot, true);
+                self.drop_rc.cond_move_drop_flags.insert(key, slot);
+                return Some(slot);
+            }
+        }
+        let generation = generation.or_else(|| {
+            self.variables
+                .get(name)
+                .map(|v| v.ptr)
+                .filter(|_| self.payload_vars.shadowed_gen_names.contains(name))
+        });
         if let Some(p) = self.drop_rc.cond_move_drop_flags.get(name).copied() {
             if let Some(slot) = self.drop_rc.cond_move_drop_flag_slots.get_mut(name) {
                 if *slot != generation {
@@ -14556,6 +14593,17 @@ impl<'ctx> super::Codegen<'ctx> {
         self.builder.position_at_end(cont);
     }
 
+    /// B-2026-09-23-36 — the `cond_move_drop_flags` key of the bit a SECOND
+    /// generation of a shadowed name gets (see `cond_move_drop_flag_for`).
+    /// Kept in the same map so every save / restore / clear of it covers these
+    /// too; the separator cannot occur in an identifier.
+    pub(super) fn generation_flag_key(name: &str, slot: PointerValue<'ctx>) -> String {
+        format!(
+            "{name}\u{1}{:p}",
+            inkwell::values::AsValueRef::as_value_ref(&slot)
+        )
+    }
+
     pub(super) fn emit_user_drop_call_guarded(
         &self,
         binding_name: &str,
@@ -14563,19 +14611,26 @@ impl<'ctx> super::Codegen<'ctx> {
         ptr: PointerValue<'ctx>,
         call_name: &str,
     ) {
-        let flagged = self
+        let gen_flag = self
             .drop_rc
             .cond_move_drop_flags
-            .get(binding_name)
-            .copied()
-            // B-2026-09-23-23 — only for the generation the bit was made for.
-            // A shadowed generation of the same name was never moved and owes
-            // its body on every path.
-            .filter(|_| {
-                !matches!(
-                    self.drop_rc.cond_move_drop_flag_slots.get(binding_name),
-                    Some(Some(slot)) if *slot != ptr
-                )
+            .get(&Self::generation_flag_key(binding_name, ptr))
+            .copied();
+        let flagged = gen_flag
+            .or_else(|| {
+                self.drop_rc
+                    .cond_move_drop_flags
+                    .get(binding_name)
+                    .copied()
+                    // B-2026-09-23-23 — only for the generation the bit was
+                    // made for. A shadowed generation of the same name was
+                    // never moved and owes its body on every path.
+                    .filter(|_| {
+                        !matches!(
+                            self.drop_rc.cond_move_drop_flag_slots.get(binding_name),
+                            Some(Some(slot)) if *slot != ptr
+                        )
+                    })
             })
             .zip(self.current_fn);
         let Some((flag, fn_val)) = flagged else {
@@ -14917,13 +14972,44 @@ impl<'ctx> super::Codegen<'ctx> {
             .keys()
             .filter(|n| hands_over(handed, n))
             .filter(|n| !self.flagged_array_arg_stays_with_caller(handed, n))
+            // B-2026-09-23-36 — only while the generation the bit was made for
+            // is the live one. A later generation of a shadowed name handed
+            // over here is not the value the bit guards: clearing it took the
+            // older generation's drop off the path that kept it (60 B in 2
+            // blocks at `-O0`, and its element bodies never ran).
+            .filter(|n| {
+                !matches!(
+                    self.drop_rc.cond_move_drop_flag_slots.get(n.as_str()),
+                    Some(Some(slot))
+                        if self.variables.get(n.as_str()).is_some_and(|v| v.ptr != *slot)
+                )
+            })
             .cloned()
+            .collect();
+        // B-2026-09-23-36 — and the live generation's own bit, for a name
+        // whose later generation was given one.
+        let gen_flags: Vec<PointerValue<'ctx>> = self
+            .payload_vars
+            .shadowed_gen_names
+            .iter()
+            .filter(|n| hands_over(handed, n))
+            .filter(|n| !self.flagged_array_arg_stays_with_caller(handed, n))
+            .filter_map(|n| {
+                let cur = self.variables.get(n.as_str())?.ptr;
+                self.drop_rc
+                    .cond_move_drop_flags
+                    .get(&Self::generation_flag_key(n, cur))
+                    .copied()
+            })
             .collect();
         let bool_t = self.context.bool_type();
         for n in names {
             if let Some(flag) = self.drop_rc.cond_move_drop_flags.get(n.as_str()).copied() {
                 let _ = self.builder.build_store(flag, bool_t.const_int(0, false));
             }
+        }
+        for flag in gen_flags {
+            let _ = self.builder.build_store(flag, bool_t.const_int(0, false));
         }
     }
 
@@ -15125,6 +15211,9 @@ impl<'ctx> super::Codegen<'ctx> {
         if self.live_generation_already_retracted(name) {
             return;
         }
+        if self.retract_tracked_generation_only(name, false) {
+            return;
+        }
         let current = self.variables.get(name).map(|v| v.ptr);
         // B-2026-08-30-57 — retract only the NEWEST generation of `name`, in the
         // innermost frame that holds one.
@@ -15179,6 +15268,46 @@ impl<'ctx> super::Codegen<'ctx> {
             }
             return;
         }
+    }
+
+    /// B-2026-09-23-36 — retract the LIVE generation of `name` by its slot
+    /// alone when that generation is one every exit hands back
+    /// (`PayloadVars::always_returned_slots`), and report that the caller must
+    /// do nothing further.
+    ///
+    /// Both retractions fall back to matching by NAME when no action carries
+    /// the live slot, and a generation of `String` elements has none: its
+    /// memory is a `StructDrop`, not a `UserDrop`. The fallback then found the
+    /// OLDER generation's flag-guarded slot and retracted it, so `let x = [..];
+    /// if c { return x }; let x = [..]; return x` freed nothing of the first
+    /// array on the path that kept it (60 B in 2 blocks at `-O0`). A tracked
+    /// generation is known to be its own value, so an absent action means
+    /// there is nothing of THIS generation to retract.
+    fn retract_tracked_generation_only(&mut self, name: &str, bodies_only: bool) -> bool {
+        let Some(cur) = self
+            .variables
+            .get(name)
+            .map(|v| v.ptr)
+            .filter(|p| self.payload_vars.always_returned_slots.contains(p))
+        else {
+            return false;
+        };
+        for frame in self.drop_rc.scope_cleanup_actions.iter_mut() {
+            frame.retain(|action| match action {
+                CleanupAction::UserDrop {
+                    binding_name,
+                    binding_ptr,
+                    kind,
+                    ..
+                } => {
+                    binding_name != name
+                        || *binding_ptr != cur
+                        || (bodies_only && *kind != UserDropKind::ContainerElemBodies)
+                }
+                _ => true,
+            });
+        }
+        true
     }
 
     /// B-2026-09-23-23 — was the LIVE generation of `name` (its current
@@ -15822,6 +15951,9 @@ impl<'ctx> super::Codegen<'ctx> {
         // walk as this kind, and an all-paths retraction at the store would
         // leave the non-storing path with no owner.
         if self.drop_rc.cond_store_flag_params.contains(name) {
+            return;
+        }
+        if self.retract_tracked_generation_only(name, true) {
             return;
         }
         // B-2026-09-23-23 — the LIVE generation only, when it can be told

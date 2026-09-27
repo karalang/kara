@@ -495,6 +495,24 @@ pub(crate) struct PayloadVars<'ctx> {
     /// retraction and conditional-move guards apply only to these. Filled by
     /// `compile_function`; empty everywhere else.
     pub(crate) shadowed_top_level_locals: std::collections::HashSet<String>,
+    /// B-2026-09-23-36 — `let` sites (span offsets) of shadowed locals whose
+    /// GENERATION every exit in its scope hands back. See
+    /// `Codegen::shadowed_generation_handbacks`. Filled by `compile_function`;
+    /// empty everywhere else.
+    pub(crate) shadowed_always_returned_lets: std::collections::HashSet<usize>,
+    /// B-2026-09-23-36 — the same for generations only SOME exits hand back;
+    /// such a `let` takes the flag-guarded slot `cond_returned_locals` gives a
+    /// once-bound local.
+    pub(crate) shadowed_cond_returned_lets: std::collections::HashSet<usize>,
+    /// B-2026-09-23-36 — the slots those every-exit generations were bound
+    /// to, so a `return` of the name asks the hand-back question only while
+    /// that generation is the live one.
+    pub(crate) always_returned_slots:
+        std::collections::HashSet<inkwell::values::PointerValue<'ctx>>,
+    /// B-2026-09-23-36 — the names `Codegen::shadowed_generation_handbacks`
+    /// analysed: bound by two or more plain `let`s at any depth. Their per-path
+    /// drop flags are kept per generation.
+    pub(crate) shadowed_gen_names: std::collections::HashSet<String>,
     /// B-2026-08-06-10 — match-arm payload bindings that were DEBOXED out of an
     /// enum payload box: `binding slot -> box pointer`.
     ///

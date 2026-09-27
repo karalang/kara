@@ -190,6 +190,10 @@ pub(super) struct SavedVarSideTables<'ctx> {
     always_returned_locals: std::collections::HashSet<String>,
     cond_returned_locals: std::collections::HashSet<String>,
     shadowed_top_level_locals: std::collections::HashSet<String>,
+    shadowed_always_returned_lets: std::collections::HashSet<usize>,
+    shadowed_cond_returned_lets: std::collections::HashSet<usize>,
+    always_returned_slots: std::collections::HashSet<inkwell::values::PointerValue<'ctx>>,
+    shadowed_gen_names: std::collections::HashSet<String>,
     deboxed_payload_box_ptrs:
         HashMap<inkwell::values::PointerValue<'ctx>, inkwell::values::PointerValue<'ctx>>,
     entry_private_payload_variants: HashMap<String, std::collections::HashSet<String>>,
@@ -1708,6 +1712,14 @@ impl<'ctx> super::Codegen<'ctx> {
             shadowed_top_level_locals: std::mem::take(
                 &mut self.payload_vars.shadowed_top_level_locals,
             ),
+            shadowed_always_returned_lets: std::mem::take(
+                &mut self.payload_vars.shadowed_always_returned_lets,
+            ),
+            shadowed_cond_returned_lets: std::mem::take(
+                &mut self.payload_vars.shadowed_cond_returned_lets,
+            ),
+            always_returned_slots: std::mem::take(&mut self.payload_vars.always_returned_slots),
+            shadowed_gen_names: std::mem::take(&mut self.payload_vars.shadowed_gen_names),
             deboxed_payload_box_ptrs: std::mem::take(
                 &mut self.payload_vars.deboxed_payload_box_ptrs,
             ),
@@ -1758,6 +1770,10 @@ impl<'ctx> super::Codegen<'ctx> {
         self.payload_vars.always_returned_locals = saved.always_returned_locals;
         self.payload_vars.cond_returned_locals = saved.cond_returned_locals;
         self.payload_vars.shadowed_top_level_locals = saved.shadowed_top_level_locals;
+        self.payload_vars.shadowed_always_returned_lets = saved.shadowed_always_returned_lets;
+        self.payload_vars.shadowed_cond_returned_lets = saved.shadowed_cond_returned_lets;
+        self.payload_vars.always_returned_slots = saved.always_returned_slots;
+        self.payload_vars.shadowed_gen_names = saved.shadowed_gen_names;
         self.payload_vars.deboxed_payload_box_ptrs = saved.deboxed_payload_box_ptrs;
         self.payload_vars.entry_private_payload_variants = saved.entry_private_payload_variants;
         self.payload_vars.private_deboxed_slots = saved.private_deboxed_slots;
@@ -5291,6 +5307,10 @@ impl<'ctx> super::Codegen<'ctx> {
         self.payload_vars.cond_handback_optres_params.clear();
         self.payload_vars.always_returned_locals.clear();
         self.payload_vars.shadowed_top_level_locals.clear();
+        self.payload_vars.shadowed_always_returned_lets.clear();
+        self.payload_vars.shadowed_cond_returned_lets.clear();
+        self.payload_vars.always_returned_slots.clear();
+        self.payload_vars.shadowed_gen_names.clear();
         self.payload_vars.cond_returned_locals.clear();
         self.payload_vars.deboxed_payload_box_ptrs.clear();
         self.payload_vars.entry_private_payload_variants.clear();
