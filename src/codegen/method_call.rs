@@ -8691,6 +8691,21 @@ impl<'ctx> super::Codegen<'ctx> {
                     if !arg_flows_into_return && entry_copied.is_none() && !boxed_struct_binding {
                         self.suppress_inline_option_result_binding_move(&a.value);
                     }
+                    // B-2026-09-27-54 — the fresh-temp boxed `Option` /
+                    // `Result` box, which only the free-function loop ever
+                    // registered: `h.rb(Some(mk(2)))` leaked it, 32 B per call.
+                    // Its own hand-back question, asked at the AST index:
+                    // `arg_flows_into_return` above indexes by `pidx`.
+                    let boxed_flows_into_return = self
+                        .callee_param_ast(&qualified, pidx)
+                        .is_some_and(|(_, ai)| self.call_arg_flows_into_return(&qualified, ai));
+                    self.register_boxed_optres_arg_temp(
+                        &qualified,
+                        pidx,
+                        &a.value,
+                        val,
+                        boxed_flows_into_return,
+                    );
                     // B-2026-09-01-35 — the OWNERSHIP question needs the copy
                     // to actually happen, which `entry_copied` (type only) does
                     // not answer; the suppressor above deliberately keeps the

@@ -864,6 +864,53 @@ impl<'a> super::Interpreter<'a> {
                     &mut self.cond_store_param_names,
                     self.pending_param_drop_bindings.iter().cloned().collect(),
                 );
+                // B-2026-09-27-54 — hide the CALLER's same-named entries in
+                // `optres_payload_bodies_tes` for this frame. The map is keyed
+                // by bare name and not frame-isolated, so a param named like a
+                // dead `Option` binding of the caller inherited that binding's
+                // payload walk: `h.rb(Some(mk(2)))` ran `d2 d2` when `main` held
+                // a `let a: Option[S]` and `rb`'s param was also `a`, and `d2`
+                // once under any other caller spelling. The free-fn frame
+                // seeds and restores the names it adopts (B-2026-09-23-26).
+                // Every param is shadowed; the ones this frame adopts because
+                // the body hands them back on SOME exits are then seeded with
+                // their declared type, which is what the free-fn frame does
+                // and what a conditionally returned method param had been
+                // getting only from a same-named caller binding
+                // (`interp_conditional_optres_param_handback_assoc_and_method`).
+                let param_tes: Vec<(String, Option<crate::ast::TypeExpr>)> = self
+                    .impl_method_ast(&type_name, method)
+                    .map(|f| {
+                        f.params
+                            .iter()
+                            .enumerate()
+                            .filter_map(|(i, p)| {
+                                let n = p.name()?.to_string();
+                                let optres = matches!(&p.ty.kind, crate::ast::TypeKind::Path(tp)
+                                    if tp.segments.len() == 1
+                                        && matches!(tp.segments[0].as_str(), "Option" | "Result"));
+                                let adopt = optres
+                                    && self.pending_param_drop_bindings.contains(&n)
+                                    && crate::ast::fn_conditionally_returns_param_bare(
+                                        Some(self.program),
+                                        f,
+                                        i,
+                                    );
+                                Some((n, adopt.then(|| p.ty.clone())))
+                            })
+                            .collect()
+                    })
+                    .unwrap_or_default();
+                let saved_optres_tes: Vec<(String, Option<crate::ast::TypeExpr>)> = param_tes
+                    .into_iter()
+                    .map(|(n, seed)| {
+                        let prev = match seed {
+                            Some(te) => self.optres_payload_bodies_tes.insert(n.clone(), te),
+                            None => self.optres_payload_bodies_tes.remove(&n),
+                        };
+                        (n, prev)
+                    })
+                    .collect();
                 // The callee frame's moved-out sets ARE isolated, exactly as
                 // `eval_call` isolates a free fn's and for the same reason: they
                 // are keyed by BINDING NAME with no frame qualifier, so without
@@ -999,6 +1046,17 @@ impl<'a> super::Interpreter<'a> {
                 // frame that registered it and disarm a same-named binding in
                 // the caller.
                 self.cond_store_param_names = saved_cond_store_params;
+                // B-2026-09-27-54 — and the caller's shadowed entries.
+                for (n, prev) in saved_optres_tes {
+                    match prev {
+                        Some(te) => {
+                            self.optres_payload_bodies_tes.insert(n, te);
+                        }
+                        None => {
+                            self.optres_payload_bodies_tes.remove(&n);
+                        }
+                    }
+                }
                 // CALLER leg, after the restore so the mark lands in the
                 // CALLER's set: a by-value identifier arg is no longer the
                 // caller's to walk. See `record_method_arg_moves`.

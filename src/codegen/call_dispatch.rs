@@ -2316,139 +2316,10 @@ impl<'ctx> super::Codegen<'ctx> {
                 self.builder.build_store(slot, val).unwrap();
                 self.track_tensor_var(slot);
             }
-            // B-2026-08-05-7 — the same shape once more, now for an `Option[T]`
-            // whose payload `T` was HEAP-BOXED because its LLVM width exceeds
-            // Option's seeded 3-word area (`coerce_to_payload_words`). A NAMED
-            // binding gets its box drop at the let site (`track_boxed_enum_var`)
-            // and a fresh-temp SCRUTINEE gets one from
-            // `materialize_freshtemp_enum_scrutinee`; a fresh temp handed
-            // straight to an owned param — `classify(Some(Some(42)))` — had
-            // neither, so the box leaked once per call. Params register no drop
-            // of their own (see `track_enum_var`'s note), so the caller is the
-            // only frame that can own it.
-            //
-            // BOX-ONLY (`inner_struct_name = None`), the same choice the
-            // fresh-temp scrutinee path documents: if the callee's arm binds the
-            // payload out, that binding owns `T`'s interior and dropping `T`
-            // here would double-free it.
-            if !flows_into_return
-                && val.is_struct_value()
-                && self.expr_yields_fresh_owned_temp(&a.value)
-                && !self.call_result_aliases_armed_binding(&a.value)
-                && self.owned_boxed_option_param_struct(&name, i).is_some()
-            {
-                // B-2026-09-09-10 — the interior travels for an ENUM payload
-                // too. This filtered the resolved name through `struct_types`,
-                // leaving `Option[K]` over `enum K { A(R2), B }` with a box the
-                // caller owned and an interior nobody did: 81 B in 9 blocks
-                // over three calls, `R2`'s three `String`s.
-                //
-                // The filter was right until the DISARM worked. A callee arm
-                // written `Some(k)` binds the whole payload and its own
-                // bindings free the interior, so registering here was a second
-                // owner — 23 allocs against 32 frees.
-                // `register_boxed_payload_alias` tested only the OWNERSHIP set,
-                // which never contains a param, so it silently did nothing for
-                // exactly the shape that needed it; it now also accepts the
-                // param REACH set.
-                //
-                // `callee_keeps_param_payload_in_frame` is the other half, and
-                // it is about a different escape than the envelope's
-                // `callee_rebinds_param_whole`: that one asks who owns the BOX
-                // when the param is rebound to a mutable local, this one keeps
-                // the INTERIOR home when the param reaches any other binding.
-                let inner_struct = self.owned_boxed_option_param_struct(&name, i).filter(|n| {
-                    self.type_decls.struct_types.contains_key(n.as_str())
-                        || self.callee_keeps_param_payload_in_frame(&name, i)
-                });
-                let cur_fn = self
-                    .builder
-                    .get_insert_block()
-                    .and_then(|bb| bb.get_parent())
-                    .expect("compile_call inside a function context");
-                let slot =
-                    self.create_entry_alloca(cur_fn, &format!("optbox_arg_tmp{i}"), val.get_type());
-                self.builder.build_store(slot, val).unwrap();
-                // B-2026-09-17-34 — mask out whatever the callee's arm moves
-                // out of this payload. That move makes the callee's local the
-                // owner of the field's body AND its memory, while this
-                // registration went on freeing it after the call returned.
-                let moved = inner_struct
-                    .as_deref()
-                    .map(|n| self.callee_moved_payload_field_idxs(&name, i, n))
-                    .unwrap_or_default();
-                self.track_boxed_enum_var_masked(
-                    &format!("__optbox_arg_tmp{i}"),
-                    slot,
-                    "Option",
-                    "Some",
-                    inner_struct.as_deref(),
-                    &moved,
-                );
-            }
-            // B-2026-09-06-56 — the `Result` sibling of the arm above, and the
-            // reason it exists is that NEITHER frame owned the box: this arm
-            // declined every non-`Option` param, and the callee's owned-param
-            // loop declines every non-`Option` enum, each citing the same
-            // per-variant asymmetry. Two considered reasons to stand down, and
-            // between them a fresh-temp `Result[P, i64]` argument's box was
-            // nobody's — 64 B per call, quietly, with no invalid free to give
-            // it away. `Option` is clean only because this arm registers.
-            //
-            // The asymmetry is real but it is about a DISARM, not about
-            // ownership; see the predicate's note. Both sides are registered
-            // when both are boxed, and `BoxedEnumDrop`'s tag guard makes them
-            // mutually exclusive at run time.
-            //
-            // The callee-side reach fix lands in the same commit and is not
-            // optional: disarming the fields an arm binds, out of a box nobody
-            // frees, would have WIDENED this leak, and adding this owner
-            // without that disarm would have converted it into a double free.
-            let result_boxed = if !flows_into_return
-                && val.is_struct_value()
-                && self.expr_yields_fresh_owned_temp(&a.value)
-            {
-                self.owned_boxed_result_param_structs(&name, i)
-            } else {
-                Vec::new()
-            };
-            if !result_boxed.is_empty() {
-                let cur_fn = self
-                    .builder
-                    .get_insert_block()
-                    .and_then(|bb| bb.get_parent())
-                    .expect("compile_call inside a function context");
-                let slot =
-                    self.create_entry_alloca(cur_fn, &format!("resbox_arg_tmp{i}"), val.get_type());
-                self.builder.build_store(slot, val).unwrap();
-                for (variant, struct_name) in &result_boxed {
-                    // B-2026-09-09-10 — the `Option` arm's twin, widened for
-                    // the same reason; the `Result` spelling measured
-                    // identically (81 B in 9 blocks).
-                    let inner = (self
-                        .type_decls
-                        .struct_types
-                        .contains_key(struct_name.as_str())
-                        || self.callee_keeps_param_payload_in_frame(&name, i))
-                    .then_some(struct_name.as_str());
-                    // B-2026-09-17-34 — the `Result` twin of the mask above,
-                    // and it is not optional here either: the row's own widest
-                    // cell is a `Result` payload wide enough to spill its
-                    // 5-word inline area, which aborts exactly as the `Option`
-                    // one does.
-                    let moved = inner
-                        .map(|n| self.callee_moved_payload_field_idxs(&name, i, n))
-                        .unwrap_or_default();
-                    self.track_boxed_enum_var_masked(
-                        &format!("__resbox_arg_tmp{i}_{variant}"),
-                        slot,
-                        "Result",
-                        variant,
-                        inner,
-                        &moved,
-                    );
-                }
-            }
+            // B-2026-08-05-7, B-2026-09-06-56 — a fresh-temp boxed
+            // `Option` / `Result` argument's box; shared with the method and
+            // associated-function loops since B-2026-09-27-54.
+            self.register_boxed_optres_arg_temp(&name, i, &a.value, val, flows_into_return);
             // B-2026-09-17-34 — the NAMED-LOCAL spelling of the mask above.
             //
             // `let a = Some(Hd { .. }); eat(a);` never reaches the fresh-temp
@@ -3667,16 +3538,10 @@ impl<'ctx> super::Codegen<'ctx> {
     /// generic, no snapshot): the interior stays behind, which leaks rather
     /// than double-frees.
     fn callee_keeps_param_payload_in_frame(&self, name: &str, i: usize) -> bool {
-        let Some(program) = self.program_snapshot.as_deref() else {
+        let Some((func, ast_i)) = self.callee_param_ast(name, i) else {
             return false;
         };
-        let Some(func) = program.items.iter().find_map(|item| match item {
-            Item::Function(f) if f.name == name => Some(f),
-            _ => None,
-        }) else {
-            return false;
-        };
-        let Some(param) = func.params.get(i) else {
+        let Some(param) = func.params.get(ast_i) else {
             return false;
         };
         let crate::ast::PatternKind::Binding(pname) = &param.pattern.kind else {
@@ -3780,16 +3645,10 @@ impl<'ctx> super::Codegen<'ctx> {
         struct_name: &str,
     ) -> std::collections::BTreeSet<usize> {
         let mut out = std::collections::BTreeSet::new();
-        let Some(program) = self.program_snapshot.as_deref() else {
+        let Some((func, ast_i)) = self.callee_param_ast(callee, i) else {
             return out;
         };
-        let Some(func) = program.items.iter().find_map(|item| match item {
-            Item::Function(f) if f.name == callee => Some(f),
-            _ => None,
-        }) else {
-            return out;
-        };
-        let Some(param) = func.params.get(i) else {
+        let Some(param) = func.params.get(ast_i) else {
             return out;
         };
         let crate::ast::PatternKind::Binding(pname) = &param.pattern.kind else {
@@ -4250,21 +4109,181 @@ impl<'ctx> super::Codegen<'ctx> {
     /// `idx` counts a method's `self` as param 0, as the method-call site's
     /// `pidx` does; the AST's `params` do not hold `self`.
     pub(super) fn callee_stores_param_whole(&self, callee_name: &str, idx: usize) -> bool {
-        let Some(program) = self.program_snapshot.as_deref() else {
-            return false;
+        self.callee_param_ast(callee_name, idx)
+            .is_some_and(|(f, ast_i)| crate::ast::fn_stores_param_whole_into_container(f, ast_i))
+    }
+
+    /// The caller-side owner of a fresh-temp argument's heap-boxed `Option` /
+    /// `Result` payload, for a by-value param no other frame takes over.
+    /// `i` counts a method's `self` as param 0.
+    ///
+    /// B-2026-09-27-54 — lifted out of `compile_call` so the METHOD and
+    /// ASSOCIATED-function argument loops register it too. Only the free-function
+    /// loop ever did, so `h.rb(Some(mk(2)))` and `H.rb(Some(mk(2)))` leaked the
+    /// box (32 B per call) where `rb(Some(mk(2)))` was clean.
+    pub(super) fn register_boxed_optres_arg_temp(
+        &mut self,
+        name: &str,
+        i: usize,
+        arg: &Expr,
+        val: BasicValueEnum<'ctx>,
+        flows_into_return: bool,
+    ) {
+        // B-2026-08-05-7 — the same shape once more, now for an `Option[T]`
+        // whose payload `T` was HEAP-BOXED because its LLVM width exceeds
+        // Option's seeded 3-word area (`coerce_to_payload_words`). A NAMED
+        // binding gets its box drop at the let site (`track_boxed_enum_var`)
+        // and a fresh-temp SCRUTINEE gets one from
+        // `materialize_freshtemp_enum_scrutinee`; a fresh temp handed
+        // straight to an owned param — `classify(Some(Some(42)))` — had
+        // neither, so the box leaked once per call. Params register no drop
+        // of their own (see `track_enum_var`'s note), so the caller is the
+        // only frame that can own it.
+        //
+        // BOX-ONLY (`inner_struct_name = None`), the same choice the
+        // fresh-temp scrutinee path documents: if the callee's arm binds the
+        // payload out, that binding owns `T`'s interior and dropping `T`
+        // here would double-free it.
+        if !flows_into_return
+            && val.is_struct_value()
+            && self.expr_yields_fresh_owned_temp(arg)
+            && !self.call_result_aliases_armed_binding(arg)
+            && self.owned_boxed_option_param_struct(name, i).is_some()
+        {
+            // B-2026-09-09-10 — the interior travels for an ENUM payload
+            // too. This filtered the resolved name through `struct_types`,
+            // leaving `Option[K]` over `enum K { A(R2), B }` with a box the
+            // caller owned and an interior nobody did: 81 B in 9 blocks
+            // over three calls, `R2`'s three `String`s.
+            //
+            // The filter was right until the DISARM worked. A callee arm
+            // written `Some(k)` binds the whole payload and its own
+            // bindings free the interior, so registering here was a second
+            // owner — 23 allocs against 32 frees.
+            // `register_boxed_payload_alias` tested only the OWNERSHIP set,
+            // which never contains a param, so it silently did nothing for
+            // exactly the shape that needed it; it now also accepts the
+            // param REACH set.
+            //
+            // `callee_keeps_param_payload_in_frame` is the other half, and
+            // it is about a different escape than the envelope's
+            // `callee_rebinds_param_whole`: that one asks who owns the BOX
+            // when the param is rebound to a mutable local, this one keeps
+            // the INTERIOR home when the param reaches any other binding.
+            let inner_struct = self.owned_boxed_option_param_struct(name, i).filter(|n| {
+                self.type_decls.struct_types.contains_key(n.as_str())
+                    || self.callee_keeps_param_payload_in_frame(name, i)
+            });
+            let cur_fn = self
+                .builder
+                .get_insert_block()
+                .and_then(|bb| bb.get_parent())
+                .expect("compile_call inside a function context");
+            let slot =
+                self.create_entry_alloca(cur_fn, &format!("optbox_arg_tmp{i}"), val.get_type());
+            self.builder.build_store(slot, val).unwrap();
+            // B-2026-09-17-34 — mask out whatever the callee's arm moves
+            // out of this payload. That move makes the callee's local the
+            // owner of the field's body AND its memory, while this
+            // registration went on freeing it after the call returned.
+            let moved = inner_struct
+                .as_deref()
+                .map(|n| self.callee_moved_payload_field_idxs(name, i, n))
+                .unwrap_or_default();
+            self.track_boxed_enum_var_masked(
+                &format!("__optbox_arg_tmp{i}"),
+                slot,
+                "Option",
+                "Some",
+                inner_struct.as_deref(),
+                &moved,
+            );
+        }
+        // B-2026-09-06-56 — the `Result` sibling of the arm above, and the
+        // reason it exists is that NEITHER frame owned the box: this arm
+        // declined every non-`Option` param, and the callee's owned-param
+        // loop declines every non-`Option` enum, each citing the same
+        // per-variant asymmetry. Two considered reasons to stand down, and
+        // between them a fresh-temp `Result[P, i64]` argument's box was
+        // nobody's — 64 B per call, quietly, with no invalid free to give
+        // it away. `Option` is clean only because this arm registers.
+        //
+        // The asymmetry is real but it is about a DISARM, not about
+        // ownership; see the predicate's note. Both sides are registered
+        // when both are boxed, and `BoxedEnumDrop`'s tag guard makes them
+        // mutually exclusive at run time.
+        //
+        // The callee-side reach fix lands in the same commit and is not
+        // optional: disarming the fields an arm binds, out of a box nobody
+        // frees, would have WIDENED this leak, and adding this owner
+        // without that disarm would have converted it into a double free.
+        let result_boxed = if !flows_into_return
+            && val.is_struct_value()
+            && self.expr_yields_fresh_owned_temp(arg)
+        {
+            self.owned_boxed_result_param_structs(name, i)
+        } else {
+            Vec::new()
         };
-        let Some(f) = super::declarations::find_function_ast(program, callee_name) else {
-            return false;
-        };
-        let ast_i = if f.self_param.is_some() {
-            match idx.checked_sub(1) {
-                Some(i) => i,
-                None => return false,
+        if !result_boxed.is_empty() {
+            let cur_fn = self
+                .builder
+                .get_insert_block()
+                .and_then(|bb| bb.get_parent())
+                .expect("compile_call inside a function context");
+            let slot =
+                self.create_entry_alloca(cur_fn, &format!("resbox_arg_tmp{i}"), val.get_type());
+            self.builder.build_store(slot, val).unwrap();
+            for (variant, struct_name) in &result_boxed {
+                // B-2026-09-09-10 — the `Option` arm's twin, widened for
+                // the same reason; the `Result` spelling measured
+                // identically (81 B in 9 blocks).
+                let inner = (self
+                    .type_decls
+                    .struct_types
+                    .contains_key(struct_name.as_str())
+                    || self.callee_keeps_param_payload_in_frame(name, i))
+                .then_some(struct_name.as_str());
+                // B-2026-09-17-34 — the `Result` twin of the mask above,
+                // and it is not optional here either: the row's own widest
+                // cell is a `Result` payload wide enough to spill its
+                // 5-word inline area, which aborts exactly as the `Option`
+                // one does.
+                let moved = inner
+                    .map(|n| self.callee_moved_payload_field_idxs(name, i, n))
+                    .unwrap_or_default();
+                self.track_boxed_enum_var_masked(
+                    &format!("__resbox_arg_tmp{i}_{variant}"),
+                    slot,
+                    "Result",
+                    variant,
+                    inner,
+                    &moved,
+                );
             }
+        }
+    }
+
+    /// The callee's AST and the AST index of its param `idx`, where `idx`
+    /// counts a method's `self` as param 0 (the convention of the
+    /// `fn_param_ref` tables and of every argument loop's index). Resolves a
+    /// free function by its bare name and an impl item by its `Type.method`
+    /// key, so one lookup serves all three argument loops. B-2026-09-27-54:
+    /// the boxed-payload helpers below matched `Item::Function` by name only,
+    /// so a METHOD or ASSOCIATED-function callee resolved to nothing.
+    pub(super) fn callee_param_ast(
+        &self,
+        callee_name: &str,
+        idx: usize,
+    ) -> Option<(&Function, usize)> {
+        let program = self.program_snapshot.as_deref()?;
+        let f = super::declarations::find_function_ast(program, callee_name)?;
+        let ast_i = if f.self_param.is_some() {
+            idx.checked_sub(1)?
         } else {
             idx
         };
-        crate::ast::fn_stores_param_whole_into_container(f, ast_i)
+        Some((f, ast_i))
     }
 
     pub(super) fn owned_boxed_option_param_struct(&self, name: &str, i: usize) -> Option<String> {
@@ -4278,11 +4297,9 @@ impl<'ctx> super::Codegen<'ctx> {
         if flagged(&self.fn_sig.fn_param_ref) || flagged(&self.fn_sig.fn_param_mut_ref) {
             return None;
         }
-        let program = self.program_snapshot.as_deref()?;
-        let param_te = program.items.iter().find_map(|item| match item {
-            Item::Function(f) if f.name == name => f.params.get(i).map(|p| p.ty.clone()),
-            _ => None,
-        })?;
+        let param_te = self
+            .callee_param_ast(name, i)
+            .and_then(|(f, ast_i)| f.params.get(ast_i).map(|p| p.ty.clone()))?;
         let TypeKind::Path(p) = &param_te.kind else {
             return None;
         };
@@ -4369,13 +4386,10 @@ impl<'ctx> super::Codegen<'ctx> {
         if flagged(&self.fn_sig.fn_param_ref) || flagged(&self.fn_sig.fn_param_mut_ref) {
             return Vec::new();
         }
-        let Some(program) = self.program_snapshot.as_deref() else {
-            return Vec::new();
-        };
-        let Some(param_te) = program.items.iter().find_map(|item| match item {
-            Item::Function(f) if f.name == name => f.params.get(i).map(|p| p.ty.clone()),
-            _ => None,
-        }) else {
+        let Some(param_te) = self
+            .callee_param_ast(name, i)
+            .and_then(|(f, ast_i)| f.params.get(ast_i).map(|p| p.ty.clone()))
+        else {
             return Vec::new();
         };
         // B-2026-09-09-17 — the same rebind stand-down the `Option` arm makes,

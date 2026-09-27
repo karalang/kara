@@ -3416,6 +3416,19 @@ impl<'ctx> super::Codegen<'ctx> {
                             self.track_optres_arg_temp(val, &param_te, own_payload, own_envelope);
                         }
                     }
+                    // B-2026-09-27-54 — the fresh-temp boxed `Option` /
+                    // `Result` box, as the method loop: `H.rb(Some(mk(2)))`
+                    // leaked it where the free-function spelling was clean.
+                    let boxed_flows_into_return = self
+                        .callee_param_ast(&qualified, i)
+                        .is_some_and(|(_, ai)| self.call_arg_flows_into_return(&qualified, ai));
+                    self.register_boxed_optres_arg_temp(
+                        &qualified,
+                        i,
+                        &a.value,
+                        val,
+                        boxed_flows_into_return,
+                    );
                     // B-2026-09-12-15 — the BODY channel, the third of the four
                     // argument loops. `Sink.eat(Some(R { id: 1 }))` printed no
                     // body compiled; see the method site's note for why only
