@@ -9355,9 +9355,13 @@ impl<'ctx> super::Codegen<'ctx> {
                                     // derive the subst from the element's
                                     // instantiated TE so `Vec[Box2[Res]]`
                                     // fires the mono field-bodies walk.
+                                    // B-2026-09-20-15 — enum-aware, so a
+                                    // generic ENUM element (`Vec[Ho[R]]`)
+                                    // reaches its payload walker too; for a
+                                    // struct this is the same subst.
                                     let elem_subst = elem_te
                                         .as_ref()
-                                        .map(|te| self.generic_struct_subst_from_inst(&en, te))
+                                        .map(|te| self.user_drop_subst_from_inst(&en, te))
                                         .unwrap_or_default();
                                     if let Some(bodies) = self
                                         .emit_vec_elem_user_drop_bodies_fn_mono(
@@ -24458,6 +24462,15 @@ impl<'ctx> super::Codegen<'ctx> {
                     self.builder.build_call(f, &[elem_ptr.into()], "").unwrap();
                 }
             } else if let Some(w) = self.emit_enum_payload_user_drop_bodies_fn(&etn) {
+                self.builder.build_call(w, &[elem_ptr.into()], "").unwrap();
+            }
+        }
+        // B-2026-09-20-15 — a GENERIC enum element's payload bodies, the
+        // complement the name-keyed walker above skips. Outside the
+        // `type_runs_user_drop` gate because that asks the erased declaration,
+        // which answers no for `Ho[T]` whatever `T` is.
+        if run_bodies && is_enum {
+            if let Some(w) = self.emit_generic_enum_payload_user_drop_bodies_fn(&elem_te) {
                 self.builder.build_call(w, &[elem_ptr.into()], "").unwrap();
             }
         }

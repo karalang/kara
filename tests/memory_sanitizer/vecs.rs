@@ -8300,3 +8300,101 @@ fn main() {
         "asan_escaping_optres_param_with_drop_payload_frees_once",
     );
 }
+
+/// B-2026-09-20-15 — a GENERIC enum's payload runs its user `Drop` body as a
+/// `Vec` ELEMENT and as a STRUCT FIELD, as its non-generic twin does. Both
+/// positions asked only the name-keyed payload walker, which skips a payload
+/// declared as the enum's own param, so `Ho[R]`'s `R` body ran under `--interp`
+/// and on no compiled surface -- narrow (inline) and wide (boxed) payloads
+/// alike. Covers the element walk at the `Vec`'s death, a `for` binding that
+/// only reads (a view, so the arm does not run the body inside the loop), a
+/// by-value callee of a narrow element, `match v[0]`, the index-assign's
+/// displaced element, a pushed named local, a `vec!` literal, and the struct
+/// field unmatched, matched, moved, handed away and held in a `Vec`.
+/// `m15`/`w4`/`w6`/`w7` pin the language's copy semantics for a loop binding
+/// moved out (one body per copy), which the non-generic twin also prints.
+#[test]
+fn asan_generic_enum_payload_body_runs_as_vec_element_and_struct_field() {
+    assert_clean_asan_run(
+        r#"struct R { id: i64 }
+impl Drop for R { fn drop(mut ref self) { println(f"dR{self.id}") } }
+struct W { id: i64, n2: i64 }
+impl Drop for W { fn drop(mut ref self) { println(f"dW{self.id}") } }
+struct S { id: i64, s: String }
+impl Drop for S { fn drop(mut ref self) { println(f"dS{self.id}") } }
+enum Ho[T] { Full(T), Empty }
+enum MoR { Full(R), Empty }
+enum MoS { Full(S), Empty }
+struct H { g: Ho[R] }
+struct Hs { g: Ho[S] }
+fn mks(i: i64) -> S { return S { id: i, s: "ab".to_string() + "cd" } }
+fn show(h: Ho[R]) { match h { Ho.Full(r) => println(f"r{r.id}"), Ho.Empty => println("e") } }
+fn shows(h: Ho[S]) { match h { Ho.Full(r) => println(f"s{r.id}"), Ho.Empty => println("e") } }
+struct Hm { g: MoR }
+struct Gh[T] { g: Ho[T] }
+fn eat(h: H) { println("eat") }
+fn v01() { let mut v: Vec[Ho[R]] = Vec.new(); v.push(Ho.Full(R { id: 7 })); v.push(Ho.Empty); v.push(Ho.Full(R { id: 8 })); println(f"n{v.len()}"); }
+fn v02() { let mut v: Vec[Ho[W]] = Vec.new(); v.push(Ho.Full(W { id: 7, n2: 1 })); v.push(Ho.Empty); println(f"n{v.len()}"); }
+fn v03() { let mut v: Vec[Ho[S]] = Vec.new(); v.push(Ho.Full(mks(7))); v.push(Ho.Empty); println(f"n{v.len()}"); }
+fn v04() { let mut v: Vec[Ho[R]] = Vec.new(); v.push(Ho.Full(R { id: 7 })); v.push(Ho.Empty); for h in v { match h { Ho.Full(r) => println(f"r{r.id}"), Ho.Empty => println("e") } } println("after"); }
+fn v05() { let mut v: Vec[Ho[S]] = Vec.new(); v.push(Ho.Full(mks(7))); v.push(Ho.Empty); for h in v { match h { Ho.Full(r) => println(f"s{r.id}"), Ho.Empty => println("e") } } println("after"); }
+fn v06() { let mut v: Vec[Ho[R]] = Vec.new(); v.push(Ho.Full(R { id: 7 })); for h in v { show(h) } println("after"); }
+fn v08() { let mut v: Vec[Ho[R]] = Vec.new(); v.push(Ho.Full(R { id: 7 })); for h in v { let k = h; println("k") } println("after"); }
+fn v09() { let mut v: Vec[Ho[S]] = Vec.new(); v.push(Ho.Full(mks(7))); match v[0] { Ho.Full(x) => println(f"x{x.id}"), Ho.Empty => println("e") } println("after"); }
+fn v10() { let mut v: Vec[Ho[R]] = Vec.new(); v.push(Ho.Full(R { id: 7 })); v[0] = Ho.Full(R { id: 9 }); println("set"); }
+fn v11() { let mut v: Vec[Ho[S]] = Vec.new(); v.push(Ho.Full(mks(7))); v[0] = Ho.Full(mks(9)); println("set"); }
+fn v12() { let g: Ho[S] = Ho.Full(mks(7)); let mut v: Vec[Ho[S]] = Vec.new(); v.push(g); println("p"); }
+fn v13() { let v: Vec[Ho[R]] = vec![Ho.Full(R { id: 7 }), Ho.Empty]; println("lit"); }
+fn s01() { let h = H { g: Ho.Full(R { id: 5 }) }; println("h"); }
+fn s04() { let g: Ho[R] = Ho.Full(R { id: 5 }); let h = H { g: g }; match h.g { Ho.Full(r) => println(f"r{r.id}"), Ho.Empty => println("e") } println("m"); }
+fn s06() { let h = H { g: Ho.Full(R { id: 5 }) }; match h.g { Ho.Full(r) => println(f"r{r.id}"), Ho.Empty => println("e") } println("m"); }
+fn s07() { let h = Gh { g: Ho.Full(R { id: 5 }) }; println("h"); }
+fn s08() { let h = H { g: Ho.Full(R { id: 5 }) }; eat(h); println("after"); }
+fn s09() { let h = H { g: Ho.Full(R { id: 5 }) }; let k = h; println("k"); }
+fn s10() { let h = H { g: Ho.Empty }; println("h"); }
+fn s12() { let mut v: Vec[H] = Vec.new(); v.push(H { g: Ho.Full(R { id: 5 }) }); println("v"); }
+fn w4() { let mut v: Vec[Ho[S]] = Vec.new(); v.push(Ho.Full(mks(7))); for h in v { let k = h; println("k") } println(f"n{v.len()}"); }
+fn w6() { let mut v: Vec[Ho[S]] = Vec.new(); v.push(Ho.Full(mks(7))); let mut w: Vec[Ho[S]] = Vec.new(); for h in v { w.push(h) } println(f"n{v.len()}{w.len()}"); }
+fn w7() { let mut v: Vec[Ho[R]] = Vec.new(); v.push(Ho.Full(R { id: 7 })); let mut w: Vec[Ho[R]] = Vec.new(); for h in v { w.push(h) } println(f"n{v.len()}{w.len()}"); }
+fn w9() { let mut v: Vec[Ho[R]] = Vec.new(); v.push(Ho.Full(R { id: 7 })); for h in v { show(h) } println(f"n{v.len()}"); }
+fn m15() { let mut v: Vec[Ho[R]] = Vec.new(); v.push(Ho.Full(R { id: 7 })); for h in v { show(h) } println(f"n{v.len()}"); }
+fn main() {
+    v01()
+    v02()
+    v03()
+    v04()
+    v05()
+    v06()
+    v08()
+    v09()
+    v10()
+    v11()
+    v12()
+    v13()
+    s01()
+    s04()
+    s06()
+    s07()
+    s08()
+    s09()
+    s10()
+    s12()
+    w4()
+    w6()
+    w7()
+    w9()
+    m15()
+    println("end")
+}
+"#,
+        &[
+            "n3", "dR7", "dR8", "n2", "dW7", "n2", "dS7", "r7", "e", "dR7", "after", "s7", "e",
+            "dS7", "after", "r7", "dR7", "after", "dR7", "k", "dR7", "after", "x7", "dS7", "after",
+            "dR7", "dR9", "set", "dS7", "dS9", "set", "dS7", "p", "dR7", "lit", "dR5", "h", "r5",
+            "dR5", "m", "r5", "dR5", "m", "dR5", "h", "eat", "dR5", "after", "dR5", "k", "h",
+            "dR5", "v", "dS7", "k", "n1", "dS7", "n11", "dS7", "dS7", "n11", "dR7", "dR7", "r7",
+            "n1", "dR7", "r7", "n1", "dR7", "end",
+        ],
+        "asan_generic_enum_payload_body_runs_as_vec_element_and_struct_field",
+    );
+}

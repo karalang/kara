@@ -4310,6 +4310,90 @@ impl<'ctx> super::Codegen<'ctx> {
     /// `seen` breaks a cycle in the type graph. Structs cannot be directly
     /// cyclic (infinite size), so this is belt-and-braces against an
     /// indirectly-registered shape rather than a live case.
+    /// B-2026-09-20-15 — does a GENERIC ENUM INSTANTIATION (`Ho[R]`) run a
+    /// user `Drop` body through a payload declared as one of the enum's own
+    /// params? The name-keyed [`Self::type_runs_user_drop`] skips exactly
+    /// those payloads (a bare `T` would otherwise match every instantiation),
+    /// so this asks the substituted payload instead -- the question
+    /// [`Self::emit_generic_enum_payload_user_drop_bodies_fn`] answers by
+    /// emitting a walker. Head names only, plus a `Vec` payload's element: a
+    /// shape it does not recognise answers false, leaving the field as it was.
+    ///
+    /// DECLINES an instantiation whose payload is heap-BOXED and owns heap of
+    /// its own (`Ho[S]`, `S { id, s: String }`). Answering yes makes the
+    /// holding struct Drop-relevant, which turns a read-only `match h.g`
+    /// into a borrow of the field: the parent then owns the payload, and the
+    /// parent's field drop frees only the box ENVELOPE (by design -- see
+    /// `emit_erased_boxed_enum_payload_free_at`), so the `String` the arm
+    /// used to take and free leaked 4 B where it was clean. Freeing the
+    /// interior there instead was measured to double-free every consuming
+    /// spelling (`match h.g { Ho.Full(r) => keeps(r) }` and three more), so
+    /// this class keeps its old answer until the field has a per-site owner.
+    pub(super) fn generic_enum_inst_runs_user_drop(
+        &self,
+        te: &TypeExpr,
+        seen: &mut Vec<String>,
+    ) -> bool {
+        if self
+            .user_enum_boxed_payload_variants(te)
+            .iter()
+            .any(|(_, _, payload_te, _, _)| self.type_expr_has_drop_heap(payload_te))
+        {
+            return false;
+        }
+        let TypeKind::Path(p) = &te.kind else {
+            return false;
+        };
+        let Some(head) = p.segments.first() else {
+            return false;
+        };
+        if matches!(head.as_str(), "Option" | "Result")
+            || self
+                .type_decls
+                .enum_layouts
+                .get(head.as_str())
+                .is_none_or(|l| l.is_shared)
+        {
+            return false;
+        }
+        let params = self.enum_generic_param_names(head);
+        let Some(args) = p.generic_args.as_ref() else {
+            return false;
+        };
+        if params.is_empty() {
+            return false;
+        }
+        let subst: std::collections::HashMap<String, TypeExpr> = params
+            .iter()
+            .cloned()
+            .zip(args.iter().filter_map(|g| match g {
+                GenericArg::Type(t) => Some(t.clone()),
+                _ => None,
+            }))
+            .collect();
+        for (_, _, tes) in self.enum_variant_field_type_exprs(head) {
+            for fty in &tes {
+                if !Self::type_expr_mentions_param(fty, &params) {
+                    continue;
+                }
+                let resolved = Self::subst_type_params(fty, &subst);
+                let resolved =
+                    crate::codegen::helpers::vec_inner_type_expr(&resolved).unwrap_or(resolved);
+                if let TypeKind::Path(rp) = &resolved.kind {
+                    if let Some(n) = rp.segments.first() {
+                        if self.type_runs_user_drop(n, seen)
+                            || (rp.generic_args.is_some()
+                                && self.generic_enum_inst_runs_user_drop(&resolved, seen))
+                        {
+                            return true;
+                        }
+                    }
+                }
+            }
+        }
+        false
+    }
+
     pub(super) fn type_runs_user_drop(&self, type_name: &str, seen: &mut Vec<String>) -> bool {
         if self.type_decls.shared_types.contains_key(type_name) {
             return false;
@@ -4503,6 +4587,12 @@ impl<'ctx> super::Codegen<'ctx> {
                             found = true;
                             break 'tes;
                         }
+                    }
+                    // B-2026-09-20-15 — the generic-enum-instantiation field,
+                    // the same leg `user_drop_field_indices_mono` takes.
+                    if self.generic_enum_inst_runs_user_drop(te, seen) {
+                        found = true;
+                        break 'tes;
                     }
                     // B-2026-09-10-17 — ENVELOPE NESTING, the instance of this
                     // widening's own recorded residual ("One container level;
@@ -5194,6 +5284,15 @@ impl<'ctx> super::Codegen<'ctx> {
                         !matches!(&elem.kind, TypeKind::Path(p) if p.generic_args.is_none())
                             && self.vec_elem_te_reaches_user_drop_nested(&elem)
                     });
+                // B-2026-09-20-15 — a field whose type is a GENERIC ENUM
+                // INSTANTIATION (`g: Ho[R]`). `direct` asks the head `Ho`,
+                // whose payload is the erased `T`, and answers false, so the
+                // field never entered the walk set and `R`'s body ran on no
+                // compiled surface while `--interp` ran it.
+                let generic_enum_field = field_te.is_some_and(|te| {
+                    let te = crate::desugar::subst_type_expr(te, subst);
+                    self.generic_enum_inst_runs_user_drop(&te, &mut Vec::new())
+                });
                 (direct
                     || vec_elem
                     || map_val
@@ -5203,7 +5302,8 @@ impl<'ctx> super::Codegen<'ctx> {
                     || nested_generic
                     || array_elem
                     || bare_param_container
-                    || vec_elem_container)
+                    || vec_elem_container
+                    || generic_enum_field)
                     .then_some(idx)
             })
             .collect()
@@ -5848,6 +5948,17 @@ impl<'ctx> super::Codegen<'ctx> {
             {
                 if let Some(w) = self.emit_enum_payload_user_drop_bodies_fn(&field_type) {
                     self.builder.build_call(w, &[field_ptr.into()], "").unwrap();
+                }
+                // B-2026-09-20-15 — the instantiation-keyed complement: the
+                // payloads declared as the enum's own params, which the
+                // name-keyed walker above skips. Same mask, same position.
+                if let Some(fte) = field_te_resolved.as_ref() {
+                    if let Some(w) = self.emit_generic_enum_payload_user_drop_bodies_fn(fte) {
+                        if let Some(bb) = saved_own_bb {
+                            self.builder.position_at_end(bb);
+                        }
+                        self.builder.build_call(w, &[field_ptr.into()], "").unwrap();
+                    }
                 }
             }
             // Then the field's OWN Drop-bearing fields, one level deeper. The
@@ -10468,14 +10579,14 @@ impl<'ctx> super::Codegen<'ctx> {
         // stopped -- one body for the TWO objects a payload variant holds. The
         // exact asymmetry B-2026-08-28-40 fixed for a struct FIELD and
         // B-2026-08-28-47 for a tuple ELEMENT; this is the Vec peer.
-        let enum_payload = if elem_name != "Option"
+        let is_value_enum = elem_name != "Option"
             && elem_name != "Result"
             && self
                 .type_decls
                 .enum_layouts
                 .get(elem_name)
-                .is_some_and(|l| !l.is_shared)
-        {
+                .is_some_and(|l| !l.is_shared);
+        let enum_payload = if is_value_enum {
             self.emit_enum_payload_user_drop_bodies_fn(elem_name)
         } else {
             None
@@ -10485,7 +10596,47 @@ impl<'ctx> super::Codegen<'ctx> {
         // nested compile of `S.drop$<concrete>` runs against a settled
         // position — the same order `emit_user_drop_wrapper_mono` keeps.
         let body_fn = self.user_drop_body_fn_mono(elem_name, subst);
-        if body_fn.is_none() && field_bodies.is_none() && enum_payload.is_none() {
+        // B-2026-09-20-15 — a GENERIC enum element's payload bodies. The
+        // name-keyed walker above skips every field declared as one of the
+        // enum's own params (B-2026-08-03-5), and the instantiation-keyed
+        // walker that takes exactly that complement was never asked here, so
+        // `Vec[Ho[R]]` ran no `R` body at the Vec's death on any compiled
+        // surface -- wide payload (boxed) or narrow (inline) alike. The
+        // instantiation is rebuilt from `subst`, which the caller derives
+        // through the enum-aware `user_drop_subst_from_inst`; an empty subst
+        // (a non-generic element, or a caller that has no instantiation)
+        // declines, leaving the name-keyed behaviour unchanged.
+        let enum_params = if self.type_decls.struct_types.contains_key(elem_name) {
+            Vec::new()
+        } else {
+            self.enum_generic_param_names(elem_name)
+        };
+        let generic_enum_payload = if is_value_enum
+            && !enum_params.is_empty()
+            && enum_params.iter().all(|p| subst.contains_key(p))
+        {
+            let inst = TypeExpr {
+                kind: TypeKind::Path(crate::ast::PathExpr {
+                    segments: vec![elem_name.to_string()],
+                    generic_args: Some(
+                        enum_params
+                            .iter()
+                            .map(|p| GenericArg::Type(subst[p].clone()))
+                            .collect(),
+                    ),
+                    span: crate::token::Span::default(),
+                }),
+                span: crate::token::Span::default(),
+            };
+            self.emit_generic_enum_payload_user_drop_bodies_fn(&inst)
+        } else {
+            None
+        };
+        if body_fn.is_none()
+            && field_bodies.is_none()
+            && enum_payload.is_none()
+            && generic_enum_payload.is_none()
+        {
             return None;
         }
 
@@ -10494,6 +10645,7 @@ impl<'ctx> super::Codegen<'ctx> {
             .struct_generic_params
             .get(elem_name)
             .cloned()
+            .or_else(|| (!enum_params.is_empty()).then(|| enum_params.clone()))
             .map(|params| {
                 params
                     .iter()
@@ -10573,6 +10725,11 @@ impl<'ctx> super::Codegen<'ctx> {
         }
         // After the element's own body, matching the field and tuple peers.
         if let Some(f) = enum_payload {
+            self.builder.build_call(f, &[ep.into()], "").unwrap();
+        }
+        // The generic complement of the walk above; the two partition the
+        // variant's fields, so a payload is walked by exactly one of them.
+        if let Some(f) = generic_enum_payload {
             self.builder.build_call(f, &[ep.into()], "").unwrap();
         }
         let next = self

@@ -2836,6 +2836,7 @@ impl<'ctx> super::Codegen<'ctx> {
                     self.register_var_from_type_expr(name, &elem_te);
                     self.mark_for_loop_borrow_if_heap(name, &elem_te);
                     self.note_for_loop_box_owner(name, &elem_te);
+                    self.mark_generic_enum_vec_loop_view(name, &elem_te, source_var);
                 }
             }
             // `for (k, v) in m` — only legal tuple iteration shape today
@@ -2861,19 +2862,6 @@ impl<'ctx> super::Codegen<'ctx> {
         }
     }
 
-    /// Mark a `for`-loop element binding as a heap borrow needing a defensive
-    /// copy at retaining-consume sites (see `for_loop_borrow_vars`). String /
-    /// Vec (`{ptr,len,cap}`) elements qualify, and — slice 3q — so does an
-    /// `Option`/`Result` element whose heap payload the container's per-element
-    /// drop now frees (`karac_drop_Option_/Result_*`): the loop binding is a
-    /// bit-copy of the container's element, so a `match o { Some(s) => … }` arm
-    /// must treat it as BORROWED (`scrutinee_is_borrowed_binding` consults this
-    /// set) — a payload binding that registered its own free would double-free
-    /// against the container's element drop (found live: exit-133 on
-    /// iterate+match over `Vec[Option[String]]`/`Vec[Result[String,_]]`).
-    /// Scalars carry no buffer to alias, so consuming them is a plain bit-copy
-    /// and stays unmarked (an unarmed container keeps the old consume+free
-    /// balance).
     /// B-2026-09-26-12 — queue a loop binding whose element's enum payload is
     /// heap-BOXED for [`Self::own_for_loop_boxed_enum_binding`]. The binding
     /// is otherwise a bit-copy of the container's slot, so it would share the
@@ -2899,6 +2887,67 @@ impl<'ctx> super::Codegen<'ctx> {
             .push((name.to_string(), elem_te.clone()));
     }
 
+    /// B-2026-09-20-15 — a `for` binding over a `Vec` of a GENERIC enum whose
+    /// payload runs a user `Drop` body is a VIEW of the element, as its
+    /// non-generic twin already is.
+    ///
+    /// `mark_for_loop_borrow_if_heap` admits a user enum through its
+    /// `field_drop_kinds`, which classify each payload from the DECLARATION, so
+    /// a bare `T` reads as nothing and `Ho[R]` was never marked -- while
+    /// `enum MoR { Full(R), Empty }` is. Unmarked, a read-only arm over the
+    /// binding took the payload as its own and ran `R`'s body inside the loop,
+    /// the body the container's element walk runs at its own death. Only a
+    /// `Vec` source: that is the container whose element walk now takes the
+    /// generic payload's bodies (`emit_vec_elem_user_drop_bodies_fn_mono`), so
+    /// a view anywhere else would leave the body with no owner.
+    fn mark_generic_enum_vec_loop_view(
+        &mut self,
+        name: &str,
+        elem_te: &TypeExpr,
+        source_var: &str,
+    ) {
+        if !self.var_types.vec_elem_types.contains_key(source_var) {
+            return;
+        }
+        let TypeKind::Path(p) = &elem_te.kind else {
+            return;
+        };
+        let Some(head) = p.segments.first() else {
+            return;
+        };
+        if p.generic_args.is_none()
+            || self.enum_generic_param_names(head).is_empty()
+            || self
+                .type_decls
+                .enum_layouts
+                .get(head.as_str())
+                .is_none_or(|l| l.is_shared)
+        {
+            return;
+        }
+        if self
+            .emit_generic_enum_payload_user_drop_bodies_fn(elem_te)
+            .is_some()
+        {
+            self.borrow_vars
+                .for_loop_owned_agg_vars
+                .insert(name.to_string());
+        }
+    }
+
+    /// Mark a `for`-loop element binding as a heap borrow needing a defensive
+    /// copy at retaining-consume sites (see `for_loop_borrow_vars`). String /
+    /// Vec (`{ptr,len,cap}`) elements qualify, and — slice 3q — so does an
+    /// `Option`/`Result` element whose heap payload the container's per-element
+    /// drop now frees (`karac_drop_Option_/Result_*`): the loop binding is a
+    /// bit-copy of the container's element, so a `match o { Some(s) => … }` arm
+    /// must treat it as BORROWED (`scrutinee_is_borrowed_binding` consults this
+    /// set) — a payload binding that registered its own free would double-free
+    /// against the container's element drop (found live: exit-133 on
+    /// iterate+match over `Vec[Option[String]]`/`Vec[Result[String,_]]`).
+    /// Scalars carry no buffer to alias, so consuming them is a plain bit-copy
+    /// and stays unmarked (an unarmed container keeps the old consume+free
+    /// balance).
     pub(super) fn mark_for_loop_borrow_if_heap(&mut self, name: &str, elem_te: &TypeExpr) {
         // B-2026-09-23-31 — a TUPLE element is a bit-copy of the container's
         // slot, so a heap member moved out of it (`let s = p.0`) aliases the
