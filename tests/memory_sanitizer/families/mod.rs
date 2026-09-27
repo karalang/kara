@@ -14,6 +14,8 @@
 //!   `merge=union` in `.gitattributes`, so two threads adding lines here
 //!   at once merge with both lines kept. Keep it to `mod` lines only: union
 //!   keeps both sides of ANY conflict, which is only safe for a pure list.
+//!   rustfmt SORTS these lines and union keeps them in arrival order, so run
+//!   `cargo fmt --all` after any rebase that brings in another thread's line.
 //!
 //! The test target is unchanged, so `cargo test --test memory_sanitizer` still runs
 //! everything. One family alone: `--test memory_sanitizer families::b_2026_09_27_58::`.
