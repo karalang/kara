@@ -4711,6 +4711,17 @@ impl<'ctx> super::Codegen<'ctx> {
         let Some(slot) = self.variables.get(name).copied() else {
             return;
         };
+        // B-2026-09-27-66 — record the instantiation the let-site records for
+        // a named local (`record_var_enum_inst_te`), since the binding is now
+        // an owner exactly like one. The by-value argument paths key on it:
+        // the hand-back disarm (`zero_boxed_binding_if_call_returned_its_box`)
+        // and the use-after-move copy both ask `uam_boxed_enum_arg_te`, and
+        // without an entry they declined for the loop binding. So `keep(h)`
+        // returned the box the binding still freed at the iteration's end, and
+        // `shows(h); shows(h)` handed both callees the same box.
+        self.var_types
+            .var_enum_inst_te
+            .insert(name.to_string(), te.clone());
         self.deep_copy_boxed_enum_payloads_in_place(te, slot.ptr);
         for (enum_name, variant, payload_te, box_field, _multi_field) in boxed {
             let inner = self.enum_boxed_payload_interior_drop(&payload_te, true);
