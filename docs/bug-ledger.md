@@ -104,13 +104,13 @@ distinguish "bugs flattening" from "we stopped writing them down."
 | false-positive | 109 |
 | soundness | 97 |
 | crash | 97 |
-| use-after-free | 57 |
+| use-after-free | 58 |
 
 ### By surface
 
 | surface | total |
 |---|---|
-| codegen | 2141 |
+| codegen | 2142 |
 | interp | 577 |
 | typecheck | 309 |
 | other | 110 |
@@ -124,7 +124,7 @@ distinguish "bugs flattening" from "we stopped writing them down."
 | lexer | 11 |
 ## Current state
 
-_Generated from `bug-ledger.jsonl` by `scripts/bug-curve.py` (2026-05-20 → 2026-09-26). Do not edit this block by hand; edit the ledger and regenerate._
+_Generated from `bug-ledger.jsonl` by `scripts/bug-curve.py` (2026-05-20 → 2026-09-27). Do not edit this block by hand; edit the ledger and regenerate._
 
 ### Open
 
@@ -311,7 +311,6 @@ registered in the callee's prologue, not by-value struct params in general. | �
 | B-2026-09-25-32 | 2026-09-25 | codegen | medium | A GENERIC FN'S RETURNED ENUM TEMP USED AS A `match` SCRUTINEE RUNS A HEAP-FREE PAYLOAD'S `Drop` BODY TWICE ON EVERY COMPILED SURFACE -- `match mkh(P { id: 6 }) { Ho.Full(r) => println(f"m{r.id}"), Ho.Empty => .. }` over `fn mkh[T](v: T) -> Ho[T] { return Ho.Full(v); }` and `struct P { id: i64 }` with a user `Drop` prints `m6 dP6 dP6 x` where `--interp` prints `m6 dP6 x`; the concrete twin `mkhC` and a heap-bearing payload are correct | — |
 | B-2026-09-25-33 | 2026-09-25 | codegen+interp | medium | A BY-VALUE PARAM HANDED TO A WRAPPER WHOSE RESULT IS DISCARDED RUNS ITS `Drop` BODY TWICE ON ALL FOUR SURFACES -- `fn outerC(x: P) { wrapC(x); println("o") }` over `fn wrapC(v: P) -> BxP { return BxP { v: v } }` called as `outerC(p)` prints `dP10 o dP10 x` everywhere against a due `dP10 o x`; the GENERIC spelling `fn outerG[T](x: T) { wrap(x); .. }` runs it once but LATE on the compiled surfaces (`o dP11 x`) and twice under `--interp` | — |
 | B-2026-09-25-34 | 2026-09-25 | codegen | medium | A DISCARDED GENERIC STRUCT LITERAL RUNS NONE OF ITS `Drop` BODIES ON ANY COMPILED SURFACE -- `Dx { v: P { id: 13 }, k: 13 };` over `struct Dx[T] { v: T, k: i64 }` with `impl[T] Drop for Dx[T]` prints `x` where `--interp` prints `dDx13 dP13 x`, and `let _ =` and a `Drop`-less `Bx[T]` (`Bx { v: P { id: 15 } };`, due `dP15`) do the same; the CALL spelling `wrapd(p);` is fixed by B-2026-09-25-30 | — |
-| B-2026-09-25-40 | 2026-09-25 | codegen | high | A GENERIC FN THAT HANDS A `shared`-FIELD STRUCT BACK, OR STORES IT, ON ONLY SOME PATHS USES IT AFTER FREE ON EVERY COMPILED SURFACE, with or without a `Drop` -- `pick(s, true, w)` over `fn pick[T](v: T, c: bool, w: T) -> T { if c { return v } return w }` aborts under `karac run` with 2 valgrind errors at -O0 at `T = S3` and `T = S2`, the S2 cells also running a body twice (`dS2 dS2 dS1 t1 dS1` against `dS2 t1 dS1`), and `stc(s, true)` over a conditional `v.push(a)` does the same at `T = S3` | — |
 | B-2026-09-26-7 | 2026-09-26 | interp+codegen | medium | A TUPLE INDEX READ OFF A FRESH TEMP RUNS NO `Drop` BODY FOR THE OTHER ELEMENTS ON ANY SURFACE, AND LEAKS THEIR HEAP AT `-O0` WHEN THE TEMP COMES OUT OF AN `unwrap()` -- `println(f"t{mkt().1}")` over `fn mkt() -> (D, i64)` prints `t1 end` on all four surfaces where `let t = mkt(); println(f"t{t.1}")` prints `t1 dD9n9 end`; `let o = Some(mkt()); println(f"t{o.unwrap().1}")` prints `t1 end` and loses 2 bytes in 1 block | — |
 | B-2026-09-26-8 | 2026-09-26 | codegen | high | A `shared struct` FIELD RETURNED FROM A `ref self` METHOD IS RELEASED WITHOUT BEING RETAINED, SO THE HOLDER'S OWN RELEASE LATER TOUCHES FREED MEMORY ON EVERY COMPILED SURFACE -- `let h = Hold { s: mksh(3) }; let x = h.get(); println(f"x{x.k}")` over `fn get(ref self) -> Sh { self.s }` prints the right text everywhere but valgrind reports an invalid read and an invalid write of size 8 at `-O0`; through a projection (`h.get().k`) the compiled surfaces also run `dSh3` BEFORE the print, while `h` still holds it | — |
 | B-2026-09-26-9 | 2026-09-26 | interp+codegen | low | A PLAIN STRUCT HOLDING A `shared struct` RELEASES IT AT LEXICAL SCOPE EXIT ON THE COMPILED BACKENDS AND AT THE HOLDER'S LIVE-RANGE END UNDER `--interp` -- `let h = Hold { s: mksh(3) }; println(f"h{h.s.k}"); println("after")` prints `h3 dSh3nm3 dD3 after end` interpreted and `h3 after end dSh3nm3 dD3` on jit / -O2 seq / -O2 par; the `shared struct` sibling of B-2026-09-19-18's `shared enum` | — |
@@ -345,6 +344,7 @@ registered in the callee's prologue, not by-value struct params in general. | �
 | B-2026-09-26-58 | 2026-09-26 | interp+codegen | medium | THREE `Vec`-IN-A-FIELD SHAPES STILL LOSE THEIR ELEMENT `Drop` BODIES AFTER B-2026-09-16-19 -- an `Option[VecDeque[D]]` field and a `Map[i64, Option[Vec[D]]]` field print the body under `--interp` and on no compiled surface, a `match h.xs { Some(v) => .. }` arm that moves the `Vec` out of an `Option[Vec[D]]` field loses both bodies compiled (`in n2 dD1 dD2 out` vs `in n2 out`), and a `Vec[H]` whose `H` holds an `Option[VecDeque[D]]` runs the body on NEITHER backend | — |
 | B-2026-09-26-59 | 2026-09-26 | codegen+interp | medium | AN `Option[Vec[D]]` HELD BY A GENERIC STRUCT, AN ARRAY ELEMENT OR AN ENUM PAYLOAD LEAKS ONE ELEMENT'S BUFFER AT `-O0` -- `G[T] { xs: Option[Vec[T]] }` at `T = D`, `Array[H, 2]` of `H { xs: Option[Vec[D]] }`, and `enum E { A(Option[Vec[D]]), B }` each lose 32 bytes in 1 block plus 36 indirectly; the enum payload also runs its element's `Drop` body on NEITHER backend | — |
 | B-2026-09-26-62 | 2026-09-26 | interp+codegen | medium | THE SPELLINGS OF B-2026-09-26-37 ITS FIX DECLINES STILL OWN A CONDITIONALLY HANDED-BACK PAYLOAD PART WRONGLY -- a TUPLE payload (`Some(t) => { if k { return t.0; } .. }` over `Option[(R, R)]`), a TWO-HOP part (`if k { return t.h.r; }`) and a TAIL yield (`Some(t) => { if k { t.r } else { .. } }`); the fresh-temp tuple spelling LOSES every element body on the compiled backends at both `k`, the rest double, and interp and compiled disagree on most cells | — |
+| B-2026-09-27-1 | 2026-09-27 | codegen | high | A GENERIC METHOD THAT HANDS A `shared`-FIELD STRUCT BACK ON ONLY SOME PATHS IS STILL USED AFTER FREE ON EVERY COMPILED SURFACE, with or without a `Drop` -- `k.gpk(s, true, w)` over `impl K { fn gpk[T](ref self, v: T, c: bool, w: T) -> T { if c { return v } return w } }` aborts under `karac run` with 2 valgrind errors at -O0 at both exits for `T = S3` and `T = S2`, the S2 cell also running a body twice (`dS6 dS6 dS5 t5 dS5` against `dS6 t5 dS5`); the remainder of B-2026-09-25-40, whose fix reached the generic FREE fn and the generic method STORE (`k.gst(s, true)`) but not this, because `compute_handback_safe_params` declines every generic impl method | — |
 
 ### Relocated
 
@@ -3040,6 +3040,7 @@ registered in the callee's prologue, not by-value struct params in general. | �
 | B-2026-09-25-37 | codegen | high | A STRUCT WITH A `shared` FIELD AND NO `Drop` OF ITS OWN IS STILL USED AFTER FREE ON THE CONCRETE PATHS B-2026-09-25-31 DID NOT REACH -- a METHOD or A… | fa4928288 |
 | B-2026-09-25-38 | codegen | medium | A `Drop` STRUCT WITH A `shared` FIELD HANDED TO A GENERIC FN THAT WRAPS IT IN AN ENUM RUNS ITS BODY TWICE ON EVERY COMPILED SURFACE -- `let h = mkh(s… | 4c34ab868 |
 | B-2026-09-25-39 | codegen | medium | AN `Option` OR GENERIC ENUM WHOSE PAYLOAD IS A STRUCT WITH A `shared` FIELD NEVER RELEASES THAT FIELD -- `let o = Some(S3 { h: Sh { k: 1 }, id: 6 })`… | 62e4961c7 |
+| B-2026-09-25-40 | codegen | high | A GENERIC FN THAT HANDS A `shared`-FIELD STRUCT BACK, OR STORES IT, ON ONLY SOME PATHS USES IT AFTER FREE ON EVERY COMPILED SURFACE, with or without… | 2e27eb990 |
 | B-2026-09-25-41 | codegen | high | A BY-VALUE PARAM HANDED ON TO A CALLEE THAT RETURNS IT ON ONLY SOME PATHS IS USED AFTER FREE, `Drop` OR NOT -- `fn passp2(a: S2, c: bool) -> S2 { let… | 663ced4b9 |
 | B-2026-09-25-42 | interp | medium | A FRESH TEMP PROJECTED IN A FUNCTION'S TAIL EXPRESSION RUNS ITS `Drop` BODIES ON THE THREE COMPILED SURFACES AND NONE UNDER `--interp` -- `fn tail()… | 0646664c0 |
 | B-2026-09-25-43 | interp | medium | A FIELD READ OFF A FRESH `shared struct` TEMPORARY RUNS ITS `Drop` BODY ON THE THREE COMPILED SURFACES AND NEVER UNDER `--interp` -- `println(f"s{mks… | 08fb3e9e3 |
