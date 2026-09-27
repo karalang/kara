@@ -22995,6 +22995,17 @@ impl<'ctx> super::Codegen<'ctx> {
                 self.fresh_bare_unit_variant_enum(n).is_some()
                     || self.drop_rc.cond_move_drop_flags.contains_key(n.as_str())
             }
+            // B-2026-09-27-14 — a one-hop PROJECTION the same machinery handed
+            // over on its path (`show(if k { p.a } else { mk() })`): the
+            // local's walk skips the part there, so the argument temp is its
+            // single owner. Lookup-only, for the reason the identifier arm is:
+            // `disarm_escaping_tail_projection` records the site only when the
+            // mask really landed. Interp twin: the projection arm of
+            // `cond_moved_place_tail_type_name`.
+            ExprKind::FieldAccess { .. } | ExprKind::TupleIndex { .. } => self
+                .drop_rc
+                .cond_move_projection_handover_sites
+                .contains(&(e.span.offset, e.span.length)),
             _ => false,
         }
     }

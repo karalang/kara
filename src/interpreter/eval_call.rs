@@ -5794,6 +5794,34 @@ impl<'a> super::Interpreter<'a> {
     /// Codegen twin: the `Identifier` arm of `arg_producer_mints_fresh_owned_temp`,
     /// gated on the flag that machinery creates for the same binding.
     fn cond_moved_place_tail_type_name(&self, e: &Expr) -> Option<String> {
+        // B-2026-09-27-14 — a one-hop PROJECTION tail the conditional-move
+        // machinery handed over on its path (`show(if k { p.a } else { mk() })`):
+        // the local's walk now skips the part there, so the argument temp is
+        // its single owner, exactly as for a whole binding. Codegen twin: the
+        // projection arm of `arg_producer_mints_fresh_owned_temp`, reading the
+        // same kind of site set.
+        //
+        // Asked STATICALLY, of every tail, not of the one that ran: the
+        // wrapper's owner needs all its tails to resolve, and on the path
+        // through the minting arm the projection never executed. So this is
+        // the same gate `record_returned_projection_moves` applies at the
+        // move, asked ahead of it.
+        if matches!(
+            e.kind,
+            ExprKind::FieldAccess { .. } | ExprKind::TupleIndex { .. }
+        ) {
+            if !self
+                .cond_move_call_arg_sites
+                .contains(&(e.span.offset, e.span.length))
+                || !self.projection_move_would_mask(e)
+            {
+                return None;
+            }
+            return match self.span_expr_type(&e.span)? {
+                crate::typechecker::Type::Named { name, .. } => Some(name),
+                _ => None,
+            };
+        }
         let ExprKind::Identifier(name) = &e.kind else {
             return None;
         };

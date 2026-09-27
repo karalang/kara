@@ -887,11 +887,12 @@ pub struct Interpreter<'a> {
     pub(crate) cond_move_escaping_sites: HashSet<(usize, usize)>,
     /// B-2026-09-27-3 — the subset of the escaping sites above reached
     /// through a by-value CALL ARGUMENT's seed, and the flag that marks that
-    /// seeding in progress. A one-hop projection at such a tail stays with its
-    /// source: the argument temp registered for a minting tail does not take
-    /// over a projected part, so disarming the source there lost the body
-    /// (`show(if k { t.0 } else { mk() })`). Span-keyed and never cleared, as
-    /// the parent set is.
+    /// seeding in progress. A one-hop projection at such a tail is handed
+    /// over only where the argument temp then owns it (B-2026-09-27-14): a
+    /// param root stays with its source, since disarming it with no owner
+    /// lost the body (`show(if k { t.0 } else { mk() })`, measured on the
+    /// first cut of B-2026-09-27-3). Span-keyed and never cleared, as the
+    /// parent set is.
     pub(crate) cond_move_call_arg_sites: HashSet<(usize, usize)>,
     pub(crate) seeding_call_arg_sites: bool,
     /// B-2026-08-29-31 — the span of the tail expression of the branch arm

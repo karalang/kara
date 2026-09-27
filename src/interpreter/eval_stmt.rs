@@ -4452,6 +4452,32 @@ impl<'a> super::Interpreter<'a> {
         }
     }
 
+    /// B-2026-09-27-14 — would [`Self::record_returned_projection_moves`]
+    /// mask this ONE-HOP projection out of its local's walk? Its own gates,
+    /// asked without moving anything: a local (not a param view) whose leaf
+    /// runs a user `Drop`.
+    pub(crate) fn projection_move_would_mask(&self, e: &Expr) -> bool {
+        let Some((root, path)) = Self::projection_chain_name_path(e) else {
+            return false;
+        };
+        if path.len() != 1
+            || self
+                .owned_param_names_stack
+                .last()
+                .is_some_and(|p| p.contains(root.as_str()))
+            || self
+                .whole_param_alias_stack
+                .last()
+                .is_some_and(|a| a.contains(root.as_str()))
+        {
+            return false;
+        }
+        self.env
+            .get(&root)
+            .and_then(|rv| Self::value_at_name_path(&rv, &path).cloned())
+            .is_some_and(|leaf| self.value_runs_user_drop(&leaf))
+    }
+
     /// B-2026-09-27-3 — `t.0` over a plain name: the tuple spelling of the
     /// one-hop field projection the move recorders admit.
     fn is_one_hop_tuple_index_of_name(e: &Expr) -> bool {
@@ -6633,12 +6659,18 @@ impl<'a> super::Interpreter<'a> {
         // own walk ran the moved part's body a second time. One hop, for the
         // twin's reason: codegen's `disarm_escaping_tail_projection` routes
         // through the let-site helpers, which need an `Identifier` object.
-        if ((matches!(expr.kind, ExprKind::FieldAccess { .. })
+        //
+        // B-2026-09-27-14 — a CALL-ARGUMENT tail (`show(if k { p.a } else {
+        // mk() })`) takes the same move, and the argument temp then owns the
+        // part: `cond_moved_place_tail_type_name` claims exactly the tails
+        // `projection_move_would_mask` admits, which is this move's own gate
+        // asked ahead of it. Leaving the source armed there kept the part with `p`
+        // and the argument temp with no owner, so the minting arm's body was
+        // lost on every surface; codegen additionally ran the part's body over
+        // the husk its block-tail move left behind.
+        if (matches!(expr.kind, ExprKind::FieldAccess { .. })
             && Self::field_chain_name_path(expr).is_some_and(|(_, path)| path.len() == 1))
-            || Self::is_one_hop_tuple_index_of_name(expr))
-            && !self
-                .cond_move_call_arg_sites
-                .contains(&(expr.span.offset, expr.span.length))
+            || Self::is_one_hop_tuple_index_of_name(expr)
         {
             self.record_returned_projection_moves(expr);
             // B-2026-09-26-62 — and when the root is an arm view of a by-value
@@ -7269,8 +7301,19 @@ impl<'a> super::Interpreter<'a> {
     /// Owning the taken tail here is what the compiled backends do in the
     /// arm's own basic block; `disarm_discarded_tail_sources` then silences
     /// the local whole, so nothing doubles on either spelling.
-    fn discard_arm_tail_is_ownable(&self, _tail: &Expr) -> bool {
-        true
+    ///
+    /// B-2026-09-27-14 — except a PROJECTION of a live local (`if k { p.a }
+    /// else { .. };`, `match n { 0 => t.0, .. };`). Nothing moves a part out
+    /// of a local at a discarded tail on the compiled backends: the local's
+    /// own walk runs every part at its death, and so does the wildcard-`let`
+    /// spelling here. Owning it at the `;` ran the part's body there AND at
+    /// the local's death, because the local's walk had no record of it.
+    fn discard_arm_tail_is_ownable(&self, tail: &Expr) -> bool {
+        !(matches!(
+            tail.kind,
+            ExprKind::FieldAccess { .. } | ExprKind::TupleIndex { .. }
+        ) && Self::projection_chain_name_path(tail)
+            .is_some_and(|(root, _)| self.env.get(&root).is_some()))
     }
 
     /// B-2026-08-31-22 — does the DISCARD PRODUCER behind `expr` construct the

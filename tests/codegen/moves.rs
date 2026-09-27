@@ -8304,7 +8304,7 @@ fn main() {
 /// tuple element passed by value to `push` or a variant constructor is
 /// masked like its field sibling. `guard-call-arg` was right before and must
 /// stay right: a projection at the tail of an `if` passed as a CALL ARGUMENT
-/// stays with its source, which is why those tails are excluded.
+/// is handed to the argument temp (B-2026-09-27-14), which prints the same.
 #[test]
 fn e2e_projection_moved_through_a_value_position_runs_its_body_once() {
     let src = r#"struct R { s: String }
@@ -8541,5 +8541,123 @@ impl H { fn gkeep[T](ref self, x: T) -> T { x } }
         if let Some(aot) = run_program(&prog) {
             assert_eq!(aot, want, "[{label}] AOT");
         }
+    }
+}
+
+/// B-2026-09-27-14 — a one-hop projection at the tail of a DISCARDED branch
+/// (`if k { p.a } else { mk() };`) or of a branch passed as a by-value CALL
+/// ARGUMENT (`show(if k { p.a } else { mk() })`) runs each body once.
+///
+/// Discarded: the interpreter owned the part at the `;` and the local's walk
+/// ran it again (`dRa dRb dRa`); the compiled backends leave it with the local,
+/// and now so does the interpreter. Argument: the struct spelling ran the
+/// part's body over the husk the block-tail move zeroed on the compiled
+/// backends, and on the MINTING path every backend lost the fresh value's
+/// body, because nothing owned the argument once a projection tail was in the
+/// branch. The argument temp now owns a part the projection hands over, on
+/// both backends. `arg-direct` was right before and must stay right.
+#[test]
+fn e2e_projection_at_a_discarded_or_argument_tail_runs_its_body_once() {
+    let src = r#"struct R { s: String }
+impl Drop for R { fn drop(mut ref self) { println(f"dR{self.s}") } }
+struct P { a: R, b: R }
+struct Q { p: P, c: R }
+struct Hh { n: i64 }
+impl Hh { fn take(ref self, r: R) { println(f"  take:{r.s}"); } }
+fn mk(s: String) -> R { R { s: f"{s}-heap" } }
+fn show(r: R) { println(f"  show:{r.s}"); }
+fn disc_field(k: bool) {
+    let p = P { a: mk("a"), b: mk("b") };
+    if k { p.a } else { mk("z") };
+    println("  after");
+}
+fn disc_elem(k: bool) {
+    let t = (mk("a"), mk("b"));
+    if k { t.0 } else { mk("z") };
+    println("  after");
+}
+fn disc_match(n: i64) {
+    let p = P { a: mk("a"), b: mk("b") };
+    match n { 0 => p.a, 1 => p.b, _ => mk("z") };
+    println("  after");
+}
+fn disc_deep(k: bool) {
+    let q = Q { p: P { a: mk("a"), b: mk("b") }, c: mk("c") };
+    if k { q.p.a } else { mk("z") };
+    println("  after");
+}
+fn arg_field(k: bool) {
+    let p = P { a: mk("a"), b: mk("b") };
+    show(if k { p.a } else { mk("z") });
+    println("  after");
+}
+fn arg_elem(k: bool) {
+    let t = (mk("a"), mk("b"));
+    show(if k { t.0 } else { mk("z") });
+    println("  after");
+}
+fn arg_match(n: i64) {
+    let p = P { a: mk("a"), b: mk("b") };
+    show(match n { 0 => p.a, 1 => p.b, _ => mk("z") });
+    println("  after");
+}
+fn arg_nested(k: bool, j: bool) {
+    let p = P { a: mk("a"), b: mk("b") };
+    show(if k { if j { mk("y") } else { p.b } } else { mk("z") });
+    println("  after");
+}
+fn arg_method(k: bool) {
+    let p = P { a: mk("a"), b: mk("b") };
+    let h = Hh { n: 1 };
+    h.take(if k { p.a } else { mk("z") });
+    println("  after");
+}
+fn arg_push(k: bool) {
+    let p = P { a: mk("a"), b: mk("b") };
+    let mut v: Vec[R] = Vec.new();
+    v.push(if k { p.a } else { mk("z") });
+    println(f"  n:{v.len()}");
+}
+fn arg_some(k: bool) {
+    let p = P { a: mk("a"), b: mk("b") };
+    let o = Option.Some(if k { p.a } else { mk("z") });
+    match o { Some(r) => println(f"  o:{r.s}"), None => println("  none") }
+}
+fn arg_direct() {
+    let p = P { a: mk("a"), b: mk("b") };
+    show(p.a);
+    println("  after");
+}
+fn main() {
+    println("disc-field-t"); disc_field(true);
+    println("disc-field-f"); disc_field(false);
+    println("disc-elem-t"); disc_elem(true);
+    println("disc-elem-f"); disc_elem(false);
+    let mut n = 0;
+    while n < 3 { println(f"disc-match-{n}"); disc_match(n); n = n + 1; }
+    println("disc-deep-t"); disc_deep(true);
+    println("arg-field-t"); arg_field(true);
+    println("arg-field-f"); arg_field(false);
+    println("arg-elem-t"); arg_elem(true);
+    println("arg-elem-f"); arg_elem(false);
+    n = 0;
+    while n < 3 { println(f"arg-match-{n}"); arg_match(n); n = n + 1; }
+    println("arg-nested-tf"); arg_nested(true, false);
+    println("arg-nested-tt"); arg_nested(true, true);
+    println("arg-method-t"); arg_method(true);
+    println("arg-method-f"); arg_method(false);
+    println("arg-push-t"); arg_push(true);
+    println("arg-push-f"); arg_push(false);
+    println("arg-some-t"); arg_some(true);
+    println("arg-some-f"); arg_some(false);
+    println("arg-direct"); arg_direct();
+    println("end");
+}"#;
+    let want = "disc-field-t\ndRb-heap\ndRa-heap\n  after\ndisc-field-f\ndRz-heap\ndRb-heap\ndRa-heap\n  after\ndisc-elem-t\ndRa-heap\ndRb-heap\n  after\ndisc-elem-f\ndRz-heap\ndRa-heap\ndRb-heap\n  after\ndisc-match-0\ndRb-heap\ndRa-heap\n  after\ndisc-match-1\ndRb-heap\ndRa-heap\n  after\ndisc-match-2\ndRz-heap\ndRb-heap\ndRa-heap\n  after\ndisc-deep-t\ndRc-heap\ndRb-heap\ndRa-heap\n  after\narg-field-t\n  show:a-heap\ndRa-heap\ndRb-heap\n  after\narg-field-f\n  show:z-heap\ndRz-heap\ndRb-heap\ndRa-heap\n  after\narg-elem-t\n  show:a-heap\ndRa-heap\ndRb-heap\n  after\narg-elem-f\n  show:z-heap\ndRz-heap\ndRa-heap\ndRb-heap\n  after\narg-match-0\n  show:a-heap\ndRa-heap\ndRb-heap\n  after\narg-match-1\n  show:b-heap\ndRb-heap\ndRa-heap\n  after\narg-match-2\n  show:z-heap\ndRz-heap\ndRb-heap\ndRa-heap\n  after\narg-nested-tf\n  show:b-heap\ndRb-heap\ndRa-heap\n  after\narg-nested-tt\n  show:y-heap\ndRy-heap\ndRb-heap\ndRa-heap\n  after\narg-method-t\n  take:a-heap\ndRa-heap\ndRb-heap\n  after\narg-method-f\n  take:z-heap\ndRz-heap\ndRb-heap\ndRa-heap\n  after\narg-push-t\ndRb-heap\n  n:1\ndRa-heap\narg-push-f\ndRb-heap\ndRa-heap\n  n:1\ndRz-heap\narg-some-t\ndRb-heap\n  o:a-heap\ndRa-heap\narg-some-f\ndRb-heap\ndRa-heap\n  o:z-heap\ndRz-heap\narg-direct\n  show:a-heap\ndRb-heap\ndRa-heap\n  after\nend\n";
+    let (interp_out, interp_errs, _, _) = karac::run_program_full_checked(src);
+    assert!(interp_errs.is_empty(), "interp errored: {interp_errs:?}");
+    assert_eq!(interp_out.join(""), want, "interpreter");
+    if let Some(aot) = run_program(src) {
+        assert_eq!(aot, want, "AOT");
     }
 }

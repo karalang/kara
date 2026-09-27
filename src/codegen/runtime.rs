@@ -14522,13 +14522,28 @@ impl<'ctx> super::Codegen<'ctx> {
     /// block after the value is loaded, so a branch masks only on its path;
     /// the helpers take their runtime-flag routes when the local's walk lives
     /// in an enclosing frame. Interp twin: `record_conditional_move_tail`.
+    ///
+    /// B-2026-09-27-14 — a CALL-ARGUMENT tail (`show(if k { p.a } else {
+    /// mk() })`) takes the same disarm, and the site is recorded as a handover
+    /// when the part really was masked, so `arg_producer_mints_fresh_owned_temp`
+    /// makes the argument temp its owner. Skipping those sites left the struct
+    /// spelling running the part's body over the husk the block-tail move had
+    /// already zeroed, and the minting arm's value owned by nobody.
     fn disarm_escaping_tail_projection(&mut self, expr: &Expr) {
-        if self
-            .drop_rc
-            .cond_move_call_arg_sites
-            .contains(&(expr.span.offset, expr.span.length))
-        {
-            return;
+        let site = (expr.span.offset, expr.span.length);
+        let call_arg = self.drop_rc.cond_move_call_arg_sites.contains(&site);
+        // A PARAM root stays where it was at a call argument: the interpreter
+        // twin (`projection_move_would_mask`) declines a param view there, and
+        // claiming the argument on this backend alone turned an agreed cell
+        // into a divergence.
+        if call_arg {
+            if let Some(root) = Self::place_root_ident(expr) {
+                if self.fn_ctx.current_fn_param_names.contains(root)
+                    || self.payload_vars.param_view_locals.contains(root)
+                {
+                    return;
+                }
+            }
         }
         match &expr.kind {
             ExprKind::FieldAccess { object, .. }
@@ -14541,7 +14556,56 @@ impl<'ctx> super::Codegen<'ctx> {
             {
                 self.suppress_tuple_index_move_source(expr)
             }
-            _ => {}
+            _ => return,
+        }
+        if call_arg && self.projection_part_is_masked(expr) {
+            self.drop_rc
+                .cond_move_projection_handover_sites
+                .insert(site);
+        }
+    }
+
+    /// B-2026-09-27-14 — has the one-hop projection `expr` been masked out of
+    /// its local's walk, by either route: the static mask
+    /// (`struct_moved_field_bodies` / `tuple_moved_elem_bodies`) or a
+    /// conditional-move flag (a struct flag also lands in the static map; a
+    /// tuple flag is keyed `#<i>` in `field_view_flags`).
+    fn projection_part_is_masked(&self, expr: &Expr) -> bool {
+        match &expr.kind {
+            ExprKind::FieldAccess { object, field } => {
+                let ExprKind::Identifier(obj) = &object.kind else {
+                    return false;
+                };
+                let Some(fidx) = self
+                    .var_types
+                    .var_type_names
+                    .get(obj.as_str())
+                    .and_then(|sn| self.type_decls.struct_field_names.get(sn.as_str()))
+                    .and_then(|names| names.iter().position(|n| n == field))
+                else {
+                    return false;
+                };
+                self.type_decls
+                    .struct_moved_field_bodies
+                    .get(obj.as_str())
+                    .is_some_and(|s| s.contains(&fidx))
+            }
+            ExprKind::TupleIndex { object, index } => {
+                let ExprKind::Identifier(obj) = &object.kind else {
+                    return false;
+                };
+                let idx = *index as u32;
+                self.tuple_moved_elem_bodies
+                    .get(obj.as_str())
+                    .is_some_and(|s| s.contains(&idx))
+                    || self
+                        .drop_rc
+                        .field_view_flags
+                        .get(obj.as_str())
+                        .and_then(|m| m.get(&format!("#{idx}")))
+                        .is_some_and(|f| self.drop_rc.tuple_elem_move_flag_types.contains_key(f))
+            }
+            _ => false,
         }
     }
 
