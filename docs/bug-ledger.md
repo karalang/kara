@@ -93,7 +93,7 @@ distinguish "bugs flattening" from "we stopped writing them down."
 | class | total |
 |---|---|
 | run-vs-build | 505 |
-| miscompile | 486 |
+| miscompile | 487 |
 | leak | 440 |
 | double-free | 324 |
 | missing-feature | 209 |
@@ -110,8 +110,8 @@ distinguish "bugs flattening" from "we stopped writing them down."
 
 | surface | total |
 |---|---|
-| codegen | 2165 |
-| interp | 589 |
+| codegen | 2166 |
+| interp | 590 |
 | typecheck | 309 |
 | other | 111 |
 | ownership | 77 |
@@ -335,7 +335,6 @@ registered in the callee's prologue, not by-value struct params in general. | �
 | B-2026-09-26-57 | 2026-09-26 | interp | medium | THE INTERPRETER RUNS AN EXTRA `Drop` BODY FOR A MATCH-ARM BINDING OFF A BORROW PROJECTION THAT IS HANDED TO A STORING CALLEE -- `match s.e { E.A(r) => keep(r, mut v), .. }` through `ref S` prints `dR2 dR2 b 1 dR2` under `--interp` and `dR2 b 1 dR2` on the JIT, `-O0` and `-O2` builds; the discarding spelling `consume(r)` agrees everywhere | — |
 | B-2026-09-26-58 | 2026-09-26 | interp+codegen | medium | THREE `Vec`-IN-A-FIELD SHAPES STILL LOSE THEIR ELEMENT `Drop` BODIES AFTER B-2026-09-16-19 -- an `Option[VecDeque[D]]` field and a `Map[i64, Option[Vec[D]]]` field print the body under `--interp` and on no compiled surface, a `match h.xs { Some(v) => .. }` arm that moves the `Vec` out of an `Option[Vec[D]]` field loses both bodies compiled (`in n2 dD1 dD2 out` vs `in n2 out`), and a `Vec[H]` whose `H` holds an `Option[VecDeque[D]]` runs the body on NEITHER backend | — |
 | B-2026-09-26-59 | 2026-09-26 | codegen+interp | medium | AN `Option[Vec[D]]` HELD BY A GENERIC STRUCT, AN ARRAY ELEMENT OR AN ENUM PAYLOAD LEAKS ONE ELEMENT'S BUFFER AT `-O0` -- `G[T] { xs: Option[Vec[T]] }` at `T = D`, `Array[H, 2]` of `H { xs: Option[Vec[D]] }`, and `enum E { A(Option[Vec[D]]), B }` each lose 32 bytes in 1 block plus 36 indirectly; the enum payload also runs its element's `Drop` body on NEITHER backend | — |
-| B-2026-09-26-62 | 2026-09-26 | interp+codegen | medium | THE SPELLINGS OF B-2026-09-26-37 ITS FIX DECLINES STILL OWN A CONDITIONALLY HANDED-BACK PAYLOAD PART WRONGLY -- a TUPLE payload (`Some(t) => { if k { return t.0; } .. }` over `Option[(R, R)]`), a TWO-HOP part (`if k { return t.h.r; }`) and a TAIL yield (`Some(t) => { if k { t.r } else { .. } }`); the fresh-temp tuple spelling LOSES every element body on the compiled backends at both `k`, the rest double, and interp and compiled disagree on most cells | — |
 | B-2026-09-26-51 | 2026-09-26 | codegen | medium | A NAMED STRUCT WITH NO `Drop` OF ITS OWN WHOSE FIELDS CARRY ONE, HANDED TO A CALLEE THAT KEEPS IT ON ONLY SOME PATHS, RUNS BOTH FIELD BODIES TWICE ON EVERY COMPILED SURFACE WHEN THE KEEPING PATH IS TAKEN -- `let o = maybew(w, true)` over `fn maybew(x: W, c: bool) -> Option[W] { if c { return Some(x); } None }` prints `dD107n107 dD7n7 otrue dD107n107 dD7n7 end` against `--interp`'s `otrue dD107n107 dD7n7 end`, and `gcsw(mut v, w, true)` over `fn gcsw[T](v: mut ref Vec[T], x: T, c: bool) { if c { v.push(x); } }` does the same | — |
 | B-2026-09-26-52 | 2026-09-26 | interp | medium | THE INTERPRETER LOSES BOTH FIELD BODIES OF A NAMED `Drop`-LESS STRUCT HANDED TO A CALLEE THAT KEEPS IT ON ONLY SOME PATHS, ON THE PATH WHERE IT DIES INSIDE -- `let o = maybew(w, false)` prints `ofalse end` under `--interp` where JIT, `-O2` seq and `-O2` par all print the due `dD107n107 dD7n7 ofalse end`; `gcsw(mut v, w, false)` loses them the same way | — |
 | B-2026-09-26-60 | 2026-09-26 | codegen | high | A NAMED `Drop` LOCAL MOVED INSIDE AN `if` ARM THAT IS NOT TAKEN LOSES ITS BODY ON EVERY COMPILED SURFACE, AND THE BUILTIN-PUSH SPELLING ALSO LEAKS ITS STRING -- `let d = mkd(2); if d.id > 3 { v.push(d); }` prints `l0 end` on JIT / `-O2` seq / `-O2` par against `--interp`'s correct `dD2n2 l0 end`, and loses 2 B in 1 block at `-O0`; the same move into a user callee (`std(mut v, d)`, `keepd(d)`) loses the body with memory balanced, and a `Drop`-less `W` pushed the same way loses both field bodies | — |
@@ -360,6 +359,7 @@ registered in the callee's prologue, not by-value struct params in general. | �
 | B-2026-09-27-35 | 2026-09-27 | codegen | high | A FRESH-TEMP `Result` ARGUMENT FORWARDED WHOLE THROUGH ONE BY-VALUE CALLEE TO ANOTHER LOSES ITS PAYLOAD'S `Drop` BODY ON EVERY COMPILED SURFACE -- `fn f(a: Result[S, i64]) -> i64 { eat(a) }` over `fn eat(x: Result[S, i64]) -> i64 { match x { Ok(y) => y.r.id, Err(e) => e } }` called as `f(Ok(mk(1)))` prints `d1 k1 end` under `--interp` and `k1 end` on jit, -O0 and -O2 (memory-clean; on the parent tree the same cell also leaked the 29 B String) | — |
 | B-2026-09-27-36 | 2026-09-27 | codegen | medium | A FRESH-TEMP PASSTHROUGH `match id(b)` OVER A BOXED `Option[S]` RUNS THE ARM PAYLOAD'S `Drop` BODY AT SCOPE EXIT INSTEAD OF AT THE ARM ON EVERY COMPILED SURFACE -- `let k = match id(b) { Some(x) => x.r.id, None => 0 }` over `struct S { r: R, s: String }` (R has a `Drop`; `Option[S]` is boxed) prints `d2 j2 end` under `--interp` and `j2 end d2` on jit, -O0 and -O2, memory-clean | — |
 | B-2026-09-27-37 | 2026-09-27 | codegen | high | A BY-VALUE BOXED `Option[S]` PARAM REBOUND INTO A `let mut` LOCAL IS FREED BY BOTH FRAMES FOR A NAMED ARGUMENT -- `fn rb(a: Option[S]) -> i64 { let mut c = a; 5 }` over `struct S { r: R, s: String }` (R has a `Drop`; `Option[S]` is boxed) called as `rb(a)` on a named local prints `d1 k5 d2 end` under `--interp` and aborts `free(): double free detected in tcache 2` at -O2, with a SIGSEGV on jit and -O0 (valgrind -O0: 5 errors, 16 frees against 14 allocs) | — |
+| B-2026-09-27-19 | 2026-09-27 | interp+codegen | medium | THE TUPLE-PAYLOAD, TWO-HOP AND CALLEE-LOCAL SPELLINGS OF B-2026-09-26-62 STILL RUN A CONDITIONALLY HANDED-BACK PAYLOAD PART'S DROP BODY TWICE OR NOT AT ALL -- `Some(t) => { if k { return t.0; } .. }` over `Option[(R, R)]` loses both element bodies compiled for a fresh temp and doubles `t.0` everywhere for a named local; `return t.h.r` doubles or loses parts; and `let x = match o { Some(t) => { if k { t.r } else { .. } } .. }` doubles `t.r` on every surface (the fn-tail spelling was fixed in 7ce7f24) | — |
 
 ### Relocated
 
@@ -3092,6 +3092,7 @@ registered in the callee's prologue, not by-value struct params in general. | �
 | B-2026-09-26-46 | interp+codegen | medium | A `Drop`-BEARING FIELD PROJECTED OFF A FRESH TEMP STILL LOSES BODIES ON ALL FOUR SURFACES WHEN A GENERIC CALLEE KEEPS OR PASSES IT ON, AND A `mut ref… | 4f730bedd |
 | B-2026-09-26-47 | interp+codegen | medium | A `Drop`-BEARING FIELD OF A NAMED LOCAL HANDED TO A USER CALLEE THAT KEEPS IT RUNS ITS BODY TWICE ON ALL FOUR SURFACES, where a builtin sink runs it… | 1c04f9f95 |
 | B-2026-09-26-48 | codegen | medium | A NAMED `Drop` LOCAL MOVED WHOLE INTO A GENERIC CALLEE THAT STORES IT RUNS ITS BODY AT THE CALL ON EVERY COMPILED SURFACE, AND AGAIN AT THE CONTAINER… | c47f9ae28 |
+| B-2026-09-26-62 | interp+codegen | medium | FIXED FOR THE TAIL SPELLING (7ce7f24); THE TUPLE-PAYLOAD AND TWO-HOP SPELLINGS MOVED TO B-2026-09-27-19 -- THE SPELLINGS OF B-2026-09-26-37 ITS FIX D… | 7ce7f24 |
 | B-2026-09-26-50 | codegen | medium | A NAMED STRUCT WITH NO `Drop` OF ITS OWN WHOSE FIELDS CARRY ONE, MOVED WHOLE INTO A CALLEE THAT KEEPS IT, RUNS EACH FIELD'S BODY AT THE CALL AND AGAI… | 049da6f4e |
 | B-2026-09-27-2 | interp+codegen | high | MOVING AN ELEMENT OUT OF A LOCAL TUPLE BY `return t.0` OR A TAIL `t.0` RUNS ITS Drop BODY TWICE IN THE INTERPRETER, AND A CONDITIONAL MOVE (`if k { r… | e39f58c |
 | B-2026-09-27-3 | interp+codegen | high | A PROJECTION MOVED OUT IN A VALUE POSITION OTHER THAN `let x = p.f` / `return` / a function tail RUNS ITS Drop BODY TWICE ON EVERY BACKEND -- `let x… | bd5b43d |
