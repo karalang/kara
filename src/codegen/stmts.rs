@@ -25608,10 +25608,8 @@ impl<'ctx> super::Codegen<'ctx> {
         // monomorph's array param the owner it always should have had moved
         // it onto the concrete path's behaviour, this hole included.
         //
-        // BODIES ARE DELIBERATELY NOT REGISTERED, for the reason the tuple arm
-        // states: `--interp` runs no `Drop` body for a discarded call result
-        // either, so the backends agree today and adding one here alone would
-        // turn a leak into a run-vs-build divergence.
+        // The BODIES half was left out at the time for the reason the tuple arm
+        // gave (`--interp` ran none either); B-2026-09-16-33 lands both halves.
         let handled_array = not_borrow
             && !handled_option
             && !handled_result
@@ -25621,6 +25619,11 @@ impl<'ctx> super::Codegen<'ctx> {
             && !handled_boxed_option
             && !handled_tuple
             && self.try_track_discarded_array_temp(tail, val);
+        // B-2026-09-16-33 — the array twin of `track_discarded_tuple_return_bodies`,
+        // registered after the memory walk for the same LIFO reason.
+        if handled_array {
+            self.track_discarded_array_return_bodies(tail, val);
+        }
         if !handled_option
             && !handled_result
             && !handled_option_map
@@ -26142,6 +26145,68 @@ impl<'ctx> super::Codegen<'ctx> {
             return true;
         }
         false
+    }
+
+    /// B-2026-09-16-33 — the BODIES peer of [`Self::try_track_discarded_array_temp`],
+    /// and the array twin of [`Self::track_discarded_tuple_return_bodies`].
+    ///
+    /// `passthru([mk(30), mk(31)]);` over `fn passthru(x: Array[R, 2]) -> Array[R, 2]`
+    /// freed both elements' memory at the `;` (B-2026-09-12-2) and ran neither
+    /// element's `Drop` body, on every backend. The element type and length come
+    /// from `discarded_call_array_parts`, the resolver the memory walk uses, so
+    /// the two halves cannot disagree about what the array holds; the walker is
+    /// `emit_array_elem_user_drop_bodies_fn`, the one a `let`-bound array
+    /// registers, which frees nothing and declines an element type with no user
+    /// `Drop`. Only reached for a value the memory walk claimed.
+    ///
+    /// A CONCRETE FREE-FUNCTION call only, the one shape the interpreter twin
+    /// routes, and for the tuple twin's reason: a method tail (`h.pass([..])`)
+    /// and a generic callee (`fn pg[T](x: T) -> T`) both reach the memory walk
+    /// here, but the interpreter's discard dispatch reaches neither -- it keys
+    /// on the callee's DECLARED `Array` return, because its `Value::Array`
+    /// also carries every `Vec`. Registering for them would fire compiled-only.
+    fn track_discarded_array_return_bodies(&mut self, tail: &Expr, val: BasicValueEnum<'ctx>) {
+        let ExprKind::Call { callee, .. } = &tail.kind else {
+            return;
+        };
+        let ExprKind::Identifier(name) = &callee.kind else {
+            return;
+        };
+        if self
+            .fn_sig
+            .fn_return_type_exprs
+            .get(name)
+            .is_none_or(|te| self.array_elem_and_len(te).is_none())
+        {
+            return;
+        }
+        let Some((elem_te, n)) = self.discarded_call_array_parts(tail) else {
+            return;
+        };
+        let Some(cur_fn) = self
+            .builder
+            .get_insert_block()
+            .and_then(|bb| bb.get_parent())
+        else {
+            return;
+        };
+        let elem_ty = self.llvm_type_for_type_expr(&elem_te);
+        // Emitted BEFORE the alloca and store: the emitter may synthesize a
+        // function and move the builder's insert block.
+        let Some(bodies) = self.emit_array_elem_user_drop_bodies_fn(elem_ty, &elem_te, n) else {
+            return;
+        };
+        let slot = self.create_entry_alloca(cur_fn, "__disc_array_bodies", val.get_type());
+        if self.builder.build_store(slot, val).is_err() {
+            return;
+        }
+        self.track_user_drop_var_with_fn(
+            "",
+            "__disc_array_bodies",
+            slot,
+            bodies,
+            UserDropKind::ContainerElemBodies,
+        );
     }
 
     /// B-2026-07-30-11 (discarded-temp leg) — payload user-Drop BODIES for a

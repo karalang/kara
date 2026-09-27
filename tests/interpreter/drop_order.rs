@@ -6047,6 +6047,9 @@ fn main() {
 /// `--interp`, jit, `karac build` and `KARAC_OPT_LEVEL=0 karac build`, and
 /// `valgrind --leak-check=full` at `-O0` with `KARAC_AUTO_PAR=0` reports 0
 /// errors and 0 bytes in use at exit.
+///
+/// B-2026-09-16-33 -- `discard`'s `two(40);` now runs both element bodies
+/// (`d40 d41`); this cell pinned the bodyless answer until that fix.
 #[test]
 fn interp_local_array_returned_on_every_exit_is_freed_once() {
     assert_eq!(
@@ -6068,7 +6071,7 @@ fn main() {
     println("str");    { let b = strs(); println(f"  y{b[1].len()}"); }
     println("end")
 }"#),
-        "one\n  y1:29\n  d1\ntwo\n  y320\n  d20\n  d21\n  d2\n  d3\ntail\n  y6\n  d5\n  d6\nboth-t\n  y7\n  d7\n  d8\nboth-f\n  y8\n  d7\n  d8\ndiscard\nstr\n  y30\nend\n"
+        "one\n  y1:29\n  d1\ntwo\n  y320\n  d20\n  d21\n  d2\n  d3\ntail\n  y6\n  d5\n  d6\nboth-t\n  y7\n  d7\n  d8\nboth-f\n  y8\n  d7\n  d8\ndiscard\n  d40\n  d41\nstr\n  y30\nend\n"
     );
 }
 

@@ -6120,6 +6120,23 @@ impl<'a> super::Interpreter<'a> {
         })
     }
 
+    /// B-2026-09-16-33 — does the user fn `fn_name` DECLARE a fixed-array
+    /// return (`-> Array[R, 2]`)? A generic callee's `-> T` does not.
+    pub(crate) fn user_fn_returns_fixed_array(&self, fn_name: &str) -> bool {
+        self.program.items.iter().any(|item| match item {
+            crate::ast::Item::Function(f) if f.name == fn_name => {
+                f.return_type.as_ref().is_some_and(|te| match &te.kind {
+                    crate::ast::TypeKind::Array { .. } => true,
+                    crate::ast::TypeKind::Path(p) => {
+                        p.segments.len() == 1 && p.segments[0] == "Array"
+                    }
+                    _ => false,
+                })
+            }
+            _ => false,
+        })
+    }
+
     pub(crate) fn user_fn_return_type_name(&self, fn_name: &str) -> Option<String> {
         self.program.items.iter().find_map(|item| match item {
             crate::ast::Item::Function(f) if f.name == fn_name => {

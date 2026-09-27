@@ -11377,7 +11377,19 @@ impl<'a> super::Interpreter<'a> {
                                         self.run_enum_payload_user_drops_value(&payload_src);
                                     }
                                 }
-                            } else if matches!(&discarded, Value::Tuple(_)) {
+                            } else if matches!(&discarded, Value::Tuple(_))
+                                || (matches!(&discarded, Value::Array(_))
+                                    && self.user_fn_returns_fixed_array(fn_name))
+                            {
+                                // B-2026-09-16-33 — and a discarded fixed-ARRAY
+                                // return (`passthru([mk(30), mk(31)]);`), for the
+                                // same reason: an `Array[R, 2]` has no return type
+                                // NAME to route by. Keyed on the DECLARED return
+                                // rather than on the value, because `Value::Array`
+                                // also carries every `Vec`, whose discarded return
+                                // runs no body on either backend. Codegen twin:
+                                // `track_discarded_array_return_bodies`.
+                                //
                                 // B-2026-09-09-21 — a discarded TUPLE return
                                 // (`f(mk(20));` over `fn f(r: R) -> (R, i64)`).
                                 // The chain below asks for the callee's declared

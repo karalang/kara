@@ -5729,6 +5729,9 @@ fn main() {
 /// `--interp`, jit, `karac build` and `KARAC_OPT_LEVEL=0 karac build`, and
 /// `valgrind --leak-check=full` at `-O0` with `KARAC_AUTO_PAR=0` reports 0
 /// errors and 0 bytes in use at exit.
+///
+/// B-2026-09-16-33 -- `discard`'s `two(40);` now runs both element bodies
+/// (`d40 d41`); this cell pinned the bodyless answer until that fix.
 #[test]
 fn e2e_local_array_returned_on_every_exit_is_freed_once() {
     let Some(out) = run_program(
@@ -5754,7 +5757,7 @@ fn main() {
     ) else {
         return;
     };
-    assert_eq!(out, "one\n  y1:29\n  d1\ntwo\n  y320\n  d20\n  d21\n  d2\n  d3\ntail\n  y6\n  d5\n  d6\nboth-t\n  y7\n  d7\n  d8\nboth-f\n  y8\n  d7\n  d8\ndiscard\nstr\n  y30\nend\n", "got:\n{out}");
+    assert_eq!(out, "one\n  y1:29\n  d1\ntwo\n  y320\n  d20\n  d21\n  d2\n  d3\ntail\n  y6\n  d5\n  d6\nboth-t\n  y7\n  d7\n  d8\nboth-f\n  y8\n  d7\n  d8\ndiscard\n  d40\n  d41\nstr\n  y30\nend\n", "got:\n{out}");
 }
 
 /// B-2026-09-23-17 — an owning local `Array` returned on SOME exits (bare,
@@ -6193,4 +6196,44 @@ fn main() {
         return;
     };
     assert_eq!(out, "ret\nd1\nd2\nk1\ntl\nk2 4\nd3\nd4\nsv\nk3 3 5\nd5\nd6\none\nd7\nk4\ntl\nd8\nd9\nk5\nmixed\nd10\nd11\nk6\nmixed\nd12\nd13\nk7\nnest\nk8 1\nd14\nd15\ngnr\nk9 16\nd16\nd17\ngone\nd18\nk10\nend\n", "got:\n{out}");
+}
+
+/// B-2026-09-16-33 — a discarded fixed-`Array` call result runs each
+/// element's `Drop` body, once, at the `;`.
+///
+/// `passthru([mk(30), mk(31)]);` over `fn passthru(x: Array[R, 2]) -> Array[R, 2]`
+/// freed both elements (B-2026-09-12-2) and ran neither body, on every surface:
+/// two values died with their destructors never called. The `let _ =` spelling
+/// (`letw`, `nlet`) was worse, a run-vs-build split: `--interp` already ran the
+/// bodies there and no compiled backend did. It is the array twin of
+/// B-2026-09-09-21's tuple fix, and like it lands both halves together.
+/// `fresh` is a callee that builds the array itself; `strs` is the negative
+/// cell, an element type with no user `Drop`.
+///
+/// The INTERPRETER twin is `tests/interpreter/arrays.rs`'s `test_discarded_array_return_runs_its_element_bodies`, byte-identical
+/// source and expectation.
+#[test]
+fn e2e_discarded_array_return_runs_its_element_bodies() {
+    let Some(out) = run_program(
+        r#"struct R { id: i64, name: String }
+impl Drop for R { fn drop(mut ref self) { println(f"dR{self.id}") } }
+fn mk(i: i64) -> R { return R { id: i, name: f"h{i}" }; }
+fn passthru(x: Array[R, 2]) -> Array[R, 2] { return x; }
+fn eat(a: Array[R, 2]) -> Array[R, 2] { println("in-eat"); return a }
+fn fresh() -> Array[R, 2] { return [mk(50), mk(51)]; }
+fn strs(x: Array[String, 2]) -> Array[String, 2] { return x; }
+fn main() {
+    println("stmt"); passthru([mk(30), mk(31)]);
+    println("letw"); let _ = passthru([mk(32), mk(33)]);
+    println("named"); { let a: Array[R, 2] = [mk(1), mk(2)]; eat(a); println("end-named") }
+    println("nlet"); { let a: Array[R, 2] = [mk(3), mk(4)]; let _ = eat(a); println("end-nlet") }
+    println("fresh"); fresh();
+    println("strs"); strs(["a", "b"]);
+    println("ok");
+}
+"#,
+    ) else {
+        return;
+    };
+    assert_eq!(out, "stmt\ndR30\ndR31\nletw\ndR32\ndR33\nnamed\nin-eat\ndR1\ndR2\nend-named\nnlet\nin-eat\ndR3\ndR4\nend-nlet\nfresh\ndR50\ndR51\nstrs\nok\n");
 }

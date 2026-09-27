@@ -936,3 +936,39 @@ fn main() {
         "dSd\na\nb\nc\nd\ne:7\ndSd\nf\ndSd\ndSd\ndSd\ng\ndSd\nh\ni\nend\n"
     );
 }
+
+/// B-2026-09-16-33 — a discarded fixed-`Array` call result runs each
+/// element's `Drop` body, once, at the `;`.
+///
+/// `passthru([mk(30), mk(31)]);` over `fn passthru(x: Array[R, 2]) -> Array[R, 2]`
+/// freed both elements (B-2026-09-12-2) and ran neither body, on every surface:
+/// two values died with their destructors never called. The `let _ =` spelling
+/// (`letw`, `nlet`) was worse, a run-vs-build split: `--interp` already ran the
+/// bodies there and no compiled backend did. It is the array twin of
+/// B-2026-09-09-21's tuple fix, and like it lands both halves together.
+/// `fresh` is a callee that builds the array itself; `strs` is the negative
+/// cell, an element type with no user `Drop`.
+///
+/// The CODEGEN twin is `tests/codegen/arrays.rs`'s `e2e_discarded_array_return_runs_its_element_bodies`, byte-identical source
+/// and expectation.
+#[test]
+fn test_discarded_array_return_runs_its_element_bodies() {
+    let out = run(r#"struct R { id: i64, name: String }
+impl Drop for R { fn drop(mut ref self) { println(f"dR{self.id}") } }
+fn mk(i: i64) -> R { return R { id: i, name: f"h{i}" }; }
+fn passthru(x: Array[R, 2]) -> Array[R, 2] { return x; }
+fn eat(a: Array[R, 2]) -> Array[R, 2] { println("in-eat"); return a }
+fn fresh() -> Array[R, 2] { return [mk(50), mk(51)]; }
+fn strs(x: Array[String, 2]) -> Array[String, 2] { return x; }
+fn main() {
+    println("stmt"); passthru([mk(30), mk(31)]);
+    println("letw"); let _ = passthru([mk(32), mk(33)]);
+    println("named"); { let a: Array[R, 2] = [mk(1), mk(2)]; eat(a); println("end-named") }
+    println("nlet"); { let a: Array[R, 2] = [mk(3), mk(4)]; let _ = eat(a); println("end-nlet") }
+    println("fresh"); fresh();
+    println("strs"); strs(["a", "b"]);
+    println("ok");
+}
+"#);
+    assert_eq!(out, "stmt\ndR30\ndR31\nletw\ndR32\ndR33\nnamed\nin-eat\ndR1\ndR2\nend-named\nnlet\nin-eat\ndR3\ndR4\nend-nlet\nfresh\ndR50\ndR51\nstrs\nok\n", "got:\n{out}");
+}

@@ -7681,6 +7681,9 @@ fn main() {
 /// `--interp`, jit, `karac build` and `KARAC_OPT_LEVEL=0 karac build`, and
 /// `valgrind --leak-check=full` at `-O0` with `KARAC_AUTO_PAR=0` reports 0
 /// errors and 0 bytes in use at exit.
+///
+/// B-2026-09-16-33 -- `discard`'s `two(40);` now runs both element bodies
+/// (`d40 d41`); this cell pinned the bodyless answer until that fix.
 #[test]
 fn asan_local_array_returned_on_every_exit_is_freed_once() {
     assert_clean_asan_run(
@@ -7706,7 +7709,7 @@ fn main() {
         &[
             "one", "  y1:29", "  d1", "two", "  y320", "  d20", "  d21", "  d2", "  d3", "tail",
             "  y6", "  d5", "  d6", "both-t", "  y7", "  d7", "  d8", "both-f", "  y8", "  d7",
-            "  d8", "discard", "str", "  y30", "end",
+            "  d8", "discard", "  d40", "  d41", "str", "  y30", "end",
         ],
         "asan_local_array_returned_on_every_exit_is_freed_once",
     );
@@ -8192,5 +8195,66 @@ fn main() {
 "#,
         &expected,
         "asan_tuple_destructure_array_leaf_is_freed_once",
+    );
+}
+
+/// B-2026-09-16-33 — a discarded fixed-`Array` call result runs each
+/// element's `Drop` body, once, at the `;`.
+///
+/// `passthru([mk(30), mk(31)]);` over `fn passthru(x: Array[R, 2]) -> Array[R, 2]`
+/// freed both elements (B-2026-09-12-2) and ran neither body, on every surface:
+/// two values died with their destructors never called. The `let _ =` spelling
+/// (`letw`, `nlet`) was worse, a run-vs-build split: `--interp` already ran the
+/// bodies there and no compiled backend did. It is the array twin of
+/// B-2026-09-09-21's tuple fix, and like it lands both halves together.
+/// `fresh` is a callee that builds the array itself; `strs` is the negative
+/// cell, an element type with no user `Drop`.
+///
+/// Each `R` owns a `String`, so a body run after the memory walk would read
+/// freed memory, and a doubled one would free it twice.
+#[test]
+fn asan_discarded_array_return_runs_its_element_bodies() {
+    assert_clean_asan_run(
+        r#"struct R { id: i64, name: String }
+impl Drop for R { fn drop(mut ref self) { println(f"dR{self.id}") } }
+fn mk(i: i64) -> R { return R { id: i, name: f"h{i}" }; }
+fn passthru(x: Array[R, 2]) -> Array[R, 2] { return x; }
+fn eat(a: Array[R, 2]) -> Array[R, 2] { println("in-eat"); return a }
+fn fresh() -> Array[R, 2] { return [mk(50), mk(51)]; }
+fn strs(x: Array[String, 2]) -> Array[String, 2] { return x; }
+fn main() {
+    println("stmt"); passthru([mk(30), mk(31)]);
+    println("letw"); let _ = passthru([mk(32), mk(33)]);
+    println("named"); { let a: Array[R, 2] = [mk(1), mk(2)]; eat(a); println("end-named") }
+    println("nlet"); { let a: Array[R, 2] = [mk(3), mk(4)]; let _ = eat(a); println("end-nlet") }
+    println("fresh"); fresh();
+    println("strs"); strs(["a", "b"]);
+    println("ok");
+}
+"#,
+        &[
+            "stmt",
+            "dR30",
+            "dR31",
+            "letw",
+            "dR32",
+            "dR33",
+            "named",
+            "in-eat",
+            "dR1",
+            "dR2",
+            "end-named",
+            "nlet",
+            "in-eat",
+            "dR3",
+            "dR4",
+            "end-nlet",
+            "fresh",
+            "dR50",
+            "dR51",
+            "strs",
+            "ok",
+        ],
+        "asan_discarded_array_return_runs_its_element_bodies",
     );
 }
