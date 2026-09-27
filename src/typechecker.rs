@@ -522,27 +522,58 @@ impl BreakFrame {
 
 pub(super) struct LocalTypeScope {
     pub(super) scopes: Vec<FxHashMap<String, Type>>,
+    /// B-2026-09-27-69 — per scope, the names bound as a VIEW of a borrowed
+    /// place under their element type: a bare `for` loop's element, which
+    /// design.md types `ref T` but the checker binds as `T`. Kept beside
+    /// `scopes` so a later `insert` of the same name (a shadowing `let`)
+    /// clears the mark, and a pop drops it with its scope.
+    views: Vec<FxHashSet<String>>,
 }
 
 impl LocalTypeScope {
     pub(super) fn new() -> Self {
         LocalTypeScope {
             scopes: vec![FxHashMap::default()],
+            views: vec![Default::default()],
         }
     }
 
     pub(super) fn push(&mut self) {
         self.scopes.push(FxHashMap::default());
+        self.views.push(Default::default());
     }
 
     pub(super) fn pop(&mut self) {
         self.scopes.pop();
+        self.views.pop();
     }
 
     pub(super) fn insert(&mut self, name: String, ty: Type) {
+        if let Some(v) = self.views.last_mut() {
+            v.remove(name.as_str());
+        }
         if let Some(scope) = self.scopes.last_mut() {
             scope.insert(name, ty);
         }
+    }
+
+    /// Mark `name`, already bound in the innermost scope, as a view.
+    pub(super) fn mark_view(&mut self, name: &str) {
+        if self.scopes.last().is_some_and(|s| s.contains_key(name)) {
+            if let Some(v) = self.views.last_mut() {
+                v.insert(name.to_string());
+            }
+        }
+    }
+
+    /// Does `name` resolve to a binding marked by [`Self::mark_view`]?
+    pub(super) fn is_view(&self, name: &str) -> bool {
+        for (scope, views) in self.scopes.iter().zip(self.views.iter()).rev() {
+            if scope.contains_key(name) {
+                return views.contains(name);
+            }
+        }
+        false
     }
 
     pub(super) fn lookup(&self, name: &str) -> Option<&Type> {

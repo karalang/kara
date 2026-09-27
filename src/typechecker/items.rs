@@ -4750,6 +4750,22 @@ impl<'a> super::TypeChecker<'a> {
     /// rules want opposite things from one predicate: one REPORTS the copy,
     /// the other must not call that copy a partial move of the original.
     pub(super) fn projection_rooted_in_borrow(&self, value: &Expr) -> bool {
+        self.rooted_in_borrow(value, false)
+    }
+
+    /// B-2026-09-27-69 — [`Self::projection_rooted_in_borrow`] widened to a
+    /// bare `for` element, which is itself a view of the borrowed collection,
+    /// so the element read WHOLE or projected copies too. Only the copy lint
+    /// asks this: the partial-move rules keep treating the element as owned,
+    /// which is what their fixtures measured.
+    fn copy_source_rooted_in_borrow(&self, value: &Expr) -> bool {
+        self.rooted_in_borrow(value, true)
+    }
+
+    fn rooted_in_borrow(&self, value: &Expr, views: bool) -> bool {
+        if let ExprKind::Identifier(n) = &value.kind {
+            return views && self.local_scope.is_view(n.as_str());
+        }
         if !matches!(
             value.kind,
             ExprKind::FieldAccess { .. } | ExprKind::TupleIndex { .. }
@@ -4775,11 +4791,12 @@ impl<'a> super::TypeChecker<'a> {
                 // enough for a parameter, but not for `self`, which is bound
                 // under its bare type rather than a `Ref`, so both tests stay.
                 ExprKind::Identifier(n) => {
-                    break self.current_fn_ref_params.contains(n.as_str())
+                    break (self.current_fn_ref_params.contains(n.as_str())
                         && matches!(
                             self.local_scope.lookup(n.as_str()),
                             Some(Type::Ref(_) | Type::MutRef(_))
-                        )
+                        ))
+                        || (views && self.local_scope.is_view(n.as_str()))
                 }
                 ExprKind::SelfValue => break self.current_fn_ref_params.contains("self"),
                 _ => return false,
@@ -4787,8 +4804,44 @@ impl<'a> super::TypeChecker<'a> {
         }
     }
 
+    /// B-2026-09-27-69 — is a `for` loop's iterable a collection PLACE the
+    /// loop borrows (`for g in v`, `for g in self.xs`, over a `Vec`, `Set`,
+    /// `SortedSet`, fixed array or slice, owned or behind a `ref`), rather
+    /// than an iterator value or a temporary whose elements it owns?
+    pub(super) fn for_iterable_is_borrowed_collection(iterable: &Expr, iter_ty: &Type) -> bool {
+        let mut root = iterable;
+        while let ExprKind::FieldAccess { object, .. } = &root.kind {
+            root = object;
+        }
+        if !matches!(root.kind, ExprKind::Identifier(_) | ExprKind::SelfValue) {
+            return false;
+        }
+        let mut t = iter_ty;
+        while let Type::Ref(inner) | Type::MutRef(inner) = t {
+            t = inner;
+        }
+        match t {
+            Type::Array { .. } | Type::Slice { .. } => true,
+            Type::Named { name, .. } => matches!(name.as_str(), "Vec" | "Set" | "SortedSet"),
+            _ => false,
+        }
+    }
+
+    /// The pattern-scrutinee entry to [`Self::warn_borrow_projection_copy`]
+    /// (`match`, `if let`, `while let`, `let … else`). A bare `for` element
+    /// destructured here stays with the partial-move rules, which treat it as
+    /// owned and reject a payload moved out of a `Drop` enum; calling the
+    /// same site a copy as well would contradict that error
+    /// (B-2026-09-27-69).
+    pub(super) fn warn_scrutinee_projection_copy(&mut self, scrutinee: &Expr, ty: &Type) {
+        if matches!(scrutinee.kind, ExprKind::Identifier(_)) {
+            return;
+        }
+        self.warn_borrow_projection_copy(scrutinee, ty);
+    }
+
     pub(super) fn warn_borrow_projection_copy(&mut self, value: &Expr, ty: &Type) {
-        if !self.projection_rooted_in_borrow(value) {
+        if !self.copy_source_rooted_in_borrow(value) {
             return;
         }
         if matches!(ty, Type::Error | Type::Never) || self.is_copy_type_during_check(ty) {
@@ -4828,12 +4881,25 @@ impl<'a> super::TypeChecker<'a> {
             return;
         }
         let has_clone = self.type_supports_clone(ty);
-        let mut message = "reading a non-`Copy` field out of a borrowed value makes an \
-             implicit copy: this binding is an independent value rather than a view, so a \
+        // B-2026-09-27-69 — a bare `for` element is not a field; name what it is.
+        let lead = if matches!(value.kind, ExprKind::Identifier(_)) {
+            "moving a non-`Copy` element out of a `for` loop over a borrowed collection makes \
+             an implicit copy (a bare `for` borrows the collection and leaves it whole)"
+        } else {
+            "reading a non-`Copy` field out of a borrowed value makes an implicit copy"
+        };
+        let mut message = format!(
+            "{lead}: this binding is an independent value rather than a view, so a \
              heap-bearing field is duplicated on every read and any user `Drop` body runs a \
              second time"
-            .to_owned();
-        if has_clone {
+        );
+        // No `.into_iter()` steer for the element: consuming iteration does
+        // not move the elements today (B-2026-09-27-76), so it would not
+        // remove the second body it promises to.
+        if matches!(value.kind, ExprKind::Identifier(_)) && !has_clone {
+            message += ". There is no `.clone()` on this type, so the copy cannot be \
+                 avoided today — read the element in place if the second `Drop` matters";
+        } else if has_clone {
             message += ". Write `.clone()` to say so at the use site";
         } else {
             message += ". There is no `.clone()` on this type and no borrow spelling for a \
@@ -5662,7 +5728,7 @@ impl<'a> super::TypeChecker<'a> {
                 // B-2026-09-06-14 — the `let … else` spelling of the read the
                 // plain `let` warns about (W0299): its bindings own a copy taken
                 // off the borrow exactly as `let e = h.e`'s binding does.
-                self.warn_borrow_projection_copy(value, &expected_ty);
+                self.warn_scrutinee_projection_copy(value, &expected_ty);
                 // The else block runs on the NON-matching edge, so the
                 // pattern's bindings are NOT in scope there — infer it first,
                 // before binding the pattern. It must diverge.

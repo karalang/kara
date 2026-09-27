@@ -50079,6 +50079,104 @@ fn borrow_projection_copy_fires_only_when_the_root_is_a_borrow() {
     );
 }
 
+/// B-2026-09-27-69 — the element of a bare `for` over a borrowed collection is
+/// a view, so moving it out copies exactly as a projection of a borrow does.
+///
+/// A bare `for g in v` borrows `v` and leaves it whole (design.md § For
+/// loops), so `let h = g` and `w.push(g)` each mint a second value and run a
+/// user `Drop` body twice, measured on `--interp`, the JIT and `karac build`.
+/// The lint reports them; it stays silent where nothing is copied: a `Copy`
+/// element, `.into_iter()`, a shadowing `let` inside the body, a pattern
+/// scrutinee (left to the partial-move rules, which treat the element as
+/// owned), and a free-function argument (the same exemption as `eat(s.r)`
+/// below).
+#[test]
+fn borrow_projection_copy_reaches_a_for_element_over_a_borrowed_collection() {
+    let hits = |body: &str| -> Vec<String> {
+        let src = format!(
+            "struct D {{ id: i64 }}\n\
+             impl Drop for D {{ fn drop(mut ref self) {{ println(f\"d{{self.id}}\") }} }}\n\
+             struct W {{ d: D }}\n\
+             fn eat(x: D) -> i64 {{ x.id }}\n\
+             fn main() {{ {body} }}"
+        );
+        typecheck_ok(&src)
+            .warnings
+            .iter()
+            .filter(|w| w.lint_name.as_deref() == Some("borrow_projection_copy"))
+            .map(|w| w.message.clone())
+            .collect()
+    };
+
+    for (label, body) in [
+        (
+            "let",
+            "let v = vec![D { id: 1 }]; for g in v { let h = g; println(h.id); }",
+        ),
+        (
+            "push",
+            "let v = vec![D { id: 1 }]; let mut w: Vec[D] = Vec.new(); for g in v { w.push(g); }",
+        ),
+        (
+            "projection",
+            "let v = vec![W { d: D { id: 1 } }]; for x in v { let r = x.d; println(r.id); }",
+        ),
+    ] {
+        let got = hits(body);
+        assert_eq!(got.len(), 1, "{label}: expected one warning; got: {got:?}");
+    }
+    let got = hits("let v = vec![D { id: 1 }]; for g in v { let h = g; println(h.id); }");
+    assert!(
+        got[0].contains("`for` loop over a borrowed collection")
+            && got[0].contains("no `.clone()`"),
+        "the element message must name the loop and admit there is no clone; got: {got:?}"
+    );
+
+    for (label, body) in [
+        (
+            "copy element",
+            "let v = vec![1, 2]; let mut w: Vec[i64] = Vec.new(); for x in v { w.push(x); let y = x; println(y); }",
+        ),
+        (
+            "into_iter",
+            "let v = vec![D { id: 1 }]; let mut w: Vec[D] = Vec.new(); for g in v.into_iter() { w.push(g); }",
+        ),
+        (
+            "shadowed",
+            "let v = vec![D { id: 1 }]; for g in v { let g = D { id: 9 }; let h = g; println(h.id); }",
+        ),
+        (
+            "pattern scrutinee",
+            "let v = vec![Some(D { id: 1 })]; for g in v { if let Some(d) = g { println(d.id); } }",
+        ),
+        (
+            "free-fn argument",
+            "let v = vec![D { id: 1 }]; for g in v { println(eat(g)); }",
+        ),
+    ] {
+        let got = hits(body);
+        assert!(got.is_empty(), "{label}: expected no warning; got: {got:?}");
+    }
+
+    let strings = typecheck_ok(
+        "fn main() { let v = vec![\"a\".to_string()]; let mut w: Vec[String] = Vec.new(); for s in v { w.push(s); } println(w.len()); }",
+    );
+    let got: Vec<_> = strings
+        .warnings
+        .iter()
+        .filter(|w| w.lint_name.as_deref() == Some("borrow_projection_copy"))
+        .collect();
+    assert_eq!(
+        got.len(),
+        1,
+        "String element: expected one warning; got: {got:?}"
+    );
+    assert!(
+        got[0].message.contains("Write `.clone()`"),
+        "a cloneable element keeps the clone steer; got: {got:?}"
+    );
+}
+
 /// B-2026-09-01-4 — the three other shapes that copy, and the four that do not.
 ///
 /// Covered because each was measured on all of `--interp`, the JIT and

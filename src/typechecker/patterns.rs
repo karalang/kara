@@ -197,7 +197,7 @@ impl<'a> super::TypeChecker<'a> {
         self.current_arm_body_block = prev_blk;
         // B-2026-09-06-14 — see `arm_materializes_scrutinee_copy`.
         if self.block_materializes_scrutinee_copy(pattern, then_block) {
-            self.warn_borrow_projection_copy(value, &scrut_ty);
+            self.warn_scrutinee_projection_copy(value, &scrut_ty);
         }
         let then_ty = self.check_block_against(then_block, expected);
         self.local_scope.pop();
@@ -292,7 +292,7 @@ impl<'a> super::TypeChecker<'a> {
         }
         // B-2026-09-06-14 — see `arm_materializes_scrutinee_copy`.
         if materializes {
-            self.warn_borrow_projection_copy(scrutinee, &scrut_ty);
+            self.warn_scrutinee_projection_copy(scrutinee, &scrut_ty);
         }
         // A variant-pattern/scrutinee mismatch already poisons the match; the
         // scrutinee isn't the enum the arms destructure, so a follow-on
@@ -585,7 +585,7 @@ impl<'a> super::TypeChecker<'a> {
         }
         // B-2026-09-06-14 — see `arm_materializes_scrutinee_copy`.
         if materializes {
-            self.warn_borrow_projection_copy(scrutinee, &scrut_ty);
+            self.warn_scrutinee_projection_copy(scrutinee, &scrut_ty);
         }
 
         // Check exhaustiveness for enum types — but not when a variant

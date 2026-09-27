@@ -5657,7 +5657,7 @@ impl<'a> super::TypeChecker<'a> {
                 self.current_arm_body_block = prev_blk;
                 // B-2026-09-06-14 — see `arm_materializes_scrutinee_copy`.
                 if self.block_materializes_scrutinee_copy(pattern, then_block) {
-                    self.warn_borrow_projection_copy(value, &scrut_ty);
+                    self.warn_scrutinee_projection_copy(value, &scrut_ty);
                 }
                 let then_ty = self.infer_block(then_block);
                 self.local_scope.pop();
@@ -5735,6 +5735,16 @@ impl<'a> super::TypeChecker<'a> {
                 // any user type that has registered an "Item" assoc binding.
                 let elem_ty = self.element_type_of(&iter_ty);
                 self.bind_pattern_types(pattern, &elem_ty);
+                // B-2026-09-27-69 — a bare `for` over a collection PLACE
+                // borrows it (design.md § `for` loops), so its element is a
+                // view: materializing it (`let h = g`, `w.push(g)`) copies,
+                // exactly as a projection off a `ref` param does, and
+                // `borrow_projection_copy` reports it the same way.
+                if let PatternKind::Binding(n) = &pattern.kind {
+                    if Self::for_iterable_is_borrowed_collection(iterable, &iter_ty) {
+                        self.local_scope.mark_view(n);
+                    }
+                }
                 // See the `While` arm: valueless frame, so an unlabeled
                 // `break` stops here instead of reaching an outer `loop`.
                 self.break_value_types
@@ -6343,7 +6353,7 @@ impl<'a> super::TypeChecker<'a> {
                 self.current_arm_body_block = prev_blk;
                 // B-2026-09-06-14 — see `arm_materializes_scrutinee_copy`.
                 if self.block_materializes_scrutinee_copy(pattern, body) {
-                    self.warn_borrow_projection_copy(value, &scrut_ty);
+                    self.warn_scrutinee_projection_copy(value, &scrut_ty);
                 }
                 // See the `While` arm.
                 self.break_value_types
