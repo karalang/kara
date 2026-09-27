@@ -6037,12 +6037,15 @@ fn escaping_param_payload_part_paths_impl(
         any_path: bool,
     ) {
         // B-2026-09-26-37 — the any-path mode answers a SHAPE question for two
-        // backends, and the interpreter settles it at an explicit `return`
-        // only. A part yielded by a TAIL off the arm binding declines the
-        // whole shape instead (`is_tail`), so neither end takes it up.
-        let mut record = |e: &Expr, top: bool, is_tail: bool| match optres_part_denote(e, root) {
+        // backends. A part yielded by a TAIL off the arm binding counts on the
+        // same terms as one handed out by a `return` since B-2026-09-26-62:
+        // both ends now settle it per path at the escaping tail (the
+        // interpreter in `record_conditional_move_tail`, codegen through
+        // `disarm_escaping_tail_projection`). Only a DEEPER-than-one-hop tail
+        // part still declines the shape, which the one-field-hop check in
+        // `optres_param_part_returns_are_callee_owned_shape` already does.
+        let mut record = |e: &Expr, top: bool, _is_tail: bool| match optres_part_denote(e, root) {
             Some(p) if p.is_empty() => *whole = true,
-            Some(_) if any_path && is_tail => *whole = true,
             Some(p) if (top || any_path) && !out.contains(&p) => {
                 out.push(p);
             }

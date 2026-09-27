@@ -6641,6 +6641,21 @@ impl<'a> super::Interpreter<'a> {
                 .contains(&(expr.span.offset, expr.span.length))
         {
             self.record_returned_projection_moves(expr);
+            // B-2026-09-26-62 — and when the root is an arm view of a by-value
+            // `Option`/`Result` param's payload, the part is handed out on this
+            // path exactly as `return t.r` hands it out: note it for the
+            // caller's post-call walk. A part that lands in a callee local
+            // rather than the return value is still owned by that local, so
+            // the caller masking it is right there too.
+            if let Some((root, path)) = Self::projection_chain_name_path(expr) {
+                let leaf = self
+                    .env
+                    .get(&root)
+                    .and_then(|rv| Self::value_at_name_path(&rv, &path).cloned());
+                if let Some(leaf) = leaf {
+                    self.note_returned_payload_part(expr, &leaf);
+                }
+            }
         }
         // B-2026-08-31-35 — every local the tail CONSUMES, not only one it
         // hands out whole. This read a bare `Identifier` and nothing else, so

@@ -11805,12 +11805,13 @@ fn main() {
 /// a scalar sibling (`let x = t.n`) and one that returns a scalar LEAF through
 /// the `Drop`-bearing field (`t.r.id`).
 ///
-/// Three spellings of the same family are deliberately NOT here, because
+/// Two spellings of the same family are deliberately NOT here, because
 /// neither backend settles them yet and both keep their old answers: a TUPLE
-/// payload (`if k { return t.0; }`), a TWO-HOP part (`if k { return t.h.r; }`)
-/// and a TAIL yield (`if k { t.r } else { .. }`). They are declined by
+/// payload (`if k { return t.0; }`) and a TWO-HOP part
+/// (`if k { return t.h.r; }`). They are declined by
 /// `optres_param_part_returns_are_callee_owned_shape` on both ends, and their
-/// measurements live on their own row.
+/// measurements live on their own row. The TAIL yield (`if k { t.r } else
+/// { .. }`) is settled since B-2026-09-26-62 and has its own fixture.
 #[test]
 fn e2e_optres_payload_part_handed_back_on_some_paths_runs_its_body_once() {
     let src = r#"struct R { id: i64 }
@@ -11854,6 +11855,72 @@ fn main() {
 }
 "#;
     let want = "temp-false\ndR5\n  got:1\ndR1\ntemp-true\n  got:5\ndR5\nnamed-false\ndR5\n  got:1\ndR1\nnamed-true\n  got:5\ndR5\nresult-named-true\n  got:5\ndR5\nresult-temp-true\n  got:5\ndR5\nmethod-named-true\n  got:5\ndR5\nmethod-named-false\ndR5\n  got:1\ndR1\nassoc-named-true\n  got:5\ndR5\nassoc-temp-true\n  got:5\ndR5\nguard-no-escape\n  k\ndR5\n  got:2\ndR2\nguard-scalar-leaf\ndR5\n  got:5\nend\n";
+    let (interp_out, interp_errs, _, _) = karac::run_program_full_checked(src);
+    assert!(interp_errs.is_empty(), "interp errored: {interp_errs:?}");
+    assert_eq!(interp_out.join(""), want, "interpreter");
+    if let Some(aot) = run_program(src) {
+        assert_eq!(aot, want, "AOT");
+    }
+}
+
+/// B-2026-09-26-62 — the tail spelling of B-2026-09-26-37, on both backends: a
+/// payload part handed back by a TAIL on only some paths
+/// (`Some(t) => { if k { t.r } else { .. } }`, no `return`) runs its `Drop`
+/// body once on each path, for a named-local and a fresh-temp argument alike.
+///
+/// Before, the interpreter doubled `t.r` on the handing-back path and the
+/// compiled backends doubled (named local) or tripled it, because the shared
+/// shape test declined every tail yield. B-2026-09-27-3 made both backends
+/// settle a projection at an escaping tail per path, so the tail now counts on
+/// the same terms as `return t.r`: the interpreter notes it for the caller's
+/// post-call walk from `record_conditional_move_tail`, codegen masks it in the
+/// callee's arm walk through `disarm_escaping_tail_projection`, and the named
+/// local's let-site walk stands down as it does for the `return` spelling.
+/// Covered: both argument forms, a bare-expression arm, the `Result` head, a
+/// function mixing a `return` and a tail, and the method spelling.
+#[test]
+fn e2e_optres_payload_part_handed_back_by_a_tail_on_some_paths_runs_its_body_once() {
+    let src = r#"struct R { id: i64 }
+impl Drop for R { fn drop(mut ref self) { println(f"dR{self.id}") } }
+struct Hd3 { r: R, n: i64 }
+struct Q { z: i64 }
+fn eat(o: Option[Hd3], k: bool) -> R {
+    match o { Some(t) => { if k { t.r } else { R { id: 1 } } } None => { R { id: 0 } } }
+}
+fn bare(o: Option[Hd3], k: bool) -> R {
+    match o { Some(t) => if k { t.r } else { R { id: 1 } }, None => R { id: 0 } }
+}
+fn res(o: Result[Hd3, i64], k: bool) -> R {
+    match o { Ok(t) => { if k { t.r } else { R { id: 1 } } } Err(e) => { R { id: 0 } } }
+}
+fn mixed(o: Option[Hd3], k: i64) -> R {
+    match o {
+        Some(t) => { if k == 0 { return t.r; } if k == 1 { t.r } else { R { id: 1 } } }
+        None => { R { id: 0 } }
+    }
+}
+impl Q {
+    fn take(ref self, o: Option[Hd3], k: bool) -> R {
+        match o { Some(t) => { if k { t.r } else { R { id: 1 } } } None => { R { id: 0 } } }
+    }
+}
+fn main() {
+    println("named-true"); { let a = Option.Some(Hd3 { r: R { id: 5 }, n: 2 }); let g = eat(a, true); println(f"  got:{g.id}") }
+    println("named-false"); { let a = Option.Some(Hd3 { r: R { id: 5 }, n: 2 }); let g = eat(a, false); println(f"  got:{g.id}") }
+    println("temp-true"); { let g = eat(Option.Some(Hd3 { r: R { id: 6 }, n: 2 }), true); println(f"  got:{g.id}") }
+    println("temp-false"); { let g = eat(Option.Some(Hd3 { r: R { id: 6 }, n: 2 }), false); println(f"  got:{g.id}") }
+    println("bare-true"); { let a = Option.Some(Hd3 { r: R { id: 5 }, n: 2 }); let g = bare(a, true); println(f"  got:{g.id}") }
+    println("bare-false"); { let a = Option.Some(Hd3 { r: R { id: 5 }, n: 2 }); let g = bare(a, false); println(f"  got:{g.id}") }
+    println("result-true"); { let a: Result[Hd3, i64] = Result.Ok(Hd3 { r: R { id: 5 }, n: 2 }); let g = res(a, true); println(f"  got:{g.id}") }
+    println("result-false"); { let a: Result[Hd3, i64] = Result.Ok(Hd3 { r: R { id: 5 }, n: 2 }); let g = res(a, false); println(f"  got:{g.id}") }
+    let mut k = 0;
+    while k < 3 { println(f"mixed-{k}"); { let a = Option.Some(Hd3 { r: R { id: 5 }, n: 2 }); let g = mixed(a, k); println(f"  got:{g.id}") } k = k + 1; }
+    println("method-true"); { let q = Q { z: 1 }; let a = Option.Some(Hd3 { r: R { id: 5 }, n: 2 }); let g = q.take(a, true); println(f"  got:{g.id}") }
+    println("method-false"); { let q = Q { z: 1 }; let a = Option.Some(Hd3 { r: R { id: 5 }, n: 2 }); let g = q.take(a, false); println(f"  got:{g.id}") }
+    println("end")
+}
+"#;
+    let want = "named-true\n  got:5\ndR5\nnamed-false\ndR5\n  got:1\ndR1\ntemp-true\n  got:6\ndR6\ntemp-false\ndR6\n  got:1\ndR1\nbare-true\n  got:5\ndR5\nbare-false\ndR5\n  got:1\ndR1\nresult-true\n  got:5\ndR5\nresult-false\ndR5\n  got:1\ndR1\nmixed-0\n  got:5\ndR5\nmixed-1\n  got:5\ndR5\nmixed-2\ndR5\n  got:1\ndR1\nmethod-true\n  got:5\ndR5\nmethod-false\ndR5\n  got:1\ndR1\nend\n";
     let (interp_out, interp_errs, _, _) = karac::run_program_full_checked(src);
     assert!(interp_errs.is_empty(), "interp errored: {interp_errs:?}");
     assert_eq!(interp_out.join(""), want, "interpreter");
