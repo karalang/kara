@@ -4012,3 +4012,69 @@ fn main() {
         "asan_owned_enum_receiver_handed_back_through_the_return_is_freed_once",
     );
 }
+
+/// B-2026-09-26-47 — a `Drop`-bearing field projected off a NAMED local and
+/// handed to a callee that keeps it (a free, generic or hand-back callee, and
+/// a leaf with a `shared` field that the callee forwards rather than copies,
+/// kept, stored, and stored in an untaken `if` arm) is freed once and runs its
+/// body once. The forwarded leaf aborted `free(): double free detected in
+/// tcache 2` before the fix: the local kept the handle the callee had taken.
+#[test]
+fn asan_named_local_field_into_a_keeping_callee_is_freed_once() {
+    assert_clean_asan_run_min_allocs(
+        r#"struct D { id: i64, name: String }
+impl Drop for D { fn drop(mut ref self) { println(f"dD{self.id} {self.name}") } }
+fn mkd(n: i64) -> D { return D { id: n, name: f"name-string-longer-than-sso-{n}" }; }
+struct W { r: D, s: D, b: i64 }
+fn mkw(n: i64) -> W { return W { r: mkd(n), s: mkd(n + 100), b: n }; }
+shared struct Sh { tag: String }
+struct F { id: i64, h: Sh, note: String }
+impl Drop for F { fn drop(mut ref self) { println(f"dF{self.id}") } }
+struct V { f: F, d: D }
+fn mkv(n: i64) -> V { return V { f: F { id: n, h: Sh { tag: f"shared-tag-longer-than-sso-{n}" }, note: f"note-string-longer-than-sso-{n}" }, d: mkd(n + 50) }; }
+fn keep(x: D) -> D { x }
+fn st(v: mut ref Vec[D], x: D) { v.push(x); }
+fn gst[T](v: mut ref Vec[T], x: T) { v.push(x); }
+fn keepf(x: F) -> F { x }
+fn stf(v: mut ref Vec[F], x: F) { v.push(x); }
+fn main() {
+    let mut v: Vec[D] = Vec.new();
+    let a = mkw(1);
+    st(mut v, a.r);
+    let b = mkw(2);
+    gst(mut v, b.s);
+    let c = mkw(3);
+    let k = keep(c.r);
+    println(f"k{k.id} v{v.len()}");
+    let mut fs: Vec[F] = Vec.new();
+    let p = mkv(4);
+    let kf = keepf(p.f);
+    let q = mkv(5);
+    stf(mut fs, q.f);
+    let r = mkv(6);
+    if r.d.id > 100 { stf(mut fs, r.f); }
+    println(f"kf{kf.id} fs{fs.len()}");
+    println("end")
+}
+"#,
+        &[
+            "dD101 name-string-longer-than-sso-101",
+            "dD2 name-string-longer-than-sso-2",
+            "dD103 name-string-longer-than-sso-103",
+            "k3 v2",
+            "dD3 name-string-longer-than-sso-3",
+            "dD1 name-string-longer-than-sso-1",
+            "dD102 name-string-longer-than-sso-102",
+            "dD54 name-string-longer-than-sso-54",
+            "dD55 name-string-longer-than-sso-55",
+            "dD56 name-string-longer-than-sso-56",
+            "dF6",
+            "kf4 fs1",
+            "dF4",
+            "dF5",
+            "end",
+        ],
+        "asan_named_local_field_into_a_keeping_callee_is_freed_once",
+        34,
+    );
+}

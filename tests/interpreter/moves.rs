@@ -2804,3 +2804,38 @@ fn main() {
     );
     assert_eq!(out, "stmt\n  1\nloop\n  2\nblock\n  3\nmatch\n  4\nkept\n  kept 26\n  5\nnested\n  6\ncallerdiscard\n  26\ncallerkept\n  26\n  26\ntwoinst\n  7\n  8\nend\n", "got:\n{out}");
 }
+
+/// B-2026-09-26-47 — a `Drop`-bearing field projected off a named local and
+/// handed to a callee that keeps it (a hand-back, a store through a `mut ref`,
+/// a generic identity, a method store) is a move out of the local: its body
+/// runs once, from the callee's kept value, not also from the local's walk.
+#[test]
+fn test_named_local_field_into_a_keeping_callee_runs_its_body_once() {
+    let out = run(r#"struct D { id: i64, name: String }
+impl Drop for D { fn drop(mut ref self) { println(f"dD{self.id}{self.name}") } }
+fn mkd(n: i64) -> D { return D { id: n, name: f"n{n}" }; }
+struct W { r: D, s: D, b: i64 }
+fn mkw(n: i64) -> W { return W { r: mkd(n), s: mkd(n + 100), b: n }; }
+fn keep(d: D) -> D { d }
+fn st(v: mut ref Vec[D], x: D) { v.push(x); }
+fn gid[T](x: T) -> T { x }
+struct H { k: i64 }
+impl H { fn put(self, v: mut ref Vec[D], x: D) { v.push(x); } }
+fn main() {
+    let w = mkw(7);
+    let k = keep(w.r);
+    println(f"k{k.id}");
+    let mut v: Vec[D] = Vec.new();
+    let a = mkw(1);
+    st(mut v, a.r);
+    let b = mkw(2);
+    let g = gid(b.s);
+    let c = mkw(3);
+    let h = H { k: 1 };
+    h.put(mut v, c.r);
+    println(f"g{g.id} v{v.len()}");
+    println("end")
+}
+"#);
+    assert_eq!(out, "dD107n107\nk7\ndD7n7\ndD101n101\ndD2n2\ndD103n103\ng102 v2\ndD102n102\ndD1n1\ndD3n3\nend\n", "got:\n{out}");
+}

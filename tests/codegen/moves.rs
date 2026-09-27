@@ -7955,3 +7955,190 @@ fn maybed(x: D, c: bool) -> Option[D] { if c { return Some(x); } None }
         }
     }
 }
+
+/// B-2026-09-26-47 — a `Drop`-bearing field projected one hop off a NAMED
+/// local and handed to a callee that keeps the argument on every path (a
+/// hand-back, a store through a `mut ref`, a generic, method or associated
+/// callee, one call further) is a move out of that local: the local's walk
+/// no longer runs the field's body, the callee's kept value does. Before the
+/// fix both ran it on every surface, and a leaf with a `shared` field (which
+/// the callee forwards rather than copies) also freed its handle twice when
+/// compiled. The controls are the builtin sink (already right since
+/// B-2026-09-26-35), a discarding callee and an untaken `if` arm.
+#[test]
+fn e2e_named_local_field_into_a_keeping_callee_runs_its_body_once() {
+    const H: &str = r#"struct D { id: i64, name: String }
+impl Drop for D { fn drop(mut ref self) { println(f"dD{self.id}{self.name}") } }
+fn mkd(n: i64) -> D { return D { id: n, name: f"n{n}" }; }
+struct W { r: D, s: D, b: i64 }
+fn mkw(n: i64) -> W { return W { r: mkd(n), s: mkd(n + 100), b: n }; }
+fn keep(d: D) -> D { d }
+fn eat(d: D) -> i64 { d.id }
+fn gid[T](x: T) -> T { x }
+fn gst[T](v: mut ref Vec[T], x: T) { v.push(x); }
+fn st(v: mut ref Vec[D], x: D) { v.push(x); }
+struct H { k: i64 }
+impl H { fn put(self, v: mut ref Vec[D], x: D) { v.push(x); } fn aput(v: mut ref Vec[D], x: D) { v.push(x); } fn hold(mut ref self, x: D) -> D { x } }
+struct E { id: i64 }
+impl Drop for E { fn drop(mut ref self) { println(f"dE{self.id}") } }
+shared struct Sh { v: i64 }
+struct F { id: i64, h: Sh }
+impl Drop for F { fn drop(mut ref self) { println(f"dF{self.id}") } }
+enum G { A(D), B }
+struct V { e: E, f: F, g: G, d: D }
+fn mkv(n: i64) -> V { V { e: E { id: n }, f: F { id: n + 10, h: Sh { v: 1 } }, g: G.A(mkd(n + 20)), d: mkd(n + 30) } }
+fn keepe(x: E) -> E { x }
+fn keepf(x: F) -> F { x }
+fn keepg(x: G) -> G { x }
+fn maybe(x: D, c: bool) -> Option[D] { if c { return Some(x); } None }
+fn via(x: D) -> D { keep(x) }
+struct X { w: W, t: D }
+fn mkx(n: i64) -> X { X { w: mkw(n), t: mkd(n + 300) } }
+fn stf(v: mut ref Vec[F], x: F) { v.push(x); }
+struct Hf { k: i64 }
+impl Hf { fn put(self, v: mut ref Vec[F], x: F) { v.push(x); } fn hold(mut ref self, x: F) -> F { x } }
+"#;
+    for (label, body, want) in [
+        (
+            "kept by a free fn (B-2026-09-26-47)",
+            "let w = mkw(7); let k = keep(w.r); println(f\"k{k.id}\");",
+            "dD107n107\nk7\ndD7n7\nend\n",
+        ),
+        (
+            "stored by a free fn (B-2026-09-26-47)",
+            "let mut v: Vec[D] = Vec.new(); let w = mkw(7); st(mut v, w.r); println(f\"l{v.len()}\");",
+            "dD107n107\nl1\ndD7n7\nend\n",
+        ),
+        (
+            "kept by a generic fn (B-2026-09-26-47)",
+            "let w = mkw(7); let k = gid(w.r); println(f\"k{k.id}\");",
+            "dD107n107\nk7\ndD7n7\nend\n",
+        ),
+        (
+            "stored by a generic fn (B-2026-09-26-47)",
+            "let mut v: Vec[D] = Vec.new(); let w = mkw(7); gst(mut v, w.r); println(f\"l{v.len()}\");",
+            "dD107n107\nl1\ndD7n7\nend\n",
+        ),
+        (
+            "stored by a method (B-2026-09-26-47)",
+            "let mut v: Vec[D] = Vec.new(); let w = mkw(7); let h = H { k: 1 }; h.put(mut v, w.r); println(f\"l{v.len()}\");",
+            "dD107n107\nl1\ndD7n7\nend\n",
+        ),
+        (
+            "stored by an associated fn (B-2026-09-26-47)",
+            "let mut v: Vec[D] = Vec.new(); let w = mkw(7); H.aput(mut v, w.r); println(f\"l{v.len()}\");",
+            "dD107n107\nl1\ndD7n7\nend\n",
+        ),
+        (
+            "kept by a mut-ref-self method (B-2026-09-26-47)",
+            "let w = mkw(7); let mut h = H { k: 1 }; let k = h.hold(w.r); println(f\"k{k.id}\");",
+            "dD107n107\nk7\ndD7n7\nend\n",
+        ),
+        (
+            "two fields kept in turn (B-2026-09-26-47)",
+            "let w = mkw(7); let k = keep(w.s); let j = keep(w.r); println(f\"k{k.id} {j.id}\");",
+            "k107 7\ndD7n7\ndD107n107\nend\n",
+        ),
+        (
+            "stored in a taken if arm (B-2026-09-26-47)",
+            "let mut v: Vec[D] = Vec.new(); let w = mkw(7); if w.b > 3 { st(mut v, w.r); } println(f\"l{v.len()}\");",
+            "dD107n107\nl1\ndD7n7\nend\n",
+        ),
+        (
+            "stored in a nested block (B-2026-09-26-47)",
+            "let mut v: Vec[D] = Vec.new(); let w = mkw(7); { st(mut v, w.r); } println(f\"l{v.len()}\");",
+            "dD107n107\nl1\ndD7n7\nend\n",
+        ),
+        (
+            "a heap-less Drop leaf (B-2026-09-26-47)",
+            "let v = mkv(1); let k = keepe(v.e); println(f\"k{k.id}\");",
+            "dD31n31\ndD21n21\ndF11\nk1\ndE1\nend\n",
+        ),
+        (
+            "a leaf with a shared field, kept (B-2026-09-26-47)",
+            "let v = mkv(1); let k = keepf(v.f); println(f\"k{k.id}\");",
+            "dD31n31\ndD21n21\ndE1\nk11\ndF11\nend\n",
+        ),
+        (
+            "kept one call further (B-2026-09-26-47)",
+            "let w = mkw(7); let k = via(w.r); println(f\"k{k.id}\");",
+            "dD107n107\nk7\ndD7n7\nend\n",
+        ),
+        (
+            "the other one-hop field (B-2026-09-26-47)",
+            "let x = mkx(7); let k = keep(x.t); println(f\"k{k.id}\");",
+            "dD107n107\ndD7n7\nk307\ndD307n307\nend\n",
+        ),
+        (
+            "stored in a loop (B-2026-09-26-47)",
+            "let mut v: Vec[D] = Vec.new(); for i in 0..2 { let w = mkw(i); st(mut v, w.r); } println(f\"l{v.len()}\");",
+            "dD100n100\ndD101n101\nl2\ndD0n0\ndD1n1\nend\n",
+        ),
+        (
+            "sibling field read after (B-2026-09-26-47)",
+            "let w = mkw(7); let k = keep(w.r); println(f\"k{k.id} s{w.s.id}\");",
+            "k7 s107\ndD7n7\ndD107n107\nend\n",
+        ),
+        (
+            "a leaf with a shared field, stored (B-2026-09-26-47)",
+            "let mut xs: Vec[F] = Vec.new(); let v = mkv(1); stf(mut xs, v.f); println(f\"l{xs.len()}\");",
+            "dD31n31\ndD21n21\ndE1\nl1\ndF11\nend\n",
+        ),
+        (
+            "a leaf with a shared field, generic (B-2026-09-26-47)",
+            "let v = mkv(1); let k = gid(v.f); println(f\"k{k.id}\");",
+            "dD31n31\ndD21n21\ndE1\nk11\ndF11\nend\n",
+        ),
+        (
+            "a leaf with a shared field, taken if arm (B-2026-09-26-47)",
+            "let mut xs: Vec[F] = Vec.new(); let v = mkv(5); if v.e.id > 3 { stf(mut xs, v.f); } println(f\"l{xs.len()}\");",
+            "dD35n35\ndD25n25\ndE5\nl1\ndF15\nend\n",
+        ),
+        (
+            "a leaf with a shared field, untaken if arm (B-2026-09-26-47)",
+            "let mut xs: Vec[F] = Vec.new(); let v = mkv(1); if v.e.id > 3 { stf(mut xs, v.f); } println(f\"l{xs.len()}\");",
+            "dD31n31\ndD21n21\ndF11\ndE1\nl0\nend\n",
+        ),
+        (
+            "a leaf with a shared field, method (B-2026-09-26-47)",
+            "let v = mkv(1); let mut h = Hf { k: 1 }; let k = h.hold(v.f); println(f\"k{k.id}\");",
+            "dD31n31\ndD21n21\ndE1\nk11\ndF11\nend\n",
+        ),
+        (
+            "a different field per arm (B-2026-09-26-47)",
+            "let mut v: Vec[D] = Vec.new(); let w = mkw(2); if w.b > 3 { st(mut v, w.r); } else { st(mut v, w.s); } println(f\"l{v.len()}\");",
+            "dD2n2\nl1\ndD102n102\nend\n",
+        ),
+        (
+            "kept in an if-expression arm (B-2026-09-26-47)",
+            "let w = mkw(7); let k = if w.b > 3 { keep(w.r) } else { mkd(9) }; println(f\"k{k.id}\");",
+            "dD107n107\nk7\ndD7n7\nend\n",
+        ),
+        (
+            "control: builtin push (B-2026-09-26-47)",
+            "let mut v: Vec[D] = Vec.new(); let w = mkw(7); v.push(w.r); println(f\"l{v.len()}\");",
+            "dD107n107\nl1\ndD7n7\nend\n",
+        ),
+        (
+            "control: discarding callee (B-2026-09-26-47)",
+            "let w = mkw(7); let e = eat(w.r); println(f\"e{e}\");",
+            "dD107n107\ndD7n7\ne7\nend\n",
+        ),
+        (
+            "control: untaken if arm (B-2026-09-26-47)",
+            "let mut v: Vec[D] = Vec.new(); let w = mkw(2); if w.b > 3 { st(mut v, w.r); } println(f\"l{v.len()}\");",
+            "dD102n102\ndD2n2\nl0\nend\n",
+        ),
+    ] {
+        let prog = format!("{H}fn main() {{\n    {body}\n    println(\"end\")\n}}\n");
+        let (interp_out, interp_errs, _, _) = karac::run_program_full_checked(&prog);
+        assert!(
+            interp_errs.is_empty(),
+            "[{label}] interp errored: {interp_errs:?}"
+        );
+        assert_eq!(interp_out.join(""), want, "[{label}] interpreter");
+        if let Some(aot) = run_program(&prog) {
+            assert_eq!(aot, want, "[{label}] AOT");
+        }
+    }
+}

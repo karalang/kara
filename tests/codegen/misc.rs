@@ -8566,11 +8566,14 @@ fn e2e_unconditional_store_still_runs_exactly_one_body() {
 /// fixes the plain cell and leaves the rebind and destructure cells doubled,
 /// which is why all three moved together.
 ///
-/// The escape guards are untouched, and the last two rows are what pins that:
-/// a callee that HANDS THE PROJECTION BACK and one that STORES it each run two
-/// bodies on every surface, before the fix and after — those parameters exit
-/// through `fn_always_returns_param` / `fn_always_moves_param_into_outliving_place`
-/// before the predicate is ever consulted. They are also rows 3 and 5 of the
+/// The escape guards are untouched, and the last two rows are what pinned
+/// that: a callee that HANDS THE PROJECTION BACK and one that STORES it each
+/// ran two bodies on every surface, before the fix and after — those
+/// parameters exit through `fn_always_returns_param` /
+/// `fn_always_moves_param_into_outliving_place` before the predicate is ever
+/// consulted. B-2026-09-26-47 then fixed those two on the CALLER side (the
+/// projected field is a move out of the named local when the callee keeps it
+/// on every path), so the rows now pin one body each. They are also rows 3 and 5 of the
 /// table in `warn_borrow_projection_copy`'s doc, whose subject is this same
 /// copy; that table still reads exactly as written.
 ///
@@ -8650,19 +8653,19 @@ fn e2e_method_projection_arg_runs_one_body() {
                 "drop 6 h6\nf6\n",
             ),
             (
-                "control: the callee HANDS THE PROJECTION BACK — two bodies on every surface, before and after",
+                "control: the callee HANDS THE PROJECTION BACK — one body since B-2026-09-26-47 (two before, on every surface)",
                 "let w: W = W { r: mk(7) };\n\
                   let mut k: K = K { n: 0, xs: Vec.new() };\n\
                   let o: R = k.hand(w.r);\n\
                   println(f\"g{o.id}\");",
-                "drop 7 h7\ng7\ndrop 7 h7\n",
+                "g7\ndrop 7 h7\n",
             ),
             (
-                "control: the callee STORES the projection — two bodies on every surface, before and after",
+                "control: the callee STORES the projection — one body since B-2026-09-26-47 (two before, on every surface)",
                 "let w: W = W { r: mk(8) };\n\
                   let mut k: K = K { n: 0, xs: Vec.new() };\n\
                   println(f\"i{k.store(w.r)}\");",
-                "i8\ndrop 8 h8\ndrop 8 h8\n",
+                "i8\ndrop 8 h8\n",
             ),
             // B-2026-09-15-24's last two NOT-MEASURED items, answered as
             // controls rather than as fixes: neither spelling ever diverged, and

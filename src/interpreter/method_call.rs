@@ -390,6 +390,13 @@ impl<'a> super::Interpreter<'a> {
                     i,
                     &a.value,
                 );
+                // B-2026-09-26-47 — see the free-function twin in `eval_call`.
+                self.record_named_projection_arg_kept_by_callee(
+                    method,
+                    Some(super::eval_call::CalleeOwner::Instance(&owner)),
+                    i,
+                    &a.value,
+                );
                 v
             }));
 

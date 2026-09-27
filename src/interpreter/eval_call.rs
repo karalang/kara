@@ -2023,6 +2023,12 @@ impl<'a> super::Interpreter<'a> {
                         i,
                         &a.value,
                     );
+                    self.record_named_projection_arg_kept_by_callee(
+                        name,
+                        owner.as_deref().map(CalleeOwner::Assoc),
+                        i,
+                        &a.value,
+                    );
                 }
                 v
             })
@@ -5607,6 +5613,41 @@ impl<'a> super::Interpreter<'a> {
         if !kept && staged && self.freshtemp_field_obj.is_none() {
             self.freshtemp_projection_args_owned
                 .push((value.span.offset, value.span.length));
+        }
+    }
+
+    /// B-2026-09-26-47 — interpreter twin of codegen's
+    /// `disarm_named_projection_arg_kept_by_callee`: a `Drop`-bearing field
+    /// projected one hop off a named local and handed to a callee that keeps
+    /// the argument on EVERY path is a move out of that local, recorded the way
+    /// `let x = w.r` and a builtin sink record it. Without it the local's walk
+    /// ran the field's body and the callee's kept value ran it again.
+    pub(super) fn record_named_projection_arg_kept_by_callee(
+        &mut self,
+        callee_name: &str,
+        method_owner: Option<CalleeOwner<'_>>,
+        i: usize,
+        value: &Expr,
+    ) {
+        let ExprKind::FieldAccess { object, .. } = &value.kind else {
+            return;
+        };
+        if !matches!(object.kind, ExprKind::Identifier(_))
+            || self.callee_param_is_borrow(callee_name, method_owner, i)
+        {
+            return;
+        }
+        let program = self.program;
+        let keeps = self
+            .callee_fn_for_ownership_guard_of(callee_name, method_owner)
+            .is_some_and(|f| {
+                crate::ast::fn_always_returns_param(Some(program), f, i)
+                    || crate::ast::fn_always_returns_param_via_call(program, f, i)
+                    || crate::ast::fn_always_moves_param_into_outliving_place(f, i)
+                    || crate::ast::fn_moves_param_into_local_container(f, i)
+            });
+        if keeps {
+            self.record_returned_projection_moves(value);
         }
     }
 

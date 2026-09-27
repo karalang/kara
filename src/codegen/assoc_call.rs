@@ -3320,6 +3320,8 @@ impl<'ctx> super::Codegen<'ctx> {
                         // B-2026-09-26-40 — see `compile_call`.
                         self.consume_escaping_freshtemp_projection_arg(&a.value);
                     }
+                    // B-2026-09-26-47 — see `compile_call`.
+                    self.disarm_named_projection_arg_kept_by_callee(&qualified, i, &a.value);
                     if !escapes_without_entry_copy {
                         // B-2026-09-07-6 — the PARTS registrar, with the
                         // callee's declared element types, where this leg used

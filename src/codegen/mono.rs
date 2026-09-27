@@ -2584,6 +2584,17 @@ impl<'ctx> super::Codegen<'ctx> {
                     }
                 }
             }
+            // B-2026-09-26-47 — a field projected off a named local, the
+            // projection twin of the retraction above; see `compile_call`.
+            if matches!(a.value.kind, ExprKind::FieldAccess { .. }) {
+                let by_value = generic_fn
+                    .params
+                    .get(i)
+                    .is_some_and(|p| !matches!(p.ty.kind, TypeKind::Ref(_) | TypeKind::MutRef(_)));
+                if let Some(ast_i) = ast_i.filter(|_| by_value) {
+                    self.disarm_named_projection_arg_kept_by_callee(name, ast_i, &a.value);
+                }
+            }
             // B-2026-09-17-7 — the MIXED-PATH sibling of the arm above, which
             // that arm declines BY DESIGN and which double frees as a result.
             //

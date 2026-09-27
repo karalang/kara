@@ -2558,6 +2558,8 @@ impl<'ctx> super::Codegen<'ctx> {
             if escapes_frame || escapes_without_entry_copy {
                 self.consume_escaping_freshtemp_projection_arg(&a.value);
             }
+            // B-2026-09-26-47 — the NAMED-root spelling of the same move.
+            self.disarm_named_projection_arg_kept_by_callee(&name, i, &a.value);
             if !arg_transfers && !escapes_without_entry_copy {
                 if drop_projection.is_some() && !escapes_frame {
                     self.consume_freshtemp_field_move(&a.value);
@@ -11177,6 +11179,50 @@ impl<'ctx> super::Codegen<'ctx> {
                 .is_some_and(|f| {
                     crate::ast::fn_always_moves_param_into_outliving_place(f, arg_index)
                 })
+    }
+
+    /// B-2026-09-26-47 — a `Drop`-bearing field projected ONE hop off a named
+    /// local (`keep(w.r)`, `st(mut v, w.r)`) and handed to a callee that keeps
+    /// the argument on every path is a move out of that local, so mask the
+    /// field's body out of the local's walk — the mask `let x = w.r` and a
+    /// builtin sink (`xs.push(w.r)`, B-2026-09-26-35) already write. The
+    /// callee entry-copies the field, so its new home runs the copy's body
+    /// while the local keeps and frees the original's memory; only the body
+    /// moves. Without this both ran it: `dD7n7 k7 dD7n7` on all four surfaces.
+    ///
+    /// Declined for a callee that keeps the argument on only some paths,
+    /// where nothing runs the body on the path that drops it.
+    pub(super) fn disarm_named_projection_arg_kept_by_callee(
+        &mut self,
+        callee_name: &str,
+        arg_index: usize,
+        value: &Expr,
+    ) {
+        let ExprKind::FieldAccess { object, .. } = &value.kind else {
+            return;
+        };
+        if !matches!(object.kind, ExprKind::Identifier(_)) {
+            return;
+        }
+        let Some(tn) = self.type_name_of_expr(value).filter(|tn| {
+            self.type_decls.struct_types.contains_key(tn.as_str())
+                && !self.type_decls.shared_types.contains_key(tn.as_str())
+        }) else {
+            return;
+        };
+        if !(self.arg_leaves_caller_on_every_path(callee_name, arg_index)
+            || self.callee_always_hands_arg_back_via_call(callee_name, arg_index))
+        {
+            return;
+        }
+        // A leaf the prologue FORWARDS rather than copies (a `shared` field
+        // declines copy support) is the same object in the callee, so its
+        // memory leaves the local too, as a builtin sink's does; keeping it
+        // gave the handle two owners.
+        if !self.aggregate_param_copy_supported_struct(&tn, &mut Vec::new()) {
+            self.suppress_source_vec_cleanup_for_arg(value);
+        }
+        self.disarm_struct_field_move_bodies(value);
     }
 
     pub(super) fn callee_moves_arg_into_local_container(
