@@ -92,13 +92,13 @@ distinguish "bugs flattening" from "we stopped writing them down."
 
 | class | total |
 |---|---|
-| run-vs-build | 505 |
+| run-vs-build | 506 |
 | miscompile | 487 |
 | leak | 441 |
 | double-free | 324 |
 | missing-feature | 209 |
 | codegen-gap | 196 |
-| other | 151 |
+| other | 153 |
 | diagnostics | 135 |
 | perf | 117 |
 | false-positive | 109 |
@@ -110,8 +110,8 @@ distinguish "bugs flattening" from "we stopped writing them down."
 
 | surface | total |
 |---|---|
-| codegen | 2167 |
-| interp | 591 |
+| codegen | 2170 |
+| interp | 593 |
 | typecheck | 309 |
 | other | 111 |
 | ownership | 77 |
@@ -130,8 +130,6 @@ _Generated from `bug-ledger.jsonl` by `scripts/bug-curve.py` (2026-05-20 → 202
 
 | id | date | surface | sev | title | tracker |
 |---|---|---|---|---|---|
-| B-2026-09-16-25 | 2026-09-16 | interp+codegen | low | THE OWNED-`self` ENUM RECEIVER PAYLOAD-BODY SUPPRESSION IS ALL-PATHS, NOT PATH-SENSITIVE -- a callee that takes the payload on SOME path still suppresses the caller's walk on the paths it does NOT take, so `if c { match self { E.A(r) => .. } } return 0;` called with `c == false` prints a bare `dE` and loses `dR`; same for a zero-trip `while` and an unselected match arm; B-2026-09-16-21's fix answered the ALL-PATHS-NO case only | — |
-| B-2026-09-16-26 | 2026-09-16 | interp+codegen | low | A DEPTH-1 FIELD MOVE-OUT WHOSE FIELD IS THEN BOUND BY A DESTRUCTURE RUNS THAT FIELD'S `Drop` BODY TWICE -- `let x = o.k; let Outer { h, k } = o;` prints `dR18 dR18 dR17 dR16` on all four surfaces with memory balanced; the NESTED sibling is fixed (B-2026-09-07-1) and this is not, because at depth 1 the leaf IS the moved field and owes no body at all rather than a masked one | — |
 | B-2026-09-16-28 | 2026-09-16 | codegen | low | A BARE GENERIC-PARAM FIELD MOVED INTO AN OWNING SINK STILL LEAKS 24 B AFTER B-2026-09-15-16 -- that fix closes the BLANK READ half for `Box2[T] { f: T }` at `T = String` (`b ` -> `b b1516-baret-...`) and leaves the leak unchanged, because the `bare_t_heap` arm zeroes words 1 and 2 ahead of every dispatched arm and does not consult `uam_copied_sites` | — |
 | B-2026-09-16-29 | 2026-09-16 | interp+codegen | low | A BARE-`self` ARM THAT PASSES ITS PAYLOAD ON BY VALUE STILL RUNS THE PAYLOAD BODY BEFORE THE SHELL'S -- `match self { E.A(r) => eat(r), .. }` prints `dR6 x6 dE` where the projection-only `r.id` spelling one line up prints `x1 dE dR1`, because B-2026-09-06-39's read-only walk counts a bare mention in ANY non-projection position as a take and so cannot tell `eat(r)` (caller-retains, safe) from `Some(r)` (a real move) | — |
 | B-2026-09-16-30 | 2026-09-16 | codegen | medium | A `shared enum` RECEIVER'S PAYLOAD `Drop` BODY RUNS UNDER `--interp` AND ON NO COMPILED BACKEND -- `Sh.A(mk(16))` over `shared enum Sh { A(R), B }` with `fn read(self) -> i64 { match self { Sh.A(r) => r.id, .. } }` prints `dR16 x16` interpreted and a bare `x16` on jit / `karac build` / `KARAC_AUTO_PAR=0 build`; a REAL A/B divergence, unlike the value-enum siblings around it | — |
@@ -360,6 +358,9 @@ registered in the callee's prologue, not by-value struct params in general. | �
 | B-2026-09-27-37 | 2026-09-27 | codegen | high | A BY-VALUE BOXED `Option[S]` PARAM REBOUND INTO A `let mut` LOCAL IS FREED BY BOTH FRAMES FOR A NAMED ARGUMENT -- `fn rb(a: Option[S]) -> i64 { let mut c = a; 5 }` over `struct S { r: R, s: String }` (R has a `Drop`; `Option[S]` is boxed) called as `rb(a)` on a named local prints `d1 k5 d2 end` under `--interp` and aborts `free(): double free detected in tcache 2` at -O2, with a SIGSEGV on jit and -O0 (valgrind -O0: 5 errors, 16 frees against 14 allocs) | — |
 | B-2026-09-27-19 | 2026-09-27 | interp+codegen | medium | THE TUPLE-PAYLOAD, TWO-HOP AND CALLEE-LOCAL SPELLINGS OF B-2026-09-26-62 STILL RUN A CONDITIONALLY HANDED-BACK PAYLOAD PART'S DROP BODY TWICE OR NOT AT ALL -- `Some(t) => { if k { return t.0; } .. }` over `Option[(R, R)]` loses both element bodies compiled for a fresh temp and doubles `t.0` everywhere for a named local; `return t.h.r` doubles or loses parts; and `let x = match o { Some(t) => { if k { t.r } else { .. } } .. }` doubles `t.r` on every surface (the fn-tail spelling was fixed in 7ce7f24) | — |
 | B-2026-09-27-20 | 2026-09-27 | interp+codegen | medium | TWO CALL-ARGUMENT SPELLINGS B-2026-09-27-14'S FIX LEAVES AS THEY WERE -- a NON-MINTING wrapper (`show({ p.a })`, `show(if k { p.a } else { p.b })`) runs the part's Drop body over the husk its block-tail move zeroed and leaks the buffer on every compiled surface, while `--interp` runs it on the value; and a by-value PARAM root (`fn f(p: P, k: bool) { show(if k { p.a } else { mk(..) }) }`) loses a body at both `k` on every surface | — |
+| B-2026-09-27-45 | 2026-09-27 | interp+codegen | low | A `Vec`-TYPED FIELD MOVED OUT AND THEN BOUND BY A DESTRUCTURE RUNS ITS ELEMENTS' `Drop` BODIES TWICE ON EVERY SURFACE -- `let x = o.v; let V { a, v } = o;` over `struct V { a: R, v: Vec[R] }` prints `dR2 dR3` twice with memory balanced; the struct- and `Option`-typed spellings of the same shape were fixed by B-2026-09-16-26 and this one was deliberately left agreeing | — |
+| B-2026-09-27-46 | 2026-09-27 | interp+codegen | medium | A FIELD MOVED OUT INSIDE AN `if` THAT FALLS THROUGH, THEN BOUND BY A DESTRUCTURE, RUNS ITS `Drop` BODY TWICE ON EVERY SURFACE -- `if c { let x = o.k; .. } let Outer { h, k } = o;` with `c` true prints `x=3 dR3 dR3`; the move promotes `o` to RC fallback, which B-2026-09-16-26's hand-off does not cover, and with `c` false the compiled surfaces also run the unread leaves' bodies after `end` where `--interp` runs them at the destructure | — |
+| B-2026-09-27-47 | 2026-09-27 | codegen | medium | A LEAF BOUND BY A NESTED STRUCT SUB-PATTERN RUNS ITS `Drop` BODY AT THE DESTRUCTURE ON EVERY COMPILED SURFACE, BEFORE THE STATEMENTS THAT STILL READ IT -- `let Outer { h: Inner { r, q }, k } = o; println(f"r={r.id}")` prints `dR1` before `r=1` compiled and after it under `--interp`; no move-out is needed | — |
 
 ### Relocated
 
@@ -2861,6 +2862,8 @@ registered in the callee's prologue, not by-value struct params in general. | �
 | B-2026-09-16-22 | codegen+interp | low | AN OWNED ENUM RECEIVER THAT ESCAPES THROUGH THE RETURN RUNS ITS SHELL `Drop` BODY TWICE, AND A CHAINED CALL OVER THE SAME SHAPE RUNS NO BODY AT ALL -… | ee28cd284 |
 | B-2026-09-16-23 | interp | low | TWO SHADOW-REBIND SPELLINGS STILL DOUBLE THE `Drop` BODY IN THE INTERPRETER -- a NESTED BLOCK (`{ let q = idr(q); . | b0d2f297c |
 | B-2026-09-16-24 | typecheck | medium | `partial_move_of_drop_enum` REJECTS A BORROW-PROJECTION SCRUTINEE, and it is a false positive by the rule's OWN stated terms -- the rule documents it… | 84030e8 |
+| B-2026-09-16-25 | interp+codegen | low | THE OWNED-`self` ENUM RECEIVER PAYLOAD-BODY SUPPRESSION IS ALL-PATHS, NOT PATH-SENSITIVE -- a callee that takes the payload on SOME path still suppre… | 9f94bb8d8 |
+| B-2026-09-16-26 | interp+codegen | low | A DEPTH-1 FIELD MOVE-OUT WHOSE FIELD IS THEN BOUND BY A DESTRUCTURE RUNS THAT FIELD'S `Drop` BODY TWICE -- `let x = o.k; let Outer { h, k } = o;` pri… | 73208d58a |
 | B-2026-09-16-27 | codegen | medium | A NESTED STRUCT MOVED INTO A VARIANT CONSTRUCTOR ABORTS WITH A DOUBLE FREE -- `Wn.Full(o)` over `struct Out { i: In }` / `struct In { s: String }` di… | 602a4bd |
 | B-2026-09-16-31 | codegen | high | A GENERIC ENUM WITH A GENERIC `impl[T] Drop` SEGFAULTS AT RUNTIME ON EVERY COMPILED BACKEND WHEN AN OWNED-`self` METHOD MATCHES ON IT -- `enum G[T] {… | 3fb151a |
 | B-2026-09-16-32 | codegen | medium | `String.substring`'s heap result is NOT NUL-terminated while every other String producer's is, which is the exact shape a past printf overread was fi… | d284a009d |
