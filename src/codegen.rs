@@ -6525,6 +6525,8 @@ impl<'ctx> Codegen<'ctx> {
                 inline_optres_retained_sources: std::collections::HashSet::new(),
                 scope_cleanup_actions: Vec::new(),
                 cond_move_escaping_sites: std::collections::HashSet::new(),
+                cond_move_call_arg_sites: std::collections::HashSet::new(),
+                seeding_call_arg_sites: false,
                 cond_move_drop_flags: HashMap::new(),
                 cond_move_drop_flag_slots: HashMap::new(),
                 retracted_live_generations: std::collections::HashSet::new(),

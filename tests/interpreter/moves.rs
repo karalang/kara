@@ -2928,3 +2928,102 @@ fn main() {
 "#);
     assert_eq!(out, "ret-some-true\ndR7\n  got:5\ndR5\nret-some-false\ndR5\ndR7\n  got:1\ndR1\nret-each-true\ndR7\n  got:5\ndR5\nret-each-false\ndR5\n  got:7\ndR7\nscalar-sibling-true\n  got:5\ndR5\nscalar-sibling-false\ndR5\n  got:1\ndR1\nlet-some-true\n  x5\ndR5\ndR7\n  got:1\ndR1\nlet-some-false\ndR5\ndR7\n  got:1\ndR1\nret-always\ndR7\n  got:5\ndR5\ntail-always\ndR7\n  got:5\ndR5\narm-0\ndR7\ndR9\n  got:5\ndR5\narm-1\ndR5\ndR9\n  got:7\ndR7\narm-2\ndR5\ndR7\n  got:9\ndR9\narm-3\ndR5\ndR7\ndR9\n  got:1\ndR1\nnested-tt\ndR7\n  got:5\ndR5\nnested-tf\ndR5\ndR7\n  after\n  got:1\ndR1\nloop\ndR10\ndR20\n  end0\n  took:11\ndR11\ndR21\n  end1\ndR12\ndR22\n  end2\nend\n", "got:\n{out}");
 }
+
+/// B-2026-09-27-3 — a projection moved out through a VALUE POSITION other than
+/// a `let` initializer or a `return` runs its `Drop` body once. The
+/// before, and every spelling below ran the moved part's `Drop` body a
+/// second time on every backend: `let x = if k { p.a } else { .. }`,
+/// `let x = { t.0 }`, `match k { 0 => t.0, .. }`, `x = if k { p.a } ..`,
+/// `v.push(t.0)` and `Option.Some(t.0)`. With a heap field the tuple
+/// spellings were real double frees compiled (`free(): double free detected
+/// in tcache 2`), and the struct ones ran the second body over the zeroed
+/// husk. Only `let x = p.a` / `return p.a` / a function tail recorded the move.
+///
+/// An escaping branch or block tail that is a ONE-HOP projection off a local
+/// now records it the way `let x = p.a` does, on the taken path only, and a
+/// tuple element passed by value to `push` or a variant constructor is
+/// masked like its field sibling. `guard-call-arg` was right before and must
+/// stay right: a projection at the tail of an `if` passed as a CALL ARGUMENT
+/// stays with its source, which is why those tails are excluded.
+///
+/// The codegen twin asserts the same string on both backends, and the ASAN
+/// twin carries the heap measurement.
+#[test]
+fn test_projection_moved_through_a_value_position_runs_its_body_once() {
+    let out = run(r#"struct R { s: String }
+impl Drop for R { fn drop(mut ref self) { println(f"dR{self.s}") } }
+struct P { a: R, b: R }
+fn mk(s: String) -> R { R { s: f"{s}-heap" } }
+fn show(r: R) { println(f"  show:{r.s}"); }
+fn if_field(k: bool) -> R {
+    let p = P { a: mk("a"), b: mk("b") };
+    let x = if k { p.a } else { mk("z") };
+    println(f"  x:{x.s}");
+    x
+}
+fn if_both(k: bool) -> R {
+    let p = P { a: mk("a"), b: mk("b") };
+    if k { p.a } else { p.b }
+}
+fn block_elem() -> R {
+    let t = (mk("a"), mk("b"));
+    let x = { t.0 };
+    println(f"  x:{x.s}");
+    x
+}
+fn match_elem(k: i64) -> R {
+    let t = (mk("a"), mk("b"));
+    let x = match k { 0 => t.0, 1 => t.1, _ => mk("z") };
+    x
+}
+fn nested(k: bool, m: bool) -> R {
+    let t = (mk("a"), mk("b"));
+    if k { if m { t.0 } else { t.1 } } else { mk("z") }
+}
+fn main() {
+    println("if-field-true"); { let g = if_field(true); println(f"  got:{g.s}") }
+    println("if-field-false"); { let g = if_field(false); println(f"  got:{g.s}") }
+    println("if-both-true"); { let g = if_both(true); println(f"  got:{g.s}") }
+    println("if-both-false"); { let g = if_both(false); println(f"  got:{g.s}") }
+    println("block-elem"); { let g = block_elem(); println(f"  got:{g.s}") }
+    let mut k = 0;
+    while k < 3 { println(f"match-{k}"); { let g = match_elem(k); println(f"  got:{g.s}") } k = k + 1; }
+    println("nested-tt"); { let g = nested(true, true); println(f"  got:{g.s}") }
+    println("nested-tf"); { let g = nested(true, false); println(f"  got:{g.s}") }
+    println("nested-f"); { let g = nested(false, true); println(f"  got:{g.s}") }
+    println("push-elem"); {
+        let t = (mk("a"), mk("b"));
+        let mut v: Vec[R] = Vec.new();
+        v.push(t.0);
+        println(f"  n:{v.len()}");
+    }
+    println("some-elem"); {
+        let t = (mk("a"), mk("b"));
+        let o = Option.Some(t.0);
+        match o { Some(r) => println(f"  o:{r.s}"), None => println("  none") }
+    }
+    println("assign"); {
+        let p = P { a: mk("a"), b: mk("b") };
+        let mut x = mk("x0");
+        let k = true;
+        x = if k { p.a } else { mk("z") };
+        println(f"  x:{x.s}");
+    }
+    println("loop");
+    let mut i = 0;
+    while i < 3 {
+        let t = (mk(f"a{i}"), mk(f"b{i}"));
+        let x = if i == 1 { t.0 } else { mk(f"z{i}") };
+        println(f"  x:{x.s}");
+        i = i + 1;
+    }
+    println("guard-call-arg"); {
+        let t = (mk("a"), mk("b"));
+        let k = true;
+        show(if k { t.0 } else { mk("z") });
+    }
+    println("end")
+}
+"#);
+    assert_eq!(out, "if-field-true\ndRb-heap\n  x:a-heap\n  got:a-heap\ndRa-heap\nif-field-false\ndRb-heap\ndRa-heap\n  x:z-heap\n  got:z-heap\ndRz-heap\nif-both-true\ndRb-heap\n  got:a-heap\ndRa-heap\nif-both-false\ndRa-heap\n  got:b-heap\ndRb-heap\nblock-elem\ndRb-heap\n  x:a-heap\n  got:a-heap\ndRa-heap\nmatch-0\ndRb-heap\n  got:a-heap\ndRa-heap\nmatch-1\ndRa-heap\n  got:b-heap\ndRb-heap\nmatch-2\ndRa-heap\ndRb-heap\n  got:z-heap\ndRz-heap\nnested-tt\ndRb-heap\n  got:a-heap\ndRa-heap\nnested-tf\ndRa-heap\n  got:b-heap\ndRb-heap\nnested-f\ndRa-heap\ndRb-heap\n  got:z-heap\ndRz-heap\npush-elem\ndRb-heap\n  n:1\ndRa-heap\nsome-elem\ndRb-heap\n  o:a-heap\ndRa-heap\nassign\ndRx0-heap\ndRb-heap\n  x:a-heap\ndRa-heap\nloop\ndRa0-heap\ndRb0-heap\n  x:z0-heap\ndRz0-heap\ndRb1-heap\n  x:a1-heap\ndRa1-heap\ndRa2-heap\ndRb2-heap\n  x:z2-heap\ndRz2-heap\nguard-call-arg\n  show:a-heap\ndRa-heap\ndRb-heap\nend\n", "got:\n{out}");
+}

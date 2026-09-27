@@ -12841,6 +12841,8 @@ impl<'ctx> super::Codegen<'ctx> {
                 if matches!(arg.value.kind, ExprKind::FieldAccess { .. }) {
                     self.disarm_struct_field_move_bodies(&arg.value);
                 }
+                // B-2026-09-27-3 — and its tuple spelling (`Some(t.0)`).
+                self.suppress_tuple_index_arg_move_source(&arg.value);
                 // Boxed / inline-heap `Option`/`Result` binding moved whole into
                 // this shared tuple-variant payload — mirrors the struct-literal
                 // / struct-variant field-init paths.
@@ -13032,6 +13034,10 @@ impl<'ctx> super::Codegen<'ctx> {
             if matches!(arg.value.kind, ExprKind::FieldAccess { .. }) {
                 self.disarm_struct_field_move_bodies(&arg.value);
             }
+            // B-2026-09-27-3 — the tuple spelling (`Some(t.0)`): the element's
+            // memory and body stayed with `t`, so `t` and the payload both
+            // dropped it. Interp twin: `record_ctor_arg_moves`.
+            self.suppress_tuple_index_arg_move_source(&arg.value);
             // Boxed / inline-heap `Option`/`Result` binding moved whole into
             // this non-shared tuple-variant payload — see the shared-enum
             // branch above and the struct-literal field-init paths.

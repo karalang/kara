@@ -90,6 +90,15 @@ pub(crate) struct DropRc<'ctx> {
     /// is worth more than the smaller collision window clearing would buy on
     /// this side alone.
     pub(crate) cond_move_escaping_sites: std::collections::HashSet<(usize, usize)>,
+    /// B-2026-09-27-3 — the subset of the escaping sites above reached
+    /// through a by-value CALL ARGUMENT's seed, and the flag that marks that
+    /// seeding in progress. A one-hop projection at such a tail stays with its
+    /// source: the argument temp registered for a minting tail does not take
+    /// over a projected part, so disarming the source there lost the body
+    /// (`show(if k { t.0 } else { mk() })`). Span-keyed and never cleared, as
+    /// the parent set is.
+    pub(crate) cond_move_call_arg_sites: std::collections::HashSet<(usize, usize)>,
+    pub(crate) seeding_call_arg_sites: bool,
     /// B-2026-08-28-51 — per-binding CONDITIONAL-MOVE drop flags: an `i1`
     /// alloca that is `true` while the binding still owns its value and
     /// `false` once a branch arm has moved it out.

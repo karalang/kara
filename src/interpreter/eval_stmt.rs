@@ -4452,6 +4452,13 @@ impl<'a> super::Interpreter<'a> {
         }
     }
 
+    /// B-2026-09-27-3 — `t.0` over a plain name: the tuple spelling of the
+    /// one-hop field projection the move recorders admit.
+    fn is_one_hop_tuple_index_of_name(e: &Expr) -> bool {
+        matches!(&e.kind, ExprKind::TupleIndex { object, .. }
+            if matches!(object.kind, ExprKind::Identifier(_)))
+    }
+
     /// [`Self::field_chain_name_path`] with TUPLE hops too, spelled `#<i>`.
     fn projection_chain_name_path(value: &Expr) -> Option<(String, Vec<String>)> {
         let mut path: Vec<String> = Vec::new();
@@ -6365,6 +6372,10 @@ impl<'a> super::Interpreter<'a> {
     /// nowhere, and marking them would take a program that runs one body today
     /// to zero.
     pub(crate) fn note_escaping_site(&mut self, expr: &Expr) {
+        if self.seeding_call_arg_sites {
+            self.cond_move_call_arg_sites
+                .insert((expr.span.offset, expr.span.length));
+        }
         if !self
             .cond_move_escaping_sites
             .insert((expr.span.offset, expr.span.length))
@@ -6408,11 +6419,13 @@ impl<'a> super::Interpreter<'a> {
             // ALL-PLACES wrapper has none, and seeding it dropped the taken
             // value's body on the compiled backends.
             ExprKind::Call { args, .. } | ExprKind::MethodCall { args, .. } => {
+                let outer = std::mem::replace(&mut self.seeding_call_arg_sites, true);
                 for a in args {
                     if self.wrapper_has_minting_tail(&a.value) {
                         self.note_escaping_site(&a.value);
                     }
                 }
+                self.seeding_call_arg_sites = outer;
             }
             _ => {}
         }
@@ -6612,6 +6625,22 @@ impl<'a> super::Interpreter<'a> {
             .contains(&(expr.span.offset, expr.span.length))
         {
             return;
+        }
+        // B-2026-09-27-3 — a ONE-HOP projection off a local at an escaping
+        // tail (`let x = if k { p.a } else { .. }`, `let x = { t.0 }`) is a
+        // move out of that local on this path, masked exactly as `let x = p.a`
+        // masks it. The walker below only knows whole locals, so the local's
+        // own walk ran the moved part's body a second time. One hop, for the
+        // twin's reason: codegen's `disarm_escaping_tail_projection` routes
+        // through the let-site helpers, which need an `Identifier` object.
+        if ((matches!(expr.kind, ExprKind::FieldAccess { .. })
+            && Self::field_chain_name_path(expr).is_some_and(|(_, path)| path.len() == 1))
+            || Self::is_one_hop_tuple_index_of_name(expr))
+            && !self
+                .cond_move_call_arg_sites
+                .contains(&(expr.span.offset, expr.span.length))
+        {
+            self.record_returned_projection_moves(expr);
         }
         // B-2026-08-31-35 — every local the tail CONSUMES, not only one it
         // hands out whole. This read a bare `Identifier` and nothing else, so
@@ -8651,8 +8680,9 @@ impl<'a> super::Interpreter<'a> {
                 if runs {
                     self.moved_out_user_drop_bindings.insert(n.clone());
                 }
-            } else if matches!(arg.value.kind, ExprKind::FieldAccess { .. })
-                && Self::field_chain_name_path(&arg.value).is_some_and(|(_, path)| path.len() == 1)
+            } else if (matches!(arg.value.kind, ExprKind::FieldAccess { .. })
+                && Self::field_chain_name_path(&arg.value).is_some_and(|(_, path)| path.len() == 1))
+                || Self::is_one_hop_tuple_index_of_name(&arg.value)
             {
                 // B-2026-09-26-35 — a field PROJECTED off a named local
                 // (`xs.push(w.r)`, `Some(w.r)`, `m.insert(k, w.r)`) moves into

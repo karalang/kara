@@ -13413,6 +13413,11 @@ impl<'ctx> super::Codegen<'ctx> {
     /// nowhere, and treating one as a move would take a program that runs one
     /// body today to zero.
     pub(super) fn note_escaping_site(&mut self, expr: &Expr) {
+        if self.drop_rc.seeding_call_arg_sites {
+            self.drop_rc
+                .cond_move_call_arg_sites
+                .insert((expr.span.offset, expr.span.length));
+        }
         if !self
             .drop_rc
             .cond_move_escaping_sites
@@ -13469,11 +13474,13 @@ impl<'ctx> super::Codegen<'ctx> {
             // unseeded keeps both backends at their prior, correct behaviour --
             // each binding armed, dying in place.
             ExprKind::Call { args, .. } | ExprKind::MethodCall { args, .. } => {
+                let outer = std::mem::replace(&mut self.drop_rc.seeding_call_arg_sites, true);
                 for a in args {
                     if self.first_minting_branch_tail(&a.value).is_some() {
                         self.note_escaping_site(&a.value);
                     }
                 }
+                self.drop_rc.seeding_call_arg_sites = outer;
             }
             _ => {}
         }
@@ -14357,7 +14364,40 @@ impl<'ctx> super::Codegen<'ctx> {
         {
             return;
         }
+        self.disarm_escaping_tail_projection(expr);
         self.clear_cond_move_flags_for_tail_sources(expr);
+    }
+
+    /// B-2026-09-27-3 — a ONE-HOP projection off a local at an escaping tail
+    /// (`let x = if k { p.a } else { .. }`, `let x = { t.0 }`) is the move
+    /// `let x = p.a` makes, so it takes the let site's helpers. The walker
+    /// below only knows whole locals, so before this the local's own walk ran
+    /// the moved part's body again (over a zeroed husk for a field) and, for a
+    /// tuple element, freed its memory again too. Emitted in the tail's own
+    /// block after the value is loaded, so a branch masks only on its path;
+    /// the helpers take their runtime-flag routes when the local's walk lives
+    /// in an enclosing frame. Interp twin: `record_conditional_move_tail`.
+    fn disarm_escaping_tail_projection(&mut self, expr: &Expr) {
+        if self
+            .drop_rc
+            .cond_move_call_arg_sites
+            .contains(&(expr.span.offset, expr.span.length))
+        {
+            return;
+        }
+        match &expr.kind {
+            ExprKind::FieldAccess { object, .. }
+                if matches!(object.kind, ExprKind::Identifier(_)) =>
+            {
+                self.disarm_struct_field_move_bodies(expr)
+            }
+            ExprKind::TupleIndex { object, .. }
+                if matches!(object.kind, ExprKind::Identifier(_)) =>
+            {
+                self.suppress_tuple_index_move_source(expr)
+            }
+            _ => {}
+        }
     }
 
     /// B-2026-08-31-35 — the same per-path disarm for every local an arm tail
@@ -15618,7 +15658,26 @@ impl<'ctx> super::Codegen<'ctx> {
             // non-RC-boxed, leaf must run a body) and idempotent. Interp twin:
             // the `FieldAccess` branch of `record_ctor_arg_moves`.
             ExprKind::FieldAccess { .. } => self.disarm_struct_field_move_bodies(e),
+            // B-2026-09-27-3 — the TUPLE spelling (`xs.push(t.0)`): the
+            // element's memory AND its body stayed with `t`, so both `t` and
+            // the container freed it. The let-site helper does both halves and
+            // is self-gated to an identifier root. Interp twin: the same arm of
+            // `record_ctor_arg_moves`.
+            ExprKind::TupleIndex { .. } => self.suppress_tuple_index_arg_move_source(e),
             _ => {}
+        }
+    }
+
+    /// B-2026-09-27-3 — a by-value ARGUMENT that is an element of a named
+    /// local tuple (`xs.push(t.0)`, `Some(t.0)`) moves that element into the
+    /// sink, so it takes the let site's helper, which zeroes the element's
+    /// slot in `t` and masks its body out of `t`'s walk. Before, both `t` and
+    /// the sink freed it. A no-op for any other expression.
+    pub(super) fn suppress_tuple_index_arg_move_source(&mut self, e: &Expr) {
+        if let ExprKind::TupleIndex { object, .. } = &e.kind {
+            if matches!(object.kind, ExprKind::Identifier(_)) {
+                self.suppress_tuple_index_move_source(e);
+            }
         }
     }
 

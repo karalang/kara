@@ -93,7 +93,7 @@ distinguish "bugs flattening" from "we stopped writing them down."
 | class | total |
 |---|---|
 | run-vs-build | 503 |
-| miscompile | 481 |
+| miscompile | 482 |
 | leak | 438 |
 | double-free | 320 |
 | missing-feature | 209 |
@@ -110,8 +110,8 @@ distinguish "bugs flattening" from "we stopped writing them down."
 
 | surface | total |
 |---|---|
-| codegen | 2152 |
-| interp | 585 |
+| codegen | 2153 |
+| interp | 586 |
 | typecheck | 309 |
 | other | 111 |
 | ownership | 77 |
@@ -353,6 +353,7 @@ registered in the callee's prologue, not by-value struct params in general. | �
 | B-2026-09-27-2 | 2026-09-27 | interp+codegen | high | MOVING AN ELEMENT OUT OF A LOCAL TUPLE BY `return t.0` OR A TAIL `t.0` RUNS ITS Drop BODY TWICE IN THE INTERPRETER, AND A CONDITIONAL MOVE (`if k { return t.0; }`, `if k { let x = t.0; }`) LOSES EVERY ELEMENT BODY ON THE PATH THAT DOES NOT MOVE IN THE COMPILED BACKENDS -- each backend wrong where the other is right | — |
 | B-2026-09-27-3 | 2026-09-27 | interp+codegen | high | A PROJECTION MOVED OUT IN A VALUE POSITION OTHER THAN `let x = p.f` / `return` / a function tail RUNS ITS Drop BODY TWICE ON EVERY BACKEND -- `let x = if k { p.a } else { .. }`, `let x = { t.0 }`, `v.push(t.0)`, and `if k { v.push(t.0); }` | — |
 | B-2026-09-27-4 | 2026-09-27 | interp+codegen | medium | A BY-VALUE TUPLE PARAMETER WHOSE ELEMENT IS RETURNED ON ONLY SOME PATHS (`fn eat(o: (R, R), k: bool) -> R { if k { return o.0; } .. }`) LOSES THAT ELEMENT'S Drop BODY ON THE PATH THAT DOES NOT RETURN IT, ON EVERY BACKEND | — |
+| B-2026-09-27-14 | 2026-09-27 | interp+codegen | medium | TWO SPELLINGS OF B-2026-09-27-3 ITS FIX LEAVES AS THEY WERE: a STRUCT field at the tail of an `if` passed as a CALL ARGUMENT (`show(if k { p.a } else { mk(..) })`) runs its Drop body over the moved-out husk compiled, and a DISCARDED `if k { p.a } else { .. };` statement runs it twice in the interpreter | — |
 
 ### Relocated
 

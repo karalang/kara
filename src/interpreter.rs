@@ -885,6 +885,15 @@ pub struct Interpreter<'a> {
     /// express, and the interpreter supplies it for free: only the taken arm
     /// is ever evaluated, so marking at the arm tail IS the runtime bit.
     pub(crate) cond_move_escaping_sites: HashSet<(usize, usize)>,
+    /// B-2026-09-27-3 — the subset of the escaping sites above reached
+    /// through a by-value CALL ARGUMENT's seed, and the flag that marks that
+    /// seeding in progress. A one-hop projection at such a tail stays with its
+    /// source: the argument temp registered for a minting tail does not take
+    /// over a projected part, so disarming the source there lost the body
+    /// (`show(if k { t.0 } else { mk() })`). Span-keyed and never cleared, as
+    /// the parent set is.
+    pub(crate) cond_move_call_arg_sites: HashSet<(usize, usize)>,
+    pub(crate) seeding_call_arg_sites: bool,
     /// B-2026-08-29-31 — the span of the tail expression of the branch arm
     /// that ACTUALLY RAN, most recently.
     ///
@@ -1365,6 +1374,8 @@ impl<'a> Interpreter<'a> {
             let_displaced_moved: Vec::new(),
             outer_shadow_moved_restore: Vec::new(),
             cond_move_escaping_sites: HashSet::new(),
+            cond_move_call_arg_sites: HashSet::new(),
+            seeding_call_arg_sites: false,
             taken_branch_tail: None,
             pending_arm_drop_bindings: Vec::new(),
             pending_arm_unbound_struct: None,
