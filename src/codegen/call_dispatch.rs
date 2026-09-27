@@ -15879,7 +15879,8 @@ impl<'ctx> super::Codegen<'ctx> {
         if !matches!(
             self.source_outlives_move(arg),
             super::runtime::SourceOutlivesMove::UseAfterMove
-        ) {
+        ) && !self.forwarded_param_box_stays_with_caller(arg)
+        {
             return false;
         }
         let Some(te) = self.uam_boxed_enum_arg_te(arg) else {
@@ -15899,6 +15900,62 @@ impl<'ctx> super::Codegen<'ctx> {
             _ => return false,
         }
         !self.user_enum_boxed_payload_variants(&te).is_empty()
+    }
+
+    /// B-2026-09-27-102 — is `arg` a by-value PARAM of the function being
+    /// compiled whose box the CALLER still owns, handed on to another by-value
+    /// callee?
+    ///
+    /// A caller keeps its binding across a call whose callee may hand the
+    /// param back (`call_arg_flows_into_return`, unless the callee entry-copies
+    /// it), and settles ownership afterwards by comparing the returned box
+    /// with its own (`zero_boxed_binding_if_call_returned_its_box`). The
+    /// callee, for its part, registers no drop for such a param, so on a path
+    /// that does NOT return it nobody in the callee frees it and the caller
+    /// does. That agreement breaks the moment the callee forwards the param by
+    /// value on such a path (`fn pkt(h, k) -> Ho[String] { if k { return h }
+    /// showt(h); return Ho.Empty }`): `showt` owns and frees the box, and the
+    /// caller, whose compare saw `Ho.Empty` come back, frees it again.
+    ///
+    /// The forwarded argument therefore gets the use-after-move copy, which
+    /// hands the consumer a box of its own and puts the caller's back in the
+    /// slot at the end of the statement. That is right on every path: the
+    /// caller either gets its own box back through the return (and stands its
+    /// binding down) or keeps it and frees it, and the consumer frees the copy.
+    /// Asked of the SAME predicate the caller's move gate uses, so the two
+    /// frames cannot disagree about which params are caller-retained.
+    pub(super) fn forwarded_param_box_stays_with_caller(&self, arg: &Expr) -> bool {
+        let ExprKind::Identifier(n) = &arg.kind else {
+            return false;
+        };
+        let fname = self.fn_ctx.current_fn_name.clone();
+        if fname.is_empty() {
+            return false;
+        }
+        let Some(program) = self.program_snapshot.as_deref() else {
+            return false;
+        };
+        let Some(f) = super::declarations::find_function_ast(program, &fname) else {
+            return false;
+        };
+        let Some(idx) = f
+            .params
+            .iter()
+            .position(|p| matches!(&p.pattern.kind, PatternKind::Binding(b) if b == n))
+        else {
+            return false;
+        };
+        if matches!(
+            f.params[idx].ty.kind,
+            TypeKind::Ref { .. } | TypeKind::MutRef { .. }
+        ) {
+            return false;
+        }
+        // `idx` indexes the AST's own params, which hold no `self`; both
+        // predicates below take that index (the `_arg_` spelling adds the
+        // receiver back for the lowered one).
+        self.call_arg_flows_into_return(&fname, idx)
+            && !self.optres_escaping_arg_entry_copied(&fname, idx)
     }
 
     /// B-2026-09-20-52 — a NAMED BINDING argument whose type is a non-shared
@@ -16274,14 +16331,22 @@ impl<'ctx> super::Codegen<'ctx> {
         let Some(bb) = self.builder.get_insert_block() else {
             return;
         };
-        if bb.get_terminator().is_some() {
-            return;
-        }
+        // B-2026-09-27-102 — a diverged statement DROPS this function's
+        // entries, as the doc above has always said, rather than leaving them
+        // queued. Left queued, the next statement to finish drained them in
+        // whatever block it ended in: `if k { return keep(h) } showt(h)`
+        // copied `h` for `keep`, returned, and then `showt(h)`'s statement
+        // stored the never-written save slot back over `h` on the path that
+        // had not taken the copy, so `showt` read garbage.
+        let diverged = bb.get_terminator().is_some();
         let mut keep = Vec::new();
         let pending = std::mem::take(&mut self.pending_uam_enum_restores);
         for (slot, saved, ty, owner) in pending {
             if owner != here {
                 keep.push((slot, saved, ty, owner));
+                continue;
+            }
+            if diverged {
                 continue;
             }
             if let Ok(v) = self.builder.build_load(ty, saved, "b13.uam.back") {

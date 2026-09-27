@@ -7924,6 +7924,9 @@ impl<'ctx> super::Codegen<'ctx> {
                     .cloned()
                     .unwrap_or_default();
                 let mut compiled_args: Vec<BasicMetadataValueEnum<'ctx>> = vec![receiver_arg];
+                // B-2026-09-27-102 — argument bindings whose box this call MAY
+                // hand back; the post-call compare below asks the returned value.
+                let mut maybe_handed_back_args: Vec<String> = Vec::new();
                 for (i, a) in args.iter().enumerate() {
                     let pidx = i + 1;
                     let is_ref = ref_flags.get(pidx).copied().unwrap_or(false);
@@ -8655,11 +8658,20 @@ impl<'ctx> super::Codegen<'ctx> {
                     // above), so no borrow gate is needed; the helper self-guards on
                     // the inline/boxed payload sets, leaving shared `Option[shared T]`
                     // (rc inc/dec balanced) and untracked args untouched.
+                    //
+                    // B-2026-09-27-102 — asked at the AST index, and of the
+                    // free path's predicate. `find_function_ast` returns the
+                    // METHOD as written, whose `params` hold no `self`, so
+                    // `fn_returns_param(f, pidx)` asked about the NEXT param:
+                    // `k.pkm(g, false)` over `fn pkm(self, h, k: bool)` read
+                    // `k`, answered false, and zeroed the caller's binding
+                    // while the callee, which does hand `h` back, left it to
+                    // the caller. The callee's side of that agreement
+                    // (`forwarded_param_box_stays_with_caller`) asks
+                    // `call_arg_flows_into_return`, so this does too.
                     let arg_flows_into_return = self
-                        .program_snapshot
-                        .as_deref()
-                        .and_then(|p| super::declarations::find_function_ast(p, &qualified))
-                        .is_some_and(|f| crate::ast::fn_returns_param(f, pidx));
+                        .callee_param_ast(&qualified, pidx)
+                        .is_some_and(|(_, ai)| self.call_arg_flows_into_return(&qualified, ai));
                     // B-2026-08-12-1 — same carve-out as the free-fn path: an
                     // ENTRY-COPIED `Option`/`Result` param owns its own buffer,
                     // so the caller keeps its original and must not zero it.
@@ -8698,6 +8710,32 @@ impl<'ctx> super::Codegen<'ctx> {
                         .callee_stores_param_whole(&qualified, pidx);
                     if !arg_flows_into_return && entry_copied.is_none() && !boxed_struct_binding {
                         self.suppress_inline_option_result_binding_move(&a.value);
+                    }
+                    // B-2026-09-27-102 — the binding the move above now keeps
+                    // (a mixed-path callee's dies-inside leg leaves the box with
+                    // the caller) is ALSO the result's box on the hand-back leg.
+                    // The free and associated paths' runtime compare settles
+                    // which leg ran; the method path had no such hook because
+                    // its index slip always zeroed the binding.
+                    if arg_flows_into_return
+                        && self.erased_boxed_user_enum_ident_arg(&a.value)
+                        && self
+                            .callee_param_ast(&qualified, pidx)
+                            .is_some_and(|(_, ai)| {
+                                self.callee_by_value_binding_param_may_return(&qualified, ai)
+                            })
+                    {
+                        if let ExprKind::Identifier(n) = &a.value.kind {
+                            let owner = self.moved_arg_owner_name(n);
+                            if self
+                                .payload_vars
+                                .boxed_enum_payload_vars
+                                .contains(owner.as_str())
+                                && !maybe_handed_back_args.contains(&owner)
+                            {
+                                maybe_handed_back_args.push(owner);
+                            }
+                        }
                     }
                     // B-2026-09-27-54 — the fresh-temp boxed `Option` /
                     // `Result` box, which only the free-function loop ever
@@ -8823,10 +8861,14 @@ impl<'ctx> super::Codegen<'ctx> {
                     // expression slot with const-0 i64. NOT a dispatch fall-through.
                     Ok(self.context.i64_type().const_int(0, false).into())
                 } else {
-                    Ok(self.unpack_wasm_bf16_ret(
+                    let v = self.unpack_wasm_bf16_ret(
                         &qualified,
                         self.unpack_niche_abi_ret(&qualified, basic_val.unwrap_basic()),
-                    ))
+                    );
+                    for src in &maybe_handed_back_args {
+                        self.zero_boxed_binding_if_call_returned_its_box(src, v);
+                    }
+                    Ok(v)
                 };
             }
         }

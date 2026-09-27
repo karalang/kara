@@ -2071,6 +2071,25 @@ impl<'ctx> super::Codegen<'ctx> {
                     crate::ast::PatternKind::Binding(n) => n.clone(),
                     _ => format!("_param{i}"),
                 };
+                // B-2026-09-27-102 — a by-value param of a BOXED generic enum
+                // records its instantiation the way a `let` binding does
+                // (`record_var_enum_inst_te`). The argument-site copies and
+                // disarms key on that record (`uam_boxed_enum_arg_te`), so a
+                // param forwarded on to another by-value callee was invisible
+                // to them in a free function; a method's param was seen only
+                // through a same-named binding left behind by an earlier
+                // function, since the table is not cleared between functions.
+                if !matches!(
+                    param.ty.kind,
+                    TypeKind::Ref { .. } | TypeKind::MutRef { .. }
+                ) {
+                    let mono_ty = self.subst_monomorph_type_params(&param.ty);
+                    if !self.user_enum_boxed_payload_variants(&mono_ty).is_empty() {
+                        self.var_types
+                            .var_enum_inst_te
+                            .insert(param_name.clone(), mono_ty);
+                    }
+                }
                 let param_val = fn_val.get_nth_param(i as u32 + sret_base).unwrap();
                 // AArch64 `#[repr(C)]` struct-by-value reconstruction
                 // (B-2026-07-09-2): the LLVM param is the AAPCS-coerced type

@@ -1554,6 +1554,15 @@ impl<'ctx> super::Codegen<'ctx> {
                     if let Some(kind) = self.current_fn_lazy_return_kind() {
                         self.emit_lazy_retain_for_return(kind, v);
                     }
+                    // B-2026-09-27-102 — put back any caller value a
+                    // use-after-move copy in the return value displaced
+                    // (`return keep(h)`), before the scope drains below read
+                    // the slot. A `return` in a block's TAIL position ends no
+                    // statement, so the statement-end drain never saw these
+                    // entries; they stayed queued and the next statement to
+                    // finish, on the OTHER path, stored a never-written save
+                    // slot over the binding.
+                    self.flush_pending_uam_enum_restores();
                     if is_error_exit {
                         // Slice 4 (Phase 7 § *defer / errdefer codegen*):
                         // stage the Err payload for any in-scope
