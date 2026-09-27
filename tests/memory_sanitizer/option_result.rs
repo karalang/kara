@@ -9040,3 +9040,54 @@ fn main() {
         20,
     );
 }
+
+/// B-2026-09-27-37 — the heap half of
+/// `e2e_unmutated_let_mut_rebind_of_optres_param_runs_each_body_once`: every
+/// `S` carries a heap `String` and a boxed `Option[S]` payload box, so a box
+/// freed by both frames, or a temporary's payload owned by neither, aborts or
+/// leaks under the sanitizer.
+#[test]
+fn asan_unmutated_let_mut_rebind_of_optres_param_is_freed_once() {
+    assert_clean_asan_run_min_allocs(
+        r#"
+struct R { id: i64 }
+impl Drop for R { fn drop(mut ref self) { println(f"d{self.id}") } }
+struct S { r: R, s: String }
+fn mk(i: i64) -> S { S { r: R { id: i }, s: f"heap-string-longer-than-sso-{i}" } }
+fn keep(a: Option[S]) -> i64 { let mut c = a; 5 }
+fn keep_in(a: Option[R]) -> i64 { let mut c = a; println("in"); 6 }
+fn keep_res(a: Result[S, i64]) -> i64 { let mut c = a; println("in"); 7 }
+fn peek(a: Option[S]) -> i64 { let mut c = a; match c { Some(s) => s.r.id, None => 0 } }
+fn show(a: Option[S]) -> i64 { let mut c = a; if let Some(s) = c { println(f"s{s.r.id}") }; 8 }
+fn maybe(a: Option[S], k: bool) -> i64 { let mut c = a; if k { println("in") }; 9 }
+fn main() {
+    let a: Option[S] = Some(mk(1));
+    println(f"k{keep(a)}");
+    println(f"k{keep(Some(mk(2)))}");
+    let b: Option[R] = Some(R { id: 3 });
+    println(f"k{keep_in(b)}");
+    println(f"k{keep_in(Some(R { id: 4 }))}");
+    let r: Result[S, i64] = Ok(mk(5));
+    println(f"k{keep_res(r)}");
+    println(f"k{keep_res(Ok(mk(6)))}");
+    let p: Option[S] = Some(mk(7));
+    println(f"k{peek(p)}");
+    println(f"k{peek(Some(mk(8)))}");
+    let q: Option[S] = Some(mk(9));
+    println(f"k{show(q)}");
+    println(f"k{show(Some(mk(10)))}");
+    let m: Option[S] = Some(mk(11));
+    if true { println(f"k{maybe(m, true)}") }
+    for i in 0..2 { println(f"k{maybe(Some(mk(i + 12)), false)}") }
+    println("end")
+}
+"#,
+        &[
+            "k5", "d1", "d2", "k5", "in", "k6", "d3", "in", "d4", "k6", "in", "k7", "d5", "in",
+            "d6", "k7", "k7", "d7", "d8", "k8", "s9", "k8", "d9", "s10", "d10", "k8", "in", "k9",
+            "d11", "d12", "k9", "d13", "k9", "end",
+        ],
+        "asan_unmutated_let_mut_rebind_of_optres_param_is_freed_once",
+        24,
+    );
+}

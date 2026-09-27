@@ -8513,6 +8513,153 @@ pub fn fn_moves_param_into_outliving_place(f: &Function, arg_index: usize) -> bo
             .any(|alias| outliving_store::walk_block(&f.body, alias, &roots))
 }
 
+/// B-2026-09-27-37 — the indices of the TOP-LEVEL statements of `f` that
+/// rebind a by-value `Option` / `Result` parameter into a `let mut` local the
+/// body never mutates (`fn rb(a: Option[S]) { let mut c = a; .. }` with no
+/// assignment to `c`, no method call on it, no `mut c` argument).
+///
+/// Such a `mut` is a permission nobody uses, so the binding is an immutable
+/// rebind in every respect that matters to ownership -- and the by-value
+/// `Option` / `Result` protocol answers the two spellings differently: the
+/// immutable one is an alias of the parameter whose payload the CALLER keeps
+/// (`result_escape::seeded_acc`, the let-site in `codegen/stmts.rs`,
+/// B-2026-09-24-20), while a `let mut` is read as a transfer to a local that
+/// can free the displaced box on reassignment. Read as a transfer with no
+/// reassignment to carry it, a named argument was freed in both frames
+/// (`free(): double free detected in tcache 2`) and a temporary's `Drop` body
+/// ran nowhere. Codegen demotes these to `let` before it compiles anything
+/// ([`demote_unmutated_optres_param_rebinds`]), so every predicate keyed on
+/// `is_mut` answers the immutable question once, at one definition.
+///
+/// Deliberately narrow and conservative. Top-level statements only; the local
+/// must be bound exactly once in `f`; and ANY assignment rooted at it, method
+/// call on it (a `take()` or `replace()` rewrites the payload), `mut`-marked
+/// argument, optional-chain call or `for` over it counts as a mutation, so a
+/// false "unmutated" cannot arise from a use this walk does not understand.
+pub fn unmutated_optres_param_mut_rebinds(f: &Function) -> Vec<usize> {
+    let optres_params: Vec<&str> = f
+        .params
+        .iter()
+        .filter(|p| {
+            matches!(&p.ty.kind, crate::ast::TypeKind::Path(path)
+                if matches!(path.segments.first().map(String::as_str), Some("Option") | Some("Result")))
+        })
+        .filter_map(|p| match &p.pattern.kind {
+            PatternKind::Binding(n) => Some(n.as_str()),
+            _ => None,
+        })
+        .collect();
+    if optres_params.is_empty() {
+        return Vec::new();
+    }
+    let mut out = Vec::new();
+    let mut bound: Option<std::collections::HashMap<String, usize>> = None;
+    let mut assigned: Option<std::collections::HashSet<String>> = None;
+    for (i, st) in f.body.stmts.iter().enumerate() {
+        let StmtKind::Let {
+            is_mut: true,
+            pattern,
+            value,
+            ..
+        } = &st.kind
+        else {
+            continue;
+        };
+        let (PatternKind::Binding(c), ExprKind::Identifier(src)) = (&pattern.kind, &value.kind)
+        else {
+            continue;
+        };
+        if !optres_params.contains(&src.as_str()) {
+            continue;
+        }
+        let bound = bound.get_or_insert_with(|| rebind_walk(f).bound);
+        if bound.get(c.as_str()) != Some(&1) {
+            continue;
+        }
+        let assigned = assigned.get_or_insert_with(|| {
+            let mut a = std::collections::HashSet::new();
+            crate::ast::collect_assigned_roots_block(&f.body, &mut a);
+            a
+        });
+        if assigned.contains(c.as_str()) || block_uses_local_mutably(&f.body, c) {
+            continue;
+        }
+        out.push(i);
+    }
+    out
+}
+
+/// Could `b` mutate the local `name` through anything other than an assignment
+/// (which [`crate::ast::collect_assigned_roots_block`] answers)? See
+/// [`unmutated_optres_param_mut_rebinds`] for why every method call counts.
+fn block_uses_local_mutably(b: &Block, name: &str) -> bool {
+    fn visit(e: &Expr, name: &str, hit: &mut bool) {
+        if *hit {
+            return;
+        }
+        let rooted = |x: &Expr| crate::ast::assign_target_root(x).as_deref() == Some(name);
+        *hit = match &e.kind {
+            ExprKind::MethodCall { object, .. } | ExprKind::OptionalChain { object, .. } => {
+                rooted(object)
+            }
+            ExprKind::Call { args, .. } => args.iter().any(|a| a.mut_marker && rooted(&a.value)),
+            ExprKind::For { iterable, .. } => rooted(iterable),
+            _ => false,
+        };
+        if !*hit {
+            crate::rc_elide::walk_children_pub(&e.kind, &mut |sub| visit(sub, name, hit));
+        }
+    }
+    let mut hit = false;
+    for s in &b.stmts {
+        crate::rc_elide::walk_stmt_children_pub(s, &mut |e| visit(e, name, &mut hit));
+    }
+    if let Some(e) = &b.final_expr {
+        visit(e, name, &mut hit);
+    }
+    hit
+}
+
+/// B-2026-09-27-37 — `program` with every rebind
+/// [`unmutated_optres_param_mut_rebinds`] finds demoted to an immutable `let`,
+/// or `None` when there is none (the common case, which then costs no clone).
+/// Read by codegen alone: the interpreter already answers both spellings alike.
+pub fn demote_unmutated_optres_param_rebinds(program: &crate::Program) -> Option<crate::Program> {
+    let any = program.items.iter().any(|item| match item {
+        Item::Function(f) => !unmutated_optres_param_mut_rebinds(f).is_empty(),
+        Item::ImplBlock(b) => b.items.iter().any(|ii| match ii {
+            ImplItem::Method(f) => !unmutated_optres_param_mut_rebinds(f).is_empty(),
+            _ => false,
+        }),
+        _ => false,
+    });
+    if !any {
+        return None;
+    }
+    fn demote(f: &mut Function) {
+        for i in unmutated_optres_param_mut_rebinds(f) {
+            if let StmtKind::Let { is_mut, .. } = &mut f.body.stmts[i].kind {
+                *is_mut = false;
+            }
+        }
+    }
+    let mut out = program.clone();
+    for item in out.items.iter_mut() {
+        match item {
+            Item::Function(f) => demote(f),
+            Item::ImplBlock(b) => {
+                for ii in b.items.iter_mut() {
+                    if let ImplItem::Method(f) = ii {
+                        demote(f);
+                    }
+                }
+            }
+            _ => {}
+        }
+    }
+    Some(out)
+}
+
 /// B-2026-09-24-20 — the names a TOP-LEVEL immutable whole rebind of the
 /// by-value parameter `param_name` binds (`let c = a;`, then `let d = c;`),
 /// in order.
@@ -9216,5 +9363,63 @@ fn collect_payload_moved_fields_in_block(b: &Block, param_name: &str, out: &mut 
     }
     if let Some(fe) = &b.final_expr {
         collect_payload_moved_fields_in_expr(fe, param_name, out);
+    }
+}
+
+#[cfg(test)]
+mod unmutated_rebind_tests {
+    use super::*;
+
+    /// The statement indices [`unmutated_optres_param_mut_rebinds`] reports
+    /// for the first function of `src`.
+    fn idxs(src: &str) -> Vec<usize> {
+        let parsed = crate::parse(src);
+        assert!(
+            parsed.errors.is_empty(),
+            "parse errors: {:?}",
+            parsed.errors
+        );
+        let f = parsed
+            .program
+            .items
+            .iter()
+            .find_map(|it| match it {
+                Item::Function(f) => Some(f),
+                _ => None,
+            })
+            .expect("no function");
+        unmutated_optres_param_mut_rebinds(f)
+    }
+
+    /// B-2026-09-27-37 — only a rebind the body never mutates is demoted, and
+    /// every way of mutating it keeps the `mut`.
+    #[test]
+    fn only_an_unmutated_optres_param_rebind_is_demoted() {
+        assert_eq!(
+            idxs("fn f(a: Option[S]) -> i64 { let mut c = a; 5 }"),
+            vec![0]
+        );
+        assert_eq!(
+            idxs("fn f(a: Result[S, i64]) -> i64 { println(\"x\"); let mut c = a; match c { Ok(s) => 1, Err(e) => e } }"),
+            vec![1]
+        );
+        for mutated in [
+            "fn f(a: Option[S]) -> i64 { let mut c = a; c = None; 5 }",
+            "fn f(a: Option[S]) -> i64 { let mut c = a; let t = c.take(); 5 }",
+            "fn f(a: Option[S]) -> i64 { let mut c = a; reset(mut c); 5 }",
+            "fn f(a: Option[S]) -> i64 { let mut c = a; if k { c = None; }; 5 }",
+            "fn f(a: Option[S]) -> i64 { let mut c = a; let g = || { c = None; }; 5 }",
+            "fn f(a: Option[S]) -> i64 { let mut c = a; for x in c { }; 5 }",
+            // Bound twice: the name no longer identifies one binding.
+            "fn f(a: Option[S]) -> i64 { let mut c = a; if k { let c = 1; }; 5 }",
+        ] {
+            assert!(
+                idxs(mutated).is_empty(),
+                "demoted a mutated rebind: {mutated}"
+            );
+        }
+        // Neither a non-`Option`/`Result` param nor a non-param source.
+        assert!(idxs("fn f(a: S) -> i64 { let mut c = a; 5 }").is_empty());
+        assert!(idxs("fn f(a: Option[S]) -> i64 { let b = a; let mut c = b; 5 }").is_empty());
     }
 }

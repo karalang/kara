@@ -11928,3 +11928,56 @@ fn main() {
         assert_eq!(aot, want, "AOT");
     }
 }
+
+/// B-2026-09-27-37 — a by-value `Option` / `Result` param rebound into a
+/// `let mut` local the callee never mutates (`fn keep(a: Option[S]) -> i64 {
+/// let mut c = a; 5 }`) runs each payload body once and frees it once.
+///
+/// The compiled backends read `let mut` as a transfer to the local, while the
+/// caller of a boxed struct payload keeps a NAMED argument's box: freed in
+/// both frames (`free(): double free detected in tcache 2` at -O2, a SIGSEGV
+/// on jit and -O0), and a TEMPORARY's body ran nowhere. Codegen now compiles
+/// an unmutated `let mut` rebind as the `let` it is. Named and temporary
+/// arguments, boxed and inline `Option`, `Result`, a `match` and an `if let`
+/// of the local, and a conditional and looped call.
+#[test]
+fn e2e_unmutated_let_mut_rebind_of_optres_param_runs_each_body_once() {
+    let src = r#"struct R { id: i64 }
+impl Drop for R { fn drop(mut ref self) { println(f"d{self.id}") } }
+struct S { r: R, s: String }
+fn mk(i: i64) -> S { S { r: R { id: i }, s: f"heap-string-longer-than-sso-{i}" } }
+fn keep(a: Option[S]) -> i64 { let mut c = a; 5 }
+fn keep_in(a: Option[R]) -> i64 { let mut c = a; println("in"); 6 }
+fn keep_res(a: Result[S, i64]) -> i64 { let mut c = a; println("in"); 7 }
+fn peek(a: Option[S]) -> i64 { let mut c = a; match c { Some(s) => s.r.id, None => 0 } }
+fn show(a: Option[S]) -> i64 { let mut c = a; if let Some(s) = c { println(f"s{s.r.id}") }; 8 }
+fn maybe(a: Option[S], k: bool) -> i64 { let mut c = a; if k { println("in") }; 9 }
+fn main() {
+    let a: Option[S] = Some(mk(1));
+    println(f"k{keep(a)}");
+    println(f"k{keep(Some(mk(2)))}");
+    let b: Option[R] = Some(R { id: 3 });
+    println(f"k{keep_in(b)}");
+    println(f"k{keep_in(Some(R { id: 4 }))}");
+    let r: Result[S, i64] = Ok(mk(5));
+    println(f"k{keep_res(r)}");
+    println(f"k{keep_res(Ok(mk(6)))}");
+    let p: Option[S] = Some(mk(7));
+    println(f"k{peek(p)}");
+    println(f"k{peek(Some(mk(8)))}");
+    let q: Option[S] = Some(mk(9));
+    println(f"k{show(q)}");
+    println(f"k{show(Some(mk(10)))}");
+    let m: Option[S] = Some(mk(11));
+    if true { println(f"k{maybe(m, true)}") }
+    for i in 0..2 { println(f"k{maybe(Some(mk(i + 12)), false)}") }
+    println("end")
+}"#;
+    let want = "k5\nd1\nd2\nk5\nin\nk6\nd3\nin\nd4\nk6\nin\nk7\nd5\nin\nd6\nk7\nk7\nd7\nd8\nk8\ns9\nk8\nd9\ns10\nd10\nk8\nin\nk9\nd11\nd12\nk9\nd13\nk9\nend\n";
+    let (interp_out, interp_errs, _, _) = karac::run_program_full_checked(src);
+    assert!(interp_errs.is_empty(), "interp errored: {interp_errs:?}");
+    assert_eq!(interp_out.join(""), want, "interpreter");
+    if let Some(aot) = run_program(src) {
+        assert_eq!(aot, want, "AOT");
+    }
+}

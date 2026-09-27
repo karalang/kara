@@ -7994,6 +7994,12 @@ impl<'ctx> Codegen<'ctx> {
     }
 
     fn compile_program(&mut self, program: &Program) -> Result<(), String> {
+        // B-2026-09-27-37 — a `let mut` rebind of a by-value `Option` /
+        // `Result` param that is never mutated is compiled as the `let` it
+        // is, so the caller-retains protocol reads one spelling. See
+        // `crate::ast::unmutated_optres_param_mut_rebinds`.
+        let demoted = crate::ast::demote_unmutated_optres_param_rebinds(program);
+        let program = demoted.as_ref().unwrap_or(program);
         // B-2026-08-21-6 — the parser deleted each `Map[K, V, H]` hasher
         // argument and left the choice here, keyed by the container path's
         // span. Every `Codegen::new` entry funnels through this method, so one
