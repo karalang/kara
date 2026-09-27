@@ -92,7 +92,7 @@ distinguish "bugs flattening" from "we stopped writing them down."
 
 | class | total |
 |---|---|
-| run-vs-build | 511 |
+| run-vs-build | 512 |
 | miscompile | 492 |
 | leak | 442 |
 | double-free | 328 |
@@ -102,15 +102,15 @@ distinguish "bugs flattening" from "we stopped writing them down."
 | diagnostics | 135 |
 | perf | 117 |
 | false-positive | 110 |
+| crash | 98 |
 | soundness | 97 |
-| crash | 97 |
 | use-after-free | 58 |
 
 ### By surface
 
 | surface | total |
 |---|---|
-| codegen | 2185 |
+| codegen | 2187 |
 | interp | 601 |
 | typecheck | 309 |
 | other | 111 |
@@ -366,11 +366,12 @@ registered in the callee's prologue, not by-value struct params in general. | �
 | B-2026-09-27-57 | 2026-09-27 | interp+codegen | medium | A PART OF A NAMED RECEIVER OR ARGUMENT WRAPPED IN A BARE `Some(..)` AND HANDED BACK RUNS ITS `Drop` BODY TWICE ON ALL FOUR SURFACES, while the qualified `Option.Some(..)` spelling is correct -- `fn opt(self) -> Option[R] { return Some(self.r) }` prints `dR11 x11 dR11 end`; `Option.Some(self.r)` prints `x11 dR11 end` | — |
 | B-2026-09-27-58 | 2026-09-27 | interp+codegen | medium | AN OWNED STRUCT PARAMETER USED AS THE NAMED RECEIVER OF AN OWNED-`self` METHOD THAT HANDS A FIELD BACK RUNS THAT FIELD'S BODY TWICE ON ALL FOUR SURFACES -- `fn via(w: Ws) -> R { let x = w.getr(); println("in"); x }` prints `in dR15 x15 dR15 end` where `in x15 dR15 end` is due | — |
 | B-2026-09-27-59 | 2026-09-27 | codegen | medium | A GENERIC STRUCT'S `Drop`-BEARING FIELD HANDED BACK BY VALUE RUNS ITS BODY TWICE ON EVERY COMPILED SURFACE WHILE `--interp` IS RIGHT, for the method, the concrete free function and the generic free function alike -- `struct G[T] { r: T, n: i64 }` with `fn getg(w: G[R]) -> R { return w.r }` prints `dR1 x1 dR1` compiled and `x1 dR1` interpreted | — |
-| B-2026-09-27-60 | 2026-09-27 | codegen | medium | A `for` LOOP BINDING OVER A `Vec` OF A BOXED GENERIC ENUM, PASSED BY VALUE TO A CALLEE THAT MATCHES IT, RUNS THE PAYLOAD'S `Drop` BODY TWICE ON EVERY COMPILED SURFACE -- `for h in v { shows(h) }` over `Vec[Ho[S]]` prints `s7 dS7 n1 dS7 end` where `--interp` and the non-generic `Vec[MoS]` twin print `s7 n1 dS7 end`; a regression of B-2026-09-20-15 | — |
 | B-2026-09-27-61 | 2026-09-27 | codegen | medium | AN ENUM RECEIVER'S ARM PASSING ITS PAYLOAD AND A BY-VALUE PARAM TO THE SAME CALL DEFERS THE PARAM'S `Drop` BODY TO THE CALLER'S STATEMENT END ON COMPILED BACKENDS -- `fn both(self, o: R) -> i64 { match self { E.A(r) => { return two(r, o); } .. } }` prints `dR6 dR60 x66 dE` under `--interp` and `dR6 x66 dR60 dE` on `karac build`; `one(o)` alone, `two(mk(7), o)`, and a struct receiver's `two(mk(6), o)` all agree, so it is the pairing of the moved-out PAYLOAD with the param in one arg list that moves `o`'s body | — |
 | B-2026-09-27-62 | 2026-09-27 | codegen | low | A USER FUNCTION NAMED LIKE A C SYMBOL THE RUNTIME DECLARES (`free`, `malloc`, `exit`, `strlen`) FAILS `karac build` WHILE `--interp` RUNS IT -- `fn free(x: i64) -> i64 { return x + 1; }` reports `Binary op Add: left operand has non-comparable type PointerType` or `Global is external, but doesn't have external or weak linkage! ptr @free.1`; `memcpy` and `puts` happen to build. User fn symbols share the LLVM module's namespace with the runtime's C externs and are not mangled | — |
 | B-2026-09-27-63 | 2026-09-27 | ownership | low | REUSING A `shared enum` AFTER PASSING IT BY VALUE WARNS `value 's' moved here, used again here`, WHERE THE SAME REUSE OF A `shared struct` IS SILENT -- `rd(e); rd(e)` over `fn rd(s: Sh) -> i64`, `e.read(); e.read()` over an owned-`self` method, and `match s {..}` twice all warn for `shared enum Sh`, while `let b = a; a.id`, `c.get(); c.get()` and `sg(d); sg(d)` on a `shared struct` do not; both kinds are reference-counted handles (design.md § Guaranteed, `shared struct` / `shared enum`: reference semantics), and every backend runs these programs correctly | — |
 | B-2026-09-27-64 | 2026-09-27 | codegen+interp | medium | A FRESH `shared enum` TEMP PASSED BY VALUE RUNS ITS PAYLOAD'S `Drop` BODY BEFORE THE ENCLOSING STATEMENT USES THE RESULT UNDER `--interp`, AND AFTER IT ON EVERY COMPILED BACKEND -- `println(f"x{rd(Sh.A(mk(28)))}")` over `fn rd(s: Sh) -> i64` prints `dR28 x28` interpreted and `x28 dR28` on jit / `-O0` / `-O2` / auto-par=0; the owned-`self` receiver spellings (`Sh.A(mk(29)).read()`, and `.none()` on a callee that never matches) split the same way. A NAMED local agrees on all five surfaces, and so does a plain (non-shared) struct temp arg, which reads `dR x` everywhere | — |
+| B-2026-09-27-65 | 2026-09-27 | codegen | medium | THE METHOD AND FIELD-SOURCE SPELLINGS OF B-2026-09-27-60 STILL RUN A BOXED GENERIC ENUM LOOP VIEW'S `Drop` BODY IN THE CALLEE -- `for h in v { k.take(h) }` over `impl K { fn take(self, h: Ho[S]) { shows(h) } }` prints `s7 dS7 n1 dS7 end` compiled where `--interp` prints `s7 n1 dS7 end`; `for h in c.v { shows(h) }` prints `s7 dS7 n1 end` and loses 32 B | — |
+| B-2026-09-27-66 | 2026-09-27 | codegen | high | A `for` LOOP VIEW OF A BOXED GENERIC ENUM THAT ESCAPES A BY-VALUE CALLEE, OR IS CONSUMED TWICE, CRASHES ON EVERY COMPILED SURFACE -- `for h in v { w.push(keep(h)) }` over `fn keep(h: Ho[S]) -> Ho[S] { h }` segfaults with 5 valgrind errors, and `for h in v { shows(h); shows(h) }` aborts, where `--interp` prints `n11 dS7 dS7 end` and `s7 s7 n1 dS7 end` | — |
 
 ### Relocated
 
@@ -3117,6 +3118,7 @@ registered in the callee's prologue, not by-value struct params in general. | �
 | B-2026-09-27-18 | interp+codegen | medium | A FRESH TEMP'S `Drop` FIELD HANDED TO A GENERIC CALLEE THAT KEEPS IT ON ONLY SOME PATHS, OR AN ENUM LEAF HANDED TO ANY KEEPING CALLEE, IS STILL WRONG… | 062289af5 |
 | B-2026-09-27-37 | codegen | high | A BY-VALUE BOXED `Option[S]` PARAM REBOUND INTO A `let mut` LOCAL IS FREED BY BOTH FRAMES FOR A NAMED ARGUMENT -- `fn rb(a: Option[S]) -> i64 { let m… | e65e0f2 |
 | B-2026-09-27-52 | codegen | high | TWO IMMUTABLE-REBIND SPELLINGS OF A BY-VALUE BOXED STRUCT PARAM THAT B-2026-09-24-20 DID NOT REACH DOUBLE-FREE ON EVERY COMPILED SURFACE -- a CHAINED… | 5accd514c |
+| B-2026-09-27-60 | codegen | medium | A `for` LOOP BINDING OVER A `Vec` OF A BOXED GENERIC ENUM, PASSED BY VALUE TO A CALLEE THAT MATCHES IT, RUNS THE PAYLOAD'S `Drop` BODY TWICE ON EVERY… | b3ab2eb44 |
 
 </details>
 
