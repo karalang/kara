@@ -92,13 +92,13 @@ distinguish "bugs flattening" from "we stopped writing them down."
 
 | class | total |
 |---|---|
-| run-vs-build | 499 |
+| run-vs-build | 500 |
 | miscompile | 477 |
-| leak | 436 |
+| leak | 437 |
 | double-free | 320 |
 | missing-feature | 209 |
 | codegen-gap | 196 |
-| other | 148 |
+| other | 150 |
 | diagnostics | 135 |
 | perf | 117 |
 | false-positive | 109 |
@@ -110,8 +110,8 @@ distinguish "bugs flattening" from "we stopped writing them down."
 
 | surface | total |
 |---|---|
-| codegen | 2142 |
-| interp | 577 |
+| codegen | 2145 |
+| interp | 580 |
 | typecheck | 309 |
 | other | 110 |
 | ownership | 77 |
@@ -130,7 +130,6 @@ _Generated from `bug-ledger.jsonl` by `scripts/bug-curve.py` (2026-05-20 → 202
 
 | id | date | surface | sev | title | tracker |
 |---|---|---|---|---|---|
-| B-2026-09-16-22 | 2026-09-16 | codegen+interp | low | AN OWNED ENUM RECEIVER THAT ESCAPES THROUGH THE RETURN RUNS ITS SHELL `Drop` BODY TWICE, AND A CHAINED CALL OVER THE SAME SHAPE RUNS NO BODY AT ALL -- `let b = a.ret_self()` prints `dE dR6 dE` and `E.A(mk(14)).ret_self().none()` prints nothing, both agreed on all four surfaces with memory balanced | — |
 | B-2026-09-16-23 | 2026-09-16 | interp | low | TWO SHADOW-REBIND SPELLINGS STILL DOUBLE THE `Drop` BODY IN THE INTERPRETER -- a NESTED BLOCK (`{ let q = idr(q); .. }`) and an `if`-WRAPPED RHS both print `dR15 dR15` against one body on `karac build`; the first is out of the retraction's SCOPE and the second is a genuine per-path question the all-paths predicate correctly declines, so they need different repairs | — |
 | B-2026-09-16-25 | 2026-09-16 | interp+codegen | low | THE OWNED-`self` ENUM RECEIVER PAYLOAD-BODY SUPPRESSION IS ALL-PATHS, NOT PATH-SENSITIVE -- a callee that takes the payload on SOME path still suppresses the caller's walk on the paths it does NOT take, so `if c { match self { E.A(r) => .. } } return 0;` called with `c == false` prints a bare `dE` and loses `dR`; same for a zero-trip `while` and an unselected match arm; B-2026-09-16-21's fix answered the ALL-PATHS-NO case only | — |
 | B-2026-09-16-26 | 2026-09-16 | interp+codegen | low | A DEPTH-1 FIELD MOVE-OUT WHOSE FIELD IS THEN BOUND BY A DESTRUCTURE RUNS THAT FIELD'S `Drop` BODY TWICE -- `let x = o.k; let Outer { h, k } = o;` prints `dR18 dR18 dR17 dR16` on all four surfaces with memory balanced; the NESTED sibling is fixed (B-2026-09-07-1) and this is not, because at depth 1 the leaf IS the moved field and owes no body at all rather than a masked one | — |
@@ -345,6 +344,10 @@ registered in the callee's prologue, not by-value struct params in general. | �
 | B-2026-09-26-59 | 2026-09-26 | codegen+interp | medium | AN `Option[Vec[D]]` HELD BY A GENERIC STRUCT, AN ARRAY ELEMENT OR AN ENUM PAYLOAD LEAKS ONE ELEMENT'S BUFFER AT `-O0` -- `G[T] { xs: Option[Vec[T]] }` at `T = D`, `Array[H, 2]` of `H { xs: Option[Vec[D]] }`, and `enum E { A(Option[Vec[D]]), B }` each lose 32 bytes in 1 block plus 36 indirectly; the enum payload also runs its element's `Drop` body on NEITHER backend | — |
 | B-2026-09-26-62 | 2026-09-26 | interp+codegen | medium | THE SPELLINGS OF B-2026-09-26-37 ITS FIX DECLINES STILL OWN A CONDITIONALLY HANDED-BACK PAYLOAD PART WRONGLY -- a TUPLE payload (`Some(t) => { if k { return t.0; } .. }` over `Option[(R, R)]`), a TWO-HOP part (`if k { return t.h.r; }`) and a TAIL yield (`Some(t) => { if k { t.r } else { .. } }`); the fresh-temp tuple spelling LOSES every element body on the compiled backends at both `k`, the rest double, and interp and compiled disagree on most cells | — |
 | B-2026-09-27-1 | 2026-09-27 | codegen | high | A GENERIC METHOD THAT HANDS A `shared`-FIELD STRUCT BACK ON ONLY SOME PATHS IS STILL USED AFTER FREE ON EVERY COMPILED SURFACE, with or without a `Drop` -- `k.gpk(s, true, w)` over `impl K { fn gpk[T](ref self, v: T, c: bool, w: T) -> T { if c { return v } return w } }` aborts under `karac run` with 2 valgrind errors at -O0 at both exits for `T = S3` and `T = S2`, the S2 cell also running a body twice (`dS6 dS6 dS5 t5 dS5` against `dS6 t5 dS5`); the remainder of B-2026-09-25-40, whose fix reached the generic FREE fn and the generic method STORE (`k.gst(s, true)`) but not this, because `compute_handback_safe_params` declines every generic impl method | — |
+| B-2026-09-27-10 | 2026-09-27 | codegen+interp | low | A CHAINED OWNED-`self` CALL WHOSE RECEIVER IS ANOTHER METHOD'S RESULT RUNS NO `Drop` BODY FOR THAT RESULT, on every surface -- `E.A(mk(14)).ret_self().none()` prints `n5` where `dE dR14 n5` is due, and a struct chain `S { r: mk(2) }.ret_self().none()` prints nothing where `dS2 dR2` is due; memory balanced | — |
+| B-2026-09-27-11 | 2026-09-27 | codegen+interp | medium | A NAMED STRUCT RECEIVER HANDED BACK WHOLE BY AN OWNED-`self` METHOD RUNS EVERY `Drop` BODY TWICE, on all four surfaces, own `Drop` or not -- `let b = a.ret_self()` over `struct S { r: R }` with `impl Drop for S` prints `dS1 dR1 dS1 dR1`, and over a plain `struct P { r: R }` prints `dR6 dR6`; a temp receiver whose method returns a fresh value loses its bodies; memory balanced | — |
+| B-2026-09-27-12 | 2026-09-27 | interp | medium | THE INTERPRETER MIS-OWNS A CONDITIONALLY-RETURNED BY-VALUE PARAM OF AN ENUM WITH ITS OWN `Drop`: `mb(a, false)` over `fn mb(e: E, c: bool) -> E { if c { return e } return E.B }` loses the payload body (`mb-new dE dE` against the compiled `mb-new dE dR2 dE`) and `mb(a, true)` runs the shell twice (`dE dR3 dE` against `dE dR3`); the always-returning `ide(q)` doubles the shell the same way | — |
+| B-2026-09-27-13 | 2026-09-27 | codegen | medium | A METHOD-CALL RESULT PASSED STRAIGHT INTO A BY-VALUE PARAM THAT HANDS IT BACK LEAKS 52 B IN 2 BLOCKS AT `-O0` -- `let b: E = f(a.ret_self())` and `f(E.A(mk(7)).ret_self())` over `fn f(e: E) -> E { return e }` (15 allocs, 13 frees) while the free-function nesting `f(g(E.A(mk(6))))` is clean; output correct on every surface | — |
 
 ### Relocated
 
@@ -2843,6 +2846,7 @@ registered in the callee's prologue, not by-value struct params in general. | �
 | B-2026-09-16-19 | codegen+interp | medium | A `Vec`-NESTING INSIDE AN `Option` OR `Map` FIELD RUNS ITS ELEMENT'S `Drop` BODY ON `--interp` AND ON NO COMPILED SURFACE -- `H { xs: Option[Vec[D]]… | 567c213fd |
 | B-2026-09-16-20 | codegen | low | `karac_string_try_inline_into` IS DEAD ABI SURFACE -- no caller anywhere in the compiler since `9d3ceb9` removed its declaration from `runtime_fns.rs… | 34211d4 |
 | B-2026-09-16-21 | codegen+interp | medium | AN OWNED ENUM RECEIVER'S PAYLOAD `Drop` BODY IS LOST WHENEVER THE CALLEE NEVER DESTRUCTURES `self` -- `let a = E.A(mk(1)); a.none()` over `fn none(se… | 0b97e71 |
+| B-2026-09-16-22 | codegen+interp | low | AN OWNED ENUM RECEIVER THAT ESCAPES THROUGH THE RETURN RUNS ITS SHELL `Drop` BODY TWICE, AND A CHAINED CALL OVER THE SAME SHAPE RUNS NO BODY AT ALL -… | ee28cd284 |
 | B-2026-09-16-24 | typecheck | medium | `partial_move_of_drop_enum` REJECTS A BORROW-PROJECTION SCRUTINEE, and it is a false positive by the rule's OWN stated terms -- the rule documents it… | 84030e8 |
 | B-2026-09-16-27 | codegen | medium | A NESTED STRUCT MOVED INTO A VARIANT CONSTRUCTOR ABORTS WITH A DOUBLE FREE -- `Wn.Full(o)` over `struct Out { i: In }` / `struct In { s: String }` di… | 602a4bd |
 | B-2026-09-16-31 | codegen | high | A GENERIC ENUM WITH A GENERIC `impl[T] Drop` SEGFAULTS AT RUNTIME ON EVERY COMPILED BACKEND WHEN AN OWNED-`self` METHOD MATCHES ON IT -- `enum G[T] {… | 3fb151a |
