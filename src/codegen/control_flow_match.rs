@@ -12303,28 +12303,88 @@ impl<'ctx> super::Codegen<'ctx> {
         // The static mask is exact only when the move runs whenever the
         // root's walk does, i.e. the walk lives in THIS frame. One frame
         // deeper (`if c { keep(x.w.r) }`) the path that skips the branch
-        // would lose the leaf's body; the one-hop route has a per-field
-        // runtime flag for that and a path has none yet, so decline.
-        // The owning frame, looking through the statement's own discard frame.
-        let frames = &self.drop_rc.scope_cleanup_actions;
-        let mut here = frames.len();
-        if here > 0 && self.drop_rc.discard_frame == Some(here - 1) {
-            here -= 1;
-        }
-        let owns_here = here > 0
-            && frames[here - 1].iter().any(|a| {
-                matches!(a,
-                    super::state::CleanupAction::UserDrop { binding_name, kind, .. }
-                        if *binding_name == root
-                            && *kind == super::state::UserDropKind::StructFieldBodies)
-            });
-        if !owns_here {
-            return;
+        // would lose the leaf's body, so that move takes a per-PATH runtime
+        // flag instead (B-2026-09-27-82), as the one-hop route does.
+        match self.nested_path_walk_frame(&root) {
+            NestedWalkFrame::Here => {}
+            NestedWalkFrame::Above => {
+                self.nested_field_move_takes_runtime_flag(&root, &path);
+                return;
+            }
+            NestedWalkFrame::Nowhere => return,
         }
         if let Some((leaf, prefix)) = path.split_last() {
             let mut only: std::collections::HashSet<u32> = std::collections::HashSet::new();
             only.insert(*leaf as u32);
             self.disarm_struct_field_tuple_elem_bodies_at(&root, prefix, &only);
+        }
+    }
+
+    /// B-2026-09-27-82 — a Drop field two or more hops down a local, moved out
+    /// one frame deeper than the local's field-bodies walk (`if c {
+    /// xs.push(x.w.r) }`). The walk stays registered unmasked; a flag keyed by
+    /// the index path, `true` in the entry block and `false` here, lets the
+    /// death site mask the leaf only on the path that ran the move. Shares
+    /// the one-hop flags' budget, and past it declines (the leaf's body then
+    /// doubles on the moving path, as it did before any flag existed).
+    fn nested_field_move_takes_runtime_flag(&mut self, root: &str, path: &[usize]) -> bool {
+        let key = Self::nested_field_move_flag_key(path);
+        let flags = self.drop_rc.field_view_flags.get(root);
+        let already = flags.map(|m| m.len()).unwrap_or(0);
+        let have = flags.is_some_and(|m| m.contains_key(&key));
+        if already + usize::from(!have) > Self::FIELD_VIEW_SELECT_MAX {
+            return false;
+        }
+        let Some(flag) = self.field_view_flag_for(root, &key) else {
+            return false;
+        };
+        self.builder
+            .build_store(flag, self.context.bool_type().const_int(0, false))
+            .is_ok()
+    }
+
+    /// B-2026-09-27-82 — which cleanup frame holds `root`'s field-bodies walk,
+    /// relative to the move being compiled: the innermost one (looking through
+    /// the statement's own discard frame), an enclosing one, or none.
+    fn nested_path_walk_frame(&self, root: &str) -> NestedWalkFrame {
+        let frames = &self.drop_rc.scope_cleanup_actions;
+        let mut here = frames.len();
+        if here > 0 && self.drop_rc.discard_frame == Some(here - 1) {
+            here -= 1;
+        }
+        let owns = |f: &Vec<super::state::CleanupAction<'ctx>>| {
+            f.iter().any(|a| {
+                matches!(a,
+                    super::state::CleanupAction::UserDrop { binding_name, kind, .. }
+                        if binding_name == root
+                            && *kind == super::state::UserDropKind::StructFieldBodies)
+            })
+        };
+        if here > 0 && owns(&frames[here - 1]) {
+            NestedWalkFrame::Here
+        } else if frames[..here.saturating_sub(1)].iter().any(owns) {
+            NestedWalkFrame::Above
+        } else {
+            NestedWalkFrame::Nowhere
+        }
+    }
+
+    /// B-2026-09-27-82 — mask the leaf at `path` (two or more hops) out of
+    /// `root`'s walk for a move-out: statically when the walk lives in this
+    /// frame, and through a per-path runtime flag when it lives in an
+    /// enclosing one (`if c { let y = x.w.r }`, `if c { return x.w.r }`),
+    /// where the static mask lost the leaf's body on the path that skipped
+    /// the move. Past the flag budget the static mask stays, as before.
+    pub(super) fn disarm_nested_path_move_bodies(&mut self, root: &str, path: &[usize]) {
+        if path.len() >= 2
+            && self.nested_path_walk_frame(root) == NestedWalkFrame::Above
+            && self.nested_field_move_takes_runtime_flag(root, path)
+        {
+            return;
+        }
+        if let Some((leaf, prefix)) = path.split_last() {
+            let only: std::collections::HashSet<u32> = std::iter::once(*leaf as u32).collect();
+            self.disarm_struct_field_tuple_elem_bodies_at(root, prefix, &only);
         }
     }
 
@@ -12418,12 +12478,7 @@ impl<'ctx> super::Codegen<'ctx> {
                 } else if let Some((root, path)) = self.projection_field_index_path(e) {
                     // Two or more hops (`return w.p.r`): the nested-path mask the
                     // `let` site writes for the same chain, leaf index only.
-                    if let Some((leaf, prefix)) = path.split_last() {
-                        let mut only: std::collections::HashSet<u32> =
-                            std::collections::HashSet::new();
-                        only.insert(*leaf as u32);
-                        self.disarm_struct_field_tuple_elem_bodies_at(&root, prefix, &only);
-                    }
+                    self.disarm_nested_path_move_bodies(&root, &path);
                 }
             }
             ExprKind::StructLiteral { fields, .. } => {
@@ -23077,4 +23132,13 @@ enum BoxedPayloadShape {
 pub(super) enum ArmScope<'a> {
     Block(&'a crate::ast::Block),
     LetElseRest(&'a crate::ast::Block),
+}
+
+/// B-2026-09-27-82 — where a root's field-bodies walk lives relative to the
+/// move being compiled; see `Codegen::nested_path_walk_frame`.
+#[derive(Clone, Copy, PartialEq, Eq)]
+enum NestedWalkFrame {
+    Here,
+    Above,
+    Nowhere,
 }

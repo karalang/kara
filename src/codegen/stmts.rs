@@ -11509,12 +11509,7 @@ impl<'ctx> super::Codegen<'ctx> {
                                         };
                                         match nested_path {
                                             Some((_, path)) => {
-                                                let (hops, leaf) = path.split_at(path.len() - 1);
-                                                let only: std::collections::HashSet<u32> =
-                                                    std::iter::once(leaf[0] as u32).collect();
-                                                self.disarm_struct_field_tuple_elem_bodies_at(
-                                                    src, hops, &only,
-                                                );
+                                                self.disarm_nested_path_move_bodies(src, &path);
                                             }
                                             // B-2026-09-17-34 — a source that
                                             // is an arm binding over a heap-

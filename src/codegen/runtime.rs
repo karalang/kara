@@ -14178,7 +14178,25 @@ impl<'ctx> super::Codegen<'ctx> {
             })
             .unwrap_or_default();
         viewed.sort_by_key(|(_, i, _)| *i);
-        if viewed.is_empty() || viewed.len() > Self::FIELD_VIEW_SELECT_MAX {
+        // B-2026-09-27-82 — a Drop field two or more hops down, moved out on
+        // only SOME paths (`if c { xs.push(x.w.r) }`), keys its flag by the
+        // field-index PATH (`@0.0`, see `Self::nested_field_move_flag_key`).
+        // The walk stays unmasked and the flag selects the masked one here.
+        let mut nested: Vec<(Vec<usize>, PointerValue<'ctx>)> = self
+            .drop_rc
+            .field_view_flags
+            .get(binding_name)
+            .map(|m| {
+                m.iter()
+                    .filter_map(|(k, flag)| {
+                        Self::parse_nested_field_move_flag_key(k).map(|p| (p, *flag))
+                    })
+                    .collect()
+            })
+            .unwrap_or_default();
+        nested.sort_by(|a, b| a.0.cmp(&b.0));
+        let total = viewed.len() + nested.len();
+        if total == 0 || total > Self::FIELD_VIEW_SELECT_MAX {
             self.emit_user_drop_call_guarded(binding_name, drop_fn, ptr, call_name);
             return;
         }
@@ -14188,17 +14206,35 @@ impl<'ctx> super::Codegen<'ctx> {
         // and those reasons silence every field, which is what it already did.
         let outer = self.open_cond_move_guard(binding_name);
         let mut disarmed: Vec<usize> = Vec::new();
+        let mut disarmed_paths: Vec<Vec<usize>> = Vec::new();
         self.emit_field_view_leaf_tree(
             binding_name,
             type_name,
             drop_fn,
             ptr,
             call_name,
-            &viewed,
+            (&viewed, &nested),
             0,
-            &mut disarmed,
+            (&mut disarmed, &mut disarmed_paths),
         );
         self.close_cond_move_guard(outer);
+    }
+
+    /// B-2026-09-27-82 — the `field_view_flags` key for a conditional move of
+    /// the field at index `path` (two or more hops) out of a binding. Prefixed
+    /// `@` so it can never equal a one-hop key (a field NAME) or a tuple
+    /// element's `#<i>`, which is what lets both keep sharing the map and its
+    /// save/restore sites.
+    pub(super) fn nested_field_move_flag_key(path: &[usize]) -> String {
+        let parts: Vec<String> = path.iter().map(|i| i.to_string()).collect();
+        format!("@{}", parts.join("."))
+    }
+
+    /// Inverse of [`Self::nested_field_move_flag_key`].
+    fn parse_nested_field_move_flag_key(key: &str) -> Option<Vec<usize>> {
+        let rest = key.strip_prefix('@')?;
+        let path: Option<Vec<usize>> = rest.split('.').map(|p| p.parse().ok()).collect();
+        path.filter(|p| p.len() >= 2)
     }
 
     /// At most this many viewed fields get a runtime-selected walker; see
@@ -14217,11 +14253,14 @@ impl<'ctx> super::Codegen<'ctx> {
         drop_fn: FunctionValue<'ctx>,
         ptr: PointerValue<'ctx>,
         call_name: &str,
-        viewed: &[(String, usize, PointerValue<'ctx>)],
+        flags: FieldViewFlags<'_, 'ctx>,
         pos: usize,
-        disarmed: &mut Vec<usize>,
+        disarmed: (&mut Vec<usize>, &mut Vec<Vec<usize>>),
     ) {
-        if pos == viewed.len() {
+        let (viewed, nested) = flags;
+        let (disarmed, disarmed_paths) = disarmed;
+        let fn_val = self.current_fn;
+        if pos == viewed.len() + nested.len() || fn_val.is_none() {
             self.emit_field_view_leaf_call(
                 binding_name,
                 type_name,
@@ -14229,23 +14268,16 @@ impl<'ctx> super::Codegen<'ctx> {
                 ptr,
                 call_name,
                 viewed,
-                disarmed,
+                (disarmed, disarmed_paths),
             );
             return;
         }
-        let Some(fn_val) = self.current_fn else {
-            self.emit_field_view_leaf_call(
-                binding_name,
-                type_name,
-                drop_fn,
-                ptr,
-                call_name,
-                viewed,
-                disarmed,
-            );
-            return;
+        let fn_val = fn_val.unwrap();
+        // One-hop flags first, then the B-2026-09-27-82 path flags.
+        let flag = match viewed.get(pos) {
+            Some(v) => v.2,
+            None => nested[pos - viewed.len()].1,
         };
-        let flag = viewed[pos].2;
         let armed_bb = self.context.append_basic_block(fn_val, "fvsel.armed");
         let viewed_bb = self.context.append_basic_block(fn_val, "fvsel.viewed");
         let cont_bb = self.context.append_basic_block(fn_val, "fvsel.cont");
@@ -14257,43 +14289,38 @@ impl<'ctx> super::Codegen<'ctx> {
         self.builder
             .build_conditional_branch(armed, armed_bb, viewed_bb)
             .unwrap();
-        self.builder.position_at_end(armed_bb);
-        self.emit_field_view_leaf_tree(
-            binding_name,
-            type_name,
-            drop_fn,
-            ptr,
-            call_name,
-            viewed,
-            pos + 1,
-            disarmed,
-        );
-        if self
-            .builder
-            .get_insert_block()
-            .is_some_and(|b| b.get_terminator().is_none())
-        {
-            self.builder.build_unconditional_branch(cont_bb).unwrap();
-        }
-        self.builder.position_at_end(viewed_bb);
-        disarmed.push(viewed[pos].1);
-        self.emit_field_view_leaf_tree(
-            binding_name,
-            type_name,
-            drop_fn,
-            ptr,
-            call_name,
-            viewed,
-            pos + 1,
-            disarmed,
-        );
-        disarmed.pop();
-        if self
-            .builder
-            .get_insert_block()
-            .is_some_and(|b| b.get_terminator().is_none())
-        {
-            self.builder.build_unconditional_branch(cont_bb).unwrap();
+        for (bb, off) in [(armed_bb, false), (viewed_bb, true)] {
+            self.builder.position_at_end(bb);
+            if off {
+                match viewed.get(pos) {
+                    Some(v) => disarmed.push(v.1),
+                    None => disarmed_paths.push(nested[pos - viewed.len()].0.clone()),
+                }
+            }
+            self.emit_field_view_leaf_tree(
+                binding_name,
+                type_name,
+                drop_fn,
+                ptr,
+                call_name,
+                (viewed, nested),
+                pos + 1,
+                (&mut *disarmed, &mut *disarmed_paths),
+            );
+            if off {
+                if pos < viewed.len() {
+                    disarmed.pop();
+                } else {
+                    disarmed_paths.pop();
+                }
+            }
+            if self
+                .builder
+                .get_insert_block()
+                .is_some_and(|b| b.get_terminator().is_none())
+            {
+                self.builder.build_unconditional_branch(cont_bb).unwrap();
+            }
         }
         self.builder.position_at_end(cont_bb);
     }
@@ -14391,9 +14418,10 @@ impl<'ctx> super::Codegen<'ctx> {
         ptr: PointerValue<'ctx>,
         call_name: &str,
         viewed: &[(String, usize, PointerValue<'ctx>)],
-        disarmed: &[usize],
+        disarmed: (&[usize], &[Vec<usize>]),
     ) {
-        if disarmed.is_empty() {
+        let (disarmed, disarmed_paths) = disarmed;
+        if disarmed.is_empty() && disarmed_paths.is_empty() {
             self.builder
                 .build_call(drop_fn, &[ptr.into()], call_name)
                 .unwrap();
@@ -14422,7 +14450,19 @@ impl<'ctx> super::Codegen<'ctx> {
             }
         }
         here.extend(disarmed.iter().copied());
-        let skip = self.field_skip_tree_for_var(binding_name, here);
+        let mut skip = self.field_skip_tree_for_var(binding_name, here);
+        // B-2026-09-27-82 — a path whose flag read `false` on this path masks
+        // its leaf on the walker of the struct that owns it, one `nested`
+        // level per hop, as `field_skip_tree_for_var` does for a static path.
+        for path in disarmed_paths {
+            if let Some((leaf, prefix)) = path.split_last() {
+                let mut cur = &mut skip;
+                for hop in prefix {
+                    cur = cur.nested.entry(*hop).or_default();
+                }
+                cur.here.insert(*leaf);
+            }
+        }
         if let Some(masked) = self.emit_user_drop_field_bodies_fn_skipping(type_name, &subst, &skip)
         {
             self.builder
@@ -21404,3 +21444,10 @@ enum FirstHop<'a> {
     Field(&'a str),
     Elem(u32),
 }
+
+/// The two flag families `emit_field_view_leaf_tree` branches over: one-hop
+/// fields `(name, index, flag)` and B-2026-09-27-82's index paths.
+type FieldViewFlags<'a, 'ctx> = (
+    &'a [(String, usize, PointerValue<'ctx>)],
+    &'a [(Vec<usize>, PointerValue<'ctx>)],
+);
