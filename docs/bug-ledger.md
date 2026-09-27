@@ -93,7 +93,7 @@ distinguish "bugs flattening" from "we stopped writing them down."
 | class | total |
 |---|---|
 | run-vs-build | 506 |
-| miscompile | 487 |
+| miscompile | 489 |
 | leak | 441 |
 | double-free | 324 |
 | missing-feature | 209 |
@@ -110,8 +110,8 @@ distinguish "bugs flattening" from "we stopped writing them down."
 
 | surface | total |
 |---|---|
-| codegen | 2170 |
-| interp | 593 |
+| codegen | 2172 |
+| interp | 595 |
 | typecheck | 309 |
 | other | 111 |
 | ownership | 77 |
@@ -347,7 +347,6 @@ registered in the callee's prologue, not by-value struct params in general. | �
 | B-2026-09-27-15 | 2026-09-27 | codegen | high | A BINDING MOVED INSIDE A LOOP BODY (RC FALLBACK) IS FREED TWICE ON EVERY COMPILED SURFACE -- `let q = mk(5); while i < 1 { let p = q; .. }` aborts with `free(): double free detected in tcache 2` on the JIT, -O0, -O2 and nopar, and the spellings that hand it through a call run its `Drop` body a second time after the loop (`p=15 dR15 end dR15`) | — |
 | B-2026-09-27-16 | 2026-09-27 | codegen+interp | high | A CLOSURE THAT CAPTURES A `Drop` VALUE RUNS ITS BODY BEFORE THE CLOSURE IS CALLED, AND ONE THAT MOVES THE CAPTURE DOUBLE-FREES IT ON EVERY COMPILED SURFACE -- `let g = || { let p = q; .. }; g()` aborts with `double free` compiled and prints `dR9 p=9 dR9` under `--interp`; `|| { eat(q) }` reads freed memory (5 invalid reads at -O0) | — |
 | B-2026-09-27-17 | 2026-09-27 | interp+codegen | medium | A FRESH TEMP'S `Drop` FIELD PASSED AS A `mut ref` ARGUMENT RUNS ITS BODY ON THE PRE-CALL VALUE ON ALL FOUR SURFACES -- `grow(mut mkw(7).r)` over `fn grow(d: mut ref D) { d.id = d.id + 1; }` prints `dD107n107 dD7n7 end` where the callee made it `dD8n7`; the named-root spelling `let mut w = mkw(7); grow(mut w.r)` prints `dD107n107 dD8n7 end` | — |
-| B-2026-09-27-18 | 2026-09-27 | interp+codegen | medium | A FRESH TEMP'S `Drop` FIELD HANDED TO A GENERIC CALLEE THAT KEEPS IT ON ONLY SOME PATHS, OR AN ENUM LEAF HANDED TO ANY KEEPING CALLEE, IS STILL WRONG AFTER B-2026-09-26-46 -- `gmaybe(mkw(7).r, c)` never runs `s`'s `dD107n107` on either leg (the non-generic `maybe` does), `gid(mkv(1).g)` never runs the siblings' bodies, and the non-generic `keepg(mkv(1).g)` runs every body but leaks the payload's 3 B | — |
 | B-2026-09-27-30 | 2026-09-27 | codegen | medium | `let x = v.pop()` OVER A `Vec` WHOSE ELEMENT A USER STRUCT OR ENUM LAYS INLINE IN `Option`'s PAYLOAD AREA HAS NO OWNER -- `Vec[S3]` (`S3 { h: Sh, id: i64 }`, `Sh` shared) loses the `Sh` box (16 B) and `Vec[Ho[String]]` the payload box (24 B direct + 4 B indirect) at -O0 on every compiled surface; a 4-word `Vec[P1]` element, which `Option` BOXES, is clean | — |
 | B-2026-09-27-31 | 2026-09-27 | codegen | medium | A BOXED GENERIC-ENUM VALUE STILL LEAKS ITS BOX EVERYWHERE B-2026-09-26-12's LOCAL-`Vec` OWNER DOES NOT REACH -- an `Array[Ho[String], 2]` element, a `Map[i64, Ho[String]]` value, a `let o: Option[Ho[String]] = Some(..)` payload and a DISCARDED `v.remove(0);` each lose 24 B direct + 4 B indirect at -O0 on every compiled surface; every local-`Vec` position, and `let y = v.remove(0)`, is clean | — |
 | B-2026-09-27-32 | 2026-09-27 | codegen | medium | AN INDEX-ASSIGN WHOSE RIGHT-HAND SIDE IS A UNIT VARIANT RUNS NO `Drop` BODY FOR THE DISPLACED ELEMENT ON ANY COMPILED SURFACE -- `v[0] = Mo.Empty` over `Vec[Mo]`, `enum Mo { Full(R), Empty }`, prints `n1 end` where `--interp` prints `dR12 n1 end`; the same store with `Mo.Full(R { id: 13 })` on the right is correct | — |
@@ -361,6 +360,8 @@ registered in the callee's prologue, not by-value struct params in general. | �
 | B-2026-09-27-45 | 2026-09-27 | interp+codegen | low | A `Vec`-TYPED FIELD MOVED OUT AND THEN BOUND BY A DESTRUCTURE RUNS ITS ELEMENTS' `Drop` BODIES TWICE ON EVERY SURFACE -- `let x = o.v; let V { a, v } = o;` over `struct V { a: R, v: Vec[R] }` prints `dR2 dR3` twice with memory balanced; the struct- and `Option`-typed spellings of the same shape were fixed by B-2026-09-16-26 and this one was deliberately left agreeing | — |
 | B-2026-09-27-46 | 2026-09-27 | interp+codegen | medium | A FIELD MOVED OUT INSIDE AN `if` THAT FALLS THROUGH, THEN BOUND BY A DESTRUCTURE, RUNS ITS `Drop` BODY TWICE ON EVERY SURFACE -- `if c { let x = o.k; .. } let Outer { h, k } = o;` with `c` true prints `x=3 dR3 dR3`; the move promotes `o` to RC fallback, which B-2026-09-16-26's hand-off does not cover, and with `c` false the compiled surfaces also run the unread leaves' bodies after `end` where `--interp` runs them at the destructure | — |
 | B-2026-09-27-47 | 2026-09-27 | codegen | medium | A LEAF BOUND BY A NESTED STRUCT SUB-PATTERN RUNS ITS `Drop` BODY AT THE DESTRUCTURE ON EVERY COMPILED SURFACE, BEFORE THE STATEMENTS THAT STILL READ IT -- `let Outer { h: Inner { r, q }, k } = o; println(f"r={r.id}")` prints `dR1` before `r=1` compiled and after it under `--interp`; no move-out is needed | — |
+| B-2026-09-27-48 | 2026-09-27 | interp+codegen | medium | A FRESH TEMP'S `Drop` FIELD HANDED TO A GENERIC CALLEE THAT KEEPS IT ON ONLY SOME PATHS STILL LOSES THE SIBLINGS' BODIES ON ALL FOUR SURFACES WHEN THE LEAF CARRIES A `shared` FIELD, IS AN ENUM, OR IS LENT ON TO A CALLEE THAT STORES IT CONDITIONALLY -- `gmaybe(mkv(1).f, c)` prints `dF11 o end` owing `dD31n31 dD21n21 dE1`, `gmaybe(mkv(1).g, true)` prints `dD21n21 o end` owing `dD31n31 dF11 dE1`, and `gl(mut v, mkw(7).r)` prints `g1 l1 dD7n7 end` owing `dD107n107` | — |
+| B-2026-09-27-49 | 2026-09-27 | interp+codegen | medium | A USER-ENUM BY-VALUE PARAM A CALLEE WRAPS IN `Some` ON ONE PATH NEVER RUNS ITS PAYLOAD'S `Drop` BODY ON THE PATH WHERE IT DIES INSIDE, ON ALL FOUR SURFACES -- `let g = G.A(mkd(21)); let o = gmaybeg(g, false)` over `fn gmaybeg(x: G, c: bool) -> Option[G] { if c { return Some(x); } None }` prints `o end` owing `dD21n21 o end`; the struct twin `maybe(d, false)` and an enum callee that never wraps it both run the body | — |
 
 ### Relocated
 
@@ -3100,6 +3101,7 @@ registered in the callee's prologue, not by-value struct params in general. | �
 | B-2026-09-27-2 | interp+codegen | high | MOVING AN ELEMENT OUT OF A LOCAL TUPLE BY `return t.0` OR A TAIL `t.0` RUNS ITS Drop BODY TWICE IN THE INTERPRETER, AND A CONDITIONAL MOVE (`if k { r… | e39f58c |
 | B-2026-09-27-3 | interp+codegen | high | A PROJECTION MOVED OUT IN A VALUE POSITION OTHER THAN `let x = p.f` / `return` / a function tail RUNS ITS Drop BODY TWICE ON EVERY BACKEND -- `let x… | bd5b43d |
 | B-2026-09-27-14 | interp+codegen | medium | TWO SPELLINGS OF B-2026-09-27-3 ITS FIX LEAVES AS THEY WERE: a STRUCT field at the tail of an `if` passed as a CALL ARGUMENT (`show(if k { p.a } else… | e06d859 |
+| B-2026-09-27-18 | interp+codegen | medium | A FRESH TEMP'S `Drop` FIELD HANDED TO A GENERIC CALLEE THAT KEEPS IT ON ONLY SOME PATHS, OR AN ENUM LEAF HANDED TO ANY KEEPING CALLEE, IS STILL WRONG… | 062289af5 |
 
 </details>
 
