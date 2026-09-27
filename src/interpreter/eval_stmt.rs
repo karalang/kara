@@ -10441,6 +10441,31 @@ impl<'a> super::Interpreter<'a> {
                             },
                         };
                         let Some(leaf) = leaf else { continue };
+                        // B-2026-09-16-26 — the DEPTH-1 twin. `let x = o.k;`
+                        // records the flat `(o, "k")`, and at depth 1 there is
+                        // no hop to mask INSIDE: the leaf `k` IS the moved
+                        // field, whose bodies `x` now owns. So the leaf owes
+                        // no body at all — disarm it on every channel the
+                        // prefix strip below would otherwise have masked
+                        // (`dR18 dR18` → `dR18`, on all four surfaces).
+                        // A container-typed leaf (`Vec`, `Map`, ...) is left
+                        // armed: its compiled twin records that move on another
+                        // channel, which the codegen hand-off does not read yet
+                        // (B-2026-09-27-45), and a fix on one backend alone
+                        // would turn an agreed double into a divergence.
+                        let leaf_is_aggregate = matches!(
+                            self.env.get(&leaf),
+                            Some(Value::Struct { .. } | Value::EnumVariant { .. })
+                        );
+                        if leaf_is_aggregate
+                            && self
+                                .moved_out_struct_field_bodies
+                                .contains(&(src.clone(), fp.name.clone()))
+                        {
+                            self.record_container_move_source_name(&leaf);
+                            self.record_returned_arg_user_drop_move(&leaf);
+                            continue;
+                        }
                         for path in &nested {
                             if path.len() < 2 || path[0] != fp.name {
                                 continue;

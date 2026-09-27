@@ -12469,6 +12469,20 @@ impl<'ctx> super::Codegen<'ctx> {
                                         )
                                     }
                                 } else {
+                                    // B-2026-09-16-26 — and a FRESH binding
+                                    // CLEARS them, the interpreter's rule
+                                    // (`rearm_container_bodies_for_name`).
+                                    // Declining to consult a stale mask kept
+                                    // this walker whole, but the entry stayed
+                                    // behind for the destructure's leaf
+                                    // hand-off to read: `let x = o.k; let o =
+                                    // Outer { .. }; let Outer { h, k } = o;`
+                                    // took the OLD `o`'s move-out as the new
+                                    // one's and ran `k`'s body nowhere.
+                                    self.type_decls.struct_moved_field_bodies.remove(var_name);
+                                    self.type_decls
+                                        .struct_moved_nested_field_bodies
+                                        .remove(var_name);
                                     self.emit_user_drop_field_bodies_fn(&struct_name, &subst)
                                 };
                                 // B-2026-09-02-1 — MEMORY BEFORE BODIES, the
@@ -16416,6 +16430,19 @@ impl<'ctx> super::Codegen<'ctx> {
         let BasicValueEnum::StructValue(sv) = val else {
             return Ok(());
         };
+        // B-2026-09-16-26 — the fields an EARLIER statement moved out of the
+        // source, read before this destructure records its own leaves in the
+        // same map (every bound field is "moved out" of the source from here
+        // on, which is not the question the leaf hand-off below asks).
+        let moved_before: std::collections::HashSet<usize> = match &value.kind {
+            ExprKind::Identifier(src) => self
+                .type_decls
+                .struct_moved_field_bodies
+                .get(src)
+                .cloned()
+                .unwrap_or_default(),
+            _ => Default::default(),
+        };
         // B-2026-09-05-3 — resolve the declared field types under the SOURCE's
         // instantiation before any leaf is classified. `struct_field_type_exprs`
         // holds the declaration's spelling, so for `Gd[T] { r: T, z: i64 }`
@@ -17821,6 +17848,54 @@ impl<'ctx> super::Codegen<'ctx> {
         // what puts the axis on the bound leaf rather than on the destructure.
         // Interpreter twin: the prefix-strip block in `eval_stmt.rs`, after
         // `bind_pattern`.
+        // B-2026-09-16-26 — the DEPTH-1 twin of the prefix strip below.
+        // `let x = o.k;` records the FLAT `struct_moved_field_bodies[o] =
+        // {k}`, and at depth 1 there is no hop to mask inside: the leaf `k`
+        // IS the moved field, whose bodies `x` now owns. So the leaf owes no
+        // body at all — retract its own body (keeping the memory, which the
+        // move-out already balanced) and its field and element walks, or it
+        // runs the body a second time (`dR18 dR18`, on all four surfaces).
+        // Interpreter twin: the same check at the head of the leaf loop in
+        // `eval_stmt.rs`.
+        if let Some(src) = place_body_src.as_deref() {
+            let flat = &moved_before;
+            if !flat.is_empty() {
+                for fp in fields {
+                    let leaf = match &fp.pattern {
+                        None => Some(fp.name.clone()),
+                        Some(p) => match &p.kind {
+                            PatternKind::Binding(n) => Some(n.clone()),
+                            _ => None,
+                        },
+                    };
+                    let (Some(leaf), Some(idx)) =
+                        (leaf, field_names.iter().position(|n| *n == fp.name))
+                    else {
+                        continue;
+                    };
+                    if !flat.contains(&idx) {
+                        continue;
+                    }
+                    // A field with a per-field FLAG was moved on only some
+                    // paths (`if c { return o.k }`), and every path that moved
+                    // it left before reaching this statement — a move that
+                    // falls through is RC-promoted instead — so here the leaf
+                    // still owns its body. Only an unconditional move-out
+                    // hands the body away.
+                    let flagged = self
+                        .drop_rc
+                        .field_view_flags
+                        .get(src)
+                        .is_some_and(|m| m.contains_key(&fp.name));
+                    if flagged {
+                        continue;
+                    }
+                    self.suppress_user_drop_body_keeping_memory(&leaf);
+                    self.suppress_struct_field_bodies_for_var(&leaf);
+                    self.suppress_container_elem_bodies_for_var(&leaf);
+                }
+            }
+        }
         if let Some(src) = place_body_src.as_deref() {
             let nested: Vec<(Vec<usize>, Vec<usize>)> = self
                 .type_decls

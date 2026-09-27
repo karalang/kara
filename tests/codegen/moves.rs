@@ -1012,6 +1012,54 @@ fn main() {
     assert_eq!(out, "stmt\n  1\nloop\n  2\nblock\n  3\nmatch\n  4\nkept\n  kept 26\n  5\nnested\n  6\ncallerdiscard\n  26\ncallerkept\n  26\n  26\ntwoinst\n  7\n  8\nend\n");
 }
 
+/// B-2026-09-16-26 — A DEPTH-1 FIELD MOVE-OUT WHOSE FIELD IS THEN BOUND BY A
+/// DESTRUCTURE RAN THAT FIELD'S `Drop` BODY TWICE, on every surface with memory
+/// balanced. `let x = o.k; let Outer { h, k } = o;` gave the bound leaf `k` a
+/// Drop slot of its own over a field `x` already owned. B-2026-09-07-1 fixed
+/// the same shape one hop down by MASKING the moved leaf inside the bound hop;
+/// at depth 1 there is nothing inside to mask, so the leaf owes no body at all.
+///
+/// `bound`, `renamed` (`k: kk`), `inner` (a field whose type has no `Drop` of
+/// its own but carries two `Drop` fields) and `option` (`Option[R]`, which only
+/// `--interp` doubled) are the fixed cells. `rebound` is the shape the first
+/// codegen draft broke: the move-out record is keyed by NAME, so a fresh `let`
+/// of the same name has to clear it or the new binding's leaf reads the old
+/// generation's move and runs its body nowhere. `param` (a by-value param
+/// root), `early`/`kept` (a move on a path that leaves, which never reaches the
+/// destructure) and `wild` (`k: _`) are controls that were already right.
+///
+/// Twin of `tests/interpreter/moves.rs`'s
+/// `test_depth1_field_move_out_then_bound_leaf_runs_each_body_once`, byte-identical source and expectation.
+#[test]
+fn e2e_depth1_field_move_out_then_bound_leaf_runs_each_body_once() {
+    let Some(out) = run_program(
+        r#"struct R { id: i64, name: String }
+    impl Drop for R { fn drop(mut ref self) { println(f"  dR{self.id}/{self.name}") } }
+    fn mk(i: i64) -> R { return R { id: i, name: f"n{i}" } }
+    struct Inner { r: R, q: R }
+    struct Outer { h: Inner, k: R }
+    struct P { a: R, m: Option[R] }
+    fn param(o: Outer) { let x: R = o.k; println(f"  x={x.id}"); let Outer { h, k } = o; }
+    fn early(c: bool) -> i64 { let o: Outer = Outer { h: Inner { r: mk(18), q: mk(19) }, k: mk(20) }; if c { let x: R = o.k; return x.id } let Outer { h, k } = o; 0 }
+    fn main() {
+        println("bound");   { let o: Outer = Outer { h: Inner { r: mk(1), q: mk(2) }, k: mk(3) }; let x: R = o.k; println(f"  x={x.id}"); let Outer { h, k } = o; }
+        println("renamed"); { let o: Outer = Outer { h: Inner { r: mk(4), q: mk(5) }, k: mk(6) }; let x: R = o.k; println(f"  x={x.id}"); let Outer { h, k: kk } = o; }
+        println("inner");   { let o: Outer = Outer { h: Inner { r: mk(7), q: mk(8) }, k: mk(9) }; let x: Inner = o.h; println(f"  x={x.r.id}"); let Outer { h, k } = o; }
+        println("option");  { let o: P = P { a: mk(10), m: Some(mk(11)) }; let x: Option[R] = o.m; println("  x"); let P { a, m } = o; }
+        println("param");   param(Outer { h: Inner { r: mk(12), q: mk(13) }, k: mk(14) });
+        println("rebound"); { let o: Outer = Outer { h: Inner { r: mk(15), q: mk(16) }, k: mk(17) }; let x: R = o.k; println(f"  x={x.id}"); let o: Outer = Outer { h: Inner { r: mk(21), q: mk(22) }, k: mk(23) }; let Outer { h, k } = o; }
+        println("early");   println(f"  {early(true)}");
+        println("kept");    println(f"  {early(false)}");
+        println("wild");    { let o: Outer = Outer { h: Inner { r: mk(24), q: mk(25) }, k: mk(26) }; let x: R = o.k; println(f"  x={x.id}"); let Outer { h, k: _ } = o; }
+        println("end");
+    }
+    "#,
+    ) else {
+        return;
+    };
+    assert_eq!(out, "bound\n  x=3\n  dR3/n3\n  dR2/n2\n  dR1/n1\nrenamed\n  x=6\n  dR6/n6\n  dR5/n5\n  dR4/n4\ninner\n  x=7\n  dR8/n8\n  dR7/n7\n  dR9/n9\noption\n  dR11/n11\n  x\n  dR10/n10\nparam\n  x=14\n  dR14/n14\n  dR13/n13\n  dR12/n12\nrebound\n  dR16/n16\n  dR15/n15\n  x=17\n  dR17/n17\n  dR23/n23\n  dR22/n22\n  dR21/n21\nearly\n  dR20/n20\n  dR19/n19\n  dR18/n18\n  20\nkept\n  dR20/n20\n  dR19/n19\n  dR18/n18\n  0\nwild\n  x=26\n  dR26/n26\n  dR25/n25\n  dR24/n24\nend\n");
+}
+
 /// B-2026-09-07-1 — A DEEP-CHAIN MOVE-OUT WHOSE HOP IS THEN BOUND OUT RAN THE
 /// MOVED LEAF'S `Drop` BODY TWICE, and the compiled second fire read a HUSK.
 ///
