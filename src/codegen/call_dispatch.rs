@@ -1676,6 +1676,12 @@ impl<'ctx> super::Codegen<'ctx> {
         // Resolved in the loop below and consumed after the call, where the
         // returned value exists to compare against.
         let mut maybe_handed_back_args: Vec<String> = Vec::new();
+        // B-2026-09-27-94 — the fresh-temp twin: a temp's box slot this call may
+        // hand back, asked of the returned value by the same compare.
+        let mut maybe_handed_back_slots: Vec<(
+            PointerValue<'ctx>,
+            inkwell::types::BasicTypeEnum<'ctx>,
+        )> = Vec::new();
         for (i, a) in args.iter().enumerate() {
             // B-2026-06-20-1: a bare named `fn` passed to a `Fn(...)`-typed
             // parameter is reified into the closure fat-pointer ABI
@@ -2374,7 +2380,11 @@ impl<'ctx> super::Codegen<'ctx> {
             // B-2026-08-05-7, B-2026-09-06-56 — a fresh-temp boxed
             // `Option` / `Result` argument's box; shared with the method and
             // associated-function loops since B-2026-09-27-54.
-            self.register_boxed_optres_arg_temp(&name, i, &a.value, val, flows_into_return);
+            if let Some(slot) =
+                self.register_boxed_optres_arg_temp(&name, i, &a.value, val, flows_into_return)
+            {
+                maybe_handed_back_slots.push(slot);
+            }
             // B-2026-09-17-34 — the NAMED-LOCAL spelling of the mask above.
             //
             // `let a = Some(Hd { .. }); eat(a);` never reaches the fresh-temp
@@ -3281,6 +3291,9 @@ impl<'ctx> super::Codegen<'ctx> {
             // the question is asked of the returned VALUE.
             for src in &maybe_handed_back_args {
                 self.zero_boxed_binding_if_call_returned_its_box(src, v);
+            }
+            for (ptr, ty) in &maybe_handed_back_slots {
+                self.zero_boxed_slot_if_call_returned_its_box(*ptr, *ty, v);
             }
             // LazyFrame codegen twin — rule 3 of the ownership model
             // (`src/codegen/lazyframe.rs`): a user fn DECLARED to return
@@ -4220,7 +4233,22 @@ impl<'ctx> super::Codegen<'ctx> {
         arg: &Expr,
         val: BasicValueEnum<'ctx>,
         flows_into_return: bool,
-    ) {
+    ) -> Option<(PointerValue<'ctx>, inkwell::types::BasicTypeEnum<'ctx>)> {
+        // B-2026-09-27-94 — a param the callee MAY hand back (`fn mf(a:
+        // Option[S], c: bool) -> Option[S] { if c { a } else { None } }`). The
+        // callee runs the payload's bodies on the leg that keeps it and frees
+        // nothing, so on that leg the temp's box and interior were nobody's:
+        // 61 B per call. The caller now owns them on both legs and the post-call
+        // compare (`zero_boxed_slot_if_call_returned_its_box`, the named
+        // binding's B-2026-09-20-52 disarm) takes the box back off the caller
+        // on the leg whose result IS it. Only where the return is the param's
+        // one way out: a store hands the box to a container instead.
+        let handback_checked = flows_into_return
+            && self.callee_param_ast(name, i).is_some_and(|(f, ast_i)| {
+                !crate::ast::fn_moves_param_into_outliving_place(f, ast_i)
+                    && !crate::ast::fn_moves_param_into_local_container_any(f, ast_i)
+            });
+        let mut handback_slot = None;
         // B-2026-08-05-7 — the same shape once more, now for an `Option[T]`
         // whose payload `T` was HEAP-BOXED because its LLVM width exceeds
         // Option's seeded 3-word area (`coerce_to_payload_words`). A NAMED
@@ -4236,7 +4264,7 @@ impl<'ctx> super::Codegen<'ctx> {
         // fresh-temp scrutinee path documents: if the callee's arm binds the
         // payload out, that binding owns `T`'s interior and dropping `T`
         // here would double-free it.
-        if !flows_into_return
+        if (!flows_into_return || handback_checked)
             && val.is_struct_value()
             && self.expr_yields_fresh_owned_temp(arg)
             && !self.call_result_aliases_armed_binding(arg)
@@ -4290,6 +4318,9 @@ impl<'ctx> super::Codegen<'ctx> {
                 inner_struct.as_deref(),
                 &moved,
             );
+            if flows_into_return {
+                handback_slot = Some((slot, val.get_type()));
+            }
         }
         // B-2026-09-06-56 — the `Result` sibling of the arm above, and the
         // reason it exists is that NEITHER frame owned the box: this arm
@@ -4354,6 +4385,7 @@ impl<'ctx> super::Codegen<'ctx> {
                 );
             }
         }
+        handback_slot
     }
 
     /// The callee's AST and the AST index of its param `idx`, where `idx`

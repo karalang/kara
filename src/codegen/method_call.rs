@@ -7927,6 +7927,12 @@ impl<'ctx> super::Codegen<'ctx> {
                 // B-2026-09-27-102 — argument bindings whose box this call MAY
                 // hand back; the post-call compare below asks the returned value.
                 let mut maybe_handed_back_args: Vec<String> = Vec::new();
+                // B-2026-09-27-94 — fresh-temp box slots this call may hand
+                // back, disarmed after it by the returned-value compare.
+                let mut maybe_handed_back_slots: Vec<(
+                    inkwell::values::PointerValue<'ctx>,
+                    inkwell::types::BasicTypeEnum<'ctx>,
+                )> = Vec::new();
                 for (i, a) in args.iter().enumerate() {
                     let pidx = i + 1;
                     let is_ref = ref_flags.get(pidx).copied().unwrap_or(false);
@@ -8745,13 +8751,15 @@ impl<'ctx> super::Codegen<'ctx> {
                     let boxed_flows_into_return = self
                         .callee_param_ast(&qualified, pidx)
                         .is_some_and(|(_, ai)| self.call_arg_flows_into_return(&qualified, ai));
-                    self.register_boxed_optres_arg_temp(
+                    if let Some(slot) = self.register_boxed_optres_arg_temp(
                         &qualified,
                         pidx,
                         &a.value,
                         val,
                         boxed_flows_into_return,
-                    );
+                    ) {
+                        maybe_handed_back_slots.push(slot);
+                    }
                     // B-2026-09-01-35 — the OWNERSHIP question needs the copy
                     // to actually happen, which `entry_copied` (type only) does
                     // not answer; the suppressor above deliberately keeps the
@@ -8867,6 +8875,9 @@ impl<'ctx> super::Codegen<'ctx> {
                     );
                     for src in &maybe_handed_back_args {
                         self.zero_boxed_binding_if_call_returned_its_box(src, v);
+                    }
+                    for (ptr, ty) in &maybe_handed_back_slots {
+                        self.zero_boxed_slot_if_call_returned_its_box(*ptr, *ty, v);
                     }
                     Ok(v)
                 };

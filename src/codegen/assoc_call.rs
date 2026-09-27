@@ -2969,6 +2969,11 @@ impl<'ctx> super::Codegen<'ctx> {
             // B-2026-09-27-65 — the static-call twin of the free path's
             // hand-back set (see `compile_call`).
             let mut maybe_handed_back_args: Vec<String> = Vec::new();
+            // B-2026-09-27-94 — the fresh-temp twin, as in `compile_call`.
+            let mut maybe_handed_back_slots: Vec<(
+                inkwell::values::PointerValue<'ctx>,
+                inkwell::types::BasicTypeEnum<'ctx>,
+            )> = Vec::new();
             for (i, a) in _args.iter().enumerate() {
                 let is_ref = ref_flags.get(i).copied().unwrap_or(false);
                 // Thread the callee's DECLARED tensor element type into
@@ -3437,13 +3442,15 @@ impl<'ctx> super::Codegen<'ctx> {
                     let boxed_flows_into_return = self
                         .callee_param_ast(&qualified, i)
                         .is_some_and(|(_, ai)| self.call_arg_flows_into_return(&qualified, ai));
-                    self.register_boxed_optres_arg_temp(
+                    if let Some(slot) = self.register_boxed_optres_arg_temp(
                         &qualified,
                         i,
                         &a.value,
                         val,
                         boxed_flows_into_return,
-                    );
+                    ) {
+                        maybe_handed_back_slots.push(slot);
+                    }
                     // B-2026-09-12-15 — the BODY channel, the third of the four
                     // argument loops. `Sink.eat(Some(R { id: 1 }))` printed no
                     // body compiled; see the method site's note for why only
@@ -3561,6 +3568,9 @@ impl<'ctx> super::Codegen<'ctx> {
                 );
                 for src in &maybe_handed_back_args {
                     self.zero_boxed_binding_if_call_returned_its_box(src, v);
+                }
+                for (ptr, ty) in &maybe_handed_back_slots {
+                    self.zero_boxed_slot_if_call_returned_its_box(*ptr, *ty, v);
                 }
                 Ok(v)
             };

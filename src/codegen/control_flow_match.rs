@@ -17661,7 +17661,20 @@ impl<'ctx> super::Codegen<'ctx> {
         let Some(slot) = self.variables.get(src).copied() else {
             return;
         };
-        let inkwell::types::BasicTypeEnum::StructType(st) = slot.ty else {
+        self.zero_boxed_slot_if_call_returned_its_box(slot.ptr, slot.ty, ret);
+    }
+
+    /// B-2026-09-27-94 — [`Self::zero_boxed_binding_if_call_returned_its_box`]
+    /// over a slot rather than a named binding, so a FRESH TEMP's box
+    /// registration (`register_boxed_optres_arg_temp`) can be disarmed by the
+    /// same compare. The body is that function's, unchanged.
+    pub(super) fn zero_boxed_slot_if_call_returned_its_box(
+        &mut self,
+        slot_ptr: inkwell::values::PointerValue<'ctx>,
+        slot_ty: inkwell::types::BasicTypeEnum<'ctx>,
+        ret: inkwell::values::BasicValueEnum<'ctx>,
+    ) {
+        let inkwell::types::BasicTypeEnum::StructType(st) = slot_ty else {
             return;
         };
         if st.count_fields() < 2 {
@@ -17676,11 +17689,11 @@ impl<'ctx> super::Codegen<'ctx> {
         // slot's type) and one per nested position of that type in an
         // aggregate-literal return.
         let mut ret_words: Vec<inkwell::values::IntValue<'ctx>> = Vec::new();
-        self.collect_handback_box_words(ret, slot.ty, 0, &mut ret_words);
+        self.collect_handback_box_words(ret, slot_ty, 0, &mut ret_words);
         if ret_words.is_empty() {
             return;
         }
-        let Ok(cur) = self.builder.build_load(st, slot.ptr, "handback.cur") else {
+        let Ok(cur) = self.builder.build_load(st, slot_ptr, "handback.cur") else {
             return;
         };
         let Ok(src_w0) =
@@ -17729,7 +17742,7 @@ impl<'ctx> super::Codegen<'ctx> {
         ) else {
             return;
         };
-        let _ = self.builder.build_store(slot.ptr, next);
+        let _ = self.builder.build_store(slot_ptr, next);
     }
 
     /// B-2026-09-19-21 — every word of `val` that could be `slot_ty`'s box
