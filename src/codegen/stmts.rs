@@ -3483,6 +3483,26 @@ impl<'ctx> super::Codegen<'ctx> {
         if !is_param_field && !is_view_field && !is_rc_boxed_field {
             return;
         }
+        // B-2026-09-16-28 — a root deboxed out of a box the param's entry
+        // copy privatized owns this field outright, and the move-out mirror
+        // zeroes the box's copy of it, so the field is simply MOVED. A copy
+        // here left the private buffer with no owner (26 B lost per call).
+        // Both sets are required: without the mirror the box would still
+        // free the field, and the copy is then what keeps the two apart.
+        if let ExprKind::FieldAccess { object, .. } = &value.kind {
+            if let ExprKind::Identifier(root) = &object.kind {
+                if let Some(root_slot) = self.variables.get(root.as_str()).map(|s| s.ptr) {
+                    if self.payload_vars.private_deboxed_slots.contains(&root_slot)
+                        && self
+                            .payload_vars
+                            .deboxed_payload_box_ptrs
+                            .contains_key(&root_slot)
+                    {
+                        return;
+                    }
+                }
+            }
+        }
         let slot_ptr = match self.variables.get(var_name) {
             Some(s) => s.ptr,
             None => return,

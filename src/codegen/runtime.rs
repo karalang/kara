@@ -8225,7 +8225,36 @@ impl<'ctx> super::Codegen<'ctx> {
                 // only while the destination registered nothing.
                 let saved_rc_inc = self.drop_rc.deep_copy_rc_inc_bare_shared;
                 self.drop_rc.deep_copy_rc_inc_bare_shared = true;
-                self.deep_copy_struct_heap_fields_in_place(slot, &struct_name);
+                // B-2026-09-16-28 — a GENERIC struct is copied at its
+                // instantiation. The base walk reads a bare-param field's
+                // declared type (`T`), which copies nothing, so `Box2[String]`
+                // came back as an alias of the source while the site was
+                // still recorded as copied: the source kept its cleanup, the
+                // consumer took the same buffer, and one of the two owners'
+                // frees never reached it (24 B definitely lost).
+                let subst = self
+                    .type_decls
+                    .enum_inst_var_types
+                    .get(name)
+                    .cloned()
+                    .map(|i| self.generic_struct_subst_from_inst(&struct_name, &i))
+                    .unwrap_or_default();
+                match self.mono_struct_type_from_subst(&struct_name, &subst) {
+                    Some(mono_st) if BasicTypeEnum::from(mono_st) == val.get_type() => {
+                        let ftes = self
+                            .type_decls
+                            .struct_field_type_exprs
+                            .get(struct_name.as_str())
+                            .cloned()
+                            .unwrap_or_default();
+                        for (i, fte) in ftes.iter().enumerate() {
+                            let resolved =
+                                super::helpers::subst_type_params_in_type_expr(fte, &subst);
+                            self.deep_copy_one_aggregate_field(slot, mono_st, i as u32, &resolved);
+                        }
+                    }
+                    _ => self.deep_copy_struct_heap_fields_in_place(slot, &struct_name),
+                }
                 self.drop_rc.deep_copy_rc_inc_bare_shared = saved_rc_inc;
                 let cloned = self
                     .builder

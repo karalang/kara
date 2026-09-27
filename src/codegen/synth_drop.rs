@@ -886,15 +886,32 @@ impl<'ctx> super::Codegen<'ctx> {
                             // word-region pointer to the struct's drop fn —
                             // its fields are 8-byte words at the same offsets
                             // the enum payload uses, so the layouts coincide.
-                            let struct_name = variant_field_tes
+                            let payload_te = variant_field_tes
                                 .iter()
                                 .find(|(n, _)| n == variant_name)
                                 .and_then(|(_, tes)| tes.get(fi))
-                                .and_then(|te| match &te.kind {
-                                    crate::ast::TypeKind::Path(p) => p.segments.first().cloned(),
-                                    _ => None,
-                                });
+                                .cloned();
+                            let struct_name = payload_te.as_ref().and_then(|te| match &te.kind {
+                                crate::ast::TypeKind::Path(p) => p.segments.first().cloned(),
+                                _ => None,
+                            });
                             if let Some(sname) = struct_name {
+                                // B-2026-09-16-28 — a GENERIC struct payload
+                                // (`Full(Box2[String])`) is packed at its
+                                // INSTANTIATION's layout, so the box test and
+                                // the drop below must read that layout too.
+                                // Against the base one the erased `T` is a
+                                // single word, so the payload read as inline,
+                                // the base drop freed nothing, and the box and
+                                // its string leaked (24 B + 26 B at -O0).
+                                // Only for a concrete instantiation: a payload
+                                // that still names a type parameter has no
+                                // single layout here and keeps the base path.
+                                let (mono_st, payload_subst) =
+                                    match self.struct_payload_mono(&sname, payload_te.as_ref()) {
+                                        Some((st, sub)) => (Some(st), sub),
+                                        None => (None, Default::default()),
+                                    };
                                 let field_idx = (*start_word + 1) as u32;
                                 let field_ptr = self
                                     .builder
@@ -935,11 +952,8 @@ impl<'ctx> super::Codegen<'ctx> {
                                 // word holds the box pointer. Drop THROUGH the
                                 // box, null-guarded, then free the box itself;
                                 // the inline GEP read the pointer as the struct.
-                                let boxed = self
-                                    .type_decls
-                                    .struct_types
-                                    .get(&sname)
-                                    .copied()
+                                let boxed = mono_st
+                                    .or_else(|| self.type_decls.struct_types.get(&sname).copied())
                                     .is_some_and(|st| {
                                         Self::llvm_type_word_count(st.into()) > *_num_words
                                     });
@@ -981,9 +995,12 @@ impl<'ctx> super::Codegen<'ctx> {
                                 // Memoized; saves/restores the builder block,
                                 // so we resume in this drop fn's BB. `None`
                                 // when the nested struct needs no drop.
-                                if let Some(struct_drop_fn) =
+                                let struct_drop = if mono_st.is_some() {
+                                    self.emit_struct_drop_synthesis_mono(&sname, &payload_subst)
+                                } else {
                                     self.emit_struct_drop_synthesis(&sname)
-                                {
+                                };
+                                if let Some(struct_drop_fn) = struct_drop {
                                     self.builder
                                         .build_call(struct_drop_fn, &[field_ptr.into()], "")
                                         .unwrap();
@@ -1910,6 +1927,48 @@ impl<'ctx> super::Codegen<'ctx> {
                 None
             }
         })
+    }
+
+    /// B-2026-09-16-28 — the CONCRETE layout of a user-struct enum payload
+    /// written as a generic instantiation (`Full(Box2[String])`), with the
+    /// substitution that produced it.
+    ///
+    /// The payload is packed at this layout (`coerce_to_payload_words` boxes
+    /// the value it was handed), so every site that asks "is this payload
+    /// boxed, and what does it own" has to read the same one: the drop, the
+    /// arm that moves the payload out, and the by-value entry copy. Read
+    /// against the base layout the erased `T` is one word, the payload looked
+    /// inline, and the box leaked or was freed twice depending on the site.
+    ///
+    /// `None` for a non-generic struct, and for an instantiation that still
+    /// names a type parameter (inside a generic enum's declaration), which has
+    /// no single layout here; callers keep the base path for those.
+    pub(super) fn struct_payload_mono(
+        &self,
+        sname: &str,
+        te: Option<&TypeExpr>,
+    ) -> Option<(
+        inkwell::types::StructType<'ctx>,
+        std::collections::HashMap<String, TypeExpr>,
+    )> {
+        let subst = self.generic_struct_subst_from_inst(sname, te?);
+        if subst.is_empty() {
+            return None;
+        }
+        let declared: Vec<String> = self
+            .type_decls
+            .declared_generic_param_names
+            .iter()
+            .cloned()
+            .collect();
+        if subst
+            .values()
+            .any(|v| Self::type_expr_mentions_param(v, &declared))
+        {
+            return None;
+        }
+        let st = self.mono_struct_type_from_subst(sname, &subst)?;
+        Some((st, subst))
     }
 
     pub(super) fn emit_struct_drop_synthesis(

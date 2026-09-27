@@ -242,6 +242,16 @@ pub(crate) struct PatternState<'ctx> {
     /// stale `true` leaking into an enclosing construct is the direction that
     /// registers an owner nobody asked for.
     pub(crate) pattern_binding_scrutinee_param_memory_is_callee_owned: bool,
+    /// B-2026-09-16-28 — the variants whose boxed payload the scrutinee, a
+    /// by-value enum param, PRIVATIZED at entry (box and contents; see
+    /// `PayloadVars::entry_private_payload_variants`). A binding deboxed out of
+    /// one of them records no caller-visible box: the box is this frame's own.
+    ///
+    /// Restored by `compile_match` and cleared by the `let`-pattern forms. A
+    /// stale entry is the dangerous direction here, because it declines a
+    /// mirror a caller-shared box needs, and the caller then frees a buffer
+    /// the move carried away.
+    pub(crate) pattern_binding_scrutinee_private_box_variants: HashSet<String>,
     /// B-2026-09-07-38 — true while binding a pattern whose scrutinee is a
     /// by-value ENUM param the callee owns BY TRANSFER
     /// (`enum_param_owned_by_transfer`, B-2026-09-07-16).

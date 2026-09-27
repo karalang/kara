@@ -607,7 +607,15 @@ impl<'ctx> super::Codegen<'ctx> {
             // whole-element move both raise it for.
             let saved_rc_inc = self.drop_rc.deep_copy_rc_inc_bare_shared;
             self.drop_rc.deep_copy_rc_inc_bare_shared = true;
+            self.payload_vars.privatized_box_variants_scratch.clear();
             self.deep_copy_enum_heap_payload_in_place(type_name, slot, &layout);
+            // B-2026-09-16-28 — see `entry_private_payload_variants`.
+            let private = std::mem::take(&mut self.payload_vars.privatized_box_variants_scratch);
+            if !private.is_empty() {
+                self.payload_vars
+                    .entry_private_payload_variants
+                    .insert(param_name.to_string(), private.into_iter().collect());
+            }
             self.drop_rc.deep_copy_rc_inc_bare_shared = saved_rc_inc;
             self.track_enum_var(type_name, slot);
             return true;
@@ -4877,6 +4885,7 @@ impl<'ctx> super::Codegen<'ctx> {
         word_ptr: PointerValue<'ctx>,
         struct_ty: StructType<'ctx>,
         struct_name: &str,
+        subst: &std::collections::HashMap<String, TypeExpr>,
         copy_contents: bool,
     ) {
         let Some(fn_val) = self.current_fn else {
@@ -4925,8 +4934,21 @@ impl<'ctx> super::Codegen<'ctx> {
             .build_ptr_to_int(new_p, i64_t, "p14e.box.w")
             .unwrap();
         self.builder.build_store(word_ptr, new_w).unwrap();
-        if copy_contents {
+        if copy_contents && subst.is_empty() {
             self.deep_copy_struct_heap_fields_in_place(new_p, struct_name);
+        } else if copy_contents {
+            // B-2026-09-16-28 — a generic instantiation's fields at its own
+            // layout; the base walk reads `T` and copies nothing.
+            let ftes = self
+                .type_decls
+                .struct_field_type_exprs
+                .get(struct_name)
+                .cloned()
+                .unwrap_or_default();
+            for (i, fte) in ftes.iter().enumerate() {
+                let resolved = crate::codegen::helpers::subst_type_params_in_type_expr(fte, subst);
+                self.deep_copy_one_aggregate_field(new_p, struct_ty, i as u32, &resolved);
+            }
         }
         // The contents walk may have split blocks; branch from wherever the
         // builder ended up rather than from `copy_bb`.
@@ -5051,16 +5073,24 @@ impl<'ctx> super::Codegen<'ctx> {
                         *kind,
                         EnumDropKind::NestedStruct | EnumDropKind::NestedOwnedStruct
                     ) {
-                        let sname =
-                            variant_tes
-                                .get(name)
-                                .and_then(|tes| tes.get(fi))
-                                .and_then(|te| match &te.kind {
-                                    TypeKind::Path(p) => p.segments.first().cloned(),
-                                    _ => None,
-                                });
+                        let payload_te = variant_tes.get(name).and_then(|tes| tes.get(fi)).cloned();
+                        let sname = payload_te.as_ref().and_then(|te| match &te.kind {
+                            TypeKind::Path(p) => p.segments.first().cloned(),
+                            _ => None,
+                        });
                         if let Some(sname) = sname {
-                            let struct_ty = self.type_decls.struct_types.get(&sname).copied();
+                            // B-2026-09-16-28 — a generic instantiation is
+                            // packed at its CONCRETE layout, so the box test,
+                            // the heap question and the copy all read that
+                            // one; against the base layout `Box2[String]`
+                            // looked inline and heapless, and caller and
+                            // callee freed one box and one string.
+                            let mono = self.struct_payload_mono(&sname, payload_te.as_ref());
+                            let struct_ty = mono
+                                .as_ref()
+                                .map(|(st, _)| *st)
+                                .or_else(|| self.type_decls.struct_types.get(&sname).copied());
+                            let subst = mono.map(|(_, sub)| sub).unwrap_or_default();
                             let boxed = struct_ty.is_some_and(|st| {
                                 Self::llvm_type_word_count(st.into()) > *num_words
                             });
@@ -5075,11 +5105,34 @@ impl<'ctx> super::Codegen<'ctx> {
                                 .get(&sname)
                                 .is_some_and(|ftes| {
                                     ftes.iter().any(|f| {
-                                        self.type_expr_has_drop_heap(f)
-                                            || self.option_field_te_has_drop_heap(f)
+                                        let f =
+                                            crate::codegen::helpers::subst_type_params_in_type_expr(
+                                                f, &subst,
+                                            );
+                                        self.type_expr_has_drop_heap(&f)
+                                            || self.option_field_te_has_drop_heap(&f)
                                     })
                                 });
-                            let copy_contents = *kind == EnumDropKind::NestedStruct;
+                            // A generic payload classified at declaration
+                            // time from its erased fields (`T` is not
+                            // copy-supported, so `Box2` is `NestedOwnedStruct`)
+                            // is re-asked at its instantiation: `Box2[String]`
+                            // copies like any `String`-bearing struct.
+                            let copy_contents = *kind == EnumDropKind::NestedStruct
+                                || (!subst.is_empty()
+                                    && self
+                                        .type_decls
+                                        .struct_field_type_exprs
+                                        .get(&sname)
+                                        .cloned()
+                                        .is_some_and(|ftes| {
+                                            ftes.iter().all(|f| {
+                                                let f = crate::codegen::helpers::subst_type_params_in_type_expr(
+                                                    f, &subst,
+                                                );
+                                                self.field_copy_supported(&f, &mut Vec::new())
+                                            })
+                                        }));
                             if boxed && (copy_contents || !owns_heap) {
                                 if let (Ok(word_ptr), Some(st)) = (
                                     self.builder.build_struct_gep(
@@ -5094,8 +5147,14 @@ impl<'ctx> super::Codegen<'ctx> {
                                         word_ptr,
                                         st,
                                         &sname,
+                                        &subst,
                                         copy_contents,
                                     );
+                                    if copy_contents {
+                                        self.payload_vars
+                                            .privatized_box_variants_scratch
+                                            .push(name.clone());
+                                    }
                                 }
                             } else if !boxed && copy_contents {
                                 if let Ok(field_ptr) = self.builder.build_struct_gep(

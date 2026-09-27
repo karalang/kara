@@ -532,6 +532,28 @@ pub(crate) struct PayloadVars<'ctx> {
     /// drained immediately after the binding's payload-BODIES walk. Cleared per
     /// function.
     pub(crate) pending_box_field_zeroes: HashMap<String, Vec<PendingBoxFieldZero<'ctx>>>,
+    /// B-2026-09-16-28 — by-value enum params whose entry copy gave a variant's
+    /// heap-BOXED struct payload a private box AND private contents, keyed by
+    /// param name, valued by variant name.
+    ///
+    /// [`Self::deboxed_payload_box_ptrs`] exists because a boxed payload is
+    /// normally SHARED with the caller, who frees through it. That premise is
+    /// false for these variants: the box is this frame's own, and the frame's
+    /// enum drop frees what is in it. Mirroring a move-out's zero into it then
+    /// orphans the copy, because the moved-out local already took a copy of
+    /// its own. Measured on `Wb.Full(q) => { let i = q.f; … }` over a
+    /// `Box2[String]` payload: 26 B lost at `-O0`, one per call.
+    ///
+    /// Filled from [`Self::privatized_box_variants_scratch`] after each param
+    /// entry copy. Cleared per function.
+    pub(crate) entry_private_payload_variants: HashMap<String, HashSet<String>>,
+    /// B-2026-09-16-28 — binding slots deboxed out of one of those private
+    /// boxes. Keyed by slot like `deboxed_payload_box_ptrs`, which every entry
+    /// here is also in. Cleared per function.
+    pub(crate) private_deboxed_slots: HashSet<inkwell::values::PointerValue<'ctx>>,
+    /// Variants the enum entry copy most recently privatized (box and
+    /// contents); read and cleared by the param prologue that called it.
+    pub(crate) privatized_box_variants_scratch: Vec<String>,
     /// B-2026-08-01-15 — locals that are whole-move REBINDS of an owned
     /// param (`let h2 = h;`), transitively. A destructure or match on one
     /// is a param-view bind exactly like the direct param case

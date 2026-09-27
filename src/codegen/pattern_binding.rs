@@ -2280,7 +2280,11 @@ impl<'ctx> super::Codegen<'ctx> {
                                     let bound =
                                         self.reconstruct_payload_value(sub_pat, &field_words)?;
                                     self.bind_pattern_values(sub_pat, bound)?;
-                                    self.record_deboxed_payload_box(sub_pat, &field_words);
+                                    self.record_deboxed_payload_box(
+                                        sub_pat,
+                                        &field_words,
+                                        variant_name,
+                                    );
                                 }
                                 self.pattern_state.match_scrutinee_enum_hint =
                                     saved_hint_for_payload;
@@ -2310,7 +2314,7 @@ impl<'ctx> super::Codegen<'ctx> {
                         }
                         let bound = self.reconstruct_payload_value(sub_pat, &field_words)?;
                         self.bind_pattern_values(sub_pat, bound)?;
-                        self.record_deboxed_payload_box(sub_pat, &field_words);
+                        self.record_deboxed_payload_box(sub_pat, &field_words, variant_name);
                     }
                 }
                 self.pattern_state.match_scrutinee_enum_hint = saved_hint_for_payload;
@@ -2448,7 +2452,11 @@ impl<'ctx> super::Codegen<'ctx> {
                                 let bound =
                                     self.reconstruct_payload_value(sub_pat, &field_words)?;
                                 self.bind_pattern_values(sub_pat, bound)?;
-                                self.record_deboxed_payload_box(sub_pat, &field_words);
+                                self.record_deboxed_payload_box(
+                                    sub_pat,
+                                    &field_words,
+                                    &variant_name,
+                                );
                             } else {
                                 let synthetic = Pattern {
                                     kind: PatternKind::Binding(field_pat.name.clone()),
@@ -2457,7 +2465,11 @@ impl<'ctx> super::Codegen<'ctx> {
                                 let bound =
                                     self.reconstruct_payload_value(&synthetic, &field_words)?;
                                 self.bind_pattern_values(&synthetic, bound)?;
-                                self.record_deboxed_payload_box(&synthetic, &field_words);
+                                self.record_deboxed_payload_box(
+                                    &synthetic,
+                                    &field_words,
+                                    &variant_name,
+                                );
                             }
                         }
                         return Ok(());

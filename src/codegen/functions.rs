@@ -1569,6 +1569,8 @@ impl<'ctx> super::Codegen<'ctx> {
         self.payload_vars.deboxed_payload_box_ptrs.clear();
         self.payload_vars.deferred_payload_box_ptrs.clear();
         self.payload_vars.pending_box_field_zeroes.clear();
+        self.payload_vars.entry_private_payload_variants.clear();
+        self.payload_vars.private_deboxed_slots.clear();
         self.mono_state.mono_payload_binding_type_exprs.clear();
         self.mono_state.mono_payload_binding_display_types.clear();
         self.payload_vars.inline_result_payload_vars.clear();

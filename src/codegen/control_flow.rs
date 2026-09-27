@@ -1531,6 +1531,10 @@ impl<'ctx> super::Codegen<'ctx> {
         self.pattern_state
             .pattern_binding_scrutinee_param_memory_is_callee_owned =
             self.scrutinee_carries_callee_owned_param_memory(scrutinee);
+        // B-2026-09-16-28 — see `compile_match`'s twin derivation.
+        self.pattern_state
+            .pattern_binding_scrutinee_private_box_variants =
+            self.scrutinee_private_box_variants(scrutinee);
         // B-2026-09-07-38 — see `compile_match`'s twin derivation.
         self.pattern_state
             .pattern_binding_scrutinee_is_transfer_owned_enum =
@@ -1584,6 +1588,10 @@ impl<'ctx> super::Codegen<'ctx> {
         // B-2026-09-15-21 — cleared rather than restored; see the field's doc.
         self.pattern_state
             .pattern_binding_scrutinee_param_memory_is_callee_owned = false;
+        // B-2026-09-16-28 — cleared; see the field's doc.
+        self.pattern_state
+            .pattern_binding_scrutinee_private_box_variants
+            .clear();
         // B-2026-09-06-20 — cleared rather than restored: the enclosing
         // construct's arm bindings were bound before this one compiled.
         self.pattern_state.pattern_binding_masked_view_names.clear();
@@ -1961,6 +1969,23 @@ impl<'ctx> super::Codegen<'ctx> {
     /// A PROJECTION keeps the walk for the same reason the body predicate
     /// does: `match self.e { .. }` reaches the receiver's memory exactly as a
     /// bare param name reaches its own.
+    /// B-2026-09-16-28 — the variants of a BARE by-value enum param whose
+    /// boxed payload the prologue privatized; empty for anything else.
+    pub(super) fn scrutinee_private_box_variants(
+        &self,
+        e: &Expr,
+    ) -> std::collections::HashSet<String> {
+        match &e.kind {
+            ExprKind::Identifier(n) => self
+                .payload_vars
+                .entry_private_payload_variants
+                .get(n.as_str())
+                .cloned()
+                .unwrap_or_default(),
+            _ => std::collections::HashSet::new(),
+        }
+    }
+
     pub(super) fn scrutinee_carries_callee_owned_param_memory(&self, e: &Expr) -> bool {
         let mut cur = e;
         let mut hops = 0usize;

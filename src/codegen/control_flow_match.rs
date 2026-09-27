@@ -598,6 +598,15 @@ impl<'ctx> super::Codegen<'ctx> {
         self.pattern_state
             .pattern_binding_scrutinee_param_memory_is_callee_owned =
             self.scrutinee_carries_callee_owned_param_memory(scrutinee);
+        // B-2026-09-16-28 — restored, not cleared: an inner `match` in one arm
+        // must not change what the next arm's bindings see.
+        let private_box_variants = self.scrutinee_private_box_variants(scrutinee);
+        let saved_private_box_variants = std::mem::replace(
+            &mut self
+                .pattern_state
+                .pattern_binding_scrutinee_private_box_variants,
+            private_box_variants,
+        );
         // B-2026-09-07-38 — the TRANSFER-owned subset of that flag, derived
         // here so `bind_pattern_values`'s copy-supported gate can tell a
         // callee-owned source from the caller-retains one it assumes.
@@ -1933,6 +1942,8 @@ impl<'ctx> super::Codegen<'ctx> {
             .pattern_binding_scrutinee_param_memory_is_callee_owned = false;
         self.pattern_state
             .pattern_binding_scrutinee_is_transfer_owned_enum = saved_transfer_enum_flag;
+        self.pattern_state
+            .pattern_binding_scrutinee_private_box_variants = saved_private_box_variants;
         // B-2026-09-06-20 — cleared rather than restored; see `compile_if_let`.
         self.pattern_state.pattern_binding_masked_view_names.clear();
         self.pattern_state
@@ -7490,6 +7501,7 @@ impl<'ctx> super::Codegen<'ctx> {
         &mut self,
         sub_pat: &Pattern,
         field_words: &[inkwell::values::IntValue<'ctx>],
+        variant: &str,
     ) {
         let PatternKind::Binding(name) = &sub_pat.kind else {
             return;
@@ -7497,6 +7509,23 @@ impl<'ctx> super::Codegen<'ctx> {
         let Some(slot) = self.variables.get(name.as_str()).map(|s| s.ptr) else {
             return;
         };
+        // B-2026-09-16-28 — a box the param's entry copy PRIVATIZED holds
+        // this frame's own copy of each field. The mirror below is still
+        // right for it (a move-out must stop this frame's enum drop freeing
+        // what the move carried away), but a field moved out of such a box
+        // is a plain MOVE: the defensive copy that a caller-shared box needs
+        // would leave the private copy with no owner once the mirror zeroes
+        // it. `deep_copy_owned_struct_param_field_move` reads this.
+        if self.pattern_state.pattern_binding_scrutinee_is_owned_param
+            && self
+                .pattern_state
+                .pattern_binding_scrutinee_private_box_variants
+                .contains(variant)
+        {
+            self.payload_vars.private_deboxed_slots.insert(slot);
+        } else {
+            self.payload_vars.private_deboxed_slots.remove(&slot);
+        }
         // OWNED-PARAM scrutinees are the shape where the box's owner is out of
         // reach entirely, so they always record. An in-frame owner is a
         // `BoxedEnumDrop` in this frame's cleanup queue, and B-2026-08-04-2
@@ -13989,11 +14018,17 @@ impl<'ctx> super::Codegen<'ctx> {
                 .into_iter()
                 .find(|(_, v, _)| v == &variant_name)
                 .and_then(|(_, _, tes)| tes.get(pos).cloned())
-                .and_then(|te| match &te.kind {
-                    crate::ast::TypeKind::Path(p) => p.segments.first().cloned(),
-                    _ => None,
+                .and_then(|te| {
+                    let sname = match &te.kind {
+                        crate::ast::TypeKind::Path(p) => p.segments.first().cloned(),
+                        _ => None,
+                    }?;
+                    // B-2026-09-16-28 — at the instantiation's layout, the
+                    // one the payload was packed (and boxed) at.
+                    self.struct_payload_mono(&sname, Some(&te))
+                        .map(|(st, _)| st)
+                        .or_else(|| self.type_decls.struct_types.get(&sname).copied())
                 })
-                .and_then(|sname| self.type_decls.struct_types.get(&sname).copied())
                 .is_some_and(|st| Self::llvm_type_word_count(st.into()) > num_words);
             if boxed_struct {
                 if let (Ok(word_ptr), Some(cur_fn)) = (

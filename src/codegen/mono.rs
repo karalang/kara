@@ -191,6 +191,8 @@ pub(super) struct SavedVarSideTables<'ctx> {
     shadowed_top_level_locals: std::collections::HashSet<String>,
     deboxed_payload_box_ptrs:
         HashMap<inkwell::values::PointerValue<'ctx>, inkwell::values::PointerValue<'ctx>>,
+    entry_private_payload_variants: HashMap<String, std::collections::HashSet<String>>,
+    private_deboxed_slots: std::collections::HashSet<inkwell::values::PointerValue<'ctx>>,
 }
 
 impl<'ctx> super::Codegen<'ctx> {
@@ -1707,6 +1709,10 @@ impl<'ctx> super::Codegen<'ctx> {
             deboxed_payload_box_ptrs: std::mem::take(
                 &mut self.payload_vars.deboxed_payload_box_ptrs,
             ),
+            entry_private_payload_variants: std::mem::take(
+                &mut self.payload_vars.entry_private_payload_variants,
+            ),
+            private_deboxed_slots: std::mem::take(&mut self.payload_vars.private_deboxed_slots),
         }
     }
 
@@ -1750,6 +1756,8 @@ impl<'ctx> super::Codegen<'ctx> {
         self.payload_vars.cond_returned_locals = saved.cond_returned_locals;
         self.payload_vars.shadowed_top_level_locals = saved.shadowed_top_level_locals;
         self.payload_vars.deboxed_payload_box_ptrs = saved.deboxed_payload_box_ptrs;
+        self.payload_vars.entry_private_payload_variants = saved.entry_private_payload_variants;
+        self.payload_vars.private_deboxed_slots = saved.private_deboxed_slots;
     }
 
     /// B-2026-09-25-7 — the typechecker's concrete `Vec`/`VecDeque` binding
@@ -5137,6 +5145,8 @@ impl<'ctx> super::Codegen<'ctx> {
         self.payload_vars.shadowed_top_level_locals.clear();
         self.payload_vars.cond_returned_locals.clear();
         self.payload_vars.deboxed_payload_box_ptrs.clear();
+        self.payload_vars.entry_private_payload_variants.clear();
+        self.payload_vars.private_deboxed_slots.clear();
         self.payload_vars.inline_result_payload_vars.clear();
         self.payload_vars.inline_optres_var_tes.clear();
         self.payload_vars.inline_option_map_payload_vars.clear();

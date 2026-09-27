@@ -1438,3 +1438,90 @@ fn main() {
         20,
     );
 }
+
+/// B-2026-09-16-28 — a GENERIC struct payload of an enum param (`Box2[String]`
+/// in `enum Wb { Full(Box2[String]), .. }`) is heap-boxed at its CONCRETE
+/// layout, and the param's entry copy, drop and match-arm suppression all read
+/// the ERASED base layout, under which it looked inline and heapless. Caller
+/// and callee then shared one box and one buffer: 24 B lost per call when the
+/// callee moved a field out (the row's program), a double free when the
+/// payload went into a `Vec` or `Map`. The entry copy now duplicates the box
+/// AND its contents at the concrete layout, and a field moved out of that
+/// private box is a plain move rather than a defensive copy, because the
+/// move-out mirror already zeroes the box's own copy.
+#[test]
+fn asan_generic_struct_enum_payload_param_owns_one_copy() {
+    assert_clean_asan_run_min_allocs(
+        r#"struct Box2[T] { f: T }
+struct Pair[A, B] { a: A, b: B, n: i64 }
+enum Wb { Full(Box2[String]), Empty }
+enum Wv { Full(Box2[Vec[String]]), Empty }
+enum Wp { Full(Pair[String, Vec[i64]]), Empty }
+fn blen(w: Wb) -> i64 {
+    match w { Wb.Full(q) => { let i = q.f; return i.len(); } Wb.Empty => { return 0; } }
+}
+fn vlen(w: Wv) -> i64 {
+    match w { Wv.Full(q) => { let i = q.f; return i.len(); } Wv.Empty => { return 0; } }
+}
+fn plen(w: Wp) -> i64 {
+    match w { Wp.Full(q) => { let s = q.a; return s.len() + q.n; } Wp.Empty => { return 0; } }
+}
+fn take(w: Wb) -> Box2[String] {
+    match w { Wb.Full(q) => q, Wb.Empty => Box2 { f: f"none" } }
+}
+fn takef(w: Wb) -> String {
+    match w { Wb.Full(q) => q.f, Wb.Empty => f"none" }
+}
+fn main() {
+    for k in 0..2 {
+        let b: Box2[String] = Box2 { f: f"heap-string-longer-than-sso-b{k}" };
+        { let w = Wb.Full(b); println(f"w {blen(w)}"); }
+        let x = b.f;
+        println(f"b {x}");
+        let c: Box2[Vec[String]] = Box2 { f: [f"heap-string-longer-than-sso-c{k}", f"heap-string-longer-than-sso-d{k}"] };
+        { let w = Wv.Full(c); println(f"v {vlen(w)}"); }
+        let y = c.f;
+        println(f"c {y.len()} {y[1]}");
+        let p: Pair[String, Vec[i64]] = Pair { a: f"heap-string-longer-than-sso-p{k}", b: [1, 2, 3], n: 7 };
+        { let w = Wp.Full(p); println(f"p {plen(w)}"); }
+        println(f"p {p.a} {p.b.len()} {p.n}");
+        let e: Box2[String] = Box2 { f: f"heap-string-longer-than-sso-e{k}" };
+        let mut v: Vec[Box2[String]] = Vec.new();
+        v.push(e);
+        println(f"e {v.len()} {e.f}");
+        let r = take(Wb.Full(Box2 { f: f"heap-string-longer-than-sso-r{k}" }));
+        println(f"r {r.f}");
+        let s = takef(Wb.Full(Box2 { f: f"heap-string-longer-than-sso-s{k}" }));
+        println(f"s {s}");
+        println(f"n {blen(Wb.Empty)} {takef(Wb.Empty)}");
+    }
+    println("end");
+}
+"#,
+        &[
+            "w 30",
+            "b heap-string-longer-than-sso-b0",
+            "v 2",
+            "c 2 heap-string-longer-than-sso-d0",
+            "p 37",
+            "p heap-string-longer-than-sso-p0 3 7",
+            "e 1 heap-string-longer-than-sso-e0",
+            "r heap-string-longer-than-sso-r0",
+            "s heap-string-longer-than-sso-s0",
+            "n 0 none",
+            "w 30",
+            "b heap-string-longer-than-sso-b1",
+            "v 2",
+            "c 2 heap-string-longer-than-sso-d1",
+            "p 37",
+            "p heap-string-longer-than-sso-p1 3 7",
+            "e 1 heap-string-longer-than-sso-e1",
+            "r heap-string-longer-than-sso-r1",
+            "s heap-string-longer-than-sso-s1",
+            "n 0 none",
+            "end",
+        ],
+        "asan_generic_struct_enum_payload_param_owns_one_copy",
+        40,
+    );
+}
